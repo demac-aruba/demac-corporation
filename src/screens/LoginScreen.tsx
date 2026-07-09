@@ -5,14 +5,19 @@ import { colors, roleLabels } from '../theme';
 import { Button, Card, Input } from '../components/UI';
 
 export function LoginScreen() {
-  const { login, loginAs, users } = useAppState();
+  const { login, loginDemo, loginAs, users } = useAppState();
   const [email, setEmail] = useState('admin@demac.demo');
-  const [password, setPassword] = useState('demac2026');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [authMode, setAuthMode] = useState<'firebase' | 'demo'>('firebase');
+  const [submitting, setSubmitting] = useState(false);
 
-  const submit = () => {
-    const result = login(email, password);
+  const submit = async () => {
+    setError('');
+    setSubmitting(true);
+    const result = authMode === 'firebase' ? await login(email, password) : loginDemo(email);
     if (!result.ok) setError(result.message ?? 'No fue posible iniciar sesión.');
+    setSubmitting(false);
   };
 
   return (
@@ -38,14 +43,25 @@ export function LoginScreen() {
         <Card style={styles.loginCard}>
           <Text style={styles.welcome}>Bienvenido</Text>
           <Text style={styles.loginSubtitle}>Inicia sesión en DEMAC Corporation</Text>
+          <View style={styles.authModeRow}>
+            <Pressable onPress={() => setAuthMode('firebase')} style={[styles.authModeButton, authMode === 'firebase' && styles.authModeButtonActive]}>
+              <Text style={[styles.authModeText, authMode === 'firebase' && styles.authModeTextActive]}>Acceso real</Text>
+            </Pressable>
+            <Pressable onPress={() => setAuthMode('demo')} style={[styles.authModeButton, authMode === 'demo' && styles.authModeButtonActive]}>
+              <Text style={[styles.authModeText, authMode === 'demo' && styles.authModeTextActive]}>Acceso DEMO</Text>
+            </Pressable>
+          </View>
+          <Text style={styles.authModeCopy}>
+            {authMode === 'firebase' ? 'Usa correo y contraseña de Firebase Authentication.' : 'Entorno temporal con usuarios de prueba locales; no se almacenan contraseñas DEMO.'}
+          </Text>
           <Input label="Correo electrónico" autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={setEmail} />
-          <Input label="Contraseña" secureTextEntry value={password} onChangeText={setPassword} onSubmitEditing={submit} />
+          {authMode === 'firebase' ? <Input label="Contraseña" secureTextEntry value={password} onChangeText={setPassword} onSubmitEditing={submit} /> : null}
           {error ? <Text style={styles.error}>{error}</Text> : null}
-          <Button label="Iniciar sesión" onPress={submit} />
+          <Button label={submitting ? "Verificando…" : "Iniciar sesión"} onPress={submit} disabled={submitting} />
 
           <View style={styles.quickSection}>
-            <Text style={styles.quickTitle}>Accesos rápidos de prueba</Text>
-            <Text style={styles.quickCopy}>Selecciona un perfil para revisar sus permisos.</Text>
+            <Text style={styles.quickTitle}>Accesos rápidos DEMO</Text>
+            <Text style={styles.quickCopy}>Separados del acceso real: selecciona un perfil local para revisar permisos.</Text>
             <View style={styles.quickGrid}>
               {users.map((user) => (
                 <Pressable key={user.id} onPress={() => loginAs(user.id)} style={({ pressed }) => [styles.quickUser, pressed && { opacity: 0.75 }]}>
@@ -81,7 +97,13 @@ const styles = StyleSheet.create({
   demoBadgeText: { color: '#BFDFFF', fontWeight: '900', letterSpacing: 1.4, fontSize: 11 },
   loginCard: { flex: 1, maxWidth: Platform.OS === 'web' ? 620 : undefined, borderRadius: 0, borderWidth: 0, padding: 38, justifyContent: 'center' },
   welcome: { fontSize: 30, fontWeight: '900', color: colors.text },
-  loginSubtitle: { color: colors.muted, marginTop: 5, marginBottom: 26 },
+  loginSubtitle: { color: colors.muted, marginTop: 5, marginBottom: 18 },
+  authModeRow: { flexDirection: 'row', gap: 8, marginBottom: 10 },
+  authModeButton: { flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: 12, paddingVertical: 10, alignItems: 'center', backgroundColor: '#FFFFFF' },
+  authModeButtonActive: { borderColor: colors.primary, backgroundColor: colors.primaryLight },
+  authModeText: { color: colors.muted, fontWeight: '900', fontSize: 12 },
+  authModeTextActive: { color: colors.primary },
+  authModeCopy: { color: colors.muted, fontSize: 12, lineHeight: 18, marginBottom: 16 },
   error: { backgroundColor: colors.dangerLight, color: colors.danger, borderRadius: 8, padding: 10, marginBottom: 12, fontWeight: '700' },
   quickSection: { marginTop: 30, paddingTop: 24, borderTopWidth: 1, borderTopColor: colors.border },
   quickTitle: { fontWeight: '900', color: colors.text, fontSize: 16 },
