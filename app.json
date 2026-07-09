@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "DEMAC Corporation",
+    "slug": "demac-corporation",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0957C3",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "com.demacaruba.corporation",
+      "versionCode": 1
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "description": "DEMAC Professional Cooling Solutions operations platform.",
+    "scheme": "demac-corporation",
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "DEMAC necesita acceso a las fotos para adjuntarlas a los reportes t\u00e9cnicos."
+        }
+      ]
+    ]
+  }
+}
