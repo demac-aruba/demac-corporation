@@ -1,14 +1,14 @@
 import { Client, Equipment, Invoice, InventoryItem, ServiceType, User, Van, WorkOrder } from '../types';
 
 export const demoUsers: User[] = [
-  { id: 'u1', name: 'Christian Alexander Márquez Márquez', email: 'admin@demac.demo', password: 'demac2026', role: 'admin', phone: '+297 564 2625', active: true },
-  { id: 'u2', name: 'Laura Croes', email: 'laura@demac.demo', password: 'demo123', role: 'office', phone: '+297 560 1101', active: true },
-  { id: 'u3', name: 'María Tromp', email: 'maria@demac.demo', password: 'demo123', role: 'office', phone: '+297 560 1102', active: true },
-  { id: 'u4', name: 'Daniel Kelly', email: 'daniel@demac.demo', password: 'demo123', role: 'supervisor', phone: '+297 560 1201', active: true },
-  { id: 'u5', name: 'Carlos Rodríguez', email: 'carlos@demac.demo', password: 'demo123', role: 'technician', phone: '+297 560 1301', vanId: 'v1', active: true },
-  { id: 'u6', name: 'Miguel Herrera', email: 'miguel@demac.demo', password: 'demo123', role: 'technician', phone: '+297 560 1302', vanId: 'v1', active: true },
-  { id: 'u7', name: 'Andrea Maduro', email: 'andrea@demac.demo', password: 'demo123', role: 'accounting', phone: '+297 560 1401', active: true },
-  { id: 'u8', name: 'Roberto Ruiz', email: 'roberto@demac.demo', password: 'demo123', role: 'inventory', phone: '+297 560 1501', active: true },
+  { id: 'u1', name: 'Christian Alexander Márquez Márquez', email: 'admin@demac.demo', role: 'admin', phone: '+297 564 2625', active: true, authProvider: 'demo' },
+  { id: 'u2', name: 'Laura Croes', email: 'laura@demac.demo', role: 'office', phone: '+297 560 1101', active: true, authProvider: 'demo' },
+  { id: 'u3', name: 'María Tromp', email: 'maria@demac.demo', role: 'office', phone: '+297 560 1102', active: true, authProvider: 'demo' },
+  { id: 'u4', name: 'Daniel Kelly', email: 'daniel@demac.demo', role: 'supervisor', phone: '+297 560 1201', active: true, authProvider: 'demo' },
+  { id: 'u5', name: 'Carlos Rodríguez', email: 'carlos@demac.demo', role: 'technician', phone: '+297 560 1301', vanId: 'v1', active: true, authProvider: 'demo' },
+  { id: 'u6', name: 'Miguel Herrera', email: 'miguel@demac.demo', role: 'technician', phone: '+297 560 1302', vanId: 'v1', active: true, authProvider: 'demo' },
+  { id: 'u7', name: 'Andrea Maduro', email: 'andrea@demac.demo', role: 'accounting', phone: '+297 560 1401', active: true, authProvider: 'demo' },
+  { id: 'u8', name: 'Roberto Ruiz', email: 'roberto@demac.demo', role: 'inventory', phone: '+297 560 1501', active: true, authProvider: 'demo' },
 ];
 
 export const demoServices: ServiceType[] = [

@@ -10,9 +10,19 @@ import {
   demoVans,
   demoWorkOrders,
 } from '../data/demo';
-import { Client, InventoryItem, Invoice, User, WorkOrder } from '../types';
+import {
+  clearFirebaseSession,
+  FirebaseSession,
+  getFirebaseUserProfile,
+  isFirebaseConfigured,
+  getValidFirebaseSession,
+  signInWithFirebaseEmail,
+} from '../services/firebase';
+import { Client, InventoryItem, Invoice, User, UserRole, WorkOrder } from '../types';
 
 const STORAGE_KEY = '@demac-corporation-demo-state-v1';
+
+const DEFAULT_FIREBASE_ROLE: UserRole = 'office';
 
 type PersistedState = {
   clients: Client[];
@@ -20,6 +30,8 @@ type PersistedState = {
   inventory: InventoryItem[];
   invoices: Invoice[];
 };
+
+type LoginResult = Promise<{ ok: boolean; message?: string }>;
 
 type AppStateValue = {
   currentUser: User | null;
@@ -32,9 +44,11 @@ type AppStateValue = {
   inventory: InventoryItem[];
   invoices: Invoice[];
   hydrated: boolean;
-  login: (email: string, password: string) => { ok: boolean; message?: string };
+  authLoading: boolean;
+  login: (email: string, password: string) => LoginResult;
+  loginDemo: (email: string) => { ok: boolean; message?: string };
   loginAs: (userId: string) => void;
-  logout: () => void;
+  logout: () => Promise<void>;
   addClient: (client: Client) => void;
   addWorkOrder: (order: WorkOrder) => void;
   updateWorkOrder: (id: string, changes: Partial<WorkOrder>) => void;
@@ -45,6 +59,23 @@ type AppStateValue = {
 
 const AppStateContext = createContext<AppStateValue | undefined>(undefined);
 
+function buildFirebaseUser(session: FirebaseSession, profile?: Partial<User>): User {
+  return {
+    id: session.uid,
+    name: profile?.name ?? session.displayName ?? session.email ?? 'Usuario DEMAC',
+    email: session.email ?? profile?.email ?? '',
+    role: profile?.role ?? DEFAULT_FIREBASE_ROLE,
+    phone: profile?.phone,
+    vanId: profile?.vanId,
+    active: profile?.active ?? true,
+    authProvider: 'firebase',
+  };
+}
+
+async function loadFirebaseProfile(session: FirebaseSession) {
+  return (await getFirebaseUserProfile(session.uid, session.idToken)) as Partial<User> | undefined;
+}
+
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [clients, setClients] = useState<Client[]>(demoClients);
@@ -52,6 +83,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [inventory, setInventory] = useState<InventoryItem[]>(demoInventory);
   const [invoices, setInvoices] = useState<Invoice[]>(demoInvoices);
   const [hydrated, setHydrated] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
@@ -73,6 +105,29 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    let active = true;
+
+    (async () => {
+      try {
+        const session = await getValidFirebaseSession();
+        if (!active || !session) return;
+        const profile = await loadFirebaseProfile(session);
+        const user = buildFirebaseUser(session, profile);
+        setCurrentUser(user.active ? user : null);
+      } catch (error) {
+        console.warn('No se pudo restaurar la sesión de Firebase:', error);
+        await clearFirebaseSession();
+      } finally {
+        if (active) setAuthLoading(false);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!hydrated) return;
     const state: PersistedState = { clients, workOrders, inventory, invoices };
     AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(state)).catch((error) => {
@@ -80,14 +135,33 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     });
   }, [clients, workOrders, inventory, invoices, hydrated]);
 
-  const login = (email: string, password: string) => {
+  const loginDemo = (email: string) => {
     const user = demoUsers.find(
-      (candidate) => candidate.email.toLowerCase() === email.trim().toLowerCase() && candidate.password === password,
+      (candidate) => candidate.email.toLowerCase() === email.trim().toLowerCase(),
     );
-    if (!user) return { ok: false, message: 'Correo o contraseña incorrectos.' };
-    if (!user.active) return { ok: false, message: 'Este usuario está inactivo.' };
+    if (!user) return { ok: false, message: 'Correo DEMO no encontrado.' };
+    if (!user.active) return { ok: false, message: 'Este usuario DEMO está inactivo.' };
     setCurrentUser(user);
     return { ok: true };
+  };
+
+  const login = async (email: string, password: string) => {
+    if (!isFirebaseConfigured) return { ok: false, message: 'Firebase no está configurado para este entorno.' };
+
+    try {
+      const session = await signInWithFirebaseEmail(email.trim(), password);
+      const profile = await loadFirebaseProfile(session);
+      const user = buildFirebaseUser(session, profile);
+      if (!user.active) {
+        await clearFirebaseSession();
+        return { ok: false, message: 'Este usuario está inactivo.' };
+      }
+      setCurrentUser(user);
+      return { ok: true };
+    } catch (error) {
+      console.warn('No se pudo iniciar sesión con Firebase:', error);
+      return { ok: false, message: 'Correo o contraseña incorrectos.' };
+    }
   };
 
   const loginAs = (userId: string) => {
@@ -95,7 +169,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     if (user) setCurrentUser(user);
   };
 
-  const logout = () => setCurrentUser(null);
+  const logout = async () => {
+    if (currentUser?.authProvider === 'firebase') await clearFirebaseSession();
+    setCurrentUser(null);
+  };
 
   const addClient = (client: Client) => setClients((previous) => [client, ...previous]);
   const addWorkOrder = (order: WorkOrder) => setWorkOrders((previous) => [order, ...previous]);
@@ -137,8 +214,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       workOrders,
       inventory,
       invoices,
-      hydrated,
+      hydrated: hydrated && !authLoading,
+      authLoading,
       login,
+      loginDemo,
       loginAs,
       logout,
       addClient,
@@ -148,7 +227,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       registerPayment,
       resetDemo,
     }),
-    [currentUser, clients, workOrders, inventory, invoices, hydrated],
+    [currentUser, clients, workOrders, inventory, invoices, hydrated, authLoading],
   );
 
   return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;
