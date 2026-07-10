@@ -1,85 +1,66 @@
 import React, { useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
-import { AppModal, Button, Card, Input, Pill, SectionTitle, statusTone } from '../components/UI';
+import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { AppModal, Button, Card, Input, Pill, SectionTitle, formatMoney, statusTone } from '../components/UI';
 import { useAppState } from '../state/AppState';
 import { colors } from '../theme';
-import { AppointmentStatus, ServiceType, Van, WorkOrder } from '../types';
+import { AppointmentStatus, WorkOrder } from '../types';
 
-const morningSlots = ['08:30', '09:30', '10:30'];
-const afternoonSlots = ['13:30', '14:30', '15:30'];
-const allSlots = [...morningSlots, ...afternoonSlots];
-const statusOptions: AppointmentStatus[] = ['Confirmada', 'Asignada', 'En camino', 'En el sitio', 'En proceso', 'Pendiente', 'Completada', 'Facturada', 'Pagada', 'Reprogramada', 'Cancelada'];
-
-function formatDate(date: string) {
-  return new Date(`${date}T12:00:00`).toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' });
-}
-
-function addDays(date: string, amount: number) {
-  const next = new Date(`${date}T12:00:00`);
-  next.setDate(next.getDate() + amount);
-  return next.toISOString().slice(0, 10);
-}
-
-function durationInSlots(service?: ServiceType) {
-  return Math.max(1, Math.min(3, Math.ceil((service?.durationMinutes ?? 60) / 60)));
-}
-
-function slotIndex(time: string) {
-  return allSlots.indexOf(time);
-}
-
-function orderOccupiesSlot(order: WorkOrder, slot: string, services: ServiceType[]) {
-  const start = slotIndex(order.time);
-  const target = slotIndex(slot);
-  if (start < 0 || target < 0) return false;
-  const service = services.find((item) => item.id === order.serviceId);
-  return target >= start && target < start + durationInSlots(service);
-}
+const statusOptions: AppointmentStatus[] = ['Solicitud recibida', 'Confirmada', 'Asignada', 'En camino', 'En el sitio', 'En proceso', 'Pendiente', 'Completada', 'Facturada', 'Pagada', 'Reprogramada', 'Cancelada'];
+const statusFilters: (AppointmentStatus | 'Todos')[] = ['Todos', 'Solicitud recibida', 'Confirmada', 'Asignada', 'En camino', 'En el sitio', 'En proceso', 'Pendiente', 'Completada'];
+const days = ['2026-07-08', '2026-07-09', '2026-07-10', '2026-07-11', '2026-07-13'];
+const workingHours = ['08:00', '09:30', '11:00', '13:00', '14:30', '16:00'];
 
 export function AgendaScreen() {
-  const { width } = useWindowDimensions();
-  const compact = width < 1050;
   const { workOrders, clients, services, vans, users, addWorkOrder, updateWorkOrder } = useAppState();
+  const { width } = useWindowDimensions();
+  const isWide = width >= 1120;
   const [selectedDate, setSelectedDate] = useState('2026-07-08');
   const [showCreate, setShowCreate] = useState(false);
   const [clientId, setClientId] = useState(clients[0]?.id ?? '');
   const [serviceId, setServiceId] = useState(services[0]?.id ?? '');
+  const [time, setTime] = useState('08:00');
   const [problem, setProblem] = useState('');
   const [vanId, setVanId] = useState(vans[0]?.id ?? '');
-  const [time, setTime] = useState('08:30');
+  const [selectedStatus, setSelectedStatus] = useState<AppointmentStatus | 'Todos'>('Todos');
+  const [selectedVan, setSelectedVan] = useState('Todos');
+  const [search, setSearch] = useState('');
 
-  const days = useMemo(() => Array.from({ length: 8 }, (_, index) => addDays('2026-07-08', index)), []);
-  const orders = useMemo(
+  const selectedDateLabel = useMemo(() => formatDateLong(selectedDate), [selectedDate]);
+
+  const dayOrders = useMemo(
     () => workOrders.filter((order) => order.date === selectedDate).sort((a, b) => a.time.localeCompare(b.time)),
     [workOrders, selectedDate],
   );
-  const selectedService = services.find((item) => item.id === serviceId);
-  const selectedVan = vans.find((item) => item.id === vanId);
-  const requiredSlots = durationInSlots(selectedService);
 
-  const isAvailable = (candidateVan: Van, candidateTime: string, date = selectedDate) => {
-    if (candidateVan.status === 'Mantenimiento') return false;
-    const start = slotIndex(candidateTime);
-    if (start < 0 || start + requiredSlots > allSlots.length) return false;
-    if (start < morningSlots.length && start + requiredSlots > morningSlots.length) return false;
-    const candidateSlots = allSlots.slice(start, start + requiredSlots);
-    return !workOrders.some((order) => order.date === date && order.vanId === candidateVan.id && candidateSlots.some((slot) => orderOccupiesSlot(order, slot, services)));
-  };
+  const filteredOrders = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return dayOrders.filter((order) => {
+      const client = clients.find((item) => item.id === order.clientId);
+      const service = services.find((item) => item.id === order.serviceId);
+      const matchesStatus = selectedStatus === 'Todos' || order.status === selectedStatus;
+      const matchesVan = selectedVan === 'Todos' || order.vanId === selectedVan;
+      const matchesSearch = !needle || [client?.name, service?.name, order.address, order.problem, order.id]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(needle);
+      return matchesStatus && matchesVan && matchesSearch;
+    });
+  }, [clients, dayOrders, search, selectedStatus, selectedVan, services]);
 
-  const nextAvailableDates = useMemo(() => {
-    const dates: string[] = [];
-    for (let offset = 1; offset <= 14 && dates.length < 4; offset += 1) {
-      const date = addDays(selectedDate, offset);
-      if (vans.some((van) => allSlots.some((slot) => isAvailable(van, slot, date)))) dates.push(date);
-    }
-    return dates;
-  }, [selectedDate, requiredSlots, workOrders, vans]);
+  const summary = useMemo(() => {
+    const completed = dayOrders.filter((order) => ['Completada', 'Facturada', 'Pagada'].includes(order.status)).length;
+    const active = dayOrders.filter((order) => ['Asignada', 'En camino', 'En el sitio', 'En proceso'].includes(order.status)).length;
+    const pending = dayOrders.filter((order) => ['Solicitud recibida', 'Confirmada', 'Pendiente', 'Reprogramada'].includes(order.status)).length;
+    const amount = dayOrders.reduce((total, order) => total + order.amount, 0);
+    return { completed, active, pending, amount };
+  }, [dayOrders]);
 
   const createOrder = () => {
     const client = clients.find((item) => item.id === clientId);
     const service = services.find((item) => item.id === serviceId);
     const van = vans.find((item) => item.id === vanId);
-    if (!client || !service || !van || !problem.trim() || !isAvailable(van, time)) return;
+    if (!client || !service || !van || !problem.trim()) return;
     const order: WorkOrder = {
       id: `WO-${selectedDate.replaceAll('-', '').slice(2)}-${String(workOrders.length + 1).padStart(3, '0')}`,
       clientId,
@@ -101,100 +82,134 @@ export function AgendaScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.page}>
-      <SectionTitle
-        title="Agenda"
-        subtitle="Planifica el día por van, disponibilidad y duración del servicio."
-        action={<Button label="Nueva cita" icon="＋" onPress={() => setShowCreate(true)} />}
-      />
-
-      <Card>
-        <View style={styles.toolbar}>
-          <View>
-            <Text style={styles.eyebrow}>CALENDARIO OPERATIVO</Text>
-            <Text style={styles.toolbarTitle}>{formatDate(selectedDate)}</Text>
-          </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.dateRow}>
-            {days.map((date) => {
-              const active = date === selectedDate;
-              const dateObj = new Date(`${date}T12:00:00`);
-              return (
-                <Pressable key={date} onPress={() => setSelectedDate(date)} style={[styles.dateChip, active && styles.dateChipActive]}>
-                  <Text style={[styles.dateWeekday, active && styles.dateTextActive]}>{dateObj.toLocaleDateString('es', { weekday: 'short' }).toUpperCase()}</Text>
-                  <Text style={[styles.dateNumber, active && styles.dateTextActive]}>{dateObj.getDate()}</Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
+      <View style={styles.hero}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.kicker}>AGENDA Y DESPACHO</Text>
+          <Text style={styles.heroTitle}>{selectedDateLabel}</Text>
+          <Text style={styles.heroSubtitle}>Planifica citas, asigna vans y mueve cada trabajo por su estado operativo.</Text>
         </View>
-      </Card>
-
-      <Card style={styles.scheduleCard}>
-        <View style={styles.scheduleHeader}>
-          <View>
-            <Text style={styles.scheduleTitle}>Disponibilidad de vans</Text>
-            <Text style={styles.scheduleSubtitle}>3 citas en la mañana · Almuerzo 12:00–13:00 · 3 citas en la tarde</Text>
-          </View>
-          <View style={styles.legend}><View style={styles.legendDot} /><Text style={styles.legendText}>Disponible</Text><View style={[styles.legendDot, styles.legendBusy]} /><Text style={styles.legendText}>Ocupado</Text></View>
+        <View style={styles.heroActions}>
+          <Button label="Nueva cita" icon="＋" onPress={() => setShowCreate(true)} />
+          <Button variant="secondary" label="Vista despacho" compact onPress={() => setSelectedStatus('Todos')} />
         </View>
+      </View>
 
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          <View style={{ minWidth: compact ? 980 : '100%' }}>
-            <View style={styles.gridHeader}>
-              <View style={styles.vanHeader}><Text style={styles.headerText}>VAN / EQUIPO</Text></View>
-              {morningSlots.map((slot) => <View key={slot} style={styles.slotHeader}><Text style={styles.headerText}>{slot}</Text><Text style={styles.headerSub}>AM</Text></View>)}
-              <View style={styles.lunchHeader}><Text style={styles.lunchText}>ALMUERZO</Text></View>
-              {afternoonSlots.map((slot) => <View key={slot} style={styles.slotHeader}><Text style={styles.headerText}>{slot}</Text><Text style={styles.headerSub}>PM</Text></View>)}
-            </View>
+      <View style={[styles.summaryGrid, isWide && styles.summaryGridWide]}>
+        <MetricCard icon="📅" label="Citas del día" value={String(dayOrders.length)} detail={`${filteredOrders.length} visibles`} />
+        <MetricCard icon="🚐" label="En operación" value={String(summary.active)} detail="Asignadas / en ruta" />
+        <MetricCard icon="✓" label="Completadas" value={String(summary.completed)} detail={`${summary.pending} pendientes`} />
+        <MetricCard icon="💳" label="Valor programado" value={formatMoney(summary.amount)} detail="Según servicio base" />
+      </View>
 
-            {vans.slice(0, 4).map((van) => {
-              const techNames = van.technicianIds.map((id) => users.find((user) => user.id === id)?.name.split(' ')[0]).filter(Boolean).join(' + ');
-              return (
-                <View key={van.id} style={styles.gridRow}>
-                  <View style={styles.vanCell}>
-                    <View style={styles.vanBadge}><Text style={styles.vanBadgeText}>{van.name.replace(/\D/g, '') || van.name.slice(-1)}</Text></View>
-                    <View style={{ flex: 1 }}><Text style={styles.vanName}>{van.name}</Text><Text style={styles.techNames}>{techNames || 'Sin equipo asignado'}</Text></View>
-                    <Pill label={van.status} tone={van.status === 'Disponible' ? 'green' : van.status === 'Mantenimiento' ? 'red' : 'blue'} />
-                  </View>
-                  {morningSlots.map((slot) => <ScheduleCell key={`${van.id}-${slot}`} van={van} slot={slot} orders={orders} services={services} clients={clients} onCreate={() => { setVanId(van.id); setTime(slot); setShowCreate(true); }} />)}
-                  <View style={styles.lunchCell}><Text style={styles.lunchIcon}>☕</Text></View>
-                  {afternoonSlots.map((slot) => <ScheduleCell key={`${van.id}-${slot}`} van={van} slot={slot} orders={orders} services={services} clients={clients} onCreate={() => { setVanId(van.id); setTime(slot); setShowCreate(true); }} />)}
-                </View>
-              );
-            })}
+      <Card style={styles.dateCardWrap}>
+        <View style={styles.dateHeader}>
+          <View>
+            <Text style={styles.blockTitle}>Calendario rápido</Text>
+            <Text style={styles.blockSubtitle}>Selecciona el día de trabajo.</Text>
           </View>
+          <Pill label="Tiempo real" tone="success" />
+        </View>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.dateRow}>
+          {days.map((date) => {
+            const active = date === selectedDate;
+            const dateObj = new Date(`${date}T12:00:00`);
+            const count = workOrders.filter((order) => order.date === date).length;
+            return (
+              <Pressable key={date} onPress={() => setSelectedDate(date)} style={[styles.dateCard, active && styles.dateCardActive]}>
+                <Text style={[styles.dateDay, active && styles.dateTextActive]}>{dateObj.toLocaleDateString('es', { weekday: 'short' }).toUpperCase()}</Text>
+                <Text style={[styles.dateNumber, active && styles.dateTextActive]}>{dateObj.getDate()}</Text>
+                <Text style={[styles.dateMonth, active && styles.dateTextActive]}>{dateObj.toLocaleDateString('es', { month: 'short' }).toUpperCase()}</Text>
+                <View style={[styles.dateBadge, active && styles.dateBadgeActive]}><Text style={[styles.dateBadgeText, active && styles.dateBadgeTextActive]}>{count}</Text></View>
+              </Pressable>
+            );
+          })}
         </ScrollView>
       </Card>
 
-      <Card>
-        <SectionTitle title={`Citas del día (${orders.length})`} subtitle="Actualiza el estado sin salir de la agenda." />
-        {orders.length === 0 ? <Text style={styles.emptyText}>No hay citas programadas para este día.</Text> : orders.map((order) => {
-          const client = clients.find((item) => item.id === order.clientId);
-          const service = services.find((item) => item.id === order.serviceId);
-          const van = vans.find((item) => item.id === order.vanId);
-          return (
-            <View key={order.id} style={styles.orderRow}>
-              <View style={styles.timeBlock}><Text style={styles.timeText}>{order.time}</Text><Text style={styles.durationText}>{durationInSlots(service)} cupo{durationInSlots(service) > 1 ? 's' : ''}</Text></View>
-              <View style={styles.orderInfo}><Text style={styles.clientName}>{client?.name}</Text><Text style={styles.orderMeta}>{service?.name} · {van?.name}</Text><Text style={styles.orderAddress}>{order.address}</Text></View>
-              <View style={styles.statusArea}><Pill label={order.status} tone={statusTone(order.status)} /><ScrollView horizontal showsHorizontalScrollIndicator={false}><View style={styles.statusActions}>{statusOptions.filter((status) => status !== order.status).slice(0, 4).map((status) => <Pressable key={status} onPress={() => updateWorkOrder(order.id, { status })} style={styles.statusButton}><Text style={styles.statusButtonText}>{status}</Text></Pressable>)}</View></ScrollView></View>
-            </View>
-          );
-        })}
-      </Card>
+      <View style={[styles.workspace, isWide && styles.workspaceWide]}>
+        <Card style={styles.mainBoard}>
+          <SectionTitle
+            title="Programación del día"
+            subtitle="Controla la ruta como una pantalla de operaciones: hora, cliente, servicio, van y estado."
+            action={<Button label="Nueva cita" compact icon="＋" onPress={() => setShowCreate(true)} />}
+          />
 
-      <AppModal visible={showCreate} title="Nueva cita" onClose={() => setShowCreate(false)}>
+          <View style={styles.toolbar}>
+            <Input style={styles.searchInput} value={search} onChangeText={setSearch} placeholder="Buscar cliente, dirección, servicio u orden…" />
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+              {statusFilters.map((status) => <FilterChip key={status} label={status} active={selectedStatus === status} onPress={() => setSelectedStatus(status)} />)}
+            </ScrollView>
+          </View>
+
+          <View style={styles.timelineHeader}>
+            <Text style={[styles.tableHead, { width: 86 }]}>HORA</Text>
+            <Text style={[styles.tableHead, { flex: 1 }]}>CLIENTE / SERVICIO</Text>
+            <Text style={[styles.tableHead, styles.hideSmall]}>VAN</Text>
+            <Text style={[styles.tableHead, styles.statusHead]}>ESTADO</Text>
+          </View>
+
+          {filteredOrders.length ? filteredOrders.map((order) => (
+            <OrderLine
+              key={order.id}
+              order={order}
+              clients={clients}
+              services={services}
+              vans={vans}
+              users={users}
+              onStatusChange={(status) => updateWorkOrder(order.id, { status })}
+            />
+          )) : (
+            <View style={styles.emptyBox}>
+              <Text style={styles.emptyIcon}>📭</Text>
+              <Text style={styles.emptyTitle}>No hay citas con estos filtros</Text>
+              <Text style={styles.emptyText}>Ajusta el estado, la van o la búsqueda para ver más resultados.</Text>
+            </View>
+          )}
+        </Card>
+
+        <View style={styles.sideColumn}>
+          <Card>
+            <Text style={styles.blockTitle}>Despacho por van</Text>
+            <Text style={styles.blockSubtitle}>Filtra la agenda tocando una van.</Text>
+            <View style={styles.vanList}>
+              <VanFilter label="Todas las vans" active={selectedVan === 'Todos'} count={dayOrders.length} onPress={() => setSelectedVan('Todos')} />
+              {vans.map((van) => {
+                const count = dayOrders.filter((order) => order.vanId === van.id).length;
+                const techNames = van.technicianIds.map((id) => users.find((u) => u.id === id)?.name.split(' ')[0]).filter(Boolean).join(' y ');
+                return <VanFilter key={van.id} label={van.name} detail={techNames || van.status} active={selectedVan === van.id} count={count} onPress={() => setSelectedVan(van.id)} />;
+              })}
+            </View>
+          </Card>
+
+          <Card>
+            <Text style={styles.blockTitle}>Horas disponibles</Text>
+            <Text style={styles.blockSubtitle}>Referencia rápida para crear nuevas citas.</Text>
+            <View style={styles.slotGrid}>
+              {workingHours.map((slot) => {
+                const busy = dayOrders.some((order) => order.time === slot);
+                return (
+                  <Pressable key={slot} onPress={() => { setTime(slot); setShowCreate(true); }} style={[styles.slot, busy && styles.slotBusy]}>
+                    <Text style={[styles.slotText, busy && styles.slotBusyText]}>{slot}</Text>
+                    <Text style={styles.slotHint}>{busy ? 'Ocupada' : 'Libre'}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </Card>
+        </View>
+      </View>
+
+      <AppModal visible={showCreate} title="Crear nueva cita" onClose={() => setShowCreate(false)}>
         <ScrollView>
-          <Text style={styles.modalIntro}>Selecciona cliente, servicio, van y un cupo disponible. El equipo técnico se asigna automáticamente según la van.</Text>
+          <Text style={styles.modalSubtitle}>Agenda una orden rápida para {selectedDateLabel}.</Text>
           <Text style={styles.fieldLabel}>Cliente</Text>
           <View style={styles.optionWrap}>{clients.map((client) => <Option key={client.id} label={client.name} active={clientId === client.id} onPress={() => setClientId(client.id)} />)}</View>
           <Text style={styles.fieldLabel}>Servicio</Text>
-          <View style={styles.optionWrap}>{services.map((service) => <Option key={service.id} label={`${service.name} · ${durationInSlots(service)} cupo${durationInSlots(service) > 1 ? 's' : ''}`} active={serviceId === service.id} onPress={() => setServiceId(service.id)} />)}</View>
-          <Text style={styles.fieldLabel}>Van y equipo</Text>
-          <View style={styles.optionWrap}>{vans.slice(0, 4).map((van) => { const names = van.technicianIds.map((id) => users.find((user) => user.id === id)?.name.split(' ')[0]).filter(Boolean).join(' + '); return <Option key={van.id} label={`${van.name} · ${names || 'Sin equipo'}`} active={vanId === van.id} onPress={() => setVanId(van.id)} />; })}</View>
-          <Text style={styles.fieldLabel}>Hora disponible</Text>
-          <View style={styles.optionWrap}>{allSlots.map((slot) => { const available = selectedVan ? isAvailable(selectedVan, slot) : false; return <Option key={slot} label={available ? slot : `${slot} · Ocupado`} active={time === slot} disabled={!available} onPress={() => setTime(slot)} />; })}</View>
-          {selectedVan && !allSlots.some((slot) => isAvailable(selectedVan, slot)) ? <View style={styles.noAvailability}><Text style={styles.noAvailabilityTitle}>No hay espacio para esta van en el día seleccionado.</Text><Text style={styles.noAvailabilityText}>Próximas fechas con disponibilidad:</Text><View style={styles.optionWrap}>{nextAvailableDates.map((date) => <Option key={date} label={formatDate(date)} active={false} onPress={() => setSelectedDate(date)} />)}</View></View> : null}
+          <View style={styles.optionWrap}>{services.map((service) => <Option key={service.id} label={`${service.name} · ${formatMoney(service.basePrice)}`} active={serviceId === service.id} onPress={() => setServiceId(service.id)} />)}</View>
+          <Text style={styles.fieldLabel}>Van asignada</Text>
+          <View style={styles.optionWrap}>{vans.map((van) => <Option key={van.id} label={`${van.name} · ${van.status}`} active={vanId === van.id} onPress={() => setVanId(van.id)} />)}</View>
+          <Input label="Hora" value={time} onChangeText={setTime} placeholder="08:00" />
           <Input label="Problema reportado / instrucciones" value={problem} onChangeText={setProblem} multiline placeholder="Describe el trabajo solicitado…" />
-          <View style={styles.summaryBox}><Text style={styles.summaryTitle}>Resumen de asignación</Text><Text style={styles.summaryLine}>{selectedService?.name} · {requiredSlots} cupo{requiredSlots > 1 ? 's' : ''}</Text><Text style={styles.summaryLine}>{selectedVan?.name} · {selectedVan?.technicianIds.map((id) => users.find((user) => user.id === id)?.name.split(' ')[0]).filter(Boolean).join(' + ') || 'Sin equipo'}</Text><Text style={styles.summaryLine}>{formatDate(selectedDate)} · {time}</Text></View>
           <View style={styles.modalActions}><Button variant="secondary" label="Cancelar" onPress={() => setShowCreate(false)} /><Button label="Guardar cita" onPress={createOrder} /></View>
         </ScrollView>
       </AppModal>
@@ -202,89 +217,177 @@ export function AgendaScreen() {
   );
 }
 
-function ScheduleCell({ van, slot, orders, services, clients, onCreate }: { van: Van; slot: string; orders: WorkOrder[]; services: ServiceType[]; clients: { id: string; name: string }[]; onCreate: () => void }) {
-  const order = orders.find((item) => item.vanId === van.id && orderOccupiesSlot(item, slot, services));
-  if (!order) return <Pressable onPress={onCreate} style={styles.freeCell}><Text style={styles.plus}>＋</Text><Text style={styles.freeText}>Disponible</Text></Pressable>;
-  const service = services.find((item) => item.id === order.serviceId);
+function OrderLine({ order, clients, services, vans, users, onStatusChange }: {
+  order: WorkOrder;
+  clients: ReturnType<typeof useAppState>['clients'];
+  services: ReturnType<typeof useAppState>['services'];
+  vans: ReturnType<typeof useAppState>['vans'];
+  users: ReturnType<typeof useAppState>['users'];
+  onStatusChange: (status: AppointmentStatus) => void;
+}) {
   const client = clients.find((item) => item.id === order.clientId);
-  const isStart = order.time === slot;
-  return <View style={[styles.busyCell, !isStart && styles.continuationCell]}>{isStart ? <><Text style={styles.busyClient} numberOfLines={1}>{client?.name}</Text><Text style={styles.busyService} numberOfLines={2}>{service?.name}</Text><Text style={styles.busyStatus}>{order.status}</Text></> : <Text style={styles.continuationText}>Continúa</Text>}</View>;
+  const service = services.find((item) => item.id === order.serviceId);
+  const van = vans.find((item) => item.id === order.vanId);
+  const techNames = order.technicianIds.map((id) => users.find((u) => u.id === id)?.name.split(' ')[0]).filter(Boolean).join(' y ');
+  const nextStatuses = statusOptions.filter((status) => status !== order.status).slice(0, 5);
+
+  return (
+    <View style={styles.orderRow}>
+      <View style={styles.timeBlock}>
+        <Text style={styles.time}>{order.time}</Text>
+        <Text style={styles.orderId}>{order.id.slice(-3)}</Text>
+      </View>
+      <View style={styles.orderMain}>
+        <View style={styles.clientLine}>
+          <Text style={styles.client}>{client?.name}</Text>
+          <Text style={styles.amount}>{formatMoney(order.amount)}</Text>
+        </View>
+        <Text style={styles.service}>{service?.name} · {order.address}</Text>
+        <Text style={styles.problem} numberOfLines={2}>{order.problem}</Text>
+      </View>
+      <View style={styles.vanColumn}>
+        <Text style={styles.vanName}>{van?.name ?? 'Sin van'}</Text>
+        <Text style={styles.techs} numberOfLines={1}>{techNames || 'Sin técnico'}</Text>
+      </View>
+      <View style={styles.statusColumn}>
+        <Pill label={order.status} tone={statusTone(order.status)} />
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.statusScroll}>
+          <View style={styles.statusActions}>
+            {nextStatuses.map((status) => (
+              <Pressable key={status} onPress={() => onStatusChange(status)} style={styles.statusButton}>
+                <Text style={styles.statusButtonText}>{status}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </ScrollView>
+      </View>
+    </View>
+  );
 }
 
-function Option({ label, active, disabled, onPress }: { label: string; active: boolean; disabled?: boolean; onPress: () => void }) {
-  return <Pressable disabled={disabled} onPress={onPress} style={[styles.option, active && styles.optionActive, disabled && styles.optionDisabled]}><Text style={[styles.optionText, active && styles.optionTextActive, disabled && styles.optionTextDisabled]}>{label}</Text></Pressable>;
+function MetricCard({ icon, label, value, detail }: { icon: string; label: string; value: string; detail: string }) {
+  return (
+    <Card style={styles.metricCard}>
+      <View style={styles.metricIcon}><Text>{icon}</Text></View>
+      <Text style={styles.metricLabel}>{label}</Text>
+      <Text style={styles.metricValue}>{value}</Text>
+      <Text style={styles.metricDetail}>{detail}</Text>
+    </Card>
+  );
+}
+
+function FilterChip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  return <Pressable onPress={onPress} style={[styles.filterChip, active && styles.filterChipActive]}><Text style={[styles.filterText, active && styles.filterTextActive]}>{label}</Text></Pressable>;
+}
+
+function VanFilter({ label, detail, count, active, onPress }: { label: string; detail?: string; count: number; active: boolean; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} style={[styles.vanFilter, active && styles.vanFilterActive]}>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.vanFilterLabel, active && styles.vanFilterLabelActive]}>{label}</Text>
+        {detail ? <Text style={styles.vanFilterDetail}>{detail}</Text> : null}
+      </View>
+      <View style={[styles.vanCount, active && styles.vanCountActive]}><Text style={[styles.vanCountText, active && styles.vanCountTextActive]}>{count}</Text></View>
+    </Pressable>
+  );
+}
+
+function Option({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  return <Pressable onPress={onPress} style={[styles.option, active && styles.optionActive]}><Text style={[styles.optionText, active && styles.optionTextActive]}>{label}</Text></Pressable>;
+}
+
+function formatDateLong(date: string) {
+  return new Date(`${date}T12:00:00`).toLocaleDateString('es', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 }
 
 const styles = StyleSheet.create({
   page: { padding: 24, gap: 18, paddingBottom: 90 },
-  toolbar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 18, flexWrap: 'wrap' },
-  eyebrow: { color: colors.primary, fontSize: 9, fontWeight: '900', letterSpacing: 1.3 },
-  toolbarTitle: { color: colors.text, fontSize: 22, fontWeight: '900', marginTop: 4, textTransform: 'capitalize' },
-  dateRow: { gap: 8 },
-  dateChip: { width: 58, minHeight: 58, borderWidth: 1, borderColor: colors.border, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' },
-  dateChipActive: { backgroundColor: '#2CA01C', borderColor: '#2CA01C' },
-  dateWeekday: { color: colors.muted, fontWeight: '800', fontSize: 9 },
-  dateNumber: { color: colors.text, fontWeight: '900', fontSize: 19, marginTop: 2 },
+  hero: { backgroundColor: colors.navy, borderRadius: 18, padding: 24, flexDirection: 'row', flexWrap: 'wrap', gap: 16, alignItems: 'center' },
+  kicker: { color: '#8DB7E2', fontSize: 10, fontWeight: '900', letterSpacing: 2.4, textTransform: 'uppercase' },
+  heroTitle: { color: '#FFFFFF', fontWeight: '900', fontSize: 28, marginTop: 8, textTransform: 'capitalize' },
+  heroSubtitle: { color: '#D7E7FF', marginTop: 8, fontSize: 14, lineHeight: 20 },
+  heroActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, alignItems: 'center' },
+  summaryGrid: { gap: 14 },
+  summaryGridWide: { flexDirection: 'row' },
+  metricCard: { flex: 1, minWidth: 190, gap: 7 },
+  metricIcon: { width: 38, height: 38, borderRadius: 12, backgroundColor: colors.primaryLight, alignItems: 'center', justifyContent: 'center', marginBottom: 2 },
+  metricLabel: { color: colors.muted, fontSize: 12, fontWeight: '800' },
+  metricValue: { color: colors.text, fontSize: 24, fontWeight: '900' },
+  metricDetail: { color: colors.muted, fontSize: 11 },
+  dateCardWrap: { gap: 14 },
+  dateHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
+  blockTitle: { color: colors.text, fontSize: 18, fontWeight: '900' },
+  blockSubtitle: { color: colors.muted, fontSize: 12, marginTop: 4, lineHeight: 18 },
+  dateRow: { gap: 10 },
+  dateCard: { width: 88, height: 104, borderWidth: 1, borderColor: colors.border, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FBFCFE', position: 'relative' },
+  dateCardActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  dateDay: { color: colors.muted, fontWeight: '900', fontSize: 10 },
+  dateNumber: { color: colors.text, fontWeight: '900', fontSize: 30, marginVertical: 2 },
+  dateMonth: { color: colors.muted, fontWeight: '800', fontSize: 10 },
   dateTextActive: { color: '#FFFFFF' },
-  scheduleCard: { padding: 0, overflow: 'hidden' },
-  scheduleHeader: { paddingHorizontal: 20, paddingVertical: 17, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 14, flexWrap: 'wrap', borderBottomWidth: 1, borderBottomColor: colors.border },
-  scheduleTitle: { color: colors.text, fontWeight: '900', fontSize: 17 },
-  scheduleSubtitle: { color: colors.muted, fontSize: 11, marginTop: 4 },
-  legend: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  legendDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: '#DDF5D8', borderWidth: 1, borderColor: '#2CA01C' },
-  legendBusy: { backgroundColor: '#DCEBFF', borderColor: colors.primary, marginLeft: 8 },
-  legendText: { color: colors.muted, fontSize: 9, fontWeight: '700' },
-  gridHeader: { flexDirection: 'row', backgroundColor: '#F4F5F7', borderBottomWidth: 1, borderBottomColor: colors.border },
-  vanHeader: { width: 245, padding: 12, justifyContent: 'center', borderRightWidth: 1, borderRightColor: colors.border },
-  slotHeader: { width: 122, paddingVertical: 10, alignItems: 'center', borderRightWidth: 1, borderRightColor: colors.border },
-  lunchHeader: { width: 70, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF8E8', borderRightWidth: 1, borderRightColor: colors.border },
-  headerText: { color: colors.text, fontSize: 10, fontWeight: '900' },
-  headerSub: { color: colors.muted, fontSize: 8, fontWeight: '700', marginTop: 2 },
-  lunchText: { color: '#9A6B00', fontSize: 8, fontWeight: '900', transform: [{ rotate: '-90deg' }] },
-  gridRow: { flexDirection: 'row', minHeight: 108, borderBottomWidth: 1, borderBottomColor: colors.border },
-  vanCell: { width: 245, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderRightWidth: 1, borderRightColor: colors.border, backgroundColor: '#FFFFFF' },
-  vanBadge: { width: 36, height: 36, borderRadius: 9, backgroundColor: '#EAF3FF', alignItems: 'center', justifyContent: 'center' },
-  vanBadgeText: { color: colors.primary, fontWeight: '900' },
+  dateBadge: { position: 'absolute', top: 8, right: 8, width: 22, height: 22, borderRadius: 11, backgroundColor: colors.primaryLight, alignItems: 'center', justifyContent: 'center' },
+  dateBadgeActive: { backgroundColor: '#FFFFFF' },
+  dateBadgeText: { color: colors.primary, fontSize: 10, fontWeight: '900' },
+  dateBadgeTextActive: { color: colors.primary },
+  workspace: { gap: 16 },
+  workspaceWide: { flexDirection: 'row', alignItems: 'flex-start' },
+  mainBoard: { flex: 1, minWidth: 0 },
+  sideColumn: { gap: 16, minWidth: 300, flexBasis: 350 },
+  toolbar: { gap: 10, marginBottom: 8 },
+  searchInput: { marginBottom: 0 },
+  filterRow: { gap: 8, paddingBottom: 2 },
+  filterChip: { borderWidth: 1, borderColor: colors.border, backgroundColor: '#FFFFFF', borderRadius: 999, paddingVertical: 8, paddingHorizontal: 13 },
+  filterChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  filterText: { color: colors.muted, fontSize: 11, fontWeight: '800' },
+  filterTextActive: { color: '#FFFFFF' },
+  timelineHeader: { flexDirection: 'row', gap: 14, borderBottomWidth: 1, borderBottomColor: colors.border, paddingBottom: 10, marginTop: 4 },
+  tableHead: { color: colors.muted, fontSize: 10, fontWeight: '900', letterSpacing: 0.4 },
+  hideSmall: { width: 120 },
+  statusHead: { width: 250 },
+  orderRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 14, paddingVertical: 17, borderBottomWidth: 1, borderBottomColor: '#EAF0F6' },
+  timeBlock: { width: 86, alignItems: 'center', backgroundColor: colors.primaryLight, paddingVertical: 12, borderRadius: 14 },
+  time: { color: colors.primary, fontWeight: '900', fontSize: 17 },
+  orderId: { color: colors.muted, fontSize: 9, marginTop: 3, fontWeight: '800' },
+  orderMain: { flex: 1, minWidth: 250 },
+  clientLine: { flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
+  client: { color: colors.text, fontWeight: '900', fontSize: 15 },
+  amount: { color: colors.success, fontWeight: '900', fontSize: 12 },
+  service: { color: colors.primary, fontWeight: '800', fontSize: 12, marginTop: 3 },
+  problem: { color: colors.text, fontSize: 12, marginTop: 6, lineHeight: 17 },
+  vanColumn: { width: 120 },
   vanName: { color: colors.text, fontWeight: '900', fontSize: 12 },
-  techNames: { color: colors.muted, fontSize: 9, marginTop: 3 },
-  freeCell: { width: 122, padding: 8, alignItems: 'center', justifyContent: 'center', borderRightWidth: 1, borderRightColor: colors.border, backgroundColor: '#FBFEFB' },
-  plus: { color: '#2CA01C', fontWeight: '900', fontSize: 18 },
-  freeText: { color: '#2CA01C', fontSize: 9, fontWeight: '800', marginTop: 2 },
-  busyCell: { width: 122, padding: 9, justifyContent: 'center', borderRightWidth: 1, borderRightColor: colors.border, backgroundColor: '#EAF3FF', borderLeftWidth: 4, borderLeftColor: colors.primary },
-  continuationCell: { backgroundColor: '#F1F6FD', borderLeftWidth: 0 },
-  busyClient: { color: colors.text, fontWeight: '900', fontSize: 11 },
-  busyService: { color: colors.primary, fontWeight: '700', fontSize: 9, marginTop: 4, lineHeight: 13 },
-  busyStatus: { color: colors.muted, fontSize: 8, marginTop: 6, fontWeight: '700' },
-  continuationText: { color: colors.muted, fontSize: 9, fontWeight: '800', textAlign: 'center' },
-  lunchCell: { width: 70, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFDF7', borderRightWidth: 1, borderRightColor: colors.border },
-  lunchIcon: { fontSize: 18 },
-  emptyText: { color: colors.muted, textAlign: 'center', paddingVertical: 28 },
-  orderRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 14, paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#EAF0F6' },
-  timeBlock: { width: 78, alignItems: 'center', backgroundColor: '#F4F5F7', paddingVertical: 10, borderRadius: 9 },
-  timeText: { color: colors.text, fontWeight: '900', fontSize: 16 },
-  durationText: { color: colors.muted, fontSize: 8, marginTop: 3 },
-  orderInfo: { flex: 1, minWidth: 220 },
-  clientName: { color: colors.text, fontWeight: '900', fontSize: 14 },
-  orderMeta: { color: colors.primary, fontWeight: '700', fontSize: 11, marginTop: 3 },
-  orderAddress: { color: colors.muted, fontSize: 10, marginTop: 4 },
-  statusArea: { minWidth: 280, gap: 8 },
+  techs: { color: colors.muted, fontSize: 10, marginTop: 4, fontWeight: '700' },
+  statusColumn: { width: 250, gap: 8 },
+  statusScroll: { maxWidth: 250 },
   statusActions: { flexDirection: 'row', gap: 6 },
-  statusButton: { borderWidth: 1, borderColor: colors.border, borderRadius: 7, paddingVertical: 6, paddingHorizontal: 9, backgroundColor: '#FFFFFF' },
-  statusButtonText: { color: colors.muted, fontSize: 8, fontWeight: '800' },
-  modalIntro: { color: colors.muted, fontSize: 11, lineHeight: 17, marginBottom: 14 },
+  statusButton: { borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingVertical: 6, paddingHorizontal: 9, backgroundColor: '#FFFFFF' },
+  statusButtonText: { color: colors.muted, fontSize: 9, fontWeight: '800' },
+  emptyBox: { alignItems: 'center', paddingVertical: 44, paddingHorizontal: 18 },
+  emptyIcon: { fontSize: 34, marginBottom: 8 },
+  emptyTitle: { color: colors.text, fontWeight: '900', fontSize: 16 },
+  emptyText: { color: colors.muted, marginTop: 6, textAlign: 'center', lineHeight: 19 },
+  vanList: { gap: 9, marginTop: 14 },
+  vanFilter: { flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: colors.border, borderRadius: 13, padding: 12, backgroundColor: '#FBFCFE' },
+  vanFilterActive: { backgroundColor: colors.primaryLight, borderColor: '#BFD7FF' },
+  vanFilterLabel: { color: colors.text, fontWeight: '900', fontSize: 13 },
+  vanFilterLabelActive: { color: colors.primary },
+  vanFilterDetail: { color: colors.muted, fontSize: 10, marginTop: 3 },
+  vanCount: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#EDF1F6', alignItems: 'center', justifyContent: 'center' },
+  vanCountActive: { backgroundColor: colors.primary },
+  vanCountText: { color: colors.muted, fontWeight: '900', fontSize: 11 },
+  vanCountTextActive: { color: '#FFFFFF' },
+  slotGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 14 },
+  slot: { width: 76, borderWidth: 1, borderColor: '#CFE0F6', backgroundColor: '#F7FBFF', borderRadius: 12, paddingVertical: 10, alignItems: 'center' },
+  slotBusy: { backgroundColor: colors.warningLight, borderColor: '#F8D48A' },
+  slotText: { color: colors.primary, fontWeight: '900' },
+  slotBusyText: { color: colors.warning },
+  slotHint: { color: colors.muted, fontSize: 9, marginTop: 2, fontWeight: '700' },
+  modalSubtitle: { color: colors.muted, fontSize: 13, lineHeight: 19, marginBottom: 14 },
   fieldLabel: { color: colors.text, fontWeight: '900', marginTop: 4, marginBottom: 8 },
   optionWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginBottom: 15 },
-  option: { borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 11, backgroundColor: '#FFFFFF' },
-  optionActive: { backgroundColor: '#EAF7E7', borderColor: '#2CA01C' },
-  optionDisabled: { backgroundColor: '#F4F5F7', borderColor: '#E2E5E9' },
-  optionText: { color: colors.muted, fontSize: 10, fontWeight: '700' },
-  optionTextActive: { color: '#1E7F14' },
-  optionTextDisabled: { color: '#A6ADB5' },
-  noAvailability: { backgroundColor: '#FFF8E8', borderRadius: 10, padding: 12, marginBottom: 15 },
-  noAvailabilityTitle: { color: '#7A5700', fontWeight: '900', fontSize: 11 },
-  noAvailabilityText: { color: '#98701A', fontSize: 10, marginTop: 4, marginBottom: 9 },
-  summaryBox: { backgroundColor: '#F4F5F7', borderRadius: 10, padding: 13, marginTop: 8 },
-  summaryTitle: { color: colors.text, fontWeight: '900', fontSize: 11, marginBottom: 6 },
-  summaryLine: { color: colors.muted, fontSize: 10, marginTop: 3 },
-  modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 15 },
+  option: { borderWidth: 1, borderColor: colors.border, borderRadius: 999, paddingVertical: 7, paddingHorizontal: 11, backgroundColor: '#FBFCFE' },
+  optionActive: { backgroundColor: colors.primaryLight, borderColor: colors.primary },
+  optionText: { color: colors.muted, fontSize: 11, fontWeight: '700' },
+  optionTextActive: { color: colors.primary },
+  modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 6 },
 });
