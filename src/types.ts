@@ -4,6 +4,7 @@ export type ScreenKey =
   | 'dashboard'
   | 'agenda'
   | 'clients'
+  | 'catalog'
   | 'workOrders'
   | 'technician'
   | 'sales'
@@ -84,12 +85,21 @@ export interface Equipment {
   condition: 'Excelente' | 'Buena' | 'Requiere atención' | 'Fuera de servicio';
 }
 
+export type CatalogItemType = 'Servicio' | 'Producto';
+
 export interface ServiceType {
   id: string;
   name: string;
+  itemType?: CatalogItemType;
   durationMinutes: number;
   basePrice: number;
-  category: 'Servicio' | 'Instalación' | 'Venta' | 'Diagnóstico' | 'Garantía' | 'Comercial';
+  category: string;
+  description?: string;
+  sku?: string;
+  active?: boolean;
+  featured?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface WorkOrder {
