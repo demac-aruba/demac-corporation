@@ -12,33 +12,47 @@ import {
 } from '../data/demo';
 import {
   clearFirebaseSession,
+  deleteFirestoreDocument,
   FirebaseSession,
   getFirebaseUserProfile,
-  isFirebaseConfigured,
   getValidFirebaseSession,
+  isFirebaseConfigured,
   listFirestoreCollection,
   saveFirestoreDocument,
   signInWithFirebaseEmail,
 } from '../services/firebase';
-import { Client, InventoryItem, Invoice, User, UserRole, WorkOrder } from '../types';
+import { Client, InventoryItem, Invoice, Property, User, UserRole, WorkOrder } from '../types';
 
-const STORAGE_KEY = '@demac-corporation-demo-state-v1';
+const STORAGE_KEY = '@demac-corporation-demo-state-v2';
 const FIRESTORE_SYNC_INTERVAL_MS = 30_000;
 const DEFAULT_FIREBASE_ROLE: UserRole = 'office';
 
+const demoProperties: Property[] = demoClients.map((client, index) => ({
+  id: `demo-property-${client.id}`,
+  clientId: client.id,
+  name: index === 0 ? 'Residencia principal' : 'Propiedad principal',
+  type: 'Casa',
+  address: client.address,
+  zone: client.zone,
+  active: true,
+}));
+
 type PersistedState = {
   clients: Client[];
+  properties: Property[];
   workOrders: WorkOrder[];
   inventory: InventoryItem[];
   invoices: Invoice[];
 };
 
-type LoginResult = Promise<{ ok: boolean; message?: string }>;
+type OperationResult = { ok: boolean; message?: string };
+type LoginResult = Promise<OperationResult>;
 
 type AppStateValue = {
   currentUser: User | null;
   users: User[];
   clients: Client[];
+  properties: Property[];
   equipment: typeof demoEquipment;
   services: typeof demoServices;
   vans: typeof demoVans;
@@ -51,12 +65,14 @@ type AppStateValue = {
   dataError: string | null;
   lastSyncedAt: string | null;
   login: (email: string, password: string) => LoginResult;
-  loginDemo: (email: string) => { ok: boolean; message?: string };
+  loginDemo: (email: string) => OperationResult;
   loginAs: (userId: string) => void;
   logout: () => Promise<void>;
-  addClient: (client: Client) => void;
-  addWorkOrder: (order: WorkOrder) => void;
-  updateWorkOrder: (id: string, changes: Partial<WorkOrder>) => void;
+  addClient: (client: Client) => Promise<OperationResult>;
+  addProperty: (property: Property) => Promise<OperationResult>;
+  removeProperty: (id: string) => Promise<OperationResult>;
+  addWorkOrder: (order: WorkOrder) => Promise<OperationResult>;
+  updateWorkOrder: (id: string, changes: Partial<WorkOrder>) => Promise<OperationResult>;
   refreshOperationalData: () => Promise<void>;
   clearDataError: () => void;
   adjustInventory: (id: string, quantityDelta: number) => void;
@@ -85,18 +101,35 @@ async function loadFirebaseProfile(session: FirebaseSession) {
 
 function friendlyDataError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  if (message.includes('PERMISSION_DENIED')) {
-    return 'Firebase rechazó el acceso. Revisa las reglas de Firestore para clientes y órdenes.';
+  const normalized = message.toLowerCase();
+  if (normalized.includes('permission') || normalized.includes('insufficient') || normalized.includes('denied')) {
+    return 'Firebase rechazó la operación. Las reglas de Firestore deben permitir clientes, propiedades y órdenes para tu rol.';
   }
-  if (message.includes('session') || message.includes('sesión')) {
+  if (normalized.includes('session') || normalized.includes('sesión') || normalized.includes('token')) {
     return 'Tu sesión venció. Cierra sesión e inicia nuevamente.';
   }
+  if (normalized.includes('network') || normalized.includes('fetch')) {
+    return 'No se pudo conectar con Firebase. Revisa la conexión e intenta nuevamente.';
+  }
   return `No se pudieron sincronizar los datos reales: ${message}`;
+}
+
+function sortClients(items: Client[]) {
+  return [...items].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function sortProperties(items: Property[]) {
+  return [...items].sort((a, b) => `${a.clientId}-${a.name}`.localeCompare(`${b.clientId}-${b.name}`));
+}
+
+function sortWorkOrders(items: WorkOrder[]) {
+  return [...items].sort((a, b) => `${b.date} ${b.time}`.localeCompare(`${a.date} ${a.time}`));
 }
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [clients, setClients] = useState<Client[]>(demoClients);
+  const [properties, setProperties] = useState<Property[]>(demoProperties);
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>(demoWorkOrders);
   const [inventory, setInventory] = useState<InventoryItem[]>(demoInventory);
   const [invoices, setInvoices] = useState<Invoice[]>(demoInvoices);
@@ -109,16 +142,18 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const refreshOperationalData = useCallback(async (showLoader = true) => {
     if (showLoader) setDataLoading(true);
     try {
-      const [remoteClients, remoteWorkOrders] = await Promise.all([
+      const [remoteClients, remoteProperties, remoteWorkOrders] = await Promise.all([
         listFirestoreCollection<Client>('clients'),
+        listFirestoreCollection<Property>('properties'),
         listFirestoreCollection<WorkOrder>('workOrders'),
       ]);
-      setClients(remoteClients.sort((a, b) => a.name.localeCompare(b.name)));
-      setWorkOrders(remoteWorkOrders.sort((a, b) => `${b.date} ${b.time}`.localeCompare(`${a.date} ${a.time}`)));
+      setClients(sortClients(remoteClients));
+      setProperties(sortProperties(remoteProperties));
+      setWorkOrders(sortWorkOrders(remoteWorkOrders));
       setDataError(null);
       setLastSyncedAt(new Date().toISOString());
     } catch (error) {
-      console.warn('No se pudieron sincronizar clientes y órdenes:', error);
+      console.warn('No se pudieron sincronizar clientes, propiedades y órdenes:', error);
       setDataError(friendlyDataError(error));
     } finally {
       if (showLoader) setDataLoading(false);
@@ -130,8 +165,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       try {
         const stored = await AsyncStorage.getItem(STORAGE_KEY);
         if (stored) {
-          const parsed = JSON.parse(stored) as PersistedState;
+          const parsed = JSON.parse(stored) as Partial<PersistedState>;
           if (Array.isArray(parsed.clients)) setClients(parsed.clients);
+          if (Array.isArray(parsed.properties)) setProperties(parsed.properties);
           if (Array.isArray(parsed.workOrders)) setWorkOrders(parsed.workOrders);
           if (Array.isArray(parsed.inventory)) setInventory(parsed.inventory);
           if (Array.isArray(parsed.invoices)) setInvoices(parsed.invoices);
@@ -146,7 +182,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true;
-
     (async () => {
       try {
         const session = await getValidFirebaseSession();
@@ -154,9 +189,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         const profile = await loadFirebaseProfile(session);
         const user = buildFirebaseUser(session, profile);
         if (!user.active) return;
-
         setCurrentUser(user);
         setClients([]);
+        setProperties([]);
         setWorkOrders([]);
         await refreshOperationalData(true);
       } catch (error) {
@@ -166,36 +201,29 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         if (active) setAuthLoading(false);
       }
     })();
-
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, [refreshOperationalData]);
 
   useEffect(() => {
     if (currentUser?.authProvider !== 'firebase') return undefined;
-    const timer = setInterval(() => {
-      void refreshOperationalData(false);
-    }, FIRESTORE_SYNC_INTERVAL_MS);
+    const timer = setInterval(() => { void refreshOperationalData(false); }, FIRESTORE_SYNC_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [currentUser?.id, currentUser?.authProvider, refreshOperationalData]);
 
   useEffect(() => {
     if (!localHydrated || currentUser?.authProvider === 'firebase') return;
-    const state: PersistedState = { clients, workOrders, inventory, invoices };
+    const state: PersistedState = { clients, properties, workOrders, inventory, invoices };
     AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(state)).catch((error) => {
       console.warn('No se pudo guardar el estado DEMO:', error);
     });
-  }, [clients, workOrders, inventory, invoices, localHydrated, currentUser?.authProvider]);
+  }, [clients, properties, workOrders, inventory, invoices, localHydrated, currentUser?.authProvider]);
 
   const loginDemo = (email: string) => {
-    const user = demoUsers.find(
-      (candidate) => candidate.email.toLowerCase() === email.trim().toLowerCase(),
-    );
+    const user = demoUsers.find((candidate) => candidate.email.toLowerCase() === email.trim().toLowerCase());
     if (!user) return { ok: false, message: 'Correo DEMO no encontrado.' };
     if (!user.active) return { ok: false, message: 'Este usuario DEMO está inactivo.' };
-
     setClients(demoClients);
+    setProperties(demoProperties);
     setWorkOrders(demoWorkOrders);
     setInventory(demoInventory);
     setInvoices(demoInvoices);
@@ -207,7 +235,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string) => {
     if (!isFirebaseConfigured) return { ok: false, message: 'Firebase no está configurado para este entorno.' };
-
     try {
       const session = await signInWithFirebaseEmail(email.trim(), password);
       const profile = await loadFirebaseProfile(session);
@@ -216,9 +243,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         await clearFirebaseSession();
         return { ok: false, message: 'Este usuario está inactivo.' };
       }
-
       setCurrentUser(user);
       setClients([]);
+      setProperties([]);
       setWorkOrders([]);
       await refreshOperationalData(true);
       return { ok: true };
@@ -237,6 +264,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     if (currentUser?.authProvider === 'firebase') await clearFirebaseSession();
     setCurrentUser(null);
     setClients(demoClients);
+    setProperties(demoProperties);
     setWorkOrders(demoWorkOrders);
     setInventory(demoInventory);
     setInvoices(demoInvoices);
@@ -244,127 +272,166 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     setLastSyncedAt(null);
   };
 
-  const addClient = (client: Client) => {
-    setClients((previous) => [client, ...previous]);
-    if (currentUser?.authProvider !== 'firebase') return;
-
-    void saveFirestoreDocument('clients', client)
-      .then(() => {
-        setDataError(null);
-        setLastSyncedAt(new Date().toISOString());
-      })
-      .catch((error) => {
-        console.warn('No se pudo guardar el cliente:', error);
-        setClients((previous) => previous.filter((item) => item.id !== client.id));
-        setDataError(friendlyDataError(error));
-      });
+  const addClient = async (client: Client): Promise<OperationResult> => {
+    if (currentUser?.authProvider !== 'firebase') {
+      setClients((previous) => sortClients([client, ...previous]));
+      return { ok: true };
+    }
+    try {
+      await saveFirestoreDocument('clients', client);
+      setClients((previous) => sortClients([client, ...previous.filter((item) => item.id !== client.id)]));
+      setDataError(null);
+      setLastSyncedAt(new Date().toISOString());
+      return { ok: true };
+    } catch (error) {
+      const message = friendlyDataError(error);
+      setDataError(message);
+      return { ok: false, message };
+    }
   };
 
-  const addWorkOrder = (order: WorkOrder) => {
-    setWorkOrders((previous) => [order, ...previous]);
-    if (currentUser?.authProvider !== 'firebase') return;
-
-    void saveFirestoreDocument('workOrders', order)
-      .then(() => {
-        setDataError(null);
-        setLastSyncedAt(new Date().toISOString());
-      })
-      .catch((error) => {
-        console.warn('No se pudo guardar la orden:', error);
-        setWorkOrders((previous) => previous.filter((item) => item.id !== order.id));
-        setDataError(friendlyDataError(error));
-      });
+  const addProperty = async (property: Property): Promise<OperationResult> => {
+    if (currentUser?.authProvider !== 'firebase') {
+      setProperties((previous) => sortProperties([property, ...previous]));
+      return { ok: true };
+    }
+    try {
+      await saveFirestoreDocument('properties', property);
+      setProperties((previous) => sortProperties([property, ...previous.filter((item) => item.id !== property.id)]));
+      setDataError(null);
+      setLastSyncedAt(new Date().toISOString());
+      return { ok: true };
+    } catch (error) {
+      const message = friendlyDataError(error);
+      setDataError(message);
+      return { ok: false, message };
+    }
   };
 
-  const updateWorkOrder = (id: string, changes: Partial<WorkOrder>) => {
+  const removeProperty = async (id: string): Promise<OperationResult> => {
+    const existing = properties.find((property) => property.id === id);
+    if (!existing) return { ok: false, message: 'La propiedad ya no existe.' };
+    if (currentUser?.authProvider !== 'firebase') {
+      setProperties((previous) => previous.filter((property) => property.id !== id));
+      return { ok: true };
+    }
+    try {
+      await deleteFirestoreDocument('properties', id);
+      setProperties((previous) => previous.filter((property) => property.id !== id));
+      setDataError(null);
+      setLastSyncedAt(new Date().toISOString());
+      return { ok: true };
+    } catch (error) {
+      const message = friendlyDataError(error);
+      setDataError(message);
+      return { ok: false, message };
+    }
+  };
+
+  const addWorkOrder = async (order: WorkOrder): Promise<OperationResult> => {
+    if (currentUser?.authProvider !== 'firebase') {
+      setWorkOrders((previous) => sortWorkOrders([order, ...previous]));
+      return { ok: true };
+    }
+    try {
+      await saveFirestoreDocument('workOrders', order);
+      setWorkOrders((previous) => sortWorkOrders([order, ...previous.filter((item) => item.id !== order.id)]));
+      setDataError(null);
+      setLastSyncedAt(new Date().toISOString());
+      return { ok: true };
+    } catch (error) {
+      const message = friendlyDataError(error);
+      setDataError(message);
+      return { ok: false, message };
+    }
+  };
+
+  const updateWorkOrder = async (id: string, changes: Partial<WorkOrder>): Promise<OperationResult> => {
     const existing = workOrders.find((order) => order.id === id);
-    if (!existing) return;
-
-    const updated = { ...existing, ...changes };
-    setWorkOrders((previous) => previous.map((order) => (order.id === id ? updated : order)));
-    if (currentUser?.authProvider !== 'firebase') return;
-
-    void saveFirestoreDocument('workOrders', updated)
-      .then(() => {
-        setDataError(null);
-        setLastSyncedAt(new Date().toISOString());
-      })
-      .catch((error) => {
-        console.warn('No se pudo actualizar la orden:', error);
-        setWorkOrders((previous) => previous.map((order) => (order.id === id ? existing : order)));
-        setDataError(friendlyDataError(error));
-      });
+    if (!existing) return { ok: false, message: 'La orden ya no existe.' };
+    const updated = { ...existing, ...changes, updatedAt: changes.updatedAt ?? new Date().toISOString() };
+    if (currentUser?.authProvider !== 'firebase') {
+      setWorkOrders((previous) => previous.map((order) => (order.id === id ? updated : order)));
+      return { ok: true };
+    }
+    try {
+      await saveFirestoreDocument('workOrders', updated);
+      setWorkOrders((previous) => previous.map((order) => (order.id === id ? updated : order)));
+      setDataError(null);
+      setLastSyncedAt(new Date().toISOString());
+      return { ok: true };
+    } catch (error) {
+      const message = friendlyDataError(error);
+      setDataError(message);
+      return { ok: false, message };
+    }
   };
 
   const adjustInventory = (id: string, quantityDelta: number) => {
-    setInventory((previous) =>
-      previous.map((item) =>
-        item.id === id ? { ...item, quantity: Math.max(0, item.quantity + quantityDelta) } : item,
-      ),
-    );
+    setInventory((previous) => previous.map((item) => item.id === id ? { ...item, quantity: Math.max(0, item.quantity + quantityDelta) } : item));
   };
 
   const registerPayment = (invoiceId: string, amount: number) => {
-    setInvoices((previous) =>
-      previous.map((invoice) => {
-        if (invoice.id !== invoiceId) return invoice;
-        const paid = Math.min(invoice.total, invoice.paid + amount);
-        return { ...invoice, paid, status: paid >= invoice.total ? 'Pagada' : 'Parcial' };
-      }),
-    );
+    setInvoices((previous) => previous.map((invoice) => {
+      if (invoice.id !== invoiceId) return invoice;
+      const paid = Math.min(invoice.total, invoice.paid + amount);
+      return { ...invoice, paid, status: paid >= invoice.total ? 'Pagada' : 'Parcial' };
+    }));
   };
 
   const resetDemo = async () => {
     setClients(demoClients);
+    setProperties(demoProperties);
     setWorkOrders(demoWorkOrders);
     setInventory(demoInventory);
     setInvoices(demoInvoices);
     await AsyncStorage.removeItem(STORAGE_KEY);
   };
 
-  const value = useMemo<AppStateValue>(
-    () => ({
-      currentUser,
-      users: demoUsers,
-      clients,
-      equipment: demoEquipment,
-      services: demoServices,
-      vans: demoVans,
-      workOrders,
-      inventory,
-      invoices,
-      hydrated: localHydrated && !authLoading && !dataLoading,
-      authLoading,
-      dataLoading,
-      dataError,
-      lastSyncedAt,
-      login,
-      loginDemo,
-      loginAs,
-      logout,
-      addClient,
-      addWorkOrder,
-      updateWorkOrder,
-      refreshOperationalData: () => refreshOperationalData(true),
-      clearDataError: () => setDataError(null),
-      adjustInventory,
-      registerPayment,
-      resetDemo,
-    }),
-    [
-      currentUser,
-      clients,
-      workOrders,
-      inventory,
-      invoices,
-      localHydrated,
-      authLoading,
-      dataLoading,
-      dataError,
-      lastSyncedAt,
-      refreshOperationalData,
-    ],
-  );
+  const value = useMemo<AppStateValue>(() => ({
+    currentUser,
+    users: demoUsers,
+    clients,
+    properties,
+    equipment: demoEquipment,
+    services: demoServices,
+    vans: demoVans,
+    workOrders,
+    inventory,
+    invoices,
+    hydrated: localHydrated && !authLoading && !dataLoading,
+    authLoading,
+    dataLoading,
+    dataError,
+    lastSyncedAt,
+    login,
+    loginDemo,
+    loginAs,
+    logout,
+    addClient,
+    addProperty,
+    removeProperty,
+    addWorkOrder,
+    updateWorkOrder,
+    refreshOperationalData: () => refreshOperationalData(true),
+    clearDataError: () => setDataError(null),
+    adjustInventory,
+    registerPayment,
+    resetDemo,
+  }), [
+    currentUser,
+    clients,
+    properties,
+    workOrders,
+    inventory,
+    invoices,
+    localHydrated,
+    authLoading,
+    dataLoading,
+    dataError,
+    lastSyncedAt,
+    refreshOperationalData,
+  ]);
 
   return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;
 }
