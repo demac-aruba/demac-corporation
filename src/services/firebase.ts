@@ -179,6 +179,31 @@ export async function saveFirestoreDocument<T extends { id: string }>(
   if (!response.ok) throw new Error(payload?.error?.message ?? `No se pudo guardar ${collectionPath}/${id}.`);
 }
 
+export async function deleteFirestoreDocument(collectionPath: string, documentId: string): Promise<void> {
+  const session = await requireFirebaseSession();
+  const response = await fetch(
+    `${getFirestoreBaseUrl()}/${collectionPath}/${encodeURIComponent(documentId)}`,
+    {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${session.idToken}` },
+    },
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    let message = `No se pudo eliminar ${collectionPath}/${documentId}.`;
+    if (text) {
+      try {
+        const payload = JSON.parse(text);
+        message = payload?.error?.message ?? message;
+      } catch {
+        message = text;
+      }
+    }
+    throw new Error(message);
+  }
+}
+
 async function requireFirebaseSession() {
   const session = await getValidFirebaseSession();
   if (!session) throw new Error('La sesión de Firebase expiró. Inicia sesión nuevamente.');

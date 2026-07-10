@@ -32,6 +32,11 @@ service cloud.firestore {
       allow delete: if adminOrSupervisor();
     }
 
+    match /properties/{propertyId} {
+      allow read, create, update: if operationsRole();
+      allow delete: if operationsRole();
+    }
+
     match /workOrders/{workOrderId} {
       allow read, create, update: if operationsRole();
       allow delete: if adminOrSupervisor();
