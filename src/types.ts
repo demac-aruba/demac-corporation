@@ -48,11 +48,29 @@ export interface Client {
   balance: number;
   equipmentCount: number;
   lastService?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type PropertyType = 'Casa' | 'Apartamento' | 'Oficina' | 'Local comercial' | 'Otro';
+
+export interface Property {
+  id: string;
+  clientId: string;
+  name: string;
+  type: PropertyType;
+  address: string;
+  zone: string;
+  notes?: string;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface Equipment {
   id: string;
   clientId: string;
+  propertyId?: string;
   location: string;
   brand: string;
   model: string;
@@ -77,6 +95,7 @@ export interface ServiceType {
 export interface WorkOrder {
   id: string;
   clientId: string;
+  propertyId?: string;
   serviceId: string;
   date: string;
   time: string;
@@ -104,6 +123,8 @@ export interface WorkOrder {
   customerSignature?: string;
   photos?: string[];
   reportGenerated?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface InventoryItem {
