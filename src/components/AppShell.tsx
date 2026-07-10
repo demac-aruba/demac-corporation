@@ -4,6 +4,7 @@ import { useAppState } from '../state/AppState';
 import { colors, roleLabels } from '../theme';
 import { ScreenKey, UserRole } from '../types';
 import { AgendaScreen } from '../screens/AgendaScreen';
+import { CatalogScreen } from '../screens/CatalogScreen';
 import { ClientsScreen } from '../screens/ClientsScreen';
 import { DashboardScreen } from '../screens/DashboardScreen';
 import { FinanceScreen } from '../screens/FinanceScreen';
@@ -16,6 +17,7 @@ const navItems: { key: ScreenKey; label: string; icon: string; roles: UserRole[]
   { key: 'dashboard', label: 'Inicio', icon: '⌂', roles: ['admin', 'office', 'supervisor', 'accounting', 'inventory'] },
   { key: 'agenda', label: 'Agenda', icon: '▣', roles: ['admin', 'office', 'supervisor'] },
   { key: 'clients', label: 'Clientes', icon: '♙', roles: ['admin', 'office', 'supervisor', 'accounting'] },
+  { key: 'catalog', label: 'Catálogo', icon: '▦', roles: ['admin', 'office', 'supervisor'] },
   { key: 'workOrders', label: 'Trabajos', icon: '☷', roles: ['admin', 'office', 'supervisor'] },
   { key: 'technician', label: 'Mi trabajo', icon: '✓', roles: ['admin', 'supervisor', 'technician'] },
   { key: 'sales', label: 'Ventas', icon: '$', roles: ['admin', 'office', 'accounting'] },
@@ -51,6 +53,7 @@ export function AppShell() {
   switch (activeScreen) {
     case 'agenda': content = <AgendaScreen />; break;
     case 'clients': content = <ClientsScreen />; break;
+    case 'catalog': content = <CatalogScreen />; break;
     case 'workOrders': content = <WorkOrdersScreen />; break;
     case 'technician': content = <TechnicianScreen />; break;
     case 'sales': content = <FinanceScreen salesMode />; break;
