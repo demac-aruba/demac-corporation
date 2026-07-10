@@ -44,6 +44,7 @@ export function Button({
   compact?: boolean;
   icon?: string;
 }) {
+  const alternateText = variant === 'secondary' ? styles.buttonTextSecondary : variant === 'ghost' ? styles.buttonTextGhost : undefined;
   return (
     <Pressable
       onPress={onPress}
@@ -52,14 +53,12 @@ export function Button({
         styles.button,
         compact && styles.buttonCompact,
         styles[`button_${variant}`],
-        pressed && !disabled && { opacity: 0.82 },
+        pressed && !disabled && { opacity: 0.76 },
         disabled && { opacity: 0.45 },
       ]}
     >
-      {icon ? <Text style={styles.buttonIcon}>{icon}</Text> : null}
-      <Text style={[styles.buttonText, variant === 'secondary' || variant === 'ghost' ? { color: colors.primary } : null]}>
-        {label}
-      </Text>
+      {icon ? <Text style={[styles.buttonIcon, alternateText]}>{icon}</Text> : null}
+      <Text style={[styles.buttonText, alternateText]}>{label}</Text>
     </Pressable>
   );
 }
@@ -69,7 +68,7 @@ export function Input({ label, multiline, style, ...props }: TextInputProps & { 
     <View style={[styles.inputGroup, style as object]}>
       {label ? <Text style={styles.inputLabel}>{label}</Text> : null}
       <TextInput
-        placeholderTextColor="#94A0B3"
+        placeholderTextColor="#8A9099"
         multiline={multiline}
         style={[styles.input, multiline && styles.inputMultiline]}
         {...props}
@@ -86,11 +85,11 @@ export function Pill({
   tone?: 'neutral' | 'success' | 'warning' | 'danger' | 'info' | 'purple';
 }) {
   const palette = {
-    neutral: { bg: '#EDF1F6', fg: '#526071' },
+    neutral: { bg: '#F0F2F4', fg: '#4B5563' },
     success: { bg: colors.successLight, fg: colors.success },
     warning: { bg: colors.warningLight, fg: colors.warning },
     danger: { bg: colors.dangerLight, fg: colors.danger },
-    info: { bg: colors.primaryLight, fg: colors.primary },
+    info: { bg: colors.infoLight, fg: colors.info },
     purple: { bg: '#F1EAFE', fg: colors.purple },
   }[tone];
   return (
@@ -163,61 +162,58 @@ export function statusTone(status: string): 'neutral' | 'success' | 'warning' | 
 const styles = StyleSheet.create({
   card: {
     backgroundColor: colors.surface,
-    borderRadius: 16,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.border,
-    padding: 18,
-    shadowColor: '#152238',
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.05,
-    shadowRadius: 12,
-    elevation: 2,
+    padding: 16,
   },
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 14, gap: 12 },
-  sectionTitle: { color: colors.text, fontSize: 20, fontWeight: '800' },
-  sectionSubtitle: { color: colors.muted, marginTop: 4, fontSize: 13, lineHeight: 19 },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 13, gap: 12 },
+  sectionTitle: { color: colors.text, fontSize: 17, fontWeight: '800' },
+  sectionSubtitle: { color: colors.muted, marginTop: 3, fontSize: 11, lineHeight: 16 },
   button: {
-    minHeight: 44,
-    paddingHorizontal: 18,
-    borderRadius: 12,
+    minHeight: 40,
+    paddingHorizontal: 16,
+    borderRadius: 7,
     flexDirection: 'row',
-    gap: 8,
+    gap: 7,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  buttonCompact: { minHeight: 36, paddingHorizontal: 12, borderRadius: 10 },
+  buttonCompact: { minHeight: 32, paddingHorizontal: 11, borderRadius: 6 },
   button_primary: { backgroundColor: colors.primary },
-  button_secondary: { backgroundColor: colors.primaryLight, borderWidth: 1, borderColor: '#C9DEFF' },
+  button_secondary: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#AEB4BC' },
   button_danger: { backgroundColor: colors.danger },
   button_ghost: { backgroundColor: 'transparent' },
   button_success: { backgroundColor: colors.success },
-  buttonText: { color: '#FFFFFF', fontWeight: '800', fontSize: 14 },
-  buttonIcon: { color: '#FFFFFF', fontSize: 16 },
-  inputGroup: { gap: 7, marginBottom: 13 },
-  inputLabel: { color: colors.text, fontWeight: '700', fontSize: 13 },
+  buttonText: { color: '#FFFFFF', fontWeight: '800', fontSize: 12 },
+  buttonTextSecondary: { color: colors.text },
+  buttonTextGhost: { color: colors.info },
+  buttonIcon: { color: '#FFFFFF', fontSize: 15 },
+  inputGroup: { gap: 6, marginBottom: 12 },
+  inputLabel: { color: colors.text, fontWeight: '700', fontSize: 12 },
   input: {
-    minHeight: 46,
+    minHeight: 42,
     borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 11,
-    paddingHorizontal: 13,
-    backgroundColor: '#FBFCFE',
+    borderColor: '#B9BEC5',
+    borderRadius: 7,
+    paddingHorizontal: 12,
+    backgroundColor: '#FFFFFF',
     color: colors.text,
-    fontSize: 14,
+    fontSize: 13,
   },
-  inputMultiline: { minHeight: 92, paddingTop: 12, textAlignVertical: 'top' },
-  pill: { borderRadius: 999, paddingVertical: 5, paddingHorizontal: 10, alignSelf: 'flex-start' },
-  pillText: { fontSize: 11, fontWeight: '800' },
-  emptyState: { alignItems: 'center', paddingVertical: 44, paddingHorizontal: 20 },
-  emptyIcon: { fontSize: 38, marginBottom: 10 },
-  emptyTitle: { fontWeight: '800', color: colors.text, fontSize: 17 },
-  emptyMessage: { color: colors.muted, textAlign: 'center', marginTop: 6, lineHeight: 20 },
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(11,31,58,0.56)', alignItems: 'center', justifyContent: 'center', padding: 18 },
-  modalCard: { width: '100%', maxWidth: 620, maxHeight: '92%', backgroundColor: '#FFFFFF', borderRadius: 18, padding: 20 },
-  modalHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
-  modalTitle: { flex: 1, color: colors.text, fontSize: 20, fontWeight: '900' },
-  closeButton: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#EFF3F8', alignItems: 'center', justifyContent: 'center' },
-  closeButtonText: { fontSize: 25, lineHeight: 26, color: colors.text },
-  loadingScreen: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background, gap: 14 },
+  inputMultiline: { minHeight: 88, paddingTop: 11, textAlignVertical: 'top' },
+  pill: { borderRadius: 999, paddingVertical: 4, paddingHorizontal: 9, alignSelf: 'flex-start' },
+  pillText: { fontSize: 10, fontWeight: '800' },
+  emptyState: { alignItems: 'center', paddingVertical: 42, paddingHorizontal: 20 },
+  emptyIcon: { fontSize: 34, marginBottom: 9 },
+  emptyTitle: { fontWeight: '800', color: colors.text, fontSize: 16 },
+  emptyMessage: { color: colors.muted, textAlign: 'center', marginTop: 5, lineHeight: 19 },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(32,33,36,0.46)', alignItems: 'center', justifyContent: 'center', padding: 18 },
+  modalCard: { width: '100%', maxWidth: 620, maxHeight: '92%', backgroundColor: '#FFFFFF', borderRadius: 12, padding: 19 },
+  modalHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 15 },
+  modalTitle: { flex: 1, color: colors.text, fontSize: 18, fontWeight: '800' },
+  closeButton: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F0F2F4', alignItems: 'center', justifyContent: 'center' },
+  closeButtonText: { fontSize: 23, lineHeight: 24, color: colors.text },
+  loadingScreen: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background, gap: 13 },
   loadingText: { color: colors.muted, fontWeight: '700' },
 });
