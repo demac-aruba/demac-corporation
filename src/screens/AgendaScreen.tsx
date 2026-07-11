@@ -63,6 +63,29 @@ function addDays(date: string, amount: number) {
   return localDateKey(next);
 }
 
+
+function monthStart(date: string) {
+  return `${date.slice(0, 7)}-01`;
+}
+
+function addMonths(date: string, amount: number) {
+  const [year, month] = date.slice(0, 7).split('-').map(Number);
+  return localDateKey(new Date(year, month - 1 + amount, 1, 12));
+}
+
+function buildMonthCalendar(monthDate: string) {
+  const [year, month] = monthDate.slice(0, 7).split('-').map(Number);
+  const firstWeekday = new Date(year, month - 1, 1, 12).getDay();
+  const daysInMonth = new Date(year, month, 0, 12).getDate();
+  const cells: Array<string | null> = Array.from({ length: firstWeekday }, () => null);
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    cells.push(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
+  }
+  while (cells.length < 42) cells.push(null);
+  return cells;
+}
+
 function serviceSlots(service?: ServiceType) {
   return Math.max(1, Math.ceil((service?.durationMinutes ?? 60) / 60));
 }
@@ -244,6 +267,7 @@ export function AgendaScreen() {
   const { calendarClosures, businessCalendarSettings, calendarLoading, calendarDataError, refreshCalendarData } = useCalendarState();
 
   const [selectedDate, setSelectedDate] = useState(localDateKey());
+  const [calendarMonth, setCalendarMonth] = useState(monthStart(localDateKey()));
   const [showCreate, setShowCreate] = useState(false);
   const [showQuickClient, setShowQuickClient] = useState(false);
   const [clientId, setClientId] = useState('');
@@ -312,7 +336,12 @@ export function AgendaScreen() {
     }
   }, [properties, clientId, propertyId]);
 
-  const days = useMemo(() => Array.from({ length: 14 }, (_, index) => addDays(selectedDate, index)), [selectedDate]);
+  const selectedMonthKey = selectedDate.slice(0, 7);
+  useEffect(() => {
+    setCalendarMonth((current) => current.slice(0, 7) === selectedMonthKey ? current : `${selectedMonthKey}-01`);
+  }, [selectedMonthKey]);
+
+  const calendarCells = useMemo(() => buildMonthCalendar(calendarMonth), [calendarMonth]);
   const orders = useMemo(
     () => workOrders
       .filter((order) => order.date === selectedDate)
@@ -328,7 +357,7 @@ export function AgendaScreen() {
   const selectedProperty = clientProperties.find((item) => item.id === propertyId);
   const selectedVan = agendaVans.find((item) => item.id === vanId);
   const selectedOrder = orders.find((order) => order.id === selectedOrderId) ?? orders[0];
-  const monthTitle = new Date(`${selectedDate}T12:00:00`).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+  const monthTitle = new Date(`${calendarMonth}T12:00:00`).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
   const selectedCalendarStatus = calendarDateStatus(selectedDate, businessCalendarSettings, calendarClosures);
   const selectedDateClosed = selectedCalendarStatus.closed;
   const combinedDataError = calendarDataError ?? teamDataError ?? dataError;
@@ -534,14 +563,19 @@ export function AgendaScreen() {
       <View style={[styles.layout, compact && styles.layoutCompact]}>
         <View style={styles.leftPanel}>
           <Card>
-            <View style={styles.monthHeader}><Text style={styles.monthTitle}>{monthTitle}</Text><Text style={styles.monthNav}>‹  ›</Text></View>
-            <View style={styles.calendarGrid}>{days.map((date) => {
-              const active = date === selectedDate;
-              const dateObj = new Date(`${date}T12:00:00`);
-              const dateStatus = calendarDateStatus(date, businessCalendarSettings, calendarClosures);
-              return <Pressable key={date} onPress={() => setSelectedDate(date)} style={[styles.calendarDay, dateStatus.closed && styles.calendarDayClosed, active && styles.calendarDayActive]}><Text style={[styles.calendarWeekday, active && styles.calendarDayTextActive]}>{dateObj.toLocaleDateString('es', { weekday: 'short' }).slice(0, 2)}</Text><Text style={[styles.calendarNumber, active && styles.calendarDayTextActive]}>{dateObj.getDate()}</Text>{dateStatus.closed ? <Text style={[styles.calendarClosedLabel, active && styles.calendarDayTextActive]}>Cerrado</Text> : null}</Pressable>;
-            })}</View>
-          </Card>
+              <View style={styles.monthHeader}>
+                <Pressable accessibilityLabel="Mes anterior" onPress={() => setCalendarMonth((current) => addMonths(current, -1))} style={styles.monthNavButton}><Text style={styles.monthNavText}>‹</Text></Pressable>
+                <Text style={styles.monthTitle}>{monthTitle}</Text>
+                <Pressable accessibilityLabel="Mes siguiente" onPress={() => setCalendarMonth((current) => addMonths(current, 1))} style={styles.monthNavButton}><Text style={styles.monthNavText}>›</Text></Pressable>
+              </View>
+              <View style={styles.calendarWeekHeader}>{['DOM', 'LUN', 'MAR', 'MIÉ', 'JUE', 'VIE', 'SÁB'].map((label) => <Text key={label} style={styles.calendarWeekdayCell}>{label}</Text>)}</View>
+              <View style={styles.calendarGrid}>{calendarCells.map((date, index) => {
+                if (!date) return <View key={`empty-${index}`} style={styles.calendarEmptyDay} />;
+                const active = date === selectedDate;
+                const dateStatus = calendarDateStatus(date, businessCalendarSettings, calendarClosures);
+                return <Pressable key={date} accessibilityLabel={formatDate(date, true)} onPress={() => setSelectedDate(date)} style={[styles.calendarDay, dateStatus.closed && styles.calendarDayClosed, active && styles.calendarDayActive]}><Text style={[styles.calendarNumber, active && styles.calendarDayTextActive]}>{Number(date.slice(-2))}</Text>{dateStatus.closed ? <Text style={[styles.calendarClosedLabel, active && styles.calendarDayTextActive]}>•</Text> : null}</Pressable>;
+              })}</View>
+            </Card>
           <Card><Text style={styles.sideTitle}>Filtros rápidos</Text><FilterRow label="Todas las citas" count={orders.length} active /><FilterRow label="Confirmadas" count={orders.filter((order) => order.status === 'Confirmada').length} /><FilterRow label="En proceso" count={orders.filter((order) => order.status === 'En proceso').length} /><FilterRow label="Pendientes" count={orders.filter((order) => ['Asignada', 'Pendiente'].includes(order.status)).length} /></Card>
           <Card><Text style={styles.sideTitle}>Equipo del día</Text>{agendaVans.map((van) => <TechnicianFilter key={van.id} van={van} users={staffDirectory} />)}</Card>
         </View>
@@ -734,17 +768,20 @@ const styles = StyleSheet.create({
   layout: { flexDirection: 'row', alignItems: 'flex-start', gap: 18 },
   layoutCompact: { flexDirection: 'column' },
   leftPanel: { width: 250, gap: 14 },
-  monthHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  monthTitle: { color: colors.text, fontWeight: '900', fontSize: 15, textTransform: 'capitalize' },
-  monthNav: { color: colors.muted, fontSize: 17, fontWeight: '900' },
-  calendarGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
-  calendarDay: { width: 42, height: 48, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' },
+  monthHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  monthTitle: { color: colors.text, fontWeight: '900', fontSize: 15, textTransform: 'capitalize', textAlign: 'center' },
+  monthNavButton: { width: 28, height: 28, borderRadius: 7, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' },
+  monthNavText: { color: colors.text, fontSize: 18, fontWeight: '900', lineHeight: 20 },
+  calendarWeekHeader: { flexDirection: 'row', gap: 3, marginBottom: 4 },
+  calendarWeekdayCell: { width: 28, color: colors.muted, fontSize: 7, fontWeight: '900', textAlign: 'center' },
+  calendarGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 3 },
+  calendarEmptyDay: { width: 28, height: 34 },
+  calendarDay: { width: 28, height: 34, borderRadius: 7, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF', position: 'relative' },
   calendarDayClosed: { backgroundColor: colors.dangerLight, borderWidth: 1, borderColor: '#E8A9A7' },
   calendarDayActive: { backgroundColor: colors.primary },
-  calendarWeekday: { color: colors.muted, fontSize: 9, fontWeight: '800', textTransform: 'uppercase' },
-  calendarNumber: { color: colors.text, fontWeight: '900', marginTop: 2 },
+  calendarNumber: { color: colors.text, fontWeight: '900', fontSize: 10 },
   calendarDayTextActive: { color: '#FFFFFF' },
-  calendarClosedLabel: { color: colors.danger, fontSize: 7, fontWeight: '900', marginTop: 2 },
+  calendarClosedLabel: { position: 'absolute', bottom: 1, color: colors.danger, fontSize: 8, fontWeight: '900' },
   sideTitle: { color: colors.text, fontWeight: '900', fontSize: 15, marginBottom: 10 },
   filterRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 9, paddingHorizontal: 9, borderRadius: 8 },
   filterRowActive: { backgroundColor: '#F0F2F4' },
