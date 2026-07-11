@@ -1,0 +1,165 @@
+name: Fix agenda mini calendar
+
+on:
+  push:
+    branches:
+      - feature/fixed-agenda-month-calendar
+    paths:
+      - .github/workflows/fix-agenda-mini-calendar.yml
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/fixed-agenda-month-calendar
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Build fixed monthly mini calendar
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/screens/AgendaScreen.tsx')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_once(old: str, new: str):
+              global text
+              if old not in text:
+                  raise SystemExit(f'Missing source fragment: {old[:160]!r}')
+              text = text.replace(old, new, 1)
+
+          replace_once(
+          """function addDays(date: string, amount: number) {
+            const next = new Date(`${date}T12:00:00`);
+            next.setDate(next.getDate() + amount);
+            return localDateKey(next);
+          }
+          """,
+          """function addDays(date: string, amount: number) {
+            const next = new Date(`${date}T12:00:00`);
+            next.setDate(next.getDate() + amount);
+            return localDateKey(next);
+          }
+
+          function monthStart(date: string) {
+            return `${date.slice(0, 7)}-01`;
+          }
+
+          function addMonths(date: string, amount: number) {
+            const [year, month] = date.slice(0, 7).split('-').map(Number);
+            return localDateKey(new Date(year, month - 1 + amount, 1, 12));
+          }
+
+          function buildMonthCalendar(monthDate: string) {
+            const [year, month] = monthDate.slice(0, 7).split('-').map(Number);
+            const firstWeekday = new Date(year, month - 1, 1, 12).getDay();
+            const daysInMonth = new Date(year, month, 0, 12).getDate();
+            const cells: Array<string | null> = Array.from({ length: firstWeekday }, () => null);
+
+            for (let day = 1; day <= daysInMonth; day += 1) {
+              cells.push(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
+            }
+            while (cells.length < 42) cells.push(null);
+            return cells;
+          }
+          """)
+
+          replace_once(
+          """  const [selectedDate, setSelectedDate] = useState(localDateKey());
+          """,
+          """  const [selectedDate, setSelectedDate] = useState(localDateKey());
+            const [calendarMonth, setCalendarMonth] = useState(monthStart(localDateKey()));
+          """)
+
+          replace_once(
+          """  const days = useMemo(() => Array.from({ length: 14 }, (_, index) => addDays(selectedDate, index)), [selectedDate]);
+          """,
+          """  const selectedMonthKey = selectedDate.slice(0, 7);
+            useEffect(() => {
+              setCalendarMonth((current) => current.slice(0, 7) === selectedMonthKey ? current : `${selectedMonthKey}-01`);
+            }, [selectedMonthKey]);
+
+            const calendarCells = useMemo(() => buildMonthCalendar(calendarMonth), [calendarMonth]);
+          """)
+
+          replace_once(
+          """  const monthTitle = new Date(`${selectedDate}T12:00:00`).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+          """,
+          """  const monthTitle = new Date(`${calendarMonth}T12:00:00`).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+          """)
+
+          replace_once(
+          """          <Card>
+                        <View style={styles.monthHeader}><Text style={styles.monthTitle}>{monthTitle}</Text><Text style={styles.monthNav}>‹  ›</Text></View>
+                        <View style={styles.calendarGrid}>{days.map((date) => {
+                          const active = date === selectedDate;
+                          const dateObj = new Date(`${date}T12:00:00`);
+                          const dateStatus = calendarDateStatus(date, businessCalendarSettings, calendarClosures);
+                          return <Pressable key={date} onPress={() => setSelectedDate(date)} style={[styles.calendarDay, dateStatus.closed && styles.calendarDayClosed, active && styles.calendarDayActive]}><Text style={[styles.calendarWeekday, active && styles.calendarDayTextActive]}>{dateObj.toLocaleDateString('es', { weekday: 'short' }).slice(0, 2)}</Text><Text style={[styles.calendarNumber, active && styles.calendarDayTextActive]}>{dateObj.getDate()}</Text>{dateStatus.closed ? <Text style={[styles.calendarClosedLabel, active && styles.calendarDayTextActive]}>Cerrado</Text> : null}</Pressable>;
+                        })}</View>
+                      </Card>
+          """,
+          """          <Card>
+                        <View style={styles.monthHeader}>
+                          <Pressable accessibilityLabel="Mes anterior" onPress={() => setCalendarMonth((current) => addMonths(current, -1))} style={styles.monthNavButton}><Text style={styles.monthNavText}>‹</Text></Pressable>
+                          <Text style={styles.monthTitle}>{monthTitle}</Text>
+                          <Pressable accessibilityLabel="Mes siguiente" onPress={() => setCalendarMonth((current) => addMonths(current, 1))} style={styles.monthNavButton}><Text style={styles.monthNavText}>›</Text></Pressable>
+                        </View>
+                        <View style={styles.calendarWeekHeader}>{['DOM', 'LUN', 'MAR', 'MIÉ', 'JUE', 'VIE', 'SÁB'].map((label) => <Text key={label} style={styles.calendarWeekdayCell}>{label}</Text>)}</View>
+                        <View style={styles.calendarGrid}>{calendarCells.map((date, index) => {
+                          if (!date) return <View key={`empty-${index}`} style={styles.calendarEmptyDay} />;
+                          const active = date === selectedDate;
+                          const dateStatus = calendarDateStatus(date, businessCalendarSettings, calendarClosures);
+                          return <Pressable key={date} accessibilityLabel={formatDate(date, true)} onPress={() => setSelectedDate(date)} style={[styles.calendarDay, dateStatus.closed && styles.calendarDayClosed, active && styles.calendarDayActive]}><Text style={[styles.calendarNumber, active && styles.calendarDayTextActive]}>{Number(date.slice(-2))}</Text>{dateStatus.closed ? <Text style={[styles.calendarClosedLabel, active && styles.calendarDayTextActive]}>•</Text> : null}</Pressable>;
+                        })}</View>
+                      </Card>
+          """)
+
+          replace_once(
+          """  monthHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+            monthTitle: { color: colors.text, fontWeight: '900', fontSize: 15, textTransform: 'capitalize' },
+            monthNav: { color: colors.muted, fontSize: 17, fontWeight: '900' },
+            calendarGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+            calendarDay: { width: 42, height: 48, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' },
+            calendarDayClosed: { backgroundColor: colors.dangerLight, borderWidth: 1, borderColor: '#E8A9A7' },
+            calendarDayActive: { backgroundColor: colors.primary },
+            calendarWeekday: { color: colors.muted, fontSize: 9, fontWeight: '800', textTransform: 'uppercase' },
+            calendarNumber: { color: colors.text, fontWeight: '900', marginTop: 2 },
+            calendarDayTextActive: { color: '#FFFFFF' },
+            calendarClosedLabel: { color: colors.danger, fontSize: 7, fontWeight: '900', marginTop: 2 },
+          """,
+          """  monthHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+            monthTitle: { color: colors.text, fontWeight: '900', fontSize: 15, textTransform: 'capitalize', textAlign: 'center' },
+            monthNavButton: { width: 28, height: 28, borderRadius: 7, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' },
+            monthNavText: { color: colors.text, fontSize: 18, fontWeight: '900', lineHeight: 20 },
+            calendarWeekHeader: { flexDirection: 'row', gap: 3, marginBottom: 4 },
+            calendarWeekdayCell: { width: 28, color: colors.muted, fontSize: 7, fontWeight: '900', textAlign: 'center' },
+            calendarGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 3 },
+            calendarEmptyDay: { width: 28, height: 34 },
+            calendarDay: { width: 28, height: 34, borderRadius: 7, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF', position: 'relative' },
+            calendarDayClosed: { backgroundColor: colors.dangerLight, borderWidth: 1, borderColor: '#E8A9A7' },
+            calendarDayActive: { backgroundColor: colors.primary },
+            calendarNumber: { color: colors.text, fontWeight: '900', fontSize: 10 },
+            calendarDayTextActive: { color: '#FFFFFF' },
+            calendarClosedLabel: { position: 'absolute', bottom: 1, color: colors.danger, fontSize: 8, fontWeight: '900' },
+          """)
+
+          path.write_text(text, encoding='utf-8')
+          PY
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build:web
+      - name: Commit calendar changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/screens/AgendaScreen.tsx
+          git commit -m "Fix agenda mini calendar month navigation"
+          git push origin HEAD:feature/fixed-agenda-month-calendar
