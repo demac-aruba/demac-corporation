@@ -785,6 +785,7 @@ const styles = StyleSheet.create({
   slotTime: { color: colors.muted, fontSize: 10, fontWeight: '800' },
   availableText: { color: colors.primary, fontWeight: '900', fontSize: 12, marginTop: 5 },
   unavailableText: { color: colors.danger, fontWeight: '900', fontSize: 12, marginTop: 5 },
+  closedSlotReason: { color: colors.muted, fontSize: 9, lineHeight: 12, marginTop: 5, textAlign: 'center' },
   addSlot: { position: 'absolute', right: 10, bottom: 8, color: colors.primary, fontSize: 16, fontWeight: '900' },
   clientName: { color: colors.text, fontWeight: '900', fontSize: 12, lineHeight: 16, minHeight: 16, marginTop: 5 },
   addressLine: { color: colors.text, fontSize: 9, marginTop: 3, lineHeight: 12 },
