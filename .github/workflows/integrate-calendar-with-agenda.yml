@@ -6,6 +6,9 @@ on:
       - feature/calendar-closures-settings
     paths:
       - .github/workflows/integrate-calendar-with-agenda.yml
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
