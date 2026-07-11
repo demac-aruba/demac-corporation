@@ -102,6 +102,8 @@ export interface ServiceType {
   updatedAt?: string;
 }
 
+export type SchedulingMode = 'fixed' | 'perUnit';
+
 export interface WorkOrder {
   id: string;
   clientId: string;
@@ -113,10 +115,14 @@ export interface WorkOrder {
   technicianIds: string[];
   vanId: string;
   address: string;
+  zone?: string;
   problem: string;
   officeNotes?: string;
   amount: number;
   paid: number;
+  schedulingMode?: SchedulingMode;
+  airConditionerCount?: number;
+  scheduledSlots?: number;
   equipmentId?: string;
   measurements?: {
     voltage?: string;
