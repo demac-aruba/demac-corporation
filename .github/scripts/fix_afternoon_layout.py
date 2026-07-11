@@ -1,5 +1,6 @@
 from pathlib import Path
 
+# Trigger the one-time layout correction after the workflow is present on the branch.
 path = Path('src/screens/AgendaScreen.tsx')
 text = path.read_text(encoding='utf-8')
 
