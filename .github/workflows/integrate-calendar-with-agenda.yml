@@ -1,0 +1,42 @@
+name: Integrate calendar closures with agenda
+
+on:
+  push:
+    branches:
+      - feature/calendar-closures-settings
+    paths:
+      - .github/scripts/integrate_calendar_with_agenda.py
+      - .github/workflows/integrate-calendar-with-agenda.yml
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/calendar-closures-settings
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: python .github/scripts/integrate_calendar_with_agenda.py
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build:web
+      - name: Commit generated changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/screens/AgendaScreen.tsx firestore.rules
+          if git diff --cached --quiet; then
+            echo "No generated changes"
+          else
+            git commit -m "Block closed business days in agenda"
+            git push origin HEAD:feature/calendar-closures-settings
+          fi
