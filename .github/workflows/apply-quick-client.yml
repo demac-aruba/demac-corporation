@@ -1,0 +1,38 @@
+name: Apply quick client agenda patch
+
+on:
+  push:
+    branches:
+      - feature/agenda-quick-client-v1
+    paths:
+      - .github/scripts/apply_quick_client.py
+      - .github/workflows/apply-quick-client.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-agenda:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Apply quick client patch
+        run: python .github/scripts/apply_quick_client.py
+
+      - name: Commit patched agenda
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/screens/AgendaScreen.tsx
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Add quick client creation inside agenda"
+            git push origin HEAD:${{ github.ref_name }}
+          fi
