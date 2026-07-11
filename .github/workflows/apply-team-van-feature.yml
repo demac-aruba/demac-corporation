@@ -6,6 +6,7 @@ on:
       - feature/team-van-management-v1
     paths:
       - .github/scripts/apply_team_van_feature.py
+      - .github/scripts/team-feature-trigger.txt
       - .github/workflows/apply-team-van-feature.yml
 
 permissions:
