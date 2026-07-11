@@ -1,5 +1,0 @@
-
-> demac-corporation@1.0.0 typecheck
-> tsc --noEmit
-
-src/screens/AgendaScreen.tsx(683,256): error TS2339: Property 'closedSlotReason' does not exist on type '{ page: { padding: number; gap: number; paddingBottom: number; }; errorBanner: { flexDirection: "row"; alignItems: "center"; gap: number; borderWidth: number; borderColor: string; backgroundColor: string; borderRadius: number; padding: number; }; ... 148 more ...; modalActions: { ...; }; }'.
