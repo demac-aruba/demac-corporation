@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { AppModal, Button, Card, Input, Pill, SectionTitle, statusTone } from '../components/UI';
 import { useAppState } from '../state/AppState';
+import { BusinessCalendarSettings, CalendarClosure, useCalendarState } from '../state/CalendarState';
 import { useTeamState } from '../state/TeamState';
 import { colors } from '../theme';
 import { AppointmentStatus, Client, DailyVanAssignment, Property, PropertyType, ServiceType, StaffAbsence, StaffProfile, Van, WorkOrder } from '../types';
@@ -207,6 +208,19 @@ function resolveStoredVanId(storedVanId: string, agendaVans: AgendaVan[], legacy
   return storedVanId;
 }
 
+
+function calendarDateStatus(date: string, settings: BusinessCalendarSettings, closures: CalendarClosure[]) {
+  const closure = closures.find((item) => item.active !== false && item.date === date);
+  if (closure) return { closed: true, reason: closure.reason };
+  const weekday = new Date(`${date}T12:00:00`).getDay();
+  if ((settings.closedWeekdays ?? [0]).includes(weekday)) return { closed: true, reason: weekdaysLabel(weekday) };
+  return { closed: false, reason: '' };
+}
+
+function weekdaysLabel(value: number) {
+  return ['Domingo cerrado', 'Lunes cerrado', 'Martes cerrado', 'Miércoles cerrado', 'Jueves cerrado', 'Viernes cerrado', 'Sábado cerrado'][value] ?? 'Día cerrado';
+}
+
 export function AgendaScreen() {
   const { width } = useWindowDimensions();
   const compact = width < 1260;
@@ -227,6 +241,7 @@ export function AgendaScreen() {
     clearDataError,
   } = useAppState();
   const { vans: teamVans, staffProfiles, dailyVanAssignments, staffAbsences, teamLoading, teamDataError, refreshTeamData } = useTeamState();
+  const { calendarClosures, businessCalendarSettings, calendarLoading, calendarDataError, refreshCalendarData } = useCalendarState();
 
   const [selectedDate, setSelectedDate] = useState(localDateKey());
   const [showCreate, setShowCreate] = useState(false);
@@ -314,7 +329,9 @@ export function AgendaScreen() {
   const selectedVan = agendaVans.find((item) => item.id === vanId);
   const selectedOrder = orders.find((order) => order.id === selectedOrderId) ?? orders[0];
   const monthTitle = new Date(`${selectedDate}T12:00:00`).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
-  const combinedDataError = teamDataError ?? dataError;
+  const selectedCalendarStatus = calendarDateStatus(selectedDate, businessCalendarSettings, calendarClosures);
+  const selectedDateClosed = selectedCalendarStatus.closed;
+  const combinedDataError = calendarDataError ?? teamDataError ?? dataError;
 
   const filteredClients = useMemo(() => {
     const needle = clientQuery.trim().toLowerCase();
@@ -328,6 +345,7 @@ export function AgendaScreen() {
   }, [clients, clientQuery, clientId]);
 
   const isAvailable = (candidateVan: AgendaVan, candidateTime: string, date = selectedDate) => {
+    if (calendarDateStatus(date, businessCalendarSettings, calendarClosures).closed) return false;
     if (!vanCanReceiveAppointments(candidateVan)) return false;
     const start = slotIndex(candidateTime);
     if (start < 0 || start + workHours > allSlots.length) return false;
@@ -348,6 +366,7 @@ export function AgendaScreen() {
   }, [workHours, vanId, selectedDate, workOrders, agendaVans]);
 
   const openCreate = (candidateVanId?: string, candidateTime?: string) => {
+    if (selectedDateClosed) return;
     clearDataError();
     setFormMessage('');
     setSuccessMessage('');
@@ -438,6 +457,7 @@ export function AgendaScreen() {
     const client = clients.find((item) => item.id === clientId);
     const van = agendaVans.find((item) => item.id === vanId);
     const description = workDescriptionText.trim();
+    if (selectedDateClosed) return setFormMessage(`No se pueden crear citas: ${selectedCalendarStatus.reason}.`);
     if (!client) return setFormMessage('Primero selecciona o registra un cliente.');
     if (!description) return setFormMessage('Escribe la descripción del trabajo antes de confirmar la cita.');
     if (!van) return setFormMessage('Selecciona una van.');
@@ -485,15 +505,17 @@ export function AgendaScreen() {
       {combinedDataError ? (
         <View style={styles.errorBanner}>
           <View style={{ flex: 1 }}><Text style={styles.errorTitle}>No se pudieron guardar o cargar los datos</Text><Text style={styles.errorText}>{combinedDataError}</Text></View>
-          <Button compact variant="secondary" label="Reintentar" onPress={() => void Promise.all([refreshOperationalData(), refreshTeamData()])} />
+          <Button compact variant="secondary" label="Reintentar" onPress={() => void Promise.all([refreshOperationalData(), refreshTeamData(), refreshCalendarData()])} />
         </View>
       ) : null}
 
       <SectionTitle
         title="Agendar nueva cita"
         subtitle="Selecciona cliente, propiedad, duración, van y horario. Cada van tiene 3 horas en la mañana y 3 horas en la tarde."
-        action={<Button label="Nueva cita" icon="＋" onPress={() => openCreate()} />}
+        action={<Button label={selectedDateClosed ? 'Día cerrado' : 'Nueva cita'} icon={selectedDateClosed ? '🔒' : '＋'} disabled={selectedDateClosed} onPress={() => openCreate()} />}
       />
+
+      {selectedDateClosed ? <View style={styles.closedBanner}><View><Text style={styles.closedTitle}>Calendario cerrado para esta fecha</Text><Text style={styles.closedText}>{selectedCalendarStatus.reason}. Las citas existentes permanecen visibles, pero no se pueden crear citas nuevas.</Text></View></View> : null}
 
       <Card>
         <View style={styles.topPlanner}>
@@ -516,7 +538,8 @@ export function AgendaScreen() {
             <View style={styles.calendarGrid}>{days.map((date) => {
               const active = date === selectedDate;
               const dateObj = new Date(`${date}T12:00:00`);
-              return <Pressable key={date} onPress={() => setSelectedDate(date)} style={[styles.calendarDay, active && styles.calendarDayActive]}><Text style={[styles.calendarWeekday, active && styles.calendarDayTextActive]}>{dateObj.toLocaleDateString('es', { weekday: 'short' }).slice(0, 2)}</Text><Text style={[styles.calendarNumber, active && styles.calendarDayTextActive]}>{dateObj.getDate()}</Text></Pressable>;
+              const dateStatus = calendarDateStatus(date, businessCalendarSettings, calendarClosures);
+              return <Pressable key={date} onPress={() => setSelectedDate(date)} style={[styles.calendarDay, dateStatus.closed && styles.calendarDayClosed, active && styles.calendarDayActive]}><Text style={[styles.calendarWeekday, active && styles.calendarDayTextActive]}>{dateObj.toLocaleDateString('es', { weekday: 'short' }).slice(0, 2)}</Text><Text style={[styles.calendarNumber, active && styles.calendarDayTextActive]}>{dateObj.getDate()}</Text>{dateStatus.closed ? <Text style={[styles.calendarClosedLabel, active && styles.calendarDayTextActive]}>Cerrado</Text> : null}</Pressable>;
             })}</View>
           </Card>
           <Card><Text style={styles.sideTitle}>Filtros rápidos</Text><FilterRow label="Todas las citas" count={orders.length} active /><FilterRow label="Confirmadas" count={orders.filter((order) => order.status === 'Confirmada').length} /><FilterRow label="En proceso" count={orders.filter((order) => order.status === 'En proceso').length} /><FilterRow label="Pendientes" count={orders.filter((order) => ['Asignada', 'Pendiente'].includes(order.status)).length} /></Card>
@@ -529,9 +552,9 @@ export function AgendaScreen() {
             <View style={styles.boardDateCenter}><Text style={styles.boardDate}>{formatDate(selectedDate, true)}</Text><Text style={styles.workday}>Horario laboral: 8:00 AM - 5:00 PM | Pausa: 12:00 PM - 1:00 PM</Text></View>
             <Pressable onPress={() => setSelectedDate(addDays(selectedDate, 1))} style={styles.dateButton}><Text style={styles.dateButtonText}>Día siguiente →</Text></Pressable>
           </View>
-          {dataLoading || teamLoading ? <Text style={styles.syncText}>Sincronizando agenda y equipo…</Text> : null}
+          {dataLoading || teamLoading || calendarLoading ? <Text style={styles.syncText}>Sincronizando agenda, equipo y calendario…</Text> : null}
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <View style={styles.boardGrid}>{agendaVans.map((van) => <VanColumn key={van.id} van={van} users={staffDirectory} orders={orders} services={services} clients={clients} properties={properties} selectedOrderId={selectedOrder?.id} onSelectOrder={setSelectedOrderId} onCreate={(slot) => openCreate(van.id, slot)} />)}</View>
+            <View style={styles.boardGrid}>{agendaVans.map((van) => <VanColumn key={van.id} van={van} users={staffDirectory} orders={orders} services={services} clients={clients} properties={properties} selectedOrderId={selectedOrder?.id} onSelectOrder={setSelectedOrderId} onCreate={(slot) => openCreate(van.id, slot)} closedReason={selectedDateClosed ? selectedCalendarStatus.reason : undefined} />)}</View>
           </ScrollView>
           <View style={styles.legendBar}><Text style={styles.legendTitle}>Leyenda de disponibilidad:</Text><Legend color="#EAF7E7" label="Disponible" /><Legend color="#EAF3FF" label="Ocupado" /><Legend color="#FDECEC" label="No disponible" /></View>
         </Card>
@@ -621,7 +644,7 @@ export function AgendaScreen() {
   );
 }
 
-function VanColumn({ van, users, orders, services, clients, properties, selectedOrderId, onSelectOrder, onCreate }: { van: AgendaVan; users: { id: string; name: string }[]; orders: WorkOrder[]; services: ServiceType[]; clients: Client[]; properties: Property[]; selectedOrderId?: string; onSelectOrder: (id: string) => void; onCreate: (slot: string) => void }) {
+function VanColumn({ van, users, orders, services, clients, properties, selectedOrderId, onSelectOrder, onCreate, closedReason }: { van: AgendaVan; users: { id: string; name: string }[]; orders: WorkOrder[]; services: ServiceType[]; clients: Client[]; properties: Property[]; selectedOrderId?: string; onSelectOrder: (id: string) => void; onCreate: (slot: string) => void; closedReason?: string }) {
   const techNames = van.technicianIds.map((id) => users.find((user) => user.id === id)?.name.split(' ')[0]).filter(Boolean).join(' + ') || 'Sin equipo';
   const unavailableReason = van.status === 'Mantenimiento' ? 'Mantenimiento' : van.status === 'Fuera de servicio' ? 'Fuera de servicio' : 'Sin personal';
   const usedMorning = morningSlots.filter((slot) => orders.some((order) => order.vanId === van.id && orderOccupiesSlot(order, slot, services))).length;
@@ -657,6 +680,7 @@ function VanColumn({ van, users, orders, services, clients, properties, selected
               </Pressable>
             );
           }
+          if (closedReason) return <View key={`${van.id}-${slot}`} style={[styles.absoluteSlot, styles.slotUnavailable, { top }]}><Text style={styles.slotTime}>{slotLabel(slot)}</Text><Text style={styles.unavailableText}>Cerrado</Text><Text style={styles.closedSlotReason} numberOfLines={2}>{closedReason}</Text></View>;
           if (!vanCanReceiveAppointments(van)) return <View key={`${van.id}-${slot}`} style={[styles.absoluteSlot, styles.slotUnavailable, { top }]}><Text style={styles.slotTime}>{slotLabel(slot)}</Text><Text style={styles.unavailableText}>{unavailableReason}</Text></View>;
           return <Pressable key={`${van.id}-${slot}`} onPress={() => onCreate(slot)} style={[styles.absoluteSlot, styles.slotAvailable, { top }]}><Text style={styles.slotTime}>{slotLabel(slot)}</Text><Text style={styles.availableText}>Disponible</Text><Text style={styles.addSlot}>＋</Text></Pressable>;
         })}
@@ -695,6 +719,9 @@ const styles = StyleSheet.create({
   errorBanner: { flexDirection: 'row', alignItems: 'center', gap: 14, borderWidth: 1, borderColor: '#F2B8B5', backgroundColor: colors.dangerLight, borderRadius: 10, padding: 14 },
   errorTitle: { color: colors.danger, fontWeight: '900', fontSize: 13 },
   errorText: { color: colors.text, fontSize: 11, marginTop: 3 },
+  closedBanner: { borderWidth: 1, borderColor: '#E8A9A7', backgroundColor: colors.dangerLight, borderRadius: 10, padding: 14 },
+  closedTitle: { color: colors.danger, fontWeight: '900', fontSize: 13 },
+  closedText: { color: colors.text, fontSize: 11, lineHeight: 17, marginTop: 4 },
   topPlanner: { flexDirection: 'row', alignItems: 'center', gap: 18, flexWrap: 'wrap' },
   topPlannerBlock: { flex: 1, minWidth: 260 },
   fieldCaption: { color: colors.muted, fontSize: 11, fontWeight: '700' },
@@ -712,10 +739,12 @@ const styles = StyleSheet.create({
   monthNav: { color: colors.muted, fontSize: 17, fontWeight: '900' },
   calendarGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
   calendarDay: { width: 42, height: 48, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' },
+  calendarDayClosed: { backgroundColor: colors.dangerLight, borderWidth: 1, borderColor: '#E8A9A7' },
   calendarDayActive: { backgroundColor: colors.primary },
   calendarWeekday: { color: colors.muted, fontSize: 9, fontWeight: '800', textTransform: 'uppercase' },
   calendarNumber: { color: colors.text, fontWeight: '900', marginTop: 2 },
   calendarDayTextActive: { color: '#FFFFFF' },
+  calendarClosedLabel: { color: colors.danger, fontSize: 7, fontWeight: '900', marginTop: 2 },
   sideTitle: { color: colors.text, fontWeight: '900', fontSize: 15, marginBottom: 10 },
   filterRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 9, paddingHorizontal: 9, borderRadius: 8 },
   filterRowActive: { backgroundColor: '#F0F2F4' },
@@ -756,6 +785,7 @@ const styles = StyleSheet.create({
   slotTime: { color: colors.muted, fontSize: 10, fontWeight: '800' },
   availableText: { color: colors.primary, fontWeight: '900', fontSize: 12, marginTop: 5 },
   unavailableText: { color: colors.danger, fontWeight: '900', fontSize: 12, marginTop: 5 },
+  closedSlotReason: { color: colors.muted, fontSize: 9, lineHeight: 12, marginTop: 5, textAlign: 'center' },
   addSlot: { position: 'absolute', right: 10, bottom: 8, color: colors.primary, fontSize: 16, fontWeight: '900' },
   clientName: { color: colors.text, fontWeight: '900', fontSize: 12, lineHeight: 16, minHeight: 16, marginTop: 5 },
   addressLine: { color: colors.text, fontSize: 9, marginTop: 3, lineHeight: 12 },
