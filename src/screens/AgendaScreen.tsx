@@ -212,7 +212,7 @@ export function AgendaScreen() {
   const [successMessage, setSuccessMessage] = useState('');
   const [workHours, setWorkHours] = useState(1);
   const [workDescriptionText, setWorkDescriptionText] = useState('');
-  const [vanId, setVanId] = useState(vans[0]?.id ?? '');
+  const [vanId, setVanId] = useState(teamVans[0]?.id ?? legacyVans[0]?.id ?? '');
   const [time, setTime] = useState('08:30');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
