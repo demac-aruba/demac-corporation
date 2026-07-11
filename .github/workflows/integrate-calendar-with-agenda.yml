@@ -1,23 +1,17 @@
-name: Integrate calendar closures with agenda
+name: Validate calendar closures
 
 on:
   push:
     branches:
       - feature/calendar-closures-settings
     paths:
-      - .github/scripts/integrate_calendar_with_agenda.py
-      - .github/scripts/run_calendar_integration.py
-      - .github/scripts/fix_calendar_agenda_style.py
       - .github/workflows/integrate-calendar-with-agenda.yml
-  pull_request:
-    branches:
-      - main
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  integrate:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,19 +21,6 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: python .github/scripts/run_calendar_integration.py
-      - run: python .github/scripts/fix_calendar_agenda_style.py
-      - name: Commit generated changes
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/screens/AgendaScreen.tsx firestore.rules
-          if git diff --cached --quiet; then
-            echo "No generated changes"
-          else
-            git commit -m "Complete blocked business day integration"
-            git push origin HEAD:feature/calendar-closures-settings
-          fi
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build:web
