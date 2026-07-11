@@ -1,7 +1,22 @@
 import React, { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { deleteFirestoreDocument, listFirestoreCollection, saveFirestoreDocument } from '../services/firebase';
-import { BusinessCalendarSettings, CalendarClosure } from '../types';
 import { OperationResult, useAppState } from './AppState';
+
+export interface CalendarClosure {
+  id: string;
+  date: string;
+  reason: string;
+  notes?: string;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface BusinessCalendarSettings {
+  id: string;
+  closedWeekdays: number[];
+  updatedAt?: string;
+}
 
 const SYNC_INTERVAL_MS = 30_000;
 const DEFAULT_SETTINGS: BusinessCalendarSettings = { id: 'business-calendar', closedWeekdays: [0] };
