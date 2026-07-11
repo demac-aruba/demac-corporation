@@ -13,8 +13,9 @@ const SLOT_HEIGHT = 118;
 const SLOT_GAP = 8;
 const GROUP_HEADER_HEIGHT = 30;
 const LUNCH_GAP = 44;
+const AFTERNOON_START_GAP = 12;
 const AFTERNOON_HEADER_TOP = GROUP_HEADER_HEIGHT + morningSlots.length * (SLOT_HEIGHT + SLOT_GAP) + LUNCH_GAP;
-const SCHEDULE_HEIGHT = GROUP_HEADER_HEIGHT * 2 + allSlots.length * SLOT_HEIGHT + (allSlots.length - 1) * SLOT_GAP + LUNCH_GAP;
+const SCHEDULE_HEIGHT = GROUP_HEADER_HEIGHT * 2 + allSlots.length * SLOT_HEIGHT + (allSlots.length - 1) * SLOT_GAP + LUNCH_GAP + AFTERNOON_START_GAP;
 
 type QuickClientForm = {
   name: string;
@@ -110,13 +111,14 @@ function toneForStatus(status: AppointmentStatus) {
 }
 
 function scheduleSlotTop(index: number) {
-  return GROUP_HEADER_HEIGHT + index * (SLOT_HEIGHT + SLOT_GAP) + (index >= morningSlots.length ? GROUP_HEADER_HEIGHT + LUNCH_GAP : 0);
+  const afternoonOffset = index >= morningSlots.length ? GROUP_HEADER_HEIGHT + LUNCH_GAP + AFTERNOON_START_GAP : 0;
+  return GROUP_HEADER_HEIGHT + index * (SLOT_HEIGHT + SLOT_GAP) + afternoonOffset;
 }
 
 function scheduleBlockHeight(start: number, requestedSlots: number) {
   const slots = Math.max(1, Math.min(requestedSlots, allSlots.length - start));
   const crossesLunch = start < morningSlots.length && start + slots > morningSlots.length;
-  return slots * SLOT_HEIGHT + (slots - 1) * SLOT_GAP + (crossesLunch ? GROUP_HEADER_HEIGHT + LUNCH_GAP : 0);
+  return slots * SLOT_HEIGHT + (slots - 1) * SLOT_GAP + (crossesLunch ? GROUP_HEADER_HEIGHT + LUNCH_GAP + AFTERNOON_START_GAP : 0);
 }
 
 function orderDescription(order: WorkOrder, service?: ServiceType) {
@@ -622,16 +624,16 @@ const styles = StyleSheet.create({
   lunchDivider: { position: 'absolute', left: 12, right: 12, height: LUNCH_GAP, alignItems: 'center', justifyContent: 'center', borderTopWidth: 1, borderBottomWidth: 1, borderColor: '#EEF0F2', zIndex: 1 },
   lunchText: { color: colors.muted, fontSize: 8, fontWeight: '800' },
   absoluteSlot: { position: 'absolute', left: 12, right: 12, height: SLOT_HEIGHT, borderRadius: 8, borderWidth: 1, padding: 10, justifyContent: 'center', zIndex: 1 },
-  mergedAppointment: { position: 'absolute', left: 12, right: 12, borderRadius: 8, borderWidth: 1, borderColor: '#B9D7FF', backgroundColor: colors.infoLight, padding: 10, justifyContent: 'flex-start', zIndex: 3, overflow: 'hidden' },
+  mergedAppointment: { position: 'absolute', left: 12, right: 12, borderRadius: 8, borderWidth: 1, borderColor: '#B9D7FF', backgroundColor: colors.infoLight, padding: 10, paddingTop: 12, justifyContent: 'flex-start', zIndex: 3, overflow: 'hidden' },
   slotAvailable: { borderColor: '#B9E4B3', backgroundColor: '#F4FBF2' },
   slotUnavailable: { borderColor: '#F2B8B5', backgroundColor: colors.dangerLight },
   slotSelected: { borderColor: colors.primary, borderWidth: 2 },
-  slotTop: { flexDirection: 'row', justifyContent: 'space-between', gap: 6, alignItems: 'center' },
+  slotTop: { flexDirection: 'row', justifyContent: 'space-between', gap: 6, alignItems: 'center', minHeight: 18, marginBottom: 2 },
   slotTime: { color: colors.muted, fontSize: 10, fontWeight: '800' },
   availableText: { color: colors.primary, fontWeight: '900', fontSize: 12, marginTop: 5 },
   unavailableText: { color: colors.danger, fontWeight: '900', fontSize: 12, marginTop: 5 },
   addSlot: { position: 'absolute', right: 10, bottom: 8, color: colors.primary, fontSize: 16, fontWeight: '900' },
-  clientName: { color: colors.text, fontWeight: '900', fontSize: 12, marginTop: 7 },
+  clientName: { color: colors.text, fontWeight: '900', fontSize: 12, lineHeight: 16, minHeight: 16, marginTop: 5 },
   addressLine: { color: colors.text, fontSize: 9, marginTop: 3, lineHeight: 12 },
   zoneLine: { color: colors.primaryDark, fontSize: 9, fontWeight: '800', marginTop: 3 },
   serviceLine: { color: colors.text, fontSize: 9, marginTop: 4, lineHeight: 12 },
