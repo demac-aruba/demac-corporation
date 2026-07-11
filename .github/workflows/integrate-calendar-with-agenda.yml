@@ -6,6 +6,7 @@ on:
       - feature/calendar-closures-settings
     paths:
       - .github/scripts/integrate_calendar_with_agenda.py
+      - .github/scripts/run_calendar_integration.py
       - .github/workflows/integrate-calendar-with-agenda.yml
   pull_request:
     branches:
@@ -25,10 +26,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: python .github/scripts/integrate_calendar_with_agenda.py
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm run build:web
+      - run: python .github/scripts/run_calendar_integration.py
       - name: Commit generated changes
         run: |
           git config user.name "github-actions[bot]"
@@ -40,3 +38,6 @@ jobs:
             git commit -m "Block closed business days in agenda"
             git push origin HEAD:feature/calendar-closures-settings
           fi
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build:web
