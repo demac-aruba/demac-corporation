@@ -6,6 +6,9 @@ on:
       - feature/fixed-agenda-month-calendar
     paths:
       - .github/workflows/fix-agenda-mini-calendar.yml
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
