@@ -179,6 +179,34 @@ function vanCanReceiveAppointments(van: AgendaVan) {
     && !['Mantenimiento', 'Fuera de servicio', 'Sin personal'].includes(van.status);
 }
 
+function normalizeVanName(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function resolveStoredVanId(storedVanId: string, agendaVans: AgendaVan[], legacyVans: Van[]) {
+  if (agendaVans.some((van) => van.id === storedVanId)) return storedVanId;
+
+  const legacyIndex = legacyVans.findIndex((van) => van.id === storedVanId);
+  const legacyVan = legacyIndex >= 0 ? legacyVans[legacyIndex] : undefined;
+  if (legacyVan) {
+    const matchingName = agendaVans.find((van) => normalizeVanName(van.name) === normalizeVanName(legacyVan.name));
+    if (matchingName) return matchingName.id;
+    if (agendaVans[legacyIndex]) return agendaVans[legacyIndex].id;
+  }
+
+  const number = storedVanId.match(/(\d+)$/)?.[1];
+  if (number) {
+    const matchingNumber = agendaVans.find((van) => normalizeVanName(van.name) === `van${number}`);
+    if (matchingNumber) return matchingNumber.id;
+  }
+
+  return storedVanId;
+}
+
 export function AgendaScreen() {
   const { width } = useWindowDimensions();
   const compact = width < 1260;
@@ -218,12 +246,11 @@ export function AgendaScreen() {
   const [saving, setSaving] = useState(false);
   const [formMessage, setFormMessage] = useState('');
 
-  const staffDirectory = useMemo(
-    () => staffProfiles.length
-      ? staffProfiles.map((profile) => ({ id: profile.id, name: profile.name }))
-      : legacyUsers.map((user) => ({ id: user.id, name: user.name })),
-    [staffProfiles, legacyUsers],
-  );
+  const staffDirectory = useMemo(() => {
+    const directory = new Map(legacyUsers.map((user) => [user.id, { id: user.id, name: user.name }]));
+    staffProfiles.forEach((profile) => directory.set(profile.id, { id: profile.id, name: profile.name }));
+    return Array.from(directory.values());
+  }, [staffProfiles, legacyUsers]);
 
   const agendaVans = useMemo<AgendaVan[]>(() => {
     const sourceVans = teamVans.length ? teamVans : legacyVans;
@@ -272,8 +299,14 @@ export function AgendaScreen() {
 
   const days = useMemo(() => Array.from({ length: 14 }, (_, index) => addDays(selectedDate, index)), [selectedDate]);
   const orders = useMemo(
-    () => workOrders.filter((order) => order.date === selectedDate).sort((a, b) => a.time.localeCompare(b.time)),
-    [workOrders, selectedDate],
+    () => workOrders
+      .filter((order) => order.date === selectedDate)
+      .map((order) => {
+        const resolvedVanId = resolveStoredVanId(order.vanId, agendaVans, legacyVans);
+        return resolvedVanId === order.vanId ? order : { ...order, vanId: resolvedVanId };
+      })
+      .sort((a, b) => a.time.localeCompare(b.time)),
+    [workOrders, selectedDate, agendaVans, legacyVans],
   );
   const selectedClient = clients.find((item) => item.id === clientId);
   const clientProperties = properties.filter((item) => item.clientId === clientId && item.active !== false);
@@ -302,7 +335,7 @@ export function AgendaScreen() {
     return !workOrders.some(
       (order) =>
         order.date === date &&
-        order.vanId === candidateVan.id &&
+        resolveStoredVanId(order.vanId, agendaVans, legacyVans) === candidateVan.id &&
         candidateSlots.some((slot) => orderOccupiesSlot(order, slot, services)),
     );
   };
