@@ -4,6 +4,7 @@ import { AppShell } from './src/components/AppShell';
 import { LoadingScreen } from './src/components/UI';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { AppStateProvider, useAppState } from './src/state/AppState';
+import { TeamStateProvider } from './src/state/TeamState';
 
 function AppContent() {
   const { currentUser, hydrated } = useAppState();
@@ -19,7 +20,9 @@ function AppContent() {
 export default function App() {
   return (
     <AppStateProvider>
-      <AppContent />
+      <TeamStateProvider>
+        <AppContent />
+      </TeamStateProvider>
     </AppStateProvider>
   );
 }

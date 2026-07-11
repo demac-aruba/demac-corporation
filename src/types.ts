@@ -6,6 +6,7 @@ export type ScreenKey =
   | 'clients'
   | 'catalog'
   | 'workOrders'
+  | 'team'
   | 'technician'
   | 'sales'
   | 'inventory'
@@ -25,6 +26,78 @@ export type AppointmentStatus =
   | 'Pagada'
   | 'Reprogramada'
   | 'Cancelada';
+
+export type StaffRole = 'Técnico responsable' | 'Técnico' | 'Ayudante' | 'Supervisor';
+export type StaffAvailability = 'Disponible' | 'Enfermo' | 'Vacaciones' | 'Libre' | 'Inactivo';
+
+export interface StaffProfile {
+  id: string;
+  name: string;
+  phone: string;
+  email?: string;
+  role: StaffRole;
+  canDriveVan: boolean;
+  primaryVanId?: string;
+  skills: string[];
+  availability: StaffAvailability;
+  unavailableFrom?: string;
+  unavailableUntil?: string;
+  licenseNumber?: string;
+  licenseExpiresAt?: string;
+  active: boolean;
+  notes?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface StaffAbsence {
+  id: string;
+  staffId: string;
+  fromDate: string;
+  toDate: string;
+  reason: 'Enfermo' | 'Vacaciones' | 'Libre' | 'Otro';
+  notes?: string;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type VanOperationalStatus = 'Disponible' | 'En ruta' | 'Mantenimiento' | 'Fuera de servicio' | 'Sin personal';
+export type VanToolCondition = 'Buena' | 'Requiere atención' | 'Fuera de servicio';
+
+export interface VanToolItem {
+  id: string;
+  name: string;
+  category: string;
+  quantity: number;
+  condition: VanToolCondition;
+  notes?: string;
+}
+
+export interface DailyVanAssignment {
+  id: string;
+  date: string;
+  vanId: string;
+  driverStaffId?: string;
+  helperStaffId?: string;
+  status: 'Disponible' | 'Trabajo liviano' | 'Sin personal' | 'Mantenimiento' | 'Fuera de servicio';
+  notes?: string;
+  updatedAt?: string;
+}
+
+export interface VanMaintenanceLog {
+  id: string;
+  vanId: string;
+  date: string;
+  odometerKm: number;
+  type: string;
+  description: string;
+  cost?: number;
+  nextDueKm?: number;
+  nextDueDate?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
 
 export interface User {
   id: string;
@@ -171,5 +244,16 @@ export interface Van {
   name: string;
   plate: string;
   technicianIds: string[];
-  status: 'Disponible' | 'En ruta' | 'Mantenimiento';
+  status: VanOperationalStatus;
+  responsibleStaffId?: string;
+  regularHelperId?: string;
+  odometerKm?: number;
+  nextServiceKm?: number;
+  nextServiceDate?: string;
+  insuranceExpiresAt?: string;
+  registrationExpiresAt?: string;
+  notes?: string;
+  inventory?: VanToolItem[];
+  active?: boolean;
+  updatedAt?: string;
 }
