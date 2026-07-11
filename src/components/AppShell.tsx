@@ -1,7 +1,7 @@
 import React, { ReactNode, useMemo, useState } from 'react';
 import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useAppState } from '../state/AppState';
-import { colors, roleLabels } from '../theme';
+import { colors } from '../theme';
 import { ScreenKey, UserRole } from '../types';
 import { AgendaScreen } from '../screens/AgendaScreen';
 import { CatalogScreen } from '../screens/CatalogScreen';
@@ -10,6 +10,7 @@ import { DashboardScreen } from '../screens/DashboardScreen';
 import { FinanceScreen } from '../screens/FinanceScreen';
 import { InventoryScreen } from '../screens/InventoryScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
+import { TeamScreen } from '../screens/TeamScreen';
 import { TechnicianScreen } from '../screens/TechnicianScreen';
 import { WorkOrdersScreen } from '../screens/WorkOrdersScreen';
 
@@ -19,6 +20,7 @@ const navItems: { key: ScreenKey; label: string; icon: string; roles: UserRole[]
   { key: 'clients', label: 'Clientes', icon: '♙', roles: ['admin', 'office', 'supervisor', 'accounting'] },
   { key: 'catalog', label: 'Catálogo', icon: '▦', roles: ['admin', 'office', 'supervisor'] },
   { key: 'workOrders', label: 'Trabajos', icon: '☷', roles: ['admin', 'office', 'supervisor'] },
+  { key: 'team', label: 'Equipo', icon: '♟', roles: ['admin', 'office', 'supervisor'] },
   { key: 'technician', label: 'Mi trabajo', icon: '✓', roles: ['admin', 'supervisor', 'technician'] },
   { key: 'sales', label: 'Ventas', icon: '$', roles: ['admin', 'office', 'accounting'] },
   { key: 'inventory', label: 'Inventario', icon: '◇', roles: ['admin', 'supervisor', 'inventory'] },
@@ -55,6 +57,7 @@ export function AppShell() {
     case 'clients': content = <ClientsScreen />; break;
     case 'catalog': content = <CatalogScreen />; break;
     case 'workOrders': content = <WorkOrdersScreen />; break;
+    case 'team': content = <TeamScreen />; break;
     case 'technician': content = <TechnicianScreen />; break;
     case 'sales': content = <FinanceScreen salesMode />; break;
     case 'inventory': content = <InventoryScreen />; break;
