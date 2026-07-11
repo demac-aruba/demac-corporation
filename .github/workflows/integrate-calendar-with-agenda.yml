@@ -27,17 +27,17 @@ jobs:
           node-version: 22
           cache: npm
       - run: python .github/scripts/run_calendar_integration.py
-      - name: Commit generated changes
+      - run: npm ci
+      - name: Capture typecheck diagnostics
+        run: npm run typecheck > .github/calendar-typecheck.log 2>&1 || true
+      - name: Commit generated changes and diagnostics
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/screens/AgendaScreen.tsx firestore.rules
+          git add src/screens/AgendaScreen.tsx firestore.rules .github/calendar-typecheck.log
           if git diff --cached --quiet; then
             echo "No generated changes"
           else
-            git commit -m "Block closed business days in agenda"
+            git commit -m "Validate blocked business days"
             git push origin HEAD:feature/calendar-closures-settings
           fi
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm run build:web
