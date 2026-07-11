@@ -65,6 +65,15 @@ service cloud.firestore {
       allow delete: if adminOrSupervisor();
     }
 
+    match /calendarClosures/{closureId} {
+      allow read, create, update, delete: if operationsRole();
+    }
+
+    match /businessSettings/{settingId} {
+      allow read, create, update: if operationsRole();
+      allow delete: if adminOrSupervisor();
+    }
+
     match /workOrders/{workOrderId} {
       allow read, create, update: if operationsRole();
       allow delete: if adminOrSupervisor();
