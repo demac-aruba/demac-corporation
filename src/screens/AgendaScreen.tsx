@@ -2,8 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { AppModal, Button, Card, Input, Pill, SectionTitle, statusTone } from '../components/UI';
 import { useAppState } from '../state/AppState';
+import { useTeamState } from '../state/TeamState';
 import { colors } from '../theme';
-import { AppointmentStatus, Client, Property, PropertyType, ServiceType, Van, WorkOrder } from '../types';
+import { AppointmentStatus, Client, DailyVanAssignment, Property, PropertyType, ServiceType, StaffAbsence, StaffProfile, Van, WorkOrder } from '../types';
 
 const morningSlots = ['08:30', '09:30', '10:30'];
 const afternoonSlots = ['13:30', '14:30', '15:30'];
@@ -127,6 +128,57 @@ function orderDescription(order: WorkOrder, service?: ServiceType) {
   return service?.name ?? 'Trabajo programado';
 }
 
+type AgendaVan = Van & {
+  dispatchStatus: DailyVanAssignment['status'];
+  driverStaffId?: string;
+  helperStaffId?: string;
+};
+
+function staffUnavailable(profile: StaffProfile | undefined, date: string, absences: StaffAbsence[]) {
+  if (!profile || !profile.active || profile.availability === 'Inactivo') return true;
+  const generallyUnavailable = profile.availability !== 'Disponible'
+    && (!profile.unavailableFrom || date >= profile.unavailableFrom)
+    && (!profile.unavailableUntil || date <= profile.unavailableUntil);
+  return generallyUnavailable || absences.some((absence) =>
+    absence.active
+    && absence.staffId === profile.id
+    && date >= absence.fromDate
+    && date <= absence.toDate,
+  );
+}
+
+function resolveAgendaAssignment(van: Van, date: string, profiles: StaffProfile[], assignments: DailyVanAssignment[], absences: StaffAbsence[]): DailyVanAssignment {
+  const saved = assignments.find((item) => item.vanId === van.id && item.date === date);
+  const driver = profiles.find((item) => item.id === (saved?.driverStaffId ?? van.responsibleStaffId));
+  const helper = profiles.find((item) => item.id === (saved?.helperStaffId ?? van.regularHelperId));
+  const driverStaffId = driver?.canDriveVan && !staffUnavailable(driver, date, absences) ? driver.id : undefined;
+  const helperStaffId = !staffUnavailable(helper, date, absences) ? helper?.id : undefined;
+
+  let status: DailyVanAssignment['status'];
+  if (van.active === false || van.status === 'Fuera de servicio' || saved?.status === 'Fuera de servicio') status = 'Fuera de servicio';
+  else if (van.status === 'Mantenimiento' || saved?.status === 'Mantenimiento') status = 'Mantenimiento';
+  else if (!driverStaffId || saved?.status === 'Sin personal') status = 'Sin personal';
+  else if (!helperStaffId || saved?.status === 'Trabajo liviano') status = 'Trabajo liviano';
+  else status = 'Disponible';
+
+  return {
+    id: saved?.id ?? `${date}-${van.id}`,
+    date,
+    vanId: van.id,
+    driverStaffId,
+    helperStaffId,
+    status,
+    notes: saved?.notes,
+    updatedAt: saved?.updatedAt,
+  };
+}
+
+function vanCanReceiveAppointments(van: AgendaVan) {
+  return van.active !== false
+    && !!van.driverStaffId
+    && !['Mantenimiento', 'Fuera de servicio', 'Sin personal'].includes(van.status);
+}
+
 export function AgendaScreen() {
   const { width } = useWindowDimensions();
   const compact = width < 1260;
@@ -135,8 +187,8 @@ export function AgendaScreen() {
     clients,
     properties,
     services,
-    vans,
-    users,
+    vans: legacyVans,
+    users: legacyUsers,
     addClient,
     addProperty,
     addWorkOrder,
@@ -146,6 +198,7 @@ export function AgendaScreen() {
     refreshOperationalData,
     clearDataError,
   } = useAppState();
+  const { vans: teamVans, staffProfiles, dailyVanAssignments, staffAbsences, teamLoading, teamDataError, refreshTeamData } = useTeamState();
 
   const [selectedDate, setSelectedDate] = useState(localDateKey());
   const [showCreate, setShowCreate] = useState(false);
@@ -164,6 +217,42 @@ export function AgendaScreen() {
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [formMessage, setFormMessage] = useState('');
+
+  const staffDirectory = useMemo(
+    () => staffProfiles.length
+      ? staffProfiles.map((profile) => ({ id: profile.id, name: profile.name }))
+      : legacyUsers.map((user) => ({ id: user.id, name: user.name })),
+    [staffProfiles, legacyUsers],
+  );
+
+  const agendaVans = useMemo<AgendaVan[]>(() => {
+    const sourceVans = teamVans.length ? teamVans : legacyVans;
+    return sourceVans
+      .filter((van) => van.active !== false)
+      .slice(0, 4)
+      .map((van) => {
+        const assignment = resolveAgendaAssignment(van, selectedDate, staffProfiles, dailyVanAssignments, staffAbsences);
+        const technicianIds = [assignment.driverStaffId, assignment.helperStaffId].filter(Boolean) as string[];
+        const status: Van['status'] = assignment.status === 'Mantenimiento'
+          ? 'Mantenimiento'
+          : assignment.status === 'Fuera de servicio'
+            ? 'Fuera de servicio'
+            : assignment.status === 'Sin personal' || !assignment.driverStaffId
+              ? 'Sin personal'
+              : van.status === 'En ruta' ? 'En ruta' : 'Disponible';
+        return { ...van, technicianIds, status, dispatchStatus: assignment.status, driverStaffId: assignment.driverStaffId, helperStaffId: assignment.helperStaffId };
+      });
+  }, [teamVans, legacyVans, selectedDate, staffProfiles, dailyVanAssignments, staffAbsences]);
+
+  useEffect(() => {
+    if (!agendaVans.length) {
+      if (vanId) setVanId('');
+      return;
+    }
+    if (!agendaVans.some((van) => van.id === vanId)) {
+      setVanId(agendaVans.find(vanCanReceiveAppointments)?.id ?? agendaVans[0].id);
+    }
+  }, [agendaVans, vanId]);
 
   useEffect(() => {
     if (!clients.length) {
@@ -189,9 +278,10 @@ export function AgendaScreen() {
   const selectedClient = clients.find((item) => item.id === clientId);
   const clientProperties = properties.filter((item) => item.clientId === clientId && item.active !== false);
   const selectedProperty = clientProperties.find((item) => item.id === propertyId);
-  const selectedVan = vans.find((item) => item.id === vanId);
+  const selectedVan = agendaVans.find((item) => item.id === vanId);
   const selectedOrder = orders.find((order) => order.id === selectedOrderId) ?? orders[0];
   const monthTitle = new Date(`${selectedDate}T12:00:00`).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+  const combinedDataError = teamDataError ?? dataError;
 
   const filteredClients = useMemo(() => {
     const needle = clientQuery.trim().toLowerCase();
@@ -204,8 +294,8 @@ export function AgendaScreen() {
     return selected ? [selected, ...matches.filter((client) => client.id !== selected.id).slice(0, 5)] : matches.slice(0, 6);
   }, [clients, clientQuery, clientId]);
 
-  const isAvailable = (candidateVan: Van, candidateTime: string, date = selectedDate) => {
-    if (candidateVan.status === 'Mantenimiento') return false;
+  const isAvailable = (candidateVan: AgendaVan, candidateTime: string, date = selectedDate) => {
+    if (!vanCanReceiveAppointments(candidateVan)) return false;
     const start = slotIndex(candidateTime);
     if (start < 0 || start + workHours > allSlots.length) return false;
     const candidateSlots = allSlots.slice(start, start + workHours);
@@ -222,7 +312,7 @@ export function AgendaScreen() {
     if (isAvailable(selectedVan, time)) return;
     const firstAvailable = allSlots.find((slot) => isAvailable(selectedVan, slot));
     if (firstAvailable) setTime(firstAvailable);
-  }, [workHours, vanId, selectedDate, workOrders]);
+  }, [workHours, vanId, selectedDate, workOrders, agendaVans]);
 
   const openCreate = (candidateVanId?: string, candidateTime?: string) => {
     clearDataError();
@@ -313,7 +403,7 @@ export function AgendaScreen() {
 
   const createOrder = async () => {
     const client = clients.find((item) => item.id === clientId);
-    const van = vans.find((item) => item.id === vanId);
+    const van = agendaVans.find((item) => item.id === vanId);
     const description = workDescriptionText.trim();
     if (!client) return setFormMessage('Primero selecciona o registra un cliente.');
     if (!description) return setFormMessage('Escribe la descripción del trabajo antes de confirmar la cita.');
@@ -359,10 +449,10 @@ export function AgendaScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.page}>
-      {dataError ? (
+      {combinedDataError ? (
         <View style={styles.errorBanner}>
-          <View style={{ flex: 1 }}><Text style={styles.errorTitle}>No se pudieron guardar o cargar los datos</Text><Text style={styles.errorText}>{dataError}</Text></View>
-          <Button compact variant="secondary" label="Reintentar" onPress={() => void refreshOperationalData()} />
+          <View style={{ flex: 1 }}><Text style={styles.errorTitle}>No se pudieron guardar o cargar los datos</Text><Text style={styles.errorText}>{combinedDataError}</Text></View>
+          <Button compact variant="secondary" label="Reintentar" onPress={() => void Promise.all([refreshOperationalData(), refreshTeamData()])} />
         </View>
       ) : null}
 
@@ -397,7 +487,7 @@ export function AgendaScreen() {
             })}</View>
           </Card>
           <Card><Text style={styles.sideTitle}>Filtros rápidos</Text><FilterRow label="Todas las citas" count={orders.length} active /><FilterRow label="Confirmadas" count={orders.filter((order) => order.status === 'Confirmada').length} /><FilterRow label="En proceso" count={orders.filter((order) => order.status === 'En proceso').length} /><FilterRow label="Pendientes" count={orders.filter((order) => ['Asignada', 'Pendiente'].includes(order.status)).length} /></Card>
-          <Card><Text style={styles.sideTitle}>Técnicos</Text>{vans.slice(0, 4).map((van) => <TechnicianFilter key={van.id} van={van} users={users} />)}</Card>
+          <Card><Text style={styles.sideTitle}>Equipo del día</Text>{agendaVans.map((van) => <TechnicianFilter key={van.id} van={van} users={staffDirectory} />)}</Card>
         </View>
 
         <Card style={styles.boardCard}>
@@ -406,14 +496,14 @@ export function AgendaScreen() {
             <View style={styles.boardDateCenter}><Text style={styles.boardDate}>{formatDate(selectedDate, true)}</Text><Text style={styles.workday}>Horario laboral: 8:00 AM - 5:00 PM | Pausa: 12:00 PM - 1:00 PM</Text></View>
             <Pressable onPress={() => setSelectedDate(addDays(selectedDate, 1))} style={styles.dateButton}><Text style={styles.dateButtonText}>Día siguiente →</Text></Pressable>
           </View>
-          {dataLoading ? <Text style={styles.syncText}>Sincronizando agenda…</Text> : null}
+          {dataLoading || teamLoading ? <Text style={styles.syncText}>Sincronizando agenda y equipo…</Text> : null}
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <View style={styles.boardGrid}>{vans.slice(0, 4).map((van) => <VanColumn key={van.id} van={van} users={users} orders={orders} services={services} clients={clients} properties={properties} selectedOrderId={selectedOrder?.id} onSelectOrder={setSelectedOrderId} onCreate={(slot) => openCreate(van.id, slot)} />)}</View>
+            <View style={styles.boardGrid}>{agendaVans.map((van) => <VanColumn key={van.id} van={van} users={staffDirectory} orders={orders} services={services} clients={clients} properties={properties} selectedOrderId={selectedOrder?.id} onSelectOrder={setSelectedOrderId} onCreate={(slot) => openCreate(van.id, slot)} />)}</View>
           </ScrollView>
           <View style={styles.legendBar}><Text style={styles.legendTitle}>Leyenda de disponibilidad:</Text><Legend color="#EAF7E7" label="Disponible" /><Legend color="#EAF3FF" label="Ocupado" /><Legend color="#FDECEC" label="No disponible" /></View>
         </Card>
 
-        <Card style={styles.detailPanel}><AppointmentDetails order={selectedOrder} clients={clients} properties={properties} services={services} vans={vans} users={users} onUpdate={updateWorkOrder} /></Card>
+        <Card style={styles.detailPanel}><AppointmentDetails order={selectedOrder} clients={clients} properties={properties} services={services} vans={agendaVans} users={staffDirectory} onUpdate={updateWorkOrder} /></Card>
       </View>
 
       <AppModal
@@ -481,7 +571,7 @@ export function AgendaScreen() {
             <View style={styles.durationPreview}><View><Text style={styles.previewLabel}>Duración</Text><Text style={styles.previewValue}>{workHours} hora{workHours !== 1 ? 's' : ''}</Text></View><View><Text style={styles.previewLabel}>Total a reservar</Text><Text style={styles.previewValue}>{workHours} cupo{workHours !== 1 ? 's' : ''}</Text></View><View><Text style={styles.previewLabel}>Modalidad</Text><Text style={styles.previewValue}>Trabajo flexible</Text></View></View>
 
             <Text style={styles.stepLabel}>4</Text><Text style={styles.fieldLabel}>Asignar a</Text>
-            <View style={styles.optionWrap}>{vans.slice(0, 4).map((van) => { const names = van.technicianIds.map((id) => users.find((user) => user.id === id)?.name.split(' ')[0]).filter(Boolean).join(' + '); return <Option key={van.id} label={`${van.name} · ${names || 'Sin equipo'}`} active={vanId === van.id} onPress={() => setVanId(van.id)} />; })}</View>
+            <View style={styles.optionWrap}>{agendaVans.map((van) => { const names = van.technicianIds.map((id) => staffDirectory.find((user) => user.id === id)?.name.split(' ')[0]).filter(Boolean).join(' + '); const disabled = !vanCanReceiveAppointments(van); return <Option key={van.id} label={`${van.name} · ${names || 'Sin equipo'} · ${van.dispatchStatus}`} active={vanId === van.id} disabled={disabled} onPress={() => setVanId(van.id)} />; })}</View>
 
             <Text style={styles.stepLabel}>5</Text><Text style={styles.fieldLabel}>Horario sugerido</Text>
             <View style={styles.optionWrap}>{allSlots.map((slot) => { const available = selectedVan ? isAvailable(selectedVan, slot) : false; return <Option key={slot} label={available ? slotLabel(slot) : `${slotLabel(slot)} · no disponible`} active={time === slot} disabled={!available} onPress={() => setTime(slot)} />; })}</View>
@@ -498,14 +588,15 @@ export function AgendaScreen() {
   );
 }
 
-function VanColumn({ van, users, orders, services, clients, properties, selectedOrderId, onSelectOrder, onCreate }: { van: Van; users: { id: string; name: string }[]; orders: WorkOrder[]; services: ServiceType[]; clients: Client[]; properties: Property[]; selectedOrderId?: string; onSelectOrder: (id: string) => void; onCreate: (slot: string) => void }) {
+function VanColumn({ van, users, orders, services, clients, properties, selectedOrderId, onSelectOrder, onCreate }: { van: AgendaVan; users: { id: string; name: string }[]; orders: WorkOrder[]; services: ServiceType[]; clients: Client[]; properties: Property[]; selectedOrderId?: string; onSelectOrder: (id: string) => void; onCreate: (slot: string) => void }) {
   const techNames = van.technicianIds.map((id) => users.find((user) => user.id === id)?.name.split(' ')[0]).filter(Boolean).join(' + ') || 'Sin equipo';
+  const unavailableReason = van.status === 'Mantenimiento' ? 'Mantenimiento' : van.status === 'Fuera de servicio' ? 'Fuera de servicio' : 'Sin personal';
   const usedMorning = morningSlots.filter((slot) => orders.some((order) => order.vanId === van.id && orderOccupiesSlot(order, slot, services))).length;
   const usedAfternoon = afternoonSlots.filter((slot) => orders.some((order) => order.vanId === van.id && orderOccupiesSlot(order, slot, services))).length;
 
   return (
     <View style={styles.vanColumn}>
-      <View style={styles.vanColumnHeader}><Text style={styles.vanIcon}>🚐</Text><Text style={styles.vanTitle}>{van.name}</Text><Text style={styles.vanTechs}>{techNames}</Text></View>
+      <View style={styles.vanColumnHeader}><Text style={styles.vanIcon}>🚐</Text><Text style={styles.vanTitle}>{van.name}</Text><Text style={styles.vanTechs}>{techNames} · {van.dispatchStatus}</Text></View>
       <View style={[styles.scheduleCanvas, { height: SCHEDULE_HEIGHT }]}>
         <ScheduleHeader title="MAÑANA" used={usedMorning} top={0} />
         <View style={[styles.lunchDivider, { top: GROUP_HEADER_HEIGHT + morningSlots.length * (SLOT_HEIGHT + SLOT_GAP) }]}><Text style={styles.lunchText}>PAUSA 12:00 - 13:00</Text></View>
@@ -533,7 +624,7 @@ function VanColumn({ van, users, orders, services, clients, properties, selected
               </Pressable>
             );
           }
-          if (van.status === 'Mantenimiento') return <View key={`${van.id}-${slot}`} style={[styles.absoluteSlot, styles.slotUnavailable, { top }]}><Text style={styles.slotTime}>{slotLabel(slot)}</Text><Text style={styles.unavailableText}>No disponible</Text></View>;
+          if (!vanCanReceiveAppointments(van)) return <View key={`${van.id}-${slot}`} style={[styles.absoluteSlot, styles.slotUnavailable, { top }]}><Text style={styles.slotTime}>{slotLabel(slot)}</Text><Text style={styles.unavailableText}>{unavailableReason}</Text></View>;
           return <Pressable key={`${van.id}-${slot}`} onPress={() => onCreate(slot)} style={[styles.absoluteSlot, styles.slotAvailable, { top }]}><Text style={styles.slotTime}>{slotLabel(slot)}</Text><Text style={styles.availableText}>Disponible</Text><Text style={styles.addSlot}>＋</Text></Pressable>;
         })}
       </View>
@@ -562,7 +653,7 @@ function SearchRow({ title, subtitle, active, onPress }: { title: string; subtit
 
 function DetailRow({ label, value }: { label: string; value?: string }) { return <View style={styles.detailRow}><Text style={styles.detailLabel}>{label}</Text><Text style={styles.detailValue}>{value || '—'}</Text></View>; }
 function FilterRow({ label, count, active }: { label: string; count: number; active?: boolean }) { return <View style={[styles.filterRow, active && styles.filterRowActive]}><Text style={styles.filterDot}>●</Text><Text style={styles.filterLabel}>{label}</Text><Text style={styles.filterCount}>{count}</Text></View>; }
-function TechnicianFilter({ van, users }: { van: Van; users: { id: string; name: string }[] }) { const names = van.technicianIds.map((id) => users.find((user) => user.id === id)?.name.split(' ')[0]).filter(Boolean).join(' + ') || 'Sin equipo'; return <View style={styles.techFilter}><Text style={styles.checkBox}>✓</Text><View><Text style={styles.techFilterVan}>{van.name}</Text><Text style={styles.techFilterName}>{names}</Text></View></View>; }
+function TechnicianFilter({ van, users }: { van: AgendaVan; users: { id: string; name: string }[] }) { const names = van.technicianIds.map((id) => users.find((user) => user.id === id)?.name.split(' ')[0]).filter(Boolean).join(' + ') || 'Sin equipo'; return <View style={styles.techFilter}><Text style={styles.checkBox}>{vanCanReceiveAppointments(van) ? '✓' : '!'}</Text><View><Text style={styles.techFilterVan}>{van.name}</Text><Text style={styles.techFilterName}>{names} · {van.dispatchStatus}</Text></View></View>; }
 function Legend({ color, label }: { color: string; label: string }) { return <View style={styles.legendItem}><View style={[styles.legendColor, { backgroundColor: color }]} /><Text style={styles.legendLabel}>{label}</Text></View>; }
 function Option({ label, active, disabled, onPress }: { label: string; active: boolean; disabled?: boolean; onPress: () => void }) { return <Pressable disabled={disabled} onPress={onPress} style={[styles.option, active && styles.optionActive, disabled && styles.optionDisabled]}><Text style={[styles.optionText, active && styles.optionTextActive, disabled && styles.optionTextDisabled]}>{label}</Text></Pressable>; }
 
