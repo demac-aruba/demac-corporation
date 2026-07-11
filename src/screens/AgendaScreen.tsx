@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
-import { AppModal, Button, Card, formatMoney, Input, Pill, SectionTitle, statusTone } from '../components/UI';
+import { AppModal, Button, Card, Input, Pill, SectionTitle, statusTone } from '../components/UI';
 import { useAppState } from '../state/AppState';
 import { colors } from '../theme';
-import { AppointmentStatus, Client, Property, SchedulingMode, ServiceType, Van, WorkOrder } from '../types';
+import { AppointmentStatus, Client, Property, ServiceType, Van, WorkOrder } from '../types';
 
 const morningSlots = ['08:30', '09:30', '10:30'];
 const afternoonSlots = ['13:30', '14:30', '15:30'];
@@ -37,18 +37,14 @@ function addDays(date: string, amount: number) {
   return localDateKey(next);
 }
 
-function isSchedulableService(service: ServiceType) {
-  return (service.itemType ?? 'Servicio') === 'Servicio' && service.active !== false;
-}
-
-function baseServiceSlots(service?: ServiceType) {
+function serviceSlots(service?: ServiceType) {
   return Math.max(1, Math.ceil((service?.durationMinutes ?? 60) / 60));
 }
 
 function orderSlotCount(order: WorkOrder, services: ServiceType[]) {
   const stored = Number(order.scheduledSlots ?? 0);
   if (stored > 0) return Math.max(1, Math.min(allSlots.length, stored));
-  return Math.max(1, Math.min(allSlots.length, baseServiceSlots(services.find((item) => item.id === order.serviceId))));
+  return Math.max(1, Math.min(allSlots.length, serviceSlots(services.find((item) => item.id === order.serviceId))));
 }
 
 function normalizeTime(time: string) {
@@ -100,6 +96,12 @@ function scheduleBlockHeight(start: number, requestedSlots: number) {
   return slots * SLOT_HEIGHT + (slots - 1) * SLOT_GAP + (crossesLunch ? GROUP_HEADER_HEIGHT + LUNCH_GAP : 0);
 }
 
+function orderDescription(order: WorkOrder, service?: ServiceType) {
+  const text = order.problem?.trim();
+  if (text && text !== 'Cita programada desde agenda.') return text;
+  return service?.name ?? 'Trabajo programado';
+}
+
 export function AgendaScreen() {
   const { width } = useWindowDimensions();
   const compact = width < 1260;
@@ -118,17 +120,13 @@ export function AgendaScreen() {
     clearDataError,
   } = useAppState();
 
-  const activeServices = useMemo(() => services.filter(isSchedulableService), [services]);
   const [selectedDate, setSelectedDate] = useState(localDateKey());
   const [showCreate, setShowCreate] = useState(false);
   const [clientId, setClientId] = useState('');
   const [propertyId, setPropertyId] = useState('');
-  const [serviceId, setServiceId] = useState('');
   const [clientQuery, setClientQuery] = useState('');
-  const [serviceQuery, setServiceQuery] = useState('');
-  const [schedulingMode, setSchedulingMode] = useState<SchedulingMode>('perUnit');
-  const [airConditionerCount, setAirConditionerCount] = useState(1);
-  const [problem, setProblem] = useState('');
+  const [workHours, setWorkHours] = useState(1);
+  const [workDescriptionText, setWorkDescriptionText] = useState('');
   const [vanId, setVanId] = useState(vans[0]?.id ?? '');
   const [time, setTime] = useState('08:30');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
@@ -145,14 +143,6 @@ export function AgendaScreen() {
   }, [clients, clientId]);
 
   useEffect(() => {
-    if (!activeServices.length) {
-      setServiceId('');
-      return;
-    }
-    if (!activeServices.some((service) => service.id === serviceId)) setServiceId(activeServices[0].id);
-  }, [activeServices, serviceId]);
-
-  useEffect(() => {
     const availableProperties = properties.filter((property) => property.clientId === clientId && property.active !== false);
     if (!availableProperties.some((property) => property.id === propertyId)) {
       setPropertyId(availableProperties[0]?.id ?? '');
@@ -167,17 +157,8 @@ export function AgendaScreen() {
   const selectedClient = clients.find((item) => item.id === clientId);
   const clientProperties = properties.filter((item) => item.clientId === clientId && item.active !== false);
   const selectedProperty = clientProperties.find((item) => item.id === propertyId);
-  const selectedService = activeServices.find((item) => item.id === serviceId);
   const selectedVan = vans.find((item) => item.id === vanId);
   const selectedOrder = orders.find((order) => order.id === selectedOrderId) ?? orders[0];
-  const perUnitSlots = baseServiceSlots(selectedService);
-  const requiredSlots = selectedService
-    ? perUnitSlots * (schedulingMode === 'perUnit' ? airConditionerCount : 1)
-    : 0;
-  const totalAmount = selectedService
-    ? selectedService.basePrice * (schedulingMode === 'perUnit' ? airConditionerCount : 1)
-    : 0;
-  const exceedsWorkday = requiredSlots > allSlots.length;
   const monthTitle = new Date(`${selectedDate}T12:00:00`).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
 
   const filteredClients = useMemo(() => {
@@ -191,24 +172,11 @@ export function AgendaScreen() {
     return selected ? [selected, ...matches.filter((client) => client.id !== selected.id).slice(0, 5)] : matches.slice(0, 6);
   }, [clients, clientQuery, clientId]);
 
-  const filteredServices = useMemo(() => {
-    const needle = serviceQuery.trim().toLowerCase();
-    const matches = activeServices.filter((service) => {
-      const haystack = `${service.name} ${service.category} ${service.description ?? ''} ${service.sku ?? ''}`.toLowerCase();
-      return !needle || haystack.includes(needle);
-    });
-    if (needle) return matches.slice(0, 12);
-    const featured = matches.filter((service) => service.featured);
-    const selected = matches.find((service) => service.id === serviceId);
-    const base = featured.length ? featured : matches;
-    return selected ? [selected, ...base.filter((service) => service.id !== selected.id).slice(0, 7)] : base.slice(0, 8);
-  }, [activeServices, serviceQuery, serviceId]);
-
   const isAvailable = (candidateVan: Van, candidateTime: string, date = selectedDate) => {
-    if (candidateVan.status === 'Mantenimiento' || requiredSlots < 1 || requiredSlots > allSlots.length) return false;
+    if (candidateVan.status === 'Mantenimiento') return false;
     const start = slotIndex(candidateTime);
-    if (start < 0 || start + requiredSlots > allSlots.length) return false;
-    const candidateSlots = allSlots.slice(start, start + requiredSlots);
+    if (start < 0 || start + workHours > allSlots.length) return false;
+    const candidateSlots = allSlots.slice(start, start + workHours);
     return !workOrders.some(
       (order) =>
         order.date === date &&
@@ -217,11 +185,17 @@ export function AgendaScreen() {
     );
   };
 
+  useEffect(() => {
+    if (!selectedVan) return;
+    if (isAvailable(selectedVan, time)) return;
+    const firstAvailable = allSlots.find((slot) => isAvailable(selectedVan, slot));
+    if (firstAvailable) setTime(firstAvailable);
+  }, [workHours, vanId, selectedDate, workOrders]);
+
   const openCreate = (candidateVanId?: string, candidateTime?: string) => {
     clearDataError();
     setFormMessage('');
     setClientQuery('');
-    setServiceQuery('');
     if (candidateVanId) setVanId(candidateVanId);
     if (candidateTime) setTime(candidateTime);
     setShowCreate(true);
@@ -229,20 +203,19 @@ export function AgendaScreen() {
 
   const createOrder = async () => {
     const client = clients.find((item) => item.id === clientId);
-    const service = activeServices.find((item) => item.id === serviceId);
     const van = vans.find((item) => item.id === vanId);
+    const description = workDescriptionText.trim();
     if (!client) return setFormMessage('Primero selecciona o registra un cliente.');
-    if (!service) return setFormMessage('Selecciona un servicio activo del catálogo.');
+    if (!description) return setFormMessage('Escribe la descripción del trabajo antes de confirmar la cita.');
     if (!van) return setFormMessage('Selecciona una van.');
-    if (requiredSlots > allSlots.length) return setFormMessage('La duración excede los 6 cupos del día. Divide el trabajo en más de una cita o ajusta la cantidad de aires.');
-    if (!isAvailable(van, time)) return setFormMessage('Ese horario no tiene suficientes cupos consecutivos para este trabajo.');
+    if (!isAvailable(van, time)) return setFormMessage('Ese horario no tiene suficientes horas consecutivas para este trabajo.');
 
     const zone = selectedProperty?.zone ?? client.zone;
     const order: WorkOrder = {
       id: `WO-${selectedDate.replaceAll('-', '').slice(2)}-${Date.now().toString().slice(-6)}`,
       clientId,
       propertyId: selectedProperty?.id,
-      serviceId,
+      serviceId: '',
       date: selectedDate,
       time,
       status: van.technicianIds.length ? 'Asignada' : 'Confirmada',
@@ -250,12 +223,11 @@ export function AgendaScreen() {
       vanId,
       address: selectedProperty?.address ?? client.address,
       zone,
-      problem: problem.trim() || 'Cita programada desde agenda.',
-      amount: totalAmount,
+      problem: description,
+      amount: 0,
       paid: 0,
-      schedulingMode,
-      airConditionerCount: schedulingMode === 'perUnit' ? airConditionerCount : undefined,
-      scheduledSlots: requiredSlots,
+      schedulingMode: 'fixed',
+      scheduledSlots: workHours,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -270,8 +242,8 @@ export function AgendaScreen() {
     }
 
     setSelectedOrderId(order.id);
-    setProblem('');
-    setAirConditionerCount(1);
+    setWorkDescriptionText('');
+    setWorkHours(1);
     setShowCreate(false);
   };
 
@@ -286,7 +258,7 @@ export function AgendaScreen() {
 
       <SectionTitle
         title="Agendar nueva cita"
-        subtitle="Selecciona fecha, propiedad, van y horario disponible. Cada van tiene 3 cupos en la mañana y 3 cupos en la tarde."
+        subtitle="Selecciona cliente, propiedad, duración, van y horario. Cada van tiene 3 horas en la mañana y 3 horas en la tarde."
         action={<Button label="Nueva cita" icon="＋" onPress={() => openCreate()} />}
       />
 
@@ -297,14 +269,10 @@ export function AgendaScreen() {
             <Text style={styles.topPlannerTitle}>{formatDate(selectedDate, true)}</Text>
           </View>
           <View style={styles.serviceSelect}>
-            <Text style={styles.serviceIcon}>❄</Text>
-            <View style={{ flex: 1 }}><Text style={styles.fieldCaption}>Servicio requerido</Text><Text style={styles.serviceName}>{selectedService?.name ?? 'Agrega un servicio en Catálogo'}</Text></View>
-            <Text style={styles.chevron}>⌄</Text>
+            <Text style={styles.serviceIcon}>◷</Text>
+            <View style={{ flex: 1 }}><Text style={styles.fieldCaption}>Planificación flexible</Text><Text style={styles.serviceName}>Trabajo definido por horas</Text></View>
           </View>
-          <View style={styles.durationBox}>
-            <Text style={styles.fieldCaption}>Duración total</Text>
-            <Text style={[styles.durationValue, exceedsWorkday && styles.durationDanger]}>{selectedService ? `${requiredSlots} cupo${requiredSlots !== 1 ? 's' : ''}` : '—'}</Text>
-          </View>
+          <View style={styles.durationBox}><Text style={styles.fieldCaption}>Duración seleccionada</Text><Text style={styles.durationValue}>{workHours} hora{workHours !== 1 ? 's' : ''}</Text></View>
         </View>
       </Card>
 
@@ -325,7 +293,7 @@ export function AgendaScreen() {
         <Card style={styles.boardCard}>
           <View style={styles.boardHeader}>
             <Pressable onPress={() => setSelectedDate(addDays(selectedDate, -1))} style={styles.dateButton}><Text style={styles.dateButtonText}>← Día anterior</Text></Pressable>
-            <View style={styles.boardDateCenter}><Text style={styles.boardDate}>{formatDate(selectedDate, true)}</Text><Text style={styles.workday}>Horario laboral: 8:00 AM - 5:00 PM | Break: 12:00 PM - 1:00 PM</Text></View>
+            <View style={styles.boardDateCenter}><Text style={styles.boardDate}>{formatDate(selectedDate, true)}</Text><Text style={styles.workday}>Horario laboral: 8:00 AM - 5:00 PM | Pausa: 12:00 PM - 1:00 PM</Text></View>
             <Pressable onPress={() => setSelectedDate(addDays(selectedDate, 1))} style={styles.dateButton}><Text style={styles.dateButtonText}>Día siguiente →</Text></Pressable>
           </View>
           {dataLoading ? <Text style={styles.syncText}>Sincronizando agenda…</Text> : null}
@@ -340,9 +308,8 @@ export function AgendaScreen() {
 
       <AppModal visible={showCreate} title="Confirmar nueva cita" onClose={() => !saving && setShowCreate(false)}>
         <ScrollView>
-          <Text style={styles.modalIntro}>Busca el cliente y el servicio, indica cuántos aires se atenderán y la agenda reservará automáticamente el tiempo completo.</Text>
+          <Text style={styles.modalIntro}>Selecciona el cliente y la propiedad, define cuántas horas ocupará el trabajo y escribe toda la descripción necesaria.</Text>
           {!clients.length ? <View style={styles.formError}><Text style={styles.formErrorText}>No hay clientes registrados. Ve a Clientes y registra el primero antes de crear una cita.</Text></View> : null}
-          {!activeServices.length ? <View style={styles.formError}><Text style={styles.formErrorText}>No hay servicios activos. Ve a Catálogo y agrega el primer servicio real.</Text></View> : null}
           {formMessage ? <View style={styles.formError}><Text style={styles.formErrorText}>{formMessage}</Text></View> : null}
 
           <Text style={styles.stepLabel}>1</Text><Text style={styles.fieldLabel}>Cliente</Text>
@@ -355,41 +322,27 @@ export function AgendaScreen() {
           <Text style={styles.fieldLabel}>Propiedad / lugar de servicio</Text>
           {clientProperties.length ? <View style={styles.optionWrap}>{clientProperties.map((property) => <Option key={property.id} label={`${property.name} · ${property.address} · ${property.zone}`} active={propertyId === property.id} onPress={() => setPropertyId(property.id)} />)}</View> : <Text style={styles.fallbackText}>Se usará la dirección principal del cliente.</Text>}
 
-          <Text style={styles.stepLabel}>2</Text><Text style={styles.fieldLabel}>{serviceQuery ? 'Resultados de servicios' : 'Servicios comunes'}</Text>
-          <Input placeholder="Buscar servicio por nombre, categoría o descripción…" value={serviceQuery} onChangeText={setServiceQuery} />
-          <View style={styles.searchResults}>
-            {filteredServices.map((service) => <SearchRow key={service.id} title={service.name} subtitle={`${service.category} · ${baseServiceSlots(service)} hora${baseServiceSlots(service) !== 1 ? 's' : ''} · ${formatMoney(service.basePrice)}`} active={serviceId === service.id} onPress={() => { setServiceId(service.id); setServiceQuery(''); }} />)}
-            {activeServices.length && !filteredServices.length ? <Text style={styles.noResults}>No encontramos servicios con esa búsqueda.</Text> : null}
-          </View>
+          <Text style={styles.stepLabel}>2</Text><Text style={styles.fieldLabel}>Cómo calcular la duración</Text>
+          <View style={styles.modeTabs}><View style={[styles.modeTab, styles.modeTabActive]}><Text style={[styles.modeTabText, styles.modeTabTextActive]}>Horas de trabajo</Text></View></View>
 
-          <Text style={styles.stepLabel}>3</Text><Text style={styles.fieldLabel}>Cómo calcular la duración</Text>
-          <View style={styles.modeTabs}>
-            <Pressable onPress={() => setSchedulingMode('fixed')} style={[styles.modeTab, schedulingMode === 'fixed' && styles.modeTabActive]}><Text style={[styles.modeTabText, schedulingMode === 'fixed' && styles.modeTabTextActive]}>Duración fija</Text></Pressable>
-            <Pressable onPress={() => setSchedulingMode('perUnit')} style={[styles.modeTab, schedulingMode === 'perUnit' && styles.modeTabActive]}><Text style={[styles.modeTabText, schedulingMode === 'perUnit' && styles.modeTabTextActive]}>Por cantidad de aires</Text></Pressable>
+          <Text style={styles.stepLabel}>3</Text><Text style={styles.fieldLabel}>Cantidad de horas de trabajo</Text>
+          <View style={styles.quantityPanel}>
+            <View style={{ flex: 1 }}><Text style={styles.quantityTitle}>Tiempo total reservado</Text><Text style={styles.quantityHelp}>Selecciona de 1 a 6 horas. La agenda bloqueará automáticamente todo ese tiempo.</Text></View>
+            <View style={styles.stepper}><Pressable disabled={workHours <= 1} onPress={() => setWorkHours((value) => Math.max(1, value - 1))} style={[styles.stepperButton, workHours <= 1 && styles.stepperDisabled]}><Text style={styles.stepperButtonText}>−</Text></Pressable><Text style={styles.stepperValue}>{workHours}</Text><Pressable disabled={workHours >= 6} onPress={() => setWorkHours((value) => Math.min(6, value + 1))} style={[styles.stepperButton, workHours >= 6 && styles.stepperDisabled]}><Text style={styles.stepperButtonText}>＋</Text></Pressable></View>
           </View>
-          {schedulingMode === 'perUnit' ? (
-            <View style={styles.quantityPanel}>
-              <View style={{ flex: 1 }}><Text style={styles.quantityTitle}>Cantidad de aires acondicionados</Text><Text style={styles.quantityHelp}>El precio y la duración del servicio se calcularán por cada aire.</Text></View>
-              <View style={styles.stepper}><Pressable disabled={airConditionerCount <= 1} onPress={() => setAirConditionerCount((value) => Math.max(1, value - 1))} style={[styles.stepperButton, airConditionerCount <= 1 && styles.stepperDisabled]}><Text style={styles.stepperButtonText}>−</Text></Pressable><Text style={styles.stepperValue}>{airConditionerCount}</Text><Pressable disabled={airConditionerCount >= 6} onPress={() => setAirConditionerCount((value) => Math.min(6, value + 1))} style={[styles.stepperButton, airConditionerCount >= 6 && styles.stepperDisabled]}><Text style={styles.stepperButtonText}>＋</Text></Pressable></View>
-            </View>
-          ) : (
-            <View style={styles.fixedPanel}><Text style={styles.quantityTitle}>Una sola duración para todo el trabajo</Text><Text style={styles.quantityHelp}>Usa esta opción para diagnósticos, instalaciones u otros trabajos cuyo tiempo no depende de la cantidad de aires.</Text></View>
-          )}
-          <View style={[styles.durationPreview, exceedsWorkday && styles.durationPreviewDanger]}>
-            <View><Text style={styles.previewLabel}>{schedulingMode === 'perUnit' ? 'Tiempo por aire' : 'Duración del servicio'}</Text><Text style={styles.previewValue}>{perUnitSlots} cupo{perUnitSlots !== 1 ? 's' : ''}</Text></View>
-            {schedulingMode === 'perUnit' ? <View><Text style={styles.previewLabel}>Cantidad</Text><Text style={styles.previewValue}>{airConditionerCount} aire{airConditionerCount !== 1 ? 's' : ''}</Text></View> : null}
-            <View><Text style={styles.previewLabel}>Total a reservar</Text><Text style={[styles.previewValue, exceedsWorkday && styles.previewDangerText]}>{requiredSlots} cupo{requiredSlots !== 1 ? 's' : ''}</Text></View>
-            <View><Text style={styles.previewLabel}>Precio estimado</Text><Text style={styles.previewValue}>{formatMoney(totalAmount)}</Text></View>
-          </View>
-          {exceedsWorkday ? <View style={styles.formError}><Text style={styles.formErrorText}>Este trabajo requiere más de 6 cupos. Reduce la cantidad o divídelo en varias citas.</Text></View> : null}
+          <View style={styles.durationPreview}><View><Text style={styles.previewLabel}>Duración</Text><Text style={styles.previewValue}>{workHours} hora{workHours !== 1 ? 's' : ''}</Text></View><View><Text style={styles.previewLabel}>Total a reservar</Text><Text style={styles.previewValue}>{workHours} cupo{workHours !== 1 ? 's' : ''}</Text></View><View><Text style={styles.previewLabel}>Modalidad</Text><Text style={styles.previewValue}>Trabajo flexible</Text></View></View>
 
           <Text style={styles.stepLabel}>4</Text><Text style={styles.fieldLabel}>Asignar a</Text>
           <View style={styles.optionWrap}>{vans.slice(0, 4).map((van) => { const names = van.technicianIds.map((id) => users.find((user) => user.id === id)?.name.split(' ')[0]).filter(Boolean).join(' + '); return <Option key={van.id} label={`${van.name} · ${names || 'Sin equipo'}`} active={vanId === van.id} onPress={() => setVanId(van.id)} />; })}</View>
+
           <Text style={styles.stepLabel}>5</Text><Text style={styles.fieldLabel}>Horario sugerido</Text>
-          <View style={styles.optionWrap}>{allSlots.map((slot) => { const available = selectedVan && selectedService ? isAvailable(selectedVan, slot) : false; return <Option key={slot} label={available ? slotLabel(slot) : `${slotLabel(slot)} · no disponible`} active={time === slot} disabled={!available} onPress={() => setTime(slot)} />; })}</View>
-          <Input label="Notas adicionales" value={problem} onChangeText={setProblem} multiline placeholder="Instrucciones especiales para el técnico…" />
-          <View style={styles.summaryBox}><Text style={styles.summaryTitle}>Resumen de la cita</Text><Text style={styles.summaryLine}>{selectedClient?.name ?? 'Sin cliente'} · {selectedProperty?.name ?? selectedClient?.address ?? 'Sin dirección'}</Text><Text style={styles.summaryLine}>{selectedService?.name ?? 'Sin servicio'} · {schedulingMode === 'perUnit' ? `${airConditionerCount} aire${airConditionerCount !== 1 ? 's' : ''} · ` : ''}${requiredSlots} cupo${requiredSlots !== 1 ? 's' : ''}</Text><Text style={styles.summaryLine}>{selectedVan?.name} · {formatDate(selectedDate)} · {time} · {formatMoney(totalAmount)}</Text></View>
-          <View style={styles.modalActions}><Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => setShowCreate(false)} /><Button label={saving ? 'Guardando…' : 'Confirmar cita'} disabled={saving || !clients.length || !activeServices.length || exceedsWorkday} onPress={() => void createOrder()} /></View>
+          <View style={styles.optionWrap}>{allSlots.map((slot) => { const available = selectedVan ? isAvailable(selectedVan, slot) : false; return <Option key={slot} label={available ? slotLabel(slot) : `${slotLabel(slot)} · no disponible`} active={time === slot} disabled={!available} onPress={() => setTime(slot)} />; })}</View>
+
+          <Text style={styles.stepLabel}>6</Text>
+          <Input label="Descripción del trabajo" value={workDescriptionText} onChangeText={setWorkDescriptionText} multiline placeholder="Ej. Dos servicios estándar, diagnóstico de una unidad e instalación de otra. Agrega instrucciones de acceso, contacto, síntomas y cualquier detalle necesario…" />
+
+          <View style={styles.summaryBox}><Text style={styles.summaryTitle}>Resumen de la cita</Text><Text style={styles.summaryLine}>{selectedClient?.name ?? 'Sin cliente'} · {selectedProperty?.name ?? selectedClient?.address ?? 'Sin dirección'}</Text><Text style={styles.summaryLine}>{workHours} hora{workHours !== 1 ? 's' : ''} · {selectedVan?.name} · {formatDate(selectedDate)} · {time}</Text><Text style={styles.summaryLine} numberOfLines={2}>{workDescriptionText.trim() || 'Falta agregar la descripción del trabajo.'}</Text></View>
+          <View style={styles.modalActions}><Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => setShowCreate(false)} /><Button label={saving ? 'Guardando…' : 'Confirmar cita'} disabled={saving || !clients.length || !workDescriptionText.trim()} onPress={() => void createOrder()} /></View>
         </ScrollView>
       </AppModal>
     </ScrollView>
@@ -425,15 +378,13 @@ function VanColumn({ van, users, orders, services, clients, properties, selected
                 <Text style={styles.clientName} numberOfLines={1}>{client?.name ?? 'Cliente'}</Text>
                 <Text style={styles.addressLine} numberOfLines={2}>{order.address}</Text>
                 <Text style={styles.zoneLine} numberOfLines={1}>{zone}</Text>
-                <Text style={styles.serviceLine} numberOfLines={1}>{service?.name ?? 'Servicio'}</Text>
-                <Text style={styles.cupoLine}>{order.airConditionerCount ? `${order.airConditionerCount} aire${order.airConditionerCount !== 1 ? 's' : ''} · ` : ''}{slots} cupo{slots !== 1 ? 's' : ''}</Text>
+                <Text style={styles.serviceLine} numberOfLines={3}>{orderDescription(order, service)}</Text>
+                <Text style={styles.cupoLine}>{slots} hora{slots !== 1 ? 's' : ''} · {slots} cupo{slots !== 1 ? 's' : ''}</Text>
                 {index < morningSlots.length && index + slots > morningSlots.length ? <Text style={styles.breakIncluded}>Incluye la pausa de almuerzo</Text> : null}
               </Pressable>
             );
           }
-          if (van.status === 'Mantenimiento') {
-            return <View key={`${van.id}-${slot}`} style={[styles.absoluteSlot, styles.slotUnavailable, { top }]}><Text style={styles.slotTime}>{slotLabel(slot)}</Text><Text style={styles.unavailableText}>No disponible</Text></View>;
-          }
+          if (van.status === 'Mantenimiento') return <View key={`${van.id}-${slot}`} style={[styles.absoluteSlot, styles.slotUnavailable, { top }]}><Text style={styles.slotTime}>{slotLabel(slot)}</Text><Text style={styles.unavailableText}>No disponible</Text></View>;
           return <Pressable key={`${van.id}-${slot}`} onPress={() => onCreate(slot)} style={[styles.absoluteSlot, styles.slotAvailable, { top }]}><Text style={styles.slotTime}>{slotLabel(slot)}</Text><Text style={styles.availableText}>Disponible</Text><Text style={styles.addSlot}>＋</Text></Pressable>;
         })}
       </View>
@@ -442,7 +393,7 @@ function VanColumn({ van, users, orders, services, clients, properties, selected
 }
 
 function ScheduleHeader({ title, used, top }: { title: string; used: number; top: number }) {
-  return <View style={[styles.scheduleHeader, { top }]}><Text style={styles.groupTitle}>{title}</Text><Text style={[styles.cupos, used >= 3 && styles.cuposFull]}>{used}/3 cupos</Text></View>;
+  return <View style={[styles.scheduleHeader, { top }]}><Text style={styles.groupTitle}>{title}</Text><Text style={[styles.cupos, used >= 3 && styles.cuposFull]}>{used}/3 horas</Text></View>;
 }
 
 function AppointmentDetails({ order, clients, properties, services, vans, users, onUpdate }: { order?: WorkOrder; clients: Client[]; properties: Property[]; services: ServiceType[]; vans: Van[]; users: { id: string; name: string }[]; onUpdate: (id: string, changes: Partial<WorkOrder>) => Promise<{ ok: boolean; message?: string }> }) {
@@ -453,7 +404,7 @@ function AppointmentDetails({ order, clients, properties, services, vans, users,
   const van = vans.find((item) => item.id === order.vanId);
   const slots = orderSlotCount(order, services);
   const techNames = order.technicianIds.map((id) => users.find((user) => user.id === id)?.name).filter(Boolean).join(' y ') || 'Sin técnico asignado';
-  return <View><View style={styles.detailHeader}><Pill label={order.status} tone={toneForStatus(order.status)} /><Text style={styles.detailId}>ID: {order.id}</Text></View><Text style={styles.detailTitle}>{client?.name}</Text><Text style={styles.detailSubtitle}>{service?.name}</Text><View style={styles.detailTabs}><Text style={styles.detailTabActive}>Detalles</Text><Text style={styles.detailTab}>Cliente</Text><Text style={styles.detailTab}>Notas</Text></View><DetailRow label="Fecha y hora" value={`${formatDate(order.date, true)} · ${scheduleRange(order.time, slots)}`} /><DetailRow label="Duración" value={`${slots} cupo${slots !== 1 ? 's' : ''}`} /><DetailRow label="Cantidad de aires" value={order.airConditionerCount ? String(order.airConditionerCount) : 'No especificada'} /><DetailRow label="Propiedad" value={property?.name} /><DetailRow label="Dirección" value={order.address} /><DetailRow label="Zona" value={order.zone ?? property?.zone ?? client?.zone} /><DetailRow label="Técnico asignado" value={techNames} /><DetailRow label="Van asignada" value={van?.name ?? 'Sin van'} /><DetailRow label="Problema / instrucciones" value={order.problem} /><View style={styles.detailActions}><Button variant="secondary" label="Editar cita" onPress={() => {}} /><Button label="Marcar completada" onPress={() => void onUpdate(order.id, { status: 'Completada', updatedAt: new Date().toISOString() })} /></View></View>;
+  return <View><View style={styles.detailHeader}><Pill label={order.status} tone={toneForStatus(order.status)} /><Text style={styles.detailId}>ID: {order.id}</Text></View><Text style={styles.detailTitle}>{client?.name}</Text><Text style={styles.detailSubtitle}>{service?.name ?? 'Trabajo programado'}</Text><View style={styles.detailTabs}><Text style={styles.detailTabActive}>Detalles</Text><Text style={styles.detailTab}>Cliente</Text><Text style={styles.detailTab}>Notas</Text></View><DetailRow label="Fecha y hora" value={`${formatDate(order.date, true)} · ${scheduleRange(order.time, slots)}`} /><DetailRow label="Duración" value={`${slots} hora${slots !== 1 ? 's' : ''}`} /><DetailRow label="Propiedad" value={property?.name} /><DetailRow label="Dirección" value={order.address} /><DetailRow label="Zona" value={order.zone ?? property?.zone ?? client?.zone} /><DetailRow label="Técnico asignado" value={techNames} /><DetailRow label="Van asignada" value={van?.name ?? 'Sin van'} /><DetailRow label="Descripción del trabajo" value={orderDescription(order, service)} />{order.airConditionerCount ? <DetailRow label="Cantidad de aires (cita anterior)" value={String(order.airConditionerCount)} /> : null}<View style={styles.detailActions}><Button variant="secondary" label="Editar cita" onPress={() => {}} /><Button label="Marcar completada" onPress={() => void onUpdate(order.id, { status: 'Completada', updatedAt: new Date().toISOString() })} /></View></View>;
 }
 
 function SearchRow({ title, subtitle, active, onPress }: { title: string; subtitle: string; active: boolean; onPress: () => void }) {
@@ -478,10 +429,8 @@ const styles = StyleSheet.create({
   serviceSelect: { minWidth: 270, flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10, backgroundColor: '#FFFFFF' },
   serviceIcon: { color: colors.brandBlue, fontSize: 20 },
   serviceName: { color: colors.text, fontWeight: '800', marginTop: 2 },
-  chevron: { color: colors.muted, fontSize: 18 },
-  durationBox: { minWidth: 140, borderLeftWidth: 1, borderLeftColor: colors.border, paddingLeft: 20 },
+  durationBox: { minWidth: 160, borderLeftWidth: 1, borderLeftColor: colors.border, paddingLeft: 20 },
   durationValue: { color: colors.primary, fontWeight: '900', fontSize: 18, marginTop: 3 },
-  durationDanger: { color: colors.danger },
   layout: { flexDirection: 'row', alignItems: 'flex-start', gap: 18 },
   layoutCompact: { flexDirection: 'column' },
   leftPanel: { width: 250, gap: 14 },
@@ -538,8 +487,8 @@ const styles = StyleSheet.create({
   clientName: { color: colors.text, fontWeight: '900', fontSize: 12, marginTop: 7 },
   addressLine: { color: colors.text, fontSize: 9, marginTop: 3, lineHeight: 12 },
   zoneLine: { color: colors.primaryDark, fontSize: 9, fontWeight: '800', marginTop: 3 },
-  serviceLine: { color: colors.text, fontSize: 9, marginTop: 4 },
-  cupoLine: { color: colors.muted, fontSize: 8, marginTop: 3 },
+  serviceLine: { color: colors.text, fontSize: 9, marginTop: 4, lineHeight: 12 },
+  cupoLine: { color: colors.muted, fontSize: 8, marginTop: 5 },
   breakIncluded: { color: colors.warning, fontSize: 8, fontWeight: '800', marginTop: 8 },
   legendBar: { flexDirection: 'row', flexWrap: 'wrap', gap: 16, padding: 14, borderTopWidth: 1, borderTopColor: colors.border, alignItems: 'center' },
   legendTitle: { color: colors.text, fontWeight: '900', fontSize: 10 },
@@ -585,7 +534,6 @@ const styles = StyleSheet.create({
   modeTabText: { color: colors.muted, fontSize: 10, fontWeight: '800' },
   modeTabTextActive: { color: colors.primaryDark },
   quantityPanel: { flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 12, marginBottom: 10 },
-  fixedPanel: { borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 12, marginBottom: 10 },
   quantityTitle: { color: colors.text, fontSize: 11, fontWeight: '900' },
   quantityHelp: { color: colors.muted, fontSize: 9, lineHeight: 13, marginTop: 4 },
   stepper: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: colors.border, borderRadius: 8, overflow: 'hidden' },
@@ -594,10 +542,8 @@ const styles = StyleSheet.create({
   stepperButtonText: { color: colors.primaryDark, fontSize: 17, fontWeight: '900' },
   stepperValue: { width: 36, textAlign: 'center', color: colors.text, fontWeight: '900' },
   durationPreview: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 12, backgroundColor: '#F4F5F7', borderRadius: 8, padding: 12, marginBottom: 15 },
-  durationPreviewDanger: { backgroundColor: colors.dangerLight, borderWidth: 1, borderColor: '#F2B8B5' },
   previewLabel: { color: colors.muted, fontSize: 8, fontWeight: '800' },
   previewValue: { color: colors.text, fontSize: 11, fontWeight: '900', marginTop: 4 },
-  previewDangerText: { color: colors.danger },
   formError: { backgroundColor: colors.dangerLight, borderRadius: 8, padding: 10, marginBottom: 12 },
   formErrorText: { color: colors.danger, fontSize: 11, fontWeight: '700' },
   summaryBox: { backgroundColor: '#F4F5F7', borderRadius: 10, padding: 13, marginTop: 8 },
