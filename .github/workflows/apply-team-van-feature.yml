@@ -1,0 +1,32 @@
+name: Apply team and van feature
+
+on:
+  push:
+    branches:
+      - feature/team-van-management-v1
+    paths:
+      - .github/scripts/apply_team_van_feature.py
+      - .github/workflows/apply-team-van-feature.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-feature:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/team-van-management-v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply feature changes
+        run: python .github/scripts/apply_team_van_feature.py
+      - name: Commit generated changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "4189826+github-actions[bot]@users.noreply.github.com"
+          git add src/types.ts src/components/AppShell.tsx src/state/AppState.tsx src/screens/AgendaScreen.tsx firestore.rules
+          git diff --cached --quiet || git commit -m "Add team profiles, van management and daily dispatch"
+          git push
