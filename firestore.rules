@@ -79,6 +79,28 @@ service cloud.firestore {
       allow delete: if adminOrSupervisor();
     }
 
+    match /whatsappOutboundQueue/{messageId} {
+      allow read: if operationsRole();
+      allow create: if operationsRole()
+        && request.resource.data.status == 'queued';
+      allow update, delete: if false;
+    }
+
+    match /whatsappMessages/{messageId} {
+      allow read: if operationsRole();
+      allow write: if false;
+    }
+
+    match /whatsappMessageStatuses/{statusId} {
+      allow read: if operationsRole();
+      allow write: if false;
+    }
+
+    match /whatsappWebhookEvents/{eventId} {
+      allow read: if adminOrSupervisor();
+      allow write: if false;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }
