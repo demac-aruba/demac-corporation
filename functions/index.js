@@ -2,12 +2,14 @@ const { initializeApp } = require("firebase-admin/app");
 const { FieldValue, getFirestore } = require("firebase-admin/firestore");
 const logger = require("firebase-functions/logger");
 const { defineSecret } = require("firebase-functions/params");
+const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { onRequest } = require("firebase-functions/v2/https");
 
 initializeApp();
 
 const db = getFirestore();
 const whatsappVerifyToken = defineSecret("WHATSAPP_VERIFY_TOKEN");
+const whatsappAccessToken = defineSecret("WHATSAPP_ACCESS_TOKEN");
 
 function queryValue(value) {
   if (Array.isArray(value)) return value[0] ?? "";
@@ -30,6 +32,62 @@ function messageText(message) {
       ?? "";
   }
   return "";
+}
+
+function digitsOnly(value) {
+  return String(value ?? "").replace(/\D/g, "");
+}
+
+function validateOutboundMessage(data) {
+  const to = digitsOnly(data.to);
+  const phoneNumberId = digitsOnly(data.phoneNumberId);
+  const templateName = String(data.templateName || "hello_world").trim();
+  const languageCode = String(data.languageCode || "en_US").trim();
+  const bodyParameters = Array.isArray(data.bodyParameters)
+    ? data.bodyParameters.map((value) => String(value))
+    : [];
+
+  if (!/^\d{8,15}$/.test(to)) {
+    throw new Error("The recipient number must contain 8 to 15 digits, including country code.");
+  }
+  if (!/^\d{5,30}$/.test(phoneNumberId)) {
+    throw new Error("A valid Meta phoneNumberId is required.");
+  }
+  if (!/^[a-z0-9_]{1,512}$/.test(templateName)) {
+    throw new Error("The templateName contains unsupported characters.");
+  }
+  if (!/^[A-Za-z_-]{2,20}$/.test(languageCode)) {
+    throw new Error("The languageCode is invalid.");
+  }
+  if (bodyParameters.length > 20 || bodyParameters.some((value) => value.length > 1024)) {
+    throw new Error("Template body parameters exceed the supported limits.");
+  }
+
+  return { to, phoneNumberId, templateName, languageCode, bodyParameters };
+}
+
+function buildTemplatePayload(message) {
+  const template = {
+    name: message.templateName,
+    language: { code: message.languageCode },
+  };
+
+  if (message.bodyParameters.length > 0) {
+    template.components = [
+      {
+        type: "body",
+        parameters: message.bodyParameters.map((text) => ({ type: "text", text })),
+      },
+    ];
+  }
+
+  return {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: message.to,
+    type: "template",
+    template,
+  };
 }
 
 /**
@@ -146,6 +204,110 @@ exports.whatsappWebhook = onRequest(
     } catch (error) {
       logger.error("Could not process WhatsApp webhook event.", error);
       response.status(500).send("Webhook processing failed");
+    }
+  },
+);
+
+/**
+ * Sends approved WhatsApp templates from documents created in
+ * whatsappOutboundQueue. The browser never receives the Meta access token.
+ */
+exports.sendQueuedWhatsAppMessage = onDocumentCreated(
+  {
+    document: "whatsappOutboundQueue/{queueId}",
+    region: "us-central1",
+    memory: "256MiB",
+    timeoutSeconds: 60,
+    secrets: [whatsappAccessToken],
+  },
+  async (event) => {
+    const snapshot = event.data;
+    if (!snapshot) return;
+
+    const queueRef = snapshot.ref;
+    const original = snapshot.data() ?? {};
+
+    try {
+      if (original.status && original.status !== "queued") {
+        logger.info("Skipping outbound queue item with non-queued status.", {
+          queueId: snapshot.id,
+          status: original.status,
+        });
+        return;
+      }
+
+      const message = validateOutboundMessage(original);
+      const payload = buildTemplatePayload(message);
+
+      await queueRef.set({
+        status: "processing",
+        processingStartedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+
+      const metaResponse = await fetch(
+        `https://graph.facebook.com/v25.0/${message.phoneNumberId}/messages`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${whatsappAccessToken.value()}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        },
+      );
+
+      const responseBody = await metaResponse.json().catch(() => ({}));
+      if (!metaResponse.ok) {
+        const metaMessage = responseBody?.error?.message || `Meta returned HTTP ${metaResponse.status}`;
+        const error = new Error(metaMessage);
+        error.code = responseBody?.error?.code || metaResponse.status;
+        error.meta = responseBody;
+        throw error;
+      }
+
+      const messageId = responseBody?.messages?.[0]?.id;
+      if (!messageId) {
+        throw new Error("Meta accepted the request but did not return a message ID.");
+      }
+
+      const outboundRef = db.collection("whatsappMessages").doc(safeDocumentId(messageId));
+      const batch = db.batch();
+
+      batch.set(outboundRef, {
+        messageId,
+        direction: "outbound",
+        to: message.to,
+        type: "template",
+        templateName: message.templateName,
+        languageCode: message.languageCode,
+        bodyParameters: message.bodyParameters,
+        phoneNumberId: message.phoneNumberId,
+        status: "accepted",
+        queueId: snapshot.id,
+        metaResponse: responseBody,
+        createdAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+
+      batch.set(queueRef, {
+        status: "sent",
+        messageId,
+        metaResponse: responseBody,
+        completedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+
+      await batch.commit();
+      logger.info("Queued WhatsApp template sent.", {
+        queueId: snapshot.id,
+        messageId,
+      });
+    } catch (error) {
+      logger.error("Could not send queued WhatsApp message.", error);
+      await queueRef.set({
+        status: "failed",
+        errorCode: error?.code ? String(error.code) : null,
+        errorMessage: error?.message || "Unknown outbound messaging error",
+        failedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
     }
   },
 );
