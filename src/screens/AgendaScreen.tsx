@@ -341,6 +341,7 @@ export function AgendaScreen() {
   const [vanId, setVanId] = useState(teamVans[0]?.id ?? legacyVans[0]?.id ?? '');
   const [time, setTime] = useState('08:30');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [reschedulingOrderId, setReschedulingOrderId] = useState<string | null>(null);
   const [sendWhatsApp, setSendWhatsApp] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -419,6 +420,7 @@ export function AgendaScreen() {
   const selectedVan = agendaVans.find((item) => item.id === vanId);
   const activeOrders = orders.filter(orderBlocksCapacity);
   const selectedOrder = activeOrders.find((order) => order.id === selectedOrderId) ?? activeOrders[0];
+  const editingOrder = workOrders.find((order) => order.id === editingOrderId);
   const reschedulingOrder = workOrders.find((order) => order.id === reschedulingOrderId);
   const monthTitle = new Date(`${calendarMonth}T12:00:00`).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
   const selectedCalendarStatus = calendarDateStatus(selectedDate, businessCalendarSettings, calendarClosures);
@@ -488,7 +490,7 @@ export function AgendaScreen() {
   };
 
   const isAvailable = (candidateVan: AgendaVan, candidateTime: string, date = selectedDate) =>
-    isAvailableFor(candidateVan, candidateTime, date, workHours, reschedulingOrderId ?? undefined);
+    isAvailableFor(candidateVan, candidateTime, date, workHours, editingOrderId ?? reschedulingOrderId ?? undefined);
 
   useEffect(() => {
     if (!selectedVan) return;
@@ -496,7 +498,7 @@ export function AgendaScreen() {
     const candidateSlots = bookingSlots(isHalfDay(selectedVan.id));
     const firstAvailable = candidateSlots.find((slot) => isAvailable(selectedVan, slot));
     if (firstAvailable) setTime(firstAvailable);
-  }, [workHours, vanId, selectedDate, workOrders, agendaVans, vanHalfDaySchedules, reschedulingOrderId]);
+  }, [workHours, vanId, selectedDate, workOrders, agendaVans, vanHalfDaySchedules, editingOrderId, reschedulingOrderId]);
 
   const openCreate = (candidateVanId?: string, candidateTime?: string, cancelled?: CancelledSlotRecord) => {
     if (selectedDateClosed) return;
@@ -506,12 +508,13 @@ export function AgendaScreen() {
     setClientQuery('');
     setShowQuickClient(false);
 
-    if (reschedulingOrder) {
-      setClientId(reschedulingOrder.clientId);
-      setPropertyId(reschedulingOrder.propertyId ?? '');
-      setWorkDescriptionText(reschedulingOrder.problem);
-      setWorkHours(orderSlotCount(reschedulingOrder, services));
-      setSendWhatsApp(reschedulingOrder.whatsappNotificationsEnabled !== false);
+    const sourceOrder = editingOrder ?? reschedulingOrder;
+    if (sourceOrder) {
+      setClientId(sourceOrder.clientId);
+      setPropertyId(sourceOrder.propertyId ?? '');
+      setWorkDescriptionText(sourceOrder.problem);
+      setWorkHours(orderSlotCount(sourceOrder, services));
+      setSendWhatsApp(sourceOrder.whatsappNotificationsEnabled !== false);
     } else if (cancelled) {
       setClientId(cancelled.clientId);
       setPropertyId(cancelled.propertyId ?? '');
@@ -609,14 +612,41 @@ export function AgendaScreen() {
     if (!client) return setFormMessage('Primero selecciona o registra un cliente.');
     if (!description) return setFormMessage('Escribe la descripción del trabajo antes de guardar la cita.');
     if (!van) return setFormMessage('Selecciona una van.');
-    if (!isAvailableFor(van, time, selectedDate, workHours, reschedulingOrderId ?? undefined)) return setFormMessage('Ese horario no tiene suficientes horas consecutivas para este trabajo.');
+    if (!isAvailableFor(van, time, selectedDate, workHours, editingOrderId ?? reschedulingOrderId ?? undefined)) return setFormMessage('Ese horario no tiene suficientes horas consecutivas para este trabajo.');
 
     const now = new Date().toISOString();
     const zone = selectedProperty?.zone ?? client.zone;
     setSaving(true);
     setFormMessage('');
 
-    if (reschedulingOrder) {
+    if (editingOrder) {
+      const scheduleChanged = editingOrder.date !== selectedDate
+        || normalizeTime(editingOrder.time) !== time
+        || resolveStoredVanId(editingOrder.vanId, agendaVans, legacyVans) !== vanId
+        || orderSlotCount(editingOrder, services) !== workHours;
+      const result = await updateWorkOrder(editingOrder.id, {
+        clientId,
+        propertyId: selectedProperty?.id,
+        date: selectedDate,
+        time,
+        status: editingOrder.status,
+        technicianIds: van.technicianIds,
+        vanId,
+        address: selectedProperty?.address ?? client.address,
+        zone,
+        problem: description,
+        scheduledSlots: workHours,
+        whatsappNotificationsEnabled: editingOrder.status === 'Reserva temporal' ? false : sendWhatsApp,
+        scheduleHistory: scheduleChanged
+          ? [...(editingOrder.scheduleHistory ?? []), scheduleHistoryEntry(editingOrder, services)]
+          : editingOrder.scheduleHistory,
+        updatedAt: now,
+      });
+      setSaving(false);
+      if (!result.ok) return setFormMessage(result.message ?? 'No se pudieron guardar los cambios de la cita.');
+      setSelectedOrderId(editingOrder.id);
+      setEditingOrderId(null);
+    } else if (reschedulingOrder) {
       const history = scheduleHistoryEntry(reschedulingOrder, services);
       const result = await updateWorkOrder(reschedulingOrder.id, {
         clientId,
@@ -697,7 +727,26 @@ export function AgendaScreen() {
     if (selectedOrderId === order.id) setSelectedOrderId(null);
   };
 
+  const startEdit = (order: WorkOrder) => {
+    setEditingOrderId(order.id);
+    setReschedulingOrderId(null);
+    setSelectedDate(order.date);
+    setCalendarMonth(monthStart(order.date));
+    setClientId(order.clientId);
+    setPropertyId(order.propertyId ?? '');
+    setWorkDescriptionText(order.problem);
+    setWorkHours(orderSlotCount(order, services));
+    setVanId(resolveStoredVanId(order.vanId, agendaVans, legacyVans));
+    setTime(normalizeTime(order.time));
+    setSendWhatsApp(order.whatsappNotificationsEnabled !== false);
+    setFormMessage('');
+    setSuccessMessage('');
+    setShowQuickClient(false);
+    setShowCreate(true);
+  };
+
   const startReschedule = (order: WorkOrder) => {
+    setEditingOrderId(null);
     setReschedulingOrderId(order.id);
     setSelectedDate(order.date);
     setCalendarMonth(monthStart(order.date));
@@ -770,18 +819,21 @@ export function AgendaScreen() {
           <View style={styles.legendBar}><Text style={styles.legendTitle}>Leyenda de disponibilidad:</Text><Legend color="#EAF7E7" label="Disponible" /><Legend color="#EAF3FF" label="Cita confirmada" /><Legend color="#FFF4D8" label="Reserva temporal" /><Legend color="#FDECEC" label="Cancelado y disponible" /><Legend color="#FDECEC" label="No disponible" /></View>
         </Card>
 
-        <Card style={styles.detailPanel}><AppointmentDetails order={selectedOrder} halfDay={selectedOrder ? isHalfDay(selectedOrder.vanId, selectedOrder.date) : false} clients={clients} properties={properties} services={services} vans={agendaVans} users={staffDirectory} onUpdate={updateWorkOrder} onConfirm={confirmTemporaryAppointment} onCancel={cancelAppointment} onReschedule={startReschedule} /></Card>
+        <Card style={styles.detailPanel}><AppointmentDetails order={selectedOrder} halfDay={selectedOrder ? isHalfDay(selectedOrder.vanId, selectedOrder.date) : false} clients={clients} properties={properties} services={services} vans={agendaVans} users={staffDirectory} onUpdate={updateWorkOrder} onConfirm={confirmTemporaryAppointment} onEdit={startEdit} onCancel={cancelAppointment} onReschedule={startReschedule} /></Card>
       </View>
 
       <AppModal
         visible={showCreate}
-        title={showQuickClient ? 'Agregar cliente rápido' : reschedulingOrder ? 'Reprogramar cita' : 'Confirmar nueva cita'}
+        title={showQuickClient ? 'Agregar cliente rápido' : editingOrder ? 'Editar cita' : reschedulingOrder ? 'Reprogramar cita' : 'Confirmar nueva cita'}
         onClose={() => {
           if (showQuickClient) {
             if (!quickClientSaving) setShowQuickClient(false);
             return;
           }
-          if (!saving) setShowCreate(false);
+          if (!saving) {
+            setShowCreate(false);
+            setEditingOrderId(null);
+          }
         }}
       >
         {showQuickClient ? (
@@ -850,7 +902,17 @@ export function AgendaScreen() {
             <View style={styles.optionWrap}><Option label="Enviar confirmación y recordatorio por WhatsApp" active={sendWhatsApp} onPress={() => setSendWhatsApp((value) => !value)} /></View>
 
             <View style={styles.summaryBox}><Text style={styles.summaryTitle}>Resumen de la cita</Text><Text style={styles.summaryLine}>{selectedClient?.name ?? 'Sin cliente'} · {selectedProperty?.name ?? selectedClient?.address ?? 'Sin dirección'}</Text><Text style={styles.summaryLine}>{workHours} hora{workHours !== 1 ? 's' : ''} · {selectedVan?.name} · {formatDate(selectedDate)} · {time}</Text><Text style={styles.summaryLine} numberOfLines={2}>{workDescriptionText.trim() || 'Falta agregar la descripción del trabajo.'}</Text></View>
-            <View style={styles.modalActions}><Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => setShowCreate(false)} /><Button variant="secondary" label={saving ? 'Guardando…' : 'Reservar temporalmente'} disabled={saving || !clientId || !workDescriptionText.trim()} onPress={() => void saveAppointment('Reserva temporal')} /><Button label={saving ? 'Guardando…' : reschedulingOrder ? 'Guardar reprogramación' : 'Confirmar cita'} disabled={saving || !clientId || !workDescriptionText.trim()} onPress={() => void saveAppointment('Confirmada')} /></View>
+            <View style={styles.modalActions}>
+              <Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => { setShowCreate(false); setEditingOrderId(null); }} />
+              {editingOrder ? (
+                <Button label={saving ? 'Guardando…' : 'Guardar cambios'} disabled={saving || !clientId || !workDescriptionText.trim()} onPress={() => void saveAppointment(editingOrder.status === 'Reserva temporal' ? 'Reserva temporal' : 'Confirmada')} />
+              ) : (
+                <>
+                  <Button variant="secondary" label={saving ? 'Guardando…' : 'Reservar temporalmente'} disabled={saving || !clientId || !workDescriptionText.trim()} onPress={() => void saveAppointment('Reserva temporal')} />
+                  <Button label={saving ? 'Guardando…' : reschedulingOrder ? 'Guardar reprogramación' : 'Confirmar cita'} disabled={saving || !clientId || !workDescriptionText.trim()} onPress={() => void saveAppointment('Confirmada')} />
+                </>
+              )}
+            </View>
           </ScrollView>
         )}
       </AppModal>
@@ -921,7 +983,7 @@ function ScheduleHeader({ title, used, capacity, top }: { title: string; used: n
   return <View style={[styles.scheduleHeader, { top }]}><Text style={styles.groupTitle}>{title}</Text><Text style={[styles.cupos, used >= capacity && styles.cuposFull]}>{used}/{capacity} horas</Text></View>;
 }
 
-function AppointmentDetails({ order, halfDay, clients, properties, services, vans, users, onUpdate, onConfirm, onCancel, onReschedule }: { order?: WorkOrder; halfDay: boolean; clients: Client[]; properties: Property[]; services: ServiceType[]; vans: Van[]; users: { id: string; name: string }[]; onUpdate: (id: string, changes: Partial<WorkOrder>) => Promise<{ ok: boolean; message?: string }>; onConfirm: (order: WorkOrder, enableWhatsApp: boolean) => Promise<void>; onCancel: (order: WorkOrder) => Promise<void>; onReschedule: (order: WorkOrder) => void }) {
+function AppointmentDetails({ order, halfDay, clients, properties, services, vans, users, onUpdate, onConfirm, onEdit, onCancel, onReschedule }: { order?: WorkOrder; halfDay: boolean; clients: Client[]; properties: Property[]; services: ServiceType[]; vans: Van[]; users: { id: string; name: string }[]; onUpdate: (id: string, changes: Partial<WorkOrder>) => Promise<{ ok: boolean; message?: string }>; onConfirm: (order: WorkOrder, enableWhatsApp: boolean) => Promise<void>; onEdit: (order: WorkOrder) => void; onCancel: (order: WorkOrder) => Promise<void>; onReschedule: (order: WorkOrder) => void }) {
   if (!order) return <View style={styles.emptyDetails}><Text style={styles.detailTitle}>Detalles de la cita</Text><Text style={styles.detailMuted}>Selecciona una cita para ver la información completa.</Text></View>;
   const client = clients.find((item) => item.id === order.clientId);
   const property = properties.find((item) => item.id === order.propertyId);
@@ -929,7 +991,7 @@ function AppointmentDetails({ order, halfDay, clients, properties, services, van
   const van = vans.find((item) => item.id === order.vanId);
   const slots = orderSlotCount(order, services);
   const techNames = order.technicianIds.map((id) => users.find((user) => user.id === id)?.name).filter(Boolean).join(' y ') || 'Sin técnico asignado';
-  return <View><View style={styles.detailHeader}><Pill label={order.status} tone={toneForStatus(order.status)} /><Text style={styles.detailId}>ID: {order.id}</Text></View><Text style={styles.detailTitle}>{client?.name}</Text><Text style={styles.detailSubtitle}>{service?.name ?? 'Trabajo programado'}</Text><View style={styles.detailTabs}><Text style={styles.detailTabActive}>Detalles</Text><Text style={styles.detailTab}>Cliente</Text><Text style={styles.detailTab}>Notas</Text></View><DetailRow label="Fecha y hora" value={`${formatDate(order.date, true)} · ${scheduleRangeForOrder(order, services, halfDay)}`} /><DetailRow label="Duración" value={`${slots} hora${slots !== 1 ? 's' : ''}`} /><DetailRow label="Propiedad" value={property?.name} /><DetailRow label="Dirección" value={order.address} /><DetailRow label="Zona" value={order.zone ?? property?.zone ?? client?.zone} /><DetailRow label="Técnico asignado" value={techNames} /><DetailRow label="Van asignada" value={van?.name ?? 'Sin van'} /><DetailRow label="Descripción del trabajo" value={orderDescription(order, service)} />{order.airConditionerCount ? <DetailRow label="Cantidad de aires (cita anterior)" value={String(order.airConditionerCount)} /> : null}<View style={styles.detailActions}>{order.status === 'Reserva temporal' ? <><Button variant="success" label="Confirmar y enviar WhatsApp" onPress={() => void onConfirm(order, true)} /><Button variant="secondary" label="Confirmar sin WhatsApp" onPress={() => void onConfirm(order, false)} /></> : null}<Button variant="secondary" label="Reprogramar cita" onPress={() => onReschedule(order)} /><Button variant="danger" label="Cancelar cita" onPress={() => void onCancel(order)} />{order.status !== 'Reserva temporal' ? <Button label="Marcar completada" onPress={() => void onUpdate(order.id, { status: 'Completada', updatedAt: new Date().toISOString() })} /> : null}</View></View>;
+  return <View><View style={styles.detailHeader}><Pill label={order.status} tone={toneForStatus(order.status)} /><Text style={styles.detailId}>ID: {order.id}</Text></View><Text style={styles.detailTitle}>{client?.name}</Text><Text style={styles.detailSubtitle}>{service?.name ?? 'Trabajo programado'}</Text><View style={styles.detailTabs}><Text style={styles.detailTabActive}>Detalles</Text><Text style={styles.detailTab}>Cliente</Text><Text style={styles.detailTab}>Notas</Text></View><DetailRow label="Fecha y hora" value={`${formatDate(order.date, true)} · ${scheduleRangeForOrder(order, services, halfDay)}`} /><DetailRow label="Duración" value={`${slots} hora${slots !== 1 ? 's' : ''}`} /><DetailRow label="Propiedad" value={property?.name} /><DetailRow label="Dirección" value={order.address} /><DetailRow label="Zona" value={order.zone ?? property?.zone ?? client?.zone} /><DetailRow label="Técnico asignado" value={techNames} /><DetailRow label="Van asignada" value={van?.name ?? 'Sin van'} /><DetailRow label="Descripción del trabajo" value={orderDescription(order, service)} />{order.airConditionerCount ? <DetailRow label="Cantidad de aires (cita anterior)" value={String(order.airConditionerCount)} /> : null}<View style={styles.detailActions}>{order.status === 'Reserva temporal' ? <><Button variant="success" label="Confirmar y enviar WhatsApp" onPress={() => void onConfirm(order, true)} /><Button variant="secondary" label="Confirmar sin WhatsApp" onPress={() => void onConfirm(order, false)} /></> : null}<Button variant="secondary" label="Editar cita" onPress={() => onEdit(order)} /><Button variant="secondary" label="Reprogramar cita" onPress={() => onReschedule(order)} /><Button variant="danger" label="Cancelar cita" onPress={() => void onCancel(order)} />{order.status !== 'Reserva temporal' ? <Button label="Marcar completada" onPress={() => void onUpdate(order.id, { status: 'Completada', updatedAt: new Date().toISOString() })} /> : null}</View></View>;
 }
 
 function SearchRow({ title, subtitle, active, onPress }: { title: string; subtitle: string; active: boolean; onPress: () => void }) {
