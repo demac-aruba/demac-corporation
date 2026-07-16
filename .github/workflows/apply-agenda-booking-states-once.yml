@@ -54,3 +54,5 @@ jobs:
           git add -A
           git commit -m "Add temporary reservations and cancellation history to agenda"
           git push origin HEAD:feature/agenda-booking-states
+
+# trigger: 2
