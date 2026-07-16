@@ -6,6 +6,7 @@ import { LoginScreen } from './src/screens/LoginScreen';
 import { AppStateProvider, useAppState } from './src/state/AppState';
 import { CalendarStateProvider } from './src/state/CalendarState';
 import { TeamStateProvider } from './src/state/TeamState';
+import { VanHalfDayStateProvider } from './src/state/VanHalfDayState';
 
 function AppContent() {
   const { currentUser, hydrated } = useAppState();
@@ -23,7 +24,9 @@ export default function App() {
     <AppStateProvider>
       <TeamStateProvider>
         <CalendarStateProvider>
-          <AppContent />
+          <VanHalfDayStateProvider>
+            <AppContent />
+          </VanHalfDayStateProvider>
         </CalendarStateProvider>
       </TeamStateProvider>
     </AppStateProvider>
