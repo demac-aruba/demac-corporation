@@ -65,6 +65,10 @@ service cloud.firestore {
       allow delete: if adminOrSupervisor();
     }
 
+    match /vanHalfDaySchedules/{scheduleId} {
+      allow read, create, update, delete: if operationsRole();
+    }
+
     match /calendarClosures/{closureId} {
       allow read, create, update, delete: if operationsRole();
     }
