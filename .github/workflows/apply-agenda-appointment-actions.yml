@@ -1,0 +1,54 @@
+name: Apply and validate agenda appointment actions
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'feature/agenda-booking-states'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: feature/agenda-booking-states
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Apply source patch
+        run: python3 scripts/apply-agenda-appointment-actions.py
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate TypeScript
+        run: npm run typecheck
+
+      - name: Validate web build
+        run: npm run build:web
+
+      - name: Remove temporary patch files
+        run: |
+          rm -rf dist
+          rm -f scripts/apply-agenda-appointment-actions.py
+          rm -f .github/workflows/apply-agenda-appointment-actions.yml
+
+      - name: Commit validated source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix agenda appointment detail actions"
+          git push origin HEAD:feature/agenda-booking-states
