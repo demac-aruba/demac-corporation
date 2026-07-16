@@ -705,7 +705,6 @@ export function AgendaScreen() {
   };
 
   return (
-  return (
     <ScrollView contentContainerStyle={styles.page}>
       {combinedDataError ? (
         <View style={styles.errorBanner}>
