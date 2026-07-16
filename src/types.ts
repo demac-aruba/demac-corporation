@@ -15,6 +15,7 @@ export type ScreenKey =
 
 export type AppointmentStatus =
   | 'Solicitud recibida'
+  | 'Reserva temporal'
   | 'Confirmada'
   | 'Asignada'
   | 'En camino'
@@ -177,6 +178,22 @@ export interface ServiceType {
 
 export type SchedulingMode = 'fixed' | 'perUnit';
 
+export interface WorkOrderScheduleHistoryEntry {
+  id: string;
+  date: string;
+  time: string;
+  vanId: string;
+  technicianIds: string[];
+  scheduledSlots: number;
+  status: 'Cancelada' | 'Reprogramada';
+  clientId: string;
+  propertyId?: string;
+  address: string;
+  zone?: string;
+  problem: string;
+  recordedAt: string;
+}
+
 export interface WorkOrder {
   id: string;
   clientId: string;
@@ -196,6 +213,12 @@ export interface WorkOrder {
   schedulingMode?: SchedulingMode;
   airConditionerCount?: number;
   scheduledSlots?: number;
+  whatsappNotificationsEnabled?: boolean;
+  confirmedAt?: string;
+  temporaryReservedAt?: string;
+  cancelledAt?: string;
+  cancellationReason?: string;
+  scheduleHistory?: WorkOrderScheduleHistoryEntry[];
   equipmentId?: string;
   measurements?: {
     voltage?: string;

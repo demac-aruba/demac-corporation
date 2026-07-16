@@ -25,7 +25,7 @@ export function WorkOrdersScreen() {
   const van = vans.find((item) => item.id === selected?.vanId);
   const technicians = selected?.technicianIds.map((id) => users.find((user) => user.id === id)?.name).filter(Boolean) ?? [];
 
-  const statuses = ['Todos', 'Solicitud recibida', 'Confirmada', 'Asignada', 'En proceso', 'Pendiente', 'Completada', 'Facturada', 'Pagada'];
+  const statuses = ['Todos', 'Solicitud recibida', 'Reserva temporal', 'Confirmada', 'Asignada', 'En proceso', 'Pendiente', 'Completada', 'Reprogramada', 'Cancelada', 'Facturada', 'Pagada'];
 
   return (
     <ScrollView contentContainerStyle={styles.page}>
