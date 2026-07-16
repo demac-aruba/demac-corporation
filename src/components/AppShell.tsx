@@ -3,7 +3,7 @@ import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, useWindowDimensi
 import { useAppState } from '../state/AppState';
 import { colors } from '../theme';
 import { ScreenKey, UserRole } from '../types';
-import { AgendaScheduleScreen } from '../screens/AgendaScheduleScreen';
+import { AgendaHubScreen } from '../screens/AgendaHubScreen';
 import { CatalogScreen } from '../screens/CatalogScreen';
 import { ClientsScreen } from '../screens/ClientsScreen';
 import { DashboardScreen } from '../screens/DashboardScreen';
@@ -53,7 +53,7 @@ export function AppShell() {
 
   let content: ReactNode;
   switch (activeScreen) {
-    case 'agenda': content = <AgendaScheduleScreen />; break;
+    case 'agenda': content = <AgendaHubScreen />; break;
     case 'clients': content = <ClientsScreen />; break;
     case 'catalog': content = <CatalogScreen />; break;
     case 'workOrders': content = <WorkOrdersScreen />; break;
