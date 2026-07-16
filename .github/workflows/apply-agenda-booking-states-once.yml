@@ -29,32 +29,29 @@ jobs:
 
       - name: Apply pending source fixes
         run: |
-          if [ -f scripts/apply-agenda-booking-states.py ]; then python3 scripts/apply-agenda-booking-states.py; fi
-          if [ -f scripts/fix-booking-state-source.py ]; then python3 scripts/fix-booking-state-source.py; fi
+          if [ -f scripts/fix-booking-state-source-2.py ]; then python3 scripts/fix-booking-state-source-2.py; fi
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Capture validation diagnostics
-        run: |
-          set +e
-          npm run typecheck > booking-state-validation.txt 2>&1
-          TYPECHECK_EXIT=$?
-          npm run build:web >> booking-state-validation.txt 2>&1
-          BUILD_EXIT=$?
-          node --check functions/appointmentNotifications.js >> booking-state-validation.txt 2>&1
-          NODE_EXIT=$?
-          printf "\nTYPECHECK_EXIT=%s\nBUILD_EXIT=%s\nNODE_EXIT=%s\n" "$TYPECHECK_EXIT" "$BUILD_EXIT" "$NODE_EXIT" >> booking-state-validation.txt
-          cat booking-state-validation.txt
-          exit 0
+      - name: Validate TypeScript
+        run: npm run typecheck
 
-      - name: Remove temporary scripts
+      - name: Validate web build
+        run: npm run build:web
+
+      - name: Validate notification function syntax
+        run: node --check functions/appointmentNotifications.js
+
+      - name: Remove temporary files
         run: |
           rm -rf dist
-          rm -f scripts/apply-agenda-booking-states.py
-          rm -f scripts/fix-booking-state-source.py
+          rm -f scripts/fix-booking-state-source-2.py
+          rm -f booking-state-validation.txt
+          rm -f booking-state-trigger.txt
+          rm -f booking-state-trigger-2.txt
 
-      - name: Commit corrected source and diagnostics
+      - name: Commit validated source when changed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -62,6 +59,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No source changes to commit."
           else
-            git commit -m "Capture agenda booking state validation"
+            git commit -m "Validate temporary reservations and cancellation history"
             git push origin HEAD:feature/agenda-booking-states
           fi
