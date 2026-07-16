@@ -57,6 +57,7 @@ jobs:
         run: |
           rm -rf dist
           rm -f halfday-patch.log
+          rm -f halfday-trigger.txt
           rm -f scripts/apply-half-days-clean.cjs
           rm -f .github/workflows/apply-half-days-clean.yml
 
