@@ -525,7 +525,7 @@ export function AgendaScreen() {
     setShowCreate(true);
   };
 
-  const openQuickClient = () => {  const openQuickClient = () => {
+  const openQuickClient = () => {
     setQuickClient({ ...emptyQuickClientForm, name: clientQuery.trim() });
     setQuickClientMessage('');
     setFormMessage('');
