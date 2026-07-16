@@ -3,6 +3,7 @@ import { listFirestoreCollection, saveFirestoreDocument } from '../services/fire
 import { OperationResult, useAppState } from './AppState';
 
 export type VanHalfDayWeekday = 1 | 2 | 3 | 4 | 5 | 6;
+export const VAN_HALF_DAY_EFFECTIVE_FROM = '2026-08-01';
 
 export interface VanHalfDaySchedule {
   id: string;
@@ -107,6 +108,7 @@ export function useVanHalfDayState() {
 }
 
 export function vanHasHalfDayOnDate(vanId: string, date: string, schedules: VanHalfDaySchedule[]) {
+  if (date < VAN_HALF_DAY_EFFECTIVE_FROM) return false;
   const weekday = new Date(`${date}T12:00:00`).getDay();
   return schedules.some((schedule) => schedule.active && schedule.vanId === vanId && schedule.weekday === weekday);
 }
