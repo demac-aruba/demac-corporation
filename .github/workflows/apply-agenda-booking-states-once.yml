@@ -1,0 +1,56 @@
+name: Apply agenda booking states once
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-agenda-booking-states-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: feature/agenda-booking-states
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Apply source changes
+        run: python3 scripts/apply-agenda-booking-states.py
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate TypeScript
+        run: npm run typecheck
+
+      - name: Validate web build
+        run: npm run build:web
+
+      - name: Validate notification function syntax
+        run: node --check functions/appointmentNotifications.js
+
+      - name: Remove temporary migration script
+        run: |
+          rm -rf dist
+          rm -f scripts/apply-agenda-booking-states.py
+
+      - name: Commit validated source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Add temporary reservations and cancellation history to agenda"
+          git push origin HEAD:feature/agenda-booking-states
