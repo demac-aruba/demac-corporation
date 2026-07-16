@@ -3,14 +3,14 @@ import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, useWindowDimensi
 import { useAppState } from '../state/AppState';
 import { colors } from '../theme';
 import { ScreenKey, UserRole } from '../types';
-import { AgendaScreen } from '../screens/AgendaScreen';
+import { AgendaScheduleScreen } from '../screens/AgendaScheduleScreen';
 import { CatalogScreen } from '../screens/CatalogScreen';
 import { ClientsScreen } from '../screens/ClientsScreen';
 import { DashboardScreen } from '../screens/DashboardScreen';
 import { FinanceScreen } from '../screens/FinanceScreen';
 import { InventoryScreen } from '../screens/InventoryScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
-import { TeamScreen } from '../screens/TeamScreen';
+import { TeamHubScreen } from '../screens/TeamHubScreen';
 import { TechnicianScreen } from '../screens/TechnicianScreen';
 import { WorkOrdersScreen } from '../screens/WorkOrdersScreen';
 
@@ -53,11 +53,11 @@ export function AppShell() {
 
   let content: ReactNode;
   switch (activeScreen) {
-    case 'agenda': content = <AgendaScreen />; break;
+    case 'agenda': content = <AgendaScheduleScreen />; break;
     case 'clients': content = <ClientsScreen />; break;
     case 'catalog': content = <CatalogScreen />; break;
     case 'workOrders': content = <WorkOrdersScreen />; break;
-    case 'team': content = <TeamScreen />; break;
+    case 'team': content = <TeamHubScreen />; break;
     case 'technician': content = <TechnicianScreen />; break;
     case 'sales': content = <FinanceScreen salesMode />; break;
     case 'inventory': content = <InventoryScreen />; break;
