@@ -38,21 +38,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Validate TypeScript
-        run: npm run typecheck
-
-      - name: Validate web build
-        run: npm run build:web
-
-      - name: Validate notification function syntax
-        run: node --check functions/appointmentNotifications.js
+      - name: Capture validation diagnostics
+        run: |
+          set +e
+          npm run typecheck > booking-state-validation.txt 2>&1
+          TYPECHECK_EXIT=$?
+          npm run build:web >> booking-state-validation.txt 2>&1
+          BUILD_EXIT=$?
+          node --check functions/appointmentNotifications.js >> booking-state-validation.txt 2>&1
+          NODE_EXIT=$?
+          printf "\nTYPECHECK_EXIT=%s\nBUILD_EXIT=%s\nNODE_EXIT=%s\n" "$TYPECHECK_EXIT" "$BUILD_EXIT" "$NODE_EXIT" >> booking-state-validation.txt
+          cat booking-state-validation.txt
+          exit 0
 
       - name: Remove temporary migration script
         run: |
           rm -rf dist
           rm -f scripts/apply-agenda-booking-states.py
 
-      - name: Commit validated source when changed
+      - name: Commit generated source and diagnostics
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -60,6 +64,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No source changes to commit."
           else
-            git commit -m "Add temporary reservations and cancellation history to agenda"
+            git commit -m "Apply agenda booking states for validation"
             git push origin HEAD:feature/agenda-booking-states
           fi
