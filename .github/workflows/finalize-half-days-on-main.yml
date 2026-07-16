@@ -1,0 +1,46 @@
+name: Finalize van half-day integration
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install, apply and validate integration
+        run: npm ci
+
+      - name: Remove temporary build migration
+        run: |
+          node -e "const fs=require('fs'); const p=require('./package.json'); delete p.scripts.postinstall; fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');"
+          rm -f scripts/patch-agenda-half-days-aug1.cjs
+          rm -f scripts/fix-agenda-patch-output.cjs
+          rm -f .github/workflows/finalize-half-days-on-main.yml
+
+      - name: Confirm final checked-in source
+        run: npm run typecheck
+
+      - name: Commit direct TypeScript integration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Finalize van half-days in classic agenda"
+          git push
