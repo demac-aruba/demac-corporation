@@ -4,20 +4,25 @@ import { AppModal, Button, Card, Input, Pill, SectionTitle, statusTone } from '.
 import { useAppState } from '../state/AppState';
 import { BusinessCalendarSettings, CalendarClosure, useCalendarState } from '../state/CalendarState';
 import { useTeamState } from '../state/TeamState';
+import { useVanHalfDayState, vanHasHalfDayOnDate } from '../state/VanHalfDayState';
 import { colors } from '../theme';
 import { AppointmentStatus, Client, DailyVanAssignment, Property, PropertyType, ServiceType, StaffAbsence, StaffProfile, Van, WorkOrder } from '../types';
 
 const morningSlots = ['08:30', '09:30', '10:30'];
+const extraMorningSlot = '11:30';
 const afternoonSlots = ['13:30', '14:30', '15:30'];
 const allSlots = [...morningSlots, ...afternoonSlots];
+const extendedSlots = [...morningSlots, extraMorningSlot, ...afternoonSlots];
 const propertyTypes: PropertyType[] = ['Casa', 'Apartamento', 'Oficina', 'Local comercial', 'Otro'];
 const SLOT_HEIGHT = 118;
 const SLOT_GAP = 8;
 const GROUP_HEADER_HEIGHT = 30;
 const LUNCH_GAP = 44;
 const AFTERNOON_START_GAP = 12;
-const AFTERNOON_HEADER_TOP = GROUP_HEADER_HEIGHT + morningSlots.length * (SLOT_HEIGHT + SLOT_GAP) + LUNCH_GAP;
-const SCHEDULE_HEIGHT = GROUP_HEADER_HEIGHT * 2 + allSlots.length * SLOT_HEIGHT + (allSlots.length - 1) * SLOT_GAP + LUNCH_GAP + AFTERNOON_START_GAP;
+const REGULAR_AFTERNOON_HEADER_TOP = GROUP_HEADER_HEIGHT + morningSlots.length * (SLOT_HEIGHT + SLOT_GAP) + LUNCH_GAP;
+const EXTENDED_AFTERNOON_HEADER_TOP = GROUP_HEADER_HEIGHT + (morningSlots.length + 1) * (SLOT_HEIGHT + SLOT_GAP) + AFTERNOON_START_GAP;
+const REGULAR_SCHEDULE_HEIGHT = GROUP_HEADER_HEIGHT * 2 + allSlots.length * SLOT_HEIGHT + (allSlots.length - 1) * SLOT_GAP + LUNCH_GAP + AFTERNOON_START_GAP;
+const EXTENDED_SCHEDULE_HEIGHT = GROUP_HEADER_HEIGHT * 2 + extendedSlots.length * SLOT_HEIGHT + (extendedSlots.length - 1) * SLOT_GAP + AFTERNOON_START_GAP;
 
 type QuickClientForm = {
   name: string;
@@ -99,51 +104,64 @@ function orderSlotCount(order: WorkOrder, services: ServiceType[]) {
 function normalizeTime(time: string) {
   if (time < '09:00') return '08:30';
   if (time >= '09:00' && time < '10:30') return '09:30';
-  if (time >= '10:30' && time < '12:00') return '10:30';
-  if (time >= '12:00' && time < '14:30') return '13:30';
+  if (time >= '10:30' && time < '11:30') return '10:30';
+  if (time >= '11:30' && time < '12:30') return extraMorningSlot;
+  if (time >= '12:30' && time < '14:30') return '13:30';
   if (time >= '14:30' && time < '15:30') return '14:30';
   return '15:30';
 }
 
-function slotIndex(time: string) {
-  return allSlots.indexOf(normalizeTime(time));
-}
-
 function slotEnd(slot: string) {
   const [hour, minute] = slot.split(':').map(Number);
-  return `${String(hour + 1).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+  return String(hour + 1).padStart(2, '0') + ':' + String(minute).padStart(2, '0');
 }
 
 function slotLabel(slot: string) {
-  return `${slot} - ${slotEnd(slot)}`;
+  return slot + ' - ' + slotEnd(slot);
 }
 
-function scheduleRange(startTime: string, slots: number) {
-  const start = Math.max(0, slotIndex(startTime));
-  const last = Math.min(allSlots.length - 1, start + Math.max(1, slots) - 1);
-  return `${allSlots[start]} - ${slotEnd(allSlots[last])}`;
+function bookingSlots(halfDay: boolean) {
+  return halfDay ? [...morningSlots, extraMorningSlot] : allSlots;
 }
 
-function orderOccupiesSlot(order: WorkOrder, slot: string, services: ServiceType[]) {
-  const start = slotIndex(order.time);
-  const target = slotIndex(slot);
-  if (start < 0 || target < 0) return false;
-  return target >= start && target < start + orderSlotCount(order, services);
+function orderOccupiedSlots(order: WorkOrder, services: ServiceType[], halfDay: boolean) {
+  const normalized = normalizeTime(order.time);
+  const source = afternoonSlots.includes(normalized) ? afternoonSlots : bookingSlots(halfDay);
+  const start = source.indexOf(normalized);
+  if (start < 0) return [];
+  return source.slice(start, start + orderSlotCount(order, services));
+}
+
+function scheduleRangeForOrder(order: WorkOrder, services: ServiceType[], halfDay: boolean) {
+  const occupied = orderOccupiedSlots(order, services, halfDay);
+  if (!occupied.length) return slotLabel(normalizeTime(order.time));
+  return occupied[0] + ' - ' + slotEnd(occupied[occupied.length - 1]);
+}
+
+function orderOccupiesSlot(order: WorkOrder, slot: string, services: ServiceType[], halfDay: boolean) {
+  return orderOccupiedSlots(order, services, halfDay).includes(slot);
 }
 
 function toneForStatus(status: AppointmentStatus) {
   return statusTone(status);
 }
 
-function scheduleSlotTop(index: number) {
-  const afternoonOffset = index >= morningSlots.length ? GROUP_HEADER_HEIGHT + LUNCH_GAP + AFTERNOON_START_GAP : 0;
+function scheduleSlotTop(index: number, extendedLayout: boolean) {
+  const morningCount = extendedLayout ? morningSlots.length + 1 : morningSlots.length;
+  const afternoonOffset = index >= morningCount
+    ? GROUP_HEADER_HEIGHT + (extendedLayout ? AFTERNOON_START_GAP : LUNCH_GAP + AFTERNOON_START_GAP)
+    : 0;
   return GROUP_HEADER_HEIGHT + index * (SLOT_HEIGHT + SLOT_GAP) + afternoonOffset;
 }
 
-function scheduleBlockHeight(start: number, requestedSlots: number) {
-  const slots = Math.max(1, Math.min(requestedSlots, allSlots.length - start));
-  const crossesLunch = start < morningSlots.length && start + slots > morningSlots.length;
-  return slots * SLOT_HEIGHT + (slots - 1) * SLOT_GAP + (crossesLunch ? GROUP_HEADER_HEIGHT + LUNCH_GAP + AFTERNOON_START_GAP : 0);
+function scheduleBlockHeight(start: number, end: number, extendedLayout: boolean) {
+  const first = Math.max(0, start);
+  const last = Math.max(first, end);
+  const slots = last - first + 1;
+  const morningCount = extendedLayout ? morningSlots.length + 1 : morningSlots.length;
+  const crossesBreak = first < morningCount && last >= morningCount;
+  const breakHeight = extendedLayout ? GROUP_HEADER_HEIGHT + AFTERNOON_START_GAP : GROUP_HEADER_HEIGHT + LUNCH_GAP + AFTERNOON_START_GAP;
+  return slots * SLOT_HEIGHT + (slots - 1) * SLOT_GAP + (crossesBreak ? breakHeight : 0);
 }
 
 function orderDescription(order: WorkOrder, service?: ServiceType) {
@@ -265,6 +283,7 @@ export function AgendaScreen() {
   } = useAppState();
   const { vans: teamVans, staffProfiles, dailyVanAssignments, staffAbsences, teamLoading, teamDataError, refreshTeamData } = useTeamState();
   const { calendarClosures, businessCalendarSettings, calendarLoading, calendarDataError, refreshCalendarData } = useCalendarState();
+  const { vanHalfDaySchedules, halfDayLoading, halfDayError, refreshVanHalfDays } = useVanHalfDayState();
 
   const [selectedDate, setSelectedDate] = useState(localDateKey());
   const [calendarMonth, setCalendarMonth] = useState(monthStart(localDateKey()));
@@ -360,7 +379,9 @@ export function AgendaScreen() {
   const monthTitle = new Date(`${calendarMonth}T12:00:00`).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
   const selectedCalendarStatus = calendarDateStatus(selectedDate, businessCalendarSettings, calendarClosures);
   const selectedDateClosed = selectedCalendarStatus.closed;
-  const combinedDataError = calendarDataError ?? teamDataError ?? dataError;
+  const combinedDataError = halfDayError ?? calendarDataError ?? teamDataError ?? dataError;
+  const isHalfDay = (candidateVanId: string, date = selectedDate) => vanHasHalfDayOnDate(candidateVanId, date, vanHalfDaySchedules);
+  const extendedDayLayout = agendaVans.some((van) => isHalfDay(van.id));
 
   const filteredClients = useMemo(() => {
     const needle = clientQuery.trim().toLowerCase();
@@ -376,23 +397,28 @@ export function AgendaScreen() {
   const isAvailable = (candidateVan: AgendaVan, candidateTime: string, date = selectedDate) => {
     if (calendarDateStatus(date, businessCalendarSettings, calendarClosures).closed) return false;
     if (!vanCanReceiveAppointments(candidateVan)) return false;
-    const start = slotIndex(candidateTime);
-    if (start < 0 || start + workHours > allSlots.length) return false;
-    const candidateSlots = allSlots.slice(start, start + workHours);
+    const halfDay = isHalfDay(candidateVan.id, date);
+    if (halfDay && afternoonSlots.includes(candidateTime)) return false;
+    if (!halfDay && candidateTime === extraMorningSlot) return false;
+    const candidateSchedule = bookingSlots(halfDay);
+    const start = candidateSchedule.indexOf(candidateTime);
+    if (start < 0 || start + workHours > candidateSchedule.length) return false;
+    const candidateSlots = candidateSchedule.slice(start, start + workHours);
     return !workOrders.some(
       (order) =>
         order.date === date &&
         resolveStoredVanId(order.vanId, agendaVans, legacyVans) === candidateVan.id &&
-        candidateSlots.some((slot) => orderOccupiesSlot(order, slot, services)),
+        candidateSlots.some((slot) => orderOccupiesSlot(order, slot, services, halfDay)),
     );
   };
 
   useEffect(() => {
     if (!selectedVan) return;
     if (isAvailable(selectedVan, time)) return;
-    const firstAvailable = allSlots.find((slot) => isAvailable(selectedVan, slot));
+    const candidateSlots = bookingSlots(isHalfDay(selectedVan.id));
+    const firstAvailable = candidateSlots.find((slot) => isAvailable(selectedVan, slot));
     if (firstAvailable) setTime(firstAvailable);
-  }, [workHours, vanId, selectedDate, workOrders, agendaVans]);
+  }, [workHours, vanId, selectedDate, workOrders, agendaVans, vanHalfDaySchedules]);
 
   const openCreate = (candidateVanId?: string, candidateTime?: string) => {
     if (selectedDateClosed) return;
@@ -534,7 +560,7 @@ export function AgendaScreen() {
       {combinedDataError ? (
         <View style={styles.errorBanner}>
           <View style={{ flex: 1 }}><Text style={styles.errorTitle}>No se pudieron guardar o cargar los datos</Text><Text style={styles.errorText}>{combinedDataError}</Text></View>
-          <Button compact variant="secondary" label="Reintentar" onPress={() => void Promise.all([refreshOperationalData(), refreshTeamData(), refreshCalendarData()])} />
+          <Button compact variant="secondary" label="Reintentar" onPress={() => void Promise.all([refreshOperationalData(), refreshTeamData(), refreshCalendarData(), refreshVanHalfDays()])} />
         </View>
       ) : null}
 
@@ -586,14 +612,14 @@ export function AgendaScreen() {
             <View style={styles.boardDateCenter}><Text style={styles.boardDate}>{formatDate(selectedDate, true)}</Text><Text style={styles.workday}>Horario laboral: 8:00 AM - 5:00 PM | Pausa: 12:00 PM - 1:00 PM</Text></View>
             <Pressable onPress={() => setSelectedDate(addDays(selectedDate, 1))} style={styles.dateButton}><Text style={styles.dateButtonText}>Día siguiente →</Text></Pressable>
           </View>
-          {dataLoading || teamLoading || calendarLoading ? <Text style={styles.syncText}>Sincronizando agenda, equipo y calendario…</Text> : null}
+          {dataLoading || teamLoading || calendarLoading || halfDayLoading ? <Text style={styles.syncText}>Sincronizando agenda, equipo y calendario…</Text> : null}
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <View style={styles.boardGrid}>{agendaVans.map((van) => <VanColumn key={van.id} van={van} users={staffDirectory} orders={orders} services={services} clients={clients} properties={properties} selectedOrderId={selectedOrder?.id} onSelectOrder={setSelectedOrderId} onCreate={(slot) => openCreate(van.id, slot)} closedReason={selectedDateClosed ? selectedCalendarStatus.reason : undefined} />)}</View>
+            <View style={styles.boardGrid}>{agendaVans.map((van) => <VanColumn key={van.id} van={van} halfDay={isHalfDay(van.id)} extendedLayout={extendedDayLayout} users={staffDirectory} orders={orders} services={services} clients={clients} properties={properties} selectedOrderId={selectedOrder?.id} onSelectOrder={setSelectedOrderId} onCreate={(slot) => openCreate(van.id, slot)} closedReason={selectedDateClosed ? selectedCalendarStatus.reason : undefined} />)}</View>
           </ScrollView>
           <View style={styles.legendBar}><Text style={styles.legendTitle}>Leyenda de disponibilidad:</Text><Legend color="#EAF7E7" label="Disponible" /><Legend color="#EAF3FF" label="Ocupado" /><Legend color="#FDECEC" label="No disponible" /></View>
         </Card>
 
-        <Card style={styles.detailPanel}><AppointmentDetails order={selectedOrder} clients={clients} properties={properties} services={services} vans={agendaVans} users={staffDirectory} onUpdate={updateWorkOrder} /></Card>
+        <Card style={styles.detailPanel}><AppointmentDetails order={selectedOrder} halfDay={selectedOrder ? isHalfDay(selectedOrder.vanId, selectedOrder.date) : false} clients={clients} properties={properties} services={services} vans={agendaVans} users={staffDirectory} onUpdate={updateWorkOrder} /></Card>
       </View>
 
       <AppModal
@@ -664,7 +690,7 @@ export function AgendaScreen() {
             <View style={styles.optionWrap}>{agendaVans.map((van) => { const names = van.technicianIds.map((id) => staffDirectory.find((user) => user.id === id)?.name.split(' ')[0]).filter(Boolean).join(' + '); const disabled = !vanCanReceiveAppointments(van); return <Option key={van.id} label={`${van.name} · ${names || 'Sin equipo'} · ${van.dispatchStatus}`} active={vanId === van.id} disabled={disabled} onPress={() => setVanId(van.id)} />; })}</View>
 
             <Text style={styles.stepLabel}>5</Text><Text style={styles.fieldLabel}>Horario sugerido</Text>
-            <View style={styles.optionWrap}>{allSlots.map((slot) => { const available = selectedVan ? isAvailable(selectedVan, slot) : false; return <Option key={slot} label={available ? slotLabel(slot) : `${slotLabel(slot)} · no disponible`} active={time === slot} disabled={!available} onPress={() => setTime(slot)} />; })}</View>
+            <View style={styles.optionWrap}>{(selectedVan && isHalfDay(selectedVan.id) ? [...morningSlots, extraMorningSlot] : allSlots).map((slot) => { const available = selectedVan ? isAvailable(selectedVan, slot) : false; return <Option key={slot} label={available ? slotLabel(slot) : `${slotLabel(slot)} · no disponible`} active={time === slot} disabled={!available} onPress={() => setTime(slot)} />; })}</View>
 
             <Text style={styles.stepLabel}>6</Text>
             <Input label="Descripción del trabajo" value={workDescriptionText} onChangeText={setWorkDescriptionText} multiline placeholder="Ej. Dos servicios estándar, diagnóstico de una unidad e instalación de otra. Agrega instrucciones de acceso, contacto, síntomas y cualquier detalle necesario…" />
@@ -678,44 +704,53 @@ export function AgendaScreen() {
   );
 }
 
-function VanColumn({ van, users, orders, services, clients, properties, selectedOrderId, onSelectOrder, onCreate, closedReason }: { van: AgendaVan; users: { id: string; name: string }[]; orders: WorkOrder[]; services: ServiceType[]; clients: Client[]; properties: Property[]; selectedOrderId?: string; onSelectOrder: (id: string) => void; onCreate: (slot: string) => void; closedReason?: string }) {
+function VanColumn({ van, halfDay, extendedLayout, users, orders, services, clients, properties, selectedOrderId, onSelectOrder, onCreate, closedReason }: { van: AgendaVan; halfDay: boolean; extendedLayout: boolean; users: { id: string; name: string }[]; orders: WorkOrder[]; services: ServiceType[]; clients: Client[]; properties: Property[]; selectedOrderId?: string; onSelectOrder: (id: string) => void; onCreate: (slot: string) => void; closedReason?: string }) {
   const techNames = van.technicianIds.map((id) => users.find((user) => user.id === id)?.name.split(' ')[0]).filter(Boolean).join(' + ') || 'Sin equipo';
   const unavailableReason = van.status === 'Mantenimiento' ? 'Mantenimiento' : van.status === 'Fuera de servicio' ? 'Fuera de servicio' : 'Sin personal';
-  const usedMorning = morningSlots.filter((slot) => orders.some((order) => order.vanId === van.id && orderOccupiesSlot(order, slot, services))).length;
-  const usedAfternoon = afternoonSlots.filter((slot) => orders.some((order) => order.vanId === van.id && orderOccupiesSlot(order, slot, services))).length;
+  const displaySlots = extendedLayout ? extendedSlots : allSlots;
+  const morningCapacity = halfDay ? 4 : 3;
+  const usedMorning = (halfDay ? [...morningSlots, extraMorningSlot] : morningSlots).filter((slot) => orders.some((order) => order.vanId === van.id && orderOccupiesSlot(order, slot, services, halfDay))).length;
+  const usedAfternoon = afternoonSlots.filter((slot) => orders.some((order) => order.vanId === van.id && orderOccupiesSlot(order, slot, services, halfDay))).length;
+  const afternoonHeaderTop = extendedLayout ? EXTENDED_AFTERNOON_HEADER_TOP : REGULAR_AFTERNOON_HEADER_TOP;
+  const scheduleHeight = extendedLayout ? EXTENDED_SCHEDULE_HEIGHT : REGULAR_SCHEDULE_HEIGHT;
 
   return (
     <View style={styles.vanColumn}>
       <View style={styles.vanColumnHeader}><Text style={styles.vanIcon}>🚐</Text><Text style={styles.vanTitle}>{van.name}</Text><Text style={styles.vanTechs}>{techNames} · {van.dispatchStatus}</Text></View>
-      <View style={[styles.scheduleCanvas, { height: SCHEDULE_HEIGHT }]}>
-        <ScheduleHeader title="MAÑANA" used={usedMorning} top={0} />
-        <View style={[styles.lunchDivider, { top: GROUP_HEADER_HEIGHT + morningSlots.length * (SLOT_HEIGHT + SLOT_GAP) }]}><Text style={styles.lunchText}>PAUSA 12:00 - 13:00</Text></View>
-        <ScheduleHeader title="TARDE" used={usedAfternoon} top={AFTERNOON_HEADER_TOP} />
-        {allSlots.map((slot, index) => {
-          const order = orders.find((item) => item.vanId === van.id && orderOccupiesSlot(item, slot, services));
-          const top = scheduleSlotTop(index);
+      <View style={[styles.scheduleCanvas, { height: scheduleHeight }]}>
+        <ScheduleHeader title="MAÑANA" used={usedMorning} capacity={morningCapacity} top={0} />
+        {!extendedLayout ? <View style={[styles.lunchDivider, { top: GROUP_HEADER_HEIGHT + morningSlots.length * (SLOT_HEIGHT + SLOT_GAP) }]}><Text style={styles.lunchText}>PAUSA 12:00 - 13:00</Text></View> : null}
+        <ScheduleHeader title="TARDE" used={usedAfternoon} capacity={3} top={afternoonHeaderTop} />
+        {displaySlots.map((slot, index) => {
+          const order = orders.find((item) => item.vanId === van.id && orderOccupiesSlot(item, slot, services, halfDay));
+          const top = scheduleSlotTop(index, extendedLayout);
           if (order) {
-            const start = slotIndex(order.time);
+            const occupied = orderOccupiedSlots(order, services, halfDay);
+            const start = displaySlots.indexOf(normalizeTime(order.time));
+            const end = occupied.length ? displaySlots.indexOf(occupied[occupied.length - 1]) : start;
             if (start !== index) return null;
             const slots = orderSlotCount(order, services);
             const service = services.find((item) => item.id === order.serviceId);
             const client = clients.find((item) => item.id === order.clientId);
             const property = properties.find((item) => item.id === order.propertyId);
             const zone = order.zone ?? property?.zone ?? client?.zone ?? 'Zona no registrada';
+            const crossesBreak = occupied.some((item) => morningSlots.includes(item)) && occupied.some((item) => afternoonSlots.includes(item));
             return (
-              <Pressable key={order.id} onPress={() => onSelectOrder(order.id)} style={[styles.mergedAppointment, selectedOrderId === order.id && styles.slotSelected, { top, height: scheduleBlockHeight(index, slots) }]}>
-                <View style={styles.slotTop}><Text style={styles.slotTime}>{scheduleRange(order.time, slots)}</Text><Pill label={order.status} tone={toneForStatus(order.status)} /></View>
+              <Pressable key={order.id} onPress={() => onSelectOrder(order.id)} style={[styles.mergedAppointment, selectedOrderId === order.id && styles.slotSelected, { top, height: scheduleBlockHeight(start, Math.max(start, end), extendedLayout) }]}>
+                <View style={styles.slotTop}><Text style={styles.slotTime}>{scheduleRangeForOrder(order, services, halfDay)}</Text><Pill label={order.status} tone={toneForStatus(order.status)} /></View>
                 <Text style={styles.clientName} numberOfLines={1}>{client?.name ?? 'Cliente'}</Text>
                 <Text style={styles.addressLine} numberOfLines={2}>{order.address}</Text>
                 <Text style={styles.zoneLine} numberOfLines={1}>{zone}</Text>
                 <Text style={styles.serviceLine} numberOfLines={3}>{orderDescription(order, service)}</Text>
                 <Text style={styles.cupoLine}>{slots} hora{slots !== 1 ? 's' : ''} · {slots} cupo{slots !== 1 ? 's' : ''}</Text>
-                {index < morningSlots.length && index + slots > morningSlots.length ? <Text style={styles.breakIncluded}>Incluye la pausa de almuerzo</Text> : null}
+                {crossesBreak ? <Text style={styles.breakIncluded}>Incluye la pausa de almuerzo</Text> : null}
               </Pressable>
             );
           }
           if (closedReason) return <View key={`${van.id}-${slot}`} style={[styles.absoluteSlot, styles.slotUnavailable, { top }]}><Text style={styles.slotTime}>{slotLabel(slot)}</Text><Text style={styles.unavailableText}>Cerrado</Text><Text style={styles.closedSlotReason} numberOfLines={2}>{closedReason}</Text></View>;
           if (!vanCanReceiveAppointments(van)) return <View key={`${van.id}-${slot}`} style={[styles.absoluteSlot, styles.slotUnavailable, { top }]}><Text style={styles.slotTime}>{slotLabel(slot)}</Text><Text style={styles.unavailableText}>{unavailableReason}</Text></View>;
+          if (extendedLayout && slot === extraMorningSlot && !halfDay) return <View key={`${van.id}-${slot}`} style={[styles.absoluteSlot, styles.slotUnavailable, { top }]}><Text style={styles.slotTime}>{slotLabel(slot)}</Text><Text style={styles.unavailableText}>Preparación / almuerzo</Text></View>;
+          if (halfDay && afternoonSlots.includes(slot)) return <View key={`${van.id}-${slot}`} style={[styles.absoluteSlot, styles.slotUnavailable, { top }]}><Text style={styles.slotTime}>{slotLabel(slot)}</Text><Text style={styles.unavailableText}>Tarde libre</Text></View>;
           return <Pressable key={`${van.id}-${slot}`} onPress={() => onCreate(slot)} style={[styles.absoluteSlot, styles.slotAvailable, { top }]}><Text style={styles.slotTime}>{slotLabel(slot)}</Text><Text style={styles.availableText}>Disponible</Text><Text style={styles.addSlot}>＋</Text></Pressable>;
         })}
       </View>
@@ -723,11 +758,11 @@ function VanColumn({ van, users, orders, services, clients, properties, selected
   );
 }
 
-function ScheduleHeader({ title, used, top }: { title: string; used: number; top: number }) {
-  return <View style={[styles.scheduleHeader, { top }]}><Text style={styles.groupTitle}>{title}</Text><Text style={[styles.cupos, used >= 3 && styles.cuposFull]}>{used}/3 horas</Text></View>;
+function ScheduleHeader({ title, used, capacity, top }: { title: string; used: number; capacity: number; top: number }) {
+  return <View style={[styles.scheduleHeader, { top }]}><Text style={styles.groupTitle}>{title}</Text><Text style={[styles.cupos, used >= capacity && styles.cuposFull]}>{used}/{capacity} horas</Text></View>;
 }
 
-function AppointmentDetails({ order, clients, properties, services, vans, users, onUpdate }: { order?: WorkOrder; clients: Client[]; properties: Property[]; services: ServiceType[]; vans: Van[]; users: { id: string; name: string }[]; onUpdate: (id: string, changes: Partial<WorkOrder>) => Promise<{ ok: boolean; message?: string }> }) {
+function AppointmentDetails({ order, halfDay, clients, properties, services, vans, users, onUpdate }: { order?: WorkOrder; halfDay: boolean; clients: Client[]; properties: Property[]; services: ServiceType[]; vans: Van[]; users: { id: string; name: string }[]; onUpdate: (id: string, changes: Partial<WorkOrder>) => Promise<{ ok: boolean; message?: string }> }) {
   if (!order) return <View style={styles.emptyDetails}><Text style={styles.detailTitle}>Detalles de la cita</Text><Text style={styles.detailMuted}>Selecciona una cita para ver la información completa.</Text></View>;
   const client = clients.find((item) => item.id === order.clientId);
   const property = properties.find((item) => item.id === order.propertyId);
@@ -735,7 +770,7 @@ function AppointmentDetails({ order, clients, properties, services, vans, users,
   const van = vans.find((item) => item.id === order.vanId);
   const slots = orderSlotCount(order, services);
   const techNames = order.technicianIds.map((id) => users.find((user) => user.id === id)?.name).filter(Boolean).join(' y ') || 'Sin técnico asignado';
-  return <View><View style={styles.detailHeader}><Pill label={order.status} tone={toneForStatus(order.status)} /><Text style={styles.detailId}>ID: {order.id}</Text></View><Text style={styles.detailTitle}>{client?.name}</Text><Text style={styles.detailSubtitle}>{service?.name ?? 'Trabajo programado'}</Text><View style={styles.detailTabs}><Text style={styles.detailTabActive}>Detalles</Text><Text style={styles.detailTab}>Cliente</Text><Text style={styles.detailTab}>Notas</Text></View><DetailRow label="Fecha y hora" value={`${formatDate(order.date, true)} · ${scheduleRange(order.time, slots)}`} /><DetailRow label="Duración" value={`${slots} hora${slots !== 1 ? 's' : ''}`} /><DetailRow label="Propiedad" value={property?.name} /><DetailRow label="Dirección" value={order.address} /><DetailRow label="Zona" value={order.zone ?? property?.zone ?? client?.zone} /><DetailRow label="Técnico asignado" value={techNames} /><DetailRow label="Van asignada" value={van?.name ?? 'Sin van'} /><DetailRow label="Descripción del trabajo" value={orderDescription(order, service)} />{order.airConditionerCount ? <DetailRow label="Cantidad de aires (cita anterior)" value={String(order.airConditionerCount)} /> : null}<View style={styles.detailActions}><Button variant="secondary" label="Editar cita" onPress={() => {}} /><Button label="Marcar completada" onPress={() => void onUpdate(order.id, { status: 'Completada', updatedAt: new Date().toISOString() })} /></View></View>;
+  return <View><View style={styles.detailHeader}><Pill label={order.status} tone={toneForStatus(order.status)} /><Text style={styles.detailId}>ID: {order.id}</Text></View><Text style={styles.detailTitle}>{client?.name}</Text><Text style={styles.detailSubtitle}>{service?.name ?? 'Trabajo programado'}</Text><View style={styles.detailTabs}><Text style={styles.detailTabActive}>Detalles</Text><Text style={styles.detailTab}>Cliente</Text><Text style={styles.detailTab}>Notas</Text></View><DetailRow label="Fecha y hora" value={`${formatDate(order.date, true)} · ${scheduleRangeForOrder(order, services, halfDay)}`} /><DetailRow label="Duración" value={`${slots} hora${slots !== 1 ? 's' : ''}`} /><DetailRow label="Propiedad" value={property?.name} /><DetailRow label="Dirección" value={order.address} /><DetailRow label="Zona" value={order.zone ?? property?.zone ?? client?.zone} /><DetailRow label="Técnico asignado" value={techNames} /><DetailRow label="Van asignada" value={van?.name ?? 'Sin van'} /><DetailRow label="Descripción del trabajo" value={orderDescription(order, service)} />{order.airConditionerCount ? <DetailRow label="Cantidad de aires (cita anterior)" value={String(order.airConditionerCount)} /> : null}<View style={styles.detailActions}><Button variant="secondary" label="Editar cita" onPress={() => {}} /><Button label="Marcar completada" onPress={() => void onUpdate(order.id, { status: 'Completada', updatedAt: new Date().toISOString() })} /></View></View>;
 }
 
 function SearchRow({ title, subtitle, active, onPress }: { title: string; subtitle: string; active: boolean; onPress: () => void }) {
