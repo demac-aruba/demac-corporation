@@ -2,7 +2,7 @@
   "name": "demac-cloud-functions",
   "version": "1.0.0",
   "description": "Secure backend functions for DEMAC Corporation integrations.",
-  "main": "index.js",
+  "main": "bootstrap.js",
   "engines": {
     "node": "22"
   },
