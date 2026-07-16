@@ -152,10 +152,10 @@ export function formatMoney(value: number) {
 
 export function statusTone(status: string): 'neutral' | 'success' | 'warning' | 'danger' | 'info' | 'purple' {
   if (['Pagada', 'Completada'].includes(status)) return 'success';
-  if (['Cancelada', 'Vencida'].includes(status)) return 'danger';
-  if (['En proceso', 'En camino', 'En el sitio', 'Parcial'].includes(status)) return 'warning';
+  if (['Cancelada', 'Reprogramada', 'Vencida'].includes(status)) return 'danger';
+  if (['Reserva temporal', 'En proceso', 'En camino', 'En el sitio', 'Parcial'].includes(status)) return 'warning';
   if (['Asignada', 'Confirmada', 'Enviada', 'Facturada'].includes(status)) return 'info';
-  if (['Pendiente', 'Reprogramada', 'Solicitud recibida'].includes(status)) return 'purple';
+  if (['Pendiente', 'Solicitud recibida'].includes(status)) return 'purple';
   return 'neutral';
 }
 

@@ -11,7 +11,7 @@ const DEFAULT_PHONE_NUMBER_ID = "1264611476725499";
 const DEFAULT_CLOSED_WEEKDAYS = [0];
 const REMINDER_SEARCH_DAYS = 60;
 const CUSTOMER_VISIBLE_FIELDS = ["date", "time", "address", "problem", "serviceId", "propertyId"];
-const NON_ACTIVE_STATUSES = new Set(["Cancelada", "Completada", "Facturada", "Pagada"]);
+const CONFIRMATION_INELIGIBLE_STATUSES = new Set(["Solicitud recibida", "Reserva temporal", "Cancelada", "Reprogramada", "Completada", "Facturada", "Pagada"]);
 
 function digitsOnly(value) {
   return String(value ?? "").replace(/\D/g, "");
@@ -97,8 +97,10 @@ function formatAppointmentTime(value, languageCode) {
   return `${displayHour}:${minute} ${suffix}`;
 }
 
-function activeAppointment(order) {
-  return order && !NON_ACTIVE_STATUSES.has(order.status);
+function confirmedAppointment(order) {
+  return order
+    && !CONFIRMATION_INELIGIBLE_STATUSES.has(order.status)
+    && order.whatsappNotificationsEnabled !== false;
 }
 
 function customerVisibleChanges(before, after) {
@@ -205,9 +207,10 @@ exports.queueAppointmentConfirmation = onDocumentWritten(
     const order = { id: afterSnapshot.id, ...afterSnapshot.data() };
     const created = !beforeSnapshot?.exists;
     const changedFields = created ? CUSTOMER_VISIBLE_FIELDS : customerVisibleChanges(before, order);
+    const becameConfirmed = !confirmedAppointment(before) && confirmedAppointment(order);
 
-    if (!created && changedFields.length === 0) return;
-    if (!activeAppointment(order)) return;
+    if (!confirmedAppointment(order)) return;
+    if (!created && !becameConfirmed && changedFields.length === 0) return;
 
     const client = await getClient(order.clientId);
     if (!client) {
@@ -224,7 +227,7 @@ exports.queueAppointmentConfirmation = onDocumentWritten(
       eventId: event.id,
       templateName: "appointment_confirmation",
       notificationType: "appointment-confirmation",
-      reason: created ? "appointment-created" : "appointment-updated",
+      reason: created ? "appointment-created" : becameConfirmed ? "appointment-confirmed" : "appointment-updated",
     });
 
     if (!notification) return;
@@ -233,7 +236,7 @@ exports.queueAppointmentConfirmation = onDocumentWritten(
       confirmationNotification: {
         queueId: notification.queueId,
         languageCode: notification.languageCode,
-        reason: created ? "appointment-created" : "appointment-updated",
+        reason: created ? "appointment-created" : becameConfirmed ? "appointment-confirmed" : "appointment-updated",
         changedFields,
         queuedAt: FieldValue.serverTimestamp(),
       },
@@ -278,7 +281,7 @@ exports.sendDailyAppointmentReminders = onSchedule(
 
     for (const document of ordersSnapshot.docs) {
       const order = { id: document.id, ...document.data() };
-      if (!activeAppointment(order)) continue;
+      if (!confirmedAppointment(order)) continue;
       if (!ordersByDate.has(order.date)) ordersByDate.set(order.date, []);
       ordersByDate.get(order.date).push(order);
     }

@@ -6,7 +6,7 @@ import { BusinessCalendarSettings, CalendarClosure, useCalendarState } from '../
 import { useTeamState } from '../state/TeamState';
 import { useVanHalfDayState, vanHasHalfDayOnDate } from '../state/VanHalfDayState';
 import { colors } from '../theme';
-import { AppointmentStatus, Client, DailyVanAssignment, Property, PropertyType, ServiceType, StaffAbsence, StaffProfile, Van, WorkOrder } from '../types';
+import { AppointmentStatus, Client, DailyVanAssignment, Property, PropertyType, ServiceType, StaffAbsence, StaffProfile, Van, WorkOrder, WorkOrderScheduleHistoryEntry } from '../types';
 
 const morningSlots = ['08:30', '09:30', '10:30'];
 const extraMorningSlot = '11:30';
@@ -124,12 +124,16 @@ function bookingSlots(halfDay: boolean) {
   return halfDay ? [...morningSlots, extraMorningSlot] : allSlots;
 }
 
-function orderOccupiedSlots(order: WorkOrder, services: ServiceType[], halfDay: boolean) {
-  const normalized = normalizeTime(order.time);
+function occupiedSlotsFor(time: string, slotCount: number, halfDay: boolean) {
+  const normalized = normalizeTime(time);
   const source = afternoonSlots.includes(normalized) ? afternoonSlots : bookingSlots(halfDay);
   const start = source.indexOf(normalized);
   if (start < 0) return [];
-  return source.slice(start, start + orderSlotCount(order, services));
+  return source.slice(start, start + slotCount);
+}
+
+function orderOccupiedSlots(order: WorkOrder, services: ServiceType[], halfDay: boolean) {
+  return occupiedSlotsFor(order.time, orderSlotCount(order, services), halfDay);
 }
 
 function scheduleRangeForOrder(order: WorkOrder, services: ServiceType[], halfDay: boolean) {
@@ -140,6 +144,42 @@ function scheduleRangeForOrder(order: WorkOrder, services: ServiceType[], halfDa
 
 function orderOccupiesSlot(order: WorkOrder, slot: string, services: ServiceType[], halfDay: boolean) {
   return orderOccupiedSlots(order, services, halfDay).includes(slot);
+}
+
+function orderBlocksCapacity(order: WorkOrder) {
+  return !['Cancelada', 'Reprogramada'].includes(order.status);
+}
+
+type CancelledSlotRecord = {
+  id: string;
+  workOrderId: string;
+  slot: string;
+  status: 'Cancelada' | 'Reprogramada';
+  clientId: string;
+  propertyId?: string;
+  address: string;
+  zone?: string;
+  problem: string;
+  vanId: string;
+  recordedAt?: string;
+};
+
+function scheduleHistoryEntry(order: WorkOrder, services: ServiceType[]): WorkOrderScheduleHistoryEntry {
+  return {
+    id: `history-${order.id}-${Date.now()}`,
+    date: order.date,
+    time: order.time,
+    vanId: order.vanId,
+    technicianIds: order.technicianIds,
+    scheduledSlots: orderSlotCount(order, services),
+    status: 'Reprogramada',
+    clientId: order.clientId,
+    propertyId: order.propertyId,
+    address: order.address,
+    zone: order.zone,
+    problem: order.problem,
+    recordedAt: new Date().toISOString(),
+  };
 }
 
 function toneForStatus(status: AppointmentStatus) {
@@ -301,6 +341,8 @@ export function AgendaScreen() {
   const [vanId, setVanId] = useState(teamVans[0]?.id ?? legacyVans[0]?.id ?? '');
   const [time, setTime] = useState('08:30');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [reschedulingOrderId, setReschedulingOrderId] = useState<string | null>(null);
+  const [sendWhatsApp, setSendWhatsApp] = useState(true);
   const [saving, setSaving] = useState(false);
   const [formMessage, setFormMessage] = useState('');
 
@@ -375,13 +417,44 @@ export function AgendaScreen() {
   const clientProperties = properties.filter((item) => item.clientId === clientId && item.active !== false);
   const selectedProperty = clientProperties.find((item) => item.id === propertyId);
   const selectedVan = agendaVans.find((item) => item.id === vanId);
-  const selectedOrder = orders.find((order) => order.id === selectedOrderId) ?? orders[0];
+  const activeOrders = orders.filter(orderBlocksCapacity);
+  const selectedOrder = activeOrders.find((order) => order.id === selectedOrderId) ?? activeOrders[0];
+  const reschedulingOrder = workOrders.find((order) => order.id === reschedulingOrderId);
   const monthTitle = new Date(`${calendarMonth}T12:00:00`).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
   const selectedCalendarStatus = calendarDateStatus(selectedDate, businessCalendarSettings, calendarClosures);
   const selectedDateClosed = selectedCalendarStatus.closed;
   const combinedDataError = halfDayError ?? calendarDataError ?? teamDataError ?? dataError;
   const isHalfDay = (candidateVanId: string, date = selectedDate) => vanHasHalfDayOnDate(candidateVanId, date, vanHalfDaySchedules);
   const extendedDayLayout = agendaVans.some((van) => isHalfDay(van.id));
+  const cancelledSlots = useMemo<CancelledSlotRecord[]>(() => {
+    const records: CancelledSlotRecord[] = [];
+    const pushRecord = (order: WorkOrder, data: WorkOrderScheduleHistoryEntry | WorkOrder) => {
+      const resolvedVanId = resolveStoredVanId(data.vanId, agendaVans, legacyVans);
+      const halfDay = isHalfDay(resolvedVanId, data.date);
+      const slotCount = 'scheduledSlots' in data && Number(data.scheduledSlots) > 0
+        ? Number(data.scheduledSlots)
+        : orderSlotCount(order, services);
+      occupiedSlotsFor(data.time, slotCount, halfDay).forEach((slot) => records.push({
+        id: `${order.id}-${'recordedAt' in data ? data.recordedAt : order.updatedAt ?? order.createdAt ?? ''}-${slot}`,
+        workOrderId: order.id,
+        slot,
+        status: data.status === 'Reprogramada' ? 'Reprogramada' : 'Cancelada',
+        clientId: data.clientId,
+        propertyId: data.propertyId,
+        address: data.address,
+        zone: data.zone,
+        problem: data.problem,
+        vanId: resolvedVanId,
+        recordedAt: 'recordedAt' in data ? data.recordedAt : order.cancelledAt ?? order.updatedAt,
+      }));
+    };
+
+    workOrders.forEach((order) => {
+      if (order.date === selectedDate && !orderBlocksCapacity(order)) pushRecord(order, order);
+      (order.scheduleHistory ?? []).filter((entry) => entry.date === selectedDate).forEach((entry) => pushRecord(order, entry));
+    });
+    return records.sort((a, b) => String(b.recordedAt ?? '').localeCompare(String(a.recordedAt ?? '')));
+  }, [workOrders, selectedDate, agendaVans, legacyVans, services, vanHalfDaySchedules]);
 
   const filteredClients = useMemo(() => {
     const needle = clientQuery.trim().toLowerCase();
@@ -394,7 +467,7 @@ export function AgendaScreen() {
     return selected ? [selected, ...matches.filter((client) => client.id !== selected.id).slice(0, 5)] : matches.slice(0, 6);
   }, [clients, clientQuery, clientId]);
 
-  const isAvailable = (candidateVan: AgendaVan, candidateTime: string, date = selectedDate) => {
+  const isAvailableFor = (candidateVan: AgendaVan, candidateTime: string, date: string, duration: number, ignoreOrderId?: string) => {
     if (calendarDateStatus(date, businessCalendarSettings, calendarClosures).closed) return false;
     if (!vanCanReceiveAppointments(candidateVan)) return false;
     const halfDay = isHalfDay(candidateVan.id, date);
@@ -402,15 +475,20 @@ export function AgendaScreen() {
     if (!halfDay && candidateTime === extraMorningSlot) return false;
     const candidateSchedule = bookingSlots(halfDay);
     const start = candidateSchedule.indexOf(candidateTime);
-    if (start < 0 || start + workHours > candidateSchedule.length) return false;
-    const candidateSlots = candidateSchedule.slice(start, start + workHours);
+    if (start < 0 || start + duration > candidateSchedule.length) return false;
+    const candidateSlots = candidateSchedule.slice(start, start + duration);
     return !workOrders.some(
       (order) =>
+        order.id !== ignoreOrderId &&
+        orderBlocksCapacity(order) &&
         order.date === date &&
         resolveStoredVanId(order.vanId, agendaVans, legacyVans) === candidateVan.id &&
         candidateSlots.some((slot) => orderOccupiesSlot(order, slot, services, halfDay)),
     );
   };
+
+  const isAvailable = (candidateVan: AgendaVan, candidateTime: string, date = selectedDate) =>
+    isAvailableFor(candidateVan, candidateTime, date, workHours, reschedulingOrderId ?? undefined);
 
   useEffect(() => {
     if (!selectedVan) return;
@@ -418,15 +496,30 @@ export function AgendaScreen() {
     const candidateSlots = bookingSlots(isHalfDay(selectedVan.id));
     const firstAvailable = candidateSlots.find((slot) => isAvailable(selectedVan, slot));
     if (firstAvailable) setTime(firstAvailable);
-  }, [workHours, vanId, selectedDate, workOrders, agendaVans, vanHalfDaySchedules]);
+  }, [workHours, vanId, selectedDate, workOrders, agendaVans, vanHalfDaySchedules, reschedulingOrderId]);
 
-  const openCreate = (candidateVanId?: string, candidateTime?: string) => {
+  const openCreate = (candidateVanId?: string, candidateTime?: string, cancelled?: CancelledSlotRecord) => {
     if (selectedDateClosed) return;
     clearDataError();
     setFormMessage('');
     setSuccessMessage('');
     setClientQuery('');
     setShowQuickClient(false);
+
+    if (reschedulingOrder) {
+      setClientId(reschedulingOrder.clientId);
+      setPropertyId(reschedulingOrder.propertyId ?? '');
+      setWorkDescriptionText(reschedulingOrder.problem);
+      setWorkHours(orderSlotCount(reschedulingOrder, services));
+      setSendWhatsApp(reschedulingOrder.whatsappNotificationsEnabled !== false);
+    } else if (cancelled) {
+      setClientId(cancelled.clientId);
+      setPropertyId(cancelled.propertyId ?? '');
+      setWorkDescriptionText(cancelled.problem);
+      setWorkHours(1);
+      setSendWhatsApp(true);
+    }
+
     if (candidateVanId) setVanId(candidateVanId);
     if (candidateTime) setTime(candidateTime);
     setShowCreate(true);
@@ -508,50 +601,106 @@ export function AgendaScreen() {
     setSuccessMessage(`${newClient.name} y ${newProperty.name} fueron agregados y seleccionados.`);
   };
 
-  const createOrder = async () => {
+  const saveAppointment = async (status: 'Reserva temporal' | 'Confirmada') => {
     const client = clients.find((item) => item.id === clientId);
     const van = agendaVans.find((item) => item.id === vanId);
     const description = workDescriptionText.trim();
     if (selectedDateClosed) return setFormMessage(`No se pueden crear citas: ${selectedCalendarStatus.reason}.`);
     if (!client) return setFormMessage('Primero selecciona o registra un cliente.');
-    if (!description) return setFormMessage('Escribe la descripción del trabajo antes de confirmar la cita.');
+    if (!description) return setFormMessage('Escribe la descripción del trabajo antes de guardar la cita.');
     if (!van) return setFormMessage('Selecciona una van.');
-    if (!isAvailable(van, time)) return setFormMessage('Ese horario no tiene suficientes horas consecutivas para este trabajo.');
+    if (!isAvailableFor(van, time, selectedDate, workHours, reschedulingOrderId ?? undefined)) return setFormMessage('Ese horario no tiene suficientes horas consecutivas para este trabajo.');
 
+    const now = new Date().toISOString();
     const zone = selectedProperty?.zone ?? client.zone;
-    const order: WorkOrder = {
-      id: `WO-${selectedDate.replaceAll('-', '').slice(2)}-${Date.now().toString().slice(-6)}`,
-      clientId,
-      propertyId: selectedProperty?.id,
-      serviceId: '',
-      date: selectedDate,
-      time,
-      status: van.technicianIds.length ? 'Asignada' : 'Confirmada',
-      technicianIds: van.technicianIds,
-      vanId,
-      address: selectedProperty?.address ?? client.address,
-      zone,
-      problem: description,
-      amount: 0,
-      paid: 0,
-      schedulingMode: 'fixed',
-      scheduledSlots: workHours,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
     setSaving(true);
     setFormMessage('');
-    const result = await addWorkOrder(order);
-    setSaving(false);
-    if (!result.ok) {
-      setFormMessage(result.message ?? 'No se pudo guardar la cita.');
-      return;
+
+    if (reschedulingOrder) {
+      const history = scheduleHistoryEntry(reschedulingOrder, services);
+      const result = await updateWorkOrder(reschedulingOrder.id, {
+        clientId,
+        propertyId: selectedProperty?.id,
+        date: selectedDate,
+        time,
+        status,
+        technicianIds: van.technicianIds,
+        vanId,
+        address: selectedProperty?.address ?? client.address,
+        zone,
+        problem: description,
+        scheduledSlots: workHours,
+        whatsappNotificationsEnabled: status === 'Confirmada' ? sendWhatsApp : false,
+        confirmedAt: status === 'Confirmada' ? now : reschedulingOrder.confirmedAt,
+        temporaryReservedAt: status === 'Reserva temporal' ? now : reschedulingOrder.temporaryReservedAt,
+        scheduleHistory: [...(reschedulingOrder.scheduleHistory ?? []), history],
+        updatedAt: now,
+      });
+      setSaving(false);
+      if (!result.ok) return setFormMessage(result.message ?? 'No se pudo reprogramar la cita.');
+      setSelectedOrderId(reschedulingOrder.id);
+      setReschedulingOrderId(null);
+    } else {
+      const order: WorkOrder = {
+        id: `WO-${selectedDate.replaceAll('-', '').slice(2)}-${Date.now().toString().slice(-6)}`,
+        clientId,
+        propertyId: selectedProperty?.id,
+        serviceId: '',
+        date: selectedDate,
+        time,
+        status,
+        technicianIds: van.technicianIds,
+        vanId,
+        address: selectedProperty?.address ?? client.address,
+        zone,
+        problem: description,
+        amount: 0,
+        paid: 0,
+        schedulingMode: 'fixed',
+        scheduledSlots: workHours,
+        whatsappNotificationsEnabled: status === 'Confirmada' ? sendWhatsApp : false,
+        confirmedAt: status === 'Confirmada' ? now : undefined,
+        temporaryReservedAt: status === 'Reserva temporal' ? now : undefined,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const result = await addWorkOrder(order);
+      setSaving(false);
+      if (!result.ok) return setFormMessage(result.message ?? 'No se pudo guardar la cita.');
+      setSelectedOrderId(order.id);
     }
 
-    setSelectedOrderId(order.id);
     setWorkDescriptionText('');
     setWorkHours(1);
+    setSendWhatsApp(true);
+    setShowCreate(false);
+  };
+
+  const confirmTemporaryAppointment = async (order: WorkOrder, enableWhatsApp: boolean) => {
+    const now = new Date().toISOString();
+    await updateWorkOrder(order.id, {
+      status: 'Confirmada',
+      whatsappNotificationsEnabled: enableWhatsApp,
+      confirmedAt: now,
+      updatedAt: now,
+    });
+  };
+
+  const cancelAppointment = async (order: WorkOrder) => {
+    const now = new Date().toISOString();
+    await updateWorkOrder(order.id, {
+      status: 'Cancelada',
+      whatsappNotificationsEnabled: false,
+      cancelledAt: now,
+      updatedAt: now,
+    });
+    if (selectedOrderId === order.id) setSelectedOrderId(null);
+  };
+
+  const startReschedule = (order: WorkOrder) => {
+    setReschedulingOrderId(order.id);
+    setSelectedDate(order.date);
+    setCalendarMonth(monthStart(order.date));
     setShowCreate(false);
   };
 
@@ -569,6 +718,8 @@ export function AgendaScreen() {
         subtitle="Selecciona cliente, propiedad, duración, van y horario. Cada van tiene 3 horas en la mañana y 3 horas en la tarde."
         action={<Button label={selectedDateClosed ? 'Día cerrado' : 'Nueva cita'} icon={selectedDateClosed ? '🔒' : '＋'} disabled={selectedDateClosed} onPress={() => openCreate()} />}
       />
+
+      {reschedulingOrder ? <View style={styles.rescheduleBanner}><View style={{ flex: 1 }}><Text style={styles.rescheduleTitle}>Modo reprogramación activo</Text><Text style={styles.rescheduleText}>Selecciona el nuevo día y después haz clic en un cupo disponible. El horario anterior quedará registrado en rojo como cancelado y reprogramado.</Text></View><Button compact variant="secondary" label="Cancelar reprogramación" onPress={() => setReschedulingOrderId(null)} /></View> : null}
 
       {selectedDateClosed ? <View style={styles.closedBanner}><View><Text style={styles.closedTitle}>Calendario cerrado para esta fecha</Text><Text style={styles.closedText}>{selectedCalendarStatus.reason}. Las citas existentes permanecen visibles, pero no se pueden crear citas nuevas.</Text></View></View> : null}
 
@@ -614,17 +765,17 @@ export function AgendaScreen() {
           </View>
           {dataLoading || teamLoading || calendarLoading || halfDayLoading ? <Text style={styles.syncText}>Sincronizando agenda, equipo y calendario…</Text> : null}
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <View style={styles.boardGrid}>{agendaVans.map((van) => <VanColumn key={van.id} van={van} halfDay={isHalfDay(van.id)} extendedLayout={extendedDayLayout} users={staffDirectory} orders={orders} services={services} clients={clients} properties={properties} selectedOrderId={selectedOrder?.id} onSelectOrder={setSelectedOrderId} onCreate={(slot) => openCreate(van.id, slot)} closedReason={selectedDateClosed ? selectedCalendarStatus.reason : undefined} />)}</View>
+            <View style={styles.boardGrid}>{agendaVans.map((van) => <VanColumn key={van.id} van={van} halfDay={isHalfDay(van.id)} extendedLayout={extendedDayLayout} users={staffDirectory} orders={activeOrders} cancelledSlots={cancelledSlots} services={services} clients={clients} properties={properties} selectedOrderId={selectedOrder?.id} onSelectOrder={setSelectedOrderId} onCreate={(slot) => openCreate(van.id, slot)} onCreateFromCancelled={(record) => openCreate(van.id, record.slot, record)} closedReason={selectedDateClosed ? selectedCalendarStatus.reason : undefined} />)}</View>
           </ScrollView>
-          <View style={styles.legendBar}><Text style={styles.legendTitle}>Leyenda de disponibilidad:</Text><Legend color="#EAF7E7" label="Disponible" /><Legend color="#EAF3FF" label="Ocupado" /><Legend color="#FDECEC" label="No disponible" /></View>
+          <View style={styles.legendBar}><Text style={styles.legendTitle}>Leyenda de disponibilidad:</Text><Legend color="#EAF7E7" label="Disponible" /><Legend color="#EAF3FF" label="Cita confirmada" /><Legend color="#FFF4D8" label="Reserva temporal" /><Legend color="#FDECEC" label="Cancelado y disponible" /><Legend color="#FDECEC" label="No disponible" /></View>
         </Card>
 
-        <Card style={styles.detailPanel}><AppointmentDetails order={selectedOrder} halfDay={selectedOrder ? isHalfDay(selectedOrder.vanId, selectedOrder.date) : false} clients={clients} properties={properties} services={services} vans={agendaVans} users={staffDirectory} onUpdate={updateWorkOrder} /></Card>
+        <Card style={styles.detailPanel}><AppointmentDetails order={selectedOrder} halfDay={selectedOrder ? isHalfDay(selectedOrder.vanId, selectedOrder.date) : false} clients={clients} properties={properties} services={services} vans={agendaVans} users={staffDirectory} onUpdate={updateWorkOrder} onConfirm={confirmTemporaryAppointment} onCancel={cancelAppointment} onReschedule={startReschedule} /></Card>
       </View>
 
       <AppModal
         visible={showCreate}
-        title={showQuickClient ? 'Agregar cliente rápido' : 'Confirmar nueva cita'}
+        title={showQuickClient ? 'Agregar cliente rápido' : reschedulingOrder ? 'Reprogramar cita' : 'Confirmar nueva cita'}
         onClose={() => {
           if (showQuickClient) {
             if (!quickClientSaving) setShowQuickClient(false);
@@ -695,8 +846,11 @@ export function AgendaScreen() {
             <Text style={styles.stepLabel}>6</Text>
             <Input label="Descripción del trabajo" value={workDescriptionText} onChangeText={setWorkDescriptionText} multiline placeholder="Ej. Dos servicios estándar, diagnóstico de una unidad e instalación de otra. Agrega instrucciones de acceso, contacto, síntomas y cualquier detalle necesario…" />
 
+            <Text style={styles.fieldLabel}>Notificaciones al confirmar</Text>
+            <View style={styles.optionWrap}><Option label="Enviar confirmación y recordatorio por WhatsApp" active={sendWhatsApp} onPress={() => setSendWhatsApp((value) => !value)} /></View>
+
             <View style={styles.summaryBox}><Text style={styles.summaryTitle}>Resumen de la cita</Text><Text style={styles.summaryLine}>{selectedClient?.name ?? 'Sin cliente'} · {selectedProperty?.name ?? selectedClient?.address ?? 'Sin dirección'}</Text><Text style={styles.summaryLine}>{workHours} hora{workHours !== 1 ? 's' : ''} · {selectedVan?.name} · {formatDate(selectedDate)} · {time}</Text><Text style={styles.summaryLine} numberOfLines={2}>{workDescriptionText.trim() || 'Falta agregar la descripción del trabajo.'}</Text></View>
-            <View style={styles.modalActions}><Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => setShowCreate(false)} /><Button label={saving ? 'Guardando…' : 'Confirmar cita'} disabled={saving || !clientId || !workDescriptionText.trim()} onPress={() => void createOrder()} /></View>
+            <View style={styles.modalActions}><Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => setShowCreate(false)} /><Button variant="secondary" label={saving ? 'Guardando…' : 'Reservar temporalmente'} disabled={saving || !clientId || !workDescriptionText.trim()} onPress={() => void saveAppointment('Reserva temporal')} /><Button label={saving ? 'Guardando…' : reschedulingOrder ? 'Guardar reprogramación' : 'Confirmar cita'} disabled={saving || !clientId || !workDescriptionText.trim()} onPress={() => void saveAppointment('Confirmada')} /></View>
           </ScrollView>
         )}
       </AppModal>
@@ -704,7 +858,7 @@ export function AgendaScreen() {
   );
 }
 
-function VanColumn({ van, halfDay, extendedLayout, users, orders, services, clients, properties, selectedOrderId, onSelectOrder, onCreate, closedReason }: { van: AgendaVan; halfDay: boolean; extendedLayout: boolean; users: { id: string; name: string }[]; orders: WorkOrder[]; services: ServiceType[]; clients: Client[]; properties: Property[]; selectedOrderId?: string; onSelectOrder: (id: string) => void; onCreate: (slot: string) => void; closedReason?: string }) {
+function VanColumn({ van, halfDay, extendedLayout, users, orders, cancelledSlots, services, clients, properties, selectedOrderId, onSelectOrder, onCreate, onCreateFromCancelled, closedReason }: { van: AgendaVan; halfDay: boolean; extendedLayout: boolean; users: { id: string; name: string }[]; orders: WorkOrder[]; cancelledSlots: CancelledSlotRecord[]; services: ServiceType[]; clients: Client[]; properties: Property[]; selectedOrderId?: string; onSelectOrder: (id: string) => void; onCreate: (slot: string) => void; onCreateFromCancelled: (record: CancelledSlotRecord) => void; closedReason?: string }) {
   const techNames = van.technicianIds.map((id) => users.find((user) => user.id === id)?.name.split(' ')[0]).filter(Boolean).join(' + ') || 'Sin equipo';
   const unavailableReason = van.status === 'Mantenimiento' ? 'Mantenimiento' : van.status === 'Fuera de servicio' ? 'Fuera de servicio' : 'Sin personal';
   const displaySlots = extendedLayout ? extendedSlots : allSlots;
@@ -723,6 +877,7 @@ function VanColumn({ van, halfDay, extendedLayout, users, orders, services, clie
         <ScheduleHeader title="TARDE" used={usedAfternoon} capacity={3} top={afternoonHeaderTop} />
         {displaySlots.map((slot, index) => {
           const order = orders.find((item) => item.vanId === van.id && orderOccupiesSlot(item, slot, services, halfDay));
+          const cancelled = cancelledSlots.find((item) => item.vanId === van.id && item.slot === slot);
           const top = scheduleSlotTop(index, extendedLayout);
           if (order) {
             const occupied = orderOccupiedSlots(order, services, halfDay);
@@ -736,7 +891,7 @@ function VanColumn({ van, halfDay, extendedLayout, users, orders, services, clie
             const zone = order.zone ?? property?.zone ?? client?.zone ?? 'Zona no registrada';
             const crossesBreak = occupied.some((item) => morningSlots.includes(item)) && occupied.some((item) => afternoonSlots.includes(item));
             return (
-              <Pressable key={order.id} onPress={() => onSelectOrder(order.id)} style={[styles.mergedAppointment, selectedOrderId === order.id && styles.slotSelected, { top, height: scheduleBlockHeight(start, Math.max(start, end), extendedLayout) }]}>
+              <Pressable key={order.id} onPress={() => onSelectOrder(order.id)} style={[styles.mergedAppointment, order.status === 'Reserva temporal' && styles.slotTemporary, selectedOrderId === order.id && styles.slotSelected, { top, height: scheduleBlockHeight(start, Math.max(start, end), extendedLayout) }]}>
                 <View style={styles.slotTop}><Text style={styles.slotTime}>{scheduleRangeForOrder(order, services, halfDay)}</Text><Pill label={order.status} tone={toneForStatus(order.status)} /></View>
                 <Text style={styles.clientName} numberOfLines={1}>{client?.name ?? 'Cliente'}</Text>
                 <Text style={styles.addressLine} numberOfLines={2}>{order.address}</Text>
@@ -751,6 +906,10 @@ function VanColumn({ van, halfDay, extendedLayout, users, orders, services, clie
           if (!vanCanReceiveAppointments(van)) return <View key={`${van.id}-${slot}`} style={[styles.absoluteSlot, styles.slotUnavailable, { top }]}><Text style={styles.slotTime}>{slotLabel(slot)}</Text><Text style={styles.unavailableText}>{unavailableReason}</Text></View>;
           if (extendedLayout && slot === extraMorningSlot && !halfDay) return <View key={`${van.id}-${slot}`} style={[styles.absoluteSlot, styles.slotUnavailable, { top }]}><Text style={styles.slotTime}>{slotLabel(slot)}</Text><Text style={styles.unavailableText}>Preparación / almuerzo</Text></View>;
           if (halfDay && afternoonSlots.includes(slot)) return <View key={`${van.id}-${slot}`} style={[styles.absoluteSlot, styles.slotUnavailable, { top }]}><Text style={styles.slotTime}>{slotLabel(slot)}</Text><Text style={styles.unavailableText}>Tarde libre</Text></View>;
+          if (cancelled) {
+            const client = clients.find((item) => item.id === cancelled.clientId);
+            return <Pressable key={cancelled.id} onPress={() => onCreateFromCancelled(cancelled)} style={[styles.absoluteSlot, styles.slotCancelledAvailable, { top }]}><Text style={styles.slotTime}>{slotLabel(slot)}</Text><Text style={styles.cancelledTitle}>{cancelled.status === 'Reprogramada' ? 'Cancelada y reprogramada' : 'Cancelada'} · Disponible</Text><Text style={styles.cancelledClient} numberOfLines={1}>{client?.name ?? 'Cliente'}</Text><Text style={styles.cancelledDescription} numberOfLines={1}>{cancelled.problem}</Text><Text style={styles.addSlot}>＋</Text></Pressable>;
+          }
           return <Pressable key={`${van.id}-${slot}`} onPress={() => onCreate(slot)} style={[styles.absoluteSlot, styles.slotAvailable, { top }]}><Text style={styles.slotTime}>{slotLabel(slot)}</Text><Text style={styles.availableText}>Disponible</Text><Text style={styles.addSlot}>＋</Text></Pressable>;
         })}
       </View>
@@ -762,7 +921,7 @@ function ScheduleHeader({ title, used, capacity, top }: { title: string; used: n
   return <View style={[styles.scheduleHeader, { top }]}><Text style={styles.groupTitle}>{title}</Text><Text style={[styles.cupos, used >= capacity && styles.cuposFull]}>{used}/{capacity} horas</Text></View>;
 }
 
-function AppointmentDetails({ order, halfDay, clients, properties, services, vans, users, onUpdate }: { order?: WorkOrder; halfDay: boolean; clients: Client[]; properties: Property[]; services: ServiceType[]; vans: Van[]; users: { id: string; name: string }[]; onUpdate: (id: string, changes: Partial<WorkOrder>) => Promise<{ ok: boolean; message?: string }> }) {
+function AppointmentDetails({ order, halfDay, clients, properties, services, vans, users, onUpdate, onConfirm, onCancel, onReschedule }: { order?: WorkOrder; halfDay: boolean; clients: Client[]; properties: Property[]; services: ServiceType[]; vans: Van[]; users: { id: string; name: string }[]; onUpdate: (id: string, changes: Partial<WorkOrder>) => Promise<{ ok: boolean; message?: string }>; onConfirm: (order: WorkOrder, enableWhatsApp: boolean) => Promise<void>; onCancel: (order: WorkOrder) => Promise<void>; onReschedule: (order: WorkOrder) => void }) {
   if (!order) return <View style={styles.emptyDetails}><Text style={styles.detailTitle}>Detalles de la cita</Text><Text style={styles.detailMuted}>Selecciona una cita para ver la información completa.</Text></View>;
   const client = clients.find((item) => item.id === order.clientId);
   const property = properties.find((item) => item.id === order.propertyId);
@@ -770,7 +929,7 @@ function AppointmentDetails({ order, halfDay, clients, properties, services, van
   const van = vans.find((item) => item.id === order.vanId);
   const slots = orderSlotCount(order, services);
   const techNames = order.technicianIds.map((id) => users.find((user) => user.id === id)?.name).filter(Boolean).join(' y ') || 'Sin técnico asignado';
-  return <View><View style={styles.detailHeader}><Pill label={order.status} tone={toneForStatus(order.status)} /><Text style={styles.detailId}>ID: {order.id}</Text></View><Text style={styles.detailTitle}>{client?.name}</Text><Text style={styles.detailSubtitle}>{service?.name ?? 'Trabajo programado'}</Text><View style={styles.detailTabs}><Text style={styles.detailTabActive}>Detalles</Text><Text style={styles.detailTab}>Cliente</Text><Text style={styles.detailTab}>Notas</Text></View><DetailRow label="Fecha y hora" value={`${formatDate(order.date, true)} · ${scheduleRangeForOrder(order, services, halfDay)}`} /><DetailRow label="Duración" value={`${slots} hora${slots !== 1 ? 's' : ''}`} /><DetailRow label="Propiedad" value={property?.name} /><DetailRow label="Dirección" value={order.address} /><DetailRow label="Zona" value={order.zone ?? property?.zone ?? client?.zone} /><DetailRow label="Técnico asignado" value={techNames} /><DetailRow label="Van asignada" value={van?.name ?? 'Sin van'} /><DetailRow label="Descripción del trabajo" value={orderDescription(order, service)} />{order.airConditionerCount ? <DetailRow label="Cantidad de aires (cita anterior)" value={String(order.airConditionerCount)} /> : null}<View style={styles.detailActions}><Button variant="secondary" label="Editar cita" onPress={() => {}} /><Button label="Marcar completada" onPress={() => void onUpdate(order.id, { status: 'Completada', updatedAt: new Date().toISOString() })} /></View></View>;
+  return <View><View style={styles.detailHeader}><Pill label={order.status} tone={toneForStatus(order.status)} /><Text style={styles.detailId}>ID: {order.id}</Text></View><Text style={styles.detailTitle}>{client?.name}</Text><Text style={styles.detailSubtitle}>{service?.name ?? 'Trabajo programado'}</Text><View style={styles.detailTabs}><Text style={styles.detailTabActive}>Detalles</Text><Text style={styles.detailTab}>Cliente</Text><Text style={styles.detailTab}>Notas</Text></View><DetailRow label="Fecha y hora" value={`${formatDate(order.date, true)} · ${scheduleRangeForOrder(order, services, halfDay)}`} /><DetailRow label="Duración" value={`${slots} hora${slots !== 1 ? 's' : ''}`} /><DetailRow label="Propiedad" value={property?.name} /><DetailRow label="Dirección" value={order.address} /><DetailRow label="Zona" value={order.zone ?? property?.zone ?? client?.zone} /><DetailRow label="Técnico asignado" value={techNames} /><DetailRow label="Van asignada" value={van?.name ?? 'Sin van'} /><DetailRow label="Descripción del trabajo" value={orderDescription(order, service)} />{order.airConditionerCount ? <DetailRow label="Cantidad de aires (cita anterior)" value={String(order.airConditionerCount)} /> : null}<View style={styles.detailActions}>{order.status === 'Reserva temporal' ? <><Button variant="success" label="Confirmar y enviar WhatsApp" onPress={() => void onConfirm(order, true)} /><Button variant="secondary" label="Confirmar sin WhatsApp" onPress={() => void onConfirm(order, false)} /></> : null}<Button variant="secondary" label="Reprogramar cita" onPress={() => onReschedule(order)} /><Button variant="danger" label="Cancelar cita" onPress={() => void onCancel(order)} />{order.status !== 'Reserva temporal' ? <Button label="Marcar completada" onPress={() => void onUpdate(order.id, { status: 'Completada', updatedAt: new Date().toISOString() })} /> : null}</View></View>;
 }
 
 function SearchRow({ title, subtitle, active, onPress }: { title: string; subtitle: string; active: boolean; onPress: () => void }) {
@@ -791,6 +950,9 @@ const styles = StyleSheet.create({
   closedBanner: { borderWidth: 1, borderColor: '#E8A9A7', backgroundColor: colors.dangerLight, borderRadius: 10, padding: 14 },
   closedTitle: { color: colors.danger, fontWeight: '900', fontSize: 13 },
   closedText: { color: colors.text, fontSize: 11, lineHeight: 17, marginTop: 4 },
+  rescheduleBanner: { flexDirection: 'row', alignItems: 'center', gap: 14, borderWidth: 1, borderColor: '#B9D7FF', backgroundColor: colors.infoLight, borderRadius: 10, padding: 14 },
+  rescheduleTitle: { color: colors.primaryDark, fontWeight: '900', fontSize: 13 },
+  rescheduleText: { color: colors.text, fontSize: 11, lineHeight: 17, marginTop: 4 },
   topPlanner: { flexDirection: 'row', alignItems: 'center', gap: 18, flexWrap: 'wrap' },
   topPlannerBlock: { flex: 1, minWidth: 260 },
   fieldCaption: { color: colors.muted, fontSize: 11, fontWeight: '700' },
@@ -851,12 +1013,17 @@ const styles = StyleSheet.create({
   absoluteSlot: { position: 'absolute', left: 12, right: 12, height: SLOT_HEIGHT, borderRadius: 8, borderWidth: 1, padding: 10, justifyContent: 'center', zIndex: 1 },
   mergedAppointment: { position: 'absolute', left: 12, right: 12, borderRadius: 8, borderWidth: 1, borderColor: '#B9D7FF', backgroundColor: colors.infoLight, padding: 10, paddingTop: 12, justifyContent: 'flex-start', zIndex: 3, overflow: 'hidden' },
   slotAvailable: { borderColor: '#B9E4B3', backgroundColor: '#F4FBF2' },
+  slotTemporary: { borderColor: '#E5C15A', backgroundColor: '#FFF8E5' },
+  slotCancelledAvailable: { borderColor: '#F2B8B5', backgroundColor: colors.dangerLight },
   slotUnavailable: { borderColor: '#F2B8B5', backgroundColor: colors.dangerLight },
   slotSelected: { borderColor: colors.primary, borderWidth: 2 },
   slotTop: { flexDirection: 'row', justifyContent: 'space-between', gap: 6, alignItems: 'center', minHeight: 18, marginBottom: 2 },
   slotTime: { color: colors.muted, fontSize: 10, fontWeight: '800' },
   availableText: { color: colors.primary, fontWeight: '900', fontSize: 12, marginTop: 5 },
   unavailableText: { color: colors.danger, fontWeight: '900', fontSize: 12, marginTop: 5 },
+  cancelledTitle: { color: colors.danger, fontWeight: '900', fontSize: 10, marginTop: 4 },
+  cancelledClient: { color: colors.text, fontWeight: '900', fontSize: 10, marginTop: 4, paddingRight: 18 },
+  cancelledDescription: { color: colors.muted, fontSize: 8, marginTop: 3, paddingRight: 18 },
   closedSlotReason: { color: colors.muted, fontSize: 9, lineHeight: 12, marginTop: 5, textAlign: 'center' },
   addSlot: { position: 'absolute', right: 10, bottom: 8, color: colors.primary, fontSize: 16, fontWeight: '900' },
   clientName: { color: colors.text, fontWeight: '900', fontSize: 12, lineHeight: 16, minHeight: 16, marginTop: 5 },
