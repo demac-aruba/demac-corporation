@@ -26,79 +26,86 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          from textwrap import dedent
 
           path = Path('src/screens/AgendaScreen.tsx')
           text = path.read_text()
 
-          old_start = """  const startReschedule = (order: WorkOrder) => {
-            setEditingOrderId(null);
-            setReschedulingOrderId(order.id);
-            setSelectedDate(order.date);
-            setCalendarMonth(monthStart(order.date));
-            setShowCreate(false);
-          };"""
-          new_start = """  const startReschedule = (order: WorkOrder) => {
-            setEditingOrderId(null);
-            setReschedulingOrderId(order.id);
-            setSelectedDate(order.date);
-            setCalendarMonth(monthStart(order.date));
-            setClientId(order.clientId);
-            setPropertyId(order.propertyId ?? '');
-            setWorkDescriptionText(order.problem);
-            setWorkHours(orderSlotCount(order, services));
-            setVanId(resolveStoredVanId(order.vanId, agendaVans, legacyVans));
-            setTime(normalizeTime(order.time));
-            setSendWhatsApp(order.whatsappNotificationsEnabled !== false);
-            setFormMessage('');
-            setSuccessMessage('');
-            setShowQuickClient(false);
-            setShowCreate(true);
-          };"""
+          old_start = dedent("""\
+            const startReschedule = (order: WorkOrder) => {
+              setEditingOrderId(null);
+              setReschedulingOrderId(order.id);
+              setSelectedDate(order.date);
+              setCalendarMonth(monthStart(order.date));
+              setShowCreate(false);
+            };""")
+          new_start = dedent("""\
+            const startReschedule = (order: WorkOrder) => {
+              setEditingOrderId(null);
+              setReschedulingOrderId(order.id);
+              setSelectedDate(order.date);
+              setCalendarMonth(monthStart(order.date));
+              setClientId(order.clientId);
+              setPropertyId(order.propertyId ?? '');
+              setWorkDescriptionText(order.problem);
+              setWorkHours(orderSlotCount(order, services));
+              setVanId(resolveStoredVanId(order.vanId, agendaVans, legacyVans));
+              setTime(normalizeTime(order.time));
+              setSendWhatsApp(order.whatsappNotificationsEnabled !== false);
+              setFormMessage('');
+              setSuccessMessage('');
+              setShowQuickClient(false);
+              setShowCreate(true);
+            };""")
           if old_start not in text:
               raise SystemExit('startReschedule block not found')
           text = text.replace(old_start, new_start, 1)
 
-          old_close = """          if (!saving) {
-            setShowCreate(false);
-            setEditingOrderId(null);
-          }"""
-          new_close = """          if (!saving) {
-            setShowCreate(false);
-            setEditingOrderId(null);
-            setReschedulingOrderId(null);
-          }"""
+          old_close = dedent("""\
+                  if (!saving) {
+                    setShowCreate(false);
+                    setEditingOrderId(null);
+                  }""")
+          new_close = dedent("""\
+                  if (!saving) {
+                    setShowCreate(false);
+                    setEditingOrderId(null);
+                    setReschedulingOrderId(null);
+                  }""")
           if old_close not in text:
               raise SystemExit('modal close block not found')
           text = text.replace(old_close, new_close, 1)
 
-          intro = """            <Text style={styles.modalIntro}>Selecciona el cliente y la propiedad, define cuántas horas ocupará el trabajo y escribe toda la descripción necesaria.</Text>
-            {!clients.length ?"""
-          date_picker = """            <Text style={styles.modalIntro}>Selecciona el cliente y la propiedad, define cuántas horas ocupará el trabajo y escribe toda la descripción necesaria.</Text>
-            {reschedulingOrder ? (
-              <View style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 12, marginBottom: 15 }}>
-                <Text style={styles.quickSectionTitle}>Nueva fecha de la cita</Text>
-                <Text style={styles.fallbackText}>Fecha seleccionada: {formatDate(selectedDate, true)}</Text>
-                <View style={styles.monthHeader}>
-                  <Pressable accessibilityLabel="Mes anterior" onPress={() => setCalendarMonth((current) => addMonths(current, -1))} style={styles.monthNavButton}><Text style={styles.monthNavText}>‹</Text></Pressable>
-                  <Text style={styles.monthTitle}>{monthTitle}</Text>
-                  <Pressable accessibilityLabel="Mes siguiente" onPress={() => setCalendarMonth((current) => addMonths(current, 1))} style={styles.monthNavButton}><Text style={styles.monthNavText}>›</Text></Pressable>
-                </View>
-                <View style={styles.calendarWeekHeader}>{['DOM', 'LUN', 'MAR', 'MIÉ', 'JUE', 'VIE', 'SÁB'].map((label) => <Text key={`reschedule-${label}`} style={styles.calendarWeekdayCell}>{label}</Text>)}</View>
-                <View style={styles.calendarGrid}>{calendarCells.map((date, index) => {
-                  if (!date) return <View key={`reschedule-empty-${index}`} style={styles.calendarEmptyDay} />;
-                  const active = date === selectedDate;
-                  const dateStatus = calendarDateStatus(date, businessCalendarSettings, calendarClosures);
-                  return <Pressable key={`reschedule-${date}`} disabled={dateStatus.closed} accessibilityLabel={formatDate(date, true)} onPress={() => setSelectedDate(date)} style={[styles.calendarDay, dateStatus.closed && styles.calendarDayClosed, active && styles.calendarDayActive]}><Text style={[styles.calendarNumber, active && styles.calendarDayTextActive]}>{Number(date.slice(-2))}</Text>{dateStatus.closed ? <Text style={[styles.calendarClosedLabel, active && styles.calendarDayTextActive]}>•</Text> : null}</Pressable>;
-                })}</View>
-              </View>
-            ) : null}
-            {!clients.length ?"""
+          intro = dedent("""\
+                    <Text style={styles.modalIntro}>Selecciona el cliente y la propiedad, define cuántas horas ocupará el trabajo y escribe toda la descripción necesaria.</Text>
+                    {!clients.length ?""")
+          date_picker = dedent("""\
+                    <Text style={styles.modalIntro}>Selecciona el cliente y la propiedad, define cuántas horas ocupará el trabajo y escribe toda la descripción necesaria.</Text>
+                    {reschedulingOrder ? (
+                      <View style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 12, marginBottom: 15 }}>
+                        <Text style={styles.quickSectionTitle}>Nueva fecha de la cita</Text>
+                        <Text style={styles.fallbackText}>Fecha seleccionada: {formatDate(selectedDate, true)}</Text>
+                        <View style={styles.monthHeader}>
+                          <Pressable accessibilityLabel="Mes anterior" onPress={() => setCalendarMonth((current) => addMonths(current, -1))} style={styles.monthNavButton}><Text style={styles.monthNavText}>‹</Text></Pressable>
+                          <Text style={styles.monthTitle}>{monthTitle}</Text>
+                          <Pressable accessibilityLabel="Mes siguiente" onPress={() => setCalendarMonth((current) => addMonths(current, 1))} style={styles.monthNavButton}><Text style={styles.monthNavText}>›</Text></Pressable>
+                        </View>
+                        <View style={styles.calendarWeekHeader}>{['DOM', 'LUN', 'MAR', 'MIÉ', 'JUE', 'VIE', 'SÁB'].map((label) => <Text key={`reschedule-${label}`} style={styles.calendarWeekdayCell}>{label}</Text>)}</View>
+                        <View style={styles.calendarGrid}>{calendarCells.map((date, index) => {
+                          if (!date) return <View key={`reschedule-empty-${index}`} style={styles.calendarEmptyDay} />;
+                          const active = date === selectedDate;
+                          const dateStatus = calendarDateStatus(date, businessCalendarSettings, calendarClosures);
+                          return <Pressable key={`reschedule-${date}`} disabled={dateStatus.closed} accessibilityLabel={formatDate(date, true)} onPress={() => setSelectedDate(date)} style={[styles.calendarDay, dateStatus.closed && styles.calendarDayClosed, active && styles.calendarDayActive]}><Text style={[styles.calendarNumber, active && styles.calendarDayTextActive]}>{Number(date.slice(-2))}</Text>{dateStatus.closed ? <Text style={[styles.calendarClosedLabel, active && styles.calendarDayTextActive]}>•</Text> : null}</Pressable>;
+                        })}</View>
+                      </View>
+                    ) : null}
+                    {!clients.length ?""")
           if intro not in text:
               raise SystemExit('modal intro insertion point not found')
           text = text.replace(intro, date_picker, 1)
 
-          old_cancel = """              <Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => { setShowCreate(false); setEditingOrderId(null); }} />"""
-          new_cancel = """              <Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => { setShowCreate(false); setEditingOrderId(null); setReschedulingOrderId(null); }} />"""
+          old_cancel = '              <Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => { setShowCreate(false); setEditingOrderId(null); }} />'
+          new_cancel = '              <Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => { setShowCreate(false); setEditingOrderId(null); setReschedulingOrderId(null); }} />'
           if old_cancel not in text:
               raise SystemExit('modal cancel button not found')
           text = text.replace(old_cancel, new_cancel, 1)
