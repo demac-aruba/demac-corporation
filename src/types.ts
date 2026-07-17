@@ -118,6 +118,8 @@ export interface Client {
   phone: string;
   whatsapp: string;
   email?: string;
+  preferredLanguage?: 'Español' | 'English' | 'Nederlands' | 'Papiamento';
+  templateLanguage?: 'en' | 'es' | 'nl';
   address: string;
   zone: string;
   balance: number;
@@ -157,6 +159,22 @@ export interface Property {
   active: boolean;
   createdAt?: string;
   updatedAt?: string;
+}
+
+export type AppointmentNotificationRecipientType = 'client' | 'propertyContact';
+
+export interface AppointmentNotificationRecipient {
+  id: string;
+  recipientType: AppointmentNotificationRecipientType;
+  sourceId: string;
+  name: string;
+  role: string;
+  phone: string;
+  whatsapp: string;
+  preferredLanguage: PropertyContactLanguage;
+  templateLanguage?: 'en' | 'es' | 'nl';
+  sendConfirmation: boolean;
+  sendReminder: boolean;
 }
 
 export interface Equipment {
@@ -255,6 +273,7 @@ export interface WorkOrder {
   airConditionerCount?: number;
   scheduledSlots?: number;
   whatsappNotificationsEnabled?: boolean;
+  notificationRecipients?: AppointmentNotificationRecipient[];
   confirmedAt?: string;
   temporaryReservedAt?: string;
   cancelledAt?: string;

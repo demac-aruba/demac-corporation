@@ -6,7 +6,7 @@ import { BusinessCalendarSettings, CalendarClosure, useCalendarState } from '../
 import { useTeamState } from '../state/TeamState';
 import { useVanHalfDayState, vanHasHalfDayOnDate } from '../state/VanHalfDayState';
 import { colors } from '../theme';
-import { AppointmentChangeOrigin, AppointmentChangeReasonCategory, AppointmentStatus, Client, DailyVanAssignment, Property, PropertyContact, PropertyContactLanguage, PropertyContactRole, PropertyType, ServiceType, StaffAbsence, StaffProfile, Van, WorkOrder, WorkOrderScheduleHistoryEntry } from '../types';
+import { AppointmentChangeOrigin, AppointmentChangeReasonCategory, AppointmentNotificationRecipient, AppointmentStatus, Client, DailyVanAssignment, Property, PropertyContact, PropertyContactLanguage, PropertyContactRole, PropertyType, ServiceType, StaffAbsence, StaffProfile, Van, WorkOrder, WorkOrderScheduleHistoryEntry } from '../types';
 
 const morningSlots = ['08:30', '09:30', '10:30'];
 const extraMorningSlot = '11:30';
@@ -105,6 +105,76 @@ const emptyQuickContactForm: QuickContactForm = {
   email: '',
   preferredLanguage: 'Español',
 };
+
+function clientNotificationLanguage(client: Client): PropertyContactLanguage {
+  if (client.preferredLanguage) return client.preferredLanguage;
+  if (client.templateLanguage === 'es') return 'Español';
+  if (client.templateLanguage === 'nl') return 'Nederlands';
+  return 'English';
+}
+
+function clientNotificationRecipient(client: Client): AppointmentNotificationRecipient {
+  return {
+    id: `client-${client.id}`,
+    recipientType: 'client',
+    sourceId: client.id,
+    name: client.name || client.company || 'Cliente',
+    role: 'Cliente / facturación',
+    phone: client.phone,
+    whatsapp: client.whatsapp || client.phone,
+    preferredLanguage: clientNotificationLanguage(client),
+    templateLanguage: client.templateLanguage,
+    sendConfirmation: true,
+    sendReminder: true,
+  };
+}
+
+function contactNotificationRecipient(contact: PropertyContact): AppointmentNotificationRecipient {
+  return {
+    id: `contact-${contact.id}`,
+    recipientType: 'propertyContact',
+    sourceId: contact.id,
+    name: contact.name,
+    role: contact.role,
+    phone: contact.phone,
+    whatsapp: contact.whatsapp || contact.phone,
+    preferredLanguage: contact.preferredLanguage,
+    sendConfirmation: false,
+    sendReminder: false,
+  };
+}
+
+function buildNotificationRecipients(
+  client?: Client,
+  property?: Property,
+  saved?: AppointmentNotificationRecipient[],
+  legacyEnabled = true,
+) {
+  const available = [
+    ...(client ? [clientNotificationRecipient(client)] : []),
+    ...((property?.contacts ?? []).filter((contact) => contact.active !== false).map(contactNotificationRecipient)),
+  ];
+  if (!saved?.length) {
+    return available.map((recipient, index) => ({
+      ...recipient,
+      sendConfirmation: index === 0 ? legacyEnabled : false,
+      sendReminder: index === 0 ? legacyEnabled : false,
+    }));
+  }
+  const savedBySource = new Map(saved.map((recipient) => [`${recipient.recipientType}:${recipient.sourceId}`, recipient]));
+  const availableKeys = new Set(available.map((recipient) => `${recipient.recipientType}:${recipient.sourceId}`));
+  return [
+    ...available.map((recipient) => {
+      const previous = savedBySource.get(`${recipient.recipientType}:${recipient.sourceId}`);
+      return previous ? {
+        ...recipient,
+        sendConfirmation: previous.sendConfirmation === true,
+        sendReminder: previous.sendReminder === true,
+      } : recipient;
+    }),
+    ...saved.filter((recipient) => !availableKeys.has(`${recipient.recipientType}:${recipient.sourceId}`)),
+  ];
+}
 
 function localDateKey(date = new Date()) {
   const year = date.getFullYear();
@@ -437,7 +507,7 @@ export function AgendaScreen() {
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [reschedulingOrderId, setReschedulingOrderId] = useState<string | null>(null);
-  const [sendWhatsApp, setSendWhatsApp] = useState(true);
+  const [notificationRecipients, setNotificationRecipients] = useState<AppointmentNotificationRecipient[]>([]);
   const [saving, setSaving] = useState(false);
   const [formMessage, setFormMessage] = useState('');
   const [showChangeReason, setShowChangeReason] = useState(false);
@@ -525,6 +595,21 @@ export function AgendaScreen() {
   const selectedOrder = activeOrders.find((order) => order.id === selectedOrderId) ?? activeOrders[0];
   const editingOrder = workOrders.find((order) => order.id === editingOrderId);
   const reschedulingOrder = workOrders.find((order) => order.id === reschedulingOrderId);
+
+  useEffect(() => {
+    if (!showCreate || showQuickClient || showQuickProperty || showQuickContact) return;
+    const sourceOrder = editingOrder ?? reschedulingOrder;
+    const sourceMatches = sourceOrder
+      && sourceOrder.clientId === clientId
+      && (sourceOrder.propertyId ?? '') === propertyId;
+    setNotificationRecipients(buildNotificationRecipients(
+      selectedClient,
+      selectedProperty,
+      sourceMatches ? sourceOrder.notificationRecipients : undefined,
+      sourceMatches ? sourceOrder.whatsappNotificationsEnabled !== false : true,
+    ));
+  }, [clientId, propertyId, editingOrderId, reschedulingOrderId, showCreate]);
+
   const monthTitle = new Date(`${calendarMonth}T12:00:00`).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
   const selectedCalendarStatus = calendarDateStatus(selectedDate, businessCalendarSettings, calendarClosures);
   const selectedDateClosed = selectedCalendarStatus.closed;
@@ -617,15 +702,20 @@ export function AgendaScreen() {
       setPropertyId(sourceOrder.propertyId ?? '');
       setWorkDescriptionText(sourceOrder.problem);
       setWorkHours(orderSlotCount(sourceOrder, services));
-      setSendWhatsApp(sourceOrder.whatsappNotificationsEnabled !== false);
+      const sourceClient = clients.find((item) => item.id === sourceOrder.clientId);
+      const sourceProperty = properties.find((item) => item.id === sourceOrder.propertyId);
+      setNotificationRecipients(buildNotificationRecipients(sourceClient, sourceProperty, sourceOrder.notificationRecipients, sourceOrder.whatsappNotificationsEnabled !== false));
     } else if (cancelled) {
       setClientId(cancelled.clientId);
       setPropertyId(cancelled.propertyId ?? '');
       setWorkDescriptionText(cancelled.problem);
       setWorkHours(1);
-      setSendWhatsApp(true);
+      const cancelledClient = clients.find((item) => item.id === cancelled.clientId);
+      const cancelledProperty = properties.find((item) => item.id === cancelled.propertyId);
+      setNotificationRecipients(buildNotificationRecipients(cancelledClient, cancelledProperty));
     }
 
+    if (!sourceOrder && !cancelled) setNotificationRecipients(buildNotificationRecipients(selectedClient, selectedProperty));
     if (candidateVanId) setVanId(candidateVanId);
     if (candidateTime) setTime(candidateTime);
     setShowCreate(true);
@@ -776,9 +866,17 @@ export function AgendaScreen() {
     });
     setQuickContactSaving(false);
     if (!result.ok) return setQuickContactMessage(result.message ?? 'No se pudo guardar la persona encargada.');
+    setNotificationRecipients((previous) => [
+      ...previous.filter((recipient) => !(recipient.recipientType === 'propertyContact' && recipient.sourceId === contact.id)),
+      contactNotificationRecipient(contact),
+    ]);
     setQuickContact(emptyQuickContactForm);
     setShowQuickContact(false);
     setSuccessMessage(`${contact.name} fue agregado como contacto de ${selectedProperty.name}.`);
+  };
+
+  const toggleNotificationRecipient = (recipientId: string, field: 'sendConfirmation' | 'sendReminder') => {
+    setNotificationRecipients((previous) => previous.map((recipient) => recipient.id === recipientId ? { ...recipient, [field]: !recipient[field] } : recipient));
   };
 
   const saveAppointment = async (status: 'Reserva temporal' | 'Confirmada') => {
@@ -793,6 +891,8 @@ export function AgendaScreen() {
 
     const now = new Date().toISOString();
     const zone = selectedProperty?.zone ?? client.zone;
+    const notificationSnapshot = notificationRecipients.map((recipient) => ({ ...recipient }));
+    const notificationsEnabled = notificationSnapshot.some((recipient) => recipient.sendConfirmation || recipient.sendReminder);
     setSaving(true);
     setFormMessage('');
 
@@ -817,7 +917,8 @@ export function AgendaScreen() {
         zone,
         problem: description,
         scheduledSlots: workHours,
-        whatsappNotificationsEnabled: editingOrder.status === 'Reserva temporal' ? false : sendWhatsApp,
+        whatsappNotificationsEnabled: editingOrder.status === 'Reserva temporal' ? false : notificationsEnabled,
+        notificationRecipients: notificationSnapshot,
                 scheduleHistory: editingOrder.scheduleHistory,
         updatedAt: now,
       });
@@ -849,7 +950,8 @@ export function AgendaScreen() {
         zone,
         problem: description,
         scheduledSlots: workHours,
-        whatsappNotificationsEnabled: status === 'Confirmada' ? sendWhatsApp : false,
+        whatsappNotificationsEnabled: status === 'Confirmada' ? notificationsEnabled : false,
+        notificationRecipients: notificationSnapshot,
         confirmedAt: status === 'Confirmada' ? now : reschedulingOrder.confirmedAt,
         temporaryReservedAt: status === 'Reserva temporal' ? now : reschedulingOrder.temporaryReservedAt,
         scheduleHistory: [...(reschedulingOrder.scheduleHistory ?? []), history],
@@ -878,7 +980,8 @@ export function AgendaScreen() {
         paid: 0,
         schedulingMode: 'fixed',
         scheduledSlots: workHours,
-        whatsappNotificationsEnabled: status === 'Confirmada' ? sendWhatsApp : false,
+        whatsappNotificationsEnabled: status === 'Confirmada' ? notificationsEnabled : false,
+        notificationRecipients: notificationSnapshot,
         confirmedAt: status === 'Confirmada' ? now : undefined,
         temporaryReservedAt: status === 'Reserva temporal' ? now : undefined,
         createdAt: now,
@@ -892,15 +995,16 @@ export function AgendaScreen() {
 
     setWorkDescriptionText('');
     setWorkHours(1);
-    setSendWhatsApp(true);
+    setNotificationRecipients([]);
     setShowCreate(false);
   };
 
   const confirmTemporaryAppointment = async (order: WorkOrder, enableWhatsApp: boolean) => {
     const now = new Date().toISOString();
+    const hasSelectedRecipients = (order.notificationRecipients ?? []).some((recipient) => recipient.sendConfirmation || recipient.sendReminder);
     await updateWorkOrder(order.id, {
       status: 'Confirmada',
-      whatsappNotificationsEnabled: enableWhatsApp,
+      whatsappNotificationsEnabled: enableWhatsApp && (order.notificationRecipients?.length ? hasSelectedRecipients : true),
       confirmedAt: now,
       updatedAt: now,
     });
@@ -964,7 +1068,6 @@ const confirmAppointmentChangeReason = async () => {
   setWorkHours(orderSlotCount(order, services));
   setVanId(resolveStoredVanId(order.vanId, agendaVans, legacyVans));
   setTime(normalizeTime(order.time));
-  setSendWhatsApp(order.whatsappNotificationsEnabled !== false);
   setFormMessage('');
   setSuccessMessage('');
   setShowQuickClient(false);
@@ -985,7 +1088,6 @@ const cancelAppointment = async (order: WorkOrder) => { openAppointmentChangeRea
     setWorkHours(orderSlotCount(order, services));
     setVanId(resolveStoredVanId(order.vanId, agendaVans, legacyVans));
     setTime(normalizeTime(order.time));
-    setSendWhatsApp(order.whatsappNotificationsEnabled !== false);
     setFormMessage('');
     setSuccessMessage('');
     setShowQuickClient(false);
@@ -1218,8 +1320,27 @@ if (!saving) {
             <Text style={styles.stepLabel}>6</Text>
             <Input label="Descripción del trabajo" value={workDescriptionText} onChangeText={setWorkDescriptionText} multiline placeholder="Ej. Dos servicios estándar, diagnóstico de una unidad e instalación de otra. Agrega instrucciones de acceso, contacto, síntomas y cualquier detalle necesario…" />
 
-            <Text style={styles.fieldLabel}>Notificaciones al confirmar</Text>
-            <View style={styles.optionWrap}><Option label="Enviar confirmación y recordatorio por WhatsApp" active={sendWhatsApp} onPress={() => setSendWhatsApp((value) => !value)} /></View>
+            <Text style={styles.fieldLabel}>Notificaciones por WhatsApp</Text>
+  <Text style={styles.notificationHelp}>Selecciona de forma independiente quién recibe la confirmación y quién recibe el recordatorio. Las reservas temporales guardan esta selección, pero no envían mensajes hasta que la cita sea confirmada.</Text>
+  <View style={styles.notificationMatrix}>
+    <View style={[styles.notificationRow, styles.notificationHeaderRow]}>
+      <Text style={[styles.notificationHeaderText, { flex: 1 }]}>Destinatario</Text>
+      <Text style={styles.notificationColumnHeader}>Confirmar cita</Text>
+      <Text style={styles.notificationColumnHeader}>Recordar cita</Text>
+    </View>
+    {notificationRecipients.map((recipient) => (
+      <View key={recipient.id} style={styles.notificationRow}>
+        <View style={{ flex: 1, minWidth: 180 }}>
+          <Text style={styles.notificationName}>{recipient.name}</Text>
+          <Text style={styles.notificationMeta}>{recipient.role} · {recipient.whatsapp || recipient.phone} · {recipient.preferredLanguage}</Text>
+        </View>
+        <Pressable accessibilityLabel={`Confirmación para ${recipient.name}`} onPress={() => toggleNotificationRecipient(recipient.id, 'sendConfirmation')} style={[styles.notificationCheck, recipient.sendConfirmation && styles.notificationCheckActive]}><Text style={[styles.notificationCheckText, recipient.sendConfirmation && styles.notificationCheckTextActive]}>{recipient.sendConfirmation ? '✓' : ''}</Text></Pressable>
+        <Pressable accessibilityLabel={`Recordatorio para ${recipient.name}`} onPress={() => toggleNotificationRecipient(recipient.id, 'sendReminder')} style={[styles.notificationCheck, recipient.sendReminder && styles.notificationCheckActive]}><Text style={[styles.notificationCheckText, recipient.sendReminder && styles.notificationCheckTextActive]}>{recipient.sendReminder ? '✓' : ''}</Text></Pressable>
+      </View>
+    ))}
+    {!notificationRecipients.length ? <Text style={styles.notificationEmpty}>Selecciona un cliente o registra una persona con WhatsApp.</Text> : null}
+  </View>
+  {notificationRecipients.some((recipient) => recipient.sendConfirmation || recipient.sendReminder) ? null : <Text style={styles.notificationDisabledText}>No se enviarán mensajes de WhatsApp para esta cita.</Text>}
 
             <View style={styles.summaryBox}><Text style={styles.summaryTitle}>Resumen de la cita</Text><Text style={styles.summaryLine}>{selectedClient?.name ?? 'Sin cliente'} · {selectedProperty?.name ?? selectedClient?.address ?? 'Sin dirección'}</Text><Text style={styles.summaryLine}>{workHours} hora{workHours !== 1 ? 's' : ''} · {selectedVan?.name} · {formatDate(selectedDate)} · {time}</Text><Text style={styles.summaryLine} numberOfLines={2}>{workDescriptionText.trim() || 'Falta agregar la descripción del trabajo.'}</Text></View>
             <View style={styles.modalActions}>
@@ -1352,7 +1473,9 @@ function AppointmentDetails({ order, halfDay, clients, properties, services, van
   const van = vans.find((item) => item.id === order.vanId);
   const slots = orderSlotCount(order, services);
   const techNames = order.technicianIds.map((id) => users.find((user) => user.id === id)?.name).filter(Boolean).join(' y ') || 'Sin técnico asignado';
-  return <View><View style={styles.detailHeader}><Pill label={order.status} tone={toneForStatus(order.status)} /><Text style={styles.detailId}>ID: {order.id}</Text></View><Text style={styles.detailTitle}>{client?.name}</Text><Text style={styles.detailSubtitle}>{service?.name ?? 'Trabajo programado'}</Text><View style={styles.detailTabs}><Text style={styles.detailTabActive}>Detalles</Text><Text style={styles.detailTab}>Cliente</Text><Text style={styles.detailTab}>Notas</Text></View><DetailRow label="Fecha y hora" value={`${formatDate(order.date, true)} · ${scheduleRangeForOrder(order, services, halfDay)}`} /><DetailRow label="Duración" value={`${slots} hora${slots !== 1 ? 's' : ''}`} /><DetailRow label="Propiedad" value={property?.name} /><DetailRow label="Dirección" value={order.address} /><DetailRow label="Zona" value={order.zone ?? property?.zone ?? client?.zone} /><DetailRow label="Técnico asignado" value={techNames} /><DetailRow label="Van asignada" value={van?.name ?? 'Sin van'} /><DetailRow label="Descripción del trabajo" value={orderDescription(order, service)} />{order.airConditionerCount ? <DetailRow label="Cantidad de aires (cita anterior)" value={String(order.airConditionerCount)} /> : null}<View style={styles.detailActions}>{order.status === 'Reserva temporal' ? <><Button variant="success" label="Confirmar y enviar WhatsApp" onPress={() => void onConfirm(order, true)} /><Button variant="secondary" label="Confirmar sin WhatsApp" onPress={() => void onConfirm(order, false)} /></> : null}<Button variant="secondary" label="Editar cita" onPress={() => onEdit(order)} /><Button variant="secondary" label="Reprogramar cita" onPress={() => onReschedule(order)} /><Button variant="danger" label="Cancelar cita" onPress={() => void onCancel(order)} />{order.status !== 'Reserva temporal' ? <Button label="Marcar completada" onPress={() => void onUpdate(order.id, { status: 'Completada', updatedAt: new Date().toISOString() })} /> : null}</View></View>;
+  const confirmationNames = (order.notificationRecipients ?? []).filter((recipient) => recipient.sendConfirmation).map((recipient) => recipient.name).join(', ');
+  const reminderNames = (order.notificationRecipients ?? []).filter((recipient) => recipient.sendReminder).map((recipient) => recipient.name).join(', ');
+  return <View><View style={styles.detailHeader}><Pill label={order.status} tone={toneForStatus(order.status)} /><Text style={styles.detailId}>ID: {order.id}</Text></View><Text style={styles.detailTitle}>{client?.name}</Text><Text style={styles.detailSubtitle}>{service?.name ?? 'Trabajo programado'}</Text><View style={styles.detailTabs}><Text style={styles.detailTabActive}>Detalles</Text><Text style={styles.detailTab}>Cliente</Text><Text style={styles.detailTab}>Notas</Text></View><DetailRow label="Fecha y hora" value={`${formatDate(order.date, true)} · ${scheduleRangeForOrder(order, services, halfDay)}`} /><DetailRow label="Duración" value={`${slots} hora${slots !== 1 ? 's' : ''}`} /><DetailRow label="Propiedad" value={property?.name} /><DetailRow label="Dirección" value={order.address} /><DetailRow label="Zona" value={order.zone ?? property?.zone ?? client?.zone} /><DetailRow label="Técnico asignado" value={techNames} /><DetailRow label="Van asignada" value={van?.name ?? 'Sin van'} /><DetailRow label="Descripción del trabajo" value={orderDescription(order, service)} /><DetailRow label="Confirmación WhatsApp" value={confirmationNames || (order.whatsappNotificationsEnabled !== false ? client?.name : 'No enviar')} /><DetailRow label="Recordatorio WhatsApp" value={reminderNames || (order.whatsappNotificationsEnabled !== false ? client?.name : 'No enviar')} />{order.airConditionerCount ? <DetailRow label="Cantidad de aires (cita anterior)" value={String(order.airConditionerCount)} /> : null}<View style={styles.detailActions}>{order.status === 'Reserva temporal' ? <><Button variant="success" label="Confirmar y enviar WhatsApp" onPress={() => void onConfirm(order, true)} /><Button variant="secondary" label="Confirmar sin WhatsApp" onPress={() => void onConfirm(order, false)} /></> : null}<Button variant="secondary" label="Editar cita" onPress={() => onEdit(order)} /><Button variant="secondary" label="Reprogramar cita" onPress={() => onReschedule(order)} /><Button variant="danger" label="Cancelar cita" onPress={() => void onCancel(order)} />{order.status !== 'Reserva temporal' ? <Button label="Marcar completada" onPress={() => void onUpdate(order.id, { status: 'Completada', updatedAt: new Date().toISOString() })} /> : null}</View></View>;
 }
 
 function SearchRow({ title, subtitle, active, onPress }: { title: string; subtitle: string; active: boolean; onPress: () => void }) {
@@ -1532,6 +1655,20 @@ const styles = StyleSheet.create({
   propertyContactRow: { flexDirection: 'row', paddingVertical: 8, borderTopWidth: 1, borderTopColor: '#E8EBEF' },
   propertyContactName: { color: colors.text, fontWeight: '900', fontSize: 10 },
   propertyContactMeta: { color: colors.muted, fontSize: 9, marginTop: 3 },
+  notificationHelp: { color: colors.muted, fontSize: 10, lineHeight: 15, marginTop: -3, marginBottom: 10, paddingLeft: 24 },
+  notificationMatrix: { borderWidth: 1, borderColor: colors.border, borderRadius: 9, overflow: 'hidden', backgroundColor: '#FFFFFF', marginBottom: 8 },
+  notificationRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 11, paddingVertical: 10, borderTopWidth: 1, borderTopColor: '#E8EBEF' },
+  notificationHeaderRow: { borderTopWidth: 0, backgroundColor: '#F4F6F8' },
+  notificationHeaderText: { color: colors.text, fontSize: 10, fontWeight: '900' },
+  notificationColumnHeader: { width: 82, color: colors.muted, fontSize: 8, fontWeight: '900', textAlign: 'center' },
+  notificationName: { color: colors.text, fontSize: 10, fontWeight: '900' },
+  notificationMeta: { color: colors.muted, fontSize: 8, marginTop: 3 },
+  notificationCheck: { width: 34, height: 34, borderRadius: 7, borderWidth: 1, borderColor: colors.border, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', marginHorizontal: 24 },
+  notificationCheckActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  notificationCheckText: { color: colors.muted, fontSize: 17, fontWeight: '900' },
+  notificationCheckTextActive: { color: '#FFFFFF' },
+  notificationEmpty: { color: colors.muted, fontSize: 10, padding: 12 },
+  notificationDisabledText: { color: colors.warning, fontSize: 10, fontWeight: '800', marginBottom: 12 },
   summaryBox: { backgroundColor: '#F4F5F7', borderRadius: 10, padding: 13, marginTop: 8 },
   summaryTitle: { color: colors.text, fontWeight: '900', fontSize: 11, marginBottom: 6 },
   summaryLine: { color: colors.muted, fontSize: 10, marginTop: 3 },

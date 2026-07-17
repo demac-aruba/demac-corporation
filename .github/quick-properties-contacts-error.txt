@@ -1,6 +1,0 @@
-[feature/quick-properties-contacts 0c891bb] Capture appointment notification patch error
- 1 file changed, 5 insertions(+)
- create mode 100644 .github/appointment-notification-patch-error.txt
-To https://github.com/demac-aruba/demac-corporation
-   decf8b3..0c891bb  feature/quick-properties-contacts -> feature/quick-properties-contacts
-notification recipient matrix not found
