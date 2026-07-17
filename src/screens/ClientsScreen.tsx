@@ -72,6 +72,9 @@ export function ClientsScreen() {
     .sort((a, b) => a.name.localeCompare(b.name));
   const clientEquipment = equipment.filter((item) => item.clientId === selectedId);
   const clientOrders = workOrders.filter((item) => item.clientId === selectedId);
+  const appointmentChanges = clientOrders
+    .flatMap((order) => (order.scheduleHistory ?? []).map((entry) => ({ order, entry })))
+    .sort((a, b) => b.entry.recordedAt.localeCompare(a.entry.recordedAt));
 
   const resetClientForm = () => setForm({ name: '', company: '', phone: '', whatsapp: '', email: '', address: '', zone: 'Oranjestad' });
 
@@ -273,6 +276,34 @@ export function ClientsScreen() {
               </Card>
 
               <Card>
+                <SectionTitle
+                  title={`Historial de citas canceladas o reprogramadas (${appointmentChanges.length})`}
+                  subtitle="Incluye motivo, explicación, responsable y anticipación del cambio."
+                />
+                {appointmentChanges.length ? appointmentChanges.map(({ order, entry }) => {
+                  const property = properties.find((item) => item.id === entry.propertyId);
+                  const notice = typeof entry.noticeHours === 'number'
+                    ? entry.noticeHours >= 0 ? `${entry.noticeHours} h de anticipación` : `${Math.abs(entry.noticeHours)} h después de la hora programada`
+                    : 'Anticipación no registrada';
+                  return (
+                    <View key={`${order.id}-${entry.id}`} style={styles.changeHistoryRow}>
+                      <View style={{ flex: 1 }}>
+                        <View style={styles.changeHistoryHeader}>
+                          <Text style={styles.changeHistoryTitle}>{entry.status} · {entry.date} · {entry.time}</Text>
+                          <Pill label={entry.status} tone="danger" />
+                        </View>
+                        <Text style={styles.changeHistoryProperty}>{property?.name ?? entry.address} · {order.id}</Text>
+                        <Text style={styles.changeHistoryReason}>Motivo: {entry.reasonCategory ?? 'Motivo no registrado (evento anterior)'}</Text>
+                        {entry.reasonNote ? <Text style={styles.changeHistoryNote}>{entry.reasonNote}</Text> : null}
+                        <Text style={styles.changeHistoryMeta}>Origen: {entry.changeOrigin ?? 'No registrado'} · Registrado por: {entry.changedByName ?? 'No registrado'} · {notice}</Text>
+                        {entry.status === 'Reprogramada' && entry.newDate ? <Text style={styles.changeHistoryNewDate}>Nueva cita: {entry.newDate} · {entry.newTime ?? ''}</Text> : null}
+                      </View>
+                    </View>
+                  );
+                }) : <EmptyState icon="🗓️" title="Sin cancelaciones ni reprogramaciones" message="Los cambios futuros aparecerán aquí con su motivo y responsable." />}
+              </Card>
+
+              <Card>
                 <SectionTitle title={`Historial de trabajos (${clientOrders.length})`} />
                 {clientOrders.length ? clientOrders.map((order) => <View key={order.id} style={styles.historyRow}><Text style={styles.historyDate}>{order.date}</Text><View style={{ flex: 1 }}><Text style={styles.historyId}>{order.id}</Text><Text style={styles.historyProblem} numberOfLines={1}>{order.problem}</Text></View><Pill label={order.status} tone={order.status === 'Completada' ? 'success' : 'info'} /></View>) : <EmptyState icon="🧰" title="Sin trabajos" message="Las citas y órdenes de este cliente aparecerán aquí." />}
               </Card>
@@ -360,6 +391,14 @@ const styles = StyleSheet.create({
   historyDate: { color: colors.primary, fontWeight: '900', fontSize: 11, width: 80 },
   historyId: { color: colors.text, fontWeight: '800', fontSize: 11 },
   historyProblem: { color: colors.muted, fontSize: 10, marginTop: 3 },
+  changeHistoryRow: { paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: '#EDF1F6' },
+  changeHistoryHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  changeHistoryTitle: { color: colors.text, fontWeight: '900', fontSize: 12 },
+  changeHistoryProperty: { color: colors.primaryDark, fontSize: 10, fontWeight: '800', marginTop: 5 },
+  changeHistoryReason: { color: colors.text, fontSize: 11, fontWeight: '800', marginTop: 7 },
+  changeHistoryNote: { color: colors.text, fontSize: 11, lineHeight: 17, marginTop: 4 },
+  changeHistoryMeta: { color: colors.muted, fontSize: 9, marginTop: 7 },
+  changeHistoryNewDate: { color: colors.primaryDark, fontWeight: '800', fontSize: 10, marginTop: 5 },
   formError: { backgroundColor: colors.dangerLight, borderRadius: 8, padding: 10, marginBottom: 12 },
   formErrorText: { color: colors.danger, fontSize: 11, fontWeight: '700' },
   formSection: { color: colors.muted, fontSize: 10, fontWeight: '900', letterSpacing: 1, marginTop: 8, marginBottom: 10 },

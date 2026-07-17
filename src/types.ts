@@ -178,6 +178,21 @@ export interface ServiceType {
 
 export type SchedulingMode = 'fixed' | 'perUnit';
 
+export type AppointmentChangeOrigin = 'Cliente' | 'DEMAC' | 'Fuerza mayor' | 'Otro';
+
+export type AppointmentChangeReasonCategory =
+  | 'Cliente solicita otra fecha'
+  | 'Cliente no puede recibirnos'
+  | 'Cliente ya no desea el servicio'
+  | 'No se logró contactar al cliente'
+  | 'Problema de precio o cotización'
+  | 'Dirección o acceso no disponible'
+  | 'Error de programación'
+  | 'Falta de personal de DEMAC'
+  | 'Avería de van o herramientas'
+  | 'Condiciones climáticas'
+  | 'Otro';
+
 export interface WorkOrderScheduleHistoryEntry {
   id: string;
   date: string;
@@ -191,6 +206,15 @@ export interface WorkOrderScheduleHistoryEntry {
   address: string;
   zone?: string;
   problem: string;
+  changeOrigin?: AppointmentChangeOrigin;
+  reasonCategory?: AppointmentChangeReasonCategory;
+  reasonNote?: string;
+  changedByUserId?: string;
+  changedByName?: string;
+  noticeHours?: number;
+  newDate?: string;
+  newTime?: string;
+  newVanId?: string;
   recordedAt: string;
 }
 
