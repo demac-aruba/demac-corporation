@@ -129,6 +129,22 @@ export interface Client {
 
 export type PropertyType = 'Casa' | 'Apartamento' | 'Oficina' | 'Local comercial' | 'Otro';
 
+export type PropertyContactRole = 'Dueño' | 'Encargado' | 'Administrador' | 'Inquilino' | 'Contacto de acceso' | 'Contabilidad' | 'Otro';
+export type PropertyContactLanguage = 'Español' | 'English' | 'Nederlands' | 'Papiamento';
+
+export interface PropertyContact {
+  id: string;
+  name: string;
+  role: PropertyContactRole;
+  phone: string;
+  whatsapp: string;
+  email?: string;
+  preferredLanguage: PropertyContactLanguage;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface Property {
   id: string;
   clientId: string;
@@ -137,6 +153,7 @@ export interface Property {
   address: string;
   zone: string;
   notes?: string;
+  contacts?: PropertyContact[];
   active: boolean;
   createdAt?: string;
   updatedAt?: string;
