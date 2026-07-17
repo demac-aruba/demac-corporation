@@ -750,7 +750,17 @@ export function AgendaScreen() {
     setReschedulingOrderId(order.id);
     setSelectedDate(order.date);
     setCalendarMonth(monthStart(order.date));
-    setShowCreate(false);
+    setClientId(order.clientId);
+    setPropertyId(order.propertyId ?? '');
+    setWorkDescriptionText(order.problem);
+    setWorkHours(orderSlotCount(order, services));
+    setVanId(resolveStoredVanId(order.vanId, agendaVans, legacyVans));
+    setTime(normalizeTime(order.time));
+    setSendWhatsApp(order.whatsappNotificationsEnabled !== false);
+    setFormMessage('');
+    setSuccessMessage('');
+    setShowQuickClient(false);
+    setShowCreate(true);
   };
 
   return (
@@ -833,6 +843,7 @@ export function AgendaScreen() {
           if (!saving) {
             setShowCreate(false);
             setEditingOrderId(null);
+            setReschedulingOrderId(null);
           }
         }}
       >
@@ -860,6 +871,24 @@ export function AgendaScreen() {
         ) : (
           <ScrollView>
             <Text style={styles.modalIntro}>Selecciona el cliente y la propiedad, define cuántas horas ocupará el trabajo y escribe toda la descripción necesaria.</Text>
+            {reschedulingOrder ? (
+              <View style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 12, marginBottom: 15 }}>
+                <Text style={styles.quickSectionTitle}>Nueva fecha de la cita</Text>
+                <Text style={styles.fallbackText}>Fecha seleccionada: {formatDate(selectedDate, true)}</Text>
+                <View style={styles.monthHeader}>
+                  <Pressable accessibilityLabel="Mes anterior" onPress={() => setCalendarMonth((current) => addMonths(current, -1))} style={styles.monthNavButton}><Text style={styles.monthNavText}>‹</Text></Pressable>
+                  <Text style={styles.monthTitle}>{monthTitle}</Text>
+                  <Pressable accessibilityLabel="Mes siguiente" onPress={() => setCalendarMonth((current) => addMonths(current, 1))} style={styles.monthNavButton}><Text style={styles.monthNavText}>›</Text></Pressable>
+                </View>
+                <View style={styles.calendarWeekHeader}>{['DOM', 'LUN', 'MAR', 'MIÉ', 'JUE', 'VIE', 'SÁB'].map((label) => <Text key={`reschedule-${label}`} style={styles.calendarWeekdayCell}>{label}</Text>)}</View>
+                <View style={styles.calendarGrid}>{calendarCells.map((date, index) => {
+                  if (!date) return <View key={`reschedule-empty-${index}`} style={styles.calendarEmptyDay} />;
+                  const active = date === selectedDate;
+                  const dateStatus = calendarDateStatus(date, businessCalendarSettings, calendarClosures);
+                  return <Pressable key={`reschedule-${date}`} disabled={dateStatus.closed} accessibilityLabel={formatDate(date, true)} onPress={() => setSelectedDate(date)} style={[styles.calendarDay, dateStatus.closed && styles.calendarDayClosed, active && styles.calendarDayActive]}><Text style={[styles.calendarNumber, active && styles.calendarDayTextActive]}>{Number(date.slice(-2))}</Text>{dateStatus.closed ? <Text style={[styles.calendarClosedLabel, active && styles.calendarDayTextActive]}>•</Text> : null}</Pressable>;
+                })}</View>
+              </View>
+            ) : null}
             {!clients.length ? <View style={styles.infoBanner}><Text style={styles.infoBannerText}>Todavía no hay clientes. Usa “Añadir cliente nuevo” para registrar el primero sin salir de esta cita.</Text></View> : null}
             {formMessage ? <View style={styles.formError}><Text style={styles.formErrorText}>{formMessage}</Text></View> : null}
             {successMessage ? <View style={styles.successBanner}><Text style={styles.successBannerText}>{successMessage}</Text></View> : null}
@@ -903,7 +932,7 @@ export function AgendaScreen() {
 
             <View style={styles.summaryBox}><Text style={styles.summaryTitle}>Resumen de la cita</Text><Text style={styles.summaryLine}>{selectedClient?.name ?? 'Sin cliente'} · {selectedProperty?.name ?? selectedClient?.address ?? 'Sin dirección'}</Text><Text style={styles.summaryLine}>{workHours} hora{workHours !== 1 ? 's' : ''} · {selectedVan?.name} · {formatDate(selectedDate)} · {time}</Text><Text style={styles.summaryLine} numberOfLines={2}>{workDescriptionText.trim() || 'Falta agregar la descripción del trabajo.'}</Text></View>
             <View style={styles.modalActions}>
-              <Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => { setShowCreate(false); setEditingOrderId(null); }} />
+              <Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => { setShowCreate(false); setEditingOrderId(null); setReschedulingOrderId(null); }} />
               {editingOrder ? (
                 <Button label={saving ? 'Guardando…' : 'Guardar cambios'} disabled={saving || !clientId || !workDescriptionText.trim()} onPress={() => void saveAppointment(editingOrder.status === 'Reserva temporal' ? 'Reserva temporal' : 'Confirmada')} />
               ) : (
