@@ -72,7 +72,21 @@ jobs:
         run: npm ci
 
       - name: Typecheck
-        run: npm run typecheck
+        shell: bash
+        run: |
+          set +e
+          npm run typecheck > /tmp/appointment-history-typecheck.log 2>&1
+          status=$?
+          cat /tmp/appointment-history-typecheck.log
+          if [ $status -ne 0 ]; then
+            cp /tmp/appointment-history-typecheck.log .github/appointment-change-typecheck-error.txt
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .github/appointment-change-typecheck-error.txt
+            git commit -m "Capture appointment history typecheck error"
+            git push
+            exit $status
+          fi
 
       - name: Build web
         run: npm run build:web
@@ -80,9 +94,9 @@ jobs:
       - name: Commit validated source
         shell: bash
         run: |
-          rm -f .github/appointment-change-patch-error.txt
+          rm -f .github/appointment-change-patch-error.txt .github/appointment-change-typecheck-error.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A src/types.ts src/screens/AgendaScreen.tsx src/screens/ClientsScreen.tsx .github/appointment-change-patch-error.txt
+          git add -A src/types.ts src/screens/AgendaScreen.tsx src/screens/ClientsScreen.tsx .github/appointment-change-patch-error.txt .github/appointment-change-typecheck-error.txt
           git commit -m "Add appointment change reasons and client history"
           git push
