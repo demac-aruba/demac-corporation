@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - fix/reschedule-appointment-flow
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -16,6 +19,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.head_ref || github.ref_name }}
 
       - name: Patch Agenda rescheduling flow
         shell: bash
