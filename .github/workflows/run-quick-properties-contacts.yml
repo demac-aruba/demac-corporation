@@ -31,6 +31,24 @@ jobs:
           end = workflow.index("\n          PY", start)
           source = workflow[start:end]
           source = '\n'.join(line[10:] if line.startswith('          ') else line for line in source.splitlines())
+
+          strict_helper = """def replace_once(text: str, old: str, new: str, label: str) -> str:
+    if old not in text:
+        raise SystemExit(f'{label} not found')
+    return text.replace(old, new, 1)"""
+          tolerant_helper = """def replace_once(text: str, old: str, new: str, label: str) -> str:
+    if old in text:
+        return text.replace(old, new, 1)
+    import re
+    tokens = [token for token in re.split(r'\\s+', old.strip()) if token]
+    pattern = r'\\s+'.join(re.escape(token) for token in tokens)
+    match = re.search(pattern, text, flags=re.DOTALL)
+    if not match:
+        raise SystemExit(f'{label} not found')
+    return text[:match.start()] + new + text[match.end():]"""
+          if strict_helper not in source:
+              raise SystemExit('replace_once helper not found in patch source')
+          source = source.replace(strict_helper, tolerant_helper, 1)
           exec(compile(source, 'quick_properties_contacts_patch.py', 'exec'))
           PY
           status=$?
