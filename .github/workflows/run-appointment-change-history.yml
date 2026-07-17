@@ -49,6 +49,10 @@ jobs:
           if strict_helper not in source:
               raise SystemExit('replace_once helper not found in patch source')
           source = source.replace(strict_helper, tolerant_helper, 1)
+          source = source.replace(
+              "const cancelAppointment = (order: WorkOrder) => openAppointmentChangeReason(order, 'cancel');",
+              "const cancelAppointment = async (order: WorkOrder) => { openAppointmentChangeReason(order, 'cancel'); };",
+          )
           exec(compile(source, 'appointment_change_patch.py', 'exec'))
           PY
           status=$?
