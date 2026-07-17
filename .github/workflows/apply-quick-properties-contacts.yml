@@ -1,4 +1,4 @@
-name: Diagnose appointment notification recipient matrix
+name: Apply appointment notification recipient matrix
 
 on:
   workflow_dispatch:
@@ -10,13 +10,12 @@ jobs:
   patch:
     runs-on: ubuntu-latest
     steps:
-      - name: Run original patch with diagnostics
+      - name: Run original patch with tolerant notification replacement
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
           import subprocess
-          import traceback
 
           original = subprocess.check_output([
               'git',
@@ -29,15 +28,22 @@ jobs:
           source = original[start:end]
           source = '\n'.join(line[10:] if line.startswith('          ') else line for line in source.splitlines())
 
-          try:
-              exec(compile(source, 'appointment_notification_recipient_patch.py', 'exec'))
-          except BaseException as error:
-              diagnostic = ''.join(traceback.format_exception(type(error), error, error.__traceback__))
-              Path('.github/appointment-notification-patch-error.txt').write_text(diagnostic)
-              subprocess.run(['git', 'config', 'user.name', 'github-actions[bot]'], check=True)
-              subprocess.run(['git', 'config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'], check=True)
-              subprocess.run(['git', 'add', '.github/appointment-notification-patch-error.txt'], check=True)
-              subprocess.run(['git', 'commit', '-m', 'Capture appointment notification patch error'], check=True)
-              subprocess.run(['git', 'push'], check=True)
-              raise
+          strict_call = "text = replace_once(text, old_notifications, new_notifications, 'notification recipient matrix')"
+          tolerant_call = """if old_notifications in text:
+    text = text.replace(old_notifications, new_notifications, 1)
+else:
+    start_marker = '<Text style={styles.fieldLabel}>Notificaciones al confirmar</Text>'
+    marker_index = text.find(start_marker)
+    if marker_index < 0:
+        raise SystemExit('notification recipient matrix start not found')
+    line_start = text.rfind('\\n', 0, marker_index) + 1
+    block_end = text.find('</View>', marker_index)
+    if block_end < 0:
+        raise SystemExit('notification recipient matrix end not found')
+    block_end += len('</View>')
+    text = text[:line_start] + new_notifications + text[block_end:]"""
+          if strict_call not in source:
+              raise SystemExit('notification replacement call not found in original patch')
+          source = source.replace(strict_call, tolerant_call, 1)
+          exec(compile(source, 'appointment_notification_recipient_patch.py', 'exec'))
           PY
