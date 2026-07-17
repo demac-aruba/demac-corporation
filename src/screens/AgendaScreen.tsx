@@ -6,7 +6,7 @@ import { BusinessCalendarSettings, CalendarClosure, useCalendarState } from '../
 import { useTeamState } from '../state/TeamState';
 import { useVanHalfDayState, vanHasHalfDayOnDate } from '../state/VanHalfDayState';
 import { colors } from '../theme';
-import { AppointmentStatus, Client, DailyVanAssignment, Property, PropertyType, ServiceType, StaffAbsence, StaffProfile, Van, WorkOrder, WorkOrderScheduleHistoryEntry } from '../types';
+import { AppointmentChangeOrigin, AppointmentChangeReasonCategory, AppointmentStatus, Client, DailyVanAssignment, Property, PropertyType, ServiceType, StaffAbsence, StaffProfile, Van, WorkOrder, WorkOrderScheduleHistoryEntry } from '../types';
 
 const morningSlots = ['08:30', '09:30', '10:30'];
 const extraMorningSlot = '11:30';
@@ -14,6 +14,30 @@ const afternoonSlots = ['13:30', '14:30', '15:30'];
 const allSlots = [...morningSlots, ...afternoonSlots];
 const extendedSlots = [...morningSlots, extraMorningSlot, ...afternoonSlots];
 const propertyTypes: PropertyType[] = ['Casa', 'Apartamento', 'Oficina', 'Local comercial', 'Otro'];
+const appointmentChangeOrigins: AppointmentChangeOrigin[] = ['Cliente', 'DEMAC', 'Fuerza mayor', 'Otro'];
+const appointmentChangeReasons: AppointmentChangeReasonCategory[] = [
+  'Cliente solicita otra fecha',
+  'Cliente no puede recibirnos',
+  'Cliente ya no desea el servicio',
+  'No se logró contactar al cliente',
+  'Problema de precio o cotización',
+  'Dirección o acceso no disponible',
+  'Error de programación',
+  'Falta de personal de DEMAC',
+  'Avería de van o herramientas',
+  'Condiciones climáticas',
+  'Otro',
+];
+
+type AppointmentChangeDraft = {
+  origin: AppointmentChangeOrigin;
+  reasonCategory: AppointmentChangeReasonCategory;
+  reasonNote: string;
+  changedByUserId?: string;
+  changedByName: string;
+  recordedAt: string;
+  noticeHours: number;
+};
 const SLOT_HEIGHT = 118;
 const SLOT_GAP = 8;
 const GROUP_HEADER_HEIGHT = 30;
@@ -164,7 +188,16 @@ type CancelledSlotRecord = {
   recordedAt?: string;
 };
 
-function scheduleHistoryEntry(order: WorkOrder, services: ServiceType[]): WorkOrderScheduleHistoryEntry {
+function scheduleHistoryEntry(
+  order: WorkOrder,
+  services: ServiceType[],
+  details: AppointmentChangeDraft & {
+    status: 'Cancelada' | 'Reprogramada';
+    newDate?: string;
+    newTime?: string;
+    newVanId?: string;
+  },
+): WorkOrderScheduleHistoryEntry {
   return {
     id: `history-${order.id}-${Date.now()}`,
     date: order.date,
@@ -172,14 +205,29 @@ function scheduleHistoryEntry(order: WorkOrder, services: ServiceType[]): WorkOr
     vanId: order.vanId,
     technicianIds: order.technicianIds,
     scheduledSlots: orderSlotCount(order, services),
-    status: 'Reprogramada',
+    status: details.status,
     clientId: order.clientId,
     propertyId: order.propertyId,
     address: order.address,
     zone: order.zone,
     problem: order.problem,
-    recordedAt: new Date().toISOString(),
+    changeOrigin: details.origin,
+    reasonCategory: details.reasonCategory,
+    reasonNote: details.reasonNote,
+    changedByUserId: details.changedByUserId,
+    changedByName: details.changedByName,
+    noticeHours: details.noticeHours,
+    newDate: details.newDate,
+    newTime: details.newTime,
+    newVanId: details.newVanId,
+    recordedAt: details.recordedAt,
   };
+}
+
+function appointmentNoticeHours(order: WorkOrder) {
+  const appointment = new Date(`${order.date}T${normalizeTime(order.time)}:00`);
+  if (Number.isNaN(appointment.getTime())) return 0;
+  return Math.round(((appointment.getTime() - Date.now()) / 3_600_000) * 10) / 10;
 }
 
 function toneForStatus(status: AppointmentStatus) {
@@ -306,6 +354,7 @@ export function AgendaScreen() {
   const { width } = useWindowDimensions();
   const compact = width < 1260;
   const {
+    currentUser,
     workOrders,
     clients,
     properties,
@@ -346,6 +395,14 @@ export function AgendaScreen() {
   const [sendWhatsApp, setSendWhatsApp] = useState(true);
   const [saving, setSaving] = useState(false);
   const [formMessage, setFormMessage] = useState('');
+  const [showChangeReason, setShowChangeReason] = useState(false);
+  const [changeAction, setChangeAction] = useState<'cancel' | 'reschedule' | null>(null);
+  const [changeOrderId, setChangeOrderId] = useState<string | null>(null);
+  const [changeOrigin, setChangeOrigin] = useState<AppointmentChangeOrigin>('Cliente');
+  const [changeReasonCategory, setChangeReasonCategory] = useState<AppointmentChangeReasonCategory | ''>('');
+  const [changeReasonNote, setChangeReasonNote] = useState('');
+  const [changeReasonMessage, setChangeReasonMessage] = useState('');
+  const [pendingChangeReason, setPendingChangeReason] = useState<AppointmentChangeDraft | null>(null);
 
   const staffDirectory = useMemo(() => {
     const directory = new Map(legacyUsers.map((user) => [user.id, { id: user.id, name: user.name }]));
@@ -620,11 +677,15 @@ export function AgendaScreen() {
     setFormMessage('');
 
     if (editingOrder) {
-      const scheduleChanged = editingOrder.date !== selectedDate
-        || normalizeTime(editingOrder.time) !== time
-        || resolveStoredVanId(editingOrder.vanId, agendaVans, legacyVans) !== vanId
-        || orderSlotCount(editingOrder, services) !== workHours;
-      const result = await updateWorkOrder(editingOrder.id, {
+            const scheduleChanged = editingOrder.date !== selectedDate
+      || normalizeTime(editingOrder.time) !== time
+      || resolveStoredVanId(editingOrder.vanId, agendaVans, legacyVans) !== vanId
+      || orderSlotCount(editingOrder, services) !== workHours;
+    if (scheduleChanged) {
+      setSaving(false);
+      return setFormMessage('Para cambiar fecha, van, horario o duración utiliza “Reprogramar cita”, porque ese flujo exige registrar el motivo.');
+    }
+    const result = await updateWorkOrder(editingOrder.id, {
         clientId,
         propertyId: selectedProperty?.id,
         date: selectedDate,
@@ -637,9 +698,7 @@ export function AgendaScreen() {
         problem: description,
         scheduledSlots: workHours,
         whatsappNotificationsEnabled: editingOrder.status === 'Reserva temporal' ? false : sendWhatsApp,
-        scheduleHistory: scheduleChanged
-          ? [...(editingOrder.scheduleHistory ?? []), scheduleHistoryEntry(editingOrder, services)]
-          : editingOrder.scheduleHistory,
+                scheduleHistory: editingOrder.scheduleHistory,
         updatedAt: now,
       });
       setSaving(false);
@@ -647,7 +706,17 @@ export function AgendaScreen() {
       setSelectedOrderId(editingOrder.id);
       setEditingOrderId(null);
     } else if (reschedulingOrder) {
-      const history = scheduleHistoryEntry(reschedulingOrder, services);
+      if (!pendingChangeReason) {
+      setSaving(false);
+      return setFormMessage('Registra el motivo de la reprogramación antes de guardar el nuevo horario.');
+    }
+    const history = scheduleHistoryEntry(reschedulingOrder, services, {
+      ...pendingChangeReason,
+      status: 'Reprogramada',
+      newDate: selectedDate,
+      newTime: time,
+      newVanId: vanId,
+    });
       const result = await updateWorkOrder(reschedulingOrder.id, {
         clientId,
         propertyId: selectedProperty?.id,
@@ -670,6 +739,7 @@ export function AgendaScreen() {
       if (!result.ok) return setFormMessage(result.message ?? 'No se pudo reprogramar la cita.');
       setSelectedOrderId(reschedulingOrder.id);
       setReschedulingOrderId(null);
+      setPendingChangeReason(null);
     } else {
       const order: WorkOrder = {
         id: `WO-${selectedDate.replaceAll('-', '').slice(2)}-${Date.now().toString().slice(-6)}`,
@@ -716,16 +786,73 @@ export function AgendaScreen() {
     });
   };
 
-  const cancelAppointment = async (order: WorkOrder) => {
-    const now = new Date().toISOString();
-    await updateWorkOrder(order.id, {
+  const openAppointmentChangeReason = (order: WorkOrder, action: 'cancel' | 'reschedule') => {
+  setChangeOrderId(order.id);
+  setChangeAction(action);
+  setChangeOrigin('Cliente');
+  setChangeReasonCategory('');
+  setChangeReasonNote('');
+  setChangeReasonMessage('');
+  setShowChangeReason(true);
+};
+
+const confirmAppointmentChangeReason = async () => {
+  const order = workOrders.find((item) => item.id === changeOrderId);
+  if (!order || !changeAction) return setChangeReasonMessage('No se encontró la cita seleccionada.');
+  if (!changeReasonCategory) return setChangeReasonMessage('Selecciona el motivo principal.');
+  if (changeReasonNote.trim().length < 5) return setChangeReasonMessage('Escribe una explicación breve del motivo del cambio.');
+
+  const now = new Date().toISOString();
+  const draft: AppointmentChangeDraft = {
+    origin: changeOrigin,
+    reasonCategory: changeReasonCategory,
+    reasonNote: changeReasonNote.trim(),
+    changedByUserId: currentUser?.id,
+    changedByName: currentUser?.name ?? 'Usuario DEMAC',
+    recordedAt: now,
+    noticeHours: appointmentNoticeHours(order),
+  };
+
+  if (changeAction === 'cancel') {
+    setSaving(true);
+    const history = scheduleHistoryEntry(order, services, { ...draft, status: 'Cancelada' });
+    const result = await updateWorkOrder(order.id, {
       status: 'Cancelada',
       whatsappNotificationsEnabled: false,
       cancelledAt: now,
+      cancellationReason: `${changeReasonCategory}: ${changeReasonNote.trim()}`,
+      scheduleHistory: [...(order.scheduleHistory ?? []), history],
       updatedAt: now,
     });
+    setSaving(false);
+    if (!result.ok) return setChangeReasonMessage(result.message ?? 'No se pudo cancelar la cita.');
     if (selectedOrderId === order.id) setSelectedOrderId(null);
-  };
+    setShowChangeReason(false);
+    setChangeOrderId(null);
+    setChangeAction(null);
+    return;
+  }
+
+  setPendingChangeReason(draft);
+  setEditingOrderId(null);
+  setReschedulingOrderId(order.id);
+  setSelectedDate(order.date);
+  setCalendarMonth(monthStart(order.date));
+  setClientId(order.clientId);
+  setPropertyId(order.propertyId ?? '');
+  setWorkDescriptionText(order.problem);
+  setWorkHours(orderSlotCount(order, services));
+  setVanId(resolveStoredVanId(order.vanId, agendaVans, legacyVans));
+  setTime(normalizeTime(order.time));
+  setSendWhatsApp(order.whatsappNotificationsEnabled !== false);
+  setFormMessage('');
+  setSuccessMessage('');
+  setShowQuickClient(false);
+  setShowChangeReason(false);
+  setShowCreate(true);
+};
+
+const cancelAppointment = async (order: WorkOrder) => { openAppointmentChangeReason(order, 'cancel'); };
 
   const startEdit = (order: WorkOrder) => {
     setEditingOrderId(order.id);
@@ -745,23 +872,7 @@ export function AgendaScreen() {
     setShowCreate(true);
   };
 
-  const startReschedule = (order: WorkOrder) => {
-    setEditingOrderId(null);
-    setReschedulingOrderId(order.id);
-    setSelectedDate(order.date);
-    setCalendarMonth(monthStart(order.date));
-    setClientId(order.clientId);
-    setPropertyId(order.propertyId ?? '');
-    setWorkDescriptionText(order.problem);
-    setWorkHours(orderSlotCount(order, services));
-    setVanId(resolveStoredVanId(order.vanId, agendaVans, legacyVans));
-    setTime(normalizeTime(order.time));
-    setSendWhatsApp(order.whatsappNotificationsEnabled !== false);
-    setFormMessage('');
-    setSuccessMessage('');
-    setShowQuickClient(false);
-    setShowCreate(true);
-  };
+  const startReschedule = (order: WorkOrder) => openAppointmentChangeReason(order, 'reschedule');
 
   return (
     <ScrollView contentContainerStyle={styles.page}>
@@ -844,6 +955,7 @@ export function AgendaScreen() {
             setShowCreate(false);
             setEditingOrderId(null);
             setReschedulingOrderId(null);
+            setPendingChangeReason(null);
           }
         }}
       >
@@ -932,7 +1044,7 @@ export function AgendaScreen() {
 
             <View style={styles.summaryBox}><Text style={styles.summaryTitle}>Resumen de la cita</Text><Text style={styles.summaryLine}>{selectedClient?.name ?? 'Sin cliente'} · {selectedProperty?.name ?? selectedClient?.address ?? 'Sin dirección'}</Text><Text style={styles.summaryLine}>{workHours} hora{workHours !== 1 ? 's' : ''} · {selectedVan?.name} · {formatDate(selectedDate)} · {time}</Text><Text style={styles.summaryLine} numberOfLines={2}>{workDescriptionText.trim() || 'Falta agregar la descripción del trabajo.'}</Text></View>
             <View style={styles.modalActions}>
-              <Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => { setShowCreate(false); setEditingOrderId(null); setReschedulingOrderId(null); }} />
+              <Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => { setShowCreate(false); setEditingOrderId(null); setReschedulingOrderId(null); setPendingChangeReason(null); }} />
               {editingOrder ? (
                 <Button label={saving ? 'Guardando…' : 'Guardar cambios'} disabled={saving || !clientId || !workDescriptionText.trim()} onPress={() => void saveAppointment(editingOrder.status === 'Reserva temporal' ? 'Reserva temporal' : 'Confirmada')} />
               ) : (
@@ -944,8 +1056,49 @@ export function AgendaScreen() {
             </View>
           </ScrollView>
         )}
-      </AppModal>
+            </AppModal>
+
+  <AppModal
+    visible={showChangeReason}
+    title={changeAction === 'reschedule' ? 'Motivo de la reprogramación' : 'Motivo de la cancelación'}
+    onClose={() => {
+      if (saving) return;
+      setShowChangeReason(false);
+      setChangeOrderId(null);
+      setChangeAction(null);
+      setChangeReasonMessage('');
+    }}
+  >
+    <ScrollView>
+      <Text style={styles.modalIntro}>Este registro es obligatorio y quedará visible en el historial del cliente para fines operativos y de auditoría.</Text>
+      {changeReasonMessage ? <View style={styles.formError}><Text style={styles.formErrorText}>{changeReasonMessage}</Text></View> : null}
+
+      <Text style={styles.fieldLabel}>Quién originó el cambio</Text>
+      <View style={styles.optionWrap}>{appointmentChangeOrigins.map((origin) => <Option key={origin} label={origin} active={changeOrigin === origin} onPress={() => setChangeOrigin(origin)} />)}</View>
+
+      <Text style={styles.fieldLabel}>Motivo principal</Text>
+      <View style={styles.optionWrap}>{appointmentChangeReasons.map((reason) => <Option key={reason} label={reason} active={changeReasonCategory === reason} onPress={() => setChangeReasonCategory(reason)} />)}</View>
+
+      <Input
+        label="Explicación del operador"
+        value={changeReasonNote}
+        onChangeText={setChangeReasonNote}
+        multiline
+        placeholder="Ej. La clienta solicitó mover la cita porque el encargado de la propiedad no estará presente."
+      />
+
+      <View style={styles.modalActions}>
+        <Button variant="secondary" label="Volver" disabled={saving} onPress={() => { setShowChangeReason(false); setChangeOrderId(null); setChangeAction(null); }} />
+        <Button
+          variant={changeAction === 'cancel' ? 'danger' : 'primary'}
+          label={saving ? 'Guardando…' : changeAction === 'reschedule' ? 'Continuar a reprogramar' : 'Confirmar cancelación'}
+          disabled={saving}
+          onPress={() => void confirmAppointmentChangeReason()}
+        />
+      </View>
     </ScrollView>
+  </AppModal>
+</ScrollView>
   );
 }
 
