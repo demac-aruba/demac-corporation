@@ -1,0 +1,6 @@
+
+> demac-corporation@1.0.0 typecheck
+> tsc --noEmit
+
+src/screens/AgendaScreen.tsx(943,358): error TS2322: Type '(order: WorkOrder) => void' is not assignable to type '(order: WorkOrder) => Promise<void>'.
+  Type 'void' is not assignable to type 'Promise<void>'.
