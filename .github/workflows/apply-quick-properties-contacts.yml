@@ -1,0 +1,359 @@
+name: Apply appointment notification recipient matrix
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply patch source
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              if old not in text:
+                  raise SystemExit(f'{label} not found')
+              return text.replace(old, new, 1)
+
+          # Types
+          path = Path('src/types.ts')
+          text = path.read_text()
+          text = replace_once(
+              text,
+              "  email?: string;\n  address: string;",
+              "  email?: string;\n  preferredLanguage?: 'Español' | 'English' | 'Nederlands' | 'Papiamento';\n  templateLanguage?: 'en' | 'es' | 'nl';\n  address: string;",
+              'client language fields',
+          )
+          property_block = """export interface Property {
+  id: string;
+  clientId: string;
+  name: string;
+  type: PropertyType;
+  address: string;
+  zone: string;
+  notes?: string;
+  contacts?: PropertyContact[];
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface Equipment {"""
+          notification_types = """export interface Property {
+  id: string;
+  clientId: string;
+  name: string;
+  type: PropertyType;
+  address: string;
+  zone: string;
+  notes?: string;
+  contacts?: PropertyContact[];
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type AppointmentNotificationRecipientType = 'client' | 'propertyContact';
+
+export interface AppointmentNotificationRecipient {
+  id: string;
+  recipientType: AppointmentNotificationRecipientType;
+  sourceId: string;
+  name: string;
+  role: string;
+  phone: string;
+  whatsapp: string;
+  preferredLanguage: PropertyContactLanguage;
+  templateLanguage?: 'en' | 'es' | 'nl';
+  sendConfirmation: boolean;
+  sendReminder: boolean;
+}
+
+export interface Equipment {"""
+          text = replace_once(text, property_block, notification_types, 'notification recipient types')
+          text = replace_once(
+              text,
+              "  whatsappNotificationsEnabled?: boolean;\n  confirmedAt?: string;",
+              "  whatsappNotificationsEnabled?: boolean;\n  notificationRecipients?: AppointmentNotificationRecipient[];\n  confirmedAt?: string;",
+              'work order notification recipients',
+          )
+          path.write_text(text)
+
+          # Agenda imports and helper functions
+          path = Path('src/screens/AgendaScreen.tsx')
+          text = path.read_text()
+          text = replace_once(
+              text,
+              "import { AppointmentChangeOrigin, AppointmentChangeReasonCategory, AppointmentStatus, Client, DailyVanAssignment, Property, PropertyContact, PropertyContactLanguage, PropertyContactRole, PropertyType, ServiceType, StaffAbsence, StaffProfile, Van, WorkOrder, WorkOrderScheduleHistoryEntry } from '../types';",
+              "import { AppointmentChangeOrigin, AppointmentChangeReasonCategory, AppointmentNotificationRecipient, AppointmentStatus, Client, DailyVanAssignment, Property, PropertyContact, PropertyContactLanguage, PropertyContactRole, PropertyType, ServiceType, StaffAbsence, StaffProfile, Van, WorkOrder, WorkOrderScheduleHistoryEntry } from '../types';",
+              'agenda notification import',
+          )
+          empty_contact = """const emptyQuickContactForm: QuickContactForm = {
+  name: '',
+  role: 'Encargado',
+  phone: '',
+  whatsapp: '',
+  email: '',
+  preferredLanguage: 'Español',
+};
+
+function localDateKey"""
+          helper_functions = """const emptyQuickContactForm: QuickContactForm = {
+  name: '',
+  role: 'Encargado',
+  phone: '',
+  whatsapp: '',
+  email: '',
+  preferredLanguage: 'Español',
+};
+
+function clientNotificationLanguage(client: Client): PropertyContactLanguage {
+  if (client.preferredLanguage) return client.preferredLanguage;
+  if (client.templateLanguage === 'es') return 'Español';
+  if (client.templateLanguage === 'nl') return 'Nederlands';
+  return 'English';
+}
+
+function clientNotificationRecipient(client: Client): AppointmentNotificationRecipient {
+  return {
+    id: `client-${client.id}`,
+    recipientType: 'client',
+    sourceId: client.id,
+    name: client.name || client.company || 'Cliente',
+    role: 'Cliente / facturación',
+    phone: client.phone,
+    whatsapp: client.whatsapp || client.phone,
+    preferredLanguage: clientNotificationLanguage(client),
+    templateLanguage: client.templateLanguage,
+    sendConfirmation: true,
+    sendReminder: true,
+  };
+}
+
+function contactNotificationRecipient(contact: PropertyContact): AppointmentNotificationRecipient {
+  return {
+    id: `contact-${contact.id}`,
+    recipientType: 'propertyContact',
+    sourceId: contact.id,
+    name: contact.name,
+    role: contact.role,
+    phone: contact.phone,
+    whatsapp: contact.whatsapp || contact.phone,
+    preferredLanguage: contact.preferredLanguage,
+    sendConfirmation: false,
+    sendReminder: false,
+  };
+}
+
+function buildNotificationRecipients(
+  client?: Client,
+  property?: Property,
+  saved?: AppointmentNotificationRecipient[],
+  legacyEnabled = true,
+) {
+  const available = [
+    ...(client ? [clientNotificationRecipient(client)] : []),
+    ...((property?.contacts ?? []).filter((contact) => contact.active !== false).map(contactNotificationRecipient)),
+  ];
+  if (!saved?.length) {
+    return available.map((recipient, index) => ({
+      ...recipient,
+      sendConfirmation: index === 0 ? legacyEnabled : false,
+      sendReminder: index === 0 ? legacyEnabled : false,
+    }));
+  }
+  const savedBySource = new Map(saved.map((recipient) => [`${recipient.recipientType}:${recipient.sourceId}`, recipient]));
+  const availableKeys = new Set(available.map((recipient) => `${recipient.recipientType}:${recipient.sourceId}`));
+  return [
+    ...available.map((recipient) => {
+      const previous = savedBySource.get(`${recipient.recipientType}:${recipient.sourceId}`);
+      return previous ? {
+        ...recipient,
+        sendConfirmation: previous.sendConfirmation === true,
+        sendReminder: previous.sendReminder === true,
+      } : recipient;
+    }),
+    ...saved.filter((recipient) => !availableKeys.has(`${recipient.recipientType}:${recipient.sourceId}`)),
+  ];
+}
+
+function localDateKey"""
+          text = replace_once(text, empty_contact, helper_functions, 'agenda notification helpers')
+
+          # State
+          text = replace_once(
+              text,
+              "  const [reschedulingOrderId, setReschedulingOrderId] = useState<string | null>(null);\n  const [sendWhatsApp, setSendWhatsApp] = useState(true);\n  const [saving, setSaving] = useState(false);",
+              "  const [reschedulingOrderId, setReschedulingOrderId] = useState<string | null>(null);\n  const [notificationRecipients, setNotificationRecipients] = useState<AppointmentNotificationRecipient[]>([]);\n  const [saving, setSaving] = useState(false);",
+              'agenda notification recipient state',
+          )
+          recipient_anchor = """  const editingOrder = workOrders.find((order) => order.id === editingOrderId);
+  const reschedulingOrder = workOrders.find((order) => order.id === reschedulingOrderId);
+  const monthTitle"""
+          recipient_effect = """  const editingOrder = workOrders.find((order) => order.id === editingOrderId);
+  const reschedulingOrder = workOrders.find((order) => order.id === reschedulingOrderId);
+
+  useEffect(() => {
+    if (!showCreate || showQuickClient || showQuickProperty || showQuickContact) return;
+    const sourceOrder = editingOrder ?? reschedulingOrder;
+    const sourceMatches = sourceOrder
+      && sourceOrder.clientId === clientId
+      && (sourceOrder.propertyId ?? '') === propertyId;
+    setNotificationRecipients(buildNotificationRecipients(
+      selectedClient,
+      selectedProperty,
+      sourceMatches ? sourceOrder.notificationRecipients : undefined,
+      sourceMatches ? sourceOrder.whatsappNotificationsEnabled !== false : true,
+    ));
+  }, [clientId, propertyId, editingOrderId, reschedulingOrderId, showCreate]);
+
+  const monthTitle"""
+          text = replace_once(text, recipient_anchor, recipient_effect, 'agenda notification initialization effect')
+
+          # Open appointment forms
+          text = replace_once(
+              text,
+              "      setWorkHours(orderSlotCount(sourceOrder, services));\n      setSendWhatsApp(sourceOrder.whatsappNotificationsEnabled !== false);",
+              "      setWorkHours(orderSlotCount(sourceOrder, services));\n      const sourceClient = clients.find((item) => item.id === sourceOrder.clientId);\n      const sourceProperty = properties.find((item) => item.id === sourceOrder.propertyId);\n      setNotificationRecipients(buildNotificationRecipients(sourceClient, sourceProperty, sourceOrder.notificationRecipients, sourceOrder.whatsappNotificationsEnabled !== false));",
+              'source order notification selection',
+          )
+          text = replace_once(
+              text,
+              "      setWorkDescriptionText(cancelled.problem);\n      setWorkHours(1);\n      setSendWhatsApp(true);",
+              "      setWorkDescriptionText(cancelled.problem);\n      setWorkHours(1);\n      const cancelledClient = clients.find((item) => item.id === cancelled.clientId);\n      const cancelledProperty = properties.find((item) => item.id === cancelled.propertyId);\n      setNotificationRecipients(buildNotificationRecipients(cancelledClient, cancelledProperty));",
+              'cancelled slot notification selection',
+          )
+          text = replace_once(
+              text,
+              "    if (candidateVanId) setVanId(candidateVanId);",
+              "    if (!sourceOrder && !cancelled) setNotificationRecipients(buildNotificationRecipients(selectedClient, selectedProperty));\n    if (candidateVanId) setVanId(candidateVanId);",
+              'new appointment notification defaults',
+          )
+
+          # Newly added property contact becomes available in matrix
+          text = replace_once(
+              text,
+              "    setQuickContact(emptyQuickContactForm);\n    setShowQuickContact(false);\n    setSuccessMessage(`${contact.name} fue agregado como contacto de ${selectedProperty.name}.`);",
+              "    setNotificationRecipients((previous) => [\n      ...previous.filter((recipient) => !(recipient.recipientType === 'propertyContact' && recipient.sourceId === contact.id)),\n      contactNotificationRecipient(contact),\n    ]);\n    setQuickContact(emptyQuickContactForm);\n    setShowQuickContact(false);\n    setSuccessMessage(`${contact.name} fue agregado como contacto de ${selectedProperty.name}.`);",
+              'quick contact notification recipient',
+          )
+
+          # Toggle and save payload
+          save_anchor = """  const saveAppointment = async (status: 'Reserva temporal' | 'Confirmada') => {
+    const client = clients.find((item) => item.id === clientId);"""
+          save_with_toggle = """  const toggleNotificationRecipient = (recipientId: string, field: 'sendConfirmation' | 'sendReminder') => {
+    setNotificationRecipients((previous) => previous.map((recipient) => recipient.id === recipientId ? { ...recipient, [field]: !recipient[field] } : recipient));
+  };
+
+  const saveAppointment = async (status: 'Reserva temporal' | 'Confirmada') => {
+    const client = clients.find((item) => item.id === clientId);"""
+          text = replace_once(text, save_anchor, save_with_toggle, 'notification toggle function')
+          text = replace_once(
+              text,
+              "    const now = new Date().toISOString();\n    const zone = selectedProperty?.zone ?? client.zone;",
+              "    const now = new Date().toISOString();\n    const zone = selectedProperty?.zone ?? client.zone;\n    const notificationSnapshot = notificationRecipients.map((recipient) => ({ ...recipient }));\n    const notificationsEnabled = notificationSnapshot.some((recipient) => recipient.sendConfirmation || recipient.sendReminder);",
+              'notification snapshot before save',
+          )
+          text = text.replace(
+              "whatsappNotificationsEnabled: editingOrder.status === 'Reserva temporal' ? false : sendWhatsApp,",
+              "whatsappNotificationsEnabled: editingOrder.status === 'Reserva temporal' ? false : notificationsEnabled,\n        notificationRecipients: notificationSnapshot,",
+              1,
+          )
+          text = text.replace(
+              "whatsappNotificationsEnabled: status === 'Confirmada' ? sendWhatsApp : false,",
+              "whatsappNotificationsEnabled: status === 'Confirmada' ? notificationsEnabled : false,\n        notificationRecipients: notificationSnapshot,",
+              1,
+          )
+          text = text.replace(
+              "whatsappNotificationsEnabled: status === 'Confirmada' ? sendWhatsApp : false,",
+              "whatsappNotificationsEnabled: status === 'Confirmada' ? notificationsEnabled : false,\n        notificationRecipients: notificationSnapshot,",
+              1,
+          )
+          text = replace_once(
+              text,
+              "    setWorkDescriptionText('');\n    setWorkHours(1);\n    setSendWhatsApp(true);\n    setShowCreate(false);",
+              "    setWorkDescriptionText('');\n    setWorkHours(1);\n    setNotificationRecipients([]);\n    setShowCreate(false);",
+              'notification reset after save',
+          )
+
+          # Temporary confirmation uses selected recipient configuration
+          text = replace_once(
+              text,
+              "  const confirmTemporaryAppointment = async (order: WorkOrder, enableWhatsApp: boolean) => {\n    const now = new Date().toISOString();\n    await updateWorkOrder(order.id, {\n      status: 'Confirmada',\n      whatsappNotificationsEnabled: enableWhatsApp,",
+              "  const confirmTemporaryAppointment = async (order: WorkOrder, enableWhatsApp: boolean) => {\n    const now = new Date().toISOString();\n    const hasSelectedRecipients = (order.notificationRecipients ?? []).some((recipient) => recipient.sendConfirmation || recipient.sendReminder);\n    await updateWorkOrder(order.id, {\n      status: 'Confirmada',\n      whatsappNotificationsEnabled: enableWhatsApp && (order.notificationRecipients?.length ? hasSelectedRecipients : true),",
+              'temporary confirmation notification selection',
+          )
+
+          # Remove legacy sendWhatsApp initialization during reschedule/edit
+          text = text.replace("  setSendWhatsApp(order.whatsappNotificationsEnabled !== false);\n", "", 1)
+          text = text.replace("    setSendWhatsApp(order.whatsappNotificationsEnabled !== false);\n", "", 1)
+
+          # Replace single switch with matrix
+          old_notifications = """            <Text style={styles.fieldLabel}>Notificaciones al confirmar</Text>
+            <View style={styles.optionWrap}><Option label="Enviar confirmación y recordatorio por WhatsApp" active={sendWhatsApp} onPress={() => setSendWhatsApp((value) => !value)} /></View>"""
+          new_notifications = """            <Text style={styles.fieldLabel}>Notificaciones por WhatsApp</Text>
+            <Text style={styles.notificationHelp}>Selecciona de forma independiente quién recibe la confirmación y quién recibe el recordatorio. Las reservas temporales guardan esta selección, pero no envían mensajes hasta que la cita sea confirmada.</Text>
+            <View style={styles.notificationMatrix}>
+              <View style={[styles.notificationRow, styles.notificationHeaderRow]}>
+                <Text style={[styles.notificationHeaderText, { flex: 1 }]}>Destinatario</Text>
+                <Text style={styles.notificationColumnHeader}>Confirmar cita</Text>
+                <Text style={styles.notificationColumnHeader}>Recordar cita</Text>
+              </View>
+              {notificationRecipients.map((recipient) => (
+                <View key={recipient.id} style={styles.notificationRow}>
+                  <View style={{ flex: 1, minWidth: 180 }}>
+                    <Text style={styles.notificationName}>{recipient.name}</Text>
+                    <Text style={styles.notificationMeta}>{recipient.role} · {recipient.whatsapp || recipient.phone} · {recipient.preferredLanguage}</Text>
+                  </View>
+                  <Pressable accessibilityLabel={`Confirmación para ${recipient.name}`} onPress={() => toggleNotificationRecipient(recipient.id, 'sendConfirmation')} style={[styles.notificationCheck, recipient.sendConfirmation && styles.notificationCheckActive]}><Text style={[styles.notificationCheckText, recipient.sendConfirmation && styles.notificationCheckTextActive]}>{recipient.sendConfirmation ? '✓' : ''}</Text></Pressable>
+                  <Pressable accessibilityLabel={`Recordatorio para ${recipient.name}`} onPress={() => toggleNotificationRecipient(recipient.id, 'sendReminder')} style={[styles.notificationCheck, recipient.sendReminder && styles.notificationCheckActive]}><Text style={[styles.notificationCheckText, recipient.sendReminder && styles.notificationCheckTextActive]}>{recipient.sendReminder ? '✓' : ''}</Text></Pressable>
+                </View>
+              ))}
+              {!notificationRecipients.length ? <Text style={styles.notificationEmpty}>Selecciona un cliente o registra una persona con WhatsApp.</Text> : null}
+            </View>
+            {notificationRecipients.some((recipient) => recipient.sendConfirmation || recipient.sendReminder) ? null : <Text style={styles.notificationDisabledText}>No se enviarán mensajes de WhatsApp para esta cita.</Text>}"""
+          text = replace_once(text, old_notifications, new_notifications, 'notification recipient matrix')
+
+          # Show recipients in details panel
+          detail_line = """  const techNames = order.technicianIds.map((id) => users.find((user) => user.id === id)?.name).filter(Boolean).join(' y ') || 'Sin técnico asignado';
+  return <View>"""
+          detail_replacement = """  const techNames = order.technicianIds.map((id) => users.find((user) => user.id === id)?.name).filter(Boolean).join(' y ') || 'Sin técnico asignado';
+  const confirmationNames = (order.notificationRecipients ?? []).filter((recipient) => recipient.sendConfirmation).map((recipient) => recipient.name).join(', ');
+  const reminderNames = (order.notificationRecipients ?? []).filter((recipient) => recipient.sendReminder).map((recipient) => recipient.name).join(', ');
+  return <View>"""
+          text = replace_once(text, detail_line, detail_replacement, 'appointment detail notification names')
+          text = replace_once(
+              text,
+              "<DetailRow label=\"Descripción del trabajo\" value={orderDescription(order, service)} />{order.airConditionerCount ?",
+              "<DetailRow label=\"Descripción del trabajo\" value={orderDescription(order, service)} /><DetailRow label=\"Confirmación WhatsApp\" value={confirmationNames || (order.whatsappNotificationsEnabled !== false ? client?.name : 'No enviar')} /><DetailRow label=\"Recordatorio WhatsApp\" value={reminderNames || (order.whatsappNotificationsEnabled !== false ? client?.name : 'No enviar')} />{order.airConditionerCount ?",
+              'appointment detail notification rows',
+          )
+
+          # Styles
+          style_anchor = """  propertyContactMeta: { color: colors.muted, fontSize: 9, marginTop: 3 },
+  summaryBox:"""
+          style_replacement = """  propertyContactMeta: { color: colors.muted, fontSize: 9, marginTop: 3 },
+  notificationHelp: { color: colors.muted, fontSize: 10, lineHeight: 15, marginTop: -3, marginBottom: 10, paddingLeft: 24 },
+  notificationMatrix: { borderWidth: 1, borderColor: colors.border, borderRadius: 9, overflow: 'hidden', backgroundColor: '#FFFFFF', marginBottom: 8 },
+  notificationRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 11, paddingVertical: 10, borderTopWidth: 1, borderTopColor: '#E8EBEF' },
+  notificationHeaderRow: { borderTopWidth: 0, backgroundColor: '#F4F6F8' },
+  notificationHeaderText: { color: colors.text, fontSize: 10, fontWeight: '900' },
+  notificationColumnHeader: { width: 82, color: colors.muted, fontSize: 8, fontWeight: '900', textAlign: 'center' },
+  notificationName: { color: colors.text, fontSize: 10, fontWeight: '900' },
+  notificationMeta: { color: colors.muted, fontSize: 8, marginTop: 3 },
+  notificationCheck: { width: 34, height: 34, borderRadius: 7, borderWidth: 1, borderColor: colors.border, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', marginHorizontal: 24 },
+  notificationCheckActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  notificationCheckText: { color: colors.muted, fontSize: 17, fontWeight: '900' },
+  notificationCheckTextActive: { color: '#FFFFFF' },
+  notificationEmpty: { color: colors.muted, fontSize: 10, padding: 12 },
+  notificationDisabledText: { color: colors.warning, fontSize: 10, fontWeight: '800', marginBottom: 12 },
+  summaryBox:"""
+          text = replace_once(text, style_anchor, style_replacement, 'notification matrix styles')
+          path.write_text(text)
+          PY
