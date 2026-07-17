@@ -3,9 +3,11 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { AppModal, Button, Card, EmptyState, formatMoney, Input, Pill, SectionTitle } from '../components/UI';
 import { useAppState } from '../state/AppState';
 import { colors } from '../theme';
-import { Client, Property, PropertyType } from '../types';
+import { Client, Property, PropertyContact, PropertyContactLanguage, PropertyContactRole, PropertyType } from '../types';
 
 const propertyTypes: PropertyType[] = ['Casa', 'Apartamento', 'Oficina', 'Local comercial', 'Otro'];
+const propertyContactRoles: PropertyContactRole[] = ['Dueño', 'Encargado', 'Administrador', 'Inquilino', 'Contacto de acceso', 'Contabilidad', 'Otro'];
+const propertyContactLanguages: PropertyContactLanguage[] = ['Español', 'English', 'Nederlands', 'Papiamento'];
 
 export function ClientsScreen() {
   const {
@@ -15,6 +17,7 @@ export function ClientsScreen() {
     workOrders,
     addClient,
     addProperty,
+    updateProperty,
     removeProperty,
     dataError,
     dataLoading,
@@ -26,6 +29,9 @@ export function ClientsScreen() {
   const [selectedId, setSelectedId] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [showProperty, setShowProperty] = useState(false);
+  const [showContact, setShowContact] = useState(false);
+  const [contactPropertyId, setContactPropertyId] = useState('');
+  const [contactForm, setContactForm] = useState({ name: '', role: 'Encargado' as PropertyContactRole, phone: '', whatsapp: '', email: '', preferredLanguage: 'Español' as PropertyContactLanguage });
   const [propertyToDelete, setPropertyToDelete] = useState<Property | null>(null);
   const [saving, setSaving] = useState(false);
   const [screenMessage, setScreenMessage] = useState('');
@@ -167,6 +173,41 @@ export function ClientsScreen() {
     setShowProperty(false);
   };
 
+
+  const openContactModal = (property: Property) => {
+    setScreenMessage('');
+    clearDataError();
+    setContactPropertyId(property.id);
+    setContactForm({ name: '', role: 'Encargado', phone: '', whatsapp: '', email: '', preferredLanguage: 'Español' });
+    setShowContact(true);
+  };
+
+  const createPropertyContact = async () => {
+    const property = properties.find((item) => item.id === contactPropertyId);
+    if (!property) return setScreenMessage('La propiedad seleccionada ya no existe.');
+    if (!contactForm.name.trim()) return setScreenMessage('Escribe el nombre de la persona.');
+    if (!contactForm.phone.trim() && !contactForm.whatsapp.trim()) return setScreenMessage('Escribe al menos un teléfono o WhatsApp.');
+    const now = new Date().toISOString();
+    const contact: PropertyContact = {
+      id: `contact-${Date.now()}`,
+      name: contactForm.name.trim(),
+      role: contactForm.role,
+      phone: contactForm.phone.trim() || contactForm.whatsapp.trim(),
+      whatsapp: contactForm.whatsapp.trim() || contactForm.phone.trim(),
+      email: contactForm.email.trim() || undefined,
+      preferredLanguage: contactForm.preferredLanguage,
+      active: true,
+      createdAt: now,
+      updatedAt: now,
+    };
+    setSaving(true);
+    const result = await updateProperty(property.id, { contacts: [...(property.contacts ?? []), contact], updatedAt: now });
+    setSaving(false);
+    if (!result.ok) return setScreenMessage(result.message ?? 'No se pudo guardar la persona.');
+    setShowContact(false);
+    setContactPropertyId('');
+  };
+
   const confirmRemoveProperty = async () => {
     if (!propertyToDelete) return;
     setSaving(true);
@@ -257,9 +298,10 @@ export function ClientsScreen() {
                     <View style={{ flex: 1 }}>
                       <View style={styles.propertyTitleRow}><Text style={styles.propertyName}>{property.name}</Text><Pill label={property.type} tone="neutral" /></View>
                       <Text style={styles.propertyAddress}>{property.address}</Text>
-                      <Text style={styles.propertyMeta}>{property.zone}{property.notes ? ` · ${property.notes}` : ''}</Text>
-                    </View>
-                    <Button compact variant="ghost" label="Quitar" onPress={() => setPropertyToDelete(property)} />
+                                            <Text style={styles.propertyMeta}>{property.zone}{property.notes ? ` · ${property.notes}` : ''}</Text>
+            {(property.contacts ?? []).filter((contact) => contact.active !== false).map((contact) => <Text key={contact.id} style={styles.propertyContactLine}>{contact.name} · {contact.role} · {contact.whatsapp || contact.phone} · {contact.preferredLanguage}</Text>)}
+          </View>
+          <View style={{ gap: 6 }}><Button compact variant="secondary" label="Agregar contacto" onPress={() => openContactModal(property)} /><Button compact variant="ghost" label="Quitar" onPress={() => setPropertyToDelete(property)} /></View>
                   </View>
                 )) : <EmptyState icon="⌂" title="Sin propiedades" message="Agrega la primera casa, apartamento, oficina o local de este cliente." />}
               </Card>
@@ -338,6 +380,19 @@ export function ClientsScreen() {
         <View style={styles.modalActions}><Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => setShowProperty(false)} /><Button label={saving ? 'Guardando…' : 'Guardar propiedad'} disabled={saving} onPress={() => void createProperty()} /></View>
       </AppModal>
 
+      <AppModal visible={showContact} title="Agregar contacto de propiedad" onClose={() => !saving && setShowContact(false)}>
+        {screenMessage ? <View style={styles.formError}><Text style={styles.formErrorText}>{screenMessage}</Text></View> : null}
+        <Input label="Nombre completo" value={contactForm.name} onChangeText={(name) => setContactForm({ ...contactForm, name })} />
+        <Text style={styles.inputLabel}>Función en la propiedad</Text>
+        <View style={styles.typeWrap}>{propertyContactRoles.map((role) => <Pressable key={role} onPress={() => setContactForm({ ...contactForm, role })} style={[styles.typeButton, contactForm.role === role && styles.typeButtonActive]}><Text style={[styles.typeText, contactForm.role === role && styles.typeTextActive]}>{role}</Text></Pressable>)}</View>
+        <Input label="Teléfono" value={contactForm.phone} onChangeText={(phone) => setContactForm({ ...contactForm, phone })} keyboardType="phone-pad" />
+        <Input label="WhatsApp" value={contactForm.whatsapp} onChangeText={(whatsapp) => setContactForm({ ...contactForm, whatsapp })} keyboardType="phone-pad" placeholder="Si es igual, puede quedar vacío" />
+        <Input label="Correo electrónico (opcional)" value={contactForm.email} onChangeText={(email) => setContactForm({ ...contactForm, email })} keyboardType="email-address" />
+        <Text style={styles.inputLabel}>Idioma preferido</Text>
+        <View style={styles.typeWrap}>{propertyContactLanguages.map((preferredLanguage) => <Pressable key={preferredLanguage} onPress={() => setContactForm({ ...contactForm, preferredLanguage })} style={[styles.typeButton, contactForm.preferredLanguage === preferredLanguage && styles.typeButtonActive]}><Text style={[styles.typeText, contactForm.preferredLanguage === preferredLanguage && styles.typeTextActive]}>{preferredLanguage}</Text></Pressable>)}</View>
+        <View style={styles.modalActions}><Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => setShowContact(false)} /><Button label={saving ? 'Guardando…' : 'Guardar contacto'} disabled={saving} onPress={() => void createPropertyContact()} /></View>
+      </AppModal>
+
       <AppModal visible={Boolean(propertyToDelete)} title="Quitar propiedad" onClose={() => !saving && setPropertyToDelete(null)}>
         <Text style={styles.confirmText}>¿Seguro que deseas quitar <Text style={styles.confirmStrong}>{propertyToDelete?.name}</Text>? Los trabajos anteriores conservarán la dirección que tenían.</Text>
         <View style={styles.modalActions}><Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => setPropertyToDelete(null)} /><Button variant="danger" label={saving ? 'Quitando…' : 'Quitar propiedad'} disabled={saving} onPress={() => void confirmRemoveProperty()} /></View>
@@ -382,6 +437,7 @@ const styles = StyleSheet.create({
   propertyName: { color: colors.text, fontWeight: '900', fontSize: 14 },
   propertyAddress: { color: colors.text, fontSize: 12, marginTop: 5 },
   propertyMeta: { color: colors.muted, fontSize: 10, marginTop: 3 },
+  propertyContactLine: { color: colors.primaryDark, fontSize: 9, fontWeight: '700', marginTop: 5 },
   equipmentRow: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#EDF1F6' },
   equipmentIcon: { width: 42, height: 42, borderRadius: 12, backgroundColor: colors.primaryLight, alignItems: 'center', justifyContent: 'center' },
   equipmentName: { color: colors.text, fontWeight: '900', fontSize: 13 },

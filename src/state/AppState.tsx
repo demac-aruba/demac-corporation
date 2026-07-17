@@ -78,6 +78,7 @@ type AppStateValue = {
   logout: () => Promise<void>;
   addClient: (client: Client) => Promise<OperationResult>;
   addProperty: (property: Property) => Promise<OperationResult>;
+  updateProperty: (id: string, changes: Partial<Property>) => Promise<OperationResult>;
   removeProperty: (id: string) => Promise<OperationResult>;
   addCatalogItem: (item: ServiceType) => Promise<OperationResult>;
   updateCatalogItem: (id: string, changes: Partial<ServiceType>) => Promise<OperationResult>;
@@ -332,6 +333,28 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     }
   };
 
+
+  const updateProperty = async (id: string, changes: Partial<Property>): Promise<OperationResult> => {
+    const existing = properties.find((property) => property.id === id);
+    if (!existing) return { ok: false, message: 'La propiedad ya no existe.' };
+    const updated: Property = { ...existing, ...changes, updatedAt: changes.updatedAt ?? new Date().toISOString() };
+    if (currentUser?.authProvider !== 'firebase') {
+      setProperties((previous) => sortProperties(previous.map((property) => property.id === id ? updated : property)));
+      return { ok: true };
+    }
+    try {
+      await saveFirestoreDocument('properties', updated);
+      setProperties((previous) => sortProperties(previous.map((property) => property.id === id ? updated : property)));
+      setDataError(null);
+      setLastSyncedAt(new Date().toISOString());
+      return { ok: true };
+    } catch (error) {
+      const message = friendlyDataError(error);
+      setDataError(message);
+      return { ok: false, message };
+    }
+  };
+
   const removeProperty = async (id: string): Promise<OperationResult> => {
     const existing = properties.find((property) => property.id === id);
     if (!existing) return { ok: false, message: 'La propiedad ya no existe.' };
@@ -490,6 +513,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     logout,
     addClient,
     addProperty,
+    updateProperty,
     removeProperty,
     addCatalogItem,
     updateCatalogItem,
