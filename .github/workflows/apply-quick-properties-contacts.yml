@@ -1,0 +1,518 @@
+name: Validate quick properties and contacts
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  patch-validate-commit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/quick-properties-contacts
+          fetch-depth: 0
+
+      - name: Apply source patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              if old not in text:
+                  raise SystemExit(f'{label} not found')
+              return text.replace(old, new, 1)
+
+          # --- Types ---
+          path = Path('src/types.ts')
+          text = path.read_text()
+          text = replace_once(
+              text,
+              "export type PropertyType = 'Casa' | 'Apartamento' | 'Oficina' | 'Local comercial' | 'Otro';\n\nexport interface Property {",
+              """export type PropertyType = 'Casa' | 'Apartamento' | 'Oficina' | 'Local comercial' | 'Otro';
+
+export type PropertyContactRole = 'Dueño' | 'Encargado' | 'Administrador' | 'Inquilino' | 'Contacto de acceso' | 'Contabilidad' | 'Otro';
+export type PropertyContactLanguage = 'Español' | 'English' | 'Nederlands' | 'Papiamento';
+
+export interface PropertyContact {
+  id: string;
+  name: string;
+  role: PropertyContactRole;
+  phone: string;
+  whatsapp: string;
+  email?: string;
+  preferredLanguage: PropertyContactLanguage;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface Property {""",
+              'property contact types',
+          )
+          text = replace_once(
+              text,
+              "  notes?: string;\n  active: boolean;",
+              "  notes?: string;\n  contacts?: PropertyContact[];\n  active: boolean;",
+              'property contacts field',
+          )
+          path.write_text(text)
+
+          # --- App state ---
+          path = Path('src/state/AppState.tsx')
+          text = path.read_text()
+          text = replace_once(
+              text,
+              "  addProperty: (property: Property) => Promise<OperationResult>;\n  removeProperty: (id: string) => Promise<OperationResult>;",
+              "  addProperty: (property: Property) => Promise<OperationResult>;\n  updateProperty: (id: string, changes: Partial<Property>) => Promise<OperationResult>;\n  removeProperty: (id: string) => Promise<OperationResult>;",
+              'app state property contract',
+          )
+          marker = "\n  const removeProperty = async (id: string): Promise<OperationResult> => {"
+          insert = """
+
+  const updateProperty = async (id: string, changes: Partial<Property>): Promise<OperationResult> => {
+    const existing = properties.find((property) => property.id === id);
+    if (!existing) return { ok: false, message: 'La propiedad ya no existe.' };
+    const updated: Property = { ...existing, ...changes, updatedAt: changes.updatedAt ?? new Date().toISOString() };
+    if (currentUser?.authProvider !== 'firebase') {
+      setProperties((previous) => sortProperties(previous.map((property) => property.id === id ? updated : property)));
+      return { ok: true };
+    }
+    try {
+      await saveFirestoreDocument('properties', updated);
+      setProperties((previous) => sortProperties(previous.map((property) => property.id === id ? updated : property)));
+      setDataError(null);
+      setLastSyncedAt(new Date().toISOString());
+      return { ok: true };
+    } catch (error) {
+      const message = friendlyDataError(error);
+      setDataError(message);
+      return { ok: false, message };
+    }
+  };
+"""
+          if marker not in text:
+              raise SystemExit('update property insertion marker not found')
+          text = text.replace(marker, insert + marker, 1)
+          text = replace_once(
+              text,
+              "    addProperty,\n    removeProperty,",
+              "    addProperty,\n    updateProperty,\n    removeProperty,",
+              'app state value property actions',
+          )
+          path.write_text(text)
+
+          # --- Agenda ---
+          path = Path('src/screens/AgendaScreen.tsx')
+          text = path.read_text()
+          text = replace_once(
+              text,
+              "import { AppointmentChangeOrigin, AppointmentChangeReasonCategory, AppointmentStatus, Client, DailyVanAssignment, Property, PropertyType, ServiceType, StaffAbsence, StaffProfile, Van, WorkOrder, WorkOrderScheduleHistoryEntry } from '../types';",
+              "import { AppointmentChangeOrigin, AppointmentChangeReasonCategory, AppointmentStatus, Client, DailyVanAssignment, Property, PropertyContact, PropertyContactLanguage, PropertyContactRole, PropertyType, ServiceType, StaffAbsence, StaffProfile, Van, WorkOrder, WorkOrderScheduleHistoryEntry } from '../types';",
+              'agenda imports',
+          )
+          text = replace_once(
+              text,
+              "const propertyTypes: PropertyType[] = ['Casa', 'Apartamento', 'Oficina', 'Local comercial', 'Otro'];",
+              "const propertyTypes: PropertyType[] = ['Casa', 'Apartamento', 'Oficina', 'Local comercial', 'Otro'];\nconst propertyContactRoles: PropertyContactRole[] = ['Dueño', 'Encargado', 'Administrador', 'Inquilino', 'Contacto de acceso', 'Contabilidad', 'Otro'];\nconst propertyContactLanguages: PropertyContactLanguage[] = ['Español', 'English', 'Nederlands', 'Papiamento'];",
+              'agenda contact constants',
+          )
+          text = replace_once(
+              text,
+              "const emptyQuickClientForm: QuickClientForm = {\n  name: '',\n  company: '',\n  phone: '',\n  whatsapp: '',\n  propertyName: 'Propiedad principal',\n  propertyType: 'Casa',\n  address: '',\n  zone: '',\n};",
+              """const emptyQuickClientForm: QuickClientForm = {
+  name: '',
+  company: '',
+  phone: '',
+  whatsapp: '',
+  propertyName: 'Propiedad principal',
+  propertyType: 'Casa',
+  address: '',
+  zone: '',
+};
+
+type QuickPropertyForm = {
+  name: string;
+  type: PropertyType;
+  address: string;
+  zone: string;
+  notes: string;
+};
+
+const emptyQuickPropertyForm: QuickPropertyForm = {
+  name: '',
+  type: 'Casa',
+  address: '',
+  zone: '',
+  notes: '',
+};
+
+type QuickContactForm = {
+  name: string;
+  role: PropertyContactRole;
+  phone: string;
+  whatsapp: string;
+  email: string;
+  preferredLanguage: PropertyContactLanguage;
+};
+
+const emptyQuickContactForm: QuickContactForm = {
+  name: '',
+  role: 'Encargado',
+  phone: '',
+  whatsapp: '',
+  email: '',
+  preferredLanguage: 'Español',
+};""",
+              'agenda quick form types',
+          )
+          text = replace_once(
+              text,
+              "    addClient,\n    addProperty,\n    addWorkOrder,",
+              "    addClient,\n    addProperty,\n    updateProperty,\n    addWorkOrder,",
+              'agenda property actions',
+          )
+          text = replace_once(
+              text,
+              "  const [quickClientMessage, setQuickClientMessage] = useState('');\n  const [successMessage, setSuccessMessage] = useState('');",
+              """  const [quickClientMessage, setQuickClientMessage] = useState('');
+  const [showQuickProperty, setShowQuickProperty] = useState(false);
+  const [quickProperty, setQuickProperty] = useState<QuickPropertyForm>(emptyQuickPropertyForm);
+  const [quickPropertySaving, setQuickPropertySaving] = useState(false);
+  const [quickPropertyMessage, setQuickPropertyMessage] = useState('');
+  const [showQuickContact, setShowQuickContact] = useState(false);
+  const [quickContact, setQuickContact] = useState<QuickContactForm>(emptyQuickContactForm);
+  const [quickContactSaving, setQuickContactSaving] = useState(false);
+  const [quickContactMessage, setQuickContactMessage] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');""",
+              'agenda quick form state',
+          )
+          text = replace_once(
+              text,
+              "  const selectedProperty = clientProperties.find((item) => item.id === propertyId);\n  const selectedVan = agendaVans.find((item) => item.id === vanId);",
+              "  const selectedProperty = clientProperties.find((item) => item.id === propertyId);\n  const selectedPropertyContacts = (selectedProperty?.contacts ?? []).filter((contact) => contact.active !== false);\n  const selectedVan = agendaVans.find((item) => item.id === vanId);",
+              'agenda selected property contacts',
+          )
+          marker = "\n  const saveAppointment = async (status: 'Reserva temporal' | 'Confirmada') => {"
+          functions = """
+
+  const openQuickProperty = () => {
+    if (!selectedClient) return setFormMessage('Selecciona un cliente antes de añadir una propiedad.');
+    setQuickProperty({ ...emptyQuickPropertyForm, name: `Propiedad ${clientProperties.length + 1}`, zone: selectedClient.zone || 'Oranjestad' });
+    setQuickPropertyMessage('');
+    setShowQuickProperty(true);
+  };
+
+  const saveQuickProperty = async () => {
+    if (!selectedClient) return setQuickPropertyMessage('Selecciona un cliente antes de añadir la propiedad.');
+    if (!quickProperty.name.trim()) return setQuickPropertyMessage('Escribe un nombre para identificar la propiedad.');
+    if (!quickProperty.address.trim()) return setQuickPropertyMessage('Escribe la dirección de la propiedad.');
+    const now = new Date().toISOString();
+    const property: Property = {
+      id: `property-${Date.now()}`,
+      clientId: selectedClient.id,
+      name: quickProperty.name.trim(),
+      type: quickProperty.type,
+      address: quickProperty.address.trim(),
+      zone: quickProperty.zone.trim() || selectedClient.zone || 'Aruba',
+      notes: quickProperty.notes.trim() || undefined,
+      contacts: [],
+      active: true,
+      createdAt: now,
+      updatedAt: now,
+    };
+    setQuickPropertySaving(true);
+    setQuickPropertyMessage('');
+    const result = await addProperty(property);
+    setQuickPropertySaving(false);
+    if (!result.ok) return setQuickPropertyMessage(result.message ?? 'No se pudo guardar la propiedad.');
+    setPropertyId(property.id);
+    setQuickProperty(emptyQuickPropertyForm);
+    setShowQuickProperty(false);
+    setSuccessMessage(`${property.name} fue agregada y seleccionada para esta cita.`);
+  };
+
+  const openQuickContact = () => {
+    if (!selectedProperty) return setFormMessage('Selecciona una propiedad antes de añadir una persona encargada.');
+    setQuickContact(emptyQuickContactForm);
+    setQuickContactMessage('');
+    setShowQuickContact(true);
+  };
+
+  const saveQuickContact = async () => {
+    if (!selectedProperty) return setQuickContactMessage('Selecciona una propiedad antes de añadir la persona.');
+    if (!quickContact.name.trim()) return setQuickContactMessage('Escribe el nombre de la persona.');
+    if (!quickContact.phone.trim() && !quickContact.whatsapp.trim()) return setQuickContactMessage('Escribe al menos un teléfono o WhatsApp.');
+    const now = new Date().toISOString();
+    const contact: PropertyContact = {
+      id: `contact-${Date.now()}`,
+      name: quickContact.name.trim(),
+      role: quickContact.role,
+      phone: quickContact.phone.trim() || quickContact.whatsapp.trim(),
+      whatsapp: quickContact.whatsapp.trim() || quickContact.phone.trim(),
+      email: quickContact.email.trim() || undefined,
+      preferredLanguage: quickContact.preferredLanguage,
+      active: true,
+      createdAt: now,
+      updatedAt: now,
+    };
+    setQuickContactSaving(true);
+    setQuickContactMessage('');
+    const result = await updateProperty(selectedProperty.id, {
+      contacts: [...(selectedProperty.contacts ?? []), contact],
+      updatedAt: now,
+    });
+    setQuickContactSaving(false);
+    if (!result.ok) return setQuickContactMessage(result.message ?? 'No se pudo guardar la persona encargada.');
+    setQuickContact(emptyQuickContactForm);
+    setShowQuickContact(false);
+    setSuccessMessage(`${contact.name} fue agregado como contacto de ${selectedProperty.name}.`);
+  };
+"""
+          if marker not in text:
+              raise SystemExit('agenda function insertion marker not found')
+          text = text.replace(marker, functions + marker, 1)
+          text = replace_once(
+              text,
+              "title={showQuickClient ? 'Agregar cliente rápido' : editingOrder ? 'Editar cita' : reschedulingOrder ? 'Reprogramar cita' : 'Confirmar nueva cita'}",
+              "title={showQuickClient ? 'Agregar cliente rápido' : showQuickProperty ? 'Añadir propiedad' : showQuickContact ? 'Añadir persona encargada' : editingOrder ? 'Editar cita' : reschedulingOrder ? 'Reprogramar cita' : 'Confirmar nueva cita'}",
+              'agenda modal title',
+          )
+          text = replace_once(
+              text,
+              "          if (showQuickClient) {\n            if (!quickClientSaving) setShowQuickClient(false);\n            return;\n          }\n          if (!saving) {",
+              """          if (showQuickClient) {
+            if (!quickClientSaving) setShowQuickClient(false);
+            return;
+          }
+          if (showQuickProperty) {
+            if (!quickPropertySaving) setShowQuickProperty(false);
+            return;
+          }
+          if (showQuickContact) {
+            if (!quickContactSaving) setShowQuickContact(false);
+            return;
+          }
+          if (!saving) {""",
+              'agenda modal close flow',
+          )
+          transition = """          </ScrollView>
+        ) : (
+          <ScrollView>"""
+          replacement = """          </ScrollView>
+        ) : showQuickProperty ? (
+          <ScrollView>
+            <Text style={styles.modalIntro}>Registra otra propiedad para {selectedClient?.name ?? 'el cliente'} sin salir de la cita. Al guardar quedará seleccionada automáticamente.</Text>
+            {quickPropertyMessage ? <View style={styles.formError}><Text style={styles.formErrorText}>{quickPropertyMessage}</Text></View> : null}
+            <Input label="Nombre para identificarla" value={quickProperty.name} onChangeText={(name) => setQuickProperty({ ...quickProperty, name })} placeholder="Ej. Bowling, Oficina principal o Apartamento 4B" />
+            <Text style={styles.quickFieldLabel}>Tipo de propiedad</Text>
+            <View style={styles.optionWrap}>{propertyTypes.map((type) => <Option key={type} label={type} active={quickProperty.type === type} onPress={() => setQuickProperty({ ...quickProperty, type })} />)}</View>
+            <Input label="Dirección" value={quickProperty.address} onChangeText={(address) => setQuickProperty({ ...quickProperty, address })} placeholder="Calle, número y referencia" />
+            <Input label="Zona" value={quickProperty.zone} onChangeText={(zone) => setQuickProperty({ ...quickProperty, zone })} placeholder="Ej. Oranjestad, Noord o Santa Cruz" />
+            <Input label="Notas de acceso (opcional)" value={quickProperty.notes} onChangeText={(notes) => setQuickProperty({ ...quickProperty, notes })} multiline placeholder="Ej. Entrada por el portón lateral, llamar al llegar…" />
+            <View style={styles.modalActions}>
+              <Button variant="secondary" label="Volver a la cita" disabled={quickPropertySaving} onPress={() => setShowQuickProperty(false)} />
+              <Button label={quickPropertySaving ? 'Guardando…' : 'Guardar y seleccionar'} disabled={quickPropertySaving} onPress={() => void saveQuickProperty()} />
+            </View>
+          </ScrollView>
+        ) : showQuickContact ? (
+          <ScrollView>
+            <Text style={styles.modalIntro}>Añade una persona relacionada con {selectedProperty?.name ?? 'esta propiedad'}. En el próximo módulo podrás decidir si recibe confirmaciones, recordatorios o ambos.</Text>
+            {quickContactMessage ? <View style={styles.formError}><Text style={styles.formErrorText}>{quickContactMessage}</Text></View> : null}
+            <Input label="Nombre completo" value={quickContact.name} onChangeText={(name) => setQuickContact({ ...quickContact, name })} placeholder="Ej. Omar Pérez" />
+            <Text style={styles.quickFieldLabel}>Función en la propiedad</Text>
+            <View style={styles.optionWrap}>{propertyContactRoles.map((role) => <Option key={role} label={role} active={quickContact.role === role} onPress={() => setQuickContact({ ...quickContact, role })} />)}</View>
+            <View style={styles.twoColumnFields}>
+              <View style={styles.halfField}><Input label="Teléfono" value={quickContact.phone} onChangeText={(phone) => setQuickContact({ ...quickContact, phone })} keyboardType="phone-pad" /></View>
+              <View style={styles.halfField}><Input label="WhatsApp" value={quickContact.whatsapp} onChangeText={(whatsapp) => setQuickContact({ ...quickContact, whatsapp })} keyboardType="phone-pad" placeholder="Si es igual, puede quedar vacío" /></View>
+            </View>
+            <Input label="Correo electrónico (opcional)" value={quickContact.email} onChangeText={(email) => setQuickContact({ ...quickContact, email })} keyboardType="email-address" />
+            <Text style={styles.quickFieldLabel}>Idioma preferido</Text>
+            <View style={styles.optionWrap}>{propertyContactLanguages.map((language) => <Option key={language} label={language} active={quickContact.preferredLanguage === language} onPress={() => setQuickContact({ ...quickContact, preferredLanguage: language })} />)}</View>
+            <View style={styles.modalActions}>
+              <Button variant="secondary" label="Volver a la cita" disabled={quickContactSaving} onPress={() => setShowQuickContact(false)} />
+              <Button label={quickContactSaving ? 'Guardando…' : 'Guardar persona'} disabled={quickContactSaving} onPress={() => void saveQuickContact()} />
+            </View>
+          </ScrollView>
+        ) : (
+          <ScrollView>"""
+          text = replace_once(text, transition, replacement, 'agenda nested quick forms')
+          text = replace_once(
+              text,
+              """            <Text style={styles.fieldLabel}>Propiedad / lugar de servicio</Text>
+            {clientProperties.length ? <View style={styles.optionWrap}>{clientProperties.map((property) => <Option key={property.id} label={`${property.name} · ${property.address} · ${property.zone}`} active={propertyId === property.id} onPress={() => setPropertyId(property.id)} />)}</View> : selectedClient ? <Text style={styles.fallbackText}>Se usará la dirección principal del cliente.</Text> : <Text style={styles.fallbackText}>Selecciona o registra un cliente para escoger la propiedad.</Text>}""",
+              """            <View style={styles.inlineFieldHeader}>
+              <Text style={[styles.fieldLabel, { marginBottom: 0 }]}>Propiedad / lugar de servicio</Text>
+              <Button compact variant="secondary" label="Añadir propiedad" icon="＋" disabled={!selectedClient} onPress={openQuickProperty} />
+            </View>
+            {clientProperties.length ? <View style={styles.optionWrap}>{clientProperties.map((property) => <Option key={property.id} label={`${property.name} · ${property.address} · ${property.zone}`} active={propertyId === property.id} onPress={() => { setPropertyId(property.id); setSuccessMessage(''); }} />)}</View> : selectedClient ? <Text style={styles.fallbackText}>Este cliente todavía no tiene propiedades. Presiona “Añadir propiedad”.</Text> : <Text style={styles.fallbackText}>Selecciona o registra un cliente para escoger la propiedad.</Text>}
+
+            {selectedProperty ? (
+              <View style={styles.propertyContactsPanel}>
+                <View style={styles.inlineFieldHeader}>
+                  <View><Text style={styles.propertyContactsTitle}>Personas vinculadas a esta propiedad</Text><Text style={styles.propertyContactsHelp}>Encargados, administradores, acceso o contabilidad.</Text></View>
+                  <Button compact variant="secondary" label="Añadir persona" icon="＋" onPress={openQuickContact} />
+                </View>
+                {selectedPropertyContacts.length ? selectedPropertyContacts.map((contact) => (
+                  <View key={contact.id} style={styles.propertyContactRow}>
+                    <View style={{ flex: 1 }}><Text style={styles.propertyContactName}>{contact.name}</Text><Text style={styles.propertyContactMeta}>{contact.role} · WhatsApp {contact.whatsapp || contact.phone} · {contact.preferredLanguage}</Text></View>
+                  </View>
+                )) : <Text style={styles.fallbackText}>Todavía no hay personas registradas para esta propiedad.</Text>}
+              </View>
+            ) : null}""",
+              'agenda property selector and contacts',
+          )
+          text = replace_once(
+              text,
+              "  halfField: { flex: 1, minWidth: 210 },\n  summaryBox:",
+              """  halfField: { flex: 1, minWidth: 210 },
+  inlineFieldHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginTop: 4, marginBottom: 8, flexWrap: 'wrap' },
+  propertyContactsPanel: { borderWidth: 1, borderColor: colors.border, borderRadius: 9, backgroundColor: '#FAFBFC', padding: 11, marginBottom: 15 },
+  propertyContactsTitle: { color: colors.text, fontWeight: '900', fontSize: 11 },
+  propertyContactsHelp: { color: colors.muted, fontSize: 9, marginTop: 2 },
+  propertyContactRow: { flexDirection: 'row', paddingVertical: 8, borderTopWidth: 1, borderTopColor: '#E8EBEF' },
+  propertyContactName: { color: colors.text, fontWeight: '900', fontSize: 10 },
+  propertyContactMeta: { color: colors.muted, fontSize: 9, marginTop: 3 },
+  summaryBox:""",
+              'agenda contact styles',
+          )
+          path.write_text(text)
+
+          # --- Clients screen ---
+          path = Path('src/screens/ClientsScreen.tsx')
+          text = path.read_text()
+          text = replace_once(
+              text,
+              "import { Client, Property, PropertyType } from '../types';",
+              "import { Client, Property, PropertyContact, PropertyContactLanguage, PropertyContactRole, PropertyType } from '../types';",
+              'clients imports',
+          )
+          text = replace_once(
+              text,
+              "const propertyTypes: PropertyType[] = ['Casa', 'Apartamento', 'Oficina', 'Local comercial', 'Otro'];",
+              "const propertyTypes: PropertyType[] = ['Casa', 'Apartamento', 'Oficina', 'Local comercial', 'Otro'];\nconst propertyContactRoles: PropertyContactRole[] = ['Dueño', 'Encargado', 'Administrador', 'Inquilino', 'Contacto de acceso', 'Contabilidad', 'Otro'];\nconst propertyContactLanguages: PropertyContactLanguage[] = ['Español', 'English', 'Nederlands', 'Papiamento'];",
+              'clients contact constants',
+          )
+          text = replace_once(
+              text,
+              "    addProperty,\n    removeProperty,",
+              "    addProperty,\n    updateProperty,\n    removeProperty,",
+              'clients property actions',
+          )
+          text = replace_once(
+              text,
+              "  const [showProperty, setShowProperty] = useState(false);\n  const [propertyToDelete, setPropertyToDelete] = useState<Property | null>(null);",
+              """  const [showProperty, setShowProperty] = useState(false);
+  const [showContact, setShowContact] = useState(false);
+  const [contactPropertyId, setContactPropertyId] = useState('');
+  const [contactForm, setContactForm] = useState({ name: '', role: 'Encargado' as PropertyContactRole, phone: '', whatsapp: '', email: '', preferredLanguage: 'Español' as PropertyContactLanguage });
+  const [propertyToDelete, setPropertyToDelete] = useState<Property | null>(null);""",
+              'clients contact state',
+          )
+          marker = "\n  const confirmRemoveProperty = async () => {"
+          functions = """
+
+  const openContactModal = (property: Property) => {
+    setScreenMessage('');
+    clearDataError();
+    setContactPropertyId(property.id);
+    setContactForm({ name: '', role: 'Encargado', phone: '', whatsapp: '', email: '', preferredLanguage: 'Español' });
+    setShowContact(true);
+  };
+
+  const createPropertyContact = async () => {
+    const property = properties.find((item) => item.id === contactPropertyId);
+    if (!property) return setScreenMessage('La propiedad seleccionada ya no existe.');
+    if (!contactForm.name.trim()) return setScreenMessage('Escribe el nombre de la persona.');
+    if (!contactForm.phone.trim() && !contactForm.whatsapp.trim()) return setScreenMessage('Escribe al menos un teléfono o WhatsApp.');
+    const now = new Date().toISOString();
+    const contact: PropertyContact = {
+      id: `contact-${Date.now()}`,
+      name: contactForm.name.trim(),
+      role: contactForm.role,
+      phone: contactForm.phone.trim() || contactForm.whatsapp.trim(),
+      whatsapp: contactForm.whatsapp.trim() || contactForm.phone.trim(),
+      email: contactForm.email.trim() || undefined,
+      preferredLanguage: contactForm.preferredLanguage,
+      active: true,
+      createdAt: now,
+      updatedAt: now,
+    };
+    setSaving(true);
+    const result = await updateProperty(property.id, { contacts: [...(property.contacts ?? []), contact], updatedAt: now });
+    setSaving(false);
+    if (!result.ok) return setScreenMessage(result.message ?? 'No se pudo guardar la persona.');
+    setShowContact(false);
+    setContactPropertyId('');
+  };
+"""
+          if marker not in text:
+              raise SystemExit('clients contact function insertion marker not found')
+          text = text.replace(marker, functions + marker, 1)
+          text = replace_once(
+              text,
+              """                      <Text style={styles.propertyMeta}>{property.zone}{property.notes ? ` · ${property.notes}` : ''}</Text>
+                    </View>
+                    <Button compact variant="ghost" label="Quitar" onPress={() => setPropertyToDelete(property)} />""",
+              """                      <Text style={styles.propertyMeta}>{property.zone}{property.notes ? ` · ${property.notes}` : ''}</Text>
+                      {(property.contacts ?? []).filter((contact) => contact.active !== false).map((contact) => <Text key={contact.id} style={styles.propertyContactLine}>{contact.name} · {contact.role} · {contact.whatsapp || contact.phone} · {contact.preferredLanguage}</Text>)}
+                    </View>
+                    <View style={{ gap: 6 }}><Button compact variant="secondary" label="Agregar contacto" onPress={() => openContactModal(property)} /><Button compact variant="ghost" label="Quitar" onPress={() => setPropertyToDelete(property)} /></View>""",
+              'clients property contacts display',
+          )
+          text = replace_once(
+              text,
+              """      <AppModal visible={Boolean(propertyToDelete)} title="Quitar propiedad" onClose={() => !saving && setPropertyToDelete(null)}>""",
+              """      <AppModal visible={showContact} title="Agregar contacto de propiedad" onClose={() => !saving && setShowContact(false)}>
+        {screenMessage ? <View style={styles.formError}><Text style={styles.formErrorText}>{screenMessage}</Text></View> : null}
+        <Input label="Nombre completo" value={contactForm.name} onChangeText={(name) => setContactForm({ ...contactForm, name })} />
+        <Text style={styles.inputLabel}>Función en la propiedad</Text>
+        <View style={styles.typeWrap}>{propertyContactRoles.map((role) => <Pressable key={role} onPress={() => setContactForm({ ...contactForm, role })} style={[styles.typeButton, contactForm.role === role && styles.typeButtonActive]}><Text style={[styles.typeText, contactForm.role === role && styles.typeTextActive]}>{role}</Text></Pressable>)}</View>
+        <Input label="Teléfono" value={contactForm.phone} onChangeText={(phone) => setContactForm({ ...contactForm, phone })} keyboardType="phone-pad" />
+        <Input label="WhatsApp" value={contactForm.whatsapp} onChangeText={(whatsapp) => setContactForm({ ...contactForm, whatsapp })} keyboardType="phone-pad" placeholder="Si es igual, puede quedar vacío" />
+        <Input label="Correo electrónico (opcional)" value={contactForm.email} onChangeText={(email) => setContactForm({ ...contactForm, email })} keyboardType="email-address" />
+        <Text style={styles.inputLabel}>Idioma preferido</Text>
+        <View style={styles.typeWrap}>{propertyContactLanguages.map((preferredLanguage) => <Pressable key={preferredLanguage} onPress={() => setContactForm({ ...contactForm, preferredLanguage })} style={[styles.typeButton, contactForm.preferredLanguage === preferredLanguage && styles.typeButtonActive]}><Text style={[styles.typeText, contactForm.preferredLanguage === preferredLanguage && styles.typeTextActive]}>{preferredLanguage}</Text></Pressable>)}</View>
+        <View style={styles.modalActions}><Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => setShowContact(false)} /><Button label={saving ? 'Guardando…' : 'Guardar contacto'} disabled={saving} onPress={() => void createPropertyContact()} /></View>
+      </AppModal>
+
+      <AppModal visible={Boolean(propertyToDelete)} title="Quitar propiedad" onClose={() => !saving && setPropertyToDelete(null)}>""",
+              'clients contact modal',
+          )
+          text = replace_once(
+              text,
+              "  propertyMeta: { color: colors.muted, fontSize: 10, marginTop: 3 },",
+              "  propertyMeta: { color: colors.muted, fontSize: 10, marginTop: 3 },\n  propertyContactLine: { color: colors.primaryDark, fontSize: 9, fontWeight: '700', marginTop: 5 },",
+              'clients contact style',
+          )
+          path.write_text(text)
+          PY
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build web
+        run: npm run build:web
+
+      - name: Commit validated source
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/types.ts src/state/AppState.tsx src/screens/AgendaScreen.tsx src/screens/ClientsScreen.tsx
+          git commit -m "Add quick properties and property contacts"
+          git push
