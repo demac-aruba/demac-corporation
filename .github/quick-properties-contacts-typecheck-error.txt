@@ -1,0 +1,15 @@
+
+> demac-corporation@1.0.0 typecheck
+> tsc --noEmit
+
+src/screens/AgendaScreen.tsx(522,55): error TS2339: Property 'contacts' does not exist on type 'Property'.
+src/screens/AgendaScreen.tsx(522,79): error TS7006: Parameter 'contact' implicitly has an 'any' type.
+src/screens/AgendaScreen.tsx(731,7): error TS2353: Object literal may only specify known properties, and 'contacts' does not exist in type 'Property'.
+src/screens/AgendaScreen.tsx(774,7): error TS2353: Object literal may only specify known properties, and 'contacts' does not exist in type 'Partial<Property>'.
+src/screens/AgendaScreen.tsx(774,39): error TS2339: Property 'contacts' does not exist on type 'Property'.
+src/screens/AgendaScreen.tsx(1194,72): error TS7006: Parameter 'contact' implicitly has an 'any' type.
+src/screens/ClientsScreen.tsx(204,56): error TS2353: Object literal may only specify known properties, and 'contacts' does not exist in type 'Partial<Property>'.
+src/screens/ClientsScreen.tsx(204,80): error TS2339: Property 'contacts' does not exist on type 'Property'.
+src/screens/ClientsScreen.tsx(302,24): error TS2339: Property 'contacts' does not exist on type 'Property'.
+src/screens/ClientsScreen.tsx(302,48): error TS7006: Parameter 'contact' implicitly has an 'any' type.
+src/screens/ClientsScreen.tsx(302,91): error TS7006: Parameter 'contact' implicitly has an 'any' type.
