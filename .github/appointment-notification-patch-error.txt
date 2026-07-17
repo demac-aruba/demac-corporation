@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "quick_properties_contacts_patch.py", line 17, in <module>
+  File "appointment_notification_recipient_patch.py", line 305, in <module>
+  File "appointment_notification_recipient_patch.py", line 5, in replace_once
+SystemExit: notification recipient matrix not found
