@@ -58,13 +58,21 @@ function normalizePreferredLanguage(value) {
   return "unknown";
 }
 
-function templateLanguageForClient(client) {
-  const explicit = String(client?.templateLanguage || "").trim().toLowerCase();
+function templateLanguageForRecipient(recipient, client) {
+  const explicit = String(recipient?.templateLanguage || "").trim().toLowerCase();
   if (["en", "es", "nl"].includes(explicit)) return explicit;
 
-  const preferred = normalizePreferredLanguage(client?.preferredLanguage);
-  if (preferred === "es") return "es";
-  if (preferred === "nl") return "nl";
+  const recipientPreferred = normalizePreferredLanguage(recipient?.preferredLanguage);
+  if (recipientPreferred === "es") return "es";
+  if (recipientPreferred === "nl") return "nl";
+  if (recipientPreferred === "en") return "en";
+
+  const clientExplicit = String(client?.templateLanguage || "").trim().toLowerCase();
+  if (["en", "es", "nl"].includes(clientExplicit)) return clientExplicit;
+
+  const clientPreferred = normalizePreferredLanguage(client?.preferredLanguage);
+  if (clientPreferred === "es") return "es";
+  if (clientPreferred === "nl") return "nl";
   return "en";
 }
 
@@ -97,10 +105,26 @@ function formatAppointmentTime(value, languageCode) {
   return `${displayHour}:${minute} ${suffix}`;
 }
 
-function confirmedAppointment(order) {
+function orderCanNotify(order) {
   return order
     && !CONFIRMATION_INELIGIBLE_STATUSES.has(order.status)
     && order.whatsappNotificationsEnabled !== false;
+}
+
+function configuredRecipients(order) {
+  return Array.isArray(order?.notificationRecipients) ? order.notificationRecipients : [];
+}
+
+function confirmationEligible(order) {
+  if (!orderCanNotify(order)) return false;
+  const recipients = configuredRecipients(order);
+  return recipients.length === 0 || recipients.some((recipient) => recipient?.sendConfirmation === true);
+}
+
+function reminderEligible(order) {
+  if (!orderCanNotify(order)) return false;
+  const recipients = configuredRecipients(order);
+  return recipients.length === 0 || recipients.some((recipient) => recipient?.sendReminder === true);
 }
 
 function customerVisibleChanges(before, after) {
@@ -126,9 +150,44 @@ async function getServiceDescription(order) {
   return String(service.data()?.name || "Air conditioning service").trim();
 }
 
-async function buildTemplateParameters(order, client, languageCode) {
+function legacyClientRecipient(client, notificationType) {
+  return {
+    id: `client-${client.id}`,
+    recipientType: "client",
+    sourceId: client.id,
+    name: client.name || client.company || "Customer",
+    role: "Cliente / facturación",
+    phone: client.phone || "",
+    whatsapp: client.whatsapp || client.phone || "",
+    preferredLanguage: client.preferredLanguage,
+    templateLanguage: client.templateLanguage,
+    sendConfirmation: notificationType === "confirmation",
+    sendReminder: notificationType === "reminder",
+  };
+}
+
+function selectedRecipients(order, client, notificationType) {
+  const recipients = configuredRecipients(order);
+  const selected = recipients.length
+    ? recipients.filter((recipient) => notificationType === "confirmation"
+      ? recipient?.sendConfirmation === true
+      : recipient?.sendReminder === true)
+    : [legacyClientRecipient(client, notificationType)];
+
+  const unique = [];
+  const seenNumbers = new Set();
+  for (const recipient of selected) {
+    const to = digitsOnly(recipient?.whatsapp || recipient?.phone);
+    if (seenNumbers.has(to)) continue;
+    seenNumbers.add(to);
+    unique.push(recipient);
+  }
+  return unique;
+}
+
+async function buildTemplateParameters(order, client, recipient, languageCode) {
   return [
-    String(client.name || client.company || "Customer").trim(),
+    String(recipient?.name || client.name || client.company || "Customer").trim(),
     formatAppointmentDate(order.date, languageCode),
     formatAppointmentTime(order.time, languageCode),
     String(order.address || client.address || "").trim(),
@@ -154,24 +213,28 @@ async function createQueueItem(queueId, data) {
 async function queueAppointmentMessage({
   order,
   client,
+  recipient,
   eventId,
   templateName,
   notificationType,
   reason,
 }) {
-  const to = digitsOnly(client.whatsapp || client.phone);
+  const to = digitsOnly(recipient?.whatsapp || recipient?.phone);
   if (!/^\d{8,15}$/.test(to)) {
-    logger.warn("Skipping appointment notification because the client has no valid WhatsApp number.", {
+    logger.warn("Skipping appointment notification because a selected recipient has no valid WhatsApp number.", {
       clientId: client.id,
       workOrderId: order.id,
+      recipientId: recipient?.id || recipient?.sourceId || null,
+      recipientName: recipient?.name || null,
     });
     return null;
   }
 
-  const languageCode = templateLanguageForClient(client);
+  const languageCode = templateLanguageForRecipient(recipient, client);
   const phoneNumberId = await getWhatsAppPhoneNumberId();
-  const bodyParameters = await buildTemplateParameters(order, client, languageCode);
-  const queueId = safeDocumentId(`${notificationType}-${order.id}-${eventId}`);
+  const bodyParameters = await buildTemplateParameters(order, client, recipient, languageCode);
+  const recipientKey = recipient?.id || recipient?.sourceId || to;
+  const queueId = safeDocumentId(`${notificationType}-${order.id}-${eventId}-${recipientKey}`);
   const result = await createQueueItem(queueId, {
     to,
     phoneNumberId,
@@ -182,13 +245,45 @@ async function queueAppointmentMessage({
     workOrderId: order.id,
     notificationType,
     reason,
+    recipientId: recipient?.id || null,
+    recipientSourceId: recipient?.sourceId || null,
+    recipientType: recipient?.recipientType || "client",
+    recipientName: recipient?.name || client.name || null,
+    recipientRole: recipient?.role || null,
   });
 
   return {
     queueId,
     languageCode,
+    recipientId: recipient?.id || null,
+    recipientName: recipient?.name || client.name || "Customer",
     created: result.created,
   };
+}
+
+async function queueAppointmentMessages({
+  order,
+  client,
+  recipients,
+  eventId,
+  templateName,
+  notificationType,
+  reason,
+}) {
+  const notifications = [];
+  for (const recipient of recipients) {
+    const notification = await queueAppointmentMessage({
+      order,
+      client,
+      recipient,
+      eventId,
+      templateName,
+      notificationType,
+      reason,
+    });
+    if (notification) notifications.push(notification);
+  }
+  return notifications;
 }
 
 exports.queueAppointmentConfirmation = onDocumentWritten(
@@ -207,9 +302,9 @@ exports.queueAppointmentConfirmation = onDocumentWritten(
     const order = { id: afterSnapshot.id, ...afterSnapshot.data() };
     const created = !beforeSnapshot?.exists;
     const changedFields = created ? CUSTOMER_VISIBLE_FIELDS : customerVisibleChanges(before, order);
-    const becameConfirmed = !confirmedAppointment(before) && confirmedAppointment(order);
+    const becameConfirmed = !confirmationEligible(before) && confirmationEligible(order);
 
-    if (!confirmedAppointment(order)) return;
+    if (!confirmationEligible(order)) return;
     if (!created && !becameConfirmed && changedFields.length === 0) return;
 
     const client = await getClient(order.clientId);
@@ -221,22 +316,40 @@ exports.queueAppointmentConfirmation = onDocumentWritten(
       return;
     }
 
-    const notification = await queueAppointmentMessage({
+    const recipients = selectedRecipients(order, client, "confirmation");
+    if (recipients.length === 0) {
+      logger.info("Appointment confirmation has no selected recipients.", { workOrderId: order.id });
+      return;
+    }
+
+    const reason = created ? "appointment-created" : becameConfirmed ? "appointment-confirmed" : "appointment-updated";
+    const notifications = await queueAppointmentMessages({
       order,
       client,
+      recipients,
       eventId: event.id,
       templateName: "appointment_confirmation",
       notificationType: "appointment-confirmation",
-      reason: created ? "appointment-created" : becameConfirmed ? "appointment-confirmed" : "appointment-updated",
+      reason,
     });
 
-    if (!notification) return;
+    if (notifications.length === 0) return;
 
     await afterSnapshot.ref.set({
+      confirmationNotifications: {
+        queueIds: notifications.map((notification) => notification.queueId),
+        languageCodes: notifications.map((notification) => notification.languageCode),
+        recipientIds: notifications.map((notification) => notification.recipientId),
+        recipientNames: notifications.map((notification) => notification.recipientName),
+        recipientCount: notifications.length,
+        reason,
+        changedFields,
+        queuedAt: FieldValue.serverTimestamp(),
+      },
       confirmationNotification: {
-        queueId: notification.queueId,
-        languageCode: notification.languageCode,
-        reason: created ? "appointment-created" : becameConfirmed ? "appointment-confirmed" : "appointment-updated",
+        queueId: notifications[0].queueId,
+        languageCode: notifications[0].languageCode,
+        reason,
         changedFields,
         queuedAt: FieldValue.serverTimestamp(),
       },
@@ -281,7 +394,7 @@ exports.sendDailyAppointmentReminders = onSchedule(
 
     for (const document of ordersSnapshot.docs) {
       const order = { id: document.id, ...document.data() };
-      if (!confirmedAppointment(order)) continue;
+      if (!reminderEligible(order)) continue;
       if (!ordersByDate.has(order.date)) ordersByDate.set(order.date, []);
       ordersByDate.get(order.date).push(order);
     }
@@ -336,26 +449,43 @@ exports.sendDailyAppointmentReminders = onSchedule(
           continue;
         }
 
-        const notification = await queueAppointmentMessage({
+        const recipients = selectedRecipients(order, client, "reminder");
+        if (recipients.length === 0) {
+          skippedCount += 1;
+          errors.push({ workOrderId: order.id, reason: "no-reminder-recipients" });
+          continue;
+        }
+
+        const notifications = await queueAppointmentMessages({
           order,
           client,
+          recipients,
           eventId: targetDate,
           templateName: "appointment_reminder_24_hours",
           notificationType: "appointment-reminder",
           reason: "daily-next-open-day-reminder",
         });
 
-        if (!notification) {
+        if (notifications.length === 0) {
           skippedCount += 1;
           errors.push({ workOrderId: order.id, reason: "invalid-whatsapp-number" });
           continue;
         }
 
-        if (notification.created) queuedCount += 1;
+        queuedCount += notifications.filter((notification) => notification.created).length;
         await db.collection("workOrders").doc(order.id).set({
+          reminderNotifications: {
+            queueIds: notifications.map((notification) => notification.queueId),
+            languageCodes: notifications.map((notification) => notification.languageCode),
+            recipientIds: notifications.map((notification) => notification.recipientId),
+            recipientNames: notifications.map((notification) => notification.recipientName),
+            recipientCount: notifications.length,
+            targetDate,
+            queuedAt: FieldValue.serverTimestamp(),
+          },
           reminderNotification: {
-            queueId: notification.queueId,
-            languageCode: notification.languageCode,
+            queueId: notifications[0].queueId,
+            languageCode: notifications[0].languageCode,
             targetDate,
             queuedAt: FieldValue.serverTimestamp(),
           },
