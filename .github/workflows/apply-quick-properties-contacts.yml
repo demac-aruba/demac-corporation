@@ -15,6 +15,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import subprocess
+          from pathlib import Path
 
           original = subprocess.check_output([
               'git',
@@ -45,4 +46,25 @@ jobs:
               raise SystemExit('replace_once helper not found in original patch')
           source = source.replace(strict_helper, tolerant_helper, 1)
           exec(compile(source, 'quick_properties_contacts_patch.py', 'exec'))
+
+          types_path = Path('src/types.ts')
+          types_text = types_path.read_text()
+          property_start = types_text.index('export interface Property {')
+          prefix = types_text[:property_start]
+          suffix = types_text[property_start:]
+          prefix = prefix.replace(
+              "  notes?: string;\n  contacts?: PropertyContact[];\n  active: boolean;",
+              "  notes?: string;\n  active: boolean;",
+              1,
+          )
+          property_end = suffix.index('\n}\n')
+          property_block = suffix[:property_end]
+          remainder = suffix[property_end:]
+          if 'contacts?: PropertyContact[];' not in property_block:
+              property_block = property_block.replace(
+                  "  notes?: string;\n  active: boolean;",
+                  "  notes?: string;\n  contacts?: PropertyContact[];\n  active: boolean;",
+                  1,
+              )
+          types_path.write_text(prefix + property_block + remainder)
           PY
