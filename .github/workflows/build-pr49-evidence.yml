@@ -36,22 +36,24 @@ jobs:
           path.write_text(text.replace(duplicate, ''))
           PY
           python3 .github/apply-pr49.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/state/AppState.tsx')
+          text = path.read_text()
+          text = text.replace(
+            "          if (Array.isArray(parsed.workOrders)) setWorkOrders(parsed.workOrders);\n",
+            "          if (Array.isArray(parsed.workOrders)) setWorkOrders(parsed.workOrders);\n          if (Array.isArray(parsed.workOrderEvidence)) setWorkOrderEvidence(parsed.workOrderEvidence);\n",
+          )
+          text = text.replace(
+            "    const state: PersistedState = { clients, properties, services, workOrders, inventory, invoices };",
+            "    const state: PersistedState = { clients, properties, services, workOrders, workOrderEvidence, inventory, invoices };",
+          )
+          path.write_text(text)
+          PY
       - name: Install dependencies
         run: npm ci
       - name: Typecheck
-        shell: bash
-        run: |
-          set +e
-          npm run typecheck > pr49-typecheck-output.txt 2>&1
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add pr49-typecheck-output.txt
-            git commit -m "Capture PR49 typecheck diagnostic" || true
-            git push origin HEAD:${{ github.event.pull_request.head.ref }}
-            exit "$status"
-          fi
+        run: npm run typecheck
       - name: Build web
         run: npm run build:web
       - name: Commit functional changes
