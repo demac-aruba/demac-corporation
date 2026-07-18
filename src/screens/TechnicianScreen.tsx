@@ -6,7 +6,7 @@ import { Button, Card, EmptyState, Input, Pill, SectionTitle, statusTone } from 
 import { usePwaStatus } from '../hooks/usePwaStatus';
 import { useAppState } from '../state/TeamState';
 import { colors } from '../theme';
-import { AppointmentStatus, PropertyContact, WorkOrder } from '../types';
+import { AppointmentStatus, WorkOrder } from '../types';
 import { locationCoordinates, mapsMeUrl } from '../utils/location';
 
 const DRAFT_PREFIX = '@demac-technician-draft-v1:';
@@ -220,7 +220,24 @@ export function TechnicianScreen() {
     setDraft((current) => ({ ...current, [field]: value }));
   };
 
-  const statusChange = async (toStatus: AppointmentStatus, note?: string) => {
+  const reportChanges = () => ({
+    diagnosis: draft.diagnosis.trim(),
+    workPerformed: draft.workPerformed.trim(),
+    recommendation: draft.recommendation.trim(),
+    customerSignature: draft.receiverName.trim(),
+    measurements: {
+      ...selected?.measurements,
+      voltage: draft.voltage.trim(),
+      amperage: draft.amperage.trim(),
+      lowPressure: draft.lowPressure.trim(),
+      highPressure: draft.highPressure.trim(),
+      returnTemp: draft.returnTemp.trim(),
+      supplyTemp: draft.supplyTemp.trim(),
+    },
+    technicianDraftUpdatedAt: new Date().toISOString(),
+  });
+
+  const statusChange = async (toStatus: AppointmentStatus, note?: string, extraChanges: Record<string, unknown> = {}) => {
     if (!selected || !currentUser) return false;
     if (!pwa.online && currentUser.authProvider === 'firebase') {
       setFormMessage('Sin conexión: el borrador está guardado en este teléfono, pero el cambio de estado se enviará cuando vuelvas a tener internet.');
@@ -248,6 +265,7 @@ export function TechnicianScreen() {
     if (toStatus === 'Completada') timestampFields.completedAt = now;
 
     const result = await updateWorkOrder(selected.id, {
+      ...extraChanges,
       status: toStatus,
       statusHistory: [...(selected.statusHistory ?? []), event],
       ...timestampFields,
@@ -268,22 +286,7 @@ export function TechnicianScreen() {
       return false;
     }
     setWorking(true);
-    const result = await updateWorkOrder(selected.id, {
-      diagnosis: draft.diagnosis.trim(),
-      workPerformed: draft.workPerformed.trim(),
-      recommendation: draft.recommendation.trim(),
-      customerSignature: draft.receiverName.trim(),
-      measurements: {
-        ...selected.measurements,
-        voltage: draft.voltage.trim(),
-        amperage: draft.amperage.trim(),
-        lowPressure: draft.lowPressure.trim(),
-        highPressure: draft.highPressure.trim(),
-        returnTemp: draft.returnTemp.trim(),
-        supplyTemp: draft.supplyTemp.trim(),
-      },
-      technicianDraftUpdatedAt: new Date().toISOString(),
-    } as unknown as Partial<WorkOrder>);
+    const result = await updateWorkOrder(selected.id, reportChanges() as unknown as Partial<WorkOrder>);
     setWorking(false);
     setFormMessage(result.ok ? 'Borrador enviado y guardado para la oficina.' : result.message ?? 'No se pudo guardar el reporte.');
     return result.ok;
@@ -295,9 +298,7 @@ export function TechnicianScreen() {
       setFormMessage('Para completar debes registrar diagnóstico, trabajo realizado y nombre de quien recibió el trabajo.');
       return;
     }
-    const saved = await saveReport();
-    if (!saved) return;
-    const changed = await statusChange('Completada', 'Reporte básico completado por el técnico.');
+    const changed = await statusChange('Completada', 'Reporte básico completado por el técnico.', reportChanges());
     if (changed) await AsyncStorage.removeItem(`${DRAFT_PREFIX}${selected.id}`);
   };
 
@@ -307,18 +308,12 @@ export function TechnicianScreen() {
       setFormMessage('Escribe el motivo por el cual el trabajo queda pendiente.');
       return;
     }
-    setWorking(true);
-    const result = await updateWorkOrder(selected.id, {
+    await statusChange('Pendiente', draft.pendingReason.trim(), {
+      ...reportChanges(),
       pendingReason: draft.pendingReason.trim(),
       pendingAction: draft.pendingAction.trim(),
       requiresSecondVisit: draft.requiresSecondVisit,
-    } as unknown as Partial<WorkOrder>);
-    setWorking(false);
-    if (!result.ok) {
-      setFormMessage(result.message ?? 'No se pudo guardar el seguimiento pendiente.');
-      return;
-    }
-    await statusChange('Pendiente', draft.pendingReason.trim());
+    });
   };
 
   const addPhoto = async (camera: boolean) => {
