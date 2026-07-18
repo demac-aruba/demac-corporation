@@ -9,42 +9,30 @@ permissions:
 
 jobs:
   build-and-validate:
-    if: github.head_ref == 'feature/agenda-aruba-address-index-v2'
+    if: github.head_ref == 'feature/agenda-aruba-address-index'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: feature/agenda-aruba-address-index-v2
+          ref: feature/agenda-aruba-address-index
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - name: Tighten generator to highway names only
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('scripts/build_aruba_address_index.py')
-          text = path.read_text(encoding='utf-8')
-          old = '        highway_name = clean_name(tags.get("name"))\n        if highway_name:\n'
-          new = '        highway_name = clean_name(tags.get("name")) if tags.get("highway") else ""\n        if highway_name:\n'
-          if old in text:
-              text = text.replace(old, new, 1)
-          elif new not in text:
-              raise RuntimeError('Could not update highway-only filter')
-          path.write_text(text, encoding='utf-8')
-          PY
-      - name: Generate address index and integrate Agenda
+      - name: Generate filtered Aruba street index
         run: python3 scripts/build_aruba_address_index.py
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build:web
-      - name: Commit validated implementation
+      - name: Publish validated and synchronized branch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           rm -f .github/workflows/build-aruba-address-index.yml
-          rm -f scripts/rebuild-aruba-address-index.trigger
+          rm -f scripts/finalize-aruba-address-index.trigger
           git add -A
-          git commit -m "Add filtered Aruba street index to Agenda"
-          git push origin HEAD:feature/agenda-aruba-address-index-v2
+          if ! git diff --cached --quiet; then
+            git commit -m "Finalize Aruba street index for Agenda"
+          fi
+          git push origin HEAD:feature/agenda-aruba-address-index
