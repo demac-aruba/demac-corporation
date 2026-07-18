@@ -28,7 +28,13 @@ jobs:
       - name: Apply functional changes
         shell: bash
         run: |
-          sed -i '107d' .github/apply-pr49.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/apply-pr49.py')
+          text = path.read_text()
+          duplicate = "replace('src/state/AppState.tsx', '    workOrders,\\n    inventory,', '    workOrders,\\n    workOrderEvidence,\\n    inventory,', 1)\n"
+          path.write_text(text.replace(duplicate, ''))
+          PY
           set +e
           python3 .github/apply-pr49.py > pr49-patch-output.txt 2>&1
           status=$?
