@@ -26,7 +26,10 @@ jobs:
           node-version: 22
           cache: npm
       - name: Apply functional changes
-        run: python3 .github/apply-pr48.py
+        run: |
+          node .github/pr48/patch-firebase.js
+          node .github/pr48/patch-appstate.js
+          node .github/pr48/patch-technician.js
       - name: Install dependencies
         run: npm ci
       - name: Typecheck
@@ -35,7 +38,7 @@ jobs:
         run: npm run build:web
       - name: Commit functional changes
         run: |
-          rm -f .github/workflows/build-pr48.yml .github/apply-pr48.py .github/pr48-trigger
+          rm -rf .github/pr48 .github/workflows/build-pr48.yml .github/pr48-trigger
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
