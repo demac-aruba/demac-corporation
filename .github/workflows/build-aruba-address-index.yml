@@ -1,0 +1,38 @@
+name: Build Aruba address index
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-validate:
+    if: github.head_ref == 'feature/agenda-aruba-address-index'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/agenda-aruba-address-index
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Generate filtered Aruba street index
+        run: python3 scripts/build_aruba_address_index.py
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build:web
+      - name: Publish validated and synchronized branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/build-aruba-address-index.yml
+          rm -f scripts/finalize-aruba-address-index.trigger
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "Finalize Aruba street index for Agenda"
+          fi
+          git push origin HEAD:feature/agenda-aruba-address-index
