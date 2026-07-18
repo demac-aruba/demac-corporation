@@ -14,6 +14,10 @@ service cloud.firestore {
       return signedIn() && userProfile().data.active == true;
     }
 
+    function adminRole() {
+      return activeStaff() && userProfile().data.role == 'admin';
+    }
+
     function operationsRole() {
       return activeStaff() && userProfile().data.role in ['admin', 'office', 'supervisor'];
     }
@@ -59,7 +63,12 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow read: if signedIn() && request.auth.uid == userId;
+      allow read: if activeStaff() && (request.auth.uid == userId || adminRole());
+      allow write: if false;
+    }
+
+    match /userAuditLogs/{logId} {
+      allow read: if adminRole();
       allow write: if false;
     }
 
