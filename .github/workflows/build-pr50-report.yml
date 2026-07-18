@@ -1,0 +1,55 @@
+name: Build PR 50 structured report
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/pr50-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Apply functional changes
+        run: python3 .github/apply-pr50.py
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        shell: bash
+        run: |
+          set +e
+          npm run typecheck > pr50-typecheck-output.txt 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add pr50-typecheck-output.txt
+            git commit -m "Capture PR50 typecheck diagnostic" || true
+            git push origin HEAD:${{ github.event.pull_request.head.ref }}
+            exit "$status"
+          fi
+      - name: Build web
+        run: npm run build:web
+      - name: Commit functional changes
+        run: |
+          rm -f .github/apply-pr50.py .github/pr50-trigger pr50-typecheck-output.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Add guided per-unit technician reporting"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
