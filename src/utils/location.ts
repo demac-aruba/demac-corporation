@@ -1,9 +1,23 @@
-
 import { arubaAddressDirectory, ArubaAddressEntry } from '../data/arubaAddresses';
 import { PropertyLocation } from '../types';
 
-function normalize(value: string) {
-  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/straat/g, 'str').replace(/boulevard/g, 'blvd').replace(/[^a-z0-9]/g, '');
+function normalizeWords(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/straat/g, 'str')
+    .replace(/boulevard/g, 'blvd')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function compact(value: string) {
+  return normalizeWords(value).replace(/\s+/g, '');
+}
+
+function withoutHouseNumber(value: string) {
+  return value.replace(/\s+\d+[a-z-]*\s*$/i, '').trim();
 }
 
 function levenshtein(a: string, b: string) {
@@ -11,20 +25,73 @@ function levenshtein(a: string, b: string) {
   for (let column = 1; column <= b.length; column += 1) rows[0][column] = column;
   for (let row = 1; row <= a.length; row += 1) {
     for (let column = 1; column <= b.length; column += 1) {
-      rows[row][column] = Math.min(rows[row - 1][column] + 1, rows[row][column - 1] + 1, rows[row - 1][column - 1] + (a[row - 1] === b[column - 1] ? 0 : 1));
+      rows[row][column] = Math.min(
+        rows[row - 1][column] + 1,
+        rows[row][column - 1] + 1,
+        rows[row - 1][column - 1] + (a[row - 1] === b[column - 1] ? 0 : 1),
+      );
     }
   }
   return rows[a.length][b.length];
 }
 
+function strongMatchScore(candidate: string, queryWords: string, queryCompact: string) {
+  const candidateWords = normalizeWords(candidate);
+  const candidateCompact = candidateWords.replace(/\s+/g, '');
+  const queryTokens = queryWords.split(' ').filter(Boolean);
+  const candidateTokens = candidateWords.split(' ').filter(Boolean);
+
+  if (candidateCompact === queryCompact) return 100;
+  if (candidateWords.startsWith(queryWords)) return 96;
+  if (candidateCompact.startsWith(queryCompact)) return 94;
+  if (queryTokens.every((queryToken) => candidateTokens.some((candidateToken) => candidateToken.startsWith(queryToken)))) return 90;
+  if (candidateWords.includes(queryWords) || candidateCompact.includes(queryCompact)) return 84;
+  return 0;
+}
+
+function fuzzyMatchScore(candidate: string, queryWords: string, queryCompact: string) {
+  if (queryCompact.length < 4) return 0;
+  const candidateWords = normalizeWords(candidate);
+  const candidateCompact = candidateWords.replace(/\s+/g, '');
+  if (candidateCompact[0] !== queryCompact[0]) return 0;
+
+  const allowedDistance = queryCompact.length <= 5 ? 1 : 2;
+  const prefix = candidateCompact.slice(0, queryCompact.length);
+  const prefixDistance = levenshtein(prefix, queryCompact);
+  if (prefixDistance <= allowedDistance) return 76 - prefixDistance * 6;
+
+  const queryTokens = queryWords.split(' ').filter(Boolean);
+  const candidateTokens = candidateWords.split(' ').filter(Boolean);
+  const tokenMatches = queryTokens.every((queryToken) => candidateTokens.some((candidateToken) => {
+    if (candidateToken[0] !== queryToken[0]) return false;
+    const tokenPrefix = candidateToken.slice(0, queryToken.length);
+    return levenshtein(tokenPrefix, queryToken) <= (queryToken.length <= 5 ? 1 : 2);
+  }));
+  return tokenMatches ? 68 : 0;
+}
+
 export function suggestArubaAddresses(query: string, limit = 6): ArubaAddressEntry[] {
-  const needle = normalize(query.replace(/\d+[a-z-]*$/i, ''));
-  if (needle.length < 2) return [];
-  return arubaAddressDirectory.map((entry) => {
-    const candidates = [entry.canonical, ...(entry.aliases ?? [])].map(normalize);
-    const best = Math.max(...candidates.map((candidate) => candidate === needle ? 100 : candidate.startsWith(needle) ? 92 : candidate.includes(needle) ? 84 : Math.max(0, 72 - levenshtein(candidate, needle) * 7)));
-    return { entry, best };
-  }).filter((item) => item.best >= 35).sort((a, b) => b.best - a.best || a.entry.canonical.localeCompare(b.entry.canonical)).slice(0, limit).map((item) => item.entry);
+  const addressQuery = withoutHouseNumber(query);
+  const queryWords = normalizeWords(addressQuery);
+  const queryCompact = compact(addressQuery);
+  if (queryCompact.length < 2) return [];
+
+  // Once the operator selected or typed the exact canonical address, hide the list.
+  if (arubaAddressDirectory.some((entry) => compact(entry.canonical) === queryCompact)) return [];
+
+  const scored = arubaAddressDirectory.map((entry) => {
+    const candidates = [entry.canonical, ...(entry.aliases ?? [])];
+    const strong = Math.max(...candidates.map((candidate) => strongMatchScore(candidate, queryWords, queryCompact)));
+    const fuzzy = strong ? 0 : Math.max(...candidates.map((candidate) => fuzzyMatchScore(candidate, queryWords, queryCompact)));
+    return { entry, score: strong || fuzzy, strong: strong > 0 };
+  });
+
+  const strongMatches = scored.filter((item) => item.strong);
+  const matches = strongMatches.length ? strongMatches : scored.filter((item) => item.score >= 68);
+  return matches
+    .sort((a, b) => b.score - a.score || a.entry.canonical.localeCompare(b.entry.canonical))
+    .slice(0, limit)
+    .map((item) => item.entry);
 }
 
 export function applyAddressSuggestion(raw: string, suggestion: ArubaAddressEntry) {
