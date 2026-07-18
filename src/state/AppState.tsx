@@ -78,6 +78,7 @@ type AppStateValue = {
   logout: () => Promise<void>;
   addClient: (client: Client) => Promise<OperationResult>;
   updateClient: (id: string, changes: Partial<Client>) => Promise<OperationResult>;
+  deleteTestClient: (id: string) => Promise<OperationResult>;
   addProperty: (property: Property) => Promise<OperationResult>;
   updateProperty: (id: string, changes: Partial<Property>) => Promise<OperationResult>;
   removeProperty: (id: string) => Promise<OperationResult>;
@@ -337,6 +338,64 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     }
   };
 
+
+const deleteTestClient = async (id: string): Promise<OperationResult> => {
+  const existing = clients.find((client) => client.id === id);
+  if (!existing) return { ok: false, message: 'El cliente ya no existe.' };
+  if (!['admin', 'supervisor'].includes(currentUser?.role ?? '')) {
+    return { ok: false, message: 'Solamente un administrador o supervisor puede eliminar datos definitivamente.' };
+  }
+
+  const linkedOrders = workOrders.filter((order) => order.clientId === id);
+  const protectedOrders = linkedOrders.filter((order) =>
+    ['Completada', 'Facturada', 'Pagada'].includes(order.status)
+    || order.reportGenerated === true
+    || Boolean(order.diagnosis || order.workPerformed || order.customerSignature)
+    || Number(order.paid || 0) > 0,
+  );
+  if (protectedOrders.length || existing.balance > 0) {
+    return { ok: false, message: 'Este cliente tiene trabajos, reportes, pagos o balance real. Archívalo en vez de eliminarlo.' };
+  }
+
+  const linkedProperties = properties.filter((property) => property.clientId === id);
+  if (currentUser?.authProvider !== 'firebase') {
+    setWorkOrders((previous) => previous.filter((order) => order.clientId !== id));
+    setProperties((previous) => previous.filter((property) => property.clientId !== id));
+    setClients((previous) => previous.filter((client) => client.id !== id));
+    return { ok: true };
+  }
+
+  try {
+    const deletedAt = new Date().toISOString();
+    await saveFirestoreDocument('clientDeletionLogs', {
+      id: `client-deletion-${id}-${Date.now()}`,
+      clientId: id,
+      clientName: existing.name,
+      clientSnapshot: existing,
+      propertyIds: linkedProperties.map((property) => property.id),
+      workOrderIds: linkedOrders.map((order) => order.id),
+      deletedAt,
+      deletedById: currentUser?.id ?? '',
+      deletedByName: currentUser?.name ?? 'Usuario DEMAC',
+      reason: 'Eliminación definitiva de datos de prueba confirmada por el usuario.',
+    });
+    for (const order of linkedOrders) await deleteFirestoreDocument('workOrders', order.id);
+    for (const property of linkedProperties) await deleteFirestoreDocument('properties', property.id);
+    await deleteFirestoreDocument('clients', id);
+    setWorkOrders((previous) => previous.filter((order) => order.clientId !== id));
+    setProperties((previous) => previous.filter((property) => property.clientId !== id));
+    setClients((previous) => previous.filter((client) => client.id !== id));
+    setDataError(null);
+    setLastSyncedAt(deletedAt);
+    return { ok: true };
+  } catch (error) {
+    await refreshOperationalData(false);
+    const message = friendlyDataError(error);
+    setDataError(message);
+    return { ok: false, message };
+  }
+};
+
   const addProperty = async (property: Property): Promise<OperationResult> => {
     if (currentUser?.authProvider !== 'firebase') {
       setProperties((previous) => sortProperties([property, ...previous]));
@@ -535,6 +594,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     logout,
     addClient,
     updateClient,
+    deleteTestClient,
     addProperty,
     updateProperty,
     removeProperty,
