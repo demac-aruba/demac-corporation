@@ -28,9 +28,27 @@ jobs:
             echo "Feature patch already applied."
           fi
       - run: npm ci
-      - run: npm run typecheck
-      - run: npm run build:web
-      - name: Commit validated source
+      - id: typecheck
+        name: Typecheck
+        continue-on-error: true
+        run: |
+          set +e
+          npm run typecheck 2>&1 | tee validation-typecheck.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -eq 0 ]; then rm -f validation-typecheck.log; fi
+          exit "$code"
+      - id: build
+        name: Build web
+        if: steps.typecheck.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set +e
+          npm run build:web 2>&1 | tee validation-build.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -eq 0 ]; then rm -f validation-build.log; fi
+          exit "$code"
+      - name: Commit source and diagnostics
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -40,5 +58,8 @@ jobs:
             echo "No source changes to commit."
             exit 0
           fi
-          git commit -m "Apply validated feature implementation"
+          git commit -m "Apply feature implementation and validation diagnostics"
           git push origin HEAD:${{ github.head_ref }}
+      - name: Fail when validation failed
+        if: steps.typecheck.outcome == 'failure' || steps.build.outcome == 'failure'
+        run: exit 1
