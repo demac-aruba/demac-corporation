@@ -1,12 +1,14 @@
+import { osmArubaStreetEntries } from './arubaStreetNames.generated';
 
 export type ArubaAddressEntry = {
   canonical: string;
   neighborhood: string;
   operationalZone: string;
   aliases?: string[];
+  source?: 'DEMAC' | 'OpenStreetMap';
 };
 
-export const arubaAddressDirectory: ArubaAddressEntry[] = [
+const curatedArubaAddressDirectory: ArubaAddressEntry[] = [
   { canonical: 'Pampunastraat', neighborhood: 'Dakota', operationalZone: 'Oranjestad Este', aliases: ['Pampuna straat', 'Pampunastrat', 'Pampuna'] },
   { canonical: 'Venezuelastraat', neighborhood: 'Playa', operationalZone: 'Oranjestad Centro', aliases: ['Venezuela straat', 'Venezuelastrat', 'Venezuela str'] },
   { canonical: 'Caya G. F. Betico Croes', neighborhood: 'Playa', operationalZone: 'Oranjestad Centro', aliases: ['Betico Croes', 'Caya Betico', 'Main Street'] },
@@ -61,4 +63,19 @@ export const arubaAddressDirectory: ArubaAddressEntry[] = [
   { canonical: 'Seroe Colorado', neighborhood: 'Seroe Colorado', operationalZone: 'San Nicolas', aliases: ['Seru Colorado'] },
   { canonical: 'Baby Beach', neighborhood: 'Seroe Colorado', operationalZone: 'San Nicolas' },
   { canonical: 'Rodgers Beach', neighborhood: 'Seroe Colorado', operationalZone: 'San Nicolas', aliases: ['Roger Beach'] },
+];
+
+const curatedAddressKeys = new Set(curatedArubaAddressDirectory.map((entry) => entry.canonical.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '')));
+
+export const arubaAddressDirectory: ArubaAddressEntry[] = [
+  ...curatedArubaAddressDirectory.map((entry) => ({ ...entry, source: 'DEMAC' as const })),
+  ...osmArubaStreetEntries
+    .filter((entry) => !curatedAddressKeys.has(entry.canonical.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '')))
+    .map((entry) => ({
+      canonical: entry.canonical,
+      neighborhood: entry.neighborhood ?? '',
+      operationalZone: entry.operationalZone ?? '',
+      aliases: entry.aliases ? [...entry.aliases] : undefined,
+      source: 'OpenStreetMap' as const,
+    })),
 ];
