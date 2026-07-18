@@ -8,6 +8,7 @@
     "expo": "~57.0.4",
     "expo-image-picker": "~57.0.2",
     "expo-status-bar": "~57.0.0",
+    "libphonenumber-js": "^1.13.9",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.86.0",

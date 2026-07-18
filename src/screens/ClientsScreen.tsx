@@ -1,13 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { AppModal, Button, Card, EmptyState, formatMoney, Input, Pill, SectionTitle } from '../components/UI';
+import { PhoneField } from '../components/PhoneField';
 import { useAppState } from '../state/AppState';
 import { colors } from '../theme';
-import { Client, Property, PropertyContact, PropertyContactLanguage, PropertyContactRole, PropertyType } from '../types';
+import { Client, PreferredLanguage, Property, PropertyContact, PropertyContactLanguage, PropertyContactRole, PropertyType } from '../types';
+import { DEFAULT_PHONE_COUNTRY, formatStoredPhone, normalizePhone, phoneComparisonKey, templateLanguageFor } from '../utils/phone';
 
 const propertyTypes: PropertyType[] = ['Casa', 'Apartamento', 'Oficina', 'Local comercial', 'Otro'];
 const propertyContactRoles: PropertyContactRole[] = ['Dueño', 'Encargado', 'Administrador', 'Inquilino', 'Contacto de acceso', 'Contabilidad', 'Otro'];
 const propertyContactLanguages: PropertyContactLanguage[] = ['Español', 'English', 'Nederlands', 'Papiamento'];
+const clientLanguages: PreferredLanguage[] = ['Español', 'English', 'Nederlands', 'Papiamento'];
 
 export function ClientsScreen() {
   const {
@@ -16,6 +19,7 @@ export function ClientsScreen() {
     equipment,
     workOrders,
     addClient,
+    updateClient,
     addProperty,
     updateProperty,
     removeProperty,
@@ -28,10 +32,11 @@ export function ClientsScreen() {
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState('');
   const [showCreate, setShowCreate] = useState(false);
+  const [showEditClient, setShowEditClient] = useState(false);
   const [showProperty, setShowProperty] = useState(false);
   const [showContact, setShowContact] = useState(false);
   const [contactPropertyId, setContactPropertyId] = useState('');
-  const [contactForm, setContactForm] = useState({ name: '', role: 'Encargado' as PropertyContactRole, phone: '', whatsapp: '', email: '', preferredLanguage: 'Español' as PropertyContactLanguage });
+  const [contactForm, setContactForm] = useState({ name: '', role: 'Encargado' as PropertyContactRole, phone: '', phoneCountry: DEFAULT_PHONE_COUNTRY as string, whatsapp: '', whatsappCountry: DEFAULT_PHONE_COUNTRY as string, email: '', preferredLanguage: 'Español' as PropertyContactLanguage, defaultSendConfirmation: false, defaultSendReminder: true, arrivalContact: true });
   const [propertyToDelete, setPropertyToDelete] = useState<Property | null>(null);
   const [saving, setSaving] = useState(false);
   const [screenMessage, setScreenMessage] = useState('');
@@ -39,11 +44,15 @@ export function ClientsScreen() {
     name: '',
     company: '',
     phone: '',
+    phoneCountry: DEFAULT_PHONE_COUNTRY as string,
     whatsapp: '',
+    whatsappCountry: DEFAULT_PHONE_COUNTRY as string,
     email: '',
+    preferredLanguage: 'Español' as PreferredLanguage,
     address: '',
     zone: 'Oranjestad',
   });
+  const [editForm, setEditForm] = useState({ name: '', company: '', phone: '', phoneCountry: DEFAULT_PHONE_COUNTRY as string, whatsapp: '', whatsappCountry: DEFAULT_PHONE_COUNTRY as string, email: '', preferredLanguage: 'Español' as PreferredLanguage });
   const [propertyForm, setPropertyForm] = useState({
     name: 'Propiedad principal',
     type: 'Casa' as PropertyType,
@@ -82,7 +91,15 @@ export function ClientsScreen() {
     .flatMap((order) => (order.scheduleHistory ?? []).map((entry) => ({ order, entry })))
     .sort((a, b) => b.entry.recordedAt.localeCompare(a.entry.recordedAt));
 
-  const resetClientForm = () => setForm({ name: '', company: '', phone: '', whatsapp: '', email: '', address: '', zone: 'Oranjestad' });
+  const resetClientForm = () => setForm({ name: '', company: '', phone: '', phoneCountry: DEFAULT_PHONE_COUNTRY as string, whatsapp: '', whatsappCountry: DEFAULT_PHONE_COUNTRY as string, email: '', preferredLanguage: 'Español' as PreferredLanguage, address: '', zone: 'Oranjestad' });
+
+  const duplicateClientFor = (phone: string, phoneCountry: string, whatsapp: string, whatsappCountry: string, ignoreId?: string) => {
+    const keys = [phoneComparisonKey(phone, phoneCountry), phoneComparisonKey(whatsapp || phone, whatsapp ? whatsappCountry : phoneCountry)].filter(Boolean);
+    return clients.find((client) => client.id !== ignoreId && [
+      phoneComparisonKey(client.phone, client.phoneCountry),
+      phoneComparisonKey(client.whatsapp, client.whatsappCountry),
+    ].some((key) => keys.includes(key)));
+  };
 
   const createClient = async () => {
     setScreenMessage('');
@@ -91,15 +108,26 @@ export function ClientsScreen() {
     if (!form.phone.trim()) return setScreenMessage('Escribe el teléfono del cliente.');
     if (!form.address.trim()) return setScreenMessage('Escribe la dirección de la primera propiedad.');
 
+    const normalizedPhone = normalizePhone(form.phone, form.phoneCountry);
+    const normalizedWhatsApp = normalizePhone(form.whatsapp.trim() || form.phone, form.whatsapp.trim() ? form.whatsappCountry : form.phoneCountry);
+    if (!normalizedPhone.valid) return setScreenMessage('El teléfono no es válido para el país seleccionado.');
+    if (!normalizedWhatsApp.valid) return setScreenMessage('El WhatsApp no es válido para el país seleccionado.');
+    const duplicate = duplicateClientFor(normalizedPhone.e164, normalizedPhone.country, normalizedWhatsApp.e164, normalizedWhatsApp.country);
+    if (duplicate) return setScreenMessage(`Ya existe un cliente con este teléfono o WhatsApp: ${duplicate.name}.`);
+
     const timestamp = Date.now();
     const now = new Date().toISOString();
     const client: Client = {
       id: `client-${timestamp}`,
       name: form.name.trim(),
       company: form.company.trim() || undefined,
-      phone: form.phone.trim(),
-      whatsapp: form.whatsapp.trim() || form.phone.trim(),
+      phone: normalizedPhone.e164,
+      phoneCountry: normalizedPhone.country,
+      whatsapp: normalizedWhatsApp.e164,
+      whatsappCountry: normalizedWhatsApp.country,
       email: form.email.trim() || undefined,
+      preferredLanguage: form.preferredLanguage,
+      templateLanguage: templateLanguageFor(form.preferredLanguage),
       address: form.address.trim(),
       zone: form.zone.trim() || 'Aruba',
       balance: 0,
@@ -133,6 +161,49 @@ export function ClientsScreen() {
     resetClientForm();
     setShowCreate(false);
     if (!propertyResult.ok) setScreenMessage(propertyResult.message ?? 'El cliente se guardó, pero no se pudo crear la propiedad principal.');
+  };
+
+  const openEditClient = () => {
+    if (!selected) return;
+    setScreenMessage('');
+    setEditForm({
+      name: selected.name,
+      company: selected.company ?? '',
+      phone: selected.phone,
+      phoneCountry: selected.phoneCountry ?? DEFAULT_PHONE_COUNTRY,
+      whatsapp: selected.whatsapp,
+      whatsappCountry: selected.whatsappCountry ?? selected.phoneCountry ?? DEFAULT_PHONE_COUNTRY,
+      email: selected.email ?? '',
+      preferredLanguage: selected.preferredLanguage ?? 'English',
+    });
+    setShowEditClient(true);
+  };
+
+  const saveEditedClient = async () => {
+    if (!selected) return;
+    if (!editForm.name.trim()) return setScreenMessage('Escribe el nombre del cliente.');
+    const normalizedPhone = normalizePhone(editForm.phone, editForm.phoneCountry);
+    const normalizedWhatsApp = normalizePhone(editForm.whatsapp.trim() || editForm.phone, editForm.whatsapp.trim() ? editForm.whatsappCountry : editForm.phoneCountry);
+    if (!normalizedPhone.valid) return setScreenMessage('El teléfono no es válido para el país seleccionado.');
+    if (!normalizedWhatsApp.valid) return setScreenMessage('El WhatsApp no es válido para el país seleccionado.');
+    const duplicate = duplicateClientFor(normalizedPhone.e164, normalizedPhone.country, normalizedWhatsApp.e164, normalizedWhatsApp.country, selected.id);
+    if (duplicate) return setScreenMessage(`Ya existe otro cliente con este teléfono o WhatsApp: ${duplicate.name}.`);
+    setSaving(true);
+    const result = await updateClient(selected.id, {
+      name: editForm.name.trim(),
+      company: editForm.company.trim() || undefined,
+      phone: normalizedPhone.e164,
+      phoneCountry: normalizedPhone.country,
+      whatsapp: normalizedWhatsApp.e164,
+      whatsappCountry: normalizedWhatsApp.country,
+      email: editForm.email.trim() || undefined,
+      preferredLanguage: editForm.preferredLanguage,
+      templateLanguage: templateLanguageFor(editForm.preferredLanguage),
+      updatedAt: new Date().toISOString(),
+    });
+    setSaving(false);
+    if (!result.ok) return setScreenMessage(result.message ?? 'No se pudo actualizar el cliente.');
+    setShowEditClient(false);
   };
 
   const openPropertyModal = () => {
@@ -178,7 +249,7 @@ export function ClientsScreen() {
     setScreenMessage('');
     clearDataError();
     setContactPropertyId(property.id);
-    setContactForm({ name: '', role: 'Encargado', phone: '', whatsapp: '', email: '', preferredLanguage: 'Español' });
+    setContactForm({ name: '', role: 'Encargado', phone: '', phoneCountry: DEFAULT_PHONE_COUNTRY, whatsapp: '', whatsappCountry: DEFAULT_PHONE_COUNTRY, email: '', preferredLanguage: 'Español', defaultSendConfirmation: false, defaultSendReminder: true, arrivalContact: true });
     setShowContact(true);
   };
 
@@ -187,15 +258,23 @@ export function ClientsScreen() {
     if (!property) return setScreenMessage('La propiedad seleccionada ya no existe.');
     if (!contactForm.name.trim()) return setScreenMessage('Escribe el nombre de la persona.');
     if (!contactForm.phone.trim() && !contactForm.whatsapp.trim()) return setScreenMessage('Escribe al menos un teléfono o WhatsApp.');
+    const normalizedPhone = normalizePhone(contactForm.phone.trim() || contactForm.whatsapp, contactForm.phone.trim() ? contactForm.phoneCountry : contactForm.whatsappCountry);
+    const normalizedWhatsApp = normalizePhone(contactForm.whatsapp.trim() || contactForm.phone, contactForm.whatsapp.trim() ? contactForm.whatsappCountry : contactForm.phoneCountry);
+    if (!normalizedPhone.valid || !normalizedWhatsApp.valid) return setScreenMessage('Revisa el país y el número de teléfono o WhatsApp del contacto.');
     const now = new Date().toISOString();
     const contact: PropertyContact = {
       id: `contact-${Date.now()}`,
       name: contactForm.name.trim(),
       role: contactForm.role,
-      phone: contactForm.phone.trim() || contactForm.whatsapp.trim(),
-      whatsapp: contactForm.whatsapp.trim() || contactForm.phone.trim(),
+      phone: normalizedPhone.e164,
+      phoneCountry: normalizedPhone.country,
+      whatsapp: normalizedWhatsApp.e164,
+      whatsappCountry: normalizedWhatsApp.country,
       email: contactForm.email.trim() || undefined,
       preferredLanguage: contactForm.preferredLanguage,
+      defaultSendConfirmation: contactForm.defaultSendConfirmation,
+      defaultSendReminder: contactForm.defaultSendReminder,
+      arrivalContact: contactForm.arrivalContact,
       active: true,
       createdAt: now,
       updatedAt: now,
@@ -276,11 +355,12 @@ export function ClientsScreen() {
                 <View style={styles.detailHeader}>
                   <View style={[styles.avatar, styles.avatarLarge]}><Text style={[styles.avatarText, { fontSize: 18 }]}>{initials(selected.name)}</Text></View>
                   <View style={{ flex: 1 }}><Text style={styles.detailName}>{selected.name}</Text><Text style={styles.detailCompany}>{selected.company || 'Cliente residencial'}</Text></View>
-                  <Pill label={selected.balance > 0 ? `Balance ${formatMoney(selected.balance)}` : 'Cuenta al día'} tone={selected.balance > 0 ? 'warning' : 'success'} />
+                  <View style={{ gap: 7, alignItems: 'flex-end' }}><Button compact variant="secondary" label="Editar cliente" onPress={openEditClient} /><Pill label={selected.balance > 0 ? `Balance ${formatMoney(selected.balance)}` : 'Cuenta al día'} tone={selected.balance > 0 ? 'warning' : 'success'} /></View>
                 </View>
                 <View style={styles.infoGrid}>
-                  <Info label="Teléfono" value={selected.phone} />
-                  <Info label="WhatsApp" value={selected.whatsapp} />
+                  <Info label="Teléfono" value={formatStoredPhone(selected.phone, selected.phoneCountry)} />
+                  <Info label="WhatsApp" value={formatStoredPhone(selected.whatsapp, selected.whatsappCountry)} />
+                  <Info label="Idioma preferido" value={selected.preferredLanguage ?? 'English (registro anterior)'} />
                   <Info label="Correo" value={selected.email || 'No registrado'} />
                   <Info label="Zona principal" value={selected.zone} />
                 </View>
@@ -299,7 +379,7 @@ export function ClientsScreen() {
                       <View style={styles.propertyTitleRow}><Text style={styles.propertyName}>{property.name}</Text><Pill label={property.type} tone="neutral" /></View>
                       <Text style={styles.propertyAddress}>{property.address}</Text>
                                             <Text style={styles.propertyMeta}>{property.zone}{property.notes ? ` · ${property.notes}` : ''}</Text>
-            {(property.contacts ?? []).filter((contact) => contact.active !== false).map((contact) => <Text key={contact.id} style={styles.propertyContactLine}>{contact.name} · {contact.role} · {contact.whatsapp || contact.phone} · {contact.preferredLanguage}</Text>)}
+            {(property.contacts ?? []).filter((contact) => contact.active !== false).map((contact) => <Text key={contact.id} style={styles.propertyContactLine}>{contact.name} · {contact.role} · {formatStoredPhone(contact.whatsapp || contact.phone, contact.whatsappCountry || contact.phoneCountry)} · {contact.preferredLanguage}{contact.arrivalContact ? ' · Contacto de llegada' : ''}{contact.defaultSendConfirmation ? ' · Confirmación' : ''}{contact.defaultSendReminder ? ' · Recordatorio' : ''}</Text>)}
           </View>
           <View style={{ gap: 6 }}><Button compact variant="secondary" label="Agregar contacto" onPress={() => openContactModal(property)} /><Button compact variant="ghost" label="Quitar" onPress={() => setPropertyToDelete(property)} /></View>
                   </View>
@@ -360,13 +440,30 @@ export function ClientsScreen() {
         {screenMessage ? <View style={styles.formError}><Text style={styles.formErrorText}>{screenMessage}</Text></View> : null}
         <Input label="Nombre completo o nombre comercial" value={form.name} onChangeText={(name) => setForm({ ...form, name })} />
         <Input label="Empresa (opcional)" value={form.company} onChangeText={(company) => setForm({ ...form, company })} />
-        <Input label="Teléfono" value={form.phone} onChangeText={(phone) => setForm({ ...form, phone })} keyboardType="phone-pad" />
-        <Input label="WhatsApp" value={form.whatsapp} onChangeText={(whatsapp) => setForm({ ...form, whatsapp })} keyboardType="phone-pad" placeholder="Si se deja vacío, usaremos el teléfono" />
+        <PhoneField label="Teléfono" value={form.phone} country={form.phoneCountry} onChangeText={(phone) => setForm({ ...form, phone })} onCountryChange={(phoneCountry) => setForm((current) => ({ ...current, phoneCountry }))} />
+        <PhoneField label="WhatsApp" value={form.whatsapp} country={form.whatsappCountry} onChangeText={(whatsapp) => setForm({ ...form, whatsapp })} onCountryChange={(whatsappCountry) => setForm((current) => ({ ...current, whatsappCountry }))} placeholder="Si queda vacío, usaremos el teléfono" />
+        <Text style={styles.inputLabel}>Idioma preferido</Text>
+        <View style={styles.typeWrap}>{clientLanguages.map((preferredLanguage) => <Pressable key={preferredLanguage} onPress={() => setForm({ ...form, preferredLanguage })} style={[styles.typeButton, form.preferredLanguage === preferredLanguage && styles.typeButtonActive]}><Text style={[styles.typeText, form.preferredLanguage === preferredLanguage && styles.typeTextActive]}>{preferredLanguage}</Text></Pressable>)}</View>
         <Input label="Correo electrónico (opcional)" value={form.email} onChangeText={(email) => setForm({ ...form, email })} keyboardType="email-address" />
         <Text style={styles.formSection}>PRIMERA PROPIEDAD</Text>
         <Input label="Dirección" value={form.address} onChangeText={(address) => setForm({ ...form, address })} />
         <Input label="Zona" value={form.zone} onChangeText={(zone) => setForm({ ...form, zone })} />
         <View style={styles.modalActions}><Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => setShowCreate(false)} /><Button label={saving ? 'Guardando…' : 'Guardar cliente'} disabled={saving} onPress={() => void createClient()} /></View>
+      </AppModal>
+
+
+      <AppModal visible={showEditClient} title="Editar cliente" onClose={() => !saving && setShowEditClient(false)}>
+        {screenMessage ? <View style={styles.formError}><Text style={styles.formErrorText}>{screenMessage}</Text></View> : null}
+        <ScrollView>
+<Input label="Nombre completo o nombre comercial" value={editForm.name} onChangeText={(name) => setEditForm({ ...editForm, name })} />
+<Input label="Empresa (opcional)" value={editForm.company} onChangeText={(company) => setEditForm({ ...editForm, company })} />
+<PhoneField label="Teléfono" value={editForm.phone} country={editForm.phoneCountry} onChangeText={(phone) => setEditForm({ ...editForm, phone })} onCountryChange={(phoneCountry) => setEditForm((current) => ({ ...current, phoneCountry }))} />
+<PhoneField label="WhatsApp" value={editForm.whatsapp} country={editForm.whatsappCountry} onChangeText={(whatsapp) => setEditForm({ ...editForm, whatsapp })} onCountryChange={(whatsappCountry) => setEditForm((current) => ({ ...current, whatsappCountry }))} />
+<Text style={styles.inputLabel}>Idioma preferido</Text>
+<View style={styles.typeWrap}>{clientLanguages.map((preferredLanguage) => <Pressable key={preferredLanguage} onPress={() => setEditForm({ ...editForm, preferredLanguage })} style={[styles.typeButton, editForm.preferredLanguage === preferredLanguage && styles.typeButtonActive]}><Text style={[styles.typeText, editForm.preferredLanguage === preferredLanguage && styles.typeTextActive]}>{preferredLanguage}</Text></Pressable>)}</View>
+<Input label="Correo electrónico (opcional)" value={editForm.email} onChangeText={(email) => setEditForm({ ...editForm, email })} keyboardType="email-address" />
+<View style={styles.modalActions}><Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => setShowEditClient(false)} /><Button label={saving ? 'Guardando…' : 'Guardar cambios'} disabled={saving} onPress={() => void saveEditedClient()} /></View>
+        </ScrollView>
       </AppModal>
 
       <AppModal visible={showProperty} title="Agregar propiedad" onClose={() => !saving && setShowProperty(false)}>
@@ -385,11 +482,13 @@ export function ClientsScreen() {
         <Input label="Nombre completo" value={contactForm.name} onChangeText={(name) => setContactForm({ ...contactForm, name })} />
         <Text style={styles.inputLabel}>Función en la propiedad</Text>
         <View style={styles.typeWrap}>{propertyContactRoles.map((role) => <Pressable key={role} onPress={() => setContactForm({ ...contactForm, role })} style={[styles.typeButton, contactForm.role === role && styles.typeButtonActive]}><Text style={[styles.typeText, contactForm.role === role && styles.typeTextActive]}>{role}</Text></Pressable>)}</View>
-        <Input label="Teléfono" value={contactForm.phone} onChangeText={(phone) => setContactForm({ ...contactForm, phone })} keyboardType="phone-pad" />
-        <Input label="WhatsApp" value={contactForm.whatsapp} onChangeText={(whatsapp) => setContactForm({ ...contactForm, whatsapp })} keyboardType="phone-pad" placeholder="Si es igual, puede quedar vacío" />
+        <PhoneField label="Teléfono" value={contactForm.phone} country={contactForm.phoneCountry} onChangeText={(phone) => setContactForm({ ...contactForm, phone })} onCountryChange={(phoneCountry) => setContactForm((current) => ({ ...current, phoneCountry }))} />
+        <PhoneField label="WhatsApp" value={contactForm.whatsapp} country={contactForm.whatsappCountry} onChangeText={(whatsapp) => setContactForm({ ...contactForm, whatsapp })} onCountryChange={(whatsappCountry) => setContactForm((current) => ({ ...current, whatsappCountry }))} placeholder="Si queda vacío, usaremos el teléfono" />
         <Input label="Correo electrónico (opcional)" value={contactForm.email} onChangeText={(email) => setContactForm({ ...contactForm, email })} keyboardType="email-address" />
         <Text style={styles.inputLabel}>Idioma preferido</Text>
         <View style={styles.typeWrap}>{propertyContactLanguages.map((preferredLanguage) => <Pressable key={preferredLanguage} onPress={() => setContactForm({ ...contactForm, preferredLanguage })} style={[styles.typeButton, contactForm.preferredLanguage === preferredLanguage && styles.typeButtonActive]}><Text style={[styles.typeText, contactForm.preferredLanguage === preferredLanguage && styles.typeTextActive]}>{preferredLanguage}</Text></Pressable>)}</View>
+        <Text style={styles.inputLabel}>Preferencias operativas</Text>
+        <View style={styles.typeWrap}><Pressable onPress={() => setContactForm({ ...contactForm, defaultSendConfirmation: !contactForm.defaultSendConfirmation })} style={[styles.typeButton, contactForm.defaultSendConfirmation && styles.typeButtonActive]}><Text style={[styles.typeText, contactForm.defaultSendConfirmation && styles.typeTextActive]}>Confirmación por defecto</Text></Pressable><Pressable onPress={() => setContactForm({ ...contactForm, defaultSendReminder: !contactForm.defaultSendReminder })} style={[styles.typeButton, contactForm.defaultSendReminder && styles.typeButtonActive]}><Text style={[styles.typeText, contactForm.defaultSendReminder && styles.typeTextActive]}>Recordatorio por defecto</Text></Pressable><Pressable onPress={() => setContactForm({ ...contactForm, arrivalContact: !contactForm.arrivalContact })} style={[styles.typeButton, contactForm.arrivalContact && styles.typeButtonActive]}><Text style={[styles.typeText, contactForm.arrivalContact && styles.typeTextActive]}>Llamar al llegar</Text></Pressable></View>
         <View style={styles.modalActions}><Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => setShowContact(false)} /><Button label={saving ? 'Guardando…' : 'Guardar contacto'} disabled={saving} onPress={() => void createPropertyContact()} /></View>
       </AppModal>
 
