@@ -1,10 +1,11 @@
 import * as ImagePicker from 'expo-image-picker';
 import React, { useMemo, useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Button, Card, EmptyState, Input, Pill, SectionTitle, statusTone } from '../components/UI';
 import { useAppState } from '../state/AppState';
 import { colors } from '../theme';
 import { AppointmentStatus } from '../types';
+import { locationCoordinates, mapsMeUrl } from '../utils/location';
 
 export function TechnicianScreen() {
   const { currentUser, users, workOrders, clients, services, equipment, updateWorkOrder } = useAppState();
@@ -16,6 +17,7 @@ export function TechnicianScreen() {
   const client = clients.find((item) => item.id === selected?.clientId);
   const service = services.find((item) => item.id === selected?.serviceId);
   const unit = equipment.find((item) => item.id === selected?.equipmentId);
+  const location = selected?.locationSnapshot;
   const [diagnosis, setDiagnosis] = useState(selected?.diagnosis ?? '');
   const [workPerformed, setWorkPerformed] = useState(selected?.workPerformed ?? '');
   const [recommendation, setRecommendation] = useState(selected?.recommendation ?? '');
@@ -94,6 +96,7 @@ export function TechnicianScreen() {
             <Card>
               <View style={styles.detailTop}><View style={{ flex: 1 }}><Text style={styles.orderId}>{selected.id}</Text><Text style={styles.clientName}>{client?.name}</Text><Text style={styles.serviceName}>{service?.name}</Text></View><Pill label={selected.status} tone={statusTone(selected.status)} /></View>
               <Text style={styles.address}>{selected.address}</Text>
+              {location ? <View style={styles.locationBox}><Text style={styles.locationTitle}>UBICACIÓN COMPARTIDA POR EL CLIENTE</Text><Text style={styles.locationText}>{location.address || location.name || locationCoordinates(location) || 'Enlace de ubicación guardado'}</Text><View style={styles.locationActions}><Button compact label="Abrir en MAPS.ME" onPress={() => { const url = mapsMeUrl(location, client?.name ?? 'Cliente DEMAC'); if (url) void Linking.openURL(url); }} /><Button compact variant="secondary" label="Copiar coordenadas" disabled={!locationCoordinates(location)} onPress={() => void (globalThis as any).navigator?.clipboard?.writeText(locationCoordinates(location))} /></View></View> : null}
               <View style={styles.problemBox}><Text style={styles.problemLabel}>PROBLEMA REPORTADO</Text><Text style={styles.problemText}>{selected.problem}</Text></View>
               {unit ? <View style={styles.unitBox}><Text style={styles.unitTitle}>Equipo: {unit.brand} {unit.model}</Text><Text style={styles.unitMeta}>{unit.location} · {unit.btu.toLocaleString()} BTU · {unit.refrigerant} · S/N {unit.serial}</Text></View> : null}
               <View style={styles.progressRow}>
@@ -156,6 +159,10 @@ const styles = StyleSheet.create({
   clientName: { color: colors.text, fontWeight: '900', fontSize: 21, marginTop: 4 },
   serviceName: { color: colors.muted, marginTop: 4, fontWeight: '700' },
   address: { color: colors.text, marginTop: 14, fontWeight: '700' },
+  locationBox: { backgroundColor: colors.primaryLight, borderRadius: 12, padding: 13, marginTop: 12 },
+  locationTitle: { color: colors.primaryDark, fontWeight: '900', fontSize: 9, letterSpacing: 1 },
+  locationText: { color: colors.text, marginTop: 6, fontWeight: '700' },
+  locationActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 10 },
   problemBox: { backgroundColor: colors.warningLight, borderRadius: 12, padding: 13, marginTop: 14 },
   problemLabel: { color: colors.warning, fontWeight: '900', fontSize: 9, letterSpacing: 1 },
   problemText: { color: colors.text, marginTop: 6, lineHeight: 19 },

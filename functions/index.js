@@ -34,7 +34,20 @@ function messageText(message) {
   return "";
 }
 
+
+function messageLocation(message) {
+  if (message?.type !== 'location' || !message.location) return {};
+  return {
+    latitude: Number(message.location.latitude),
+    longitude: Number(message.location.longitude),
+    locationName: message.location.name ?? null,
+    locationAddress: message.location.address ?? null,
+    locationUrl: message.location.url ?? null,
+  };
+}
+
 function digitsOnly(value) {
+
   return String(value ?? "").replace(/\D/g, "");
 }
 
@@ -164,6 +177,7 @@ exports.whatsappWebhook = onRequest(
               contactName: contact?.profile?.name ?? null,
               type: message.type ?? "unknown",
               text: messageText(message),
+              ...messageLocation(message),
               whatsappTimestamp: message.timestamp ?? null,
               phoneNumberId: metadata.phone_number_id ?? null,
               displayPhoneNumber: metadata.display_phone_number ?? null,
