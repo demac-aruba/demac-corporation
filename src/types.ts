@@ -347,6 +347,41 @@ export interface WorkOrderScheduleHistoryEntry {
   recordedAt: string;
 }
 
+export type EvidenceSection =
+  | 'identification'
+  | 'before_service'
+  | 'initial_pressures'
+  | 'electrical_disconnect'
+  | 'during_service'
+  | 'final_pressures'
+  | 'after_service'
+  | 'finding'
+  | 'general';
+
+export type EvidenceMoment = 'before' | 'during' | 'after' | 'not_applicable';
+
+export interface WorkOrderEvidence {
+  id: string;
+  workOrderId: string;
+  unitId?: string;
+  equipmentId?: string;
+  section: EvidenceSection;
+  itemKey: string;
+  label: string;
+  moment: EvidenceMoment;
+  storagePath: string;
+  downloadUrl: string;
+  contentType: string;
+  sizeBytes: number;
+  note?: string;
+  capturedAt: string;
+  uploadedAt: string;
+  uploadedByUserId: string;
+  uploadedByStaffId?: string;
+  uploadedByName: string;
+  updatedAt?: string;
+}
+
 export interface WorkOrder {
   id: string;
   clientId: string;

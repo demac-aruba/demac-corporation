@@ -6,7 +6,8 @@ import { Button, Card, EmptyState, Input, Pill, SectionTitle, statusTone } from 
 import { usePwaStatus } from '../hooks/usePwaStatus';
 import { useAppState } from '../state/TeamState';
 import { colors } from '../theme';
-import { AppointmentStatus, WorkOrder } from '../types';
+import { AppointmentStatus, WorkOrder, WorkOrderEvidence } from '../types';
+import { deleteWorkOrderEvidenceImage, uploadWorkOrderEvidenceImage } from '../services/firebaseStorage';
 import { locationCoordinates, mapsMeUrl } from '../utils/location';
 
 const DRAFT_PREFIX = '@demac-technician-draft-v1:';
@@ -50,7 +51,6 @@ type TechnicianDraft = {
   pendingReason: string;
   pendingAction: string;
   requiresSecondVisit: boolean;
-  localPhotos: string[];
 };
 
 const emptyDraft: TechnicianDraft = {
@@ -67,7 +67,6 @@ const emptyDraft: TechnicianDraft = {
   pendingReason: '',
   pendingAction: '',
   requiresSecondVisit: false,
-  localPhotos: [],
 };
 
 function arubaDate(offsetDays = 0) {
@@ -107,7 +106,6 @@ function draftFromOrder(order?: OperationalWorkOrder): TechnicianDraft {
     pendingReason: order.pendingReason ?? '',
     pendingAction: order.pendingAction ?? '',
     requiresSecondVisit: order.requiresSecondVisit ?? false,
-    localPhotos: [],
   };
 }
 
@@ -131,7 +129,10 @@ export function TechnicianScreen() {
     services,
     equipment,
     staffProfiles,
+    workOrderEvidence,
     updateWorkOrder,
+    addWorkOrderEvidence,
+    removeWorkOrderEvidence,
   } = useAppState();
   const pwa = usePwaStatus();
   const today = arubaDate();
@@ -174,6 +175,7 @@ export function TechnicianScreen() {
   const [formMessage, setFormMessage] = useState('');
   const [photoMessage, setPhotoMessage] = useState('');
   const [working, setWorking] = useState(false);
+  const [photoUploading, setPhotoUploading] = useState(false);
 
   useEffect(() => {
     if (!jobs.length) {
@@ -302,13 +304,7 @@ export function TechnicianScreen() {
       return;
     }
     const changed = await statusChange('Completada', 'Reporte básico completado por el técnico.', reportChanges());
-    if (changed) {
-      if (draft.localPhotos.length) {
-        setFormMessage('Trabajo completado. Las fotos temporales permanecen guardadas en este teléfono hasta que activemos Firebase Storage.');
-      } else {
-        await AsyncStorage.removeItem(`${DRAFT_PREFIX}${selected.id}`);
-      }
-    }
+    if (changed) await AsyncStorage.removeItem(`${DRAFT_PREFIX}${selected.id}`);
   };
 
   const markPending = async () => {
@@ -326,7 +322,7 @@ export function TechnicianScreen() {
   };
 
   const addPhoto = async (camera: boolean) => {
-    if (!selected) return;
+    if (!selected || !currentUser) return;
     setPhotoMessage('');
     try {
       const permission = camera
@@ -337,14 +333,51 @@ export function TechnicianScreen() {
         return;
       }
       const result = camera
-        ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.7 })
-        : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: true, quality: 0.7 });
+        ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.72 })
+        : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: true, quality: 0.72 });
       if (result.canceled) return;
-      const localPhotos = result.assets.map((asset) => asset.uri);
-      setDraft((current) => ({ ...current, localPhotos: [...current.localPhotos, ...localPhotos] }));
-      setPhotoMessage(`${localPhotos.length} foto${localPhotos.length === 1 ? '' : 's'} guardada${localPhotos.length === 1 ? '' : 's'} temporalmente en este teléfono. Firebase Storage se activará en el módulo de evidencia permanente.`);
+
+      setPhotoUploading(true);
+      let uploaded = 0;
+      for (const asset of result.assets) {
+        const evidenceId = `evidence-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        const stored = await uploadWorkOrderEvidenceImage({
+          uri: asset.uri,
+          workOrderId: selected.id,
+          unitId: selected.equipmentId || 'general',
+          evidenceId,
+          mimeType: asset.mimeType,
+          fileName: asset.fileName,
+        });
+        const now = new Date().toISOString();
+        const evidence: WorkOrderEvidence = {
+          id: evidenceId,
+          workOrderId: selected.id,
+          equipmentId: selected.equipmentId,
+          unitId: selected.equipmentId || 'general',
+          section: 'general',
+          itemKey: 'general-work-evidence',
+          label: 'Evidencia general del trabajo',
+          moment: 'during',
+          ...stored,
+          capturedAt: now,
+          uploadedAt: now,
+          uploadedByUserId: currentUser.id,
+          uploadedByStaffId: currentStaff?.id,
+          uploadedByName: currentStaff?.name ?? currentUser.name,
+        };
+        const saved = await addWorkOrderEvidence(evidence);
+        if (!saved.ok) {
+          await deleteWorkOrderEvidenceImage(stored.storagePath).catch(() => undefined);
+          throw new Error(saved.message ?? 'No se pudo registrar la fotografía para la oficina.');
+        }
+        uploaded += 1;
+      }
+      setPhotoMessage(`${uploaded} foto${uploaded === 1 ? '' : 's'} subida${uploaded === 1 ? '' : 's'} correctamente. Ya está${uploaded === 1 ? '' : 'n'} disponible${uploaded === 1 ? '' : 's'} para la oficina.`);
     } catch (error) {
-      setPhotoMessage(`No se pudo abrir la cámara o galería: ${error instanceof Error ? error.message : String(error)}`);
+      setPhotoMessage(`No se pudo subir la evidencia: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setPhotoUploading(false);
     }
   };
 
@@ -354,7 +387,11 @@ export function TechnicianScreen() {
   const assignedNames = selected?.technicianIds
     .map((id) => staffProfiles.find((staff) => staff.id === id)?.name ?? id)
     .join(', ');
-  const displayedPhotos = [...(selected?.photos ?? []), ...draft.localPhotos];
+  const selectedEvidence = workOrderEvidence.filter((item) => item.workOrderId === selected?.id);
+  const displayedPhotos = [
+    ...(selected?.photos ?? []).map((downloadUrl, index) => ({ id: `legacy-${index}`, downloadUrl, label: 'Evidencia anterior' })),
+    ...selectedEvidence,
+  ];
 
   return (
     <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
@@ -448,12 +485,12 @@ export function TechnicianScreen() {
               <Input label="Trabajo realizado" multiline value={draft.workPerformed} onChangeText={(value) => setField('workPerformed', value)} placeholder="Describe las acciones realizadas…" />
               <Input label="Recomendaciones" multiline value={draft.recommendation} onChangeText={(value) => setField('recommendation', value)} placeholder="Recomendaciones para cliente u oficina…" />
 
-              <Text style={styles.photoLabel}>Evidencia temporal ({displayedPhotos.length})</Text>
+              <Text style={styles.photoLabel}>Evidencia permanente ({displayedPhotos.length})</Text>
               <View style={styles.photoRow}>
-                {displayedPhotos.map((uri, index) => <Image key={`${uri}-${index}`} source={{ uri }} style={styles.photo} />)}
+                {displayedPhotos.map((evidence) => <View key={evidence.id}><Image source={{ uri: evidence.downloadUrl }} style={styles.photo} /><Text style={styles.helperText}>{evidence.label}</Text></View>)}
               </View>
-              {draft.localPhotos.length ? <Text style={styles.helperText}>Estas fotos todavía están guardadas únicamente en este teléfono y no se enviarán a la oficina hasta activar Firebase Storage.</Text> : null}
-              <View style={styles.photoActions}><Button compact variant="secondary" label="Tomar foto" onPress={() => void addPhoto(true)} /><Button compact variant="secondary" label="Seleccionar galería" onPress={() => void addPhoto(false)} /></View>
+              <Text style={styles.helperText}>Las fotos se guardan en Firebase Storage y quedan disponibles para oficina y futuros reportes.</Text>
+              <View style={styles.photoActions}><Button compact variant="secondary" label={photoUploading ? "Subiendo…" : "Tomar foto"} disabled={photoUploading} onPress={() => void addPhoto(true)} /><Button compact variant="secondary" label={photoUploading ? "Subiendo…" : "Seleccionar galería"} disabled={photoUploading} onPress={() => void addPhoto(false)} /></View>
               {photoMessage ? <Text style={styles.helperText}>{photoMessage}</Text> : null}
 
               <Input label="Nombre de quien recibe el trabajo" value={draft.receiverName} onChangeText={(value) => setField('receiverName', value)} placeholder="Nombre completo" />

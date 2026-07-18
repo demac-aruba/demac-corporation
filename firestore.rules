@@ -39,6 +39,19 @@ service cloud.firestore {
         );
     }
 
+    function workOrderData(workOrderId) {
+      return get(/databases/$(database)/documents/workOrders/$(workOrderId)).data;
+    }
+
+    function assignedToWorkOrderId(workOrderId) {
+      return technicianRole()
+        && (
+          request.auth.uid in workOrderData(workOrderId).technicianIds
+          || ('staffId' in userProfile().data && userProfile().data.staffId in workOrderData(workOrderId).technicianIds)
+          || ('vanId' in userProfile().data && userProfile().data.vanId == workOrderData(workOrderId).vanId)
+        );
+    }
+
     function technicianWorkOrderFieldsOnly() {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
         'status',
@@ -143,6 +156,20 @@ service cloud.firestore {
       allow create: if operationsRole();
       allow update: if operationsRole() || (assignedToTechnician() && technicianWorkOrderFieldsOnly());
       allow delete: if adminOrSupervisor();
+    }
+
+    match /workOrderEvidence/{evidenceId} {
+      allow read: if activeStaff();
+      allow create: if operationsRole()
+        || (assignedToWorkOrderId(request.resource.data.workOrderId)
+          && request.resource.data.uploadedByUserId == request.auth.uid);
+      allow update: if operationsRole()
+        || (assignedToWorkOrderId(resource.data.workOrderId)
+          && resource.data.uploadedByUserId == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['note', 'updatedAt']));
+      allow delete: if operationsRole()
+        || (assignedToWorkOrderId(resource.data.workOrderId)
+          && resource.data.uploadedByUserId == request.auth.uid);
     }
 
     match /whatsappOutboundQueue/{messageId} {
