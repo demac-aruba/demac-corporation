@@ -22,7 +22,11 @@
     },
     "web": {
       "favicon": "./assets/favicon.png",
-      "bundler": "metro"
+      "bundler": "metro",
+      "output": "single",
+      "name": "DEMAC Professional Cooling Solutions",
+      "shortName": "DEMAC",
+      "lang": "es"
     },
     "description": "DEMAC Professional Cooling Solutions operations platform.",
     "scheme": "demac-corporation",
@@ -30,7 +34,8 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "DEMAC necesita acceso a las fotos para adjuntarlas a los reportes t\u00e9cnicos."
+          "photosPermission": "DEMAC necesita acceso a las fotos para adjuntarlas a los reportes técnicos.",
+          "cameraPermission": "DEMAC necesita acceso a la cámara para documentar los trabajos técnicos."
         }
       ]
     ]

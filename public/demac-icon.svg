@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">DEMAC Professional Cooling Solutions</title>
+  <rect width="512" height="512" rx="112" fill="#0957C3"/>
+  <circle cx="256" cy="228" r="142" fill="#FFFFFF" opacity="0.12"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="28" stroke-linecap="round">
+    <path d="M256 92v272"/>
+    <path d="M138 160l236 136"/>
+    <path d="M138 296l236-136"/>
+    <path d="M256 92l-30 38m30-38l30 38"/>
+    <path d="M256 364l-30-38m30 38l30-38"/>
+    <path d="M138 160l48 6m-48-6l18 44"/>
+    <path d="M374 296l-48-6m48 6l-18-44"/>
+    <path d="M138 296l18-44m-18 44l48-6"/>
+    <path d="M374 160l-18 44m18-44l-48 6"/>
+  </g>
+  <text x="256" y="450" text-anchor="middle" fill="#FFFFFF" font-family="Arial, Helvetica, sans-serif" font-size="54" font-weight="800" letter-spacing="5">DEMAC</text>
+</svg>
