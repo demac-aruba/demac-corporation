@@ -9,12 +9,12 @@ permissions:
 
 jobs:
   build-and-validate:
-    if: github.head_ref == 'feature/agenda-aruba-address-index'
+    if: github.head_ref == 'feature/agenda-aruba-address-index-v2'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: feature/agenda-aruba-address-index
+          ref: feature/agenda-aruba-address-index-v2
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
@@ -44,6 +44,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           rm -f .github/workflows/build-aruba-address-index.yml
+          rm -f scripts/rebuild-aruba-address-index.trigger
           git add -A
-          git commit -m "Refine comprehensive Aruba address index"
-          git push origin HEAD:feature/agenda-aruba-address-index
+          git commit -m "Add filtered Aruba street index to Agenda"
+          git push origin HEAD:feature/agenda-aruba-address-index-v2
