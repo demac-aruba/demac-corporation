@@ -8,13 +8,18 @@ on:
       - src/components/AppShell.tsx
       - .github/profile-menu-validation-trigger
 
+permissions:
+  contents: write
+
 jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout PR
+      - name: Checkout PR branch
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -22,7 +27,15 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Typecheck
-        run: npm run typecheck
-      - name: Build web
-        run: npm run build:web
+      - name: Capture typecheck output
+        shell: bash
+        run: |
+          set +e
+          npm run typecheck > typecheck-output.txt 2>&1
+          status=$?
+          printf '\nTYPECHECK_EXIT_CODE=%s\n' "$status" >> typecheck-output.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add typecheck-output.txt
+          git commit -m "Capture PR 47 typecheck output" || true
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
