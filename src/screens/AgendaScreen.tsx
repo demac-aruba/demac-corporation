@@ -179,8 +179,8 @@ function buildNotificationRecipients(
   if (!saved?.length) {
     return available.map((recipient, index) => ({
       ...recipient,
-      sendConfirmation: index === 0 ? legacyEnabled : false,
-      sendReminder: index === 0 ? legacyEnabled : false,
+      sendConfirmation: index === 0 ? legacyEnabled : recipient.sendConfirmation,
+      sendReminder: index === 0 ? legacyEnabled : recipient.sendReminder,
     }));
   }
   const savedBySource = new Map(saved.map((recipient) => [`${recipient.recipientType}:${recipient.sourceId}`, recipient]));
