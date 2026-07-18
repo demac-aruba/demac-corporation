@@ -20,6 +20,20 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Tighten generator to highway names only
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/build_aruba_address_index.py')
+          text = path.read_text(encoding='utf-8')
+          old = '        highway_name = clean_name(tags.get("name"))\n        if highway_name:\n'
+          new = '        highway_name = clean_name(tags.get("name")) if tags.get("highway") else ""\n        if highway_name:\n'
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise RuntimeError('Could not update highway-only filter')
+          path.write_text(text, encoding='utf-8')
+          PY
       - name: Generate address index and integrate Agenda
         run: python3 scripts/build_aruba_address_index.py
       - run: npm ci
@@ -31,5 +45,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           rm -f .github/workflows/build-aruba-address-index.yml
           git add -A
-          git commit -m "Add comprehensive Aruba addresses to Agenda"
+          git commit -m "Refine comprehensive Aruba address index"
           git push origin HEAD:feature/agenda-aruba-address-index
