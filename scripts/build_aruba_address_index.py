@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import time
 import unicodedata
 import urllib.error
@@ -43,6 +44,30 @@ STREET_WORDS = (
     "caya",
     "camino",
 )
+TEMP_WORKFLOW = ".github/workflows/build-aruba-address-index.yml"
+
+
+def sync_with_main() -> None:
+    subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
+    subprocess.run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], check=True)
+    subprocess.run(["git", "fetch", "origin", "main"], check=True)
+    result = subprocess.run(["git", "merge", "origin/main", "--no-edit"], text=True, capture_output=True)
+    if result.returncode == 0:
+        return
+
+    unmerged = subprocess.run(
+        ["git", "diff", "--name-only", "--diff-filter=U"],
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.splitlines()
+    unexpected = [path for path in unmerged if path != TEMP_WORKFLOW]
+    if unexpected:
+        raise RuntimeError(f"Unexpected merge conflicts: {unexpected}\n{result.stdout}\n{result.stderr}")
+    if TEMP_WORKFLOW in unmerged:
+        subprocess.run(["git", "rm", "-f", TEMP_WORKFLOW], check=True)
+    subprocess.run(["git", "add", "-A"], check=True)
+    subprocess.run(["git", "commit", "--no-edit"], check=True)
 
 
 def normalize_key(value: str) -> str:
@@ -88,7 +113,7 @@ def infer_operational_zone(place: str) -> str:
 def fetch_osm() -> dict:
     payload = urllib.parse.urlencode({"data": OVERPASS_QUERY}).encode("utf-8")
     headers = {
-        "User-Agent": "DEMAC-Aruba-address-index/1.2 (https://github.com/demac-aruba/demac-corporation)",
+        "User-Agent": "DEMAC-Aruba-address-index/1.3 (https://github.com/demac-aruba/demac-corporation)",
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
     }
     errors: list[str] = []
@@ -224,6 +249,7 @@ def write_generated_entries(entries: list[dict]) -> None:
 
 
 def main() -> None:
+    sync_with_main()
     entries = build_entries(fetch_osm())
     write_generated_entries(entries)
     print(f"Generated {len(entries)} unique Aruba street/address names.")
