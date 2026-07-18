@@ -1,5 +1,0 @@
-
-> demac-corporation@1.0.0 typecheck
-> tsc --noEmit
-
-src/screens/ClientsScreen.tsx(1,1): error TS1127: Invalid character.
