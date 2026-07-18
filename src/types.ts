@@ -111,14 +111,18 @@ export interface User {
   active: boolean;
 }
 
+export type PreferredLanguage = 'Español' | 'English' | 'Nederlands' | 'Papiamento';
+
 export interface Client {
   id: string;
   name: string;
   company?: string;
   phone: string;
+  phoneCountry?: string;
   whatsapp: string;
+  whatsappCountry?: string;
   email?: string;
-  preferredLanguage?: 'Español' | 'English' | 'Nederlands' | 'Papiamento';
+  preferredLanguage?: PreferredLanguage;
   templateLanguage?: 'en' | 'es' | 'nl';
   address: string;
   zone: string;
@@ -132,16 +136,21 @@ export interface Client {
 export type PropertyType = 'Casa' | 'Apartamento' | 'Oficina' | 'Local comercial' | 'Otro';
 
 export type PropertyContactRole = 'Dueño' | 'Encargado' | 'Administrador' | 'Inquilino' | 'Contacto de acceso' | 'Contabilidad' | 'Otro';
-export type PropertyContactLanguage = 'Español' | 'English' | 'Nederlands' | 'Papiamento';
+export type PropertyContactLanguage = PreferredLanguage;
 
 export interface PropertyContact {
   id: string;
   name: string;
   role: PropertyContactRole;
   phone: string;
+  phoneCountry?: string;
   whatsapp: string;
+  whatsappCountry?: string;
   email?: string;
   preferredLanguage: PropertyContactLanguage;
+  defaultSendConfirmation?: boolean;
+  defaultSendReminder?: boolean;
+  arrivalContact?: boolean;
   active: boolean;
   createdAt?: string;
   updatedAt?: string;
@@ -170,7 +179,9 @@ export interface AppointmentNotificationRecipient {
   name: string;
   role: string;
   phone: string;
+  phoneCountry?: string;
   whatsapp: string;
+  whatsappCountry?: string;
   preferredLanguage: PropertyContactLanguage;
   templateLanguage?: 'en' | 'es' | 'nl';
   sendConfirmation: boolean;

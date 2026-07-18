@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { AppModal, Button, Card, Input, Pill, SectionTitle, statusTone } from '../components/UI';
+import { PhoneField } from '../components/PhoneField';
 import { useAppState } from '../state/AppState';
 import { BusinessCalendarSettings, CalendarClosure, useCalendarState } from '../state/CalendarState';
 import { useTeamState } from '../state/TeamState';
 import { useVanHalfDayState, vanHasHalfDayOnDate } from '../state/VanHalfDayState';
 import { colors } from '../theme';
-import { AppointmentChangeOrigin, AppointmentChangeReasonCategory, AppointmentNotificationRecipient, AppointmentStatus, Client, DailyVanAssignment, Property, PropertyContact, PropertyContactLanguage, PropertyContactRole, PropertyType, ServiceType, StaffAbsence, StaffProfile, Van, WorkOrder, WorkOrderScheduleHistoryEntry } from '../types';
+import { AppointmentChangeOrigin, AppointmentChangeReasonCategory, AppointmentNotificationRecipient, AppointmentStatus, Client, DailyVanAssignment, PreferredLanguage, Property, PropertyContact, PropertyContactLanguage, PropertyContactRole, PropertyType, ServiceType, StaffAbsence, StaffProfile, Van, WorkOrder, WorkOrderScheduleHistoryEntry } from '../types';
+import { DEFAULT_PHONE_COUNTRY, normalizePhone, phoneComparisonKey, templateLanguageFor } from '../utils/phone';
 
 const morningSlots = ['08:30', '09:30', '10:30'];
 const extraMorningSlot = '11:30';
@@ -54,7 +56,10 @@ type QuickClientForm = {
   name: string;
   company: string;
   phone: string;
+  phoneCountry: string;
   whatsapp: string;
+  whatsappCountry: string;
+  preferredLanguage: PreferredLanguage;
   propertyName: string;
   propertyType: PropertyType;
   address: string;
@@ -65,7 +70,10 @@ const emptyQuickClientForm: QuickClientForm = {
   name: '',
   company: '',
   phone: '',
+  phoneCountry: DEFAULT_PHONE_COUNTRY,
   whatsapp: '',
+  whatsappCountry: DEFAULT_PHONE_COUNTRY,
+  preferredLanguage: 'Español',
   propertyName: 'Propiedad principal',
   propertyType: 'Casa',
   address: '',
@@ -92,18 +100,28 @@ type QuickContactForm = {
   name: string;
   role: PropertyContactRole;
   phone: string;
+  phoneCountry: string;
   whatsapp: string;
+  whatsappCountry: string;
   email: string;
   preferredLanguage: PropertyContactLanguage;
+  defaultSendConfirmation: boolean;
+  defaultSendReminder: boolean;
+  arrivalContact: boolean;
 };
 
 const emptyQuickContactForm: QuickContactForm = {
   name: '',
   role: 'Encargado',
   phone: '',
+  phoneCountry: DEFAULT_PHONE_COUNTRY,
   whatsapp: '',
+  whatsappCountry: DEFAULT_PHONE_COUNTRY,
   email: '',
   preferredLanguage: 'Español',
+  defaultSendConfirmation: false,
+  defaultSendReminder: true,
+  arrivalContact: true,
 };
 
 function clientNotificationLanguage(client: Client): PropertyContactLanguage {
@@ -121,7 +139,9 @@ function clientNotificationRecipient(client: Client): AppointmentNotificationRec
     name: client.name || client.company || 'Cliente',
     role: 'Cliente / facturación',
     phone: client.phone,
+    phoneCountry: client.phoneCountry,
     whatsapp: client.whatsapp || client.phone,
+    whatsappCountry: client.whatsappCountry || client.phoneCountry,
     preferredLanguage: clientNotificationLanguage(client),
     templateLanguage: client.templateLanguage,
     sendConfirmation: true,
@@ -137,10 +157,12 @@ function contactNotificationRecipient(contact: PropertyContact): AppointmentNoti
     name: contact.name,
     role: contact.role,
     phone: contact.phone,
+    phoneCountry: contact.phoneCountry,
     whatsapp: contact.whatsapp || contact.phone,
+    whatsappCountry: contact.whatsappCountry || contact.phoneCountry,
     preferredLanguage: contact.preferredLanguage,
-    sendConfirmation: false,
-    sendReminder: false,
+    sendConfirmation: contact.defaultSendConfirmation === true,
+    sendReminder: contact.defaultSendReminder === true,
   };
 }
 
@@ -157,8 +179,8 @@ function buildNotificationRecipients(
   if (!saved?.length) {
     return available.map((recipient, index) => ({
       ...recipient,
-      sendConfirmation: index === 0 ? legacyEnabled : false,
-      sendReminder: index === 0 ? legacyEnabled : false,
+      sendConfirmation: index === 0 ? legacyEnabled : recipient.sendConfirmation,
+      sendReminder: index === 0 ? legacyEnabled : recipient.sendReminder,
     }));
   }
   const savedBySource = new Map(saved.map((recipient) => [`${recipient.recipientType}:${recipient.sourceId}`, recipient]));
@@ -732,14 +754,21 @@ export function AgendaScreen() {
   const saveQuickClient = async () => {
     const name = quickClient.name.trim();
     const company = quickClient.company.trim();
-    const phone = quickClient.phone.trim();
-    const whatsapp = quickClient.whatsapp.trim() || phone;
+    const normalizedPhone = normalizePhone(quickClient.phone, quickClient.phoneCountry);
+    const normalizedWhatsApp = normalizePhone(quickClient.whatsapp.trim() || quickClient.phone, quickClient.whatsapp.trim() ? quickClient.whatsappCountry : quickClient.phoneCountry);
+    const phone = normalizedPhone.e164;
+    const whatsapp = normalizedWhatsApp.e164;
     const address = quickClient.address.trim();
     const zone = quickClient.zone.trim();
     const propertyName = quickClient.propertyName.trim() || 'Propiedad principal';
 
     if (!name) return setQuickClientMessage('Escribe el nombre completo del cliente o empresa.');
-    if (!phone) return setQuickClientMessage('Escribe un número de teléfono.');
+    if (!quickClient.phone.trim()) return setQuickClientMessage('Escribe un número de teléfono.');
+    if (!normalizedPhone.valid) return setQuickClientMessage('El teléfono no es válido para el país seleccionado.');
+    if (!normalizedWhatsApp.valid) return setQuickClientMessage('El WhatsApp no es válido para el país seleccionado.');
+    const duplicateKeys = [phoneComparisonKey(phone, normalizedPhone.country), phoneComparisonKey(whatsapp, normalizedWhatsApp.country)];
+    const duplicate = clients.find((client) => [phoneComparisonKey(client.phone, client.phoneCountry), phoneComparisonKey(client.whatsapp, client.whatsappCountry)].some((key) => duplicateKeys.includes(key)));
+    if (duplicate) return setQuickClientMessage(`Ya existe un cliente con este teléfono o WhatsApp: ${duplicate.name}.`);
     if (!address) return setQuickClientMessage('Escribe la dirección de la propiedad.');
     if (!zone) return setQuickClientMessage('Escribe la zona de la propiedad.');
 
@@ -750,7 +779,11 @@ export function AgendaScreen() {
       name,
       company: company || undefined,
       phone,
+      phoneCountry: normalizedPhone.country,
       whatsapp,
+      whatsappCountry: normalizedWhatsApp.country,
+      preferredLanguage: quickClient.preferredLanguage,
+      templateLanguage: templateLanguageFor(quickClient.preferredLanguage),
       address,
       zone,
       balance: 0,
@@ -845,15 +878,23 @@ export function AgendaScreen() {
     if (!selectedProperty) return setQuickContactMessage('Selecciona una propiedad antes de añadir la persona.');
     if (!quickContact.name.trim()) return setQuickContactMessage('Escribe el nombre de la persona.');
     if (!quickContact.phone.trim() && !quickContact.whatsapp.trim()) return setQuickContactMessage('Escribe al menos un teléfono o WhatsApp.');
+    const normalizedPhone = normalizePhone(quickContact.phone.trim() || quickContact.whatsapp, quickContact.phone.trim() ? quickContact.phoneCountry : quickContact.whatsappCountry);
+    const normalizedWhatsApp = normalizePhone(quickContact.whatsapp.trim() || quickContact.phone, quickContact.whatsapp.trim() ? quickContact.whatsappCountry : quickContact.phoneCountry);
+    if (!normalizedPhone.valid || !normalizedWhatsApp.valid) return setQuickContactMessage('Revisa el país y el teléfono o WhatsApp de la persona.');
     const now = new Date().toISOString();
     const contact: PropertyContact = {
       id: `contact-${Date.now()}`,
       name: quickContact.name.trim(),
       role: quickContact.role,
-      phone: quickContact.phone.trim() || quickContact.whatsapp.trim(),
-      whatsapp: quickContact.whatsapp.trim() || quickContact.phone.trim(),
+      phone: normalizedPhone.e164,
+      phoneCountry: normalizedPhone.country,
+      whatsapp: normalizedWhatsApp.e164,
+      whatsappCountry: normalizedWhatsApp.country,
       email: quickContact.email.trim() || undefined,
       preferredLanguage: quickContact.preferredLanguage,
+      defaultSendConfirmation: quickContact.defaultSendConfirmation,
+      defaultSendReminder: quickContact.defaultSendReminder,
+      arrivalContact: quickContact.arrivalContact,
       active: true,
       createdAt: now,
       updatedAt: now,
@@ -892,6 +933,8 @@ export function AgendaScreen() {
     const now = new Date().toISOString();
     const zone = selectedProperty?.zone ?? client.zone;
     const notificationSnapshot = notificationRecipients.map((recipient) => ({ ...recipient }));
+    const invalidRecipient = notificationSnapshot.find((recipient) => (recipient.sendConfirmation || recipient.sendReminder) && !normalizePhone(recipient.whatsapp || recipient.phone, recipient.whatsappCountry || recipient.phoneCountry).valid);
+    if (invalidRecipient) return setFormMessage(`${invalidRecipient.name} está seleccionado para recibir WhatsApp, pero su número no es válido. Corrige el contacto o desmárcalo.`);
     const notificationsEnabled = notificationSnapshot.some((recipient) => recipient.sendConfirmation || recipient.sendReminder);
     setSaving(true);
     setFormMessage('');
@@ -1196,9 +1239,11 @@ if (!saving) {
             <Input label="Nombre completo o empresa" value={quickClient.name} onChangeText={(name) => setQuickClient({ ...quickClient, name })} placeholder="Ej. María Pérez o Empresa ABC" />
             <Input label="Empresa (opcional)" value={quickClient.company} onChangeText={(company) => setQuickClient({ ...quickClient, company })} placeholder="Déjalo vacío si es cliente residencial" />
             <View style={styles.twoColumnFields}>
-              <View style={styles.halfField}><Input label="Teléfono" value={quickClient.phone} onChangeText={(phone) => setQuickClient({ ...quickClient, phone })} keyboardType="phone-pad" /></View>
-              <View style={styles.halfField}><Input label="WhatsApp" value={quickClient.whatsapp} onChangeText={(whatsapp) => setQuickClient({ ...quickClient, whatsapp })} keyboardType="phone-pad" placeholder="Si es igual, puede quedar vacío" /></View>
+              <View style={styles.halfField}><PhoneField label="Teléfono" value={quickClient.phone} country={quickClient.phoneCountry} onChangeText={(phone) => setQuickClient({ ...quickClient, phone })} onCountryChange={(phoneCountry) => setQuickClient((current) => ({ ...current, phoneCountry }))} /></View>
+              <View style={styles.halfField}><PhoneField label="WhatsApp" value={quickClient.whatsapp} country={quickClient.whatsappCountry} onChangeText={(whatsapp) => setQuickClient({ ...quickClient, whatsapp })} onCountryChange={(whatsappCountry) => setQuickClient((current) => ({ ...current, whatsappCountry }))} placeholder="Si queda vacío, usaremos el teléfono" /></View>
             </View>
+            <Text style={styles.quickFieldLabel}>Idioma preferido</Text>
+            <View style={styles.optionWrap}>{propertyContactLanguages.map((preferredLanguage) => <Option key={preferredLanguage} label={preferredLanguage} active={quickClient.preferredLanguage === preferredLanguage} onPress={() => setQuickClient({ ...quickClient, preferredLanguage })} />)}</View>
             <Text style={styles.quickSectionTitle}>Primera propiedad / lugar de servicio</Text>
             <Input label="Nombre de la propiedad" value={quickClient.propertyName} onChangeText={(propertyName) => setQuickClient({ ...quickClient, propertyName })} placeholder="Ej. Casa principal, Apartamento 3B u Oficina" />
             <Text style={styles.quickFieldLabel}>Tipo de propiedad</Text>
@@ -1233,12 +1278,14 @@ if (!saving) {
   <Text style={styles.quickFieldLabel}>Función en la propiedad</Text>
   <View style={styles.optionWrap}>{propertyContactRoles.map((role) => <Option key={role} label={role} active={quickContact.role === role} onPress={() => setQuickContact({ ...quickContact, role })} />)}</View>
   <View style={styles.twoColumnFields}>
-    <View style={styles.halfField}><Input label="Teléfono" value={quickContact.phone} onChangeText={(phone) => setQuickContact({ ...quickContact, phone })} keyboardType="phone-pad" /></View>
-    <View style={styles.halfField}><Input label="WhatsApp" value={quickContact.whatsapp} onChangeText={(whatsapp) => setQuickContact({ ...quickContact, whatsapp })} keyboardType="phone-pad" placeholder="Si es igual, puede quedar vacío" /></View>
+    <View style={styles.halfField}><PhoneField label="Teléfono" value={quickContact.phone} country={quickContact.phoneCountry} onChangeText={(phone) => setQuickContact({ ...quickContact, phone })} onCountryChange={(phoneCountry) => setQuickContact((current) => ({ ...current, phoneCountry }))} /></View>
+    <View style={styles.halfField}><PhoneField label="WhatsApp" value={quickContact.whatsapp} country={quickContact.whatsappCountry} onChangeText={(whatsapp) => setQuickContact({ ...quickContact, whatsapp })} onCountryChange={(whatsappCountry) => setQuickContact((current) => ({ ...current, whatsappCountry }))} placeholder="Si queda vacío, usaremos el teléfono" /></View>
   </View>
   <Input label="Correo electrónico (opcional)" value={quickContact.email} onChangeText={(email) => setQuickContact({ ...quickContact, email })} keyboardType="email-address" />
   <Text style={styles.quickFieldLabel}>Idioma preferido</Text>
   <View style={styles.optionWrap}>{propertyContactLanguages.map((language) => <Option key={language} label={language} active={quickContact.preferredLanguage === language} onPress={() => setQuickContact({ ...quickContact, preferredLanguage: language })} />)}</View>
+  <Text style={styles.quickFieldLabel}>Preferencias operativas</Text>
+  <View style={styles.optionWrap}><Option label="Confirmación por defecto" active={quickContact.defaultSendConfirmation} onPress={() => setQuickContact({ ...quickContact, defaultSendConfirmation: !quickContact.defaultSendConfirmation })} /><Option label="Recordatorio por defecto" active={quickContact.defaultSendReminder} onPress={() => setQuickContact({ ...quickContact, defaultSendReminder: !quickContact.defaultSendReminder })} /><Option label="Contacto para llamar al llegar" active={quickContact.arrivalContact} onPress={() => setQuickContact({ ...quickContact, arrivalContact: !quickContact.arrivalContact })} /></View>
   <View style={styles.modalActions}>
     <Button variant="secondary" label="Volver a la cita" disabled={quickContactSaving} onPress={() => setShowQuickContact(false)} />
     <Button label={quickContactSaving ? 'Guardando…' : 'Guardar persona'} disabled={quickContactSaving} onPress={() => void saveQuickContact()} />
@@ -1295,7 +1342,7 @@ if (!saving) {
       </View>
       {selectedPropertyContacts.length ? selectedPropertyContacts.map((contact) => (
         <View key={contact.id} style={styles.propertyContactRow}>
-          <View style={{ flex: 1 }}><Text style={styles.propertyContactName}>{contact.name}</Text><Text style={styles.propertyContactMeta}>{contact.role} · WhatsApp {contact.whatsapp || contact.phone} · {contact.preferredLanguage}</Text></View>
+          <View style={{ flex: 1 }}><Text style={styles.propertyContactName}>{contact.name}</Text><Text style={styles.propertyContactMeta}>{contact.role} · WhatsApp {contact.whatsapp || contact.phone} · {contact.preferredLanguage}{contact.arrivalContact ? ' · Llamar al llegar' : ''}</Text></View>
         </View>
       )) : <Text style={styles.fallbackText}>Todavía no hay personas registradas para esta propiedad.</Text>}
     </View>

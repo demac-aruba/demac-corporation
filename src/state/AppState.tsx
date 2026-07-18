@@ -77,6 +77,7 @@ type AppStateValue = {
   loginAs: (userId: string) => void;
   logout: () => Promise<void>;
   addClient: (client: Client) => Promise<OperationResult>;
+  updateClient: (id: string, changes: Partial<Client>) => Promise<OperationResult>;
   addProperty: (property: Property) => Promise<OperationResult>;
   updateProperty: (id: string, changes: Partial<Property>) => Promise<OperationResult>;
   removeProperty: (id: string) => Promise<OperationResult>;
@@ -315,6 +316,27 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const updateClient = async (id: string, changes: Partial<Client>): Promise<OperationResult> => {
+    const existing = clients.find((client) => client.id === id);
+    if (!existing) return { ok: false, message: 'El cliente ya no existe.' };
+    const updated: Client = { ...existing, ...changes, updatedAt: changes.updatedAt ?? new Date().toISOString() };
+    if (currentUser?.authProvider !== 'firebase') {
+      setClients((previous) => sortClients(previous.map((client) => client.id === id ? updated : client)));
+      return { ok: true };
+    }
+    try {
+      await saveFirestoreDocument('clients', updated);
+      setClients((previous) => sortClients(previous.map((client) => client.id === id ? updated : client)));
+      setDataError(null);
+      setLastSyncedAt(new Date().toISOString());
+      return { ok: true };
+    } catch (error) {
+      const message = friendlyDataError(error);
+      setDataError(message);
+      return { ok: false, message };
+    }
+  };
+
   const addProperty = async (property: Property): Promise<OperationResult> => {
     if (currentUser?.authProvider !== 'firebase') {
       setProperties((previous) => sortProperties([property, ...previous]));
@@ -512,6 +534,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     loginAs,
     logout,
     addClient,
+    updateClient,
     addProperty,
     updateProperty,
     removeProperty,
