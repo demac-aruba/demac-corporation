@@ -9,7 +9,7 @@ import { ClientsScreen } from '../screens/ClientsScreen';
 import { DashboardScreen } from '../screens/DashboardScreen';
 import { FinanceScreen } from '../screens/FinanceScreen';
 import { InventoryScreen } from '../screens/InventoryScreen';
-import { SettingsScreen } from '../screens/SettingsScreen';
+import { SettingsHubScreen } from '../screens/SettingsHubScreen';
 import { TeamHubScreen } from '../screens/TeamHubScreen';
 import { TechnicianScreen } from '../screens/TechnicianScreen';
 import { WorkOrdersScreen } from '../screens/WorkOrdersScreen';
@@ -62,7 +62,7 @@ export function AppShell() {
     case 'sales': content = <FinanceScreen salesMode />; break;
     case 'inventory': content = <InventoryScreen />; break;
     case 'finance': content = <FinanceScreen />; break;
-    case 'settings': content = <SettingsScreen />; break;
+    case 'settings': content = <SettingsHubScreen />; break;
     default: content = <DashboardScreen navigate={navigate} />;
   }
 

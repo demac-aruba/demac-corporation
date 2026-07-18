@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { AppModal, Button, Card, Input, Pill, SectionTitle } from '../components/UI';
+import { AppModal, Button, Card, Input, SectionTitle } from '../components/UI';
 import { useAppState } from '../state/AppState';
 import { CalendarClosure, useCalendarState } from '../state/CalendarState';
-import { colors, roleLabels } from '../theme';
+import { colors } from '../theme';
 
 const weekdays = [
   { value: 0, label: 'Domingo', short: 'DOM' },
@@ -34,7 +34,7 @@ function formatLongDate(value: string) {
 }
 
 export function SettingsScreen() {
-  const { currentUser, users, resetDemo } = useAppState();
+  const { currentUser, resetDemo } = useAppState();
   const {
     calendarClosures,
     businessCalendarSettings,
@@ -124,7 +124,7 @@ export function SettingsScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.page}>
-      <SectionTitle title="Configuración del sistema" subtitle="Calendario laboral, usuarios, permisos e información de DEMAC." />
+      <SectionTitle title="Calendario y configuración de la empresa" subtitle="Horario laboral, cierres especiales e información general de DEMAC." />
 
       {calendarDataError ? <View style={styles.errorBanner}><View style={{ flex: 1 }}><Text style={styles.errorTitle}>No se pudo cargar el calendario laboral</Text><Text style={styles.errorText}>{calendarDataError}</Text></View><Button compact variant="secondary" label="Reintentar" onPress={() => void refreshCalendarData()} /></View> : null}
       {message ? <View style={styles.messageBanner}><Text style={styles.messageText}>{message}</Text></View> : null}
@@ -171,11 +171,6 @@ export function SettingsScreen() {
         <SectionTitle title="Información de la empresa" />
         <View style={styles.brandRow}><View style={styles.logo}><Text style={styles.logoText}>❄</Text></View><View><Text style={styles.name}>DEMAC</Text><Text style={styles.corporation}>CORPORATION</Text><Text style={styles.slogan}>Professional Cooling Solutions</Text></View></View>
         <View style={styles.infoGrid}><Info label="Administrador" value="Christian Alexander Márquez Márquez" /><Info label="Moneda" value="Florín arubeño (Afl.)" /><Info label="Zona horaria" value="America/Aruba" /><Info label="Plataformas" value="Android y Web" /></View>
-      </Card>
-
-      <Card>
-        <SectionTitle title={`Usuarios (${users.length})`} subtitle="Perfiles con acceso configurado en la plataforma." />
-        {users.map((user) => <View key={user.id} style={styles.userRow}><View style={styles.avatar}><Text style={styles.avatarText}>{user.name.split(' ').map((part) => part[0]).slice(0, 2).join('')}</Text></View><View style={{ flex: 1 }}><Text style={styles.userName}>{user.name}</Text><Text style={styles.userEmail}>{user.email}</Text></View><Pill label={roleLabels[user.role]} tone={user.id === currentUser?.id ? 'success' : 'info'} /></View>)}
       </Card>
 
       {currentUser?.authProvider !== 'firebase' ? <Card><SectionTitle title="Entorno de demostración" subtitle="La aplicación guarda localmente los cambios hechos durante las pruebas." /><View style={styles.warning}><Text style={styles.warningTitle}>Restablecer datos DEMO</Text><Text style={styles.warningText}>Elimina los cambios locales y vuelve a cargar clientes, citas, inventario e invoices originales.</Text><Button variant="danger" label="Restablecer información" onPress={() => { void resetDemo(); }} /></View></Card> : null}
@@ -245,11 +240,6 @@ const styles = StyleSheet.create({
   info: { flex: 1, minWidth: 190 },
   infoLabel: { color: colors.muted, fontSize: 9, fontWeight: '900', textTransform: 'uppercase' },
   infoValue: { color: colors.text, fontWeight: '800', fontSize: 12, marginTop: 5 },
-  userRow: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#EDF1F6' },
-  avatar: { width: 39, height: 39, borderRadius: 11, backgroundColor: colors.primaryLight, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { color: colors.primary, fontWeight: '900', fontSize: 11 },
-  userName: { color: colors.text, fontWeight: '900', fontSize: 12 },
-  userEmail: { color: colors.muted, fontSize: 10, marginTop: 3 },
   warning: { borderWidth: 1, borderColor: '#F3C8C8', backgroundColor: '#FFF8F8', borderRadius: 13, padding: 15, gap: 8, alignItems: 'flex-start' },
   warningTitle: { color: colors.danger, fontWeight: '900' },
   warningText: { color: colors.text, lineHeight: 19, marginBottom: 4 },
