@@ -193,7 +193,42 @@ export interface PropertyContact {
   updatedAt?: string;
 }
 
+
+export type PropertyLocationSource = 'WhatsApp' | 'Enlace pegado' | 'Coordenadas' | 'Manual';
+
+export interface PropertyLocation {
+  latitude?: number;
+  longitude?: number;
+  originalUrl?: string;
+  name?: string;
+  address?: string;
+  source: PropertyLocationSource;
+  receivedFrom?: string;
+  receivedAt?: string;
+  verified: boolean;
+  verifiedAt?: string;
+  verifiedById?: string;
+  verifiedByName?: string;
+}
+
+export interface WhatsAppLocationMessage {
+  id: string;
+  direction?: string;
+  from?: string;
+  contactName?: string;
+  type?: string;
+  latitude?: number;
+  longitude?: number;
+  locationName?: string;
+  locationAddress?: string;
+  locationUrl?: string;
+  whatsappTimestamp?: string;
+  receivedAt?: string;
+  raw?: { location?: { latitude?: number; longitude?: number; name?: string; address?: string; url?: string } };
+}
+
 export interface Property {
+
   id: string;
   clientId: string;
   name: string;
@@ -201,6 +236,13 @@ export interface Property {
   address: string;
   zone: string;
   notes?: string;
+  addressRaw?: string;
+  addressNormalized?: string;
+  neighborhood?: string;
+  operationalZone?: string;
+  accessInstructions?: string;
+  landmark?: string;
+  location?: PropertyLocation;
   contacts?: PropertyContact[];
   active: boolean;
   archivedAt?: string;
@@ -332,6 +374,7 @@ export interface WorkOrder {
   cancellationReason?: string;
   scheduleHistory?: WorkOrderScheduleHistoryEntry[];
   equipmentId?: string;
+  locationSnapshot?: PropertyLocation;
   measurements?: {
     voltage?: string;
     amperage?: string;

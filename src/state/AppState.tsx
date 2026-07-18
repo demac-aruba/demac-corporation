@@ -21,7 +21,7 @@ import {
   saveFirestoreDocument,
   signInWithFirebaseEmail,
 } from '../services/firebase';
-import { Client, InventoryItem, Invoice, Property, ServiceType, User, UserRole, WorkOrder } from '../types';
+import { Client, InventoryItem, Invoice, Property, ServiceType, User, UserRole, WhatsAppLocationMessage, WorkOrder } from '../types';
 
 const STORAGE_KEY = '@demac-corporation-demo-state-v3';
 const FIRESTORE_SYNC_INTERVAL_MS = 30_000;
@@ -67,6 +67,7 @@ type AppStateValue = {
   workOrders: WorkOrder[];
   inventory: InventoryItem[];
   invoices: Invoice[];
+  whatsappLocations: WhatsAppLocationMessage[];
   hydrated: boolean;
   authLoading: boolean;
   dataLoading: boolean;
@@ -156,6 +157,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>(demoWorkOrders);
   const [inventory, setInventory] = useState<InventoryItem[]>(demoInventory);
   const [invoices, setInvoices] = useState<Invoice[]>(demoInvoices);
+  const [whatsappLocations, setWhatsappLocations] = useState<WhatsAppLocationMessage[]>([]);
   const [localHydrated, setLocalHydrated] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [dataLoading, setDataLoading] = useState(false);
@@ -165,16 +167,26 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const refreshOperationalData = useCallback(async (showLoader = true) => {
     if (showLoader) setDataLoading(true);
     try {
-      const [remoteClients, remoteProperties, remoteServices, remoteWorkOrders] = await Promise.all([
+      const [remoteClients, remoteProperties, remoteServices, remoteWorkOrders, remoteWhatsappMessages] = await Promise.all([
         listFirestoreCollection<Client>('clients'),
         listFirestoreCollection<Property>('properties'),
         listFirestoreCollection<ServiceType>('services'),
         listFirestoreCollection<WorkOrder>('workOrders'),
+        listFirestoreCollection<WhatsAppLocationMessage>('whatsappMessages'),
       ]);
       setClients(sortClients(remoteClients));
       setProperties(sortProperties(remoteProperties));
       setServices(sortCatalog(remoteServices));
       setWorkOrders(sortWorkOrders(remoteWorkOrders));
+      setWhatsappLocations(remoteWhatsappMessages.map((message) => ({
+        ...message,
+        latitude: Number(message.latitude ?? message.raw?.location?.latitude),
+        longitude: Number(message.longitude ?? message.raw?.location?.longitude),
+        locationName: message.locationName ?? message.raw?.location?.name,
+        locationAddress: message.locationAddress ?? message.raw?.location?.address,
+        locationUrl: message.locationUrl ?? message.raw?.location?.url,
+      })).filter((message) => message.direction === 'inbound' && message.type === 'location' && Number.isFinite(message.latitude) && Number.isFinite(message.longitude)));
+
       setDataError(null);
       setLastSyncedAt(new Date().toISOString());
     } catch (error) {
@@ -252,6 +264,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     setWorkOrders(demoWorkOrders);
     setInventory(demoInventory);
     setInvoices(demoInvoices);
+    setWhatsappLocations([]);
     setDataError(null);
     setLastSyncedAt(null);
   };
@@ -583,6 +596,7 @@ const deleteTestClient = async (id: string): Promise<OperationResult> => {
     workOrders,
     inventory,
     invoices,
+    whatsappLocations,
     hydrated: localHydrated && !authLoading && !dataLoading,
     authLoading,
     dataLoading,
@@ -616,6 +630,7 @@ const deleteTestClient = async (id: string): Promise<OperationResult> => {
     workOrders,
     inventory,
     invoices,
+    whatsappLocations,
     localHydrated,
     authLoading,
     dataLoading,
