@@ -28,6 +28,21 @@ out tags center;
 '''.strip()
 
 REQUIRED_STREETS = ["Nijhoffstraat"]
+STREET_WORDS = (
+    "straat",
+    "weg",
+    "boulevard",
+    "blvd",
+    "street",
+    "avenue",
+    "laan",
+    "drive",
+    "road",
+    "route",
+    "plein",
+    "caya",
+    "camino",
+)
 
 
 def normalize_key(value: str) -> str:
@@ -45,6 +60,13 @@ def clean_name(value: object) -> str:
 
 def split_names(value: object) -> list[str]:
     return [name for part in str(value or "").split(";") if (name := clean_name(part))]
+
+
+def looks_like_street_name(value: str) -> bool:
+    lowered = value.casefold()
+    if re.search(r"\d", value):
+        return False
+    return any(word in lowered for word in STREET_WORDS)
 
 
 def infer_operational_zone(place: str) -> str:
@@ -66,7 +88,7 @@ def infer_operational_zone(place: str) -> str:
 def fetch_osm() -> dict:
     payload = urllib.parse.urlencode({"data": OVERPASS_QUERY}).encode("utf-8")
     headers = {
-        "User-Agent": "DEMAC-Aruba-address-index/1.1 (https://github.com/demac-aruba/demac-corporation)",
+        "User-Agent": "DEMAC-Aruba-address-index/1.2 (https://github.com/demac-aruba/demac-corporation)",
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
     }
     errors: list[str] = []
@@ -89,6 +111,10 @@ def build_entries(data: dict) -> list[dict]:
     canonical_by_key: dict[str, str] = {}
     aliases_by_key: defaultdict[str, set[str]] = defaultdict(set)
     places_by_key: defaultdict[str, Counter[str]] = defaultdict(Counter)
+    highway_keys: set[str] = set()
+    address_names: dict[str, str] = {}
+    address_counts: Counter[str] = Counter()
+    address_places: defaultdict[str, Counter[str]] = defaultdict(Counter)
 
     def register(name: str, aliases: list[str] | None = None, place: str = "") -> None:
         canonical = clean_name(name)
@@ -106,9 +132,20 @@ def build_entries(data: dict) -> list[dict]:
     for element in data.get("elements", []):
         tags = element.get("tags") or {}
 
-        # Address records contribute their addr:street value, never the POI/business name.
+        if tags.get("highway"):
+            highway_name = clean_name(tags.get("name"))
+            if highway_name:
+                aliases: list[str] = []
+                for field in ("alt_name", "official_name", "loc_name", "short_name", "old_name", "name:nl", "name:en", "name:pap"):
+                    aliases.extend(split_names(tags.get(field)))
+                register(highway_name, aliases=aliases)
+                highway_keys.add(normalize_key(highway_name))
+
         street = clean_name(tags.get("addr:street"))
         if street:
+            key = normalize_key(street)
+            address_names.setdefault(key, street)
+            address_counts[key] += 1
             place = next(
                 (
                     clean_name(tags.get(field))
@@ -117,16 +154,15 @@ def build_entries(data: dict) -> list[dict]:
                 ),
                 "",
             )
-            register(street, place=place)
+            if place:
+                address_places[key][place] += 1
 
-        # Only highway objects may contribute their name as a street name.
-        if tags.get("highway"):
-            highway_name = clean_name(tags.get("name"))
-            if highway_name:
-                aliases: list[str] = []
-                for field in ("alt_name", "official_name", "loc_name", "short_name", "old_name", "name:nl", "name:en", "name:pap"):
-                    aliases.extend(split_names(tags.get(field)))
-                register(highway_name, aliases=aliases)
+    for key, street in address_names.items():
+        accepted = key in highway_keys or address_counts[key] >= 2 or looks_like_street_name(street)
+        if not accepted:
+            continue
+        place = address_places[key].most_common(1)[0][0] if address_places[key] else ""
+        register(street, place=place)
 
     for required in REQUIRED_STREETS:
         register(required)
