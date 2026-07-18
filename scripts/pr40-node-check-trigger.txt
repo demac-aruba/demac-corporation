@@ -1,0 +1,1 @@
+validate functions/index.js
