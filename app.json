@@ -26,9 +26,7 @@
       "output": "single",
       "name": "DEMAC Professional Cooling Solutions",
       "shortName": "DEMAC",
-      "lang": "es",
-      "themeColor": "#0957C3",
-      "backgroundColor": "#FFFFFF"
+      "lang": "es"
     },
     "description": "DEMAC Professional Cooling Solutions operations platform.",
     "scheme": "demac-corporation",
