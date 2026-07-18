@@ -1,0 +1,7 @@
+
+> demac-corporation@1.0.0 typecheck
+> tsc --noEmit
+
+src/components/AppShell.tsx(145,110): error TS2551: Property 'absoluteFillObject' does not exist on type 'typeof StyleSheet'. Did you mean 'absoluteFill'?
+
+TYPECHECK_EXIT_CODE=2
