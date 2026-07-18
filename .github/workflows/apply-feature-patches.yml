@@ -1,0 +1,44 @@
+name: Apply and validate feature patches
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    if: startsWith(github.head_ref, 'feature/client-lifecycle') || startsWith(github.head_ref, 'feature/aruba-location')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Apply feature patch
+        run: |
+          if [ -f scripts/apply_feature.py ]; then
+            python3 scripts/apply_feature.py
+          else
+            echo "Feature patch already applied."
+          fi
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build:web
+      - name: Commit validated source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f scripts/apply_feature.py
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No source changes to commit."
+            exit 0
+          fi
+          git commit -m "Apply validated feature implementation"
+          git push origin HEAD:${{ github.head_ref }}
