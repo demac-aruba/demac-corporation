@@ -1,7 +1,7 @@
 import React, { ReactNode, useMemo, useState } from 'react';
-import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useAppState } from '../state/AppState';
-import { colors } from '../theme';
+import { colors, roleLabels } from '../theme';
 import { ScreenKey, UserRole } from '../types';
 import { AgendaHubScreen } from '../screens/AgendaHubScreen';
 import { CatalogScreen } from '../screens/CatalogScreen';
@@ -45,10 +45,17 @@ export function AppShell() {
   const availableItems = useMemo(() => navItems.filter((item) => currentUser && item.roles.includes(currentUser.role)), [currentUser]);
   const defaultScreen: ScreenKey = currentUser?.role === 'technician' ? 'technician' : currentUser?.role === 'inventory' ? 'inventory' : currentUser?.role === 'accounting' ? 'finance' : 'dashboard';
   const [activeScreen, setActiveScreen] = useState<ScreenKey>(defaultScreen);
+  const [profileMenuVisible, setProfileMenuVisible] = useState(false);
   const activeLabel = availableItems.find((item) => item.key === activeScreen)?.label ?? 'Inicio';
+  const profileMenuWidth = Math.min(320, Math.max(260, width - 24));
 
   const navigate = (screen: ScreenKey) => {
     if (availableItems.some((item) => item.key === screen)) setActiveScreen(screen);
+  };
+
+  const handleLogout = async () => {
+    setProfileMenuVisible(false);
+    await logout();
   };
 
   let content: ReactNode;
@@ -79,7 +86,7 @@ export function AppShell() {
             <ScrollView contentContainerStyle={styles.railNav} showsVerticalScrollIndicator={false}>
               {availableItems.map((item) => <RailButton key={item.key} item={item} active={activeScreen === item.key} onPress={() => setActiveScreen(item.key)} />)}
             </ScrollView>
-            <Pressable onPress={logout} style={styles.railFooter}>
+            <Pressable onPress={() => void handleLogout()} style={styles.railFooter}>
               <Text style={styles.railFooterIcon}>↪</Text>
               <Text style={styles.railFooterLabel}>Salir</Text>
             </Pressable>
@@ -105,7 +112,14 @@ export function AppShell() {
               {isDesktop ? <TopIcon icon="⚡" label="Rápido" onPress={() => setActiveScreen('agenda')} /> : null}
               {isDesktop ? <TopIcon icon="?" label="Ayuda" /> : null}
               <View style={styles.notification}><Text style={styles.notificationText}>♢</Text><View style={styles.notificationDot} /></View>
-              <View style={styles.profileCircle}><Text style={styles.profileText}>{initials(currentUser?.name)}</Text></View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Abrir menú de cuenta"
+                onPress={() => setProfileMenuVisible(true)}
+                style={({ pressed }) => [styles.profileCircle, pressed && styles.profileCirclePressed]}
+              >
+                <Text style={styles.profileText}>{initials(currentUser?.name)}</Text>
+              </Pressable>
             </View>
           </View>
 
@@ -125,6 +139,40 @@ export function AppShell() {
           ) : null}
         </View>
       </View>
+
+      <Modal visible={profileMenuVisible} transparent animationType="fade" onRequestClose={() => setProfileMenuVisible(false)}>
+        <View style={styles.profileMenuOverlay}>
+          <Pressable accessibilityRole="button" accessibilityLabel="Cerrar menú de cuenta" style={StyleSheet.absoluteFill} onPress={() => setProfileMenuVisible(false)} />
+          <View style={[styles.profileMenuCard, { width: profileMenuWidth }]}>
+            <View style={styles.profileMenuHeader}>
+              <View style={styles.profileMenuAvatar}><Text style={styles.profileMenuAvatarText}>{initials(currentUser?.name)}</Text></View>
+              <View style={styles.profileMenuIdentity}>
+                <Text style={styles.profileMenuName} numberOfLines={2}>{currentUser?.name ?? 'Usuario DEMAC'}</Text>
+                <Text style={styles.profileMenuEmail} numberOfLines={1}>{currentUser?.email ?? ''}</Text>
+                {currentUser ? <Text style={styles.profileMenuRole}>{roleLabels[currentUser.role]}</Text> : null}
+              </View>
+              <Pressable accessibilityRole="button" accessibilityLabel="Cerrar menú" onPress={() => setProfileMenuVisible(false)} style={styles.profileMenuClose}>
+                <Text style={styles.profileMenuCloseText}>×</Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.profileMenuDivider} />
+
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Cerrar sesión y cambiar de cuenta"
+              onPress={() => void handleLogout()}
+              style={({ pressed }) => [styles.logoutMenuItem, pressed && styles.logoutMenuItemPressed]}
+            >
+              <View style={styles.logoutMenuIcon}><Text style={styles.logoutMenuIconText}>↪</Text></View>
+              <View style={styles.logoutMenuCopy}>
+                <Text style={styles.logoutMenuTitle}>Cerrar sesión</Text>
+                <Text style={styles.logoutMenuHelp}>Volver al inicio de sesión para entrar con otra cuenta.</Text>
+              </View>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -183,8 +231,28 @@ const styles = StyleSheet.create({
   notification: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center' },
   notificationText: { color: colors.text, fontSize: 19 },
   notificationDot: { position: 'absolute', top: 3, right: 4, width: 7, height: 7, borderRadius: 4, backgroundColor: colors.danger, borderWidth: 1, borderColor: '#FFFFFF' },
-  profileCircle: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
+  profileCircle: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#FFFFFF' },
+  profileCirclePressed: { opacity: 0.72, transform: [{ scale: 0.96 }] },
   profileText: { color: '#FFFFFF', fontWeight: '900', fontSize: 11 },
+  profileMenuOverlay: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.18)' },
+  profileMenuCard: { position: 'absolute', top: 60, right: 12, backgroundColor: '#FFFFFF', borderRadius: 14, borderWidth: 1, borderColor: colors.border, padding: 16, shadowColor: '#000000', shadowOpacity: 0.18, shadowRadius: 16, shadowOffset: { width: 0, height: 7 }, elevation: 10 },
+  profileMenuHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 11 },
+  profileMenuAvatar: { width: 46, height: 46, borderRadius: 23, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
+  profileMenuAvatarText: { color: '#FFFFFF', fontWeight: '900', fontSize: 14 },
+  profileMenuIdentity: { flex: 1, minWidth: 0 },
+  profileMenuName: { color: colors.text, fontWeight: '900', fontSize: 13, lineHeight: 18 },
+  profileMenuEmail: { color: colors.muted, fontSize: 10, marginTop: 3 },
+  profileMenuRole: { color: colors.primaryDark, fontWeight: '800', fontSize: 9, marginTop: 5 },
+  profileMenuClose: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#F0F2F4', alignItems: 'center', justifyContent: 'center' },
+  profileMenuCloseText: { color: colors.text, fontSize: 21, lineHeight: 22 },
+  profileMenuDivider: { height: 1, backgroundColor: colors.border, marginVertical: 14 },
+  logoutMenuItem: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 10, padding: 10, backgroundColor: colors.dangerLight },
+  logoutMenuItemPressed: { opacity: 0.72 },
+  logoutMenuIcon: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
+  logoutMenuIconText: { color: colors.danger, fontWeight: '900', fontSize: 18 },
+  logoutMenuCopy: { flex: 1 },
+  logoutMenuTitle: { color: colors.danger, fontWeight: '900', fontSize: 12 },
+  logoutMenuHelp: { color: colors.text, fontSize: 9, lineHeight: 14, marginTop: 3 },
   content: { flex: 1, backgroundColor: '#FFFFFF' },
   bottomNav: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: colors.border, minHeight: 66 },
   bottomNavInner: { alignItems: 'stretch', paddingHorizontal: 6 },
