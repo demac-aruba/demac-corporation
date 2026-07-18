@@ -577,12 +577,13 @@ export function AgendaScreen() {
   }, [agendaVans, vanId]);
 
   useEffect(() => {
-    if (!clients.length) {
+    const activeClients = clients.filter((client) => client.active !== false);
+    if (!activeClients.length) {
       setClientId('');
       setPropertyId('');
       return;
     }
-    if (!clients.some((client) => client.id === clientId)) setClientId(clients[0].id);
+    if (!activeClients.some((client) => client.id === clientId)) setClientId(activeClients[0].id);
   }, [clients, clientId]);
 
   useEffect(() => {
@@ -671,6 +672,7 @@ export function AgendaScreen() {
   const filteredClients = useMemo(() => {
     const needle = clientQuery.trim().toLowerCase();
     const matches = clients.filter((client) => {
+      if (client.active === false) return false;
       const haystack = `${client.name} ${client.company ?? ''} ${client.phone} ${client.whatsapp} ${client.address} ${client.zone}`.toLowerCase();
       return !needle || haystack.includes(needle);
     });

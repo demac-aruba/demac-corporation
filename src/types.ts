@@ -111,9 +111,33 @@ export interface User {
   active: boolean;
 }
 
+
 export type PreferredLanguage = 'Español' | 'English' | 'Nederlands' | 'Papiamento';
 
+export type ClientLifecycleAction = 'Creado' | 'Archivado' | 'Restaurado' | 'Teléfono compartido' | 'Teléfono reasignado';
+
+export interface ClientLifecycleEntry {
+  id: string;
+  action: ClientLifecycleAction;
+  reason: string;
+  performedAt: string;
+  performedById?: string;
+  performedByName: string;
+}
+
+export interface ClientPhoneHistoryEntry {
+  id: string;
+  phone: string;
+  whatsapp: string;
+  action: 'Compartido' | 'Reasignado';
+  reason: string;
+  changedAt: string;
+  changedById?: string;
+  changedByName: string;
+}
+
 export interface Client {
+
   id: string;
   name: string;
   company?: string;
@@ -129,6 +153,15 @@ export interface Client {
   balance: number;
   equipmentCount: number;
   lastService?: string;
+  active?: boolean;
+  archivedAt?: string;
+  archivedById?: string;
+  archivedByName?: string;
+  archiveReason?: string;
+  phoneSharedWithClientIds?: string[];
+  phoneSharedReason?: string;
+  phoneHistory?: ClientPhoneHistoryEntry[];
+  lifecycleHistory?: ClientLifecycleEntry[];
   createdAt?: string;
   updatedAt?: string;
 }
@@ -152,6 +185,10 @@ export interface PropertyContact {
   defaultSendReminder?: boolean;
   arrivalContact?: boolean;
   active: boolean;
+  inactiveReason?: string;
+  archivedAt?: string;
+  archivedById?: string;
+  archivedByName?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -166,6 +203,10 @@ export interface Property {
   notes?: string;
   contacts?: PropertyContact[];
   active: boolean;
+  archivedAt?: string;
+  archivedById?: string;
+  archivedByName?: string;
+  archiveReason?: string;
   createdAt?: string;
   updatedAt?: string;
 }
