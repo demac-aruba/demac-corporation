@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { AppModal, Button, Card, Input, Pill, SectionTitle, statusTone } from '../components/UI';
 import { PhoneField } from '../components/PhoneField';
+import { ArubaAddressEntry } from '../data/arubaAddresses';
 import { useAppState } from '../state/AppState';
 import { BusinessCalendarSettings, CalendarClosure, useCalendarState } from '../state/CalendarState';
 import { useTeamState } from '../state/TeamState';
@@ -9,6 +10,7 @@ import { useVanHalfDayState, vanHasHalfDayOnDate } from '../state/VanHalfDayStat
 import { colors } from '../theme';
 import { AppointmentChangeOrigin, AppointmentChangeReasonCategory, AppointmentNotificationRecipient, AppointmentStatus, Client, DailyVanAssignment, PreferredLanguage, Property, PropertyContact, PropertyContactLanguage, PropertyContactRole, PropertyType, ServiceType, StaffAbsence, StaffProfile, Van, WorkOrder, WorkOrderScheduleHistoryEntry } from '../types';
 import { DEFAULT_PHONE_COUNTRY, normalizePhone, phoneComparisonKey, templateLanguageFor } from '../utils/phone';
+import { applyAddressSuggestion, suggestArubaAddresses } from '../utils/location';
 
 const morningSlots = ['08:30', '09:30', '10:30'];
 const extraMorningSlot = '11:30';
@@ -63,6 +65,7 @@ type QuickClientForm = {
   propertyName: string;
   propertyType: PropertyType;
   address: string;
+  neighborhood: string;
   zone: string;
 };
 
@@ -77,6 +80,7 @@ const emptyQuickClientForm: QuickClientForm = {
   propertyName: 'Propiedad principal',
   propertyType: 'Casa',
   address: '',
+  neighborhood: '',
   zone: '',
 };
 
@@ -84,6 +88,7 @@ type QuickPropertyForm = {
   name: string;
   type: PropertyType;
   address: string;
+  neighborhood: string;
   zone: string;
   notes: string;
 };
@@ -92,6 +97,7 @@ const emptyQuickPropertyForm: QuickPropertyForm = {
   name: '',
   type: 'Casa',
   address: '',
+  neighborhood: '',
   zone: '',
   notes: '',
 };
@@ -612,6 +618,8 @@ export function AgendaScreen() {
   const selectedClient = clients.find((item) => item.id === clientId);
   const clientProperties = properties.filter((item) => item.clientId === clientId && item.active !== false);
   const selectedProperty = clientProperties.find((item) => item.id === propertyId);
+  const quickClientAddressSuggestions = suggestArubaAddresses(quickClient.address);
+  const quickPropertyAddressSuggestions = suggestArubaAddresses(quickProperty.address);
   const selectedPropertyContacts = (selectedProperty?.contacts ?? []).filter((contact) => contact.active !== false);
   const selectedVan = agendaVans.find((item) => item.id === vanId);
   const activeOrders = orders.filter(orderBlocksCapacity);
@@ -799,6 +807,10 @@ export function AgendaScreen() {
       name: propertyName,
       type: quickClient.propertyType,
       address,
+      addressRaw: address,
+      addressNormalized: address,
+      neighborhood: quickClient.neighborhood.trim() || undefined,
+      operationalZone: zone,
       zone,
       active: true,
       createdAt: now,
@@ -851,6 +863,10 @@ export function AgendaScreen() {
       name: quickProperty.name.trim(),
       type: quickProperty.type,
       address: quickProperty.address.trim(),
+      addressRaw: quickProperty.address.trim(),
+      addressNormalized: quickProperty.address.trim(),
+      neighborhood: quickProperty.neighborhood.trim() || undefined,
+      operationalZone: quickProperty.zone.trim() || selectedClient.zone || 'Aruba',
       zone: quickProperty.zone.trim() || selectedClient.zone || 'Aruba',
       notes: quickProperty.notes.trim() || undefined,
       contacts: [],
@@ -1238,7 +1254,7 @@ if (!saving) {
         }}
       >
         {showQuickClient ? (
-          <ScrollView>
+          <ScrollView keyboardShouldPersistTaps="handled">
             <Text style={styles.modalIntro}>Registra el cliente y su primera propiedad sin salir de la agenda. Al guardar, quedarán seleccionados automáticamente en la cita.</Text>
             {quickClientMessage ? <View style={styles.formError}><Text style={styles.formErrorText}>{quickClientMessage}</Text></View> : null}
             <Input label="Nombre completo o empresa" value={quickClient.name} onChangeText={(name) => setQuickClient({ ...quickClient, name })} placeholder="Ej. María Pérez o Empresa ABC" />
@@ -1253,22 +1269,26 @@ if (!saving) {
             <Input label="Nombre de la propiedad" value={quickClient.propertyName} onChangeText={(propertyName) => setQuickClient({ ...quickClient, propertyName })} placeholder="Ej. Casa principal, Apartamento 3B u Oficina" />
             <Text style={styles.quickFieldLabel}>Tipo de propiedad</Text>
             <View style={styles.optionWrap}>{propertyTypes.map((type) => <Option key={type} label={type} active={quickClient.propertyType === type} onPress={() => setQuickClient({ ...quickClient, propertyType: type })} />)}</View>
-            <Input label="Dirección" value={quickClient.address} onChangeText={(address) => setQuickClient({ ...quickClient, address })} placeholder="Calle, número y referencia" />
-            <Input label="Zona" value={quickClient.zone} onChangeText={(zone) => setQuickClient({ ...quickClient, zone })} placeholder="Ej. Oranjestad, Noord, Santa Cruz…" />
+            <Input label="Dirección" value={quickClient.address} onChangeText={(address) => setQuickClient({ ...quickClient, address })} placeholder="Calle y número" />
+            <AgendaAddressSuggestions entries={quickClientAddressSuggestions} onSelect={(entry) => setQuickClient((current) => ({ ...current, address: applyAddressSuggestion(current.address, entry), neighborhood: entry.neighborhood || current.neighborhood, zone: entry.operationalZone || current.zone }))} />
+            <Input label="Sector / barrio" value={quickClient.neighborhood} onChangeText={(neighborhood) => setQuickClient({ ...quickClient, neighborhood })} placeholder="Se completa cuando el directorio conoce el sector" />
+            <Input label="Zona operativa" value={quickClient.zone} onChangeText={(zone) => setQuickClient({ ...quickClient, zone })} placeholder="Ej. Oranjestad, Noord, Santa Cruz…" />
             <View style={styles.modalActions}>
               <Button variant="secondary" label="Volver a la cita" disabled={quickClientSaving} onPress={() => setShowQuickClient(false)} />
               <Button label={quickClientSaving ? 'Guardando…' : 'Guardar y seleccionar'} disabled={quickClientSaving} onPress={() => void saveQuickClient()} />
             </View>
                     </ScrollView>
         ) : showQuickProperty ? (
-<ScrollView>
+<ScrollView keyboardShouldPersistTaps="handled">
   <Text style={styles.modalIntro}>Registra otra propiedad para {selectedClient?.name ?? 'el cliente'} sin salir de la cita. Al guardar quedará seleccionada automáticamente.</Text>
   {quickPropertyMessage ? <View style={styles.formError}><Text style={styles.formErrorText}>{quickPropertyMessage}</Text></View> : null}
   <Input label="Nombre para identificarla" value={quickProperty.name} onChangeText={(name) => setQuickProperty({ ...quickProperty, name })} placeholder="Ej. Bowling, Oficina principal o Apartamento 4B" />
   <Text style={styles.quickFieldLabel}>Tipo de propiedad</Text>
   <View style={styles.optionWrap}>{propertyTypes.map((type) => <Option key={type} label={type} active={quickProperty.type === type} onPress={() => setQuickProperty({ ...quickProperty, type })} />)}</View>
-  <Input label="Dirección" value={quickProperty.address} onChangeText={(address) => setQuickProperty({ ...quickProperty, address })} placeholder="Calle, número y referencia" />
-  <Input label="Zona" value={quickProperty.zone} onChangeText={(zone) => setQuickProperty({ ...quickProperty, zone })} placeholder="Ej. Oranjestad, Noord o Santa Cruz" />
+  <Input label="Dirección" value={quickProperty.address} onChangeText={(address) => setQuickProperty({ ...quickProperty, address })} placeholder="Calle y número" />
+  <AgendaAddressSuggestions entries={quickPropertyAddressSuggestions} onSelect={(entry) => setQuickProperty((current) => ({ ...current, address: applyAddressSuggestion(current.address, entry), neighborhood: entry.neighborhood || current.neighborhood, zone: entry.operationalZone || current.zone }))} />
+  <Input label="Sector / barrio" value={quickProperty.neighborhood} onChangeText={(neighborhood) => setQuickProperty({ ...quickProperty, neighborhood })} placeholder="Se completa cuando el directorio conoce el sector" />
+  <Input label="Zona operativa" value={quickProperty.zone} onChangeText={(zone) => setQuickProperty({ ...quickProperty, zone })} placeholder="Ej. Oranjestad, Noord o Santa Cruz" />
   <Input label="Notas de acceso (opcional)" value={quickProperty.notes} onChangeText={(notes) => setQuickProperty({ ...quickProperty, notes })} multiline placeholder="Ej. Entrada por el portón lateral, llamar al llegar…" />
   <View style={styles.modalActions}>
     <Button variant="secondary" label="Volver a la cita" disabled={quickPropertySaving} onPress={() => setShowQuickProperty(false)} />
@@ -1453,6 +1473,35 @@ if (!saving) {
 </ScrollView>
   );
 }
+
+
+function AgendaAddressSuggestions({ entries, onSelect }: { entries: ArubaAddressEntry[]; onSelect: (entry: ArubaAddressEntry) => void }) {
+  if (!entries.length) return null;
+  const includesOpenStreetMap = entries.some((entry) => entry.source === 'OpenStreetMap');
+  return (
+    <View style={agendaAddressStyles.container}>
+      {entries.map((entry) => {
+        const meta = [entry.neighborhood, entry.operationalZone].filter(Boolean).join(' · ') || 'Aruba · sector por confirmar';
+        return (
+          <Pressable accessibilityRole="button" key={`${entry.canonical}-${entry.neighborhood}`} onPress={() => onSelect(entry)} style={({ pressed }) => [agendaAddressStyles.option, pressed && agendaAddressStyles.optionPressed]}>
+            <Text style={agendaAddressStyles.name}>{entry.canonical}</Text>
+            <Text style={agendaAddressStyles.meta}>{meta}</Text>
+          </Pressable>
+        );
+      })}
+      {includesOpenStreetMap ? <Text style={agendaAddressStyles.attribution}>Datos de calles: © OpenStreetMap contributors · ODbL</Text> : null}
+    </View>
+  );
+}
+
+const agendaAddressStyles = StyleSheet.create({
+  container: { gap: 6, marginTop: -5, marginBottom: 12 },
+  option: { borderWidth: 1, borderColor: '#B8D7FF', backgroundColor: '#F4F8FF', borderRadius: 8, padding: 9 },
+  optionPressed: { opacity: 0.72, backgroundColor: '#E7F1FF' },
+  name: { color: colors.primaryDark, fontWeight: '900', fontSize: 11 },
+  meta: { color: colors.muted, fontSize: 9, marginTop: 3 },
+  attribution: { color: colors.muted, fontSize: 8, marginTop: 2 },
+});
 
 function VanColumn({ van, halfDay, extendedLayout, users, orders, cancelledSlots, services, clients, properties, selectedOrderId, onSelectOrder, onCreate, onCreateFromCancelled, closedReason }: { van: AgendaVan; halfDay: boolean; extendedLayout: boolean; users: { id: string; name: string }[]; orders: WorkOrder[]; cancelledSlots: CancelledSlotRecord[]; services: ServiceType[]; clients: Client[]; properties: Property[]; selectedOrderId?: string; onSelectOrder: (id: string) => void; onCreate: (slot: string) => void; onCreateFromCancelled: (record: CancelledSlotRecord) => void; closedReason?: string }) {
   const techNames = van.technicianIds.map((id) => users.find((user) => user.id === id)?.name.split(' ')[0]).filter(Boolean).join(' + ') || 'Sin equipo';

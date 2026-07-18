@@ -394,21 +394,15 @@ const copyLocation = (property: Property) => {
   );
 }
 
-function AddressSuggestions({ entries, onSelect }: { entries: Array<{ canonical: string; neighborhood: string; operationalZone: string }>; onSelect: (entry: { canonical: string; neighborhood: string; operationalZone: string }) => void }) {
+function AddressSuggestions({ entries, onSelect }: { entries: Array<{ canonical: string; neighborhood: string; operationalZone: string; source?: 'DEMAC' | 'OpenStreetMap' }>; onSelect: (entry: { canonical: string; neighborhood: string; operationalZone: string; source?: 'DEMAC' | 'OpenStreetMap' }) => void }) {
   if (!entries.length) return null;
   return (
     <View style={styles.addressSuggestions}>
-      {entries.map((entry) => (
-        <Pressable
-          accessibilityRole="button"
-          key={`${entry.canonical}-${entry.neighborhood}`}
-          onPress={() => onSelect(entry)}
-          style={({ pressed }) => [styles.addressSuggestion, pressed && styles.addressSuggestionPressed]}
-        >
-          <Text style={styles.addressSuggestionName}>{entry.canonical}</Text>
-          <Text style={styles.addressSuggestionMeta}>{entry.neighborhood} · {entry.operationalZone}</Text>
-        </Pressable>
-      ))}
+      {entries.map((entry) => {
+        const meta = [entry.neighborhood, entry.operationalZone].filter(Boolean).join(' · ') || 'Aruba · sector por confirmar';
+        return <Pressable accessibilityRole="button" key={`${entry.canonical}-${entry.neighborhood}`} onPress={() => onSelect(entry)} style={({ pressed }) => [styles.addressSuggestion, pressed && styles.addressSuggestionPressed]}><Text style={styles.addressSuggestionName}>{entry.canonical}</Text><Text style={styles.addressSuggestionMeta}>{meta}</Text></Pressable>;
+      })}
+      {entries.some((entry) => entry.source === 'OpenStreetMap') ? <Text style={styles.addressAttribution}>Datos de calles: © OpenStreetMap contributors · ODbL</Text> : null}
     </View>
   );
 }
@@ -442,6 +436,7 @@ const styles = StyleSheet.create({
   addressSuggestionPressed: { opacity: 0.72, backgroundColor: '#E7F1FF' },
   addressSuggestionName: { color: colors.primaryDark, fontWeight: '900', fontSize: 11 },
   addressSuggestionMeta: { color: colors.muted, fontSize: 9, marginTop: 3 },
+  addressAttribution: { color: colors.muted, fontSize: 8, marginTop: 2 },
   savedLocation: { backgroundColor: colors.successLight, borderRadius: 9, padding: 9, marginTop: 8 },
   savedLocationTitle: { color: colors.success, fontWeight: '900', fontSize: 9 },
   savedLocationText: { color: colors.text, fontSize: 10, marginTop: 4 },
