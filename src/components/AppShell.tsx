@@ -142,7 +142,7 @@ export function AppShell() {
 
       <Modal visible={profileMenuVisible} transparent animationType="fade" onRequestClose={() => setProfileMenuVisible(false)}>
         <View style={styles.profileMenuOverlay}>
-          <Pressable accessibilityRole="button" accessibilityLabel="Cerrar menú de cuenta" style={StyleSheet.absoluteFillObject} onPress={() => setProfileMenuVisible(false)} />
+          <Pressable accessibilityRole="button" accessibilityLabel="Cerrar menú de cuenta" style={StyleSheet.absoluteFill} onPress={() => setProfileMenuVisible(false)} />
           <View style={[styles.profileMenuCard, { width: profileMenuWidth }]}>
             <View style={styles.profileMenuHeader}>
               <View style={styles.profileMenuAvatar}><Text style={styles.profileMenuAvatarText}>{initials(currentUser?.name)}</Text></View>
