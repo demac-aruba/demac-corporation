@@ -1,0 +1,29 @@
+name: Sync feature branches with main
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.head_ref == 'feature/client-lifecycle-safe-deletion' || github.head_ref == 'feature/aruba-location-directory'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - name: Merge current main and clean temporary files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git merge origin/main --no-edit
+          rm -f scripts/sync-with-main-trigger.txt
+          rm -f .github/workflows/sync-feature-branches.yml
+          git add -A
+          git commit --amend --no-edit
+          git push origin HEAD:${{ github.head_ref }}
