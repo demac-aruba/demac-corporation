@@ -18,8 +18,44 @@ service cloud.firestore {
       return activeStaff() && userProfile().data.role in ['admin', 'office', 'supervisor'];
     }
 
+    function technicianRole() {
+      return activeStaff() && userProfile().data.role == 'technician';
+    }
+
     function adminOrSupervisor() {
       return activeStaff() && userProfile().data.role in ['admin', 'supervisor'];
+    }
+
+    function assignedToTechnician() {
+      return technicianRole()
+        && (
+          request.auth.uid in resource.data.technicianIds
+          || ('staffId' in userProfile().data && userProfile().data.staffId in resource.data.technicianIds)
+          || ('vanId' in userProfile().data && userProfile().data.vanId == resource.data.vanId)
+        );
+    }
+
+    function technicianWorkOrderFieldsOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'status',
+        'departedAt',
+        'arrivedAt',
+        'workStartedAt',
+        'pendingAt',
+        'completedAt',
+        'pendingReason',
+        'pendingAction',
+        'requiresSecondVisit',
+        'technicianDraftUpdatedAt',
+        'statusHistory',
+        'diagnosis',
+        'workPerformed',
+        'recommendation',
+        'customerSignature',
+        'measurements',
+        'photos',
+        'updatedAt'
+      ]);
     }
 
     match /users/{userId} {
@@ -28,65 +64,75 @@ service cloud.firestore {
     }
 
     match /clients/{clientId} {
-      allow read, create, update: if operationsRole();
+      allow read: if activeStaff();
+      allow create, update: if operationsRole();
       allow delete: if adminOrSupervisor();
     }
 
+    match /clientDeletionLogs/{logId} {
+      allow read, create: if adminOrSupervisor();
+      allow update, delete: if false;
+    }
 
-match /clientDeletionLogs/{logId} {
-  allow read, create: if adminOrSupervisor();
-  allow update, delete: if false;
-}
-
-match /properties/{propertyId} {
-
-      allow read, create, update: if operationsRole();
-      allow delete: if operationsRole();
+    match /properties/{propertyId} {
+      allow read: if activeStaff();
+      allow create, update, delete: if operationsRole();
     }
 
     match /services/{serviceId} {
-      allow read, create, update: if operationsRole();
+      allow read: if activeStaff();
+      allow create, update: if operationsRole();
       allow delete: if adminOrSupervisor();
     }
 
     match /staffProfiles/{staffId} {
-      allow read, create, update: if operationsRole();
+      allow read: if activeStaff();
+      allow create, update: if operationsRole();
       allow delete: if adminOrSupervisor();
     }
 
     match /vans/{vanId} {
-      allow read, create, update: if operationsRole();
+      allow read: if activeStaff();
+      allow create, update: if operationsRole();
       allow delete: if adminOrSupervisor();
     }
 
     match /dailyVanAssignments/{assignmentId} {
-      allow read, create, update, delete: if operationsRole();
+      allow read: if activeStaff();
+      allow create, update, delete: if operationsRole();
     }
 
     match /staffAbsences/{absenceId} {
-      allow read, create, update, delete: if operationsRole();
+      allow read: if activeStaff();
+      allow create, update, delete: if operationsRole();
     }
 
     match /vanMaintenanceLogs/{logId} {
-      allow read, create, update: if operationsRole();
+      allow read: if activeStaff();
+      allow create, update: if operationsRole();
       allow delete: if adminOrSupervisor();
     }
 
     match /vanHalfDaySchedules/{scheduleId} {
-      allow read, create, update, delete: if operationsRole();
+      allow read: if activeStaff();
+      allow create, update, delete: if operationsRole();
     }
 
     match /calendarClosures/{closureId} {
-      allow read, create, update, delete: if operationsRole();
+      allow read: if activeStaff();
+      allow create, update, delete: if operationsRole();
     }
 
     match /businessSettings/{settingId} {
-      allow read, create, update: if operationsRole();
+      allow read: if activeStaff();
+      allow create, update: if operationsRole();
       allow delete: if adminOrSupervisor();
     }
 
     match /workOrders/{workOrderId} {
-      allow read, create, update: if operationsRole();
+      allow read: if activeStaff();
+      allow create: if operationsRole();
+      allow update: if operationsRole() || (assignedToTechnician() && technicianWorkOrderFieldsOnly());
       allow delete: if adminOrSupervisor();
     }
 
