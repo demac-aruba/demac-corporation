@@ -28,6 +28,7 @@ jobs:
       - name: Apply functional changes
         shell: bash
         run: |
+          sed -i '107d' .github/apply-pr49.py
           set +e
           python3 .github/apply-pr49.py > pr49-patch-output.txt 2>&1
           status=$?
