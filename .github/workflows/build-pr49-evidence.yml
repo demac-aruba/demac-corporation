@@ -26,7 +26,19 @@ jobs:
           node-version: 22
           cache: npm
       - name: Apply functional changes
-        run: python3 .github/apply-pr49.py
+        shell: bash
+        run: |
+          set +e
+          python3 .github/apply-pr49.py > pr49-patch-output.txt 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add pr49-patch-output.txt
+            git commit -m "Capture PR49 patch diagnostic" || true
+            git push origin HEAD:${{ github.event.pull_request.head.ref }}
+            exit "$status"
+          fi
       - name: Install dependencies
         run: npm ci
       - name: Typecheck
@@ -35,7 +47,7 @@ jobs:
         run: npm run build:web
       - name: Commit functional changes
         run: |
-          rm -f .github/workflows/build-pr49.yml .github/apply-pr49.py .github/pr49-trigger
+          rm -f .github/workflows/build-pr49.yml .github/apply-pr49.py .github/pr49-trigger pr49-patch-output.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
