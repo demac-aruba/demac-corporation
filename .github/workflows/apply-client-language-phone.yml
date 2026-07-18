@@ -1,0 +1,25 @@
+name: Minimal PR 37 recipient default patch
+
+on:
+  workflow_dispatch:
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Apply source patch
+        run: |
+          cat > /tmp/patch_pr37.py <<'PY'
+          from pathlib import Path
+
+          path = Path('src/screens/AgendaScreen.tsx')
+          text = path.read_text(encoding='utf-8')
+          old = """      sendConfirmation: index === 0 ? legacyEnabled : false,
+      sendReminder: index === 0 ? legacyEnabled : false,"""
+          new = """      sendConfirmation: index === 0 ? legacyEnabled : recipient.sendConfirmation,
+      sendReminder: index === 0 ? legacyEnabled : recipient.sendReminder,"""
+          if old in text:
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          elif new not in text:
+              raise SystemExit('notification default block not found')
+          PY
