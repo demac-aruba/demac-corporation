@@ -1,0 +1,560 @@
+name: Apply client language and international phone support
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-validate-commit:
+    if: github.head_ref == 'feature/client-language-international-phone'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/client-language-international-phone
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Apply source patch
+        shell: bash
+        run: |
+          cat > /tmp/patch_pr37.py <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              if old not in text:
+                  raise SystemExit(f'{label} not found')
+              return text.replace(old, new, 1)
+
+          phone_util = r'''import { CountryCode, getCountries, getCountryCallingCode, parsePhoneNumberFromString } from 'libphonenumber-js';
+
+export const DEFAULT_PHONE_COUNTRY: CountryCode = 'AW';
+
+export type PhoneNormalization = {
+  raw: string;
+  e164: string;
+  display: string;
+  country: CountryCode;
+  nationalNumber: string;
+  valid: boolean;
+  explicitInternational: boolean;
+};
+
+const countries = new Set<CountryCode>(getCountries());
+
+export function asCountryCode(value?: string): CountryCode {
+  return value && countries.has(value as CountryCode) ? value as CountryCode : DEFAULT_PHONE_COUNTRY;
+}
+
+export function countryFlag(country: string) {
+  return country.toUpperCase().replace(/./g, (letter) => String.fromCodePoint(127397 + letter.charCodeAt(0)));
+}
+
+export function countryName(country: CountryCode) {
+  try {
+    const DisplayNames = (Intl as unknown as { DisplayNames?: new (locales: string[], options: { type: string }) => { of: (value: string) => string | undefined } }).DisplayNames;
+    return DisplayNames ? new DisplayNames(['es'], { type: 'region' }).of(country) ?? country : country;
+  } catch {
+    return country;
+  }
+}
+
+export function countryCallingCode(country: CountryCode) {
+  return `+${getCountryCallingCode(country)}`;
+}
+
+export function normalizePhone(rawValue: string, defaultCountryValue?: string): PhoneNormalization {
+  const raw = String(rawValue ?? '').trim();
+  const defaultCountry = asCountryCode(defaultCountryValue);
+  const explicitInternational = raw.startsWith('+') || raw.startsWith('00');
+  const candidate = raw.startsWith('00') ? `+${raw.slice(2)}` : raw;
+  const parsed = candidate
+    ? parsePhoneNumberFromString(candidate, explicitInternational ? undefined : defaultCountry)
+    : undefined;
+  return {
+    raw,
+    e164: parsed?.number ?? '',
+    display: parsed?.formatInternational() ?? raw,
+    country: parsed?.country ?? defaultCountry,
+    nationalNumber: parsed?.nationalNumber ?? raw.replace(/\D/g, ''),
+    valid: parsed?.isValid() ?? false,
+    explicitInternational,
+  };
+}
+
+export function internationalSuggestion(rawValue: string, selectedCountryValue?: string) {
+  const raw = String(rawValue ?? '').trim();
+  if (!raw || raw.startsWith('+') || raw.startsWith('00')) return null;
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length < 9) return null;
+  const parsed = parsePhoneNumberFromString(`+${digits}`);
+  const selectedCountry = asCountryCode(selectedCountryValue);
+  if (!parsed?.isValid() || !parsed.country || parsed.country === selectedCountry) return null;
+  return {
+    country: parsed.country,
+    e164: parsed.number,
+    display: parsed.formatInternational(),
+  };
+}
+
+export function phoneComparisonKey(rawValue: string, countryValue?: string) {
+  const normalized = normalizePhone(rawValue, countryValue);
+  return normalized.valid ? normalized.e164.replace(/\D/g, '') : rawValue.replace(/\D/g, '');
+}
+
+export function formatStoredPhone(rawValue: string, countryValue?: string) {
+  const normalized = normalizePhone(rawValue, countryValue);
+  return normalized.valid ? normalized.display : rawValue || 'No registrado';
+}
+
+export function templateLanguageFor(preferredLanguage: string) {
+  if (preferredLanguage === 'Español') return 'es' as const;
+  if (preferredLanguage === 'Nederlands') return 'nl' as const;
+  return 'en' as const;
+}
+
+export function allPhoneCountries() {
+  return getCountries().map((country) => ({
+    country,
+    name: countryName(country),
+    callingCode: countryCallingCode(country),
+  })).sort((a, b) => a.name.localeCompare(b.name, 'es'));
+}
+'''
+          Path('src/utils').mkdir(parents=True, exist_ok=True)
+          Path('src/utils/phone.ts').write_text(phone_util, encoding='utf-8')
+
+          phone_field = r'''import React, { useEffect, useMemo, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { AppModal, Button, Input } from './UI';
+import { colors } from '../theme';
+import {
+  allPhoneCountries,
+  asCountryCode,
+  countryCallingCode,
+  countryFlag,
+  countryName,
+  internationalSuggestion,
+  normalizePhone,
+} from '../utils/phone';
+
+export function PhoneField({
+  label,
+  value,
+  country,
+  onChangeText,
+  onCountryChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  country?: string;
+  onChangeText: (value: string) => void;
+  onCountryChange: (country: string) => void;
+  placeholder?: string;
+}) {
+  const selectedCountry = asCountryCode(country);
+  const [showCountries, setShowCountries] = useState(false);
+  const [query, setQuery] = useState('');
+  const normalized = useMemo(() => normalizePhone(value, selectedCountry), [value, selectedCountry]);
+  const suggestion = useMemo(() => internationalSuggestion(value, selectedCountry), [value, selectedCountry]);
+  const filteredCountries = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    const all = allPhoneCountries();
+    if (!needle) return all;
+    return all.filter((item) => `${item.name} ${item.country} ${item.callingCode}`.toLowerCase().includes(needle));
+  }, [query]);
+
+  useEffect(() => {
+    if (normalized.explicitInternational && normalized.valid && normalized.country !== selectedCountry) {
+      onCountryChange(normalized.country);
+    }
+  }, [normalized.explicitInternational, normalized.valid, normalized.country, selectedCountry, onCountryChange]);
+
+  return (
+    <View style={styles.wrapper}>
+      <Text style={styles.label}>{label}</Text>
+      <View style={styles.row}>
+        <Pressable onPress={() => setShowCountries(true)} style={styles.countryButton}>
+          <Text style={styles.flag}>{countryFlag(selectedCountry)}</Text>
+          <Text style={styles.callingCode}>{countryCallingCode(selectedCountry)}</Text>
+          <Text style={styles.arrow}>⌄</Text>
+        </Pressable>
+        <Input
+          value={value}
+          onChangeText={onChangeText}
+          keyboardType="phone-pad"
+          placeholder={placeholder ?? 'Número de teléfono'}
+          style={styles.input}
+        />
+      </View>
+      {value.trim() ? (
+        <Text style={[styles.preview, normalized.valid ? styles.valid : styles.invalid]}>
+          {normalized.valid
+            ? `Se guardará como ${normalized.display} · ${countryName(normalized.country)}`
+            : `Número incompleto o no válido para ${countryName(selectedCountry)}.`}
+        </Text>
+      ) : null}
+      {suggestion ? (
+        <View style={styles.suggestion}>
+          <Text style={styles.suggestionText}>Parece un número de {countryName(suggestion.country)}: {suggestion.display}</Text>
+          <Button compact variant="secondary" label={`Usar ${countryName(suggestion.country)}`} onPress={() => {
+            onCountryChange(suggestion.country);
+            onChangeText(suggestion.e164);
+          }} />
+        </View>
+      ) : null}
+
+      <AppModal visible={showCountries} title="Seleccionar país del número" onClose={() => setShowCountries(false)}>
+        <Input placeholder="Buscar país o código…" value={query} onChangeText={setQuery} />
+        <ScrollView style={styles.countryList}>
+          {filteredCountries.map((item) => (
+            <Pressable key={item.country} onPress={() => {
+              onCountryChange(item.country);
+              setShowCountries(false);
+              setQuery('');
+            }} style={[styles.countryRow, item.country === selectedCountry && styles.countryRowActive]}>
+              <Text style={styles.countryFlag}>{countryFlag(item.country)}</Text>
+              <Text style={styles.countryName}>{item.name}</Text>
+              <Text style={styles.countryCode}>{item.callingCode}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+      </AppModal>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  wrapper: { marginBottom: 12 },
+  label: { color: colors.text, fontWeight: '700', fontSize: 12, marginBottom: 6 },
+  row: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
+  countryButton: { minHeight: 42, minWidth: 112, borderWidth: 1, borderColor: '#B9BEC5', borderRadius: 7, paddingHorizontal: 10, backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', gap: 6 },
+  flag: { fontSize: 17 },
+  callingCode: { color: colors.text, fontWeight: '800', fontSize: 12 },
+  arrow: { color: colors.muted, marginLeft: 'auto' },
+  input: { flex: 1, marginBottom: 0 },
+  preview: { fontSize: 10, marginTop: 5 },
+  valid: { color: colors.success },
+  invalid: { color: colors.danger },
+  suggestion: { marginTop: 7, borderWidth: 1, borderColor: '#F2C66D', backgroundColor: colors.warningLight, borderRadius: 8, padding: 9, gap: 8, alignItems: 'flex-start' },
+  suggestionText: { color: colors.text, fontSize: 10, lineHeight: 15 },
+  countryList: { maxHeight: 430 },
+  countryRow: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 8, borderBottomWidth: 1, borderBottomColor: colors.border },
+  countryRowActive: { backgroundColor: colors.primaryLight },
+  countryFlag: { fontSize: 18 },
+  countryName: { flex: 1, color: colors.text, fontWeight: '700' },
+  countryCode: { color: colors.muted, fontWeight: '800' },
+});
+'''
+          Path('src/components/PhoneField.tsx').write_text(phone_field, encoding='utf-8')
+
+          types = Path('src/types.ts').read_text(encoding='utf-8')
+          types = replace_once(types,
+          "export interface Client {\n  id: string;\n  name: string;\n  company?: string;\n  phone: string;\n  whatsapp: string;\n  email?: string;\n  preferredLanguage?: 'Español' | 'English' | 'Nederlands' | 'Papiamento';\n  templateLanguage?: 'en' | 'es' | 'nl';",
+          "export type PreferredLanguage = 'Español' | 'English' | 'Nederlands' | 'Papiamento';\n\nexport interface Client {\n  id: string;\n  name: string;\n  company?: string;\n  phone: string;\n  phoneCountry?: string;\n  whatsapp: string;\n  whatsappCountry?: string;\n  email?: string;\n  preferredLanguage?: PreferredLanguage;\n  templateLanguage?: 'en' | 'es' | 'nl';",
+          'client phone and language fields')
+          types = replace_once(types,
+          "export type PropertyContactLanguage = 'Español' | 'English' | 'Nederlands' | 'Papiamento';",
+          "export type PropertyContactLanguage = PreferredLanguage;",
+          'property contact language alias')
+          types = replace_once(types,
+          "  phone: string;\n  whatsapp: string;\n  email?: string;\n  preferredLanguage: PropertyContactLanguage;\n  active: boolean;",
+          "  phone: string;\n  phoneCountry?: string;\n  whatsapp: string;\n  whatsappCountry?: string;\n  email?: string;\n  preferredLanguage: PropertyContactLanguage;\n  defaultSendConfirmation?: boolean;\n  defaultSendReminder?: boolean;\n  arrivalContact?: boolean;\n  active: boolean;",
+          'property contact preferences')
+          types = replace_once(types,
+          "  phone: string;\n  whatsapp: string;\n  preferredLanguage: PropertyContactLanguage;",
+          "  phone: string;\n  phoneCountry?: string;\n  whatsapp: string;\n  whatsappCountry?: string;\n  preferredLanguage: PropertyContactLanguage;",
+          'appointment recipient country fields')
+          Path('src/types.ts').write_text(types, encoding='utf-8')
+
+          app = Path('src/state/AppState.tsx').read_text(encoding='utf-8')
+          app = replace_once(app,
+          "  addClient: (client: Client) => Promise<OperationResult>;\n  addProperty:",
+          "  addClient: (client: Client) => Promise<OperationResult>;\n  updateClient: (id: string, changes: Partial<Client>) => Promise<OperationResult>;\n  addProperty:",
+          'app state updateClient type')
+          app = replace_once(app,
+          "  const addProperty = async (property: Property): Promise<OperationResult> => {",
+          "  const updateClient = async (id: string, changes: Partial<Client>): Promise<OperationResult> => {\n    const existing = clients.find((client) => client.id === id);\n    if (!existing) return { ok: false, message: 'El cliente ya no existe.' };\n    const updated: Client = { ...existing, ...changes, updatedAt: changes.updatedAt ?? new Date().toISOString() };\n    if (currentUser?.authProvider !== 'firebase') {\n      setClients((previous) => sortClients(previous.map((client) => client.id === id ? updated : client)));\n      return { ok: true };\n    }\n    try {\n      await saveFirestoreDocument('clients', updated);\n      setClients((previous) => sortClients(previous.map((client) => client.id === id ? updated : client)));\n      setDataError(null);\n      setLastSyncedAt(new Date().toISOString());\n      return { ok: true };\n    } catch (error) {\n      const message = friendlyDataError(error);\n      setDataError(message);\n      return { ok: false, message };\n    }\n  };\n\n  const addProperty = async (property: Property): Promise<OperationResult> => {",
+          'app state updateClient implementation')
+          app = replace_once(app,
+          "    addClient,\n    addProperty,",
+          "    addClient,\n    updateClient,\n    addProperty,",
+          'app state updateClient value')
+          Path('src/state/AppState.tsx').write_text(app, encoding='utf-8')
+
+          clients = Path('src/screens/ClientsScreen.tsx').read_text(encoding='utf-8')
+          clients = replace_once(clients,
+          "import { AppModal, Button, Card, EmptyState, formatMoney, Input, Pill, SectionTitle } from '../components/UI';",
+          "import { AppModal, Button, Card, EmptyState, formatMoney, Input, Pill, SectionTitle } from '../components/UI';\nimport { PhoneField } from '../components/PhoneField';",
+          'clients phone field import')
+          clients = replace_once(clients,
+          "import { Client, Property, PropertyContact, PropertyContactLanguage, PropertyContactRole, PropertyType } from '../types';",
+          "import { Client, PreferredLanguage, Property, PropertyContact, PropertyContactLanguage, PropertyContactRole, PropertyType } from '../types';\nimport { DEFAULT_PHONE_COUNTRY, formatStoredPhone, normalizePhone, phoneComparisonKey, templateLanguageFor } from '../utils/phone';",
+          'clients phone utils import')
+          clients = replace_once(clients,
+          "const propertyContactLanguages: PropertyContactLanguage[] = ['Español', 'English', 'Nederlands', 'Papiamento'];",
+          "const propertyContactLanguages: PropertyContactLanguage[] = ['Español', 'English', 'Nederlands', 'Papiamento'];\nconst clientLanguages: PreferredLanguage[] = ['Español', 'English', 'Nederlands', 'Papiamento'];",
+          'client language options')
+          clients = replace_once(clients,
+          "    addClient,\n    addProperty,",
+          "    addClient,\n    updateClient,\n    addProperty,",
+          'clients updateClient destructure')
+          clients = replace_once(clients,
+          "  const [showCreate, setShowCreate] = useState(false);",
+          "  const [showCreate, setShowCreate] = useState(false);\n  const [showEditClient, setShowEditClient] = useState(false);",
+          'clients edit modal state')
+          clients = replace_once(clients,
+          "  const [contactForm, setContactForm] = useState({ name: '', role: 'Encargado' as PropertyContactRole, phone: '', whatsapp: '', email: '', preferredLanguage: 'Español' as PropertyContactLanguage });",
+          "  const [contactForm, setContactForm] = useState({ name: '', role: 'Encargado' as PropertyContactRole, phone: '', phoneCountry: DEFAULT_PHONE_COUNTRY as string, whatsapp: '', whatsappCountry: DEFAULT_PHONE_COUNTRY as string, email: '', preferredLanguage: 'Español' as PropertyContactLanguage, defaultSendConfirmation: false, defaultSendReminder: true, arrivalContact: true });",
+          'clients contact form state')
+          clients = replace_once(clients,
+          "    phone: '',\n    whatsapp: '',\n    email: '',",
+          "    phone: '',\n    phoneCountry: DEFAULT_PHONE_COUNTRY as string,\n    whatsapp: '',\n    whatsappCountry: DEFAULT_PHONE_COUNTRY as string,\n    email: '',\n    preferredLanguage: 'Español' as PreferredLanguage,",
+          'clients create form phone fields')
+          clients = replace_once(clients,
+          "  const [propertyForm, setPropertyForm] = useState({",
+          "  const [editForm, setEditForm] = useState({ name: '', company: '', phone: '', phoneCountry: DEFAULT_PHONE_COUNTRY as string, whatsapp: '', whatsappCountry: DEFAULT_PHONE_COUNTRY as string, email: '', preferredLanguage: 'Español' as PreferredLanguage });\n  const [propertyForm, setPropertyForm] = useState({",
+          'clients edit form state')
+          clients = replace_once(clients,
+          "  const resetClientForm = () => setForm({ name: '', company: '', phone: '', whatsapp: '', email: '', address: '', zone: 'Oranjestad' });",
+          "  const resetClientForm = () => setForm({ name: '', company: '', phone: '', phoneCountry: DEFAULT_PHONE_COUNTRY as string, whatsapp: '', whatsappCountry: DEFAULT_PHONE_COUNTRY as string, email: '', preferredLanguage: 'Español' as PreferredLanguage, address: '', zone: 'Oranjestad' });\n\n  const duplicateClientFor = (phone: string, phoneCountry: string, whatsapp: string, whatsappCountry: string, ignoreId?: string) => {\n    const keys = [phoneComparisonKey(phone, phoneCountry), phoneComparisonKey(whatsapp || phone, whatsapp ? whatsappCountry : phoneCountry)].filter(Boolean);\n    return clients.find((client) => client.id !== ignoreId && [\n      phoneComparisonKey(client.phone, client.phoneCountry),\n      phoneComparisonKey(client.whatsapp, client.whatsappCountry),\n    ].some((key) => keys.includes(key)));\n  };",
+          'clients reset and duplicate helper')
+          old_create_start = """    const timestamp = Date.now();
+    const now = new Date().toISOString();
+    const client: Client = {
+      id: `client-${timestamp}`,
+      name: form.name.trim(),
+      company: form.company.trim() || undefined,
+      phone: form.phone.trim(),
+      whatsapp: form.whatsapp.trim() || form.phone.trim(),
+      email: form.email.trim() || undefined,"""
+          new_create_start = """    const normalizedPhone = normalizePhone(form.phone, form.phoneCountry);
+    const normalizedWhatsApp = normalizePhone(form.whatsapp.trim() || form.phone, form.whatsapp.trim() ? form.whatsappCountry : form.phoneCountry);
+    if (!normalizedPhone.valid) return setScreenMessage('El teléfono no es válido para el país seleccionado.');
+    if (!normalizedWhatsApp.valid) return setScreenMessage('El WhatsApp no es válido para el país seleccionado.');
+    const duplicate = duplicateClientFor(normalizedPhone.e164, normalizedPhone.country, normalizedWhatsApp.e164, normalizedWhatsApp.country);
+    if (duplicate) return setScreenMessage(`Ya existe un cliente con este teléfono o WhatsApp: ${duplicate.name}.`);
+
+    const timestamp = Date.now();
+    const now = new Date().toISOString();
+    const client: Client = {
+      id: `client-${timestamp}`,
+      name: form.name.trim(),
+      company: form.company.trim() || undefined,
+      phone: normalizedPhone.e164,
+      phoneCountry: normalizedPhone.country,
+      whatsapp: normalizedWhatsApp.e164,
+      whatsappCountry: normalizedWhatsApp.country,
+      email: form.email.trim() || undefined,
+      preferredLanguage: form.preferredLanguage,
+      templateLanguage: templateLanguageFor(form.preferredLanguage),"""
+          clients = replace_once(clients, old_create_start, new_create_start, 'clients normalized create')
+          clients = replace_once(clients,
+          "  const openPropertyModal = () => {",
+          "  const openEditClient = () => {\n    if (!selected) return;\n    setScreenMessage('');\n    setEditForm({\n      name: selected.name,\n      company: selected.company ?? '',\n      phone: selected.phone,\n      phoneCountry: selected.phoneCountry ?? DEFAULT_PHONE_COUNTRY,\n      whatsapp: selected.whatsapp,\n      whatsappCountry: selected.whatsappCountry ?? selected.phoneCountry ?? DEFAULT_PHONE_COUNTRY,\n      email: selected.email ?? '',\n      preferredLanguage: selected.preferredLanguage ?? 'English',\n    });\n    setShowEditClient(true);\n  };\n\n  const saveEditedClient = async () => {\n    if (!selected) return;\n    if (!editForm.name.trim()) return setScreenMessage('Escribe el nombre del cliente.');\n    const normalizedPhone = normalizePhone(editForm.phone, editForm.phoneCountry);\n    const normalizedWhatsApp = normalizePhone(editForm.whatsapp.trim() || editForm.phone, editForm.whatsapp.trim() ? editForm.whatsappCountry : editForm.phoneCountry);\n    if (!normalizedPhone.valid) return setScreenMessage('El teléfono no es válido para el país seleccionado.');\n    if (!normalizedWhatsApp.valid) return setScreenMessage('El WhatsApp no es válido para el país seleccionado.');\n    const duplicate = duplicateClientFor(normalizedPhone.e164, normalizedPhone.country, normalizedWhatsApp.e164, normalizedWhatsApp.country, selected.id);\n    if (duplicate) return setScreenMessage(`Ya existe otro cliente con este teléfono o WhatsApp: ${duplicate.name}.`);\n    setSaving(true);\n    const result = await updateClient(selected.id, {\n      name: editForm.name.trim(),\n      company: editForm.company.trim() || undefined,\n      phone: normalizedPhone.e164,\n      phoneCountry: normalizedPhone.country,\n      whatsapp: normalizedWhatsApp.e164,\n      whatsappCountry: normalizedWhatsApp.country,\n      email: editForm.email.trim() || undefined,\n      preferredLanguage: editForm.preferredLanguage,\n      templateLanguage: templateLanguageFor(editForm.preferredLanguage),\n      updatedAt: new Date().toISOString(),\n    });\n    setSaving(false);\n    if (!result.ok) return setScreenMessage(result.message ?? 'No se pudo actualizar el cliente.');\n    setShowEditClient(false);\n  };\n\n  const openPropertyModal = () => {",
+          'clients edit handlers')
+          clients = replace_once(clients,
+          "    setContactForm({ name: '', role: 'Encargado', phone: '', whatsapp: '', email: '', preferredLanguage: 'Español' });",
+          "    setContactForm({ name: '', role: 'Encargado', phone: '', phoneCountry: DEFAULT_PHONE_COUNTRY, whatsapp: '', whatsappCountry: DEFAULT_PHONE_COUNTRY, email: '', preferredLanguage: 'Español', defaultSendConfirmation: false, defaultSendReminder: true, arrivalContact: true });",
+          'clients reset contact form')
+          old_contact = """    const now = new Date().toISOString();
+    const contact: PropertyContact = {
+      id: `contact-${Date.now()}`,
+      name: contactForm.name.trim(),
+      role: contactForm.role,
+      phone: contactForm.phone.trim() || contactForm.whatsapp.trim(),
+      whatsapp: contactForm.whatsapp.trim() || contactForm.phone.trim(),
+      email: contactForm.email.trim() || undefined,
+      preferredLanguage: contactForm.preferredLanguage,
+      active: true,"""
+          new_contact = """    const normalizedPhone = normalizePhone(contactForm.phone.trim() || contactForm.whatsapp, contactForm.phone.trim() ? contactForm.phoneCountry : contactForm.whatsappCountry);
+    const normalizedWhatsApp = normalizePhone(contactForm.whatsapp.trim() || contactForm.phone, contactForm.whatsapp.trim() ? contactForm.whatsappCountry : contactForm.phoneCountry);
+    if (!normalizedPhone.valid || !normalizedWhatsApp.valid) return setScreenMessage('Revisa el país y el número de teléfono o WhatsApp del contacto.');
+    const now = new Date().toISOString();
+    const contact: PropertyContact = {
+      id: `contact-${Date.now()}`,
+      name: contactForm.name.trim(),
+      role: contactForm.role,
+      phone: normalizedPhone.e164,
+      phoneCountry: normalizedPhone.country,
+      whatsapp: normalizedWhatsApp.e164,
+      whatsappCountry: normalizedWhatsApp.country,
+      email: contactForm.email.trim() || undefined,
+      preferredLanguage: contactForm.preferredLanguage,
+      defaultSendConfirmation: contactForm.defaultSendConfirmation,
+      defaultSendReminder: contactForm.defaultSendReminder,
+      arrivalContact: contactForm.arrivalContact,
+      active: true,"""
+          clients = replace_once(clients, old_contact, new_contact, 'clients normalized property contact')
+          clients = replace_once(clients,
+          "                  <View style={{ flex: 1 }}><Text style={styles.detailName}>{selected.name}</Text><Text style={styles.detailCompany}>{selected.company || 'Cliente residencial'}</Text></View>\n                  <Pill label={selected.balance > 0 ? `Balance ${formatMoney(selected.balance)}` : 'Cuenta al día'} tone={selected.balance > 0 ? 'warning' : 'success'} />",
+          "                  <View style={{ flex: 1 }}><Text style={styles.detailName}>{selected.name}</Text><Text style={styles.detailCompany}>{selected.company || 'Cliente residencial'}</Text></View>\n                  <View style={{ gap: 7, alignItems: 'flex-end' }}><Button compact variant=\"secondary\" label=\"Editar cliente\" onPress={openEditClient} /><Pill label={selected.balance > 0 ? `Balance ${formatMoney(selected.balance)}` : 'Cuenta al día'} tone={selected.balance > 0 ? 'warning' : 'success'} /></View>",
+          'clients edit button')
+          clients = replace_once(clients,
+          "                  <Info label=\"Teléfono\" value={selected.phone} />\n                  <Info label=\"WhatsApp\" value={selected.whatsapp} />\n                  <Info label=\"Correo\" value={selected.email || 'No registrado'} />",
+          "                  <Info label=\"Teléfono\" value={formatStoredPhone(selected.phone, selected.phoneCountry)} />\n                  <Info label=\"WhatsApp\" value={formatStoredPhone(selected.whatsapp, selected.whatsappCountry)} />\n                  <Info label=\"Idioma preferido\" value={selected.preferredLanguage ?? 'English (registro anterior)'} />\n                  <Info label=\"Correo\" value={selected.email || 'No registrado'} />",
+          'clients detail phone display')
+          clients = replace_once(clients,
+          "            {(property.contacts ?? []).filter((contact) => contact.active !== false).map((contact) => <Text key={contact.id} style={styles.propertyContactLine}>{contact.name} · {contact.role} · {contact.whatsapp || contact.phone} · {contact.preferredLanguage}</Text>)}",
+          "            {(property.contacts ?? []).filter((contact) => contact.active !== false).map((contact) => <Text key={contact.id} style={styles.propertyContactLine}>{contact.name} · {contact.role} · {formatStoredPhone(contact.whatsapp || contact.phone, contact.whatsappCountry || contact.phoneCountry)} · {contact.preferredLanguage}{contact.arrivalContact ? ' · Contacto de llegada' : ''}{contact.defaultSendConfirmation ? ' · Confirmación' : ''}{contact.defaultSendReminder ? ' · Recordatorio' : ''}</Text>)}",
+          'clients property contact display')
+          clients = replace_once(clients,
+          "        <Input label=\"Teléfono\" value={form.phone} onChangeText={(phone) => setForm({ ...form, phone })} keyboardType=\"phone-pad\" />\n        <Input label=\"WhatsApp\" value={form.whatsapp} onChangeText={(whatsapp) => setForm({ ...form, whatsapp })} keyboardType=\"phone-pad\" placeholder=\"Si se deja vacío, usaremos el teléfono\" />\n        <Input label=\"Correo electrónico (opcional)\"",
+          "        <PhoneField label=\"Teléfono\" value={form.phone} country={form.phoneCountry} onChangeText={(phone) => setForm({ ...form, phone })} onCountryChange={(phoneCountry) => setForm((current) => ({ ...current, phoneCountry }))} />\n        <PhoneField label=\"WhatsApp\" value={form.whatsapp} country={form.whatsappCountry} onChangeText={(whatsapp) => setForm({ ...form, whatsapp })} onCountryChange={(whatsappCountry) => setForm((current) => ({ ...current, whatsappCountry }))} placeholder=\"Si queda vacío, usaremos el teléfono\" />\n        <Text style={styles.inputLabel}>Idioma preferido</Text>\n        <View style={styles.typeWrap}>{clientLanguages.map((preferredLanguage) => <Pressable key={preferredLanguage} onPress={() => setForm({ ...form, preferredLanguage })} style={[styles.typeButton, form.preferredLanguage === preferredLanguage && styles.typeButtonActive]}><Text style={[styles.typeText, form.preferredLanguage === preferredLanguage && styles.typeTextActive]}>{preferredLanguage}</Text></Pressable>)}</View>\n        <Input label=\"Correo electrónico (opcional)\"",
+          'clients create phone language UI')
+          edit_modal = r'''
+      <AppModal visible={showEditClient} title="Editar cliente" onClose={() => !saving && setShowEditClient(false)}>
+        {screenMessage ? <View style={styles.formError}><Text style={styles.formErrorText}>{screenMessage}</Text></View> : null}
+        <ScrollView>
+          <Input label="Nombre completo o nombre comercial" value={editForm.name} onChangeText={(name) => setEditForm({ ...editForm, name })} />
+          <Input label="Empresa (opcional)" value={editForm.company} onChangeText={(company) => setEditForm({ ...editForm, company })} />
+          <PhoneField label="Teléfono" value={editForm.phone} country={editForm.phoneCountry} onChangeText={(phone) => setEditForm({ ...editForm, phone })} onCountryChange={(phoneCountry) => setEditForm((current) => ({ ...current, phoneCountry }))} />
+          <PhoneField label="WhatsApp" value={editForm.whatsapp} country={editForm.whatsappCountry} onChangeText={(whatsapp) => setEditForm({ ...editForm, whatsapp })} onCountryChange={(whatsappCountry) => setEditForm((current) => ({ ...current, whatsappCountry }))} />
+          <Text style={styles.inputLabel}>Idioma preferido</Text>
+          <View style={styles.typeWrap}>{clientLanguages.map((preferredLanguage) => <Pressable key={preferredLanguage} onPress={() => setEditForm({ ...editForm, preferredLanguage })} style={[styles.typeButton, editForm.preferredLanguage === preferredLanguage && styles.typeButtonActive]}><Text style={[styles.typeText, editForm.preferredLanguage === preferredLanguage && styles.typeTextActive]}>{preferredLanguage}</Text></Pressable>)}</View>
+          <Input label="Correo electrónico (opcional)" value={editForm.email} onChangeText={(email) => setEditForm({ ...editForm, email })} keyboardType="email-address" />
+          <View style={styles.modalActions}><Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => setShowEditClient(false)} /><Button label={saving ? 'Guardando…' : 'Guardar cambios'} disabled={saving} onPress={() => void saveEditedClient()} /></View>
+        </ScrollView>
+      </AppModal>
+
+'''
+          clients = replace_once(clients,
+          "      <AppModal visible={showProperty}",
+          edit_modal + "      <AppModal visible={showProperty}",
+          'clients edit modal insert')
+          clients = replace_once(clients,
+          "        <Input label=\"Teléfono\" value={contactForm.phone} onChangeText={(phone) => setContactForm({ ...contactForm, phone })} keyboardType=\"phone-pad\" />\n        <Input label=\"WhatsApp\" value={contactForm.whatsapp} onChangeText={(whatsapp) => setContactForm({ ...contactForm, whatsapp })} keyboardType=\"phone-pad\" placeholder=\"Si es igual, puede quedar vacío\" />",
+          "        <PhoneField label=\"Teléfono\" value={contactForm.phone} country={contactForm.phoneCountry} onChangeText={(phone) => setContactForm({ ...contactForm, phone })} onCountryChange={(phoneCountry) => setContactForm((current) => ({ ...current, phoneCountry }))} />\n        <PhoneField label=\"WhatsApp\" value={contactForm.whatsapp} country={contactForm.whatsappCountry} onChangeText={(whatsapp) => setContactForm({ ...contactForm, whatsapp })} onCountryChange={(whatsappCountry) => setContactForm((current) => ({ ...current, whatsappCountry }))} placeholder=\"Si queda vacío, usaremos el teléfono\" />",
+          'clients contact phone UI')
+          clients = replace_once(clients,
+          "        <View style={styles.typeWrap}>{propertyContactLanguages.map((preferredLanguage) => <Pressable key={preferredLanguage} onPress={() => setContactForm({ ...contactForm, preferredLanguage })} style={[styles.typeButton, contactForm.preferredLanguage === preferredLanguage && styles.typeButtonActive]}><Text style={[styles.typeText, contactForm.preferredLanguage === preferredLanguage && styles.typeTextActive]}>{preferredLanguage}</Text></Pressable>)}</View>\n        <View style={styles.modalActions}",
+          "        <View style={styles.typeWrap}>{propertyContactLanguages.map((preferredLanguage) => <Pressable key={preferredLanguage} onPress={() => setContactForm({ ...contactForm, preferredLanguage })} style={[styles.typeButton, contactForm.preferredLanguage === preferredLanguage && styles.typeButtonActive]}><Text style={[styles.typeText, contactForm.preferredLanguage === preferredLanguage && styles.typeTextActive]}>{preferredLanguage}</Text></Pressable>)}</View>\n        <Text style={styles.inputLabel}>Preferencias operativas</Text>\n        <View style={styles.typeWrap}><Pressable onPress={() => setContactForm({ ...contactForm, defaultSendConfirmation: !contactForm.defaultSendConfirmation })} style={[styles.typeButton, contactForm.defaultSendConfirmation && styles.typeButtonActive]}><Text style={[styles.typeText, contactForm.defaultSendConfirmation && styles.typeTextActive]}>Confirmación por defecto</Text></Pressable><Pressable onPress={() => setContactForm({ ...contactForm, defaultSendReminder: !contactForm.defaultSendReminder })} style={[styles.typeButton, contactForm.defaultSendReminder && styles.typeButtonActive]}><Text style={[styles.typeText, contactForm.defaultSendReminder && styles.typeTextActive]}>Recordatorio por defecto</Text></Pressable><Pressable onPress={() => setContactForm({ ...contactForm, arrivalContact: !contactForm.arrivalContact })} style={[styles.typeButton, contactForm.arrivalContact && styles.typeButtonActive]}><Text style={[styles.typeText, contactForm.arrivalContact && styles.typeTextActive]}>Llamar al llegar</Text></Pressable></View>\n        <View style={styles.modalActions}",
+          'clients contact preferences UI')
+          Path('src/screens/ClientsScreen.tsx').write_text(clients, encoding='utf-8')
+
+          agenda = Path('src/screens/AgendaScreen.tsx').read_text(encoding='utf-8')
+          agenda = replace_once(agenda,
+          "import { AppModal, Button, Card, Input, Pill, SectionTitle, statusTone } from '../components/UI';",
+          "import { AppModal, Button, Card, Input, Pill, SectionTitle, statusTone } from '../components/UI';\nimport { PhoneField } from '../components/PhoneField';",
+          'agenda phone field import')
+          agenda = replace_once(agenda,
+          "import { AppointmentChangeOrigin, AppointmentChangeReasonCategory, AppointmentNotificationRecipient, AppointmentStatus, Client, DailyVanAssignment, Property, PropertyContact, PropertyContactLanguage, PropertyContactRole, PropertyType, ServiceType, StaffAbsence, StaffProfile, Van, WorkOrder, WorkOrderScheduleHistoryEntry } from '../types';",
+          "import { AppointmentChangeOrigin, AppointmentChangeReasonCategory, AppointmentNotificationRecipient, AppointmentStatus, Client, DailyVanAssignment, PreferredLanguage, Property, PropertyContact, PropertyContactLanguage, PropertyContactRole, PropertyType, ServiceType, StaffAbsence, StaffProfile, Van, WorkOrder, WorkOrderScheduleHistoryEntry } from '../types';\nimport { DEFAULT_PHONE_COUNTRY, normalizePhone, phoneComparisonKey, templateLanguageFor } from '../utils/phone';",
+          'agenda phone utils import')
+          agenda = replace_once(agenda,
+          "  phone: string;\n  whatsapp: string;\n  propertyName:",
+          "  phone: string;\n  phoneCountry: string;\n  whatsapp: string;\n  whatsappCountry: string;\n  preferredLanguage: PreferredLanguage;\n  propertyName:",
+          'agenda quick client fields')
+          agenda = replace_once(agenda,
+          "  phone: '',\n  whatsapp: '',\n  propertyName:",
+          "  phone: '',\n  phoneCountry: DEFAULT_PHONE_COUNTRY,\n  whatsapp: '',\n  whatsappCountry: DEFAULT_PHONE_COUNTRY,\n  preferredLanguage: 'Español',\n  propertyName:",
+          'agenda quick client defaults')
+          agenda = replace_once(agenda,
+          "  phone: string;\n  whatsapp: string;\n  email: string;\n  preferredLanguage: PropertyContactLanguage;",
+          "  phone: string;\n  phoneCountry: string;\n  whatsapp: string;\n  whatsappCountry: string;\n  email: string;\n  preferredLanguage: PropertyContactLanguage;\n  defaultSendConfirmation: boolean;\n  defaultSendReminder: boolean;\n  arrivalContact: boolean;",
+          'agenda quick contact fields')
+          agenda = replace_once(agenda,
+          "  phone: '',\n  whatsapp: '',\n  email: '',\n  preferredLanguage: 'Español',",
+          "  phone: '',\n  phoneCountry: DEFAULT_PHONE_COUNTRY,\n  whatsapp: '',\n  whatsappCountry: DEFAULT_PHONE_COUNTRY,\n  email: '',\n  preferredLanguage: 'Español',\n  defaultSendConfirmation: false,\n  defaultSendReminder: true,\n  arrivalContact: true,",
+          'agenda quick contact defaults')
+          agenda = replace_once(agenda,
+          "    phone: client.phone,\n    whatsapp: client.whatsapp || client.phone,",
+          "    phone: client.phone,\n    phoneCountry: client.phoneCountry,\n    whatsapp: client.whatsapp || client.phone,\n    whatsappCountry: client.whatsappCountry || client.phoneCountry,",
+          'agenda client recipient phone countries')
+          agenda = replace_once(agenda,
+          "    phone: contact.phone,\n    whatsapp: contact.whatsapp || contact.phone,\n    preferredLanguage: contact.preferredLanguage,\n    sendConfirmation: false,\n    sendReminder: false,",
+          "    phone: contact.phone,\n    phoneCountry: contact.phoneCountry,\n    whatsapp: contact.whatsapp || contact.phone,\n    whatsappCountry: contact.whatsappCountry || contact.phoneCountry,\n    preferredLanguage: contact.preferredLanguage,\n    sendConfirmation: contact.defaultSendConfirmation === true,\n    sendReminder: contact.defaultSendReminder === true,",
+          'agenda contact recipient defaults')
+          agenda = replace_once(agenda,
+          "    const phone = quickClient.phone.trim();\n    const whatsapp = quickClient.whatsapp.trim() || phone;",
+          "    const normalizedPhone = normalizePhone(quickClient.phone, quickClient.phoneCountry);\n    const normalizedWhatsApp = normalizePhone(quickClient.whatsapp.trim() || quickClient.phone, quickClient.whatsapp.trim() ? quickClient.whatsappCountry : quickClient.phoneCountry);\n    const phone = normalizedPhone.e164;\n    const whatsapp = normalizedWhatsApp.e164;",
+          'agenda quick client normalize')
+          agenda = replace_once(agenda,
+          "    if (!phone) return setQuickClientMessage('Escribe un número de teléfono.');",
+          "    if (!quickClient.phone.trim()) return setQuickClientMessage('Escribe un número de teléfono.');\n    if (!normalizedPhone.valid) return setQuickClientMessage('El teléfono no es válido para el país seleccionado.');\n    if (!normalizedWhatsApp.valid) return setQuickClientMessage('El WhatsApp no es válido para el país seleccionado.');\n    const duplicateKeys = [phoneComparisonKey(phone, normalizedPhone.country), phoneComparisonKey(whatsapp, normalizedWhatsApp.country)];\n    const duplicate = clients.find((client) => [phoneComparisonKey(client.phone, client.phoneCountry), phoneComparisonKey(client.whatsapp, client.whatsappCountry)].some((key) => duplicateKeys.includes(key)));\n    if (duplicate) return setQuickClientMessage(`Ya existe un cliente con este teléfono o WhatsApp: ${duplicate.name}.`);",
+          'agenda quick client duplicate validation')
+          agenda = replace_once(agenda,
+          "      phone,\n      whatsapp,\n      address,",
+          "      phone,\n      phoneCountry: normalizedPhone.country,\n      whatsapp,\n      whatsappCountry: normalizedWhatsApp.country,\n      preferredLanguage: quickClient.preferredLanguage,\n      templateLanguage: templateLanguageFor(quickClient.preferredLanguage),\n      address,",
+          'agenda quick client saved metadata')
+          old_quick_contact = """    const now = new Date().toISOString();
+    const contact: PropertyContact = {
+      id: `contact-${Date.now()}`,
+      name: quickContact.name.trim(),
+      role: quickContact.role,
+      phone: quickContact.phone.trim() || quickContact.whatsapp.trim(),
+      whatsapp: quickContact.whatsapp.trim() || quickContact.phone.trim(),
+      email: quickContact.email.trim() || undefined,
+      preferredLanguage: quickContact.preferredLanguage,
+      active: true,"""
+          new_quick_contact = """    const normalizedPhone = normalizePhone(quickContact.phone.trim() || quickContact.whatsapp, quickContact.phone.trim() ? quickContact.phoneCountry : quickContact.whatsappCountry);
+    const normalizedWhatsApp = normalizePhone(quickContact.whatsapp.trim() || quickContact.phone, quickContact.whatsapp.trim() ? quickContact.whatsappCountry : quickContact.phoneCountry);
+    if (!normalizedPhone.valid || !normalizedWhatsApp.valid) return setQuickContactMessage('Revisa el país y el teléfono o WhatsApp de la persona.');
+    const now = new Date().toISOString();
+    const contact: PropertyContact = {
+      id: `contact-${Date.now()}`,
+      name: quickContact.name.trim(),
+      role: quickContact.role,
+      phone: normalizedPhone.e164,
+      phoneCountry: normalizedPhone.country,
+      whatsapp: normalizedWhatsApp.e164,
+      whatsappCountry: normalizedWhatsApp.country,
+      email: quickContact.email.trim() || undefined,
+      preferredLanguage: quickContact.preferredLanguage,
+      defaultSendConfirmation: quickContact.defaultSendConfirmation,
+      defaultSendReminder: quickContact.defaultSendReminder,
+      arrivalContact: quickContact.arrivalContact,
+      active: true,"""
+          agenda = replace_once(agenda, old_quick_contact, new_quick_contact, 'agenda normalized quick contact')
+          agenda = replace_once(agenda,
+          "    const notificationSnapshot = notificationRecipients.map((recipient) => ({ ...recipient }));\n    const notificationsEnabled =",
+          "    const notificationSnapshot = notificationRecipients.map((recipient) => ({ ...recipient }));\n    const invalidRecipient = notificationSnapshot.find((recipient) => (recipient.sendConfirmation || recipient.sendReminder) && !normalizePhone(recipient.whatsapp || recipient.phone, recipient.whatsappCountry || recipient.phoneCountry).valid);\n    if (invalidRecipient) return setFormMessage(`${invalidRecipient.name} está seleccionado para recibir WhatsApp, pero su número no es válido. Corrige el contacto o desmárcalo.`);\n    const notificationsEnabled =",
+          'agenda selected recipient validation')
+          agenda = replace_once(agenda,
+          "              <View style={styles.halfField}><Input label=\"Teléfono\" value={quickClient.phone} onChangeText={(phone) => setQuickClient({ ...quickClient, phone })} keyboardType=\"phone-pad\" /></View>\n              <View style={styles.halfField}><Input label=\"WhatsApp\" value={quickClient.whatsapp} onChangeText={(whatsapp) => setQuickClient({ ...quickClient, whatsapp })} keyboardType=\"phone-pad\" placeholder=\"Si es igual, puede quedar vacío\" /></View>",
+          "              <View style={styles.halfField}><PhoneField label=\"Teléfono\" value={quickClient.phone} country={quickClient.phoneCountry} onChangeText={(phone) => setQuickClient({ ...quickClient, phone })} onCountryChange={(phoneCountry) => setQuickClient((current) => ({ ...current, phoneCountry }))} /></View>\n              <View style={styles.halfField}><PhoneField label=\"WhatsApp\" value={quickClient.whatsapp} country={quickClient.whatsappCountry} onChangeText={(whatsapp) => setQuickClient({ ...quickClient, whatsapp })} onCountryChange={(whatsappCountry) => setQuickClient((current) => ({ ...current, whatsappCountry }))} placeholder=\"Si queda vacío, usaremos el teléfono\" /></View>",
+          'agenda quick client phone UI')
+          agenda = replace_once(agenda,
+          "            <Text style={styles.quickSectionTitle}>Primera propiedad / lugar de servicio</Text>",
+          "            <Text style={styles.quickFieldLabel}>Idioma preferido</Text>\n            <View style={styles.optionWrap}>{propertyContactLanguages.map((preferredLanguage) => <Option key={preferredLanguage} label={preferredLanguage} active={quickClient.preferredLanguage === preferredLanguage} onPress={() => setQuickClient({ ...quickClient, preferredLanguage })} />)}</View>\n            <Text style={styles.quickSectionTitle}>Primera propiedad / lugar de servicio</Text>",
+          'agenda quick client language UI')
+          agenda = replace_once(agenda,
+          "    <View style={styles.halfField}><Input label=\"Teléfono\" value={quickContact.phone} onChangeText={(phone) => setQuickContact({ ...quickContact, phone })} keyboardType=\"phone-pad\" /></View>\n    <View style={styles.halfField}><Input label=\"WhatsApp\" value={quickContact.whatsapp} onChangeText={(whatsapp) => setQuickContact({ ...quickContact, whatsapp })} keyboardType=\"phone-pad\" placeholder=\"Si es igual, puede quedar vacío\" /></View>",
+          "    <View style={styles.halfField}><PhoneField label=\"Teléfono\" value={quickContact.phone} country={quickContact.phoneCountry} onChangeText={(phone) => setQuickContact({ ...quickContact, phone })} onCountryChange={(phoneCountry) => setQuickContact((current) => ({ ...current, phoneCountry }))} /></View>\n    <View style={styles.halfField}><PhoneField label=\"WhatsApp\" value={quickContact.whatsapp} country={quickContact.whatsappCountry} onChangeText={(whatsapp) => setQuickContact({ ...quickContact, whatsapp })} onCountryChange={(whatsappCountry) => setQuickContact((current) => ({ ...current, whatsappCountry }))} placeholder=\"Si queda vacío, usaremos el teléfono\" /></View>",
+          'agenda quick contact phone UI')
+          agenda = replace_once(agenda,
+          "  <View style={styles.optionWrap}>{propertyContactLanguages.map((language) => <Option key={language} label={language} active={quickContact.preferredLanguage === language} onPress={() => setQuickContact({ ...quickContact, preferredLanguage: language })} />)}</View>\n  <View style={styles.modalActions}",
+          "  <View style={styles.optionWrap}>{propertyContactLanguages.map((language) => <Option key={language} label={language} active={quickContact.preferredLanguage === language} onPress={() => setQuickContact({ ...quickContact, preferredLanguage: language })} />)}</View>\n  <Text style={styles.quickFieldLabel}>Preferencias operativas</Text>\n  <View style={styles.optionWrap}><Option label=\"Confirmación por defecto\" active={quickContact.defaultSendConfirmation} onPress={() => setQuickContact({ ...quickContact, defaultSendConfirmation: !quickContact.defaultSendConfirmation })} /><Option label=\"Recordatorio por defecto\" active={quickContact.defaultSendReminder} onPress={() => setQuickContact({ ...quickContact, defaultSendReminder: !quickContact.defaultSendReminder })} /><Option label=\"Contacto para llamar al llegar\" active={quickContact.arrivalContact} onPress={() => setQuickContact({ ...quickContact, arrivalContact: !quickContact.arrivalContact })} /></View>\n  <View style={styles.modalActions}",
+          'agenda quick contact preferences UI')
+          agenda = replace_once(agenda,
+          "<Text style={styles.propertyContactMeta}>{contact.role} · WhatsApp {contact.whatsapp || contact.phone} · {contact.preferredLanguage}</Text>",
+          "<Text style={styles.propertyContactMeta}>{contact.role} · WhatsApp {contact.whatsapp || contact.phone} · {contact.preferredLanguage}{contact.arrivalContact ? ' · Llamar al llegar' : ''}</Text>",
+          'agenda property contact arrival display')
+          Path('src/screens/AgendaScreen.tsx').write_text(agenda, encoding='utf-8')
+          PY
+          python3 /tmp/patch_pr37.py
+      - name: Install dependencies
+        run: npm install libphonenumber-js
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build web
+        run: npm run build:web
+      - name: Commit validated source
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json src/types.ts src/state/AppState.tsx src/screens/ClientsScreen.tsx src/screens/AgendaScreen.tsx src/components/PhoneField.tsx src/utils/phone.ts
+          if git diff --cached --quiet; then
+            echo "No source changes to commit."
+            exit 0
+          fi
+          git commit -m "Add client language and international phone support"
+          git push origin HEAD:feature/client-language-international-phone
