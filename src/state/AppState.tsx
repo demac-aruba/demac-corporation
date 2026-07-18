@@ -22,7 +22,7 @@ import {
   signInWithFirebaseEmail,
   updateFirestoreDocument,
 } from '../services/firebase';
-import { Client, InventoryItem, Invoice, Property, ServiceType, User, UserRole, WhatsAppLocationMessage, WorkOrder, WorkOrderEvidence } from '../types';
+import { Client, InventoryItem, Invoice, Property, ServiceType, User, UserRole, WhatsAppLocationMessage, WorkOrder, WorkOrderEvidence, WorkOrderUnit } from '../types';
 
 const STORAGE_KEY = '@demac-corporation-demo-state-v3';
 const FIRESTORE_SYNC_INTERVAL_MS = 30_000;
@@ -51,6 +51,7 @@ type PersistedState = {
   services: ServiceType[];
   workOrders: WorkOrder[];
   workOrderEvidence: WorkOrderEvidence[];
+  workOrderUnits: WorkOrderUnit[];
   inventory: InventoryItem[];
   invoices: Invoice[];
 };
@@ -68,6 +69,7 @@ type AppStateValue = {
   vans: typeof demoVans;
   workOrders: WorkOrder[];
   workOrderEvidence: WorkOrderEvidence[];
+  workOrderUnits: WorkOrderUnit[];
   inventory: InventoryItem[];
   invoices: Invoice[];
   whatsappLocations: WhatsAppLocationMessage[];
@@ -93,6 +95,8 @@ type AppStateValue = {
   updateWorkOrder: (id: string, changes: Partial<WorkOrder>) => Promise<OperationResult>;
   addWorkOrderEvidence: (evidence: WorkOrderEvidence) => Promise<OperationResult>;
   removeWorkOrderEvidence: (id: string) => Promise<OperationResult>;
+  saveWorkOrderUnit: (unit: WorkOrderUnit) => Promise<OperationResult>;
+  removeWorkOrderUnit: (id: string) => Promise<OperationResult>;
   refreshOperationalData: () => Promise<void>;
   clearDataError: () => void;
   adjustInventory: (id: string, quantityDelta: number) => void;
@@ -161,6 +165,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [services, setServices] = useState<ServiceType[]>(normalizedDemoServices);
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>(demoWorkOrders);
   const [workOrderEvidence, setWorkOrderEvidence] = useState<WorkOrderEvidence[]>([]);
+  const [workOrderUnits, setWorkOrderUnits] = useState<WorkOrderUnit[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>(demoInventory);
   const [invoices, setInvoices] = useState<Invoice[]>(demoInvoices);
   const [whatsappLocations, setWhatsappLocations] = useState<WhatsAppLocationMessage[]>([]);
@@ -173,12 +178,13 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const refreshOperationalData = useCallback(async (showLoader = true) => {
     if (showLoader) setDataLoading(true);
     try {
-      const [remoteClients, remoteProperties, remoteServices, remoteWorkOrders, remoteEvidence, remoteWhatsappMessages] = await Promise.all([
+      const [remoteClients, remoteProperties, remoteServices, remoteWorkOrders, remoteEvidence, remoteUnits, remoteWhatsappMessages] = await Promise.all([
         listFirestoreCollection<Client>('clients'),
         listFirestoreCollection<Property>('properties'),
         listFirestoreCollection<ServiceType>('services'),
         listFirestoreCollection<WorkOrder>('workOrders'),
         listFirestoreCollection<WorkOrderEvidence>('workOrderEvidence'),
+        listFirestoreCollection<WorkOrderUnit>('workOrderUnits'),
         listFirestoreCollection<WhatsAppLocationMessage>('whatsappMessages'),
       ]);
       setClients(sortClients(remoteClients));
@@ -186,6 +192,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       setServices(sortCatalog(remoteServices));
       setWorkOrders(sortWorkOrders(remoteWorkOrders));
       setWorkOrderEvidence([...remoteEvidence].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt)));
+      setWorkOrderUnits([...remoteUnits].sort((a, b) => `${a.workOrderId}-${a.sequence}`.localeCompare(`${b.workOrderId}-${b.sequence}`)));
       setWhatsappLocations(remoteWhatsappMessages.map((message) => ({
         ...message,
         latitude: Number(message.latitude ?? message.raw?.location?.latitude),
@@ -216,6 +223,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           if (Array.isArray(parsed.services)) setServices(parsed.services);
           if (Array.isArray(parsed.workOrders)) setWorkOrders(parsed.workOrders);
           if (Array.isArray(parsed.workOrderEvidence)) setWorkOrderEvidence(parsed.workOrderEvidence);
+          if (Array.isArray(parsed.workOrderUnits)) setWorkOrderUnits(parsed.workOrderUnits);
           if (Array.isArray(parsed.inventory)) setInventory(parsed.inventory);
           if (Array.isArray(parsed.invoices)) setInvoices(parsed.invoices);
         }
@@ -242,6 +250,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         setServices([]);
         setWorkOrders([]);
         setWorkOrderEvidence([]);
+        setWorkOrderUnits([]);
         await refreshOperationalData(true);
       } catch (error) {
         console.warn('No se pudo restaurar la sesión de Firebase:', error);
@@ -261,7 +270,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!localHydrated || currentUser?.authProvider === 'firebase') return;
-    const state: PersistedState = { clients, properties, services, workOrders, workOrderEvidence, inventory, invoices };
+    const state: PersistedState = { clients, properties, services, workOrders, workOrderEvidence, workOrderUnits, inventory, invoices };
     AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(state)).catch((error) => {
       console.warn('No se pudo guardar el estado DEMO:', error);
     });
@@ -273,6 +282,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     setServices(normalizedDemoServices);
     setWorkOrders(demoWorkOrders);
     setWorkOrderEvidence([]);
+    setWorkOrderUnits([]);
     setInventory(demoInventory);
     setInvoices(demoInvoices);
     setWhatsappLocations([]);
@@ -305,6 +315,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       setServices([]);
       setWorkOrders([]);
       setWorkOrderEvidence([]);
+      setWorkOrderUnits([]);
       await refreshOperationalData(true);
       return { ok: true };
     } catch (error) {
@@ -620,6 +631,42 @@ const deleteTestClient = async (id: string): Promise<OperationResult> => {
     }
   };
 
+
+  const saveWorkOrderUnit = async (unit: WorkOrderUnit): Promise<OperationResult> => {
+    if (currentUser?.authProvider !== 'firebase') {
+      setWorkOrderUnits((previous) => [unit, ...previous.filter((item) => item.id !== unit.id)]);
+      return { ok: true };
+    }
+    try {
+      await saveFirestoreDocument('workOrderUnits', unit);
+      setWorkOrderUnits((previous) => [unit, ...previous.filter((item) => item.id !== unit.id)]);
+      setDataError(null);
+      setLastSyncedAt(new Date().toISOString());
+      return { ok: true };
+    } catch (error) {
+      const message = friendlyDataError(error);
+      setDataError(message);
+      return { ok: false, message };
+    }
+  };
+
+  const removeWorkOrderUnit = async (id: string): Promise<OperationResult> => {
+    if (currentUser?.authProvider !== 'firebase') {
+      setWorkOrderUnits((previous) => previous.filter((item) => item.id !== id));
+      return { ok: true };
+    }
+    try {
+      await deleteFirestoreDocument('workOrderUnits', id);
+      setWorkOrderUnits((previous) => previous.filter((item) => item.id !== id));
+      setDataError(null);
+      return { ok: true };
+    } catch (error) {
+      const message = friendlyDataError(error);
+      setDataError(message);
+      return { ok: false, message };
+    }
+  };
+
   const adjustInventory = (id: string, quantityDelta: number) => {
     setInventory((previous) => previous.map((item) => item.id === id ? { ...item, quantity: Math.max(0, item.quantity + quantityDelta) } : item));
   };
@@ -647,6 +694,7 @@ const deleteTestClient = async (id: string): Promise<OperationResult> => {
     vans: demoVans,
     workOrders,
     workOrderEvidence,
+    workOrderUnits,
     inventory,
     invoices,
     whatsappLocations,
@@ -672,6 +720,8 @@ const deleteTestClient = async (id: string): Promise<OperationResult> => {
     updateWorkOrder,
     addWorkOrderEvidence,
     removeWorkOrderEvidence,
+    saveWorkOrderUnit,
+    removeWorkOrderUnit,
     refreshOperationalData: () => refreshOperationalData(true),
     clearDataError: () => setDataError(null),
     adjustInventory,
@@ -684,6 +734,7 @@ const deleteTestClient = async (id: string): Promise<OperationResult> => {
     services,
     workOrders,
     workOrderEvidence,
+    workOrderUnits,
     inventory,
     invoices,
     whatsappLocations,

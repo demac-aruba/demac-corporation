@@ -5,7 +5,7 @@ import { useAppState } from '../state/AppState';
 import { colors } from '../theme';
 
 export function WorkOrdersScreen() {
-  const { workOrders, workOrderEvidence, clients, services, users, vans, updateWorkOrder } = useAppState();
+  const { workOrders, workOrderEvidence, workOrderUnits, clients, services, users, vans, updateWorkOrder } = useAppState();
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState(workOrders[0]?.id ?? '');
   const [statusFilter, setStatusFilter] = useState('Todos');
@@ -25,6 +25,7 @@ export function WorkOrdersScreen() {
   const van = vans.find((item) => item.id === selected?.vanId);
   const technicians = selected?.technicianIds.map((id) => users.find((user) => user.id === id)?.name).filter(Boolean) ?? [];
   const selectedEvidence = workOrderEvidence.filter((item) => item.workOrderId === selected?.id);
+  const selectedUnits = workOrderUnits.filter((item) => item.workOrderId === selected?.id).sort((a, b) => a.sequence - b.sequence);
 
   const statuses = ['Todos', 'Solicitud recibida', 'Reserva temporal', 'Confirmada', 'Asignada', 'En proceso', 'Pendiente', 'Completada', 'Reprogramada', 'Cancelada', 'Facturada', 'Pagada'];
 
@@ -95,7 +96,7 @@ export function WorkOrdersScreen() {
                     {Object.entries(selected.measurements).map(([key, value]) => <View key={key} style={styles.measure}><Text style={styles.measureKey}>{key}</Text><Text style={styles.measureValue}>{value}</Text></View>)}
                   </View>
                 ) : null}
-                {selectedEvidence.length ? <View style={styles.evidenceSection}><Text style={styles.reportLabel}>Evidencia fotográfica ({selectedEvidence.length})</Text><View style={styles.evidenceGrid}>{selectedEvidence.map((evidence) => <View key={evidence.id} style={styles.evidenceItem}><Image source={{ uri: evidence.downloadUrl }} style={styles.evidenceImage} /><Text style={styles.evidenceLabel}>{evidence.label}</Text><Text style={styles.evidenceMeta}>{evidence.uploadedByName}</Text></View>)}</View></View> : <Text style={styles.reportValue}>No hay fotografías permanentes registradas.</Text>}
+                {selectedEvidence.length ? <View style={styles.evidenceSection}><Text style={styles.reportLabel}>Evidencia fotográfica ({selectedEvidence.length})</Text>{(selectedUnits.length ? selectedUnits : [{ id: 'general', label: 'Evidencia general', status: 'in_progress' }]).map((unit) => { const unitEvidence = selectedEvidence.filter((evidence) => (evidence.unitId || 'general') === unit.id || (!selectedUnits.length && true)); if (!unitEvidence.length) return null; return <View key={unit.id} style={styles.unitEvidenceGroup}><View style={styles.unitEvidenceHeader}><Text style={styles.unitEvidenceTitle}>{unit.label}</Text><Pill label={unit.status === 'completed' ? 'Completada' : unit.status === 'pending' ? 'Pendiente' : 'En proceso'} tone={unit.status === 'completed' ? 'success' : unit.status === 'pending' ? 'warning' : 'info'} /></View><View style={styles.evidenceGrid}>{unitEvidence.map((evidence) => <View key={evidence.id} style={styles.evidenceItem}><Image source={{ uri: evidence.downloadUrl }} style={styles.evidenceImage} /><Text style={styles.evidenceLabel}>{evidence.label}</Text><Text style={styles.evidenceMeta}>{evidence.section.replace(/_/g, ' ')} · {evidence.uploadedByName}</Text></View>)}</View></View>; })}</View> : <Text style={styles.reportValue}>No hay fotografías permanentes registradas.</Text>}
                 <View style={styles.actionRow}>
                   <Button variant="secondary" label="Marcar pendiente" onPress={() => updateWorkOrder(selected.id, { status: 'Pendiente' })} />
                   <Button variant="success" label={selected.reportGenerated ? 'Reporte generado' : 'Aprobar y generar reporte'} disabled={selected.reportGenerated} onPress={() => updateWorkOrder(selected.id, { reportGenerated: true, status: selected.status === 'Completada' ? 'Facturada' : selected.status })} />
@@ -157,6 +158,9 @@ const styles = StyleSheet.create({
   measureKey: { color: colors.muted, fontSize: 9, textTransform: 'uppercase' },
   measureValue: { color: colors.text, fontWeight: '900', marginTop: 5 },
   evidenceSection: { marginTop: 18 },
+  unitEvidenceGroup: { marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.border },
+  unitEvidenceHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  unitEvidenceTitle: { color: colors.text, fontWeight: '900', flex: 1 },
   evidenceGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 10 },
   evidenceItem: { width: 150, gap: 4 },
   evidenceImage: { width: 150, height: 112, borderRadius: 10, backgroundColor: '#EEF2F6' },

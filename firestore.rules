@@ -158,6 +158,18 @@ service cloud.firestore {
       allow delete: if adminOrSupervisor();
     }
 
+    match /workOrderUnits/{unitId} {
+      allow read: if activeStaff();
+      allow create: if operationsRole()
+        || (assignedToWorkOrderId(request.resource.data.workOrderId)
+          && request.resource.data.createdByUserId == request.auth.uid);
+      allow update: if operationsRole()
+        || (assignedToWorkOrderId(resource.data.workOrderId)
+          && request.resource.data.workOrderId == resource.data.workOrderId);
+      allow delete: if operationsRole()
+        || assignedToWorkOrderId(resource.data.workOrderId);
+    }
+
     match /workOrderEvidence/{evidenceId} {
       allow read: if activeStaff();
       allow create: if operationsRole()

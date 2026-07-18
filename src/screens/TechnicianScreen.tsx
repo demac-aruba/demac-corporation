@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Image, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { TechnicianEvidenceReport } from '../components/TechnicianEvidenceReport';
 import { Button, Card, EmptyState, Input, Pill, SectionTitle, statusTone } from '../components/UI';
 import { usePwaStatus } from '../hooks/usePwaStatus';
 import { useAppState } from '../state/TeamState';
@@ -466,6 +467,8 @@ export function TechnicianScreen() {
               </View>
             </Card>
 
+            <TechnicianEvidenceReport order={selected} currentStaff={currentStaff} />
+
             <Card>
               <SectionTitle title="Mediciones básicas" subtitle="Los protocolos específicos por servicio se añadirán en el próximo módulo." />
               <View style={styles.inputGrid}>
@@ -485,13 +488,8 @@ export function TechnicianScreen() {
               <Input label="Trabajo realizado" multiline value={draft.workPerformed} onChangeText={(value) => setField('workPerformed', value)} placeholder="Describe las acciones realizadas…" />
               <Input label="Recomendaciones" multiline value={draft.recommendation} onChangeText={(value) => setField('recommendation', value)} placeholder="Recomendaciones para cliente u oficina…" />
 
-              <Text style={styles.photoLabel}>Evidencia permanente ({displayedPhotos.length})</Text>
-              <View style={styles.photoRow}>
-                {displayedPhotos.map((evidence) => <View key={evidence.id}><Image source={{ uri: evidence.downloadUrl }} style={styles.photo} /><Text style={styles.helperText}>{evidence.label}</Text></View>)}
-              </View>
-              <Text style={styles.helperText}>Las fotos se guardan en Firebase Storage y quedan disponibles para oficina y futuros reportes.</Text>
-              <View style={styles.photoActions}><Button compact variant="secondary" label={photoUploading ? "Subiendo…" : "Tomar foto"} disabled={photoUploading} onPress={() => void addPhoto(true)} /><Button compact variant="secondary" label={photoUploading ? "Subiendo…" : "Seleccionar galería"} disabled={photoUploading} onPress={() => void addPhoto(false)} /></View>
-              {photoMessage ? <Text style={styles.helperText}>{photoMessage}</Text> : null}
+              <Text style={styles.photoLabel}>Evidencia fotográfica estructurada</Text>
+              <Text style={styles.helperText}>Las fotografías se toman desde el menú guiado por unidad y quedan clasificadas como Antes, Presiones, Switch, Durante, Después o Hallazgo.</Text>
 
               <Input label="Nombre de quien recibe el trabajo" value={draft.receiverName} onChangeText={(value) => setField('receiverName', value)} placeholder="Nombre completo" />
               <View style={styles.formActions}><Button variant="secondary" label={working ? 'Guardando…' : 'Guardar y enviar borrador'} disabled={working} onPress={() => void saveReport()} /><Button variant="success" label="Completar trabajo" disabled={working} onPress={() => void complete()} /></View>
