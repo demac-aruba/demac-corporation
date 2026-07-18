@@ -50,6 +50,7 @@ type TechnicianDraft = {
   pendingReason: string;
   pendingAction: string;
   requiresSecondVisit: boolean;
+  localPhotos: string[];
 };
 
 const emptyDraft: TechnicianDraft = {
@@ -66,6 +67,7 @@ const emptyDraft: TechnicianDraft = {
   pendingReason: '',
   pendingAction: '',
   requiresSecondVisit: false,
+  localPhotos: [],
 };
 
 function arubaDate(offsetDays = 0) {
@@ -105,6 +107,7 @@ function draftFromOrder(order?: OperationalWorkOrder): TechnicianDraft {
     pendingReason: order.pendingReason ?? '',
     pendingAction: order.pendingAction ?? '',
     requiresSecondVisit: order.requiresSecondVisit ?? false,
+    localPhotos: [],
   };
 }
 
@@ -299,7 +302,13 @@ export function TechnicianScreen() {
       return;
     }
     const changed = await statusChange('Completada', 'Reporte básico completado por el técnico.', reportChanges());
-    if (changed) await AsyncStorage.removeItem(`${DRAFT_PREFIX}${selected.id}`);
+    if (changed) {
+      if (draft.localPhotos.length) {
+        setFormMessage('Trabajo completado. Las fotos temporales permanecen guardadas en este teléfono hasta que activemos Firebase Storage.');
+      } else {
+        await AsyncStorage.removeItem(`${DRAFT_PREFIX}${selected.id}`);
+      }
+    }
   };
 
   const markPending = async () => {
@@ -331,9 +340,9 @@ export function TechnicianScreen() {
         ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.7 })
         : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: true, quality: 0.7 });
       if (result.canceled) return;
-      const updatedPhotos = [...(selected.photos ?? []), ...result.assets.map((asset) => asset.uri)];
-      const saved = await updateWorkOrder(selected.id, { photos: updatedPhotos });
-      setPhotoMessage(saved.ok ? 'Evidencia añadida. En el próximo módulo se almacenará permanentemente en Firebase Storage.' : saved.message ?? 'No se pudo adjuntar la foto.');
+      const localPhotos = result.assets.map((asset) => asset.uri);
+      setDraft((current) => ({ ...current, localPhotos: [...current.localPhotos, ...localPhotos] }));
+      setPhotoMessage(`${localPhotos.length} foto${localPhotos.length === 1 ? '' : 's'} guardada${localPhotos.length === 1 ? '' : 's'} temporalmente en este teléfono. Firebase Storage se activará en el módulo de evidencia permanente.`);
     } catch (error) {
       setPhotoMessage(`No se pudo abrir la cámara o galería: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -345,6 +354,7 @@ export function TechnicianScreen() {
   const assignedNames = selected?.technicianIds
     .map((id) => staffProfiles.find((staff) => staff.id === id)?.name ?? id)
     .join(', ');
+  const displayedPhotos = [...(selected?.photos ?? []), ...draft.localPhotos];
 
   return (
     <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
@@ -438,10 +448,11 @@ export function TechnicianScreen() {
               <Input label="Trabajo realizado" multiline value={draft.workPerformed} onChangeText={(value) => setField('workPerformed', value)} placeholder="Describe las acciones realizadas…" />
               <Input label="Recomendaciones" multiline value={draft.recommendation} onChangeText={(value) => setField('recommendation', value)} placeholder="Recomendaciones para cliente u oficina…" />
 
-              <Text style={styles.photoLabel}>Evidencia temporal ({selected.photos?.length ?? 0})</Text>
+              <Text style={styles.photoLabel}>Evidencia temporal ({displayedPhotos.length})</Text>
               <View style={styles.photoRow}>
-                {(selected.photos ?? []).map((uri, index) => <Image key={`${uri}-${index}`} source={{ uri }} style={styles.photo} />)}
+                {displayedPhotos.map((uri, index) => <Image key={`${uri}-${index}`} source={{ uri }} style={styles.photo} />)}
               </View>
+              {draft.localPhotos.length ? <Text style={styles.helperText}>Estas fotos todavía están guardadas únicamente en este teléfono y no se enviarán a la oficina hasta activar Firebase Storage.</Text> : null}
               <View style={styles.photoActions}><Button compact variant="secondary" label="Tomar foto" onPress={() => void addPhoto(true)} /><Button compact variant="secondary" label="Seleccionar galería" onPress={() => void addPhoto(false)} /></View>
               {photoMessage ? <Text style={styles.helperText}>{photoMessage}</Text> : null}
 

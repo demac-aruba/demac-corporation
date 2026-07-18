@@ -20,6 +20,7 @@ import {
   listFirestoreCollection,
   saveFirestoreDocument,
   signInWithFirebaseEmail,
+  updateFirestoreDocument,
 } from '../services/firebase';
 import { Client, InventoryItem, Invoice, Property, ServiceType, User, UserRole, WhatsAppLocationMessage, WorkOrder } from '../types';
 
@@ -550,19 +551,23 @@ const deleteTestClient = async (id: string): Promise<OperationResult> => {
   const updateWorkOrder = async (id: string, changes: Partial<WorkOrder>): Promise<OperationResult> => {
     const existing = workOrders.find((order) => order.id === id);
     if (!existing) return { ok: false, message: 'La orden ya no existe.' };
-    const updated = { ...existing, ...changes, updatedAt: changes.updatedAt ?? new Date().toISOString() };
+    const patch = { ...changes, updatedAt: changes.updatedAt ?? new Date().toISOString() };
+    const updated = { ...existing, ...patch };
     if (currentUser?.authProvider !== 'firebase') {
       setWorkOrders((previous) => previous.map((order) => order.id === id ? updated : order));
       return { ok: true };
     }
     try {
-      await saveFirestoreDocument('workOrders', updated);
+      await updateFirestoreDocument('workOrders', id, patch as Record<string, unknown>);
       setWorkOrders((previous) => previous.map((order) => order.id === id ? updated : order));
       setDataError(null);
       setLastSyncedAt(new Date().toISOString());
       return { ok: true };
     } catch (error) {
-      const message = friendlyDataError(error);
+      const genericMessage = friendlyDataError(error);
+      const message = currentUser?.role === 'technician' && genericMessage.startsWith('Firebase rechazó')
+        ? 'Firebase rechazó este cambio. Confirma que tu cuenta esté vinculada al empleado correcto y que la orden esté asignada a ese técnico o a su van.'
+        : genericMessage;
       setDataError(message);
       return { ok: false, message };
     }

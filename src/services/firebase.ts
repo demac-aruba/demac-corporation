@@ -182,6 +182,35 @@ export async function saveFirestoreDocument<T extends { id: string }>(
   if (!response.ok) throw new Error(payload?.error?.message ?? `No se pudo guardar ${collectionPath}/${id}.`);
 }
 
+export async function updateFirestoreDocument(
+  collectionPath: string,
+  documentId: string,
+  changes: Record<string, unknown>,
+): Promise<void> {
+  const session = await requireFirebaseSession();
+  const fields = encodeFirestoreFields(changes);
+  const fieldPaths = Object.keys(fields);
+  if (!fieldPaths.length) return;
+
+  const updateMask = fieldPaths
+    .map((fieldPath) => `updateMask.fieldPaths=${encodeURIComponent(fieldPath)}`)
+    .join('&');
+  const response = await fetch(
+    `${getFirestoreBaseUrl()}/${collectionPath}/${encodeURIComponent(documentId)}?${updateMask}`,
+    {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${session.idToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ fields }),
+    },
+  );
+
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload?.error?.message ?? `No se pudo actualizar ${collectionPath}/${documentId}.`);
+}
+
 export async function deleteFirestoreDocument(collectionPath: string, documentId: string): Promise<void> {
   const session = await requireFirebaseSession();
   const response = await fetch(
