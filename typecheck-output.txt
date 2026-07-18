@@ -1,6 +1,0 @@
-
-> demac-corporation@1.0.0 typecheck
-> tsc --noEmit
-
-
-TYPECHECK_EXIT_CODE=0
