@@ -144,7 +144,10 @@ export async function listFirestoreCollection<T extends { id: string }>(collecti
       headers: { Authorization: `Bearer ${session.idToken}` },
     });
     const payload = (await response.json()) as FirestoreListResponse & { error?: { message?: string } };
-    if (!response.ok) throw new Error(payload.error?.message ?? `No se pudo cargar ${collectionPath}.`);
+    if (!response.ok) {
+      if (response.status === 403 && collectionPath === 'whatsappMessages') return documents;
+      throw new Error(payload.error?.message ?? `No se pudo cargar ${collectionPath}.`);
+    }
 
     for (const document of payload.documents ?? []) {
       const id = decodeURIComponent(document.name.split('/').pop() ?? '');
