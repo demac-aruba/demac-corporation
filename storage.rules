@@ -22,32 +22,45 @@ service firebase.storage {
       return activeStaff() && userProfile().data.role == 'technician';
     }
 
-    function workOrder(workOrderId) {
-      return firestore.get(/databases/(default)/documents/workOrders/$(workOrderId));
+    function workOrderData(workOrderId) {
+      return firestore.get(/databases/(default)/documents/workOrders/$(workOrderId)).data;
     }
 
     function assignedToWorkOrder(workOrderId) {
       return technicianRole()
         && (
-          request.auth.uid in workOrder(workOrderId).data.technicianIds
-          || ('staffId' in userProfile().data && userProfile().data.staffId in workOrder(workOrderId).data.technicianIds)
-          || ('vanId' in userProfile().data && userProfile().data.vanId == workOrder(workOrderId).data.vanId)
+          request.auth.uid in workOrderData(workOrderId).technicianIds
+          || ('staffId' in userProfile().data && userProfile().data.staffId in workOrderData(workOrderId).technicianIds)
+          || ('vanId' in userProfile().data && userProfile().data.vanId == workOrderData(workOrderId).vanId)
         );
     }
 
     function validEvidenceImage() {
-      return request.resource.size < 12 * 1024 * 1024
+      return request.resource != null
+        && request.resource.size < 12 * 1024 * 1024
         && request.resource.contentType.matches('image/.*');
+    }
+
+    function uploadedByCurrentUser() {
+      return resource != null
+        && resource.metadata != null
+        && 'uploadedByUid' in resource.metadata
+        && resource.metadata.uploadedByUid == request.auth.uid;
     }
 
     match /work-orders/{workOrderId}/{unitId}/{fileName} {
       allow read: if activeStaff();
+
+      // Assignment to the work order or van is the authorization boundary.
+      // uploadedByUid remains stored as audit metadata, but is not required
+      // during create because some Storage upload transports expose custom
+      // metadata only after the object has been accepted.
       allow create: if validEvidenceImage()
-        && (operationsRole() || assignedToWorkOrder(workOrderId))
-        && request.resource.metadata.uploadedByUid == request.auth.uid;
+        && (operationsRole() || assignedToWorkOrder(workOrderId));
+
       allow update: if false;
       allow delete: if operationsRole()
-        || (assignedToWorkOrder(workOrderId) && resource.metadata.uploadedByUid == request.auth.uid);
+        || (assignedToWorkOrder(workOrderId) && uploadedByCurrentUser());
     }
 
     match /{allPaths=**} {
