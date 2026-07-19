@@ -347,6 +347,54 @@ export interface WorkOrderScheduleHistoryEntry {
   recordedAt: string;
 }
 
+export type WorkOrderUnitStatus = 'not_started' | 'in_progress' | 'completed' | 'pending' | 'not_accessible';
+
+export interface UnitMeasurements {
+  lowPressure?: string;
+  highPressure?: string;
+  returnTemp?: string;
+  supplyTemp?: string;
+  amperage?: string;
+  refrigerant?: string;
+  ambientTemp?: string;
+  notes?: string;
+}
+
+export interface DisconnectInspection {
+  safetyConfirmed: boolean;
+  condition: 'Buen estado' | 'Requiere mantenimiento' | 'Reemplazo recomendado' | 'Peligro de seguridad' | 'No inspeccionado';
+  notes?: string;
+}
+
+export interface UnitFinding {
+  id: string;
+  category: string;
+  severity: 'Informativo' | 'Mantenimiento recomendado' | 'Urgente' | 'Peligro de seguridad';
+  description: string;
+  clientInformed: boolean;
+  createdAt: string;
+  createdByName: string;
+}
+
+export interface WorkOrderUnit {
+  id: string;
+  workOrderId: string;
+  equipmentId?: string;
+  label: string;
+  sequence: number;
+  status: WorkOrderUnitStatus;
+  skippedItems?: Record<string, string>;
+  initialMeasurements?: UnitMeasurements;
+  finalMeasurements?: UnitMeasurements;
+  disconnectInspection: DisconnectInspection;
+  findings?: UnitFinding[];
+  completedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  createdByUserId: string;
+  createdByName: string;
+}
+
 export type EvidenceSection =
   | 'identification'
   | 'before_service'
