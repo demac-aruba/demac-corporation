@@ -1,0 +1,57 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userProfile() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid));
+    }
+
+    function activeStaff() {
+      return signedIn() && userProfile().data.active == true;
+    }
+
+    function operationsRole() {
+      return activeStaff() && userProfile().data.role in ['admin', 'office', 'supervisor'];
+    }
+
+    function technicianRole() {
+      return activeStaff() && userProfile().data.role == 'technician';
+    }
+
+    function workOrder(workOrderId) {
+      return firestore.get(/databases/(default)/documents/workOrders/$(workOrderId));
+    }
+
+    function assignedToWorkOrder(workOrderId) {
+      return technicianRole()
+        && (
+          request.auth.uid in workOrder(workOrderId).data.technicianIds
+          || ('staffId' in userProfile().data && userProfile().data.staffId in workOrder(workOrderId).data.technicianIds)
+          || ('vanId' in userProfile().data && userProfile().data.vanId == workOrder(workOrderId).data.vanId)
+        );
+    }
+
+    function validEvidenceImage() {
+      return request.resource.size < 12 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    match /work-orders/{workOrderId}/{unitId}/{fileName} {
+      allow read: if activeStaff();
+      allow create: if validEvidenceImage()
+        && (operationsRole() || assignedToWorkOrder(workOrderId))
+        && request.resource.metadata.uploadedByUid == request.auth.uid;
+      allow update: if false;
+      allow delete: if operationsRole()
+        || (assignedToWorkOrder(workOrderId) && resource.metadata.uploadedByUid == request.auth.uid);
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

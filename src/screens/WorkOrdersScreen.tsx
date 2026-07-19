@@ -1,11 +1,11 @@
 import React, { useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Button, Card, EmptyState, formatMoney, Input, Pill, SectionTitle, statusTone } from '../components/UI';
 import { useAppState } from '../state/AppState';
 import { colors } from '../theme';
 
 export function WorkOrdersScreen() {
-  const { workOrders, clients, services, users, vans, updateWorkOrder } = useAppState();
+  const { workOrders, workOrderEvidence, clients, services, users, vans, updateWorkOrder } = useAppState();
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState(workOrders[0]?.id ?? '');
   const [statusFilter, setStatusFilter] = useState('Todos');
@@ -24,6 +24,7 @@ export function WorkOrdersScreen() {
   const service = services.find((item) => item.id === selected?.serviceId);
   const van = vans.find((item) => item.id === selected?.vanId);
   const technicians = selected?.technicianIds.map((id) => users.find((user) => user.id === id)?.name).filter(Boolean) ?? [];
+  const selectedEvidence = workOrderEvidence.filter((item) => item.workOrderId === selected?.id);
 
   const statuses = ['Todos', 'Solicitud recibida', 'Reserva temporal', 'Confirmada', 'Asignada', 'En proceso', 'Pendiente', 'Completada', 'Reprogramada', 'Cancelada', 'Facturada', 'Pagada'];
 
@@ -94,6 +95,7 @@ export function WorkOrdersScreen() {
                     {Object.entries(selected.measurements).map(([key, value]) => <View key={key} style={styles.measure}><Text style={styles.measureKey}>{key}</Text><Text style={styles.measureValue}>{value}</Text></View>)}
                   </View>
                 ) : null}
+                {selectedEvidence.length ? <View style={styles.evidenceSection}><Text style={styles.reportLabel}>Evidencia fotográfica ({selectedEvidence.length})</Text><View style={styles.evidenceGrid}>{selectedEvidence.map((evidence) => <View key={evidence.id} style={styles.evidenceItem}><Image source={{ uri: evidence.downloadUrl }} style={styles.evidenceImage} /><Text style={styles.evidenceLabel}>{evidence.label}</Text><Text style={styles.evidenceMeta}>{evidence.uploadedByName}</Text></View>)}</View></View> : <Text style={styles.reportValue}>No hay fotografías permanentes registradas.</Text>}
                 <View style={styles.actionRow}>
                   <Button variant="secondary" label="Marcar pendiente" onPress={() => updateWorkOrder(selected.id, { status: 'Pendiente' })} />
                   <Button variant="success" label={selected.reportGenerated ? 'Reporte generado' : 'Aprobar y generar reporte'} disabled={selected.reportGenerated} onPress={() => updateWorkOrder(selected.id, { reportGenerated: true, status: selected.status === 'Completada' ? 'Facturada' : selected.status })} />
@@ -154,5 +156,11 @@ const styles = StyleSheet.create({
   measure: { minWidth: 120, flex: 1, backgroundColor: '#F6F8FB', borderRadius: 10, padding: 12 },
   measureKey: { color: colors.muted, fontSize: 9, textTransform: 'uppercase' },
   measureValue: { color: colors.text, fontWeight: '900', marginTop: 5 },
+  evidenceSection: { marginTop: 18 },
+  evidenceGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 10 },
+  evidenceItem: { width: 150, gap: 4 },
+  evidenceImage: { width: 150, height: 112, borderRadius: 10, backgroundColor: '#EEF2F6' },
+  evidenceLabel: { color: colors.text, fontSize: 10, fontWeight: '800' },
+  evidenceMeta: { color: colors.muted, fontSize: 8 },
   actionRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 10, marginTop: 18 },
 });
