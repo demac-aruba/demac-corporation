@@ -44,6 +44,20 @@ async function requireSession() {
   return session;
 }
 
+function buildMultipartUploadBody(metadata: Record<string, unknown>, file: Blob, contentType: string) {
+  const boundary = `demac-${randomToken().replace(/[^a-zA-Z0-9_-]/g, '')}`;
+  const body = new Blob([
+    `--${boundary}\r\n`,
+    'Content-Type: application/json; charset=UTF-8\r\n\r\n',
+    JSON.stringify(metadata),
+    `\r\n--${boundary}\r\n`,
+    `Content-Type: ${contentType}\r\n\r\n`,
+    file,
+    `\r\n--${boundary}--\r\n`,
+  ], { type: `multipart/related; boundary=${boundary}` });
+  return { body, contentTypeHeader: `multipart/related; boundary=${boundary}` };
+}
+
 export async function uploadWorkOrderEvidenceImage(input: UploadEvidenceInput): Promise<StorageUploadResult> {
   if (!storageBucket) throw new Error('Firebase Storage no está configurado para este entorno.');
   const session = await requireSession();
@@ -72,18 +86,25 @@ export async function uploadWorkOrderEvidenceImage(input: UploadEvidenceInput): 
     },
   };
 
-  const formData = new FormData();
-  formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json; charset=UTF-8' }));
-  formData.append('file', blob, `${evidenceId}.${extension}`);
-
+  // The Google/Firebase Storage JSON API requires multipart/related for a
+  // single request containing both object metadata and binary file data.
+  // FormData produces multipart/form-data, which can hide the final object
+  // metadata from Storage Rules and cause a misleading permission denied.
+  const multipart = buildMultipartUploadBody(metadata, blob, contentType);
   const endpoint = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(storageBucket)}/o?uploadType=multipart&name=${encodeURIComponent(storagePath)}`;
   const response = await fetch(endpoint, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${session.idToken}` },
-    body: formData,
+    headers: {
+      Authorization: `Bearer ${session.idToken}`,
+      'Content-Type': multipart.contentTypeHeader,
+    },
+    body: multipart.body,
   });
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload?.error?.message ?? 'Firebase Storage rechazó la fotografía.');
+  const payload = await response.json().catch(() => undefined);
+  if (!response.ok) {
+    const message = payload?.error?.message ?? 'Firebase Storage rechazó la fotografía.';
+    throw new Error(`${message} (Storage ${response.status})`);
+  }
 
   const token = payload.downloadTokens || payload.metadata?.firebaseStorageDownloadTokens || downloadToken;
   const downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(storageBucket)}/o/${encodeURIComponent(storagePath)}?alt=media&token=${encodeURIComponent(String(token).split(',')[0])}`;
