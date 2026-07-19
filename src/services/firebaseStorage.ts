@@ -18,6 +18,13 @@ type UploadEvidenceInput = {
   fileName?: string | null;
 };
 
+type FirebaseStoragePayload = {
+  downloadTokens?: string | string[];
+  metadata?: Record<string, string>;
+  error?: { message?: string };
+  message?: string;
+};
+
 function safeSegment(value: string, fallback: string) {
   const cleaned = value.trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
   return cleaned || fallback;
@@ -58,14 +65,36 @@ function buildMultipartUploadBody(metadata: Record<string, unknown>, file: Blob,
   return { body, contentTypeHeader: `multipart/related; boundary=${boundary}` };
 }
 
-function storageResponseMessage(responseText: string) {
+function parseStoragePayload(responseText: string): FirebaseStoragePayload | undefined {
   if (!responseText.trim()) return undefined;
   try {
-    const payload = JSON.parse(responseText);
-    return payload?.error?.message ?? payload?.message ?? responseText.trim();
+    return JSON.parse(responseText) as FirebaseStoragePayload;
   } catch {
-    return responseText.trim();
+    return undefined;
   }
+}
+
+function storageResponseMessage(responseText: string) {
+  const payload = parseStoragePayload(responseText);
+  const fallback = responseText.trim();
+  return payload?.error?.message ?? payload?.message ?? (fallback || undefined);
+}
+
+function downloadTokenFromPayload(payload?: FirebaseStoragePayload) {
+  const rawToken = payload?.downloadTokens ?? payload?.metadata?.firebaseStorageDownloadTokens;
+  if (Array.isArray(rawToken)) return rawToken[0];
+  return rawToken?.split(',')[0];
+}
+
+async function fetchGeneratedDownloadToken(storagePath: string, idToken: string) {
+  const endpoint = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(storageBucket!)}/o/${encodeURIComponent(storagePath)}`;
+  const response = await fetch(endpoint, { headers: { Authorization: `Bearer ${idToken}` } });
+  const responseText = await response.text();
+  if (!response.ok) {
+    const message = storageResponseMessage(responseText) ?? 'No se pudo obtener el enlace de descarga de la fotografía.';
+    throw new Error(`${message} (Storage ${response.status})`);
+  }
+  return downloadTokenFromPayload(parseStoragePayload(responseText));
 }
 
 export async function uploadWorkOrderEvidenceImage(input: UploadEvidenceInput): Promise<StorageUploadResult> {
@@ -83,12 +112,10 @@ export async function uploadWorkOrderEvidenceImage(input: UploadEvidenceInput): 
   const unitId = safeSegment(input.unitId || 'general', 'general');
   const evidenceId = safeSegment(input.evidenceId, randomToken());
   const storagePath = `work-orders/${workOrderId}/${unitId}/${evidenceId}.${extension}`;
-  const downloadToken = randomToken();
   const metadata = {
     name: storagePath,
     contentType,
     metadata: {
-      firebaseStorageDownloadTokens: downloadToken,
       workOrderId: input.workOrderId,
       unitId: input.unitId || 'general',
       evidenceId: input.evidenceId,
@@ -96,9 +123,8 @@ export async function uploadWorkOrderEvidenceImage(input: UploadEvidenceInput): 
     },
   };
 
-  // Match the Firebase Web SDK multipart protocol exactly: the Firebase
-  // endpoint uses X-Goog-Upload-Protocol and a name query parameter. The
-  // Cloud Storage JSON API uploadType parameter is not valid on this endpoint.
+  // Firebase owns the reserved download-token metadata. The client sends only
+  // DEMAC audit metadata and reads the server-generated token after upload.
   const multipart = buildMultipartUploadBody(metadata, blob, contentType);
   const endpoint = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(storageBucket)}/o?name=${encodeURIComponent(storagePath)}`;
   const response = await fetch(endpoint, {
@@ -111,14 +137,16 @@ export async function uploadWorkOrderEvidenceImage(input: UploadEvidenceInput): 
     body: multipart.body,
   });
   const responseText = await response.text();
-  const payload = responseText ? JSON.parse(responseText) : undefined;
+  const payload = parseStoragePayload(responseText);
   if (!response.ok) {
     const message = storageResponseMessage(responseText) ?? 'Firebase Storage rechazó la fotografía.';
     throw new Error(`${message} (Storage ${response.status})`);
   }
 
-  const token = payload?.downloadTokens || payload?.metadata?.firebaseStorageDownloadTokens || downloadToken;
-  const downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(storageBucket)}/o/${encodeURIComponent(storagePath)}?alt=media&token=${encodeURIComponent(String(token).split(',')[0])}`;
+  const token = downloadTokenFromPayload(payload) ?? await fetchGeneratedDownloadToken(storagePath, session.idToken);
+  if (!token) throw new Error('La fotografía subió, pero Firebase no devolvió su enlace de descarga.');
+
+  const downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(storageBucket)}/o/${encodeURIComponent(storagePath)}?alt=media&token=${encodeURIComponent(token)}`;
   return { storagePath, downloadUrl, contentType, sizeBytes: blob.size };
 }
 
