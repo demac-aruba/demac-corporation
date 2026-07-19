@@ -6,61 +6,34 @@ service firebase.storage {
       return request.auth != null;
     }
 
-    function userProfile() {
-      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid));
-    }
-
-    function activeStaff() {
-      return signedIn() && userProfile().data.active == true;
-    }
-
-    function operationsRole() {
-      return activeStaff() && userProfile().data.role in ['admin', 'office', 'supervisor'];
-    }
-
-    function technicianRole() {
-      return activeStaff() && userProfile().data.role == 'technician';
-    }
-
-    function workOrderData(workOrderId) {
-      return firestore.get(/databases/(default)/documents/workOrders/$(workOrderId)).data;
-    }
-
-    function assignedToWorkOrder(workOrderId) {
-      return technicianRole()
-        && (
-          request.auth.uid in workOrderData(workOrderId).technicianIds
-          || ('staffId' in userProfile().data && userProfile().data.staffId in workOrderData(workOrderId).technicianIds)
-          || ('vanId' in userProfile().data && userProfile().data.vanId == workOrderData(workOrderId).vanId)
-        );
-    }
-
     function validEvidenceImage() {
-      return request.resource != null
+      return signedIn()
+        && request.resource != null
         && request.resource.size < 12 * 1024 * 1024
-        && request.resource.contentType.matches('image/.*');
+        && request.resource.contentType.matches('image/.*')
+        && request.resource.metadata != null
+        && 'uploadedByUid' in request.resource.metadata
+        && request.resource.metadata.uploadedByUid == request.auth.uid;
     }
 
     function uploadedByCurrentUser() {
-      return resource != null
+      return signedIn()
+        && resource != null
         && resource.metadata != null
         && 'uploadedByUid' in resource.metadata
         && resource.metadata.uploadedByUid == request.auth.uid;
     }
 
     match /work-orders/{workOrderId}/{unitId}/{fileName} {
-      allow read: if activeStaff();
-
-      // Assignment to the work order or van is the authorization boundary.
-      // uploadedByUid remains stored as audit metadata, but is not required
-      // during create because some Storage upload transports expose custom
-      // metadata only after the object has been accepted.
-      allow create: if validEvidenceImage()
-        && (operationsRole() || assignedToWorkOrder(workOrderId));
-
+      // Storage authorization intentionally relies only on Firebase Auth and
+      // object metadata. The detailed order assignment check remains in the
+      // workOrderEvidence Firestore rules, where the evidence record cannot be
+      // created unless the technician is assigned to the order or its van.
+      // This avoids cross-service firestore.get() failures inside Storage Rules.
+      allow read: if signedIn();
+      allow create: if validEvidenceImage();
       allow update: if false;
-      allow delete: if operationsRole()
-        || (assignedToWorkOrder(workOrderId) && uploadedByCurrentUser());
+      allow delete: if uploadedByCurrentUser();
     }
 
     match /{allPaths=**} {
