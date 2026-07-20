@@ -1,5 +1,5 @@
 import * as ImagePicker from 'expo-image-picker';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Image, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { AppModal, Button, Card, EmptyState, formatMoney, Input, Pill, SectionTitle } from '../components/UI';
 import {
@@ -195,6 +195,7 @@ export function InventoryScreen() {
 
   async function uploadPhotosForAssets(assets: VanToolAssetV2[], photos: Array<PendingPhoto | null>, phase: 'initial' | 'control', checkId?: string) {
     if (!currentUser) throw new Error('Debes iniciar sesión.');
+    const evidenceIds: Record<string, string> = {};
     for (let index = 0; index < assets.length; index += 1) {
       const asset = assets[index];
       const photo = photos[(asset.trackingMode ?? 'individual') === 'quantity' ? 0 : index];
@@ -225,8 +226,10 @@ export function InventoryScreen() {
         latestPhotoAt: now,
       });
       if (!saveResult.ok) throw new Error(saveResult.message);
+      evidenceIds[asset.id] = evidenceId;
     }
     setPhotoBusyId('');
+    return evidenceIds;
   }
 
   async function registerTool() {
@@ -312,12 +315,15 @@ export function InventoryScreen() {
     const photo = await pickPhoto(true);
     if (!photo) return;
     try {
-      await uploadPhotosForAssets([asset], [photo], entry ? 'control' : 'initial', entry?.checkId);
-      const latestEvidence = module.evidence.find((candidate) => candidate.entityId === asset.id && candidate.checkId === entry?.checkId);
+      const evidenceIds = await uploadPhotosForAssets([asset], [photo], entry ? 'control' : 'initial', entry?.checkId);
       if (entry) {
-        const allEvidence = module.evidence.filter((candidate) => candidate.entityId === asset.id && candidate.checkId === entry.checkId);
-        const evidenceId = latestEvidence?.id ?? allEvidence[0]?.id;
-        const result = await module.saveCheckEntry({ ...entry, photoEvidenceId: evidenceId, status: 'present', countedQuantity: entry.countedQuantity ?? 1 });
+        const quantityMode = (entry.trackingMode ?? asset.trackingMode ?? 'individual') === 'quantity';
+        const result = await module.saveCheckEntry({
+          ...entry,
+          photoEvidenceId: evidenceIds[asset.id],
+          status: quantityMode ? entry.status : 'present',
+          countedQuantity: quantityMode ? entry.countedQuantity : 1,
+        });
         if (!result.ok) throw new Error(result.message);
       }
       setMessage('Fotografía agregada al historial.');
@@ -440,9 +446,7 @@ export function InventoryScreen() {
             {warehousePowerTools.length ? warehousePowerTools.map((asset) => (
               <View key={asset.id} style={styles.assetCard}>
                 <AssetSummary asset={asset} catalog={module.catalogById[asset.toolCatalogId]} />
-                <View style={styles.optionRow}>
-                  {module.vans.map((van) => <Button key={van.id} compact variant="secondary" label={`Enviar a ${van.name}`} onPress={() => { setTransferAsset(asset); void performTransfer(van.id); }} />)}
-                </View>
+                <View style={styles.optionRow}><Button compact variant="secondary" label="Transferir a una van" onPress={() => setTransferAsset(asset)} /></View>
               </View>
             )) : <EmptyState icon="🧰" title="Sin power tools guardados" message="Las herramientas transferidas al depósito aparecerán aquí." />}
           </Card>
@@ -500,7 +504,6 @@ export function InventoryScreen() {
                       asset={asset}
                       catalog={catalog}
                       evidence={module.evidence.filter((photo) => photo.entityId === asset.id)}
-                      vans={module.vans}
                       busy={module.busy || photoBusyId === asset.id}
                       onSave={async (updated) => { const result = await module.saveVanAsset(updated); setMessage(result.ok ? 'Herramienta actualizada.' : result.message ?? 'No se pudo actualizar.'); }}
                       onPhoto={() => void captureAssetPhoto(asset)}
@@ -601,7 +604,7 @@ export function InventoryScreen() {
           <Text style={styles.cardText}>El código permanece igual para conservar el historial. Selecciona el nuevo destino:</Text>
           <View style={styles.optionRow}>
             {module.vans.filter((van) => !assetIsInVan(transferAsset, van.id)).map((van) => <Button key={van.id} variant="secondary" label={van.name} onPress={() => void performTransfer(van.id)} />)}
-            <Button variant="secondary" label="Depósito" onPress={() => void performTransfer('warehouse')} />
+            {!assetIsInWarehouse(transferAsset) ? <Button variant="secondary" label="Depósito" onPress={() => void performTransfer('warehouse')} /> : null}
           </View>
         </View> : null}
       </AppModal>
@@ -646,7 +649,7 @@ function AssetSummary({ asset, catalog }: { asset: VanToolAssetV2; catalog?: Too
   return <View style={styles.assetTop}>{asset.latestPhotoUrl ? <Image source={{ uri: asset.latestPhotoUrl }} style={styles.assetImage} /> : <View style={styles.assetImagePlaceholder}><Text>📷</Text></View>}<View style={{ flex: 1 }}><Text style={styles.assetCode}>{asset.assetCode}</Text><Text style={styles.cardTitle}>{catalog?.name ?? asset.toolCatalogId}</Text><Text style={styles.cardText}>{catalog?.category ?? 'Herramienta'} · {formatMoney(asset.purchaseCost)} por unidad</Text></View><Pill label={asset.operationalStatus ?? 'Disponible'} tone={statusTone(asset.operationalStatus)} /></View>;
 }
 
-function AssetEditorCard({ asset, catalog, evidence, vans, busy, onSave, onPhoto, onTransfer }: { asset: VanToolAssetV2; catalog: ToolCatalogItemV2; evidence: InventoryEvidenceV2[]; vans: Van[]; busy: boolean; onSave: (asset: VanToolAssetV2) => Promise<void>; onPhoto: () => void; onTransfer: () => void }) {
+function AssetEditorCard({ asset, catalog, evidence, busy, onSave, onPhoto, onTransfer }: { asset: VanToolAssetV2; catalog: ToolCatalogItemV2; evidence: InventoryEvidenceV2[]; busy: boolean; onSave: (asset: VanToolAssetV2) => Promise<void>; onPhoto: () => void; onTransfer: () => void }) {
   const [condition, setCondition] = useState<ToolConditionV2>(asset.condition);
   const [status, setStatus] = useState<ToolOperationalStatus>(asset.operationalStatus ?? 'Disponible');
   const [notes, setNotes] = useState(asset.notes ?? '');
