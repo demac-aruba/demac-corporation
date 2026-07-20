@@ -1,1 +1,1 @@
-export { InventoryScreen } from './InventoryScreenV2';
+export { InventoryScreen } from './InventoryScreenV3';
