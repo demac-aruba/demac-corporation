@@ -117,6 +117,7 @@ export interface InventoryCheckV2 {
   id: string;
   scope: 'van' | 'warehouse';
   vanId?: string;
+  trackingModeFilter?: ToolTrackingMode;
   status: InventoryCheckStatusV2;
   startedAt: string;
   completedAt?: string;
