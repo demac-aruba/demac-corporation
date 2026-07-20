@@ -99,6 +99,7 @@ export function InventoryScreen() {
   const [toolPhotos, setToolPhotos] = useState<Array<PendingPhoto | null>>([null]);
 
   const [selectedAssetId, setSelectedAssetId] = useState('');
+  const [lightboxUrl, setLightboxUrl] = useState('');
   const [addCatalog, setAddCatalog] = useState<ToolCatalogItemV2 | null>(null);
   const [addQuantity, setAddQuantity] = useState('1');
   const [addCondition, setAddCondition] = useState<ToolConditionV2>('Nueva');
@@ -808,7 +809,13 @@ export function InventoryScreen() {
                   </View>
                   {assets.length
                     ? <View style={styles.compactList}>{assets.map((asset) => (
-                      <CompactAssetRow key={asset.id} asset={asset} catalog={catalog} onPress={() => setSelectedAssetId(asset.id)} />
+                      <CompactAssetRow
+                        key={asset.id}
+                        asset={asset}
+                        catalog={catalog}
+                        onOpenProfile={() => setSelectedAssetId(asset.id)}
+                        onOpenPhoto={() => setLightboxUrl(asset.latestPhotoUrl ?? '')}
+                      />
                     ))}</View>
                     : <View style={styles.unassignedBox}><Text style={styles.cardText}>No asignada a esta van.</Text></View>}
                 </View>
@@ -973,15 +980,30 @@ export function InventoryScreen() {
               catalog={selectedAssetCatalog}
               evidence={module.evidence.filter((photo) => photo.entityId === selectedAsset.id)}
               busy={module.busy || photoBusyId === selectedAsset.id}
-              onSave={async (updated) => {
-                const result = await module.saveVanAsset(updated);
-                setMessage(result.ok ? 'Herramienta actualizada.' : result.message ?? 'No se pudo actualizar.');
+              onSave={async (updated, updatedCost) => {
+                const assetResult = await module.saveVanAsset({ ...updated, purchaseCost: updatedCost });
+                if (!assetResult.ok) {
+                  setMessage(assetResult.message ?? 'No se pudo actualizar la herramienta.');
+                  return;
+                }
+                const catalogResult = await module.saveCatalog({ ...selectedAssetCatalog, standardCost: updatedCost });
+                setMessage(catalogResult.ok ? 'Herramienta y costo actualizados.' : catalogResult.message ?? 'La herramienta se actualizó, pero no el costo estándar.');
               }}
               onPhoto={() => void captureAssetPhoto(selectedAsset)}
+              onOpenPhoto={(url) => setLightboxUrl(url || selectedAsset.latestPhotoUrl || '')}
               onTransfer={() => { setSelectedAssetId(''); setTransferAsset(selectedAsset); }}
               onLifecycle={() => openLifecycle(selectedAsset)}
             />
           </ScrollView>
+        ) : null}
+      </AppModal>
+
+      <AppModal visible={Boolean(lightboxUrl)} title="Fotografía de la herramienta" onClose={() => setLightboxUrl('')}>
+        {lightboxUrl ? (
+          <View style={styles.photoViewerContent}>
+            <Image source={{ uri: lightboxUrl }} resizeMode="contain" style={styles.photoViewerImage} />
+            <Button variant="secondary" label="Cerrar fotografía" onPress={() => setLightboxUrl('')} />
+          </View>
         ) : null}
       </AppModal>
 
@@ -1122,61 +1144,81 @@ function VanBanner({ van, mode }: { van: Van; mode: 'tools' | 'check' }) {
   return <Card style={styles.banner}><View style={styles.bannerTop}><Text style={styles.menuIcon}>🚐</Text><View style={styles.flexOne}><Text style={styles.eyebrow}>{mode === 'tools' ? 'PERFIL DE VAN ACTIVO' : 'VAN SELECCIONADA PARA CONTROL'}</Text><Text style={styles.bannerName}>{van.name}</Text><Text style={styles.cardText}>Placa {van.plate} · {van.status}</Text></View><Pill label={mode === 'tools' ? 'Perfil activo' : 'Confirmada'} tone="info" /></View></Card>;
 }
 
-function AssetSummary({ asset, catalog }: { asset: VanToolAssetV2; catalog?: ToolCatalogItemV2 }) {
-  return <View style={styles.assetTop}>{asset.latestPhotoUrl ? <Image source={{ uri: asset.latestPhotoUrl }} style={styles.assetImage} /> : <View style={styles.assetImagePlaceholder}><Text>📷</Text></View>}<View style={styles.flexOne}><Text style={styles.assetCode}>{asset.assetCode}</Text><Text style={styles.cardTitle}>{catalog?.name ?? asset.toolCatalogId}</Text><Text style={styles.cardText}>{catalog?.category ?? 'Herramienta'} · {formatMoney(asset.purchaseCost)}</Text></View><Pill label={asset.operationalStatus ?? 'Disponible'} tone={statusTone(asset.operationalStatus)} /></View>;
+function AssetSummary({ asset, catalog, onPhotoPress }: { asset: VanToolAssetV2; catalog?: ToolCatalogItemV2; onPhotoPress?: () => void }) {
+  const image = asset.latestPhotoUrl ? <Image source={{ uri: asset.latestPhotoUrl }} style={styles.assetImage} /> : <View style={styles.assetImagePlaceholder}><Text>📷</Text></View>;
+  return (
+    <View style={styles.assetTop}>
+      {asset.latestPhotoUrl && onPhotoPress ? <Pressable accessibilityRole="button" accessibilityLabel="Ver fotografía grande" onPress={onPhotoPress} style={styles.assetPhotoButton}>{image}</Pressable> : image}
+      <View style={styles.flexOne}>
+        <Text style={styles.assetCode}>{asset.assetCode}</Text>
+        <Text style={styles.cardTitle}>{catalog?.name ?? asset.toolCatalogId}</Text>
+        <Text style={styles.cardText}>{catalog?.category ?? 'Herramienta'} · {formatMoney(asset.purchaseCost)}</Text>
+      </View>
+      <Pill label={asset.operationalStatus ?? 'Disponible'} tone={statusTone(asset.operationalStatus)} />
+    </View>
+  );
 }
 
-function CompactAssetRow({ asset, catalog, onPress }: { asset: VanToolAssetV2; catalog: ToolCatalogItemV2; onPress: () => void }) {
+function CompactAssetRow({ asset, catalog, onOpenProfile, onOpenPhoto }: { asset: VanToolAssetV2; catalog: ToolCatalogItemV2; onOpenProfile: () => void; onOpenPhoto: () => void }) {
   const quantityMode = (asset.trackingMode ?? catalog.trackingMode ?? 'individual') === 'quantity';
   const quantityText = quantityMode
     ? `${Number(asset.quantityPresent ?? 0)} presentes de ${Number(asset.quantityExpected ?? 0)}`
     : '1 unidad física';
   return (
-    <Pressable accessibilityRole="button" onPress={onPress} style={({ pressed }) => [styles.compactAssetRow, pressed && styles.compactAssetRowPressed]}>
-      {asset.latestPhotoUrl ? <Image source={{ uri: asset.latestPhotoUrl }} style={styles.compactImage} /> : <View style={styles.compactImagePlaceholder}><Text>📷</Text></View>}
-      <View style={styles.compactAssetText}>
+    <View style={styles.compactAssetRow}>
+      {asset.latestPhotoUrl ? (
+        <Pressable accessibilityRole="button" accessibilityLabel={`Ver fotografía grande de ${catalog.name}`} onPress={onOpenPhoto} style={({ pressed }) => [styles.compactPhotoButton, pressed && styles.compactAssetRowPressed]}>
+          <Image source={{ uri: asset.latestPhotoUrl }} style={styles.compactImage} />
+        </Pressable>
+      ) : <View style={styles.compactImagePlaceholder}><Text>📷</Text></View>}
+      <Pressable accessibilityRole="button" accessibilityLabel={`Abrir perfil de ${catalog.name}`} onPress={onOpenProfile} style={({ pressed }) => [styles.compactAssetText, pressed && styles.compactTextPressed]}>
         <Text style={styles.assetCode}>{asset.assetCode}</Text>
-        <Text style={styles.cardTitle}>{catalog.name}</Text>
+        <Text style={styles.compactToolName}>{catalog.name}</Text>
         <Text style={styles.cardText}>{quantityText} · {formatMoney(asset.purchaseCost)} por unidad</Text>
-      </View>
+      </Pressable>
       <View style={styles.compactAssetRight}>
-        <Pill label={asset.operationalStatus ?? 'Disponible'} tone={statusTone(asset.operationalStatus)} />
-        <Text style={styles.openProfileText}>Abrir perfil ›</Text>
+        <View style={styles.compactStatus}><Pill label={asset.operationalStatus ?? 'Disponible'} tone={statusTone(asset.operationalStatus)} /></View>
+        <Button compact variant="secondary" label="Abrir perfil" onPress={onOpenProfile} />
       </View>
-    </Pressable>
+    </View>
   );
 }
 
-function AssetProfileEditor({ asset, catalog, evidence, busy, onSave, onPhoto, onTransfer, onLifecycle }: { asset: VanToolAssetV2; catalog: ToolCatalogItemV2; evidence: InventoryEvidenceV2[]; busy: boolean; onSave: (asset: VanToolAssetV2) => Promise<void>; onPhoto: () => void; onTransfer: () => void; onLifecycle: () => void }) {
+function AssetProfileEditor({ asset, catalog, evidence, busy, onSave, onPhoto, onOpenPhoto, onTransfer, onLifecycle }: { asset: VanToolAssetV2; catalog: ToolCatalogItemV2; evidence: InventoryEvidenceV2[]; busy: boolean; onSave: (asset: VanToolAssetV2, cost: number) => Promise<void>; onPhoto: () => void; onOpenPhoto: (url?: string) => void; onTransfer: () => void; onLifecycle: () => void }) {
   const [condition, setCondition] = useState<ToolConditionV2>(asset.condition);
   const [status, setStatus] = useState<ToolOperationalStatus>(asset.operationalStatus ?? 'Disponible');
   const [notes, setNotes] = useState(asset.notes ?? '');
+  const [cost, setCost] = useState(String(asset.purchaseCost ?? catalog.standardCost ?? 0));
   const [expected, setExpected] = useState(String(asset.quantityExpected ?? 1));
   const [present, setPresent] = useState(String(asset.quantityPresent ?? asset.quantityExpected ?? 1));
   useEffect(() => {
     setCondition(asset.condition);
     setStatus(asset.operationalStatus ?? 'Disponible');
     setNotes(asset.notes ?? '');
+    setCost(String(asset.purchaseCost ?? catalog.standardCost ?? 0));
     setExpected(String(asset.quantityExpected ?? 1));
     setPresent(String(asset.quantityPresent ?? asset.quantityExpected ?? 1));
-  }, [asset]);
+  }, [asset, catalog.standardCost]);
   const quantityMode = (asset.trackingMode ?? catalog.trackingMode ?? 'individual') === 'quantity';
   const historicalEvidence = evidence.filter((photo) => photo.storagePath !== asset.latestPhotoStoragePath);
   return (
     <View style={styles.profileEditor}>
-      <AssetSummary asset={asset} catalog={catalog} />
+      <AssetSummary asset={asset} catalog={catalog} onPhotoPress={() => onOpenPhoto(asset.latestPhotoUrl)} />
       <View style={styles.profileFacts}>
         <ProfileFact label="Tipo de control" value={quantityMode ? 'Por cantidad' : 'Individual'} />
-        <ProfileFact label="Costo por unidad" value={formatMoney(asset.purchaseCost)} />
+        <ProfileFact label="Código interno" value={asset.assetCode} />
         <ProfileFact label="Última foto" value={asset.latestPhotoAt ? new Date(asset.latestPhotoAt).toLocaleString('es-AW') : 'Sin fecha'} />
       </View>
-      {quantityMode ? <View style={styles.formGrid}><Input style={styles.field} keyboardType="numeric" label="Cantidad asignada" value={expected} onChangeText={setExpected} /><Input style={styles.field} keyboardType="numeric" label="Cantidad presente" value={present} onChangeText={setPresent} /></View> : null}
+      <View style={styles.formGrid}>
+        <Input style={styles.field} keyboardType="numeric" label="Costo por unidad Afl." value={cost} onChangeText={setCost} />
+        {quantityMode ? <><Input style={styles.field} keyboardType="numeric" label="Cantidad asignada" value={expected} onChangeText={setExpected} /><Input style={styles.field} keyboardType="numeric" label="Cantidad presente" value={present} onChangeText={setPresent} /></> : null}
+      </View>
       <Text style={styles.smallLabel}>CONDICIÓN</Text>
       <View style={styles.optionRow}>{CONDITIONS.map((candidate) => <Button key={candidate} compact variant={condition === candidate ? 'primary' : 'secondary'} label={candidate} onPress={() => setCondition(candidate)} />)}</View>
       {!['Faltante', 'En reparación'].includes(asset.operationalStatus ?? '') ? <><Text style={styles.smallLabel}>ESTADO OPERATIVO</Text><View style={styles.optionRow}>{EDITABLE_STATUSES.map((candidate) => <Button key={candidate} compact variant={status === candidate ? 'primary' : 'secondary'} label={candidate} onPress={() => setStatus(candidate)} />)}</View></> : null}
       <Input multiline label="Observación, daño o anomalía" value={notes} onChangeText={setNotes} />
       <View style={styles.optionRow}>
-        <Button compact variant="success" label={busy ? 'Guardando…' : 'Guardar cambios'} disabled={busy} onPress={() => void onSave({ ...asset, condition, operationalStatus: status, notes: notes.trim(), quantityExpected: quantityMode ? Math.max(0, Number(expected || 0)) : 1, quantityPresent: quantityMode ? Math.max(0, Number(present || 0)) : asset.present === false ? 0 : 1 })} />
+        <Button compact variant="success" label={busy ? 'Guardando…' : 'Guardar cambios'} disabled={busy} onPress={() => void onSave({ ...asset, condition, operationalStatus: status, notes: notes.trim(), quantityExpected: quantityMode ? Math.max(0, Number(expected || 0)) : 1, quantityPresent: quantityMode ? Math.max(0, Number(present || 0)) : asset.present === false ? 0 : 1 }, Math.max(0, Number(cost || 0)))} />
         <Button compact variant="secondary" label="Nueva foto" disabled={busy} onPress={onPhoto} />
         {!quantityMode ? <Button compact variant="secondary" label="Transferir" disabled={busy} onPress={onTransfer} /> : null}
         <Button compact variant="danger" label="Retirar / reparar" disabled={busy} onPress={onLifecycle} />
@@ -1185,7 +1227,7 @@ function AssetProfileEditor({ asset, catalog, evidence, busy, onSave, onPhoto, o
         <View style={styles.historySection}>
           <Text style={styles.smallLabel}>HISTORIAL DE FOTOGRAFÍAS</Text>
           <ScrollView horizontal contentContainerStyle={styles.historyStrip}>
-            {historicalEvidence.map((photo) => <View key={photo.id}><Image source={{ uri: photo.downloadUrl }} style={styles.historyImage} /><Text style={styles.historyDate}>{new Date(photo.capturedAt).toLocaleDateString('es-AW')}</Text></View>)}
+            {historicalEvidence.map((photo) => <Pressable key={photo.id} accessibilityRole="button" onPress={() => onOpenPhoto(photo.downloadUrl)}><Image source={{ uri: photo.downloadUrl }} style={styles.historyImage} /><Text style={styles.historyDate}>{new Date(photo.capturedAt).toLocaleDateString('es-AW')}</Text></Pressable>)}
           </ScrollView>
         </View>
       ) : null}
@@ -1305,13 +1347,17 @@ const styles = StyleSheet.create({
   compactList: { gap: 7 },
   compactAssetRow: { flexDirection: 'row', alignItems: 'center', gap: 11, borderWidth: 1, borderColor: colors.border, borderRadius: 11, padding: 10, backgroundColor: '#FFFFFF' },
   compactAssetRowPressed: { backgroundColor: colors.primaryLight, borderColor: colors.primary },
+  compactPhotoButton: { borderRadius: 8 },
   compactImage: { width: 70, height: 58, borderRadius: 8 },
   compactImagePlaceholder: { width: 70, height: 58, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EEF2F6' },
-  compactAssetText: { flex: 1, minWidth: 170 },
-  compactAssetRight: { alignItems: 'flex-end', gap: 6 },
-  openProfileText: { color: colors.primary, fontWeight: '900', fontSize: 10 },
+  compactAssetText: { flex: 1, minWidth: 170, borderRadius: 7, paddingVertical: 3, paddingHorizontal: 2 },
+  compactTextPressed: { backgroundColor: colors.primaryLight },
+  compactToolName: { color: colors.text, fontWeight: '900', fontSize: 14 },
+  compactAssetRight: { width: 126, alignItems: 'stretch', justifyContent: 'center', gap: 7 },
+  compactStatus: { alignItems: 'center', justifyContent: 'center', minHeight: 24 },
   assetCard: { borderWidth: 1, borderColor: colors.border, borderRadius: 10, padding: 11, gap: 10, marginTop: 8 },
   assetTop: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  assetPhotoButton: { borderRadius: 8 },
   assetImage: { width: 82, height: 68, borderRadius: 8 },
   assetImagePlaceholder: { width: 82, height: 68, borderRadius: 8, backgroundColor: '#EEF2F6', alignItems: 'center', justifyContent: 'center' },
   assetCode: { color: colors.success, fontSize: 9, fontWeight: '900' },
@@ -1329,6 +1375,8 @@ const styles = StyleSheet.create({
   lifecycleList: { gap: 4 },
   lifecycleText: { color: colors.muted, fontSize: 9 },
   lifecyclePhoto: { width: '100%', height: 220, borderRadius: 10 },
+  photoViewerContent: { gap: 12, alignItems: 'stretch' },
+  photoViewerImage: { width: '100%', height: 520, borderRadius: 10, backgroundColor: '#0B1220' },
   inventoryRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 10, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border },
   warningRow: { backgroundColor: colors.warningLight },
   valueText: { color: colors.text, fontWeight: '900' },
