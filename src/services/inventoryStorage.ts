@@ -72,7 +72,8 @@ function parsePayload(text: string): FirebaseStoragePayload | undefined {
 
 function responseMessage(text: string) {
   const payload = parsePayload(text);
-  return payload?.error?.message ?? payload?.message ?? text.trim() || undefined;
+  const fallback = text.trim();
+  return payload?.error?.message ?? payload?.message ?? (fallback || undefined);
 }
 
 function downloadToken(payload?: FirebaseStoragePayload) {
