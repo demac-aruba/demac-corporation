@@ -25,6 +25,23 @@ function nowId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function vanNumber(van: Van) {
+  const digits = van.name.match(/\d+/)?.[0];
+  return digits ? Number(digits) : Number.MAX_SAFE_INTEGER;
+}
+
+function sortVansNaturally(items: Van[]) {
+  return [...items].sort((a, b) => {
+    const numberDifference = vanNumber(a) - vanNumber(b);
+    if (numberDifference !== 0) return numberDifference;
+    return a.name.localeCompare(b.name, 'es', { numeric: true, sensitivity: 'base' });
+  });
+}
+
+function sortAssetsNaturally(items: VanToolAsset[]) {
+  return [...items].sort((a, b) => a.assetCode.localeCompare(b.assetCode, 'es', { numeric: true, sensitivity: 'base' }));
+}
+
 function vanCode(van: Van, index: number) {
   const digits = van.name.match(/\d+/)?.[0];
   return `V${digits || index + 1}`;
@@ -42,7 +59,7 @@ export function useInventoryModule(currentUser: User | null, fallbackInventory: 
   const [checks, setChecks] = useState<InventoryCheck[]>([]);
   const [entries, setEntries] = useState<InventoryCheckEntry[]>([]);
   const [evidence, setEvidence] = useState<InventoryEvidence[]>([]);
-  const [vans, setVans] = useState<Van[]>(fallbackVans);
+  const [vans, setVans] = useState<Van[]>(() => sortVansNaturally(fallbackVans));
   const [loading, setLoading] = useState(firebase);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -50,7 +67,7 @@ export function useInventoryModule(currentUser: User | null, fallbackInventory: 
   const refresh = useCallback(async () => {
     if (!firebase) {
       setWarehouseItems(normalizeFallback(fallbackInventory));
-      setVans(fallbackVans);
+      setVans(sortVansNaturally(fallbackVans));
       return;
     }
     setLoading(true);
@@ -66,11 +83,11 @@ export function useInventoryModule(currentUser: User | null, fallbackInventory: 
       ]);
       setWarehouseItems([...remoteWarehouse].sort((a, b) => a.name.localeCompare(b.name)));
       setToolCatalog([...remoteCatalog].sort((a, b) => a.sequence - b.sequence));
-      setVanAssets([...remoteAssets].sort((a, b) => a.assetCode.localeCompare(b.assetCode)));
+      setVanAssets(sortAssetsNaturally(remoteAssets));
       setChecks([...remoteChecks].sort((a, b) => b.startedAt.localeCompare(a.startedAt)));
       setEntries(remoteEntries);
       setEvidence([...remoteEvidence].sort((a, b) => b.capturedAt.localeCompare(a.capturedAt)));
-      setVans(remoteVans.length ? remoteVans : fallbackVans);
+      setVans(sortVansNaturally(remoteVans.length ? remoteVans : fallbackVans));
       setError('');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -149,7 +166,7 @@ export function useInventoryModule(currentUser: User | null, fallbackInventory: 
         createdAssets.push(asset);
       }
       setToolCatalog((previous) => [...previous, catalog].sort((a, b) => a.sequence - b.sequence));
-      setVanAssets((previous) => [...previous, ...createdAssets].sort((a, b) => a.assetCode.localeCompare(b.assetCode)));
+      setVanAssets((previous) => sortAssetsNaturally([...previous, ...createdAssets]));
       return { result: { ok: true }, asset: createdAssets.find((item) => item.vanId === input.initialVanId) };
     } catch (cause) {
       return { result: { ok: false, message: cause instanceof Error ? cause.message : String(cause) } };
@@ -161,7 +178,7 @@ export function useInventoryModule(currentUser: User | null, fallbackInventory: 
     try {
       const updated = { ...asset, updatedAt: new Date().toISOString() };
       await persist('vanToolAssets', updated);
-      setVanAssets((previous) => previous.map((candidate) => candidate.id === updated.id ? updated : candidate));
+      setVanAssets((previous) => sortAssetsNaturally(previous.map((candidate) => candidate.id === updated.id ? updated : candidate)));
       return { ok: true };
     } catch (cause) {
       return { ok: false, message: cause instanceof Error ? cause.message : String(cause) };
@@ -180,7 +197,7 @@ export function useInventoryModule(currentUser: User | null, fallbackInventory: 
 
   async function startVanCheck(vanId: string): Promise<{ result: InventoryOperationResult; check?: InventoryCheck }> {
     if (!currentUser) return { result: { ok: false, message: 'Debes iniciar sesión.' } };
-    const assigned = vanAssets.filter((asset) => asset.vanId === vanId && asset.assigned);
+    const assigned = sortAssetsNaturally(vanAssets.filter((asset) => asset.vanId === vanId && asset.assigned));
     if (!assigned.length) return { result: { ok: false, message: 'Esta van no tiene herramientas asignadas.' } };
     setBusy(true);
     try {
