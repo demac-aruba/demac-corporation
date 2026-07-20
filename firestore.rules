@@ -22,6 +22,10 @@ service cloud.firestore {
       return activeStaff() && userProfile().data.role in ['admin', 'office', 'supervisor'];
     }
 
+    function inventoryRole() {
+      return activeStaff() && userProfile().data.role in ['admin', 'office', 'supervisor', 'inventory'];
+    }
+
     function technicianRole() {
       return activeStaff() && userProfile().data.role == 'technician';
     }
@@ -149,6 +153,36 @@ service cloud.firestore {
       allow read: if activeStaff();
       allow create, update: if operationsRole();
       allow delete: if adminOrSupervisor();
+    }
+
+    match /warehouseInventory/{itemId} {
+      allow read: if activeStaff();
+      allow create, update, delete: if inventoryRole();
+    }
+
+    match /toolCatalog/{toolId} {
+      allow read: if activeStaff();
+      allow create, update, delete: if inventoryRole();
+    }
+
+    match /vanToolAssets/{assetId} {
+      allow read: if activeStaff();
+      allow create, update, delete: if inventoryRole();
+    }
+
+    match /inventoryChecks/{checkId} {
+      allow read: if activeStaff();
+      allow create, update, delete: if inventoryRole();
+    }
+
+    match /inventoryCheckEntries/{entryId} {
+      allow read: if activeStaff();
+      allow create, update, delete: if inventoryRole();
+    }
+
+    match /inventoryEvidence/{evidenceId} {
+      allow read: if activeStaff();
+      allow create, update, delete: if inventoryRole();
     }
 
     match /workOrders/{workOrderId} {
