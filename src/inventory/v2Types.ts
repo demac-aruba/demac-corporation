@@ -19,6 +19,34 @@ export type ToolOperationalStatus =
 
 export type AssetLocationType = 'van' | 'warehouse';
 
+export type ToolLifecycleAction =
+  | 'registered'
+  | 'transferred'
+  | 'sent_to_repair'
+  | 'returned_to_service'
+  | 'marked_missing'
+  | 'retired'
+  | 'discarded'
+  | 'quantity_retired'
+  | 'replacement_assigned';
+
+export type ToolRetirementDisposition = 'Retirada' | 'Desechada' | 'Vendida' | 'Donada' | 'Para piezas' | 'Otro';
+
+export interface ToolLifecycleEventV2 {
+  id: string;
+  action: ToolLifecycleAction;
+  occurredAt: string;
+  performedByUserId: string;
+  performedByName: string;
+  fromVanId?: string;
+  toVanId?: string;
+  quantity?: number;
+  reason?: string;
+  disposition?: ToolRetirementDisposition;
+  note?: string;
+  photoEvidenceId?: string;
+}
+
 export interface ToolCatalogItemV2 {
   id: string;
   sequence: number;
@@ -50,12 +78,19 @@ export interface VanToolAssetV2 {
   present?: boolean;
   locationType?: AssetLocationType;
   locationId?: string;
+  previousVanId?: string;
   latestPhotoUrl?: string;
   latestPhotoStoragePath?: string;
   latestPhotoAt?: string;
   notes?: string;
   maintenanceDueAt?: string;
   calibrationDueAt?: string;
+  retiredAt?: string;
+  retiredReason?: string;
+  retiredDisposition?: ToolRetirementDisposition;
+  retiredByUserId?: string;
+  retiredByName?: string;
+  lifecycleHistory?: ToolLifecycleEventV2[];
   createdAt: string;
   updatedAt: string;
 }
