@@ -172,7 +172,7 @@ export function useInventoryModuleV2(currentUser: User | null, fallbackInventory
     try {
       const now = new Date().toISOString();
       const normalized = normalizeFallback(fallbackInventory).map((item) => ({ ...item, createdAt: item.createdAt ?? now, updatedAt: now }));
-      for (const item of normalized) await persist('warehouseInventory', item);
+      await Promise.all(normalized.map((item) => persist('warehouseInventory', item)));
       setWarehouseItems(normalized);
       return { ok: true, message: `${normalized.length} artículos importados al depósito.` };
     } catch (cause) {
@@ -268,8 +268,10 @@ export function useInventoryModuleV2(currentUser: User | null, fallbackInventory
       const assets = input.trackingMode === 'individual'
         ? buildIndividualAssets(catalog, van, quantity, input.condition)
         : [buildQuantityAsset(catalog, van, quantity, input.condition)];
-      await persist('toolCatalog', catalog);
-      for (const asset of assets) await persist('vanToolAssets', asset);
+      await Promise.all([
+        persist('toolCatalog', catalog),
+        ...assets.map((asset) => persist('vanToolAssets', asset)),
+      ]);
       setToolCatalog((previous) => [...previous, catalog].sort((a, b) => a.sequence - b.sequence));
       setVanAssets((previous) => sortAssetCodes([...previous, ...assets]));
       return { result: { ok: true }, catalog, assets };
@@ -305,7 +307,7 @@ export function useInventoryModuleV2(currentUser: User | null, fallbackInventory
         return { result: { ok: true }, assets: [updated] };
       }
       const assets = buildIndividualAssets(catalog, van, quantity, input.condition);
-      for (const asset of assets) await persist('vanToolAssets', asset);
+      await Promise.all(assets.map((asset) => persist('vanToolAssets', asset)));
       setVanAssets((previous) => sortAssetCodes([...previous, ...assets]));
       return { result: { ok: true }, assets };
     } catch (cause) {
@@ -329,8 +331,8 @@ export function useInventoryModuleV2(currentUser: User | null, fallbackInventory
     }
   }
 
-  async function saveVanAsset(asset: VanToolAssetV2): Promise<InventoryOperationResultV2> {
-    setBusy(true);
+  async function saveVanAssetInternal(asset: VanToolAssetV2, manageBusy: boolean): Promise<InventoryOperationResultV2> {
+    if (manageBusy) setBusy(true);
     try {
       const updated = normalizeAsset({ ...asset, updatedAt: new Date().toISOString() });
       await persist('vanToolAssets', updated);
@@ -339,8 +341,16 @@ export function useInventoryModuleV2(currentUser: User | null, fallbackInventory
     } catch (cause) {
       return { ok: false, message: cause instanceof Error ? cause.message : String(cause) };
     } finally {
-      setBusy(false);
+      if (manageBusy) setBusy(false);
     }
+  }
+
+  async function saveVanAsset(asset: VanToolAssetV2) {
+    return saveVanAssetInternal(asset, true);
+  }
+
+  async function saveVanAssetQuietly(asset: VanToolAssetV2) {
+    return saveVanAssetInternal(asset, false);
   }
 
   async function transferAsset(assetId: string, destination: string): Promise<InventoryOperationResultV2> {
@@ -389,11 +399,15 @@ export function useInventoryModuleV2(currentUser: User | null, fallbackInventory
     }
   }
 
-  async function startVanCheck(vanId: string): Promise<{ result: InventoryOperationResultV2; check?: InventoryCheckV2 }> {
+  async function startVanCheck(vanId: string, trackingModeFilter?: ToolTrackingMode): Promise<{ result: InventoryOperationResultV2; check?: InventoryCheckV2 }> {
     if (!currentUser) return { result: { ok: false, message: 'Debes iniciar sesión.' } };
     const assigned = sortAssetCodes(vanAssets.filter((asset) => assetIsInVan(asset, vanId)
-      && !['Retirada', 'Desechada'].includes(normalizeAsset(asset).operationalStatus ?? 'Disponible')));
-    if (!assigned.length) return { result: { ok: false, message: 'Esta van no tiene herramientas asignadas.' } };
+      && !['Retirada', 'Desechada'].includes(normalizeAsset(asset).operationalStatus ?? 'Disponible')
+      && (!trackingModeFilter || (normalizeAsset(asset).trackingMode ?? 'individual') === trackingModeFilter)));
+    if (!assigned.length) {
+      const label = trackingModeFilter === 'individual' ? 'herramientas de control individual' : trackingModeFilter === 'quantity' ? 'herramientas controladas por cantidad' : 'herramientas asignadas';
+      return { result: { ok: false, message: `Esta van no tiene ${label}.` } };
+    }
     setBusy(true);
     try {
       const now = new Date().toISOString();
@@ -401,6 +415,7 @@ export function useInventoryModuleV2(currentUser: User | null, fallbackInventory
         id: nowId('van-check'),
         scope: 'van',
         vanId,
+        trackingModeFilter,
         status: 'draft',
         startedAt: now,
         startedByUserId: currentUser.id,
@@ -427,8 +442,10 @@ export function useInventoryModuleV2(currentUser: User | null, fallbackInventory
           updatedAt: now,
         };
       });
-      await persist('inventoryChecks', check);
-      for (const entry of newEntries) await persist('inventoryCheckEntries', entry);
+      await Promise.all([
+        persist('inventoryChecks', check),
+        ...newEntries.map((entry) => persist('inventoryCheckEntries', entry)),
+      ]);
       setChecks((previous) => [check, ...previous]);
       setEntries((previous) => [...previous, ...newEntries]);
       return { result: { ok: true }, check };
@@ -455,8 +472,10 @@ export function useInventoryModuleV2(currentUser: User | null, fallbackInventory
         label: item.name, expectedQuantity: item.quantity, countedQuantity: undefined,
         status: 'pending', updatedAt: now,
       }));
-      await persist('inventoryChecks', check);
-      for (const entry of newEntries) await persist('inventoryCheckEntries', entry);
+      await Promise.all([
+        persist('inventoryChecks', check),
+        ...newEntries.map((entry) => persist('inventoryCheckEntries', entry)),
+      ]);
       setChecks((previous) => [check, ...previous]);
       setEntries((previous) => [...previous, ...newEntries]);
       return { result: { ok: true }, check };
@@ -510,10 +529,9 @@ export function useInventoryModuleV2(currentUser: User | null, fallbackInventory
           if (!item) continue;
           const counted = Math.max(0, Number(entry.countedQuantity ?? 0));
           value += counted * item.cost;
-          const updated = { ...item, quantity: counted, latestCountAt: completedAt, updatedAt: completedAt };
-          await persist('warehouseInventory', updated);
-          updatedItems.push(updated);
+          updatedItems.push({ ...item, quantity: counted, latestCountAt: completedAt, updatedAt: completedAt });
         }
+        await Promise.all(updatedItems.map((item) => persist('warehouseInventory', item)));
         setWarehouseItems((previous) => previous.map((item) => updatedItems.find((updated) => updated.id === item.id) ?? item));
       } else {
         const updatedAssets: VanToolAssetV2[] = [];
@@ -527,7 +545,7 @@ export function useInventoryModuleV2(currentUser: User | null, fallbackInventory
             presentCount += counted;
             missingCount += Math.max(0, expected - counted);
             value += counted * asset.purchaseCost;
-            const updated = normalizeAsset({
+            updatedAssets.push(normalizeAsset({
               ...asset,
               quantityExpected: expected,
               quantityPresent: counted,
@@ -535,15 +553,13 @@ export function useInventoryModuleV2(currentUser: User | null, fallbackInventory
               condition: entry.condition ?? asset.condition,
               operationalStatus: counted === 0 ? 'Faltante' : asset.operationalStatus === 'Faltante' ? 'Disponible' : asset.operationalStatus,
               updatedAt: completedAt,
-            });
-            await persist('vanToolAssets', updated);
-            updatedAssets.push(updated);
+            }));
           } else {
             const present = entry.status === 'present';
             presentCount += present ? 1 : 0;
             missingCount += present ? 0 : 1;
             if (present) value += asset.purchaseCost;
-            const updated = normalizeAsset({
+            updatedAssets.push(normalizeAsset({
               ...asset,
               present,
               quantityPresent: present ? 1 : 0,
@@ -552,11 +568,10 @@ export function useInventoryModuleV2(currentUser: User | null, fallbackInventory
                 ? (entry.operationalStatus === 'Faltante' ? 'Disponible' : entry.operationalStatus ?? asset.operationalStatus)
                 : 'Faltante',
               updatedAt: completedAt,
-            });
-            await persist('vanToolAssets', updated);
-            updatedAssets.push(updated);
+            }));
           }
         }
+        await Promise.all(updatedAssets.map((asset) => persist('vanToolAssets', asset)));
         setVanAssets((previous) => sortAssetCodes(previous.map((asset) => updatedAssets.find((updated) => updated.id === asset.id) ?? asset)));
       }
       const completed: InventoryCheckV2 = {
@@ -603,6 +618,7 @@ export function useInventoryModuleV2(currentUser: User | null, fallbackInventory
     addUnitsToVan,
     saveCatalog,
     saveVanAsset,
+    saveVanAssetQuietly,
     transferAsset,
     saveInventoryEvidence,
     startVanCheck,
