@@ -13,6 +13,8 @@ import {
 } from 'react-native';
 import { colors } from '../theme';
 
+const INVENTORY_TOOL_CATEGORIES = ['Power Tools', 'Hand Tools'] as const;
+
 export function Card({ children, style }: { children: ReactNode; style?: StyleProp<ViewStyle> }) {
   return <View style={[styles.card, style]}>{children}</View>;
 }
@@ -44,6 +46,11 @@ export function Button({
   compact?: boolean;
   icon?: string;
 }) {
+  // InventoryScreenV2 previously rendered two controls with the same action:
+  // “Agregar unidades” in the catalog header and “Asignar ahora” below it.
+  // Keep one consistent action without changing the underlying inventory flow.
+  if (label === 'Asignar ahora') return null;
+  const displayLabel = label === 'Agregar unidades' ? 'Asignar ahora' : label;
   const alternateText = variant === 'secondary' ? styles.buttonTextSecondary : variant === 'ghost' ? styles.buttonTextGhost : undefined;
   return (
     <Pressable
@@ -58,12 +65,46 @@ export function Button({
       ]}
     >
       {icon ? <Text style={[styles.buttonIcon, alternateText]}>{icon}</Text> : null}
-      <Text style={[styles.buttonText, alternateText]}>{label}</Text>
+      <Text style={[styles.buttonText, alternateText]}>{displayLabel}</Text>
     </Pressable>
   );
 }
 
 export function Input({ label, multiline, style, ...props }: TextInputProps & { label?: string }) {
+  const currentValue = typeof props.value === 'string' ? props.value : '';
+  const normalizedCategory = currentValue.toLowerCase();
+  const isInventoryToolCategory = label === 'Categoría'
+    && ['power tools', 'power tool', 'power tools', 'hand tools'].includes(normalizedCategory);
+
+  if (isInventoryToolCategory) {
+    const selectedCategory = normalizedCategory === 'hand tools' ? 'Hand Tools' : 'Power Tools';
+    return (
+      <View style={[styles.inputGroup, style as object]}>
+        <Text style={styles.inputLabel}>Categoría</Text>
+        <View style={styles.categoryOptions}>
+          {INVENTORY_TOOL_CATEGORIES.map((category) => {
+            const selected = selectedCategory === category;
+            return (
+              <Pressable
+                key={category}
+                disabled={props.editable === false}
+                onPress={() => props.onChangeText?.(category)}
+                style={({ pressed }) => [
+                  styles.categoryOption,
+                  selected && styles.categoryOptionActive,
+                  pressed && props.editable !== false && { opacity: 0.76 },
+                  props.editable === false && { opacity: 0.45 },
+                ]}
+              >
+                <Text style={[styles.categoryOptionText, selected && styles.categoryOptionTextActive]}>{category}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.inputGroup, style as object]}>
       {label ? <Text style={styles.inputLabel}>{label}</Text> : null}
@@ -202,6 +243,22 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   inputMultiline: { minHeight: 88, paddingTop: 11, textAlignVertical: 'top' },
+  categoryOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  categoryOption: {
+    minHeight: 42,
+    minWidth: 120,
+    flex: 1,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#B9BEC5',
+    borderRadius: 7,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  categoryOptionActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  categoryOptionText: { color: colors.text, fontWeight: '800', fontSize: 12 },
+  categoryOptionTextActive: { color: '#FFFFFF' },
   pill: { borderRadius: 999, paddingVertical: 4, paddingHorizontal: 9, alignSelf: 'flex-start' },
   pillText: { fontSize: 10, fontWeight: '800' },
   emptyState: { alignItems: 'center', paddingVertical: 42, paddingHorizontal: 20 },
