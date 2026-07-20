@@ -1,6 +1,11 @@
 import { getValidFirebaseSession } from './firebase';
 
 const storageBucket = process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET;
+const MAX_SOURCE_BYTES = 25 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
+const TARGET_MAX_DIMENSION = 1280;
+const TARGET_JPEG_QUALITY = 0.68;
+const SKIP_COMPRESSION_BELOW = 420 * 1024;
 
 export type InventoryStorageUpload = {
   storagePath: string;
@@ -25,6 +30,12 @@ type FirebaseStoragePayload = {
   message?: string;
 };
 
+type PreparedImage = {
+  blob: Blob;
+  contentType: string;
+  fileName?: string | null;
+};
+
 function safeSegment(value: string, fallback: string) {
   const cleaned = value.trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
   return cleaned || fallback;
@@ -38,11 +49,16 @@ function randomToken() {
 
 function extensionFor(contentType: string, fileName?: string | null) {
   const existing = fileName?.match(/\.([a-zA-Z0-9]{2,5})$/)?.[1];
-  if (existing) return existing.toLowerCase();
+  if (existing && contentType !== 'image/jpeg') return existing.toLowerCase();
   if (contentType === 'image/png') return 'png';
   if (contentType === 'image/webp') return 'webp';
   if (contentType === 'image/heic' || contentType === 'image/heif') return 'heic';
   return 'jpg';
+}
+
+function jpegFileName(fileName?: string | null) {
+  if (!fileName) return 'inventory-photo.jpg';
+  return fileName.replace(/\.[a-zA-Z0-9]{2,5}$/i, '') + '.jpg';
 }
 
 async function requireSession() {
@@ -90,19 +106,73 @@ async function fetchGeneratedToken(storagePath: string, idToken: string) {
   return downloadToken(parsePayload(text));
 }
 
-export async function uploadInventoryImage(input: UploadInput): Promise<InventoryStorageUpload> {
-  if (!storageBucket) throw new Error('Firebase Storage no está configurado para este entorno.');
-  const session = await requireSession();
+async function canvasBlob(canvas: HTMLCanvasElement, quality: number) {
+  return new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+}
+
+async function optimizeBrowserImage(blob: Blob, contentType: string, fileName?: string | null): Promise<PreparedImage> {
+  if (typeof document === 'undefined' || typeof globalThis.createImageBitmap !== 'function') {
+    return { blob, contentType, fileName };
+  }
+  if (!contentType.startsWith('image/') || contentType === 'image/gif' || contentType === 'image/svg+xml') {
+    return { blob, contentType, fileName };
+  }
+  if (blob.size <= SKIP_COMPRESSION_BELOW && (contentType === 'image/jpeg' || contentType === 'image/webp')) {
+    return { blob, contentType, fileName };
+  }
+
+  try {
+    const bitmap = await globalThis.createImageBitmap(blob);
+    const sourceWidth = bitmap.width;
+    const sourceHeight = bitmap.height;
+    const longestSide = Math.max(sourceWidth, sourceHeight);
+    const scale = Math.min(1, TARGET_MAX_DIMENSION / Math.max(1, longestSide));
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d', { alpha: false });
+    if (!context) {
+      bitmap.close?.();
+      return { blob, contentType, fileName };
+    }
+    context.fillStyle = '#FFFFFF';
+    context.fillRect(0, 0, width, height);
+    context.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close?.();
+    const compressed = await canvasBlob(canvas, TARGET_JPEG_QUALITY);
+    if (!compressed || compressed.size <= 0 || compressed.size >= blob.size) {
+      return { blob, contentType, fileName };
+    }
+    return { blob: compressed, contentType: 'image/jpeg', fileName: jpegFileName(fileName) };
+  } catch {
+    return { blob, contentType, fileName };
+  }
+}
+
+async function prepareImage(input: UploadInput): Promise<PreparedImage> {
   const localResponse = await fetch(input.uri);
   if (!localResponse.ok) throw new Error('No se pudo leer la fotografía seleccionada.');
-  const blob = await localResponse.blob();
-  const contentType = input.mimeType || blob.type || 'image/jpeg';
-  if (!contentType.startsWith('image/')) throw new Error('El archivo seleccionado no es una imagen válida.');
-  if (blob.size > 12 * 1024 * 1024) throw new Error('La fotografía supera el límite de 12 MB.');
+  const original = await localResponse.blob();
+  const originalType = input.mimeType || original.type || 'image/jpeg';
+  if (!originalType.startsWith('image/')) throw new Error('El archivo seleccionado no es una imagen válida.');
+  if (original.size > MAX_SOURCE_BYTES) throw new Error('La fotografía original supera el límite de 25 MB.');
+  const prepared = await optimizeBrowserImage(original, originalType, input.fileName);
+  if (prepared.blob.size > MAX_UPLOAD_BYTES) {
+    throw new Error('La fotografía sigue siendo demasiado grande después de optimizarla.');
+  }
+  return prepared;
+}
+
+export async function uploadInventoryImage(input: UploadInput): Promise<InventoryStorageUpload> {
+  if (!storageBucket) throw new Error('Firebase Storage no está configurado para este entorno.');
+  const [session, prepared] = await Promise.all([requireSession(), prepareImage(input)]);
+  const { blob, contentType, fileName } = prepared;
 
   const entityId = safeSegment(input.entityId, 'inventory-item');
   const evidenceId = safeSegment(input.evidenceId, randomToken());
-  const extension = extensionFor(contentType, input.fileName);
+  const extension = extensionFor(contentType, fileName);
   const storagePath = `inventory/${input.scope}/${entityId}/${evidenceId}.${extension}`;
   const metadata = {
     name: storagePath,
