@@ -7,7 +7,6 @@ import {
   InventoryEvidenceV2,
   ToolCatalogItemV2,
   ToolConditionV2,
-  ToolOperationalStatus,
   ToolTrackingMode,
   VanToolAssetV2,
   WarehouseInventoryItemV2,
@@ -93,7 +92,8 @@ export function assetIsInVan(asset: VanToolAssetV2, vanId: string) {
 }
 
 export function assetIsInWarehouse(asset: VanToolAssetV2) {
-  return normalizeAsset(asset).assigned && normalizeAsset(asset).locationType === 'warehouse';
+  const normalized = normalizeAsset(asset);
+  return normalized.assigned && normalized.locationType === 'warehouse';
 }
 
 export function assetInventoryValue(asset: VanToolAssetV2) {
@@ -367,6 +367,22 @@ export function useInventoryModuleV2(currentUser: User | null, fallbackInventory
     try {
       await persist('inventoryEvidence', item);
       setEvidence((previous) => [item, ...previous.filter((candidate) => candidate.id !== item.id)]);
+      if (item.checkId) {
+        const matchingEntry = entries.find((entry) => entry.checkId === item.checkId && entry.assetId === item.entityId);
+        if (matchingEntry) {
+          const linkedEntry: InventoryCheckEntryV2 = {
+            ...matchingEntry,
+            photoEvidenceId: item.id,
+            status: matchingEntry.status === 'missing' ? 'missing' : 'present',
+            countedQuantity: matchingEntry.trackingMode === 'quantity'
+              ? matchingEntry.countedQuantity
+              : 1,
+            updatedAt: new Date().toISOString(),
+          };
+          await persist('inventoryCheckEntries', linkedEntry);
+          setEntries((previous) => previous.map((entry) => entry.id === linkedEntry.id ? linkedEntry : entry));
+        }
+      }
       return { ok: true };
     } catch (cause) {
       return { ok: false, message: cause instanceof Error ? cause.message : String(cause) };
@@ -453,7 +469,13 @@ export function useInventoryModuleV2(currentUser: User | null, fallbackInventory
 
   async function saveCheckEntry(entry: InventoryCheckEntryV2): Promise<InventoryOperationResultV2> {
     try {
-      const updated = { ...entry, updatedAt: new Date().toISOString() };
+      const current = entries.find((candidate) => candidate.id === entry.id);
+      const updated = {
+        ...current,
+        ...entry,
+        photoEvidenceId: entry.photoEvidenceId ?? current?.photoEvidenceId,
+        updatedAt: new Date().toISOString(),
+      } as InventoryCheckEntryV2;
       await persist('inventoryCheckEntries', updated);
       setEntries((previous) => previous.map((candidate) => candidate.id === updated.id ? updated : candidate));
       return { ok: true };
@@ -469,10 +491,10 @@ export function useInventoryModuleV2(currentUser: User | null, fallbackInventory
     const unresolved = checkEntries.filter((entry) => entry.status === 'pending'
       || ((entry.scope === 'warehouse' || entry.trackingMode === 'quantity') && entry.countedQuantity === undefined));
     if (unresolved.length) return { ok: false, message: `Faltan ${unresolved.length} artículos por revisar.` };
-    const individualWithoutPhoto = checkEntries.filter((entry) => entry.scope === 'van'
-      && (entry.trackingMode ?? 'individual') === 'individual'
-      && entry.status === 'present'
-      && !entry.photoEvidenceId);
+    const individualWithoutPhoto = checkEntries.filter((entry) => {
+      if (entry.scope !== 'van' || (entry.trackingMode ?? 'individual') !== 'individual' || entry.status !== 'present') return false;
+      return !entry.photoEvidenceId && !evidence.some((photo) => photo.checkId === entry.checkId && photo.entityId === entry.assetId);
+    });
     if (individualWithoutPhoto.length) return { ok: false, message: `Faltan fotografías de ${individualWithoutPhoto.length} power tools presentes.` };
 
     setBusy(true);
@@ -557,7 +579,10 @@ export function useInventoryModuleV2(currentUser: User | null, fallbackInventory
     }
   }
 
-  const catalogById = useMemo(() => Object.fromEntries(toolCatalog.map((item) => [item.id, item])), [toolCatalog]);
+  const catalogById = useMemo<Record<string, ToolCatalogItemV2>>(
+    () => Object.fromEntries(toolCatalog.map((item) => [item.id, item])),
+    [toolCatalog],
+  );
 
   return {
     warehouseItems,
