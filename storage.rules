@@ -25,11 +25,13 @@ service firebase.storage {
     }
 
     match /work-orders/{workOrderId}/{unitId}/{fileName} {
-      // Storage authorization intentionally relies only on Firebase Auth and
-      // object metadata. The detailed order assignment check remains in the
-      // workOrderEvidence Firestore rules, where the evidence record cannot be
-      // created unless the technician is assigned to the order or its van.
-      // This avoids cross-service firestore.get() failures inside Storage Rules.
+      allow read: if signedIn();
+      allow create: if validEvidenceImage();
+      allow update: if false;
+      allow delete: if uploadedByCurrentUser();
+    }
+
+    match /inventory/{scope}/{entityId}/{fileName} {
       allow read: if signedIn();
       allow create: if validEvidenceImage();
       allow update: if false;
