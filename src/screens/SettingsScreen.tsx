@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { InventoryCleanupAdmin } from '../components/InventoryCleanupAdmin';
 import { AppModal, Button, Card, Input, SectionTitle } from '../components/UI';
 import { useAppState } from '../state/AppState';
 import { CalendarClosure, useCalendarState } from '../state/CalendarState';
@@ -61,9 +62,7 @@ export function SettingsScreen() {
     const first = new Date(`${month}T12:00:00`);
     const count = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
     const cells: Array<string | null> = Array.from({ length: first.getDay() }, () => null);
-    for (let day = 1; day <= count; day += 1) {
-      cells.push(`${first.getFullYear()}-${String(first.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
-    }
+    for (let day = 1; day <= count; day += 1) cells.push(`${first.getFullYear()}-${String(first.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
     while (cells.length % 7) cells.push(null);
     return cells;
   }, [month]);
@@ -131,34 +130,13 @@ export function SettingsScreen() {
 
       <Card>
         <SectionTitle title="Calendario laboral" subtitle="Define los días semanales que DEMAC no trabaja y bloquea fechas especiales como feriados, inventario o cierres internos." action={<Button label="Bloquear fecha" icon="＋" onPress={() => openDate(dateKey())} />} />
-
         <Text style={styles.blockTitle}>Días cerrados todas las semanas</Text>
         <Text style={styles.blockHelp}>Los domingos vienen bloqueados por defecto. Puedes activar o desactivar cualquier otro día.</Text>
-        <View style={styles.weekdayRow}>
-          {weekdays.map((day) => {
-            const active = draftWeekdays.includes(day.value);
-            return <Pressable key={day.value} onPress={() => toggleWeekday(day.value)} style={[styles.weekdayChip, active && styles.weekdayChipActive]}><Text style={[styles.weekdayChipText, active && styles.weekdayChipTextActive]}>{day.label}</Text><Text style={[styles.weekdayStatus, active && styles.weekdayStatusActive]}>{active ? 'Cerrado' : 'Abierto'}</Text></Pressable>;
-          })}
-        </View>
+        <View style={styles.weekdayRow}>{weekdays.map((day) => { const active = draftWeekdays.includes(day.value); return <Pressable key={day.value} onPress={() => toggleWeekday(day.value)} style={[styles.weekdayChip, active && styles.weekdayChipActive]}><Text style={[styles.weekdayChipText, active && styles.weekdayChipTextActive]}>{day.label}</Text><Text style={[styles.weekdayStatus, active && styles.weekdayStatusActive]}>{active ? 'Cerrado' : 'Abierto'}</Text></Pressable>; })}</View>
         <View style={styles.weeklyActions}><Button label={saving ? 'Guardando…' : 'Guardar horario semanal'} disabled={saving} onPress={() => void saveWeeklySchedule()} /></View>
-
-        <View style={styles.calendarHeader}>
-          <Pressable onPress={() => setMonth(shiftMonth(month, -1))} style={styles.monthButton}><Text style={styles.monthButtonText}>‹</Text></Pressable>
-          <Text style={styles.monthTitle}>{monthTitle}</Text>
-          <Pressable onPress={() => setMonth(shiftMonth(month, 1))} style={styles.monthButton}><Text style={styles.monthButtonText}>›</Text></Pressable>
-        </View>
+        <View style={styles.calendarHeader}><Pressable onPress={() => setMonth(shiftMonth(month, -1))} style={styles.monthButton}><Text style={styles.monthButtonText}>‹</Text></Pressable><Text style={styles.monthTitle}>{monthTitle}</Text><Pressable onPress={() => setMonth(shiftMonth(month, 1))} style={styles.monthButton}><Text style={styles.monthButtonText}>›</Text></Pressable></View>
         <View style={styles.weekHeader}>{weekdays.map((day) => <Text key={day.value} style={styles.weekHeaderText}>{day.short}</Text>)}</View>
-        <View style={styles.calendarGrid}>
-          {monthDays.map((date, index) => {
-            if (!date) return <View key={`blank-${index}`} style={styles.calendarCell} />;
-            const dateObj = new Date(`${date}T12:00:00`);
-            const recurringClosed = draftWeekdays.includes(dateObj.getDay());
-            const closure = calendarClosures.find((item) => item.date === date && item.active !== false);
-            const closed = recurringClosed || !!closure;
-            const today = date === dateKey();
-            return <Pressable key={date} onPress={() => openDate(date)} style={[styles.calendarCell, styles.calendarDate, closed && styles.calendarDateClosed, today && styles.calendarDateToday]}><Text style={[styles.calendarNumber, closed && styles.calendarNumberClosed]}>{dateObj.getDate()}</Text><Text style={[styles.calendarStatus, closed && styles.calendarStatusClosed]} numberOfLines={1}>{closure?.reason ?? (recurringClosed ? 'Cerrado semanal' : 'Disponible')}</Text></Pressable>;
-          })}
-        </View>
+        <View style={styles.calendarGrid}>{monthDays.map((date, index) => { if (!date) return <View key={`blank-${index}`} style={styles.calendarCell} />; const dateObj = new Date(`${date}T12:00:00`); const recurringClosed = draftWeekdays.includes(dateObj.getDay()); const closure = calendarClosures.find((item) => item.date === date && item.active !== false); const closed = recurringClosed || !!closure; const today = date === dateKey(); return <Pressable key={date} onPress={() => openDate(date)} style={[styles.calendarCell, styles.calendarDate, closed && styles.calendarDateClosed, today && styles.calendarDateToday]}><Text style={[styles.calendarNumber, closed && styles.calendarNumberClosed]}>{dateObj.getDate()}</Text><Text style={[styles.calendarStatus, closed && styles.calendarStatusClosed]} numberOfLines={1}>{closure?.reason ?? (recurringClosed ? 'Cerrado semanal' : 'Disponible')}</Text></Pressable>; })}</View>
       </Card>
 
       <Card>
@@ -172,6 +150,8 @@ export function SettingsScreen() {
         <View style={styles.brandRow}><View style={styles.logo}><Text style={styles.logoText}>❄</Text></View><View><Text style={styles.name}>DEMAC</Text><Text style={styles.corporation}>CORPORATION</Text><Text style={styles.slogan}>Professional Cooling Solutions</Text></View></View>
         <View style={styles.infoGrid}><Info label="Administrador" value="Christian Alexander Márquez Márquez" /><Info label="Moneda" value="Florín arubeño (Afl.)" /><Info label="Zona horaria" value="America/Aruba" /><Info label="Plataformas" value="Android y Web" /></View>
       </Card>
+
+      <InventoryCleanupAdmin />
 
       {currentUser?.authProvider !== 'firebase' ? <Card><SectionTitle title="Entorno de demostración" subtitle="La aplicación guarda localmente los cambios hechos durante las pruebas." /><View style={styles.warning}><Text style={styles.warningTitle}>Restablecer datos DEMO</Text><Text style={styles.warningText}>Elimina los cambios locales y vuelve a cargar clientes, citas, inventario e invoices originales.</Text><Button variant="danger" label="Restablecer información" onPress={() => { void resetDemo(); }} /></View></Card> : null}
 
