@@ -1,0 +1,31 @@
+name: Apply employee master integration
+
+on:
+  push:
+    branches:
+      - agent/employee-master-profile
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[skip employee master patch]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/employee-master-profile
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply master employee patch
+        run: python scripts/apply_employee_master_patch.py
+      - name: Commit integrated files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/types.ts src/hooks/usePayrollModule.ts src/screens/EmployeesTimesheetScreen.tsx src/screens/TeamScreen.tsx
+          git diff --cached --quiet || git commit -m "[skip employee master patch] Unify employee records"
+          git push
