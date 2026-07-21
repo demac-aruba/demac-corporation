@@ -53,7 +53,10 @@ function roundHours(value: number) {
 }
 
 function employeeTypeFromStaff(profile: StaffProfile): PayrollEmployeeType {
-  if (profile.role === 'Técnico responsable' || profile.role === 'Técnico' || profile.role === 'Ayudante') return 'Técnico';
+  if (profile.employeeType) return profile.employeeType;
+  if (['Técnico responsable', 'Técnico', 'Ayudante', 'Supervisor'].includes(profile.role)) return 'Técnico';
+  if (profile.role === 'Secretaria') return 'Secretaria';
+  if (['Administración', 'Contabilidad', 'Almacén'].includes(profile.role)) return 'Administración';
   return 'Otro';
 }
 
@@ -228,21 +231,31 @@ export function usePayrollModule(currentUser: User | null, staffProfiles: StaffP
   useEffect(() => { void refresh(); }, [refresh, currentUser?.id]);
 
   const employees = useMemo(() => {
-    const staffDefaults = staffProfiles.map(employeeFromStaff);
-    const defaults = [...staffDefaults];
-    for (const officeEmployee of OFFICE_FALLBACK) {
-      if (!defaults.some((employee) => employee.name.toLowerCase() === officeEmployee.name.toLowerCase())) defaults.push(officeEmployee);
-    }
     const merged = new Map<string, PayrollEmployee>();
-    defaults.forEach((employee) => merged.set(employee.id, employee));
+    staffProfiles.map(employeeFromStaff).forEach((employee) => merged.set(employee.id, employee));
     savedEmployees.forEach((employee) => {
-      const fallback = merged.get(employee.id) ?? [...merged.values()].find((candidate) => candidate.sourceStaffId && candidate.sourceStaffId === employee.sourceStaffId);
-      merged.set(employee.id, { ...fallback, ...employee });
+      const masterId = employee.sourceStaffId ?? employee.id;
+      const master = merged.get(masterId);
+      if (!master) return;
+      merged.set(masterId, {
+        ...master,
+        ...employee,
+        id: masterId,
+        sourceStaffId: masterId,
+        name: master.name,
+        role: master.role,
+        active: master.active,
+      });
     });
     return sortEmployees([...merged.values()]);
   }, [savedEmployees, staffProfiles]);
 
   async function saveEmployee(employee: PayrollEmployee) {
+    if (!staffProfiles.some((profile) => profile.id === (employee.sourceStaffId ?? employee.id))) {
+      const message = 'Primero crea el perfil maestro del empleado en Empleados.';
+      setError(message);
+      return { ok: false, message };
+    }
     setBusy(true);
     try {
       const now = new Date().toISOString();
