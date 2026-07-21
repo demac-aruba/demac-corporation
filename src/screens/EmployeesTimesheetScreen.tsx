@@ -4,6 +4,7 @@ import { EmployeeProfileEditor } from '../components/EmployeeProfileEditor';
 import { AppModal, Button, Card, EmptyState, Input, Pill, SectionTitle } from '../components/UI';
 import {
   calculatePayrollDay,
+  MONTHLY_HOURS_FACTOR,
   payrollPeriodDates,
   payrollPeriodForReference,
   shiftPayrollPeriod,
@@ -25,18 +26,54 @@ const WEEKDAYS = [
   { value: 5, label: 'Viernes' },
   { value: 6, label: 'Sábado' },
 ];
+const CALENDAR_WEEKDAYS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 
 function hours(value: number) {
   return Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function dateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 function formatDate(value: string) {
-  return new Date(`${value}T12:00:00Z`).toLocaleDateString('es-AW', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' });
+  const formatted = new Date(`${value}T12:00:00Z`).toLocaleDateString('es-AW', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+  return formatted.charAt(0).toUpperCase() + formatted.slice(1);
+}
+
+function shiftDateValue(value: string, days: number) {
+  const date = new Date(`${value}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function shiftCalendarMonth(value: string, months: number) {
+  const [year, month] = value.split('-').map(Number);
+  const shifted = new Date(Date.UTC(year, month - 1 + months, 1, 12));
+  return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function calendarMonthLabel(value: string) {
+  return new Date(`${value}-01T12:00:00Z`).toLocaleDateString('es-AW', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
+
+function calendarDays(value: string) {
+  const [year, month] = value.split('-').map(Number);
+  const firstWeekday = new Date(Date.UTC(year, month - 1, 1, 12)).getUTCDay();
+  const daysInMonth = new Date(Date.UTC(year, month, 0, 12)).getUTCDate();
+  const cells: Array<string | null> = Array.from({ length: firstWeekday }, () => null);
+  for (let day = 1; day <= daysInMonth; day += 1) cells.push(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
+  while (cells.length % 7) cells.push(null);
+  return cells;
 }
 
 function statusTone(status: PayrollDayStatus): 'neutral' | 'success' | 'warning' | 'danger' | 'info' {
   if (status === 'Regular') return 'success';
   if (status.startsWith('AO')) return 'warning';
+  if (status.startsWith('Vacaciones')) return 'info';
   if (status.startsWith('No Work')) return 'danger';
   if (status === 'Día libre programado') return 'info';
   return 'neutral';
@@ -73,7 +110,9 @@ export function EmployeesTimesheetScreen() {
   const [employeeType, setEmployeeType] = useState<PayrollEmployeeType | 'Todos'>('Todos');
   const [search, setSearch] = useState('');
   const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
-  const [selectedDate, setSelectedDate] = useState(period.endDate);
+  const [selectedDate, setSelectedDate] = useState(() => dateKey(new Date()));
+  const [calendarVisible, setCalendarVisible] = useState(false);
+  const [calendarMonth, setCalendarMonth] = useState(() => dateKey(new Date()).slice(0, 7));
   const [message, setMessage] = useState('');
   const [summaryVisible, setSummaryVisible] = useState(false);
   const [scheduleEmployee, setScheduleEmployee] = useState<PayrollEmployee | null>(null);
@@ -82,6 +121,7 @@ export function EmployeesTimesheetScreen() {
   const [profileSaving, setProfileSaving] = useState(false);
 
   const [aoDraft, setAoDraft] = useState('0');
+  const [vacationDraft, setVacationDraft] = useState('0');
   const [noWorkDraft, setNoWorkDraft] = useState('0');
   const [overtimeDraft, setOvertimeDraft] = useState('0');
   const [notesDraft, setNotesDraft] = useState('');
@@ -108,10 +148,6 @@ export function EmployeesTimesheetScreen() {
     if (selectedEmployeeId && !activeEmployees.some((employee) => employee.id === selectedEmployeeId)) setSelectedEmployeeId(activeEmployees[0]?.id ?? '');
   }, [activeEmployees, selectedEmployeeId]);
 
-  useEffect(() => {
-    if (selectedDate < period.startDate || selectedDate > period.endDate) setSelectedDate(period.endDate);
-  }, [period, selectedDate]);
-
   const selectedEmployee = activeEmployees.find((employee) => employee.id === selectedEmployeeId) ?? null;
   const selectedStaffProfile = staffProfiles.find((profile) => profile.id === selectedEmployeeId) ?? null;
   const selectedSummary = summaries.find((summary) => summary.employee.id === selectedEmployeeId) ?? null;
@@ -121,6 +157,7 @@ export function EmployeesTimesheetScreen() {
 
   useEffect(() => {
     setAoDraft(String(selectedSavedEntry?.aoHours ?? 0));
+    setVacationDraft(String(selectedSavedEntry?.vacationHours ?? 0));
     setNoWorkDraft(String(selectedSavedEntry?.noWorkNoPayHours ?? 0));
     setOvertimeDraft(String(selectedSavedEntry?.overtimeHours ?? 0));
     setNotesDraft(selectedSavedEntry?.notes ?? '');
@@ -137,6 +174,7 @@ export function EmployeesTimesheetScreen() {
     regularHours: 0,
     overtimeHours: Math.max(0, Number(overtimeDraft || 0)),
     aoHours: Math.max(0, Number(aoDraft || 0)),
+    vacationHours: Math.max(0, Number(vacationDraft || 0)),
     noWorkNoPayHours: Math.max(0, Number(noWorkDraft || 0)),
     status: 'Regular',
     notes: notesDraft,
@@ -144,12 +182,12 @@ export function EmployeesTimesheetScreen() {
   }) : null;
 
   const totalMetrics = useMemo(() => summaries.reduce((totals, summary) => ({
-    regular: totals.regular + summary.regularHours,
+    monthlyBase: totals.monthlyBase + summary.monthlyBaseHours,
     overtime: totals.overtime + summary.overtimeHours,
     ao: totals.ao + summary.aoHours,
+    vacation: totals.vacation + summary.vacationHours,
     noWork: totals.noWork + summary.noWorkNoPayHours,
-    paidFree: totals.paidFree + summary.paidFreeHours,
-  }), { regular: 0, overtime: 0, ao: 0, noWork: 0, paidFree: 0 }), [summaries]);
+  }), { monthlyBase: 0, overtime: 0, ao: 0, vacation: 0, noWork: 0 }), [summaries]);
 
   async function saveDay() {
     if (!selectedEmployee || !previewDay) return;
@@ -165,6 +203,7 @@ export function EmployeesTimesheetScreen() {
       regularHours: previewDay.regularHours,
       overtimeHours: previewDay.overtimeHours,
       aoHours: previewDay.aoHours,
+      vacationHours: previewDay.vacationHours,
       noWorkNoPayHours: previewDay.noWorkNoPayHours,
       status: previewDay.status,
       notes: notesDraft.trim(),
@@ -177,15 +216,19 @@ export function EmployeesTimesheetScreen() {
     setMessage(result.ok ? `${selectedEmployee.name}: ${formatDate(selectedDate)} guardado correctamente.` : result.message ?? 'No se pudo guardar el día.');
   }
 
+  function selectDate(date: string) {
+    setSelectedDate(date);
+    setPeriod(payrollPeriodForReference(new Date(`${date}T12:00:00`)));
+    setCalendarMonth(date.slice(0, 7));
+  }
+
   function changeDate(offset: number) {
-    const index = periodDates.indexOf(selectedDate);
-    const next = periodDates[Math.max(0, Math.min(periodDates.length - 1, index + offset))];
-    if (next) setSelectedDate(next);
+    selectDate(shiftDateValue(selectedDate, offset));
   }
 
   function detailedRows() {
     const rows: Array<Array<string | number>> = [[
-      'Empleado', 'Cargo', 'Tipo', 'Fecha', 'Horas regulares', 'Overtime', 'AO', 'No Work No Pay', 'Horas libres pagadas', 'Estado', 'Nota',
+      'Empleado', 'Cargo', 'Tipo', 'Fecha', 'Día de semana', 'Horas regulares reales', 'Overtime', 'AO', 'Vacaciones', 'No Work No Pay', 'Horas libres pagadas', 'Estado', 'Nota',
     ]];
     for (const employee of activeEmployees) {
       for (const date of periodDates) {
@@ -196,9 +239,11 @@ export function EmployeesTimesheetScreen() {
           employee.role,
           employee.employeeType,
           date,
+          formatDate(date).split(',')[0],
           hours(day.regularHours),
           hours(day.overtimeHours),
           hours(day.aoHours),
+          hours(day.vacationHours),
           hours(day.noWorkNoPayHours),
           hours(day.paidFreeHours),
           day.status,
@@ -211,14 +256,17 @@ export function EmployeesTimesheetScreen() {
 
   function summaryRows() {
     return [[
-      'Empleado', 'Cargo', 'Tipo', 'Horas regulares', 'Overtime', 'AO', 'No Work No Pay', 'Horas libres pagadas', 'Horas pagables',
+      'Empleado', 'Cargo', 'Tipo', 'Horas semanales base', `Horas mensuales base (${MONTHLY_HOURS_FACTOR})`, 'Horas regulares reales del período', 'Overtime', 'AO', 'Vacaciones', 'No Work No Pay', 'Horas libres pagadas', 'Horas pagables estimadas',
     ], ...summaries.map((summary) => [
       summary.employee.name,
       summary.employee.role,
       summary.employee.employeeType,
-      hours(summary.regularHours),
+      hours(summary.weeklyRegularHours),
+      hours(summary.monthlyBaseHours),
+      hours(summary.actualRegularHours),
       hours(summary.overtimeHours),
       hours(summary.aoHours),
+      hours(summary.vacationHours),
       hours(summary.noWorkNoPayHours),
       hours(summary.paidFreeHours),
       hours(summary.payableHours),
@@ -304,9 +352,9 @@ export function EmployeesTimesheetScreen() {
         <View style={styles.periodBlock}>
           <Text style={styles.filterLabel}>PERÍODO DE NÓMINA</Text>
           <View style={styles.periodControls}>
-            <Button compact variant="secondary" label="‹" onPress={() => { const next = shiftPayrollPeriod(period, -1); setPeriod(next); setSelectedDate(next.endDate); }} />
+            <Button compact variant="secondary" label="‹" onPress={() => { const next = shiftPayrollPeriod(period, -1); setPeriod(next); setSelectedDate(next.endDate); setCalendarMonth(next.endDate.slice(0, 7)); }} />
             <View style={styles.periodLabelBox}><Text style={styles.periodLabel}>{period.label}</Text></View>
-            <Button compact variant="secondary" label="›" onPress={() => { const next = shiftPayrollPeriod(period, 1); setPeriod(next); setSelectedDate(next.endDate); }} />
+            <Button compact variant="secondary" label="›" onPress={() => { const next = shiftPayrollPeriod(period, 1); setPeriod(next); setSelectedDate(next.endDate); setCalendarMonth(next.endDate.slice(0, 7)); }} />
           </View>
         </View>
         <View style={styles.cutoffBadge}><Text style={styles.cutoffText}>▣ Cierre de nómina: todos los 26</Text></View>
@@ -321,9 +369,10 @@ export function EmployeesTimesheetScreen() {
 
       <View style={styles.metrics}>
         <Metric label="Empleados activos" value={String(activeEmployees.length)} icon="♙" />
-        <Metric label="Horas regulares" value={hours(totalMetrics.regular)} icon="◷" />
+        <Metric label={`Base mensual · ${MONTHLY_HOURS_FACTOR}`} value={hours(totalMetrics.monthlyBase)} icon="◷" />
         <Metric label="Horas overtime" value={hours(totalMetrics.overtime)} icon="◴" />
         <Metric label="Horas AO" value={hours(totalMetrics.ao)} icon="AO" />
+        <Metric label="Horas vacaciones" value={hours(totalMetrics.vacation)} icon="V" />
         <Metric label="No Work No Pay" value={hours(totalMetrics.noWork)} icon="▣" warning={totalMetrics.noWork > 0} />
       </View>
 
@@ -350,7 +399,10 @@ export function EmployeesTimesheetScreen() {
               />
               <View style={styles.dateNavigation}>
                 <Button compact variant="secondary" label="‹ Día" onPress={() => changeDate(-1)} />
-                <View style={styles.selectedDateBox}><Text style={styles.selectedDate}>{formatDate(selectedDate)}</Text></View>
+                <Pressable style={styles.selectedDateBox} onPress={() => { setCalendarMonth(selectedDate.slice(0, 7)); setCalendarVisible(true); }}>
+                  <Text style={styles.selectedDate}>{formatDate(selectedDate)}</Text>
+                  <Text style={styles.selectedDateHint}>Abrir calendario</Text>
+                </Pressable>
                 <Button compact variant="secondary" label="Día ›" onPress={() => changeDate(1)} />
               </View>
               <View style={styles.dayFacts}>
@@ -361,10 +413,11 @@ export function EmployeesTimesheetScreen() {
               </View>
               <View style={styles.formGrid}>
                 <Input style={styles.field} keyboardType="decimal-pad" label="Horas AO" value={aoDraft} onChangeText={setAoDraft} />
+                <Input style={styles.field} keyboardType="decimal-pad" label="Horas de vacaciones" value={vacationDraft} onChangeText={setVacationDraft} />
                 <Input style={styles.field} keyboardType="decimal-pad" label="Horas No Work No Pay" value={noWorkDraft} onChangeText={setNoWorkDraft} />
                 <Input style={styles.field} keyboardType="decimal-pad" label="Overtime" value={overtimeDraft} onChangeText={setOvertimeDraft} />
               </View>
-              <Input multiline label="Nota del día" value={notesDraft} onChangeText={setNotesDraft} placeholder="Motivo de AO, permiso, salida temprana, overtime..." />
+              <Input multiline label="Nota del día" value={notesDraft} onChangeText={setNotesDraft} placeholder="Motivo de AO, vacaciones, permiso, salida temprana, overtime..." />
               <View style={styles.saveRow}>
                 <Pill label={previewDay.status} tone={statusTone(previewDay.status)} />
                 <Button variant="success" label={module.busy ? 'Guardando…' : 'Guardar día'} disabled={module.busy} onPress={() => void saveDay()} />
@@ -380,11 +433,12 @@ export function EmployeesTimesheetScreen() {
                   const entry = module.entryByEmployeeDate.get(`${selectedEmployee.id}_${date}`);
                   const day = calculatePayrollDay(selectedEmployee, date, entry);
                   return (
-                    <Pressable key={date} onPress={() => setSelectedDate(date)} style={[styles.dayRow, date === selectedDate && styles.dayRowSelected]}>
+                    <Pressable key={date} onPress={() => selectDate(date)} style={[styles.dayRow, date === selectedDate && styles.dayRowSelected]}>
                       <View style={styles.dayRowDate}><Text style={styles.dayRowDateText}>{formatDate(date)}</Text>{entry ? <Text style={styles.savedText}>Editado</Text> : null}</View>
                       <Text style={styles.dayRowHours}>{hours(day.regularHours)}h regular</Text>
                       {day.overtimeHours ? <Text style={styles.overtimeText}>+{hours(day.overtimeHours)} OT</Text> : null}
                       {day.aoHours ? <Text style={styles.aoText}>{hours(day.aoHours)} AO</Text> : null}
+                      {day.vacationHours ? <Text style={styles.vacationText}>{hours(day.vacationHours)} Vac.</Text> : null}
                       {day.noWorkNoPayHours ? <Text style={styles.noWorkText}>{hours(day.noWorkNoPayHours)} NWNP</Text> : null}
                       <Pill label={day.status} tone={statusTone(day.status)} />
                     </Pressable>
@@ -400,10 +454,22 @@ export function EmployeesTimesheetScreen() {
         <Text style={styles.rulesTitle}>ⓘ Reglas de cálculo</Text>
         <Text style={styles.rulesText}>• La nómina corre automáticamente del día 27 al día 26.</Text>
         <Text style={styles.rulesText}>• El horario regular diario aplica de lunes a sábado; domingo permanece sin jornada.</Text>
-        <Text style={styles.rulesText}>• Las horas regulares se calculan como jornada programada menos AO y No Work No Pay.</Text>
+        <Text style={styles.rulesText}>• La base mensual se calcula como horas regulares semanales × {MONTHLY_HOURS_FACTOR} y se redondea a horas completas.</Text>
+        <Text style={styles.rulesText}>• AO y vacaciones se reportan como ausencias pagadas; No Work No Pay se descuenta de la base mensual.</Text>
         <Text style={styles.rulesText}>• Para julio, los técnicos permanecen con su horario completo. La regla de 5 horas trabajadas + 3 horas libres puede activarse desde el 1 de agosto.</Text>
         <Text style={styles.rulesText}>• Las secretarias pueden configurarse con 4 horas trabajadas + 4 horas libres en su medio día semanal.</Text>
       </Card>
+
+      <AppModal visible={calendarVisible} title="Seleccionar fecha" onClose={() => setCalendarVisible(false)}>
+        <CalendarPicker
+          month={calendarMonth}
+          selectedDate={selectedDate}
+          today={dateKey(new Date())}
+          onPreviousMonth={() => setCalendarMonth((current) => shiftCalendarMonth(current, -1))}
+          onNextMonth={() => setCalendarMonth((current) => shiftCalendarMonth(current, 1))}
+          onSelect={(date) => { selectDate(date); setCalendarVisible(false); }}
+        />
+      </AppModal>
 
       <AppModal visible={summaryVisible} title={`Resumen payroll · ${period.label}`} onClose={() => setSummaryVisible(false)}>
         <ScrollView contentContainerStyle={styles.modalContent}>
@@ -465,9 +531,10 @@ function EmployeeSummaryRow({ summary, selected, onPress }: { summary: PayrollEm
     <Pressable onPress={onPress} style={[styles.employeeRow, selected && styles.employeeRowSelected]}>
       <View style={styles.avatar}><Text style={styles.avatarText}>{initials}</Text></View>
       <View style={styles.employeeIdentity}><Text style={styles.employeeName}>{summary.employee.name}</Text><Text style={styles.employeeRole}>{summary.employee.role} · {summary.employee.employeeType}</Text></View>
-      <SummaryValue label="Regular" value={summary.regularHours} />
+      <SummaryValue label="Base mes" value={summary.monthlyBaseHours} />
       <SummaryValue label="OT" value={summary.overtimeHours} />
       <SummaryValue label="AO" value={summary.aoHours} warning={summary.aoHours > 0} />
+      <SummaryValue label="Vac." value={summary.vacationHours} />
       <SummaryValue label="NWNP" value={summary.noWorkNoPayHours} danger={summary.noWorkNoPayHours > 0} />
       <Pill label={summary.changedDays ? 'En progreso' : 'Sin cambios'} tone={summary.changedDays ? 'info' : 'neutral'} />
       <Text style={styles.openDetail}>Ver detalle ›</Text>
@@ -484,7 +551,29 @@ function DayFact({ label, value }: { label: string; value: string }) {
 }
 
 function PayrollSummaryCard({ summary }: { summary: PayrollEmployeeSummary }) {
-  return <View style={styles.payrollSummaryCard}><Text style={styles.employeeName}>{summary.employee.name}</Text><Text style={styles.employeeRole}>{summary.employee.role}</Text><View style={styles.payrollSummaryGrid}><SummaryValue label="Regular" value={summary.regularHours} /><SummaryValue label="OT" value={summary.overtimeHours} /><SummaryValue label="AO" value={summary.aoHours} /><SummaryValue label="NWNP" value={summary.noWorkNoPayHours} /><SummaryValue label="Libre pago" value={summary.paidFreeHours} /><SummaryValue label="Pagables" value={summary.payableHours} /></View></View>;
+  return <View style={styles.payrollSummaryCard}><Text style={styles.employeeName}>{summary.employee.name}</Text><Text style={styles.employeeRole}>{summary.employee.role}</Text><View style={styles.payrollSummaryGrid}><SummaryValue label="Base semana" value={summary.weeklyRegularHours} /><SummaryValue label="Base mes" value={summary.monthlyBaseHours} /><SummaryValue label="Laboradas" value={summary.actualRegularHours} /><SummaryValue label="OT" value={summary.overtimeHours} /><SummaryValue label="AO" value={summary.aoHours} /><SummaryValue label="Vacaciones" value={summary.vacationHours} /><SummaryValue label="NWNP" value={summary.noWorkNoPayHours} /><SummaryValue label="Libre pago" value={summary.paidFreeHours} /><SummaryValue label="Pagables" value={summary.payableHours} /></View></View>;
+}
+
+function CalendarPicker({ month, selectedDate, today, onPreviousMonth, onNextMonth, onSelect }: { month: string; selectedDate: string; today: string; onPreviousMonth: () => void; onNextMonth: () => void; onSelect: (date: string) => void }) {
+  const days = calendarDays(month);
+  return (
+    <View style={styles.calendarCard}>
+      <View style={styles.calendarHeader}>
+        <Button compact variant="secondary" label="‹" onPress={onPreviousMonth} />
+        <Text style={styles.calendarMonth}>{calendarMonthLabel(month)}</Text>
+        <Button compact variant="secondary" label="›" onPress={onNextMonth} />
+      </View>
+      <View style={styles.calendarGrid}>
+        {CALENDAR_WEEKDAYS.map((weekday) => <View key={weekday} style={styles.calendarCell}><Text style={styles.calendarWeekday}>{weekday}</Text></View>)}
+        {days.map((date, index) => date ? (
+          <Pressable key={date} onPress={() => onSelect(date)} style={[styles.calendarCell, styles.calendarDay, date === today && styles.calendarToday, date === selectedDate && styles.calendarSelected]}>
+            <Text style={[styles.calendarDayText, date === selectedDate && styles.calendarSelectedText]}>{Number(date.slice(-2))}</Text>
+          </Pressable>
+        ) : <View key={`blank-${index}`} style={styles.calendarCell} />)}
+      </View>
+      <Text style={styles.calendarHelp}>Las semanas comienzan en domingo. Selecciona cualquier fecha para abrir automáticamente su período de nómina.</Text>
+    </View>
+  );
 }
 
 function ScheduleEditor({ employee, busy, onSave, onCancel }: { employee: PayrollEmployee; busy: boolean; onSave: (employee: PayrollEmployee) => Promise<void>; onCancel: () => void }) {
@@ -557,7 +646,8 @@ const styles = StyleSheet.create({
   openDetail: { color: colors.info, fontWeight: '900', fontSize: 10 },
   dateNavigation: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
   selectedDateBox: { flex: 1, minHeight: 38, borderRadius: 7, backgroundColor: '#F3F5F7', alignItems: 'center', justifyContent: 'center' },
-  selectedDate: { color: colors.text, fontWeight: '900', fontSize: 12 },
+  selectedDate: { color: colors.text, fontWeight: '900', fontSize: 12, textAlign: 'center' },
+  selectedDateHint: { color: colors.info, fontWeight: '800', fontSize: 8, marginTop: 2 },
   dayFacts: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
   dayFact: { flex: 1, minWidth: 125, borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 9 },
   dayFactLabel: { color: colors.muted, fontSize: 8, fontWeight: '900', textTransform: 'uppercase' },
@@ -574,6 +664,7 @@ const styles = StyleSheet.create({
   dayRowHours: { color: colors.text, fontSize: 9, minWidth: 82 },
   overtimeText: { color: colors.info, fontWeight: '900', fontSize: 9 },
   aoText: { color: colors.warning, fontWeight: '900', fontSize: 9 },
+  vacationText: { color: colors.info, fontWeight: '900', fontSize: 9 },
   noWorkText: { color: colors.danger, fontWeight: '900', fontSize: 9 },
   rulesCard: { backgroundColor: colors.successLight, borderColor: '#B8DDBB', gap: 5 },
   rulesTitle: { color: colors.success, fontWeight: '900', fontSize: 13 },
@@ -582,4 +673,16 @@ const styles = StyleSheet.create({
   modalActions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 8 },
   payrollSummaryCard: { borderWidth: 1, borderColor: colors.border, borderRadius: 9, padding: 11, gap: 8 },
   payrollSummaryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  calendarCard: { gap: 12, minWidth: 280 },
+  calendarHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  calendarMonth: { flex: 1, color: colors.text, fontWeight: '900', fontSize: 15, textAlign: 'center', textTransform: 'capitalize' },
+  calendarGrid: { flexDirection: 'row', flexWrap: 'wrap', width: '100%' },
+  calendarCell: { width: '14.2857%', aspectRatio: 1, alignItems: 'center', justifyContent: 'center', padding: 2 },
+  calendarWeekday: { color: colors.muted, fontWeight: '900', fontSize: 9 },
+  calendarDay: { borderRadius: 999 },
+  calendarDayText: { color: colors.text, fontWeight: '800', fontSize: 12 },
+  calendarToday: { borderWidth: 1, borderColor: colors.success },
+  calendarSelected: { backgroundColor: colors.success },
+  calendarSelectedText: { color: '#FFFFFF' },
+  calendarHelp: { color: colors.muted, fontSize: 9, lineHeight: 14, textAlign: 'center' },
 });

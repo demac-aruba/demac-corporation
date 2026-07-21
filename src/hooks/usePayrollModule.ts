@@ -11,6 +11,8 @@ import {
   PayrollPeriod,
 } from '../payroll/types';
 
+export const MONTHLY_HOURS_FACTOR = 4.333;
+
 function isoDate(date: Date) {
   return date.toISOString().slice(0, 10);
 }
@@ -47,7 +49,7 @@ function employeeFromStaff(profile: StaffProfile): PayrollEmployee {
     employeeType,
     active: profile.active,
     weekdayHours: 8,
-    saturdayHours: technical ? 4 : 0,
+    saturdayHours: 8,
     halfDayEffectiveFrom: technical ? '2026-08-01' : secretarial ? '2026-01-01' : undefined,
     halfDayWorkedHours: technical ? 5 : secretarial ? 4 : 8,
     halfDayPaidFreeHours: technical ? 3 : secretarial ? 4 : 0,
@@ -105,7 +107,6 @@ export function employeeScheduleForDate(employee: PayrollEmployee, date: string)
   const weekday = parsed.getUTCDay();
   if (weekday === 0) return { scheduledWorkHours: 0, paidFreeHours: 0 };
 
-  // El horario regular aplica de lunes a sábado. El medio día semanal se configura por separado.
   let scheduledWorkHours = Number(employee.weekdayHours ?? 8);
   let paidFreeHours = 0;
   const halfDayActive = employee.weeklyHalfDayWeekday !== undefined
@@ -124,12 +125,32 @@ export function employeeScheduleForDate(employee: PayrollEmployee, date: string)
   };
 }
 
-function statusForDay(scheduledWorkHours: number, paidFreeHours: number, aoHours: number, noWorkNoPayHours: number): PayrollDayStatus {
+export function weeklyRegularHoursForPeriod(employee: PayrollEmployee, period: PayrollPeriod) {
+  const regularDailyHours = Math.max(0, Number(employee.weekdayHours ?? 8));
+  let weeklyHours = regularDailyHours * 6;
+  const halfDayActive = employee.weeklyHalfDayWeekday !== undefined
+    && employee.weeklyHalfDayWeekday >= 1
+    && employee.weeklyHalfDayWeekday <= 6
+    && employee.halfDayEffectiveFrom
+    && employee.halfDayEffectiveFrom <= period.endDate;
+  if (halfDayActive) weeklyHours -= Math.max(0, regularDailyHours - Math.max(0, Number(employee.halfDayWorkedHours ?? regularDailyHours)));
+  return roundHours(Math.max(0, weeklyHours));
+}
+
+function statusForDay(
+  scheduledWorkHours: number,
+  paidFreeHours: number,
+  aoHours: number,
+  vacationHours: number,
+  noWorkNoPayHours: number,
+): PayrollDayStatus {
   if (scheduledWorkHours <= 0 && paidFreeHours <= 0) return 'Sin jornada';
   if (scheduledWorkHours <= 0 && paidFreeHours > 0) return 'Día libre programado';
   if (aoHours >= scheduledWorkHours && scheduledWorkHours > 0) return 'AO completo';
-  if (aoHours > 0) return 'AO parcial';
+  if (vacationHours >= scheduledWorkHours && scheduledWorkHours > 0) return 'Vacaciones completo';
   if (noWorkNoPayHours >= scheduledWorkHours && scheduledWorkHours > 0) return 'No Work No Pay completo';
+  if (aoHours > 0) return 'AO parcial';
+  if (vacationHours > 0) return 'Vacaciones parcial';
   if (noWorkNoPayHours > 0) return 'No Work No Pay parcial';
   return 'Regular';
 }
@@ -139,8 +160,9 @@ export function calculatePayrollDay(employee: PayrollEmployee, date: string, ent
   const scheduled = entry?.scheduledWorkHours ?? schedule.scheduledWorkHours;
   const paidFree = entry?.paidFreeHours ?? schedule.paidFreeHours;
   const aoHours = clamp(entry?.aoHours ?? 0, 0, scheduled);
-  const noWorkNoPayHours = clamp(entry?.noWorkNoPayHours ?? 0, 0, Math.max(0, scheduled - aoHours));
-  const regularHours = roundHours(Math.max(0, scheduled - aoHours - noWorkNoPayHours));
+  const vacationHours = clamp(entry?.vacationHours ?? 0, 0, Math.max(0, scheduled - aoHours));
+  const noWorkNoPayHours = clamp(entry?.noWorkNoPayHours ?? 0, 0, Math.max(0, scheduled - aoHours - vacationHours));
+  const regularHours = roundHours(Math.max(0, scheduled - aoHours - vacationHours - noWorkNoPayHours));
   const overtimeHours = roundHours(Math.max(0, Number(entry?.overtimeHours ?? 0)));
   return {
     employeeId: employee.id,
@@ -150,8 +172,9 @@ export function calculatePayrollDay(employee: PayrollEmployee, date: string, ent
     regularHours,
     overtimeHours,
     aoHours: roundHours(aoHours),
+    vacationHours: roundHours(vacationHours),
     noWorkNoPayHours: roundHours(noWorkNoPayHours),
-    status: statusForDay(scheduled, paidFree, aoHours, noWorkNoPayHours),
+    status: statusForDay(scheduled, paidFree, aoHours, vacationHours, noWorkNoPayHours),
     notes: entry?.notes ?? '',
     savedEntry: entry,
   };
@@ -160,20 +183,26 @@ export function calculatePayrollDay(employee: PayrollEmployee, date: string, ent
 export function summarizeEmployee(employee: PayrollEmployee, period: PayrollPeriod, entries: EmployeeTimesheetEntry[]): PayrollEmployeeSummary {
   const employeeEntries = new Map(entries.filter((entry) => entry.employeeId === employee.id).map((entry) => [entry.date, entry]));
   const days = payrollPeriodDates(period).map((date) => calculatePayrollDay(employee, date, employeeEntries.get(date)));
-  const total = (key: keyof Pick<PayrollDayCalculation, 'regularHours' | 'overtimeHours' | 'aoHours' | 'noWorkNoPayHours' | 'paidFreeHours'>) => roundHours(days.reduce((sum, day) => sum + Number(day[key]), 0));
-  const regularHours = total('regularHours');
+  const total = (key: keyof Pick<PayrollDayCalculation, 'regularHours' | 'overtimeHours' | 'aoHours' | 'vacationHours' | 'noWorkNoPayHours' | 'paidFreeHours'>) => roundHours(days.reduce((sum, day) => sum + Number(day[key]), 0));
+  const weeklyRegularHours = weeklyRegularHoursForPeriod(employee, period);
+  const monthlyBaseHours = Math.round(weeklyRegularHours * MONTHLY_HOURS_FACTOR);
+  const actualRegularHours = total('regularHours');
   const overtimeHours = total('overtimeHours');
   const aoHours = total('aoHours');
+  const vacationHours = total('vacationHours');
   const noWorkNoPayHours = total('noWorkNoPayHours');
   const paidFreeHours = total('paidFreeHours');
   return {
     employee,
-    regularHours,
+    weeklyRegularHours,
+    monthlyBaseHours,
+    actualRegularHours,
     overtimeHours,
     aoHours,
+    vacationHours,
     noWorkNoPayHours,
     paidFreeHours,
-    payableHours: roundHours(regularHours + overtimeHours + aoHours + paidFreeHours),
+    payableHours: roundHours(Math.max(0, monthlyBaseHours - noWorkNoPayHours) + overtimeHours),
     changedDays: employeeEntries.size,
   };
 }
