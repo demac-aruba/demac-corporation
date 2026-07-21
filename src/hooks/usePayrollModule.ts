@@ -11,31 +11,6 @@ import {
   PayrollPeriod,
 } from '../payroll/types';
 
-const OFFICE_FALLBACK: PayrollEmployee[] = [
-  {
-    id: 'payroll-yerika',
-    name: 'Yerika',
-    role: 'Secretaria',
-    employeeType: 'Secretaria',
-    active: true,
-    weekdayHours: 8,
-    saturdayHours: 0,
-    halfDayWorkedHours: 4,
-    halfDayPaidFreeHours: 4,
-  },
-  {
-    id: 'payroll-herlin',
-    name: 'Herlin',
-    role: 'Secretaria',
-    employeeType: 'Secretaria',
-    active: true,
-    weekdayHours: 8,
-    saturdayHours: 0,
-    halfDayWorkedHours: 4,
-    halfDayPaidFreeHours: 4,
-  },
-];
-
 function isoDate(date: Date) {
   return date.toISOString().slice(0, 10);
 }
@@ -61,18 +36,21 @@ function employeeTypeFromStaff(profile: StaffProfile): PayrollEmployeeType {
 }
 
 function employeeFromStaff(profile: StaffProfile): PayrollEmployee {
+  const employeeType = employeeTypeFromStaff(profile);
+  const technical = employeeType === 'Técnico';
+  const secretarial = employeeType === 'Secretaria';
   return {
     id: profile.id,
     sourceStaffId: profile.id,
     name: profile.name,
     role: profile.role,
-    employeeType: employeeTypeFromStaff(profile),
+    employeeType,
     active: profile.active,
     weekdayHours: 8,
-    saturdayHours: 4,
-    halfDayEffectiveFrom: '2026-08-01',
-    halfDayWorkedHours: 5,
-    halfDayPaidFreeHours: 3,
+    saturdayHours: technical ? 4 : 0,
+    halfDayEffectiveFrom: technical ? '2026-08-01' : secretarial ? '2026-01-01' : undefined,
+    halfDayWorkedHours: technical ? 5 : secretarial ? 4 : 8,
+    halfDayPaidFreeHours: technical ? 3 : secretarial ? 4 : 0,
   };
 }
 

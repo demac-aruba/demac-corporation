@@ -78,15 +78,14 @@ export function EmployeesTimesheetScreen() {
   const [summaryVisible, setSummaryVisible] = useState(false);
   const [scheduleEmployee, setScheduleEmployee] = useState<PayrollEmployee | null>(null);
   const [profileForm, setProfileForm] = useState<StaffProfile | null>(null);
+  const [directoryVisible, setDirectoryVisible] = useState(false);
+  const [profileSaving, setProfileSaving] = useState(false);
 
   const [aoDraft, setAoDraft] = useState('0');
   const [noWorkDraft, setNoWorkDraft] = useState('0');
   const [overtimeDraft, setOvertimeDraft] = useState('0');
   const [notesDraft, setNotesDraft] = useState('');
 
-  const [newName, setNewName] = useState('');
-  const [newRole, setNewRole] = useState('');
-  const [newType, setNewType] = useState<PayrollEmployeeType>('Técnico');
 
   const activeEmployees = useMemo(() => module.employees.filter((employee) => employee.active), [module.employees]);
   const periodEntries = useMemo(
@@ -237,6 +236,7 @@ export function EmployeesTimesheetScreen() {
   }
 
   function openNewEmployee() {
+    setDirectoryVisible(false);
     const now = new Date().toISOString();
     setProfileForm({
       id: `staff-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -272,13 +272,16 @@ export function EmployeesTimesheetScreen() {
       setMessage(`Ya existe un perfil maestro para ${duplicate.name}. Revisa el nombre o teléfono antes de guardar.`);
       return;
     }
+    setProfileSaving(true);
     const result = await saveStaffProfile({ ...profile, name, phone, updatedAt: new Date().toISOString() });
+    setProfileSaving(false);
     if (!result.ok) {
       setMessage(result.message ?? 'No se pudo guardar el perfil maestro.');
       return;
     }
     setSelectedEmployeeId(profile.id);
     setProfileForm(null);
+    setDirectoryVisible(false);
     setMessage(`${name} quedó guardado como registro maestro del empleado.`);
   }
 
@@ -288,7 +291,7 @@ export function EmployeesTimesheetScreen() {
         title="Empleados"
         subtitle="Timesheet, asistencia y preparación de nómina"
         action={<View style={styles.headerActions}>
-          {currentUser?.role === 'admin' ? <Button compact variant="secondary" label="Agregar empleado" onPress={openNewEmployee} /> : null}
+          {currentUser?.role === 'admin' ? <><Button compact variant="secondary" label="Directorio de empleados" onPress={() => setDirectoryVisible(true)} /><Button compact variant="secondary" label="Agregar empleado" onPress={openNewEmployee} /></> : null}
           <Button compact variant="secondary" label="Generar resumen payroll" onPress={() => setSummaryVisible(true)} />
           <Button compact variant="success" label="Descargar reporte" onPress={downloadDetailed} />
         </View>}
@@ -343,7 +346,7 @@ export function EmployeesTimesheetScreen() {
               <SectionTitle
                 title={`Detalle diario — ${selectedEmployee.name}`}
                 subtitle={`${selectedEmployee.role} · ${selectedEmployee.employeeType}`}
-                action={<View style={styles.headerActions}>{currentUser?.role === 'admin' && selectedStaffProfile ? <Button compact variant="secondary" label="Editar perfil" onPress={() => setProfileForm({ ...selectedStaffProfile, skills: [...selectedStaffProfile.skills] })} /> : null}<Button compact variant="secondary" label="Configurar horario" onPress={() => setScheduleEmployee(selectedEmployee)} /></View>}
+                action={<View style={styles.headerActions}>{currentUser?.role === 'admin' && selectedStaffProfile ? <Button compact variant="secondary" label="Editar perfil" onPress={() => { setDirectoryVisible(false); setProfileForm({ ...selectedStaffProfile, skills: [...selectedStaffProfile.skills] }); }} /> : null}<Button compact variant="secondary" label="Configurar horario" onPress={() => setScheduleEmployee(selectedEmployee)} /></View>}
               />
               <View style={styles.dateNavigation}>
                 <Button compact variant="secondary" label="‹ Día" onPress={() => changeDate(-1)} />
@@ -425,8 +428,27 @@ export function EmployeesTimesheetScreen() {
         ) : null}
       </AppModal>
 
-      <AppModal visible={Boolean(profileForm)} title={profileForm && staffProfiles.some((profile) => profile.id === profileForm.id) ? 'Editar perfil maestro' : 'Agregar empleado'} onClose={() => setProfileForm(null)}>
-        {profileForm ? <EmployeeProfileEditor profile={profileForm} vans={vans} busy={module.busy} onCancel={() => setProfileForm(null)} onSave={saveMasterProfile} /> : null}
+      <AppModal visible={directoryVisible} title="Directorio maestro de empleados" onClose={() => setDirectoryVisible(false)}>
+        <ScrollView contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
+          <View style={styles.rulesCard}>
+            <Text style={styles.rulesTitle}>Un solo perfil por persona</Text>
+            <Text style={styles.rulesText}>Los empleados de esta lista son los mismos que se seleccionan en las vans y en Timesheet.</Text>
+          </View>
+          {staffProfiles.map((profile) => {
+            const assignments = vans.filter((van) => van.responsibleStaffId === profile.id || van.regularHelperId === profile.id);
+            return <Pressable key={profile.id} onPress={() => { setDirectoryVisible(false); setProfileForm({ ...profile, skills: [...profile.skills] }); }} style={styles.dayRow}>
+              <View style={styles.dayRowDate}><Text style={styles.employeeName}>{profile.name}</Text><Text style={styles.employeeRole}>{profile.role} · {profile.phone}</Text></View>
+              <Text style={styles.dayRowHours}>{assignments.length ? assignments.map((van) => van.name).join(' · ') : 'Sin van'}</Text>
+              <Pill label={profile.active ? profile.availability : 'Inactivo'} tone={profile.active ? 'success' : 'neutral'} />
+              <Text style={styles.openDetail}>Editar ›</Text>
+            </Pressable>;
+          })}
+          <Button variant="success" label="Agregar empleado" onPress={openNewEmployee} />
+        </ScrollView>
+      </AppModal>
+
+      <AppModal visible={Boolean(profileForm)} title={profileForm && staffProfiles.some((profile) => profile.id === profileForm.id) ? 'Editar perfil maestro' : 'Agregar empleado'} onClose={() => !profileSaving && setProfileForm(null)}>
+        {profileForm ? <EmployeeProfileEditor profile={profileForm} vans={vans} busy={profileSaving} onCancel={() => setProfileForm(null)} onSave={saveMasterProfile} /> : null}
       </AppModal>
     </ScrollView>
   );
