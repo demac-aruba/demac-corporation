@@ -21,11 +21,13 @@ jobs:
         with:
           python-version: '3.12'
       - name: Apply master employee patch
-        run: python scripts/apply_employee_master_patch.py
+        run: |
+          python scripts/apply_employee_master_patch.py
+          python scripts/finalize_employee_master_patch.py
       - name: Commit integrated files
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/types.ts src/hooks/usePayrollModule.ts src/screens/EmployeesTimesheetScreen.tsx src/screens/TeamScreen.tsx
-          git diff --cached --quiet || git commit -m "[skip employee master patch] Unify employee records"
+          git diff --cached --quiet || git commit -m "[skip employee master patch] Finalize unified employee records"
           git push
