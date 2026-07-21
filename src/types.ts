@@ -29,7 +29,8 @@ export type AppointmentStatus =
   | 'Reprogramada'
   | 'Cancelada';
 
-export type StaffRole = 'Técnico responsable' | 'Técnico' | 'Ayudante' | 'Supervisor';
+export type StaffEmployeeType = 'Técnico' | 'Secretaria' | 'Administración' | 'Otro';
+export type StaffRole = 'Técnico responsable' | 'Técnico' | 'Ayudante' | 'Supervisor' | 'Secretaria' | 'Administración' | 'Contabilidad' | 'Almacén' | 'Otro';
 export type StaffAvailability = 'Disponible' | 'Enfermo' | 'Vacaciones' | 'Libre' | 'Inactivo';
 
 export interface StaffProfile {
@@ -38,6 +39,7 @@ export interface StaffProfile {
   phone: string;
   email?: string;
   role: StaffRole;
+  employeeType?: StaffEmployeeType;
   canDriveVan: boolean;
   primaryVanId?: string;
   skills: string[];
