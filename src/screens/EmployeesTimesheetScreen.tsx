@@ -399,6 +399,7 @@ export function EmployeesTimesheetScreen() {
       <Card style={styles.rulesCard}>
         <Text style={styles.rulesTitle}>ⓘ Reglas de cálculo</Text>
         <Text style={styles.rulesText}>• La nómina corre automáticamente del día 27 al día 26.</Text>
+        <Text style={styles.rulesText}>• El horario regular diario aplica de lunes a sábado; domingo permanece sin jornada.</Text>
         <Text style={styles.rulesText}>• Las horas regulares se calculan como jornada programada menos AO y No Work No Pay.</Text>
         <Text style={styles.rulesText}>• Para julio, los técnicos permanecen con su horario completo. La regla de 5 horas trabajadas + 3 horas libres puede activarse desde el 1 de agosto.</Text>
         <Text style={styles.rulesText}>• Las secretarias pueden configurarse con 4 horas trabajadas + 4 horas libres en su medio día semanal.</Text>
@@ -496,10 +497,8 @@ function ScheduleEditor({ employee, busy, onSave, onCancel }: { employee: Payrol
       <View style={styles.optionRow}>
         {EMPLOYEE_TYPES.filter((type): type is PayrollEmployeeType => type !== 'Todos').map((type) => <Button key={type} compact variant={draft.employeeType === type ? 'primary' : 'secondary'} label={type} onPress={() => setDraft((current) => ({ ...current, employeeType: type }))} />)}
       </View>
-      <View style={styles.formGrid}>
-        <Input style={styles.field} keyboardType="decimal-pad" label="Horas lunes a viernes" value={String(draft.weekdayHours)} onChangeText={(value) => setDraft((current) => ({ ...current, weekdayHours: Math.max(0, Number(value || 0)) }))} />
-        <Input style={styles.field} keyboardType="decimal-pad" label="Horas sábado" value={String(draft.saturdayHours)} onChangeText={(value) => setDraft((current) => ({ ...current, saturdayHours: Math.max(0, Number(value || 0)) }))} />
-      </View>
+      <Input keyboardType="decimal-pad" label="Horario regular diario (lunes a sábado)" value={String(draft.weekdayHours)} onChangeText={(value) => setDraft((current) => ({ ...current, weekdayHours: Math.max(0, Number(value || 0)), saturdayHours: Math.max(0, Number(value || 0)) }))} />
+      <Text style={styles.rulesText}>Este horario aplica a todos los días laborables de lunes a sábado. El día de medio día y sus horas especiales se configuran abajo.</Text>
       <Text style={styles.filterLabel}>MEDIO DÍA SEMANAL</Text>
       <View style={styles.optionRow}>
         <Button compact variant={draft.weeklyHalfDayWeekday === undefined ? 'primary' : 'secondary'} label="Sin medio día" onPress={() => setDraft((current) => ({ ...current, weeklyHalfDayWeekday: undefined }))} />
@@ -510,7 +509,7 @@ function ScheduleEditor({ employee, busy, onSave, onCancel }: { employee: Payrol
         <Input style={styles.field} keyboardType="decimal-pad" label="Horas trabajadas ese día" value={String(draft.halfDayWorkedHours)} onChangeText={(value) => setDraft((current) => ({ ...current, halfDayWorkedHours: Math.max(0, Number(value || 0)) }))} />
         <Input style={styles.field} keyboardType="decimal-pad" label="Horas libres pagadas" value={String(draft.halfDayPaidFreeHours)} onChangeText={(value) => setDraft((current) => ({ ...current, halfDayPaidFreeHours: Math.max(0, Number(value || 0)) }))} />
       </View>
-      <View style={styles.modalActions}><Button variant="secondary" label="Cancelar" onPress={onCancel} /><Button variant="success" label={busy ? 'Guardando…' : 'Guardar horario'} disabled={busy} onPress={() => void onSave({ ...draft, updatedAt: new Date().toISOString() })} /></View>
+      <View style={styles.modalActions}><Button variant="secondary" label="Cancelar" onPress={onCancel} /><Button variant="success" label={busy ? 'Guardando…' : 'Guardar horario'} disabled={busy} onPress={() => void onSave({ ...draft, saturdayHours: draft.weekdayHours, updatedAt: new Date().toISOString() })} /></View>
     </ScrollView>
   );
 }
