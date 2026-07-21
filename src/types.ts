@@ -10,6 +10,7 @@ export type ScreenKey =
   | 'technician'
   | 'sales'
   | 'inventory'
+  | 'employees'
   | 'finance'
   | 'settings';
 

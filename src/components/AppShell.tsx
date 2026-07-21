@@ -8,6 +8,7 @@ import { CatalogScreen } from '../screens/CatalogScreen';
 import { ClientsScreen } from '../screens/ClientsScreen';
 import { DashboardScreen } from '../screens/DashboardScreen';
 import { FinanceScreen } from '../screens/FinanceScreen';
+import { EmployeesTimesheetScreen } from '../screens/EmployeesTimesheetScreen';
 import { InventoryScreen } from '../screens/InventoryScreen';
 import { SettingsHubScreen } from '../screens/SettingsHubScreen';
 import { TeamHubScreen } from '../screens/TeamHubScreen';
@@ -24,6 +25,7 @@ const navItems: { key: ScreenKey; label: string; icon: string; roles: UserRole[]
   { key: 'technician', label: 'Mi trabajo', icon: '✓', roles: ['admin', 'supervisor', 'technician'] },
   { key: 'sales', label: 'Ventas', icon: '$', roles: ['admin', 'office', 'accounting'] },
   { key: 'inventory', label: 'Inventario', icon: '◇', roles: ['admin', 'supervisor', 'inventory'] },
+  { key: 'employees', label: 'Empleados', icon: '♙', roles: ['admin', 'accounting'] },
   { key: 'finance', label: 'Cuentas', icon: '▤', roles: ['admin', 'accounting'] },
   { key: 'settings', label: 'Ajustes', icon: '⚙', roles: ['admin'] },
 ];
@@ -68,6 +70,7 @@ export function AppShell() {
     case 'technician': content = <TechnicianScreen />; break;
     case 'sales': content = <FinanceScreen salesMode />; break;
     case 'inventory': content = <InventoryScreen />; break;
+    case 'employees': content = <EmployeesTimesheetScreen />; break;
     case 'finance': content = <FinanceScreen />; break;
     case 'settings': content = <SettingsHubScreen />; break;
     default: content = <DashboardScreen navigate={navigate} />;
