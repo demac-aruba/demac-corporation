@@ -105,7 +105,8 @@ export function employeeScheduleForDate(employee: PayrollEmployee, date: string)
   const weekday = parsed.getUTCDay();
   if (weekday === 0) return { scheduledWorkHours: 0, paidFreeHours: 0 };
 
-  let scheduledWorkHours = weekday === 6 ? Number(employee.saturdayHours ?? 0) : Number(employee.weekdayHours ?? 8);
+  // El horario regular aplica de lunes a sábado. El medio día semanal se configura por separado.
+  let scheduledWorkHours = Number(employee.weekdayHours ?? 8);
   let paidFreeHours = 0;
   const halfDayActive = employee.weeklyHalfDayWeekday !== undefined
     && employee.halfDayEffectiveFrom
