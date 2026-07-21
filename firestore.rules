@@ -26,6 +26,10 @@ service cloud.firestore {
       return activeStaff() && userProfile().data.role in ['admin', 'office', 'supervisor', 'inventory'];
     }
 
+    function payrollRole() {
+      return activeStaff() && userProfile().data.role in ['admin', 'accounting'];
+    }
+
     function technicianRole() {
       return activeStaff() && userProfile().data.role == 'technician';
     }
@@ -131,6 +135,16 @@ service cloud.firestore {
     match /staffAbsences/{absenceId} {
       allow read: if activeStaff();
       allow create, update, delete: if operationsRole();
+    }
+
+    match /employeePayrollSettings/{employeeId} {
+      allow read, create, update: if payrollRole();
+      allow delete: if adminRole();
+    }
+
+    match /employeeTimesheets/{entryId} {
+      allow read, create, update: if payrollRole();
+      allow delete: if adminRole();
     }
 
     match /vanMaintenanceLogs/{logId} {
