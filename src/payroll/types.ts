@@ -4,6 +4,8 @@ export type PayrollDayStatus =
   | 'Regular'
   | 'AO parcial'
   | 'AO completo'
+  | 'Vacaciones parcial'
+  | 'Vacaciones completo'
   | 'No Work No Pay parcial'
   | 'No Work No Pay completo'
   | 'Día libre programado'
@@ -39,6 +41,7 @@ export interface EmployeeTimesheetEntry {
   regularHours: number;
   overtimeHours: number;
   aoHours: number;
+  vacationHours?: number;
   noWorkNoPayHours: number;
   status: PayrollDayStatus;
   notes?: string;
@@ -63,6 +66,7 @@ export interface PayrollDayCalculation {
   regularHours: number;
   overtimeHours: number;
   aoHours: number;
+  vacationHours: number;
   noWorkNoPayHours: number;
   status: PayrollDayStatus;
   notes: string;
@@ -71,9 +75,12 @@ export interface PayrollDayCalculation {
 
 export interface PayrollEmployeeSummary {
   employee: PayrollEmployee;
-  regularHours: number;
+  weeklyRegularHours: number;
+  monthlyBaseHours: number;
+  actualRegularHours: number;
   overtimeHours: number;
   aoHours: number;
+  vacationHours: number;
   noWorkNoPayHours: number;
   paidFreeHours: number;
   payableHours: number;
