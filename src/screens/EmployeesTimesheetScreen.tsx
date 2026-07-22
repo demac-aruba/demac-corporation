@@ -14,6 +14,7 @@ import {
 import { EmployeeTimesheetEntry, PayrollDayStatus, PayrollEmployee, PayrollEmployeeSummary, PayrollEmployeeType } from '../payroll/types';
 import { useAppState } from '../state/AppState';
 import { useTeamState } from '../state/TeamState';
+import { downloadPayrollSummaryPdf } from '../services/payrollSummaryPdf';
 import { colors } from '../theme';
 import { StaffProfile } from '../types';
 
@@ -228,7 +229,7 @@ export function EmployeesTimesheetScreen() {
 
   function detailedRows() {
     const rows: Array<Array<string | number>> = [[
-      'Empleado', 'Cargo', 'Tipo', 'Fecha', 'Día de semana', 'Horas regulares reales', 'Overtime', 'AO', 'Vacaciones', 'No Work No Pay', 'Horas libres pagadas', 'Estado', 'Nota',
+      'Empleado', 'Cargo', 'Tipo', 'Fecha', 'Día de semana', 'Horas regulares reales', 'Overtime', 'AO', 'Vacaciones', 'No Work No Pay', 'Estado', 'Nota',
     ]];
     for (const employee of activeEmployees) {
       for (const date of periodDates) {
@@ -245,7 +246,6 @@ export function EmployeesTimesheetScreen() {
           hours(day.aoHours),
           hours(day.vacationHours),
           hours(day.noWorkNoPayHours),
-          hours(day.paidFreeHours),
           day.status,
           day.notes,
         ]);
@@ -254,33 +254,14 @@ export function EmployeesTimesheetScreen() {
     return rows;
   }
 
-  function summaryRows() {
-    return [[
-      'Empleado', 'Cargo', 'Tipo', 'Horas semanales base', `Horas mensuales base (${MONTHLY_HOURS_FACTOR})`, 'Horas regulares reales del período', 'Overtime', 'AO', 'Vacaciones', 'No Work No Pay', 'Horas libres pagadas', 'Horas pagables estimadas',
-    ], ...summaries.map((summary) => [
-      summary.employee.name,
-      summary.employee.role,
-      summary.employee.employeeType,
-      hours(summary.weeklyRegularHours),
-      hours(summary.monthlyBaseHours),
-      hours(summary.actualRegularHours),
-      hours(summary.overtimeHours),
-      hours(summary.aoHours),
-      hours(summary.vacationHours),
-      hours(summary.noWorkNoPayHours),
-      hours(summary.paidFreeHours),
-      hours(summary.payableHours),
-    ])];
-  }
-
   function downloadDetailed() {
     const ok = downloadCsv(`DEMAC_Timesheet_${period.startDate}_${period.endDate}.csv`, detailedRows());
     setMessage(ok ? 'Reporte detallado descargado.' : 'La descarga está disponible desde la versión web/PWA.');
   }
 
   function downloadSummary() {
-    const ok = downloadCsv(`DEMAC_Payroll_Resumen_${period.startDate}_${period.endDate}.csv`, summaryRows());
-    setMessage(ok ? 'Resumen de payroll descargado.' : 'La descarga está disponible desde la versión web/PWA.');
+    const ok = downloadPayrollSummaryPdf({ period, summaries });
+    setMessage(ok ? 'Resumen de payroll descargado en PDF.' : 'La descarga PDF está disponible desde la versión web/PWA.');
   }
 
   function openNewEmployee() {
@@ -408,7 +389,6 @@ export function EmployeesTimesheetScreen() {
               <View style={styles.dayFacts}>
                 <DayFact label="Jornada programada" value={`${hours(previewDay.scheduledWorkHours)} h`} />
                 <DayFact label="Horas regulares" value={`${hours(previewDay.regularHours)} h`} />
-                <DayFact label="Horas libres pagadas" value={`${hours(previewDay.paidFreeHours)} h`} />
                 <DayFact label="Estado" value={previewDay.status} />
               </View>
               <View style={styles.formGrid}>
@@ -423,7 +403,7 @@ export function EmployeesTimesheetScreen() {
                 <Button variant="success" label={module.busy ? 'Guardando…' : 'Guardar día'} disabled={module.busy} onPress={() => void saveDay()} />
               </View>
             </Card>
-          ) : <Card><EmptyState icon="♙" title="Selecciona un empleado" message="Abre un empleado para registrar AO, No Work No Pay y overtime." /></Card>}
+          ) : <Card><EmptyState icon="♙" title="Selecciona un empleado" message="Abre un empleado para registrar AO, vacaciones, No Work No Pay y overtime." /></Card>}
 
           {selectedEmployee ? (
             <Card>
@@ -474,7 +454,7 @@ export function EmployeesTimesheetScreen() {
       <AppModal visible={summaryVisible} title={`Resumen payroll · ${period.label}`} onClose={() => setSummaryVisible(false)}>
         <ScrollView contentContainerStyle={styles.modalContent}>
           {summaries.map((summary) => <PayrollSummaryCard key={summary.employee.id} summary={summary} />)}
-          <Button variant="success" label="Descargar resumen CSV" onPress={downloadSummary} />
+          <Button variant="success" label="Descargar resumen PDF" onPress={downloadSummary} />
         </ScrollView>
       </AppModal>
 
@@ -551,7 +531,7 @@ function DayFact({ label, value }: { label: string; value: string }) {
 }
 
 function PayrollSummaryCard({ summary }: { summary: PayrollEmployeeSummary }) {
-  return <View style={styles.payrollSummaryCard}><Text style={styles.employeeName}>{summary.employee.name}</Text><Text style={styles.employeeRole}>{summary.employee.role}</Text><View style={styles.payrollSummaryGrid}><SummaryValue label="Base semana" value={summary.weeklyRegularHours} /><SummaryValue label="Base mes" value={summary.monthlyBaseHours} /><SummaryValue label="Laboradas" value={summary.actualRegularHours} /><SummaryValue label="OT" value={summary.overtimeHours} /><SummaryValue label="AO" value={summary.aoHours} /><SummaryValue label="Vacaciones" value={summary.vacationHours} /><SummaryValue label="NWNP" value={summary.noWorkNoPayHours} /><SummaryValue label="Libre pago" value={summary.paidFreeHours} /><SummaryValue label="Pagables" value={summary.payableHours} /></View></View>;
+  return <View style={styles.payrollSummaryCard}><Text style={styles.employeeName}>{summary.employee.name}</Text><Text style={styles.employeeRole}>{summary.employee.role}</Text><View style={styles.payrollSummaryGrid}><SummaryValue label="Base semana" value={summary.weeklyRegularHours} /><SummaryValue label="Base mes" value={summary.monthlyBaseHours} /><SummaryValue label="Laboradas" value={summary.actualRegularHours} /><SummaryValue label="OT" value={summary.overtimeHours} /><SummaryValue label="AO" value={summary.aoHours} /><SummaryValue label="Vacaciones" value={summary.vacationHours} /><SummaryValue label="NWNP" value={summary.noWorkNoPayHours} /><SummaryValue label="Pagables" value={summary.payableHours} /></View></View>;
 }
 
 function CalendarPicker({ month, selectedDate, today, onPreviousMonth, onNextMonth, onSelect }: { month: string; selectedDate: string; today: string; onPreviousMonth: () => void; onNextMonth: () => void; onSelect: (date: string) => void }) {
@@ -596,9 +576,9 @@ function ScheduleEditor({ employee, busy, onSave, onCancel }: { employee: Payrol
       <Input label="Fecha de inicio del medio día (AAAA-MM-DD)" value={draft.halfDayEffectiveFrom ?? ''} onChangeText={(value) => setDraft((current) => ({ ...current, halfDayEffectiveFrom: value || undefined }))} placeholder="2026-08-01" />
       <View style={styles.formGrid}>
         <Input style={styles.field} keyboardType="decimal-pad" label="Horas trabajadas ese día" value={String(draft.halfDayWorkedHours)} onChangeText={(value) => setDraft((current) => ({ ...current, halfDayWorkedHours: Math.max(0, Number(value || 0)) }))} />
-        <Input style={styles.field} keyboardType="decimal-pad" label="Horas libres pagadas" value={String(draft.halfDayPaidFreeHours)} onChangeText={(value) => setDraft((current) => ({ ...current, halfDayPaidFreeHours: Math.max(0, Number(value || 0)) }))} />
       </View>
-      <View style={styles.modalActions}><Button variant="secondary" label="Cancelar" onPress={onCancel} /><Button variant="success" label={busy ? 'Guardando…' : 'Guardar horario'} disabled={busy} onPress={() => void onSave({ ...draft, saturdayHours: draft.weekdayHours, updatedAt: new Date().toISOString() })} /></View>
+      <Text style={styles.rulesText}>Beneficio semanal no contabilizado: {hours(Math.max(0, Number(draft.weekdayHours || 0) - Number(draft.halfDayWorkedHours || 0)))} horas libres. Este beneficio no aparece en Timesheet ni en el resumen de payroll.</Text>
+      <View style={styles.modalActions}><Button variant="secondary" label="Cancelar" onPress={onCancel} /><Button variant="success" label={busy ? 'Guardando…' : 'Guardar horario'} disabled={busy} onPress={() => void onSave({ ...draft, saturdayHours: draft.weekdayHours, halfDayPaidFreeHours: Math.max(0, Number(draft.weekdayHours || 0) - Number(draft.halfDayWorkedHours || 0)), updatedAt: new Date().toISOString() })} /></View>
     </ScrollView>
   );
 }
