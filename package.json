@@ -20,7 +20,7 @@
   },
   "scripts": {
     "patch:inventory": "node scripts/runInventoryUnitPatch.cjs",
-    "patch:payroll": "node scripts/patchPayrollStartDateStage1.cjs",
+    "patch:payroll": "node scripts/patchPayrollStartDateStage1.cjs && node scripts/patchPayrollStartDateStage2.cjs",
     "patch:all": "npm run patch:inventory && npm run patch:payroll",
     "prestart": "npm run patch:all",
     "start": "expo start",
