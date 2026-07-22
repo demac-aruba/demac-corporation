@@ -1,0 +1,35 @@
+name: Apply payroll PDF and summary cleanup
+
+on:
+  push:
+    branches:
+      - agent/payroll-pdf-no-free-hours
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/payroll-pdf-no-free-hours
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply screen changes
+        run: python .github/scripts/apply_payroll_pdf_no_free_hours.py
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/screens/EmployeesTimesheetScreen.tsx
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Remove free-hour tracking and add payroll PDF action"
+            git push origin HEAD:agent/payroll-pdf-no-free-hours
+          fi
