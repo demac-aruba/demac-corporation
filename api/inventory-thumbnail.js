@@ -54,19 +54,26 @@ async function createThumbnail(buffer) {
 }
 
 module.exports = async function handler(req, res) {
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
+  if (!['GET', 'POST'].includes(req.method)) {
+    res.setHeader('Allow', 'GET, POST');
     return sendJson(res, 405, { error: 'Método no permitido.' });
   }
 
   try {
-    const sourceUrl = typeof req.body?.sourceUrl === 'string' ? req.body.sourceUrl : '';
+    const sourceUrl = req.method === 'GET'
+      ? (typeof req.query?.sourceUrl === 'string' ? req.query.sourceUrl : '')
+      : (typeof req.body?.sourceUrl === 'string' ? req.body.sourceUrl : '');
     if (!sourceUrl) return sendJson(res, 400, { error: 'Falta la URL de la fotografía.' });
 
     const validatedUrl = allowedFirebaseUrl(sourceUrl);
     const sourceResponse = await fetch(validatedUrl, { redirect: 'follow' });
     if (!sourceResponse.ok) {
       return sendJson(res, 502, { error: `Firebase respondió ${sourceResponse.status} al leer la fotografía.` });
+    }
+
+    const contentType = sourceResponse.headers.get('content-type') || '';
+    if (contentType && !contentType.startsWith('image/') && contentType !== 'application/octet-stream') {
+      return sendJson(res, 415, { error: 'La fuente no es una imagen válida.' });
     }
 
     const contentLength = Number(sourceResponse.headers.get('content-length') || 0);
@@ -83,7 +90,7 @@ module.exports = async function handler(req, res) {
     res.status(200);
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Content-Length', String(thumbnail.length));
-    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Cache-Control', 'public, max-age=31536000, s-maxage=31536000, stale-while-revalidate=86400, immutable');
     return res.end(thumbnail);
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
