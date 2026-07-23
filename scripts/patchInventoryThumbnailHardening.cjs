@@ -150,20 +150,8 @@ replaceOrConfirm(
 
 replaceOrConfirm(
   screen,
+  '  function resetNewToolForm() {',
   lines(
-    '  useEffect(() => {',
-    '    if (!addCatalog) return;',
-    "    setAddPhotos((previous) => makePhotoSlots(additionQuantity, addCatalog.trackingMode ?? 'individual', previous));",
-    '  }, [additionQuantity, addCatalog]);',
-    '',
-    '  function resetNewToolForm() {',
-  ),
-  lines(
-    '  useEffect(() => {',
-    '    if (!addCatalog) return;',
-    "    setAddPhotos((previous) => makePhotoSlots(additionQuantity, addCatalog.trackingMode ?? 'individual', previous));",
-    '  }, [additionQuantity, addCatalog]);',
-    '',
     '  useEffect(() => {',
     "    if (view !== 'van-profile' || !selectedVanId || currentUser?.role !== 'admin' || thumbnailBusy || !assetsMissingThumbnails.length) return;",
     '    const timer = setTimeout(() => { void optimizeExistingThumbnails(); }, 500);',
