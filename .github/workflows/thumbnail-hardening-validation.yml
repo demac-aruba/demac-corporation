@@ -1,0 +1,25 @@
+name: Thumbnail hardening validation
+
+on:
+  push:
+    branches:
+      - agent/inventory-thumbnail-hardening
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --silent
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build web
+        run: npm run build:web
