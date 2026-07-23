@@ -32,12 +32,30 @@ if (!text.includes('function thumbnailProxyUrl(')) {
   text = text.replace(oldThumbnailFunction, newThumbnailFunction);
 }
 
-const oldUpload = "      const thumbnail = await uploadInventoryThumbnail({ ...photo, scope: 'van-tool', entityId: asset.id, evidenceId }).catch(() => null);";
-const newUpload = '      const thumbnail: Awaited<ReturnType<typeof uploadInventoryThumbnail>> = null; // Las miniaturas se sirven por el proxy cacheado; no se suben a Firebase.';
-if (!text.includes(newUpload)) {
-  if (!text.includes(oldUpload)) throw new Error('No se encontró la creación de miniatura durante la carga de evidencia.');
-  text = text.replace(oldUpload, newUpload);
+const uploadLine = "      const thumbnail = await uploadInventoryThumbnail({ ...photo, scope: 'van-tool', entityId: asset.id, evidenceId }).catch(() => null);\n";
+if (text.includes(uploadLine)) {
+  text = text.replace(uploadLine, '      // La miniatura se sirve por el proxy cacheado; no se sube a Firebase.\n');
 }
+
+text = text.replace('        ...(thumbnail ?? {}),\n', '');
+
+const thumbnailFieldsWithSize = [
+  '        latestThumbnailUrl: thumbnail?.thumbnailDownloadUrl,',
+  '        latestThumbnailStoragePath: thumbnail?.thumbnailStoragePath,',
+  '        latestThumbnailSourcePhotoPath: thumbnail ? stored.storagePath : undefined,',
+  '        latestThumbnailSizeBytes: thumbnail?.thumbnailSizeBytes,',
+  '        latestThumbnailWidth: thumbnail?.thumbnailWidth,',
+  '        latestThumbnailHeight: thumbnail?.thumbnailHeight,',
+  '',
+].join('\n');
+const thumbnailFieldsBasic = [
+  '        latestThumbnailUrl: thumbnail?.thumbnailDownloadUrl,',
+  '        latestThumbnailStoragePath: thumbnail?.thumbnailStoragePath,',
+  '        latestThumbnailSourcePhotoPath: thumbnail ? stored.storagePath : undefined,',
+  '',
+].join('\n');
+text = text.replace(thumbnailFieldsWithSize, '');
+text = text.replace(thumbnailFieldsBasic, '');
 
 fs.writeFileSync(screenPath, text);
 console.log('Inventory thumbnail proxy-only patch applied.');
