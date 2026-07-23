@@ -20,7 +20,7 @@ jobs:
           set +e
           npm run typecheck > typecheck.log 2>&1
           status=$?
-          tail -n 120 typecheck.log
+          grep -E "error TS|Error:|Missing|Property .* does not exist|Cannot find" typecheck.log | tail -n 80 || true
           exit $status
       - name: Build web
         shell: bash
@@ -28,5 +28,5 @@ jobs:
           set +e
           npm run build:web > build.log 2>&1
           status=$?
-          tail -n 120 build.log
+          grep -E "Error:|Missing|error TS|Metro error|Bundling failed" build.log | tail -n 80 || true
           exit $status
