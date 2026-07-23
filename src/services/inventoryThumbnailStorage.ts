@@ -1,8 +1,10 @@
 import { getValidFirebaseSession } from './firebase';
 
 const storageBucket = process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET;
-const THUMBNAIL_MAX_DIMENSION = 180;
-const THUMBNAIL_JPEG_QUALITY = 0.58;
+const THUMBNAIL_MAX_DIMENSION = 144;
+const THUMBNAIL_JPEG_QUALITY = 0.46;
+const THUMBNAIL_RETRY_QUALITY = 0.32;
+const MAX_THUMBNAIL_BYTES = 64 * 1024;
 const MAX_SOURCE_BYTES = 25 * 1024 * 1024;
 
 export type InventoryThumbnailUpload = {
@@ -10,6 +12,8 @@ export type InventoryThumbnailUpload = {
   thumbnailDownloadUrl: string;
   thumbnailContentType: 'image/jpeg';
   thumbnailSizeBytes: number;
+  thumbnailWidth: number;
+  thumbnailHeight: number;
 };
 
 type ThumbnailInput = {
@@ -33,6 +37,12 @@ type DrawableImage = {
   width: number;
   height: number;
   cleanup: () => void;
+};
+
+type GeneratedThumbnail = {
+  blob: Blob;
+  width: number;
+  height: number;
 };
 
 function safeSegment(value: string, fallback: string) {
@@ -146,11 +156,11 @@ async function loadDrawableImage(blob: Blob): Promise<DrawableImage | null> {
   }
 }
 
-async function canvasBlob(canvas: HTMLCanvasElement) {
-  return new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', THUMBNAIL_JPEG_QUALITY));
+async function canvasBlob(canvas: HTMLCanvasElement, quality: number) {
+  return new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
 }
 
-async function createThumbnail(sourceBlob: Blob, mimeType?: string | null) {
+async function createThumbnail(sourceBlob: Blob, mimeType?: string | null): Promise<GeneratedThumbnail | null> {
   if (typeof document === 'undefined') return null;
   const sourceType = mimeType || sourceBlob.type || 'image/jpeg';
   if (!sourceType.startsWith('image/')) throw new Error('El archivo original no es una imagen válida.');
@@ -171,8 +181,16 @@ async function createThumbnail(sourceBlob: Blob, mimeType?: string | null) {
     context.fillStyle = '#FFFFFF';
     context.fillRect(0, 0, width, height);
     context.drawImage(drawable.source, 0, 0, width, height);
-    const thumbnail = await canvasBlob(canvas);
-    return thumbnail && thumbnail.size > 0 ? thumbnail : null;
+
+    let thumbnail = await canvasBlob(canvas, THUMBNAIL_JPEG_QUALITY);
+    if (thumbnail && thumbnail.size > MAX_THUMBNAIL_BYTES) {
+      thumbnail = await canvasBlob(canvas, THUMBNAIL_RETRY_QUALITY);
+    }
+    if (!thumbnail || thumbnail.size <= 0) return null;
+    if (thumbnail.size > MAX_THUMBNAIL_BYTES) {
+      throw new Error('La miniatura generada sigue siendo demasiado pesada.');
+    }
+    return { blob: thumbnail, width, height };
   } finally {
     drawable.cleanup();
   }
@@ -184,25 +202,31 @@ export async function uploadInventoryThumbnail(input: ThumbnailInput): Promise<I
   if (!session) throw new Error('Tu sesión venció. Inicia sesión nuevamente.');
 
   const sourceBlob = await fetchSourceBlob(input, session.idToken);
-  const thumbnail = await createThumbnail(sourceBlob, input.mimeType);
-  if (!thumbnail) return null;
+  const generated = await createThumbnail(sourceBlob, input.mimeType);
+  if (!generated) return null;
 
   const entityId = safeSegment(input.entityId, 'inventory-item');
   const evidenceId = safeSegment(input.evidenceId, randomToken());
-  const thumbnailStoragePath = `inventory/${input.scope}/${entityId}/thumbnails/${evidenceId}-thumb.jpg`;
+  // Storage rules allow one file level below the entity folder. Keep thumbnails
+  // beside the original instead of using a nested /thumbnails/ subfolder.
+  const thumbnailStoragePath = `inventory/${input.scope}/${entityId}/${evidenceId}-thumb.jpg`;
   const metadata = {
     name: thumbnailStoragePath,
     contentType: 'image/jpeg',
+    cacheControl: 'public,max-age=31536000,immutable',
     metadata: {
       scope: input.scope,
       entityId: input.entityId,
       evidenceId: input.evidenceId,
       sourceStoragePath: input.sourceStoragePath ?? '',
       variant: 'thumbnail',
+      width: String(generated.width),
+      height: String(generated.height),
+      sizeBytes: String(generated.blob.size),
       uploadedByUid: session.uid,
     },
   };
-  const multipart = buildMultipartUploadBody(metadata, thumbnail);
+  const multipart = buildMultipartUploadBody(metadata, generated.blob);
   const endpoint = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(storageBucket)}/o?name=${encodeURIComponent(thumbnailStoragePath)}`;
   const response = await fetch(endpoint, {
     method: 'POST',
@@ -226,6 +250,8 @@ export async function uploadInventoryThumbnail(input: ThumbnailInput): Promise<I
     thumbnailStoragePath,
     thumbnailDownloadUrl,
     thumbnailContentType: 'image/jpeg',
-    thumbnailSizeBytes: thumbnail.size,
+    thumbnailSizeBytes: generated.blob.size,
+    thumbnailWidth: generated.width,
+    thumbnailHeight: generated.height,
   };
 }
