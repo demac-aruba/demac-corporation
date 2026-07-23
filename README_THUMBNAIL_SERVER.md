@@ -1,0 +1,1 @@
+Inventory thumbnails for existing Firebase photos are generated through `/api/inventory-thumbnail` to avoid browser CORS restrictions. The endpoint accepts only URLs from the configured Firebase Storage bucket and returns JPEG files no larger than 144 px and 64 KB.
