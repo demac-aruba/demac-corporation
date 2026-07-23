@@ -82,6 +82,12 @@ export interface VanToolAssetV2 {
   latestPhotoUrl?: string;
   latestPhotoStoragePath?: string;
   latestPhotoAt?: string;
+  latestThumbnailUrl?: string;
+  latestThumbnailStoragePath?: string;
+  latestThumbnailSourcePhotoPath?: string;
+  latestThumbnailSizeBytes?: number;
+  latestThumbnailWidth?: number;
+  latestThumbnailHeight?: number;
   notes?: string;
   maintenanceDueAt?: string;
   calibrationDueAt?: string;
@@ -161,6 +167,12 @@ export interface InventoryEvidenceV2 {
   downloadUrl: string;
   contentType: string;
   sizeBytes: number;
+  thumbnailStoragePath?: string;
+  thumbnailDownloadUrl?: string;
+  thumbnailContentType?: string;
+  thumbnailSizeBytes?: number;
+  thumbnailWidth?: number;
+  thumbnailHeight?: number;
   capturedAt: string;
   uploadedAt: string;
   uploadedByUserId: string;

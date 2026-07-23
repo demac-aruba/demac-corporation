@@ -1,6 +1,6 @@
 import * as ImagePicker from 'expo-image-picker';
 import React, { useEffect, useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, ImageStyle, Pressable, ScrollView, StyleProp, StyleSheet, Text, View } from 'react-native';
 import { AppModal, Button, Card, EmptyState, formatMoney, Input, Pill, SectionTitle } from '../components/UI';
 import { assetInventoryValue, assetIsInVan, assetIsInWarehouse, useInventoryModuleV2 } from '../hooks/useInventoryModuleV2';
 import {
@@ -54,12 +54,43 @@ function makePhotoSlots(quantity: number, mode: ToolTrackingMode, previous: Arra
   return Array.from({ length }, (_, index) => previous[index] ?? null);
 }
 
+function makeConditionSlots(quantity: number, mode: ToolTrackingMode, previous: ToolConditionV2[] = []) {
+  const length = mode === 'individual' ? Math.max(1, quantity) : 1;
+  return Array.from({ length }, (_, index) => previous[index] ?? 'Nueva');
+}
+
 function eventId() {
   return `lifecycle-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function isRetired(asset: VanToolAssetV2) {
   return ['Retirada', 'Desechada'].includes(asset.operationalStatus ?? '') || Boolean(asset.retiredAt);
+}
+
+function thumbnailProxyUrl(originalUrl?: string) {
+  if (!originalUrl) return undefined;
+  const origin = typeof window !== "undefined" ? window.location.origin : "https://demac-aruba.com";
+  return `${origin}/api/inventory-thumbnail?sourceUrl=${encodeURIComponent(originalUrl)}`;
+}
+
+function currentThumbnailUrl(asset: VanToolAssetV2) {
+  return thumbnailProxyUrl(asset.latestPhotoUrl);
+}
+
+function SafeInventoryImage({ thumbnailUrl, originalUrl, style, fallbackToOriginal = true }: { thumbnailUrl?: string; originalUrl?: string; style: StyleProp<ImageStyle>; fallbackToOriginal?: boolean }) {
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
+  useEffect(() => setThumbnailFailed(false), [thumbnailUrl, originalUrl]);
+  const resolvedUrl = thumbnailUrl && !thumbnailFailed ? thumbnailUrl : fallbackToOriginal ? originalUrl : undefined;
+  if (!resolvedUrl) return <View style={style as any}><Text>📷</Text></View>;
+  return (
+    <Image
+      source={{ uri: resolvedUrl }}
+      style={style}
+      onError={() => {
+        if (thumbnailUrl && resolvedUrl === thumbnailUrl) setThumbnailFailed(true);
+      }}
+    />
+  );
 }
 
 function availableQuantity(assets: VanToolAssetV2[], catalog: ToolCatalogItemV2) {
@@ -92,8 +123,9 @@ export function InventoryScreen() {
   const [registrationProgress, setRegistrationProgress] = useState('');
   const [toolName, setToolName] = useState('');
   const [toolCategory, setToolCategory] = useState<'Power Tools' | 'Hand Tools'>('Power Tools');
+  const [toolTrackingMode, setToolTrackingMode] = useState<ToolTrackingMode>('individual');
   const [toolCost, setToolCost] = useState('0');
-  const [toolCondition, setToolCondition] = useState<ToolConditionV2>('Nueva');
+  const [toolConditions, setToolConditions] = useState<ToolConditionV2[]>(['Nueva']);
   const [toolQuantity, setToolQuantity] = useState('1');
   const [recommendedQuantity, setRecommendedQuantity] = useState('1');
   const [toolPhotos, setToolPhotos] = useState<Array<PendingPhoto | null>>([null]);
@@ -102,7 +134,7 @@ export function InventoryScreen() {
   const [lightboxUrl, setLightboxUrl] = useState('');
   const [addCatalog, setAddCatalog] = useState<ToolCatalogItemV2 | null>(null);
   const [addQuantity, setAddQuantity] = useState('1');
-  const [addCondition, setAddCondition] = useState<ToolConditionV2>('Nueva');
+  const [addConditions, setAddConditions] = useState<ToolConditionV2[]>(['Nueva']);
   const [addPhotos, setAddPhotos] = useState<Array<PendingPhoto | null>>([null]);
   const [replacementAssignment, setReplacementAssignment] = useState(false);
 
@@ -114,7 +146,6 @@ export function InventoryScreen() {
   const [lifecycleQuantity, setLifecycleQuantity] = useState('1');
   const [lifecyclePhoto, setLifecyclePhoto] = useState<PendingPhoto | null>(null);
 
-  const toolTrackingMode: ToolTrackingMode = toolCategory === 'Power Tools' ? 'individual' : 'quantity';
   const selectedVan = module.vans.find((van) => van.id === selectedVanId);
   const selectedAssets = module.vanAssets.filter((asset) => assetIsInVan(asset, selectedVanId) && !isRetired(asset));
   const selectedAsset = module.vanAssets.find((asset) => asset.id === selectedAssetId) ?? null;
@@ -141,18 +172,24 @@ export function InventoryScreen() {
 
   useEffect(() => {
     setToolPhotos((previous) => makePhotoSlots(registrationQuantity, toolTrackingMode, previous));
+    setToolConditions((previous) => makeConditionSlots(registrationQuantity, toolTrackingMode, previous));
   }, [registrationQuantity, toolTrackingMode]);
 
   useEffect(() => {
     if (!addCatalog) return;
-    setAddPhotos((previous) => makePhotoSlots(additionQuantity, addCatalog.trackingMode ?? 'individual', previous));
+    const mode = addCatalog.trackingMode ?? 'individual';
+    setAddPhotos((previous) => makePhotoSlots(additionQuantity, mode, previous));
+    setAddConditions((previous) => makeConditionSlots(additionQuantity, mode, previous));
   }, [additionQuantity, addCatalog]);
+
+  // La migración de miniaturas es manual para evitar ciclos silenciosos cuando una operación falla.
 
   function resetNewToolForm() {
     setToolName('');
     setToolCategory('Power Tools');
+    setToolTrackingMode('individual');
     setToolCost('0');
-    setToolCondition('Nueva');
+    setToolConditions(['Nueva']);
     setToolQuantity('1');
     setRecommendedQuantity('1');
     setToolPhotos([null]);
@@ -269,6 +306,7 @@ export function InventoryScreen() {
     try {
       const evidenceId = `inventory-photo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const stored = await uploadInventoryImage({ ...photo, scope: 'van-tool', entityId: asset.id, evidenceId });
+      // La miniatura se sirve por el proxy cacheado; no se sube a Firebase.
       const now = new Date().toISOString();
       const evidence: InventoryEvidenceV2 = {
         id: evidenceId,
@@ -366,7 +404,8 @@ export function InventoryScreen() {
         category: toolCategory,
         standardCost: Math.max(0, Number(toolCost || 0)),
         initialVanId: selectedVanId,
-        condition: toolCondition,
+        condition: toolConditions[0] ?? 'Nueva',
+        conditions: toolConditions,
         trackingMode: toolTrackingMode,
         quantity: registrationQuantity,
         recommendedQuantity: Math.max(1, Number(recommendedQuantity || registrationQuantity)),
@@ -393,7 +432,7 @@ export function InventoryScreen() {
   function openAddUnits(catalog: ToolCatalogItemV2, suggestedQuantity = 1, replacement = false) {
     setAddCatalog(catalog);
     setAddQuantity(String(Math.max(1, suggestedQuantity)));
-    setAddCondition('Nueva');
+    setAddConditions(['Nueva']);
     setAddPhotos([null]);
     setReplacementAssignment(replacement);
   }
@@ -436,7 +475,8 @@ export function InventoryScreen() {
       const created = await module.addUnitsToVan({
         catalogId: addCatalog.id,
         vanId: selectedVan.id,
-        condition: addCondition,
+        condition: addConditions[0] ?? 'Nueva',
+        conditions: addConditions,
         quantity: additionQuantity,
       });
       if (!created.result.ok || !created.assets.length) {
@@ -783,7 +823,10 @@ export function InventoryScreen() {
           </Card>
 
           <Card>
-            <SectionTitle title={`Herramientas de ${selectedVan.name}`} subtitle="Pulsa una herramienta para abrir su perfil, condición, observaciones y acciones." />
+            <SectionTitle
+              title={`Herramientas de ${selectedVan.name}`}
+              subtitle="Pulsa una herramienta para abrir su perfil, condición, observaciones y acciones."
+            />
             {module.toolCatalog.filter((catalog) => catalog.active !== false).map((catalog) => {
               const assets = selectedAssets.filter((asset) => asset.toolCatalogId === catalog.id);
               const available = availableQuantity(assets, catalog);
@@ -933,30 +976,33 @@ export function InventoryScreen() {
         onClose={() => { if (!registrationBusy) setShowNewTool(false); }}
       >
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.modalContent}>
-          <Text style={styles.cardText}>Completa únicamente la información de la nueva herramienta. El tipo de control se asigna automáticamente según la categoría.</Text>
-          <Input label="Nombre de la herramienta" value={toolName} onChangeText={setToolName} placeholder="Ej. Makita Impact Driver" />
+          <Text style={styles.cardText}>Registra las piezas una por una cuando necesiten foto, condición e historial propios. Usa grupo por cantidad solamente para artículos pequeños e intercambiables.</Text>
+          <Input label="Nombre de la herramienta" value={toolName} onChangeText={setToolName} placeholder="Ej. Core drill bit" />
           <Text style={styles.smallLabel}>CATEGORÍA</Text>
           <View style={styles.optionRow}>
             <Button compact variant={toolCategory === 'Power Tools' ? 'primary' : 'secondary'} label="Power Tools" onPress={() => setToolCategory('Power Tools')} />
             <Button compact variant={toolCategory === 'Hand Tools' ? 'primary' : 'secondary'} label="Hand Tools" onPress={() => setToolCategory('Hand Tools')} />
           </View>
+          <Text style={styles.smallLabel}>FORMA DE REGISTRO</Text>
+          <View style={styles.optionRow}>
+            <Button compact variant={toolTrackingMode === 'individual' ? 'primary' : 'secondary'} label="Por unidad" onPress={() => setToolTrackingMode('individual')} />
+            <Button compact variant={toolTrackingMode === 'quantity' ? 'primary' : 'secondary'} label="Grupo por cantidad" onPress={() => setToolTrackingMode('quantity')} />
+          </View>
           <View style={styles.autoModeBox}>
-            <Text style={styles.autoModeTitle}>{toolCategory === 'Power Tools' ? 'Registro por unidad física' : 'Registro por cantidad'}</Text>
-            <Text style={styles.cardText}>{toolCategory === 'Power Tools' ? 'Cada máquina tendrá foto, código e historial independiente.' : 'Las herramientas pequeñas se administrarán mediante cantidades.'}</Text>
+            <Text style={styles.autoModeTitle}>{toolTrackingMode === 'individual' ? 'Una ficha por cada pieza física' : 'Un solo grupo contado'}</Text>
+            <Text style={styles.cardText}>{toolTrackingMode === 'individual' ? 'La cantidad indicada generará la misma cantidad de fotos, condiciones y códigos internos.' : 'Todas las piezas compartirán una foto y una condición general.'}</Text>
           </View>
           <View style={styles.formGrid}>
             <Input style={styles.field} keyboardType="numeric" label="Costo por unidad Afl." value={toolCost} onChangeText={setToolCost} />
             <Input style={styles.field} keyboardType="numeric" label="Cantidad en esta van" value={toolQuantity} onChangeText={setToolQuantity} />
             <Input style={styles.field} keyboardType="numeric" label="Cantidad estándar recomendada" value={recommendedQuantity} onChangeText={setRecommendedQuantity} />
           </View>
-          <Text style={styles.smallLabel}>ESTADO INICIAL</Text>
-          <View style={styles.optionRow}>
-            {CONDITIONS.map((condition) => <Button key={condition} compact variant={toolCondition === condition ? 'primary' : 'secondary'} label={condition} onPress={() => setToolCondition(condition)} />)}
-          </View>
           <PhotoSlots
-            title={toolTrackingMode === 'individual' ? 'Fotografía obligatoria por unidad' : 'Fotografía general obligatoria'}
+            title={toolTrackingMode === 'individual' ? `${registrationQuantity} fotografía${registrationQuantity === 1 ? '' : 's'} y estado por unidad` : 'Fotografía y estado general del grupo'}
             slots={toolPhotos}
+            conditions={toolConditions}
             mode={toolTrackingMode}
+            onConditionChange={(index, condition) => setToolConditions((previous) => previous.map((candidate, candidateIndex) => candidateIndex === index ? condition : candidate))}
             onCamera={(index) => void replacePhoto(toolPhotos, setToolPhotos, index, true)}
             onGallery={(index) => void replacePhoto(toolPhotos, setToolPhotos, index, false)}
           />
@@ -1014,16 +1060,14 @@ export function InventoryScreen() {
       >
         {addCatalog ? (
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.modalContent}>
-            <Text style={styles.cardText}>Se asignará únicamente a {selectedVan?.name}.</Text>
+            <Text style={styles.cardText}>Se asignará únicamente a {selectedVan?.name}. Las unidades individuales conservan foto y condición propias.</Text>
             <Input keyboardType="numeric" label="Cantidad a asignar" value={addQuantity} onChangeText={setAddQuantity} />
-            <Text style={styles.smallLabel}>ESTADO INICIAL</Text>
-            <View style={styles.optionRow}>
-              {CONDITIONS.map((condition) => <Button key={condition} compact variant={addCondition === condition ? 'primary' : 'secondary'} label={condition} onPress={() => setAddCondition(condition)} />)}
-            </View>
             <PhotoSlots
-              title={(addCatalog.trackingMode ?? 'individual') === 'individual' ? 'Una fotografía por unidad' : 'Fotografía general'}
+              title={(addCatalog.trackingMode ?? 'individual') === 'individual' ? `${additionQuantity} fotografía${additionQuantity === 1 ? '' : 's'} y estado por unidad` : 'Fotografía y estado general del grupo'}
               slots={addPhotos}
+              conditions={addConditions}
               mode={addCatalog.trackingMode ?? 'individual'}
+              onConditionChange={(index, condition) => setAddConditions((previous) => previous.map((candidate, candidateIndex) => candidateIndex === index ? condition : candidate))}
               onCamera={(index) => void replacePhoto(addPhotos, setAddPhotos, index, true)}
               onGallery={(index) => void replacePhoto(addPhotos, setAddPhotos, index, false)}
             />
@@ -1110,15 +1154,22 @@ function ActionMenuCard({ icon, title, text, label, disabled, onPress }: { icon:
   return <View style={[styles.actionMenuCard, disabled && styles.actionMenuCardDisabled]}><Text style={styles.actionIcon}>{icon}</Text><Text style={styles.cardTitle}>{title}</Text><Text style={styles.cardText}>{text}</Text><Button compact variant={title === 'Agregar nueva herramienta' ? 'success' : 'secondary'} label={label} disabled={disabled} onPress={onPress} /></View>;
 }
 
-function PhotoSlots({ title, slots, mode, onCamera, onGallery }: { title: string; slots: Array<PendingPhoto | null>; mode: ToolTrackingMode; onCamera: (index: number) => void; onGallery: (index: number) => void }) {
+function PhotoSlots({ title, slots, conditions, mode, onConditionChange, onCamera, onGallery }: { title: string; slots: Array<PendingPhoto | null>; conditions: ToolConditionV2[]; mode: ToolTrackingMode; onConditionChange: (index: number, condition: ToolConditionV2) => void; onCamera: (index: number) => void; onGallery: (index: number) => void }) {
   return (
     <View style={styles.photoSection}>
       <Text style={styles.smallLabel}>{title.toUpperCase()}</Text>
       <View style={styles.photoGrid}>
         {slots.map((photo, index) => (
           <View key={index} style={styles.photoSlot}>
-            {photo ? <Image source={{ uri: photo.uri }} style={styles.preview} /> : <View style={styles.photoPlaceholder}><Text>{mode === 'individual' ? `Unidad ${index + 1}` : 'Foto general'}</Text></View>}
+            <Text style={styles.photoUnitTitle}>{mode === 'individual' ? `Unidad ${index + 1} de ${slots.length}` : 'Grupo completo'}</Text>
+            {photo ? <Image source={{ uri: photo.uri }} style={styles.preview} /> : <View style={styles.photoPlaceholder}><Text>{mode === 'individual' ? `Foto de unidad ${index + 1}` : 'Foto general'}</Text></View>}
             <View style={styles.optionRow}><Button compact variant="secondary" label="Cámara" onPress={() => onCamera(index)} /><Button compact variant="secondary" label="Galería" onPress={() => onGallery(index)} /></View>
+            <View style={styles.unitConditionBox}>
+              <Text style={styles.smallLabel}>{mode === 'individual' ? `ESTADO DE UNIDAD ${index + 1}` : 'ESTADO GENERAL'}</Text>
+              <View style={styles.optionRow}>
+                {CONDITIONS.map((condition) => <Button key={condition} compact variant={(conditions[index] ?? 'Nueva') === condition ? 'primary' : 'secondary'} label={condition} onPress={() => onConditionChange(index, condition)} />)}
+              </View>
+            </View>
           </View>
         ))}
       </View>
@@ -1145,7 +1196,10 @@ function VanBanner({ van, mode }: { van: Van; mode: 'tools' | 'check' }) {
 }
 
 function AssetSummary({ asset, catalog, onPhotoPress }: { asset: VanToolAssetV2; catalog?: ToolCatalogItemV2; onPhotoPress?: () => void }) {
-  const image = asset.latestPhotoUrl ? <Image source={{ uri: asset.latestPhotoUrl }} style={styles.assetImage} /> : <View style={styles.assetImagePlaceholder}><Text>📷</Text></View>;
+  const thumbnailUrl = currentThumbnailUrl(asset);
+  const image = asset.latestPhotoUrl
+    ? <SafeInventoryImage thumbnailUrl={thumbnailUrl} originalUrl={asset.latestPhotoUrl} style={styles.assetImage} />
+    : <View style={styles.assetImagePlaceholder}><Text>📷</Text></View>;
   return (
     <View style={styles.assetTop}>
       {asset.latestPhotoUrl && onPhotoPress ? <Pressable accessibilityRole="button" accessibilityLabel="Ver fotografía grande" onPress={onPhotoPress} style={styles.assetPhotoButton}>{image}</Pressable> : image}
@@ -1160,6 +1214,7 @@ function AssetSummary({ asset, catalog, onPhotoPress }: { asset: VanToolAssetV2;
 }
 
 function CompactAssetRow({ asset, catalog, onOpenProfile, onOpenPhoto }: { asset: VanToolAssetV2; catalog: ToolCatalogItemV2; onOpenProfile: () => void; onOpenPhoto: () => void }) {
+  const thumbnailUrl = currentThumbnailUrl(asset);
   const quantityMode = (asset.trackingMode ?? catalog.trackingMode ?? 'individual') === 'quantity';
   const quantityText = quantityMode
     ? `${Number(asset.quantityPresent ?? 0)} presentes de ${Number(asset.quantityExpected ?? 0)}`
@@ -1168,7 +1223,7 @@ function CompactAssetRow({ asset, catalog, onOpenProfile, onOpenPhoto }: { asset
     <View style={styles.compactAssetRow}>
       {asset.latestPhotoUrl ? (
         <Pressable accessibilityRole="button" accessibilityLabel={`Ver fotografía grande de ${catalog.name}`} onPress={onOpenPhoto} style={({ pressed }) => [styles.compactPhotoButton, pressed && styles.compactAssetRowPressed]}>
-          <Image source={{ uri: asset.latestPhotoUrl }} style={styles.compactImage} />
+          <SafeInventoryImage thumbnailUrl={thumbnailUrl} originalUrl={asset.latestPhotoUrl} fallbackToOriginal={false} style={styles.compactImage} />
         </Pressable>
       ) : <View style={styles.compactImagePlaceholder}><Text>📷</Text></View>}
       <Pressable accessibilityRole="button" accessibilityLabel={`Abrir perfil de ${catalog.name}`} onPress={onOpenProfile} style={({ pressed }) => [styles.compactAssetText, pressed && styles.compactTextPressed]}>
@@ -1227,7 +1282,7 @@ function AssetProfileEditor({ asset, catalog, evidence, busy, onSave, onPhoto, o
         <View style={styles.historySection}>
           <Text style={styles.smallLabel}>HISTORIAL DE FOTOGRAFÍAS</Text>
           <ScrollView horizontal contentContainerStyle={styles.historyStrip}>
-            {historicalEvidence.map((photo) => <Pressable key={photo.id} accessibilityRole="button" onPress={() => onOpenPhoto(photo.downloadUrl)}><Image source={{ uri: photo.downloadUrl }} style={styles.historyImage} /><Text style={styles.historyDate}>{new Date(photo.capturedAt).toLocaleDateString('es-AW')}</Text></Pressable>)}
+            {historicalEvidence.map((photo) => <Pressable key={photo.id} accessibilityRole="button" onPress={() => onOpenPhoto(photo.downloadUrl)}><SafeInventoryImage thumbnailUrl={thumbnailProxyUrl(photo.downloadUrl)} originalUrl={photo.downloadUrl} style={styles.historyImage} /><Text style={styles.historyDate}>{new Date(photo.capturedAt).toLocaleDateString('es-AW')}</Text></Pressable>)}
           </ScrollView>
         </View>
       ) : null}
@@ -1264,7 +1319,7 @@ function WarehouseItemRow({ item, disabled, onSave }: { item: WarehouseInventory
 }
 
 function IndividualCheckRow({ entry, asset, photo, disabled, onSave, onPhoto }: { entry: InventoryCheckEntryV2; asset: VanToolAssetV2; photo?: InventoryEvidenceV2; disabled: boolean; onSave: (entry: InventoryCheckEntryV2) => Promise<{ ok: boolean; message?: string }>; onPhoto: () => void }) {
-  return <View style={styles.checkRow}><View style={styles.flexOne}><Text style={styles.assetCode}>{entry.assetCode}</Text><Text style={styles.cardTitle}>{entry.label}</Text></View>{photo ? <Image source={{ uri: photo.downloadUrl }} style={styles.checkPhoto} /> : null}<View style={styles.optionRow}><Button compact variant="success" label="Presente" disabled={disabled} onPress={() => void onSave({ ...entry, status: 'present', countedQuantity: 1, operationalStatus: 'Disponible' })} /><Button compact variant="danger" label="Faltante" disabled={disabled} onPress={() => void onSave({ ...entry, status: 'missing', countedQuantity: 0, photoEvidenceId: undefined, operationalStatus: 'Faltante' })} /><Button compact variant="secondary" label="Foto" disabled={disabled || entry.status === 'missing'} onPress={onPhoto} /></View></View>;
+  return <View style={styles.checkRow}><View style={styles.flexOne}><Text style={styles.assetCode}>{entry.assetCode}</Text><Text style={styles.cardTitle}>{entry.label}</Text></View>{photo ? <SafeInventoryImage thumbnailUrl={thumbnailProxyUrl(photo.downloadUrl)} originalUrl={photo.downloadUrl} style={styles.checkPhoto} /> : null}<View style={styles.optionRow}><Button compact variant="success" label="Presente" disabled={disabled} onPress={() => void onSave({ ...entry, status: 'present', countedQuantity: 1, operationalStatus: 'Disponible' })} /><Button compact variant="danger" label="Faltante" disabled={disabled} onPress={() => void onSave({ ...entry, status: 'missing', countedQuantity: 0, photoEvidenceId: undefined, operationalStatus: 'Faltante' })} /><Button compact variant="secondary" label="Foto" disabled={disabled || entry.status === 'missing'} onPress={onPhoto} /></View></View>;
 }
 
 function QuantityCheckRow({ entry, asset, disabled, onSave, onPhoto }: { entry: InventoryCheckEntryV2; asset: VanToolAssetV2; disabled: boolean; onSave: (entry: InventoryCheckEntryV2) => Promise<{ ok: boolean; message?: string }>; onPhoto: () => void }) {
@@ -1325,7 +1380,9 @@ const styles = StyleSheet.create({
   autoModeTitle: { color: colors.primaryDark, fontWeight: '900', fontSize: 11 },
   photoSection: { gap: 8 },
   photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  photoSlot: { width: 220, gap: 7 },
+  photoSlot: { flexGrow: 1, flexBasis: 240, minWidth: 220, maxWidth: 340, gap: 8, borderWidth: 1, borderColor: colors.border, borderRadius: 11, padding: 10, backgroundColor: '#FFFFFF' },
+  photoUnitTitle: { color: colors.text, fontWeight: '900', fontSize: 12 },
+  unitConditionBox: { gap: 4, paddingTop: 2 },
   photoPlaceholder: { height: 145, borderWidth: 1, borderColor: colors.border, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FAFBFC' },
   preview: { width: '100%', height: 145, borderRadius: 9 },
   modalContent: { gap: 12, paddingBottom: 8 },

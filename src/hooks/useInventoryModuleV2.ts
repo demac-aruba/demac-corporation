@@ -20,6 +20,7 @@ type CreateToolInputV2 = {
   standardCost: number;
   initialVanId: string;
   condition: ToolConditionV2;
+  conditions?: ToolConditionV2[];
   trackingMode: ToolTrackingMode;
   quantity: number;
   recommendedQuantity: number;
@@ -29,6 +30,7 @@ type AddUnitsInputV2 = {
   catalogId: string;
   vanId: string;
   condition: ToolConditionV2;
+  conditions?: ToolConditionV2[];
   quantity: number;
 };
 
@@ -193,11 +195,13 @@ export function useInventoryModuleV2(currentUser: User | null, fallbackInventory
     return `${vanCode(van, Math.max(0, index))}-H${String(catalogSequence).padStart(3, '0')}`;
   }
 
-  function buildIndividualAssets(catalog: ToolCatalogItemV2, van: Van, quantity: number, condition: ToolConditionV2) {
+  function buildIndividualAssets(catalog: ToolCatalogItemV2, van: Van, quantity: number, conditions: ToolConditionV2 | ToolConditionV2[]) {
     const now = new Date().toISOString();
     const firstUnit = nextUnitNumber(catalog.id);
+    const conditionList = Array.isArray(conditions) ? conditions : [conditions];
     return Array.from({ length: quantity }, (_, index): VanToolAssetV2 => {
       const unitNumber = firstUnit + index;
+      const condition = conditionList[index] ?? conditionList[0] ?? 'Nueva';
       return {
         id: nowId(`asset-${catalog.id}`),
         toolCatalogId: catalog.id,
@@ -266,8 +270,8 @@ export function useInventoryModuleV2(currentUser: User | null, fallbackInventory
       };
       const quantity = Math.max(1, Math.round(input.quantity));
       const assets = input.trackingMode === 'individual'
-        ? buildIndividualAssets(catalog, van, quantity, input.condition)
-        : [buildQuantityAsset(catalog, van, quantity, input.condition)];
+        ? buildIndividualAssets(catalog, van, quantity, input.conditions?.length ? input.conditions : input.condition)
+        : [buildQuantityAsset(catalog, van, quantity, input.conditions?.[0] ?? input.condition)];
       await Promise.all([
         persist('toolCatalog', catalog),
         ...assets.map((asset) => persist('vanToolAssets', asset)),
@@ -301,12 +305,12 @@ export function useInventoryModuleV2(currentUser: User | null, fallbackInventory
               operationalStatus: 'Disponible',
               updatedAt: new Date().toISOString(),
             })
-          : buildQuantityAsset(catalog, van, quantity, input.condition);
+          : buildQuantityAsset(catalog, van, quantity, input.conditions?.[0] ?? input.condition);
         await persist('vanToolAssets', updated);
         setVanAssets((previous) => sortAssetCodes([...previous.filter((asset) => asset.id !== updated.id), updated]));
         return { result: { ok: true }, assets: [updated] };
       }
-      const assets = buildIndividualAssets(catalog, van, quantity, input.condition);
+      const assets = buildIndividualAssets(catalog, van, quantity, input.conditions?.length ? input.conditions : input.condition);
       await Promise.all(assets.map((asset) => persist('vanToolAssets', asset)));
       setVanAssets((previous) => sortAssetCodes([...previous, ...assets]));
       return { result: { ok: true }, assets };

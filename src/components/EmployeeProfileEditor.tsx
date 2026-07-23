@@ -74,6 +74,13 @@ export function EmployeeProfileEditor({
         <Input style={styles.flex} label="Teléfono" value={draft.phone} onChangeText={(phone) => setDraft((current) => ({ ...current, phone }))} />
         <Input style={styles.flex} label="Correo" value={draft.email ?? ''} onChangeText={(email) => setDraft((current) => ({ ...current, email }))} />
       </View>
+      <Input
+        label="Starting Date / Fecha de inicio (AAAA-MM-DD)"
+        value={draft.startDate ?? ''}
+        onChangeText={(startDate) => setDraft((current) => ({ ...current, startDate }))}
+        placeholder="2026-07-10"
+      />
+      <Text style={styles.noticeText}>La nómina y el Timesheet comienzan a acumular horas desde esta fecha.</Text>
 
       <Text style={styles.label}>TIPO DE EMPLEADO</Text>
       <ChoiceGroup options={EMPLOYEE_TYPES} value={employeeType} onChange={changeType} />

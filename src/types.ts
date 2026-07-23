@@ -38,6 +38,7 @@ export interface StaffProfile {
   name: string;
   phone: string;
   email?: string;
+  startDate?: string;
   role: StaffRole;
   employeeType?: StaffEmployeeType;
   canDriveVan: boolean;

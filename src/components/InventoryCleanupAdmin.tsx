@@ -151,8 +151,14 @@ export function InventoryCleanupAdmin() {
       const entryIds = new Set(targetEntries.map((entry) => entry.id));
       const affectedCheckIds = new Set(targetEntries.map((entry) => entry.checkId));
       const storagePaths = new Set<string>();
-      targetEvidence.forEach((photo) => storagePaths.add(photo.storagePath));
-      targetAssets.forEach((asset) => { if (asset.latestPhotoStoragePath) storagePaths.add(asset.latestPhotoStoragePath); });
+      targetEvidence.forEach((photo) => {
+        storagePaths.add(photo.storagePath);
+        if (photo.thumbnailStoragePath) storagePaths.add(photo.thumbnailStoragePath);
+      });
+      targetAssets.forEach((asset) => {
+        if (asset.latestPhotoStoragePath) storagePaths.add(asset.latestPhotoStoragePath);
+        if (asset.latestThumbnailStoragePath) storagePaths.add(asset.latestThumbnailStoragePath);
+      });
 
       for (const storagePath of storagePaths) await deleteStorageObject(storagePath);
       for (const photo of targetEvidence) await deleteFirestoreDocument('inventoryEvidence', photo.id);
