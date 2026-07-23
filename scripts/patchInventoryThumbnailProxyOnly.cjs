@@ -33,7 +33,7 @@ if (!text.includes('function thumbnailProxyUrl(')) {
 }
 
 const oldUpload = "      const thumbnail = await uploadInventoryThumbnail({ ...photo, scope: 'van-tool', entityId: asset.id, evidenceId }).catch(() => null);";
-const newUpload = '      const thumbnail = null; // Las miniaturas se sirven por el proxy cacheado; no se suben a Firebase.';
+const newUpload = '      const thumbnail: Awaited<ReturnType<typeof uploadInventoryThumbnail>> = null; // Las miniaturas se sirven por el proxy cacheado; no se suben a Firebase.';
 if (!text.includes(newUpload)) {
   if (!text.includes(oldUpload)) throw new Error('No se encontró la creación de miniatura durante la carga de evidencia.');
   text = text.replace(oldUpload, newUpload);
