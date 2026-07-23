@@ -3,6 +3,8 @@ name: Export generated inventory source
 on:
   push:
     branches: [agent/inventory-thumbnail-cleanup]
+  pull_request:
+    branches: [main]
 
 jobs:
   export:
