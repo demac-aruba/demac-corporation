@@ -15,11 +15,21 @@ jobs:
           cache: 'npm'
       - run: npm install
       - run: npm run typecheck
-      - name: Build web and show final error
+      - name: Build web
+        id: webbuild
         shell: bash
         run: |
           set +e
-          npm run build:web > build.log 2>&1
+          npm run build:web > build-full.log 2>&1
           status=$?
-          tail -n 100 build.log
-          exit $status
+          tail -n 120 build-full.log > build-tail.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Upload build error
+        uses: actions/upload-artifact@v4
+        with:
+          name: thumbnail-build-log
+          path: build-tail.log
+      - name: Fail when build failed
+        if: steps.webbuild.outputs.status != '0'
+        run: exit 1
