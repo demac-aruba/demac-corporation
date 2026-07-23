@@ -12,6 +12,8 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      validation_log: ${{ steps.validate.outputs.log }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,7 +21,30 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci --silent
-      - name: Typecheck
-        run: npm run typecheck
-      - name: Build web
-        run: npm run build:web
+      - name: Capture validation result
+        id: validate
+        shell: bash
+        run: |
+          set +e
+          npm run typecheck > /tmp/validation.log 2>&1
+          status=$?
+          if [ "$status" -eq 0 ]; then
+            npm run build:web >> /tmp/validation.log 2>&1
+            status=$?
+          fi
+          {
+            echo 'log<<VALIDATION_EOF'
+            tail -n 50 /tmp/validation.log
+            echo 'VALIDATION_EOF'
+          } >> "$GITHUB_OUTPUT"
+          exit $status
+
+  report:
+    if: always()
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print captured validation output
+        env:
+          VALIDATION_LOG: ${{ needs.validate.outputs.validation_log }}
+        run: printf '%s\n' "$VALIDATION_LOG"
