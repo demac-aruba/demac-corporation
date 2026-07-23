@@ -12,6 +12,8 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      typecheck_log: ${{ steps.typecheck.outputs.log }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,11 +24,26 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci --silent
-      - name: Typecheck with concise error output
+      - name: Capture typecheck result
+        id: typecheck
         shell: bash
         run: |
           set +e
           npm run typecheck > /tmp/typecheck.log 2>&1
           status=$?
-          tail -n 60 /tmp/typecheck.log
+          {
+            echo 'log<<TYPECHECK_EOF'
+            tail -n 40 /tmp/typecheck.log
+            echo 'TYPECHECK_EOF'
+          } >> "$GITHUB_OUTPUT"
           exit $status
+
+  report:
+    if: always()
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print captured typecheck output
+        env:
+          TYPECHECK_LOG: ${{ needs.validate.outputs.typecheck_log }}
+        run: printf '%s\n' "$TYPECHECK_LOG"
