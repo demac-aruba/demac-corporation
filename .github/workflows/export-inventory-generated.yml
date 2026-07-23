@@ -1,0 +1,33 @@
+name: Export generated inventory source
+
+on:
+  push:
+    branches: [agent/inventory-thumbnail-cleanup]
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm install
+      - name: Apply inventory patches
+        run: npm run patch:inventory
+      - name: Collect generated files
+        shell: bash
+        run: |
+          mkdir -p generated
+          git status --short > generated/status.txt
+          git ls-files --modified --others --exclude-standard > generated/files.txt
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            mkdir -p "generated/$(dirname "$file")"
+            cp "$file" "generated/$file"
+          done < generated/files.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: generated-inventory-source
+          path: generated
