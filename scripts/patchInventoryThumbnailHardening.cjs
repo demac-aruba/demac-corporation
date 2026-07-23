@@ -156,7 +156,7 @@ replaceOrConfirm(
     "    if (view !== 'van-profile' || !selectedVanId || currentUser?.role !== 'admin' || thumbnailBusy || !assetsMissingThumbnails.length) return;",
     '    const timer = setTimeout(() => { void optimizeExistingThumbnails(); }, 500);',
     '    return () => clearTimeout(timer);',
-    '  }, [view, selectedVanId]);',
+    '  }, [view, selectedVanId, currentUser?.role, assetsMissingThumbnails.length]);',
     '',
     '  function resetNewToolForm() {',
   ),
