@@ -12,14 +12,15 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.86.0",
-    "react-native-web": "~0.21.0"
+    "react-native-web": "~0.21.0",
+    "sharp": "^0.34.3"
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
     "typescript": "~6.0.3"
   },
   "scripts": {
-    "patch:inventory": "node scripts/runInventoryUnitPatch.cjs && node scripts/fixInventoryThumbnailPatchIdempotency.cjs && node scripts/patchInventorySafeThumbnailsV2.cjs && node scripts/patchInventoryThumbnailHardening.cjs && node scripts/patchInventoryThumbnailDownloadFix.cjs && node scripts/patchInventoryThumbnailStorageV2.cjs && node scripts/patchInventoryThumbnailReliability.cjs",
+    "patch:inventory": "node scripts/runInventoryUnitPatch.cjs && node scripts/fixInventoryThumbnailPatchIdempotency.cjs && node scripts/patchInventorySafeThumbnailsV2.cjs && node scripts/patchInventoryThumbnailHardening.cjs && node scripts/patchInventoryThumbnailDownloadFix.cjs && node scripts/patchInventoryThumbnailStorageV2.cjs && node scripts/fixInventoryThumbnailServerPatchIdempotency.cjs && node scripts/patchInventoryThumbnailReliability.cjs && node scripts/patchInventoryThumbnailServer.cjs",
     "patch:payroll": "node scripts/patchPayrollStartDateStage1.cjs && node scripts/patchPayrollStartDateStage2.cjs",
     "patch:all": "npm run patch:inventory && npm run patch:payroll",
     "prestart": "npm run patch:all",
