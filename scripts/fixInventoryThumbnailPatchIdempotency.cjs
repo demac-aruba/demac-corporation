@@ -53,4 +53,18 @@ if (text.includes(oldBlock)) {
   throw new Error('No se encontró el bloque de miniatura compacta para hacerlo idempotente.');
 }
 
+function makeProxyAware(scriptPath) {
+  let script = fs.readFileSync(scriptPath, 'utf8');
+  const marker = "text.includes('function thumbnailProxyUrl(')";
+  if (script.includes(marker)) return;
+  const oldGuard = "  if (text.includes(marker)) return;\n  if (!text.includes(oldText)) throw new Error(`Missing block in ${path}: ${marker}`);";
+  const newGuard = "  if (text.includes(marker)) return;\n  if (path.endsWith('InventoryScreenV4.tsx') && text.includes('function thumbnailProxyUrl(')) return;\n  if (!text.includes(oldText)) throw new Error(`Missing block in ${path}: ${marker}`);";
+  if (!script.includes(oldGuard)) throw new Error(`No se encontró el guard de idempotencia en ${scriptPath}.`);
+  script = script.replace(oldGuard, newGuard);
+  fs.writeFileSync(scriptPath, script);
+}
+
+makeProxyAware('scripts/patchInventoryThumbnailHardening.cjs');
+makeProxyAware('scripts/patchInventoryThumbnailDownloadFix.cjs');
+
 console.log('Base thumbnail patch idempotency verified.');
