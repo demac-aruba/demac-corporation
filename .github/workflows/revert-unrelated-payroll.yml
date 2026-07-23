@@ -1,0 +1,46 @@
+name: Revert unrelated payroll source changes
+
+on:
+  push:
+    branches: [agent/inventory-thumbnail-cleanup]
+
+permissions:
+  contents: write
+
+jobs:
+  revert:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/inventory-thumbnail-cleanup
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm install
+      - name: Restore payroll files from main
+        shell: bash
+        run: |
+          git fetch origin main
+          git checkout origin/main -- \
+            src/components/EmployeeProfileEditor.tsx \
+            src/hooks/usePayrollModule.ts \
+            src/payroll/types.ts \
+            src/screens/EmployeesTimesheetScreen.tsx \
+            src/services/payrollPdf.ts \
+            src/types.ts
+          rm .github/workflows/revert-unrelated-payroll.yml
+      - name: Validate consolidated source without applying build-time patches
+        run: |
+          npx tsc --noEmit
+          npx expo export --platform web
+      - name: Commit focused cleanup
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Keep inventory cleanup focused"
+          git push origin HEAD:agent/inventory-thumbnail-cleanup
