@@ -182,7 +182,6 @@ export function InventoryScreen() {
     setAddConditions((previous) => makeConditionSlots(additionQuantity, mode, previous));
   }, [additionQuantity, addCatalog]);
 
-  // La migración de miniaturas es manual para evitar ciclos silenciosos cuando una operación falla.
 
   function resetNewToolForm() {
     setToolName('');
