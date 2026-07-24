@@ -128,7 +128,7 @@ export function EmployeesTimesheetScreen() {
   const [notesDraft, setNotesDraft] = useState('');
 
 
-  const activeEmployees = useMemo(() => module.employees.filter((employee) => employee.active && (!employee.startDate || employee.startDate <= period.endDate)), [module.employees, period.endDate]);
+  const activeEmployees = useMemo(() => module.employees.filter((employee) => employee.active), [module.employees]);
   const periodEntries = useMemo(
     () => module.entries.filter((entry) => entry.date >= period.startDate && entry.date <= period.endDate),
     [module.entries, period.endDate, period.startDate],
@@ -233,7 +233,6 @@ export function EmployeesTimesheetScreen() {
     ]];
     for (const employee of activeEmployees) {
       for (const date of periodDates) {
-        if (employee.startDate && date < employee.startDate) continue;
         const entry = module.entryByEmployeeDate.get(`${employee.id}_${date}`);
         const day = calculatePayrollDay(employee, date, entry);
         rows.push([
@@ -257,14 +256,14 @@ export function EmployeesTimesheetScreen() {
 
   function summaryRows() {
     return [[
-      'Empleado', 'Cargo', 'Tipo', 'Fecha de inicio', 'Horas semanales base', `Base mensual o proporcional (${MONTHLY_HOURS_FACTOR})`, 'Overtime', 'AO', 'Vacaciones', 'No Work No Pay', 'Horas pagables netas',
+      'Empleado', 'Cargo', 'Tipo', 'Horas semanales base', `Horas mensuales base (${MONTHLY_HOURS_FACTOR})`, 'Horas regulares reales del período', 'Overtime', 'AO', 'Vacaciones', 'No Work No Pay', 'Horas pagables estimadas',
     ], ...summaries.map((summary) => [
       summary.employee.name,
       summary.employee.role,
       summary.employee.employeeType,
-      summary.employee.startDate ?? '',
       hours(summary.weeklyRegularHours),
       hours(summary.monthlyBaseHours),
+      hours(summary.actualRegularHours),
       hours(summary.overtimeHours),
       hours(summary.aoHours),
       hours(summary.vacationHours),
@@ -297,7 +296,6 @@ export function EmployeesTimesheetScreen() {
       email: '',
       role: 'Ayudante',
       employeeType: 'Técnico',
-      startDate: dateKey(new Date()),
       canDriveVan: false,
       skills: [],
       availability: 'Disponible',
@@ -313,10 +311,6 @@ export function EmployeesTimesheetScreen() {
     const phone = profile.phone.trim();
     if (!name || !phone) {
       setMessage('Nombre y teléfono son obligatorios.');
-      return;
-    }
-    if (!profile.startDate || !/^\d{4}-\d{2}-\d{2}$/.test(profile.startDate)) {
-      setMessage('La fecha de inicio es obligatoria y debe usar el formato AAAA-MM-DD.');
       return;
     }
     const normalizedName = name.toLocaleLowerCase('es').replace(/\s+/g, ' ');
@@ -438,7 +432,7 @@ export function EmployeesTimesheetScreen() {
             <Card>
               <SectionTitle title={`Días del período — ${selectedEmployee.name}`} subtitle="Los días sin cambios utilizan automáticamente el horario configurado." />
               <View style={styles.dayList}>
-                {periodDates.filter((date) => !selectedEmployee.startDate || date >= selectedEmployee.startDate).map((date) => {
+                {periodDates.map((date) => {
                   const entry = module.entryByEmployeeDate.get(`${selectedEmployee.id}_${date}`);
                   const day = calculatePayrollDay(selectedEmployee, date, entry);
                   return (
@@ -463,7 +457,7 @@ export function EmployeesTimesheetScreen() {
         <Text style={styles.rulesTitle}>ⓘ Reglas de cálculo</Text>
         <Text style={styles.rulesText}>• La nómina corre automáticamente del día 27 al día 26.</Text>
         <Text style={styles.rulesText}>• El horario regular diario aplica de lunes a sábado; domingo permanece sin jornada.</Text>
-        <Text style={styles.rulesText}>• La base mensual se calcula como horas regulares semanales × {MONTHLY_HOURS_FACTOR} y se redondea a horas completas. En el primer período de un empleado nuevo, la base se prorratea desde su Starting Date.</Text>
+        <Text style={styles.rulesText}>• La base mensual se calcula como horas regulares semanales × {MONTHLY_HOURS_FACTOR} y se redondea a horas completas.</Text>
         <Text style={styles.rulesText}>• AO y vacaciones se reportan por separado; No Work No Pay se descuenta de la base mensual. Las horas libres del medio día son un beneficio de horario y no se muestran como categoría de payroll.</Text>
         <Text style={styles.rulesText}>• Para julio, los técnicos permanecen con su horario completo. La regla de 5 horas trabajadas + 3 horas libres puede activarse desde el 1 de agosto.</Text>
         <Text style={styles.rulesText}>• Las secretarias pueden configurarse con 4 horas trabajadas + 4 horas libres en su medio día semanal.</Text>
@@ -513,7 +507,7 @@ export function EmployeesTimesheetScreen() {
           {staffProfiles.map((profile) => {
             const assignments = vans.filter((van) => van.responsibleStaffId === profile.id || van.regularHelperId === profile.id);
             return <Pressable key={profile.id} onPress={() => { setDirectoryVisible(false); setProfileForm({ ...profile, skills: [...profile.skills] }); }} style={styles.dayRow}>
-              <View style={styles.dayRowDate}><Text style={styles.employeeName}>{profile.name}</Text><Text style={styles.employeeRole}>{profile.role} · {profile.phone} · Inicio: {profile.startDate ?? 'No registrado'}</Text></View>
+              <View style={styles.dayRowDate}><Text style={styles.employeeName}>{profile.name}</Text><Text style={styles.employeeRole}>{profile.role} · {profile.phone}</Text></View>
               <Text style={styles.dayRowHours}>{assignments.length ? assignments.map((van) => van.name).join(' · ') : 'Sin van'}</Text>
               <Pill label={profile.active ? profile.availability : 'Inactivo'} tone={profile.active ? 'success' : 'neutral'} />
               <Text style={styles.openDetail}>Editar ›</Text>
@@ -539,7 +533,7 @@ function EmployeeSummaryRow({ summary, selected, onPress }: { summary: PayrollEm
   return (
     <Pressable onPress={onPress} style={[styles.employeeRow, selected && styles.employeeRowSelected]}>
       <View style={styles.avatar}><Text style={styles.avatarText}>{initials}</Text></View>
-      <View style={styles.employeeIdentity}><Text style={styles.employeeName}>{summary.employee.name}</Text><Text style={styles.employeeRole}>{summary.employee.role} · {summary.employee.employeeType}{summary.employee.startDate ? ` · Inicio: ${summary.employee.startDate}` : ''}</Text></View>
+      <View style={styles.employeeIdentity}><Text style={styles.employeeName}>{summary.employee.name}</Text><Text style={styles.employeeRole}>{summary.employee.role} · {summary.employee.employeeType}</Text></View>
       <SummaryValue label="Base mes" value={summary.monthlyBaseHours} />
       <SummaryValue label="OT" value={summary.overtimeHours} />
       <SummaryValue label="AO" value={summary.aoHours} warning={summary.aoHours > 0} />
@@ -560,7 +554,7 @@ function DayFact({ label, value }: { label: string; value: string }) {
 }
 
 function PayrollSummaryCard({ summary }: { summary: PayrollEmployeeSummary }) {
-  return <View style={styles.payrollSummaryCard}><Text style={styles.employeeName}>{summary.employee.name}</Text><Text style={styles.employeeRole}>{summary.employee.role}{summary.employee.startDate ? ` · Inicio: ${summary.employee.startDate}` : ''}</Text><View style={styles.payrollSummaryGrid}><SummaryValue label="Base semana" value={summary.weeklyRegularHours} /><SummaryValue label={summary.proratedBase ? 'Base proporcional' : 'Base mes'} value={summary.monthlyBaseHours} /><SummaryValue label="OT" value={summary.overtimeHours} /><SummaryValue label="AO" value={summary.aoHours} /><SummaryValue label="Vacaciones" value={summary.vacationHours} /><SummaryValue label="NWNP" value={summary.noWorkNoPayHours} /><SummaryValue label="Pagables netas" value={summary.payableHours} /></View></View>;
+  return <View style={styles.payrollSummaryCard}><Text style={styles.employeeName}>{summary.employee.name}</Text><Text style={styles.employeeRole}>{summary.employee.role}</Text><View style={styles.payrollSummaryGrid}><SummaryValue label="Base semana" value={summary.weeklyRegularHours} /><SummaryValue label="Base mes" value={summary.monthlyBaseHours} /><SummaryValue label="Laboradas" value={summary.actualRegularHours} /><SummaryValue label="OT" value={summary.overtimeHours} /><SummaryValue label="AO" value={summary.aoHours} /><SummaryValue label="Vacaciones" value={summary.vacationHours} /><SummaryValue label="NWNP" value={summary.noWorkNoPayHours} /><SummaryValue label="Pagables" value={summary.payableHours} /></View></View>;
 }
 
 function CalendarPicker({ month, selectedDate, today, onPreviousMonth, onNextMonth, onSelect }: { month: string; selectedDate: string; today: string; onPreviousMonth: () => void; onNextMonth: () => void; onSelect: (date: string) => void }) {

@@ -48,7 +48,6 @@ function employeeFromStaff(profile: StaffProfile): PayrollEmployee {
     role: profile.role,
     employeeType,
     active: profile.active,
-    startDate: profile.startDate,
     weekdayHours: 8,
     saturdayHours: 8,
     halfDayEffectiveFrom: technical ? '2026-08-01' : secretarial ? '2026-01-01' : undefined,
@@ -104,7 +103,6 @@ export function payrollPeriodDates(period: PayrollPeriod) {
 }
 
 export function employeeScheduleForDate(employee: PayrollEmployee, date: string) {
-  if (employee.startDate && date < employee.startDate) return { scheduledWorkHours: 0, paidFreeHours: 0 };
   const parsed = parseIsoDate(date);
   const weekday = parsed.getUTCDay();
   if (weekday === 0) return { scheduledWorkHours: 0, paidFreeHours: 0 };
@@ -182,29 +180,12 @@ export function calculatePayrollDay(employee: PayrollEmployee, date: string, ent
   };
 }
 
-export function calculatePayableHours(monthlyBaseHours: number, noWorkNoPayHours: number, overtimeHours: number) {
-  const baseAfterNoWorkNoPay = Math.max(0, Number(monthlyBaseHours || 0) - Number(noWorkNoPayHours || 0));
-  return roundHours(baseAfterNoWorkNoPay + Math.max(0, Number(overtimeHours || 0)));
-}
-
 export function summarizeEmployee(employee: PayrollEmployee, period: PayrollPeriod, entries: EmployeeTimesheetEntry[]): PayrollEmployeeSummary {
-  const startDate = employee.startDate;
-  const periodDates = payrollPeriodDates(period);
-  const employeeEntries = new Map(entries
-    .filter((entry) => entry.employeeId === employee.id && (!startDate || entry.date >= startDate))
-    .map((entry) => [entry.date, entry]));
-  const days = periodDates.map((date) => calculatePayrollDay(employee, date, employeeEntries.get(date)));
+  const employeeEntries = new Map(entries.filter((entry) => entry.employeeId === employee.id).map((entry) => [entry.date, entry]));
+  const days = payrollPeriodDates(period).map((date) => calculatePayrollDay(employee, date, employeeEntries.get(date)));
   const total = (key: keyof Pick<PayrollDayCalculation, 'regularHours' | 'overtimeHours' | 'aoHours' | 'vacationHours' | 'noWorkNoPayHours' | 'paidFreeHours'>) => roundHours(days.reduce((sum, day) => sum + Number(day[key]), 0));
   const weeklyRegularHours = weeklyRegularHoursForPeriod(employee, period);
-  const proratedBase = Boolean(startDate && startDate > period.startDate && startDate <= period.endDate);
-  const effectiveStart = startDate ?? period.startDate;
-  const monthlyBaseHours = startDate && startDate > period.endDate
-    ? 0
-    : proratedBase
-      ? roundHours(periodDates
-        .filter((date) => date >= effectiveStart)
-        .reduce((sum, date) => sum + employeeScheduleForDate(employee, date).scheduledWorkHours, 0))
-      : Math.round(weeklyRegularHours * MONTHLY_HOURS_FACTOR);
+  const monthlyBaseHours = Math.round(weeklyRegularHours * MONTHLY_HOURS_FACTOR);
   const actualRegularHours = total('regularHours');
   const overtimeHours = total('overtimeHours');
   const aoHours = total('aoHours');
@@ -215,15 +196,13 @@ export function summarizeEmployee(employee: PayrollEmployee, period: PayrollPeri
     employee,
     weeklyRegularHours,
     monthlyBaseHours,
-    effectiveStartDate: startDate,
-    proratedBase,
     actualRegularHours,
     overtimeHours,
     aoHours,
     vacationHours,
     noWorkNoPayHours,
     paidFreeHours,
-    payableHours: calculatePayableHours(monthlyBaseHours, noWorkNoPayHours, overtimeHours),
+    payableHours: roundHours(Math.max(0, monthlyBaseHours - noWorkNoPayHours) + overtimeHours),
     changedDays: employeeEntries.size,
   };
 }
@@ -274,7 +253,6 @@ export function usePayrollModule(currentUser: User | null, staffProfiles: StaffP
         name: master.name,
         role: master.role,
         active: master.active,
-        startDate: master.startDate,
       });
     });
     return sortEmployees([...merged.values()]);

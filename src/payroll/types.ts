@@ -17,7 +17,6 @@ export interface PayrollEmployee {
   role: string;
   employeeType: PayrollEmployeeType;
   active: boolean;
-  startDate?: string;
   sourceStaffId?: string;
   weekdayHours: number;
   saturdayHours: number;
@@ -78,8 +77,6 @@ export interface PayrollEmployeeSummary {
   employee: PayrollEmployee;
   weeklyRegularHours: number;
   monthlyBaseHours: number;
-  effectiveStartDate?: string;
-  proratedBase: boolean;
   actualRegularHours: number;
   overtimeHours: number;
   aoHours: number;

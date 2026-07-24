@@ -166,12 +166,11 @@ function buildPayrollPages(periodLabel: string, summaries: PayrollEmployeeSummar
       const top = cardTop + index * (cardHeight + cardGap);
       page.fillRect(MARGIN, top, cardWidth, cardHeight, [1, 1, 1], BORDER);
       page.drawText(truncate(summary.employee.name, 36), MARGIN + 12, top + 13, 13, { bold: true });
-      const startDetail = summary.employee.startDate ? ` - Inicio: ${summary.employee.startDate}` : '';
-      page.drawText(`${truncate(summary.employee.role, 24)} - ${summary.employee.employeeType}${startDetail}`, MARGIN + 12, top + 31, 7.8, { fill: MUTED });
+      page.drawText(`${truncate(summary.employee.role, 30)} - ${summary.employee.employeeType}`, MARGIN + 12, top + 31, 7.8, { fill: MUTED });
 
       const badgeWidth = 104;
       page.fillRect(PAGE_WIDTH - MARGIN - badgeWidth - 12, top + 10, badgeWidth, 23, LIGHT_GREEN);
-      page.drawText(`${summary.proratedBase ? 'Base proporcional' : 'Base mes'}: ${formatHours(summary.monthlyBaseHours)} h`, PAGE_WIDTH - MARGIN - badgeWidth - 12, top + 16, 7.1, {
+      page.drawText(`Base mes: ${formatHours(summary.monthlyBaseHours)} h`, PAGE_WIDTH - MARGIN - badgeWidth - 12, top + 16, 7.5, {
         bold: true,
         fill: DARK_GREEN,
         align: 'center',
@@ -181,12 +180,13 @@ function buildPayrollPages(periodLabel: string, summaries: PayrollEmployeeSummar
 
       const metrics: Array<{ label: string; value: number; payable?: boolean }> = [
         { label: 'Base semanal', value: summary.weeklyRegularHours },
-        { label: summary.proratedBase ? 'Base proporcional' : 'Base mensual', value: summary.monthlyBaseHours },
+        { label: 'Base mensual', value: summary.monthlyBaseHours },
+        { label: 'Laboradas', value: summary.actualRegularHours },
         { label: 'Overtime', value: summary.overtimeHours },
         { label: 'AO', value: summary.aoHours },
         { label: 'Vacaciones', value: summary.vacationHours },
         { label: 'No Work No Pay', value: summary.noWorkNoPayHours },
-        { label: 'Pagables netas', value: summary.payableHours, payable: true },
+        { label: 'Horas pagables', value: summary.payableHours, payable: true },
       ];
 
       metrics.forEach((metric, metricIndex) => {
