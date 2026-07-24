@@ -1,0 +1,45 @@
+name: Finalize inventory cleanup
+
+on:
+  push:
+    branches: [agent/inventory-thumbnail-cleanup]
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/inventory-thumbnail-cleanup
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm install
+      - name: Remove stale migration comment
+        shell: bash
+        run: |
+          sed -i '/La migración de miniaturas es manual para evitar ciclos silenciosos cuando una operación falla\./d' src/screens/InventoryScreenV4.tsx
+          rm .github/workflows/finalize-inventory-cleanup.yml
+      - name: Verify active inventory source
+        shell: bash
+        run: |
+          ! grep -R "uploadInventoryThumbnail\|optimizeExistingThumbnails\|inventoryThumbnailStorage\|assetsMissingThumbnails\|thumbnailBusy\|thumbnailProgress" src package.json scripts --exclude-dir=node_modules
+          ! grep -n "latestThumbnail\|thumbnailDownloadUrl" src/screens/InventoryScreenV4.tsx
+          test ! -f src/services/inventoryThumbnailStorage.ts
+          test ! -f scripts/runInventoryUnitPatch.cjs
+      - name: Validate clean source directly
+        run: |
+          npx tsc --noEmit
+          npx expo export --platform web
+      - name: Commit final cleanup
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Finalize inventory thumbnail cleanup"
+          git push origin HEAD:agent/inventory-thumbnail-cleanup
