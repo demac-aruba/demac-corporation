@@ -203,6 +203,7 @@ export function TechnicianPortalStateProvider({ children }: { children: ReactNod
     const now = new Date().toISOString();
     const currentActor = actor();
     const sequence = Math.max(0, ...visitUnits.filter((unit) => unit.visitId === input.visitId).map((unit) => unit.sequence)) + 1;
+    const defaultAddedOnSite = input.source === 'registered_on_site' || input.source === 'qr_scan';
     const unit: VisitUnit = {
       id: `visit-unit-${idPart(input.visitId)}-${Date.now().toString(36)}`,
       visitId: input.visitId,
@@ -212,7 +213,7 @@ export function TechnicianPortalStateProvider({ children }: { children: ReactNod
       locationLabel: input.locationLabel.trim() || `Aire ${sequence}`,
       source: input.source,
       status: 'not_started',
-      addedOnSite: input.addedOnSite ?? input.source === 'registered_on_site' || input.source === 'qr_scan',
+      addedOnSite: input.addedOnSite ?? defaultAddedOnSite,
       addedReason: input.addedReason,
       addedByStaffId: currentActor.staffId,
       createdAt: now,
