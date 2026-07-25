@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import { AppShell } from './src/components/AppShell';
 import { LoadingScreen } from './src/components/UI';
 import { LoginScreen } from './src/screens/LoginScreen';
+import { TechnicianPortalPreviewScreen } from './src/screens/TechnicianPortalPreviewScreen';
 import { AppStateProvider, useAppState } from './src/state/AppState';
 import { CalendarStateProvider } from './src/state/CalendarState';
 import { TeamStateProvider } from './src/state/TeamState';
@@ -47,14 +48,24 @@ function usePwaRegistration() {
   }, []);
 }
 
+function technicianPortalPreviewRequested() {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return false;
+  return new URLSearchParams(window.location.search).get('technicianPortalV2') === '1';
+}
+
 function AppContent() {
   usePwaRegistration();
   const { currentUser, hydrated } = useAppState();
+  const showTechnicianPortalPreview = technicianPortalPreviewRequested();
   if (!hydrated) return <LoadingScreen />;
   return (
     <>
       <StatusBar style={currentUser ? 'dark' : 'light'} />
-      {currentUser ? <AppShell /> : <LoginScreen />}
+      {currentUser
+        ? showTechnicianPortalPreview
+          ? <TechnicianPortalPreviewScreen />
+          : <AppShell />
+        : <LoginScreen />}
     </>
   );
 }
