@@ -3,9 +3,8 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { UserManagementCard } from '../components/UserManagementCard';
 import { colors } from '../theme';
 import { SettingsScreen } from './SettingsScreen';
-import { WhatsAppSettingsScreen } from './WhatsAppSettingsScreen';
 
-type SettingsTab = 'users' | 'calendar' | 'whatsapp';
+type SettingsTab = 'users' | 'calendar';
 
 export function SettingsHubScreen() {
   const [tab, setTab] = useState<SettingsTab>('users');
@@ -19,15 +18,12 @@ export function SettingsHubScreen() {
         <Pressable onPress={() => setTab('calendar')} style={[styles.tab, tab === 'calendar' && styles.tabActive]}>
           <Text style={[styles.tabText, tab === 'calendar' && styles.tabTextActive]}>Calendario y empresa</Text>
         </Pressable>
-        <Pressable onPress={() => setTab('whatsapp')} style={[styles.tab, tab === 'whatsapp' && styles.tabActive]}>
-          <Text style={[styles.tabText, tab === 'whatsapp' && styles.tabTextActive]}>WhatsApp y mensajes</Text>
-        </Pressable>
       </View>
       {tab === 'users' ? (
         <ScrollView contentContainerStyle={styles.userPage} keyboardShouldPersistTaps="handled">
           <UserManagementCard />
         </ScrollView>
-      ) : tab === 'calendar' ? <SettingsScreen /> : <WhatsAppSettingsScreen />}
+      ) : <SettingsScreen />}
     </View>
   );
 }
