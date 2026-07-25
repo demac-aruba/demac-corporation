@@ -1,4 +1,4 @@
-name: Audit WhatsApp agenda flow
+name: Validate WhatsApp agenda flow
 
 on:
   push:
@@ -8,31 +8,51 @@ on:
   workflow_dispatch:
 
 jobs:
-  audit:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Collect WhatsApp and reminder implementation
-        shell: bash
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - name: Install application dependencies
+        run: npm install
+      - name: TypeScript
+        run: npm run typecheck
+      - name: Web build
+        run: npm run build:web
+      - name: Install Cloud Functions dependencies
+        working-directory: functions
+        run: npm install
+      - name: Validate Cloud Functions
         run: |
-          mkdir -p audit
-          find . -maxdepth 4 -type f | sort > audit/files.txt
-          grep -RInE --exclude-dir=node_modules --exclude-dir=.git "WhatsApp|whatsapp|reminder|recordatorio|confirmation|confirmación|template|Meta|Twilio|Cloud API|phone_number_id|access_token|maintenance" . > audit/matches.txt || true
-          grep -RInE --exclude-dir=node_modules --exclude-dir=.git "api/|cron|schedule|webhook" package.json vercel.json api src .github > audit/runtime.txt || true
-          cp package.json audit/package.json
-          [ -f vercel.json ] && cp vercel.json audit/vercel.json || true
+          node --check functions/index.js
+          node --check functions/appointmentNotifications.js
+          node --check functions/appointmentNotificationsV2.js
+          node -e "const exported = require('./functions/bootstrap'); const required = ['whatsappWebhook','sendQueuedWhatsAppMessage','queueAppointmentConfirmation','sendDailyAppointmentReminders','validateWhatsAppBusinessSettings']; for (const name of required) { if (!exported[name]) throw new Error('Missing export: ' + name); } console.log(required.join('\n'));"
       - name: Probe deployed Firebase webhook
         shell: bash
         run: |
           URL='https://us-central1-demac-corporation.cloudfunctions.net/whatsappWebhook?hub.mode=subscribe&hub.verify_token=invalid-audit-token&hub.challenge=12345'
+          STATUS=$(curl -sS -o /tmp/webhook-body.txt -w '%{http_code}' --max-time 30 "$URL" || true)
+          echo "HTTP_STATUS=$STATUS"
+          cat /tmp/webhook-body.txt || true
+          test "$STATUS" = '403'
+      - name: Report deployment credential availability
+        shell: bash
+        env:
+          FIREBASE_TOKEN_VALUE: ${{ secrets.FIREBASE_TOKEN }}
+          FIREBASE_SERVICE_ACCOUNT_VALUE: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          GCP_SERVICE_ACCOUNT_VALUE: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+        run: |
+          mkdir -p validation
           {
-            echo "URL=$URL"
-            curl -sS -D - --max-time 30 "$URL" -o /tmp/webhook-body.txt || true
-            echo
-            echo 'BODY:'
-            cat /tmp/webhook-body.txt 2>/dev/null || true
-          } > audit/webhook-probe.txt 2>&1
+            [ -n "$FIREBASE_TOKEN_VALUE" ] && echo 'FIREBASE_TOKEN=true' || echo 'FIREBASE_TOKEN=false'
+            [ -n "$FIREBASE_SERVICE_ACCOUNT_VALUE" ] && echo 'FIREBASE_SERVICE_ACCOUNT=true' || echo 'FIREBASE_SERVICE_ACCOUNT=false'
+            [ -n "$GCP_SERVICE_ACCOUNT_VALUE" ] && echo 'GCP_SERVICE_ACCOUNT=true' || echo 'GCP_SERVICE_ACCOUNT=false'
+          } | tee validation/deployment-credentials.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: whatsapp-agenda-audit
-          path: audit
+          name: whatsapp-agenda-validation
+          path: validation
