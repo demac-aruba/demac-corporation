@@ -8,6 +8,7 @@ import { TechnicianPortalPreviewScreen } from './src/screens/TechnicianPortalPre
 import { AppStateProvider, useAppState } from './src/state/AppState';
 import { CalendarStateProvider } from './src/state/CalendarState';
 import { TeamStateProvider } from './src/state/TeamState';
+import { TechnicianPortalStateProvider } from './src/state/TechnicianPortalState';
 import { VanHalfDayStateProvider } from './src/state/VanHalfDayState';
 
 function usePwaRegistration() {
@@ -74,11 +75,13 @@ export default function App() {
   return (
     <AppStateProvider>
       <TeamStateProvider>
-        <CalendarStateProvider>
-          <VanHalfDayStateProvider>
-            <AppContent />
-          </VanHalfDayStateProvider>
-        </CalendarStateProvider>
+        <TechnicianPortalStateProvider>
+          <CalendarStateProvider>
+            <VanHalfDayStateProvider>
+              <AppContent />
+            </VanHalfDayStateProvider>
+          </CalendarStateProvider>
+        </TechnicianPortalStateProvider>
       </TeamStateProvider>
     </AppStateProvider>
   );
