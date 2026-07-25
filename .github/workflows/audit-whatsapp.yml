@@ -21,6 +21,17 @@ jobs:
           grep -RInE --exclude-dir=node_modules --exclude-dir=.git "api/|cron|schedule|webhook" package.json vercel.json api src .github > audit/runtime.txt || true
           cp package.json audit/package.json
           [ -f vercel.json ] && cp vercel.json audit/vercel.json || true
+      - name: Probe deployed Firebase webhook
+        shell: bash
+        run: |
+          URL='https://us-central1-demac-corporation.cloudfunctions.net/whatsappWebhook?hub.mode=subscribe&hub.verify_token=invalid-audit-token&hub.challenge=12345'
+          {
+            echo "URL=$URL"
+            curl -sS -D - --max-time 30 "$URL" -o /tmp/webhook-body.txt || true
+            echo
+            echo 'BODY:'
+            cat /tmp/webhook-body.txt 2>/dev/null || true
+          } > audit/webhook-probe.txt 2>&1
       - uses: actions/upload-artifact@v4
         with:
           name: whatsapp-agenda-audit
