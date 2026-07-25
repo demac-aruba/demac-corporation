@@ -1,0 +1,25 @@
+name: Audit WhatsApp agenda flow
+
+on:
+  push:
+    branches: [agent/official-whatsapp-agenda]
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Collect WhatsApp and reminder implementation
+        shell: bash
+        run: |
+          mkdir -p audit
+          find . -maxdepth 4 -type f | sort > audit/files.txt
+          grep -RInE --exclude-dir=node_modules --exclude-dir=.git "WhatsApp|whatsapp|reminder|recordatorio|confirmation|confirmación|template|Meta|Twilio|Cloud API|phone_number_id|access_token|maintenance" . > audit/matches.txt || true
+          grep -RInE --exclude-dir=node_modules --exclude-dir=.git "api/|cron|schedule|webhook" package.json vercel.json api src .github > audit/runtime.txt || true
+          cp package.json audit/package.json
+          [ -f vercel.json ] && cp vercel.json audit/vercel.json || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: whatsapp-agenda-audit
+          path: audit
