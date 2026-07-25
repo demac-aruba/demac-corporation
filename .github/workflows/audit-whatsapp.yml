@@ -3,6 +3,8 @@ name: Audit WhatsApp agenda flow
 on:
   push:
     branches: [agent/official-whatsapp-agenda]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
