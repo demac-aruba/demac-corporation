@@ -21,7 +21,8 @@
   },
   "scripts": {
     "patch:payroll": "node scripts/patchPayrollStartDateStage1.cjs && node scripts/patchPayrollStartDateStage2.cjs && node scripts/patchPayrollOvertimeMinutes.cjs",
-    "patch:all": "npm run patch:payroll",
+    "patch:technician-equipment": "node scripts/patchTechnicianEquipmentRealTesting.cjs",
+    "patch:all": "npm run patch:payroll && npm run patch:technician-equipment",
     "prestart": "npm run patch:all",
     "start": "expo start",
     "preandroid": "npm run patch:all",
