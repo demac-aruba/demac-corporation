@@ -138,6 +138,23 @@ service cloud.firestore {
       ]);
     }
 
+    function technicianEquipmentFieldsOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'locationLabel',
+        'systemType',
+        'components',
+        'active',
+        'condition',
+        'installedAt',
+        'warrantyUntil',
+        'updatedAt',
+        'updatedByUserId',
+        'updatedByStaffId',
+        'updatedByName',
+        'version'
+      ]);
+    }
+
     match /users/{userId} {
       allow read: if activeStaff() && (request.auth.uid == userId || adminRole());
       allow write: if false;
@@ -307,6 +324,27 @@ service cloud.firestore {
           && request.resource.data.createdByUserId == resource.data.createdByUserId
           && technicianInterventionFieldsOnly());
       allow delete: if operationsRole();
+    }
+
+    match /equipmentSystems/{equipmentId} {
+      allow read: if activeStaff();
+      allow create: if operationsRole()
+        || (assignedToWorkOrderId(request.resource.data.sourceWorkOrderId)
+          && request.resource.data.sourceWorkOrderId == visitData(request.resource.data.sourceVisitId).workOrderId
+          && request.resource.data.clientId == visitData(request.resource.data.sourceVisitId).clientId
+          && request.resource.data.get('propertyId', '') == visitData(request.resource.data.sourceVisitId).get('propertyId', '')
+          && request.resource.data.createdByUserId == request.auth.uid);
+      allow update: if operationsRole()
+        || (assignedToWorkOrderId(resource.data.sourceWorkOrderId)
+          && request.resource.data.qrCode == resource.data.qrCode
+          && request.resource.data.clientId == resource.data.clientId
+          && request.resource.data.get('propertyId', '') == resource.data.get('propertyId', '')
+          && request.resource.data.sourceWorkOrderId == resource.data.sourceWorkOrderId
+          && request.resource.data.sourceVisitId == resource.data.sourceVisitId
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.createdByUserId == resource.data.createdByUserId
+          && technicianEquipmentFieldsOnly());
+      allow delete: if adminOrSupervisor();
     }
 
     match /workOrderUnits/{unitId} {
