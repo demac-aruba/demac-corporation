@@ -1,8 +1,6 @@
 const sharp = require('sharp');
 
 const MAX_SOURCE_BYTES = 25 * 1024 * 1024;
-const MAX_THUMBNAIL_BYTES = 64 * 1024;
-const THUMBNAIL_DIMENSION = 144;
 
 function sendJson(res, status, payload) {
   res.status(status).setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -25,30 +23,53 @@ function allowedFirebaseUrl(value) {
   return url;
 }
 
-async function createThumbnail(buffer) {
+function thumbnailProfile(value) {
+  if (value === 'report') {
+    return {
+      width: 420,
+      height: 315,
+      fallbackWidth: 360,
+      fallbackHeight: 270,
+      quality: 62,
+      fallbackQuality: 48,
+      maxBytes: 160 * 1024,
+    };
+  }
+  return {
+    width: 144,
+    height: 144,
+    fallbackWidth: 112,
+    fallbackHeight: 112,
+    quality: 46,
+    fallbackQuality: 32,
+    maxBytes: 64 * 1024,
+  };
+}
+
+async function createThumbnail(buffer, profile) {
   let output = await sharp(buffer, { failOn: 'none' })
     .rotate()
     .resize({
-      width: THUMBNAIL_DIMENSION,
-      height: THUMBNAIL_DIMENSION,
+      width: profile.width,
+      height: profile.height,
       fit: 'inside',
       withoutEnlargement: true,
     })
     .flatten({ background: '#ffffff' })
-    .jpeg({ quality: 46, mozjpeg: true })
+    .jpeg({ quality: profile.quality, mozjpeg: true })
     .toBuffer();
 
-  if (output.length > MAX_THUMBNAIL_BYTES) {
+  if (output.length > profile.maxBytes) {
     output = await sharp(buffer, { failOn: 'none' })
       .rotate()
-      .resize({ width: 112, height: 112, fit: 'inside', withoutEnlargement: true })
+      .resize({ width: profile.fallbackWidth, height: profile.fallbackHeight, fit: 'inside', withoutEnlargement: true })
       .flatten({ background: '#ffffff' })
-      .jpeg({ quality: 32, mozjpeg: true })
+      .jpeg({ quality: profile.fallbackQuality, mozjpeg: true })
       .toBuffer();
   }
 
-  if (!output.length || output.length > MAX_THUMBNAIL_BYTES) {
-    throw new Error('No se pudo reducir la miniatura por debajo de 64 KB.');
+  if (!output.length || output.length > profile.maxBytes) {
+    throw new Error('No se pudo reducir la miniatura al tamaño requerido.');
   }
   return output;
 }
@@ -65,6 +86,10 @@ module.exports = async function handler(req, res) {
       : (typeof req.body?.sourceUrl === 'string' ? req.body.sourceUrl : '');
     if (!sourceUrl) return sendJson(res, 400, { error: 'Falta la URL de la fotografía.' });
 
+    const size = req.method === 'GET'
+      ? (typeof req.query?.size === 'string' ? req.query.size : '')
+      : (typeof req.body?.size === 'string' ? req.body.size : '');
+    const profile = thumbnailProfile(size);
     const validatedUrl = allowedFirebaseUrl(sourceUrl);
     const sourceResponse = await fetch(validatedUrl, { redirect: 'follow' });
     if (!sourceResponse.ok) {
@@ -86,7 +111,7 @@ module.exports = async function handler(req, res) {
       return sendJson(res, 413, { error: 'La fotografía original está vacía o supera 25 MB.' });
     }
 
-    const thumbnail = await createThumbnail(sourceBuffer);
+    const thumbnail = await createThumbnail(sourceBuffer, profile);
     res.status(200);
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Content-Length', String(thumbnail.length));
