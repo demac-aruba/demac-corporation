@@ -1,4 +1,4 @@
-import { EmployeeTimesheetEntry } from './types';
+import type { EmployeeTimesheetEntry } from './types';
 
 const LEGACY_MINUTES_THRESHOLD_HOURS = 12;
 
