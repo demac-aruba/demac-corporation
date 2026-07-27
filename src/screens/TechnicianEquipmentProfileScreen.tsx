@@ -252,7 +252,18 @@ export function TechnicianEquipmentProfileScreen() {
                   <Text style={styles.interventionName}>{workTypeLabel(intervention.type)}</Text>
                   <Text style={styles.interventionMeta}>Plantilla {intervention.templateId} · versión {intervention.templateVersion}</Text>
                 </View>
-                <Pill label={interventionStatusLabel(intervention.status)} tone="info" />
+                <View style={{ alignItems: 'flex-end', gap: 7 }}>
+                  <Pill label={interventionStatusLabel(intervention.status)} tone={intervention.status === 'completed' ? 'success' : 'info'} />
+                  <Button
+                    compact
+                    label={intervention.status === 'draft' ? 'Iniciar reporte' : 'Abrir reporte'}
+                    onPress={() => {
+                      if (typeof window === 'undefined') return;
+                      const returnParameter = returnToTechnician ? '&returnTo=technician' : '';
+                      window.location.assign(`${window.location.pathname}?technicianPortalReport=1&visitId=${encodeURIComponent(visit.id)}&unitId=${encodeURIComponent(unit.id)}&interventionId=${encodeURIComponent(intervention.id)}${returnParameter}`);
+                    }}
+                  />
+                </View>
               </View>
 
               {pendingRemovalId === intervention.id ? (
@@ -307,7 +318,7 @@ export function TechnicianEquipmentProfileScreen() {
 
       {interventions.length ? (
         <View style={styles.nextBox}>
-          <Text style={styles.nextTitle}>Reportes por trabajo</Text>
+          <Text style={styles.nextTitle}>Reporte técnico disponible</Text>
           <Text style={styles.nextText}>Cada trabajo activo mantiene su propia plantilla técnica, fotografías, mediciones, hallazgos y estado de revisión.</Text>
         </View>
       ) : null}
