@@ -2,11 +2,17 @@ import React, { createContext, ReactNode, useCallback, useContext, useEffect, us
 import { listFirestoreCollection, saveFirestoreDocument } from '../services/firebase';
 import { useAppState as useCoreAppState } from './AppState';
 import { WorkOrder } from '../types';
-import { WorkIntervention, WorkVisit, VisitUnit } from '../features/technicianPortal/contracts';
+import { EquipmentSystem, WorkIntervention, WorkVisit, VisitUnit } from '../features/technicianPortal/contracts';
+import { equipmentDocumentIdFromQr, isValidEquipmentQrCode, normalizeEquipmentQrCode } from '../features/technicianPortal/equipmentQr';
 
 const REFRESH_INTERVAL_MS = 15_000;
 
 export type TechnicianPortalOperationResult = { ok: boolean; message?: string };
+
+export type RegisteredEquipmentSystem = EquipmentSystem & {
+  sourceWorkOrderId: string;
+  sourceVisitId: string;
+};
 
 type PrepareVisitOptions = {
   serviceName?: string;
@@ -36,10 +42,23 @@ type AddInterventionInput = {
   scopeChangeId?: string;
 };
 
+type RegisterEquipmentSystemInput = {
+  qrCode: string;
+  clientId: string;
+  propertyId?: string;
+  locationLabel: string;
+  systemType: string;
+  components: EquipmentSystem['components'];
+  sourceWorkOrderId: string;
+  sourceVisitId: string;
+  condition?: string;
+};
+
 type TechnicianPortalStateValue = {
   workVisits: WorkVisit[];
   visitUnits: VisitUnit[];
   workInterventions: WorkIntervention[];
+  equipmentSystems: RegisteredEquipmentSystem[];
   loading: boolean;
   dataError: string | null;
   lastSyncedAt: string | null;
@@ -47,9 +66,12 @@ type TechnicianPortalStateValue = {
   saveWorkVisit: (visit: WorkVisit) => Promise<TechnicianPortalOperationResult>;
   saveVisitUnit: (unit: VisitUnit) => Promise<TechnicianPortalOperationResult>;
   saveWorkIntervention: (intervention: WorkIntervention) => Promise<TechnicianPortalOperationResult>;
+  saveEquipmentSystem: (equipment: RegisteredEquipmentSystem) => Promise<TechnicianPortalOperationResult>;
   prepareVisitFromWorkOrder: (order: WorkOrder, options?: PrepareVisitOptions) => Promise<{ result: TechnicianPortalOperationResult; visit?: WorkVisit }>;
   addVisitUnit: (input: AddVisitUnitInput) => Promise<{ result: TechnicianPortalOperationResult; unit?: VisitUnit }>;
   addWorkIntervention: (input: AddInterventionInput) => Promise<{ result: TechnicianPortalOperationResult; intervention?: WorkIntervention }>;
+  registerEquipmentSystem: (input: RegisterEquipmentSystemInput) => Promise<{ result: TechnicianPortalOperationResult; equipment?: RegisteredEquipmentSystem }>;
+  attachEquipmentToVisitUnit: (unit: VisitUnit, equipment: RegisteredEquipmentSystem) => Promise<TechnicianPortalOperationResult>;
 };
 
 const TechnicianPortalStateContext = createContext<TechnicianPortalStateValue | undefined>(undefined);
@@ -81,6 +103,10 @@ function sortInterventions(items: WorkIntervention[]) {
   return [...items].sort((a, b) => `${a.visitUnitId}-${a.createdAt}`.localeCompare(`${b.visitUnitId}-${b.createdAt}`));
 }
 
+function sortEquipment(items: RegisteredEquipmentSystem[]) {
+  return [...items].sort((a, b) => `${a.clientId}-${a.locationLabel}`.localeCompare(`${b.clientId}-${b.locationLabel}`, 'es', { sensitivity: 'base' }));
+}
+
 function idPart(value: string) {
   return value.replace(/[^a-zA-Z0-9_-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 80) || 'record';
 }
@@ -90,6 +116,7 @@ export function TechnicianPortalStateProvider({ children }: { children: ReactNod
   const [workVisits, setWorkVisits] = useState<WorkVisit[]>([]);
   const [visitUnits, setVisitUnits] = useState<VisitUnit[]>([]);
   const [workInterventions, setWorkInterventions] = useState<WorkIntervention[]>([]);
+  const [equipmentSystems, setEquipmentSystems] = useState<RegisteredEquipmentSystem[]>([]);
   const [loading, setLoading] = useState(false);
   const [dataError, setDataError] = useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
@@ -102,14 +129,16 @@ export function TechnicianPortalStateProvider({ children }: { children: ReactNod
     }
     if (showLoader) setLoading(true);
     try {
-      const [remoteVisits, remoteUnits, remoteInterventions] = await Promise.all([
+      const [remoteVisits, remoteUnits, remoteInterventions, remoteEquipment] = await Promise.all([
         listFirestoreCollection<WorkVisit>('workVisits'),
         listFirestoreCollection<VisitUnit>('visitUnits'),
         listFirestoreCollection<WorkIntervention>('workInterventions'),
+        listFirestoreCollection<RegisteredEquipmentSystem>('equipmentSystems'),
       ]);
       setWorkVisits(sortVisits(remoteVisits));
       setVisitUnits(sortUnits(remoteUnits));
       setWorkInterventions(sortInterventions(remoteInterventions));
+      setEquipmentSystems(sortEquipment(remoteEquipment));
       setDataError(null);
       setLastSyncedAt(new Date().toISOString());
     } catch (error) {
@@ -131,7 +160,7 @@ export function TechnicianPortalStateProvider({ children }: { children: ReactNod
 
   const actor = useCallback(() => ({
     userId: currentUser?.id ?? 'demo-user',
-    staffId: undefined as string | undefined,
+    staffId: (currentUser as { staffId?: string } | null)?.staffId,
     name: currentUser?.name ?? 'Usuario DEMAC',
   }), [currentUser?.id, currentUser?.name]);
 
@@ -157,6 +186,7 @@ export function TechnicianPortalStateProvider({ children }: { children: ReactNod
   const saveWorkVisit = (visit: WorkVisit) => saveDocument('workVisits', visit, setWorkVisits, sortVisits);
   const saveVisitUnit = (unit: VisitUnit) => saveDocument('visitUnits', unit, setVisitUnits, sortUnits);
   const saveWorkIntervention = (intervention: WorkIntervention) => saveDocument('workInterventions', intervention, setWorkInterventions, sortInterventions);
+  const saveEquipmentSystem = (equipment: RegisteredEquipmentSystem) => saveDocument('equipmentSystems', equipment, setEquipmentSystems, sortEquipment);
 
   const prepareVisitFromWorkOrder = async (order: WorkOrder, options: PrepareVisitOptions = {}) => {
     const existing = workVisits.find((visit) => visit.workOrderId === order.id);
@@ -259,10 +289,65 @@ export function TechnicianPortalStateProvider({ children }: { children: ReactNod
     return { result, intervention: result.ok ? intervention : undefined };
   };
 
+  const registerEquipmentSystem = async (input: RegisterEquipmentSystemInput) => {
+    const qrCode = normalizeEquipmentQrCode(input.qrCode);
+    if (!isValidEquipmentQrCode(qrCode)) {
+      return { result: { ok: false, message: 'El código debe tener el formato DEMAC-AC-XXXXXXXX.' } };
+    }
+    const existing = equipmentSystems.find((equipment) => normalizeEquipmentQrCode(equipment.qrCode) === qrCode);
+    if (existing) {
+      return { result: { ok: false, message: `El QR ${qrCode} ya pertenece a ${existing.locationLabel}.` }, equipment: existing };
+    }
+
+    const now = new Date().toISOString();
+    const currentActor = actor();
+    const equipment: RegisteredEquipmentSystem = {
+      id: equipmentDocumentIdFromQr(qrCode),
+      qrCode,
+      clientId: input.clientId,
+      propertyId: input.propertyId,
+      locationLabel: input.locationLabel.trim(),
+      systemType: input.systemType,
+      components: input.components,
+      active: true,
+      condition: input.condition,
+      sourceWorkOrderId: input.sourceWorkOrderId,
+      sourceVisitId: input.sourceVisitId,
+      createdAt: now,
+      createdByUserId: currentActor.userId,
+      createdByStaffId: currentActor.staffId,
+      createdByName: currentActor.name,
+      updatedAt: now,
+      updatedByUserId: currentActor.userId,
+      updatedByStaffId: currentActor.staffId,
+      updatedByName: currentActor.name,
+      version: 1,
+    };
+    const result = await saveEquipmentSystem(equipment);
+    return { result, equipment: result.ok ? equipment : undefined };
+  };
+
+  const attachEquipmentToVisitUnit = async (unit: VisitUnit, equipment: RegisteredEquipmentSystem) => {
+    const now = new Date().toISOString();
+    const currentActor = actor();
+    return saveVisitUnit({
+      ...unit,
+      equipmentSystemId: equipment.id,
+      locationLabel: equipment.locationLabel,
+      source: unit.source === 'scheduled' ? 'existing_equipment' : unit.source,
+      updatedAt: now,
+      updatedByUserId: currentActor.userId,
+      updatedByStaffId: currentActor.staffId,
+      updatedByName: currentActor.name,
+      version: Math.max(1, Number(unit.version ?? 1)) + 1,
+    });
+  };
+
   const value = useMemo<TechnicianPortalStateValue>(() => ({
     workVisits,
     visitUnits,
     workInterventions,
+    equipmentSystems,
     loading,
     dataError,
     lastSyncedAt,
@@ -270,10 +355,13 @@ export function TechnicianPortalStateProvider({ children }: { children: ReactNod
     saveWorkVisit,
     saveVisitUnit,
     saveWorkIntervention,
+    saveEquipmentSystem,
     prepareVisitFromWorkOrder,
     addVisitUnit,
     addWorkIntervention,
-  }), [workVisits, visitUnits, workInterventions, loading, dataError, lastSyncedAt, refreshTechnicianPortalData]);
+    registerEquipmentSystem,
+    attachEquipmentToVisitUnit,
+  }), [workVisits, visitUnits, workInterventions, equipmentSystems, loading, dataError, lastSyncedAt, refreshTechnicianPortalData]);
 
   return <TechnicianPortalStateContext.Provider value={value}>{children}</TechnicianPortalStateContext.Provider>;
 }
