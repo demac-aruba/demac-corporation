@@ -3,7 +3,7 @@ import { listFirestoreCollection, saveFirestoreDocument } from '../services/fire
 import { useAppState as useCoreAppState } from './AppState';
 import { WorkOrder } from '../types';
 import { EquipmentSystem, WorkIntervention, WorkVisit, VisitUnit } from '../features/technicianPortal/contracts';
-import { equipmentDocumentIdFromQr, isValidEquipmentQrCode, normalizeEquipmentQrCode } from '../features/technicianPortal/equipmentQr';
+import { equipmentDocumentIdFromQr, equipmentQrCodesMatch, isValidEquipmentQrCode, normalizeEquipmentQrCode } from '../features/technicianPortal/equipmentQr';
 
 const REFRESH_INTERVAL_MS = 15_000;
 
@@ -292,11 +292,11 @@ export function TechnicianPortalStateProvider({ children }: { children: ReactNod
   const registerEquipmentSystem = async (input: RegisterEquipmentSystemInput) => {
     const qrCode = normalizeEquipmentQrCode(input.qrCode);
     if (!isValidEquipmentQrCode(qrCode)) {
-      return { result: { ok: false, message: 'El código debe tener el formato DEMAC-AC-XXXXXXXX.' } };
+      return { result: { ok: false, message: 'Escanea o escribe el código completo del sticker QR preimpreso.' } };
     }
-    const existing = equipmentSystems.find((equipment) => normalizeEquipmentQrCode(equipment.qrCode) === qrCode);
+    const existing = equipmentSystems.find((equipment) => equipmentQrCodesMatch(equipment.qrCode, qrCode));
     if (existing) {
-      return { result: { ok: false, message: `El QR ${qrCode} ya pertenece a ${existing.locationLabel}.` }, equipment: existing };
+      return { result: { ok: false, message: `Este QR ya pertenece a ${existing.locationLabel}.` }, equipment: existing };
     }
 
     const now = new Date().toISOString();
