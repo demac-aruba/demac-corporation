@@ -98,14 +98,21 @@ async function imageUrlToJpeg(url: string): Promise<PdfImage | undefined> {
   pdfSource = pdfSource.replace(oldFunction, newFunction);
 }
 
-if (!pdfSource.includes('const PHOTO_COLUMN_GAP = 10;')) {
-  const startMarker = '    for (const field of section.fields) {';
+if (!pdfSource.includes('const PHOTO_GRID_PAGE_SIZE = 4;')) {
+  const originalStartMarker = '    for (const field of section.fields) {';
+  const previousLayoutStartMarker = '    const PHOTO_COLUMN_GAP = 10;';
   const endMarker = '    cursor += 8;\n  }\n\n  if (report.observation) {';
-  const start = pdfSource.indexOf(startMarker);
+  const start = pdfSource.includes(previousLayoutStartMarker)
+    ? pdfSource.indexOf(previousLayoutStartMarker)
+    : pdfSource.indexOf(originalStartMarker);
   const end = pdfSource.indexOf(endMarker, start);
-  if (start < 0 || end < 0) throw new Error('The original PDF field layout block was not found.');
+  if (start < 0 || end < 0) throw new Error('The PDF field layout block was not found.');
 
-  const replacement = `    const PHOTO_COLUMN_GAP = 10;
+  const replacement = `    const PHOTO_GRID_PAGE_SIZE = 4;
+    const PHOTO_COLUMN_GAP = 10;
+    const PHOTO_ROW_GAP = 10;
+    const PHOTO_CARD_WIDTH = (CONTENT_WIDTH - PHOTO_COLUMN_GAP) / 2;
+    const PHOTO_MAX_IMAGE_HEIGHT = 205;
     let fieldIndex = 0;
     while (fieldIndex < section.fields.length) {
       const field = section.fields[fieldIndex];
@@ -122,20 +129,37 @@ if (!pdfSource.includes('const PHOTO_COLUMN_GAP = 10;')) {
         continue;
       }
 
-      const photoGroup = [field];
-      const followingField = section.fields[fieldIndex + 1];
-      if (followingField?.photoUrl) photoGroup.push(followingField);
-      const columns = photoGroup.length;
-      const cardWidth = columns === 2 ? (CONTENT_WIDTH - PHOTO_COLUMN_GAP) / 2 : CONTENT_WIDTH;
-      const maxImageHeight = columns === 2 ? 245 : 360;
-      const prepared = photoGroup.map((photoField) => {
-        const image = photoField.photoUrl ? images.get(photoField.photoUrl) : undefined;
-        const titleLines = wrapText(photoField.label, cardWidth - 18, 9.5);
-        const titleHeight = titleLines.length * 12;
-        const caption = photoField.photoCaption && photoField.photoCaption !== photoField.label ? photoField.photoCaption : '';
-        const captionLines = caption ? wrapText(caption, cardWidth - 18, 7.8) : [];
-        const captionHeight = captionLines.length * 10;
-        if (!image) {
+      let photoRunEnd = fieldIndex;
+      while (photoRunEnd < section.fields.length && section.fields[photoRunEnd].photoUrl) photoRunEnd += 1;
+      let photoChunkStart = fieldIndex;
+      let firstPhotoChunk = true;
+
+      while (photoChunkStart < photoRunEnd) {
+        const photoGroup = section.fields.slice(photoChunkStart, Math.min(photoChunkStart + PHOTO_GRID_PAGE_SIZE, photoRunEnd));
+        const prepared = photoGroup.map((photoField) => {
+          const image = photoField.photoUrl ? images.get(photoField.photoUrl) : undefined;
+          const titleLines = wrapText(photoField.label, PHOTO_CARD_WIDTH - 18, 9.2).slice(0, 3);
+          const titleHeight = titleLines.length * 11.5;
+          const caption = photoField.photoCaption && photoField.photoCaption !== photoField.label ? photoField.photoCaption : '';
+          const captionLines = caption ? wrapText(caption, PHOTO_CARD_WIDTH - 18, 7.5).slice(0, 2) : [];
+          const captionHeight = captionLines.length * 9.5;
+          if (!image) {
+            return {
+              photoField,
+              image,
+              titleLines,
+              titleHeight,
+              captionLines,
+              captionHeight,
+              imageWidth: PHOTO_CARD_WIDTH - 18,
+              imageHeight: 34,
+              cardHeight: 18 + titleHeight + 7 + 34 + captionHeight + 15,
+            };
+          }
+          const availableWidth = PHOTO_CARD_WIDTH - 18;
+          const scale = Math.min(availableWidth / image.width, PHOTO_MAX_IMAGE_HEIGHT / image.height, 1);
+          const imageWidth = image.width * scale;
+          const imageHeight = image.height * scale;
           return {
             photoField,
             image,
@@ -143,58 +167,51 @@ if (!pdfSource.includes('const PHOTO_COLUMN_GAP = 10;')) {
             titleHeight,
             captionLines,
             captionHeight,
-            imageWidth: cardWidth - 18,
-            imageHeight: 34,
-            cardHeight: 18 + titleHeight + 7 + 34 + captionHeight + 16,
+            imageWidth,
+            imageHeight,
+            cardHeight: 18 + titleHeight + 7 + imageHeight + captionHeight + 15,
           };
+        });
+
+        const rows = [prepared.slice(0, 2), prepared.slice(2, 4)].filter((row) => row.length);
+        const rowHeights = rows.map((row) => Math.max(...row.map((item) => item.cardHeight)));
+        const blockHeight = rowHeights.reduce((sum, height) => sum + height, 0) + Math.max(0, rows.length - 1) * PHOTO_ROW_GAP;
+
+        if (!firstPhotoChunk || cursor + blockHeight > FOOTER_TOP - 18) {
+          addPage();
+          drawText(page, section.title + ' - continuación', MARGIN, cursor, 12, { bold: true, fill: DARK_BLUE });
+          cursor += 22;
         }
-        const availableWidth = cardWidth - 18;
-        const scale = Math.min(availableWidth / image.width, maxImageHeight / image.height, 1);
-        const imageWidth = image.width * scale;
-        const imageHeight = image.height * scale;
-        return {
-          photoField,
-          image,
-          titleLines,
-          titleHeight,
-          captionLines,
-          captionHeight,
-          imageWidth,
-          imageHeight,
-          cardHeight: 18 + titleHeight + 7 + imageHeight + captionHeight + 16,
-        };
-      });
-      const rowHeight = Math.max(...prepared.map((item) => item.cardHeight));
 
-      ensureSpace(rowHeight + 12);
-      prepared.forEach((item, index) => {
-        const x = MARGIN + index * (cardWidth + PHOTO_COLUMN_GAP);
-        fillRect(page, x, cursor, cardWidth, rowHeight, WHITE, BORDER);
-        let itemTop = cursor + 9;
-        item.titleLines.forEach((entry, lineIndex) => drawText(page, entry, x + 9, itemTop + lineIndex * 12, 9.5, { bold: true, fill: BLUE }));
-        itemTop += item.titleHeight + 7;
-        if (!item.image) {
-          fillRect(page, x + 9, itemTop, cardWidth - 18, 34, LIGHT_GRAY, BORDER);
-          drawText(page, 'Fotografía no disponible para el PDF.', x + 17, itemTop + 11, 7.8, { fill: MUTED });
-          itemTop += 41;
-        } else {
-          page.imageKeys.add(item.image.key);
-          const imageX = x + (cardWidth - item.imageWidth) / 2;
-          page.commands.push('q ' + number(item.imageWidth) + ' 0 0 ' + number(item.imageHeight) + ' ' + number(imageX) + ' ' + number(topToY(itemTop, item.imageHeight)) + ' cm /' + item.image.resourceName + ' Do Q');
-          itemTop += item.imageHeight + 7;
-        }
-        item.captionLines.forEach((entry, lineIndex) => drawText(page, entry, x + 9, itemTop + lineIndex * 10, 7.8, { bold: true, fill: TEXT }));
-      });
+        rows.forEach((row, rowIndex) => {
+          const rowHeight = rowHeights[rowIndex];
+          row.forEach((item, columnIndex) => {
+            const x = MARGIN + columnIndex * (PHOTO_CARD_WIDTH + PHOTO_COLUMN_GAP);
+            fillRect(page, x, cursor, PHOTO_CARD_WIDTH, rowHeight, WHITE, BORDER);
+            let itemTop = cursor + 9;
+            item.titleLines.forEach((entry, lineIndex) => drawText(page, entry, x + 9, itemTop + lineIndex * 11.5, 9.2, { bold: true, fill: BLUE }));
+            itemTop += item.titleHeight + 7;
+            if (!item.image) {
+              fillRect(page, x + 9, itemTop, PHOTO_CARD_WIDTH - 18, 34, LIGHT_GRAY, BORDER);
+              drawText(page, 'Fotografía no disponible para el PDF.', x + 17, itemTop + 11, 7.5, { fill: MUTED });
+              itemTop += 41;
+            } else {
+              page.imageKeys.add(item.image.key);
+              const imageX = x + (PHOTO_CARD_WIDTH - item.imageWidth) / 2;
+              page.commands.push('q ' + number(item.imageWidth) + ' 0 0 ' + number(item.imageHeight) + ' ' + number(imageX) + ' ' + number(topToY(itemTop, item.imageHeight)) + ' cm /' + item.image.resourceName + ' Do Q');
+              itemTop += item.imageHeight + 7;
+            }
+            item.captionLines.forEach((entry, lineIndex) => drawText(page, entry, x + 9, itemTop + lineIndex * 9.5, 7.5, { bold: true, fill: TEXT }));
+          });
+          cursor += rowHeight + (rowIndex < rows.length - 1 ? PHOTO_ROW_GAP : 0);
+        });
 
-      cursor += rowHeight + 12;
-      fieldIndex += photoGroup.length;
-
-      const nextField = section.fields[fieldIndex];
-      if (nextField?.photoUrl) {
-        addPage();
-        drawText(page, section.title + ' - continuación', MARGIN, cursor, 12, { bold: true, fill: DARK_BLUE });
-        cursor += 22;
+        cursor += 12;
+        photoChunkStart += photoGroup.length;
+        firstPhotoChunk = false;
       }
+
+      fieldIndex = photoRunEnd;
     }
 `;
 
