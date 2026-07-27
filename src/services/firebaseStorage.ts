@@ -7,6 +7,10 @@ export type StorageUploadResult = {
   downloadUrl: string;
   contentType: string;
   sizeBytes: number;
+  thumbnailStoragePath?: string;
+  thumbnailUrl?: string;
+  thumbnailContentType?: string;
+  thumbnailSizeBytes?: number;
 };
 
 type UploadEvidenceInput = {
@@ -16,6 +20,14 @@ type UploadEvidenceInput = {
   evidenceId: string;
   mimeType?: string | null;
   fileName?: string | null;
+};
+
+type ExistingEvidenceThumbnailInput = {
+  downloadUrl: string;
+  storagePath: string;
+  workOrderId: string;
+  unitId?: string;
+  evidenceId: string;
 };
 
 type FirebaseStoragePayload = {
@@ -97,6 +109,75 @@ async function fetchGeneratedDownloadToken(storagePath: string, idToken: string)
   return downloadTokenFromPayload(parseStoragePayload(responseText));
 }
 
+async function uploadBlob({
+  blob,
+  contentType,
+  storagePath,
+  metadata,
+  idToken,
+}: {
+  blob: Blob;
+  contentType: string;
+  storagePath: string;
+  metadata: Record<string, string>;
+  idToken: string;
+}) {
+  const multipart = buildMultipartUploadBody({ name: storagePath, contentType, metadata }, blob, contentType);
+  const endpoint = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(storageBucket!)}/o?name=${encodeURIComponent(storagePath)}`;
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${idToken}`,
+      'Content-Type': multipart.contentTypeHeader,
+      'X-Goog-Upload-Protocol': 'multipart',
+    },
+    body: multipart.body,
+  });
+  const responseText = await response.text();
+  const payload = parseStoragePayload(responseText);
+  if (!response.ok) {
+    const message = storageResponseMessage(responseText) ?? 'Firebase Storage rechazó la fotografía.';
+    throw new Error(`${message} (Storage ${response.status})`);
+  }
+  const token = downloadTokenFromPayload(payload) ?? await fetchGeneratedDownloadToken(storagePath, idToken);
+  if (!token) throw new Error('La fotografía subió, pero Firebase no devolvió su enlace de descarga.');
+  const downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(storageBucket!)}/o/${encodeURIComponent(storagePath)}?alt=media&token=${encodeURIComponent(token)}`;
+  return { storagePath, downloadUrl, contentType, sizeBytes: blob.size };
+}
+
+async function imageBlobToThumbnail(blob: Blob) {
+  if (typeof document === 'undefined') return undefined;
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = document.createElement('img');
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error('No se pudo preparar la miniatura de la fotografía.'));
+      element.src = objectUrl;
+    });
+    const maxWidth = 420;
+    const maxHeight = 315;
+    const ratio = Math.min(maxWidth / image.naturalWidth, maxHeight / image.naturalHeight, 1);
+    const width = Math.max(1, Math.round(image.naturalWidth * ratio));
+    const height = Math.max(1, Math.round(image.naturalHeight * ratio));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d');
+    if (!context) return undefined;
+    context.drawImage(image, 0, 0, width, height);
+    return await new Promise<Blob | undefined>((resolve) => canvas.toBlob((result) => resolve(result ?? undefined), 'image/jpeg', 0.72));
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+function thumbnailPathFromOriginal(storagePath: string, evidenceId: string) {
+  const slash = storagePath.lastIndexOf('/');
+  const directory = slash >= 0 ? storagePath.slice(0, slash) : 'work-orders';
+  return `${directory}/thumbnails/${safeSegment(evidenceId, randomToken())}.jpg`;
+}
+
 export async function uploadWorkOrderEvidenceImage(input: UploadEvidenceInput): Promise<StorageUploadResult> {
   if (!storageBucket) throw new Error('Firebase Storage no está configurado para este entorno.');
   const session = await requireSession();
@@ -113,41 +194,62 @@ export async function uploadWorkOrderEvidenceImage(input: UploadEvidenceInput): 
   const evidenceId = safeSegment(input.evidenceId, randomToken());
   const storagePath = `work-orders/${workOrderId}/${unitId}/${evidenceId}.${extension}`;
   const metadata = {
-    name: storagePath,
-    contentType,
+    workOrderId: input.workOrderId,
+    unitId: input.unitId || 'general',
+    evidenceId: input.evidenceId,
+    uploadedByUid: session.uid,
+  };
+
+  const original = await uploadBlob({ blob, contentType, storagePath, metadata, idToken: session.idToken });
+  const thumbnailBlob = await imageBlobToThumbnail(blob).catch(() => undefined);
+  if (!thumbnailBlob) return original;
+
+  const thumbnailStoragePath = thumbnailPathFromOriginal(storagePath, input.evidenceId);
+  const thumbnail = await uploadBlob({
+    blob: thumbnailBlob,
+    contentType: 'image/jpeg',
+    storagePath: thumbnailStoragePath,
+    metadata: { ...metadata, variant: 'thumbnail' },
+    idToken: session.idToken,
+  }).catch(() => undefined);
+
+  return {
+    ...original,
+    thumbnailStoragePath: thumbnail?.storagePath,
+    thumbnailUrl: thumbnail?.downloadUrl,
+    thumbnailContentType: thumbnail?.contentType,
+    thumbnailSizeBytes: thumbnail?.sizeBytes,
+  };
+}
+
+export async function createExistingEvidenceThumbnail(input: ExistingEvidenceThumbnailInput) {
+  if (!storageBucket) throw new Error('Firebase Storage no está configurado para este entorno.');
+  const session = await requireSession();
+  const response = await fetch(input.downloadUrl);
+  if (!response.ok) throw new Error('No se pudo descargar la fotografía original para crear su miniatura.');
+  const originalBlob = await response.blob();
+  const thumbnailBlob = await imageBlobToThumbnail(originalBlob);
+  if (!thumbnailBlob) throw new Error('El navegador no pudo crear la miniatura.');
+  const thumbnailStoragePath = thumbnailPathFromOriginal(input.storagePath, input.evidenceId);
+  const thumbnail = await uploadBlob({
+    blob: thumbnailBlob,
+    contentType: 'image/jpeg',
+    storagePath: thumbnailStoragePath,
     metadata: {
       workOrderId: input.workOrderId,
       unitId: input.unitId || 'general',
       evidenceId: input.evidenceId,
       uploadedByUid: session.uid,
+      variant: 'thumbnail',
     },
-  };
-
-  // Firebase owns the reserved download-token metadata. The client sends only
-  // DEMAC audit metadata and reads the server-generated token after upload.
-  const multipart = buildMultipartUploadBody(metadata, blob, contentType);
-  const endpoint = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(storageBucket)}/o?name=${encodeURIComponent(storagePath)}`;
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${session.idToken}`,
-      'Content-Type': multipart.contentTypeHeader,
-      'X-Goog-Upload-Protocol': 'multipart',
-    },
-    body: multipart.body,
+    idToken: session.idToken,
   });
-  const responseText = await response.text();
-  const payload = parseStoragePayload(responseText);
-  if (!response.ok) {
-    const message = storageResponseMessage(responseText) ?? 'Firebase Storage rechazó la fotografía.';
-    throw new Error(`${message} (Storage ${response.status})`);
-  }
-
-  const token = downloadTokenFromPayload(payload) ?? await fetchGeneratedDownloadToken(storagePath, session.idToken);
-  if (!token) throw new Error('La fotografía subió, pero Firebase no devolvió su enlace de descarga.');
-
-  const downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(storageBucket)}/o/${encodeURIComponent(storagePath)}?alt=media&token=${encodeURIComponent(token)}`;
-  return { storagePath, downloadUrl, contentType, sizeBytes: blob.size };
+  return {
+    thumbnailStoragePath: thumbnail.storagePath,
+    thumbnailUrl: thumbnail.downloadUrl,
+    thumbnailContentType: thumbnail.contentType,
+    thumbnailSizeBytes: thumbnail.sizeBytes,
+  };
 }
 
 export async function deleteWorkOrderEvidenceImage(storagePath: string) {
