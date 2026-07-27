@@ -4,10 +4,12 @@ import { Platform } from 'react-native';
 import { AppShell } from './src/components/AppShell';
 import { LoadingScreen } from './src/components/UI';
 import { LoginScreen } from './src/screens/LoginScreen';
+import { TechnicianPortalPersistenceTestScreen } from './src/screens/TechnicianPortalPersistenceTestScreen';
 import { TechnicianPortalPreviewScreen } from './src/screens/TechnicianPortalPreviewScreen';
 import { AppStateProvider, useAppState } from './src/state/AppState';
 import { CalendarStateProvider } from './src/state/CalendarState';
 import { TeamStateProvider } from './src/state/TeamState';
+import { TechnicianPortalStateProvider } from './src/state/TechnicianPortalState';
 import { VanHalfDayStateProvider } from './src/state/VanHalfDayState';
 
 function usePwaRegistration() {
@@ -48,23 +50,28 @@ function usePwaRegistration() {
   }, []);
 }
 
-function technicianPortalPreviewRequested() {
-  if (Platform.OS !== 'web' || typeof window === 'undefined') return false;
-  return new URLSearchParams(window.location.search).get('technicianPortalV2') === '1';
+function technicianPortalRoute() {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return 'app';
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('technicianPortalPersistence') === '1') return 'persistence';
+  if (params.get('technicianPortalV2') === '1') return 'preview';
+  return 'app';
 }
 
 function AppContent() {
   usePwaRegistration();
   const { currentUser, hydrated } = useAppState();
-  const showTechnicianPortalPreview = technicianPortalPreviewRequested();
+  const route = technicianPortalRoute();
   if (!hydrated) return <LoadingScreen />;
   return (
     <>
       <StatusBar style={currentUser ? 'dark' : 'light'} />
       {currentUser
-        ? showTechnicianPortalPreview
-          ? <TechnicianPortalPreviewScreen />
-          : <AppShell />
+        ? route === 'persistence'
+          ? <TechnicianPortalPersistenceTestScreen />
+          : route === 'preview'
+            ? <TechnicianPortalPreviewScreen />
+            : <AppShell />
         : <LoginScreen />}
     </>
   );
@@ -74,11 +81,13 @@ export default function App() {
   return (
     <AppStateProvider>
       <TeamStateProvider>
-        <CalendarStateProvider>
-          <VanHalfDayStateProvider>
-            <AppContent />
-          </VanHalfDayStateProvider>
-        </CalendarStateProvider>
+        <TechnicianPortalStateProvider>
+          <CalendarStateProvider>
+            <VanHalfDayStateProvider>
+              <AppContent />
+            </VanHalfDayStateProvider>
+          </CalendarStateProvider>
+        </TechnicianPortalStateProvider>
       </TeamStateProvider>
     </AppStateProvider>
   );
