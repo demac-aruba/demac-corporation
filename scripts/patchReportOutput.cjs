@@ -52,4 +52,12 @@ replaceOnce(
   'const requestedScreen = useMemo',
 );
 
+const reviewFile = 'src/screens/OfficeReportReviewScreen.tsx';
+let reviewText = fs.readFileSync(reviewFile, 'utf8');
+reviewText = reviewText.replace(
+  "fieldValue: { color: colors.text, lineHeight: 18, whiteSpace: 'pre-wrap' as any },",
+  "fieldValue: { color: colors.text, lineHeight: 18 },",
+);
+fs.writeFileSync(reviewFile, reviewText);
+
 console.log('Report PDF, routing and thumbnail state patches applied.');
