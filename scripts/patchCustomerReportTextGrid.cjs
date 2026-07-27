@@ -28,7 +28,7 @@ if (!pdfSource.includes('const TEXT_GRID_COLUMNS = 3;')) {
         let textRunIndex = 0;
 
         while (textRunIndex < textRun.length) {
-          const row: Array<{ field: PrintableReportField; span: number; startUnit: number }> = [];
+          const row: Array<{ field: typeof field; span: number; startUnit: number }> = [];
           let usedUnits = 0;
 
           while (textRunIndex < textRun.length) {
