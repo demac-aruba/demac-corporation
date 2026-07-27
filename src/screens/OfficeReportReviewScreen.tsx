@@ -1,10 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Button, Card, EmptyState, Input, Pill, SectionTitle } from '../components/UI';
+import { AppModal, Button, Card, EmptyState, Input, Pill, SectionTitle } from '../components/UI';
 import { InterventionStatus, InterventionType, ReportSection, WorkIntervention } from '../features/technicianPortal/contracts';
 import { getTechnicianReportTemplate, TemplateFieldDefinition } from '../features/technicianPortal/templates';
-import { createExistingEvidenceThumbnail } from '../services/firebaseStorage';
 import { createReportPrintWindow, PrintableTechnicalReport, renderPrintableTechnicalReport } from '../services/reportPrint';
+import { createTechnicalReportPdfDownload } from '../services/technicalReportPdf';
 import { useAppState } from '../state/AppState';
 import { useTeamState } from '../state/TeamState';
 import { useTechnicianPortalState } from '../state/TechnicianPortalState';
@@ -12,6 +12,7 @@ import { colors } from '../theme';
 import { WorkOrderEvidence } from '../types';
 
 type ReviewFilter = 'pending' | 'changes_requested' | 'approved';
+type CustomerReportOverrides = { reportDate?: string; observation?: string };
 
 const WORK_LABELS: Record<InterventionType, string> = {
   standard_service: 'Servicio estándar',
@@ -30,7 +31,7 @@ function statusLabel(status: InterventionStatus) {
     pending_part: 'Pendiente por pieza',
     ready_for_review: 'Pendiente de revisión',
     changes_requested: 'Corrección solicitada',
-    completed: 'Aprobado',
+    completed: 'Revisado',
     cancelled: 'Cancelado',
   };
   return labels[status];
@@ -58,7 +59,7 @@ function fieldValue(value: ReportSection['fields'][string] | undefined, field: T
 }
 
 function appendAuditNote(existing: string | undefined, title: string, note: string, reviewer: string, timestamp: string) {
-  const entry = `[${title}] ${note}\nRevisado por: ${reviewer}\nFecha: ${timestamp}`;
+  const entry = `[${title}] ${note}\nRevisado internamente por: ${reviewer}\nFecha: ${timestamp}`;
   return [existing, entry].filter(Boolean).join('\n\n');
 }
 
@@ -71,15 +72,13 @@ function queryInterventionId() {
   return new URLSearchParams(window.location.search).get('interventionId') ?? '';
 }
 
+function reportThumbnailUrl(originalUrl: string) {
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://demac-aruba.com';
+  return `${origin}/api/inventory-thumbnail?size=report&sourceUrl=${encodeURIComponent(originalUrl)}`;
+}
+
 export function OfficeReportReviewScreen() {
-  const {
-    currentUser,
-    clients,
-    properties,
-    workOrders,
-    workOrderEvidence,
-    updateWorkOrderEvidence,
-  } = useAppState();
+  const { currentUser, clients, properties, workOrders, workOrderEvidence } = useAppState();
   const { staffProfiles, vans, dailyVanAssignments } = useTeamState();
   const {
     workVisits,
@@ -98,9 +97,8 @@ export function OfficeReportReviewScreen() {
   const [selectedInterventionId, setSelectedInterventionId] = useState(requestedInterventionId);
   const [correctionNote, setCorrectionNote] = useState('');
   const [working, setWorking] = useState(false);
-  const [optimizing, setOptimizing] = useState(false);
+  const [lightboxEvidence, setLightboxEvidence] = useState<WorkOrderEvidence | null>(null);
   const [message, setMessage] = useState('Selecciona un reporte pendiente para revisar sus secciones, mediciones y fotografías.');
-  const thumbnailAttempts = useRef(new Set<string>());
 
   const allowed = currentUser && ['admin', 'office', 'supervisor'].includes(currentUser.role);
   const reviewable = useMemo(() => workInterventions
@@ -128,7 +126,10 @@ export function OfficeReportReviewScreen() {
       }))
     : [];
 
-  const reportEvidenceIds = useMemo(() => unique(selectedSections.flatMap(({ section }) => section?.evidenceIds ?? [])), [selectedInterventionId, workReportSections]);
+  const reportEvidenceIds = useMemo(
+    () => unique(selectedSections.flatMap(({ section }) => section?.evidenceIds ?? [])),
+    [selectedInterventionId, workReportSections],
+  );
   const selectedEvidence = workOrderEvidence.filter((item) => reportEvidenceIds.includes(item.id));
 
   const assignmentStaffIds = unique([
@@ -156,34 +157,6 @@ export function OfficeReportReviewScreen() {
     return workOrderEvidence.find((item) => item.id === value);
   }
 
-  useEffect(() => {
-    if (!selected || !allowed) return;
-    const missing = selectedEvidence.filter((evidence) => !evidence.thumbnailUrl && !thumbnailAttempts.current.has(evidence.id));
-    if (!missing.length) return;
-    let cancelled = false;
-    setOptimizing(true);
-    void (async () => {
-      for (const evidence of missing) {
-        if (cancelled) break;
-        thumbnailAttempts.current.add(evidence.id);
-        try {
-          const thumbnail = await createExistingEvidenceThumbnail({
-            downloadUrl: evidence.downloadUrl,
-            storagePath: evidence.storagePath,
-            workOrderId: evidence.workOrderId,
-            unitId: evidence.unitId,
-            evidenceId: evidence.id,
-          });
-          if (!cancelled) await updateWorkOrderEvidence(evidence.id, thumbnail);
-        } catch (error) {
-          console.warn('No se pudo optimizar una miniatura existente:', error);
-        }
-      }
-      if (!cancelled) setOptimizing(false);
-    })();
-    return () => { cancelled = true; };
-  }, [selectedInterventionId, selectedEvidence.map((item) => `${item.id}:${item.thumbnailUrl ?? ''}`).join('|')]);
-
   function openReport(intervention: WorkIntervention) {
     setSelectedInterventionId(intervention.id);
     setCorrectionNote('');
@@ -196,7 +169,7 @@ export function OfficeReportReviewScreen() {
     setMessage('Selecciona otro reporte para revisar.');
   }
 
-  function buildPrintableReport(overrides?: { approvedBy?: string; approvedAt?: string; approvalNote?: string }): PrintableTechnicalReport | undefined {
+  function buildPrintableReport(overrides: CustomerReportOverrides = {}): PrintableTechnicalReport | undefined {
     if (!selected || !selectedUnit || !selectedTemplate) return undefined;
     const mainComponent = selectedEquipment?.components.find((item) => item.componentType === 'indoor') ?? selectedEquipment?.components[0];
     return {
@@ -209,26 +182,20 @@ export function OfficeReportReviewScreen() {
       equipmentName: selectedEquipment?.locationLabel ?? selectedUnit.locationLabel,
       equipmentDetails: `${mainComponent?.brand ?? 'Marca pendiente'} · ${mainComponent?.btu ? `${mainComponent.btu.toLocaleString('en-US')} BTU` : 'BTU pendiente'} · ${selectedEquipment?.systemType ?? 'Sistema pendiente'}`,
       orderId: selectedOrder?.id ?? selectedVisit?.workOrderId ?? 'Orden pendiente',
-      vanName: assignedVan?.name ?? 'Sin asignar',
-      technicianNames: assignedTechnicianNames.join(', ') || selected.updatedByName || 'Sin asignar',
-      submittedBy: selected.createdByName || selected.updatedByName,
-      submittedAt: formatDate(selected.updatedAt),
-      approvedBy: overrides?.approvedBy ?? (selected.status === 'completed' ? selected.updatedByName : undefined),
-      approvedAt: overrides?.approvedAt ?? (selected.status === 'completed' ? formatDate(selected.updatedAt) : undefined),
-      approvalNote: overrides?.approvalNote ?? (selected.status === 'completed' ? selected.resultNotes : undefined),
+      reportDate: overrides.reportDate ?? formatDate(selected.reviewedAt ?? selected.updatedAt),
+      observation: overrides.observation ?? selected.customerReportNote,
       sections: selectedSections.map(({ definition, section }) => ({
         title: definition.title,
         status: section?.status === 'completed' ? 'Completada' : section?.status === 'not_applicable' ? 'No aplica' : 'Incompleta',
-        updatedByName: section?.updatedByName,
         fields: definition.fields.map((field) => {
           const value = section?.fields[field.key];
           const evidence = evidenceFor(value);
           return field.type === 'photo'
             ? {
                 label: field.label,
-                value: evidence ? `${evidence.label} · ${evidence.uploadedByName} · ${formatDate(evidence.uploadedAt)}` : 'Fotografía no disponible',
+                value: evidence?.label ?? 'Fotografía no disponible',
                 photoUrl: evidence?.downloadUrl,
-                photoCaption: evidence ? `${evidence.label} · ${evidence.uploadedByName}` : undefined,
+                photoCaption: evidence?.label,
               }
             : { label: field.label, value: fieldValue(value, field) };
         }),
@@ -236,24 +203,40 @@ export function OfficeReportReviewScreen() {
     };
   }
 
-  function openPdf(overrides?: { approvedBy?: string; approvedAt?: string; approvalNote?: string }, targetWindow?: Window | null) {
+  async function openCustomerReport(overrides: CustomerReportOverrides = {}, targetWindow?: Window | null) {
     const printable = buildPrintableReport(overrides);
     if (!printable) return false;
-    return renderPrintableTechnicalReport(printable, targetWindow);
+    const popup = targetWindow ?? createReportPrintWindow();
+    if (!popup) {
+      setMessage('El navegador bloqueó la ventana del reporte. Habilita pop-ups para demac-aruba.com.');
+      return false;
+    }
+    try {
+      const download = await createTechnicalReportPdfDownload(printable);
+      const opened = renderPrintableTechnicalReport(printable, popup, download);
+      setTimeout(() => URL.revokeObjectURL(download.url), 30 * 60 * 1000);
+      return opened;
+    } catch (error) {
+      popup.close();
+      setMessage(`No se pudo preparar el PDF: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
   }
 
   async function approveReport() {
     if (!selected || !selectedUnit || !currentUser) return;
-    const printWindow = createReportPrintWindow();
+    const reportWindow = createReportPrintWindow();
     setWorking(true);
     const now = new Date().toISOString();
-    const approvalText = correctionNote.trim() || 'Reporte técnico revisado y aprobado sin observaciones adicionales.';
-    const approvalNote = appendAuditNote(selected.resultNotes, 'REPORTE APROBADO', approvalText, currentUser.name, now);
+    const customerObservation = correctionNote.trim();
+    const internalNote = customerObservation || 'Reporte revisado sin observaciones adicionales para el cliente.';
     const result = await saveWorkIntervention({
       ...selected,
       status: 'completed',
-      resultCode: 'approved',
-      resultNotes: approvalNote,
+      resultCode: 'reviewed',
+      resultNotes: appendAuditNote(selected.resultNotes, 'REVISIÓN DE OFICINA', internalNote, currentUser.name, now),
+      customerReportNote: customerObservation || undefined,
+      reviewedAt: now,
       updatedAt: now,
       updatedByUserId: currentUser.id,
       updatedByStaffId: (currentUser as { staffId?: string }).staffId ?? selected.updatedByStaffId,
@@ -262,9 +245,9 @@ export function OfficeReportReviewScreen() {
     });
 
     if (!result.ok) {
-      printWindow?.close();
+      reportWindow?.close();
       setWorking(false);
-      setMessage(result.message ?? 'No se pudo aprobar el reporte.');
+      setMessage(result.message ?? 'No se pudo finalizar la revisión del reporte.');
       return;
     }
 
@@ -284,13 +267,13 @@ export function OfficeReportReviewScreen() {
       });
     }
 
-    const pdfOpened = openPdf({ approvedBy: currentUser.name, approvedAt: formatDate(now), approvalNote: approvalText }, printWindow);
+    const opened = await openCustomerReport({ reportDate: formatDate(now), observation: customerObservation || undefined }, reportWindow);
     setWorking(false);
     setCorrectionNote('');
     setFilter('approved');
-    setMessage(pdfOpened
-      ? 'Reporte aprobado. Se abrió la versión lista para imprimir o guardar como PDF.'
-      : 'Reporte aprobado. El navegador bloqueó la ventana del PDF; usa Descargar PDF en la bandeja Aprobados.');
+    setMessage(opened
+      ? 'Reporte revisado. La ventana incluye Cerrar, Imprimir y Descargar PDF.'
+      : 'Reporte revisado, pero no se pudo abrir la vista del cliente. Puedes intentarlo nuevamente desde Finalizados.');
   }
 
   async function returnForCorrection() {
@@ -325,11 +308,7 @@ export function OfficeReportReviewScreen() {
   }
 
   if (!allowed) {
-    return (
-      <ScrollView contentContainerStyle={styles.page}>
-        <Card><EmptyState icon="🔒" title="Acceso restringido" message="La revisión de reportes está disponible para oficina, supervisión y administración." /></Card>
-      </ScrollView>
-    );
+    return <ScrollView contentContainerStyle={styles.page}><Card><EmptyState icon="🔒" title="Acceso restringido" message="La revisión de reportes está disponible para oficina, supervisión y administración." /></Card></ScrollView>;
   }
 
   if (selected && selectedTemplate && selectedUnit) {
@@ -337,11 +316,7 @@ export function OfficeReportReviewScreen() {
     return (
       <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
         <View style={styles.hero}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.eyebrow}>REVISIÓN DE REPORTE</Text>
-            <Text style={styles.title}>{selectedEquipment?.locationLabel ?? selectedUnit.locationLabel}</Text>
-            <Text style={styles.copy}>{WORK_LABELS[selected.type]} · {selectedClient?.name ?? 'Cliente'}</Text>
-          </View>
+          <View style={{ flex: 1 }}><Text style={styles.eyebrow}>REVISIÓN DE REPORTE</Text><Text style={styles.title}>{selectedEquipment?.locationLabel ?? selectedUnit.locationLabel}</Text><Text style={styles.copy}>{WORK_LABELS[selected.type]} · {selectedClient?.name ?? 'Cliente'}</Text></View>
           <Pill label={statusLabel(selected.status)} tone={statusTone(selected.status)} />
         </View>
 
@@ -355,13 +330,13 @@ export function OfficeReportReviewScreen() {
             <Fact label="Técnicos" value={assignedTechnicianNames.join(', ') || selected.updatedByName || 'Sin asignar'} />
             <Fact label="Orden" value={selectedOrder?.id ?? selectedVisit?.workOrderId ?? 'Pendiente'} />
           </View>
+          <Text style={styles.internalNotice}>La van y los nombres del personal son información interna. No se incluyen en el reporte destinado al cliente.</Text>
         </Card>
 
         {selected.status === 'changes_requested' && selected.resultNotes ? <View style={styles.warningBox}><Text style={styles.warningTitle}>Corrección pendiente</Text><Text style={styles.warningText}>{selected.resultNotes}</Text></View> : null}
-        {optimizing ? <View style={styles.optimizingBox}><Text style={styles.optimizingText}>Optimizando miniaturas existentes. Las fotos originales se conservan intactas.</Text></View> : null}
 
         <Card>
-          <SectionTitle title="Secciones del reporte" subtitle="Se muestran todos los campos guardados por el técnico" />
+          <SectionTitle title="Secciones del reporte" subtitle="Pulsa una miniatura para abrir la fotografía original sin salir del portal" />
           <View style={styles.sectionList}>
             {selectedSections.map(({ definition, section }) => (
               <View key={definition.sectionType} style={styles.reviewSection}>
@@ -374,10 +349,11 @@ export function OfficeReportReviewScreen() {
                   const evidence = evidenceFor(value);
                   return (
                     <View key={field.key} style={styles.fieldRow}>
-                      <Text style={styles.fieldLabel}>{field.label}{field.required ? ' *' : ''}</Text>
                       {field.type === 'photo'
-                        ? evidence ? <EvidencePreview evidence={evidence} /> : <Text style={styles.missingValue}>Fotografía no disponible</Text>
-                        : <Text style={styles.fieldValue}>{fieldValue(value, field)}</Text>}
+                        ? evidence
+                          ? <EvidencePreview evidence={evidence} onOpen={() => setLightboxEvidence(evidence)} />
+                          : <><Text style={styles.fieldLabel}>{field.label}{field.required ? ' *' : ''}</Text><Text style={styles.missingValue}>Fotografía no disponible</Text></>
+                        : <><Text style={styles.fieldLabel}>{field.label}{field.required ? ' *' : ''}</Text><Text style={styles.fieldValue}>{fieldValue(value, field)}</Text></>}
                     </View>
                   );
                 })}
@@ -388,24 +364,34 @@ export function OfficeReportReviewScreen() {
 
         {selected.status === 'ready_for_review' ? (
           <Card>
-            <SectionTitle title="Decisión de la oficina" subtitle="La aprobación genera una versión lista para guardar como PDF" />
-            <Input label="Observación de revisión" value={correctionNote} onChangeText={setCorrectionNote} multiline placeholder="Escribe la corrección solicitada o una observación opcional de aprobación." editable={!working} />
+            <SectionTitle title="Decisión interna" subtitle="La observación escrita aquí sí puede incluirse en el reporte del cliente; los nombres internos nunca se muestran" />
+            <Input label="Observación para el reporte" value={correctionNote} onChangeText={setCorrectionNote} multiline placeholder="Observación opcional destinada al cliente, o explicación obligatoria cuando se devuelve al técnico." editable={!working} />
             <View style={styles.actionRow}>
               <Button variant="secondary" label={working ? 'Procesando…' : 'Devolver al técnico'} disabled={working} onPress={() => void returnForCorrection()} />
-              <Button variant="success" label={working ? 'Procesando…' : 'Aprobar y generar PDF'} disabled={working} onPress={() => void approveReport()} />
+              <Button variant="success" label={working ? 'Preparando reporte…' : 'Finalizar y abrir reporte'} disabled={working} onPress={() => void approveReport()} />
             </View>
           </Card>
         ) : null}
 
         {selected.status === 'completed' ? (
           <View style={styles.successBox}>
-            <Text style={styles.successTitle}>Reporte aprobado</Text>
-            <Text style={styles.successText}>El reporte puede regenerarse en cualquier momento usando todos los campos y las fotografías originales.</Text>
-            <Button variant="success" label="Descargar / imprimir PDF" onPress={() => { const popup = createReportPrintWindow(); const opened = openPdf(undefined, popup); if (!opened) setMessage('El navegador bloqueó la ventana del PDF. Habilita pop-ups para demac-aruba.com.'); }} />
+            <Text style={styles.successTitle}>Reporte revisado</Text>
+            <Text style={styles.successText}>La versión del cliente no incluye van, técnicos, ayudantes, nombres bajo las fotografías ni usuario de oficina.</Text>
+            <Button variant="success" label={working ? 'Preparando PDF…' : 'Abrir reporte para imprimir o descargar'} disabled={working} onPress={() => { setWorking(true); void openCustomerReport().finally(() => setWorking(false)); }} />
           </View>
         ) : null}
 
         <View style={styles.messageBox}><Text style={styles.messageTitle}>Estado</Text><Text style={styles.messageText}>{message}</Text></View>
+
+        <AppModal visible={Boolean(lightboxEvidence)} title={lightboxEvidence?.label ?? 'Fotografía del reporte'} onClose={() => setLightboxEvidence(null)}>
+          {lightboxEvidence ? (
+            <View style={styles.photoViewerContent}>
+              <Image source={{ uri: lightboxEvidence.downloadUrl }} resizeMode="contain" style={styles.photoViewerImage} />
+              <Text style={styles.photoViewerTitle}>{lightboxEvidence.label}</Text>
+              <Button variant="secondary" label="Cerrar fotografía" onPress={() => setLightboxEvidence(null)} />
+            </View>
+          ) : null}
+        </AppModal>
       </ScrollView>
     );
   }
@@ -419,10 +405,10 @@ export function OfficeReportReviewScreen() {
       <View style={styles.summaryGrid}>
         <SummaryBox label="Pendientes" value={pendingCount} active={filter === 'pending'} onPress={() => setFilter('pending')} />
         <SummaryBox label="Devueltos" value={correctionsCount} active={filter === 'changes_requested'} onPress={() => setFilter('changes_requested')} />
-        <SummaryBox label="Aprobados" value={approvedCount} active={filter === 'approved'} onPress={() => setFilter('approved')} />
+        <SummaryBox label="Finalizados" value={approvedCount} active={filter === 'approved'} onPress={() => setFilter('approved')} />
       </View>
       <Card>
-        <SectionTitle title={filter === 'pending' ? 'Pendientes de revisión' : filter === 'changes_requested' ? 'Devueltos para corrección' : 'Reportes aprobados'} subtitle="Selecciona un reporte para ver su contenido completo" action={<Button compact variant="ghost" label={loading ? 'Actualizando…' : 'Actualizar'} disabled={loading} onPress={() => void refreshTechnicianPortalData()} />} />
+        <SectionTitle title={filter === 'pending' ? 'Pendientes de revisión' : filter === 'changes_requested' ? 'Devueltos para corrección' : 'Reportes finalizados'} subtitle="Selecciona un reporte para ver su contenido completo" action={<Button compact variant="ghost" label={loading ? 'Actualizando…' : 'Actualizar'} disabled={loading} onPress={() => void refreshTechnicianPortalData()} />} />
         {filtered.length ? filtered.map((intervention) => {
           const visit = workVisits.find((item) => item.id === intervention.visitId);
           const unit = visitUnits.find((item) => item.id === intervention.visitUnitId);
@@ -434,7 +420,7 @@ export function OfficeReportReviewScreen() {
           return (
             <View key={intervention.id} style={styles.reportRow}>
               <View style={{ flex: 1 }}><Text style={styles.reportEyebrow}>{WORK_LABELS[intervention.type].toUpperCase()}</Text><Text style={styles.reportTitle}>{equipment?.locationLabel ?? unit?.locationLabel ?? 'Aire acondicionado'}</Text><Text style={styles.reportMeta}>{client?.name ?? 'Cliente'} · {property?.name ?? property?.address ?? 'Propiedad'}</Text><Text style={styles.reportMeta}>{completeSections}/{sections.length} secciones cerradas · enviado por {intervention.updatedByName}</Text><Text style={styles.reportDate}>{formatDate(intervention.updatedAt)}</Text></View>
-              <View style={styles.reportActions}><Pill label={statusLabel(intervention.status)} tone={statusTone(intervention.status)} /><Button compact label={intervention.status === 'completed' ? 'Ver y descargar' : 'Revisar reporte'} onPress={() => openReport(intervention)} /></View>
+              <View style={styles.reportActions}><Pill label={statusLabel(intervention.status)} tone={statusTone(intervention.status)} /><Button compact label={intervention.status === 'completed' ? 'Ver / PDF' : 'Revisar reporte'} onPress={() => openReport(intervention)} /></View>
             </View>
           );
         }) : <EmptyState icon="✓" title="No hay reportes en esta bandeja" message={filter === 'pending' ? 'Los reportes enviados por los técnicos aparecerán aquí.' : 'No hay registros con este estado.'} />}
@@ -446,12 +432,16 @@ export function OfficeReportReviewScreen() {
 
 function Fact({ label, value }: { label: string; value: string }) { return <View style={styles.fact}><Text style={styles.factLabel}>{label}</Text><Text style={styles.factValue}>{value}</Text></View>; }
 function SummaryBox({ label, value, active, onPress }: { label: string; value: number; active: boolean; onPress: () => void }) { return <Pressable onPress={onPress} style={[styles.summaryBox, active && styles.summaryBoxActive]}><Text style={[styles.summaryValue, active && styles.summaryValueActive]}>{value}</Text><Text style={[styles.summaryLabel, active && styles.summaryLabelActive]}>{label}</Text></Pressable>; }
-function EvidencePreview({ evidence }: { evidence: WorkOrderEvidence }) {
+
+function EvidencePreview({ evidence, onOpen }: { evidence: WorkOrderEvidence; onOpen: () => void }) {
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
+  const thumbnail = reportThumbnailUrl(evidence.downloadUrl);
+  const sourceUrl = thumbnailFailed ? evidence.downloadUrl : thumbnail;
   return (
-    <Pressable onPress={() => { if (typeof window !== 'undefined') window.open(evidence.downloadUrl, '_blank', 'noopener,noreferrer'); }} style={styles.evidenceBox}>
-      {evidence.thumbnailUrl ? <Image source={{ uri: evidence.thumbnailUrl }} style={styles.evidenceImage} resizeMode="cover" /> : <View style={styles.thumbnailPlaceholder}><Text style={styles.thumbnailPlaceholderText}>Preparando miniatura…</Text></View>}
-      <Text style={styles.evidenceMeta}>{evidence.label} · {evidence.uploadedByName}</Text>
-      <Text style={styles.evidenceLink}>Abrir fotografía original ›</Text>
+    <Pressable onPress={onOpen} style={styles.evidenceBox}>
+      <Image source={{ uri: sourceUrl }} style={styles.evidenceImage} resizeMode="cover" onError={() => setThumbnailFailed(true)} />
+      <Text style={styles.evidenceTitle}>{evidence.label}</Text>
+      <Text style={styles.evidenceLink}>Ver fotografía original ›</Text>
     </Pressable>
   );
 }
@@ -479,6 +469,7 @@ const styles = StyleSheet.create({
   fact: { flex: 1, minWidth: 180, backgroundColor: '#F7F9FC', borderRadius: 11, padding: 11 },
   factLabel: { color: colors.muted, fontSize: 8, fontWeight: '900', textTransform: 'uppercase' },
   factValue: { color: colors.text, fontWeight: '900', marginTop: 4 },
+  internalNotice: { color: colors.muted, fontSize: 9, lineHeight: 14, marginTop: 10 },
   sectionList: { gap: 12 },
   reviewSection: { borderWidth: 1, borderColor: colors.border, borderRadius: 13, padding: 13, backgroundColor: '#FFFFFF' },
   reviewSectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
@@ -488,21 +479,20 @@ const styles = StyleSheet.create({
   fieldLabel: { color: colors.muted, fontSize: 9, fontWeight: '900', marginBottom: 5 },
   fieldValue: { color: colors.text, lineHeight: 18, whiteSpace: 'pre-wrap' as any },
   missingValue: { color: '#9A5A00', fontSize: 10, fontWeight: '800' },
-  evidenceBox: { gap: 5, maxWidth: 420 },
-  evidenceImage: { width: 260, height: 195, borderRadius: 12, backgroundColor: '#EEF1F5' },
-  thumbnailPlaceholder: { width: 260, height: 195, borderRadius: 12, backgroundColor: '#EEF1F5', alignItems: 'center', justifyContent: 'center' },
-  thumbnailPlaceholderText: { color: colors.muted, fontSize: 10, fontWeight: '800' },
-  evidenceMeta: { color: colors.muted, fontSize: 9 },
+  evidenceBox: { gap: 7, maxWidth: 420 },
+  evidenceImage: { width: 300, maxWidth: '100%', height: 220, borderRadius: 12, backgroundColor: '#EEF1F5' },
+  evidenceTitle: { color: colors.primaryDark, fontSize: 13, lineHeight: 17, fontWeight: '900' },
   evidenceLink: { color: colors.primary, fontSize: 9, fontWeight: '900' },
+  photoViewerContent: { gap: 14, alignItems: 'center', paddingBottom: 6 },
+  photoViewerImage: { width: '100%', height: 560, maxHeight: '72vh' as any, backgroundColor: '#0D1117', borderRadius: 12 },
+  photoViewerTitle: { color: colors.text, fontSize: 14, fontWeight: '900', textAlign: 'center' },
   actionRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 10, marginTop: 12 },
   warningBox: { backgroundColor: '#FFF8EC', borderRadius: 13, padding: 14 },
   warningTitle: { color: '#8A5200', fontWeight: '900' },
   warningText: { color: colors.text, fontSize: 10, lineHeight: 16, marginTop: 5 },
-  successBox: { backgroundColor: '#F0F8F1', borderRadius: 13, padding: 14, gap: 10 },
+  successBox: { backgroundColor: '#F0F8F1', borderRadius: 13, padding: 14 },
   successTitle: { color: '#2F6A3B', fontWeight: '900' },
-  successText: { color: colors.text, fontSize: 10, lineHeight: 16 },
-  optimizingBox: { backgroundColor: '#EEF6FF', borderRadius: 12, padding: 12 },
-  optimizingText: { color: colors.primaryDark, fontSize: 10, fontWeight: '800' },
+  successText: { color: colors.text, fontSize: 10, lineHeight: 16, marginTop: 5 },
   messageBox: { backgroundColor: colors.primaryLight, borderRadius: 13, padding: 13 },
   messageTitle: { color: colors.primaryDark, fontSize: 9, fontWeight: '900', textTransform: 'uppercase' },
   messageText: { color: colors.text, marginTop: 5, lineHeight: 18 },
