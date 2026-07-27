@@ -1,35 +1,33 @@
-const QR_PREFIX = 'DEMAC-AC';
-
-function randomPart(length = 8) {
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let value = '';
-  for (let index = 0; index < length; index += 1) {
-    value += alphabet[Math.floor(Math.random() * alphabet.length)];
+function stableHash(value: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
   }
-  return value;
+  return (hash >>> 0).toString(36);
 }
 
 export function normalizeEquipmentQrCode(value: string) {
-  return value
-    .trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9-]/g, '')
-    .replace(/-+/g, '-');
-}
-
-export function generateEquipmentQrCode(existingCodes: string[] = []) {
-  const existing = new Set(existingCodes.map(normalizeEquipmentQrCode));
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const candidate = `${QR_PREFIX}-${randomPart()}`;
-    if (!existing.has(candidate)) return candidate;
-  }
-  return `${QR_PREFIX}-${Date.now().toString(36).toUpperCase()}`;
+  return value.trim();
 }
 
 export function equipmentDocumentIdFromQr(qrCode: string) {
-  return `equipment-${normalizeEquipmentQrCode(qrCode).toLowerCase()}`;
+  const normalized = normalizeEquipmentQrCode(qrCode);
+  return `equipment-qr-${stableHash(normalized)}-${normalized.length}`;
 }
 
 export function isValidEquipmentQrCode(value: string) {
-  return /^DEMAC-AC-[A-Z0-9]{6,16}$/.test(normalizeEquipmentQrCode(value));
+  const normalized = normalizeEquipmentQrCode(value);
+  return normalized.length >= 3 && normalized.length <= 512;
+}
+
+export function equipmentQrCodesMatch(first: string, second: string) {
+  return normalizeEquipmentQrCode(first) === normalizeEquipmentQrCode(second);
+}
+
+export function shortEquipmentQrCode(value: string, maximumLength = 34) {
+  const normalized = normalizeEquipmentQrCode(value);
+  if (normalized.length <= maximumLength) return normalized;
+  const edgeLength = Math.max(6, Math.floor((maximumLength - 1) / 2));
+  return `${normalized.slice(0, edgeLength)}…${normalized.slice(-edgeLength)}`;
 }
