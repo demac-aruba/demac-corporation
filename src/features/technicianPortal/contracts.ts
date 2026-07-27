@@ -32,6 +32,7 @@ export type InterventionStatus =
   | 'pending_authorization'
   | 'pending_part'
   | 'ready_for_review'
+  | 'changes_requested'
   | 'completed'
   | 'cancelled';
 
@@ -218,86 +219,9 @@ export interface TechnicianPortalPermissionSet {
   canAddVisitUnits: boolean;
   canRegisterEquipment: boolean;
   canChangeActualScope: boolean;
-  canCreateInterventions: boolean;
+  canRequestScopeApproval: boolean;
+  canApproveScopeChange: boolean;
   canEditAnySection: boolean;
-  canEditAssignedSections: boolean;
-  canDeleteVisitUnits: boolean;
-  canApproveAdditionalWork: boolean;
-  canCompleteVisitUnits: boolean;
-  canCompleteVisit: boolean;
+  canSubmitVisitForReview: boolean;
+  canApproveVisit: boolean;
 }
-
-export const technicianPortalPermissions: Record<TechnicianPortalRole, TechnicianPortalPermissionSet> = {
-  lead_technician: {
-    canAddVisitUnits: true,
-    canRegisterEquipment: true,
-    canChangeActualScope: true,
-    canCreateInterventions: true,
-    canEditAnySection: true,
-    canEditAssignedSections: true,
-    canDeleteVisitUnits: true,
-    canApproveAdditionalWork: false,
-    canCompleteVisitUnits: true,
-    canCompleteVisit: true,
-  },
-  technician: {
-    canAddVisitUnits: true,
-    canRegisterEquipment: true,
-    canChangeActualScope: true,
-    canCreateInterventions: true,
-    canEditAnySection: true,
-    canEditAssignedSections: true,
-    canDeleteVisitUnits: false,
-    canApproveAdditionalWork: false,
-    canCompleteVisitUnits: true,
-    canCompleteVisit: false,
-  },
-  helper: {
-    canAddVisitUnits: false,
-    canRegisterEquipment: false,
-    canChangeActualScope: false,
-    canCreateInterventions: false,
-    canEditAnySection: false,
-    canEditAssignedSections: true,
-    canDeleteVisitUnits: false,
-    canApproveAdditionalWork: false,
-    canCompleteVisitUnits: false,
-    canCompleteVisit: false,
-  },
-  supervisor: {
-    canAddVisitUnits: true,
-    canRegisterEquipment: true,
-    canChangeActualScope: true,
-    canCreateInterventions: true,
-    canEditAnySection: true,
-    canEditAssignedSections: true,
-    canDeleteVisitUnits: true,
-    canApproveAdditionalWork: true,
-    canCompleteVisitUnits: true,
-    canCompleteVisit: true,
-  },
-  office: {
-    canAddVisitUnits: true,
-    canRegisterEquipment: true,
-    canChangeActualScope: true,
-    canCreateInterventions: true,
-    canEditAnySection: false,
-    canEditAssignedSections: false,
-    canDeleteVisitUnits: false,
-    canApproveAdditionalWork: true,
-    canCompleteVisitUnits: false,
-    canCompleteVisit: false,
-  },
-  admin: {
-    canAddVisitUnits: true,
-    canRegisterEquipment: true,
-    canChangeActualScope: true,
-    canCreateInterventions: true,
-    canEditAnySection: true,
-    canEditAssignedSections: true,
-    canDeleteVisitUnits: true,
-    canApproveAdditionalWork: true,
-    canCompleteVisitUnits: true,
-    canCompleteVisit: true,
-  },
-};
