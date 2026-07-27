@@ -20,7 +20,7 @@
     "typescript": "~6.0.3"
   },
   "scripts": {
-    "patch:payroll": "node scripts/patchPayrollStartDateStage1.cjs && node scripts/patchPayrollStartDateStage2.cjs",
+    "patch:payroll": "node scripts/patchPayrollStartDateStage1.cjs && node scripts/patchPayrollStartDateStage2.cjs && node scripts/patchPayrollOvertimeMinutes.cjs",
     "patch:all": "npm run patch:payroll",
     "prestart": "npm run patch:all",
     "start": "expo start",
