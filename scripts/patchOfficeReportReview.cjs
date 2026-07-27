@@ -104,12 +104,18 @@ replaceOnce(
 
 const officeReviewFile = 'src/screens/OfficeReportReviewScreen.tsx';
 let officeReviewText = fs.readFileSync(officeReviewFile, 'utf8');
-if (!officeReviewText.includes('(currentUser as { staffId?: string }).staffId')) {
-  officeReviewText = officeReviewText.replaceAll(
-    'currentUser.staffId ??',
-    '(currentUser as { staffId?: string }).staffId ??',
-  );
-  fs.writeFileSync(officeReviewFile, officeReviewText);
-}
+officeReviewText = officeReviewText.replaceAll(
+  'currentUser.staffId ??',
+  '(currentUser as { staffId?: string }).staffId ??',
+);
+officeReviewText = officeReviewText.replace(
+  "function fieldValue(value: ReportSection['fields'][string], field: TemplateFieldDefinition)",
+  "function fieldValue(value: ReportSection['fields'][string] | undefined, field: TemplateFieldDefinition)",
+);
+officeReviewText = officeReviewText.replace(
+  "function evidenceFor(value: ReportSection['fields'][string])",
+  "function evidenceFor(value: ReportSection['fields'][string] | undefined)",
+);
+fs.writeFileSync(officeReviewFile, officeReviewText);
 
 console.log('Office report review workflow patch applied.');
