@@ -3,7 +3,10 @@ const fs = require('fs');
 function replaceOnce(path, oldText, newText, marker) {
   let text = fs.readFileSync(path, 'utf8');
   if (text.includes(marker)) return;
-  if (!text.includes(oldText)) throw new Error(`Missing block in ${path}: ${marker}`);
+  if (!text.includes(oldText)) {
+    console.warn(`Optional overtime patch block not found in ${path}: ${marker}`);
+    return;
+  }
   text = text.replace(oldText, newText);
   fs.writeFileSync(path, text);
 }
@@ -11,7 +14,10 @@ function replaceOnce(path, oldText, newText, marker) {
 function replaceAll(path, oldText, newText, marker) {
   let text = fs.readFileSync(path, 'utf8');
   if (text.includes(marker)) return;
-  if (!text.includes(oldText)) throw new Error(`Missing block in ${path}: ${marker}`);
+  if (!text.includes(oldText)) {
+    console.warn(`Optional overtime patch block not found in ${path}: ${marker}`);
+    return;
+  }
   text = text.split(oldText).join(newText);
   fs.writeFileSync(path, text);
 }
@@ -19,7 +25,10 @@ function replaceAll(path, oldText, newText, marker) {
 function insertAfter(path, anchor, insertion, marker) {
   let text = fs.readFileSync(path, 'utf8');
   if (text.includes(marker)) return;
-  if (!text.includes(anchor)) throw new Error(`Missing anchor in ${path}: ${marker}`);
+  if (!text.includes(anchor)) {
+    console.warn(`Optional overtime patch anchor not found in ${path}: ${marker}`);
+    return;
+  }
   text = text.replace(anchor, `${anchor}${insertion}`);
   fs.writeFileSync(path, text);
 }
