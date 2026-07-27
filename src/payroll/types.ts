@@ -40,6 +40,7 @@ export interface EmployeeTimesheetEntry {
   paidFreeHours: number;
   regularHours: number;
   overtimeHours: number;
+  overtimeMinutes?: number;
   aoHours: number;
   vacationHours?: number;
   noWorkNoPayHours: number;
@@ -65,6 +66,7 @@ export interface PayrollDayCalculation {
   paidFreeHours: number;
   regularHours: number;
   overtimeHours: number;
+  overtimeMinutes: number;
   aoHours: number;
   vacationHours: number;
   noWorkNoPayHours: number;
