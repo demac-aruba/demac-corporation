@@ -1,5 +1,5 @@
 import * as ImagePicker from 'expo-image-picker';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Button, Card, EmptyState, Input, Pill, SectionTitle } from '../components/UI';
 import { ReportSection } from '../features/technicianPortal/contracts';
@@ -27,6 +27,7 @@ function statusLabel(status: string) {
     not_applicable: 'No aplica',
     draft: 'Por iniciar',
     ready_for_review: 'Listo para revisión',
+    cancelled: 'Cancelado',
   };
   return labels[status] ?? status.replace(/_/g, ' ');
 }
@@ -77,6 +78,7 @@ function workLabel(templateName?: string) {
 }
 
 export function TechnicianInterventionReportScreen() {
+  const scrollRef = useRef<ScrollView | null>(null);
   const {
     currentUser,
     clients,
@@ -124,26 +126,29 @@ export function TechnicianInterventionReportScreen() {
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState('Preparando la plantilla técnica del trabajo seleccionado.');
 
-  const activeItem = reportSections.find((item) => item.section.id === activeSectionId) ?? reportSections[0];
+  const activeItem = reportSections.find((item) => item.section.id === activeSectionId);
   const requiredSections = reportSections.filter((item) => item.definition.required);
   const completedRequiredSections = requiredSections.filter((item) => item.section.status === 'completed');
   const reportReady = requiredSections.length > 0 && completedRequiredSections.length === requiredSections.length;
 
   useEffect(() => {
-    if (!intervention || !template || !equipment || initializing) return;
+    if (!intervention || intervention.status === 'cancelled' || !template || !equipment || initializing) return;
     const existing = workReportSections.some((section) => section.interventionId === intervention.id);
     if (existing) return;
     setInitializing(true);
     void initializeReportSections(intervention, equipment)
-      .then((result) => setMessage(result.ok ? 'Plantilla preparada. Abre una sección para comenzar.' : result.message ?? 'No se pudo preparar la plantilla.'))
+      .then((result) => setMessage(result.ok ? 'Plantilla preparada. Selecciona una sección para comenzar.' : result.message ?? 'No se pudo preparar la plantilla.'))
       .finally(() => setInitializing(false));
-  }, [intervention?.id, template?.id, equipment?.id, workReportSections.length, initializing]);
+  }, [intervention?.id, intervention?.status, template?.id, equipment?.id, workReportSections.length, initializing]);
 
   useEffect(() => {
     if (!activeItem) return;
-    if (!activeSectionId) setActiveSectionId(activeItem.section.id);
     setDraft({ ...activeItem.section.fields });
   }, [activeItem?.section.id, activeItem?.section.updatedAt]);
+
+  function scrollToTop() {
+    setTimeout(() => scrollRef.current?.scrollTo({ y: 0, animated: false }), 0);
+  }
 
   function goBack() {
     if (typeof window === 'undefined') return;
@@ -155,6 +160,14 @@ export function TechnicianInterventionReportScreen() {
     setActiveSectionId(section.id);
     setDraft({ ...section.fields });
     setMessage(`${statusLabel(section.status)} · ${section.updatedByName ?? 'Sin edición reciente'}`);
+    scrollToTop();
+  }
+
+  function closeSectionEditor() {
+    setActiveSectionId('');
+    setDraft({});
+    setMessage('Selecciona la próxima sección pendiente del reporte.');
+    scrollToTop();
   }
 
   function setDraftValue(key: string, value: DraftValue) {
@@ -164,11 +177,24 @@ export function TechnicianInterventionReportScreen() {
   async function saveSection(status?: ReportSection['status']) {
     if (!activeItem) return;
     setWorking(true);
+    const sectionTitle = activeItem.definition.title;
     const result = await updateReportSection(activeItem.section, { fields: draft, status });
     setWorking(false);
-    setMessage(result.ok
-      ? status === 'completed' ? `${activeItem.definition.title} completada.` : `${activeItem.definition.title} guardada.`
-      : result.message ?? 'No se pudo guardar la sección.');
+
+    if (!result.ok) {
+      setMessage(result.message ?? 'No se pudo guardar la sección.');
+      return;
+    }
+
+    const successMessage = status === 'completed'
+      ? `${sectionTitle} completada. Selecciona la próxima sección pendiente.`
+      : status === 'not_applicable'
+        ? `${sectionTitle} marcada como No aplica.`
+        : `${sectionTitle} guardada. Puedes continuar con otra sección.`;
+    setMessage(successMessage);
+    setActiveSectionId('');
+    setDraft({});
+    scrollToTop();
   }
 
   async function capturePhoto(field: TemplateFieldDefinition) {
@@ -235,18 +261,26 @@ export function TechnicianInterventionReportScreen() {
       status: 'ready_for_review',
       updatedAt: now,
       updatedByUserId: currentUser.id,
+      updatedByStaffId: (currentUser as { staffId?: string }).staffId ?? intervention.updatedByStaffId,
       updatedByName: currentUser.name,
       version: Math.max(1, Number(intervention.version ?? 1)) + 1,
     });
     setWorking(false);
     setMessage(result.ok ? 'Reporte enviado para revisión de la oficina.' : result.message ?? 'No se pudo enviar el reporte.');
+    scrollToTop();
   }
 
-  if (!visit || !unit || !intervention || !equipment || !template) {
+  if (!visit || !unit || !intervention || intervention.status === 'cancelled' || !equipment || !template) {
     return (
       <ScrollView contentContainerStyle={styles.page}>
         <Card>
-          <EmptyState icon="🧾" title="No se encontró el reporte" message="Regresa al perfil del aire y abre nuevamente el trabajo registrado." />
+          <EmptyState
+            icon="🧾"
+            title={intervention?.status === 'cancelled' ? 'Este trabajo fue quitado' : 'No se encontró el reporte'}
+            message={intervention?.status === 'cancelled'
+              ? 'El trabajo ya no está activo. Regresa al perfil del aire para seleccionar el trabajo correcto.'
+              : 'Regresa al perfil del aire y abre nuevamente el trabajo registrado.'}
+          />
           <Button variant="secondary" label="Volver al perfil del aire" onPress={goBack} />
         </Card>
       </ScrollView>
@@ -254,92 +288,105 @@ export function TechnicianInterventionReportScreen() {
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
+    <ScrollView ref={scrollRef} contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
       <View style={styles.hero}>
         <View style={{ flex: 1 }}>
           <Text style={styles.eyebrow}>REPORTE TÉCNICO · {equipment.locationLabel.toUpperCase()}</Text>
-          <Text style={styles.title}>{workLabel(template.name)}</Text>
+          <Text style={styles.title}>{activeItem ? activeItem.definition.title : workLabel(template.name)}</Text>
           <Text style={styles.copy}>{client?.name ?? 'Cliente'} · {property?.name ?? property?.address ?? workOrder?.address ?? 'Propiedad'}</Text>
         </View>
-        <Pill label={statusLabel(intervention.status)} tone={statusTone(intervention.status)} />
+        <Pill label={activeItem ? statusLabel(activeItem.section.status) : statusLabel(intervention.status)} tone={activeItem ? statusTone(activeItem.section.status) : statusTone(intervention.status)} />
       </View>
 
-      <Card>
-        <SectionTitle
-          title="Progreso del reporte"
-          subtitle={`${completedRequiredSections.length} de ${requiredSections.length} secciones obligatorias completadas`}
-          action={<Button compact label="Volver" variant="ghost" onPress={goBack} />}
-        />
-        <View style={styles.progressTrack}>
-          <View style={[styles.progressFill, { width: `${requiredSections.length ? Math.round((completedRequiredSections.length / requiredSections.length) * 100) : 0}%` }]} />
-        </View>
-        <Text style={styles.templateDescription}>{template.description}</Text>
-      </Card>
-
-      <Card>
-        <SectionTitle title="Secciones del reporte" subtitle="Indoor y Outdoor se guardan por separado para permitir trabajo simultáneo" />
-        {initializing && !reportSections.length ? <Text style={styles.loadingText}>Preparando secciones…</Text> : null}
-        <View style={styles.sectionList}>
-          {reportSections.map(({ definition, section }) => {
-            const requiredCount = definition.fields.filter((field) => field.required).length;
-            const completedCount = definition.fields.filter((field) => field.required && fieldHasValue(section.fields[field.key])).length;
-            const active = activeItem?.section.id === section.id;
-            return (
-              <Pressable key={section.id} onPress={() => selectSection(section)} style={[styles.sectionRow, active && styles.sectionRowActive]}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.sectionName}>{definition.title}</Text>
-                  <Text style={styles.sectionMeta}>{sectionOwnerLabel(definition.ownerSuggestion)}</Text>
-                  <Text style={styles.sectionMeta}>{section.assignedToName ? `Editando / asignado: ${section.assignedToName}` : 'Aún sin asignar'} · {completedCount}/{requiredCount} obligatorios</Text>
-                </View>
-                <Pill label={statusLabel(section.status)} tone={statusTone(section.status)} />
-              </Pressable>
-            );
-          })}
-        </View>
-      </Card>
-
       {activeItem ? (
-        <Card>
-          <SectionTitle
-            title={activeItem.definition.title}
-            subtitle={`${sectionOwnerLabel(activeItem.definition.ownerSuggestion)} · Última edición: ${activeItem.section.updatedByName ?? 'Sin editar'}`}
-          />
+        <>
+          <Card>
+            <SectionTitle
+              title={activeItem.definition.title}
+              subtitle={`${sectionOwnerLabel(activeItem.definition.ownerSuggestion)} · Última edición: ${activeItem.section.updatedByName ?? 'Sin editar'}`}
+              action={<Button compact label="Volver a secciones" variant="ghost" disabled={working} onPress={closeSectionEditor} />}
+            />
 
-          <View style={styles.fieldList}>
-            {activeItem.definition.fields.map((field) => (
-              <FieldEditor
-                key={field.key}
-                field={field}
-                value={draft[field.key]}
-                evidence={typeof draft[field.key] === 'string' ? workOrderEvidence.find((item) => item.id === draft[field.key]) : undefined}
-                disabled={working}
-                onChange={(value) => setDraftValue(field.key, value)}
-                onPhoto={() => void capturePhoto(field)}
-              />
-            ))}
-          </View>
+            <View style={styles.editorStatusBox}>
+              <Text style={styles.editorStatusTitle}>{statusLabel(activeItem.section.status)}</Text>
+              <Text style={styles.editorStatusText}>Completa únicamente esta sección. Al guardar o completar regresarás automáticamente a la lista del reporte.</Text>
+            </View>
 
-          <View style={styles.sectionActions}>
-            <Button variant="secondary" label={working ? 'Guardando…' : 'Guardar sección'} disabled={working} onPress={() => void saveSection()} />
-            <Button variant="success" label="Completar sección" disabled={working} onPress={() => void saveSection('completed')} />
-            {!activeItem.definition.required ? (
-              <Button variant="ghost" label="Marcar No aplica" disabled={working} onPress={() => void saveSection('not_applicable')} />
-            ) : null}
-          </View>
-        </Card>
-      ) : null}
+            <View style={styles.fieldList}>
+              {activeItem.definition.fields.map((field) => (
+                <FieldEditor
+                  key={field.key}
+                  field={field}
+                  value={draft[field.key]}
+                  evidence={typeof draft[field.key] === 'string' ? workOrderEvidence.find((item) => item.id === draft[field.key]) : undefined}
+                  disabled={working}
+                  onChange={(value) => setDraftValue(field.key, value)}
+                  onPhoto={() => void capturePhoto(field)}
+                />
+              ))}
+            </View>
 
-      <Card>
-        <SectionTitle title="Reglas de finalización" />
-        {template.completionRules.map((rule) => <Text key={rule} style={styles.ruleText}>• {rule}</Text>)}
-        <Button
-          variant="success"
-          label={intervention.status === 'ready_for_review' ? 'Enviado para revisión' : 'Enviar reporte a revisión'}
-          disabled={working || !reportReady || intervention.status === 'ready_for_review'}
-          onPress={() => void submitForReview()}
-        />
-        {!reportReady ? <Text style={styles.helpText}>Completa todas las secciones obligatorias para enviar el reporte.</Text> : null}
-      </Card>
+            <View style={styles.sectionActions}>
+              <Button variant="ghost" label="Cancelar y volver" disabled={working} onPress={closeSectionEditor} />
+              <Button variant="secondary" label={working ? 'Guardando…' : 'Guardar y volver'} disabled={working} onPress={() => void saveSection()} />
+              <Button variant="success" label="Completar y volver" disabled={working} onPress={() => void saveSection('completed')} />
+              {!activeItem.definition.required ? (
+                <Button variant="ghost" label="Marcar No aplica" disabled={working} onPress={() => void saveSection('not_applicable')} />
+              ) : null}
+            </View>
+          </Card>
+        </>
+      ) : (
+        <>
+          <Card>
+            <SectionTitle
+              title="Progreso del reporte"
+              subtitle={`${completedRequiredSections.length} de ${requiredSections.length} secciones obligatorias completadas`}
+              action={<Button compact label="Volver" variant="ghost" onPress={goBack} />}
+            />
+            <View style={styles.progressTrack}>
+              <View style={[styles.progressFill, { width: `${requiredSections.length ? Math.round((completedRequiredSections.length / requiredSections.length) * 100) : 0}%` }]} />
+            </View>
+            <Text style={styles.templateDescription}>{template.description}</Text>
+          </Card>
+
+          <Card>
+            <SectionTitle title="Secciones del reporte" subtitle="Abre una sección a la vez. Indoor y Outdoor se guardan independientemente." />
+            {initializing && !reportSections.length ? <Text style={styles.loadingText}>Preparando secciones…</Text> : null}
+            <View style={styles.sectionList}>
+              {reportSections.map(({ definition, section }) => {
+                const requiredCount = definition.fields.filter((field) => field.required).length;
+                const completedCount = definition.fields.filter((field) => field.required && fieldHasValue(section.fields[field.key])).length;
+                return (
+                  <Pressable key={section.id} onPress={() => selectSection(section)} style={styles.sectionRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.sectionName}>{definition.title}</Text>
+                      <Text style={styles.sectionMeta}>{sectionOwnerLabel(definition.ownerSuggestion)}</Text>
+                      <Text style={styles.sectionMeta}>{section.assignedToName ? `Asignado / última edición: ${section.assignedToName}` : 'Aún sin asignar'} · {completedCount}/{requiredCount} obligatorios</Text>
+                    </View>
+                    <View style={styles.sectionRowAction}>
+                      <Pill label={statusLabel(section.status)} tone={statusTone(section.status)} />
+                      <Text style={styles.openText}>Abrir ›</Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </Card>
+
+          <Card>
+            <SectionTitle title="Finalización del reporte" />
+            {template.completionRules.map((rule) => <Text key={rule} style={styles.ruleText}>• {rule}</Text>)}
+            <Button
+              variant="success"
+              label={intervention.status === 'ready_for_review' ? 'Enviado para revisión' : 'Enviar reporte a revisión'}
+              disabled={working || !reportReady || intervention.status === 'ready_for_review'}
+              onPress={() => void submitForReview()}
+            />
+            {!reportReady ? <Text style={styles.helpText}>Completa todas las secciones obligatorias para enviar el reporte.</Text> : null}
+          </Card>
+        </>
+      )}
 
       <View style={styles.messageBox}>
         <Text style={styles.messageTitle}>Estado</Text>
@@ -438,9 +485,13 @@ const styles = StyleSheet.create({
   loadingText: { color: colors.muted, textAlign: 'center', paddingVertical: 18 },
   sectionList: { gap: 8 },
   sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: colors.border, borderRadius: 12, padding: 13, backgroundColor: '#FFFFFF' },
-  sectionRowActive: { borderColor: colors.primary, backgroundColor: '#F7FAFF' },
+  sectionRowAction: { alignItems: 'flex-end', gap: 6 },
+  openText: { color: colors.primary, fontSize: 9, fontWeight: '900' },
   sectionName: { color: colors.text, fontSize: 14, fontWeight: '900' },
   sectionMeta: { color: colors.muted, fontSize: 9, marginTop: 4 },
+  editorStatusBox: { backgroundColor: colors.primaryLight, borderRadius: 11, padding: 11, marginBottom: 14 },
+  editorStatusTitle: { color: colors.primaryDark, fontSize: 10, fontWeight: '900' },
+  editorStatusText: { color: colors.text, fontSize: 9, lineHeight: 14, marginTop: 4 },
   fieldList: { gap: 12 },
   fieldBlock: { gap: 7 },
   fieldLabel: { color: colors.text, fontSize: 10, fontWeight: '900' },
