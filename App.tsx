@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import { AppShell } from './src/components/AppShell';
 import { LoadingScreen } from './src/components/UI';
 import { LoginScreen } from './src/screens/LoginScreen';
+import { TechnicianEquipmentProfileScreen } from './src/screens/TechnicianEquipmentProfileScreen';
 import { TechnicianPortalEquipmentTestScreen } from './src/screens/TechnicianPortalEquipmentTestScreen';
 import { TechnicianPortalPersistenceTestScreen } from './src/screens/TechnicianPortalPersistenceTestScreen';
 import { TechnicianPortalPreviewScreen } from './src/screens/TechnicianPortalPreviewScreen';
@@ -54,6 +55,7 @@ function usePwaRegistration() {
 function technicianPortalRoute() {
   if (Platform.OS !== 'web' || typeof window === 'undefined') return 'app';
   const params = new URLSearchParams(window.location.search);
+  if (params.get('technicianPortalIntervention') === '1') return 'intervention';
   if (params.get('technicianPortalEquipment') === '1') return 'equipment';
   if (params.get('technicianPortalPersistence') === '1') return 'persistence';
   if (params.get('technicianPortalV2') === '1') return 'preview';
@@ -69,13 +71,15 @@ function AppContent() {
     <>
       <StatusBar style={currentUser ? 'dark' : 'light'} />
       {currentUser
-        ? route === 'equipment'
-          ? <TechnicianPortalEquipmentTestScreen />
-          : route === 'persistence'
-            ? <TechnicianPortalPersistenceTestScreen />
-            : route === 'preview'
-              ? <TechnicianPortalPreviewScreen />
-              : <AppShell />
+        ? route === 'intervention'
+          ? <TechnicianEquipmentProfileScreen />
+          : route === 'equipment'
+            ? <TechnicianPortalEquipmentTestScreen />
+            : route === 'persistence'
+              ? <TechnicianPortalPersistenceTestScreen />
+              : route === 'preview'
+                ? <TechnicianPortalPreviewScreen />
+                : <AppShell />
         : <LoginScreen />}
     </>
   );
