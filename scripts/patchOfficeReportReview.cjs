@@ -102,4 +102,14 @@ replaceOnce(
   "intervention.status === 'changes_requested' ? 'Corregir reporte'",
 );
 
+const officeReviewFile = 'src/screens/OfficeReportReviewScreen.tsx';
+let officeReviewText = fs.readFileSync(officeReviewFile, 'utf8');
+if (!officeReviewText.includes('(currentUser as { staffId?: string }).staffId')) {
+  officeReviewText = officeReviewText.replaceAll(
+    'currentUser.staffId ??',
+    '(currentUser as { staffId?: string }).staffId ??',
+  );
+  fs.writeFileSync(officeReviewFile, officeReviewText);
+}
+
 console.log('Office report review workflow patch applied.');
