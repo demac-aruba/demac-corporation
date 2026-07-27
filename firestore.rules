@@ -138,6 +138,24 @@ service cloud.firestore {
       ]);
     }
 
+    function technicianReportSectionFieldsOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'status',
+        'assignedToStaffId',
+        'assignedToName',
+        'fields',
+        'missingRequiredFieldKeys',
+        'evidenceIds',
+        'lock',
+        'completedAt',
+        'updatedAt',
+        'updatedByUserId',
+        'updatedByStaffId',
+        'updatedByName',
+        'version'
+      ]);
+    }
+
     function technicianEquipmentFieldsOnly() {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
         'locationLabel',
@@ -323,6 +341,23 @@ service cloud.firestore {
           && request.resource.data.createdAt == resource.data.createdAt
           && request.resource.data.createdByUserId == resource.data.createdByUserId
           && technicianInterventionFieldsOnly());
+      allow delete: if operationsRole();
+    }
+
+    match /workReportSections/{sectionId} {
+      allow read: if activeStaff();
+      allow create: if operationsRole()
+        || (assignedToVisitId(request.resource.data.visitId)
+          && request.resource.data.createdByUserId == request.auth.uid);
+      allow update: if operationsRole()
+        || (assignedToVisitId(resource.data.visitId)
+          && request.resource.data.visitId == resource.data.visitId
+          && request.resource.data.visitUnitId == resource.data.visitUnitId
+          && request.resource.data.interventionId == resource.data.interventionId
+          && request.resource.data.sectionType == resource.data.sectionType
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.createdByUserId == resource.data.createdByUserId
+          && technicianReportSectionFieldsOnly());
       allow delete: if operationsRole();
     }
 
