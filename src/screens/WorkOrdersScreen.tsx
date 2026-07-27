@@ -1,37 +1,79 @@
 import React, { useMemo, useState } from 'react';
-import { Image, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Button, Card, EmptyState, formatMoney, Input, Pill, SectionTitle, statusTone } from '../components/UI';
+import { InterventionType } from '../features/technicianPortal/contracts';
 import { useAppState } from '../state/AppState';
+import { useTeamState } from '../state/TeamState';
+import { useTechnicianPortalState } from '../state/TechnicianPortalState';
 import { colors } from '../theme';
 
+const WORK_LABELS: Record<InterventionType, string> = {
+  standard_service: 'Servicio estándar',
+  deep_service: 'Servicio profundo',
+  repair: 'Reparación',
+  installation: 'Instalación',
+  diagnostic: 'Diagnóstico',
+  checkup: 'Chequeo',
+};
+
+function unique(values: (string | undefined)[]) {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
 export function WorkOrdersScreen() {
-  const { workOrders, workOrderEvidence, workOrderUnits, clients, services, users, vans, updateWorkOrder } = useAppState();
+  const { workOrders, workOrderEvidence, clients, services } = useAppState();
+  const { staffProfiles, vans, dailyVanAssignments } = useTeamState();
+  const { workVisits, visitUnits, workInterventions, equipmentSystems, workReportSections } = useTechnicianPortalState();
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState(workOrders[0]?.id ?? '');
   const [statusFilter, setStatusFilter] = useState('Todos');
 
-  const filtered = useMemo(() => {
-    return workOrders.filter((order) => {
-      const client = clients.find((item) => item.id === order.clientId);
-      const matchQuery = `${order.id} ${client?.name ?? ''} ${order.problem}`.toLowerCase().includes(query.toLowerCase());
-      const matchStatus = statusFilter === 'Todos' || order.status === statusFilter;
-      return matchQuery && matchStatus;
-    });
-  }, [workOrders, clients, query, statusFilter]);
+  const filtered = useMemo(() => workOrders.filter((order) => {
+    const client = clients.find((item) => item.id === order.clientId);
+    const matchQuery = `${order.id} ${client?.name ?? ''} ${order.problem}`.toLowerCase().includes(query.toLowerCase());
+    const matchStatus = statusFilter === 'Todos' || order.status === statusFilter;
+    return matchQuery && matchStatus;
+  }), [workOrders, clients, query, statusFilter]);
 
   const selected = workOrders.find((order) => order.id === selectedId);
   const client = clients.find((item) => item.id === selected?.clientId);
   const service = services.find((item) => item.id === selected?.serviceId);
-  const van = vans.find((item) => item.id === selected?.vanId);
-  const technicians = selected?.technicianIds.map((id) => users.find((user) => user.id === id)?.name).filter(Boolean) ?? [];
-  const selectedEvidence = workOrderEvidence.filter((item) => item.workOrderId === selected?.id);
-  const selectedUnits = workOrderUnits.filter((item) => item.workOrderId === selected?.id).sort((a, b) => a.sequence - b.sequence);
+  const visit = workVisits.find((item) => item.workOrderId === selected?.id);
+  const visitUnitIds = visitUnits.filter((item) => item.visitId === visit?.id).map((item) => item.id);
+  const reports = workInterventions
+    .filter((item) => visitUnitIds.includes(item.visitUnitId) && item.status !== 'cancelled')
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const evidence = workOrderEvidence.filter((item) => item.workOrderId === selected?.id);
+
+  const assignedStaffIds = unique([
+    ...(selected?.technicianIds ?? []),
+    ...(visit?.participatingStaffIds ?? []),
+    visit?.leadTechnicianStaffId,
+  ]);
+  const technicianNames = unique([
+    ...assignedStaffIds.map((id) => staffProfiles.find((staff) => staff.id === id)?.name),
+    ...evidence.map((item) => item.uploadedByName),
+  ]);
+  const dailyAssignment = dailyVanAssignments.find((assignment) => assignment.date === selected?.date
+    && [assignment.driverStaffId, assignment.helperStaffId].some((id) => id && assignedStaffIds.includes(id)));
+  const primaryVanId = assignedStaffIds.map((id) => staffProfiles.find((staff) => staff.id === id)?.primaryVanId).find(Boolean);
+  const assignedVan = vans.find((item) => item.id === selected?.vanId)
+    ?? vans.find((item) => item.id === dailyAssignment?.vanId)
+    ?? vans.find((item) => item.id === primaryVanId);
 
   const statuses = ['Todos', 'Solicitud recibida', 'Reserva temporal', 'Confirmada', 'Asignada', 'En proceso', 'Pendiente', 'Completada', 'Reprogramada', 'Cancelada', 'Facturada', 'Pagada'];
 
+  function openReview(interventionId?: string) {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams();
+    params.set('screen', 'reportReview');
+    if (interventionId) params.set('interventionId', interventionId);
+    window.location.assign(`${window.location.pathname}?${params.toString()}`);
+  }
+
   return (
     <ScrollView contentContainerStyle={styles.page}>
-      <SectionTitle title="Órdenes de trabajo" subtitle="Supervisa diagnósticos, avances, reportes y balances por trabajo." />
+      <SectionTitle title="Órdenes de trabajo" subtitle="Supervisa asignación, alcance y reportes enviados por el Portal del Técnico." />
       <View style={styles.toolbar}>
         <View style={{ flex: 1, minWidth: 280 }}><Input placeholder="Buscar orden, cliente o problema…" value={query} onChangeText={setQuery} /></View>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
@@ -44,17 +86,7 @@ export function WorkOrdersScreen() {
           {filtered.length ? filtered.map((order) => {
             const orderClient = clients.find((item) => item.id === order.clientId);
             const orderService = services.find((item) => item.id === order.serviceId);
-            return (
-              <ButtonRow
-                key={order.id}
-                active={selectedId === order.id}
-                onPress={() => setSelectedId(order.id)}
-                title={orderClient?.name ?? 'Cliente'}
-                subtitle={`${order.date} · ${order.time} · ${orderService?.name}`}
-                id={order.id}
-                status={order.status}
-              />
-            );
+            return <ButtonRow key={order.id} active={selectedId === order.id} onPress={() => setSelectedId(order.id)} title={orderClient?.name ?? 'Cliente'} subtitle={`${order.date} · ${order.time} · ${orderService?.name ?? 'Servicio'}`} id={order.id} status={order.status} />;
           }) : <EmptyState icon="🧰" title="Sin órdenes" message="No hay resultados para los filtros seleccionados." />}
         </Card>
 
@@ -63,17 +95,13 @@ export function WorkOrdersScreen() {
             <>
               <Card>
                 <View style={styles.orderHeader}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.orderId}>{selected.id}</Text>
-                    <Text style={styles.orderClient}>{client?.name}</Text>
-                    <Text style={styles.orderMeta}>{service?.name} · {selected.date} a las {selected.time}</Text>
-                  </View>
+                  <View style={{ flex: 1 }}><Text style={styles.orderId}>{selected.id}</Text><Text style={styles.orderClient}>{client?.name}</Text><Text style={styles.orderMeta}>{service?.name} · {selected.date} a las {selected.time}</Text></View>
                   <Pill label={selected.status} tone={statusTone(selected.status)} />
                 </View>
                 <View style={styles.infoGrid}>
                   <Info label="Dirección" value={selected.address} />
-                  <Info label="Van" value={van?.name ?? 'Sin asignar'} />
-                  <Info label="Técnicos" value={technicians.join(', ') || 'Sin asignar'} />
+                  <Info label="Van" value={assignedVan?.name ?? 'Sin asignar'} />
+                  <Info label="Técnicos" value={technicianNames.join(', ') || 'Sin asignar'} />
                   <Info label="Monto" value={formatMoney(selected.amount)} />
                   <Info label="Pagado" value={formatMoney(selected.paid)} />
                   <Info label="Balance" value={formatMoney(selected.amount - selected.paid)} />
@@ -87,20 +115,20 @@ export function WorkOrdersScreen() {
               </Card>
 
               <Card>
-                <SectionTitle title="Reporte técnico" subtitle={selected.reportGenerated ? 'Reporte marcado como generado.' : 'Pendiente de completar o aprobar.'} />
-                <ReportField label="Diagnóstico" value={selected.diagnosis} />
-                <ReportField label="Trabajo realizado" value={selected.workPerformed} />
-                <ReportField label="Recomendación" value={selected.recommendation} />
-                {selected.measurements ? (
-                  <View style={styles.measureGrid}>
-                    {Object.entries(selected.measurements).map(([key, value]) => <View key={key} style={styles.measure}><Text style={styles.measureKey}>{key}</Text><Text style={styles.measureValue}>{value}</Text></View>)}
-                  </View>
-                ) : null}
-                {selectedEvidence.length ? <View style={styles.evidenceSection}><Text style={styles.reportLabel}>Evidencia fotográfica ({selectedEvidence.length})</Text>{(selectedUnits.length ? selectedUnits : [{ id: 'general', label: 'Evidencia general', status: 'in_progress' }]).map((unit) => { const unitEvidence = selectedEvidence.filter((evidence) => (evidence.unitId || 'general') === unit.id || (!selectedUnits.length && true)); if (!unitEvidence.length) return null; return <View key={unit.id} style={styles.unitEvidenceGroup}><View style={styles.unitEvidenceHeader}><Text style={styles.unitEvidenceTitle}>{unit.label}</Text><Pill label={unit.status === 'completed' ? 'Completada' : unit.status === 'pending' ? 'Pendiente' : 'En proceso'} tone={unit.status === 'completed' ? 'success' : unit.status === 'pending' ? 'warning' : 'info'} /></View><View style={styles.evidenceGrid}>{unitEvidence.map((evidence) => <View key={evidence.id} style={styles.evidenceItem}><Image source={{ uri: evidence.downloadUrl }} style={styles.evidenceImage} /><Text style={styles.evidenceLabel}>{evidence.label}</Text><Text style={styles.evidenceMeta}>{evidence.section.replace(/_/g, ' ')} · {evidence.uploadedByName}</Text></View>)}</View></View>; })}</View> : <Text style={styles.reportValue}>No hay fotografías permanentes registradas.</Text>}
-                <View style={styles.actionRow}>
-                  <Button variant="secondary" label="Marcar pendiente" onPress={() => updateWorkOrder(selected.id, { status: 'Pendiente' })} />
-                  <Button variant="success" label={selected.reportGenerated ? 'Reporte generado' : 'Aprobar y generar reporte'} disabled={selected.reportGenerated} onPress={() => updateWorkOrder(selected.id, { reportGenerated: true, status: selected.status === 'Completada' ? 'Facturada' : selected.status })} />
-                </View>
+                <SectionTitle title="Reportes del Portal del Técnico" subtitle="La revisión, aprobación y generación del PDF se realizan en Revisión" action={<Button compact variant="secondary" label="Abrir Revisión" onPress={() => openReview(reports.find((item) => item.status === 'ready_for_review')?.id)} />} />
+                {reports.length ? reports.map((report) => {
+                  const unit = visitUnits.find((item) => item.id === report.visitUnitId);
+                  const equipment = equipmentSystems.find((item) => item.id === report.equipmentSystemId || item.id === unit?.equipmentSystemId);
+                  const sections = workReportSections.filter((item) => item.interventionId === report.id);
+                  const completed = sections.filter((item) => item.status === 'completed' || item.status === 'not_applicable').length;
+                  const status = report.status === 'ready_for_review' ? 'Pendiente de revisión' : report.status === 'changes_requested' ? 'Corrección solicitada' : report.status === 'completed' ? 'Aprobado' : 'En proceso';
+                  return (
+                    <View key={report.id} style={styles.reportRow}>
+                      <View style={{ flex: 1 }}><Text style={styles.reportType}>{WORK_LABELS[report.type]}</Text><Text style={styles.reportName}>{equipment?.locationLabel ?? unit?.locationLabel ?? 'Aire acondicionado'}</Text><Text style={styles.reportMeta}>{completed}/{sections.length} secciones cerradas · {evidence.filter((item) => item.unitId === unit?.id).length} fotografías</Text><Text style={styles.reportMeta}>Última actualización: {report.updatedByName}</Text></View>
+                      <View style={styles.reportActions}><Pill label={status} tone={report.status === 'completed' ? 'success' : report.status === 'changes_requested' ? 'warning' : 'info'} /><Button compact label={report.status === 'completed' ? 'Ver / PDF' : 'Abrir en Revisión'} onPress={() => openReview(report.id)} /></View>
+                    </View>
+                  );
+                }) : <EmptyState icon="🧾" title="Sin reportes del nuevo portal" message="Cuando el técnico envíe un reporte, aparecerá aquí y en la bandeja Revisión." />}
               </Card>
             </>
           ) : null}
@@ -111,20 +139,9 @@ export function WorkOrdersScreen() {
 }
 
 function ButtonRow({ active, onPress, title, subtitle, id, status }: { active: boolean; onPress: () => void; title: string; subtitle: string; id: string; status: string }) {
-  return (
-    <View style={[styles.listRow, active && styles.listRowActive]}>
-      <View style={{ flex: 1 }}>
-        <Text onPress={onPress} style={styles.listTitle}>{title}</Text>
-        <Text onPress={onPress} style={styles.listSubtitle}>{subtitle}</Text>
-        <Text onPress={onPress} style={styles.listId}>{id}</Text>
-      </View>
-      <Pill label={status} tone={statusTone(status)} />
-    </View>
-  );
+  return <View style={[styles.listRow, active && styles.listRowActive]}><View style={{ flex: 1 }}><Text onPress={onPress} style={styles.listTitle}>{title}</Text><Text onPress={onPress} style={styles.listSubtitle}>{subtitle}</Text><Text onPress={onPress} style={styles.listId}>{id}</Text></View><Pill label={status} tone={statusTone(status)} /></View>;
 }
-
 function Info({ label, value }: { label: string; value: string }) { return <View style={styles.info}><Text style={styles.infoLabel}>{label}</Text><Text style={styles.infoValue}>{value}</Text></View>; }
-function ReportField({ label, value }: { label: string; value?: string }) { return <View style={styles.reportField}><Text style={styles.reportLabel}>{label}</Text><Text style={styles.reportValue}>{value || 'No registrado todavía.'}</Text></View>; }
 
 const styles = StyleSheet.create({
   page: { padding: 24, gap: 18, paddingBottom: 90 },
@@ -150,21 +167,9 @@ const styles = StyleSheet.create({
   noteBox: { marginTop: 16, padding: 14, backgroundColor: colors.warningLight, borderRadius: 12, borderLeftWidth: 4, borderLeftColor: colors.warning },
   noteTitle: { color: colors.warning, fontWeight: '900', fontSize: 9, letterSpacing: 1 },
   noteText: { color: colors.text, marginTop: 6, lineHeight: 19 },
-  reportField: { marginBottom: 16 },
-  reportLabel: { color: colors.muted, fontWeight: '900', fontSize: 10, textTransform: 'uppercase' },
-  reportValue: { color: colors.text, marginTop: 5, lineHeight: 20 },
-  measureGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 4 },
-  measure: { minWidth: 120, flex: 1, backgroundColor: '#F6F8FB', borderRadius: 10, padding: 12 },
-  measureKey: { color: colors.muted, fontSize: 9, textTransform: 'uppercase' },
-  measureValue: { color: colors.text, fontWeight: '900', marginTop: 5 },
-  evidenceSection: { marginTop: 18 },
-  unitEvidenceGroup: { marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.border },
-  unitEvidenceHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  unitEvidenceTitle: { color: colors.text, fontWeight: '900', flex: 1 },
-  evidenceGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 10 },
-  evidenceItem: { width: 150, gap: 4 },
-  evidenceImage: { width: 150, height: 112, borderRadius: 10, backgroundColor: '#EEF2F6' },
-  evidenceLabel: { color: colors.text, fontSize: 10, fontWeight: '800' },
-  evidenceMeta: { color: colors.muted, fontSize: 8 },
-  actionRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 10, marginTop: 18 },
+  reportRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: colors.border, borderRadius: 12, padding: 13, marginBottom: 9 },
+  reportType: { color: colors.primary, fontSize: 9, fontWeight: '900', textTransform: 'uppercase' },
+  reportName: { color: colors.text, fontSize: 15, fontWeight: '900', marginTop: 4 },
+  reportMeta: { color: colors.muted, fontSize: 9, marginTop: 4 },
+  reportActions: { alignItems: 'flex-end', gap: 8 },
 });
