@@ -69,10 +69,10 @@ replaceOnce(
   "    setWorking(false);\n    if (!result.ok) {\n      setMessage(result.message ?? 'No se pudo enviar el reporte.');\n      scrollToTop();\n      return;\n    }\n    setMessage('Reporte enviado para revisión de la oficina. Regresando al perfil del aire…');\n    scrollToTop();\n    setTimeout(goBack, 1100);",
   "Regresando al perfil del aire…",
 );
-insertAfter(
+replaceOnce(
   reportFile,
   "      </View>\n\n      {activeItem ? (",
-  "\n      {intervention.status === 'changes_requested' && intervention.resultNotes ? (\n        <View style={styles.correctionBox}>\n          <Text style={styles.correctionTitle}>Corrección solicitada por la oficina</Text>\n          <Text style={styles.correctionText}>{intervention.resultNotes}</Text>\n        </View>\n      ) : null}\n",
+  "      </View>\n\n      {intervention.status === 'changes_requested' && intervention.resultNotes ? (\n        <View style={styles.correctionBox}>\n          <Text style={styles.correctionTitle}>Corrección solicitada por la oficina</Text>\n          <Text style={styles.correctionText}>{intervention.resultNotes}</Text>\n        </View>\n      ) : null}\n\n      {activeItem ? (",
   'Corrección solicitada por la oficina',
 );
 replaceOnce(
