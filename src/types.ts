@@ -6,6 +6,7 @@ export type ScreenKey =
   | 'clients'
   | 'catalog'
   | 'workOrders'
+  | 'reportReview'
   | 'team'
   | 'technician'
   | 'sales'
@@ -78,27 +79,15 @@ export interface VanToolItem {
   notes?: string;
 }
 
-export interface DailyVanAssignment {
+export interface Van {
   id: string;
-  date: string;
-  vanId: string;
-  driverStaffId?: string;
-  helperStaffId?: string;
-  status: 'Disponible' | 'Trabajo liviano' | 'Sin personal' | 'Mantenimiento' | 'Fuera de servicio';
+  name: string;
+  plate: string;
+  driverId?: string;
+  technicianIds: string[];
+  status: VanOperationalStatus;
   notes?: string;
-  updatedAt?: string;
-}
-
-export interface VanMaintenanceLog {
-  id: string;
-  vanId: string;
-  date: string;
-  odometerKm: number;
-  type: string;
-  description: string;
-  cost?: number;
-  nextDueKm?: number;
-  nextDueDate?: string;
+  tools: VanToolItem[];
   createdAt?: string;
   updatedAt?: string;
 }
@@ -107,247 +96,110 @@ export interface User {
   id: string;
   name: string;
   email: string;
-  authProvider?: 'demo' | 'firebase';
   role: UserRole;
   phone?: string;
   vanId?: string;
+  staffId?: string;
   active: boolean;
+  authProvider?: 'demo' | 'firebase';
 }
 
-
-export type PreferredLanguage = 'Español' | 'English' | 'Nederlands' | 'Papiamento';
-
-export type ClientLifecycleAction = 'Creado' | 'Archivado' | 'Restaurado' | 'Teléfono compartido' | 'Teléfono reasignado';
-
-export interface ClientLifecycleEntry {
-  id: string;
-  action: ClientLifecycleAction;
-  reason: string;
-  performedAt: string;
-  performedById?: string;
-  performedByName: string;
-}
-
-export interface ClientPhoneHistoryEntry {
-  id: string;
-  phone: string;
-  whatsapp: string;
-  action: 'Compartido' | 'Reasignado';
-  reason: string;
-  changedAt: string;
-  changedById?: string;
-  changedByName: string;
+export interface PropertyLocation {
+  latitude: number;
+  longitude: number;
+  name?: string;
+  address?: string;
+  url?: string;
+  receivedAt?: string;
 }
 
 export interface Client {
-
   id: string;
   name: string;
-  company?: string;
   phone: string;
-  phoneCountry?: string;
-  whatsapp: string;
-  whatsappCountry?: string;
   email?: string;
-  preferredLanguage?: PreferredLanguage;
-  templateLanguage?: 'en' | 'es' | 'nl';
   address: string;
-  zone: string;
-  balance: number;
-  equipmentCount: number;
-  lastService?: string;
-  active?: boolean;
-  archivedAt?: string;
-  archivedById?: string;
-  archivedByName?: string;
-  archiveReason?: string;
-  phoneSharedWithClientIds?: string[];
-  phoneSharedReason?: string;
-  phoneHistory?: ClientPhoneHistoryEntry[];
-  lifecycleHistory?: ClientLifecycleEntry[];
-  createdAt?: string;
-  updatedAt?: string;
-}
-
-export type PropertyType = 'Casa' | 'Apartamento' | 'Oficina' | 'Local comercial' | 'Otro';
-
-export type PropertyContactRole = 'Dueño' | 'Encargado' | 'Administrador' | 'Inquilino' | 'Contacto de acceso' | 'Contabilidad' | 'Otro';
-export type PropertyContactLanguage = PreferredLanguage;
-
-export interface PropertyContact {
-  id: string;
-  name: string;
-  role: PropertyContactRole;
-  phone: string;
-  phoneCountry?: string;
-  whatsapp: string;
-  whatsappCountry?: string;
-  email?: string;
-  preferredLanguage: PropertyContactLanguage;
-  defaultSendConfirmation?: boolean;
-  defaultSendReminder?: boolean;
-  arrivalContact?: boolean;
+  zone?: string;
+  notes?: string;
   active: boolean;
-  inactiveReason?: string;
-  archivedAt?: string;
-  archivedById?: string;
-  archivedByName?: string;
   createdAt?: string;
   updatedAt?: string;
-}
-
-
-export type PropertyLocationSource = 'WhatsApp' | 'Enlace pegado' | 'Coordenadas' | 'Manual';
-
-export interface PropertyLocation {
-  latitude?: number;
-  longitude?: number;
-  originalUrl?: string;
-  name?: string;
-  address?: string;
-  source: PropertyLocationSource;
-  receivedFrom?: string;
-  receivedAt?: string;
-  verified: boolean;
-  verifiedAt?: string;
-  verifiedById?: string;
-  verifiedByName?: string;
-}
-
-export interface WhatsAppLocationMessage {
-  id: string;
-  direction?: string;
-  from?: string;
-  contactName?: string;
-  type?: string;
-  latitude?: number;
-  longitude?: number;
-  locationName?: string;
-  locationAddress?: string;
-  locationUrl?: string;
-  whatsappTimestamp?: string;
-  receivedAt?: string;
-  raw?: { location?: { latitude?: number; longitude?: number; name?: string; address?: string; url?: string } };
 }
 
 export interface Property {
-
   id: string;
   clientId: string;
   name: string;
-  type: PropertyType;
+  type: string;
   address: string;
-  zone: string;
-  notes?: string;
-  addressRaw?: string;
-  addressNormalized?: string;
-  neighborhood?: string;
-  operationalZone?: string;
-  accessInstructions?: string;
-  landmark?: string;
-  location?: PropertyLocation;
-  contacts?: PropertyContact[];
+  zone?: string;
   active: boolean;
-  archivedAt?: string;
-  archivedById?: string;
-  archivedByName?: string;
-  archiveReason?: string;
+  location?: PropertyLocation;
+  notes?: string;
   createdAt?: string;
   updatedAt?: string;
 }
-
-export type AppointmentNotificationRecipientType = 'client' | 'propertyContact';
-
-export interface AppointmentNotificationRecipient {
-  id: string;
-  recipientType: AppointmentNotificationRecipientType;
-  sourceId: string;
-  name: string;
-  role: string;
-  phone: string;
-  phoneCountry?: string;
-  whatsapp: string;
-  whatsappCountry?: string;
-  preferredLanguage: PropertyContactLanguage;
-  templateLanguage?: 'en' | 'es' | 'nl';
-  sendConfirmation: boolean;
-  sendReminder: boolean;
-}
-
-export interface Equipment {
-  id: string;
-  clientId: string;
-  propertyId?: string;
-  location: string;
-  brand: string;
-  model: string;
-  serial: string;
-  btu: number;
-  type: string;
-  refrigerant: 'R32' | 'R410A' | 'R22';
-  voltage: '110V' | '220V' | '380V';
-  installedAt: string;
-  warrantyUntil: string;
-  condition: 'Excelente' | 'Buena' | 'Requiere atención' | 'Fuera de servicio';
-}
-
-export type CatalogItemType = 'Servicio' | 'Producto';
 
 export interface ServiceType {
   id: string;
   name: string;
-  itemType?: CatalogItemType;
-  durationMinutes: number;
-  basePrice: number;
-  category: string;
   description?: string;
-  sku?: string;
+  itemType?: 'Servicio' | 'Producto';
   active?: boolean;
   featured?: boolean;
+  defaultDurationMinutes?: number;
+  price?: number;
   createdAt?: string;
   updatedAt?: string;
 }
 
-export type SchedulingMode = 'fixed' | 'perUnit';
-
-export type AppointmentChangeOrigin = 'Cliente' | 'DEMAC' | 'Fuerza mayor' | 'Otro';
-
-export type AppointmentChangeReasonCategory =
-  | 'Cliente solicita otra fecha'
-  | 'Cliente no puede recibirnos'
-  | 'Cliente ya no desea el servicio'
-  | 'No se logró contactar al cliente'
-  | 'Problema de precio o cotización'
-  | 'Dirección o acceso no disponible'
-  | 'Error de programación'
-  | 'Falta de personal de DEMAC'
-  | 'Avería de van o herramientas'
-  | 'Condiciones climáticas'
-  | 'Otro';
-
 export interface WorkOrderScheduleHistoryEntry {
   id: string;
-  date: string;
-  time: string;
-  vanId: string;
-  technicianIds: string[];
-  scheduledSlots: number;
-  status: 'Cancelada' | 'Reprogramada';
-  clientId: string;
-  propertyId?: string;
-  address: string;
-  zone?: string;
-  problem: string;
-  changeOrigin?: AppointmentChangeOrigin;
-  reasonCategory?: AppointmentChangeReasonCategory;
-  reasonNote?: string;
+  action: string;
+  at: string;
+  byUserId?: string;
+  byName?: string;
+  note?: string;
+}
+
+export type SchedulingMode = 'exact_time' | 'morning' | 'afternoon' | 'anytime';
+
+export interface AppointmentNotificationRecipient {
+  name: string;
+  phone: string;
+  relationship?: string;
+}
+
+export interface WhatsAppLocationMessage {
+  id: string;
+  direction: 'inbound' | 'outbound';
+  type: string;
+  from?: string;
+  to?: string;
+  latitude: number;
+  longitude: number;
+  locationName?: string;
+  locationAddress?: string;
+  locationUrl?: string;
+  timestamp?: string;
+  raw?: any;
+}
+
+export interface WorkOrderStatusHistoryEntry {
+  status: AppointmentStatus;
+  changedAt: string;
   changedByUserId?: string;
   changedByName?: string;
-  noticeHours?: number;
-  newDate?: string;
-  newTime?: string;
-  newVanId?: string;
-  recordedAt: string;
+  note?: string;
+}
+
+export interface WorkOrderUnitPhoto {
+  id: string;
+  uri: string;
+  type: string;
+  section: string;
+  takenAt: string;
+  takenBy: string;
 }
 
 export type WorkOrderUnitStatus = 'not_started' | 'in_progress' | 'completed' | 'pending' | 'not_accessible';
@@ -499,25 +351,5 @@ export interface Invoice {
   dueDate: string;
   total: number;
   paid: number;
-  status: 'Borrador' | 'Enviada' | 'Parcial' | 'Pagada' | 'Vencida';
-  channel: 'Tienda' | 'WhatsApp' | 'Teléfono' | 'Servicio técnico';
-}
-
-export interface Van {
-  id: string;
-  name: string;
-  plate: string;
-  technicianIds: string[];
-  status: VanOperationalStatus;
-  responsibleStaffId?: string;
-  regularHelperId?: string;
-  odometerKm?: number;
-  nextServiceKm?: number;
-  nextServiceDate?: string;
-  insuranceExpiresAt?: string;
-  registrationExpiresAt?: string;
-  notes?: string;
-  inventory?: VanToolItem[];
-  active?: boolean;
-  updatedAt?: string;
+  status: 'Pendiente' | 'Parcial' | 'Pagada' | 'Vencida';
 }
