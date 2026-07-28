@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { PayrollAdjustment } from '../payroll/adjustments';
-import { listFirestoreCollection, saveFirestoreDocument } from '../services/firebase';
+import { listFirestoreCollection, updateFirestoreDocument } from '../services/firebase';
 import { User } from '../types';
+
+type PayrollSettingsAdjustmentDocument = {
+  id: string;
+  payrollAdjustments?: PayrollAdjustment[];
+};
 
 function sortAdjustments(items: PayrollAdjustment[]) {
   return [...items].sort((first, second) => {
@@ -22,13 +27,13 @@ export function usePayrollAdjustments(currentUser: User | null) {
     if (!firebase) return;
     setLoading(true);
     try {
-      const remote = await listFirestoreCollection<PayrollAdjustment>('employeePayrollAdjustments');
-      setAdjustments(sortAdjustments(remote));
+      const settings = await listFirestoreCollection<PayrollSettingsAdjustmentDocument>('employeePayrollSettings');
+      setAdjustments(sortAdjustments(settings.flatMap((document) => document.payrollAdjustments ?? [])));
       setError('');
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       setError(message.toLowerCase().includes('permission') || message.toLowerCase().includes('denied')
-        ? 'Firebase rechazó bonos y deducciones. Publica las reglas nuevas de Firestore.'
+        ? 'Firebase rechazó bonos y deducciones. Revisa los permisos del módulo de payroll.'
         : `No se pudieron cargar bonos y deducciones: ${message}`);
     } finally {
       setLoading(false);
@@ -50,7 +55,15 @@ export function usePayrollAdjustments(currentUser: User | null) {
         createdByUserId: adjustment.createdByUserId ?? currentUser?.id,
         createdByName: adjustment.createdByName ?? currentUser?.name,
       };
-      if (firebase) await saveFirestoreDocument('employeePayrollAdjustments', normalized);
+      const employeeAdjustments = sortAdjustments([
+        normalized,
+        ...adjustments.filter((candidate) => candidate.employeeId === normalized.employeeId && candidate.id !== normalized.id),
+      ]);
+      if (firebase) {
+        await updateFirestoreDocument('employeePayrollSettings', normalized.employeeId, {
+          payrollAdjustments: employeeAdjustments,
+        });
+      }
       setAdjustments((previous) => sortAdjustments([
         normalized,
         ...previous.filter((candidate) => candidate.id !== normalized.id),
