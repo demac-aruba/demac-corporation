@@ -78,10 +78,10 @@ replaceOnce(
   "                {definition.fields.filter((field) => templateFieldIsVisible(field, section?.fields ?? {})).map((field) => {",
   'templateFieldIsVisible(field, section?.fields ?? {})).map',
 );
-insertAfter(
+replaceOnce(
   officeFile,
   "        </Card>\n\n        {selected.status === 'ready_for_review' ? (",
-  `
+  `        </Card>
 
         {selectedAddOns.length ? (
           <Card>
@@ -106,7 +106,9 @@ insertAfter(
               })}
             </View>
           </Card>
-        ) : null}`,
+        ) : null}
+
+        {selected.status === 'ready_for_review' ? (`,
   'title="Add-ons registrados"',
 );
 insertAfter(
