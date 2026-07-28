@@ -58,8 +58,8 @@ insertAfter(
 );
 replaceOnce(
   shellFile,
-  '  const [activeScreen, setActiveScreen] = useState<ScreenKey>(defaultScreen);',
-  '  const [activeScreen, setActiveScreen] = useState<ScreenKey>(() => readHistoryScreen<ScreenKey>(availableScreenKeys) ?? defaultScreen);',
+  '  const [activeScreen, setActiveScreen] = useState<ScreenKey>(requestedScreen ?? defaultScreen);',
+  '  const [activeScreen, setActiveScreen] = useState<ScreenKey>(() => readHistoryScreen<ScreenKey>(availableScreenKeys) ?? requestedScreen ?? defaultScreen);',
   'readHistoryScreen<ScreenKey>(availableScreenKeys)',
 );
 insertAfter(
@@ -75,10 +75,10 @@ replaceOnce(
   };`,
   `  useEffect(() => {
     const restoredScreen = readHistoryScreen<ScreenKey>(availableScreenKeys);
-    const nextScreen = restoredScreen ?? (availableScreenKeys.includes(activeScreen) ? activeScreen : defaultScreen);
+    const nextScreen = restoredScreen ?? requestedScreen ?? (availableScreenKeys.includes(activeScreen) ? activeScreen : defaultScreen);
     if (nextScreen !== activeScreen) setActiveScreen(nextScreen);
     replaceHistoryScreen(nextScreen);
-  }, [currentUser?.id, defaultScreen, availableScreenKeys]);
+  }, [currentUser?.id, defaultScreen, requestedScreen, availableScreenKeys]);
 
   useEffect(() => subscribeToScreenHistory((screen) => {
     if (screen && availableScreenKeys.includes(screen as ScreenKey)) {
