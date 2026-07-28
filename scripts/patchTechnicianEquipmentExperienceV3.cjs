@@ -140,11 +140,13 @@ replaceRange(
             <Button compact variant="secondary" label="Agregar otro trabajo" onPress={() => setAddingAnother(true)} />
           </View>
         )}
-      </Card>
-
-      <TechnicianAddOnsPanel visit={visit} unit={unit} interventions={interventions} disabled={newWorkLocked} />
-
-      <View style={styles.messageBox}>`,
+`,
+  'addAnotherBox:',
+);
+replaceOnce(
+  profileFile,
+  "      </Card>\n\n      <View style={styles.messageBox}>",
+  "      </Card>\n\n      <TechnicianAddOnsPanel visit={visit} unit={unit} interventions={interventions} disabled={newWorkLocked} />\n\n      <View style={styles.messageBox}>",
   '<TechnicianAddOnsPanel visit={visit}',
 );
 replaceOnce(
