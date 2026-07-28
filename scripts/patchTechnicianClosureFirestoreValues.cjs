@@ -1,5 +1,29 @@
 const fs = require('fs');
 
+const typesPath = 'src/types.ts';
+let typesText = fs.readFileSync(typesPath, 'utf8');
+if (!typesText.includes('export interface WorkOrderStatusHistoryEntry')) {
+  const interfaceAnchor = 'export interface WorkOrder {';
+  if (!typesText.includes(interfaceAnchor)) throw new Error('The WorkOrder interface was not found.');
+  typesText = typesText.replace(interfaceAnchor, `export interface WorkOrderStatusHistoryEntry {
+  status: AppointmentStatus;
+  changedAt: string;
+  changedByUserId?: string;
+  changedByName?: string;
+  note?: string;
+}
+
+${interfaceAnchor}`);
+}
+if (!typesText.includes('  statusHistory?: WorkOrderStatusHistoryEntry[];')) {
+  const fieldAnchor = '  scheduleHistory?: WorkOrderScheduleHistoryEntry[];';
+  if (!typesText.includes(fieldAnchor)) throw new Error('The WorkOrder schedule history field was not found.');
+  typesText = typesText.replace(fieldAnchor, `${fieldAnchor}
+  statusHistory?: WorkOrderStatusHistoryEntry[];
+  completedAt?: string;`);
+}
+fs.writeFileSync(typesPath, typesText);
+
 const officePath = 'src/screens/OfficeReportReviewScreen.tsx';
 let officeText = fs.readFileSync(officePath, 'utf8');
 const correctionMarker = "note: 'La oficina devolvió un reporte para corrección.'";
@@ -37,4 +61,4 @@ if (profileText.includes(duplicateClosure)) {
   fs.writeFileSync(profilePath, profileText);
 }
 
-console.log('Technician closure values, markup and repeated-build markers normalized.');
+console.log('Technician closure types, values, markup and repeated-build markers normalized.');
