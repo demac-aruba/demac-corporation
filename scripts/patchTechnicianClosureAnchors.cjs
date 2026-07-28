@@ -11,7 +11,11 @@ const normalizedAnchor = `  async function attachExistingEquipment(equipment: Re
     if (!selectedVisit || !selectedOrder) return;`;
 if (text.includes(expandedAnchor)) {
   text = text.replace(expandedAnchor, normalizedAnchor);
-  fs.writeFileSync(path, text);
 }
+text = text.replace(
+  "  mainActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 13 },",
+  "  mainActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },",
+);
+fs.writeFileSync(path, text);
 
 console.log('Technician closure anchors normalized.');
