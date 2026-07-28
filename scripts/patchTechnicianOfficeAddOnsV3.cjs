@@ -111,7 +111,7 @@ insertAfter(
 );
 insertAfter(
   officeFile,
-  "  sectionList: { gap: 8 },",
+  "  sectionList: { gap: 12 },",
   "\n  addOnEvidenceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },",
   'addOnEvidenceRow:',
 );
