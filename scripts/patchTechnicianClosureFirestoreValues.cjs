@@ -27,4 +27,14 @@ if (!reportText.includes(officePatchMarker)) {
   fs.writeFileSync(reportPath, reportText);
 }
 
-console.log('Technician closure values and repeated-build markers normalized.');
+const profilePath = 'src/screens/TechnicianEquipmentProfileScreen.tsx';
+let profileText = fs.readFileSync(profilePath, 'utf8');
+const duplicateClosure = `      <View style={styles.messageBox}>      </Card>
+
+      <View style={styles.messageBox}>`;
+if (profileText.includes(duplicateClosure)) {
+  profileText = profileText.replace(duplicateClosure, '      <View style={styles.messageBox}>');
+  fs.writeFileSync(profilePath, profileText);
+}
+
+console.log('Technician closure values, markup and repeated-build markers normalized.');
