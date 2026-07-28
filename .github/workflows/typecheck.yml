@@ -24,10 +24,10 @@ jobs:
         with:
           name: typecheck-diagnostics
           path: typecheck.log
-      - name: Fail when typecheck has errors
+      - name: Fail when typecheck or patching has errors
         run: |
           cat typecheck.log
-          if grep -q "error TS" typecheck.log; then exit 1; fi
+          if grep -Eq "(error TS|^Error:|ELIFECYCLE|patch block not found|patch range not found|patch anchor not found)" typecheck.log; then exit 1; fi
       - name: Capture Expo web build diagnostics
         run: npm run build:web > web-build.log 2>&1 || true
       - name: Upload Expo web build diagnostics
@@ -38,5 +38,5 @@ jobs:
       - name: Fail when Expo web build fails
         run: |
           cat web-build.log
-          if grep -Eq "(Error:|SyntaxError|Module not found|Command.*failed|ELIFECYCLE)" web-build.log; then exit 1; fi
+          if grep -Eq "(Error:|SyntaxError|Module not found|Command.*failed|ELIFECYCLE|patch block not found|patch range not found|patch anchor not found)" web-build.log; then exit 1; fi
           test -d dist
