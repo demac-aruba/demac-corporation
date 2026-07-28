@@ -21,6 +21,7 @@
   },
   "scripts": {
     "patch:payroll": "node scripts/patchPayrollStartDateStage1.cjs && node scripts/patchPayrollStartDateStage2.cjs && node scripts/patchPayrollOvertimeMinutes.cjs",
+    "patch:technician-equipment-anchor": "node scripts/patchTechnicianEquipmentEntryAnchor.cjs",
     "patch:technician-equipment": "node scripts/patchTechnicianEquipmentRealTesting.cjs",
     "patch:technician-interventions": "node scripts/patchTechnicianEquipmentInterventions.cjs",
     "patch:technician-reports": "node scripts/patchTechnicianReportSections.cjs",
@@ -32,7 +33,7 @@
     "patch:technician-closure": "node scripts/patchTechnicianWorkOrderClosure.cjs",
     "patch:technician-closure-firestore": "node scripts/patchTechnicianClosureFirestoreValues.cjs",
     "patch:technician-home": "node scripts/patchSimplifiedTechnicianWorkHome.cjs",
-    "patch:all": "npm run patch:payroll && npm run patch:technician-equipment && npm run patch:technician-interventions && npm run patch:technician-reports && npm run patch:office-review && npm run patch:report-output && npm run patch:customer-report && npm run patch:customer-report-text-grid && npm run patch:technician-closure-anchors && npm run patch:technician-closure && npm run patch:technician-closure-firestore && npm run patch:technician-home",
+    "patch:all": "npm run patch:payroll && npm run patch:technician-equipment-anchor && npm run patch:technician-equipment && npm run patch:technician-interventions && npm run patch:technician-reports && npm run patch:office-review && npm run patch:report-output && npm run patch:customer-report && npm run patch:customer-report-text-grid && npm run patch:technician-closure-anchors && npm run patch:technician-closure && npm run patch:technician-closure-firestore && npm run patch:technician-home",
     "prestart": "npm run patch:all",
     "start": "expo start",
     "preandroid": "npm run patch:all",
