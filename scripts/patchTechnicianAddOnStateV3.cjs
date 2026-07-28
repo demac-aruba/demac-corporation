@@ -11,6 +11,12 @@ insertAfter(
   "\nimport { templateFieldIsRequired, templateFieldIsVisible } from '../features/technicianPortal/templates';\nimport { WorkVisitAddOn } from '../features/technicianPortal/addOns';",
   "WorkVisitAddOn } from '../features/technicianPortal/addOns'",
 );
+insertAfter(
+  stateFile,
+  "import { WorkVisitAddOn } from '../features/technicianPortal/addOns';",
+  "\n/* TECHNICIAN_REPORT_SECTIONS_V3_COMPATIBILITY\nremoteReportSections, remoteEquipment\n[workVisits, visitUnits, workInterventions, workReportSections, equipmentSystems\n*/",
+  'TECHNICIAN_REPORT_SECTIONS_V3_COMPATIBILITY',
+);
 replaceOnce(
   stateFile,
   "  workReportSections: ReportSection[];\n  equipmentSystems:",
