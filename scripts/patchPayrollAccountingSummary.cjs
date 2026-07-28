@@ -53,7 +53,7 @@ insertAfter(
 
 insertAfter(
   screen,
-  "  payrollSummaryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },",
+  "  payrollSummaryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },",
   "\n  accountingSummaryHelp: { color: colors.muted, fontSize: 9, lineHeight: 14, textAlign: 'center', marginTop: 2 },",
   'accountingSummaryHelp:',
 );
