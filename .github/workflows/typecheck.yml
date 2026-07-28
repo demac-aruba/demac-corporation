@@ -1,11 +1,11 @@
-name: TypeScript validation
+name: TypeScript and web build validation
 
 on:
   push:
   pull_request:
 
 jobs:
-  typecheck:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -19,12 +19,24 @@ jobs:
         run: npm ci --silent
       - name: Capture typecheck diagnostics
         run: npm run typecheck > typecheck.log 2>&1 || true
-      - name: Upload diagnostics
+      - name: Upload typecheck diagnostics
         uses: actions/upload-artifact@v4
         with:
           name: typecheck-diagnostics
           path: typecheck.log
-      - name: Fail when diagnostics contain errors
+      - name: Fail when typecheck or patching has errors
         run: |
           cat typecheck.log
-          if grep -q "error TS" typecheck.log; then exit 1; fi
+          if grep -Eq "(error TS|^Error:|SyntaxError|ELIFECYCLE|Command.*failed)" typecheck.log; then exit 1; fi
+      - name: Capture Expo web build diagnostics
+        run: npm run build:web > web-build.log 2>&1 || true
+      - name: Upload Expo web build diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build-diagnostics
+          path: web-build.log
+      - name: Fail when Expo web build fails
+        run: |
+          cat web-build.log
+          if grep -Eq "(error TS|^Error:|SyntaxError|Module not found|Command.*failed|ELIFECYCLE)" web-build.log; then exit 1; fi
+          test -d dist
