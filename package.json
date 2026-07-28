@@ -20,7 +20,7 @@
     "typescript": "~6.0.3"
   },
   "scripts": {
-    "patch:payroll": "node scripts/patchPayrollStartDateStage1.cjs && node scripts/patchPayrollStartDateStage2.cjs && node scripts/patchPayrollOvertimeMinutes.cjs && node scripts/patchPayrollAccountingSummary.cjs",
+    "patch:payroll": "node scripts/patchPayrollStartDateStage1.cjs && node scripts/patchPayrollStartDateStage2.cjs && node scripts/patchPayrollOvertimeMinutes.cjs && node scripts/patchPayrollAccountingSummary.cjs && node scripts/patchPayrollBonusesDeductions.cjs",
     "patch:technician-equipment-anchor": "node scripts/patchTechnicianEquipmentEntryAnchor.cjs",
     "patch:technician-equipment": "node scripts/patchTechnicianEquipmentRealTesting.cjs",
     "patch:technician-interventions": "node scripts/patchTechnicianEquipmentInterventions.cjs",

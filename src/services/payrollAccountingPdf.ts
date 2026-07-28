@@ -1,3 +1,4 @@
+import { PayrollAdjustment, payrollAdjustmentTotals } from '../payroll/adjustments';
 import { PayrollEmployeeSummary } from '../payroll/types';
 
 const PAGE_WIDTH = 841.89;
@@ -20,22 +21,25 @@ type PayrollAccountingPdfOptions = {
   filename: string;
   periodLabel: string;
   summaries: PayrollEmployeeSummary[];
+  adjustments: PayrollAdjustment[];
 };
 
 type Column = {
-  key: 'employee' | 'weeklyBase' | 'overtime' | 'ao' | 'vacation' | 'noWork';
+  key: 'employee' | 'bonuses' | 'deductions' | 'weeklyBase' | 'overtime' | 'ao' | 'vacation' | 'noWork';
   label: string;
   width: number;
   align?: 'left' | 'center' | 'right';
 };
 
 const COLUMNS: Column[] = [
-  { key: 'employee', label: 'Empleado', width: 275, align: 'left' },
-  { key: 'weeklyBase', label: 'Base semanal', width: 105, align: 'center' },
-  { key: 'overtime', label: 'Overtime', width: 90, align: 'center' },
-  { key: 'ao', label: 'AO', width: 80, align: 'center' },
-  { key: 'vacation', label: 'Vacation', width: 105, align: 'center' },
-  { key: 'noWork', label: 'No work / no pay', width: CONTENT_WIDTH - 655, align: 'center' },
+  { key: 'employee', label: 'Empleado', width: 200, align: 'left' },
+  { key: 'bonuses', label: 'Bonos (Afl.)', width: 80, align: 'center' },
+  { key: 'deductions', label: 'Deducciones (Afl.)', width: 85, align: 'center' },
+  { key: 'weeklyBase', label: 'Base semanal', width: 85, align: 'center' },
+  { key: 'overtime', label: 'Overtime', width: 70, align: 'center' },
+  { key: 'ao', label: 'AO', width: 50, align: 'center' },
+  { key: 'vacation', label: 'Vacation', width: 75, align: 'center' },
+  { key: 'noWork', label: 'No work / no pay', width: CONTENT_WIDTH - 645, align: 'center' },
 ];
 
 function formatHours(value: number) {
@@ -43,6 +47,13 @@ function formatHours(value: number) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })} h`;
+}
+
+function formatAfl(value: number) {
+  return `Afl. ${Number(value || 0).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
 function formatStartDate(summary: PayrollEmployeeSummary) {
@@ -121,18 +132,14 @@ function concatBytes(chunks: Uint8Array[]) {
   return output;
 }
 
-function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSummary[]) {
+function buildAccountingPages(
+  periodLabel: string,
+  summaries: PayrollEmployeeSummary[],
+  adjustments: PayrollAdjustment[],
+) {
   const groups: PayrollEmployeeSummary[][] = [];
   for (let index = 0; index < summaries.length; index += ROWS_PER_PAGE) groups.push(summaries.slice(index, index + ROWS_PER_PAGE));
   if (!groups.length) groups.push([]);
-
-  const totals = {
-    weeklyBase: summaries.reduce((sum, item) => sum + item.weeklyRegularHours, 0),
-    overtime: summaries.reduce((sum, item) => sum + item.overtimeHours, 0),
-    ao: summaries.reduce((sum, item) => sum + item.aoHours, 0),
-    vacation: summaries.reduce((sum, item) => sum + item.vacationHours, 0),
-    noWork: summaries.reduce((sum, item) => sum + item.noWorkNoPayHours, 0),
-  };
 
   return groups.map((group, pageIndex) => {
     const commands: string[] = [];
@@ -180,11 +187,11 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
     const headerHeight = 34;
     COLUMNS.forEach((column) => {
       fillRect(x, headerTop, column.width, headerHeight, LIGHT_GREEN, BORDER);
-      drawText(column.label, x + 7, headerTop + 12, 8.2, {
+      drawText(column.label, x + 5, headerTop + 12, column.key === 'deductions' || column.key === 'noWork' ? 7.2 : 7.8, {
         bold: true,
         fill: DARK_GREEN,
         align: column.align,
-        width: column.width - 14,
+        width: column.width - 10,
       });
       x += column.width;
     });
@@ -193,12 +200,22 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
     group.forEach((summary, rowIndex) => {
       const top = headerTop + headerHeight + rowIndex * rowHeight;
       const fill = rowIndex % 2 === 0 ? WHITE : LIGHT_GRAY;
+      const employeeAdjustments = adjustments.filter((adjustment) => adjustment.employeeId === summary.employee.id);
+      const monetaryTotals = payrollAdjustmentTotals(employeeAdjustments);
       x = MARGIN;
       COLUMNS.forEach((column) => {
         fillRect(x, top, column.width, rowHeight, fill, BORDER);
         if (column.key === 'employee') {
-          drawText(truncate(summary.employee.name, 40), x + 8, top + 6, 9.2, { bold: true });
-          drawText(truncate(`${summary.employee.role} · ${formatStartDate(summary)}`, 68), x + 8, top + 18, 6.8, { fill: MUTED });
+          drawText(truncate(summary.employee.name, 30), x + 8, top + 6, 9.2, { bold: true });
+          drawText(truncate(`${summary.employee.role} · ${formatStartDate(summary)}`, 48), x + 8, top + 18, 6.6, { fill: MUTED });
+        } else if (column.key === 'bonuses' || column.key === 'deductions') {
+          const value = column.key === 'bonuses' ? monetaryTotals.bonusesAfl : monetaryTotals.deductionsAfl;
+          drawText(formatAfl(value), x + 5, top + 11, 7.7, {
+            bold: value > 0,
+            fill: column.key === 'bonuses' && value > 0 ? DARK_GREEN : TEXT,
+            align: column.align,
+            width: column.width - 10,
+          });
         } else {
           const values = {
             weeklyBase: summary.weeklyRegularHours,
@@ -207,40 +224,20 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
             vacation: summary.vacationHours,
             noWork: summary.noWorkNoPayHours,
           };
-          drawText(formatHours(values[column.key]), x + 7, top + 11, 8.8, {
+          drawText(formatHours(values[column.key]), x + 5, top + 11, 8.1, {
             bold: column.key === 'weeklyBase',
             align: column.align,
-            width: column.width - 14,
+            width: column.width - 10,
           });
         }
         x += column.width;
       });
     });
 
-    const isLastPage = pageIndex === groups.length - 1;
-    if (isLastPage) {
-      const top = headerTop + headerHeight + group.length * rowHeight;
-      x = MARGIN;
-      COLUMNS.forEach((column) => {
-        fillRect(x, top, column.width, rowHeight, LIGHT_GREEN, BORDER);
-        if (column.key === 'employee') {
-          drawText('TOTALES', x + 8, top + 10, 9, { bold: true, fill: DARK_GREEN });
-        } else {
-          drawText(formatHours(totals[column.key]), x + 7, top + 10, 8.8, {
-            bold: true,
-            fill: DARK_GREEN,
-            align: column.align,
-            width: column.width - 14,
-          });
-        }
-        x += column.width;
-      });
-    }
-
     if (!group.length) drawText('No hay empleados activos para el período seleccionado.', MARGIN, 145, 11, { fill: MUTED });
 
     line(MARGIN, PAGE_HEIGHT - 31, PAGE_WIDTH - MARGIN, PAGE_HEIGHT - 31, BORDER, 0.6);
-    drawText('Todos los valores se expresan en horas. Base semanal según horario configurado del empleado.', MARGIN, PAGE_HEIGHT - 24, 7.2, { fill: MUTED });
+    drawText('Horas: base semanal, overtime, AO, vacation y no work / no pay. Bonos y deducciones: florines (Afl.).', MARGIN, PAGE_HEIGHT - 24, 7.2, { fill: MUTED });
     drawText(`Página ${pageIndex + 1} de ${groups.length}`, PAGE_WIDTH - MARGIN - 90, PAGE_HEIGHT - 24, 7.2, { fill: MUTED, align: 'right', width: 90 });
     return commands.join('\n');
   });
@@ -290,9 +287,9 @@ function buildPdf(pageStreams: string[]) {
   return concatBytes(chunks);
 }
 
-export function downloadPayrollAccountingPdf({ filename, periodLabel, summaries }: PayrollAccountingPdfOptions) {
+export function downloadPayrollAccountingPdf({ filename, periodLabel, summaries, adjustments }: PayrollAccountingPdfOptions) {
   if (typeof document === 'undefined' || typeof URL === 'undefined') return false;
-  const pdf = buildPdf(buildAccountingPages(periodLabel, summaries));
+  const pdf = buildPdf(buildAccountingPages(periodLabel, summaries, adjustments));
   const blob = new Blob([pdf], { type: 'application/pdf' });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
