@@ -91,8 +91,9 @@ replaceRange(
                   onPress={() => void openServiceFlow()}
                 />
               </View>
+            </Card>
 
-              {formMessage ? <View style={styles.messageBox}><Text style={styles.messageText}>{formMessage}</Text></View> : null}
+            {formMessage ? <View style={styles.messageBox}><Text style={styles.messageText}>{formMessage}</Text></View> : null}
 `,
   'SERVICIO EN ESTA VISITA',
 );
