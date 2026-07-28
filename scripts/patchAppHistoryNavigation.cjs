@@ -180,6 +180,52 @@ insertAfter(
   "'technician-remove-work'",
 );
 
+// ---------------------------------------------------------------------------
+// Module tabs: Back returns from a secondary tab to the module's primary tab
+// before returning to the previous main module.
+// ---------------------------------------------------------------------------
+const agendaHubFile = 'src/screens/AgendaHubScreen.tsx';
+insertAfter(
+  agendaHubFile,
+  "import { colors } from '../theme';",
+  "\nimport { useWebBackLayer } from '../navigation/appHistory';",
+  "useWebBackLayer } from '../navigation/appHistory'",
+);
+insertAfter(
+  agendaHubFile,
+  "  const [tab, setTab] = useState<AgendaTab>('complete');",
+  "\n  useWebBackLayer(tab !== 'complete', () => setTab('complete'), 'agenda-secondary-tab');",
+  "'agenda-secondary-tab'",
+);
+
+const teamHubFile = 'src/screens/TeamHubScreen.tsx';
+insertAfter(
+  teamHubFile,
+  "import { colors } from '../theme';",
+  "\nimport { useWebBackLayer } from '../navigation/appHistory';",
+  "useWebBackLayer } from '../navigation/appHistory'",
+);
+insertAfter(
+  teamHubFile,
+  "  const [tab, setTab] = useState<TeamHubTab>('operations');",
+  "\n  useWebBackLayer(tab !== 'operations', () => setTab('operations'), 'team-secondary-tab');",
+  "'team-secondary-tab'",
+);
+
+const settingsHubFile = 'src/screens/SettingsHubScreen.tsx';
+insertAfter(
+  settingsHubFile,
+  "import { colors } from '../theme';",
+  "\nimport { useWebBackLayer } from '../navigation/appHistory';",
+  "useWebBackLayer } from '../navigation/appHistory'",
+);
+insertAfter(
+  settingsHubFile,
+  "  const [tab, setTab] = useState<SettingsTab>('users');",
+  "\n  useWebBackLayer(tab !== 'users', () => setTab('users'), 'settings-secondary-tab');",
+  "'settings-secondary-tab'",
+);
+
 assertIncludes(shellFile, [
   'pushHistoryScreen(screen)',
   'subscribeToScreenHistory((screen)',
@@ -189,5 +235,8 @@ assertIncludes(uiFile, ['useWebBackLayer(visible, onClose, `modal:${title}`)']);
 assertIncludes(reportFile, ["'technician-report-section'"]);
 assertIncludes(equipmentFile, ["'technician-equipment-panel'"]);
 assertIncludes(profileFile, ["'technician-remove-work'", "'technician-add-work'"]);
+assertIncludes(agendaHubFile, ["'agenda-secondary-tab'"]);
+assertIncludes(teamHubFile, ["'team-secondary-tab'"]);
+assertIncludes(settingsHubFile, ["'settings-secondary-tab'"]);
 
 console.log('patchAppHistoryNavigation.cjs applied.');
