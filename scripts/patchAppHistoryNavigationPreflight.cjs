@@ -7,18 +7,31 @@ const selectedStateOld = '  const [selectedInterventionId, setSelectedInterventi
 const selectedStateNew = "  const [selectedInterventionId, setSelectedInterventionId] = useState('');";
 if (text.includes(selectedStateOld)) text = text.replace(selectedStateOld, selectedStateNew);
 
+function functionRange(source, startMarker, endMarker) {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start);
+  if (start < 0 || end < 0) throw new Error(`Office review function range was not found: ${startMarker}`);
+  return { start, end, content: source.slice(start, end) };
+}
+
 const correctionHistoryLine = "    reviewHistory.replace(JSON.stringify({ filter: 'changes_requested', selectedInterventionId: '' }));";
 if (!text.includes(correctionHistoryLine)) {
-  const correctionAnchor = "    setMessage('Reporte devuelto al técnico con la corrección solicitada.');";
-  if (!text.includes(correctionAnchor)) throw new Error('Office review correction history anchor was not found.');
-  text = text.replace(correctionAnchor, `${correctionAnchor}\n${correctionHistoryLine}`);
+  const range = functionRange(text, '  async function returnForCorrection() {', '  if (!allowed) {');
+  const closeAnchor = "    setSelectedInterventionId('');";
+  const relativeAnchor = range.content.lastIndexOf(closeAnchor);
+  if (relativeAnchor < 0) throw new Error('Office review correction close-state anchor was not found.');
+  const absoluteAnchor = range.start + relativeAnchor;
+  text = `${text.slice(0, absoluteAnchor)}${correctionHistoryLine}\n${text.slice(absoluteAnchor)}`;
 }
 
 const approvalHistoryLine = "    reviewHistory.replace(JSON.stringify({ filter: 'approved', selectedInterventionId: selected.id }));";
 if (!text.includes(approvalHistoryLine)) {
-  const approvalAnchor = "    setCorrectionNote('');\n    setFilter('approved');";
-  if (!text.includes(approvalAnchor)) throw new Error('Office review approval history anchor was not found.');
-  text = text.replace(approvalAnchor, `    setCorrectionNote('');\n${approvalHistoryLine}\n    setFilter('approved');`);
+  const range = functionRange(text, '  async function approveReport() {', '  async function returnForCorrection() {');
+  const filterAnchor = "    setFilter('approved');";
+  const relativeAnchor = range.content.lastIndexOf(filterAnchor);
+  if (relativeAnchor < 0) throw new Error('Office review approval filter anchor was not found.');
+  const absoluteAnchor = range.start + relativeAnchor;
+  text = `${text.slice(0, absoluteAnchor)}${approvalHistoryLine}\n${text.slice(absoluteAnchor)}`;
 }
 
 fs.writeFileSync(officeReviewFile, text);
