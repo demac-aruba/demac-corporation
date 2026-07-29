@@ -5,6 +5,7 @@ type DemacHistoryState = Record<string, unknown> & {
   __demacApp?: boolean;
   __demacScreen?: string;
   __demacLayer?: string;
+  __demacViews?: Record<string, string>;
 };
 
 type BackLayer = {
@@ -12,6 +13,11 @@ type BackLayer = {
   activeRef: { current: boolean };
   onBackRef: { current: () => void };
   entryActive: boolean;
+};
+
+type WebHistoryStateController = {
+  back: (fallback?: () => void) => void;
+  replace: (nextValue: string) => void;
 };
 
 const backLayers: BackLayer[] = [];
@@ -31,13 +37,28 @@ function currentState(): DemacHistoryState {
   return state && typeof state === 'object' ? { ...state } : {};
 }
 
-function historyStateForScreen(screen: string): DemacHistoryState {
+function historyStateForScreen(screen: string, resetViews: boolean): DemacHistoryState {
   const state = currentState();
+  const changingScreen = state.__demacScreen !== screen;
   delete state.__demacLayer;
   return {
     ...state,
     __demacApp: true,
     __demacScreen: screen,
+    __demacViews: resetViews || changingScreen ? {} : { ...(state.__demacViews ?? {}) },
+  };
+}
+
+function historyStateForView(scope: string, value: string): DemacHistoryState {
+  const state = currentState();
+  delete state.__demacLayer;
+  return {
+    ...state,
+    __demacApp: true,
+    __demacViews: {
+      ...(state.__demacViews ?? {}),
+      [scope]: value,
+    },
   };
 }
 
@@ -116,12 +137,12 @@ export function readHistoryScreen<T extends string>(allowed?: readonly T[]): T |
 
 export function replaceHistoryScreen(screen: string) {
   if (!browserHistoryAvailable()) return;
-  window.history.replaceState(historyStateForScreen(screen), '', window.location.href);
+  window.history.replaceState(historyStateForScreen(screen, false), '', window.location.href);
 }
 
 export function pushHistoryScreen(screen: string) {
   if (!browserHistoryAvailable()) return;
-  window.history.pushState(historyStateForScreen(screen), '', window.location.href);
+  window.history.pushState(historyStateForScreen(screen, true), '', window.location.href);
 }
 
 export function subscribeToScreenHistory(listener: (screen?: string) => void) {
@@ -137,7 +158,94 @@ export function subscribeToScreenHistory(listener: (screen?: string) => void) {
 }
 
 /**
- * Gives a modal or nested in-app view its own browser-history entry.
+ * Connects a multi-step in-app state machine to browser history. Each value
+ * change creates a real history entry. Browser/mobile Back restores the exact
+ * previous value, while buttons can call controller.back() to use the same
+ * history stack instead of creating a contradictory forward entry.
+ */
+export function useWebHistoryState(
+  scope: string,
+  value: string,
+  onRestore: (value: string) => void,
+): WebHistoryStateController {
+  const valueRef = useRef(value);
+  const restoreRef = useRef(onRestore);
+  const lastValueRef = useRef<string | undefined>(undefined);
+  const pendingRestoreRef = useRef<string | null>(null);
+  valueRef.current = value;
+  restoreRef.current = onRestore;
+
+  useEffect(() => {
+    if (!browserHistoryAvailable()) return undefined;
+
+    const storedValue = currentState().__demacViews?.[scope];
+    if (typeof storedValue === 'string') {
+      lastValueRef.current = storedValue;
+      if (storedValue !== valueRef.current) {
+        pendingRestoreRef.current = storedValue;
+        restoreRef.current(storedValue);
+      }
+    } else {
+      lastValueRef.current = valueRef.current;
+      window.history.replaceState(historyStateForView(scope, valueRef.current), '', window.location.href);
+    }
+
+    const handlePopState = (event: PopStateEvent) => {
+      const state = event.state && typeof event.state === 'object'
+        ? event.state as DemacHistoryState
+        : undefined;
+      const restoredValue = state?.__demacViews?.[scope];
+      if (typeof restoredValue !== 'string' || restoredValue === valueRef.current) return;
+      lastValueRef.current = restoredValue;
+      pendingRestoreRef.current = restoredValue;
+      restoreRef.current(restoredValue);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [scope]);
+
+  useEffect(() => {
+    if (!browserHistoryAvailable()) return;
+
+    const pendingRestore = pendingRestoreRef.current;
+    if (pendingRestore !== null) {
+      if (value === pendingRestore) {
+        pendingRestoreRef.current = null;
+        lastValueRef.current = value;
+      }
+      return;
+    }
+
+    if (lastValueRef.current === undefined) {
+      lastValueRef.current = value;
+      return;
+    }
+    if (lastValueRef.current === value) return;
+
+    window.history.pushState(historyStateForView(scope, value), '', window.location.href);
+    lastValueRef.current = value;
+  }, [scope, value]);
+
+  return {
+    back: (fallback) => {
+      if (browserHistoryAvailable() && typeof currentState().__demacViews?.[scope] === 'string') {
+        window.history.back();
+        return;
+      }
+      fallback?.();
+    },
+    replace: (nextValue) => {
+      if (!browserHistoryAvailable()) return;
+      pendingRestoreRef.current = null;
+      lastValueRef.current = nextValue;
+      window.history.replaceState(historyStateForView(scope, nextValue), '', window.location.href);
+    },
+  };
+}
+
+/**
+ * Gives a modal or single nested in-app view its own browser-history entry.
  * Android Back, the browser Back button, and the PWA Back gesture then close
  * the active layer before the browser can leave the application.
  */
