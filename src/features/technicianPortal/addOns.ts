@@ -1,4 +1,4 @@
-export type WorkVisitAddOnType = 'switch' | 'bracket' | 'armaflex';
+export type WorkVisitAddOnType = 'switch' | 'bracket' | 'armaflex' | 'refrigerant';
 export type WorkVisitAddOnStatus = 'selected' | 'installed' | 'cancelled';
 
 export interface WorkVisitAddOn {
@@ -61,6 +61,15 @@ export const WORK_VISIT_ADD_ON_DEFINITIONS: WorkVisitAddOnDefinition[] = [
     beforeLabel: 'Armaflex anterior',
     afterLabel: 'Armaflex nuevo instalado',
     customerSummary: 'Se reemplazó el aislamiento Armaflex de la tubería de refrigeración.',
+  },
+  {
+    type: 'refrigerant',
+    label: 'Gas / refrigerante',
+    icon: '❄',
+    description: 'Registra la corrección de la carga de refrigerante realizada durante el servicio.',
+    beforeLabel: 'Manómetro antes de corregir la carga',
+    afterLabel: 'Manómetro después de corregir la carga',
+    customerSummary: 'Se corrigió la carga de refrigerante del equipo y se documentaron las presiones finales.',
   },
 ];
 

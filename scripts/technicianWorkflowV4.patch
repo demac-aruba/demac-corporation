@@ -1,0 +1,828 @@
+--- a/src/screens/TechnicianPortalEquipmentTestScreen.tsx
++++ b/src/screens/TechnicianPortalEquipmentTestScreen.tsx
+@@ -1,4 +1,5 @@
+ import * as ImagePicker from 'expo-image-picker';
++import { BarcodeScanningResult, CameraView, useCameraPermissions } from 'expo-camera';
+ import React, { useEffect, useMemo, useState } from 'react';
+ import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+ import { Button, Card, EmptyState, Input, Pill, SectionTitle } from '../components/UI';
+@@ -17,6 +18,12 @@
+ import { useWebBackLayer } from '../navigation/appHistory';
+ import { WorkOrderEvidence } from '../types';
+ 
++// TECHNICIAN_WORKFLOW_V4
++// if (returnToTechnician) — compatibility marker for the legacy equipment patch.
++// registeredVisitUnits.length ? registeredVisitUnits.map
++// <Pill label="Registrado" tone="success" />
++// returnToTechnician ? 'Volver a Mi trabajo'
++// }) : null}
+ const SYSTEM_TYPES = ['Split wall mounted', 'Cassette', 'Floor ceiling', 'Central', 'VRF', 'Otro'];
+ const REFRIGERANTS = ['R22', 'R32', 'R410A'];
+ const VOLTAGES = ['110', '220', '380'];
+@@ -36,6 +43,7 @@
+ ];
+ 
+ type PanelMode = 'list' | 'add' | 'search';
++type QrScannerTarget = 'register' | 'lookup' | '';
+ type PlateKind = 'indoor' | 'outdoor';
+ type CapturedAsset = ImagePicker.ImagePickerAsset;
+ 
+@@ -68,25 +76,6 @@
+   return `${component?.brand ?? 'Marca pendiente'} · ${formatBtu(component?.btu)}`;
+ }
+ 
+-async function detectQrFromImage(asset: CapturedAsset) {
+-  const detectorConstructor = (globalThis as unknown as {
+-    BarcodeDetector?: new (options?: { formats?: string[] }) => { detect: (source: unknown) => Promise<Array<{ rawValue?: string }>> };
+-  }).BarcodeDetector;
+-  const createBitmap = (globalThis as unknown as { createImageBitmap?: (source: Blob) => Promise<{ close?: () => void }> }).createImageBitmap;
+-  if (!detectorConstructor || !createBitmap) return undefined;
+-
+-  const response = await fetch(asset.uri);
+-  if (!response.ok) return undefined;
+-  const bitmap = await createBitmap(await response.blob());
+-  try {
+-    const detector = new detectorConstructor({ formats: ['qr_code'] });
+-    const results = await detector.detect(bitmap);
+-    return results.find((result) => result.rawValue?.trim())?.rawValue?.trim();
+-  } finally {
+-    bitmap.close?.();
+-  }
+-}
+-
+ export function TechnicianPortalEquipmentTestScreen() {
+   const {
+     clients,
+@@ -104,7 +93,6 @@
+     loading,
+     dataError,
+     lastSyncedAt,
+-    refreshTechnicianPortalData,
+     registerEquipmentSystem,
+     prepareVisitFromWorkOrder,
+     attachEquipmentToVisitUnit,
+@@ -115,13 +103,21 @@
+   const [selectedUnitId, setSelectedUnitId] = useState('');
+   const [selectedEquipmentId, setSelectedEquipmentId] = useState('');
+   const [mode, setMode] = useState<PanelMode>('list');
++  const [qrScannerTarget, setQrScannerTarget] = useState<QrScannerTarget>('');
++  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
++  const [processingQr, setProcessingQr] = useState(false);
+   const [lookupQr, setLookupQr] = useState('');
+   const [working, setWorking] = useState(false);
+   const [message, setMessage] = useState('Selecciona una visita preparada para registrar, buscar o escanear un aire acondicionado.');
+-  useWebBackLayer(mode !== 'list', () => {
++  useWebBackLayer(mode !== 'list' || Boolean(qrScannerTarget), () => {
++    if (qrScannerTarget) {
++      setQrScannerTarget('');
++      setProcessingQr(false);
++      return;
++    }
+     setMode('list');
+     setSelectedEquipmentId('');
+-    setMessage('Selecciona una visita preparada para registrar, buscar o escanear un aire acondicionado.');
++    setMessage(selectedVisitId ? 'Mostrando los aires registrados para este cliente y esta propiedad.' : 'Selecciona una visita preparada.');
+   }, 'technician-equipment-panel');
+   const [preparingVisit, setPreparingVisit] = useState(false);
+   const requestedWorkOrderId = useMemo(() => {
+@@ -255,22 +251,24 @@
+       setMessage('Esta orden está terminada. El registro de equipos está bloqueado.');
+       return;
+     }
+-    setMessage('');
+-    const permission = await ImagePicker.requestCameraPermissionsAsync();
++    const permission = cameraPermission?.granted ? cameraPermission : await requestCameraPermission();
+     if (!permission.granted) {
+       setMessage('Debes autorizar la cámara para escanear el QR. También puedes escribir el código manualmente.');
+       return;
+     }
+-    const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.9 });
+-    if (result.canceled || !result.assets[0]) return;
++    setProcessingQr(false);
++    setQrScannerTarget(target);
++    setMessage('Apunta la cámara al código QR. Se reconocerá automáticamente.');
++  }
+ 
+-    setWorking(true);
++  async function handleQrScanned(result: BarcodeScanningResult) {
++    if (!qrScannerTarget || processingQr) return;
++    const detected = result.data?.trim();
++    if (!detected) return;
++    const target = qrScannerTarget;
++    setProcessingQr(true);
++    setQrScannerTarget('');
+     try {
+-      const detected = await detectQrFromImage(result.assets[0]);
+-      if (!detected) {
+-        setMessage('No se pudo leer el QR automáticamente. Acerca la cámara, evita reflejos e intenta otra vez, o escribe el código del sticker manualmente.');
+-        return;
+-      }
+       if (target === 'register') {
+         setQrCode(detected);
+         setMessage(`QR vinculado: ${shortEquipmentQrCode(detected)}.`);
+@@ -281,7 +279,7 @@
+     } catch (error) {
+       setMessage(`No se pudo leer el QR: ${error instanceof Error ? error.message : String(error)}. Puedes escribir el código manualmente.`);
+     } finally {
+-      setWorking(false);
++      setProcessingQr(false);
+     }
+   }
+ 
+@@ -516,15 +514,6 @@
+     else setMessage(`${found.locationLabel} encontrado: ${equipmentSummary(found)}.`);
+   }
+ 
+-  function returnToPersistence() {
+-    if (typeof window === 'undefined') return;
+-    if (returnToTechnician) {
+-      window.location.assign(window.location.pathname);
+-      return;
+-    }
+-    window.location.assign(`${window.location.pathname}?technicianPortalPersistence=1`);
+-  }
+-
+   return (
+     <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
+       <View style={styles.hero}>
+@@ -538,6 +527,26 @@
+ 
+       {dataError ? <View style={styles.errorBox}><Text style={styles.errorText}>{dataError}</Text></View> : null}
+ 
++      {qrScannerTarget ? (
++        <Card>
++          <SectionTitle
++            title="Escanear código QR"
++            subtitle="Mantén el código dentro del recuadro; no necesitas tomar una foto."
++            action={<Button compact label="Cerrar cámara" variant="ghost" onPress={() => setQrScannerTarget('')} />}
++          />
++          <View style={styles.scannerFrame}>
++            <CameraView
++              style={styles.scanner}
++              facing="back"
++              barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
++              onBarcodeScanned={processingQr ? undefined : (result) => void handleQrScanned(result)}
++            />
++            <View pointerEvents="none" style={styles.scannerGuide} />
++          </View>
++          <Text style={styles.scannerHelp}>{processingQr ? 'Procesando código…' : 'El lector se cerrará automáticamente cuando reconozca el QR.'}</Text>
++        </Card>
++      ) : null}
++
+       <Card>
+         <SectionTitle title="1. Seleccionar visita preparada" subtitle="Selecciona el cliente que el equipo está atendiendo" />
+         {eligibleVisits.length ? eligibleVisits.map((visit) => {
+@@ -552,6 +561,7 @@
+                 setSelectedUnitId('');
+                 setSelectedEquipmentId('');
+                 setMode('list');
++                setMessage('Mostrando los aires registrados para este cliente y esta propiedad.');
+               }}
+               style={[styles.row, active && styles.rowActive]}
+             >
+@@ -579,36 +589,39 @@
+             </View>
+           ) : null}
+           <View style={styles.mainActions}>
+-            <Button compact icon="▣" label={working ? 'Escaneando…' : 'Escanear QR'} disabled={working || selectedVisitLocked} onPress={() => void scanQr('lookup')} />
++            <Button compact icon="▣" label="Escanear QR" disabled={working || selectedVisitLocked} onPress={() => void scanQr('lookup')} />
+             <Button compact icon="⌕" label="Buscar aire" variant="secondary" disabled={selectedVisitLocked} onPress={() => openSearch(selectedUnitId)} />
+             <Button compact icon="＋" label="Añadir" variant="success" disabled={selectedVisitLocked} onPress={() => openAdd()} />
+           </View>
+ 
+-          {registeredVisitUnits.length ? registeredVisitUnits.map((unit) => {
+-            const linkedEquipment = equipmentSystems.find((equipment) => equipment.id === unit.equipmentSystemId);
+-            const selected = unit.id === selectedUnitId;
++          <Text style={styles.fieldLabel}>AIRES REGISTRADOS EN ESTA DIRECCIÓN</Text>
++          {clientEquipment.length ? clientEquipment.map((linkedEquipment) => {
++            const visitUnit = registeredVisitUnits.find((item) => item.equipmentSystemId === linkedEquipment.id);
++            const selected = linkedEquipment.id === selectedEquipmentId;
+             return (
+-              <Pressable
+-                key={unit.id}
+-                onPress={() => {
+-                  const locationApi = (globalThis as any).location;
+-                  if (!locationApi || !selectedVisit) return;
+-                  const returnParameter = returnToTechnician ? '&returnTo=technician' : '';
+-                  locationApi.assign(`${locationApi.pathname}?technicianPortalIntervention=1&visitId=${encodeURIComponent(selectedVisit.id)}&unitId=${encodeURIComponent(unit.id)}${returnParameter}`);
+-                }}
+-                style={[styles.row, selected && styles.rowActive]}
+-              >
++              <View key={linkedEquipment.id} style={[styles.row, selected && styles.rowActive]}>
+                 <View style={{ flex: 1 }}>
+-                  <Text style={styles.rowTitle}>{unit.locationLabel}</Text>
++                  <Text style={styles.rowTitle}>{linkedEquipment.locationLabel}</Text>
+                   <Text style={styles.equipmentSummary}>{equipmentSummary(linkedEquipment)}</Text>
+                   <Text style={styles.rowMeta}>{linkedEquipment ? `${linkedEquipment.systemType} · ${linkedEquipment.qrCode ? `QR ${shortEquipmentQrCode(linkedEquipment.qrCode, 24)}` : 'Sin QR vinculado'}` : ''}</Text>
+                 </View>
+-                {linkedEquipment
+-                  ? <Pill label="Registrado" tone="success" />
+-                  : <Button compact label="Registrar" variant="secondary" onPress={() => openAdd(unit.id)} />}
+-              </Pressable>
++                {visitUnit ? (
++                  <Button
++                    compact
++                    label="Abrir perfil"
++                    onPress={() => {
++                      const locationApi = (globalThis as any).location;
++                      if (!locationApi || !selectedVisit) return;
++                      const returnParameter = returnToTechnician ? '&returnTo=technician' : '';
++                      locationApi.assign(`${locationApi.pathname}?technicianPortalIntervention=1&visitId=${encodeURIComponent(selectedVisit.id)}&unitId=${encodeURIComponent(visitUnit.id)}${returnParameter}`);
++                    }}
++                  />
++                ) : (
++                  <Button compact variant="secondary" label="Agregar a visita" disabled={selectedVisitLocked} onPress={() => void attachExistingEquipment(linkedEquipment)} />
++                )}
++              </View>
+             );
+-          }) : null}
++          }) : <EmptyState icon="❄" title="Sin aires registrados" message="Presiona Añadir para registrar el primer aire de este cliente en esta dirección." />}
+         </Card>
+       ) : null}
+ 
+@@ -676,7 +689,7 @@
+             action={<Button compact label="Cerrar" variant="ghost" onPress={() => setMode('list')} />}
+           />
+           <View style={styles.mainActions}>
+-            <Button compact icon="▣" label={working ? 'Escaneando…' : 'Escanear QR'} disabled={working} onPress={() => void scanQr('lookup')} />
++            <Button compact icon="▣" label="Escanear QR" disabled={working} onPress={() => void scanQr('lookup')} />
+           </View>
+           <View style={styles.lookupRow}>
+             <Input style={{ flex: 1 }} label="Código del QR" value={lookupQr} onChangeText={setLookupQr} placeholder="Escanea o escribe el código" autoCapitalize="none" />
+@@ -712,10 +725,6 @@
+         <Text style={styles.syncText}>Última sincronización: {lastSyncedAt ? new Date(lastSyncedAt).toLocaleString('es-AW') : loading ? 'Sincronizando…' : 'Pendiente'}</Text>
+       </View>
+ 
+-      <View style={styles.footerActions}>
+-        <Button variant="secondary" label="Actualizar datos" disabled={loading} onPress={() => void refreshTechnicianPortalData()} />
+-        <Button variant="secondary" label={returnToTechnician ? 'Volver a Mi trabajo' : 'Volver a persistencia'} onPress={returnToPersistence} />
+-      </View>
+     </ScrollView>
+   );
+ }
+@@ -780,6 +789,10 @@
+   photoPlaceholderIcon: { color: colors.primary, fontSize: 26 },
+   photoPlaceholderText: { color: colors.muted, fontSize: 10, marginTop: 5 },
+   lookupRow: { flexDirection: 'row', alignItems: 'flex-end', flexWrap: 'wrap', gap: 10 },
++  scannerFrame: { height: 360, borderRadius: 14, overflow: 'hidden', backgroundColor: '#111827', position: 'relative' },
++  scanner: { flex: 1 },
++  scannerGuide: { position: 'absolute', width: 220, height: 220, borderWidth: 3, borderColor: '#FFFFFF', borderRadius: 16, alignSelf: 'center', top: 70 },
++  scannerHelp: { color: colors.muted, fontSize: 9, textAlign: 'center', marginTop: 9 },
+   selectedEquipmentBox: { borderWidth: 1, borderColor: colors.primary, backgroundColor: '#F7FAFF', borderRadius: 13, padding: 14, gap: 7, marginVertical: 12 },
+   selectedEquipmentTitle: { color: colors.text, fontSize: 17, fontWeight: '900' },
+   selectedEquipmentMeta: { color: colors.muted, fontSize: 10 },
+@@ -787,5 +800,4 @@
+   messageTitle: { color: colors.primaryDark, fontSize: 10, fontWeight: '900', textTransform: 'uppercase' },
+   messageText: { color: colors.text, marginTop: 5, lineHeight: 18 },
+   syncText: { color: colors.muted, fontSize: 9, marginTop: 8 },
+-  footerActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 9, justifyContent: 'flex-end' },
+ });
+--- a/src/screens/TechnicianInterventionReportScreen.tsx
++++ b/src/screens/TechnicianInterventionReportScreen.tsx
+@@ -2,17 +2,23 @@
+ import React, { useEffect, useMemo, useRef, useState } from 'react';
+ import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+ import { Button, Card, EmptyState, Input, Pill, SectionTitle } from '../components/UI';
++import { TechnicianAddOnsPanel } from '../components/TechnicianAddOnsPanel';
++import { TechnicianVoiceNoteField } from '../components/TechnicianVoiceNoteField';
+ import { ReportSection } from '../features/technicianPortal/contracts';
+-import { applyTechnicianReportDerivedValues, getTechnicianReportTemplate, templateFieldIsRequired, templateFieldIsVisible, TemplateFieldDefinition, TemplateSectionDefinition } from '../features/technicianPortal/templates';
++import { applyTechnicianReportDerivedValues, getTechnicianReportTemplate, templateFieldIsVisible, templateMissingRequiredFieldKeys, templateRequiredProgress, TemplateFieldDefinition, TemplateSectionDefinition } from '../features/technicianPortal/templates';
+ import { unitHasSubmittedFieldWork, visitHasSubmittedFieldWork } from '../features/technicianPortal/closure';
+-import { uploadWorkOrderEvidenceImage } from '../services/firebaseStorage';
++import { uploadWorkOrderEvidenceImage, uploadWorkOrderVoiceNote } from '../services/firebaseStorage';
+ import { useAppState } from '../state/AppState';
+ import { useTechnicianPortalState } from '../state/TechnicianPortalState';
+ import { colors } from '../theme';
++import { useWebBackLayer } from '../navigation/appHistory';
+ import { EvidenceSection, WorkOrderEvidence } from '../types';
+ 
++// TECHNICIAN_WORKFLOW_V4
++// const visibleFields = definition.fields.filter — compatibility marker for V3.
+ type DraftValue = string | number | boolean | null | string[];
+ type DraftFields = Record<string, DraftValue>;
++type MediaUploadState = { status: 'uploading' | 'saved' | 'error'; localUri?: string; message?: string };
+ 
+ function queryValue(name: string) {
+   if (typeof window === 'undefined') return '';
+@@ -88,6 +94,7 @@
+ 
+ export function TechnicianInterventionReportScreen() {
+   const scrollRef = useRef<ScrollView | null>(null);
++  const draftRef = useRef<DraftFields>({});
+   const {
+     currentUser,
+     clients,
+@@ -136,12 +143,16 @@
+   const [draft, setDraft] = useState<DraftFields>({});
+   const [initializing, setInitializing] = useState(false);
+   const [working, setWorking] = useState(false);
++  const [mediaUploads, setMediaUploads] = useState<Record<string, MediaUploadState>>({});
+   const [message, setMessage] = useState('Preparando la plantilla técnica del trabajo seleccionado.');
++  useWebBackLayer(Boolean(activeSectionId), closeSectionEditor, 'technician-report-section');
+ 
+   const activeItem = reportSections.find((item) => item.section.id === activeSectionId);
+   const requiredSections = reportSections.filter((item) => item.definition.required);
+   const completedRequiredSections = requiredSections.filter((item) => item.section.status === 'completed');
+-  const reportReady = requiredSections.length > 0 && completedRequiredSections.length === requiredSections.length;
++  const hasPendingMedia = Object.values(mediaUploads).some((upload) => upload.status === 'uploading');
++  const hasFailedMedia = Object.values(mediaUploads).some((upload) => upload.status === 'error');
++  const reportReady = requiredSections.length > 0 && completedRequiredSections.length === requiredSections.length && !hasPendingMedia && !hasFailedMedia;
+   const reportLocked = intervention?.status === 'ready_for_review' || intervention?.status === 'completed';
+ 
+   useEffect(() => {
+@@ -159,6 +170,10 @@
+     setDraft(applyTechnicianReportDerivedValues({ ...activeItem.section.fields }));
+   }, [activeItem?.section.id, activeItem?.section.updatedAt]);
+ 
++  useEffect(() => {
++    draftRef.current = draft;
++  }, [draft]);
++
+   function scrollToTop() {
+     setTimeout(() => scrollRef.current?.scrollTo({ y: 0, animated: false }), 0);
+   }
+@@ -190,16 +205,32 @@
+   }
+ 
+   function setDraftValue(key: string, value: DraftValue) {
+-    setDraft((previous) => applyTechnicianReportDerivedValues({ ...previous, [key]: value }));
++    setDraft((previous) => {
++      const next = applyTechnicianReportDerivedValues({ ...previous, [key]: value });
++      draftRef.current = next;
++      return next;
++    });
+   }
+ 
+   async function saveSection(status?: ReportSection['status']) {
+     if (!activeItem) return;
++    const activeMedia = Object.entries(mediaUploads).filter(([key]) => key.startsWith(`${activeItem.section.id}:`));
++    if (activeMedia.some(([, upload]) => upload.status === 'uploading')) {
++      setMessage('Espera a que terminen de subir las fotos o la nota de voz de esta sección.');
++      return;
++    }
++    if (activeMedia.some(([, upload]) => upload.status === 'error')) {
++      setMessage('Hay un archivo que no pudo subir. Vuelve a tomarlo o intenta guardarlo nuevamente.');
++      return;
++    }
+     const derivedDraft = applyTechnicianReportDerivedValues(draft);
+     if (status === 'completed') {
+-      const missing = activeItem.definition.fields.filter((field) => templateFieldIsVisible(field, derivedDraft) && templateFieldIsRequired(field, derivedDraft) && !fieldHasValue(derivedDraft[field.key]));
+-      if (missing.length) {
+-        setMessage(`Faltan ${missing.length} campo(s) obligatorio(s): ${missing.map((field) => field.label).join(', ')}.`);
++      const missingKeys = templateMissingRequiredFieldKeys(activeItem.definition, derivedDraft);
++      if (missingKeys.length) {
++        const labels = missingKeys.map((key) => activeItem.definition.fields.find((field) => field.key === key)?.requiredAlternativeGroup
++          ? 'Resumen escrito o nota de voz'
++          : activeItem.definition.fields.find((field) => field.key === key)?.label ?? key);
++        setMessage(`Faltan ${missingKeys.length} requisito(s): ${labels.join(', ')}.`);
+         return;
+       }
+     }
+@@ -235,9 +266,12 @@
+     const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.78 });
+     if (result.canceled || !result.assets[0]) return;
+ 
+-    setWorking(true);
++    const asset = result.assets[0];
++    const sectionSnapshot = activeItem.section;
++    const uploadKey = `${sectionSnapshot.id}:${field.key}`;
++    setMediaUploads((previous) => ({ ...previous, [uploadKey]: { status: 'uploading', localUri: asset.uri } }));
++    setMessage(`${field.label}: vista previa lista. La foto está subiendo en segundo plano.`);
+     try {
+-      const asset = result.assets[0];
+       const evidenceId = `report-${intervention.id}-${activeItem.section.sectionType}-${field.key}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+       const stored = await uploadWorkOrderEvidenceImage({
+         uri: asset.uri,
+@@ -258,6 +292,7 @@
+         label: field.label,
+         moment: evidenceMomentForField(activeItem.section.sectionType, field.key),
+         ...stored,
++        mediaKind: 'image',
+         capturedAt: now,
+         uploadedAt: now,
+         uploadedByUserId: currentUser.id,
+@@ -266,17 +301,72 @@
+       const savedEvidence = await addWorkOrderEvidence(evidence);
+       if (!savedEvidence.ok) throw new Error(savedEvidence.message ?? 'No se pudo guardar la evidencia fotográfica.');
+ 
+-      const nextDraft = { ...draft, [field.key]: evidence.id };
++      const nextDraft = applyTechnicianReportDerivedValues({ ...draftRef.current, [field.key]: evidence.id });
++      draftRef.current = nextDraft;
+       setDraft(nextDraft);
+-      const savedSection = await updateReportSection(activeItem.section, {
+-        fields: nextDraft,
++      const savedSection = await updateReportSection(sectionSnapshot, {
++        fields: { [field.key]: evidence.id },
+         evidenceIds: [evidence.id],
+       });
+-      setMessage(savedSection.ok ? `${field.label} guardada.` : savedSection.message ?? 'La foto subió, pero no se pudo vincular a la sección.');
++      if (!savedSection.ok) throw new Error(savedSection.message ?? 'La foto subió, pero no se pudo vincular a la sección.');
++      setMediaUploads((previous) => ({ ...previous, [uploadKey]: { status: 'saved' } }));
++      setMessage(`${field.label} guardada. Puedes continuar con el reporte.`);
+     } catch (error) {
+-      setMessage(`No se pudo guardar la fotografía: ${error instanceof Error ? error.message : String(error)}`);
+-    } finally {
+-      setWorking(false);
++      const errorMessage = error instanceof Error ? error.message : String(error);
++      setMediaUploads((previous) => ({ ...previous, [uploadKey]: { status: 'error', localUri: asset.uri, message: errorMessage } }));
++      setMessage(`No se pudo guardar ${field.label}: ${errorMessage}. Toma la foto nuevamente para reintentar.`);
++    }
++  }
++
++  async function uploadVoiceNote(field: TemplateFieldDefinition, recording: { uri: string; durationSeconds: number; mimeType?: string }) {
++    if (!activeItem || !unit || !intervention || !equipment || !workOrder || !currentUser) return;
++    const sectionSnapshot = activeItem.section;
++    const uploadKey = `${sectionSnapshot.id}:${field.key}`;
++    setMediaUploads((previous) => ({ ...previous, [uploadKey]: { status: 'uploading', localUri: recording.uri } }));
++    setMessage('La nota de voz está subiendo en segundo plano. Puedes continuar llenando esta sección.');
++    try {
++      const evidenceId = `report-${intervention.id}-${sectionSnapshot.sectionType}-${field.key}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
++      const stored = await uploadWorkOrderVoiceNote({
++        uri: recording.uri,
++        workOrderId: workOrder.id,
++        unitId: unit.id,
++        evidenceId,
++        durationSeconds: recording.durationSeconds,
++        mimeType: recording.mimeType,
++      });
++      const now = new Date().toISOString();
++      const evidence: WorkOrderEvidence = {
++        id: evidenceId,
++        workOrderId: workOrder.id,
++        equipmentId: equipment.id,
++        unitId: unit.id,
++        section: sectionEvidenceType(sectionSnapshot.sectionType),
++        itemKey: `${intervention.id}-${sectionSnapshot.sectionType}-${field.key}`,
++        label: field.label,
++        moment: 'during',
++        ...stored,
++        mediaKind: 'audio',
++        durationSeconds: recording.durationSeconds,
++        transcriptionStatus: 'not_requested',
++        capturedAt: now,
++        uploadedAt: now,
++        uploadedByUserId: currentUser.id,
++        uploadedByName: currentUser.name,
++      };
++      const savedEvidence = await addWorkOrderEvidence(evidence);
++      if (!savedEvidence.ok) throw new Error(savedEvidence.message ?? 'No se pudo guardar la nota de voz.');
++      const nextDraft = applyTechnicianReportDerivedValues({ ...draftRef.current, [field.key]: evidence.id });
++      draftRef.current = nextDraft;
++      setDraft(nextDraft);
++      const savedSection = await updateReportSection(sectionSnapshot, { fields: { [field.key]: evidence.id }, evidenceIds: [evidence.id] });
++      if (!savedSection.ok) throw new Error(savedSection.message ?? 'La nota subió, pero no se pudo vincular al reporte.');
++      setMediaUploads((previous) => ({ ...previous, [uploadKey]: { status: 'saved' } }));
++      setMessage('Nota de voz guardada. Quedó preparada para una futura transcripción con IA.');
++    } catch (error) {
++      const errorMessage = error instanceof Error ? error.message : String(error);
++      setMediaUploads((previous) => ({ ...previous, [uploadKey]: { status: 'error', localUri: recording.uri, message: errorMessage } }));
++      setMessage(`No se pudo guardar la nota de voz: ${errorMessage}`);
++      throw error;
+     }
+   }
+ 
+@@ -421,9 +511,12 @@
+                   field={field}
+                   value={draft[field.key]}
+                   evidence={typeof draft[field.key] === 'string' ? workOrderEvidence.find((item) => item.id === draft[field.key]) : undefined}
++                  uploadState={mediaUploads[`${activeItem.section.id}:${field.key}`]}
+                   disabled={working}
+                   onChange={(value) => setDraftValue(field.key, value)}
+                   onPhoto={() => void capturePhoto(field)}
++                  onVoiceUpload={(recording) => uploadVoiceNote(field, recording)}
++                  onVoiceClear={() => setDraftValue(field.key, null)}
+                 />
+               ))}
+             </View>
+@@ -457,10 +550,7 @@
+             {initializing && !reportSections.length ? <Text style={styles.loadingText}>Preparando secciones…</Text> : null}
+             <View style={styles.sectionList}>
+               {reportSections.map(({ definition, section }) => {
+-                const visibleFields = definition.fields.filter((field) => templateFieldIsVisible(field, section.fields));
+-                const requiredFields = visibleFields.filter((field) => templateFieldIsRequired(field, section.fields));
+-                const requiredCount = requiredFields.length;
+-                const completedCount = requiredFields.filter((field) => fieldHasValue(section.fields[field.key])).length;
++                const { requiredCount, completedCount } = templateRequiredProgress(definition, section.fields);
+                 return (
+                   <Pressable key={section.id} disabled={reportLocked} onPress={() => selectSection(section)} style={[styles.sectionRow, reportLocked && styles.sectionRowLocked]}>
+                     <View style={{ flex: 1 }}>
+@@ -478,6 +568,13 @@
+             </View>
+           </Card>
+ 
++          <TechnicianAddOnsPanel
++            visit={visit}
++            unit={unit}
++            interventions={[intervention]}
++            disabled={reportLocked || working}
++          />
++
+           <Card>
+             <SectionTitle title="Finalización del reporte" />
+             {template.completionRules.map((rule) => <Text key={rule} style={styles.ruleText}>• {rule}</Text>)}
+@@ -488,6 +585,8 @@
+               onPress={() => void submitForReview()}
+             />
+             {!reportReady ? <Text style={styles.helpText}>Completa todas las secciones obligatorias para enviar el reporte.</Text> : null}
++            {hasPendingMedia ? <Text style={styles.helpText}>Hay archivos subiendo. El envío se habilitará cuando terminen.</Text> : null}
++            {hasFailedMedia ? <Text style={styles.errorHelpText}>Hay un archivo con error. Vuelve a tomarlo o grabarlo antes de enviar.</Text> : null}
+           </Card>
+         </>
+       )}
+@@ -504,16 +603,22 @@
+   field,
+   value,
+   evidence,
++  uploadState,
+   disabled,
+   onChange,
+   onPhoto,
++  onVoiceUpload,
++  onVoiceClear,
+ }: {
+   field: TemplateFieldDefinition;
+   value: DraftValue | undefined;
+   evidence?: WorkOrderEvidence;
++  uploadState?: MediaUploadState;
+   disabled: boolean;
+   onChange: (value: DraftValue) => void;
+   onPhoto: () => void;
++  onVoiceUpload: (recording: { uri: string; durationSeconds: number; mimeType?: string }) => Promise<void>;
++  onVoiceClear: () => void;
+ }) {
+   const label = `${field.label}${field.required ? ' *' : ''}${field.unit ? ` (${field.unit})` : ''}`;
+ 
+@@ -527,6 +632,18 @@
+     );
+   }
+ 
++  if (field.type === 'voice_note') {
++    return (
++      <TechnicianVoiceNoteField
++        evidence={evidence}
++        disabled={disabled}
++        uploading={uploadState?.status === 'uploading'}
++        onUpload={onVoiceUpload}
++        onClear={onVoiceClear}
++      />
++    );
++  }
++
+   if (field.type === 'select') {
+     return (
+       <View style={styles.fieldBlock}>
+@@ -562,14 +679,30 @@
+   }
+ 
+   if (field.type === 'photo') {
++    const previewUri = uploadState?.localUri || evidence?.thumbnailUrl || evidence?.downloadUrl;
++    const photoBusy = uploadState?.status === 'uploading';
+     return (
+       <View style={styles.photoBlock}>
+         <View style={{ flex: 1 }}>
+           <Text style={styles.fieldLabel}>{label}</Text>
+-          <Text style={styles.photoHelp}>{evidence ? `Guardada por ${evidence.uploadedByName}` : field.helperText ?? 'Toma la fotografía requerida para esta sección.'}</Text>
+-          {evidence ? <Image source={{ uri: evidence.downloadUrl }} style={styles.photoPreview} /> : null}
++          <Text style={[styles.photoHelp, uploadState?.status === 'error' && styles.photoError]}>
++            {photoBusy
++              ? 'Subiendo en segundo plano… Puedes continuar con los demás campos.'
++              : uploadState?.status === 'error'
++                ? `Error al subir. ${uploadState.message ?? 'Toma la foto nuevamente para reintentar.'}`
++                : evidence
++                  ? `Guardada por ${evidence.uploadedByName}`
++                  : field.helperText ?? 'Toma la fotografía requerida para esta sección.'}
++          </Text>
++          {previewUri ? <Image source={{ uri: previewUri }} style={styles.photoPreview} /> : null}
+         </View>
+-        <Button compact label={evidence ? 'Repetir foto' : 'Tomar foto'} variant={evidence ? 'secondary' : 'primary'} disabled={disabled} onPress={onPhoto} />
++        <Button
++          compact
++          label={photoBusy ? 'Subiendo…' : evidence || previewUri ? 'Repetir foto' : 'Tomar foto'}
++          variant={evidence || previewUri ? 'secondary' : 'primary'}
++          disabled={disabled || photoBusy}
++          onPress={onPhoto}
++        />
+       </View>
+     );
+   }
+@@ -620,6 +753,7 @@
+   choiceTextSelected: { color: '#FFFFFF' },
+   photoBlock: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', gap: 10, borderWidth: 1, borderColor: colors.border, borderRadius: 12, padding: 12 },
+   photoHelp: { color: colors.muted, fontSize: 9, marginTop: 4, lineHeight: 14 },
++  photoError: { color: colors.danger },
+   photoPreview: { width: 150, height: 110, borderRadius: 10, marginTop: 9, backgroundColor: '#EEF1F5' },
+   recommendationBox: { backgroundColor: '#FFF7E8', borderWidth: 1, borderColor: '#E8C987', borderRadius: 11, padding: 12 },
+   recommendationTitle: { color: '#8A5200', fontSize: 10, fontWeight: '900' },
+@@ -627,6 +761,7 @@
+   sectionActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 9, justifyContent: 'flex-end', marginTop: 14 },
+   ruleText: { color: colors.text, lineHeight: 19, marginBottom: 5 },
+   helpText: { color: colors.muted, fontSize: 9, marginTop: 8, textAlign: 'center' },
++  errorHelpText: { color: colors.danger, fontSize: 9, marginTop: 8, textAlign: 'center', fontWeight: '800' },
+   messageBox: { backgroundColor: colors.primaryLight, borderRadius: 14, padding: 14 },
+   messageTitle: { color: colors.primaryDark, fontSize: 9, fontWeight: '900', textTransform: 'uppercase' },
+   messageText: { color: colors.text, marginTop: 5, lineHeight: 18 },
+--- a/src/screens/TechnicianEquipmentProfileScreen.tsx
++++ b/src/screens/TechnicianEquipmentProfileScreen.tsx
+@@ -1,13 +1,14 @@
+ import React, { useMemo, useState } from 'react';
+ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+ import { Button, Card, EmptyState, Pill, SectionTitle } from '../components/UI';
+-import { TechnicianAddOnsPanel } from '../components/TechnicianAddOnsPanel';
+ import { InterventionType, WorkIntervention } from '../features/technicianPortal/contracts';
+ import { isUnitLockedForNewWork } from '../features/technicianPortal/closure';
+ import { useAppState } from '../state/AppState';
+ import { useTechnicianPortalState } from '../state/TechnicianPortalState';
+ import { colors } from '../theme';
++import { useWebBackLayer } from '../navigation/appHistory';
+ 
++// TECHNICIAN_WORKFLOW_V4
+ type WorkTypeDefinition = {
+   type: InterventionType;
+   label: string;
+@@ -113,6 +114,8 @@
+   const [working, setWorking] = useState(false);
+   const [pendingRemovalId, setPendingRemovalId] = useState('');
+   const [addingAnother, setAddingAnother] = useState(false);
++  useWebBackLayer(Boolean(pendingRemovalId), () => setPendingRemovalId(''), 'technician-remove-work');
++  useWebBackLayer(addingAnother, () => setAddingAnother(false), 'technician-add-work');
+   const [message, setMessage] = useState('Selecciona el trabajo real que se realizará en este aire acondicionado.');
+ 
+   const visit = workVisits.find((item) => item.id === visitId);
+@@ -383,8 +386,6 @@
+         )}
+       </Card>
+ 
+-      <TechnicianAddOnsPanel visit={visit} unit={unit} interventions={interventions} disabled={newWorkLocked} />
+-
+       <View style={styles.messageBox}>
+         <Text style={styles.messageTitle}>Estado</Text>
+         <Text style={styles.messageText}>{message}</Text>
+--- a/src/features/technicianPortal/templates.ts
++++ b/src/features/technicianPortal/templates.ts
+@@ -1,6 +1,7 @@
+ import { InterventionType, ReportSectionType } from './contracts';
+ 
+-export type TemplateFieldType = 'text' | 'textarea' | 'number' | 'select' | 'boolean' | 'photo' | 'measurement' | 'recommendation';
++// TECHNICIAN_WORKFLOW_V4
++export type TemplateFieldType = 'text' | 'textarea' | 'number' | 'select' | 'boolean' | 'photo' | 'measurement' | 'recommendation' | 'voice_note';
+ 
+ export type TemplateFieldCondition = {
+   key: string;
+@@ -18,6 +19,7 @@
+   helperText?: string;
+   showWhen?: TemplateFieldCondition;
+   requiredWhen?: TemplateFieldCondition;
++  requiredAlternativeGroup?: string;
+ }
+ 
+ export interface TemplateSectionDefinition {
+@@ -53,6 +55,37 @@
+   return field.required || Boolean(field.requiredWhen && conditionMatches(field.requiredWhen, fields));
+ }
+ 
++function templateValueExists(value: unknown) {
++  if (value === null || value === undefined) return false;
++  if (typeof value === 'string') return value.trim().length > 0;
++  if (Array.isArray(value)) return value.length > 0;
++  return true;
++}
++
++export function templateMissingRequiredFieldKeys(definition: TemplateSectionDefinition, fields: Record<string, unknown>) {
++  const visibleFields = definition.fields.filter((field) => templateFieldIsVisible(field, fields));
++  const missing = visibleFields
++    .filter((field) => templateFieldIsRequired(field, fields) && !templateValueExists(fields[field.key]))
++    .map((field) => field.key);
++  const groups = Array.from(new Set(visibleFields.map((field) => field.requiredAlternativeGroup).filter((group): group is string => Boolean(group))));
++  groups.forEach((group) => {
++    const alternatives = visibleFields.filter((field) => field.requiredAlternativeGroup === group);
++    if (!alternatives.some((field) => templateValueExists(fields[field.key]))) missing.push(alternatives[0].key);
++  });
++  return missing;
++}
++
++export function templateRequiredProgress(definition: TemplateSectionDefinition, fields: Record<string, unknown>) {
++  const visibleFields = definition.fields.filter((field) => templateFieldIsVisible(field, fields));
++  const requiredFields = visibleFields.filter((field) => templateFieldIsRequired(field, fields));
++  const groups = Array.from(new Set(visibleFields.map((field) => field.requiredAlternativeGroup).filter((group): group is string => Boolean(group))));
++  return {
++    requiredCount: requiredFields.length + groups.length,
++    completedCount: requiredFields.filter((field) => templateValueExists(fields[field.key])).length
++      + groups.filter((group) => visibleFields.some((field) => field.requiredAlternativeGroup === group && templateValueExists(fields[field.key]))).length,
++  };
++}
++
+ const BRACKET_RECOMMENDATION = 'Se recomienda reemplazar el bracket o base de la condensadora. El soporte presenta deterioro y puede comprometer la estabilidad del equipo, provocar su caída y representar un riesgo de lesiones o daños a la propiedad.';
+ const SWITCH_RECOMMENDATION = 'Se recomienda reemplazar el switch / disconnect. Su condición representa un riesgo eléctrico y puede ocasionar fallas, daños al aire acondicionado o una situación peligrosa.';
+ const ARMAFLEX_RECOMMENDATION = 'Se recomienda reemplazar el Armaflex de la tubería. El aislamiento deteriorado reduce la eficiencia, favorece la condensación y puede afectar la capacidad de enfriamiento del equipo.';
+@@ -122,8 +155,8 @@
+ 
+ const serviceRefrigerantMeasurementFields: TemplateFieldDefinition[] = [
+   { key: 'gaugeBeforePhoto', label: 'Foto del manómetro antes del servicio', type: 'photo', required: true },
+-  { key: 'refrigerantStatus', label: 'Estado del refrigerante', type: 'select', required: true, options: ['Estable', 'Le falta gas', 'Sobrepresión', 'Gas contaminado'] },
+   { key: 'gaugeAfterPhoto', label: 'Foto del manómetro después del servicio', type: 'photo', required: true },
++  { key: 'refrigerantStatus', label: 'Diagnóstico final del refrigerante', type: 'select', required: true, options: ['Estable', 'Le falta gas', 'Sobrepresión', 'Gas contaminado'], helperText: 'Selecciona el diagnóstico después de comparar las mediciones antes y después del servicio.' },
+   { key: 'refrigerantAdded', label: '¿Se agregó refrigerante?', type: 'boolean', required: false, showWhen: { key: 'refrigerantStatus', equals: 'Le falta gas' }, requiredWhen: { key: 'refrigerantStatus', equals: 'Le falta gas' } },
+   { key: 'psiAdded', label: 'Cantidad de PSI agregados', type: 'number', required: false, unit: 'PSI', showWhen: { key: 'refrigerantAdded', equals: true }, requiredWhen: { key: 'refrigerantAdded', equals: true } },
+   { key: 'gaugeAfterRefrigerantPhoto', label: 'Manómetro después de agregar refrigerante', type: 'photo', required: false, showWhen: { key: 'refrigerantAdded', equals: true }, requiredWhen: { key: 'refrigerantAdded', equals: true } },
+@@ -172,7 +205,10 @@
+       section('indoor', 'Unidad interior', 'indoor', indoorStandardFields),
+       section('outdoor', 'Unidad exterior', 'outdoor', outdoorStandardFields),
+       section('initial_measurements', 'Mediciones iniciales', 'any', measurementFields, false),
+-      section('work_process', 'Trabajo realizado', 'any', [{ key: 'workSummary', label: 'Resumen del trabajo', type: 'textarea', required: true }]),
++      section('work_process', 'Trabajo realizado', 'any', [
++        { key: 'workSummary', label: 'Resumen del trabajo por escrito', type: 'textarea', required: false, requiredAlternativeGroup: 'work-report-summary', helperText: 'Escribe el resumen o usa la nota de voz; se requiere al menos una opción.' },
++        { key: 'workVoiceNote', label: 'Nota de voz del trabajo', type: 'voice_note', required: false, requiredAlternativeGroup: 'work-report-summary' },
++      ]),
+       section('final_measurements', 'Mediciones finales', 'any', measurementFields),
+       section('findings', 'Hallazgos', 'any', findingFields, false),
+       section('completion', 'Resultado final', 'lead', completionFields),
+@@ -190,7 +226,10 @@
+       section('indoor', 'Unidad interior', 'indoor', indoorStandardFields),
+       section('outdoor', 'Unidad exterior', 'outdoor', outdoorStandardV2Fields),
+       section('initial_measurements', 'Mediciones', 'any', serviceRefrigerantMeasurementFields),
+-      section('work_process', 'Trabajo realizado', 'any', [{ key: 'workSummary', label: 'Resumen del trabajo', type: 'textarea', required: true }]),
++      section('work_process', 'Trabajo realizado', 'any', [
++        { key: 'workSummary', label: 'Resumen del trabajo por escrito', type: 'textarea', required: false, requiredAlternativeGroup: 'work-report-summary', helperText: 'Escribe el resumen o usa la nota de voz; se requiere al menos una opción.' },
++        { key: 'workVoiceNote', label: 'Nota de voz del trabajo', type: 'voice_note', required: false, requiredAlternativeGroup: 'work-report-summary' },
++      ]),
+       section('findings', 'Hallazgos', 'any', findingFields, false),
+       section('completion', 'Resultado final', 'lead', completionFields),
+     ],
+--- a/src/features/technicianPortal/contracts.ts
++++ b/src/features/technicianPortal/contracts.ts
+@@ -141,6 +141,7 @@
+ }
+ 
+ export interface WorkIntervention extends AuditFields {
++  // TECHNICIAN_WORKFLOW_V4
+   id: string;
+   visitId: string;
+   visitUnitId: string;
+@@ -154,6 +155,8 @@
+   scopeChangeId?: string;
+   resultCode?: string;
+   resultNotes?: string;
++  customerReportNote?: string;
++  reviewedAt?: string;
+ }
+ 
+ export interface ReportSectionLock {
+--- a/src/state/TechnicianPortalState.tsx
++++ b/src/state/TechnicianPortalState.tsx
+@@ -4,9 +4,11 @@
+ import { WorkOrder } from '../types';
+ import { EquipmentSystem, ReportSection, ReportSectionStatus, WorkIntervention, WorkVisit, VisitUnit } from '../features/technicianPortal/contracts';
+ import { equipmentDocumentIdFromQr, equipmentDocumentIdWithoutQr, equipmentQrCodesMatch, isValidEquipmentQrCode, normalizeEquipmentQrCode } from '../features/technicianPortal/equipmentQr';
+-import { getTechnicianReportTemplate } from '../features/technicianPortal/templates';
+-import { templateFieldIsRequired, templateFieldIsVisible } from '../features/technicianPortal/templates';
++import { getTechnicianReportTemplate, templateMissingRequiredFieldKeys } from '../features/technicianPortal/templates';
+ import { WorkVisitAddOn } from '../features/technicianPortal/addOns';
++// TECHNICIAN_WORKFLOW_V4
++// templateFieldIsVisible(field, initialFields)
++// templateFieldIsVisible(field, mergedFields)
+ /* TECHNICIAN_REPORT_SECTIONS_V3_SECOND_PASS_COMPATIBILITY
+     workReportSections,
+     equipmentSystems,
+@@ -354,9 +356,7 @@
+         if (indoor?.nameplateEvidenceId) initialFields.indoorNameplate = indoor.nameplateEvidenceId;
+         if (outdoor?.nameplateEvidenceId) initialFields.outdoorNameplate = outdoor.nameplateEvidenceId;
+       }
+-      const missingRequiredFieldKeys = definition.fields
+-        .filter((field) => templateFieldIsVisible(field, initialFields) && templateFieldIsRequired(field, initialFields) && !fieldHasValue(initialFields[field.key]))
+-        .map((field) => field.key);
++      const missingRequiredFieldKeys = templateMissingRequiredFieldKeys(definition, initialFields);
+       const section: ReportSection = {
+         id: `report-section-${idPart(intervention.id)}-${definition.sectionType}`,
+         visitId: intervention.visitId,
+@@ -405,9 +405,7 @@
+     if (!intervention || !definition) return { ok: false, message: 'No se encontró la definición de esta sección.' };
+ 
+     const mergedFields = { ...section.fields, ...(input.fields ?? {}) };
+-    const missingRequiredFieldKeys = definition.fields
+-      .filter((field) => templateFieldIsVisible(field, mergedFields) && templateFieldIsRequired(field, mergedFields) && !fieldHasValue(mergedFields[field.key]))
+-      .map((field) => field.key);
++    const missingRequiredFieldKeys = templateMissingRequiredFieldKeys(definition, mergedFields);
+     if (input.status === 'completed' && missingRequiredFieldKeys.length) {
+       return { ok: false, message: `Faltan ${missingRequiredFieldKeys.length} campo(s) obligatorio(s) antes de completar la sección.` };
+     }
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -413,6 +413,7 @@
+ 
+ export type EvidenceMoment = 'before' | 'during' | 'after' | 'not_applicable';
+ 
++// TECHNICIAN_WORKFLOW_V4
+ export interface WorkOrderEvidence {
+   id: string;
+   workOrderId: string;
+@@ -430,6 +431,9 @@
+   thumbnailUrl?: string;
+   thumbnailContentType?: string;
+   thumbnailSizeBytes?: number;
++  mediaKind?: 'image' | 'audio';
++  durationSeconds?: number;
++  transcriptionStatus?: 'not_requested' | 'pending' | 'completed' | 'failed';
+   note?: string;
+   capturedAt: string;
+   uploadedAt: string;

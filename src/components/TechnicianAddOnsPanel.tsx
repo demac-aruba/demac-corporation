@@ -190,7 +190,7 @@ export function TechnicianAddOnsPanel({ visit, unit, interventions, disabled = f
     <Card>
       <SectionTitle
         title="Add-ons en esta visita"
-        subtitle="Registra switch, bracket o Armaflex vendidos e instalados durante el trabajo. Precios, inventario y comisiones se conectarán después."
+        subtitle="Registra switch, bracket, Armaflex o refrigerante vendidos e instalados durante el trabajo. Precios, inventario y comisiones se conectarán después."
       />
 
       {!activeInterventions.length ? (
@@ -297,7 +297,7 @@ function AddOnPhoto({ label, evidence, disabled, onPress }: { label: string; evi
   return (
     <View style={styles.photoCard}>
       <Text style={styles.photoLabel}>{label}</Text>
-      {evidence ? <Image source={{ uri: evidence.downloadUrl }} style={styles.photoPreview} /> : <View style={styles.photoPlaceholder}><Text style={styles.photoPlaceholderText}>Sin foto</Text></View>}
+      {evidence ? <Image source={{ uri: evidence.thumbnailUrl ?? evidence.downloadUrl }} style={styles.photoPreview} /> : <View style={styles.photoPlaceholder}><Text style={styles.photoPlaceholderText}>Sin foto</Text></View>}
       <Button compact variant={evidence ? 'secondary' : 'primary'} label={evidence ? 'Repetir foto' : 'Tomar foto'} disabled={disabled} onPress={onPress} />
     </View>
   );

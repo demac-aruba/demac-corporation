@@ -22,6 +22,15 @@ type UploadEvidenceInput = {
   fileName?: string | null;
 };
 
+type UploadVoiceNoteInput = {
+  uri: string;
+  workOrderId: string;
+  unitId?: string;
+  evidenceId: string;
+  durationSeconds: number;
+  mimeType?: string | null;
+};
+
 type ExistingEvidenceThumbnailInput = {
   downloadUrl: string;
   storagePath: string;
@@ -55,6 +64,15 @@ function extensionFor(contentType: string, fileName?: string | null) {
   if (contentType === 'image/webp') return 'webp';
   if (contentType === 'image/heic' || contentType === 'image/heif') return 'heic';
   return 'jpg';
+}
+
+function audioExtensionFor(contentType: string, uri: string) {
+  const existing = uri.match(/\.([a-zA-Z0-9]{2,5})(?:\?|$)/)?.[1];
+  if (existing) return existing.toLowerCase();
+  if (contentType.includes('webm')) return 'webm';
+  if (contentType.includes('3gpp')) return '3gp';
+  if (contentType.includes('mpeg')) return 'mp3';
+  return 'm4a';
 }
 
 async function requireSession() {
@@ -145,7 +163,7 @@ async function uploadBlob({
   return { storagePath, downloadUrl, contentType, sizeBytes: blob.size };
 }
 
-async function imageBlobToThumbnail(blob: Blob) {
+async function imageBlobToJpeg(blob: Blob, maxWidth: number, maxHeight: number, quality: number) {
   if (typeof document === 'undefined') return undefined;
   const objectUrl = URL.createObjectURL(blob);
   try {
@@ -155,8 +173,6 @@ async function imageBlobToThumbnail(blob: Blob) {
       element.onerror = () => reject(new Error('No se pudo preparar la miniatura de la fotografía.'));
       element.src = objectUrl;
     });
-    const maxWidth = 420;
-    const maxHeight = 315;
     const ratio = Math.min(maxWidth / image.naturalWidth, maxHeight / image.naturalHeight, 1);
     const width = Math.max(1, Math.round(image.naturalWidth * ratio));
     const height = Math.max(1, Math.round(image.naturalHeight * ratio));
@@ -166,16 +182,24 @@ async function imageBlobToThumbnail(blob: Blob) {
     const context = canvas.getContext('2d');
     if (!context) return undefined;
     context.drawImage(image, 0, 0, width, height);
-    return await new Promise<Blob | undefined>((resolve) => canvas.toBlob((result) => resolve(result ?? undefined), 'image/jpeg', 0.72));
+    return await new Promise<Blob | undefined>((resolve) => canvas.toBlob((result) => resolve(result ?? undefined), 'image/jpeg', quality));
   } finally {
     URL.revokeObjectURL(objectUrl);
   }
 }
 
+async function prepareReportImage(source: Blob) {
+  if (source.size > 25 * 1024 * 1024) throw new Error('La fotografía supera el límite de 25 MB antes de optimizarla.');
+  if (source.size < 350 * 1024) return { blob: source, contentType: source.type || 'image/jpeg' };
+  const optimized = await imageBlobToJpeg(source, 1600, 1600, 0.76).catch(() => undefined);
+  if (!optimized || optimized.size >= source.size) return { blob: source, contentType: source.type || 'image/jpeg' };
+  return { blob: optimized, contentType: 'image/jpeg' };
+}
+
 function thumbnailPathFromOriginal(storagePath: string, evidenceId: string) {
   const slash = storagePath.lastIndexOf('/');
   const directory = slash >= 0 ? storagePath.slice(0, slash) : 'work-orders';
-  return `${directory}/thumbnails/${safeSegment(evidenceId, randomToken())}.jpg`;
+  return `${directory}/${safeSegment(evidenceId, randomToken())}-thumbnail.jpg`;
 }
 
 export async function uploadWorkOrderEvidenceImage(input: UploadEvidenceInput): Promise<StorageUploadResult> {
@@ -183,12 +207,15 @@ export async function uploadWorkOrderEvidenceImage(input: UploadEvidenceInput): 
   const session = await requireSession();
   const localResponse = await fetch(input.uri);
   if (!localResponse.ok) throw new Error('No se pudo leer la fotografía seleccionada.');
-  const blob = await localResponse.blob();
-  const contentType = input.mimeType || blob.type || 'image/jpeg';
-  if (!contentType.startsWith('image/')) throw new Error('El archivo seleccionado no es una imagen válida.');
-  if (blob.size > 12 * 1024 * 1024) throw new Error('La fotografía supera el límite de 12 MB.');
+  const sourceBlob = await localResponse.blob();
+  const sourceContentType = input.mimeType || sourceBlob.type || 'image/jpeg';
+  if (!sourceContentType.startsWith('image/')) throw new Error('El archivo seleccionado no es una imagen válida.');
+  const prepared = await prepareReportImage(sourceBlob);
+  const blob = prepared.blob;
+  const contentType = prepared.contentType;
+  if (blob.size > 12 * 1024 * 1024) throw new Error('La fotografía optimizada supera el límite de 12 MB.');
 
-  const extension = extensionFor(contentType, input.fileName);
+  const extension = extensionFor(contentType, prepared.blob === sourceBlob ? input.fileName : null);
   const workOrderId = safeSegment(input.workOrderId, 'work-order');
   const unitId = safeSegment(input.unitId || 'general', 'general');
   const evidenceId = safeSegment(input.evidenceId, randomToken());
@@ -200,18 +227,22 @@ export async function uploadWorkOrderEvidenceImage(input: UploadEvidenceInput): 
     uploadedByUid: session.uid,
   };
 
-  const original = await uploadBlob({ blob, contentType, storagePath, metadata, idToken: session.idToken });
-  const thumbnailBlob = await imageBlobToThumbnail(blob).catch(() => undefined);
-  if (!thumbnailBlob) return original;
+  const thumbnailBlob = await imageBlobToJpeg(blob, 360, 270, 0.62).catch(() => undefined);
+  if (!thumbnailBlob) {
+    return uploadBlob({ blob, contentType, storagePath, metadata: { ...metadata, variant: 'report' }, idToken: session.idToken });
+  }
 
   const thumbnailStoragePath = thumbnailPathFromOriginal(storagePath, input.evidenceId);
-  const thumbnail = await uploadBlob({
-    blob: thumbnailBlob,
-    contentType: 'image/jpeg',
-    storagePath: thumbnailStoragePath,
-    metadata: { ...metadata, variant: 'thumbnail' },
-    idToken: session.idToken,
-  }).catch(() => undefined);
+  const [original, thumbnail] = await Promise.all([
+    uploadBlob({ blob, contentType, storagePath, metadata: { ...metadata, variant: 'report' }, idToken: session.idToken }),
+    uploadBlob({
+      blob: thumbnailBlob,
+      contentType: 'image/jpeg',
+      storagePath: thumbnailStoragePath,
+      metadata: { ...metadata, variant: 'thumbnail' },
+      idToken: session.idToken,
+    }),
+  ]);
 
   return {
     ...original,
@@ -228,7 +259,7 @@ export async function createExistingEvidenceThumbnail(input: ExistingEvidenceThu
   const response = await fetch(input.downloadUrl);
   if (!response.ok) throw new Error('No se pudo descargar la fotografía original para crear su miniatura.');
   const originalBlob = await response.blob();
-  const thumbnailBlob = await imageBlobToThumbnail(originalBlob);
+  const thumbnailBlob = await imageBlobToJpeg(originalBlob, 360, 270, 0.62);
   if (!thumbnailBlob) throw new Error('El navegador no pudo crear la miniatura.');
   const thumbnailStoragePath = thumbnailPathFromOriginal(input.storagePath, input.evidenceId);
   const thumbnail = await uploadBlob({
@@ -250,6 +281,39 @@ export async function createExistingEvidenceThumbnail(input: ExistingEvidenceThu
     thumbnailContentType: thumbnail.contentType,
     thumbnailSizeBytes: thumbnail.sizeBytes,
   };
+}
+
+export async function uploadWorkOrderVoiceNote(input: UploadVoiceNoteInput): Promise<StorageUploadResult> {
+  if (!storageBucket) throw new Error('Firebase Storage no está configurado para este entorno.');
+  if (input.durationSeconds <= 0 || input.durationSeconds > 120.5) {
+    throw new Error('La nota de voz debe durar un máximo de 2 minutos.');
+  }
+  const session = await requireSession();
+  const response = await fetch(input.uri);
+  if (!response.ok) throw new Error('No se pudo leer la nota de voz grabada.');
+  const blob = await response.blob();
+  const contentType = input.mimeType || blob.type || 'audio/mp4';
+  if (!contentType.startsWith('audio/')) throw new Error('El archivo grabado no es una nota de voz válida.');
+  if (blob.size > 6 * 1024 * 1024) throw new Error('La nota de voz supera el límite de 6 MB.');
+
+  const workOrderId = safeSegment(input.workOrderId, 'work-order');
+  const unitId = safeSegment(input.unitId || 'general', 'general');
+  const evidenceId = safeSegment(input.evidenceId, randomToken());
+  const storagePath = `work-orders/${workOrderId}/${unitId}/${evidenceId}.${audioExtensionFor(contentType, input.uri)}`;
+  return uploadBlob({
+    blob,
+    contentType,
+    storagePath,
+    metadata: {
+      workOrderId: input.workOrderId,
+      unitId: input.unitId || 'general',
+      evidenceId: input.evidenceId,
+      uploadedByUid: session.uid,
+      mediaKind: 'audio',
+      durationSeconds: String(Math.round(input.durationSeconds)),
+    },
+    idToken: session.idToken,
+  });
 }
 
 export async function deleteWorkOrderEvidenceImage(storagePath: string) {
