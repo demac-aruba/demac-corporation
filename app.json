@@ -37,6 +37,23 @@
           "photosPermission": "DEMAC necesita acceso a las fotos para adjuntarlas a los reportes técnicos.",
           "cameraPermission": "DEMAC necesita acceso a la cámara para documentar los trabajos técnicos."
         }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "DEMAC necesita acceso a la cámara para escanear los códigos QR de los equipos.",
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": true
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "DEMAC necesita acceso al micrófono para grabar la nota de voz del reporte técnico.",
+          "recordAudioAndroid": true,
+          "enableBackgroundRecording": false,
+          "enableBackgroundPlayback": false
+        }
       ]
     ]
   }
