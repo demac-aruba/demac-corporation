@@ -32,6 +32,26 @@ if (marked.length) {
   throw new Error(`Technician workflow V4 is only partially applied: ${marked.join(', ')}`);
 }
 
+const reportFile = 'src/screens/TechnicianInterventionReportScreen.tsx';
+let reportSource = fs.readFileSync(reportFile, 'utf8');
+reportSource = reportSource
+  .replace("import { useWebBackLayer } from '../navigation/appHistory';\n", '')
+  .replace("  useWebBackLayer(Boolean(activeSectionId), closeSectionEditor, 'technician-report-section');\n", '');
+fs.writeFileSync(reportFile, reportSource);
+const profileFile = 'src/screens/TechnicianEquipmentProfileScreen.tsx';
+let profileSource = fs.readFileSync(profileFile, 'utf8');
+profileSource = profileSource
+  .replace("import { useWebBackLayer } from '../navigation/appHistory';\n", '')
+  .replace("  useWebBackLayer(Boolean(pendingRemovalId), () => setPendingRemovalId(''), 'technician-remove-work');\n", '')
+  .replace("  useWebBackLayer(addingAnother, () => setAddingAnother(false), 'technician-add-work');\n", '');
+fs.writeFileSync(profileFile, profileSource);
+const contractsFile = 'src/features/technicianPortal/contracts.ts';
+let contractsSource = fs.readFileSync(contractsFile, 'utf8');
+contractsSource = contractsSource
+  .replace('  customerReportNote?: string;\n', '')
+  .replace('  reviewedAt?: string;\n', '');
+fs.writeFileSync(contractsFile, contractsSource);
+
 function parseRange(header, sign) {
   const match = header.match(new RegExp(`\\${sign}(\\d+)(?:,(\\d+))?`));
   if (!match) throw new Error(`Invalid unified diff range: ${header}`);
@@ -49,7 +69,24 @@ function applyFilePatch(file, hunks) {
   for (const hunk of hunks) {
     const oldRange = parseRange(hunk.header, '-');
     const newRange = parseRange(hunk.header, '+');
-    const startIndex = Math.max(0, oldRange.start - 1);
+    const expectedStartIndex = Math.max(0, oldRange.start - 1);
+    const oldLines = hunk.lines
+      .filter((line) => line.startsWith(' ') || line.startsWith('-'))
+      .map((line) => line.slice(1));
+    const matchesAt = (index) => oldLines.every((line, offset) => original[index + offset] === line);
+    let startIndex = expectedStartIndex;
+    if (!matchesAt(startIndex)) {
+      const candidates = [];
+      for (let index = cursor; index <= original.length - oldLines.length; index += 1) {
+        if (matchesAt(index)) candidates.push(index);
+      }
+      if (!candidates.length) {
+        throw new Error(`Patch context not found in ${file}: ${hunk.header}`);
+      }
+      startIndex = candidates.reduce((closest, candidate) => (
+        Math.abs(candidate - expectedStartIndex) < Math.abs(closest - expectedStartIndex) ? candidate : closest
+      ));
+    }
     if (startIndex < cursor) throw new Error(`Overlapping patch hunks in ${file}.`);
     output.push(...original.slice(cursor, startIndex));
     cursor = startIndex;
