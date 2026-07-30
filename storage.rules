@@ -16,6 +16,18 @@ service firebase.storage {
         && request.resource.metadata.uploadedByUid == request.auth.uid;
     }
 
+    function validEvidenceAudio() {
+      return signedIn()
+        && request.resource != null
+        && request.resource.size < 6 * 1024 * 1024
+        && request.resource.contentType.matches('audio/.*')
+        && request.resource.metadata != null
+        && 'uploadedByUid' in request.resource.metadata
+        && request.resource.metadata.uploadedByUid == request.auth.uid
+        && 'mediaKind' in request.resource.metadata
+        && request.resource.metadata.mediaKind == 'audio';
+    }
+
     function uploadedByCurrentUser() {
       return signedIn()
         && resource != null
@@ -26,7 +38,7 @@ service firebase.storage {
 
     match /work-orders/{workOrderId}/{unitId}/{fileName} {
       allow read: if signedIn();
-      allow create: if validEvidenceImage();
+      allow create: if validEvidenceImage() || validEvidenceAudio();
       allow update: if false;
       allow delete: if uploadedByCurrentUser();
     }
