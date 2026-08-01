@@ -29,6 +29,8 @@ After deployment, Firebase prints the public HTTPS endpoint for `whatsappWebhook
 
 The `transcribeWorkOrderVoiceNote` Firestore trigger runs automatically after an audio evidence document is created. It downloads the private Storage object, sends it to OpenAI from the backend, and saves the transcript and processing status on `workOrderEvidence`.
 
+The `generateProfessionalCustomerReport` trigger runs when a technician sends an intervention for office review or when the office requests a new draft. It waits briefly for pending voice transcriptions, combines the verified report fields, measurements, findings and add-ons, and saves an editable customer-facing draft on `workInterventions`. The original technical evidence is never replaced.
+
 ## Incoming WhatsApp data
 
 - `whatsappWebhookEvents`: complete webhook payloads for troubleshooting.
