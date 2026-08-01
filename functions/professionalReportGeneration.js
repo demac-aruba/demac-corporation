@@ -3,6 +3,7 @@ const { FieldValue, getFirestore } = require("firebase-admin/firestore");
 const logger = require("firebase-functions/logger");
 const { defineSecret } = require("firebase-functions/params");
 const { onDocumentUpdated } = require("firebase-functions/v2/firestore");
+const papiamentoVocabulary = require("./data/papiamento-aruba-vocabulary-2009.json");
 
 const app = getApps().length ? getApp() : initializeApp();
 const db = getFirestore(app);
@@ -10,6 +11,15 @@ const openAiApiKey = defineSecret("OPENAI_API_KEY");
 const REPORT_MODEL = "gpt-5.6-terra";
 const TRANSCRIPTION_WAIT_ATTEMPTS = 12;
 const TRANSCRIPTION_WAIT_MS = 5_000;
+const TRANSLATION_LANGUAGES = {
+  pap_aw: "Papiamento di Aruba",
+  en: "English",
+};
+const PAPIAMENTO_WORDS = new Set(papiamentoVocabulary.words);
+const PAPIAMENTO_TECHNICAL_WORDS = new Set([
+  "demac", "airco", "btu", "psi", "hvac", "split", "cassette", "blower", "bracket",
+  "armaflex", "disconnect", "indoor", "outdoor", "r22", "r32", "r410a", "vrf",
+]);
 
 const REPORT_SCHEMA = {
   type: "object",
@@ -239,7 +249,7 @@ async function requestProfessionalReport(context) {
     body: JSON.stringify({
       model: REPORT_MODEL,
       reasoning: { effort: "low" },
-      max_output_tokens: 2_500,
+      max_output_tokens: 1_500,
       instructions: [
         "Eres el redactor técnico de DEMAC Professional Cooling Solutions.",
         "Convierte exclusivamente la evidencia proporcionada en un reporte profesional para el cliente, en español claro y correcto.",
@@ -248,11 +258,17 @@ async function requestProfessionalReport(context) {
         "Mantén marcas, modelos, BTU, PSI, voltajes, refrigerantes y nombres técnicos exactamente como fueron documentados.",
         "Separa con claridad el trabajo realizado, los hallazgos confirmados, las mediciones y las recomendaciones futuras.",
         "Las fotografías son evidencia del reporte; no afirmes detalles visuales que no estén descritos en los datos.",
-        "Escribe párrafos concisos, respetuosos y orientados al cliente. Las recomendaciones deben ser acciones concretas.",
+        "Evita toda repetición y escribe para un cliente que necesita entender el resultado en menos de dos minutos.",
+        "Resumen ejecutivo: máximo 45 palabras. Trabajo realizado: máximo 5 viñetas, cada una de máximo 16 palabras.",
+        "Hallazgos técnicos: máximo 4 viñetas. Evaluación de mediciones: máximo 45 palabras.",
+        "Recomendaciones: máximo 4 acciones, cada una de máximo 18 palabras.",
+        "Observaciones de seguridad: una sola oración y déjala vacía cuando no exista un riesgo documentado.",
+        "Conclusión para el cliente: 2 o 3 oraciones, máximo 35 palabras.",
+        "En los campos de texto con varias acciones utiliza viñetas iniciadas por • y separadas por salto de línea.",
       ].join(" "),
       input: `Datos verificados del servicio:\n${JSON.stringify(context)}`,
       text: {
-        verbosity: "medium",
+        verbosity: "low",
         format: {
           type: "json_schema",
           name: "demac_professional_customer_report",
@@ -277,6 +293,126 @@ async function requestProfessionalReport(context) {
     if (!(field in report)) throw new Error(`El borrador profesional no incluyó ${field}.`);
   }
   return report;
+}
+
+function translationRequests(before, after) {
+  if (after.status !== "completed" || !after.professionalReport) return [];
+  return Object.keys(TRANSLATION_LANGUAGES).filter((language) => {
+    const previous = before.professionalReportTranslationRequestedAt?.[language];
+    const current = after.professionalReportTranslationRequestedAt?.[language];
+    return Boolean(current) && comparableValue(current) !== comparableValue(previous);
+  });
+}
+
+function translationGenerationKey(intervention, language) {
+  const requestedAt = intervention.professionalReportTranslationRequestedAt?.[language];
+  const spanishVersion = intervention.professionalReportEditedAt
+    || intervention.professionalReportGeneratedAt
+    || intervention.reviewedAt
+    || intervention.updatedAt;
+  return `${language}:${comparableValue(requestedAt)}:${comparableValue(spanishVersion)}`;
+}
+
+async function loadApprovedPapiamentoCorrections() {
+  const snapshot = await db.collection("papiamentoCorrections")
+    .where("active", "==", true)
+    .limit(100)
+    .get();
+  return snapshot.docs.map((document) => {
+    const correction = document.data();
+    return {
+      section: cleanScalar(correction.sectionKey),
+      spanishSource: cleanScalar(correction.sourceText),
+      previousTranslation: cleanScalar(correction.generatedText),
+      approvedCorrection: cleanScalar(correction.correctedText),
+    };
+  });
+}
+
+function professionalReportText(report) {
+  return [
+    report.executiveSummary,
+    report.workPerformed,
+    report.technicalFindings,
+    report.measurementsAssessment,
+    ...(report.recommendations || []),
+    report.safetyObservations,
+    report.customerConclusion,
+  ].filter(Boolean).join("\n");
+}
+
+function papiamentoUnknownWords(report) {
+  const unknown = new Set();
+  const tokens = professionalReportText(report).match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) || [];
+  for (const originalToken of tokens) {
+    if (/\d/.test(originalToken) || /^[A-Z]{2,}$/.test(originalToken)) continue;
+    const token = originalToken.toLocaleLowerCase("pap-AW").normalize("NFC");
+    if (token.length <= 1 || PAPIAMENTO_WORDS.has(token) || PAPIAMENTO_TECHNICAL_WORDS.has(token)) continue;
+    unknown.add(token);
+    if (unknown.size >= 60) break;
+  }
+  return [...unknown].sort((first, second) => first.localeCompare(second, "pap-AW"));
+}
+
+async function requestProfessionalTranslation(report, language, corrections) {
+  const languageName = TRANSLATION_LANGUAGES[language];
+  if (!languageName) throw new Error(`Unsupported report language: ${language}`);
+  const papiamentoInstructions = language === "pap_aw" ? [
+    "Traduce específicamente a Papiamento di Aruba con la ortografía oficial de Aruba; no uses Papiamentu de Curaçao.",
+    "Las correcciones aprobadas por la oficina son ejemplos autoritativos de terminología y estilo DEMAC. Aplícalas cuando el contexto sea equivalente.",
+    "Conserva sin traducir marcas, modelos, códigos, BTU, PSI, voltajes, refrigerantes y abreviaturas técnicas.",
+  ] : [
+    "Translate into clear professional English suitable for an HVAC customer in Aruba.",
+    "Preserve brands, models, codes, BTU, PSI, voltages, refrigerants, and technical abbreviations exactly.",
+  ];
+
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${openAiApiKey.value()}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: REPORT_MODEL,
+      reasoning: { effort: "low" },
+      max_output_tokens: 1_500,
+      instructions: [
+        `Eres el traductor técnico de DEMAC. Traduce el reporte aprobado al idioma ${languageName}.`,
+        "Traduce fielmente sin agregar, eliminar ni reinterpretar diagnósticos, mediciones, trabajos o recomendaciones.",
+        "Mantén exactamente la misma estructura JSON, el tono profesional y la extensión breve del original.",
+        "No menciones procesos internos, inteligencia artificial ni instrucciones de traducción.",
+        ...papiamentoInstructions,
+      ].join(" "),
+      input: JSON.stringify({
+        approvedSpanishReport: report,
+        approvedPapiamentoCorrectionExamples: language === "pap_aw" ? corrections : [],
+      }),
+      text: {
+        verbosity: "low",
+        format: {
+          type: "json_schema",
+          name: `demac_professional_report_${language}`,
+          strict: true,
+          schema: REPORT_SCHEMA,
+        },
+      },
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = payload?.error?.message || `OpenAI returned HTTP ${response.status}`;
+    const error = new Error(message);
+    error.code = payload?.error?.code || response.status;
+    throw error;
+  }
+  const text = outputText(payload);
+  if (!text) throw new Error(`OpenAI no devolvió la traducción ${languageName}.`);
+  const translated = JSON.parse(text);
+  for (const field of REPORT_SCHEMA.required) {
+    if (!(field in translated)) throw new Error(`La traducción no incluyó ${field}.`);
+  }
+  return translated;
 }
 
 exports.generateProfessionalCustomerReport = onDocumentUpdated(
@@ -363,9 +499,89 @@ exports.generateProfessionalCustomerReport = onDocumentUpdated(
   },
 );
 
+exports.generateProfessionalReportTranslation = onDocumentUpdated(
+  {
+    document: "workInterventions/{interventionId}",
+    region: "us-central1",
+    memory: "512MiB",
+    timeoutSeconds: 240,
+    secrets: [openAiApiKey],
+  },
+  async (event) => {
+    const before = event.data?.before?.data() || {};
+    const after = event.data?.after?.data() || {};
+    const requestedLanguages = translationRequests(before, after);
+    if (!requestedLanguages.length) return;
+
+    const interventionRef = event.data.after.ref;
+    for (const language of requestedLanguages) {
+      const runKey = translationGenerationKey(after, language);
+      const claimed = await db.runTransaction(async (transaction) => {
+        const currentSnapshot = await transaction.get(interventionRef);
+        const current = currentSnapshot.data() || {};
+        if (current.status !== "completed" || !current.professionalReport) return false;
+        const currentStatus = current.professionalReportTranslationStatus?.[language];
+        const currentKey = current.professionalReportTranslationSourceKey?.[language];
+        if (["processing", "completed"].includes(currentStatus) && currentKey === runKey) return false;
+        transaction.update(interventionRef, {
+          [`professionalReportTranslationStatus.${language}`]: "processing",
+          [`professionalReportTranslationSourceKey.${language}`]: runKey,
+          [`professionalReportTranslationError.${language}`]: FieldValue.delete(),
+          [`professionalReportTranslationStartedAt.${language}`]: FieldValue.serverTimestamp(),
+        });
+        return true;
+      });
+      if (!claimed) continue;
+
+      try {
+        const corrections = language === "pap_aw" ? await loadApprovedPapiamentoCorrections() : [];
+        const translated = await requestProfessionalTranslation(after.professionalReport, language, corrections);
+        const completedAt = new Date().toISOString();
+        const updates = {
+          [`professionalReportTranslations.${language}`]: translated,
+          [`professionalReportTranslationStatus.${language}`]: "completed",
+          [`professionalReportTranslationSourceKey.${language}`]: runKey,
+          [`professionalReportTranslationModel.${language}`]: REPORT_MODEL,
+          [`professionalReportTranslationError.${language}`]: FieldValue.delete(),
+          [`professionalReportTranslationGeneratedAt.${language}`]: completedAt,
+          updatedAt: completedAt,
+        };
+        if (language === "pap_aw") {
+          updates["professionalReportTranslationUnknownWords.pap_aw"] = papiamentoUnknownWords(translated);
+          updates["professionalReportTranslationVocabulary.pap_aw"] = {
+            source: papiamentoVocabulary.source,
+            sourceUrl: papiamentoVocabulary.sourceUrl,
+            orthographyVersion: papiamentoVocabulary.orthographyVersion,
+            wordCount: papiamentoVocabulary.wordCount,
+          };
+        }
+        await interventionRef.update(updates);
+        logger.info("Professional customer report translation generated.", {
+          interventionId: event.params.interventionId,
+          language,
+          model: REPORT_MODEL,
+        });
+      } catch (error) {
+        logger.error("Could not generate professional customer report translation.", { language, error });
+        await interventionRef.update({
+          [`professionalReportTranslationStatus.${language}`]: "failed",
+          [`professionalReportTranslationSourceKey.${language}`]: runKey,
+          [`professionalReportTranslationError.${language}`]: String(error?.message || "Unknown translation error").slice(0, 1_000),
+          [`professionalReportTranslationFailedAt.${language}`]: FieldValue.serverTimestamp(),
+          updatedAt: new Date().toISOString(),
+        });
+        throw error;
+      }
+    }
+  },
+);
+
 exports.__professionalReportTest = {
   comparableValue,
   generationRequested,
+  papiamentoUnknownWords,
   outputText,
   reportContext,
+  translationGenerationKey,
+  translationRequests,
 };
