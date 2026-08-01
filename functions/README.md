@@ -29,6 +29,14 @@ After deployment, Firebase prints the public HTTPS endpoint for `whatsappWebhook
 
 The `transcribeWorkOrderVoiceNote` Firestore trigger runs automatically after an audio evidence document is created. It downloads the private Storage object, sends it to OpenAI from the backend, and saves the transcript and processing status on `workOrderEvidence`.
 
+The `generateProfessionalCustomerReport` trigger prepares a concise Spanish customer draft when the technician submits an intervention for office review. The `generateProfessionalReportTranslation` trigger runs only after the office approves the Spanish report and explicitly requests English or Papiamento di Aruba. Papiamento output is checked against the official April 2009 vocabulary published by Departamento di Enseñansa Aruba, while operator-approved corrections are supplied as future DEMAC translation examples.
+
+Deploy both report functions with the same `OPENAI_API_KEY` secret:
+
+```bash
+firebase deploy --only "functions:generateProfessionalCustomerReport,functions:generateProfessionalReportTranslation" --project demac-corporation
+```
+
 The `generateProfessionalCustomerReport` trigger runs when a technician sends an intervention for office review or when the office requests a new draft. It waits briefly for pending voice transcriptions, combines the verified report fields, measurements, findings and add-ons, and saves an editable customer-facing draft on `workInterventions`. The original technical evidence is never replaced.
 
 ## Incoming WhatsApp data
