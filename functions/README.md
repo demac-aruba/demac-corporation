@@ -9,10 +9,12 @@ From the repository root:
 ```bash
 firebase functions:secrets:set WHATSAPP_VERIFY_TOKEN
 firebase functions:secrets:set WHATSAPP_ACCESS_TOKEN
+firebase functions:secrets:set OPENAI_API_KEY
 ```
 
 - `WHATSAPP_VERIFY_TOKEN` verifies the Meta webhook.
 - `WHATSAPP_ACCESS_TOKEN` is the permanent Meta system-user token used only by backend functions.
+- `OPENAI_API_KEY` transcribes technician voice notes on the server with `gpt-4o-transcribe`. It is never included in the web or mobile application.
 
 ## Deployment
 
@@ -24,6 +26,8 @@ firebase deploy --only functions --project demac-corporation
 ```
 
 After deployment, Firebase prints the public HTTPS endpoint for `whatsappWebhook`. Paste that URL into Meta's **Callback URL** field.
+
+The `transcribeWorkOrderVoiceNote` Firestore trigger runs automatically after an audio evidence document is created. It downloads the private Storage object, sends it to OpenAI from the backend, and saves the transcript and processing status on `workOrderEvidence`.
 
 ## Incoming WhatsApp data
 
