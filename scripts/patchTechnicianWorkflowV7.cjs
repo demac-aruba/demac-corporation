@@ -161,6 +161,7 @@ function capacityButtonLabel(value: number, systemType: string) {
   formGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },`,
     'capacity styles',
   );
+  return source;
 });
 
 update('src/screens/TechnicianInterventionReportScreen.tsx', (original) => {
