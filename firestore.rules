@@ -145,6 +145,10 @@ service cloud.firestore {
         'templateVersion',
         'status',
         'scopeChangeId',
+        // AI_PROFESSIONAL_REPORTS_V8: technicians may request generation, while only operations roles edit the generated narrative.
+        'professionalReportStatus',
+        'professionalReportRequestedAt',
+        'professionalReportError',
         'resultCode',
         'resultNotes',
         'updatedAt',
