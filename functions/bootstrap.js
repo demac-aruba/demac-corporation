@@ -3,4 +3,5 @@ module.exports = {
   ...require("./appointmentNotifications"),
   ...require("./userManagement"),
   ...require("./voiceTranscription"),
+  ...require("./professionalReportGeneration"),
 };
