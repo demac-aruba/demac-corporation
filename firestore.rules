@@ -484,6 +484,13 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // MULTILINGUAL_PROFESSIONAL_REPORTS_V9: office-approved Aruba Papiamento examples.
+    match /papiamentoCorrections/{correctionId} {
+      allow read: if operationsRole();
+      allow create, update: if operationsRole();
+      allow delete: if adminOrSupervisor();
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }
