@@ -128,10 +128,40 @@ update('src/components/UI.tsx', (source) => {
 update('src/screens/AgendaScreen.tsx', (source) => {
   source = replaceOnce(
     source,
+    `  const selectedOrder = activeOrders.find((order) => order.id === selectedOrderId);`,
+    `  const selectedOrder = activeOrders.find((order) => order.id === selectedOrderId) ?? activeOrders[0];`,
+    'agenda inline appointment selection',
+  );
+
+  source = replaceOnce(
+    source,
+    `      </View>
+
+      {/* APP_SCREEN_NAVIGATION_V5: appointment details open as a dedicated screen. */}
+      <AppModal
+        visible={Boolean(selectedOrderId && selectedOrder)}
+        title="Detalles de la cita"
+        onClose={() => setSelectedOrderId(null)}
+      >
+        <ScrollView keyboardShouldPersistTaps="handled">
+          <AppointmentDetails order={selectedOrder} halfDay={selectedOrder ? isHalfDay(selectedOrder.vanId, selectedOrder.date) : false} clients={clients} properties={properties} services={services} vans={agendaVans} users={staffDirectory} onUpdate={updateWorkOrder} onConfirm={confirmTemporaryAppointment} onEdit={startEdit} onCancel={cancelAppointment} onReschedule={startReschedule} />
+        </ScrollView>
+      </AppModal>
+
+      <AppModal`,
+    `        <Card style={styles.detailPanel}><AppointmentDetails order={selectedOrder} halfDay={selectedOrder ? isHalfDay(selectedOrder.vanId, selectedOrder.date) : false} clients={clients} properties={properties} services={services} vans={agendaVans} users={staffDirectory} onUpdate={updateWorkOrder} onConfirm={confirmTemporaryAppointment} onEdit={startEdit} onCancel={cancelAppointment} onReschedule={startReschedule} /></Card>
+      </View>
+
+      <AppModal`,
+    'agenda inline appointment details',
+  );
+
+  source = replaceOnce(
+    source,
     `      <AppModal
         visible={showCreate}
         title={showQuickClient ? 'Agregar cliente rápido' : showQuickProperty ? 'Añadir propiedad' : showQuickContact ? 'Añadir persona encargada' : editingOrder ? 'Editar cita' : reschedulingOrder ? 'Reprogramar cita' : 'Confirmar nueva cita'}`,
-    `      {/* ${marker}: creating a new appointment stays over the calendar; existing appointment actions remain dedicated screens. */}
+    `      {/* ${marker}: creation stays in an overlay and existing appointment details stay in the right-hand agenda panel. */}
       <AppModal
         visible={showCreate}
         presentation={editingOrder || reschedulingOrder ? 'screen' : 'overlay'}
