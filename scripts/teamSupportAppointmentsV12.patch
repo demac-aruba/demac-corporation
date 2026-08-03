@@ -1,0 +1,824 @@
+--- a/src/screens/AgendaScreen.tsx
++++ b/src/screens/AgendaScreen.tsx
+@@ -8,7 +8,7 @@
+ import { useTeamState } from '../state/TeamState';
+ import { useVanHalfDayState, vanHasHalfDayOnDate } from '../state/VanHalfDayState';
+ import { colors } from '../theme';
+-import { AppointmentChangeOrigin, AppointmentChangeReasonCategory, AppointmentNotificationRecipient, AppointmentStatus, AppointmentWorkType, Client, DailyVanAssignment, PreferredLanguage, Property, PropertyContact, PropertyContactLanguage, PropertyContactRole, PropertyType, ServiceType, StaffAbsence, StaffProfile, Van, WorkOrder, WorkOrderScheduleHistoryEntry } from '../types';
++import { AppointmentAssignmentRole, AppointmentChangeOrigin, AppointmentChangeReasonCategory, AppointmentNotificationRecipient, AppointmentStatus, AppointmentWorkItem, AppointmentWorkType, Client, DailyVanAssignment, PreferredLanguage, Property, PropertyContact, PropertyContactLanguage, PropertyContactRole, PropertyType, ServiceType, StaffAbsence, StaffProfile, Van, WorkOrder, WorkOrderScheduleHistoryEntry } from '../types';
+ import { DEFAULT_PHONE_COUNTRY, normalizePhone, phoneComparisonKey, templateLanguageFor } from '../utils/phone';
+ import { applyAddressSuggestion, suggestArubaAddresses } from '../utils/location';
+ 
+@@ -37,7 +37,9 @@
+ 
+ // APPOINTMENT_PRESETS_V10: standardized office scheduling keeps customer copy and technician-only instructions separate.
+ // APPOINTMENT_SETTINGS_V11: presets are synchronized from administrator settings.
++// TEAM_SUPPORT_APPOINTMENTS_V12: customer visits support several work lines and notification-free support vans.
+ const MAX_BOOKABLE_HOURS = 6;
++const MAX_WORK_ITEM_QUANTITY = 20;
+ const LEGACY_SPECIAL_INSTALLATIONS = new Set<AppointmentWorkType>(['extended_installation', 'rooftop_installation', 'second_floor_installation', 'third_floor_installation']);
+ 
+ function normalizedAppointmentPresetId(id?: string) {
+@@ -49,15 +51,65 @@
+   return presets.find((preset) => preset.id === normalizedId);
+ }
+ 
+-function appointmentDescription(preset: AppointmentWorkPreset, count: number) {
+-  const equipment = count === 1 ? '1 aire acondicionado' : `${count} aires acondicionados`;
+-  return preset.kind === 'installation'
+-    ? `${preset.label} de ${equipment}.`
+-    : `${preset.label} para ${equipment}.`;
++function maximumUnitsForPreset(preset: AppointmentWorkPreset) {
++  return Math.max(1, Math.min(MAX_WORK_ITEM_QUANTITY, Math.floor((MAX_BOOKABLE_HOURS * 60) / preset.durationMinutesPerUnit)));
+ }
+ 
+-function maximumUnitsForPreset(preset: AppointmentWorkPreset) {
+-  return Math.max(1, Math.floor((MAX_BOOKABLE_HOURS * 60) / preset.durationMinutesPerUnit));
++function createAppointmentWorkItem(preset: AppointmentWorkPreset | undefined, quantity: number, customLabel = 'Otro trabajo', customDurationMinutes = 60): AppointmentWorkItem {
++  return {
++    id: preset?.id ?? `other-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
++    presetId: preset?.id,
++    label: preset?.label ?? (customLabel.trim() || 'Otro trabajo'),
++    kind: preset?.kind ?? 'other',
++    quantity: Math.max(1, Math.min(MAX_WORK_ITEM_QUANTITY, Math.round(quantity))),
++    durationMinutesPerUnit: preset?.durationMinutesPerUnit ?? Math.max(30, Math.min(360, Math.round(customDurationMinutes / 30) * 30)),
++  };
++}
++
++function normalizedAppointmentWorkItems(order: WorkOrder, presets: AppointmentWorkPreset[]): AppointmentWorkItem[] {
++  const stored = Array.isArray(order.appointmentWorkItems)
++    ? order.appointmentWorkItems.filter((item) => item && item.label && Number(item.quantity) > 0 && Number(item.durationMinutesPerUnit) > 0)
++    : [];
++  if (stored.length) return stored.map((item) => ({ ...item, quantity: Math.max(1, Number(item.quantity)), durationMinutesPerUnit: Math.max(30, Number(item.durationMinutesPerUnit)) }));
++  const preset = appointmentPreset(presets, order.appointmentPresetId ?? order.appointmentWorkType);
++  if (preset) return [createAppointmentWorkItem(preset, Math.max(1, Number(order.airConditionerCount ?? 1)))];
++  const duration = Math.max(30, Number(order.appointmentDurationMinutes ?? 0) || Number(order.scheduledSlots ?? 1) * 60);
++  return [{ id: 'legacy-other', label: order.appointmentWorkLabel ?? order.problem ?? 'Otro trabajo', kind: 'other', quantity: 1, durationMinutesPerUnit: duration }];
++}
++
++function appointmentWorkItemsDuration(items: AppointmentWorkItem[]) {
++  return items.reduce((total, item) => total + Math.max(1, Number(item.quantity)) * Math.max(30, Number(item.durationMinutesPerUnit)), 0);
++}
++
++function appointmentWorkItemsCount(items: AppointmentWorkItem[]) {
++  return items.reduce((total, item) => total + Math.max(1, Number(item.quantity)), 0);
++}
++
++function appointmentWorkItemsLabel(items: AppointmentWorkItem[]) {
++  if (!items.length) return 'Trabajo pendiente de seleccionar';
++  if (items.length === 1) return items[0].label;
++  return `${items.length} trabajos programados`;
++}
++
++function appointmentWorkItemsDescription(items: AppointmentWorkItem[]) {
++  if (!items.length) return '';
++  const lines = items.map((item) => {
++    const quantity = Math.max(1, Number(item.quantity));
++    const equipment = quantity === 1 ? '1 aire acondicionado' : `${quantity} aires acondicionados`;
++    return item.kind === 'installation' ? `${item.label} de ${equipment}` : `${item.label} para ${equipment}`;
++  });
++  if (lines.length === 1) return `${lines[0]}.`;
++  if (lines.length === 2) return `${lines[0]} y ${lines[1]}.`;
++  return `${lines.slice(0, -1).join(', ')} y ${lines[lines.length - 1]}.`;
++}
++
++function isSevenServiceFullDay(items: AppointmentWorkItem[], time: string, halfDay: boolean) {
++  return !halfDay
++    && time === '08:30'
++    && items.length === 1
++    && items[0].presetId === 'standard_service'
++    && Number(items[0].quantity) === 7
++    && Number(items[0].durationMinutesPerUnit) === 60;
+ }
+ 
+ function workOrderDurationMinutes(order: WorkOrder, services: ServiceType[]) {
+@@ -567,6 +619,11 @@
+   const [workHours, setWorkHours] = useState(1);
+   const [appointmentPresetId, setAppointmentPresetId] = useState('standard_service');
+   const [airConditionerCount, setAirConditionerCount] = useState(1);
++  const [appointmentWorkItems, setAppointmentWorkItems] = useState<AppointmentWorkItem[]>([]);
++  const [customWorkLabel, setCustomWorkLabel] = useState('');
++  const [descriptionManuallyEdited, setDescriptionManuallyEdited] = useState(false);
++  const [appointmentMode, setAppointmentMode] = useState<AppointmentAssignmentRole>('primary');
++  const [parentWorkOrderId, setParentWorkOrderId] = useState('');
+   const [workDescriptionText, setWorkDescriptionText] = useState('');
+   const [technicianInstructionsText, setTechnicianInstructionsText] = useState('');
+   const [vanId, setVanId] = useState(teamVans[0]?.id ?? legacyVans[0]?.id ?? '');
+@@ -666,16 +723,22 @@
+   const selectedHelperName = selectedVan?.helperStaffId ? staffDirectory.find((item) => item.id === selectedVan.helperStaffId)?.name : undefined;
+   const activeAppointmentWorkPresets = appointmentWorkPresets.filter((preset) => preset.active !== false);
+   const selectedWorkPreset = appointmentPreset(appointmentWorkPresets, appointmentPresetId);
+-  const maximumAirConditionerCount = selectedWorkPreset ? maximumUnitsForPreset(selectedWorkPreset) : 1;
+-  const workDurationMinutes = Math.round(workHours * 60);
+-  const workSlots = Math.ceil(workDurationMinutes / 60);
++  const maximumAirConditionerCount = selectedWorkPreset?.id === 'standard_service' ? 7 : selectedWorkPreset ? maximumUnitsForPreset(selectedWorkPreset) : 1;
++  const workDurationMinutes = appointmentWorkItemsDuration(appointmentWorkItems);
+   const activeOrders = orders.filter(orderBlocksCapacity);
+   const selectedOrder = activeOrders.find((order) => order.id === selectedOrderId) ?? activeOrders[0];
+   const editingOrder = workOrders.find((order) => order.id === editingOrderId);
+   const reschedulingOrder = workOrders.find((order) => order.id === reschedulingOrderId);
++  const supportParentOrder = workOrders.find((order) => order.id === parentWorkOrderId);
++  const supportParentVanId = supportParentOrder ? resolveStoredVanId(supportParentOrder.vanId, agendaVans, legacyVans) : undefined;
++  const supportCandidates = workOrders.filter((order) => order.date === selectedDate && orderBlocksCapacity(order) && order.appointmentAssignmentRole !== 'support');
+ 
+   useEffect(() => {
+     if (!showCreate || showQuickClient || showQuickProperty || showQuickContact) return;
++    if (appointmentMode === 'support') {
++      setNotificationRecipients([]);
++      return;
++    }
+     const sourceOrder = editingOrder ?? reschedulingOrder;
+     const sourceMatches = sourceOrder
+       && sourceOrder.clientId === clientId
+@@ -686,13 +749,15 @@
+       sourceMatches ? sourceOrder.notificationRecipients : undefined,
+       sourceMatches ? sourceOrder.whatsappNotificationsEnabled !== false : true,
+     ));
+-  }, [clientId, propertyId, editingOrderId, reschedulingOrderId, showCreate]);
++  }, [clientId, propertyId, editingOrderId, reschedulingOrderId, showCreate, appointmentMode]);
+ 
+   const monthTitle = new Date(`${calendarMonth}T12:00:00`).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
+   const selectedCalendarStatus = calendarDateStatus(selectedDate, businessCalendarSettings, calendarClosures);
+   const selectedDateClosed = selectedCalendarStatus.closed;
+   const combinedDataError = halfDayError ?? calendarDataError ?? teamDataError ?? dataError;
+   const isHalfDay = (candidateVanId: string, date = selectedDate) => vanHasHalfDayOnDate(candidateVanId, date, vanHalfDaySchedules);
++  const fullDaySevenService = Boolean(selectedVan && isSevenServiceFullDay(appointmentWorkItems, time, isHalfDay(selectedVan.id)));
++  const workSlots = fullDaySevenService ? 6 : Math.ceil(workDurationMinutes / 60);
+   const extendedDayLayout = agendaVans.some((van) => isHalfDay(van.id));
+   const cancelledSlots = useMemo<CancelledSlotRecord[]>(() => {
+     const records: CancelledSlotRecord[] = [];
+@@ -756,9 +821,20 @@
+     );
+   };
+ 
+-  const isAvailable = (candidateVan: AgendaVan, candidateTime: string, date = selectedDate) =>
+-    isAvailableFor(candidateVan, candidateTime, date, workSlots, editingOrderId ?? reschedulingOrderId ?? undefined);
+-  const selectedAppointmentAvailable = selectedVan ? isAvailable(selectedVan, time) : false;
++  const isAvailable = (candidateVan: AgendaVan, candidateTime: string, date = selectedDate) => {
++    if (appointmentMode === 'support' && candidateVan.id === supportParentVanId) return false;
++    const candidateSlots = isSevenServiceFullDay(appointmentWorkItems, candidateTime, isHalfDay(candidateVan.id, date)) ? 6 : Math.ceil(workDurationMinutes / 60);
++    return candidateSlots > 0 && isAvailableFor(candidateVan, candidateTime, date, candidateSlots, editingOrderId ?? reschedulingOrderId ?? undefined);
++  };
++  const selectedAppointmentAvailable = selectedVan && appointmentWorkItems.length ? isAvailable(selectedVan, time) : false;
++
++  const replaceWorkItems = (nextItems: AppointmentWorkItem[], forceDescription = false) => {
++    setAppointmentWorkItems(nextItems);
++    if (!descriptionManuallyEdited || forceDescription) {
++      setWorkDescriptionText(appointmentWorkItemsDescription(nextItems));
++      if (forceDescription) setDescriptionManuallyEdited(false);
++    }
++  };
+ 
+   const selectAppointmentWorkType = (type: string) => {
+     setAppointmentPresetId(type);
+@@ -766,21 +842,75 @@
+     if (!preset) {
+       setAirConditionerCount(1);
+       setWorkHours(1);
+-      setWorkDescriptionText('');
++      setCustomWorkLabel('');
+       return;
+     }
+-    const nextCount = Math.min(airConditionerCount, maximumUnitsForPreset(preset));
+-    setAirConditionerCount(nextCount);
+-    setWorkHours((preset.durationMinutesPerUnit * nextCount) / 60);
+-    setWorkDescriptionText(appointmentDescription(preset, nextCount));
++    setAirConditionerCount(1);
++    setWorkHours(preset.durationMinutesPerUnit / 60);
+   };
+ 
+   const changeAirConditionerCount = (nextValue: number) => {
+     if (!selectedWorkPreset) return;
+-    const nextCount = Math.min(maximumUnitsForPreset(selectedWorkPreset), Math.max(1, nextValue));
++    const nextCount = Math.min(maximumAirConditionerCount, Math.max(1, nextValue));
+     setAirConditionerCount(nextCount);
+-    setWorkHours((selectedWorkPreset.durationMinutesPerUnit * nextCount) / 60);
+-    setWorkDescriptionText(appointmentDescription(selectedWorkPreset, nextCount));
++  };
++
++  const addAppointmentWorkItem = () => {
++    const customDurationMinutes = Math.round(workHours * 60);
++    if (!selectedWorkPreset && !customWorkLabel.trim()) return setFormMessage('Escribe el nombre del trabajo “Otro”.');
++    const nextItem = createAppointmentWorkItem(selectedWorkPreset, airConditionerCount, customWorkLabel, customDurationMinutes);
++    const existing = selectedWorkPreset ? appointmentWorkItems.find((item) => item.presetId === selectedWorkPreset.id) : undefined;
++    const maximumQuantity = selectedWorkPreset?.id === 'standard_service' ? 7 : MAX_WORK_ITEM_QUANTITY;
++    const nextItems = existing
++      ? appointmentWorkItems.map((item) => item.id === existing.id ? { ...item, quantity: Math.min(maximumQuantity, item.quantity + nextItem.quantity) } : item)
++      : [...appointmentWorkItems, nextItem];
++    replaceWorkItems(nextItems);
++    setAirConditionerCount(1);
++    setCustomWorkLabel('');
++    setFormMessage('');
++  };
++
++  const changeAppointmentWorkItemQuantity = (itemId: string, delta: number) => {
++    const nextItems = appointmentWorkItems.map((item) => item.id === itemId ? { ...item, quantity: Math.max(1, Math.min(MAX_WORK_ITEM_QUANTITY, item.quantity + delta)) } : item);
++    replaceWorkItems(nextItems);
++  };
++
++  const removeAppointmentWorkItem = (itemId: string) => {
++    replaceWorkItems(appointmentWorkItems.filter((item) => item.id !== itemId));
++  };
++
++  const resetCustomerDescription = () => {
++    setDescriptionManuallyEdited(false);
++    setWorkDescriptionText(appointmentWorkItemsDescription(appointmentWorkItems));
++  };
++
++  const selectSupportParent = (order: WorkOrder) => {
++    setParentWorkOrderId(order.id);
++    setClientId(order.clientId);
++    setPropertyId(order.propertyId ?? '');
++    setNotificationRecipients([]);
++    setDescriptionManuallyEdited(false);
++    const primaryVan = agendaVans.find((item) => item.id === resolveStoredVanId(order.vanId, agendaVans, legacyVans));
++    setWorkDescriptionText(`Apoyo a ${primaryVan?.name ?? 'la van principal'} en ${order.problem}`);
++  };
++
++  const changeAppointmentMode = (mode: AppointmentAssignmentRole) => {
++    setAppointmentMode(mode);
++    setAppointmentWorkItems([]);
++    setDescriptionManuallyEdited(false);
++    setWorkDescriptionText('');
++    setFormMessage('');
++    if (mode === 'support') {
++      const firstCandidate = supportCandidates[0];
++      if (firstCandidate) selectSupportParent(firstCandidate);
++      else {
++        setParentWorkOrderId('');
++        setNotificationRecipients([]);
++      }
++      return;
++    }
++    setParentWorkOrderId('');
++    setNotificationRecipients(buildNotificationRecipients(selectedClient, selectedProperty));
+   };
+ 
+   const openCreate = (candidateVanId?: string, candidateTime?: string, cancelled?: CancelledSlotRecord) => {
+@@ -794,22 +924,32 @@
+     const sourceOrder = editingOrder ?? reschedulingOrder;
+     if (sourceOrder) {
+       const storedPreset = appointmentPreset(appointmentWorkPresets, sourceOrder.appointmentPresetId ?? sourceOrder.appointmentWorkType);
++      const sourceItems = normalizedAppointmentWorkItems(sourceOrder, appointmentWorkPresets);
++      const sourceRole = sourceOrder.appointmentAssignmentRole ?? 'primary';
++      setAppointmentMode(sourceRole);
++      setParentWorkOrderId(sourceOrder.parentWorkOrderId ?? '');
+       setClientId(sourceOrder.clientId);
+       setPropertyId(sourceOrder.propertyId ?? '');
+       setAppointmentPresetId(storedPreset ? storedPreset.id : 'other');
+       setAirConditionerCount(Math.max(1, Number(sourceOrder.airConditionerCount ?? 1)));
++      setAppointmentWorkItems(sourceItems);
+       setWorkDescriptionText(sourceOrder.problem);
++      setDescriptionManuallyEdited(sourceOrder.problem !== appointmentWorkItemsDescription(sourceItems));
+       setTechnicianInstructionsText(sourceOrder.officeNotes ?? '');
+-      setWorkHours(workOrderDurationMinutes(sourceOrder, services) / 60);
++      setWorkHours(storedPreset ? storedPreset.durationMinutesPerUnit / 60 : 1);
+       const sourceClient = clients.find((item) => item.id === sourceOrder.clientId);
+       const sourceProperty = properties.find((item) => item.id === sourceOrder.propertyId);
+-      setNotificationRecipients(buildNotificationRecipients(sourceClient, sourceProperty, sourceOrder.notificationRecipients, sourceOrder.whatsappNotificationsEnabled !== false));
++      setNotificationRecipients(sourceRole === 'support' ? [] : buildNotificationRecipients(sourceClient, sourceProperty, sourceOrder.notificationRecipients, sourceOrder.whatsappNotificationsEnabled !== false));
+     } else if (cancelled) {
++      setAppointmentMode('primary');
++      setParentWorkOrderId('');
+       setClientId(cancelled.clientId);
+       setPropertyId(cancelled.propertyId ?? '');
+       setAppointmentPresetId('other');
+       setAirConditionerCount(1);
++      setAppointmentWorkItems([{ id: `other-${Date.now()}`, label: cancelled.problem, kind: 'other', quantity: 1, durationMinutesPerUnit: 60 }]);
+       setWorkDescriptionText(cancelled.problem);
++      setDescriptionManuallyEdited(true);
+       setTechnicianInstructionsText('');
+       setWorkHours(1);
+       const cancelledClient = clients.find((item) => item.id === cancelled.clientId);
+@@ -819,9 +959,14 @@
+ 
+     if (!sourceOrder && !cancelled) {
+       const defaultPreset = activeAppointmentWorkPresets[0];
++      setAppointmentMode('primary');
++      setParentWorkOrderId('');
+       setAppointmentPresetId(defaultPreset?.id ?? 'other');
+       setAirConditionerCount(1);
+-      setWorkDescriptionText(defaultPreset ? appointmentDescription(defaultPreset, 1) : '');
++      setAppointmentWorkItems([]);
++      setWorkDescriptionText('');
++      setDescriptionManuallyEdited(false);
++      setCustomWorkLabel('');
+       setTechnicianInstructionsText('');
+       setWorkHours(defaultPreset ? defaultPreset.durationMinutesPerUnit / 60 : 1);
+       setNotificationRecipients(buildNotificationRecipients(selectedClient, selectedProperty));
+@@ -832,6 +977,31 @@
+     setShowCreate(true);
+   };
+ 
++  const openSupportFor = (order: WorkOrder) => {
++    if (selectedDateClosed || order.appointmentAssignmentRole === 'support') return;
++    clearDataError();
++    setEditingOrderId(null);
++    setReschedulingOrderId(null);
++    setSelectedDate(order.date);
++    setCalendarMonth(monthStart(order.date));
++    setAppointmentMode('support');
++    setAppointmentPresetId(activeAppointmentWorkPresets[0]?.id ?? 'other');
++    setAirConditionerCount(1);
++    setAppointmentWorkItems([]);
++    setCustomWorkLabel('');
++    setTechnicianInstructionsText('');
++    setWorkHours(activeAppointmentWorkPresets[0]?.durationMinutesPerUnit ? activeAppointmentWorkPresets[0].durationMinutesPerUnit / 60 : 1);
++    setFormMessage('');
++    setSuccessMessage('');
++    setShowQuickClient(false);
++    setAssignmentLockedToSlot(false);
++    selectSupportParent(order);
++    const alternateVan = agendaVans.find((candidate) => candidate.id !== resolveStoredVanId(order.vanId, agendaVans, legacyVans) && vanCanReceiveAppointments(candidate));
++    if (alternateVan) setVanId(alternateVan.id);
++    setTime('13:30');
++    setShowCreate(true);
++  };
++
+   const openQuickClient = () => {
+     setQuickClient({ ...emptyQuickClientForm, name: clientQuery.trim() });
+     setQuickClientMessage('');
+@@ -1023,20 +1193,28 @@
+     // `problem` remains the only customer-facing work text used by WhatsApp. `officeNotes` is internal.
+     const description = workDescriptionText.trim();
+     const technicianInstructions = technicianInstructionsText.trim();
+-    const appointmentWorkLabel = selectedWorkPreset?.label ?? 'Otro';
+-    const appointmentWorkType = selectedWorkPreset ? legacyAppointmentWorkType(selectedWorkPreset.id) : 'other';
++    const singleWorkItem = appointmentWorkItems.length === 1 ? appointmentWorkItems[0] : undefined;
++    const parentVan = supportParentOrder ? agendaVans.find((item) => item.id === resolveStoredVanId(supportParentOrder.vanId, agendaVans, legacyVans)) : undefined;
++    const appointmentWorkLabel = appointmentMode === 'support' ? `Apoyo a ${parentVan?.name ?? 'van principal'}` : appointmentWorkItemsLabel(appointmentWorkItems);
++    const appointmentWorkType = singleWorkItem?.presetId ? legacyAppointmentWorkType(singleWorkItem.presetId) : 'other';
++    const appointmentPresetId = singleWorkItem?.presetId;
++    const totalAirConditionerCount = appointmentWorkItemsCount(appointmentWorkItems);
+     if (selectedDateClosed) return setFormMessage(`No se pueden crear citas: ${selectedCalendarStatus.reason}.`);
+     if (!client) return setFormMessage('Primero selecciona o registra un cliente.');
++    if (!appointmentWorkItems.length) return setFormMessage('Agrega al menos un trabajo a la cita.');
++    if (appointmentMode === 'support' && !supportParentOrder) return setFormMessage('Selecciona la cita principal que recibirá el apoyo.');
++    if (appointmentMode === 'support' && supportParentOrder?.date !== selectedDate) return setFormMessage('La van de apoyo debe programarse en la misma fecha de la cita principal.');
++    if (appointmentMode === 'support' && van?.id === supportParentVanId) return setFormMessage('Selecciona una van diferente a la van principal.');
+     if (!description) return setFormMessage('Escribe la descripción del trabajo antes de guardar la cita.');
+     if (!van) return setFormMessage('Selecciona una van.');
+     if (!isAvailableFor(van, time, selectedDate, workSlots, editingOrderId ?? reschedulingOrderId ?? undefined)) return setFormMessage('Ese equipo no tiene suficientes cupos consecutivos para la duración seleccionada.');
+ 
+     const now = new Date().toISOString();
+     const zone = selectedProperty?.zone ?? client.zone;
+-    const notificationSnapshot = notificationRecipients.map((recipient) => ({ ...recipient }));
++    const notificationSnapshot = appointmentMode === 'support' ? [] : notificationRecipients.map((recipient) => ({ ...recipient }));
+     const invalidRecipient = notificationSnapshot.find((recipient) => (recipient.sendConfirmation || recipient.sendReminder) && !normalizePhone(recipient.whatsapp || recipient.phone, recipient.whatsappCountry || recipient.phoneCountry).valid);
+     if (invalidRecipient) return setFormMessage(`${invalidRecipient.name} está seleccionado para recibir WhatsApp, pero su número no es válido. Corrige el contacto o desmárcalo.`);
+-    const notificationsEnabled = notificationSnapshot.some((recipient) => recipient.sendConfirmation || recipient.sendReminder);
++    const notificationsEnabled = appointmentMode === 'primary' && notificationSnapshot.some((recipient) => recipient.sendConfirmation || recipient.sendReminder);
+     setSaving(true);
+     setFormMessage('');
+ 
+@@ -1064,12 +1242,16 @@
+         problem: description,
+         officeNotes: technicianInstructions,
+         appointmentWorkType,
+-        appointmentPresetId: selectedWorkPreset?.id,
++        appointmentPresetId,
+         appointmentWorkLabel,
+         appointmentDurationMinutes: workDurationMinutes,
+-        airConditionerCount,
++        appointmentWorkItems,
++        appointmentAssignmentRole: appointmentMode,
++        parentWorkOrderId: appointmentMode === 'support' ? supportParentOrder?.id : undefined,
++        fullDaySingleProperty: fullDaySevenService,
++        airConditionerCount: totalAirConditionerCount,
+         scheduledSlots: workSlots,
+-        whatsappNotificationsEnabled: editingOrder.status === 'Reserva temporal' ? false : notificationsEnabled,
++        whatsappNotificationsEnabled: appointmentMode === 'support' || editingOrder.status === 'Reserva temporal' ? false : notificationsEnabled,
+         notificationRecipients: notificationSnapshot,
+                 scheduleHistory: editingOrder.scheduleHistory,
+         updatedAt: now,
+@@ -1104,12 +1286,16 @@
+         problem: description,
+         officeNotes: technicianInstructions,
+         appointmentWorkType,
+-        appointmentPresetId: selectedWorkPreset?.id,
++        appointmentPresetId,
+         appointmentWorkLabel,
+         appointmentDurationMinutes: workDurationMinutes,
+-        airConditionerCount,
++        appointmentWorkItems,
++        appointmentAssignmentRole: appointmentMode,
++        parentWorkOrderId: appointmentMode === 'support' ? supportParentOrder?.id : undefined,
++        fullDaySingleProperty: fullDaySevenService,
++        airConditionerCount: totalAirConditionerCount,
+         scheduledSlots: workSlots,
+-        whatsappNotificationsEnabled: status === 'Confirmada' ? notificationsEnabled : false,
++        whatsappNotificationsEnabled: appointmentMode === 'primary' && status === 'Confirmada' ? notificationsEnabled : false,
+         notificationRecipients: notificationSnapshot,
+         confirmedAt: status === 'Confirmada' ? now : reschedulingOrder.confirmedAt,
+         temporaryReservedAt: status === 'Reserva temporal' ? now : reschedulingOrder.temporaryReservedAt,
+@@ -1138,15 +1324,19 @@
+         problem: description,
+         officeNotes: technicianInstructions,
+         appointmentWorkType,
+-        appointmentPresetId: selectedWorkPreset?.id,
++        appointmentPresetId,
+         appointmentWorkLabel,
+         appointmentDurationMinutes: workDurationMinutes,
++        appointmentWorkItems,
++        appointmentAssignmentRole: appointmentMode,
++        parentWorkOrderId: appointmentMode === 'support' ? supportParentOrder?.id : undefined,
++        fullDaySingleProperty: fullDaySevenService,
+         amount: 0,
+         paid: 0,
+         schedulingMode: 'fixed',
+-        airConditionerCount,
++        airConditionerCount: totalAirConditionerCount,
+         scheduledSlots: workSlots,
+-        whatsappNotificationsEnabled: status === 'Confirmada' ? notificationsEnabled : false,
++        whatsappNotificationsEnabled: appointmentMode === 'primary' && status === 'Confirmada' ? notificationsEnabled : false,
+         notificationRecipients: notificationSnapshot,
+         confirmedAt: status === 'Confirmada' ? now : undefined,
+         temporaryReservedAt: status === 'Reserva temporal' ? now : undefined,
+@@ -1160,9 +1350,14 @@
+     }
+ 
+     setWorkDescriptionText('');
++    setDescriptionManuallyEdited(false);
+     setTechnicianInstructionsText('');
+     setAppointmentPresetId(activeAppointmentWorkPresets[0]?.id ?? 'other');
+     setAirConditionerCount(1);
++    setAppointmentWorkItems([]);
++    setAppointmentMode('primary');
++    setParentWorkOrderId('');
++    setCustomWorkLabel('');
+     setWorkHours(1);
+     setNotificationRecipients([]);
+     setShowCreate(false);
+@@ -1173,7 +1368,7 @@
+     const hasSelectedRecipients = (order.notificationRecipients ?? []).some((recipient) => recipient.sendConfirmation || recipient.sendReminder);
+     await updateWorkOrder(order.id, {
+       status: 'Confirmada',
+-      whatsappNotificationsEnabled: enableWhatsApp && (order.notificationRecipients?.length ? hasSelectedRecipients : true),
++      whatsappNotificationsEnabled: order.appointmentAssignmentRole === 'support' ? false : enableWhatsApp && (order.notificationRecipients?.length ? hasSelectedRecipients : true),
+       confirmedAt: now,
+       updatedAt: now,
+     });
+@@ -1235,7 +1430,12 @@
+   setPropertyId(order.propertyId ?? '');
+   setAppointmentPresetId(appointmentPreset(appointmentWorkPresets, order.appointmentPresetId ?? order.appointmentWorkType)?.id ?? 'other');
+   setAirConditionerCount(Math.max(1, Number(order.airConditionerCount ?? 1)));
++  const rescheduleItems = normalizedAppointmentWorkItems(order, appointmentWorkPresets);
++  setAppointmentWorkItems(rescheduleItems);
++  setAppointmentMode(order.appointmentAssignmentRole ?? 'primary');
++  setParentWorkOrderId(order.parentWorkOrderId ?? '');
+   setWorkDescriptionText(order.problem);
++  setDescriptionManuallyEdited(order.problem !== appointmentWorkItemsDescription(rescheduleItems));
+   setTechnicianInstructionsText(order.officeNotes ?? '');
+   setWorkHours(workOrderDurationMinutes(order, services) / 60);
+   setVanId(resolveStoredVanId(order.vanId, agendaVans, legacyVans));
+@@ -1259,7 +1459,12 @@
+     setPropertyId(order.propertyId ?? '');
+     setAppointmentPresetId(appointmentPreset(appointmentWorkPresets, order.appointmentPresetId ?? order.appointmentWorkType)?.id ?? 'other');
+     setAirConditionerCount(Math.max(1, Number(order.airConditionerCount ?? 1)));
++    const editItems = normalizedAppointmentWorkItems(order, appointmentWorkPresets);
++    setAppointmentWorkItems(editItems);
++    setAppointmentMode(order.appointmentAssignmentRole ?? 'primary');
++    setParentWorkOrderId(order.parentWorkOrderId ?? '');
+     setWorkDescriptionText(order.problem);
++    setDescriptionManuallyEdited(order.problem !== appointmentWorkItemsDescription(editItems));
+     setTechnicianInstructionsText(order.officeNotes ?? '');
+     setWorkHours(workOrderDurationMinutes(order, services) / 60);
+     setVanId(resolveStoredVanId(order.vanId, agendaVans, legacyVans));
+@@ -1300,7 +1505,7 @@
+           </View>
+           <View style={styles.serviceSelect}>
+             <Text style={styles.serviceIcon}>◷</Text>
+-            <View style={{ flex: 1 }}><Text style={styles.fieldCaption}>Trabajo seleccionado</Text><Text style={styles.serviceName}>{selectedWorkPreset?.label ?? 'Otro trabajo'}</Text></View>
++            <View style={{ flex: 1 }}><Text style={styles.fieldCaption}>Trabajos seleccionados</Text><Text style={styles.serviceName}>{appointmentWorkItemsLabel(appointmentWorkItems)}</Text></View>
+           </View>
+           <View style={styles.durationBox}><Text style={styles.fieldCaption}>Duración seleccionada</Text><Text style={styles.durationValue}>{formatAppointmentDuration(workDurationMinutes)}</Text></View>
+         </View>
+@@ -1340,14 +1545,14 @@
+         </Card>
+ 
+         {/* APP_SCREEN_NAVIGATION_V5 + AGENDA_CREATION_MODAL_V6: appointment details remain inline as the agenda-specific exception. */}
+-        <Card style={styles.detailPanel}><AppointmentDetails order={selectedOrder} halfDay={selectedOrder ? isHalfDay(selectedOrder.vanId, selectedOrder.date) : false} clients={clients} properties={properties} services={services} vans={agendaVans} users={staffDirectory} onUpdate={updateWorkOrder} onConfirm={confirmTemporaryAppointment} onEdit={startEdit} onCancel={cancelAppointment} onReschedule={startReschedule} /></Card>
++        <Card style={styles.detailPanel}><AppointmentDetails order={selectedOrder} halfDay={selectedOrder ? isHalfDay(selectedOrder.vanId, selectedOrder.date) : false} clients={clients} properties={properties} services={services} vans={agendaVans} users={staffDirectory} workOrders={workOrders} onUpdate={updateWorkOrder} onConfirm={confirmTemporaryAppointment} onEdit={startEdit} onCancel={cancelAppointment} onReschedule={startReschedule} onAddSupport={openSupportFor} /></Card>
+       </View>
+ 
+       {/* AGENDA_CREATION_MODAL_V6: creation stays in an overlay and existing appointment details stay in the right-hand agenda panel. */}
+       <AppModal
+         visible={showCreate}
+         presentation={editingOrder || reschedulingOrder ? 'screen' : 'overlay'}
+-        title={showQuickClient ? 'Agregar cliente rápido' : showQuickProperty ? 'Añadir propiedad' : showQuickContact ? 'Añadir persona encargada' : editingOrder ? 'Editar cita' : reschedulingOrder ? 'Reprogramar cita' : 'Confirmar nueva cita'}
++        title={showQuickClient ? 'Agregar cliente rápido' : showQuickProperty ? 'Añadir propiedad' : showQuickContact ? 'Añadir persona encargada' : editingOrder ? appointmentMode === 'support' ? 'Editar van de apoyo' : 'Editar cita' : reschedulingOrder ? appointmentMode === 'support' ? 'Reprogramar van de apoyo' : 'Reprogramar cita' : appointmentMode === 'support' ? 'Agregar van de apoyo' : 'Confirmar nueva cita'}
+         onClose={() => {
+           if (showQuickClient) {
+   if (!quickClientSaving) setShowQuickClient(false);
+@@ -1434,7 +1639,7 @@
+ </ScrollView>
+         ) : (
+ <ScrollView>
+-            <Text style={styles.modalIntro}>Selecciona el cliente, la propiedad y el trabajo. La duración se calculará automáticamente; las instrucciones internas permanecerán separadas del WhatsApp del cliente.</Text>
++            <Text style={styles.modalIntro}>{appointmentMode === 'support' ? 'Asigna una segunda van a una cita existente. Los datos del cliente se heredan y esta asignación nunca enviará WhatsApp.' : 'Selecciona el cliente, agrega uno o varios trabajos y confirma la asignación. La descripción del cliente seguirá siendo editable.'}</Text>
+             {reschedulingOrder ? (
+               <View style={{ borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 12, marginBottom: 15 }}>
+                 <Text style={styles.quickSectionTitle}>Nueva fecha de la cita</Text>
+@@ -1457,50 +1662,40 @@
+             {formMessage ? <View style={styles.formError}><Text style={styles.formErrorText}>{formMessage}</Text></View> : null}
+             {successMessage ? <View style={styles.successBanner}><Text style={styles.successBannerText}>{successMessage}</Text></View> : null}
+ 
+-            <Text style={styles.stepLabel}>1</Text><Text style={styles.fieldLabel}>Cliente</Text>
+-            <Input placeholder="Buscar por nombre, empresa, teléfono, dirección o zona…" value={clientQuery} onChangeText={setClientQuery} />
+-            <View style={styles.searchResults}>
+-              {filteredClients.map((client) => <SearchRow key={client.id} title={client.name} subtitle={`${client.company ? `${client.company} · ` : ''}${client.phone} · ${client.zone}`} active={clientId === client.id} onPress={() => { setClientId(client.id); setClientQuery(''); setSuccessMessage(''); }} />)}
+-              {clientQuery.trim() && !filteredClients.length ? <Text style={styles.noResults}>No encontramos clientes con esa búsqueda.</Text> : null}
+-              <Pressable onPress={openQuickClient} style={styles.addClientRow}>
+-                <View style={styles.addClientIcon}><Text style={styles.addClientIconText}>＋</Text></View>
+-                <View style={{ flex: 1 }}><Text style={styles.addClientTitle}>Añadir cliente nuevo</Text><Text style={styles.addClientSubtitle}>{clientQuery.trim() ? `Crear “${clientQuery.trim()}” y registrar su propiedad` : 'Registrar cliente y propiedad rápidamente'}</Text></View>
+-                <Text style={styles.addClientArrow}>›</Text>
+-              </Pressable>
+-            </View>
+-
+-                        <View style={styles.inlineFieldHeader}>
+-    <Text style={[styles.fieldLabel, { marginBottom: 0 }]}>Propiedad / lugar de servicio</Text>
+-    <Button compact variant="secondary" label="Añadir propiedad" icon="＋" disabled={!selectedClient} onPress={openQuickProperty} />
+-  </View>
+-  {clientProperties.length ? <View style={styles.optionWrap}>{clientProperties.map((property) => <Option key={property.id} label={`${property.name} · ${property.address} · ${property.zone}`} active={propertyId === property.id} onPress={() => { setPropertyId(property.id); setSuccessMessage(''); }} />)}</View> : selectedClient ? <Text style={styles.fallbackText}>Este cliente todavía no tiene propiedades. Presiona “Añadir propiedad”.</Text> : <Text style={styles.fallbackText}>Selecciona o registra un cliente para escoger la propiedad.</Text>}
++            {!editingOrder && !reschedulingOrder ? <><Text style={styles.fieldLabel}>Tipo de asignación</Text><View style={styles.modeSelector}><Option label="Cita principal" active={appointmentMode === 'primary'} onPress={() => changeAppointmentMode('primary')} /><Option label="Van de apoyo" active={appointmentMode === 'support'} onPress={() => changeAppointmentMode('support')} /></View></> : null}
+ 
+-  {selectedProperty ? (
+-    <View style={styles.propertyContactsPanel}>
+-      <View style={styles.inlineFieldHeader}>
+-        <View><Text style={styles.propertyContactsTitle}>Personas vinculadas a esta propiedad</Text><Text style={styles.propertyContactsHelp}>Encargados, administradores, acceso o contabilidad.</Text></View>
+-        <Button compact variant="secondary" label="Añadir persona" icon="＋" onPress={openQuickContact} />
+-      </View>
+-      {selectedPropertyContacts.length ? selectedPropertyContacts.map((contact) => (
+-        <View key={contact.id} style={styles.propertyContactRow}>
+-          <View style={{ flex: 1 }}><Text style={styles.propertyContactName}>{contact.name}</Text><Text style={styles.propertyContactMeta}>{contact.role} · WhatsApp {contact.whatsapp || contact.phone} · {contact.preferredLanguage}{contact.arrivalContact ? ' · Llamar al llegar' : ''}</Text></View>
+-        </View>
+-      )) : <Text style={styles.fallbackText}>Todavía no hay personas registradas para esta propiedad.</Text>}
+-    </View>
+-  ) : null}
++            {appointmentMode === 'support' ? <>
++              <Text style={styles.stepLabel}>1</Text><Text style={styles.fieldLabel}>Cita principal a apoyar</Text>
++              {supportCandidates.length ? <View style={styles.supportCandidateList}>{supportCandidates.map((order) => {
++                const client = clients.find((item) => item.id === order.clientId);
++                const primaryVan = agendaVans.find((item) => item.id === resolveStoredVanId(order.vanId, agendaVans, legacyVans));
++                return <SearchRow key={order.id} title={`${client?.name ?? 'Cliente'} · ${primaryVan?.name ?? 'Van principal'}`} subtitle={`${order.time} · ${order.problem}`} active={parentWorkOrderId === order.id} onPress={() => selectSupportParent(order)} />;
++              })}</View> : <View style={styles.infoBanner}><Text style={styles.infoBannerText}>No hay citas principales activas en esta fecha. Primero crea la cita del cliente.</Text></View>}
++              {supportParentOrder ? <View style={styles.supportParentCard}><Text style={styles.supportParentTitle}>Apoyo interno · no envía WhatsApp</Text><Text style={styles.supportParentText}>{selectedClient?.name} · {selectedProperty?.name ?? supportParentOrder.address}</Text><Text style={styles.supportParentText}>Cita principal: {agendaVans.find((item) => item.id === resolveStoredVanId(supportParentOrder.vanId, agendaVans, legacyVans))?.name ?? 'Van principal'} · {supportParentOrder.time}</Text></View> : null}
++            </> : <>
++              <Text style={styles.stepLabel}>1</Text><Text style={styles.fieldLabel}>Cliente</Text>
++              <Input placeholder="Buscar por nombre, empresa, teléfono, dirección o zona…" value={clientQuery} onChangeText={setClientQuery} />
++              <View style={styles.searchResults}>
++                {filteredClients.map((client) => <SearchRow key={client.id} title={client.name} subtitle={`${client.company ? `${client.company} · ` : ''}${client.phone} · ${client.zone}`} active={clientId === client.id} onPress={() => { setClientId(client.id); setClientQuery(''); setSuccessMessage(''); }} />)}
++                {clientQuery.trim() && !filteredClients.length ? <Text style={styles.noResults}>No encontramos clientes con esa búsqueda.</Text> : null}
++                <Pressable onPress={openQuickClient} style={styles.addClientRow}><View style={styles.addClientIcon}><Text style={styles.addClientIconText}>＋</Text></View><View style={{ flex: 1 }}><Text style={styles.addClientTitle}>Añadir cliente nuevo</Text><Text style={styles.addClientSubtitle}>{clientQuery.trim() ? `Crear “${clientQuery.trim()}” y registrar su propiedad` : 'Registrar cliente y propiedad rápidamente'}</Text></View><Text style={styles.addClientArrow}>›</Text></Pressable>
++              </View>
++              <View style={styles.inlineFieldHeader}><Text style={[styles.fieldLabel, { marginBottom: 0 }]}>Propiedad / lugar de servicio</Text><Button compact variant="secondary" label="Añadir propiedad" icon="＋" disabled={!selectedClient} onPress={openQuickProperty} /></View>
++              {clientProperties.length ? <View style={styles.optionWrap}>{clientProperties.map((property) => <Option key={property.id} label={`${property.name} · ${property.address} · ${property.zone}`} active={propertyId === property.id} onPress={() => { setPropertyId(property.id); setSuccessMessage(''); }} />)}</View> : selectedClient ? <Text style={styles.fallbackText}>Este cliente todavía no tiene propiedades. Presiona “Añadir propiedad”.</Text> : <Text style={styles.fallbackText}>Selecciona o registra un cliente para escoger la propiedad.</Text>}
++              {selectedProperty ? <View style={styles.propertyContactsPanel}><View style={styles.inlineFieldHeader}><View><Text style={styles.propertyContactsTitle}>Personas vinculadas a esta propiedad</Text><Text style={styles.propertyContactsHelp}>Encargados, administradores, acceso o contabilidad.</Text></View><Button compact variant="secondary" label="Añadir persona" icon="＋" onPress={openQuickContact} /></View>{selectedPropertyContacts.length ? selectedPropertyContacts.map((contact) => <View key={contact.id} style={styles.propertyContactRow}><View style={{ flex: 1 }}><Text style={styles.propertyContactName}>{contact.name}</Text><Text style={styles.propertyContactMeta}>{contact.role} · WhatsApp {contact.whatsapp || contact.phone} · {contact.preferredLanguage}{contact.arrivalContact ? ' · Llamar al llegar' : ''}</Text></View></View>) : <Text style={styles.fallbackText}>Todavía no hay personas registradas para esta propiedad.</Text>}</View> : null}
++            </>}
+ 
+-            <Text style={styles.stepLabel}>2</Text><Text style={styles.fieldLabel}>Trabajo programado</Text>
+-            <Text style={styles.workPresetHelp}>Escoge un trabajo predeterminado para calcular la duración y preparar automáticamente la descripción que recibirá el cliente.</Text>
++            <Text style={styles.stepLabel}>2</Text><Text style={styles.fieldLabel}>Trabajos de esta asignación</Text>
++            <Text style={styles.workPresetHelp}>Agrega todos los trabajos que realizará esta van. Cada línea conserva su cantidad y duración.</Text>
+             <View style={styles.optionWrap}>
+               {activeAppointmentWorkPresets.map((preset) => <Option key={preset.id} label={`${preset.label} · ${formatAppointmentDuration(preset.durationMinutesPerUnit)} por aire`} active={appointmentPresetId === preset.id} onPress={() => selectAppointmentWorkType(preset.id)} />)}
+               <Option label="Otro" active={appointmentPresetId === 'other'} onPress={() => selectAppointmentWorkType('other')} />
+             </View>
+-
+-            <Text style={styles.stepLabel}>3</Text><Text style={styles.fieldLabel}>{selectedWorkPreset ? 'Cantidad de aires' : 'Cantidad de horas de trabajo'}</Text>
++            {!selectedWorkPreset ? <Input label="Nombre del trabajo" value={customWorkLabel} onChangeText={setCustomWorkLabel} placeholder="Ej. Diagnóstico eléctrico" /> : null}
+             <View style={styles.quantityPanel}>
+               <View style={{ flex: 1 }}>
+-                <Text style={styles.quantityTitle}>{selectedWorkPreset ? 'Aires incluidos en esta cita' : 'Tiempo total reservado'}</Text>
+-                <Text style={styles.quantityHelp}>{selectedWorkPreset ? `${formatAppointmentDuration(selectedWorkPreset.durationMinutesPerUnit)} por aire. La agenda calculará y bloqueará el tiempo automáticamente.` : 'Para “Otro”, selecciona manualmente de 30 minutos a 6 horas.'}</Text>
++                <Text style={styles.quantityTitle}>{selectedWorkPreset ? 'Cantidad de aires para este trabajo' : 'Duración del trabajo personalizado'}</Text>
++                <Text style={styles.quantityHelp}>{selectedWorkPreset ? `${formatAppointmentDuration(selectedWorkPreset.durationMinutesPerUnit)} por aire.` : 'Selecciona de 30 minutos a 6 horas.'}</Text>
+               </View>
+               {selectedWorkPreset ? (
+                 <View style={styles.stepper}><Pressable disabled={airConditionerCount <= 1} onPress={() => changeAirConditionerCount(airConditionerCount - 1)} style={[styles.stepperButton, airConditionerCount <= 1 && styles.stepperDisabled]}><Text style={styles.stepperButtonText}>−</Text></Pressable><Text style={styles.stepperValue}>{airConditionerCount}</Text><Pressable disabled={airConditionerCount >= maximumAirConditionerCount} onPress={() => changeAirConditionerCount(airConditionerCount + 1)} style={[styles.stepperButton, airConditionerCount >= maximumAirConditionerCount && styles.stepperDisabled]}><Text style={styles.stepperButtonText}>＋</Text></Pressable></View>
+@@ -1508,25 +1703,27 @@
+                 <View style={styles.stepper}><Pressable disabled={workHours <= 0.5} onPress={() => setWorkHours((value) => Math.max(0.5, value - 0.5))} style={[styles.stepperButton, workHours <= 0.5 && styles.stepperDisabled]}><Text style={styles.stepperButtonText}>−</Text></Pressable><Text style={styles.stepperValue}>{workHours}</Text><Pressable disabled={workHours >= MAX_BOOKABLE_HOURS} onPress={() => setWorkHours((value) => Math.min(MAX_BOOKABLE_HOURS, value + 0.5))} style={[styles.stepperButton, workHours >= MAX_BOOKABLE_HOURS && styles.stepperDisabled]}><Text style={styles.stepperButtonText}>＋</Text></Pressable></View>
+               )}
+             </View>
+-            <View style={styles.durationPreview}><View><Text style={styles.previewLabel}>Duración exacta</Text><Text style={styles.previewValue}>{formatAppointmentDuration(workDurationMinutes)}</Text></View><View><Text style={styles.previewLabel}>Capacidad reservada</Text><Text style={styles.previewValue}>{workSlots} cupo{workSlots !== 1 ? 's' : ''}</Text></View><View><Text style={styles.previewLabel}>Cálculo</Text><Text style={styles.previewValue}>{selectedWorkPreset ? 'Automático' : 'Manual'}</Text></View></View>
++            <Button variant="secondary" label="＋ Agregar trabajo" onPress={addAppointmentWorkItem} />
++            <View style={styles.workItemsList}>{appointmentWorkItems.length ? appointmentWorkItems.map((item) => <View key={item.id} style={styles.workItemCard}><View style={{ flex: 1 }}><Text style={styles.workItemTitle}>{item.label}</Text><Text style={styles.workItemMeta}>{formatAppointmentDuration(item.durationMinutesPerUnit)} por unidad · {formatAppointmentDuration(item.durationMinutesPerUnit * item.quantity)} total</Text></View><View style={styles.stepper}><Pressable disabled={item.quantity <= 1} onPress={() => changeAppointmentWorkItemQuantity(item.id, -1)} style={[styles.stepperButton, item.quantity <= 1 && styles.stepperDisabled]}><Text style={styles.stepperButtonText}>−</Text></Pressable><Text style={styles.stepperValue}>{item.quantity}</Text><Pressable disabled={item.quantity >= (item.presetId === 'standard_service' ? 7 : MAX_WORK_ITEM_QUANTITY)} onPress={() => changeAppointmentWorkItemQuantity(item.id, 1)} style={[styles.stepperButton, item.quantity >= (item.presetId === 'standard_service' ? 7 : MAX_WORK_ITEM_QUANTITY) && styles.stepperDisabled]}><Text style={styles.stepperButtonText}>＋</Text></Pressable></View><Pressable onPress={() => removeAppointmentWorkItem(item.id)} style={styles.removeWorkItem}><Text style={styles.removeWorkItemText}>Quitar</Text></Pressable></View>) : <Text style={styles.emptyWorkItems}>Todavía no has agregado trabajos.</Text>}</View>
++            <View style={styles.durationPreview}><View><Text style={styles.previewLabel}>Duración calculada</Text><Text style={styles.previewValue}>{formatAppointmentDuration(workDurationMinutes)}</Text></View><View><Text style={styles.previewLabel}>Capacidad reservada</Text><Text style={styles.previewValue}>{workSlots} cupo{workSlots !== 1 ? 's' : ''}</Text></View><View><Text style={styles.previewLabel}>Trabajos</Text><Text style={styles.previewValue}>{appointmentWorkItems.length}</Text></View></View>
+             <Text style={styles.capacityRoundingHelp}>Los cupos de la agenda son de 1 hora. Si la duración incluye 30 minutos, se reserva el siguiente cupo completo para proteger la capacidad del equipo.</Text>
+-
+-            <View style={[styles.liveCapacityBanner, selectedAppointmentAvailable ? styles.liveCapacityAvailable : styles.liveCapacityUnavailable]}><Text style={[styles.liveCapacityTitle, selectedAppointmentAvailable ? styles.liveCapacityTitleAvailable : styles.liveCapacityTitleUnavailable]}>{selectedAppointmentAvailable ? '✓ Capacidad disponible' : 'Ese equipo no tiene cupo suficiente'}</Text><Text style={styles.liveCapacityText}>{selectedAppointmentAvailable ? `${selectedVan?.name} puede realizar este trabajo desde ${time}.` : `${formatAppointmentDuration(workDurationMinutes)} requieren ${workSlots} cupo${workSlots === 1 ? '' : 's'} consecutivo${workSlots === 1 ? '' : 's'}. Reduce la cantidad o cambia el horario, el equipo o la fecha.`}</Text></View>
++            {fullDaySevenService ? <View style={styles.fullDayBanner}><Text style={styles.fullDayTitle}>✓ Excepción de jornada completa</Text><Text style={styles.fullDayText}>Siete servicios estándar en una sola dirección desde las 8:30. La van quedará bloqueada durante todo el día.</Text></View> : null}
++            <View style={[styles.liveCapacityBanner, selectedAppointmentAvailable ? styles.liveCapacityAvailable : styles.liveCapacityUnavailable]}><Text style={[styles.liveCapacityTitle, selectedAppointmentAvailable ? styles.liveCapacityTitleAvailable : styles.liveCapacityTitleUnavailable]}>{selectedAppointmentAvailable ? '✓ Capacidad disponible' : appointmentMode === 'support' && selectedVan?.id === supportParentVanId ? 'Selecciona otra van para el apoyo' : appointmentWorkItems.length ? 'Ese equipo no tiene cupo suficiente' : 'Agrega un trabajo para calcular la capacidad'}</Text><Text style={styles.liveCapacityText}>{selectedAppointmentAvailable ? `${selectedVan?.name} puede realizar esta asignación desde ${time}.` : appointmentMode === 'support' && selectedVan?.id === supportParentVanId ? 'La van de apoyo debe ser diferente a la van responsable de la cita principal.' : appointmentWorkItems.length ? `${formatAppointmentDuration(workDurationMinutes)} requieren ${workSlots} cupo${workSlots === 1 ? '' : 's'} consecutivo${workSlots === 1 ? '' : 's'}. Reduce la cantidad o cambia el horario, el equipo o la fecha.` : 'La validación aparecerá automáticamente al agregar el primer trabajo.'}</Text></View>
+ 
+             <Text style={styles.stepLabel}>4</Text><Text style={styles.fieldLabel}>{assignmentLockedToSlot ? 'Equipo asignado' : 'Asignar a'}</Text>
+-            {assignmentLockedToSlot && selectedVan ? <View style={styles.assignedTeamCard}><Text style={styles.assignedTeamVan}>{selectedVan.name}</Text><View style={styles.assignedTeamPeople}><View><Text style={styles.assignedTeamRole}>Técnico</Text><Text style={styles.assignedTeamName}>{selectedDriverName ?? 'Sin técnico asignado'}</Text></View><View><Text style={styles.assignedTeamRole}>Ayudante</Text><Text style={styles.assignedTeamName}>{selectedHelperName ?? 'Sin ayudante asignado'}</Text></View></View><Text style={styles.assignedTeamHelp}>Este equipo proviene del cupo que seleccionaste en la agenda.</Text></View> : <View style={styles.optionWrap}>{agendaVans.map((van) => { const names = van.technicianIds.map((id) => staffDirectory.find((user) => user.id === id)?.name.split(' ')[0]).filter(Boolean).join(' + '); const disabled = !vanCanReceiveAppointments(van); return <Option key={van.id} label={`${van.name} · ${names || 'Sin equipo'} · ${van.dispatchStatus}`} active={vanId === van.id} disabled={disabled} onPress={() => setVanId(van.id)} />; })}</View>}
++            {assignmentLockedToSlot && selectedVan ? <View style={styles.assignedTeamCard}><Text style={styles.assignedTeamVan}>{selectedVan.name}</Text><View style={styles.assignedTeamPeople}><View><Text style={styles.assignedTeamRole}>Técnico</Text><Text style={styles.assignedTeamName}>{selectedDriverName ?? 'Sin técnico asignado'}</Text></View><View><Text style={styles.assignedTeamRole}>Ayudante</Text><Text style={styles.assignedTeamName}>{selectedHelperName ?? 'Sin ayudante asignado'}</Text></View></View><Text style={styles.assignedTeamHelp}>Este equipo proviene del cupo que seleccionaste en la agenda.</Text></View> : <View style={styles.optionWrap}>{agendaVans.map((van) => { const names = van.technicianIds.map((id) => staffDirectory.find((user) => user.id === id)?.name.split(' ')[0]).filter(Boolean).join(' + '); const disabled = !vanCanReceiveAppointments(van) || (appointmentMode === 'support' && van.id === supportParentVanId); return <Option key={van.id} label={`${van.name} · ${names || 'Sin equipo'} · ${van.dispatchStatus}${appointmentMode === 'support' && van.id === supportParentVanId ? ' · van principal' : ''}`} active={vanId === van.id} disabled={disabled} onPress={() => setVanId(van.id)} />; })}</View>}
+ 
+             <Text style={styles.stepLabel}>5</Text><Text style={styles.fieldLabel}>Horario sugerido</Text>
+             <View style={styles.optionWrap}>{(selectedVan && isHalfDay(selectedVan.id) ? [...morningSlots, extraMorningSlot] : allSlots).map((slot) => { const available = selectedVan ? isAvailable(selectedVan, slot) : false; return <Option key={slot} label={available ? slotLabel(slot) : `${slotLabel(slot)} · no disponible`} active={time === slot} disabled={!available} onPress={() => setTime(slot)} />; })}</View>
+ 
+             <Text style={styles.stepLabel}>6</Text>
+-            <Input label="Descripción del trabajo" value={workDescriptionText} onChangeText={setWorkDescriptionText} editable={!selectedWorkPreset} multiline placeholder={selectedWorkPreset ? undefined : 'Describe el trabajo que no aparece en la lista…'} />
+-            <Text style={styles.customerDescriptionHelp}>{selectedWorkPreset ? 'Descripción estandarizada automáticamente.' : 'Escribe una descripción clara para el cliente.'} Este texto sí se utilizará en la confirmación y el recordatorio de WhatsApp.</Text>
++            <Input label={appointmentMode === 'support' ? 'Descripción interna de la asignación' : 'Descripción del trabajo para el cliente'} value={workDescriptionText} onChangeText={(value) => { setWorkDescriptionText(value); setDescriptionManuallyEdited(true); }} multiline placeholder="Describe claramente el trabajo programado…" />
++            <View style={styles.descriptionActions}><Text style={styles.customerDescriptionHelp}>{appointmentMode === 'support' ? 'Este texto solo será visible para la oficina y los técnicos.' : 'Este texto sí se utilizará en la confirmación y el recordatorio de WhatsApp.'}</Text><Button compact variant="ghost" label="Restablecer texto automático" disabled={!appointmentWorkItems.length} onPress={resetCustomerDescription} /></View>
+ 
+             <Input label="Instrucciones para el técnico" value={technicianInstructionsText} onChangeText={setTechnicianInstructionsText} multiline placeholder="Ej. Llamar al encargado al llegar, llevar escalera alta, revisar ruido reportado…" />
+             <View style={styles.internalNote}><Text style={styles.internalNoteTitle}>SOLO USO INTERNO</Text><Text style={styles.internalNoteText}>Estas instrucciones serán visibles para el técnico. No se incluirán en WhatsApp, confirmaciones ni recordatorios enviados al cliente.</Text></View>
+ 
+-            <Text style={styles.fieldLabel}>Notificaciones por WhatsApp</Text>
++            {appointmentMode === 'support' ? <View style={styles.noWhatsappBanner}><Text style={styles.noWhatsappTitle}>SIN MENSAJES AL CLIENTE</Text><Text style={styles.noWhatsappText}>La confirmación y el recordatorio pertenecen únicamente a la cita principal. Esta van de apoyo no generará mensajes duplicados.</Text></View> : <><Text style={styles.fieldLabel}>Notificaciones por WhatsApp</Text>
+   <Text style={styles.notificationHelp}>Selecciona de forma independiente quién recibe la confirmación y quién recibe el recordatorio. Las reservas temporales guardan esta selección, pero no envían mensajes hasta que la cita sea confirmada.</Text>
+   <View style={styles.notificationMatrix}>
+     <View style={[styles.notificationRow, styles.notificationHeaderRow]}>
+@@ -1546,17 +1743,17 @@
+     ))}
+     {!notificationRecipients.length ? <Text style={styles.notificationEmpty}>Selecciona un cliente o registra una persona con WhatsApp.</Text> : null}
+   </View>
+-  {notificationRecipients.some((recipient) => recipient.sendConfirmation || recipient.sendReminder) ? null : <Text style={styles.notificationDisabledText}>No se enviarán mensajes de WhatsApp para esta cita.</Text>}
++  {notificationRecipients.some((recipient) => recipient.sendConfirmation || recipient.sendReminder) ? null : <Text style={styles.notificationDisabledText}>No se enviarán mensajes de WhatsApp para esta cita.</Text>}</>}
+ 
+-            <View style={styles.summaryBox}><Text style={styles.summaryTitle}>Resumen de la cita</Text><Text style={styles.summaryLine}>{selectedClient?.name ?? 'Sin cliente'} · {selectedProperty?.name ?? selectedClient?.address ?? 'Sin dirección'}</Text><Text style={styles.summaryLine}>{selectedWorkPreset ? `${airConditionerCount} aire${airConditionerCount === 1 ? '' : 's'} · ` : ''}{formatAppointmentDuration(workDurationMinutes)} · {selectedVan?.name} · {formatDate(selectedDate)} · {time}</Text><Text style={styles.summaryLine} numberOfLines={2}>Cliente: {workDescriptionText.trim() || 'Falta agregar la descripción del trabajo.'}</Text>{technicianInstructionsText.trim() ? <Text style={styles.summaryInternalLine} numberOfLines={2}>Técnico: {technicianInstructionsText.trim()}</Text> : null}</View>
++            <View style={styles.summaryBox}><Text style={styles.summaryTitle}>{appointmentMode === 'support' ? 'Resumen del apoyo' : 'Resumen de la cita'}</Text><Text style={styles.summaryLine}>{selectedClient?.name ?? 'Sin cliente'} · {selectedProperty?.name ?? selectedClient?.address ?? 'Sin dirección'}</Text><Text style={styles.summaryLine}>{appointmentWorkItemsCount(appointmentWorkItems)} unidad(es) · {formatAppointmentDuration(workDurationMinutes)} · {selectedVan?.name} · {formatDate(selectedDate)} · {time}</Text><Text style={styles.summaryLine} numberOfLines={2}>{appointmentMode === 'support' ? 'Asignación' : 'Cliente'}: {workDescriptionText.trim() || 'Falta agregar la descripción del trabajo.'}</Text>{technicianInstructionsText.trim() ? <Text style={styles.summaryInternalLine} numberOfLines={2}>Técnico: {technicianInstructionsText.trim()}</Text> : null}</View>
+             <View style={styles.modalActions}>
+               <Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => { setShowCreate(false); setEditingOrderId(null); setReschedulingOrderId(null); setPendingChangeReason(null); }} />
+               {editingOrder ? (
+-                <Button label={saving ? 'Guardando…' : 'Guardar cambios'} disabled={saving || !clientId || !workDescriptionText.trim() || !selectedAppointmentAvailable} onPress={() => void saveAppointment(editingOrder.status === 'Reserva temporal' ? 'Reserva temporal' : 'Confirmada')} />
++                <Button label={saving ? 'Guardando…' : 'Guardar cambios'} disabled={saving || !clientId || !appointmentWorkItems.length || !workDescriptionText.trim() || !selectedAppointmentAvailable || (appointmentMode === 'support' && !supportParentOrder)} onPress={() => void saveAppointment(editingOrder.status === 'Reserva temporal' ? 'Reserva temporal' : 'Confirmada')} />
+               ) : (
+                 <>
+-                  <Button variant="secondary" label={saving ? 'Guardando…' : 'Reservar temporalmente'} disabled={saving || !clientId || !workDescriptionText.trim() || !selectedAppointmentAvailable} onPress={() => void saveAppointment('Reserva temporal')} />
+-                  <Button label={saving ? 'Guardando…' : reschedulingOrder ? 'Guardar reprogramación' : 'Confirmar cita'} disabled={saving || !clientId || !workDescriptionText.trim() || !selectedAppointmentAvailable} onPress={() => void saveAppointment('Confirmada')} />
++                  <Button variant="secondary" label={saving ? 'Guardando…' : 'Reservar temporalmente'} disabled={saving || !clientId || !appointmentWorkItems.length || !workDescriptionText.trim() || !selectedAppointmentAvailable || (appointmentMode === 'support' && !supportParentOrder)} onPress={() => void saveAppointment('Reserva temporal')} />
++                  <Button label={saving ? 'Guardando…' : reschedulingOrder ? 'Guardar reprogramación' : appointmentMode === 'support' ? 'Guardar van de apoyo' : 'Confirmar cita'} disabled={saving || !clientId || !appointmentWorkItems.length || !workDescriptionText.trim() || !selectedAppointmentAvailable || (appointmentMode === 'support' && !supportParentOrder)} onPress={() => void saveAppointment('Confirmada')} />
+                 </>
+               )}
+             </View>
+@@ -1670,8 +1867,8 @@
+             const zone = order.zone ?? property?.zone ?? client?.zone ?? 'Zona no registrada';
+             const crossesBreak = occupied.some((item) => morningSlots.includes(item)) && occupied.some((item) => afternoonSlots.includes(item));
+             return (
+-              <Pressable key={order.id} onPress={() => onSelectOrder(order.id)} style={[styles.mergedAppointment, order.status === 'Reserva temporal' && styles.slotTemporary, selectedOrderId === order.id && styles.slotSelected, { top, height: scheduleBlockHeight(start, Math.max(start, end), extendedLayout) }]}>
+-                <View style={styles.slotTop}><Text style={styles.slotTime}>{scheduleRangeForOrder(order, services, halfDay)}</Text><Pill label={order.status} tone={toneForStatus(order.status)} /></View>
++              <Pressable key={order.id} onPress={() => onSelectOrder(order.id)} style={[styles.mergedAppointment, order.appointmentAssignmentRole === 'support' && styles.slotSupport, order.status === 'Reserva temporal' && styles.slotTemporary, selectedOrderId === order.id && styles.slotSelected, { top, height: scheduleBlockHeight(start, Math.max(start, end), extendedLayout) }]}>
++                <View style={styles.slotTop}><Text style={styles.slotTime}>{scheduleRangeForOrder(order, services, halfDay)}</Text><Pill label={order.appointmentAssignmentRole === 'support' ? 'Apoyo' : order.status} tone={order.appointmentAssignmentRole === 'support' ? 'warning' : toneForStatus(order.status)} /></View>
+                 <Text style={styles.clientName} numberOfLines={1}>{client?.name ?? 'Cliente'}</Text>
+                 <Text style={styles.addressLine} numberOfLines={2}>{order.address}</Text>
+                 <Text style={styles.zoneLine} numberOfLines={1}>{zone}</Text>
+@@ -1700,17 +1897,40 @@
+   return <View style={[styles.scheduleHeader, { top }]}><Text style={styles.groupTitle}>{title}</Text><Text style={[styles.cupos, used >= capacity && styles.cuposFull]}>{used}/{capacity} horas</Text></View>;
+ }
+ 
+-function AppointmentDetails({ order, halfDay, clients, properties, services, vans, users, onUpdate, onConfirm, onEdit, onCancel, onReschedule }: { order?: WorkOrder; halfDay: boolean; clients: Client[]; properties: Property[]; services: ServiceType[]; vans: Van[]; users: { id: string; name: string }[]; onUpdate: (id: string, changes: Partial<WorkOrder>) => Promise<{ ok: boolean; message?: string }>; onConfirm: (order: WorkOrder, enableWhatsApp: boolean) => Promise<void>; onEdit: (order: WorkOrder) => void; onCancel: (order: WorkOrder) => Promise<void>; onReschedule: (order: WorkOrder) => void }) {
++function AppointmentDetails({ order, halfDay, clients, properties, services, vans, users, workOrders, onUpdate, onConfirm, onEdit, onCancel, onReschedule, onAddSupport }: { order?: WorkOrder; halfDay: boolean; clients: Client[]; properties: Property[]; services: ServiceType[]; vans: Van[]; users: { id: string; name: string }[]; workOrders: WorkOrder[]; onUpdate: (id: string, changes: Partial<WorkOrder>) => Promise<{ ok: boolean; message?: string }>; onConfirm: (order: WorkOrder, enableWhatsApp: boolean) => Promise<void>; onEdit: (order: WorkOrder) => void; onCancel: (order: WorkOrder) => Promise<void>; onReschedule: (order: WorkOrder) => void; onAddSupport: (order: WorkOrder) => void }) {
+   if (!order) return <View style={styles.emptyDetails}><Text style={styles.detailTitle}>Detalles de la cita</Text><Text style={styles.detailMuted}>Selecciona una cita para ver la información completa.</Text></View>;
+   const client = clients.find((item) => item.id === order.clientId);
+   const property = properties.find((item) => item.id === order.propertyId);
+   const service = services.find((item) => item.id === order.serviceId);
+   const van = vans.find((item) => item.id === order.vanId);
++  const isSupport = order.appointmentAssignmentRole === 'support';
++  const parentOrder = isSupport ? workOrders.find((item) => item.id === order.parentWorkOrderId) : undefined;
++  const parentVan = parentOrder ? vans.find((item) => item.id === parentOrder.vanId) : undefined;
++  const supportOrders = !isSupport ? workOrders.filter((item) => item.parentWorkOrderId === order.id && item.appointmentAssignmentRole === 'support' && orderBlocksCapacity(item)) : [];
+   const slots = orderSlotCount(order, services);
+   const techNames = order.technicianIds.map((id) => users.find((user) => user.id === id)?.name).filter(Boolean).join(' y ') || 'Sin técnico asignado';
+   const confirmationNames = (order.notificationRecipients ?? []).filter((recipient) => recipient.sendConfirmation).map((recipient) => recipient.name).join(', ');
+   const reminderNames = (order.notificationRecipients ?? []).filter((recipient) => recipient.sendReminder).map((recipient) => recipient.name).join(', ');
+-  return <View><View style={styles.detailHeader}><Pill label={order.status} tone={toneForStatus(order.status)} /><Text style={styles.detailId}>ID: {order.id}</Text></View><Text style={styles.detailTitle}>{client?.name}</Text><Text style={styles.detailSubtitle}>{order.appointmentWorkLabel ?? service?.name ?? 'Trabajo programado'}</Text><View style={styles.detailTabs}><Text style={styles.detailTabActive}>Detalles</Text><Text style={styles.detailTab}>Cliente</Text><Text style={styles.detailTab}>Notas</Text></View><DetailRow label="Fecha y hora" value={`${formatDate(order.date, true)} · ${scheduleRangeForOrder(order, services, halfDay)}`} /><DetailRow label="Duración del trabajo" value={formatAppointmentDuration(workOrderDurationMinutes(order, services))} />{workOrderDurationMinutes(order, services) !== slots * 60 ? <DetailRow label="Capacidad reservada" value={`${slots} cupo${slots === 1 ? '' : 's'} de agenda`} /> : null}{order.appointmentWorkType !== 'other' && order.airConditionerCount ? <DetailRow label="Cantidad de aires" value={String(order.airConditionerCount)} /> : null}<DetailRow label="Propiedad" value={property?.name} /><DetailRow label="Dirección" value={order.address} /><DetailRow label="Zona" value={order.zone ?? property?.zone ?? client?.zone} /><DetailRow label="Técnico asignado" value={techNames} /><DetailRow label="Van asignada" value={van?.name ?? 'Sin van'} /><DetailRow label="Descripción para el cliente" value={orderDescription(order, service)} />{order.officeNotes ? <DetailRow label="Instrucciones internas para el técnico" value={order.officeNotes} /> : null}<DetailRow label="Confirmación WhatsApp" value={confirmationNames || (order.whatsappNotificationsEnabled !== false ? client?.name : 'No enviar')} /><DetailRow label="Recordatorio WhatsApp" value={reminderNames || (order.whatsappNotificationsEnabled !== false ? client?.name : 'No enviar')} /><View style={styles.detailActions}>{order.status === 'Reserva temporal' ? <><Button variant="success" label="Confirmar y enviar WhatsApp" onPress={() => void onConfirm(order, true)} /><Button variant="secondary" label="Confirmar sin WhatsApp" onPress={() => void onConfirm(order, false)} /></> : null}<Button variant="secondary" label="Editar cita" onPress={() => onEdit(order)} /><Button variant="secondary" label="Reprogramar cita" onPress={() => onReschedule(order)} /><Button variant="danger" label="Cancelar cita" onPress={() => void onCancel(order)} />{order.status !== 'Reserva temporal' ? <Button label="Marcar completada" onPress={() => void onUpdate(order.id, { status: 'Completada', updatedAt: new Date().toISOString() })} /> : null}</View></View>;
++  return <View>
++    <View style={styles.detailHeader}><View style={styles.detailHeaderPills}><Pill label={order.status} tone={toneForStatus(order.status)} />{isSupport ? <Pill label="Van de apoyo" tone="warning" /> : null}</View><Text style={styles.detailId}>ID: {order.id}</Text></View>
++    <Text style={styles.detailTitle}>{client?.name}</Text>
++    <Text style={styles.detailSubtitle}>{order.appointmentWorkLabel ?? service?.name ?? 'Trabajo programado'}</Text>
++    <View style={styles.detailTabs}><Text style={styles.detailTabActive}>Detalles</Text><Text style={styles.detailTab}>Cliente</Text><Text style={styles.detailTab}>Notas</Text></View>
++    {isSupport ? <View style={styles.supportDetailBanner}><Text style={styles.supportDetailTitle}>Apoyo interno · sin WhatsApp</Text><Text style={styles.supportDetailText}>Cita principal: {parentVan?.name ?? 'Van principal'} · {parentOrder?.time ?? 'horario no disponible'}</Text></View> : null}
++    <DetailRow label="Fecha y hora" value={`${formatDate(order.date, true)} · ${scheduleRangeForOrder(order, services, halfDay)}`} />
++    <DetailRow label="Duración del trabajo" value={formatAppointmentDuration(workOrderDurationMinutes(order, services))} />
++    {order.fullDaySingleProperty ? <DetailRow label="Capacidad especial" value="7 servicios estándar · jornada completa" /> : workOrderDurationMinutes(order, services) !== slots * 60 ? <DetailRow label="Capacidad reservada" value={`${slots} cupo${slots === 1 ? '' : 's'} de agenda`} /> : null}
++    {order.appointmentWorkItems?.length ? <View style={styles.detailWorkList}><Text style={styles.detailLabel}>Trabajos programados</Text>{order.appointmentWorkItems.map((item) => <Text key={item.id} style={styles.detailWorkItem}>• {item.label} × {item.quantity}</Text>)}</View> : order.airConditionerCount ? <DetailRow label="Cantidad de aires" value={String(order.airConditionerCount)} /> : null}
++    <DetailRow label="Propiedad" value={property?.name} /><DetailRow label="Dirección" value={order.address} /><DetailRow label="Zona" value={order.zone ?? property?.zone ?? client?.zone} /><DetailRow label="Técnico asignado" value={techNames} /><DetailRow label="Van asignada" value={van?.name ?? 'Sin van'} />
++    <DetailRow label={isSupport ? 'Descripción interna' : 'Descripción para el cliente'} value={orderDescription(order, service)} />
++    {order.officeNotes ? <DetailRow label="Instrucciones internas para el técnico" value={order.officeNotes} /> : null}
++    {!isSupport ? <><DetailRow label="Confirmación WhatsApp" value={confirmationNames || (order.whatsappNotificationsEnabled !== false ? client?.name : 'No enviar')} /><DetailRow label="Recordatorio WhatsApp" value={reminderNames || (order.whatsappNotificationsEnabled !== false ? client?.name : 'No enviar')} />{supportOrders.length ? <DetailRow label="Vanes de apoyo" value={supportOrders.map((item) => vans.find((candidate) => candidate.id === item.vanId)?.name ?? 'Van').join(', ')} /> : null}</> : null}
++    <View style={styles.detailActions}>
++      {order.status === 'Reserva temporal' ? isSupport ? <Button variant="success" label="Confirmar apoyo" onPress={() => void onConfirm(order, false)} /> : <><Button variant="success" label="Confirmar y enviar WhatsApp" onPress={() => void onConfirm(order, true)} /><Button variant="secondary" label="Confirmar sin WhatsApp" onPress={() => void onConfirm(order, false)} /></> : null}
++      {!isSupport ? <Button variant="success" label="＋ Agregar van de apoyo" onPress={() => onAddSupport(order)} /> : null}
++      <Button variant="secondary" label={isSupport ? 'Editar apoyo' : 'Editar cita'} onPress={() => onEdit(order)} /><Button variant="secondary" label="Reprogramar cita" onPress={() => onReschedule(order)} /><Button variant="danger" label={isSupport ? 'Cancelar apoyo' : 'Cancelar cita'} onPress={() => void onCancel(order)} />{order.status !== 'Reserva temporal' ? <Button label="Marcar completada" onPress={() => void onUpdate(order.id, { status: 'Completada', updatedAt: new Date().toISOString() })} /> : null}
++    </View>
++  </View>;
+ }
+ 
+ function SearchRow({ title, subtitle, active, onPress }: { title: string; subtitle: string; active: boolean; onPress: () => void }) {
+@@ -1793,6 +2013,7 @@
+   lunchText: { color: colors.muted, fontSize: 8, fontWeight: '800' },
+   absoluteSlot: { position: 'absolute', left: 12, right: 12, height: SLOT_HEIGHT, borderRadius: 8, borderWidth: 1, padding: 10, justifyContent: 'center', zIndex: 1 },
+   mergedAppointment: { position: 'absolute', left: 12, right: 12, borderRadius: 8, borderWidth: 1, borderColor: '#B9D7FF', backgroundColor: colors.infoLight, padding: 10, paddingTop: 12, justifyContent: 'flex-start', zIndex: 3, overflow: 'hidden' },
++  slotSupport: { borderColor: '#E5C15A', backgroundColor: '#FFF8E5' },
+   slotAvailable: { borderColor: '#B9E4B3', backgroundColor: '#F4FBF2' },
+   slotTemporary: { borderColor: '#E5C15A', backgroundColor: '#FFF8E5' },
+   slotCancelledAvailable: { borderColor: '#F2B8B5', backgroundColor: colors.dangerLight },
+@@ -1821,6 +2042,7 @@
+   detailPanel: { width: 330, minHeight: 560 },
+   emptyDetails: { paddingVertical: 32 },
+   detailHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
++  detailHeaderPills: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+   detailId: { color: colors.muted, fontSize: 10, fontWeight: '800' },
+   detailTitle: { color: colors.text, fontWeight: '900', fontSize: 20, marginBottom: 5 },
+   detailSubtitle: { color: colors.text, fontSize: 13, marginBottom: 14 },
+@@ -1831,6 +2053,11 @@
+   detailRow: { marginBottom: 16 },
+   detailLabel: { color: colors.muted, fontSize: 11, fontWeight: '800', marginBottom: 5 },
+   detailValue: { color: colors.text, fontSize: 13, lineHeight: 18 },
++  detailWorkList: { marginBottom: 16 },
++  detailWorkItem: { color: colors.text, fontSize: 12, lineHeight: 18 },
++  supportDetailBanner: { borderWidth: 1, borderColor: '#E5C15A', backgroundColor: '#FFF8E5', borderRadius: 8, padding: 10, marginBottom: 14 },
++  supportDetailTitle: { color: colors.warning, fontSize: 10, fontWeight: '900' },
++  supportDetailText: { color: colors.text, fontSize: 10, lineHeight: 15, marginTop: 4 },
+   detailActions: { flexDirection: 'row', gap: 10, marginTop: 12, flexWrap: 'wrap' },
+   modalIntro: { color: colors.muted, fontSize: 11, lineHeight: 17, marginBottom: 14 },
+   stepLabel: { position: 'absolute', left: 0, marginTop: 1, width: 18, height: 18, borderRadius: 9, overflow: 'hidden', textAlign: 'center', backgroundColor: colors.primary, color: '#FFFFFF', fontSize: 10, fontWeight: '900', lineHeight: 18 },
+@@ -1858,6 +2085,11 @@
+   optionTextDisabled: { color: '#A6ADB5' },
+   fallbackText: { color: colors.muted, fontSize: 11, marginBottom: 15 },
+   workPresetHelp: { color: colors.muted, fontSize: 10, lineHeight: 15, marginTop: -3, marginBottom: 10, paddingLeft: 24 },
++  modeSelector: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 15 },
++  supportCandidateList: { borderWidth: 1, borderColor: colors.border, borderRadius: 8, overflow: 'hidden', marginBottom: 12 },
++  supportParentCard: { borderWidth: 1, borderColor: '#E5C15A', backgroundColor: '#FFF8E5', borderRadius: 9, padding: 12, marginBottom: 15 },
++  supportParentTitle: { color: colors.warning, fontSize: 11, fontWeight: '900' },
++  supportParentText: { color: colors.text, fontSize: 10, lineHeight: 15, marginTop: 4 },
+   modeTabs: { flexDirection: 'row', borderWidth: 1, borderColor: colors.border, borderRadius: 8, overflow: 'hidden', marginBottom: 10 },
+   modeTab: { flex: 1, paddingVertical: 10, alignItems: 'center', backgroundColor: '#FFFFFF' },
+   modeTabActive: { backgroundColor: colors.primaryLight },
+@@ -1866,6 +2098,13 @@
+   quantityPanel: { flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 12, marginBottom: 10 },
+   quantityTitle: { color: colors.text, fontSize: 11, fontWeight: '900' },
+   quantityHelp: { color: colors.muted, fontSize: 9, lineHeight: 13, marginTop: 4 },
++  workItemsList: { gap: 8, marginTop: 10, marginBottom: 12 },
++  workItemCard: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 10, borderWidth: 1, borderColor: colors.border, borderRadius: 9, backgroundColor: '#FAFBFC', padding: 11 },
++  workItemTitle: { color: colors.text, fontSize: 11, fontWeight: '900' },
++  workItemMeta: { color: colors.muted, fontSize: 9, marginTop: 3 },
++  removeWorkItem: { paddingHorizontal: 8, paddingVertical: 7 },
++  removeWorkItemText: { color: colors.danger, fontSize: 9, fontWeight: '900' },
++  emptyWorkItems: { color: colors.muted, fontSize: 10, textAlign: 'center', borderWidth: 1, borderStyle: 'dashed', borderColor: colors.border, borderRadius: 8, padding: 14 },
+   stepper: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: colors.border, borderRadius: 8, overflow: 'hidden' },
+   stepperButton: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primaryLight },
+   stepperDisabled: { backgroundColor: '#F1F3F5' },
+@@ -1882,6 +2121,9 @@
+   liveCapacityTitleAvailable: { color: colors.success },
+   liveCapacityTitleUnavailable: { color: colors.danger },
+   liveCapacityText: { color: colors.text, fontSize: 10, lineHeight: 15, marginTop: 4 },
++  fullDayBanner: { borderWidth: 1, borderColor: '#B9E4B3', backgroundColor: colors.successLight, borderRadius: 9, padding: 11, marginBottom: 10 },
++  fullDayTitle: { color: colors.success, fontSize: 11, fontWeight: '900' },
++  fullDayText: { color: colors.text, fontSize: 10, lineHeight: 15, marginTop: 4 },
+   assignedTeamCard: { borderWidth: 1, borderColor: colors.primary, backgroundColor: colors.primaryLight, borderRadius: 9, padding: 12, marginBottom: 15 },
+   assignedTeamVan: { color: colors.primaryDark, fontSize: 13, fontWeight: '900' },
+   assignedTeamPeople: { flexDirection: 'row', flexWrap: 'wrap', gap: 28, marginTop: 10 },
+@@ -1920,6 +2162,10 @@
+   notificationEmpty: { color: colors.muted, fontSize: 10, padding: 12 },
+   notificationDisabledText: { color: colors.warning, fontSize: 10, fontWeight: '800', marginBottom: 12 },
+   customerDescriptionHelp: { color: colors.primaryDark, fontSize: 9, lineHeight: 14, fontWeight: '700', marginTop: -7, marginBottom: 12 },
++  descriptionActions: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap', marginBottom: 4 },
++  noWhatsappBanner: { borderWidth: 1, borderColor: '#E5C15A', backgroundColor: '#FFF8E5', borderRadius: 9, padding: 11, marginBottom: 14 },
++  noWhatsappTitle: { color: colors.warning, fontSize: 9, fontWeight: '900', letterSpacing: 0.6 },
++  noWhatsappText: { color: colors.text, fontSize: 10, lineHeight: 15, marginTop: 4 },
+   internalNote: { backgroundColor: '#EEF5FF', borderWidth: 1, borderColor: '#B9D7FF', borderRadius: 8, padding: 10, marginTop: -7, marginBottom: 14 },
+   internalNoteTitle: { color: colors.primaryDark, fontSize: 9, fontWeight: '900', letterSpacing: 0.8 },
+   internalNoteText: { color: colors.text, fontSize: 9, lineHeight: 14, marginTop: 4 },
+@@ -1928,4 +2174,4 @@
+   summaryLine: { color: colors.muted, fontSize: 10, marginTop: 3 },
+   summaryInternalLine: { color: colors.primaryDark, fontSize: 10, fontWeight: '700', marginTop: 5 },
+   modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 15, flexWrap: 'wrap' },
+-});
+\ No newline at end of file
++});
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -324,6 +324,18 @@
+   | 'third_floor_installation'
+   | 'other';
+ 
++// TEAM_SUPPORT_APPOINTMENTS_V12: one customer visit can contain several work lines and internal support assignments.
++export interface AppointmentWorkItem {
++  id: string;
++  presetId?: string;
++  label: string;
++  kind: 'service' | 'installation' | 'other';
++  quantity: number;
++  durationMinutesPerUnit: number;
++}
++
++export type AppointmentAssignmentRole = 'primary' | 'support';
++
+ export type AppointmentChangeOrigin = 'Cliente' | 'DEMAC' | 'Fuerza mayor' | 'Otro';
+ 
+ export type AppointmentChangeReasonCategory =
+@@ -487,6 +499,10 @@
+   appointmentPresetId?: string;
+   appointmentWorkLabel?: string;
+   appointmentDurationMinutes?: number;
++  appointmentWorkItems?: AppointmentWorkItem[];
++  appointmentAssignmentRole?: AppointmentAssignmentRole;
++  parentWorkOrderId?: string;
++  fullDaySingleProperty?: boolean;
+   amount: number;
+   paid: number;
+   schedulingMode?: SchedulingMode;
