@@ -1,0 +1,813 @@
+--- a/src/components/UI.tsx
++++ b/src/components/UI.tsx
+@@ -165,7 +165,6 @@
+   presentation?: 'screen' | 'overlay';
+ }) {
+   useWebBackLayer(visible, onClose, `modal:${title}`);
+-
+   if (presentation === 'overlay') {
+     return (
+       <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+@@ -173,9 +172,7 @@
+           <View style={styles.modalCard}>
+             <View style={styles.modalHeader}>
+               <Text style={styles.modalTitle}>{title}</Text>
+-              <Pressable accessibilityLabel="Cerrar" accessibilityRole="button" onPress={onClose} style={styles.closeButton}>
+-                <Text style={styles.closeButtonText}>×</Text>
+-              </Pressable>
++              <Pressable accessibilityLabel="Cerrar" accessibilityRole="button" onPress={onClose} style={styles.closeButton}><Text style={styles.closeButtonText}>×</Text></Pressable>
+             </View>
+             {children}
+           </View>
+@@ -183,7 +180,6 @@
+       </Modal>
+     );
+   }
+-
+   return (
+     <Modal visible={visible} transparent={false} animationType="slide" onRequestClose={onClose}>
+       <View style={styles.screenLayer}>
+@@ -287,14 +283,15 @@
+   emptyIcon: { fontSize: 34, marginBottom: 9 },
+   emptyTitle: { fontWeight: '800', color: colors.text, fontSize: 16 },
+   emptyMessage: { color: colors.muted, textAlign: 'center', marginTop: 5, lineHeight: 19 },
+-  // APP_SCREEN_NAVIGATION_V5: action forms are dedicated app screens by default.
+-  // AGENDA_CREATION_MODAL_V6: short agenda creation remains a centered overlay on desktop.
+   modalBackdrop: { flex: 1, backgroundColor: 'rgba(32,33,36,0.46)', alignItems: 'center', justifyContent: 'center', padding: 18 },
+   modalCard: { width: '100%', maxWidth: 760, maxHeight: '92%', backgroundColor: '#FFFFFF', borderRadius: 12, padding: 19 },
+   modalHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 15 },
+   modalTitle: { flex: 1, color: colors.text, fontSize: 18, fontWeight: '800' },
+   closeButton: { width: 32, height: 32, borderRadius: 16, backgroundColor: '#F0F2F4', alignItems: 'center', justifyContent: 'center' },
+   closeButtonText: { fontSize: 23, lineHeight: 24, color: colors.text },
++  // APP_SCREEN_NAVIGATION_V5: action forms are dedicated app screens by default.
++  // AGENDA_CREATION_MODAL_V6: short agenda creation remains a centered overlay on desktop.
++  // APPOINTMENT_SETTINGS_V11: preserve both presentation modes while appointment settings add another long form.
+   screenLayer: { flex: 1, backgroundColor: colors.background },
+   screenHeader: { minHeight: 64, paddingHorizontal: 16, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: colors.border },
+   screenBackButton: { minWidth: 82, minHeight: 42, alignItems: 'flex-start', justifyContent: 'center' },
+@@ -304,4 +301,4 @@
+   screenBody: { flex: 1, width: '100%', maxWidth: 760, alignSelf: 'center', padding: 16, overflow: 'hidden' },
+   loadingScreen: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background, gap: 13 },
+   loadingText: { color: colors.muted, fontWeight: '700' },
+-});
+\ No newline at end of file
++});
+--- a/src/screens/AgendaScreen.tsx
++++ b/src/screens/AgendaScreen.tsx
+@@ -4,7 +4,7 @@
+ import { PhoneField } from '../components/PhoneField';
+ import { ArubaAddressEntry } from '../data/arubaAddresses';
+ import { useAppState } from '../state/AppState';
+-import { BusinessCalendarSettings, CalendarClosure, useCalendarState } from '../state/CalendarState';
++import { AppointmentWorkPreset, BusinessCalendarSettings, CalendarClosure, formatAppointmentDuration, useCalendarState } from '../state/CalendarState';
+ import { useTeamState } from '../state/TeamState';
+ import { useVanHalfDayState, vanHasHalfDayOnDate } from '../state/VanHalfDayState';
+ import { colors } from '../theme';
+@@ -36,26 +36,17 @@
+ ];
+ 
+ // APPOINTMENT_PRESETS_V10: standardized office scheduling keeps customer copy and technician-only instructions separate.
+-type AppointmentWorkPreset = {
+-  id: Exclude<AppointmentWorkType, 'other'>;
+-  label: string;
+-  hoursPerUnit: number;
+-  kind: 'service' | 'installation';
+-};
+-
++// APPOINTMENT_SETTINGS_V11: presets are synchronized from administrator settings.
+ const MAX_BOOKABLE_HOURS = 6;
+-const appointmentWorkPresets: AppointmentWorkPreset[] = [
+-  { id: 'standard_service', label: 'Servicio estándar', hoursPerUnit: 1, kind: 'service' },
+-  { id: 'deep_cleaning', label: 'Servicio deep cleaning', hoursPerUnit: 2, kind: 'service' },
+-  { id: 'standard_installation', label: 'Instalación estándar', hoursPerUnit: 2, kind: 'installation' },
+-  { id: 'extended_installation', label: 'Instalación extendida', hoursPerUnit: 3, kind: 'installation' },
+-  { id: 'rooftop_installation', label: 'Instalación en rooftop', hoursPerUnit: 3, kind: 'installation' },
+-  { id: 'second_floor_installation', label: 'Instalación en segundo piso', hoursPerUnit: 3, kind: 'installation' },
+-  { id: 'third_floor_installation', label: 'Instalación en tercer piso', hoursPerUnit: 3, kind: 'installation' },
+-];
++const LEGACY_SPECIAL_INSTALLATIONS = new Set<AppointmentWorkType>(['extended_installation', 'rooftop_installation', 'second_floor_installation', 'third_floor_installation']);
+ 
+-function appointmentPreset(type?: AppointmentWorkType) {
+-  return appointmentWorkPresets.find((preset) => preset.id === type);
++function normalizedAppointmentPresetId(id?: string) {
++  return id && LEGACY_SPECIAL_INSTALLATIONS.has(id as AppointmentWorkType) ? 'special_installation' : id;
++}
++
++function appointmentPreset(presets: AppointmentWorkPreset[], id?: string) {
++  const normalizedId = normalizedAppointmentPresetId(id);
++  return presets.find((preset) => preset.id === normalizedId);
+ }
+ 
+ function appointmentDescription(preset: AppointmentWorkPreset, count: number) {
+@@ -66,7 +57,18 @@
+ }
+ 
+ function maximumUnitsForPreset(preset: AppointmentWorkPreset) {
+-  return Math.max(1, Math.floor(MAX_BOOKABLE_HOURS / preset.hoursPerUnit));
++  return Math.max(1, Math.floor((MAX_BOOKABLE_HOURS * 60) / preset.durationMinutesPerUnit));
++}
++
++function workOrderDurationMinutes(order: WorkOrder, services: ServiceType[]) {
++  const stored = Number(order.appointmentDurationMinutes ?? 0);
++  if (stored > 0) return stored;
++  return orderSlotCount(order, services) * 60;
++}
++
++function legacyAppointmentWorkType(presetId: string): AppointmentWorkType {
++  const supported: AppointmentWorkType[] = ['standard_service', 'deep_cleaning', 'standard_installation', 'special_installation'];
++  return supported.includes(presetId as AppointmentWorkType) ? presetId as AppointmentWorkType : 'other';
+ }
+ 
+ type AppointmentChangeDraft = {
+@@ -540,7 +542,7 @@
+     clearDataError,
+   } = useAppState();
+   const { vans: teamVans, staffProfiles, dailyVanAssignments, staffAbsences, teamLoading, teamDataError, refreshTeamData } = useTeamState();
+-  const { calendarClosures, businessCalendarSettings, calendarLoading, calendarDataError, refreshCalendarData } = useCalendarState();
++  const { calendarClosures, businessCalendarSettings, appointmentWorkPresets, calendarLoading, calendarDataError, refreshCalendarData } = useCalendarState();
+   const { vanHalfDaySchedules, halfDayLoading, halfDayError, refreshVanHalfDays } = useVanHalfDayState();
+ 
+   const [selectedDate, setSelectedDate] = useState(localDateKey());
+@@ -563,12 +565,13 @@
+   const [quickContactMessage, setQuickContactMessage] = useState('');
+   const [successMessage, setSuccessMessage] = useState('');
+   const [workHours, setWorkHours] = useState(1);
+-  const [appointmentWorkType, setAppointmentWorkType] = useState<AppointmentWorkType>('standard_service');
++  const [appointmentPresetId, setAppointmentPresetId] = useState('standard_service');
+   const [airConditionerCount, setAirConditionerCount] = useState(1);
+   const [workDescriptionText, setWorkDescriptionText] = useState('');
+   const [technicianInstructionsText, setTechnicianInstructionsText] = useState('');
+   const [vanId, setVanId] = useState(teamVans[0]?.id ?? legacyVans[0]?.id ?? '');
+   const [time, setTime] = useState('08:30');
++  const [assignmentLockedToSlot, setAssignmentLockedToSlot] = useState(false);
+   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
+   const [reschedulingOrderId, setReschedulingOrderId] = useState<string | null>(null);
+@@ -659,8 +662,13 @@
+   const quickPropertyAddressSuggestions = suggestArubaAddresses(quickProperty.address);
+   const selectedPropertyContacts = (selectedProperty?.contacts ?? []).filter((contact) => contact.active !== false);
+   const selectedVan = agendaVans.find((item) => item.id === vanId);
+-  const selectedWorkPreset = appointmentPreset(appointmentWorkType);
++  const selectedDriverName = selectedVan?.driverStaffId ? staffDirectory.find((item) => item.id === selectedVan.driverStaffId)?.name : undefined;
++  const selectedHelperName = selectedVan?.helperStaffId ? staffDirectory.find((item) => item.id === selectedVan.helperStaffId)?.name : undefined;
++  const activeAppointmentWorkPresets = appointmentWorkPresets.filter((preset) => preset.active !== false);
++  const selectedWorkPreset = appointmentPreset(appointmentWorkPresets, appointmentPresetId);
+   const maximumAirConditionerCount = selectedWorkPreset ? maximumUnitsForPreset(selectedWorkPreset) : 1;
++  const workDurationMinutes = Math.round(workHours * 60);
++  const workSlots = Math.ceil(workDurationMinutes / 60);
+   const activeOrders = orders.filter(orderBlocksCapacity);
+   const selectedOrder = activeOrders.find((order) => order.id === selectedOrderId) ?? activeOrders[0];
+   const editingOrder = workOrders.find((order) => order.id === editingOrderId);
+@@ -749,19 +757,12 @@
+   };
+ 
+   const isAvailable = (candidateVan: AgendaVan, candidateTime: string, date = selectedDate) =>
+-    isAvailableFor(candidateVan, candidateTime, date, workHours, editingOrderId ?? reschedulingOrderId ?? undefined);
++    isAvailableFor(candidateVan, candidateTime, date, workSlots, editingOrderId ?? reschedulingOrderId ?? undefined);
++  const selectedAppointmentAvailable = selectedVan ? isAvailable(selectedVan, time) : false;
+ 
+-  useEffect(() => {
+-    if (!selectedVan) return;
+-    if (isAvailable(selectedVan, time)) return;
+-    const candidateSlots = bookingSlots(isHalfDay(selectedVan.id));
+-    const firstAvailable = candidateSlots.find((slot) => isAvailable(selectedVan, slot));
+-    if (firstAvailable) setTime(firstAvailable);
+-  }, [workHours, vanId, selectedDate, workOrders, agendaVans, vanHalfDaySchedules, editingOrderId, reschedulingOrderId]);
+-
+-  const selectAppointmentWorkType = (type: AppointmentWorkType) => {
+-    setAppointmentWorkType(type);
+-    const preset = appointmentPreset(type);
++  const selectAppointmentWorkType = (type: string) => {
++    setAppointmentPresetId(type);
++    const preset = appointmentPreset(appointmentWorkPresets, type);
+     if (!preset) {
+       setAirConditionerCount(1);
+       setWorkHours(1);
+@@ -770,7 +771,7 @@
+     }
+     const nextCount = Math.min(airConditionerCount, maximumUnitsForPreset(preset));
+     setAirConditionerCount(nextCount);
+-    setWorkHours(preset.hoursPerUnit * nextCount);
++    setWorkHours((preset.durationMinutesPerUnit * nextCount) / 60);
+     setWorkDescriptionText(appointmentDescription(preset, nextCount));
+   };
+ 
+@@ -778,7 +779,7 @@
+     if (!selectedWorkPreset) return;
+     const nextCount = Math.min(maximumUnitsForPreset(selectedWorkPreset), Math.max(1, nextValue));
+     setAirConditionerCount(nextCount);
+-    setWorkHours(selectedWorkPreset.hoursPerUnit * nextCount);
++    setWorkHours((selectedWorkPreset.durationMinutesPerUnit * nextCount) / 60);
+     setWorkDescriptionText(appointmentDescription(selectedWorkPreset, nextCount));
+   };
+ 
+@@ -792,21 +793,21 @@
+ 
+     const sourceOrder = editingOrder ?? reschedulingOrder;
+     if (sourceOrder) {
+-      const storedPreset = appointmentPreset(sourceOrder.appointmentWorkType);
++      const storedPreset = appointmentPreset(appointmentWorkPresets, sourceOrder.appointmentPresetId ?? sourceOrder.appointmentWorkType);
+       setClientId(sourceOrder.clientId);
+       setPropertyId(sourceOrder.propertyId ?? '');
+-      setAppointmentWorkType(storedPreset ? storedPreset.id : 'other');
++      setAppointmentPresetId(storedPreset ? storedPreset.id : 'other');
+       setAirConditionerCount(Math.max(1, Number(sourceOrder.airConditionerCount ?? 1)));
+       setWorkDescriptionText(sourceOrder.problem);
+       setTechnicianInstructionsText(sourceOrder.officeNotes ?? '');
+-      setWorkHours(orderSlotCount(sourceOrder, services));
++      setWorkHours(workOrderDurationMinutes(sourceOrder, services) / 60);
+       const sourceClient = clients.find((item) => item.id === sourceOrder.clientId);
+       const sourceProperty = properties.find((item) => item.id === sourceOrder.propertyId);
+       setNotificationRecipients(buildNotificationRecipients(sourceClient, sourceProperty, sourceOrder.notificationRecipients, sourceOrder.whatsappNotificationsEnabled !== false));
+     } else if (cancelled) {
+       setClientId(cancelled.clientId);
+       setPropertyId(cancelled.propertyId ?? '');
+-      setAppointmentWorkType('other');
++      setAppointmentPresetId('other');
+       setAirConditionerCount(1);
+       setWorkDescriptionText(cancelled.problem);
+       setTechnicianInstructionsText('');
+@@ -817,16 +818,17 @@
+     }
+ 
+     if (!sourceOrder && !cancelled) {
+-      const defaultPreset = appointmentWorkPresets[0];
+-      setAppointmentWorkType(defaultPreset.id);
++      const defaultPreset = activeAppointmentWorkPresets[0];
++      setAppointmentPresetId(defaultPreset?.id ?? 'other');
+       setAirConditionerCount(1);
+-      setWorkDescriptionText(appointmentDescription(defaultPreset, 1));
++      setWorkDescriptionText(defaultPreset ? appointmentDescription(defaultPreset, 1) : '');
+       setTechnicianInstructionsText('');
+-      setWorkHours(defaultPreset.hoursPerUnit);
++      setWorkHours(defaultPreset ? defaultPreset.durationMinutesPerUnit / 60 : 1);
+       setNotificationRecipients(buildNotificationRecipients(selectedClient, selectedProperty));
+     }
+     if (candidateVanId) setVanId(candidateVanId);
+     if (candidateTime) setTime(candidateTime);
++    setAssignmentLockedToSlot(Boolean(candidateVanId && candidateTime));
+     setShowCreate(true);
+   };
+ 
+@@ -1022,11 +1024,12 @@
+     const description = workDescriptionText.trim();
+     const technicianInstructions = technicianInstructionsText.trim();
+     const appointmentWorkLabel = selectedWorkPreset?.label ?? 'Otro';
++    const appointmentWorkType = selectedWorkPreset ? legacyAppointmentWorkType(selectedWorkPreset.id) : 'other';
+     if (selectedDateClosed) return setFormMessage(`No se pueden crear citas: ${selectedCalendarStatus.reason}.`);
+     if (!client) return setFormMessage('Primero selecciona o registra un cliente.');
+     if (!description) return setFormMessage('Escribe la descripción del trabajo antes de guardar la cita.');
+     if (!van) return setFormMessage('Selecciona una van.');
+-    if (!isAvailableFor(van, time, selectedDate, workHours, editingOrderId ?? reschedulingOrderId ?? undefined)) return setFormMessage('Ese horario no tiene suficientes horas consecutivas para este trabajo.');
++    if (!isAvailableFor(van, time, selectedDate, workSlots, editingOrderId ?? reschedulingOrderId ?? undefined)) return setFormMessage('Ese equipo no tiene suficientes cupos consecutivos para la duración seleccionada.');
+ 
+     const now = new Date().toISOString();
+     const zone = selectedProperty?.zone ?? client.zone;
+@@ -1041,7 +1044,8 @@
+             const scheduleChanged = editingOrder.date !== selectedDate
+       || normalizeTime(editingOrder.time) !== time
+       || resolveStoredVanId(editingOrder.vanId, agendaVans, legacyVans) !== vanId
+-      || orderSlotCount(editingOrder, services) !== workHours;
++      || orderSlotCount(editingOrder, services) !== workSlots
++      || workOrderDurationMinutes(editingOrder, services) !== workDurationMinutes;
+     if (scheduleChanged) {
+       setSaving(false);
+       return setFormMessage('Para cambiar fecha, van, horario o duración utiliza “Reprogramar cita”, porque ese flujo exige registrar el motivo.');
+@@ -1060,9 +1064,11 @@
+         problem: description,
+         officeNotes: technicianInstructions,
+         appointmentWorkType,
++        appointmentPresetId: selectedWorkPreset?.id,
+         appointmentWorkLabel,
++        appointmentDurationMinutes: workDurationMinutes,
+         airConditionerCount,
+-        scheduledSlots: workHours,
++        scheduledSlots: workSlots,
+         whatsappNotificationsEnabled: editingOrder.status === 'Reserva temporal' ? false : notificationsEnabled,
+         notificationRecipients: notificationSnapshot,
+                 scheduleHistory: editingOrder.scheduleHistory,
+@@ -1098,9 +1104,11 @@
+         problem: description,
+         officeNotes: technicianInstructions,
+         appointmentWorkType,
++        appointmentPresetId: selectedWorkPreset?.id,
+         appointmentWorkLabel,
++        appointmentDurationMinutes: workDurationMinutes,
+         airConditionerCount,
+-        scheduledSlots: workHours,
++        scheduledSlots: workSlots,
+         whatsappNotificationsEnabled: status === 'Confirmada' ? notificationsEnabled : false,
+         notificationRecipients: notificationSnapshot,
+         confirmedAt: status === 'Confirmada' ? now : reschedulingOrder.confirmedAt,
+@@ -1130,12 +1138,14 @@
+         problem: description,
+         officeNotes: technicianInstructions,
+         appointmentWorkType,
++        appointmentPresetId: selectedWorkPreset?.id,
+         appointmentWorkLabel,
++        appointmentDurationMinutes: workDurationMinutes,
+         amount: 0,
+         paid: 0,
+         schedulingMode: 'fixed',
+         airConditionerCount,
+-        scheduledSlots: workHours,
++        scheduledSlots: workSlots,
+         whatsappNotificationsEnabled: status === 'Confirmada' ? notificationsEnabled : false,
+         notificationRecipients: notificationSnapshot,
+         confirmedAt: status === 'Confirmada' ? now : undefined,
+@@ -1151,7 +1161,7 @@
+ 
+     setWorkDescriptionText('');
+     setTechnicianInstructionsText('');
+-    setAppointmentWorkType('standard_service');
++    setAppointmentPresetId(activeAppointmentWorkPresets[0]?.id ?? 'other');
+     setAirConditionerCount(1);
+     setWorkHours(1);
+     setNotificationRecipients([]);
+@@ -1223,16 +1233,17 @@
+   setCalendarMonth(monthStart(order.date));
+   setClientId(order.clientId);
+   setPropertyId(order.propertyId ?? '');
+-  setAppointmentWorkType(appointmentPreset(order.appointmentWorkType)?.id ?? 'other');
++  setAppointmentPresetId(appointmentPreset(appointmentWorkPresets, order.appointmentPresetId ?? order.appointmentWorkType)?.id ?? 'other');
+   setAirConditionerCount(Math.max(1, Number(order.airConditionerCount ?? 1)));
+   setWorkDescriptionText(order.problem);
+   setTechnicianInstructionsText(order.officeNotes ?? '');
+-  setWorkHours(orderSlotCount(order, services));
++  setWorkHours(workOrderDurationMinutes(order, services) / 60);
+   setVanId(resolveStoredVanId(order.vanId, agendaVans, legacyVans));
+   setTime(normalizeTime(order.time));
+   setFormMessage('');
+   setSuccessMessage('');
+   setShowQuickClient(false);
++  setAssignmentLockedToSlot(false);
+   setShowChangeReason(false);
+   setShowCreate(true);
+ };
+@@ -1246,16 +1257,17 @@
+     setCalendarMonth(monthStart(order.date));
+     setClientId(order.clientId);
+     setPropertyId(order.propertyId ?? '');
+-    setAppointmentWorkType(appointmentPreset(order.appointmentWorkType)?.id ?? 'other');
++    setAppointmentPresetId(appointmentPreset(appointmentWorkPresets, order.appointmentPresetId ?? order.appointmentWorkType)?.id ?? 'other');
+     setAirConditionerCount(Math.max(1, Number(order.airConditionerCount ?? 1)));
+     setWorkDescriptionText(order.problem);
+     setTechnicianInstructionsText(order.officeNotes ?? '');
+-    setWorkHours(orderSlotCount(order, services));
++    setWorkHours(workOrderDurationMinutes(order, services) / 60);
+     setVanId(resolveStoredVanId(order.vanId, agendaVans, legacyVans));
+     setTime(normalizeTime(order.time));
+     setFormMessage('');
+     setSuccessMessage('');
+     setShowQuickClient(false);
++    setAssignmentLockedToSlot(true);
+     setShowCreate(true);
+   };
+ 
+@@ -1290,7 +1302,7 @@
+             <Text style={styles.serviceIcon}>◷</Text>
+             <View style={{ flex: 1 }}><Text style={styles.fieldCaption}>Trabajo seleccionado</Text><Text style={styles.serviceName}>{selectedWorkPreset?.label ?? 'Otro trabajo'}</Text></View>
+           </View>
+-          <View style={styles.durationBox}><Text style={styles.fieldCaption}>Duración seleccionada</Text><Text style={styles.durationValue}>{workHours} hora{workHours !== 1 ? 's' : ''}</Text></View>
++          <View style={styles.durationBox}><Text style={styles.fieldCaption}>Duración seleccionada</Text><Text style={styles.durationValue}>{formatAppointmentDuration(workDurationMinutes)}</Text></View>
+         </View>
+       </Card>
+ 
+@@ -1480,26 +1492,29 @@
+             <Text style={styles.stepLabel}>2</Text><Text style={styles.fieldLabel}>Trabajo programado</Text>
+             <Text style={styles.workPresetHelp}>Escoge un trabajo predeterminado para calcular la duración y preparar automáticamente la descripción que recibirá el cliente.</Text>
+             <View style={styles.optionWrap}>
+-              {appointmentWorkPresets.map((preset) => <Option key={preset.id} label={`${preset.label} · ${preset.hoursPerUnit} h por aire`} active={appointmentWorkType === preset.id} onPress={() => selectAppointmentWorkType(preset.id)} />)}
+-              <Option label="Otro" active={appointmentWorkType === 'other'} onPress={() => selectAppointmentWorkType('other')} />
++              {activeAppointmentWorkPresets.map((preset) => <Option key={preset.id} label={`${preset.label} · ${formatAppointmentDuration(preset.durationMinutesPerUnit)} por aire`} active={appointmentPresetId === preset.id} onPress={() => selectAppointmentWorkType(preset.id)} />)}
++              <Option label="Otro" active={appointmentPresetId === 'other'} onPress={() => selectAppointmentWorkType('other')} />
+             </View>
+ 
+             <Text style={styles.stepLabel}>3</Text><Text style={styles.fieldLabel}>{selectedWorkPreset ? 'Cantidad de aires' : 'Cantidad de horas de trabajo'}</Text>
+             <View style={styles.quantityPanel}>
+               <View style={{ flex: 1 }}>
+                 <Text style={styles.quantityTitle}>{selectedWorkPreset ? 'Aires incluidos en esta cita' : 'Tiempo total reservado'}</Text>
+-                <Text style={styles.quantityHelp}>{selectedWorkPreset ? `${selectedWorkPreset.hoursPerUnit} hora${selectedWorkPreset.hoursPerUnit === 1 ? '' : 's'} por aire. La agenda calculará y bloqueará el tiempo automáticamente.` : 'Para “Otro”, selecciona manualmente de 1 a 6 horas.'}</Text>
++                <Text style={styles.quantityHelp}>{selectedWorkPreset ? `${formatAppointmentDuration(selectedWorkPreset.durationMinutesPerUnit)} por aire. La agenda calculará y bloqueará el tiempo automáticamente.` : 'Para “Otro”, selecciona manualmente de 30 minutos a 6 horas.'}</Text>
+               </View>
+               {selectedWorkPreset ? (
+                 <View style={styles.stepper}><Pressable disabled={airConditionerCount <= 1} onPress={() => changeAirConditionerCount(airConditionerCount - 1)} style={[styles.stepperButton, airConditionerCount <= 1 && styles.stepperDisabled]}><Text style={styles.stepperButtonText}>−</Text></Pressable><Text style={styles.stepperValue}>{airConditionerCount}</Text><Pressable disabled={airConditionerCount >= maximumAirConditionerCount} onPress={() => changeAirConditionerCount(airConditionerCount + 1)} style={[styles.stepperButton, airConditionerCount >= maximumAirConditionerCount && styles.stepperDisabled]}><Text style={styles.stepperButtonText}>＋</Text></Pressable></View>
+               ) : (
+-                <View style={styles.stepper}><Pressable disabled={workHours <= 1} onPress={() => setWorkHours((value) => Math.max(1, value - 1))} style={[styles.stepperButton, workHours <= 1 && styles.stepperDisabled]}><Text style={styles.stepperButtonText}>−</Text></Pressable><Text style={styles.stepperValue}>{workHours}</Text><Pressable disabled={workHours >= MAX_BOOKABLE_HOURS} onPress={() => setWorkHours((value) => Math.min(MAX_BOOKABLE_HOURS, value + 1))} style={[styles.stepperButton, workHours >= MAX_BOOKABLE_HOURS && styles.stepperDisabled]}><Text style={styles.stepperButtonText}>＋</Text></Pressable></View>
++                <View style={styles.stepper}><Pressable disabled={workHours <= 0.5} onPress={() => setWorkHours((value) => Math.max(0.5, value - 0.5))} style={[styles.stepperButton, workHours <= 0.5 && styles.stepperDisabled]}><Text style={styles.stepperButtonText}>−</Text></Pressable><Text style={styles.stepperValue}>{workHours}</Text><Pressable disabled={workHours >= MAX_BOOKABLE_HOURS} onPress={() => setWorkHours((value) => Math.min(MAX_BOOKABLE_HOURS, value + 0.5))} style={[styles.stepperButton, workHours >= MAX_BOOKABLE_HOURS && styles.stepperDisabled]}><Text style={styles.stepperButtonText}>＋</Text></Pressable></View>
+               )}
+             </View>
+-            <View style={styles.durationPreview}><View><Text style={styles.previewLabel}>Duración</Text><Text style={styles.previewValue}>{workHours} hora{workHours !== 1 ? 's' : ''}</Text></View><View><Text style={styles.previewLabel}>Total a reservar</Text><Text style={styles.previewValue}>{workHours} cupo{workHours !== 1 ? 's' : ''}</Text></View><View><Text style={styles.previewLabel}>Cálculo</Text><Text style={styles.previewValue}>{selectedWorkPreset ? 'Automático' : 'Manual'}</Text></View></View>
++            <View style={styles.durationPreview}><View><Text style={styles.previewLabel}>Duración exacta</Text><Text style={styles.previewValue}>{formatAppointmentDuration(workDurationMinutes)}</Text></View><View><Text style={styles.previewLabel}>Capacidad reservada</Text><Text style={styles.previewValue}>{workSlots} cupo{workSlots !== 1 ? 's' : ''}</Text></View><View><Text style={styles.previewLabel}>Cálculo</Text><Text style={styles.previewValue}>{selectedWorkPreset ? 'Automático' : 'Manual'}</Text></View></View>
++            <Text style={styles.capacityRoundingHelp}>Los cupos de la agenda son de 1 hora. Si la duración incluye 30 minutos, se reserva el siguiente cupo completo para proteger la capacidad del equipo.</Text>
++
++            <View style={[styles.liveCapacityBanner, selectedAppointmentAvailable ? styles.liveCapacityAvailable : styles.liveCapacityUnavailable]}><Text style={[styles.liveCapacityTitle, selectedAppointmentAvailable ? styles.liveCapacityTitleAvailable : styles.liveCapacityTitleUnavailable]}>{selectedAppointmentAvailable ? '✓ Capacidad disponible' : 'Ese equipo no tiene cupo suficiente'}</Text><Text style={styles.liveCapacityText}>{selectedAppointmentAvailable ? `${selectedVan?.name} puede realizar este trabajo desde ${time}.` : `${formatAppointmentDuration(workDurationMinutes)} requieren ${workSlots} cupo${workSlots === 1 ? '' : 's'} consecutivo${workSlots === 1 ? '' : 's'}. Reduce la cantidad o cambia el horario, el equipo o la fecha.`}</Text></View>
+ 
+-            <Text style={styles.stepLabel}>4</Text><Text style={styles.fieldLabel}>Asignar a</Text>
+-            <View style={styles.optionWrap}>{agendaVans.map((van) => { const names = van.technicianIds.map((id) => staffDirectory.find((user) => user.id === id)?.name.split(' ')[0]).filter(Boolean).join(' + '); const disabled = !vanCanReceiveAppointments(van); return <Option key={van.id} label={`${van.name} · ${names || 'Sin equipo'} · ${van.dispatchStatus}`} active={vanId === van.id} disabled={disabled} onPress={() => setVanId(van.id)} />; })}</View>
++            <Text style={styles.stepLabel}>4</Text><Text style={styles.fieldLabel}>{assignmentLockedToSlot ? 'Equipo asignado' : 'Asignar a'}</Text>
++            {assignmentLockedToSlot && selectedVan ? <View style={styles.assignedTeamCard}><Text style={styles.assignedTeamVan}>{selectedVan.name}</Text><View style={styles.assignedTeamPeople}><View><Text style={styles.assignedTeamRole}>Técnico</Text><Text style={styles.assignedTeamName}>{selectedDriverName ?? 'Sin técnico asignado'}</Text></View><View><Text style={styles.assignedTeamRole}>Ayudante</Text><Text style={styles.assignedTeamName}>{selectedHelperName ?? 'Sin ayudante asignado'}</Text></View></View><Text style={styles.assignedTeamHelp}>Este equipo proviene del cupo que seleccionaste en la agenda.</Text></View> : <View style={styles.optionWrap}>{agendaVans.map((van) => { const names = van.technicianIds.map((id) => staffDirectory.find((user) => user.id === id)?.name.split(' ')[0]).filter(Boolean).join(' + '); const disabled = !vanCanReceiveAppointments(van); return <Option key={van.id} label={`${van.name} · ${names || 'Sin equipo'} · ${van.dispatchStatus}`} active={vanId === van.id} disabled={disabled} onPress={() => setVanId(van.id)} />; })}</View>}
+ 
+             <Text style={styles.stepLabel}>5</Text><Text style={styles.fieldLabel}>Horario sugerido</Text>
+             <View style={styles.optionWrap}>{(selectedVan && isHalfDay(selectedVan.id) ? [...morningSlots, extraMorningSlot] : allSlots).map((slot) => { const available = selectedVan ? isAvailable(selectedVan, slot) : false; return <Option key={slot} label={available ? slotLabel(slot) : `${slotLabel(slot)} · no disponible`} active={time === slot} disabled={!available} onPress={() => setTime(slot)} />; })}</View>
+@@ -1533,15 +1548,15 @@
+   </View>
+   {notificationRecipients.some((recipient) => recipient.sendConfirmation || recipient.sendReminder) ? null : <Text style={styles.notificationDisabledText}>No se enviarán mensajes de WhatsApp para esta cita.</Text>}
+ 
+-            <View style={styles.summaryBox}><Text style={styles.summaryTitle}>Resumen de la cita</Text><Text style={styles.summaryLine}>{selectedClient?.name ?? 'Sin cliente'} · {selectedProperty?.name ?? selectedClient?.address ?? 'Sin dirección'}</Text><Text style={styles.summaryLine}>{selectedWorkPreset ? `${airConditionerCount} aire${airConditionerCount === 1 ? '' : 's'} · ` : ''}{workHours} hora{workHours !== 1 ? 's' : ''} · {selectedVan?.name} · {formatDate(selectedDate)} · {time}</Text><Text style={styles.summaryLine} numberOfLines={2}>Cliente: {workDescriptionText.trim() || 'Falta agregar la descripción del trabajo.'}</Text>{technicianInstructionsText.trim() ? <Text style={styles.summaryInternalLine} numberOfLines={2}>Técnico: {technicianInstructionsText.trim()}</Text> : null}</View>
++            <View style={styles.summaryBox}><Text style={styles.summaryTitle}>Resumen de la cita</Text><Text style={styles.summaryLine}>{selectedClient?.name ?? 'Sin cliente'} · {selectedProperty?.name ?? selectedClient?.address ?? 'Sin dirección'}</Text><Text style={styles.summaryLine}>{selectedWorkPreset ? `${airConditionerCount} aire${airConditionerCount === 1 ? '' : 's'} · ` : ''}{formatAppointmentDuration(workDurationMinutes)} · {selectedVan?.name} · {formatDate(selectedDate)} · {time}</Text><Text style={styles.summaryLine} numberOfLines={2}>Cliente: {workDescriptionText.trim() || 'Falta agregar la descripción del trabajo.'}</Text>{technicianInstructionsText.trim() ? <Text style={styles.summaryInternalLine} numberOfLines={2}>Técnico: {technicianInstructionsText.trim()}</Text> : null}</View>
+             <View style={styles.modalActions}>
+               <Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => { setShowCreate(false); setEditingOrderId(null); setReschedulingOrderId(null); setPendingChangeReason(null); }} />
+               {editingOrder ? (
+-                <Button label={saving ? 'Guardando…' : 'Guardar cambios'} disabled={saving || !clientId || !workDescriptionText.trim()} onPress={() => void saveAppointment(editingOrder.status === 'Reserva temporal' ? 'Reserva temporal' : 'Confirmada')} />
++                <Button label={saving ? 'Guardando…' : 'Guardar cambios'} disabled={saving || !clientId || !workDescriptionText.trim() || !selectedAppointmentAvailable} onPress={() => void saveAppointment(editingOrder.status === 'Reserva temporal' ? 'Reserva temporal' : 'Confirmada')} />
+               ) : (
+                 <>
+-                  <Button variant="secondary" label={saving ? 'Guardando…' : 'Reservar temporalmente'} disabled={saving || !clientId || !workDescriptionText.trim()} onPress={() => void saveAppointment('Reserva temporal')} />
+-                  <Button label={saving ? 'Guardando…' : reschedulingOrder ? 'Guardar reprogramación' : 'Confirmar cita'} disabled={saving || !clientId || !workDescriptionText.trim()} onPress={() => void saveAppointment('Confirmada')} />
++                  <Button variant="secondary" label={saving ? 'Guardando…' : 'Reservar temporalmente'} disabled={saving || !clientId || !workDescriptionText.trim() || !selectedAppointmentAvailable} onPress={() => void saveAppointment('Reserva temporal')} />
++                  <Button label={saving ? 'Guardando…' : reschedulingOrder ? 'Guardar reprogramación' : 'Confirmar cita'} disabled={saving || !clientId || !workDescriptionText.trim() || !selectedAppointmentAvailable} onPress={() => void saveAppointment('Confirmada')} />
+                 </>
+               )}
+             </View>
+@@ -1695,7 +1710,7 @@
+   const techNames = order.technicianIds.map((id) => users.find((user) => user.id === id)?.name).filter(Boolean).join(' y ') || 'Sin técnico asignado';
+   const confirmationNames = (order.notificationRecipients ?? []).filter((recipient) => recipient.sendConfirmation).map((recipient) => recipient.name).join(', ');
+   const reminderNames = (order.notificationRecipients ?? []).filter((recipient) => recipient.sendReminder).map((recipient) => recipient.name).join(', ');
+-  return <View><View style={styles.detailHeader}><Pill label={order.status} tone={toneForStatus(order.status)} /><Text style={styles.detailId}>ID: {order.id}</Text></View><Text style={styles.detailTitle}>{client?.name}</Text><Text style={styles.detailSubtitle}>{order.appointmentWorkLabel ?? service?.name ?? 'Trabajo programado'}</Text><View style={styles.detailTabs}><Text style={styles.detailTabActive}>Detalles</Text><Text style={styles.detailTab}>Cliente</Text><Text style={styles.detailTab}>Notas</Text></View><DetailRow label="Fecha y hora" value={`${formatDate(order.date, true)} · ${scheduleRangeForOrder(order, services, halfDay)}`} /><DetailRow label="Duración" value={`${slots} hora${slots !== 1 ? 's' : ''}`} />{order.appointmentWorkType !== 'other' && order.airConditionerCount ? <DetailRow label="Cantidad de aires" value={String(order.airConditionerCount)} /> : null}<DetailRow label="Propiedad" value={property?.name} /><DetailRow label="Dirección" value={order.address} /><DetailRow label="Zona" value={order.zone ?? property?.zone ?? client?.zone} /><DetailRow label="Técnico asignado" value={techNames} /><DetailRow label="Van asignada" value={van?.name ?? 'Sin van'} /><DetailRow label="Descripción para el cliente" value={orderDescription(order, service)} />{order.officeNotes ? <DetailRow label="Instrucciones internas para el técnico" value={order.officeNotes} /> : null}<DetailRow label="Confirmación WhatsApp" value={confirmationNames || (order.whatsappNotificationsEnabled !== false ? client?.name : 'No enviar')} /><DetailRow label="Recordatorio WhatsApp" value={reminderNames || (order.whatsappNotificationsEnabled !== false ? client?.name : 'No enviar')} /><View style={styles.detailActions}>{order.status === 'Reserva temporal' ? <><Button variant="success" label="Confirmar y enviar WhatsApp" onPress={() => void onConfirm(order, true)} /><Button variant="secondary" label="Confirmar sin WhatsApp" onPress={() => void onConfirm(order, false)} /></> : null}<Button variant="secondary" label="Editar cita" onPress={() => onEdit(order)} /><Button variant="secondary" label="Reprogramar cita" onPress={() => onReschedule(order)} /><Button variant="danger" label="Cancelar cita" onPress={() => void onCancel(order)} />{order.status !== 'Reserva temporal' ? <Button label="Marcar completada" onPress={() => void onUpdate(order.id, { status: 'Completada', updatedAt: new Date().toISOString() })} /> : null}</View></View>;
++  return <View><View style={styles.detailHeader}><Pill label={order.status} tone={toneForStatus(order.status)} /><Text style={styles.detailId}>ID: {order.id}</Text></View><Text style={styles.detailTitle}>{client?.name}</Text><Text style={styles.detailSubtitle}>{order.appointmentWorkLabel ?? service?.name ?? 'Trabajo programado'}</Text><View style={styles.detailTabs}><Text style={styles.detailTabActive}>Detalles</Text><Text style={styles.detailTab}>Cliente</Text><Text style={styles.detailTab}>Notas</Text></View><DetailRow label="Fecha y hora" value={`${formatDate(order.date, true)} · ${scheduleRangeForOrder(order, services, halfDay)}`} /><DetailRow label="Duración del trabajo" value={formatAppointmentDuration(workOrderDurationMinutes(order, services))} />{workOrderDurationMinutes(order, services) !== slots * 60 ? <DetailRow label="Capacidad reservada" value={`${slots} cupo${slots === 1 ? '' : 's'} de agenda`} /> : null}{order.appointmentWorkType !== 'other' && order.airConditionerCount ? <DetailRow label="Cantidad de aires" value={String(order.airConditionerCount)} /> : null}<DetailRow label="Propiedad" value={property?.name} /><DetailRow label="Dirección" value={order.address} /><DetailRow label="Zona" value={order.zone ?? property?.zone ?? client?.zone} /><DetailRow label="Técnico asignado" value={techNames} /><DetailRow label="Van asignada" value={van?.name ?? 'Sin van'} /><DetailRow label="Descripción para el cliente" value={orderDescription(order, service)} />{order.officeNotes ? <DetailRow label="Instrucciones internas para el técnico" value={order.officeNotes} /> : null}<DetailRow label="Confirmación WhatsApp" value={confirmationNames || (order.whatsappNotificationsEnabled !== false ? client?.name : 'No enviar')} /><DetailRow label="Recordatorio WhatsApp" value={reminderNames || (order.whatsappNotificationsEnabled !== false ? client?.name : 'No enviar')} /><View style={styles.detailActions}>{order.status === 'Reserva temporal' ? <><Button variant="success" label="Confirmar y enviar WhatsApp" onPress={() => void onConfirm(order, true)} /><Button variant="secondary" label="Confirmar sin WhatsApp" onPress={() => void onConfirm(order, false)} /></> : null}<Button variant="secondary" label="Editar cita" onPress={() => onEdit(order)} /><Button variant="secondary" label="Reprogramar cita" onPress={() => onReschedule(order)} /><Button variant="danger" label="Cancelar cita" onPress={() => void onCancel(order)} />{order.status !== 'Reserva temporal' ? <Button label="Marcar completada" onPress={() => void onUpdate(order.id, { status: 'Completada', updatedAt: new Date().toISOString() })} /> : null}</View></View>;
+ }
+ 
+ function SearchRow({ title, subtitle, active, onPress }: { title: string; subtitle: string; active: boolean; onPress: () => void }) {
+@@ -1859,6 +1874,20 @@
+   durationPreview: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 12, backgroundColor: '#F4F5F7', borderRadius: 8, padding: 12, marginBottom: 15 },
+   previewLabel: { color: colors.muted, fontSize: 8, fontWeight: '800' },
+   previewValue: { color: colors.text, fontSize: 11, fontWeight: '900', marginTop: 4 },
++  capacityRoundingHelp: { color: colors.muted, fontSize: 9, lineHeight: 14, marginTop: -8, marginBottom: 12 },
++  liveCapacityBanner: { borderWidth: 1, borderRadius: 9, padding: 11, marginBottom: 15 },
++  liveCapacityAvailable: { borderColor: '#B9E4B3', backgroundColor: colors.successLight },
++  liveCapacityUnavailable: { borderColor: '#F2B8B5', backgroundColor: colors.dangerLight },
++  liveCapacityTitle: { fontSize: 11, fontWeight: '900' },
++  liveCapacityTitleAvailable: { color: colors.success },
++  liveCapacityTitleUnavailable: { color: colors.danger },
++  liveCapacityText: { color: colors.text, fontSize: 10, lineHeight: 15, marginTop: 4 },
++  assignedTeamCard: { borderWidth: 1, borderColor: colors.primary, backgroundColor: colors.primaryLight, borderRadius: 9, padding: 12, marginBottom: 15 },
++  assignedTeamVan: { color: colors.primaryDark, fontSize: 13, fontWeight: '900' },
++  assignedTeamPeople: { flexDirection: 'row', flexWrap: 'wrap', gap: 28, marginTop: 10 },
++  assignedTeamRole: { color: colors.muted, fontSize: 8, fontWeight: '900', textTransform: 'uppercase' },
++  assignedTeamName: { color: colors.text, fontSize: 11, fontWeight: '900', marginTop: 3 },
++  assignedTeamHelp: { color: colors.primaryDark, fontSize: 9, marginTop: 10 },
+   formError: { backgroundColor: colors.dangerLight, borderRadius: 8, padding: 10, marginBottom: 12 },
+   formErrorText: { color: colors.danger, fontSize: 11, fontWeight: '700' },
+   infoBanner: { backgroundColor: colors.infoLight, borderRadius: 8, padding: 10, marginBottom: 12 },
+@@ -1899,4 +1928,4 @@
+   summaryLine: { color: colors.muted, fontSize: 10, marginTop: 3 },
+   summaryInternalLine: { color: colors.primaryDark, fontSize: 10, fontWeight: '700', marginTop: 5 },
+   modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 15, flexWrap: 'wrap' },
+-});
+\ No newline at end of file
++});
+--- a/src/screens/SettingsScreen.tsx
++++ b/src/screens/SettingsScreen.tsx
+@@ -3,9 +3,11 @@
+ import { InventoryCleanupAdmin } from '../components/InventoryCleanupAdmin';
+ import { AppModal, Button, Card, Input, SectionTitle } from '../components/UI';
+ import { useAppState } from '../state/AppState';
+-import { CalendarClosure, useCalendarState } from '../state/CalendarState';
++import { AppointmentWorkPreset, CalendarClosure, formatAppointmentDuration, useCalendarState } from '../state/CalendarState';
+ import { colors } from '../theme';
+ 
++// APPOINTMENT_SETTINGS_V11: administrators control the appointment work menu and durations.
++
+ const weekdays = [
+   { value: 0, label: 'Domingo', short: 'DOM' },
+   { value: 1, label: 'Lunes', short: 'LUN' },
+@@ -39,10 +41,12 @@
+   const {
+     calendarClosures,
+     businessCalendarSettings,
++    appointmentWorkPresets,
+     calendarLoading,
+     calendarDataError,
+     refreshCalendarData,
+     saveBusinessCalendarSettings,
++    saveAppointmentWorkPresets,
+     saveCalendarClosure,
+     removeCalendarClosure,
+   } = useCalendarState();
+@@ -55,6 +59,9 @@
+   const [notes, setNotes] = useState('');
+   const [saving, setSaving] = useState(false);
+   const [message, setMessage] = useState('');
++  const [showWorkPreset, setShowWorkPreset] = useState(false);
++  const [workPresetDraft, setWorkPresetDraft] = useState<AppointmentWorkPreset | null>(null);
++  const [workPresetMessage, setWorkPresetMessage] = useState('');
+ 
+   useEffect(() => setDraftWeekdays(businessCalendarSettings.closedWeekdays ?? [0]), [businessCalendarSettings.closedWeekdays]);
+ 
+@@ -83,6 +90,45 @@
+     setMessage(result.ok ? 'Los días cerrados semanales fueron actualizados.' : result.message ?? 'No se pudieron guardar los días semanales.');
+   }
+ 
++  function openWorkPreset(preset?: AppointmentWorkPreset) {
++    setWorkPresetDraft(preset ? { ...preset } : {
++      id: `appointment-preset-${Date.now()}`,
++      label: '',
++      durationMinutesPerUnit: 60,
++      kind: 'service',
++      active: true,
++      sortOrder: Math.max(0, ...appointmentWorkPresets.map((item) => item.sortOrder)) + 10,
++    });
++    setWorkPresetMessage('');
++    setShowWorkPreset(true);
++  }
++
++  async function saveWorkPreset() {
++    if (!workPresetDraft) return;
++    const label = workPresetDraft.label.trim();
++    if (!label) return setWorkPresetMessage('Escribe el nombre que verá el operador y el cliente.');
++    const duplicate = appointmentWorkPresets.find((item) => item.id !== workPresetDraft.id && item.label.trim().toLowerCase() === label.toLowerCase());
++    if (duplicate) return setWorkPresetMessage('Ya existe un trabajo programado con ese nombre.');
++    const normalized = { ...workPresetDraft, label };
++    const next = [...appointmentWorkPresets.filter((item) => item.id !== normalized.id), normalized];
++    setSaving(true);
++    setWorkPresetMessage('');
++    const result = await saveAppointmentWorkPresets(next);
++    setSaving(false);
++    if (!result.ok) return setWorkPresetMessage(result.message ?? 'No se pudo guardar el trabajo programado.');
++    setShowWorkPreset(false);
++    setWorkPresetDraft(null);
++    setMessage(`${label} quedó disponible en la agenda.`);
++  }
++
++  async function toggleWorkPreset(preset: AppointmentWorkPreset) {
++    setSaving(true);
++    setMessage('');
++    const result = await saveAppointmentWorkPresets(appointmentWorkPresets.map((item) => item.id === preset.id ? { ...item, active: !item.active } : item));
++    setSaving(false);
++    setMessage(result.ok ? `${preset.label} fue ${preset.active ? 'desactivado' : 'activado'}.` : result.message ?? 'No se pudo actualizar el trabajo programado.');
++  }
++
+   function openDate(date: string) {
+     const existing = calendarClosures.find((item) => item.date === date && item.active !== false);
+     setSelectedDate(date);
+@@ -129,6 +175,13 @@
+       {message ? <View style={styles.messageBanner}><Text style={styles.messageText}>{message}</Text></View> : null}
+ 
+       <Card>
++        <SectionTitle title="Trabajos programados de la agenda" subtitle="Administra los nombres y la duración por aire que usa la oficina al crear una cita." action={currentUser?.role === 'admin' ? <Button label="Añadir trabajo" icon="＋" onPress={() => openWorkPreset()} /> : undefined} />
++        <View style={styles.presetExplanation}><Text style={styles.presetExplanationTitle}>Duraciones configurables</Text><Text style={styles.presetExplanationText}>Puedes usar incrementos de 30 minutos. La agenda conserva la duración exacta y reserva cupos completos de una hora para evitar sobrecargar al equipo. La opción “Otro” siempre permanece disponible.</Text></View>
++        {currentUser?.role !== 'admin' ? <Text style={styles.readOnlyText}>Solo un administrador puede añadir, editar o desactivar estos trabajos.</Text> : null}
++        {appointmentWorkPresets.map((preset) => <View key={preset.id} style={styles.presetRow}><View style={{ flex: 1, minWidth: 220 }}><Text style={styles.presetName}>{preset.label}</Text><Text style={styles.presetMeta}>{formatAppointmentDuration(preset.durationMinutesPerUnit)} por aire · {preset.kind === 'installation' ? 'Instalación' : 'Servicio'}</Text></View><Text style={[styles.presetStatus, !preset.active && styles.presetStatusInactive]}>{preset.active ? 'Activo' : 'Inactivo'}</Text>{currentUser?.role === 'admin' ? <><Button compact variant="secondary" label="Editar" onPress={() => openWorkPreset(preset)} /><Button compact variant={preset.active ? 'danger' : 'success'} label={preset.active ? 'Desactivar' : 'Activar'} disabled={saving} onPress={() => void toggleWorkPreset(preset)} /></> : null}</View>)}
++      </Card>
++
++      <Card>
+         <SectionTitle title="Calendario laboral" subtitle="Define los días semanales que DEMAC no trabaja y bloquea fechas especiales como feriados, inventario o cierres internos." action={<Button label="Bloquear fecha" icon="＋" onPress={() => openDate(dateKey())} />} />
+         <Text style={styles.blockTitle}>Días cerrados todas las semanas</Text>
+         <Text style={styles.blockHelp}>Los domingos vienen bloqueados por defecto. Puedes activar o desactivar cualquier otro día.</Text>
+@@ -161,6 +214,17 @@
+         <Input label="Notas internas (opcional)" value={notes} onChangeText={setNotes} multiline placeholder="Agrega cualquier detalle necesario para la oficina." />
+         <View style={styles.modalActions}>{selectedClosure ? <Button variant="danger" label="Reabrir fecha" disabled={saving} onPress={() => void reopenDate(selectedClosure)} /> : null}<Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => setShowClosure(false)} /><Button label={saving ? 'Guardando…' : selectedClosure ? 'Guardar cambios' : 'Bloquear fecha'} disabled={saving || !reason.trim()} onPress={() => void saveClosure()} /></View>
+       </AppModal>
++
++      <AppModal visible={showWorkPreset} title={workPresetDraft?.label ? 'Editar trabajo programado' : 'Añadir trabajo programado'} onClose={() => { if (!saving) setShowWorkPreset(false); }}>
++        {workPresetMessage ? <View style={styles.modalError}><Text style={styles.modalErrorText}>{workPresetMessage}</Text></View> : null}
++        <Input label="Nombre para la agenda y el cliente" value={workPresetDraft?.label ?? ''} onChangeText={(label) => setWorkPresetDraft((current) => current ? { ...current, label } : current)} placeholder="Ej. Mantenimiento preventivo" />
++        <Text style={styles.modalFieldLabel}>Tipo de trabajo</Text>
++        <View style={styles.kindRow}><Pressable onPress={() => setWorkPresetDraft((current) => current ? { ...current, kind: 'service' } : current)} style={[styles.kindOption, workPresetDraft?.kind === 'service' && styles.kindOptionActive]}><Text style={[styles.kindOptionText, workPresetDraft?.kind === 'service' && styles.kindOptionTextActive]}>Servicio</Text></Pressable><Pressable onPress={() => setWorkPresetDraft((current) => current ? { ...current, kind: 'installation' } : current)} style={[styles.kindOption, workPresetDraft?.kind === 'installation' && styles.kindOptionActive]}><Text style={[styles.kindOptionText, workPresetDraft?.kind === 'installation' && styles.kindOptionTextActive]}>Instalación</Text></Pressable></View>
++        <Text style={styles.modalFieldLabel}>Duración por aire</Text>
++        <View style={styles.durationEditor}><Pressable disabled={(workPresetDraft?.durationMinutesPerUnit ?? 30) <= 30} onPress={() => setWorkPresetDraft((current) => current ? { ...current, durationMinutesPerUnit: Math.max(30, current.durationMinutesPerUnit - 30) } : current)} style={styles.durationButton}><Text style={styles.durationButtonText}>−</Text></Pressable><Text style={styles.durationEditorValue}>{formatAppointmentDuration(workPresetDraft?.durationMinutesPerUnit ?? 60)}</Text><Pressable disabled={(workPresetDraft?.durationMinutesPerUnit ?? 360) >= 360} onPress={() => setWorkPresetDraft((current) => current ? { ...current, durationMinutesPerUnit: Math.min(360, current.durationMinutesPerUnit + 30) } : current)} style={styles.durationButton}><Text style={styles.durationButtonText}>＋</Text></Pressable></View>
++        <Text style={styles.modalHint}>Cada toque cambia 30 minutos. El máximo por aire es 6 horas.</Text>
++        <View style={styles.modalActions}><Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => setShowWorkPreset(false)} /><Button label={saving ? 'Guardando…' : 'Guardar trabajo'} disabled={saving || !workPresetDraft?.label.trim()} onPress={() => void saveWorkPreset()} /></View>
++      </AppModal>
+     </ScrollView>
+   );
+ }
+@@ -174,6 +238,28 @@
+   errorText: { color: colors.text, fontSize: 10, marginTop: 3 },
+   messageBanner: { backgroundColor: colors.successLight, borderRadius: 10, padding: 12 },
+   messageText: { color: colors.success, fontWeight: '800', fontSize: 11 },
++  presetExplanation: { backgroundColor: colors.infoLight, borderRadius: 10, padding: 12, marginBottom: 10 },
++  presetExplanationTitle: { color: colors.primaryDark, fontWeight: '900', fontSize: 11 },
++  presetExplanationText: { color: colors.text, fontSize: 10, lineHeight: 16, marginTop: 4 },
++  readOnlyText: { color: colors.warning, fontSize: 10, fontWeight: '800', marginBottom: 8 },
++  presetRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 9, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: '#EDF1F6' },
++  presetName: { color: colors.text, fontWeight: '900', fontSize: 12 },
++  presetMeta: { color: colors.muted, fontSize: 10, marginTop: 3 },
++  presetStatus: { color: colors.success, backgroundColor: colors.successLight, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4, fontSize: 9, fontWeight: '900' },
++  presetStatusInactive: { color: colors.muted, backgroundColor: '#EEF0F2' },
++  modalError: { backgroundColor: colors.dangerLight, borderRadius: 8, padding: 10, marginBottom: 12 },
++  modalErrorText: { color: colors.danger, fontSize: 11, fontWeight: '800' },
++  modalFieldLabel: { color: colors.text, fontWeight: '900', fontSize: 11, marginBottom: 8 },
++  kindRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
++  kindOption: { borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 9, backgroundColor: '#FFFFFF' },
++  kindOptionActive: { borderColor: colors.primary, backgroundColor: colors.primaryLight },
++  kindOptionText: { color: colors.muted, fontWeight: '800', fontSize: 10 },
++  kindOptionTextActive: { color: colors.primaryDark },
++  durationEditor: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', borderWidth: 1, borderColor: colors.border, borderRadius: 9, overflow: 'hidden' },
++  durationButton: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primaryLight },
++  durationButtonText: { color: colors.primaryDark, fontSize: 20, fontWeight: '900' },
++  durationEditorValue: { minWidth: 130, textAlign: 'center', color: colors.text, fontWeight: '900', fontSize: 12 },
++  modalHint: { color: colors.muted, fontSize: 10, marginTop: 8, marginBottom: 12 },
+   blockTitle: { color: colors.text, fontWeight: '900', fontSize: 14, marginTop: 8 },
+   blockHelp: { color: colors.muted, fontSize: 11, lineHeight: 17, marginTop: 4 },
+   weekdayRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 14 },
+@@ -223,4 +309,4 @@
+   warning: { borderWidth: 1, borderColor: '#F3C8C8', backgroundColor: '#FFF8F8', borderRadius: 13, padding: 15, gap: 8, alignItems: 'flex-start' },
+   warningTitle: { color: colors.danger, fontWeight: '900' },
+   warningText: { color: colors.text, lineHeight: 19, marginBottom: 4 },
+-});
+\ No newline at end of file
++});
+--- a/src/screens/SettingsHubScreen.tsx
++++ b/src/screens/SettingsHubScreen.tsx
+@@ -5,6 +5,8 @@
+ import { useWebHistoryState } from '../navigation/appHistory';
+ import { SettingsScreen } from './SettingsScreen';
+ 
++// APPOINTMENT_SETTINGS_V11: agenda configuration lives alongside business calendar settings.
++
+ type SettingsTab = 'users' | 'calendar';
+ 
+ export function SettingsHubScreen() {
+@@ -18,7 +20,7 @@
+           <Text style={[styles.tabText, tab === 'users' && styles.tabTextActive]}>Usuarios y accesos</Text>
+         </Pressable>
+         <Pressable onPress={() => setTab('calendar')} style={[styles.tab, tab === 'calendar' && styles.tabActive]}>
+-          <Text style={[styles.tabText, tab === 'calendar' && styles.tabTextActive]}>Calendario y empresa</Text>
++          <Text style={[styles.tabText, tab === 'calendar' && styles.tabTextActive]}>Agenda y empresa</Text>
+         </Pressable>
+       </View>
+       {tab === 'users' ? (
+--- a/src/state/CalendarState.tsx
++++ b/src/state/CalendarState.tsx
+@@ -18,16 +18,65 @@
+   updatedAt?: string;
+ }
+ 
++// APPOINTMENT_SETTINGS_V11: office appointment presets are editable by administrators.
++export interface AppointmentWorkPreset {
++  id: string;
++  label: string;
++  durationMinutesPerUnit: number;
++  kind: 'service' | 'installation';
++  active: boolean;
++  sortOrder: number;
++}
++
++type AppointmentWorkPresetSettings = {
++  id: 'appointment-work-presets';
++  presets: AppointmentWorkPreset[];
++  updatedAt?: string;
++};
++
+ const SYNC_INTERVAL_MS = 30_000;
+ const DEFAULT_SETTINGS: BusinessCalendarSettings = { id: 'business-calendar', closedWeekdays: [0] };
++const APPOINTMENT_PRESETS_SETTINGS_ID = 'appointment-work-presets';
++export const DEFAULT_APPOINTMENT_WORK_PRESETS: AppointmentWorkPreset[] = [
++  { id: 'standard_service', label: 'Servicio estándar', durationMinutesPerUnit: 60, kind: 'service', active: true, sortOrder: 10 },
++  { id: 'deep_cleaning', label: 'Servicio deep cleaning', durationMinutesPerUnit: 120, kind: 'service', active: true, sortOrder: 20 },
++  { id: 'standard_installation', label: 'Instalación estándar', durationMinutesPerUnit: 120, kind: 'installation', active: true, sortOrder: 30 },
++  { id: 'special_installation', label: 'Instalación especial', durationMinutesPerUnit: 180, kind: 'installation', active: true, sortOrder: 40 },
++];
++
++export function formatAppointmentDuration(minutes: number) {
++  const safeMinutes = Math.max(30, Math.round(minutes / 30) * 30);
++  const hours = Math.floor(safeMinutes / 60);
++  const remainder = safeMinutes % 60;
++  if (!hours) return `${remainder} min`;
++  if (!remainder) return `${hours} hora${hours === 1 ? '' : 's'}`;
++  return `${hours} h ${remainder} min`;
++}
++
++function normalizeAppointmentWorkPresets(presets?: AppointmentWorkPreset[]) {
++  const source = Array.isArray(presets) && presets.length ? presets : DEFAULT_APPOINTMENT_WORK_PRESETS;
++  return source
++    .filter((preset) => preset && preset.id && preset.label)
++    .map((preset, index) => ({
++      id: String(preset.id),
++      label: String(preset.label).trim(),
++      durationMinutesPerUnit: Math.min(360, Math.max(30, Math.round(Number(preset.durationMinutesPerUnit || 60) / 30) * 30)),
++      kind: preset.kind === 'installation' ? 'installation' as const : 'service' as const,
++      active: preset.active !== false,
++      sortOrder: Number.isFinite(Number(preset.sortOrder)) ? Number(preset.sortOrder) : (index + 1) * 10,
++    }))
++    .sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label));
++}
+ 
+ type CalendarStateValue = {
+   calendarClosures: CalendarClosure[];
+   businessCalendarSettings: BusinessCalendarSettings;
++  appointmentWorkPresets: AppointmentWorkPreset[];
+   calendarLoading: boolean;
+   calendarDataError: string | null;
+   refreshCalendarData: () => Promise<void>;
+   saveBusinessCalendarSettings: (settings: BusinessCalendarSettings) => Promise<OperationResult>;
++  saveAppointmentWorkPresets: (presets: AppointmentWorkPreset[]) => Promise<OperationResult>;
+   saveCalendarClosure: (closure: CalendarClosure) => Promise<OperationResult>;
+   removeCalendarClosure: (id: string) => Promise<OperationResult>;
+ };
+@@ -48,12 +97,14 @@
+   const { currentUser } = useAppState();
+   const [calendarClosures, setCalendarClosures] = useState<CalendarClosure[]>([]);
+   const [businessCalendarSettings, setBusinessCalendarSettings] = useState<BusinessCalendarSettings>(DEFAULT_SETTINGS);
++  const [appointmentWorkPresets, setAppointmentWorkPresets] = useState<AppointmentWorkPreset[]>(DEFAULT_APPOINTMENT_WORK_PRESETS);
+   const [calendarLoading, setCalendarLoading] = useState(false);
+   const [calendarDataError, setCalendarDataError] = useState<string | null>(null);
+ 
+   const restoreDemo = useCallback(() => {
+     setCalendarClosures([]);
+     setBusinessCalendarSettings(DEFAULT_SETTINGS);
++    setAppointmentWorkPresets(DEFAULT_APPOINTMENT_WORK_PRESETS);
+     setCalendarDataError(null);
+   }, []);
+ 
+@@ -71,6 +122,8 @@
+       setCalendarClosures(remoteClosures.filter((item) => item.active !== false).sort((a, b) => a.date.localeCompare(b.date)));
+       const saved = remoteSettings.find((item) => item.id === DEFAULT_SETTINGS.id);
+       setBusinessCalendarSettings(saved ? { ...saved, closedWeekdays: saved.closedWeekdays ?? [0] } : DEFAULT_SETTINGS);
++      const presetSettings = remoteSettings.find((item) => item.id === APPOINTMENT_PRESETS_SETTINGS_ID) as unknown as AppointmentWorkPresetSettings | undefined;
++      setAppointmentWorkPresets(normalizeAppointmentWorkPresets(presetSettings?.presets));
+       setCalendarDataError(null);
+     } catch (error) {
+       setCalendarDataError(friendlyError(error));
+@@ -123,6 +176,29 @@
+     }
+   };
+ 
++  const saveAppointmentWorkPresets = async (presets: AppointmentWorkPreset[]): Promise<OperationResult> => {
++    const normalized = normalizeAppointmentWorkPresets(presets);
++    const settings: AppointmentWorkPresetSettings = {
++      id: APPOINTMENT_PRESETS_SETTINGS_ID,
++      presets: normalized,
++      updatedAt: new Date().toISOString(),
++    };
++    if (currentUser?.authProvider !== 'firebase') {
++      setAppointmentWorkPresets(normalized);
++      return { ok: true };
++    }
++    try {
++      await saveFirestoreDocument('businessSettings', settings);
++      setAppointmentWorkPresets(normalized);
++      setCalendarDataError(null);
++      return { ok: true };
++    } catch (error) {
++      const message = friendlyError(error);
++      setCalendarDataError(message);
++      return { ok: false, message };
++    }
++  };
++
+   const removeCalendarClosure = async (id: string): Promise<OperationResult> => {
+     if (currentUser?.authProvider !== 'firebase') {
+       setCalendarClosures((previous) => previous.filter((item) => item.id !== id));
+@@ -143,13 +219,15 @@
+   const value = useMemo<CalendarStateValue>(() => ({
+     calendarClosures,
+     businessCalendarSettings,
++    appointmentWorkPresets,
+     calendarLoading,
+     calendarDataError,
+     refreshCalendarData: () => refreshCalendarData(true),
+     saveBusinessCalendarSettings,
++    saveAppointmentWorkPresets,
+     saveCalendarClosure,
+     removeCalendarClosure,
+-  }), [calendarClosures, businessCalendarSettings, calendarLoading, calendarDataError, refreshCalendarData]);
++  }), [calendarClosures, businessCalendarSettings, appointmentWorkPresets, calendarLoading, calendarDataError, refreshCalendarData]);
+ 
+   return <CalendarStateContext.Provider value={value}>{children}</CalendarStateContext.Provider>;
+ }
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -317,6 +317,7 @@
+   | 'standard_service'
+   | 'deep_cleaning'
+   | 'standard_installation'
++  | 'special_installation'
+   | 'extended_installation'
+   | 'rooftop_installation'
+   | 'second_floor_installation'
+@@ -482,7 +483,10 @@
+   problem: string;
+   officeNotes?: string;
+   appointmentWorkType?: AppointmentWorkType;
++  // APPOINTMENT_SETTINGS_V11: dynamic preset snapshot and exact duration for customer appointments.
++  appointmentPresetId?: string;
+   appointmentWorkLabel?: string;
++  appointmentDurationMinutes?: number;
+   amount: number;
+   paid: number;
+   schedulingMode?: SchedulingMode;
+--- a/firestore.rules
++++ b/firestore.rules
+@@ -290,7 +290,8 @@
+ 
+     match /businessSettings/{settingId} {
+       allow read: if activeStaff();
+-      allow create, update: if operationsRole();
++      // APPOINTMENT_SETTINGS_V11: only administrators manage customer-facing appointment presets.
++      allow create, update: if settingId == 'appointment-work-presets' ? adminRole() : operationsRole();
+       allow delete: if adminOrSupervisor();
+     }
+ 
