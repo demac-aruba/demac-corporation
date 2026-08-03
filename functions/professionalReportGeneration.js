@@ -202,7 +202,7 @@ function reportContext({ intervention, visit, unit, equipment, sections, addOns,
     scheduledScope: {
       service: cleanScalar(visit?.scheduledScopeSnapshot?.serviceName),
       reportedProblem: cleanScalar(visit?.scheduledScopeSnapshot?.problemDescription),
-      officeInstructions: cleanScalar(visit?.scheduledScopeSnapshot?.technicianInstructions),
+      // APPOINTMENT_PRESETS_V10: technician instructions are private and must never enter customer-facing AI copy.
     },
     equipment: {
       location: cleanScalar(equipment?.locationLabel || unit?.locationLabel),

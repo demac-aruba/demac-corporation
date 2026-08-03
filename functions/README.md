@@ -39,6 +39,8 @@ firebase deploy --only "functions:generateProfessionalCustomerReport,functions:g
 
 The `generateProfessionalCustomerReport` trigger runs when a technician sends an intervention for office review or when the office requests a new draft. It waits briefly for pending voice transcriptions, combines the verified report fields, measurements, findings and add-ons, and saves an editable customer-facing draft on `workInterventions`. The original technical evidence is never replaced.
 
+Appointment `officeNotes` are technician-only instructions. They are deliberately excluded from customer WhatsApp payloads and from the AI context used to create professional customer reports.
+
 ## Incoming WhatsApp data
 
 - `whatsappWebhookEvents`: complete webhook payloads for troubleshooting.
