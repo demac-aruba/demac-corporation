@@ -1,10 +1,10 @@
-const BUILD_VERSION = "0.2.1";
+const BUILD_VERSION = chrome.runtime.getManifest().version;
 const DEFAULT_SETTINGS = {
   backendUrl: "https://us-central1-demac-corporation.cloudfunctions.net/whatsappCopilotDraft",
   backendToken: "",
   companyName: "DEMAC Professional Cooling Solutions",
   operatorName: "Operaciones",
-  maxMessages: 24,
+  maxMessages: 30,
   languageMode: "auto",
 };
 
@@ -26,11 +26,17 @@ async function sendToWhatsApp(type, payload = {}) {
   return chrome.tabs.sendMessage(tab.id, { type, payload });
 }
 
-async function callBackend(context, settings) {
+function backendConfiguration(settings) {
   const endpoint = String(settings.backendUrl ?? "").trim();
   const token = String(settings.backendToken ?? "").trim();
-  if (!endpoint || !token) throw new Error("El backend de OpenAI todavía no está configurado.");
+  if (!endpoint || !token) {
+    throw new Error("OpenAI todavía no está configurado. Abre Ajustes y agrega el token privado de Firebase.");
+  }
+  return { endpoint, token };
+}
 
+async function backendRequest(settings, body) {
+  const { endpoint, token } = backendConfiguration(settings);
   let response;
   try {
     response = await fetch(endpoint, {
@@ -39,27 +45,44 @@ async function callBackend(context, settings) {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({
-        channel: "whatsapp-web-copilot",
-        company: settings.companyName,
-        operator: settings.operatorName,
-        languageMode: settings.languageMode,
-        conversation: context,
-      }),
+      body: JSON.stringify(body),
     });
   } catch (error) {
-    throw new Error(`No se pudo conectar con el backend: ${error.message}`);
+    throw new Error(`No se pudo conectar con Firebase: ${error.message}`);
   }
 
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data?.error ?? `El backend respondió HTTP ${response.status}.`);
+  if (!response.ok) throw new Error(data?.error ?? `Firebase respondió HTTP ${response.status}.`);
+  return data;
+}
+
+async function callBackend(context, settings) {
+  const data = await backendRequest(settings, {
+    channel: "whatsapp-web-copilot",
+    company: settings.companyName,
+    operator: settings.operatorName,
+    languageMode: settings.languageMode,
+    conversation: context,
+  });
   const text = String(data?.draft ?? data?.message ?? "").trim();
-  if (!text) throw new Error("El backend no devolvió una respuesta.");
+  if (!text) throw new Error("OpenAI no devolvió una respuesta.");
   return {
     text,
-    source: data?.source ?? "backend",
+    source: data?.source ?? "openai",
     warning: data?.warning ?? "",
     metadata: data?.metadata ?? null,
+  };
+}
+
+async function testBackend(settings) {
+  const data = await backendRequest(settings, { mode: "health" });
+  if (!data?.ok || !data?.openAiConfigured) {
+    throw new Error("Firebase respondió, pero la clave de OpenAI no está disponible.");
+  }
+  return {
+    connected: true,
+    model: data.model || "OpenAI",
+    source: data.source || "openai",
   };
 }
 
@@ -76,6 +99,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case "GENERATE_DRAFT": {
         const settings = await chrome.storage.local.get(DEFAULT_SETTINGS);
         return callBackend(message.payload?.context ?? {}, settings);
+      }
+      case "TEST_BACKEND": {
+        const settings = await chrome.storage.local.get(DEFAULT_SETTINGS);
+        return testBackend(settings);
       }
       case "INSERT_DRAFT":
         return sendToWhatsApp("INSERT_DRAFT", { text: message.payload?.text ?? "" });
