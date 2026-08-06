@@ -5,57 +5,32 @@
   const nativeExecCommand = Document.prototype.execCommand;
   if (typeof nativeExecCommand !== "function") return;
 
-  function escapeHtml(value) {
-    return String(value)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#039;");
-  }
-
   function normalizeNewlines(value) {
     return String(value).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   }
 
-  function insertMultiline(documentInstance, text) {
-    const normalized = normalizeNewlines(text);
-    const html = escapeHtml(normalized).replace(/\n/g, "<br>");
-
+  function runCommand(documentInstance, command, value = null) {
     try {
-      if (nativeExecCommand.call(documentInstance, "insertHTML", false, html)) return true;
+      return Boolean(nativeExecCommand.call(documentInstance, command, false, value));
     } catch (_error) {
+      return false;
     }
+  }
 
-    const lines = normalized.split("\n");
+  function insertBreak(documentInstance) {
+    return runCommand(documentInstance, "insertLineBreak")
+      || runCommand(documentInstance, "insertParagraph")
+      || runCommand(documentInstance, "insertHTML", "<br>");
+  }
+
+  function insertMultiline(documentInstance, text) {
+    const lines = normalizeNewlines(text).split("\n");
     let insertedAnything = false;
 
     for (let index = 0; index < lines.length; index += 1) {
-      if (index > 0) {
-        let breakInserted = false;
-        try {
-          breakInserted = nativeExecCommand.call(documentInstance, "insertLineBreak", false, null);
-        } catch (_error) {
-          breakInserted = false;
-        }
-        if (!breakInserted) {
-          try {
-            breakInserted = nativeExecCommand.call(documentInstance, "insertHTML", false, "<br>");
-          } catch (_error) {
-            breakInserted = false;
-          }
-        }
-        insertedAnything = insertedAnything || breakInserted;
-      }
-
+      if (index > 0) insertedAnything = insertBreak(documentInstance) || insertedAnything;
       if (lines[index]) {
-        let lineInserted = false;
-        try {
-          lineInserted = nativeExecCommand.call(documentInstance, "insertText", false, lines[index]);
-        } catch (_error) {
-          lineInserted = false;
-        }
-        insertedAnything = insertedAnything || lineInserted;
+        insertedAnything = runCommand(documentInstance, "insertText", lines[index]) || insertedAnything;
       }
     }
 
