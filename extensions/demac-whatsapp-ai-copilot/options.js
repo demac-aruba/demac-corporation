@@ -1,8 +1,9 @@
 const DEFAULT_SETTINGS = {
-  backendUrl: "",
+  backendUrl: "https://us-central1-demac-corporation.cloudfunctions.net/whatsappCopilotDraft",
+  backendToken: "",
   companyName: "DEMAC Professional Cooling Solutions",
   operatorName: "Operaciones",
-  maxMessages: 20,
+  maxMessages: 24,
   languageMode: "auto",
 };
 
@@ -21,9 +22,10 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const settings = {
     backendUrl: document.querySelector("#backendUrl").value.trim(),
+    backendToken: document.querySelector("#backendToken").value.trim(),
     companyName: document.querySelector("#companyName").value.trim(),
     operatorName: document.querySelector("#operatorName").value.trim(),
-    maxMessages: Math.max(1, Math.min(50, Number(document.querySelector("#maxMessages").value) || 20)),
+    maxMessages: Math.max(1, Math.min(50, Number(document.querySelector("#maxMessages").value) || 24)),
     languageMode: document.querySelector("#languageMode").value,
   };
   await chrome.storage.local.set(settings);
