@@ -11,7 +11,7 @@
     "shell": "firebase functions:shell",
     "deploy": "firebase deploy --only functions",
     "logs": "firebase functions:log",
-    "test:whatsapp-copilot": "node --test whatsappCopilotScheduling.test.js"
+    "test:whatsapp-copilot": "node --test whatsappCopilotScheduling.test.js whatsappCopilotPresentation.test.js"
   },
   "dependencies": {
     "firebase-admin": "^13.4.0",
