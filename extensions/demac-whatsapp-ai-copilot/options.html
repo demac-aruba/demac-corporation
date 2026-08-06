@@ -10,7 +10,7 @@
     <main class="options-shell">
       <p class="eyebrow">DEMAC</p>
       <h1>Ajustes del WhatsApp AI Copilot</h1>
-      <p class="muted">La clave de OpenAI nunca debe guardarse aquí. El navegador se conectará posteriormente a un backend seguro de Firebase.</p>
+      <p class="muted">La clave de OpenAI nunca se guarda en Chrome. La extensión usa un token privado y limitado para llamar al backend seguro de Firebase.</p>
 
       <form id="settingsForm" class="card form-grid">
         <label>
@@ -22,9 +22,13 @@
           <input id="operatorName" type="text" required />
         </label>
         <label>
-          <span>Endpoint seguro del backend</span>
-          <input id="backendUrl" type="url" placeholder="https://...cloudfunctions.net/..." />
-          <small>Déjalo vacío para usar el generador local de prueba.</small>
+          <span>Endpoint seguro de Firebase</span>
+          <input id="backendUrl" type="url" placeholder="https://...cloudfunctions.net/whatsappCopilotDraft" />
+        </label>
+        <label>
+          <span>Token privado de la extensión</span>
+          <input id="backendToken" type="password" autocomplete="off" placeholder="Se configura después de desplegar Firebase" />
+          <small>No es la clave de OpenAI. Es un token revocable que protege únicamente esta función.</small>
         </label>
         <label>
           <span>Mensajes visibles que puede leer</span>
@@ -46,8 +50,8 @@
       </form>
 
       <section class="notice">
-        <strong>Privacidad</strong>
-        <span>Sin un endpoint configurado, la conversación no sale del navegador. Con un endpoint configurado, solo se envía el chat abierto para generar el borrador solicitado.</span>
+        <strong>Sin token configurado</strong>
+        <span>La extensión usa respuestas locales mejoradas. Cuando se despliegue el backend y se agregue el token, las respuestas serán generadas por OpenAI.</span>
       </section>
     </main>
     <script src="options.js"></script>
