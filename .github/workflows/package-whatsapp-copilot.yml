@@ -7,6 +7,12 @@ on:
     paths:
       - 'extensions/demac-whatsapp-ai-copilot/**'
       - '.github/workflows/package-whatsapp-copilot.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'extensions/demac-whatsapp-ai-copilot/**'
+      - '.github/workflows/package-whatsapp-copilot.yml'
   workflow_dispatch:
 
 permissions:
