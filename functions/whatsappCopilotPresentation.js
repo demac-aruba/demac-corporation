@@ -9,12 +9,13 @@ function capitalize(value) {
 }
 
 function formatDateSpanish(date) {
-  return capitalize(new Intl.DateTimeFormat("es-AW", {
+  const formatted = new Intl.DateTimeFormat("es-AW", {
     timeZone: "UTC",
     weekday: "long",
     day: "numeric",
     month: "long",
-  }).format(new Date(`${date}T12:00:00Z`)));
+  }).format(new Date(`${date}T12:00:00Z`));
+  return capitalize(formatted.replace(",", ""));
 }
 
 function formatDateEnglish(date) {
@@ -54,7 +55,7 @@ function formatClock(value, language) {
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
-  }).format(date);
+  }).format(date).replace(/\u00a0/g, " ");
 }
 
 function serviceReference(language, quantity) {
