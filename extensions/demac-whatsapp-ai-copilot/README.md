@@ -19,7 +19,9 @@ Extensión privada Manifest V3 para asistir a Operaciones dentro de WhatsApp Web
 - Favorece trabajos en el mismo sector, sectores adyacentes y recorridos que regresen progresivamente hacia la oficina de Santa Cruz.
 - Ofrece solamente las mejores una, dos o tres opciones; nunca expone todos los espacios abiertos.
 - Respeta voluntariamente días u horarios mencionados por el cliente sin preguntarlos como requisito.
-- Revisa nuevamente el cupo dentro de una transacción antes de crear la cita, evitando doble reserva.
+- Mantiene la selección de la cita pendiente de aprobación mientras el operador revisa el borrador.
+- Al pulsar **Enviar ahora**, revisa nuevamente el cupo dentro de una transacción, crea la cita y solamente después envía la confirmación, evitando doble reserva.
+- Desactiva **Insertar** para una confirmación pendiente, de modo que no pueda enviarse sin reservar primero.
 - Crea una orden principal y, cuando la cantidad requiere varias vans, asignaciones de apoyo sin confirmaciones o recordatorios duplicados.
 - Utiliza el vocabulario oficial **Vocabulario di Papiamento — Aruba 2009**, con referencia de `papiamento.aw`, para validar las respuestas en Papiamento di Aruba.
 - Mantiene marcas, modelos, direcciones y términos HVAC como excepciones revisables.
@@ -32,9 +34,10 @@ Extensión privada Manifest V3 para asistir a Operaciones dentro de WhatsApp Web
 2. El backend consulta el ERP durante los próximos 21 días.
 3. Primero descarta cupos imposibles y luego puntúa las rutas eficientes.
 4. Devuelve como máximo tres opciones.
-5. Cuando el cliente selecciona una opción, el backend vuelve a consultar la agenda.
-6. Si el cupo sigue disponible, crea la cita y las vans de apoyo necesarias.
-7. Si el espacio cambió mientras el cliente respondía, no crea una cita duplicada y ofrece nuevas opciones.
+5. Cuando el cliente selecciona una opción, el Copilot prepara una confirmación pendiente de aprobación.
+6. Al pulsar **Enviar ahora**, el backend vuelve a consultar la agenda.
+7. Si el cupo sigue disponible, crea la cita y las vans de apoyo necesarias y luego envía el mensaje.
+8. Si el espacio cambió mientras el cliente respondía, no envía una confirmación incorrecta: muestra nuevas opciones para revisión.
 
 ## Datos y configuración utilizados
 
@@ -140,6 +143,7 @@ Para la extensión:
 node --check background.js
 node --check content.js
 node --check sidepanel.js
+node --check appointment-guard.js
 node --check options.js
 ```
 
