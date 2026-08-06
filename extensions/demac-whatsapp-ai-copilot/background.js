@@ -1,3 +1,4 @@
+const BUILD_VERSION = "0.2.1";
 const DEFAULT_SETTINGS = {
   backendUrl: "https://us-central1-demac-corporation.cloudfunctions.net/whatsappCopilotDraft",
   backendToken: "",
@@ -25,76 +26,10 @@ async function sendToWhatsApp(type, payload = {}) {
   return chrome.tabs.sendMessage(tab.id, { type, payload });
 }
 
-function latestCustomerText(context) {
-  const grouped = String(context?.customerTurn?.text ?? "").trim();
-  if (grouped) return grouped;
-  const inbound = [...(context?.messages ?? [])]
-    .reverse()
-    .find((message) => message.direction === "inbound");
-  return String(inbound?.text ?? "").trim();
-}
-
-function localTestDraft(context, settings) {
-  const text = latestCustomerText(context);
-  const lower = text.toLocaleLowerCase();
-
-  if (!text) {
-    return {
-      text: `Buenas tardes. Gracias por comunicarse con ${settings.companyName}. ¿En qué podemos asistirle?`,
-      source: "local-test",
-      warning: "No se identificó todavía un mensaje recibido. Revisa el conteo de recibidos y vuelve a leer el chat.",
-      metadata: { intent: "unknown", customerTurn: "" },
-    };
-  }
-
-  if (/servicio|service|mantenimiento|maintenance|limpia|clean|airco|aire/.test(lower)) {
-    return {
-      text: "Buenas tardes. Con mucho gusto podemos coordinar el servicio de sus aires acondicionados. ¿Cuántos aires necesitan servicio y cuál es la dirección de la propiedad?",
-      source: "local-test",
-      warning: "Respuesta local mejorada. Configura el token del backend para generar respuestas con OpenAI.",
-      metadata: { intent: "service_request", customerTurn: text },
-    };
-  }
-
-  if (/instalaci[oó]n|install|airco nobo|aire nuevo/.test(lower)) {
-    return {
-      text: "Buenas tardes. Con mucho gusto podemos ayudarle con la instalación. ¿Cuántos aires desea instalar, en qué dirección y ya conoce las capacidades aproximadas?",
-      source: "local-test",
-      warning: "Respuesta local mejorada. Todavía no consulta precios ni disponibilidad del ERP.",
-      metadata: { intent: "installation_request", customerTurn: text },
-    };
-  }
-
-  if (/cita|appointment|disponib|fecha|hora/.test(lower)) {
-    return {
-      text: "Buenas tardes. Con gusto podemos ayudarle a coordinar una cita. ¿Qué trabajo necesita, cuántos aires son y cuál es la dirección de la propiedad?",
-      source: "local-test",
-      warning: "Respuesta local mejorada. Todavía no consulta la agenda del ERP.",
-      metadata: { intent: "appointment_question", customerTurn: text },
-    };
-  }
-
-  if (/precio|price|cu[aá]nto|cost/.test(lower)) {
-    return {
-      text: "Buenas tardes. Con gusto le ayudamos con la información de precio. ¿Podría indicarnos el servicio requerido, la cantidad de aires y la dirección?",
-      source: "local-test",
-      warning: "No confirmes precios hasta conectarlo con la información autorizada del ERP.",
-      metadata: { intent: "price_question", customerTurn: text },
-    };
-  }
-
-  return {
-    text: "Buenas tardes. Gracias por escribirnos. Hemos leído su solicitud y con gusto le ayudaremos. ¿Podría compartir el detalle que falte para poder atenderla correctamente?",
-    source: "local-test",
-    warning: "Respuesta local mejorada. Configura el backend para comprensión completa con OpenAI.",
-    metadata: { intent: "general_question", customerTurn: text },
-  };
-}
-
 async function callBackend(context, settings) {
   const endpoint = String(settings.backendUrl ?? "").trim();
   const token = String(settings.backendToken ?? "").trim();
-  if (!endpoint || !token) return localTestDraft(context, settings);
+  if (!endpoint || !token) throw new Error("El backend de OpenAI todavía no está configurado.");
 
   let response;
   try {
@@ -118,10 +53,8 @@ async function callBackend(context, settings) {
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data?.error ?? `El backend respondió HTTP ${response.status}.`);
-
   const text = String(data?.draft ?? data?.message ?? "").trim();
-  if (!text) throw new Error("El backend no devolvió un borrador.");
-
+  if (!text) throw new Error("El backend no devolvió una respuesta.");
   return {
     text,
     source: data?.source ?? "backend",
@@ -133,6 +66,9 @@ async function callBackend(context, settings) {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const run = async () => {
     switch (message?.type) {
+      case "PING":
+      case "PING_BACKGROUND":
+        return { buildVersion: BUILD_VERSION };
       case "GET_ACTIVE_CONTEXT": {
         const settings = await chrome.storage.local.get(DEFAULT_SETTINGS);
         return sendToWhatsApp("READ_ACTIVE_CHAT", { maxMessages: settings.maxMessages });
@@ -144,20 +80,22 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case "INSERT_DRAFT":
         return sendToWhatsApp("INSERT_DRAFT", { text: message.payload?.text ?? "" });
       case "SEND_DRAFT":
+      case "SEND_NOW":
+      case "SEND_MESSAGE":
         return sendToWhatsApp("SEND_DRAFT", { text: message.payload?.text ?? "" });
       case "GET_SETTINGS":
         return chrome.storage.local.get(DEFAULT_SETTINGS);
       case "OPEN_OPTIONS":
         await chrome.runtime.openOptionsPage();
-        return { ok: true };
+        return { opened: true };
       default:
-        throw new Error("Acción no reconocida por la extensión.");
+        throw new Error(`Acción no reconocida por el motor ${BUILD_VERSION}: ${String(message?.type || "vacía")}`);
     }
   };
 
   run().then(
     (result) => sendResponse({ ok: true, result }),
-    (error) => sendResponse({ ok: false, error: error?.message ?? String(error) }),
+    (error) => sendResponse({ ok: false, error: error?.message ?? String(error), buildVersion: BUILD_VERSION }),
   );
   return true;
 });
