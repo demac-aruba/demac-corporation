@@ -1,4 +1,4 @@
-const BUILD_VERSION = "0.2.1";
+const BUILD_VERSION = chrome.runtime.getManifest().version;
 const DEFAULT_SETTINGS = {
   backendUrl: "https://us-central1-demac-corporation.cloudfunctions.net/whatsappCopilotDraft",
   backendToken: "",
@@ -11,30 +11,38 @@ const DEFAULT_SETTINGS = {
 const state = {
   context: null,
   draft: "",
+  initialized: false,
 };
 
-const elements = {
-  statusDot: document.querySelector("#statusDot"),
-  statusText: document.querySelector("#statusText"),
-  settingsButton: document.querySelector("#settingsButton"),
-  chatTitle: document.querySelector("#chatTitle"),
-  contextSummary: document.querySelector("#contextSummary"),
-  customerTurnCard: document.querySelector("#customerTurnCard"),
-  customerTurnText: document.querySelector("#customerTurnText"),
-  messageList: document.querySelector("#messageList"),
-  refreshButton: document.querySelector("#refreshButton"),
-  generateButton: document.querySelector("#generateButton"),
-  insertButton: document.querySelector("#insertButton"),
-  sendButton: document.querySelector("#sendButton"),
-  draftText: document.querySelector("#draftText"),
-  draftSource: document.querySelector("#draftSource"),
-  draftWarning: document.querySelector("#draftWarning"),
-  buildInfo: document.querySelector("#buildInfo"),
-};
+let elements = {};
+
+function byId(id) {
+  return document.getElementById(id);
+}
+
+function setText(element, value) {
+  if (element) element.textContent = String(value ?? "");
+}
+
+function setHtml(element, value) {
+  if (element) element.innerHTML = String(value ?? "");
+}
+
+function setHidden(element, hidden) {
+  if (element) element.hidden = Boolean(hidden);
+}
+
+function setDisabled(element, disabled) {
+  if (element) element.disabled = Boolean(disabled);
+}
 
 function setStatus(text, kind = "idle") {
-  elements.statusText.textContent = text;
-  elements.statusDot.dataset.kind = kind;
+  setText(elements.statusText, text);
+  if (elements.statusDot) elements.statusDot.dataset.kind = kind;
+}
+
+function setWarning(text) {
+  setText(elements.draftWarning, text);
 }
 
 function escapeHtml(value) {
@@ -46,6 +54,62 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function collectElements() {
+  elements = {
+    statusDot: byId("statusDot"),
+    statusText: byId("statusText"),
+    settingsButton: byId("settingsButton"),
+    chatTitle: byId("chatTitle"),
+    contextSummary: byId("contextSummary"),
+    customerTurnCard: byId("customerTurnCard"),
+    customerTurnText: byId("customerTurnText"),
+    messageList: byId("messageList"),
+    refreshButton: byId("refreshButton"),
+    generateButton: byId("generateButton"),
+    insertButton: byId("insertButton"),
+    sendButton: byId("sendButton"),
+    draftText: byId("draftText"),
+    draftSource: byId("draftSource"),
+    draftWarning: byId("draftWarning"),
+    buildInfo: byId("buildInfo"),
+    versionText: byId("versionText"),
+  };
+
+  const required = [
+    "statusText",
+    "chatTitle",
+    "contextSummary",
+    "messageList",
+    "refreshButton",
+    "generateButton",
+    "insertButton",
+    "sendButton",
+    "draftText",
+    "draftSource",
+    "draftWarning",
+  ];
+  return required.filter((key) => !elements[key]);
+}
+
+function renderFatalPanelError(missingIds) {
+  document.body.innerHTML = `
+    <main style="font-family:system-ui;padding:18px;color:#142033">
+      <h2 style="margin-top:0">DEMAC WhatsApp AI Copilot</h2>
+      <p>No se pudo iniciar el panel porque faltan componentes de la interfaz.</p>
+      <p style="color:#a33"><strong>Archivos mezclados o actualización incompleta:</strong> ${escapeHtml(missingIds.join(", "))}</p>
+      <p>Cierra este panel, recarga la extensión en <code>chrome://extensions</code> y vuelve a abrir WhatsApp Web.</p>
+      <p>Versión del código: ${escapeHtml(BUILD_VERSION)}</p>
+    </main>`;
+}
+
+function isConnectionError(error) {
+  const message = String(error?.message ?? error ?? "").toLocaleLowerCase();
+  return message.includes("receiving end does not exist")
+    || message.includes("could not establish connection")
+    || message.includes("message port closed")
+    || message.includes("no tab with id");
+}
+
 async function getWhatsAppTab() {
   const tabs = await chrome.tabs.query({ url: "https://web.whatsapp.com/*" });
   const active = tabs.find((tab) => tab.active) ?? tabs[0];
@@ -53,11 +117,30 @@ async function getWhatsAppTab() {
   return active;
 }
 
+async function injectCurrentReader(tabId) {
+  if (!chrome.scripting?.executeScript) {
+    throw new Error("El lector no está cargado. Recarga WhatsApp Web con Ctrl + Shift + R.");
+  }
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ["content.js"],
+  });
+  await new Promise((resolve) => setTimeout(resolve, 120));
+}
+
 async function requestWhatsApp(type, payload = {}) {
   const tab = await getWhatsAppTab();
-  const response = await chrome.tabs.sendMessage(tab.id, { type, payload });
-  if (response?.error) throw new Error(response.error);
-  return response;
+  try {
+    const response = await chrome.tabs.sendMessage(tab.id, { type, payload });
+    if (response?.error) throw new Error(response.error);
+    return response;
+  } catch (error) {
+    if (!isConnectionError(error)) throw error;
+    await injectCurrentReader(tab.id);
+    const response = await chrome.tabs.sendMessage(tab.id, { type, payload });
+    if (response?.error) throw new Error(response.error);
+    return response;
+  }
 }
 
 async function requestBackground(type, payload = {}) {
@@ -73,7 +156,7 @@ function latestCustomerText(context) {
   const inbound = [...(context?.messages ?? [])]
     .reverse()
     .find((message) => message.direction === "inbound"
-      || (message.positionRatio !== null && message.positionRatio < 0.5));
+      || (Number.isFinite(message.positionRatio) && message.positionRatio < 0.52));
   return String(inbound?.text ?? "").trim();
 }
 
@@ -129,65 +212,82 @@ function localDraft(context, settings) {
 }
 
 function renderContext(context) {
-  state.context = context;
-  elements.chatTitle.textContent = context.chatTitle || "Chat sin nombre visible";
-  const inbound = context.messages.filter((message) => message.direction === "inbound").length;
-  const outbound = context.messages.filter((message) => message.direction === "outbound").length;
-  const unknown = context.messages.filter((message) => message.direction === "unknown").length;
-  elements.contextSummary.textContent = `${context.messages.length} visibles · ${inbound} recibidos · ${outbound} enviados${unknown ? ` · ${unknown} sin clasificar` : ""}`;
+  const messages = Array.isArray(context?.messages) ? context.messages : [];
+  state.context = { ...context, messages };
 
-  const customerTurn = String(context.customerTurn?.text ?? "").trim();
-  elements.customerTurnCard.hidden = !customerTurn;
-  elements.customerTurnText.textContent = customerTurn;
+  setText(elements.chatTitle, context?.chatTitle || "Chat sin nombre visible");
+  const inbound = messages.filter((message) => message.direction === "inbound").length;
+  const outbound = messages.filter((message) => message.direction === "outbound").length;
+  const unknown = messages.filter((message) => message.direction === "unknown").length;
+  setText(
+    elements.contextSummary,
+    `${messages.length} visibles · ${inbound} recibidos · ${outbound} enviados${unknown ? ` · ${unknown} sin clasificar` : ""}`,
+  );
 
-  elements.messageList.innerHTML = context.messages.slice(-10).map((message) => {
+  const customerTurn = String(context?.customerTurn?.text ?? "").trim();
+  setHidden(elements.customerTurnCard, !customerTurn);
+  setText(elements.customerTurnText, customerTurn);
+
+  setHtml(elements.messageList, messages.slice(-10).map((message) => {
     const direction = message.direction === "inbound"
       ? "Cliente"
       : message.direction === "outbound"
         ? "DEMAC"
         : "Sin clasificar";
     return `<article class="message ${escapeHtml(message.direction)}"><span>${direction}</span><p>${escapeHtml(message.text)}</p></article>`;
-  }).join("");
+  }).join(""));
 
-  const contentVersion = context.buildVersion || "desconocida";
-  elements.buildInfo.textContent = `Panel ${BUILD_VERSION} · lector ${contentVersion}`;
+  const contentVersion = String(context?.buildVersion || "desconocida");
+  setText(elements.buildInfo, `Panel ${BUILD_VERSION} · lector ${contentVersion}`);
   if (contentVersion !== BUILD_VERSION) {
-    setStatus("Lector desactualizado: recarga WhatsApp Web", "error");
+    setStatus("Lector actualizado automáticamente; vuelve a leer", "working");
   } else if (customerTurn) {
     setStatus("Solicitud del cliente identificada", "ready");
   } else if (inbound > 0) {
     setStatus("Conversación lista", "ready");
+  } else if (messages.length > 0) {
+    setStatus("Lectura parcial: revisa los mensajes sin clasificar", "error");
   } else {
-    setStatus("Lectura parcial: no se detectó la solicitud", "error");
+    setStatus("No se encontraron mensajes de texto visibles", "error");
   }
 }
 
 function clearContext(errorMessage) {
   state.context = null;
-  elements.chatTitle.textContent = "Ninguna seleccionada";
-  elements.contextSummary.textContent = errorMessage;
-  elements.customerTurnCard.hidden = true;
-  elements.messageList.innerHTML = "";
+  setText(elements.chatTitle, "Ninguna seleccionada");
+  setText(elements.contextSummary, errorMessage);
+  setHidden(elements.customerTurnCard, true);
+  setHtml(elements.messageList, "");
   setStatus("No se pudo leer el chat", "error");
 }
 
 function updateDraftButtons() {
-  const hasText = Boolean(elements.draftText.value.trim());
-  elements.insertButton.disabled = !hasText;
-  elements.sendButton.disabled = !hasText;
+  const text = elements.draftText?.value ?? "";
+  const hasText = Boolean(text.trim());
+  setDisabled(elements.insertButton, !hasText);
+  setDisabled(elements.sendButton, !hasText);
 }
 
 async function refreshContext() {
   setStatus("Leyendo conversación…", "working");
-  elements.refreshButton.disabled = true;
+  setDisabled(elements.refreshButton, true);
   try {
     const settings = await chrome.storage.local.get(DEFAULT_SETTINGS);
-    const context = await requestWhatsApp("READ_ACTIVE_CHAT", { maxMessages: settings.maxMessages });
+    let context = await requestWhatsApp("READ_ACTIVE_CHAT", { maxMessages: settings.maxMessages });
+    if (String(context?.buildVersion || "") !== BUILD_VERSION) {
+      const tab = await getWhatsAppTab();
+      await injectCurrentReader(tab.id);
+      context = await chrome.tabs.sendMessage(tab.id, {
+        type: "READ_ACTIVE_CHAT",
+        payload: { maxMessages: settings.maxMessages },
+      });
+      if (context?.error) throw new Error(context.error);
+    }
     renderContext(context);
   } catch (error) {
-    clearContext(error.message);
+    clearContext(error?.message ?? String(error));
   } finally {
-    elements.refreshButton.disabled = false;
+    setDisabled(elements.refreshButton, false);
   }
 }
 
@@ -195,7 +295,7 @@ async function generateDraft() {
   if (!state.context) await refreshContext();
   if (!state.context) return;
 
-  elements.generateButton.disabled = true;
+  setDisabled(elements.generateButton, true);
   setStatus("Comprendiendo la solicitud…", "working");
   try {
     const settings = await chrome.storage.local.get(DEFAULT_SETTINGS);
@@ -204,30 +304,30 @@ async function generateDraft() {
       ? await requestBackground("GENERATE_DRAFT", { context: state.context })
       : localDraft(state.context, settings);
     state.draft = result.text;
-    elements.draftText.value = result.text;
-    elements.draftSource.textContent = result.source === "local-test" ? "Respuesta local" : "OpenAI";
-    elements.draftWarning.textContent = result.warning || "";
+    if (elements.draftText) elements.draftText.value = result.text;
+    setText(elements.draftSource, result.source === "local-test" ? "Respuesta local" : "OpenAI");
+    setWarning(result.warning || "");
     updateDraftButtons();
     setStatus("Respuesta lista para revisar", "ready");
   } catch (error) {
-    elements.draftWarning.textContent = error.message;
+    setWarning(error?.message ?? String(error));
     setStatus("Error al generar la respuesta", "error");
   } finally {
-    elements.generateButton.disabled = false;
+    setDisabled(elements.generateButton, false);
   }
 }
 
 async function insertDraft() {
-  const text = elements.draftText.value.trim();
+  const text = String(elements.draftText?.value ?? "").trim();
   if (!text) return;
 
-  elements.insertButton.disabled = true;
+  setDisabled(elements.insertButton, true);
   setStatus("Insertando respuesta…", "working");
   try {
     await requestWhatsApp("INSERT_DRAFT", { text });
     setStatus("Respuesta insertada; revisa y envía", "ready");
   } catch (error) {
-    elements.draftWarning.textContent = error.message;
+    setWarning(error?.message ?? String(error));
     setStatus("No se pudo insertar", "error");
   } finally {
     updateDraftButtons();
@@ -235,41 +335,67 @@ async function insertDraft() {
 }
 
 async function sendDraft() {
-  const text = elements.draftText.value.trim();
+  const text = String(elements.draftText?.value ?? "").trim();
   if (!text) return;
 
   const confirmed = window.confirm(`¿Enviar este mensaje ahora a ${state.context?.chatTitle || "la conversación abierta"}?`);
   if (!confirmed) return;
 
-  elements.sendButton.disabled = true;
+  setDisabled(elements.sendButton, true);
   setStatus("Enviando respuesta…", "working");
   try {
     const result = await requestWhatsApp("SEND_DRAFT", { text });
     if (!result?.sent) throw new Error("WhatsApp no confirmó el envío.");
     setStatus("Mensaje enviado correctamente", "ready");
-    elements.draftWarning.textContent = "";
+    setWarning("");
     setTimeout(refreshContext, 900);
   } catch (error) {
-    elements.draftWarning.textContent = error.message;
+    setWarning(error?.message ?? String(error));
     setStatus("No se pudo enviar", "error");
   } finally {
     updateDraftButtons();
   }
 }
 
-elements.refreshButton.addEventListener("click", refreshContext);
-elements.generateButton.addEventListener("click", generateDraft);
-elements.insertButton.addEventListener("click", insertDraft);
-elements.sendButton.addEventListener("click", sendDraft);
-elements.settingsButton.addEventListener("click", () => chrome.runtime.openOptionsPage());
-elements.draftText.addEventListener("input", () => {
-  state.draft = elements.draftText.value;
+function bindEvents() {
+  elements.refreshButton?.addEventListener("click", refreshContext);
+  elements.generateButton?.addEventListener("click", generateDraft);
+  elements.insertButton?.addEventListener("click", insertDraft);
+  elements.sendButton?.addEventListener("click", sendDraft);
+  elements.settingsButton?.addEventListener("click", () => chrome.runtime.openOptionsPage());
+  elements.draftText?.addEventListener("input", () => {
+    state.draft = elements.draftText.value;
+    updateDraftButtons();
+  });
+
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type === "ACTIVE_CONTEXT_CHANGED" && message.payload) {
+      try {
+        renderContext(message.payload);
+      } catch (error) {
+        setWarning(`No se pudo actualizar el panel: ${error?.message ?? error}`);
+      }
+    }
+  });
+}
+
+function init() {
+  if (state.initialized) return;
+  state.initialized = true;
+  const missing = collectElements();
+  if (missing.length) {
+    renderFatalPanelError(missing);
+    return;
+  }
+  setText(elements.versionText, `Versión ${BUILD_VERSION} de prueba supervisada`);
+  setText(elements.buildInfo, `Panel ${BUILD_VERSION}`);
+  bindEvents();
   updateDraftButtons();
-});
+  refreshContext();
+}
 
-chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === "ACTIVE_CONTEXT_CHANGED" && message.payload) renderContext(message.payload);
-});
-
-elements.buildInfo.textContent = `Panel ${BUILD_VERSION}`;
-refreshContext();
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", init, { once: true });
+} else {
+  init();
+}
