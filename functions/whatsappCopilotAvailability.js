@@ -9,6 +9,7 @@ const {
   REGULAR_SLOTS,
   addDays,
   arubaDateParts,
+  cleanText,
   dateDistanceInDays,
   endTime,
   hashId,
