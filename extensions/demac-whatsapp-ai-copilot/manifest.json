@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "DEMAC WhatsApp AI Copilot",
+  "short_name": "DEMAC Copilot",
+  "version": "0.4.0",
+  "description": "Asistente supervisado de DEMAC para comprender chats de WhatsApp Web, consultar rutas y disponibilidad real del ERP, coordinar citas y responder en el idioma del cliente.",
+  "minimum_chrome_version": "114",
+  "permissions": [
+    "storage",
+    "tabs",
+    "sidePanel",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://web.whatsapp.com/*",
+    "https://us-central1-demac-corporation.cloudfunctions.net/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Abrir DEMAC WhatsApp AI Copilot"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://web.whatsapp.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "options_page": "options.html"
+}

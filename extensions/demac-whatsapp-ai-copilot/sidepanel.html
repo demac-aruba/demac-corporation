@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DEMAC WhatsApp AI Copilot</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="hero">
+        <div class="brand-mark">D</div>
+        <div>
+          <p class="eyebrow">DEMAC</p>
+          <h1>WhatsApp AI Copilot</h1>
+          <p class="subtitle" id="versionText">Asistente conversacional supervisado</p>
+        </div>
+      </header>
+
+      <section class="status-card">
+        <div>
+          <span class="status-dot" id="statusDot"></span>
+          <strong id="statusText">Esperando WhatsApp Web</strong>
+        </div>
+        <button class="link-button" id="settingsButton" type="button">Ajustes</button>
+      </section>
+
+      <section class="card">
+        <div class="section-heading">
+          <div>
+            <p class="label">Conversación abierta</p>
+            <h2 id="chatTitle">Ninguna seleccionada</h2>
+          </div>
+          <button id="refreshButton" class="secondary-button" type="button">Leer chat</button>
+        </div>
+        <p class="muted" id="contextSummary">Abre WhatsApp Web y selecciona una conversación.</p>
+        <div id="customerTurnCard" class="customer-turn" hidden>
+          <span>Último mensaje del cliente</span>
+          <p id="customerTurnText"></p>
+        </div>
+        <div id="messageList" class="message-list" aria-live="polite"></div>
+      </section>
+
+      <section class="card">
+        <div class="section-heading">
+          <div>
+            <p class="label">Respuesta preparada</p>
+            <h2>Borrador</h2>
+          </div>
+          <span class="badge" id="draftSource">Sin generar</span>
+        </div>
+        <textarea id="draftText" rows="7" placeholder="Aquí aparecerá la respuesta para revisar y editar."></textarea>
+        <p class="warning" id="draftWarning"></p>
+
+        <div class="ai-analysis" id="aiAnalysisCard" hidden>
+          <div class="analysis-grid">
+            <div class="analysis-item"><span>Idioma</span><strong id="aiLanguage">—</strong></div>
+            <div class="analysis-item"><span>Etapa</span><strong id="aiStage">—</strong></div>
+            <div class="analysis-item"><span>Próximo paso</span><strong id="aiNextAction">—</strong></div>
+            <div class="analysis-item"><span>Confianza</span><strong id="aiConfidence">—</strong></div>
+          </div>
+          <p><strong>Datos reconocidos:</strong> <span id="aiCollected">—</span></p>
+          <p><strong>Información pendiente:</strong> <span id="aiMissing">—</span></p>
+        </div>
+
+        <div class="button-row">
+          <button id="generateButton" class="primary-button" type="button">Generar respuesta</button>
+          <button id="insertButton" class="secondary-button" type="button" disabled>Insertar</button>
+          <button id="sendButton" class="danger-button" type="button" disabled>Enviar ahora</button>
+        </div>
+      </section>
+
+      <section class="notice">
+        <strong>Modo supervisado.</strong>
+        <span>OpenAI analiza la conversación completa y responde en el idioma del cliente. El envío siempre requiere confirmación del operador.</span>
+      </section>
+
+      <p class="footer-note" id="buildInfo">Panel cargando…</p>
+      <p class="footer-note">Solo procesa el chat abierto. La clave de OpenAI permanece en Firebase.</p>
+    </main>
+    <script src="sidepanel.js"></script>
+    <script src="appointment-guard.js"></script>
+  </body>
+</html>
