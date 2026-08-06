@@ -1,6 +1,7 @@
 const { FieldValue } = require("firebase-admin/firestore");
 const {
   MAX_SEARCH_DAYS,
+  MAX_VANS,
   addDays,
   arubaDateParts,
   cleanText,
@@ -9,6 +10,7 @@ const {
   normalizePhone,
   normalizeRouteConfig,
   normalizeText,
+  normalizeTime,
   occupiedSlots,
   orderBlocksCapacity,
   orderSlotCount,
