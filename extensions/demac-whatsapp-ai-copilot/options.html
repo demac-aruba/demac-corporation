@@ -10,7 +10,7 @@
     <main class="options-shell">
       <p class="eyebrow">DEMAC</p>
       <h1>Ajustes del WhatsApp AI Copilot</h1>
-      <p class="muted">La clave de OpenAI nunca se guarda en Chrome. La extensión usa un token privado y limitado para llamar al backend seguro de Firebase.</p>
+      <p class="muted">La clave de OpenAI permanece en Firebase. Chrome solo guarda un token privado y revocable para acceder a la función de DEMAC.</p>
 
       <form id="settingsForm" class="card form-grid">
         <label>
@@ -27,31 +27,32 @@
         </label>
         <label>
           <span>Token privado de la extensión</span>
-          <input id="backendToken" type="password" autocomplete="off" placeholder="Se configura después de desplegar Firebase" />
-          <small>No es la clave de OpenAI. Es un token revocable que protege únicamente esta función.</small>
+          <input id="backendToken" type="password" autocomplete="off" placeholder="Pega aquí el token configurado en Firebase" />
+          <small>No es la clave de OpenAI. Este token protege únicamente la función del Copilot.</small>
         </label>
         <label>
-          <span>Mensajes visibles que puede leer</span>
-          <input id="maxMessages" type="number" min="1" max="50" />
+          <span>Mensajes visibles que puede analizar</span>
+          <input id="maxMessages" type="number" min="8" max="50" />
         </label>
         <label>
           <span>Idioma de respuesta</span>
           <select id="languageMode">
-            <option value="auto">Detectar automáticamente</option>
-            <option value="es">Español</option>
-            <option value="en">English</option>
-            <option value="pap-aw">Papiamento di Aruba</option>
+            <option value="auto">Detectar automáticamente el idioma del cliente</option>
+            <option value="es">Siempre español</option>
+            <option value="en">Always English</option>
+            <option value="pap-aw">Sempre Papiamento di Aruba</option>
           </select>
         </label>
         <div class="button-row">
           <button class="primary-button" type="submit">Guardar ajustes</button>
+          <button class="secondary-button" id="testBackendButton" type="button">Probar OpenAI</button>
           <span id="saveStatus" class="muted"></span>
         </div>
       </form>
 
-      <section class="notice">
-        <strong>Sin token configurado</strong>
-        <span>La extensión usa respuestas locales mejoradas. Cuando se despliegue el backend y se agregue el token, las respuestas serán generadas por OpenAI.</span>
+      <section class="notice" id="backendNotice">
+        <strong id="backendNoticeTitle">Estado de OpenAI</strong>
+        <span id="backendStatus">Guarda el token y pulsa “Probar OpenAI” para verificar la conexión completa.</span>
       </section>
     </main>
     <script src="options.js"></script>
