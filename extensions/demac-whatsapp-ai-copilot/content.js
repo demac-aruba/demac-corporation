@@ -1,5 +1,7 @@
 (() => {
-  const BUILD_VERSION = "0.2.1";
+  const BUILD_VERSION = chrome.runtime.getManifest().version;
+  const previousInstance = window.__DEMAC_WHATSAPP_COPILOT__;
+  if (previousInstance?.dispose) previousInstance.dispose();
   const STATE = {
     lastFingerprint: "",
     observer: null,
@@ -68,7 +70,8 @@
     const records = [];
     const seen = new Set();
     const metadataNodes = [...main.querySelectorAll("[data-pre-plain-text]")]
-      .filter((element) => element.querySelector("span.selectable-text, [data-testid='msg-text']"));
+      .filter((element) => element.matches("span.selectable-text, [data-testid='msg-text']")
+        || element.querySelector("span.selectable-text, [data-testid='msg-text']"));
     const sourceNodes = metadataNodes.length
       ? metadataNodes
       : [...main.querySelectorAll("span.selectable-text, [data-testid='msg-text']")];
@@ -153,11 +156,19 @@
     return "unknown";
   }
 
+  function visualElementFor(record) {
+    const candidates = [record.metadataElement, record.textElement, record.root].filter(Boolean);
+    return candidates.find((element) => {
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    }) ?? record.root;
+  }
+
   function positionRatio(record, main) {
-    const element = record.metadataElement ?? record.textElement ?? record.root;
-    const rect = element.getBoundingClientRect();
+    const element = visualElementFor(record);
+    const rect = element?.getBoundingClientRect?.();
     const mainRect = main.getBoundingClientRect();
-    if (!rect.width || !mainRect.width) return null;
+    if (!rect?.width || !mainRect.width) return null;
     return (rect.left + (rect.width / 2) - mainRect.left) / mainRect.width;
   }
 
@@ -410,12 +421,11 @@
         STATE.lastFingerprint = fingerprint;
         chrome.runtime.sendMessage({ type: "ACTIVE_CONTEXT_CHANGED", payload: context }).catch(() => undefined);
       } catch (_error) {
-        // WhatsApp may be between screens; the panel can request a fresh read later.
       }
     }, 900);
   }
 
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  const messageListener = (message, _sender, sendResponse) => {
     const run = async () => {
       switch (message?.type) {
         case "PING_CONTENT":
@@ -438,7 +448,9 @@
       (error) => sendResponse({ error: error?.message ?? String(error), buildVersion: BUILD_VERSION }),
     );
     return true;
-  });
+  };
+
+  chrome.runtime.onMessage.addListener(messageListener);
 
   STATE.observer = new MutationObserver(notifyContextChanged);
   STATE.observer.observe(document.documentElement, {
@@ -446,6 +458,16 @@
     subtree: true,
     characterData: true,
   });
+
+  window.__DEMAC_WHATSAPP_COPILOT__ = {
+    version: BUILD_VERSION,
+    readActiveChat,
+    dispose() {
+      clearTimeout(STATE.debounceTimer);
+      STATE.observer?.disconnect();
+      chrome.runtime.onMessage.removeListener(messageListener);
+    },
+  };
 
   notifyContextChanged();
 })();
