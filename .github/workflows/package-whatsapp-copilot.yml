@@ -1,0 +1,43 @@
+name: Package WhatsApp Copilot
+
+on:
+  push:
+    branches:
+      - agent/whatsapp-ai-copilot-v2
+    paths:
+      - 'extensions/demac-whatsapp-ai-copilot/**'
+      - '.github/workflows/package-whatsapp-copilot.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+
+      - name: Validate extension
+        run: |
+          node --check extensions/demac-whatsapp-ai-copilot/background.js
+          node --check extensions/demac-whatsapp-ai-copilot/content.js
+          node --check extensions/demac-whatsapp-ai-copilot/sidepanel.js
+          node --check extensions/demac-whatsapp-ai-copilot/appointment-guard.js
+          node --check extensions/demac-whatsapp-ai-copilot/options.js
+          python -m json.tool extensions/demac-whatsapp-ai-copilot/manifest.json >/dev/null
+
+      - name: Prepare clean package
+        run: |
+          mkdir -p package/DEMAC-WhatsApp-AI-Copilot-v0.4.0
+          cp -R extensions/demac-whatsapp-ai-copilot/. package/DEMAC-WhatsApp-AI-Copilot-v0.4.0/
+          rm -f package/DEMAC-WhatsApp-AI-Copilot-v0.4.0/.DS_Store
+
+      - name: Upload extension package
+        uses: actions/upload-artifact@v4
+        with:
+          name: DEMAC-WhatsApp-AI-Copilot-v0.4.0
+          path: package/DEMAC-WhatsApp-AI-Copilot-v0.4.0
+          if-no-files-found: error
+          retention-days: 30
