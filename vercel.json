@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "npm run typecheck && npm run build:web",
+  "buildCommand": "npm run typecheck && node scripts/buildCopilotDownload.cjs && npm run build:web",
   "outputDirectory": "dist",
   "framework": null,
   "headers": [
@@ -41,6 +41,19 @@
         {
           "key": "Cache-Control",
           "value": "no-cache, max-age=0"
+        }
+      ]
+    },
+    {
+      "source": "/DEMAC-WhatsApp-AI-Copilot-v0.4.0.zip",
+      "headers": [
+        {
+          "key": "Content-Disposition",
+          "value": "attachment; filename=DEMAC-WhatsApp-AI-Copilot-v0.4.0.zip"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=300"
         }
       ]
     }
