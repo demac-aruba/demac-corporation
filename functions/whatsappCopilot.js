@@ -9,7 +9,7 @@ const app = getApps().length ? getApp() : initializeApp();
 const db = getFirestore(app);
 const openAiApiKey = defineSecret("OPENAI_API_KEY");
 const extensionToken = defineSecret("WHATSAPP_COPILOT_EXTENSION_TOKEN");
-const COPILOT_MODEL = "gpt-5.6-terra";
+const COPILOT_MODEL = "gpt-5-mini";
 
 const RESPONSE_SCHEMA = {
   type: "object",
