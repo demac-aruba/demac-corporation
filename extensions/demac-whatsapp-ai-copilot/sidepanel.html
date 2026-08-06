@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DEMAC WhatsApp AI Copilot</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="hero">
+        <div class="brand-mark">D</div>
+        <div>
+          <p class="eyebrow">DEMAC</p>
+          <h1>WhatsApp AI Copilot</h1>
+          <p class="subtitle">Primera versión de prueba supervisada</p>
+        </div>
+      </header>
+
+      <section class="status-card">
+        <div>
+          <span class="status-dot" id="statusDot"></span>
+          <strong id="statusText">Esperando WhatsApp Web</strong>
+        </div>
+        <button class="link-button" id="settingsButton" type="button">Ajustes</button>
+      </section>
+
+      <section class="card">
+        <div class="section-heading">
+          <div>
+            <p class="label">Conversación abierta</p>
+            <h2 id="chatTitle">Ninguna seleccionada</h2>
+          </div>
+          <button id="refreshButton" class="secondary-button" type="button">Leer chat</button>
+        </div>
+        <p class="muted" id="contextSummary">Abre WhatsApp Web y selecciona una conversación.</p>
+        <div id="messageList" class="message-list" aria-live="polite"></div>
+      </section>
+
+      <section class="card">
+        <div class="section-heading">
+          <div>
+            <p class="label">Respuesta preparada</p>
+            <h2>Borrador</h2>
+          </div>
+          <span class="badge" id="draftSource">Sin generar</span>
+        </div>
+        <textarea id="draftText" rows="8" placeholder="Aquí aparecerá el borrador para revisar y editar."></textarea>
+        <p class="warning" id="draftWarning"></p>
+        <div class="button-row">
+          <button id="generateButton" class="primary-button" type="button">Generar borrador</button>
+          <button id="insertButton" class="secondary-button" type="button" disabled>Insertar en WhatsApp</button>
+        </div>
+      </section>
+
+      <section class="notice">
+        <strong>No envía automáticamente.</strong>
+        <span>Esta versión inserta el texto en el campo de WhatsApp para que operaciones lo revise antes de enviarlo.</span>
+      </section>
+
+      <p class="footer-note">Solo procesa el chat que está abierto. No recorre ni extrae todas las conversaciones.</p>
+    </main>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>
