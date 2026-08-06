@@ -58,6 +58,15 @@ function formatClock(value, language) {
   }).format(date).replace(/\u00a0/g, " ");
 }
 
+function selectClientOptions(options) {
+  const available = Array.isArray(options) ? options.filter(Boolean) : [];
+  if (available.length <= CLIENT_OPTION_LIMIT) return available;
+
+  const first = available[0];
+  const differentDate = available.find((option) => option.date !== first.date);
+  return differentDate ? [first, differentDate] : available.slice(0, CLIENT_OPTION_LIMIT);
+}
+
 function serviceReference(language, quantity) {
   if (language === "en") return quantity === 1 ? "the AC service" : `the service for ${quantity} AC units`;
   if (language === "pap-aw") return quantity === 1 ? "e servicio di e airco" : `e servicio di ${quantity} airco`;
@@ -99,7 +108,7 @@ function question(language) {
 }
 
 function formatAvailabilityReply(language, result) {
-  const options = Array.isArray(result?.options) ? result.options.slice(0, CLIENT_OPTION_LIMIT) : [];
+  const options = selectClientOptions(result?.options);
   if (!options.length) {
     if (language === "en") return "At this moment, I do not have a suitable opening for the service. Our operations team will review the schedule manually and send you the closest option.";
     if (language === "pap-aw") return "Na e momento aki, mi no tin un cupo adecuado pa e servicio. Nos team di Operacion lo revisa e agenda manualmente y lo manda bo e opcion mas cercano.";
@@ -137,7 +146,7 @@ availability.generateOptions = function generateOptionsWithClientLimit(...args) 
   const result = originalGenerateOptions(...args);
   return {
     ...result,
-    options: Array.isArray(result.options) ? result.options.slice(0, CLIENT_OPTION_LIMIT) : [],
+    options: selectClientOptions(result.options),
   };
 };
 
@@ -148,4 +157,5 @@ module.exports = {
   CLIENT_OPTION_LIMIT,
   formatAvailabilityReply,
   formatConfirmationReply,
+  selectClientOptions,
 };
