@@ -284,7 +284,7 @@ function propertyZone(property, fallbackAddress, routeConfig) {
 function routeCompatibility({ candidateZone, existingOrders, candidateTime, officePosition, maximumAnchorDistance }) {
   if (!candidateZone) return { allowed: true, score: 0, reason: "unknown-zone" };
   const block = AFTERNOON_SLOTS.includes(candidateTime) ? "afternoon" : "morning";
-  const blockSlots = block === "afternoon" ? AFTERNOON_SLOTS : MORNING_SLOTS;
+  const blockSlots = block === "afternoon" ? AFTERNOON_SLOTS : [...MORNING_SLOTS, EXTRA_MORNING_SLOT];
   const blockOrders = existingOrders
     .filter((item) => blockSlots.includes(item.time) && item.zoneInfo)
     .sort((a, b) => a.time.localeCompare(b.time));
