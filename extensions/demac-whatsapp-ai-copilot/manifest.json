@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "DEMAC WhatsApp AI Copilot",
   "short_name": "DEMAC Copilot",
-  "version": "0.1.0",
-  "description": "Asistente privado de DEMAC para leer el chat abierto de WhatsApp Web, preparar borradores e insertarlos para revisión.",
+  "version": "0.2.0",
+  "description": "Asistente privado de DEMAC para comprender el chat abierto de WhatsApp Web, preparar respuestas e insertarlas o enviarlas con confirmación.",
   "minimum_chrome_version": "114",
   "permissions": [
     "storage",
@@ -11,7 +11,8 @@
     "sidePanel"
   ],
   "host_permissions": [
-    "https://web.whatsapp.com/*"
+    "https://web.whatsapp.com/*",
+    "https://us-central1-demac-corporation.cloudfunctions.net/*"
   ],
   "background": {
     "service_worker": "background.js",
