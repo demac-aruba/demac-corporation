@@ -21,23 +21,25 @@ jobs:
         working-directory: extensions/demac-whatsapp-ai-copilot
         run: |
           node --check background.js
+          node --check conversation-memory.mjs
           node --check composer-linebreaks.js
           node --check content.js
           node --check sidepanel.js
           node --check appointment-guard.js
           node --check options.js
+          node --test conversation-memory.test.mjs
 
       - name: Build ZIP
         run: |
-          mkdir -p build/DEMAC-WhatsApp-AI-Copilot-v0.4.3
-          cp -R extensions/demac-whatsapp-ai-copilot/. build/DEMAC-WhatsApp-AI-Copilot-v0.4.3/
+          mkdir -p build/DEMAC-WhatsApp-AI-Copilot-v0.4.4
+          cp -R extensions/demac-whatsapp-ai-copilot/. build/DEMAC-WhatsApp-AI-Copilot-v0.4.4/
           cd build
-          zip -r DEMAC-WhatsApp-AI-Copilot-v0.4.3.zip DEMAC-WhatsApp-AI-Copilot-v0.4.3
+          zip -r DEMAC-WhatsApp-AI-Copilot-v0.4.4.zip DEMAC-WhatsApp-AI-Copilot-v0.4.4
 
       - name: Upload ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: DEMAC-WhatsApp-AI-Copilot-v0.4.3
-          path: build/DEMAC-WhatsApp-AI-Copilot-v0.4.3.zip
+          name: DEMAC-WhatsApp-AI-Copilot-v0.4.4
+          path: build/DEMAC-WhatsApp-AI-Copilot-v0.4.4.zip
           if-no-files-found: error
           retention-days: 30
