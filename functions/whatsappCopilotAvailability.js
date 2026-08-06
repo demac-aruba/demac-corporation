@@ -9,7 +9,6 @@ const {
   REGULAR_SLOTS,
   addDays,
   arubaDateParts,
-  cleanText,
   dateDistanceInDays,
   endTime,
   hashId,
@@ -65,8 +64,7 @@ function distributeUnits(quantity, durationMinutesPerUnit, availableVanCount) {
   const allocations = [];
   let remaining = quantity;
   for (let index = 0; index < required; index += 1) {
-    const vansRemaining = required - index;
-    const units = Math.min(maxUnitsPerVan, Math.ceil(remaining / vansRemaining));
+    const units = Math.min(maxUnitsPerVan, remaining);
     allocations.push({ quantity: units, slots: Math.ceil((units * durationMinutesPerUnit) / 60), fullDay: false });
     remaining -= units;
   }
@@ -308,9 +306,9 @@ function workPhrase(language, quantity, presetLabel) {
 function formatAvailabilityReply(language, result) {
   const { options, quantity, preset, requestedDateUnavailable, requestedDate } = result;
   if (!options.length) {
-    if (language === "en") return "At this moment, the ERP agenda does not have a suitable route and consecutive capacity for this service. Our operations team will review the schedule manually and contact you with the closest option.";
-    if (language === "pap-aw") return "Na e momento aki, agenda di ERP no tin un ruta y capacidad consecutivo cu ta cuadra cu e servicio. Nos team di Operacion lo revisa agenda manualmente y lo bolbe cerca bo cu e opcion mas cercano.";
-    return "En este momento, la agenda del ERP no tiene una ruta y capacidad consecutiva adecuada para este servicio. Nuestro equipo de Operaciones revisará la agenda manualmente y le responderá con la opción más cercana.";
+    if (language === "en") return "At this moment, our schedule does not have a suitable route and consecutive capacity for this service. Our operations team will review it manually and contact you with the closest option.";
+    if (language === "pap-aw") return "Na e momento aki, nos agenda no tin un ruta y capacidad consecutivo cu ta cuadra cu e servicio. Nos team di Operacion lo revisa e agenda manualmente y lo bolbe cerca bo cu e opcion mas cercano.";
+    return "En este momento, nuestra agenda no tiene una ruta y capacidad consecutiva adecuada para este servicio. Nuestro equipo de Operaciones la revisará manualmente y le responderá con la opción más cercana.";
   }
   const phrase = workPhrase(language, quantity, preset.label);
   if (language === "en") {
@@ -318,20 +316,20 @@ function formatAvailabilityReply(language, result) {
       ? `We do not have a suitable opening on ${formatDateEnglish(requestedDate)}. `
       : "";
     const lines = options.map((option, index) => `${index + 1}) ${formatDateEnglish(option.date)}, ${formatClock(option.time, language)}–${formatClock(option.endTime, language)}`);
-    return `${prefix}The closest ERP options for ${phrase} at ${options[0].address} are: ${lines.join("; ")}. Which option works best for you?`;
+    return `${prefix}The closest available options for ${phrase} at ${options[0].address} are: ${lines.join("; ")}. Which option works best for you?`;
   }
   if (language === "pap-aw") {
     const prefix = requestedDateUnavailable && requestedDate
       ? `Nos no tin un cupo cu ta cuadra riba ${requestedDate}. `
       : "";
     const lines = options.map((option, index) => `${index + 1}) ${option.date}, ${formatClock(option.time, "es")} pa ${formatClock(option.endTime, "es")}`);
-    return `${prefix}E opcionnan mas cercano den agenda di ERP pa ${phrase} na ${options[0].address} ta: ${lines.join("; ")}. Cua opcion ta mihor pa bo?`;
+    return `${prefix}E opcionnan mas cerca cu nos tin disponibel pa ${phrase} na ${options[0].address} ta: ${lines.join("; ")}. Cua opcion ta mihor pa bo?`;
   }
   const prefix = requestedDateUnavailable && requestedDate
     ? `No tenemos un espacio adecuado el ${formatDateSpanish(requestedDate)}. `
     : "";
   const lines = options.map((option, index) => `${index + 1}) ${formatDateSpanish(option.date)}, de ${formatClock(option.time, language)} a ${formatClock(option.endTime, language)}`);
-  return `${prefix}Las opciones más cercanas en la agenda del ERP para ${phrase} en ${options[0].address} son: ${lines.join("; ")}. ¿Cuál de estas opciones prefiere?`;
+  return `${prefix}Las opciones disponibles más cercanas para ${phrase} en ${options[0].address} son: ${lines.join("; ")}. ¿Cuál de estas opciones prefiere?`;
 }
 
 function formatConfirmationReply(language, option) {
