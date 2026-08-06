@@ -1,4 +1,5 @@
 (() => {
+  const BUILD_VERSION = "0.2.1";
   const STATE = {
     lastFingerprint: "",
     observer: null,
@@ -7,6 +8,20 @@
 
   function normalizeText(value) {
     return String(value ?? "").replace(/\s+/g, " ").trim();
+  }
+
+  function normalizeName(value) {
+    return normalizeText(value)
+      .toLocaleLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+  }
+
+  function isVisible(element) {
+    if (!element) return false;
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
   }
 
   function findMainPanel() {
@@ -28,59 +43,94 @@
     return "";
   }
 
-  function messageContainerFor(element, main) {
-    const container = element.closest(
-      ".message-in, .message-out, [data-testid='msg-container'], [data-id]",
-    );
-    return container && main.contains(container) ? container : null;
+  function nearestDataId(element) {
+    return element?.getAttribute?.("data-id")
+      || element?.closest?.("[data-id]")?.getAttribute("data-id")
+      || "";
   }
 
-  function candidateMessageContainers(main) {
-    const containers = [];
+  function metadataElementFor(element) {
+    return element?.matches?.("[data-pre-plain-text]")
+      ? element
+      : element?.closest?.("[data-pre-plain-text]")
+        ?? element?.querySelector?.("[data-pre-plain-text]")
+        ?? null;
+  }
+
+  function messageRootFor(element, main) {
+    const root = element?.closest?.(
+      ".message-in, .message-out, [data-testid='msg-container'], [data-id]",
+    ) ?? metadataElementFor(element);
+    return root && main.contains(root) ? root : null;
+  }
+
+  function candidateMessageRecords(main) {
+    const records = [];
     const seen = new Set();
-    const textNodes = main.querySelectorAll(
-      "span.selectable-text, [data-testid='msg-text'], [data-pre-plain-text]",
-    );
+    const metadataNodes = [...main.querySelectorAll("[data-pre-plain-text]")]
+      .filter((element) => element.querySelector("span.selectable-text, [data-testid='msg-text']"));
+    const sourceNodes = metadataNodes.length
+      ? metadataNodes
+      : [...main.querySelectorAll("span.selectable-text, [data-testid='msg-text']")];
 
-    for (const textNode of textNodes) {
-      const container = messageContainerFor(textNode, main);
-      if (!container || seen.has(container)) continue;
-      seen.add(container);
-      containers.push(container);
+    for (const source of sourceNodes) {
+      const metadataElement = metadataElementFor(source);
+      const textElement = source.matches?.("span.selectable-text, [data-testid='msg-text']")
+        ? source
+        : source.querySelector("span.selectable-text, [data-testid='msg-text']");
+      const root = messageRootFor(source, main) ?? messageRootFor(textElement, main) ?? source;
+      if (!root || !textElement) continue;
+
+      const dataId = nearestDataId(root) || nearestDataId(source);
+      const metadata = metadataElement?.getAttribute("data-pre-plain-text") || "";
+      const key = dataId || `${metadata}|${normalizeText(textElement.textContent)}|${records.length}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      records.push({ root, source, textElement, metadataElement, dataId, metadata });
     }
 
-    if (!containers.length) {
-      for (const container of main.querySelectorAll(".message-in, .message-out, [data-id]")) {
-        if (seen.has(container)) continue;
-        seen.add(container);
-        containers.push(container);
-      }
-    }
-
-    return containers.sort((a, b) => {
-      if (a === b) return 0;
-      const position = a.compareDocumentPosition(b);
+    return records.sort((a, b) => {
+      if (a.root === b.root) return 0;
+      const position = a.root.compareDocumentPosition(b.root);
       return position & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
     });
   }
 
-  function textFromMessageNode(node) {
-    const selectable = node.querySelectorAll("span.selectable-text, [data-testid='msg-text']");
-    const pieces = [...selectable]
+  function textFromRecord(record) {
+    const scope = record.metadataElement ?? record.root;
+    const pieces = [...scope.querySelectorAll("span.selectable-text, [data-testid='msg-text']")]
       .map((element) => normalizeText(element.textContent))
       .filter(Boolean);
     if (pieces.length) return [...new Set(pieces)].join("\n");
-
-    const copyable = node.matches("[data-pre-plain-text]")
-      ? node
-      : node.querySelector("[data-pre-plain-text]");
-    return normalizeText(copyable?.textContent);
+    return normalizeText(record.textElement?.textContent);
   }
 
-  function nearestDataId(node) {
-    return node.getAttribute?.("data-id")
-      || node.closest?.("[data-id]")?.getAttribute("data-id")
-      || "";
+  function senderFromMetadata(metadata) {
+    const raw = String(metadata || "").trim();
+    const closingBracket = raw.lastIndexOf("]");
+    const suffix = closingBracket >= 0 ? raw.slice(closingBracket + 1).trim() : raw;
+    const colon = suffix.lastIndexOf(":");
+    return normalizeText(colon >= 0 ? suffix.slice(0, colon) : suffix);
+  }
+
+  function isSelfSender(sender) {
+    const value = normalizeName(sender);
+    return ["you", "me", "yo", "tu", "tú", "vos", "demac"].includes(value);
+  }
+
+  function hasOutboundStatus(root) {
+    const selectors = [
+      "span[data-icon='msg-check']",
+      "span[data-icon='msg-dblcheck']",
+      "span[data-icon='msg-dblcheck-ack']",
+      "[aria-label*='Read']",
+      "[aria-label*='Delivered']",
+      "[aria-label*='Sent']",
+      "[aria-label*='Leído']",
+      "[aria-label*='Entregado']",
+      "[aria-label*='Enviado']",
+    ];
+    return selectors.some((selector) => root.querySelector(selector));
   }
 
   function directionFromDataId(dataId) {
@@ -90,95 +140,136 @@
     return "unknown";
   }
 
-  function directionFromMetadata(node) {
-    const metadata = node.matches("[data-pre-plain-text]")
-      ? node.getAttribute("data-pre-plain-text")
-      : node.querySelector("[data-pre-plain-text]")?.getAttribute("data-pre-plain-text");
-    const aria = normalizeText(node.getAttribute?.("aria-label") || node.textContent).toLocaleLowerCase();
-    const meta = normalizeText(metadata).toLocaleLowerCase();
-
-    if (/\b(you|tú|tu|vos|demac)\s*:/i.test(meta) || /^you\b|^tú\b|^demac\b/i.test(aria)) {
-      return "outbound";
+  function directionFromLayout(record, main) {
+    let element = record.metadataElement ?? record.textElement ?? record.root;
+    for (let depth = 0; element && element !== main && depth < 7; depth += 1) {
+      const style = getComputedStyle(element);
+      if (style.alignSelf === "flex-end" || style.justifyContent === "flex-end") return "outbound";
+      if (style.alignSelf === "flex-start" || style.justifyContent === "flex-start") return "inbound";
+      if (style.marginLeft === "auto" && style.marginRight !== "auto") return "outbound";
+      if (style.marginRight === "auto" && style.marginLeft !== "auto") return "inbound";
+      element = element.parentElement;
     }
     return "unknown";
   }
 
-  function directionFromPosition(node, main) {
-    const nodeRect = node.getBoundingClientRect();
+  function positionRatio(record, main) {
+    const element = record.metadataElement ?? record.textElement ?? record.root;
+    const rect = element.getBoundingClientRect();
     const mainRect = main.getBoundingClientRect();
-    if (!nodeRect.width || !mainRect.width) return "unknown";
-
-    const center = nodeRect.left + (nodeRect.width / 2);
-    const relative = (center - mainRect.left) / mainRect.width;
-    if (relative >= 0.57) return "outbound";
-    if (relative <= 0.48) return "inbound";
-    return "unknown";
+    if (!rect.width || !mainRect.width) return null;
+    return (rect.left + (rect.width / 2) - mainRect.left) / mainRect.width;
   }
 
-  function directionFromNode(node, main) {
-    const classContainer = node.closest(".message-in, .message-out")
-      ?? node.querySelector(".message-in, .message-out");
+  function classifyDirection(record, main, chatTitle) {
+    const classContainer = record.root.closest?.(".message-in, .message-out")
+      ?? record.root.querySelector?.(".message-in, .message-out");
     if (classContainer?.classList.contains("message-in")) {
-      return { direction: "inbound", method: "class" };
+      return { direction: "inbound", method: "class", sender: "", ratio: positionRatio(record, main) };
     }
     if (classContainer?.classList.contains("message-out")) {
-      return { direction: "outbound", method: "class" };
+      return { direction: "outbound", method: "class", sender: "", ratio: positionRatio(record, main) };
     }
 
-    const byId = directionFromDataId(nearestDataId(node));
-    if (byId !== "unknown") return { direction: byId, method: "data-id" };
+    if (hasOutboundStatus(record.root)) {
+      return { direction: "outbound", method: "status-icon", sender: "", ratio: positionRatio(record, main) };
+    }
 
-    const byMetadata = directionFromMetadata(node);
-    if (byMetadata !== "unknown") return { direction: byMetadata, method: "metadata" };
+    const sender = senderFromMetadata(record.metadata);
+    if (sender) {
+      if (isSelfSender(sender)) {
+        return { direction: "outbound", method: "metadata-self", sender, ratio: positionRatio(record, main) };
+      }
+      const normalizedSender = normalizeName(sender);
+      const normalizedTitle = normalizeName(chatTitle);
+      if (normalizedSender && normalizedTitle && (
+        normalizedSender === normalizedTitle
+        || normalizedTitle.includes(normalizedSender)
+        || normalizedSender.includes(normalizedTitle)
+      )) {
+        return { direction: "inbound", method: "metadata-contact", sender, ratio: positionRatio(record, main) };
+      }
+      return { direction: "inbound", method: "metadata-sender", sender, ratio: positionRatio(record, main) };
+    }
 
-    const byPosition = directionFromPosition(node, main);
-    if (byPosition !== "unknown") return { direction: byPosition, method: "position" };
+    const byId = directionFromDataId(record.dataId);
+    if (byId !== "unknown") {
+      return { direction: byId, method: "data-id", sender: "", ratio: positionRatio(record, main) };
+    }
 
-    return { direction: "unknown", method: "unresolved" };
+    const byLayout = directionFromLayout(record, main);
+    if (byLayout !== "unknown") {
+      return { direction: byLayout, method: "layout", sender: "", ratio: positionRatio(record, main) };
+    }
+
+    const ratio = positionRatio(record, main);
+    if (ratio !== null) {
+      return {
+        direction: ratio < 0.5 ? "inbound" : "outbound",
+        method: "text-position",
+        sender: "",
+        ratio,
+      };
+    }
+
+    return { direction: "unknown", method: "unresolved", sender: "", ratio: null };
   }
 
-  function extractMessages(main, maxMessages) {
+  function extractMessages(main, maxMessages, chatTitle) {
     const messages = [];
     const fingerprints = new Set();
 
-    for (const node of candidateMessageContainers(main)) {
-      const text = textFromMessageNode(node);
+    for (const record of candidateMessageRecords(main)) {
+      const text = textFromRecord(record);
       if (!text) continue;
-
-      const id = nearestDataId(node);
-      const { direction, method } = directionFromNode(node, main);
-      const fingerprint = `${direction}:${id}:${text}`;
+      const classification = classifyDirection(record, main, chatTitle);
+      const fingerprint = `${classification.direction}:${record.dataId}:${record.metadata}:${text}`;
       if (fingerprints.has(fingerprint)) continue;
       fingerprints.add(fingerprint);
-
-      messages.push({ id, direction, directionMethod: method, text });
+      messages.push({
+        id: record.dataId,
+        direction: classification.direction,
+        directionMethod: classification.method,
+        sender: classification.sender,
+        positionRatio: classification.ratio,
+        text,
+      });
     }
 
-    return messages.slice(-Math.max(1, Math.min(Number(maxMessages) || 20, 50)));
+    return messages.slice(-Math.max(1, Math.min(Number(maxMessages) || 24, 50)));
   }
 
   function latestCustomerTurn(messages) {
-    const lastInboundIndex = [...messages]
+    let lastInboundIndex = [...messages]
       .map((message) => message.direction)
       .lastIndexOf("inbound");
-    if (lastInboundIndex < 0) return { text: "", count: 0, messageIds: [] };
 
+    if (lastInboundIndex < 0) {
+      lastInboundIndex = [...messages]
+        .map((message) => message.positionRatio !== null && message.positionRatio < 0.5)
+        .lastIndexOf(true);
+    }
+    if (lastInboundIndex < 0) return { text: "", count: 0, messageIds: [], inferred: false };
+
+    const isCustomer = (message) => message.direction === "inbound"
+      || (message.direction === "unknown" && message.positionRatio !== null && message.positionRatio < 0.5);
     let start = lastInboundIndex;
-    while (start > 0 && messages[start - 1].direction === "inbound") start -= 1;
+    while (start > 0 && isCustomer(messages[start - 1])) start -= 1;
     const turn = messages.slice(start, lastInboundIndex + 1).filter((message) => message.text);
     return {
       text: turn.map((message) => message.text).join("\n"),
       count: turn.length,
       messageIds: turn.map((message) => message.id).filter(Boolean),
+      inferred: turn.some((message) => message.direction !== "inbound"),
     };
   }
 
-  function readActiveChat(maxMessages = 20) {
+  function readActiveChat(maxMessages = 24) {
     const main = findMainPanel();
     if (!main) throw new Error("Selecciona una conversación en WhatsApp Web.");
 
     const chatTitle = findChatTitle(main);
-    const messages = extractMessages(main, maxMessages);
+    const messages = extractMessages(main, maxMessages, chatTitle);
     const customerTurn = latestCustomerTurn(messages);
     const diagnostic = messages.reduce((result, message) => {
       result[message.directionMethod] = (result[message.directionMethod] || 0) + 1;
@@ -186,6 +277,7 @@
     }, {});
 
     return {
+      buildVersion: BUILD_VERSION,
       chatTitle,
       messages,
       customerTurn,
@@ -240,47 +332,71 @@
 
   function insertDraft(text) {
     replaceComposerText(text);
-    return { inserted: true, sent: false };
+    return { inserted: true, sent: false, buildVersion: BUILD_VERSION };
   }
 
-  function findSendButton() {
-    const main = findMainPanel();
-    const selectors = [
+  function findSendButton(composer) {
+    const footer = composer.closest("footer") ?? document.querySelector("#main footer") ?? document.querySelector("footer");
+    if (!footer) return null;
+
+    const explicitSelectors = [
       "button[aria-label='Send']",
       "button[aria-label='Enviar']",
       "[data-testid='compose-btn-send']",
+      "button span[data-icon='send']",
+      "[role='button'] span[data-icon='send']",
       "span[data-icon='send']",
+      "svg[aria-label='Send']",
+      "svg[aria-label='Enviar']",
     ];
-    for (const selector of selectors) {
-      const element = main?.querySelector(selector) ?? document.querySelector(selector);
-      if (!element) continue;
-      return element.closest("button, [role='button']") ?? element;
+    for (const selector of explicitSelectors) {
+      const element = footer.querySelector(selector);
+      if (!element || !isVisible(element)) continue;
+      const clickable = element.closest("button, [role='button']") ?? element;
+      if (isVisible(clickable)) return clickable;
     }
-    return null;
+
+    const composerRect = composer.getBoundingClientRect();
+    const candidates = [...footer.querySelectorAll("button, [role='button']")]
+      .filter(isVisible)
+      .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+      .filter(({ rect }) => rect.left >= composerRect.right - 20 && rect.width >= 24 && rect.height >= 24)
+      .sort((a, b) => b.rect.left - a.rect.left);
+    return candidates[0]?.element ?? null;
+  }
+
+  function clickElement(element) {
+    const options = { bubbles: true, cancelable: true, composed: true, view: window };
+    element.dispatchEvent(new PointerEvent("pointerdown", options));
+    element.dispatchEvent(new MouseEvent("mousedown", options));
+    element.dispatchEvent(new PointerEvent("pointerup", options));
+    element.dispatchEvent(new MouseEvent("mouseup", options));
+    element.click();
+  }
+
+  async function waitForComposerToClear(composer, timeoutMs = 2500) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      if (!normalizeText(composer.textContent)) return true;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return false;
   }
 
   async function sendDraft(text) {
     const composer = replaceComposerText(text);
-    await new Promise((resolve) => setTimeout(resolve, 140));
-
-    const sendButton = findSendButton();
-    if (sendButton) {
-      sendButton.click();
-      return { inserted: true, sent: true, method: "button" };
+    await new Promise((resolve) => setTimeout(resolve, 220));
+    const sendButton = findSendButton(composer);
+    if (!sendButton) {
+      throw new Error("No se encontró el botón verde de enviar en esta versión de WhatsApp Web.");
     }
 
-    const keyOptions = {
-      key: "Enter",
-      code: "Enter",
-      keyCode: 13,
-      which: 13,
-      bubbles: true,
-      cancelable: true,
-    };
-    composer.dispatchEvent(new KeyboardEvent("keydown", keyOptions));
-    composer.dispatchEvent(new KeyboardEvent("keypress", keyOptions));
-    composer.dispatchEvent(new KeyboardEvent("keyup", keyOptions));
-    return { inserted: true, sent: true, method: "enter" };
+    clickElement(sendButton);
+    const cleared = await waitForComposerToClear(composer);
+    if (!cleared) {
+      throw new Error("WhatsApp no confirmó el envío. El texto permanece en el campo para que puedas enviarlo manualmente.");
+    }
+    return { inserted: true, sent: true, method: "send-button", buildVersion: BUILD_VERSION };
   }
 
   function notifyContextChanged() {
@@ -301,21 +417,25 @@
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const run = async () => {
-      if (message?.type === "READ_ACTIVE_CHAT") {
-        return readActiveChat(message.payload?.maxMessages);
+      switch (message?.type) {
+        case "PING_CONTENT":
+          return { buildVersion: BUILD_VERSION };
+        case "READ_ACTIVE_CHAT":
+          return readActiveChat(message.payload?.maxMessages);
+        case "INSERT_DRAFT":
+          return insertDraft(message.payload?.text);
+        case "SEND_DRAFT":
+        case "SEND_NOW":
+        case "SEND_MESSAGE":
+          return sendDraft(message.payload?.text);
+        default:
+          return { ignored: true, buildVersion: BUILD_VERSION };
       }
-      if (message?.type === "INSERT_DRAFT") {
-        return insertDraft(message.payload?.text);
-      }
-      if (message?.type === "SEND_DRAFT") {
-        return sendDraft(message.payload?.text);
-      }
-      return { ignored: true };
     };
 
     run().then(
       (result) => sendResponse(result),
-      (error) => sendResponse({ error: error?.message ?? String(error) }),
+      (error) => sendResponse({ error: error?.message ?? String(error), buildVersion: BUILD_VERSION }),
     );
     return true;
   });
