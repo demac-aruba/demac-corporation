@@ -55,13 +55,14 @@ async function backendRequest(settings, body) {
   return data;
 }
 
-async function callBackend(context, settings) {
+async function callBackend(context, settings, extra = {}) {
   const data = await backendRequest(settings, {
     channel: "whatsapp-web-copilot",
     company: settings.companyName,
     operator: settings.operatorName,
     languageMode: settings.languageMode,
     conversation: context,
+    ...extra,
   });
   const text = String(data?.draft ?? data?.message ?? "").trim();
   if (!text) throw new Error("El backend no devolvió una respuesta para revisar.");
@@ -103,6 +104,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       case "GENERATE_DRAFT": {
         const settings = await chrome.storage.local.get(DEFAULT_SETTINGS);
         return callBackend(message.payload?.context ?? {}, settings);
+      }
+      case "CONFIRM_APPOINTMENT": {
+        const settings = await chrome.storage.local.get(DEFAULT_SETTINGS);
+        return callBackend(message.payload?.context ?? {}, settings, { commitAppointment: true });
       }
       case "TEST_BACKEND": {
         const settings = await chrome.storage.local.get(DEFAULT_SETTINGS);
