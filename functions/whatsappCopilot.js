@@ -14,7 +14,18 @@ const COPILOT_MODEL = "gpt-5.6-terra";
 const RESPONSE_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["intent", "language", "summary", "reply", "requiresHuman", "confidence", "missingInformation"],
+  required: [
+    "intent",
+    "language",
+    "conversationStage",
+    "nextAction",
+    "summary",
+    "reply",
+    "requiresHuman",
+    "confidence",
+    "missingInformation",
+    "collectedInformation",
+  ],
   properties: {
     intent: {
       type: "string",
@@ -33,11 +44,54 @@ const RESPONSE_SCHEMA = {
       ],
     },
     language: { type: "string", enum: ["es", "en", "pap-aw"] },
+    conversationStage: {
+      type: "string",
+      enum: [
+        "initial_request",
+        "collecting_details",
+        "ready_for_schedule_lookup",
+        "general_support",
+        "human_handoff",
+        "resolved",
+      ],
+    },
+    nextAction: {
+      type: "string",
+      enum: [
+        "ask_missing_information",
+        "query_erp_availability",
+        "answer_customer",
+        "transfer_human",
+        "wait_for_customer",
+      ],
+    },
     summary: { type: "string" },
     reply: { type: "string" },
     requiresHuman: { type: "boolean" },
     confidence: { type: "number", minimum: 0, maximum: 1 },
     missingInformation: { type: "array", items: { type: "string" }, maxItems: 8 },
+    collectedInformation: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "serviceType",
+        "quantity",
+        "address",
+        "preferredDate",
+        "preferredTime",
+        "customerName",
+        "extraDetails",
+      ],
+      properties: {
+        serviceType: { type: "string" },
+        quantity: { type: "string" },
+        address: { type: "string" },
+        preferredDate: { type: "string" },
+        preferredTime: { type: "string" },
+        customerName: { type: "string" },
+        extraDetails: { type: "string" },
+      },
+    },
   },
 };
 
@@ -67,7 +121,7 @@ function cleanText(value, maxLength = 2_000) {
 
 function sanitizeConversation(raw) {
   const messages = Array.isArray(raw?.messages) ? raw.messages : [];
-  const sanitized = messages.slice(-30).map((message) => ({
+  const sanitized = messages.slice(-40).map((message) => ({
     direction: ["inbound", "outbound", "unknown"].includes(message?.direction)
       ? message.direction
       : "unknown",
@@ -81,7 +135,7 @@ function sanitizeConversation(raw) {
   }
 
   const totalCharacters = sanitized.reduce((sum, message) => sum + message.text.length, 0);
-  if (totalCharacters > 14_000) throw new Error("La conversación excede el límite permitido.");
+  if (totalCharacters > 18_000) throw new Error("La conversación excede el límite permitido.");
 
   return {
     chatTitle: cleanText(raw?.chatTitle, 160),
@@ -111,22 +165,29 @@ async function requestCopilotResponse({ company, operator, languageMode, convers
     body: JSON.stringify({
       model: COPILOT_MODEL,
       reasoning: { effort: "low" },
-      max_output_tokens: 700,
+      max_output_tokens: 900,
       instructions: [
         `Eres el asistente de atención al cliente de ${company}.`,
         `El departamento responsable es ${operator}.`,
-        "Tu trabajo es comprender la solicitud más reciente del cliente y redactar una respuesta corta, profesional y útil.",
-        "Responde en el idioma del cliente, salvo que languageMode obligue español, inglés o Papiamento di Aruba.",
-        "Para Papiamento usa la variante y ortografía de Aruba, no la de Curaçao.",
-        "No vuelvas a preguntar qué necesita el cliente cuando su intención ya es clara.",
-        "Si solicita servicio, pregunta únicamente la información operativa que todavía falte, normalmente cantidad de aires y dirección.",
-        "Si solicita instalación, identifica cantidad, dirección y capacidades solo cuando falten.",
+        "Analiza toda la conversación reciente, no solamente el último mensaje aislado.",
+        "Identifica qué información ya fue solicitada por DEMAC y qué datos ya respondió el cliente.",
+        "Nunca vuelvas a preguntar un dato que el cliente ya proporcionó claramente en cualquier mensaje reciente.",
+        "Responde en el idioma del mensaje entrante más reciente del cliente, salvo que requestedLanguageMode obligue otro idioma.",
+        "Si el cliente escribe en Papiamento, responde en Papiamento di Aruba con ortografía de Aruba, no la variante de Curaçao.",
+        "Reconoce Papiamento aunque incluya palabras técnicas en español o inglés como airco, service, cita, invoice o estimate.",
+        "Para solicitudes de servicio, los datos operativos principales son tipo de trabajo, cantidad de aires y dirección.",
+        "Cuando cantidad y dirección ya estén completas, reconócelas y pasa al próximo paso: preguntar preferencia de día u horario, o indicar que se revisará disponibilidad.",
+        "No repitas una introducción larga en cada turno. Continúa la conversación de forma natural.",
+        "Si el cliente responde '2 aires en Wayaca 217' después de que DEMAC preguntó cantidad y dirección, confirma esos datos y pregunta solo el próximo dato que falte.",
         "No inventes precios, disponibilidad, citas, garantías, pagos, invoices, estimates, diagnósticos ni datos del ERP.",
-        "No confirmes una cita porque esta función todavía no consulta la agenda.",
+        "No confirmes una cita porque esta función todavía no consulta la agenda del ERP.",
+        "Usa nextAction=query_erp_availability cuando la solicitud, cantidad y dirección estén completas y el próximo paso lógico sea consultar agenda.",
+        "Usa nextAction=ask_missing_information únicamente cuando falte información necesaria; missingInformation debe contener solo datos realmente faltantes.",
         "Marca requiresHuman=true para quejas, reembolsos, amenazas, descuentos, garantías dudosas, pagos no conciliados o solicitud expresa de una persona.",
-        "No menciones inteligencia artificial ni procesos internos.",
-        "No uses el nombre visible del chat como nombre del cliente, porque podría ser un apodo.",
-        "La respuesta debe tener entre una y cuatro oraciones y no superar 90 palabras.",
+        "No menciones inteligencia artificial, prompts, modelos ni procesos internos.",
+        "No uses el nombre visible del chat como nombre real del cliente porque podría ser un apodo.",
+        "La respuesta debe tener entre una y cuatro oraciones y no superar 100 palabras.",
+        "En collectedInformation usa cadena vacía para datos desconocidos y conserva exactamente direcciones, cantidades y fechas expresadas por el cliente.",
       ].join(" "),
       input: JSON.stringify({
         requestedLanguageMode: languageMode,
@@ -137,7 +198,7 @@ async function requestCopilotResponse({ company, operator, languageMode, convers
         verbosity: "low",
         format: {
           type: "json_schema",
-          name: "demac_whatsapp_copilot_reply",
+          name: "demac_whatsapp_copilot_reply_v2",
           strict: true,
           schema: RESPONSE_SCHEMA,
         },
@@ -181,6 +242,16 @@ exports.whatsappCopilotDraft = onRequest(
       return;
     }
 
+    if (request.body?.mode === "health") {
+      response.status(200).json({
+        ok: true,
+        source: "openai",
+        model: COPILOT_MODEL,
+        openAiConfigured: Boolean(openAiApiKey.value()),
+      });
+      return;
+    }
+
     try {
       const conversation = sanitizeConversation(request.body?.conversation ?? {});
       if (!conversation.messages.length || !conversation.customerTurn) {
@@ -199,10 +270,13 @@ exports.whatsappCopilotDraft = onRequest(
         channel: "whatsapp-web-copilot",
         intent: result.intent,
         language: result.language,
+        conversationStage: result.conversationStage,
+        nextAction: result.nextAction,
         confidence: result.confidence,
         requiresHuman: result.requiresHuman,
         messageCount: conversation.messages.length,
         customerTurnCharacters: conversation.customerTurn.length,
+        missingInformationCount: result.missingInformation.length,
         createdAt: FieldValue.serverTimestamp(),
       });
 
@@ -210,15 +284,19 @@ exports.whatsappCopilotDraft = onRequest(
         draft: result.reply,
         source: "openai",
         warning: result.requiresHuman
-          ? "La IA recomienda transferir esta conversación a una persona antes de continuar."
+          ? "OpenAI recomienda transferir esta conversación a una persona antes de continuar."
           : "",
         metadata: {
           intent: result.intent,
           language: result.language,
+          conversationStage: result.conversationStage,
+          nextAction: result.nextAction,
           summary: result.summary,
           confidence: result.confidence,
           requiresHuman: result.requiresHuman,
           missingInformation: result.missingInformation,
+          collectedInformation: result.collectedInformation,
+          model: COPILOT_MODEL,
         },
       });
     } catch (error) {
