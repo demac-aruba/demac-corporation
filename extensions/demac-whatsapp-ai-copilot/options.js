@@ -39,8 +39,8 @@ async function loadSettings() {
     if (input) input.value = value;
   }
   backendStatus.textContent = settings.backendToken
-    ? "Token guardado. Pulsa “Probar OpenAI” para confirmar Firebase y la clave de OpenAI."
-    : "OpenAI todavía no está activado. La extensión continuará usando respuestas locales hasta guardar un token válido.";
+    ? "Token guardado. Pulsa “Probar OpenAI + ERP” para confirmar OpenAI, agenda y Papiamento di Aruba."
+    : "El backend todavía no está activado. El modo local puede recopilar datos, pero no ofrece ni confirma horarios.";
 }
 
 form.addEventListener("submit", async (event) => {
@@ -51,13 +51,17 @@ form.addEventListener("submit", async (event) => {
 testBackendButton.addEventListener("click", async () => {
   testBackendButton.disabled = true;
   backendNotice.dataset.kind = "working";
-  backendStatus.textContent = "Comprobando Firebase, token y configuración de OpenAI…";
+  backendStatus.textContent = "Comprobando Firebase, OpenAI, agenda ERP y vocabulario oficial de Papiamento…";
   try {
     await saveSettings();
     const response = await chrome.runtime.sendMessage({ type: "TEST_BACKEND" });
-    if (!response?.ok) throw new Error(response?.error || "No se pudo verificar OpenAI.");
+    if (!response?.ok) throw new Error(response?.error || "No se pudo verificar el backend.");
+    const vocabulary = response.result?.papiamentoVocabulary;
+    const vocabularyText = vocabulary?.wordCount
+      ? ` Vocabulario de Papiamento: ${Number(vocabulary.wordCount).toLocaleString("es-AW")} palabras.`
+      : "";
     backendNotice.dataset.kind = "ready";
-    backendStatus.textContent = `OpenAI conectado correctamente. Modelo activo: ${response.result?.model || "OpenAI"}.`;
+    backendStatus.textContent = `OpenAI y agenda ERP conectados. Modelo activo: ${response.result?.model || "OpenAI"}.${vocabularyText}`;
   } catch (error) {
     backendNotice.dataset.kind = "error";
     backendStatus.textContent = error?.message || String(error);
