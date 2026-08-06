@@ -301,9 +301,9 @@ function validatePapiamento(text) {
 }
 
 function safeSchedulingReply(language) {
-  if (language === "en") return "Thank you. I have the service details and our operations team is reviewing the ERP agenda and route before confirming the closest available options.";
-  if (language === "pap-aw") return "Danki. Nos tin e datonan di e servicio y nos team di Operacion ta revisa agenda di ERP y e ruta prome cu nos confirma e opcionnan mas cercano.";
-  return "Gracias. Ya tenemos los datos del servicio y nuestro equipo de Operaciones está revisando la agenda del ERP y la ruta antes de confirmar las opciones más cercanas.";
+  if (language === "en") return "Thank you. I have the service details and our operations team is reviewing the schedule and route before confirming the closest available options.";
+  if (language === "pap-aw") return "Danki. Nos tin e datonan di e servicio y nos team di Operacion ta revisa nos agenda y e ruta prome cu nos confirma e opcionnan mas cercano.";
+  return "Gracias. Ya tenemos los datos del servicio y nuestro equipo de Operaciones está revisando la agenda y la ruta antes de confirmar las opciones más cercanas.";
 }
 
 exports.whatsappCopilotDraft = onRequest(
@@ -381,17 +381,21 @@ exports.whatsappCopilotDraft = onRequest(
               latestCustomerTurn: conversation.customerTurn,
             },
             analysis: result,
+            commitAppointment: request.body?.commitAppointment === true,
           });
           draft = scheduling.reply;
           if (scheduling.warning) warning = scheduling.warning;
+          const offeringAgain = ["availability_offered", "appointment_changed_reoffer"].includes(scheduling.action);
           result.conversationStage = scheduling.action === "appointment_booked"
             ? "appointment_confirmed"
-            : scheduling.action === "availability_offered"
-              ? "offering_appointments"
-              : "human_handoff";
-          result.nextAction = scheduling.action === "appointment_booked"
-            ? "wait_for_customer"
-            : scheduling.action === "availability_offered"
+            : scheduling.action === "appointment_pending_approval"
+              ? "appointment_option_selected"
+              : offeringAgain
+                ? "offering_appointments"
+                : "human_handoff";
+          result.nextAction = scheduling.action === "appointment_pending_approval"
+            ? "reserve_erp_appointment"
+            : scheduling.action === "appointment_booked" || offeringAgain
               ? "wait_for_customer"
               : "transfer_human";
           result.requiresHuman = scheduling.action === "availability_unavailable";
@@ -425,7 +429,7 @@ exports.whatsappCopilotDraft = onRequest(
         missingInformationCount: result.missingInformation.length,
         schedulingAction: scheduling?.action ?? "not_requested",
         availabilityOptionCount: scheduling?.result?.options?.length ?? 0,
-        primaryWorkOrderId: scheduling?.booking?.primaryWorkOrderId ?? "",
+        primaryWorkOrderId: scheduling?.booking?.primaryWorkOrderId ?? scheduling?.metadata?.primaryWorkOrderId ?? "",
         papiamentoUnknownWordCount: papiamentoValidation?.unknownWords.length ?? 0,
         createdAt: FieldValue.serverTimestamp(),
       });
