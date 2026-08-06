@@ -8,16 +8,22 @@ const result = {
   requestedDate: '',
   options: [
     { date: '2026-08-07', time: '13:30', endTime: '15:30', address: 'Wayaca 217', quantity: 2 },
+    { date: '2026-08-07', time: '14:30', endTime: '16:30', address: 'Wayaca 217', quantity: 2 },
     { date: '2026-08-08', time: '13:30', endTime: '15:30', address: 'Wayaca 217', quantity: 2 },
-    { date: '2026-08-10', time: '14:30', endTime: '16:30', address: 'Wayaca 217', quantity: 2 },
   ],
 };
 
-test('ofrece solamente dos opciones al cliente', () => {
+test('ofrece solamente dos opciones y prioriza fechas distintas', () => {
+  const selected = presentation.selectClientOptions(result.options);
+  assert.deepEqual(selected.map((option) => `${option.date} ${option.time}`), [
+    '2026-08-07 13:30',
+    '2026-08-08 13:30',
+  ]);
+
   const reply = presentation.formatAvailabilityReply('es', result);
   assert.match(reply, /\*1\. Viernes 7 de agosto — 1:30 p\. m\.\*/);
   assert.match(reply, /\*2\. Sábado 8 de agosto — 1:30 p\. m\.\*/);
-  assert.doesNotMatch(reply, /Lunes 10 de agosto/);
+  assert.doesNotMatch(reply, /2:30 p\. m\./);
 });
 
 test('usa saltos de línea y formato de WhatsApp', () => {
