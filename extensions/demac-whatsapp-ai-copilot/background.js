@@ -30,7 +30,7 @@ function backendConfiguration(settings) {
   const endpoint = String(settings.backendUrl ?? "").trim();
   const token = String(settings.backendToken ?? "").trim();
   if (!endpoint || !token) {
-    throw new Error("OpenAI todavía no está configurado. Abre Ajustes y agrega el token privado de Firebase.");
+    throw new Error("OpenAI y la agenda ERP todavía no están configurados. Abre Ajustes y agrega el token privado de Firebase.");
   }
   return { endpoint, token };
 }
@@ -50,7 +50,6 @@ async function backendRequest(settings, body) {
   } catch (error) {
     throw new Error(`No se pudo conectar con Firebase: ${error.message}`);
   }
-
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data?.error ?? `Firebase respondió HTTP ${response.status}.`);
   return data;
@@ -65,7 +64,7 @@ async function callBackend(context, settings) {
     conversation: context,
   });
   const text = String(data?.draft ?? data?.message ?? "").trim();
-  if (!text) throw new Error("OpenAI no devolvió una respuesta.");
+  if (!text) throw new Error("El backend no devolvió una respuesta para revisar.");
   return {
     text,
     source: data?.source ?? "openai",
@@ -79,10 +78,15 @@ async function testBackend(settings) {
   if (!data?.ok || !data?.openAiConfigured) {
     throw new Error("Firebase respondió, pero la clave de OpenAI no está disponible.");
   }
+  if (!data?.erpSchedulingConfigured) {
+    throw new Error("OpenAI está conectado, pero la consulta de agenda ERP no está activada.");
+  }
   return {
     connected: true,
     model: data.model || "OpenAI",
-    source: data.source || "openai",
+    source: data.source || "openai+erp",
+    erpSchedulingConfigured: true,
+    papiamentoVocabulary: data.papiamentoVocabulary ?? null,
   };
 }
 
