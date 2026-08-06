@@ -1,12 +1,13 @@
 # Privacidad — DEMAC WhatsApp AI Copilot
 
-## Alcance de la versión 0.2.0
+## Alcance de la versión 0.2.2
 
 - Opera únicamente en `https://web.whatsapp.com/`.
 - Lee solo los mensajes visibles del chat abierto.
 - No recorre automáticamente todas las conversaciones.
 - No contiene ni almacena la clave de OpenAI.
 - Puede insertar un borrador o enviarlo únicamente después de una confirmación explícita del operador.
+- Puede reinyectar su propio lector actualizado en la pestaña abierta de WhatsApp Web cuando Chrome conserva una versión anterior.
 
 ## Transmisión de datos
 
