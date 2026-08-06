@@ -7,7 +7,7 @@
 - No recorre automáticamente todas las conversaciones.
 - No contiene ni almacena la clave de OpenAI.
 - Puede insertar o enviar un mensaje únicamente después de una acción explícita del operador.
-- Puede consultar la agenda interna de DEMAC y crear una cita cuando el cliente selecciona y confirma una opción ofrecida.
+- Puede consultar la agenda interna de DEMAC. La cita se crea solamente cuando el cliente selecciona una opción y el operador aprueba **Enviar ahora**.
 
 ## Transmisión de datos
 
@@ -27,7 +27,7 @@ El token guardado en Chrome no es una clave de OpenAI. Es un token limitado y re
 
 Para calcular opciones, Firebase consulta únicamente información operativa de DEMAC, como órdenes existentes, duración del trabajo, propiedades, sectores, vans, personal asignado, ausencias, cierres y tardes libres.
 
-Cuando el cliente confirma una opción:
+Cuando el cliente confirma una opción y el operador aprueba el envío:
 
 - el horario se comprueba nuevamente para impedir una doble reserva;
 - se crea la orden principal y, si es necesario, las asignaciones internas de vans de apoyo;
