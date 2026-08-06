@@ -182,22 +182,11 @@ function generateOptions({ analysis, request, data, routeConfig, today, currentT
     })).filter(({ van, assignment }) => vanCanReceiveAppointments(van, assignment));
     if (dateAssignments.length < allocations.length) continue;
 
-    const candidateTimes = [...REGULAR_SLOTS];
+    const candidateTimes = [...REGULAR_SLOTS, EXTRA_MORNING_SLOT].sort();
     for (const time of candidateTimes) {
       if (date === today && time <= currentTime) continue;
       if (requestedBlock === "morning" && AFTERNOON_SLOTS.includes(time)) continue;
-      if (requestedBlock === "afternoon" && MORNING_SLOTS.includes(time)) continue;
-      const perVanCandidates = dateAssignments.map(({ van, assignment }) => candidateAvailability({
-        date,
-        time,
-        allocation: allocations[0],
-        van,
-        assignment,
-        data,
-        routeConfig,
-        candidateZone,
-      })).filter(Boolean);
-      if (perVanCandidates.length < allocations.length) continue;
+      if (requestedBlock === "afternoon" && [...MORNING_SLOTS, EXTRA_MORNING_SLOT].includes(time)) continue;
 
       const selected = [];
       const remainingVans = [...dateAssignments];
