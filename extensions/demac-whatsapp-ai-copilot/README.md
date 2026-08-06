@@ -1,72 +1,41 @@
-# DEMAC WhatsApp AI Copilot — v0.1.0
+# DEMAC WhatsApp AI Copilot — v0.2.0
 
-Extensión privada Manifest V3 para probar el flujo de asistencia de WhatsApp dentro de DEMAC.
+Extensión privada Manifest V3 para asistir a operaciones dentro de WhatsApp Web.
 
-## Qué incluye
+## Mejoras de esta versión
 
-- Panel lateral persistente en Chrome.
-- Lectura del chat actualmente abierto en WhatsApp Web.
-- Vista de los últimos mensajes visibles.
-- Generador local de borradores para pruebas.
-- Contrato preparado para conectar un endpoint seguro de Firebase/OpenAI.
-- Edición del borrador antes de insertarlo.
-- Inserción del texto en el campo de WhatsApp sin pulsar Enviar.
-- Ajustes de idioma, cantidad de contexto y endpoint.
+- Clasifica mensajes recibidos y enviados usando clases, `data-id`, metadatos y posición visual.
+- Agrupa mensajes consecutivos del cliente como una sola solicitud.
+- Genera respuestas locales más precisas cuando Firebase todavía no está configurado.
+- Deja preparada la conexión segura con OpenAI mediante `whatsappCopilotDraft` en Firebase.
+- Añade **Insertar** y **Enviar ahora**.
+- **Enviar ahora** exige una confirmación explícita antes de pulsar el botón de WhatsApp.
+- Muestra mensajes que todavía no puedan clasificarse para facilitar diagnóstico.
 
-## Qué no incluye todavía
+## Actualizar una instalación existente
 
-- Envío automático.
-- Escaneo de todas las conversaciones.
-- Agendamiento en el ERP.
-- Identificación del cliente en Firestore.
-- Autenticación de Firebase desde la extensión.
-- Adjuntos, notas de voz, estimates o invoices.
+1. Conserva la carpeta original instalada.
+2. Reemplaza todos sus archivos con los de esta versión.
+3. Abre `chrome://extensions`.
+4. Pulsa **Recargar** en DEMAC WhatsApp AI Copilot.
+5. Regresa a WhatsApp Web y actualiza la página con `Ctrl + R`.
+6. Abre un chat y pulsa **Leer chat**.
 
-## Instalar sin publicar
+No es necesario eliminar ni volver a instalar la extensión si se usa la misma carpeta.
 
-1. Descarga o copia esta carpeta completa en la computadora.
-2. Abre Chrome y entra a `chrome://extensions`.
-3. Activa **Developer mode / Modo de desarrollador**.
-4. Pulsa **Load unpacked / Cargar descomprimida**.
-5. Selecciona esta carpeta, la que contiene `manifest.json`.
-6. Abre `https://web.whatsapp.com/` e inicia sesión.
-7. Pulsa el icono de extensiones, fija **DEMAC WhatsApp AI Copilot** y ábrelo.
-8. Selecciona un chat de prueba y pulsa **Leer chat**.
-9. Pulsa **Generar borrador**, revisa el texto y después **Insertar en WhatsApp**.
+## OpenAI mediante Firebase
 
-No es necesario publicar la extensión para usarla en las computadoras de DEMAC durante desarrollo y pruebas. Chrome puede mostrar una advertencia de que hay una extensión cargada en modo de desarrollador; es normal.
+La extensión nunca almacena la clave de OpenAI. Para activar respuestas reales se debe desplegar la función `whatsappCopilotDraft` y definir:
 
-## Configurar un backend
+- `OPENAI_API_KEY` en Firebase Secret Manager.
+- `WHATSAPP_COPILOT_EXTENSION_TOKEN` como token privado y revocable.
 
-Desde **Ajustes**, establece un endpoint HTTPS de DEMAC. El endpoint recibe:
+Después, el mismo token se guarda en **Ajustes** de la extensión. Sin token, la extensión continúa funcionando con respuestas locales de prueba.
 
-```json
-{
-  "channel": "whatsapp-web-copilot",
-  "company": "DEMAC Professional Cooling Solutions",
-  "operator": "Operaciones",
-  "languageMode": "auto",
-  "conversation": {
-    "chatTitle": "Cliente",
-    "messages": [
-      { "direction": "inbound", "text": "Necesito una cita" }
-    ]
-  }
-}
-```
+## Alcance actual
 
-Y debe responder:
-
-```json
-{
-  "draft": "Buenas tardes...",
-  "source": "openai",
-  "warning": ""
-}
-```
-
-La clave de OpenAI debe permanecer exclusivamente en el backend.
-
-## Limitaciones técnicas
-
-WhatsApp Web cambia su estructura interna con frecuencia. Los selectores de lectura e inserción están centralizados en `content.js` para facilitar ajustes después de probarlos contra la sesión real de DEMAC.
+- Procesa solamente el chat abierto.
+- No recorre automáticamente chats no leídos.
+- No agenda todavía dentro del ERP.
+- No adjunta invoices, estimates ni archivos.
+- No envía automáticamente al recibir un mensaje; el operador debe pulsar **Enviar ahora** y confirmar.
