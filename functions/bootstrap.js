@@ -1,3 +1,4 @@
+require("./whatsappCopilotCorrections");
 require("./whatsappCopilotPresentation");
 
 module.exports = {
