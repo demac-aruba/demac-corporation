@@ -1,3 +1,8 @@
+import {
+  learnConversationMemory,
+  prepareConversationContext,
+} from "./conversation-memory.mjs";
+
 const BUILD_VERSION = chrome.runtime.getManifest().version;
 const DEFAULT_SETTINGS = {
   backendUrl: "https://us-central1-demac-corporation.cloudfunctions.net/whatsappCopilotDraft",
@@ -56,14 +61,33 @@ async function backendRequest(settings, body) {
 }
 
 async function callBackend(context, settings, extra = {}) {
+  let prepared = { context, key: "", facts: {} };
+  try {
+    prepared = await prepareConversationContext(context, chrome.storage.local);
+  } catch (error) {
+    console.warn("DEMAC Copilot could not prepare conversation memory.", error);
+  }
+
   const data = await backendRequest(settings, {
     channel: "whatsapp-web-copilot",
     company: settings.companyName,
     operator: settings.operatorName,
     languageMode: settings.languageMode,
-    conversation: context,
+    conversation: prepared.context,
     ...extra,
   });
+
+  try {
+    await learnConversationMemory(
+      prepared.key,
+      prepared.facts,
+      data?.metadata,
+      chrome.storage.local,
+    );
+  } catch (error) {
+    console.warn("DEMAC Copilot could not update conversation memory.", error);
+  }
+
   const text = String(data?.draft ?? data?.message ?? "").trim();
   if (!text) throw new Error("El backend no devolvió una respuesta para revisar.");
   return {
