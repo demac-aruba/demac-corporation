@@ -13,7 +13,7 @@
         <div>
           <p class="eyebrow">DEMAC</p>
           <h1>WhatsApp AI Copilot</h1>
-          <p class="subtitle" id="versionText">Versión 0.2.2 de prueba supervisada</p>
+          <p class="subtitle" id="versionText">Asistente conversacional supervisado</p>
         </div>
       </header>
 
@@ -35,7 +35,7 @@
         </div>
         <p class="muted" id="contextSummary">Abre WhatsApp Web y selecciona una conversación.</p>
         <div id="customerTurnCard" class="customer-turn" hidden>
-          <span>Última solicitud agrupada</span>
+          <span>Último mensaje del cliente</span>
           <p id="customerTurnText"></p>
         </div>
         <div id="messageList" class="message-list" aria-live="polite"></div>
@@ -49,8 +49,20 @@
           </div>
           <span class="badge" id="draftSource">Sin generar</span>
         </div>
-        <textarea id="draftText" rows="8" placeholder="Aquí aparecerá el borrador para revisar y editar."></textarea>
+        <textarea id="draftText" rows="7" placeholder="Aquí aparecerá la respuesta para revisar y editar."></textarea>
         <p class="warning" id="draftWarning"></p>
+
+        <div class="ai-analysis" id="aiAnalysisCard" hidden>
+          <div class="analysis-grid">
+            <div class="analysis-item"><span>Idioma</span><strong id="aiLanguage">—</strong></div>
+            <div class="analysis-item"><span>Etapa</span><strong id="aiStage">—</strong></div>
+            <div class="analysis-item"><span>Próximo paso</span><strong id="aiNextAction">—</strong></div>
+            <div class="analysis-item"><span>Confianza</span><strong id="aiConfidence">—</strong></div>
+          </div>
+          <p><strong>Datos reconocidos:</strong> <span id="aiCollected">—</span></p>
+          <p><strong>Información pendiente:</strong> <span id="aiMissing">—</span></p>
+        </div>
+
         <div class="button-row">
           <button id="generateButton" class="primary-button" type="button">Generar respuesta</button>
           <button id="insertButton" class="secondary-button" type="button" disabled>Insertar</button>
@@ -60,10 +72,10 @@
 
       <section class="notice">
         <strong>Modo supervisado.</strong>
-        <span>Enviar ahora requiere una confirmación explícita. Esta versión todavía no recorre chats ni agenda automáticamente.</span>
+        <span>OpenAI analiza la conversación completa y responde en el idioma del cliente. El envío siempre requiere confirmación del operador.</span>
       </section>
 
-      <p class="footer-note" id="buildInfo">Panel 0.2.2</p>
+      <p class="footer-note" id="buildInfo">Panel cargando…</p>
       <p class="footer-note">Solo procesa el chat abierto. La clave de OpenAI permanece en Firebase.</p>
     </main>
     <script src="sidepanel.js"></script>
