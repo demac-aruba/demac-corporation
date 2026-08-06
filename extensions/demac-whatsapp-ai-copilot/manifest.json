@@ -2,13 +2,14 @@
   "manifest_version": 3,
   "name": "DEMAC WhatsApp AI Copilot",
   "short_name": "DEMAC Copilot",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Asistente privado de DEMAC para identificar solicitudes en el chat abierto, preparar respuestas e insertarlas o enviarlas con confirmación.",
   "minimum_chrome_version": "114",
   "permissions": [
     "storage",
     "tabs",
-    "sidePanel"
+    "sidePanel",
+    "scripting"
   ],
   "host_permissions": [
     "https://web.whatsapp.com/*",
