@@ -10,7 +10,8 @@
     "serve": "firebase emulators:start --only functions",
     "shell": "firebase functions:shell",
     "deploy": "firebase deploy --only functions",
-    "logs": "firebase functions:log"
+    "logs": "firebase functions:log",
+    "test:whatsapp-copilot": "node --test whatsappCopilotScheduling.test.js"
   },
   "dependencies": {
     "firebase-admin": "^13.4.0",
