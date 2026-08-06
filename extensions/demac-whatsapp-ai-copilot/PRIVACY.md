@@ -1,6 +1,6 @@
 # Privacidad — DEMAC WhatsApp AI Copilot
 
-## Alcance de la versión 0.4.1
+## Alcance de la versión 0.4.4
 
 - Opera únicamente en `https://web.whatsapp.com/`.
 - Lee solo los mensajes visibles del chat abierto.
@@ -10,6 +10,19 @@
 - Conserva saltos de línea y formato visual al transferir el borrador hacia el compositor de WhatsApp Web.
 - Puede consultar la agenda interna de DEMAC. La cita se crea solamente cuando el cliente selecciona una opción y el operador aprueba **Enviar ahora**.
 
+## Memoria local estructurada
+
+Para evitar preguntas repetidas, la extensión guarda en `chrome.storage.local` únicamente datos operativos confirmados, por ejemplo:
+
+- tipo de trabajo;
+- cantidad de aires;
+- dirección;
+- fecha solicitada;
+- restricción horaria;
+- nombre, cuando el cliente lo haya proporcionado claramente.
+
+La memoria se separa por número técnico de WhatsApp cuando está disponible y, como respaldo, por el título visible del chat. No se guarda una copia completa del texto de la conversación. La extensión conserva como máximo 100 registros de memoria y elimina primero los más antiguos.
+
 ## Transmisión de datos
 
 Cuando Firebase está configurado, se envían al backend seguro de DEMAC:
@@ -18,6 +31,7 @@ Cuando Firebase está configurado, se envían al backend seguro de DEMAC:
 - hasta la cantidad configurada de mensajes visibles recientes;
 - identificadores técnicos necesarios para distinguir entrada y salida y, cuando WhatsApp lo incluye, reconocer el número del contacto;
 - último turno agrupado del cliente;
+- datos estructurados ya confirmados para mantener continuidad;
 - idioma solicitado y hora de captura.
 
 El token guardado en Chrome no es una clave de OpenAI. Es un token limitado y revocable para proteger la función de Firebase. La clave de OpenAI permanece en Firebase Secret Manager.
@@ -33,8 +47,6 @@ Cuando el cliente confirma una opción y el operador aprueba el envío:
 - se reutiliza el cliente y la propiedad cuando pueden identificarse de forma segura;
 - no se utiliza el nombre visible del chat como nombre legal de un cliente nuevo.
 
-## Conservación
+## Conservación en Firebase
 
-La extensión no guarda el texto de las conversaciones en `chrome.storage`.
-
-Firebase conserva metadatos mínimos de auditoría, las opciones temporales necesarias para revalidar la reserva y los registros normales del ERP creados durante el proceso.
+Firebase conserva metadatos mínimos de auditoría, las opciones temporales necesarias para revalidar la reserva y los registros normales del ERP creados durante el proceso. El registro de auditoría no guarda el texto completo del chat.
