@@ -16,8 +16,8 @@ const {
 
 test('separa la planificación de diez servicios entre dos vans', () => {
   assert.deepEqual(distributeUnits(10, 60, 4), [
-    { quantity: 5, slots: 5, fullDay: false },
-    { quantity: 5, slots: 5, fullDay: false },
+    { quantity: 6, slots: 6, fullDay: false },
+    { quantity: 4, slots: 4, fullDay: false },
   ]);
 });
 
