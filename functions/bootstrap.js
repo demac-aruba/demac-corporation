@@ -4,4 +4,5 @@ module.exports = {
   ...require("./userManagement"),
   ...require("./voiceTranscription"),
   ...require("./professionalReportGeneration"),
+  ...require("./whatsappCopilot"),
 };
