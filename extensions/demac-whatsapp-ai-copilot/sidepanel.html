@@ -13,7 +13,7 @@
         <div>
           <p class="eyebrow">DEMAC</p>
           <h1>WhatsApp AI Copilot</h1>
-          <p class="subtitle">Primera versión de prueba supervisada</p>
+          <p class="subtitle">Versión 0.2 · atención supervisada</p>
         </div>
       </header>
 
@@ -34,6 +34,10 @@
           <button id="refreshButton" class="secondary-button" type="button">Leer chat</button>
         </div>
         <p class="muted" id="contextSummary">Abre WhatsApp Web y selecciona una conversación.</p>
+        <div id="customerTurnCard" class="customer-turn" hidden>
+          <span>Última solicitud agrupada</span>
+          <p id="customerTurnText"></p>
+        </div>
         <div id="messageList" class="message-list" aria-live="polite"></div>
       </section>
 
@@ -48,17 +52,18 @@
         <textarea id="draftText" rows="8" placeholder="Aquí aparecerá el borrador para revisar y editar."></textarea>
         <p class="warning" id="draftWarning"></p>
         <div class="button-row">
-          <button id="generateButton" class="primary-button" type="button">Generar borrador</button>
-          <button id="insertButton" class="secondary-button" type="button" disabled>Insertar en WhatsApp</button>
+          <button id="generateButton" class="primary-button" type="button">Generar respuesta</button>
+          <button id="insertButton" class="secondary-button" type="button" disabled>Insertar</button>
+          <button id="sendButton" class="danger-button" type="button" disabled>Enviar ahora</button>
         </div>
       </section>
 
       <section class="notice">
-        <strong>No envía automáticamente.</strong>
-        <span>Esta versión inserta el texto en el campo de WhatsApp para que operaciones lo revise antes de enviarlo.</span>
+        <strong>Modo supervisado.</strong>
+        <span>Enviar ahora requiere una confirmación explícita. Esta versión todavía no recorre chats ni agenda automáticamente.</span>
       </section>
 
-      <p class="footer-note">Solo procesa el chat que está abierto. No recorre ni extrae todas las conversaciones.</p>
+      <p class="footer-note">Solo procesa el chat abierto. La clave de OpenAI permanece en Firebase.</p>
     </main>
     <script src="sidepanel.js"></script>
   </body>
