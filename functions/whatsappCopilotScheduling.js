@@ -63,13 +63,13 @@ async function saveOffer(db, request, analysis, result) {
   return { id, key, expiresAt };
 }
 
-async function getOpenOffer(db, request) {
+async function getCurrentOffer(db, request) {
   const key = conversationKey(request);
   const id = `wa-offer-${hashId(key, 32)}`;
   const snapshot = await db.collection("whatsappCopilotOffers").doc(id).get();
   if (!snapshot.exists) return null;
   const offer = { id: snapshot.id, ...snapshot.data() };
-  if (offer.status !== "open" || !Array.isArray(offer.options)) return null;
+  if (!["open", "booked"].includes(offer.status) || !Array.isArray(offer.options)) return null;
   if (offer.expiresAt && offer.expiresAt < new Date().toISOString()) return null;
   return offer;
 }
@@ -357,11 +357,40 @@ async function reserveOption({ db, request, analysis, offer, option }) {
   return { primaryWorkOrderId: primaryId, workOrderIds: createdIds, option };
 }
 
-async function orchestrateScheduling({ db, request, analysis }) {
+async function orchestrateScheduling({ db, request, analysis, commitAppointment = false }) {
   const today = arubaDateParts().date;
-  const offer = await getOpenOffer(db, request);
+  const offer = await getCurrentOffer(db, request);
   const selected = selectedOfferOption(analysis, offer);
   if (offer && selected && analysis.customerConfirmedAppointment) {
+    if (offer.status === "booked" && offer.primaryWorkOrderId) {
+      return {
+        handled: true,
+        action: "appointment_booked",
+        reply: formatConfirmationReply(analysis.language, selected),
+        offer,
+        metadata: {
+          appointmentCreated: true,
+          appointmentAlreadyCreated: true,
+          primaryWorkOrderId: offer.primaryWorkOrderId,
+          workOrderIds: offer.workOrderIds || [offer.primaryWorkOrderId],
+          selectedOption: selected,
+        },
+      };
+    }
+    if (!commitAppointment) {
+      return {
+        handled: true,
+        action: "appointment_pending_approval",
+        reply: formatConfirmationReply(analysis.language, selected),
+        offer,
+        metadata: {
+          appointmentCreated: false,
+          pendingAppointment: true,
+          offerId: offer.id,
+          selectedOption: selected,
+        },
+      };
+    }
     try {
       const booking = await reserveOption({ db, request, analysis, offer, option: selected });
       return {
