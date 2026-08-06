@@ -4,7 +4,7 @@ const DEFAULT_SETTINGS = {
   backendToken: "",
   companyName: "DEMAC Professional Cooling Solutions",
   operatorName: "Operaciones",
-  maxMessages: 24,
+  maxMessages: 30,
   languageMode: "auto",
 };
 
@@ -73,6 +73,13 @@ function collectElements() {
     draftWarning: byId("draftWarning"),
     buildInfo: byId("buildInfo"),
     versionText: byId("versionText"),
+    aiAnalysisCard: byId("aiAnalysisCard"),
+    aiLanguage: byId("aiLanguage"),
+    aiStage: byId("aiStage"),
+    aiNextAction: byId("aiNextAction"),
+    aiConfidence: byId("aiConfidence"),
+    aiCollected: byId("aiCollected"),
+    aiMissing: byId("aiMissing"),
   };
 
   const required = [
@@ -160,55 +167,124 @@ function latestCustomerText(context) {
   return String(inbound?.text ?? "").trim();
 }
 
+function allConversationText(context) {
+  return (context?.messages ?? []).map((message) => String(message?.text ?? "")).join("\n");
+}
+
+function detectLocalLanguage(context, settings) {
+  if (["es", "en", "pap-aw"].includes(settings.languageMode)) return settings.languageMode;
+  const latest = latestCustomerText(context).toLocaleLowerCase();
+  const papiamentoSignals = [
+    /\bmi ta\b/, /\bmi kier\b/, /\bmi mester\b/, /\bbo por\b/, /\bpor fabor\b/,
+    /\bpa mi\b/, /\bna cas\b/, /\bki ora\b/, /\bcon ta\b/, /\bawor\b/, /\bawe\b/,
+    /\bservicio di airco\b/, /\bcita pa\b/, /\bairconan\b/,
+  ];
+  if (papiamentoSignals.some((pattern) => pattern.test(latest))) return "pap-aw";
+  const englishSignals = /\b(please|need|would like|appointment|service|install|repair|address|available|tomorrow|today)\b/;
+  if (englishSignals.test(latest)) return "en";
+  return "es";
+}
+
+function extractLocalDetails(context) {
+  const latest = latestCustomerText(context);
+  const conversation = allConversationText(context);
+  const quantityMatch = latest.match(/\b(\d{1,2})\s*(?:aires?|aircos?|airco(?:nan)?|a\/?c(?:s)?)\b/i)
+    ?? conversation.match(/\b(\d{1,2})\s*(?:aires?|aircos?|airco(?:nan)?|a\/?c(?:s)?)\b/i);
+  const latestHasAddressShape = /\d/.test(latest) && latest.replace(/\d+/g, "").trim().length >= 3;
+  const serviceKnown = /servicio|service|mantenimiento|maintenance|limpia|clean|airco|aire|aires/i.test(conversation);
+  return {
+    serviceKnown,
+    quantity: quantityMatch?.[1] || "",
+    address: latestHasAddressShape ? latest.trim() : "",
+  };
+}
+
 function localDraft(context, settings) {
   const text = latestCustomerText(context);
   const lower = text.toLocaleLowerCase();
+  const language = detectLocalLanguage(context, settings);
+  const details = extractLocalDetails(context);
 
   if (!text) {
+    const greetings = {
+      es: `Buenas tardes. Gracias por comunicarse con ${settings.companyName}. ¿En qué podemos asistirle?`,
+      en: `Good afternoon. Thank you for contacting ${settings.companyName}. How may we assist you?`,
+      "pap-aw": `Bon tardi. Danki pa tuma contacto cu ${settings.companyName}. Con nos por yuda bo?`,
+    };
     return {
-      text: `Buenas tardes. Gracias por comunicarse con ${settings.companyName}. ¿En qué podemos asistirle?`,
+      text: greetings[language],
       source: "local-test",
-      warning: "No se identificó una solicitud del cliente. Confirma que aparezcan mensajes recibidos o una solicitud agrupada.",
+      warning: "Modo local: OpenAI todavía no está conectado.",
+      metadata: { language, conversationStage: "initial_request", nextAction: "ask_missing_information", confidence: 0.55, missingInformation: ["solicitud"], collectedInformation: {} },
+    };
+  }
+
+  if (details.serviceKnown && details.quantity && details.address) {
+    const replies = {
+      es: `Perfecto, gracias. Tenemos registrado el servicio para ${details.quantity} aires en ${details.address}. ¿Qué día u horario le conviene para que revisemos disponibilidad?`,
+      en: `Perfect, thank you. We have the service request for ${details.quantity} AC units at ${details.address}. Which day or time works best so we can check availability?`,
+      "pap-aw": `Perfecto, danki. Nos tin registra e servicio pa ${details.quantity} airco na ${details.address}. Ki dia of horario ta bin bon pa bo pa nos por controla disponibilidad?`,
+    };
+    return {
+      text: replies[language],
+      source: "local-test",
+      warning: "Modo local mejorado. OpenAI dará una respuesta más natural al activar Firebase.",
+      metadata: {
+        language, conversationStage: "ready_for_schedule_lookup", nextAction: "query_erp_availability", confidence: 0.75, missingInformation: ["preferredDate", "preferredTime"],
+        collectedInformation: { serviceType: "service", quantity: details.quantity, address: details.address },
+      },
     };
   }
 
   if (/servicio|service|mantenimiento|maintenance|limpia|clean|airco|aire|aires/.test(lower)) {
+    const replies = {
+      es: "Buenas tardes. Con mucho gusto podemos coordinar el servicio. ¿Cuántos aires necesitan servicio y cuál es la dirección de la propiedad?",
+      en: "Good afternoon. We can gladly coordinate the service. How many AC units need service, and what is the property address?",
+      "pap-aw": "Bon tardi. Cu hopi gusto nos por coordina e servicio. Cuanto airco mester servicio y kico ta e adres di e propiedad?",
+    };
     return {
-      text: "Buenas tardes. Con mucho gusto podemos coordinar el servicio de sus aires acondicionados. ¿Cuántos aires necesitan servicio y cuál es la dirección de la propiedad?",
-      source: "local-test",
-      warning: "Respuesta local basada en la solicitud agrupada. OpenAI se activará al configurar el backend.",
+      text: replies[language], source: "local-test", warning: "Modo local: OpenAI todavía no está conectado.",
+      metadata: { language, conversationStage: "collecting_details", nextAction: "ask_missing_information", confidence: 0.7, missingInformation: ["quantity", "address"], collectedInformation: { serviceType: "service" } },
     };
   }
 
   if (/instalaci[oó]n|install|airco nobo|aire nuevo/.test(lower)) {
-    return {
-      text: "Buenas tardes. Con mucho gusto podemos ayudarle con la instalación. ¿Cuántos aires desea instalar, en qué dirección y ya conoce las capacidades aproximadas?",
-      source: "local-test",
-      warning: "Respuesta local. Todavía no consulta precios ni disponibilidad del ERP.",
+    const replies = {
+      es: "Con mucho gusto podemos ayudarle con la instalación. ¿Cuántos aires desea instalar, en qué dirección y conoce las capacidades aproximadas?",
+      en: "We can gladly help with the installation. How many AC units would you like installed, at what address, and do you know the approximate capacities?",
+      "pap-aw": "Cu hopi gusto nos por yuda bo cu e instalacion. Cuanto airco bo kier instala, na ki adres, y bo sa e capacidadnan aproximado?",
     };
+    return { text: replies[language], source: "local-test", warning: "Modo local: OpenAI todavía no está conectado.", metadata: { language, conversationStage: "collecting_details", nextAction: "ask_missing_information", confidence: 0.7, missingInformation: ["quantity", "address", "capacities"], collectedInformation: { serviceType: "installation" } } };
   }
 
-  if (/cita|appointment|disponib|fecha|hora/.test(lower)) {
-    return {
-      text: "Buenas tardes. Con gusto podemos ayudarle a coordinar una cita. ¿Qué trabajo necesita, cuántos aires son y cuál es la dirección de la propiedad?",
-      source: "local-test",
-      warning: "Respuesta local. Todavía no consulta la agenda del ERP.",
-    };
-  }
-
-  if (/precio|price|cu[aá]nto|cost/.test(lower)) {
-    return {
-      text: "Buenas tardes. Con gusto le ayudamos con la información de precio. ¿Podría indicarnos el servicio requerido, la cantidad de aires y la dirección?",
-      source: "local-test",
-      warning: "No confirmes precios hasta conectarlo con la información autorizada del ERP.",
-    };
-  }
-
-  return {
-    text: "Buenas tardes. Gracias por escribirnos. Hemos leído su solicitud y con gusto le ayudaremos. ¿Podría compartir el detalle que falte para poder atenderla correctamente?",
-    source: "local-test",
-    warning: "Respuesta local. La comprensión completa se habilitará con OpenAI.",
+  const generic = {
+    es: "Gracias por la información. ¿Podría compartir el detalle adicional que falte para poder atender su solicitud correctamente?",
+    en: "Thank you for the information. Could you share any remaining detail needed so we can assist you correctly?",
+    "pap-aw": "Danki pa e informacion. Bo por comparti e otro detalle cu falta pa nos por atende bo solicitud correctamente?",
   };
+  return { text: generic[language], source: "local-test", warning: "Modo local. La comprensión completa se habilita al conectar OpenAI.", metadata: { language, conversationStage: "general_support", nextAction: "ask_missing_information", confidence: 0.5, missingInformation: [], collectedInformation: {} } };
+}
+
+function readableLabel(value) {
+  return String(value || "—").replaceAll("_", " ");
+}
+
+function renderAiMetadata(metadata, source) {
+  const visible = Boolean(metadata);
+  setHidden(elements.aiAnalysisCard, !visible);
+  if (!visible) return;
+  setText(elements.aiLanguage, metadata.language || "—");
+  setText(elements.aiStage, readableLabel(metadata.conversationStage));
+  setText(elements.aiNextAction, readableLabel(metadata.nextAction));
+  setText(elements.aiConfidence, Number.isFinite(metadata.confidence) ? `${Math.round(metadata.confidence * 100)}%` : "—");
+  const collected = Object.entries(metadata.collectedInformation || {})
+    .filter(([, value]) => String(value || "").trim())
+    .map(([key, value]) => `${readableLabel(key)}: ${value}`);
+  setText(elements.aiCollected, collected.length ? collected.join(" · ") : "Ninguno todavía");
+  const missing = Array.isArray(metadata.missingInformation) ? metadata.missingInformation : [];
+  setText(elements.aiMissing, missing.length ? missing.map(readableLabel).join(", ") : "Ninguna");
+  if (source === "openai") elements.aiAnalysisCard?.setAttribute("data-source", "openai");
+  else elements.aiAnalysisCard?.removeAttribute("data-source");
 }
 
 function renderContext(context) {
@@ -258,6 +334,7 @@ function clearContext(errorMessage) {
   setText(elements.contextSummary, errorMessage);
   setHidden(elements.customerTurnCard, true);
   setHtml(elements.messageList, "");
+  setHidden(elements.aiAnalysisCard, true);
   setStatus("No se pudo leer el chat", "error");
 }
 
@@ -307,6 +384,7 @@ async function generateDraft() {
     if (elements.draftText) elements.draftText.value = result.text;
     setText(elements.draftSource, result.source === "local-test" ? "Respuesta local" : "OpenAI");
     setWarning(result.warning || "");
+    renderAiMetadata(result.metadata, result.source);
     updateDraftButtons();
     setStatus("Respuesta lista para revisar", "ready");
   } catch (error) {
@@ -387,7 +465,7 @@ function init() {
     renderFatalPanelError(missing);
     return;
   }
-  setText(elements.versionText, `Versión ${BUILD_VERSION} de prueba supervisada`);
+  setText(elements.versionText, `Versión ${BUILD_VERSION} · OpenAI conversacional`);
   setText(elements.buildInfo, `Panel ${BUILD_VERSION}`);
   bindEvents();
   updateDraftButtons();
