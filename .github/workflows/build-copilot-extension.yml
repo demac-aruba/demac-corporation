@@ -1,0 +1,43 @@
+name: Build DEMAC Copilot Extension
+
+on:
+  pull_request:
+    paths:
+      - "extensions/demac-whatsapp-ai-copilot/**"
+      - ".github/workflows/build-copilot-extension.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-extension:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate JavaScript
+        working-directory: extensions/demac-whatsapp-ai-copilot
+        run: |
+          node --check background.js
+          node --check content.js
+          node --check content-multiline.js
+          node --check sidepanel.js
+          node --check appointment-guard.js
+          node --check options.js
+
+      - name: Build ZIP
+        run: |
+          mkdir -p build/DEMAC-WhatsApp-AI-Copilot-v0.4.1
+          cp -R extensions/demac-whatsapp-ai-copilot/. build/DEMAC-WhatsApp-AI-Copilot-v0.4.1/
+          cd build
+          zip -r DEMAC-WhatsApp-AI-Copilot-v0.4.1.zip DEMAC-WhatsApp-AI-Copilot-v0.4.1
+
+      - name: Upload ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: DEMAC-WhatsApp-AI-Copilot-v0.4.1
+          path: build/DEMAC-WhatsApp-AI-Copilot-v0.4.1.zip
+          if-no-files-found: error
+          retention-days: 30
