@@ -7,7 +7,7 @@ const {
   ruleScore,
 } = require('./whatsappCopilotKnowledge');
 
-test('detects duration even when the customer also repeats a time restriction', () => {
+test('detects duration when the current turn actually asks duration', () => {
   const text = 'Yo puedo después de las 10, pero ¿cuánto tiempo durará el servicio?';
   assert.equal(detectQuestionKind(text), 'duration');
   assert.equal(isSchedulingTurn(text), false);
@@ -21,6 +21,16 @@ test('keeps appointment selection in the scheduling flow', () => {
 
 test('availability questions stay in scheduling instead of inheriting an old knowledge question', () => {
   assert.equal(isSchedulingTurn('¿Tienes cupo para el martes?'), true);
+  assert.equal(isSchedulingTurn('¿Tienes para el lunes?'), true);
+  assert.equal(isSchedulingTurn('¿Y tienes cupo en la tarde?'), true);
+  assert.equal(detectQuestionKind('¿Y tienes cupo en la tarde?'), '');
+});
+
+test('customer rejection mentioning duration does not become a duration question', () => {
+  const text = 'no te pregunté nada de la duración ni el ERP';
+  assert.equal(detectQuestionKind(text), '');
+  assert.equal(isSchedulingTurn(text), true);
+  assert.equal(looksLikeQuestion(text), false);
 });
 
 test('scores an approved rule from example phrases', () => {
@@ -43,4 +53,9 @@ test('priority is only a tie-breaker and cannot make an irrelevant rule match', 
     triggerPhrases: ['cómo puedo pagar', 'aceptan transferencia'],
   }, 'Buenos días', '');
   assert.equal(score, -1);
+});
+
+test('a bare historical duration word in a correction is ignored while a direct duration keyword still works', () => {
+  assert.equal(detectQuestionKind('duración'), 'duration');
+  assert.equal(detectQuestionKind('no necesito saber la duración'), '');
 });
