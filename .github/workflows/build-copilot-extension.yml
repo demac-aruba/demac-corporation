@@ -15,6 +15,7 @@ on:
       - "src/screens/SettingsHubScreen.tsx"
       - "scripts/patchWhatsappKnowledgeSettingsV13.cjs"
       - "scripts/patchCompanyRulesV14.cjs"
+      - "docs/DEMAC-company-rules-v1.md"
       - "package.json"
       - ".github/workflows/build-copilot-extension.yml"
   workflow_dispatch:
