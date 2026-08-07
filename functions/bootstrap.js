@@ -8,4 +8,5 @@ module.exports = {
   ...require("./voiceTranscription"),
   ...require("./professionalReportGeneration"),
   ...require("./whatsappCopilot"),
+  ...require("./whatsappCopilotKnowledge"),
 };
