@@ -10,6 +10,11 @@ const {
   latestCustomerText,
 } = require("./whatsappCopilotConversationPolicy");
 
+// COPILOT_CONVERSATION_RULES_V15_ROUTER: runtime policy is already materialized.
+const COPILOT_FUNCTION_NAME = "whatsappCopilotDraftV17";
+const COPILOT_RUNTIME_SOURCE = "openai+erp-unified-router-v17";
+const COPILOT_RUNTIME_VERSION = 17;
+
 const extensionToken = defineSecret("WHATSAPP_COPILOT_EXTENSION_TOKEN");
 const openAiApiKey = defineSecret("OPENAI_API_KEY");
 
@@ -66,17 +71,26 @@ async function runSchedulingDraft(request) {
   return state;
 }
 
+function runtimeMetadata() {
+  return {
+    functionName: COPILOT_FUNCTION_NAME,
+    source: COPILOT_RUNTIME_SOURCE,
+    version: COPILOT_RUNTIME_VERSION,
+  };
+}
+
 function sendCaptured(response, captured) {
   const body = captured.body;
   if (body && typeof body === "object" && typeof body.draft === "string") {
     body.draft = formatNaturalCustomerReply(body.draft, body?.metadata?.language || "es");
   }
+  if (body && typeof body === "object") body.runtime = runtimeMetadata();
   const outgoing = response.status(captured.statusCode);
   if (captured.responseType === "send") outgoing.send(body);
   else outgoing.json(body);
 }
 
-exports.whatsappCopilotDraft = onRequest(
+const copilotHandler = onRequest(
   {
     region: "us-central1",
     memory: "512MiB",
@@ -102,33 +116,30 @@ exports.whatsappCopilotDraft = onRequest(
     if (request.body?.mode === "health") {
       response.status(200).json({
         ok: true,
-        source: "openai+erp-unified-router-v16",
+        source: COPILOT_RUNTIME_SOURCE,
         model: "gpt-5-mini",
         openAiConfigured: Boolean(openAiApiKey.value()),
         erpSchedulingConfigured: true,
         erpKnowledgeConfigured: true,
-        conversationPolicyVersion: 16,
+        conversationPolicyVersion: COPILOT_RUNTIME_VERSION,
+        functionName: COPILOT_FUNCTION_NAME,
       });
       return;
     }
 
     try {
-      // COPILOT_CONVERSATION_RULES_V15_ROUTER / V16_RUNTIME_ROUTER:
-      // the latest customer turn is classified before old conversation knowledge.
       const conversation = request.body?.conversation || {};
       const immediate = immediateReply({
         conversation,
         languageMode: request.body?.languageMode || "auto",
       });
       if (immediate) {
+        immediate.runtime = runtimeMetadata();
         response.status(200).json(immediate);
         return;
       }
 
       const latest = latestCustomerText(conversation);
-
-      // Availability is always an Agenda request. Never let an old duration/price
-      // question steal this turn just because it still exists in conversation history.
       if (isAvailabilityTurn(latest)) {
         const captured = await runSchedulingDraft(request);
         sendCaptured(response, captured);
@@ -141,6 +152,7 @@ exports.whatsappCopilotDraft = onRequest(
           knowledge.payload.draft,
           knowledge.payload?.metadata?.language || "es",
         );
+        knowledge.payload.runtime = runtimeMetadata();
         response.status(200).json(knowledge.payload);
         return;
       }
@@ -150,7 +162,13 @@ exports.whatsappCopilotDraft = onRequest(
     } catch (error) {
       response.status(500).json({
         error: `No se pudo procesar el flujo unificado del Copilot: ${error?.message || error}`,
+        runtime: runtimeMetadata(),
       });
     }
   },
 );
+
+// New clean endpoint for testing. Keeping the old name prevents breaking any
+// existing supervised clients while we prove the new runtime independently.
+exports.whatsappCopilotDraft = copilotHandler;
+exports.whatsappCopilotDraftV17 = copilotHandler;
