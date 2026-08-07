@@ -39,12 +39,12 @@ function bearerToken(request) {
 
 function detectQuestionKind(value) {
   const text = normalizeText(value);
-  if (/\b(cuanto tiempo|cuánto tiempo|cuanto dura|cuánto dura|how long|duration|duracion|duración)\b/.test(text)) return "duration";
-  if (/\b(cuanto cuesta|cuánto cuesta|precio|price|cost|tarifa|costo)\b/.test(text)) return "price";
-  if (/\b(que incluye|qué incluye|what is included|what does.*include|incluye el servicio)\b/.test(text)) return "service_includes";
-  if (/\b(garantia|garantía|warranty)\b/.test(text)) return "warranty";
+  if (/\b(cuanto tiempo|cuanto dura|how long|duration|duracion)\b/.test(text)) return "duration";
+  if (/\b(cuanto cuesta|precio|price|cost|tarifa|costo)\b/.test(text)) return "price";
+  if (/\b(que incluye|what is included|what does.*include|incluye el servicio)\b/.test(text)) return "service_includes";
+  if (/\b(garantia|warranty)\b/.test(text)) return "warranty";
   if (/\b(pago|payment|transferencia|cash|efectivo|tarjeta|card)\b/.test(text)) return "payment";
-  if (/\b(que hacen|qué hacen|como funciona|cómo funciona|what do you do|how does.*work)\b/.test(text)) return "service_info";
+  if (/\b(que hacen|como funciona|what do you do|how does.*work)\b/.test(text)) return "service_info";
   return "";
 }
 
@@ -68,8 +68,8 @@ function conversationFacts(raw) {
 function languageFromRequest(requestBody, latestText) {
   if (["es", "en", "pap-aw"].includes(requestBody?.languageMode)) return requestBody.languageMode;
   const text = normalizeText(latestText);
-  if (/\b(how|what|when|where|price|cost|service|duration|warranty|payment)\b/.test(text)) return "en";
-  if (/\b(con ta|cua|cuanto tempo|garantia|pago|servicio|airco)\b/.test(text)) return "pap-aw";
+  if (/\b(how|what|when|where|price|cost|duration|warranty|payment|does|included)\b/.test(text)) return "en";
+  if (/\b(con ta|cua opcion|cuanto tempo|ki ora|mi por|bo por|mester|danki|pa bo|tin un|airconan)\b/.test(text)) return "pap-aw";
   return "es";
 }
 
@@ -144,7 +144,7 @@ function unavailableAnswer(kind, language) {
   return "Nuestro equipo de Operaciones verificará esa información en el ERP antes de responderle, para no darle información incorrecta.";
 }
 
-async function buildKnowledgeReply({ body, conversation, kind, language }) {
+async function buildKnowledgeReply({ conversation, kind, language }) {
   const [presetSnapshot, knowledgeSnapshot, servicesSnapshot, vansSnapshot] = await Promise.all([
     db.collection("businessSettings").doc("appointment-work-presets").get(),
     db.collection("businessSettings").doc("whatsapp-copilot-knowledge").get(),
@@ -235,12 +235,7 @@ exports.whatsappCopilotKnowledge = onRequest(
         return;
       }
       const language = languageFromRequest(request.body, latestText);
-      const result = await buildKnowledgeReply({
-        body: request.body,
-        conversation,
-        kind,
-        language,
-      });
+      const result = await buildKnowledgeReply({ conversation, kind, language });
       const facts = conversationFacts(conversation);
       response.status(200).json({
         draft: result.draft,
