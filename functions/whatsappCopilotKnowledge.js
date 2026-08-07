@@ -12,6 +12,17 @@ const {
   cleanText,
   normalizeText,
 } = require("./whatsappCopilotSchedulingCore");
+const {
+  formatDurationReply,
+  formatPriceReply,
+  resolvePricingContext,
+} = require("./demacServicePricingRules");
+const {
+  formatNaturalCustomerReply,
+  isAvailabilityTurn,
+  isKnowledgeRejectionTurn,
+  latestCustomerText,
+} = require("./whatsappCopilotConversationPolicy");
 
 const app = getApps().length ? getApp() : initializeApp();
 const db = getFirestore(app);
@@ -39,43 +50,48 @@ function bearerToken(request) {
   return authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
 }
 
-function latestCustomerText(conversation) {
-  const explicit = cleanText(conversation?.customerTurn?.text, 4_000);
-  if (explicit) return explicit;
-  return cleanText(
-    [...(conversation?.messages || [])].reverse().find((item) => item?.direction === "inbound")?.text,
-    4_000,
-  );
+function normalizedQuestion(value) {
+  return normalizeText(value)
+    .replace(/[!¡?¿.,;:()\-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function detectQuestionKind(value) {
-  const text = normalizeText(value);
-  if (/\b(cuanto tiempo|cuánto tiempo|cuanto dura|cuánto dura|durara|durará|how long|duration|duracion|duración|tempo ta dura)\b/.test(text)) return "duration";
-  if (/\b(cuanto cuesta|cuánto cuesta|cuanto sale|cuánto sale|precio|price|cost|tarifa|costo|prijs)\b/.test(text)) return "price";
-  if (/\b(que incluye|qué incluye|what is included|what does.*include|incluye el servicio|kiko ta inclui)\b/.test(text)) return "service_includes";
-  if (/\b(garantia|garantía|warranty)\b/.test(text)) return "warranty";
-  if (/\b(metodo de pago|método de pago|formas de pago|payment method|transferencia|cash|efectivo|tarjeta|card)\b/.test(text)) return "payment";
-  if (/\b(area de servicio|área de servicio|hasta donde|service area|donde trabajan|unda boso ta traha)\b/.test(text)) return "service_area";
-  if (/\b(cancelar|cancelacion|cancelación|reprogramar|cambiar la cita|reschedule|cancel)\b/.test(text)) return "cancellation_reschedule";
-  if (/\b(que debo hacer antes|qué debo hacer antes|preparar|preparation|antes del servicio)\b/.test(text)) return "preparation";
-  if (/\b(cada cuanto|cada cuánto|frecuencia|how often|maintenance frequency)\b/.test(text)) return "maintenance_frequency";
+  const text = normalizedQuestion(value);
+  if (!text || isKnowledgeRejectionTurn(value)) return "";
+
+  if (/\b(cuanto tiempo|cuanto dura|cuantas horas|se demora|tarda|durara|how long|how many hours|duration of|cuanto tempo|tempo e servicio ta dura)\b/.test(text)
+    || /^(duracion|duration|tempo)$/.test(text)) return "duration";
+  if (/\b(cuanto cuesta|cuanto sale|que precio|cual es el precio|precio de|price of|how much|cost of|cuanto ta costa|prijs di)\b/.test(text)
+    || /^(precio|price|cost|prijs)$/.test(text)) return "price";
+  if (/\b(que incluye|what is included|what does .* include|incluye el servicio|kiko ta inclui)\b/.test(text)) return "service_includes";
+  if (/\b(garantia|warranty)\b/.test(text)) return "warranty";
+  if (/\b(metodo de pago|formas de pago|como puedo pagar|aceptan transferencia|pagar en efectivo|payment method|how can i pay|bank transfer|cash payment|con mi por paga|transferencia|cash)\b/.test(text)) return "payment";
+  if (/\b(area de servicio|hasta donde|service area|donde trabajan|unda boso ta traha)\b/.test(text)) return "service_area";
+  if (/\b(cancelar|cancelacion|reprogramar|cambiar la cita|reschedule|cancel)\b/.test(text)) return "cancellation_reschedule";
+  if (/\b(que debo hacer antes|preparar antes|preparation|antes del servicio)\b/.test(text)) return "preparation";
+  if (/\b(cada cuanto|frecuencia|how often|maintenance frequency)\b/.test(text)) return "maintenance_frequency";
   if (/\b(emergencia|emergency|urgente|urgent)\b/.test(text)) return "emergency_service";
-  if (/\b(invoice|factura|estimate|estimado|cotizacion|cotización|quotation)\b/.test(text)) return "invoice_estimate";
-  if (/\b(que hacen|qué hacen|como funciona|cómo funciona|what do you do|how does.*work|informacion del servicio|información del servicio)\b/.test(text)) return "service_info";
+  if (/\b(invoice|factura|estimate|estimado|cotizacion|quotation)\b/.test(text)) return "invoice_estimate";
+  if (/\b(que hacen|como funciona el servicio|what do you do|how does .* work|informacion del servicio)\b/.test(text)) return "service_info";
   return "";
 }
 
 function isSchedulingTurn(value) {
-  const text = normalizeText(value);
+  const text = normalizedQuestion(value);
   if (!text) return true;
-  return /\b(opcion 1|opcion 2|opcion uno|opcion dos|la primera|la segunda|ese horario|esa hora|puedo despues|puedo antes|disponible despues|disponible antes|quiero cita|agendar|reservar|que me puedes ofrecer|qué me puedes ofrecer|otro dia|otro día|otra hora)\b/.test(text)
+  if (isAvailabilityTurn(value)) return true;
+  if (isKnowledgeRejectionTurn(value)) return true;
+  return /\b(opcion 1|opcion 2|opcion uno|opcion dos|la primera|la segunda|ese horario|esa hora|puedo despues|puedo antes|disponible despues|disponible antes|quiero cita|agendar|reservar|que me puedes ofrecer|otro dia|otra hora|a las \d{1,2})\b/.test(text)
     && !detectQuestionKind(text);
 }
 
 function looksLikeQuestion(value) {
-  const text = normalizeText(value);
+  const text = normalizedQuestion(value);
+  if (!text || isKnowledgeRejectionTurn(value)) return false;
   return String(value || "").includes("?")
-    || /^(que|qué|cuanto|cuánto|como|cómo|cuando|cuándo|donde|dónde|cual|cuál|puedo|tienen|tiene|how|what|when|where|which|do you|can you|is there|con|kiko|unda|ki ora)\b/.test(text)
+    || /^(que|cuanto|como|cuando|donde|cual|puedo|tienen|tiene|how|what|when|where|which|do you|can you|is there|con|kiko|unda|ki ora)\b/.test(text)
     || Boolean(detectQuestionKind(text));
 }
 
@@ -100,7 +116,7 @@ function languageFromRequest(requestBody, latestText) {
   if (["es", "en", "pap-aw"].includes(requestBody?.languageMode)) return requestBody.languageMode;
   const text = normalizeText(latestText);
   if (/\b(how|what|when|where|which|price|cost|service|duration|warranty|payment|invoice|estimate)\b/.test(text)) return "en";
-  if (/\b(con ta|cua|kiko|unda|cuanto tempo|prijs|servicio|airco|garantia)\b/.test(text)) return "pap-aw";
+  if (/\b(con ta|cua|kiko|unda|cuanto tempo|prijs|mi kier|bo por|bon dia|bon tardi)\b/.test(text)) return "pap-aw";
   return "es";
 }
 
@@ -113,19 +129,15 @@ function valueForLanguage(value, language) {
 function durationText(minutes, language, perUnit = false) {
   const hours = minutes / 60;
   const display = Number.isInteger(hours) ? String(hours) : hours.toFixed(1).replace(".0", "");
-  if (language === "en") {
-    return perUnit
-      ? `The estimated duration configured in our ERP is approximately ${display} hour${hours === 1 ? "" : "s"} per AC unit.`
-      : `The estimated duration configured in our ERP is approximately ${display} hour${hours === 1 ? "" : "s"}.`;
-  }
-  if (language === "pap-aw") {
-    return perUnit
-      ? `E duracion estima cu ta configura den nos ERP ta aproximadamente ${display} ora pa cada airco.`
-      : `E duracion estima cu ta configura den nos ERP ta aproximadamente ${display} ora.`;
-  }
+  if (language === "en") return perUnit
+    ? `A standard service takes approximately ${display} hour${hours === 1 ? "" : "s"} per AC unit.`
+    : `The service takes approximately ${display} hour${hours === 1 ? "" : "s"}.`;
+  if (language === "pap-aw") return perUnit
+    ? `Un servicio standard ta dura aproximadamente ${display} ora pa cada airco.`
+    : `E servicio ta dura aproximadamente ${display} ora.`;
   return perUnit
-    ? `La duración estimada configurada en nuestro ERP es de aproximadamente ${display} hora${hours === 1 ? "" : "s"} por cada aire.`
-    : `La duración estimada configurada en nuestro ERP es de aproximadamente ${display} hora${hours === 1 ? "" : "s"}.`;
+    ? `Un servicio estándar dura aproximadamente ${display} hora${hours === 1 ? "" : "s"} por aire.`
+    : `El servicio dura aproximadamente ${display} hora${hours === 1 ? "" : "s"}.`;
 }
 
 function tokens(value) {
@@ -136,26 +148,31 @@ function ruleScore(rule, latestText, detectedKind) {
   if (rule.active === false) return -1;
   const text = normalizeText(latestText);
   const triggers = Array.isArray(rule.triggerPhrases) ? rule.triggerPhrases : [];
-  let score = Number(rule.priority || 0);
-  if (detectedKind && normalizeText(rule.intent) === normalizeText(detectedKind)) score += 200;
+  let relevance = 0;
+
+  if (detectedKind && normalizeText(rule.intent) === normalizeText(detectedKind)) relevance += 220;
   for (const phrase of triggers) {
     const normalizedPhrase = normalizeText(phrase);
     if (!normalizedPhrase) continue;
-    if (text.includes(normalizedPhrase)) score += 160 + normalizedPhrase.length;
+    if (text.includes(normalizedPhrase)) relevance += 180 + normalizedPhrase.length;
     const phraseTokens = tokens(normalizedPhrase);
     const textTokens = tokens(text);
     let overlap = 0;
     for (const token of phraseTokens) if (textTokens.has(token)) overlap += 1;
-    if (phraseTokens.size) score += Math.round((overlap / phraseTokens.size) * 80);
+    if (phraseTokens.size && overlap > 0) relevance += Math.round((overlap / phraseTokens.size) * 70);
   }
-  return score;
+
+  // Priority is only a tie-breaker after the current turn actually matches.
+  if (relevance <= 0) return -1;
+  return relevance + Math.max(0, Math.min(100, Number(rule.priority || 0))) / 10;
 }
 
 function bestDeterministicRule(rules, latestText, detectedKind) {
   const ranked = rules
     .map((rule) => ({ rule, score: ruleScore(rule, latestText, detectedKind) }))
+    .filter((item) => item.score >= 0)
     .sort((a, b) => b.score - a.score);
-  return ranked[0]?.score >= 70 ? ranked[0].rule : null;
+  return ranked[0]?.score >= 60 ? ranked[0].rule : null;
 }
 
 function outputText(payload) {
@@ -169,7 +186,9 @@ function outputText(payload) {
 }
 
 async function classifyAgainstRules(latestText, facts, rules) {
-  if (!openAiApiKey.value() || !rules.length) return { route: "human", ruleId: "", confidence: 0 };
+  if (!openAiApiKey.value() || !rules.length || !looksLikeQuestion(latestText)) {
+    return { route: "schedule", ruleId: "", confidence: 0 };
+  }
   const allowedRules = rules.slice(0, 80).map((rule) => ({
     id: rule.id,
     title: cleanText(rule.title, 120),
@@ -187,19 +206,20 @@ async function classifyAgainstRules(latestText, facts, rules) {
       reasoning: { effort: "low" },
       max_output_tokens: 220,
       instructions: [
-        "Clasifica el último mensaje del cliente de DEMAC.",
-        "No redactes una respuesta para el cliente.",
-        "Elige route=rule solamente cuando una regla aprobada responda directamente la pregunta.",
-        "Elige route=schedule cuando el cliente selecciona, cambia o solicita una cita o disponibilidad.",
-        "Elige route=human cuando es una pregunta real pero ninguna regla aprobada aplica.",
-        "Nunca inventes un ruleId.",
+        "Classify ONLY the customer's latest message.",
+        "Ignore earlier questions when deciding the current intent.",
+        "Choose route=rule only when an approved rule directly answers the latest message.",
+        "Choose route=schedule for availability, appointment selection, appointment changes, ordinary service intake, greetings, corrections, or non-FAQ statements.",
+        "Choose route=human for a genuine FAQ question that has no approved rule.",
+        "Never select a rule merely because it has high priority.",
+        "Never invent a ruleId.",
       ].join(" "),
       input: JSON.stringify({ latestCustomerText: latestText, confirmedFacts: facts, allowedRules }),
       text: {
         verbosity: "low",
         format: {
           type: "json_schema",
-          name: "demac_knowledge_rule_classifier",
+          name: "demac_knowledge_rule_classifier_v18",
           strict: true,
           schema: {
             type: "object",
@@ -216,10 +236,13 @@ async function classifyAgainstRules(latestText, facts, rules) {
     }),
   });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) return { route: "human", ruleId: "", confidence: 0 };
+  if (!response.ok) return { route: "schedule", ruleId: "", confidence: 0 };
   const parsed = JSON.parse(outputText(payload) || "{}");
   if (parsed.route === "rule" && !rules.some((rule) => rule.id === parsed.ruleId)) {
     return { route: "human", ruleId: "", confidence: 0 };
+  }
+  if (parsed.route === "rule" && Number(parsed.confidence || 0) < 0.82) {
+    return { route: "human", ruleId: "", confidence: Number(parsed.confidence || 0) };
   }
   return parsed;
 }
@@ -239,9 +262,9 @@ function servicePriceText(service, language) {
     .map(Number)
     .find((value) => Number.isFinite(value) && value >= 0);
   if (amount === undefined) return "";
-  if (language === "en") return `The current price registered in our ERP is Afl. ${amount.toFixed(2)}.`;
-  if (language === "pap-aw") return `E prijs actual registra den nos ERP ta Afl. ${amount.toFixed(2)}.`;
-  return `El precio actual registrado en nuestro ERP es Afl. ${amount.toFixed(2)}.`;
+  if (language === "en") return `The current price is Afl. ${amount.toFixed(2)}.`;
+  if (language === "pap-aw") return `E prijs actual ta Afl. ${amount.toFixed(2)}.`;
+  return `El precio actual es Afl. ${amount.toFixed(2)}.`;
 }
 
 function safeHumanAnswer(language) {
@@ -250,12 +273,16 @@ function safeHumanAnswer(language) {
   return "Queremos darle la información correcta. Nuestro equipo de Operaciones revisará esta pregunta y le responderá en breve.";
 }
 
-async function buildRuleAnswer({ rule, language, preset, facts, services, activeVanCount }) {
+async function buildRuleAnswer({ rule, language, preset, facts, services, activeVanCount, operationalRules, pricingRules, conversation, latestText }) {
   const source = cleanText(rule?.source, 80) || "manual";
   if (source === "erp_duration" || cleanText(rule?.intent, 80) === "duration") {
+    const pricingContext = resolvePricingContext({ pricingRules, conversation, latestText, facts });
+    const natural = formatDurationReply(pricingContext, language, parseQuantity(facts.quantity));
+    if (natural) return natural;
+
     const quantity = parseQuantity(facts.quantity);
     if (!quantity) return durationText(preset.durationMinutesPerUnit, language, true);
-    const allocations = distributeUnits(quantity, preset.durationMinutesPerUnit, activeVanCount);
+    const allocations = distributeUnits(quantity, preset.durationMinutesPerUnit, activeVanCount, operationalRules, preset);
     const estimatedMinutes = allocations.length
       ? Math.max(...allocations.map((allocation) => allocation.quantity * preset.durationMinutesPerUnit))
       : quantity * preset.durationMinutesPerUnit;
@@ -264,12 +291,12 @@ async function buildRuleAnswer({ rule, language, preset, facts, services, active
 
   const service = findService(services, preset, facts);
   if (source === "erp_service_description") {
-    return valueForLanguage(
-      service?.customerDescription || service?.description || service?.details,
-      language,
-    );
+    return valueForLanguage(service?.customerDescription || service?.description || service?.details, language);
   }
-  if (source === "erp_service_price") return servicePriceText(service, language);
+  if (source === "erp_service_price") {
+    const pricingContext = resolvePricingContext({ pricingRules, conversation, latestText, facts });
+    return formatPriceReply(pricingContext, language) || servicePriceText(service, language);
+  }
 
   return valueForLanguage(
     rule?.answer || {
@@ -283,17 +310,17 @@ async function buildRuleAnswer({ rule, language, preset, facts, services, active
 
 function responsePayload({ draft, language, facts, kind, rule, requiresHuman, warning, confidence = 1 }) {
   return {
-    draft,
-    source: "erp-knowledge-rules",
+    draft: formatNaturalCustomerReply(draft, language),
+    source: "erp-knowledge-rules-v18",
     warning: warning || "",
     metadata: {
-      intent: kind === "price" ? "price_question" : "general_question",
+      intent: kind || "knowledge_question",
       language,
-      conversationStage: requiresHuman ? "human_handoff" : "general_support",
+      conversationStage: "answering_question",
       nextAction: requiresHuman ? "transfer_human" : "wait_for_customer",
-      summary: `Pregunta directa atendida por la regla ${rule?.id || kind || "sin-regla"}`,
+      summary: "Se respondió únicamente la pregunta actual usando una regla aprobada del ERP.",
       confidence,
-      requiresHuman,
+      requiresHuman: Boolean(requiresHuman),
       missingInformation: [],
       collectedInformation: facts,
       selectedOptionOrdinal: 0,
@@ -301,6 +328,7 @@ function responsePayload({ draft, language, facts, kind, rule, requiresHuman, wa
       knowledgeQuestionKind: kind,
       knowledgeRuleId: rule?.id || "",
       knowledgeSource: rule?.source || (kind === "duration" ? "erp_duration" : "manual"),
+      currentTurnPolicy: "authoritative",
     },
   };
 }
@@ -309,26 +337,31 @@ async function resolveKnowledgeReply(body) {
   if (body?.commitAppointment === true) return { route: "schedule" };
   const conversation = body?.conversation || {};
   const latestText = latestCustomerText(conversation);
-  if (!latestText || isSchedulingTurn(latestText)) return { route: "schedule" };
+  if (!latestText || isSchedulingTurn(latestText) || isKnowledgeRejectionTurn(latestText)) return { route: "schedule" };
 
   const detectedKind = cleanText(body?.questionKind, 80) || detectQuestionKind(latestText);
-  if (!detectedKind && !looksLikeQuestion(latestText)) return { route: "schedule" };
+  const currentLooksLikeQuestion = looksLikeQuestion(latestText);
+  if (!detectedKind && !currentLooksLikeQuestion) return { route: "schedule" };
 
-  const [presetSnapshot, servicesSnapshot, vansSnapshot, rulesSnapshot] = await Promise.all([
+  const [presetSnapshot, operationalSnapshot, pricingSnapshot, servicesSnapshot, vansSnapshot, rulesSnapshot] = await Promise.all([
     db.collection("businessSettings").doc("appointment-work-presets").get(),
+    db.collection("businessSettings").doc("company-operational-rules").get(),
+    db.collection("businessSettings").doc("company-service-pricing-rules").get(),
     db.collection("services").get(),
     db.collection("vans").get(),
     db.collection("whatsappKnowledgeRules").where("active", "==", true).get(),
   ]);
 
   const presetSettings = presetSnapshot.exists ? presetSnapshot.data() : null;
+  const operationalRules = operationalSnapshot.exists ? operationalSnapshot.data() : null;
+  const pricingRules = pricingSnapshot.exists ? pricingSnapshot.data() : null;
   const services = servicesSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
   const rules = rulesSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
   const activeVanCount = Math.max(1, vansSnapshot.docs.filter((doc) => doc.data()?.active !== false).length);
   const facts = conversationFacts(conversation);
   const language = languageFromRequest(body, latestText);
   const analysis = {
-    intent: facts.serviceType === "installation" ? "installation_request" : "service_request",
+    intent: facts.serviceType === "installation" ? "installation_request" : facts.serviceType === "repair" ? "repair_request" : "service_request",
     summary: `${facts.serviceType} ${facts.quantity}`,
     collectedInformation: facts,
   };
@@ -370,7 +403,18 @@ async function resolveKnowledgeReply(body) {
     };
   }
 
-  const draft = await buildRuleAnswer({ rule, language, preset, facts, services, activeVanCount });
+  const draft = await buildRuleAnswer({
+    rule,
+    language,
+    preset,
+    facts,
+    services,
+    activeVanCount,
+    operationalRules,
+    pricingRules,
+    conversation,
+    latestText,
+  });
   if (!draft) {
     return {
       route: "knowledge",
@@ -424,7 +468,7 @@ exports.whatsappCopilotKnowledge = onRequest(
       return;
     }
     if (request.body?.mode === "health") {
-      response.status(200).json({ ok: true, source: "erp-knowledge-rules", classifierModel: CLASSIFIER_MODEL });
+      response.status(200).json({ ok: true, source: "erp-knowledge-rules-v18", classifierModel: CLASSIFIER_MODEL });
       return;
     }
 
