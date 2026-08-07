@@ -58,15 +58,15 @@ jobs:
 
       - name: Build ZIP
         run: |
-          mkdir -p build/DEMAC-WhatsApp-AI-Copilot-v0.4.8
-          cp -R extensions/demac-whatsapp-ai-copilot/. build/DEMAC-WhatsApp-AI-Copilot-v0.4.8/
+          mkdir -p build/DEMAC-WhatsApp-AI-Copilot-v0.4.9
+          cp -R extensions/demac-whatsapp-ai-copilot/. build/DEMAC-WhatsApp-AI-Copilot-v0.4.9/
           cd build
-          zip -r DEMAC-WhatsApp-AI-Copilot-v0.4.8.zip DEMAC-WhatsApp-AI-Copilot-v0.4.8
+          zip -r DEMAC-WhatsApp-AI-Copilot-v0.4.9.zip DEMAC-WhatsApp-AI-Copilot-v0.4.9
 
       - name: Upload ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: DEMAC-WhatsApp-AI-Copilot-v0.4.8
-          path: build/DEMAC-WhatsApp-AI-Copilot-v0.4.8.zip
+          name: DEMAC-WhatsApp-AI-Copilot-v0.4.9
+          path: build/DEMAC-WhatsApp-AI-Copilot-v0.4.9.zip
           if-no-files-found: error
           retention-days: 30
