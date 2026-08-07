@@ -1,61 +1,50 @@
-# DEMAC WhatsApp AI Copilot — v0.4.4
+# DEMAC WhatsApp AI Copilot — v0.4.6
 
-Extensión privada Manifest V3 para asistir a Operaciones dentro de WhatsApp Web. El envío permanece supervisado: el Copilot prepara la respuesta y el operador decide si la inserta o la envía.
+Extensión privada para asistir a Operaciones dentro de WhatsApp Web. El operador conserva la aprobación final del mensaje.
 
-## Correcciones de v0.4.4
+## Envío seguro
 
-- Inserta saltos de línea reales en el compositor de WhatsApp; ya no convierte el mensaje en una sola línea.
-- Mantiene líneas en blanco y negritas compatibles con WhatsApp.
-- Guarda memoria estructurada por conversación para no volver a preguntar tipo de trabajo, cantidad, dirección, fecha o restricción horaria ya confirmados.
-- La memoria se identifica por el número técnico de WhatsApp cuando está disponible y, como respaldo, por el título del chat.
-- Trata expresiones como `después de las 10`, `a partir de las 10`, `antes de las 10` y sus equivalentes en inglés como restricciones obligatorias.
-- Vuelve a consultar la agenda completa del ERP cuando cambia la disponibilidad del cliente.
-- Descarta cualquier opción que no cumpla la restricción antes de elegir los mejores cupos.
-- Mantiene un máximo de dos opciones visibles, priorizando fechas distintas cuando sea posible.
+- La extensión solamente pulsa un control verificado como **Send / Enviar**.
+- El micrófono, grabación de voz y controles alternativos quedan excluidos.
+- Si WhatsApp no muestra un botón de envío verificable, el mensaje permanece en el campo y la extensión no pulsa ningún otro control.
 
-## Actualizar la extensión
+## Inserción verificada
 
-1. Reemplaza el contenido de la carpeta cargada en Chrome con todos los archivos de `extensions/demac-whatsapp-ai-copilot` de esta versión. Es importante incluir `conversation-memory.mjs`.
-2. Confirma que el archivo antiguo `content-multiline.js` no exista.
-3. Abre `chrome://extensions`.
-4. Pulsa **Recargar** en DEMAC WhatsApp AI Copilot.
-5. Cierra completamente WhatsApp Web y vuelve a abrirlo.
-6. Confirma `Panel 0.4.4 · lector 0.4.4`.
+La extensión prueba varias estrategias compatibles con el editor de WhatsApp y verifica que el texto realmente apareció antes de continuar:
 
-## Desplegar el backend
+1. pegado de texto plano;
+2. inserción HTML con saltos reales;
+3. inserción nativa por líneas;
+4. actualización controlada del campo editable con eventos de entrada.
 
-La corrección de las restricciones horarias requiere desplegar la función actualizada:
+Si el borrador contiene saltos y WhatsApp lo convierte en una sola línea, la inserción se considera fallida y no se intenta enviar.
 
-```bash
-firebase deploy --only functions:whatsappCopilotDraft
+## Router unificado del ERP
+
+La extensión utiliza un solo endpoint: `whatsappCopilotDraft`. El backend decide primero si el último mensaje es una pregunta directa o una coordinación de cita.
+
+Una frase como:
+
+```text
+Yo puedo después de las 10, pero ¿cuánto tiempo durará el servicio?
 ```
 
-## Funciones principales
+se responde como pregunta de duración y no vuelve a ofrecer horarios.
 
-- Consulta disponibilidad real del ERP.
-- Optimiza rutas por van, sector y regreso progresivo hacia Santa Cruz.
-- Respeta capacidad, duración, vans, técnicos, ausencias, cierres y tardes libres.
-- Revalida la disponibilidad antes de crear la cita.
-- Mantiene el envío supervisado.
-- Responde en español, inglés o Papiamento di Aruba.
+## Base de conocimiento por reglas
 
-## Validación técnica
+El ERP incorpora una sección de administración llamada **Reglas del WhatsApp Copilot**. Cada regla puede guardar intención, frases de ejemplo, prioridad, estado, fuente dinámica del ERP y respuestas aprobadas en español, inglés y Papiamento Aruba.
 
-Desde la carpeta de la extensión:
+La IA solamente clasifica la pregunta y selecciona una regla válida. La respuesta sale del ERP o de un texto previamente aprobado.
 
-```bash
-node --check background.js
-node --check conversation-memory.mjs
-node --check composer-linebreaks.js
-node --check content.js
-node --check sidepanel.js
-node --check appointment-guard.js
-node --check options.js
-node --test conversation-memory.test.mjs
-```
+Las reglas se guardan en `whatsappKnowledgeRules`.
 
-Desde `functions`:
+## Despliegue
 
 ```bash
-npm run test:whatsapp-copilot
+firebase deploy --only functions:whatsappCopilotDraft,functions:whatsappCopilotKnowledge --project demac-corporation
+npm run patch:all
+firebase deploy --only firestore:rules --project demac-corporation
 ```
+
+Después instala la extensión v0.4.6, recárgala en `chrome://extensions`, cierra WhatsApp Web y vuelve a abrirlo. Debe mostrar `Panel 0.4.6 · lector 0.4.6`.
