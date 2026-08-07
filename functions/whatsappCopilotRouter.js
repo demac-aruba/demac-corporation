@@ -10,6 +10,7 @@ const {
   latestCustomerText,
 } = require("./whatsappCopilotConversationPolicy");
 
+// COPILOT_CONVERSATION_RULES_V15_ROUTER: runtime policy is already materialized.
 const COPILOT_FUNCTION_NAME = "whatsappCopilotDraftV17";
 const COPILOT_RUNTIME_SOURCE = "openai+erp-unified-router-v17";
 const COPILOT_RUNTIME_VERSION = 17;
