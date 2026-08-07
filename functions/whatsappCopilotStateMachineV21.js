@@ -69,7 +69,7 @@ async function findCurrentOfferV21(conversation) {
 function isDeicticConfirmation(value) {
   const text = normalizeText(value);
   if (!text || text.length > 140) return false;
-  return /\b(esa cita|ese horario|ese cupo|esa opcion|esa opción|esa hora|dame esa|pon esa|reserva esa|confirmame esa|confirma esa|si esa|sí esa|esa esta bien|esa está bien|me quedo con esa)\b/.test(text);
+  return /\b(esa cita|ese horario|ese cupo|esa opcion|esa hora|dame esa|pon esa|reserva esa|confirmame esa|confirma esa|si esa|esa esta bien|me quedo con esa)\b/.test(text);
 }
 
 function isExplicitSelectionTurnV21(value) {
@@ -194,7 +194,7 @@ async function handleStatefulSchedulingV21(rawBody) {
 }
 
 function isSchedulingControlTurnV21(value) {
-  return flow20.isSchedulingControlTurn(value) || isExplicitSelectionTurnV21(value);
+  return flow19.isSchedulingControlTurn(value) || isExplicitSelectionTurnV21(value);
 }
 
 module.exports = {
