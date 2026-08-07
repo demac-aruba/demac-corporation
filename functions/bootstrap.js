@@ -1,5 +1,6 @@
 require("./whatsappCopilotCorrections");
 require("./whatsappCopilotPresentation");
+require("./whatsappCopilotCompanyRules");
 
 module.exports = {
   ...require("./index"),
