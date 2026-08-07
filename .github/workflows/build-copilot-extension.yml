@@ -35,12 +35,14 @@ jobs:
         run: |
           node --check background.js
           node --check conversation-memory.mjs
+          node --check auto-test-mode.mjs
           node --check content.js
           node --check composer-controller.js
           node --check sidepanel.js
+          node --check auto-test-panel.js
           node --check appointment-guard.js
           node --check options.js
-          node --test conversation-memory.test.mjs
+          node --test conversation-memory.test.mjs auto-test-mode.test.mjs
 
       - name: Validate unified ERP routing
         working-directory: functions
@@ -55,15 +57,15 @@ jobs:
 
       - name: Build ZIP
         run: |
-          mkdir -p build/DEMAC-WhatsApp-AI-Copilot-v0.4.6
-          cp -R extensions/demac-whatsapp-ai-copilot/. build/DEMAC-WhatsApp-AI-Copilot-v0.4.6/
+          mkdir -p build/DEMAC-WhatsApp-AI-Copilot-v0.4.7
+          cp -R extensions/demac-whatsapp-ai-copilot/. build/DEMAC-WhatsApp-AI-Copilot-v0.4.7/
           cd build
-          zip -r DEMAC-WhatsApp-AI-Copilot-v0.4.6.zip DEMAC-WhatsApp-AI-Copilot-v0.4.6
+          zip -r DEMAC-WhatsApp-AI-Copilot-v0.4.7.zip DEMAC-WhatsApp-AI-Copilot-v0.4.7
 
       - name: Upload ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: DEMAC-WhatsApp-AI-Copilot-v0.4.6
-          path: build/DEMAC-WhatsApp-AI-Copilot-v0.4.6.zip
+          name: DEMAC-WhatsApp-AI-Copilot-v0.4.7
+          path: build/DEMAC-WhatsApp-AI-Copilot-v0.4.7.zip
           if-no-files-found: error
           retention-days: 30
