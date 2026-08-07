@@ -44,9 +44,9 @@ function isSimpleAffirmation(value) {
 function optionOrdinalFromTurn(value) {
   const text = normalizeText(value);
   if (!text) return 0;
-  if (/\b(opcion|option)?\s*1\b/.test(text) || /\b(la|el)?\s*(primera|primer|first)\b/.test(text)) return 1;
-  if (/\b(opcion|option)?\s*2\b/.test(text) || /\b(la|el)?\s*(segunda|segundo|second)\b/.test(text)) return 2;
-  if (/\b(opcion|option)?\s*3\b/.test(text) || /\b(la|el)?\s*(tercera|tercer|third)\b/.test(text)) return 3;
+  if (/\b(opcion|option)\s*(numero\s*)?1\b/.test(text) || /\b(la|el)?\s*(primera|primer|first)\b/.test(text)) return 1;
+  if (/\b(opcion|option)\s*(numero\s*)?2\b/.test(text) || /\b(la|el)?\s*(segunda|segundo|second)\b/.test(text)) return 2;
+  if (/\b(opcion|option)\s*(numero\s*)?3\b/.test(text) || /\b(la|el)?\s*(tercera|tercer|third)\b/.test(text)) return 3;
   return 0;
 }
 
@@ -78,18 +78,9 @@ function applyOfferSelection(result, option, ordinal) {
 }
 
 function inheritOfferContextV20(analysis, offer, latest) {
-  let result = baseInheritOfferContext(analysis, offer, latest);
+  const result = baseInheritOfferContext(analysis, offer, latest);
   const options = Array.isArray(offer?.options) ? offer.options.filter(Boolean) : [];
   if (!options.length || result.customerConfirmedAppointment) return result;
-
-  const ordinal = optionOrdinalFromTurn(latest);
-  if (ordinal >= 1 && ordinal <= options.length) {
-    return applyOfferSelection(result, options[ordinal - 1], ordinal);
-  }
-
-  if (isSimpleAffirmation(latest) && options.length === 1) {
-    return applyOfferSelection(result, options[0], 1);
-  }
 
   if (isBookingCommandV20(latest)) {
     const requestedTime = flow.contextualTime(latest, offer);
@@ -99,6 +90,15 @@ function inheritOfferContextV20(analysis, offer, latest) {
       const fuzzy = flow.findFuzzyOption(options, requestedDate, requestedTime);
       if (fuzzy) return applyOfferSelection(result, fuzzy.option, fuzzy.index + 1);
     }
+  }
+
+  const ordinal = optionOrdinalFromTurn(latest);
+  if (ordinal >= 1 && ordinal <= options.length) {
+    return applyOfferSelection(result, options[ordinal - 1], ordinal);
+  }
+
+  if (isSimpleAffirmation(latest) && options.length === 1) {
+    return applyOfferSelection(result, options[0], 1);
   }
 
   return result;
