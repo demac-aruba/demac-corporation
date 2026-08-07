@@ -2,9 +2,12 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const router = require("./whatsappCopilotRouter");
+const bootstrap = require("./bootstrap");
 
-test("exports the legacy and V17 endpoints as distinct Cloud Function objects", () => {
+test("exports one public whatsappCopilotDraft endpoint from the V18 orchestrator", () => {
   assert.equal(typeof router.whatsappCopilotDraft, "function");
-  assert.equal(typeof router.whatsappCopilotDraftV17, "function");
-  assert.notStrictEqual(router.whatsappCopilotDraft, router.whatsappCopilotDraftV17);
+  assert.equal(router.RUNTIME.version, 18);
+  assert.equal(router.RUNTIME.functionName, "whatsappCopilotDraft");
+  assert.strictEqual(bootstrap.whatsappCopilotDraft, router.whatsappCopilotDraft);
+  assert.equal(router.whatsappCopilotDraftV17, undefined);
 });
