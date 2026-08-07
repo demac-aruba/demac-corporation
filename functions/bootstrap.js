@@ -3,6 +3,7 @@ require("./whatsappCopilotPresentation");
 require("./whatsappCopilotCompanyRules");
 require("./whatsappCopilotServiceRules");
 require("./whatsappCopilotFlowV19");
+require("./whatsappCopilotFlowV19Fix");
 require("./whatsappCopilotSchedulingRuntimeV19");
 
 const core = require("./index");
