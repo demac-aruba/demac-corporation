@@ -1,4 +1,4 @@
-# DEMAC WhatsApp AI Copilot — v0.4.7
+# DEMAC WhatsApp AI Copilot — v0.4.9
 
 Extensión privada para asistir a Operaciones dentro de WhatsApp Web.
 
@@ -8,21 +8,21 @@ Fuera de pruebas, el flujo continúa supervisado: el operador genera, revisa y d
 
 ## Modo automático de prueba
 
-La v0.4.7 añade un control en el panel llamado **Respuesta automática**.
+La v0.4.9 mueve el control del modo automático al propio panel lateral para evitar depender de comandos nuevos del service worker de Chrome durante las pruebas.
 
 - Se activa manualmente desde el chat de prueba abierto.
 - Queda vinculado exclusivamente a esa conversación, usando el identificador técnico de WhatsApp cuando está disponible.
 - No responde a otros chats aunque el usuario navegue a ellos.
 - Solo reacciona cuando el mensaje más reciente es realmente entrante.
-- Espera brevemente para agrupar mensajes consecutivos del cliente antes de generar la respuesta.
-- Genera mediante OpenAI + reglas/agenda del ERP y envía automáticamente usando únicamente el botón **Send / Enviar** verificado.
+- El panel consulta el chat periódicamente y espera aproximadamente 1.6 segundos para agrupar mensajes consecutivos antes de generar la respuesta.
+- Genera mediante OpenAI + reglas/agenda del ERP y envía automáticamente usando el mismo controlador seguro del compositor.
 - Si llega otro mensaje mientras la IA está pensando, descarta el borrador anterior y responde al turno más reciente.
 - Si el backend exige revisión humana, no envía automáticamente.
 - Si el cliente selecciona una cita, revalida el cupo y crea la cita real en el ERP antes de mandar la confirmación.
-- El modo se guarda solamente en `chrome.storage.session`: se desactiva al cerrar Chrome y también expira después de 8 horas.
-- Se deduplican mensajes para impedir respuestas dobles.
+- Se deduplican turnos para impedir respuestas dobles.
+- El modo funciona únicamente mientras el panel de Copilot permanece abierto y expira después de 8 horas.
 
-Este modo está destinado exclusivamente a números/controlados de prueba. Para clientes reales debe mantenerse desactivado hasta completar la validación.
+Este modo está destinado exclusivamente a números controlados de prueba. Para clientes reales debe mantenerse desactivado hasta completar la validación.
 
 ## Envío seguro
 
@@ -47,6 +47,6 @@ La extensión utiliza `whatsappCopilotDraft`. El backend decide primero si el ú
 
 ## Instalación
 
-Instala la carpeta completa de la extensión v0.4.7, recárgala en `chrome://extensions`, cierra WhatsApp Web y vuelve a abrirlo. Debe mostrar `Panel 0.4.7 · lector 0.4.7`.
+Instala la carpeta completa de la extensión v0.4.9, recárgala en `chrome://extensions`, cierra WhatsApp Web y vuelve a abrirlo. Debe mostrar `Panel 0.4.9 · lector 0.4.9`.
 
 Esta versión no requiere un nuevo despliegue de Firebase si el backend de reglas unificadas ya fue desplegado.
