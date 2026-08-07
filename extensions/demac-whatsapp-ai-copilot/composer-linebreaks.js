@@ -1,5 +1,5 @@
 (() => {
-  const PATCH_FLAG = "__DEMAC_MULTILINE_EXEC_COMMAND_V044__";
+  const PATCH_FLAG = "__DEMAC_MULTILINE_EXEC_COMMAND_V045__";
   if (Document.prototype[PATCH_FLAG]) return;
 
   const nativeExecCommand = Document.prototype.execCommand;
@@ -11,31 +11,18 @@
       .replace(/\r/g, "\n");
   }
 
-  function insertBreak(documentRef) {
-    try {
-      if (nativeExecCommand.call(documentRef, "insertLineBreak", false, null)) return true;
-    } catch (_error) {
-      // Continue with the compatible HTML fallback.
-    }
-    try {
-      return nativeExecCommand.call(documentRef, "insertHTML", false, "<br>");
-    } catch (_error) {
-      return false;
-    }
+  function escapeHtml(value) {
+    return String(value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
   }
 
-  function insertMultiline(documentRef, showUi, value) {
+  function multilineHtml(value) {
     const lines = normalizeNewlines(value).split("\n");
-    let inserted = nativeExecCommand.call(documentRef, "insertText", showUi, lines[0]);
-
-    for (let index = 1; index < lines.length; index += 1) {
-      const breakInserted = insertBreak(documentRef);
-      if (!breakInserted) return false;
-      if (lines[index]) {
-        inserted = nativeExecCommand.call(documentRef, "insertText", false, lines[index]) && inserted;
-      }
-    }
-    return inserted;
+    return lines.map((line) => `<div>${line ? escapeHtml(line) : "<br>"}</div>`).join("");
   }
 
   Object.defineProperty(Document.prototype, PATCH_FLAG, {
@@ -49,7 +36,17 @@
     const normalizedCommand = String(command || "").toLowerCase();
 
     if (normalizedCommand === "inserttext" && typeof value === "string" && /[\r\n]/.test(value)) {
-      return insertMultiline(this, showUi, value);
+      try {
+        const inserted = nativeExecCommand.call(
+          this,
+          "insertHTML",
+          showUi,
+          multilineHtml(value),
+        );
+        if (inserted) return true;
+      } catch (_error) {
+        // Fall back to the browser's native plain-text insertion below.
+      }
     }
 
     return nativeExecCommand.call(this, command, showUi, value);
