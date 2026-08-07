@@ -66,7 +66,8 @@ function patchCompanyRulesEngine() {
 
 function patchKnowledge() {
   let source = fs.readFileSync(files.knowledge, 'utf8');
-  if (source.includes(`${marker}_KNOWLEDGE`)) return;
+  // The V18 knowledge engine already contains these fixes plus stricter current-turn routing.
+  if (source.includes(`${marker}_KNOWLEDGE`) || source.includes('erp-knowledge-rules-v18')) return;
   const original = source;
 
   const coreImport = `const {\n  cleanText,\n  normalizeText,\n} = require("./whatsappCopilotSchedulingCore");`;
@@ -155,7 +156,8 @@ function patchKnowledge() {
 
 function patchRouter() {
   let source = fs.readFileSync(files.router, 'utf8');
-  if (source.includes(`${marker}_ROUTER`)) return;
+  // V18 is the authoritative router and must never be rewritten by V15.
+  if (source.includes(`${marker}_ROUTER`) || source.includes('openai+erp-conversation-orchestrator-v18')) return;
   const original = source;
 
   source = replaceRequired(

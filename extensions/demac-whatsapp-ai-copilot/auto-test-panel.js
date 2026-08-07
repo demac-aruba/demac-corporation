@@ -3,6 +3,7 @@
   const AUTO_TEST_TTL_MS = 8 * 60 * 60 * 1000;
   const POLL_MS = 1100;
   const SETTLE_MS = 1600;
+  const EXPECTED_RUNTIME_VERSION = 18;
 
   let currentStatus = { enabled: false };
   let pollTimer = null;
@@ -102,8 +103,25 @@
     if (detail) {
       const expires = expiryLabel(currentStatus.expiresAt);
       detail.textContent = enabled
-        ? `El panel está vigilando únicamente este chat y generará + enviará cada respuesta nueva.${expires ? ` Se desactiva cerca de ${expires}, al cerrar el panel o al recargar la extensión.` : ""}`
-        : "Generará y enviará las respuestas automáticamente. Si el cliente confirma una cita, también revalidará y creará la orden real en el ERP.";
+        ? `Motor único de pruebas conectado al orquestador V${EXPECTED_RUNTIME_VERSION}. Generará + enviará cada respuesta nueva.${expires ? ` Se desactiva cerca de ${expires}, al cerrar el panel o al recargar la extensión.` : ""}`
+        : `Antes de activarse verificará que Firebase esté ejecutando el orquestador conversacional V${EXPECTED_RUNTIME_VERSION}.`;
+    }
+  }
+
+  function runtimeLabel(result) {
+    const runtime = result?.runtime;
+    if (!runtime) return "Automático · runtime sin identificar";
+    return `Automático · ${runtime.functionName || "Copilot"} · V${runtime.version || "?"}`;
+  }
+
+  function assertExpectedRuntime(result) {
+    const version = Number(result?.runtime?.version || 0);
+    const functionName = String(result?.runtime?.functionName || "");
+    if (version !== EXPECTED_RUNTIME_VERSION || functionName !== "whatsappCopilotDraft") {
+      throw new Error(
+        `Respuesta bloqueada: Firebase no confirmó el orquestador V${EXPECTED_RUNTIME_VERSION}. `
+        + `Runtime recibido: ${functionName || "sin nombre"} V${version || "?"}.`,
+      );
     }
   }
 
@@ -113,7 +131,7 @@
       byId("draftText").value = draft;
       byId("draftText").dispatchEvent(new Event("input", { bubbles: true }));
     }
-    if (draft && byId("draftSource")) byId("draftSource").textContent = "Automático · OpenAI + ERP";
+    if (draft && byId("draftSource")) byId("draftSource").textContent = runtimeLabel(result);
     if (result?.warning) setWarning(result.warning);
   }
 
@@ -160,6 +178,7 @@
       if (!fingerprint || fingerprint !== expectedFingerprint || fingerprint === lastHandledFingerprint) return;
 
       let result = await backgroundRequest("GENERATE_DRAFT", { context });
+      assertExpectedRuntime(result);
       showAutomaticDraft(result);
       if (requiresHumanReview(result)) {
         lastHandledFingerprint = fingerprint;
@@ -170,6 +189,7 @@
       if (result?.metadata?.nextAction === "reserve_erp_appointment") {
         setMainStatus("El cliente seleccionó una cita. Revalidando cupo y creando la orden en el ERP…", "working");
         result = await backgroundRequest("CONFIRM_APPOINTMENT", { context });
+        assertExpectedRuntime(result);
         showAutomaticDraft(result);
         if (requiresHumanReview(result) || result?.metadata?.nextAction === "reserve_erp_appointment") {
           lastHandledFingerprint = fingerprint;
@@ -246,13 +266,23 @@
         return;
       }
 
+      const backend = await backgroundRequest("TEST_BACKEND");
+      const runtimeVersion = Number(backend?.conversationPolicyVersion || 0);
+      if (runtimeVersion !== EXPECTED_RUNTIME_VERSION || backend?.functionName !== "whatsappCopilotDraft") {
+        throw new Error(
+          `No se activó el modo automático: Firebase debe reportar whatsappCopilotDraft V${EXPECTED_RUNTIME_VERSION}. `
+          + `Ahora reporta ${backend?.functionName || "sin nombre"} V${runtimeVersion || "?"}.`,
+        );
+      }
+
       const context = await backgroundRequest("GET_ACTIVE_CONTEXT");
       const key = conversationKey(context);
       if (!key || key === "chat:unknown") throw new Error("No se pudo identificar de forma segura la conversación abierta.");
       const chatTitle = String(context?.chatTitle || "esta conversación").trim();
       const accepted = window.confirm(
         `¿Activar respuestas automáticas únicamente para ${chatTitle}?\n\n`
-        + "La IA generará y enviará mensajes sin confirmación manual. Si durante la prueba se confirma una cita, se puede crear una orden REAL en la agenda del ERP.\n\n"
+        + `Firebase confirmó el orquestador conversacional V${EXPECTED_RUNTIME_VERSION}. La IA generará y enviará mensajes sin confirmación manual. `
+        + "Si durante la prueba se confirma una cita, se puede crear una orden REAL en la agenda del ERP.\n\n"
         + "El modo funcionará mientras este panel permanezca abierto y expirará después de 8 horas.",
       );
       if (!accepted) return;
@@ -270,7 +300,7 @@
         expiresAt: expiresAt.toISOString(),
       });
       setWarning("");
-      setMainStatus(`Modo automático activo para ${chatTitle}. Esperando el próximo mensaje del cliente…`, "ready");
+      setMainStatus(`Modo automático V${EXPECTED_RUNTIME_VERSION} activo para ${chatTitle}. Esperando el próximo mensaje del cliente…`, "ready");
       stopTimers();
       pollTimer = window.setInterval(() => void pollForNewInbound(), POLL_MS);
     } catch (error) {

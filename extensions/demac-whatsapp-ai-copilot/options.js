@@ -7,6 +7,7 @@ const DEFAULT_SETTINGS = {
   languageMode: "auto",
 };
 
+const EXPECTED_RUNTIME_VERSION = 18;
 const form = document.querySelector("#settingsForm");
 const saveStatus = document.querySelector("#saveStatus");
 const testBackendButton = document.querySelector("#testBackendButton");
@@ -39,7 +40,7 @@ async function loadSettings() {
     if (input) input.value = value;
   }
   backendStatus.textContent = settings.backendToken
-    ? "Token guardado. Pulsa “Probar OpenAI + ERP” para confirmar OpenAI, agenda y Papiamento di Aruba."
+    ? `Token guardado. Pulsa “Probar OpenAI + ERP” para confirmar que Firebase ejecuta el orquestador V${EXPECTED_RUNTIME_VERSION}.`
     : "El backend todavía no está activado. El modo local puede recopilar datos, pero no ofrece ni confirma horarios.";
 }
 
@@ -51,17 +52,27 @@ form.addEventListener("submit", async (event) => {
 testBackendButton.addEventListener("click", async () => {
   testBackendButton.disabled = true;
   backendNotice.dataset.kind = "working";
-  backendStatus.textContent = "Comprobando Firebase, OpenAI, agenda ERP y vocabulario oficial de Papiamento…";
+  backendStatus.textContent = "Comprobando Firebase, OpenAI, agenda ERP y versión del orquestador conversacional…";
   try {
     await saveSettings();
     const response = await chrome.runtime.sendMessage({ type: "TEST_BACKEND" });
     if (!response?.ok) throw new Error(response?.error || "No se pudo verificar el backend.");
+
+    const runtimeVersion = Number(response.result?.conversationPolicyVersion || 0);
+    const functionName = String(response.result?.functionName || "");
+    if (runtimeVersion !== EXPECTED_RUNTIME_VERSION || functionName !== "whatsappCopilotDraft") {
+      throw new Error(
+        `Backend desactualizado. Se esperaba whatsappCopilotDraft V${EXPECTED_RUNTIME_VERSION}, `
+        + `pero Firebase reportó ${functionName || "sin nombre"} V${runtimeVersion || "?"}.`,
+      );
+    }
+
     const vocabulary = response.result?.papiamentoVocabulary;
     const vocabularyText = vocabulary?.wordCount
       ? ` Vocabulario de Papiamento: ${Number(vocabulary.wordCount).toLocaleString("es-AW")} palabras.`
       : "";
     backendNotice.dataset.kind = "ready";
-    backendStatus.textContent = `OpenAI y agenda ERP conectados. Modelo activo: ${response.result?.model || "OpenAI"}.${vocabularyText}`;
+    backendStatus.textContent = `Conectado correctamente: ${functionName} · Orquestador V${runtimeVersion} · ${response.result?.model || "OpenAI"}.${vocabularyText}`;
   } catch (error) {
     backendNotice.dataset.kind = "error";
     backendStatus.textContent = error?.message || String(error);

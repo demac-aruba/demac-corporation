@@ -98,7 +98,9 @@ function patchScheduling() {
 function patchKnowledge() {
   let source = fs.readFileSync(knowledgePath, 'utf8');
   const knowledgeMarker = `${marker}_KNOWLEDGE`;
-  if (source.includes(knowledgeMarker)) return;
+  // V18 already reads the operational/pricing settings directly and must not be
+  // rewritten by this historical V14 migration patch.
+  if (source.includes(knowledgeMarker) || source.includes('erp-knowledge-rules-v18')) return;
 
   source = replaceRequired(
     source,

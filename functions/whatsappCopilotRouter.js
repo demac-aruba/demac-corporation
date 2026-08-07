@@ -2,7 +2,10 @@ const crypto = require("node:crypto");
 const { defineSecret } = require("firebase-functions/params");
 const { onRequest } = require("firebase-functions/v2/https");
 const { whatsappCopilotDraft: schedulingDraft } = require("./whatsappCopilot");
-const { resolveKnowledgeReply } = require("./whatsappCopilotKnowledge");
+const {
+  detectQuestionKind,
+  resolveKnowledgeReply,
+} = require("./whatsappCopilotKnowledge");
 const {
   formatNaturalCustomerReply,
   immediateReply,
@@ -10,9 +13,13 @@ const {
   latestCustomerText,
 } = require("./whatsappCopilotConversationPolicy");
 
-// COPILOT_CONVERSATION_RULES_V15_ROUTER: runtime policy is already materialized.
 const extensionToken = defineSecret("WHATSAPP_COPILOT_EXTENSION_TOKEN");
 const openAiApiKey = defineSecret("OPENAI_API_KEY");
+const RUNTIME = {
+  functionName: "whatsappCopilotDraft",
+  source: "openai+erp-conversation-orchestrator-v18",
+  version: 18,
+};
 const FUNCTION_OPTIONS = {
   region: "us-central1",
   memory: "512MiB",
@@ -41,11 +48,7 @@ function safeEqual(left, right) {
 }
 
 function schedulingCapture() {
-  const state = {
-    statusCode: 200,
-    body: undefined,
-    responseType: "json",
-  };
+  const state = { statusCode: 200, body: undefined, responseType: "json" };
   const capture = {
     set() { return capture; },
     status(code) {
@@ -73,108 +76,120 @@ async function runSchedulingDraft(request) {
   return state;
 }
 
-function runtimeMetadata(runtime) {
-  return {
-    functionName: runtime.functionName,
-    source: runtime.source,
-    version: runtime.version,
-  };
+function runtimeMetadata(extra = {}) {
+  return { ...RUNTIME, ...extra };
 }
 
-function sendCaptured(response, captured, runtime) {
+function sendCaptured(response, captured, route) {
   const body = captured.body;
   if (body && typeof body === "object" && typeof body.draft === "string") {
     body.draft = formatNaturalCustomerReply(body.draft, body?.metadata?.language || "es");
   }
-  if (body && typeof body === "object") body.runtime = runtimeMetadata(runtime);
+  if (body && typeof body === "object") {
+    body.runtime = runtimeMetadata({ route });
+    body.metadata = {
+      ...(body.metadata || {}),
+      currentTurnPolicy: "authoritative-v18",
+      orchestratorRoute: route,
+    };
+  }
   const outgoing = response.status(captured.statusCode);
   if (captured.responseType === "send") outgoing.send(body);
   else outgoing.json(body);
 }
 
-function createCopilotEndpoint(runtime) {
-  // Important: every exported Firebase function must get its own onRequest object.
-  // Aliasing one onRequest object under two export names makes Firebase discover
-  // only one endpoint, which caused `No function matches the filter` for V17.
-  return onRequest(FUNCTION_OPTIONS, async (request, response) => {
-    setCors(request, response);
-    if (request.method === "OPTIONS") {
-      response.status(204).send("");
-      return;
-    }
-    if (request.method !== "POST") {
-      response.set("Allow", "POST, OPTIONS");
-      response.status(405).json({ error: "Method not allowed" });
-      return;
-    }
-    if (!safeEqual(bearerToken(request), extensionToken.value())) {
-      response.status(401).json({ error: "Token de extensión inválido o ausente." });
+exports.whatsappCopilotDraft = onRequest(FUNCTION_OPTIONS, async (request, response) => {
+  setCors(request, response);
+  if (request.method === "OPTIONS") {
+    response.status(204).send("");
+    return;
+  }
+  if (request.method !== "POST") {
+    response.set("Allow", "POST, OPTIONS");
+    response.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  if (!safeEqual(bearerToken(request), extensionToken.value())) {
+    response.status(401).json({ error: "Token de extensión inválido o ausente." });
+    return;
+  }
+
+  if (request.body?.mode === "health") {
+    response.status(200).json({
+      ok: true,
+      source: RUNTIME.source,
+      model: "gpt-5-mini",
+      openAiConfigured: Boolean(openAiApiKey.value()),
+      erpSchedulingConfigured: true,
+      erpKnowledgeConfigured: true,
+      conversationPolicyVersion: RUNTIME.version,
+      functionName: RUNTIME.functionName,
+      currentTurnPolicy: "authoritative-v18",
+    });
+    return;
+  }
+
+  try {
+    const conversation = request.body?.conversation || {};
+    const latest = latestCustomerText(conversation);
+
+    // 1) Deterministic current-turn handling always wins over memory/history.
+    const immediate = immediateReply({
+      conversation,
+      languageMode: request.body?.languageMode || "auto",
+    });
+    if (immediate) {
+      immediate.runtime = runtimeMetadata({ route: "immediate-current-turn" });
+      immediate.metadata = {
+        ...(immediate.metadata || {}),
+        currentCustomerTurn: latest,
+        orchestratorRoute: "immediate-current-turn",
+      };
+      response.status(200).json(immediate);
       return;
     }
 
-    if (request.body?.mode === "health") {
-      response.status(200).json({
-        ok: true,
-        source: runtime.source,
-        model: "gpt-5-mini",
-        openAiConfigured: Boolean(openAiApiKey.value()),
-        erpSchedulingConfigured: true,
-        erpKnowledgeConfigured: true,
-        conversationPolicyVersion: runtime.version,
-        functionName: runtime.functionName,
+    // 2) Availability and appointment language can never be hijacked by an old FAQ.
+    if (isAvailabilityTurn(latest) || request.body?.commitAppointment === true) {
+      const captured = await runSchedulingDraft(request);
+      sendCaptured(response, captured, "schedule");
+      return;
+    }
+
+    // 3) FAQ rules are consulted only when the CURRENT turn explicitly asks that FAQ.
+    //    We intentionally do not classify arbitrary statements against all historical rules.
+    const questionKind = detectQuestionKind(latest);
+    if (questionKind) {
+      const knowledge = await resolveKnowledgeReply({
+        ...(request.body || {}),
+        questionKind,
       });
-      return;
-    }
-
-    try {
-      const conversation = request.body?.conversation || {};
-      const immediate = immediateReply({
-        conversation,
-        languageMode: request.body?.languageMode || "auto",
-      });
-      if (immediate) {
-        immediate.runtime = runtimeMetadata(runtime);
-        response.status(200).json(immediate);
-        return;
-      }
-
-      const latest = latestCustomerText(conversation);
-      if (isAvailabilityTurn(latest)) {
-        const captured = await runSchedulingDraft(request);
-        sendCaptured(response, captured, runtime);
-        return;
-      }
-
-      const knowledge = await resolveKnowledgeReply(request.body || {});
       if (knowledge.route === "knowledge") {
         knowledge.payload.draft = formatNaturalCustomerReply(
           knowledge.payload.draft,
           knowledge.payload?.metadata?.language || "es",
         );
-        knowledge.payload.runtime = runtimeMetadata(runtime);
+        knowledge.payload.runtime = runtimeMetadata({ route: `knowledge:${questionKind}` });
+        knowledge.payload.metadata = {
+          ...(knowledge.payload.metadata || {}),
+          currentCustomerTurn: latest,
+          currentTurnPolicy: "authoritative-v18",
+          orchestratorRoute: `knowledge:${questionKind}`,
+        };
         response.status(200).json(knowledge.payload);
         return;
       }
-
-      const captured = await runSchedulingDraft(request);
-      sendCaptured(response, captured, runtime);
-    } catch (error) {
-      response.status(500).json({
-        error: `No se pudo procesar el flujo unificado del Copilot: ${error?.message || error}`,
-        runtime: runtimeMetadata(runtime),
-      });
     }
-  });
-}
 
-exports.whatsappCopilotDraft = createCopilotEndpoint({
-  functionName: "whatsappCopilotDraft",
-  source: "openai+erp-unified-router-v17-compatible",
-  version: 17,
+    // 4) Ordinary conversation/intake continues through the scheduling/OpenAI engine.
+    const captured = await runSchedulingDraft(request);
+    sendCaptured(response, captured, "conversation-intake");
+  } catch (error) {
+    response.status(500).json({
+      error: `No se pudo procesar el flujo unificado del Copilot: ${error?.message || error}`,
+      runtime: runtimeMetadata({ route: "error" }),
+    });
+  }
 });
 
-exports.whatsappCopilotDraftV17 = createCopilotEndpoint({
-  functionName: "whatsappCopilotDraftV17",
-  source: "openai+erp-unified-router-v17",
-  version: 17,
-});
+module.exports.RUNTIME = RUNTIME;

@@ -10,6 +10,7 @@ on:
       - "functions/whatsappCopilotCompanyRules.test.js"
       - "functions/whatsappCopilotConversationPolicy.js"
       - "functions/whatsappCopilotConversationPolicy.test.js"
+      - "functions/whatsappCopilotRouterExports.test.js"
       - "functions/demacServicePricingRules.js"
       - "functions/demacServicePricingRules.test.js"
       - "functions/whatsappCopilotServiceRules.js"
@@ -21,7 +22,6 @@ on:
       - "src/screens/SettingsHubScreen.tsx"
       - "scripts/patchWhatsappKnowledgeSettingsV13.cjs"
       - "scripts/patchCompanyRulesV14.cjs"
-      - "scripts/patchCopilotConversationRulesV15.cjs"
       - "docs/DEMAC-company-rules-v1.md"
       - "package.json"
       - ".github/workflows/build-copilot-extension.yml"
@@ -45,15 +45,13 @@ jobs:
         run: |
           node --check background.js
           node --check conversation-memory.mjs
-          node --check auto-storage-shim.mjs
-          node --check auto-test-mode.mjs
           node --check content.js
           node --check composer-controller.js
           node --check sidepanel.js
           node --check auto-test-panel.js
           node --check appointment-guard.js
           node --check options.js
-          node --test conversation-memory.test.mjs auto-test-mode.test.mjs
+          node --test conversation-memory.test.mjs
 
       - name: Validate unified ERP routing
         working-directory: functions
@@ -70,17 +68,27 @@ jobs:
           node --check whatsappCopilot.js
           node --check bootstrap.js
 
+      - name: Verify V18 public runtime source
+        run: |
+          grep -q 'openai+erp-conversation-orchestrator-v18' functions/whatsappCopilotRouter.js
+          grep -q 'whatsappCopilotDraft: router.whatsappCopilotDraft' functions/bootstrap.js
+          grep -q '"version": "0.5.0"' extensions/demac-whatsapp-ai-copilot/manifest.json
+          if grep -q 'runAutoReply' extensions/demac-whatsapp-ai-copilot/background.js; then
+            echo "Legacy background auto-reply engine is still present" >&2
+            exit 1
+          fi
+
       - name: Build ZIP
         run: |
-          mkdir -p build/DEMAC-WhatsApp-AI-Copilot-v0.4.9
-          cp -R extensions/demac-whatsapp-ai-copilot/. build/DEMAC-WhatsApp-AI-Copilot-v0.4.9/
+          mkdir -p build/DEMAC-WhatsApp-AI-Copilot-v0.5.0
+          cp -R extensions/demac-whatsapp-ai-copilot/. build/DEMAC-WhatsApp-AI-Copilot-v0.5.0/
           cd build
-          zip -r DEMAC-WhatsApp-AI-Copilot-v0.4.9.zip DEMAC-WhatsApp-AI-Copilot-v0.4.9
+          zip -r DEMAC-WhatsApp-AI-Copilot-v0.5.0.zip DEMAC-WhatsApp-AI-Copilot-v0.5.0
 
       - name: Upload ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: DEMAC-WhatsApp-AI-Copilot-v0.4.9
-          path: build/DEMAC-WhatsApp-AI-Copilot-v0.4.9.zip
+          name: DEMAC-WhatsApp-AI-Copilot-v0.5.0
+          path: build/DEMAC-WhatsApp-AI-Copilot-v0.5.0.zip
           if-no-files-found: error
           retention-days: 30
