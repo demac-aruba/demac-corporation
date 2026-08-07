@@ -1,5 +1,6 @@
-const localArea = chrome.storage?.local;
-const nativeSessionArea = chrome.storage?.session;
+const chromeApi = globalThis.chrome;
+const localArea = chromeApi?.storage?.local;
+const nativeSessionArea = chromeApi?.storage?.session;
 
 function wrapMethod(nativeArea, name) {
   const nativeMethod = typeof nativeArea?.[name] === "function"
@@ -35,12 +36,12 @@ function replacementArea() {
 }
 
 function installStorageCompatibility() {
-  if (!chrome.storage || !localArea) return;
+  if (!chromeApi?.storage || !localArea) return;
   const replacement = replacementArea();
 
   if (!nativeSessionArea) {
     try {
-      Object.defineProperty(chrome.storage, "session", {
+      Object.defineProperty(chromeApi.storage, "session", {
         configurable: true,
         enumerable: true,
         value: replacement,
@@ -48,7 +49,7 @@ function installStorageCompatibility() {
       return;
     } catch (_error) {
       try {
-        chrome.storage.session = replacement;
+        chromeApi.storage.session = replacement;
         return;
       } catch (error) {
         console.warn("DEMAC Copilot could not install the session storage fallback.", error);
