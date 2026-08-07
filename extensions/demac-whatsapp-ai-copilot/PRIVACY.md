@@ -1,6 +1,6 @@
 # Privacidad — DEMAC WhatsApp AI Copilot
 
-## Alcance de la versión 0.4.7
+## Alcance de la versión 0.4.9
 
 - Opera únicamente en `https://web.whatsapp.com/`.
 - Lee solo los mensajes visibles del chat abierto.
@@ -15,13 +15,14 @@ Por defecto, el operador conserva el control de generación, inserción y envío
 
 ## Modo automático de prueba
 
-La versión 0.4.7 permite activar temporalmente respuestas automáticas para una sola conversación controlada de prueba.
+La versión 0.4.9 permite activar temporalmente respuestas automáticas para una sola conversación controlada de prueba.
 
 - La activación requiere una acción explícita del operador desde el chat abierto.
 - El modo queda vinculado exclusivamente al identificador de esa conversación.
 - No se utiliza para otros chats.
-- La configuración temporal se guarda en `chrome.storage.session`, por lo que se elimina al cerrar Chrome.
+- El estado automático vive en el panel lateral y deja de operar al cerrar o recargar ese panel.
 - Además, el modo expira automáticamente después de 8 horas.
+- El panel consulta periódicamente únicamente el chat abierto para detectar un nuevo mensaje entrante.
 - Si una respuesta requiere revisión humana, no se envía automáticamente.
 - Si el cliente de prueba confirma una cita, el sistema puede crear una orden real en el ERP después de revalidar disponibilidad; el panel advierte esto antes de activar el modo.
 - El envío automático conserva las mismas protecciones contra el micrófono: únicamente se pulsa un botón verificado explícitamente como **Send / Enviar**.
