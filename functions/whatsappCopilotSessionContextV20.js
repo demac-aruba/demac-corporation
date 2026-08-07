@@ -57,12 +57,16 @@ function addressFromText(value) {
 }
 
 function timePreferenceFromText(value) {
-  const constraint = parseTimeConstraint({ collectedInformation: {} }, value);
+  const raw = cleanText(value, 300);
+  const constraint = parseTimeConstraint({ collectedInformation: {} }, raw);
   if (["morning", "afternoon"].includes(constraint.kind)) return constraint.kind;
   if (constraint.kind && constraint.time) return `${constraint.kind} ${constraint.time}`;
-  const block = timeBlock(value);
+  const block = timeBlock(raw);
   if (block) return block;
-  return normalizeTime(value);
+  const normalized = normalizeText(raw);
+  const explicitClockLanguage = /\b(a las|a la|hora|am|pm|a m|p m|o clock|at)\b/.test(normalized)
+    || /\b\d{1,2}:\d{2}\b/.test(raw);
+  return explicitClockLanguage ? normalizeTime(raw) : "";
 }
 
 function rebuildSessionFacts(messages, today = arubaDateParts().date) {
