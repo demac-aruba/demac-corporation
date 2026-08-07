@@ -1,3 +1,8 @@
+require("./whatsappCopilotCorrections");
+require("./whatsappCopilotPresentation");
+require("./whatsappCopilotCompanyRules");
+require("./whatsappCopilotServiceRules");
+
 module.exports = {
   ...require("./index"),
   ...require("./appointmentNotifications"),
@@ -5,4 +10,6 @@ module.exports = {
   ...require("./voiceTranscription"),
   ...require("./professionalReportGeneration"),
   ...require("./whatsappCopilot"),
+  ...require("./whatsappCopilotKnowledge"),
+  ...require("./whatsappCopilotRouter"),
 };

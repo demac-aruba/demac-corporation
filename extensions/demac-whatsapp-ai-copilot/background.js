@@ -1,3 +1,8 @@
+import {
+  learnConversationMemory,
+  prepareConversationContext,
+} from "./conversation-memory.mjs";
+
 const BUILD_VERSION = chrome.runtime.getManifest().version;
 const DEFAULT_SETTINGS = {
   backendUrl: "https://us-central1-demac-corporation.cloudfunctions.net/whatsappCopilotDraft",
@@ -30,7 +35,7 @@ function backendConfiguration(settings) {
   const endpoint = String(settings.backendUrl ?? "").trim();
   const token = String(settings.backendToken ?? "").trim();
   if (!endpoint || !token) {
-    throw new Error("OpenAI y la agenda ERP todavía no están configurados. Abre Ajustes y agrega el token privado de Firebase.");
+    throw new Error("OpenAI y el ERP todavía no están configurados. Abre Ajustes y agrega el token privado de Firebase.");
   }
   return { endpoint, token };
 }
@@ -56,19 +61,38 @@ async function backendRequest(settings, body) {
 }
 
 async function callBackend(context, settings, extra = {}) {
+  let prepared = { context, key: "", facts: {} };
+  try {
+    prepared = await prepareConversationContext(context, chrome.storage.local);
+  } catch (error) {
+    console.warn("DEMAC Copilot could not prepare conversation memory.", error);
+  }
+
   const data = await backendRequest(settings, {
     channel: "whatsapp-web-copilot",
     company: settings.companyName,
     operator: settings.operatorName,
     languageMode: settings.languageMode,
-    conversation: context,
+    conversation: prepared.context,
     ...extra,
   });
+
+  try {
+    await learnConversationMemory(
+      prepared.key,
+      prepared.facts,
+      data?.metadata,
+      chrome.storage.local,
+    );
+  } catch (error) {
+    console.warn("DEMAC Copilot could not update conversation memory.", error);
+  }
+
   const text = String(data?.draft ?? data?.message ?? "").trim();
   if (!text) throw new Error("El backend no devolvió una respuesta para revisar.");
   return {
     text,
-    source: data?.source ?? "openai",
+    source: data?.source ?? "openai+erp",
     warning: data?.warning ?? "",
     metadata: data?.metadata ?? null,
   };
@@ -79,14 +103,15 @@ async function testBackend(settings) {
   if (!data?.ok || !data?.openAiConfigured) {
     throw new Error("Firebase respondió, pero la clave de OpenAI no está disponible.");
   }
-  if (!data?.erpSchedulingConfigured) {
-    throw new Error("OpenAI está conectado, pero la consulta de agenda ERP no está activada.");
+  if (!data?.erpSchedulingConfigured || !data?.erpKnowledgeConfigured) {
+    throw new Error("OpenAI está conectado, pero la agenda o la base de conocimiento del ERP no están activadas.");
   }
   return {
     connected: true,
     model: data.model || "OpenAI",
     source: data.source || "openai+erp",
     erpSchedulingConfigured: true,
+    erpKnowledgeConfigured: true,
     papiamentoVocabulary: data.papiamentoVocabulary ?? null,
   };
 }

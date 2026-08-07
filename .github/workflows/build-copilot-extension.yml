@@ -1,0 +1,69 @@
+name: Build DEMAC Copilot Extension
+
+on:
+  pull_request:
+    paths:
+      - "extensions/demac-whatsapp-ai-copilot/**"
+      - "functions/whatsappCopilotKnowledge.js"
+      - "functions/whatsappCopilotRouter.js"
+      - "functions/whatsappCopilotCompanyRules.js"
+      - "functions/whatsappCopilotCompanyRules.test.js"
+      - "functions/whatsappCopilotServiceRules.js"
+      - "functions/bootstrap.js"
+      - "src/screens/WhatsAppKnowledgeScreen.tsx"
+      - "src/screens/CompanyRulesScreen.tsx"
+      - "src/screens/SettingsHubScreen.tsx"
+      - "scripts/patchWhatsappKnowledgeSettingsV13.cjs"
+      - "scripts/patchCompanyRulesV14.cjs"
+      - "docs/DEMAC-company-rules-v1.md"
+      - "package.json"
+      - ".github/workflows/build-copilot-extension.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-extension:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate extension JavaScript
+        working-directory: extensions/demac-whatsapp-ai-copilot
+        run: |
+          node --check background.js
+          node --check conversation-memory.mjs
+          node --check content.js
+          node --check composer-controller.js
+          node --check sidepanel.js
+          node --check appointment-guard.js
+          node --check options.js
+          node --test conversation-memory.test.mjs
+
+      - name: Validate unified ERP routing
+        working-directory: functions
+        run: |
+          npm install --ignore-scripts
+          npm run test:whatsapp-copilot
+          node --check whatsappCopilotKnowledge.js
+          node --check whatsappCopilotRouter.js
+          node --check whatsappCopilotCompanyRules.js
+          node --check whatsappCopilotServiceRules.js
+          node --check bootstrap.js
+
+      - name: Build ZIP
+        run: |
+          mkdir -p build/DEMAC-WhatsApp-AI-Copilot-v0.4.6
+          cp -R extensions/demac-whatsapp-ai-copilot/. build/DEMAC-WhatsApp-AI-Copilot-v0.4.6/
+          cd build
+          zip -r DEMAC-WhatsApp-AI-Copilot-v0.4.6.zip DEMAC-WhatsApp-AI-Copilot-v0.4.6
+
+      - name: Upload ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: DEMAC-WhatsApp-AI-Copilot-v0.4.6
+          path: build/DEMAC-WhatsApp-AI-Copilot-v0.4.6.zip
+          if-no-files-found: error
+          retention-days: 30

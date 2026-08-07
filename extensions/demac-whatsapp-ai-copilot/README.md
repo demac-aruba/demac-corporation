@@ -1,156 +1,50 @@
-# DEMAC WhatsApp AI Copilot — v0.4.0
+# DEMAC WhatsApp AI Copilot — v0.4.6
 
-Extensión privada Manifest V3 para asistir a Operaciones dentro de WhatsApp Web. El envío permanece supervisado: el Copilot prepara la respuesta y el operador decide si la inserta o la envía.
+Extensión privada para asistir a Operaciones dentro de WhatsApp Web. El operador conserva la aprobación final del mensaje.
 
-## Qué incorpora v0.4.0
+## Envío seguro
 
-- Lee la conversación completa visible y conserva cantidad, dirección, idioma y restricciones ya proporcionadas.
-- Corrige la separación de mensajes como `2 aires en Wayaca 217`: cantidad `2`, dirección `Wayaca 217`.
-- Deja de preguntarle al cliente qué día u hora desea cuando ya están completos el trabajo, la cantidad y la dirección.
-- Consulta disponibilidad real en Firestore usando:
-  - órdenes de trabajo;
-  - duración exacta del trabajo;
-  - cierres del negocio;
-  - tardes libres;
-  - vans activas;
-  - conductor y ayudante asignados;
-  - ausencias y disponibilidad del personal.
-- Evalúa cada van de forma independiente y utiliza la primera cita de la mañana y la primera de la tarde como anclas de ruta.
-- Favorece trabajos en el mismo sector, sectores adyacentes y recorridos que regresen progresivamente hacia la oficina de Santa Cruz.
-- Ofrece solamente las mejores una, dos o tres opciones; nunca expone todos los espacios abiertos.
-- Respeta voluntariamente días u horarios mencionados por el cliente sin preguntarlos como requisito.
-- Mantiene la selección de la cita pendiente de aprobación mientras el operador revisa el borrador.
-- Al pulsar **Enviar ahora**, revisa nuevamente el cupo dentro de una transacción, crea la cita y solamente después envía la confirmación, evitando doble reserva.
-- Desactiva **Insertar** para una confirmación pendiente, de modo que no pueda enviarse sin reservar primero.
-- Crea una orden principal y, cuando la cantidad requiere varias vans, asignaciones de apoyo sin confirmaciones o recordatorios duplicados.
-- Utiliza el vocabulario oficial **Vocabulario di Papiamento — Aruba 2009**, con referencia de `papiamento.aw`, para validar las respuestas en Papiamento di Aruba.
-- Mantiene marcas, modelos, direcciones y términos HVAC como excepciones revisables.
-- Muestra en el panel las opciones ERP, el sector, el número de vans y el ID de la cita creada.
-- Bloquea el envío de una supuesta disponibilidad cuando la extensión está únicamente en modo local.
+- La extensión solamente pulsa un control verificado como **Send / Enviar**.
+- El micrófono, grabación de voz y controles alternativos quedan excluidos.
+- Si WhatsApp no muestra un botón de envío verificable, el mensaje permanece en el campo y la extensión no pulsa ningún otro control.
 
-## Flujo de programación
+## Inserción verificada
 
-1. OpenAI identifica intención, idioma, tipo de trabajo, cantidad, dirección y cualquier restricción voluntaria.
-2. El backend consulta el ERP durante los próximos 21 días.
-3. Primero descarta cupos imposibles y luego puntúa las rutas eficientes.
-4. Devuelve como máximo tres opciones.
-5. Cuando el cliente selecciona una opción, el Copilot prepara una confirmación pendiente de aprobación.
-6. Al pulsar **Enviar ahora**, el backend vuelve a consultar la agenda.
-7. Si el cupo sigue disponible, crea la cita y las vans de apoyo necesarias y luego envía el mensaje.
-8. Si el espacio cambió mientras el cliente respondía, no envía una confirmación incorrecta: muestra nuevas opciones para revisión.
+La extensión prueba varias estrategias compatibles con el editor de WhatsApp y verifica que el texto realmente apareció antes de continuar:
 
-## Datos y configuración utilizados
+1. pegado de texto plano;
+2. inserción HTML con saltos reales;
+3. inserción nativa por líneas;
+4. actualización controlada del campo editable con eventos de entrada.
 
-La integración lee las colecciones existentes:
+Si el borrador contiene saltos y WhatsApp lo convierte en una sola línea, la inserción se considera fallida y no se intenta enviar.
 
-- `workOrders`
-- `services`
-- `clients`
-- `properties`
-- `vans`
-- `staffProfiles`
-- `dailyVanAssignments`
-- `staffAbsences`
-- `calendarClosures`
-- `businessSettings`
-- `vanHalfDaySchedules`
+## Router unificado del ERP
 
-Guarda auditoría y ofertas temporales en:
+La extensión utiliza un solo endpoint: `whatsappCopilotDraft`. El backend decide primero si el último mensaje es una pregunta directa o una coordinación de cita.
 
-- `whatsappCopilotAudit`
-- `whatsappCopilotOffers`
-
-Las Cloud Functions utilizan Firebase Admin, por lo que no se requieren reglas nuevas para estas dos colecciones internas.
-
-### Mapa de sectores
-
-La versión incluye una ruta predeterminada de Aruba, desde Malmok/Arashi y Noord hasta San Nicolás/Seroe Colorado, con Santa Cruz como oficina. Opcionalmente puede sobrescribirse mediante el documento:
+Una frase como:
 
 ```text
-businessSettings/whatsapp-copilot-routing
+Yo puedo después de las 10, pero ¿cuánto tiempo durará el servicio?
 ```
 
-Campos admitidos:
+se responde como pregunta de duración y no vuelve a ofrecer horarios.
 
-```json
-{
-  "id": "whatsapp-copilot-routing",
-  "officeZoneId": "santa-cruz",
-  "maximumAnchorDistance": 40,
-  "zones": [
-    {
-      "id": "noord",
-      "label": "Noord / Palm Beach",
-      "position": 90,
-      "aliases": ["noord", "palm beach", "kamay"]
-    }
-  ]
-}
-```
+## Base de conocimiento por reglas
 
-No es obligatorio crear este documento para comenzar; el backend utiliza la configuración predeterminada.
+El ERP incorpora una sección de administración llamada **Reglas del WhatsApp Copilot**. Cada regla puede guardar intención, frases de ejemplo, prioridad, estado, fuente dinámica del ERP y respuestas aprobadas en español, inglés y Papiamento Aruba.
 
-## Desplegar el backend
+La IA solamente clasifica la pregunta y selecciona una regla válida. La respuesta sale del ERP o de un texto previamente aprobado.
 
-La clave de OpenAI permanece exclusivamente en Firebase Secret Manager. Configura una sola vez el token privado de la extensión:
+Las reglas se guardan en `whatsappKnowledgeRules`.
+
+## Despliegue
 
 ```bash
-firebase functions:secrets:set WHATSAPP_COPILOT_EXTENSION_TOKEN
+firebase deploy --only functions:whatsappCopilotDraft,functions:whatsappCopilotKnowledge --project demac-corporation
+npm run patch:all
+firebase deploy --only firestore:rules --project demac-corporation
 ```
 
-Después despliega la función actualizada:
-
-```bash
-firebase deploy --only functions:whatsappCopilotDraft
-```
-
-Los módulos `whatsappCopilotSchedulingCore.js`, `whatsappCopilotAvailability.js` y `whatsappCopilotScheduling.js` se incluyen automáticamente con la función.
-
-El valor guardado en `WHATSAPP_COPILOT_EXTENSION_TOKEN` debe pegarse en:
-
-```text
-Ajustes → Token privado de la extensión
-```
-
-Luego pulsa **Probar OpenAI + ERP**. La prueba debe confirmar OpenAI, agenda ERP y vocabulario de Papiamento.
-
-## Actualizar la extensión instalada
-
-1. Conserva la carpeta que Chrome tiene cargada como extensión sin empaquetar.
-2. Reemplaza su contenido con los archivos de `extensions/demac-whatsapp-ai-copilot` de esta versión.
-3. Cierra el panel lateral y las pestañas de WhatsApp Web.
-4. Abre `chrome://extensions`.
-5. Pulsa **Recargar** en DEMAC WhatsApp AI Copilot.
-6. Abre WhatsApp Web nuevamente.
-7. Confirma que el pie del panel muestre `Panel 0.4.0 · lector 0.4.0`.
-8. Abre Ajustes y pulsa **Probar OpenAI + ERP**.
-
-## Validación técnica
-
-Desde la carpeta `functions`:
-
-```bash
-npm run test:whatsapp-copilot
-node --check whatsappCopilot.js
-node --check whatsappCopilotSchedulingCore.js
-node --check whatsappCopilotAvailability.js
-node --check whatsappCopilotScheduling.js
-```
-
-Para la extensión:
-
-```bash
-node --check background.js
-node --check content.js
-node --check sidepanel.js
-node --check appointment-guard.js
-node --check options.js
-```
-
-## Límites deliberados
-
-- Solamente procesa el chat abierto.
-- No recorre chats pendientes automáticamente.
-- El operador conserva la aprobación final del mensaje.
-- Si no puede identificar de forma segura el número de WhatsApp para una cita nueva, transfiere la conversación a Operaciones en vez de crear datos dudosos.
-- La dirección y los sectores nuevos pueden ser corregidos después en el perfil de la propiedad para mejorar futuras rutas.
+Después instala la extensión v0.4.6, recárgala en `chrome://extensions`, cierra WhatsApp Web y vuelve a abrirlo. Debe mostrar `Panel 0.4.6 · lector 0.4.6`.
