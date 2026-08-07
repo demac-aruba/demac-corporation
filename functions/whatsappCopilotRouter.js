@@ -13,17 +13,17 @@ const {
   latestCustomerText,
 } = require("./whatsappCopilotConversationPolicy");
 const {
-  handleStatefulSchedulingV21,
-  isSchedulingControlTurnV21,
-} = require("./whatsappCopilotStateMachineV21");
+  handleStatefulSchedulingV22,
+  isSchedulingControlTurnV22,
+} = require("./whatsappCopilotStateMachineV22");
 
 const extensionToken = defineSecret("WHATSAPP_COPILOT_EXTENSION_TOKEN");
 const openAiApiKey = defineSecret("OPENAI_API_KEY");
 const RUNTIME = {
   functionName: "whatsappCopilotDraft",
-  source: "openai+erp-conversation-orchestrator-v18-flow-v21",
+  source: "openai+erp-conversation-orchestrator-v18-flow-v22",
   version: 18,
-  flowVersion: 21,
+  flowVersion: 22,
 };
 const FUNCTION_OPTIONS = {
   region: "us-central1",
@@ -95,7 +95,7 @@ function sendCaptured(response, captured, route) {
     body.metadata = {
       ...(body.metadata || {}),
       currentTurnPolicy: "authoritative-v18",
-      conversationFlowVersion: 21,
+      conversationFlowVersion: 22,
       orchestratorRoute: route,
     };
   }
@@ -110,7 +110,7 @@ function sendDeterministic(response, payload, route) {
   payload.metadata = {
     ...(payload.metadata || {}),
     currentTurnPolicy: "authoritative-v18",
-    conversationFlowVersion: 21,
+    conversationFlowVersion: 22,
     orchestratorRoute: route,
   };
   response.status(200).json(payload);
@@ -162,20 +162,22 @@ exports.whatsappCopilotDraft = onRequest(FUNCTION_OPTIONS, async (request, respo
       immediate.metadata = {
         ...(immediate.metadata || {}),
         currentCustomerTurn: latest,
-        conversationFlowVersion: 21,
+        conversationFlowVersion: 22,
         orchestratorRoute: "immediate-current-turn",
       };
       response.status(200).json(immediate);
       return;
     }
 
-    // 2) Appointment state is deterministic and backed by the active Firestore offer.
-    //    V21 resolves confirmations such as "sí", "excelente ok", "esa cita",
-    //    "la primera" and "dame la cita de la 1" without asking OpenAI to rebuild state.
-    if (isSchedulingControlTurnV21(latest) || request.body?.commitAppointment === true) {
-      const deterministic = await handleStatefulSchedulingV21(request.body || {});
+    // 2) Appointment selection is a direct state transition against the active offer.
+    //    V22 no longer rewrites "sí" into text that must pass the generic scheduling
+    //    classifier. It builds the confirmed analysis itself, then calls the ERP
+    //    scheduling transaction directly. This prevents confirmations from falling
+    //    back into another availability search.
+    if (isSchedulingControlTurnV22(latest) || request.body?.commitAppointment === true) {
+      const deterministic = await handleStatefulSchedulingV22(request.body || {});
       if (deterministic) {
-        sendDeterministic(response, deterministic, "schedule-stateful-v21");
+        sendDeterministic(response, deterministic, "schedule-stateful-v22");
         return;
       }
     }
@@ -204,7 +206,7 @@ exports.whatsappCopilotDraft = onRequest(FUNCTION_OPTIONS, async (request, respo
           ...(knowledge.payload.metadata || {}),
           currentCustomerTurn: latest,
           currentTurnPolicy: "authoritative-v18",
-          conversationFlowVersion: 21,
+          conversationFlowVersion: 22,
           orchestratorRoute: `knowledge:${questionKind}`,
         };
         response.status(200).json(knowledge.payload);
