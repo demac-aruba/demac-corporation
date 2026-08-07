@@ -9,13 +9,39 @@ function latestCustomerText(conversation) {
   );
 }
 
-function isGreetingOnly(value) {
-  const text = normalizeText(value)
+function normalizedTurn(value) {
+  return normalizeText(value)
     .replace(/[!¡?¿.,;:()\-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function isGreetingOnly(value) {
+  const text = normalizedTurn(value);
   if (!text) return false;
   return /^(hola|buenos dias|buen dia|buenas tardes|buenas noches|buenas|good morning|good afternoon|good evening|hello|hi|bon dia|bon tardi|bon nochi)(\s+(senor|senora|sr|sra|demac|equipo|team))?$/.test(text);
+}
+
+function isServiceSelectionOnly(value) {
+  const text = normalizedTurn(value);
+  return /^(servicio|servicios|servicio y mantenimiento|mantenimiento|service|maintenance|service and maintenance|servicio di airco)$/.test(text);
+}
+
+function isInstallationSelectionOnly(value) {
+  const text = normalizedTurn(value);
+  return /^(instalacion|instalar|installation|install|instalacion di airco)$/.test(text);
+}
+
+function isRepairSelectionOnly(value) {
+  const text = normalizedTurn(value);
+  return /^(reparacion|reparar|repair|diagnostico|diagnostic|checkup)$/.test(text);
+}
+
+function isKnowledgeRejectionTurn(value) {
+  const text = normalizedTurn(value);
+  if (!text) return false;
+  return /\b(no te pregunte|no te pregunte nada|no pregunte|no estoy preguntando|yo no pregunte|no me hables|no necesito saber)\b/.test(text)
+    && /\b(duracion|tiempo|erp|precio|costo|garantia|pago)\b/.test(text);
 }
 
 function greetingReply(value, language = "es") {
@@ -48,11 +74,34 @@ function greetingReply(value, language = "es") {
   return `${greeting}\n\n¿Cómo podemos ayudarle hoy?\n\n• Servicio y mantenimiento\n• Instalación\n• Reparación`;
 }
 
+function selectionReply(kind, language = "es") {
+  if (language === "en") {
+    if (kind === "installation") return "Perfect.\n\nHow many AC units would you like installed, and what is the property address?";
+    if (kind === "repair") return "Perfect.\n\nHow many AC units have the problem, and what is the property address?";
+    return "Perfect.\n\nHow many AC units need service, and what is the property address?";
+  }
+  if (language === "pap-aw") {
+    if (kind === "installation") return "Perfecto.\n\nCuanto airco bo kier instala y kico ta e adres di e propiedad?";
+    if (kind === "repair") return "Perfecto.\n\nCuanto airco tin e problema y kico ta e adres di e propiedad?";
+    return "Perfecto.\n\nCuanto airco mester servicio y kico ta e adres di e propiedad?";
+  }
+  if (kind === "installation") return "Perfecto.\n\n¿Cuántos aires desea instalar y cuál es la dirección de la propiedad?";
+  if (kind === "repair") return "Perfecto.\n\n¿Cuántos aires presentan el problema y cuál es la dirección de la propiedad?";
+  return "Perfecto.\n\n¿Cuántos aires son y cuál es la dirección donde debemos ir?";
+}
+
+function correctionReply(language = "es") {
+  if (language === "en") return "Understood. Sorry for the confusion.\n\nLet’s continue with your request.";
+  if (language === "pap-aw") return "Comprendi. Disculpa pa e confusion.\n\nLaga nos sigui cu bo solicitud.";
+  return "Entendido. Disculpe la confusión.\n\nContinuemos con su solicitud.";
+}
+
 function isAvailabilityTurn(value) {
   const text = normalizeText(value);
   if (!text) return false;
-  return /\b(cupo|disponibilidad|disponible|espacio|appointment|availability|slot|cita|pueden venir|puede venir|pueden el|puede el|tin cupo|tin espacio)\b/.test(text)
-    || /\b(para|el|este|proximo|próximo)\s+(lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado|domingo)\b/.test(text);
+  return /\b(cupo|disponibilidad|disponible|espacio|appointment|availability|slot|cita|pueden venir|puede venir|pueden el|puede el|tin cupo|tin espacio|tienes para|tiene para|hay para|hay cupo)\b/.test(text)
+    || /\b(para|el|este|proximo|próximo)\s+(lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado|domingo)\b/.test(text)
+    || /\b(en|por|para)\s+la\s+(manana|mañana|tarde)\b/.test(text);
 }
 
 function looksLikeAffirmativeSelection(value) {
@@ -139,43 +188,77 @@ function formatNaturalCustomerReply(value, language = "es") {
   return paragraphs.join("\n\n");
 }
 
+function languageForTurn(latest, languageMode = "auto") {
+  const normalized = normalizeText(latest);
+  if (languageMode === "en" || /\b(good|hello|hi|service|installation|repair)\b/.test(normalized)) return "en";
+  if (languageMode === "pap-aw" || /\b(bon dia|bon tardi|bon nochi|mi kier|bo por|airco)\b/.test(normalized)) return "pap-aw";
+  return "es";
+}
+
 function immediateReply({ conversation, languageMode = "auto" }) {
   const latest = latestCustomerText(conversation);
-  if (!isGreetingOnly(latest)) return null;
-  const normalized = normalizeText(latest);
-  const language = languageMode === "en" || /\b(good|hello|hi)\b/.test(normalized)
-    ? "en"
-    : languageMode === "pap-aw" || /\b(bon dia|bon tardi|bon nochi)\b/.test(normalized)
-      ? "pap-aw"
-      : "es";
+  const language = languageForTurn(latest, languageMode);
+  let draft = "";
+  let intent = "";
+  let serviceType = "";
+
+  if (isGreetingOnly(latest)) {
+    draft = greetingReply(latest, language);
+    intent = "greeting";
+  } else if (isServiceSelectionOnly(latest)) {
+    draft = selectionReply("service", language);
+    intent = "service_request";
+    serviceType = "service";
+  } else if (isInstallationSelectionOnly(latest)) {
+    draft = selectionReply("installation", language);
+    intent = "installation_request";
+    serviceType = "installation";
+  } else if (isRepairSelectionOnly(latest)) {
+    draft = selectionReply("repair", language);
+    intent = "repair_request";
+    serviceType = "repair";
+  } else if (isKnowledgeRejectionTurn(latest)) {
+    draft = correctionReply(language);
+    intent = "customer_correction";
+  } else {
+    return null;
+  }
+
   return {
-    draft: greetingReply(latest, language),
-    source: "conversation-policy",
+    draft,
+    source: "conversation-policy-v18",
     warning: "",
     metadata: {
-      intent: "greeting",
+      intent,
       language,
-      conversationStage: "initial_request",
+      conversationStage: intent === "greeting" ? "initial_request" : "collecting_details",
       nextAction: "wait_for_customer",
-      summary: "El cliente saludó sin hacer todavía una solicitud.",
+      summary: "El último turno del cliente fue resuelto antes de consultar el historial.",
       confidence: 1,
       requiresHuman: false,
       missingInformation: [],
-      collectedInformation: {},
+      collectedInformation: serviceType ? { serviceType } : {},
       selectedOptionOrdinal: 0,
       customerConfirmedAppointment: false,
+      currentTurnPolicy: "authoritative",
     },
   };
 }
 
 module.exports = {
+  correctionReply,
   formatNaturalCustomerReply,
   fuzzyTimeOption,
   greetingReply,
   immediateReply,
   isAvailabilityTurn,
   isGreetingOnly,
+  isInstallationSelectionOnly,
+  isKnowledgeRejectionTurn,
+  isRepairSelectionOnly,
+  isServiceSelectionOnly,
   latestCustomerText,
   looksLikeAffirmativeSelection,
+  selectionReply,
   stripInternalLanguage,
 };
