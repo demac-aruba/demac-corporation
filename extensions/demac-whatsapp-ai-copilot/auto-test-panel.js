@@ -92,8 +92,9 @@
       setWarning("");
       setMainStatus(`Modo automático activo para ${status.chatTitle || chatTitle}`, "ready");
     } catch (error) {
-      setWarning(error?.message || String(error));
-      setMainStatus("No se pudo cambiar el modo automático", "error");
+      const detail = error?.message || String(error);
+      setWarning(detail);
+      setMainStatus(`No se pudo activar: ${detail}`, "error");
     } finally {
       if (button) button.disabled = false;
     }
