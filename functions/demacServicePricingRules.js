@@ -58,14 +58,19 @@ function normalizeServicePricingRules(raw) {
 }
 
 function extractBtu(value) {
-  const raw = String(value || "");
-  const compact = normalizeText(raw).replace(/\s+/g, " ");
-  const explicit = compact.match(/\b(9|12|18|24|36)\s*(?:k|mil)\b/);
-  if (explicit) return Number(explicit[1]) * 1000;
-  const full = compact.match(/\b(9[.,]?000|12[.,]?000|18[.,]?000|24[.,]?000|36[.,]?000)\s*(?:btu)?\b/);
-  if (full) return Number(full[1].replace(/[.,]/g, ""));
-  const withBtu = compact.match(/\b(9000|12000|18000|24000|36000)\s*btu\b/);
-  return withBtu ? Number(withBtu[1]) : 0;
+  const raw = String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
+  const short = raw.match(/\b(9|12|18|24|36)\s*(?:k|mil)\b/);
+  if (short) return Number(short[1]) * 1000;
+
+  const thousands = raw.match(/\b(9|12|18|24|36)\s*(?:[.,]\s*|\s+)000\s*(?:btu)?\b/);
+  if (thousands) return Number(thousands[1]) * 1000;
+
+  const compact = raw.match(/\b(9000|12000|18000|24000|36000)\s*(?:btu)?\b/);
+  return compact ? Number(compact[1]) : 0;
 }
 
 function contextText(conversation, latestText) {
