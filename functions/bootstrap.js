@@ -3,6 +3,7 @@ require("./whatsappCopilotPresentation");
 require("./whatsappCopilotCompanyRules");
 require("./whatsappCopilotServiceRules");
 require("./whatsappCopilotFlowV19");
+require("./whatsappCopilotSchedulingRuntimeV19");
 
 const core = require("./index");
 const appointmentNotifications = require("./appointmentNotifications");
