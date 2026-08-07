@@ -21,19 +21,31 @@ function isGreetingOnly(value) {
 function greetingReply(value, language = "es") {
   const text = normalizeText(value);
   if (language === "en") {
-    if (/good afternoon/.test(text)) return "Good afternoon. How can I help you?";
-    if (/good evening/.test(text)) return "Good evening. How can I help you?";
-    return "Good morning. How can I help you?";
+    const greeting = /good afternoon/.test(text)
+      ? "Good afternoon."
+      : /good evening/.test(text)
+        ? "Good evening."
+        : /^hello\b|^hi\b/.test(text)
+          ? "Hello."
+          : "Good morning.";
+    return `${greeting}\n\nHow can we help you today?\n\n• Service & maintenance\n• Installation\n• Repair`;
   }
   if (language === "pap-aw") {
-    if (/bon tardi/.test(text)) return "Bon tardi. Con nos por yuda bo?";
-    if (/bon nochi/.test(text)) return "Bon nochi. Con nos por yuda bo?";
-    return "Bon dia. Con nos por yuda bo?";
+    const greeting = /bon tardi/.test(text)
+      ? "Bon tardi."
+      : /bon nochi/.test(text)
+        ? "Bon nochi."
+        : "Bon dia.";
+    return `${greeting}\n\nCon nos por yuda bo awe?\n\n• Servicio y mantenimento\n• Instalacion\n• Reparacion`;
   }
-  if (/buenas tardes/.test(text)) return "Buenas tardes. ¿Cómo puedo ayudarle?";
-  if (/buenas noches/.test(text)) return "Buenas noches. ¿Cómo puedo ayudarle?";
-  if (/^hola\b/.test(text)) return "Hola. ¿Cómo puedo ayudarle?";
-  return "Buenos días. ¿Cómo puedo ayudarle?";
+  const greeting = /buenas tardes/.test(text)
+    ? "Buenas tardes."
+    : /buenas noches/.test(text)
+      ? "Buenas noches."
+      : /^hola\b/.test(text)
+        ? "Hola."
+        : "Buenos días.";
+  return `${greeting}\n\n¿Cómo podemos ayudarle hoy?\n\n• Servicio y mantenimiento\n• Instalación\n• Reparación`;
 }
 
 function isAvailabilityTurn(value) {
@@ -81,18 +93,19 @@ function stripInternalLanguage(value, language = "es") {
   let text = String(value || "");
   if (language === "es") {
     text = text
-      .replace(/la duraci[oó]n estimada configurada en (?:nuestro|el) ERP es de aproximadamente/gi, "La duración aproximada es de")
+      .replace(/la duraci[oó]n estimada configurada en (?:nuestro|el) ERP es de aproximadamente\s*/gi, "Un servicio estándar dura aproximadamente ")
+      .replace(/la duraci[oó]n aproximada es de\s*/gi, "Un servicio estándar dura aproximadamente ")
       .replace(/el precio actual registrado en (?:nuestro|el) ERP es/gi, "El precio actual es")
       .replace(/seg[uú]n (?:nuestro|el) ERP/gi, "")
       .replace(/configurad[oa] en (?:nuestro|el) ERP/gi, "");
   } else if (language === "en") {
     text = text
-      .replace(/the estimated duration configured in our ERP is approximately/gi, "The estimated duration is approximately")
+      .replace(/the estimated duration configured in our ERP is approximately\s*/gi, "A standard service takes approximately ")
       .replace(/the current price registered in our ERP is/gi, "The current price is")
       .replace(/according to our ERP/gi, "");
   } else if (language === "pap-aw") {
     text = text
-      .replace(/e duracion estima cu ta configura den nos ERP ta aproximadamente/gi, "E duracion ta aproximadamente")
+      .replace(/e duracion estima cu ta configura den nos ERP ta aproximadamente\s*/gi, "Un servicio standard ta dura aproximadamente ")
       .replace(/e prijs actual registra den nos ERP ta/gi, "E prijs actual ta");
   }
   return text.replace(/\s+([,.!?])/g, "$1").replace(/ {2,}/g, " ").trim();
@@ -158,6 +171,7 @@ function immediateReply({ conversation, languageMode = "auto" }) {
 module.exports = {
   formatNaturalCustomerReply,
   fuzzyTimeOption,
+  greetingReply,
   immediateReply,
   isAvailabilityTurn,
   isGreetingOnly,
