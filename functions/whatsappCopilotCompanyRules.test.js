@@ -53,22 +53,37 @@ test("splits ten units into a full-day primary van and a half-day support van", 
   });
 });
 
-test("requires manual review above the configured automatic maximum", () => {
-  const plan = buildAllocationPlan(11, 60, 4, standardService, DEFAULT_COMPANY_OPERATIONAL_RULES);
+test("fourteen units use two full-day vans from 8:30", () => {
+  const plan = buildAllocationPlan(14, 60, 4, standardService, DEFAULT_COMPANY_OPERATIONAL_RULES);
+  assert.equal(plan.length, 2);
+  assert.deepEqual(plan.map((item) => item.quantity), [7, 7]);
+  assert.equal(plan.every((item) => item.fullDay && item.fixedTime === "08:30"), true);
+});
+
+test("sixteen units can use two full-day vans plus a two-unit half-day support van", () => {
+  const plan = buildAllocationPlan(16, 60, 4, standardService, DEFAULT_COMPANY_OPERATIONAL_RULES);
+  assert.equal(plan.length, 3);
+  assert.deepEqual(plan.map((item) => item.quantity), [7, 7, 2]);
+  assert.equal(plan[2].fullDay, false);
+  assert.deepEqual(plan[2].allowedTimes, ["08:30", "13:30"]);
+});
+
+test("no fixed maximum still respects the number of staffed vans", () => {
+  const plan = buildAllocationPlan(22, 60, 3, standardService, DEFAULT_COMPANY_OPERATIONAL_RULES);
   assert.deepEqual(plan, []);
 });
 
-test("normalizes unsafe support limits to a valid main-plus-support maximum", () => {
+test("normalizes support threshold and preserves zero as no fixed automatic maximum", () => {
   const rules = normalizeCompanyOperationalRules({
     standardService: {
       singlePropertyMainVanMaxUnits: 7,
       automaticSupportFromUnits: 5,
-      automaticSupportMaxUnits: 20,
+      automaticSupportMaxUnits: 0,
       supportHalfDayMaxUnits: 3,
     },
   });
   assert.equal(rules.standardService.automaticSupportFromUnits, 8);
-  assert.equal(rules.standardService.automaticSupportMaxUnits, 10);
+  assert.equal(rules.standardService.automaticSupportMaxUnits, 0);
 });
 
 test("customer wording explains an all-day job without exposing support vans", () => {

@@ -1,16 +1,52 @@
-# DEMAC Company Rules Registry — Version 1
+# DEMAC Company Rules Registry — Version 2
 
-This registry is the operational reference for the DEMAC ERP and WhatsApp Copilot. Runtime values that may change are stored in Firestore; protected behavior is implemented in code and tested.
+This registry is the operational reference for the DEMAC ERP and WhatsApp Copilot. Runtime values that may change are stored in Firestore; protected behavior is implemented in versioned code and tested.
 
 ## Source-of-truth hierarchy
 
-1. `businessSettings/company-operational-rules` — editable capacity thresholds.
-2. `businessSettings/appointment-work-presets` — editable appointment duration per AC unit.
-3. `services` — current service prices and customer-facing service descriptions.
-4. `whatsappKnowledgeRules` — approved customer answers and trigger examples.
-5. Protected scheduling and communication rules — versioned code with automated tests.
+1. `businessSettings/company-operational-rules` — editable same-property capacity and support thresholds.
+2. `businessSettings/company-service-pricing-rules` — editable BTU-specific prices and durations approved by DEMAC.
+3. `businessSettings/appointment-work-presets` — general appointment duration defaults used by the agenda.
+4. `services` — catalog descriptions and other service records not covered by the BTU-specific matrix.
+5. `whatsappKnowledgeRules` — approved customer answers and multilingual trigger examples.
+6. Protected scheduling, routing and communication rules — versioned code with automated tests.
 
 The Chrome extension must not maintain a separate copy of prices, duration, capacity or policy.
+
+## Commercial rules — split units
+
+### PRICE-SVC-001 — Standard service
+
+| Capacity | Price | Price type | Duration |
+| --- | ---: | --- | ---: |
+| 9,000 BTU | Afl. 100 | Special | 60 min |
+| 12,000 BTU | Afl. 125 | Special | 60 min |
+| 18,000 BTU | Afl. 135 | Special | 60 min |
+| 24,000 BTU | Afl. 145 | Special | 60 min |
+| 36,000 BTU | Afl. 175 | Regular | 60 min |
+
+### PRICE-DEEP-001 — Deep cleaning
+
+| Capacity | Price |
+| --- | ---: |
+| 9,000 BTU | Afl. 195 |
+| 12,000 BTU | Afl. 195 |
+| 18,000 BTU | Afl. 195 |
+| 24,000 BTU | Afl. 195 |
+| 36,000 BTU | Afl. 225 |
+
+Deep-cleaning duration remains editable in Company Rules until a more specific operational matrix is approved.
+
+### PRICE-INSTALL-001 — Standard installation for Adina purchased from DEMAC
+
+| Capacity | Special installation price | Reserved duration |
+| --- | ---: | ---: |
+| 12,000 BTU | Afl. 200 | 120 min |
+| 18,000 BTU | Afl. 225 | 120 min |
+| 24,000 BTU | Afl. 250 | 120 min |
+| 36,000 BTU | Afl. 300 | 180 min |
+
+No 9,000 BTU installation price is defined in this rule because no approved value has been provided.
 
 ## Operational rules
 
@@ -20,34 +56,39 @@ The Chrome extension must not maintain a separate copy of prices, duration, capa
 - The morning contains three customer slots: 8:30, 9:30 and 10:30.
 - The afternoon contains three customer slots: 13:30, 14:30 and 15:30.
 - This represents a maximum of six different one-AC properties in one day, subject to route compatibility and staff availability.
+- The 3 + 3 structure is protected and is not edited like a commercial price.
 
 ### OPS-SVC-002 — Single-property seven-unit exception
 
-- A single customer with up to seven standard-service AC units may receive one primary van for the full day.
-- This exception is valid only with an 8:30 a.m. start.
-- Seven AC units reserve the six visible ERP day slots as one full-day primary appointment.
+- A single customer with up to seven standard-service split units may receive one primary van for the full day.
+- This exception requires an 8:30 a.m. start.
+- Seven units reserve the complete workday for that van.
 
-### OPS-SVC-003 — Automatic support for eight to ten units
+### OPS-SVC-003 — Scalable support for a single property
 
-- For one property with eight, nine or ten standard-service AC units, the primary van is assigned up to seven units for the full day.
-- A second van receives an internal support order for the remaining one, two or three units.
-- The support order may occupy the morning or afternoon according to real availability and route efficiency.
-- The primary order is created first and the support order references it as its parent.
-- Above the configured automatic maximum, Operations must review the job manually.
+- From eight standard-service units onward, the ERP may combine multiple staffed vans.
+- Each full-day van can receive up to seven units and starts at 8:30 a.m.
+- A remaining block of one to three units may use an available morning or afternoon support block.
+- A remaining block of four to seven units requires another full-day van from 8:30 a.m.
+- Example: 10 units = 7 + 3.
+- Example: 14 units = 7 + 7.
+- Example: 16 units = 7 + 7 + 2.
+- `automaticSupportMaxUnits = 0` means there is no fixed numeric maximum; real capacity is limited by staffed vans, absences, existing work, route compatibility and closures.
+- If a positive automatic maximum is configured, the Copilot must not exceed it automatically.
 
 ### OPS-TEAM-001 — Real personnel assignment
 
 - A van must have an available authorized driver.
 - A staff member cannot belong to two vans on the same date.
 - Saved daily assignments and absences override regular van assignments.
-- Work requiring support must validate the personnel of every participating van before an option is offered and again before booking.
+- Work requiring support validates the personnel of every participating van before an option is offered and again before booking.
 
 ## Routing rules
 
 ### OPS-ROUTE-001 — Morning route anchor
 
 - The first appointment at 8:30 a.m. establishes the primary morning sector for that van.
-- The following morning appointments must be in the same sector, an adjacent compatible sector, or on the progressive route back toward the office.
+- Following morning appointments must be in the same sector, an adjacent compatible sector, or on the progressive route back toward the office.
 
 ### OPS-ROUTE-002 — Afternoon route anchor
 
@@ -56,62 +97,92 @@ The Chrome extension must not maintain a separate copy of prices, duration, capa
 
 ### OPS-ROUTE-003 — Availability before preference
 
-- The customer is not asked to choose an unrestricted day and time.
+- The customer is not asked to choose an unrestricted day and time once the ERP has enough information to calculate availability.
 - The ERP calculates real options from capacity, route, staff, closures and existing appointments.
-- A time voluntarily supplied by the customer is treated as a mandatory restriction, not a scoring preference.
+- A day or time voluntarily supplied by the customer is treated as a scheduling constraint.
 
-## Customer communication rules
+## Conversation rules
 
-### COMMS-001 — Do not expose internal van splitting
+### COMMS-001 — Current turn has priority
+
+- The most recent customer turn determines the current intention.
+- Conversation memory answers “what do we already know?”; it does not decide “what does the customer want now?”.
+- A simple greeting receives a greeting even if an earlier turn discussed duration or price.
+- A direct availability question is routed to appointment coordination rather than inheriting an earlier knowledge intent.
+
+### COMMS-002 — Answer the current question first
+
+- A direct question about duration, price, warranty, payment or service scope is answered before returning to appointment coordination.
+- Confirmed facts such as address, quantity and time restriction remain available for the next step.
+
+### COMMS-003 — Natural customer language
+
+- Customer-facing text must not mention ERP configuration, prompts, models, databases or other internal implementation details.
+- Simple questions receive simple answers.
+- Multiple questions are separated into short paragraphs.
+- The Copilot should ask no more than two short questions in one message when collecting missing information.
+
+### COMMS-004 — Contextual option selection
+
+- Appointment confirmations are interpreted against the options that were actually offered.
+- Expressions such as “the first one”, “that time works”, or “a las 8 está bien” can select an offered 8:30 option when it is the only reasonable match.
+- If more than one option remains genuinely plausible, the Copilot asks for clarification instead of guessing.
+
+### COMMS-005 — Do not expose internal van splitting
 
 - For a large property, the customer is told that the team will start at 8:30 a.m. and that the work may continue throughout the day.
 - The customer does not need to be told how many vans are assigned.
 
-### COMMS-002 — One customer confirmation
+### COMMS-006 — One customer confirmation
 
 - Only the primary work order sends appointment confirmation and reminder messages.
 - Internal support orders never generate duplicate customer messages.
 
-### COMMS-003 — Answer the current question first
+### COMMS-007 — No invented information
 
-- A direct question about duration, price, warranty, payment or service scope is answered before returning to appointment coordination.
-- Confirmed facts such as address, quantity and time restriction remain in conversation memory.
+- The AI classifies language and chooses the correct operational path.
+- Price, duration, descriptions and availability come from approved ERP rules/data.
+- Missing or ambiguous information is escalated or clarified instead of invented.
 
-### COMMS-004 — No invented information
+## Knowledge-rule priority
 
-- The AI classifies the customer message and selects an approved rule.
-- Price, duration, descriptions and availability are read from the ERP.
-- Missing or ambiguous information is transferred to Operations instead of being invented.
+`priority` is only a tie-breaker between rules that already match the current customer question. A high-priority payment rule, for example, must never answer an unrelated greeting or availability request.
 
 ## Editable values in Settings → Company Rules
 
-- Standard-service duration per AC unit.
-- Deep-cleaning duration per AC unit.
-- Standard-installation duration per AC unit.
-- Special-installation duration per AC unit.
-- Diagnostic / repair duration.
-- Current prices from the service catalog.
-- Main-van single-property capacity.
-- Automatic support threshold and maximum.
-- Support-van half-day capacity.
-- Approved WhatsApp answers and trigger examples.
+- BTU-specific standard-service prices and duration.
+- BTU-specific deep-cleaning prices and duration.
+- Adina-from-DEMAC standard-installation prices and duration.
+- Main-van same-property capacity.
+- Automatic support threshold.
+- Optional automatic maximum (`0` = no fixed maximum).
+- Half-day support capacity.
+- Approved WhatsApp answers and multilingual trigger examples.
 
-## Scenario acceptance test: ten standard-service units
+## Acceptance scenarios
 
-Given:
+### Ten standard-service units
 
-- one property;
-- ten standard-service AC units;
-- at least two staffed vans;
-- a free full day for the primary van;
-- a free morning or afternoon block for the support van;
+Given one property, ten units and at least two compatible staffed vans:
 
-Then:
-
-1. The customer receives available dates with an 8:30 a.m. start.
+1. The customer receives available dates with an 8:30 a.m. start for the primary work.
 2. The reply says the work may continue throughout the day.
 3. The reply does not mention a support van.
-4. After customer confirmation, the ERP creates one primary full-day order for seven units.
+4. After confirmation, the ERP creates one primary full-day order for seven units.
 5. The ERP creates one internal support order for three units in the best available half-day block.
-6. Only the primary order contains customer notification recipients.
-7. Both orders use the same client, property, address and parent-child booking relationship.
+6. Only the primary order sends customer notifications.
+
+### Fourteen standard-service units
+
+Given one property, fourteen units and at least two compatible staffed vans:
+
+1. The ERP allocates seven units to each van.
+2. Both vans reserve the full day from 8:30 a.m.
+3. The customer still receives one appointment conversation and one confirmation.
+
+### Conversation regression examples
+
+- `Buenos días` → greet and ask how to help; do not answer an old duration question.
+- `¿Tienes cupo para el martes?` → recognize the requested day and collect only missing service facts before checking the agenda.
+- `¿Cuánto dura un servicio estándar?` → answer naturally: approximately one hour per AC unit; do not mention ERP configuration.
+- After offering 8:30 and 9:30, `a las 8 está bien` → select 8:30 when that is the unique reasonable interpretation.
