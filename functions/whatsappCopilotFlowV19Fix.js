@@ -1,6 +1,7 @@
 const flow = require("./whatsappCopilotFlowV19");
 const { normalizeText } = require("./whatsappCopilotSchedulingCore");
 
+const baseBookingCommand = flow.looksLikeBookingCommand;
 const baseInheritOfferContext = flow.inheritOfferContext;
 const baseSchedulingControlTurn = flow.isSchedulingControlTurn;
 
@@ -37,7 +38,7 @@ function patchedInheritOfferContext(analysis, offer, latest) {
   };
 }
 
-flow.looksLikeBookingCommand = (value) => flow.looksLikeBookingCommand(value) || isNaturalBookingCommand(value);
+flow.looksLikeBookingCommand = (value) => baseBookingCommand(value) || isNaturalBookingCommand(value);
 flow.isSchedulingControlTurn = (value) => baseSchedulingControlTurn(value) || isNaturalBookingCommand(value);
 flow.inheritOfferContext = patchedInheritOfferContext;
 
