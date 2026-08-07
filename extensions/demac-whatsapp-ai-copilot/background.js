@@ -6,7 +6,6 @@ import {
 const BUILD_VERSION = chrome.runtime.getManifest().version;
 const DEFAULT_SETTINGS = {
   backendUrl: "https://us-central1-demac-corporation.cloudfunctions.net/whatsappCopilotDraft",
-  knowledgeBackendUrl: "https://us-central1-demac-corporation.cloudfunctions.net/whatsappCopilotKnowledge",
   backendToken: "",
   companyName: "DEMAC Professional Cooling Solutions",
   operatorName: "Operaciones",
@@ -32,52 +31,17 @@ async function sendToWhatsApp(type, payload = {}) {
   return chrome.tabs.sendMessage(tab.id, { type, payload });
 }
 
-function normalizeForIntent(value) {
-  return String(value ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function latestCustomerText(context) {
-  const explicit = String(context?.customerTurn?.text ?? "").trim();
-  if (explicit) return explicit;
-  return String(
-    [...(context?.messages || [])].reverse().find((message) => message?.direction === "inbound")?.text ?? "",
-  ).trim();
-}
-
-function detectKnowledgeQuestion(context) {
-  const text = normalizeForIntent(latestCustomerText(context));
-  if (/\b(cuanto tiempo|cuanto dura|how long|duration|duracion)\b/.test(text)) return "duration";
-  if (/\b(cuanto cuesta|precio|price|cost|tarifa|costo)\b/.test(text)) return "price";
-  if (/\b(que incluye|what is included|what does.*include|incluye el servicio)\b/.test(text)) return "service_includes";
-  if (/\b(garantia|warranty)\b/.test(text)) return "warranty";
-  if (/\b(pago|payment|transferencia|cash|efectivo|tarjeta|card)\b/.test(text)) return "payment";
-  if (/\b(que hacen|como funciona|what do you do|how does.*work)\b/.test(text)) return "service_info";
-  return "";
-}
-
-function backendConfiguration(settings, endpointOverride = "") {
-  const endpoint = String(endpointOverride || settings.backendUrl || "").trim();
+function backendConfiguration(settings) {
+  const endpoint = String(settings.backendUrl ?? "").trim();
   const token = String(settings.backendToken ?? "").trim();
   if (!endpoint || !token) {
-    throw new Error("OpenAI y la agenda ERP todavía no están configurados. Abre Ajustes y agrega el token privado de Firebase.");
+    throw new Error("OpenAI y el ERP todavía no están configurados. Abre Ajustes y agrega el token privado de Firebase.");
   }
   return { endpoint, token };
 }
 
-function knowledgeEndpoint(settings) {
-  const configured = String(settings.knowledgeBackendUrl ?? "").trim();
-  if (configured) return configured;
-  return String(settings.backendUrl ?? "")
-    .replace(/whatsappCopilotDraft\/?$/, "whatsappCopilotKnowledge");
-}
-
-async function backendRequest(settings, body, endpointOverride = "") {
-  const { endpoint, token } = backendConfiguration(settings, endpointOverride);
+async function backendRequest(settings, body) {
+  const { endpoint, token } = backendConfiguration(settings);
   let response;
   try {
     response = await fetch(endpoint, {
@@ -104,19 +68,14 @@ async function callBackend(context, settings, extra = {}) {
     console.warn("DEMAC Copilot could not prepare conversation memory.", error);
   }
 
-  const questionKind = extra.commitAppointment === true
-    ? ""
-    : detectKnowledgeQuestion(prepared.context);
-  const endpoint = questionKind ? knowledgeEndpoint(settings) : settings.backendUrl;
   const data = await backendRequest(settings, {
     channel: "whatsapp-web-copilot",
     company: settings.companyName,
     operator: settings.operatorName,
     languageMode: settings.languageMode,
-    questionKind,
     conversation: prepared.context,
     ...extra,
-  }, endpoint);
+  });
 
   try {
     await learnConversationMemory(
@@ -133,7 +92,7 @@ async function callBackend(context, settings, extra = {}) {
   if (!text) throw new Error("El backend no devolvió una respuesta para revisar.");
   return {
     text,
-    source: data?.source ?? "openai",
+    source: data?.source ?? "openai+erp",
     warning: data?.warning ?? "",
     metadata: data?.metadata ?? null,
   };
@@ -144,14 +103,15 @@ async function testBackend(settings) {
   if (!data?.ok || !data?.openAiConfigured) {
     throw new Error("Firebase respondió, pero la clave de OpenAI no está disponible.");
   }
-  if (!data?.erpSchedulingConfigured) {
-    throw new Error("OpenAI está conectado, pero la consulta de agenda ERP no está activada.");
+  if (!data?.erpSchedulingConfigured || !data?.erpKnowledgeConfigured) {
+    throw new Error("OpenAI está conectado, pero la agenda o la base de conocimiento del ERP no están activadas.");
   }
   return {
     connected: true,
     model: data.model || "OpenAI",
     source: data.source || "openai+erp",
     erpSchedulingConfigured: true,
+    erpKnowledgeConfigured: true,
     papiamentoVocabulary: data.papiamentoVocabulary ?? null,
   };
 }
