@@ -6,6 +6,7 @@ const {
   immediateReply,
   isAvailabilityTurn,
   isGreetingOnly,
+  isKnowledgeRejectionTurn,
   looksLikeAffirmativeSelection,
 } = require("./whatsappCopilotConversationPolicy");
 
@@ -27,13 +28,39 @@ test("a simple buenos días gets the staged DEMAC welcome and never inherits an 
     "Buenos días.\n\n¿Cómo podemos ayudarle hoy?\n\n• Servicio y mantenimiento\n• Instalación\n• Reparación",
   );
   assert.doesNotMatch(reply.draft, /duraci|ERP|precio/i);
+  assert.equal(reply.metadata.nextAction, "wait_for_customer");
+});
+
+test("service selection is progressive instead of asking the whole intake at once", () => {
+  const reply = immediateReply({
+    conversation: {
+      customerTurn: { text: "servicio" },
+      messages: [{ direction: "inbound", text: "servicio" }],
+    },
+    languageMode: "auto",
+  });
+  assert.equal(reply.draft, "Perfecto.\n\n¿Cuántos aires son y cuál es la dirección donde debemos ir?");
+  assert.equal(reply.metadata.collectedInformation.serviceType, "service");
+  assert.doesNotMatch(reply.draft, /instalaci|reparaci|tipo de trabajo/i);
 });
 
 test("availability questions are routed to scheduling rather than old knowledge context", () => {
   assert.equal(isAvailabilityTurn("¿Tienes cupo para el martes?"), true);
   assert.equal(isAvailabilityTurn("¿Tienes para el lunes?"), true);
   assert.equal(isAvailabilityTurn("hay disponibilidad el miércoles?"), true);
+  assert.equal(isAvailabilityTurn("¿Y tienes cupo en la tarde?"), true);
   assert.equal(isAvailabilityTurn("cuánto dura el servicio"), false);
+});
+
+test("customer correction about duration is not treated as a new duration question", () => {
+  const text = "no te pregunté nada de la duración ni el ERP";
+  assert.equal(isKnowledgeRejectionTurn(text), true);
+  const reply = immediateReply({
+    conversation: { customerTurn: { text }, messages: [{ direction: "inbound", text }] },
+    languageMode: "auto",
+  });
+  assert.match(reply.draft, /Disculpe la confusión/i);
+  assert.doesNotMatch(reply.draft, /1 hora|duración estimada|ERP/i);
 });
 
 test("multi-question replies are separated into natural paragraphs", () => {
