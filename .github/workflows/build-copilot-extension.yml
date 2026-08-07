@@ -10,6 +10,9 @@ on:
       - "functions/whatsappCopilotCompanyRules.test.js"
       - "functions/whatsappCopilotConversationPolicy.js"
       - "functions/whatsappCopilotConversationPolicy.test.js"
+      - "functions/whatsappCopilotFlowV19.js"
+      - "functions/whatsappCopilotFlowV19.test.js"
+      - "functions/whatsappCopilotSchedulingRuntimeV19.js"
       - "functions/whatsappCopilotRouterExports.test.js"
       - "functions/demacServicePricingRules.js"
       - "functions/demacServicePricingRules.test.js"
@@ -17,6 +20,7 @@ on:
       - "functions/whatsappCopilotScheduling.js"
       - "functions/whatsappCopilot.js"
       - "functions/bootstrap.js"
+      - "functions/package.json"
       - "src/screens/WhatsAppKnowledgeScreen.tsx"
       - "src/screens/CompanyRulesScreen.tsx"
       - "src/screens/SettingsHubScreen.tsx"
@@ -62,16 +66,20 @@ jobs:
           node --check whatsappCopilotRouter.js
           node --check whatsappCopilotCompanyRules.js
           node --check whatsappCopilotConversationPolicy.js
+          node --check whatsappCopilotFlowV19.js
+          node --check whatsappCopilotSchedulingRuntimeV19.js
           node --check demacServicePricingRules.js
           node --check whatsappCopilotServiceRules.js
           node --check whatsappCopilotScheduling.js
           node --check whatsappCopilot.js
           node --check bootstrap.js
 
-      - name: Verify V18 public runtime source
+      - name: Verify V18 public runtime with V19 conversation flow
         run: |
-          grep -q 'openai+erp-conversation-orchestrator-v18' functions/whatsappCopilotRouter.js
+          grep -q 'openai+erp-conversation-orchestrator-v18-flow-v19' functions/whatsappCopilotRouter.js
+          grep -q 'conversationFlowVersion: RUNTIME.flowVersion' functions/whatsappCopilotRouter.js
           grep -q 'whatsappCopilotDraft: router.whatsappCopilotDraft' functions/bootstrap.js
+          grep -q 'whatsappCopilotFlowV19' functions/bootstrap.js
           grep -q '"version": "0.5.0"' extensions/demac-whatsapp-ai-copilot/manifest.json
           if grep -q 'runAutoReply' extensions/demac-whatsapp-ai-copilot/background.js; then
             echo "Legacy background auto-reply engine is still present" >&2
