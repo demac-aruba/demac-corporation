@@ -1,3 +1,4 @@
+// COMPANY_RULES_V14_SCREEN: unified company rules screen already includes protected capacity behavior.
 import React, { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Button, Card, Input, SectionTitle } from '../components/UI';
@@ -376,7 +377,6 @@ function ServiceRulesSection() {
     setError('');
     try {
       if (currentUser?.authProvider === 'firebase') await saveFirestoreDocument('businessSettings', normalized);
-
       const presetDuration = new Map<string, number>([
         ['standard_service', normalized.standardServiceSplit[0]?.durationMinutes ?? 60],
         ['deep_cleaning', normalized.deepCleaningSplit[0]?.durationMinutes ?? 120],
@@ -388,7 +388,6 @@ function ServiceRulesSection() {
       }).sort((a, b) => a.sortOrder - b.sortOrder);
       const presetResult = await saveAppointmentWorkPresets(nextPresets);
       if (!presetResult.ok) throw new Error(presetResult.message ?? 'No se pudieron sincronizar las duraciones de agenda.');
-
       setRules(normalized);
       setDraft(matrixDraft(normalized));
       setMessage('Precios y duraciones guardados. El Copilot y la agenda ya usarán esta matriz como fuente de verdad.');
@@ -404,11 +403,9 @@ function ServiceRulesSection() {
       <SectionTitle title="Servicios, duración y precios" subtitle="Esta matriz es la fuente de verdad para respuestas del Copilot. Los valores pueden cambiarse aquí sin reprogramar la extensión." action={<Button compact variant="secondary" label={loading ? 'Cargando…' : 'Actualizar'} disabled={loading} onPress={() => void refresh()} />} />
       {message ? <View style={styles.success}><Text style={styles.successText}>{message}</Text></View> : null}
       {error ? <View style={styles.error}><Text style={styles.errorText}>{error}</Text></View> : null}
-
       <PriceMatrixCard title="Servicio estándar — split units" subtitle="Duración normal: 1 hora por aire. 9k–24k son precios especiales; 36k es precio regular." group="standard" rows={rules.standardServiceSplit} draft={draft} onChange={updateDraft} />
       <PriceMatrixCard title="Deep cleaning — split units" subtitle="Precio fijo Afl. 195 hasta 24,000 BTU y Afl. 225 para 36,000 BTU. La duración queda editable." group="deep" rows={rules.deepCleaningSplit} draft={draft} onChange={updateDraft} />
       <PriceMatrixCard title="Instalación estándar — Adina comprado con DEMAC" subtitle="Estos precios especiales aplican cuando el cliente compra el equipo Adina con DEMAC. 12k/18k/24k reservan 2 horas; 36k reserva 3 horas." group="install" rows={rules.standardInstallationAdinaDemac} draft={draft} onChange={updateDraft} />
-
       <Card><View style={styles.actions}><Button label={saving ? 'Guardando…' : 'Guardar todos los precios y duraciones'} disabled={saving} onPress={() => void save()} /></View></Card>
     </ScrollView>
   );
