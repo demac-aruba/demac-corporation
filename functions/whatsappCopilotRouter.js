@@ -11,12 +11,14 @@ const {
 } = require("./whatsappCopilotConversationPolicy");
 
 // COPILOT_CONVERSATION_RULES_V15_ROUTER: runtime policy is already materialized.
-const COPILOT_FUNCTION_NAME = "whatsappCopilotDraftV17";
-const COPILOT_RUNTIME_SOURCE = "openai+erp-unified-router-v17";
-const COPILOT_RUNTIME_VERSION = 17;
-
 const extensionToken = defineSecret("WHATSAPP_COPILOT_EXTENSION_TOKEN");
 const openAiApiKey = defineSecret("OPENAI_API_KEY");
+const FUNCTION_OPTIONS = {
+  region: "us-central1",
+  memory: "512MiB",
+  timeoutSeconds: 90,
+  secrets: [openAiApiKey, extensionToken],
+};
 
 function setCors(request, response) {
   const origin = String(request.get("origin") || "");
@@ -71,33 +73,30 @@ async function runSchedulingDraft(request) {
   return state;
 }
 
-function runtimeMetadata() {
+function runtimeMetadata(runtime) {
   return {
-    functionName: COPILOT_FUNCTION_NAME,
-    source: COPILOT_RUNTIME_SOURCE,
-    version: COPILOT_RUNTIME_VERSION,
+    functionName: runtime.functionName,
+    source: runtime.source,
+    version: runtime.version,
   };
 }
 
-function sendCaptured(response, captured) {
+function sendCaptured(response, captured, runtime) {
   const body = captured.body;
   if (body && typeof body === "object" && typeof body.draft === "string") {
     body.draft = formatNaturalCustomerReply(body.draft, body?.metadata?.language || "es");
   }
-  if (body && typeof body === "object") body.runtime = runtimeMetadata();
+  if (body && typeof body === "object") body.runtime = runtimeMetadata(runtime);
   const outgoing = response.status(captured.statusCode);
   if (captured.responseType === "send") outgoing.send(body);
   else outgoing.json(body);
 }
 
-const copilotHandler = onRequest(
-  {
-    region: "us-central1",
-    memory: "512MiB",
-    timeoutSeconds: 90,
-    secrets: [openAiApiKey, extensionToken],
-  },
-  async (request, response) => {
+function createCopilotEndpoint(runtime) {
+  // Important: every exported Firebase function must get its own onRequest object.
+  // Aliasing one onRequest object under two export names makes Firebase discover
+  // only one endpoint, which caused `No function matches the filter` for V17.
+  return onRequest(FUNCTION_OPTIONS, async (request, response) => {
     setCors(request, response);
     if (request.method === "OPTIONS") {
       response.status(204).send("");
@@ -116,13 +115,13 @@ const copilotHandler = onRequest(
     if (request.body?.mode === "health") {
       response.status(200).json({
         ok: true,
-        source: COPILOT_RUNTIME_SOURCE,
+        source: runtime.source,
         model: "gpt-5-mini",
         openAiConfigured: Boolean(openAiApiKey.value()),
         erpSchedulingConfigured: true,
         erpKnowledgeConfigured: true,
-        conversationPolicyVersion: COPILOT_RUNTIME_VERSION,
-        functionName: COPILOT_FUNCTION_NAME,
+        conversationPolicyVersion: runtime.version,
+        functionName: runtime.functionName,
       });
       return;
     }
@@ -134,7 +133,7 @@ const copilotHandler = onRequest(
         languageMode: request.body?.languageMode || "auto",
       });
       if (immediate) {
-        immediate.runtime = runtimeMetadata();
+        immediate.runtime = runtimeMetadata(runtime);
         response.status(200).json(immediate);
         return;
       }
@@ -142,7 +141,7 @@ const copilotHandler = onRequest(
       const latest = latestCustomerText(conversation);
       if (isAvailabilityTurn(latest)) {
         const captured = await runSchedulingDraft(request);
-        sendCaptured(response, captured);
+        sendCaptured(response, captured, runtime);
         return;
       }
 
@@ -152,23 +151,30 @@ const copilotHandler = onRequest(
           knowledge.payload.draft,
           knowledge.payload?.metadata?.language || "es",
         );
-        knowledge.payload.runtime = runtimeMetadata();
+        knowledge.payload.runtime = runtimeMetadata(runtime);
         response.status(200).json(knowledge.payload);
         return;
       }
 
       const captured = await runSchedulingDraft(request);
-      sendCaptured(response, captured);
+      sendCaptured(response, captured, runtime);
     } catch (error) {
       response.status(500).json({
         error: `No se pudo procesar el flujo unificado del Copilot: ${error?.message || error}`,
-        runtime: runtimeMetadata(),
+        runtime: runtimeMetadata(runtime),
       });
     }
-  },
-);
+  });
+}
 
-// New clean endpoint for testing. Keeping the old name prevents breaking any
-// existing supervised clients while we prove the new runtime independently.
-exports.whatsappCopilotDraft = copilotHandler;
-exports.whatsappCopilotDraftV17 = copilotHandler;
+exports.whatsappCopilotDraft = createCopilotEndpoint({
+  functionName: "whatsappCopilotDraft",
+  source: "openai+erp-unified-router-v17-compatible",
+  version: 17,
+});
+
+exports.whatsappCopilotDraftV17 = createCopilotEndpoint({
+  functionName: "whatsappCopilotDraftV17",
+  source: "openai+erp-unified-router-v17",
+  version: 17,
+});
