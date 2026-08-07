@@ -8,6 +8,7 @@ on:
       - "functions/whatsappCopilotRouter.js"
       - "functions/whatsappCopilotCompanyRules.js"
       - "functions/whatsappCopilotCompanyRules.test.js"
+      - "functions/whatsappCopilotServiceRules.js"
       - "functions/bootstrap.js"
       - "src/screens/WhatsAppKnowledgeScreen.tsx"
       - "src/screens/CompanyRulesScreen.tsx"
@@ -48,6 +49,7 @@ jobs:
           node --check whatsappCopilotKnowledge.js
           node --check whatsappCopilotRouter.js
           node --check whatsappCopilotCompanyRules.js
+          node --check whatsappCopilotServiceRules.js
           node --check bootstrap.js
 
       - name: Build ZIP
