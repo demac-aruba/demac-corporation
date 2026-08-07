@@ -8,6 +8,9 @@
   "functions": {
     "source": "functions",
     "codebase": "default",
+    "predeploy": [
+      "npm run patch:all"
+    ],
     "ignore": [
       "node_modules",
       ".git",

@@ -9,7 +9,7 @@ const {
   looksLikeAffirmativeSelection,
 } = require("./whatsappCopilotConversationPolicy");
 
-test("a simple buenos días stays a greeting and does not inherit an old intent", () => {
+test("a simple buenos días gets the staged DEMAC welcome and never inherits an old intent", () => {
   assert.equal(isGreetingOnly("Buenos días"), true);
   const reply = immediateReply({
     conversation: {
@@ -22,12 +22,18 @@ test("a simple buenos días stays a greeting and does not inherit an old intent"
     },
     languageMode: "auto",
   });
-  assert.equal(reply.draft, "Buenos días. ¿Cómo puedo ayudarle?");
+  assert.equal(
+    reply.draft,
+    "Buenos días.\n\n¿Cómo podemos ayudarle hoy?\n\n• Servicio y mantenimiento\n• Instalación\n• Reparación",
+  );
+  assert.doesNotMatch(reply.draft, /duraci|ERP|precio/i);
 });
 
-test("availability questions are routed to scheduling rather than knowledge", () => {
+test("availability questions are routed to scheduling rather than old knowledge context", () => {
   assert.equal(isAvailabilityTurn("¿Tienes cupo para el martes?"), true);
+  assert.equal(isAvailabilityTurn("¿Tienes para el lunes?"), true);
   assert.equal(isAvailabilityTurn("hay disponibilidad el miércoles?"), true);
+  assert.equal(isAvailabilityTurn("cuánto dura el servicio"), false);
 });
 
 test("multi-question replies are separated into natural paragraphs", () => {
@@ -40,11 +46,12 @@ test("multi-question replies are separated into natural paragraphs", () => {
   assert.match(reply, /19\?\n\n¿Es servicio/);
 });
 
-test("internal ERP wording is removed from customer-facing duration text", () => {
+test("old robotic ERP duration wording is converted to a natural customer answer", () => {
   const reply = formatNaturalCustomerReply(
     "La duración estimada configurada en nuestro ERP es de aproximadamente 1 hora por cada aire.",
     "es",
   );
+  assert.equal(reply, "Un servicio estándar dura aproximadamente 1 hora por cada aire.");
   assert.doesNotMatch(reply, /ERP|configur/i);
 });
 
