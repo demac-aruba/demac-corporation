@@ -12,13 +12,20 @@ const {
   isAvailabilityTurn,
   latestCustomerText,
 } = require("./whatsappCopilotConversationPolicy");
+const {
+  handleDeterministicScheduling,
+} = require("./whatsappCopilotSchedulingRuntimeV19");
+const {
+  isSchedulingControlTurn,
+} = require("./whatsappCopilotFlowV19");
 
 const extensionToken = defineSecret("WHATSAPP_COPILOT_EXTENSION_TOKEN");
 const openAiApiKey = defineSecret("OPENAI_API_KEY");
 const RUNTIME = {
   functionName: "whatsappCopilotDraft",
-  source: "openai+erp-conversation-orchestrator-v18",
+  source: "openai+erp-conversation-orchestrator-v18-flow-v19",
   version: 18,
+  flowVersion: 19,
 };
 const FUNCTION_OPTIONS = {
   region: "us-central1",
@@ -90,12 +97,25 @@ function sendCaptured(response, captured, route) {
     body.metadata = {
       ...(body.metadata || {}),
       currentTurnPolicy: "authoritative-v18",
+      conversationFlowVersion: 19,
       orchestratorRoute: route,
     };
   }
   const outgoing = response.status(captured.statusCode);
   if (captured.responseType === "send") outgoing.send(body);
   else outgoing.json(body);
+}
+
+function sendDeterministic(response, payload, route) {
+  payload.draft = formatNaturalCustomerReply(payload.draft, payload?.metadata?.language || "es");
+  payload.runtime = runtimeMetadata({ route });
+  payload.metadata = {
+    ...(payload.metadata || {}),
+    currentTurnPolicy: "authoritative-v18",
+    conversationFlowVersion: 19,
+    orchestratorRoute: route,
+  };
+  response.status(200).json(payload);
 }
 
 exports.whatsappCopilotDraft = onRequest(FUNCTION_OPTIONS, async (request, response) => {
@@ -123,6 +143,7 @@ exports.whatsappCopilotDraft = onRequest(FUNCTION_OPTIONS, async (request, respo
       erpSchedulingConfigured: true,
       erpKnowledgeConfigured: true,
       conversationPolicyVersion: RUNTIME.version,
+      conversationFlowVersion: RUNTIME.flowVersion,
       functionName: RUNTIME.functionName,
       currentTurnPolicy: "authoritative-v18",
     });
@@ -143,21 +164,34 @@ exports.whatsappCopilotDraft = onRequest(FUNCTION_OPTIONS, async (request, respo
       immediate.metadata = {
         ...(immediate.metadata || {}),
         currentCustomerTurn: latest,
+        conversationFlowVersion: 19,
         orchestratorRoute: "immediate-current-turn",
       };
       response.status(200).json(immediate);
       return;
     }
 
-    // 2) Availability and appointment language can never be hijacked by an old FAQ.
+    // 2) Date/time refinements and appointment selections use ERP deterministically.
+    //    This prevents a long prior conversation or a truncated model JSON response
+    //    from blocking simple turns such as “en la tarde”, “después de las 2” or
+    //    “ponlo a la 1”.
+    if (isSchedulingControlTurn(latest) || request.body?.commitAppointment === true) {
+      const deterministic = await handleDeterministicScheduling(request.body || {});
+      if (deterministic) {
+        sendDeterministic(response, deterministic, "schedule-deterministic-v19");
+        return;
+      }
+    }
+
+    // 3) Availability language that still needs intake interpretation falls back to
+    //    the OpenAI + ERP scheduling engine, but can never be hijacked by an old FAQ.
     if (isAvailabilityTurn(latest) || request.body?.commitAppointment === true) {
       const captured = await runSchedulingDraft(request);
       sendCaptured(response, captured, "schedule");
       return;
     }
 
-    // 3) FAQ rules are consulted only when the CURRENT turn explicitly asks that FAQ.
-    //    We intentionally do not classify arbitrary statements against all historical rules.
+    // 4) FAQ rules are consulted only when the CURRENT turn explicitly asks that FAQ.
     const questionKind = detectQuestionKind(latest);
     if (questionKind) {
       const knowledge = await resolveKnowledgeReply({
@@ -174,6 +208,7 @@ exports.whatsappCopilotDraft = onRequest(FUNCTION_OPTIONS, async (request, respo
           ...(knowledge.payload.metadata || {}),
           currentCustomerTurn: latest,
           currentTurnPolicy: "authoritative-v18",
+          conversationFlowVersion: 19,
           orchestratorRoute: `knowledge:${questionKind}`,
         };
         response.status(200).json(knowledge.payload);
@@ -181,7 +216,7 @@ exports.whatsappCopilotDraft = onRequest(FUNCTION_OPTIONS, async (request, respo
       }
     }
 
-    // 4) Ordinary conversation/intake continues through the scheduling/OpenAI engine.
+    // 5) Ordinary conversation/intake continues through the scheduling/OpenAI engine.
     const captured = await runSchedulingDraft(request);
     sendCaptured(response, captured, "conversation-intake");
   } catch (error) {
