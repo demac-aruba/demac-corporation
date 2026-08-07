@@ -1,14 +1,30 @@
 # Privacidad — DEMAC WhatsApp AI Copilot
 
-## Alcance de la versión 0.4.4
+## Alcance de la versión 0.4.7
 
 - Opera únicamente en `https://web.whatsapp.com/`.
 - Lee solo los mensajes visibles del chat abierto.
 - No recorre automáticamente todas las conversaciones.
 - No contiene ni almacena la clave de OpenAI.
-- Puede insertar o enviar un mensaje únicamente después de una acción explícita del operador.
-- Conserva saltos de línea y formato visual al transferir el borrador hacia el compositor de WhatsApp Web.
-- Puede consultar la agenda interna de DEMAC. La cita se crea solamente cuando el cliente selecciona una opción y el operador aprueba **Enviar ahora**.
+- Conserva saltos de línea y formato visual al transferir respuestas hacia WhatsApp Web.
+- Consulta reglas, conocimiento y agenda operativa del ERP cuando son necesarios para responder.
+
+## Modo normal supervisado
+
+Por defecto, el operador conserva el control de generación, inserción y envío. Las citas se revalidan antes de crearse en el ERP.
+
+## Modo automático de prueba
+
+La versión 0.4.7 permite activar temporalmente respuestas automáticas para una sola conversación controlada de prueba.
+
+- La activación requiere una acción explícita del operador desde el chat abierto.
+- El modo queda vinculado exclusivamente al identificador de esa conversación.
+- No se utiliza para otros chats.
+- La configuración temporal se guarda en `chrome.storage.session`, por lo que se elimina al cerrar Chrome.
+- Además, el modo expira automáticamente después de 8 horas.
+- Si una respuesta requiere revisión humana, no se envía automáticamente.
+- Si el cliente de prueba confirma una cita, el sistema puede crear una orden real en el ERP después de revalidar disponibilidad; el panel advierte esto antes de activar el modo.
+- El envío automático conserva las mismas protecciones contra el micrófono: únicamente se pulsa un botón verificado explícitamente como **Send / Enviar**.
 
 ## Memoria local estructurada
 
@@ -38,9 +54,9 @@ El token guardado en Chrome no es una clave de OpenAI. Es un token limitado y re
 
 ## Uso dentro del ERP
 
-Firebase consulta únicamente información operativa necesaria para calcular opciones, como órdenes existentes, duración, propiedades, sectores, vans, personal asignado, ausencias, cierres y tardes libres.
+Firebase consulta únicamente información operativa necesaria para calcular opciones y respuestas, como órdenes existentes, duración, precios, propiedades, sectores, vans, personal asignado, ausencias, cierres y reglas aprobadas.
 
-Cuando el cliente confirma una opción y el operador aprueba el envío:
+Cuando el cliente confirma una opción:
 
 - el horario se comprueba nuevamente para impedir doble reserva;
 - se crea la orden principal y, si hace falta, las asignaciones internas de apoyo;
