@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+require("./whatsappCopilotFlowV19Fix");
 const flow = require("./whatsappCopilotFlowV19");
 
 test("interprets a bare 1 o'clock as 13:00 when the offered context is afternoon", () => {
@@ -38,7 +39,7 @@ test("inherits the only offered date when customer refines only the time block",
   assert.equal(result.customerConfirmedAppointment, false);
 });
 
-test("fuzzy booking command maps 'a la 1' to the offered 13:30 slot", () => {
+test("fuzzy booking command maps 'pon el servicio a la 1' to the offered 13:30 slot", () => {
   const analysis = {
     collectedInformation: {
       serviceType: "service",
