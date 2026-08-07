@@ -9,6 +9,8 @@ on:
       - "functions/bootstrap.js"
       - "src/screens/WhatsAppKnowledgeScreen.tsx"
       - "src/screens/SettingsHubScreen.tsx"
+      - "scripts/patchWhatsappKnowledgeSettingsV13.cjs"
+      - "package.json"
       - ".github/workflows/build-copilot-extension.yml"
   workflow_dispatch:
 
