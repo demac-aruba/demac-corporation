@@ -1,3 +1,4 @@
+import "./auto-storage-shim.mjs";
 import { conversationMemoryKey } from "./conversation-memory.mjs";
 
 export const AUTO_TEST_TTL_MS = 8 * 60 * 60 * 1000;
