@@ -25,6 +25,21 @@
         <button class="link-button" id="settingsButton" type="button">Ajustes</button>
       </section>
 
+      <section class="notice auto-test-section" id="autoTestCard" data-kind="idle">
+        <div class="section-heading auto-test-heading">
+          <div>
+            <p class="label">Pruebas rápidas</p>
+            <strong>Respuesta automática</strong>
+          </div>
+          <span class="badge" id="autoTestBadge">Desactivado</span>
+        </div>
+        <span id="autoTestStatus">Actívalo únicamente dentro de tu chat de prueba. Se vincula solo a esa conversación.</span>
+        <span class="muted" id="autoTestDetail">Generará y enviará las respuestas automáticamente. Si el cliente confirma una cita, también revalidará y creará la orden real en el ERP.</span>
+        <div class="button-row">
+          <button id="autoTestButton" class="primary-button" type="button">Activar para este chat</button>
+        </div>
+      </section>
+
       <section class="card">
         <div class="section-heading">
           <div>
@@ -71,14 +86,15 @@
       </section>
 
       <section class="notice">
-        <strong>Modo supervisado.</strong>
-        <span>OpenAI analiza la conversación completa y responde en el idioma del cliente. El envío siempre requiere confirmación del operador.</span>
+        <strong>Modo normal supervisado.</strong>
+        <span>OpenAI analiza la conversación completa y responde en el idioma del cliente. Fuera del modo automático de prueba, el envío continúa requiriendo confirmación del operador.</span>
       </section>
 
       <p class="footer-note" id="buildInfo">Panel cargando…</p>
       <p class="footer-note">Solo procesa el chat abierto. La clave de OpenAI permanece en Firebase.</p>
     </main>
     <script src="sidepanel.js"></script>
+    <script src="auto-test-panel.js"></script>
     <script src="appointment-guard.js"></script>
   </body>
 </html>
