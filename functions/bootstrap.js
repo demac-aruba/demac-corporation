@@ -9,4 +9,5 @@ module.exports = {
   ...require("./professionalReportGeneration"),
   ...require("./whatsappCopilot"),
   ...require("./whatsappCopilotKnowledge"),
+  ...require("./whatsappCopilotRouter"),
 };
