@@ -19,6 +19,8 @@ on:
       - "functions/whatsappCopilotRuntimeV20.js"
       - "functions/whatsappCopilotStateMachineV21.js"
       - "functions/whatsappCopilotStateMachineV21.test.js"
+      - "functions/whatsappCopilotStateMachineV22.js"
+      - "functions/whatsappCopilotStateMachineV22.test.js"
       - "functions/whatsappCopilotSchedulingRuntimeV19.js"
       - "functions/whatsappCopilotRouterExports.test.js"
       - "functions/demacServicePricingRules.js"
@@ -78,6 +80,7 @@ jobs:
           node --check whatsappCopilotSessionContextV20.js
           node --check whatsappCopilotRuntimeV20.js
           node --check whatsappCopilotStateMachineV21.js
+          node --check whatsappCopilotStateMachineV22.js
           node --check whatsappCopilotSchedulingRuntimeV19.js
           node --check demacServicePricingRules.js
           node --check whatsappCopilotServiceRules.js
@@ -85,11 +88,11 @@ jobs:
           node --check whatsappCopilot.js
           node --check bootstrap.js
 
-      - name: Verify V18 public runtime with V21 appointment state
+      - name: Verify V18 public runtime with V22 appointment state
         run: |
-          grep -q 'openai+erp-conversation-orchestrator-v18-flow-v21' functions/whatsappCopilotRouter.js
-          grep -q 'flowVersion: 21' functions/whatsappCopilotRouter.js
-          grep -q 'whatsappCopilotStateMachineV21' functions/whatsappCopilotRouter.js
+          grep -q 'openai+erp-conversation-orchestrator-v18-flow-v22' functions/whatsappCopilotRouter.js
+          grep -q 'flowVersion: 22' functions/whatsappCopilotRouter.js
+          grep -q 'whatsappCopilotStateMachineV22' functions/whatsappCopilotRouter.js
           grep -q 'whatsappCopilotDraft: router.whatsappCopilotDraft' functions/bootstrap.js
           grep -q '"version": "0.5.0"' extensions/demac-whatsapp-ai-copilot/manifest.json
           if grep -q 'runAutoReply' extensions/demac-whatsapp-ai-copilot/background.js; then
