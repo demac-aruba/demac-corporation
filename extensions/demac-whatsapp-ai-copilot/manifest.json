@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "DEMAC WhatsApp AI Copilot",
   "short_name": "DEMAC Copilot",
-  "version": "0.4.4",
-  "description": "Asistente supervisado de DEMAC para comprender chats de WhatsApp Web, consultar rutas y disponibilidad real del ERP, coordinar citas y responder en el idioma del cliente.",
+  "version": "0.4.5",
+  "description": "Asistente supervisado de DEMAC para comprender chats de WhatsApp Web, consultar rutas, disponibilidad y conocimiento unificado del ERP, coordinar citas y responder en el idioma del cliente.",
   "minimum_chrome_version": "114",
   "permissions": [
     "storage",
