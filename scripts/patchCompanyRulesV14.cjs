@@ -5,6 +5,7 @@ const marker = 'COMPANY_RULES_V14';
 const root = path.join(__dirname, '..');
 const settingsHubPath = path.join(root, 'src', 'screens', 'SettingsHubScreen.tsx');
 const schedulingPath = path.join(root, 'functions', 'whatsappCopilotScheduling.js');
+const knowledgePath = path.join(root, 'functions', 'whatsappCopilotKnowledge.js');
 
 function replaceRequired(source, search, replacement, label) {
   if (!source.includes(search)) throw new Error(`${label} not found.`);
@@ -74,6 +75,51 @@ function patchScheduling() {
   fs.writeFileSync(schedulingPath, source);
 }
 
+function patchKnowledge() {
+  let source = fs.readFileSync(knowledgePath, 'utf8');
+  const knowledgeMarker = `${marker}_KNOWLEDGE`;
+  if (source.includes(knowledgeMarker)) return;
+
+  source = replaceRequired(
+    source,
+    'async function buildRuleAnswer({ rule, language, preset, facts, services, activeVanCount }) {',
+    `// ${knowledgeMarker}: duration answers use the same capacity rules as appointment scheduling.\nasync function buildRuleAnswer({ rule, language, preset, facts, services, activeVanCount, operationalRules }) {`,
+    'knowledge answer signature',
+  );
+  source = replaceRequired(
+    source,
+    '    const allocations = distributeUnits(quantity, preset.durationMinutesPerUnit, activeVanCount);',
+    '    const allocations = distributeUnits(quantity, preset.durationMinutesPerUnit, activeVanCount, operationalRules, preset);',
+    'knowledge allocation rules',
+  );
+  source = replaceRequired(
+    source,
+    '  const [presetSnapshot, servicesSnapshot, vansSnapshot, rulesSnapshot] = await Promise.all([',
+    '  const [presetSnapshot, operationalSnapshot, servicesSnapshot, vansSnapshot, rulesSnapshot] = await Promise.all([',
+    'knowledge settings snapshots',
+  );
+  source = replaceRequired(
+    source,
+    '    db.collection("businessSettings").doc("appointment-work-presets").get(),\n    db.collection("services").get(),',
+    '    db.collection("businessSettings").doc("appointment-work-presets").get(),\n    db.collection("businessSettings").doc("company-operational-rules").get(),\n    db.collection("services").get(),',
+    'operational rules snapshot',
+  );
+  source = replaceRequired(
+    source,
+    '  const presetSettings = presetSnapshot.exists ? presetSnapshot.data() : null;\n  const services = servicesSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));',
+    '  const presetSettings = presetSnapshot.exists ? presetSnapshot.data() : null;\n  const operationalRules = operationalSnapshot.exists ? operationalSnapshot.data() : null;\n  const services = servicesSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));',
+    'operational rules data',
+  );
+  source = replaceRequired(
+    source,
+    '  const draft = await buildRuleAnswer({ rule, language, preset, facts, services, activeVanCount });',
+    '  const draft = await buildRuleAnswer({ rule, language, preset, facts, services, activeVanCount, operationalRules });',
+    'knowledge answer call',
+  );
+  fs.writeFileSync(knowledgePath, source);
+}
+
 patchSettingsHub();
 patchScheduling();
+patchKnowledge();
 console.log('Company rules V14 applied.');
