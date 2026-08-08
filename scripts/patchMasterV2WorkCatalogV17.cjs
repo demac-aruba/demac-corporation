@@ -89,8 +89,14 @@ write(files.agenda, agenda);
 let settings = read(files.settings);
 settings = requiredReplace(
   settings,
+  '// APPOINTMENT_SETTINGS_V11: administrators control the appointment work menu and durations.',
+  `// APPOINTMENT_SETTINGS_V11: administrators control the appointment work menu and durations.\n// ${marker}: durations support 15-minute increments and business defaults remain editable.`,
+  'settings V17 marker',
+);
+settings = requiredReplace(
+  settings,
   'Puedes usar incrementos de 30 minutos.',
-  `/* ${marker} */ Puedes usar incrementos de 15 minutos.`,
+  'Puedes usar incrementos de 15 minutos.',
   'settings duration explanation',
 );
 settings = settings.replaceAll('(workPresetDraft?.durationMinutesPerUnit ?? 30) <= 30', '(workPresetDraft?.durationMinutesPerUnit ?? 15) <= 15');
