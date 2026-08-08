@@ -6,6 +6,7 @@ on:
       - "extensions/demac-whatsapp-ai-copilot/**"
       - "functions/whatsappCopilotAgentV30.js"
       - "functions/whatsappCopilotAgentV30.test.js"
+      - "functions/whatsappCopilotBookingIdentityV31.test.js"
       - "functions/whatsappCopilotKnowledge.js"
       - "functions/whatsappCopilotRouter.js"
       - "functions/whatsappCopilotCompanyRules.js"
@@ -86,15 +87,18 @@ jobs:
           node --check whatsappCopilot.js
           node --check bootstrap.js
 
-      - name: Verify AI-first V30 production path
+      - name: Verify AI-first V31 production path
         run: |
-          grep -q 'openai-native-conversation-agent-v30+erp-tools' functions/whatsappCopilotRouter.js
+          grep -q 'openai-native-conversation-agent-v31+erp-tools' functions/whatsappCopilotRouter.js
           grep -q 'whatsappCopilotAgentV30' functions/whatsappCopilotRouter.js
           grep -q 'ai-first-native-messages+erp-tools' functions/whatsappCopilotRouter.js
+          grep -q 'AGENT_VERSION = 31' functions/whatsappCopilotAgentV30.js
           grep -q 'PRIMARY_MODEL = "gpt-5.1"' functions/whatsappCopilotAgentV30.js
           grep -q 'reasoning: { effort: REASONING_EFFORT }' functions/whatsappCopilotAgentV30.js
           grep -q 'tool_choice: { type: "function", name: "decide_customer_turn" }' functions/whatsappCopilotAgentV30.js
           grep -q 'whatsappCopilotDraft: router.whatsappCopilotDraft' functions/bootstrap.js
+          grep -q 'contactVerificationRequired' functions/whatsappCopilotScheduling.js
+          grep -q 'system-price' functions/whatsappCopilotKnowledge.js
           if grep -q 'require("./whatsappCopilotFlowV19")' functions/bootstrap.js; then
             echo "Legacy conversation flow V19 is still loaded in production bootstrap" >&2
             exit 1
