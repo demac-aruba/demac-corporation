@@ -5,6 +5,7 @@ const {
   extractBtu,
   formatDurationReply,
   formatPriceReply,
+  priceQuestionMode,
   resolvePricingContext,
 } = require("./demacServicePricingRules");
 
@@ -57,6 +58,57 @@ test("customer price wording is natural and does not mention ERP", () => {
   assert.match(reply, /Afl\. 125/);
   assert.match(reply, /servicio estándar/i);
   assert.doesNotMatch(reply, /ERP|configur/i);
+});
+
+test("latest BTU overrides an older BTU mentioned earlier in the conversation", () => {
+  const context = resolvePricingContext({
+    pricingRules: DEFAULT_SERVICE_PRICING_RULES,
+    conversation: {
+      messages: [
+        { direction: "inbound", text: "cuanto cuesta un servicio de 18k" },
+        { direction: "outbound", text: "Para 18,000 BTU son Afl. 135." },
+        { direction: "inbound", text: "y uno de 24k?" },
+      ],
+    },
+    latestText: "y uno de 24k?",
+    facts: { serviceType: "service" },
+  });
+  assert.equal(context.btu, 24000);
+  assert.match(formatPriceReply(context, "es"), /Afl\. 145/);
+});
+
+test("all-BTU comparison does not inherit the old 18k price", () => {
+  const latestText = "¿todos los aires variando de sus BTU tienen el mismo precio?";
+  assert.equal(priceQuestionMode(latestText), "comparison");
+  const context = resolvePricingContext({
+    pricingRules: DEFAULT_SERVICE_PRICING_RULES,
+    conversation: {
+      messages: [
+        { direction: "inbound", text: "cuanto cuesta servicio para 18k" },
+        { direction: "outbound", text: "Afl. 135" },
+        { direction: "inbound", text: latestText },
+      ],
+    },
+    latestText,
+    facts: { serviceType: "service" },
+  });
+  assert.equal(context.btu, 0);
+  const reply = formatPriceReply(context, "es");
+  for (const amount of [100, 125, 135, 145, 175]) assert.match(reply, new RegExp(`Afl\\. ${amount}`));
+  assert.match(reply, /varía según los BTU/i);
+});
+
+test("generic price question returns the configured BTU matrix instead of a generic service price", () => {
+  const context = resolvePricingContext({
+    pricingRules: DEFAULT_SERVICE_PRICING_RULES,
+    conversation: { messages: [{ direction: "inbound", text: "¿cuánto cuesta el servicio?" }] },
+    latestText: "¿cuánto cuesta el servicio?",
+    facts: { serviceType: "service" },
+  });
+  assert.equal(context.btu, 0);
+  const reply = formatPriceReply(context, "es");
+  assert.match(reply, /9,000 BTU — Afl\. 100/);
+  assert.match(reply, /36,000 BTU — Afl\. 175/);
 });
 
 test("standard service duration sounds human", () => {
