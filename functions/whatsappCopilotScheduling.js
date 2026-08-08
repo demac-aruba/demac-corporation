@@ -34,6 +34,12 @@ function conversationKey(request) {
     || hashId(request.latestCustomerTurn, 20);
 }
 
+function offerUsable(offer) {
+  if (!offer || !["open", "booked"].includes(offer.status) || !Array.isArray(offer.options)) return false;
+  if (offer.expiresAt && offer.expiresAt < new Date().toISOString()) return false;
+  return true;
+}
+
 async function saveOffer(db, request, analysis, result) {
   const key = conversationKey(request);
   const id = `wa-offer-${hashId(key, 32)}`;
@@ -44,6 +50,7 @@ async function saveOffer(db, request, analysis, result) {
     conversationKey: key,
     chatTitle: request.chatTitle,
     contactPhone: request.contactPhone || "",
+    contactJid: request.contactJid || "",
     language: analysis.language,
     status: "open",
     request: {
@@ -67,11 +74,20 @@ async function getCurrentOffer(db, request) {
   const key = conversationKey(request);
   const id = `wa-offer-${hashId(key, 32)}`;
   const snapshot = await db.collection("whatsappCopilotOffers").doc(id).get();
-  if (!snapshot.exists) return null;
-  const offer = { id: snapshot.id, ...snapshot.data() };
-  if (!["open", "booked"].includes(offer.status) || !Array.isArray(offer.options)) return null;
-  if (offer.expiresAt && offer.expiresAt < new Date().toISOString()) return null;
-  return offer;
+  if (snapshot.exists) {
+    const offer = { id: snapshot.id, ...snapshot.data() };
+    if (offerUsable(offer)) return offer;
+  }
+
+  // WhatsApp Web sometimes exposes only a LID or only a saved contact name. An
+  // offer created before the identity became available must still be recoverable.
+  const title = cleanText(request.chatTitle, 160);
+  if (!title) return null;
+  const byTitle = await db.collection("whatsappCopilotOffers").where("chatTitle", "==", title).limit(10).get();
+  return (byTitle.docs || [])
+    .map((doc) => ({ id: doc.id, ...doc.data() }))
+    .filter(offerUsable)
+    .sort((a, b) => String(b.createdAtIso || "").localeCompare(String(a.createdAtIso || "")))[0] || null;
 }
 
 function selectedOfferOption(analysis, offer) {
@@ -140,25 +156,58 @@ function customerLanguage(language) {
   return "Español";
 }
 
+function bookingIdentity(request, customer = {}, option = {}) {
+  const phone = normalizePhone(request?.contactPhone || customer?.phone || customer?.whatsapp);
+  const jid = cleanText(request?.contactJid, 160);
+  const chatTitle = cleanText(request?.chatTitle, 160);
+  const address = normalizeText(option?.address);
+  const key = phone
+    ? `phone:${phone}`
+    : jid
+      ? `jid:${jid}`
+      : customer?.client?.id
+        ? `client:${customer.client.id}`
+        : chatTitle
+          ? `chat:${normalizeText(chatTitle)}|${address}`
+          : "";
+  const source = phone ? "phone" : jid ? "jid" : customer?.client?.id ? "erp-client" : chatTitle ? "chat-title" : "";
+  return {
+    phone,
+    jid,
+    chatTitle,
+    key,
+    source,
+    canNotify: Boolean(phone),
+  };
+}
+
 async function ensureCustomerAndProperty(transaction, db, { customer, request, analysis, option }) {
-  if (customer.client && customer.property) return { client: customer.client, property: customer.property, created: false };
-  const phone = normalizePhone(request.contactPhone || customer.phone);
-  if (!phone) {
-    throw new Error("No se pudo identificar el número de WhatsApp para crear o enlazar el cliente en el ERP.");
+  const identity = bookingIdentity(request, customer, option);
+  if (customer.client && customer.property) {
+    return { client: customer.client, property: customer.property, created: false, identity };
   }
-  const clientId = customer.client?.id ?? `client-wa-${hashId(phone, 24)}`;
+  if (!identity.key && !customer.client?.id) {
+    throw new Error("No se pudo identificar de forma estable la conversación de WhatsApp para enlazar la cita en el ERP.");
+  }
+
+  const clientId = customer.client?.id ?? `client-wa-${hashId(identity.key, 24)}`;
   const propertyId = customer.property?.id ?? `property-wa-${hashId(`${clientId}|${normalizeText(option.address)}`, 24)}`;
   const clientRef = db.collection("clients").doc(clientId);
   const propertyRef = db.collection("properties").doc(propertyId);
   const [clientSnapshot, propertySnapshot] = await Promise.all([transaction.get(clientRef), transaction.get(propertyRef)]);
   const now = new Date().toISOString();
+  const fallbackName = identity.chatTitle
+    || (identity.phone ? `Cliente WhatsApp ${identity.phone.slice(-4)}` : `Cliente WhatsApp ${hashId(identity.key, 6).toUpperCase()}`);
   const client = clientSnapshot.exists ? { id: clientSnapshot.id, ...clientSnapshot.data() } : {
     id: clientId,
-    name: `Cliente WhatsApp ${phone.slice(-4)}`,
-    phone: `+${phone}`,
+    name: fallbackName,
+    phone: identity.phone ? `+${identity.phone}` : "",
     phoneCountry: "AW",
-    whatsapp: `+${phone}`,
+    whatsapp: identity.phone ? `+${identity.phone}` : "",
     whatsappCountry: "AW",
+    whatsappContactJid: identity.jid || "",
+    whatsappIdentitySource: identity.source,
+    contactVerificationRequired: !identity.phone,
     preferredLanguage: customerLanguage(analysis.language),
     address: option.address,
     zone: option.zone || "",
@@ -187,10 +236,12 @@ async function ensureCustomerAndProperty(transaction, db, { customer, request, a
   };
   if (!clientSnapshot.exists) transaction.set(clientRef, client);
   if (!propertySnapshot.exists) transaction.set(propertyRef, property);
-  return { client, property, created: !clientSnapshot.exists || !propertySnapshot.exists };
+  return { client, property, created: !clientSnapshot.exists || !propertySnapshot.exists, identity };
 }
 
 function notificationRecipient(client) {
+  const target = client?.whatsapp || client?.phone || "";
+  if (!normalizePhone(target)) return null;
   return {
     id: `client-${client.id}`,
     recipientType: "client",
@@ -222,6 +273,7 @@ function workOrderBase({ id, option, assignment, allocation, client, property, a
   const problem = workItem.kind === "installation"
     ? `${option.presetLabel} de ${equipmentLabel}.`
     : `${option.presetLabel} para ${equipmentLabel}.`;
+  const recipient = isPrimary ? notificationRecipient(client) : null;
   return {
     id,
     clientId: client.id,
@@ -236,7 +288,7 @@ function workOrderBase({ id, option, assignment, allocation, client, property, a
     zone: option.zone || property.operationalZone || property.zone || "",
     problem: isPrimary ? problem : `Apoyo a la cita principal: ${problem}`,
     officeNotes: isPrimary
-      ? `Cita coordinada por WhatsApp AI Copilot${supportCount ? ` con ${supportCount} van(es) de apoyo` : ""}.`
+      ? `Cita coordinada por WhatsApp AI Copilot${supportCount ? ` con ${supportCount} van(es) de apoyo` : ""}.${recipient ? "" : " Contacto creado sin teléfono verificable; enlazar número para recordatorios automáticos."}`
       : "Asignación interna de van de apoyo. No enviar confirmación ni recordatorio duplicado.",
     appointmentWorkType: option.presetId,
     appointmentPresetId: option.presetId,
@@ -251,8 +303,8 @@ function workOrderBase({ id, option, assignment, allocation, client, property, a
     schedulingMode: "perUnit",
     airConditionerCount: allocation.quantity,
     scheduledSlots: allocation.slots,
-    whatsappNotificationsEnabled: isPrimary,
-    notificationRecipients: isPrimary ? [notificationRecipient(client)] : [],
+    whatsappNotificationsEnabled: Boolean(recipient),
+    notificationRecipients: recipient ? [recipient] : [],
     confirmedAt: now,
     createdAt: now,
     updatedAt: now,
@@ -299,6 +351,7 @@ async function reserveOption({ db, request, analysis, offer, option }) {
 
   const primaryId = `WO-WA-${option.date.replaceAll("-", "")}-${hashId(`${offer.id}|${option.id}`, 8).toUpperCase()}`;
   const createdIds = [];
+  let bookingIdentityResult = bookingIdentity(request, latestCustomer, option);
   await db.runTransaction(async (transaction) => {
     const existingRef = db.collection("workOrders").doc(primaryId);
     const existing = await transaction.get(existingRef);
@@ -327,6 +380,7 @@ async function reserveOption({ db, request, analysis, offer, option }) {
       analysis,
       option,
     });
+    bookingIdentityResult = ensured.identity;
     const supportCount = Math.max(0, refreshedAssignments.length - 1);
     refreshedAssignments.forEach((assignment, index) => {
       const id = index === 0 ? primaryId : `${primaryId}-SUP-${index}`;
@@ -354,7 +408,14 @@ async function reserveOption({ db, request, analysis, offer, option }) {
       bookedAtIso: new Date().toISOString(),
     }, { merge: true });
   });
-  return { primaryWorkOrderId: primaryId, workOrderIds: createdIds, option };
+  return {
+    primaryWorkOrderId: primaryId,
+    workOrderIds: createdIds,
+    option,
+    customerIdentitySource: bookingIdentityResult.source,
+    notificationPhoneAvailable: bookingIdentityResult.canNotify,
+    provisionalCustomer: !bookingIdentityResult.canNotify,
+  };
 }
 
 async function orchestrateScheduling({ db, request, analysis, commitAppointment = false }) {
@@ -393,17 +454,24 @@ async function orchestrateScheduling({ db, request, analysis, commitAppointment 
     }
     try {
       const booking = await reserveOption({ db, request, analysis, offer, option: selected });
+      const notificationWarning = booking.notificationPhoneAvailable
+        ? ""
+        : "La cita sí se creó en el ERP. WhatsApp Web no expuso un número telefónico verificable, por lo que el recordatorio automático del ERP queda pendiente hasta enlazar el teléfono del cliente.";
       return {
         handled: true,
         action: "appointment_booked",
         reply: formatConfirmationReply(analysis.language, selected),
         booking,
         offer,
+        warning: notificationWarning,
         metadata: {
           appointmentCreated: true,
           primaryWorkOrderId: booking.primaryWorkOrderId,
           workOrderIds: booking.workOrderIds,
           selectedOption: selected,
+          customerIdentitySource: booking.customerIdentitySource,
+          notificationPhoneAvailable: booking.notificationPhoneAvailable,
+          provisionalCustomer: booking.provisionalCustomer,
         },
       };
     } catch (error) {
@@ -446,4 +514,10 @@ async function orchestrateScheduling({ db, request, analysis, commitAppointment 
   };
 }
 
-module.exports = { orchestrateScheduling };
+module.exports = {
+  bookingIdentity,
+  conversationKey,
+  notificationRecipient,
+  orchestrateScheduling,
+  selectedOfferOption,
+};
