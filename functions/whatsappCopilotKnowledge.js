@@ -63,7 +63,7 @@ function detectQuestionKind(value) {
 
   if (/\b(cuanto tiempo|cuanto dura|cuantas horas|se demora|tarda|durara|how long|how many hours|duration of|cuanto tempo|tempo e servicio ta dura)\b/.test(text)
     || /^(duracion|duration|tempo)$/.test(text)) return "duration";
-  if (/\b(cuanto cuesta|cuanto sale|que precio|cual es el precio|precio de|price of|how much|cost of|cuanto ta costa|prijs di)\b/.test(text)
+  if (/\b(cuanto cuesta|cuanto sale|que precio|cual es el precio|precio de|precios|mismo precio|igual precio|varia el precio|precio varia|price of|prices|same price|price vary|how much|cost of|cuanto ta costa|prijs di|mesun prijs|prijs ta varia|prijsnan)\b/.test(text)
     || /^(precio|price|cost|prijs)$/.test(text)) return "price";
   if (/\b(que incluye|what is included|what does .* include|incluye el servicio|kiko ta inclui)\b/.test(text)) return "service_includes";
   if (/\b(garantia|warranty)\b/.test(text)) return "warranty";
@@ -275,7 +275,8 @@ function safeHumanAnswer(language) {
 
 async function buildRuleAnswer({ rule, language, preset, facts, services, activeVanCount, operationalRules, pricingRules, conversation, latestText }) {
   const source = cleanText(rule?.source, 80) || "manual";
-  if (source === "erp_duration" || cleanText(rule?.intent, 80) === "duration") {
+  const intent = cleanText(rule?.intent, 80);
+  if (source === "erp_duration" || intent === "duration") {
     const pricingContext = resolvePricingContext({ pricingRules, conversation, latestText, facts });
     const natural = formatDurationReply(pricingContext, language, parseQuantity(facts.quantity));
     if (natural) return natural;
@@ -293,7 +294,9 @@ async function buildRuleAnswer({ rule, language, preset, facts, services, active
   if (source === "erp_service_description") {
     return valueForLanguage(service?.customerDescription || service?.description || service?.details, language);
   }
-  if (source === "erp_service_price") {
+  // Price questions always use the dedicated ERP pricing matrix first. This avoids
+  // a generic service record (for example Afl. 135) overriding BTU-specific rules.
+  if (source === "erp_service_price" || intent === "price") {
     const pricingContext = resolvePricingContext({ pricingRules, conversation, latestText, facts });
     return formatPriceReply(pricingContext, language) || servicePriceText(service, language);
   }
@@ -309,6 +312,11 @@ async function buildRuleAnswer({ rule, language, preset, facts, services, active
 }
 
 function responsePayload({ draft, language, facts, kind, rule, requiresHuman, warning, confidence = 1 }) {
+  const inferredSource = kind === "duration"
+    ? "erp_duration"
+    : kind === "price"
+      ? "erp_service_price"
+      : "manual";
   return {
     draft: formatNaturalCustomerReply(draft, language),
     source: "erp-knowledge-rules-v18",
@@ -318,7 +326,7 @@ function responsePayload({ draft, language, facts, kind, rule, requiresHuman, wa
       language,
       conversationStage: "answering_question",
       nextAction: requiresHuman ? "transfer_human" : "wait_for_customer",
-      summary: "Se respondió únicamente la pregunta actual usando una regla aprobada del ERP.",
+      summary: "Se respondió la pregunta actual usando información autoritativa configurada en DEMAC.",
       confidence,
       requiresHuman: Boolean(requiresHuman),
       missingInformation: [],
@@ -327,7 +335,7 @@ function responsePayload({ draft, language, facts, kind, rule, requiresHuman, wa
       customerConfirmedAppointment: false,
       knowledgeQuestionKind: kind,
       knowledgeRuleId: rule?.id || "",
-      knowledgeSource: rule?.source || (kind === "duration" ? "erp_duration" : "manual"),
+      knowledgeSource: rule?.source || inferredSource,
       currentTurnPolicy: "authoritative",
     },
   };
@@ -374,6 +382,11 @@ async function resolveKnowledgeReply(body) {
   if (!rule && detectedKind === "duration") {
     rule = { id: "system-duration", intent: "duration", source: "erp_duration", active: true };
     kind = "duration";
+    confidence = 1;
+  }
+  if (!rule && detectedKind === "price") {
+    rule = { id: "system-price", intent: "price", source: "erp_service_price", active: true };
+    kind = "price";
     confidence = 1;
   }
 
