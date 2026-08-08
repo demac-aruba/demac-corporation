@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - "extensions/demac-whatsapp-ai-copilot/**"
+      - "functions/whatsappCopilotAgentV30.js"
+      - "functions/whatsappCopilotAgentV30.test.js"
       - "functions/whatsappCopilotKnowledge.js"
       - "functions/whatsappCopilotRouter.js"
       - "functions/whatsappCopilotCompanyRules.js"
@@ -35,6 +37,7 @@ on:
       - "src/screens/SettingsHubScreen.tsx"
       - "scripts/patchWhatsappKnowledgeSettingsV13.cjs"
       - "scripts/patchCompanyRulesV14.cjs"
+      - "scripts/patchCopilotConversationRulesV15.cjs"
       - "docs/DEMAC-company-rules-v1.md"
       - "package.json"
       - ".github/workflows/build-copilot-extension.yml"
@@ -66,34 +69,41 @@ jobs:
           node --check options.js
           node --test conversation-memory.test.mjs
 
-      - name: Validate unified ERP routing
+      - name: Validate AI-first ERP agent
         working-directory: functions
         run: |
           npm install --ignore-scripts
           npm run test:whatsapp-copilot
+          node --check whatsappCopilotAgentV30.js
           node --check whatsappCopilotKnowledge.js
           node --check whatsappCopilotRouter.js
           node --check whatsappCopilotCompanyRules.js
           node --check whatsappCopilotConversationPolicy.js
-          node --check whatsappCopilotFlowV19.js
-          node --check whatsappCopilotFlowV20.js
           node --check whatsappCopilotSessionContextV20.js
-          node --check whatsappCopilotRuntimeV20.js
-          node --check whatsappCopilotStateMachineV21.js
-          node --check whatsappCopilotStateMachineV22.js
-          node --check whatsappCopilotSchedulingRuntimeV19.js
           node --check demacServicePricingRules.js
           node --check whatsappCopilotServiceRules.js
           node --check whatsappCopilotScheduling.js
           node --check whatsappCopilot.js
           node --check bootstrap.js
 
-      - name: Verify V18 public runtime with V22 appointment state
+      - name: Verify AI-first V30 production path
         run: |
-          grep -q 'openai+erp-conversation-orchestrator-v18-flow-v22' functions/whatsappCopilotRouter.js
-          grep -q 'flowVersion: 22' functions/whatsappCopilotRouter.js
-          grep -q 'whatsappCopilotStateMachineV22' functions/whatsappCopilotRouter.js
+          grep -q 'openai-native-conversation-agent-v30+erp-tools' functions/whatsappCopilotRouter.js
+          grep -q 'whatsappCopilotAgentV30' functions/whatsappCopilotRouter.js
+          grep -q 'ai-first-native-messages+erp-tools' functions/whatsappCopilotRouter.js
+          grep -q 'PRIMARY_MODEL = "gpt-5.1"' functions/whatsappCopilotAgentV30.js
+          grep -q 'reasoning: { effort: REASONING_EFFORT }' functions/whatsappCopilotAgentV30.js
+          grep -q 'tool_choice: { type: "function", name: "decide_customer_turn" }' functions/whatsappCopilotAgentV30.js
           grep -q 'whatsappCopilotDraft: router.whatsappCopilotDraft' functions/bootstrap.js
+          if grep -q 'require("./whatsappCopilotFlowV19")' functions/bootstrap.js; then
+            echo "Legacy conversation flow V19 is still loaded in production bootstrap" >&2
+            exit 1
+          fi
+          if grep -q 'require("./whatsappCopilotRuntimeV20")' functions/bootstrap.js; then
+            echo "Legacy conversation runtime V20 is still loaded in production bootstrap" >&2
+            exit 1
+          fi
+          grep -q 'openai+erp-conversation-orchestrator-v18' functions/whatsappCopilotRouter.js
           grep -q '"version": "0.5.0"' extensions/demac-whatsapp-ai-copilot/manifest.json
           if grep -q 'runAutoReply' extensions/demac-whatsapp-ai-copilot/background.js; then
             echo "Legacy background auto-reply engine is still present" >&2

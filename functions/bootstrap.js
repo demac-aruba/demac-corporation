@@ -1,12 +1,8 @@
+// Stable ERP business-rule patches load before the scheduling module so they remain authoritative.
 require("./whatsappCopilotCorrections");
 require("./whatsappCopilotPresentation");
 require("./whatsappCopilotCompanyRules");
 require("./whatsappCopilotServiceRules");
-require("./whatsappCopilotFlowV19");
-require("./whatsappCopilotFlowV19Fix");
-require("./whatsappCopilotFlowV20");
-require("./whatsappCopilotSchedulingRuntimeV19");
-require("./whatsappCopilotRuntimeV20");
 
 const core = require("./index");
 const appointmentNotifications = require("./appointmentNotifications");
@@ -17,8 +13,9 @@ const scheduling = require("./whatsappCopilot");
 const knowledge = require("./whatsappCopilotKnowledge");
 const router = require("./whatsappCopilotRouter");
 
-// Export the public Copilot endpoint explicitly so no earlier spread can shadow
-// the V18 conversation orchestrator with the lower-level scheduling handler.
+// Conversation V19–V22 modules remain in the repository as migration history/tests,
+// but they are deliberately NOT loaded into production. V30 lets OpenAI interpret
+// the conversation first and uses ERP code only as authoritative business tools.
 module.exports = {
   ...core,
   ...appointmentNotifications,
