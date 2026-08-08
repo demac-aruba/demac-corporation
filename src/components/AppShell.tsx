@@ -1,6 +1,7 @@
-import React, { ReactNode, useMemo, useState } from 'react';
+import React, { ReactNode, useEffect, useMemo, useState } from 'react';
 import { Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useAppState } from '../state/AppState';
+import { pushHistoryScreen, readHistoryScreen, replaceHistoryScreen, subscribeToScreenHistory, useWebBackLayer } from '../navigation/appHistory';
 import { colors, roleLabels } from '../theme';
 import { ScreenKey, UserRole } from '../types';
 import { AgendaHubScreen } from '../screens/AgendaHubScreen';
@@ -51,16 +52,42 @@ export function AppShell() {
   const isDesktop = width >= 980;
   const isWideDesktop = width >= 1180;
   const availableItems = useMemo(() => navItems.filter((item) => currentUser && item.roles.includes(currentUser.role)), [currentUser]);
+  const availableScreenKeys = useMemo(() => availableItems.map((item) => item.key), [availableItems]);
   const defaultScreen: ScreenKey = currentUser?.role === 'technician' ? 'technician' : currentUser?.role === 'inventory' ? 'inventory' : currentUser?.role === 'accounting' ? 'finance' : 'dashboard';
-  const [activeScreen, setActiveScreen] = useState<ScreenKey>(defaultScreen);
+  const [activeScreen, setActiveScreen] = useState<ScreenKey>(() => readHistoryScreen<ScreenKey>(availableScreenKeys) ?? defaultScreen);
   const [profileMenuVisible, setProfileMenuVisible] = useState(false);
+  useWebBackLayer(profileMenuVisible, () => setProfileMenuVisible(false), 'account-menu');
   const activeItem = availableItems.find((item) => item.key === activeScreen);
   const activeLabel = activeItem?.label ?? 'Centro de control';
   const profileMenuWidth = Math.min(340, Math.max(270, width - 24));
 
+  useEffect(() => {
+    const restoredScreen = readHistoryScreen<ScreenKey>(availableScreenKeys);
+    const nextScreen = restoredScreen ?? (availableScreenKeys.includes(activeScreen) ? activeScreen : defaultScreen);
+    if (nextScreen !== activeScreen) setActiveScreen(nextScreen);
+    replaceHistoryScreen(nextScreen);
+  }, [currentUser?.id, defaultScreen, availableScreenKeys]);
+
+  useEffect(() => subscribeToScreenHistory((screen) => {
+    if (screen && availableScreenKeys.includes(screen as ScreenKey)) {
+      setActiveScreen(screen as ScreenKey);
+      return;
+    }
+    setActiveScreen(defaultScreen);
+    replaceHistoryScreen(defaultScreen);
+  }), [availableScreenKeys, defaultScreen]);
+
   const navigate = (screen: ScreenKey) => {
-    if (availableItems.some((item) => item.key === screen)) setActiveScreen(screen);
+    if (!availableScreenKeys.includes(screen) || screen === activeScreen) return;
+    pushHistoryScreen(screen);
+    setActiveScreen(screen);
   };
+
+  // Compatibility markers for the idempotent navigation-history patch:
+  // onPress={() => navigate('agenda')} style={styles.createItem}
+  // onPress={() => navigate(item.key)} />
+  // onPress={() => navigate('agenda')} />
+  // onPress={() => navigate(item.key)} style={[styles.bottomItem
 
   const handleLogout = async () => {
     setProfileMenuVisible(false);
@@ -98,7 +125,7 @@ export function AppShell() {
               ) : null}
             </View>
 
-            <Pressable onPress={() => setActiveScreen('agenda')} style={({ pressed }) => [styles.primaryAction, pressed && styles.pressed]}>
+            <Pressable onPress={() => navigate('agenda')} style={({ pressed }) => [styles.primaryAction, pressed && styles.pressed]}>
               <View style={styles.primaryActionIcon}><Text style={styles.primaryActionIconText}>+</Text></View>
               {isWideDesktop ? <Text style={styles.primaryActionText}>Nueva cita</Text> : null}
             </Pressable>
@@ -111,7 +138,7 @@ export function AppShell() {
                   <View key={group} style={styles.navGroup}>
                     {isWideDesktop ? <Text style={styles.navGroupLabel}>{group.toUpperCase()}</Text> : null}
                     {groupItems.map((item) => (
-                      <SidebarButton key={item.key} item={item} active={activeScreen === item.key} compact={!isWideDesktop} onPress={() => setActiveScreen(item.key)} />
+                      <SidebarButton key={item.key} item={item} active={activeScreen === item.key} compact={!isWideDesktop} onPress={() => navigate(item.key)} />
                     ))}
                   </View>
                 );
@@ -151,7 +178,7 @@ export function AppShell() {
             ) : null}
 
             <View style={styles.topbarActions}>
-              <Pressable onPress={() => setActiveScreen('agenda')} style={({ pressed }) => [styles.quickButton, pressed && styles.pressed]}>
+              <Pressable onPress={() => navigate('agenda')} style={({ pressed }) => [styles.quickButton, pressed && styles.pressed]}>
                 <Text style={styles.quickButtonText}>{isDesktop ? 'Crear cita' : '+'}</Text>
               </Pressable>
               <Pressable onPress={() => setProfileMenuVisible(true)} style={({ pressed }) => [styles.topbarAvatar, pressed && styles.pressed]}>
@@ -166,7 +193,7 @@ export function AppShell() {
             <View style={styles.bottomNav}>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.bottomNavInner}>
                 {availableItems.map((item) => (
-                  <Pressable key={item.key} onPress={() => setActiveScreen(item.key)} style={[styles.bottomItem, activeScreen === item.key && styles.bottomItemActive]}>
+                  <Pressable key={item.key} onPress={() => navigate(item.key)} style={[styles.bottomItem, activeScreen === item.key && styles.bottomItemActive]}>
                     <View style={[styles.bottomBadge, activeScreen === item.key && styles.bottomBadgeActive]}>
                       <Text style={[styles.bottomBadgeText, activeScreen === item.key && styles.bottomBadgeTextActive]}>{item.short}</Text>
                     </View>
