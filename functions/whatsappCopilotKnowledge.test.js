@@ -14,6 +14,20 @@ test('detects duration when the current turn actually asks duration', () => {
   assert.equal(looksLikeQuestion(text), true);
 });
 
+test('detects BTU price comparison follow-up as price knowledge', () => {
+  const text = '¿todos los aires variando de sus BTU tienen el mismo precio?';
+  assert.equal(detectQuestionKind(text), 'price');
+  assert.equal(isSchedulingTurn(text), false);
+  assert.equal(looksLikeQuestion(text), true);
+});
+
+test('detects natural price-variation wording without requiring a numeric BTU', () => {
+  for (const text of ['¿varía el precio según los BTU?', '¿todos los precios son iguales?', 'Do all BTU sizes have the same price?']) {
+    assert.equal(detectQuestionKind(text), 'price');
+    assert.equal(looksLikeQuestion(text), true);
+  }
+});
+
 test('keeps appointment selection in the scheduling flow', () => {
   assert.equal(detectQuestionKind('Perfecto, la primera opción está bien'), '');
   assert.equal(isSchedulingTurn('Perfecto, la primera opción está bien'), true);

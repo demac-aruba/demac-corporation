@@ -18,7 +18,7 @@ const openAiApiKey = defineSecret("OPENAI_API_KEY");
 // can verify the public endpoint. flowVersion/agentVersion identify the new AI-first core.
 const RUNTIME = {
   functionName: "whatsappCopilotDraft",
-  source: "openai-native-conversation-agent-v30+erp-tools",
+  source: "openai-native-conversation-agent-v31+erp-tools",
   version: 18,
   flowVersion: AGENT_VERSION,
   agentVersion: AGENT_VERSION,
@@ -61,7 +61,7 @@ function attachRuntime(payload) {
   };
   body.metadata = {
     ...(body.metadata || {}),
-    currentTurnPolicy: "ai-semantic-v30",
+    currentTurnPolicy: "ai-semantic-v31",
     conversationFlowVersion: AGENT_VERSION,
     agentVersion: AGENT_VERSION,
     architecture: RUNTIME.architecture,
@@ -101,7 +101,7 @@ exports.whatsappCopilotDraft = onRequest(FUNCTION_OPTIONS, async (request, respo
       agentVersion: RUNTIME.agentVersion,
       architecture: RUNTIME.architecture,
       functionName: RUNTIME.functionName,
-      currentTurnPolicy: "ai-semantic-v30",
+      currentTurnPolicy: "ai-semantic-v31",
     });
     return;
   }

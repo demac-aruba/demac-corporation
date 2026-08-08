@@ -73,20 +73,51 @@ function extractBtu(value) {
   return compact ? Number(compact[1]) : 0;
 }
 
+function inboundHistory(conversation) {
+  return (conversation?.messages || [])
+    .filter((item) => item?.direction === "inbound" && item?.text)
+    .map((item) => String(item.text));
+}
+
 function contextText(conversation, latestText) {
-  return [
-    ...(conversation?.messages || []).filter((item) => item?.direction === "inbound").map((item) => item.text),
-    latestText,
-  ].filter(Boolean).join(" \n ");
+  return [...inboundHistory(conversation), latestText].filter(Boolean).join(" \n ");
+}
+
+function mostRecentHistoricalBtu(conversation, latestText) {
+  const latestNormalized = normalizeText(latestText);
+  for (const text of [...inboundHistory(conversation)].reverse()) {
+    if (latestNormalized && normalizeText(text) === latestNormalized) continue;
+    const btu = extractBtu(text);
+    if (btu) return btu;
+  }
+  return 0;
+}
+
+function priceQuestionMode(value) {
+  const text = normalizeText(value);
+  if (!text) return "single";
+  if (/\b(mismo precio|mismos precios|igual precio|igual cuestan|varia el precio|varian los precios|precio varia|precio cambia|dependen de los btu|same price|same prices|price vary|prices vary|different price|different prices|mesun prijs|prijs ta varia|prijsnan ta varia)\b/.test(text)) {
+    return "comparison";
+  }
+  if (/\b(todos los aires|todos los btu|cada btu|todos los precios|lista de precios|precios por btu|cuanto cuesta cada|all btus|all sizes|each btu|price list|prices by btu|tur airco|tur btu|prijsnan)\b/.test(text)) {
+    return "matrix";
+  }
+  return "single";
 }
 
 function detectServiceRuleKind(text, facts = {}) {
   const normalized = normalizeText(`${text} ${facts.serviceType || ""}`);
   if (/\b(deep cleaning|deep clean|limpieza profunda|servicio profundo)\b/.test(normalized)) return "deep_cleaning";
-  if (/\b(instalacion|instalación|installation|instalar|instala)\b/.test(normalized)) return "standard_installation";
+  if (/\b(instalacion|installation|instalar|instala)\b/.test(normalized)) return "standard_installation";
   if (/\b(servicio|service|mantenimiento|cleaning)\b/.test(normalized)) return "standard_service";
   if (normalizeText(facts.serviceType) === "installation") return "standard_installation";
   return "standard_service";
+}
+
+function rowsForKind(rules, kind) {
+  if (kind === "deep_cleaning") return rules.deepCleaningSplit;
+  if (kind === "standard_installation") return rules.standardInstallationAdinaDemac;
+  return rules.standardServiceSplit;
 }
 
 function findRow(rows, btu) {
@@ -95,24 +126,30 @@ function findRow(rows, btu) {
 
 function resolvePricingContext({ pricingRules, conversation, latestText, facts = {} }) {
   const rules = normalizeServicePricingRules(pricingRules);
-  const text = contextText(conversation, latestText);
-  const btu = extractBtu(text);
-  const kind = detectServiceRuleKind(text, facts);
-  const normalized = normalizeText(text);
+  const fullText = contextText(conversation, latestText);
+  const questionMode = priceQuestionMode(latestText);
+  const latestBtu = extractBtu(latestText);
+  const historicalBtu = mostRecentHistoricalBtu(conversation, latestText);
+  // The current turn is authoritative. A comparison/list question must never inherit
+  // an old BTU from history, which previously caused repeated single-price replies.
+  const btu = latestBtu || (questionMode === "single" ? historicalBtu : 0);
+  const kind = detectServiceRuleKind(fullText, facts);
+  const normalized = normalizeText(fullText);
   const mentionsSplit = /\b(split|split unit|mini split)\b/.test(normalized);
   const mentionsAdina = /\badina\b/.test(normalized);
-  const purchasedFromDemac = /\b(comprad[oa] con (?:ustedes|demac)|compr[ée] con (?:ustedes|demac)|bought (?:it )?from (?:you|demac)|compra cu boso|cumpra cu boso)\b/.test(normalized);
-
-  let row = null;
-  if (kind === "deep_cleaning") row = findRow(rules.deepCleaningSplit, btu);
-  else if (kind === "standard_installation") row = findRow(rules.standardInstallationAdinaDemac, btu);
-  else row = findRow(rules.standardServiceSplit, btu);
+  const purchasedFromDemac = /\b(comprad[oa] con (?:ustedes|demac)|compre con (?:ustedes|demac)|bought (?:it )?from (?:you|demac)|compra cu boso|cumpra cu boso)\b/.test(normalized);
+  const rows = rowsForKind(rules, kind);
+  const row = findRow(rows, btu);
 
   return {
     rules,
     kind,
     btu,
+    latestBtu,
+    historicalBtu,
     row,
+    rows,
+    questionMode,
     mentionsSplit,
     mentionsAdina,
     purchasedFromDemac,
@@ -130,9 +167,35 @@ function priceTypeLabel(type, language) {
   return " precio especial";
 }
 
+function compactPriceRows(rows) {
+  return (rows || []).map((row) => `${btuLabel(row.btu)} BTU — Afl. ${Number(row.price).toFixed(0)}`).join("; ");
+}
+
+function formatPriceMatrix(context, language = "es") {
+  const { kind, rows, questionMode } = context;
+  if (!rows?.length) return "";
+  const list = compactPriceRows(rows);
+  const comparison = questionMode === "comparison";
+
+  if (language === "en") {
+    if (kind === "deep_cleaning") return `${comparison ? "No. " : ""}Deep-cleaning pricing depends on the unit size: ${list}.`;
+    if (kind === "standard_installation") return `${comparison ? "No. " : ""}For Adina units purchased from DEMAC, standard-installation pricing depends on BTU: ${list}.`;
+    return `${comparison ? "No. " : ""}Standard-service pricing varies by the split unit's BTU: ${list}.`;
+  }
+  if (language === "pap-aw") {
+    if (kind === "deep_cleaning") return `${comparison ? "No. " : ""}E prijs di deep cleaning ta varia segun e capacidad di e airco: ${list}.`;
+    if (kind === "standard_installation") return `${comparison ? "No. " : ""}Pa airco Adina cumpra cu DEMAC, e prijs di instalacion standard ta varia segun BTU: ${list}.`;
+    return `${comparison ? "No. " : ""}E prijs di servicio standard ta varia segun e BTU di e split unit: ${list}.`;
+  }
+  if (kind === "deep_cleaning") return `${comparison ? "No. " : ""}El precio del deep cleaning varía según la capacidad del aire: ${list}.`;
+  if (kind === "standard_installation") return `${comparison ? "No. " : ""}Para equipos Adina comprados con DEMAC, el precio de la instalación estándar varía según los BTU: ${list}.`;
+  return `${comparison ? "No. " : ""}El precio del servicio estándar varía según los BTU del split: ${list}.`;
+}
+
 function formatPriceReply(context, language = "es") {
-  const { kind, btu, row } = context;
-  if (!row || !btu) return "";
+  const { kind, btu, row, questionMode } = context;
+  if (questionMode !== "single" || !row || !btu) return formatPriceMatrix(context, language);
+
   const amount = Number(row.price).toFixed(0);
   const capacity = btuLabel(btu);
   if (language === "en") {
@@ -150,11 +213,28 @@ function formatPriceReply(context, language = "es") {
   return `Para un split unit de ${capacity} BTU, el servicio estándar cuesta Afl. ${amount}${row.priceType === "special" ? " como precio especial" : ""}.`;
 }
 
+function compactDurationRows(rows) {
+  return (rows || []).map((row) => {
+    const hours = Number(row.durationMinutes || 0) / 60;
+    const display = Number.isInteger(hours) ? String(hours) : hours.toFixed(1).replace(".0", "");
+    return `${btuLabel(row.btu)} BTU — ${display} h`;
+  }).join("; ");
+}
+
 function formatDurationReply(context, language = "es", quantity = 0) {
-  const { kind, btu, row } = context;
+  const { kind, btu, row, rows } = context;
   let minutes = Number(row?.durationMinutes || 0);
-  if (!minutes && kind === "standard_service") minutes = 60;
+  if (!minutes && kind === "standard_service") minutes = Number(rows?.[0]?.durationMinutes || 60);
+  if (!minutes && kind === "deep_cleaning") minutes = Number(rows?.[0]?.durationMinutes || 120);
+
+  if (!minutes && kind === "standard_installation" && rows?.length) {
+    const list = compactDurationRows(rows);
+    if (language === "en") return `Standard-installation duration depends on BTU: ${list}.`;
+    if (language === "pap-aw") return `Duracion di instalacion standard ta depende di BTU: ${list}.`;
+    return `La duración de la instalación estándar depende de los BTU: ${list}.`;
+  }
   if (!minutes) return "";
+
   const hours = minutes / 60;
   const display = Number.isInteger(hours) ? String(hours) : hours.toFixed(1).replace(".0", "");
   const plural = hours === 1 ? "" : "s";
@@ -179,7 +259,10 @@ module.exports = {
   detectServiceRuleKind,
   extractBtu,
   formatDurationReply,
+  formatPriceMatrix,
   formatPriceReply,
   normalizeServicePricingRules,
+  priceQuestionMode,
   resolvePricingContext,
+  rowsForKind,
 };

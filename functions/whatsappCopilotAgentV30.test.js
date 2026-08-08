@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 
 const agent = require("./whatsappCopilotAgentV30");
 
-test("V30 sends WhatsApp history to OpenAI as native user and assistant roles", () => {
+test("V31 sends WhatsApp history to OpenAI as native user and assistant roles", () => {
   const messages = agent.inputMessages({
     customerTurn: { text: "sí" },
     messages: [
@@ -20,7 +20,7 @@ test("V30 sends WhatsApp history to OpenAI as native user and assistant roles", 
   assert.match(messages.at(-2).content, /1:30/);
 });
 
-test("V30 planner explicitly treats a short yes after one offered slot as booking", () => {
+test("V31 planner explicitly treats a short yes after one offered slot as booking", () => {
   const instructions = agent.plannerInstructions({
     company: "DEMAC",
     operator: "Operaciones",
@@ -39,7 +39,20 @@ test("V30 planner explicitly treats a short yes after one offered slot as bookin
   assert.match(instructions, /13:30/);
 });
 
-test("V30 carries authoritative facts into an ERP scheduling action", () => {
+test("V31 tells the planner that all-BTU price follow-ups are ERP knowledge questions", () => {
+  const instructions = agent.plannerInstructions({
+    company: "DEMAC",
+    operator: "Operaciones",
+    languageMode: "auto",
+    knownFacts: { serviceType: "service", quantity: "3", address: "Sabana Liber 404" },
+    activeOffer: null,
+  });
+  assert.match(instructions, /diferentes BTU/i);
+  assert.match(instructions, /knowledgeKind=price/i);
+  assert.match(instructions, /must not simply repeat/i);
+});
+
+test("V31 carries authoritative facts into an ERP scheduling action", () => {
   const decision = {
     serviceType: "service",
     quantity: 3,
@@ -68,7 +81,7 @@ test("V30 carries authoritative facts into an ERP scheduling action", () => {
   assert.equal(analysis.collectedInformation.requestedTime, "13:30");
 });
 
-test("V30 preserves ERP facts when the customer's short reply contains no repeated details", () => {
+test("V31 preserves ERP facts when the customer's short reply contains no repeated details", () => {
   const decision = {
     serviceType: "",
     quantity: 0,
@@ -87,8 +100,22 @@ test("V30 preserves ERP facts when the customer's short reply contains no repeat
   assert.equal(facts.address, "Sabana Liber 404");
 });
 
-test("V30 declares GPT-5.1 primary and GPT-5 mini only as fallback", () => {
-  assert.equal(agent.AGENT_VERSION, 30);
+test("V31 recognizes WhatsApp LID as a stable JID without mistaking it for a phone number", () => {
+  const conversation = {
+    chatTitle: "My Love",
+    messages: [
+      { id: "false_159876543210987@lid_ABC", direction: "inbound", text: "sí dame a la 1" },
+    ],
+  };
+  const candidates = agent.identityCandidates(conversation);
+  const identity = agent.requestIdentity(conversation);
+  assert.ok(candidates.includes("159876543210987@lid"));
+  assert.equal(identity.jid, "159876543210987@lid");
+  assert.equal(identity.phone, "");
+});
+
+test("V31 declares GPT-5.1 primary and GPT-5 mini only as fallback", () => {
+  assert.equal(agent.AGENT_VERSION, 31);
   assert.equal(agent.PRIMARY_MODEL, "gpt-5.1");
   assert.equal(agent.FALLBACK_MODEL, "gpt-5-mini");
   assert.equal(agent.REASONING_EFFORT, "medium");
