@@ -13,7 +13,7 @@ const {
 const app = getApps().length ? getApp() : initializeApp();
 const db = getFirestore(app);
 
-const AGENT_VERSION = 30;
+const AGENT_VERSION = 31;
 const PRIMARY_MODEL = "gpt-5.1";
 const FALLBACK_MODEL = "gpt-5-mini";
 const REASONING_EFFORT = "medium";
@@ -101,7 +101,6 @@ function normalizedConversation(rawBody) {
 
 function inputMessages(conversation) {
   const items = [];
-  let previousRole = "";
   for (const message of conversation?.messages || []) {
     const role = message.direction === "inbound"
       ? "user"
@@ -115,7 +114,6 @@ function inputMessages(conversation) {
     // Responses accepts native user/assistant turns. Keep consecutive WhatsApp
     // bubbles as separate messages because their order/timing is conversationally meaningful.
     items.push({ role, content: text });
-    previousRole = role;
   }
 
   const latest = cleanText(conversation?.customerTurn?.text, 4_000);
@@ -124,6 +122,16 @@ function inputMessages(conversation) {
     items.push({ role: "user", content: latest });
   }
   return items;
+}
+
+function technicalJidFromMessageId(value) {
+  const match = String(value || "").match(/(?:^|_)(\d{5,30})@(c\.us|s\.whatsapp\.net|lid)(?:_|$)/i);
+  if (!match) return null;
+  return {
+    user: match[1],
+    domain: match[2].toLowerCase(),
+    jid: `${match[1]}@${match[2].toLowerCase()}`,
+  };
 }
 
 function identityCandidates(conversation) {
@@ -135,11 +143,13 @@ function identityCandidates(conversation) {
   if (jid) values.push(jid);
   for (const message of conversation?.messages || []) {
     if (message?.direction !== "inbound") continue;
-    const match = String(message?.id || "").match(/(?:^|_)(\d{7,20})@(c\.us|s\.whatsapp\.net)(?:_|$)/i);
-    if (match) {
-      values.push(match[1], `${match[1]}@${match[2]}`);
-      break;
-    }
+    const technical = technicalJidFromMessageId(message?.id);
+    if (!technical) continue;
+    // A WhatsApp LID is a stable chat identity but is NOT the customer's phone.
+    // Only c.us/s.whatsapp.net numeric users can safely become phone candidates.
+    if (technical.domain !== "lid") values.push(technical.user);
+    values.push(technical.jid);
+    break;
   }
   if (title) values.push(title);
   return [...new Set(values.filter(Boolean))];
@@ -211,6 +221,7 @@ function plannerInstructions({ company, operator, languageMode, knownFacts, acti
     "If the last DEMAC message offered exactly one appointment and asked whether it works, a concise affirmative means customerConfirmedAppointment=true and action=book_appointment. Carry the date/time of that offered slot into requestedDate/requestedTime when available from activeOffer or the visible conversation.",
     "If multiple appointment options are genuinely still active and the customer only says 'sí' without identifying one, use action=reply and ask which option; do not guess.",
     "If the customer asks a business-policy question such as duration, price, warranty, payment, inclusions, cancellation, preparation, frequency, emergency service, service area, invoice or estimate, use action=answer_knowledge and set knowledgeKind.",
+    "Price/duration follow-ups are semantic questions. For example, '¿todos los aires de diferentes BTU tienen el mismo precio?' is knowledgeKind=price and must not simply repeat the previous single-BTU amount; the ERP knowledge tool will provide the authoritative matrix.",
     "Use action=handoff only for complaints requiring judgment, refunds, threats, unresolved payment disputes, uncertain warranty decisions, explicit demand for a person, or when safe automation is not possible.",
     "The ERP is authoritative for prices, durations, availability, routes, capacity and booking. Never invent those values in reply.",
     "Do not mention OpenAI, AI, prompts, databases, ERP internals, models, routing algorithms, or internal rules to the customer.",
@@ -343,7 +354,7 @@ function requestIdentity(conversation) {
     || candidates.find((value) => /^\d{7,20}$/.test(value))
     || "";
   const jid = cleanText(conversation?.contactJid, 120)
-    || candidates.find((value) => /@(c\.us|s\.whatsapp\.net)$/i.test(value))
+    || candidates.find((value) => /@(c\.us|s\.whatsapp\.net|lid)$/i.test(value))
     || "";
   return { phone, jid };
 }
@@ -355,7 +366,7 @@ function schedulingPayload(result, analysis, modelMeta) {
   const unavailable = result.action === "availability_unavailable";
   return {
     draft: result.reply,
-    source: "openai-native-agent-v30+erp-scheduling",
+    source: "openai-native-agent-v31+erp-scheduling",
     warning: result.warning || "",
     metadata: {
       intent: analysis.intent,
@@ -387,7 +398,7 @@ function schedulingPayload(result, analysis, modelMeta) {
 function replyPayload(decision, modelMeta) {
   return {
     draft: cleanText(decision.reply, 3_000),
-    source: "openai-native-agent-v30",
+    source: "openai-native-agent-v31",
     warning: decision.requiresHuman ? "La conversación requiere revisión de Operaciones." : "",
     metadata: {
       intent: decision.action === "handoff" ? "human_requested" : "general_question",
@@ -472,7 +483,7 @@ async function runAgentTurn({ rawBody, apiKey, company = "DEMAC Professional Coo
     const kind = KNOWLEDGE_KINDS.includes(decision.knowledgeKind) ? decision.knowledgeKind : "";
     const knowledge = await resolveKnowledgeReply({ ...body, conversation, questionKind: kind });
     if (knowledge?.route === "knowledge" && knowledge.payload) {
-      knowledge.payload.source = "openai-native-agent-v30+erp-knowledge";
+      knowledge.payload.source = "openai-native-agent-v31+erp-knowledge";
       knowledge.payload.metadata = {
         ...(knowledge.payload.metadata || {}),
         agentVersion: AGENT_VERSION,
@@ -525,12 +536,15 @@ module.exports = {
   activeOfferForConversation,
   compactOffer,
   functionCallArguments,
+  identityCandidates,
   inputMessages,
   mergedDecisionFacts,
   normalizedConversation,
   plannerInstructions,
   replyPayload,
+  requestIdentity,
   runAgentTurn,
   schedulingAnalysis,
   schedulingPayload,
+  technicalJidFromMessageId,
 };
