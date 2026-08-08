@@ -25,6 +25,20 @@ function replaceOnce(oldText, newText, marker) {
   next = next.replace(oldText, newText);
 }
 
+// The ERP v2 command center is intentionally a different information
+// architecture from the legacy card dashboard. Keep the old dashboard source
+// untouched while the new experience is reviewed in this PR.
+replaceOnce(
+  "import { DashboardScreen } from '../screens/DashboardScreen';",
+  "import { DashboardScreenV2 } from '../screens/DashboardScreenV2';",
+  "DashboardScreenV2 } from '../screens/DashboardScreenV2'",
+);
+replaceOnce(
+  '    default: content = <DashboardScreen navigate={navigate} />;',
+  '    default: content = <DashboardScreenV2 navigate={navigate} />;',
+  'default: content = <DashboardScreenV2 navigate={navigate} />',
+);
+
 // Office review is a first-class operational module added by the existing
 // office-review patch.
 insertAfter(
@@ -66,4 +80,4 @@ replaceOnce(
 );
 
 fs.writeFileSync(target, next);
-console.log('patchDemacOperationsShellV16.cjs applied with runtime compatibility.');
+console.log('patchDemacOperationsShellV16.cjs applied with premium command center and runtime compatibility.');
