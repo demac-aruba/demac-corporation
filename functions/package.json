@@ -11,7 +11,7 @@
     "shell": "firebase functions:shell",
     "deploy": "firebase deploy --only functions",
     "logs": "firebase functions:log",
-    "test:whatsapp-copilot": "node --test whatsappCopilotScheduling.test.js whatsappCopilotPresentation.test.js whatsappCopilotCorrections.test.js whatsappCopilotKnowledge.test.js whatsappCopilotCompanyRules.test.js whatsappCopilotConversationPolicy.test.js whatsappCopilotFlowV19.test.js whatsappCopilotFlowV20.test.js whatsappCopilotSessionContextV20.test.js whatsappCopilotStateMachineV21.test.js whatsappCopilotStateMachineV22.test.js whatsappCopilotRouterExports.test.js demacServicePricingRules.test.js ../extensions/demac-whatsapp-ai-copilot/conversation-memory.test.mjs"
+    "test:whatsapp-copilot": "node --test whatsappCopilotScheduling.test.js whatsappCopilotPresentation.test.js whatsappCopilotCorrections.test.js whatsappCopilotKnowledge.test.js whatsappCopilotCompanyRules.test.js whatsappCopilotConversationPolicy.test.js whatsappCopilotFlowV19.test.js whatsappCopilotFlowV20.test.js whatsappCopilotSessionContextV20.test.js whatsappCopilotStateMachineV21.test.js whatsappCopilotStateMachineV22.test.js whatsappCopilotAgentV30.test.js whatsappCopilotRouterExports.test.js demacServicePricingRules.test.js ../extensions/demac-whatsapp-ai-copilot/conversation-memory.test.mjs"
   },
   "dependencies": {
     "firebase-admin": "^13.4.0",
