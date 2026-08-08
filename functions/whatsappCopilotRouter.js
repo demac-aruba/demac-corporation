@@ -2,6 +2,10 @@ const crypto = require("node:crypto");
 const { defineSecret } = require("firebase-functions/params");
 const { onRequest } = require("firebase-functions/v2/https");
 const {
+  CONFIRMATION_GUARD_VERSION,
+  tryResolveConfirmedAppointment,
+} = require("./whatsappCopilotConfirmationGuardV32");
+const {
   AGENT_VERSION,
   FALLBACK_MODEL,
   PRIMARY_MODEL,
@@ -15,14 +19,16 @@ const extensionToken = defineSecret("WHATSAPP_COPILOT_EXTENSION_TOKEN");
 const openAiApiKey = defineSecret("OPENAI_API_KEY");
 
 // Runtime version 18 is intentionally retained so the installed v0.5.0 extension
-// can verify the public endpoint. flowVersion/agentVersion identify the new AI-first core.
+// can verify the public endpoint. The AI agent remains V31 while V32 adds a
+// deterministic transaction guard for accepting an already-offered ERP slot.
 const RUNTIME = {
   functionName: "whatsappCopilotDraft",
-  source: "openai-native-conversation-agent-v31+erp-tools",
+  source: "openai-native-conversation-agent-v31+offer-confirmation-guard-v32+erp-tools",
   version: 18,
   flowVersion: AGENT_VERSION,
   agentVersion: AGENT_VERSION,
-  architecture: "ai-first-native-messages+erp-tools",
+  confirmationGuardVersion: CONFIRMATION_GUARD_VERSION,
+  architecture: "ai-first-native-messages+deterministic-offer-commit+erp-tools",
 };
 
 const FUNCTION_OPTIONS = {
@@ -61,9 +67,10 @@ function attachRuntime(payload) {
   };
   body.metadata = {
     ...(body.metadata || {}),
-    currentTurnPolicy: "ai-semantic-v31",
+    currentTurnPolicy: "ai-semantic-v31+offer-confirmation-guard-v32",
     conversationFlowVersion: AGENT_VERSION,
     agentVersion: AGENT_VERSION,
+    confirmationGuardVersion: CONFIRMATION_GUARD_VERSION,
     architecture: RUNTIME.architecture,
   };
   return body;
@@ -99,14 +106,25 @@ exports.whatsappCopilotDraft = onRequest(FUNCTION_OPTIONS, async (request, respo
       conversationPolicyVersion: RUNTIME.version,
       conversationFlowVersion: RUNTIME.flowVersion,
       agentVersion: RUNTIME.agentVersion,
+      confirmationGuardVersion: RUNTIME.confirmationGuardVersion,
       architecture: RUNTIME.architecture,
       functionName: RUNTIME.functionName,
-      currentTurnPolicy: "ai-semantic-v31",
+      currentTurnPolicy: "ai-semantic-v31+offer-confirmation-guard-v32",
     });
     return;
   }
 
   try {
+    // Once the ERP has already offered concrete slots, accepting one of those
+    // slots is a transaction state transition, not a creative-language task.
+    // Resolve a unique confirmation before asking the model so phrases such as
+    // "lunes en la tarde está bien" or "lunes a la 1" cannot reopen availability.
+    const confirmed = await tryResolveConfirmedAppointment(request.body || {});
+    if (confirmed) {
+      response.status(200).json(attachRuntime(confirmed));
+      return;
+    }
+
     const payload = await runAgentTurn({
       rawBody: request.body || {},
       apiKey: openAiApiKey.value(),

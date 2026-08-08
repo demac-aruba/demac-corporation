@@ -7,6 +7,8 @@ on:
       - "functions/whatsappCopilotAgentV30.js"
       - "functions/whatsappCopilotAgentV30.test.js"
       - "functions/whatsappCopilotBookingIdentityV31.test.js"
+      - "functions/whatsappCopilotConfirmationGuardV32.js"
+      - "functions/whatsappCopilotConfirmationGuardV32.test.js"
       - "functions/whatsappCopilotKnowledge.js"
       - "functions/whatsappCopilotRouter.js"
       - "functions/whatsappCopilotCompanyRules.js"
@@ -76,6 +78,7 @@ jobs:
           npm install --ignore-scripts
           npm run test:whatsapp-copilot
           node --check whatsappCopilotAgentV30.js
+          node --check whatsappCopilotConfirmationGuardV32.js
           node --check whatsappCopilotKnowledge.js
           node --check whatsappCopilotRouter.js
           node --check whatsappCopilotCompanyRules.js
@@ -87,11 +90,12 @@ jobs:
           node --check whatsappCopilot.js
           node --check bootstrap.js
 
-      - name: Verify AI-first V31 production path
+      - name: Verify AI-first V31 plus V32 confirmation production path
         run: |
-          grep -q 'openai-native-conversation-agent-v31+erp-tools' functions/whatsappCopilotRouter.js
-          grep -q 'whatsappCopilotAgentV30' functions/whatsappCopilotRouter.js
-          grep -q 'ai-first-native-messages+erp-tools' functions/whatsappCopilotRouter.js
+          grep -q 'openai-native-conversation-agent-v31+offer-confirmation-guard-v32+erp-tools' functions/whatsappCopilotRouter.js
+          grep -q 'whatsappCopilotConfirmationGuardV32' functions/whatsappCopilotRouter.js
+          grep -q 'deterministic-offer-commit' functions/whatsappCopilotRouter.js
+          grep -q 'CONFIRMATION_GUARD_VERSION = 32' functions/whatsappCopilotConfirmationGuardV32.js
           grep -q 'AGENT_VERSION = 31' functions/whatsappCopilotAgentV30.js
           grep -q 'PRIMARY_MODEL = "gpt-5.1"' functions/whatsappCopilotAgentV30.js
           grep -q 'reasoning: { effort: REASONING_EFFORT }' functions/whatsappCopilotAgentV30.js
