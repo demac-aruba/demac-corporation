@@ -9,6 +9,8 @@ const {
   runAgentTurn,
 } = require("./whatsappCopilotAgentV30");
 
+// Legacy V15 migration guard: openai+erp-conversation-orchestrator-v18
+// This marker prevents the old patch script from rewriting the AI-first router during Firebase predeploy.
 const extensionToken = defineSecret("WHATSAPP_COPILOT_EXTENSION_TOKEN");
 const openAiApiKey = defineSecret("OPENAI_API_KEY");
 
