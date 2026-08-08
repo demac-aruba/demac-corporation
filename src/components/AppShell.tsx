@@ -15,20 +15,25 @@ import { TeamHubScreen } from '../screens/TeamHubScreen';
 import { TechnicianScreen } from '../screens/TechnicianScreen';
 import { WorkOrdersScreen } from '../screens/WorkOrdersScreen';
 
-const navItems: { key: ScreenKey; label: string; icon: string; roles: UserRole[] }[] = [
-  { key: 'dashboard', label: 'Inicio', icon: '⌂', roles: ['admin', 'office', 'supervisor', 'accounting', 'inventory'] },
-  { key: 'agenda', label: 'Agenda', icon: '▣', roles: ['admin', 'office', 'supervisor'] },
-  { key: 'clients', label: 'Clientes', icon: '♙', roles: ['admin', 'office', 'supervisor', 'accounting'] },
-  { key: 'catalog', label: 'Catálogo', icon: '▦', roles: ['admin', 'office', 'supervisor'] },
-  { key: 'workOrders', label: 'Trabajos', icon: '☷', roles: ['admin', 'office', 'supervisor'] },
-  { key: 'team', label: 'Equipo', icon: '♟', roles: ['admin', 'office', 'supervisor'] },
-  { key: 'technician', label: 'Mi trabajo', icon: '✓', roles: ['admin', 'supervisor', 'technician'] },
-  { key: 'sales', label: 'Ventas', icon: '$', roles: ['admin', 'office', 'accounting'] },
-  { key: 'inventory', label: 'Inventario', icon: '◇', roles: ['admin', 'supervisor', 'inventory'] },
-  { key: 'employees', label: 'Empleados', icon: '♙', roles: ['admin', 'accounting'] },
-  { key: 'finance', label: 'Cuentas', icon: '▤', roles: ['admin', 'accounting'] },
-  { key: 'settings', label: 'Ajustes', icon: '⚙', roles: ['admin'] },
+type NavGroup = 'Operaciones' | 'Negocio' | 'Sistema';
+type NavItem = { key: ScreenKey; label: string; short: string; group: NavGroup; roles: UserRole[] };
+
+const navItems: NavItem[] = [
+  { key: 'dashboard', label: 'Centro de control', short: 'CC', group: 'Operaciones', roles: ['admin', 'office', 'supervisor', 'accounting', 'inventory'] },
+  { key: 'agenda', label: 'Agenda y despacho', short: 'AD', group: 'Operaciones', roles: ['admin', 'office', 'supervisor'] },
+  { key: 'clients', label: 'Clientes', short: 'CL', group: 'Operaciones', roles: ['admin', 'office', 'supervisor', 'accounting'] },
+  { key: 'workOrders', label: 'Órdenes de trabajo', short: 'OT', group: 'Operaciones', roles: ['admin', 'office', 'supervisor'] },
+  { key: 'technician', label: 'Mi trabajo', short: 'MT', group: 'Operaciones', roles: ['admin', 'supervisor', 'technician'] },
+  { key: 'team', label: 'Equipo y vans', short: 'EV', group: 'Operaciones', roles: ['admin', 'office', 'supervisor'] },
+  { key: 'catalog', label: 'Catálogo', short: 'CA', group: 'Negocio', roles: ['admin', 'office', 'supervisor'] },
+  { key: 'sales', label: 'Ventas', short: 'VE', group: 'Negocio', roles: ['admin', 'office', 'accounting'] },
+  { key: 'inventory', label: 'Inventario', short: 'IN', group: 'Negocio', roles: ['admin', 'supervisor', 'inventory'] },
+  { key: 'employees', label: 'Empleados', short: 'EM', group: 'Negocio', roles: ['admin', 'accounting'] },
+  { key: 'finance', label: 'Cuentas', short: 'CU', group: 'Negocio', roles: ['admin', 'accounting'] },
+  { key: 'settings', label: 'Configuración', short: 'CF', group: 'Sistema', roles: ['admin'] },
 ];
+
+const navGroups: NavGroup[] = ['Operaciones', 'Negocio', 'Sistema'];
 
 function initials(name?: string) {
   return (name ?? 'Usuario DEMAC')
@@ -43,13 +48,15 @@ function initials(name?: string) {
 export function AppShell() {
   const { currentUser, logout } = useAppState();
   const { width } = useWindowDimensions();
-  const isDesktop = width >= 920;
+  const isDesktop = width >= 980;
+  const isWideDesktop = width >= 1180;
   const availableItems = useMemo(() => navItems.filter((item) => currentUser && item.roles.includes(currentUser.role)), [currentUser]);
   const defaultScreen: ScreenKey = currentUser?.role === 'technician' ? 'technician' : currentUser?.role === 'inventory' ? 'inventory' : currentUser?.role === 'accounting' ? 'finance' : 'dashboard';
   const [activeScreen, setActiveScreen] = useState<ScreenKey>(defaultScreen);
   const [profileMenuVisible, setProfileMenuVisible] = useState(false);
-  const activeLabel = availableItems.find((item) => item.key === activeScreen)?.label ?? 'Inicio';
-  const profileMenuWidth = Math.min(320, Math.max(260, width - 24));
+  const activeItem = availableItems.find((item) => item.key === activeScreen);
+  const activeLabel = activeItem?.label ?? 'Centro de control';
+  const profileMenuWidth = Math.min(340, Math.max(270, width - 24));
 
   const navigate = (screen: ScreenKey) => {
     if (availableItems.some((item) => item.key === screen)) setActiveScreen(screen);
@@ -80,48 +87,75 @@ export function AppShell() {
     <SafeAreaView style={styles.safe}>
       <View style={styles.root}>
         {isDesktop ? (
-          <View style={styles.rail}>
-            <View style={styles.railLogo}><Text style={styles.railLogoText}>❄</Text></View>
-            <Pressable onPress={() => setActiveScreen('agenda')} style={styles.createItem}>
-              <View style={styles.createCircle}><Text style={styles.createIcon}>＋</Text></View>
-              <Text style={styles.createLabel}>Crear</Text>
+          <View style={[styles.sidebar, !isWideDesktop && styles.sidebarCompact]}>
+            <View style={styles.brandBlock}>
+              <View style={styles.brandMark}><Text style={styles.brandMarkText}>D</Text></View>
+              {isWideDesktop ? (
+                <View style={styles.brandCopy}>
+                  <Text style={styles.brandName}>DEMAC</Text>
+                  <Text style={styles.brandTagline}>Operations OS</Text>
+                </View>
+              ) : null}
+            </View>
+
+            <Pressable onPress={() => setActiveScreen('agenda')} style={({ pressed }) => [styles.primaryAction, pressed && styles.pressed]}>
+              <View style={styles.primaryActionIcon}><Text style={styles.primaryActionIconText}>+</Text></View>
+              {isWideDesktop ? <Text style={styles.primaryActionText}>Nueva cita</Text> : null}
             </Pressable>
-            <ScrollView contentContainerStyle={styles.railNav} showsVerticalScrollIndicator={false}>
-              {availableItems.map((item) => <RailButton key={item.key} item={item} active={activeScreen === item.key} onPress={() => setActiveScreen(item.key)} />)}
+
+            <ScrollView contentContainerStyle={styles.sidebarScroll} showsVerticalScrollIndicator={false}>
+              {navGroups.map((group) => {
+                const groupItems = availableItems.filter((item) => item.group === group);
+                if (!groupItems.length) return null;
+                return (
+                  <View key={group} style={styles.navGroup}>
+                    {isWideDesktop ? <Text style={styles.navGroupLabel}>{group.toUpperCase()}</Text> : null}
+                    {groupItems.map((item) => (
+                      <SidebarButton key={item.key} item={item} active={activeScreen === item.key} compact={!isWideDesktop} onPress={() => setActiveScreen(item.key)} />
+                    ))}
+                  </View>
+                );
+              })}
             </ScrollView>
-            <Pressable onPress={() => void handleLogout()} style={styles.railFooter}>
-              <Text style={styles.railFooterIcon}>↪</Text>
-              <Text style={styles.railFooterLabel}>Salir</Text>
+
+            <Pressable onPress={() => setProfileMenuVisible(true)} style={({ pressed }) => [styles.sidebarProfile, !isWideDesktop && styles.sidebarProfileCompact, pressed && styles.pressed]}>
+              <View style={styles.sidebarAvatar}><Text style={styles.sidebarAvatarText}>{initials(currentUser?.name)}</Text></View>
+              {isWideDesktop ? (
+                <View style={styles.sidebarProfileCopy}>
+                  <Text style={styles.sidebarProfileName} numberOfLines={1}>{currentUser?.name ?? 'Usuario DEMAC'}</Text>
+                  <Text style={styles.sidebarProfileRole} numberOfLines={1}>{currentUser ? roleLabels[currentUser.role] : ''}</Text>
+                </View>
+              ) : null}
             </Pressable>
           </View>
         ) : null}
 
         <View style={styles.main}>
           <View style={styles.topbar}>
-            <View style={styles.brandArea}>
-              <Text style={styles.brandName}>DEMAC</Text>
-              {!isDesktop ? <Text style={styles.mobilePage}>{activeLabel}</Text> : null}
+            <View style={styles.pageIdentity}>
+              {!isDesktop ? (
+                <View style={styles.mobileBrandMark}><Text style={styles.mobileBrandMarkText}>D</Text></View>
+              ) : null}
+              <View>
+                <Text style={styles.pageEyebrow}>{activeItem?.group ?? 'Operaciones'}</Text>
+                <Text style={styles.pageTitle}>{activeLabel}</Text>
+              </View>
             </View>
 
             {isDesktop ? (
               <View style={styles.searchBox}>
-                <Text style={styles.searchIcon}>⌕</Text>
-                <Text style={styles.searchPlaceholder}>Navegar. Buscar clientes, órdenes, reportes y más.</Text>
+                <Text style={styles.searchBadge}>⌕</Text>
+                <Text style={styles.searchPlaceholder}>Buscar clientes, órdenes, equipos y reportes</Text>
+                <View style={styles.searchShortcut}><Text style={styles.searchShortcutText}>CTRL K</Text></View>
               </View>
             ) : null}
 
             <View style={styles.topbarActions}>
-              {isDesktop ? <TopIcon icon="▣" label="Tareas" /> : null}
-              {isDesktop ? <TopIcon icon="⚡" label="Rápido" onPress={() => setActiveScreen('agenda')} /> : null}
-              {isDesktop ? <TopIcon icon="?" label="Ayuda" /> : null}
-              <View style={styles.notification}><Text style={styles.notificationText}>♢</Text><View style={styles.notificationDot} /></View>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Abrir menú de cuenta"
-                onPress={() => setProfileMenuVisible(true)}
-                style={({ pressed }) => [styles.profileCircle, pressed && styles.profileCirclePressed]}
-              >
-                <Text style={styles.profileText}>{initials(currentUser?.name)}</Text>
+              <Pressable onPress={() => setActiveScreen('agenda')} style={({ pressed }) => [styles.quickButton, pressed && styles.pressed]}>
+                <Text style={styles.quickButtonText}>{isDesktop ? 'Crear cita' : '+'}</Text>
+              </Pressable>
+              <Pressable onPress={() => setProfileMenuVisible(true)} style={({ pressed }) => [styles.topbarAvatar, pressed && styles.pressed]}>
+                <Text style={styles.topbarAvatarText}>{initials(currentUser?.name)}</Text>
               </Pressable>
             </View>
           </View>
@@ -133,8 +167,10 @@ export function AppShell() {
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.bottomNavInner}>
                 {availableItems.map((item) => (
                   <Pressable key={item.key} onPress={() => setActiveScreen(item.key)} style={[styles.bottomItem, activeScreen === item.key && styles.bottomItemActive]}>
-                    <Text style={[styles.bottomIcon, activeScreen === item.key && styles.bottomTextActive]}>{item.icon}</Text>
-                    <Text style={[styles.bottomLabel, activeScreen === item.key && styles.bottomTextActive]} numberOfLines={1}>{item.label}</Text>
+                    <View style={[styles.bottomBadge, activeScreen === item.key && styles.bottomBadgeActive]}>
+                      <Text style={[styles.bottomBadgeText, activeScreen === item.key && styles.bottomBadgeTextActive]}>{item.short}</Text>
+                    </View>
+                    <Text style={[styles.bottomLabel, activeScreen === item.key && styles.bottomLabelActive]} numberOfLines={1}>{item.label}</Text>
                   </Pressable>
                 ))}
               </ScrollView>
@@ -158,20 +194,10 @@ export function AppShell() {
                 <Text style={styles.profileMenuCloseText}>×</Text>
               </Pressable>
             </View>
-
             <View style={styles.profileMenuDivider} />
-
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Cerrar sesión y cambiar de cuenta"
-              onPress={() => void handleLogout()}
-              style={({ pressed }) => [styles.logoutMenuItem, pressed && styles.logoutMenuItemPressed]}
-            >
-              <View style={styles.logoutMenuIcon}><Text style={styles.logoutMenuIconText}>↪</Text></View>
-              <View style={styles.logoutMenuCopy}>
-                <Text style={styles.logoutMenuTitle}>Cerrar sesión</Text>
-                <Text style={styles.logoutMenuHelp}>Volver al inicio de sesión para entrar con otra cuenta.</Text>
-              </View>
+            <Pressable onPress={() => void handleLogout()} style={({ pressed }) => [styles.logoutMenuItem, pressed && styles.pressed]}>
+              <Text style={styles.logoutMenuTitle}>Cerrar sesión</Text>
+              <Text style={styles.logoutMenuHelp}>Salir de esta cuenta y volver al inicio de sesión.</Text>
             </Pressable>
           </View>
         </View>
@@ -180,88 +206,95 @@ export function AppShell() {
   );
 }
 
-function TopIcon({ icon, label, onPress }: { icon: string; label: string; onPress?: () => void }) {
+function SidebarButton({ item, active, compact, onPress }: { item: NavItem; active: boolean; compact: boolean; onPress: () => void }) {
   return (
-    <Pressable onPress={onPress} style={styles.topIconButton}>
-      <Text style={styles.topIconGlyph}>{icon}</Text>
-      <Text style={styles.topIconLabel}>{label}</Text>
-    </Pressable>
-  );
-}
-
-function RailButton({ item, active, onPress }: { item: (typeof navItems)[number]; active: boolean; onPress: () => void }) {
-  return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.railItem, pressed && { opacity: 0.75 }]}>
-      <View style={[styles.railIconBox, active && styles.railIconBoxActive]}><Text style={[styles.railIcon, active && styles.railIconActive]}>{item.icon}</Text></View>
-      <Text style={[styles.railLabel, active && styles.railLabelActive]} numberOfLines={1}>{item.label}</Text>
+    <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={item.label} style={({ pressed }) => [styles.navItem, compact && styles.navItemCompact, active && styles.navItemActive, pressed && styles.pressed]}>
+      <View style={[styles.navBadge, active && styles.navBadgeActive]}>
+        <Text style={[styles.navBadgeText, active && styles.navBadgeTextActive]}>{item.short}</Text>
+      </View>
+      {!compact ? <Text style={[styles.navLabel, active && styles.navLabelActive]} numberOfLines={1}>{item.label}</Text> : null}
+      {!compact && active ? <View style={styles.activeDot} /> : null}
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#FFFFFF' },
-  root: { flex: 1, flexDirection: 'row' },
-  rail: { width: 72, backgroundColor: '#F3F5F7', borderRightWidth: 1, borderRightColor: '#E1E4E8', alignItems: 'center', paddingTop: 10, paddingBottom: 10 },
-  railLogo: { width: 34, height: 34, borderRadius: 17, backgroundColor: colors.brandBlue, alignItems: 'center', justifyContent: 'center', marginBottom: 10 },
-  railLogoText: { color: '#FFFFFF', fontSize: 18 },
-  createItem: { width: '100%', alignItems: 'center', paddingVertical: 8 },
-  createCircle: { width: 30, height: 30, borderRadius: 15, borderWidth: 1, borderColor: '#AAB1B9', backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
-  createIcon: { color: colors.primary, fontWeight: '900', fontSize: 18, lineHeight: 20 },
-  createLabel: { color: colors.text, fontSize: 9, fontWeight: '700', marginTop: 4 },
-  railNav: { width: 72, alignItems: 'center', gap: 2, paddingVertical: 6 },
-  railItem: { width: 68, minHeight: 58, alignItems: 'center', justifyContent: 'center' },
-  railIconBox: { width: 34, height: 34, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  railIconBoxActive: { backgroundColor: colors.primaryDark },
-  railIcon: { color: '#252A31', fontSize: 17, fontWeight: '900' },
-  railIconActive: { color: '#FFFFFF' },
-  railLabel: { color: '#555B64', fontSize: 8, fontWeight: '700', marginTop: 3, maxWidth: 64, textAlign: 'center' },
-  railLabelActive: { color: colors.text, fontWeight: '900' },
-  railFooter: { width: 68, alignItems: 'center', paddingTop: 8, borderTopWidth: 1, borderTopColor: '#DDE1E5' },
-  railFooterIcon: { color: colors.text, fontSize: 17 },
-  railFooterLabel: { color: colors.muted, fontSize: 8, fontWeight: '700', marginTop: 2 },
-  main: { flex: 1, backgroundColor: '#FFFFFF' },
-  topbar: { height: 56, backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: '#E1E4E8', paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', gap: 20, zIndex: 5 },
-  brandArea: { width: 180 },
-  brandName: { color: colors.text, fontWeight: '800', fontSize: 14 },
-  mobilePage: { color: colors.muted, fontSize: 9, marginTop: 1 },
-  searchBox: { flex: 1, maxWidth: 520, minHeight: 36, borderRadius: 6, backgroundColor: '#F0F2F4', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  searchIcon: { color: '#374151', fontSize: 18 },
-  searchPlaceholder: { color: '#4B5563', fontSize: 12, flex: 1 },
-  topbarActions: { marginLeft: 'auto', flexDirection: 'row', alignItems: 'center', gap: 12 },
-  topIconButton: { alignItems: 'center', minWidth: 34 },
-  topIconGlyph: { color: colors.text, fontSize: 16, fontWeight: '800' },
-  topIconLabel: { color: colors.muted, fontSize: 7, marginTop: 1 },
-  notification: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center' },
-  notificationText: { color: colors.text, fontSize: 19 },
-  notificationDot: { position: 'absolute', top: 3, right: 4, width: 7, height: 7, borderRadius: 4, backgroundColor: colors.danger, borderWidth: 1, borderColor: '#FFFFFF' },
-  profileCircle: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#FFFFFF' },
-  profileCirclePressed: { opacity: 0.72, transform: [{ scale: 0.96 }] },
-  profileText: { color: '#FFFFFF', fontWeight: '900', fontSize: 11 },
-  profileMenuOverlay: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.18)' },
-  profileMenuCard: { position: 'absolute', top: 60, right: 12, backgroundColor: '#FFFFFF', borderRadius: 14, borderWidth: 1, borderColor: colors.border, padding: 16, shadowColor: '#000000', shadowOpacity: 0.18, shadowRadius: 16, shadowOffset: { width: 0, height: 7 }, elevation: 10 },
+  safe: { flex: 1, backgroundColor: colors.navy },
+  root: { flex: 1, flexDirection: 'row', backgroundColor: colors.background },
+  sidebar: { width: 236, backgroundColor: colors.navy, paddingHorizontal: 14, paddingTop: 16, paddingBottom: 14 },
+  sidebarCompact: { width: 78, paddingHorizontal: 9 },
+  brandBlock: { minHeight: 50, flexDirection: 'row', alignItems: 'center', gap: 11, paddingHorizontal: 6 },
+  brandMark: { width: 38, height: 38, borderRadius: 11, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
+  brandMarkText: { color: '#FFFFFF', fontSize: 19, fontWeight: '900' },
+  brandCopy: { flex: 1 },
+  brandName: { color: '#FFFFFF', fontWeight: '900', fontSize: 16, letterSpacing: 0.6 },
+  brandTagline: { color: '#8EA0BC', fontSize: 9, fontWeight: '700', marginTop: 2, letterSpacing: 0.4 },
+  primaryAction: { minHeight: 44, borderRadius: 12, backgroundColor: colors.primary, marginTop: 16, marginBottom: 15, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 },
+  primaryActionIcon: { width: 24, height: 24, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.16)', alignItems: 'center', justifyContent: 'center' },
+  primaryActionIconText: { color: '#FFFFFF', fontSize: 19, lineHeight: 21, fontWeight: '700' },
+  primaryActionText: { color: '#FFFFFF', fontSize: 12, fontWeight: '900' },
+  sidebarScroll: { paddingBottom: 12 },
+  navGroup: { marginBottom: 16, gap: 4 },
+  navGroupLabel: { color: '#6F819C', fontSize: 8, fontWeight: '900', letterSpacing: 1.1, paddingHorizontal: 10, marginBottom: 4 },
+  navItem: { minHeight: 42, borderRadius: 10, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  navItemCompact: { justifyContent: 'center', paddingHorizontal: 0 },
+  navItemActive: { backgroundColor: '#16243A' },
+  navBadge: { width: 28, height: 28, borderRadius: 8, backgroundColor: '#17263D', borderWidth: 1, borderColor: '#263953', alignItems: 'center', justifyContent: 'center' },
+  navBadgeActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  navBadgeText: { color: '#9CB0CC', fontSize: 8, fontWeight: '900', letterSpacing: 0.2 },
+  navBadgeTextActive: { color: '#FFFFFF' },
+  navLabel: { flex: 1, color: '#B8C4D7', fontSize: 11, fontWeight: '700' },
+  navLabelActive: { color: '#FFFFFF', fontWeight: '900' },
+  activeDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: '#61A5FF' },
+  sidebarProfile: { minHeight: 56, borderTopWidth: 1, borderTopColor: '#1F3049', paddingTop: 13, paddingHorizontal: 6, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  sidebarProfileCompact: { justifyContent: 'center', paddingHorizontal: 0 },
+  sidebarAvatar: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#1A3152', borderWidth: 1, borderColor: '#31557E', alignItems: 'center', justifyContent: 'center' },
+  sidebarAvatarText: { color: '#FFFFFF', fontWeight: '900', fontSize: 10 },
+  sidebarProfileCopy: { flex: 1, minWidth: 0 },
+  sidebarProfileName: { color: '#FFFFFF', fontWeight: '800', fontSize: 10 },
+  sidebarProfileRole: { color: '#8194AF', fontSize: 8, marginTop: 2 },
+  main: { flex: 1, backgroundColor: colors.background },
+  topbar: { minHeight: 66, backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: colors.border, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', gap: 18, zIndex: 5 },
+  pageIdentity: { minWidth: 210, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  mobileBrandMark: { width: 34, height: 34, borderRadius: 10, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
+  mobileBrandMarkText: { color: '#FFFFFF', fontWeight: '900', fontSize: 15 },
+  pageEyebrow: { color: colors.muted, fontSize: 8, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.8 },
+  pageTitle: { color: colors.text, fontSize: 15, fontWeight: '900', marginTop: 2 },
+  searchBox: { flex: 1, maxWidth: 520, minHeight: 38, borderRadius: 11, backgroundColor: '#F6F8FB', borderWidth: 1, borderColor: '#E5EAF1', paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', gap: 9 },
+  searchBadge: { color: '#344054', fontSize: 17, fontWeight: '800' },
+  searchPlaceholder: { color: '#7A8799', fontSize: 11, flex: 1 },
+  searchShortcut: { paddingHorizontal: 7, paddingVertical: 4, borderRadius: 6, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#DCE2EA' },
+  searchShortcutText: { color: '#8491A3', fontSize: 7, fontWeight: '900' },
+  topbarActions: { marginLeft: 'auto', flexDirection: 'row', alignItems: 'center', gap: 9 },
+  quickButton: { minHeight: 36, minWidth: 36, borderRadius: 10, backgroundColor: colors.primaryLight, borderWidth: 1, borderColor: '#CFE2FF', paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center' },
+  quickButtonText: { color: colors.primaryDark, fontSize: 10, fontWeight: '900' },
+  topbarAvatar: { width: 34, height: 34, borderRadius: 10, backgroundColor: colors.navy, alignItems: 'center', justifyContent: 'center' },
+  topbarAvatarText: { color: '#FFFFFF', fontWeight: '900', fontSize: 9 },
+  content: { flex: 1, backgroundColor: colors.background },
+  profileMenuOverlay: { flex: 1, backgroundColor: 'rgba(11,18,32,0.28)' },
+  profileMenuCard: { position: 'absolute', top: 66, right: 12, backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: colors.border, padding: 16, shadowColor: '#000000', shadowOpacity: 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 10 },
   profileMenuHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 11 },
-  profileMenuAvatar: { width: 46, height: 46, borderRadius: 23, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
-  profileMenuAvatarText: { color: '#FFFFFF', fontWeight: '900', fontSize: 14 },
+  profileMenuAvatar: { width: 46, height: 46, borderRadius: 13, backgroundColor: colors.navy, alignItems: 'center', justifyContent: 'center' },
+  profileMenuAvatarText: { color: '#FFFFFF', fontWeight: '900', fontSize: 13 },
   profileMenuIdentity: { flex: 1, minWidth: 0 },
   profileMenuName: { color: colors.text, fontWeight: '900', fontSize: 13, lineHeight: 18 },
   profileMenuEmail: { color: colors.muted, fontSize: 10, marginTop: 3 },
   profileMenuRole: { color: colors.primaryDark, fontWeight: '800', fontSize: 9, marginTop: 5 },
-  profileMenuClose: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#F0F2F4', alignItems: 'center', justifyContent: 'center' },
-  profileMenuCloseText: { color: colors.text, fontSize: 21, lineHeight: 22 },
+  profileMenuClose: { width: 30, height: 30, borderRadius: 9, backgroundColor: '#F2F4F7', alignItems: 'center', justifyContent: 'center' },
+  profileMenuCloseText: { color: colors.text, fontSize: 20, lineHeight: 21 },
   profileMenuDivider: { height: 1, backgroundColor: colors.border, marginVertical: 14 },
-  logoutMenuItem: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 10, padding: 10, backgroundColor: colors.dangerLight },
-  logoutMenuItemPressed: { opacity: 0.72 },
-  logoutMenuIcon: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
-  logoutMenuIconText: { color: colors.danger, fontWeight: '900', fontSize: 18 },
-  logoutMenuCopy: { flex: 1 },
-  logoutMenuTitle: { color: colors.danger, fontWeight: '900', fontSize: 12 },
+  logoutMenuItem: { borderRadius: 12, padding: 12, backgroundColor: colors.dangerLight },
+  logoutMenuTitle: { color: colors.danger, fontWeight: '900', fontSize: 11 },
   logoutMenuHelp: { color: colors.text, fontSize: 9, lineHeight: 14, marginTop: 3 },
-  content: { flex: 1, backgroundColor: '#FFFFFF' },
-  bottomNav: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: colors.border, minHeight: 66 },
+  bottomNav: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: colors.border, minHeight: 70 },
   bottomNavInner: { alignItems: 'stretch', paddingHorizontal: 6 },
-  bottomItem: { width: 82, minHeight: 65, alignItems: 'center', justifyContent: 'center', gap: 3, borderTopWidth: 3, borderTopColor: 'transparent' },
-  bottomItemActive: { borderTopColor: colors.primary, backgroundColor: colors.primaryLight },
-  bottomIcon: { color: colors.muted, fontSize: 16, fontWeight: '900' },
-  bottomLabel: { color: colors.muted, fontSize: 8, fontWeight: '800' },
-  bottomTextActive: { color: colors.primaryDark },
+  bottomItem: { width: 92, minHeight: 69, alignItems: 'center', justifyContent: 'center', gap: 4, borderTopWidth: 3, borderTopColor: 'transparent' },
+  bottomItemActive: { borderTopColor: colors.primary, backgroundColor: '#F7FAFF' },
+  bottomBadge: { width: 28, height: 24, borderRadius: 7, backgroundColor: '#F0F3F7', alignItems: 'center', justifyContent: 'center' },
+  bottomBadgeActive: { backgroundColor: colors.primaryLight },
+  bottomBadgeText: { color: colors.muted, fontSize: 7, fontWeight: '900' },
+  bottomBadgeTextActive: { color: colors.primaryDark },
+  bottomLabel: { color: colors.muted, fontSize: 7, fontWeight: '800', maxWidth: 84 },
+  bottomLabelActive: { color: colors.primaryDark },
+  pressed: { opacity: 0.72 },
 });
