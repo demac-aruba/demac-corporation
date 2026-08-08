@@ -24,11 +24,11 @@
       "favicon": "./assets/favicon.png",
       "bundler": "metro",
       "output": "single",
-      "name": "DEMAC Professional Cooling Solutions",
+      "name": "DEMAC Professional Cooling Solutions Aruba",
       "shortName": "DEMAC",
       "lang": "es"
     },
-    "description": "DEMAC Professional Cooling Solutions operations platform.",
+    "description": "DEMAC Professional Cooling Solutions provides air conditioning sales, installation, service, maintenance, repairs and VRF solutions across Aruba. Legal business: DEMAC COOLING SOLUTIONS VBA.",
     "scheme": "demac-corporation",
     "plugins": [
       [

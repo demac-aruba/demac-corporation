@@ -1,7 +1,7 @@
 {
   "short_name": "DEMAC",
-  "name": "DEMAC Professional Cooling Solutions",
-  "description": "Operaciones, agenda y reportes técnicos de DEMAC Aruba.",
+  "name": "DEMAC Professional Cooling Solutions Aruba",
+  "description": "Air conditioning sales, installation, service, maintenance, repairs and VRF solutions across Aruba. Legal business: DEMAC COOLING SOLUTIONS VBA.",
   "id": "/",
   "start_url": "/?source=pwa",
   "scope": "/",

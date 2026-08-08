@@ -32,6 +32,11 @@ export function LoginScreen() {
           <Text style={styles.slogan}>Professional Cooling Solutions</Text>
           <View style={styles.brandDivider} />
           <Text style={styles.brandCopy}>Una sola plataforma para administrar clientes, técnicos, ventas, inventario y operaciones.</Text>
+          <View style={styles.publicIdentity}>
+            <Text style={styles.publicIdentityName}>DEMAC COOLING SOLUTIONS VBA</Text>
+            <Text style={styles.publicIdentityLine}>Santa Cruz 54 C, Lokaal 1, Papilon, Santa Cruz, Aruba</Text>
+            <Text style={styles.publicIdentityLine}>+297 564-2625 · www.demac-aruba.com</Text>
+          </View>
           <View style={styles.featureList}>
             <Text style={styles.feature}>✓ Aplicación Android para técnicos</Text>
             <Text style={styles.feature}>✓ Plataforma web para oficina</Text>
@@ -91,6 +96,9 @@ const styles = StyleSheet.create({
   slogan: { color: '#FFFFFF', fontSize: 17, marginTop: 14, fontWeight: '700' },
   brandDivider: { width: 54, height: 4, backgroundColor: '#59A5FF', borderRadius: 2, marginVertical: 22 },
   brandCopy: { color: '#D7E7FA', lineHeight: 23, maxWidth: 480, fontSize: 15 },
+  publicIdentity: { marginTop: 18, paddingTop: 15, borderTopWidth: 1, borderTopColor: '#3977B8', maxWidth: 500, gap: 3 },
+  publicIdentityName: { color: '#FFFFFF', fontSize: 12, fontWeight: '900', letterSpacing: 0.5 },
+  publicIdentityLine: { color: '#BFDFFF', fontSize: 11, lineHeight: 16 },
   featureList: { gap: 10, marginTop: 22 },
   feature: { color: '#FFFFFF', fontWeight: '700' },
   demoBadge: { marginTop: 28, borderWidth: 1, borderColor: '#6BA9EB', borderRadius: 999, paddingVertical: 7, paddingHorizontal: 13, alignSelf: 'flex-start' },
