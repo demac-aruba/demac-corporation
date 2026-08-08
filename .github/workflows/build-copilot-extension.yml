@@ -9,6 +9,9 @@ on:
       - "functions/whatsappCopilotBookingIdentityV31.test.js"
       - "functions/whatsappCopilotConfirmationGuardV32.js"
       - "functions/whatsappCopilotConfirmationGuardV32.test.js"
+      - "functions/whatsappCopilotBookingCoreV1.js"
+      - "functions/whatsappCopilotBookingCoreV1.test.js"
+      - "functions/whatsappCopilotBookingRuntimeV1.js"
       - "functions/whatsappCopilotKnowledge.js"
       - "functions/whatsappCopilotRouter.js"
       - "functions/whatsappCopilotCompanyRules.js"
@@ -72,13 +75,15 @@ jobs:
           node --check options.js
           node --test conversation-memory.test.mjs
 
-      - name: Validate AI-first ERP agent
+      - name: Validate AI-first ERP agent and booking core
         working-directory: functions
         run: |
           npm install --ignore-scripts
           npm run test:whatsapp-copilot
           node --check whatsappCopilotAgentV30.js
           node --check whatsappCopilotConfirmationGuardV32.js
+          node --check whatsappCopilotBookingCoreV1.js
+          node --check whatsappCopilotBookingRuntimeV1.js
           node --check whatsappCopilotKnowledge.js
           node --check whatsappCopilotRouter.js
           node --check whatsappCopilotCompanyRules.js
@@ -90,11 +95,14 @@ jobs:
           node --check whatsappCopilot.js
           node --check bootstrap.js
 
-      - name: Verify AI-first V31 plus V32 confirmation production path
+      - name: Verify AI-first agent plus canonical Booking Core v1 production path
         run: |
-          grep -q 'openai-native-conversation-agent-v31+offer-confirmation-guard-v32+erp-tools' functions/whatsappCopilotRouter.js
-          grep -q 'whatsappCopilotConfirmationGuardV32' functions/whatsappCopilotRouter.js
-          grep -q 'deterministic-offer-commit' functions/whatsappCopilotRouter.js
+          grep -q 'booking-core-v1' functions/whatsappCopilotRouter.js
+          grep -q 'whatsappCopilotBookingRuntimeV1' functions/whatsappCopilotRouter.js
+          grep -q 'canonical-booking-session' functions/whatsappCopilotRouter.js
+          grep -q 'BOOKING_CORE_VERSION = 1' functions/whatsappCopilotBookingCoreV1.js
+          grep -q 'whatsappCopilotBookingSessions' functions/whatsappCopilotBookingCoreV1.js
+          grep -q 'applyHardConstraints' functions/whatsappCopilotBookingRuntimeV1.js
           grep -q 'CONFIRMATION_GUARD_VERSION = 32' functions/whatsappCopilotConfirmationGuardV32.js
           grep -q 'AGENT_VERSION = 31' functions/whatsappCopilotAgentV30.js
           grep -q 'PRIMARY_MODEL = "gpt-5.1"' functions/whatsappCopilotAgentV30.js
