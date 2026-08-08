@@ -1,0 +1,1 @@
+Premium redesign continuation prepared after PR #146 merge.
