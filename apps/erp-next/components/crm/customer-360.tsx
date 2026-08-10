@@ -66,6 +66,8 @@ export function Customer360() {
   }, [customers, query]);
 
   const selected = customers.find((customer) => customer.id === selectedId) ?? customers[0];
+  const selectedEditorValue = useMemo(() => editorValue(selected), [selected]);
+
   const saveCustomer = (value: CustomerEditorValue) => {
     if (customerEditor === 'edit') {
       setCustomers((current) => current.map((customer) => customer.id === selected.id ? { ...customer, name: value.name, legalName: value.legalName, type: value.type, phone: value.phone, email: value.email, location: value.location, preferredLanguage: value.preferredLanguage, initials: initials(value.name) } : customer));
@@ -139,7 +141,7 @@ export function Customer360() {
         </aside>
       </div>
 
-      <CustomerEditorDrawer open={customerEditor !== null} mode={customerEditor ?? 'create'} initial={customerEditor === 'edit' ? editorValue(selected) : undefined} existingCustomers={customers.map((customer) => ({ id: customer.id, name: customer.name, phone: customer.phone, email: customer.email }))} onClose={() => setCustomerEditor(null)} onSave={saveCustomer} />
+      <CustomerEditorDrawer open={customerEditor !== null} mode={customerEditor ?? 'create'} initial={customerEditor === 'edit' ? selectedEditorValue : undefined} existingCustomers={customers.map((customer) => ({ id: customer.id, name: customer.name, phone: customer.phone, email: customer.email }))} onClose={() => setCustomerEditor(null)} onSave={saveCustomer} />
     </section>
   );
 }
@@ -154,6 +156,6 @@ function Overview({ customer, onEdit }: { customer: CustomerPreview; onEdit: () 
 
 function Activity({ time, title, detail, tone }: { time: string; title: string; detail: string; tone: string }) { return <div className={styles.activityRow}><span className={`${styles.activityDot} ${styles[tone]}`} /><time>{time}</time><div><strong>{title}</strong><p>{detail}</p></div></div>; }
 
-function TabPreview({ tab, customer }: { tab: Exclude<Tab, 'Overview' | 'Contacts' | 'Properties' | 'Equipment'>; customer: CustomerPreview }) {
+function TabPreview({ tab, customer }: { tab: Tab; customer: CustomerPreview }) {
   return <section className={styles.tabPreview}><div className={styles.tabPreviewIcon}>{tab.slice(0, 2).toUpperCase()}</div><div><h3>{tab}</h3><p>This Customer 360 section is registered in the CRM architecture for <strong>{customer.name}</strong>. It will be implemented after the customer master-data flows, without changing the information hierarchy.</p></div></section>;
 }
