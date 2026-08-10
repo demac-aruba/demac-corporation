@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
+import { AssetDetailDrawer, SiteDetailDrawer, type AssetDetail, type SiteDetail } from './relationship-detail';
 import styles from './customer-master-data.module.css';
 
 export type CustomerEditorValue = {
@@ -127,10 +128,9 @@ export function CustomerEditorDrawer({ open, mode, initial, existingCustomers, o
 }
 
 type MasterTab = 'Contacts' | 'Properties' | 'Equipment';
-
 type ContactRow = { id: string; name: string; role: string; phone: string; email: string; primary: boolean };
-type SiteRow = { id: string; name: string; address: string; sector: string; gac: string; access: string };
-type AssetRow = { id: string; site: string; type: string; name: string; brand: string; capacity: string; serial: string; status: string };
+type SiteRow = SiteDetail;
+type AssetRow = AssetDetail;
 
 const initialContacts: ContactRow[] = [
   { id: 'CT-1', name: 'Primary Contact', role: 'Decision maker', phone: '+297 560 1000', email: 'contact@example.com', primary: true },
@@ -147,6 +147,8 @@ export function CustomerMasterDataTab({ tab, customerName }: { tab: MasterTab; c
   const [sites, setSites] = useState(initialSites);
   const [assets, setAssets] = useState(initialAssets);
   const [editor, setEditor] = useState<MasterTab | null>(null);
+  const [selectedSite, setSelectedSite] = useState<SiteRow | null>(null);
+  const [selectedAsset, setSelectedAsset] = useState<AssetRow | null>(null);
 
   const rows = tab === 'Contacts' ? contacts : tab === 'Properties' ? sites : assets;
   const copy = tab === 'Contacts'
@@ -167,15 +169,17 @@ export function CustomerMasterDataTab({ tab, customerName }: { tab: MasterTab; c
       ) : null}
 
       {tab === 'Properties' ? (
-        <div className={styles.recordList}>{sites.map((row) => <article className={styles.siteCard} key={row.id}><div className={styles.siteIcon}>⌂</div><div className={styles.recordMain}><div><strong>{row.name}</strong><b>Active</b></div><span>{row.address}</span><small>{row.sector} · GAC: {row.gac}</small><em>{row.access}</em></div><button type="button">Open site</button></article>)}</div>
+        <div className={styles.recordList}>{sites.map((row) => <article className={styles.siteCard} key={row.id}><div className={styles.siteIcon}>⌂</div><div className={styles.recordMain}><div><strong>{row.name}</strong><b>Active</b></div><span>{row.address}</span><small>{row.sector} · GAC: {row.gac}</small><em>{row.access}</em></div><button type="button" onClick={() => setSelectedSite(row)}>Open site</button></article>)}</div>
       ) : null}
 
       {tab === 'Equipment' ? (
-        <div className={styles.assetTableWrap}><table className={styles.assetTable}><thead><tr><th>Equipment</th><th>Property</th><th>Brand</th><th>Capacity</th><th>Serial</th><th>Status</th></tr></thead><tbody>{assets.map((row) => <tr key={row.id}><td><strong>{row.name}</strong><span>{row.type}</span></td><td>{row.site}</td><td>{row.brand}</td><td>{row.capacity}</td><td>{row.serial}</td><td><b>{row.status}</b></td></tr>)}</tbody></table></div>
+        <div className={styles.assetTableWrap}><table className={styles.assetTable}><thead><tr><th>Equipment</th><th>Property</th><th>Brand</th><th>Capacity</th><th>Serial</th><th>Status</th></tr></thead><tbody>{assets.map((row) => <tr key={row.id} onClick={() => setSelectedAsset(row)}><td><strong>{row.name}</strong><span>{row.type}</span></td><td>{row.site}</td><td>{row.brand}</td><td>{row.capacity}</td><td>{row.serial}</td><td><b>{row.status}</b></td></tr>)}</tbody></table></div>
       ) : null}
 
       {rows.length === 0 ? <div className={styles.emptyState}><strong>No records yet</strong><p>Add the first {tab.toLowerCase()} record for this customer.</p></div> : null}
       {editor ? <MasterRecordEditor kind={editor} sites={sites} onClose={() => setEditor(null)} onAddContact={(value) => setContacts((current) => [...current, value])} onAddSite={(value) => setSites((current) => [...current, value])} onAddAsset={(value) => setAssets((current) => [...current, value])} /> : null}
+      {selectedSite ? <SiteDetailDrawer site={selectedSite} assets={assets} onClose={() => setSelectedSite(null)} /> : null}
+      {selectedAsset ? <AssetDetailDrawer asset={selectedAsset} onClose={() => setSelectedAsset(null)} /> : null}
     </section>
   );
 }
