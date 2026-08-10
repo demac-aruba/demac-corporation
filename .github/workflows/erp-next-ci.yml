@@ -1,0 +1,39 @@
+name: ERP Next CI
+
+on:
+  pull_request:
+    paths:
+      - 'apps/erp-next/**'
+      - 'docs/ERP_NEXT_**'
+      - '.github/workflows/erp-next-ci.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/erp-next/**'
+      - 'docs/ERP_NEXT_**'
+      - '.github/workflows/erp-next-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/erp-next
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install
+        run: npm install --no-audit --no-fund
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
