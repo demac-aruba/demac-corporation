@@ -1,12 +1,12 @@
-# DEMAC ERP Next — CRM Customer 360 V1
+# DEMAC ERP Next — CRM Customer 360
 
-Status: In Development / UI foundation.
+Status: In Development / master-data foundation.
 
 ## Objective
 
 Create the canonical customer workspace before connecting production Firebase data. The CRM is the relationship and commercial memory of DEMAC, not merely a contact directory.
 
-## V1 requirements
+## Core requirements
 
 ### CRM-001 — One customer identity
 A returning customer must resolve to the same customer record instead of creating a new customer for every appointment or conversation.
@@ -44,6 +44,29 @@ CRM UI/services must use a repository/service boundary. Firebase implementation 
 ### CRM-012 — Responsive premium UX
 The Customer 360 workspace must preserve usable hierarchy on desktop and smaller screens while retaining the global ERP light/dark themes.
 
+## Master-data V2 requirements
+
+### CRM-013 — Progressive customer registration
+Creating a customer captures only the minimum relationship identity needed to continue work: display name, customer type, phone/WhatsApp, optional email, preferred language and general area. Property and HVAC information must not be forced into the customer form.
+
+### CRM-014 — Duplicate detection before creation
+The customer form must warn when display name, phone or email resembles an existing customer. The first implementation is deterministic; later AI may assist, but AI never silently merges records.
+
+### CRM-015 — Contact records
+A customer can have multiple contacts with role/relationship, phone, email and primary-contact status. Commercial accounts must not be limited to one person's contact details.
+
+### CRM-016 — Property/site records
+A customer can own or manage multiple service sites. Each site carries its own full address, future GAC mapping, DEMAC operating sector and access/parking/gate notes.
+
+### CRM-017 — Equipment registry
+Each HVAC asset belongs to one customer and one site. Registration captures system type, room/equipment name, capacity, brand and serial number while preserving room for future model, QR, warranty and technical fields.
+
+### CRM-018 — No destructive CRM delete as normal workflow
+Master-data correction should use archive, replace or merge semantics so service, communication, financial and audit history remain traceable.
+
+### CRM-019 — Master data before transactions
+Appointments, work orders, invoices and communications reference canonical customer/site/equipment IDs. Transactional modules must not become alternate stores of customer identity.
+
 ## Current implementation
 
 - Premium customer list + search rail.
@@ -52,27 +75,31 @@ The Customer 360 workspace must preserve usable hierarchy on desktop and smaller
 - Tabbed information architecture.
 - Overview with relationship facts, sites/assets and recent activity.
 - Customer Intelligence side rail.
-- Responsive layouts.
-- CRM repository adapter contract.
-- Preview data only; no production data writes.
+- Native create/edit customer drawer.
+- Deterministic duplicate warning by customer name, phone and email.
+- Contact registration UI.
+- Property/site registration UI with GAC/sector placeholders.
+- HVAC equipment registration UI tied to a property.
+- Responsive premium master-data layouts in light and dark themes.
+- Expanded CRM repository adapter contract for customer/contact/site/asset CRUD plus archive/merge semantics.
+- Preview data only; no production Firebase reads or writes.
 
 ## Next CRM work
 
-1. Canonical customer create/edit form design.
-2. Contacts model and UI.
-3. Property/site profile with Aruba location/sector metadata.
-4. HVAC asset/equipment registry.
-5. Duplicate-detection and merge UX.
-6. Timeline event contract and filters.
-7. Opportunity/recommendation lifecycle.
-8. Permission matrix by role/field.
-9. Firebase adapter design and migration mapping after the canonical flows are accepted.
+1. Duplicate review/merge workflow.
+2. Property 360 and equipment detail profile.
+3. Timeline event contract and filters.
+4. Opportunity/recommendation lifecycle.
+5. Permission matrix by role/field/action.
+6. Customer tags/segments and maintenance relationships.
+7. Firebase adapter design and Legacy migration mapping after the canonical flows are accepted.
 
 ## Questions intentionally deferred
 
-These do not block the V1 structure:
+These do not block the present structure:
 - final customer number format
-- mandatory fields for residential versus commercial customers
-- whether customer health score is displayed to every office role or management only
+- mandatory fields that may differ for residential versus commercial customers
+- whether customer health score is visible to every office role or management only
 - exact Aruba GAC address-assistance interaction
 - final financial fields visible to non-finance office operators
+- whether an equipment serial number becomes mandatory for specific equipment classes
