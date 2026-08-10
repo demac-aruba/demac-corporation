@@ -1,6 +1,7 @@
 'use client';
 
-import { FormEvent, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import type { FormEvent } from 'react';
 import styles from './customer-master-data.module.css';
 
 export type CustomerEditorValue = {
@@ -40,15 +41,11 @@ function normalize(value: string) {
 }
 
 export function CustomerEditorDrawer({ open, mode, initial, existingCustomers, onClose, onSave }: DrawerProps) {
-  const [form, setForm] = useState<CustomerEditorValue>(() => initial ?? emptyCustomer);
-  const [lastOpen, setLastOpen] = useState(open);
-  const [lastIdentity, setLastIdentity] = useState(initial?.id);
+  const [form, setForm] = useState<CustomerEditorValue>(initial ?? emptyCustomer);
 
-  if (open !== lastOpen || initial?.id !== lastIdentity) {
-    setLastOpen(open);
-    setLastIdentity(initial?.id);
-    setForm(initial ?? emptyCustomer);
-  }
+  useEffect(() => {
+    if (open) setForm(initial ?? emptyCustomer);
+  }, [open, initial]);
 
   const duplicates = useMemo(() => {
     const phone = normalize(form.phone);
@@ -191,7 +188,7 @@ function MasterRecordEditor({ kind, sites, onClose, onAddContact, onAddSite, onA
     const id = `${kind.slice(0,2).toUpperCase()}-${Date.now()}`;
     if (kind === 'Contacts') onAddContact({ id, name: values.name || 'New Contact', role: values.role || 'Contact', phone: values.phone || '—', email: values.email || '—', primary: false });
     if (kind === 'Properties') onAddSite({ id, name: values.name || 'New Property', address: values.address || 'Aruba', sector: values.sector || 'Pending sector mapping', gac: values.gac || 'Pending mapping', access: values.access || 'No special access notes' });
-    if (kind === 'Equipment') onAddAsset({ id, site: values.site || sites[0]?.name || 'Unassigned', type: values.type || 'Split', name: values.name || 'HVAC Equipment', brand: values.brand || 'Unknown', capacity: values.capacity || 'Other', serial: values.serial || '—', status: 'Active' });
+    if (kind === 'Equipment') onAddAsset({ id, site: values.site || sites[0]?.name || 'Unassigned', type: values.type || 'Split', name: values.name || 'HVAC Equipment', brand: values.brand || 'Unknown', capacity: values.capacity || '18,000 BTU', serial: values.serial || '—', status: 'Active' });
     onClose();
   };
 
@@ -202,7 +199,7 @@ function MasterRecordEditor({ kind, sites, onClose, onAddContact, onAddSite, onA
         <form className={styles.form} onSubmit={submit}>
           {kind === 'Contacts' ? <section className={styles.formSection}><div className={styles.fieldGrid}><label className={styles.fieldWide}><span>Full name *</span><input onChange={(e) => update('name', e.target.value)} required /></label><label><span>Role / relationship</span><input onChange={(e) => update('role', e.target.value)} placeholder="Decision maker, tenant, manager..." /></label><label><span>Phone</span><input onChange={(e) => update('phone', e.target.value)} /></label><label><span>Email</span><input type="email" onChange={(e) => update('email', e.target.value)} /></label></div></section> : null}
           {kind === 'Properties' ? <section className={styles.formSection}><div className={styles.fieldGrid}><label><span>Property name *</span><input onChange={(e) => update('name', e.target.value)} placeholder="Home, Office, Warehouse..." required /></label><label><span>Full address *</span><input onChange={(e) => update('address', e.target.value)} required /></label><label><span>GAC code</span><input onChange={(e) => update('gac', e.target.value)} placeholder="Official Aruba address classification" /></label><label><span>DEMAC operating sector</span><input onChange={(e) => update('sector', e.target.value)} placeholder="Mapped operational sector" /></label><label className={styles.fieldWide}><span>Access / parking / gate notes</span><textarea onChange={(e) => update('access', e.target.value)} rows={3} /></label></div></section> : null}
-          {kind === 'Equipment' ? <section className={styles.formSection}><div className={styles.fieldGrid}><label><span>Property *</span><select onChange={(e) => update('site', e.target.value)} defaultValue={sites[0]?.name ?? ''}>{sites.map((site) => <option key={site.id}>{site.name}</option>)}</select></label><label><span>System type *</span><select onChange={(e) => update('type', e.target.value)} defaultValue="Split"><option>Split</option><option>Cassette</option><option>Floor-Ceiling</option><option>Central</option><option>VRF Indoor</option><option>VRF Outdoor</option><option>Other</option></select></label><label><span>Equipment name / room *</span><input onChange={(e) => update('name', e.target.value)} placeholder="Master Bedroom, Lobby cassette..." required /></label><label><span>Capacity</span><select onChange={(e) => update('capacity', e.target.value)} defaultValue="18,000 BTU"><option>12,000 BTU</option><option>18,000 BTU</option><option>24,000 BTU</option><option>36,000 BTU</option><option>60,000 BTU</option><option>7.5 ton</option><option>10 ton</option><option>Other</option></select></label><label><span>Brand</span><input onChange={(e) => update('brand', e.target.value)} /></label><label><span>Serial number</span><input onChange={(e) => update('serial', e.target.value)} /></label></div></section> : null}
+          {kind === 'Equipment' ? <section className={styles.formSection}><div className={styles.fieldGrid}><label><span>Property *</span><select onChange={(e) => update('site', e.target.value)} defaultValue={sites[0]?.name ?? ''}>{sites.length ? sites.map((site) => <option key={site.id}>{site.name}</option>) : <option value="">No property registered</option>}</select></label><label><span>System type *</span><select onChange={(e) => update('type', e.target.value)} defaultValue="Split"><option>Split</option><option>Cassette</option><option>Floor-Ceiling</option><option>Central</option><option>VRF Indoor</option><option>VRF Outdoor</option><option>Other</option></select></label><label><span>Equipment name / room *</span><input onChange={(e) => update('name', e.target.value)} placeholder="Master Bedroom, Lobby cassette..." required /></label><label><span>Capacity</span><select onChange={(e) => update('capacity', e.target.value)} defaultValue="18,000 BTU"><option>12,000 BTU</option><option>18,000 BTU</option><option>24,000 BTU</option><option>36,000 BTU</option><option>60,000 BTU</option><option>7.5 ton</option><option>10 ton</option><option>Other</option></select></label><label><span>Brand</span><input onChange={(e) => update('brand', e.target.value)} /></label><label><span>Serial number</span><input onChange={(e) => update('serial', e.target.value)} /></label></div></section> : null}
           <footer className={styles.drawerFooter}><button type="button" className={styles.secondaryButton} onClick={onClose}>Cancel</button><button type="submit" className={styles.primaryButton}>Save record</button></footer>
         </form>
       </aside>
