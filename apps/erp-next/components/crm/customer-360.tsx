@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { CustomerEditorDrawer, CustomerMasterDataTab, type CustomerEditorValue } from './customer-master-data';
+import { DuplicateReviewDrawer } from './relationship-detail';
 import styles from './customer-360.module.css';
 
 export type CustomerPreview = {
@@ -57,6 +58,7 @@ export function Customer360() {
   const [query, setQuery] = useState('');
   const [activeTab, setActiveTab] = useState<Tab>('Overview');
   const [customerEditor, setCustomerEditor] = useState<'create' | 'edit' | null>(null);
+  const [mergeReview, setMergeReview] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
@@ -91,7 +93,7 @@ export function Customer360() {
           <p>Every customer relationship, property, HVAC asset, interaction, opportunity and financial signal in one operating view.</p>
         </div>
         <div className={styles.pageActions}>
-          <button className="btn" type="button">Import / Merge</button>
+          <button className="btn" type="button" onClick={() => setMergeReview(true)}>Import / Merge</button>
           <button className="btn primary" type="button" onClick={() => setCustomerEditor('create')}>+ New Customer</button>
         </div>
       </header>
@@ -142,6 +144,7 @@ export function Customer360() {
       </div>
 
       <CustomerEditorDrawer open={customerEditor !== null} mode={customerEditor ?? 'create'} initial={customerEditor === 'edit' ? selectedEditorValue : undefined} existingCustomers={customers.map((customer) => ({ id: customer.id, name: customer.name, phone: customer.phone, email: customer.email }))} onClose={() => setCustomerEditor(null)} onSave={saveCustomer} />
+      {mergeReview ? <DuplicateReviewDrawer customers={customers.map((customer) => ({ id: customer.id, name: customer.name, phone: customer.phone, email: customer.email, type: customer.type }))} onClose={() => setMergeReview(false)} /> : null}
     </section>
   );
 }
