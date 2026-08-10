@@ -1,5 +1,5 @@
-import { DispatchBoard } from '../../../components/scheduling/dispatch-board';
+import { DispatchWorkspace } from '../../../components/scheduling/dispatch-workspace';
 
 export default function SchedulingPage() {
-  return <DispatchBoard />;
+  return <DispatchWorkspace />;
 }
