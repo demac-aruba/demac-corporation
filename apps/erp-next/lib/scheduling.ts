@@ -1,4 +1,5 @@
 export type HalfDay = 'am' | 'pm';
+export type DaySegment = HalfDay | 'full_day';
 export type BookingStatus = 'available' | 'temporary_hold' | 'confirmed' | 'cancelled' | 'rescheduled';
 export type ReadinessStatus = 'ready' | 'at_risk' | 'blocked' | 'not_checked';
 
@@ -33,6 +34,7 @@ export type SchedulingSettings = {
   serviceStartTimes: string[];
   maxStandardUnitsDifferentSitesPerVan: number;
   maxStandardUnitsSameSiteSingleVan: number;
+  maxStandardUnitsPerVanWhenSupport: number;
   routeMarginMinutes: number;
 };
 
@@ -51,7 +53,7 @@ export type DispatchJob = {
   sector: string;
   start: string;
   end: string;
-  halfDay: HalfDay;
+  segment: DaySegment;
   vanId: string;
   presetId: WorkPresetId;
   quantity: number;
@@ -81,12 +83,14 @@ export type CandidateSlot = {
   vanId: string;
   start: string;
   end: string;
-  halfDay: HalfDay;
+  segment: DaySegment;
   sector: string;
   score: number;
   reasons: string[];
   requiresSupportVan: boolean;
   supportVanId?: string;
+  primaryUnits?: number;
+  supportUnits?: number;
 };
 
 export const defaultSchedulingSettings: SchedulingSettings = {
@@ -99,6 +103,7 @@ export const defaultSchedulingSettings: SchedulingSettings = {
   serviceStartTimes: ['08:30', '09:30', '10:30', '13:30', '14:30', '15:30'],
   maxStandardUnitsDifferentSitesPerVan: 6,
   maxStandardUnitsSameSiteSingleVan: 7,
+  maxStandardUnitsPerVanWhenSupport: 6,
   routeMarginMinutes: 30,
 };
 
@@ -168,7 +173,7 @@ export function sectorsCompatible(anchorSector: string | undefined, candidateSec
 
 export function getHalfDayAnchor(jobs: DispatchJob[], vanId: string, halfDay: HalfDay) {
   return jobs
-    .filter((job) => job.vanId === vanId && job.halfDay === halfDay && job.status !== 'cancelled')
+    .filter((job) => job.vanId === vanId && (job.segment === halfDay || job.segment === 'full_day') && job.status !== 'cancelled')
     .sort((a, b) => timeToMinutes(a.start) - timeToMinutes(b.start))[0];
 }
 
@@ -214,10 +219,47 @@ function scoreCandidate(args: { anchor?: DispatchJob; candidateSector: string; s
   return { score, reasons };
 }
 
+function vanFreeForFullDay(vanId: string, jobs: DispatchJob[]) {
+  return !jobs.some((job) => job.vanId === vanId && job.status !== 'cancelled');
+}
+
+function findSupportPlan(request: BookingRequest, jobs: DispatchJob[], vans: VanResource[], settings: SchedulingSettings): CandidateSlot[] {
+  if (request.presetId !== 'standard_service') return [];
+  const capacity = settings.maxStandardUnitsPerVanWhenSupport;
+  if (request.quantity <= settings.maxStandardUnitsSameSiteSingleVan || request.quantity > capacity * 2) return [];
+  if (request.restriction?.halfDay === 'pm' || request.restriction?.notBefore && timeToMinutes(request.restriction.notBefore) > timeToMinutes('08:30')) return [];
+
+  const available = vans.filter((van) => van.active && vanFreeForFullDay(van.id, jobs));
+  if (available.length < 2) return [];
+  const primaryUnits = Math.min(capacity, request.quantity);
+  const supportUnits = request.quantity - primaryUnits;
+  const results: CandidateSlot[] = [];
+
+  for (let i = 0; i < available.length; i += 1) {
+    for (let j = i + 1; j < available.length; j += 1) {
+      results.push({
+        vanId: available[i].id,
+        supportVanId: available[j].id,
+        start: '08:30',
+        end: '16:30',
+        segment: 'full_day',
+        sector: request.sector,
+        score: 140 - i * 4 - j * 2,
+        reasons: ['Large same-site job split across two linked vans', 'Single customer appointment and communication owner', 'No duplicate confirmation or reminder from support assignment'],
+        requiresSupportVan: true,
+        primaryUnits,
+        supportUnits,
+      });
+    }
+  }
+  return results.slice(0, 3);
+}
+
 export function findCandidateSlots(request: BookingRequest, jobs: DispatchJob[], vans: VanResource[] = previewVans, settings: SchedulingSettings = defaultSchedulingSettings): CandidateSlot[] {
+  const supportPlans = findSupportPlan(request, jobs, vans, settings);
+  if (supportPlans.length) return supportPlans;
+
   const duration = calculateDurationMinutes(request);
-  const sameSiteCapacity = request.presetId === 'standard_service' ? settings.maxStandardUnitsSameSiteSingleVan : Number.POSITIVE_INFINITY;
-  const requiresSupportVan = request.quantity > sameSiteCapacity;
   const candidates: CandidateSlot[] = [];
 
   for (const van of vans.filter((resource) => resource.active)) {
@@ -226,21 +268,15 @@ export function findCandidateSlots(request: BookingRequest, jobs: DispatchJob[],
       const startMinutes = timeToMinutes(start);
       const endMinutes = startMinutes + duration;
       if (!fitsWorkingWindow(startMinutes, endMinutes, settings)) continue;
-      const halfDay = halfDayForTime(start);
+      const segment = halfDayForTime(start);
       const vanJobs = jobs.filter((job) => job.vanId === van.id && job.status !== 'cancelled');
       if (vanJobs.some((job) => overlaps(startMinutes, endMinutes, job))) continue;
 
-      const anchor = getHalfDayAnchor(jobs, van.id, halfDay);
+      const anchor = getHalfDayAnchor(jobs, van.id, segment);
       if (!sectorsCompatible(anchor?.sector, request.sector)) continue;
 
-      let supportVanId: string | undefined;
-      if (requiresSupportVan) {
-        supportVanId = vans.find((resource) => resource.active && resource.id !== van.id && !jobs.filter((job) => job.vanId === resource.id && job.status !== 'cancelled').some((job) => overlaps(startMinutes, endMinutes, job)))?.id;
-        if (!supportVanId) continue;
-      }
-
       const scored = scoreCandidate({ anchor, candidateSector: request.sector, start, existingCount: vanJobs.length, isFirstJob: !anchor });
-      candidates.push({ vanId: van.id, start, end: minutesToTime(endMinutes), halfDay, sector: request.sector, score: scored.score, reasons: scored.reasons, requiresSupportVan, supportVanId });
+      candidates.push({ vanId: van.id, start, end: minutesToTime(endMinutes), segment, sector: request.sector, score: scored.score, reasons: scored.reasons, requiresSupportVan: false, primaryUnits: request.quantity });
     }
   }
 
