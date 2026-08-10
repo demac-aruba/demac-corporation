@@ -22,6 +22,7 @@ export const navigationGroups: NavigationGroup[] = [
       { label: 'KPIs', href: '/kpis', short: 'KP', roles: allManagementRoles },
       { label: 'Scheduling & Dispatch', href: '/scheduling', short: 'SD', roles: ['super_admin', 'operations', 'office_operator', 'project_manager'] },
       { label: 'Work Orders', href: '/work-orders', short: 'WO', roles: ['super_admin', 'operations', 'office_operator', 'project_manager'] },
+      { label: 'Field App', href: '/field', short: 'FA', roles: ['super_admin', 'technician'] },
       { label: 'Technicians', href: '/technicians', short: 'TE', roles: ['super_admin', 'operations', 'project_manager'] },
     ],
   },
