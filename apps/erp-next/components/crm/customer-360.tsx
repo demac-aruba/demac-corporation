@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { CustomerTimelinePanel, CustomerOpportunityPanel } from './customer-commercial';
 import { CustomerEditorDrawer, CustomerMasterDataTab, type CustomerEditorValue } from './customer-master-data';
 import { DuplicateReviewDrawer } from './relationship-detail';
 import styles from './customer-360.module.css';
@@ -131,7 +132,11 @@ export function Customer360() {
 
           <nav className={styles.tabs} aria-label="Customer sections">{tabs.map((tab) => <button key={tab} type="button" className={activeTab === tab ? styles.tabActive : ''} onClick={() => setActiveTab(tab)}>{tab}</button>)}</nav>
 
-          {activeTab === 'Overview' ? <Overview customer={selected} onEdit={() => setCustomerEditor('edit')} /> : activeTab === 'Contacts' || activeTab === 'Properties' || activeTab === 'Equipment' ? <CustomerMasterDataTab key={`${selected.id}-${activeTab}`} tab={activeTab} customerName={selected.name} /> : <TabPreview tab={activeTab} customer={selected} />}
+          {activeTab === 'Overview' ? <Overview customer={selected} onEdit={() => setCustomerEditor('edit')} />
+            : activeTab === 'Contacts' || activeTab === 'Properties' || activeTab === 'Equipment' ? <CustomerMasterDataTab key={`${selected.id}-${activeTab}`} tab={activeTab} customerName={selected.name} />
+              : activeTab === 'Communications' ? <CustomerTimelinePanel key={`${selected.id}-timeline`} customerName={selected.name} />
+                : activeTab === 'Opportunities' ? <CustomerOpportunityPanel key={`${selected.id}-opportunities`} customerName={selected.name} />
+                  : <TabPreview tab={activeTab} customer={selected} />}
         </main>
 
         <aside className={styles.intelligenceRail}>
