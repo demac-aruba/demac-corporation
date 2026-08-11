@@ -1,6 +1,7 @@
 import { BROWSER_BILLING_DRAFTS_KEY, type BrowserBillingDraft } from './browser-billing';
 import type { BrowserFieldExecutionRecord, BrowserOfficeReviewRecord } from './browser-field';
 import { BROWSER_INVENTORY_MOVEMENTS_KEY, type BrowserInventoryMovement } from './browser-inventory-ledger';
+import { BROWSER_DISPATCH_RELEASES_KEY, type BrowserDispatchAtRiskRelease } from './browser-job-readiness';
 import type { BrowserAppointmentRecord, BrowserWorkOrderRecord } from './browser-operational';
 import { BROWSER_BANK_PAYMENTS_KEY, BROWSER_PAYMENT_ALLOCATIONS_KEY, type BrowserBankPayment, type BrowserPaymentAllocation } from './browser-receivables';
 import { BROWSER_REPORT_DELIVERIES_KEY, type BrowserReportDeliveryRecord } from './browser-report-delivery';
@@ -19,6 +20,14 @@ export type BrowserAuditProjectionEvent = {
   importance: 'normal' | 'sensitive' | 'financial';
 };
 
+function dispatchRiskDimensions(release: BrowserDispatchAtRiskRelease) {
+  const labels = release.riskSignature
+    .split('|')
+    .map((part) => part.split(':')[0]?.replaceAll('_', ' ').trim())
+    .filter(Boolean);
+  return labels.length ? labels.join(', ') : 'risk snapshot unavailable';
+}
+
 export function loadBrowserAuditProjection(): BrowserAuditProjectionEvent[] {
   const appointments = loadBrowserValue<BrowserAppointmentRecord[]>(browserKeys.appointments, []);
   const workOrders = loadBrowserValue<BrowserWorkOrderRecord[]>(browserKeys.workOrders, []);
@@ -30,6 +39,7 @@ export function loadBrowserAuditProjection(): BrowserAuditProjectionEvent[] {
   const billing = loadBrowserValue<BrowserBillingDraft[]>(BROWSER_BILLING_DRAFTS_KEY, []);
   const payments = loadBrowserValue<BrowserBankPayment[]>(BROWSER_BANK_PAYMENTS_KEY, []);
   const allocations = loadBrowserValue<BrowserPaymentAllocation[]>(BROWSER_PAYMENT_ALLOCATIONS_KEY, []);
+  const dispatchReleases = loadBrowserValue<BrowserDispatchAtRiskRelease[]>(BROWSER_DISPATCH_RELEASES_KEY, []);
 
   const events: BrowserAuditProjectionEvent[] = [];
 
@@ -41,6 +51,18 @@ export function loadBrowserAuditProjection(): BrowserAuditProjectionEvent[] {
   for (const order of workOrders) events.push({ id: `AUD-${order.id}`, occurredAt: order.createdAt, module: 'Work Orders', action: 'Work Order created', entityType: 'WorkOrder', entityId: order.id, actor: 'System handoff', detail: `${order.customerFacingDescription} · ${order.primaryVanId}${order.supportVanId ? ` + ${order.supportVanId}` : ''}`, importance: 'normal' });
 
   for (const scope of scopes) events.push({ id: `AUD-SCOPE-${scope.workOrderId}`, occurredAt: scope.updatedAt, module: 'Work Orders', action: 'Equipment scope saved', entityType: 'WorkOrderScope', entityId: scope.workOrderId, actor: 'Office / Preview', detail: `${scope.items.length}/${scope.expectedQuantity} exact equipment item(s) · ${scope.mode.replaceAll('_', ' ')}`, importance: 'sensitive' });
+
+  for (const release of dispatchReleases) events.push({
+    id: `AUD-${release.id}`,
+    occurredAt: release.authorizedAt,
+    module: 'Operations',
+    action: 'AT RISK dispatch released',
+    entityType: 'DispatchRelease',
+    entityId: release.id,
+    actor: release.authorizedBy,
+    detail: `${release.workOrderId} · ${release.reason} · risks accepted: ${dispatchRiskDimensions(release)}`,
+    importance: 'sensitive',
+  });
 
   for (const execution of field) {
     if (execution.startedAt) events.push({ id: `AUD-${execution.workOrderId}-field-start`, occurredAt: execution.startedAt, module: 'Field', action: 'Field execution started', entityType: 'FieldExecution', entityId: execution.workOrderId, actor: 'Technician / Preview', detail: `${execution.equipment.length} equipment record(s) opened for execution.`, importance: 'normal' });
