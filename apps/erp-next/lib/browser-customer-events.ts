@@ -40,6 +40,12 @@ function releaseRiskDimensions(release: BrowserDispatchAtRiskRelease) {
   return labels.length ? labels.join(', ') : 'risk snapshot unavailable';
 }
 
+function fieldStartDetail(execution: BrowserFieldExecutionRecord) {
+  if (execution.startAuthority === 'released_at_risk') return `${execution.equipment.length} scoped equipment record(s) · started under Operations release ${execution.dispatchReleaseId ?? 'unknown release'}${execution.startAuthorityReason ? ` · ${execution.startAuthorityReason}` : ''}`;
+  if (execution.startAuthority === 'ready') return `${execution.equipment.length} scoped equipment record(s) · started with consolidated readiness READY.`;
+  return `${execution.equipment.length} scoped equipment record(s) · legacy preview start without explicit authority metadata.`;
+}
+
 export function loadCustomerEventSnapshot(customerId: string): CustomerEventSnapshot {
   const appointments = loadBrowserValue<BrowserAppointmentRecord[]>(browserKeys.appointments, []);
   const orders = loadBrowserValue<BrowserWorkOrderRecord[]>(browserKeys.workOrders, []);
@@ -111,11 +117,11 @@ export function loadCustomerEventSnapshot(customerId: string): CustomerEventSnap
       id: `EV-${execution.workOrderId}-field-start`,
       customerId,
       occurredAt: execution.startedAt,
-      title: 'Technician started field execution',
-      detail: `${execution.equipment.length} scoped equipment record(s) · field evidence in progress.`,
-      entityId: execution.workOrderId,
+      title: execution.startAuthority === 'released_at_risk' ? 'Technician started under AT RISK release' : 'Technician started field execution',
+      detail: fieldStartDetail(execution),
+      entityId: execution.dispatchReleaseId ?? execution.workOrderId,
       module: 'Field',
-      tone: 'purple',
+      tone: execution.startAuthority === 'released_at_risk' ? 'amber' : 'purple',
     });
     if (execution.submittedAt) events.push({
       id: `EV-${execution.workOrderId}-field-submit`,
