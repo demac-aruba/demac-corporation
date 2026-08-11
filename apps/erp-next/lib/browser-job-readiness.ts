@@ -8,22 +8,9 @@ import { deriveRequiredToolsReadiness } from './browser-tools';
 import { deriveSiteAccessReadiness } from './browser-site-access';
 import { deriveCommercialClearanceReadiness } from './browser-commercial-clearance';
 
-export const BROWSER_JOB_READINESS_CHECKS_KEY = 'demac.erp-next.operations.job-readiness-checks.v1';
 export const BROWSER_DISPATCH_RELEASES_KEY = 'demac.erp-next.operations.dispatch-at-risk-releases.v1';
 
-export type ManualReadinessState = 'not_checked' | 'ready' | 'not_required' | 'blocked';
 export type JobReadinessStatus = 'ready' | 'at_risk' | 'blocked';
-
-/** @deprecated Legacy browser preview shape retained only so older local data remains readable. */
-export type BrowserJobReadinessChecks = {
-  workOrderId: string;
-  crewSkill: Exclude<ManualReadinessState, 'not_required'>;
-  tools: ManualReadinessState;
-  siteAccess: ManualReadinessState;
-  commercialClearance: ManualReadinessState;
-  updatedAt: string;
-  updatedBy: string;
-};
 
 export type JobReadinessDimension = {
   id: 'appointment' | 'assignment' | 'scope' | 'materials' | 'crew_skill' | 'tools' | 'site_access' | 'commercial';
@@ -51,30 +38,6 @@ export type BrowserDispatchAtRiskRelease = {
   authorizedAt: string;
 };
 
-export const defaultJobReadinessChecks = (workOrderId: string): BrowserJobReadinessChecks => ({
-  workOrderId,
-  crewSkill: 'not_checked',
-  tools: 'not_checked',
-  siteAccess: 'not_checked',
-  commercialClearance: 'not_checked',
-  updatedAt: new Date(0).toISOString(),
-  updatedBy: 'Legacy / not used by current readiness',
-});
-
-export function loadJobReadinessChecks() {
-  return loadBrowserValue<BrowserJobReadinessChecks[]>(BROWSER_JOB_READINESS_CHECKS_KEY, []);
-}
-
-export function saveJobReadinessChecks(record: BrowserJobReadinessChecks) {
-  const current = loadJobReadinessChecks();
-  const normalized = { ...record, updatedAt: new Date().toISOString() };
-  const next = current.some((item) => item.workOrderId === record.workOrderId)
-    ? current.map((item) => item.workOrderId === record.workOrderId ? normalized : item)
-    : [...current, normalized];
-  saveBrowserValue(BROWSER_JOB_READINESS_CHECKS_KEY, next);
-  return normalized;
-}
-
 function appointmentDimension(order: BrowserWorkOrderRecord, appointments: BrowserAppointmentRecord[]): JobReadinessDimension {
   const appointment = appointments.find((item) => item.id === order.appointmentId);
   if (!appointment) return { id: 'appointment', label: 'Customer Confirmation', status: 'at_risk', reason: 'The source appointment could not be resolved from browser persistence.', source: order.appointmentId };
@@ -92,7 +55,6 @@ function assignmentDimension(order: BrowserWorkOrderRecord): JobReadinessDimensi
 }
 
 export function deriveBrowserJobReadiness(order: BrowserWorkOrderRecord, options?: {
-  checks?: BrowserJobReadinessChecks[];
   appointments?: BrowserAppointmentRecord[];
   executions?: BrowserFieldExecutionRecord[];
 }): BrowserJobReadiness {
