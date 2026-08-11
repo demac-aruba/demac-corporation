@@ -16,7 +16,7 @@ const commonOptions: Array<{ value: ManualReadinessState; label: string }> = [
 
 function sameChecks(a?: BrowserJobReadinessChecks, b?: BrowserJobReadinessChecks | null) {
   if (!a || !b) return false;
-  return a.siteAccess === b.siteAccess && a.commercialClearance === b.commercialClearance;
+  return a.commercialClearance === b.commercialClearance;
 }
 
 function derivedClass(status?: string) {
@@ -67,6 +67,7 @@ export function BrowserJobReadiness() {
   const readiness = selectedOrder ? deriveBrowserJobReadiness(selectedOrder, { checks: effectiveChecks, appointments, executions }) : null;
   const crewDimension = readiness?.dimensions.find((dimension) => dimension.id === 'crew_skill');
   const toolsDimension = readiness?.dimensions.find((dimension) => dimension.id === 'tools');
+  const siteAccessDimension = readiness?.dimensions.find((dimension) => dimension.id === 'site_access');
   const locked = selectedExecution?.technicianStatus === 'submitted';
   const persistedCheck = selectedOrder ? checks.find((item) => item.workOrderId === selectedOrder.id) : undefined;
   const checksDirty = !sameChecks(persistedCheck, draft);
@@ -82,8 +83,8 @@ export function BrowserJobReadiness() {
     };
   }, [appointments, checks, executions, orders, refreshKey]);
 
-  const update = <K extends keyof Pick<BrowserJobReadinessChecks, 'siteAccess' | 'commercialClearance'>>(key: K, value: BrowserJobReadinessChecks[K]) => {
-    setDraft((current) => current ? { ...current, [key]: value, updatedBy: 'Operations / Preview' } : current);
+  const updateCommercial = (value: BrowserJobReadinessChecks['commercialClearance']) => {
+    setDraft((current) => current ? { ...current, commercialClearance: value, updatedBy: 'Operations / Preview' } : current);
   };
 
   const save = () => {
@@ -92,7 +93,7 @@ export function BrowserJobReadiness() {
     setChecks((current) => current.some((item) => item.workOrderId === saved.workOrderId) ? current.map((item) => item.workOrderId === saved.workOrderId ? saved : item) : [...current, saved]);
     setDraft(saved);
     setReleases(loadDispatchAtRiskReleases());
-    setNotice(`${saved.workOrderId} manual readiness checks saved. Crew and Required Tools remain derived from their owning registries; previous AT RISK releases remain valid only while the exact risk signature still matches.`);
+    setNotice(`${saved.workOrderId} Commercial Clearance check saved. Crew, Required Tools and Site Access remain derived from their owning modules; previous AT RISK releases remain valid only while the exact risk signature still matches.`);
   };
 
   const authorizeAtRisk = () => {
@@ -111,7 +112,7 @@ export function BrowserJobReadiness() {
 
   return (
     <section className={styles.workspace}>
-      <header><div><span>PRE-DISPATCH DECISION</span><h2>Consolidated Job Readiness</h2><p>Customer confirmation, van assignment, exact HVAC scope, materials, crew skill and required tools now derive from their owning modules. Only Site Access and Commercial Clearance remain explicit office checks.</p></div><div className={styles.headerActions}><label>Work Order<select value={selectedOrder.id} onChange={(event) => setSelectedId(event.target.value)}>{orders.slice().reverse().map((order) => <option key={order.id} value={order.id}>{order.id} · {order.customer}</option>)}</select></label><button type="button" onClick={() => setRefreshKey((value) => value + 1)}>↻ Refresh Facts</button></div></header>
+      <header><div><span>PRE-DISPATCH DECISION</span><h2>Consolidated Job Readiness</h2><p>Seven of eight readiness dimensions now derive from operational source modules. Commercial Clearance is the only remaining explicit office check in this preview.</p></div><div className={styles.headerActions}><label>Work Order<select value={selectedOrder.id} onChange={(event) => setSelectedId(event.target.value)}>{orders.slice().reverse().map((order) => <option key={order.id} value={order.id}>{order.id} · {order.customer}</option>)}</select></label><button type="button" onClick={() => setRefreshKey((value) => value + 1)}>↻ Refresh Facts</button></div></header>
       {notice ? <div className={styles.notice}><span>{notice}</span><button type="button" onClick={() => setNotice(null)}>×</button></div> : null}
 
       <div className={styles.metrics}><article><span>READY</span><strong className={styles.goodText}>{summary.ready}</strong><small>All readiness dimensions resolved</small></article><article><span>AT RISK</span><strong className={summary.atRisk ? styles.warnText : ''}>{summary.atRisk}</strong><small>Pending checks or unverified dependencies</small></article><article><span>BLOCKED</span><strong className={summary.blocked ? styles.dangerText : ''}>{summary.blocked}</strong><small>Hard operational blocker exists</small></article><article><span>Open Risk Dimensions</span><strong>{summary.totalRisks}</strong><small>Across browser Work Orders</small></article></div>
@@ -127,20 +128,20 @@ export function BrowserJobReadiness() {
         </main>
 
         <aside>
-          <div className={styles.sectionHead}><div><strong>Readiness Controls</strong><span>Derived operational evidence plus the two remaining office checks</span></div></div>
+          <div className={styles.sectionHead}><div><strong>Readiness Controls</strong><span>Three derived controls plus the final commercial check</span></div></div>
           <div className={styles.checkForm}>
             <div className={`${styles.derivedCheck} ${derivedClass(crewDimension?.status)}`}><span>Crew & required skill · derived</span><strong>{crewDimension?.status.replace('_', ' ').toUpperCase()}</strong><p>{crewDimension?.reason}</p><small>Source: {crewDimension?.source}</small><a href="/employees/">Open Workforce Registry →</a></div>
             <div className={`${styles.derivedCheck} ${derivedClass(toolsDimension?.status)}`}><span>Required tools · derived</span><strong>{toolsDimension?.status.replace('_', ' ').toUpperCase()}</strong><p>{toolsDimension?.reason}</p><small>Source: {toolsDimension?.source}</small><a href="/inventory/">Open Tool Registry & Policy →</a></div>
-            <label><span>Site access</span><select disabled={locked} value={draft.siteAccess} onChange={(event) => update('siteAccess', event.target.value as ManualReadinessState)}>{commonOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>
-            <label><span>Commercial clearance</span><select disabled={locked} value={draft.commercialClearance} onChange={(event) => update('commercialClearance', event.target.value as ManualReadinessState)}>{commonOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select><small>Use Not required when the job legitimately needs no deposit/PO/financial clearance.</small></label>
+            <div className={`${styles.derivedCheck} ${derivedClass(siteAccessDimension?.status)}`}><span>Site access · derived</span><strong>{siteAccessDimension?.status.replace('_', ' ').toUpperCase()}</strong><p>{siteAccessDimension?.reason}</p><small>Source: {siteAccessDimension?.source}</small><a href="/work-orders/">Open Access Plan above →</a></div>
+            <label><span>Commercial clearance</span><select disabled={locked} value={draft.commercialClearance} onChange={(event) => updateCommercial(event.target.value as ManualReadinessState)}>{commonOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select><small>Use Not required only when the job legitimately needs no deposit, PO or financial clearance.</small></label>
           </div>
-          <div className={styles.checkFooter}><span>Last manual check evidence</span><strong>{draft.updatedBy}</strong><small>{draft.updatedAt.startsWith('1970-') ? 'Never saved' : new Date(draft.updatedAt).toLocaleString()}</small><button type="button" disabled={locked || !checksDirty} onClick={save}>{checksDirty ? 'Save Manual Checks' : 'Manual Checks Saved'}</button></div>
+          <div className={styles.checkFooter}><span>Last commercial check evidence</span><strong>{draft.updatedBy}</strong><small>{draft.updatedAt.startsWith('1970-') ? 'Never saved' : new Date(draft.updatedAt).toLocaleString()}</small><button type="button" disabled={locked || !checksDirty} onClick={save}>{checksDirty ? 'Save Commercial Check' : 'Commercial Check Saved'}</button></div>
 
-          {readiness.status === 'at_risk' ? <section className={styles.releaseBox}><span>AT RISK FIELD RELEASE</span>{validRelease ? <><strong>Released by {validRelease.authorizedBy}</strong><p>{validRelease.reason}</p><small>{new Date(validRelease.authorizedAt).toLocaleString()} · valid only for current risk signature</small></> : <><strong>Field start is on hold.</strong><p>Operations may authorize start only after reviewing the current risks. A changed workforce, tool, material or other risk signature invalidates the release automatically.</p><textarea rows={3} disabled={locked || checksDirty} value={releaseReason} onChange={(event) => setReleaseReason(event.target.value)} placeholder={checksDirty ? 'Save manual readiness checks before release...' : 'Why is it operationally acceptable to start AT RISK?'} /><button type="button" disabled={locked || checksDirty || releaseReason.trim().length < 8} onClick={authorizeAtRisk}>Authorize AT RISK Start</button></>}</section> : readiness.status === 'blocked' ? <section className={`${styles.releaseBox} ${styles.releaseBlocked}`}><span>HARD BLOCK</span><strong>No Field release is available.</strong><p>Resolve the blocking readiness dimension in its owning workflow.</p></section> : <section className={`${styles.releaseBox} ${styles.releaseReady}`}><span>DISPATCH RELEASE</span><strong>No override required.</strong><p>All readiness dimensions are READY; Field may start normally.</p></section>}
+          {readiness.status === 'at_risk' ? <section className={styles.releaseBox}><span>AT RISK FIELD RELEASE</span>{validRelease ? <><strong>Released by {validRelease.authorizedBy}</strong><p>{validRelease.reason}</p><small>{new Date(validRelease.authorizedAt).toLocaleString()} · valid only for current risk signature</small></> : <><strong>Field start is on hold.</strong><p>Operations may authorize start only after reviewing the current risks. A changed workforce, tool, access, material or other risk signature invalidates the release automatically.</p><textarea rows={3} disabled={locked || checksDirty} value={releaseReason} onChange={(event) => setReleaseReason(event.target.value)} placeholder={checksDirty ? 'Save Commercial Clearance before release...' : 'Why is it operationally acceptable to start AT RISK?'} /><button type="button" disabled={locked || checksDirty || releaseReason.trim().length < 8} onClick={authorizeAtRisk}>Authorize AT RISK Start</button></>}</section> : readiness.status === 'blocked' ? <section className={`${styles.releaseBox} ${styles.releaseBlocked}`}><span>HARD BLOCK</span><strong>No Field release is available.</strong><p>Resolve the blocking readiness dimension in its owning workflow.</p></section> : <section className={`${styles.releaseBox} ${styles.releaseReady}`}><span>DISPATCH RELEASE</span><strong>No override required.</strong><p>All readiness dimensions are READY; Field may start normally.</p></section>}
         </aside>
       </div>
 
-      <footer><div><span>DECISION RULE</span><strong>BLOCKED cannot be released. AT RISK requires a risk-signature-bound Operations release. READY starts normally.</strong></div><p>Crew and tool readiness are now calculated from verified operational registries rather than manual Work Order toggles.</p></footer>
+      <footer><div><span>DECISION RULE</span><strong>BLOCKED cannot be released. AT RISK requires a risk-signature-bound Operations release. READY starts normally.</strong></div><p>Site Access now comes from an explicit Work Order Access Plan, while reusable CRM access notes remain context rather than silent confirmation.</p></footer>
     </section>
   );
 }
