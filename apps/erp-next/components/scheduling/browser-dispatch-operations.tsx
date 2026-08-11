@@ -9,6 +9,7 @@ import { loadBrowserWorkforce } from '../../lib/browser-workforce';
 import { loadWorkOrderScopes } from '../../lib/browser-workorder-scope';
 import { currentArubaDateKey } from '../../lib/scheduling-capacity';
 import { assignmentStateFor, deriveDailyClose, deriveDispatchConflicts, deriveDispatchTimingAlerts, deriveProjectedDelayByAssignment, effectiveDispatchStage, loadDispatchAssignmentStates, saveDispatchAssignmentStage, type BrowserDispatchAssignmentState, type DispatchAssignmentStage } from '../../lib/browser-dispatch-operations';
+import { recordDispatchEvent } from '../../lib/browser-dispatch-history';
 import styles from './browser-dispatch-operations.module.css';
 
 const vanIds = ['VAN-1', 'VAN-2', 'VAN-3', 'VAN-4'] as const;
@@ -91,7 +92,10 @@ export function BrowserDispatchOperations() {
     const readiness = readinessByWorkOrder.get(order.id);
     if (!readiness) return;
     try {
+      const current = assignmentStateFor(order.id, vanId, states);
+      const fromStage: DispatchAssignmentStage = current?.stage ?? 'not_ready';
       const saved = saveDispatchAssignmentStage({ order, vanId, nextStage, readiness });
+      recordDispatchEvent({ workOrderId: order.id, vanId, fromStage, toStage: saved.stage });
       const next = loadDispatchAssignmentStates();
       setStates(next);
       setNotice(`${order.id} · ${vanId} → ${stageLabel(saved.stage)}. Physical Field start remains a separate technician event.`);
