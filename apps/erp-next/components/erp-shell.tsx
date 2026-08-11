@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import { foundationRole, navigationGroups } from '@/lib/navigation';
 
@@ -27,9 +27,29 @@ function ThemeControl() {
   );
 }
 
+const quickActions = [
+  { label: 'Create customer', detail: 'CRM master data', href: '/crm', short: 'CU' },
+  { label: 'Book appointment', detail: 'Scheduling & Dispatch', href: '/scheduling', short: 'AP' },
+  { label: 'Open work orders', detail: 'Field operations', href: '/work-orders', short: 'WO' },
+  { label: 'Capture expense', detail: 'Finance & evidence', href: '/expenses', short: 'EX' },
+  { label: 'Reconcile payments', detail: 'Banking / allocation', href: '/payments', short: 'PA' },
+  { label: 'Ask Executive AI', detail: 'Management intelligence', href: '/executive-ai', short: 'AI' },
+];
+
+const notifications = [
+  { tone: 'critical', title: 'Expense budget ahead of pace', detail: '81% spent with 35% of month elapsed.', href: '/kpis' },
+  { tone: 'warning', title: 'Customer balance remains', detail: 'Afl. 1,000 requires collection follow-up.', href: '/invoices' },
+  { tone: 'warning', title: 'Van 2 stock at risk', detail: '220V switches projected below par.', href: '/vans' },
+  { tone: 'opportunity', title: 'Sales ahead of pace', detail: 'Monthly sales are materially ahead of elapsed time.', href: '/kpis' },
+];
+
 export function ErpShell({ children }: Readonly<{ children: React.ReactNode }>) {
   const pathname = usePathname();
+  const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [query, setQuery] = useState('');
   const groups = useMemo(
     () => navigationGroups
       .map((group) => ({ ...group, items: group.items.filter((item) => item.roles.includes(foundationRole)) }))
@@ -37,7 +57,40 @@ export function ErpShell({ children }: Readonly<{ children: React.ReactNode }>) 
     [],
   );
 
+  const searchableModules = useMemo(() => groups.flatMap((group) => group.items.map((item) => ({ ...item, group: group.label }))), [groups]);
+  const normalizedQuery = query.trim().toLowerCase();
+  const moduleResults = useMemo(() => {
+    if (!normalizedQuery) return searchableModules.slice(0, 10);
+    return searchableModules.filter((item) => `${item.label} ${item.group} ${item.short}`.toLowerCase().includes(normalizedQuery)).slice(0, 12);
+  }, [normalizedQuery, searchableModules]);
+  const actionResults = useMemo(() => {
+    if (!normalizedQuery) return quickActions;
+    return quickActions.filter((item) => `${item.label} ${item.detail}`.toLowerCase().includes(normalizedQuery));
+  }, [normalizedQuery]);
+
   useEffect(() => setSidebarOpen(false), [pathname]);
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setCommandOpen((current) => !current);
+        setNotificationsOpen(false);
+      }
+      if (event.key === 'Escape') {
+        setCommandOpen(false);
+        setNotificationsOpen(false);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  const navigate = (href: string) => {
+    setCommandOpen(false);
+    setNotificationsOpen(false);
+    setQuery('');
+    router.push(href);
+  };
 
   return (
     <div className="erp-frame">
@@ -68,8 +121,8 @@ export function ErpShell({ children }: Readonly<{ children: React.ReactNode }>) 
         </nav>
 
         <div className="sidebar-footer">
-          <div className="environment-pill"><span /> Foundation Preview</div>
-          <small>Legacy remains isolated</small>
+          <div className="environment-pill"><span /> ERP Next Live</div>
+          <small>Preview data · controlled integrations</small>
         </div>
       </aside>
 
@@ -78,14 +131,17 @@ export function ErpShell({ children }: Readonly<{ children: React.ReactNode }>) 
       <div className="erp-main">
         <header className="erp-topbar">
           <button className="menu-trigger" type="button" onClick={() => setSidebarOpen((value) => !value)} aria-label="Open navigation">☰</button>
-          <div className="global-search">
+          <label className="global-search" onClick={() => { setCommandOpen(true); setNotificationsOpen(false); }}>
             <span>⌕</span>
-            <input aria-label="Global search" placeholder="Search customers, work orders, invoices, assets..." />
+            <input aria-label="Global search" value={query} onFocus={() => { setCommandOpen(true); setNotificationsOpen(false); }} onChange={(event) => setQuery(event.target.value)} placeholder="Search modules, customers, work orders, invoices..." />
             <kbd>⌘ K</kbd>
-          </div>
+          </label>
           <div className="topbar-actions">
             <ThemeControl />
-            <button className="icon-action" type="button" aria-label="Notifications">◌<b>4</b></button>
+            <div className="notification-anchor">
+              <button className="icon-action" type="button" aria-label="Notifications" aria-expanded={notificationsOpen} onClick={() => { setNotificationsOpen((current) => !current); setCommandOpen(false); }}>◌<b>{notifications.length}</b></button>
+              {notificationsOpen ? <div className="notification-popover"><header><div><strong>Management Alerts</strong><span>Exception-first attention queue</span></div><button type="button" onClick={() => setNotificationsOpen(false)}>×</button></header>{notifications.map((item) => <button type="button" className={`notification-row notification-${item.tone}`} key={item.title} onClick={() => navigate(item.href)}><i /><div><strong>{item.title}</strong><span>{item.detail}</span></div></button>)}<button className="notification-footer" type="button" onClick={() => navigate('/kpis')}>Open full attention queue →</button></div> : null}
+            </div>
             <div className="owner-chip">
               <div className="avatar">CM</div>
               <div><strong>Christian</strong><span>Super Admin</span></div>
@@ -95,6 +151,18 @@ export function ErpShell({ children }: Readonly<{ children: React.ReactNode }>) 
 
         <main className="erp-content">{children}</main>
       </div>
+
+      {commandOpen ? <div className="command-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setCommandOpen(false); }}>
+        <section className="command-palette" role="dialog" aria-modal="true" aria-label="DEMAC command palette">
+          <header className="command-input-row"><span>⌕</span><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search ERP Next or type an action..." /><kbd>ESC</kbd></header>
+          <div className="command-results">
+            {actionResults.length > 0 ? <section><div className="command-section-label">Quick Actions</div>{actionResults.map((item) => <button type="button" className="command-result" key={`action-${item.label}`} onClick={() => navigate(item.href)}><span className="command-glyph">{item.short}</span><div><strong>{item.label}</strong><small>{item.detail}</small></div><em>Open</em></button>)}</section> : null}
+            {moduleResults.length > 0 ? <section><div className="command-section-label">Modules</div>{moduleResults.map((item) => <button type="button" className="command-result" key={item.href} onClick={() => navigate(item.href)}><span className="command-glyph">{item.short}</span><div><strong>{item.label}</strong><small>{item.group}</small></div><em>Go</em></button>)}</section> : null}
+            {actionResults.length === 0 && moduleResults.length === 0 ? <div className="command-empty"><strong>No matching ERP destination</strong><span>Customer/work-order/entity search will use the live repository after Firebase is connected.</span></div> : null}
+          </div>
+          <footer className="command-footer"><span>↑↓ Navigate</span><span>Enter Open</span><span>⌘K Toggle</span></footer>
+        </section>
+      </div> : null}
     </div>
   );
 }

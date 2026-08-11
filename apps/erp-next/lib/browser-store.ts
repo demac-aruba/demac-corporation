@@ -1,6 +1,7 @@
 export const browserKeys = {
   customers: 'demac.erp-next.crm.customers.v1',
   customerMaster: (customerId: string) => `demac.erp-next.crm.master.${customerId}.v1`,
+  businessSettings: 'demac.erp-next.settings.business-rules.v1',
 } as const;
 
 export function loadBrowserValue<T>(key: string, fallback: T): T {

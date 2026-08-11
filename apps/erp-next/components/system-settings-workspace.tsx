@@ -1,24 +1,50 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { browserKeys, loadBrowserValue, saveBrowserValue } from '@/lib/browser-store';
+
+type BusinessSettings = {
+  serviceMinutes: number;
+  deepMinutes: number;
+  bufferMinutes: number;
+  afterHours: string;
+};
+
+const defaults: BusinessSettings = { serviceMinutes: 60, deepMinutes: 90, bufferMinutes: 30, afterHours: '17:00' };
 
 export function SystemSettingsWorkspace() {
-  const [serviceMinutes, setServiceMinutes] = useState(60);
-  const [deepMinutes, setDeepMinutes] = useState(90);
-  const [bufferMinutes, setBufferMinutes] = useState(30);
-  const [afterHours, setAfterHours] = useState('17:00');
+  const [settings, setSettings] = useState<BusinessSettings>(defaults);
+  const [ready, setReady] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSettings(loadBrowserValue(browserKeys.businessSettings, defaults));
+    setReady(true);
+  }, []);
+
+  const update = <K extends keyof BusinessSettings>(key: K, value: BusinessSettings[K]) => {
+    setSettings((current) => ({ ...current, [key]: value }));
+    setDirty(true);
+  };
+
+  const saveDraft = () => {
+    saveBrowserValue(browserKeys.businessSettings, settings);
+    setDirty(false);
+    setSavedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+  };
 
   return (
     <div className="sg-stack">
       <section className="page-head">
         <div><div className="eyebrow">Governed Configuration</div><h1>System Settings</h1><p>Business rules that are expected to change belong in controlled configuration — with permissions and history — instead of being hidden inside application code.</p></div>
-        <div className="page-actions"><button className="btn" type="button">Change History</button><button className="btn primary" type="button">Save Draft</button></div>
+        <div className="page-actions"><button className="btn" type="button">Change History</button><button className="btn primary" type="button" onClick={saveDraft} disabled={!ready || !dirty}>Save Browser Draft</button></div>
       </section>
 
       <section className="sg-settings-grid">
         <article className="panel sg-setting-card">
           <header><div><span>Scheduling</span><h2>Work Durations</h2></div><b>Configurable</b></header>
-          <div className="sg-form-grid"><label>Standard service<input type="number" min="30" step="15" value={serviceMinutes} onChange={(e)=>setServiceMinutes(Number(e.target.value))}/><small>minutes per standard booking unit</small></label><label>Deep cleaning<input type="number" min="45" step="15" value={deepMinutes} onChange={(e)=>setDeepMinutes(Number(e.target.value))}/><small>default duration before travel rules</small></label><label>Operational buffer<input type="number" min="0" step="5" value={bufferMinutes} onChange={(e)=>setBufferMinutes(Number(e.target.value))}/><small>margin for delays / route recovery</small></label><label>Overtime threshold<input type="time" value={afterHours} onChange={(e)=>setAfterHours(e.target.value)}/><small>work after this time is flagged</small></label></div>
+          <div className="sg-form-grid"><label>Standard service<input type="number" min="30" step="15" value={settings.serviceMinutes} onChange={(e)=>update('serviceMinutes',Number(e.target.value))}/><small>minutes per standard booking unit</small></label><label>Deep cleaning<input type="number" min="45" step="15" value={settings.deepMinutes} onChange={(e)=>update('deepMinutes',Number(e.target.value))}/><small>default duration before travel rules</small></label><label>Operational buffer<input type="number" min="0" step="5" value={settings.bufferMinutes} onChange={(e)=>update('bufferMinutes',Number(e.target.value))}/><small>margin for delays / route recovery</small></label><label>Overtime threshold<input type="time" value={settings.afterHours} onChange={(e)=>update('afterHours',e.target.value)}/><small>work after this time is flagged</small></label></div>
         </article>
 
         <article className="panel sg-setting-card">
@@ -37,7 +63,7 @@ export function SystemSettingsWorkspace() {
         </article>
       </section>
 
-      <section className="panel sg-change-banner"><div><strong>Draft configuration model</strong><p>These controls are interactive for UX validation but are not yet persisted. Firebase-backed versioning, permissions and audit events will be attached during the persistence phase.</p></div><span>0 unsaved production changes</span></section>
+      <section className="panel sg-change-banner"><div><strong>{dirty ? 'Unsaved browser configuration changes' : 'Browser configuration draft saved'}</strong><p>These values now persist on this browser for live workflow testing. Firebase-backed versioning, permissions and audit events will replace this preview store when production persistence is enabled.</p></div><span>{dirty ? 'Draft changed' : savedAt ? `Saved ${savedAt}` : 'Loaded from browser'}</span></section>
     </div>
   );
 }
