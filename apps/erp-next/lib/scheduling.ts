@@ -36,6 +36,12 @@ export type SchedulingSettings = {
   maxStandardUnitsSameSiteSingleVan: number;
   maxStandardUnitsPerVanWhenSupport: number;
   routeMarginMinutes: number;
+  presetMinutes: Partial<Record<WorkPresetId, number>>;
+};
+
+export type SchedulingRuntimeOverrides = {
+  routeMarginMinutes?: number;
+  presetMinutes?: Partial<Record<WorkPresetId, number>>;
 };
 
 export type VanResource = {
@@ -105,6 +111,7 @@ export const defaultSchedulingSettings: SchedulingSettings = {
   maxStandardUnitsSameSiteSingleVan: 7,
   maxStandardUnitsPerVanWhenSupport: 6,
   routeMarginMinutes: 30,
+  presetMinutes: {},
 };
 
 export const defaultWorkPresets: WorkPreset[] = [
@@ -138,6 +145,41 @@ export const previewSectorCompatibility: Record<string, string[]> = {
   Savaneta: ['Savaneta', 'San Nicolas', 'Santa Cruz'],
 };
 
+let runtimeSchedulingSettings: SchedulingSettings = {
+  ...defaultSchedulingSettings,
+  serviceStartTimes: [...defaultSchedulingSettings.serviceStartTimes],
+  presetMinutes: { ...defaultSchedulingSettings.presetMinutes },
+};
+
+export function configureSchedulingRuntime(overrides: SchedulingRuntimeOverrides) {
+  runtimeSchedulingSettings = {
+    ...runtimeSchedulingSettings,
+    ...(overrides.routeMarginMinutes !== undefined ? { routeMarginMinutes: Math.max(0, overrides.routeMarginMinutes) } : {}),
+    presetMinutes: {
+      ...runtimeSchedulingSettings.presetMinutes,
+      ...(overrides.presetMinutes ?? {}),
+    },
+  };
+  return getRuntimeSchedulingSettings();
+}
+
+export function resetSchedulingRuntime() {
+  runtimeSchedulingSettings = {
+    ...defaultSchedulingSettings,
+    serviceStartTimes: [...defaultSchedulingSettings.serviceStartTimes],
+    presetMinutes: { ...defaultSchedulingSettings.presetMinutes },
+  };
+  return getRuntimeSchedulingSettings();
+}
+
+export function getRuntimeSchedulingSettings(): SchedulingSettings {
+  return {
+    ...runtimeSchedulingSettings,
+    serviceStartTimes: [...runtimeSchedulingSettings.serviceStartTimes],
+    presetMinutes: { ...runtimeSchedulingSettings.presetMinutes },
+  };
+}
+
 export function timeToMinutes(value: string) {
   const [hours, minutes] = value.split(':').map(Number);
   return hours * 60 + minutes;
@@ -157,9 +199,16 @@ export function getPreset(presetId: WorkPresetId) {
   return defaultWorkPresets.find((preset) => preset.id === presetId) ?? defaultWorkPresets[defaultWorkPresets.length - 1];
 }
 
-export function calculateDurationMinutes(request: Pick<BookingRequest, 'presetId' | 'quantity'>) {
+export function getPresetDurationMinutes(presetId: WorkPresetId, settings: SchedulingSettings = getRuntimeSchedulingSettings()) {
+  const configured = settings.presetMinutes[presetId];
+  if (configured !== undefined && Number.isFinite(configured) && configured > 0) return configured;
+  return getPreset(presetId).defaultMinutes;
+}
+
+export function calculateDurationMinutes(request: Pick<BookingRequest, 'presetId' | 'quantity'>, settings: SchedulingSettings = getRuntimeSchedulingSettings()) {
   const preset = getPreset(request.presetId);
-  return preset.defaultMinutes * (preset.perUnit ? Math.max(1, request.quantity) : 1);
+  const baseMinutes = getPresetDurationMinutes(request.presetId, settings);
+  return baseMinutes * (preset.perUnit ? Math.max(1, request.quantity) : 1);
 }
 
 export function customerFacingDescription(request: Pick<BookingRequest, 'presetId' | 'quantity'>) {
@@ -223,16 +272,40 @@ function vanFreeForFullDay(vanId: string, jobs: DispatchJob[]) {
   return !jobs.some((job) => job.vanId === vanId && job.status !== 'cancelled');
 }
 
+function workingEndAfter(start: string, workMinutes: number, settings: SchedulingSettings) {
+  let cursor = timeToMinutes(start);
+  let remaining = Math.max(0, workMinutes);
+  const lunchStart = timeToMinutes(settings.lunchStart);
+  const lunchEnd = timeToMinutes(settings.lunchEnd);
+
+  if (cursor < lunchStart) {
+    const availableBeforeLunch = lunchStart - cursor;
+    const used = Math.min(remaining, availableBeforeLunch);
+    cursor += used;
+    remaining -= used;
+    if (remaining > 0) cursor = Math.max(cursor, lunchEnd);
+  } else if (cursor >= lunchStart && cursor < lunchEnd) {
+    cursor = lunchEnd;
+  }
+
+  return minutesToTime(cursor + remaining);
+}
+
 function findSupportPlan(request: BookingRequest, jobs: DispatchJob[], vans: VanResource[], settings: SchedulingSettings): CandidateSlot[] {
   if (request.presetId !== 'standard_service') return [];
   const capacity = settings.maxStandardUnitsPerVanWhenSupport;
   if (request.quantity <= settings.maxStandardUnitsSameSiteSingleVan || request.quantity > capacity * 2) return [];
   if (request.restriction?.halfDay === 'pm' || request.restriction?.notBefore && timeToMinutes(request.restriction.notBefore) > timeToMinutes('08:30')) return [];
 
-  const available = vans.filter((van) => van.active && vanFreeForFullDay(van.id, jobs));
-  if (available.length < 2) return [];
   const primaryUnits = Math.min(capacity, request.quantity);
   const supportUnits = request.quantity - primaryUnits;
+  const longestAssignmentUnits = Math.max(primaryUnits, supportUnits);
+  const end = workingEndAfter('08:30', longestAssignmentUnits * getPresetDurationMinutes('standard_service', settings), settings);
+  const latestEnd = timeToMinutes(settings.workdayEnd) - settings.routeMarginMinutes;
+  if (timeToMinutes(end) > latestEnd) return [];
+
+  const available = vans.filter((van) => van.active && vanFreeForFullDay(van.id, jobs));
+  if (available.length < 2) return [];
   const results: CandidateSlot[] = [];
 
   for (let i = 0; i < available.length; i += 1) {
@@ -241,7 +314,7 @@ function findSupportPlan(request: BookingRequest, jobs: DispatchJob[], vans: Van
         vanId: available[i].id,
         supportVanId: available[j].id,
         start: '08:30',
-        end: '16:30',
+        end,
         segment: 'full_day',
         sector: request.sector,
         score: 140 - i * 4 - j * 2,
@@ -255,11 +328,11 @@ function findSupportPlan(request: BookingRequest, jobs: DispatchJob[], vans: Van
   return results.slice(0, 3);
 }
 
-export function findCandidateSlots(request: BookingRequest, jobs: DispatchJob[], vans: VanResource[] = previewVans, settings: SchedulingSettings = defaultSchedulingSettings): CandidateSlot[] {
+export function findCandidateSlots(request: BookingRequest, jobs: DispatchJob[], vans: VanResource[] = previewVans, settings: SchedulingSettings = getRuntimeSchedulingSettings()): CandidateSlot[] {
   const supportPlans = findSupportPlan(request, jobs, vans, settings);
   if (supportPlans.length) return supportPlans;
 
-  const duration = calculateDurationMinutes(request);
+  const duration = calculateDurationMinutes(request, settings);
   const candidates: CandidateSlot[] = [];
 
   for (const van of vans.filter((resource) => resource.active)) {
