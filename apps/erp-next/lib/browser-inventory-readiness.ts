@@ -21,6 +21,8 @@ export type BrowserInventoryOpeningBalance = {
 
 export type BrowserLocationBalance = BrowserInventoryOpeningBalance & {
   consumed: number;
+  transferredIn: number;
+  transferredOut: number;
   current: number;
   status: 'ok' | 'low' | 'empty';
 };
@@ -82,13 +84,22 @@ export function syncSubmittedFieldConsumption() {
 
 export function deriveBrowserLocationBalances(opening: BrowserInventoryOpeningBalance[], movements: BrowserInventoryMovement[]) {
   return opening.map<BrowserLocationBalance>((line) => {
-    const consumed = movements
-      .filter((movement) => movement.movementType === 'job_consumption' && movement.sourceLocation === line.locationId && movement.itemCode === line.itemCode)
+    const relevant = movements.filter((movement) => movement.itemCode === line.itemCode);
+    const consumed = relevant
+      .filter((movement) => movement.movementType === 'job_consumption' && movement.sourceLocation === line.locationId)
       .reduce((sum, movement) => sum + movement.quantity, 0);
-    const current = Math.max(0, line.openingQuantity - consumed);
+    const transferredOut = relevant
+      .filter((movement) => movement.movementType === 'transfer_out' && movement.sourceLocation === line.locationId)
+      .reduce((sum, movement) => sum + movement.quantity, 0);
+    const transferredIn = relevant
+      .filter((movement) => movement.movementType === 'transfer_in' && movement.destination === line.locationId)
+      .reduce((sum, movement) => sum + movement.quantity, 0);
+    const current = Math.max(0, line.openingQuantity + transferredIn - transferredOut - consumed);
     return {
       ...line,
       consumed,
+      transferredIn,
+      transferredOut,
       current,
       status: current <= 0 ? 'empty' : current < line.minimum ? 'low' : 'ok',
     };
