@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { isFirebaseClientConfigured } from '@/lib/firebase/client-config';
 import { loadFirebasePrincipal } from '@/lib/firebase/principal';
 import { clearFirebaseWebSession, loadFirebaseWebSession, signInWithFirebaseEmail } from '@/lib/firebase/session';
-import { roleCapabilities, roleLabels, type AuthPrincipal } from '@/lib/security';
+import { roleLabels, type AuthPrincipal } from '@/lib/security';
 
 export type AuthMode = 'signed_out' | 'firebase';
 
@@ -68,7 +68,6 @@ export function AuthProvider({ children }: Readonly<{ children: React.ReactNode 
     }
     try {
       const nextPrincipal = await loadFirebasePrincipal();
-      if (!nextPrincipal.active) throw new Error('This DEMAC ERP account is inactive.');
       setPrincipal(nextPrincipal);
       setMode('firebase');
       setError(null);
@@ -91,7 +90,6 @@ export function AuthProvider({ children }: Readonly<{ children: React.ReactNode 
     try {
       await signInWithFirebaseEmail(email.trim(), password);
       const nextPrincipal = await loadFirebasePrincipal();
-      if (!nextPrincipal.active) throw new Error('This DEMAC ERP account is inactive.');
       setPrincipal(nextPrincipal);
       setMode('firebase');
       setStatus('ready');
@@ -110,7 +108,6 @@ export function AuthProvider({ children }: Readonly<{ children: React.ReactNode 
     if (mode !== 'firebase') throw new Error('Authentication is required.');
     try {
       const nextPrincipal = await loadFirebasePrincipal();
-      if (!nextPrincipal.active) throw new Error('This DEMAC ERP account is inactive.');
       setPrincipal(nextPrincipal);
       setError(null);
     } catch (refreshError) {
@@ -142,8 +139,4 @@ export function useAuth() {
 
 export function principalRoleLabel(principal: AuthPrincipal) {
   return roleLabels[principal.role];
-}
-
-export function isAuthenticatedPrincipal(principal: AuthPrincipal) {
-  return principal.active && principal.userId !== signedOutPrincipal.userId && principal.capabilities !== roleCapabilities.auditor;
 }
