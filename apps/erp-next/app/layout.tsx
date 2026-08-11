@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import './theme-hardening.css';
+import './management-intelligence.css';
 
 export const metadata: Metadata = {
   title: 'DEMAC ERP Next',
