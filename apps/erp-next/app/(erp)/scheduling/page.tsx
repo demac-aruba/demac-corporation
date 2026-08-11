@@ -1,7 +1,5 @@
-import { BrowserDispatchOperations } from '../../../components/scheduling/browser-dispatch-operations';
-import { BrowserDispatchReadinessBoard } from '../../../components/scheduling/browser-dispatch-readiness-board';
-import { DispatchWorkspace } from '../../../components/scheduling/dispatch-workspace';
+import { SchedulingPageShell } from '../../../components/scheduling/scheduling-page-shell';
 
 export default function SchedulingPage() {
-  return <><BrowserDispatchOperations /><BrowserDispatchReadinessBoard /><DispatchWorkspace /></>;
+  return <SchedulingPageShell />;
 }
