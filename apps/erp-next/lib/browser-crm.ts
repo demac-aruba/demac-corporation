@@ -3,10 +3,32 @@ import { browserKeys, loadBrowserValue } from './browser-store';
 export type BrowserCrmCustomerIdentity = {
   id: string;
   name: string;
-  type?: string;
+  legalName?: string;
+  type?: 'Residential' | 'Commercial' | 'Enterprise' | string;
   location?: string;
   phone?: string;
   email?: string;
+  preferredLanguage?: 'Papiamento' | 'English' | 'Spanish' | 'Dutch' | string;
+  initials?: string;
+  since?: string;
+  health?: number;
+  lifetimeRevenue?: string;
+  outstanding?: string;
+  openJobs?: number;
+  openProposals?: number;
+  assets?: number;
+  sites?: number;
+  maintenance?: 'Active' | 'Due Soon' | 'None' | string;
+  nextAction?: string;
+};
+
+export type BrowserCrmContactIdentity = {
+  id: string;
+  name: string;
+  role: string;
+  phone: string;
+  email: string;
+  primary: boolean;
 };
 
 export type BrowserCrmSiteIdentity = {
@@ -30,7 +52,7 @@ export type BrowserCrmAssetIdentity = {
 };
 
 export type BrowserCustomerMasterSnapshot = {
-  contacts?: unknown[];
+  contacts?: BrowserCrmContactIdentity[];
   sites?: BrowserCrmSiteIdentity[];
   assets?: BrowserCrmAssetIdentity[];
 };
@@ -40,8 +62,8 @@ export function loadBrowserCrmCustomers(): BrowserCrmCustomerIdentity[] {
 }
 
 export function loadBrowserCustomerMaster(customerId: string): BrowserCustomerMasterSnapshot {
-  if (!customerId) return { sites: [], assets: [] };
-  return loadBrowserValue<BrowserCustomerMasterSnapshot>(browserKeys.customerMaster(customerId), { sites: [], assets: [] });
+  if (!customerId) return { contacts: [], sites: [], assets: [] };
+  return loadBrowserValue<BrowserCustomerMasterSnapshot>(browserKeys.customerMaster(customerId), { contacts: [], sites: [], assets: [] });
 }
 
 export function sectorFromCrm(customer?: BrowserCrmCustomerIdentity, site?: BrowserCrmSiteIdentity) {
