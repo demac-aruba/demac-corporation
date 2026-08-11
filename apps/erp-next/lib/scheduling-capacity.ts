@@ -60,7 +60,7 @@ export function buildOperationalWeek(referenceDateKey = currentArubaDateKey()): 
   });
 }
 
-export function jobsForDate(jobs: CalendarDispatchJob[], dateKey: string): DispatchJob[] {
+export function jobsForDate(jobs: CalendarDispatchJob[], dateKey: string): CalendarDispatchJob[] {
   return jobs.filter((job) => job.dateKey === dateKey);
 }
 
