@@ -7,6 +7,7 @@ import { BROWSER_BANK_PAYMENTS_KEY, BROWSER_PAYMENT_ALLOCATIONS_KEY, type Browse
 import { BROWSER_REPORT_DELIVERIES_KEY, type BrowserReportDeliveryRecord } from './browser-report-delivery';
 import { browserKeys, loadBrowserValue } from './browser-store';
 import { loadWorkOrderScopes } from './browser-workorder-scope';
+import { loadDispatchEvents } from './browser-dispatch-history';
 
 export type BrowserAuditProjectionEvent = {
   id: string;
@@ -46,6 +47,7 @@ export function loadBrowserAuditProjection(): BrowserAuditProjectionEvent[] {
   const payments = loadBrowserValue<BrowserBankPayment[]>(BROWSER_BANK_PAYMENTS_KEY, []);
   const allocations = loadBrowserValue<BrowserPaymentAllocation[]>(BROWSER_PAYMENT_ALLOCATIONS_KEY, []);
   const dispatchReleases = loadBrowserValue<BrowserDispatchAtRiskRelease[]>(BROWSER_DISPATCH_RELEASES_KEY, []);
+  const dispatchEvents = loadDispatchEvents();
 
   const events: BrowserAuditProjectionEvent[] = [];
 
@@ -68,6 +70,18 @@ export function loadBrowserAuditProjection(): BrowserAuditProjectionEvent[] {
     actor: release.authorizedBy,
     detail: `${release.workOrderId} · ${release.reason} · risks accepted: ${dispatchRiskDimensions(release)}`,
     importance: 'sensitive',
+  });
+
+  for (const dispatchEvent of dispatchEvents) events.push({
+    id: `AUD-${dispatchEvent.id}`,
+    occurredAt: dispatchEvent.occurredAt,
+    module: 'Dispatch',
+    action: `Van status → ${dispatchEvent.toStage.replaceAll('_', ' ')}`,
+    entityType: 'DispatchAssignment',
+    entityId: dispatchEvent.id,
+    actor: dispatchEvent.actor,
+    detail: `${dispatchEvent.workOrderId} · ${dispatchEvent.vanId} · ${dispatchEvent.fromStage.replaceAll('_', ' ')} → ${dispatchEvent.toStage.replaceAll('_', ' ')}${dispatchEvent.note ? ` · ${dispatchEvent.note}` : ''}`,
+    importance: dispatchEvent.toStage === 'departed' || dispatchEvent.toStage === 'on_site' ? 'sensitive' : 'normal',
   });
 
   for (const execution of field) {
