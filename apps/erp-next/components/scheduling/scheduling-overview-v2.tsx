@@ -8,6 +8,7 @@ import type { BookingRequest, CandidateSlot, DispatchJob, WorkPresetId } from '.
 import { customerFacingDescription, defaultWorkPresets, getHalfDayAnchor, getRuntimeSchedulingSettings, minutesToTime, previewVans, timeToMinutes } from '../../lib/scheduling';
 import type { CalendarDispatchJob, OperationalDay } from '../../lib/scheduling-capacity';
 import { buildOperationalWeek, currentArubaDateKey, findCandidateSlotsForDay } from '../../lib/scheduling-capacity';
+import { QuickCustomerOnboarding, type QuickCustomerCreateResult } from './quick-customer-onboarding';
 import styles from './scheduling-overview-v2.module.css';
 
 type BookingIdentity = { customerId?: string; siteId?: string };
@@ -73,6 +74,23 @@ function occupancyForDay(day: OperationalDay, jobs: CalendarDispatchJob[]) {
     }
   }
   return { total, occupied, open: total - occupied, percent: Math.round((occupied / total) * 100) };
+}
+
+function appointmentIdForJob(job: CalendarDispatchJob) {
+  return job.id.startsWith('APT-') ? job.id.replace(/-(P|S)$/, '') : undefined;
+}
+
+function jobSpanFromIndex(job: CalendarDispatchJob, slots: DisplaySlot[], startIndex: number) {
+  let span = 0;
+  for (let index = startIndex; index < slots.length; index += 1) {
+    if (!overlapsSlot(job, slots[index])) break;
+    span += 1;
+  }
+  return Math.max(1, span);
+}
+
+function jobCrossesLunch(job: CalendarDispatchJob) {
+  return timeToMinutes(job.start) < 12 * 60 && timeToMinutes(job.end) > 13 * 60;
 }
 
 export function SchedulingOverviewV2() {
@@ -246,17 +264,8 @@ export function SchedulingOverviewV2() {
               return <section className={styles.vanLane} key={van.id}>
                 <header><div className={styles.vanIdentity}><span>{van.id.replace('VAN-', 'V')}</span><div><strong>{van.name}</strong><small>{van.team}</small></div></div><b>ACTIVE</b></header>
                 <div className={styles.anchorBar}><div><span>AM anchor</span><strong>{amAnchor?.sector ?? 'Open'}</strong></div><div><span>PM anchor</span><strong>{pmAnchor?.sector ?? 'Open'}</strong></div></div>
-                <div className={styles.slotList}>
-                  {activeSlots.map((slot, index) => {
-                    const slotJobs = vanJobs.filter((job) => overlapsSlot(job, slot)).sort((a, b) => a.start.localeCompare(b.start));
-                    const isFirstAfternoon = index > 0 && activeSlots[index - 1]?.segment === 'am' && slot.segment === 'pm';
-                    return <div key={`${van.id}-${slot.start}`}>
-                      {isFirstAfternoon ? <div className={styles.lunchRow}><span>12:00</span><div>Lunch / reset</div><span>1:00</span></div> : null}
-                      <ScheduleSlot slot={slot} jobs={slotJobs} onConfirm={confirmAppointment} onOpen={() => openBooking({ vanId: van.id, start: slot.start })} />
-                    </div>;
-                  })}
-                  {!activeDay.isOpen ? <div className={styles.closedDay}>No operational capacity</div> : null}
-                </div>
+                <VanScheduleSlots slots={activeSlots} jobs={vanJobs} onConfirm={confirmAppointment} onOpen={(start) => openBooking({ vanId: van.id, start })} />
+                {!activeDay.isOpen ? <div className={styles.closedDay}>No operational capacity</div> : null}
               </section>;
             })}
           </div>
@@ -268,39 +277,76 @@ export function SchedulingOverviewV2() {
   );
 }
 
-function ScheduleSlot({ slot, jobs, onConfirm, onOpen }: { slot: DisplaySlot; jobs: CalendarDispatchJob[]; onConfirm: (appointmentId: string) => void; onOpen: () => void }) {
-  if (!jobs.length) {
-    return <button type="button" className={styles.openSlot} onClick={onOpen}><div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div><div><strong>Available</strong><span>Open work spot</span></div><b>+ Schedule</b></button>;
+function VanScheduleSlots({ slots, jobs, onConfirm, onOpen }: { slots: DisplaySlot[]; jobs: CalendarDispatchJob[]; onConfirm: (appointmentId: string) => void; onOpen: (start: string) => void }) {
+  const rows: React.ReactNode[] = [];
+  let index = 0;
+
+  while (index < slots.length) {
+    const slot = slots[index];
+    const previous = slots[index - 1];
+    const firstAfternoon = index > 0 && previous?.segment === 'am' && slot.segment === 'pm';
+    if (firstAfternoon) rows.push(<div className={styles.lunchRow} key={`lunch-${slot.start}`}><span>12:00</span><div>Lunch / reset</div><span>1:00</span></div>);
+
+    const startingJobs = jobs.filter((job) => job.start === slot.start).sort((a, b) => a.id.localeCompare(b.id));
+    if (startingJobs.length) {
+      const job = startingJobs[0];
+      const span = jobSpanFromIndex(job, slots, index);
+      rows.push(<AppointmentBlock key={job.id} job={job} span={span} crossesLunch={jobCrossesLunch(job)} onConfirm={onConfirm} />);
+      index += span;
+      continue;
+    }
+
+    const continuingJob = jobs.find((job) => overlapsSlot(job, slot) && timeToMinutes(job.start) < timeToMinutes(slot.start));
+    if (continuingJob) {
+      rows.push(<div className={styles.continuationFallback} key={`${continuingJob.id}-${slot.start}`}><div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div><div><strong>Reserved</strong><span>Part of {formatTime(continuingJob.start)}–{formatTime(continuingJob.end)} appointment</span></div></div>);
+      index += 1;
+      continue;
+    }
+
+    rows.push(<button type="button" className={styles.openSlot} key={`open-${slot.start}`} onClick={() => onOpen(slot.start)}><div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div><div><strong>Available</strong><span>Open work spot</span></div><b>+ Schedule</b></button>);
+    index += 1;
   }
 
-  return <div className={styles.occupiedSlot}>
-    <div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div>
-    <div className={styles.slotJobs}>{jobs.map((job) => {
-      const appointmentId = job.id.startsWith('APT-') ? job.id.replace(/-(P|S)$/, '') : undefined;
-      const startsHere = job.start === slot.start;
-      return <article key={job.id} className={`${styles.jobCard} ${job.status === 'temporary_hold' ? styles.holdCard : ''}`}>
-        <div><div className={styles.jobTitle}><strong>{job.customer}</strong><b className={slotClass(job.readiness)}>{readinessLabel(job.readiness)}</b></div><span>{startsHere ? presetLabel(job.presetId) : `Continues · ${presetLabel(job.presetId)}`} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span><small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support' : ''}</small></div>
-        {appointmentId && job.status === 'temporary_hold' && job.isPrimaryAssignment ? <button type="button" onClick={() => onConfirm(appointmentId)}>Confirm</button> : null}
-      </article>;
-    })}</div>
-  </div>;
+  return <div className={styles.slotList}>{rows}</div>;
+}
+
+function AppointmentBlock({ job, span, crossesLunch, onConfirm }: { job: CalendarDispatchJob; span: number; crossesLunch: boolean; onConfirm: (appointmentId: string) => void }) {
+  const appointmentId = appointmentIdForJob(job);
+  const minHeight = span * 64 + Math.max(0, span - 1) * 6 + (crossesLunch ? 18 : 0);
+  return <article className={`${styles.appointmentBlock} ${job.status === 'temporary_hold' ? styles.appointmentHold : ''}`} style={{ minHeight }}>
+    <div className={styles.appointmentTime}><strong>{formatTime(job.start)}</strong><span>{formatTime(job.end)}</span>{span > 1 ? <b>{span} spots</b> : null}</div>
+    <div className={styles.appointmentBody}>
+      <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={slotClass(job.readiness)}>{readinessLabel(job.readiness)}</b></div>
+      <span>{presetLabel(job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span>
+      <small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small>
+      {span > 1 ? <em>Reserved continuously · {formatTime(job.start)}–{formatTime(job.end)}</em> : null}
+      {crossesLunch ? <div className={styles.appointmentLunch}>12:00–1:00 PM · Lunch / reset remains protected</div> : null}
+    </div>
+    {appointmentId && job.status === 'temporary_hold' && job.isPrimaryAssignment ? <button type="button" onClick={() => onConfirm(appointmentId)}>Confirm</button> : null}
+  </article>;
 }
 
 function BookingDrawer({ day, jobs, preferred, onClose, onReserve }: { day: OperationalDay; jobs: CalendarDispatchJob[]; preferred: PreferredSlot; onClose: () => void; onReserve: (request: BookingRequest, slot: CandidateSlot, technicianInstructions: string, identity: BookingIdentity) => void }) {
-  const [crmCustomers] = useState<BrowserCrmCustomerIdentity[]>(() => loadBrowserCrmCustomers());
+  const [crmCustomers, setCrmCustomers] = useState<BrowserCrmCustomerIdentity[]>(() => loadBrowserCrmCustomers());
+  const [customerQuery, setCustomerQuery] = useState('');
   const [customerId, setCustomerId] = useState('');
   const [siteId, setSiteId] = useState('');
-  const [customer, setCustomer] = useState('New Customer');
-  const [site, setSite] = useState('Customer Property');
+  const [crmSites, setCrmSites] = useState<BrowserCrmSiteIdentity[]>([]);
+  const [customer, setCustomer] = useState('');
+  const [site, setSite] = useState('');
   const [sector, setSector] = useState('Noord');
   const [presetId, setPresetId] = useState<WorkPresetId>('standard_service');
   const [quantity, setQuantity] = useState(1);
   const [restriction, setRestriction] = useState('any');
   const [technicianInstructions, setTechnicianInstructions] = useState('');
   const [selected, setSelected] = useState<CandidateSlot | null>(null);
-  const master = useMemo(() => customerId ? loadBrowserCustomerMaster(customerId) : { sites: [], assets: [] }, [customerId]);
-  const crmSites = (master.sites ?? []) as BrowserCrmSiteIdentity[];
+  const [customerCreateOpen, setCustomerCreateOpen] = useState(false);
   const selectedCustomer = crmCustomers.find((item) => item.id === customerId);
+  const customerMatches = useMemo(() => {
+    const query = customerQuery.trim().toLowerCase();
+    if (!query) return crmCustomers.slice(0, 6);
+    return crmCustomers.filter((item) => [item.name, item.phone, item.email].some((value) => (value ?? '').toLowerCase().includes(query))).slice(0, 8);
+  }, [crmCustomers, customerQuery]);
   const request = useMemo<BookingRequest>(() => ({
     customer,
     site,
@@ -310,13 +356,14 @@ function BookingDrawer({ day, jobs, preferred, onClose, onReserve }: { day: Oper
     restriction: restriction === 'morning' ? { halfDay: 'am' } : restriction === 'afternoon' ? { halfDay: 'pm' } : restriction === 'after10' ? { notBefore: '10:00' } : restriction === 'after2' ? { notBefore: '14:00' } : undefined,
   }), [customer, site, sector, presetId, quantity, restriction]);
   const slots = useMemo(() => {
+    if (!customerId || !siteId) return [];
     const options = findCandidateSlotsForDay(day, request, jobs);
     return [...options].sort((a, b) => {
       const aPreferred = Number(Boolean(preferred.vanId && a.vanId === preferred.vanId && preferred.start && a.start === preferred.start));
       const bPreferred = Number(Boolean(preferred.vanId && b.vanId === preferred.vanId && preferred.start && b.start === preferred.start));
       return bPreferred - aPreferred || b.score - a.score;
     });
-  }, [day, jobs, preferred.start, preferred.vanId, request]);
+  }, [customerId, day, jobs, preferred.start, preferred.vanId, request, siteId]);
 
   useEffect(() => {
     const exact = slots.find((slot) => preferred.vanId && preferred.start && slot.vanId === preferred.vanId && slot.start === preferred.start);
@@ -327,21 +374,25 @@ function BookingDrawer({ day, jobs, preferred, onClose, onReserve }: { day: Oper
     setSelected(null);
     setCustomerId(id);
     setSiteId('');
-    if (!id) {
-      setCustomer('New Customer');
-      setSite('Customer Property');
+    const crmCustomer = crmCustomers.find((item) => item.id === id);
+    if (!crmCustomer) {
+      setCustomer('');
+      setSite('');
+      setCrmSites([]);
       return;
     }
-    const crmCustomer = crmCustomers.find((item) => item.id === id);
     const nextMaster = loadBrowserCustomerMaster(id);
-    const firstSite = nextMaster.sites?.[0];
-    if (crmCustomer) setCustomer(crmCustomer.name);
+    const sites = nextMaster.sites ?? [];
+    const firstSite = sites[0];
+    setCustomer(crmCustomer.name);
+    setCustomerQuery(crmCustomer.name);
+    setCrmSites(sites);
     if (firstSite) {
       setSiteId(firstSite.id);
       setSite(firstSite.name);
       setSector(sectorFromCrm(crmCustomer, firstSite) ?? sector);
     } else {
-      setSite('Unregistered Property');
+      setSite('');
       setSector(sectorFromCrm(crmCustomer) ?? sector);
     }
   };
@@ -351,35 +402,62 @@ function BookingDrawer({ day, jobs, preferred, onClose, onReserve }: { day: Oper
     setSiteId(id);
     const crmSite = crmSites.find((item) => item.id === id);
     if (!crmSite) {
-      setSite('Unregistered Property');
-      setSector(sectorFromCrm(selectedCustomer) ?? sector);
+      setSite('');
       return;
     }
     setSite(crmSite.name);
     setSector(sectorFromCrm(selectedCustomer, crmSite) ?? sector);
   };
 
+  const createCustomer = (result: QuickCustomerCreateResult) => {
+    const nextCustomers = [result.customer, ...crmCustomers.filter((item) => item.id !== result.customer.id)];
+    saveBrowserValue(browserKeys.customers, nextCustomers);
+    saveBrowserValue(browserKeys.customerMaster(result.customer.id), result.master);
+    setCrmCustomers(nextCustomers);
+    setCustomerCreateOpen(false);
+    chooseCreatedCustomer(result);
+  };
+
+  const chooseCreatedCustomer = (result: QuickCustomerCreateResult) => {
+    const sites = result.master.sites ?? [];
+    const primary = sites.find((item) => item.id === result.primarySiteId) ?? sites[0];
+    setCustomerId(result.customer.id);
+    setCustomer(result.customer.name);
+    setCustomerQuery(result.customer.name);
+    setCrmSites(sites);
+    setSiteId(primary?.id ?? '');
+    setSite(primary?.name ?? '');
+    setSector(sectorFromCrm(result.customer, primary) ?? 'Noord');
+    setSelected(null);
+  };
+
   return <div className={styles.drawerOverlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <aside className={styles.drawer} role="dialog" aria-modal="true">
-      <header className={styles.drawerHeader}><div><span>New appointment · {day.weekday} {day.shortDate}</span><h2>Find a valid work spot</h2><p>The same deterministic scheduler still controls van, sector, duration, customer restrictions and support capacity.</p></div><button type="button" onClick={onClose}>×</button></header>
+      <header className={styles.drawerHeader}><div><span>New appointment · {day.weekday} {day.shortDate}</span><h2>Find a valid work spot</h2><p>Search the CRM relationship first. The deterministic scheduler then controls van, sector, duration, restrictions and support capacity.</p></div><button type="button" onClick={onClose}>×</button></header>
       <div className={styles.drawerBody}>
-        <section className={styles.formSection}><header><strong>1 · Customer & property</strong><span>Use CRM identity when available.</span></header><div className={styles.formGrid}>
-          <label className={styles.wide}><span>CRM customer</span><select value={customerId} onChange={(event) => chooseCustomer(event.target.value)}><option value="">New / unregistered lead</option>{crmCustomers.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.location || item.type || item.id}</option>)}</select></label>
-          {customerId ? <label className={styles.wide}><span>Registered property</span><select value={siteId} onChange={(event) => chooseSite(event.target.value)}><option value="">Unregistered property</option>{crmSites.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.address}</option>)}</select></label> : <><label><span>Customer / lead name</span><input value={customer} onChange={(event) => { setCustomer(event.target.value); setSelected(null); }} /></label><label><span>Property / site</span><input value={site} onChange={(event) => { setSite(event.target.value); setSelected(null); }} /></label></>}
-          <label><span>DEMAC sector</span><select value={sector} onChange={(event) => { setSector(event.target.value); setSelected(null); }}><option>Noord</option><option>Palm Beach</option><option>Oranjestad</option><option>Santa Cruz</option><option>Paradera</option><option>San Nicolas</option><option>Savaneta</option></select></label>
-        </div></section>
+        <section className={styles.formSection}><header><strong>1 · Customer & property</strong><span>One CRM customer can have multiple properties and contacts.</span></header>
+          <div className={styles.customerSearchArea}>
+            <div className={styles.customerSearchHead}><div><span>CRM CUSTOMER SEARCH</span><strong>{selectedCustomer ? 'Customer selected' : 'Find customer by name'}</strong></div><button type="button" onClick={() => setCustomerCreateOpen(true)}>+ Add Customer</button></div>
+            {selectedCustomer ? <div className={styles.selectedCustomerCard}><div><span>{selectedCustomer.id}</span><strong>{selectedCustomer.name}</strong><small>{selectedCustomer.phone || 'No phone'} · {selectedCustomer.email || 'No email'}</small></div><button type="button" onClick={() => { setCustomerId(''); setCustomer(''); setSiteId(''); setSite(''); setCrmSites([]); setCustomerQuery(''); setSelected(null); }}>Change</button></div> : <>
+              <label className={styles.customerSearchInput}><span>⌕</span><input value={customerQuery} onChange={(event) => setCustomerQuery(event.target.value)} placeholder="Start typing customer name..." /></label>
+              <div className={styles.customerResults}>{customerMatches.length ? customerMatches.map((item) => <button type="button" key={item.id} onClick={() => chooseCustomer(item.id)}><div><strong>{item.name}</strong><span>{item.location || item.type || 'Customer'} · {item.phone || 'No phone'}</span></div><b>Select</b></button>) : <div className={styles.noCustomerMatch}><strong>No customer found</strong><span>Create the relationship instead of booking an unregistered duplicate.</span><button type="button" onClick={() => setCustomerCreateOpen(true)}>+ Add Customer</button></div>}</div>
+            </>}
+          </div>
+          {customerId ? <div className={styles.formGrid}><label className={styles.wide}><span>Registered property</span><select value={siteId} onChange={(event) => chooseSite(event.target.value)}><option value="">Select a property</option>{crmSites.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.address}</option>)}</select></label><label><span>DEMAC sector</span><select value={sector} onChange={(event) => { setSector(event.target.value); setSelected(null); }}><option>Noord</option><option>Palm Beach</option><option>Oranjestad</option><option>Santa Cruz</option><option>Paradera</option><option>San Nicolas</option><option>Savaneta</option></select></label>{customerId && !crmSites.length ? <div className={`${styles.wide} ${styles.propertyWarning}`}><strong>This customer has no registered property.</strong><span>Open Add Customer only for a new relationship; existing-customer properties should be added in Customer 360 before booking.</span></div> : null}</div> : null}
+        </section>
 
         <section className={styles.formSection}><header><strong>2 · Work & restrictions</strong><span>Changing these values recalculates valid slots.</span></header><div className={styles.formGrid}>
           <label className={styles.wide}><span>Work type</span><select value={presetId} onChange={(event) => { setPresetId(event.target.value as WorkPresetId); setSelected(null); }}>{defaultWorkPresets.map((preset) => <option value={preset.id} key={preset.id}>{preset.label}</option>)}</select></label>
           <label><span>Number of A/C units</span><input type="number" min={1} max={12} value={quantity} onChange={(event) => { setQuantity(Math.max(1, Number(event.target.value) || 1)); setSelected(null); }} /></label>
           <label><span>Customer restriction</span><select value={restriction} onChange={(event) => { setRestriction(event.target.value); setSelected(null); }}><option value="any">No time restriction</option><option value="morning">Morning only</option><option value="afternoon">Afternoon only</option><option value="after10">After 10:00 AM</option><option value="after2">After 2:00 PM</option></select></label>
-        </div><div className={styles.descriptionPreview}><span>CUSTOMER-FACING DESCRIPTION</span><strong>{customerFacingDescription(request)}</strong><small>Technician-only instructions remain separate.</small></div><label className={styles.instructions}><span>Technician instructions</span><textarea rows={3} value={technicianInstructions} onChange={(event) => setTechnicianInstructions(event.target.value)} placeholder="Internal access, preparation or technical instructions..." /></label></section>
+        </div><div className={styles.descriptionPreview}><span>CUSTOMER-FACING DESCRIPTION</span><strong>{customerId && siteId ? customerFacingDescription(request) : 'Select a CRM customer and service property first.'}</strong><small>Technician-only instructions remain separate.</small></div><label className={styles.instructions}><span>Technician instructions</span><textarea rows={3} value={technicianInstructions} onChange={(event) => setTechnicianInstructions(event.target.value)} placeholder="Internal access, preparation or technical instructions..." /></label></section>
 
         <section className={styles.formSection}><header><strong>3 · Valid ERP options</strong><span>{preferred.vanId && preferred.start ? `Requested visual spot: ${preferred.vanId.replace('VAN-', 'Van ')} · ${formatTime(preferred.start)}` : 'Choose one of the valid calculated options.'}</span></header><div className={styles.slotOptions}>
-          {slots.length ? slots.map((slot) => <button type="button" key={`${slot.vanId}-${slot.start}-${slot.supportVanId ?? ''}`} className={`${styles.slotOption} ${selected === slot ? styles.slotOptionSelected : ''}`} onClick={() => setSelected(slot)}><div><strong>{slot.vanId.replace('VAN-', 'Van ')} · {formatTime(slot.start)}–{formatTime(slot.end)}</strong><span>{slot.sector}{slot.supportVanId ? ` · support ${slot.supportVanId.replace('VAN-', 'Van ')}` : ''}</span></div><b>{slot.score}</b><small>{slot.reasons[0] ?? 'Valid capacity'}</small></button>) : <div className={styles.noSlots}><strong>No valid capacity for this request</strong><p>Change day, sector, restriction, work type or quantity. ERP Next will not invent availability.</p></div>}
+          {!customerId || !siteId ? <div className={styles.noSlots}><strong>Customer and property required</strong><p>Choose the CRM relationship and exact service property before the ERP calculates route-aware capacity.</p></div> : slots.length ? slots.map((slot) => <button type="button" key={`${slot.vanId}-${slot.start}-${slot.supportVanId ?? ''}`} className={`${styles.slotOption} ${selected === slot ? styles.slotOptionSelected : ''}`} onClick={() => setSelected(slot)}><div><strong>{slot.vanId.replace('VAN-', 'Van ')} · {formatTime(slot.start)}–{formatTime(slot.end)}</strong><span>{slot.sector}{slot.supportVanId ? ` · support ${slot.supportVanId.replace('VAN-', 'Van ')}` : ''}</span></div><b>{slot.score}</b><small>{slot.reasons[0] ?? 'Valid capacity'}</small></button>) : <div className={styles.noSlots}><strong>No valid capacity for this request</strong><p>Change day, sector, restriction, work type or quantity. ERP Next will not invent availability.</p></div>}
         </div></section>
       </div>
-      <footer className={styles.drawerFooter}><div>{selected ? <><span>Selected</span><strong>{selected.vanId.replace('VAN-', 'Van ')} · {formatTime(selected.start)}</strong></> : <span>Select a valid work spot.</span>}</div><div><button type="button" className={styles.secondary} onClick={onClose}>Cancel</button><button type="button" className={styles.primary} disabled={!selected || !customer.trim() || !site.trim()} onClick={() => selected && onReserve(request, selected, technicianInstructions, { customerId: customerId || undefined, siteId: siteId || undefined })}>Temporary hold</button></div></footer>
+      <footer className={styles.drawerFooter}><div>{selected ? <><span>Selected</span><strong>{selected.vanId.replace('VAN-', 'Van ')} · {formatTime(selected.start)}</strong></> : <span>Select a valid work spot.</span>}</div><div><button type="button" className={styles.secondary} onClick={onClose}>Cancel</button><button type="button" className={styles.primary} disabled={!selected || !customerId || !siteId} onClick={() => selected && onReserve(request, selected, technicianInstructions, { customerId, siteId })}>Temporary hold</button></div></footer>
     </aside>
+    <QuickCustomerOnboarding open={customerCreateOpen} existingCustomers={crmCustomers} onClose={() => setCustomerCreateOpen(false)} onUseExisting={(id) => { setCustomerCreateOpen(false); chooseCustomer(id); }} onCreate={createCustomer} />
   </div>;
 }
