@@ -3,5 +3,14 @@
   "framework": null,
   "installCommand": "npm install --prefix apps/erp-next --no-audit --no-fund",
   "buildCommand": "npm --prefix apps/erp-next run typecheck && npm --prefix apps/erp-next run build",
-  "outputDirectory": "apps/erp-next/out"
+  "outputDirectory": "apps/erp-next/out",
+  "headers": [
+    {
+      "source": "/sw.js",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" },
+        { "key": "Service-Worker-Allowed", "value": "/" }
+      ]
+    }
+  ]
 }
