@@ -1,16 +1,20 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/auth-provider';
 
 export default function LoginPage() {
   const router = useRouter();
-  const { firebaseConfigured, mode, principal, signIn, usePreviewMode } = useAuth();
+  const { firebaseConfigured, mode, principal, status, error: sessionError, signIn } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (mode === 'firebase' && status === 'ready' && principal.active) router.replace('/dashboard');
+  }, [mode, principal.active, router, status]);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -19,7 +23,7 @@ export default function LoginPage() {
     setError(null);
     try {
       await signIn(email, password);
-      router.push('/dashboard');
+      router.replace('/dashboard');
     } catch (signInError) {
       setError(signInError instanceof Error ? signInError.message : 'Sign-in failed.');
     } finally {
@@ -27,10 +31,7 @@ export default function LoginPage() {
     }
   };
 
-  const continuePreview = () => {
-    usePreviewMode();
-    router.push('/dashboard');
-  };
+  const visibleError = error ?? (status === 'error' ? sessionError : null);
 
   return (
     <main className="auth-page">
@@ -39,30 +40,28 @@ export default function LoginPage() {
         <div className="auth-brand-copy">
           <div className="eyebrow">Professional Cooling Solutions</div>
           <h1>One operating system for DEMAC.</h1>
-          <p>Customers, dispatch, field work, inventory, communications, finance, projects and management intelligence—designed as one governed company system.</p>
-          <div className="auth-brand-points"><div><strong>Role-aware</strong><span>Every user sees the right operational surface.</span></div><div><strong>Evidence-driven</strong><span>Transactions and audit history stay traceable.</span></div><div><strong>AI governed</strong><span>AI interprets and prepares; humans approve sensitive actions.</span></div><div><strong>Live + Field</strong><span>Office and technician workflows share the same business model.</span></div></div>
+          <p>Secure access to customers, dispatch, field work, inventory, communications, finance, projects and management intelligence.</p>
+          <div className="auth-brand-points"><div><strong>Authorized users only</strong><span>Every account must exist in Firebase Authentication and the DEMAC ERP user registry.</span></div><div><strong>Role-aware</strong><span>Each user sees only the operational surfaces allowed by their role.</span></div><div><strong>Session protected</strong><span>ERP modules remain locked when a valid authenticated session is not present.</span></div><div><strong>Auditable access</strong><span>User identity follows the same governed account model used by DEMAC.</span></div></div>
         </div>
-        <div className="auth-security-note"><i /><span>Firebase authentication is optional during the rebuild; real-data mode will require authenticated access before production activation.</span></div>
+        <div className="auth-security-note"><i /><span>DEMAC ERP is private. Authentication is required before any internal ERP module is displayed.</span></div>
       </section>
 
       <section className="auth-form-panel">
         <div className="auth-card">
-          <header className="auth-card-head"><span>Secure Access</span><h2>Sign in to ERP Next</h2><p>Use an authorized Firebase account when the production connection is ready, or continue in Preview Owner mode while we finish the rebuild.</p></header>
+          <header className="auth-card-head"><span>Secure Access</span><h2>Sign in to DEMAC ERP</h2><p>Use your authorized DEMAC email and password. Accounts must be explicitly provisioned and enabled by an administrator.</p></header>
 
-          <div className={`auth-config-status ${firebaseConfigured ? 'ready' : ''}`}><i /><div><strong>{firebaseConfigured ? 'Firebase client configuration detected' : 'Firebase sign-in is not active in this build'}</strong><span>{firebaseConfigured ? 'The existing Vercel/Firebase public configuration was detected. Sign-in uses Firebase Authentication; Firestore writes still depend on the final Security Rules review.' : 'ERP Next remains safely available in Preview Owner mode. No Firebase Console change is required to keep reviewing the product.'}</span></div></div>
+          <div className={`auth-config-status ${firebaseConfigured ? 'ready' : ''}`}><i /><div><strong>{firebaseConfigured ? 'Secure Firebase sign-in is active' : 'Secure sign-in is unavailable'}</strong><span>{firebaseConfigured ? 'Your password is verified directly by Firebase Authentication and is never stored in ERP Next code.' : 'ERP access is locked because the Firebase authentication configuration is not available in this deployment.'}</span></div></div>
 
-          {mode === 'firebase' ? <div className="auth-config-status ready"><i /><div><strong>Already signed in</strong><span>{principal.displayName} · {principal.role}</span></div></div> : null}
+          {mode === 'firebase' ? <div className="auth-config-status ready"><i /><div><strong>Authenticated session detected</strong><span>{principal.displayName} · redirecting to ERP…</span></div></div> : null}
 
           <form className="auth-form" onSubmit={submit}>
             <label>Email<input type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} disabled={!firebaseConfigured || busy} placeholder="Authorized DEMAC email" /></label>
             <label>Password<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} disabled={!firebaseConfigured || busy} placeholder="Password" /></label>
-            {error ? <div className="auth-error">{error}</div> : null}
-            <button className="auth-primary" type="submit" disabled={!firebaseConfigured || busy || !email.trim() || !password}>{busy ? 'Signing in…' : 'Sign in with Firebase'}</button>
+            {visibleError ? <div className="auth-error">{visibleError}</div> : null}
+            <button className="auth-primary" type="submit" disabled={!firebaseConfigured || busy || !email.trim() || !password}>{busy ? 'Signing in…' : 'Sign in securely'}</button>
           </form>
 
-          <div className="auth-divider">or</div>
-          <button className="auth-preview-btn" type="button" onClick={continuePreview}>Continue in Preview Owner Mode</button>
-          <p className="auth-footnote">Preview mode uses structured/browser test data only. It is intentionally not treated as authenticated production access.</p>
+          <p className="auth-footnote">There is no public preview or guest access. If you need a new account, an authorized DEMAC administrator must create it.</p>
         </div>
       </section>
     </main>

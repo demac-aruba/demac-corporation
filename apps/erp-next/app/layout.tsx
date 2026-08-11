@@ -14,6 +14,7 @@ import './auth.css';
 export const metadata: Metadata = {
   title: 'DEMAC ERP Next',
   description: 'DEMAC Professional Cooling Solutions operating system',
+  robots: { index: false, follow: false, nocache: true },
 };
 
 const themeBootstrap = `

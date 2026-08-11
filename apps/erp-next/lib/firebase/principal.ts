@@ -12,10 +12,10 @@ type FirebaseUserProfile = {
   active?: boolean;
 };
 
-function normalizeRole(value?: string): UserRole {
+function normalizeRole(value?: string): UserRole | null {
   const role = (value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
   if (role === 'owner' || role === 'admin' || role === 'superadmin' || role === 'super_admin') return 'super_admin';
-  if (role === 'operation' || role === 'operations' || role === 'manager') return 'operations';
+  if (role === 'operation' || role === 'operations' || role === 'manager' || role === 'supervisor') return 'operations';
   if (role === 'office' || role === 'operator' || role === 'office_operator') return 'office_operator';
   if (role === 'finance' || role === 'accounting') return 'finance';
   if (role === 'warehouse' || role === 'inventory') return 'warehouse';
@@ -23,19 +23,23 @@ function normalizeRole(value?: string): UserRole {
   if (role === 'project_manager' || role === 'projects') return 'project_manager';
   if (role === 'technician' || role === 'tech') return 'technician';
   if (role === 'auditor' || role === 'readonly' || role === 'read_only') return 'auditor';
-  // Unknown legacy roles fail toward a read-only posture instead of broad office access.
-  return 'auditor';
+  return null;
 }
 
 export async function loadFirebasePrincipal(): Promise<AuthPrincipal> {
   const session = await requireFirebaseWebSession();
   const profile = await getFirebaseUserProfile<FirebaseUserProfile>(session.uid);
-  const role = normalizeRole(profile?.role);
+  if (!profile) throw new Error('This Firebase account has no DEMAC ERP profile and is not provisioned for access.');
+  if (profile.active !== true) throw new Error('This DEMAC ERP account is inactive.');
+
+  const role = normalizeRole(profile.role);
+  if (!role) throw new Error(`ERP role is not recognized for this account: ${profile.role ?? 'missing role'}.`);
+
   return {
     userId: session.uid,
-    displayName: profile?.name ?? profile?.displayName ?? session.displayName ?? session.email,
+    displayName: profile.name ?? profile.displayName ?? session.displayName ?? session.email,
     role,
-    active: profile?.active ?? true,
+    active: true,
     capabilities: roleCapabilities[role],
   };
 }
