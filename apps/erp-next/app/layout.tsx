@@ -10,6 +10,7 @@ import './field-assets.css';
 import './persistence-security.css';
 import './shell-productivity.css';
 import './auth.css';
+import './landing.css';
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://demac-aruba.com'),
