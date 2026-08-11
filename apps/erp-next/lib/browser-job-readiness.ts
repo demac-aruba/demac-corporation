@@ -6,6 +6,7 @@ import { deriveWorkOrderMaterialReadiness, loadWorkOrderMaterialPlans } from './
 import { deriveCrewSkillReadiness } from './browser-workforce';
 import { deriveRequiredToolsReadiness } from './browser-tools';
 import { deriveSiteAccessReadiness } from './browser-site-access';
+import { deriveCommercialClearanceReadiness } from './browser-commercial-clearance';
 
 export const BROWSER_JOB_READINESS_CHECKS_KEY = 'demac.erp-next.operations.job-readiness-checks.v1';
 export const BROWSER_DISPATCH_RELEASES_KEY = 'demac.erp-next.operations.dispatch-at-risk-releases.v1';
@@ -13,6 +14,7 @@ export const BROWSER_DISPATCH_RELEASES_KEY = 'demac.erp-next.operations.dispatch
 export type ManualReadinessState = 'not_checked' | 'ready' | 'not_required' | 'blocked';
 export type JobReadinessStatus = 'ready' | 'at_risk' | 'blocked';
 
+/** @deprecated Legacy browser preview shape retained only so older local data remains readable. */
 export type BrowserJobReadinessChecks = {
   workOrderId: string;
   crewSkill: Exclude<ManualReadinessState, 'not_required'>;
@@ -56,7 +58,7 @@ export const defaultJobReadinessChecks = (workOrderId: string): BrowserJobReadin
   siteAccess: 'not_checked',
   commercialClearance: 'not_checked',
   updatedAt: new Date(0).toISOString(),
-  updatedBy: 'Not checked',
+  updatedBy: 'Legacy / not used by current readiness',
 });
 
 export function loadJobReadinessChecks() {
@@ -71,13 +73,6 @@ export function saveJobReadinessChecks(record: BrowserJobReadinessChecks) {
     : [...current, normalized];
   saveBrowserValue(BROWSER_JOB_READINESS_CHECKS_KEY, next);
   return normalized;
-}
-
-function manualDimension(id: JobReadinessDimension['id'], label: string, state: ManualReadinessState, source: string): JobReadinessDimension {
-  if (state === 'blocked') return { id, label, status: 'blocked', reason: `${label} was explicitly marked blocked.`, source };
-  if (state === 'ready') return { id, label, status: 'ready', reason: `${label} was explicitly confirmed ready.`, source };
-  if (state === 'not_required') return { id, label, status: 'ready', reason: `${label} was explicitly marked not required for this Work Order.`, source };
-  return { id, label, status: 'at_risk', reason: `${label} has not been explicitly checked.`, source };
 }
 
 function appointmentDimension(order: BrowserWorkOrderRecord, appointments: BrowserAppointmentRecord[]): JobReadinessDimension {
@@ -101,8 +96,6 @@ export function deriveBrowserJobReadiness(order: BrowserWorkOrderRecord, options
   appointments?: BrowserAppointmentRecord[];
   executions?: BrowserFieldExecutionRecord[];
 }): BrowserJobReadiness {
-  const checks = options?.checks ?? loadJobReadinessChecks();
-  const manual = checks.find((item) => item.workOrderId === order.id) ?? defaultJobReadinessChecks(order.id);
   const appointments = options?.appointments ?? loadBrowserValue<BrowserAppointmentRecord[]>(browserKeys.appointments, []);
   const scope = loadWorkOrderScopes().find((item) => item.workOrderId === order.id);
   const scopeResult = scopeStatus(order, scope);
@@ -110,6 +103,7 @@ export function deriveBrowserJobReadiness(order: BrowserWorkOrderRecord, options
   const crewSkill = deriveCrewSkillReadiness(order);
   const requiredTools = deriveRequiredToolsReadiness(order);
   const siteAccess = deriveSiteAccessReadiness(order);
+  const commercial = deriveCommercialClearanceReadiness(order);
 
   const dimensions: JobReadinessDimension[] = [
     appointmentDimension(order, appointments),
@@ -121,7 +115,7 @@ export function deriveBrowserJobReadiness(order: BrowserWorkOrderRecord, options
     { id: 'crew_skill', label: 'Crew & Required Skill', status: crewSkill.status, reason: crewSkill.reason, source: crewSkill.source },
     { id: 'tools', label: 'Required Tools', status: requiredTools.status, reason: requiredTools.reason, source: requiredTools.source },
     { id: 'site_access', label: 'Site Access', status: siteAccess.status, reason: siteAccess.reason, source: siteAccess.source },
-    manualDimension('commercial', 'Commercial Clearance', manual.commercialClearance, manual.updatedBy),
+    { id: 'commercial', label: 'Commercial Clearance', status: commercial.status, reason: commercial.reason, source: commercial.source },
   ];
 
   const blockers = dimensions.filter((dimension) => dimension.status === 'blocked');
