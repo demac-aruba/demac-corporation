@@ -1,6 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { browserKeys, loadBrowserValue, saveBrowserValue } from '@/lib/browser-store';
 import { CustomerTimelinePanel, CustomerOpportunityPanel } from './customer-commercial';
 import { CustomerEditorDrawer, CustomerMasterDataTab, type CustomerEditorValue } from './customer-master-data';
 import { DuplicateReviewDrawer } from './relationship-detail';
@@ -56,11 +57,25 @@ function editorValue(customer: CustomerPreview): CustomerEditorValue {
 export function Customer360() {
   const [customers, setCustomers] = useState(initialCustomers);
   const [selectedId, setSelectedId] = useState(initialCustomers[0].id);
+  const [storageReady, setStorageReady] = useState(false);
   const [query, setQuery] = useState('');
   const [activeTab, setActiveTab] = useState<Tab>('Overview');
   const [customerEditor, setCustomerEditor] = useState<'create' | 'edit' | null>(null);
   const [mergeReview, setMergeReview] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    const persisted = loadBrowserValue<CustomerPreview[]>(browserKeys.customers, initialCustomers);
+    const safeCustomers = persisted.length > 0 ? persisted : initialCustomers;
+    setCustomers(safeCustomers);
+    setSelectedId(safeCustomers[0].id);
+    setStorageReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!storageReady) return;
+    saveBrowserValue(browserKeys.customers, customers);
+  }, [customers, storageReady]);
 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -68,21 +83,21 @@ export function Customer360() {
     return customers.filter((customer) => [customer.name, customer.type, customer.location, customer.phone, customer.email].some((value) => value.toLowerCase().includes(normalized)));
   }, [customers, query]);
 
-  const selected = customers.find((customer) => customer.id === selectedId) ?? customers[0];
+  const selected = customers.find((customer) => customer.id === selectedId) ?? customers[0] ?? initialCustomers[0];
   const selectedEditorValue = useMemo(() => editorValue(selected), [selected]);
 
   const saveCustomer = (value: CustomerEditorValue) => {
     if (customerEditor === 'edit') {
       setCustomers((current) => current.map((customer) => customer.id === selected.id ? { ...customer, name: value.name, legalName: value.legalName, type: value.type, phone: value.phone, email: value.email, location: value.location, preferredLanguage: value.preferredLanguage, initials: initials(value.name) } : customer));
-      setNotice('Customer master data updated in preview.');
+      setNotice('Customer master data saved in this browser test workspace.');
       return;
     }
-    const nextId = `C-${String(1300 + customers.length).padStart(4, '0')}`;
+    const nextId = `C-${Date.now().toString().slice(-6)}`;
     const next: CustomerPreview = { id: nextId, name: value.name, legalName: value.legalName, type: value.type, initials: initials(value.name), location: value.location || 'Aruba', phone: value.phone, email: value.email, preferredLanguage: value.preferredLanguage, since: '2026', health: 80, lifetimeRevenue: 'Afl. 0', outstanding: 'Afl. 0', openJobs: 0, openProposals: 0, assets: 0, sites: 0, maintenance: 'None', nextAction: 'Complete customer profile and register first property' };
     setCustomers((current) => [next, ...current]);
     setSelectedId(nextId);
     setActiveTab('Overview');
-    setNotice('New customer created in ERP Next preview.');
+    setNotice('New customer saved locally. It will persist after refresh on this browser.');
   };
 
   return (
@@ -102,15 +117,15 @@ export function Customer360() {
       {notice ? <div style={{ border: '1px solid var(--border)', borderRadius: 12, padding: '10px 12px', background: 'var(--brand-soft)', color: 'var(--brand)', fontSize: 9, fontWeight: 800, display: 'flex', justifyContent: 'space-between', gap: 12 }}><span>{notice}</span><button type="button" onClick={() => setNotice(null)} style={{ border: 0, background: 'transparent', color: 'inherit', cursor: 'pointer' }}>×</button></div> : null}
 
       <div className={styles.metricGrid}>
-        <div className={styles.metricCard}><span>Active Customers</span><strong>4,281</strong><em>+38 this month</em></div>
-        <div className={styles.metricCard}><span>Open Opportunities</span><strong>Afl. 384K</strong><em>26 active opportunities</em></div>
-        <div className={styles.metricCard}><span>Maintenance Due</span><strong>183</strong><em>Next 30 days</em></div>
-        <div className={styles.metricCard}><span>Outstanding AR</span><strong>Afl. 92K</strong><em>18 accounts need attention</em></div>
+        <div className={styles.metricCard}><span>Browser Test Customers</span><strong>{customers.length}</strong><em>Persisted on this device</em></div>
+        <div className={styles.metricCard}><span>Open Opportunities</span><strong>Afl. 384K</strong><em>Structured demo intelligence</em></div>
+        <div className={styles.metricCard}><span>Maintenance Due</span><strong>183</strong><em>Structured demo intelligence</em></div>
+        <div className={styles.metricCard}><span>Outstanding AR</span><strong>Afl. 92K</strong><em>Structured demo intelligence</em></div>
       </div>
 
       <div className={styles.workspace}>
         <aside className={styles.customerRail}>
-          <div className={styles.railHeader}><div><strong>Customers</strong><span>{filtered.length} preview records</span></div><button type="button" aria-label="Customer filters">≡</button></div>
+          <div className={styles.railHeader}><div><strong>Customers</strong><span>{filtered.length} browser records</span></div><button type="button" aria-label="Customer filters">≡</button></div>
           <label className={styles.searchBox}><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search customer, phone, site..." /></label>
           <div className={styles.customerList}>{filtered.map((customer) => <button key={customer.id} type="button" onClick={() => { setSelectedId(customer.id); setActiveTab('Overview'); }} className={`${styles.customerRow} ${selected.id === customer.id ? styles.customerRowActive : ''}`}><span className={styles.customerAvatar}>{customer.initials}</span><span className={styles.customerIdentity}><strong>{customer.name}</strong><small>{customer.type} · {customer.location}</small></span><span className={`${styles.healthDot} ${healthTone(customer.health)}`} title={`Health ${customer.health}`} /></button>)}</div>
         </aside>
@@ -133,7 +148,7 @@ export function Customer360() {
           <nav className={styles.tabs} aria-label="Customer sections">{tabs.map((tab) => <button key={tab} type="button" className={activeTab === tab ? styles.tabActive : ''} onClick={() => setActiveTab(tab)}>{tab}</button>)}</nav>
 
           {activeTab === 'Overview' ? <Overview customer={selected} onEdit={() => setCustomerEditor('edit')} />
-            : activeTab === 'Contacts' || activeTab === 'Properties' || activeTab === 'Equipment' ? <CustomerMasterDataTab key={`${selected.id}-${activeTab}`} tab={activeTab} customerName={selected.name} />
+            : activeTab === 'Contacts' || activeTab === 'Properties' || activeTab === 'Equipment' ? <CustomerMasterDataTab key={`${selected.id}-${activeTab}`} tab={activeTab} customerId={selected.id} customerName={selected.name} />
               : activeTab === 'Communications' ? <CustomerTimelinePanel key={`${selected.id}-timeline`} customerName={selected.name} />
                 : activeTab === 'Opportunities' ? <CustomerOpportunityPanel key={`${selected.id}-opportunities`} customerName={selected.name} />
                   : <TabPreview tab={activeTab} customer={selected} />}
@@ -144,7 +159,7 @@ export function Customer360() {
           <section className={styles.intelligenceCard}><span className={styles.cardLabel}>Next Best Action</span><strong>{selected.nextAction}</strong><p>Suggested from customer status, open work, financial context and recent activity.</p><button type="button">Open action</button></section>
           <section className={styles.intelligenceCard}><span className={styles.cardLabel}>Maintenance</span><div className={styles.statusLine}><b>{selected.maintenance}</b><span className={selected.maintenance === 'Active' ? styles.okDot : styles.warnDot} /></div><p>{selected.maintenance === 'None' ? 'Commercial maintenance agreement opportunity detected.' : 'Maintenance relationship is visible at customer and asset level.'}</p></section>
           <section className={styles.intelligenceCard}><span className={styles.cardLabel}>Relationship Snapshot</span><ul><li>{selected.assets} equipment assets registered</li><li>{selected.openJobs} open operational jobs</li><li>{selected.openProposals} proposal(s) awaiting decision</li><li>{selected.outstanding} currently outstanding</li></ul></section>
-          <div className={styles.previewNotice}><span />Preview data only · Firebase adapter not connected</div>
+          <div className={styles.previewNotice}><span />Browser-persistent test data · Firebase not connected</div>
         </aside>
       </div>
 
@@ -165,5 +180,5 @@ function Overview({ customer, onEdit }: { customer: CustomerPreview; onEdit: () 
 function Activity({ time, title, detail, tone }: { time: string; title: string; detail: string; tone: string }) { return <div className={styles.activityRow}><span className={`${styles.activityDot} ${styles[tone]}`} /><time>{time}</time><div><strong>{title}</strong><p>{detail}</p></div></div>; }
 
 function TabPreview({ tab, customer }: { tab: Tab; customer: CustomerPreview }) {
-  return <section className={styles.tabPreview}><div className={styles.tabPreviewIcon}>{tab.slice(0, 2).toUpperCase()}</div><div><h3>{tab}</h3><p>This Customer 360 section is registered in the CRM architecture for <strong>{customer.name}</strong>. It will be implemented after the customer master-data flows, without changing the information hierarchy.</p></div></section>;
+  return <section className={styles.tabPreview}><div className={styles.tabPreviewIcon}>{tab.slice(0, 2).toUpperCase()}</div><div><h3>{tab}</h3><p>This Customer 360 section is registered in the CRM architecture for <strong>{customer.name}</strong>. It will be implemented through the governed ERP data model without changing the information hierarchy.</p></div></section>;
 }
