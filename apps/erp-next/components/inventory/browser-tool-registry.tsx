@@ -2,14 +2,14 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { defaultWorkPresets, type WorkPresetId } from '../../lib/scheduling';
-import { loadBrowserToolAssets, loadToolRequirementPolicies, saveBrowserToolAssets, saveToolRequirementPolicies, toolClasses, type BrowserToolAsset, type BrowserToolRequirementPolicy, type ToolClass } from '../../lib/browser-tools';
+import { loadBrowserToolAssets, loadToolRequirementPolicies, saveBrowserToolAssets, saveToolRequirementPolicies, toolClasses, type BrowserToolAsset, type BrowserToolRequirementPolicy, type ToolClass, type ToolCoverageMode } from '../../lib/browser-tools';
 import styles from './browser-tool-registry.module.css';
 
 const locations: BrowserToolAsset['locationId'][] = ['OFFICE', 'VAN-1', 'VAN-2', 'VAN-3', 'VAN-4', 'UNASSIGNED'];
 const statuses: BrowserToolAsset['status'][] = ['available', 'checked_out', 'maintenance', 'calibration_due', 'lost'];
 
 function emptyPolicies(existing: BrowserToolRequirementPolicy[]) {
-  return defaultWorkPresets.map((preset) => existing.find((policy) => policy.presetId === preset.id) ?? ({ presetId: preset.id, requiredClasses: [], reviewed: false, updatedAt: new Date(0).toISOString(), updatedBy: 'Not reviewed' } satisfies BrowserToolRequirementPolicy));
+  return defaultWorkPresets.map((preset) => existing.find((policy) => policy.presetId === preset.id) ?? ({ presetId: preset.id, requiredClasses: [], coverageMode: 'per_assigned_van', reviewed: false, updatedAt: new Date(0).toISOString(), updatedBy: 'Not reviewed' } satisfies BrowserToolRequirementPolicy));
 }
 
 export function BrowserToolRegistry() {
@@ -44,6 +44,11 @@ export function BrowserToolRegistry() {
     setAssetDirty(true);
   };
 
+  const patchPolicy = (presetId: WorkPresetId, patch: Partial<BrowserToolRequirementPolicy>) => {
+    setPolicies((current) => current.map((policy) => policy.presetId === presetId ? { ...policy, ...patch } : policy));
+    setPolicyDirty(true);
+  };
+
   const togglePolicyClass = (presetId: WorkPresetId, toolClass: ToolClass) => {
     setPolicies((current) => current.map((policy) => {
       if (policy.presetId !== presetId) return policy;
@@ -62,14 +67,14 @@ export function BrowserToolRegistry() {
   const savePolicies = () => {
     setPolicies(emptyPolicies(saveToolRequirementPolicies(policies)));
     setPolicyDirty(false);
-    setNotice('Tool Requirement Policy saved. Work Orders now recalculate Required Tools from the reviewed policy and assigned van custody.');
+    setNotice('Tool Requirement Policy saved. Work Orders now recalculate Required Tools from reviewed classes, coverage mode and assigned van custody.');
   };
 
   if (!ready) return <section className={styles.loading}>Loading tool registry…</section>;
 
   return (
     <section className={styles.workspace}>
-      <header><div><span>COMPANY TOOL ASSETS · PREVIEW</span><h2>Tools, Custody & Work Requirements</h2><p>Company tools are tracked separately from consumable inventory. A Work Order can only be Tools READY when its reviewed policy is satisfied by verified usable tools on every assigned van.</p></div><div className={styles.actions}><button type="button" onClick={addAsset}>+ Tool Asset</button><button type="button" className={styles.primary} disabled={!assetDirty} onClick={saveAssets}>{assetDirty ? 'Save Tool Assets' : 'Assets Saved'}</button></div></header>
+      <header><div><span>COMPANY TOOL ASSETS · PREVIEW</span><h2>Tools, Custody & Work Requirements</h2><p>Company tools are tracked separately from consumable inventory. Required tools can be configured per assigned van or shared across one same-job assignment, avoiding false duplication assumptions.</p></div><div className={styles.actions}><button type="button" onClick={addAsset}>+ Tool Asset</button><button type="button" className={styles.primary} disabled={!assetDirty} onClick={saveAssets}>{assetDirty ? 'Save Tool Assets' : 'Assets Saved'}</button></div></header>
       {notice ? <div className={styles.notice}>{notice}</div> : null}
 
       <div className={styles.metrics}><article><span>Registered Tools</span><strong>{metrics.total}</strong><small>Company-owned tracked assets</small></article><article><span>Verified + Available</span><strong>{metrics.usable}</strong><small>Can satisfy readiness</small></article><article><span>Tool Attention</span><strong>{metrics.attention}</strong><small>Maintenance / calibration / lost</small></article><article><span>Reviewed Work Policies</span><strong>{metrics.reviewedPolicies}/{policies.length}</strong><small>Unreviewed remains AT RISK</small></article></div>
@@ -90,14 +95,14 @@ export function BrowserToolRegistry() {
       </section>
 
       <section className={styles.panel}>
-        <div className={styles.sectionHead}><div><strong>Tool Requirement Policy</strong><span>Explicit required tool classes by Work Preset</span></div><button type="button" className={styles.primary} disabled={!policyDirty} onClick={savePolicies}>{policyDirty ? 'Save Policy' : 'Policy Saved'}</button></div>
+        <div className={styles.sectionHead}><div><strong>Tool Requirement Policy</strong><span>Explicit required tool classes and coverage mode by Work Preset</span></div><button type="button" className={styles.primary} disabled={!policyDirty} onClick={savePolicies}>{policyDirty ? 'Save Policy' : 'Policy Saved'}</button></div>
         <div className={styles.policyList}>{policies.map((policy) => {
           const preset = defaultWorkPresets.find((item) => item.id === policy.presetId);
-          return <article key={policy.presetId} className={policy.reviewed ? styles.reviewed : ''}><header><div><strong>{preset?.label ?? policy.presetId}</strong><small>{policy.reviewed ? `Reviewed · ${policy.updatedBy}` : 'Not reviewed — Work Orders remain AT RISK'}</small></div><label className={styles.check}><input type="checkbox" checked={policy.reviewed} onChange={(event) => { setPolicies((current) => current.map((item) => item.presetId === policy.presetId ? { ...item, reviewed: event.target.checked } : item)); setPolicyDirty(true); }}/><span>Reviewed</span></label></header><div className={styles.classPills}>{toolClasses.map((toolClass) => <button type="button" key={toolClass} className={policy.requiredClasses.includes(toolClass) ? styles.selected : ''} onClick={() => togglePolicyClass(policy.presetId, toolClass)}>{policy.requiredClasses.includes(toolClass) ? '✓ ' : ''}{toolClass}</button>)}</div>{policy.reviewed && !policy.requiredClasses.length ? <p>Explicitly reviewed: no tracked company tool required.</p> : null}</article>;
+          return <article key={policy.presetId} className={policy.reviewed ? styles.reviewed : ''}><header><div><strong>{preset?.label ?? policy.presetId}</strong><small>{policy.reviewed ? `Reviewed · ${policy.updatedBy}` : 'Not reviewed — Work Orders remain AT RISK'}</small></div><label className={styles.check}><input type="checkbox" checked={policy.reviewed} onChange={(event) => patchPolicy(policy.presetId, { reviewed: event.target.checked })}/><span>Reviewed</span></label></header><label className={styles.coverage}>Coverage<select value={policy.coverageMode} onChange={(event) => patchPolicy(policy.presetId, { coverageMode: event.target.value as ToolCoverageMode, reviewed: false })}><option value="per_assigned_van">Per assigned van</option><option value="shared_across_job">Shared across same job</option></select></label><div className={styles.classPills}>{toolClasses.map((toolClass) => <button type="button" key={toolClass} className={policy.requiredClasses.includes(toolClass) ? styles.selected : ''} onClick={() => togglePolicyClass(policy.presetId, toolClass)}>{policy.requiredClasses.includes(toolClass) ? '✓ ' : ''}{toolClass}</button>)}</div>{policy.reviewed && !policy.requiredClasses.length ? <p>Explicitly reviewed: no tracked company tool required.</p> : <p className={styles.modeNote}>{policy.coverageMode === 'shared_across_job' ? 'One usable asset of each required class may be shared across the assigned vans working this same Work Order.' : 'Every assigned van must carry a usable asset of each required class.'}</p>}</article>;
         })}</div>
       </section>
 
-      <footer><span>READINESS RULE</span><strong>Policy not reviewed → AT RISK. Reviewed policy + missing registered tool → BLOCKED. Unverified matching tool → AT RISK. Verified available required tools on every assigned van → READY.</strong></footer>
+      <footer><span>READINESS RULE</span><strong>Policy not reviewed → AT RISK. Reviewed policy + missing required coverage → BLOCKED. Unverified matching tool → AT RISK. Verified available tools satisfying the selected coverage mode → READY.</strong></footer>
     </section>
   );
 }
