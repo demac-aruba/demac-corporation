@@ -1,0 +1,115 @@
+// DRAFT ONLY — DO NOT DEPLOY FROM THIS FILE YET.
+// First vertical slice: authenticated ERP Next Customer → Contact → Site → Asset.
+// Final rules must be tested in the Firebase Emulator and reviewed against the
+// production user-role migration before they replace any existing ruleset.
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function activeUser() {
+      return signedIn() && userData().get('active', true) == true;
+    }
+
+    function role() {
+      return userData().get('role', 'auditor');
+    }
+
+    function isSuperAdmin() {
+      return activeUser() && role() in ['super_admin', 'owner', 'admin'];
+    }
+
+    function canReadCrm() {
+      return activeUser() && role() in [
+        'super_admin', 'owner', 'admin',
+        'operations', 'manager',
+        'office_operator', 'office',
+        'finance', 'accounting',
+        'sales',
+        'project_manager', 'projects',
+        'auditor', 'readonly', 'read_only'
+      ];
+    }
+
+    function canManageCrm() {
+      return activeUser() && role() in [
+        'super_admin', 'owner', 'admin',
+        'operations', 'manager',
+        'office_operator', 'office',
+        'sales',
+        'project_manager', 'projects'
+      ];
+    }
+
+    function validCreateAudit() {
+      return request.resource.data.keys().hasAll(['createdAt', 'updatedAt'])
+        && request.resource.data.get('createdBy', request.auth.uid) == request.auth.uid
+        && request.resource.data.get('updatedBy', request.auth.uid) == request.auth.uid;
+    }
+
+    function keepsCreationAudit() {
+      return !request.resource.data.diff(resource.data).affectedKeys()
+        .hasAny(['createdAt', 'createdBy']);
+    }
+
+    function validUpdateActor() {
+      return request.resource.data.get('updatedBy', request.auth.uid) == request.auth.uid;
+    }
+
+    match /users/{userId} {
+      allow read: if activeUser() && (request.auth.uid == userId || isSuperAdmin());
+      allow create, update: if isSuperAdmin();
+      allow delete: if false;
+    }
+
+    match /customers/{customerId} {
+      allow read: if canReadCrm();
+      allow create: if canManageCrm() && validCreateAudit();
+      allow update: if canManageCrm() && keepsCreationAudit() && validUpdateActor();
+      allow delete: if false;
+    }
+
+    match /contacts/{contactId} {
+      allow read: if canReadCrm();
+      allow create: if canManageCrm() && validCreateAudit();
+      allow update: if canManageCrm()
+        && keepsCreationAudit()
+        && validUpdateActor()
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['customerId']);
+      allow delete: if false;
+    }
+
+    match /sites/{siteId} {
+      allow read: if canReadCrm();
+      allow create: if canManageCrm() && validCreateAudit();
+      allow update: if canManageCrm()
+        && keepsCreationAudit()
+        && validUpdateActor()
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['customerId']);
+      allow delete: if false;
+    }
+
+    match /assets/{assetId} {
+      allow read: if canReadCrm();
+      allow create: if canManageCrm() && validCreateAudit();
+      allow update: if canManageCrm()
+        && keepsCreationAudit()
+        && validUpdateActor()
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['customerId']);
+      allow delete: if false;
+    }
+
+    // All remaining ERP Next collections are intentionally denied by this first-slice
+    // draft until their capability/query/index requirements are implemented and tested.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
