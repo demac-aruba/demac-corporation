@@ -16,7 +16,7 @@ const commonOptions: Array<{ value: ManualReadinessState; label: string }> = [
 
 function sameChecks(a?: BrowserJobReadinessChecks, b?: BrowserJobReadinessChecks | null) {
   if (!a || !b) return false;
-  return a.crewSkill === b.crewSkill && a.tools === b.tools && a.siteAccess === b.siteAccess && a.commercialClearance === b.commercialClearance;
+  return a.tools === b.tools && a.siteAccess === b.siteAccess && a.commercialClearance === b.commercialClearance;
 }
 
 export function BrowserJobReadiness() {
@@ -59,6 +59,7 @@ export function BrowserJobReadiness() {
   }, [checks, draft]);
 
   const readiness = selectedOrder ? deriveBrowserJobReadiness(selectedOrder, { checks: effectiveChecks, appointments, executions }) : null;
+  const crewDimension = readiness?.dimensions.find((dimension) => dimension.id === 'crew_skill');
   const locked = selectedExecution?.technicianStatus === 'submitted';
   const persistedCheck = selectedOrder ? checks.find((item) => item.workOrderId === selectedOrder.id) : undefined;
   const checksDirty = !sameChecks(persistedCheck, draft);
@@ -72,9 +73,9 @@ export function BrowserJobReadiness() {
       blocked: states.filter((item) => item.status === 'blocked').length,
       totalRisks: states.reduce((sum, item) => sum + item.risks.length, 0),
     };
-  }, [appointments, checks, executions, orders]);
+  }, [appointments, checks, executions, orders, refreshKey]);
 
-  const update = <K extends keyof Pick<BrowserJobReadinessChecks, 'crewSkill' | 'tools' | 'siteAccess' | 'commercialClearance'>>(key: K, value: BrowserJobReadinessChecks[K]) => {
+  const update = <K extends keyof Pick<BrowserJobReadinessChecks, 'tools' | 'siteAccess' | 'commercialClearance'>>(key: K, value: BrowserJobReadinessChecks[K]) => {
     setDraft((current) => current ? { ...current, [key]: value, updatedBy: 'Operations / Preview' } : current);
   };
 
@@ -84,7 +85,7 @@ export function BrowserJobReadiness() {
     setChecks((current) => current.some((item) => item.workOrderId === saved.workOrderId) ? current.map((item) => item.workOrderId === saved.workOrderId ? saved : item) : [...current, saved]);
     setDraft(saved);
     setReleases(loadDispatchAtRiskReleases());
-    setNotice(`${saved.workOrderId} readiness checks saved. Any previous AT RISK release remains valid only if the exact risk signature still matches.`);
+    setNotice(`${saved.workOrderId} readiness checks saved. Crew & Required Skill continues to come from the Workforce Registry; any previous AT RISK release remains valid only if the exact risk signature still matches.`);
   };
 
   const authorizeAtRisk = () => {
@@ -103,10 +104,10 @@ export function BrowserJobReadiness() {
 
   return (
     <section className={styles.workspace}>
-      <header><div><span>PRE-DISPATCH DECISION</span><h2>Consolidated Job Readiness</h2><p>READY only when every required dimension is resolved. AT RISK requires an explicit Operations release before Field start; BLOCKED has no Field override.</p></div><div className={styles.headerActions}><label>Work Order<select value={selectedOrder.id} onChange={(event) => setSelectedId(event.target.value)}>{orders.slice().reverse().map((order) => <option key={order.id} value={order.id}>{order.id} · {order.customer}</option>)}</select></label><button type="button" onClick={() => setRefreshKey((value) => value + 1)}>↻ Refresh Facts</button></div></header>
+      <header><div><span>PRE-DISPATCH DECISION</span><h2>Consolidated Job Readiness</h2><p>Customer confirmation, assignment, exact HVAC scope, materials and crew skill are derived from their owning modules. Remaining office checks are explicit until their dedicated subsystems become authoritative.</p></div><div className={styles.headerActions}><label>Work Order<select value={selectedOrder.id} onChange={(event) => setSelectedId(event.target.value)}>{orders.slice().reverse().map((order) => <option key={order.id} value={order.id}>{order.id} · {order.customer}</option>)}</select></label><button type="button" onClick={() => setRefreshKey((value) => value + 1)}>↻ Refresh Facts</button></div></header>
       {notice ? <div className={styles.notice}><span>{notice}</span><button type="button" onClick={() => setNotice(null)}>×</button></div> : null}
 
-      <div className={styles.metrics}><article><span>READY</span><strong className={styles.goodText}>{summary.ready}</strong><small>All readiness dimensions resolved</small></article><article><span>AT RISK</span><strong className={summary.atRisk ? styles.warnText : ''}>{summary.atRisk}</strong><small>Pending checks or inbound dependencies</small></article><article><span>BLOCKED</span><strong className={summary.blocked ? styles.dangerText : ''}>{summary.blocked}</strong><small>Hard operational blocker exists</small></article><article><span>Open Risk Dimensions</span><strong>{summary.totalRisks}</strong><small>Across browser Work Orders</small></article></div>
+      <div className={styles.metrics}><article><span>READY</span><strong className={styles.goodText}>{summary.ready}</strong><small>All readiness dimensions resolved</small></article><article><span>AT RISK</span><strong className={summary.atRisk ? styles.warnText : ''}>{summary.atRisk}</strong><small>Pending checks or unverified dependencies</small></article><article><span>BLOCKED</span><strong className={summary.blocked ? styles.dangerText : ''}>{summary.blocked}</strong><small>Hard operational blocker exists</small></article><article><span>Open Risk Dimensions</span><strong>{summary.totalRisks}</strong><small>Across browser Work Orders</small></article></div>
 
       <section className={styles.hero}><div><span>{selectedOrder.id}</span><h3>{selectedOrder.customer} · {selectedOrder.site}</h3><p>{selectedOrder.customerFacingDescription} · {selectedOrder.scheduledDate} {selectedOrder.scheduledStart}–{selectedOrder.scheduledEnd}</p></div><div className={`${styles.overall} ${readiness.status === 'ready' ? styles.ready : readiness.status === 'blocked' ? styles.blocked : styles.risk}`}><span>OVERALL JOB READINESS</span><strong>{readiness.status.replace('_', ' ').toUpperCase()}</strong><small>{readiness.blockers.length} blocker(s) · {readiness.risks.length} risk(s)</small></div></section>
 
@@ -119,20 +120,20 @@ export function BrowserJobReadiness() {
         </main>
 
         <aside>
-          <div className={styles.sectionHead}><div><strong>Office Readiness Checks</strong><span>Manual facts that are not yet derived from a dedicated subsystem</span></div></div>
+          <div className={styles.sectionHead}><div><strong>Readiness Controls</strong><span>Derived workforce evidence plus remaining explicit office checks</span></div></div>
           <div className={styles.checkForm}>
-            <label><span>Crew & required skill</span><select disabled={locked} value={draft.crewSkill} onChange={(event) => update('crewSkill', event.target.value as BrowserJobReadinessChecks['crewSkill'])}>{commonOptions.filter((option) => option.value !== 'not_required').map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select><small>Required crew/skill cannot be marked “not required.”</small></label>
+            <div className={`${styles.derivedCheck} ${crewDimension?.status === 'ready' ? styles.derivedReady : crewDimension?.status === 'blocked' ? styles.derivedBlocked : styles.derivedRisk}`}><span>Crew & required skill · derived</span><strong>{crewDimension?.status.replace('_', ' ').toUpperCase()}</strong><p>{crewDimension?.reason}</p><small>Source: {crewDimension?.source}</small><a href="/employees/">Open Workforce Registry →</a></div>
             <label><span>Required tools</span><select disabled={locked} value={draft.tools} onChange={(event) => update('tools', event.target.value as ManualReadinessState)}>{commonOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>
             <label><span>Site access</span><select disabled={locked} value={draft.siteAccess} onChange={(event) => update('siteAccess', event.target.value as ManualReadinessState)}>{commonOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>
             <label><span>Commercial clearance</span><select disabled={locked} value={draft.commercialClearance} onChange={(event) => update('commercialClearance', event.target.value as ManualReadinessState)}>{commonOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select><small>Use Not required when the job legitimately needs no deposit/PO/financial clearance.</small></label>
           </div>
-          <div className={styles.checkFooter}><span>Last check evidence</span><strong>{draft.updatedBy}</strong><small>{draft.updatedAt.startsWith('1970-') ? 'Never saved' : new Date(draft.updatedAt).toLocaleString()}</small><button type="button" disabled={locked || !checksDirty} onClick={save}>{checksDirty ? 'Save Readiness Checks' : 'Checks Saved'}</button></div>
+          <div className={styles.checkFooter}><span>Last manual check evidence</span><strong>{draft.updatedBy}</strong><small>{draft.updatedAt.startsWith('1970-') ? 'Never saved' : new Date(draft.updatedAt).toLocaleString()}</small><button type="button" disabled={locked || !checksDirty} onClick={save}>{checksDirty ? 'Save Manual Checks' : 'Manual Checks Saved'}</button></div>
 
-          {readiness.status === 'at_risk' ? <section className={styles.releaseBox}><span>AT RISK FIELD RELEASE</span>{validRelease ? <><strong>Released by {validRelease.authorizedBy}</strong><p>{validRelease.reason}</p><small>{new Date(validRelease.authorizedAt).toLocaleString()} · valid only for current risk signature</small></> : <><strong>Field start is on hold.</strong><p>Operations may authorize start only after reviewing the current risks. A changed risk signature invalidates the release automatically.</p><textarea rows={3} disabled={locked || checksDirty} value={releaseReason} onChange={(event) => setReleaseReason(event.target.value)} placeholder={checksDirty ? 'Save readiness checks before release...' : 'Why is it operationally acceptable to start AT RISK?'} /><button type="button" disabled={locked || checksDirty || releaseReason.trim().length < 8} onClick={authorizeAtRisk}>Authorize AT RISK Start</button></>}</section> : readiness.status === 'blocked' ? <section className={`${styles.releaseBox} ${styles.releaseBlocked}`}><span>HARD BLOCK</span><strong>No Field release is available.</strong><p>Resolve the blocking readiness dimension in its owning workflow.</p></section> : <section className={`${styles.releaseBox} ${styles.releaseReady}`}><span>DISPATCH RELEASE</span><strong>No override required.</strong><p>All readiness dimensions are READY; Field may start normally.</p></section>}
+          {readiness.status === 'at_risk' ? <section className={styles.releaseBox}><span>AT RISK FIELD RELEASE</span>{validRelease ? <><strong>Released by {validRelease.authorizedBy}</strong><p>{validRelease.reason}</p><small>{new Date(validRelease.authorizedAt).toLocaleString()} · valid only for current risk signature</small></> : <><strong>Field start is on hold.</strong><p>Operations may authorize start only after reviewing the current risks. A changed workforce, material or other risk signature invalidates the release automatically.</p><textarea rows={3} disabled={locked || checksDirty} value={releaseReason} onChange={(event) => setReleaseReason(event.target.value)} placeholder={checksDirty ? 'Save manual readiness checks before release...' : 'Why is it operationally acceptable to start AT RISK?'} /><button type="button" disabled={locked || checksDirty || releaseReason.trim().length < 8} onClick={authorizeAtRisk}>Authorize AT RISK Start</button></>}</section> : readiness.status === 'blocked' ? <section className={`${styles.releaseBox} ${styles.releaseBlocked}`}><span>HARD BLOCK</span><strong>No Field release is available.</strong><p>Resolve the blocking readiness dimension in its owning workflow.</p></section> : <section className={`${styles.releaseBox} ${styles.releaseReady}`}><span>DISPATCH RELEASE</span><strong>No override required.</strong><p>All readiness dimensions are READY; Field may start normally.</p></section>}
         </aside>
       </div>
 
-      <footer><div><span>DECISION RULE</span><strong>BLOCKED cannot be released. AT RISK requires a risk-signature-bound Operations release. READY starts normally.</strong></div><p>The release is evidence for start authority, not a mutation of the readiness facts themselves.</p></footer>
+      <footer><div><span>DECISION RULE</span><strong>BLOCKED cannot be released. AT RISK requires a risk-signature-bound Operations release. READY starts normally.</strong></div><p>Crew capability is now derived from verified Workforce Registry evidence rather than a manual Work Order toggle.</p></footer>
     </section>
   );
 }
