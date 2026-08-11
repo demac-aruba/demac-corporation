@@ -1,0 +1,67 @@
+.readable {
+  /*
+   * Scheduling is intentionally information-dense, but the first visual pass
+   * pushed secondary copy below a comfortable operator reading size.
+   * These are scoped minimums only: layout, grids, card geometry and large KPI
+   * values remain owned by their original module styles.
+   */
+}
+
+.readable :where(p, small, em, time) {
+  font-size: 8.5px !important;
+  line-height: 1.45;
+}
+
+.readable :where(span) {
+  font-size: 8px !important;
+  line-height: 1.35;
+}
+
+.readable :where(b) {
+  font-size: 7.5px !important;
+  line-height: 1.25;
+}
+
+.readable :where(button) {
+  font-size: 8.5px !important;
+}
+
+.readable :where(label) {
+  font-size: 8.5px !important;
+}
+
+.readable :where(input, select, textarea) {
+  font-size: 9px !important;
+  line-height: 1.4;
+}
+
+/*
+ * Most small operational titles/customer names use <strong>. KPI values are
+ * direct children of <article>, so exclude those to preserve their existing
+ * larger visual hierarchy.
+ */
+.readable :where(strong:not(article > strong)) {
+  font-size: 9.5px !important;
+  line-height: 1.3;
+}
+
+/* Keep the primary page headings unchanged; only improve supporting copy. */
+.readable h1,
+.readable h2,
+.readable h3 {
+  line-height: 1.15;
+}
+
+@media (max-width: 900px) {
+  .readable :where(p, small, em, time, span) {
+    font-size: 9px !important;
+  }
+
+  .readable :where(strong:not(article > strong)) {
+    font-size: 10px !important;
+  }
+
+  .readable :where(button, label, input, select, textarea) {
+    font-size: 9.5px !important;
+  }
+}
