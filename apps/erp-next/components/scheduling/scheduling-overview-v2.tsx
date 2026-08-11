@@ -298,7 +298,7 @@ function VanScheduleSlots({ slots, jobs, onConfirm, onOpen }: { slots: DisplaySl
 
     const continuingJob = jobs.find((job) => overlapsSlot(job, slot) && timeToMinutes(job.start) < timeToMinutes(slot.start));
     if (continuingJob) {
-      rows.push(<div className={styles.continuationFallback} key={`${continuingJob.id}-${slot.start}`}><div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div><div><strong>Reserved</strong><span>Part of {formatTime(continuingJob.start)}–{formatTime(continuingJob.end)} appointment</span></div></div>);
+      rows.push(<div className={styles.occupiedSlot} key={`${continuingJob.id}-${slot.start}`}><div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div><div className={styles.slotJobs}><article className={styles.jobCard}><div><div className={styles.jobTitle}><strong>Reserved</strong></div><span>Part of {formatTime(continuingJob.start)}–{formatTime(continuingJob.end)} appointment</span></div></article></div></div>);
       index += 1;
       continue;
     }
@@ -313,17 +313,15 @@ function VanScheduleSlots({ slots, jobs, onConfirm, onOpen }: { slots: DisplaySl
 function AppointmentBlock({ job, span, crossesLunch, onConfirm }: { job: CalendarDispatchJob; span: number; crossesLunch: boolean; onConfirm: (appointmentId: string) => void }) {
   const appointmentId = appointmentIdForJob(job);
   const minHeight = span * 64 + Math.max(0, span - 1) * 6 + (crossesLunch ? 18 : 0);
-  return <article className={`${styles.appointmentBlock} ${job.status === 'temporary_hold' ? styles.appointmentHold : ''}`} style={{ minHeight }}>
-    <div className={styles.appointmentTime}><strong>{formatTime(job.start)}</strong><span>{formatTime(job.end)}</span>{span > 1 ? <b>{span} spots</b> : null}</div>
-    <div className={styles.appointmentBody}>
-      <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={slotClass(job.readiness)}>{readinessLabel(job.readiness)}</b></div>
-      <span>{presetLabel(job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span>
-      <small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small>
-      {span > 1 ? <em>Reserved continuously · {formatTime(job.start)}–{formatTime(job.end)}</em> : null}
-      {crossesLunch ? <div className={styles.appointmentLunch}>12:00–1:00 PM · Lunch / reset remains protected</div> : null}
+  return <div className={styles.occupiedSlot} style={{ minHeight }}>
+    <div className={styles.slotTime}><strong>{formatTime(job.start)}</strong><span>{formatTime(job.end)}</span>{span > 1 ? <span>{span} spots</span> : null}</div>
+    <div className={styles.slotJobs}>
+      <article className={`${styles.jobCard} ${job.status === 'temporary_hold' ? styles.holdCard : ''}`} style={{ minHeight: '100%', alignItems: 'center' }}>
+        <div><div className={styles.jobTitle}><strong>{job.customer}</strong><b className={slotClass(job.readiness)}>{readinessLabel(job.readiness)}</b></div><span>{presetLabel(job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span><small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small>{span > 1 ? <small>Reserved continuously · {formatTime(job.start)}–{formatTime(job.end)}</small> : null}{crossesLunch ? <small>12:00–1:00 PM lunch/reset remains protected</small> : null}</div>
+        {appointmentId && job.status === 'temporary_hold' && job.isPrimaryAssignment ? <button type="button" onClick={() => onConfirm(appointmentId)}>Confirm</button> : null}
+      </article>
     </div>
-    {appointmentId && job.status === 'temporary_hold' && job.isPrimaryAssignment ? <button type="button" onClick={() => onConfirm(appointmentId)}>Confirm</button> : null}
-  </article>;
+  </div>;
 }
 
 function BookingDrawer({ day, jobs, preferred, onClose, onReserve }: { day: OperationalDay; jobs: CalendarDispatchJob[]; preferred: PreferredSlot; onClose: () => void; onReserve: (request: BookingRequest, slot: CandidateSlot, technicianInstructions: string, identity: BookingIdentity) => void }) {
@@ -409,15 +407,6 @@ function BookingDrawer({ day, jobs, preferred, onClose, onReserve }: { day: Oper
     setSector(sectorFromCrm(selectedCustomer, crmSite) ?? sector);
   };
 
-  const createCustomer = (result: QuickCustomerCreateResult) => {
-    const nextCustomers = [result.customer, ...crmCustomers.filter((item) => item.id !== result.customer.id)];
-    saveBrowserValue(browserKeys.customers, nextCustomers);
-    saveBrowserValue(browserKeys.customerMaster(result.customer.id), result.master);
-    setCrmCustomers(nextCustomers);
-    setCustomerCreateOpen(false);
-    chooseCreatedCustomer(result);
-  };
-
   const chooseCreatedCustomer = (result: QuickCustomerCreateResult) => {
     const sites = result.master.sites ?? [];
     const primary = sites.find((item) => item.id === result.primarySiteId) ?? sites[0];
@@ -431,19 +420,26 @@ function BookingDrawer({ day, jobs, preferred, onClose, onReserve }: { day: Oper
     setSelected(null);
   };
 
+  const createCustomer = (result: QuickCustomerCreateResult) => {
+    const nextCustomers = [result.customer, ...crmCustomers.filter((item) => item.id !== result.customer.id)];
+    saveBrowserValue(browserKeys.customers, nextCustomers);
+    saveBrowserValue(browserKeys.customerMaster(result.customer.id), result.master);
+    setCrmCustomers(nextCustomers);
+    setCustomerCreateOpen(false);
+    chooseCreatedCustomer(result);
+  };
+
   return <div className={styles.drawerOverlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <aside className={styles.drawer} role="dialog" aria-modal="true">
       <header className={styles.drawerHeader}><div><span>New appointment · {day.weekday} {day.shortDate}</span><h2>Find a valid work spot</h2><p>Search the CRM relationship first. The deterministic scheduler then controls van, sector, duration, restrictions and support capacity.</p></div><button type="button" onClick={onClose}>×</button></header>
       <div className={styles.drawerBody}>
         <section className={styles.formSection}><header><strong>1 · Customer & property</strong><span>One CRM customer can have multiple properties and contacts.</span></header>
-          <div className={styles.customerSearchArea}>
-            <div className={styles.customerSearchHead}><div><span>CRM CUSTOMER SEARCH</span><strong>{selectedCustomer ? 'Customer selected' : 'Find customer by name'}</strong></div><button type="button" onClick={() => setCustomerCreateOpen(true)}>+ Add Customer</button></div>
-            {selectedCustomer ? <div className={styles.selectedCustomerCard}><div><span>{selectedCustomer.id}</span><strong>{selectedCustomer.name}</strong><small>{selectedCustomer.phone || 'No phone'} · {selectedCustomer.email || 'No email'}</small></div><button type="button" onClick={() => { setCustomerId(''); setCustomer(''); setSiteId(''); setSite(''); setCrmSites([]); setCustomerQuery(''); setSelected(null); }}>Change</button></div> : <>
-              <label className={styles.customerSearchInput}><span>⌕</span><input value={customerQuery} onChange={(event) => setCustomerQuery(event.target.value)} placeholder="Start typing customer name..." /></label>
-              <div className={styles.customerResults}>{customerMatches.length ? customerMatches.map((item) => <button type="button" key={item.id} onClick={() => chooseCustomer(item.id)}><div><strong>{item.name}</strong><span>{item.location || item.type || 'Customer'} · {item.phone || 'No phone'}</span></div><b>Select</b></button>) : <div className={styles.noCustomerMatch}><strong>No customer found</strong><span>Create the relationship instead of booking an unregistered duplicate.</span><button type="button" onClick={() => setCustomerCreateOpen(true)}>+ Add Customer</button></div>}</div>
-            </>}
+          <div className={styles.formGrid}>
+            <label className={styles.wide}><span>CRM customer search</span><input value={customerQuery} onChange={(event) => { setCustomerQuery(event.target.value); if (customerId) { setCustomerId(''); setCustomer(''); setSiteId(''); setSite(''); setCrmSites([]); setSelected(null); } }} placeholder="Start typing customer name..." /></label>
+            <div className={styles.wide} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}><span style={{ color: 'var(--muted)' }}>{selectedCustomer ? `${selectedCustomer.id} · ${selectedCustomer.name}` : `${customerMatches.length} CRM match${customerMatches.length === 1 ? '' : 'es'}`}</span><button type="button" className={styles.secondary} onClick={() => setCustomerCreateOpen(true)}>+ Add Customer</button></div>
           </div>
-          {customerId ? <div className={styles.formGrid}><label className={styles.wide}><span>Registered property</span><select value={siteId} onChange={(event) => chooseSite(event.target.value)}><option value="">Select a property</option>{crmSites.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.address}</option>)}</select></label><label><span>DEMAC sector</span><select value={sector} onChange={(event) => { setSector(event.target.value); setSelected(null); }}><option>Noord</option><option>Palm Beach</option><option>Oranjestad</option><option>Santa Cruz</option><option>Paradera</option><option>San Nicolas</option><option>Savaneta</option></select></label>{customerId && !crmSites.length ? <div className={`${styles.wide} ${styles.propertyWarning}`}><strong>This customer has no registered property.</strong><span>Open Add Customer only for a new relationship; existing-customer properties should be added in Customer 360 before booking.</span></div> : null}</div> : null}
+          {!selectedCustomer ? <div className={styles.slotOptions}>{customerMatches.length ? customerMatches.map((item) => <button type="button" key={item.id} className={styles.slotOption} onClick={() => chooseCustomer(item.id)}><div><strong>{item.name}</strong><span>{item.location || item.type || 'Customer'} · {item.phone || 'No phone'}</span></div><b>Select</b><small>{item.email || item.id}</small></button>) : <div className={styles.noSlots}><strong>No customer found</strong><p>Create the CRM relationship instead of booking an unregistered duplicate.</p><button type="button" className={styles.secondary} onClick={() => setCustomerCreateOpen(true)}>+ Add Customer</button></div>}</div> : <div className={styles.descriptionPreview}><span>SELECTED CRM CUSTOMER</span><strong>{selectedCustomer.name}</strong><small>{selectedCustomer.phone || 'No phone'} · {selectedCustomer.email || 'No email'}</small></div>}
+          {customerId ? <div className={styles.formGrid}><label className={styles.wide}><span>Registered property</span><select value={siteId} onChange={(event) => chooseSite(event.target.value)}><option value="">Select a property</option>{crmSites.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.address}</option>)}</select></label><label><span>DEMAC sector</span><select value={sector} onChange={(event) => { setSector(event.target.value); setSelected(null); }}><option>Noord</option><option>Palm Beach</option><option>Oranjestad</option><option>Santa Cruz</option><option>Paradera</option><option>San Nicolas</option><option>Savaneta</option></select></label>{!crmSites.length ? <div className={`${styles.wide} ${styles.noSlots}`}><strong>No registered property</strong><p>Add a property in Customer 360 before booking this existing customer.</p></div> : null}</div> : null}
         </section>
 
         <section className={styles.formSection}><header><strong>2 · Work & restrictions</strong><span>Changing these values recalculates valid slots.</span></header><div className={styles.formGrid}>
