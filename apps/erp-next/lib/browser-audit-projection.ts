@@ -28,6 +28,12 @@ function dispatchRiskDimensions(release: BrowserDispatchAtRiskRelease) {
   return labels.length ? labels.join(', ') : 'risk snapshot unavailable';
 }
 
+function fieldStartDetail(execution: BrowserFieldExecutionRecord) {
+  if (execution.startAuthority === 'released_at_risk') return `${execution.equipment.length} equipment record(s) opened for execution under Operations release ${execution.dispatchReleaseId ?? 'unknown release'}${execution.startAuthorityReason ? ` · ${execution.startAuthorityReason}` : ''}.`;
+  if (execution.startAuthority === 'ready') return `${execution.equipment.length} equipment record(s) opened for execution with consolidated readiness READY${execution.startAuthorityReason ? ` · ${execution.startAuthorityReason}` : ''}.`;
+  return `${execution.equipment.length} equipment record(s) opened for execution · legacy preview start without explicit start-authority metadata.`;
+}
+
 export function loadBrowserAuditProjection(): BrowserAuditProjectionEvent[] {
   const appointments = loadBrowserValue<BrowserAppointmentRecord[]>(browserKeys.appointments, []);
   const workOrders = loadBrowserValue<BrowserWorkOrderRecord[]>(browserKeys.workOrders, []);
@@ -65,7 +71,7 @@ export function loadBrowserAuditProjection(): BrowserAuditProjectionEvent[] {
   });
 
   for (const execution of field) {
-    if (execution.startedAt) events.push({ id: `AUD-${execution.workOrderId}-field-start`, occurredAt: execution.startedAt, module: 'Field', action: 'Field execution started', entityType: 'FieldExecution', entityId: execution.workOrderId, actor: 'Technician / Preview', detail: `${execution.equipment.length} equipment record(s) opened for execution.`, importance: 'normal' });
+    if (execution.startedAt) events.push({ id: `AUD-${execution.workOrderId}-field-start`, occurredAt: execution.startedAt, module: 'Field', action: execution.startAuthority === 'released_at_risk' ? 'Field execution started under AT RISK release' : 'Field execution started', entityType: 'FieldExecution', entityId: execution.workOrderId, actor: 'Technician / Preview', detail: fieldStartDetail(execution), importance: execution.startAuthority === 'released_at_risk' ? 'sensitive' : 'normal' });
     if (execution.submittedAt) events.push({ id: `AUD-${execution.workOrderId}-field-submit`, occurredAt: execution.submittedAt, module: 'Field', action: 'Field report submitted', entityType: 'FieldExecution', entityId: execution.workOrderId, actor: 'Technician / Preview', detail: `Submitted to Office Review with ${execution.equipment.length} equipment record(s).`, importance: 'sensitive' });
   }
 
