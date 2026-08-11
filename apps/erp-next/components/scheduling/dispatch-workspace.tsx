@@ -1,6 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { browserKeys, loadBrowserValue, saveBrowserValue } from '../../lib/browser-store';
+import { createBrowserWorkOrder, type BrowserAppointmentRecord, type BrowserWorkOrderRecord } from '../../lib/browser-operational';
 import type { BookingRequest, CandidateSlot, DispatchJob, WorkPresetId } from '../../lib/scheduling';
 import { customerFacingDescription, defaultWorkPresets, evaluateReadiness, getHalfDayAnchor, previewVans } from '../../lib/scheduling';
 import type { CalendarDispatchJob, OperationalDay } from '../../lib/scheduling-capacity';
@@ -43,34 +45,67 @@ function readinessClass(value: DispatchJob['readiness']) {
   return value === 'ready' ? styles.ready : value === 'at_risk' ? styles.risk : value === 'blocked' ? styles.blocked : styles.neutral;
 }
 
+function appointmentAssignments(record: BrowserAppointmentRecord): CalendarDispatchJob[] {
+  if (record.status === 'cancelled') return [];
+  const status = record.status === 'confirmed' ? 'confirmed' : 'temporary_hold';
+  return record.assignments.map((assignment) => ({ ...assignment, status }));
+}
+
 export function DispatchWorkspace() {
   const [calendar] = useState(() => {
     const today = currentArubaDateKey();
     return { today, week: buildOperationalWeek(today) };
   });
+  const seededJobs = useMemo(() => seedJobs(calendar.today, calendar.week), [calendar]);
   const [activeDate, setActiveDate] = useState(calendar.today);
-  const [jobs, setJobs] = useState<CalendarDispatchJob[]>(() => seedJobs(calendar.today, calendar.week));
+  const [appointments, setAppointments] = useState<BrowserAppointmentRecord[]>([]);
+  const [storageReady, setStorageReady] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [selectedVan, setSelectedVan] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  useEffect(() => {
+    setAppointments(loadBrowserValue<BrowserAppointmentRecord[]>(browserKeys.appointments, []));
+    setStorageReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!storageReady) return;
+    saveBrowserValue(browserKeys.appointments, appointments);
+  }, [appointments, storageReady]);
+
+  const jobs = useMemo(() => [...seededJobs, ...appointments.flatMap(appointmentAssignments)], [appointments, seededJobs]);
   const activeDay = calendar.week.find((day) => day.dateKey === activeDate) ?? calendar.week[0];
   const activeJobs = jobsForDate(jobs, activeDate);
   const capacity = weekCapacity(jobs, calendar.week);
-  const confirmed = activeJobs.filter((job) => job.status === 'confirmed').length;
-  const holds = activeJobs.filter((job) => job.status === 'temporary_hold').length;
-  const attention = activeJobs.filter((job) => job.readiness === 'blocked' || job.readiness === 'at_risk').length;
+  const confirmed = activeJobs.filter((job) => job.isPrimaryAssignment && job.status === 'confirmed').length;
+  const holds = activeJobs.filter((job) => job.isPrimaryAssignment && job.status === 'temporary_hold').length;
+  const attention = activeJobs.filter((job) => job.isPrimaryAssignment && (job.readiness === 'blocked' || job.readiness === 'at_risk')).length;
 
   const addAppointment = (request: BookingRequest, slot: CandidateSlot, technicianInstructions: string) => {
-    const jobId = `WO-${2300 + jobs.length}`;
+    const stamp = Date.now().toString();
+    const appointmentId = `APT-${stamp.slice(-8)}`;
+    const primaryId = `${appointmentId}-P`;
     const primaryQty = slot.primaryUnits ?? request.quantity;
-    const primary: CalendarDispatchJob = { dateKey: activeDate, id: jobId, customer: request.customer, site: request.site, sector: request.sector, start: slot.start, end: slot.end, segment: slot.segment, vanId: slot.vanId, presetId: request.presetId, quantity: primaryQty, status: 'temporary_hold', readiness: 'at_risk', isPrimaryAssignment: true, customerCommunicationOwner: true };
-    const additions: CalendarDispatchJob[] = [primary];
-    if (slot.requiresSupportVan && slot.supportVanId) additions.push({ ...primary, id: `${jobId}-S`, vanId: slot.supportVanId, quantity: slot.supportUnits ?? Math.max(1, request.quantity - primaryQty), isPrimaryAssignment: false, customerCommunicationOwner: false, supportForJobId: jobId });
-    setJobs((current) => [...current, ...additions]);
+    const primary: CalendarDispatchJob = { dateKey: activeDate, id: primaryId, customer: request.customer, site: request.site, sector: request.sector, start: slot.start, end: slot.end, segment: slot.segment, vanId: slot.vanId, presetId: request.presetId, quantity: primaryQty, status: 'temporary_hold', readiness: 'at_risk', isPrimaryAssignment: true, customerCommunicationOwner: true };
+    const assignments: CalendarDispatchJob[] = [primary];
+    if (slot.requiresSupportVan && slot.supportVanId) assignments.push({ ...primary, id: `${appointmentId}-S`, vanId: slot.supportVanId, quantity: slot.supportUnits ?? Math.max(1, request.quantity - primaryQty), isPrimaryAssignment: false, customerCommunicationOwner: false, supportForJobId: primaryId });
+    const record: BrowserAppointmentRecord = { id: appointmentId, dateKey: activeDate, customer: request.customer, site: request.site, sector: request.sector, presetId: request.presetId, totalQuantity: request.quantity, customerFacingDescription: customerFacingDescription(request), technicianInstructions: technicianInstructions.trim() || undefined, status: 'temporary_hold', assignments, primaryVanId: slot.vanId, supportVanId: slot.supportVanId, createdAt: new Date().toISOString() };
+    setAppointments((current) => [...current, record]);
     setDrawerOpen(false);
     setSelectedVan(slot.vanId);
-    setNotice(`${customerFacingDescription(request)} placed on ${activeDay.weekday} ${activeDay.shortDate} as a temporary hold. ${slot.requiresSupportVan ? 'Linked support van added with one customer communication owner.' : technicianInstructions ? 'Technician instructions remain internal.' : ''}`);
+    setNotice(`${record.customerFacingDescription} saved as ${record.id} on ${activeDay.weekday} ${activeDay.shortDate}. ${slot.requiresSupportVan ? 'Linked support van added with one customer communication owner.' : technicianInstructions ? 'Technician instructions remain internal.' : ''} The hold will survive refresh on this browser.`);
+  };
+
+  const confirmAppointment = (appointmentId: string) => {
+    const current = appointments.find((appointment) => appointment.id === appointmentId);
+    if (!current || current.status !== 'temporary_hold') return;
+    const workOrderId = current.workOrderId ?? `WO-${appointmentId.replace(/^APT-/, '').slice(-6)}`;
+    const confirmed: BrowserAppointmentRecord = { ...current, status: 'confirmed', workOrderId, confirmedAt: new Date().toISOString(), assignments: current.assignments.map((assignment) => ({ ...assignment, status: 'confirmed' })) };
+    setAppointments((items) => items.map((item) => item.id === appointmentId ? confirmed : item));
+    const workOrders = loadBrowserValue<BrowserWorkOrderRecord[]>(browserKeys.workOrders, []);
+    if (!workOrders.some((order) => order.appointmentId === appointmentId)) saveBrowserValue(browserKeys.workOrders, [...workOrders, createBrowserWorkOrder(confirmed)]);
+    setNotice(`${appointmentId} confirmed. ${workOrderId} was created without re-entering customer, site, work, van or technician instructions.${confirmed.supportVanId ? ' The support assignment remains linked and cannot send duplicate customer confirmations.' : ''}`);
   };
 
   const moveDay = (direction: -1 | 1) => {
@@ -92,7 +127,7 @@ export function DispatchWorkspace() {
       })}
     </section>
 
-    <div className={styles.metrics}><article><span>Confirmed</span><strong>{confirmed}</strong><small>{activeDay.weekday} {activeDay.shortDate}</small><i style={{ width: `${Math.min(100, confirmed / 24 * 100)}%` }} /></article><article><span>Temporary Holds</span><strong>{holds}</strong><small>Awaiting transaction / confirmation</small><i style={{ width: `${Math.min(100, holds * 18)}%` }} /></article><article><span>Need Attention</span><strong className={attention ? styles.metricWarning : ''}>{attention}</strong><small>At risk or blocked</small><i style={{ width: `${Math.min(100, attention * 20)}%` }} /></article><article><span>Available Vans</span><strong>{Math.max(0, 4 - new Set(activeJobs.map((job) => job.vanId)).size)}</strong><small>{activeDay.shiftLabel}</small><i style={{ width: `${Math.max(0, 4 - new Set(activeJobs.map((job) => job.vanId)).size) / 4 * 100}%` }} /></article></div>
+    <div className={styles.metrics}><article><span>Confirmed</span><strong>{confirmed}</strong><small>{activeDay.weekday} {activeDay.shortDate}</small><i style={{ width: `${Math.min(100, confirmed / 24 * 100)}%` }} /></article><article><span>Temporary Holds</span><strong>{holds}</strong><small>Browser-persistent appointments</small><i style={{ width: `${Math.min(100, holds * 18)}%` }} /></article><article><span>Need Attention</span><strong className={attention ? styles.metricWarning : ''}>{attention}</strong><small>At risk or blocked</small><i style={{ width: `${Math.min(100, attention * 20)}%` }} /></article><article><span>Available Vans</span><strong>{Math.max(0, 4 - new Set(activeJobs.map((job) => job.vanId)).size)}</strong><small>{activeDay.shiftLabel}</small><i style={{ width: `${Math.max(0, 4 - new Set(activeJobs.map((job) => job.vanId)).size) / 4 * 100}%` }} /></article></div>
 
     <div className={styles.toolbar}><div className={styles.dayNav}><button type="button" onClick={() => moveDay(-1)}>‹</button><div><strong>{activeDay.isToday ? 'Today' : `${activeDay.weekday} · ${activeDay.shortDate}`}</strong><span>{activeDay.shiftLabel} · Aruba time</span></div><button type="button" onClick={() => moveDay(1)}>›</button></div><div className={styles.legend}><span><i className={styles.readyDot} /> Ready</span><span><i className={styles.riskDot} /> At risk</span><span><i className={styles.blockedDot} /> Blocked</span><span><i className={styles.holdDot} /> Hold</span></div></div>
 
@@ -100,10 +135,10 @@ export function DispatchWorkspace() {
       const vanJobs = activeJobs.filter((job) => job.vanId === van.id);
       const amAnchor = getHalfDayAnchor(activeJobs, van.id, 'am');
       const pmAnchor = getHalfDayAnchor(activeJobs, van.id, 'pm');
-      return <section key={van.id} className={`${styles.vanLane} ${selectedVan === van.id ? styles.vanLaneSelected : ''}`}><header><div className={styles.vanIdentity}><span>{van.id.replace('VAN-', 'V')}</span><div><strong>{van.name}</strong><small>{van.team}</small></div></div><b>{activeDay.isOpen ? 'ACTIVE' : 'CLOSED'}</b></header><div className={styles.anchorBar}><div><span>AM anchor</span><strong>{amAnchor?.sector ?? 'Open'}</strong></div><div><span>PM anchor</span><strong>{pmAnchor?.sector ?? 'Open'}</strong></div></div><div className={styles.daySegments}><JobSegment label="Morning" jobs={vanJobs.filter((job) => job.segment === 'am' || job.segment === 'full_day')} />{activeDay.weekday !== 'Sat' ? <div className={styles.breakRow}><span>12:00</span><div>Lunch / reset</div><span>1:00</span></div> : null}<JobSegment label={activeDay.weekday === 'Sat' ? 'Remaining short shift' : 'Afternoon'} jobs={vanJobs.filter((job) => job.segment === 'pm' || job.segment === 'full_day')} /></div></section>;
+      return <section key={van.id} className={`${styles.vanLane} ${selectedVan === van.id ? styles.vanLaneSelected : ''}`}><header><div className={styles.vanIdentity}><span>{van.id.replace('VAN-', 'V')}</span><div><strong>{van.name}</strong><small>{van.team}</small></div></div><b>{activeDay.isOpen ? 'ACTIVE' : 'CLOSED'}</b></header><div className={styles.anchorBar}><div><span>AM anchor</span><strong>{amAnchor?.sector ?? 'Open'}</strong></div><div><span>PM anchor</span><strong>{pmAnchor?.sector ?? 'Open'}</strong></div></div><div className={styles.daySegments}><JobSegment label="Morning" jobs={vanJobs.filter((job) => job.segment === 'am' || job.segment === 'full_day')} onConfirm={confirmAppointment} />{activeDay.weekday !== 'Sat' ? <div className={styles.breakRow}><span>12:00</span><div>Lunch / reset</div><span>1:00</span></div> : null}<JobSegment label={activeDay.weekday === 'Sat' ? 'Remaining short shift' : 'Afternoon'} jobs={vanJobs.filter((job) => job.segment === 'pm' || job.segment === 'full_day')} onConfirm={confirmAppointment} /></div></section>;
     })}</div></main>
 
-    <aside className={styles.sideRail}><section className={styles.sideCard}><div className={styles.sideTitle}><span>AI</span><div><strong>Booking Intelligence</strong><small>Deterministic facts first</small></div></div><div className={styles.insight}><b>Date-aware capacity</b><p>Changing the selected day changes the jobs evaluated by the booking engine. Holds on another date do not block today's capacity.</p></div><div className={styles.insight}><b>Same-site extended plan</b><p>Four to seven standard services at one property can span lunch while lunch is excluded from working duration.</p></div><button type="button" disabled={!activeDay.isOpen} onClick={() => setDrawerOpen(true)}>Find valid appointment</button></section>
+    <aside className={styles.sideRail}><section className={styles.sideCard}><div className={styles.sideTitle}><span>AI</span><div><strong>Booking Intelligence</strong><small>Deterministic facts first</small></div></div><div className={styles.insight}><b>Date-aware capacity</b><p>Changing the selected day changes the jobs evaluated by the booking engine. Holds on another date do not block today's capacity.</p></div><div className={styles.insight}><b>Persistent handoff</b><p>New test appointments survive refresh. Confirming a hold creates a linked work order without duplicating customer/site/work information.</p></div><button type="button" disabled={!activeDay.isOpen} onClick={() => setDrawerOpen(true)}>Find valid appointment</button></section>
       <section className={styles.sideCard}><div className={styles.cardHeading}><div><strong>Job Readiness</strong><span>Pre-dispatch gate</span></div><b className={styles.blockedText}>{readinessPreview.status.toUpperCase()}</b></div><ul className={styles.checkList}><li className={styles.ok}>✓ Crew + skill assigned</li><li className={styles.ok}>✓ Van and route compatible</li><li className={styles.bad}>! Required parts not ready</li><li className={styles.warn}>! Site access not confirmed</li></ul><button type="button">Open readiness queue</button></section>
       <section className={styles.sideCard}><div className={styles.cardHeading}><div><strong>Support Van Rule</strong><span>Large same-site jobs</span></div><b>6 + 4</b></div><div className={styles.supportDiagram}><div><strong>Primary van</strong><span>6 units</span><small>Owns confirmation + reminder</small></div><i>+</i><div><strong>Support van</strong><span>4 units</span><small>No duplicate customer messages</small></div></div><p className={styles.cardFoot}>Linked assignments share one customer appointment and retain distinct van accountability.</p></section>
       <section className={styles.sideCard}><div className={styles.cardHeading}><div><strong>Unscheduled Queue</strong><span>Needs a scheduling decision</span></div><b>3</b></div><div className={styles.queue}><div><span className={styles.queuePriority}>HIGH</span><strong>Commercial diagnostic</strong><small>Oranjestad · requested today</small></div><div><span>NEW</span><strong>2-unit standard service</strong><small>Noord · customer after 10 AM</small></div><div><span>READY</span><strong>Installation</strong><small>Santa Cruz · deposit confirmed</small></div></div></section></aside></div>
@@ -112,9 +147,9 @@ export function DispatchWorkspace() {
   </section>;
 }
 
-function JobSegment({ label, jobs }: { label: string; jobs: DispatchJob[] }) {
+function JobSegment({ label, jobs, onConfirm }: { label: string; jobs: CalendarDispatchJob[]; onConfirm: (appointmentId: string) => void }) {
   const unique = jobs.filter((job, index, list) => list.findIndex((item) => item.id === job.id) === index).sort((a, b) => a.start.localeCompare(b.start));
-  return <section className={styles.segment}><div className={styles.segmentLabel}>{label}</div>{unique.length ? unique.map((job) => <article className={`${styles.jobCard} ${job.status === 'temporary_hold' ? styles.jobHold : ''}`} key={job.id}><div className={styles.jobTime}><strong>{labelTime(job.start)}</strong><span>{labelTime(job.end)}</span></div><div className={styles.jobMain}><div><strong>{job.customer}</strong><b className={readinessClass(job.readiness)}>{job.readiness.replace('_', ' ')}</b></div><span>{presetLabel(job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span><small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small></div></article>) : <button type="button" className={styles.openCapacity}>+ Open capacity</button>}</section>;
+  return <section className={styles.segment}><div className={styles.segmentLabel}>{label}</div>{unique.length ? unique.map((job) => { const persistentAppointmentId = job.id.startsWith('APT-') ? job.id.replace(/-(P|S)$/, '') : null; return <article className={`${styles.jobCard} ${job.status === 'temporary_hold' ? styles.jobHold : ''}`} key={job.id}><div className={styles.jobTime}><strong>{labelTime(job.start)}</strong><span>{labelTime(job.end)}</span></div><div className={styles.jobMain}><div><strong>{job.customer}</strong><b className={readinessClass(job.readiness)}>{job.readiness.replace('_', ' ')}</b></div><span>{presetLabel(job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span><small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small>{persistentAppointmentId && job.status === 'temporary_hold' && job.isPrimaryAssignment ? <button type="button" onClick={() => onConfirm(persistentAppointmentId)} style={{ marginTop: 7, border: '1px solid var(--border)', borderRadius: 8, background: 'var(--brand-soft)', color: 'var(--brand)', padding: '5px 7px', fontSize: 8, fontWeight: 850, cursor: 'pointer' }}>Confirm → Create Work Order</button> : persistentAppointmentId && job.isPrimaryAssignment ? <em style={{ display: 'block', marginTop: 5, color: 'var(--success)', fontSize: 7, fontStyle: 'normal', fontWeight: 800 }}>Confirmed · Work Order created</em> : null}</div></article>; }) : <button type="button" className={styles.openCapacity}>+ Open capacity</button>}</section>;
 }
 
 function AppointmentDrawer({ day, jobs, onClose, onReserve }: { day: OperationalDay; jobs: DispatchJob[]; onClose: () => void; onReserve: (request: BookingRequest, slot: CandidateSlot, technicianInstructions: string) => void }) {
@@ -130,7 +165,7 @@ function AppointmentDrawer({ day, jobs, onClose, onReserve }: { day: Operational
   const slots = useMemo(() => findCandidateSlotsForDay(day, request, jobs), [day, request, jobs]);
   const description = customerFacingDescription(request);
   return <div className={styles.drawerOverlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><aside className={styles.drawer} role="dialog" aria-modal="true"><header className={styles.drawerHeader}><div><span>Booking workflow · {day.weekday} {day.shortDate}</span><h2>New appointment</h2><p>{day.shiftLabel}. The ERP offers only valid capacity for the selected operational date.</p></div><button type="button" onClick={onClose}>×</button></header><div className={styles.drawerBody}>
-    <section className={styles.formSection}><header><strong>1 · Customer & location</strong><span>Canonical CRM records will replace preview fields at integration.</span></header><div className={styles.formGrid}><label><span>Customer</span><input value={customer} onChange={(event) => setCustomer(event.target.value)} /></label><label><span>Property / site</span><input value={site} onChange={(event) => setSite(event.target.value)} /></label><label><span>DEMAC sector</span><select value={sector} onChange={(event) => { setSector(event.target.value); setSelected(null); }}><option>Noord</option><option>Palm Beach</option><option>Oranjestad</option><option>Santa Cruz</option><option>Paradera</option><option>San Nicolas</option><option>Savaneta</option></select></label></div></section>
+    <section className={styles.formSection}><header><strong>1 · Customer & location</strong><span>Canonical CRM selection will replace manual fallback when Firebase data mode is enabled.</span></header><div className={styles.formGrid}><label><span>Customer</span><input value={customer} onChange={(event) => setCustomer(event.target.value)} /></label><label><span>Property / site</span><input value={site} onChange={(event) => setSite(event.target.value)} /></label><label><span>DEMAC sector</span><select value={sector} onChange={(event) => { setSector(event.target.value); setSelected(null); }}><option>Noord</option><option>Palm Beach</option><option>Oranjestad</option><option>Santa Cruz</option><option>Paradera</option><option>San Nicolas</option><option>Savaneta</option></select></label></div></section>
     <section className={styles.formSection}><header><strong>2 · Work & duration</strong><span>Four-to-seven same-site standard services use the extended-day planner.</span></header><div className={styles.formGrid}><label className={styles.wide}><span>Predetermined work</span><select value={presetId} onChange={(event) => { setPresetId(event.target.value as WorkPresetId); setSelected(null); }}>{defaultWorkPresets.map((preset) => <option value={preset.id} key={preset.id}>{preset.label}</option>)}</select></label><label><span>Number of A/C units</span><input type="number" min={1} max={12} value={quantity} onChange={(event) => { setQuantity(Math.max(1, Number(event.target.value) || 1)); setSelected(null); }} /></label><label><span>Customer restriction</span><select value={restriction} onChange={(event) => { setRestriction(event.target.value); setSelected(null); }}><option value="any">No time restriction</option><option value="morning">Morning only</option><option value="afternoon">Afternoon only</option><option value="after10">After 10:00 AM</option><option value="after2">After 2:00 PM</option></select></label></div><div className={styles.descriptionPreview}><span>CUSTOMER-FACING DESCRIPTION</span><strong>{description}</strong><small>Technician-only notes remain separate.</small></div><label className={styles.instructions}><span>Technician instructions</span><textarea rows={3} value={technicianInstructions} onChange={(event) => setTechnicianInstructions(event.target.value)} placeholder="Internal access notes, preparation or technical instructions..." /></label></section>
     <section className={styles.formSection}><header><strong>3 · Valid ERP options</strong><span>{day.weekday === 'Sat' ? 'Saturday short-shift solver active.' : 'Date, route anchors, duration and customer restrictions are enforced.'}</span></header><div className={styles.slotList}>{slots.length ? slots.map((slot) => <button type="button" key={`${slot.vanId}-${slot.start}-${slot.supportVanId ?? ''}`} className={`${styles.slotCard} ${selected === slot ? styles.slotSelected : ''}`} onClick={() => setSelected(slot)}><div><strong>{slot.segment === 'full_day' ? `${labelTime(slot.start)} – ${labelTime(slot.end)} · extended plan` : `${labelTime(slot.start)} – ${labelTime(slot.end)}`}</strong><span>{slot.vanId}{slot.supportVanId ? ` + ${slot.supportVanId}` : ''} · {slot.sector}</span></div><b>{slot.score}</b><small>{slot.requiresSupportVan ? `${slot.primaryUnits} + ${slot.supportUnits} units · one customer communication owner` : slot.reasons[0] ?? 'Available capacity'}</small></button>) : <div className={styles.noSlots}><strong>No valid capacity on this date</strong><p>Choose another day, restriction, quantity or work type. The ERP does not invent availability.</p></div>}</div></section>
   </div><footer className={styles.drawerFooter}><div>{selected ? <><span>Selected</span><strong>{selected.vanId}{selected.supportVanId ? ` + ${selected.supportVanId}` : ''} · {selected.segment === 'full_day' ? `${labelTime(selected.start)}–${labelTime(selected.end)}` : labelTime(selected.start)}</strong></> : <span>Select a valid ERP option to continue.</span>}</div><div><button type="button" className={styles.secondary} onClick={onClose}>Cancel</button><button type="button" className={styles.primary} disabled={!selected} onClick={() => selected && onReserve(request, selected, technicianInstructions)}>Temporary hold</button></div></footer></aside></div>;
