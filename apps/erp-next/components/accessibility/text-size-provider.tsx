@@ -40,23 +40,24 @@ function collectTargets(root: ParentNode) {
 export function AccessibilityTextProvider({ children }: Readonly<{ children: React.ReactNode }>) {
   const { principal } = useAuth();
   const [textSizeOffset, setOffsetState] = useState<TextSizeOffset>(0);
-  const [preferenceReady, setPreferenceReady] = useState(false);
+  const [loadedUserId, setLoadedUserId] = useState<string | null>(null);
   const trackedRef = useRef<Map<HTMLElement, TrackedTextElement>>(new Map());
 
   useEffect(() => {
+    setLoadedUserId(null);
     const preferences = loadBrowserUserPreferences(principal.userId);
     setOffsetState(preferences.textSizeOffset);
-    setPreferenceReady(true);
+    setLoadedUserId(principal.userId);
   }, [principal.userId]);
 
   useEffect(() => {
-    if (!preferenceReady) return;
+    if (loadedUserId !== principal.userId) return;
     saveBrowserUserPreferences(principal.userId, { textSizeOffset });
     document.documentElement.dataset.demacTextSize = String(textSizeOffset);
-  }, [preferenceReady, principal.userId, textSizeOffset]);
+  }, [loadedUserId, principal.userId, textSizeOffset]);
 
   useEffect(() => {
-    if (!preferenceReady) return;
+    if (loadedUserId !== principal.userId) return;
 
     const tracked = trackedRef.current;
     for (const record of tracked.values()) record.element.style.fontSize = record.originalInlineSize;
@@ -117,7 +118,7 @@ export function AccessibilityTextProvider({ children }: Readonly<{ children: Rea
       for (const record of tracked.values()) record.element.style.fontSize = record.originalInlineSize;
       tracked.clear();
     };
-  }, [preferenceReady, textSizeOffset]);
+  }, [loadedUserId, principal.userId, textSizeOffset]);
 
   const setTextSizeOffset = useCallback((value: number) => setOffsetState(normalizeTextSizeOffset(value)), []);
   const increaseTextSize = useCallback(() => setOffsetState((current) => normalizeTextSizeOffset(current + 1)), []);
