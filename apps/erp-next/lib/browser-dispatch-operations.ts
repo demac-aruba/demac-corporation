@@ -49,6 +49,8 @@ type AssignmentRow = {
   order: BrowserWorkOrderRecord;
   vanId: string;
   role: 'primary' | 'support';
+  start: string;
+  end: string;
 };
 
 function assignmentId(workOrderId: string, vanId: string) {
@@ -130,11 +132,17 @@ export function saveDispatchAssignmentStage(args: {
 function rowsForDate(orders: BrowserWorkOrderRecord[], dateKey: string): AssignmentRow[] {
   return orders
     .filter((order) => order.scheduledDate === dateKey)
-    .flatMap((order) => order.assignments.map((assignment) => ({ order, vanId: assignment.vanId, role: assignment.role })));
+    .flatMap((order) => order.assignments.map((assignment) => ({
+      order,
+      vanId: assignment.vanId,
+      role: assignment.role,
+      start: assignment.start ?? order.scheduledStart,
+      end: assignment.end ?? order.scheduledEnd,
+    })));
 }
 
-function intervalOverlaps(a: BrowserWorkOrderRecord, b: BrowserWorkOrderRecord) {
-  return timeToMinutes(a.scheduledStart) < timeToMinutes(b.scheduledEnd) && timeToMinutes(a.scheduledEnd) > timeToMinutes(b.scheduledStart);
+function intervalOverlaps(a: AssignmentRow, b: AssignmentRow) {
+  return timeToMinutes(a.start) < timeToMinutes(b.end) && timeToMinutes(a.end) > timeToMinutes(b.start);
 }
 
 export function deriveDispatchConflicts(orders: BrowserWorkOrderRecord[], dateKey: string, roster: BrowserWorkforceEmployee[] = loadBrowserWorkforce()) {
@@ -146,27 +154,27 @@ export function deriveDispatchConflicts(orders: BrowserWorkOrderRecord[], dateKe
   for (const row of rows) byVan.set(row.vanId, [...(byVan.get(row.vanId) ?? []), row]);
 
   for (const [vanId, lane] of byVan) {
-    const sorted = lane.slice().sort((a, b) => a.order.scheduledStart.localeCompare(b.order.scheduledStart));
+    const sorted = lane.slice().sort((a, b) => a.start.localeCompare(b.start));
     for (let i = 0; i < sorted.length; i += 1) {
       const current = sorted[i];
-      const end = timeToMinutes(current.order.scheduledEnd);
+      const end = timeToMinutes(current.end);
       const afterHours = timeToMinutes(settings.afterHours);
       if (end > afterHours) {
-        conflicts.push({ id: `CONFLICT-${vanId}-${current.order.id}-afterhours`, severity: 'warning', type: 'workday_overrun', title: `${vanId} scheduled beyond configured workday`, detail: `${current.order.id} ends at ${current.order.scheduledEnd}, later than ${settings.afterHours}.`, workOrderIds: [current.order.id], vanIds: [vanId] });
+        conflicts.push({ id: `CONFLICT-${vanId}-${current.order.id}-afterhours`, severity: 'warning', type: 'workday_overrun', title: `${vanId} scheduled beyond configured workday`, detail: `${current.order.id} ends at ${current.end}, later than ${settings.afterHours}.`, workOrderIds: [current.order.id], vanIds: [vanId] });
       }
       for (let j = i + 1; j < sorted.length; j += 1) {
         const next = sorted[j];
-        if (intervalOverlaps(current.order, next.order)) {
+        if (intervalOverlaps(current, next)) {
           const supportContext = current.role === 'support' || next.role === 'support' ? ' A linked support assignment is part of this conflict.' : '';
-          conflicts.push({ id: `CONFLICT-${vanId}-${current.order.id}-${next.order.id}-overlap`, severity: 'critical', type: 'van_overlap', title: `${vanId} has overlapping Work Orders`, detail: `${current.order.id} ${current.order.scheduledStart}–${current.order.scheduledEnd} overlaps ${next.order.id} ${next.order.scheduledStart}–${next.order.scheduledEnd}.${supportContext}`, workOrderIds: [current.order.id, next.order.id], vanIds: [vanId] });
+          conflicts.push({ id: `CONFLICT-${vanId}-${current.order.id}-${next.order.id}-overlap`, severity: 'critical', type: 'van_overlap', title: `${vanId} has overlapping Work Orders`, detail: `${current.order.id} ${current.start}–${current.end} overlaps ${next.order.id} ${next.start}–${next.end}.${supportContext}`, workOrderIds: [current.order.id, next.order.id], vanIds: [vanId] });
           continue;
         }
-        const gap = timeToMinutes(next.order.scheduledStart) - timeToMinutes(current.order.scheduledEnd);
+        const gap = timeToMinutes(next.start) - timeToMinutes(current.end);
         if (gap < 0) continue;
         if (current.order.sector !== next.order.sector && gap < settings.bufferMinutes) {
           conflicts.push({ id: `CONFLICT-${vanId}-${current.order.id}-${next.order.id}-buffer`, severity: 'warning', type: 'route_buffer', title: `${vanId} has insufficient route buffer`, detail: `${gap} minutes between ${current.order.sector} and ${next.order.sector}; configured buffer is ${settings.bufferMinutes} minutes.`, workOrderIds: [current.order.id, next.order.id], vanIds: [vanId] });
         }
-        const sameHalfDay = (timeToMinutes(current.order.scheduledStart) < 720) === (timeToMinutes(next.order.scheduledStart) < 720);
+        const sameHalfDay = (timeToMinutes(current.start) < 720) === (timeToMinutes(next.start) < 720);
         if (sameHalfDay && !sectorsCompatible(current.order.sector, next.order.sector)) {
           conflicts.push({ id: `CONFLICT-${vanId}-${current.order.id}-${next.order.id}-sector`, severity: 'warning', type: 'route_sector', title: `${vanId} crosses incompatible half-day sectors`, detail: `${current.order.sector} → ${next.order.sector} does not match the current DEMAC sector-compatibility map.`, workOrderIds: [current.order.id, next.order.id], vanIds: [vanId] });
         }
@@ -209,15 +217,15 @@ export function deriveProjectedDelayByAssignment(args: {
   for (const row of rows) byVan.set(row.vanId, [...(byVan.get(row.vanId) ?? []), row]);
 
   for (const [vanId, lane] of byVan) {
-    const sorted = lane.slice().sort((a, b) => a.order.scheduledStart.localeCompare(b.order.scheduledStart));
+    const sorted = lane.slice().sort((a, b) => a.start.localeCompare(b.start));
     let carry = 0;
     for (let i = 0; i < sorted.length; i += 1) {
       const row = sorted[i];
       const execution = args.executions.find((item) => item.workOrderId === row.order.id);
       let ownDelay = 0;
       if (selectedIsToday) {
-        const start = timeToMinutes(row.order.scheduledStart);
-        const end = timeToMinutes(row.order.scheduledEnd);
+        const start = timeToMinutes(row.start);
+        const end = timeToMinutes(row.end);
         if (execution?.technicianStatus === 'in_progress' && nowMinutes > end) ownDelay = nowMinutes - end;
         else if (!execution?.startedAt && nowMinutes > start) ownDelay = nowMinutes - start;
       }
@@ -225,7 +233,7 @@ export function deriveProjectedDelayByAssignment(args: {
       result.set(assignmentId(row.order.id, vanId), rowDelay);
       const next = sorted[i + 1];
       if (next) {
-        const scheduledGap = Math.max(0, timeToMinutes(next.order.scheduledStart) - timeToMinutes(row.order.scheduledEnd));
+        const scheduledGap = Math.max(0, timeToMinutes(next.start) - timeToMinutes(row.end));
         carry = Math.max(0, rowDelay - scheduledGap);
       }
     }
@@ -254,8 +262,10 @@ export function deriveDispatchTimingAlerts(args: {
     if (!readiness) continue;
     const startDecision = fieldStartDecision(readiness, loadDispatchAtRiskReleases());
     for (const assignment of order.assignments) {
+      const assignmentStart = assignment.start ?? order.scheduledStart;
+      const assignmentEnd = assignment.end ?? order.scheduledEnd;
       const stage = effectiveDispatchStage(order, assignment.vanId, execution, states);
-      const minutesToStart = timeToMinutes(order.scheduledStart) - clock.minutes;
+      const minutesToStart = timeToMinutes(assignmentStart) - clock.minutes;
       const projectedDelayMinutes = delays.get(assignmentId(order.id, assignment.vanId)) ?? 0;
       const physicallyLeft = stage === 'departed' || stage === 'in_transit' || stage === 'on_site' || stage === 'in_field' || stage === 'submitted';
 
@@ -269,8 +279,8 @@ export function deriveDispatchTimingAlerts(args: {
         alerts.push({ id: `ALERT-${order.id}-${assignment.vanId}-prep`, severity: 'warning', title: `${assignment.vanId} is not marked Ready to Depart`, detail: `${order.id} can dispatch, but pre-departure preparation has not been acknowledged.`, workOrderId: order.id, vanId: assignment.vanId, minutesToStart, projectedDelayMinutes });
       }
 
-      if (execution?.technicianStatus === 'in_progress' && clock.minutes > timeToMinutes(order.scheduledEnd)) {
-        const overrun = clock.minutes - timeToMinutes(order.scheduledEnd);
+      if (execution?.technicianStatus === 'in_progress' && clock.minutes > timeToMinutes(assignmentEnd)) {
+        const overrun = clock.minutes - timeToMinutes(assignmentEnd);
         alerts.push({ id: `ALERT-${order.id}-${assignment.vanId}-overrun`, severity: 'critical', title: `${order.id} is running ${overrun} min past schedule`, detail: `Following ${assignment.vanId} work may be delayed. Customer communication remains an explicit Operations action.`, workOrderId: order.id, vanId: assignment.vanId, projectedDelayMinutes: Math.max(projectedDelayMinutes, overrun) });
       } else if (projectedDelayMinutes >= 15) {
         alerts.push({ id: `ALERT-${order.id}-${assignment.vanId}-propagated`, severity: projectedDelayMinutes >= 30 ? 'critical' : 'warning', title: `${order.id} projected ${projectedDelayMinutes} min late`, detail: `Delay is propagated from an earlier assignment in ${assignment.vanId}. Review route/customer communication before it becomes a missed promise.`, workOrderId: order.id, vanId: assignment.vanId, projectedDelayMinutes });
