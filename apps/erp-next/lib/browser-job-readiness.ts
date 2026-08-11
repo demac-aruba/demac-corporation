@@ -154,15 +154,15 @@ export function createDispatchAtRiskRelease(readiness: BrowserJobReadiness, reas
     authorizedAt: new Date().toISOString(),
   };
   const current = loadDispatchAtRiskReleases();
-  const next = [release, ...current.filter((item) => item.workOrderId !== readiness.workOrderId)];
-  saveBrowserValue(BROWSER_DISPATCH_RELEASES_KEY, next);
+  saveBrowserValue(BROWSER_DISPATCH_RELEASES_KEY, [release, ...current]);
   return release;
 }
 
 export function validDispatchAtRiskRelease(readiness: BrowserJobReadiness, releases = loadDispatchAtRiskReleases()) {
   if (readiness.status !== 'at_risk') return undefined;
-  const signature = readinessRiskSignature(readiness);
-  return releases.find((release) => release.workOrderId === readiness.workOrderId && release.riskSignature === signature);
+  const latestForWorkOrder = releases.find((release) => release.workOrderId === readiness.workOrderId);
+  if (!latestForWorkOrder) return undefined;
+  return latestForWorkOrder.riskSignature === readinessRiskSignature(readiness) ? latestForWorkOrder : undefined;
 }
 
 export function fieldStartDecision(readiness: BrowserJobReadiness, releases = loadDispatchAtRiskReleases()) {

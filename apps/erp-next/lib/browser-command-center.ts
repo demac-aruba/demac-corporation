@@ -1,7 +1,7 @@
 import { BROWSER_BILLING_DRAFTS_KEY, type BrowserBillingDraft } from './browser-billing';
 import type { BrowserFieldExecutionRecord, BrowserOfficeReviewRecord } from './browser-field';
 import { BROWSER_INVENTORY_MOVEMENTS_KEY, type BrowserInventoryMovement } from './browser-inventory-ledger';
-import { deriveBrowserJobReadiness, loadJobReadinessChecks } from './browser-job-readiness';
+import { deriveBrowserJobReadiness, fieldStartDecision, loadDispatchAtRiskReleases, loadJobReadinessChecks } from './browser-job-readiness';
 import type { BrowserAppointmentRecord, BrowserWorkOrderRecord } from './browser-operational';
 import { BROWSER_BANK_PAYMENTS_KEY, BROWSER_RECEIVABLES_KEY, type BrowserBankPayment, type BrowserReceivableInvoice } from './browser-receivables';
 import { BROWSER_REPORT_DELIVERIES_KEY, type BrowserReportDeliveryRecord } from './browser-report-delivery';
@@ -10,7 +10,20 @@ import { loadWorkOrderScopes } from './browser-workorder-scope';
 
 export type BrowserCommandCenterSnapshot = {
   appointments: { holds: number; confirmed: number };
-  workOrders: { total: number; scoped: number; scopeMissing: number; fieldSubmitted: number; inField: number; dispatchReady: number; dispatchAtRisk: number; dispatchBlocked: number };
+  workOrders: {
+    total: number;
+    scoped: number;
+    scopeMissing: number;
+    fieldSubmitted: number;
+    inField: number;
+    dispatchReady: number;
+    dispatchAtRisk: number;
+    dispatchAtRiskHold: number;
+    dispatchReleasedAtRisk: number;
+    dispatchBlocked: number;
+    startedUnderAtRiskRelease: number;
+    dispatchReleaseHistory: number;
+  };
   reviews: { pending: number; approved: number; returned: number };
   deliveries: { sent: number; approvedWaiting: number };
   inventory: { movementCount: number; switches: number; refrigerantLb: number; sourceWorkOrders: number };
@@ -31,6 +44,7 @@ export function loadBrowserCommandCenterSnapshot(): BrowserCommandCenterSnapshot
   const payments = loadBrowserValue<BrowserBankPayment[]>(BROWSER_BANK_PAYMENTS_KEY, []);
   const scopes = loadWorkOrderScopes();
   const readinessChecks = loadJobReadinessChecks();
+  const dispatchReleases = loadDispatchAtRiskReleases();
 
   const scopedIds = new Set(scopes.filter((scope) => scope.status === 'complete' && scope.items.length === scope.expectedQuantity).map((scope) => scope.workOrderId));
   const submittedIds = new Set(fieldExecutions.filter((execution) => execution.technicianStatus === 'submitted').map((execution) => execution.workOrderId));
@@ -40,8 +54,12 @@ export function loadBrowserCommandCenterSnapshot(): BrowserCommandCenterSnapshot
   const activeWorkOrders = workOrders.filter((order) => !submittedIds.has(order.id));
   const activeReadiness = activeWorkOrders.map((order) => deriveBrowserJobReadiness(order, { checks: readinessChecks, appointments, executions: fieldExecutions }));
   const dispatchReady = activeReadiness.filter((item) => item.status === 'ready').length;
-  const dispatchAtRisk = activeReadiness.filter((item) => item.status === 'at_risk').length;
+  const dispatchAtRiskStates = activeReadiness.filter((item) => item.status === 'at_risk');
+  const dispatchAtRisk = dispatchAtRiskStates.length;
+  const dispatchReleasedAtRisk = dispatchAtRiskStates.filter((item) => fieldStartDecision(item, dispatchReleases).mode === 'released_at_risk').length;
+  const dispatchAtRiskHold = Math.max(0, dispatchAtRisk - dispatchReleasedAtRisk);
   const dispatchBlocked = activeReadiness.filter((item) => item.status === 'blocked').length;
+  const startedUnderAtRiskRelease = fieldExecutions.filter((execution) => Boolean(execution.startedAt) && execution.startAuthority === 'released_at_risk').length;
 
   const openBalance = receivables.reduce((sum, invoice) => sum + invoice.openBalance, 0);
   const unappliedCash = payments.reduce((sum, payment) => sum + payment.unappliedAmount, 0);
@@ -60,11 +78,13 @@ export function loadBrowserCommandCenterSnapshot(): BrowserCommandCenterSnapshot
     const reason = first?.blockers[0]?.reason ?? 'At least one hard readiness dimension is blocked.';
     attention.push({ severity: 'critical', title: `${dispatchBlocked} Work Order${dispatchBlocked === 1 ? '' : 's'} BLOCKED for dispatch`, detail: reason, href: '/work-orders/' });
   }
-  if (dispatchAtRisk) {
-    const first = activeReadiness.find((item) => item.status === 'at_risk');
-    const reason = first?.risks[0]?.reason ?? 'One or more pre-dispatch facts remain unresolved.';
-    attention.push({ severity: 'warning', title: `${dispatchAtRisk} Work Order${dispatchAtRisk === 1 ? '' : 's'} AT RISK`, detail: reason, href: '/work-orders/' });
+  if (dispatchAtRiskHold) {
+    const first = dispatchAtRiskStates.find((item) => fieldStartDecision(item, dispatchReleases).mode === 'at_risk_hold');
+    const reason = first?.risks[0]?.reason ?? 'One or more pre-dispatch facts remain unresolved and no valid release exists.';
+    attention.push({ severity: 'warning', title: `${dispatchAtRiskHold} AT RISK Work Order${dispatchAtRiskHold === 1 ? '' : 's'} awaiting Operations release`, detail: reason, href: '/work-orders/' });
   }
+  if (dispatchReleasedAtRisk) attention.push({ severity: 'information', title: `${dispatchReleasedAtRisk} AT RISK Work Order${dispatchReleasedAtRisk === 1 ? '' : 's'} released by Operations`, detail: 'These jobs remain visibly AT RISK, but a valid risk-snapshot release currently authorizes Field start.', href: '/work-orders/' });
+  if (startedUnderAtRiskRelease) attention.push({ severity: 'information', title: `${startedUnderAtRiskRelease} Work Order${startedUnderAtRiskRelease === 1 ? '' : 's'} started under AT RISK authority`, detail: 'Field start evidence is linked to the exact Operations release used at start time.', href: '/audit/' });
   if (dispatchReady) attention.push({ severity: 'opportunity', title: `${dispatchReady} Work Order${dispatchReady === 1 ? '' : 's'} dispatch READY`, detail: 'All consolidated readiness dimensions are currently resolved for these open jobs.', href: '/work-orders/' });
   if (pendingReviews) attention.push({ severity: 'warning', title: `${pendingReviews} field report${pendingReviews === 1 ? '' : 's'} await Office Review`, detail: 'Technician submission is complete, but customer delivery remains blocked until office approval.', href: '/work-orders/' });
   if (approvedWaiting) attention.push({ severity: 'information', title: `${approvedWaiting} approved report${approvedWaiting === 1 ? '' : 's'} ready for customer delivery`, detail: 'A human delivery action is still required.', href: '/communications/' });
@@ -86,7 +106,11 @@ export function loadBrowserCommandCenterSnapshot(): BrowserCommandCenterSnapshot
       inField: inFieldIds.size,
       dispatchReady,
       dispatchAtRisk,
+      dispatchAtRiskHold,
+      dispatchReleasedAtRisk,
       dispatchBlocked,
+      startedUnderAtRiskRelease,
+      dispatchReleaseHistory: dispatchReleases.length,
     },
     reviews: {
       pending: pendingReviews,

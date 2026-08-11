@@ -74,7 +74,15 @@ export function BrowserFieldExecution() {
       setNotice(scopeGate.reason);
       return;
     }
-    updateExecution((current) => ({ ...current, technicianStatus: 'in_progress', startedAt: current.startedAt ?? new Date().toISOString() }));
+    const startedAt = new Date().toISOString();
+    updateExecution((current) => ({
+      ...current,
+      technicianStatus: 'in_progress',
+      startedAt: current.startedAt ?? startedAt,
+      startAuthority: current.startedAt ? current.startAuthority : dispatchDecision.mode === 'released_at_risk' ? 'released_at_risk' : 'ready',
+      dispatchReleaseId: current.startedAt ? current.dispatchReleaseId : dispatchDecision.release?.id,
+      startAuthorityReason: current.startedAt ? current.startAuthorityReason : dispatchDecision.reason,
+    }));
     setNotice(dispatchDecision.mode === 'released_at_risk'
       ? `${selectedOrder.id} started under Operations AT RISK release ${dispatchDecision.release?.id}. ${dispatchDecision.release?.reason}`
       : `${selectedOrder.id} started with consolidated readiness READY. Progress will survive refresh on this browser.`);
@@ -179,7 +187,7 @@ export function BrowserFieldExecution() {
         <article><span>Progress</span><strong>{completedCount} / {totalEquipment}</strong><small>{execution ? labelState(execution.technicianStatus) : 'Not started'}{selectedReview ? ` · Review ${selectedReview.status}` : ''}</small></article>
       </div>
 
-      {needsStart ? <section className={`${styles.dispatchGate} ${dispatchDecision.allowed ? dispatchDecision.mode === 'released_at_risk' ? styles.dispatchRisk : styles.dispatchReady : jobReadiness?.status === 'blocked' ? styles.dispatchBlocked : styles.dispatchHold}`}><div><span>FIELD START GATE · {jobReadiness?.status.replace('_', ' ').toUpperCase()}</span><strong>{dispatchDecision.allowed ? dispatchDecision.mode === 'released_at_risk' ? 'Operations released this AT RISK Work Order for start.' : 'Work Order is dispatch READY.' : jobReadiness?.status === 'blocked' ? 'Work Order is BLOCKED and cannot start.' : 'Work Order is AT RISK and awaiting Operations release.'}</strong><p>{dispatchDecision.reason}</p>{dispatchDecision.release ? <small>{dispatchDecision.release.id} · {dispatchDecision.release.authorizedBy} · {new Date(dispatchDecision.release.authorizedAt).toLocaleString()}</small> : null}</div><a href="/work-orders/">Open Job Readiness →</a></section> : <section className={styles.startedGate}><span>FIELD START RECORDED</span><strong>{execution?.startedAt ? new Date(execution.startedAt).toLocaleString() : 'Execution already active'}</strong><p>Readiness controls the start decision. Once work has started, field evidence remains editable until submission/office lock; later readiness changes do not erase the start record.</p></section>}
+      {needsStart ? <section className={`${styles.dispatchGate} ${dispatchDecision.allowed ? dispatchDecision.mode === 'released_at_risk' ? styles.dispatchRisk : styles.dispatchReady : jobReadiness?.status === 'blocked' ? styles.dispatchBlocked : styles.dispatchHold}`}><div><span>FIELD START GATE · {jobReadiness?.status.replace('_', ' ').toUpperCase()}</span><strong>{dispatchDecision.allowed ? dispatchDecision.mode === 'released_at_risk' ? 'Operations released this AT RISK Work Order for start.' : 'Work Order is dispatch READY.' : jobReadiness?.status === 'blocked' ? 'Work Order is BLOCKED and cannot start.' : 'Work Order is AT RISK and awaiting Operations release.'}</strong><p>{dispatchDecision.reason}</p>{dispatchDecision.release ? <small>{dispatchDecision.release.id} · {dispatchDecision.release.authorizedBy} · {new Date(dispatchDecision.release.authorizedAt).toLocaleString()}</small> : null}</div><a href="/work-orders/">Open Job Readiness →</a></section> : <section className={styles.startedGate}><span>FIELD START RECORDED · {execution?.startAuthority === 'released_at_risk' ? 'AT RISK RELEASE' : 'READY'}</span><strong>{execution?.startedAt ? new Date(execution.startedAt).toLocaleString() : 'Execution already active'}</strong><p>{execution?.startAuthorityReason || 'Legacy preview start record without explicit start-authority metadata.'}{execution?.dispatchReleaseId ? ` · Release ${execution.dispatchReleaseId}` : ''}</p></section>}
 
       {!scopeGate.complete ? <section className={styles.scopeGate}><div><span>EXACT EQUIPMENT SCOPE REQUIRED</span><strong>{scopeGate.reason}</strong><p>Exact scope is also a hard consolidated-readiness blocker.</p></div><a href="/work-orders/scope/">Set Exact Scope →</a></section> : null}
 
