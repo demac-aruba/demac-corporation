@@ -3,19 +3,23 @@ import type { BrowserWorkOrderRecord } from './browser-operational';
 
 export const BROWSER_INVENTORY_MOVEMENTS_KEY = 'demac.erp-next.inventory.movements.v1';
 
+export type BrowserInventoryMovementType = 'job_consumption' | 'transfer_out' | 'transfer_in';
+export type BrowserInventoryMovementSource = 'field_execution' | 'inventory_transfer';
+
 export type BrowserInventoryMovement = {
   id: string;
-  workOrderId: string;
-  appointmentId: string;
   itemCode: string;
   itemName: string;
   quantity: number;
   unit: 'ea' | 'lb';
   sourceLocation: string;
   destination: string;
-  movementType: 'job_consumption';
-  source: 'field_execution';
+  movementType: BrowserInventoryMovementType;
+  source: BrowserInventoryMovementSource;
   occurredAt: string;
+  workOrderId?: string;
+  appointmentId?: string;
+  transferId?: string;
 };
 
 type MovementTemplate = {
