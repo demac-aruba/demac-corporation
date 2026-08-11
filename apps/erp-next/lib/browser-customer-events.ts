@@ -1,5 +1,6 @@
 import { BROWSER_BILLING_DRAFTS_KEY, type BrowserBillingDraft } from './browser-billing';
 import type { BrowserFieldExecutionRecord, BrowserOfficeReviewRecord } from './browser-field';
+import { BROWSER_DISPATCH_RELEASES_KEY, type BrowserDispatchAtRiskRelease } from './browser-job-readiness';
 import type { BrowserAppointmentRecord, BrowserWorkOrderRecord } from './browser-operational';
 import { BROWSER_BANK_PAYMENTS_KEY, BROWSER_PAYMENT_ALLOCATIONS_KEY, type BrowserBankPayment, type BrowserPaymentAllocation } from './browser-receivables';
 import { BROWSER_REPORT_DELIVERIES_KEY, type BrowserReportDeliveryRecord } from './browser-report-delivery';
@@ -14,7 +15,7 @@ export type BrowserCustomerEvent = {
   title: string;
   detail: string;
   entityId?: string;
-  module: 'Scheduling' | 'Work Orders' | 'Field' | 'Office Review' | 'Communications' | 'Finance';
+  module: 'Scheduling' | 'Work Orders' | 'Operations' | 'Field' | 'Office Review' | 'Communications' | 'Finance';
   tone: CustomerEventTone;
 };
 
@@ -31,6 +32,14 @@ function resolveCustomerId(orderId: string, orders: BrowserWorkOrderRecord[]) {
   return orders.find((order) => order.id === orderId)?.customerId;
 }
 
+function releaseRiskDimensions(release: BrowserDispatchAtRiskRelease) {
+  const labels = release.riskSignature
+    .split('|')
+    .map((part) => part.split(':')[0]?.replaceAll('_', ' ').trim())
+    .filter(Boolean);
+  return labels.length ? labels.join(', ') : 'risk snapshot unavailable';
+}
+
 export function loadCustomerEventSnapshot(customerId: string): CustomerEventSnapshot {
   const appointments = loadBrowserValue<BrowserAppointmentRecord[]>(browserKeys.appointments, []);
   const orders = loadBrowserValue<BrowserWorkOrderRecord[]>(browserKeys.workOrders, []);
@@ -40,6 +49,7 @@ export function loadCustomerEventSnapshot(customerId: string): CustomerEventSnap
   const billingDrafts = loadBrowserValue<BrowserBillingDraft[]>(BROWSER_BILLING_DRAFTS_KEY, []);
   const payments = loadBrowserValue<BrowserBankPayment[]>(BROWSER_BANK_PAYMENTS_KEY, []);
   const allocations = loadBrowserValue<BrowserPaymentAllocation[]>(BROWSER_PAYMENT_ALLOCATIONS_KEY, []);
+  const dispatchReleases = loadBrowserValue<BrowserDispatchAtRiskRelease[]>(BROWSER_DISPATCH_RELEASES_KEY, []);
 
   const events: BrowserCustomerEvent[] = [];
 
@@ -78,6 +88,21 @@ export function loadCustomerEventSnapshot(customerId: string): CustomerEventSnap
       entityId: order.id,
       module: 'Work Orders',
       tone: 'blue',
+    });
+  }
+
+  for (const release of dispatchReleases) {
+    const resolvedCustomerId = resolveCustomerId(release.workOrderId, orders);
+    if (resolvedCustomerId !== customerId) continue;
+    events.push({
+      id: `EV-${release.id}`,
+      customerId,
+      occurredAt: release.authorizedAt,
+      title: 'Operations authorized AT RISK dispatch',
+      detail: `${release.workOrderId} · ${release.reason} · accepted risk dimensions: ${releaseRiskDimensions(release)} · authorized by ${release.authorizedBy}`,
+      entityId: release.id,
+      module: 'Operations',
+      tone: 'amber',
     });
   }
 
