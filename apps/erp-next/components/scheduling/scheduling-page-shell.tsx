@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { BrowserDispatchOperations } from './browser-dispatch-operations';
 import { BrowserDispatchReadinessBoard } from './browser-dispatch-readiness-board';
 import { SchedulingOverviewV2 } from './scheduling-overview-v2';
+import readableStyles from './scheduling-readable-type.module.css';
 import styles from './scheduling-page-shell.module.css';
 
 type SchedulingView = 'schedule' | 'dispatch' | 'readiness';
@@ -12,7 +13,7 @@ export function SchedulingPageShell() {
   const [view, setView] = useState<SchedulingView>('schedule');
 
   return (
-    <div className={styles.shell}>
+    <div className={`${styles.shell} ${readableStyles.readable}`}>
       <nav className={styles.viewNav} aria-label="Scheduling workspace views">
         <div>
           <span>Scheduling workspace</span>
