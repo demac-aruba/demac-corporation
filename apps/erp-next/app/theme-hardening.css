@@ -1,0 +1,128 @@
+/* ERP Next theme hardening
+   Keeps future modules readable in both light and dark modes by forcing
+   native controls and generic semantic content to consume the design tokens. */
+
+:root {
+  --control-bg: var(--surface-2);
+  --control-text: var(--text);
+  --control-placeholder: var(--muted-2);
+  --focus-ring: color-mix(in srgb, var(--brand) 38%, transparent);
+}
+
+html[data-theme='dark'] {
+  --control-bg: var(--surface-2);
+  --control-text: var(--text);
+  --control-placeholder: var(--muted-2);
+}
+
+body,
+.erp-frame,
+.erp-main,
+.erp-content {
+  color: var(--text);
+}
+
+button,
+input,
+select,
+textarea,
+option {
+  font: inherit;
+  color: var(--control-text);
+}
+
+input,
+select,
+textarea {
+  border-color: var(--border);
+  background-color: var(--control-bg);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--control-placeholder);
+  opacity: 1;
+}
+
+select option,
+select optgroup {
+  color: var(--text);
+  background: var(--surface);
+}
+
+button:not(:disabled),
+select:not(:disabled),
+input:not(:disabled),
+textarea:not(:disabled) {
+  accent-color: var(--brand);
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--focus-ring);
+}
+
+/* Generic content should inherit the active foreground unless a component
+   intentionally applies a semantic token such as success/warning/danger. */
+.erp-content :where(article, section, aside, header, footer, main, nav, form, fieldset, table, thead, tbody, tfoot, tr, th, td, dl, dt, dd) {
+  color: inherit;
+}
+
+.erp-content :where(h1, h2, h3, h4, h5, h6) {
+  color: var(--text);
+}
+
+.erp-content :where(label, legend) {
+  color: var(--text);
+}
+
+html[data-theme='dark'] .erp-content :where(
+  [data-tone='default'],
+  [data-text='primary'],
+  .text-primary,
+  .primary-text
+) {
+  color: var(--text) !important;
+}
+
+html[data-theme='dark'] .erp-content :where(
+  [data-tone='muted'],
+  [data-text='secondary'],
+  .text-muted,
+  .secondary-text
+) {
+  color: var(--muted) !important;
+}
+
+/* Guard against browser defaults on disabled controls. */
+input:disabled,
+select:disabled,
+textarea:disabled,
+button:disabled {
+  color: var(--muted);
+  opacity: .72;
+}
+
+/* Native autofill can otherwise reintroduce an unreadable light treatment. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+  -webkit-text-fill-color: var(--text);
+  caret-color: var(--text);
+  box-shadow: 0 0 0 1000px var(--surface-2) inset;
+  transition: background-color 9999s ease-out 0s;
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --border: color-mix(in srgb, var(--text) 28%, var(--surface));
+    --border-strong: color-mix(in srgb, var(--text) 40%, var(--surface));
+  }
+}
