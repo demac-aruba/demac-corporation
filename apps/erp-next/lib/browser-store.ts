@@ -6,6 +6,7 @@ export const browserKeys = {
   workOrders: 'demac.erp-next.operations.work-orders.v1',
   fieldExecutions: 'demac.erp-next.field.executions.v1',
   officeReviews: 'demac.erp-next.office.reviews.v1',
+  dispatchAssignments: 'demac.erp-next.operations.dispatch-assignments.v2',
 } as const;
 
 export function loadBrowserValue<T>(key: string, fallback: T): T {
