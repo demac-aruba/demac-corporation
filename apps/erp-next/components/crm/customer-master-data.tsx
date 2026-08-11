@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
+import { browserKeys, loadBrowserValue, saveBrowserValue } from '@/lib/browser-store';
 import { AssetDetailDrawer, SiteDetailDrawer, type AssetDetail, type SiteDetail } from './relationship-detail';
 import styles from './customer-master-data.module.css';
 
@@ -131,6 +132,7 @@ type MasterTab = 'Contacts' | 'Properties' | 'Equipment';
 type ContactRow = { id: string; name: string; role: string; phone: string; email: string; primary: boolean };
 type SiteRow = SiteDetail;
 type AssetRow = AssetDetail;
+type MasterSnapshot = { contacts: ContactRow[]; sites: SiteRow[]; assets: AssetRow[] };
 
 const initialContacts: ContactRow[] = [
   { id: 'CT-1', name: 'Primary Contact', role: 'Decision maker', phone: '+297 560 1000', email: 'contact@example.com', primary: true },
@@ -141,14 +143,39 @@ const initialSites: SiteRow[] = [
 const initialAssets: AssetRow[] = [
   { id: 'AC-1', site: 'Primary Property', type: 'Split', name: 'Living Room', brand: 'Adina', capacity: '18,000 BTU', serial: '—', status: 'Active' },
 ];
+const seededDemoCustomers = new Set(['C-1042', 'C-0887', 'C-1201', 'C-1118', 'C-0741']);
 
-export function CustomerMasterDataTab({ tab, customerName }: { tab: MasterTab; customerName: string }) {
-  const [contacts, setContacts] = useState(initialContacts);
-  const [sites, setSites] = useState(initialSites);
-  const [assets, setAssets] = useState(initialAssets);
+function fallbackMasterData(customerId: string): MasterSnapshot {
+  if (!seededDemoCustomers.has(customerId)) return { contacts: [], sites: [], assets: [] };
+  return { contacts: initialContacts, sites: initialSites, assets: initialAssets };
+}
+
+export function CustomerMasterDataTab({ tab, customerId, customerName }: { tab: MasterTab; customerId: string; customerName: string }) {
+  const fallback = useMemo(() => fallbackMasterData(customerId), [customerId]);
+  const [contacts, setContacts] = useState<ContactRow[]>(fallback.contacts);
+  const [sites, setSites] = useState<SiteRow[]>(fallback.sites);
+  const [assets, setAssets] = useState<AssetRow[]>(fallback.assets);
+  const [loadedCustomerId, setLoadedCustomerId] = useState<string | null>(null);
   const [editor, setEditor] = useState<MasterTab | null>(null);
   const [selectedSite, setSelectedSite] = useState<SiteRow | null>(null);
   const [selectedAsset, setSelectedAsset] = useState<AssetRow | null>(null);
+
+  useEffect(() => {
+    const nextFallback = fallbackMasterData(customerId);
+    const snapshot = loadBrowserValue<MasterSnapshot>(browserKeys.customerMaster(customerId), nextFallback);
+    setContacts(snapshot.contacts);
+    setSites(snapshot.sites);
+    setAssets(snapshot.assets);
+    setLoadedCustomerId(customerId);
+    setEditor(null);
+    setSelectedSite(null);
+    setSelectedAsset(null);
+  }, [customerId]);
+
+  useEffect(() => {
+    if (loadedCustomerId !== customerId) return;
+    saveBrowserValue(browserKeys.customerMaster(customerId), { contacts, sites, assets });
+  }, [assets, contacts, customerId, loadedCustomerId, sites]);
 
   const rows = tab === 'Contacts' ? contacts : tab === 'Properties' ? sites : assets;
   const copy = tab === 'Contacts'
