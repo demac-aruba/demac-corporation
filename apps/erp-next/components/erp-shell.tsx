@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
+import { TextSizeControl } from '@/components/accessibility/text-size-control';
 import { principalRoleLabel, useAuth } from '@/components/auth/auth-provider';
 import { navigationGroups } from '@/lib/navigation';
 
@@ -159,7 +160,7 @@ export function ErpShell({ children }: Readonly<{ children: React.ReactNode }>) 
                 <div className="avatar">{initials(principal.displayName)}</div>
                 <div><strong>{principal.displayName}</strong><span>{status === 'loading' ? 'Checking session…' : principalRoleLabel(principal)}</span></div>
               </button>
-              {sessionOpen ? <div className="session-popover"><header><strong>{principal.displayName}</strong><span>{principalRoleLabel(principal)}</span></header><div><span>Security mode</span><strong>{mode === 'firebase' ? 'Firebase authenticated' : 'Preview Owner mode'}</strong></div><div><span>Firebase client</span><strong>{firebaseConfigured ? 'Configuration detected' : 'Configuration not detected'}</strong></div>{mode === 'firebase' ? <button className="danger" type="button" onClick={logout}>Sign out and return to Preview Mode</button> : <button type="button" onClick={() => navigate('/login')}>{firebaseConfigured ? 'Sign in with Firebase' : 'Open security / sign-in status'} →</button>}</div> : null}
+              {sessionOpen ? <div className="session-popover"><header><strong>{principal.displayName}</strong><span>{principalRoleLabel(principal)}</span></header><div><span>Security mode</span><strong>{mode === 'firebase' ? 'Firebase authenticated' : 'Preview Owner mode'}</strong></div><div><span>Firebase client</span><strong>{firebaseConfigured ? 'Configuration detected' : 'Configuration not detected'}</strong></div><TextSizeControl compact />{mode === 'firebase' ? <button className="danger" type="button" onClick={logout}>Sign out and return to Preview Mode</button> : <button type="button" onClick={() => navigate('/login')}>{firebaseConfigured ? 'Sign in with Firebase' : 'Open security / sign-in status'} →</button>}</div> : null}
             </div>
           </div>
         </header>
