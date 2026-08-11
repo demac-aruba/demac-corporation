@@ -6,6 +6,8 @@ export type BrowserAppointmentStatus = 'temporary_hold' | 'confirmed' | 'cancell
 export type BrowserAppointmentRecord = {
   id: string;
   dateKey: string;
+  customerId?: string;
+  siteId?: string;
   customer: string;
   site: string;
   sector: string;
@@ -25,6 +27,8 @@ export type BrowserAppointmentRecord = {
 export type BrowserWorkOrderRecord = {
   id: string;
   appointmentId: string;
+  customerId?: string;
+  siteId?: string;
   customer: string;
   site: string;
   sector: string;
@@ -50,6 +54,8 @@ export function createBrowserWorkOrder(appointment: BrowserAppointmentRecord): B
   return {
     id: appointment.workOrderId ?? `WO-${suffix}`,
     appointmentId: appointment.id,
+    customerId: appointment.customerId,
+    siteId: appointment.siteId,
     customer: appointment.customer,
     site: appointment.site,
     sector: appointment.sector,

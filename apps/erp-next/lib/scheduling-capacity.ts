@@ -1,5 +1,5 @@
 import type { BookingRequest, CandidateSlot, DispatchJob, SchedulingSettings, VanResource } from './scheduling';
-import { calculateDurationMinutes, defaultSchedulingSettings, findCandidateSlots, minutesToTime, previewVans, sectorsCompatible, timeToMinutes } from './scheduling';
+import { calculateDurationMinutes, findCandidateSlots, getPresetDurationMinutes, getRuntimeSchedulingSettings, minutesToTime, previewVans, sectorsCompatible, timeToMinutes } from './scheduling';
 
 export type OperationalDay = {
   dateKey: string;
@@ -77,7 +77,7 @@ function addSameSiteWorkingMinutes(quantity: number, settings: SchedulingSetting
   const start = timeToMinutes('08:30');
   const lunchStart = timeToMinutes(settings.lunchStart);
   const lunchEnd = timeToMinutes(settings.lunchEnd);
-  const minutesNeeded = quantity * 60;
+  const minutesNeeded = quantity * getPresetDurationMinutes('standard_service', settings);
   const beforeLunch = lunchStart - start;
   if (minutesNeeded <= beforeLunch) return minutesToTime(start + minutesNeeded);
   return minutesToTime(lunchEnd + (minutesNeeded - beforeLunch));
@@ -94,14 +94,15 @@ function conflictsWithSpan(jobs: DispatchJob[], vanId: string, start: string, en
   });
 }
 
-export function findExtendedSameSitePlan(request: BookingRequest, jobs: DispatchJob[], vans: VanResource[] = previewVans, settings: SchedulingSettings = defaultSchedulingSettings): CandidateSlot[] {
+export function findExtendedSameSitePlan(request: BookingRequest, jobs: DispatchJob[], vans: VanResource[] = previewVans, settings: SchedulingSettings = getRuntimeSchedulingSettings()): CandidateSlot[] {
   if (request.presetId !== 'standard_service') return [];
   if (request.quantity < 4 || request.quantity > settings.maxStandardUnitsSameSiteSingleVan) return [];
   if (!restrictionAllowsMorningStart(request)) return [];
 
   const start = '08:30';
   const end = addSameSiteWorkingMinutes(request.quantity, settings);
-  if (timeToMinutes(end) > timeToMinutes('16:30')) return [];
+  const latestEnd = timeToMinutes(settings.workdayEnd) - settings.routeMarginMinutes;
+  if (timeToMinutes(end) > latestEnd) return [];
 
   return vans
     .filter((van) => van.active && !conflictsWithSpan(jobs, van.id, start, end))
@@ -114,6 +115,7 @@ export function findExtendedSameSitePlan(request: BookingRequest, jobs: Dispatch
       score: 132 - index * 4,
       reasons: [
         `${request.quantity} same-site services planned continuously across the operational day`,
+        `Configured standard-service duration: ${getPresetDurationMinutes('standard_service', settings)} minutes per unit`,
         'Lunch is skipped as working time rather than counted as customer-service duration',
         'No property-to-property transit is required',
       ],
@@ -122,7 +124,7 @@ export function findExtendedSameSitePlan(request: BookingRequest, jobs: Dispatch
     }));
 }
 
-export function findCandidateSlotsV2(request: BookingRequest, jobs: DispatchJob[], vans: VanResource[] = previewVans, settings: SchedulingSettings = defaultSchedulingSettings) {
+export function findCandidateSlotsV2(request: BookingRequest, jobs: DispatchJob[], vans: VanResource[] = previewVans, settings: SchedulingSettings = getRuntimeSchedulingSettings()) {
   const extended = findExtendedSameSitePlan(request, jobs, vans, settings);
   if (extended.length) return extended;
   return findCandidateSlots(request, jobs, vans, settings);
@@ -141,10 +143,10 @@ function saturdayAnchor(jobs: DispatchJob[], vanId: string) {
   return jobs.filter((job) => job.vanId === vanId && job.status !== 'cancelled').sort((a, b) => a.start.localeCompare(b.start))[0];
 }
 
-export function findSaturdaySlots(request: BookingRequest, jobs: DispatchJob[], vans: VanResource[] = previewVans): CandidateSlot[] {
-  const duration = calculateDurationMinutes(request);
+export function findSaturdaySlots(request: BookingRequest, jobs: DispatchJob[], vans: VanResource[] = previewVans, settings: SchedulingSettings = getRuntimeSchedulingSettings()): CandidateSlot[] {
+  const duration = calculateDurationMinutes(request, settings);
   const starts = ['09:00', '10:00', '11:00', '12:00'];
-  const dayEnd = timeToMinutes('13:00');
+  const dayEnd = timeToMinutes('13:00') - settings.routeMarginMinutes;
   const candidates: CandidateSlot[] = [];
 
   for (const van of vans.filter((resource) => resource.active)) {
@@ -163,7 +165,7 @@ export function findSaturdaySlots(request: BookingRequest, jobs: DispatchJob[], 
         segment: 'am',
         sector: request.sector,
         score: (anchor?.sector === request.sector ? 120 : 108) - candidates.length,
-        reasons: [anchor ? 'Saturday route-compatible with existing anchor' : 'Open Saturday short-shift capacity'],
+        reasons: [anchor ? 'Saturday route-compatible with existing anchor' : 'Open Saturday short-shift capacity', `Configured duration: ${duration} minutes`, `Configured route buffer: ${settings.routeMarginMinutes} minutes`],
         requiresSupportVan: false,
         primaryUnits: request.quantity,
       });
@@ -172,9 +174,9 @@ export function findSaturdaySlots(request: BookingRequest, jobs: DispatchJob[], 
   return candidates.sort((a, b) => b.score - a.score).slice(0, 8);
 }
 
-export function findCandidateSlotsForDay(day: OperationalDay, request: BookingRequest, jobs: DispatchJob[], vans: VanResource[] = previewVans, settings: SchedulingSettings = defaultSchedulingSettings) {
+export function findCandidateSlotsForDay(day: OperationalDay, request: BookingRequest, jobs: DispatchJob[], vans: VanResource[] = previewVans, settings: SchedulingSettings = getRuntimeSchedulingSettings()) {
   if (!day.isOpen) return [];
-  if (day.weekday === 'Sat') return findSaturdaySlots(request, jobs, vans);
+  if (day.weekday === 'Sat') return findSaturdaySlots(request, jobs, vans, settings);
   return findCandidateSlotsV2(request, jobs, vans, settings);
 }
 

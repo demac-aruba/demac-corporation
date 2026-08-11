@@ -1,37 +1,32 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { browserKeys, loadBrowserValue, saveBrowserValue } from '@/lib/browser-store';
-
-type BusinessSettings = {
-  serviceMinutes: number;
-  deepMinutes: number;
-  bufferMinutes: number;
-  afterHours: string;
-};
-
-const defaults: BusinessSettings = { serviceMinutes: 60, deepMinutes: 90, bufferMinutes: 30, afterHours: '17:00' };
+import { browserBusinessDefaults, loadBrowserBusinessSettings, normalizeBrowserBusinessSettings, type BrowserBusinessSettings } from '@/lib/browser-scheduling-settings';
+import { browserKeys, saveBrowserValue } from '@/lib/browser-store';
 
 export function SystemSettingsWorkspace() {
-  const [settings, setSettings] = useState<BusinessSettings>(defaults);
+  const [settings, setSettings] = useState<BrowserBusinessSettings>(browserBusinessDefaults);
   const [ready, setReady] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
 
   useEffect(() => {
-    setSettings(loadBrowserValue(browserKeys.businessSettings, defaults));
+    setSettings(loadBrowserBusinessSettings());
     setReady(true);
   }, []);
 
-  const update = <K extends keyof BusinessSettings>(key: K, value: BusinessSettings[K]) => {
+  const update = <K extends keyof BrowserBusinessSettings>(key: K, value: BrowserBusinessSettings[K]) => {
     setSettings((current) => ({ ...current, [key]: value }));
     setDirty(true);
   };
 
   const saveDraft = () => {
-    saveBrowserValue(browserKeys.businessSettings, settings);
+    const normalized = normalizeBrowserBusinessSettings(settings);
+    saveBrowserValue(browserKeys.businessSettings, normalized);
+    setSettings(normalized);
     setDirty(false);
     setSavedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+    window.dispatchEvent(new Event('demac:business-settings-saved'));
   };
 
   return (
@@ -43,18 +38,24 @@ export function SystemSettingsWorkspace() {
 
       <section className="sg-settings-grid">
         <article className="panel sg-setting-card">
-          <header><div><span>Scheduling</span><h2>Work Durations</h2></div><b>Configurable</b></header>
-          <div className="sg-form-grid"><label>Standard service<input type="number" min="30" step="15" value={settings.serviceMinutes} onChange={(e)=>update('serviceMinutes',Number(e.target.value))}/><small>minutes per standard booking unit</small></label><label>Deep cleaning<input type="number" min="45" step="15" value={settings.deepMinutes} onChange={(e)=>update('deepMinutes',Number(e.target.value))}/><small>default duration before travel rules</small></label><label>Operational buffer<input type="number" min="0" step="5" value={settings.bufferMinutes} onChange={(e)=>update('bufferMinutes',Number(e.target.value))}/><small>margin for delays / route recovery</small></label><label>Overtime threshold<input type="time" value={settings.afterHours} onChange={(e)=>update('afterHours',e.target.value)}/><small>work after this time is flagged</small></label></div>
+          <header><div><span>Scheduling</span><h2>Work Durations</h2></div><b>Live Runtime</b></header>
+          <div className="sg-form-grid">
+            <label>Standard service<input type="number" min="30" max="480" step="15" value={settings.serviceMinutes} onChange={(e)=>update('serviceMinutes',Number(e.target.value))}/><small>minutes per standard-service A/C unit</small></label>
+            <label>Deep cleaning<input type="number" min="45" max="480" step="15" value={settings.deepMinutes} onChange={(e)=>update('deepMinutes',Number(e.target.value))}/><small>minutes per deep-cleaning A/C unit</small></label>
+            <label>Operational buffer<input type="number" min="0" max="120" step="5" value={settings.bufferMinutes} onChange={(e)=>update('bufferMinutes',Number(e.target.value))}/><small>margin before lunch / end-of-day route recovery</small></label>
+            <label>Overtime threshold<input type="time" value={settings.afterHours} onChange={(e)=>update('afterHours',e.target.value)}/><small>work after this time is flagged; this does not extend scheduling capacity</small></label>
+          </div>
+          <div className="sg-runtime-note"><strong>Operational effect</strong><p>After saving, Scheduling uses these service/deep-cleaning durations and the route buffer when calculating valid future options. Existing appointments keep their recorded start/end snapshots and are not silently rewritten.</p></div>
         </article>
 
         <article className="panel sg-setting-card">
           <header><div><span>Operations</span><h2>Working Calendar</h2></div><b>Protected</b></header>
-          <div className="sg-rule-table"><div><strong>Monday–Friday</strong><span>08:00–17:00</span><small>Lunch 12:00–13:00</small></div><div><strong>Saturday</strong><span>09:00–13:00</span><small>Short operating day</small></div><div><strong>Sunday</strong><span>Closed</span><small>No standard residential scheduling</small></div><div><strong>Emergency</strong><span>Commercial only</span><small>Requires governed exception path</small></div></div>
+          <div className="sg-rule-table"><div><strong>Monday–Friday</strong><span>08:00–17:00</span><small>Lunch 12:00–13:00</small></div><div><strong>Saturday</strong><span>09:00–13:00</span><small>Short operating day; route buffer still protects closing margin</small></div><div><strong>Sunday</strong><span>Closed</span><small>No standard residential scheduling</small></div><div><strong>Emergency</strong><span>Commercial only</span><small>Requires governed exception path</small></div></div>
         </article>
 
         <article className="panel sg-setting-card">
           <header><div><span>Dispatch</span><h2>Geography & Capacity</h2></div><b>Configurable</b></header>
-          <div className="sg-rule-table"><div><strong>AM routing</strong><span>First AM job anchors sector</span><small>Later jobs same/adjacent/on route</small></div><div><strong>PM routing</strong><span>First PM job anchors sector</span><small>Afternoon cluster recalculated independently</small></div><div><strong>Standard capacity</strong><span>6 jobs / team / day</span><small>Subject to duration and route constraints</small></div><div><strong>Single-property capacity</strong><span>Up to 7 services</span><small>Large jobs may link support van</small></div></div>
+          <div className="sg-rule-table"><div><strong>AM routing</strong><span>First AM job anchors sector</span><small>Later jobs same/adjacent/on route</small></div><div><strong>PM routing</strong><span>First PM job anchors sector</span><small>Afternoon cluster recalculated independently</small></div><div><strong>Standard capacity</strong><span>6 jobs / team / day</span><small>Subject to configured duration and route constraints</small></div><div><strong>Single-property capacity</strong><span>Up to 7 services</span><small>Large jobs may link support van; runtime duration must still fit the day</small></div></div>
         </article>
 
         <article className="panel sg-setting-card">
@@ -63,7 +64,7 @@ export function SystemSettingsWorkspace() {
         </article>
       </section>
 
-      <section className="panel sg-change-banner"><div><strong>{dirty ? 'Unsaved browser configuration changes' : 'Browser configuration draft saved'}</strong><p>These values now persist on this browser for live workflow testing. Firebase-backed versioning, permissions and audit events will replace this preview store when production persistence is enabled.</p></div><span>{dirty ? 'Draft changed' : savedAt ? `Saved ${savedAt}` : 'Loaded from browser'}</span></section>
+      <section className="panel sg-change-banner"><div><strong>{dirty ? 'Unsaved browser configuration changes' : 'Browser configuration draft saved'}</strong><p>Saved Standard Service, Deep Cleaning and Operational Buffer values now feed the Scheduling runtime for live workflow testing. Firebase-backed versioning, permissions and immutable configuration audit events will replace this preview store when production persistence is enabled.</p></div><span>{dirty ? 'Draft changed' : savedAt ? `Saved ${savedAt}` : 'Loaded from browser'}</span></section>
     </div>
   );
 }
