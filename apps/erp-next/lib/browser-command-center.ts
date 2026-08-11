@@ -1,7 +1,7 @@
 import { BROWSER_BILLING_DRAFTS_KEY, type BrowserBillingDraft } from './browser-billing';
 import type { BrowserFieldExecutionRecord, BrowserOfficeReviewRecord } from './browser-field';
 import { BROWSER_INVENTORY_MOVEMENTS_KEY, type BrowserInventoryMovement } from './browser-inventory-ledger';
-import { deriveBrowserJobReadiness, fieldStartDecision, loadDispatchAtRiskReleases, loadJobReadinessChecks } from './browser-job-readiness';
+import { deriveBrowserJobReadiness, fieldStartDecision, loadDispatchAtRiskReleases } from './browser-job-readiness';
 import type { BrowserAppointmentRecord, BrowserWorkOrderRecord } from './browser-operational';
 import { BROWSER_BANK_PAYMENTS_KEY, BROWSER_RECEIVABLES_KEY, type BrowserBankPayment, type BrowserReceivableInvoice } from './browser-receivables';
 import { BROWSER_REPORT_DELIVERIES_KEY, type BrowserReportDeliveryRecord } from './browser-report-delivery';
@@ -43,7 +43,6 @@ export function loadBrowserCommandCenterSnapshot(): BrowserCommandCenterSnapshot
   const receivables = loadBrowserValue<BrowserReceivableInvoice[]>(BROWSER_RECEIVABLES_KEY, []);
   const payments = loadBrowserValue<BrowserBankPayment[]>(BROWSER_BANK_PAYMENTS_KEY, []);
   const scopes = loadWorkOrderScopes();
-  const readinessChecks = loadJobReadinessChecks();
   const dispatchReleases = loadDispatchAtRiskReleases();
 
   const scopedIds = new Set(scopes.filter((scope) => scope.status === 'complete' && scope.items.length === scope.expectedQuantity).map((scope) => scope.workOrderId));
@@ -52,7 +51,7 @@ export function loadBrowserCommandCenterSnapshot(): BrowserCommandCenterSnapshot
   const approvedReviewIds = new Set(reviews.filter((review) => review.status === 'approved').map((review) => review.id));
   const sentReviewIds = new Set(deliveries.map((delivery) => delivery.reviewId));
   const activeWorkOrders = workOrders.filter((order) => !submittedIds.has(order.id));
-  const activeReadiness = activeWorkOrders.map((order) => deriveBrowserJobReadiness(order, { checks: readinessChecks, appointments, executions: fieldExecutions }));
+  const activeReadiness = activeWorkOrders.map((order) => deriveBrowserJobReadiness(order, { appointments, executions: fieldExecutions }));
   const dispatchReady = activeReadiness.filter((item) => item.status === 'ready').length;
   const dispatchAtRiskStates = activeReadiness.filter((item) => item.status === 'at_risk');
   const dispatchAtRisk = dispatchAtRiskStates.length;
