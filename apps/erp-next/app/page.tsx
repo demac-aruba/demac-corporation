@@ -1,9 +1,8 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import './landing.css';
 
 export const metadata: Metadata = {
-  title: 'DEMAC Professional Cooling Solutions | Aruba',
+  title: { absolute: 'DEMAC Professional Cooling Solutions | Aruba' },
   description:
     'DEMAC Professional Cooling Solutions in Aruba. Our new website is currently under construction while we continue providing professional air conditioning solutions.',
   alternates: { canonical: '/' },
