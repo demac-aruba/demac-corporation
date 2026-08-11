@@ -5,6 +5,7 @@ import type { BrowserAppointmentRecord, BrowserWorkOrderRecord } from './browser
 import { BROWSER_BANK_PAYMENTS_KEY, BROWSER_PAYMENT_ALLOCATIONS_KEY, type BrowserBankPayment, type BrowserPaymentAllocation } from './browser-receivables';
 import { BROWSER_REPORT_DELIVERIES_KEY, type BrowserReportDeliveryRecord } from './browser-report-delivery';
 import { browserKeys, loadBrowserValue } from './browser-store';
+import { loadDispatchEvents } from './browser-dispatch-history';
 
 export type CustomerEventTone = 'blue' | 'green' | 'amber' | 'purple' | 'red' | 'neutral';
 
@@ -15,7 +16,7 @@ export type BrowserCustomerEvent = {
   title: string;
   detail: string;
   entityId?: string;
-  module: 'Scheduling' | 'Work Orders' | 'Operations' | 'Field' | 'Office Review' | 'Communications' | 'Finance';
+  module: 'Scheduling' | 'Work Orders' | 'Operations' | 'Dispatch' | 'Field' | 'Office Review' | 'Communications' | 'Finance';
   tone: CustomerEventTone;
 };
 
@@ -56,6 +57,7 @@ export function loadCustomerEventSnapshot(customerId: string): CustomerEventSnap
   const payments = loadBrowserValue<BrowserBankPayment[]>(BROWSER_BANK_PAYMENTS_KEY, []);
   const allocations = loadBrowserValue<BrowserPaymentAllocation[]>(BROWSER_PAYMENT_ALLOCATIONS_KEY, []);
   const dispatchReleases = loadBrowserValue<BrowserDispatchAtRiskRelease[]>(BROWSER_DISPATCH_RELEASES_KEY, []);
+  const dispatchEvents = loadDispatchEvents();
 
   const events: BrowserCustomerEvent[] = [];
 
@@ -109,6 +111,21 @@ export function loadCustomerEventSnapshot(customerId: string): CustomerEventSnap
       entityId: release.id,
       module: 'Operations',
       tone: 'amber',
+    });
+  }
+
+  for (const dispatchEvent of dispatchEvents) {
+    const resolvedCustomerId = resolveCustomerId(dispatchEvent.workOrderId, orders);
+    if (resolvedCustomerId !== customerId) continue;
+    events.push({
+      id: `EV-${dispatchEvent.id}`,
+      customerId,
+      occurredAt: dispatchEvent.occurredAt,
+      title: `${dispatchEvent.vanId} ${dispatchEvent.toStage.replaceAll('_', ' ')}`,
+      detail: `${dispatchEvent.workOrderId} · ${dispatchEvent.fromStage.replaceAll('_', ' ')} → ${dispatchEvent.toStage.replaceAll('_', ' ')} · recorded by ${dispatchEvent.actor}${dispatchEvent.note ? ` · ${dispatchEvent.note}` : ''}`,
+      entityId: dispatchEvent.id,
+      module: 'Dispatch',
+      tone: dispatchEvent.toStage === 'on_site' ? 'green' : dispatchEvent.toStage === 'departed' || dispatchEvent.toStage === 'in_transit' ? 'blue' : 'neutral',
     });
   }
 
