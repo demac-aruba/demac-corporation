@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { TextSizeControl } from '@/components/accessibility/text-size-control';
 import { browserBusinessDefaults, loadBrowserBusinessSettings, normalizeBrowserBusinessSettings, type BrowserBusinessSettings } from '@/lib/browser-scheduling-settings';
 import { browserKeys, saveBrowserValue } from '@/lib/browser-store';
 
@@ -38,6 +39,12 @@ export function SystemSettingsWorkspace() {
 
       <section className="sg-settings-grid">
         <article className="panel sg-setting-card">
+          <header><div><span>My Preferences</span><h2>Accessibility</h2></div><b>Per User</b></header>
+          <TextSizeControl />
+          <div className="sg-runtime-note"><strong>Personal preference</strong><p>The approved default typography is Standard. Each user may enlarge operational text by 1–4 px without changing H1/H2/H3 page titles. The preference is saved automatically for the signed-in user and loads again when the ERP opens on this browser.</p></div>
+        </article>
+
+        <article className="panel sg-setting-card">
           <header><div><span>Scheduling</span><h2>Work Durations</h2></div><b>Live Runtime</b></header>
           <div className="sg-form-grid">
             <label>Standard service<input type="number" min="30" max="480" step="15" value={settings.serviceMinutes} onChange={(e)=>update('serviceMinutes',Number(e.target.value))}/><small>minutes per standard-service A/C unit</small></label>
@@ -64,7 +71,7 @@ export function SystemSettingsWorkspace() {
         </article>
       </section>
 
-      <section className="panel sg-change-banner"><div><strong>{dirty ? 'Unsaved browser configuration changes' : 'Browser configuration draft saved'}</strong><p>Saved Standard Service, Deep Cleaning and Operational Buffer values now feed the Scheduling runtime for live workflow testing. Firebase-backed versioning, permissions and immutable configuration audit events will replace this preview store when production persistence is enabled.</p></div><span>{dirty ? 'Draft changed' : savedAt ? `Saved ${savedAt}` : 'Loaded from browser'}</span></section>
+      <section className="panel sg-change-banner"><div><strong>{dirty ? 'Unsaved browser configuration changes' : 'Browser configuration draft saved'}</strong><p>Saved Standard Service, Deep Cleaning and Operational Buffer values now feed the Scheduling runtime for live workflow testing. Personal accessibility preferences save independently per user and do not require the business-settings Save button.</p></div><span>{dirty ? 'Draft changed' : savedAt ? `Saved ${savedAt}` : 'Loaded from browser'}</span></section>
     </div>
   );
 }
