@@ -12,6 +12,13 @@ function emptyPolicies(existing: BrowserToolRequirementPolicy[]) {
   return defaultWorkPresets.map((preset) => existing.find((policy) => policy.presetId === preset.id) ?? ({ presetId: preset.id, requiredClasses: [], coverageMode: 'per_assigned_van', reviewed: false, updatedAt: new Date(0).toISOString(), updatedBy: 'Not reviewed' } satisfies BrowserToolRequirementPolicy));
 }
 
+function assetUsable(asset: BrowserToolAsset) {
+  if (!asset.verified || asset.status !== 'available') return false;
+  if (!asset.calibrationDueAt) return true;
+  const due = new Date(asset.calibrationDueAt).getTime();
+  return Number.isNaN(due) || due >= Date.now();
+}
+
 export function BrowserToolRegistry() {
   const [assets, setAssets] = useState<BrowserToolAsset[]>([]);
   const [policies, setPolicies] = useState<BrowserToolRequirementPolicy[]>([]);
@@ -28,8 +35,8 @@ export function BrowserToolRegistry() {
 
   const metrics = useMemo(() => ({
     total: assets.length,
-    usable: assets.filter((asset) => asset.verified && asset.status === 'available').length,
-    attention: assets.filter((asset) => asset.status === 'maintenance' || asset.status === 'calibration_due' || asset.status === 'lost').length,
+    usable: assets.filter(assetUsable).length,
+    attention: assets.filter((asset) => asset.status === 'maintenance' || asset.status === 'calibration_due' || asset.status === 'lost' || Boolean(asset.calibrationDueAt && new Date(asset.calibrationDueAt).getTime() < Date.now())).length,
     reviewedPolicies: policies.filter((policy) => policy.reviewed).length,
   }), [assets, policies]);
 
@@ -61,7 +68,7 @@ export function BrowserToolRegistry() {
   const saveAssets = () => {
     setAssets(saveBrowserToolAssets(assets));
     setAssetDirty(false);
-    setNotice('Tool Asset Registry saved. Only verified, available assets can satisfy Work Order tool readiness.');
+    setNotice('Tool Asset Registry saved. Only verified, available and in-calibration assets can satisfy Work Order tool readiness.');
   };
 
   const savePolicies = () => {
@@ -74,22 +81,23 @@ export function BrowserToolRegistry() {
 
   return (
     <section className={styles.workspace}>
-      <header><div><span>COMPANY TOOL ASSETS · PREVIEW</span><h2>Tools, Custody & Work Requirements</h2><p>Company tools are tracked separately from consumable inventory. Required tools can be configured per assigned van or shared across one same-job assignment, avoiding false duplication assumptions.</p></div><div className={styles.actions}><button type="button" onClick={addAsset}>+ Tool Asset</button><button type="button" className={styles.primary} disabled={!assetDirty} onClick={saveAssets}>{assetDirty ? 'Save Tool Assets' : 'Assets Saved'}</button></div></header>
+      <header><div><span>COMPANY TOOL ASSETS · PREVIEW</span><h2>Tools, Custody & Work Requirements</h2><p>Company tools are tracked separately from consumable inventory. Required tools can be configured per assigned van or shared across one same-job assignment, while condition and calibration remain part of usability.</p></div><div className={styles.actions}><button type="button" onClick={addAsset}>+ Tool Asset</button><button type="button" className={styles.primary} disabled={!assetDirty} onClick={saveAssets}>{assetDirty ? 'Save Tool Assets' : 'Assets Saved'}</button></div></header>
       {notice ? <div className={styles.notice}>{notice}</div> : null}
 
-      <div className={styles.metrics}><article><span>Registered Tools</span><strong>{metrics.total}</strong><small>Company-owned tracked assets</small></article><article><span>Verified + Available</span><strong>{metrics.usable}</strong><small>Can satisfy readiness</small></article><article><span>Tool Attention</span><strong>{metrics.attention}</strong><small>Maintenance / calibration / lost</small></article><article><span>Reviewed Work Policies</span><strong>{metrics.reviewedPolicies}/{policies.length}</strong><small>Unreviewed remains AT RISK</small></article></div>
+      <div className={styles.metrics}><article><span>Registered Tools</span><strong>{metrics.total}</strong><small>Company-owned tracked assets</small></article><article><span>Verified + Usable</span><strong>{metrics.usable}</strong><small>Available and calibration-valid</small></article><article><span>Tool Attention</span><strong>{metrics.attention}</strong><small>Maintenance / calibration / lost</small></article><article><span>Reviewed Work Policies</span><strong>{metrics.reviewedPolicies}/{policies.length}</strong><small>Unreviewed remains AT RISK</small></article></div>
 
       <section className={styles.panel}>
-        <div className={styles.sectionHead}><div><strong>Tool Asset Registry</strong><span>Physical custody, condition and verification</span></div><b>{assets.length}</b></div>
+        <div className={styles.sectionHead}><div><strong>Tool Asset Registry</strong><span>Physical custody, condition, calibration and verification</span></div><b>{assets.length}</b></div>
         {assets.length ? <div className={styles.assetTable}>
-          <div className={`${styles.assetRow} ${styles.head}`}><span>Asset</span><span>Class</span><span>Location</span><span>Status</span><span>QR / Serial</span><span>Verified</span></div>
+          <div className={`${styles.assetRow} ${styles.head}`}><span>Asset</span><span>Class</span><span>Location</span><span>Status</span><span>Calibration Due</span><span>QR / Serial</span><span>Verified</span></div>
           {assets.map((asset) => <div className={styles.assetRow} key={asset.id}>
             <div><input value={asset.name} onChange={(event) => patchAsset(asset.id, { name: event.target.value, verified: false })}/><small>{asset.id}</small></div>
             <select value={asset.toolClass} onChange={(event) => patchAsset(asset.id, { toolClass: event.target.value as ToolClass, verified: false })}>{toolClasses.map((toolClass) => <option value={toolClass} key={toolClass}>{toolClass}</option>)}</select>
             <select value={asset.locationId} onChange={(event) => patchAsset(asset.id, { locationId: event.target.value as BrowserToolAsset['locationId'], verified: false })}>{locations.map((location) => <option value={location} key={location}>{location}</option>)}</select>
-            <select value={asset.status} onChange={(event) => patchAsset(asset.id, { status: event.target.value as BrowserToolAsset['status'] })}>{statuses.map((status) => <option value={status} key={status}>{status.replaceAll('_', ' ')}</option>)}</select>
+            <select value={asset.status} onChange={(event) => patchAsset(asset.id, { status: event.target.value as BrowserToolAsset['status'], verified: false })}>{statuses.map((status) => <option value={status} key={status}>{status.replaceAll('_', ' ')}</option>)}</select>
+            <input type="date" value={asset.calibrationDueAt ?? ''} onChange={(event) => patchAsset(asset.id, { calibrationDueAt: event.target.value || undefined, verified: false })} />
             <input value={asset.serialOrQr ?? ''} onChange={(event) => patchAsset(asset.id, { serialOrQr: event.target.value, verified: false })} placeholder="Optional" />
-            <label className={styles.check}><input type="checkbox" checked={asset.verified} onChange={(event) => patchAsset(asset.id, { verified: event.target.checked })}/><span>{asset.verified ? 'Verified' : 'Review'}</span></label>
+            <label className={styles.check}><input type="checkbox" checked={asset.verified} onChange={(event) => patchAsset(asset.id, { verified: event.target.checked })}/><span>{asset.verified ? assetUsable(asset) ? 'Verified' : 'Verified / unavailable' : 'Review'}</span></label>
           </div>)}
         </div> : <div className={styles.empty}><strong>No company tools registered yet</strong><p>Add actual tool assets when ready. The ERP intentionally does not create fake vacuum pumps, gauges or drills just to make readiness green.</p></div>}
       </section>
@@ -102,7 +110,7 @@ export function BrowserToolRegistry() {
         })}</div>
       </section>
 
-      <footer><span>READINESS RULE</span><strong>Policy not reviewed → AT RISK. Reviewed policy + missing required coverage → BLOCKED. Unverified matching tool → AT RISK. Verified available tools satisfying the selected coverage mode → READY.</strong></footer>
+      <footer><span>READINESS RULE</span><strong>Policy not reviewed → AT RISK. Reviewed policy + missing required coverage → BLOCKED. Unverified matching tool → AT RISK. Verified available and calibration-valid tools satisfying the selected coverage mode → READY.</strong></footer>
     </section>
   );
 }
