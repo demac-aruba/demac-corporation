@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { browserKeys, loadBrowserValue, saveBrowserValue } from '../../lib/browser-store';
 import type { BrowserWorkOrderRecord } from '../../lib/browser-operational';
 import { canSubmitFieldExecution, createFieldExecution, createOfficeReview, type BrowserFieldExecutionRecord, type BrowserOfficeReviewRecord, type FieldAddonState, type FieldEquipmentProgress } from '../../lib/browser-field';
+import { deriveBrowserJobReadiness, fieldStartDecision } from '../../lib/browser-job-readiness';
 import { loadWorkOrderScopes, scopeStatus } from '../../lib/browser-workorder-scope';
 import styles from './browser-field-execution.module.css';
 
@@ -47,8 +48,10 @@ export function BrowserFieldExecution() {
   const selectedReview = reviews.find((review) => review.workOrderId === selectedOrder?.id);
   const selectedScope = selectedOrder ? loadWorkOrderScopes().find((scope) => scope.workOrderId === selectedOrder.id) : undefined;
   const scopeGate = selectedOrder ? scopeStatus(selectedOrder, selectedScope) : { complete: false, reason: 'No Work Order selected.' };
+  const jobReadiness = selectedOrder ? deriveBrowserJobReadiness(selectedOrder, { executions }) : null;
+  const dispatchDecision = jobReadiness ? fieldStartDecision(jobReadiness) : { allowed: false, mode: 'blocked' as const, release: undefined, reason: 'No Work Order readiness decision available.' };
   const fieldGate = useMemo(() => selectedExecution ? canSubmitFieldExecution(selectedExecution) : { allowed: false, blockers: ['Start the work order first.'] }, [selectedExecution]);
-  const canSubmit = scopeGate.complete && fieldGate.allowed && selectedReview?.status !== 'pending' && selectedReview?.status !== 'approved';
+  const canSubmit = Boolean(selectedExecution && selectedExecution.technicianStatus === 'in_progress' && scopeGate.complete && fieldGate.allowed && selectedReview?.status !== 'pending' && selectedReview?.status !== 'approved');
 
   const updateExecution = (mutator: (current: BrowserFieldExecutionRecord) => BrowserFieldExecutionRecord) => {
     if (!selectedOrder) return;
@@ -63,38 +66,53 @@ export function BrowserFieldExecution() {
 
   const startWork = () => {
     if (!selectedOrder) return;
+    if (!dispatchDecision.allowed) {
+      setNotice(dispatchDecision.reason);
+      return;
+    }
     if (!scopeGate.complete) {
       setNotice(scopeGate.reason);
       return;
     }
     updateExecution((current) => ({ ...current, technicianStatus: 'in_progress', startedAt: current.startedAt ?? new Date().toISOString() }));
-    setNotice(`${selectedOrder.id} started with its exact Work Order equipment scope. Progress will survive refresh on this browser.`);
+    setNotice(dispatchDecision.mode === 'released_at_risk'
+      ? `${selectedOrder.id} started under Operations AT RISK release ${dispatchDecision.release?.id}. ${dispatchDecision.release?.reason}`
+      : `${selectedOrder.id} started with consolidated readiness READY. Progress will survive refresh on this browser.`);
   };
 
   const reopenReturned = () => {
     if (!selectedExecution || selectedReview?.status !== 'returned') return;
     updateExecution((current) => ({ ...current, technicianStatus: 'in_progress', submittedAt: undefined }));
-    setNotice(`${selectedOrder?.id} reopened for correction. Office reviewer note remains visible in the review record.`);
+    setNotice(`${selectedOrder?.id} reopened for correction. Office reviewer note remains visible in the same review record.`);
+  };
+
+  const requireActiveExecution = () => {
+    if (selectedExecution?.technicianStatus === 'in_progress') return true;
+    setNotice('Start this Work Order through the dispatch gate before changing field evidence.');
+    return false;
   };
 
   const updateEquipment = (assetId: string, patch: Partial<FieldEquipmentProgress>) => {
-    if (!scopeGate.complete) {
-      setNotice(scopeGate.reason);
-      return;
-    }
-    updateExecution((current) => ({ ...current, technicianStatus: current.technicianStatus === 'not_started' ? 'in_progress' : current.technicianStatus, startedAt: current.startedAt ?? new Date().toISOString(), equipment: current.equipment.map((item) => item.assetId === assetId ? { ...item, ...patch } : item) }));
+    if (!requireActiveExecution()) return;
+    updateExecution((current) => ({ ...current, equipment: current.equipment.map((item) => item.assetId === assetId ? { ...item, ...patch } : item) }));
   };
 
   const updateAddon = (key: keyof FieldAddonState, value: number) => {
+    if (!requireActiveExecution()) return;
     updateExecution((current) => ({ ...current, addons: { ...current.addons, [key]: Math.max(0, value || 0) } }));
   };
 
   const queueTranscription = () => {
+    if (!requireActiveExecution()) return;
     updateExecution((current) => ({ ...current, voiceTranscriptionStatus: current.voiceSeconds > 0 && current.voiceSeconds <= 120 ? 'transcribed' : 'none' }));
   };
 
   const submitForOffice = () => {
     if (!selectedOrder || !selectedExecution) return;
+    if (selectedExecution.technicianStatus !== 'in_progress') {
+      setNotice('Only an active Field Execution can be submitted to Office Review.');
+      return;
+    }
     if (!scopeGate.complete) {
       setNotice(scopeGate.reason);
       return;
@@ -142,11 +160,13 @@ export function BrowserFieldExecution() {
   const totalEquipment = execution?.equipment.length ?? Math.max(1, selectedOrder.totalQuantity);
   const isLockedByOffice = selectedReview?.status === 'pending' || selectedReview?.status === 'approved';
   const isReturned = selectedReview?.status === 'returned';
+  const canEdit = execution?.technicianStatus === 'in_progress' && !isLockedByOffice;
+  const needsStart = !execution || execution.technicianStatus === 'not_started';
 
   return (
     <section className={styles.workspace}>
       <header className={styles.header}>
-        <div><span>LIVE PERSISTENT FIELD FLOW</span><h2>Technician Execution</h2><p>Execute the exact HVAC assets assigned to a Scheduling-created Work Order and submit one report to Office Review.</p></div>
+        <div><span>LIVE PERSISTENT FIELD FLOW</span><h2>Technician Execution</h2><p>Field start is governed by the same consolidated READY / AT RISK / BLOCKED decision used by Work Orders and Command Center.</p></div>
         <div className={styles.orderSelect}><label>Work Order<select value={selectedOrder.id} onChange={(event) => { setSelectedId(event.target.value); setNotice(null); }}>{orders.slice().reverse().map((order) => <option key={order.id} value={order.id}>{order.id} · {order.customer}</option>)}</select></label></div>
       </header>
 
@@ -159,31 +179,33 @@ export function BrowserFieldExecution() {
         <article><span>Progress</span><strong>{completedCount} / {totalEquipment}</strong><small>{execution ? labelState(execution.technicianStatus) : 'Not started'}{selectedReview ? ` · Review ${selectedReview.status}` : ''}</small></article>
       </div>
 
-      {!scopeGate.complete ? <section className={styles.scopeGate}><div><span>EXACT EQUIPMENT SCOPE REQUIRED</span><strong>{scopeGate.reason}</strong><p>Field work cannot start or submit from inferred property equipment. Office must identify the exact registered/planned HVAC units on the Work Order first.</p></div><a href="/work-orders/scope/">Set Exact Scope →</a></section> : null}
+      {needsStart ? <section className={`${styles.dispatchGate} ${dispatchDecision.allowed ? dispatchDecision.mode === 'released_at_risk' ? styles.dispatchRisk : styles.dispatchReady : jobReadiness?.status === 'blocked' ? styles.dispatchBlocked : styles.dispatchHold}`}><div><span>FIELD START GATE · {jobReadiness?.status.replace('_', ' ').toUpperCase()}</span><strong>{dispatchDecision.allowed ? dispatchDecision.mode === 'released_at_risk' ? 'Operations released this AT RISK Work Order for start.' : 'Work Order is dispatch READY.' : jobReadiness?.status === 'blocked' ? 'Work Order is BLOCKED and cannot start.' : 'Work Order is AT RISK and awaiting Operations release.'}</strong><p>{dispatchDecision.reason}</p>{dispatchDecision.release ? <small>{dispatchDecision.release.id} · {dispatchDecision.release.authorizedBy} · {new Date(dispatchDecision.release.authorizedAt).toLocaleString()}</small> : null}</div><a href="/work-orders/">Open Job Readiness →</a></section> : <section className={styles.startedGate}><span>FIELD START RECORDED</span><strong>{execution?.startedAt ? new Date(execution.startedAt).toLocaleString() : 'Execution already active'}</strong><p>Readiness controls the start decision. Once work has started, field evidence remains editable until submission/office lock; later readiness changes do not erase the start record.</p></section>}
+
+      {!scopeGate.complete ? <section className={styles.scopeGate}><div><span>EXACT EQUIPMENT SCOPE REQUIRED</span><strong>{scopeGate.reason}</strong><p>Exact scope is also a hard consolidated-readiness blocker.</p></div><a href="/work-orders/scope/">Set Exact Scope →</a></section> : null}
 
       {isReturned ? <section className={styles.returnedBanner}><div><span>RETURNED BY OFFICE</span><strong>This Work Order needs correction before it can be approved.</strong><p>{selectedReview?.reviewerNote || 'Open Office Review for the reviewer note and required correction.'}</p></div><button type="button" onClick={reopenReturned} disabled={execution?.technicianStatus !== 'submitted'}>Reopen for Correction</button></section> : null}
 
-      {!execution ? <div className={styles.startPanel}><div><span>{scopeGate.complete ? 'WORK ORDER READY FOR FIELD EXECUTION' : 'WORK ORDER NOT FIELD-READY'}</span><strong>{selectedOrder.customerFacingDescription}</strong><p>{selectedOrder.technicianInstructions || 'No technician-only instructions were captured.'}</p></div><button type="button" disabled={!scopeGate.complete} onClick={startWork}>Start Work</button></div> : null}
+      {needsStart ? <div className={styles.startPanel}><div><span>{dispatchDecision.allowed ? 'START AUTHORITY AVAILABLE' : 'START AUTHORITY NOT AVAILABLE'}</span><strong>{selectedOrder.customerFacingDescription}</strong><p>{selectedOrder.technicianInstructions || 'No technician-only instructions were captured.'}</p></div><button type="button" disabled={!dispatchDecision.allowed || !scopeGate.complete} onClick={startWork}>Start Work</button></div> : null}
 
       {execution ? <>
         <section className={styles.instructions}><div><span>CUSTOMER-FACING SCOPE</span><strong>{selectedOrder.customerFacingDescription}</strong></div><div><span>TECHNICIAN-ONLY INSTRUCTIONS</span><strong>{selectedOrder.technicianInstructions || 'No internal instructions.'}</strong></div></section>
 
         <section className={styles.equipmentSection}>
-          <div className={styles.sectionHead}><div><span>1</span><div><strong>Exact Equipment Execution</strong><small>{scopeGate.complete ? 'These records come from the saved Work Order asset scope.' : 'Scope is incomplete; execution changes are blocked.'}</small></div></div><b>{completedCount}/{execution.equipment.length} complete</b></div>
+          <div className={styles.sectionHead}><div><span>1</span><div><strong>Exact Equipment Execution</strong><small>{canEdit ? 'Field execution is active.' : execution.technicianStatus === 'not_started' ? 'Start Work through the dispatch gate before editing evidence.' : 'Editing is locked by execution/review state.'}</small></div></div><b>{completedCount}/{execution.equipment.length} complete</b></div>
           <div className={styles.equipmentGrid}>{execution.equipment.map((item) => <article className={`${styles.equipmentCard} ${item.status === 'complete' ? styles.complete : ''}`} key={item.assetId}>
             <header><div><span>{item.assetId}</span><strong>{item.name}</strong><small>{item.type}{item.capacity ? ` · ${item.capacity}` : ''}{item.serial ? ` · ${item.serial}` : ''}</small></div><b>{labelState(item.status)}</b></header>
-            <div className={styles.evidenceGrid}><button type="button" disabled={isLockedByOffice || !scopeGate.complete} className={item.beforePhoto ? styles.captured : ''} onClick={() => updateEquipment(item.assetId, { beforePhoto: !item.beforePhoto })}><span>{item.beforePhoto ? '✓' : '○'}</span>Before photo</button><button type="button" disabled={isLockedByOffice || !scopeGate.complete} className={item.afterPhoto ? styles.captured : ''} onClick={() => updateEquipment(item.assetId, { afterPhoto: !item.afterPhoto })}><span>{item.afterPhoto ? '✓' : '○'}</span>After photo</button><button type="button" disabled={isLockedByOffice || !scopeGate.complete} className={item.gaugePhoto ? styles.captured : ''} onClick={() => updateEquipment(item.assetId, { gaugePhoto: !item.gaugePhoto })}><span>{item.gaugePhoto ? '✓' : '○'}</span>Gauge photo</button></div>
-            <div className={styles.fieldGrid}><label>Refrigerant state<select disabled={isLockedByOffice || !scopeGate.complete} value={item.refrigerantState} onChange={(event) => updateEquipment(item.assetId, { refrigerantState: event.target.value as FieldEquipmentProgress['refrigerantState'] })}>{refrigerantOptions.map((value) => <option value={value} key={value}>{labelState(value)}</option>)}</select></label><label>Measurement<input disabled={isLockedByOffice || !scopeGate.complete} value={item.measurement ?? ''} onChange={(event) => updateEquipment(item.assetId, { measurement: event.target.value })} placeholder="Pressure / temp / reading" /></label><label className={styles.wide}>Technical note<input disabled={isLockedByOffice || !scopeGate.complete} value={item.note ?? ''} onChange={(event) => updateEquipment(item.assetId, { note: event.target.value })} placeholder="Optional equipment-specific note" /></label></div>
-            <footer><button type="button" disabled={isLockedByOffice || !scopeGate.complete} onClick={() => updateEquipment(item.assetId, { status: item.status === 'pending' ? 'in_progress' : 'pending' })}>{item.status === 'pending' ? 'Begin unit' : 'Reset unit'}</button><button type="button" disabled={isLockedByOffice || !scopeGate.complete} className={styles.primaryButton} onClick={() => updateEquipment(item.assetId, { status: 'complete' })}>Mark Complete</button></footer>
+            <div className={styles.evidenceGrid}><button type="button" disabled={!canEdit} className={item.beforePhoto ? styles.captured : ''} onClick={() => updateEquipment(item.assetId, { beforePhoto: !item.beforePhoto })}><span>{item.beforePhoto ? '✓' : '○'}</span>Before photo</button><button type="button" disabled={!canEdit} className={item.afterPhoto ? styles.captured : ''} onClick={() => updateEquipment(item.assetId, { afterPhoto: !item.afterPhoto })}><span>{item.afterPhoto ? '✓' : '○'}</span>After photo</button><button type="button" disabled={!canEdit} className={item.gaugePhoto ? styles.captured : ''} onClick={() => updateEquipment(item.assetId, { gaugePhoto: !item.gaugePhoto })}><span>{item.gaugePhoto ? '✓' : '○'}</span>Gauge photo</button></div>
+            <div className={styles.fieldGrid}><label>Refrigerant state<select disabled={!canEdit} value={item.refrigerantState} onChange={(event) => updateEquipment(item.assetId, { refrigerantState: event.target.value as FieldEquipmentProgress['refrigerantState'] })}>{refrigerantOptions.map((value) => <option value={value} key={value}>{labelState(value)}</option>)}</select></label><label>Measurement<input disabled={!canEdit} value={item.measurement ?? ''} onChange={(event) => updateEquipment(item.assetId, { measurement: event.target.value })} placeholder="Pressure / temp / reading" /></label><label className={styles.wide}>Technical note<input disabled={!canEdit} value={item.note ?? ''} onChange={(event) => updateEquipment(item.assetId, { note: event.target.value })} placeholder="Optional equipment-specific note" /></label></div>
+            <footer><button type="button" disabled={!canEdit} onClick={() => updateEquipment(item.assetId, { status: item.status === 'pending' ? 'in_progress' : 'pending' })}>{item.status === 'pending' ? 'Begin unit' : 'Reset unit'}</button><button type="button" disabled={!canEdit} className={styles.primaryButton} onClick={() => updateEquipment(item.assetId, { status: 'complete' })}>Mark Complete</button></footer>
           </article>)}</div>
         </section>
 
         <section className={styles.twoColumn}>
-          <article className={styles.panel}><div className={styles.sectionHead}><div><span>2</span><div><strong>Materials & Add-ons</strong><small>Captured before submission; downstream Inventory uses submitted quantities.</small></div></div></div><div className={styles.addonGrid}><label>220V switches<input disabled={isLockedByOffice} type="number" min="0" value={execution.addons.switches} onChange={(event) => updateAddon('switches', Number(event.target.value))}/></label><label>Brackets<input disabled={isLockedByOffice} type="number" min="0" value={execution.addons.brackets} onChange={(event) => updateAddon('brackets', Number(event.target.value))}/></label><label>Armaflex<input disabled={isLockedByOffice} type="number" min="0" value={execution.addons.armaflex} onChange={(event) => updateAddon('armaflex', Number(event.target.value))}/></label><label>Refrigerant lb<input disabled={isLockedByOffice} type="number" min="0" step="0.1" value={execution.addons.refrigerantLb} onChange={(event) => updateAddon('refrigerantLb', Number(event.target.value))}/></label></div></article>
-          <article className={styles.panel}><div className={styles.sectionHead}><div><span>3</span><div><strong>Voice & Summary</strong><small>Voice is limited to 2 minutes and transcription does not block field progress.</small></div></div></div><div className={styles.voiceRow}><label>Voice duration (seconds)<input disabled={isLockedByOffice} type="number" min="0" max="180" value={execution.voiceSeconds} onChange={(event) => updateExecution((current) => ({ ...current, voiceSeconds: Math.max(0, Number(event.target.value) || 0), voiceTranscriptionStatus: 'none' }))}/></label><button type="button" disabled={isLockedByOffice || !execution.voiceSeconds || execution.voiceSeconds > 120} onClick={queueTranscription}>{execution.voiceTranscriptionStatus === 'transcribed' ? '✓ Transcribed' : 'Transcribe in background'}</button></div>{execution.voiceSeconds > 120 ? <p className={styles.errorText}>Voice note exceeds the 120-second limit.</p> : null}<label className={styles.summaryField}>Technician summary<textarea disabled={isLockedByOffice} rows={4} value={execution.technicianSummary} onChange={(event) => updateExecution((current) => ({ ...current, technicianSummary: event.target.value }))} placeholder="What was found, what was done, and what should the office/customer know?" /></label></article>
+          <article className={styles.panel}><div className={styles.sectionHead}><div><span>2</span><div><strong>Materials & Add-ons</strong><small>Captured before submission; downstream Inventory uses submitted quantities.</small></div></div></div><div className={styles.addonGrid}><label>220V switches<input disabled={!canEdit} type="number" min="0" value={execution.addons.switches} onChange={(event) => updateAddon('switches', Number(event.target.value))}/></label><label>Brackets<input disabled={!canEdit} type="number" min="0" value={execution.addons.brackets} onChange={(event) => updateAddon('brackets', Number(event.target.value))}/></label><label>Armaflex<input disabled={!canEdit} type="number" min="0" value={execution.addons.armaflex} onChange={(event) => updateAddon('armaflex', Number(event.target.value))}/></label><label>Refrigerant lb<input disabled={!canEdit} type="number" min="0" step="0.1" value={execution.addons.refrigerantLb} onChange={(event) => updateAddon('refrigerantLb', Number(event.target.value))}/></label></div></article>
+          <article className={styles.panel}><div className={styles.sectionHead}><div><span>3</span><div><strong>Voice & Summary</strong><small>Voice is limited to 2 minutes and transcription does not block field progress.</small></div></div></div><div className={styles.voiceRow}><label>Voice duration (seconds)<input disabled={!canEdit} type="number" min="0" max="180" value={execution.voiceSeconds} onChange={(event) => updateExecution((current) => ({ ...current, voiceSeconds: Math.max(0, Number(event.target.value) || 0), voiceTranscriptionStatus: 'none' }))}/></label><button type="button" disabled={!canEdit || !execution.voiceSeconds || execution.voiceSeconds > 120} onClick={queueTranscription}>{execution.voiceTranscriptionStatus === 'transcribed' ? '✓ Transcribed' : 'Transcribe in background'}</button></div>{execution.voiceSeconds > 120 ? <p className={styles.errorText}>Voice note exceeds the 120-second limit.</p> : null}<label className={styles.summaryField}>Technician summary<textarea disabled={!canEdit} rows={4} value={execution.technicianSummary} onChange={(event) => updateExecution((current) => ({ ...current, technicianSummary: event.target.value }))} placeholder="What was found, what was done, and what should the office/customer know?" /></label></article>
         </section>
 
-        <section className={styles.submitPanel}><div><span>4 · SUBMIT GATE</span><strong>{selectedReview?.status === 'approved' ? 'Office Approved' : selectedReview?.status === 'pending' ? 'Awaiting Office Review' : canSubmit ? 'Ready for Office Review' : 'Field report is not ready yet'}</strong>{!scopeGate.complete ? <ul><li>{scopeGate.reason}</li></ul> : fieldGate.blockers.length ? <ul>{fieldGate.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul> : <p>All scoped equipment records are complete, required evidence is captured, and voice duration is valid.</p>}<small>Submitting never sends anything to the customer.</small></div><button type="button" disabled={!canSubmit || execution.technicianStatus === 'submitted'} onClick={submitForOffice}>{selectedReview?.status === 'pending' ? 'Awaiting Office Review' : selectedReview?.status === 'approved' ? 'Office Approved' : 'Submit for Office Review'}</button></section>
+        <section className={styles.submitPanel}><div><span>4 · SUBMIT GATE</span><strong>{selectedReview?.status === 'approved' ? 'Office Approved' : selectedReview?.status === 'pending' ? 'Awaiting Office Review' : canSubmit ? 'Ready for Office Review' : 'Field report is not ready yet'}</strong>{!scopeGate.complete ? <ul><li>{scopeGate.reason}</li></ul> : fieldGate.blockers.length ? <ul>{fieldGate.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul> : execution.technicianStatus !== 'in_progress' ? <ul><li>Field execution must be active before submission.</li></ul> : <p>All scoped equipment records are complete, required evidence is captured, and voice duration is valid.</p>}<small>Submitting never sends anything to the customer.</small></div><button type="button" disabled={!canSubmit} onClick={submitForOffice}>{selectedReview?.status === 'pending' ? 'Awaiting Office Review' : selectedReview?.status === 'approved' ? 'Office Approved' : 'Submit for Office Review'}</button></section>
       </> : null}
     </section>
   );
