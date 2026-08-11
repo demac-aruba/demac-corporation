@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:dispatch": "node -e \"require('fs').rmSync('.dispatch-test',{recursive:true,force:true})\" && tsc scripts/dispatch-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --esModuleInterop --skipLibCheck --outDir .dispatch-test --rootDir . --lib ES2022,DOM && node .dispatch-test/scripts/dispatch-acceptance.js"
   },
   "dependencies": {
     "next": "16.2.11",
