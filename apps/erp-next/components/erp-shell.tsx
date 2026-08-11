@@ -52,7 +52,7 @@ function initials(name: string) {
 export function ErpShell({ children }: Readonly<{ children: React.ReactNode }>) {
   const pathname = usePathname();
   const router = useRouter();
-  const { mode, status, principal, firebaseConfigured, signOut } = useAuth();
+  const { status, principal, firebaseConfigured, signOut } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -110,7 +110,7 @@ export function ErpShell({ children }: Readonly<{ children: React.ReactNode }>) 
   const logout = () => {
     signOut();
     setSessionOpen(false);
-    router.push('/dashboard');
+    router.replace('/login');
   };
 
   return (
@@ -134,8 +134,8 @@ export function ErpShell({ children }: Readonly<{ children: React.ReactNode }>) 
         </nav>
 
         <div className="sidebar-footer">
-          <div className="environment-pill"><span /> {mode === 'firebase' ? 'Firebase Session' : 'Preview Owner Mode'}</div>
-          <small>{mode === 'firebase' ? `${principalRoleLabel(principal)} · authenticated` : 'Test data · production writes protected'}</small>
+          <div className="environment-pill"><span /> Secure Firebase Session</div>
+          <small>{principalRoleLabel(principal)} · authenticated</small>
         </div>
       </aside>
 
@@ -160,7 +160,7 @@ export function ErpShell({ children }: Readonly<{ children: React.ReactNode }>) 
                 <div className="avatar">{initials(principal.displayName)}</div>
                 <div><strong>{principal.displayName}</strong><span>{status === 'loading' ? 'Checking session…' : principalRoleLabel(principal)}</span></div>
               </button>
-              {sessionOpen ? <div className="session-popover"><header><strong>{principal.displayName}</strong><span>{principalRoleLabel(principal)}</span></header><div><span>Security mode</span><strong>{mode === 'firebase' ? 'Firebase authenticated' : 'Preview Owner mode'}</strong></div><div><span>Firebase client</span><strong>{firebaseConfigured ? 'Configuration detected' : 'Configuration not detected'}</strong></div><TextSizeControl compact />{mode === 'firebase' ? <button className="danger" type="button" onClick={logout}>Sign out and return to Preview Mode</button> : <button type="button" onClick={() => navigate('/login')}>{firebaseConfigured ? 'Sign in with Firebase' : 'Open security / sign-in status'} →</button>}</div> : null}
+              {sessionOpen ? <div className="session-popover"><header><strong>{principal.displayName}</strong><span>{principalRoleLabel(principal)}</span></header><div><span>Security mode</span><strong>Firebase authenticated</strong></div><div><span>Firebase client</span><strong>{firebaseConfigured ? 'Configuration detected' : 'Configuration unavailable'}</strong></div><TextSizeControl compact /><button className="danger" type="button" onClick={logout}>Sign out securely</button></div> : null}
             </div>
           </div>
         </header>
