@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { loadBrowserCrmCustomers, loadBrowserCustomerMaster, sectorFromCrm, type BrowserCrmCustomerIdentity, type BrowserCrmSiteIdentity } from '../../lib/browser-crm';
+import { diagnoseBookingRequest, type BookingLiveIssue } from '../../lib/scheduling-booking-diagnostics';
 import { createBrowserWorkOrder, type BrowserAppointmentRecord, type BrowserWorkOrderRecord } from '../../lib/browser-operational';
 import { browserKeys, loadBrowserValue, saveBrowserValue } from '../../lib/browser-store';
 import type { BookingRequest, CandidateSlot, DispatchJob, WorkPresetId } from '../../lib/scheduling';
@@ -156,6 +157,9 @@ export function SchedulingOverviewV2() {
       assignments.push({
         ...primary,
         id: `${appointmentId}-S`,
+        start: slot.supportStart ?? primary.start,
+        end: slot.supportEnd ?? primary.end,
+        segment: slot.supportSegment ?? primary.segment,
         vanId: slot.supportVanId,
         quantity: slot.supportUnits ?? Math.max(1, request.quantity - primaryQty),
         isPrimaryAssignment: false,
@@ -184,7 +188,8 @@ export function SchedulingOverviewV2() {
     setAppointments((current) => [...current, record]);
     setDrawerOpen(false);
     setPreferredSlot({});
-    setNotice(`${record.customerFacingDescription} placed on temporary hold for ${slot.vanId.replace('VAN-', 'Van ')} at ${formatTime(slot.start)}.`);
+    const supportText = slot.supportVanId ? ` with linked support from ${slot.supportVanId.replace('VAN-', 'Van ')}` : '';
+    setNotice(`${record.customerFacingDescription} placed on temporary hold for ${slot.vanId.replace('VAN-', 'Van ')}${supportText} at ${formatTime(slot.start)}.`);
   };
 
   const confirmAppointment = (appointmentId: string) => {
@@ -324,6 +329,18 @@ function AppointmentBlock({ job, span, crossesLunch, onConfirm }: { job: Calenda
   </div>;
 }
 
+function LiveIssue({ issue }: { issue: BookingLiveIssue }) {
+  const isError = issue.severity === 'error';
+  const isWarning = issue.severity === 'warning';
+  const border = isError ? 'var(--danger)' : isWarning ? 'var(--warning)' : 'var(--brand)';
+  const background = isError ? 'var(--danger-soft)' : isWarning ? 'var(--warning-soft)' : 'var(--brand-soft)';
+  const color = isError ? 'var(--danger)' : isWarning ? 'var(--warning)' : 'var(--brand)';
+  return <div style={{ margin: '0 11px 9px', padding: '9px 10px', border: `1px solid color-mix(in srgb, ${border} 35%, var(--border))`, borderLeft: `3px solid ${border}`, borderRadius: 8, background }}>
+    <strong style={{ display: 'block', color, fontSize: '8px' }}>{issue.title}</strong>
+    <span style={{ display: 'block', marginTop: 3, color: 'var(--text)', fontSize: '7px', lineHeight: 1.45 }}>{issue.message}</span>
+  </div>;
+}
+
 function BookingDrawer({ day, jobs, preferred, onClose, onReserve }: { day: OperationalDay; jobs: CalendarDispatchJob[]; preferred: PreferredSlot; onClose: () => void; onReserve: (request: BookingRequest, slot: CandidateSlot, technicianInstructions: string, identity: BookingIdentity) => void }) {
   const [crmCustomers, setCrmCustomers] = useState<BrowserCrmCustomerIdentity[]>(() => loadBrowserCrmCustomers());
   const [customerQuery, setCustomerQuery] = useState('');
@@ -334,12 +351,15 @@ function BookingDrawer({ day, jobs, preferred, onClose, onReserve }: { day: Oper
   const [site, setSite] = useState('');
   const [sector, setSector] = useState('Noord');
   const [presetId, setPresetId] = useState<WorkPresetId>('standard_service');
-  const [quantity, setQuantity] = useState(1);
+  const [quantityInput, setQuantityInput] = useState('1');
   const [restriction, setRestriction] = useState('any');
   const [technicianInstructions, setTechnicianInstructions] = useState('');
   const [selected, setSelected] = useState<CandidateSlot | null>(null);
   const [customerCreateOpen, setCustomerCreateOpen] = useState(false);
   const selectedCustomer = crmCustomers.find((item) => item.id === customerId);
+  const parsedQuantity = Number(quantityInput);
+  const quantityValid = quantityInput.trim() !== '' && Number.isInteger(parsedQuantity) && parsedQuantity >= 1 && parsedQuantity <= 14;
+  const quantity = quantityValid ? parsedQuantity : 1;
   const customerMatches = useMemo(() => {
     const query = customerQuery.trim().toLowerCase();
     if (!query) return crmCustomers.slice(0, 6);
@@ -354,18 +374,26 @@ function BookingDrawer({ day, jobs, preferred, onClose, onReserve }: { day: Oper
     restriction: restriction === 'morning' ? { halfDay: 'am' } : restriction === 'afternoon' ? { halfDay: 'pm' } : restriction === 'after10' ? { notBefore: '10:00' } : restriction === 'after2' ? { notBefore: '14:00' } : undefined,
   }), [customer, site, sector, presetId, quantity, restriction]);
   const slots = useMemo(() => {
-    if (!customerId || !siteId) return [];
+    if (!customerId || !siteId || !quantityValid) return [];
     const options = findCandidateSlotsForDay(day, request, jobs);
     return [...options].sort((a, b) => {
       const aPreferred = Number(Boolean(preferred.vanId && a.vanId === preferred.vanId && preferred.start && a.start === preferred.start));
       const bPreferred = Number(Boolean(preferred.vanId && b.vanId === preferred.vanId && preferred.start && b.start === preferred.start));
       return bPreferred - aPreferred || b.score - a.score;
     });
-  }, [customerId, day, jobs, preferred.start, preferred.vanId, request, siteId]);
+  }, [customerId, day, jobs, preferred.start, preferred.vanId, quantityValid, request, siteId]);
+  const liveIssues = useMemo(() => {
+    if (!customerId || !siteId) return [];
+    return diagnoseBookingRequest({ request, jobs, preferred, candidateSlots: slots, quantityValid });
+  }, [customerId, jobs, preferred, quantityValid, request, siteId, slots]);
+  const propertyIssues = liveIssues.filter((issue) => issue.field === 'property');
+  const quantityIssues = liveIssues.filter((issue) => issue.field === 'quantity' || issue.field === 'support');
+  const slotIssues = liveIssues.filter((issue) => issue.field === 'slot');
 
   useEffect(() => {
-    const exact = slots.find((slot) => preferred.vanId && preferred.start && slot.vanId === preferred.vanId && slot.start === preferred.start);
-    if (exact) setSelected(exact);
+    if (!preferred.vanId || !preferred.start) return;
+    const exact = slots.find((slot) => slot.vanId === preferred.vanId && slot.start === preferred.start);
+    setSelected(exact ?? null);
   }, [preferred.start, preferred.vanId, slots]);
 
   const chooseCustomer = (id: string) => {
@@ -440,19 +468,24 @@ function BookingDrawer({ day, jobs, preferred, onClose, onReserve }: { day: Oper
           </div>
           {!selectedCustomer ? <div className={styles.slotOptions}>{customerMatches.length ? customerMatches.map((item) => <button type="button" key={item.id} className={styles.slotOption} onClick={() => chooseCustomer(item.id)}><div><strong>{item.name}</strong><span>{item.location || item.type || 'Customer'} · {item.phone || 'No phone'}</span></div><b>Select</b><small>{item.email || item.id}</small></button>) : <div className={styles.noSlots}><strong>No customer found</strong><p>Create the CRM relationship instead of booking an unregistered duplicate.</p><button type="button" className={styles.secondary} onClick={() => setCustomerCreateOpen(true)}>+ Add Customer</button></div>}</div> : <div className={styles.descriptionPreview}><span>SELECTED CRM CUSTOMER</span><strong>{selectedCustomer.name}</strong><small>{selectedCustomer.phone || 'No phone'} · {selectedCustomer.email || 'No email'}</small></div>}
           {customerId ? <div className={styles.formGrid}><label className={styles.wide}><span>Registered property</span><select value={siteId} onChange={(event) => chooseSite(event.target.value)}><option value="">Select a property</option>{crmSites.map((item) => <option value={item.id} key={item.id}>{item.name} · {item.address}</option>)}</select></label><label><span>DEMAC sector</span><select value={sector} onChange={(event) => { setSector(event.target.value); setSelected(null); }}><option>Noord</option><option>Palm Beach</option><option>Oranjestad</option><option>Santa Cruz</option><option>Paradera</option><option>San Nicolas</option><option>Savaneta</option></select></label>{!crmSites.length ? <div className={`${styles.wide} ${styles.noSlots}`}><strong>No registered property</strong><p>Add a property in Customer 360 before booking this existing customer.</p></div> : null}</div> : null}
+          {propertyIssues.map((issue) => <LiveIssue issue={issue} key={issue.code} />)}
         </section>
 
         <section className={styles.formSection}><header><strong>2 · Work & restrictions</strong><span>Changing these values recalculates valid slots.</span></header><div className={styles.formGrid}>
           <label className={styles.wide}><span>Work type</span><select value={presetId} onChange={(event) => { setPresetId(event.target.value as WorkPresetId); setSelected(null); }}>{defaultWorkPresets.map((preset) => <option value={preset.id} key={preset.id}>{preset.label}</option>)}</select></label>
-          <label><span>Number of A/C units</span><input type="number" min={1} max={12} value={quantity} onChange={(event) => { setQuantity(Math.max(1, Number(event.target.value) || 1)); setSelected(null); }} /></label>
+          <label><span>Number of A/C units</span><input type="number" min={1} max={14} value={quantityInput} onChange={(event) => { const next = event.target.value; if (/^\d*$/.test(next)) { setQuantityInput(next); setSelected(null); } }} /></label>
           <label><span>Customer restriction</span><select value={restriction} onChange={(event) => { setRestriction(event.target.value); setSelected(null); }}><option value="any">No time restriction</option><option value="morning">Morning only</option><option value="afternoon">Afternoon only</option><option value="after10">After 10:00 AM</option><option value="after2">After 2:00 PM</option></select></label>
-        </div><div className={styles.descriptionPreview}><span>CUSTOMER-FACING DESCRIPTION</span><strong>{customerId && siteId ? customerFacingDescription(request) : 'Select a CRM customer and service property first.'}</strong><small>Technician-only instructions remain separate.</small></div><label className={styles.instructions}><span>Technician instructions</span><textarea rows={3} value={technicianInstructions} onChange={(event) => setTechnicianInstructions(event.target.value)} placeholder="Internal access, preparation or technical instructions..." /></label></section>
+        </div>
+        {quantityIssues.map((issue) => <LiveIssue issue={issue} key={issue.code} />)}
+        <div className={styles.descriptionPreview}><span>CUSTOMER-FACING DESCRIPTION</span><strong>{customerId && siteId && quantityValid ? customerFacingDescription(request) : quantityValid ? 'Select a CRM customer and service property first.' : 'Enter a valid A/C quantity from 1 to 14.'}</strong><small>Technician-only instructions remain separate.</small></div><label className={styles.instructions}><span>Technician instructions</span><textarea rows={3} value={technicianInstructions} onChange={(event) => setTechnicianInstructions(event.target.value)} placeholder="Internal access, preparation or technical instructions..." /></label></section>
 
-        <section className={styles.formSection}><header><strong>3 · Valid ERP options</strong><span>{preferred.vanId && preferred.start ? `Requested visual spot: ${preferred.vanId.replace('VAN-', 'Van ')} · ${formatTime(preferred.start)}` : 'Choose one of the valid calculated options.'}</span></header><div className={styles.slotOptions}>
-          {!customerId || !siteId ? <div className={styles.noSlots}><strong>Customer and property required</strong><p>Choose the CRM relationship and exact service property before the ERP calculates route-aware capacity.</p></div> : slots.length ? slots.map((slot) => <button type="button" key={`${slot.vanId}-${slot.start}-${slot.supportVanId ?? ''}`} className={`${styles.slotOption} ${selected === slot ? styles.slotOptionSelected : ''}`} onClick={() => setSelected(slot)}><div><strong>{slot.vanId.replace('VAN-', 'Van ')} · {formatTime(slot.start)}–{formatTime(slot.end)}</strong><span>{slot.sector}{slot.supportVanId ? ` · support ${slot.supportVanId.replace('VAN-', 'Van ')}` : ''}</span></div><b>{slot.score}</b><small>{slot.reasons[0] ?? 'Valid capacity'}</small></button>) : <div className={styles.noSlots}><strong>No valid capacity for this request</strong><p>Change day, sector, restriction, work type or quantity. ERP Next will not invent availability.</p></div>}
+        <section className={styles.formSection}><header><strong>3 · Valid ERP options</strong><span>{preferred.vanId && preferred.start ? `Requested visual spot: ${preferred.vanId.replace('VAN-', 'Van ')} · ${formatTime(preferred.start)}` : 'Choose one of the valid calculated options.'}</span></header>
+          {slotIssues.map((issue) => <LiveIssue issue={issue} key={issue.code} />)}
+          <div className={styles.slotOptions}>
+          {!customerId || !siteId ? <div className={styles.noSlots}><strong>Customer and property required</strong><p>Choose the CRM relationship and exact service property before the ERP calculates route-aware capacity.</p></div> : !quantityValid ? <div className={styles.noSlots}><strong>Valid A/C quantity required</strong><p>Enter a whole number from 1 to 14. The field can be temporarily blank while typing.</p></div> : slots.length ? slots.map((slot) => <button type="button" key={`${slot.vanId}-${slot.start}-${slot.supportVanId ?? ''}-${slot.supportStart ?? ''}`} className={`${styles.slotOption} ${selected === slot ? styles.slotOptionSelected : ''}`} onClick={() => setSelected(slot)}><div><strong>{slot.vanId.replace('VAN-', 'Van ')} · {formatTime(slot.start)}–{formatTime(slot.end)}</strong><span>{slot.sector}{slot.supportVanId ? ` · support ${slot.supportVanId.replace('VAN-', 'Van ')}${slot.supportStart ? ` ${formatTime(slot.supportStart)}–${formatTime(slot.supportEnd ?? slot.end)}` : ''}` : ''}</span></div><b>{slot.score}</b><small>{slot.reasons.join(' · ') || 'Valid capacity'}</small></button>) : <div className={styles.noSlots}><strong>No valid capacity for this request</strong><p>Review the live validation messages above. ERP Next will not hide a route, duration, support or restriction conflict behind a disabled button.</p></div>}
         </div></section>
       </div>
-      <footer className={styles.drawerFooter}><div>{selected ? <><span>Selected</span><strong>{selected.vanId.replace('VAN-', 'Van ')} · {formatTime(selected.start)}</strong></> : <span>Select a valid work spot.</span>}</div><div><button type="button" className={styles.secondary} onClick={onClose}>Cancel</button><button type="button" className={styles.primary} disabled={!selected || !customerId || !siteId} onClick={() => selected && onReserve(request, selected, technicianInstructions, { customerId, siteId })}>Temporary hold</button></div></footer>
+      <footer className={styles.drawerFooter}><div>{selected ? <><span>Selected</span><strong>{selected.vanId.replace('VAN-', 'Van ')} · {formatTime(selected.start)}{selected.supportVanId ? ` + ${selected.supportVanId.replace('VAN-', 'Van ')} support` : ''}</strong></> : <span>Select a valid work spot.</span>}</div><div><button type="button" className={styles.secondary} onClick={onClose}>Cancel</button><button type="button" className={styles.primary} disabled={!selected || !customerId || !siteId || !quantityValid} onClick={() => selected && onReserve(request, selected, technicianInstructions, { customerId, siteId })}>Temporary hold</button></div></footer>
     </aside>
     <QuickCustomerOnboarding open={customerCreateOpen} existingCustomers={crmCustomers} onClose={() => setCustomerCreateOpen(false)} onUseExisting={(id) => { setCustomerCreateOpen(false); chooseCustomer(id); }} onCreate={createCustomer} />
   </div>;
