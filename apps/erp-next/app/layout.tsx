@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { AuthProvider } from '@/components/auth/auth-provider';
 import './globals.css';
 import './theme-hardening.css';
 import './management-intelligence.css';
@@ -8,6 +9,7 @@ import './revenue-cycle.css';
 import './field-assets.css';
 import './persistence-security.css';
 import './shell-productivity.css';
+import './auth.css';
 
 export const metadata: Metadata = {
   title: 'DEMAC ERP Next',
@@ -52,7 +54,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <script dangerouslySetInnerHTML={{ __html: themeBootstrap }} />
         <script dangerouslySetInnerHTML={{ __html: legacyCacheCleanup }} />
       </head>
-      <body>{children}</body>
+      <body><AuthProvider>{children}</AuthProvider></body>
     </html>
   );
 }

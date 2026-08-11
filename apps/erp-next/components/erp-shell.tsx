@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
-import { foundationRole, navigationGroups } from '@/lib/navigation';
+import { principalRoleLabel, useAuth } from '@/components/auth/auth-provider';
+import { navigationGroups } from '@/lib/navigation';
 
 function ThemeControl() {
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
@@ -43,30 +44,40 @@ const notifications = [
   { tone: 'opportunity', title: 'Sales ahead of pace', detail: 'Monthly sales are materially ahead of elapsed time.', href: '/kpis' },
 ];
 
+function initials(name: string) {
+  return name.split(/\s+/).filter(Boolean).map((part) => part[0]).slice(0, 2).join('').toUpperCase() || 'DU';
+}
+
 export function ErpShell({ children }: Readonly<{ children: React.ReactNode }>) {
   const pathname = usePathname();
   const router = useRouter();
+  const { mode, status, principal, firebaseConfigured, signOut } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [sessionOpen, setSessionOpen] = useState(false);
   const [query, setQuery] = useState('');
+
   const groups = useMemo(
     () => navigationGroups
-      .map((group) => ({ ...group, items: group.items.filter((item) => item.roles.includes(foundationRole)) }))
+      .map((group) => ({ ...group, items: group.items.filter((item) => item.roles.includes(principal.role)) }))
       .filter((group) => group.items.length > 0),
-    [],
+    [principal.role],
   );
 
   const searchableModules = useMemo(() => groups.flatMap((group) => group.items.map((item) => ({ ...item, group: group.label }))), [groups]);
+  const accessibleHrefs = useMemo(() => new Set(searchableModules.map((item) => item.href)), [searchableModules]);
+  const visibleQuickActions = useMemo(() => quickActions.filter((item) => accessibleHrefs.has(item.href)), [accessibleHrefs]);
+  const visibleNotifications = useMemo(() => notifications.filter((item) => accessibleHrefs.has(item.href)), [accessibleHrefs]);
   const normalizedQuery = query.trim().toLowerCase();
   const moduleResults = useMemo(() => {
     if (!normalizedQuery) return searchableModules.slice(0, 10);
     return searchableModules.filter((item) => `${item.label} ${item.group} ${item.short}`.toLowerCase().includes(normalizedQuery)).slice(0, 12);
   }, [normalizedQuery, searchableModules]);
   const actionResults = useMemo(() => {
-    if (!normalizedQuery) return quickActions;
-    return quickActions.filter((item) => `${item.label} ${item.detail}`.toLowerCase().includes(normalizedQuery));
-  }, [normalizedQuery]);
+    if (!normalizedQuery) return visibleQuickActions;
+    return visibleQuickActions.filter((item) => `${item.label} ${item.detail}`.toLowerCase().includes(normalizedQuery));
+  }, [normalizedQuery, visibleQuickActions]);
 
   useEffect(() => setSidebarOpen(false), [pathname]);
   useEffect(() => {
@@ -75,10 +86,12 @@ export function ErpShell({ children }: Readonly<{ children: React.ReactNode }>) 
         event.preventDefault();
         setCommandOpen((current) => !current);
         setNotificationsOpen(false);
+        setSessionOpen(false);
       }
       if (event.key === 'Escape') {
         setCommandOpen(false);
         setNotificationsOpen(false);
+        setSessionOpen(false);
       }
     };
     document.addEventListener('keydown', handleKeyDown);
@@ -88,8 +101,15 @@ export function ErpShell({ children }: Readonly<{ children: React.ReactNode }>) 
   const navigate = (href: string) => {
     setCommandOpen(false);
     setNotificationsOpen(false);
+    setSessionOpen(false);
     setQuery('');
     router.push(href);
+  };
+
+  const logout = () => {
+    signOut();
+    setSessionOpen(false);
+    router.push('/dashboard');
   };
 
   return (
@@ -97,10 +117,7 @@ export function ErpShell({ children }: Readonly<{ children: React.ReactNode }>) 
       <aside className={`erp-sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="brand-block">
           <div className="brand-mark">D</div>
-          <div>
-            <strong>DEMAC</strong>
-            <span>ERP NEXT</span>
-          </div>
+          <div><strong>DEMAC</strong><span>ERP NEXT</span></div>
         </div>
 
         <nav className="side-nav" aria-label="Main navigation">
@@ -109,20 +126,15 @@ export function ErpShell({ children }: Readonly<{ children: React.ReactNode }>) 
               <div className="nav-group-label">{group.label}</div>
               {group.items.map((item) => {
                 const active = pathname === item.href;
-                return (
-                  <Link className={`nav-item ${active ? 'active' : ''}`} href={item.href} key={item.href}>
-                    <span className="nav-glyph">{item.short}</span>
-                    <span>{item.label}</span>
-                  </Link>
-                );
+                return <Link className={`nav-item ${active ? 'active' : ''}`} href={item.href} key={item.href}><span className="nav-glyph">{item.short}</span><span>{item.label}</span></Link>;
               })}
             </div>
           ))}
         </nav>
 
         <div className="sidebar-footer">
-          <div className="environment-pill"><span /> ERP Next Live</div>
-          <small>Preview data · controlled integrations</small>
+          <div className="environment-pill"><span /> {mode === 'firebase' ? 'Firebase Session' : 'Preview Owner Mode'}</div>
+          <small>{mode === 'firebase' ? `${principalRoleLabel(principal)} · authenticated` : 'Test data · production writes protected'}</small>
         </div>
       </aside>
 
@@ -131,20 +143,23 @@ export function ErpShell({ children }: Readonly<{ children: React.ReactNode }>) 
       <div className="erp-main">
         <header className="erp-topbar">
           <button className="menu-trigger" type="button" onClick={() => setSidebarOpen((value) => !value)} aria-label="Open navigation">☰</button>
-          <label className="global-search" onClick={() => { setCommandOpen(true); setNotificationsOpen(false); }}>
+          <label className="global-search" onClick={() => { setCommandOpen(true); setNotificationsOpen(false); setSessionOpen(false); }}>
             <span>⌕</span>
-            <input aria-label="Global search" value={query} onFocus={() => { setCommandOpen(true); setNotificationsOpen(false); }} onChange={(event) => setQuery(event.target.value)} placeholder="Search modules, customers, work orders, invoices..." />
+            <input aria-label="Global search" value={query} onFocus={() => { setCommandOpen(true); setNotificationsOpen(false); setSessionOpen(false); }} onChange={(event) => setQuery(event.target.value)} placeholder="Search modules, customers, work orders, invoices..." />
             <kbd>⌘ K</kbd>
           </label>
           <div className="topbar-actions">
             <ThemeControl />
             <div className="notification-anchor">
-              <button className="icon-action" type="button" aria-label="Notifications" aria-expanded={notificationsOpen} onClick={() => { setNotificationsOpen((current) => !current); setCommandOpen(false); }}>◌<b>{notifications.length}</b></button>
-              {notificationsOpen ? <div className="notification-popover"><header><div><strong>Management Alerts</strong><span>Exception-first attention queue</span></div><button type="button" onClick={() => setNotificationsOpen(false)}>×</button></header>{notifications.map((item) => <button type="button" className={`notification-row notification-${item.tone}`} key={item.title} onClick={() => navigate(item.href)}><i /><div><strong>{item.title}</strong><span>{item.detail}</span></div></button>)}<button className="notification-footer" type="button" onClick={() => navigate('/kpis')}>Open full attention queue →</button></div> : null}
+              <button className="icon-action" type="button" aria-label="Notifications" aria-expanded={notificationsOpen} onClick={() => { setNotificationsOpen((current) => !current); setCommandOpen(false); setSessionOpen(false); }}>◌<b>{visibleNotifications.length}</b></button>
+              {notificationsOpen ? <div className="notification-popover"><header><div><strong>Management Alerts</strong><span>Exception-first attention queue</span></div><button type="button" onClick={() => setNotificationsOpen(false)}>×</button></header>{visibleNotifications.map((item) => <button type="button" className={`notification-row notification-${item.tone}`} key={item.title} onClick={() => navigate(item.href)}><i /><div><strong>{item.title}</strong><span>{item.detail}</span></div></button>)}<button className="notification-footer" type="button" onClick={() => navigate('/kpis')}>Open full attention queue →</button></div> : null}
             </div>
-            <div className="owner-chip">
-              <div className="avatar">CM</div>
-              <div><strong>Christian</strong><span>Super Admin</span></div>
+            <div className="notification-anchor">
+              <button className="owner-chip" type="button" aria-label="Account and session" aria-expanded={sessionOpen} onClick={() => { setSessionOpen((current) => !current); setNotificationsOpen(false); setCommandOpen(false); }} style={{ border: 0, background: 'transparent', color: 'inherit', cursor: 'pointer' }}>
+                <div className="avatar">{initials(principal.displayName)}</div>
+                <div><strong>{principal.displayName}</strong><span>{status === 'loading' ? 'Checking session…' : principalRoleLabel(principal)}</span></div>
+              </button>
+              {sessionOpen ? <div className="session-popover"><header><strong>{principal.displayName}</strong><span>{principalRoleLabel(principal)}</span></header><div><span>Security mode</span><strong>{mode === 'firebase' ? 'Firebase authenticated' : 'Preview Owner mode'}</strong></div><div><span>Firebase client</span><strong>{firebaseConfigured ? 'Configuration detected' : 'Configuration not detected'}</strong></div>{mode === 'firebase' ? <button className="danger" type="button" onClick={logout}>Sign out and return to Preview Mode</button> : <button type="button" onClick={() => navigate('/login')}>{firebaseConfigured ? 'Sign in with Firebase' : 'Open security / sign-in status'} →</button>}</div> : null}
             </div>
           </div>
         </header>
@@ -158,7 +173,7 @@ export function ErpShell({ children }: Readonly<{ children: React.ReactNode }>) 
           <div className="command-results">
             {actionResults.length > 0 ? <section><div className="command-section-label">Quick Actions</div>{actionResults.map((item) => <button type="button" className="command-result" key={`action-${item.label}`} onClick={() => navigate(item.href)}><span className="command-glyph">{item.short}</span><div><strong>{item.label}</strong><small>{item.detail}</small></div><em>Open</em></button>)}</section> : null}
             {moduleResults.length > 0 ? <section><div className="command-section-label">Modules</div>{moduleResults.map((item) => <button type="button" className="command-result" key={item.href} onClick={() => navigate(item.href)}><span className="command-glyph">{item.short}</span><div><strong>{item.label}</strong><small>{item.group}</small></div><em>Go</em></button>)}</section> : null}
-            {actionResults.length === 0 && moduleResults.length === 0 ? <div className="command-empty"><strong>No matching ERP destination</strong><span>Customer/work-order/entity search will use the live repository after Firebase is connected.</span></div> : null}
+            {actionResults.length === 0 && moduleResults.length === 0 ? <div className="command-empty"><strong>No matching ERP destination</strong><span>Customer/work-order/entity search will use the live repository after Firebase data mode is enabled.</span></div> : null}
           </div>
           <footer className="command-footer"><span>↑↓ Navigate</span><span>Enter Open</span><span>⌘K Toggle</span></footer>
         </section>
