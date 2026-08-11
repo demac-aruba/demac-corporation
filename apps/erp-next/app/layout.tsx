@@ -20,11 +20,30 @@ const themeBootstrap = `
   }
 })();`;
 
+const legacyCacheCleanup = `
+(function () {
+  if (!('serviceWorker' in navigator)) return;
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.getRegistrations()
+      .then(function (registrations) {
+        return Promise.all(registrations.map(function (registration) { return registration.unregister(); }));
+      })
+      .then(function () {
+        if (!('caches' in window)) return;
+        return caches.keys().then(function (keys) {
+          return Promise.all(keys.map(function (key) { return caches.delete(key); }));
+        });
+      })
+      .catch(function () {});
+  });
+})();`;
+
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeBootstrap }} />
+        <script dangerouslySetInnerHTML={{ __html: legacyCacheCleanup }} />
       </head>
       <body>{children}</body>
     </html>
