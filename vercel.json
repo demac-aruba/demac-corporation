@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": "nextjs",
+  "framework": null,
   "installCommand": "npm install --prefix apps/erp-next --no-audit --no-fund",
   "buildCommand": "npm --prefix apps/erp-next run typecheck && npm --prefix apps/erp-next run build",
-  "outputDirectory": "apps/erp-next/.next"
+  "outputDirectory": "apps/erp-next/out"
 }
