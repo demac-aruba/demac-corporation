@@ -10,11 +10,17 @@ import './field-assets.css';
 import './persistence-security.css';
 import './shell-productivity.css';
 import './auth.css';
+import './landing.css';
 
 export const metadata: Metadata = {
-  title: 'DEMAC ERP Next',
-  description: 'DEMAC Professional Cooling Solutions operating system',
-  robots: { index: false, follow: false, nocache: true },
+  metadataBase: new URL('https://demac-aruba.com'),
+  title: {
+    default: 'DEMAC Professional Cooling Solutions | Aruba',
+    template: '%s | DEMAC',
+  },
+  description: 'Professional cooling solutions in Aruba.',
+  applicationName: 'DEMAC Professional Cooling Solutions',
+  robots: { index: true, follow: true },
 };
 
 const themeBootstrap = `
