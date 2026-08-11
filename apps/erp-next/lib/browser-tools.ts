@@ -14,6 +14,7 @@ export const toolClasses = [
   'Service Toolkit',
 ] as const;
 export type ToolClass = (typeof toolClasses)[number];
+export type ToolCoverageMode = 'per_assigned_van' | 'shared_across_job';
 
 export type BrowserToolAsset = {
   id: string;
@@ -30,6 +31,7 @@ export type BrowserToolAsset = {
 export type BrowserToolRequirementPolicy = {
   presetId: WorkPresetId;
   requiredClasses: ToolClass[];
+  coverageMode: ToolCoverageMode;
   reviewed: boolean;
   updatedAt: string;
   updatedBy: string;
@@ -55,7 +57,7 @@ export function saveBrowserToolAssets(assets: BrowserToolAsset[]) {
 }
 
 export function loadToolRequirementPolicies() {
-  return loadBrowserValue<BrowserToolRequirementPolicy[]>(BROWSER_TOOL_REQUIREMENTS_KEY, []);
+  return loadBrowserValue<BrowserToolRequirementPolicy[]>(BROWSER_TOOL_REQUIREMENTS_KEY, []).map((policy) => ({ ...policy, coverageMode: policy.coverageMode ?? 'per_assigned_van' }));
 }
 
 export function saveToolRequirementPolicies(policies: BrowserToolRequirementPolicy[]) {
@@ -70,6 +72,56 @@ function toolIsUsable(asset: BrowserToolAsset) {
   if (!asset.calibrationDueAt) return true;
   const due = new Date(asset.calibrationDueAt).getTime();
   return Number.isNaN(due) || due >= Date.now();
+}
+
+function deriveSharedJobCoverage(requiredClasses: ToolClass[], assignedVanIds: string[], assets: BrowserToolAsset[]) {
+  const risks: string[] = [];
+  const blockers: string[] = [];
+  const readyEvidence: string[] = [];
+  for (const requiredClass of requiredClasses) {
+    const matching = assets.filter((asset) => assignedVanIds.includes(asset.locationId) && asset.toolClass === requiredClass);
+    const usable = matching.find(toolIsUsable);
+    if (usable) {
+      readyEvidence.push(`${requiredClass} (${usable.id}) is verified and available on ${usable.locationId} for shared job use.`);
+      continue;
+    }
+    if (!matching.length) {
+      blockers.push(`No assigned van has ${requiredClass} registered for shared job use.`);
+      continue;
+    }
+    if (matching.some((asset) => !asset.verified)) {
+      risks.push(`${requiredClass} exists on an assigned van, but asset verification is incomplete.`);
+      continue;
+    }
+    blockers.push(`No usable ${requiredClass} is available across assigned vans; ${matching.map((asset) => `${asset.id} ${asset.status.replaceAll('_', ' ')}`).join(', ')}.`);
+  }
+  return { risks, blockers, readyEvidence };
+}
+
+function derivePerVanCoverage(requiredClasses: ToolClass[], assignedVanIds: string[], assets: BrowserToolAsset[]) {
+  const risks: string[] = [];
+  const blockers: string[] = [];
+  const readyEvidence: string[] = [];
+  for (const vanId of assignedVanIds) {
+    for (const requiredClass of requiredClasses) {
+      const matching = assets.filter((asset) => asset.locationId === vanId && asset.toolClass === requiredClass);
+      const usable = matching.find(toolIsUsable);
+      if (usable) {
+        readyEvidence.push(`${vanId}: ${requiredClass} (${usable.id}) available and verified.`);
+        continue;
+      }
+      if (!matching.length) {
+        blockers.push(`${vanId} has no ${requiredClass} registered.`);
+        continue;
+      }
+      if (matching.some((asset) => !asset.verified)) {
+        risks.push(`${vanId} has ${requiredClass}, but asset verification is incomplete.`);
+        continue;
+      }
+      blockers.push(`${vanId} has no usable ${requiredClass}; ${matching.map((asset) => `${asset.id} ${asset.status.replaceAll('_', ' ')}`).join(', ')}.`);
+    }
+  }
+  return { risks, blockers, readyEvidence };
 }
 
 export function deriveRequiredToolsReadiness(order: BrowserWorkOrderRecord, options?: {
@@ -93,33 +145,12 @@ export function deriveRequiredToolsReadiness(order: BrowserWorkOrderRecord, opti
     return { status: 'blocked', reason: 'No assigned van exists, so required tool custody cannot be resolved.', source: 'Work Order assignments + Tool Asset Registry', requiredClasses: policy.requiredClasses, assignedVanIds };
   }
 
-  const risks: string[] = [];
-  const blockers: string[] = [];
-  const readyEvidence: string[] = [];
+  const result = policy.coverageMode === 'shared_across_job'
+    ? deriveSharedJobCoverage(policy.requiredClasses, assignedVanIds, assets)
+    : derivePerVanCoverage(policy.requiredClasses, assignedVanIds, assets);
 
-  for (const vanId of assignedVanIds) {
-    for (const requiredClass of policy.requiredClasses) {
-      const matching = assets.filter((asset) => asset.locationId === vanId && asset.toolClass === requiredClass);
-      const usable = matching.find(toolIsUsable);
-      if (usable) {
-        readyEvidence.push(`${vanId}: ${requiredClass} (${usable.id}) available and verified.`);
-        continue;
-      }
-      if (!matching.length) {
-        blockers.push(`${vanId} has no ${requiredClass} registered.`);
-        continue;
-      }
-      const unverified = matching.filter((asset) => !asset.verified);
-      if (unverified.length) {
-        risks.push(`${vanId} has ${requiredClass}, but asset verification is incomplete.`);
-        continue;
-      }
-      const unavailable = matching.map((asset) => `${asset.id} ${asset.status.replaceAll('_', ' ')}`).join(', ');
-      blockers.push(`${vanId} has no usable ${requiredClass}; ${unavailable}.`);
-    }
-  }
-
-  if (blockers.length) return { status: 'blocked', reason: blockers.join(' '), source: 'Verified Tool Asset Registry', requiredClasses: policy.requiredClasses, assignedVanIds };
-  if (risks.length) return { status: 'at_risk', reason: risks.join(' '), source: 'Unverified Tool Asset Registry', requiredClasses: policy.requiredClasses, assignedVanIds };
-  return { status: 'ready', reason: readyEvidence.join(' '), source: 'Verified Tool Asset Registry', requiredClasses: policy.requiredClasses, assignedVanIds };
+  const source = `Verified Tool Asset Registry · ${policy.coverageMode === 'shared_across_job' ? 'shared across job' : 'per assigned van'}`;
+  if (result.blockers.length) return { status: 'blocked', reason: result.blockers.join(' '), source, requiredClasses: policy.requiredClasses, assignedVanIds };
+  if (result.risks.length) return { status: 'at_risk', reason: result.risks.join(' '), source, requiredClasses: policy.requiredClasses, assignedVanIds };
+  return { status: 'ready', reason: result.readyEvidence.join(' '), source, requiredClasses: policy.requiredClasses, assignedVanIds };
 }
