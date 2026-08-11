@@ -31,6 +31,9 @@ export type BrowserFieldExecutionRecord = {
   siteId?: string;
   technicianStatus: 'not_started' | 'in_progress' | 'submitted';
   startedAt?: string;
+  startAuthority?: 'ready' | 'released_at_risk';
+  dispatchReleaseId?: string;
+  startAuthorityReason?: string;
   submittedAt?: string;
   updatedAt: string;
   equipment: FieldEquipmentProgress[];
