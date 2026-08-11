@@ -5,6 +5,7 @@ import { loadWorkOrderScopes, scopeStatus } from './browser-workorder-scope';
 import { deriveWorkOrderMaterialReadiness, loadWorkOrderMaterialPlans } from './browser-workorder-materials';
 import { deriveCrewSkillReadiness } from './browser-workforce';
 import { deriveRequiredToolsReadiness } from './browser-tools';
+import { deriveSiteAccessReadiness } from './browser-site-access';
 
 export const BROWSER_JOB_READINESS_CHECKS_KEY = 'demac.erp-next.operations.job-readiness-checks.v1';
 export const BROWSER_DISPATCH_RELEASES_KEY = 'demac.erp-next.operations.dispatch-at-risk-releases.v1';
@@ -108,6 +109,7 @@ export function deriveBrowserJobReadiness(order: BrowserWorkOrderRecord, options
   const materials = deriveWorkOrderMaterialReadiness(order, { plans: loadWorkOrderMaterialPlans(), executions: options?.executions });
   const crewSkill = deriveCrewSkillReadiness(order);
   const requiredTools = deriveRequiredToolsReadiness(order);
+  const siteAccess = deriveSiteAccessReadiness(order);
 
   const dimensions: JobReadinessDimension[] = [
     appointmentDimension(order, appointments),
@@ -118,7 +120,7 @@ export function deriveBrowserJobReadiness(order: BrowserWorkOrderRecord, options
     { id: 'materials', label: 'Materials', status: materials.status, reason: materials.reason, source: `Material plan: ${materials.planState}` },
     { id: 'crew_skill', label: 'Crew & Required Skill', status: crewSkill.status, reason: crewSkill.reason, source: crewSkill.source },
     { id: 'tools', label: 'Required Tools', status: requiredTools.status, reason: requiredTools.reason, source: requiredTools.source },
-    manualDimension('site_access', 'Site Access', manual.siteAccess, manual.updatedBy),
+    { id: 'site_access', label: 'Site Access', status: siteAccess.status, reason: siteAccess.reason, source: siteAccess.source },
     manualDimension('commercial', 'Commercial Clearance', manual.commercialClearance, manual.updatedBy),
   ];
 
