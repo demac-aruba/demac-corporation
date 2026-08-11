@@ -97,6 +97,9 @@ export type CandidateSlot = {
   supportVanId?: string;
   primaryUnits?: number;
   supportUnits?: number;
+  supportStart?: string;
+  supportEnd?: string;
+  supportSegment?: DaySegment;
 };
 
 export const defaultSchedulingSettings: SchedulingSettings = {
@@ -109,7 +112,7 @@ export const defaultSchedulingSettings: SchedulingSettings = {
   serviceStartTimes: ['08:30', '09:30', '10:30', '13:30', '14:30', '15:30'],
   maxStandardUnitsDifferentSitesPerVan: 6,
   maxStandardUnitsSameSiteSingleVan: 7,
-  maxStandardUnitsPerVanWhenSupport: 6,
+  maxStandardUnitsPerVanWhenSupport: 7,
   routeMarginMinutes: 30,
   presetMinutes: {},
 };
@@ -272,6 +275,12 @@ function vanFreeForFullDay(vanId: string, jobs: DispatchJob[]) {
   return !jobs.some((job) => job.vanId === vanId && job.status !== 'cancelled');
 }
 
+function spanIsFree(vanId: string, start: string, end: string, jobs: DispatchJob[]) {
+  const startMinutes = timeToMinutes(start);
+  const endMinutes = timeToMinutes(end);
+  return !jobs.some((job) => job.vanId === vanId && job.status !== 'cancelled' && overlaps(startMinutes, endMinutes, job));
+}
+
 function workingEndAfter(start: string, workMinutes: number, settings: SchedulingSettings) {
   let cursor = timeToMinutes(start);
   let remaining = Math.max(0, workMinutes);
@@ -293,39 +302,89 @@ function workingEndAfter(start: string, workMinutes: number, settings: Schedulin
 
 function findSupportPlan(request: BookingRequest, jobs: DispatchJob[], vans: VanResource[], settings: SchedulingSettings): CandidateSlot[] {
   if (request.presetId !== 'standard_service') return [];
-  const capacity = settings.maxStandardUnitsPerVanWhenSupport;
-  if (request.quantity <= settings.maxStandardUnitsSameSiteSingleVan || request.quantity > capacity * 2) return [];
+  const primaryCapacity = settings.maxStandardUnitsSameSiteSingleVan;
+  const supportCapacity = settings.maxStandardUnitsPerVanWhenSupport;
+  if (request.quantity <= primaryCapacity || request.quantity > primaryCapacity + supportCapacity) return [];
   if (request.restriction?.halfDay === 'pm' || request.restriction?.notBefore && timeToMinutes(request.restriction.notBefore) > timeToMinutes('08:30')) return [];
 
-  const primaryUnits = Math.min(capacity, request.quantity);
+  const serviceMinutes = getPresetDurationMinutes('standard_service', settings);
+  const primaryUnits = primaryCapacity;
   const supportUnits = request.quantity - primaryUnits;
-  const longestAssignmentUnits = Math.max(primaryUnits, supportUnits);
-  const end = workingEndAfter('08:30', longestAssignmentUnits * getPresetDurationMinutes('standard_service', settings), settings);
+  const primaryStart = '08:30';
+  const primaryEnd = workingEndAfter(primaryStart, primaryUnits * serviceMinutes, settings);
   const latestEnd = timeToMinutes(settings.workdayEnd) - settings.routeMarginMinutes;
-  if (timeToMinutes(end) > latestEnd) return [];
+  if (timeToMinutes(primaryEnd) > latestEnd) return [];
 
-  const available = vans.filter((van) => van.active && vanFreeForFullDay(van.id, jobs));
-  if (available.length < 2) return [];
+  const primaryVans = vans.filter((van) => van.active && vanFreeForFullDay(van.id, jobs));
   const results: CandidateSlot[] = [];
 
-  for (let i = 0; i < available.length; i += 1) {
-    for (let j = i + 1; j < available.length; j += 1) {
+  for (const primaryVan of primaryVans) {
+    for (const supportVan of vans.filter((van) => van.active && van.id !== primaryVan.id)) {
+      if (supportUnits <= 3) {
+        for (const supportStart of ['08:30', '13:30']) {
+          const supportEnd = minutesToTime(timeToMinutes(supportStart) + supportUnits * serviceMinutes);
+          const startMinutes = timeToMinutes(supportStart);
+          const endMinutes = timeToMinutes(supportEnd);
+          if (!fitsWorkingWindow(startMinutes, endMinutes, settings)) continue;
+          if (!spanIsFree(supportVan.id, supportStart, supportEnd, jobs)) continue;
+          const supportSegment = halfDayForTime(supportStart);
+          const supportAnchor = getHalfDayAnchor(jobs, supportVan.id, supportSegment);
+          if (!sectorsCompatible(supportAnchor?.sector, request.sector)) continue;
+          const score = 150
+            + (supportAnchor?.sector === request.sector ? 8 : supportAnchor ? 2 : 5)
+            - results.length;
+          results.push({
+            vanId: primaryVan.id,
+            supportVanId: supportVan.id,
+            start: primaryStart,
+            end: primaryEnd,
+            segment: 'full_day',
+            sector: request.sector,
+            score,
+            reasons: [
+              `${primaryUnits} units assigned to the primary full-day van`,
+              `${supportUnits} remaining unit${supportUnits === 1 ? '' : 's'} assigned to a compatible ${supportSegment === 'am' ? 'morning' : 'afternoon'} support block`,
+              'Single customer appointment and communication owner',
+            ],
+            requiresSupportVan: true,
+            primaryUnits,
+            supportUnits,
+            supportStart,
+            supportEnd,
+            supportSegment,
+          });
+        }
+        continue;
+      }
+
+      if (!vanFreeForFullDay(supportVan.id, jobs)) continue;
+      const supportStart = '08:30';
+      const supportEnd = workingEndAfter(supportStart, supportUnits * serviceMinutes, settings);
+      if (timeToMinutes(supportEnd) > latestEnd) continue;
       results.push({
-        vanId: available[i].id,
-        supportVanId: available[j].id,
-        start: '08:30',
-        end,
+        vanId: primaryVan.id,
+        supportVanId: supportVan.id,
+        start: primaryStart,
+        end: primaryEnd,
         segment: 'full_day',
         sector: request.sector,
-        score: 140 - i * 4 - j * 2,
-        reasons: ['Large same-site job split across two linked vans', 'Single customer appointment and communication owner', 'No duplicate confirmation or reminder from support assignment'],
+        score: 145 - results.length,
+        reasons: [
+          `${primaryUnits} units assigned to the primary full-day van`,
+          `${supportUnits} units require a second full-day linked van`,
+          'Single customer appointment and communication owner',
+        ],
         requiresSupportVan: true,
         primaryUnits,
         supportUnits,
+        supportStart,
+        supportEnd,
+        supportSegment: 'full_day',
       });
     }
   }
-  return results.slice(0, 3);
+
+  return results.sort((a, b) => b.score - a.score).slice(0, 6);
 }
 
 export function findCandidateSlots(request: BookingRequest, jobs: DispatchJob[], vans: VanResource[] = previewVans, settings: SchedulingSettings = getRuntimeSchedulingSettings()): CandidateSlot[] {

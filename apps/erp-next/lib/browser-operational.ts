@@ -1,5 +1,5 @@
 import type { CalendarDispatchJob } from './scheduling-capacity';
-import type { WorkPresetId } from './scheduling';
+import type { DaySegment, WorkPresetId } from './scheduling';
 
 export type BrowserAppointmentStatus = 'temporary_hold' | 'confirmed' | 'cancelled';
 
@@ -24,6 +24,16 @@ export type BrowserAppointmentRecord = {
   workOrderId?: string;
 };
 
+export type BrowserWorkOrderAssignment = {
+  vanId: string;
+  role: 'primary' | 'support';
+  quantity: number;
+  customerCommunicationOwner: boolean;
+  start?: string;
+  end?: string;
+  segment?: DaySegment;
+};
+
 export type BrowserWorkOrderRecord = {
   id: string;
   appointmentId: string;
@@ -43,7 +53,7 @@ export type BrowserWorkOrderRecord = {
   supportVanId?: string;
   readiness: 'ready' | 'at_risk' | 'blocked';
   lifecycle: 'scheduled';
-  assignments: Array<{ vanId: string; role: 'primary' | 'support'; quantity: number; customerCommunicationOwner: boolean }>;
+  assignments: BrowserWorkOrderAssignment[];
   createdAt: string;
 };
 
@@ -75,6 +85,9 @@ export function createBrowserWorkOrder(appointment: BrowserAppointmentRecord): B
       role: assignment.isPrimaryAssignment ? 'primary' : 'support',
       quantity: assignment.quantity,
       customerCommunicationOwner: assignment.customerCommunicationOwner ?? assignment.isPrimaryAssignment,
+      start: assignment.start,
+      end: assignment.end,
+      segment: assignment.segment,
     })),
     createdAt: new Date().toISOString(),
   };
