@@ -6,6 +6,7 @@ import './management-operations.css';
 import './system-governance.css';
 import './revenue-cycle.css';
 import './field-assets.css';
+import './persistence-security.css';
 
 export const metadata: Metadata = {
   title: 'DEMAC ERP Next',

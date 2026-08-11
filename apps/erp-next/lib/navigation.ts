@@ -78,6 +78,7 @@ export const navigationGroups: NavigationGroup[] = [
       { label: 'Settings', href: '/settings', short: 'ST', roles: ['super_admin'] },
       { label: 'Automations', href: '/automations', short: 'AU', roles: ['super_admin'] },
       { label: 'Integrations', href: '/integrations', short: 'IG', roles: ['super_admin'] },
+      { label: 'Access Control', href: '/access-control', short: 'AC', roles: ['super_admin'] },
       { label: 'Audit Log', href: '/audit', short: 'AL', roles: ['super_admin', 'auditor'] },
     ],
   },
