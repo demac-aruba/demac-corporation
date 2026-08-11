@@ -5,6 +5,7 @@ import { loadWorkOrderScopes, scopeStatus } from './browser-workorder-scope';
 import { deriveWorkOrderMaterialReadiness, loadWorkOrderMaterialPlans } from './browser-workorder-materials';
 
 export const BROWSER_JOB_READINESS_CHECKS_KEY = 'demac.erp-next.operations.job-readiness-checks.v1';
+export const BROWSER_DISPATCH_RELEASES_KEY = 'demac.erp-next.operations.dispatch-at-risk-releases.v1';
 
 export type ManualReadinessState = 'not_checked' | 'ready' | 'not_required' | 'blocked';
 export type JobReadinessStatus = 'ready' | 'at_risk' | 'blocked';
@@ -34,6 +35,15 @@ export type BrowserJobReadiness = {
   blockers: JobReadinessDimension[];
   risks: JobReadinessDimension[];
   calculatedAt: string;
+};
+
+export type BrowserDispatchAtRiskRelease = {
+  id: string;
+  workOrderId: string;
+  riskSignature: string;
+  reason: string;
+  authorizedBy: string;
+  authorizedAt: string;
 };
 
 export const defaultJobReadinessChecks = (workOrderId: string): BrowserJobReadinessChecks => ({
@@ -118,4 +128,47 @@ export function deriveBrowserJobReadiness(order: BrowserWorkOrderRecord, options
     risks,
     calculatedAt: new Date().toISOString(),
   };
+}
+
+export function readinessRiskSignature(readiness: BrowserJobReadiness) {
+  return readiness.risks
+    .map((risk) => `${risk.id}:${risk.reason}`)
+    .sort()
+    .join('|');
+}
+
+export function loadDispatchAtRiskReleases() {
+  return loadBrowserValue<BrowserDispatchAtRiskRelease[]>(BROWSER_DISPATCH_RELEASES_KEY, []);
+}
+
+export function createDispatchAtRiskRelease(readiness: BrowserJobReadiness, reason: string, authorizedBy = 'Operations / Preview') {
+  if (readiness.status !== 'at_risk') throw new Error('Only AT RISK Work Orders can receive a dispatch release. READY needs no release and BLOCKED cannot be overridden here.');
+  const trimmed = reason.trim();
+  if (trimmed.length < 8) throw new Error('Enter a meaningful release reason of at least 8 characters.');
+  const release: BrowserDispatchAtRiskRelease = {
+    id: `REL-${readiness.workOrderId}-${Date.now().toString().slice(-8)}`,
+    workOrderId: readiness.workOrderId,
+    riskSignature: readinessRiskSignature(readiness),
+    reason: trimmed,
+    authorizedBy,
+    authorizedAt: new Date().toISOString(),
+  };
+  const current = loadDispatchAtRiskReleases();
+  const next = [release, ...current.filter((item) => item.workOrderId !== readiness.workOrderId)];
+  saveBrowserValue(BROWSER_DISPATCH_RELEASES_KEY, next);
+  return release;
+}
+
+export function validDispatchAtRiskRelease(readiness: BrowserJobReadiness, releases = loadDispatchAtRiskReleases()) {
+  if (readiness.status !== 'at_risk') return undefined;
+  const signature = readinessRiskSignature(readiness);
+  return releases.find((release) => release.workOrderId === readiness.workOrderId && release.riskSignature === signature);
+}
+
+export function fieldStartDecision(readiness: BrowserJobReadiness, releases = loadDispatchAtRiskReleases()) {
+  if (readiness.status === 'ready') return { allowed: true, mode: 'ready' as const, release: undefined, reason: 'All consolidated readiness dimensions are READY.' };
+  if (readiness.status === 'blocked') return { allowed: false, mode: 'blocked' as const, release: undefined, reason: readiness.blockers[0]?.reason ?? 'A hard readiness blocker exists.' };
+  const release = validDispatchAtRiskRelease(readiness, releases);
+  if (release) return { allowed: true, mode: 'released_at_risk' as const, release, reason: `Operations authorized AT RISK start: ${release.reason}` };
+  return { allowed: false, mode: 'at_risk_hold' as const, release: undefined, reason: readiness.risks[0]?.reason ?? 'AT RISK Work Order needs Operations release before Field start.' };
 }
