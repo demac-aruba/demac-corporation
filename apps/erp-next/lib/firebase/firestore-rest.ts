@@ -36,6 +36,12 @@ function documentId(name: string) {
   return decodeURIComponent(name.split('/').pop() ?? '');
 }
 
+function isDateTimeField(key: string, value: unknown) {
+  if (typeof value !== 'string') return false;
+  if (!/(At|Until)$/.test(key)) return false;
+  return /^\d{4}-\d{2}-\d{2}T/.test(value) && !Number.isNaN(Date.parse(value));
+}
+
 export function encodeFirestoreValue(value: unknown): FirestoreValue {
   if (value === null) return { nullValue: 'NULL_VALUE' };
   if (typeof value === 'boolean') return { booleanValue: value };
@@ -50,7 +56,9 @@ export function encodeFirestoreFields(input: Record<string, unknown>) {
   const fields: Record<string, FirestoreValue> = {};
   for (const [key, value] of Object.entries(input)) {
     if (value === undefined) continue;
-    fields[key] = encodeFirestoreValue(value);
+    fields[key] = isDateTimeField(key, value)
+      ? { timestampValue: String(value) }
+      : encodeFirestoreValue(value);
   }
   return fields;
 }
