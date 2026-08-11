@@ -11,7 +11,6 @@ export type BrowserCommercialPolicy = {
   presetId: WorkPresetId;
   mode: CommercialClearanceMode;
   reviewed: boolean;
-  defaultDepositPercent?: number;
   updatedAt: string;
   updatedBy: string;
 };
