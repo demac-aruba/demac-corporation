@@ -83,8 +83,8 @@ export function BookingDrawer({ day, jobs, preferred, onClose, onReserve, onAppl
     quantity: Number(line.quantityInput),
   })), [workLines]);
   const scopeValid = parsedWorkLines.length > 0 && parsedWorkLines.every((line) => Number.isInteger(line.quantity) && line.quantity >= 1 && line.quantity <= 14);
-  const safeWorkLines = parsedWorkLines.map((line) => ({ ...line, quantity: Number.isInteger(line.quantity) && line.quantity >= 1 ? line.quantity : 1 }));
-  const totalQuantity = safeWorkLines.reduce((sum, line) => sum + line.quantity, 0);
+  const safeWorkLines = useMemo(() => parsedWorkLines.map((line) => ({ ...line, quantity: Number.isInteger(line.quantity) && line.quantity >= 1 ? line.quantity : 1 })), [parsedWorkLines]);
+  const totalQuantity = useMemo(() => safeWorkLines.reduce((sum, line) => sum + line.quantity, 0), [safeWorkLines]);
   const primaryLine = safeWorkLines[0] ?? { id: 'work-fallback', presetId: 'standard_service' as WorkPresetId, quantity: 1 };
 
   const customerMatches = useMemo(() => {
