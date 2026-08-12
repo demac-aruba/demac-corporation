@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
+import { PublicFooterDynamicInfo } from './public-footer-dynamic-info';
 
 type PublicSiteShellProps = {
   children: ReactNode;
@@ -107,15 +108,7 @@ export function PublicFooter() {
             {footerServices.map((service) => <Link href="/services" key={service}>{service}</Link>)}
           </nav>
 
-          <section className="premium-footer-contact">
-            <strong>Contact DEMAC</strong>
-            <div className="premium-footer-contact-item"><span aria-hidden="true">⌖</span><div><small>Office</small><b>Santa Cruz 54 C</b><em>Santa Cruz, Aruba</em></div></div>
-            <div className="premium-footer-contact-item"><span aria-hidden="true">◷</span><div><small>Business Hours</small><b>Mon–Fri · 8:00 AM–5:00 PM</b><em>Saturday · 9:00 AM–1:00 PM</em></div></div>
-            <div className="premium-footer-contact-actions">
-              <Link href="/contact?channel=whatsapp">WhatsApp / Contact</Link>
-              <a href="https://www.google.com/maps/search/?api=1&query=Santa+Cruz+54+C%2C+Aruba" target="_blank" rel="noreferrer">Get Directions ↗</a>
-            </div>
-          </section>
+          <PublicFooterDynamicInfo />
         </div>
 
         <div className="premium-footer-bottom">
