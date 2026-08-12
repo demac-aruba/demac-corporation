@@ -1,4 +1,4 @@
-import type { BookingRequest, CandidateSlot, DispatchJob, SchedulingSettings, VanResource } from './scheduling';
+import type { BookingRequest, CandidateSlot, DispatchJob, HalfDay, SchedulingSettings, VanResource } from './scheduling';
 import { calculateDurationMinutes, findCandidateSlots, getPresetDurationMinutes, getRuntimeSchedulingSettings, minutesToTime, previewVans, sectorsCompatible, timeToMinutes } from './scheduling';
 
 export type OperationalDay = {
@@ -11,6 +11,23 @@ export type OperationalDay = {
 };
 
 export type CalendarDispatchJob = DispatchJob & { dateKey: string };
+
+export type SupportReflowPlan = {
+  id: string;
+  supportJobId: string;
+  vanId: string;
+  customer: string;
+  sector: string;
+  quantity: number;
+  fromStart: string;
+  fromEnd: string;
+  toStart: string;
+  toEnd: string;
+  toSegment: HalfDay;
+  unlockedSlot: CandidateSlot;
+  score: number;
+  reasons: string[];
+};
 
 function arubaDateKey(date: Date) {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Aruba', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
@@ -178,6 +195,99 @@ export function findCandidateSlotsForDay(day: OperationalDay, request: BookingRe
   if (!day.isOpen) return [];
   if (day.weekday === 'Sat') return findSaturdaySlots(request, jobs, vans, settings);
   return findCandidateSlotsV2(request, jobs, vans, settings);
+}
+
+function weekdayWorkingWindowAllows(start: string, end: string, settings: SchedulingSettings) {
+  const startMinutes = timeToMinutes(start);
+  const endMinutes = timeToMinutes(end);
+  const lunchStart = timeToMinutes(settings.lunchStart);
+  const lunchEnd = timeToMinutes(settings.lunchEnd);
+  const dayEnd = timeToMinutes(settings.workdayEnd) - settings.routeMarginMinutes;
+  if (startMinutes < 12 * 60) return endMinutes <= lunchStart - settings.routeMarginMinutes;
+  return startMinutes >= lunchEnd && endMinutes <= dayEnd;
+}
+
+function routeRemainsCompatible(jobs: DispatchJob[], movedSupport: DispatchJob) {
+  const segment: HalfDay = timeToMinutes(movedSupport.start) < 12 * 60 ? 'am' : 'pm';
+  const routeJobs = jobs
+    .filter((job) => job.vanId === movedSupport.vanId && job.status !== 'cancelled')
+    .filter((job) => job.segment === segment || job.segment === 'full_day')
+    .sort((a, b) => timeToMinutes(a.start) - timeToMinutes(b.start));
+  const anchor = routeJobs[0];
+  if (!anchor) return true;
+  return routeJobs.every((job) => sectorsCompatible(anchor.sector, job.sector));
+}
+
+export function findSupportReflowPlansForDay(
+  day: OperationalDay,
+  request: BookingRequest,
+  jobs: DispatchJob[],
+  vans: VanResource[] = previewVans,
+  settings: SchedulingSettings = getRuntimeSchedulingSettings(),
+): SupportReflowPlan[] {
+  if (!day.isOpen || day.weekday === 'Sat') return [];
+  if (findCandidateSlotsForDay(day, request, jobs, vans, settings).length) return [];
+
+  const supportJobs = jobs.filter((job) => job.status !== 'cancelled' && !job.isPrimaryAssignment && Boolean(job.supportForJobId));
+  const plans: SupportReflowPlan[] = [];
+  const requestDuration = calculateDurationMinutes(request, settings);
+
+  for (const supportJob of supportJobs) {
+    const primaryJob = jobs.find((job) => job.id === supportJob.supportForJobId && job.status !== 'cancelled');
+    if (!primaryJob) continue;
+    const supportMinutes = timeToMinutes(supportJob.end) - timeToMinutes(supportJob.start);
+    if (supportMinutes <= 0) continue;
+
+    const withoutSupport = jobs.filter((job) => job.id !== supportJob.id);
+    for (const alternateStart of settings.serviceStartTimes) {
+      if (alternateStart === supportJob.start) continue;
+      const alternateEnd = minutesToTime(timeToMinutes(alternateStart) + supportMinutes);
+      if (!weekdayWorkingWindowAllows(alternateStart, alternateEnd, settings)) continue;
+      if (timeToMinutes(alternateStart) < timeToMinutes(primaryJob.start) || timeToMinutes(alternateEnd) > timeToMinutes(primaryJob.end)) continue;
+      if (conflictsWithSpan(withoutSupport, supportJob.vanId, alternateStart, alternateEnd)) continue;
+
+      const toSegment: HalfDay = timeToMinutes(alternateStart) < 12 * 60 ? 'am' : 'pm';
+      const movedSupport: DispatchJob = { ...supportJob, start: alternateStart, end: alternateEnd, segment: toSegment };
+      const simulatedJobs = [...withoutSupport, movedSupport];
+      if (!routeRemainsCompatible(simulatedJobs, movedSupport)) continue;
+
+      const recoveredCandidates = findCandidateSlotsForDay(day, request, simulatedJobs, vans, settings)
+        .filter((slot) => slot.vanId === supportJob.vanId || slot.supportVanId === supportJob.vanId);
+      if (!recoveredCandidates.length) continue;
+      const unlockedSlot = recoveredCandidates.sort((a, b) => b.score - a.score || timeToMinutes(a.start) - timeToMinutes(b.start))[0];
+      const moveDistance = Math.abs(timeToMinutes(alternateStart) - timeToMinutes(supportJob.start));
+      const score = unlockedSlot.score + 35 - Math.round(moveDistance / 30);
+
+      plans.push({
+        id: `${supportJob.id}:${alternateStart}:${unlockedSlot.vanId}:${unlockedSlot.start}`,
+        supportJobId: supportJob.id,
+        vanId: supportJob.vanId,
+        customer: supportJob.customer,
+        sector: supportJob.sector,
+        quantity: supportJob.quantity,
+        fromStart: supportJob.start,
+        fromEnd: supportJob.end,
+        toStart: alternateStart,
+        toEnd: alternateEnd,
+        toSegment,
+        unlockedSlot,
+        score,
+        reasons: [
+          `Move support-only work for ${supportJob.customer} without changing its primary appointment`,
+          `Recover ${requestDuration} continuous minutes for the new request on ${unlockedSlot.vanId.replace('VAN-', 'Van ')}`,
+          `New request becomes valid at ${unlockedSlot.start}–${unlockedSlot.end}`,
+          'Customer communication ownership remains with the primary van',
+        ],
+      });
+    }
+  }
+
+  const unique = new Map<string, SupportReflowPlan>();
+  for (const plan of plans.sort((a, b) => b.score - a.score)) {
+    const key = `${plan.supportJobId}:${plan.toStart}:${plan.unlockedSlot.vanId}:${plan.unlockedSlot.start}`;
+    if (!unique.has(key)) unique.set(key, plan);
+  }
+  return [...unique.values()].slice(0, 6);
 }
 
 export function weekCapacity(jobs: CalendarDispatchJob[], week: OperationalDay[]) {
