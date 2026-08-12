@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
-import type { WorkPresetId } from '../../lib/scheduling';
+import type { BookingWorkLine, WorkPresetId } from '../../lib/scheduling';
 import { defaultWorkPresets } from '../../lib/scheduling';
 import type { CalendarDispatchJob } from '../../lib/scheduling-capacity';
 import { buildOperationalWeek } from '../../lib/scheduling-capacity';
@@ -19,6 +19,7 @@ import {
 import styles from './scheduling-overview-v2.module.css';
 
 type DrawerMode = 'details' | 'edit' | 'move' | 'reschedule' | 'cancel' | 'issue';
+type WorkLineDraft = { id: string; presetId: WorkPresetId; quantityInput: string };
 
 type Props = {
   appointment: BrowserAppointmentRecord;
@@ -75,10 +76,28 @@ function historyLabel(kind: string) {
   return kind.replaceAll('_', ' ').replace(/\b\w/g, (value) => value.toUpperCase());
 }
 
+function presetLabel(id: WorkPresetId) {
+  return defaultWorkPresets.find((item) => item.id === id)?.label ?? id;
+}
+
+function draftsFromAppointment(appointment: BrowserAppointmentRecord): WorkLineDraft[] {
+  const source: BookingWorkLine[] = appointment.workLines?.length
+    ? appointment.workLines
+    : [{ id: 'work-1', presetId: appointment.presetId, quantity: appointment.totalQuantity }];
+  return source.map((line, index) => ({
+    id: line.id || `work-${index + 1}`,
+    presetId: line.presetId,
+    quantityInput: String(line.quantity),
+  }));
+}
+
+function newWorkLine(index: number): WorkLineDraft {
+  return { id: `work-${Date.now()}-${index}`, presetId: 'standard_service', quantityInput: '1' };
+}
+
 export function AppointmentDetailsDrawer({ appointment, allJobs, canManage, actor, moveArmed, onArmMove, onClose, onUpdate }: Props) {
   const [mode, setMode] = useState<DrawerMode>('details');
-  const [presetId, setPresetId] = useState<WorkPresetId>(appointment.presetId);
-  const [quantity, setQuantity] = useState(String(appointment.totalQuantity));
+  const [editWorkLines, setEditWorkLines] = useState<WorkLineDraft[]>(() => draftsFromAppointment(appointment));
   const [instructions, setInstructions] = useState(appointment.technicianInstructions ?? '');
   const [reason, setReason] = useState('');
   const [note, setNote] = useState('');
@@ -102,29 +121,31 @@ export function AppointmentDetailsDrawer({ appointment, allJobs, canManage, acto
   const selectedReschedule = reschedule.slots.find((slot) => `${slot.vanId}|${slot.start}|${slot.supportVanId ?? ''}|${slot.supportStart ?? ''}` === selectedRescheduleKey);
   const primary = appointment.assignments.find((assignment) => assignment.isPrimaryAssignment) ?? appointment.assignments[0];
   const support = appointment.assignments.find((assignment) => !assignment.isPrimaryAssignment);
+  const displayWorkLines = appointment.workLines?.length
+    ? appointment.workLines
+    : [{ id: 'legacy-work-1', presetId: appointment.presetId, quantity: appointment.totalQuantity }];
 
-  const saveEdit = () => {
-    const parsed = Number(quantity);
-    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 14) {
-      setError('Enter a valid quantity from 1 to 14.');
-      return;
-    }
-    const result = updateAppointmentDetails({ appointment: undefined as never } as never);
-    void result;
+  const updateWorkLine = (id: string, patch: Partial<WorkLineDraft>) => {
+    setEditWorkLines((current) => current.map((line) => line.id === id ? { ...line, ...patch } : line));
+    setError('');
   };
 
   const applyEdit = () => {
-    const parsed = Number(quantity);
-    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 14) {
-      setError('Enter a valid quantity from 1 to 14.');
+    const parsed: BookingWorkLine[] = editWorkLines.map((line) => ({
+      id: line.id,
+      presetId: line.presetId,
+      quantity: Number(line.quantityInput),
+    }));
+    if (!parsed.length || parsed.some((line) => !Number.isInteger(line.quantity) || line.quantity < 1 || line.quantity > 14)) {
+      setError('Every work line needs a whole-number quantity from 1 to 14.');
       return;
     }
-    const result = updateAppointmentDetails({ record: appointment, update: { presetId, totalQuantity: parsed, technicianInstructions: instructions }, day, jobs: sameDayJobs, actor });
+    const result = updateAppointmentDetails({ record: appointment, update: { workLines: parsed, technicianInstructions: instructions }, day, jobs: sameDayJobs, actor });
     if (!result.ok) {
       setError(result.message);
       return;
     }
-    onUpdate(result.record, 'Appointment details updated. Capacity was recalculated and the existing work spot remains valid.');
+    onUpdate(result.record, 'Appointment scope updated. Booking Intelligence recalculated the complete work duration and verified the existing work spot.');
     setMode('details');
     setError('');
   };
@@ -177,6 +198,10 @@ export function AppointmentDetailsDrawer({ appointment, allJobs, canManage, acto
     setReason('');
     setNote('');
     setError('');
+    if (next === 'edit') {
+      setEditWorkLines(draftsFromAppointment(appointment));
+      setInstructions(appointment.technicianInstructions ?? '');
+    }
     if (next === 'reschedule') {
       setTargetDate(appointment.dateKey);
       setSelectedRescheduleKey('');
@@ -193,10 +218,11 @@ export function AppointmentDetailsDrawer({ appointment, allJobs, canManage, acto
         <section className={styles.formSection}>
           <header><strong>Appointment details</strong><span>{appointment.status === 'cancelled' ? `Cancelled · ${appointment.cancellationReason ?? 'No reason recorded'}` : `${formatDate(appointment.dateKey)} · ${formatTime(primary?.start)}–${formatTime(primary?.end)}`}</span></header>
           <div className={styles.formGrid}>
-            <div><span style={{ color: 'var(--muted)', fontSize: 7 }}>SERVICE</span><strong style={{ display: 'block', marginTop: 4 }}>{defaultWorkPresets.find((item) => item.id === appointment.presetId)?.label ?? appointment.presetId}</strong></div>
-            <div><span style={{ color: 'var(--muted)', fontSize: 7 }}>A/C UNITS</span><strong style={{ display: 'block', marginTop: 4 }}>{appointment.totalQuantity}</strong></div>
+            <div className={styles.wide}><span style={{ color: 'var(--muted)', fontSize: 7 }}>WORK SCOPE</span><div style={{ display: 'grid', gap: 4, marginTop: 5 }}>{displayWorkLines.map((line) => <strong key={line.id} style={{ display: 'block' }}>{presetLabel(line.presetId)} · {line.quantity} item/unit{line.quantity === 1 ? '' : 's'}</strong>)}</div></div>
+            <div><span style={{ color: 'var(--muted)', fontSize: 7 }}>TOTAL ITEMS / UNITS</span><strong style={{ display: 'block', marginTop: 4 }}>{appointment.totalQuantity}</strong></div>
             <div><span style={{ color: 'var(--muted)', fontSize: 7 }}>PRIMARY VAN</span><strong style={{ display: 'block', marginTop: 4 }}>{primary?.vanId?.replace('VAN-', 'Van ') ?? appointment.primaryVanId}</strong></div>
             <div><span style={{ color: 'var(--muted)', fontSize: 7 }}>SUPPORT</span><strong style={{ display: 'block', marginTop: 4 }}>{support ? `${support.vanId.replace('VAN-', 'Van ')} · ${formatTime(support.start)}–${formatTime(support.end)}` : 'None'}</strong></div>
+            <div><span style={{ color: 'var(--muted)', fontSize: 7 }}>CUSTOMER RESTRICTION</span><strong style={{ display: 'block', marginTop: 4 }}>{appointment.bookingRestriction?.halfDay ? appointment.bookingRestriction.halfDay.toUpperCase() : appointment.bookingRestriction?.notBefore ? `After ${formatTime(appointment.bookingRestriction.notBefore)}` : appointment.bookingRestriction?.notAfter ? `Before ${formatTime(appointment.bookingRestriction.notAfter)}` : 'None'}</strong></div>
             <div className={styles.wide}><span style={{ color: 'var(--muted)', fontSize: 7 }}>TECHNICIAN INSTRUCTIONS</span><strong style={{ display: 'block', marginTop: 4, whiteSpace: 'pre-wrap' }}>{appointment.technicianInstructions || 'No internal instructions.'}</strong></div>
           </div>
         </section>
@@ -205,7 +231,7 @@ export function AppointmentDetailsDrawer({ appointment, allJobs, canManage, acto
           <section className={styles.formSection}>
             <header><strong>Manage appointment</strong><span>Actions are separated so customer changes are not confused with internal dispatch optimization.</span></header>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: 8, padding: 11 }}>
-              <button className={styles.secondary} type="button" disabled={!canManage || appointment.status === 'cancelled'} onClick={() => begin('edit')}>Edit Details</button>
+              <button className={styles.secondary} type="button" disabled={!canManage || appointment.status === 'cancelled'} onClick={() => begin('edit')}>Edit Scope / Details</button>
               <button className={styles.secondary} type="button" disabled={!canManage || appointment.status === 'cancelled'} onClick={() => begin('move')}>Move / Reassign</button>
               <button className={styles.secondary} type="button" disabled={!canManage || appointment.status === 'cancelled'} onClick={() => begin('reschedule')}>Reschedule</button>
               <button className={styles.secondary} type="button" disabled={!canManage || appointment.status === 'cancelled'} onClick={() => begin('issue')}>Record Issue</button>
@@ -217,11 +243,16 @@ export function AppointmentDetailsDrawer({ appointment, allJobs, canManage, acto
           </section>
         </> : null}
 
-        {mode === 'edit' ? <section className={styles.formSection}><header><strong>Edit details</strong><span>Changing service or quantity recalculates capacity before saving.</span></header><div className={styles.formGrid}>
-          <label className={styles.wide}><span>Work type</span><select value={presetId} onChange={(event) => setPresetId(event.target.value as WorkPresetId)}>{defaultWorkPresets.map((preset) => <option value={preset.id} key={preset.id}>{preset.label}</option>)}</select></label>
-          <label><span>Number of A/C units</span><input type="number" min={1} max={14} value={quantity} onChange={(event) => setQuantity(event.target.value)} /></label>
-          <label className={styles.wide}><span>Technician instructions</span><textarea rows={4} value={instructions} onChange={(event) => setInstructions(event.target.value)} /></label>
-        </div><ActionFooter error={error} onBack={() => setMode('details')} onSave={applyEdit} saveLabel="Save Changes" /></section> : null}
+        {mode === 'edit' ? <section className={styles.formSection}><header><strong>Edit appointment scope</strong><span>Every work line participates in the combined duration; saving is blocked if the current work spot no longer fits.</span></header>
+          <div style={{ display: 'grid', gap: 8, padding: 11 }}>{editWorkLines.map((line, index) => <div className={styles.formGrid} key={line.id} style={{ padding: 9, border: '1px solid var(--border)', borderRadius: 9 }}>
+            <label className={styles.wide}><span>Work line {index + 1}</span><select value={line.presetId} onChange={(event) => updateWorkLine(line.id, { presetId: event.target.value as WorkPresetId })}>{defaultWorkPresets.map((preset) => <option value={preset.id} key={preset.id}>{preset.label}</option>)}</select></label>
+            <label><span>Quantity</span><input type="number" min={1} max={14} value={line.quantityInput} onChange={(event) => { if (/^\d*$/.test(event.target.value)) updateWorkLine(line.id, { quantityInput: event.target.value }); }} /></label>
+            <div style={{ display: 'flex', alignItems: 'end' }}>{editWorkLines.length > 1 ? <button type="button" className={styles.secondary} onClick={() => setEditWorkLines((current) => current.filter((item) => item.id !== line.id))}>Remove line</button> : null}</div>
+          </div>)}</div>
+          <div style={{ padding: '0 11px 9px' }}><button type="button" className={styles.secondary} onClick={() => setEditWorkLines((current) => [...current, newWorkLine(current.length)])}>+ Add another work type</button></div>
+          <div className={styles.formGrid}><label className={styles.wide}><span>Technician instructions</span><textarea rows={4} value={instructions} onChange={(event) => setInstructions(event.target.value)} /></label></div>
+          <ActionFooter error={error} onBack={() => setMode('details')} onSave={applyEdit} saveLabel="Save Scope" />
+        </section> : null}
 
         {mode === 'move' ? <section className={styles.formSection}><header><strong>Move / Reassign · same day</strong><span>Only Booking Intelligence-approved destinations are shown. This is an operational move, not a customer reschedule.</span></header><div className={styles.slotOptions}>
           {moveCandidates.length ? moveCandidates.map((slot) => {
@@ -236,7 +267,7 @@ export function AppointmentDetailsDrawer({ appointment, allJobs, canManage, acto
           <label className={styles.wide}><span>Internal note</span><textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Optional context..." /></label>
         </div><div className={styles.slotOptions}>{reschedule.day?.isOpen && reschedule.slots.length ? reschedule.slots.map((slot) => {
           const key = `${slot.vanId}|${slot.start}|${slot.supportVanId ?? ''}|${slot.supportStart ?? ''}`;
-          return <button type="button" key={key} className={`${styles.slotOption} ${selectedRescheduleKey === key ? styles.slotOptionSelected : ''}`} onClick={() => setSelectedRescheduleKey(key)}><div><strong>{formatDate(targetDate)} · {slot.vanId.replace('VAN-', 'Van ')} · {formatTime(slot.start)}–${formatTime(slot.end)}</strong><span>{slot.supportVanId ? `Linked support ${slot.supportVanId.replace('VAN-', 'Van ')}` : 'Valid route-aware capacity'}</span></div><b>SELECT</b><small>{slot.reasons.join(' · ')}</small></button>;
+          return <button type="button" key={key} className={`${styles.slotOption} ${selectedRescheduleKey === key ? styles.slotOptionSelected : ''}`} onClick={() => setSelectedRescheduleKey(key)}><div><strong>{formatDate(targetDate)} · {slot.vanId.replace('VAN-', 'Van ')} · {formatTime(slot.start)}–{formatTime(slot.end)}</strong><span>{slot.supportVanId ? `Linked support ${slot.supportVanId.replace('VAN-', 'Van ')}` : 'Valid route-aware capacity'}</span></div><b>SELECT</b><small>{slot.reasons.join(' · ')}</small></button>;
         }) : <div className={styles.noSlots}><strong>No valid capacity on this date</strong><p>Select another operational date or review the request constraints.</p></div>}</div><ActionFooter error={error} onBack={() => setMode('details')} onSave={applyReschedule} saveLabel="Save Reschedule" /></section> : null}
 
         {mode === 'cancel' ? <section className={styles.formSection}><header><strong>Cancel appointment</strong><span>Cancellation releases capacity immediately and permanently records the reason.</span></header><div className={styles.formGrid}>
@@ -250,7 +281,7 @@ export function AppointmentDetailsDrawer({ appointment, allJobs, canManage, acto
         </div><ActionFooter error={error} onBack={() => setMode('details')} onSave={applyIssue} saveLabel="Record Issue" /></section> : null}
 
         <section className={styles.formSection}><header><strong>History / audit trail</strong><span>Changes are appended; previous schedule events are never overwritten.</span></header><div style={{ display: 'grid', gap: 7, padding: 10 }}>
-          {(appointment.lifecycleHistory ?? []).length ? [...(appointment.lifecycleHistory ?? [])].reverse().map((item) => <article key={item.id} style={{ padding: 9, border: '1px solid var(--border)', borderRadius: 9, background: 'var(--surface-2)' }}><strong style={{ fontSize: 7.5 }}>{historyLabel(item.kind)}</strong><span style={{ display: 'block', marginTop: 3, color: 'var(--muted)', fontSize: 6.2 }}>{new Date(item.at).toLocaleString()} · {item.actorName || 'ERP operator'}</span>{item.reason ? <span style={{ display: 'block', marginTop: 3, fontSize: 6.5 }}>{item.reason}</span> : null}{item.from && item.to ? <small style={{ display: 'block', marginTop: 4, color: 'var(--muted)' }}>{formatDate(item.from.dateKey)} {item.from.primaryVanId.replace('VAN-', 'Van ')} {formatTime(item.from.primaryStart)} → {formatDate(item.to.dateKey)} {item.to.primaryVanId.replace('VAN-', 'Van ')} {formatTime(item.to.primaryStart)}</small> : null}</article>) : <div className={styles.noSlots}><strong>No lifecycle changes yet</strong><p>Legacy-created appointments remain compatible; new changes will be recorded here.</p></div>}
+          {(appointment.lifecycleHistory ?? []).length ? [...(appointment.lifecycleHistory ?? [])].reverse().map((item) => <article key={item.id} style={{ padding: 9, border: '1px solid var(--border)', borderRadius: 9, background: 'var(--surface-2)' }}><strong style={{ fontSize: 7.5 }}>{historyLabel(item.kind)}</strong><span style={{ display: 'block', marginTop: 3, color: 'var(--muted)', fontSize: 6.2 }}>{new Date(item.at).toLocaleString()} · {item.actorName || 'ERP operator'}</span>{item.reason ? <span style={{ display: 'block', marginTop: 3, fontSize: 6.5 }}>{item.reason}</span> : null}{item.note ? <small style={{ display: 'block', marginTop: 3, color: 'var(--muted)' }}>{item.note}</small> : null}{item.from && item.to ? <small style={{ display: 'block', marginTop: 4, color: 'var(--muted)' }}>{formatDate(item.from.dateKey)} {item.from.primaryVanId.replace('VAN-', 'Van ')} {formatTime(item.from.primaryStart)} → {formatDate(item.to.dateKey)} {item.to.primaryVanId.replace('VAN-', 'Van ')} {formatTime(item.to.primaryStart)}</small> : null}</article>) : <div className={styles.noSlots}><strong>No lifecycle changes yet</strong><p>Legacy-created appointments remain compatible; new changes will be recorded here.</p></div>}
         </div></section>
       </div>
       <footer className={styles.drawerFooter}><div><span>Status</span><strong>{appointment.status.replace('_', ' ')}</strong></div><div><button type="button" className={styles.secondary} onClick={onClose}>Close</button></div></footer>
