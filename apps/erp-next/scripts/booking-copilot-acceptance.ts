@@ -1,4 +1,5 @@
 import { defaultBookingCopilotState, interpretBookingCopilotMessage, simulateBookingCopilot } from '../lib/booking-intelligence/copilot';
+import { resolveBookingCopilotLocation, type CopilotPropertyCandidate } from '../lib/booking-intelligence/copilot-location';
 import type { CalendarDispatchJob } from '../lib/scheduling-capacity';
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -66,4 +67,30 @@ assert(nextWeek.sector === 'Palm Beach', 'Palm Beach should be preserved as its 
 assert(nextWeek.dateScope === 'next_week', 'next week should switch the date search horizon');
 assert(nextWeek.workLines[0].quantity === 2, 'spoken quantity should be retained for next-week searches');
 
-console.log('Booking Copilot acceptance passed: conversational memory, area normalization, time/day refinement, simulation purity and date scope are valid.');
+const christianProperty: CopilotPropertyCandidate[] = [{
+  customer: {
+    id: 'C-614230',
+    name: 'Christian Márquez',
+    phone: '5606772',
+  },
+  site: {
+    id: 'SITE-WAYACA-217',
+    name: 'Wayaca Residence 217',
+    address: 'Wayaca Residence 217',
+    sector: 'Oranjestad',
+  },
+}];
+
+const crmLocation = resolveBookingCopilotLocation({
+  text: 'el cliente Christian Márquez de guayaca 217 tiene cuatro aires acondicionados splits para hacer standard service qué día le podemos dar',
+  candidates: christianProperty,
+});
+assert(crmLocation.customerId === 'C-614230', 'named customer should resolve against CRM');
+assert(crmLocation.siteId === 'SITE-WAYACA-217', 'spoken Guayaca 217 should resolve the registered Wayaca 217 property');
+assert(crmLocation.sector === 'Oranjestad', 'registered Wayaca property should inherit Oranjestad instead of asking for area again');
+assert(crmLocation.source === 'registered_property', 'registered property should be the authoritative location source');
+
+const addressOnly = resolveBookingCopilotLocation({ text: 'es en guayaca', candidates: [] });
+assert(addressOnly.sector === 'Oranjestad', 'Guayaca speech variant should map through Aruba Address Intelligence to Oranjestad');
+
+console.log('Booking Copilot acceptance passed: conversational memory, CRM/property resolution, Aruba address normalization, time/day refinement, simulation purity and date scope are valid.');
