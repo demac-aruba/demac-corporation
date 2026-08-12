@@ -2,6 +2,30 @@ import type { CalendarDispatchJob } from './scheduling-capacity';
 import type { DaySegment, WorkPresetId } from './scheduling';
 
 export type BrowserAppointmentStatus = 'temporary_hold' | 'confirmed' | 'cancelled';
+export type BrowserAppointmentChangeKind = 'created' | 'confirmed' | 'details_edited' | 'operational_move' | 'customer_reschedule' | 'cancelled' | 'operational_issue' | 'support_reflow' | 'undo_move';
+
+export type BrowserAppointmentScheduleSnapshot = {
+  dateKey: string;
+  primaryVanId: string;
+  primaryStart: string;
+  primaryEnd: string;
+  supportVanId?: string;
+  supportStart?: string;
+  supportEnd?: string;
+};
+
+export type BrowserAppointmentHistoryEvent = {
+  id: string;
+  kind: BrowserAppointmentChangeKind;
+  at: string;
+  actorId?: string;
+  actorName?: string;
+  reason?: string;
+  note?: string;
+  from?: BrowserAppointmentScheduleSnapshot;
+  to?: BrowserAppointmentScheduleSnapshot;
+  customerNotificationRecommended?: boolean;
+};
 
 export type BrowserAppointmentRecord = {
   id: string;
@@ -19,7 +43,12 @@ export type BrowserAppointmentRecord = {
   assignments: CalendarDispatchJob[];
   primaryVanId: string;
   supportVanId?: string;
+  lifecycleHistory?: BrowserAppointmentHistoryEvent[];
+  cancellationReason?: string;
+  cancellationNote?: string;
+  cancelledAt?: string;
   createdAt: string;
+  updatedAt?: string;
   confirmedAt?: string;
   workOrderId?: string;
 };
@@ -52,9 +81,11 @@ export type BrowserWorkOrderRecord = {
   primaryVanId: string;
   supportVanId?: string;
   readiness: 'ready' | 'at_risk' | 'blocked';
-  lifecycle: 'scheduled';
+  lifecycle: 'scheduled' | 'cancelled';
   assignments: BrowserWorkOrderAssignment[];
+  scheduleHistory?: BrowserAppointmentHistoryEvent[];
   createdAt: string;
+  updatedAt?: string;
 };
 
 export function createBrowserWorkOrder(appointment: BrowserAppointmentRecord): BrowserWorkOrderRecord {
@@ -79,7 +110,7 @@ export function createBrowserWorkOrder(appointment: BrowserAppointmentRecord): B
     primaryVanId: primary?.vanId ?? appointment.primaryVanId,
     supportVanId: support?.vanId ?? appointment.supportVanId,
     readiness: appointment.assignments.some((assignment) => assignment.readiness === 'blocked') ? 'blocked' : appointment.assignments.some((assignment) => assignment.readiness === 'at_risk') ? 'at_risk' : 'ready',
-    lifecycle: 'scheduled',
+    lifecycle: appointment.status === 'cancelled' ? 'cancelled' : 'scheduled',
     assignments: appointment.assignments.map((assignment) => ({
       vanId: assignment.vanId,
       role: assignment.isPrimaryAssignment ? 'primary' : 'support',
@@ -89,6 +120,8 @@ export function createBrowserWorkOrder(appointment: BrowserAppointmentRecord): B
       end: assignment.end,
       segment: assignment.segment,
     })),
+    scheduleHistory: appointment.lifecycleHistory,
     createdAt: new Date().toISOString(),
+    updatedAt: appointment.updatedAt,
   };
 }
