@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useState, type ChangeEvent, type TouchEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type TouchEvent, type TransitionEvent } from 'react';
 import { buildOperationalWeek, type OperationalDay } from '../../lib/scheduling-capacity';
 import styles from './scheduling-overview-v2.module.css';
 
@@ -15,6 +15,7 @@ type Props = {
 };
 
 type SwipeStart = { x: number; y: number; horizontal: boolean };
+type CarouselDirection = -1 | 0 | 1;
 
 function addDays(dateKey: string, amount: number) {
   const date = new Date(`${dateKey}T12:00:00Z`);
@@ -52,6 +53,10 @@ export function SchedulingWeekNavigator({ week, activeDate, today, summaries, on
   const swipeRef = useRef<SwipeStart | null>(null);
   const suppressDayClickRef = useRef(false);
   const animationTimerRef = useRef<number | null>(null);
+  const animationUnlockTimerRef = useRef<number | null>(null);
+  const animatingRef = useRef(false);
+  const animationDirectionRef = useRef<CarouselDirection>(0);
+  const animationTokenRef = useRef(0);
   const [dragX, setDragX] = useState(0);
   const [animating, setAnimating] = useState(false);
 
@@ -87,10 +92,43 @@ export function SchedulingWeekNavigator({ week, activeDate, today, summaries, on
     }
   };
 
-  const startWeekSwipe = (event: TouchEvent<HTMLDivElement>) => {
+  const clearUnlockTimer = () => {
+    if (animationUnlockTimerRef.current !== null) {
+      window.clearTimeout(animationUnlockTimerRef.current);
+      animationUnlockTimerRef.current = null;
+    }
+  };
+
+  useEffect(() => () => {
     clearAnimationTimer();
+    clearUnlockTimer();
+  }, []);
+
+  const finishWeekCarousel = (token: number) => {
+    if (!animatingRef.current || token !== animationTokenRef.current) return;
+    const direction = animationDirectionRef.current;
+    clearAnimationTimer();
+    clearUnlockTimer();
+
+    if (direction !== 0) onSelectDate(addDays(activeDate, direction * 7));
+
+    animatingRef.current = false;
+    animationDirectionRef.current = 0;
+    setAnimating(false);
+    setDragX(0);
+    swipeRef.current = null;
+
+    animationUnlockTimerRef.current = window.setTimeout(() => {
+      suppressDayClickRef.current = false;
+      animationUnlockTimerRef.current = null;
+    }, 60);
+  };
+
+  const startWeekSwipe = (event: TouchEvent<HTMLDivElement>) => {
     const touch = event.touches[0];
-    if (!touch || animating) return;
+    // Never cancel the in-flight settle timer here. Doing so can strand the
+    // carousel in animating=true when a fast follow-up swipe starts mid-snap.
+    if (!touch || animatingRef.current) return;
     swipeRef.current = { x: touch.clientX, y: touch.clientY, horizontal: false };
     setDragX(0);
   };
@@ -98,7 +136,7 @@ export function SchedulingWeekNavigator({ week, activeDate, today, summaries, on
   const moveWeekSwipe = (event: TouchEvent<HTMLDivElement>) => {
     const start = swipeRef.current;
     const touch = event.touches[0];
-    if (!start || !touch || animating) return;
+    if (!start || !touch || animatingRef.current) return;
     const deltaX = touch.clientX - start.x;
     const deltaY = touch.clientY - start.y;
     if (!start.horizontal) {
@@ -113,25 +151,27 @@ export function SchedulingWeekNavigator({ week, activeDate, today, summaries, on
     setDragX(clamped);
   };
 
-  const settleWeekCarousel = (direction: -1 | 0 | 1) => {
+  const settleWeekCarousel = (direction: CarouselDirection) => {
+    if (animatingRef.current) return;
     const width = carouselRef.current?.clientWidth ?? window.innerWidth;
+    const token = animationTokenRef.current + 1;
+    animationTokenRef.current = token;
+    animationDirectionRef.current = direction;
+    animatingRef.current = true;
     setAnimating(true);
+    swipeRef.current = null;
     setDragX(direction === 0 ? 0 : direction === 1 ? -width : width);
+
     clearAnimationTimer();
-    animationTimerRef.current = window.setTimeout(() => {
-      if (direction !== 0) onSelectDate(addDays(activeDate, direction * 7));
-      setAnimating(false);
-      setDragX(0);
-      swipeRef.current = null;
-      window.setTimeout(() => { suppressDayClickRef.current = false; }, 40);
-      animationTimerRef.current = null;
-    }, direction === 0 ? 180 : 240);
+    // Watchdog: transitionend is preferred, but Android browsers can drop a
+    // transition event during rapid gesture churn. This guarantees recovery.
+    animationTimerRef.current = window.setTimeout(() => finishWeekCarousel(token), 420);
   };
 
   const endWeekSwipe = (event: TouchEvent<HTMLDivElement>) => {
     const start = swipeRef.current;
     const touch = event.changedTouches[0];
-    if (!start || !touch || animating) return;
+    if (!start || !touch || animatingRef.current) return;
     const deltaX = touch.clientX - start.x;
     const deltaY = touch.clientY - start.y;
     if (!start.horizontal || Math.abs(deltaX) <= Math.abs(deltaY) * 1.1) {
@@ -149,7 +189,7 @@ export function SchedulingWeekNavigator({ week, activeDate, today, summaries, on
   };
 
   const cancelWeekSwipe = () => {
-    if (!swipeRef.current) return;
+    if (!swipeRef.current || animatingRef.current) return;
     if (swipeRef.current.horizontal) settleWeekCarousel(0);
     else {
       swipeRef.current = null;
@@ -157,8 +197,13 @@ export function SchedulingWeekNavigator({ week, activeDate, today, summaries, on
     }
   };
 
+  const handleTrackTransitionEnd = (event: TransitionEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget || event.propertyName !== 'transform' || !animatingRef.current) return;
+    finishWeekCarousel(animationTokenRef.current);
+  };
+
   const selectDay = (dateKey: string) => {
-    if (suppressDayClickRef.current || animating) return;
+    if (suppressDayClickRef.current || animatingRef.current) return;
     onSelectDate(dateKey);
   };
 
@@ -263,12 +308,17 @@ export function SchedulingWeekNavigator({ week, activeDate, today, summaries, on
       ref={carouselRef}
       data-week-carousel
       aria-label="Swipe operational weeks"
+      aria-busy={animating}
       onTouchStart={startWeekSwipe}
       onTouchMove={moveWeekSwipe}
       onTouchEnd={endWeekSwipe}
       onTouchCancel={cancelWeekSwipe}
     >
-      <div data-week-track style={{ transform: trackTransform, transition: animating ? 'transform 220ms cubic-bezier(.22,.72,.22,1)' : 'none' }}>
+      <div
+        data-week-track
+        onTransitionEnd={handleTrackTransitionEnd}
+        style={{ transform: trackTransform, transition: animating ? 'transform 220ms cubic-bezier(.22,.72,.22,1)' : 'none' }}
+      >
         {renderWeek(carouselWeeks[0], false, false, 'previous')}
         {renderWeek(carouselWeeks[1], true, true, 'current')}
         {renderWeek(carouselWeeks[2], false, false, 'next')}

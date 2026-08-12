@@ -3,6 +3,7 @@ import { AccessibilityTextProvider } from '@/components/accessibility/text-size-
 import { AuthGate } from '@/components/auth/auth-gate';
 import { DemoDataGate } from '@/components/demo/demo-data-gate';
 import { ErpShell } from '@/components/erp-shell';
+import '../mobile-shell-fixes.css';
 
 export const metadata: Metadata = {
   title: 'ERP',
