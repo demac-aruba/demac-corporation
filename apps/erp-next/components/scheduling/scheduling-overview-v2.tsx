@@ -13,11 +13,7 @@ import { AppointmentDetailsDrawer } from './appointment-details-drawer';
 import { BookingDrawer, type BookingIdentity, type PreferredSlot } from './booking-drawer';
 import styles from './scheduling-overview-v2.module.css';
 
-type DisplaySlot = {
-  start: string;
-  end: string;
-  segment: 'am' | 'pm';
-};
+type DisplaySlot = { start: string; end: string; segment: 'am' | 'pm' };
 
 function appointmentAssignments(record: BrowserAppointmentRecord): CalendarDispatchJob[] {
   if (record.status === 'cancelled') return [];
@@ -120,9 +116,7 @@ export function SchedulingOverviewV2() {
   }, [appointments, storageReady]);
 
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setMoveArmedAppointmentId(null);
-    };
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setMoveArmedAppointmentId(null); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
@@ -188,18 +182,7 @@ export function SchedulingOverviewV2() {
     };
     const assignments: CalendarDispatchJob[] = [primary];
     if (slot.requiresSupportVan && slot.supportVanId) {
-      assignments.push({
-        ...primary,
-        id: `${appointmentId}-S`,
-        start: slot.supportStart ?? primary.start,
-        end: slot.supportEnd ?? primary.end,
-        segment: slot.supportSegment ?? primary.segment,
-        vanId: slot.supportVanId,
-        quantity: slot.supportUnits ?? Math.max(1, request.quantity - primaryQty),
-        isPrimaryAssignment: false,
-        customerCommunicationOwner: false,
-        supportForJobId: primaryId,
-      });
+      assignments.push({ ...primary, id: `${appointmentId}-S`, start: slot.supportStart ?? primary.start, end: slot.supportEnd ?? primary.end, segment: slot.supportSegment ?? primary.segment, vanId: slot.supportVanId, quantity: slot.supportUnits ?? Math.max(1, request.quantity - primaryQty), isPrimaryAssignment: false, customerCommunicationOwner: false, supportForJobId: primaryId });
     }
     let record: BrowserAppointmentRecord = {
       id: appointmentId,
@@ -231,19 +214,11 @@ export function SchedulingOverviewV2() {
     const current = appointments.find((appointment) => appointment.id === appointmentId);
     if (!current || current.status !== 'temporary_hold' || !canManage) return;
     const workOrderId = current.workOrderId ?? `WO-${appointmentId.replace(/^APT-/, '').slice(-6)}`;
-    let confirmedRecord: BrowserAppointmentRecord = {
-      ...current,
-      status: 'confirmed',
-      workOrderId,
-      confirmedAt: new Date().toISOString(),
-      assignments: current.assignments.map((assignment) => ({ ...assignment, status: 'confirmed' })),
-    };
+    let confirmedRecord: BrowserAppointmentRecord = { ...current, status: 'confirmed', workOrderId, confirmedAt: new Date().toISOString(), assignments: current.assignments.map((assignment) => ({ ...assignment, status: 'confirmed' })) };
     confirmedRecord = appendLifecycleEvent(confirmedRecord, { kind: 'confirmed', actorId: actor.id, actorName: actor.name, from: appointmentSnapshot(current), to: appointmentSnapshot(confirmedRecord) });
     setAppointments((items) => items.map((item) => item.id === appointmentId ? confirmedRecord : item));
     const workOrders = loadBrowserValue<BrowserWorkOrderRecord[]>(browserKeys.workOrders, []);
-    if (!workOrders.some((order) => order.appointmentId === appointmentId)) {
-      saveBrowserValue(browserKeys.workOrders, [...workOrders, createBrowserWorkOrder(confirmedRecord)]);
-    }
+    if (!workOrders.some((order) => order.appointmentId === appointmentId)) saveBrowserValue(browserKeys.workOrders, [...workOrders, createBrowserWorkOrder(confirmedRecord)]);
     setNotice(`${appointmentId} confirmed and linked to ${workOrderId}.`);
   };
 
@@ -255,21 +230,21 @@ export function SchedulingOverviewV2() {
       return;
     }
     const from = appointmentSnapshot(appointment);
-    const base: BrowserAppointmentRecord = {
-      ...appointment,
-      updatedAt: new Date().toISOString(),
-      assignments: appointment.assignments.map((assignment) => assignment.id === plan.supportJobId ? { ...assignment, start: plan.toStart, end: plan.toEnd, segment: plan.toSegment } : assignment),
-    };
+    const base: BrowserAppointmentRecord = { ...appointment, updatedAt: new Date().toISOString(), assignments: appointment.assignments.map((assignment) => assignment.id === plan.supportJobId ? { ...assignment, start: plan.toStart, end: plan.toEnd, segment: plan.toSegment } : assignment) };
     const updated = appendLifecycleEvent(base, { kind: 'support_reflow', actorId: actor.id, actorName: actor.name, reason: 'Booking Intelligence capacity recovery', from, to: appointmentSnapshot(base) });
-    persistAppointmentUpdate(updated, `Booking Intelligence moved support for ${plan.customer} from ${formatTime(plan.fromStart)} to ${formatTime(plan.toStart)}. The primary appointment was not changed.`);
+    setAppointments((items) => items.map((item) => item.id === updated.id ? updated : item));
+    syncExistingWorkOrder(updated);
+    setUndoSnapshot(null);
+    setNotice(`Booking Intelligence moved support for ${plan.customer} from ${formatTime(plan.fromStart)} to ${formatTime(plan.toStart)}. The new customer request can now recalculate against the recovered capacity.`);
   };
 
   const toggleMoveArm = (appointmentId: string) => {
     if (!canManage) return;
+    const disarming = moveArmedAppointmentId === appointmentId;
     setDrawerOpen(false);
-    setSelectedAppointmentId(appointmentId);
-    setMoveArmedAppointmentId((current) => current === appointmentId ? null : appointmentId);
-    setNotice(moveArmedAppointmentId === appointmentId ? 'Drag mode disarmed.' : 'Move mode armed. Hold and drag the appointment to a highlighted valid slot. Press Esc to cancel.');
+    setSelectedAppointmentId(null);
+    setMoveArmedAppointmentId(disarming ? null : appointmentId);
+    setNotice(disarming ? 'Drag mode disarmed.' : 'Move mode armed. Hold and drag the appointment to a highlighted valid slot. Press Esc to cancel.');
   };
 
   const dropMove = (vanId: string, start: string) => {
@@ -304,111 +279,35 @@ export function SchedulingOverviewV2() {
 
   const moveDay = (direction: -1 | 1) => setActiveDate((current) => addDays(current, direction));
 
-  return (
-    <section className={styles.page}>
-      <header className={styles.pageHeader}>
-        <div><span className={styles.eyebrow}>Operations · Aruba</span><h1>Scheduling & Dispatch</h1><p>See the operational week, all four vans and every available work spot from one primary agenda view.</p></div>
-        <div className={styles.pageActions}><button type="button" className={styles.secondary}>Capacity settings</button><button type="button" className={styles.primary} disabled={!activeDay.isOpen || !canManage} onClick={() => openBooking()}>+ New appointment</button></div>
-      </header>
+  return <section className={styles.page}>
+    <header className={styles.pageHeader}><div><span className={styles.eyebrow}>Operations · Aruba</span><h1>Scheduling & Dispatch</h1><p>See the operational week, all four vans and every available work spot from one primary agenda view.</p></div><div className={styles.pageActions}><button type="button" className={styles.secondary}>Capacity settings</button><button type="button" className={styles.primary} disabled={!activeDay.isOpen || !canManage} onClick={() => openBooking()}>+ New appointment</button></div></header>
 
-      {notice ? <div className={styles.notice}><span>{notice}</span><div style={{ display: 'flex', gap: 7 }}>{undoSnapshot ? <button type="button" onClick={undoMove} style={{ fontSize: 7, fontWeight: 900 }}>Undo Move</button> : null}<button type="button" onClick={() => setNotice(null)}>×</button></div></div> : null}
+    {notice ? <div className={styles.notice}><span>{notice}</span><div style={{ display: 'flex', gap: 7 }}>{undoSnapshot ? <button type="button" onClick={undoMove} style={{ fontSize: 7, fontWeight: 900 }}>Undo Move</button> : null}<button type="button" onClick={() => setNotice(null)}>×</button></div></div> : null}
 
-      <section className={styles.weekStrip} aria-label="Operational week">
-        {week.map((day) => {
-          const summary = occupancyForDay(day, jobs);
-          return <button type="button" key={day.dateKey} disabled={!day.isOpen} className={`${styles.dayCard} ${day.dateKey === activeDate ? styles.dayActive : ''} ${day.dateKey === today ? styles.today : ''}`} onClick={() => setActiveDate(day.dateKey)}>
-            <div><span>{day.weekday}</span><strong>{day.shortDate}</strong>{day.dateKey === today ? <b>TODAY</b> : null}</div>
-            <small>{day.shiftLabel}</small>
-            {day.isOpen ? <><i><em style={{ width: `${summary.percent}%` }} /></i><p>{summary.occupied}/{summary.total} spots filled · {summary.open} open</p></> : <p>Operationally closed</p>}
-          </button>;
-        })}
-      </section>
+    <section className={styles.weekStrip} aria-label="Operational week">{week.map((day) => { const summary = occupancyForDay(day, jobs); return <button type="button" key={day.dateKey} disabled={!day.isOpen} className={`${styles.dayCard} ${day.dateKey === activeDate ? styles.dayActive : ''} ${day.dateKey === today ? styles.today : ''}`} onClick={() => setActiveDate(day.dateKey)}><div><span>{day.weekday}</span><strong>{day.shortDate}</strong>{day.dateKey === today ? <b>TODAY</b> : null}</div><small>{day.shiftLabel}</small>{day.isOpen ? <><i><em style={{ width: `${summary.percent}%` }} /></i><p>{summary.occupied}/{summary.total} spots filled · {summary.open} open</p></> : <p>Operationally closed</p>}</button>; })}</section>
 
-      <div className={styles.metrics}>
-        <article><span>Confirmed</span><strong>{confirmed}</strong><small>{activeDay.weekday} {activeDay.shortDate}</small><i style={{ width: `${Math.min(100, activeOccupancy.percent)}%` }} /></article>
-        <article><span>Temporary Holds</span><strong>{holds}</strong><small>Awaiting confirmation</small><i style={{ width: `${Math.min(100, holds * 14)}%` }} /></article>
-        <article><span>Need Attention</span><strong className={attention ? styles.metricWarning : ''}>{attention}</strong><small>At risk or blocked assignments</small><i style={{ width: `${Math.min(100, attention * 16)}%` }} /></article>
-        <article><span>Open Spots</span><strong className={activeOccupancy.open ? styles.metricGood : ''}>{activeOccupancy.open}</strong><small>{activeOccupancy.occupied}/{activeOccupancy.total} occupied today</small><i style={{ width: `${activeOccupancy.total ? Math.round((activeOccupancy.open / activeOccupancy.total) * 100) : 0}%` }} /></article>
-      </div>
+    <div className={styles.metrics}><article><span>Confirmed</span><strong>{confirmed}</strong><small>{activeDay.weekday} {activeDay.shortDate}</small><i style={{ width: `${Math.min(100, activeOccupancy.percent)}%` }} /></article><article><span>Temporary Holds</span><strong>{holds}</strong><small>Awaiting confirmation</small><i style={{ width: `${Math.min(100, holds * 14)}%` }} /></article><article><span>Need Attention</span><strong className={attention ? styles.metricWarning : ''}>{attention}</strong><small>At risk or blocked assignments</small><i style={{ width: `${Math.min(100, attention * 16)}%` }} /></article><article><span>Open Spots</span><strong className={activeOccupancy.open ? styles.metricGood : ''}>{activeOccupancy.open}</strong><small>{activeOccupancy.occupied}/{activeOccupancy.total} occupied today</small><i style={{ width: `${activeOccupancy.total ? Math.round((activeOccupancy.open / activeOccupancy.total) * 100) : 0}%` }} /></article></div>
 
-      <div className={styles.toolbar}>
-        <div className={styles.dayNav}><button type="button" onClick={() => moveDay(-1)}>‹</button><div><strong>{activeDate === today ? 'Today' : `${activeDay.weekday} · ${activeDay.shortDate}`}</strong><span>{activeDay.shiftLabel} · Aruba time</span></div><button type="button" onClick={() => moveDay(1)}>›</button></div>
-        <div className={styles.legend}><span><i className={styles.readyDot} /> Ready</span><span><i className={styles.riskDot} /> At risk</span><span><i className={styles.blockedDot} /> Blocked</span><span><i className={styles.holdDot} /> Hold</span><span><i className={styles.openDot} /> Open spot</span></div>
-      </div>
+    <div className={styles.toolbar}><div className={styles.dayNav}><button type="button" onClick={() => moveDay(-1)}>‹</button><div><strong>{activeDate === today ? 'Today' : `${activeDay.weekday} · ${activeDay.shortDate}`}</strong><span>{activeDay.shiftLabel} · Aruba time</span></div><button type="button" onClick={() => moveDay(1)}>›</button></div><div className={styles.legend}><span><i className={styles.readyDot} /> Ready</span><span><i className={styles.riskDot} /> At risk</span><span><i className={styles.blockedDot} /> Blocked</span><span><i className={styles.holdDot} /> Hold</span><span><i className={styles.openDot} /> Open spot</span></div></div>
 
-      {moveArmedAppointmentId ? <div className={styles.notice}><span><strong>MOVE MODE:</strong> Double-clicked appointment is armed. Valid drop targets are highlighted. Dragging never bypasses Booking Intelligence.</span><button type="button" onClick={() => setMoveArmedAppointmentId(null)}>Disarm</button></div> : null}
+    {moveArmedAppointmentId ? <div className={styles.notice}><span><strong>MOVE MODE:</strong> Double-clicked appointment is armed. Valid drop targets are highlighted. Dragging never bypasses Booking Intelligence.</span><button type="button" onClick={() => setMoveArmedAppointmentId(null)}>Disarm</button></div> : null}
 
-      <section className={styles.bookingIntelligence}>
-        <div className={styles.aiBadge}>AI</div>
-        <div className={styles.intelligenceTitle}><strong>Booking Intelligence</strong><span>Deterministic booking engine</span></div>
-        <div className={styles.intelligenceInsight}><span>Date-aware capacity</span><p>{activeOccupancy.open} open spot{activeOccupancy.open === 1 ? '' : 's'} across four vans on the selected day.</p></div>
-        <div className={styles.intelligenceInsight}><span>Lifecycle-aware</span><p>Moves, cancellations and reschedules preserve appointment and Work Order history instead of creating silent duplicates.</p></div>
-        <div className={styles.intelligenceInsight}><span>Route-aware offers</span><p>The booking engine enforces sector anchors, duration, restrictions, support-van rules and protected drop targets.</p></div>
-        <button type="button" disabled={!activeDay.isOpen || !canManage} onClick={() => openBooking()}>Find valid appointment</button>
-      </section>
+    <section className={styles.bookingIntelligence}><div className={styles.aiBadge}>AI</div><div className={styles.intelligenceTitle}><strong>Booking Intelligence</strong><span>Deterministic booking engine</span></div><div className={styles.intelligenceInsight}><span>Date-aware capacity</span><p>{activeOccupancy.open} open spot{activeOccupancy.open === 1 ? '' : 's'} across four vans on the selected day.</p></div><div className={styles.intelligenceInsight}><span>Lifecycle-aware</span><p>Moves, cancellations and reschedules preserve appointment and Work Order history instead of creating silent duplicates.</p></div><div className={styles.intelligenceInsight}><span>Route-aware offers</span><p>The booking engine enforces sector anchors, duration, restrictions, support-van rules and protected drop targets.</p></div><button type="button" disabled={!activeDay.isOpen || !canManage} onClick={() => openBooking()}>Find valid appointment</button></section>
 
-      <section className={styles.board}>
-        <header className={styles.boardHeader}><div><strong>Four-Van Schedule</strong><span>{activeDay.weekday} {activeDay.shortDate} · single click opens details; double click arms safe drag.</span></div><b>{activeOccupancy.open} OPEN SPOTS</b></header>
-        <div className={styles.boardScroll}>
-          <div className={styles.vanGrid}>
-            {previewVans.map((van) => {
-              const vanJobs = activeJobs.filter((job) => job.vanId === van.id);
-              const amAnchor = getHalfDayAnchor(activeJobs, van.id, 'am');
-              const pmAnchor = getHalfDayAnchor(activeJobs, van.id, 'pm');
-              const validDropStarts = new Set(dragCandidates.filter((slot) => slot.vanId === van.id).map((slot) => slot.start));
-              return <section className={styles.vanLane} key={van.id}>
-                <header><div className={styles.vanIdentity}><span>{van.id.replace('VAN-', 'V')}</span><div><strong>{van.name}</strong><small>{van.team}</small></div></div><b>ACTIVE</b></header>
-                <div className={styles.anchorBar}><div><span>AM anchor</span><strong>{amAnchor?.sector ?? 'Open'}</strong></div><div><span>PM anchor</span><strong>{pmAnchor?.sector ?? 'Open'}</strong></div></div>
-                <VanScheduleSlots
-                  vanId={van.id}
-                  slots={activeSlots}
-                  jobs={vanJobs}
-                  onConfirm={confirmAppointment}
-                  onOpen={(start) => openBooking({ vanId: van.id, start })}
-                  onSelect={(appointmentId) => { setDrawerOpen(false); setSelectedAppointmentId(appointmentId); }}
-                  onToggleArm={toggleMoveArm}
-                  armedAppointmentId={moveArmedAppointmentId}
-                  selectedAppointmentId={selectedAppointmentId}
-                  validDropStarts={validDropStarts}
-                  canManage={canManage}
-                  onDropMove={dropMove}
-                />
-                {!activeDay.isOpen ? <div className={styles.closedDay}>No operational capacity</div> : null}
-              </section>;
-            })}
-          </div>
-        </div>
-      </section>
+    <section className={styles.board}><header className={styles.boardHeader}><div><strong>Four-Van Schedule</strong><span>{activeDay.weekday} {activeDay.shortDate} · single click opens details; double click arms safe drag.</span></div><b>{activeOccupancy.open} OPEN SPOTS</b></header><div className={styles.boardScroll}><div className={styles.vanGrid}>{previewVans.map((van) => { const vanJobs = activeJobs.filter((job) => job.vanId === van.id); const amAnchor = getHalfDayAnchor(activeJobs, van.id, 'am'); const pmAnchor = getHalfDayAnchor(activeJobs, van.id, 'pm'); const validDropStarts = new Set(dragCandidates.filter((slot) => slot.vanId === van.id).map((slot) => slot.start)); return <section className={styles.vanLane} key={van.id}><header><div className={styles.vanIdentity}><span>{van.id.replace('VAN-', 'V')}</span><div><strong>{van.name}</strong><small>{van.team}</small></div></div><b>ACTIVE</b></header><div className={styles.anchorBar}><div><span>AM anchor</span><strong>{amAnchor?.sector ?? 'Open'}</strong></div><div><span>PM anchor</span><strong>{pmAnchor?.sector ?? 'Open'}</strong></div></div><VanScheduleSlots vanId={van.id} slots={activeSlots} jobs={vanJobs} onConfirm={confirmAppointment} onOpen={(start) => openBooking({ vanId: van.id, start })} onSelect={(appointmentId) => { setDrawerOpen(false); setSelectedAppointmentId(appointmentId); }} onToggleArm={toggleMoveArm} armedAppointmentId={moveArmedAppointmentId} selectedAppointmentId={selectedAppointmentId} validDropStarts={validDropStarts} canManage={canManage} onDropMove={dropMove} />{!activeDay.isOpen ? <div className={styles.closedDay}>No operational capacity</div> : null}</section>; })}</div></div></section>
 
-      {drawerOpen ? <BookingDrawer day={activeDay} jobs={activeJobs} preferred={preferredSlot} onClose={() => { setDrawerOpen(false); setPreferredSlot({}); }} onReserve={addAppointment} onApplySupportReflow={applySupportReflow} /> : null}
-      {selectedAppointment ? <AppointmentDetailsDrawer appointment={selectedAppointment} allJobs={jobs} canManage={canManage} actor={actor} moveArmed={moveArmedAppointmentId === selectedAppointment.id} onArmMove={() => toggleMoveArm(selectedAppointment.id)} onClose={() => setSelectedAppointmentId(null)} onUpdate={persistAppointmentUpdate} /> : null}
-    </section>
-  );
+    {drawerOpen ? <BookingDrawer day={activeDay} jobs={activeJobs} preferred={preferredSlot} onClose={() => { setDrawerOpen(false); setPreferredSlot({}); }} onReserve={addAppointment} onApplySupportReflow={applySupportReflow} /> : null}
+    {selectedAppointment ? <AppointmentDetailsDrawer appointment={selectedAppointment} allJobs={jobs} canManage={canManage} actor={actor} moveArmed={moveArmedAppointmentId === selectedAppointment.id} onArmMove={() => toggleMoveArm(selectedAppointment.id)} onClose={() => setSelectedAppointmentId(null)} onUpdate={persistAppointmentUpdate} /> : null}
+  </section>;
 }
 
-function VanScheduleSlots({ vanId, slots, jobs, onConfirm, onOpen, onSelect, onToggleArm, armedAppointmentId, selectedAppointmentId, validDropStarts, canManage, onDropMove }: {
-  vanId: string;
-  slots: DisplaySlot[];
-  jobs: CalendarDispatchJob[];
-  onConfirm: (appointmentId: string) => void;
-  onOpen: (start: string) => void;
-  onSelect: (appointmentId: string) => void;
-  onToggleArm: (appointmentId: string) => void;
-  armedAppointmentId: string | null;
-  selectedAppointmentId: string | null;
-  validDropStarts: Set<string>;
-  canManage: boolean;
-  onDropMove: (vanId: string, start: string) => void;
-}) {
+function VanScheduleSlots({ vanId, slots, jobs, onConfirm, onOpen, onSelect, onToggleArm, armedAppointmentId, selectedAppointmentId, validDropStarts, canManage, onDropMove }: { vanId: string; slots: DisplaySlot[]; jobs: CalendarDispatchJob[]; onConfirm: (appointmentId: string) => void; onOpen: (start: string) => void; onSelect: (appointmentId: string) => void; onToggleArm: (appointmentId: string) => void; armedAppointmentId: string | null; selectedAppointmentId: string | null; validDropStarts: Set<string>; canManage: boolean; onDropMove: (vanId: string, start: string) => void }) {
   const rows: React.ReactNode[] = [];
   let index = 0;
-
   while (index < slots.length) {
     const slot = slots[index];
     const previous = slots[index - 1];
-    const firstAfternoon = index > 0 && previous?.segment === 'am' && slot.segment === 'pm';
-    if (firstAfternoon) rows.push(<div className={styles.lunchRow} key={`lunch-${slot.start}`}><span>12:00</span><div>Lunch / reset</div><span>1:00</span></div>);
-
+    if (index > 0 && previous?.segment === 'am' && slot.segment === 'pm') rows.push(<div className={styles.lunchRow} key={`lunch-${slot.start}`}><span>12:00</span><div>Lunch / reset</div><span>1:00</span></div>);
     const startingJobs = jobs.filter((job) => job.start === slot.start).sort((a, b) => a.id.localeCompare(b.id));
     if (startingJobs.length) {
       const job = startingJobs[0];
@@ -418,65 +317,25 @@ function VanScheduleSlots({ vanId, slots, jobs, onConfirm, onOpen, onSelect, onT
       index += span;
       continue;
     }
-
     const continuingJob = jobs.find((job) => overlapsSlot(job, slot) && timeToMinutes(job.start) < timeToMinutes(slot.start));
     if (continuingJob) {
       rows.push(<div className={styles.occupiedSlot} key={`${continuingJob.id}-${slot.start}`}><div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div><div className={styles.slotJobs}><article className={styles.jobCard}><div><div className={styles.jobTitle}><strong>Reserved</strong></div><span>Part of {formatTime(continuingJob.start)}–{formatTime(continuingJob.end)} appointment</span></div></article></div></div>);
       index += 1;
       continue;
     }
-
     const dropAllowed = Boolean(armedAppointmentId && validDropStarts.has(slot.start));
-    rows.push(<button type="button" className={`${styles.openSlot} ${dropAllowed ? styles.dropTarget : ''}`} key={`open-${slot.start}`}
-      onClick={() => { if (!armedAppointmentId) onOpen(slot.start); }}
-      onDragOver={(event) => { if (dropAllowed) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; } }}
-      onDrop={(event) => { if (!dropAllowed) return; event.preventDefault(); onDropMove(vanId, slot.start); }}>
-      <div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div><div><strong>{dropAllowed ? 'Valid move target' : 'Available'}</strong><span>{dropAllowed ? 'Release appointment here' : armedAppointmentId ? 'Not valid for armed appointment' : 'Open work spot'}</span></div><b>{dropAllowed ? 'DROP HERE' : armedAppointmentId ? 'LOCKED' : '+ Schedule'}</b>
-    </button>);
+    rows.push(<button type="button" className={styles.openSlot} style={dropAllowed ? { borderColor: 'var(--brand)', background: 'var(--brand-soft)', boxShadow: '0 0 0 2px color-mix(in srgb,var(--brand) 16%,transparent)' } : armedAppointmentId ? { opacity: .58 } : undefined} key={`open-${slot.start}`} onClick={() => { if (!armedAppointmentId) onOpen(slot.start); }} onDragOver={(event) => { if (dropAllowed) { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; } }} onDrop={(event) => { if (!dropAllowed) return; event.preventDefault(); onDropMove(vanId, slot.start); }}><div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div><div><strong>{dropAllowed ? 'Valid move target' : 'Available'}</strong><span>{dropAllowed ? 'Release appointment here' : armedAppointmentId ? 'Not valid for armed appointment' : 'Open work spot'}</span></div><b>{dropAllowed ? 'DROP HERE' : armedAppointmentId ? 'LOCKED' : '+ Schedule'}</b></button>);
     index += 1;
   }
-
   return <div className={styles.slotList}>{rows}</div>;
 }
 
-function AppointmentBlock({ job, span, crossesLunch, onConfirm, onSelect, onToggleArm, armed, selected, canManage }: {
-  job: CalendarDispatchJob;
-  span: number;
-  crossesLunch: boolean;
-  onConfirm: (appointmentId: string) => void;
-  onSelect: (appointmentId: string) => void;
-  onToggleArm: (appointmentId: string) => void;
-  armed: boolean;
-  selected: boolean;
-  canManage: boolean;
-}) {
+function AppointmentBlock({ job, span, crossesLunch, onConfirm, onSelect, onToggleArm, armed, selected, canManage }: { job: CalendarDispatchJob; span: number; crossesLunch: boolean; onConfirm: (appointmentId: string) => void; onSelect: (appointmentId: string) => void; onToggleArm: (appointmentId: string) => void; armed: boolean; selected: boolean; canManage: boolean }) {
   const appointmentId = appointmentIdForJob(job);
   const minHeight = span * 64 + Math.max(0, span - 1) * 6 + (crossesLunch ? 18 : 0);
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const handleClick = () => {
-    if (!appointmentId) return;
-    if (clickTimer.current) clearTimeout(clickTimer.current);
-    clickTimer.current = setTimeout(() => onSelect(appointmentId), 220);
-  };
-  const handleDoubleClick = () => {
-    if (!appointmentId || !canManage) return;
-    if (clickTimer.current) clearTimeout(clickTimer.current);
-    onToggleArm(appointmentId);
-  };
-  return <div className={styles.occupiedSlot} style={{ minHeight }}>
-    <div className={styles.slotTime}><strong>{formatTime(job.start)}</strong><span>{formatTime(job.end)}</span>{span > 1 ? <span>{span} spots</span> : null}</div>
-    <div className={styles.slotJobs}>
-      <article
-        className={`${styles.jobCard} ${job.status === 'temporary_hold' ? styles.holdCard : ''} ${armed ? styles.jobCardArmed : ''} ${selected ? styles.jobCardSelected : ''}`}
-        style={{ minHeight: '100%', alignItems: 'center' }}
-        title={canManage ? 'Single click: details · Double click: arm drag mode' : 'Single click: details'}
-        onClick={handleClick}
-        onDoubleClick={handleDoubleClick}
-        draggable={Boolean(armed && canManage)}
-        onDragStart={(event) => { if (!armed || !appointmentId) return; event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', appointmentId); }}>
-        <div><div className={styles.jobTitle}><strong>{job.customer}</strong><b className={slotClass(job.readiness)}>{readinessLabel(job.readiness)}</b></div><span>{presetLabel(job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span><small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small>{span > 1 ? <small>Reserved continuously · {formatTime(job.start)}–{formatTime(job.end)}</small> : null}{crossesLunch ? <small>12:00–1:00 PM lunch/reset remains protected</small> : null}{armed ? <small><strong>MOVE ARMED · hold and drag</strong></small> : null}</div>
-        {appointmentId && job.status === 'temporary_hold' && job.isPrimaryAssignment && canManage ? <button type="button" onClick={(event) => { event.stopPropagation(); onConfirm(appointmentId); }}>Confirm</button> : null}
-      </article>
-    </div>
-  </div>;
+  const handleClick = () => { if (!appointmentId) return; if (clickTimer.current) clearTimeout(clickTimer.current); clickTimer.current = setTimeout(() => onSelect(appointmentId), 220); };
+  const handleDoubleClick = () => { if (!appointmentId || !canManage) return; if (clickTimer.current) clearTimeout(clickTimer.current); onToggleArm(appointmentId); };
+  const interactionStyle: React.CSSProperties = { minHeight: '100%', alignItems: 'center', ...(armed ? { outline: '2px solid var(--brand)', boxShadow: '0 0 0 4px var(--brand-soft)', cursor: 'grab' } : selected ? { outline: '1px solid color-mix(in srgb,var(--brand) 50%,var(--border))' } : { cursor: 'pointer' }) };
+  return <div className={styles.occupiedSlot} style={{ minHeight }}><div className={styles.slotTime}><strong>{formatTime(job.start)}</strong><span>{formatTime(job.end)}</span>{span > 1 ? <span>{span} spots</span> : null}</div><div className={styles.slotJobs}><article className={`${styles.jobCard} ${job.status === 'temporary_hold' ? styles.holdCard : ''}`} style={interactionStyle} title={canManage ? 'Single click: details · Double click: arm drag mode' : 'Single click: details'} onClick={handleClick} onDoubleClick={handleDoubleClick} draggable={Boolean(armed && canManage)} onDragStart={(event) => { if (!armed || !appointmentId) return; event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', appointmentId); }}><div><div className={styles.jobTitle}><strong>{job.customer}</strong><b className={slotClass(job.readiness)}>{readinessLabel(job.readiness)}</b></div><span>{presetLabel(job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span><small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small>{span > 1 ? <small>Reserved continuously · {formatTime(job.start)}–{formatTime(job.end)}</small> : null}{crossesLunch ? <small>12:00–1:00 PM lunch/reset remains protected</small> : null}{armed ? <small><strong>MOVE ARMED · hold and drag</strong></small> : null}</div>{appointmentId && job.status === 'temporary_hold' && job.isPrimaryAssignment && canManage ? <button type="button" onClick={(event) => { event.stopPropagation(); onConfirm(appointmentId); }}>Confirm</button> : null}</article></div></div>;
 }
