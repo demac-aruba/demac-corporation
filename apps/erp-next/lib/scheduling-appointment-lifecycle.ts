@@ -1,6 +1,6 @@
 import type { BrowserAppointmentHistoryEvent, BrowserAppointmentRecord, BrowserAppointmentScheduleSnapshot, BrowserWorkOrderRecord } from './browser-operational';
 import { createBrowserWorkOrder } from './browser-operational';
-import type { BookingRequest, CandidateSlot, WorkPresetId } from './scheduling';
+import type { BookingRequest, BookingWorkLine, CandidateSlot, WorkPresetId } from './scheduling';
 import { customerFacingDescription, halfDayForTime, timeToMinutes } from './scheduling';
 import type { CalendarDispatchJob, OperationalDay } from './scheduling-capacity';
 import { buildOperationalWeek, findCandidateSlotsForDay } from './scheduling-capacity';
@@ -8,8 +8,9 @@ import { buildOperationalWeek, findCandidateSlotsForDay } from './scheduling-cap
 export type AppointmentActor = { id?: string; name?: string };
 
 export type AppointmentDetailsUpdate = {
-  presetId: WorkPresetId;
-  totalQuantity: number;
+  presetId?: WorkPresetId;
+  totalQuantity?: number;
+  workLines?: BookingWorkLine[];
   technicianInstructions?: string;
 };
 
@@ -225,21 +226,31 @@ export function updateAppointmentDetails(args: {
   jobs: CalendarDispatchJob[];
   actor?: AppointmentActor;
 }) {
-  const quantity = Math.max(1, Math.min(14, Math.round(args.update.totalQuantity)));
-  const workLines = [{ id: args.record.workLines?.[0]?.id ?? 'work-1', presetId: args.update.presetId, quantity }];
+  const incomingLines = args.update.workLines?.map((line, index) => ({
+    ...line,
+    id: line.id || `work-${index + 1}`,
+    quantity: Math.max(1, Math.round(line.quantity)),
+  })).filter((line) => Boolean(line.presetId));
+  const legacyQuantity = Math.max(1, Math.round(args.update.totalQuantity ?? args.record.totalQuantity));
+  const legacyPreset = args.update.presetId ?? args.record.presetId;
+  const workLines: BookingWorkLine[] = incomingLines?.length
+    ? incomingLines
+    : [{ id: args.record.workLines?.[0]?.id ?? 'work-1', presetId: legacyPreset, quantity: legacyQuantity }];
+  const totalQuantity = workLines.reduce((sum, line) => sum + line.quantity, 0);
+  const primaryPreset = workLines[0]?.presetId ?? legacyPreset;
   const candidateRecord: BrowserAppointmentRecord = {
     ...args.record,
-    presetId: args.update.presetId,
-    totalQuantity: quantity,
+    presetId: primaryPreset,
+    totalQuantity,
     workLines,
     technicianInstructions: args.update.technicianInstructions?.trim() || undefined,
-    customerFacingDescription: customerFacingDescription({ presetId: args.update.presetId, quantity, workLines }),
+    customerFacingDescription: customerFacingDescription({ presetId: primaryPreset, quantity: totalQuantity, workLines }),
   };
   const current = appointmentSnapshot(args.record);
   const options = findCandidateSlotsForDay(args.day, appointmentRequest(candidateRecord), jobsWithoutAppointment(args.record, args.jobs));
   const exact = options.find((slot) => slot.vanId === current.primaryVanId && slot.start === current.primaryStart);
   if (!exact) {
-    return { ok: false as const, message: 'The edited service or quantity no longer fits the current schedule. Use Move / Reassign or Reschedule to choose a valid work spot.' };
+    return { ok: false as const, message: 'The edited appointment scope no longer fits the current schedule. Use Move / Reassign or Reschedule to choose a valid work spot.' };
   }
   const assignments = rebuildAssignments(candidateRecord, exact, args.record.dateKey);
   const next: BrowserAppointmentRecord = {
@@ -254,6 +265,7 @@ export function updateAppointmentDetails(args: {
         kind: 'details_edited',
         actorId: args.actor?.id,
         actorName: args.actor?.name,
+        note: `${workLines.length} work line${workLines.length === 1 ? '' : 's'} · ${customerFacingDescription({ presetId: primaryPreset, quantity: totalQuantity, workLines })}`,
         from: appointmentSnapshot(args.record),
         to: appointmentSnapshot({ ...candidateRecord, assignments, primaryVanId: exact.vanId, supportVanId: exact.supportVanId }),
       }),
