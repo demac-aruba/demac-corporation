@@ -1,4 +1,5 @@
 import { getFirestoreDocument, saveFirestoreDocument } from './firestore-rest';
+import { publishPublicWebsiteConfig } from './storage-rest';
 import {
   cloneWebsiteContent,
   defaultPublicWebsiteContent,
@@ -47,7 +48,13 @@ export async function publishWebsiteContent(content: PublicWebsiteContent, actor
     publishedAt: now,
     publishedBy: actorId,
   };
+
+  // Keep an authenticated audit copy in Firestore, then publish the same
+  // normalized payload as a public JSON object in Firebase Storage. The public
+  // site reads only the Storage copy and falls back to bundled defaults if it
+  // is unavailable, so an incomplete publish can never blank the homepage.
   const savedPublished = await saveFirestoreDocument(WEBSITE_SETTINGS_COLLECTION, published);
+  await publishPublicWebsiteConfig(savedPublished);
   const draft = await saveFirestoreDocument(WEBSITE_SETTINGS_COLLECTION, {
     ...cloneWebsiteContent(savedPublished, WEBSITE_DRAFT_ID),
     id: WEBSITE_DRAFT_ID,
