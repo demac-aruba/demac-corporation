@@ -32,6 +32,7 @@ state = interpretBookingCopilotMessage({
 }).state;
 assert(state.constraints.notBefore === '10:00', 'after 10 should merge into the existing conversation constraints');
 assert(state.excludedWeekdays.includes(3), 'time refinement must not forget the Wednesday exclusion');
+assert(state.workLines[0].quantity === 3, 'a time such as 10:00 must never be reinterpreted as the A/C quantity');
 
 const selection = interpretBookingCopilotMessage({
   text: 'Perfecto, ponlo el jueves',
@@ -42,6 +43,7 @@ state = selection.state;
 assert(selection.selectionRequested, '"ponlo" should be recognized as a plan-selection command');
 assert(state.constraints.requestedWeekday === 4, 'Thursday should become the requested weekday');
 assert(state.excludedWeekdays.includes(3), 'selecting Thursday must preserve the Wednesday exclusion');
+assert(state.workLines[0].quantity === 3, 'day selection must preserve the original work quantity');
 
 const jobs: CalendarDispatchJob[] = [];
 const jobsBefore = JSON.stringify(jobs);
