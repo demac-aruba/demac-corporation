@@ -83,6 +83,13 @@ def clean_name(value: object) -> str:
     return text
 
 
+def clean_house_number(value: object) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip(" ,;")
+    if not text or len(text) > 32:
+        return ""
+    return text
+
+
 def split_names(value: object) -> list[str]:
     return [name for part in str(value or "").split(";") if (name := clean_name(part))]
 
@@ -101,7 +108,7 @@ def infer_operational_zone(place: str) -> str:
         ("Paradera", ["paradera", "piedraplat", "papaya", "cashero"]),
         ("Santa Cruz", ["santacruz", "hooiberg", "macuarima", "jaburibari", "balashi"]),
         ("Savaneta", ["savaneta", "poschiquito", "mangelhalto", "sabanabasora"]),
-        ("San Nicolas", ["sannicolas", "sannicolaas", "brazil", "brasil", "zeewijk", "lagoheights", "seroecolorado"]),
+        ("San Nicolas", ["sannicolas", "sannicolaas", "fontein", "brazil", "brasil", "zeewijk", "lagoheights", "seroecolorado"]),
         ("Oranjestad", ["oranjestad", "playa", "dakota", "wayaca", "tarabana", "morgenster", "seroeblanco", "ponton", "madiki", "tankileendert", "tankiflip"]),
     ]
     for zone, names in groups:
@@ -113,7 +120,7 @@ def infer_operational_zone(place: str) -> str:
 def fetch_osm() -> dict:
     payload = urllib.parse.urlencode({"data": OVERPASS_QUERY}).encode("utf-8")
     headers = {
-        "User-Agent": "DEMAC-Aruba-address-index/1.3 (https://github.com/demac-aruba/demac-corporation)",
+        "User-Agent": "DEMAC-Aruba-address-index/1.4 (https://github.com/demac-aruba/demac-corporation)",
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
     }
     errors: list[str] = []
@@ -212,6 +219,45 @@ def build_entries(data: dict) -> list[dict]:
     return entries
 
 
+def build_address_points(data: dict) -> list[dict]:
+    points: dict[tuple[str, str], dict] = {}
+    for element in data.get("elements", []):
+        tags = element.get("tags") or {}
+        street = clean_name(tags.get("addr:street"))
+        house_number = clean_house_number(tags.get("addr:housenumber"))
+        if not street or not house_number:
+            continue
+
+        latitude = element.get("lat")
+        longitude = element.get("lon")
+        if latitude is None or longitude is None:
+            center = element.get("center") or {}
+            latitude = center.get("lat")
+            longitude = center.get("lon")
+        if not isinstance(latitude, (int, float)) or not isinstance(longitude, (int, float)):
+            continue
+
+        place = next(
+            (
+                clean_name(tags.get(field))
+                for field in ("addr:suburb", "addr:district", "addr:city", "is_in:city", "is_in")
+                if clean_name(tags.get(field))
+            ),
+            "",
+        )
+        key = (normalize_key(street), normalize_key(house_number))
+        points.setdefault(key, {
+            "street": street,
+            "houseNumber": house_number,
+            "latitude": float(latitude),
+            "longitude": float(longitude),
+            "neighborhood": place,
+            "operationalZone": infer_operational_zone(place),
+        })
+
+    return sorted(points.values(), key=lambda item: (normalize_key(item["street"]), normalize_key(item["houseNumber"])))
+
+
 def ts_string(value: str) -> str:
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
@@ -248,11 +294,50 @@ def write_generated_entries(entries: list[dict]) -> None:
     Path("src/data/arubaStreetNames.generated.ts").write_text("\n".join(lines), encoding="utf-8")
 
 
+def write_generated_points(points: list[dict]) -> None:
+    generated_at = datetime.now(timezone.utc).date().isoformat()
+    lines = [
+        "// Generated from OpenStreetMap address data. Do not edit manually.",
+        "// © OpenStreetMap contributors, available under the ODbL.",
+        "",
+        "export type OsmArubaAddressPoint = {",
+        "  street: string;",
+        "  houseNumber: string;",
+        "  latitude: number;",
+        "  longitude: number;",
+        "  neighborhood?: string;",
+        "  operationalZone?: string;",
+        "};",
+        "",
+        f"export const osmArubaAddressPointIndexGeneratedAt = {ts_string(generated_at)};",
+        "export const osmArubaAddressPointAttribution = '© OpenStreetMap contributors · ODbL';",
+        "",
+        "export const osmArubaAddressPoints: readonly OsmArubaAddressPoint[] = [",
+    ]
+    for point in points:
+        fields = [
+            f"street: {ts_string(point['street'])}",
+            f"houseNumber: {ts_string(point['houseNumber'])}",
+            f"latitude: {point['latitude']:.7f}",
+            f"longitude: {point['longitude']:.7f}",
+        ]
+        if point["neighborhood"]:
+            fields.append(f"neighborhood: {ts_string(point['neighborhood'])}")
+        if point["operationalZone"]:
+            fields.append(f"operationalZone: {ts_string(point['operationalZone'])}")
+        lines.append("  { " + ", ".join(fields) + " },")
+    lines.extend(["] as const;", ""])
+    Path("src/data/arubaAddressPoints.generated.ts").write_text("\n".join(lines), encoding="utf-8")
+
+
 def main() -> None:
     sync_with_main()
-    entries = build_entries(fetch_osm())
+    data = fetch_osm()
+    entries = build_entries(data)
+    points = build_address_points(data)
     write_generated_entries(entries)
-    print(f"Generated {len(entries)} unique Aruba street/address names.")
+    write_generated_points(points)
+    print(f"Generated {len(entries)} unique Aruba street/address names and {len(points)} house-number GPS points.")
     match = next(entry for entry in entries if normalize_key(entry["canonical"]) == normalize_key("Nijhoffstraat"))
     print("Nijhoffstraat:", match)
 
