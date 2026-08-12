@@ -1,4 +1,5 @@
 import { arubaAddressDirectory, type ArubaAddressEntry } from '../../../../src/data/arubaAddresses';
+import { osmArubaAddressPoints } from '../../../../src/data/arubaAddressPoints.generated';
 
 export type AddressConfidence = 'verified' | 'suggested' | 'unresolved';
 
@@ -17,6 +18,22 @@ export type ParsedLocationInput = {
   originalUrl?: string;
 };
 
+export type ParsedArubaAddress = {
+  street: string;
+  houseNumber?: string;
+};
+
+export type ResolvedArubaAddress = ParsedArubaAddress & {
+  address: string;
+  sector: string;
+  source: 'DEMAC' | 'OpenStreetMap' | 'unknown';
+  neighborhood: string;
+  operationalZone: string;
+  confidence: 'verified';
+  latitude?: number;
+  longitude?: number;
+};
+
 function normalizeWords(value: string) {
   return value
     .normalize('NFD')
@@ -32,8 +49,17 @@ function compact(value: string) {
   return normalizeWords(value).replace(/\s+/g, '');
 }
 
+export function parseArubaAddressParts(value: string): ParsedArubaAddress {
+  const trimmed = value.trim();
+  const match = trimmed.match(/^(.*?)(?:\s+(\d+[a-z-]*))?\s*$/i);
+  return {
+    street: (match?.[1] ?? trimmed).trim(),
+    houseNumber: match?.[2]?.trim() || undefined,
+  };
+}
+
 function withoutHouseNumber(value: string) {
-  return value.replace(/\s+\d+[a-z-]*\s*$/i, '').trim();
+  return parseArubaAddressParts(value).street;
 }
 
 function levenshtein(left: string, right: string) {
@@ -99,7 +125,7 @@ export function demacSectorForAddress(entry: Pick<ArubaAddressEntry, 'canonical'
   if (/santa cruz|hooiberg|balashi|macuarima/.test(place)) return 'Santa Cruz';
   if (/paradera|piedra plat|papaya|cashero/.test(place)) return 'Paradera';
   if (/savaneta|pos chiquito|mangel halto/.test(place)) return 'Savaneta';
-  if (/san nicolas|brazil|zeewijk|lago heights|seroe colorado|baby beach/.test(place)) return 'San Nicolas';
+  if (/san nicolas|brazil|zeewijk|lago heights|seroe colorado|baby beach|weg fontein|fontein/.test(place)) return 'San Nicolas';
   return '';
 }
 
@@ -117,8 +143,15 @@ export function suggestArubaServiceAddresses(query: string, limit = 6): DemacAdd
   });
   const strongMatches = scored.filter((item) => item.strong);
   const matches = strongMatches.length ? strongMatches : scored.filter((item) => item.score >= 68);
+  const seen = new Set<string>();
   return matches
     .sort((left, right) => right.score - left.score || left.entry.canonical.localeCompare(right.entry.canonical))
+    .filter(({ entry }) => {
+      const key = compact(entry.canonical);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
     .slice(0, limit)
     .map(({ entry, score }) => ({
       canonical: entry.canonical,
@@ -131,8 +164,34 @@ export function suggestArubaServiceAddresses(query: string, limit = 6): DemacAdd
 }
 
 export function applyArubaAddressSuggestion(raw: string, suggestion: Pick<DemacAddressSuggestion, 'canonical'>) {
-  const house = raw.match(/\b(\d+[a-z-]*)\b/i)?.[1];
-  return `${suggestion.canonical}${house ? ` ${house}` : ''}`;
+  const { houseNumber } = parseArubaAddressParts(raw);
+  return `${suggestion.canonical}${houseNumber ? ` ${houseNumber}` : ''}`;
+}
+
+export function resolveArubaHouseNumberGps(street: string, houseNumber?: string): ParsedLocationInput | null {
+  if (!street.trim() || !houseNumber?.trim()) return null;
+  const streetKey = compact(street);
+  const houseKey = compact(houseNumber);
+  const point = osmArubaAddressPoints.find((candidate) => compact(candidate.street) === streetKey && compact(candidate.houseNumber) === houseKey);
+  if (!point) return null;
+  return { latitude: point.latitude, longitude: point.longitude };
+}
+
+export function resolveArubaAddressSuggestion(raw: string, suggestion: DemacAddressSuggestion): ResolvedArubaAddress {
+  const { houseNumber } = parseArubaAddressParts(raw);
+  const point = resolveArubaHouseNumberGps(suggestion.canonical, houseNumber);
+  return {
+    street: suggestion.canonical,
+    houseNumber,
+    address: `${suggestion.canonical}${houseNumber ? ` ${houseNumber}` : ''}`,
+    sector: suggestion.demacSector,
+    source: suggestion.source,
+    neighborhood: suggestion.neighborhood,
+    operationalZone: suggestion.operationalZone,
+    confidence: 'verified',
+    latitude: point?.latitude,
+    longitude: point?.longitude,
+  };
 }
 
 export function addressConfidence(value: string): AddressConfidence {
@@ -158,8 +217,16 @@ export function parseLocationInput(value: string): ParsedLocationInput | null {
     const latitude = Number(match[1]);
     const longitude = Number(match[2]);
     if (latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180) {
-      return { latitude, longitude, originalUrl: /^https?:/i.test(input) ? input : undefined };
+      return { latitude, longitude, originalUrl: /^[a-z][a-z0-9+.-]*:\/\//i.test(input) ? input : undefined };
     }
   }
-  return /^https?:\/\//i.test(input) ? { originalUrl: input } : null;
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(input) ? { originalUrl: input } : null;
+}
+
+export function navigationUrlForAddress(address: string, location?: ParsedLocationInput | null) {
+  const target = location?.latitude != null && location?.longitude != null
+    ? `${location.latitude},${location.longitude}`
+    : address.trim();
+  if (!target) return '';
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(target)}`;
 }

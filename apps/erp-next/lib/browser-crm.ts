@@ -43,7 +43,11 @@ export type BrowserCrmSiteIdentity = {
   id: string;
   name: string;
   address: string;
+  addressCanonicalStreet?: string;
+  addressHouseNumber?: string;
+  addressSource?: 'DEMAC' | 'OpenStreetMap' | 'manual' | 'unknown';
   sector?: string;
+  sectorResolution?: 'address' | 'manual' | 'unresolved';
   gac?: string;
   access?: string;
   latitude?: number;
@@ -81,6 +85,9 @@ export function loadBrowserCustomerMaster(customerId: string): BrowserCustomerMa
 export function sectorFromCrm(customer?: BrowserCrmCustomerIdentity, site?: BrowserCrmSiteIdentity) {
   const allowed = new Set(['Noord', 'Palm Beach', 'Oranjestad', 'Santa Cruz', 'Paradera', 'San Nicolas', 'Savaneta']);
   if (site?.sector && allowed.has(site.sector)) return site.sector;
-  if (customer?.location && allowed.has(customer.location)) return customer.location;
+  // Legacy records may not yet have a property-level sector. Keep this compatibility
+  // fallback until those records are migrated, but new property flows always persist
+  // the sector on the property itself.
+  if (!site?.sector && customer?.location && allowed.has(customer.location)) return customer.location;
   return undefined;
 }
