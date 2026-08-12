@@ -24,6 +24,14 @@ export type WorkPreset = {
   customerDescriptionTemplate: string;
 };
 
+export type BookingWorkLine = {
+  id: string;
+  presetId: WorkPresetId;
+  quantity: number;
+  customerFacingDescription?: string;
+  technicianInstructions?: string;
+};
+
 export type SchedulingSettings = {
   timezone: 'America/Aruba';
   officeSector: string;
@@ -82,6 +90,7 @@ export type BookingRequest = {
   sector: string;
   presetId: WorkPresetId;
   quantity: number;
+  workLines?: BookingWorkLine[];
   restriction?: BookingRestriction;
 };
 
@@ -208,14 +217,38 @@ export function getPresetDurationMinutes(presetId: WorkPresetId, settings: Sched
   return getPreset(presetId).defaultMinutes;
 }
 
-export function calculateDurationMinutes(request: Pick<BookingRequest, 'presetId' | 'quantity'>, settings: SchedulingSettings = getRuntimeSchedulingSettings()) {
+function singleWorkDuration(request: Pick<BookingWorkLine, 'presetId' | 'quantity'>, settings: SchedulingSettings) {
   const preset = getPreset(request.presetId);
   const baseMinutes = getPresetDurationMinutes(request.presetId, settings);
   return baseMinutes * (preset.perUnit ? Math.max(1, request.quantity) : 1);
 }
 
-export function customerFacingDescription(request: Pick<BookingRequest, 'presetId' | 'quantity'>) {
+export function calculateDurationMinutes(request: Pick<BookingRequest, 'presetId' | 'quantity' | 'workLines'>, settings: SchedulingSettings = getRuntimeSchedulingSettings()) {
+  if (request.workLines?.length) {
+    return request.workLines.reduce((total, line) => total + singleWorkDuration(line, settings), 0);
+  }
+  return singleWorkDuration(request, settings);
+}
+
+function singleCustomerFacingDescription(request: Pick<BookingWorkLine, 'presetId' | 'quantity'>) {
   return getPreset(request.presetId).customerDescriptionTemplate.replace('{quantity}', String(Math.max(1, request.quantity)));
+}
+
+export function customerFacingDescription(request: Pick<BookingRequest, 'presetId' | 'quantity' | 'workLines'>) {
+  if (request.workLines?.length) {
+    return request.workLines.map((line) => line.customerFacingDescription?.trim() || singleCustomerFacingDescription(line)).join(' + ');
+  }
+  return singleCustomerFacingDescription(request);
+}
+
+export function isStandardServiceOnly(request: Pick<BookingRequest, 'presetId' | 'quantity' | 'workLines'>) {
+  if (!request.workLines?.length) return request.presetId === 'standard_service';
+  return request.workLines.every((line) => line.presetId === 'standard_service');
+}
+
+export function standardServiceQuantity(request: Pick<BookingRequest, 'quantity' | 'workLines'>) {
+  if (!request.workLines?.length) return request.quantity;
+  return request.workLines.reduce((sum, line) => sum + line.quantity, 0);
 }
 
 export function sectorsCompatible(anchorSector: string | undefined, candidateSector: string) {
@@ -301,15 +334,16 @@ function workingEndAfter(start: string, workMinutes: number, settings: Schedulin
 }
 
 function findSupportPlan(request: BookingRequest, jobs: DispatchJob[], vans: VanResource[], settings: SchedulingSettings): CandidateSlot[] {
-  if (request.presetId !== 'standard_service') return [];
+  if (!isStandardServiceOnly(request)) return [];
+  const requestedUnits = standardServiceQuantity(request);
   const primaryCapacity = settings.maxStandardUnitsSameSiteSingleVan;
   const supportCapacity = settings.maxStandardUnitsPerVanWhenSupport;
-  if (request.quantity <= primaryCapacity || request.quantity > primaryCapacity + supportCapacity) return [];
+  if (requestedUnits <= primaryCapacity || requestedUnits > primaryCapacity + supportCapacity) return [];
   if (request.restriction?.halfDay === 'pm' || request.restriction?.notBefore && timeToMinutes(request.restriction.notBefore) > timeToMinutes('08:30')) return [];
 
   const serviceMinutes = getPresetDurationMinutes('standard_service', settings);
   const primaryUnits = primaryCapacity;
-  const supportUnits = request.quantity - primaryUnits;
+  const supportUnits = requestedUnits - primaryUnits;
   const primaryStart = '08:30';
   const primaryEnd = workingEndAfter(primaryStart, primaryUnits * serviceMinutes, settings);
   const latestEnd = timeToMinutes(settings.workdayEnd) - settings.routeMarginMinutes;
