@@ -47,6 +47,22 @@ export const WEBSITE_DRAFT_ID = 'publicWebsiteDraft';
 export const WEBSITE_PUBLISHED_ID = 'publicWebsitePublished';
 export const WEBSITE_SETTINGS_COLLECTION = 'businessSettings';
 
+// The first bundled image exports were accidentally compressed to only
+// 7–14 KB and became visibly blocky at full hero width. Keep these HD URLs
+// centralized so both bundled defaults and previously saved configs migrate
+// away from the damaged assets automatically.
+export const DEFAULT_HERO_IMAGE_URLS = {
+  residential: 'https://images.unsplash.com/photo-1761330440311-16e160cad236?auto=format&fit=crop&fm=webp&q=88&w=2400',
+  professional: 'https://images.unsplash.com/photo-1715593949273-09009558300a?auto=format&fit=crop&fm=webp&q=88&w=2400',
+  hospitality: 'https://images.unsplash.com/photo-1775480462508-373a4f259049?auto=format&fit=crop&fm=webp&q=88&w=2400',
+} as const;
+
+const COMPRESSED_HERO_MIGRATION: Record<string, string> = {
+  '/website/hero/hero-residential.webp': DEFAULT_HERO_IMAGE_URLS.residential,
+  '/website/hero/hero-professional.webp': DEFAULT_HERO_IMAGE_URLS.professional,
+  '/website/hero/hero-hospitality.webp': DEFAULT_HERO_IMAGE_URLS.hospitality,
+};
+
 export const defaultPublicWebsiteContent: PublicWebsiteContent = {
   id: WEBSITE_PUBLISHED_ID,
   version: 1,
@@ -58,7 +74,7 @@ export const defaultPublicWebsiteContent: PublicWebsiteContent = {
         id: 'hero-residential',
         name: 'Residential comfort',
         enabled: true,
-        imageUrl: '/website/hero/hero-residential.webp',
+        imageUrl: DEFAULT_HERO_IMAGE_URLS.residential,
         eyebrow: 'Premium air conditioning solutions',
         title: 'Cooling Comfort for Homes & Businesses in',
         accent: 'Aruba.',
@@ -72,7 +88,7 @@ export const defaultPublicWebsiteContent: PublicWebsiteContent = {
         id: 'hero-professional',
         name: 'Professional spaces',
         enabled: true,
-        imageUrl: '/website/hero/hero-professional.webp',
+        imageUrl: DEFAULT_HERO_IMAGE_URLS.professional,
         eyebrow: 'Cooling for professional spaces',
         title: 'Reliable Cooling for Offices & Clinics in',
         accent: 'Aruba.',
@@ -86,7 +102,7 @@ export const defaultPublicWebsiteContent: PublicWebsiteContent = {
         id: 'hero-hospitality',
         name: 'Hospitality & business',
         enabled: true,
-        imageUrl: '/website/hero/hero-hospitality.webp',
+        imageUrl: DEFAULT_HERO_IMAGE_URLS.hospitality,
         eyebrow: 'Commercial comfort across Aruba',
         title: 'Cooling Solutions for Hospitality & Business in',
         accent: 'Aruba.',
@@ -127,6 +143,11 @@ function normalizeLink(value: unknown, fallback: WebsiteLink): WebsiteLink {
   };
 }
 
+function normalizeImageUrl(value: unknown, fallback: string) {
+  const imageUrl = stringValue(value, fallback);
+  return COMPRESSED_HERO_MIGRATION[imageUrl] ?? imageUrl;
+}
+
 function normalizeSlide(value: unknown, fallback: WebsiteHeroSlide): WebsiteHeroSlide {
   if (!value || typeof value !== 'object') return fallback;
   const source = value as Record<string, unknown>;
@@ -134,7 +155,7 @@ function normalizeSlide(value: unknown, fallback: WebsiteHeroSlide): WebsiteHero
     id: stringValue(source.id, fallback.id),
     name: stringValue(source.name, fallback.name),
     enabled: typeof source.enabled === 'boolean' ? source.enabled : fallback.enabled,
-    imageUrl: stringValue(source.imageUrl, fallback.imageUrl),
+    imageUrl: normalizeImageUrl(source.imageUrl, fallback.imageUrl),
     mobileImageUrl: optionalString(source.mobileImageUrl),
     eyebrow: stringValue(source.eyebrow, fallback.eyebrow),
     title: stringValue(source.title, fallback.title),

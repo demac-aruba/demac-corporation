@@ -45,6 +45,13 @@ function buildDraft(content: PublicWebsiteContent, actorId: string): PublicWebsi
   };
 }
 
+function containsBrowserOnlyImage(content: PublicWebsiteContent) {
+  return content.hero.slides.some((slide) =>
+    slide.imageUrl.startsWith('data:image/')
+    || Boolean(slide.mobileImageUrl?.startsWith('data:image/')),
+  );
+}
+
 export async function loadWebsiteDraft() {
   try {
     const stored = await getFirestoreDocument<PublicWebsiteContent>(WEBSITE_SETTINGS_COLLECTION, WEBSITE_DRAFT_ID);
@@ -99,6 +106,12 @@ export async function saveWebsiteDraft(content: PublicWebsiteContent, actorId: s
 }
 
 export async function publishWebsiteContent(content: PublicWebsiteContent, actorId: string) {
+  if (containsBrowserOnlyImage(content)) {
+    const preservedDraft = buildDraft(content, actorId);
+    writeLocalWebsiteContent(LOCAL_DRAFT_KEY, preservedDraft);
+    throw new Error('This Draft contains an image saved only in this browser. The image is safe in your Draft, but Publish requires Firebase website media storage to be activated first. The live website has not changed.');
+  }
+
   const now = new Date().toISOString();
   const nextVersion = Math.max(1, content.version + 1);
   const published: PublicWebsiteContent = {
