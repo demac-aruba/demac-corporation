@@ -1,5 +1,8 @@
 import { firebaseClientConfig, isFirebaseClientConfigured } from './client-config';
 import { requireFirebaseWebSession } from './session';
+import type { PublicWebsiteContent } from '../public-website-content';
+
+export const PUBLIC_WEBSITE_CONFIG_PATH = 'public-website/config/published.json';
 
 export type WebsiteImageUpload = {
   path: string;
@@ -12,32 +15,49 @@ function cleanFileName(name: string) {
   return `${stem}${extension}`;
 }
 
-export async function uploadPublicWebsiteImage(file: File, scope = 'hero'): Promise<WebsiteImageUpload> {
+function storageMediaUrl(path: string) {
+  if (!firebaseClientConfig.storageBucket) return '';
+  return `https://firebasestorage.googleapis.com/v0/b/${firebaseClientConfig.storageBucket}/o/${encodeURIComponent(path)}?alt=media`;
+}
+
+async function uploadMedia(path: string, body: Blob | string, contentType: string, mediaKind: string) {
   if (!isFirebaseClientConfigured || !firebaseClientConfig.storageBucket) {
     throw new Error('Firebase Storage is not configured for this deployment.');
   }
-  if (!file.type.startsWith('image/')) throw new Error('Choose an image file.');
-  if (file.size > 8 * 1024 * 1024) throw new Error('Website images must be smaller than 8 MB.');
-
   const session = await requireFirebaseWebSession();
-  const path = `public-website/${scope}/${Date.now()}-${cleanFileName(file.name)}`;
   const endpoint = `https://firebasestorage.googleapis.com/v0/b/${firebaseClientConfig.storageBucket}/o?uploadType=media&name=${encodeURIComponent(path)}`;
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${session.idToken}`,
-      'Content-Type': file.type || 'application/octet-stream',
+      'Content-Type': contentType,
       'X-Goog-Meta-uploadedByUid': session.uid,
-      'X-Goog-Meta-mediaKind': 'website-image',
+      'X-Goog-Meta-mediaKind': mediaKind,
+      'Cache-Control': mediaKind === 'website-config' ? 'public,max-age=30' : 'public,max-age=31536000,immutable',
     },
-    body: file,
+    body,
   });
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || 'Website image upload failed.');
+    throw new Error(text || 'Website media upload failed.');
   }
-  return {
-    path,
-    mediaUrl: `https://firebasestorage.googleapis.com/v0/b/${firebaseClientConfig.storageBucket}/o/${encodeURIComponent(path)}?alt=media`,
-  };
+  return storageMediaUrl(path);
+}
+
+export async function uploadPublicWebsiteImage(file: File, scope = 'hero'): Promise<WebsiteImageUpload> {
+  if (!file.type.startsWith('image/')) throw new Error('Choose an image file.');
+  if (file.size > 8 * 1024 * 1024) throw new Error('Website images must be smaller than 8 MB.');
+  const path = `public-website/${scope}/${Date.now()}-${cleanFileName(file.name)}`;
+  const mediaUrl = await uploadMedia(path, file, file.type || 'application/octet-stream', 'website-image');
+  return { path, mediaUrl };
+}
+
+export async function publishPublicWebsiteConfig(content: PublicWebsiteContent) {
+  const payload = JSON.stringify(content);
+  if (new Blob([payload]).size > 512 * 1024) throw new Error('Published website configuration is too large.');
+  return uploadMedia(PUBLIC_WEBSITE_CONFIG_PATH, payload, 'application/json', 'website-config');
+}
+
+export function publicWebsiteConfigUrl() {
+  return storageMediaUrl(PUBLIC_WEBSITE_CONFIG_PATH);
 }
