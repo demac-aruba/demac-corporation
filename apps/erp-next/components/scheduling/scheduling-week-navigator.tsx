@@ -1,6 +1,6 @@
 'use client';
 
-import type { ChangeEvent } from 'react';
+import { useRef, type ChangeEvent } from 'react';
 import type { OperationalDay } from '../../lib/scheduling-capacity';
 import styles from './scheduling-overview-v2.module.css';
 
@@ -45,11 +45,29 @@ function calendarIcon() {
 }
 
 export function SchedulingWeekNavigator({ week, activeDate, today, summaries, onSelectDate }: Props) {
+  const dateInputRef = useRef<HTMLInputElement>(null);
+
   const pickDate = (event: ChangeEvent<HTMLInputElement>) => {
     if (event.target.value) onSelectDate(event.target.value);
   };
 
+  const openCalendar = () => {
+    const input = dateInputRef.current as (HTMLInputElement & { showPicker?: () => void }) | null;
+    if (!input) return;
+    try {
+      if (typeof input.showPicker === 'function') {
+        input.showPicker();
+        return;
+      }
+    } catch {
+      // Fall back to focus/click for browsers that reject showPicker on this control.
+    }
+    input.focus();
+    input.click();
+  };
+
   return <section aria-label="Week navigation" style={{ marginBottom: 10 }}>
+    <style>{`.${styles.toolbar}{display:none!important}`}</style>
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
         <button type="button" onClick={() => onSelectDate(addDays(activeDate, -7))} title="Previous week" aria-label="Previous week" style={{ width: 30, height: 30, border: '1px solid var(--border)', borderRadius: 9, color: 'var(--text)', background: 'var(--surface)', cursor: 'pointer', fontSize: 16 }}>‹</button>
@@ -62,19 +80,29 @@ export function SchedulingWeekNavigator({ week, activeDate, today, summaries, on
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
         <button type="button" onClick={() => onSelectDate(today)} style={{ height: 30, border: '1px solid var(--border)', borderRadius: 9, padding: '0 10px', color: activeDate === today ? 'var(--brand)' : 'var(--text)', background: activeDate === today ? 'var(--brand-soft)' : 'var(--surface)', cursor: 'pointer', fontSize: 6.8, fontWeight: 900 }}>Today</button>
-        <label title="Choose a date" style={{ position: 'relative', height: 30, display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid var(--border)', borderRadius: 9, padding: '0 10px', color: 'var(--brand)', background: 'var(--surface)', cursor: 'pointer', fontSize: 6.8, fontWeight: 900, overflow: 'hidden' }}>
+        <button type="button" onClick={openCalendar} title="Choose a date" aria-label="Choose a schedule date" style={{ height: 30, display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid var(--border)', borderRadius: 9, padding: '0 10px', color: 'var(--brand)', background: 'var(--surface)', cursor: 'pointer', fontSize: 6.8, fontWeight: 900 }}>
           {calendarIcon()}<span>Calendar</span>
-          <input type="date" value={activeDate} onChange={pickDate} aria-label="Choose schedule date" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} />
-        </label>
+        </button>
+        <input ref={dateInputRef} type="date" value={activeDate} onChange={pickDate} tabIndex={-1} aria-hidden="true" style={{ position: 'fixed', left: -20, top: -20, width: 1, height: 1, opacity: 0, pointerEvents: 'none' }} />
       </div>
     </div>
 
     <section className={styles.weekStrip} aria-label="Operational week">{week.map((day) => {
       const summary = summaries[day.dateKey] ?? { total: 0, occupied: 0, open: 0, percent: 0 };
+      const labelPosition = Math.min(96, Math.max(4, summary.percent));
+      const color = progressColor(summary.percent);
       return <button type="button" key={day.dateKey} disabled={!day.isOpen} className={`${styles.dayCard} ${day.dateKey === activeDate ? styles.dayActive : ''} ${day.dateKey === today ? styles.today : ''}`} onClick={() => onSelectDate(day.dateKey)}>
         <div><span>{day.weekday}</span><strong>{day.shortDate}</strong>{day.dateKey === today ? <b>TODAY</b> : null}</div>
         <small>{day.shiftLabel}</small>
-        {day.isOpen ? <><i><em style={{ width: `${summary.percent}%`, background: progressColor(summary.percent), transition: 'width .2s ease, background .2s ease' }} /></i><p>{summary.occupied}/{summary.total} spots filled · {summary.open} open</p></> : <p>Operationally closed</p>}
+        {day.isOpen ? <>
+          <span style={{ position: 'relative', display: 'block', marginTop: 13 }}>
+            <b style={{ position: 'absolute', left: `${labelPosition}%`, top: -11, transform: 'translateX(-50%)', color, fontSize: 5.5, fontWeight: 950, lineHeight: 1, whiteSpace: 'nowrap' }}>{summary.percent}%</b>
+            <i style={{ display: 'block', height: 4, borderRadius: 99, background: 'var(--surface-3)', overflow: 'hidden' }}>
+              <em style={{ display: 'block', width: `${summary.percent}%`, height: '100%', borderRadius: 99, background: color, transition: 'width .2s ease, background .2s ease' }} />
+            </i>
+          </span>
+          <p>{summary.occupied}/{summary.total} spots filled · {summary.open} open</p>
+        </> : <p>Operationally closed</p>}
       </button>;
     })}</section>
   </section>;
