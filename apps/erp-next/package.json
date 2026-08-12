@@ -8,7 +8,8 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test:dispatch": "node -e \"require('fs').rmSync('.dispatch-test',{recursive:true,force:true})\" && tsc --ignoreConfig scripts/dispatch-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --outDir .dispatch-test --rootDir . --lib ES2022,DOM && node .dispatch-test/scripts/dispatch-acceptance.js",
-    "test:lifecycle": "node -e \"require('fs').rmSync('.lifecycle-test',{recursive:true,force:true})\" && tsc --ignoreConfig scripts/appointment-lifecycle-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --outDir .lifecycle-test --rootDir . --lib ES2022,DOM && node .lifecycle-test/scripts/appointment-lifecycle-acceptance.js"
+    "test:lifecycle": "node -e \"require('fs').rmSync('.lifecycle-test',{recursive:true,force:true})\" && tsc --ignoreConfig scripts/appointment-lifecycle-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --outDir .lifecycle-test --rootDir . --lib ES2022,DOM && node .lifecycle-test/scripts/appointment-lifecycle-acceptance.js",
+    "test:booking-intelligence": "node -e \"require('fs').rmSync('.booking-intelligence-test',{recursive:true,force:true})\" && tsc --ignoreConfig scripts/booking-intelligence-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --outDir .booking-intelligence-test --rootDir . --lib ES2022,DOM && node .booking-intelligence-test/scripts/booking-intelligence-acceptance.js"
   },
   "dependencies": {
     "next": "16.2.11",
