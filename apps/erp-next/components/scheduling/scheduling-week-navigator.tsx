@@ -66,10 +66,47 @@ export function SchedulingWeekNavigator({ week, activeDate, today, summaries, on
     input.click();
   };
 
-  return <section aria-label="Week navigation" style={{ marginBottom: 10 }}>
-    <style>{`.${styles.toolbar}{display:none!important}`}</style>
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+  return <section aria-label="Week navigation" data-week-nav style={{ marginBottom: 10 }}>
+    <style>{`
+      .${styles.toolbar}{display:none!important}
+      @media(max-width:600px){
+        .${styles.pageHeader}{gap:8px!important;margin-bottom:10px!important}
+        .${styles.pageHeader} p{display:none!important}
+        .${styles.metrics}{display:none!important}
+        .${styles.bookingIntelligence}{display:none!important}
+        [data-week-nav]{margin-bottom:7px!important}
+        [data-week-nav-bar]{display:grid!important;grid-template-columns:minmax(0,1fr) auto!important;gap:6px!important;margin-bottom:6px!important}
+        [data-week-nav-copy]{min-width:0!important;gap:4px!important}
+        [data-week-nav-copy]>div{min-width:0!important}
+        [data-week-nav-copy] strong{font-size:7px!important;white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important}
+        [data-week-nav-copy] span{display:none!important}
+        [data-week-nav-copy]>button{width:27px!important;height:27px!important;flex:0 0 27px!important}
+        [data-week-nav-actions]{gap:4px!important}
+        [data-week-nav-actions]>button{height:27px!important;padding:0 7px!important}
+        .${styles.weekStrip}{grid-template-columns:repeat(7,minmax(0,1fr))!important;gap:3px!important;margin-bottom:7px!important}
+        .${styles.dayCard}{position:relative!important;min-height:54px!important;padding:6px 3px!important;border-radius:9px!important}
+        .${styles.dayCard}>div{display:flex!important;align-items:flex-start!important;flex-direction:column!important;gap:0!important}
+        .${styles.dayCard}>div>span{font-size:5px!important;line-height:1.1!important}
+        .${styles.dayCard}>div>strong{font-size:5.8px!important;line-height:1.15!important;white-space:nowrap!important}
+        .${styles.dayCard}>div>b{display:none!important}
+        .${styles.dayCard}>small,.${styles.dayCard}>p{display:none!important}
+        .${styles.dayCard}>span{margin-top:10px!important}
+        .${styles.dayCard}>span>b{left:50%!important;transform:translateX(-50%)!important;font-size:4.8px!important}
+        .${styles.dayCard}>span>i{height:3px!important}
+        .${styles.boardHeader}{padding:9px 10px!important}
+        .${styles.boardHeader} span{display:none!important}
+        .${styles.boardHeader}>div::after{content:'Swipe left/right to change van';display:block;margin-top:2px;color:var(--muted);font-size:5.8px}
+        .${styles.boardScroll}{overflow-x:auto!important;scroll-snap-type:x mandatory!important;scrollbar-width:none!important;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;touch-action:pan-x pan-y}
+        .${styles.boardScroll}::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}
+        .${styles.vanGrid}{display:flex!important;grid-template-columns:none!important;gap:0!important;min-width:0!important;width:100%!important;padding:0!important}
+        .${styles.vanLane}{flex:0 0 100%!important;width:100%!important;max-width:100%!important;scroll-snap-align:start!important;scroll-snap-stop:always!important;border:0!important;border-radius:0!important}
+        .${styles.vanLane}>header{padding:10px 11px!important}
+        .${styles.anchorBar}>div{padding:7px 9px!important}
+        .${styles.slotList}{padding:8px!important}
+      }
+    `}</style>
+    <div data-week-nav-bar style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
+      <div data-week-nav-copy style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
         <button type="button" onClick={() => onSelectDate(addDays(activeDate, -7))} title="Previous week" aria-label="Previous week" style={{ width: 30, height: 30, border: '1px solid var(--border)', borderRadius: 9, color: 'var(--text)', background: 'var(--surface)', cursor: 'pointer', fontSize: 16 }}>‹</button>
         <div>
           <strong style={{ display: 'block', fontSize: 8.5 }}>{weekLabel(week)}</strong>
@@ -78,7 +115,7 @@ export function SchedulingWeekNavigator({ week, activeDate, today, summaries, on
         <button type="button" onClick={() => onSelectDate(addDays(activeDate, 7))} title="Next week" aria-label="Next week" style={{ width: 30, height: 30, border: '1px solid var(--border)', borderRadius: 9, color: 'var(--text)', background: 'var(--surface)', cursor: 'pointer', fontSize: 16 }}>›</button>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+      <div data-week-nav-actions style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
         <button type="button" onClick={() => onSelectDate(today)} style={{ height: 30, border: '1px solid var(--border)', borderRadius: 9, padding: '0 10px', color: activeDate === today ? 'var(--brand)' : 'var(--text)', background: activeDate === today ? 'var(--brand-soft)' : 'var(--surface)', cursor: 'pointer', fontSize: 6.8, fontWeight: 900 }}>Today</button>
         <button type="button" onClick={openCalendar} title="Choose a date" aria-label="Choose a schedule date" style={{ height: 30, display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid var(--border)', borderRadius: 9, padding: '0 10px', color: 'var(--brand)', background: 'var(--surface)', cursor: 'pointer', fontSize: 6.8, fontWeight: 900 }}>
           {calendarIcon()}<span>Calendar</span>
