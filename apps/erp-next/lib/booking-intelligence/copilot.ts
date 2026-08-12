@@ -1,5 +1,5 @@
 import type { BookingRequest, BookingWorkLine, CandidateSlot, WorkPresetId } from '../scheduling';
-import { customerFacingDescription, defaultWorkPresets } from '../scheduling';
+import { customerFacingDescription, timeToMinutes } from '../scheduling';
 import type { CalendarDispatchJob, OperationalDay, SupportReflowPlan } from '../scheduling-capacity';
 import { buildOperationalWeek, findCandidateSlotsForDay, findSupportReflowPlansForDay, jobsForDate } from '../scheduling-capacity';
 import { bookingRestrictionFromConstraints, describeBookingConstraints, inferBookingConstraintPatch, mergeBookingConstraints, type BookingConstraintState } from './constraints';
@@ -97,6 +97,17 @@ function operationalDay(dateKey: string) {
   return buildOperationalWeek(dateKey).find((day) => day.dateKey === dateKey)!;
 }
 
+function currentArubaClock() {
+  const now = new Date();
+  const dateParts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Aruba', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now);
+  const timeParts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Aruba', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(now);
+  const read = (parts: Intl.DateTimeFormatPart[], type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? '';
+  return {
+    dateKey: `${read(dateParts, 'year')}-${read(dateParts, 'month')}-${read(dateParts, 'day')}`,
+    minutes: Number(read(timeParts, 'hour')) * 60 + Number(read(timeParts, 'minute')),
+  };
+}
+
 function parseCount(text: string) {
   const normalized = normalize(text);
   const digit = normalized.match(/\b(1[0-4]|[1-9])\b/)?.[1];
@@ -110,7 +121,7 @@ function parseCount(text: string) {
 function inferPreset(text: string): WorkPresetId | undefined {
   const value = normalize(text);
   if (/\b(deep|deep cleaning|limpieza profunda|servicio profundo|deep service)\b/.test(value)) return 'deep_cleaning';
-  if (/\b(check\s*up|checkup|diagnostic|diagnostico|diagnostico|revision tecnica)\b/.test(value)) return 'diagnostic';
+  if (/\b(check\s*up|checkup|diagnostic|diagnostico|revision tecnica)\b/.test(value)) return 'diagnostic';
   if (/\b(repair|reparacion|reparar|arreglo|fix)\b/.test(value)) return 'repair';
   if (/\b(rooftop|techo)\b/.test(value) && /\b(instal|install)\w*/.test(value)) return 'installation_rooftop';
   if (/\b(third floor|tercer piso|tercera planta)\b/.test(value) && /\b(instal|install)\w*/.test(value)) return 'installation_third_floor';
@@ -154,7 +165,7 @@ function requestedDateFromRelativeText(text: string, referenceDateKey: string) {
 
 function inferDateScope(text: string, previous: CopilotDateScope): CopilotDateScope {
   const value = normalize(text);
-  if (/\b(proxima semana|pr[oó]xima semana|next week|siman benidero)\b/.test(value)) return 'next_week';
+  if (/\b(proxima semana|next week|siman benidero)\b/.test(value)) return 'next_week';
   if (/\b(dos semanas|2 semanas|next two weeks|proximas dos semanas)\b/.test(value)) return 'next_14_days';
   if (/\b(este mes|this month|fin de mes|end of the month)\b/.test(value)) return 'this_month';
   if (/\b(esta semana|this week|e siman aki)\b/.test(value)) return 'this_week';
@@ -163,10 +174,7 @@ function inferDateScope(text: string, previous: CopilotDateScope): CopilotDateSc
 
 function dateKeysForScope(state: BookingCopilotState, referenceDateKey: string) {
   if (state.constraints.requestedDate) return [state.constraints.requestedDate];
-  if (state.dateScope === 'next_week') {
-    const nextWeek = buildOperationalWeek(addDays(referenceDateKey, 7));
-    return nextWeek.map((day) => day.dateKey);
-  }
+  if (state.dateScope === 'next_week') return buildOperationalWeek(addDays(referenceDateKey, 7)).map((day) => day.dateKey);
   if (state.dateScope === 'next_14_days') return Array.from({ length: 14 }, (_, index) => addDays(referenceDateKey, index));
   if (state.dateScope === 'this_month') {
     const date = new Date(`${referenceDateKey}T12:00:00Z`);
@@ -189,21 +197,10 @@ function selectionCommand(text: string) {
 }
 
 export function defaultBookingCopilotState(): BookingCopilotState {
-  return {
-    workLines: [],
-    constraints: {},
-    excludedWeekdays: [],
-    excludedDateKeys: [],
-    dateScope: 'this_week',
-    sourceMessages: [],
-  };
+  return { workLines: [], constraints: {}, excludedWeekdays: [], excludedDateKeys: [], dateScope: 'this_week', sourceMessages: [] };
 }
 
-export function interpretBookingCopilotMessage(args: {
-  text: string;
-  previous?: BookingCopilotState;
-  referenceDateKey: string;
-}): BookingCopilotInterpretation {
+export function interpretBookingCopilotMessage(args: { text: string; previous?: BookingCopilotState; referenceDateKey: string }): BookingCopilotInterpretation {
   const previous = args.previous ?? defaultBookingCopilotState();
   const normalized = normalize(args.text);
   const resetRequested = /\b(reset|reiniciar|empezar de nuevo|nueva simulacion|new simulation)\b/.test(normalized);
@@ -211,16 +208,16 @@ export function interpretBookingCopilotMessage(args: {
   const exclusions = excludedWeekdaysFromText(args.text);
   const relativeDate = requestedDateFromRelativeText(args.text, args.referenceDateKey);
   const inferredConstraintPatch = inferBookingConstraintPatch(args.text);
-
-  if (exclusions.length) {
-    inferredConstraintPatch.requestedWeekday = undefined;
-  }
+  if (exclusions.length) inferredConstraintPatch.requestedWeekday = undefined;
   if (relativeDate) inferredConstraintPatch.requestedDate = relativeDate;
 
   const sector = inferSector(args.text) ?? base.sector;
   const workLines = inferWorkLines(args.text, base.workLines);
   const constraints = mergeBookingConstraints(base.constraints, inferredConstraintPatch);
   const excludedWeekdays = [...new Set([...base.excludedWeekdays, ...exclusions])];
+
+  if (constraints.requestedWeekday !== undefined && excludedWeekdays.includes(constraints.requestedWeekday)) constraints.requestedWeekday = undefined;
+  if (constraints.requestedDate && excludedWeekdays.includes(weekdayIndex(constraints.requestedDate))) constraints.requestedDate = undefined;
 
   for (const [weekday, pattern] of weekdayAliases) {
     if (pattern.test(normalized) && !exclusions.includes(weekday) && /\b(si puede|puede|available|disponible|mejor|prefer|prefiere)\b/.test(normalized)) {
@@ -259,12 +256,7 @@ export function buildCopilotRequest(state: BookingCopilotState): BookingRequest 
   };
 }
 
-export function simulateBookingCopilot(args: {
-  state: BookingCopilotState;
-  referenceDateKey: string;
-  jobs: CalendarDispatchJob[];
-  limit?: number;
-}): BookingCopilotSimulation {
+export function simulateBookingCopilot(args: { state: BookingCopilotState; referenceDateKey: string; jobs: CalendarDispatchJob[]; limit?: number }): BookingCopilotSimulation {
   const missing: Array<'sector' | 'work'> = [];
   if (!args.state.sector) missing.push('sector');
   if (!args.state.workLines.length) missing.push('work');
@@ -285,22 +277,18 @@ export function simulateBookingCopilot(args: {
   let dateKeys = dateKeysForScope(args.state, args.referenceDateKey)
     .filter((key) => !args.state.excludedDateKeys.includes(key))
     .filter((key) => !args.state.excludedWeekdays.includes(weekdayIndex(key)));
-  if (args.state.constraints.requestedWeekday !== undefined) {
-    dateKeys = dateKeys.filter((key) => weekdayIndex(key) === args.state.constraints.requestedWeekday);
-  }
+  if (args.state.constraints.requestedWeekday !== undefined) dateKeys = dateKeys.filter((key) => weekdayIndex(key) === args.state.constraints.requestedWeekday);
 
+  const clock = currentArubaClock();
   const directPlans: BookingCopilotPlan[] = [];
   const recoveryPlans: BookingCopilotPlan[] = [];
   for (const dateKey of dateKeys) {
     const day = operationalDay(dateKey);
     if (!day?.isOpen) continue;
     const dayJobs = jobsForDate(args.jobs, dateKey);
-    const slots = rankRouteAwareCandidates({
-      slots: findCandidateSlotsForDay(day, request, dayJobs),
-      request,
-      jobs: dayJobs,
-      officeSector: 'Santa Cruz',
-    });
+    let slots = rankRouteAwareCandidates({ slots: findCandidateSlotsForDay(day, request, dayJobs), request, jobs: dayJobs, officeSector: 'Santa Cruz' });
+    if (dateKey === clock.dateKey && args.referenceDateKey === clock.dateKey) slots = slots.filter((slot) => timeToMinutes(slot.start) > clock.minutes);
+
     slots.slice(0, 2).forEach((slot, index) => directPlans.push({
       id: `direct-${dateKey}-${slot.vanId}-${slot.start}-${index}`,
       dateKey,
@@ -315,7 +303,7 @@ export function simulateBookingCopilot(args: {
       ],
     }));
 
-    if (!slots.length) {
+    if (!slots.length && !(dateKey === clock.dateKey && args.referenceDateKey === clock.dateKey && clock.minutes >= 16 * 60)) {
       const reflows = findSupportReflowPlansForDay(day, request, dayJobs);
       reflows.slice(0, 2).forEach((plan) => recoveryPlans.push({
         id: `recovery-${dateKey}-${plan.id}`,
@@ -344,11 +332,4 @@ export function simulateBookingCopilot(args: {
     ? `${plans.length} valid plan${plans.length === 1 ? '' : 's'} found for ${scope} in ${args.state.sector}. ${restriction}.`
     : `No valid plan found for ${scope} in ${args.state.sector} under the current date/time constraints.`;
   return { state: args.state, request, plans, missing, summary };
-}
-
-export function copilotPlanLabel(plan: BookingCopilotPlan) {
-  const date = new Date(`${plan.dateKey}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
-  const preset = defaultWorkPresets.find((item) => item.id === plan.slot.requiresSupportVan ? 'standard_service' : undefined);
-  void preset;
-  return `${date} · ${plan.slot.vanId.replace('VAN-', 'Van ')} · ${plan.slot.start}–${plan.slot.end}`;
 }
