@@ -5,7 +5,7 @@ import { resolveCustomerIdentity } from '../lib/booking-intelligence/identity';
 import { selectCommunicationRecipients } from '../lib/booking-intelligence/communication-policy';
 import { rankRouteAwareCandidates } from '../lib/booking-intelligence/route-ranking';
 import { summarizeAppointmentScope } from '../lib/booking-intelligence/appointment-scope';
-import { navigationUrlForAddress, parseArubaAddressParts, parseLocationInput, resolveArubaAddressSuggestion, suggestArubaServiceAddresses } from '../lib/booking-intelligence/address';
+import { formatArubaServiceAddress, navigationUrlForAddress, parseArubaAddressParts, parseLocationInput, resolveArubaAddressSuggestion, suggestArubaServiceAddresses } from '../lib/booking-intelligence/address';
 import type { BookingRequest, CandidateSlot, DispatchJob } from '../lib/scheduling';
 
 const identity = resolveCustomerIdentity(
@@ -39,6 +39,23 @@ assert.equal(legacyFontein[0]?.demacSector, 'San Nicolas');
 const parsedHouse = parseArubaAddressParts('Wayaca 217');
 assert.equal(parsedHouse.street, 'Wayaca');
 assert.equal(parsedHouse.houseNumber, '217');
+
+const parsedHouseSuffix = parseArubaAddressParts('Tanki Leendert 23 A');
+assert.equal(parsedHouseSuffix.street, 'Tanki Leendert', 'A house suffix must not become part of the canonical street.');
+assert.equal(parsedHouseSuffix.houseNumber, '23A');
+
+const parsedApartment = parseArubaAddressParts('Tanki Leendert 23 apt 2');
+assert.equal(parsedApartment.street, 'Tanki Leendert', 'Apartment details must not invalidate street recognition.');
+assert.equal(parsedApartment.houseNumber, '23');
+assert.equal(parsedApartment.unit, 'Apt 2');
+assert.equal(formatArubaServiceAddress(parsedApartment), 'Tanki Leendert 23, Apt 2');
+const tankiSuggestions = suggestArubaServiceAddresses('Tanki Leendert 23 apt 2', 4);
+assert.equal(tankiSuggestions[0]?.canonical, 'Tanki Leendert', 'Autocomplete must keep matching the canonical street when a house and apartment are typed inline.');
+assert.equal(tankiSuggestions[0]?.demacSector, 'Oranjestad');
+const tankiResolved = resolveArubaAddressSuggestion('Tanki Leendert 23 apt 2', tankiSuggestions[0]);
+assert.equal(tankiResolved.address, 'Tanki Leendert 23, Apt 2');
+assert.equal(tankiResolved.sector, 'Oranjestad', 'Unit details must never erase the derived DEMAC sector.');
+
 const mapsMeLocation = parseLocationInput('mapsme://map?v=1&ll=12.450000,-69.950000');
 assert.equal(mapsMeLocation?.latitude, 12.45, 'MAPS.ME-style ll coordinates should be captured.');
 assert.equal(mapsMeLocation?.longitude, -69.95);
