@@ -5,8 +5,11 @@ export type BrowserCrmCustomerIdentity = {
   name: string;
   legalName?: string;
   type?: 'Residential' | 'Commercial' | 'Enterprise' | string;
+  status?: 'lead' | 'active' | 'inactive' | 'on_hold' | string;
   location?: string;
   phone?: string;
+  phoneShared?: boolean;
+  previousPhones?: string[];
   email?: string;
   preferredLanguage?: 'Papiamento' | 'English' | 'Spanish' | 'Dutch' | string;
   initials?: string;
@@ -29,6 +32,11 @@ export type BrowserCrmContactIdentity = {
   phone: string;
   email: string;
   primary: boolean;
+  preferredLanguage?: 'Papiamento' | 'English' | 'Spanish' | 'Dutch' | string;
+  sendConfirmationDefault?: boolean;
+  sendReminderDefault?: boolean;
+  arrivalContact?: boolean;
+  billingContact?: boolean;
 };
 
 export type BrowserCrmSiteIdentity = {
@@ -38,6 +46,10 @@ export type BrowserCrmSiteIdentity = {
   sector?: string;
   gac?: string;
   access?: string;
+  latitude?: number;
+  longitude?: number;
+  locationUrl?: string;
+  addressConfidence?: 'verified' | 'suggested' | 'unresolved';
 };
 
 export type BrowserCrmAssetIdentity = {
