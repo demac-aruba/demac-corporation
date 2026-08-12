@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import type { BookingRestriction, BookingWorkLine } from '../../lib/scheduling';
 import type { CalendarDispatchJob } from '../../lib/scheduling-capacity';
+import { loadBrowserCrmCustomers, loadBrowserCustomerMaster } from '../../lib/browser-crm';
 import {
   defaultBookingCopilotState,
   interpretBookingCopilotMessage,
@@ -10,6 +11,11 @@ import {
   type BookingCopilotPlan,
   type BookingCopilotState,
 } from '../../lib/booking-intelligence/copilot';
+import {
+  resolveBookingCopilotLocation,
+  type CopilotLocationResolution,
+  type CopilotPropertyCandidate,
+} from '../../lib/booking-intelligence/copilot-location';
 import { describeBookingConstraints } from '../../lib/booking-intelligence/constraints';
 import styles from './booking-copilot.module.css';
 
@@ -58,15 +64,24 @@ function getRecognitionConstructor(): RecognitionConstructor | undefined {
   return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
 }
 
+function loadCopilotProperties(): CopilotPropertyCandidate[] {
+  return loadBrowserCrmCustomers().flatMap((customer) => {
+    const master = loadBrowserCustomerMaster(customer.id);
+    return (master.sites ?? []).map((site) => ({ customer, site }));
+  });
+}
+
 export function BookingCopilot({ open, referenceDateKey, jobs, onClose, onUsePlan }: Props) {
   const [intent, setIntent] = useState<BookingCopilotState>(() => defaultBookingCopilotState());
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { id: 'hello', role: 'assistant', text: 'Tell me what the customer needs, the Aruba area, and any date or time restriction. I will simulate the schedule without changing anything.' },
+    { id: 'hello', role: 'assistant', text: 'Tell me what the customer needs, the customer/property or Aruba area, and any date or time restriction. I will simulate the schedule without changing anything.' },
   ]);
   const [input, setInput] = useState('');
   const [listening, setListening] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [pendingPlan, setPendingPlan] = useState<BookingCopilotPlan | null>(null);
+  const [resolvedLocation, setResolvedLocation] = useState<CopilotLocationResolution | null>(null);
+  const crmProperties = useMemo(() => open ? loadCopilotProperties() : [], [open]);
 
   const simulation = useMemo(() => simulateBookingCopilot({ state: intent, referenceDateKey, jobs, limit: 5 }), [intent, jobs, referenceDateKey]);
 
@@ -78,14 +93,29 @@ export function BookingCopilot({ open, referenceDateKey, jobs, onClose, onUsePla
     const text = raw.trim();
     if (!text) return;
     setMessages((current) => [...current, { id: `u-${Date.now()}`, role: 'user' as const, text }].slice(-16));
+
+    const location = resolveBookingCopilotLocation({ text, candidates: crmProperties, previous: resolvedLocation });
     const interpretation = interpretBookingCopilotMessage({ text, previous: intent, referenceDateKey });
-    setIntent(interpretation.state);
+    const currentMessageResolvedLocation = location.source !== 'previous' && Boolean(location.sector);
+    const nextState: BookingCopilotState = {
+      ...interpretation.state,
+      sector: currentMessageResolvedLocation ? location.sector : interpretation.state.sector,
+    };
+
+    setIntent(nextState);
+    setResolvedLocation(location.source === 'none' ? resolvedLocation : location);
     setPendingPlan(null);
-    const nextSimulation = simulateBookingCopilot({ state: interpretation.state, referenceDateKey, jobs, limit: 5 });
+    const nextSimulation = simulateBookingCopilot({ state: nextState, referenceDateKey, jobs, limit: 5 });
+
     if (interpretation.resetRequested) {
+      setResolvedLocation(null);
       addAssistant('Simulation reset. Tell me the new service request.');
     } else if (nextSimulation.missing.length) {
-      addAssistant(nextSimulation.summary);
+      if (location.customerId && !location.siteId && nextSimulation.missing.includes('sector')) {
+        addAssistant(`I found ${location.customerName ?? 'the customer'} in CRM, but I could not determine which registered property you mean. Tell me the property name or address.`);
+      } else {
+        addAssistant(nextSimulation.summary);
+      }
     } else if (!nextSimulation.plans.length) {
       addAssistant(`${nextSimulation.summary} You can loosen the day/time restriction or ask me to search a wider period.`);
     } else if (interpretation.selectionRequested) {
@@ -94,7 +124,12 @@ export function BookingCopilot({ open, referenceDateKey, jobs, onClose, onUsePla
       addAssistant(`I found the best matching plan on ${formatDate(best.dateKey)} at ${formatTime(best.slot.start)}. Review the impact below before continuing to booking.`);
     } else {
       const best = nextSimulation.plans[0];
-      addAssistant(`Best option: ${formatDate(best.dateKey)}, ${best.slot.vanId.replace('VAN-', 'Van ')}, ${formatTime(best.slot.start)}–${formatTime(best.slot.end)}. I also listed the alternatives below.`);
+      const propertyText = location.siteId && location.source !== 'previous'
+        ? ` I recognized ${location.customerName} · ${location.siteName ?? location.siteAddress} and inherited ${nextState.sector} from that property.`
+        : location.source === 'aruba_address'
+          ? ` I recognized the Aruba address/area and mapped it to ${nextState.sector}.`
+          : '';
+      addAssistant(`Best option: ${formatDate(best.dateKey)}, ${best.slot.vanId.replace('VAN-', 'Van ')}, ${formatTime(best.slot.start)}–${formatTime(best.slot.end)}.${propertyText} I also listed the alternatives below.`);
     }
     setInput('');
   };
@@ -125,6 +160,7 @@ export function BookingCopilot({ open, referenceDateKey, jobs, onClose, onUsePla
 
   const reset = () => {
     setIntent(defaultBookingCopilotState());
+    setResolvedLocation(null);
     setPendingPlan(null);
     setMessages([{ id: `reset-${Date.now()}`, role: 'assistant', text: 'New simulation started. What does the customer need?' }]);
     setInput('');
@@ -143,11 +179,13 @@ export function BookingCopilot({ open, referenceDateKey, jobs, onClose, onUsePla
   return <div className={styles.overlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <aside className={styles.panel} role="dialog" aria-modal="true" aria-label="Booking Copilot simulator">
       <header className={styles.header}>
-        <div><span>Booking Intelligence · Simulation Mode</span><h2>Voice + Text Booking Copilot</h2><p>Speak naturally. The copilot interprets your request, but the deterministic ERP scheduler remains the authority for capacity, route, lunch, support and valid work spots.</p></div>
+        <div><span>Booking Intelligence · Simulation Mode</span><h2>Voice + Text Booking Copilot</h2><p>Speak naturally. The copilot interprets your request, resolves registered customer/property context when possible, but the deterministic ERP scheduler remains the authority for capacity, route, lunch, support and valid work spots.</p></div>
         <button type="button" className={styles.close} onClick={onClose}>×</button>
       </header>
 
       <div className={styles.context}>
+        {resolvedLocation?.customerName ? <span className={styles.chip}>Customer: <strong>{resolvedLocation.customerName}</strong></span> : null}
+        {resolvedLocation?.siteId ? <span className={styles.chip}>Property: <strong>{resolvedLocation.siteName ?? resolvedLocation.siteAddress}</strong></span> : null}
         <span className={styles.chip}>Area: <strong>{intent.sector ?? 'Not set'}</strong></span>
         <span className={styles.chip}>Work: <strong>{workSummary(intent)}</strong></span>
         <span className={styles.chip}>Time: <strong>{describeBookingConstraints(intent.constraints)}</strong></span>
@@ -166,7 +204,7 @@ export function BookingCopilot({ open, referenceDateKey, jobs, onClose, onUsePla
           <p>{plan.slot.sector}{plan.slot.supportVanId ? ` · linked support ${plan.slot.supportVanId.replace('VAN-', 'Van ')}` : ''}</p>
           <div className={styles.impact}>{plan.impact.map((item) => <span key={item}>✓ {item}</span>)}</div>
           <div className={styles.actions}><button type="button" className={styles.secondary} onClick={() => setPendingPlan(plan)}>{plan.kind === 'capacity_recovery' ? 'Review recovery' : 'Use this option'}</button></div>
-        </article>)}</div> : simulation.missing.length ? <div className={styles.empty}>The copilot is waiting for the missing booking facts. Try: “Tengo un cliente con tres aires en Noord esta semana.”</div> : <div className={styles.empty}>No valid capacity under the current constraints. Try another day, a wider period, or remove a time restriction.</div>}
+        </article>)}</div> : simulation.missing.length ? <div className={styles.empty}>The copilot is waiting for the missing booking facts. You can name a registered customer/property, an Aruba address, or a DEMAC sector.</div> : <div className={styles.empty}>No valid capacity under the current constraints. Try another day, a wider period, or remove a time restriction.</div>}
 
         {pendingPlan ? <div className={styles.confirm}>
           <strong>{pendingPlan.kind === 'capacity_recovery' ? 'Confirm capacity recovery plan' : 'Continue with this simulated plan?'}</strong>
@@ -178,7 +216,7 @@ export function BookingCopilot({ open, referenceDateKey, jobs, onClose, onUsePla
       <footer className={styles.composer}>
         {voiceError ? <div className={styles.helper}><span>{voiceError}</span></div> : null}
         <div className={styles.inputRow}>
-          <textarea className={styles.input} rows={2} value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); processMessage(input); } }} placeholder="Example: 3 standard services in Noord, this week, after 10 AM..." />
+          <textarea className={styles.input} rows={2} value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); processMessage(input); } }} placeholder="Example: Christian Márquez at Wayaca 217 needs 4 standard services this week..." />
           <button type="button" className={`${styles.mic} ${listening ? styles.listening : ''}`} onClick={startVoice} disabled={listening} title="Speak booking request">{listening ? '●' : '🎙'}</button>
           <button type="button" className={styles.primary} onClick={() => processMessage(input)} disabled={!input.trim()}>Ask</button>
         </div>
