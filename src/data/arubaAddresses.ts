@@ -57,6 +57,7 @@ const curatedArubaAddressDirectory: ArubaAddressEntry[] = [
   { canonical: 'Mangel Halto', neighborhood: 'Mangel Halto', operationalZone: 'Savaneta' },
   { canonical: 'Sabana Basora', neighborhood: 'Sabana Basora', operationalZone: 'Savaneta' },
   { canonical: 'San Nicolas', neighborhood: 'San Nicolas', operationalZone: 'San Nicolas', aliases: ['San Nicolaas', 'San Nickolas'] },
+  { canonical: 'Weg Fontein', neighborhood: 'Fontein', operationalZone: 'San Nicolas', aliases: ['Otaheitistraat', 'Weg Fontijn', 'Fonteinweg'] },
   { canonical: 'Brazil', neighborhood: 'Brazil', operationalZone: 'San Nicolas', aliases: ['Brasil'] },
   { canonical: 'Lago Heights', neighborhood: 'Lago Heights', operationalZone: 'San Nicolas' },
   { canonical: 'Zeewijk', neighborhood: 'Zeewijk', operationalZone: 'San Nicolas', aliases: ['Zee Wijk'] },
@@ -65,12 +66,18 @@ const curatedArubaAddressDirectory: ArubaAddressEntry[] = [
   { canonical: 'Rodgers Beach', neighborhood: 'Seroe Colorado', operationalZone: 'San Nicolas', aliases: ['Roger Beach'] },
 ];
 
-const curatedAddressKeys = new Set(curatedArubaAddressDirectory.map((entry) => entry.canonical.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '')));
+function addressKey(value: string) {
+  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+const curatedAddressKeys = new Set(
+  curatedArubaAddressDirectory.flatMap((entry) => [entry.canonical, ...(entry.aliases ?? [])]).map(addressKey),
+);
 
 export const arubaAddressDirectory: ArubaAddressEntry[] = [
   ...curatedArubaAddressDirectory.map((entry) => ({ ...entry, source: 'DEMAC' as const })),
   ...osmArubaStreetEntries
-    .filter((entry) => !curatedAddressKeys.has(entry.canonical.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '')))
+    .filter((entry) => !curatedAddressKeys.has(addressKey(entry.canonical)))
     .map((entry) => ({
       canonical: entry.canonical,
       neighborhood: entry.neighborhood ?? '',
