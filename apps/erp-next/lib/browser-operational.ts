@@ -1,5 +1,5 @@
 import type { CalendarDispatchJob } from './scheduling-capacity';
-import type { DaySegment, WorkPresetId } from './scheduling';
+import type { BookingRestriction, BookingWorkLine, DaySegment, WorkPresetId } from './scheduling';
 
 export type BrowserAppointmentStatus = 'temporary_hold' | 'confirmed' | 'cancelled';
 export type BrowserAppointmentChangeKind = 'created' | 'confirmed' | 'details_edited' | 'operational_move' | 'customer_reschedule' | 'cancelled' | 'operational_issue' | 'support_reflow' | 'support_move' | 'undo_move';
@@ -37,6 +37,8 @@ export type BrowserAppointmentRecord = {
   sector: string;
   presetId: WorkPresetId;
   totalQuantity: number;
+  workLines?: BookingWorkLine[];
+  bookingRestriction?: BookingRestriction;
   customerFacingDescription: string;
   technicianInstructions?: string;
   status: BrowserAppointmentStatus;
@@ -73,6 +75,8 @@ export type BrowserWorkOrderRecord = {
   sector: string;
   presetId: WorkPresetId;
   totalQuantity: number;
+  workLines?: BookingWorkLine[];
+  bookingRestriction?: BookingRestriction;
   customerFacingDescription: string;
   technicianInstructions?: string;
   scheduledDate: string;
@@ -102,6 +106,8 @@ export function createBrowserWorkOrder(appointment: BrowserAppointmentRecord): B
     sector: appointment.sector,
     presetId: appointment.presetId,
     totalQuantity: appointment.totalQuantity,
+    workLines: appointment.workLines,
+    bookingRestriction: appointment.bookingRestriction,
     customerFacingDescription: appointment.customerFacingDescription,
     technicianInstructions: appointment.technicianInstructions,
     scheduledDate: appointment.dateKey,
