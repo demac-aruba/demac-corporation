@@ -108,27 +108,27 @@ const projectTypes = [
   {
     title: 'Residential Cooling',
     copy: 'Comfort-focused installation and replacement applications.',
-    image: 'https://unsplash.com/photos/BsHycOlU6Bg/download?force=true&w=900',
+    image: 'https://images.unsplash.com/photo-1761330440311-16e160cad236?auto=format&fit=crop&w=1000&q=82',
   },
   {
     title: 'Outdoor Equipment',
     copy: 'Condensers and mechanical equipment for residential and commercial properties.',
-    image: 'https://unsplash.com/photos/ayBLtTKMgxE/download?force=true&w=900',
+    image: 'https://images.unsplash.com/photo-1776860153678-b204dccd0f65?auto=format&fit=crop&w=1000&q=82',
   },
   {
     title: 'Commercial Systems',
     copy: 'Larger-capacity cooling applications for demanding operating environments.',
-    image: 'https://unsplash.com/photos/ypmI48pdWMI/download?force=true&w=900',
+    image: 'https://images.unsplash.com/photo-1775359647433-e2d7935b8b54?auto=format&fit=crop&w=1000&q=82',
   },
   {
     title: 'Rooftop & Exterior',
     copy: 'Outdoor installations planned around access, airflow and the property.',
-    image: 'https://unsplash.com/photos/nSNWtsZbkMA/download?force=true&w=900',
+    image: 'https://images.unsplash.com/photo-1775508131358-6cfae3729de4?auto=format&fit=crop&w=1000&q=82',
   },
   {
-    title: 'Premium Interiors',
-    copy: 'Cooling solutions integrated cleanly into modern residential spaces.',
-    image: 'https://unsplash.com/photos/YKMByxsdyDY/download?force=true&w=900',
+    title: 'Hospitality & Properties',
+    copy: 'Cooling applications for hotels, hospitality and larger customer properties.',
+    image: 'https://images.unsplash.com/photo-1545065053-56b6948e260a?auto=format&fit=crop&w=1000&q=82',
   },
 ];
 
