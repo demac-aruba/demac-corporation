@@ -1,7 +1,16 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { addressConfidence, navigationUrlForAddress, parseArubaAddressParts, parseLocationInput, resolveArubaAddressSuggestion, suggestArubaServiceAddresses } from '../../lib/booking-intelligence/address';
+import {
+  addressConfidence,
+  formatArubaServiceAddress,
+  navigationUrlForAddress,
+  parseArubaAddressParts,
+  parseLocationInput,
+  resolveArubaAddressSuggestion,
+  resolveArubaHouseNumberGps,
+  suggestArubaServiceAddresses,
+} from '../../lib/booking-intelligence/address';
 import { resolveCustomerIdentity } from '../../lib/booking-intelligence/identity';
 import type { BrowserCrmContactIdentity, BrowserCrmCustomerIdentity, BrowserCrmSiteIdentity, BrowserCustomerMasterSnapshot } from '../../lib/browser-crm';
 import styles from './quick-customer-onboarding.module.css';
@@ -12,13 +21,16 @@ type PropertyDraft = {
   address: string;
   canonicalStreet: string;
   houseNumber: string;
+  unit: string;
   addressSource: 'DEMAC' | 'OpenStreetMap' | 'manual' | 'unknown';
   addressSelected: boolean;
   sector: string;
   sectorResolution: 'address' | 'manual' | 'unresolved';
+  manualSectorOpen: boolean;
   gac: string;
   access: string;
   locationInput: string;
+  locationSource: 'none' | 'address' | 'manual';
   confidence: 'verified' | 'suggested' | 'unresolved';
 };
 
@@ -65,13 +77,16 @@ function propertyDraft(index: number): PropertyDraft {
     address: '',
     canonicalStreet: '',
     houseNumber: '',
+    unit: '',
     addressSource: 'unknown',
     addressSelected: false,
     sector: '',
     sectorResolution: 'unresolved',
+    manualSectorOpen: false,
     gac: '',
     access: '',
     locationInput: '',
+    locationSource: 'none',
     confidence: 'unresolved',
   };
 }
@@ -95,14 +110,23 @@ function initials(name: string) {
   return name.split(/\s+/).filter(Boolean).map((part) => part[0]).slice(0, 2).join('').toUpperCase() || 'CU';
 }
 
+function fullPropertyAddress(property: PropertyDraft) {
+  return formatArubaServiceAddress({
+    street: property.canonicalStreet.trim() || parseArubaAddressParts(property.address).street || property.address.trim(),
+    houseNumber: property.houseNumber.trim() || undefined,
+    unit: property.unit.trim() || undefined,
+  });
+}
+
 function siteFromDraft(property: PropertyDraft, index: number, stamp: string): BrowserCrmSiteIdentity {
   const location = parseLocationInput(property.locationInput);
   return {
     id: `ST-${stamp.slice(-6)}-${index + 1}`,
     name: property.name.trim() || (index === 0 ? 'Primary Property' : `Property ${index + 1}`),
-    address: property.address.trim(),
+    address: fullPropertyAddress(property),
     addressCanonicalStreet: property.canonicalStreet.trim() || undefined,
     addressHouseNumber: property.houseNumber.trim() || undefined,
+    addressUnit: property.unit.trim() || undefined,
     addressSource: property.addressSource,
     sector: property.sector || undefined,
     sectorResolution: property.sectorResolution,
@@ -259,50 +283,76 @@ export function QuickCustomerOnboarding({ open, existingCustomers, onClose, onCr
         </section>
 
         <section className={styles.section}>
-          <header><div><span>2</span><div><strong>Service properties</strong><small>Address Intelligence validates spelling, derives the DEMAC sector and stores optional GPS coordinates.</small></div></div><button type="button" onClick={() => setProperties((current) => [...current, propertyDraft(current.length)])}>+ Add another property</button></header>
+          <header><div><span>2</span><div><strong>Service properties</strong><small>Address Intelligence validates the street, derives the DEMAC sector, and keeps house/unit details separate.</small></div></div><button type="button" onClick={() => setProperties((current) => [...current, propertyDraft(current.length)])}>+ Add another property</button></header>
           <div className={styles.stack}>{properties.map((property, index) => {
             const suggestions = property.addressSelected ? [] : suggestArubaServiceAddresses(property.address, 4);
             const parsedLocation = parseLocationInput(property.locationInput);
-            const navigationUrl = navigationUrlForAddress(property.address, parsedLocation);
+            const displayAddress = fullPropertyAddress(property);
+            const navigationUrl = navigationUrlForAddress(displayAddress, parsedLocation);
             return <article className={styles.subcard} key={property.key}>
               <div className={styles.subhead}><div><strong>{index === 0 ? 'Primary service property' : `Additional property ${index}`}</strong><span>{index === 0 ? 'Used automatically for this appointment after creation.' : 'Available for this customer in future bookings.'}</span></div>{index > 0 ? <button type="button" onClick={() => setProperties((current) => current.filter((item) => item.key !== property.key))}>Remove</button> : null}</div>
               <div className={styles.grid}>
                 <label><span>Property name</span><input value={property.name} onChange={(event) => updateProperty(property.key, { name: event.target.value })} placeholder="Home, Office, Rental Villa..." /></label>
-                <label><span>DEMAC sector · {property.sectorResolution === 'address' ? 'derived from address' : property.sectorResolution === 'manual' ? 'manually confirmed' : 'needs confirmation'}</span>{property.sectorResolution === 'address' && property.sector ? <input readOnly value={property.sector} aria-label="DEMAC sector derived from selected address" /> : <select value={property.sector} onChange={(event) => updateProperty(property.key, { sector: event.target.value, sectorResolution: event.target.value ? 'manual' : 'unresolved' })}><option value="">Select only if Address Intelligence cannot resolve it</option>{sectors.map((sector) => <option key={sector}>{sector}</option>)}</select>}</label>
-                <label className={styles.wide}><span>Service address * · {property.addressSelected ? '✓ address selected' : property.confidence}</span><input value={property.address} onChange={(event) => {
+                <label><span>DEMAC sector · {property.sectorResolution === 'address' ? 'derived from address' : property.sectorResolution === 'manual' ? 'manually confirmed' : 'pending address'}</span>
+                  {property.sectorResolution === 'address' && property.sector ? <input readOnly value={property.sector} aria-label="DEMAC sector derived from selected address" /> : property.manualSectorOpen ? <select value={property.sector} onChange={(event) => updateProperty(property.key, { sector: event.target.value, sectorResolution: event.target.value ? 'manual' : 'unresolved' })}><option value="">Select DEMAC sector</option>{sectors.map((sector) => <option key={sector}>{sector}</option>)}</select> : <div style={{ display: 'grid', gap: 6 }}><input readOnly value="" placeholder={property.addressSelected ? 'Sector could not be resolved' : 'Pending address selection'} />{property.addressSelected ? <button type="button" onClick={() => updateProperty(property.key, { manualSectorOpen: true })}>Confirm sector manually</button> : null}</div>}
+                </label>
+                <label className={styles.wide}><span>Street / neighborhood * · {property.addressSelected ? '✓ address selected' : property.confidence}</span><input value={property.address} onChange={(event) => {
                   const value = event.target.value;
                   const parts = parseArubaAddressParts(value);
                   updateProperty(property.key, {
                     address: value,
                     canonicalStreet: '',
-                    houseNumber: parts.houseNumber ?? '',
+                    houseNumber: parts.houseNumber ?? property.houseNumber,
+                    unit: parts.unit ?? property.unit,
                     addressSource: 'unknown',
                     addressSelected: false,
                     sector: '',
                     sectorResolution: 'unresolved',
+                    manualSectorOpen: false,
                     confidence: addressConfidence(value),
                   });
                   setNotice(null);
                 }} placeholder="Start typing an Aruba street / neighborhood..." /></label>
                 {suggestions.length ? <div className={styles.wide} style={{ display: 'grid', gap: 5 }}>{suggestions.map((suggestion) => <button type="button" key={`${property.key}-${suggestion.canonical}`} style={{ textAlign: 'left', padding: '8px 10px' }} onClick={() => {
                   const resolved = resolveArubaAddressSuggestion(property.address, suggestion);
+                  const keepManualLocation = property.locationSource === 'manual';
+                  const resolvedLocation = resolved.latitude != null && resolved.longitude != null ? `${resolved.latitude},${resolved.longitude}` : '';
                   updateProperty(property.key, {
-                    address: resolved.address,
+                    address: resolved.street,
                     canonicalStreet: resolved.street,
-                    houseNumber: resolved.houseNumber ?? '',
+                    houseNumber: resolved.houseNumber ?? property.houseNumber,
+                    unit: resolved.unit ?? property.unit,
                     addressSource: resolved.source,
                     addressSelected: true,
                     sector: resolved.sector,
                     sectorResolution: resolved.sector ? 'address' : 'unresolved',
+                    manualSectorOpen: false,
                     confidence: resolved.confidence,
+                    locationInput: keepManualLocation ? property.locationInput : resolvedLocation,
+                    locationSource: keepManualLocation ? 'manual' : resolvedLocation ? 'address' : 'none',
                   });
                   setNotice(resolved.sector ? null : 'Address selected, but this street does not yet have a reliable DEMAC sector. Confirm the sector once for this property.');
                 }}><strong>{suggestion.canonical}</strong><span style={{ display: 'block' }}>{suggestion.neighborhood || suggestion.operationalZone || 'Aruba'} · {suggestion.demacSector || 'Sector needs confirmation'} · {suggestion.source}</span></button>)}</div> : null}
-                {property.addressSelected ? <div className={styles.wide} style={{ padding: '7px 9px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface-soft, transparent)', fontSize: 11 }}><strong>✓ Address selected</strong><span style={{ display: 'block', marginTop: 2 }}>{property.canonicalStreet}{property.houseNumber ? ` · House ${property.houseNumber}` : ''} · {property.addressSource}{property.sector ? ` · ${property.sector}` : ' · sector needs confirmation'}</span></div> : null}
+                {property.addressSelected ? <>
+                  <label><span>House / building no.</span><input value={property.houseNumber} onChange={(event) => {
+                    const houseNumber = event.target.value;
+                    const point = resolveArubaHouseNumberGps(property.canonicalStreet, houseNumber);
+                    const canReplaceAddressGps = property.locationSource !== 'manual';
+                    updateProperty(property.key, {
+                      houseNumber,
+                      ...(canReplaceAddressGps ? {
+                        locationInput: point?.latitude != null && point?.longitude != null ? `${point.latitude},${point.longitude}` : '',
+                        locationSource: point ? 'address' : 'none',
+                      } : {}),
+                    });
+                  }} placeholder="23, 23A, 23-B..." /></label>
+                  <label><span>Unit / apartment</span><input value={property.unit} onChange={(event) => updateProperty(property.key, { unit: event.target.value })} placeholder="Apt 2, Unit B, Floor 2..." /></label>
+                </> : null}
+                {property.addressSelected ? <div className={styles.wide} style={{ padding: '7px 9px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface-soft, transparent)', fontSize: 11 }}><strong>✓ Address selected</strong><span style={{ display: 'block', marginTop: 2 }}>{displayAddress} · {property.addressSource}{property.sector ? ` · ${property.sector}` : ' · sector needs confirmation'}</span></div> : null}
                 <label><span>GAC / address code</span><input value={property.gac} onChange={(event) => updateProperty(property.key, { gac: event.target.value })} placeholder="Optional / pending mapping" /></label>
-                <label><span>Map link / coordinates</span><input value={property.locationInput} onChange={(event) => updateProperty(property.key, { locationInput: event.target.value })} placeholder="Paste Maps / MAPS.ME URL or coordinates" /></label>
+                <label><span>Map link / coordinates</span><input value={property.locationInput} onChange={(event) => updateProperty(property.key, { locationInput: event.target.value, locationSource: event.target.value.trim() ? 'manual' : 'none' })} placeholder="Paste Maps / MAPS.ME URL or coordinates" /></label>
                 {property.locationInput ? <div className={styles.wide} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '7px 9px', border: '1px solid var(--border)', borderRadius: 8 }}><span>{parsedLocation?.latitude != null && parsedLocation?.longitude != null ? `✓ GPS captured · ${parsedLocation.latitude.toFixed(6)}, ${parsedLocation.longitude.toFixed(6)}` : 'Map link saved · coordinates not embedded in this link'}</span>{navigationUrl ? <a href={navigationUrl} target="_blank" rel="noreferrer">Open map</a> : null}</div> : null}
-                <label className={styles.wide}><span>Access notes</span><input value={property.access} onChange={(event) => updateProperty(property.key, { access: event.target.value })} placeholder="Gate, rooftop/ladder access, parking, keys, arrival contact..." /></label>
+                <label className={styles.wide}><span>Access notes / reference</span><input value={property.access} onChange={(event) => updateProperty(property.key, { access: event.target.value })} placeholder="Blue gate, rear house, rooftop access, parking, keys, arrival contact..." /></label>
               </div>
             </article>;
           })}</div>
@@ -323,7 +373,7 @@ export function QuickCustomerOnboarding({ open, existingCustomers, onClose, onCr
           </article>)}</div> : <div className={styles.empty}>No additional contacts. The customer's primary phone/email remain the fallback communication recipient.</div>}
         </section>
 
-        <section className={styles.rule}><span>BOOKING INTELLIGENCE RULE</span><strong>Identity first. Property second. Appointment third.</strong><p>A known customer can add a new property without creating a duplicate CRM record, and every property keeps its own verified address, route sector, GPS/access information and communication context.</p></section>
+        <section className={styles.rule}><span>BOOKING INTELLIGENCE RULE</span><strong>Identity first. Property second. Appointment third.</strong><p>A known customer can add a new property without creating a duplicate CRM record, and every property keeps its verified street, separate house/unit details, route sector, GPS/access information and communication context.</p></section>
       </div>
 
       <footer className={styles.footer}><button type="button" onClick={onClose}>Cancel</button><button type="button" className={styles.primary} onClick={create}>Create Customer & Use Property</button></footer>
