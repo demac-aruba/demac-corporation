@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { PublicFooter, PublicHeader } from '@/components/public/public-site-shell';
 
 export const metadata: Metadata = {
   title: { absolute: 'DEMAC Professional Cooling Solutions | Air Conditioning Aruba' },
@@ -121,53 +122,17 @@ export default function HomePage() {
   return (
     <main className="public-site">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }} />
-
-      <header className="public-header">
-        <div className="public-header-inner">
-          <Link className="public-brand" href="/" aria-label="DEMAC home">
-            <span className="public-snow" aria-hidden="true">❄</span>
-            <span><strong>DEMAC</strong><small>Professional Cooling Solutions</small></span>
-          </Link>
-
-          <nav className="public-nav" aria-label="Main navigation">
-            <a href="#home" className="is-active">Home</a>
-            <a href="#solutions">Solutions</a>
-            <a href="#services">Services</a>
-            <a href="#projects">Projects</a>
-            <a href="#industries">Industries</a>
-            <a href="#contact">Contact</a>
-          </nav>
-
-          <div className="public-header-actions">
-            <a className="public-button public-button-whatsapp" href="#contact"><span aria-hidden="true">◉</span> WhatsApp Us</a>
-            <a className="public-button public-button-primary" href="#contact">Request Estimate</a>
-          </div>
-
-          <details className="public-mobile-menu">
-            <summary aria-label="Open navigation"><span /><span /><span /></summary>
-            <div>
-              <a href="#solutions">Solutions</a>
-              <a href="#services">Services</a>
-              <a href="#projects">Projects</a>
-              <a href="#industries">Industries</a>
-              <a href="#contact">Contact</a>
-              <Link href="/login">Staff Login</Link>
-            </div>
-          </details>
-        </div>
-      </header>
+      <PublicHeader active="home" />
 
       <section className="public-hero" id="home">
         <div className="public-hero-inner">
           <div className="public-hero-copy">
             <span className="public-eyebrow">Premium air conditioning solutions · Aruba</span>
             <h1>Cooling comfort for <span>homes & businesses</span> in <em>Aruba.</em></h1>
-            <p>
-              Sales, professional installation, service, maintenance, diagnostics and repairs—from residential comfort to commercial and VRF systems.
-            </p>
+            <p>Sales, professional installation, service, maintenance, diagnostics and repairs—from residential comfort to commercial and VRF systems.</p>
             <div className="public-hero-actions">
-              <a className="public-button public-button-primary public-button-large" href="#contact">Request Estimate <span>→</span></a>
-              <a className="public-button public-button-whatsapp public-button-large" href="#contact"><span aria-hidden="true">◉</span> WhatsApp Us</a>
+              <Link className="public-button public-button-primary public-button-large" href="/contact?request=estimate">Request Estimate <span>→</span></Link>
+              <Link className="public-button public-button-whatsapp public-button-large" href="/contact?channel=whatsapp"><span aria-hidden="true">◉</span> WhatsApp Us</Link>
             </div>
             <div className="public-proof-points">
               <span><b>✓</b> Aruba-based team</span>
@@ -181,9 +146,7 @@ export default function HomePage() {
             <div className="public-ocean" />
             <div className="public-window-frame"><i /><i /></div>
             <div className="public-palm"><i /><i /><i /><i /><i /></div>
-            <div className="public-wall-unit">
-              <span>DEMAC</span><b>24°</b><i /><div className="public-vent" />
-            </div>
+            <div className="public-wall-unit"><span>DEMAC</span><b>24°</b><i /><div className="public-vent" /></div>
             <div className="public-airflow"><i /><i /><i /><i /></div>
             <div className="public-sofa"><i /><i /><i /></div>
             <div className="public-table"><i /></div>
@@ -215,7 +178,7 @@ export default function HomePage() {
               <span className="public-service-icon"><LineIcon name={service.icon} /></span>
               <h3>{service.title}</h3>
               <p>{service.description}</p>
-              <a href="#contact" aria-label={`Ask about ${service.title}`}>Learn more <span>→</span></a>
+              <Link href="/services" aria-label={`Learn more about ${service.title}`}>Learn more <span>→</span></Link>
             </article>
           ))}
         </div>
@@ -246,7 +209,7 @@ export default function HomePage() {
       </section>
 
       <section className="public-section public-projects" id="projects">
-        <div className="public-project-head"><div><span>Our work</span><h2>Recent project categories</h2></div><a href="#contact">Ask to see our project gallery →</a></div>
+        <div className="public-project-head"><div><span>Our work</span><h2>Recent project categories</h2></div><Link href="/project-gallery">View project gallery →</Link></div>
         <div className="public-project-grid">
           {projectTypes.map(([title, copy], index) => (
             <article className={`public-project-card project-${index + 1}`} key={title}>
@@ -264,8 +227,8 @@ export default function HomePage() {
           <h2>Need reliable cooling solutions?</h2>
           <p>Tell us what you need and our team can help you determine the right next step—from a service appointment to a new installation or commercial project.</p>
           <div className="public-contact-actions">
-            <a className="public-button public-button-light" href="#contact-details">Contact DEMAC</a>
-            <a className="public-button public-button-outline-light" href="#services">Review services</a>
+            <Link className="public-button public-button-light" href="/contact">Contact DEMAC</Link>
+            <Link className="public-button public-button-outline-light" href="/services">Review services</Link>
           </div>
         </div>
         <div className="public-contact-card" id="contact-details">
@@ -278,18 +241,7 @@ export default function HomePage() {
         </div>
       </section>
 
-      <footer className="public-footer">
-        <div className="public-footer-brand">
-          <span className="public-snow" aria-hidden="true">❄</span>
-          <span><strong>DEMAC</strong><small>Professional Cooling Solutions</small></span>
-        </div>
-        <div className="public-footer-links">
-          <a href="#services">Services</a><a href="#projects">Projects</a><a href="#industries">Industries</a><a href="#contact">Contact</a>
-        </div>
-        <div className="public-footer-office"><span>Office</span><strong>Santa Cruz 54 C · Aruba</strong></div>
-        <Link className="public-staff-link" href="/login">Staff Login →</Link>
-        <p>© {new Date().getFullYear()} DEMAC. All rights reserved.</p>
-      </footer>
+      <PublicFooter />
     </main>
   );
 }
