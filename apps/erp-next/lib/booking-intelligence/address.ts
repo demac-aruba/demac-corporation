@@ -140,6 +140,12 @@ function fuzzyMatchScore(candidate: string, queryWords: string, queryCompact: st
   return tokenMatches ? 68 : 0;
 }
 
+function addressSourcePriority(entry: ArubaAddressEntry) {
+  if (entry.source === 'DEMAC') return 2;
+  if (entry.source === 'OpenStreetMap') return 1;
+  return 0;
+}
+
 export function demacSectorForAddress(entry: Pick<ArubaAddressEntry, 'canonical' | 'neighborhood' | 'operationalZone'>) {
   const zone = normalizeWords(entry.operationalZone || '');
   const place = normalizeWords(`${entry.canonical} ${entry.neighborhood}`);
@@ -176,7 +182,7 @@ export function suggestArubaServiceAddresses(query: string, limit = 6): DemacAdd
   const matches = strongMatches.length ? strongMatches : scored.filter((item) => item.score >= 68);
   const seen = new Set<string>();
   return matches
-    .sort((left, right) => right.score - left.score || left.entry.canonical.localeCompare(right.entry.canonical))
+    .sort((left, right) => right.score - left.score || addressSourcePriority(right.entry) - addressSourcePriority(left.entry) || left.entry.canonical.localeCompare(right.entry.canonical))
     .filter(({ entry }) => {
       const key = compact(entry.canonical);
       if (seen.has(key)) return false;
