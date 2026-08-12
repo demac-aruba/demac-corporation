@@ -5,6 +5,7 @@ import type { BrowserWorkOrderRecord } from '../lib/browser-operational';
 import type { BrowserWorkforceEmployee } from '../lib/browser-workforce';
 import { diagnoseBookingRequest } from '../lib/scheduling-booking-diagnostics';
 import { findCandidateSlots, type BookingRequest, type DispatchJob } from '../lib/scheduling';
+import { findCandidateSlotsForDay, findSupportReflowPlansForDay, type OperationalDay } from '../lib/scheduling-capacity';
 
 const dateKey = '2026-08-11';
 
@@ -121,4 +122,36 @@ const fourteenUnitRequest: BookingRequest = { customer: 'Very Large Customer', s
 const fourteenUnitPlans = findCandidateSlots(fourteenUnitRequest, []);
 requireCondition(fourteenUnitPlans.some((slot) => slot.requiresSupportVan && slot.primaryUnits === 7 && slot.supportUnits === 7 && slot.supportSegment === 'full_day'), '14 same-site units must automatically plan 7 + 7 across two linked full-day vans.');
 
-console.log(`Dispatch acceptance passed: ${conflicts.length} conflict(s) detected; four-van collision, route buffer, support conflict, workday overrun, delay propagation, departure gate, live route diagnostics and linked support planning verified.`);
+const recoveryDay: OperationalDay = {
+  dateKey,
+  weekday: 'Tue',
+  shortDate: 'Aug 11',
+  isToday: true,
+  isOpen: true,
+  shiftLabel: '8:00 AM–5:00 PM',
+};
+const recoveryJobs: DispatchJob[] = [
+  {
+    id: 'APT-MORNING-P', customer: 'Morning Customer', site: 'Noord Home', sector: 'Noord', start: '08:30', end: '10:30', segment: 'am', vanId: 'VAN-1', presetId: 'standard_service', quantity: 2, status: 'confirmed', readiness: 'ready', isPrimaryAssignment: true, customerCommunicationOwner: true,
+  },
+  {
+    id: 'APT-CHRISTIAN-P', customer: 'Christian Marquez', site: 'Wayaca Residence', sector: 'Oranjestad', start: '08:30', end: '16:30', segment: 'full_day', vanId: 'VAN-3', presetId: 'standard_service', quantity: 7, status: 'confirmed', readiness: 'ready', isPrimaryAssignment: true, customerCommunicationOwner: true,
+  },
+  {
+    id: 'APT-CHRISTIAN-S', customer: 'Christian Marquez', site: 'Wayaca Residence', sector: 'Oranjestad', start: '13:30', end: '14:30', segment: 'pm', vanId: 'VAN-1', presetId: 'standard_service', quantity: 1, status: 'confirmed', readiness: 'ready', isPrimaryAssignment: false, customerCommunicationOwner: false, supportForJobId: 'APT-CHRISTIAN-P',
+  },
+  {
+    id: 'APT-BLOCK-V2', customer: 'Van 2 Full Day', site: 'Noord', sector: 'Noord', start: '08:30', end: '16:30', segment: 'full_day', vanId: 'VAN-2', presetId: 'standard_service', quantity: 7, status: 'confirmed', readiness: 'ready', isPrimaryAssignment: true, customerCommunicationOwner: true,
+  },
+  {
+    id: 'APT-BLOCK-V4', customer: 'Van 4 Full Day', site: 'Noord', sector: 'Noord', start: '08:30', end: '16:30', segment: 'full_day', vanId: 'VAN-4', presetId: 'standard_service', quantity: 7, status: 'confirmed', readiness: 'ready', isPrimaryAssignment: true, customerCommunicationOwner: true,
+  },
+];
+const recoveryRequest: BookingRequest = { customer: 'Three Unit Customer', site: 'Noord Property', sector: 'Noord', presetId: 'standard_service', quantity: 3 };
+const fragmentedCandidates = findCandidateSlotsForDay(recoveryDay, recoveryRequest, recoveryJobs);
+requireCondition(fragmentedCandidates.length === 0, 'Fragmented Van 1 capacity must not be falsely offered as a continuous three-hour appointment.');
+const recoveryPlans = findSupportReflowPlansForDay(recoveryDay, recoveryRequest, recoveryJobs);
+requireCondition(recoveryPlans.some((plan) => plan.supportJobId === 'APT-CHRISTIAN-S' && plan.vanId === 'VAN-1' && plan.fromStart === '13:30' && plan.toStart === '10:30' && plan.unlockedSlot.vanId === 'VAN-1' && plan.unlockedSlot.start === '13:30' && plan.unlockedSlot.end === '16:30'), 'Booking Intelligence must move the one-unit support assignment to 10:30 and recover Van 1 from 13:30–16:30.');
+requireCondition(recoveryPlans.every((plan) => plan.supportJobId !== 'APT-CHRISTIAN-P'), 'Capacity recovery must never move a primary assignment.');
+
+console.log(`Dispatch acceptance passed: ${conflicts.length} conflict(s) detected; four-van collision, route buffer, support conflict, workday overrun, delay propagation, departure gate, live route diagnostics, linked support planning and support-only capacity recovery verified.`);

@@ -7,8 +7,8 @@ import { createBrowserWorkOrder, type BrowserAppointmentRecord, type BrowserWork
 import { browserKeys, loadBrowserValue, saveBrowserValue } from '../../lib/browser-store';
 import type { BookingRequest, CandidateSlot, DispatchJob, WorkPresetId } from '../../lib/scheduling';
 import { customerFacingDescription, defaultWorkPresets, getHalfDayAnchor, getRuntimeSchedulingSettings, minutesToTime, previewVans, timeToMinutes } from '../../lib/scheduling';
-import type { CalendarDispatchJob, OperationalDay } from '../../lib/scheduling-capacity';
-import { buildOperationalWeek, currentArubaDateKey, findCandidateSlotsForDay } from '../../lib/scheduling-capacity';
+import type { CalendarDispatchJob, OperationalDay, SupportReflowPlan } from '../../lib/scheduling-capacity';
+import { buildOperationalWeek, currentArubaDateKey, findCandidateSlotsForDay, findSupportReflowPlansForDay } from '../../lib/scheduling-capacity';
 import { QuickCustomerOnboarding, type QuickCustomerCreateResult } from './quick-customer-onboarding';
 import styles from './scheduling-overview-v2.module.css';
 
@@ -211,6 +211,41 @@ export function SchedulingOverviewV2() {
     setNotice(`${appointmentId} confirmed and linked to ${workOrderId}.`);
   };
 
+  const applySupportReflow = (plan: SupportReflowPlan) => {
+    const appointment = appointments.find((item) => item.assignments.some((assignment) => assignment.id === plan.supportJobId));
+    if (!appointment) {
+      setNotice('Booking Intelligence could not find the support assignment to optimize. Refresh the schedule and try again.');
+      return;
+    }
+
+    const updatedAppointment: BrowserAppointmentRecord = {
+      ...appointment,
+      assignments: appointment.assignments.map((assignment) => assignment.id === plan.supportJobId ? {
+        ...assignment,
+        start: plan.toStart,
+        end: plan.toEnd,
+        segment: plan.toSegment,
+      } : assignment),
+    };
+    setAppointments((items) => items.map((item) => item.id === appointment.id ? updatedAppointment : item));
+
+    if (appointment.workOrderId) {
+      const workOrders = loadBrowserValue<BrowserWorkOrderRecord[]>(browserKeys.workOrders, []);
+      saveBrowserValue(browserKeys.workOrders, workOrders.map((order) => order.appointmentId === appointment.id ? {
+        ...order,
+        assignments: order.assignments.map((assignment) => assignment.role === 'support' && assignment.vanId === plan.vanId && assignment.start === plan.fromStart ? {
+          ...assignment,
+          start: plan.toStart,
+          end: plan.toEnd,
+          segment: plan.toSegment,
+        } : assignment),
+      } : order));
+    }
+
+    setPreferredSlot({});
+    setNotice(`Booking Intelligence moved support for ${plan.customer} on ${plan.vanId.replace('VAN-', 'Van ')} from ${formatTime(plan.fromStart)} to ${formatTime(plan.toStart)}. The primary appointment was not changed, and ${formatTime(plan.unlockedSlot.start)}–${formatTime(plan.unlockedSlot.end)} is now available for the new request.`);
+  };
+
   const moveDay = (direction: -1 | 1) => {
     const index = calendar.week.findIndex((day) => day.dateKey === activeDate);
     const next = Math.max(0, Math.min(calendar.week.length - 1, index + direction));
@@ -277,7 +312,7 @@ export function SchedulingOverviewV2() {
         </div>
       </section>
 
-      {drawerOpen ? <BookingDrawer day={activeDay} jobs={activeJobs} preferred={preferredSlot} onClose={() => { setDrawerOpen(false); setPreferredSlot({}); }} onReserve={addAppointment} /> : null}
+      {drawerOpen ? <BookingDrawer day={activeDay} jobs={activeJobs} preferred={preferredSlot} onClose={() => { setDrawerOpen(false); setPreferredSlot({}); }} onReserve={addAppointment} onApplySupportReflow={applySupportReflow} /> : null}
     </section>
   );
 }
@@ -341,7 +376,7 @@ function LiveIssue({ issue }: { issue: BookingLiveIssue }) {
   </div>;
 }
 
-function BookingDrawer({ day, jobs, preferred, onClose, onReserve }: { day: OperationalDay; jobs: CalendarDispatchJob[]; preferred: PreferredSlot; onClose: () => void; onReserve: (request: BookingRequest, slot: CandidateSlot, technicianInstructions: string, identity: BookingIdentity) => void }) {
+function BookingDrawer({ day, jobs, preferred, onClose, onReserve, onApplySupportReflow }: { day: OperationalDay; jobs: CalendarDispatchJob[]; preferred: PreferredSlot; onClose: () => void; onReserve: (request: BookingRequest, slot: CandidateSlot, technicianInstructions: string, identity: BookingIdentity) => void; onApplySupportReflow: (plan: SupportReflowPlan) => void }) {
   const [crmCustomers, setCrmCustomers] = useState<BrowserCrmCustomerIdentity[]>(() => loadBrowserCrmCustomers());
   const [customerQuery, setCustomerQuery] = useState('');
   const [customerId, setCustomerId] = useState('');
@@ -382,6 +417,15 @@ function BookingDrawer({ day, jobs, preferred, onClose, onReserve }: { day: Oper
       return bPreferred - aPreferred || b.score - a.score;
     });
   }, [customerId, day, jobs, preferred.start, preferred.vanId, quantityValid, request, siteId]);
+  const reflowPlans = useMemo(() => {
+    if (!customerId || !siteId || !quantityValid || slots.length) return [];
+    const plans = findSupportReflowPlansForDay(day, request, jobs);
+    return [...plans].sort((a, b) => {
+      const aPreferred = Number(Boolean(preferred.vanId && a.vanId === preferred.vanId));
+      const bPreferred = Number(Boolean(preferred.vanId && b.vanId === preferred.vanId));
+      return bPreferred - aPreferred || b.score - a.score;
+    });
+  }, [customerId, day, jobs, preferred.vanId, quantityValid, request, siteId, slots.length]);
   const liveIssues = useMemo(() => {
     if (!customerId || !siteId) return [];
     return diagnoseBookingRequest({ request, jobs, preferred, candidateSlots: slots, quantityValid });
@@ -482,7 +526,10 @@ function BookingDrawer({ day, jobs, preferred, onClose, onReserve }: { day: Oper
         <section className={styles.formSection}><header><strong>3 · Valid ERP options</strong><span>{preferred.vanId && preferred.start ? `Requested visual spot: ${preferred.vanId.replace('VAN-', 'Van ')} · ${formatTime(preferred.start)}` : 'Choose one of the valid calculated options.'}</span></header>
           {slotIssues.map((issue) => <LiveIssue issue={issue} key={issue.code} />)}
           <div className={styles.slotOptions}>
-          {!customerId || !siteId ? <div className={styles.noSlots}><strong>Customer and property required</strong><p>Choose the CRM relationship and exact service property before the ERP calculates route-aware capacity.</p></div> : !quantityValid ? <div className={styles.noSlots}><strong>Valid A/C quantity required</strong><p>Enter a whole number from 1 to 14. The field can be temporarily blank while typing.</p></div> : slots.length ? slots.map((slot) => <button type="button" key={`${slot.vanId}-${slot.start}-${slot.supportVanId ?? ''}-${slot.supportStart ?? ''}`} className={`${styles.slotOption} ${selected === slot ? styles.slotOptionSelected : ''}`} onClick={() => setSelected(slot)}><div><strong>{slot.vanId.replace('VAN-', 'Van ')} · {formatTime(slot.start)}–{formatTime(slot.end)}</strong><span>{slot.sector}{slot.supportVanId ? ` · support ${slot.supportVanId.replace('VAN-', 'Van ')}${slot.supportStart ? ` ${formatTime(slot.supportStart)}–${formatTime(slot.supportEnd ?? slot.end)}` : ''}` : ''}</span></div><b>{slot.score}</b><small>{slot.reasons.join(' · ') || 'Valid capacity'}</small></button>) : <div className={styles.noSlots}><strong>No valid capacity for this request</strong><p>Review the live validation messages above. ERP Next will not hide a route, duration, support or restriction conflict behind a disabled button.</p></div>}
+          {!customerId || !siteId ? <div className={styles.noSlots}><strong>Customer and property required</strong><p>Choose the CRM relationship and exact service property before the ERP calculates route-aware capacity.</p></div> : !quantityValid ? <div className={styles.noSlots}><strong>Valid A/C quantity required</strong><p>Enter a whole number from 1 to 14. The field can be temporarily blank while typing.</p></div> : slots.length ? slots.map((slot) => <button type="button" key={`${slot.vanId}-${slot.start}-${slot.supportVanId ?? ''}-${slot.supportStart ?? ''}`} className={`${styles.slotOption} ${selected === slot ? styles.slotOptionSelected : ''}`} onClick={() => setSelected(slot)}><div><strong>{slot.vanId.replace('VAN-', 'Van ')} · {formatTime(slot.start)}–{formatTime(slot.end)}</strong><span>{slot.sector}{slot.supportVanId ? ` · support ${slot.supportVanId.replace('VAN-', 'Van ')}${slot.supportStart ? ` ${formatTime(slot.supportStart)}–${formatTime(slot.supportEnd ?? slot.end)}` : ''}` : ''}</span></div><b>{slot.score}</b><small>{slot.reasons.join(' · ') || 'Valid capacity'}</small></button>) : reflowPlans.length ? <>
+            <div className={styles.noSlots} style={{ borderLeft: '3px solid var(--brand)', background: 'var(--brand-soft)' }}><strong>Booking Intelligence found recoverable capacity</strong><p>The day has enough total capacity, but it is fragmented. A support-only assignment can move without changing its primary customer appointment. Apply one recommendation below, then reserve the newly unlocked block.</p></div>
+            {reflowPlans.map((plan) => <button type="button" key={plan.id} className={styles.slotOption} onClick={() => { setSelected(null); onApplySupportReflow(plan); }}><div><strong>Recover {plan.vanId.replace('VAN-', 'Van ')} · move support {formatTime(plan.fromStart)} → {formatTime(plan.toStart)}</strong><span>{plan.customer} · {plan.quantity} support unit{plan.quantity === 1 ? '' : 's'} · {plan.sector}</span></div><b>APPLY</b><small>Unlocks {formatTime(plan.unlockedSlot.start)}–{formatTime(plan.unlockedSlot.end)} for this request · Primary appointment remains unchanged · {plan.reasons.join(' · ')}</small></button>)}
+          </> : <div className={styles.noSlots}><strong>No valid capacity for this request</strong><p>Review the live validation messages above. ERP Next also checked whether support-only assignments could be safely rearranged, but no route-safe recovery plan was available.</p></div>}
         </div></section>
       </div>
       <footer className={styles.drawerFooter}><div>{selected ? <><span>Selected</span><strong>{selected.vanId.replace('VAN-', 'Van ')} · {formatTime(selected.start)}{selected.supportVanId ? ` + ${selected.supportVanId.replace('VAN-', 'Van ')} support` : ''}</strong></> : <span>Select a valid work spot.</span>}</div><div><button type="button" className={styles.secondary} onClick={onClose}>Cancel</button><button type="button" className={styles.primary} disabled={!selected || !customerId || !siteId || !quantityValid} onClick={() => selected && onReserve(request, selected, technicianInstructions, { customerId, siteId })}>Temporary hold</button></div></footer>
