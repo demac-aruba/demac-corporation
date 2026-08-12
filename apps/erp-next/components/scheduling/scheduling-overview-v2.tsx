@@ -228,6 +228,8 @@ export function SchedulingOverviewV2() {
       sector: request.sector,
       presetId: request.presetId,
       totalQuantity: request.quantity,
+      workLines: request.workLines,
+      bookingRestriction: request.restriction,
       customerFacingDescription: customerFacingDescription(request),
       technicianInstructions: technicianInstructions.trim() || undefined,
       status: 'temporary_hold',
