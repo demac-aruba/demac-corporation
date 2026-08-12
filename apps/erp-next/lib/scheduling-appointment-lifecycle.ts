@@ -18,12 +18,15 @@ function historyId(kind: BrowserAppointmentHistoryEvent['kind']) {
 }
 
 export function appointmentRequest(record: BrowserAppointmentRecord, overrides?: Partial<Pick<BookingRequest, 'presetId' | 'quantity'>>): BookingRequest {
+  const hasOverride = Boolean(overrides?.presetId !== undefined || overrides?.quantity !== undefined);
   return {
     customer: record.customer,
     site: record.site,
     sector: record.sector,
     presetId: overrides?.presetId ?? record.presetId,
     quantity: overrides?.quantity ?? record.totalQuantity,
+    workLines: hasOverride ? undefined : record.workLines,
+    restriction: hasOverride ? undefined : record.bookingRestriction,
   };
 }
 
@@ -223,12 +226,14 @@ export function updateAppointmentDetails(args: {
   actor?: AppointmentActor;
 }) {
   const quantity = Math.max(1, Math.min(14, Math.round(args.update.totalQuantity)));
+  const workLines = [{ id: args.record.workLines?.[0]?.id ?? 'work-1', presetId: args.update.presetId, quantity }];
   const candidateRecord: BrowserAppointmentRecord = {
     ...args.record,
     presetId: args.update.presetId,
     totalQuantity: quantity,
+    workLines,
     technicianInstructions: args.update.technicianInstructions?.trim() || undefined,
-    customerFacingDescription: customerFacingDescription({ presetId: args.update.presetId, quantity }),
+    customerFacingDescription: customerFacingDescription({ presetId: args.update.presetId, quantity, workLines }),
   };
   const current = appointmentSnapshot(args.record);
   const options = findCandidateSlotsForDay(args.day, appointmentRequest(candidateRecord), jobsWithoutAppointment(args.record, args.jobs));
