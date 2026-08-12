@@ -26,24 +26,14 @@ service firebase.storage {
       return websiteAdmin()
         && request.resource != null
         && request.resource.size < 8 * 1024 * 1024
-        && request.resource.contentType.matches('image/.*')
-        && request.resource.metadata != null
-        && 'uploadedByUid' in request.resource.metadata
-        && request.resource.metadata.uploadedByUid == request.auth.uid
-        && 'mediaKind' in request.resource.metadata
-        && request.resource.metadata.mediaKind == 'website-image';
+        && request.resource.contentType.matches('image/.*');
     }
 
     function validWebsiteConfig() {
       return websiteAdmin()
         && request.resource != null
         && request.resource.size < 512 * 1024
-        && request.resource.contentType == 'application/json'
-        && request.resource.metadata != null
-        && 'uploadedByUid' in request.resource.metadata
-        && request.resource.metadata.uploadedByUid == request.auth.uid
-        && 'mediaKind' in request.resource.metadata
-        && request.resource.metadata.mediaKind == 'website-config';
+        && request.resource.contentType == 'application/json';
     }
 
     function validEvidenceAudio() {
