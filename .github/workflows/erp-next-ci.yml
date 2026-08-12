@@ -37,5 +37,7 @@ jobs:
         run: npm run typecheck
       - name: Dispatch acceptance simulation
         run: npm run test:dispatch
+      - name: Appointment lifecycle acceptance simulation
+        run: npm run test:lifecycle
       - name: Build
         run: npm run build
