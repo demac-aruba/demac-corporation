@@ -13,7 +13,9 @@ import './auth.css';
 import './landing.css';
 import './public-pages.css';
 import './public-approved.css';
+import './public-hero-slider.css';
 import './public-footer-premium.css';
+import './website-manager.css';
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://demac-aruba.com'),

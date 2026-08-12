@@ -1,0 +1,59 @@
+.website-manager { min-width: 0; }
+.website-manager-head { align-items: flex-start; }
+.website-manager-status { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; }
+.website-manager-status article { padding: 16px 17px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); display: grid; gap: 4px; box-shadow: 0 7px 22px rgba(18,48,96,.04); }
+.website-manager-status span { font-size: 10px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; opacity: .62; }
+.website-manager-status strong { font-size: 20px; }
+.website-manager-status small { opacity: .62; }
+.website-manager-notice { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.website-manager-notice.is-good { border-color: rgba(20,180,110,.28); background: rgba(20,180,110,.07); }
+.website-manager-notice.is-error { border-color: rgba(220,70,70,.28); background: rgba(220,70,70,.07); }
+.website-manager-tabs { display: flex; gap: 8px; padding: 5px; width: fit-content; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+.website-manager-tabs button, .website-manager-device button { border: 0; border-radius: 9px; padding: 9px 13px; color: inherit; background: transparent; font-weight: 800; cursor: pointer; }
+.website-manager-tabs button.is-active, .website-manager-device button.is-active { color: #0a60df; background: rgba(10,96,223,.09); }
+.website-manager-grid { display: grid; grid-template-columns: minmax(420px,.95fr) minmax(520px,1.35fr); gap: 16px; align-items: start; }
+.website-manager-editor, .website-manager-preview-panel { min-width: 0; overflow: hidden; }
+.website-manager-editor .panel-head, .website-manager-preview-panel .panel-head, .website-manager-global .panel-head { padding: 15px 16px; }
+.website-manager-slider-settings { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.website-manager label { display: grid; gap: 6px; min-width: 0; }
+.website-manager label > span { font-size: 10px; font-weight: 800; opacity: .72; }
+.website-manager input, .website-manager select, .website-manager textarea { width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 9px; padding: 10px 11px; color: inherit; background: var(--panel); font: inherit; }
+.website-manager textarea { resize: vertical; }
+.website-manager-slide-list { display: grid; gap: 7px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.website-manager-slide-list > button { width: 100%; display: grid; grid-template-columns: 76px 1fr; gap: 11px; align-items: center; padding: 7px; border: 1px solid var(--line); border-radius: 11px; color: inherit; background: transparent; text-align: left; cursor: pointer; }
+.website-manager-slide-list > button.is-active { border-color: rgba(10,96,223,.45); background: rgba(10,96,223,.06); box-shadow: inset 3px 0 0 #0a60df; }
+.website-manager-slide-thumb { width: 76px; height: 48px; border-radius: 8px; background-size: cover; background-position: center; }
+.website-manager-slide-list strong, .website-manager-slide-list small { display: block; }
+.website-manager-slide-list small { margin-top: 3px; opacity: .6; font-size: 9px; }
+.website-manager-form { display: grid; gap: 13px; padding: 16px; }
+.website-manager-form-actions { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+.website-manager-toggle { display: flex !important; grid-template-columns: auto 1fr; align-items: center; gap: 8px !important; }
+.website-manager-toggle input { width: 17px; height: 17px; }
+.website-manager-form-actions > div { display: flex; gap: 6px; }
+.website-manager-form-actions button { border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; color: inherit; background: transparent; font-size: 10px; font-weight: 800; cursor: pointer; }
+.website-manager-form-actions button.danger { color: #c43b3b; }
+.website-manager-form-actions button:disabled { opacity: .35; cursor: not-allowed; }
+.website-manager-fields { display: grid; gap: 11px; }
+.website-manager-fields.two { grid-template-columns: 1fr 1fr; }
+.website-manager-image-editor { display: grid; grid-template-columns: 180px 1fr; gap: 13px; padding: 11px; border: 1px solid var(--line); border-radius: 12px; }
+.website-manager-image-preview { min-height: 126px; border-radius: 9px; background-size: cover; background-position: center right; background-color: #eaf4fd; }
+.website-manager-image-editor > div:last-child { display: grid; gap: 9px; }
+.website-manager-image-editor small { opacity: .6; line-height: 1.45; }
+.website-manager-upload { position: relative; display: inline-flex !important; width: fit-content; padding: 9px 11px; border: 1px dashed rgba(10,96,223,.4); border-radius: 9px; color: #0a60df; background: rgba(10,96,223,.05); cursor: pointer; }
+.website-manager-upload input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.website-manager-preview-panel { position: sticky; top: 86px; }
+.website-manager-preview-panel .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.website-manager-device { display: flex; gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: 9px; }
+.website-manager-preview-frame { padding: 16px; overflow: auto; background: linear-gradient(135deg, rgba(10,96,223,.035), transparent); }
+.website-manager-preview-frame.is-mobile { max-width: 430px; margin-inline: auto; }
+.website-manager-preview-frame.is-mobile .public-hero-slider { min-width: 390px; }
+.website-manager-global-fields { padding: 18px; }
+.website-manager-roadmap { margin: 0 18px 18px; padding: 15px; border: 1px solid var(--line); border-radius: 12px; background: rgba(10,96,223,.04); }
+.website-manager-roadmap p { margin: 6px 0 0; opacity: .7; line-height: 1.5; }
+
+@media(max-width:1180px){
+ .website-manager-grid{grid-template-columns:1fr}.website-manager-preview-panel{position:static}.website-manager-status{grid-template-columns:repeat(2,1fr)}
+}
+@media(max-width:700px){
+ .website-manager-status{grid-template-columns:1fr 1fr}.website-manager-slider-settings,.website-manager-fields.two{grid-template-columns:1fr}.website-manager-image-editor{grid-template-columns:1fr}.website-manager-form-actions{align-items:flex-start;flex-direction:column}.website-manager-preview-frame{padding:8px}.website-manager-preview-frame.is-mobile{max-width:100%}.website-manager-preview-frame.is-mobile .public-hero-slider{min-width:0}.website-manager-tabs{width:100%}.website-manager-tabs button{flex:1}
+}
