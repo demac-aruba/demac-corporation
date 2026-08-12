@@ -4,7 +4,9 @@ import {
   getHalfDayAnchor,
   getRuntimeSchedulingSettings,
   halfDayForTime,
+  isStandardServiceOnly,
   sectorsCompatible,
+  standardServiceQuantity,
   timeToMinutes,
 } from './scheduling';
 
@@ -64,14 +66,15 @@ export function diagnoseBookingRequest(args: {
       code: 'quantity-invalid',
       field: 'quantity',
       severity: 'error',
-      title: 'Enter a valid A/C quantity',
-      message: 'Number of A/C units must be a whole number of at least 1 before the ERP can calculate capacity.',
+      title: 'Review appointment work scope',
+      message: 'Every work line needs a valid whole-number quantity before the ERP can calculate continuous capacity.',
     });
     return issues;
   }
 
-  const supportRequired = args.request.presetId === 'standard_service'
-    && args.request.quantity > settings.maxStandardUnitsSameSiteSingleVan;
+  const requestedStandardUnits = standardServiceQuantity(args.request);
+  const supportRequired = isStandardServiceOnly(args.request)
+    && requestedStandardUnits > settings.maxStandardUnitsSameSiteSingleVan;
 
   if (supportRequired) {
     const linkedPlan = args.candidateSlots.find((slot) => slot.requiresSupportVan && slot.supportVanId);
@@ -81,7 +84,7 @@ export function diagnoseBookingRequest(args: {
         field: 'support',
         severity: 'info',
         title: 'Support van required',
-        message: `${args.request.quantity} A/C units exceed the single-van same-property capacity of ${settings.maxStandardUnitsSameSiteSingleVan}. ERP will link ${linkedPlan.vanId.replace('VAN-', 'Van ')} + ${linkedPlan.supportVanId?.replace('VAN-', 'Van ')} automatically (${linkedPlan.primaryUnits ?? 0} + ${linkedPlan.supportUnits ?? 0} units) while keeping one customer appointment and one communication owner.`,
+        message: `${requestedStandardUnits} A/C units exceed the single-van same-property capacity of ${settings.maxStandardUnitsSameSiteSingleVan}. ERP will link ${linkedPlan.vanId.replace('VAN-', 'Van ')} + ${linkedPlan.supportVanId?.replace('VAN-', 'Van ')} automatically (${linkedPlan.primaryUnits ?? 0} + ${linkedPlan.supportUnits ?? 0} units) while keeping one customer appointment and one communication owner.`,
       });
     } else {
       issues.push({
@@ -89,7 +92,7 @@ export function diagnoseBookingRequest(args: {
         field: 'support',
         severity: 'error',
         title: 'Support van required but unavailable',
-        message: `${args.request.quantity} A/C units exceed the single-van capacity of ${settings.maxStandardUnitsSameSiteSingleVan}. No valid linked support-van plan is available under the current day, capacity and customer restrictions.`,
+        message: `${requestedStandardUnits} A/C units exceed the single-van capacity of ${settings.maxStandardUnitsSameSiteSingleVan}. No valid linked support-van plan is available under the current day, capacity and customer restrictions.`,
       });
     }
   }
@@ -127,7 +130,7 @@ export function diagnoseBookingRequest(args: {
         field: 'slot',
         severity: 'warning',
         title: 'Selected spot cannot carry this large job alone',
-        message: `This ${args.request.quantity}-unit job requires linked support capacity. Use one of the calculated van combinations shown below instead of forcing the selected single-van spot.`,
+        message: `This ${requestedStandardUnits}-unit job requires linked support capacity. Use one of the calculated van combinations shown below instead of forcing the selected single-van spot.`,
       });
     }
     return issues;
