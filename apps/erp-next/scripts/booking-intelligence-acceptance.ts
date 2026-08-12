@@ -5,6 +5,7 @@ import { resolveCustomerIdentity } from '../lib/booking-intelligence/identity';
 import { selectCommunicationRecipients } from '../lib/booking-intelligence/communication-policy';
 import { rankRouteAwareCandidates } from '../lib/booking-intelligence/route-ranking';
 import { summarizeAppointmentScope } from '../lib/booking-intelligence/appointment-scope';
+import { navigationUrlForAddress, parseArubaAddressParts, parseLocationInput, resolveArubaAddressSuggestion, suggestArubaServiceAddresses } from '../lib/booking-intelligence/address';
 import type { BookingRequest, CandidateSlot, DispatchJob } from '../lib/scheduling';
 
 const identity = resolveCustomerIdentity(
@@ -21,6 +22,27 @@ const similarName = resolveCustomerIdentity(
 )[0];
 assert(similarName, 'Very similar names should be surfaced for review.');
 assert.notEqual(similarName.recommendedAction, 'reuse', 'Name similarity alone must never silently reuse a CRM identity.');
+
+const fonteinSuggestions = suggestArubaServiceAddresses('Weg Fontein 117', 4);
+assert(fonteinSuggestions.length > 0, 'Weg Fontein must resolve from the Aruba address directory.');
+assert.equal(fonteinSuggestions[0].canonical, 'Weg Fontein', 'The curated canonical address must outrank duplicate legacy aliases.');
+assert.equal(fonteinSuggestions[0].demacSector, 'San Nicolas', 'Weg Fontein must derive the San Nicolas DEMAC sector.');
+const fonteinResolved = resolveArubaAddressSuggestion('Weg Fontein 117', fonteinSuggestions[0]);
+assert.equal(fonteinResolved.address, 'Weg Fontein 117', 'Selecting a street must preserve the house number.');
+assert.equal(fonteinResolved.houseNumber, '117');
+assert.equal(fonteinResolved.sector, 'San Nicolas');
+
+const legacyFontein = suggestArubaServiceAddresses('Otaheitistraat', 4);
+assert.equal(legacyFontein[0]?.canonical, 'Weg Fontein', 'Legacy Otaheitistraat wording should resolve to the curated Weg Fontein record instead of creating a duplicate suggestion.');
+assert.equal(legacyFontein[0]?.demacSector, 'San Nicolas');
+
+const parsedHouse = parseArubaAddressParts('Wayaca 217');
+assert.equal(parsedHouse.street, 'Wayaca');
+assert.equal(parsedHouse.houseNumber, '217');
+const mapsMeLocation = parseLocationInput('mapsme://map?v=1&ll=12.450000,-69.950000');
+assert.equal(mapsMeLocation?.latitude, 12.45, 'MAPS.ME-style ll coordinates should be captured.');
+assert.equal(mapsMeLocation?.longitude, -69.95);
+assert(navigationUrlForAddress('Weg Fontein 117', mapsMeLocation).includes('12.45%2C-69.95'), 'Navigation should prefer verified coordinates when available.');
 
 const monday = mergeBookingConstraints({}, inferBookingConstraintPatch('El lunes puedo.'));
 const mondayAfterTen = mergeBookingConstraints(monday, inferBookingConstraintPatch('Después de las 10 am.'));
