@@ -139,12 +139,15 @@ function inferPreset(text: string): WorkPresetId | undefined {
 }
 
 function inferWorkLines(text: string, previous: BookingWorkLine[]) {
+  const normalized = normalize(text);
   const count = parseCount(text);
   const preset = inferPreset(text);
-  const mentionsAir = /\b(air\s*conditioners?|a\/?c|ac|aires?|aircos?|units?|unidades?)\b/i.test(normalize(text));
+  const mentionsWorkObject = /\b(air\s*conditioners?|a\/?c|ac|aires?|aircos?|units?|unidades?|services?|servicios?|installations?|instalaciones?)\b/i.test(normalized);
+  const explicitQuantityChange = /\b(son|serian|serian|cantidad|make it|instead|en vez de|cambialo a|cambiarlo a|change it to)\b/i.test(normalized);
+  if (!preset && !mentionsWorkObject && !explicitQuantityChange) return previous;
   if (!count && !preset) return previous;
   const existing = previous[0];
-  const nextPreset = preset ?? existing?.presetId ?? (mentionsAir ? 'standard_service' : undefined);
+  const nextPreset = preset ?? existing?.presetId ?? (mentionsWorkObject ? 'standard_service' : undefined);
   if (!nextPreset) return previous;
   const nextCount = count ?? existing?.quantity ?? 1;
   return [{ id: existing?.id ?? 'copilot-work-1', presetId: nextPreset, quantity: Math.max(1, Math.min(14, nextCount)) }];
