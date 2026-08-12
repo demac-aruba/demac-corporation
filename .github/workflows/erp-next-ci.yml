@@ -39,5 +39,9 @@ jobs:
         run: npm run test:dispatch
       - name: Appointment lifecycle acceptance simulation
         run: npm run test:lifecycle
+      - name: Booking intelligence acceptance simulation
+        run: npm run test:booking-intelligence
+      - name: Booking Copilot acceptance simulation
+        run: npm run test:booking-copilot
       - name: Build
         run: npm run build
