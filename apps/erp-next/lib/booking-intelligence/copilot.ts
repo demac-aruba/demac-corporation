@@ -110,6 +110,11 @@ function currentArubaClock() {
 
 function parseCount(text: string) {
   const normalized = normalize(text);
+  const quantityTarget = '(?:aires?(?: acondicionados?)?|aircos?|air conditioners?|a\\/?c|ac|units?|unidades?|services?|servicios?|installations?|instalaciones?)';
+  const wordAlternatives = Object.keys(numberWords).sort((left, right) => right.length - left.length).join('|');
+  const targeted = normalized.match(new RegExp(`\\b(1[0-4]|[1-9]|${wordAlternatives})\\s+${quantityTarget}\\b`, 'i'))?.[1];
+  if (targeted) return /^\d+$/.test(targeted) ? Number(targeted) : numberWords[targeted];
+
   const digit = normalized.match(/\b(1[0-4]|[1-9])\b/)?.[1];
   if (digit) return Number(digit);
   for (const [word, value] of Object.entries(numberWords)) {
