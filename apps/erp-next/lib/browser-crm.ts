@@ -45,6 +45,7 @@ export type BrowserCrmSiteIdentity = {
   address: string;
   addressCanonicalStreet?: string;
   addressHouseNumber?: string;
+  addressUnit?: string;
   addressSource?: 'DEMAC' | 'OpenStreetMap' | 'manual' | 'unknown';
   sector?: string;
   sectorResolution?: 'address' | 'manual' | 'unresolved';
