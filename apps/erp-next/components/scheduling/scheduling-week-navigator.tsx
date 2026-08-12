@@ -1,7 +1,7 @@
 'use client';
 
-import { useRef, type ChangeEvent, type TouchEvent } from 'react';
-import type { OperationalDay } from '../../lib/scheduling-capacity';
+import { useMemo, useRef, useState, type ChangeEvent, type TouchEvent } from 'react';
+import { buildOperationalWeek, type OperationalDay } from '../../lib/scheduling-capacity';
 import styles from './scheduling-overview-v2.module.css';
 
 type DaySummary = { total: number; occupied: number; open: number; percent: number };
@@ -13,6 +13,8 @@ type Props = {
   summaries: Record<string, DaySummary>;
   onSelectDate: (dateKey: string) => void;
 };
+
+type SwipeStart = { x: number; y: number; horizontal: boolean };
 
 function addDays(dateKey: string, amount: number) {
   const date = new Date(`${dateKey}T12:00:00Z`);
@@ -46,8 +48,18 @@ function calendarIcon() {
 
 export function SchedulingWeekNavigator({ week, activeDate, today, summaries, onSelectDate }: Props) {
   const dateInputRef = useRef<HTMLInputElement>(null);
-  const weekTouchRef = useRef<{ x: number; y: number } | null>(null);
+  const carouselRef = useRef<HTMLDivElement>(null);
+  const swipeRef = useRef<SwipeStart | null>(null);
   const suppressDayClickRef = useRef(false);
+  const animationTimerRef = useRef<number | null>(null);
+  const [dragX, setDragX] = useState(0);
+  const [animating, setAnimating] = useState(false);
+
+  const carouselWeeks = useMemo(() => [
+    buildOperationalWeek(addDays(activeDate, -7)),
+    week,
+    buildOperationalWeek(addDays(activeDate, 7)),
+  ], [activeDate, week]);
 
   const pickDate = (event: ChangeEvent<HTMLInputElement>) => {
     if (event.target.value) onSelectDate(event.target.value);
@@ -68,33 +80,125 @@ export function SchedulingWeekNavigator({ week, activeDate, today, summaries, on
     input.click();
   };
 
-  const startWeekSwipe = (event: TouchEvent<HTMLElement>) => {
-    const touch = event.touches[0];
-    if (!touch) return;
-    weekTouchRef.current = { x: touch.clientX, y: touch.clientY };
+  const clearAnimationTimer = () => {
+    if (animationTimerRef.current !== null) {
+      window.clearTimeout(animationTimerRef.current);
+      animationTimerRef.current = null;
+    }
   };
 
-  const endWeekSwipe = (event: TouchEvent<HTMLElement>) => {
-    const start = weekTouchRef.current;
-    weekTouchRef.current = null;
-    const touch = event.changedTouches[0];
-    if (!start || !touch) return;
+  const startWeekSwipe = (event: TouchEvent<HTMLDivElement>) => {
+    clearAnimationTimer();
+    const touch = event.touches[0];
+    if (!touch || animating) return;
+    swipeRef.current = { x: touch.clientX, y: touch.clientY, horizontal: false };
+    setDragX(0);
+  };
+
+  const moveWeekSwipe = (event: TouchEvent<HTMLDivElement>) => {
+    const start = swipeRef.current;
+    const touch = event.touches[0];
+    if (!start || !touch || animating) return;
     const deltaX = touch.clientX - start.x;
     const deltaY = touch.clientY - start.y;
-    if (Math.abs(deltaX) < 48 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.15) return;
-    suppressDayClickRef.current = true;
-    onSelectDate(addDays(activeDate, deltaX < 0 ? 7 : -7));
-    window.setTimeout(() => { suppressDayClickRef.current = false; }, 0);
+    if (!start.horizontal) {
+      if (Math.abs(deltaX) < 7) return;
+      if (Math.abs(deltaX) <= Math.abs(deltaY) * 1.1) return;
+      start.horizontal = true;
+      suppressDayClickRef.current = true;
+    }
+    event.preventDefault();
+    const width = carouselRef.current?.clientWidth ?? window.innerWidth;
+    const clamped = Math.max(-width, Math.min(width, deltaX));
+    setDragX(clamped);
+  };
+
+  const settleWeekCarousel = (direction: -1 | 0 | 1) => {
+    const width = carouselRef.current?.clientWidth ?? window.innerWidth;
+    setAnimating(true);
+    setDragX(direction === 0 ? 0 : direction === 1 ? -width : width);
+    clearAnimationTimer();
+    animationTimerRef.current = window.setTimeout(() => {
+      if (direction !== 0) onSelectDate(addDays(activeDate, direction * 7));
+      setAnimating(false);
+      setDragX(0);
+      swipeRef.current = null;
+      window.setTimeout(() => { suppressDayClickRef.current = false; }, 40);
+      animationTimerRef.current = null;
+    }, direction === 0 ? 180 : 240);
+  };
+
+  const endWeekSwipe = (event: TouchEvent<HTMLDivElement>) => {
+    const start = swipeRef.current;
+    const touch = event.changedTouches[0];
+    if (!start || !touch || animating) return;
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+    if (!start.horizontal || Math.abs(deltaX) <= Math.abs(deltaY) * 1.1) {
+      swipeRef.current = null;
+      setDragX(0);
+      return;
+    }
+    const width = carouselRef.current?.clientWidth ?? window.innerWidth;
+    const threshold = Math.max(52, width * 0.14);
+    if (Math.abs(deltaX) < threshold) {
+      settleWeekCarousel(0);
+      return;
+    }
+    settleWeekCarousel(deltaX < 0 ? 1 : -1);
+  };
+
+  const cancelWeekSwipe = () => {
+    if (!swipeRef.current) return;
+    if (swipeRef.current.horizontal) settleWeekCarousel(0);
+    else {
+      swipeRef.current = null;
+      setDragX(0);
+    }
   };
 
   const selectDay = (dateKey: string) => {
-    if (suppressDayClickRef.current) return;
+    if (suppressDayClickRef.current || animating) return;
     onSelectDate(dateKey);
   };
+
+  const renderWeek = (days: OperationalDay[], interactive: boolean, showOccupancy: boolean, key: string) => (
+    <section className={styles.weekStrip} data-week-slide={key} aria-label={interactive ? 'Operational week' : undefined} aria-hidden={!interactive}>
+      {days.map((day) => {
+        const summary = showOccupancy ? summaries[day.dateKey] : undefined;
+        const percent = summary?.percent ?? 0;
+        const labelPosition = Math.min(96, Math.max(4, percent));
+        const color = progressColor(percent);
+        return <button
+          type="button"
+          key={day.dateKey}
+          disabled={!day.isOpen}
+          tabIndex={interactive ? 0 : -1}
+          className={`${styles.dayCard} ${interactive && day.dateKey === activeDate ? styles.dayActive : ''} ${day.dateKey === today ? styles.today : ''}`}
+          onClick={interactive ? () => selectDay(day.dateKey) : undefined}
+        >
+          <div><span>{day.weekday}</span><strong>{day.shortDate}</strong>{day.dateKey === today ? <b>TODAY</b> : null}</div>
+          <small>{day.shiftLabel}</small>
+          {day.isOpen ? <>
+            <span style={{ position: 'relative', display: 'block', marginTop: 13 }}>
+              {summary ? <b style={{ position: 'absolute', left: `${labelPosition}%`, top: -11, transform: 'translateX(-50%)', color, fontSize: 5.5, fontWeight: 950, lineHeight: 1, whiteSpace: 'nowrap' }}>{percent}%</b> : null}
+              <i style={{ display: 'block', height: 4, borderRadius: 99, background: 'var(--surface-3)', overflow: 'hidden', opacity: summary ? 1 : .55 }}>
+                <em style={{ display: 'block', width: `${summary ? percent : 0}%`, height: '100%', borderRadius: 99, background: color, transition: 'width .2s ease, background .2s ease' }} />
+              </i>
+            </span>
+            {summary ? <p>{summary.occupied}/{summary.total} spots filled · {summary.open} open</p> : <p>Loading week capacity</p>}
+          </> : <p>Operationally closed</p>}
+        </button>;
+      })}
+    </section>
+  );
+
+  const trackTransform = `translate3d(calc(-33.333333% + ${dragX}px),0,0)`;
 
   return <section aria-label="Week navigation" data-week-nav style={{ marginBottom: 10 }}>
     <style>{`
       .${styles.toolbar}{display:none!important}
+      [data-week-carousel]{display:none}
       @media(max-width:600px){
         .${styles.pageHeader}{gap:8px!important;margin-bottom:10px!important}
         .${styles.pageHeader} p{display:none!important}
@@ -109,7 +213,11 @@ export function SchedulingWeekNavigator({ week, activeDate, today, summaries, on
         [data-week-nav-copy]>button{width:27px!important;height:27px!important;flex:0 0 27px!important}
         [data-week-nav-actions]{min-width:0!important;gap:4px!important}
         [data-week-nav-actions]>button{height:27px!important;padding:0 7px!important}
-        .${styles.weekStrip}{grid-template-columns:repeat(7,minmax(0,1fr))!important;width:100%!important;max-width:100%!important;min-width:0!important;gap:3px!important;margin-bottom:7px!important;overflow:hidden!important;touch-action:pan-y!important;user-select:none!important}
+        [data-week-desktop]{display:none!important}
+        [data-week-carousel]{display:block!important;width:100%!important;max-width:100%!important;min-width:0!important;overflow:hidden!important;touch-action:pan-y!important;user-select:none!important}
+        [data-week-track]{display:flex!important;width:300%!important;min-width:0!important;will-change:transform!important}
+        [data-week-slide]{flex:0 0 33.333333%!important;width:33.333333%!important;max-width:33.333333%!important;min-width:0!important;margin-bottom:7px!important}
+        .${styles.weekStrip}{grid-template-columns:repeat(7,minmax(0,1fr))!important;width:100%!important;max-width:100%!important;min-width:0!important;gap:3px!important;overflow:hidden!important}
         .${styles.dayCard}{position:relative!important;width:100%!important;min-width:0!important;min-height:60px!important;padding:6px 3px!important;border-radius:9px!important;overflow:hidden!important}
         .${styles.dayCard}>div{display:flex!important;align-items:flex-start!important;flex-direction:column!important;gap:1px!important;min-width:0!important}
         .${styles.dayCard}>div>span{font-size:8px!important;line-height:1.05!important}
@@ -150,23 +258,21 @@ export function SchedulingWeekNavigator({ week, activeDate, today, summaries, on
       </div>
     </div>
 
-    <section className={styles.weekStrip} data-week-strip aria-label="Operational week" onTouchStart={startWeekSwipe} onTouchEnd={endWeekSwipe} onTouchCancel={() => { weekTouchRef.current = null; }}>{week.map((day) => {
-      const summary = summaries[day.dateKey] ?? { total: 0, occupied: 0, open: 0, percent: 0 };
-      const labelPosition = Math.min(96, Math.max(4, summary.percent));
-      const color = progressColor(summary.percent);
-      return <button type="button" key={day.dateKey} disabled={!day.isOpen} className={`${styles.dayCard} ${day.dateKey === activeDate ? styles.dayActive : ''} ${day.dateKey === today ? styles.today : ''}`} onClick={() => selectDay(day.dateKey)}>
-        <div><span>{day.weekday}</span><strong>{day.shortDate}</strong>{day.dateKey === today ? <b>TODAY</b> : null}</div>
-        <small>{day.shiftLabel}</small>
-        {day.isOpen ? <>
-          <span style={{ position: 'relative', display: 'block', marginTop: 13 }}>
-            <b style={{ position: 'absolute', left: `${labelPosition}%`, top: -11, transform: 'translateX(-50%)', color, fontSize: 5.5, fontWeight: 950, lineHeight: 1, whiteSpace: 'nowrap' }}>{summary.percent}%</b>
-            <i style={{ display: 'block', height: 4, borderRadius: 99, background: 'var(--surface-3)', overflow: 'hidden' }}>
-              <em style={{ display: 'block', width: `${summary.percent}%`, height: '100%', borderRadius: 99, background: color, transition: 'width .2s ease, background .2s ease' }} />
-            </i>
-          </span>
-          <p>{summary.occupied}/{summary.total} spots filled · {summary.open} open</p>
-        </> : <p>Operationally closed</p>}
-      </button>;
-    })}</section>
+    <div data-week-desktop>{renderWeek(week, true, true, 'desktop')}</div>
+    <div
+      ref={carouselRef}
+      data-week-carousel
+      aria-label="Swipe operational weeks"
+      onTouchStart={startWeekSwipe}
+      onTouchMove={moveWeekSwipe}
+      onTouchEnd={endWeekSwipe}
+      onTouchCancel={cancelWeekSwipe}
+    >
+      <div data-week-track style={{ transform: trackTransform, transition: animating ? 'transform 220ms cubic-bezier(.22,.72,.22,1)' : 'none' }}>
+        {renderWeek(carouselWeeks[0], false, false, 'previous')}
+        {renderWeek(carouselWeeks[1], true, true, 'current')}
+        {renderWeek(carouselWeeks[2], false, false, 'next')}
+      </div>
+    </div>
   </section>;
 }
