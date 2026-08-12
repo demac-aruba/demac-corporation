@@ -19,8 +19,7 @@ export const metadata: Metadata = {
   ],
   openGraph: {
     title: 'DEMAC Professional Cooling Solutions | Aruba',
-    description:
-      'Premium residential, light-commercial, commercial and VRF cooling solutions in Aruba.',
+    description: 'Premium residential, light-commercial, commercial and VRF cooling solutions in Aruba.',
     url: 'https://demac-aruba.com',
     siteName: 'DEMAC Professional Cooling Solutions',
     locale: 'en_AW',
@@ -47,7 +46,14 @@ type IconName =
   | 'hotel';
 
 function LineIcon({ name }: { name: IconName }) {
-  const common = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
+  const common = {
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.8,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+  };
+
   const shapes: Record<IconName, React.ReactNode> = {
     home: <><path {...common} d="M3.5 11.2 12 4l8.5 7.2"/><path {...common} d="M5.5 10.2V20h13v-9.8M9.5 20v-6h5v6"/></>,
     store: <><path {...common} d="M4 9h16l-1.3-5H5.3L4 9Z"/><path {...common} d="M5 9v11h14V9M8 20v-6h4v6M4 9c0 2 3 2 4 0 1 2 3 2 4 0 1 2 3 2 4 0 1 2 4 2 4 0"/></>,
@@ -66,41 +72,64 @@ function LineIcon({ name }: { name: IconName }) {
     office: <><path {...common} d="M4 20h16M6 20V5h8v15M14 9h4v11M9 8h2M9 11h2M9 14h2M9 17h2"/></>,
     hotel: <><path {...common} d="M4 20V6h16v14M7 9h3v3H7zM14 9h3v3h-3zM7 15h3v3H7zM14 15h3v3h-3z"/></>,
   };
+
   return <svg viewBox="0 0 24 24" aria-hidden="true">{shapes[name]}</svg>;
 }
 
-const solutionGroups: Array<{ icon: IconName; title: string; subtitle: string; detail: string }> = [
-  { icon: 'home', title: 'Residential', subtitle: 'Homes & villas', detail: 'Comfort, efficiency and dependable service for everyday living.' },
-  { icon: 'store', title: 'Light Commercial', subtitle: 'Up to 5 tons', detail: 'Cassette, floor-ceiling and central solutions for smaller commercial spaces.' },
-  { icon: 'building', title: 'Commercial', subtitle: 'Above 5 tons', detail: 'Higher-capacity cooling solutions for demanding business environments.' },
-  { icon: 'vrf', title: 'VRF Systems', subtitle: 'Advanced systems', detail: 'Flexible multi-zone technology for larger and more complex properties.' },
+const solutionGroups: Array<{ icon: IconName; title: string; subtitle: string }> = [
+  { icon: 'home', title: 'Residential', subtitle: 'Comfort solutions for your home.' },
+  { icon: 'store', title: 'Light Commercial', subtitle: 'Efficient systems for small businesses.' },
+  { icon: 'building', title: 'Commercial', subtitle: 'Powerful cooling for medium & large spaces.' },
+  { icon: 'vrf', title: 'VRF Systems', subtitle: 'Advanced technology for maximum efficiency.' },
 ];
 
 const services: Array<{ icon: IconName; title: string; description: string }> = [
-  { icon: 'sales', title: 'A/C Sales', description: 'Residential, light-commercial, commercial and special-order cooling equipment.' },
-  { icon: 'tools', title: 'Installations', description: 'Professional installation focused on performance, reliability and a clean finish.' },
-  { icon: 'service', title: 'Service & Maintenance', description: 'Preventive and corrective care to keep air conditioning systems operating efficiently.' },
-  { icon: 'diagnostic', title: 'Diagnostics & Repairs', description: 'Systematic troubleshooting and dependable repair solutions for cooling problems.' },
-  { icon: 'shield', title: 'Anti-Corrosive Treatment', description: 'Protective treatment for outdoor condensers exposed to Aruba’s coastal environment.' },
-  { icon: 'bracket', title: 'Custom Brackets & Metal Fabrication', description: 'Special iron brackets and custom mounting solutions fabricated for the job.' },
-  { icon: 'electric', title: 'A/C Electrical Diagnostics', description: 'Specialized electrical diagnostics for power and supply issues related to air conditioning.' },
-  { icon: 'air', title: 'UMA / Chilled-Water Air Handlers', description: 'Service and maintenance for internal chilled-water air-handling units and UMAs.' },
+  { icon: 'sales', title: 'A/C Sales', description: 'Quality cooling equipment for residential and commercial needs.' },
+  { icon: 'tools', title: 'Installation', description: 'Professional installation focused on performance and a clean finish.' },
+  { icon: 'service', title: 'Service & Maintenance', description: 'Preventive care that keeps your system operating efficiently.' },
+  { icon: 'tools', title: 'Repairs', description: 'Reliable corrective work when your cooling system needs attention.' },
+  { icon: 'diagnostic', title: 'Diagnostics', description: 'Systematic troubleshooting to identify the real cause of a problem.' },
+  { icon: 'shield', title: 'Anti-Corrosive Treatment', description: 'Protection for outdoor equipment exposed to Aruba’s coastal climate.' },
+  { icon: 'bracket', title: 'Custom Brackets & Metal Fabrication', description: 'Custom mounting and fabrication solutions built for the job.' },
+  { icon: 'electric', title: 'A/C Electrical Diagnostics', description: 'Specialized electrical troubleshooting related to A/C systems.' },
+  { icon: 'air', title: 'UMA / Chilled-Water Air Handler Service', description: 'Service and maintenance for internal chilled-water air handlers.' },
 ];
 
 const industries: Array<{ icon: IconName; title: string }> = [
-  { icon: 'home', title: 'Homes & Villas' },
+  { icon: 'home', title: 'Homes' },
   { icon: 'restaurant', title: 'Restaurants' },
-  { icon: 'clinic', title: 'Clinics & Consultorios' },
-  { icon: 'office', title: 'Offices & Professionals' },
-  { icon: 'hotel', title: 'Hotels & Hospitality' },
+  { icon: 'clinic', title: 'Clinics' },
+  { icon: 'office', title: 'Professional Offices' },
+  { icon: 'hotel', title: 'Hotels' },
   { icon: 'building', title: 'Commercial Properties' },
 ];
 
 const projectTypes = [
-  ['Residential installation', 'Comfort designed around the property.'],
-  ['Commercial systems', 'Capacity for demanding operating environments.'],
-  ['Service & restoration', 'Detailed maintenance and problem solving.'],
-  ['VRF & specialized work', 'Advanced multi-zone cooling expertise.'],
+  {
+    title: 'Residential Cooling',
+    copy: 'Comfort-focused installation and replacement applications.',
+    image: 'https://unsplash.com/photos/BsHycOlU6Bg/download?force=true&w=900',
+  },
+  {
+    title: 'Outdoor Equipment',
+    copy: 'Condensers and mechanical equipment for residential and commercial properties.',
+    image: 'https://unsplash.com/photos/ayBLtTKMgxE/download?force=true&w=900',
+  },
+  {
+    title: 'Commercial Systems',
+    copy: 'Larger-capacity cooling applications for demanding operating environments.',
+    image: 'https://unsplash.com/photos/ypmI48pdWMI/download?force=true&w=900',
+  },
+  {
+    title: 'Rooftop & Exterior',
+    copy: 'Outdoor installations planned around access, airflow and the property.',
+    image: 'https://unsplash.com/photos/nSNWtsZbkMA/download?force=true&w=900',
+  },
+  {
+    title: 'Premium Interiors',
+    copy: 'Cooling solutions integrated cleanly into modern residential spaces.',
+    image: 'https://unsplash.com/photos/YKMByxsdyDY/download?force=true&w=900',
+  },
 ];
 
 const structuredData = {
@@ -120,124 +149,99 @@ const structuredData = {
 
 export default function HomePage() {
   return (
-    <main className="public-site">
+    <main className="public-site public-home-approved">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }} />
       <PublicHeader active="home" />
 
-      <section className="public-hero" id="home">
-        <div className="public-hero-inner">
-          <div className="public-hero-copy">
-            <span className="public-eyebrow">Premium air conditioning solutions · Aruba</span>
-            <h1>Cooling comfort for <span>homes & businesses</span> in <em>Aruba.</em></h1>
-            <p>Sales, professional installation, service, maintenance, diagnostics and repairs—from residential comfort to commercial and VRF systems.</p>
-            <div className="public-hero-actions">
-              <Link className="public-button public-button-primary public-button-large" href="/contact?request=estimate">Request Estimate <span>→</span></Link>
-              <Link className="public-button public-button-whatsapp public-button-large" href="/contact?channel=whatsapp"><span aria-hidden="true">◉</span> WhatsApp Us</Link>
+      <section className="approved-hero" id="home">
+        <div className="approved-hero-photo" aria-hidden="true" />
+        <div className="approved-hero-fade" aria-hidden="true" />
+        <div className="approved-hero-inner">
+          <div className="approved-hero-copy">
+            <span className="approved-kicker">Premium air conditioning solutions</span>
+            <h1>Cooling Comfort for <span>Homes & Businesses</span> in <em>Aruba.</em></h1>
+            <p>Premium air conditioning solutions built for Aruba’s climate. Sales, professional installations, expert service and reliable repairs.</p>
+            <div className="approved-hero-actions">
+              <Link className="public-button public-button-primary approved-main-button" href="/contact?request=estimate">▣ Request Estimate</Link>
+              <Link className="public-button public-button-whatsapp approved-main-button" href="/contact?channel=whatsapp">◉ WhatsApp Us</Link>
             </div>
-            <div className="public-proof-points">
+            <div className="approved-trust-row">
               <span><b>✓</b> Aruba-based team</span>
-              <span><b>✓</b> Residential to commercial</span>
+              <span><b>⚙</b> Fast & reliable service</span>
+              <span><b>◇</b> Residential to commercial</span>
               <span><b>✓</b> Island-wide service</span>
             </div>
           </div>
-
-          <div className="public-hero-scene" aria-label="Premium cooling illustration">
-            <div className="public-sky"><i /><i /><i /></div>
-            <div className="public-ocean" />
-            <div className="public-window-frame"><i /><i /></div>
-            <div className="public-palm"><i /><i /><i /><i /><i /></div>
-            <div className="public-wall-unit"><span>DEMAC</span><b>24°</b><i /><div className="public-vent" /></div>
-            <div className="public-airflow"><i /><i /><i /><i /></div>
-            <div className="public-sofa"><i /><i /><i /></div>
-            <div className="public-table"><i /></div>
-            <div className="public-plant"><i /><i /><i /></div>
-          </div>
         </div>
       </section>
 
-      <section className="public-solution-wrap" id="solutions">
-        <div className="public-solution-grid">
-          {solutionGroups.map((group) => (
-            <article className="public-solution-card" key={group.title}>
-              <span className="public-icon"><LineIcon name={group.icon} /></span>
-              <div><h2>{group.title}</h2><small>{group.subtitle}</small><p>{group.detail}</p></div>
-              <b aria-hidden="true">→</b>
-            </article>
-          ))}
-        </div>
+      <section className="approved-solutions" id="solutions">
+        {solutionGroups.map((group) => (
+          <Link className="approved-solution" href="/services" key={group.title}>
+            <span className="approved-solution-icon"><LineIcon name={group.icon} /></span>
+            <span><strong>{group.title}</strong><small>{group.subtitle}</small></span>
+            <b aria-hidden="true">→</b>
+          </Link>
+        ))}
       </section>
 
-      <section className="public-section public-services" id="services">
-        <div className="public-section-heading">
-          <div><span>What we do</span><h2>Complete cooling solutions.<br />One professional team.</h2></div>
-          <p>From the first equipment recommendation to ongoing maintenance and specialized diagnostics, DEMAC supports the full life of your cooling system.</p>
+      <section className="approved-services" id="services">
+        <div className="approved-section-title">
+          <div><span>Our Services</span><h2>Complete cooling solutions.</h2></div>
+          <Link href="/services">View all services →</Link>
         </div>
-        <div className="public-service-grid">
+        <div className="approved-service-grid">
           {services.map((service) => (
-            <article className="public-service-card" key={service.title}>
-              <span className="public-service-icon"><LineIcon name={service.icon} /></span>
-              <h3>{service.title}</h3>
-              <p>{service.description}</p>
-              <Link href="/services" aria-label={`Learn more about ${service.title}`}>Learn more <span>→</span></Link>
-            </article>
+            <Link className="approved-service-card" href="/services" key={service.title}>
+              <span className="approved-service-icon"><LineIcon name={service.icon} /></span>
+              <strong>{service.title}</strong>
+              <small>{service.description}</small>
+              <b aria-hidden="true">→</b>
+            </Link>
           ))}
         </div>
       </section>
 
-      <section className="public-industries" id="industries">
-        <div className="public-industries-copy">
-          <span className="public-eyebrow">Built for Aruba</span>
-          <h2>Cooling expertise for every kind of property.</h2>
-          <p>Our work ranges from a single residential split unit to specialized commercial systems and multi-zone VRF projects.</p>
-          <div className="public-industry-grid">
-            {industries.map((industry) => <div key={industry.title}><LineIcon name={industry.icon} /><span>{industry.title}</span></div>)}
-          </div>
-        </div>
-        <div className="public-system-stack" aria-hidden="true">
-          <div className="public-condenser condenser-one"><i /><span>Residential</span></div>
-          <div className="public-condenser condenser-two"><i /><span>Commercial</span></div>
-          <div className="public-vrf-tower"><i /><i /><i /><span>VRF</span></div>
-          <div className="public-system-floor" />
-        </div>
-      </section>
-
-      <section className="public-social-proof" aria-label="DEMAC community and reviews">
-        <div className="public-stat"><span className="facebook-mark">f</span><div><strong>7,000+</strong><small>Facebook followers</small></div></div>
-        <div className="public-stat"><span className="review-star">★</span><div><strong>60+</strong><small>Customer reviews</small></div></div>
-        <div className="public-trust-message"><span>Trusted across Aruba</span><strong>Homes · Restaurants · Clinics · Offices · Hotels · Businesses</strong></div>
-        <div className="public-stars" aria-label="Customer review presence"><span>★★★★★</span><small>Real customer feedback helps tell our story.</small></div>
-      </section>
-
-      <section className="public-section public-projects" id="projects">
-        <div className="public-project-head"><div><span>Our work</span><h2>Recent project categories</h2></div><Link href="/project-gallery">View project gallery →</Link></div>
-        <div className="public-project-grid">
-          {projectTypes.map(([title, copy], index) => (
-            <article className={`public-project-card project-${index + 1}`} key={title}>
-              <div className="public-project-art" aria-hidden="true"><span className="project-unit"/><span className="project-building"/><span className="project-air"/></div>
-              <div><span>DEMAC PROJECTS</span><h3>{title}</h3><p>{copy}</p></div>
-            </article>
+      <section className="approved-industries" id="industries">
+        <span className="approved-industries-label">Industries we serve</span>
+        <div className="approved-industry-list">
+          {industries.map((industry) => (
+            <span key={industry.title}><i><LineIcon name={industry.icon} /></i>{industry.title}</span>
           ))}
         </div>
-        <p className="public-project-note">Real before-and-after photos and completed-project galleries can be connected here as the media library is added.</p>
       </section>
 
-      <section className="public-contact" id="contact">
-        <div className="public-contact-copy">
-          <span className="public-eyebrow">Ready when you are</span>
-          <h2>Need reliable cooling solutions?</h2>
-          <p>Tell us what you need and our team can help you determine the right next step—from a service appointment to a new installation or commercial project.</p>
-          <div className="public-contact-actions">
-            <Link className="public-button public-button-light" href="/contact">Contact DEMAC</Link>
-            <Link className="public-button public-button-outline-light" href="/services">Review services</Link>
-          </div>
+      <section className="approved-proof" aria-label="DEMAC community and customer feedback">
+        <div className="approved-proof-stat"><span className="approved-facebook">f</span><div><strong>7,000+</strong><small>Facebook followers</small></div></div>
+        <div className="approved-proof-stat"><span className="approved-star">★</span><div><strong>60+</strong><small>Customer reviews</small></div></div>
+        <div className="approved-proof-copy"><span>Trusted across Aruba</span><strong>Homes · Restaurants · Clinics · Offices · Hotels · Businesses</strong></div>
+        <div className="approved-proof-rating"><span>★★★★★</span><small>Customer feedback helps tell our story.</small></div>
+      </section>
+
+      <section className="approved-projects" id="projects">
+        <div className="approved-section-title">
+          <div><span>Our Work</span><h2>Cooling applications & project gallery</h2></div>
+          <Link href="/project-gallery">View gallery →</Link>
         </div>
-        <div className="public-contact-card" id="contact-details">
-          <span>DEMAC OFFICE</span>
-          <strong>Santa Cruz 54 C</strong>
-          <p>Santa Cruz, Aruba</p>
-          <hr />
-          <small>WhatsApp sales · Estimates · Service requests · Commercial inquiries</small>
-          <em>Customer contact channels are being connected to this new website experience.</em>
+        <div className="approved-project-grid">
+          {projectTypes.map((project) => (
+            <Link className="approved-project-card" href="/project-gallery" key={project.title}>
+              <span className="approved-project-image" style={{ backgroundImage: `url(${project.image})` }} aria-hidden="true" />
+              <span className="approved-project-copy"><small>PROJECT CATEGORY</small><strong>{project.title}</strong><p>{project.copy}</p></span>
+            </Link>
+          ))}
+        </div>
+      </section>
+
+      <section className="approved-cta" id="contact">
+        <div className="approved-cta-copy">
+          <span>Ready for reliable cooling comfort?</span>
+          <h2>Let DEMAC help you plan the right next step.</h2>
+          <p>From routine service to a new installation or commercial project, tell us what you need and we’ll guide the request.</p>
+        </div>
+        <div className="approved-cta-actions">
+          <Link className="public-button public-button-whatsapp approved-main-button" href="/contact?channel=whatsapp">◉ WhatsApp Us</Link>
+          <Link className="public-button public-button-primary approved-main-button" href="/contact?request=estimate">▣ Request Estimate</Link>
         </div>
       </section>
 
