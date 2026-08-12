@@ -4,12 +4,14 @@ import type { CalendarDispatchJob } from '../lib/scheduling-capacity';
 import { buildOperationalWeek } from '../lib/scheduling-capacity';
 import {
   applyAppointmentScheduleChange,
+  applySupportAssignmentMove,
   cancelAppointment,
   recordOperationalIssue,
   syncWorkOrderFromAppointment,
   updateAppointmentDetails,
   validMoveCandidates,
   validRescheduleCandidates,
+  validSupportMoveCandidates,
 } from '../lib/scheduling-appointment-lifecycle';
 
 function requireCondition(condition: unknown, message: string) {
@@ -136,4 +138,23 @@ requireCondition(linkedMoved.record.assignments.length === 2, 'Moving a linked a
 requireCondition(linkedMoved.record.assignments.filter((item) => item.isPrimaryAssignment).length === 1, 'Linked move must preserve exactly one primary assignment.');
 requireCondition(linkedMoved.record.assignments.filter((item) => !item.isPrimaryAssignment).length === 1, 'Linked move must preserve exactly one support assignment.');
 
-console.log('Appointment lifecycle acceptance passed: details capacity revalidation, operational move, customer-facing time awareness, cancellation, issue logging, reschedule, Work Order sync and linked Primary + Support movement verified.');
+const supportDragCase = appointment({ id: 'APT-LIFE-3', dateKey, vanId: 'VAN-4', start: '08:30', end: '16:30', quantity: 10, supportVanId: 'VAN-2', supportStart: '13:30', supportEnd: '16:30' });
+const supportAssignment = supportDragCase.assignments.find((item) => !item.isPrimaryAssignment)!;
+const supportMoveOptions = validSupportMoveCandidates(day, supportDragCase, supportAssignment.id, supportDragCase.assignments);
+const moveSupportToVan1 = supportMoveOptions.find((slot) => slot.vanId === 'VAN-1' && slot.start === '13:30');
+requireCondition(Boolean(moveSupportToVan1), 'A three-unit support assignment should be movable from Van 2 to an open Van 1 at the same time without moving the primary appointment.');
+const supportMoved = applySupportAssignmentMove({ record: supportDragCase, supportAssignmentId: supportAssignment.id, slot: moveSupportToVan1!, actor, reason: 'Support drag reassignment' });
+requireCondition(supportMoved.ok, 'Support-only reassignment should succeed for a valid target.');
+if (supportMoved.ok) {
+  const movedPrimary = supportMoved.record.assignments.find((item) => item.isPrimaryAssignment)!;
+  const movedSupport = supportMoved.record.assignments.find((item) => !item.isPrimaryAssignment)!;
+  requireCondition(movedPrimary.vanId === 'VAN-4' && movedPrimary.start === '08:30', 'Support-only drag must leave the Van 4 primary assignment untouched.');
+  requireCondition(movedSupport.vanId === 'VAN-1' && movedSupport.start === '13:30' && movedSupport.quantity === 3, 'Support-only drag must move exactly the three-unit support block to Van 1.');
+  requireCondition(supportMoved.record.lifecycleHistory?.at(-1)?.kind === 'support_move', 'Support-only drag must append a support_move audit event.');
+  requireCondition(!supportMoved.customerNotificationRecommended, 'Moving support only must not recommend a customer-facing notification when the primary schedule is unchanged.');
+  const supportWorkOrder = createBrowserWorkOrder(supportDragCase);
+  const syncedSupportOrder = syncWorkOrderFromAppointment(supportWorkOrder, supportMoved.record);
+  requireCondition(syncedSupportOrder.primaryVanId === 'VAN-4' && syncedSupportOrder.supportVanId === 'VAN-1', 'Work Order sync must preserve primary Van 4 and update only the support van to Van 1.');
+}
+
+console.log('Appointment lifecycle acceptance passed: details capacity revalidation, operational move, customer-facing time awareness, cancellation, issue logging, reschedule, Work Order sync, linked Primary + Support movement and support-only drag reassignment verified.');

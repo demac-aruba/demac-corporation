@@ -2,7 +2,7 @@ import type { CalendarDispatchJob } from './scheduling-capacity';
 import type { DaySegment, WorkPresetId } from './scheduling';
 
 export type BrowserAppointmentStatus = 'temporary_hold' | 'confirmed' | 'cancelled';
-export type BrowserAppointmentChangeKind = 'created' | 'confirmed' | 'details_edited' | 'operational_move' | 'customer_reschedule' | 'cancelled' | 'operational_issue' | 'support_reflow' | 'undo_move';
+export type BrowserAppointmentChangeKind = 'created' | 'confirmed' | 'details_edited' | 'operational_move' | 'customer_reschedule' | 'cancelled' | 'operational_issue' | 'support_reflow' | 'support_move' | 'undo_move';
 
 export type BrowserAppointmentScheduleSnapshot = {
   dateKey: string;

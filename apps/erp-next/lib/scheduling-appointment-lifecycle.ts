@@ -1,7 +1,7 @@
 import type { BrowserAppointmentHistoryEvent, BrowserAppointmentRecord, BrowserAppointmentScheduleSnapshot, BrowserWorkOrderRecord } from './browser-operational';
 import { createBrowserWorkOrder } from './browser-operational';
 import type { BookingRequest, CandidateSlot, WorkPresetId } from './scheduling';
-import { customerFacingDescription, halfDayForTime } from './scheduling';
+import { customerFacingDescription, halfDayForTime, timeToMinutes } from './scheduling';
 import type { CalendarDispatchJob, OperationalDay } from './scheduling-capacity';
 import { buildOperationalWeek, findCandidateSlotsForDay } from './scheduling-capacity';
 
@@ -54,6 +54,10 @@ function jobsWithoutAppointment(record: BrowserAppointmentRecord, jobs: Calendar
   return jobs.filter((job) => !assignmentIds.has(job.id));
 }
 
+function jobsWithoutAssignment(assignmentId: string, jobs: CalendarDispatchJob[]) {
+  return jobs.filter((job) => job.id !== assignmentId);
+}
+
 function rebuildAssignments(record: BrowserAppointmentRecord, slot: CandidateSlot, dateKey: string): CalendarDispatchJob[] {
   const oldPrimary = record.assignments.find((assignment) => assignment.isPrimaryAssignment) ?? record.assignments[0];
   const oldSupport = record.assignments.find((assignment) => !assignment.isPrimaryAssignment);
@@ -100,6 +104,27 @@ export function validMoveCandidates(day: OperationalDay, record: BrowserAppointm
   return findCandidateSlotsForDay(day, appointmentRequest(record), jobsWithoutAppointment(record, jobs));
 }
 
+export function validSupportMoveCandidates(day: OperationalDay, record: BrowserAppointmentRecord, supportAssignmentId: string, jobs: CalendarDispatchJob[]) {
+  if (record.status === 'cancelled' || record.dateKey !== day.dateKey) return [];
+  const support = record.assignments.find((assignment) => assignment.id === supportAssignmentId && !assignment.isPrimaryAssignment);
+  const primary = record.assignments.find((assignment) => assignment.isPrimaryAssignment) ?? record.assignments[0];
+  if (!support || !primary) return [];
+
+  const supportDuration = timeToMinutes(support.end) - timeToMinutes(support.start);
+  if (supportDuration <= 0) return [];
+
+  const request = appointmentRequest(record, { presetId: support.presetId, quantity: support.quantity });
+  return findCandidateSlotsForDay(day, request, jobsWithoutAssignment(support.id, jobs))
+    .filter((slot) => !slot.requiresSupportVan)
+    .filter((slot) => slot.vanId !== primary.vanId)
+    .filter((slot) => timeToMinutes(slot.end) - timeToMinutes(slot.start) === supportDuration)
+    .filter((slot) => timeToMinutes(slot.start) >= timeToMinutes(primary.start) && timeToMinutes(slot.end) <= timeToMinutes(primary.end))
+    .map((slot) => ({
+      ...slot,
+      reasons: [...slot.reasons, 'Support-only move; primary appointment remains unchanged'],
+    }));
+}
+
 export function validRescheduleCandidates(dateKey: string, record: BrowserAppointmentRecord, targetJobs: CalendarDispatchJob[]) {
   const day = buildOperationalWeek(dateKey).find((item) => item.dateKey === dateKey);
   if (!day || !day.isOpen) return { day, slots: [] as CandidateSlot[] };
@@ -142,6 +167,52 @@ export function applyAppointmentScheduleChange(args: {
     }),
   ];
   return { record: next, customerNotificationRecommended, from, to };
+}
+
+export function applySupportAssignmentMove(args: {
+  record: BrowserAppointmentRecord;
+  supportAssignmentId: string;
+  slot: CandidateSlot;
+  actor?: AppointmentActor;
+  reason?: string;
+  kind?: 'support_move' | 'undo_move';
+}) {
+  const support = args.record.assignments.find((assignment) => assignment.id === args.supportAssignmentId && !assignment.isPrimaryAssignment);
+  const primary = args.record.assignments.find((assignment) => assignment.isPrimaryAssignment) ?? args.record.assignments[0];
+  if (!support || !primary) return { ok: false as const, message: 'The selected support assignment no longer exists.' };
+
+  const from = appointmentSnapshot(args.record);
+  const assignments = args.record.assignments.map((assignment) => assignment.id === support.id ? {
+    ...assignment,
+    vanId: args.slot.vanId,
+    start: args.slot.start,
+    end: args.slot.end,
+    segment: args.slot.segment,
+  } : assignment);
+  const base: BrowserAppointmentRecord = {
+    ...args.record,
+    assignments,
+    supportVanId: args.slot.vanId,
+    updatedAt: new Date().toISOString(),
+  };
+  const to = appointmentSnapshot(base);
+  const next: BrowserAppointmentRecord = {
+    ...base,
+    lifecycleHistory: [
+      ...(args.record.lifecycleHistory ?? []),
+      event({
+        kind: args.kind ?? 'support_move',
+        actorId: args.actor?.id,
+        actorName: args.actor?.name,
+        reason: args.reason,
+        note: `Support assignment ${support.id}: ${support.vanId} ${support.start}–${support.end} → ${args.slot.vanId} ${args.slot.start}–${args.slot.end}`,
+        from,
+        to,
+        customerNotificationRecommended: false,
+      }),
+    ],
+  };
+  return { ok: true as const, record: next, customerNotificationRecommended: false, from, to };
 }
 
 export function updateAppointmentDetails(args: {
