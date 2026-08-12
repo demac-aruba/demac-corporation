@@ -17,6 +17,7 @@ export type Capability =
   | 'projects.view' | 'projects.manage'
   | 'reports.view'
   | 'executive_ai.use'
+  | 'website.manage'
   | 'settings.view' | 'settings.manage'
   | 'automations.view' | 'automations.manage'
   | 'integrations.view' | 'integrations.manage'
@@ -39,7 +40,7 @@ export const roleCapabilities: Record<UserRole, ReadonlySet<Capability>> = {
     'work_orders.view','work_orders.manage','field.execute','communications.view','communications.reply','communications.manage',
     'inventory.view','inventory.manage','inventory.approve','purchasing.view','purchasing.manage','purchasing.approve',
     'finance.view','finance.manage','finance.approve','banking.view','banking.reconcile','employees.view','employees.manage',
-    'payroll_sensitive.view','projects.view','projects.manage','reports.view','executive_ai.use','settings.view','settings.manage',
+    'payroll_sensitive.view','projects.view','projects.manage','reports.view','executive_ai.use','website.manage','settings.view','settings.manage',
     'automations.view','automations.manage','integrations.view','integrations.manage','audit.view','security.manage',
   ),
   operations: capabilities(
