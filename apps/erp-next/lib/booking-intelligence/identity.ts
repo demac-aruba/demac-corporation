@@ -97,7 +97,7 @@ export function resolveCustomerIdentity(
   const emailKey = normalizeEmailKey(draft.email);
   const draftName = normalizeIdentityText(draft.name);
 
-  return candidates.flatMap((candidate) => {
+  return candidates.flatMap((candidate): CustomerIdentityMatch[] => {
     const reasons: string[] = [];
     let score = 0;
     const currentPhoneKey = normalizePhoneKey(candidate.phone);
@@ -134,11 +134,12 @@ export function resolveCustomerIdentity(
     if (score < 50) return [];
     const reusable = score >= 90 && !candidate.phoneShared && !matchedHistoricalPhone;
     const strength: IdentityMatchStrength = score >= 90 ? 'high' : score >= 65 ? 'medium' : 'low';
+    const recommendedAction: IdentityRecommendedAction = reusable ? 'reuse' : 'review';
     return [{
       customerId: candidate.id,
       score,
       strength,
-      recommendedAction: reusable ? 'reuse' : 'review',
+      recommendedAction,
       reasons,
       matchedCurrentPhone,
       matchedHistoricalPhone,
