@@ -1,4 +1,5 @@
 import { arubaAddressDirectory, type ArubaAddressEntry } from '../../../../src/data/arubaAddresses';
+import { osmArubaAddressPoints } from '../../../../src/data/arubaAddressPoints.generated';
 
 export type AddressConfidence = 'verified' | 'suggested' | 'unresolved';
 
@@ -29,6 +30,8 @@ export type ResolvedArubaAddress = ParsedArubaAddress & {
   neighborhood: string;
   operationalZone: string;
   confidence: 'verified';
+  latitude?: number;
+  longitude?: number;
 };
 
 function normalizeWords(value: string) {
@@ -165,8 +168,18 @@ export function applyArubaAddressSuggestion(raw: string, suggestion: Pick<DemacA
   return `${suggestion.canonical}${houseNumber ? ` ${houseNumber}` : ''}`;
 }
 
+export function resolveArubaHouseNumberGps(street: string, houseNumber?: string): ParsedLocationInput | null {
+  if (!street.trim() || !houseNumber?.trim()) return null;
+  const streetKey = compact(street);
+  const houseKey = compact(houseNumber);
+  const point = osmArubaAddressPoints.find((candidate) => compact(candidate.street) === streetKey && compact(candidate.houseNumber) === houseKey);
+  if (!point) return null;
+  return { latitude: point.latitude, longitude: point.longitude };
+}
+
 export function resolveArubaAddressSuggestion(raw: string, suggestion: DemacAddressSuggestion): ResolvedArubaAddress {
   const { houseNumber } = parseArubaAddressParts(raw);
+  const point = resolveArubaHouseNumberGps(suggestion.canonical, houseNumber);
   return {
     street: suggestion.canonical,
     houseNumber,
@@ -176,6 +189,8 @@ export function resolveArubaAddressSuggestion(raw: string, suggestion: DemacAddr
     neighborhood: suggestion.neighborhood,
     operationalZone: suggestion.operationalZone,
     confidence: 'verified',
+    latitude: point?.latitude,
+    longitude: point?.longitude,
   };
 }
 
