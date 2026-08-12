@@ -9,7 +9,7 @@ type PublicSiteShellProps = {
 const links = [
   ['home', '/', 'Home'],
   ['services', '/services', 'Services'],
-  ['projects', '/projects', 'Projects'],
+  ['projects', '/project-gallery', 'Projects'],
   ['about', '/about', 'About Us'],
   ['contact', '/contact', 'Contact'],
 ] as const;
@@ -57,7 +57,7 @@ export function PublicFooter() {
         <span><strong>DEMAC</strong><small>Professional Cooling Solutions</small></span>
       </div>
       <div className="public-footer-links">
-        <Link href="/services">Services</Link><Link href="/projects">Projects</Link><Link href="/about">About</Link><Link href="/contact">Contact</Link>
+        <Link href="/services">Services</Link><Link href="/project-gallery">Projects</Link><Link href="/about">About</Link><Link href="/contact">Contact</Link>
       </div>
       <div className="public-footer-office"><span>Office</span><strong>Santa Cruz 54 C · Aruba</strong></div>
       <Link className="public-staff-link" href="/login">Staff Login →</Link>
