@@ -72,12 +72,12 @@ export function BookingCopilot({ open, referenceDateKey, jobs, onClose, onUsePla
 
   if (!open) return null;
 
-  const addAssistant = (text: string) => setMessages((current) => [...current, { id: `a-${Date.now()}-${Math.random()}`, role: 'assistant', text }].slice(-16));
+  const addAssistant = (text: string) => setMessages((current) => [...current, { id: `a-${Date.now()}-${Math.random()}`, role: 'assistant' as const, text }].slice(-16));
 
   const processMessage = (raw: string) => {
     const text = raw.trim();
     if (!text) return;
-    setMessages((current) => [...current, { id: `u-${Date.now()}`, role: 'user', text }].slice(-16));
+    setMessages((current) => [...current, { id: `u-${Date.now()}`, role: 'user' as const, text }].slice(-16));
     const interpretation = interpretBookingCopilotMessage({ text, previous: intent, referenceDateKey });
     setIntent(interpretation.state);
     setPendingPlan(null);
