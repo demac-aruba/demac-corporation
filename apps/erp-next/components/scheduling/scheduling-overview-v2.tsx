@@ -11,6 +11,7 @@ import { buildOperationalWeek, currentArubaDateKey } from '../../lib/scheduling-
 import { appendLifecycleEvent, applyAppointmentScheduleChange, applySupportAssignmentMove, appointmentSnapshot, syncWorkOrderFromAppointment, validMoveCandidates, validRescheduleCandidates, validSupportMoveCandidates } from '../../lib/scheduling-appointment-lifecycle';
 import { AppointmentDetailsDrawer } from './appointment-details-drawer';
 import { BookingDrawer, type BookingIdentity, type PreferredSlot } from './booking-drawer';
+import { DragMoveConfirmation, type PendingDragMove } from './drag-move-confirmation';
 import styles from './scheduling-overview-v2.module.css';
 
 type DisplaySlot = { start: string; end: string; segment: 'am' | 'pm' };
@@ -101,6 +102,7 @@ export function SchedulingOverviewV2() {
   const [selectedAppointmentId, setSelectedAppointmentId] = useState<string | null>(null);
   const [moveArmedAppointmentId, setMoveArmedAppointmentId] = useState<string | null>(null);
   const [moveArmedAssignmentId, setMoveArmedAssignmentId] = useState<string | null>(null);
+  const [pendingDragMove, setPendingDragMove] = useState<PendingDragMove | null>(null);
   const [undoSnapshot, setUndoSnapshot] = useState<BrowserAppointmentRecord | null>(null);
   const [undoSupportAssignmentId, setUndoSupportAssignmentId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -122,6 +124,7 @@ export function SchedulingOverviewV2() {
       if (event.key === 'Escape') {
         setMoveArmedAppointmentId(null);
         setMoveArmedAssignmentId(null);
+        setPendingDragMove(null);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -156,10 +159,10 @@ export function SchedulingOverviewV2() {
     saveBrowserValue(browserKeys.workOrders, workOrders.map((order) => order.appointmentId === next.id ? syncWorkOrderFromAppointment(order, next) : order));
   };
 
-  const persistAppointmentUpdate = (next: BrowserAppointmentRecord, message: string, previousForUndo?: BrowserAppointmentRecord, supportAssignmentForUndo?: string) => {
+  const persistAppointmentUpdate = (next: BrowserAppointmentRecord, message: string, previousForUndo?: BrowserAppointmentRecord, supportAssignmentForUndo?: string, openDetails = true) => {
     setAppointments((items) => items.map((item) => item.id === next.id ? next : item));
     syncExistingWorkOrder(next);
-    setSelectedAppointmentId(next.id);
+    setSelectedAppointmentId(openDetails ? next.id : null);
     setUndoSnapshot(previousForUndo ?? null);
     setUndoSupportAssignmentId(previousForUndo ? supportAssignmentForUndo ?? null : null);
     setNotice(message);
@@ -174,6 +177,7 @@ export function SchedulingOverviewV2() {
   const openBooking = (slot?: PreferredSlot) => {
     setPreferredSlot(slot ?? {});
     setSelectedAppointmentId(null);
+    setPendingDragMove(null);
     disarmMove();
     setDrawerOpen(true);
   };
@@ -271,6 +275,7 @@ export function SchedulingOverviewV2() {
     const disarming = moveArmedAppointmentId === appointmentId && moveArmedAssignmentId === targetAssignmentId;
     setDrawerOpen(false);
     setSelectedAppointmentId(null);
+    setPendingDragMove(null);
     setMoveArmedAppointmentId(disarming ? null : appointmentId);
     setMoveArmedAssignmentId(disarming ? null : targetAssignmentId);
     const scope = target.isPrimaryAssignment ? 'linked appointment' : `support assignment (${target.quantity} unit${target.quantity === 1 ? '' : 's'})`;
@@ -285,20 +290,86 @@ export function SchedulingOverviewV2() {
       return;
     }
 
+    let customerNotificationRecommended = false;
     if (!armedAssignment.isPrimaryAssignment) {
-      const result = applySupportAssignmentMove({ record: armedAppointment, supportAssignmentId: armedAssignment.id, slot, actor, reason: 'Drag-and-drop support reassignment' });
-      if (!result.ok) {
-        setNotice(result.message);
+      const preview = applySupportAssignmentMove({ record: armedAppointment, supportAssignmentId: armedAssignment.id, slot, actor, reason: 'Drag-and-drop support reassignment' });
+      if (!preview.ok) {
+        setNotice(preview.message);
         return;
       }
-      persistAppointmentUpdate(result.record, `Support reassigned to ${slot.vanId.replace('VAN-', 'Van ')} at ${formatTime(slot.start)}. The primary appointment and customer-facing schedule were not changed.`, armedAppointment, armedAssignment.id);
-      disarmMove();
+    } else {
+      customerNotificationRecommended = applyAppointmentScheduleChange({ record: armedAppointment, slot, dateKey: activeDate, kind: 'operational_move', actor, reason: 'Drag-and-drop dispatch optimization' }).customerNotificationRecommended;
+    }
+
+    setPendingDragMove({
+      appointmentId: armedAppointment.id,
+      assignmentId: armedAssignment.id,
+      customer: armedAppointment.customer,
+      scope: armedAssignment.isPrimaryAssignment ? 'primary' : 'support',
+      fromVanId: armedAssignment.vanId,
+      fromStart: armedAssignment.start,
+      fromEnd: armedAssignment.end,
+      targetVanId: slot.vanId,
+      targetStart: slot.start,
+      targetEnd: slot.end,
+      customerNotificationRecommended,
+    });
+    setNotice(null);
+    setSelectedAppointmentId(null);
+    disarmMove();
+  };
+
+  const cancelPendingDragMove = () => {
+    setPendingDragMove(null);
+    setSelectedAppointmentId(null);
+    setNotice('Move cancelled. No scheduling changes were saved.');
+  };
+
+  const confirmPendingDragMove = () => {
+    const pending = pendingDragMove;
+    if (!pending || !canManage) return;
+    const current = appointments.find((item) => item.id === pending.appointmentId);
+    if (!current || current.status === 'cancelled') {
+      setPendingDragMove(null);
+      setNotice('This appointment is no longer available to move. Nothing was changed.');
+      return;
+    }
+    const assignment = current.assignments.find((item) => item.id === pending.assignmentId);
+    const day = buildOperationalWeek(current.dateKey).find((item) => item.dateKey === current.dateKey);
+    const targetJobs = jobs.filter((job) => job.dateKey === current.dateKey);
+    if (!assignment || !day) {
+      setPendingDragMove(null);
+      setNotice('Booking Intelligence could not revalidate this move. Nothing was changed.');
       return;
     }
 
-    const result = applyAppointmentScheduleChange({ record: armedAppointment, slot, dateKey: activeDate, kind: 'operational_move', actor, reason: 'Drag-and-drop dispatch optimization' });
-    persistAppointmentUpdate(result.record, result.customerNotificationRecommended ? 'Appointment moved. The promised time changed; customer notification is recommended.' : 'Appointment reassigned successfully. The promised customer time did not change.', armedAppointment);
-    disarmMove();
+    if (!assignment.isPrimaryAssignment) {
+      const slot = validSupportMoveCandidates(day, current, assignment.id, targetJobs).find((item) => item.vanId === pending.targetVanId && item.start === pending.targetStart);
+      if (!slot) {
+        setPendingDragMove(null);
+        setNotice('That support destination is no longer valid. The original schedule was preserved.');
+        return;
+      }
+      const result = applySupportAssignmentMove({ record: current, supportAssignmentId: assignment.id, slot, actor, reason: 'Confirmed drag-and-drop support reassignment' });
+      if (!result.ok) {
+        setPendingDragMove(null);
+        setNotice(result.message);
+        return;
+      }
+      persistAppointmentUpdate(result.record, `Support reassigned to ${slot.vanId.replace('VAN-', 'Van ')} at ${formatTime(slot.start)}. The primary appointment and customer-facing schedule were not changed.`, current, assignment.id, false);
+      setPendingDragMove(null);
+      return;
+    }
+
+    const slot = validMoveCandidates(day, current, targetJobs).find((item) => item.vanId === pending.targetVanId && item.start === pending.targetStart);
+    if (!slot) {
+      setPendingDragMove(null);
+      setNotice('That destination is no longer valid. The original schedule was preserved.');
+      return;
+    }
+    const result = applyAppointmentScheduleChange({ record: current, slot, dateKey: current.dateKey, kind: 'operational_move', actor, reason: 'Confirmed drag-and-drop dispatch optimization' });
+    persistAppointmentUpdate(result.record, result.customerNotificationRecommended ? 'Appointment moved. The promised time changed; customer notification is recommended.' : 'Appointment reassigned successfully. The promised customer time did not change.', current, undefined, false);
+    setPendingDragMove(null);
   };
 
   const undoMove = () => {
@@ -368,6 +439,7 @@ export function SchedulingOverviewV2() {
 
     {drawerOpen ? <BookingDrawer day={activeDay} jobs={activeJobs} preferred={preferredSlot} onClose={() => { setDrawerOpen(false); setPreferredSlot({}); }} onReserve={addAppointment} onApplySupportReflow={applySupportReflow} /> : null}
     {selectedAppointment ? <AppointmentDetailsDrawer appointment={selectedAppointment} allJobs={jobs} canManage={canManage} actor={actor} moveArmed={moveArmedAppointmentId === selectedAppointment.id} onArmMove={() => toggleMoveArm(selectedAppointment.id, selectedAppointment.assignments.find((item) => item.isPrimaryAssignment)?.id)} onClose={() => setSelectedAppointmentId(null)} onUpdate={persistAppointmentUpdate} /> : null}
+    {pendingDragMove ? <DragMoveConfirmation move={pendingDragMove} onCancel={cancelPendingDragMove} onConfirm={confirmPendingDragMove} /> : null}
   </section>;
 }
 
