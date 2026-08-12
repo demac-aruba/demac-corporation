@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, type ChangeEvent } from 'react';
+import { useRef, type ChangeEvent, type TouchEvent } from 'react';
 import type { OperationalDay } from '../../lib/scheduling-capacity';
 import styles from './scheduling-overview-v2.module.css';
 
@@ -46,6 +46,8 @@ function calendarIcon() {
 
 export function SchedulingWeekNavigator({ week, activeDate, today, summaries, onSelectDate }: Props) {
   const dateInputRef = useRef<HTMLInputElement>(null);
+  const weekTouchRef = useRef<{ x: number; y: number } | null>(null);
+  const suppressDayClickRef = useRef(false);
 
   const pickDate = (event: ChangeEvent<HTMLInputElement>) => {
     if (event.target.value) onSelectDate(event.target.value);
@@ -66,6 +68,30 @@ export function SchedulingWeekNavigator({ week, activeDate, today, summaries, on
     input.click();
   };
 
+  const startWeekSwipe = (event: TouchEvent<HTMLElement>) => {
+    const touch = event.touches[0];
+    if (!touch) return;
+    weekTouchRef.current = { x: touch.clientX, y: touch.clientY };
+  };
+
+  const endWeekSwipe = (event: TouchEvent<HTMLElement>) => {
+    const start = weekTouchRef.current;
+    weekTouchRef.current = null;
+    const touch = event.changedTouches[0];
+    if (!start || !touch) return;
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+    if (Math.abs(deltaX) < 48 || Math.abs(deltaX) <= Math.abs(deltaY) * 1.15) return;
+    suppressDayClickRef.current = true;
+    onSelectDate(addDays(activeDate, deltaX < 0 ? 7 : -7));
+    window.setTimeout(() => { suppressDayClickRef.current = false; }, 0);
+  };
+
+  const selectDay = (dateKey: string) => {
+    if (suppressDayClickRef.current) return;
+    onSelectDate(dateKey);
+  };
+
   return <section aria-label="Week navigation" data-week-nav style={{ marginBottom: 10 }}>
     <style>{`
       .${styles.toolbar}{display:none!important}
@@ -74,32 +100,32 @@ export function SchedulingWeekNavigator({ week, activeDate, today, summaries, on
         .${styles.pageHeader} p{display:none!important}
         .${styles.metrics}{display:none!important}
         .${styles.bookingIntelligence}{display:none!important}
-        [data-week-nav]{margin-bottom:7px!important}
-        [data-week-nav-bar]{display:grid!important;grid-template-columns:minmax(0,1fr) auto!important;gap:6px!important;margin-bottom:6px!important}
+        [data-week-nav]{width:100%!important;max-width:100%!important;min-width:0!important;overflow:hidden!important;margin-bottom:7px!important}
+        [data-week-nav-bar]{display:grid!important;grid-template-columns:minmax(0,1fr) auto!important;min-width:0!important;max-width:100%!important;gap:6px!important;margin-bottom:6px!important}
         [data-week-nav-copy]{min-width:0!important;gap:4px!important}
         [data-week-nav-copy]>div{min-width:0!important}
         [data-week-nav-copy] strong{font-size:7px!important;white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important}
         [data-week-nav-copy] span{display:none!important}
         [data-week-nav-copy]>button{width:27px!important;height:27px!important;flex:0 0 27px!important}
-        [data-week-nav-actions]{gap:4px!important}
+        [data-week-nav-actions]{min-width:0!important;gap:4px!important}
         [data-week-nav-actions]>button{height:27px!important;padding:0 7px!important}
-        .${styles.weekStrip}{grid-template-columns:repeat(7,minmax(0,1fr))!important;gap:3px!important;margin-bottom:7px!important}
-        .${styles.dayCard}{position:relative!important;min-height:54px!important;padding:6px 3px!important;border-radius:9px!important}
-        .${styles.dayCard}>div{display:flex!important;align-items:flex-start!important;flex-direction:column!important;gap:0!important}
-        .${styles.dayCard}>div>span{font-size:5px!important;line-height:1.1!important}
-        .${styles.dayCard}>div>strong{font-size:5.8px!important;line-height:1.15!important;white-space:nowrap!important}
+        .${styles.weekStrip}{grid-template-columns:repeat(7,minmax(0,1fr))!important;width:100%!important;max-width:100%!important;min-width:0!important;gap:3px!important;margin-bottom:7px!important;overflow:hidden!important;touch-action:pan-y!important;user-select:none!important}
+        .${styles.dayCard}{position:relative!important;width:100%!important;min-width:0!important;min-height:60px!important;padding:6px 3px!important;border-radius:9px!important;overflow:hidden!important}
+        .${styles.dayCard}>div{display:flex!important;align-items:flex-start!important;flex-direction:column!important;gap:1px!important;min-width:0!important}
+        .${styles.dayCard}>div>span{font-size:8px!important;line-height:1.05!important}
+        .${styles.dayCard}>div>strong{font-size:8.8px!important;line-height:1.08!important;white-space:nowrap!important}
         .${styles.dayCard}>div>b{display:none!important}
         .${styles.dayCard}>small,.${styles.dayCard}>p{display:none!important}
-        .${styles.dayCard}>span{margin-top:10px!important}
-        .${styles.dayCard}>span>b{left:50%!important;transform:translateX(-50%)!important;font-size:4.8px!important}
+        .${styles.dayCard}>span{margin-top:11px!important}
+        .${styles.dayCard}>span>b{left:50%!important;transform:translateX(-50%)!important;font-size:7px!important}
         .${styles.dayCard}>span>i{height:3px!important}
         .${styles.boardHeader}{padding:9px 10px!important}
         .${styles.boardHeader} span{display:none!important}
         .${styles.boardHeader}>div::after{content:'Swipe left/right to change van';display:block;margin-top:2px;color:var(--muted);font-size:5.8px}
-        .${styles.boardScroll}{overflow-x:auto!important;scroll-snap-type:x mandatory!important;scrollbar-width:none!important;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;touch-action:pan-x pan-y}
+        .${styles.boardScroll}{overflow-x:auto!important;max-width:100%!important;scroll-snap-type:x mandatory!important;scrollbar-width:none!important;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;touch-action:pan-x pan-y}
         .${styles.boardScroll}::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}
-        .${styles.vanGrid}{display:flex!important;grid-template-columns:none!important;gap:0!important;min-width:0!important;width:100%!important;padding:0!important}
-        .${styles.vanLane}{flex:0 0 100%!important;width:100%!important;max-width:100%!important;scroll-snap-align:start!important;scroll-snap-stop:always!important;border:0!important;border-radius:0!important}
+        .${styles.vanGrid}{display:flex!important;grid-template-columns:none!important;gap:0!important;min-width:0!important;width:100%!important;max-width:100%!important;padding:0!important}
+        .${styles.vanLane}{flex:0 0 100%!important;width:100%!important;max-width:100%!important;min-width:0!important;scroll-snap-align:start!important;scroll-snap-stop:always!important;border:0!important;border-radius:0!important}
         .${styles.vanLane}>header{padding:10px 11px!important}
         .${styles.anchorBar}>div{padding:7px 9px!important}
         .${styles.slotList}{padding:8px!important}
@@ -124,11 +150,11 @@ export function SchedulingWeekNavigator({ week, activeDate, today, summaries, on
       </div>
     </div>
 
-    <section className={styles.weekStrip} aria-label="Operational week">{week.map((day) => {
+    <section className={styles.weekStrip} data-week-strip aria-label="Operational week" onTouchStart={startWeekSwipe} onTouchEnd={endWeekSwipe} onTouchCancel={() => { weekTouchRef.current = null; }}>{week.map((day) => {
       const summary = summaries[day.dateKey] ?? { total: 0, occupied: 0, open: 0, percent: 0 };
       const labelPosition = Math.min(96, Math.max(4, summary.percent));
       const color = progressColor(summary.percent);
-      return <button type="button" key={day.dateKey} disabled={!day.isOpen} className={`${styles.dayCard} ${day.dateKey === activeDate ? styles.dayActive : ''} ${day.dateKey === today ? styles.today : ''}`} onClick={() => onSelectDate(day.dateKey)}>
+      return <button type="button" key={day.dateKey} disabled={!day.isOpen} className={`${styles.dayCard} ${day.dateKey === activeDate ? styles.dayActive : ''} ${day.dateKey === today ? styles.today : ''}`} onClick={() => selectDay(day.dateKey)}>
         <div><span>{day.weekday}</span><strong>{day.shortDate}</strong>{day.dateKey === today ? <b>TODAY</b> : null}</div>
         <small>{day.shiftLabel}</small>
         {day.isOpen ? <>
