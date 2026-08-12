@@ -21,6 +21,7 @@ export type ParsedLocationInput = {
 export type ParsedArubaAddress = {
   street: string;
   houseNumber?: string;
+  unit?: string;
 };
 
 export type ResolvedArubaAddress = ParsedArubaAddress & {
@@ -49,13 +50,43 @@ function compact(value: string) {
   return normalizeWords(value).replace(/\s+/g, '');
 }
 
+function normalizeHouseNumber(value: string) {
+  return value.replace(/\s+/g, '').replace(/-+/g, '-').toUpperCase();
+}
+
+function normalizeUnit(label: string, value: string) {
+  const cleanValue = value.trim().replace(/^#/, '');
+  const key = label.toLowerCase();
+  if (/^apt|apartment|apartamento/.test(key)) return `Apt ${cleanValue}`;
+  if (/^unit|unidad/.test(key)) return `Unit ${cleanValue}`;
+  if (/^suite/.test(key)) return `Suite ${cleanValue}`;
+  if (/^piso|floor/.test(key)) return `Floor ${cleanValue}`;
+  if (/^door|deur/.test(key)) return `Door ${cleanValue}`;
+  return `${label} ${cleanValue}`.trim();
+}
+
 export function parseArubaAddressParts(value: string): ParsedArubaAddress {
   const trimmed = value.trim();
-  const match = trimmed.match(/^(.*?)(?:\s+(\d+[a-z-]*))?\s*$/i);
-  return {
-    street: (match?.[1] ?? trimmed).trim(),
-    houseNumber: match?.[2]?.trim() || undefined,
-  };
+  if (!trimmed) return { street: '' };
+
+  let base = trimmed;
+  let unit: string | undefined;
+  const unitMatch = base.match(/\s+(apt(?:\.?|artment)?|apartment|apartamento|unit|unidad|suite|door|deur|piso|floor)\s*#?\s*([a-z0-9-]+)\s*$/i);
+  if (unitMatch) {
+    unit = normalizeUnit(unitMatch[1], unitMatch[2]);
+    base = base.slice(0, unitMatch.index).trim();
+  }
+
+  const houseMatch = base.match(/^(.*?)(?:\s+(\d+(?:\s*-?\s*[a-z])?))\s*$/i);
+  const street = (houseMatch?.[1] ?? base).trim();
+  const houseNumber = houseMatch?.[2] ? normalizeHouseNumber(houseMatch[2]) : undefined;
+
+  return { street, houseNumber, unit };
+}
+
+export function formatArubaServiceAddress(parts: Pick<ParsedArubaAddress, 'street' | 'houseNumber' | 'unit'>) {
+  const streetAndHouse = `${parts.street.trim()}${parts.houseNumber?.trim() ? ` ${parts.houseNumber.trim()}` : ''}`.trim();
+  return `${streetAndHouse}${parts.unit?.trim() ? `, ${parts.unit.trim()}` : ''}`.trim();
 }
 
 function withoutHouseNumber(value: string) {
@@ -164,8 +195,8 @@ export function suggestArubaServiceAddresses(query: string, limit = 6): DemacAdd
 }
 
 export function applyArubaAddressSuggestion(raw: string, suggestion: Pick<DemacAddressSuggestion, 'canonical'>) {
-  const { houseNumber } = parseArubaAddressParts(raw);
-  return `${suggestion.canonical}${houseNumber ? ` ${houseNumber}` : ''}`;
+  const { houseNumber, unit } = parseArubaAddressParts(raw);
+  return formatArubaServiceAddress({ street: suggestion.canonical, houseNumber, unit });
 }
 
 export function resolveArubaHouseNumberGps(street: string, houseNumber?: string): ParsedLocationInput | null {
@@ -178,12 +209,13 @@ export function resolveArubaHouseNumberGps(street: string, houseNumber?: string)
 }
 
 export function resolveArubaAddressSuggestion(raw: string, suggestion: DemacAddressSuggestion): ResolvedArubaAddress {
-  const { houseNumber } = parseArubaAddressParts(raw);
+  const { houseNumber, unit } = parseArubaAddressParts(raw);
   const point = resolveArubaHouseNumberGps(suggestion.canonical, houseNumber);
   return {
     street: suggestion.canonical,
     houseNumber,
-    address: `${suggestion.canonical}${houseNumber ? ` ${houseNumber}` : ''}`,
+    unit,
+    address: formatArubaServiceAddress({ street: suggestion.canonical, houseNumber, unit }),
     sector: suggestion.demacSector,
     source: suggestion.source,
     neighborhood: suggestion.neighborhood,
