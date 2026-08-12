@@ -12,6 +12,7 @@ import { appendLifecycleEvent, applyAppointmentScheduleChange, applySupportAssig
 import { AppointmentDetailsDrawer } from './appointment-details-drawer';
 import { BookingDrawer, type BookingIdentity, type PreferredSlot } from './booking-drawer';
 import { DragMoveConfirmation, type PendingDragMove } from './drag-move-confirmation';
+import { SchedulingWeekNavigator } from './scheduling-week-navigator';
 import styles from './scheduling-overview-v2.module.css';
 
 type DisplaySlot = { start: string; end: string; segment: 'am' | 'pm' };
@@ -132,6 +133,7 @@ export function SchedulingOverviewV2() {
   }, []);
 
   const jobs = useMemo(() => appointments.flatMap(appointmentAssignments), [appointments]);
+  const weekSummaries = useMemo(() => Object.fromEntries(week.map((day) => [day.dateKey, occupancyForDay(day, jobs)])), [jobs, week]);
   const activeDay = week.find((day) => day.dateKey === activeDate) ?? week[0];
   const activeJobs = jobs.filter((job) => job.dateKey === activeDate);
   const activeSlots = displaySlotsForDay(activeDay);
@@ -172,6 +174,14 @@ export function SchedulingOverviewV2() {
   const disarmMove = () => {
     setMoveArmedAppointmentId(null);
     setMoveArmedAssignmentId(null);
+  };
+
+  const selectScheduleDate = (dateKey: string) => {
+    setDrawerOpen(false);
+    setSelectedAppointmentId(null);
+    setPendingDragMove(null);
+    disarmMove();
+    setActiveDate(dateKey);
   };
 
   const openBooking = (slot?: PreferredSlot) => {
@@ -425,7 +435,7 @@ export function SchedulingOverviewV2() {
 
     {notice ? <div className={styles.notice}><span>{notice}</span><div style={{ display: 'flex', gap: 7 }}>{undoSnapshot ? <button type="button" onClick={undoMove} style={{ fontSize: 7, fontWeight: 900 }}>Undo Move</button> : null}<button type="button" onClick={() => setNotice(null)}>×</button></div></div> : null}
 
-    <section className={styles.weekStrip} aria-label="Operational week">{week.map((day) => { const summary = occupancyForDay(day, jobs); return <button type="button" key={day.dateKey} disabled={!day.isOpen} className={`${styles.dayCard} ${day.dateKey === activeDate ? styles.dayActive : ''} ${day.dateKey === today ? styles.today : ''}`} onClick={() => setActiveDate(day.dateKey)}><div><span>{day.weekday}</span><strong>{day.shortDate}</strong>{day.dateKey === today ? <b>TODAY</b> : null}</div><small>{day.shiftLabel}</small>{day.isOpen ? <><i><em style={{ width: `${summary.percent}%` }} /></i><p>{summary.occupied}/{summary.total} spots filled · {summary.open} open</p></> : <p>Operationally closed</p>}</button>; })}</section>
+    <SchedulingWeekNavigator week={week} activeDate={activeDate} today={today} summaries={weekSummaries} onSelectDate={selectScheduleDate} />
 
     <div className={styles.metrics}><article><span>Confirmed</span><strong>{confirmed}</strong><small>{activeDay.weekday} {activeDay.shortDate}</small><i style={{ width: `${Math.min(100, activeOccupancy.percent)}%` }} /></article><article><span>Temporary Holds</span><strong>{holds}</strong><small>Awaiting confirmation</small><i style={{ width: `${Math.min(100, holds * 14)}%` }} /></article><article><span>Need Attention</span><strong className={attention ? styles.metricWarning : ''}>{attention}</strong><small>At risk or blocked assignments</small><i style={{ width: `${Math.min(100, attention * 16)}%` }} /></article><article><span>Open Spots</span><strong className={activeOccupancy.open ? styles.metricGood : ''}>{activeOccupancy.open}</strong><small>{activeOccupancy.occupied}/{activeOccupancy.total} occupied today</small><i style={{ width: `${activeOccupancy.total ? Math.round((activeOccupancy.open / activeOccupancy.total) * 100) : 0}%` }} /></article></div>
 
