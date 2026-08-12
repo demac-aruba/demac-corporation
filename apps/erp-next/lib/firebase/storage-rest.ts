@@ -20,7 +20,7 @@ function storageMediaUrl(path: string) {
   return `https://firebasestorage.googleapis.com/v0/b/${firebaseClientConfig.storageBucket}/o/${encodeURIComponent(path)}?alt=media`;
 }
 
-async function uploadMedia(path: string, body: Blob | string, contentType: string, mediaKind: string) {
+async function uploadMedia(path: string, body: Blob | string, contentType: string) {
   if (!isFirebaseClientConfigured || !firebaseClientConfig.storageBucket) {
     throw new Error('Firebase Storage is not configured for this deployment.');
   }
@@ -31,9 +31,6 @@ async function uploadMedia(path: string, body: Blob | string, contentType: strin
     headers: {
       Authorization: `Bearer ${session.idToken}`,
       'Content-Type': contentType,
-      'X-Goog-Meta-uploadedByUid': session.uid,
-      'X-Goog-Meta-mediaKind': mediaKind,
-      'Cache-Control': mediaKind === 'website-config' ? 'public,max-age=30' : 'public,max-age=31536000,immutable',
     },
     body,
   });
@@ -48,14 +45,14 @@ export async function uploadPublicWebsiteImage(file: File, scope = 'hero'): Prom
   if (!file.type.startsWith('image/')) throw new Error('Choose an image file.');
   if (file.size > 8 * 1024 * 1024) throw new Error('Website images must be smaller than 8 MB.');
   const path = `public-website/${scope}/${Date.now()}-${cleanFileName(file.name)}`;
-  const mediaUrl = await uploadMedia(path, file, file.type || 'application/octet-stream', 'website-image');
+  const mediaUrl = await uploadMedia(path, file, file.type || 'application/octet-stream');
   return { path, mediaUrl };
 }
 
 export async function publishPublicWebsiteConfig(content: PublicWebsiteContent) {
   const payload = JSON.stringify(content);
   if (new Blob([payload]).size > 512 * 1024) throw new Error('Published website configuration is too large.');
-  return uploadMedia(PUBLIC_WEBSITE_CONFIG_PATH, payload, 'application/json', 'website-config');
+  return uploadMedia(PUBLIC_WEBSITE_CONFIG_PATH, payload, 'application/json');
 }
 
 export function publicWebsiteConfigUrl() {
