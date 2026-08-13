@@ -2,6 +2,18 @@
   isolation: isolate;
 }
 
+.public-hero-slider.is-loading {
+  min-height: 530px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 18% 28%, rgba(31,158,255,.10), transparent 30rem),
+    linear-gradient(105deg, #eff8ff 0%, #f9fcff 44%, #fff 78%);
+}
+
+.public-hero-loading-shell {
+  min-height: 530px;
+}
+
 .public-hero-media {
   position: absolute;
   inset: 0;
@@ -129,6 +141,11 @@
 }
 
 @media (max-width: 720px) {
+  .public-hero-slider.is-loading,
+  .public-hero-loading-shell {
+    min-height: 575px;
+  }
+
   .public-hero-media-slide img {
     object-position: var(--hero-mobile-position, 64% center);
   }
