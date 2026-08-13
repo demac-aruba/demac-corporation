@@ -1,3 +1,4 @@
+import { BrowserReportDelivery } from '../../../components/communications/browser-report-delivery';
 import { reportCatalog } from '@/lib/management-operations';
 
 export default function ReportsPage() {
@@ -7,6 +8,8 @@ export default function ReportsPage() {
         <div><div className="eyebrow">Reporting & Traceability</div><h1>Reports & Intelligence</h1><p>Role-specific reports that reconcile to source transactions, expose exceptions and support drill-down instead of disconnected spreadsheets.</p></div>
         <div className="page-actions"><button className="btn" type="button">Scheduled Reports</button><button className="btn primary" type="button">+ Build Report</button></div>
       </section>
+
+      <BrowserReportDelivery />
 
       <section className="mo-metric-grid">
         <article><span>Standard Reports</span><strong>18</strong><small>Across all modules</small></article>
