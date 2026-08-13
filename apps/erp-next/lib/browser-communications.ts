@@ -3,6 +3,8 @@ import type { Conversation, ConversationMessage, ConversationStatus, Operator, O
 import { getFirestoreDocument, listFirestoreCollection, saveFirestoreDocument, updateFirestoreDocument } from './firebase/firestore-rest';
 
 export type WhatsAppProvider = 'wacli' | 'meta';
+type ConversationLanguage = Conversation['language'];
+type OperatorLanguage = Operator['languages'][number];
 
 export type LiveConversation = Conversation & {
   ownerUserId?: string | null;
@@ -22,8 +24,9 @@ export type LiveOperator = Operator & {
   lastSeenAt?: string;
 };
 
-type StoredConversation = Omit<LiveConversation, 'messages'> & {
+type StoredConversation = Omit<LiveConversation, 'messages' | 'language'> & {
   id: string;
+  language?: string;
   recentMessages?: ConversationMessage[];
 };
 
@@ -34,7 +37,7 @@ type StoredOperatorPresence = {
   queues?: Queue[];
   languages?: string[];
   activeChats?: number;
-  activeVoiceCall?: boolean;
+  activeVoiceCall?: boolean | string;
   role?: string;
   lastSeenAt?: string;
 };
@@ -46,6 +49,20 @@ type CommunicationSettings = {
 
 function safeString(value: unknown, fallback = '') {
   return typeof value === 'string' ? value : fallback;
+}
+
+function normalizeLanguage(value: unknown): ConversationLanguage {
+  const normalized = safeString(value).trim().toLowerCase();
+  if (normalized === 'papiamento') return 'Papiamento';
+  if (normalized === 'spanish' || normalized === 'español' || normalized === 'espanol') return 'Spanish';
+  if (normalized === 'dutch' || normalized === 'nederlands') return 'Dutch';
+  return 'English';
+}
+
+function normalizeOperatorLanguages(values: unknown): OperatorLanguage[] {
+  if (!Array.isArray(values)) return ['Papiamento', 'Spanish', 'English'];
+  const normalized = values.map(normalizeLanguage);
+  return [...new Set(normalized)];
 }
 
 function normalizeMessage(message: ConversationMessage): ConversationMessage {
@@ -69,9 +86,10 @@ function normalizeConversation(stored: StoredConversation): LiveConversation {
     status: stored.status ?? 'new',
     queue: stored.queue ?? 'general',
     unread: Number(stored.unread || 0),
-    language: safeString(stored.language, 'unknown'),
+    language: normalizeLanguage(stored.language),
     aiDisposition: stored.aiDisposition ?? 'human_active',
     lastActivityAt: safeString(stored.lastActivityAt, stored.updatedAt || ''),
+    vip: Boolean(stored.vip),
     messages,
   };
 }
@@ -103,9 +121,9 @@ export async function loadCommunicationWorkspace() {
       name: operator.displayName || 'DEMAC operator',
       presence: operator.presence ?? 'offline',
       queues: Array.isArray(operator.queues) ? operator.queues : ['general'],
-      languages: Array.isArray(operator.languages) ? operator.languages : ['Papiamento', 'Spanish', 'English'],
+      languages: normalizeOperatorLanguages(operator.languages),
       activeChats: Number(operator.activeChats || 0),
-      activeVoiceCall: Boolean(operator.activeVoiceCall),
+      activeVoiceCall: operator.activeVoiceCall ? 'active' : undefined,
       role: operator.role,
       lastSeenAt: operator.lastSeenAt,
     }))
