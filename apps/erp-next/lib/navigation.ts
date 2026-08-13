@@ -5,6 +5,7 @@ export type NavigationItem = {
   href: string;
   short: string;
   roles: UserRole[];
+  openInNewTab?: boolean;
 };
 
 export type NavigationGroup = {
@@ -39,7 +40,7 @@ export const navigationGroups: NavigationGroup[] = [
   {
     label: 'Communications',
     items: [
-      { label: 'Communication Center', href: '/communications', short: 'CO', roles: ['super_admin', 'operations', 'office_operator', 'sales'] },
+      { label: 'Communication Center', href: '/communication-center', short: 'CO', openInNewTab: true, roles: ['super_admin', 'operations', 'office_operator', 'sales'] },
       { label: 'AI Customer Agent', href: '/customer-ai', short: 'AI', roles: ['super_admin', 'operations'] },
       { label: 'Escalations', href: '/escalations', short: 'EC', roles: ['super_admin', 'operations', 'office_operator'] },
     ],
