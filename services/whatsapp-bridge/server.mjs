@@ -78,7 +78,7 @@ async function readBody(request) {
 function validateRecipient(value) {
   const recipient = String(value || '').trim();
   if (!recipient || recipient.length > 160) throw new Error('A WhatsApp recipient is required.');
-  if (/[@]/.test(recipient) && !/@(s\.whatsapp\.net|g\.us|newsletter)$/.test(recipient)) {
+  if (/[@]/.test(recipient) && !/@(s\.whatsapp\.net|lid|g\.us|newsletter)$/.test(recipient)) {
     throw new Error('Unsupported WhatsApp JID.');
   }
   if (!/@/.test(recipient) && !/^\+?[0-9() .-]{8,24}$/.test(recipient)) {
