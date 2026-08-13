@@ -1,0 +1,23 @@
+[Unit]
+Description=DEMAC WhatsApp continuous wacli sync
+After=network-online.target demac-whatsapp-bridge.service
+Wants=network-online.target
+Requires=demac-whatsapp-bridge.service
+
+[Service]
+Type=simple
+User=demac-wacli
+Group=demac-wacli
+EnvironmentFile=/etc/demac-whatsapp-bridge.env
+ExecStart=/usr/local/bin/wacli sync --follow --max-reconnect 0 --stale-threshold 2m --presence-mode quiet --send-spacing 2s-5s --max-db-size 2GB --webhook http://127.0.0.1:8787/v1/events --webhook-secret ${WACLI_WEBHOOK_SECRET} --webhook-events message,receipt
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/demac-wacli
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
