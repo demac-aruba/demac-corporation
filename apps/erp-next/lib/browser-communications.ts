@@ -121,7 +121,7 @@ export async function loadCommunicationWorkspace() {
       userId: operator.id,
       name: operator.displayName || 'DEMAC operator',
       presence: operator.presence ?? 'offline',
-      queues: Array.isArray(operator.queues) ? operator.queues : ['general'],
+      queues: operator.queues?.length ? operator.queues : (['general'] as Queue[]),
       languages: normalizeOperatorLanguages(operator.languages),
       activeChats: Number(operator.activeChats || 0),
       activeVoiceCall: operator.activeVoiceCall ? 'active' : undefined,
