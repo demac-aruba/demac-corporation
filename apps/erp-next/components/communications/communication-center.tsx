@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   aiRiskDecision,
   routeConversation,
@@ -11,12 +11,14 @@ import {
 import {
   assignConversation,
   claimConversation,
+  loadCommunicationCustomerContext,
   loadCommunicationWorkspace,
   markConversationRead,
   queueWhatsAppText,
   saveInternalCommunicationNote,
   touchCommunicationPresence,
   updateConversationStatus,
+  type CommunicationCustomerContext,
   type LiveConversation,
   type LiveOperator,
   type WhatsAppProvider,
@@ -28,6 +30,7 @@ import styles from './communication-center.module.css';
 type Mode = 'communications' | 'ai' | 'escalations';
 type InboxScope = 'pending' | 'mine' | 'unassigned' | 'team';
 type VisualState = 'overdue' | 'needs_reply' | 'assigned' | 'unassigned' | 'escalated' | 'resolved';
+type ContextTab = 'overview' | 'properties' | 'equipment' | 'actions';
 
 const queueLabels: Array<{ value: 'all' | Queue; label: string }> = [
   { value: 'all', label: 'All queues' },
@@ -119,7 +122,20 @@ function messageAuthorLabel(message: ConversationMessage, customer: string) {
   return message.author || (message.role === 'ai' ? 'DEMAC AI' : 'DEMAC operator');
 }
 
-export function CommunicationCenter({ mode = 'communications' }: { mode?: Mode }) {
+function customerActionUrl(path: string, customer: CommunicationCustomerContext | null, selected: LiveConversation | null, extra: Record<string, string> = {}) {
+  const query = new URLSearchParams({ source: 'communication-center', ...extra });
+  if (customer?.id) query.set('customerId', customer.id);
+  if (customer?.properties[0]?.id) query.set('propertyId', customer.properties[0].id);
+  if (selected?.id) query.set('conversationId', selected.id);
+  if (selected?.phone) query.set('phone', selected.phone);
+  return `${path}?${query.toString()}`;
+}
+
+function Metric({ label, value, tone, hint }: { label: string; value: number; tone?: 'danger' | 'warning' | 'success'; hint: string }) {
+  return <article className={styles.metricCard} data-tone={tone ?? 'neutral'}><span>{label}</span><strong>{value}</strong><small>{hint}</small></article>;
+}
+
+export function CommunicationCenter({ mode = 'communications', standalone = false }: { mode?: Mode; standalone?: boolean }) {
   const [principal, setPrincipal] = useState<AuthPrincipal | null>(null);
   const [conversations, setConversations] = useState<LiveConversation[]>([]);
   const [operators, setOperators] = useState<LiveOperator[]>([]);
@@ -134,7 +150,11 @@ export function CommunicationCenter({ mode = 'communications' }: { mode?: Mode }
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [assignmentTarget, setAssignmentTarget] = useState('');
-  const [showDetails, setShowDetails] = useState(mode !== 'communications');
+  const [showDetails, setShowDetails] = useState(standalone || mode !== 'communications');
+  const [customerContext, setCustomerContext] = useState<CommunicationCustomerContext | null>(null);
+  const [contextLoading, setContextLoading] = useState(false);
+  const [contextTab, setContextTab] = useState<ContextTab>('overview');
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   const refresh = useCallback(async () => {
     const workspace = await loadCommunicationWorkspace();
@@ -189,9 +209,12 @@ export function CommunicationCenter({ mode = 'communications' }: { mode?: Mode }
 
   const manager = isManager(principal);
   const normalizedSearch = search.trim().toLowerCase();
+  const activeCount = conversations.filter((conversation) => !['resolved', 'closed'].includes(conversation.status)).length;
   const pendingCount = conversations.filter(needsDemacReply).length;
   const myCount = principal ? conversations.filter((conversation) => conversation.ownerUserId === principal.userId && !['resolved', 'closed'].includes(conversation.status)).length : 0;
   const unassignedCount = conversations.filter((conversation) => !conversation.ownerUserId && !['resolved', 'closed'].includes(conversation.status)).length;
+  const escalatedCount = conversations.filter((conversation) => conversation.status === 'escalated').length;
+  const onlineCount = operators.filter((operator) => operator.presence !== 'offline').length;
 
   const visible = useMemo(() => conversations
     .filter((conversation) => queue === 'all' || conversation.queue === queue)
@@ -222,6 +245,23 @@ export function CommunicationCenter({ mode = 'communications' }: { mode?: Mode }
   const selectedOwnedByColleague = Boolean(selected && selected.ownerUserId && principal && selected.ownerUserId !== principal.userId);
   const canReadBody = Boolean(selected && (manager || selectedOwnedByMe || selectedUnassigned));
   const canReply = Boolean(selected && principal && (selectedOwnedByMe || selectedUnassigned));
+
+  useEffect(() => {
+    let cancelled = false;
+    setCustomerContext(null);
+    setContextTab('overview');
+    if (!selected) return () => { cancelled = true; };
+    setContextLoading(true);
+    loadCommunicationCustomerContext(selected)
+      .then((context) => { if (!cancelled) setCustomerContext(context); })
+      .catch(() => { if (!cancelled) setCustomerContext(null); })
+      .finally(() => { if (!cancelled) setContextLoading(false); });
+    return () => { cancelled = true; };
+  }, [selected?.id]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ block: 'end' });
+  }, [selected?.id, selected?.messages.length]);
 
   const aiDecision = selected ? aiRiskDecision({
     intent: selected.queue,
@@ -328,26 +368,44 @@ export function CommunicationCenter({ mode = 'communications' }: { mode?: Mode }
     }
   };
 
+  const openAction = (path: string, extra: Record<string, string> = {}) => {
+    const url = customerActionUrl(path, customerContext, selected, extra);
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
   const heading = mode === 'ai' ? 'AI Customer Agent' : mode === 'escalations' ? 'Escalations' : 'Communication Center';
   const subtitle = mode === 'communications' ? 'WhatsApp team inbox for customer conversations, ownership and follow-up.' : mode === 'ai' ? 'AI-assisted customer conversations with human ownership controls.' : 'Conversations that require human exception handling.';
+  const detailsVisible = standalone || showDetails;
 
-  return <section className={styles.page}>
+  return <section className={`${styles.page} ${standalone ? styles.standalone : ''}`}>
     <div className={styles.topLine}>
       <div className={styles.titleBlock}>
-        <div className={styles.titleRow}><h1>{heading}</h1><span className={`${styles.liveBadge} ${provider === 'wacli' ? styles.testBadge : ''}`}>{provider === 'wacli' ? 'TEST · WACLI' : 'LIVE · META'}</span></div>
-        <p>{subtitle}</p>
+        <div className={styles.titleRow}>{standalone ? <span className={styles.brandIcon}>WA</span> : null}<div><h1>{standalone ? 'DEMAC Communication Center' : heading}</h1><p>{subtitle}</p></div><span className={`${styles.liveBadge} ${provider === 'wacli' ? styles.testBadge : ''}`}>{provider === 'wacli' ? 'TEST · WACLI' : 'LIVE · META'}</span></div>
       </div>
-      <div className={styles.headerActions}><span className={styles.syncState}><i /> Auto-sync</span><button className={styles.refreshButton} type="button" onClick={() => refresh().catch(() => undefined)} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</button></div>
+      <div className={styles.headerActions}>
+        <span className={styles.syncState}><i /> Auto-sync</span>
+        {standalone && principal ? <span className={styles.operatorIdentity}><b>{initials(principal.displayName)}</b><span>{principal.displayName}</span></span> : null}
+        {standalone ? <a className={styles.erpLink} href="/dashboard" target="_blank" rel="noopener noreferrer">ERP ↗</a> : null}
+        <button className={styles.refreshButton} type="button" onClick={() => refresh().catch(() => undefined)} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</button>
+      </div>
     </div>
+
+    {standalone ? <div className={styles.standaloneMetrics}>
+      <Metric label="Active conversations" value={activeCount} hint="Open customer threads" />
+      <Metric label="Needs reply" value={pendingCount} tone={pendingCount ? 'warning' : undefined} hint="Waiting on DEMAC" />
+      <Metric label="Unassigned" value={unassignedCount} tone={unassignedCount ? 'warning' : undefined} hint="No operator yet" />
+      <Metric label="Operators online" value={onlineCount} tone="success" hint="Active presence" />
+      <Metric label="Escalated" value={escalatedCount} tone={escalatedCount ? 'danger' : undefined} hint="Exception queue" />
+    </div> : null}
 
     {provider === 'wacli' && mode === 'communications' ? <div className={styles.testNotice}><strong>TEST CONNECTION</strong><span>Personal linked WhatsApp device. Production customer traffic remains on the official channel until cutover.</span></div> : null}
     {error ? <div className={styles.notice}><strong>Communication Center</strong><span>{error}</span></div> : null}
 
-    <div className={`${styles.workspace} ${showDetails ? styles.withDetails : ''}`}>
+    <div className={`${styles.workspace} ${detailsVisible ? styles.withDetails : ''}`}>
       <aside className={`${styles.panel} ${styles.inboxPanel}`}>
         <div className={styles.inboxHeader}><div><strong>WhatsApp Inbox</strong><span>{loading ? 'Loading conversations…' : `${visible.length} conversations shown`}</span></div><span className={styles.inboxCount}>{conversations.length}</span></div>
         <div className={styles.inboxTools}>
-          <label className={styles.inboxSearch}><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name, phone or message" aria-label="Search conversations" />{search ? <button type="button" onClick={() => setSearch('')} aria-label="Clear conversation search">×</button> : null}</label>
+          <label className={styles.inboxSearch}><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search conversations" aria-label="Search conversations" />{search ? <button type="button" onClick={() => setSearch('')} aria-label="Clear conversation search">×</button> : null}</label>
           <select className={styles.queueSelect} value={queue} onChange={(event) => setQueue(event.target.value as 'all' | Queue)} aria-label="Filter by queue">{queueLabels.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
         </div>
         <div className={styles.scopeTabs}>
@@ -377,7 +435,7 @@ export function CommunicationCenter({ mode = 'communications' }: { mode?: Mode }
         {!selected ? <div className={styles.emptyLarge}><span className={styles.emptyIcon}>WA</span><strong>{loading ? 'Loading Communication Center…' : 'No conversation selected'}</strong><p>Choose a conversation from the inbox to start working.</p></div> : <>
           <div className={styles.chatHeader}>
             <div className={styles.chatIdentity}><span className={styles.chatAvatar}>{initials(selected.customer)}</span><div><h2>{selected.customer}</h2><p>{selected.phone || selected.chatJid || 'WhatsApp identity pending'}{selected.property ? ` · ${selected.property}` : ''}</p></div></div>
-            <div className={styles.chatHeaderActions}><span className={styles.ownerLabel}>{selected.owner ? `Assigned to ${selected.owner}` : 'Unassigned'}</span><button type="button" className={styles.takeover} onClick={takeOver} disabled={busy || selectedOwnedByMe}>{selectedOwnedByMe ? 'Owned by me' : selectedOwnedByColleague ? 'Take over' : 'Take conversation'}</button><button type="button" className={styles.detailsButton} onClick={() => setShowDetails((current) => !current)}>{showDetails ? 'Hide details' : 'Customer details'}</button></div>
+            <div className={styles.chatHeaderActions}><span className={styles.ownerLabel}>{selected.owner ? `Assigned to ${selected.owner}` : 'Unassigned'}</span><button type="button" className={styles.takeover} onClick={takeOver} disabled={busy || selectedOwnedByMe}>{selectedOwnedByMe ? 'Owned by me' : selectedOwnedByColleague ? 'Take over' : 'Take conversation'}</button>{!standalone ? <button type="button" className={styles.detailsButton} onClick={() => setShowDetails((current) => !current)}>{showDetails ? 'Hide details' : 'Customer details'}</button> : null}</div>
           </div>
 
           <div className={styles.workflowBar}>
@@ -395,26 +453,52 @@ export function CommunicationCenter({ mode = 'communications' }: { mode?: Mode }
               <p>{message.text}</p>
               <div className={styles.messageFooter}><time>{messageTime(message.at)}</time>{message.role === 'operator' ? <span>{message.id.startsWith('local-') ? 'Sending…' : 'Sent ✓'}</span> : null}</div>
             </article>) : <article className={`${styles.message} ${styles.system}`}><span className={styles.messageAuthor}>Conversation ready</span><p>No synchronized messages are stored in the recent window yet.</p></article>}
+            <div ref={messagesEndRef} />
           </div>
 
           <div className={`${styles.composer} ${internal ? styles.internalComposer : ''}`}>
-            <div className={styles.composerMode}><button type="button" onClick={() => setInternal(false)} className={!internal ? styles.active : ''} disabled={!canReadBody}>Customer reply</button><button type="button" onClick={() => setInternal(true)} className={internal ? styles.active : ''} disabled={!canReadBody}>Internal note</button><span>{internal ? 'Visible only to DEMAC staff' : principal ? `Sending as ${principal.displayName}` : 'WhatsApp message'}</span></div>
-            <div className={styles.composerBox}><textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (!busy && draft.trim() && (internal || canReply)) void send(); } }} disabled={!canReadBody || busy} placeholder={internal ? 'Write an internal note…' : canReply ? 'Type a reply to the customer…' : 'Take ownership before replying…'} /><button type="button" className={styles.sendButton} onClick={send} disabled={busy || !draft.trim() || (!internal && !canReply)}>{busy ? 'Sending…' : internal ? 'Save note' : 'Send'}</button></div>
+            <div className={styles.composerMode}><button type="button" onClick={() => setInternal(false)} className={!internal ? styles.active : ''} disabled={!canReadBody}>Reply</button><button type="button" onClick={() => setInternal(true)} className={internal ? styles.active : ''} disabled={!canReadBody}>Internal note</button><span>{internal ? 'Visible only to DEMAC staff' : principal ? `Sending as ${principal.displayName}` : 'WhatsApp message'}</span></div>
+            <div className={styles.composerBox}>
+              <div className={styles.mediaTools}><button type="button" className={styles.mediaButton} disabled title="File sending will be activated after full-screen UX acceptance." aria-label="Attach file">＋</button><button type="button" className={styles.mediaButton} disabled title="Voice notes will be activated after full-screen UX acceptance." aria-label="Record voice note">●</button></div>
+              <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (!busy && draft.trim() && (internal || canReply)) void send(); } }} disabled={!canReadBody || busy} placeholder={internal ? 'Write an internal note…' : canReply ? 'Type a message…' : 'Take ownership before replying…'} />
+              <button type="button" className={styles.sendButton} onClick={send} disabled={busy || !draft.trim() || (!internal && !canReply)}>{busy ? 'Sending…' : internal ? 'Save note' : 'Send'}</button>
+            </div>
             <div className={styles.composerHint}><span>Enter to send · Shift+Enter for new line</span><span>{internal ? 'Internal collaboration' : 'WhatsApp'}</span></div>
           </div>
         </>}
       </main>
 
-      {showDetails ? <aside className={`${styles.panel} ${styles.contextPanel}`}>
-        <div className={styles.contextHeader}><div><strong>Customer details</strong><span>Context for this conversation</span></div>{selected ? <span className={styles.contextChannel}>WhatsApp</span> : null}</div>
+      {detailsVisible ? <aside className={`${styles.panel} ${styles.contextPanel}`}>
+        <div className={styles.contextHeader}><div><strong>Customer 360</strong><span>CRM & operational context</span></div>{selected ? <span className={styles.contextChannel}>WhatsApp</span> : null}</div>
         {selected ? <div className={styles.context}>
-          <section className={styles.customerCard}><span className={styles.largeAvatar}>{initials(selected.customer)}</span><div><strong>{selected.customer}</strong><p>{selected.phone || selected.chatJid || 'Phone not resolved'}</p><small>{selected.customerId ? 'Matched CRM customer' : 'New / unresolved contact'}</small></div></section>
-          <section><span>Assignment</span><strong>{selected.owner ?? 'Unassigned'}</strong><p>{statusLabel(selected.status)} · {selected.queue}</p></section>
-          <section><span>Customer context</span><dl><div><dt>Property</dt><dd>{selected.property ?? 'Not linked'}</dd></div><div><dt>Equipment</dt><dd>{selected.equipment ?? 'Not linked'}</dd></div><div><dt>Language</dt><dd>{selected.language}</dd></div></dl></section>
-          {selected.nextAction ? <section><span>Next action</span><strong>{selected.nextAction}</strong><p>{selected.nextActionDue ? `Due ${selected.nextActionDue}` : 'No due date.'}</p></section> : null}
-          {mode !== 'communications' ? <section><span>Routing</span><strong>{selected.routeReason ?? (recommendedOperator ? `Recommended: ${recommendedOperator.name}` : 'Manual / queue routing')}</strong><p>{aiDecision ? `${aiDecision.mode === 'ai' ? 'AI may continue' : 'Human required'} · ${aiDecision.reason}` : 'Waiting for more context.'}</p></section> : null}
-          <details className={styles.details}><summary>Ownership & collision control</summary><p>{selected.lockedBy ? `Reply lock: ${selected.lockedBy}` : `Current owner: ${selected.owner ?? 'Unassigned'}`}</p><small>Operators cannot reply to a colleague-owned chat until takeover. Managers can reassign.</small></details>
-          <details className={styles.details}><summary>Operator presence</summary><div className={styles.operators}>{operators.length ? operators.map((operator) => <article className={styles.operator} key={operator.id}><span>{initials(operator.name)}</span><div><strong>{operator.name}</strong><small>{operator.activeChats} chat{operator.activeChats === 1 ? '' : 's'}{operator.activeVoiceCall ? ' · on voice call' : ''}</small></div><b>{operator.presence.replaceAll('_', ' ')}</b></article>) : <div className={styles.empty}><span>No other operators online.</span></div>}</div></details>
+          <section className={styles.customerCard}><span className={styles.largeAvatar}>{initials(customerContext?.displayName || selected.customer)}</span><div><strong>{customerContext?.displayName || selected.customer}</strong><p>{customerContext?.phone || selected.phone || selected.chatJid || 'Phone not resolved'}</p>{customerContext?.email ? <p>{customerContext.email}</p> : null}<small>{contextLoading ? 'Matching CRM…' : customerContext ? 'Matched CRM customer' : 'WhatsApp contact · not linked to CRM'}</small></div></section>
+
+          <nav className={styles.contextTabs} aria-label="Customer context sections">
+            {(['overview', 'properties', 'equipment', 'actions'] as ContextTab[]).map((tab) => <button key={tab} type="button" className={contextTab === tab ? styles.contextTabActive : ''} onClick={() => setContextTab(tab)}>{tab === 'overview' ? 'Info' : tab === 'properties' ? 'Properties' : tab === 'equipment' ? 'A/C' : 'Actions'}</button>)}
+          </nav>
+
+          {contextTab === 'overview' ? <div className={styles.contextBody}>
+            <section className={styles.contextSection}><span>Conversation</span><dl><div><dt>Owner</dt><dd>{selected.owner ?? 'Unassigned'}</dd></div><div><dt>Status</dt><dd>{statusLabel(selected.status)}</dd></div><div><dt>Queue</dt><dd>{selected.queue}</dd></div><div><dt>Language</dt><dd>{customerContext?.preferredLanguage || selected.language}</dd></div></dl></section>
+            <section className={styles.contextSection}><span>Customer profile</span>{customerContext ? <dl><div><dt>Customer ID</dt><dd>{customerContext.id}</dd></div><div><dt>Type</dt><dd>{customerContext.type || '—'}</dd></div><div><dt>CRM status</dt><dd>{customerContext.status || '—'}</dd></div><div><dt>Properties</dt><dd>{customerContext.properties.length}</dd></div><div><dt>Registered A/C</dt><dd>{customerContext.equipment.length}</dd></div></dl> : <p>This WhatsApp identity has not been matched to a live CRM customer yet. The conversation can still be handled normally.</p>}{customerContext?.tags.length ? <div className={styles.tagList}>{customerContext.tags.map((tag) => <span key={tag}>{tag}</span>)}</div> : null}</section>
+            {selected.nextAction ? <section className={styles.contextSection}><span>Next action</span><strong>{selected.nextAction}</strong><p>{selected.nextActionDue ? `Due ${selected.nextActionDue}` : 'No due date.'}</p></section> : null}
+            {mode !== 'communications' ? <section className={styles.contextSection}><span>Routing</span><strong>{selected.routeReason ?? (recommendedOperator ? `Recommended: ${recommendedOperator.name}` : 'Manual / queue routing')}</strong><p>{aiDecision ? `${aiDecision.mode === 'ai' ? 'AI may continue' : 'Human required'} · ${aiDecision.reason}` : 'Waiting for more context.'}</p></section> : null}
+          </div> : null}
+
+          {contextTab === 'properties' ? <div className={styles.contextBody}>{contextLoading ? <div className={styles.contextEmpty}>Loading customer properties…</div> : customerContext?.properties.length ? <div className={styles.recordList}>{customerContext.properties.map((property) => <article key={property.id}><div><strong>{property.name}</strong><span>{property.address}</span>{property.sector ? <small>{property.sector}</small> : null}</div><b>{property.equipment.length} A/C</b></article>)}</div> : <div className={styles.contextEmpty}>No live CRM properties are linked to this WhatsApp contact.</div>}</div> : null}
+
+          {contextTab === 'equipment' ? <div className={styles.contextBody}>{contextLoading ? <div className={styles.contextEmpty}>Loading registered equipment…</div> : customerContext?.equipment.length ? <div className={styles.recordList}>{customerContext.equipment.map((equipment) => <article key={equipment.id}><div><strong>{equipment.locationLabel}</strong><span>{equipment.systemType}</span><small>{equipment.condition || (equipment.active ? 'Active' : 'Inactive')}</small></div><b>{equipment.active ? 'Active' : 'Off'}</b></article>)}</div> : <div className={styles.contextEmpty}>No registered A/C equipment found for this customer.</div>}</div> : null}
+
+          {contextTab === 'actions' ? <div className={styles.contextBody}>
+            <section className={styles.contextSection}><span>Quick customer actions</span><div className={styles.quickActionGrid}>
+              <button type="button" disabled={!customerContext} onClick={() => openAction('/scheduling', { action: 'create-appointment' })}><b>＋</b><span>Create appointment</span><small>Open Scheduling with customer context</small></button>
+              <button type="button" disabled={!customerContext} onClick={() => openAction('/work-orders', { action: 'create', type: 'warranty' })}><b>W</b><span>Warranty ticket</span><small>Start a warranty work order</small></button>
+              <button type="button" disabled={!customerContext} onClick={() => openAction('/crm', { tab: 'Equipment', action: 'add-equipment' })}><b>A/C</b><span>Add equipment</span><small>Register another air conditioner</small></button>
+              <button type="button" disabled={!customerContext} onClick={() => openAction('/crm', { action: 'edit-customer' })}><b>✎</b><span>Edit customer</span><small>Update CRM master information</small></button>
+              <button type="button" onClick={() => openAction('/crm', { action: 'open-customer' })}><b>CRM</b><span>Open full CRM</span><small>View complete Customer 360</small></button>
+            </div>{!customerContext ? <p>Link this WhatsApp identity to a CRM customer before using customer-specific actions.</p> : null}</section>
+          </div> : null}
+
+          {!standalone ? <details className={styles.details}><summary>Operator presence</summary><div className={styles.operators}>{operators.length ? operators.map((operator) => <article className={styles.operator} key={operator.id}><span>{initials(operator.name)}</span><div><strong>{operator.name}</strong><small>{operator.activeChats} chat{operator.activeChats === 1 ? '' : 's'}{operator.activeVoiceCall ? ' · on voice call' : ''}</small></div><b>{operator.presence.replaceAll('_', ' ')}</b></article>) : <div className={styles.empty}><span>No other operators online.</span></div>}</div></details> : null}
         </div> : <div className={styles.empty}><strong>No customer selected</strong><span>Customer context appears when you open a conversation.</span></div>}
       </aside> : null}
     </div>
