@@ -7,6 +7,7 @@ type ConversationLanguage = Conversation['language'];
 type OperatorLanguage = Operator['languages'][number];
 
 export type LiveConversation = Conversation & {
+  channel?: ConversationMessage['channel'];
   ownerUserId?: string | null;
   provider?: WhatsAppProvider;
   externalChatId?: string | null;
