@@ -2,7 +2,10 @@ import type { Metadata } from 'next';
 import { PublicFooter, PublicHeader } from '@/components/public/public-site-shell';
 import { PublicHeroSlider } from '@/components/public/public-hero-slider';
 import { PublicHomeSections } from '@/components/public/public-home-sections';
-import { defaultPublicWebsiteContent } from '@/lib/public-website-content';
+import { loadPublishedWebsiteContent } from '@/lib/public-website-public';
+
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 export const metadata: Metadata = {
   title: { absolute: 'DEMAC Professional Cooling Solutions | Air Conditioning Aruba' },
@@ -30,12 +33,14 @@ const structuredData = {
   description: 'Professional residential, commercial and VRF air conditioning solutions in Aruba.',
 };
 
-export default function HomePage() {
+export default async function HomePage() {
+  const publishedContent = await loadPublishedWebsiteContent();
+
   return (
     <main className="public-site public-home-approved">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }} />
       <PublicHeader active="home" />
-      <PublicHeroSlider initialContent={defaultPublicWebsiteContent} />
+      <PublicHeroSlider initialContent={publishedContent} />
       <PublicHomeSections />
       <PublicFooter />
     </main>
