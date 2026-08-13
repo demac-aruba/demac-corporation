@@ -34,9 +34,8 @@ function messageText(message) {
   return "";
 }
 
-
 function messageLocation(message) {
-  if (message?.type !== 'location' || !message.location) return {};
+  if (message?.type !== "location" || !message.location) return {};
   return {
     latitude: Number(message.location.latitude),
     longitude: Number(message.location.longitude),
@@ -47,7 +46,6 @@ function messageLocation(message) {
 }
 
 function digitsOnly(value) {
-
   return String(value ?? "").replace(/\D/g, "");
 }
 
@@ -212,8 +210,6 @@ exports.whatsappWebhook = onRequest(
 
       await batch.commit();
       logger.info("WhatsApp webhook event stored.", { eventId: eventRef.id });
-
-      // Meta expects a fast 200 response so it does not retry the event.
       response.status(200).send("EVENT_RECEIVED");
     } catch (error) {
       logger.error("Could not process WhatsApp webhook event.", error);
@@ -240,6 +236,16 @@ exports.sendQueuedWhatsAppMessage = onDocumentCreated(
 
     const queueRef = snapshot.ref;
     const original = snapshot.data() ?? {};
+
+    // Provider-neutral queue: legacy documents without a provider still use Meta,
+    // while explicit wacli documents are handled by sendQueuedWacliMessage.
+    if (original.provider && original.provider !== "meta") {
+      logger.info("Skipping non-Meta outbound queue item in Meta sender.", {
+        queueId: snapshot.id,
+        provider: original.provider,
+      });
+      return;
+    }
 
     try {
       if (original.status && original.status !== "queued") {

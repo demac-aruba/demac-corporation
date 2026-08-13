@@ -5,6 +5,7 @@ require("./whatsappCopilotCompanyRules");
 require("./whatsappCopilotServiceRules");
 
 const core = require("./index");
+const wacliGateway = require("./whatsappWacliGateway");
 const appointmentNotifications = require("./appointmentNotifications");
 const userManagement = require("./userManagement");
 const voiceTranscription = require("./voiceTranscription");
@@ -18,6 +19,7 @@ const router = require("./whatsappCopilotRouter");
 // the conversation first and uses ERP code only as authoritative business tools.
 module.exports = {
   ...core,
+  ...wacliGateway,
   ...appointmentNotifications,
   ...userManagement,
   ...voiceTranscription,

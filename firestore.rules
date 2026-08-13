@@ -38,6 +38,29 @@ service cloud.firestore {
       return activeStaff() && userProfile().data.role in ['admin', 'supervisor'];
     }
 
+    function communicationConversationFieldsOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'owner',
+        'ownerUserId',
+        'status',
+        'queue',
+        'aiDisposition',
+        'lockedBy',
+        'lockedByUserId',
+        'unread',
+        'nextAction',
+        'nextActionDue',
+        'updatedAt'
+      ]);
+    }
+
+    function communicationConversationAssignmentAllowed() {
+      return adminOrSupervisor()
+        || resource.data.get('ownerUserId', '') == request.auth.uid
+        || request.resource.data.get('ownerUserId', '') == request.auth.uid
+        || resource.data.get('ownerUserId', '') == '';
+    }
+
     // TECHNICIAN_WORKFLOW_V7: assignment checks tolerate uid/staff/van identifiers and visit snapshots.
     function currentStaffId() {
       return userProfile().data.get('staffId', '');
@@ -460,6 +483,31 @@ service cloud.firestore {
       allow delete: if operationsRole()
         || (assignedToWorkOrderId(resource.data.workOrderId)
           && resource.data.uploadedByUserId == request.auth.uid);
+    }
+
+    match /communicationConversations/{conversationId} {
+      allow read: if operationsRole();
+      allow create: if false;
+      allow update: if operationsRole()
+        && communicationConversationFieldsOnly()
+        && communicationConversationAssignmentAllowed();
+      allow delete: if adminOrSupervisor();
+    }
+
+    match /communicationOperatorPresence/{operatorId} {
+      allow read: if operationsRole();
+      allow create, update: if operationsRole() && request.auth.uid == operatorId;
+      allow delete: if adminOrSupervisor() || (operationsRole() && request.auth.uid == operatorId);
+    }
+
+    match /communicationInternalNotes/{noteId} {
+      allow read: if operationsRole();
+      allow create: if operationsRole()
+        && request.resource.data.createdByUserId == request.auth.uid
+        && request.resource.data.text is string
+        && request.resource.data.text.size() > 0
+        && request.resource.data.text.size() <= 10000;
+      allow update, delete: if false;
     }
 
     match /whatsappOutboundQueue/{messageId} {
