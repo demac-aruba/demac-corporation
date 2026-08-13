@@ -48,6 +48,18 @@ type CommunicationSettings = {
   whatsappProvider?: WhatsAppProvider;
 };
 
+type StoredWhatsAppMessage = {
+  id: string;
+  messageId?: string;
+  sentByUserId?: string | null;
+  sentByName?: string | null;
+};
+
+type MessageAttribution = {
+  userId?: string | null;
+  name?: string | null;
+};
+
 function safeString(value: unknown, fallback = '') {
   return typeof value === 'string' ? value : fallback;
 }
@@ -66,19 +78,25 @@ function normalizeOperatorLanguages(values: unknown): OperatorLanguage[] {
   return [...new Set(normalized)];
 }
 
-function normalizeMessage(message: ConversationMessage): ConversationMessage {
+function normalizeMessage(message: ConversationMessage, attribution?: MessageAttribution): ConversationMessage {
+  const storedAuthor = safeString(message.author, 'WhatsApp');
+  const author = message.role === 'operator' && attribution?.name
+    ? attribution.name
+    : storedAuthor;
   return {
     id: safeString(message.id, `message-${Date.now()}`),
     at: safeString(message.at, new Date().toISOString()),
-    author: safeString(message.author, 'WhatsApp'),
+    author,
     role: message.role ?? 'customer',
     text: safeString(message.text),
     channel: message.channel ?? 'whatsapp',
   };
 }
 
-function normalizeConversation(stored: StoredConversation): LiveConversation {
-  const messages = Array.isArray(stored.recentMessages) ? stored.recentMessages.map(normalizeMessage) : [];
+function normalizeConversation(stored: StoredConversation, attributions: Map<string, MessageAttribution>): LiveConversation {
+  const messages = Array.isArray(stored.recentMessages)
+    ? stored.recentMessages.map((message) => normalizeMessage(message, attributions.get(safeString(message.id))))
+    : [];
   return {
     ...stored,
     customer: safeString(stored.customer, stored.phone || 'WhatsApp contact'),
@@ -104,6 +122,30 @@ function operatorQueues(role: AuthPrincipal['role']): Queue[] {
   return ['general'];
 }
 
+async function loadOperatorAttributions(storedConversations: StoredConversation[]) {
+  const genericOperatorMessageIds = [...new Set(storedConversations
+    .flatMap((conversation) => Array.isArray(conversation.recentMessages) ? conversation.recentMessages : [])
+    .filter((message) => message.role === 'operator' && safeString(message.author) === 'DEMAC WhatsApp')
+    .sort((left, right) => Date.parse(right.at || '1970-01-01') - Date.parse(left.at || '1970-01-01'))
+    .map((message) => safeString(message.id))
+    .filter(Boolean))]
+    .slice(0, 200);
+
+  const documents = await Promise.all(genericOperatorMessageIds.map((messageId) =>
+    getFirestoreDocument<StoredWhatsAppMessage>('whatsappMessages', messageId).catch(() => null),
+  ));
+
+  const attributions = new Map<string, MessageAttribution>();
+  for (const document of documents) {
+    if (!document?.sentByName) continue;
+    attributions.set(document.messageId || document.id, {
+      userId: document.sentByUserId,
+      name: document.sentByName,
+    });
+  }
+  return attributions;
+}
+
 export async function loadCommunicationWorkspace() {
   const [storedConversations, storedOperators, settings] = await Promise.all([
     listFirestoreCollection<StoredConversation>('communicationConversations'),
@@ -111,8 +153,9 @@ export async function loadCommunicationWorkspace() {
     getFirestoreDocument<CommunicationSettings>('businessSettings', 'communications').catch(() => null),
   ]);
 
+  const attributions = await loadOperatorAttributions(storedConversations);
   const conversations = storedConversations
-    .map(normalizeConversation)
+    .map((conversation) => normalizeConversation(conversation, attributions))
     .sort((left, right) => Date.parse(right.lastActivityAt || '1970-01-01') - Date.parse(left.lastActivityAt || '1970-01-01'));
 
   const operators: LiveOperator[] = storedOperators
