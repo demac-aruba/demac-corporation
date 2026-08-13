@@ -19,7 +19,7 @@ export default function StandaloneCommunicationCenterPage() {
             <span className={styles.status}><i /> Live workspace</span>
           </header>
           <div className={styles.host}>
-            <CommunicationCenter />
+            <CommunicationCenter mode={'ai'} />
           </div>
         </main>
       </AccessibilityTextProvider>
