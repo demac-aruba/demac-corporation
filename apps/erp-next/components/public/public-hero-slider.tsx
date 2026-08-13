@@ -28,10 +28,23 @@ function sliderStyle(slide: WebsiteHeroSlide, transitionMs: number) {
   } as CSSProperties;
 }
 
+function preloadImage(src: string) {
+  return new Promise<void>((resolve) => {
+    const image = new Image();
+    const done = () => resolve();
+    image.onload = done;
+    image.onerror = done;
+    image.src = src;
+    if (image.complete) resolve();
+  });
+}
+
 export function PublicHeroSlider({ initialContent = defaultPublicWebsiteContent, previewContent, compactPreview = false }: PublicHeroSliderProps) {
   const [content, setContent] = useState(previewContent ?? initialContent);
+  const [publishedReady, setPublishedReady] = useState(Boolean(previewContent));
   const [activeIndex, setActiveIndex] = useState(0);
-  const [paused, setPaused] = useState(false);
+  const [touchPaused, setTouchPaused] = useState(false);
+  const [autoplayCycle, setAutoplayCycle] = useState(0);
   const touchStartX = useRef<number | null>(null);
   const touchStartY = useRef<number | null>(null);
   const slides = useMemo(() => enabledSlides(content), [content]);
@@ -39,12 +52,22 @@ export function PublicHeroSlider({ initialContent = defaultPublicWebsiteContent,
   useEffect(() => {
     if (previewContent) {
       setContent(previewContent);
+      setPublishedReady(true);
       return;
     }
+
     let cancelled = false;
-    void loadPublishedWebsiteContent().then((published) => {
-      if (!cancelled) setContent(published);
+    setPublishedReady(false);
+
+    void loadPublishedWebsiteContent().then(async (published) => {
+      const firstSlide = enabledSlides(published)[0];
+      if (firstSlide?.imageUrl) await preloadImage(firstSlide.imageUrl);
+      if (cancelled) return;
+      setContent(published);
+      setActiveIndex(0);
+      setPublishedReady(true);
     });
+
     return () => { cancelled = true; };
   }, [previewContent]);
 
@@ -56,21 +79,28 @@ export function PublicHeroSlider({ initialContent = defaultPublicWebsiteContent,
     setActiveIndex((current) => (current + direction + slides.length) % slides.length);
   }, [slides.length]);
 
+  const manualGo = useCallback((direction: number) => {
+    go(direction);
+    setAutoplayCycle((cycle) => cycle + 1);
+  }, [go]);
+
+  const manualSelect = useCallback((index: number) => {
+    setActiveIndex(index);
+    setAutoplayCycle((cycle) => cycle + 1);
+  }, []);
+
   useEffect(() => {
-    if (previewContent || compactPreview || paused || slides.length <= 1) return;
+    if (previewContent || compactPreview || !publishedReady || touchPaused || slides.length <= 1) return;
     const media = window.matchMedia('(prefers-reduced-motion: reduce)');
     if (media.matches) return;
     const timer = window.setInterval(() => go(1), content.hero.autoplayMs);
     return () => window.clearInterval(timer);
-  }, [compactPreview, content.hero.autoplayMs, go, paused, previewContent, slides.length]);
-
-  const active = slides[activeIndex] ?? slides[0];
-  if (!active) return null;
+  }, [autoplayCycle, compactPreview, content.hero.autoplayMs, go, publishedReady, previewContent, slides.length, touchPaused]);
 
   function touchStart(event: React.TouchEvent<HTMLElement>) {
     touchStartX.current = event.touches[0]?.clientX ?? null;
     touchStartY.current = event.touches[0]?.clientY ?? null;
-    setPaused(true);
+    setTouchPaused(true);
   }
 
   function touchEnd(event: React.TouchEvent<HTMLElement>) {
@@ -79,22 +109,35 @@ export function PublicHeroSlider({ initialContent = defaultPublicWebsiteContent,
     const end = event.changedTouches[0];
     touchStartX.current = null;
     touchStartY.current = null;
-    window.setTimeout(() => setPaused(false), 800);
+    window.setTimeout(() => setTouchPaused(false), 800);
     if (startX == null || startY == null || !end) return;
     const dx = end.clientX - startX;
     const dy = end.clientY - startY;
     if (Math.abs(dx) < 45 || Math.abs(dx) <= Math.abs(dy) * 1.15) return;
-    go(dx < 0 ? 1 : -1);
+    manualGo(dx < 0 ? 1 : -1);
   }
+
+  const isPublicLoading = !previewContent && !compactPreview && !publishedReady;
+  if (isPublicLoading) {
+    return (
+      <section
+        className="approved-hero public-hero-slider is-loading"
+        id="home"
+        aria-busy="true"
+        aria-label="Loading DEMAC featured cooling solutions"
+      >
+        <div className="public-hero-loading-shell" aria-hidden="true" />
+      </section>
+    );
+  }
+
+  const active = slides[activeIndex] ?? slides[0];
+  if (!active) return null;
 
   return (
     <section
       className={`approved-hero public-hero-slider${compactPreview ? ' is-preview' : ''}`}
       id={compactPreview ? undefined : 'home'}
-      onMouseEnter={() => setPaused(true)}
-      onMouseLeave={() => setPaused(false)}
-      onFocusCapture={() => setPaused(true)}
-      onBlurCapture={() => setPaused(false)}
       onTouchStart={touchStart}
       onTouchEnd={touchEnd}
       aria-roledescription="carousel"
@@ -137,20 +180,20 @@ export function PublicHeroSlider({ initialContent = defaultPublicWebsiteContent,
 
       {slides.length > 1 ? (
         <div className="public-hero-controls" aria-label="Hero banner controls">
-          <button type="button" onClick={() => go(-1)} aria-label="Previous banner">‹</button>
+          <button type="button" onClick={() => manualGo(-1)} aria-label="Previous banner">‹</button>
           <div className="public-hero-dots">
             {slides.map((slide, index) => (
               <button
                 type="button"
                 className={index === activeIndex ? 'is-active' : ''}
-                onClick={() => setActiveIndex(index)}
+                onClick={() => manualSelect(index)}
                 aria-label={`Show ${slide.name}`}
                 aria-current={index === activeIndex ? 'true' : undefined}
                 key={slide.id}
               />
             ))}
           </div>
-          <button type="button" onClick={() => go(1)} aria-label="Next banner">›</button>
+          <button type="button" onClick={() => manualGo(1)} aria-label="Next banner">›</button>
         </div>
       ) : null}
     </section>
