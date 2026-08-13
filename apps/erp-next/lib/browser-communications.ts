@@ -60,6 +60,8 @@ type MessageAttribution = {
   name?: string | null;
 };
 
+const operatorAttributionCache = new Map<string, MessageAttribution>();
+
 function safeString(value: unknown, fallback = '') {
   return typeof value === 'string' ? value : fallback;
 }
@@ -131,17 +133,23 @@ async function loadOperatorAttributions(storedConversations: StoredConversation[
     .filter(Boolean))]
     .slice(0, 200);
 
-  const documents = await Promise.all(genericOperatorMessageIds.map((messageId) =>
+  const uncachedIds = genericOperatorMessageIds.filter((messageId) => !operatorAttributionCache.has(messageId));
+  const documents = await Promise.all(uncachedIds.map((messageId) =>
     getFirestoreDocument<StoredWhatsAppMessage>('whatsappMessages', messageId).catch(() => null),
   ));
 
-  const attributions = new Map<string, MessageAttribution>();
-  for (const document of documents) {
-    if (!document?.sentByName) continue;
-    attributions.set(document.messageId || document.id, {
+  uncachedIds.forEach((messageId, index) => {
+    const document = documents[index];
+    operatorAttributionCache.set(messageId, document?.sentByName ? {
       userId: document.sentByUserId,
       name: document.sentByName,
-    });
+    } : {});
+  });
+
+  const attributions = new Map<string, MessageAttribution>();
+  for (const messageId of genericOperatorMessageIds) {
+    const attribution = operatorAttributionCache.get(messageId);
+    if (attribution?.name) attributions.set(messageId, attribution);
   }
   return attributions;
 }
