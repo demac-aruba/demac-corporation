@@ -85,6 +85,7 @@ export function CommunicationCenter({ mode = 'communications' }: { mode?: Mode }
     setOperators(workspace.operators);
     setProvider(workspace.provider);
     setSelectedId((current) => current || workspace.conversations[0]?.id || '');
+    return workspace;
   }, []);
 
   useEffect(() => {
@@ -98,16 +99,20 @@ export function CommunicationCenter({ mode = 'communications' }: { mode?: Mode }
         if (cancelled) return;
         activePrincipal = loadedPrincipal;
         setPrincipal(loadedPrincipal);
-        await touchCommunicationPresence(loadedPrincipal, 'available', 0);
-        await refresh();
+        const initialWorkspace = await refresh();
+        if (cancelled) return;
+        const initialOwned = initialWorkspace.conversations.filter((conversation) => conversation.ownerUserId === loadedPrincipal.userId && !['resolved', 'closed'].includes(conversation.status)).length;
+        await touchCommunicationPresence(loadedPrincipal, 'available', initialOwned);
         if (cancelled) return;
         setLoading(false);
         interval = setInterval(() => {
-          refresh().catch((refreshError) => setError(refreshError instanceof Error ? refreshError.message : String(refreshError)));
-          if (activePrincipal) {
-            const owned = conversations.filter((conversation) => conversation.ownerUserId === activePrincipal?.userId && !['resolved', 'closed'].includes(conversation.status)).length;
-            touchCommunicationPresence(activePrincipal, 'available', owned).catch(() => undefined);
-          }
+          refresh()
+            .then((workspace) => {
+              if (!activePrincipal) return;
+              const owned = workspace.conversations.filter((conversation) => conversation.ownerUserId === activePrincipal?.userId && !['resolved', 'closed'].includes(conversation.status)).length;
+              return touchCommunicationPresence(activePrincipal, 'available', owned);
+            })
+            .catch((refreshError) => setError(refreshError instanceof Error ? refreshError.message : String(refreshError)));
         }, 5000);
       } catch (bootstrapError) {
         if (!cancelled) {
@@ -136,9 +141,15 @@ export function CommunicationCenter({ mode = 'communications' }: { mode?: Mode }
       return true;
     }), [conversations, queue, mode, principal, scope]);
 
-  const selected = conversations.find((conversation) => conversation.id === selectedId)
+  useEffect(() => {
+    if (visible.some((conversation) => conversation.id === selectedId)) return;
+    const fallback = visible[0];
+    setSelectedId(fallback?.id ?? '');
+    setAssignmentTarget(fallback?.ownerUserId || '');
+  }, [visible, selectedId]);
+
+  const selected = visible.find((conversation) => conversation.id === selectedId)
     ?? visible[0]
-    ?? conversations[0]
     ?? null;
 
   const selectedOwnedByMe = Boolean(selected && principal && selected.ownerUserId === principal.userId);
