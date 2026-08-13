@@ -315,7 +315,7 @@ exports.wacliWebhook = onRequest(
 function validateWacliOutbound(data) {
   const to = String(data.to || "").trim();
   const text = String(data.text || "").trim();
-  if (!to || (!/^\+?[0-9() .-]{8,24}$/.test(to) && !/@(s\.whatsapp\.net|g\.us)$/.test(to))) {
+  if (!to || (!/^\+?[0-9() .-]{8,24}$/.test(to) && !/@(s\.whatsapp\.net|lid|g\.us)$/.test(to))) {
     throw new Error("A valid WhatsApp phone number or JID is required.");
   }
   if (!text || text.length > 10000) {
