@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'functions/marketingImageAnalysis.js'
+      - 'functions/marketingImageAnalysisCallable.js'
       - 'functions/bootstrap.js'
       - '.github/workflows/marketing-agent-function-deploy.yml'
   push:
@@ -11,6 +12,7 @@ on:
       - main
     paths:
       - 'functions/marketingImageAnalysis.js'
+      - 'functions/marketingImageAnalysisCallable.js'
       - 'functions/bootstrap.js'
       - '.github/workflows/marketing-agent-function-deploy.yml'
   workflow_dispatch:
@@ -34,8 +36,9 @@ jobs:
       - name: Validate function syntax and exports
         run: |
           node --check functions/marketingImageAnalysis.js
+          node --check functions/marketingImageAnalysisCallable.js
           node --check functions/bootstrap.js
-          node -e "const mod=require('./functions/bootstrap'); if(typeof mod.analyzeMarketingUploadSession!=='function') throw new Error('analyzeMarketingUploadSession export missing');"
+          node -e "const mod=require('./functions/bootstrap'); if(typeof mod.analyzeMarketingUploadSession!=='function') throw new Error('analyzeMarketingUploadSession export missing'); if(typeof mod.requestMarketingImageAnalysis!=='function') throw new Error('requestMarketingImageAnalysis export missing');"
 
   deploy-marketing-function:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -53,17 +56,11 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Resolve existing DEMAC runtime configuration
+      - name: Resolve existing DEMAC runtime identity
         id: config
         shell: bash
         run: |
           set -euo pipefail
-          DB_LOCATION="$(gcloud firestore databases describe --project=demac-corporation --database='(default)' --format='value(locationId)')"
-          if [ -z "$DB_LOCATION" ]; then
-            echo '::error::Could not resolve the default Firestore database location.'
-            exit 1
-          fi
-
           REPORT_NAME='generateProfessionalCustomerReport'
           if ! gcloud functions describe "$REPORT_NAME" --project=demac-corporation --gen2 --region=us-central1 --format='value(name)' >/dev/null 2>&1; then
             REPORT_NAME="$(gcloud functions list --project=demac-corporation --gen2 --format='value(name)' | awk -F/ 'tolower($NF) ~ /generateprofessionalcustomerreport/ {print $NF; exit}')"
@@ -72,48 +69,42 @@ jobs:
             echo '::error::Could not find the existing DEMAC professional report function to mirror its runtime identity.'
             exit 1
           fi
-
           RUN_SA="$(gcloud functions describe "$REPORT_NAME" --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.serviceAccountEmail)')"
           if [ -z "$RUN_SA" ]; then
             echo '::error::Could not resolve the existing DEMAC runtime service account.'
             exit 1
           fi
-
-          echo "database_location=${DB_LOCATION}" >> "$GITHUB_OUTPUT"
           echo "run_service_account=${RUN_SA}" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy Marketing Agent analysis function
+      - name: Deploy Marketing Agent callable function
         shell: bash
         env:
-          DB_LOCATION: ${{ steps.config.outputs.database_location }}
           RUN_SERVICE_ACCOUNT: ${{ steps.config.outputs.run_service_account }}
         run: |
           set -euo pipefail
-          gcloud functions deploy analyzeMarketingUploadSession \
+          gcloud functions deploy requestMarketingImageAnalysis \
             --project=demac-corporation \
             --gen2 \
             --region=us-central1 \
-            --trigger-location="$DB_LOCATION" \
             --runtime=nodejs22 \
             --source=functions \
-            --entry-point=analyzeMarketingUploadSession \
+            --entry-point=requestMarketingImageAnalysis \
             --memory=512Mi \
             --timeout=540s \
             --run-service-account="$RUN_SERVICE_ACCOUNT" \
             --set-secrets=OPENAI_API_KEY=OPENAI_API_KEY:latest \
-            --trigger-event-filters=type=google.cloud.firestore.document.v1.updated \
-            --trigger-event-filters=database='(default)' \
-            --trigger-event-filters=namespace='(default)' \
-            --trigger-event-filters-path-pattern="document=marketingUploadSessions/{sessionId}" \
+            --trigger-http \
+            --allow-unauthenticated \
             --quiet
 
-      - name: Verify deployed function
+      - name: Verify deployed callable function
         shell: bash
         run: |
           set -euo pipefail
-          STATE="$(gcloud functions describe analyzeMarketingUploadSession --project=demac-corporation --gen2 --region=us-central1 --format='value(state)')"
-          if [ "$STATE" != "ACTIVE" ]; then
-            echo "::error::Marketing Agent function state is ${STATE:-unknown}, expected ACTIVE."
+          STATE="$(gcloud functions describe requestMarketingImageAnalysis --project=demac-corporation --gen2 --region=us-central1 --format='value(state)')"
+          URI="$(gcloud functions describe requestMarketingImageAnalysis --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.uri)')"
+          if [ "$STATE" != "ACTIVE" ] || [ -z "$URI" ]; then
+            echo "::error::Marketing callable state is ${STATE:-unknown}; URI=${URI:-missing}."
             exit 1
           fi
-          echo 'Marketing Agent analysis function is ACTIVE.'
+          echo "Marketing callable is ACTIVE at $URI"
