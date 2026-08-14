@@ -1,0 +1,133 @@
+name: ERP Next Marketing Post-Merge Smoke
+
+on:
+  push:
+    branches:
+      - test/erp-next-marketing-post-merge
+    paths:
+      - '.github/workflows/erp-next-marketing-post-merge-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  authenticated-marketing-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install Firebase Admin dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+      - name: Verify ERP Next Marketing auth + Firestore + callables
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+          FIREBASE_WEB_API_KEY: AIzaSyCo31zuo6d8RsgiLWGqUVOvRmHkisoF1DE
+        run: |
+          set -euo pipefail
+          cd functions
+          node <<'NODE'
+          const { cert, initializeApp } = require('firebase-admin/app');
+          const { getAuth } = require('firebase-admin/auth');
+          const { getFirestore } = require('firebase-admin/firestore');
+
+          const projectId = 'demac-corporation';
+          const credentials = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+          initializeApp({ credential: cert(credentials), projectId });
+          const auth = getAuth();
+          const db = getFirestore();
+          const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          const email = `erp-next-marketing-${stamp}@demac-smoke.test`;
+          let uid = '';
+
+          async function exchange(customToken) {
+            const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${encodeURIComponent(process.env.FIREBASE_WEB_API_KEY)}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ token: customToken, returnSecureToken: true }),
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.idToken) throw new Error(`Custom token exchange failed: ${JSON.stringify(payload)}`);
+            return payload.idToken;
+          }
+
+          async function call(url, idToken, body) {
+            const response = await fetch(url, {
+              method: body ? 'POST' : 'GET',
+              headers: {
+                Authorization: `Bearer ${idToken}`,
+                ...(body ? { 'Content-Type': 'application/json' } : {}),
+              },
+              ...(body ? { body: JSON.stringify(body) } : {}),
+            });
+            const text = await response.text();
+            return { status: response.status, text, contentType: response.headers.get('content-type') || '' };
+          }
+
+          (async () => {
+            try {
+              const user = await auth.createUser({ email, emailVerified: true, displayName: 'ERP Next Marketing smoke' });
+              uid = user.uid;
+              const now = new Date().toISOString();
+              await db.collection('users').doc(uid).set({
+                id: uid,
+                name: 'ERP Next Marketing smoke',
+                displayName: 'ERP Next Marketing smoke',
+                email,
+                role: 'admin',
+                active: true,
+                createdAt: now,
+                updatedAt: now,
+                syntheticSmokeTest: true,
+              });
+
+              const customToken = await auth.createCustomToken(uid);
+              const idToken = await exchange(customToken);
+              const base = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents`;
+
+              const unauth = await fetch(`${base}/marketingUploadSessions?pageSize=1`);
+              if (unauth.status !== 401 && unauth.status !== 403) throw new Error(`Expected unauthenticated Marketing read to be blocked; got ${unauth.status}`);
+
+              const sessions = await call(`${base}/marketingUploadSessions?pageSize=2`, idToken);
+              if (sessions.status !== 200) throw new Error(`Authenticated Marketing session list failed: ${sessions.status} ${sessions.text}`);
+
+              const brand = await call(`${base}/marketingBrandSettings/default`, idToken);
+              if (![200, 404].includes(brand.status)) throw new Error(`Authenticated Brand Center read failed: ${brand.status} ${brand.text}`);
+
+              const fakeSession = `erp-next-smoke-${stamp}`;
+              const imageAnalysis = await call('https://us-central1-demac-corporation.cloudfunctions.net/requestMarketingImageAnalysis', idToken, { data: { sessionId: fakeSession } });
+              if (imageAnalysis.status === 401 || imageAnalysis.status === 403 || /Unauthorized|Forbidden|Cloud Run/i.test(imageAnalysis.text)) {
+                throw new Error(`Image Analysis callable did not accept authenticated transport: ${imageAnalysis.status} ${imageAnalysis.text}`);
+              }
+              if (!imageAnalysis.contentType.includes('application/json')) throw new Error(`Image Analysis callable returned non-JSON: ${imageAnalysis.contentType}`);
+
+              const strategy = await call('https://us-central1-demac-corporation.cloudfunctions.net/requestMarketingCampaignStrategy', idToken, { data: { sessionId: fakeSession } });
+              if (strategy.status === 401 || strategy.status === 403 || /Unauthorized|Forbidden|Cloud Run/i.test(strategy.text)) {
+                throw new Error(`Campaign Strategy callable did not accept authenticated transport: ${strategy.status} ${strategy.text}`);
+              }
+              if (!strategy.contentType.includes('application/json')) throw new Error(`Campaign Strategy callable returned non-JSON: ${strategy.contentType}`);
+
+              console.log(JSON.stringify({
+                result: 'PASS',
+                productionCommit: '290aa07fedab7e80e2c17c516abb9429dff4c1cd',
+                firebaseRole: 'admin',
+                erpNextMappedRole: 'super_admin',
+                unauthenticatedMarketingReadBlocked: true,
+                authenticatedMarketingRead: true,
+                brandCenterRead: brand.status === 200 ? 'live' : 'defaults_expected',
+                imageAnalysisTransportStatus: imageAnalysis.status,
+                campaignStrategyTransportStatus: strategy.status,
+                callablesReachedApplicationHandler: true,
+              }, null, 2));
+            } finally {
+              if (uid) {
+                try { await db.collection('users').doc(uid).delete(); } catch (error) { console.error('Profile cleanup failed:', error); process.exitCode = 1; }
+                try { await auth.deleteUser(uid); } catch (error) { console.error('Auth cleanup failed:', error); process.exitCode = 1; }
+              }
+            }
+          })().catch((error) => { console.error(error); process.exitCode = 1; });
+          NODE
