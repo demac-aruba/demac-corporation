@@ -30,6 +30,10 @@ service cloud.firestore {
       return activeStaff() && userProfile().data.role in ['admin', 'accounting'];
     }
 
+    function marketingRole() {
+      return activeStaff() && userProfile().data.role in ['admin', 'office'];
+    }
+
     function technicianRole() {
       return activeStaff() && userProfile().data.role == 'technician';
     }
@@ -315,6 +319,26 @@ service cloud.firestore {
       allow read: if activeStaff();
       allow create, update: if operationsRole();
       allow delete: if adminOrSupervisor();
+    }
+
+    match /marketingUploadSessions/{sessionId} {
+      allow read, create, update, delete: if marketingRole();
+    }
+
+    match /marketingAssets/{assetId} {
+      allow read, create, update, delete: if marketingRole();
+    }
+
+    match /marketingCampaigns/{campaignId} {
+      allow read, create, update, delete: if marketingRole();
+    }
+
+    match /marketingBrandSettings/{settingId} {
+      allow read, create, update, delete: if marketingRole();
+    }
+
+    match /marketingCreativeFeedback/{feedbackId} {
+      allow read, create, update, delete: if marketingRole();
     }
 
     match /warehouseInventory/{itemId} {
