@@ -1,0 +1,34 @@
+name: Communication Center V8 Backend CI
+
+on:
+  push:
+    branches:
+      - preview/communication-center-v8-consolidated
+    paths:
+      - 'functions/whatsappWacliGatewayV2.js'
+      - 'functions/whatsappWacliBackfill.js'
+      - 'functions/bootstrap.js'
+      - 'services/whatsapp-bridge/server-v2.mjs'
+      - 'services/whatsapp-bridge/backfill-recent.mjs'
+      - '.github/workflows/communication-v8-backend-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Check JavaScript and ESM syntax
+        run: |
+          node --check functions/whatsappWacliGatewayV2.js
+          node --check functions/whatsappWacliBackfill.js
+          node --check functions/bootstrap.js
+          node --check services/whatsapp-bridge/server-v2.mjs
+          node --check services/whatsapp-bridge/backfill-recent.mjs
