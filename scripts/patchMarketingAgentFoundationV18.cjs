@@ -49,6 +49,7 @@ insertAfter(
 );
 
 console.log('Marketing Agent foundation V18 applied.');
+require('./patchMarketingV1cRepeatBuildPreflight.cjs');
 require('./patchMarketingImageAnalysisV19.cjs');
 require('./patchMarketingCallableV20.cjs');
 require('./patchMarketingCampaignStrategyV21Preflight.cjs');
