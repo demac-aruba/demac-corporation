@@ -1,0 +1,64 @@
+name: Marketing Trigger Namespace Redeploy
+
+on:
+  push:
+    branches:
+      - agent/marketing-function-gcloud-deploy
+    paths:
+      - '.github/workflows/marketing-trigger-namespace-redeploy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  redeploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Authenticate Firebase deployment service account
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Resolve DEMAC runtime identity
+        id: config
+        shell: bash
+        run: |
+          set -euo pipefail
+          DB_LOCATION="$(gcloud firestore databases describe --project=demac-corporation --database='(default)' --format='value(locationId)')"
+          RUN_SA="$(gcloud functions describe generateProfessionalCustomerReport --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.serviceAccountEmail)')"
+          echo "database_location=${DB_LOCATION}" >> "$GITHUB_OUTPUT"
+          echo "run_service_account=${RUN_SA}" >> "$GITHUB_OUTPUT"
+      - name: Redeploy with Firebase-equivalent namespace filter
+        shell: bash
+        env:
+          DB_LOCATION: ${{ steps.config.outputs.database_location }}
+          RUN_SERVICE_ACCOUNT: ${{ steps.config.outputs.run_service_account }}
+        run: |
+          set -euo pipefail
+          gcloud functions deploy analyzeMarketingUploadSession \
+            --project=demac-corporation \
+            --gen2 \
+            --region=us-central1 \
+            --trigger-location="$DB_LOCATION" \
+            --runtime=nodejs22 \
+            --source=functions \
+            --entry-point=analyzeMarketingUploadSession \
+            --memory=512Mi \
+            --timeout=540s \
+            --run-service-account="$RUN_SERVICE_ACCOUNT" \
+            --set-secrets=OPENAI_API_KEY=OPENAI_API_KEY:latest \
+            --trigger-event-filters=type=google.cloud.firestore.document.v1.updated \
+            --trigger-event-filters=database='(default)' \
+            --trigger-event-filters=namespace='(default)' \
+            --trigger-event-filters-path-pattern="document=marketingUploadSessions/{sessionId}" \
+            --quiet
+      - name: Verify namespace filter
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud functions describe analyzeMarketingUploadSession --project=demac-corporation --gen2 --region=us-central1 \
+            --format='yaml(state,eventTrigger.eventFilters,eventTrigger.triggerRegion)'
