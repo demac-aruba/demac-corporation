@@ -5,6 +5,7 @@ on:
     paths:
       - 'functions/marketingImageAnalysis.js'
       - 'functions/marketingImageAnalysisCallable.js'
+      - 'functions/marketingCampaignStrategy.js'
       - 'functions/bootstrap.js'
       - '.github/workflows/marketing-agent-function-deploy.yml'
   push:
@@ -13,6 +14,7 @@ on:
     paths:
       - 'functions/marketingImageAnalysis.js'
       - 'functions/marketingImageAnalysisCallable.js'
+      - 'functions/marketingCampaignStrategy.js'
       - 'functions/bootstrap.js'
       - '.github/workflows/marketing-agent-function-deploy.yml'
   workflow_dispatch:
@@ -33,12 +35,13 @@ jobs:
           package-manager-cache: false
       - name: Install function dependencies
         run: npm install --prefix functions --no-audit --no-fund
-      - name: Validate function syntax and callable export
+      - name: Validate function syntax and callable exports
         run: |
           node --check functions/marketingImageAnalysis.js
           node --check functions/marketingImageAnalysisCallable.js
+          node --check functions/marketingCampaignStrategy.js
           node --check functions/bootstrap.js
-          node -e "const mod=require('./functions/bootstrap'); if(typeof mod.requestMarketingImageAnalysis!=='function') throw new Error('requestMarketingImageAnalysis export missing'); if(typeof mod.analyzeMarketingUploadSession==='function') throw new Error('legacy Eventarc marketing handler must not be exported from bootstrap');"
+          node -e "const mod=require('./functions/bootstrap'); if(typeof mod.requestMarketingImageAnalysis!=='function') throw new Error('requestMarketingImageAnalysis export missing'); if(typeof mod.requestMarketingCampaignStrategy!=='function') throw new Error('requestMarketingCampaignStrategy export missing'); if(typeof mod.analyzeMarketingUploadSession==='function') throw new Error('legacy Eventarc marketing handler must not be exported from bootstrap');"
 
   deploy-marketing-function:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -76,7 +79,7 @@ jobs:
           fi
           echo "run_service_account=${RUN_SA}" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy Marketing Agent callable function
+      - name: Deploy Marketing Agent visual analysis callable
         shell: bash
         env:
           RUN_SERVICE_ACCOUNT: ${{ steps.config.outputs.run_service_account }}
@@ -96,15 +99,54 @@ jobs:
             --trigger-http \
             --allow-unauthenticated \
             --quiet
+          RUN_SERVICE="$(gcloud functions describe requestMarketingImageAnalysis --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.service)')"
+          RUN_SERVICE="${RUN_SERVICE##*/}"
+          gcloud run services add-iam-policy-binding "$RUN_SERVICE" \
+            --project=demac-corporation \
+            --region=us-central1 \
+            --member=allUsers \
+            --role=roles/run.invoker \
+            --quiet
 
-      - name: Verify deployed callable function
+      - name: Deploy Marketing Agent campaign strategist callable
+        shell: bash
+        env:
+          RUN_SERVICE_ACCOUNT: ${{ steps.config.outputs.run_service_account }}
+        run: |
+          set -euo pipefail
+          gcloud functions deploy requestMarketingCampaignStrategy \
+            --project=demac-corporation \
+            --gen2 \
+            --region=us-central1 \
+            --runtime=nodejs22 \
+            --source=functions \
+            --entry-point=requestMarketingCampaignStrategy \
+            --memory=512Mi \
+            --timeout=540s \
+            --run-service-account="$RUN_SERVICE_ACCOUNT" \
+            --set-secrets=OPENAI_API_KEY=OPENAI_API_KEY:latest \
+            --trigger-http \
+            --allow-unauthenticated \
+            --quiet
+          RUN_SERVICE="$(gcloud functions describe requestMarketingCampaignStrategy --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.service)')"
+          RUN_SERVICE="${RUN_SERVICE##*/}"
+          gcloud run services add-iam-policy-binding "$RUN_SERVICE" \
+            --project=demac-corporation \
+            --region=us-central1 \
+            --member=allUsers \
+            --role=roles/run.invoker \
+            --quiet
+
+      - name: Verify deployed Marketing Agent callables
         shell: bash
         run: |
           set -euo pipefail
-          STATE="$(gcloud functions describe requestMarketingImageAnalysis --project=demac-corporation --gen2 --region=us-central1 --format='value(state)')"
-          URI="$(gcloud functions describe requestMarketingImageAnalysis --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.uri)')"
-          if [ "$STATE" != "ACTIVE" ] || [ -z "$URI" ]; then
-            echo "::error::Marketing callable state is ${STATE:-unknown}; URI=${URI:-missing}."
-            exit 1
-          fi
-          echo "Marketing callable is ACTIVE at $URI"
+          for FUNCTION_NAME in requestMarketingImageAnalysis requestMarketingCampaignStrategy; do
+            STATE="$(gcloud functions describe "$FUNCTION_NAME" --project=demac-corporation --gen2 --region=us-central1 --format='value(state)')"
+            URI="$(gcloud functions describe "$FUNCTION_NAME" --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.uri)')"
+            if [ "$STATE" != "ACTIVE" ] || [ -z "$URI" ]; then
+              echo "::error::$FUNCTION_NAME state is ${STATE:-unknown}; URI=${URI:-missing}."
+              exit 1
+            fi
+            echo "$FUNCTION_NAME is ACTIVE at $URI"
+          done
