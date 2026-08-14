@@ -141,9 +141,9 @@ export async function queueWhatsAppMedia(
   if (!to) throw new Error('This conversation does not have a resolvable WhatsApp destination.');
   const uploaded: UploadedCommunicationMedia = await uploadCommunicationMedia(file, conversation.id, kind);
   const id = `wa-media-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-  return saveFirestoreDocument('whatsappOutboundQueueV2', {
+  return saveFirestoreDocument('whatsappOutboundQueue', {
     id,
-    provider: 'wacli',
+    provider: 'wacli-v2',
     status: 'queued',
     type: 'media',
     to,
