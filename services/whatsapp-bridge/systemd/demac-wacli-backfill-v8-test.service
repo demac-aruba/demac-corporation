@@ -1,0 +1,22 @@
+[Unit]
+Description=DEMAC WhatsApp V8 recent media, identity and avatar backfill - personal test
+After=network-online.target
+Wants=network-online.target
+Conflicts=demac-wacli-sync-v8-test.service demac-wacli-sync-test.service
+
+[Service]
+Type=oneshot
+User=demac-wacli
+Group=demac-wacli
+WorkingDirectory=/opt/demac-whatsapp-bridge
+EnvironmentFile=/etc/demac-whatsapp-bridge.env
+Environment=WACLI_BINARY=/opt/demac-whatsapp-bridge/wacli-test-wrapper
+Environment=WACLI_ALLOW_LIVE_PROFILE_FETCH=1
+Environment=WACLI_BACKFILL_LIMIT=500
+ExecStart=/usr/bin/node /opt/demac-whatsapp-bridge/backfill-recent.mjs
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/demac-whatsapp-bridge /var/lib/demac-wacli-test
+UMask=0077
