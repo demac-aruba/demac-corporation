@@ -21,20 +21,16 @@ jobs:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
-      - name: Describe deployed function and recent logs
+      - name: Compare working and Marketing Firestore triggers
         shell: bash
         run: |
           set -euo pipefail
-          echo '--- FUNCTION ---'
+          echo '--- MARKETING FUNCTION ---'
           gcloud functions describe analyzeMarketingUploadSession --project=demac-corporation --gen2 --region=us-central1 \
-            --format='yaml(name,state,serviceConfig.uri,eventTrigger.eventType,eventTrigger.eventFilters,eventTrigger.triggerRegion)'
-          echo '--- CLOUD RUN LOGS ---'
-          gcloud logging read \
-            'resource.type="cloud_run_revision" AND resource.labels.service_name="analyzemarketinguploadsession"' \
-            --project=demac-corporation --freshness=15m --limit=80 \
-            --format='value(timestamp,severity,textPayload,jsonPayload.message)' || true
-          echo '--- CLOUD FUNCTION LOGS ---'
-          gcloud logging read \
-            'resource.type="cloud_function" AND resource.labels.function_name="analyzeMarketingUploadSession"' \
-            --project=demac-corporation --freshness=15m --limit=80 \
-            --format='value(timestamp,severity,textPayload,jsonPayload.message)' || true
+            --format='yaml(name,state,serviceConfig.serviceAccountEmail,eventTrigger.trigger,eventTrigger.triggerRegion,eventTrigger.eventType,eventTrigger.eventFilters,eventTrigger.serviceAccountEmail)'
+          echo '--- WORKING PROFESSIONAL REPORT FUNCTION ---'
+          gcloud functions describe generateProfessionalCustomerReport --project=demac-corporation --gen2 --region=us-central1 \
+            --format='yaml(name,state,serviceConfig.serviceAccountEmail,eventTrigger.trigger,eventTrigger.triggerRegion,eventTrigger.eventType,eventTrigger.eventFilters,eventTrigger.serviceAccountEmail)'
+          echo '--- EVENTARC TRIGGERS ---'
+          gcloud eventarc triggers list --project=demac-corporation --location=nam5 \
+            --format='table(name,eventFilters.type,eventFilters.database,eventFilters.document,serviceAccount,destination.cloudRunService.service)' || true
