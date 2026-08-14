@@ -1,0 +1,72 @@
+name: Marketing Agent Function
+
+on:
+  pull_request:
+    paths:
+      - 'functions/marketingImageAnalysis.js'
+      - 'functions/bootstrap.js'
+      - '.github/workflows/marketing-agent-function-deploy.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'functions/marketingImageAnalysis.js'
+      - 'functions/bootstrap.js'
+      - '.github/workflows/marketing-agent-function-deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-marketing-function:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+      - name: Validate function syntax and exports
+        run: |
+          node --check functions/marketingImageAnalysis.js
+          node --check functions/bootstrap.js
+          node -e "const mod=require('./functions/bootstrap'); if(typeof mod.analyzeMarketingUploadSession!=='function') throw new Error('analyzeMarketingUploadSession export missing');"
+
+  deploy-marketing-function:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate-marketing-function
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+      - name: Deploy Marketing Agent analysis function
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${FIREBASE_SERVICE_ACCOUNT_JSON:-}" ]; then
+            CREDENTIAL_FILE="$RUNNER_TEMP/firebase-service-account.json"
+            printf '%s' "$FIREBASE_SERVICE_ACCOUNT_JSON" > "$CREDENTIAL_FILE"
+            chmod 600 "$CREDENTIAL_FILE"
+            export GOOGLE_APPLICATION_CREDENTIALS="$CREDENTIAL_FILE"
+            npx --yes firebase-tools@15.2.1 deploy --only functions:analyzeMarketingUploadSession --project demac-corporation --non-interactive
+          elif [ -n "${FIREBASE_TOKEN:-}" ]; then
+            npx --yes firebase-tools@15.2.1 deploy --only functions:analyzeMarketingUploadSession --project demac-corporation --non-interactive --token "$FIREBASE_TOKEN"
+          else
+            echo "::error title=Firebase deployment credential missing::Add FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION (preferred) or FIREBASE_TOKEN as a GitHub Actions repository secret."
+            exit 1
+          fi
