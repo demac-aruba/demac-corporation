@@ -33,12 +33,12 @@ jobs:
           package-manager-cache: false
       - name: Install function dependencies
         run: npm install --prefix functions --no-audit --no-fund
-      - name: Validate function syntax and exports
+      - name: Validate function syntax and callable export
         run: |
           node --check functions/marketingImageAnalysis.js
           node --check functions/marketingImageAnalysisCallable.js
           node --check functions/bootstrap.js
-          node -e "const mod=require('./functions/bootstrap'); if(typeof mod.analyzeMarketingUploadSession!=='function') throw new Error('analyzeMarketingUploadSession export missing'); if(typeof mod.requestMarketingImageAnalysis!=='function') throw new Error('requestMarketingImageAnalysis export missing');"
+          node -e "const mod=require('./functions/bootstrap'); if(typeof mod.requestMarketingImageAnalysis!=='function') throw new Error('requestMarketingImageAnalysis export missing'); if(typeof mod.analyzeMarketingUploadSession==='function') throw new Error('legacy Eventarc marketing handler must not be exported from bootstrap');"
 
   deploy-marketing-function:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
