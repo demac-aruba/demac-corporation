@@ -1,0 +1,57 @@
+name: Bootstrap Firebase Deployer IAM
+
+on:
+  push:
+    branches:
+      - agent/firebase-deployer-extensions-viewer
+    paths:
+      - '.github/workflows/firebase-deployer-iam-bootstrap.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  grant-minimum-extension-viewer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Authenticate deployment service account
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Grant Firebase Extensions Viewer to the deployer itself
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+        run: |
+          set -euo pipefail
+          SA_EMAIL="$(node -e "const v=JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON); if(!v.client_email) process.exit(2); process.stdout.write(v.client_email)")"
+          echo "Granting the least-privilege Firebase Extensions Viewer role to the configured deploy service account."
+          gcloud projects add-iam-policy-binding demac-corporation \
+            --member="serviceAccount:${SA_EMAIL}" \
+            --role="roles/firebaseextensions.viewer" \
+            --condition=None \
+            --quiet
+
+      - name: Verify extension instance list permission
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACCESS_TOKEN="$(gcloud auth print-access-token)"
+          STATUS="$(curl -sS -o /tmp/extensions-response.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            'https://firebaseextensions.googleapis.com/v1beta/projects/demac-corporation/instances?pageSize=1')"
+          if [ "$STATUS" != "200" ]; then
+            cat /tmp/extensions-response.json
+            echo "::error::Firebase Extensions instance list verification returned HTTP ${STATUS}."
+            exit 1
+          fi
+          echo "Firebase Extensions list permission verified."
