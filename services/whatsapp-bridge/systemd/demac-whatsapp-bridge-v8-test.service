@@ -1,0 +1,24 @@
+[Unit]
+Description=DEMAC WhatsApp wacli Bridge V8 - personal test
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=demac-wacli
+Group=demac-wacli
+WorkingDirectory=/opt/demac-whatsapp-bridge
+EnvironmentFile=/etc/demac-whatsapp-bridge.env
+Environment=WACLI_BINARY=/opt/demac-whatsapp-bridge/wacli-test-wrapper
+ExecStart=/usr/bin/node /opt/demac-whatsapp-bridge/server-v2.mjs
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/demac-whatsapp-bridge /var/lib/demac-wacli-test
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
