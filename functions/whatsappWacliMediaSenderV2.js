@@ -49,7 +49,7 @@ function mergeRecentMessages(existing, incoming) {
 
 exports.sendQueuedWacliMediaMessageV2 = onDocumentCreated(
   {
-    document: 'whatsappOutboundQueueV2/{queueId}',
+    document: 'whatsappOutboundQueue/{queueId}',
     region: 'us-central1',
     memory: '512MiB',
     timeoutSeconds: 90,
@@ -60,7 +60,7 @@ exports.sendQueuedWacliMediaMessageV2 = onDocumentCreated(
     if (!snapshot) return;
     const ref = snapshot.ref;
     const original = snapshot.data() || {};
-    if (original.provider !== 'wacli' || (original.status && original.status !== 'queued')) return;
+    if (original.provider !== 'wacli-v2' || (original.status && original.status !== 'queued')) return;
 
     try {
       const to = validateRecipient(original.to);
@@ -116,7 +116,7 @@ exports.sendQueuedWacliMediaMessageV2 = onDocumentCreated(
 
       const batch = db.batch();
       batch.set(db.collection('whatsappMessages').doc(safeDocumentId(messageId)), {
-        provider: 'wacli',
+        provider: 'wacli-v2',
         messageId,
         conversationId: original.conversationId || null,
         direction: 'outbound',
