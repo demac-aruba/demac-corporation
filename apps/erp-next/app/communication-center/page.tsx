@@ -1,6 +1,6 @@
 import { AccessibilityTextProvider } from '@/components/accessibility/text-size-provider';
 import { AuthGate } from '@/components/auth/auth-gate';
-import { CommunicationCenter } from '@/components/communications/communication-center';
+import { WhatsAppOperatorWorkspace } from '@/components/communications/whatsapp-operator-workspace';
 import styles from './standalone.module.css';
 
 export default function StandaloneCommunicationCenterPage() {
@@ -19,7 +19,7 @@ export default function StandaloneCommunicationCenterPage() {
             <span className={styles.status}><i /> Live workspace</span>
           </header>
           <div className={styles.host}>
-            <CommunicationCenter standalone />
+            <WhatsAppOperatorWorkspace />
           </div>
         </main>
       </AccessibilityTextProvider>

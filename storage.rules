@@ -60,6 +60,22 @@ service firebase.storage {
         && resource.metadata.uploadedByUid == request.auth.uid;
     }
 
+    function validCommunicationOutbound(uid) {
+      return signedIn()
+        && request.auth.uid == uid
+        && request.resource != null
+        && request.resource.size < 50 * 1024 * 1024
+        && (
+          request.resource.contentType.matches('image/.*')
+          || request.resource.contentType.matches('video/.*')
+          || request.resource.contentType.matches('audio/.*')
+          || request.resource.contentType == 'application/pdf'
+          || request.resource.contentType == 'application/octet-stream'
+          || request.resource.contentType.matches('text/.*')
+          || request.resource.contentType.matches('application/.*')
+        );
+    }
+
     match /public-website/config/published.json {
       allow read: if true;
       allow create, update: if validWebsiteConfig();
@@ -85,6 +101,26 @@ service firebase.storage {
       allow create: if validEvidenceImage();
       allow update: if false;
       allow delete: if uploadedByCurrentUser();
+    }
+
+    // Communication Center media stays private. Operators can upload only into
+    // their own outbound prefix. Inbound media and profile-picture cache are
+    // written by trusted backend code / signed Cloud Storage URLs.
+    match /communication-media/outbound/{uid}/{conversationId}/{allPaths=**} {
+      allow read: if signedIn();
+      allow create: if validCommunicationOutbound(uid);
+      allow update: if false;
+      allow delete: if signedIn() && request.auth.uid == uid;
+    }
+
+    match /communication-media/inbound/{conversationId}/{allPaths=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /communication-media/avatars/{identity}/{allPaths=**} {
+      allow read: if signedIn();
+      allow write: if false;
     }
 
     match /{allPaths=**} {
