@@ -55,4 +55,4 @@ jobs:
           --only
           "functions:wacliWebhookV2,functions:wacliMediaUploadTicketV2,functions:sendQueuedWacliMediaMessageV2,functions:wacliBackfillUpdateV2,storage"
 
-# IAM retry: 2026-08-13 extensions-viewer
+# IAM retry: 2026-08-13 secret-manager-viewer
