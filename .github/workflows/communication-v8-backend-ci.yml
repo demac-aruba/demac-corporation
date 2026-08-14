@@ -10,6 +10,10 @@ on:
       - 'functions/bootstrap.js'
       - 'services/whatsapp-bridge/server-v2.mjs'
       - 'services/whatsapp-bridge/backfill-recent.mjs'
+      - 'services/whatsapp-bridge/install-v8-test.sh'
+      - 'services/whatsapp-bridge/systemd/demac-whatsapp-bridge-v8-test.service'
+      - 'services/whatsapp-bridge/systemd/demac-wacli-sync-v8-test.service'
+      - 'services/whatsapp-bridge/systemd/demac-wacli-backfill-v8-test.service'
       - '.github/workflows/communication-v8-backend-ci.yml'
   workflow_dispatch:
 
@@ -25,10 +29,11 @@ jobs:
         with:
           node-version: '22'
           package-manager-cache: false
-      - name: Check JavaScript and ESM syntax
+      - name: Check JavaScript, ESM and installer syntax
         run: |
           node --check functions/whatsappWacliGatewayV2.js
           node --check functions/whatsappWacliBackfill.js
           node --check functions/bootstrap.js
           node --check services/whatsapp-bridge/server-v2.mjs
           node --check services/whatsapp-bridge/backfill-recent.mjs
+          bash -n services/whatsapp-bridge/install-v8-test.sh
