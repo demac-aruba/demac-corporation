@@ -56,4 +56,5 @@ require('./patchMarketingCampaignStrategyV21Preflight.cjs');
 require('./patchMarketingCampaignStrategyV21.cjs');
 require('./patchMarketingCampaignStrategyV22.cjs');
 require('./patchMarketingCampaignStrategyV23.cjs');
+require('./patchMarketingBrandCenterV24Preflight.cjs');
 require('./patchMarketingBrandCenterV24.cjs');
