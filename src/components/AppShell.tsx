@@ -10,12 +10,15 @@ import { DashboardScreen } from '../screens/DashboardScreen';
 import { FinanceScreen } from '../screens/FinanceScreen';
 import { EmployeesTimesheetScreen } from '../screens/EmployeesTimesheetScreen';
 import { InventoryScreen } from '../screens/InventoryScreen';
+import { MarketingScreen } from '../screens/MarketingScreen';
 import { SettingsHubScreen } from '../screens/SettingsHubScreen';
 import { TeamHubScreen } from '../screens/TeamHubScreen';
 import { TechnicianScreen } from '../screens/TechnicianScreen';
 import { WorkOrdersScreen } from '../screens/WorkOrdersScreen';
 
-const navItems: { key: ScreenKey; label: string; icon: string; roles: UserRole[] }[] = [
+type ShellScreenKey = ScreenKey | 'marketing';
+
+const navItems: { key: ShellScreenKey; label: string; icon: string; roles: UserRole[] }[] = [
   { key: 'dashboard', label: 'Inicio', icon: '⌂', roles: ['admin', 'office', 'supervisor', 'accounting', 'inventory'] },
   { key: 'agenda', label: 'Agenda', icon: '▣', roles: ['admin', 'office', 'supervisor'] },
   { key: 'clients', label: 'Clientes', icon: '♙', roles: ['admin', 'office', 'supervisor', 'accounting'] },
@@ -25,6 +28,7 @@ const navItems: { key: ScreenKey; label: string; icon: string; roles: UserRole[]
   { key: 'technician', label: 'Mi trabajo', icon: '✓', roles: ['admin', 'supervisor', 'technician'] },
   { key: 'sales', label: 'Ventas', icon: '$', roles: ['admin', 'office', 'accounting'] },
   { key: 'inventory', label: 'Inventario', icon: '◇', roles: ['admin', 'supervisor', 'inventory'] },
+  { key: 'marketing', label: 'Marketing', icon: '✦', roles: ['admin', 'office'] },
   { key: 'employees', label: 'Empleados', icon: '♙', roles: ['admin', 'accounting'] },
   { key: 'finance', label: 'Cuentas', icon: '▤', roles: ['admin', 'accounting'] },
   { key: 'settings', label: 'Ajustes', icon: '⚙', roles: ['admin'] },
@@ -87,7 +91,7 @@ export function AppShell() {
               <Text style={styles.createLabel}>Crear</Text>
             </Pressable>
             <ScrollView contentContainerStyle={styles.railNav} showsVerticalScrollIndicator={false}>
-              {availableItems.map((item) => <RailButton key={item.key} item={item} active={activeScreen === item.key} onPress={() => setActiveScreen(item.key)} />)}
+              {availableItems.map((item) => <RailButton key={item.key} item={item} active={activeScreen === item.key} onPress={() => setActiveScreen(item.key as ScreenKey)} />)}
             </ScrollView>
             <Pressable onPress={() => void handleLogout()} style={styles.railFooter}>
               <Text style={styles.railFooterIcon}>↪</Text>
@@ -132,7 +136,7 @@ export function AppShell() {
             <View style={styles.bottomNav}>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.bottomNavInner}>
                 {availableItems.map((item) => (
-                  <Pressable key={item.key} onPress={() => setActiveScreen(item.key)} style={[styles.bottomItem, activeScreen === item.key && styles.bottomItemActive]}>
+                  <Pressable key={item.key} onPress={() => setActiveScreen(item.key as ScreenKey)} style={[styles.bottomItem, activeScreen === item.key && styles.bottomItemActive]}>
                     <Text style={[styles.bottomIcon, activeScreen === item.key && styles.bottomTextActive]}>{item.icon}</Text>
                     <Text style={[styles.bottomLabel, activeScreen === item.key && styles.bottomTextActive]} numberOfLines={1}>{item.label}</Text>
                   </Pressable>

@@ -12,6 +12,12 @@ service firebase.storage {
         && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role in ['admin', 'owner', 'super_admin'];
     }
 
+    function marketingRole() {
+      return signedIn()
+        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.active == true
+        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role in ['admin', 'office'];
+    }
+
     function validEvidenceImage() {
       return signedIn()
         && request.resource != null
@@ -20,6 +26,19 @@ service firebase.storage {
         && request.resource.metadata != null
         && 'uploadedByUid' in request.resource.metadata
         && request.resource.metadata.uploadedByUid == request.auth.uid;
+    }
+
+    function validMarketingImage() {
+      return marketingRole()
+        && request.resource != null
+        && request.resource.size < 25 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*')
+        && request.resource.metadata != null
+        && 'uploadedByUid' in request.resource.metadata
+        && request.resource.metadata.uploadedByUid == request.auth.uid
+        && 'sessionId' in request.resource.metadata
+        && 'assetId' in request.resource.metadata
+        && 'variant' in request.resource.metadata;
     }
 
     function validWebsiteImage() {
@@ -85,6 +104,14 @@ service firebase.storage {
       allow create: if validEvidenceImage();
       allow update: if false;
       allow delete: if uploadedByCurrentUser();
+    }
+
+    match /marketing/{category}/{sessionId}/{fileName} {
+      allow read: if marketingRole();
+      allow create: if validMarketingImage()
+        && request.resource.metadata.sessionId == sessionId;
+      allow update: if false;
+      allow delete: if marketingRole();
     }
 
     match /{allPaths=**} {
