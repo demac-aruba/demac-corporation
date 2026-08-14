@@ -1,5 +1,5 @@
 [Unit]
-Description=DEMAC WhatsApp wacli Bridge
+Description=DEMAC WhatsApp wacli Bridge V2
 After=network-online.target
 Wants=network-online.target
 
@@ -9,7 +9,7 @@ User=demac-wacli
 Group=demac-wacli
 WorkingDirectory=/opt/demac-whatsapp-bridge
 EnvironmentFile=/etc/demac-whatsapp-bridge.env
-ExecStart=/usr/bin/node /opt/demac-whatsapp-bridge/server.mjs
+ExecStart=/usr/bin/node /opt/demac-whatsapp-bridge/server-v2.mjs
 Restart=always
 RestartSec=3
 NoNewPrivileges=true
