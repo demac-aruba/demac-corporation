@@ -49,3 +49,4 @@ insertAfter(
 );
 
 console.log('Marketing Agent foundation V18 applied.');
+require('./patchMarketingImageAnalysisV19.cjs');
