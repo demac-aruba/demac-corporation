@@ -1,10 +1,11 @@
-name: Deploy Firebase Storage Rules
+name: Deploy Firebase Rules
 
 on:
   push:
     branches:
       - main
     paths:
+      - 'firestore.rules'
       - 'storage.rules'
       - 'firebase.json'
       - '.firebaserc'
@@ -15,7 +16,7 @@ permissions:
   contents: read
 
 jobs:
-  deploy-storage-rules:
+  deploy-firebase-rules:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -27,7 +28,7 @@ jobs:
           node-version: '24'
           package-manager-cache: false
 
-      - name: Deploy Storage rules to demac-corporation
+      - name: Deploy Firestore and Storage rules to demac-corporation
         shell: bash
         env:
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
@@ -40,9 +41,9 @@ jobs:
             printf '%s' "$FIREBASE_SERVICE_ACCOUNT_JSON" > "$CREDENTIAL_FILE"
             chmod 600 "$CREDENTIAL_FILE"
             export GOOGLE_APPLICATION_CREDENTIALS="$CREDENTIAL_FILE"
-            npx --yes firebase-tools@15.2.1 deploy --only storage --project demac-corporation --non-interactive
+            npx --yes firebase-tools@15.2.1 deploy --only firestore:rules,storage --project demac-corporation --non-interactive
           elif [ -n "${FIREBASE_TOKEN:-}" ]; then
-            npx --yes firebase-tools@15.2.1 deploy --only storage --project demac-corporation --non-interactive --token "$FIREBASE_TOKEN"
+            npx --yes firebase-tools@15.2.1 deploy --only firestore:rules,storage --project demac-corporation --non-interactive --token "$FIREBASE_TOKEN"
           else
             echo "::error title=Firebase deployment credential missing::Add FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION (preferred) or FIREBASE_TOKEN as a GitHub Actions repository secret. No Firebase rules were changed."
             exit 1
