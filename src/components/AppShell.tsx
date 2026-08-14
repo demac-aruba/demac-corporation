@@ -49,8 +49,8 @@ export function AppShell() {
   const { width } = useWindowDimensions();
   const isDesktop = width >= 920;
   const availableItems = useMemo(() => navItems.filter((item) => currentUser && item.roles.includes(currentUser.role)), [currentUser]);
-  const defaultScreen: ShellScreenKey = currentUser?.role === 'technician' ? 'technician' : currentUser?.role === 'inventory' ? 'inventory' : currentUser?.role === 'accounting' ? 'finance' : 'dashboard';
-  const [activeScreen, setActiveScreen] = useState<ShellScreenKey>(defaultScreen);
+  const defaultScreen: ScreenKey = currentUser?.role === 'technician' ? 'technician' : currentUser?.role === 'inventory' ? 'inventory' : currentUser?.role === 'accounting' ? 'finance' : 'dashboard';
+  const [activeScreen, setActiveScreen] = useState<ScreenKey>(defaultScreen);
   const [profileMenuVisible, setProfileMenuVisible] = useState(false);
   const activeLabel = availableItems.find((item) => item.key === activeScreen)?.label ?? 'Inicio';
   const profileMenuWidth = Math.min(320, Math.max(260, width - 24));
@@ -74,7 +74,6 @@ export function AppShell() {
     case 'technician': content = <TechnicianScreen />; break;
     case 'sales': content = <FinanceScreen salesMode />; break;
     case 'inventory': content = <InventoryScreen />; break;
-    case 'marketing': content = <MarketingScreen />; break;
     case 'employees': content = <EmployeesTimesheetScreen />; break;
     case 'finance': content = <FinanceScreen />; break;
     case 'settings': content = <SettingsHubScreen />; break;
@@ -92,7 +91,7 @@ export function AppShell() {
               <Text style={styles.createLabel}>Crear</Text>
             </Pressable>
             <ScrollView contentContainerStyle={styles.railNav} showsVerticalScrollIndicator={false}>
-              {availableItems.map((item) => <RailButton key={item.key} item={item} active={activeScreen === item.key} onPress={() => setActiveScreen(item.key)} />)}
+              {availableItems.map((item) => <RailButton key={item.key} item={item} active={activeScreen === item.key} onPress={() => setActiveScreen(item.key as ScreenKey)} />)}
             </ScrollView>
             <Pressable onPress={() => void handleLogout()} style={styles.railFooter}>
               <Text style={styles.railFooterIcon}>↪</Text>
@@ -137,7 +136,7 @@ export function AppShell() {
             <View style={styles.bottomNav}>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.bottomNavInner}>
                 {availableItems.map((item) => (
-                  <Pressable key={item.key} onPress={() => setActiveScreen(item.key)} style={[styles.bottomItem, activeScreen === item.key && styles.bottomItemActive]}>
+                  <Pressable key={item.key} onPress={() => setActiveScreen(item.key as ScreenKey)} style={[styles.bottomItem, activeScreen === item.key && styles.bottomItemActive]}>
                     <Text style={[styles.bottomIcon, activeScreen === item.key && styles.bottomTextActive]}>{item.icon}</Text>
                     <Text style={[styles.bottomLabel, activeScreen === item.key && styles.bottomTextActive]} numberOfLines={1}>{item.label}</Text>
                   </Pressable>
