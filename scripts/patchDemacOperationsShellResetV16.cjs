@@ -16,7 +16,7 @@ function normalizeLegacyShell(source) {
     .replace("\ntype ShellScreenKey = ScreenKey | 'marketing';\n", '\n')
     .replace('const navItems: { key: ShellScreenKey; label: string; icon: string; roles: UserRole[] }[] = [', 'const navItems: { key: ScreenKey; label: string; icon: string; roles: UserRole[] }[] = [')
     .replace("  { key: 'marketing', label: 'Marketing', icon: '✦', roles: ['admin', 'office'] },\n", '')
-    .replace('onPress={() => setActiveScreen(item.key as ScreenKey)}', 'onPress={() => setActiveScreen(item.key)}');
+    .replaceAll('onPress={() => setActiveScreen(item.key as ScreenKey)}', 'onPress={() => setActiveScreen(item.key)}');
 }
 
 try {
