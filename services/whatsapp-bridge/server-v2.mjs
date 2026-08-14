@@ -48,6 +48,14 @@ function json(response, status, payload) { const body = JSON.stringify(payload);
 function digitsOnly(value) { return String(value || '').replace(/\D/g, ''); }
 function validPhone(value) { const phone = digitsOnly(value); return /^\d{8,15}$/.test(phone) ? phone : ''; }
 function safeName(value, fallback = 'file') { return String(value || fallback).replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 140) || fallback; }
+function siblingFunctionUrl(functionName) {
+  const url = new URL(ERP_WEBHOOK_URL);
+  const parts = url.pathname.split('/').filter(Boolean);
+  if (!parts.length) throw new Error('ERP_WEBHOOK_URL does not contain a Firebase function name.');
+  parts[parts.length - 1] = functionName;
+  url.pathname = `/${parts.join('/')}`;
+  return url.toString();
+}
 
 async function readBody(request) {
   const chunks = []; let size = 0;
@@ -120,10 +128,10 @@ function extensionFor(meta) {
   if (mime.includes('webp')) return 'webp'; if (mime.includes('jpeg')) return 'jpg'; if (mime.includes('png')) return 'png'; if (mime.includes('gif')) return 'gif'; if (mime.includes('ogg')) return 'ogg'; if (mime.includes('webm')) return 'webm'; if (mime.includes('mpeg')) return 'mp3'; if (mime.includes('mp4')) return 'mp4'; if (mime.includes('pdf')) return 'pdf'; return 'bin';
 }
 
-async function uploadTicketUrl() { const url = new URL(ERP_WEBHOOK_URL); url.pathname = url.pathname.replace(/wacliWebhook\/?$/, 'wacliMediaUploadTicket'); return url.toString(); }
+function uploadTicketUrl() { return siblingFunctionUrl('wacliMediaUploadTicketV2'); }
 async function requestUploadTicket(metadata) {
   const raw = Buffer.from(JSON.stringify(metadata));
-  const response = await fetch(await uploadTicketUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Wacli-Signature': signatureFor(raw) }, body: raw, signal: AbortSignal.timeout(FORWARD_TIMEOUT_MS) });
+  const response = await fetch(uploadTicketUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Wacli-Signature': signatureFor(raw) }, body: raw, signal: AbortSignal.timeout(FORWARD_TIMEOUT_MS) });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data?.ok !== true || !data.uploadUrl || !data.storagePath) throw new Error(data?.error || `Media ticket returned HTTP ${response.status}`);
   return data;
@@ -167,7 +175,11 @@ async function enrichProfilePicture(chat, conversationId) {
     const contentType = response.headers.get('content-type') || 'image/jpeg';
     const storagePath = await uploadBufferToStorage(buffer, { scope: 'avatar', identity: chat, conversationId, messageId: `avatar-${Date.now()}`, contentType, fileName: `profile.${contentType.includes('png') ? 'png' : 'jpg'}`, kind: 'image' });
     const value = { storagePath, updatedAt: new Date().toISOString() }; avatarCache.set(chat, { at: Date.now(), value }); return value;
-  } catch { avatarCache.set(chat, { at: Date.now(), value: null }); return null; }
+  } catch {
+    // picture-info may temporarily contend with the continuous sync store lock.
+    // Do not poison the 24h cache on transient failures; a later event/backfill can retry.
+    return null;
+  }
 }
 
 async function enrichIncomingPayload(payload) {
