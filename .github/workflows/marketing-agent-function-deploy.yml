@@ -103,6 +103,7 @@ jobs:
             --set-secrets=OPENAI_API_KEY=OPENAI_API_KEY:latest \
             --trigger-event-filters=type=google.cloud.firestore.document.v1.updated \
             --trigger-event-filters=database='(default)' \
+            --trigger-event-filters=namespace='(default)' \
             --trigger-event-filters-path-pattern="document=marketingUploadSessions/{sessionId}" \
             --quiet
 
