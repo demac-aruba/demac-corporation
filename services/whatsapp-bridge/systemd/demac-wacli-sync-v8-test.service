@@ -1,0 +1,23 @@
+[Unit]
+Description=DEMAC WhatsApp wacli Sync V8 - personal test with media
+After=network-online.target demac-whatsapp-bridge-v8-test.service
+Wants=network-online.target
+Requires=demac-whatsapp-bridge-v8-test.service
+
+[Service]
+Type=simple
+User=demac-wacli
+Group=demac-wacli
+EnvironmentFile=/etc/demac-whatsapp-bridge.env
+ExecStart=/usr/local/bin/wacli --store /var/lib/demac-wacli-test sync --follow --max-reconnect 0 --stale-threshold 2m --presence-mode quiet --send-spacing 2s-5s --max-db-size 2GB --download-media --refresh-contacts --webhook http://127.0.0.1:8787/v1/events --webhook-allow-private --webhook-secret ${WACLI_WEBHOOK_SECRET} --webhook-events message,receipt
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/demac-wacli-test
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
