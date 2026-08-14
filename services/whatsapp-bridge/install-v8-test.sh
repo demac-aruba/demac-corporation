@@ -112,13 +112,18 @@ fi
 log "Installing validated V8 bridge assets"
 mkdir -p "$APP_DIR" "$STATE_DIR"
 chmod 700 "$STATE_DIR"
-curl -fL --retry 3 --connect-timeout 10 "$RAW_BASE/server-v2.mjs" -o "$APP_DIR/server-v2.mjs.new"
-curl -fL --retry 3 --connect-timeout 10 "$RAW_BASE/backfill-recent.mjs" -o "$APP_DIR/backfill-recent.mjs.new"
-node --check "$APP_DIR/server-v2.mjs.new"
-node --check "$APP_DIR/backfill-recent.mjs.new"
-install -o root -g root -m 644 "$APP_DIR/server-v2.mjs.new" "$APP_DIR/server-v2.mjs"
-install -o root -g root -m 644 "$APP_DIR/backfill-recent.mjs.new" "$APP_DIR/backfill-recent.mjs"
-rm -f "$APP_DIR/server-v2.mjs.new" "$APP_DIR/backfill-recent.mjs.new"
+# Keep a real .mjs suffix during validation. Node 24 rejects unknown suffixes
+# such as `.mjs.new` before it can perform --check.
+SERVER_TMP="$APP_DIR/.server-v2.new.mjs"
+BACKFILL_TMP="$APP_DIR/.backfill-recent.new.mjs"
+rm -f "$SERVER_TMP" "$BACKFILL_TMP" "$APP_DIR/server-v2.mjs.new" "$APP_DIR/backfill-recent.mjs.new"
+curl -fL --retry 3 --connect-timeout 10 "$RAW_BASE/server-v2.mjs" -o "$SERVER_TMP"
+curl -fL --retry 3 --connect-timeout 10 "$RAW_BASE/backfill-recent.mjs" -o "$BACKFILL_TMP"
+node --check "$SERVER_TMP"
+node --check "$BACKFILL_TMP"
+install -o root -g root -m 644 "$SERVER_TMP" "$APP_DIR/server-v2.mjs"
+install -o root -g root -m 644 "$BACKFILL_TMP" "$APP_DIR/backfill-recent.mjs"
+rm -f "$SERVER_TMP" "$BACKFILL_TMP"
 
 # Every bridge-spawned wacli command is forced into the already-paired personal test store.
 cat >"$APP_DIR/wacli-test-wrapper" <<'WRAPPER'
