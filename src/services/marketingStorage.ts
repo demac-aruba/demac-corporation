@@ -15,7 +15,21 @@ export type MarketingCampaignType =
   | 'seasonal_heat'
   | 'other';
 
+export type MarketingRecommendedCampaignType = MarketingCampaignType | 'do_not_use';
 export type MarketingUploadSessionStatus = 'uploading' | 'ready' | 'partial' | 'failed';
+export type MarketingAnalysisStatus = 'queued' | 'processing' | 'completed' | 'failed';
+export type MarketingShotType =
+  | 'customer_handoff'
+  | 'installed_unit'
+  | 'technician_at_work'
+  | 'before_after'
+  | 'equipment_detail'
+  | 'team'
+  | 'vehicle'
+  | 'property'
+  | 'product'
+  | 'unclear'
+  | 'other';
 
 export type MarketingUploadSession = {
   id: string;
@@ -29,6 +43,19 @@ export type MarketingUploadSession = {
   updatedAt: string;
   createdByUserId: string;
   createdByName: string;
+  analysisStatus?: MarketingAnalysisStatus;
+  analysisRequestedAt?: string;
+  analysisStartedAt?: string;
+  analysisCompletedAt?: string;
+  analysisFailedAt?: string;
+  analysisSourceKey?: string;
+  analysisModel?: string;
+  analysisError?: string;
+  analyzedAssetCount?: number;
+  usableAssetCount?: number;
+  primaryAssetId?: string | null;
+  bestAssetIds?: string[];
+  recommendedCampaignType?: MarketingCampaignType;
 };
 
 export type MarketingAsset = {
@@ -45,6 +72,32 @@ export type MarketingAsset = {
   createdAt: string;
   updatedAt: string;
   uploadedByUserId: string;
+  analysisStatus?: 'processing' | 'completed' | 'failed';
+  analysisSourceKey?: string;
+  analysisModel?: string;
+  analysisError?: string;
+  qualityScore?: number;
+  marketingSuitabilityScore?: number;
+  compositionScore?: number;
+  lightingScore?: number;
+  sharpnessScore?: number;
+  subjectClarityScore?: number;
+  brandSafetyScore?: number;
+  rankingScore?: number;
+  rank?: number;
+  recommendedCampaignType?: MarketingRecommendedCampaignType;
+  shotType?: MarketingShotType;
+  strengths?: string[];
+  issues?: string[];
+  recommendedUse?: string;
+  doNotUse?: boolean;
+  rejectionReason?: string;
+  containsPerson?: boolean;
+  personUsageNote?: string;
+  containsReadableSensitiveData?: boolean;
+  sensitiveDataNote?: string;
+  analysisSummary?: string;
+  analyzedAt?: string;
 };
 
 export type MarketingStorageUploadResult = {
@@ -268,6 +321,16 @@ export async function createMarketingUploadSession(session: MarketingUploadSessi
 
 export async function updateMarketingUploadSession(sessionId: string, changes: Partial<Omit<MarketingUploadSession, 'id'>>) {
   await updateFirestoreDocument('marketingUploadSessions', sessionId, changes);
+}
+
+export async function requestMarketingAnalysis(sessionId: string) {
+  const now = new Date().toISOString();
+  await updateMarketingUploadSession(sessionId, {
+    analysisStatus: 'queued',
+    analysisRequestedAt: now,
+    analysisError: undefined,
+    updatedAt: now,
+  });
 }
 
 export async function saveMarketingAsset(asset: MarketingAsset) {
