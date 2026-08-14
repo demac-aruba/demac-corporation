@@ -10,12 +10,15 @@ import { DashboardScreen } from '../screens/DashboardScreen';
 import { FinanceScreen } from '../screens/FinanceScreen';
 import { EmployeesTimesheetScreen } from '../screens/EmployeesTimesheetScreen';
 import { InventoryScreen } from '../screens/InventoryScreen';
+import { MarketingScreen } from '../screens/MarketingScreen';
 import { SettingsHubScreen } from '../screens/SettingsHubScreen';
 import { TeamHubScreen } from '../screens/TeamHubScreen';
 import { TechnicianScreen } from '../screens/TechnicianScreen';
 import { WorkOrdersScreen } from '../screens/WorkOrdersScreen';
 
-const navItems: { key: ScreenKey; label: string; icon: string; roles: UserRole[] }[] = [
+type ShellScreenKey = ScreenKey | 'marketing';
+
+const navItems: { key: ShellScreenKey; label: string; icon: string; roles: UserRole[] }[] = [
   { key: 'dashboard', label: 'Inicio', icon: '⌂', roles: ['admin', 'office', 'supervisor', 'accounting', 'inventory'] },
   { key: 'agenda', label: 'Agenda', icon: '▣', roles: ['admin', 'office', 'supervisor'] },
   { key: 'clients', label: 'Clientes', icon: '♙', roles: ['admin', 'office', 'supervisor', 'accounting'] },
@@ -25,6 +28,7 @@ const navItems: { key: ScreenKey; label: string; icon: string; roles: UserRole[]
   { key: 'technician', label: 'Mi trabajo', icon: '✓', roles: ['admin', 'supervisor', 'technician'] },
   { key: 'sales', label: 'Ventas', icon: '$', roles: ['admin', 'office', 'accounting'] },
   { key: 'inventory', label: 'Inventario', icon: '◇', roles: ['admin', 'supervisor', 'inventory'] },
+  { key: 'marketing', label: 'Marketing', icon: '✦', roles: ['admin', 'office'] },
   { key: 'employees', label: 'Empleados', icon: '♙', roles: ['admin', 'accounting'] },
   { key: 'finance', label: 'Cuentas', icon: '▤', roles: ['admin', 'accounting'] },
   { key: 'settings', label: 'Ajustes', icon: '⚙', roles: ['admin'] },
@@ -45,8 +49,8 @@ export function AppShell() {
   const { width } = useWindowDimensions();
   const isDesktop = width >= 920;
   const availableItems = useMemo(() => navItems.filter((item) => currentUser && item.roles.includes(currentUser.role)), [currentUser]);
-  const defaultScreen: ScreenKey = currentUser?.role === 'technician' ? 'technician' : currentUser?.role === 'inventory' ? 'inventory' : currentUser?.role === 'accounting' ? 'finance' : 'dashboard';
-  const [activeScreen, setActiveScreen] = useState<ScreenKey>(defaultScreen);
+  const defaultScreen: ShellScreenKey = currentUser?.role === 'technician' ? 'technician' : currentUser?.role === 'inventory' ? 'inventory' : currentUser?.role === 'accounting' ? 'finance' : 'dashboard';
+  const [activeScreen, setActiveScreen] = useState<ShellScreenKey>(defaultScreen);
   const [profileMenuVisible, setProfileMenuVisible] = useState(false);
   const activeLabel = availableItems.find((item) => item.key === activeScreen)?.label ?? 'Inicio';
   const profileMenuWidth = Math.min(320, Math.max(260, width - 24));
@@ -70,6 +74,7 @@ export function AppShell() {
     case 'technician': content = <TechnicianScreen />; break;
     case 'sales': content = <FinanceScreen salesMode />; break;
     case 'inventory': content = <InventoryScreen />; break;
+    case 'marketing': content = <MarketingScreen />; break;
     case 'employees': content = <EmployeesTimesheetScreen />; break;
     case 'finance': content = <FinanceScreen />; break;
     case 'settings': content = <SettingsHubScreen />; break;
