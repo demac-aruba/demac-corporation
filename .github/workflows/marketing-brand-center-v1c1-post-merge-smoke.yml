@@ -1,0 +1,248 @@
+name: Marketing Brand Center V1C.1 Post-Merge Smoke
+
+on:
+  push:
+    branches:
+      - test/marketing-brand-center-v1c1-post-merge
+    paths:
+      - '.github/workflows/marketing-brand-center-v1c1-post-merge-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  authenticated-brand-center-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout merged production code
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install Firebase Admin dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Run authenticated Brand Center Firestore smoke
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+          FIREBASE_WEB_API_KEY: AIzaSyCo31zuo6d8RsgiLWGqUVOvRmHkisoF1DE
+        run: |
+          set -euo pipefail
+          cd functions
+          node <<'NODE'
+          const { cert, initializeApp } = require('firebase-admin/app');
+          const { getAuth } = require('firebase-admin/auth');
+          const { getFirestore } = require('firebase-admin/firestore');
+
+          const projectId = 'demac-corporation';
+          const credentials = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+          initializeApp({ credential: cert(credentials), projectId });
+          const auth = getAuth();
+          const db = getFirestore();
+          const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          const email = `marketing-brand-smoke-${stamp}@demac-smoke.test`;
+          let uid = '';
+
+          const brandRef = db.collection('marketingBrandSettings').doc('default');
+          const correctionRef = db.collection('papiamentoCorrections').doc('marketing-brand-approved-phrases');
+          let originalBrandExists = false;
+          let originalBrand = null;
+          let originalCorrectionExists = false;
+          let originalCorrection = null;
+
+          function encodeValue(value) {
+            if (value === null || value === undefined) return { nullValue: null };
+            if (typeof value === 'string') return { stringValue: value };
+            if (typeof value === 'boolean') return { booleanValue: value };
+            if (Number.isInteger(value)) return { integerValue: String(value) };
+            if (typeof value === 'number') return { doubleValue: value };
+            if (Array.isArray(value)) return { arrayValue: { values: value.map(encodeValue) } };
+            if (typeof value === 'object') {
+              return { mapValue: { fields: Object.fromEntries(Object.entries(value).map(([key, item]) => [key, encodeValue(item)])) } };
+            }
+            throw new Error(`Unsupported Firestore value: ${typeof value}`);
+          }
+
+          function encodeFields(data) {
+            return Object.fromEntries(Object.entries(data).map(([key, value]) => [key, encodeValue(value)]));
+          }
+
+          function fieldString(document, key) {
+            return document?.fields?.[key]?.stringValue ?? '';
+          }
+
+          function fieldArrayStrings(document, key) {
+            return (document?.fields?.[key]?.arrayValue?.values || []).map((item) => item.stringValue || '');
+          }
+
+          async function exchangeCustomToken(customToken) {
+            const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${encodeURIComponent(process.env.FIREBASE_WEB_API_KEY)}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ token: customToken, returnSecureToken: true }),
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.idToken) throw new Error(`Firebase token exchange failed: ${JSON.stringify(payload)}`);
+            return payload.idToken;
+          }
+
+          async function firestoreRest(path, idToken, options = {}) {
+            const response = await fetch(`https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}`, {
+              ...options,
+              headers: {
+                ...(options.headers || {}),
+                Authorization: `Bearer ${idToken}`,
+                'Content-Type': 'application/json',
+              },
+            });
+            const text = await response.text();
+            let payload = {};
+            try { payload = text ? JSON.parse(text) : {}; } catch {}
+            if (!response.ok) throw new Error(`${options.method || 'GET'} ${path} failed (${response.status}): ${payload?.error?.message || text}`);
+            return payload;
+          }
+
+          (async () => {
+            try {
+              const [brandSnapshot, correctionSnapshot] = await Promise.all([brandRef.get(), correctionRef.get()]);
+              originalBrandExists = brandSnapshot.exists;
+              originalBrand = brandSnapshot.exists ? brandSnapshot.data() : null;
+              originalCorrectionExists = correctionSnapshot.exists;
+              originalCorrection = correctionSnapshot.exists ? correctionSnapshot.data() : null;
+
+              const user = await auth.createUser({ email, emailVerified: true, displayName: 'Marketing Brand Center smoke' });
+              uid = user.uid;
+              const now = new Date().toISOString();
+              await db.collection('users').doc(uid).set({
+                id: uid,
+                name: 'Marketing Brand Center smoke',
+                displayName: 'Marketing Brand Center smoke',
+                email,
+                active: true,
+                role: 'admin',
+                createdAt: now,
+                updatedAt: now,
+                syntheticSmokeTest: true,
+              });
+
+              const baseline = originalBrandExists ? { ...originalBrand } : {
+                companyName: 'DEMAC Professional Cooling Solutions',
+                brandName: 'DEMAC Professional Cooling Solutions',
+                whatsapp: '564-26-25',
+                primaryContact: 'WhatsApp',
+                primaryColor: 'Royal Blue',
+                secondaryColor: 'White',
+                style: 'Premium / Modern / Clean / Professional / High contrast / Mobile-first',
+                language: 'Papiamento di Aruba',
+                defaultFormat: 'Facebook/Instagram square 1:1 · high resolution',
+                footerRule: 'Reserve a sufficiently large blank bottom margin for the original DEMAC company footer; never generate or recreate it.',
+                realPhotoRule: 'Preserve the authenticity of real DEMAC installation photos and do not distort people, installed equipment, or official branding.',
+                approvedClaims: ['2-year full-unit warranty when installed by DEMAC.'],
+                approvedProducts: [
+                  'Adina Optima Inverter R32 · 220V · SEER 21 · 12,000 BTU · Afl. 699',
+                  'Adina Optima Inverter R32 · 220V · SEER 21 · 18,000 BTU · Afl. 1,199',
+                  'Adina Optima Inverter R32 · 220V · SEER 21 · 24,000 BTU · Afl. 1,399',
+                ],
+                approvedOffers: [],
+                approvedPapiamentoPhrases: [
+                  'Service bo Airco',
+                  'Instala bo Airco Nobo',
+                  'Traha bo Cita Awe mes',
+                  'Y Hanja 2 aña di Garantia riba Full e Airco',
+                  'Stop di drumi den Calor.',
+                  'Cumpra bo Airco awe mes.',
+                  'WhatsApp nos awe mes',
+                ],
+                campaignNotes: [
+                  'Use WhatsApp as the primary CTA.',
+                  'Keep all ad content above the reserved original company footer area.',
+                  'Preserve real installation photos authentically.',
+                ],
+              };
+
+              const approvedPhrases = Array.isArray(baseline.approvedPapiamentoPhrases) && baseline.approvedPapiamentoPhrases.length
+                ? baseline.approvedPapiamentoPhrases
+                : ['WhatsApp nos awe mes'];
+              const smokeBrand = {
+                ...baseline,
+                updatedAt: now,
+                updatedByUserId: uid,
+                updatedByName: 'Marketing Brand Center smoke',
+              };
+              const smokeCorrection = {
+                sectionKey: 'marketing_brand_center',
+                sourceText: 'DEMAC approved marketing phrases',
+                generatedText: '',
+                correctedText: approvedPhrases.join('\n'),
+                active: true,
+                createdAt: originalCorrection?.createdAt || now,
+                updatedAt: now,
+                approvedByUserId: uid,
+                approvedByName: 'Marketing Brand Center smoke',
+              };
+
+              const customToken = await auth.createCustomToken(uid);
+              const idToken = await exchangeCustomToken(customToken);
+
+              const unauth = await fetch(`https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/marketingBrandSettings/default`);
+              if (unauth.status !== 401 && unauth.status !== 403) throw new Error(`Expected unauthenticated Brand Center read to be blocked; got ${unauth.status}`);
+
+              await firestoreRest('marketingBrandSettings/default', idToken, {
+                method: 'PATCH',
+                body: JSON.stringify({ fields: encodeFields(smokeBrand) }),
+              });
+              await firestoreRest('papiamentoCorrections/marketing-brand-approved-phrases', idToken, {
+                method: 'PATCH',
+                body: JSON.stringify({ fields: encodeFields(smokeCorrection) }),
+              });
+
+              const [brandDocument, correctionDocument] = await Promise.all([
+                firestoreRest('marketingBrandSettings/default', idToken),
+                firestoreRest('papiamentoCorrections/marketing-brand-approved-phrases', idToken),
+              ]);
+
+              if (fieldString(brandDocument, 'companyName') !== smokeBrand.companyName) throw new Error('Brand companyName did not round-trip.');
+              if (fieldString(brandDocument, 'primaryContact') !== smokeBrand.primaryContact) throw new Error('Brand primaryContact did not round-trip.');
+              if (fieldString(brandDocument, 'whatsapp') !== smokeBrand.whatsapp) throw new Error('Brand WhatsApp did not round-trip.');
+              if (fieldString(brandDocument, 'updatedByUserId') !== uid) throw new Error('Brand authenticated writer metadata did not round-trip.');
+              const storedOffers = fieldArrayStrings(brandDocument, 'approvedOffers');
+              if (Array.isArray(smokeBrand.approvedOffers) && smokeBrand.approvedOffers.length === 0 && storedOffers.length !== 0) throw new Error('Empty approvedOffers guardrail was not preserved.');
+              const correctedText = fieldString(correctionDocument, 'correctedText');
+              if (!correctedText.includes(approvedPhrases[0])) throw new Error('Approved Papiamento phrase bank did not round-trip.');
+              if (fieldString(correctionDocument, 'approvedByUserId') !== uid) throw new Error('Papiamento correction authenticated writer metadata did not round-trip.');
+
+              console.log(JSON.stringify({
+                result: 'PASS',
+                productionCommit: '90d238c1ac26de28dc2bdba50e3e537fde683449',
+                authenticatedRole: 'admin',
+                brandConfigRoundTrip: true,
+                approvedOffersEmptyGuardrail: Array.isArray(smokeBrand.approvedOffers) ? smokeBrand.approvedOffers.length === 0 : false,
+                papiamentoPhraseBankRoundTrip: true,
+                unauthenticatedReadBlocked: true,
+                priorBrandConfigRestoredAfterTest: originalBrandExists,
+              }, null, 2));
+            } finally {
+              try {
+                if (originalBrandExists) await brandRef.set(originalBrand);
+                else await brandRef.delete();
+              } catch (error) { console.error('Brand restore failed:', error); process.exitCode = 1; }
+              try {
+                if (originalCorrectionExists) await correctionRef.set(originalCorrection);
+                else await correctionRef.delete();
+              } catch (error) { console.error('Correction restore failed:', error); process.exitCode = 1; }
+              if (uid) {
+                try { await db.collection('users').doc(uid).delete(); } catch (error) { console.error('User profile cleanup failed:', error); process.exitCode = 1; }
+                try { await auth.deleteUser(uid); } catch (error) { console.error('Auth user cleanup failed:', error); process.exitCode = 1; }
+              }
+            }
+          })().catch((error) => {
+            console.error(error);
+            process.exitCode = 1;
+          });
+          NODE
