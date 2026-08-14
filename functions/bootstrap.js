@@ -7,6 +7,7 @@ require('./whatsappCopilotServiceRules');
 const core = require('./index');
 const wacliGateway = require('./whatsappWacliGateway');
 const wacliGatewayV2 = require('./whatsappWacliGatewayV2');
+const wacliBackfill = require('./whatsappWacliBackfill');
 const appointmentNotifications = require('./appointmentNotifications');
 const userManagement = require('./userManagement');
 const voiceTranscription = require('./voiceTranscription');
@@ -22,6 +23,7 @@ module.exports = {
   ...core,
   ...wacliGateway,
   ...wacliGatewayV2,
+  ...wacliBackfill,
   ...appointmentNotifications,
   ...userManagement,
   ...voiceTranscription,
