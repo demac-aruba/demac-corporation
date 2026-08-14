@@ -10,6 +10,7 @@ const appointmentNotifications = require("./appointmentNotifications");
 const userManagement = require("./userManagement");
 const voiceTranscription = require("./voiceTranscription");
 const professionalReports = require("./professionalReportGeneration");
+const marketingImageAnalysis = require("./marketingImageAnalysis");
 const scheduling = require("./whatsappCopilot");
 const knowledge = require("./whatsappCopilotKnowledge");
 const router = require("./whatsappCopilotRouter");
@@ -24,6 +25,7 @@ module.exports = {
   ...userManagement,
   ...voiceTranscription,
   ...professionalReports,
+  ...marketingImageAnalysis,
   ...scheduling,
   ...knowledge,
   whatsappCopilotDraft: router.whatsappCopilotDraft,
