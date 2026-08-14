@@ -1,0 +1,91 @@
+name: Test Direct Marketing Function Deploy
+
+on:
+  push:
+    branches:
+      - agent/firebase-deployer-extensions-viewer
+    paths:
+      - '.github/workflows/marketing-direct-gcloud-deploy-test.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  direct-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Authenticate Firebase deployment service account
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Resolve existing DEMAC runtime configuration
+        id: config
+        shell: bash
+        run: |
+          set -euo pipefail
+          DB_LOCATION="$(gcloud firestore databases describe --database='(default)' --format='value(locationId)')"
+          if [ -z "$DB_LOCATION" ]; then
+            echo '::error::Could not resolve the default Firestore database location.'
+            exit 1
+          fi
+
+          REPORT_NAME='generateProfessionalCustomerReport'
+          if ! gcloud functions describe "$REPORT_NAME" --gen2 --region=us-central1 --format='value(name)' >/tmp/report-name.txt 2>/dev/null; then
+            REPORT_NAME="$(gcloud functions list --gen2 --format='value(name)' | awk -F/ 'tolower($NF) ~ /generateprofessionalcustomerreport/ {print $NF; exit}')"
+          fi
+          if [ -z "$REPORT_NAME" ]; then
+            echo '::error::Could not find the existing DEMAC professional report function to mirror its runtime identity.'
+            exit 1
+          fi
+
+          RUN_SA="$(gcloud functions describe "$REPORT_NAME" --gen2 --region=us-central1 --format='value(serviceConfig.serviceAccountEmail)')"
+          if [ -z "$RUN_SA" ]; then
+            echo '::error::Could not resolve the existing DEMAC runtime service account.'
+            exit 1
+          fi
+
+          echo "database_location=${DB_LOCATION}" >> "$GITHUB_OUTPUT"
+          echo "run_service_account=${RUN_SA}" >> "$GITHUB_OUTPUT"
+          echo "Resolved Firestore trigger location and existing DEMAC runtime service account."
+
+      - name: Deploy Marketing Agent function directly with Cloud Functions Gen 2
+        shell: bash
+        env:
+          DB_LOCATION: ${{ steps.config.outputs.database_location }}
+          RUN_SERVICE_ACCOUNT: ${{ steps.config.outputs.run_service_account }}
+        run: |
+          set -euo pipefail
+          gcloud functions deploy analyzeMarketingUploadSession \
+            --project=demac-corporation \
+            --gen2 \
+            --region=us-central1 \
+            --trigger-location="$DB_LOCATION" \
+            --runtime=nodejs22 \
+            --source=functions \
+            --entry-point=analyzeMarketingUploadSession \
+            --memory=512Mi \
+            --timeout=540s \
+            --run-service-account="$RUN_SERVICE_ACCOUNT" \
+            --set-secrets=OPENAI_API_KEY=OPENAI_API_KEY:latest \
+            --trigger-event-filters=type=google.cloud.firestore.document.v1.updated \
+            --trigger-event-filters=database='(default)' \
+            --trigger-event-filters-path-pattern="document=marketingUploadSessions/{sessionId}" \
+            --quiet
+
+      - name: Verify deployed function
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud functions describe analyzeMarketingUploadSession \
+            --project=demac-corporation \
+            --gen2 \
+            --region=us-central1 \
+            --format='table(name,state,serviceConfig.runtime,serviceConfig.availableMemory,eventTrigger.eventType)'
