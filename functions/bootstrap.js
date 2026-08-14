@@ -10,7 +10,7 @@ const appointmentNotifications = require("./appointmentNotifications");
 const userManagement = require("./userManagement");
 const voiceTranscription = require("./voiceTranscription");
 const professionalReports = require("./professionalReportGeneration");
-const marketingImageAnalysis = require("./marketingImageAnalysis");
+const marketingImageAnalysisCallable = require("./marketingImageAnalysisCallable");
 const scheduling = require("./whatsappCopilot");
 const knowledge = require("./whatsappCopilotKnowledge");
 const router = require("./whatsappCopilotRouter");
@@ -18,6 +18,9 @@ const router = require("./whatsappCopilotRouter");
 // Conversation V19–V22 modules remain in the repository as migration history/tests,
 // but they are deliberately NOT loaded into production. V30 lets OpenAI interpret
 // the conversation first and uses ERP code only as authoritative business tools.
+// Marketing V1B is exposed only through the authenticated callable function. The
+// legacy Firestore/Eventarc handler remains an internal reusable engine dependency
+// of marketingImageAnalysisCallable and is intentionally not exported for deploy.
 module.exports = {
   ...core,
   ...wacliGateway,
@@ -25,7 +28,7 @@ module.exports = {
   ...userManagement,
   ...voiceTranscription,
   ...professionalReports,
-  ...marketingImageAnalysis,
+  ...marketingImageAnalysisCallable,
   ...scheduling,
   ...knowledge,
   whatsappCopilotDraft: router.whatsappCopilotDraft,
