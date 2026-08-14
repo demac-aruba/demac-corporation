@@ -1,0 +1,71 @@
+name: Marketing Smoke Status
+
+on:
+  push:
+    branches:
+      - agent/marketing-function-gcloud-deploy
+    paths:
+      - '.github/workflows/marketing-smoke-status.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install Firebase Admin dependency
+        run: npm install --prefix functions --no-audit --no-fund
+      - name: Read only synthetic marketing smoke documents
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+        run: |
+          set -euo pipefail
+          cd functions
+          node <<'NODE'
+          const { cert, initializeApp } = require('firebase-admin/app');
+          const { getFirestore } = require('firebase-admin/firestore');
+          initializeApp({ credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)), projectId: 'demac-corporation' });
+          const db = getFirestore();
+          (async () => {
+            const sessions = await db.collection('marketingUploadSessions').listDocuments();
+            const smokeSessionRefs = sessions.filter((ref) => ref.id.startsWith('marketing-smoke-'));
+            console.log(`Synthetic sessions found: ${smokeSessionRefs.length}`);
+            for (const ref of smokeSessionRefs) {
+              const data = (await ref.get()).data() || {};
+              console.log('SESSION', ref.id, JSON.stringify({
+                status: data.status,
+                analysisStatus: data.analysisStatus,
+                analysisError: data.analysisError || null,
+                analysisModel: data.analysisModel || null,
+                analyzedAssetCount: data.analyzedAssetCount ?? null,
+                primaryAssetId: data.primaryAssetId || null,
+                analysisStartedAt: Boolean(data.analysisStartedAt),
+                analysisCompletedAt: Boolean(data.analysisCompletedAt),
+                analysisFailedAt: Boolean(data.analysisFailedAt),
+              }));
+            }
+            const assets = await db.collection('marketingAssets').listDocuments();
+            const smokeAssetRefs = assets.filter((ref) => ref.id.startsWith('marketing-smoke-asset-'));
+            for (const ref of smokeAssetRefs) {
+              const data = (await ref.get()).data() || {};
+              console.log('ASSET', ref.id, JSON.stringify({
+                analysisStatus: data.analysisStatus || null,
+                analysisError: data.analysisError || null,
+                qualityScore: data.qualityScore ?? null,
+                marketingSuitabilityScore: data.marketingSuitabilityScore ?? null,
+                rankingScore: data.rankingScore ?? null,
+                rank: data.rank ?? null,
+              }));
+            }
+          })().catch((error) => { console.error(error); process.exit(1); });
+          NODE
