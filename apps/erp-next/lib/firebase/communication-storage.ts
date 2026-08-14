@@ -38,7 +38,7 @@ export async function uploadCommunicationMedia(file: File, conversationId: strin
   const session = await requireFirebaseWebSession();
   const safeConversation = cleanSegment(conversationId, 'conversation');
   const safeName = cleanSegment(file.name || `${kind}-${Date.now()}`, `${kind}-${Date.now()}`);
-  const storagePath = `communication-media/outbound/${session.user.uid}/${safeConversation}/${Date.now()}-${safeName}`;
+  const storagePath = `communication-media/outbound/${session.uid}/${safeConversation}/${Date.now()}-${safeName}`;
   const endpoint = `${storageEndpoint(storagePath)}?uploadType=media&name=${encodeURIComponent(storagePath)}`;
   const response = await fetch(endpoint, {
     method: 'POST',
