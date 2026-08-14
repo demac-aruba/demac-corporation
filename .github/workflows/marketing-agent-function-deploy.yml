@@ -44,29 +44,75 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-      - name: Setup Node
-        uses: actions/setup-node@v6
+
+      - name: Authenticate Firebase deployment service account
+        uses: google-github-actions/auth@v2
         with:
-          node-version: '22'
-          package-manager-cache: false
-      - name: Install function dependencies
-        run: npm install --prefix functions --no-audit --no-fund
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Resolve existing DEMAC runtime configuration
+        id: config
+        shell: bash
+        run: |
+          set -euo pipefail
+          DB_LOCATION="$(gcloud firestore databases describe --project=demac-corporation --database='(default)' --format='value(locationId)')"
+          if [ -z "$DB_LOCATION" ]; then
+            echo '::error::Could not resolve the default Firestore database location.'
+            exit 1
+          fi
+
+          REPORT_NAME='generateProfessionalCustomerReport'
+          if ! gcloud functions describe "$REPORT_NAME" --project=demac-corporation --gen2 --region=us-central1 --format='value(name)' >/dev/null 2>&1; then
+            REPORT_NAME="$(gcloud functions list --project=demac-corporation --gen2 --format='value(name)' | awk -F/ 'tolower($NF) ~ /generateprofessionalcustomerreport/ {print $NF; exit}')"
+          fi
+          if [ -z "$REPORT_NAME" ]; then
+            echo '::error::Could not find the existing DEMAC professional report function to mirror its runtime identity.'
+            exit 1
+          fi
+
+          RUN_SA="$(gcloud functions describe "$REPORT_NAME" --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.serviceAccountEmail)')"
+          if [ -z "$RUN_SA" ]; then
+            echo '::error::Could not resolve the existing DEMAC runtime service account.'
+            exit 1
+          fi
+
+          echo "database_location=${DB_LOCATION}" >> "$GITHUB_OUTPUT"
+          echo "run_service_account=${RUN_SA}" >> "$GITHUB_OUTPUT"
+
       - name: Deploy Marketing Agent analysis function
         shell: bash
         env:
-          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          DB_LOCATION: ${{ steps.config.outputs.database_location }}
+          RUN_SERVICE_ACCOUNT: ${{ steps.config.outputs.run_service_account }}
         run: |
           set -euo pipefail
-          if [ -n "${FIREBASE_SERVICE_ACCOUNT_JSON:-}" ]; then
-            CREDENTIAL_FILE="$RUNNER_TEMP/firebase-service-account.json"
-            printf '%s' "$FIREBASE_SERVICE_ACCOUNT_JSON" > "$CREDENTIAL_FILE"
-            chmod 600 "$CREDENTIAL_FILE"
-            export GOOGLE_APPLICATION_CREDENTIALS="$CREDENTIAL_FILE"
-            npx --yes firebase-tools@15.2.1 deploy --only functions:analyzeMarketingUploadSession --project demac-corporation --non-interactive
-          elif [ -n "${FIREBASE_TOKEN:-}" ]; then
-            npx --yes firebase-tools@15.2.1 deploy --only functions:analyzeMarketingUploadSession --project demac-corporation --non-interactive --token "$FIREBASE_TOKEN"
-          else
-            echo "::error title=Firebase deployment credential missing::Add FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION (preferred) or FIREBASE_TOKEN as a GitHub Actions repository secret."
+          gcloud functions deploy analyzeMarketingUploadSession \
+            --project=demac-corporation \
+            --gen2 \
+            --region=us-central1 \
+            --trigger-location="$DB_LOCATION" \
+            --runtime=nodejs22 \
+            --source=functions \
+            --entry-point=analyzeMarketingUploadSession \
+            --memory=512Mi \
+            --timeout=540s \
+            --run-service-account="$RUN_SERVICE_ACCOUNT" \
+            --set-secrets=OPENAI_API_KEY=OPENAI_API_KEY:latest \
+            --trigger-event-filters=type=google.cloud.firestore.document.v1.updated \
+            --trigger-event-filters=database='(default)' \
+            --trigger-event-filters-path-pattern="document=marketingUploadSessions/{sessionId}" \
+            --quiet
+
+      - name: Verify deployed function
+        shell: bash
+        run: |
+          set -euo pipefail
+          STATE="$(gcloud functions describe analyzeMarketingUploadSession --project=demac-corporation --gen2 --region=us-central1 --format='value(state)')"
+          if [ "$STATE" != "ACTIVE" ]; then
+            echo "::error::Marketing Agent function state is ${STATE:-unknown}, expected ACTIVE."
             exit 1
           fi
+          echo 'Marketing Agent analysis function is ACTIVE.'
