@@ -120,9 +120,21 @@ function chooseTimelineMessageIndex(messages, input, media) {
     }
   }
 
-  return bestIndex >= 0 && bestScore >= 8
-    ? { index: bestIndex, mode: 'fuzzy' }
-    : { index: -1, mode: 'none' };
+  if (bestIndex >= 0 && bestScore >= 8) return { index: bestIndex, mode: 'fuzzy' };
+
+  // Legacy V1 messages can have synthetic IDs/timestamps, while still retaining
+  // the correct media kind and chronological position. wacli's recent message
+  // list is processed newest-first, so consuming the newest unresolved
+  // placeholder of the same kind gives a deterministic, type-safe fallback.
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] || {};
+    if (message?.media?.storagePath) continue;
+    const existingKind = messageMediaKind(message);
+    if (!existingKind || !kindCompatible(existingKind, media.kind)) continue;
+    return { index, mode: 'kind_order' };
+  }
+
+  return { index: -1, mode: 'none' };
 }
 
 exports.wacliBackfillUpdate = onRequest(
