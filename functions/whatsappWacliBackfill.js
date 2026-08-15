@@ -76,6 +76,14 @@ function messageMediaKind(message) {
   return '';
 }
 
+function isGenericMediaPlaceholder(message) {
+  if (message?.media?.storagePath) return false;
+  const text = normalizedText(message?.text);
+  return text === 'media is syncing from whatsapp…'
+    || text === 'media is syncing from whatsapp...'
+    || text === 'media is syncing from whatsapp';
+}
+
 function kindCompatible(existing, incoming) {
   if (!existing) return true;
   if (existing === incoming) return true;
@@ -132,6 +140,13 @@ function chooseTimelineMessageIndex(messages, input, media) {
     const existingKind = messageMediaKind(message);
     if (!existingKind || !kindCompatible(existingKind, media.kind)) continue;
     return { index, mode: 'kind_order' };
+  }
+
+  // The earliest V8 preview stored media events as a generic sync placeholder
+  // without preserving the media kind. That exact text is reserved for media,
+  // so it is safe to consume newest-first after all stronger matching modes fail.
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (isGenericMediaPlaceholder(messages[index])) return { index, mode: 'generic_order' };
   }
 
   return { index: -1, mode: 'none' };
@@ -197,7 +212,7 @@ exports.wacliBackfillUpdate = onRequest(
               ...existing,
               type: 'media',
               media,
-              text: String(existing?.text || input.text || ''),
+              text: isGenericMediaPlaceholder(existing) ? String(input.text || media.caption || '') : String(existing?.text || input.text || ''),
             };
             updates.recentMessages = messages;
             mediaMatched = true;
