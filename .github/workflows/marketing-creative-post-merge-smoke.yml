@@ -1,0 +1,406 @@
+name: Marketing Creative Post-Merge Smoke
+
+on:
+  push:
+    branches:
+      - test/marketing-creative-post-merge
+    paths:
+      - '.github/workflows/marketing-creative-post-merge-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  creative-pipeline-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Authenticate smoke-test service account
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Wait for five production Marketing callables
+        shell: bash
+        run: |
+          set -euo pipefail
+          FUNCTIONS=(
+            requestMarketingImageAnalysis
+            requestMarketingCampaignStrategy
+            requestMarketingCreativeBuild
+            approveMarketingCreative
+            getMarketingCreativeState
+          )
+          for attempt in $(seq 1 45); do
+            all_active=1
+            for fn in "${FUNCTIONS[@]}"; do
+              state="$(gcloud functions describe "$fn" --project=demac-corporation --gen2 --region=us-central1 --format='value(state)' 2>/dev/null || true)"
+              if [ "$state" != "ACTIVE" ]; then
+                all_active=0
+                echo "$fn => ${state:-not-ready}"
+              fi
+            done
+            if [ "$all_active" = "1" ]; then
+              echo 'All five Marketing callables are ACTIVE.'
+              exit 0
+            fi
+            sleep 10
+          done
+          echo '::error::Marketing callables did not all become ACTIVE in time.'
+          exit 1
+
+      - name: Resolve Firebase Storage bucket
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUCKET="$(gcloud storage buckets list --project=demac-corporation --format='value(name)' 2>/dev/null | grep -E 'demac-corporation' | head -1 || true)"
+          if [ -z "$BUCKET" ]; then
+            for candidate in demac-corporation.firebasestorage.app demac-corporation.appspot.com; do
+              if gcloud storage buckets describe "gs://$candidate" --project=demac-corporation >/dev/null 2>&1; then
+                BUCKET="$candidate"
+                break
+              fi
+            done
+          fi
+          if [ -z "$BUCKET" ]; then
+            echo '::error::Could not resolve Firebase Storage bucket.'
+            exit 1
+          fi
+          echo "FIREBASE_STORAGE_BUCKET=$BUCKET" >> "$GITHUB_ENV"
+          echo "Resolved Firebase Storage bucket."
+
+      - name: Install Firebase and image-test dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Run authenticated Creative Builder end-to-end smoke
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+          FIREBASE_WEB_API_KEY: AIzaSyCo31zuo6d8RsgiLWGqUVOvRmHkisoF1DE
+          PRODUCTION_COMMIT: 3ef9cbac0c6edd08c381112daa4495c9a1a4e972
+        run: |
+          set -euo pipefail
+          cd functions
+          node <<'NODE'
+          const { randomUUID } = require('node:crypto');
+          const { cert, initializeApp } = require('firebase-admin/app');
+          const { getAuth } = require('firebase-admin/auth');
+          const { getFirestore } = require('firebase-admin/firestore');
+          const { getStorage } = require('firebase-admin/storage');
+          const sharp = require('sharp');
+
+          const projectId = 'demac-corporation';
+          const bucketName = process.env.FIREBASE_STORAGE_BUCKET;
+          const credentials = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+          const app = initializeApp({ credential: cert(credentials), projectId, storageBucket: bucketName });
+          const auth = getAuth(app);
+          const db = getFirestore(app);
+          const bucket = getStorage(app).bucket();
+          const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          const uidHolder = { value: '' };
+          const sessionId = `creative-smoke-${stamp}`;
+          const assetId = `hero-${stamp}`;
+          const sourcePath = `marketing/originals/${sessionId}/${assetId}.png`;
+          const email = `marketing-creative-${stamp}@demac-smoke.test`;
+          let brandCreated = false;
+
+          function callableUrl(name) {
+            return `https://us-central1-demac-corporation.cloudfunctions.net/${name}`;
+          }
+
+          async function exchange(customToken) {
+            const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${encodeURIComponent(process.env.FIREBASE_WEB_API_KEY)}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ token: customToken, returnSecureToken: true }),
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.idToken) throw new Error(`Custom-token exchange failed: ${JSON.stringify(payload)}`);
+            return payload.idToken;
+          }
+
+          async function call(name, idToken, data) {
+            const response = await fetch(callableUrl(name), {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${idToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ data }),
+            });
+            const text = await response.text();
+            let payload = {};
+            try { payload = text ? JSON.parse(text) : {}; } catch {}
+            if (!response.ok || payload.error) {
+              throw new Error(`${name} failed (${response.status}): ${payload?.error?.message || text}`);
+            }
+            return payload.result ?? payload.data ?? {};
+          }
+
+          async function makeHero() {
+            const svg = Buffer.from(`
+              <svg width="1024" height="1024" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                  <linearGradient id="wall" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0" stop-color="#f4f7fb"/>
+                    <stop offset="1" stop-color="#dbe6f2"/>
+                  </linearGradient>
+                </defs>
+                <rect width="1024" height="1024" fill="url(#wall)"/>
+                <rect y="730" width="1024" height="294" fill="#c7d1dc"/>
+                <rect x="255" y="245" width="520" height="170" rx="34" fill="#fbfdff" stroke="#a9b9ca" stroke-width="5"/>
+                <rect x="295" y="372" width="440" height="13" rx="6" fill="#9aabba"/>
+                <circle cx="708" cy="286" r="8" fill="#54a3ff"/>
+                <path d="M360 455 C410 500 440 535 470 595" fill="none" stroke="#8fc8ff" stroke-width="18" stroke-linecap="round" opacity=".65"/>
+                <path d="M505 455 C555 505 580 548 600 612" fill="none" stroke="#8fc8ff" stroke-width="18" stroke-linecap="round" opacity=".55"/>
+                <rect x="160" y="715" width="704" height="20" rx="10" fill="#afbac5"/>
+              </svg>`);
+            return sharp(svg).png().toBuffer();
+          }
+
+          async function cleanup() {
+            const creativeSnap = await db.collection('marketingCreatives').where('sessionId', '==', sessionId).get().catch(() => null);
+            if (creativeSnap) {
+              for (const doc of creativeSnap.docs) {
+                const data = doc.data() || {};
+                for (const path of [data.imageStoragePath, data.approvedStoragePath]) {
+                  if (path) await bucket.file(path).delete({ ignoreNotFound: true }).catch(() => undefined);
+                }
+                await doc.ref.delete().catch(() => undefined);
+              }
+            }
+            await bucket.file(sourcePath).delete({ ignoreNotFound: true }).catch(() => undefined);
+            await db.collection('marketingAssets').doc(assetId).delete().catch(() => undefined);
+            await db.collection('marketingCampaigns').doc(sessionId).delete().catch(() => undefined);
+            await db.collection('marketingUploadSessions').doc(sessionId).delete().catch(() => undefined);
+            if (brandCreated) await db.collection('marketingBrandSettings').doc('default').delete().catch(() => undefined);
+            if (uidHolder.value) {
+              await db.collection('users').doc(uidHolder.value).delete().catch(() => undefined);
+              await auth.deleteUser(uidHolder.value).catch(() => undefined);
+            }
+          }
+
+          (async () => {
+            try {
+              const user = await auth.createUser({ email, emailVerified: true, displayName: 'Marketing Creative smoke' });
+              uidHolder.value = user.uid;
+              const now = new Date().toISOString();
+              await db.collection('users').doc(user.uid).set({
+                id: user.uid,
+                name: 'Marketing Creative smoke',
+                displayName: 'Marketing Creative smoke',
+                email,
+                role: 'admin',
+                active: true,
+                syntheticSmokeTest: true,
+                createdAt: now,
+                updatedAt: now,
+              });
+
+              const brandRef = db.collection('marketingBrandSettings').doc('default');
+              const brandSnap = await brandRef.get();
+              if (!brandSnap.exists) {
+                brandCreated = true;
+                await brandRef.set({
+                  companyName: 'DEMAC Professional Cooling Solutions',
+                  brandName: 'DEMAC',
+                  whatsapp: '564-26-25',
+                  primaryContact: 'WhatsApp',
+                  primaryColor: 'Royal Blue',
+                  secondaryColor: 'White',
+                  style: 'Premium, modern, clean, professional, high contrast, mobile-first',
+                  language: 'Papiamento di Aruba',
+                  defaultFormat: 'Facebook / Instagram Feed · square 1:1 · high resolution',
+                  footerRule: 'Reserve a clean blank bottom margin for the original DEMAC footer.',
+                  realPhotoRule: 'Preserve real DEMAC installation photos authentically.',
+                  approvedClaims: [],
+                  approvedProducts: [],
+                  approvedOffers: [],
+                  approvedPapiamentoPhrases: ['Instala bo Airco Nobo', 'WhatsApp nos awe mes', 'Traha bo Cita Awe mes'],
+                  campaignNotes: [],
+                  syntheticSmokeTest: true,
+                });
+              }
+
+              const token = randomUUID();
+              const heroBuffer = await makeHero();
+              await bucket.file(sourcePath).save(heroBuffer, {
+                resumable: false,
+                contentType: 'image/png',
+                metadata: {
+                  metadata: {
+                    firebaseStorageDownloadTokens: token,
+                    sessionId,
+                    assetId,
+                    uploadedByUid: user.uid,
+                    variant: 'original',
+                  },
+                },
+              });
+              const downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket.name)}/o/${encodeURIComponent(sourcePath)}?alt=media&token=${encodeURIComponent(token)}`;
+
+              await db.collection('marketingUploadSessions').doc(sessionId).set({
+                name: 'Synthetic Creative Pipeline Test',
+                campaignType: 'installation',
+                status: 'ready',
+                analysisStatus: 'completed',
+                primaryAssetId: assetId,
+                bestAssetIds: [assetId],
+                recommendedCampaignType: 'installation',
+                expectedAssetCount: 1,
+                uploadedAssetCount: 1,
+                failedAssetCount: 0,
+                createdAt: now,
+                updatedAt: now,
+                createdByUserId: user.uid,
+                createdByName: 'Marketing Creative smoke',
+                syntheticSmokeTest: true,
+              });
+
+              await db.collection('marketingAssets').doc(assetId).set({
+                sessionId,
+                originalFileName: 'synthetic-airco-room.png',
+                contentType: 'image/png',
+                sizeBytes: heroBuffer.length,
+                storagePath: sourcePath,
+                downloadUrl,
+                status: 'uploaded',
+                createdAt: now,
+                updatedAt: now,
+                uploadedByUserId: user.uid,
+                analysisStatus: 'completed',
+                qualityScore: 92,
+                marketingSuitabilityScore: 88,
+                rankingScore: 90,
+                rank: 1,
+                recommendedCampaignType: 'installation',
+                shotType: 'installed_unit',
+                doNotUse: false,
+                containsPerson: false,
+                containsReadableSensitiveData: false,
+                analysisSummary: 'Clean synthetic room showing one wall-mounted split air conditioner. No people, logos, readable text, or sensitive data.',
+                syntheticSmokeTest: true,
+              });
+
+              await db.collection('marketingCampaigns').doc(sessionId).set({
+                sessionId,
+                campaignType: 'installation',
+                objective: 'Show a clean professional DEMAC air-conditioning installation and invite a WhatsApp inquiry.',
+                angle: 'Professional installation, comfort and a direct WhatsApp next step.',
+                targetAction: 'WhatsApp inquiry',
+                heroAssetId: assetId,
+                supportingAssetIds: [],
+                copy: {
+                  headline: 'Instala bo Airco Nobo',
+                  subheadline: 'WhatsApp nos awe mes',
+                  primaryText: 'Traha bo Cita Awe mes',
+                  cta: 'WhatsApp nos awe mes',
+                },
+                visualDirection: {
+                  heroTreatment: 'Keep the installed split unit clearly visible and use a clean premium royal-blue commercial treatment.',
+                },
+                papiamentoValidationStatus: 'passed',
+                papiamentoUnknownWords: [],
+                createdAt: now,
+                updatedAt: now,
+                syntheticSmokeTest: true,
+              });
+
+              const customToken = await auth.createCustomToken(user.uid);
+              const idToken = await exchange(customToken);
+
+              const unauth = await fetch(callableUrl('getMarketingCreativeState'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ data: { sessionId } }),
+              });
+              if (![401, 403].includes(unauth.status)) throw new Error(`Unauthenticated creative state should be blocked; got ${unauth.status}.`);
+
+              const build = await call('requestMarketingCreativeBuild', idToken, { sessionId });
+              if (!build.creativeId || !build.imageUrl) throw new Error(`Builder returned incomplete result: ${JSON.stringify(build)}`);
+
+              const creativeRef = db.collection('marketingCreatives').doc(build.creativeId);
+              const creativeSnap = await creativeRef.get();
+              if (!creativeSnap.exists) throw new Error('Builder did not persist marketingCreatives record.');
+              const creative = creativeSnap.data();
+              if (creative.width !== 1080 || creative.height !== 1080) throw new Error(`Creative metadata dimensions invalid: ${creative.width}x${creative.height}`);
+              if (creative.reservedFooterPx !== 156) throw new Error(`Footer reserve metadata invalid: ${creative.reservedFooterPx}`);
+
+              const generatedFile = bucket.file(creative.imageStoragePath);
+              const [exists] = await generatedFile.exists();
+              if (!exists) throw new Error('Generated creative PNG was not stored.');
+              const [generatedBuffer] = await generatedFile.download();
+              const metadata = await sharp(generatedBuffer).metadata();
+              if (metadata.width !== 1080 || metadata.height !== 1080 || metadata.format !== 'png') {
+                throw new Error(`Generated file is not 1080x1080 PNG: ${JSON.stringify(metadata)}`);
+              }
+              const footerStats = await sharp(generatedBuffer).extract({ left: 0, top: 944, width: 1080, height: 120 }).stats();
+              const footerMean = footerStats.channels.slice(0, 3).reduce((sum, channel) => sum + channel.mean, 0) / 3;
+              if (footerMean < 245) throw new Error(`Reserved footer zone is not sufficiently blank/white. Mean=${footerMean.toFixed(2)}`);
+
+              const [sourceStillExists] = await bucket.file(sourcePath).exists();
+              if (!sourceStillExists) throw new Error('Original source photo was modified/deleted by Creative Builder.');
+
+              const state = await call('getMarketingCreativeState', idToken, { sessionId });
+              if (!Array.isArray(state.creatives) || !state.creatives.some((item) => item.id === build.creativeId)) {
+                throw new Error('Authenticated creative-state reader did not return the generated creative.');
+              }
+
+              const liveQaStatus = creative.qa?.status || 'missing';
+              const liveQaScore = Number(creative.qa?.score) || 0;
+              let approvalSeededForPathTest = false;
+              if (creative.status !== 'qa_passed' || liveQaStatus !== 'passed') {
+                approvalSeededForPathTest = true;
+                await creativeRef.update({
+                  status: 'qa_passed',
+                  papiamentoValidationStatus: 'passed',
+                  'qa.status': 'passed',
+                  'qa.hardChecks.allPassed': true,
+                  syntheticApprovalSeed: true,
+                });
+              }
+
+              const approval = await call('approveMarketingCreative', idToken, { creativeId: build.creativeId });
+              if (approval.status !== 'approved' || !approval.approvedUrl) throw new Error(`Approval failed: ${JSON.stringify(approval)}`);
+              const approvedSnap = await creativeRef.get();
+              const approvedData = approvedSnap.data();
+              const [approvedExists] = await bucket.file(approvedData.approvedStoragePath).exists();
+              if (!approvedExists) throw new Error('Approved creative copy was not created in Storage.');
+
+              console.log(JSON.stringify({
+                result: 'PASS',
+                productionCommit: process.env.PRODUCTION_COMMIT,
+                authenticatedRole: 'admin',
+                builderReturnedCreative: true,
+                renderMode: creative.renderMode,
+                imageModel: creative.imageModel || null,
+                liveVisualQaStatus: liveQaStatus,
+                liveVisualQaScore: liveQaScore,
+                generatedPng: '1080x1080',
+                footerReservedPx: creative.reservedFooterPx,
+                footerMeanBrightness: Number(footerMean.toFixed(2)),
+                originalPreserved: true,
+                serverSideCreativeRead: true,
+                approvalPath: true,
+                approvalSeededForPathTest,
+                cleanupPlanned: true,
+              }, null, 2));
+            } finally {
+              await cleanup();
+            }
+          })().catch((error) => {
+            console.error(error);
+            process.exitCode = 1;
+          });
+          NODE
