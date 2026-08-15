@@ -63,6 +63,23 @@ function safeName(value, fallback = 'media') {
   return String(value || fallback).replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 140) || fallback;
 }
 
+function messageTimestamp(value) {
+  const raw = field(value, 'Timestamp', 'timestamp', 'Time', 'time', 'At', 'at', 'MessageTimestamp', 'message_timestamp');
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    const ms = raw > 1e12 ? raw : raw > 1e9 ? raw * 1000 : 0;
+    return ms ? new Date(ms).toISOString() : null;
+  }
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  if (/^\d+(?:\.\d+)?$/.test(text)) {
+    const numeric = Number(text);
+    const ms = numeric > 1e12 ? numeric : numeric > 1e9 ? numeric * 1000 : 0;
+    if (ms) return new Date(ms).toISOString();
+  }
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
 async function parseWacli(args, { readOnly = true, timeout = 30000 } = {}) {
   const prefix = ['--json'];
   if (readOnly) prefix.push('--read-only');
@@ -95,7 +112,8 @@ function messageIdentity(row) {
   const chat = String(field(row, 'ChatJID', 'chat_jid', 'chatJID', 'chat') || '');
   const id = String(field(row, 'MsgID', 'msg_id', 'messageId', 'id') || '');
   const text = String(field(row, 'Text', 'DisplayText', 'text', 'display_text', 'MediaCaption', 'media_caption') || '');
-  return { chat, id, text };
+  const at = messageTimestamp(row);
+  return { chat, id, text, at };
 }
 
 function mediaKind(detail) {
@@ -213,6 +231,10 @@ let mediaDetected = 0;
 let mediaFromLocalPath = 0;
 let mediaFromDirectDownload = 0;
 let mediaFailures = 0;
+let mediaTimelineMatched = 0;
+let mediaTimelineMatchedById = 0;
+let mediaTimelineMatchedFuzzy = 0;
+let mediaTimelineUnmatched = 0;
 let phoneUpdated = 0;
 let avatarUpdated = 0;
 let avatarFailures = 0;
@@ -236,6 +258,7 @@ for (const row of messageRows) {
     detailFailures += 1;
     continue;
   }
+  const at = messageTimestamp(detail) || base.at;
 
   let resolvedPhone = phoneCache.get(base.chat);
   if (resolvedPhone === undefined) {
@@ -324,7 +347,7 @@ for (const row of messageRows) {
 
   if (identity.phone || media || avatar) {
     try {
-      await postBackfill({
+      const result = await postBackfill({
         conversationId: base.chat,
         chat: base.chat,
         messageId: base.id,
@@ -332,9 +355,19 @@ for (const row of messageRows) {
         media,
         avatar,
         text: base.text,
+        at,
       });
       updated += 1;
       if (identity.phone) phoneUpdated += 1;
+      if (media) {
+        if (result.mediaMatched) {
+          mediaTimelineMatched += 1;
+          if (result.mediaMatchMode === 'id') mediaTimelineMatchedById += 1;
+          if (result.mediaMatchMode === 'fuzzy') mediaTimelineMatchedFuzzy += 1;
+        } else {
+          mediaTimelineUnmatched += 1;
+        }
+      }
     } catch (error) {
       console.warn(`backfill ${base.id}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -352,6 +385,10 @@ console.log(JSON.stringify({
   mediaFromLocalPath,
   mediaFromDirectDownload,
   mediaFailures,
+  mediaTimelineMatched,
+  mediaTimelineMatchedById,
+  mediaTimelineMatchedFuzzy,
+  mediaTimelineUnmatched,
   updated,
   phoneUpdated,
   avatarsChecked: avatarDone.size,
