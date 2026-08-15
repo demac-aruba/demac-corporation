@@ -216,6 +216,7 @@ let mediaFailures = 0;
 let phoneUpdated = 0;
 let avatarUpdated = 0;
 let avatarFailures = 0;
+let avatarNoPicture = 0;
 let parsedMessages = 0;
 let skippedWithoutIdentity = 0;
 let detailFailures = 0;
@@ -290,19 +291,22 @@ for (const row of messageRows) {
   }
 
   let avatar = null;
-  if (!avatarDone.has(base.chat) && !base.chat.endsWith('@g.us') && !base.chat.endsWith('@newsletter')) {
-    avatarDone.add(base.chat);
+  const avatarTarget = canonicalJid || (resolvedPhone ? `+${resolvedPhone}` : base.chat);
+  if (!avatarDone.has(avatarTarget) && !base.chat.endsWith('@g.us') && !base.chat.endsWith('@newsletter')) {
+    avatarDone.add(avatarTarget);
     try {
-      const info = await wacliLive(['profile', 'picture-info', '--jid', base.chat], 20000);
+      const info = await wacliLive(['profile', 'picture-info', '--jid', avatarTarget], 20000);
       const imageUrl = strings(info).find((item) => /url/.test(item.key) && /^https:\/\//.test(item.value))?.value;
-      if (imageUrl) {
+      if (!imageUrl) {
+        avatarNoPicture += 1;
+      } else {
         const response = await fetch(imageUrl);
         if (!response.ok) throw new Error(`avatar download ${response.status}`);
         const buffer = Buffer.from(await response.arrayBuffer());
         const contentType = response.headers.get('content-type') || 'image/jpeg';
         const storagePath = await upload(buffer, {
           scope: 'avatar',
-          identity: base.chat,
+          identity: avatarTarget,
           conversationId: base.chat,
           messageId: `avatar-${Date.now()}`,
           contentType,
@@ -312,8 +316,9 @@ for (const row of messageRows) {
         avatar = { storagePath, updatedAt: new Date().toISOString() };
         avatarUpdated += 1;
       }
-    } catch {
+    } catch (error) {
       avatarFailures += 1;
+      console.warn(`avatar ${avatarTarget}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -351,6 +356,7 @@ console.log(JSON.stringify({
   phoneUpdated,
   avatarsChecked: avatarDone.size,
   avatarUpdated,
+  avatarNoPicture,
   avatarFailures,
   uniqueChats: phoneCache.size,
 }, null, 2));
