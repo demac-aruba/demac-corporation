@@ -1,0 +1,44 @@
+name: Temporary Marketing Footer Opaque Fix
+
+on:
+  push:
+    branches:
+      - agent/marketing-footer-opaque-fix
+
+permissions:
+  contents: write
+
+jobs:
+  patch-footer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Make reserved footer fully opaque
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('functions/marketingCreativeBuilder.js')
+          text = path.read_text()
+          old = '    <rect x="0" y="${contentBottom}" width="${OUTPUT_SIZE}" height="${FOOTER_RESERVED_PX}" fill="#ffffff" fill-opacity="0.985"/>'
+          new = '    <rect x="0" y="${contentBottom}" width="${OUTPUT_SIZE}" height="${FOOTER_RESERVED_PX}" fill="#ffffff"/>'
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'Expected exactly one footer rect to patch; found {count}.')
+          path.write_text(text.replace(old, new))
+          PY
+          node --check functions/marketingCreativeBuilder.js
+
+      - name: Commit only durable footer fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/temp-marketing-footer-opaque-fix.yml
+          git config user.name 'demac-aruba'
+          git config user.email 'gm.demac@gmail.com'
+          git add functions/marketingCreativeBuilder.js .github/workflows/temp-marketing-footer-opaque-fix.yml
+          git commit -m 'make Marketing creative footer fully opaque'
+          git push origin HEAD:agent/marketing-footer-opaque-fix
