@@ -135,6 +135,7 @@ jobs:
               --memory="$memory" \
               --timeout="$timeout" \
               --run-service-account="$RUN_SERVICE_ACCOUNT" \
+              --set-env-vars='FIREBASE_CONFIG={"storageBucket":"demac-corporation.firebasestorage.app"}' \
               --set-secrets=OPENAI_API_KEY=OPENAI_API_KEY:latest \
               --trigger-http \
               --allow-unauthenticated \
@@ -156,6 +157,7 @@ jobs:
               --memory="$memory" \
               --timeout="$timeout" \
               --run-service-account="$RUN_SERVICE_ACCOUNT" \
+              --set-env-vars='FIREBASE_CONFIG={"storageBucket":"demac-corporation.firebasestorage.app"}' \
               --trigger-http \
               --allow-unauthenticated \
               --quiet
