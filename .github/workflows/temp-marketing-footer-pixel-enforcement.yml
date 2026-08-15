@@ -1,0 +1,80 @@
+name: Temporary Marketing Footer Pixel Enforcement
+
+on:
+  push:
+    branches:
+      - agent/marketing-footer-pixel-enforcement
+    paths:
+      - '.github/workflows/temp-marketing-footer-pixel-enforcement.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: agent/marketing-footer-pixel-enforcement
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Patch renderer with byte-level footer enforcement
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('functions/marketingCreativeBuilder.js')
+          text = path.read_text()
+          text = text.replace(
+            'const MAX_RENDER_ATTEMPTS = 2;\n',
+            'const MAX_RENDER_ATTEMPTS = 2;\nconst CREATIVE_RENDERER_VERSION = "footer-pixels-v3";\n',
+            1,
+          )
+          old = '''  // Apply the reserved footer as a final raster layer after every other visual\n  // operation. This guarantees that the original DEMAC footer always receives\n  // a physically blank, opaque white zone regardless of SVG/compositing behavior.\n  const footerLayer = await sharp({\n    create: {\n      width: OUTPUT_SIZE,\n      height: FOOTER_RESERVED_PX,\n      channels: 4,\n      background: { r: 255, g: 255, b: 255, alpha: 1 },\n    },\n  }).png().toBuffer();\n\n  return sharp(rendered)\n    .composite([{\n      input: footerLayer,\n      top: OUTPUT_SIZE - FOOTER_RESERVED_PX,\n      left: 0,\n    }])\n    .png({ compressionLevel: 8 })\n    .toBuffer();'''
+          new = '''  // Hard guarantee: overwrite the final footer pixels themselves instead of\n  // relying on alpha/SVG compositing. The bottom 156px become byte-for-byte\n  // opaque white after every other visual operation has finished.\n  const { data, info } = await sharp(rendered)\n    .ensureAlpha()\n    .raw()\n    .toBuffer({ resolveWithObject: true });\n  const footerStart = (info.height - FOOTER_RESERVED_PX) * info.width * info.channels;\n  data.fill(255, footerStart);\n\n  const finalBuffer = await sharp(data, {\n    raw: { width: info.width, height: info.height, channels: info.channels },\n  })\n    .png({ compressionLevel: 8 })\n    .toBuffer();\n\n  const footerStats = await sharp(finalBuffer)\n    .extract({ left: 0, top: OUTPUT_SIZE - FOOTER_RESERVED_PX, width: OUTPUT_SIZE, height: FOOTER_RESERVED_PX })\n    .stats();\n  const footerMean = footerStats.channels\n    .slice(0, 3)\n    .reduce((sum, channel) => sum + channel.mean, 0) / 3;\n  if (footerMean < 254.5) {\n    throw new Error(`Footer pixel enforcement failed (${footerMean.toFixed(2)}).`);\n  }\n\n  return finalBuffer;'''
+          if old not in text:
+              raise SystemExit('Expected final raster footer block was not found')
+          text = text.replace(old, new, 1)
+          text = text.replace(
+            '    version,\n    status,\n',
+            '    version,\n    rendererVersion: CREATIVE_RENDERER_VERSION,\n    status,\n',
+            1,
+          )
+          text = text.replace(
+            '      version: creative.version,\n      status: creative.status,\n',
+            '      version: creative.version,\n      rendererVersion: creative.rendererVersion,\n      status: creative.status,\n',
+            1,
+          )
+          path.write_text(text)
+          PY
+          node --check functions/marketingCreativeBuilder.js
+      - name: Verify raw pixel enforcement algorithm
+        run: |
+          npm install --prefix functions --no-audit --no-fund
+          cd functions
+          node <<'NODE'
+          const sharp = require('sharp');
+          (async () => {
+            const width = 1080, height = 1080, footer = 156;
+            const dark = await sharp({ create: { width, height, channels: 4, background: { r: 10, g: 20, b: 30, alpha: 1 } } }).png().toBuffer();
+            const { data, info } = await sharp(dark).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+            data.fill(255, (height - footer) * info.width * info.channels);
+            const out = await sharp(data, { raw: { width: info.width, height: info.height, channels: info.channels } }).png().toBuffer();
+            const stats = await sharp(out).extract({ left: 0, top: height - footer, width, height: footer }).stats();
+            const mean = stats.channels.slice(0,3).reduce((sum,c)=>sum+c.mean,0)/3;
+            if (mean < 254.5) throw new Error(`Raw pixel footer test failed: ${mean}`);
+            console.log(`Raw pixel footer mean: ${mean}`);
+          })().catch((e) => { console.error(e); process.exit(1); });
+          NODE
+      - name: Commit durable renderer fix only
+        run: |
+          rm .github/workflows/temp-marketing-footer-pixel-enforcement.yml
+          git config user.name 'demac-aruba'
+          git config user.email 'gm.demac@gmail.com'
+          git add functions/marketingCreativeBuilder.js .github/workflows/temp-marketing-footer-pixel-enforcement.yml
+          git commit -m 'enforce Marketing footer pixels deterministically'
+          git push origin HEAD:agent/marketing-footer-pixel-enforcement
