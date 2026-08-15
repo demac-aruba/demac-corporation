@@ -1,0 +1,40 @@
+name: Temporary Fix Marketing Smoke Stats
+
+on:
+  push:
+    branches:
+      - agent/marketing-creative-final-smoke
+    paths:
+      - '.github/workflows/temp-fix-marketing-smoke-stats.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: agent/marketing-creative-final-smoke
+      - name: Correct Sharp footer measurement order
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/marketing-creative-final-smoke.yml')
+          text = p.read_text()
+          old = "              const footerStats = await sharp(generatedBuffer).extract({left:0, top:924, width:1080, height:156}).stats();"
+          new = "              const footerBuffer = await sharp(generatedBuffer).extract({left:0, top:924, width:1080, height:156}).png().toBuffer();\n              const footerStats = await sharp(footerBuffer).stats();"
+          if old not in text:
+              raise SystemExit('Expected footer stats line not found')
+          p.write_text(text.replace(old, new, 1))
+          PY
+      - name: Commit smoke correction only
+        run: |
+          rm .github/workflows/temp-fix-marketing-smoke-stats.yml
+          git config user.name 'demac-aruba'
+          git config user.email 'gm.demac@gmail.com'
+          git add .github/workflows/marketing-creative-final-smoke.yml .github/workflows/temp-fix-marketing-smoke-stats.yml
+          git commit -m 'measure Marketing footer after extraction'
+          git push origin HEAD:agent/marketing-creative-final-smoke
