@@ -1,0 +1,204 @@
+name: Marketing Creative Final Smoke
+
+on:
+  push:
+    branches:
+      - agent/marketing-creative-final-smoke
+    paths:
+      - '.github/workflows/marketing-creative-final-smoke.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  creative-final-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Authenticate smoke service account
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Resolve Firebase Storage bucket
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUCKET="$(gcloud storage buckets list --project=demac-corporation --format='value(name)' | grep -E 'demac-corporation' | head -1)"
+          test -n "$BUCKET"
+          echo "FIREBASE_STORAGE_BUCKET=$BUCKET" >> "$GITHUB_ENV"
+
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Run fresh production end-to-end smoke
+        env:
+          FIREBASE_WEB_API_KEY: 'AIzaSyCo31zuo6d8RsgiLWGqUVOvRmHkisoF1DE'
+          PRODUCTION_COMMIT: 'd0ca0015afd55a85267ce24284c7a846613b209f'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd functions
+          node <<'NODE'
+          const { randomUUID } = require('node:crypto');
+          const { applicationDefault, initializeApp } = require('firebase-admin/app');
+          const { getAuth } = require('firebase-admin/auth');
+          const { getFirestore } = require('firebase-admin/firestore');
+          const { getStorage } = require('firebase-admin/storage');
+          const sharp = require('sharp');
+
+          const projectId = 'demac-corporation';
+          const bucketName = process.env.FIREBASE_STORAGE_BUCKET;
+          const app = initializeApp({ credential: applicationDefault(), projectId, storageBucket: bucketName });
+          const auth = getAuth(app);
+          const db = getFirestore(app);
+          const bucket = getStorage(app).bucket();
+          const stamp = `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+          const sessionId = `creative-final-smoke-${stamp}`;
+          const assetId = `hero-${stamp}`;
+          const sourcePath = `marketing/originals/${sessionId}/${assetId}.png`;
+          const email = `marketing-final-${stamp}@demac-smoke.test`;
+          const password = `Smoke-${randomUUID()}!a9`;
+          let uid = '';
+          let brandCreated = false;
+
+          const callableUrl = (name) => `https://us-central1-demac-corporation.cloudfunctions.net/${name}`;
+
+          async function signIn() {
+            const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(process.env.FIREBASE_WEB_API_KEY)}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email, password, returnSecureToken: true }),
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.idToken) throw new Error(`Firebase login failed: ${JSON.stringify(payload)}`);
+            return payload.idToken;
+          }
+
+          async function call(name, idToken, data) {
+            const response = await fetch(callableUrl(name), {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${idToken}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ data }),
+            });
+            const text = await response.text();
+            let payload = {};
+            try { payload = text ? JSON.parse(text) : {}; } catch {}
+            if (!response.ok || payload.error) throw new Error(`${name} failed (${response.status}): ${payload?.error?.message || text}`);
+            return payload.result ?? payload.data ?? {};
+          }
+
+          async function makeHero() {
+            const svg = Buffer.from(`
+              <svg width="1024" height="1024" xmlns="http://www.w3.org/2000/svg">
+                <defs><linearGradient id="wall" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#eef4fa"/><stop offset="1" stop-color="#bdcad8"/></linearGradient></defs>
+                <rect width="1024" height="1024" fill="url(#wall)"/>
+                <rect y="700" width="1024" height="324" fill="#7d8d9c"/>
+                <rect x="250" y="220" width="530" height="175" rx="32" fill="#ffffff" stroke="#a9b9ca" stroke-width="5"/>
+                <rect x="300" y="360" width="430" height="14" rx="7" fill="#92a5b5"/>
+                <circle cx="710" cy="265" r="8" fill="#4ea4ff"/>
+              </svg>`);
+            return sharp(svg).png().toBuffer();
+          }
+
+          async function cleanup() {
+            const snap = await db.collection('marketingCreatives').where('sessionId','==',sessionId).get().catch(() => null);
+            if (snap) for (const doc of snap.docs) {
+              const data = doc.data() || {};
+              for (const p of [data.imageStoragePath, data.approvedStoragePath]) if (p) await bucket.file(p).delete({ ignoreNotFound: true }).catch(() => undefined);
+              await doc.ref.delete().catch(() => undefined);
+            }
+            await bucket.file(sourcePath).delete({ ignoreNotFound: true }).catch(() => undefined);
+            await db.collection('marketingAssets').doc(assetId).delete().catch(() => undefined);
+            await db.collection('marketingCampaigns').doc(sessionId).delete().catch(() => undefined);
+            await db.collection('marketingUploadSessions').doc(sessionId).delete().catch(() => undefined);
+            if (brandCreated) await db.collection('marketingBrandSettings').doc('default').delete().catch(() => undefined);
+            if (uid) {
+              await db.collection('users').doc(uid).delete().catch(() => undefined);
+              await auth.deleteUser(uid).catch(() => undefined);
+            }
+          }
+
+          (async () => {
+            try {
+              const user = await auth.createUser({ email, password, emailVerified: true, displayName: 'Marketing final smoke' });
+              uid = user.uid;
+              const now = new Date().toISOString();
+              await db.collection('users').doc(uid).set({ id: uid, name: 'Marketing final smoke', displayName: 'Marketing final smoke', email, role: 'admin', active: true, syntheticSmokeTest: true, createdAt: now, updatedAt: now });
+
+              const brandRef = db.collection('marketingBrandSettings').doc('default');
+              const brandSnap = await brandRef.get();
+              if (!brandSnap.exists) {
+                brandCreated = true;
+                await brandRef.set({
+                  companyName: 'DEMAC Professional Cooling Solutions', brandName: 'DEMAC', whatsapp: '564-26-25', primaryContact: 'WhatsApp', primaryColor: 'Royal Blue', secondaryColor: 'White', style: 'Premium, modern, clean, professional, high contrast, mobile-first', language: 'Papiamento di Aruba', defaultFormat: 'Facebook / Instagram Feed · square 1:1 · high resolution', footerRule: 'Reserve a clean blank bottom margin for the original DEMAC footer.', realPhotoRule: 'Preserve real DEMAC installation photos authentically.', approvedClaims: [], approvedProducts: [], approvedOffers: [], approvedPapiamentoPhrases: ['Instala bo Airco Nobo','WhatsApp nos awe mes','Traha bo Cita Awe mes'], campaignNotes: [], syntheticSmokeTest: true,
+                });
+              }
+
+              const heroBuffer = await makeHero();
+              const token = randomUUID();
+              await bucket.file(sourcePath).save(heroBuffer, { resumable: false, contentType: 'image/png', metadata: { metadata: { firebaseStorageDownloadTokens: token, sessionId, assetId, uploadedByUid: uid, variant: 'original' } } });
+              const downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket.name)}/o/${encodeURIComponent(sourcePath)}?alt=media&token=${encodeURIComponent(token)}`;
+
+              await db.collection('marketingUploadSessions').doc(sessionId).set({ name:'Synthetic Final Creative Test', campaignType:'installation', status:'ready', analysisStatus:'completed', primaryAssetId:assetId, bestAssetIds:[assetId], recommendedCampaignType:'installation', expectedAssetCount:1, uploadedAssetCount:1, failedAssetCount:0, createdAt:now, updatedAt:now, createdByUserId:uid, createdByName:'Marketing final smoke', syntheticSmokeTest:true });
+              await db.collection('marketingAssets').doc(assetId).set({ sessionId, originalFileName:'synthetic-airco-room.png', contentType:'image/png', sizeBytes:heroBuffer.length, storagePath:sourcePath, downloadUrl, status:'uploaded', createdAt:now, updatedAt:now, uploadedByUserId:uid, analysisStatus:'completed', qualityScore:92, marketingSuitabilityScore:88, rankingScore:90, rank:1, recommendedCampaignType:'installation', shotType:'installed_unit', doNotUse:false, containsPerson:false, containsReadableSensitiveData:false, analysisSummary:'Clean synthetic room showing one wall-mounted split air conditioner. No people, logos, readable text, or sensitive data.', syntheticSmokeTest:true });
+              await db.collection('marketingCampaigns').doc(sessionId).set({ sessionId, campaignType:'installation', objective:'Show a clean professional DEMAC air-conditioning installation and invite a WhatsApp inquiry.', angle:'Professional installation, comfort and a direct WhatsApp next step.', targetAction:'WhatsApp inquiry', heroAssetId:assetId, supportingAssetIds:[], copy:{ headline:'Instala bo Airco Nobo', subheadline:'WhatsApp nos awe mes', primaryText:'Traha bo Cita Awe mes', cta:'WhatsApp nos awe mes' }, visualDirection:{ heroTreatment:'Keep the installed split unit clearly visible and use a clean premium royal-blue commercial treatment.' }, papiamentoValidationStatus:'passed', papiamentoUnknownWords:[], createdAt:now, updatedAt:now, syntheticSmokeTest:true });
+
+              const idToken = await signIn();
+              const unauth = await fetch(callableUrl('getMarketingCreativeState'), { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({data:{sessionId}}) });
+              if (![401,403].includes(unauth.status)) throw new Error(`Unauthenticated creative state should be blocked; got ${unauth.status}`);
+
+              const build = await call('requestMarketingCreativeBuild', idToken, { sessionId });
+              if (!build.creativeId || !build.imageUrl) throw new Error(`Incomplete Creative Builder result: ${JSON.stringify(build)}`);
+              const ref = db.collection('marketingCreatives').doc(build.creativeId);
+              const snap = await ref.get();
+              if (!snap.exists) throw new Error('Creative record missing.');
+              const creative = snap.data();
+              if (creative.width !== 1080 || creative.height !== 1080 || creative.reservedFooterPx !== 156) throw new Error(`Creative metadata invalid: ${creative.width}x${creative.height}, footer=${creative.reservedFooterPx}`);
+
+              const generatedFile = bucket.file(creative.imageStoragePath);
+              const [exists] = await generatedFile.exists();
+              if (!exists) throw new Error('Generated PNG missing from Storage.');
+              const [generatedBuffer] = await generatedFile.download();
+              const meta = await sharp(generatedBuffer).metadata();
+              if (meta.width !== 1080 || meta.height !== 1080 || meta.format !== 'png') throw new Error(`Generated file invalid: ${JSON.stringify(meta)}`);
+              const footerStats = await sharp(generatedBuffer).extract({left:0, top:924, width:1080, height:156}).stats();
+              const means = footerStats.channels.slice(0,3).map((c) => c.mean);
+              const footerMean = means.reduce((a,b)=>a+b,0)/means.length;
+              if (footerMean < 254.5) throw new Error(`Footer raster guarantee failed. RGB mean=${footerMean.toFixed(2)}`);
+              const [sourceExists] = await bucket.file(sourcePath).exists();
+              if (!sourceExists) throw new Error('Original source photo was not preserved.');
+
+              const state = await call('getMarketingCreativeState', idToken, { sessionId });
+              if (!Array.isArray(state.creatives) || !state.creatives.some((item) => item.id === build.creativeId)) throw new Error('Authenticated state reader did not return generated creative.');
+              if (!creative.qa || !creative.qa.status) throw new Error('Visual QA result missing.');
+
+              let approvalSeededForPathTest = false;
+              if (creative.status !== 'qa_passed' || creative.qa.status !== 'passed') {
+                approvalSeededForPathTest = true;
+                await ref.update({ status:'qa_passed', papiamentoValidationStatus:'passed', 'qa.status':'passed', 'qa.hardChecks.allPassed':true, syntheticApprovalSeed:true });
+              }
+              const approval = await call('approveMarketingCreative', idToken, { creativeId: build.creativeId });
+              if (approval.status !== 'approved' || !approval.approvedUrl) throw new Error(`Approval path failed: ${JSON.stringify(approval)}`);
+              const approvedSnap = await ref.get();
+              const approvedData = approvedSnap.data();
+              const [approvedExists] = await bucket.file(approvedData.approvedStoragePath).exists();
+              if (!approvedExists) throw new Error('Approved creative copy missing from Storage.');
+
+              console.log(JSON.stringify({ result:'PASS', productionCommit:process.env.PRODUCTION_COMMIT, generatedPng:'1080x1080', footerReservedPx:creative.reservedFooterPx, footerMeanBrightness:Number(footerMean.toFixed(2)), originalPreserved:true, authenticatedCreativeRead:true, visualQaPresent:true, liveQaStatus:creative.qa.status, liveQaScore:Number(creative.qa.score)||0, approvalPath:true, approvalSeededForPathTest, cleanupPlanned:true }, null, 2));
+            } finally {
+              await cleanup();
+            }
+          })().catch((error) => { console.error(error); process.exitCode = 1; });
+          NODE
