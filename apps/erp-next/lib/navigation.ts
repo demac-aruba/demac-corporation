@@ -48,6 +48,8 @@ export const navigationGroups: NavigationGroup[] = [
     label: 'Marketing',
     items: [
       { label: 'Marketing Center', href: '/marketing', short: 'MK', roles: ['super_admin', 'office_operator'] },
+      { label: 'Creative Studio', href: '/marketing/creative-studio', short: 'CS', roles: ['super_admin', 'office_operator'] },
+      { label: 'Approved Creatives', href: '/marketing/approved', short: 'AC', roles: ['super_admin', 'office_operator'] },
     ],
   },
   {
