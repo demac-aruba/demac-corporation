@@ -173,7 +173,8 @@ jobs:
               const [generatedBuffer] = await generatedFile.download();
               const meta = await sharp(generatedBuffer).metadata();
               if (meta.width !== 1080 || meta.height !== 1080 || meta.format !== 'png') throw new Error(`Generated file invalid: ${JSON.stringify(meta)}`);
-              const footerStats = await sharp(generatedBuffer).extract({left:0, top:924, width:1080, height:156}).stats();
+              const footerBuffer = await sharp(generatedBuffer).extract({left:0, top:924, width:1080, height:156}).png().toBuffer();
+              const footerStats = await sharp(footerBuffer).stats();
               const means = footerStats.channels.slice(0,3).map((c) => c.mean);
               const footerMean = means.reduce((a,b)=>a+b,0)/means.length;
               if (footerMean < 254.5) throw new Error(`Footer raster guarantee failed. RGB mean=${footerMean.toFixed(2)}`);
