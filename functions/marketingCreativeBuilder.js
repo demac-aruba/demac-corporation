@@ -367,8 +367,29 @@ async function renderCreative(backgroundBuffer, exact, template) {
     .png()
     .toBuffer();
 
-  return sharp(background)
+  const rendered = await sharp(background)
     .composite([{ input: overlaySvg(exact, template), top: 0, left: 0 }])
+    .png({ compressionLevel: 8 })
+    .toBuffer();
+
+  // Apply the reserved footer as a final raster layer after every other visual
+  // operation. This guarantees that the original DEMAC footer always receives
+  // a physically blank, opaque white zone regardless of SVG/compositing behavior.
+  const footerLayer = await sharp({
+    create: {
+      width: OUTPUT_SIZE,
+      height: FOOTER_RESERVED_PX,
+      channels: 4,
+      background: { r: 255, g: 255, b: 255, alpha: 1 },
+    },
+  }).png().toBuffer();
+
+  return sharp(rendered)
+    .composite([{
+      input: footerLayer,
+      top: OUTPUT_SIZE - FOOTER_RESERVED_PX,
+      left: 0,
+    }])
     .png({ compressionLevel: 8 })
     .toBuffer();
 }
