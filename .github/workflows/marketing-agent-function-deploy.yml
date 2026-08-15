@@ -6,6 +6,9 @@ on:
       - 'functions/marketingImageAnalysis.js'
       - 'functions/marketingImageAnalysisCallable.js'
       - 'functions/marketingCampaignStrategy.js'
+      - 'functions/marketingCreativeBuilder.js'
+      - 'functions/marketingCreativeRead.js'
+      - 'functions/package.json'
       - 'functions/bootstrap.js'
       - '.github/workflows/marketing-agent-function-deploy.yml'
   push:
@@ -15,6 +18,9 @@ on:
       - 'functions/marketingImageAnalysis.js'
       - 'functions/marketingImageAnalysisCallable.js'
       - 'functions/marketingCampaignStrategy.js'
+      - 'functions/marketingCreativeBuilder.js'
+      - 'functions/marketingCreativeRead.js'
+      - 'functions/package.json'
       - 'functions/bootstrap.js'
       - '.github/workflows/marketing-agent-function-deploy.yml'
   workflow_dispatch:
@@ -40,8 +46,24 @@ jobs:
           node --check functions/marketingImageAnalysis.js
           node --check functions/marketingImageAnalysisCallable.js
           node --check functions/marketingCampaignStrategy.js
+          node --check functions/marketingCreativeBuilder.js
+          node --check functions/marketingCreativeRead.js
           node --check functions/bootstrap.js
-          node -e "const mod=require('./functions/bootstrap'); if(typeof mod.requestMarketingImageAnalysis!=='function') throw new Error('requestMarketingImageAnalysis export missing'); if(typeof mod.requestMarketingCampaignStrategy!=='function') throw new Error('requestMarketingCampaignStrategy export missing'); if(typeof mod.analyzeMarketingUploadSession==='function') throw new Error('legacy Eventarc marketing handler must not be exported from bootstrap');"
+          node - <<'NODE'
+          const mod = require('./functions/bootstrap');
+          for (const name of [
+            'requestMarketingImageAnalysis',
+            'requestMarketingCampaignStrategy',
+            'requestMarketingCreativeBuild',
+            'approveMarketingCreative',
+            'getMarketingCreativeState',
+          ]) {
+            if (typeof mod[name] !== 'function') throw new Error(`${name} export missing`);
+          }
+          if (typeof mod.analyzeMarketingUploadSession === 'function') {
+            throw new Error('legacy Eventarc marketing handler must not be exported from bootstrap');
+          }
+          NODE
 
   deploy-marketing-function:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -79,69 +101,84 @@ jobs:
           fi
           echo "run_service_account=${RUN_SA}" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy Marketing Agent visual analysis callable
+      - name: Deploy Marketing Agent callables
         shell: bash
         env:
           RUN_SERVICE_ACCOUNT: ${{ steps.config.outputs.run_service_account }}
         run: |
           set -euo pipefail
-          gcloud functions deploy requestMarketingImageAnalysis \
-            --project=demac-corporation \
-            --gen2 \
-            --region=us-central1 \
-            --runtime=nodejs22 \
-            --source=functions \
-            --entry-point=requestMarketingImageAnalysis \
-            --memory=512Mi \
-            --timeout=540s \
-            --run-service-account="$RUN_SERVICE_ACCOUNT" \
-            --set-secrets=OPENAI_API_KEY=OPENAI_API_KEY:latest \
-            --trigger-http \
-            --allow-unauthenticated \
-            --quiet
-          RUN_SERVICE="$(gcloud functions describe requestMarketingImageAnalysis --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.service)')"
-          RUN_SERVICE="${RUN_SERVICE##*/}"
-          gcloud run services add-iam-policy-binding "$RUN_SERVICE" \
-            --project=demac-corporation \
-            --region=us-central1 \
-            --member=allUsers \
-            --role=roles/run.invoker \
-            --quiet
 
-      - name: Deploy Marketing Agent campaign strategist callable
-        shell: bash
-        env:
-          RUN_SERVICE_ACCOUNT: ${{ steps.config.outputs.run_service_account }}
-        run: |
-          set -euo pipefail
-          gcloud functions deploy requestMarketingCampaignStrategy \
-            --project=demac-corporation \
-            --gen2 \
-            --region=us-central1 \
-            --runtime=nodejs22 \
-            --source=functions \
-            --entry-point=requestMarketingCampaignStrategy \
-            --memory=512Mi \
-            --timeout=540s \
-            --run-service-account="$RUN_SERVICE_ACCOUNT" \
-            --set-secrets=OPENAI_API_KEY=OPENAI_API_KEY:latest \
-            --trigger-http \
-            --allow-unauthenticated \
-            --quiet
-          RUN_SERVICE="$(gcloud functions describe requestMarketingCampaignStrategy --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.service)')"
-          RUN_SERVICE="${RUN_SERVICE##*/}"
-          gcloud run services add-iam-policy-binding "$RUN_SERVICE" \
-            --project=demac-corporation \
-            --region=us-central1 \
-            --member=allUsers \
-            --role=roles/run.invoker \
-            --quiet
+          make_public() {
+            local function_name="$1"
+            local run_service
+            run_service="$(gcloud functions describe "$function_name" --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.service)')"
+            run_service="${run_service##*/}"
+            gcloud run services add-iam-policy-binding "$run_service" \
+              --project=demac-corporation \
+              --region=us-central1 \
+              --member=allUsers \
+              --role=roles/run.invoker \
+              --quiet
+          }
+
+          deploy_openai_callable() {
+            local function_name="$1"
+            local memory="$2"
+            local timeout="$3"
+            gcloud functions deploy "$function_name" \
+              --project=demac-corporation \
+              --gen2 \
+              --region=us-central1 \
+              --runtime=nodejs22 \
+              --source=functions \
+              --entry-point="$function_name" \
+              --memory="$memory" \
+              --timeout="$timeout" \
+              --run-service-account="$RUN_SERVICE_ACCOUNT" \
+              --set-secrets=OPENAI_API_KEY=OPENAI_API_KEY:latest \
+              --trigger-http \
+              --allow-unauthenticated \
+              --quiet
+            make_public "$function_name"
+          }
+
+          deploy_plain_callable() {
+            local function_name="$1"
+            local memory="$2"
+            local timeout="$3"
+            gcloud functions deploy "$function_name" \
+              --project=demac-corporation \
+              --gen2 \
+              --region=us-central1 \
+              --runtime=nodejs22 \
+              --source=functions \
+              --entry-point="$function_name" \
+              --memory="$memory" \
+              --timeout="$timeout" \
+              --run-service-account="$RUN_SERVICE_ACCOUNT" \
+              --trigger-http \
+              --allow-unauthenticated \
+              --quiet
+            make_public "$function_name"
+          }
+
+          deploy_openai_callable requestMarketingImageAnalysis 512Mi 540s
+          deploy_openai_callable requestMarketingCampaignStrategy 512Mi 540s
+          deploy_openai_callable requestMarketingCreativeBuild 1Gi 540s
+          deploy_plain_callable approveMarketingCreative 512Mi 120s
+          deploy_plain_callable getMarketingCreativeState 512Mi 120s
 
       - name: Verify deployed Marketing Agent callables
         shell: bash
         run: |
           set -euo pipefail
-          for FUNCTION_NAME in requestMarketingImageAnalysis requestMarketingCampaignStrategy; do
+          for FUNCTION_NAME in \
+            requestMarketingImageAnalysis \
+            requestMarketingCampaignStrategy \
+            requestMarketingCreativeBuild \
+            approveMarketingCreative \
+            getMarketingCreativeState
+          do
             STATE="$(gcloud functions describe "$FUNCTION_NAME" --project=demac-corporation --gen2 --region=us-central1 --format='value(state)')"
             URI="$(gcloud functions describe "$FUNCTION_NAME" --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.uri)')"
             if [ "$STATE" != "ACTIVE" ] || [ -z "$URI" ]; then
