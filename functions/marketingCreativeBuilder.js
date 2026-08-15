@@ -356,7 +356,7 @@ function overlaySvg(exact, template) {
     ${productBlock}
     ${offer}
     ${cta}
-    <rect x="0" y="${contentBottom}" width="${OUTPUT_SIZE}" height="${FOOTER_RESERVED_PX}" fill="#ffffff" fill-opacity="0.985"/>
+    <rect x="0" y="${contentBottom}" width="${OUTPUT_SIZE}" height="${FOOTER_RESERVED_PX}" fill="#ffffff"/>
   </svg>`);
 }
 
