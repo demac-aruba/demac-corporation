@@ -30,6 +30,12 @@ function storageEndpoint(path: string) {
   return `https://firebasestorage.googleapis.com/v0/b/${firebaseClientConfig.storageBucket}/o/${encodeURIComponent(path)}`;
 }
 
+function firebaseStorageAuthHeader(idToken: string) {
+  // Cloud Storage for Firebase's web transport sends Firebase Auth ID tokens
+  // with the `Firebase` authorization scheme (not OAuth's `Bearer` scheme).
+  return `Firebase ${idToken}`;
+}
+
 export async function uploadCommunicationMedia(file: File, conversationId: string, kind: CommunicationMediaKind): Promise<UploadedCommunicationMedia> {
   if (!isFirebaseClientConfigured || !firebaseClientConfig.storageBucket) throw new Error('Firebase Storage is not configured for Communication Center.');
   if (!file.size) throw new Error('The selected file is empty.');
@@ -43,7 +49,7 @@ export async function uploadCommunicationMedia(file: File, conversationId: strin
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${session.idToken}`,
+      Authorization: firebaseStorageAuthHeader(session.idToken),
       'Content-Type': file.type || 'application/octet-stream',
     },
     body: file,
@@ -65,7 +71,7 @@ export async function fetchPrivateCommunicationMedia(storagePath: string): Promi
   if (!storagePath.startsWith('communication-media/')) throw new Error('Unsupported communication media path.');
   const session = await requireFirebaseWebSession();
   const response = await fetch(`${storageEndpoint(storagePath)}?alt=media`, {
-    headers: { Authorization: `Bearer ${session.idToken}` },
+    headers: { Authorization: firebaseStorageAuthHeader(session.idToken) },
     cache: 'no-store',
   });
   if (!response.ok) throw new Error(`Could not load communication media (${response.status}).`);
