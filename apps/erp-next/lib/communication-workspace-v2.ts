@@ -196,7 +196,7 @@ function kindCompatible(left: CommunicationMediaKind | null, right: Communicatio
 }
 
 function mergeConversationHistory(recentMessages: RichConversationMessage[], archiveMessages: RichConversationMessage[]) {
-  const merged = recentMessages.map((message) => ({ ...message, media: message.media ? { ...message.media } : message.media }));
+  const merged: RichConversationMessage[] = recentMessages.map((message) => ({ ...message, media: message.media ? { ...message.media } : message.media }));
   const consumedRecent = new Set<number>();
   const knownIds = new Set(merged.map((message) => message.id).filter(Boolean));
   const knownStoragePaths = new Set(merged.map((message) => message.media?.storagePath).filter(Boolean));
