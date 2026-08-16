@@ -60,8 +60,16 @@ type ArchivedWhatsAppMessage = {
   id: string;
   messageId?: string | null;
   conversationId?: string | null;
+  chatJid?: string | null;
+  canonicalJid?: string | null;
+  whatsappLid?: string | null;
+  phone?: string | null;
   type?: string | null;
   media?: Record<string, unknown> | null;
+  storagePath?: string | null;
+  mimeType?: string | null;
+  fileName?: string | null;
+  size?: number | null;
   whatsappTimestamp?: string | number | null;
   at?: string | null;
   createdAt?: string | null;
@@ -83,6 +91,7 @@ const archiveCache = new Map<string, ArchiveCacheEntry>();
 
 function asString(value: unknown, fallback = '') { return typeof value === 'string' ? value : fallback; }
 function asNumber(value: unknown) { return typeof value === 'number' && Number.isFinite(value) ? value : null; }
+function digits(value: unknown) { return String(value ?? '').replace(/\D/g, ''); }
 function timestampMs(value: unknown) {
   if (typeof value === 'number' && Number.isFinite(value)) return value > 1e12 ? value : value > 1e9 ? value * 1000 : 0;
   const raw = asString(value).trim();
@@ -140,7 +149,14 @@ function normalizeRichMessage(value: Record<string, unknown>): RichConversationM
 }
 
 function normalizeArchivedMessage(value: ArchivedWhatsAppMessage): RichConversationMessage | null {
-  const media = normalizeMedia(value.media);
+  const fallbackMedia = value.storagePath ? {
+    kind: value.type,
+    storagePath: value.storagePath,
+    mimeType: value.mimeType,
+    fileName: value.fileName,
+    size: value.size,
+  } : null;
+  const media = normalizeMedia(value.media || fallbackMedia);
   if (!media?.storagePath) return null;
   const explicitRole = asString(value.role).toLowerCase();
   const outbound = value.fromMe === true || asString(value.direction).toLowerCase() === 'outbound' || Boolean(value.sentByName);
@@ -148,10 +164,9 @@ function normalizeArchivedMessage(value: ArchivedWhatsAppMessage): RichConversat
     ? explicitRole as ConversationMessage['role']
     : outbound ? 'operator' : 'customer';
   const id = asString(value.messageId || value.id, value.id);
-  const at = isoTimestamp(value.whatsappTimestamp || value.at || value.createdAt);
   return {
     id,
-    at,
+    at: isoTimestamp(value.whatsappTimestamp || value.at || value.createdAt),
     author: asString(value.sentByName || value.author, role === 'customer' ? 'WhatsApp contact' : 'DEMAC WhatsApp'),
     role,
     text: asString(value.text || media.caption),
@@ -190,20 +205,23 @@ function conversationNeedsArchive(messages: RichConversationMessage[]) {
 }
 
 function kindCompatible(left: CommunicationMediaKind | null, right: CommunicationMediaKind) {
-  if (!left) return true;
-  if (left === right) return true;
+  if (!left || left === right) return true;
   return (left === 'audio' && right === 'voice') || (left === 'voice' && right === 'audio');
 }
 
 function mergeConversationHistory(recentMessages: RichConversationMessage[], archiveMessages: RichConversationMessage[]) {
-  const merged: RichConversationMessage[] = recentMessages.map((message) => ({ ...message, media: message.media ? { ...message.media } : message.media }));
+  const merged: RichConversationMessage[] = recentMessages.map((message) => ({
+    ...message,
+    media: message.media ? { ...message.media } : message.media,
+  }));
   const consumedRecent = new Set<number>();
   const knownIds = new Set(merged.map((message) => message.id).filter(Boolean));
-  const knownStoragePaths = new Set(merged.map((message) => message.media?.storagePath).filter(Boolean));
-
+  const knownStoragePaths = new Set(merged.map((message) => message.media?.storagePath).filter((value): value is string => Boolean(value)));
   const archives = [...archiveMessages].sort((left, right) => timestampMs(left.at) - timestampMs(right.at));
+
   for (const archive of archives) {
-    if (!archive.media?.storagePath || knownStoragePaths.has(archive.media.storagePath)) continue;
+    const storagePath = archive.media?.storagePath;
+    if (!storagePath || knownStoragePaths.has(storagePath)) continue;
 
     let matchIndex = merged.findIndex((message) => message.id === archive.id);
     if (matchIndex < 0) {
@@ -215,15 +233,12 @@ function mergeConversationHistory(recentMessages: RichConversationMessage[], arc
         const candidate = merged[index];
         if (candidate.media?.storagePath) continue;
         const candidateKind = placeholderKind(candidate);
-        if (!isGenericMediaPlaceholder(candidate) && !candidateKind) continue;
-        if (!kindCompatible(candidateKind, archive.media.kind)) continue;
+        if (!candidateKind && !isGenericMediaPlaceholder(candidate)) continue;
+        if (!kindCompatible(candidateKind, archive.media!.kind)) continue;
         const candidateAt = timestampMs(candidate.at);
         const delta = archiveAt && candidateAt ? Math.abs(archiveAt - candidateAt) : 0;
-        if (archiveAt && candidateAt && delta > 15 * 60 * 1000) continue;
-        if (delta < bestDelta) {
-          bestIndex = index;
-          bestDelta = delta;
-        }
+        if (archiveAt && candidateAt && delta > 30 * 60 * 1000) continue;
+        if (delta < bestDelta) { bestDelta = delta; bestIndex = index; }
       }
       matchIndex = bestIndex;
     }
@@ -236,7 +251,7 @@ function mergeConversationHistory(recentMessages: RichConversationMessage[], arc
         at: existing.at || archive.at,
         author: existing.author || archive.author,
         role: existing.role || archive.role,
-        text: isGenericMediaPlaceholder(existing) ? archive.text : existing.text || archive.text,
+        text: isGenericMediaPlaceholder(existing) ? (archive.text || archive.media?.caption || '') : (existing.text || archive.text),
         type: archive.type || existing.type,
         status: archive.status || existing.status,
         media: archive.media,
@@ -244,7 +259,7 @@ function mergeConversationHistory(recentMessages: RichConversationMessage[], arc
         quotedText: existing.quotedText || archive.quotedText,
       };
       consumedRecent.add(matchIndex);
-      knownStoragePaths.add(archive.media.storagePath);
+      knownStoragePaths.add(storagePath);
       knownIds.add(archive.id);
       continue;
     }
@@ -252,7 +267,7 @@ function mergeConversationHistory(recentMessages: RichConversationMessage[], arc
     if (knownIds.has(archive.id)) continue;
     merged.push(archive);
     knownIds.add(archive.id);
-    knownStoragePaths.add(archive.media.storagePath);
+    knownStoragePaths.add(storagePath);
   }
 
   return merged.sort((left, right) => {
@@ -270,27 +285,47 @@ function resolutionStatus(raw: RawConversation, base: LiveConversation): PhoneRe
   return 'unavailable';
 }
 
+async function firstArchiveMatch(fieldPath: string, values: string[]) {
+  for (const value of [...new Set(values.map((item) => item.trim()).filter(Boolean))]) {
+    const rows = await queryFirestoreCollectionByField<ArchivedWhatsAppMessage>('whatsappMessages', fieldPath, value, 500).catch(() => []);
+    const mediaRows = rows.filter((row) => Boolean(normalizeArchivedMessage(row)));
+    if (mediaRows.length) return mediaRows;
+  }
+  return [];
+}
+
 async function loadArchivedMessages(conversation: RichLiveConversation) {
-  const cacheKey = conversation.id;
+  const phone = digits(conversation.phone);
+  const cacheKey = [conversation.id, phone, conversation.chatJid, conversation.whatsappLid, conversation.canonicalJid].filter(Boolean).join('|');
   const cached = archiveCache.get(cacheKey);
   if (cached && Date.now() - cached.loadedAt < ARCHIVE_CACHE_MS) return cached.messages;
 
-  const identifiers = [...new Set([
+  const documentIdentities = [
     conversation.id,
     conversation.externalChatId,
     conversation.chatJid,
     conversation.whatsappLid,
     conversation.canonicalJid,
-  ].map((value) => asString(value).trim()).filter(Boolean))];
+  ].map((value) => asString(value)).filter(Boolean);
+  const canonicalIdentities = [
+    asString(conversation.canonicalJid),
+    phone ? `${phone}@s.whatsapp.net` : '',
+  ].filter(Boolean);
+  const lidIdentities = [
+    asString(conversation.whatsappLid),
+    asString(conversation.chatJid).endsWith('@lid') ? asString(conversation.chatJid) : '',
+    asString(conversation.id).endsWith('@lid') ? asString(conversation.id) : '',
+  ].filter(Boolean);
+  const chatIdentities = [asString(conversation.chatJid), asString(conversation.externalChatId)].filter(Boolean);
 
-  let archived: ArchivedWhatsAppMessage[] = [];
-  for (const identifier of identifiers) {
-    const rows = await queryFirestoreCollectionByField<ArchivedWhatsAppMessage>('whatsappMessages', 'conversationId', identifier, 500).catch(() => []);
-    if (rows.length) {
-      archived = rows;
-      break;
-    }
-  }
+  // Backfilled rows carry the resolved phone, canonical JID and LID in addition
+  // to conversationId. Phone-first recovery bridges historical @lid/@s.whatsapp.net
+  // splits without scanning the full whatsappMessages collection.
+  let archived = phone ? await firstArchiveMatch('phone', [phone]) : [];
+  if (!archived.length) archived = await firstArchiveMatch('conversationId', documentIdentities);
+  if (!archived.length) archived = await firstArchiveMatch('canonicalJid', canonicalIdentities);
+  if (!archived.length) archived = await firstArchiveMatch('whatsappLid', lidIdentities);
+  if (!archived.length) archived = await firstArchiveMatch('chatJid', chatIdentities);
 
   archiveCache.set(cacheKey, { loadedAt: Date.now(), messages: archived });
   return archived;
@@ -299,7 +334,9 @@ async function loadArchivedMessages(conversation: RichLiveConversation) {
 export async function loadRichConversationHistory(conversation: RichLiveConversation): Promise<RichConversationMessage[]> {
   const archived = await loadArchivedMessages(conversation);
   if (!archived.length) return conversation.messages;
-  const archiveMessages = archived.map((message) => normalizeArchivedMessage(message)).filter((message): message is RichConversationMessage => Boolean(message));
+  const archiveMessages = archived
+    .map((message) => normalizeArchivedMessage(message))
+    .filter((message): message is RichConversationMessage => Boolean(message));
   return mergeConversationHistory(conversation.messages, archiveMessages);
 }
 
