@@ -8,8 +8,21 @@ type OperatorLanguage = Operator['languages'][number];
 
 export type CommunicationPropertyPreview = { id: string; name: string; address: string; equipmentCount: number };
 export type CommunicationEquipmentPreview = { id: string; propertyId?: string | null; locationLabel: string; systemType: string; active: boolean; condition?: string | null };
+export type LiveConversationMessage = ConversationMessage & {
+  status?: string | null;
+  provider?: WhatsAppProvider;
+  mediaType?: string | null;
+  mediaCaption?: string | null;
+  mediaFileName?: string | null;
+  mediaMimeType?: string | null;
+  mediaSize?: number | null;
+  mediaUrl?: string | null;
+  reactionToId?: string | null;
+  reactionEmoji?: string | null;
+};
 
-export type LiveConversation = Conversation & {
+export type LiveConversation = Omit<Conversation, 'messages'> & {
+  messages: LiveConversationMessage[];
   channel?: ConversationMessage['channel'];
   ownerUserId?: string | null;
   provider?: WhatsAppProvider;
@@ -19,6 +32,7 @@ export type LiveConversation = Conversation & {
   routeReason?: string | null;
   customerTyping?: boolean;
   typingMedia?: string | null;
+  avatarUrl?: string | null;
   updatedAt?: string;
   customerEmail?: string | null;
   customerType?: string | null;
@@ -38,7 +52,7 @@ export type LiveOperator = Operator & {
 type StoredConversation = Omit<LiveConversation, 'messages' | 'language'> & {
   id: string;
   language?: string;
-  recentMessages?: ConversationMessage[];
+  recentMessages?: LiveConversationMessage[];
 };
 
 type StoredOperatorPresence = {
@@ -66,6 +80,7 @@ const CRM_CACHE_MS = 60_000;
 let crmIndexCache: CrmIndex | null = null;
 
 function safeString(value: unknown, fallback = '') { return typeof value === 'string' ? value : fallback; }
+function nullableString(value: unknown) { const normalized = safeString(value).trim(); return normalized || null; }
 function normalizePhone(value: unknown) { const digits = String(value ?? '').replace(/\D/g, ''); return !digits ? '' : digits.length === 7 ? `297${digits}` : digits; }
 
 function normalizeLanguage(value: unknown): ConversationLanguage {
@@ -81,14 +96,31 @@ function normalizeOperatorLanguages(values: unknown): OperatorLanguage[] {
   return [...new Set(values.map(normalizeLanguage))];
 }
 
-function normalizeMessage(message: ConversationMessage, attribution?: MessageAttribution): ConversationMessage {
+function normalizeMessage(message: LiveConversationMessage, attribution?: MessageAttribution): LiveConversationMessage {
   const storedAuthor = safeString(message.author, 'WhatsApp');
-  return { id: safeString(message.id, `message-${Date.now()}`), at: safeString(message.at, new Date().toISOString()), author: message.role === 'operator' && attribution?.name ? attribution.name : storedAuthor, role: message.role ?? 'customer', text: safeString(message.text), channel: message.channel ?? 'whatsapp' };
+  return {
+    id: safeString(message.id, `message-${Date.now()}`),
+    at: safeString(message.at, new Date().toISOString()),
+    author: message.role === 'operator' && attribution?.name ? attribution.name : storedAuthor,
+    role: message.role ?? 'customer',
+    text: safeString(message.text),
+    channel: message.channel ?? 'whatsapp',
+    status: nullableString(message.status),
+    provider: message.provider === 'meta' ? 'meta' : 'wacli',
+    mediaType: nullableString(message.mediaType),
+    mediaCaption: nullableString(message.mediaCaption),
+    mediaFileName: nullableString(message.mediaFileName),
+    mediaMimeType: nullableString(message.mediaMimeType),
+    mediaSize: Number.isFinite(Number(message.mediaSize)) ? Number(message.mediaSize) : null,
+    mediaUrl: nullableString(message.mediaUrl),
+    reactionToId: nullableString(message.reactionToId),
+    reactionEmoji: nullableString(message.reactionEmoji),
+  };
 }
 
 function normalizeConversation(stored: StoredConversation, attributions: Map<string, MessageAttribution>): LiveConversation {
   const messages = Array.isArray(stored.recentMessages) ? stored.recentMessages.map((message) => normalizeMessage(message, attributions.get(safeString(message.id)))) : [];
-  return { ...stored, customer: safeString(stored.customer, stored.phone || 'WhatsApp contact'), phone: safeString(stored.phone), channel: stored.channel ?? 'whatsapp', status: stored.status ?? 'new', queue: stored.queue ?? 'general', unread: Number(stored.unread || 0), language: normalizeLanguage(stored.language), aiDisposition: stored.aiDisposition ?? 'human_active', lastActivityAt: safeString(stored.lastActivityAt, stored.updatedAt || ''), vip: Boolean(stored.vip), messages };
+  return { ...stored, customer: safeString(stored.customer, stored.phone || 'WhatsApp contact'), phone: safeString(stored.phone), avatarUrl: nullableString(stored.avatarUrl), channel: stored.channel ?? 'whatsapp', status: stored.status ?? 'new', queue: stored.queue ?? 'general', unread: Number(stored.unread || 0), language: normalizeLanguage(stored.language), aiDisposition: stored.aiDisposition ?? 'human_active', lastActivityAt: safeString(stored.lastActivityAt, stored.updatedAt || ''), vip: Boolean(stored.vip), messages };
 }
 
 function operatorQueues(role: AuthPrincipal['role']): Queue[] {

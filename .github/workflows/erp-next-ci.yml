@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'apps/erp-next/**'
+      - 'functions/whatsappWacliGateway.js'
+      - 'services/whatsapp-bridge/**'
       - 'docs/ERP_NEXT_**'
       - '.github/workflows/erp-next-ci.yml'
   push:
@@ -11,6 +13,8 @@ on:
       - main
     paths:
       - 'apps/erp-next/**'
+      - 'functions/whatsappWacliGateway.js'
+      - 'services/whatsapp-bridge/**'
       - 'docs/ERP_NEXT_**'
       - '.github/workflows/erp-next-ci.yml'
 
@@ -31,6 +35,12 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
+      - name: Validate WhatsApp bridge syntax
+        working-directory: .
+        run: node --check services/whatsapp-bridge/server.mjs
+      - name: Validate WhatsApp Firebase gateway syntax
+        working-directory: .
+        run: node --check functions/whatsappWacliGateway.js
       - name: Install
         run: npm install --no-audit --no-fund
       - name: Typecheck

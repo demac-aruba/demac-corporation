@@ -25,6 +25,7 @@ import {
 } from '../../lib/browser-communications';
 import { loadFirebasePrincipal } from '../../lib/firebase/principal';
 import type { AuthPrincipal } from '../../lib/security';
+import { CommunicationAvatar, WhatsAppMessageContent, conversationMessagePreview, messageReceiptLabel } from './whatsapp-message-content';
 import styles from './communication-center.module.css';
 
 type Mode = 'communications' | 'ai' | 'escalations';
@@ -78,7 +79,8 @@ function lastConversationMessage(conversation: LiveConversation) {
 }
 
 function lastMessage(conversation: LiveConversation) {
-  return lastConversationMessage(conversation)?.text || conversation.lastMessageText || 'No recent message';
+  const recent = lastConversationMessage(conversation);
+  return recent ? conversationMessagePreview(recent) : conversation.lastMessageText || 'No recent message';
 }
 
 function isManager(principal: AuthPrincipal | null) {
@@ -419,7 +421,7 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
           {visible.map((conversation) => {
             const state = visualState(conversation);
             return <button key={conversation.id} type="button" data-state={state.state} className={`${styles.conversationRow} ${selected?.id === conversation.id ? styles.selectedRow : ''}`} onClick={() => selectConversation(conversation)}>
-              <span className={styles.avatar}>{initials(conversation.customer)}</span>
+              <CommunicationAvatar className={styles.avatar} name={conversation.customer} url={conversation.avatarUrl} />
               <span className={styles.rowBody}>
                 <span className={styles.rowTop}><strong>{conversation.customer}</strong><time>{relativeTime(conversation.lastActivityAt)}</time></span>
                 <span className={styles.rowPreview}>{lastMessage(conversation)}</span>
@@ -434,7 +436,7 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
       <main className={`${styles.panel} ${styles.chat}`}>
         {!selected ? <div className={styles.emptyLarge}><span className={styles.emptyIcon}>WA</span><strong>{loading ? 'Loading Communication Center…' : 'No conversation selected'}</strong><p>Choose a conversation from the inbox to start working.</p></div> : <>
           <div className={styles.chatHeader}>
-            <div className={styles.chatIdentity}><span className={styles.chatAvatar}>{initials(selected.customer)}</span><div><h2>{selected.customer}</h2><p>{selected.phone || selected.chatJid || 'WhatsApp identity pending'}{selected.property ? ` · ${selected.property}` : ''}</p></div></div>
+            <div className={styles.chatIdentity}><CommunicationAvatar className={styles.chatAvatar} name={selected.customer} url={selected.avatarUrl} /><div><h2>{selected.customer}</h2><p>{selected.phone || selected.chatJid || 'WhatsApp identity pending'}{selected.property ? ` · ${selected.property}` : ''}</p></div></div>
             <div className={styles.chatHeaderActions}><span className={styles.ownerLabel}>{selected.owner ? `Assigned to ${selected.owner}` : 'Unassigned'}</span><button type="button" className={styles.takeover} onClick={takeOver} disabled={busy || selectedOwnedByMe}>{selectedOwnedByMe ? 'Owned by me' : selectedOwnedByColleague ? 'Take over' : 'Take conversation'}</button>{!standalone ? <button type="button" className={styles.detailsButton} onClick={() => setShowDetails((current) => !current)}>{showDetails ? 'Hide details' : 'Customer details'}</button> : null}</div>
           </div>
 
@@ -450,8 +452,8 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
           <div className={styles.messages}>
             {!canReadBody ? <article className={`${styles.message} ${styles.system}`}><span className={styles.messageAuthor}>Team ownership</span><p>This conversation is being handled by {selected.owner ?? 'another operator'}. Take ownership before working in the chat.</p></article> : selected.messages.length ? selected.messages.map((message) => <article key={message.id} className={`${styles.message} ${styles[message.role]}`}>
               <div className={styles.messageHeader}><span className={styles.messageAuthor}>{messageAuthorLabel(message, selected.customer)}</span></div>
-              <p>{message.text}</p>
-              <div className={styles.messageFooter}><time>{messageTime(message.at)}</time>{message.role === 'operator' ? <span>{message.id.startsWith('local-') ? 'Sending…' : 'Sent ✓'}</span> : null}</div>
+              <WhatsAppMessageContent message={message} />
+              <div className={styles.messageFooter}><time>{messageTime(message.at)}</time>{message.role === 'operator' ? <span>{messageReceiptLabel(message)}</span> : null}</div>
             </article>) : <article className={`${styles.message} ${styles.system}`}><span className={styles.messageAuthor}>Conversation ready</span><p>No synchronized messages are stored in the recent window yet.</p></article>}
             <div ref={messagesEndRef} />
           </div>
@@ -471,7 +473,7 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
       {detailsVisible ? <aside className={`${styles.panel} ${styles.contextPanel}`}>
         <div className={styles.contextHeader}><div><strong>Customer 360</strong><span>CRM & operational context</span></div>{selected ? <span className={styles.contextChannel}>WhatsApp</span> : null}</div>
         {selected ? <div className={styles.context}>
-          <section className={styles.customerCard}><span className={styles.largeAvatar}>{initials(customerContext?.displayName || selected.customer)}</span><div><strong>{customerContext?.displayName || selected.customer}</strong><p>{customerContext?.phone || selected.phone || selected.chatJid || 'Phone not resolved'}</p>{customerContext?.email ? <p>{customerContext.email}</p> : null}<small>{contextLoading ? 'Matching CRM…' : customerContext ? 'Matched CRM customer' : 'WhatsApp contact · not linked to CRM'}</small></div></section>
+          <section className={styles.customerCard}><CommunicationAvatar className={styles.largeAvatar} name={customerContext?.displayName || selected.customer} url={selected.avatarUrl} /><div><strong>{customerContext?.displayName || selected.customer}</strong><p>{customerContext?.phone || selected.phone || selected.chatJid || 'Phone not resolved'}</p>{customerContext?.email ? <p>{customerContext.email}</p> : null}<small>{contextLoading ? 'Matching CRM…' : customerContext ? 'Matched CRM customer' : 'WhatsApp contact · not linked to CRM'}</small></div></section>
 
           <nav className={styles.contextTabs} aria-label="Customer context sections">
             {(['overview', 'properties', 'equipment', 'actions'] as ContextTab[]).map((tab) => <button key={tab} type="button" className={contextTab === tab ? styles.contextTabActive : ''} onClick={() => setContextTab(tab)}>{tab === 'overview' ? 'Info' : tab === 'properties' ? 'Properties' : tab === 'equipment' ? 'A/C' : 'Actions'}</button>)}
