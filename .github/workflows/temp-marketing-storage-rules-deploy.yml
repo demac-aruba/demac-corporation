@@ -1,0 +1,77 @@
+name: Temporary Marketing Storage Rules Deploy
+
+on:
+  push:
+    branches:
+      - agent/marketing-upload-diagnostic
+    paths:
+      - '.github/workflows/temp-marketing-storage-rules-deploy.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Authenticate Firebase service account
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+
+      - name: Deploy current Firebase Storage rules
+        run: npx --yes firebase-tools@latest deploy --only storage --project demac-corporation --non-interactive
+
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Verify authenticated Marketing upload through Storage rules
+        env:
+          FIREBASE_WEB_API_KEY: 'AIzaSyCo31zuo6d8RsgiLWGqUVOvRmHkisoF1DE'
+          FIREBASE_STORAGE_BUCKET: 'demac-corporation.firebasestorage.app'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd functions
+          node <<'NODE'
+          const { randomUUID } = require('node:crypto');
+          const { applicationDefault, initializeApp } = require('firebase-admin/app');
+          const { getAuth } = require('firebase-admin/auth');
+          const { getFirestore } = require('firebase-admin/firestore');
+          const { getStorage } = require('firebase-admin/storage');
+          const app = initializeApp({ credential: applicationDefault(), projectId:'demac-corporation', storageBucket:process.env.FIREBASE_STORAGE_BUCKET });
+          const auth = getAuth(app); const db = getFirestore(app); const bucket = getStorage(app).bucket();
+          const stamp = `${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+          const email = `storage-rules-${stamp}@demac-smoke.test`;
+          const password = `Smoke-${randomUUID()}!A9`;
+          const path = `marketing/originals/diagnostic-session/diagnostic-${stamp}.png`;
+          let uid = '';
+          async function signIn(){ const r=await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(process.env.FIREBASE_WEB_API_KEY)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password,returnSecureToken:true})}); const p=await r.json(); if(!r.ok||!p.idToken) throw new Error(JSON.stringify(p)); return p.idToken; }
+          try {
+            const u=await auth.createUser({email,password,emailVerified:true,displayName:'Storage rules smoke'}); uid=u.uid;
+            const now=new Date().toISOString();
+            await db.collection('users').doc(uid).set({id:uid,name:'Storage rules smoke',displayName:'Storage rules smoke',email,role:'admin',active:true,syntheticSmokeTest:true,createdAt:now,updatedAt:now});
+            const idToken=await signIn();
+            const boundary=`demac-marketing-${randomUUID().replace(/[^a-zA-Z0-9_-]/g,'')}`;
+            const bytes=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZpP8AAAAASUVORK5CYII=','base64');
+            const metadata={sessionId:'diagnostic-session',assetId:'diagnostic-asset',uploadedByUid:uid,originalFileName:'diagnostic.png',variant:'original'};
+            const body=new Blob([`--${boundary}\r\n`,'Content-Type: application/json; charset=utf-8\r\n\r\n',JSON.stringify({name:path,contentType:'image/png',metadata}),`\r\n--${boundary}\r\n`,'Content-Type: image/png\r\n\r\n',new Blob([bytes],{type:'image/png'}),`\r\n--${boundary}--`],{type:`multipart/related; boundary=${boundary}`});
+            const endpoint=`https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(process.env.FIREBASE_STORAGE_BUCKET)}/o?name=${encodeURIComponent(path)}`;
+            const r=await fetch(endpoint,{method:'POST',headers:{Authorization:`Bearer ${idToken}`,'Content-Type':`multipart/related; boundary=${boundary}`,'X-Goog-Upload-Protocol':'multipart'},body});
+            const text=await r.text();
+            console.log(JSON.stringify({marketingStorageUploadOk:r.ok,status:r.status,response:r.ok?'accepted':text.slice(0,1000)},null,2));
+            if(!r.ok) process.exitCode=2;
+          } finally {
+            await bucket.file(path).delete({ignoreNotFound:true}).catch(()=>undefined);
+            if(uid){await db.collection('users').doc(uid).delete().catch(()=>undefined); await auth.deleteUser(uid).catch(()=>undefined);}
+          }
+          NODE
