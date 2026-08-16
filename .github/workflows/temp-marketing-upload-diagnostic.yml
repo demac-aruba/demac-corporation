@@ -22,21 +22,24 @@ jobs:
         with:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
 
-      - name: Inspect bucket CORS and browser preflight
+      - name: Inspect Firebase Rules Firestore service-agent IAM
         shell: bash
         run: |
           set -euo pipefail
-          echo '=== BUCKET CORS ==='
-          gcloud storage buckets describe gs://demac-corporation.firebasestorage.app --format='json(cors_config)' || true
-          echo '=== PREFLIGHT demac-aruba.com ==='
-          curl -sS -i -X OPTIONS \
-            -H 'Origin: https://demac-aruba.com' \
-            -H 'Access-Control-Request-Method: POST' \
-            -H 'Access-Control-Request-Headers: authorization,content-type,x-goog-upload-protocol' \
-            'https://firebasestorage.googleapis.com/v0/b/demac-corporation.firebasestorage.app/o?name=marketing%2Foriginals%2Fcors-test%2Ftest.png' | head -80
-          echo '=== PREFLIGHT www.demac-aruba.com ==='
-          curl -sS -i -X OPTIONS \
-            -H 'Origin: https://www.demac-aruba.com' \
-            -H 'Access-Control-Request-Method: POST' \
-            -H 'Access-Control-Request-Headers: authorization,content-type,x-goog-upload-protocol' \
-            'https://firebasestorage.googleapis.com/v0/b/demac-corporation.firebasestorage.app/o?name=marketing%2Foriginals%2Fcors-test%2Ftest.png' | head -80
+          PROJECT_NUMBER="$(gcloud projects describe demac-corporation --format='value(projectNumber)')"
+          AGENT="service-${PROJECT_NUMBER}@gcp-sa-firebaserules.iam.gserviceaccount.com"
+          echo "projectNumber=${PROJECT_NUMBER}"
+          echo "rulesServiceAgent=${AGENT}"
+          echo '=== MATCHING IAM BINDINGS ==='
+          gcloud projects get-iam-policy demac-corporation --format=json > /tmp/policy.json
+          python3 - <<'PY'
+          import json, os
+          p=json.load(open('/tmp/policy.json'))
+          project_number=os.popen("gcloud projects describe demac-corporation --format='value(projectNumber)'").read().strip()
+          agent=f'serviceAccount:service-{project_number}@gcp-sa-firebaserules.iam.gserviceaccount.com'
+          found=[]
+          for b in p.get('bindings',[]):
+              if agent in b.get('members',[]):
+                  found.append(b.get('role'))
+          print(json.dumps({'agent':agent,'roles':found},indent=2))
+          PY
