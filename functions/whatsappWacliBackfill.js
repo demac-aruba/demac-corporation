@@ -5,6 +5,7 @@ const { onRequest } = require('firebase-functions/v2/https');
 
 const db = getFirestore();
 const wacliWebhookSecret = defineSecret('WACLI_WEBHOOK_SECRET');
+const conversationIdentityCache = new Map();
 
 function safeDocumentId(value) {
   return String(value || 'unknown').replaceAll('/', '_').replaceAll('#', '_').slice(0, 1200);
@@ -45,6 +46,7 @@ function cleanMedia(value) {
 }
 
 function millis(value) {
+  if (typeof value?.toMillis === 'function') return value.toMillis();
   if (typeof value === 'number' && Number.isFinite(value)) {
     if (value > 1e12) return value;
     if (value > 1e9) return value * 1000;
@@ -81,7 +83,8 @@ function isGenericMediaPlaceholder(message) {
   const text = normalizedText(message?.text);
   return text === 'media is syncing from whatsapp…'
     || text === 'media is syncing from whatsapp...'
-    || text === 'media is syncing from whatsapp';
+    || text === 'media is syncing from whatsapp'
+    || /^\[(audio|voice|image|sticker|video|document|file|pdf)\]$/.test(text);
 }
 
 function kindCompatible(existing, incoming) {
@@ -130,10 +133,6 @@ function chooseTimelineMessageIndex(messages, input, media) {
 
   if (bestIndex >= 0 && bestScore >= 8) return { index: bestIndex, mode: 'fuzzy' };
 
-  // Legacy V1 messages can have synthetic IDs/timestamps, while still retaining
-  // the correct media kind and chronological position. wacli's recent message
-  // list is processed newest-first, so consuming the newest unresolved
-  // placeholder of the same kind gives a deterministic, type-safe fallback.
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index] || {};
     if (message?.media?.storagePath) continue;
@@ -142,14 +141,57 @@ function chooseTimelineMessageIndex(messages, input, media) {
     return { index, mode: 'kind_order' };
   }
 
-  // The earliest V8 preview stored media events as a generic sync placeholder
-  // without preserving the media kind. That exact text is reserved for media,
-  // so it is safe to consume newest-first after all stronger matching modes fail.
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (isGenericMediaPlaceholder(messages[index])) return { index, mode: 'generic_order' };
   }
 
   return { index: -1, mode: 'none' };
+}
+
+function activityMillis(snapshot) {
+  const data = snapshot.data() || {};
+  return millis(data.lastActivityAt) || millis(data.updatedAt) || millis(data.createdAt);
+}
+
+function mostRecentSnapshot(snapshot) {
+  if (!snapshot || snapshot.empty) return null;
+  return [...snapshot.docs].sort((left, right) => activityMillis(right) - activityMillis(left))[0] || null;
+}
+
+async function queryConversation(field, value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return null;
+  const snapshot = await db.collection('communicationConversations').where(field, '==', normalized).limit(5).get();
+  return mostRecentSnapshot(snapshot);
+}
+
+async function resolveConversationRef({ originalConversationId, resolvedPhone, canonicalJid, whatsappLid, chat }) {
+  const cacheKey = [resolvedPhone, canonicalJid, whatsappLid, chat].filter(Boolean).join('|');
+  const cachedId = cacheKey ? conversationIdentityCache.get(cacheKey) : null;
+  if (cachedId) return db.collection('communicationConversations').doc(cachedId);
+
+  const exactRef = db.collection('communicationConversations').doc(originalConversationId);
+  const exactSnapshot = await exactRef.get();
+  if (exactSnapshot.exists) {
+    if (cacheKey) conversationIdentityCache.set(cacheKey, exactRef.id);
+    return exactRef;
+  }
+
+  const lookups = [
+    ['canonicalJid', canonicalJid],
+    ['whatsappLid', whatsappLid],
+    ['chatJid', chat],
+    ['externalChatId', chat],
+    ['phone', resolvedPhone],
+  ];
+  for (const [field, value] of lookups) {
+    const match = await queryConversation(field, value);
+    if (!match) continue;
+    if (cacheKey) conversationIdentityCache.set(cacheKey, match.id);
+    return match.ref;
+  }
+
+  return exactRef;
 }
 
 exports.wacliBackfillUpdate = onRequest(
@@ -173,8 +215,8 @@ exports.wacliBackfillUpdate = onRequest(
     try {
       const input = request.body || {};
       const chat = String(input.chat || input.conversationId || '');
-      const conversationId = safeDocumentId(input.conversationId || chat);
-      if (!conversationId) throw new Error('conversationId is required.');
+      const originalConversationId = safeDocumentId(input.conversationId || chat);
+      if (!originalConversationId) throw new Error('conversationId is required.');
       const identity = input.identity && typeof input.identity === 'object' ? input.identity : {};
       const resolvedPhone = phone(identity.phone);
       const canonicalJid = String(identity.canonicalJid || '');
@@ -182,13 +224,16 @@ exports.wacliBackfillUpdate = onRequest(
       const messageId = input.messageId ? String(input.messageId) : '';
       const media = cleanMedia(input.media);
       const avatar = input.avatar && typeof input.avatar === 'object' ? input.avatar : null;
-      const conversationRef = db.collection('communicationConversations').doc(conversationId);
+      const conversationRef = await resolveConversationRef({ originalConversationId, resolvedPhone, canonicalJid, whatsappLid, chat });
+      const resolvedConversationId = conversationRef.id;
       let mediaMatched = false;
       let mediaMatchMode = 'none';
+      let conversationMatched = false;
 
       await db.runTransaction(async (transaction) => {
         const snapshot = await transaction.get(conversationRef);
         if (!snapshot.exists) return;
+        conversationMatched = true;
         const current = snapshot.data() || {};
         const updates = { updatedAt: FieldValue.serverTimestamp() };
         if (resolvedPhone) {
@@ -199,6 +244,10 @@ exports.wacliBackfillUpdate = onRequest(
         }
         if (canonicalJid.endsWith('@s.whatsapp.net')) updates.canonicalJid = canonicalJid;
         if (whatsappLid.endsWith('@lid')) updates.whatsappLid = whatsappLid;
+        if (chat) {
+          updates.chatJid = current.chatJid || chat;
+          updates.externalChatId = current.externalChatId || chat;
+        }
         if (avatar?.storagePath) {
           updates.avatarStoragePath = String(avatar.storagePath);
           updates.avatarUpdatedAt = String(avatar.updatedAt || new Date().toISOString());
@@ -226,13 +275,16 @@ exports.wacliBackfillUpdate = onRequest(
         await db.collection('whatsappMessages').doc(safeDocumentId(messageId)).set({
           provider: 'wacli',
           messageId,
-          conversationId,
+          conversationId: resolvedConversationId,
+          sourceConversationId: originalConversationId !== resolvedConversationId ? originalConversationId : null,
+          chatJid: chat || null,
           type: media.kind,
           media,
           phone: resolvedPhone,
           canonicalJid: canonicalJid || null,
           whatsappLid: whatsappLid || null,
           whatsappTimestamp: input.at || input.timestamp || null,
+          avatarStoragePath: avatar?.storagePath ? String(avatar.storagePath) : null,
           enrichedByBackfill: true,
           enrichedAt: FieldValue.serverTimestamp(),
         }, { merge: true });
@@ -240,11 +292,14 @@ exports.wacliBackfillUpdate = onRequest(
 
       response.status(200).json({
         ok: true,
-        conversationId,
+        conversationId: resolvedConversationId,
+        sourceConversationId: originalConversationId,
+        conversationMatched,
         messageId: messageId || null,
         media: Boolean(media),
         mediaMatched,
         mediaMatchMode,
+        avatarLinked: Boolean(conversationMatched && avatar?.storagePath),
         phoneResolved: Boolean(resolvedPhone),
       });
     } catch (error) {
