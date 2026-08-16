@@ -1,0 +1,128 @@
+name: Temporary Marketing Upload Diagnostic
+
+on:
+  push:
+    branches:
+      - agent/marketing-upload-diagnostic
+    paths:
+      - '.github/workflows/temp-marketing-upload-diagnostic.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Authenticate Firebase service account
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Diagnose latest real Marketing upload and direct Storage protocol
+        env:
+          FIREBASE_WEB_API_KEY: 'AIzaSyCo31zuo6d8RsgiLWGqUVOvRmHkisoF1DE'
+          FIREBASE_STORAGE_BUCKET: 'demac-corporation.firebasestorage.app'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd functions
+          node <<'NODE'
+          const { randomUUID } = require('node:crypto');
+          const { applicationDefault, initializeApp } = require('firebase-admin/app');
+          const { getAuth } = require('firebase-admin/auth');
+          const { getFirestore } = require('firebase-admin/firestore');
+          const { getStorage } = require('firebase-admin/storage');
+
+          const app = initializeApp({ credential: applicationDefault(), projectId: 'demac-corporation', storageBucket: process.env.FIREBASE_STORAGE_BUCKET });
+          const db = getFirestore(app);
+          const auth = getAuth(app);
+          const bucket = getStorage(app).bucket();
+
+          async function signIn(email, password) {
+            const r = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(process.env.FIREBASE_WEB_API_KEY)}`, {
+              method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify({ email, password, returnSecureToken:true }),
+            });
+            const p = await r.json();
+            if (!r.ok || !p.idToken) throw new Error(`Sign-in failed: ${JSON.stringify(p)}`);
+            return { idToken:p.idToken, uid:p.localId };
+          }
+
+          async function clientUpload({ idToken, uid, path, blob, contentType }) {
+            const boundary = `demac-marketing-${randomUUID().replace(/[^a-zA-Z0-9_-]/g, '')}`;
+            const metadata = { sessionId:'diagnostic-session', assetId:'diagnostic-asset', uploadedByUid:uid, originalFileName:'diagnostic.png', variant:'original' };
+            const body = new Blob([
+              `--${boundary}\r\n`,
+              'Content-Type: application/json; charset=utf-8\r\n\r\n',
+              JSON.stringify({ name:path, contentType, metadata }),
+              `\r\n--${boundary}\r\n`,
+              `Content-Type: ${contentType}\r\n\r\n`,
+              blob,
+              `\r\n--${boundary}--`,
+            ], { type:`multipart/related; boundary=${boundary}` });
+            const endpoint = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(process.env.FIREBASE_STORAGE_BUCKET)}/o?name=${encodeURIComponent(path)}`;
+            const r = await fetch(endpoint, { method:'POST', headers:{ Authorization:`Bearer ${idToken}`, 'Content-Type':`multipart/related; boundary=${boundary}`, 'X-Goog-Upload-Protocol':'multipart' }, body });
+            const text = await r.text();
+            return { status:r.status, ok:r.ok, text:text.slice(0,1000) };
+          }
+
+          (async () => {
+            // Inspect the user's latest visible failed session without printing sensitive profile data.
+            const sessions = await db.collection('marketingUploadSessions').where('name','==','Prueba Marketing 01').get();
+            const sorted = sessions.docs.map(d => ({ id:d.id, ...d.data() })).sort((a,b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+            const latest = sorted[0] || null;
+            if (latest) {
+              const profile = latest.createdByUserId ? await db.collection('users').doc(latest.createdByUserId).get() : null;
+              const p = profile?.exists ? profile.data() : {};
+              console.log(JSON.stringify({
+                realSessionFound:true,
+                sessionStatus:latest.status,
+                expectedAssetCount:latest.expectedAssetCount,
+                uploadedAssetCount:latest.uploadedAssetCount,
+                failedAssetCount:latest.failedAssetCount,
+                creatorRole:p?.role ?? null,
+                creatorActive:p?.active ?? null,
+                creatorUidMatchesSession:Boolean(latest.createdByUserId && profile?.id === latest.createdByUserId),
+              }, null, 2));
+            } else {
+              console.log(JSON.stringify({ realSessionFound:false }, null, 2));
+            }
+
+            // Reproduce the exact browser multipart Storage upload with a synthetic admin account.
+            const stamp = `${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+            const email = `marketing-upload-diagnostic-${stamp}@demac-smoke.test`;
+            const password = `Smoke-${randomUUID()}!A9`;
+            let uid = '';
+            const path = `marketing/originals/diagnostic-session/diagnostic-${stamp}.png`;
+            try {
+              const u = await auth.createUser({ email, password, emailVerified:true, displayName:'Marketing upload diagnostic' });
+              uid = u.uid;
+              const now = new Date().toISOString();
+              await db.collection('users').doc(uid).set({ id:uid, name:'Marketing upload diagnostic', displayName:'Marketing upload diagnostic', email, role:'admin', active:true, syntheticSmokeTest:true, createdAt:now, updatedAt:now });
+              const { idToken } = await signIn(email, password);
+              // A tiny valid PNG.
+              const pngBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZpP8AAAAASUVORK5CYII=', 'base64');
+              const upload = await clientUpload({ idToken, uid, path, blob:new Blob([pngBytes], { type:'image/png' }), contentType:'image/png' });
+              console.log(JSON.stringify({ syntheticAdminUploadOk:upload.ok, syntheticAdminUploadStatus:upload.status, syntheticAdminUploadResponse:upload.ok ? 'accepted' : upload.text }, null, 2));
+              if (!upload.ok) process.exitCode = 2;
+            } finally {
+              await bucket.file(path).delete({ ignoreNotFound:true }).catch(() => undefined);
+              if (uid) {
+                await db.collection('users').doc(uid).delete().catch(() => undefined);
+                await auth.deleteUser(uid).catch(() => undefined);
+              }
+            }
+          })().catch((e) => { console.error(e); process.exitCode = 1; });
+          NODE
