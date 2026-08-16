@@ -22,24 +22,27 @@ jobs:
         with:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
 
-      - name: Inspect Firebase Rules Firestore service-agent IAM
+      - name: Inspect Cloud Storage for Firebase service-agent IAM
         shell: bash
         run: |
           set -euo pipefail
           PROJECT_NUMBER="$(gcloud projects describe demac-corporation --format='value(projectNumber)')"
-          AGENT="service-${PROJECT_NUMBER}@gcp-sa-firebaserules.iam.gserviceaccount.com"
+          STORAGE_AGENT="service-${PROJECT_NUMBER}@gcp-sa-firebasestorage.iam.gserviceaccount.com"
           echo "projectNumber=${PROJECT_NUMBER}"
-          echo "rulesServiceAgent=${AGENT}"
-          echo '=== MATCHING IAM BINDINGS ==='
+          echo "storageServiceAgent=${STORAGE_AGENT}"
           gcloud projects get-iam-policy demac-corporation --format=json > /tmp/policy.json
           python3 - <<'PY'
           import json, os
           p=json.load(open('/tmp/policy.json'))
-          project_number=os.popen("gcloud projects describe demac-corporation --format='value(projectNumber)'").read().strip()
-          agent=f'serviceAccount:service-{project_number}@gcp-sa-firebaserules.iam.gserviceaccount.com'
-          found=[]
+          n=os.popen("gcloud projects describe demac-corporation --format='value(projectNumber)'").read().strip()
+          targets={
+            'storage':f'serviceAccount:service-{n}@gcp-sa-firebasestorage.iam.gserviceaccount.com',
+            'rules':f'serviceAccount:service-{n}@gcp-sa-firebaserules.iam.gserviceaccount.com',
+            'legacy_rules':f'serviceAccount:service-{n}@firebase-rules.iam.gserviceaccount.com',
+          }
+          out={k:[] for k in targets}
           for b in p.get('bindings',[]):
-              if agent in b.get('members',[]):
-                  found.append(b.get('role'))
-          print(json.dumps({'agent':agent,'roles':found},indent=2))
+              for k,m in targets.items():
+                  if m in b.get('members',[]): out[k].append(b.get('role'))
+          print(json.dumps({'targets':targets,'roles':out},indent=2))
           PY
