@@ -6,6 +6,7 @@ on:
       - 'functions/marketingImageAnalysis.js'
       - 'functions/marketingImageAnalysisCallable.js'
       - 'functions/marketingCampaignStrategy.js'
+      - 'functions/marketingCampaignStrategyAruba.js'
       - 'functions/marketingCreativeBuilder.js'
       - 'functions/marketingCreativeRead.js'
       - 'functions/package.json'
@@ -18,6 +19,7 @@ on:
       - 'functions/marketingImageAnalysis.js'
       - 'functions/marketingImageAnalysisCallable.js'
       - 'functions/marketingCampaignStrategy.js'
+      - 'functions/marketingCampaignStrategyAruba.js'
       - 'functions/marketingCreativeBuilder.js'
       - 'functions/marketingCreativeRead.js'
       - 'functions/package.json'
@@ -46,6 +48,7 @@ jobs:
           node --check functions/marketingImageAnalysis.js
           node --check functions/marketingImageAnalysisCallable.js
           node --check functions/marketingCampaignStrategy.js
+          node --check functions/marketingCampaignStrategyAruba.js
           node --check functions/marketingCreativeBuilder.js
           node --check functions/marketingCreativeRead.js
           node --check functions/bootstrap.js
@@ -63,6 +66,40 @@ jobs:
           if (typeof mod.analyzeMarketingUploadSession === 'function') {
             throw new Error('legacy Eventarc marketing handler must not be exported from bootstrap');
           }
+
+          const aruba = require('./functions/marketingCampaignStrategyAruba').__marketingCampaignStrategyArubaTest;
+          if (!aruba || aruba.verifiedArubaMarketingWords.length < 20) {
+            throw new Error('Aruba Marketing lexicon did not load enough verified official words.');
+          }
+          const replacements = new Map(aruba.verifiedCuracaoReplacements);
+          for (const [curacao, expectedAruba] of [
+            ['ku', 'cu'],
+            ['hasi', 'haci'],
+            ['kada', 'cada'],
+            ['atenshon', 'atencion'],
+            ['konfiabel', 'confiabel'],
+            ['profeshonal', 'profesional'],
+          ]) {
+            if (replacements.get(curacao) !== expectedAruba) {
+              throw new Error(`Official Aruba replacement missing: ${curacao} -> ${expectedAruba}`);
+            }
+          }
+          const badStrategy = {
+            copy: {
+              language: 'pap_aw',
+              headline: 'Trabou profeshonal i konfiabel',
+              subheadline: 'Hasi bo cita ku atenshon',
+              primaryText: 'Kada detaye ta importante ku DEMAC.',
+              cta: 'WhatsApp nos awe mes',
+            },
+          };
+          const normalized = aruba.applyVerifiedArubaReplacements(badStrategy);
+          const forbidden = aruba.papiamentoForbiddenWords(normalized);
+          if (forbidden.length) throw new Error(`Curaçao forms survived normalization: ${forbidden.join(', ')}`);
+          const safeFallback = aruba.deterministicSafeCopy(badStrategy, 'installation', {}, []);
+          const fallbackIssues = aruba.papiamentoReviewWords(safeFallback, []);
+          if (fallbackIssues.length) throw new Error(`Approved DEMAC fallback did not validate: ${fallbackIssues.join(', ')}`);
+          console.log('Aruba Papiamento Marketing guardrails: PASS');
           NODE
 
   deploy-marketing-function:
