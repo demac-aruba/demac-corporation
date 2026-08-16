@@ -227,12 +227,10 @@ async function uploadBlob(path: string, blob: Blob, contentType: string, metadat
   if (!bucket) throw new Error('Firebase Storage is not configured.');
   const session = await requireFirebaseWebSession();
   const boundary = `demac-marketing-${id().replace(/[^a-zA-Z0-9_-]/g, '')}`;
-  const downloadToken = id();
-  const storageMetadata = { ...metadata, firebaseStorageDownloadTokens: downloadToken };
   const body = new Blob([
     `--${boundary}\r\n`,
     'Content-Type: application/json; charset=utf-8\r\n\r\n',
-    JSON.stringify({ name: path, contentType, metadata: storageMetadata }),
+    JSON.stringify({ name: path, contentType, metadata }),
     `\r\n--${boundary}\r\n`,
     `Content-Type: ${contentType}\r\n\r\n`,
     blob,
@@ -255,8 +253,7 @@ async function uploadBlob(path: string, blob: Blob, contentType: string, metadat
     throw new Error(`Storage upload failed (${response.status}): ${reason}`);
   }
   let token: string | undefined = payload.downloadTokens?.split(',')[0]
-    || payload.metadata?.firebaseStorageDownloadTokens?.split(',')[0]
-    || downloadToken;
+    || payload.metadata?.firebaseStorageDownloadTokens?.split(',')[0];
   if (!token) {
     const metadataResponse = await fetch(`https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket)}/o/${encodeURIComponent(path)}`, {
       headers: { Authorization: `Bearer ${session.idToken}` },
