@@ -254,7 +254,7 @@ async function uploadBlob(path: string, blob: Blob, contentType: string, metadat
     const reason = payload.error?.message || text || 'Unknown Firebase Storage error.';
     throw new Error(`Storage upload failed (${response.status}): ${reason}`);
   }
-  let token = payload.downloadTokens?.split(',')[0]
+  let token: string | undefined = payload.downloadTokens?.split(',')[0]
     || payload.metadata?.firebaseStorageDownloadTokens?.split(',')[0]
     || downloadToken;
   if (!token) {
