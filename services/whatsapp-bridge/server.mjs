@@ -15,8 +15,11 @@ const WEBHOOK_SECRET = String(process.env.WACLI_WEBHOOK_SECRET || '').trim();
 const ERP_WEBHOOK_URL = String(process.env.ERP_WEBHOOK_URL || '').trim();
 const STATE_DIR = process.env.BRIDGE_STATE_DIR || '/var/lib/demac-whatsapp-bridge';
 const OUTBOX_DIR = path.join(STATE_DIR, 'webhook-outbox');
+const MEDIA_TMP_DIR = path.join(STATE_DIR, 'media-tmp');
 const MAX_BODY_BYTES = 256 * 1024;
+const MAX_MEDIA_BYTES = Number(process.env.WACLI_MEDIA_MAX_BYTES || 25 * 1024 * 1024);
 const SEND_TIMEOUT_MS = Number(process.env.WACLI_SEND_TIMEOUT_MS || 45000);
+const MEDIA_TIMEOUT_MS = Number(process.env.WACLI_MEDIA_TIMEOUT_MS || 45000);
 const FORWARD_TIMEOUT_MS = Number(process.env.ERP_FORWARD_TIMEOUT_MS || 15000);
 const RETRY_INTERVAL_MS = Number(process.env.WEBHOOK_RETRY_INTERVAL_MS || 5000);
 
@@ -25,6 +28,8 @@ let lastForwardSuccessAt = null;
 let lastForwardError = null;
 let lastSendSuccessAt = null;
 let lastSendError = null;
+let lastMediaSuccessAt = null;
+let lastMediaError = null;
 let forwarding = false;
 
 function requireConfiguration() {
@@ -94,6 +99,37 @@ function validateText(value) {
   return text;
 }
 
+function validateChat(value) {
+  const chat = String(value || '').trim();
+  if (!chat || chat.length > 180 || !/@(s\.whatsapp\.net|lid|g\.us|newsletter)$/.test(chat)) {
+    throw new Error('A supported WhatsApp chat JID is required.');
+  }
+  return chat;
+}
+
+function validateMessageId(value) {
+  const id = String(value || '').trim();
+  if (!id || id.length > 300 || !/^[A-Za-z0-9._:+\-=]+$/.test(id)) {
+    throw new Error('A valid WhatsApp message ID is required.');
+  }
+  return id;
+}
+
+function safeDownloadName(value, mimeType = '') {
+  const raw = path.basename(String(value || '').trim()).replace(/[^A-Za-z0-9._ -]/g, '_').slice(0, 120);
+  if (raw) return raw;
+  const mime = String(mimeType || '').toLowerCase();
+  const extension = mime.includes('jpeg') ? '.jpg'
+    : mime.includes('png') ? '.png'
+      : mime.includes('webp') ? '.webp'
+        : mime.includes('ogg') ? '.ogg'
+          : mime.includes('mpeg') ? '.mp3'
+            : mime.includes('mp4') ? '.mp4'
+              : mime.includes('pdf') ? '.pdf'
+                : '';
+  return `whatsapp-media${extension}`;
+}
+
 function normalizeWacliResult(stdout) {
   let envelope;
   try {
@@ -133,6 +169,40 @@ async function sendText({ to, text }) {
   const result = normalizeWacliResult(stdout);
   if (stderr?.trim()) result.stderr = stderr.trim().slice(-2000);
   return result;
+}
+
+async function downloadMedia({ chat, messageId, fileName, mimeType }) {
+  await fs.mkdir(MEDIA_TMP_DIR, { recursive: true, mode: 0o700 });
+  const safeName = safeDownloadName(fileName, mimeType);
+  const extension = path.extname(safeName).slice(0, 12);
+  const temporaryPath = path.join(MEDIA_TMP_DIR, `${crypto.randomUUID()}${extension}`);
+  const args = [
+    '--read-only',
+    '--timeout', `${Math.ceil(MEDIA_TIMEOUT_MS / 1000)}s`,
+    'media', 'download',
+    '--chat', chat,
+    '--id', messageId,
+    '--output', temporaryPath,
+  ];
+
+  try {
+    await execFileAsync(WACLI_BINARY, args, {
+      timeout: MEDIA_TIMEOUT_MS + 5000,
+      maxBuffer: 1024 * 1024,
+      env: process.env,
+      windowsHide: true,
+    });
+    const stats = await fs.stat(temporaryPath);
+    if (!stats.isFile() || stats.size <= 0) throw new Error('wacli did not produce a media file.');
+    if (stats.size > MAX_MEDIA_BYTES) {
+      const error = new Error(`Media exceeds the ${MAX_MEDIA_BYTES} byte bridge limit.`);
+      error.statusCode = 413;
+      throw error;
+    }
+    return { bytes: await fs.readFile(temporaryPath), fileName: safeName };
+  } finally {
+    await fs.unlink(temporaryPath).catch(() => undefined);
+  }
 }
 
 function outboxFileName() {
@@ -241,6 +311,34 @@ async function handleSend(request, response) {
   }
 }
 
+async function handleMedia(request, response) {
+  if (!authorized(request)) {
+    json(response, 401, { error: 'Unauthorized' });
+    return;
+  }
+  try {
+    const rawBody = await readBody(request);
+    const input = JSON.parse(rawBody.toString('utf8'));
+    const chat = validateChat(input.chat);
+    const messageId = validateMessageId(input.messageId);
+    const mimeType = String(input.mimeType || 'application/octet-stream').trim().slice(0, 160) || 'application/octet-stream';
+    const result = await downloadMedia({ chat, messageId, fileName: input.fileName, mimeType });
+    lastMediaSuccessAt = new Date().toISOString();
+    lastMediaError = null;
+    response.writeHead(200, {
+      'Content-Type': mimeType,
+      'Content-Length': result.bytes.length,
+      'Content-Disposition': `inline; filename="${result.fileName.replaceAll('"', '_')}"`,
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    response.end(result.bytes);
+  } catch (error) {
+    lastMediaError = error instanceof Error ? error.message : String(error);
+    json(response, error?.statusCode || 502, { error: lastMediaError });
+  }
+}
+
 async function handleWacliEvent(request, response) {
   try {
     const rawBody = await readBody(request);
@@ -269,11 +367,14 @@ async function handleHealth(response) {
     lastForwardError,
     lastSendSuccessAt,
     lastSendError,
+    lastMediaSuccessAt,
+    lastMediaError,
   });
 }
 
 requireConfiguration();
 await fs.mkdir(OUTBOX_DIR, { recursive: true, mode: 0o700 });
+await fs.mkdir(MEDIA_TMP_DIR, { recursive: true, mode: 0o700 });
 
 const server = http.createServer(async (request, response) => {
   try {
@@ -284,6 +385,10 @@ const server = http.createServer(async (request, response) => {
     }
     if (request.method === 'POST' && url.pathname === '/v1/send') {
       await handleSend(request, response);
+      return;
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/media') {
+      await handleMedia(request, response);
       return;
     }
     if (request.method === 'POST' && url.pathname === '/v1/events') {
