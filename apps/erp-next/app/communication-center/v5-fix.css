@@ -1,0 +1,27 @@
+.communication-v4 article[class*="message"] [class*="message"]{border:0!important;border-radius:0!important;padding:0!important;box-shadow:none!important;background:transparent!important;max-width:none!important}
+.communication-v4 article[class*="message"] [class*="messageHeader"]{display:flex!important;align-items:center!important;min-height:15px!important;margin-bottom:4px!important}
+.communication-v4 article[class*="message"] [class*="messageAuthor"]{display:block!important;margin:0!important;color:#71807c!important;font-size:10px!important;font-weight:850!important;line-height:1.25!important}
+.communication-v4 article[class*="message"][class*="operator"] [class*="messageAuthor"],.communication-v4 article[class*="message"][class*="ai"] [class*="messageAuthor"]{color:#16765a!important}
+.communication-v4 article[class*="message"] [class*="messageFooter"]{display:flex!important;justify-content:flex-end!important;align-items:center!important;gap:7px!important;margin-top:6px!important;color:#80908b!important;font-size:9px!important;line-height:1.2!important}
+.communication-v4 article[class*="message"] [class*="messageFooter"] span{color:#2088c7!important;font-weight:750!important}
+.communication-v4 article[class*="message"] p{margin:0!important;font-size:13.5px!important;line-height:1.48!important;color:#202a27!important;white-space:pre-wrap!important;overflow-wrap:anywhere!important}
+.communication-v4 [class*="avatar"] img,.communication-v4 [class*="chatAvatar"] img,.communication-v4 [class*="largeAvatar"] img{display:block;width:100%;height:100%;object-fit:cover;border-radius:inherit}
+.communication-v4 article[class*="message"] figure[data-media]{display:grid;gap:7px;margin:0 0 6px;max-width:100%}
+.communication-v4 article[class*="message"] figure[data-media] a:not([data-document]){display:block;line-height:0}
+.communication-v4 article[class*="message"] figure[data-media] img{display:block;max-width:min(420px,100%);max-height:440px;width:auto;height:auto;border-radius:9px;object-fit:contain;background:#f2f4f3}
+.communication-v4 article[class*="message"] figure[data-media="sticker"] img{max-width:220px;max-height:220px;background:transparent}
+.communication-v4 article[class*="message"] figure[data-media] video{display:block;width:min(440px,100%);max-height:420px;border-radius:9px;background:#111}
+.communication-v4 article[class*="message"] figure[data-media] audio{display:block;width:min(360px,100%);min-width:250px;height:42px}
+.communication-v4 article[class*="message"] figure[data-media] figcaption{font-size:12.5px;line-height:1.45;color:#202a27;white-space:pre-wrap;overflow-wrap:anywhere}
+.communication-v4 article[class*="message"] a[data-document]{display:flex;align-items:center;gap:10px;min-width:240px;max-width:380px;border:1px solid rgba(31,53,47,.1);border-radius:10px;padding:10px 11px;background:rgba(255,255,255,.55);color:#202a27;text-decoration:none;line-height:1.25}
+.communication-v4 article[class*="message"] a[data-document]>span{display:grid;place-items:center;flex:0 0 auto;width:30px;height:30px;border-radius:8px;background:#e7f8f1;color:#0d8c6e;font-weight:900}
+.communication-v4 article[class*="message"] a[data-document] div{min-width:0;display:grid;gap:2px}
+.communication-v4 article[class*="message"] a[data-document] strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.communication-v4 article[class*="message"] a[data-document] small{color:#71807c;font-size:9px}
+.communication-v4 article[class*="message"] [data-media-pending="true"]{display:flex;align-items:center;gap:9px;min-width:220px;border:1px dashed rgba(31,53,47,.15);border-radius:10px;padding:10px 11px;background:rgba(255,255,255,.45)}
+.communication-v4 article[class*="message"] [data-media-pending="true"] span{font-size:11px;font-weight:850;text-transform:capitalize}
+.communication-v4 article[class*="message"] [data-media-pending="true"] small{color:#71807c;font-size:9px}
+.communication-v4 article[class*="message"] [data-reaction="true"]{display:flex;align-items:center;gap:7px}
+.communication-v4 article[class*="message"] [data-reaction="true"] strong{font-size:24px;line-height:1}
+.communication-v4 article[class*="message"] [data-reaction="true"] span{color:#71807c;font-size:10px}
+@media(max-width:700px){.communication-v4 article[class*="message"] figure[data-media] img,.communication-v4 article[class*="message"] figure[data-media] video{max-width:100%}.communication-v4 article[class*="message"] figure[data-media] audio{min-width:210px;width:100%}.communication-v4 article[class*="message"] a[data-document]{min-width:0;width:100%}}
