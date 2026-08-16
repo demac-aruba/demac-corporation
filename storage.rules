@@ -114,6 +114,17 @@ service firebase.storage {
       allow delete: if marketingRole();
     }
 
+    // TEMPORARY DIAGNOSTIC PROBES — branch only, restored after workflow.
+    match /marketing-probe-auth/{fileName} {
+      allow create: if signedIn();
+    }
+    match /marketing-probe-role/{fileName} {
+      allow create: if marketingRole();
+    }
+    match /marketing-probe-valid/{fileName} {
+      allow create: if validMarketingImage();
+    }
+
     match /{allPaths=**} {
       allow read, write: if false;
     }
