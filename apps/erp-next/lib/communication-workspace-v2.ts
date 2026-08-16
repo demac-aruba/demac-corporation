@@ -76,6 +76,11 @@ type ArchivedWhatsAppMessage = {
   quotedText?: string | null;
 };
 
+type ArchiveCacheEntry = { loadedAt: number; messages: ArchivedWhatsAppMessage[] };
+
+const ARCHIVE_CACHE_MS = 60_000;
+const archiveCache = new Map<string, ArchiveCacheEntry>();
+
 function asString(value: unknown, fallback = '') { return typeof value === 'string' ? value : fallback; }
 function asNumber(value: unknown) { return typeof value === 'number' && Number.isFinite(value) ? value : null; }
 function timestampMs(value: unknown) {
@@ -177,6 +182,13 @@ function isGenericMediaPlaceholder(message: RichConversationMessage) {
   return text.includes('media is syncing from whatsapp') || /^\[(audio|voice|image|sticker|video|document|file|pdf)\]$/.test(text);
 }
 
+function conversationNeedsArchive(messages: RichConversationMessage[]) {
+  return messages.some((message) => {
+    if (message.media?.storagePath) return false;
+    return Boolean(message.media || placeholderKind(message) || isGenericMediaPlaceholder(message));
+  });
+}
+
 function kindCompatible(left: CommunicationMediaKind | null, right: CommunicationMediaKind) {
   if (!left) return true;
   if (left === right) return true;
@@ -258,31 +270,11 @@ function resolutionStatus(raw: RawConversation, base: LiveConversation): PhoneRe
   return 'unavailable';
 }
 
-export async function loadRichCommunicationWorkspace(): Promise<RichCommunicationWorkspace> {
-  const [base, rawDocuments] = await Promise.all([
-    loadCommunicationWorkspace(),
-    listFirestoreCollection<RawConversation>('communicationConversations'),
-  ]);
-  const rawById = new Map(rawDocuments.map((document) => [document.id, document]));
-  const conversations: RichLiveConversation[] = base.conversations.map((conversation) => {
-    const raw = rawById.get(conversation.id);
-    const messages = Array.isArray(raw?.recentMessages)
-      ? raw!.recentMessages!.map((message) => normalizeRichMessage(message))
-      : conversation.messages as RichConversationMessage[];
-    return {
-      ...conversation,
-      messages,
-      whatsappLid: raw?.whatsappLid || (String(conversation.chatJid || '').endsWith('@lid') ? conversation.chatJid : null),
-      canonicalJid: raw?.canonicalJid || (String(conversation.chatJid || '').endsWith('@s.whatsapp.net') ? conversation.chatJid : null),
-      phoneResolutionStatus: resolutionStatus(raw || { id: conversation.id }, conversation),
-      avatarStoragePath: raw?.avatarStoragePath || null,
-      avatarUpdatedAt: raw?.avatarUpdatedAt || null,
-    };
-  });
-  return { conversations, operators: base.operators, provider: base.provider };
-}
+async function loadArchivedMessages(conversation: RichLiveConversation) {
+  const cacheKey = conversation.id;
+  const cached = archiveCache.get(cacheKey);
+  if (cached && Date.now() - cached.loadedAt < ARCHIVE_CACHE_MS) return cached.messages;
 
-export async function loadRichConversationHistory(conversation: RichLiveConversation): Promise<RichConversationMessage[]> {
   const identifiers = [...new Set([
     conversation.id,
     conversation.externalChatId,
@@ -300,9 +292,46 @@ export async function loadRichConversationHistory(conversation: RichLiveConversa
     }
   }
 
+  archiveCache.set(cacheKey, { loadedAt: Date.now(), messages: archived });
+  return archived;
+}
+
+export async function loadRichConversationHistory(conversation: RichLiveConversation): Promise<RichConversationMessage[]> {
+  const archived = await loadArchivedMessages(conversation);
   if (!archived.length) return conversation.messages;
   const archiveMessages = archived.map((message) => normalizeArchivedMessage(message)).filter((message): message is RichConversationMessage => Boolean(message));
   return mergeConversationHistory(conversation.messages, archiveMessages);
+}
+
+export async function loadRichCommunicationWorkspace(): Promise<RichCommunicationWorkspace> {
+  const [base, rawDocuments] = await Promise.all([
+    loadCommunicationWorkspace(),
+    listFirestoreCollection<RawConversation>('communicationConversations'),
+  ]);
+  const rawById = new Map(rawDocuments.map((document) => [document.id, document]));
+  const initialConversations: RichLiveConversation[] = base.conversations.map((conversation) => {
+    const raw = rawById.get(conversation.id);
+    const messages = Array.isArray(raw?.recentMessages)
+      ? raw!.recentMessages!.map((message) => normalizeRichMessage(message))
+      : conversation.messages as RichConversationMessage[];
+    return {
+      ...conversation,
+      messages,
+      whatsappLid: raw?.whatsappLid || (String(conversation.chatJid || '').endsWith('@lid') ? conversation.chatJid : null),
+      canonicalJid: raw?.canonicalJid || (String(conversation.chatJid || '').endsWith('@s.whatsapp.net') ? conversation.chatJid : null),
+      phoneResolutionStatus: resolutionStatus(raw || { id: conversation.id }, conversation),
+      avatarStoragePath: raw?.avatarStoragePath || null,
+      avatarUpdatedAt: raw?.avatarUpdatedAt || null,
+    };
+  });
+
+  const conversations = await Promise.all(initialConversations.map(async (conversation) => {
+    if (!conversationNeedsArchive(conversation.messages)) return conversation;
+    const messages = await loadRichConversationHistory(conversation).catch(() => conversation.messages);
+    return { ...conversation, messages };
+  }));
+
+  return { conversations, operators: base.operators, provider: base.provider };
 }
 
 export async function queueWhatsAppMedia(
