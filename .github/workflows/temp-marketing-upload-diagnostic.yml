@@ -14,35 +14,104 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout diagnostic branch
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
 
       - name: Authenticate Google Cloud
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
 
-      - name: Inspect Cloud Storage for Firebase service-agent IAM
+      - name: Deploy temporary diagnostic Storage rules
+        run: npx --yes firebase-tools@15.2.1 deploy --only storage --project demac-corporation --non-interactive
+
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Probe Storage rule conditions independently
+        env:
+          FIREBASE_WEB_API_KEY: 'AIzaSyCo31zuo6d8RsgiLWGqUVOvRmHkisoF1DE'
+          FIREBASE_STORAGE_BUCKET: 'demac-corporation.firebasestorage.app'
         shell: bash
         run: |
           set -euo pipefail
-          PROJECT_NUMBER="$(gcloud projects describe demac-corporation --format='value(projectNumber)')"
-          STORAGE_AGENT="service-${PROJECT_NUMBER}@gcp-sa-firebasestorage.iam.gserviceaccount.com"
-          echo "projectNumber=${PROJECT_NUMBER}"
-          echo "storageServiceAgent=${STORAGE_AGENT}"
-          gcloud projects get-iam-policy demac-corporation --format=json > /tmp/policy.json
-          python3 - <<'PY'
-          import json, os
-          p=json.load(open('/tmp/policy.json'))
-          n=os.popen("gcloud projects describe demac-corporation --format='value(projectNumber)'").read().strip()
-          targets={
-            'storage':f'serviceAccount:service-{n}@gcp-sa-firebasestorage.iam.gserviceaccount.com',
-            'rules':f'serviceAccount:service-{n}@gcp-sa-firebaserules.iam.gserviceaccount.com',
-            'legacy_rules':f'serviceAccount:service-{n}@firebase-rules.iam.gserviceaccount.com',
+          cd functions
+          node <<'NODE'
+          const { randomUUID } = require('node:crypto');
+          const { applicationDefault, initializeApp } = require('firebase-admin/app');
+          const { getAuth } = require('firebase-admin/auth');
+          const { getFirestore } = require('firebase-admin/firestore');
+          const { getStorage } = require('firebase-admin/storage');
+
+          const app = initializeApp({ credential: applicationDefault(), projectId:'demac-corporation', storageBucket:process.env.FIREBASE_STORAGE_BUCKET });
+          const auth = getAuth(app);
+          const db = getFirestore(app);
+          const bucket = getStorage(app).bucket();
+
+          async function signIn(email,password){
+            const r=await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(process.env.FIREBASE_WEB_API_KEY)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password,returnSecureToken:true})});
+            const p=await r.json(); if(!r.ok||!p.idToken) throw new Error(JSON.stringify(p)); return p.idToken;
           }
-          out={k:[] for k in targets}
-          for b in p.get('bindings',[]):
-              for k,m in targets.items():
-                  if m in b.get('members',[]): out[k].append(b.get('role'))
-          print(json.dumps({'targets':targets,'roles':out},indent=2))
-          PY
+
+          async function upload(path,idToken,uid){
+            const boundary=`demac-probe-${randomUUID().replace(/[^a-zA-Z0-9_-]/g,'')}`;
+            const bytes=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZpP8AAAAASUVORK5CYII=','base64');
+            const metadata={sessionId:'diagnostic-session',assetId:'diagnostic-asset',uploadedByUid:uid,originalFileName:'diagnostic.png',variant:'original'};
+            const body=new Blob([
+              `--${boundary}\r\n`,
+              'Content-Type: application/json; charset=utf-8\r\n\r\n',
+              JSON.stringify({name:path,contentType:'image/png',metadata}),
+              `\r\n--${boundary}\r\n`,
+              'Content-Type: image/png\r\n\r\n',
+              new Blob([bytes],{type:'image/png'}),
+              `\r\n--${boundary}--`,
+            ],{type:`multipart/related; boundary=${boundary}`});
+            const endpoint=`https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(process.env.FIREBASE_STORAGE_BUCKET)}/o?name=${encodeURIComponent(path)}`;
+            const r=await fetch(endpoint,{method:'POST',headers:{Authorization:`Bearer ${idToken}`,'Content-Type':`multipart/related; boundary=${boundary}`,'X-Goog-Upload-Protocol':'multipart'},body});
+            const text=await r.text();
+            return {ok:r.ok,status:r.status,response:text.slice(0,300)};
+          }
+
+          (async()=>{
+            const stamp=`${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+            const email=`marketing-rule-probe-${stamp}@demac-smoke.test`;
+            const password=`Smoke-${randomUUID()}!A9`;
+            let uid='';
+            const paths=[
+              `marketing-probe-auth/${stamp}.png`,
+              `marketing-probe-role/${stamp}.png`,
+              `marketing-probe-valid/${stamp}.png`,
+            ];
+            try {
+              const u=await auth.createUser({email,password,emailVerified:true,displayName:'Marketing rule probe'}); uid=u.uid;
+              const now=new Date().toISOString();
+              await db.collection('users').doc(uid).set({id:uid,name:'Marketing rule probe',displayName:'Marketing rule probe',email,role:'admin',active:true,syntheticSmokeTest:true,createdAt:now,updatedAt:now});
+              const idToken=await signIn(email,password);
+              await new Promise(r=>setTimeout(r,2500));
+              const results={};
+              for(const path of paths){ results[path.split('/')[0]]=await upload(path,idToken,uid); }
+              console.log(JSON.stringify(results,null,2));
+              if(!results['marketing-probe-auth'].ok) throw new Error('signedIn probe failed');
+            } finally {
+              for(const path of paths) await bucket.file(path).delete({ignoreNotFound:true}).catch(()=>undefined);
+              if(uid){ await db.collection('users').doc(uid).delete().catch(()=>undefined); await auth.deleteUser(uid).catch(()=>undefined); }
+            }
+          })().catch(e=>{console.error(e);process.exitCode=1});
+          NODE
+
+      - name: Restore production Storage rules from main
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --depth=1
+          git show origin/main:storage.rules > storage.rules
+          npx --yes firebase-tools@15.2.1 deploy --only storage --project demac-corporation --non-interactive
