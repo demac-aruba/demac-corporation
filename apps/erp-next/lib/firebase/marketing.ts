@@ -24,13 +24,6 @@ export type MarketingUploadError = {
   message: string;
 };
 
-export type MarketingUploadResult = {
-  sessionId: string;
-  uploadedAssetCount: number;
-  failedAssetCount: number;
-  errors: MarketingUploadError[];
-};
-
 export type MarketingUploadSession = {
   id: string;
   name: string;
@@ -322,7 +315,7 @@ export async function createMarketingSessionWithFiles(input: {
   createdByUserId: string;
   createdByName: string;
   onProgress?: (uploaded: number, total: number) => void;
-}): Promise<MarketingUploadResult> {
+}): Promise<string> {
   if (!input.files.length) throw new Error('Choose at least one image.');
   const sessionId = id();
   const now = new Date().toISOString();
@@ -403,7 +396,14 @@ export async function createMarketingSessionWithFiles(input: {
       updatedAt: new Date().toISOString(),
     });
   }
-  return { sessionId, uploadedAssetCount: uploaded, failedAssetCount: failed, errors };
+  if (failed > 0) {
+    const details = errors.slice(0, 3).map((item) => `${item.fileName}: ${item.message}`).join(' · ');
+    const summary = uploaded > 0
+      ? `Uploaded ${uploaded} of ${input.files.length} photos; ${failed} failed.`
+      : `Upload failed for all ${failed} selected photos.`;
+    throw new Error(`${summary}${details ? ` ${details}` : ''}`);
+  }
+  return sessionId;
 }
 
 async function callMarketingFunction(name: 'requestMarketingImageAnalysis' | 'requestMarketingCampaignStrategy', sessionId: string) {
