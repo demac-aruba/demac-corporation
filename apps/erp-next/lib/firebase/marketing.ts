@@ -19,6 +19,11 @@ export type MarketingCampaignType =
 
 export type MarketingAnalysisStatus = 'queued' | 'processing' | 'completed' | 'failed';
 
+export type MarketingUploadError = {
+  fileName: string;
+  message: string;
+};
+
 export type MarketingUploadSession = {
   id: string;
   name: string;
@@ -27,6 +32,7 @@ export type MarketingUploadSession = {
   expectedAssetCount: number;
   uploadedAssetCount: number;
   failedAssetCount: number;
+  uploadErrors?: MarketingUploadError[];
   createdAt: string;
   updatedAt: string;
   createdByUserId: string;
@@ -186,6 +192,30 @@ function safeFileName(name: string) {
   return `${stem}${extension || '.jpg'}`;
 }
 
+function normalizedImageContentType(file: File) {
+  const browserType = String(file.type || '').trim().toLowerCase();
+  if (browserType.startsWith('image/')) return browserType;
+  const extension = file.name.split('.').pop()?.trim().toLowerCase() || '';
+  const inferred: Record<string, string> = {
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    jfif: 'image/jpeg',
+    png: 'image/png',
+    webp: 'image/webp',
+    gif: 'image/gif',
+  };
+  const contentType = inferred[extension];
+  if (contentType) return contentType;
+  throw new Error(`${file.name}: unsupported image format or missing image type. Use JPG, JPEG, PNG, or WebP.`);
+}
+
+function readableUploadError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || 'Unknown upload error.');
+  if (/permission denied/i.test(message)) return 'Firebase Storage denied the upload. Please refresh the ERP and try again; if it repeats, report this exact message.';
+  if (/failed to fetch|networkerror|network request/i.test(message)) return 'The browser could not reach Firebase Storage. Check the connection and try again.';
+  return message;
+}
+
 function parseStoragePayload(text: string) {
   if (!text.trim()) return {} as { downloadTokens?: string; metadata?: Record<string, string>; error?: { message?: string } };
   try { return JSON.parse(text) as { downloadTokens?: string; metadata?: Record<string, string>; error?: { message?: string } }; }
@@ -197,10 +227,12 @@ async function uploadBlob(path: string, blob: Blob, contentType: string, metadat
   if (!bucket) throw new Error('Firebase Storage is not configured.');
   const session = await requireFirebaseWebSession();
   const boundary = `demac-marketing-${id().replace(/[^a-zA-Z0-9_-]/g, '')}`;
+  const downloadToken = id();
+  const storageMetadata = { ...metadata, firebaseStorageDownloadTokens: downloadToken };
   const body = new Blob([
     `--${boundary}\r\n`,
     'Content-Type: application/json; charset=utf-8\r\n\r\n',
-    JSON.stringify({ name: path, contentType, metadata }),
+    JSON.stringify({ name: path, contentType, metadata: storageMetadata }),
     `\r\n--${boundary}\r\n`,
     `Content-Type: ${contentType}\r\n\r\n`,
     blob,
@@ -218,8 +250,13 @@ async function uploadBlob(path: string, blob: Blob, contentType: string, metadat
   });
   const text = await response.text();
   const payload = parseStoragePayload(text);
-  if (!response.ok) throw new Error(payload.error?.message || text || `Storage upload failed (${response.status}).`);
-  let token = payload.downloadTokens?.split(',')[0] || payload.metadata?.firebaseStorageDownloadTokens?.split(',')[0];
+  if (!response.ok) {
+    const reason = payload.error?.message || text || 'Unknown Firebase Storage error.';
+    throw new Error(`Storage upload failed (${response.status}): ${reason}`);
+  }
+  let token: string | undefined = payload.downloadTokens?.split(',')[0]
+    || payload.metadata?.firebaseStorageDownloadTokens?.split(',')[0]
+    || downloadToken;
   if (!token) {
     const metadataResponse = await fetch(`https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket)}/o/${encodeURIComponent(path)}`, {
       headers: { Authorization: `Bearer ${session.idToken}` },
@@ -278,7 +315,7 @@ export async function createMarketingSessionWithFiles(input: {
   createdByUserId: string;
   createdByName: string;
   onProgress?: (uploaded: number, total: number) => void;
-}) {
+}): Promise<string> {
   if (!input.files.length) throw new Error('Choose at least one image.');
   const sessionId = id();
   const now = new Date().toISOString();
@@ -290,6 +327,7 @@ export async function createMarketingSessionWithFiles(input: {
     expectedAssetCount: input.files.length,
     uploadedAssetCount: 0,
     failedAssetCount: 0,
+    uploadErrors: [],
     createdAt: now,
     updatedAt: now,
     createdByUserId: input.createdByUserId,
@@ -298,14 +336,15 @@ export async function createMarketingSessionWithFiles(input: {
   await saveFirestoreDocument('marketingUploadSessions', session);
   let uploaded = 0;
   let failed = 0;
+  const errors: MarketingUploadError[] = [];
   for (const file of input.files) {
     try {
-      if (!file.type.startsWith('image/')) throw new Error(`${file.name} is not an image.`);
+      const contentType = normalizedImageContentType(file);
       if (file.size > 25 * 1024 * 1024) throw new Error(`${file.name} exceeds 25 MB.`);
       const assetId = id();
       const fileName = safeFileName(file.name);
       const originalPath = `marketing/originals/${sessionId}/${assetId}-${fileName}`;
-      const originalUrl = await uploadBlob(originalPath, file, file.type || 'image/jpeg', {
+      const originalUrl = await uploadBlob(originalPath, file, contentType, {
         sessionId,
         assetId,
         uploadedByUid: input.createdByUserId,
@@ -330,7 +369,7 @@ export async function createMarketingSessionWithFiles(input: {
         id: assetId,
         sessionId,
         originalFileName: file.name,
-        contentType: file.type || 'image/jpeg',
+        contentType,
         sizeBytes: file.size,
         storagePath: originalPath,
         downloadUrl: originalUrl,
@@ -343,16 +382,26 @@ export async function createMarketingSessionWithFiles(input: {
       });
       uploaded += 1;
     } catch (error) {
-      console.error('Marketing upload failed:', file.name, error);
+      const uploadError = { fileName: file.name, message: readableUploadError(error) };
+      console.error('Marketing upload failed:', uploadError.fileName, uploadError.message);
+      errors.push(uploadError);
       failed += 1;
     }
     input.onProgress?.(uploaded + failed, input.files.length);
     await updateFirestoreDocument('marketingUploadSessions', sessionId, {
       uploadedAssetCount: uploaded,
       failedAssetCount: failed,
+      uploadErrors: errors.slice(-12),
       status: uploaded === input.files.length ? 'ready' : failed > 0 && uploaded > 0 ? 'partial' : failed === input.files.length ? 'failed' : 'uploading',
       updatedAt: new Date().toISOString(),
     });
+  }
+  if (failed > 0) {
+    const details = errors.slice(0, 3).map((item) => `${item.fileName}: ${item.message}`).join(' · ');
+    const summary = uploaded > 0
+      ? `Uploaded ${uploaded} of ${input.files.length} photos; ${failed} failed.`
+      : `Upload failed for all ${failed} selected photos.`;
+    throw new Error(`${summary}${details ? ` ${details}` : ''}`);
   }
   return sessionId;
 }
