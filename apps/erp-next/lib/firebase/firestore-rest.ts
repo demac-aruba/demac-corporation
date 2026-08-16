@@ -25,6 +25,12 @@ type FirestoreListResponse = {
   error?: { message?: string };
 };
 
+type FirestoreRunQueryRow = {
+  document?: FirestoreDocument;
+  readTime?: string;
+  skippedResults?: number;
+};
+
 function baseUrl() {
   if (!isFirebaseClientConfigured || !firebaseClientConfig.projectId) {
     throw new Error('Cloud Firestore is not configured for ERP Next in this environment.');
@@ -126,6 +132,40 @@ export async function listFirestoreCollection<T extends { id: string }>(collecti
     }
     pageToken = payload.nextPageToken ?? '';
   } while (pageToken);
+  return result;
+}
+
+export async function queryFirestoreCollectionByField<T extends { id: string }>(
+  collectionId: string,
+  fieldPath: string,
+  value: unknown,
+  limit = 250,
+): Promise<T[]> {
+  const safeLimit = Math.max(1, Math.min(1000, Math.trunc(limit || 250)));
+  const response = await authenticatedFetch(`${baseUrl()}:runQuery`, {
+    method: 'POST',
+    body: JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId }],
+        where: {
+          fieldFilter: {
+            field: { fieldPath },
+            op: 'EQUAL',
+            value: encodeFirestoreValue(value),
+          },
+        },
+        limit: safeLimit,
+      },
+    }),
+  });
+  if (!response.ok) throw new Error(await readError(response, `Unable to query ${collectionId}.`));
+  const payload = await response.json() as FirestoreRunQueryRow[];
+  const result: T[] = [];
+  for (const row of payload) {
+    const document = row.document;
+    if (!document) continue;
+    result.push({ ...decodeFirestoreFields(document.fields ?? {}), id: documentId(document.name) } as T);
+  }
   return result;
 }
 
