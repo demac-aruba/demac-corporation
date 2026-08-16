@@ -31,7 +31,7 @@ jobs:
       - name: Install function dependencies
         run: npm install --prefix functions --no-audit --no-fund
 
-      - name: Diagnose latest real Marketing upload and direct Storage protocol
+      - name: Diagnose latest real Marketing upload and download-token behavior
         env:
           FIREBASE_WEB_API_KEY: 'AIzaSyCo31zuo6d8RsgiLWGqUVOvRmHkisoF1DE'
           FIREBASE_STORAGE_BUCKET: 'demac-corporation.firebasestorage.app'
@@ -75,47 +75,59 @@ jobs:
             const endpoint = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(process.env.FIREBASE_STORAGE_BUCKET)}/o?name=${encodeURIComponent(path)}`;
             const r = await fetch(endpoint, { method:'POST', headers:{ Authorization:`Bearer ${idToken}`, 'Content-Type':`multipart/related; boundary=${boundary}`, 'X-Goog-Upload-Protocol':'multipart' }, body });
             const text = await r.text();
-            return { status:r.status, ok:r.ok, text:text.slice(0,1000) };
+            let payload = {};
+            try { payload = JSON.parse(text); } catch {}
+            const metaR = await fetch(`https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(process.env.FIREBASE_STORAGE_BUCKET)}/o/${encodeURIComponent(path)}`, { headers:{ Authorization:`Bearer ${idToken}` } });
+            const metaText = await metaR.text();
+            let metaPayload = {};
+            try { metaPayload = JSON.parse(metaText); } catch {}
+            return {
+              status:r.status,
+              ok:r.ok,
+              uploadKeys:Object.keys(payload || {}),
+              uploadDownloadTokens:payload?.downloadTokens ?? null,
+              uploadMetadataKeys:Object.keys(payload?.metadata || {}),
+              metadataStatus:metaR.status,
+              metadataKeys:Object.keys(metaPayload || {}),
+              metadataDownloadTokens:metaPayload?.downloadTokens ?? null,
+              metadataCustomKeys:Object.keys(metaPayload?.metadata || {}),
+            };
           }
 
           (async () => {
-            // Inspect the user's latest visible failed session without printing sensitive profile data.
-            const sessions = await db.collection('marketingUploadSessions').where('name','==','Prueba Marketing 01').get();
+            const sessions = await db.collection('marketingUploadSessions').where('name','==','test 3').get();
             const sorted = sessions.docs.map(d => ({ id:d.id, ...d.data() })).sort((a,b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
             const latest = sorted[0] || null;
             if (latest) {
-              const profile = latest.createdByUserId ? await db.collection('users').doc(latest.createdByUserId).get() : null;
-              const p = profile?.exists ? profile.data() : {};
+              const [files] = await bucket.getFiles({ prefix:`marketing/originals/${latest.id}/` });
               console.log(JSON.stringify({
                 realSessionFound:true,
+                sessionId:latest.id,
                 sessionStatus:latest.status,
                 expectedAssetCount:latest.expectedAssetCount,
                 uploadedAssetCount:latest.uploadedAssetCount,
                 failedAssetCount:latest.failedAssetCount,
-                creatorRole:p?.role ?? null,
-                creatorActive:p?.active ?? null,
-                creatorUidMatchesSession:Boolean(latest.createdByUserId && profile?.id === latest.createdByUserId),
+                persistedOriginalObjectCount:files.length,
+                persistedOriginals:files.slice(0,10).map(f => f.name),
               }, null, 2));
             } else {
               console.log(JSON.stringify({ realSessionFound:false }, null, 2));
             }
 
-            // Reproduce the exact browser multipart Storage upload with a synthetic admin account.
             const stamp = `${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
-            const email = `marketing-upload-diagnostic-${stamp}@demac-smoke.test`;
+            const email = `marketing-upload-token-diagnostic-${stamp}@demac-smoke.test`;
             const password = `Smoke-${randomUUID()}!A9`;
             let uid = '';
             const path = `marketing/originals/diagnostic-session/diagnostic-${stamp}.png`;
             try {
-              const u = await auth.createUser({ email, password, emailVerified:true, displayName:'Marketing upload diagnostic' });
+              const u = await auth.createUser({ email, password, emailVerified:true, displayName:'Marketing upload token diagnostic' });
               uid = u.uid;
               const now = new Date().toISOString();
-              await db.collection('users').doc(uid).set({ id:uid, name:'Marketing upload diagnostic', displayName:'Marketing upload diagnostic', email, role:'admin', active:true, syntheticSmokeTest:true, createdAt:now, updatedAt:now });
+              await db.collection('users').doc(uid).set({ id:uid, name:'Marketing upload token diagnostic', displayName:'Marketing upload token diagnostic', email, role:'admin', active:true, syntheticSmokeTest:true, createdAt:now, updatedAt:now });
               const { idToken } = await signIn(email, password);
-              // A tiny valid PNG.
               const pngBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZpP8AAAAASUVORK5CYII=', 'base64');
               const upload = await clientUpload({ idToken, uid, path, blob:new Blob([pngBytes], { type:'image/png' }), contentType:'image/png' });
-              console.log(JSON.stringify({ syntheticAdminUploadOk:upload.ok, syntheticAdminUploadStatus:upload.status, syntheticAdminUploadResponse:upload.ok ? 'accepted' : upload.text }, null, 2));
+              console.log(JSON.stringify({ syntheticTokenDiagnostic:upload }, null, 2));
               if (!upload.ok) process.exitCode = 2;
             } finally {
               await bucket.file(path).delete({ ignoreNotFound:true }).catch(() => undefined);
