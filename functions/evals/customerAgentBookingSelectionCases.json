@@ -1,0 +1,81 @@
+[
+  {
+    "id": "unique-monday-afternoon-selection",
+    "customerMessage": "on lunes en la tarde esta bien",
+    "options": [
+      { "id": "opt-1", "date": "2026-08-10", "time": "13:30" },
+      { "id": "opt-2", "date": "2026-08-11", "time": "13:30" }
+    ],
+    "expected": { "intent": "select_option", "optionId": "opt-1", "mayCreateAppointment": true },
+    "regression": "A uniquely identified offered Monday-afternoon option may be selected."
+  },
+  {
+    "id": "colloquial-one-means-offered-afternoon-slot",
+    "customerMessage": "lunes a la 1",
+    "options": [
+      { "id": "opt-1", "date": "2026-08-10", "time": "13:30" },
+      { "id": "opt-2", "date": "2026-08-10", "time": "08:30" }
+    ],
+    "expected": { "intent": "select_option", "optionId": "opt-1", "mayCreateAppointment": true },
+    "regression": "Colloquial 'a la 1' can identify the only offered afternoon option when the context makes the choice unique."
+  },
+  {
+    "id": "availability-question-afternoon-is-not-confirmation",
+    "customerMessage": "tienes en la tarde?",
+    "options": [
+      { "id": "opt-1", "date": "2026-08-10", "time": "13:30" },
+      { "id": "opt-2", "date": "2026-08-10", "time": "08:30" }
+    ],
+    "expected": { "intent": "availability_question", "optionId": "", "mayCreateAppointment": false },
+    "regression": "A question about availability must never be interpreted as acceptance of an offered option."
+  },
+  {
+    "id": "availability-question-monday-one-is-not-confirmation",
+    "customerMessage": "tienes para lunes a la 1?",
+    "options": [
+      { "id": "opt-1", "date": "2026-08-10", "time": "13:30" },
+      { "id": "opt-2", "date": "2026-08-10", "time": "08:30" }
+    ],
+    "expected": { "intent": "availability_question", "optionId": "", "mayCreateAppointment": false },
+    "regression": "A date/time availability question is not an appointment confirmation."
+  },
+  {
+    "id": "bare-yes-two-options-remains-ambiguous",
+    "customerMessage": "si",
+    "options": [
+      { "id": "opt-1", "date": "2026-08-10", "time": "13:30" },
+      { "id": "opt-2", "date": "2026-08-11", "time": "13:30" }
+    ],
+    "expected": { "intent": "clarify_selection", "optionId": "", "mayCreateAppointment": false },
+    "regression": "Bare agreement cannot select among multiple still-active options."
+  },
+  {
+    "id": "bare-yes-one-option-can-confirm",
+    "customerMessage": "si",
+    "options": [
+      { "id": "opt-1", "date": "2026-08-10", "time": "13:30" }
+    ],
+    "expected": { "intent": "select_option", "optionId": "opt-1", "mayCreateAppointment": true },
+    "regression": "Bare agreement can accept the sole active canonical option."
+  },
+  {
+    "id": "unique-afternoon-option",
+    "customerMessage": "ok dame la opcion de la tarde",
+    "options": [
+      { "id": "opt-1", "date": "2026-08-10", "time": "08:30" },
+      { "id": "opt-2", "date": "2026-08-10", "time": "13:30" }
+    ],
+    "expected": { "intent": "select_option", "optionId": "opt-2", "mayCreateAppointment": true },
+    "regression": "A unique afternoon option can be selected by natural reference."
+  },
+  {
+    "id": "exact-one-does-not-silently-become-one-thirty",
+    "customerMessage": "lunes a la 1:00",
+    "options": [
+      { "id": "opt-1", "date": "2026-08-10", "time": "13:30" },
+      { "id": "opt-2", "date": "2026-08-10", "time": "08:30" }
+    ],
+    "expected": { "intent": "no_exact_match", "optionId": "", "mayCreateAppointment": false },
+    "regression": "An explicit 1:00 request must not be silently changed to the offered 1:30 slot."
+  }
+]
