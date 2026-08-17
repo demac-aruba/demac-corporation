@@ -5,7 +5,7 @@ const {
   normalizePhone,
   normalizeText,
   snapshotItems,
-} = require("./whatsappCopilotSchedulingCore");
+} = require("./bookingSchedulingPrimitives");
 
 const CUSTOMER_BUSINESS_TOOLS_VERSION = 1;
 const CUSTOMER_BUSINESS_TOOL_NAMES = Object.freeze({
