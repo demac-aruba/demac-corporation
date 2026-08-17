@@ -62,26 +62,52 @@ function timestampMillis(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function verifyBridgeSignature(request) {
+function inspectBridgeSignature(request) {
   const provided = String(request.get("x-demac-bridge-signature") || "").trim();
-  if (!provided.startsWith("ed25519=")) return false;
-  if (!(request.rawBody instanceof Buffer)) return false;
+  const rawValue = request.rawBody;
+  const rawBody = Buffer.isBuffer(rawValue)
+    ? rawValue
+    : rawValue instanceof Uint8Array
+      ? Buffer.from(rawValue.buffer, rawValue.byteOffset, rawValue.byteLength)
+      : null;
+  let signature = null;
   try {
-    const signature = Buffer.from(provided.slice("ed25519=".length), "base64");
-    return signature.length === 64 && crypto.verify(null, request.rawBody, BRIDGE_PUBLIC_KEY, signature);
+    signature = provided.startsWith("ed25519=")
+      ? Buffer.from(provided.slice("ed25519=".length), "base64")
+      : null;
   } catch {
-    return false;
+    signature = null;
   }
-}
 
-function bridgeSignatureDiagnostics(request) {
-  const provided = String(request.get("x-demac-bridge-signature") || "").trim();
+  const rawValid = Boolean(
+    rawBody &&
+    signature?.length === 64 &&
+    crypto.verify(null, rawBody, BRIDGE_PUBLIC_KEY, signature)
+  );
+  let parsedBody = null;
+  let parsedValid = false;
+  try {
+    parsedBody = Buffer.from(JSON.stringify(request.body ?? {}));
+    parsedValid = Boolean(
+      signature?.length === 64 &&
+      crypto.verify(null, parsedBody, BRIDGE_PUBLIC_KEY, signature)
+    );
+  } catch {
+    parsedBody = null;
+  }
+
   return {
-    signatureHeaderPresent: Boolean(provided),
-    signatureScheme: provided.includes("=") ? provided.slice(0, provided.indexOf("=")) : null,
-    signatureLength: provided.length,
-    rawBodyBytes: request.rawBody instanceof Buffer ? request.rawBody.length : null,
-    bridgePublicKeyFingerprint: BRIDGE_PUBLIC_KEY_FINGERPRINT,
+    valid: rawValid,
+    header: Boolean(provided),
+    scheme: provided.includes("=") ? provided.slice(0, provided.indexOf("=")) : null,
+    sigBytes: signature?.length ?? null,
+    rawAvailable: Boolean(rawBody),
+    rawBytes: rawBody?.length ?? null,
+    rawSha256: rawBody ? crypto.createHash("sha256").update(rawBody).digest("hex") : null,
+    parsedBytes: parsedBody?.length ?? null,
+    parsedSha256: parsedBody ? crypto.createHash("sha256").update(parsedBody).digest("hex") : null,
+    parsedValid,
+    keyFingerprint: BRIDGE_PUBLIC_KEY_FINGERPRINT,
   };
 }
 
@@ -420,11 +446,26 @@ exports.wacliWebhook = onRequest(
       response.status(405).send("Method not allowed");
       return;
     }
-    if (!verifyBridgeSignature(request)) {
-      logger.warn("Rejected DEMAC bridge webhook with invalid Ed25519 signature.", bridgeSignatureDiagnostics(request));
-      response.status(401).send("Invalid signature");
-      return;
-    }
+    const bridgeSignature = inspectBridgeSignature(request);
+  if (!bridgeSignature.valid) {
+    logger.warn("Rejected DEMAC bridge webhook with invalid Ed25519 signature.", bridgeSignature);
+    response.status(401).json({
+      error: "Invalid signature",
+      diagnostics: {
+        header: bridgeSignature.header,
+        scheme: bridgeSignature.scheme,
+        sigBytes: bridgeSignature.sigBytes,
+        rawAvailable: bridgeSignature.rawAvailable,
+        rawBytes: bridgeSignature.rawBytes,
+        rawSha256: bridgeSignature.rawSha256,
+        parsedBytes: bridgeSignature.parsedBytes,
+        parsedSha256: bridgeSignature.parsedSha256,
+        parsedValid: bridgeSignature.parsedValid,
+        keyFingerprint: bridgeSignature.keyFingerprint,
+      },
+    });
+    return;
+  }
 
     const payload = request.body ?? {};
     const eventType = String(payload.EventType || "message");
