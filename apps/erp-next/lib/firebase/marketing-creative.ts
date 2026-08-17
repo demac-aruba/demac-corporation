@@ -11,6 +11,29 @@ export type MarketingCreativeProduct = {
   specs: string;
 };
 
+export type MarketingCreativeVisualReview = {
+  benchmarkLevel?: 'amateur' | 'competent' | 'professional' | 'agency' | 'top_tier_paid_social' | string;
+  composition?: number;
+  typography?: number;
+  professionalFinish?: number;
+  brandCoherence?: number;
+  photoAuthenticity?: number;
+  originality?: number;
+  mobileReadability?: number;
+};
+
+export type MarketingCreativePerformanceReview = {
+  benchmarkLevel?: 'amateur' | 'competent' | 'professional' | 'agency' | 'top_tier_paid_social' | string;
+  scrollStopping?: number;
+  promiseClarity?: number;
+  proofStrength?: number;
+  ctaProminence?: number;
+  conversionPath?: number;
+  audienceRelevance?: number;
+  modeFit?: number;
+  offerClarity?: number;
+};
+
 export type MarketingCreativeQa = {
   source: string;
   status: 'passed' | 'failed' | 'needs_review' | string;
@@ -18,9 +41,17 @@ export type MarketingCreativeQa = {
   selectionScore?: number;
   overallScore?: number;
   benchmarkLevel?: 'amateur' | 'competent' | 'professional' | 'agency' | 'top_tier' | string;
+  visualBenchmarkLevel?: string;
+  performanceBenchmarkLevel?: string;
+  visualScore?: number;
+  performanceScore?: number;
+  visualReview?: MarketingCreativeVisualReview;
+  performanceReview?: MarketingCreativePerformanceReview;
   adSpendReady?: boolean;
   visibleTextExact?: boolean;
   inventedFacts?: boolean;
+  hardFailure?: boolean;
+  hardFailureReasons?: string[];
   creativeDirection?: number;
   composition?: number;
   typography?: number;
@@ -31,12 +62,12 @@ export type MarketingCreativeQa = {
   footerSafety?: number;
   originality?: number;
   thumbnailImpact?: number;
-  mobileLegibility: number;
-  visualHierarchy: number;
-  contrast: number;
-  footerClearance: number;
-  authenticity: number;
-  professionalism: number;
+  mobileLegibility?: number;
+  visualHierarchy?: number;
+  contrast?: number;
+  footerClearance?: number;
+  authenticity?: number;
+  professionalism?: number;
   creativeQuality?: number;
   scrollStoppingPower?: number;
   agencyFeel?: number;
@@ -47,7 +78,7 @@ export type MarketingCreativeQa = {
   layoutRichness?: number;
   brandSystemCoherence?: number;
   offerClarity?: number;
-  attempt: number;
+  attempt?: number;
   amateurSignals?: string[];
   issues: string[];
   revisionInstructions: string[];
@@ -61,11 +92,31 @@ export type MarketingCreativeQa = {
   } | null;
 };
 
+export type MarketingCreativeBlueprint = {
+  heroRegion?: string;
+  heroSharePercent?: number;
+  headlineRegion?: string;
+  headlineMaxLines?: number;
+  supportRegion?: string;
+  ctaRegion?: string;
+  brandRegion?: string;
+  proofRegion?: string;
+  typographyScale?: string;
+  negativeSpacePlan?: string;
+  cropInstruction?: string;
+  primaryGraphicDevice?: string;
+  mobileReadSequence?: string[];
+  footerExclusion?: string;
+  mustPreserve?: string[];
+  mustAvoid?: string[];
+};
+
 export type MarketingCreativeVariant = {
   id: string;
   conceptId: string;
   name: string;
   rationale: string;
+  diversityRationale?: string;
   stage?: string;
   parentVariantId?: string;
   imageStoragePath?: string;
@@ -86,8 +137,32 @@ export type MarketingCreativeVariant = {
     typographyDirection?: string;
     persuasionMechanism?: string;
     thumbnailIdea?: string;
+    heroTreatment?: string;
+    proofStrategy?: string;
+    ctaStrategy?: string;
+    blueprint?: MarketingCreativeBlueprint;
   };
   qa: MarketingCreativeQa;
+};
+
+export type MarketingCreativeBrief = {
+  creativeMode?: string;
+  modeConfidence?: number;
+  modeReason?: string;
+  conversionGoal?: string;
+  targetAudience?: string;
+  primaryPromise?: string;
+  supportingProof?: string[];
+  persuasionMechanism?: string;
+  heroAssetRole?: string;
+  brandRole?: string;
+  visualPriority?: string[];
+  mandatoryInformation?: string[];
+  optionalInformation?: string[];
+  forbiddenClaims?: string[];
+  authenticityConstraints?: string[];
+  mobileRequirements?: string[];
+  creativeNorthStar?: string;
 };
 
 export type MarketingCreative = {
@@ -95,6 +170,7 @@ export type MarketingCreative = {
   sessionId: string;
   campaignId: string;
   campaignType: string;
+  creativeMode?: string;
   version: number;
   status: MarketingCreativeStatus | string;
   builderVersion?: string;
@@ -114,6 +190,7 @@ export type MarketingCreative = {
   variantCount?: number;
   autoRevised?: boolean;
   variants?: MarketingCreativeVariant[];
+  creativeBrief?: MarketingCreativeBrief;
   providerManifest?: {
     activeProvider?: string;
     activeImageModel?: string;
@@ -131,12 +208,26 @@ export type MarketingCreative = {
     strategyDiagnosis?: string;
     benchmarkDefinition?: string;
     creativeNorthStar?: string;
+    portfolioRationale?: string;
     exploredConcepts?: Array<{
       id?: string;
       name?: string;
       archetype?: string;
       thumbnailIdea?: string;
       whyItCouldWin?: string;
+      persuasionMechanism?: string;
+      heroTreatment?: string;
+      composition?: string;
+      proofStrategy?: string;
+      ctaStrategy?: string;
+      whyItMayConvert?: string;
+      distinctnessAxis?: string;
+    }>;
+    selectedBlueprints?: Array<{
+      id?: string;
+      name?: string;
+      diversityRationale?: string;
+      blueprint?: MarketingCreativeBlueprint;
     }>;
     finalJury?: {
       spendConfidence?: number;
@@ -147,6 +238,7 @@ export type MarketingCreative = {
   artDirection?: {
     campaignSummary?: string;
     creativeNorthStar?: string;
+    creativeMode?: string;
   };
   exactText: {
     headline: string;
