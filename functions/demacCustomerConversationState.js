@@ -94,6 +94,8 @@ function emptySession(identity) {
     language: "",
     lastOutcome: "",
     requiresHuman: false,
+    handoffQueue: "",
+    handoffReason: "",
   };
 }
 
@@ -195,19 +197,24 @@ async function recordCustomerConversationOutcome({
   language = "",
   requiresHuman = false,
   appointmentId = "",
+  handoffQueue = "",
+  handoffReason = "",
   now = new Date(),
 } = {}) {
   const identity = sessionIdentity(context);
   if (!identity) return { updated: false, sessionId: "" };
+  const isHandoff = Boolean(requiresHuman || outcome === "handoff");
   const ref = db.collection(CUSTOMER_AGENT_SESSION_COLLECTION).doc(identity.sessionId);
   const patch = {
     version: CUSTOMER_AGENT_SESSION_VERSION,
     provider: identity.provider,
     conversationId: identity.conversation,
-    status: requiresHuman || outcome === "handoff" ? "HUMAN_ACTIVE" : "AI_ACTIVE",
+    status: isHandoff ? "HUMAN_ACTIVE" : "AI_ACTIVE",
     lastOutcome: cleanText(outcome, 80),
     language: cleanText(language, 40),
-    requiresHuman: Boolean(requiresHuman || outcome === "handoff"),
+    requiresHuman: isHandoff,
+    handoffQueue: isHandoff ? cleanText(handoffQueue, 80) : "",
+    handoffReason: isHandoff ? cleanText(handoffReason, 500) : "",
     updatedAt: timestampValue(),
     updatedAtIso: now.toISOString(),
   };

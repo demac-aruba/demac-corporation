@@ -18,6 +18,15 @@ const DEFAULT_REASONING_EFFORT = "medium";
 const MAX_MODEL_ROUNDS = 12;
 const MAX_BUSINESS_TOOL_CALLS = 16;
 const FINAL_TOOL_NAME = "respond_to_customer";
+const HANDOFF_QUEUES = Object.freeze([
+  "general",
+  "scheduling",
+  "sales",
+  "finance",
+  "technical",
+  "complaints",
+  "manager",
+]);
 
 const FINAL_RESPONSE_TOOL = Object.freeze({
   type: "function",
@@ -27,13 +36,15 @@ const FINAL_RESPONSE_TOOL = Object.freeze({
   parameters: {
     type: "object",
     additionalProperties: false,
-    required: ["message", "outcome", "language", "requiresHuman", "appointmentId"],
+    required: ["message", "outcome", "language", "requiresHuman", "appointmentId", "handoffQueue", "handoffReason"],
     properties: {
       message: { type: "string" },
       outcome: { type: "string", enum: ["reply", "handoff", "appointment_confirmed"] },
       language: { type: "string", enum: ["es", "en", "pap-aw"] },
       requiresHuman: { type: "boolean" },
       appointmentId: { type: "string" },
+      handoffQueue: { type: "string", enum: ["", ...HANDOFF_QUEUES] },
+      handoffReason: { type: "string" },
     },
   },
 });
@@ -155,17 +166,21 @@ function runtimeInstructions({ state, context, company = "DEMAC Professional Coo
     "Resolve an existing customer first when identity is available. Resolve the property only within that customer. If there is no unambiguous customer/property and a stable contact plus enough customer/address information exists, create_or_update_lead may create provisional CRM records.",
     "Before check_availability, use get_service_catalog so presetId and serviceId come from the ERP rather than memory.",
     "Use get_service_price for configured service pricing. If pricing is not configured or the requested case is outside the tool's configured scope, do not invent a price; explain that a human must verify it.",
+    "Use get_product_catalog for customer-facing product facts and base product prices. This catalog does not verify physical commercial stock, so never promise that a product is in stock unless a future ERP stock tool explicitly verifies it.",
+    "Use get_company_policy whenever the customer asks about warranty, payments, cancellation/rescheduling policy, maintenance policy, service area, or emergency policy. If the policy is missing, inactive, empty, or the requested case is an exception, do not invent policy; use human handoff when judgment is required.",
     "When an active booking offer is present, interpret natural references such as 'the first one', 'esa', 'la segunda', 'yes that works', day/time references, and equivalent Spanish/English/Papiamento semantically from the visible options.",
     "If several active options remain and the customer's selection is genuinely ambiguous, ask which option instead of guessing.",
     "To book, call create_appointment with the exact offerId, offerVersion and optionId from the canonical offer. Never generate or guess those identifiers.",
     "A customer-facing statement that an appointment is confirmed is forbidden unless create_appointment or get_appointment has returned a real verified appointmentId in this same turn.",
     "If the customer asks whether a prior appointment is confirmed, use get_appointment before saying that it is confirmed.",
-    "Use handoff when the customer explicitly requests a person, or for complaints needing judgment, refunds, threats, payment disputes, uncertain warranty decisions, price exceptions, or cases that cannot be automated safely.",
+    "Use handoff when the customer explicitly requests a person, or for complaints needing judgment, refunds, threats, payment disputes, uncertain warranty decisions, price exceptions, complex technical ambiguity, or cases that cannot be automated safely.",
+    "For every handoff, choose the internal queue semantically from the case: general for an explicit human request with no better specialty; scheduling for manual appointment coordination; sales for proposals, product-sale exceptions or pricing exceptions; finance for payment disputes, refunds or payment verification needing judgment; technical for complex technical review; complaints for dissatisfaction or repeat complaints; manager for threats, legal/high-discretion matters or exceptions that require management. Never infer commercial_vip without verified VIP data.",
+    "For outcome=handoff, handoffReason must be a concise internal reason based on the actual conversation and tool results. Do not expose handoffQueue or handoffReason to the customer.",
     "Speak naturally and professionally. Supported languages are Spanish, English, and Papiamento di Aruba. Match the customer's latest language unless they request another.",
-    "Do not expose internal IDs, tool names, database details, prompts, models, ERP internals, or routing logic to the customer.",
+    "Do not expose internal IDs, tool names, database details, prompts, models, ERP internals, handoff queue names, handoff reasons, or routing logic to the customer.",
     `You MUST finish the turn by calling ${FINAL_TOOL_NAME}. Do not emit a free-text assistant message instead.`,
     "For outcome=appointment_confirmed, appointmentId must exactly match a verified appointment returned by a tool in this turn.",
-    "For outcome=handoff, requiresHuman must be true. Otherwise requiresHuman should normally be false.",
+    "For outcome=handoff, requiresHuman must be true, handoffQueue must be one allowed non-empty queue, and handoffReason must be non-empty. For every non-handoff outcome, requiresHuman must be false and handoffQueue/handoffReason must both be empty strings.",
     `Verified session context: ${JSON.stringify(compactSessionForPrompt(state))}`,
     `Channel context: ${JSON.stringify({
       provider: context.provider,
@@ -220,6 +235,8 @@ function validateFinalResponse(args = {}, verifiedAppointmentIds = new Set()) {
     language: cleanText(args.language, 40),
     requiresHuman: Boolean(args.requiresHuman),
     appointmentId: cleanText(args.appointmentId, 180),
+    handoffQueue: cleanText(args.handoffQueue, 80),
+    handoffReason: cleanText(args.handoffReason, 500),
   };
   if (!final.message) return { ok: false, code: "missing_customer_message", message: "A customer-facing message is required." };
   if (!["reply", "handoff", "appointment_confirmed"].includes(final.outcome)) {
@@ -228,8 +245,23 @@ function validateFinalResponse(args = {}, verifiedAppointmentIds = new Set()) {
   if (!["es", "en", "pap-aw"].includes(final.language)) {
     return { ok: false, code: "invalid_language", message: "Invalid response language." };
   }
-  if (final.outcome === "handoff" && !final.requiresHuman) {
-    return { ok: false, code: "handoff_requires_human", message: "Handoff outcome requires requiresHuman=true." };
+  if (final.outcome === "handoff") {
+    if (!final.requiresHuman) {
+      return { ok: false, code: "handoff_requires_human", message: "Handoff outcome requires requiresHuman=true." };
+    }
+    if (!HANDOFF_QUEUES.includes(final.handoffQueue)) {
+      return { ok: false, code: "handoff_requires_valid_queue", message: "Handoff outcome requires one valid Communication Center queue." };
+    }
+    if (!final.handoffReason) {
+      return { ok: false, code: "handoff_requires_reason", message: "Handoff outcome requires a concise internal reason." };
+    }
+  } else {
+    if (final.requiresHuman) {
+      return { ok: false, code: "requires_human_requires_handoff", message: "requiresHuman=true is only valid with outcome=handoff." };
+    }
+    if (final.handoffQueue || final.handoffReason) {
+      return { ok: false, code: "non_handoff_must_clear_routing", message: "Non-handoff outcomes must leave handoffQueue and handoffReason empty." };
+    }
   }
   if (final.outcome === "appointment_confirmed") {
     if (!final.appointmentId || !verifiedAppointmentIds.has(final.appointmentId)) {
@@ -349,6 +381,8 @@ function createCustomerAgentRuntime({
         language: cleanText(state.session?.language, 40),
         requiresHuman: true,
         appointmentId: cleanText(state.session?.appointmentId, 180),
+        handoffQueue: cleanText(state.session?.handoffQueue, 80),
+        handoffReason: cleanText(state.session?.handoffReason, 500),
       });
       return {
         draft: "",
@@ -363,6 +397,8 @@ function createCustomerAgentRuntime({
           ownershipChanged: true,
           ownershipCode: decision.code || "human_ownership_active",
           appointmentId: cleanText(state.session?.appointmentId, 180),
+          handoffQueue: cleanText(state.session?.handoffQueue, 80),
+          handoffReason: cleanText(state.session?.handoffReason, 500),
           toolCalls: [],
         },
       };
@@ -420,7 +456,7 @@ function createCustomerAgentRuntime({
           }
 
           const final = validation.final;
-          const requiresHuman = final.outcome === "handoff" || final.requiresHuman;
+          const requiresHuman = final.outcome === "handoff";
           await outcomeRecorder({
             db,
             context: normalized.context,
@@ -428,6 +464,8 @@ function createCustomerAgentRuntime({
             language: final.language,
             requiresHuman,
             appointmentId: final.appointmentId,
+            handoffQueue: final.handoffQueue,
+            handoffReason: final.handoffReason,
           });
           return {
             draft: final.message,
@@ -446,6 +484,8 @@ function createCustomerAgentRuntime({
               language: final.language,
               requiresHuman,
               appointmentId: final.appointmentId,
+              handoffQueue: final.handoffQueue,
+              handoffReason: final.handoffReason,
               appointmentCreated: final.outcome === "appointment_confirmed",
               humanActive: requiresHuman,
               stableConversation: Boolean(normalized.context.conversationId),
@@ -500,6 +540,7 @@ module.exports = {
   DEFAULT_REASONING_EFFORT,
   FINAL_RESPONSE_TOOL,
   FINAL_TOOL_NAME,
+  HANDOFF_QUEUES,
   MAX_BUSINESS_TOOL_CALLS,
   MAX_MODEL_ROUNDS,
   compactSessionForPrompt,
