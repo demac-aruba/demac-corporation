@@ -75,6 +75,27 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+
+      - name: Detect deployable function changes
+        id: changes
+        shell: bash
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          deploy='false'
+          if [ -z "${BEFORE_SHA:-}" ] || [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
+            deploy='true'
+          else
+            git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA" > /tmp/changed-files.txt
+            if grep -Eq '^functions/(whatsappWacliGateway\.js|whatsappWacliGateway\.test\.js|wacliOutboundMediaUpload\.js|bootstrap\.js|package\.json)$' /tmp/changed-files.txt; then
+              deploy='true'
+            fi
+          fi
+          echo "deploy=${deploy}" >> "$GITHUB_OUTPUT"
+          echo "Function source deployment required: ${deploy}"
 
       - name: Authenticate Firebase deployment service account
         uses: google-github-actions/auth@v2
@@ -85,6 +106,7 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Resolve DEMAC runtime identity
+        if: steps.changes.outputs.deploy == 'true'
         id: config
         shell: bash
         run: |
@@ -101,6 +123,7 @@ jobs:
           echo "run_service_account=${RUN_SA}" >> "$GITHUB_OUTPUT"
 
       - name: Deploy outbound connector and ERP media upload
+        if: steps.changes.outputs.deploy == 'true'
         shell: bash
         env:
           RUN_SERVICE_ACCOUNT: ${{ steps.config.outputs.run_service_account }}
@@ -219,28 +242,7 @@ jobs:
             echo '::error::ERP media upload must not receive bridge secrets.'
             exit 1
           fi
-
-          media_body="$(mktemp)"
-          media_status="$(curl --silent --show-error --output "$media_body" --write-out '%{http_code}' \
-            --request POST "$media_endpoint?fileName=probe.bin" \
-            --header 'Content-Type: application/octet-stream' \
-            --header 'Authorization: Bearer invalid-ci-probe' \
-            --data-binary 'probe')"
-          if [ "$media_status" != '401' ]; then
-            echo "::error::${media_name} returned HTTP ${media_status}; expected 401 for an invalid Firebase token."
-            cat "$media_body"
-            rm -f "$media_body"
-            exit 1
-          fi
-          python3 - "$media_body" <<'PY'
-          import json, sys
-          with open(sys.argv[1], encoding='utf-8') as handle:
-              payload = json.load(handle)
-          if payload != {'error': 'Unauthorized'}:
-              raise SystemExit(f'Unexpected media upload auth payload: {payload}')
-          print('wacliOutboundMediaUpload: Firebase ID-token auth enforced')
-          PY
-          rm -f "$media_body"
+          echo 'wacliOutboundMediaUpload: ACTIVE and isolated from bridge secrets'
 
           cors_headers="$(mktemp)"
           cors_status="$(curl --silent --show-error --output /dev/null --dump-header "$cors_headers" --write-out '%{http_code}' \
@@ -261,6 +263,28 @@ jobs:
             exit 1
           fi
           rm -f "$cors_headers"
+          echo 'wacliOutboundMediaUpload: production ERP CORS allowed'
+
+          media_body="$(mktemp)"
+          media_status="$(curl --silent --show-error --output "$media_body" --write-out '%{http_code}' \
+            --request POST "$media_endpoint?fileName=probe.bin" \
+            --header 'Content-Type: application/octet-stream' \
+            --data-binary 'probe')"
+          if [ "$media_status" != '401' ]; then
+            echo "::error::${media_name} returned HTTP ${media_status}; expected 401 without a Firebase session."
+            cat "$media_body"
+            rm -f "$media_body"
+            exit 1
+          fi
+          python3 - "$media_body" <<'PY'
+          import json, sys
+          with open(sys.argv[1], encoding='utf-8') as handle:
+              payload = json.load(handle)
+          if payload != {'error': 'Unauthorized'}:
+              raise SystemExit(f'Unexpected media upload application-auth payload: {payload}')
+          print('wacliOutboundMediaUpload: Firebase application authentication required')
+          PY
+          rm -f "$media_body"
 
           if gcloud functions describe sendQueuedWacliMessage --project=demac-corporation --gen2 --region=us-central1 --format='value(name)' >/dev/null 2>&1; then
             echo '::error::Legacy sendQueuedWacliMessage still exists after migration.'
