@@ -164,8 +164,8 @@ function runtimeInstructions({ state, context, company = "DEMAC Professional Coo
     "Speak naturally and professionally. Supported languages are Spanish, English, and Papiamento di Aruba. Match the customer's latest language unless they request another.",
     "Do not expose internal IDs, tool names, database details, prompts, models, ERP internals, or routing logic to the customer.",
     `You MUST finish the turn by calling ${FINAL_TOOL_NAME}. Do not emit a free-text assistant message instead.`,
-    `For outcome=appointment_confirmed, appointmentId must exactly match a verified appointment returned by a tool in this turn.`,
-    `For outcome=handoff, requiresHuman must be true. Otherwise requiresHuman should normally be false.`,
+    "For outcome=appointment_confirmed, appointmentId must exactly match a verified appointment returned by a tool in this turn.",
+    "For outcome=handoff, requiresHuman must be true. Otherwise requiresHuman should normally be false.",
     `Verified session context: ${JSON.stringify(compactSessionForPrompt(state))}`,
     `Channel context: ${JSON.stringify({
       provider: context.provider,
@@ -292,6 +292,7 @@ function createCustomerAgentRuntime({
   stateLoader = loadCustomerConversationState,
   stateUpdater = updateCustomerConversationStateAfterTool,
   outcomeRecorder = recordCustomerConversationOutcome,
+  executionGuard = null,
   primaryModel = process.env.DEMAC_CUSTOMER_AGENT_MODEL || DEFAULT_PRIMARY_MODEL,
   fallbackModel = process.env.DEMAC_CUSTOMER_AGENT_FALLBACK_MODEL || DEFAULT_FALLBACK_MODEL,
   reasoningEffort = process.env.DEMAC_CUSTOMER_AGENT_REASONING_EFFORT || DEFAULT_REASONING_EFFORT,
@@ -322,22 +323,57 @@ function createCustomerAgentRuntime({
     if (!normalized.latestText) throw new Error("No customer message was found.");
 
     const state = await stateLoader({ db, context: normalized.context });
-    if (state.session?.status === "HUMAN_ACTIVE") {
+
+    async function ownershipDecision(phase, toolName = "") {
+      if (typeof executionGuard !== "function") return { allowed: true };
+      const result = await executionGuard({
+        db,
+        context: normalized.context,
+        phase,
+        toolName,
+      });
+      return result && result.allowed === false
+        ? {
+          allowed: false,
+          code: cleanText(result.code || "human_ownership_active", 120),
+          reason: cleanText(result.reason || result.message || "Conversation is under human control.", 500),
+        }
+        : { allowed: true };
+    }
+
+    async function humanOwnershipResult(decision = {}) {
+      await outcomeRecorder({
+        db,
+        context: normalized.context,
+        outcome: "handoff",
+        language: cleanText(state.session?.language, 40),
+        requiresHuman: true,
+        appointmentId: cleanText(state.session?.appointmentId, 180),
+      });
       return {
         draft: "",
         source: "demac-customer-agent-runtime-v1",
-        warning: "Conversation is under human control.",
+        warning: decision.reason || "Conversation is under human control.",
         metadata: {
           runtimeVersion: CUSTOMER_AGENT_RUNTIME_VERSION,
           architecture: "single-agent-tool-loop+erp-tools+booking-authority",
           outcome: "handoff",
           requiresHuman: true,
           humanActive: true,
-          appointmentId: cleanText(state.session.appointmentId, 180),
+          ownershipChanged: true,
+          ownershipCode: decision.code || "human_ownership_active",
+          appointmentId: cleanText(state.session?.appointmentId, 180),
           toolCalls: [],
         },
       };
     }
+
+    if (state.session?.status === "HUMAN_ACTIVE") {
+      return humanOwnershipResult({ code: "session_human_active", reason: "Conversation is under human control." });
+    }
+
+    const initialOwnership = await ownershipDecision("before_model");
+    if (!initialOwnership.allowed) return humanOwnershipResult(initialOwnership);
 
     const instructions = runtimeInstructions({ state, context: normalized.context, company });
     const input = nativeInputMessages(normalized.conversation);
@@ -364,12 +400,14 @@ function createCustomerAgentRuntime({
         throw new Error("Customer Agent model returned no function call even though tool_choice=required.");
       }
 
-      // Preserve model output, including reasoning items, before providing tool outputs.
       input.push(...(Array.isArray(response.output) ? response.output : []));
 
       for (const call of calls) {
         const args = parseFunctionArguments(call);
         if (call.name === FINAL_TOOL_NAME) {
+          const finalOwnership = await ownershipDecision("before_final_response", FINAL_TOOL_NAME);
+          if (!finalOwnership.allowed) return humanOwnershipResult(finalOwnership);
+
           const validation = validateFinalResponse(args, verifiedAppointmentIds);
           if (!validation.ok) {
             const rejection = {
@@ -421,6 +459,9 @@ function createCustomerAgentRuntime({
         if (businessToolCalls > MAX_BUSINESS_TOOL_CALLS) {
           throw new Error("Customer Agent exceeded the maximum business tool calls for one turn.");
         }
+
+        const toolOwnership = await ownershipDecision("before_business_tool", call.name);
+        if (!toolOwnership.allowed) return humanOwnershipResult(toolOwnership);
 
         const result = await tools.invoke(call.name, args, normalized.context);
         const verifiedAppointmentId = verifiedAppointmentFromTool(call.name, result);
