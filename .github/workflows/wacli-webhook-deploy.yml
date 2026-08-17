@@ -4,7 +4,6 @@ on:
   pull_request:
     paths:
       - 'functions/whatsappWacliGateway.js'
-      - 'functions/applyWacliGatewayEd25519Patch.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
       - '.github/workflows/wacli-webhook-deploy.yml'
@@ -13,7 +12,6 @@ on:
       - main
     paths:
       - 'functions/whatsappWacliGateway.js'
-      - 'functions/applyWacliGatewayEd25519Patch.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
       - '.github/workflows/wacli-webhook-deploy.yml'
@@ -22,30 +20,48 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: wacli-webhook-production
+  cancel-in-progress: false
+
 jobs:
   validate-wacli-webhook:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
           node-version: '22'
           package-manager-cache: false
+
       - name: Install function dependencies
         run: npm install --prefix functions --no-audit --no-fund
-      - name: Apply DEMAC Ed25519 bridge verifier
-        run: node functions/applyWacliGatewayEd25519Patch.js
-      - name: Validate wacli gateway syntax and export
+
+      - name: Validate canonical wacli gateway
+        shell: bash
         run: |
+          set -euo pipefail
           node --check functions/whatsappWacliGateway.js
           node --check functions/bootstrap.js
+          if grep -q 'WACLI_WEBHOOK_SECRET' functions/whatsappWacliGateway.js; then
+            echo '::error::Firebase gateway must not depend on the local wacli webhook secret.'
+            exit 1
+          fi
+          if grep -q 'x-wacli-signature' functions/whatsappWacliGateway.js; then
+            echo '::error::Bridge-to-Firebase authentication must use only X-Demac-Bridge-Signature.'
+            exit 1
+          fi
+          if ! grep -q 'x-demac-bridge-signature' functions/whatsappWacliGateway.js; then
+            echo '::error::Canonical Ed25519 bridge verifier is missing.'
+            exit 1
+          fi
           node - <<'NODE'
           const mod = require('./functions/bootstrap');
-          if (typeof mod.wacliWebhook !== 'function') {
-            throw new Error('wacliWebhook export missing from functions/bootstrap.js');
-          }
+          if (typeof mod.wacliWebhook !== 'function') throw new Error('wacliWebhook export missing');
+          if (typeof mod.sendQueuedWacliMessage !== 'function') throw new Error('sendQueuedWacliMessage export missing');
           NODE
 
   deploy-wacli-webhook:
@@ -55,15 +71,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-          package-manager-cache: false
-
-      - name: Apply DEMAC Ed25519 bridge verifier
-        run: node functions/applyWacliGatewayEd25519Patch.js
 
       - name: Authenticate Firebase deployment service account
         uses: google-github-actions/auth@v2
@@ -89,7 +96,7 @@ jobs:
           fi
           echo "run_service_account=${RUN_SA}" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy wacliWebhook
+      - name: Deploy canonical wacliWebhook
         shell: bash
         env:
           RUN_SERVICE_ACCOUNT: ${{ steps.config.outputs.run_service_account }}
@@ -106,7 +113,7 @@ jobs:
             --timeout=120s \
             --run-service-account="$RUN_SERVICE_ACCOUNT" \
             --set-env-vars='FIREBASE_CONFIG={"storageBucket":"demac-corporation.firebasestorage.app"}' \
-            --set-secrets=WACLI_WEBHOOK_SECRET=WACLI_WEBHOOK_SECRET:latest,WACLI_BRIDGE_URL=WACLI_BRIDGE_URL:latest,WACLI_BRIDGE_TOKEN=WACLI_BRIDGE_TOKEN:latest \
+            --set-secrets=WACLI_BRIDGE_URL=WACLI_BRIDGE_URL:latest,WACLI_BRIDGE_TOKEN=WACLI_BRIDGE_TOKEN:latest \
             --trigger-http \
             --allow-unauthenticated \
             --quiet
@@ -117,8 +124,13 @@ jobs:
           set -euo pipefail
           STATE="$(gcloud functions describe wacliWebhook --project=demac-corporation --gen2 --region=us-central1 --format='value(state)')"
           URI="$(gcloud functions describe wacliWebhook --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.uri)')"
+          SECRETS="$(gcloud functions describe wacliWebhook --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.secretEnvironmentVariables[].key)' | tr ';' '\n' | sort -u)"
           if [ "$STATE" != 'ACTIVE' ] || [ -z "$URI" ]; then
             echo "::error::wacliWebhook state is ${STATE:-unknown}; URI=${URI:-missing}."
             exit 1
           fi
-          echo "wacliWebhook is ACTIVE at $URI"
+          if printf '%s\n' "$SECRETS" | grep -qx 'WACLI_WEBHOOK_SECRET'; then
+            echo '::error::Legacy WACLI_WEBHOOK_SECRET is still bound to Firebase runtime.'
+            exit 1
+          fi
+          echo "wacliWebhook ACTIVE at $URI with canonical Ed25519 authentication."
