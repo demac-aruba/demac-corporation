@@ -50,11 +50,17 @@ jobs:
       - name: Validate Commercial Sales Authority syntax
         run: node --check commercialSalesAuthority.js
 
+      - name: Validate Customer Reservation Adapter syntax
+        run: node --check demacCustomerReservationTools.js
+
       - name: Test Booking Authority
         run: npm run test:booking-authority
 
       - name: Test Commercial Sales Authority
         run: node --test commercialSalesAuthority.test.js
+
+      - name: Test Customer Product Reservations
+        run: node --test demacCustomerReservationTools.test.js demacCustomerProductReservationRuntime.test.js
 
       - name: Test Customer Agent
         run: npm run test:customer-agent-tools
