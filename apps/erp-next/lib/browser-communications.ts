@@ -4,7 +4,7 @@ import { getFirestoreDocument, listFirestoreCollection, saveFirestoreDocument, u
 import { requireFirebaseWebSession } from './firebase/session';
 
 export type WhatsAppProvider = 'wacli' | 'meta';
-export type WhatsAppMediaKind = 'image' | 'video' | 'audio' | 'document';
+export type WhatsAppMediaKind = 'image' | 'video' | 'audio' | 'voice' | 'document';
 type ConversationLanguage = Conversation['language'];
 type OperatorLanguage = Operator['languages'][number];
 
@@ -90,6 +90,7 @@ const operatorAttributionCache = new Map<string, MessageAttribution>();
 const CRM_CACHE_MS = 60_000;
 const MAX_WHATSAPP_MEDIA_BYTES = 25 * 1024 * 1024;
 const WACLI_MEDIA_UPLOAD_ENDPOINT = 'https://us-central1-demac-corporation.cloudfunctions.net/wacliOutboundMediaUpload';
+const BLOCKED_ATTACHMENT_EXTENSIONS = new Set(['html', 'htm', 'xhtml', 'svg']);
 let crmIndexCache: CrmIndex | null = null;
 
 function safeString(value: unknown, fallback = '') { return typeof value === 'string' ? value : fallback; }
@@ -109,14 +110,18 @@ export function whatsAppAttachmentKind(file: Pick<File, 'name' | 'type'>): Whats
 }
 
 export function validateWhatsAppAttachment(file: Pick<File, 'name' | 'size' | 'type'>) {
-  if (!String(file.name || '').trim()) throw new Error('The attachment needs a file name.');
+  const name = String(file.name || '').trim();
+  if (!name) throw new Error('The attachment needs a file name.');
   if (!Number.isFinite(file.size) || file.size <= 0) throw new Error('The selected attachment is empty.');
   if (file.size > MAX_WHATSAPP_MEDIA_BYTES) throw new Error('The attachment is larger than the 25 MB WhatsApp connector limit.');
   const mime = String(file.type || '').toLowerCase().split(';')[0].trim();
-  if (['text/html', 'application/xhtml+xml', 'image/svg+xml'].includes(mime)) throw new Error('This file type is not allowed for WhatsApp attachments.');
+  const extension = name.toLowerCase().split('.').pop() || '';
+  if (['text/html', 'application/xhtml+xml', 'image/svg+xml'].includes(mime) || BLOCKED_ATTACHMENT_EXTENSIONS.has(extension)) {
+    throw new Error('This file type is not allowed for WhatsApp attachments.');
+  }
 }
 
-async function uploadWhatsAppAttachment(file: File) {
+async function uploadWhatsAppAttachment(file: File, kindOverride?: WhatsAppMediaKind) {
   validateWhatsAppAttachment(file);
   const session = await requireFirebaseWebSession();
   const contentType = String(file.type || '').split(';')[0].trim() || 'application/octet-stream';
@@ -131,7 +136,7 @@ async function uploadWhatsAppAttachment(file: File) {
   const payload = await response.json().catch(() => ({})) as OutboundMediaUploadResponse;
   if (!response.ok || !payload.url) throw new Error(payload.error || `Could not upload WhatsApp attachment (HTTP ${response.status}).`);
   return {
-    kind: whatsAppAttachmentKind(file),
+    kind: kindOverride || whatsAppAttachmentKind(file),
     url: payload.url,
     fileName: payload.fileName || file.name,
     mimeType: payload.mimeType || contentType,
@@ -273,11 +278,11 @@ export async function queueWhatsAppText(conversation: LiveConversation, text: st
   return saveFirestoreDocument('whatsappOutboundQueue', { id, provider: 'wacli', status: 'queued', type: 'text', to, text: text.trim(), conversationId: conversation.id, createdByUserId: principal.userId, createdByName: principal.displayName, createdAt: new Date().toISOString() });
 }
 
-export async function queueWhatsAppMedia(conversation: LiveConversation, file: File, text: string, principal: AuthPrincipal, provider: WhatsAppProvider) {
+export async function queueWhatsAppMedia(conversation: LiveConversation, file: File, text: string, principal: AuthPrincipal, provider: WhatsAppProvider, kindOverride?: WhatsAppMediaKind) {
   if (provider !== 'wacli') throw new Error('Free-form ERP media replies are currently enabled through the wacli provider.');
   const to = conversation.chatJid || conversation.phone;
   if (!to) throw new Error('This conversation has no WhatsApp phone number or JID.');
-  const media = await uploadWhatsAppAttachment(file);
+  const media = await uploadWhatsAppAttachment(file, kindOverride);
   const id = `wa-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
   return saveFirestoreDocument('whatsappOutboundQueue', {
     id,
