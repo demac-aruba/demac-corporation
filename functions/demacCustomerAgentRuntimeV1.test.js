@@ -2,7 +2,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  FINAL_RESPONSE_TOOL,
   FINAL_TOOL_NAME,
+  HANDOFF_QUEUES,
   createCustomerAgentRuntime,
   nativeInputMessages,
   normalizeCustomerTurn,
@@ -85,6 +87,8 @@ test("final appointment confirmation is structurally rejected without verified e
     language: "es",
     requiresHuman: false,
     appointmentId: "APT-FAKE",
+    handoffQueue: "",
+    handoffReason: "",
   }, new Set());
   assert.equal(bad.ok, false);
   assert.equal(bad.code, "appointment_confirmation_requires_verified_appointment");
@@ -95,8 +99,62 @@ test("final appointment confirmation is structurally rejected without verified e
     language: "es",
     requiresHuman: false,
     appointmentId: "APT-REAL",
+    handoffQueue: "",
+    handoffReason: "",
   }, new Set(["APT-REAL"]));
   assert.equal(good.ok, true);
+});
+
+test("handoff requires a semantic queue and internal reason", () => {
+  assert.deepEqual(HANDOFF_QUEUES, ["general", "scheduling", "sales", "finance", "technical", "complaints", "manager"]);
+  const missingQueue = validateFinalResponse({
+    message: "Voy a pasarle con nuestro equipo.",
+    outcome: "handoff",
+    language: "es",
+    requiresHuman: true,
+    appointmentId: "",
+    handoffQueue: "",
+    handoffReason: "Payment dispute needs review",
+  });
+  assert.equal(missingQueue.ok, false);
+  assert.equal(missingQueue.code, "handoff_requires_valid_queue");
+
+  const missingReason = validateFinalResponse({
+    message: "Voy a pasarle con nuestro equipo.",
+    outcome: "handoff",
+    language: "es",
+    requiresHuman: true,
+    appointmentId: "",
+    handoffQueue: "finance",
+    handoffReason: "",
+  });
+  assert.equal(missingReason.ok, false);
+  assert.equal(missingReason.code, "handoff_requires_reason");
+
+  const valid = validateFinalResponse({
+    message: "Voy a pasarle con nuestro equipo.",
+    outcome: "handoff",
+    language: "es",
+    requiresHuman: true,
+    appointmentId: "",
+    handoffQueue: "finance",
+    handoffReason: "Customer disputes the recorded payment balance.",
+  });
+  assert.equal(valid.ok, true);
+});
+
+test("non-handoff cannot hide human routing metadata", () => {
+  const hiddenHuman = validateFinalResponse({
+    message: "Le respondo normalmente.",
+    outcome: "reply",
+    language: "es",
+    requiresHuman: true,
+    appointmentId: "",
+    handoffQueue: "finance",
+    handoffReason: "Hidden routing",
+  });
+  assert.equal(hiddenHuman.ok, false);
+  assert.equal(hiddenHuman.code, "requires_human_requires_handoff");
 });
 
 test("runtime can call multiple ERP tools and then finish one customer turn", async () => {
@@ -112,6 +170,8 @@ test("runtime can call multiple ERP tools and then finish one customer turn", as
       language: "es",
       requiresHuman: false,
       appointmentId: "",
+      handoffQueue: "",
+      handoffReason: "",
     })] },
   ]);
   const runtime = createCustomerAgentRuntime({
@@ -147,6 +207,8 @@ test("runtime refuses a model hallucinated confirmation and lets the model corre
         language: "es",
         requiresHuman: false,
         appointmentId: "APT-NOT-REAL",
+        handoffQueue: "",
+        handoffReason: "",
       })] },
       { output: [functionCall(FINAL_TOOL_NAME, {
         message: "Todavía necesito crear la cita antes de confirmarla.",
@@ -154,6 +216,8 @@ test("runtime refuses a model hallucinated confirmation and lets the model corre
         language: "es",
         requiresHuman: false,
         appointmentId: "",
+        handoffQueue: "",
+        handoffReason: "",
       }, "call-correct")] },
     ]),
     stateLoader: async () => ({ session: { status: "AI_ACTIVE" }, activeOffer: null }),
@@ -183,6 +247,8 @@ test("runtime allows confirmation only after create_appointment returns a real a
         language: "es",
         requiresHuman: false,
         appointmentId: "APT-REAL",
+        handoffQueue: "",
+        handoffReason: "",
       })] },
     ]),
     stateLoader: async () => ({ session: { status: "AI_ACTIVE" }, activeOffer: { id: "OFR-1" } }),
@@ -211,6 +277,8 @@ test("get_appointment can provide evidence for a confirmation answer", async () 
         language: "es",
         requiresHuman: false,
         appointmentId: "APT-OLD",
+        handoffQueue: "",
+        handoffReason: "",
       })] },
     ]),
     stateLoader: async () => ({ session: { status: "AI_ACTIVE", appointmentId: "APT-OLD" }, activeOffer: null }),
@@ -223,17 +291,19 @@ test("get_appointment can provide evidence for a confirmation answer", async () 
   assert.equal(result.metadata.appointmentId, "APT-OLD");
 });
 
-test("handoff records HUMAN ownership intent and returns a customer reply", async () => {
+test("handoff records semantic queue and reason and returns a customer reply", async () => {
   let recorded = null;
   const runtime = createCustomerAgentRuntime({
     db: new FakeDb(),
     registry: registry(),
     modelClient: scriptedModel([{ output: [functionCall(FINAL_TOOL_NAME, {
-      message: "Voy a pasar su conversación a nuestro equipo de Operaciones.",
+      message: "Voy a pasar su conversación a nuestro equipo para revisar el reclamo.",
       outcome: "handoff",
       language: "es",
       requiresHuman: true,
       appointmentId: "",
+      handoffQueue: "complaints",
+      handoffReason: "Customer reports a repeat cooling complaint after recent service.",
     })] }]),
     stateLoader: async () => ({ session: { status: "AI_ACTIVE" }, activeOffer: null }),
     stateUpdater: async () => {},
@@ -243,8 +313,12 @@ test("handoff records HUMAN ownership intent and returns a customer reply", asyn
   });
   const result = await runtime.runTurn({ rawBody: rawBody(), apiKey: "test" });
   assert.equal(result.metadata.requiresHuman, true);
+  assert.equal(result.metadata.handoffQueue, "complaints");
+  assert.equal(result.metadata.handoffReason, "Customer reports a repeat cooling complaint after recent service.");
   assert.equal(recorded.requiresHuman, true);
   assert.equal(recorded.outcome, "handoff");
+  assert.equal(recorded.handoffQueue, "complaints");
+  assert.equal(recorded.handoffReason, result.metadata.handoffReason);
 });
 
 test("HUMAN_ACTIVE conversations do not call the model or business tools", async () => {
@@ -254,7 +328,7 @@ test("HUMAN_ACTIVE conversations do not call the model or business tools", async
     db: new FakeDb(),
     registry: registry(async () => { toolCalls += 1; return { success: true }; }),
     modelClient: async () => { modelCalls += 1; throw new Error("should not call"); },
-    stateLoader: async () => ({ session: { status: "HUMAN_ACTIVE", appointmentId: "" }, activeOffer: null }),
+    stateLoader: async () => ({ session: { status: "HUMAN_ACTIVE", appointmentId: "", handoffQueue: "technical", handoffReason: "Existing technical handoff" }, activeOffer: null }),
     stateUpdater: async () => {},
     outcomeRecorder: async () => {},
     primaryModel: "test-model",
@@ -262,6 +336,7 @@ test("HUMAN_ACTIVE conversations do not call the model or business tools", async
   });
   const result = await runtime.runTurn({ rawBody: rawBody(), apiKey: "test" });
   assert.equal(result.metadata.humanActive, true);
+  assert.equal(result.metadata.handoffQueue, "technical");
   assert.equal(modelCalls, 0);
   assert.equal(toolCalls, 0);
 });
@@ -281,4 +356,7 @@ test("runtime final tool is included beside one unified business registry", () =
     FINAL_TOOL_NAME,
   ]);
   assert.equal(runtime.toolDefinitions.at(-1).strict, true);
+  assert.deepEqual(FINAL_RESPONSE_TOOL.parameters.required, [
+    "message", "outcome", "language", "requiresHuman", "appointmentId", "handoffQueue", "handoffReason",
+  ]);
 });
