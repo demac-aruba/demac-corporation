@@ -57,7 +57,8 @@ jobs:
           set -euo pipefail
           git config user.name demac-aruba
           git config user.email gm.demac@gmail.com
-          git rm .github/workflows/tmp-apply-communication-workspace.yml tools/tmp-apply-communication-workspace.py
+          git rm .github/workflows/tmp-apply-communication-workspace.yml
+          git rm -f tools/tmp-apply-communication-workspace.py
           git add apps/erp-next/components/communications/communication-center.tsx
           git commit -m "Redesign Communication Center operator workspace"
           git push origin HEAD:feature/communication-center-operator-workspace
