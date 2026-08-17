@@ -10,7 +10,7 @@ const {
   normalizePhone,
   normalizeText,
   snapshotItems,
-} = require("./whatsappCopilotSchedulingCore");
+} = require("./bookingSchedulingPrimitives");
 
 const CUSTOMER_AGENT_TOOLS_VERSION = 1;
 

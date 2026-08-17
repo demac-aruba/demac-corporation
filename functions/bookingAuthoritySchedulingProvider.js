@@ -17,11 +17,11 @@ const {
   propertyZone,
   resolveAssignment,
   snapshotItems,
-} = require("./whatsappCopilotSchedulingCore");
+} = require("./bookingSchedulingPrimitives");
 const {
   candidateAvailability,
   normalizeOrderTime,
-} = require("./whatsappCopilotAvailability");
+} = require("./bookingCapacityAvailability");
 const {
   CANONICAL_SCHEDULING_ENGINE_VERSION,
   generateCanonicalOptions,

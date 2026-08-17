@@ -1,7 +1,7 @@
 const {
   cleanText,
   hashId,
-} = require("./whatsappCopilotSchedulingCore");
+} = require("./bookingSchedulingPrimitives");
 
 const CUSTOMER_AGENT_SESSION_VERSION = 1;
 const CUSTOMER_AGENT_SESSION_COLLECTION = "customerAgentSessions";
