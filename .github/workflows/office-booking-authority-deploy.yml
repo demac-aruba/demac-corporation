@@ -1,0 +1,173 @@
+name: Office Booking Authority
+
+on:
+  pull_request:
+    paths:
+      - 'functions/officeBookingAuthority.js'
+      - 'functions/officeBookingAuthority.test.js'
+      - 'functions/bookingAuthorityCore.js'
+      - 'functions/bookingAuthorityFirestore.js'
+      - 'functions/bookingAuthoritySchedulingEngine.js'
+      - 'functions/bookingAuthoritySchedulingProvider.js'
+      - 'functions/bookingSchedulingPrimitives.js'
+      - 'functions/bookingCapacityAvailability.js'
+      - 'functions/index.js'
+      - 'functions/package.json'
+      - '.github/workflows/office-booking-authority-deploy.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'functions/officeBookingAuthority.js'
+      - 'functions/officeBookingAuthority.test.js'
+      - 'functions/bookingAuthorityCore.js'
+      - 'functions/bookingAuthorityFirestore.js'
+      - 'functions/bookingAuthoritySchedulingEngine.js'
+      - 'functions/bookingAuthoritySchedulingProvider.js'
+      - 'functions/bookingSchedulingPrimitives.js'
+      - 'functions/bookingCapacityAvailability.js'
+      - 'functions/index.js'
+      - 'functions/package.json'
+      - '.github/workflows/office-booking-authority-deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: office-booking-authority-production
+  cancel-in-progress: false
+
+jobs:
+  validate-office-booking-authority:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Validate Office Booking Authority boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check functions/index.js
+          node --check functions/officeBookingAuthority.js
+          node --check functions/bookingAuthorityCore.js
+          node --check functions/bookingAuthorityFirestore.js
+          node --check functions/bookingAuthoritySchedulingEngine.js
+          node --check functions/bookingAuthoritySchedulingProvider.js
+          node --test functions/officeBookingAuthority.test.js
+          node - <<'NODE'
+          const mod = require('./functions/index');
+          if (typeof mod.officeBookingAuthority !== 'function') {
+            throw new Error('officeBookingAuthority export missing from functions/index.js');
+          }
+          NODE
+
+  deploy-office-booking-authority:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate-office-booking-authority
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Authenticate Firebase deployment service account
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Resolve DEMAC runtime identity
+        id: config
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_FUNCTION='generateProfessionalCustomerReport'
+          if ! gcloud functions describe "$SOURCE_FUNCTION" --project=demac-corporation --gen2 --region=us-central1 --format='value(name)' >/dev/null 2>&1; then
+            SOURCE_FUNCTION='wacliWebhook'
+          fi
+          RUN_SA="$(gcloud functions describe "$SOURCE_FUNCTION" --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.serviceAccountEmail)')"
+          if [ -z "$RUN_SA" ]; then
+            echo '::error::Could not resolve the DEMAC Cloud Functions runtime service account.'
+            exit 1
+          fi
+          echo "run_service_account=${RUN_SA}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy Office Booking Authority only
+        shell: bash
+        env:
+          RUN_SERVICE_ACCOUNT: ${{ steps.config.outputs.run_service_account }}
+        run: |
+          set -euo pipefail
+          gcloud functions deploy officeBookingAuthority \
+            --project=demac-corporation \
+            --gen2 \
+            --region=us-central1 \
+            --runtime=nodejs22 \
+            --source=functions \
+            --entry-point=officeBookingAuthority \
+            --memory=256Mi \
+            --timeout=60s \
+            --run-service-account="$RUN_SERVICE_ACCOUNT" \
+            --set-env-vars='FIREBASE_CONFIG={"projectId":"demac-corporation","storageBucket":"demac-corporation.firebasestorage.app"}' \
+            --trigger-http \
+            --allow-unauthenticated \
+            --quiet
+
+      - name: Verify deployed Office Booking Authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          name='officeBookingAuthority'
+          endpoint="https://us-central1-demac-corporation.cloudfunctions.net/${name}"
+          state="$(gcloud functions describe "$name" --project=demac-corporation --gen2 --region=us-central1 --format='value(state)')"
+          if [ "$state" != 'ACTIVE' ]; then
+            echo "::error::${name} state is ${state:-unknown}."
+            exit 1
+          fi
+
+          cors_headers="$(mktemp)"
+          cors_status="$(curl --silent --show-error --output /dev/null --dump-header "$cors_headers" --write-out '%{http_code}' \
+            --request OPTIONS "$endpoint" \
+            --header 'Origin: https://demac-corporation.vercel.app' \
+            --header 'Access-Control-Request-Method: POST' \
+            --header 'Access-Control-Request-Headers: authorization,content-type')"
+          if [ "$cors_status" != '204' ]; then
+            echo "::error::Office Booking Authority CORS preflight returned HTTP ${cors_status}; expected 204."
+            cat "$cors_headers"
+            rm -f "$cors_headers"
+            exit 1
+          fi
+          rm -f "$cors_headers"
+
+          body="$(mktemp)"
+          status="$(curl --silent --show-error --output "$body" --write-out '%{http_code}' \
+            --request POST "$endpoint" \
+            --header 'Content-Type: application/json' \
+            --data '{"action":"list_presets","data":{}}')"
+          if [ "$status" != '401' ]; then
+            echo "::error::${name} returned HTTP ${status}; expected 401 without Firebase authentication."
+            cat "$body"
+            rm -f "$body"
+            exit 1
+          fi
+          node - "$body" <<'NODE'
+          const fs = require('node:fs');
+          const payload = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (payload?.error?.code !== 'unauthenticated') {
+            throw new Error(`Unexpected unauthenticated payload: ${JSON.stringify(payload)}`);
+          }
+          console.log('officeBookingAuthority: ACTIVE and Firebase-auth protected');
+          NODE
+          rm -f "$body"
