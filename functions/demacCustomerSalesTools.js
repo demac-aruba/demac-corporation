@@ -43,8 +43,9 @@ function matchesProductQuery(item, query) {
   const normalizedQuery = normalizeText(query);
   if (!normalizedQuery) return true;
   const haystack = productSearchText(item);
+  const compactHaystack = haystack.replace(/\s+/g, "");
   const tokens = normalizedQuery.split(" ").filter(Boolean);
-  return tokens.every((token) => haystack.includes(token));
+  return tokens.every((token) => haystack.includes(token) || compactHaystack.includes(token));
 }
 
 function customerProduct(item = {}) {
