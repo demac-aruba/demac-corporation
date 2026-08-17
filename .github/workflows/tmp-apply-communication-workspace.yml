@@ -22,6 +22,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tools/tmp-apply-communication-workspace.py')
+          text = path.read_text()
+          text = text.replace('"          const state =', '"            const state =')
+          text = text.replace('\\n          const owner =', '\\n            const owner =')
+          path.write_text(text)
+          PY
           python tools/tmp-apply-communication-workspace.py
           git diff --check
       - name: Commit final branch state
