@@ -10,6 +10,7 @@ const execFileAsync = promisify(execFile);
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || '127.0.0.1';
 const WACLI_BINARY = process.env.WACLI_BINARY || 'wacli';
+const WACLI_STORE_DIR = String(process.env.WACLI_STORE_DIR || '/var/lib/demac-wacli-test').trim();
 const FFMPEG_BINARY = process.env.FFMPEG_BINARY || 'ffmpeg';
 const BRIDGE_TOKEN = String(process.env.BRIDGE_TOKEN || '').trim();
 const WEBHOOK_SECRET = String(process.env.WACLI_WEBHOOK_SECRET || '').trim();
@@ -22,6 +23,8 @@ const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
 const SEND_TIMEOUT_MS = Number(process.env.WACLI_SEND_TIMEOUT_MS || 60000);
 const FORWARD_TIMEOUT_MS = Number(process.env.ERP_FORWARD_TIMEOUT_MS || 20000);
 const RETRY_INTERVAL_MS = Number(process.env.WEBHOOK_RETRY_INTERVAL_MS || 5000);
+const MEDIA_DOWNLOAD_ATTEMPTS = Math.max(1, Number(process.env.WACLI_MEDIA_DOWNLOAD_ATTEMPTS || 4));
+const MEDIA_DOWNLOAD_RETRY_MS = Math.max(250, Number(process.env.WACLI_MEDIA_DOWNLOAD_RETRY_MS || 1500));
 const IDENTITY_CACHE_MS = 12 * 60 * 60 * 1000;
 const AVATAR_CACHE_MS = 24 * 60 * 60 * 1000;
 
@@ -30,6 +33,8 @@ let lastForwardSuccessAt = null;
 let lastForwardError = null;
 let lastSendSuccessAt = null;
 let lastSendError = null;
+let lastMediaSuccessAt = null;
+let lastMediaError = null;
 let forwarding = false;
 const identityCache = new Map();
 const avatarCache = new Map();
@@ -38,6 +43,7 @@ function requireConfiguration() {
   const missing = [];
   if (!BRIDGE_TOKEN) missing.push('BRIDGE_TOKEN');
   if (!WEBHOOK_SECRET) missing.push('WACLI_WEBHOOK_SECRET');
+  if (!WACLI_STORE_DIR) missing.push('WACLI_STORE_DIR');
   if (missing.length) throw new Error(`Missing bridge configuration: ${missing.join(', ')}`);
 }
 
@@ -50,7 +56,6 @@ function safeEqual(left, right) {
 function wacliSignatureFor(rawBody) {
   return `sha256=${crypto.createHmac('sha256', WEBHOOK_SECRET).update(rawBody).digest('hex')}`;
 }
-
 
 function authorized(request) {
   const header = String(request.headers.authorization || '');
@@ -65,6 +70,10 @@ function json(response, status, payload) {
     'Cache-Control': 'no-store',
   });
   response.end(body);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function digitsOnly(value) { return String(value || '').replace(/\D/g, ''); }
@@ -105,7 +114,7 @@ function parseJsonOutput(stdout) {
 }
 
 async function runWacliJson(args, options = {}) {
-  const prefix = ['--json'];
+  const prefix = ['--store', WACLI_STORE_DIR, '--json'];
   if (options.readOnly) prefix.push('--read-only');
   const { stdout } = await execFileAsync(WACLI_BINARY, [...prefix, ...args], {
     timeout: options.timeout || SEND_TIMEOUT_MS,
@@ -401,16 +410,31 @@ async function handleMedia(request, response) {
 
     await fs.mkdir(TEMP_DIR, { recursive: true, mode: 0o700 });
     output = path.join(TEMP_DIR, `pull-${safeName(messageId, crypto.randomUUID())}`);
-    await execFileAsync(WACLI_BINARY, ['--read-only', 'media', 'download', '--chat', chat, '--id', messageId, '--output', output], {
-      timeout: 60000,
-      maxBuffer: 4 * 1024 * 1024,
-      env: process.env,
-      windowsHide: true,
-    });
+    let downloadError = null;
+    for (let attempt = 1; attempt <= MEDIA_DOWNLOAD_ATTEMPTS; attempt += 1) {
+      await fs.unlink(output).catch(() => undefined);
+      try {
+        await execFileAsync(WACLI_BINARY, ['--store', WACLI_STORE_DIR, '--read-only', 'media', 'download', '--chat', chat, '--id', messageId, '--output', output], {
+          timeout: 60000,
+          maxBuffer: 4 * 1024 * 1024,
+          env: process.env,
+          windowsHide: true,
+        });
+        downloadError = null;
+        break;
+      } catch (error) {
+        downloadError = error;
+        if (attempt < MEDIA_DOWNLOAD_ATTEMPTS) await sleep(MEDIA_DOWNLOAD_RETRY_MS * attempt);
+      }
+    }
+    if (downloadError) throw downloadError;
+
     const buffer = await fs.readFile(output);
     if (!buffer.length) throw new Error('Downloaded media is empty.');
     if (buffer.length > MAX_MEDIA_BYTES) throw new Error('WhatsApp media exceeds bridge download limit.');
     const contentType = String(input.mimeType || 'application/octet-stream').trim() || 'application/octet-stream';
+    lastMediaSuccessAt = new Date().toISOString();
+    lastMediaError = null;
     response.writeHead(200, {
       'Content-Type': contentType,
       'Content-Length': String(buffer.length),
@@ -418,6 +442,7 @@ async function handleMedia(request, response) {
     });
     response.end(buffer);
   } catch (error) {
+    lastMediaError = (error instanceof Error ? error.message : String(error)).split('\n')[0].slice(0, 240);
     if (!response.headersSent) json(response, error?.statusCode || 502, { error: error instanceof Error ? error.message : String(error) });
   } finally {
     if (output) await fs.unlink(output).catch(() => undefined);
@@ -475,6 +500,7 @@ async function handleHealth(response) {
     service: 'demac-whatsapp-wacli-bridge-v2',
     bridgeAuth: 'bearer-v1',
     erpWebhookUrl: ERP_WEBHOOK_URL,
+    wacliStoreDir: WACLI_STORE_DIR,
     startedAt,
     hostname: os.hostname(),
     pendingWebhookEvents: await pendingWebhookCount(),
@@ -484,6 +510,8 @@ async function handleHealth(response) {
     lastForwardError,
     lastSendSuccessAt,
     lastSendError,
+    lastMediaSuccessAt,
+    lastMediaError,
   });
 }
 
