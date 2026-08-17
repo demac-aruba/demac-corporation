@@ -67,6 +67,12 @@ function wacliSignatureFor(rawBody) {
   return `sha256=${crypto.createHmac('sha256', WEBHOOK_SECRET).update(rawBody).digest('hex')}`;
 }
 
+function shouldIgnoreInboundPayload(payload) {
+  if (payload?.EventType) return false;
+  const chat = String(payload?.Chat || '').trim().toLowerCase();
+  return chat === 'status@broadcast';
+}
+
 function json(response, status, payload) {
   const body = JSON.stringify(payload);
   response.writeHead(status, {
@@ -463,6 +469,12 @@ async function forwardRecord(filePath) {
   let rawBody = Buffer.from(record.bodyBase64, 'base64');
   let payload = JSON.parse(rawBody.toString('utf8'));
 
+  if (shouldIgnoreInboundPayload(payload)) {
+    await fs.unlink(filePath);
+    lastForwardError = null;
+    return true;
+  }
+
   if (!payload.EventType && payload.Media && !(payload.Media.mediaUrl || payload.Media.url)) {
     payload = await uploadInboundMedia(payload);
     rawBody = Buffer.from(JSON.stringify(payload));
@@ -621,6 +633,10 @@ async function handleWacliEvent(request, response) {
     }
 
     const original = JSON.parse(rawBody.toString('utf8'));
+    if (shouldIgnoreInboundPayload(original)) {
+      json(response, 202, { accepted: true, ignored: true, reason: 'status-broadcast' });
+      return;
+    }
     const enriched = await enrichIncomingPayload(original);
     const enrichedRaw = Buffer.from(JSON.stringify(enriched));
     await persistWebhookEvent(enrichedRaw);
