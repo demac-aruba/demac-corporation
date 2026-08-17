@@ -1,0 +1,62 @@
+name: Temporary outbound ACK verification
+
+on:
+  push:
+    branches:
+      - diag/outbound-ack-20260817
+    paths:
+      - .github/workflows/tmp-verify-outbound-ack.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      DO_HOST: 159.223.160.239
+      DO_USER: demac-deploy
+    steps:
+      - name: Configure restricted SSH
+        env:
+          DO_SSH_KEY_B64: ${{ secrets.DO_SSH_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$HOME/.ssh"
+          printf '%s' "$DO_SSH_KEY_B64" | base64 --decode > "$HOME/.ssh/id_ed25519"
+          chmod 0600 "$HOME/.ssh/id_ed25519"
+          ssh-keygen -y -f "$HOME/.ssh/id_ed25519" >/dev/null
+          ssh-keyscan -T 10 -H "$DO_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 0600 "$HOME/.ssh/known_hosts"
+      - name: Read bridge health only
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes "$DO_USER@$DO_HOST" "curl -fsS http://127.0.0.1:8787/health" > /tmp/health.json
+          python3 - <<'PY'
+          import json
+          with open('/tmp/health.json','r',encoding='utf-8') as f:
+              h=json.load(f)
+          keys=[
+              'ok','connectorMode','pendingWebhookEvents','pendingOutboundAcks',
+              'lastForwardError','lastOutboundPollAt','lastOutboundAckAt','lastOutboundError',
+              'lastSendSuccessAt','lastSendError'
+          ]
+          for k in keys:
+              print(f"{k}={h.get(k)}")
+          if h.get('ok') is not True:
+              raise SystemExit('bridge health not ok')
+          if h.get('pendingOutboundAcks') not in (0, None):
+              raise SystemExit('outbound ACKs still pending')
+          if h.get('lastOutboundError'):
+              raise SystemExit('outbound pipeline reports an error')
+          if h.get('lastSendError'):
+              raise SystemExit('wacli send reports an error')
+          if not h.get('lastSendSuccessAt'):
+              raise SystemExit('no successful outbound send recorded')
+          if not h.get('lastOutboundAckAt'):
+              raise SystemExit('no outbound ACK recorded')
+          print('OUTBOUND_TEXT_ACK_VERIFIED')
+          PY
+      - name: Remove runner SSH key
+        if: always()
+        run: rm -f "$HOME/.ssh/id_ed25519"
