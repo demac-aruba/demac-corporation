@@ -21,6 +21,7 @@ const OUTBOUND_POLL_URL = `${FIREBASE_FUNCTIONS_BASE}/wacliOutboundPoll`;
 const OUTBOUND_ACK_URL = `${FIREBASE_FUNCTIONS_BASE}/wacliOutboundAck`;
 const STATE_DIR = process.env.BRIDGE_STATE_DIR || '/var/lib/demac-whatsapp-bridge';
 const OUTBOX_DIR = path.join(STATE_DIR, 'webhook-outbox');
+const DEAD_LETTER_DIR = path.join(STATE_DIR, 'webhook-dead-letter');
 const OUTBOUND_ACK_DIR = path.join(STATE_DIR, 'outbound-acks');
 const TEMP_DIR = path.join(STATE_DIR, 'media-temp');
 const MAX_BODY_BYTES = 256 * 1024;
@@ -28,6 +29,7 @@ const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
 const SEND_TIMEOUT_MS = Number(process.env.WACLI_SEND_TIMEOUT_MS || 60000);
 const FORWARD_TIMEOUT_MS = Number(process.env.ERP_FORWARD_TIMEOUT_MS || 20000);
 const RETRY_INTERVAL_MS = Number(process.env.WEBHOOK_RETRY_INTERVAL_MS || 5000);
+const MAX_WEBHOOK_ATTEMPTS = Math.max(2, Number(process.env.WEBHOOK_MAX_ATTEMPTS || 6));
 const OUTBOUND_POLL_INTERVAL_MS = Math.max(1000, Number(process.env.WACLI_OUTBOUND_POLL_INTERVAL_MS || 2000));
 const MEDIA_DOWNLOAD_ATTEMPTS = Math.max(1, Number(process.env.WACLI_MEDIA_DOWNLOAD_ATTEMPTS || 4));
 const MEDIA_DOWNLOAD_RETRY_MS = Math.max(250, Number(process.env.WACLI_MEDIA_DOWNLOAD_RETRY_MS || 1500));
@@ -37,6 +39,8 @@ const AVATAR_CACHE_MS = 24 * 60 * 60 * 1000;
 let startedAt = new Date().toISOString();
 let lastForwardSuccessAt = null;
 let lastForwardError = null;
+let lastDeadLetterAt = null;
+let lastDeadLetterError = null;
 let lastSendSuccessAt = null;
 let lastSendError = null;
 let lastMediaSuccessAt = null;
@@ -380,6 +384,7 @@ async function persistWebhookEvent(rawBody) {
   const finalPath = path.join(OUTBOX_DIR, filename);
   await atomicWriteJson(finalPath, {
     receivedAt: new Date().toISOString(),
+    attempts: 0,
     bodyBase64: rawBody.toString('base64'),
   });
   return finalPath;
@@ -387,6 +392,44 @@ async function persistWebhookEvent(rawBody) {
 
 async function rewriteWebhookRecord(filePath, record, rawBody) {
   await atomicWriteJson(filePath, { ...record, bodyBase64: rawBody.toString('base64') });
+}
+
+function compactError(error, maxLength = 500) {
+  return (error instanceof Error ? error.message : String(error)).split('\n')[0].slice(0, maxLength);
+}
+
+function transientWebhookError(error) {
+  if (error?.transient === true) return true;
+  const status = Number(error?.statusCode || 0);
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+async function recordWebhookFailure(filePath, error) {
+  const record = JSON.parse(await fs.readFile(filePath, 'utf8'));
+  const attempts = Math.max(0, Number(record.attempts || 0)) + 1;
+  const errorMessage = compactError(error);
+  const updated = {
+    ...record,
+    attempts,
+    lastAttemptAt: new Date().toISOString(),
+    lastError: errorMessage,
+  };
+
+  if (transientWebhookError(error) || attempts < MAX_WEBHOOK_ATTEMPTS) {
+    await atomicWriteJson(filePath, updated);
+    return 'retry';
+  }
+
+  await fs.mkdir(DEAD_LETTER_DIR, { recursive: true, mode: 0o700 });
+  const deadLetterPath = path.join(DEAD_LETTER_DIR, path.basename(filePath));
+  await atomicWriteJson(deadLetterPath, {
+    ...updated,
+    deadLetteredAt: new Date().toISOString(),
+  });
+  await fs.unlink(filePath);
+  lastDeadLetterAt = new Date().toISOString();
+  lastDeadLetterError = errorMessage;
+  return 'quarantined';
 }
 
 function mediaField(media, ...names) {
@@ -452,18 +495,27 @@ async function uploadInboundMedia(payload) {
     if (fileName) endpoint.searchParams.set('fileName', fileName);
     if (mediaType) endpoint.searchParams.set('mediaType', mediaType);
 
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${BRIDGE_TOKEN}`,
-        'Content-Type': mimeType || 'application/octet-stream',
-      },
-      body: bytes,
-      signal: AbortSignal.timeout(120000),
-    });
+    let response;
+    try {
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${BRIDGE_TOKEN}`,
+          'Content-Type': mimeType || 'application/octet-stream',
+        },
+        body: bytes,
+        signal: AbortSignal.timeout(120000),
+      });
+    } catch (error) {
+      error.transient = true;
+      throw error;
+    }
     const body = await response.json().catch(() => ({}));
     if (!response.ok || body?.ok !== true || !body?.mediaUrl) {
-      throw new Error(body?.error || `Firebase media ingest returned HTTP ${response.status}`);
+      const error = new Error(body?.error || `Firebase media ingest returned HTTP ${response.status}`);
+      error.statusCode = response.status;
+      error.transient = response.status === 408 || response.status === 429 || response.status >= 500;
+      throw error;
     }
 
     const resolvedMime = String(body.mediaMimeType || mimeType || 'application/octet-stream');
@@ -483,7 +535,7 @@ async function uploadInboundMedia(payload) {
       },
     };
   } catch (error) {
-    lastMediaError = (error instanceof Error ? error.message : String(error)).split('\n')[0].slice(0, 300);
+    lastMediaError = compactError(error, 300);
     throw error;
   }
 }
@@ -505,17 +557,26 @@ async function forwardRecord(filePath) {
     await rewriteWebhookRecord(filePath, record, rawBody);
   }
 
-  const response = await fetch(ERP_WEBHOOK_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${BRIDGE_TOKEN}`,
-    },
-    body: rawBody,
-    signal: AbortSignal.timeout(FORWARD_TIMEOUT_MS),
-  });
+  let response;
+  try {
+    response = await fetch(ERP_WEBHOOK_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${BRIDGE_TOKEN}`,
+      },
+      body: rawBody,
+      signal: AbortSignal.timeout(FORWARD_TIMEOUT_MS),
+    });
+  } catch (error) {
+    error.transient = true;
+    throw error;
+  }
   if (!response.ok) {
-    throw new Error(`ERP webhook returned HTTP ${response.status}: ${(await response.text().catch(() => '')).slice(0, 500)}`);
+    const error = new Error(`ERP webhook returned HTTP ${response.status}: ${(await response.text().catch(() => '')).slice(0, 500)}`);
+    error.statusCode = response.status;
+    error.transient = response.status === 408 || response.status === 429 || response.status >= 500;
+    throw error;
   }
   await fs.unlink(filePath);
   lastForwardSuccessAt = new Date().toISOString();
@@ -530,10 +591,17 @@ async function flushWebhookOutbox() {
     await fs.mkdir(OUTBOX_DIR, { recursive: true, mode: 0o700 });
     const files = (await fs.readdir(OUTBOX_DIR)).filter((name) => name.endsWith('.json')).sort().slice(0, 100);
     for (const filename of files) {
+      const filePath = path.join(OUTBOX_DIR, filename);
       try {
-        await forwardRecord(path.join(OUTBOX_DIR, filename));
+        await forwardRecord(filePath);
       } catch (error) {
-        lastForwardError = error instanceof Error ? error.message : String(error);
+        const errorMessage = compactError(error);
+        lastForwardError = errorMessage;
+        const outcome = await recordWebhookFailure(filePath, error);
+        if (outcome === 'quarantined') {
+          lastForwardError = null;
+          continue;
+        }
         break;
       }
     }
@@ -542,20 +610,24 @@ async function flushWebhookOutbox() {
   }
 }
 
-async function pendingWebhookCount() {
+async function pendingJsonCount(directory) {
   try {
-    return (await fs.readdir(OUTBOX_DIR)).filter((name) => name.endsWith('.json')).length;
+    return (await fs.readdir(directory)).filter((name) => name.endsWith('.json')).length;
   } catch {
     return 0;
   }
 }
 
+async function pendingWebhookCount() {
+  return pendingJsonCount(OUTBOX_DIR);
+}
+
+async function pendingDeadLetterCount() {
+  return pendingJsonCount(DEAD_LETTER_DIR);
+}
+
 async function pendingOutboundAckCount() {
-  try {
-    return (await fs.readdir(OUTBOUND_ACK_DIR)).filter((name) => name.endsWith('.json')).length;
-  } catch {
-    return 0;
-  }
+  return pendingJsonCount(OUTBOUND_ACK_DIR);
 }
 
 async function persistOutboundAck(payload) {
@@ -641,7 +713,7 @@ async function processOutboundCycle() {
     await persistOutboundAck(ack);
     await flushOutboundAcks();
   } catch (error) {
-    lastOutboundError = (error instanceof Error ? error.message : String(error)).split('\n')[0].slice(0, 400);
+    lastOutboundError = compactError(error, 400);
   } finally {
     outboundPolling = false;
   }
@@ -684,10 +756,13 @@ async function handleHealth(response) {
     startedAt,
     hostname: os.hostname(),
     pendingWebhookEvents: await pendingWebhookCount(),
+    pendingDeadLetterEvents: await pendingDeadLetterCount(),
     identityCache: identityCache.size,
     avatarCache: avatarCache.size,
     lastForwardSuccessAt,
     lastForwardError,
+    lastDeadLetterAt,
+    lastDeadLetterError,
     lastSendSuccessAt,
     lastSendError,
     lastMediaSuccessAt,
@@ -701,6 +776,7 @@ async function handleHealth(response) {
 
 requireConfiguration();
 await fs.mkdir(OUTBOX_DIR, { recursive: true, mode: 0o700 });
+await fs.mkdir(DEAD_LETTER_DIR, { recursive: true, mode: 0o700 });
 await fs.mkdir(OUTBOUND_ACK_DIR, { recursive: true, mode: 0o700 });
 await fs.mkdir(TEMP_DIR, { recursive: true, mode: 0o700 });
 
