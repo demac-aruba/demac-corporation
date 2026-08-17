@@ -1,5 +1,6 @@
 const core = require("./index");
 const wacliGateway = require("./whatsappWacliGateway");
+const wacliOutboundMediaUpload = require("./wacliOutboundMediaUpload");
 const customerAgentCommunication = require("./demacCustomerAgentCommunication");
 const appointmentNotifications = require("./appointmentNotifications");
 const userManagement = require("./userManagement");
@@ -18,6 +19,7 @@ const router = require("./whatsappCopilotRouter");
 module.exports = {
   ...core,
   ...wacliGateway,
+  ...wacliOutboundMediaUpload,
   ...customerAgentCommunication,
   ...appointmentNotifications,
   ...userManagement,
