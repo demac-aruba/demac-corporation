@@ -11,16 +11,6 @@ const storage = getStorage();
 const wacliBridgeUrl = defineSecret("WACLI_BRIDGE_URL");
 const wacliBridgeToken = defineSecret("WACLI_BRIDGE_TOKEN");
 
-const BRIDGE_PUBLIC_KEY_DER_BASE64 = "MCowBQYDK2VwAyEAe01shOc9JLdWeX8OwYyzA3Mw9ckn5fg1llLtu4QtJX0=";
-const BRIDGE_PUBLIC_KEY = crypto.createPublicKey({
-  key: Buffer.from(BRIDGE_PUBLIC_KEY_DER_BASE64, "base64"),
-  format: "der",
-  type: "spki",
-});
-const BRIDGE_PUBLIC_KEY_FINGERPRINT = crypto
-  .createHash("sha256")
-  .update(Buffer.from(BRIDGE_PUBLIC_KEY_DER_BASE64, "base64"))
-  .digest("hex");
 
 const MAX_RECENT_MESSAGES = 120;
 const OPERATOR_STALE_MS = 5 * 60 * 1000;
@@ -62,53 +52,16 @@ function timestampMillis(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function inspectBridgeSignature(request) {
-  const provided = String(request.get("x-demac-bridge-signature") || "").trim();
-  const rawValue = request.rawBody;
-  const rawBody = Buffer.isBuffer(rawValue)
-    ? rawValue
-    : rawValue instanceof Uint8Array
-      ? Buffer.from(rawValue.buffer, rawValue.byteOffset, rawValue.byteLength)
-      : null;
-  let signature = null;
-  try {
-    signature = provided.startsWith("ed25519=")
-      ? Buffer.from(provided.slice("ed25519=".length), "base64")
-      : null;
-  } catch {
-    signature = null;
-  }
+function safeSecretEqual(left, right) {
+  const first = Buffer.from(String(left || ""));
+  const second = Buffer.from(String(right || ""));
+  return first.length === second.length && first.length > 0 && crypto.timingSafeEqual(first, second);
+}
 
-  const rawValid = Boolean(
-    rawBody &&
-    signature?.length === 64 &&
-    crypto.verify(null, rawBody, BRIDGE_PUBLIC_KEY, signature)
-  );
-  let parsedBody = null;
-  let parsedValid = false;
-  try {
-    parsedBody = Buffer.from(JSON.stringify(request.body ?? {}));
-    parsedValid = Boolean(
-      signature?.length === 64 &&
-      crypto.verify(null, parsedBody, BRIDGE_PUBLIC_KEY, signature)
-    );
-  } catch {
-    parsedBody = null;
-  }
-
-  return {
-    valid: rawValid,
-    header: Boolean(provided),
-    scheme: provided.includes("=") ? provided.slice(0, provided.indexOf("=")) : null,
-    sigBytes: signature?.length ?? null,
-    rawAvailable: Boolean(rawBody),
-    rawBytes: rawBody?.length ?? null,
-    rawSha256: rawBody ? crypto.createHash("sha256").update(rawBody).digest("hex") : null,
-    parsedBytes: parsedBody?.length ?? null,
-    parsedSha256: parsedBody ? crypto.createHash("sha256").update(parsedBody).digest("hex") : null,
-    parsedValid,
-    keyFingerprint: BRIDGE_PUBLIC_KEY_FINGERPRINT,
-  };
+function authorizedBridgeRequest(request) {
+  const header = String(request.get("authorization") || "");
+  if (!header.startsWith("Bearer ")) return false;
+  return safeSecretEqual(header.slice(7).trim(), String(wacliBridgeToken.value() || "").trim());
 }
 
 function inferQueue(text) {
@@ -446,26 +399,11 @@ exports.wacliWebhook = onRequest(
       response.status(405).send("Method not allowed");
       return;
     }
-    const bridgeSignature = inspectBridgeSignature(request);
-  if (!bridgeSignature.valid) {
-    logger.warn("Rejected DEMAC bridge webhook with invalid Ed25519 signature.", bridgeSignature);
-    response.status(401).json({
-      error: "Invalid signature",
-      diagnostics: {
-        header: bridgeSignature.header,
-        scheme: bridgeSignature.scheme,
-        sigBytes: bridgeSignature.sigBytes,
-        rawAvailable: bridgeSignature.rawAvailable,
-        rawBytes: bridgeSignature.rawBytes,
-        rawSha256: bridgeSignature.rawSha256,
-        parsedBytes: bridgeSignature.parsedBytes,
-        parsedSha256: bridgeSignature.parsedSha256,
-        parsedValid: bridgeSignature.parsedValid,
-        keyFingerprint: bridgeSignature.keyFingerprint,
-      },
-    });
-    return;
-  }
+    if (!authorizedBridgeRequest(request)) {
+      logger.warn("Rejected DEMAC bridge webhook with invalid bearer token.");
+      response.status(401).json({ error: "Unauthorized" });
+      return;
+    }
 
     const payload = request.body ?? {};
     const eventType = String(payload.EventType || "message");
@@ -566,7 +504,7 @@ exports.wacliWebhook = onRequest(
         source: "wacli",
         eventType,
         processed: true,
-        auth: "ed25519-v1",
+        auth: "bridge-bearer-v1",
         receivedAt: FieldValue.serverTimestamp(),
       });
       response.status(200).json({ ok: true });

@@ -13,11 +13,10 @@ const WACLI_BINARY = process.env.WACLI_BINARY || 'wacli';
 const FFMPEG_BINARY = process.env.FFMPEG_BINARY || 'ffmpeg';
 const BRIDGE_TOKEN = String(process.env.BRIDGE_TOKEN || '').trim();
 const WEBHOOK_SECRET = String(process.env.WACLI_WEBHOOK_SECRET || '').trim();
-const ERP_WEBHOOK_URL = String(process.env.ERP_WEBHOOK_URL || '').trim();
+const ERP_WEBHOOK_URL = 'https://us-central1-demac-corporation.cloudfunctions.net/wacliWebhook';
 const STATE_DIR = process.env.BRIDGE_STATE_DIR || '/var/lib/demac-whatsapp-bridge';
 const OUTBOX_DIR = path.join(STATE_DIR, 'webhook-outbox');
 const TEMP_DIR = path.join(STATE_DIR, 'media-temp');
-const BRIDGE_SIGNING_KEY_PATH = path.join(STATE_DIR, 'bridge-signing-ed25519-private.pem');
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
 const SEND_TIMEOUT_MS = Number(process.env.WACLI_SEND_TIMEOUT_MS || 60000);
@@ -32,8 +31,6 @@ let lastForwardError = null;
 let lastSendSuccessAt = null;
 let lastSendError = null;
 let forwarding = false;
-let bridgeSigningPrivateKey = null;
-let bridgeSigningPublicKeyDer = '';
 const identityCache = new Map();
 const avatarCache = new Map();
 
@@ -41,7 +38,6 @@ function requireConfiguration() {
   const missing = [];
   if (!BRIDGE_TOKEN) missing.push('BRIDGE_TOKEN');
   if (!WEBHOOK_SECRET) missing.push('WACLI_WEBHOOK_SECRET');
-  if (!/^https:\/\//i.test(ERP_WEBHOOK_URL)) missing.push('ERP_WEBHOOK_URL (HTTPS)');
   if (missing.length) throw new Error(`Missing bridge configuration: ${missing.join(', ')}`);
 }
 
@@ -55,28 +51,6 @@ function wacliSignatureFor(rawBody) {
   return `sha256=${crypto.createHmac('sha256', WEBHOOK_SECRET).update(rawBody).digest('hex')}`;
 }
 
-function bridgeSignatureFor(rawBody) {
-  if (!bridgeSigningPrivateKey) throw new Error('Bridge signing identity is not initialized.');
-  return `ed25519=${crypto.sign(null, rawBody, bridgeSigningPrivateKey).toString('base64')}`;
-}
-
-async function ensureBridgeSigningIdentity() {
-  await fs.mkdir(STATE_DIR, { recursive: true, mode: 0o700 });
-  let privatePem = '';
-  try {
-    privatePem = await fs.readFile(BRIDGE_SIGNING_KEY_PATH, 'utf8');
-  } catch (error) {
-    if (error?.code !== 'ENOENT') throw error;
-    const pair = crypto.generateKeyPairSync('ed25519');
-    privatePem = pair.privateKey.export({ type: 'pkcs8', format: 'pem' });
-    const temporary = `${BRIDGE_SIGNING_KEY_PATH}.${crypto.randomUUID()}.tmp`;
-    await fs.writeFile(temporary, privatePem, { mode: 0o600 });
-    await fs.rename(temporary, BRIDGE_SIGNING_KEY_PATH);
-  }
-  bridgeSigningPrivateKey = crypto.createPrivateKey(privatePem);
-  const publicKey = crypto.createPublicKey(bridgeSigningPrivateKey);
-  bridgeSigningPublicKeyDer = publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
-}
 
 function authorized(request) {
   const header = String(request.headers.authorization || '');
@@ -371,7 +345,7 @@ async function forwardRecord(filePath) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-Demac-Bridge-Signature': bridgeSignatureFor(rawBody),
+      Authorization: `Bearer ${BRIDGE_TOKEN}`,
     },
     body: rawBody,
     signal: AbortSignal.timeout(FORWARD_TIMEOUT_MS),
@@ -496,11 +470,11 @@ async function handleWacliEvent(request, response) {
 }
 
 async function handleHealth(response) {
-  const publicKeyBytes = bridgeSigningPublicKeyDer ? Buffer.from(bridgeSigningPublicKeyDer, 'base64') : Buffer.alloc(0);
   json(response, 200, {
     ok: true,
     service: 'demac-whatsapp-wacli-bridge-v2',
-    bridgeAuth: 'ed25519-v1',
+    bridgeAuth: 'bearer-v1',
+    erpWebhookUrl: ERP_WEBHOOK_URL,
     startedAt,
     hostname: os.hostname(),
     pendingWebhookEvents: await pendingWebhookCount(),
@@ -510,15 +484,10 @@ async function handleHealth(response) {
     lastForwardError,
     lastSendSuccessAt,
     lastSendError,
-    bridgeSigningPublicKey: bridgeSigningPublicKeyDer,
-    bridgeSigningPublicKeyFingerprint: publicKeyBytes.length
-      ? crypto.createHash('sha256').update(publicKeyBytes).digest('hex')
-      : null,
   });
 }
 
 requireConfiguration();
-await ensureBridgeSigningIdentity();
 await fs.mkdir(OUTBOX_DIR, { recursive: true, mode: 0o700 });
 await fs.mkdir(TEMP_DIR, { recursive: true, mode: 0o700 });
 
