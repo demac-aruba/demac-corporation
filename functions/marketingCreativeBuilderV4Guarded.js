@@ -49,6 +49,8 @@ exports.requestMarketingCreativeBuild = onCall({
 });
 
 exports.approveMarketingCreative = v4.approveMarketingCreative;
+// Preserve the production CI contract used by the Marketing Agent workflow.
+exports.__marketingCreativeBuilderV4Test = v4.__marketingCreativeBuilderV4Test;
 
 exports.__marketingCreativeBuilderV4GuardedTest = {
   runUnderlyingV4,
