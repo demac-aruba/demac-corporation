@@ -267,6 +267,34 @@ service cloud.firestore {
       allow delete: if adminOrSupervisor();
     }
 
+    match /commercialProductStock/{productId} {
+      allow read: if activeStaff();
+      allow create: if inventoryRole()
+        && request.resource.data.productId == productId
+        && request.resource.data.onHand is int
+        && request.resource.data.onHand >= 0
+        && request.resource.data.reserved is int
+        && request.resource.data.reserved == 0
+        && request.resource.data.active is bool
+        && request.resource.data.verifiedAt is string
+        && request.resource.data.verifiedById == request.auth.uid
+        && request.resource.data.updatedById == request.auth.uid;
+      allow update: if inventoryRole()
+        && request.resource.data.productId == productId
+        && resource.data.productId == productId
+        && request.resource.data.onHand is int
+        && request.resource.data.onHand >= 0
+        && request.resource.data.reserved is int
+        && request.resource.data.reserved == resource.data.reserved
+        && request.resource.data.reserved >= 0
+        && request.resource.data.reserved <= request.resource.data.onHand
+        && request.resource.data.active is bool
+        && request.resource.data.verifiedAt is string
+        && request.resource.data.verifiedById == request.auth.uid
+        && request.resource.data.updatedById == request.auth.uid;
+      allow delete: if adminOrSupervisor();
+    }
+
     match /staffProfiles/{staffId} {
       allow read: if activeStaff();
       allow create, update: if operationsRole();
