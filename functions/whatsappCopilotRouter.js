@@ -16,14 +16,13 @@ const {
   runAgentTurn,
 } = require("./whatsappCopilotAgentV30");
 
-// Legacy V15 migration guard: openai+erp-conversation-orchestrator-v18
-// This marker prevents the old patch script from rewriting the AI-first router during Firebase predeploy.
-const extensionToken = defineSecret("WHATSAPP_COPILOT_EXTENSION_TOKEN");
+// Transitional access token for the current internal agent endpoint.
+// Keep the deployed secret name until Communication Center becomes the sole caller.
+const agentAccessToken = defineSecret("WHATSAPP_COPILOT_EXTENSION_TOKEN");
 const openAiApiKey = defineSecret("OPENAI_API_KEY");
 
-// Runtime version 18 is intentionally retained so the installed v0.5.0 extension
-// can verify the public endpoint. AI handles language/intent; Booking Core v1 owns
-// the canonical offer -> selection -> booking state used by the ERP.
+// AI handles language/intent; Booking Core v1 owns the current canonical
+// offer -> selection -> booking state until Booking Authority replaces it.
 const RUNTIME = {
   functionName: "whatsappCopilotDraft",
   source: "openai-native-conversation-agent-v31+booking-core-v1+confirmation-guard-v32+erp-tools",
@@ -39,13 +38,11 @@ const FUNCTION_OPTIONS = {
   region: "us-central1",
   memory: "512MiB",
   timeoutSeconds: 90,
-  secrets: [openAiApiKey, extensionToken],
+  secrets: [openAiApiKey, agentAccessToken],
 };
 
-function setCors(request, response) {
-  const origin = String(request.get("origin") || "");
-  response.set("Access-Control-Allow-Origin", origin.startsWith("chrome-extension://") ? origin : "*");
-  response.set("Vary", "Origin");
+function setCors(_request, response) {
+  response.set("Access-Control-Allow-Origin", "*");
   response.set("Access-Control-Allow-Methods", "POST, OPTIONS");
   response.set("Access-Control-Allow-Headers", "Authorization, Content-Type");
   response.set("Access-Control-Max-Age", "3600");
@@ -92,8 +89,8 @@ exports.whatsappCopilotDraft = onRequest(FUNCTION_OPTIONS, async (request, respo
     response.status(405).json({ error: "Method not allowed" });
     return;
   }
-  if (!safeEqual(bearerToken(request), extensionToken.value())) {
-    response.status(401).json({ error: "Token de extensión inválido o ausente." });
+  if (!safeEqual(bearerToken(request), agentAccessToken.value())) {
+    response.status(401).json({ error: "Token de acceso del agente inválido o ausente." });
     return;
   }
 
