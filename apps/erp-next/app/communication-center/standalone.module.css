@@ -11,7 +11,7 @@
 .host{flex:1;min-height:0;overflow:hidden}
 .host>section{height:100%!important;min-height:0!important;padding:12px 14px 14px!important;gap:10px!important;box-sizing:border-box}
 .host>section>div:first-child{display:none!important}
-.host :global([class*="workspace"]){height:100%!important;max-height:none!important;min-height:0!important;grid-template-columns:minmax(300px,335px) minmax(540px,1fr) minmax(300px,330px)!important;gap:10px!important}
+.host>section>div:has(>aside[class*="inboxPanel"]){height:100%!important;max-height:none!important;min-height:0!important;grid-template-columns:minmax(255px,285px) minmax(190px,220px) minmax(520px,1fr) minmax(300px,330px)!important;gap:10px!important}
 .host :global([class*="panel"]){border-radius:16px!important}
 .host :global([class*="inboxHeader"]) strong,.host :global([class*="contextHeader"]) strong{font-size:15px!important}
 .host :global([class*="inboxHeader"]) span,.host :global([class*="contextHeader"]) span{font-size:10.5px!important}
@@ -27,5 +27,6 @@
 .host :global([class*="messageFooter"]){font-size:9px!important}
 .host :global([class*="composer_"]) textarea,.host :global([class~="composer"]) textarea{font-size:13px!important}
 .host :global([class*="context_"]) section,.host :global([class~="context"]) section{font-size:10.5px!important}
-@media(max-width:1450px){.host :global([class*="workspace"]){grid-template-columns:minmax(280px,315px) minmax(500px,1fr) minmax(280px,310px)!important}.host>section{padding:10px 11px 12px!important}}
-@media(max-width:1200px){.host :global([class*="workspace"]){grid-template-columns:minmax(280px,320px) minmax(480px,1fr)!important}.host :global([class*="contextPanel"]){grid-column:1/-1!important;min-height:280px!important}.shell{overflow:auto}.host{overflow:visible}}
+@media(max-width:1450px){.host>section>div:has(>aside[class*="inboxPanel"]){grid-template-columns:minmax(230px,255px) minmax(175px,195px) minmax(430px,1fr) minmax(275px,300px)!important}.host>section{padding:10px 11px 12px!important}}
+@media(max-width:1180px){.host>section>div:has(>aside[class*="inboxPanel"]){grid-template-columns:minmax(230px,260px) minmax(0,1fr) minmax(260px,290px)!important}.shell{overflow:auto}.host{overflow:visible}}
+@media(max-width:860px){.host>section>div:has(>aside[class*="inboxPanel"]){grid-template-columns:1fr!important;height:auto!important}.shell{overflow:auto}.host{overflow:visible}}
