@@ -35,6 +35,7 @@ jobs:
           text = text.replace('"    {detailsVisible ? <aside className={`${styles.panel} ${styles.contextPanel}`}>\\n"', '"      {detailsVisible ? <aside className={`${styles.panel} ${styles.contextPanel}`}>\\n"')
           text = text.replace('"          {([\'overview\', \'properties\', \'equipment\', \'actions\'] as ContextTab[]).map', '"            {([\'overview\', \'properties\', \'equipment\', \'actions\'] as ContextTab[]).map')
           text = text.replace('r"        \\{contextTab === \'properties\'', 'r"          \\{contextTab === \'properties\'')
+          text = text.replace("\\n\\n        \\{contextTab === 'equipment'", "\\n\\n          \\{contextTab === 'equipment'")
           text = text.replace('drawer_anchor = "    </aside> : null}\\n  </div>\\n</section>;\\n}"', 'drawer_anchor = "      </aside> : null}\\n    </div>\\n  </section>;\\n}"')
 
           def indent_block(source, start_marker, end_marker, spaces=2):
