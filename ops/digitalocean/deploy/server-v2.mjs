@@ -215,20 +215,29 @@ function extensionFor(meta) {
 }
 
 async function resolveIdentity(chat, detail) {
-  if (String(chat).endsWith('@s.whatsapp.net')) {
-    return { ResolvedPhone: validPhone(String(chat).split('@')[0]), CanonicalJid: chat, WhatsAppLid: null };
+  const sourceChat = String(chat || '').trim();
+  if (sourceChat.endsWith('@s.whatsapp.net')) {
+    return { ResolvedPhone: validPhone(sourceChat.split('@')[0]), CanonicalJid: sourceChat, WhatsAppLid: null };
   }
-  if (!String(chat).endsWith('@lid')) return {};
-  const cached = identityCache.get(chat);
+  if (!sourceChat.endsWith('@lid')) return {};
+  const cached = identityCache.get(sourceChat);
   if (cached && Date.now() - cached.at < IDENTITY_CACHE_MS) return cached.value;
 
   const strings = collectStrings(detail);
   let canonical = strings.find((entry) => entry.value.endsWith('@s.whatsapp.net') && validPhone(entry.value.split('@')[0]))?.value || '';
   if (!canonical) {
     try {
+      const shown = await runWacliJson(['chats', 'show', '--jid', sourceChat], { readOnly: true, timeout: 15000 });
+      canonical = collectStrings(shown).find((entry) => entry.value.endsWith('@s.whatsapp.net') && validPhone(entry.value.split('@')[0]))?.value || '';
+    } catch {
+      // Fall through to the bounded chat-list compatibility lookup.
+    }
+  }
+  if (!canonical) {
+    try {
       const chats = await runWacliJson(['chats', 'list', '--limit', '2000'], { readOnly: true, timeout: 15000 });
       const rows = Array.isArray(chats) ? chats : Array.isArray(chats?.chats) ? chats.chats : Array.isArray(chats?.items) ? chats.items : [];
-      const match = rows.find((row) => JSON.stringify(row).includes(chat));
+      const match = rows.find((row) => JSON.stringify(row).includes(sourceChat));
       if (match) canonical = collectStrings(match).find((entry) => entry.value.endsWith('@s.whatsapp.net') && validPhone(entry.value.split('@')[0]))?.value || '';
     } catch {
       // Keep the LID unresolved rather than fabricating a phone number.
@@ -237,10 +246,21 @@ async function resolveIdentity(chat, detail) {
   const value = {
     ResolvedPhone: canonical ? validPhone(canonical.split('@')[0]) : null,
     CanonicalJid: canonical || null,
-    WhatsAppLid: chat,
+    WhatsAppLid: sourceChat,
   };
-  identityCache.set(chat, { at: Date.now(), value });
+  if (canonical) identityCache.set(sourceChat, { at: Date.now(), value });
   return value;
+}
+
+async function storageChatForPayload(payload) {
+  const sourceChat = String(payload?.Chat || '').trim();
+  if (!sourceChat.endsWith('@lid')) return sourceChat;
+  const provided = String(payload?.CanonicalJid || '').trim();
+  if (provided.endsWith('@s.whatsapp.net') && validPhone(provided.split('@')[0])) return provided;
+  const resolved = await resolveIdentity(sourceChat, null);
+  const canonical = String(resolved?.CanonicalJid || '').trim();
+  if (canonical.endsWith('@s.whatsapp.net') && validPhone(canonical.split('@')[0])) return canonical;
+  throw new Error('Unable to resolve WhatsApp LID to its canonical store JID.');
 }
 
 async function resolveProfilePicture(chat) {
@@ -265,19 +285,22 @@ async function enrichIncomingPayload(payload) {
   const id = String(payload.ID || '');
   if (!chat || !id) return payload;
 
+  let identity = await resolveIdentity(chat, null).catch(() => ({}));
+  let storageChat = String(identity?.CanonicalJid || chat).trim();
   let detail = null;
   try {
-    detail = await runWacliJson(['messages', 'show', '--chat', chat, '--id', id], { readOnly: true, timeout: 15000 });
+    detail = await runWacliJson(['messages', 'show', '--chat', storageChat, '--id', id], { readOnly: true, timeout: 15000 });
   } catch {
     // Text delivery must never depend on optional enrichment.
   }
 
-  const identity = await resolveIdentity(chat, detail).catch(() => ({}));
+  if (!identity?.CanonicalJid && detail) identity = await resolveIdentity(chat, detail).catch(() => identity);
+  if (identity?.CanonicalJid) storageChat = String(identity.CanonicalJid);
   const enriched = { ...payload, ...identity };
   const kind = detail ? mediaKindFromDetail(detail) : null;
   if (kind) enriched.Media = extractMediaMeta(detail, kind);
 
-  const profilePicture = await resolveProfilePicture(chat).catch(() => null);
+  const profilePicture = await resolveProfilePicture(storageChat).catch(() => null);
   if (profilePicture) enriched.ProfilePicture = profilePicture;
   return enriched;
 }
@@ -418,7 +441,8 @@ async function uploadInboundMedia(payload) {
   if (!chat || !messageId) throw new Error('Inbound media requires Chat and ID before forwarding.');
 
   try {
-    const bytes = await downloadInboundMedia(chat, messageId);
+    const storageChat = await storageChatForPayload(payload);
+    const bytes = await downloadInboundMedia(storageChat, messageId);
     const fileName = String(mediaField(media, 'Filename', 'filename', 'fileName') || '').trim();
     const mediaType = String(mediaField(media, 'Type', 'type', 'kind') || '').trim().toLowerCase();
     const mimeType = String(mediaField(media, 'MimeType', 'mimeType', 'mime_type') || 'application/octet-stream').trim();
