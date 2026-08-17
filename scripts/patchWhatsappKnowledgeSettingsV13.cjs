@@ -9,34 +9,34 @@ function patchSettingsHub() {
   let source = fs.readFileSync(settingsHubPath, 'utf8');
   if (source.includes(marker)) return;
   if (!source.includes('APPOINTMENT_SETTINGS_V11')) {
-    throw new Error('Appointment settings V11 must be applied before WhatsApp knowledge V13.');
+    throw new Error('Appointment settings V11 must be applied before company rules navigation.');
   }
 
   const settingsImport = "import { SettingsScreen } from './SettingsScreen';";
   if (!source.includes(settingsImport)) throw new Error('SettingsScreen import not found.');
   source = source.replace(
     settingsImport,
-    `${settingsImport}\nimport { WhatsAppKnowledgeScreen } from './WhatsAppKnowledgeScreen';`,
+    `import { CompanyRulesScreen } from './CompanyRulesScreen';\n${settingsImport}`,
   );
 
   const tabType = "type SettingsTab = 'users' | 'calendar';";
   if (!source.includes(tabType)) throw new Error('Settings tab type not found.');
   source = source.replace(
     tabType,
-    `// ${marker}: approved customer answers and ERP-backed rules live in one administration screen.\ntype SettingsTab = 'users' | 'calendar' | 'whatsapp-knowledge';`,
+    `// ${marker}: company operations, service pricing and approved customer responses share one ERP rules area.\ntype SettingsTab = 'users' | 'calendar' | 'company-rules';`,
   );
 
   const calendarTabPattern = /(\s*<Pressable onPress=\{\(\) => setTab\('calendar'\)\}[\s\S]*?<\/Pressable>)/;
   const calendarMatch = source.match(calendarTabPattern);
   if (!calendarMatch) throw new Error('Calendar settings tab block not found.');
-  const knowledgeTab = `\n        <Pressable onPress={() => setTab('whatsapp-knowledge')} style={[styles.tab, tab === 'whatsapp-knowledge' && styles.tabActive]}>\n          <Text style={[styles.tabText, tab === 'whatsapp-knowledge' && styles.tabTextActive]}>Reglas del WhatsApp Copilot</Text>\n        </Pressable>`;
-  source = source.replace(calendarTabPattern, `${calendarMatch[1]}${knowledgeTab}`);
+  const companyRulesTab = `\n        <Pressable onPress={() => setTab('company-rules')} style={[styles.tab, tab === 'company-rules' && styles.tabActive]}>\n          <Text style={[styles.tabText, tab === 'company-rules' && styles.tabTextActive]}>Reglas de la compañía</Text>\n        </Pressable>`;
+  source = source.replace(calendarTabPattern, `${calendarMatch[1]}${companyRulesTab}`);
 
   const renderPattern = /\)\s*:\s*<SettingsScreen\s*\/>\}/;
   if (!renderPattern.test(source)) throw new Error('Settings screen render branch not found.');
   source = source.replace(
     renderPattern,
-    `) : tab === 'calendar' ? <SettingsScreen /> : <WhatsAppKnowledgeScreen />}`,
+    `) : tab === 'calendar' ? <SettingsScreen /> : <CompanyRulesScreen />}`,
   );
 
   fs.writeFileSync(settingsHubPath, source);
@@ -55,4 +55,4 @@ function patchFirestoreRules() {
 
 patchSettingsHub();
 patchFirestoreRules();
-console.log('WhatsApp knowledge V13 settings and Firestore rules applied.');
+console.log('Company rules navigation and approved-response Firestore rules applied.');
