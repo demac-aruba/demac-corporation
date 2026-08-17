@@ -9,7 +9,7 @@
     "source": "functions",
     "codebase": "default",
     "predeploy": [
-      "npm run patch:all"
+      "npm --prefix functions run validate:firebase"
     ],
     "ignore": [
       "node_modules",
