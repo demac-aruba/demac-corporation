@@ -11,6 +11,9 @@ on:
       - 'functions/marketingCreativeBuilderV2.js'
       - 'functions/marketingCreativeBuilderV2Compat.js'
       - 'functions/marketingCreativeBuilderV21.js'
+      - 'functions/marketingCreativeBuilderV3.js'
+      - 'functions/marketingCreativeSkillsV3.js'
+      - 'functions/marketingCreativeProvidersV3.js'
       - 'functions/marketingCreativeRead.js'
       - 'functions/package.json'
       - 'functions/bootstrap.js'
@@ -27,6 +30,9 @@ on:
       - 'functions/marketingCreativeBuilderV2.js'
       - 'functions/marketingCreativeBuilderV2Compat.js'
       - 'functions/marketingCreativeBuilderV21.js'
+      - 'functions/marketingCreativeBuilderV3.js'
+      - 'functions/marketingCreativeSkillsV3.js'
+      - 'functions/marketingCreativeProvidersV3.js'
       - 'functions/marketingCreativeRead.js'
       - 'functions/package.json'
       - 'functions/bootstrap.js'
@@ -59,6 +65,9 @@ jobs:
           node --check functions/marketingCreativeBuilderV2.js
           node --check functions/marketingCreativeBuilderV2Compat.js
           node --check functions/marketingCreativeBuilderV21.js
+          node --check functions/marketingCreativeBuilderV3.js
+          node --check functions/marketingCreativeSkillsV3.js
+          node --check functions/marketingCreativeProvidersV3.js
           node --check functions/marketingCreativeRead.js
           node --check functions/bootstrap.js
           node - <<'NODE'
@@ -109,15 +118,33 @@ jobs:
           const fallbackIssues = aruba.papiamentoReviewWords(safeFallback, []);
           if (fallbackIssues.length) throw new Error(`Approved DEMAC fallback did not validate: ${fallbackIssues.join(', ')}`);
 
-          const v21 = require('./functions/marketingCreativeBuilderV21').__marketingCreativeBuilderV2Test;
-          if (!v21 || v21.IMAGE_MODEL !== 'gpt-image-2') throw new Error('Creative Builder V2.1 must require gpt-image-2.');
-          if (v21.ART_DIRECTOR_MODEL !== 'gpt-5.6-sol' || v21.QA_MODEL !== 'gpt-5.6-sol') {
-            throw new Error('Creative Builder V2.1 must use GPT-5.6 Sol for art direction and visual QA.');
+          const v3 = require('./functions/marketingCreativeBuilderV3').__marketingCreativeBuilderV3Test;
+          if (!v3 || v3.IMAGE_MODEL !== 'gpt-image-2') throw new Error('Creative Engine V3 must require gpt-image-2 as the active image provider.');
+          if (v3.ART_DIRECTOR_MODEL !== 'gpt-5.6-sol' || v3.QA_MODEL !== 'gpt-5.6-sol') {
+            throw new Error('Creative Engine V3 must use GPT-5.6 Sol for art direction and benchmark QA.');
           }
-          if (v21.BUILDER_VERSION !== 'V2.1') throw new Error('Creative Builder production version must be V2.1.');
-          if (!Array.isArray(v21.VARIANT_IDS) || v21.VARIANT_IDS.length !== 3) throw new Error('Creative Builder V2.1 must generate three concepts.');
-          if (v21.FOOTER_RESERVED_PX < 140) throw new Error('Footer reserve is too small.');
-          console.log('Aruba Papiamento + Marketing Creative V2.1 guardrails: PASS');
+          if (v3.BUILDER_VERSION !== 'V3') throw new Error('Creative Builder production version must be V3.');
+          if (v3.EXPLORATION_COUNT !== 12 || v3.SHORTLIST_COUNT !== 4 || v3.REFINEMENT_COUNT !== 2) {
+            throw new Error('Creative Engine V3 must use the 12 -> 4 -> 2 exploration funnel.');
+          }
+          if (v3.FOOTER_RESERVED_PX < 140) throw new Error('Footer reserve is too small.');
+
+          const skills = require('./functions/marketingCreativeSkillsV3');
+          if (!Array.isArray(skills.AMATEUR_ANTI_PATTERNS) || skills.AMATEUR_ANTI_PATTERNS.length < 8) {
+            throw new Error('V3 amateur anti-pattern skill is incomplete.');
+          }
+          if (!Array.isArray(skills.DESIGN_DNA) || skills.DESIGN_DNA.length < 8) {
+            throw new Error('V3 DEMAC design DNA skill is incomplete.');
+          }
+          const provider = require('./functions/marketingCreativeProvidersV3').providerManifest();
+          if (provider.activeProvider !== 'openai_full_design' || provider.providers.openai_full_design !== true) {
+            throw new Error('V3 provider manifest must expose OpenAI full-design as the active provider.');
+          }
+          const production = require('./functions/marketingCreativeBuilderV2Compat').__marketingCreativeBuilderV3Test;
+          if (!production || production.BUILDER_VERSION !== 'V3') {
+            throw new Error('Production Marketing Creative adapter is not routed to V3.');
+          }
+          console.log('Aruba Papiamento + Marketing Creative Engine V3 guardrails: PASS');
           NODE
 
   deploy-marketing-function:
