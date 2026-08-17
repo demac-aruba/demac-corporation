@@ -16,78 +16,73 @@ else
 fi
 printf 'bridge_service=%s\n' "$(systemctl is-active demac-whatsapp-bridge-v8-test.service 2>/dev/null || true)"
 printf 'sync_service=%s\n' "$(systemctl is-active demac-wacli-sync-v8-test.service 2>/dev/null || true)"
+printf 'wacli_version='; /usr/local/bin/wacli --version 2>/dev/null || true
 
 echo '=== SAFE TEST MESSAGE PROBE ==='
 python3 - <<'PY' || true
 import json
 import subprocess
-from datetime import datetime, timezone
 
-cmd = [
-    '/usr/local/bin/wacli', '--store', '/var/lib/demac-wacli-test', '--json',
-    'messages', 'list', '--limit', '50'
-]
+base = ['sudo','-n','/usr/local/sbin/demac-wacli-ro']
+cmd = base + ['messages','search','PRUEBA FINAL DEMAC','--limit','5','--json']
 try:
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
 except Exception as exc:
     print(f'wacli_probe_unavailable={type(exc).__name__}')
     raise SystemExit(0)
+print(f'search_rc={proc.returncode}')
 if proc.returncode != 0:
-    print('wacli_probe_unavailable=permission_or_store_lock')
+    print('wacli_probe_unavailable=wrapper_error')
     raise SystemExit(0)
 try:
     payload = json.loads(proc.stdout)
 except Exception:
     print('wacli_probe_unavailable=non_json_output')
     raise SystemExit(0)
-rows = payload if isinstance(payload, list) else payload.get('messages') or payload.get('data') or []
+rows = payload.get('data') if isinstance(payload, dict) else payload
+if isinstance(rows, dict):
+    rows = rows.get('messages') or rows.get('items') or []
+if not isinstance(rows, list):
+    rows = []
 needle = 'PRUEBA FINAL DEMAC'
-match = None
-for row in rows:
-    text = str(row.get('Text') or row.get('DisplayText') or row.get('text') or '')
-    if needle in text:
-        match = row
-        break
+match = next((r for r in rows if needle in str(r.get('Text') or r.get('DisplayText') or r.get('text') or r.get('display_text') or '')), None)
+print(f'test_text_found={str(bool(match)).lower()}')
 if not match:
-    print('test_text_found=false')
     raise SystemExit(0)
-chat = str(match.get('ChatJID') or match.get('Chat') or match.get('chat') or '')
-raw_ts = str(match.get('Timestamp') or match.get('timestamp') or '')
+chat = str(match.get('ChatJID') or match.get('Chat') or match.get('chat_jid') or match.get('chat') or '')
+print(f'test_chat_present={str(bool(chat)).lower()}')
+if not chat:
+    raise SystemExit(0)
+list_cmd = base + ['messages','list','--chat',chat,'--limit','12','--json']
+listed = subprocess.run(list_cmd, capture_output=True, text=True, timeout=20)
+print(f'list_rc={listed.returncode}')
+if listed.returncode != 0:
+    print('wacli_probe_unavailable=list_error')
+    raise SystemExit(0)
 try:
-    anchor = datetime.fromisoformat(raw_ts.replace('Z', '+00:00'))
-    if anchor.tzinfo is None:
-        anchor = anchor.replace(tzinfo=timezone.utc)
+    lp = json.loads(listed.stdout)
 except Exception:
-    anchor = None
-print('test_text_found=true')
-print(f'test_chat_present={bool(chat)}')
-print(f'test_timestamp={raw_ts or "unknown"}')
-nearby = []
-for row in rows:
-    row_chat = str(row.get('ChatJID') or row.get('Chat') or row.get('chat') or '')
-    if chat and row_chat != chat:
-        continue
-    ts = str(row.get('Timestamp') or row.get('timestamp') or '')
-    if anchor:
-        try:
-            dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            if abs((dt - anchor).total_seconds()) > 300:
-                continue
-        except Exception:
-            continue
-    media = str(row.get('MediaType') or row.get('mediaType') or '').lower()
-    text = str(row.get('Text') or row.get('DisplayText') or row.get('text') or '')
+    print('wacli_probe_unavailable=list_non_json')
+    raise SystemExit(0)
+items = lp.get('data') if isinstance(lp, dict) else lp
+if isinstance(items, dict):
+    items = items.get('messages') or items.get('items') or []
+if not isinstance(items, list):
+    items = []
+for index, row in enumerate(items, 1):
+    media = str(row.get('MediaType') or row.get('mediaType') or row.get('media_type') or '').lower()
+    text = str(row.get('Text') or row.get('DisplayText') or row.get('text') or row.get('display_text') or '')
     if needle in text:
         kind = 'text-test'
-    elif media in {'image', 'audio', 'voice', 'video', 'document', 'sticker'}:
+    elif media in {'image','audio','voice','video','document','sticker'}:
         kind = media
     else:
         continue
-    nearby.append((ts, kind, bool(row.get('FromMe') or row.get('fromMe'))))
-for index, (ts, kind, from_me) in enumerate(sorted(nearby), 1):
-    print(f'test_event_{index}=timestamp:{ts},kind:{kind},from_me:{str(from_me).lower()}')
+    mid = str(row.get('ID') or row.get('MessageID') or row.get('msg_id') or row.get('id') or '')
+    ts = str(row.get('Timestamp') or row.get('timestamp') or row.get('ts') or '')
+    local_path = row.get('LocalPath') or row.get('localPath') or row.get('local_path')
+    downloaded = row.get('DownloadedAt') or row.get('downloadedAt') or row.get('downloaded_at')
+    print(f'test_event_{index}=kind:{kind},id_present:{str(bool(mid)).lower()},ts:{ts or "unknown"},local_path_present:{str(bool(local_path)).lower()},downloaded_present:{str(bool(downloaded)).lower()}')
 PY
 
 test -s "$STAGED"
