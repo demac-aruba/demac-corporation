@@ -1,0 +1,39 @@
+name: Temporary wacli bridge outbound-only migration
+
+on:
+  push:
+    branches:
+      - refactor/wacli-outbound-only-bridge-20260817
+    paths:
+      - 'tools/migrate-wacli-bridge-outbound-only.py'
+      - '.github/workflows/tmp-wacli-bridge-outbound-migration.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refactor/wacli-outbound-only-bridge-20260817
+      - name: Apply deterministic migration
+        run: python3 tools/migrate-wacli-bridge-outbound-only.py
+      - name: Validate bridge source
+        run: |
+          node --check ops/digitalocean/deploy/server-v2.mjs
+          grep -q "connectorMode: 'outbound-only-v1'" ops/digitalocean/deploy/server-v2.mjs
+          grep -q 'wacliMediaIngest' ops/digitalocean/deploy/server-v2.mjs
+          grep -q 'wacliOutboundPoll' ops/digitalocean/deploy/server-v2.mjs
+          grep -q 'wacliOutboundAck' ops/digitalocean/deploy/server-v2.mjs
+          ! grep -q "url.pathname === '/v1/send'" ops/digitalocean/deploy/server-v2.mjs
+          ! grep -q "url.pathname === '/v1/media'" ops/digitalocean/deploy/server-v2.mjs
+      - name: Commit migrated bridge
+        run: |
+          git config user.name 'demac-aruba'
+          git config user.email 'gm.demac@gmail.com'
+          git add ops/digitalocean/deploy/server-v2.mjs
+          git commit -m 'Make DigitalOcean wacli bridge outbound-only'
+          git push origin HEAD:refactor/wacli-outbound-only-bridge-20260817
