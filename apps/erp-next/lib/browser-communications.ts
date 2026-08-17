@@ -258,7 +258,6 @@ export async function returnConversationToAi(conversationId: string, principal: 
     lockedByUserId: null,
     status: 'waiting_demac',
     aiDisposition: 'ai_active',
-    routeReason: `Returned to DEMAC Customer Agent by ${principal.displayName}.`,
     updatedAt: new Date().toISOString(),
   });
 }
