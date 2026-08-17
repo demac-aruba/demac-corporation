@@ -500,13 +500,13 @@ async function previousIssues(sessionId) {
   return Array.isArray(latest?.qa?.issues) ? latest.qa.issues.slice(0, 8) : [];
 }
 
-async function renderVariant({ sessionId, creativeId, concept, heroBuffer, exact, hard, core, variantIndex, revisionInstructions = [], suffix = '' }) {
+async function renderVariant({ sessionId, creativeId, concept, heroBuffer, exact, hard, core, variantIndex, revisionInstructions = [], suffix = '', reportProgress = true }) {
   const progressBase = 24 + variantIndex * 18;
-  await setProgress(sessionId, `render_${concept.id}${suffix}`, progressBase, `Generating ${concept.name}${suffix ? ' revision' : ''} with GPT Image 2…`, { currentVariant: concept.id });
+  if (reportProgress) await setProgress(sessionId, `render_${concept.id}${suffix}`, progressBase, `Generating ${concept.name}${suffix ? ' revision' : ''} with GPT Image 2…`, { currentVariant: concept.id });
   const generated = await generateGptImage2(heroBuffer, imagePrompt({ concept, ...core, revisionInstructions }));
-  await setProgress(sessionId, `layout_${concept.id}${suffix}`, progressBase + 8, `Applying exact DEMAC typography to ${concept.name}…`, { currentVariant: concept.id });
+  if (reportProgress) await setProgress(sessionId, `layout_${concept.id}${suffix}`, progressBase + 8, `Applying exact DEMAC typography to ${concept.name}…`, { currentVariant: concept.id });
   const rendered = await renderCreative(generated, exact, concept);
-  await setProgress(sessionId, `qa_${concept.id}${suffix}`, progressBase + 13, `Running agency-quality QA on ${concept.name}…`, { currentVariant: concept.id });
+  if (reportProgress) await setProgress(sessionId, `qa_${concept.id}${suffix}`, progressBase + 13, `Running agency-quality QA on ${concept.name}…`, { currentVariant: concept.id });
   const qa = await visualQa(rendered, hard, exact, core.campaign, concept);
   const variantId = suffix ? `${concept.id}${suffix}` : concept.id;
   const path = `marketing/generated/${sessionId}/${creativeId}-${variantId}.png`;
@@ -553,12 +553,34 @@ async function buildCreative({ sessionId, uid, profile }) {
   const artDirection = await createArtDirection(core, heroBuffer, issues);
   await setProgress(sessionId, 'concepts_ready', 20, 'Art direction ready. Starting three premium variants…');
 
-  const variants = [];
-  for (let index = 0; index < artDirection.concepts.length; index += 1) {
-    variants.push(await renderVariant({ sessionId, creativeId, concept: artDirection.concepts[index], heroBuffer, exact, hard, core, variantIndex: index }));
-  }
+  await setProgress(
+    sessionId,
+    'render_variants_parallel',
+    24,
+    'Generating three premium GPT Image 2 variants in parallel…',
+    { totalVariants: artDirection.concepts.length },
+  );
+  const variants = await Promise.all(
+    artDirection.concepts.map((concept, index) => renderVariant({
+      sessionId,
+      creativeId,
+      concept,
+      heroBuffer,
+      exact,
+      hard,
+      core,
+      variantIndex: index,
+      reportProgress: false,
+    })),
+  );
 
-  await setProgress(sessionId, 'compare', 80, 'Comparing creative quality, agency feel and scroll-stopping power…');
+  await setProgress(
+    sessionId,
+    'compare',
+    80,
+    'Three variants ready. Comparing creative quality, agency feel and scroll-stopping power…',
+    { completedVariants: variants.length },
+  );
   variants.sort((a, b) => b.selectionScore - a.selectionScore);
   let selected = variants.find((variant) => variant.qa.status === 'passed') || variants[0];
   let autoRevised = false;
