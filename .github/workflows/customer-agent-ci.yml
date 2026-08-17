@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "functions/bookingAuthority*.js"
+      - "functions/commercialSalesAuthority*.js"
       - "functions/demacCustomer*.js"
       - "functions/whatsappCopilotRouter.js"
       - "functions/whatsappCopilotRouterExports.test.js"
@@ -14,6 +15,7 @@ on:
     branches: [main]
     paths:
       - "functions/bookingAuthority*.js"
+      - "functions/commercialSalesAuthority*.js"
       - "functions/demacCustomer*.js"
       - "functions/whatsappCopilotRouter.js"
       - "functions/whatsappCopilotRouterExports.test.js"
@@ -45,8 +47,14 @@ jobs:
       - name: Validate Firebase function syntax
         run: npm run validate:firebase
 
+      - name: Validate Commercial Sales Authority syntax
+        run: node --check commercialSalesAuthority.js
+
       - name: Test Booking Authority
         run: npm run test:booking-authority
+
+      - name: Test Commercial Sales Authority
+        run: node --test commercialSalesAuthority.test.js
 
       - name: Test Customer Agent
         run: npm run test:customer-agent-tools
