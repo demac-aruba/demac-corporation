@@ -60,6 +60,14 @@ jobs:
             echo '::error::Standard Bearer bridge authentication is missing.'
             exit 1
           fi
+          if ! grep -q 'authorizedOperationsUser(user.uid)' functions/wacliOutboundMediaUpload.js; then
+            echo '::error::ERP media upload must enforce active operations-role authorization.'
+            exit 1
+          fi
+          if grep -Eq 'WACLI_BRIDGE_TOKEN|WACLI_BRIDGE_URL|WACLI_WEBHOOK_SECRET' functions/wacliOutboundMediaUpload.js; then
+            echo '::error::ERP media upload source must remain isolated from bridge secrets.'
+            exit 1
+          fi
           node - <<'NODE'
           const mod = require('./functions/bootstrap');
           for (const name of ['wacliWebhook', 'wacliMediaIngest', 'wacliOutboundPoll', 'wacliOutboundAck', 'wacliOutboundMediaUpload']) {
@@ -256,7 +264,7 @@ jobs:
             rm -f "$cors_headers"
             exit 1
           fi
-          if ! grep -Eiq '^access-control-allow-origin: https://demac-corporation\.vercel\.app\r?$' "$cors_headers"; then
+          if ! tr -d '\r' < "$cors_headers" | grep -Fqi 'access-control-allow-origin: https://demac-corporation.vercel.app'; then
             echo '::error::Media upload did not allow the production ERP Vercel origin.'
             cat "$cors_headers"
             rm -f "$cors_headers"
