@@ -2,6 +2,10 @@
 
 import { useEffect } from 'react';
 
+function findCommunicationRoot() {
+  return document.querySelector<HTMLElement>('.communication-v4');
+}
+
 function findComposerTextarea() {
   return document.querySelector<HTMLTextAreaElement>('.communication-v4 textarea');
 }
@@ -11,6 +15,7 @@ export function ComposerFocusRetention() {
     let pendingRestore = false;
     let observer: MutationObserver | null = null;
     let fallbackTimer: number | null = null;
+    let frame: number | null = null;
 
     const cleanupObserver = () => {
       observer?.disconnect();
@@ -18,6 +23,10 @@ export function ComposerFocusRetention() {
       if (fallbackTimer !== null) {
         window.clearTimeout(fallbackTimer);
         fallbackTimer = null;
+      }
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+        frame = null;
       }
     };
 
@@ -37,12 +46,19 @@ export function ComposerFocusRetention() {
       pendingRestore = true;
       cleanupObserver();
 
-      const textarea = findComposerTextarea();
-      if (!textarea) return;
+      const root = findCommunicationRoot();
+      if (root) {
+        observer = new MutationObserver(restoreWhenReady);
+        observer.observe(root, {
+          subtree: true,
+          childList: true,
+          attributes: true,
+          attributeFilter: ['disabled'],
+        });
+      }
 
-      observer = new MutationObserver(restoreWhenReady);
-      observer.observe(textarea, { attributes: true, attributeFilter: ['disabled'] });
-      fallbackTimer = window.setTimeout(restoreWhenReady, 250);
+      frame = window.requestAnimationFrame(restoreWhenReady);
+      fallbackTimer = window.setTimeout(restoreWhenReady, 500);
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -64,6 +80,7 @@ export function ComposerFocusRetention() {
     return () => {
       document.removeEventListener('keydown', handleKeyDown, true);
       document.removeEventListener('pointerdown', handlePointerDown, true);
+      pendingRestore = false;
       cleanupObserver();
     };
   }, []);
