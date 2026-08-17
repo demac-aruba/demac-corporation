@@ -7,6 +7,7 @@ on:
       - "functions/officeBookingAuthority*.js"
       - "functions/commercialSalesAuthority*.js"
       - "functions/demacCustomer*.js"
+      - "functions/index.js"
       - "functions/whatsappCopilotRouter.js"
       - "functions/whatsappCopilotRouterExports.test.js"
       - "functions/bootstrap.js"
@@ -19,6 +20,7 @@ on:
       - "functions/officeBookingAuthority*.js"
       - "functions/commercialSalesAuthority*.js"
       - "functions/demacCustomer*.js"
+      - "functions/index.js"
       - "functions/whatsappCopilotRouter.js"
       - "functions/whatsappCopilotRouterExports.test.js"
       - "functions/bootstrap.js"
@@ -48,6 +50,9 @@ jobs:
 
       - name: Validate Firebase function syntax
         run: npm run validate:firebase
+
+      - name: Validate core function index syntax
+        run: node --check index.js
 
       - name: Validate Commercial Sales Authority syntax
         run: node --check commercialSalesAuthority.js
