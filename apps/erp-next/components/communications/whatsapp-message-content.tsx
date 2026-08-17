@@ -28,11 +28,11 @@ export function conversationMessagePreview(message?: LiveConversationMessage | n
 }
 
 export function messageReceiptLabel(message: LiveConversationMessage) {
-  if (message.id.startsWith('local-')) return 'Sending…';
   const status = String(message.status || '').toLowerCase();
+  if (status.includes('fail')) return 'Failed · retry';
+  if (message.id.startsWith('local-')) return 'Sending…';
   if (status.includes('read')) return 'Read ✓✓';
   if (status.includes('deliver')) return 'Delivered ✓✓';
-  if (status.includes('fail')) return 'Failed';
   return 'Sent ✓';
 }
 
