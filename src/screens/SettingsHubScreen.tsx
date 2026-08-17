@@ -1,13 +1,19 @@
 import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { UserManagementCard } from '../components/UserManagementCard';
+import { useWebHistoryState } from '../navigation/appHistory';
 import { colors } from '../theme';
+import { CompanyRulesScreen } from './CompanyRulesScreen';
 import { SettingsScreen } from './SettingsScreen';
 
-type SettingsTab = 'users' | 'calendar';
+type SettingsTab = 'users' | 'calendar' | 'company-rules';
 
 export function SettingsHubScreen() {
   const [tab, setTab] = useState<SettingsTab>('users');
+
+  useWebHistoryState('settings-hub-tab', tab, (restored) => {
+    if (restored === 'users' || restored === 'calendar' || restored === 'company-rules') setTab(restored);
+  });
 
   return (
     <View style={styles.root}>
@@ -16,14 +22,17 @@ export function SettingsHubScreen() {
           <Text style={[styles.tabText, tab === 'users' && styles.tabTextActive]}>Usuarios y accesos</Text>
         </Pressable>
         <Pressable onPress={() => setTab('calendar')} style={[styles.tab, tab === 'calendar' && styles.tabActive]}>
-          <Text style={[styles.tabText, tab === 'calendar' && styles.tabTextActive]}>Calendario y empresa</Text>
+          <Text style={[styles.tabText, tab === 'calendar' && styles.tabTextActive]}>Agenda y empresa</Text>
+        </Pressable>
+        <Pressable onPress={() => setTab('company-rules')} style={[styles.tab, tab === 'company-rules' && styles.tabActive]}>
+          <Text style={[styles.tabText, tab === 'company-rules' && styles.tabTextActive]}>Reglas de la compañía</Text>
         </Pressable>
       </View>
       {tab === 'users' ? (
         <ScrollView contentContainerStyle={styles.userPage} keyboardShouldPersistTaps="handled">
           <UserManagementCard />
         </ScrollView>
-      ) : <SettingsScreen />}
+      ) : tab === 'calendar' ? <SettingsScreen /> : <CompanyRulesScreen />}
     </View>
   );
 }

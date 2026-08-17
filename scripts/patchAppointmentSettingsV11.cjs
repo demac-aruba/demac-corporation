@@ -7,11 +7,13 @@ const targetFiles = [
   'src/components/UI.tsx',
   'src/screens/AgendaScreen.tsx',
   'src/screens/SettingsScreen.tsx',
-  'src/screens/SettingsHubScreen.tsx',
   'src/state/CalendarState.tsx',
   'src/types.ts',
   'firestore.rules',
 ];
+const materializedFiles = new Set([
+  'src/screens/SettingsHubScreen.tsx',
+]);
 
 const marked = targetFiles.filter((file) => fs.readFileSync(file, 'utf8').includes(marker));
 if (marked.length === targetFiles.length) {
@@ -125,10 +127,11 @@ const parsed = parsePatch(fs.readFileSync(patchPath, 'utf8'));
 const expected = new Set(targetFiles);
 const outputs = new Map();
 for (const { file, hunks } of parsed) {
+  if (materializedFiles.has(file)) continue;
   if (!expected.has(file)) throw new Error(`Unexpected file in appointment settings V11 patch: ${file}`);
   outputs.set(file, applyFilePatch(file, hunks));
 }
 if (outputs.size !== targetFiles.length) throw new Error('Appointment settings V11 patch is missing one or more target files.');
 for (const [file, content] of outputs) fs.writeFileSync(file, content);
 
-console.log('patchAppointmentSettingsV11.cjs applied.');
+console.log('patchAppointmentSettingsV11.cjs applied; SettingsHub is materialized directly in source.');
