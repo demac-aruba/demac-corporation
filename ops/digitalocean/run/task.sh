@@ -3,10 +3,10 @@ set -euo pipefail
 
 STAGED=/home/demac-deploy/stage/server-v2.mjs
 DEPLOYED=/opt/demac-whatsapp-bridge/server-v2.mjs
-EXPECTED_WEBHOOK='https://us-central1-demac-corporation.cloudfunctions.net/wacliWebhook'
-EXPECTED_MEDIA='https://us-central1-demac-corporation.cloudfunctions.net/wacliMediaIngest'
-EXPECTED_POLL='https://us-central1-demac-corporation.cloudfunctions.net/wacliOutboundPoll'
-EXPECTED_ACK='https://us-central1-demac-corporation.cloudfunctions.net/wacliOutboundAck'
+EXPECTED_BASE='https://us-central1-demac-corporation.cloudfunctions.net'
+EXPECTED_WEBHOOK="${EXPECTED_BASE}/wacliWebhook"
+EXPECTED_MEDIA="${EXPECTED_BASE}/wacliMediaIngest"
+EXPECTED_POLL="${EXPECTED_BASE}/wacliOutboundPoll"
 EXPECTED_STORE='/var/lib/demac-wacli-test'
 
 echo '=== DEMAC OUTBOUND-ONLY WACLI CONNECTOR DEPLOY ==='
@@ -39,10 +39,11 @@ for retired in \
 done
 
 for required in \
-  "$EXPECTED_WEBHOOK" \
-  'wacliMediaIngest' \
-  'wacliOutboundPoll' \
-  'wacliOutboundAck' \
+  "const FIREBASE_FUNCTIONS_BASE = '${EXPECTED_BASE}';" \
+  '`${FIREBASE_FUNCTIONS_BASE}/wacliWebhook`' \
+  '`${FIREBASE_FUNCTIONS_BASE}/wacliMediaIngest`' \
+  '`${FIREBASE_FUNCTIONS_BASE}/wacliOutboundPoll`' \
+  '`${FIREBASE_FUNCTIONS_BASE}/wacliOutboundAck`' \
   "connectorMode: 'outbound-only-v1'" \
   "const WACLI_STORE_DIR = String(process.env.WACLI_STORE_DIR || '/var/lib/demac-wacli-test').trim()"; do
   if ! grep -Fq "$required" "$STAGED"; then
@@ -83,18 +84,24 @@ print("|".join([
  str(p.get("ok",False)).lower(),
  str(p.get("connectorMode") or ""),
  str(p.get("wacliStoreDir") or ""),
+ str(p.get("erpWebhookUrl") or ""),
+ str(p.get("mediaIngestUrl") or ""),
+ str(p.get("outboundPollUrl") or ""),
  str(p.get("pendingWebhookEvents",-1)),
  str(p.get("pendingOutboundAcks",-1)),
  str(p.get("lastForwardError") or ""),
  str(p.get("lastOutboundPollAt") or ""),
  str(p.get("lastOutboundError") or ""),
 ]))')"
-    IFS='|' read -r ok mode store pending acks forward_error poll_at outbound_error <<<"$values"
+    IFS='|' read -r ok mode store webhook media poll_url pending acks forward_error poll_at outbound_error <<<"$values"
     printf 'attempt=%s ok=%s mode=%s pending=%s acks=%s poll=%s outbound_error=%s\n' \
       "$attempt" "$ok" "$mode" "$pending" "$acks" "${poll_at:-none}" "$([ -n "$outbound_error" ] && echo yes || echo no)"
     if [ "$ok" = 'true' ] \
       && [ "$mode" = 'outbound-only-v1' ] \
       && [ "$store" = "$EXPECTED_STORE" ] \
+      && [ "$webhook" = "$EXPECTED_WEBHOOK" ] \
+      && [ "$media" = "$EXPECTED_MEDIA" ] \
+      && [ "$poll_url" = "$EXPECTED_POLL" ] \
       && [ "$pending" = '0' ] \
       && [ "$acks" = '0' ] \
       && [ -z "$forward_error" ] \
