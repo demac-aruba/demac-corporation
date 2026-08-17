@@ -1,8 +1,10 @@
-.communication-v4 [class*="messages"] {
+.communication-v4 main[class*="chat"] > [class*="messages"] {
   box-sizing: border-box !important;
   width: 100% !important;
   max-width: none !important;
   min-width: 0 !important;
+  align-self: stretch !important;
+  justify-self: stretch !important;
   border: 0 !important;
   border-radius: 0 !important;
   box-shadow: none !important;
@@ -16,7 +18,7 @@
 }
 
 @media (max-width: 1500px) {
-  .communication-v4 [class*="messages"] {
+  .communication-v4 main[class*="chat"] > [class*="messages"] {
     padding: 18px !important;
   }
 }
