@@ -24,11 +24,13 @@ import {
   type LiveConversation,
   type LiveConversationMessage,
   type LiveOperator,
+  type WhatsAppMediaKind,
   type WhatsAppProvider,
 } from '../../lib/browser-communications';
 import { loadFirebasePrincipal } from '../../lib/firebase/principal';
 import type { AuthPrincipal } from '../../lib/security';
 import { CommunicationAvatar, WhatsAppMessageContent, conversationMessagePreview, messageReceiptLabel } from './whatsapp-message-content';
+import { useVoiceNoteRecorder } from './use-voice-note-recorder';
 import styles from './communication-center.module.css';
 import mediaStyles from './communication-media.module.css';
 
@@ -36,6 +38,7 @@ type Mode = 'communications' | 'ai' | 'escalations';
 type InboxScope = 'pending' | 'mine' | 'unassigned' | 'team';
 type VisualState = 'overdue' | 'needs_reply' | 'assigned' | 'unassigned' | 'escalated' | 'resolved';
 type ContextTab = 'overview' | 'properties' | 'equipment' | 'actions';
+type StagedAttachment = { file: File; kind: WhatsAppMediaKind };
 
 const queueLabels: Array<{ value: 'all' | Queue; label: string }> = [
   { value: 'all', label: 'All queues' },
@@ -138,10 +141,16 @@ function formatAttachmentSize(bytes: number) {
   return `${mb.toFixed(mb >= 10 ? 1 : 2)} MB`;
 }
 
+function formatRecordingTime(seconds: number) {
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
 function attachmentPreviewLabel(type?: string | null) {
   const normalized = String(type || '').toLowerCase();
   if (normalized === 'image') return '[Photo]';
   if (normalized === 'video') return '[Video]';
+  if (normalized === 'voice') return '[Voice note]';
   if (normalized === 'audio') return '[Audio]';
   return '[Document]';
 }
@@ -149,6 +158,7 @@ function attachmentPreviewLabel(type?: string | null) {
 function attachmentIcon(type?: string | null) {
   const normalized = String(type || '').toLowerCase();
   if (normalized === 'video') return 'VID';
+  if (normalized === 'voice') return 'MIC';
   if (normalized === 'audio') return 'AUD';
   if (normalized === 'image') return 'IMG';
   return 'DOC';
@@ -177,7 +187,7 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
   const [scope, setScope] = useState<InboxScope>(mode === 'escalations' ? 'team' : 'pending');
   const [search, setSearch] = useState('');
   const [draft, setDraft] = useState('');
-  const [attachment, setAttachment] = useState<File | null>(null);
+  const [attachment, setAttachment] = useState<StagedAttachment | null>(null);
   const [attachmentPreviewUrl, setAttachmentPreviewUrl] = useState('');
   const [dragActive, setDragActive] = useState(false);
   const [internal, setInternal] = useState(false);
@@ -301,11 +311,11 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
   }, [selected?.id]);
 
   useEffect(() => {
-    if (!attachment || whatsAppAttachmentKind(attachment) !== 'image') {
+    if (!attachment || attachment.kind !== 'image') {
       setAttachmentPreviewUrl('');
       return undefined;
     }
-    const url = URL.createObjectURL(attachment);
+    const url = URL.createObjectURL(attachment.file);
     setAttachmentPreviewUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [attachment]);
@@ -383,7 +393,7 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
     }
   };
 
-  const stageAttachment = (file: File | null) => {
+  const stageAttachment = useCallback((file: File | null, kindOverride?: WhatsAppMediaKind) => {
     if (!file) return;
     if (internal) {
       setError('Attachments are for customer WhatsApp replies. Switch back to Reply before attaching a file.');
@@ -395,12 +405,27 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
     }
     try {
       validateWhatsAppAttachment(file);
-      setAttachment(file);
+      setAttachment({ file, kind: kindOverride || whatsAppAttachmentKind(file) });
       setError('');
     } catch (attachmentError) {
       setError(attachmentError instanceof Error ? attachmentError.message : String(attachmentError));
     }
-  };
+  }, [canReply, internal]);
+
+  const {
+    recording: voiceRecording,
+    seconds: voiceSeconds,
+    supported: voiceSupported,
+    start: startVoiceNote,
+    stop: stopVoiceNote,
+    cancel: cancelVoiceNote,
+  } = useVoiceNoteRecorder({
+    onRecorded: useCallback((file: File) => stageAttachment(file, 'voice'), [stageAttachment]),
+    onError: useCallback((message: string) => setError(message), []),
+    maxSeconds: 120,
+  });
+
+  useEffect(() => () => cancelVoiceNote(), [selected?.id, cancelVoiceNote]);
 
   const send = async () => {
     const text = draft.trim();
@@ -411,16 +436,20 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
       setError('Take ownership of this conversation before replying so the Customer Agent and an operator cannot answer the same customer.');
       return;
     }
+    if (voiceRecording) {
+      setError('Stop the voice-note recording before sending.');
+      return;
+    }
 
     setBusy(true);
     setError('');
     try {
       let queuedMedia: Awaited<ReturnType<typeof queueWhatsAppMedia>> | null = null;
       if (internal) await saveInternalCommunicationNote(selected.id, text, principal);
-      else if (attachment) queuedMedia = await queueWhatsAppMedia(selected, attachment, text, principal, provider);
+      else if (attachment) queuedMedia = await queueWhatsAppMedia(selected, attachment.file, text, principal, provider, attachment.kind);
       else await queueWhatsAppText(selected, text, principal, provider);
 
-      const mediaKind = attachment ? queuedMedia?.media.kind || whatsAppAttachmentKind(attachment) : null;
+      const mediaKind = attachment ? queuedMedia?.media.kind || attachment.kind : null;
       const optimistic: LiveConversationMessage = {
         id: `local-${Date.now()}`,
         at: new Date().toISOString(),
@@ -432,9 +461,9 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
         provider: internal ? undefined : provider,
         mediaType: mediaKind,
         mediaCaption: attachment && text ? text : null,
-        mediaFileName: attachment?.name || null,
-        mediaMimeType: attachment?.type || null,
-        mediaSize: attachment?.size || null,
+        mediaFileName: attachment?.file.name || null,
+        mediaMimeType: attachment?.file.type || null,
+        mediaSize: attachment?.file.size || null,
         mediaUrl: queuedMedia?.media.url || null,
       };
       const preview = text || attachmentPreviewLabel(mediaKind);
@@ -461,8 +490,8 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
   const detailsVisible = standalone || showDetails;
   const canSubmit = internal
     ? Boolean(canReadBody && !busy && draft.trim())
-    : Boolean(canReply && !busy && (draft.trim() || attachment));
-  const attachmentKind = attachment ? whatsAppAttachmentKind(attachment) : null;
+    : Boolean(canReply && !busy && !voiceRecording && (draft.trim() || attachment));
+  const attachmentKind = attachment?.kind || null;
 
   return <section className={`${styles.page} ${standalone ? styles.standalone : ''}`}>
     <div className={styles.topLine}>
@@ -551,33 +580,48 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
           </div>
 
           <div className={`${styles.composer} ${internal ? styles.internalComposer : ''}`}>
-            <div className={styles.composerMode}><button type="button" onClick={() => setInternal(false)} className={!internal ? styles.active : ''} disabled={!canReadBody}>Reply</button><button type="button" onClick={() => { setInternal(true); setAttachment(null); }} className={internal ? styles.active : ''} disabled={!canReadBody}>Internal note</button><span>{internal ? 'Visible only to DEMAC staff' : selectedAiActive ? 'Customer Agent currently owns this conversation' : principal ? `Sending as ${principal.displayName}` : 'WhatsApp message'}</span></div>
+            <div className={styles.composerMode}><button type="button" onClick={() => setInternal(false)} className={!internal ? styles.active : ''} disabled={!canReadBody}>Reply</button><button type="button" onClick={() => { cancelVoiceNote(); setInternal(true); setAttachment(null); }} className={internal ? styles.active : ''} disabled={!canReadBody}>Internal note</button><span>{internal ? 'Visible only to DEMAC staff' : selectedAiActive ? 'Customer Agent currently owns this conversation' : principal ? `Sending as ${principal.displayName}` : 'WhatsApp message'}</span></div>
             {attachment ? <div className={mediaStyles.pendingAttachment}>
               <span className={mediaStyles.pendingThumb}>{attachmentKind === 'image' && attachmentPreviewUrl ? <img src={attachmentPreviewUrl} alt="Selected attachment preview" /> : attachmentIcon(attachmentKind)}</span>
-              <span className={mediaStyles.pendingBody}><strong>{attachment.name}</strong><small>{attachmentKind} · {formatAttachmentSize(attachment.size)}</small></span>
+              <span className={mediaStyles.pendingBody}><strong>{attachment.file.name}</strong><small>{attachmentKind} · {formatAttachmentSize(attachment.file.size)}</small></span>
               <button type="button" className={mediaStyles.removeAttachment} onClick={() => setAttachment(null)} disabled={busy} aria-label="Remove attachment">×</button>
             </div> : null}
             <div
               className={`${styles.composerBox} ${mediaStyles.mediaComposerBox} ${dragActive ? mediaStyles.dropActive : ''}`}
-              onDragEnter={(event) => { event.preventDefault(); if (!internal && canReply && !busy) setDragActive(true); }}
-              onDragOver={(event) => { event.preventDefault(); if (!internal && canReply && !busy) { event.dataTransfer.dropEffect = 'copy'; setDragActive(true); } }}
+              onDragEnter={(event) => { event.preventDefault(); if (!internal && canReply && !busy && !voiceRecording) setDragActive(true); }}
+              onDragOver={(event) => { event.preventDefault(); if (!internal && canReply && !busy && !voiceRecording) { event.dataTransfer.dropEffect = 'copy'; setDragActive(true); } }}
               onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragActive(false); }}
               onDrop={(event) => {
                 event.preventDefault();
                 setDragActive(false);
+                if (voiceRecording) return;
                 const file = event.dataTransfer.files?.[0] || null;
                 stageAttachment(file);
               }}
             >
               <div className={mediaStyles.mediaTools}>
                 <input ref={fileInputRef} type="file" hidden accept="image/*,audio/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt,.zip" onChange={(event) => { stageAttachment(event.target.files?.[0] || null); event.currentTarget.value = ''; }} />
-                <button type="button" className={mediaStyles.mediaButton} onClick={() => fileInputRef.current?.click()} disabled={busy || internal || !canReply} title={canReply ? 'Attach photo, audio, video or document' : 'Take ownership before attaching a file'} aria-label="Attach file">＋</button>
-                <button type="button" className={mediaStyles.mediaButton} disabled title="Voice note recording will be activated separately." aria-label="Record voice note">●</button>
+                <button type="button" className={mediaStyles.mediaButton} onClick={() => fileInputRef.current?.click()} disabled={busy || internal || !canReply || voiceRecording} title={canReply ? 'Attach photo, audio, video or document' : 'Take ownership before attaching a file'} aria-label="Attach file">＋</button>
+                <button
+                  type="button"
+                  className={`${mediaStyles.mediaButton} ${voiceRecording ? mediaStyles.recordingButton : ''}`}
+                  onClick={() => {
+                    if (voiceRecording) stopVoiceNote();
+                    else {
+                      setAttachment(null);
+                      setError('');
+                      void startVoiceNote();
+                    }
+                  }}
+                  disabled={busy || internal || !canReply || !voiceSupported}
+                  title={!voiceSupported ? 'Voice-note recording is not supported by this browser' : voiceRecording ? 'Stop voice-note recording' : canReply ? 'Record voice note' : 'Take ownership before recording a voice note'}
+                  aria-label={voiceRecording ? 'Stop voice-note recording' : 'Record voice note'}
+                >{voiceRecording ? '■' : '●'}</button>
               </div>
-              <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (canSubmit) void send(); } }} disabled={!canReadBody || busy} placeholder={internal ? 'Write an internal note…' : canReply ? attachment ? 'Add a caption or press Send…' : 'Type a message or drop a file here…' : selectedAiActive ? 'Take over from AI before replying…' : 'Take ownership before replying…'} />
+              <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (canSubmit) void send(); } }} disabled={!canReadBody || busy} placeholder={internal ? 'Write an internal note…' : voiceRecording ? `Recording voice note ${formatRecordingTime(voiceSeconds)}… click stop when finished` : canReply ? attachment ? 'Add a caption or press Send…' : 'Type a message or drop a file here…' : selectedAiActive ? 'Take over from AI before replying…' : 'Take ownership before replying…'} />
               <button type="button" className={styles.sendButton} onClick={send} disabled={!canSubmit}>{busy ? attachment && !internal ? 'Uploading…' : 'Sending…' : internal ? 'Save note' : 'Send'}</button>
             </div>
-            <div className={styles.composerHint}><span>{attachment ? <span className={mediaStyles.attachmentHint}>Attachment ready · Enter to send</span> : 'Enter to send · Shift+Enter for new line'}</span><span>{internal ? 'Internal collaboration' : 'WhatsApp'}</span></div>
+            <div className={styles.composerHint}><span>{voiceRecording ? <span className={mediaStyles.recordingHint}>Recording {formatRecordingTime(voiceSeconds)} · click ■ to stop</span> : attachment ? <span className={mediaStyles.attachmentHint}>Attachment ready · Enter to send</span> : 'Enter to send · Shift+Enter for new line'}</span><span>{internal ? 'Internal collaboration' : 'WhatsApp'}</span></div>
           </div>
         </>}
       </main>

@@ -1,11 +1,16 @@
 const crypto = require("node:crypto");
 const { getAuth } = require("firebase-admin/auth");
+const { getFirestore } = require("firebase-admin/firestore");
 const { getStorage } = require("firebase-admin/storage");
 const logger = require("firebase-functions/logger");
 const { onRequest } = require("firebase-functions/v2/https");
 
+const db = getFirestore();
 const storage = getStorage();
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
+const OPERATIONS_ROLES = new Set(["admin", "office", "supervisor"]);
+const BLOCKED_MIME_TYPES = new Set(["text/html", "application/xhtml+xml", "image/svg+xml"]);
+const BLOCKED_EXTENSIONS = new Set(["html", "htm", "xhtml", "svg"]);
 const EXACT_ALLOWED_ORIGINS = new Set([
   "https://demac-aruba.com",
   "https://www.demac-aruba.com",
@@ -51,10 +56,23 @@ async function authenticatedErpUser(request) {
   }
 }
 
+async function authorizedOperationsUser(uid) {
+  const snapshot = await db.collection("users").doc(String(uid || "")).get();
+  if (!snapshot.exists) return false;
+  const profile = snapshot.data() || {};
+  const role = String(profile.role || "").trim().toLowerCase();
+  return profile.active === true && OPERATIONS_ROLES.has(role);
+}
+
 function requestRawBody(request) {
   if (Buffer.isBuffer(request.rawBody)) return request.rawBody;
   if (Buffer.isBuffer(request.body)) return request.body;
   return Buffer.alloc(0);
+}
+
+function fileExtension(fileName) {
+  const match = String(fileName || "").trim().toLowerCase().match(/\.([a-z0-9]{1,12})$/);
+  return match ? match[1] : "";
 }
 
 exports.wacliOutboundMediaUpload = onRequest(
@@ -84,6 +102,10 @@ exports.wacliOutboundMediaUpload = onRequest(
       response.status(401).json({ error: "Unauthorized" });
       return;
     }
+    if (!(await authorizedOperationsUser(user.uid))) {
+      response.status(403).json({ error: "Forbidden" });
+      return;
+    }
 
     try {
       const fileName = String(request.query.fileName || "attachment").trim();
@@ -101,8 +123,8 @@ exports.wacliOutboundMediaUpload = onRequest(
         return;
       }
 
-      const contentType = String(request.get("content-type") || "application/octet-stream").split(";")[0].trim() || "application/octet-stream";
-      if (contentType === "text/html" || contentType === "image/svg+xml") {
+      const contentType = String(request.get("content-type") || "application/octet-stream").split(";")[0].trim().toLowerCase() || "application/octet-stream";
+      if (BLOCKED_MIME_TYPES.has(contentType) || BLOCKED_EXTENSIONS.has(fileExtension(fileName))) {
         response.status(415).json({ error: "This file type is not allowed for WhatsApp attachments" });
         return;
       }

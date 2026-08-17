@@ -6,6 +6,7 @@ on:
       - 'functions/whatsappWacliGateway.js'
       - 'functions/whatsappWacliGateway.test.js'
       - 'functions/wacliOutboundMediaUpload.js'
+      - 'functions/wacliOutboundMediaUpload.test.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
       - '.github/workflows/wacli-webhook-deploy.yml'
@@ -16,6 +17,7 @@ on:
       - 'functions/whatsappWacliGateway.js'
       - 'functions/whatsappWacliGateway.test.js'
       - 'functions/wacliOutboundMediaUpload.js'
+      - 'functions/wacliOutboundMediaUpload.test.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
       - '.github/workflows/wacli-webhook-deploy.yml'
@@ -51,13 +53,21 @@ jobs:
           node --check functions/whatsappWacliGateway.js
           node --check functions/wacliOutboundMediaUpload.js
           node --check functions/bootstrap.js
-          node --test functions/whatsappWacliGateway.test.js
+          node --test functions/whatsappWacliGateway.test.js functions/wacliOutboundMediaUpload.test.js
           if grep -Eqi 'ed25519|x-demac-bridge-signature|BRIDGE_PUBLIC_KEY|WACLI_BRIDGE_URL|bridgeEndpoint\(|sendQueuedWacliMessage' functions/whatsappWacliGateway.js; then
             echo '::error::Retired inbound-to-Droplet or custom-auth code remains in Firebase gateway.'
             exit 1
           fi
           if ! grep -q 'authorizedBridgeRequest(request)' functions/whatsappWacliGateway.js; then
             echo '::error::Standard Bearer bridge authentication is missing.'
+            exit 1
+          fi
+          if ! grep -q 'authorizedOperationsUser(user.uid)' functions/wacliOutboundMediaUpload.js; then
+            echo '::error::ERP media upload must enforce active operations-role authorization.'
+            exit 1
+          fi
+          if grep -Eq 'WACLI_BRIDGE_TOKEN|WACLI_BRIDGE_URL|WACLI_WEBHOOK_SECRET' functions/wacliOutboundMediaUpload.js; then
+            echo '::error::ERP media upload source must remain isolated from bridge secrets.'
             exit 1
           fi
           node - <<'NODE'
@@ -256,7 +266,7 @@ jobs:
             rm -f "$cors_headers"
             exit 1
           fi
-          if ! grep -Eiq '^access-control-allow-origin: https://demac-corporation\.vercel\.app\r?$' "$cors_headers"; then
+          if ! tr -d '\r' < "$cors_headers" | grep -Fqi 'access-control-allow-origin: https://demac-corporation.vercel.app'; then
             echo '::error::Media upload did not allow the production ERP Vercel origin.'
             cat "$cors_headers"
             rm -f "$cors_headers"
