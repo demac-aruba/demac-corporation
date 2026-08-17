@@ -12,7 +12,6 @@ const wacliBridgeToken = defineSecret("WACLI_BRIDGE_TOKEN");
 
 
 const MAX_RECENT_MESSAGES = 120;
-const OPERATOR_STALE_MS = 5 * 60 * 1000;
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
 const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
 
@@ -63,32 +62,31 @@ function authorizedBridgeRequest(request) {
   return safeSecretEqual(header.slice(7).trim(), String(wacliBridgeToken.value() || "").trim());
 }
 
-function inferQueue(text) {
-  const value = String(text || "").toLowerCase();
-  if (/\b(complaint|queja|reclamo|mad|angry|molest|problema con servicio)\b/.test(value)) return "complaints";
-  if (/\b(payment|invoice|pago|factura|saldo|transfer|deposit)\b/.test(value)) return "finance";
-  if (/\b(estimate|quote|cotiza|precio|price|comprar|buy|new airco|aire nuevo)\b/.test(value)) return "sales";
-  if (/\b(appointment|cita|schedule|agenda|disponib|mañana|tomorrow|hora)\b/.test(value)) return "scheduling";
-  if (/\b(not cooling|no enfria|no enfría|leak|fuga|error|breaker|gas|refrigerant|refrigerante)\b/.test(value)) return "technical";
-  return "general";
-}
+function conversationIngressState({ current = {}, exists = false, inbound = false } = {}) {
+  const owner = current?.owner || null;
+  const ownerUserId = current?.ownerUserId || null;
+  const lockedBy = current?.lockedBy || null;
+  const lockedByUserId = current?.lockedByUserId || null;
+  const explicitDisposition = String(current?.aiDisposition || "").trim();
+  const humanOwned = Boolean(owner || ownerUserId || lockedBy || lockedByUserId) || explicitDisposition === "human_active";
+  const queue = exists && String(current?.queue || "").trim() ? current.queue : "general";
+  const aiDisposition = humanOwned
+    ? "human_active"
+    : explicitDisposition || (inbound ? "ai_active" : "human_active");
+  const status = inbound
+    ? (current?.status && !["resolved", "closed"].includes(current.status) ? current.status : (humanOwned ? "assigned" : "new"))
+    : (current?.status || "waiting_customer");
 
-function operatorSupportsQueue(operator, queue) {
-  const queues = Array.isArray(operator.queues) ? operator.queues : [];
-  return queues.length === 0 || queues.includes("all") || queues.includes(queue) || (queue === "complaints" && queues.includes("general"));
-}
-
-async function chooseAvailableOperator(queue) {
-  const snapshot = await db.collection("communicationOperatorPresence").get();
-  const now = Date.now();
-  const candidates = snapshot.docs
-    .map((doc) => ({ id: doc.id, ...doc.data() }))
-    .filter((operator) => operator.presence === "available")
-    .filter((operator) => now - timestampMillis(operator.lastSeenAt) <= OPERATOR_STALE_MS)
-    .filter((operator) => operatorSupportsQueue(operator, queue))
-    .filter((operator) => !operator.activeVoiceCall)
-    .sort((left, right) => Number(left.activeChats || 0) - Number(right.activeChats || 0));
-  return candidates[0] ?? null;
+  return {
+    queue,
+    status,
+    owner,
+    ownerUserId,
+    routeReason: current?.routeReason || null,
+    aiDisposition,
+    lockedBy,
+    lockedByUserId,
+  };
 }
 
 function normalizeMedia(payload) {
@@ -225,20 +223,13 @@ function mergeRecentMessages(existing, incoming) {
 
 async function appendConversationMessage({ chat, phone, chatName, message, inbound, profilePicture }) {
   const conversationId = safeDocumentId(chat || phone);
-  const queue = inferQueue(message.text);
-  const routedOperator = inbound ? await chooseAvailableOperator(queue) : null;
   const ref = db.collection("communicationConversations").doc(conversationId);
 
   await db.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(ref);
     const current = snapshot.exists ? snapshot.data() : {};
     const recentMessages = mergeRecentMessages(current?.recentMessages, message);
-    const hasOwner = Boolean(current?.ownerUserId || current?.owner);
-    const owner = !hasOwner && routedOperator ? routedOperator.displayName || routedOperator.name || null : current?.owner || null;
-    const ownerUserId = !hasOwner && routedOperator ? routedOperator.id : current?.ownerUserId || null;
-    const nextStatus = inbound
-      ? (hasOwner || routedOperator ? "assigned" : (current?.status && !["resolved", "closed"].includes(current.status) ? current.status : "new"))
-      : (current?.status || "waiting_customer");
+    const ingress = conversationIngressState({ current, exists: snapshot.exists, inbound });
     const lastMessageText = String(message.text || message.mediaCaption || message.reactionEmoji || (message.mediaType ? mediaPreview(message) : ""));
 
     transaction.set(ref, {
@@ -252,14 +243,14 @@ async function appendConversationMessage({ chat, phone, chatName, message, inbou
       property: current?.property || null,
       equipment: current?.equipment || null,
       language: current?.language || "unknown",
-      queue: current?.queue && current.queue !== "general" ? current.queue : queue,
-      status: nextStatus,
-      owner,
-      ownerUserId,
-      routeReason: !hasOwner && routedOperator ? `Auto-routed from ${queue} queue to available operator.` : current?.routeReason || null,
-      aiDisposition: current?.aiDisposition || "human_active",
-      lockedBy: current?.lockedBy || null,
-      lockedByUserId: current?.lockedByUserId || null,
+      queue: ingress.queue,
+      status: ingress.status,
+      owner: ingress.owner,
+      ownerUserId: ingress.ownerUserId,
+      routeReason: ingress.routeReason,
+      aiDisposition: ingress.aiDisposition,
+      lockedBy: ingress.lockedBy,
+      lockedByUserId: ingress.lockedByUserId,
       unread: inbound ? FieldValue.increment(1) : Number(current?.unread || 0),
       lastMessageText,
       lastActivityAt: FieldValue.serverTimestamp(),
@@ -782,3 +773,5 @@ exports.appendCommunicationInternalNote = onDocumentCreated(
     });
   },
 );
+
+module.exports.conversationIngressState = conversationIngressState;
