@@ -30,16 +30,17 @@ jobs:
       - name: Configure SSH
         shell: bash
         env:
-          DO_SSH_KEY: ${{ secrets.DO_SSH_KEY }}
+          DO_SSH_KEY_B64: ${{ secrets.DO_SSH_KEY_B64 }}
         run: |
           set -euo pipefail
-          if [ -z "${DO_SSH_KEY:-}" ]; then
-            echo '::error::Repository secret DO_SSH_KEY is missing. Run ops/digitalocean/bootstrap.sh on the Droplet and add the printed private key as DO_SSH_KEY.'
+          if [ -z "${DO_SSH_KEY_B64:-}" ]; then
+            echo '::error::Repository secret DO_SSH_KEY_B64 is missing. Rotate the Droplet key with ops/digitalocean/rotate-github-key.sh and add the base64 value as DO_SSH_KEY_B64.'
             exit 1
           fi
           install -d -m 0700 "$HOME/.ssh"
-          printf '%s\n' "$DO_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s' "$DO_SSH_KEY_B64" | base64 --decode > "$HOME/.ssh/id_ed25519"
           chmod 0600 "$HOME/.ssh/id_ed25519"
+          ssh-keygen -y -f "$HOME/.ssh/id_ed25519" >/dev/null
           ssh-keyscan -T 10 -H "$DO_HOST" >> "$HOME/.ssh/known_hosts"
           chmod 0600 "$HOME/.ssh/known_hosts"
 
