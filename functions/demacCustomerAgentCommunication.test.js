@@ -9,6 +9,7 @@ const {
   outboundDocumentId,
   outcomeConversationPatch,
   queueDocumentId,
+  semanticHandoffQueue,
   shouldRunAgent,
   whatsappMessageToRuntime,
 } = require("./demacCustomerAgentCommunication");
@@ -99,14 +100,32 @@ test("normal agent result returns conversation to waiting_customer under AI owne
   assert.equal(patch.aiDisposition, "ai_active");
   assert.equal(patch.status, "waiting_customer");
   assert.equal(patch.agentLastOutcome, "reply");
+  assert.equal(patch.agentLastHandoffQueue, null);
+  assert.equal(patch.agentLastHandoffReason, null);
 });
 
-test("handoff result transfers conversation to human exception ownership", () => {
+test("semantic handoff result preserves agent-selected Communication Center queue and reason", () => {
   const patch = outcomeConversationPatch({
-    metadata: { outcome: "handoff", requiresHuman: true, appointmentId: "APT-1" },
+    metadata: {
+      outcome: "handoff",
+      requiresHuman: true,
+      appointmentId: "APT-1",
+      handoffQueue: "finance",
+      handoffReason: "Customer disputes payment allocation for an open invoice.",
+    },
   });
   assert.equal(patch.aiDisposition, "human_active");
   assert.equal(patch.status, "escalated");
-  assert.equal(patch.queue, "manager");
+  assert.equal(patch.queue, "finance");
+  assert.equal(patch.routeReason, "Customer disputes payment allocation for an open invoice.");
+  assert.equal(patch.agentLastHandoffQueue, "finance");
   assert.equal(patch.agentLastAppointmentId, "APT-1");
+});
+
+test("Communication Center validates queue contract without interpreting customer language", () => {
+  assert.equal(semanticHandoffQueue("technical"), "technical");
+  assert.equal(semanticHandoffQueue("complaints"), "complaints");
+  assert.equal(semanticHandoffQueue("commercial_vip"), "manager");
+  assert.equal(semanticHandoffQueue("invented-queue"), "manager");
+  assert.equal(semanticHandoffQueue(""), "manager");
 });
