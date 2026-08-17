@@ -124,6 +124,7 @@ jobs:
           set -euo pipefail
           STATE="$(gcloud functions describe wacliWebhook --project=demac-corporation --gen2 --region=us-central1 --format='value(state)')"
           URI="$(gcloud functions describe wacliWebhook --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.uri)')"
+          PUBLIC_URL='https://us-central1-demac-corporation.cloudfunctions.net/wacliWebhook'
           SECRETS="$(gcloud functions describe wacliWebhook --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.secretEnvironmentVariables[].key)' | tr ';' '\n' | sort -u)"
           if [ "$STATE" != 'ACTIVE' ] || [ -z "$URI" ]; then
             echo "::error::wacliWebhook state is ${STATE:-unknown}; URI=${URI:-missing}."
@@ -133,4 +134,49 @@ jobs:
             echo '::error::Legacy WACLI_WEBHOOK_SECRET is still bound to Firebase runtime.'
             exit 1
           fi
-          echo "wacliWebhook ACTIVE at $URI with canonical Ed25519 authentication."
+
+          probe_endpoint() {
+            local label="$1"
+            local endpoint="$2"
+            local body
+            local status
+            body="$(mktemp)"
+            status="$(curl --silent --show-error --output "$body" --write-out '%{http_code}' \
+              --request POST "$endpoint" \
+              --header 'Content-Type: application/json' \
+              --header 'X-Demac-Bridge-Signature: ed25519=AAAA' \
+              --data '{}')"
+            if [ "$status" != '401' ]; then
+              echo "::error::${label} returned HTTP ${status}; expected 401 from the canonical Ed25519 boundary."
+              cat "$body"
+              rm -f "$body"
+              exit 1
+            fi
+            python3 - "$body" "$label" <<'PY'
+          import json, sys
+          path, label = sys.argv[1:3]
+          try:
+              payload = json.load(open(path, encoding='utf-8'))
+          except Exception as exc:
+              raise SystemExit(f'{label} did not return canonical JSON diagnostics: {exc}')
+          diagnostics = payload.get('diagnostics') or {}
+          expected_fingerprint = '44f4ec68c8b169456bccd4a70e4a7e210a5b71034a02085da724de9bc4ba480a'
+          checks = {
+              'error': payload.get('error') == 'Invalid signature',
+              'header': diagnostics.get('header') is True,
+              'scheme': diagnostics.get('scheme') == 'ed25519',
+              'sigBytes': diagnostics.get('sigBytes') == 3,
+              'rawAvailable': diagnostics.get('rawAvailable') is True,
+              'keyFingerprint': diagnostics.get('keyFingerprint') == expected_fingerprint,
+          }
+          failed = [name for name, ok in checks.items() if not ok]
+          if failed:
+              raise SystemExit(f'{label} canonical diagnostic check failed: {failed}; payload={payload}')
+          print(f'{label} serves canonical Ed25519 diagnostics.')
+          PY
+            rm -f "$body"
+          }
+
+          probe_endpoint 'Cloud Run URI' "$URI"
+          probe_endpoint 'Cloud Functions URL' "$PUBLIC_URL"
+          echo "wacliWebhook ACTIVE at $URI; both public endpoint forms serve the canonical Ed25519 boundary."
