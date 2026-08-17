@@ -120,7 +120,6 @@ jobs:
             --memory=256Mi \
             --timeout=60s \
             --run-service-account="$RUN_SERVICE_ACCOUNT" \
-            --set-env-vars='FIREBASE_CONFIG={"projectId":"demac-corporation","storageBucket":"demac-corporation.firebasestorage.app"}' \
             --trigger-http \
             --allow-unauthenticated \
             --quiet
