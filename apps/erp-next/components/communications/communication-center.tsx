@@ -2,8 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  aiRiskDecision,
-  routeConversation,
   type ConversationMessage,
   type ConversationStatus,
   type Queue,
@@ -15,6 +13,7 @@ import {
   loadCommunicationWorkspace,
   markConversationRead,
   queueWhatsAppText,
+  returnConversationToAi,
   saveInternalCommunicationNote,
   touchCommunicationPresence,
   updateConversationStatus,
@@ -89,6 +88,7 @@ function isManager(principal: AuthPrincipal | null) {
 
 function needsDemacReply(conversation: LiveConversation) {
   if (['resolved', 'closed'].includes(conversation.status)) return false;
+  if (conversation.aiDisposition === 'ai_active') return false;
   if (conversation.status === 'escalated') return true;
   const last = lastConversationMessage(conversation);
   if (!last) return conversation.status === 'new' || conversation.status === 'waiting_demac';
@@ -105,6 +105,7 @@ function waitingMinutes(conversation: LiveConversation) {
 function visualState(conversation: LiveConversation): { state: VisualState; label: string } {
   if (conversation.status === 'escalated') return { state: 'escalated', label: 'Escalated' };
   if (['resolved', 'closed'].includes(conversation.status)) return { state: 'resolved', label: 'Resolved' };
+  if (conversation.aiDisposition === 'ai_active') return { state: 'assigned', label: 'AI active' };
   if (needsDemacReply(conversation)) {
     const minutes = waitingMinutes(conversation);
     if (minutes >= 30) return { state: 'overdue', label: `${minutes}m waiting` };
@@ -214,7 +215,7 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
   const activeCount = conversations.filter((conversation) => !['resolved', 'closed'].includes(conversation.status)).length;
   const pendingCount = conversations.filter(needsDemacReply).length;
   const myCount = principal ? conversations.filter((conversation) => conversation.ownerUserId === principal.userId && !['resolved', 'closed'].includes(conversation.status)).length : 0;
-  const unassignedCount = conversations.filter((conversation) => !conversation.ownerUserId && !['resolved', 'closed'].includes(conversation.status)).length;
+  const unassignedCount = conversations.filter((conversation) => conversation.aiDisposition !== 'ai_active' && !conversation.ownerUserId && !['resolved', 'closed'].includes(conversation.status)).length;
   const escalatedCount = conversations.filter((conversation) => conversation.status === 'escalated').length;
   const onlineCount = operators.filter((operator) => operator.presence !== 'offline').length;
 
@@ -225,7 +226,7 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
       if (!principal) return false;
       if (scope === 'pending') return needsDemacReply(conversation);
       if (scope === 'mine') return conversation.ownerUserId === principal.userId;
-      if (scope === 'unassigned') return !conversation.ownerUserId;
+      if (scope === 'unassigned') return conversation.aiDisposition !== 'ai_active' && !conversation.ownerUserId;
       return true;
     })
     .filter((conversation) => {
@@ -242,11 +243,14 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
   }, [visible, selectedId]);
 
   const selected = visible.find((conversation) => conversation.id === selectedId) ?? visible[0] ?? null;
+  const selectedAiActive = Boolean(selected && selected.aiDisposition === 'ai_active');
   const selectedOwnedByMe = Boolean(selected && principal && selected.ownerUserId === principal.userId);
-  const selectedUnassigned = Boolean(selected && !selected.ownerUserId);
+  const selectedUnassigned = Boolean(selected && !selected.ownerUserId && !selectedAiActive);
   const selectedOwnedByColleague = Boolean(selected && selected.ownerUserId && principal && selected.ownerUserId !== principal.userId);
-  const canReadBody = Boolean(selected && (manager || selectedOwnedByMe || selectedUnassigned));
-  const canReply = Boolean(selected && principal && (selectedOwnedByMe || selectedUnassigned));
+  const canReadBody = Boolean(selected && (manager || selectedAiActive || selectedOwnedByMe || selectedUnassigned));
+  const canReply = Boolean(selected && principal && selectedOwnedByMe && !selectedAiActive);
+  const canManageWorkflow = Boolean(selected && !selectedAiActive && (manager || selectedOwnedByMe));
+  const canReturnToAi = Boolean(selected && !selectedAiActive && principal && (manager || selectedOwnedByMe));
 
   useEffect(() => {
     let cancelled = false;
@@ -264,17 +268,6 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ block: 'end' });
   }, [selected?.id, selected?.messages.length]);
-
-  const aiDecision = selected ? aiRiskDecision({
-    intent: selected.queue,
-    complaint: selected.queue === 'complaints',
-    paymentDispute: selected.queue === 'finance' && selected.status === 'escalated',
-    refund: false,
-    pricingException: false,
-    technicalComplexity: selected.queue === 'technical' ? 'complex' : 'normal',
-    confidence: selected.queue === 'complaints' ? .55 : .91,
-  }) : null;
-  const recommendedOperator = selected ? routeConversation(selected, operators) : null;
 
   const selectConversation = async (conversation: LiveConversation) => {
     setSelectedId(conversation.id);
@@ -300,6 +293,21 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
     }
   };
 
+  const returnToAi = async () => {
+    if (!selected || !principal || !canReturnToAi) return;
+    setBusy(true);
+    setError('');
+    try {
+      await returnConversationToAi(selected.id, principal);
+      await refresh();
+      setScope('team');
+    } catch (returnError) {
+      setError(returnError instanceof Error ? returnError.message : String(returnError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const reassign = async () => {
     if (!selected || !manager || !assignmentTarget) return;
     const operator = operators.find((item) => item.userId === assignmentTarget);
@@ -317,7 +325,7 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
   };
 
   const changeStatus = async (status: ConversationStatus) => {
-    if (!selected) return;
+    if (!selected || !canManageWorkflow) return;
     setBusy(true);
     setError('');
     try {
@@ -334,21 +342,15 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
     const text = draft.trim();
     if (!text || !selected || !principal) return;
     if (!internal && !canReply) {
-      setError('Take ownership of this conversation before replying so two operators cannot answer the same customer.');
+      setError('Take ownership of this conversation before replying so the Customer Agent and an operator cannot answer the same customer.');
       return;
     }
 
     setBusy(true);
     setError('');
     try {
-      let workingConversation = selected;
-      if (!internal && selectedUnassigned) {
-        await claimConversation(selected.id, principal);
-        workingConversation = { ...selected, owner: principal.displayName, ownerUserId: principal.userId, status: 'assigned' };
-      }
-
       if (internal) await saveInternalCommunicationNote(selected.id, text, principal);
-      else await queueWhatsAppText(workingConversation, text, principal, provider);
+      else await queueWhatsAppText(selected, text, principal, provider);
 
       const optimistic: ConversationMessage = {
         id: `local-${Date.now()}`,
@@ -359,7 +361,7 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
         channel: internal ? 'internal' : 'whatsapp',
       };
       setConversations((current) => current.map((conversation) => conversation.id === selected.id
-        ? { ...conversation, owner: workingConversation.owner, ownerUserId: workingConversation.ownerUserId, messages: [...conversation.messages, optimistic], lastActivityAt: optimistic.at, lastMessageText: text }
+        ? { ...conversation, messages: [...conversation.messages, optimistic], lastActivityAt: optimistic.at, lastMessageText: text }
         : conversation));
       setDraft('');
       if (!internal) setScope('mine');
@@ -394,8 +396,8 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
 
     {standalone ? <div className={styles.standaloneMetrics}>
       <Metric label="Active conversations" value={activeCount} hint="Open customer threads" />
-      <Metric label="Needs reply" value={pendingCount} tone={pendingCount ? 'warning' : undefined} hint="Waiting on DEMAC" />
-      <Metric label="Unassigned" value={unassignedCount} tone={unassignedCount ? 'warning' : undefined} hint="No operator yet" />
+      <Metric label="Needs reply" value={pendingCount} tone={pendingCount ? 'warning' : undefined} hint="Waiting on a DEMAC operator" />
+      <Metric label="Unassigned" value={unassignedCount} tone={unassignedCount ? 'warning' : undefined} hint="Human queue without owner" />
       <Metric label="Operators online" value={onlineCount} tone="success" hint="Active presence" />
       <Metric label="Escalated" value={escalatedCount} tone={escalatedCount ? 'danger' : undefined} hint="Exception queue" />
     </div> : null}
@@ -420,12 +422,13 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
           {!loading && visible.length === 0 ? <div className={styles.empty}><strong>No conversations found</strong><span>Try another inbox view, queue or search.</span></div> : null}
           {visible.map((conversation) => {
             const state = visualState(conversation);
+            const owner = conversation.aiDisposition === 'ai_active' ? 'DEMAC Customer Agent' : conversation.owner ?? 'No operator';
             return <button key={conversation.id} type="button" data-state={state.state} className={`${styles.conversationRow} ${selected?.id === conversation.id ? styles.selectedRow : ''}`} onClick={() => selectConversation(conversation)}>
               <CommunicationAvatar className={styles.avatar} name={conversation.customer} url={conversation.avatarUrl} />
               <span className={styles.rowBody}>
                 <span className={styles.rowTop}><strong>{conversation.customer}</strong><time>{relativeTime(conversation.lastActivityAt)}</time></span>
                 <span className={styles.rowPreview}>{lastMessage(conversation)}</span>
-                <span className={styles.rowMeta}><em className={styles.statusChip} data-state={state.state}>{state.label}</em><em>{conversation.owner ?? 'No operator'}</em><em>{conversation.queue}</em></span>
+                <span className={styles.rowMeta}><em className={styles.statusChip} data-state={state.state}>{state.label}</em><em>{owner}</em><em>{conversation.queue}</em></span>
               </span>
               {conversation.unread ? <b className={styles.unreadBadge}>{conversation.unread}</b> : null}
             </button>;
@@ -437,15 +440,21 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
         {!selected ? <div className={styles.emptyLarge}><span className={styles.emptyIcon}>WA</span><strong>{loading ? 'Loading Communication Center…' : 'No conversation selected'}</strong><p>Choose a conversation from the inbox to start working.</p></div> : <>
           <div className={styles.chatHeader}>
             <div className={styles.chatIdentity}><CommunicationAvatar className={styles.chatAvatar} name={selected.customer} url={selected.avatarUrl} /><div><h2>{selected.customer}</h2><p>{selected.phone || selected.chatJid || 'WhatsApp identity pending'}{selected.property ? ` · ${selected.property}` : ''}</p></div></div>
-            <div className={styles.chatHeaderActions}><span className={styles.ownerLabel}>{selected.owner ? `Assigned to ${selected.owner}` : 'Unassigned'}</span><button type="button" className={styles.takeover} onClick={takeOver} disabled={busy || selectedOwnedByMe}>{selectedOwnedByMe ? 'Owned by me' : selectedOwnedByColleague ? 'Take over' : 'Take conversation'}</button>{!standalone ? <button type="button" className={styles.detailsButton} onClick={() => setShowDetails((current) => !current)}>{showDetails ? 'Hide details' : 'Customer details'}</button> : null}</div>
+            <div className={styles.chatHeaderActions}>
+              <span className={styles.ownerLabel}>{selectedAiActive ? 'DEMAC Customer Agent active' : selected.owner ? `Assigned to ${selected.owner}` : 'Human queue · unassigned'}</span>
+              {selectedOwnedByMe && !selectedAiActive
+                ? <button type="button" className={styles.takeover} onClick={returnToAi} disabled={busy || !canReturnToAi}>Return to AI</button>
+                : <button type="button" className={styles.takeover} onClick={takeOver} disabled={busy || selectedOwnedByMe}>{selectedAiActive ? 'Take over from AI' : selectedOwnedByColleague ? 'Take over' : 'Take conversation'}</button>}
+              {!standalone ? <button type="button" className={styles.detailsButton} onClick={() => setShowDetails((current) => !current)}>{showDetails ? 'Hide details' : 'Customer details'}</button> : null}
+            </div>
           </div>
 
           <div className={styles.workflowBar}>
-            <div className={styles.statusPills}><span className={styles.pill}>{statusLabel(selected.status)}</span><span className={styles.pill}>{selected.queue}</span>{selected.customerTyping ? <span className={`${styles.pill} ${styles.typingPill}`}>typing…</span> : null}{selected.vip ? <span className={`${styles.pill} ${styles.vipPill}`}>VIP</span> : null}</div>
+            <div className={styles.statusPills}><span className={styles.pill}>{statusLabel(selected.status)}</span><span className={styles.pill}>{selected.queue}</span><span className={styles.pill}>{selectedAiActive ? 'AI ownership' : 'Human ownership'}</span>{selected.customerTyping ? <span className={`${styles.pill} ${styles.typingPill}`}>typing…</span> : null}{selected.vip ? <span className={`${styles.pill} ${styles.vipPill}`}>VIP</span> : null}</div>
             <div className={styles.controls}>
-              <select value={selected.status} onChange={(event) => changeStatus(event.target.value as ConversationStatus)} disabled={busy || (!manager && !selectedOwnedByMe)} aria-label="Conversation status">{statusOptions.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select>
+              <select value={selected.status} onChange={(event) => changeStatus(event.target.value as ConversationStatus)} disabled={busy || !canManageWorkflow} aria-label="Conversation status">{statusOptions.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select>
               {manager ? <><select value={assignmentTarget || selected.ownerUserId || ''} onChange={(event) => setAssignmentTarget(event.target.value)} aria-label="Assign conversation"><option value="">Select operator</option>{operators.map((operator) => <option key={operator.userId} value={operator.userId}>{operator.name} · {operator.presence.replaceAll('_', ' ')}</option>)}</select><button type="button" onClick={reassign} disabled={busy || !assignmentTarget}>Assign</button></> : null}
-              <button type="button" className={styles.escalateButton} onClick={() => changeStatus('escalated')} disabled={busy || (!manager && !selectedOwnedByMe)}>Escalate</button><button type="button" className={styles.resolveButton} onClick={() => changeStatus('resolved')} disabled={busy || (!manager && !selectedOwnedByMe)}>Resolve</button>
+              <button type="button" className={styles.escalateButton} onClick={() => changeStatus('escalated')} disabled={busy || !canManageWorkflow}>Escalate</button><button type="button" className={styles.resolveButton} onClick={() => changeStatus('resolved')} disabled={busy || !canManageWorkflow}>Resolve</button>
             </div>
           </div>
 
@@ -459,10 +468,10 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
           </div>
 
           <div className={`${styles.composer} ${internal ? styles.internalComposer : ''}`}>
-            <div className={styles.composerMode}><button type="button" onClick={() => setInternal(false)} className={!internal ? styles.active : ''} disabled={!canReadBody}>Reply</button><button type="button" onClick={() => setInternal(true)} className={internal ? styles.active : ''} disabled={!canReadBody}>Internal note</button><span>{internal ? 'Visible only to DEMAC staff' : principal ? `Sending as ${principal.displayName}` : 'WhatsApp message'}</span></div>
+            <div className={styles.composerMode}><button type="button" onClick={() => setInternal(false)} className={!internal ? styles.active : ''} disabled={!canReadBody}>Reply</button><button type="button" onClick={() => setInternal(true)} className={internal ? styles.active : ''} disabled={!canReadBody}>Internal note</button><span>{internal ? 'Visible only to DEMAC staff' : selectedAiActive ? 'Customer Agent currently owns this conversation' : principal ? `Sending as ${principal.displayName}` : 'WhatsApp message'}</span></div>
             <div className={styles.composerBox}>
               <div className={styles.mediaTools}><button type="button" className={styles.mediaButton} disabled title="File sending will be activated after full-screen UX acceptance." aria-label="Attach file">＋</button><button type="button" className={styles.mediaButton} disabled title="Voice notes will be activated after full-screen UX acceptance." aria-label="Record voice note">●</button></div>
-              <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (!busy && draft.trim() && (internal || canReply)) void send(); } }} disabled={!canReadBody || busy} placeholder={internal ? 'Write an internal note…' : canReply ? 'Type a message…' : 'Take ownership before replying…'} />
+              <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (!busy && draft.trim() && (internal || canReply)) void send(); } }} disabled={!canReadBody || busy} placeholder={internal ? 'Write an internal note…' : canReply ? 'Type a message…' : selectedAiActive ? 'Take over from AI before replying…' : 'Take ownership before replying…'} />
               <button type="button" className={styles.sendButton} onClick={send} disabled={busy || !draft.trim() || (!internal && !canReply)}>{busy ? 'Sending…' : internal ? 'Save note' : 'Send'}</button>
             </div>
             <div className={styles.composerHint}><span>Enter to send · Shift+Enter for new line</span><span>{internal ? 'Internal collaboration' : 'WhatsApp'}</span></div>
@@ -480,10 +489,10 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
           </nav>
 
           {contextTab === 'overview' ? <div className={styles.contextBody}>
-            <section className={styles.contextSection}><span>Conversation</span><dl><div><dt>Owner</dt><dd>{selected.owner ?? 'Unassigned'}</dd></div><div><dt>Status</dt><dd>{statusLabel(selected.status)}</dd></div><div><dt>Queue</dt><dd>{selected.queue}</dd></div><div><dt>Language</dt><dd>{customerContext?.preferredLanguage || selected.language}</dd></div></dl></section>
+            <section className={styles.contextSection}><span>Conversation</span><dl><div><dt>Owner</dt><dd>{selectedAiActive ? 'DEMAC Customer Agent' : selected.owner ?? 'Unassigned'}</dd></div><div><dt>Ownership</dt><dd>{selectedAiActive ? 'AI' : 'Human'}</dd></div><div><dt>Status</dt><dd>{statusLabel(selected.status)}</dd></div><div><dt>Queue</dt><dd>{selected.queue}</dd></div><div><dt>Language</dt><dd>{customerContext?.preferredLanguage || selected.language}</dd></div></dl></section>
             <section className={styles.contextSection}><span>Customer profile</span>{customerContext ? <dl><div><dt>Customer ID</dt><dd>{customerContext.id}</dd></div><div><dt>Type</dt><dd>{customerContext.type || '—'}</dd></div><div><dt>CRM status</dt><dd>{customerContext.status || '—'}</dd></div><div><dt>Properties</dt><dd>{customerContext.properties.length}</dd></div><div><dt>Registered A/C</dt><dd>{customerContext.equipment.length}</dd></div></dl> : <p>This WhatsApp identity has not been matched to a live CRM customer yet. The conversation can still be handled normally.</p>}{customerContext?.tags.length ? <div className={styles.tagList}>{customerContext.tags.map((tag) => <span key={tag}>{tag}</span>)}</div> : null}</section>
             {selected.nextAction ? <section className={styles.contextSection}><span>Next action</span><strong>{selected.nextAction}</strong><p>{selected.nextActionDue ? `Due ${selected.nextActionDue}` : 'No due date.'}</p></section> : null}
-            {mode !== 'communications' ? <section className={styles.contextSection}><span>Routing</span><strong>{selected.routeReason ?? (recommendedOperator ? `Recommended: ${recommendedOperator.name}` : 'Manual / queue routing')}</strong><p>{aiDecision ? `${aiDecision.mode === 'ai' ? 'AI may continue' : 'Human required'} · ${aiDecision.reason}` : 'Waiting for more context.'}</p></section> : null}
+            {mode !== 'communications' ? <section className={styles.contextSection}><span>Ownership</span><strong>{selectedAiActive ? 'DEMAC Customer Agent' : selected.owner ? `Human · ${selected.owner}` : 'Human queue · unassigned'}</strong><p>{selected.routeReason || 'Ownership is controlled by the Customer Agent runtime and Communication Center.'}</p></section> : null}
           </div> : null}
 
           {contextTab === 'properties' ? <div className={styles.contextBody}>{contextLoading ? <div className={styles.contextEmpty}>Loading customer properties…</div> : customerContext?.properties.length ? <div className={styles.recordList}>{customerContext.properties.map((property) => <article key={property.id}><div><strong>{property.name}</strong><span>{property.address}</span>{property.sector ? <small>{property.sector}</small> : null}</div><b>{property.equipment.length} A/C</b></article>)}</div> : <div className={styles.contextEmpty}>No live CRM properties are linked to this WhatsApp contact.</div>}</div> : null}
