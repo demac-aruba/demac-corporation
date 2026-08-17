@@ -11,6 +11,64 @@ export type MarketingCreativeProduct = {
   specs: string;
 };
 
+export type MarketingCreativeQa = {
+  source: string;
+  status: 'passed' | 'failed' | 'needs_review' | string;
+  score: number;
+  selectionScore?: number;
+  overallScore?: number;
+  mobileLegibility: number;
+  visualHierarchy: number;
+  contrast: number;
+  footerClearance: number;
+  authenticity: number;
+  professionalism: number;
+  creativeQuality?: number;
+  scrollStoppingPower?: number;
+  agencyFeel?: number;
+  photoIntegration?: number;
+  ctaProminence?: number;
+  visualSophistication?: number;
+  commercialCompleteness?: number;
+  layoutRichness?: number;
+  brandSystemCoherence?: number;
+  offerClarity?: number;
+  attempt: number;
+  issues: string[];
+  revisionInstructions: string[];
+  hardChecks?: {
+    brandCenterLive: boolean;
+    languagePassed: boolean;
+    exactWhatsapp: boolean;
+    productFactsApproved: boolean;
+    footerReserved: boolean;
+    allPassed: boolean;
+  } | null;
+};
+
+export type MarketingCreativeVariant = {
+  id: string;
+  conceptId: string;
+  name: string;
+  rationale: string;
+  imageStoragePath?: string;
+  imageUrl: string;
+  imageModel?: string;
+  selectionScore?: number;
+  revised?: boolean;
+  layout?: {
+    headlineZone?: string;
+    ctaZone?: string;
+    textPanelStyle?: string;
+    textAlign?: string;
+    accentStyle?: string;
+    photoFocus?: string;
+    compositionTemplate?: string;
+    visualEnergy?: string;
+  };
+  qa: MarketingCreativeQa;
+};
+
 export type MarketingCreative = {
   id: string;
   sessionId: string;
@@ -18,7 +76,9 @@ export type MarketingCreative = {
   campaignType: string;
   version: number;
   status: MarketingCreativeStatus | string;
+  builderVersion?: string;
   heroAssetId: string;
+  imageStoragePath?: string;
   imageUrl: string;
   approvedUrl?: string;
   width: number;
@@ -26,39 +86,32 @@ export type MarketingCreative = {
   reservedFooterPx: number;
   renderTemplate: string;
   renderMode: string;
+  artDirectorModel?: string;
   imageModel?: string;
+  qaModel?: string;
+  selectedVariantId?: string;
+  variantCount?: number;
+  autoRevised?: boolean;
+  variants?: MarketingCreativeVariant[];
+  artDirection?: {
+    campaignSummary?: string;
+    creativeNorthStar?: string;
+  };
   exactText: {
     headline: string;
     subheadline: string;
+    primaryText?: string;
     cta: string;
     whatsapp: string;
     offer: string;
+    eyebrow?: string;
+    proofLabel?: string;
+    supportPoints?: string[];
     products: MarketingCreativeProduct[];
   };
   captionText: string;
   papiamentoValidationStatus: string;
-  qa: {
-    source: string;
-    status: 'passed' | 'failed' | 'needs_review' | string;
-    score: number;
-    mobileLegibility: number;
-    visualHierarchy: number;
-    contrast: number;
-    footerClearance: number;
-    authenticity: number;
-    professionalism: number;
-    attempt: number;
-    issues: string[];
-    revisionInstructions: string[];
-    hardChecks?: {
-      brandCenterLive: boolean;
-      languagePassed: boolean;
-      exactWhatsapp: boolean;
-      productFactsApproved: boolean;
-      footerReserved: boolean;
-      allPassed: boolean;
-    } | null;
-  };
+  qa: MarketingCreativeQa;
   approvedAt?: string;
   approvedByName?: string;
   createdAt: string;
