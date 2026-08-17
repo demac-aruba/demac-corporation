@@ -1,5 +1,5 @@
-import { CreativeStudio } from '@/components/marketing/creative-studio';
+import { CreativeStudioV2 } from '@/components/marketing/creative-studio-v2';
 
 export default function MarketingCreativeStudioPage() {
-  return <CreativeStudio />;
+  return <CreativeStudioV2 />;
 }
