@@ -6,6 +6,7 @@ on:
       - 'functions/whatsappWacliGateway.js'
       - 'functions/whatsappWacliGateway.test.js'
       - 'functions/wacliOutboundMediaUpload.js'
+      - 'functions/wacliOutboundMediaUpload.test.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
       - '.github/workflows/wacli-webhook-deploy.yml'
@@ -16,6 +17,7 @@ on:
       - 'functions/whatsappWacliGateway.js'
       - 'functions/whatsappWacliGateway.test.js'
       - 'functions/wacliOutboundMediaUpload.js'
+      - 'functions/wacliOutboundMediaUpload.test.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
       - '.github/workflows/wacli-webhook-deploy.yml'
@@ -51,7 +53,7 @@ jobs:
           node --check functions/whatsappWacliGateway.js
           node --check functions/wacliOutboundMediaUpload.js
           node --check functions/bootstrap.js
-          node --test functions/whatsappWacliGateway.test.js
+          node --test functions/whatsappWacliGateway.test.js functions/wacliOutboundMediaUpload.test.js
           if grep -Eqi 'ed25519|x-demac-bridge-signature|BRIDGE_PUBLIC_KEY|WACLI_BRIDGE_URL|bridgeEndpoint\(|sendQueuedWacliMessage' functions/whatsappWacliGateway.js; then
             echo '::error::Retired inbound-to-Droplet or custom-auth code remains in Firebase gateway.'
             exit 1
