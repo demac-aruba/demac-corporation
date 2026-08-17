@@ -222,18 +222,47 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for FUNCTION_NAME in \
-            requestMarketingImageAnalysis \
-            requestMarketingCampaignStrategy \
-            requestMarketingCreativeBuild \
-            approveMarketingCreative \
+          FUNCTIONS=(
+            requestMarketingImageAnalysis
+            requestMarketingCampaignStrategy
+            requestMarketingCreativeBuild
+            approveMarketingCreative
             getMarketingCreativeState
-          do
-            STATE="$(gcloud functions describe "$FUNCTION_NAME" --project=demac-corporation --gen2 --region=us-central1 --format='value(state)')"
-            URI="$(gcloud functions describe "$FUNCTION_NAME" --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.uri)')"
-            if [ "$STATE" != "ACTIVE" ] || [ -z "$URI" ]; then
-              echo "::error::$FUNCTION_NAME state is ${STATE:-unknown}; URI=${URI:-missing}."
-              exit 1
+          )
+
+          MAX_ATTEMPTS=30
+          SLEEP_SECONDS=10
+
+          for ATTEMPT in $(seq 1 "$MAX_ATTEMPTS"); do
+            PENDING=0
+            echo "Readiness check ${ATTEMPT}/${MAX_ATTEMPTS}"
+
+            for FUNCTION_NAME in "${FUNCTIONS[@]}"; do
+              STATE="$(gcloud functions describe "$FUNCTION_NAME" --project=demac-corporation --gen2 --region=us-central1 --format='value(state)' || true)"
+              URI="$(gcloud functions describe "$FUNCTION_NAME" --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.uri)' || true)"
+
+              if [ "$STATE" = "FAILED" ]; then
+                echo "::error::$FUNCTION_NAME entered FAILED state; URI=${URI:-missing}."
+                exit 1
+              fi
+
+              if [ "$STATE" = "ACTIVE" ] && [ -n "$URI" ]; then
+                echo "$FUNCTION_NAME is ACTIVE at $URI"
+              else
+                echo "$FUNCTION_NAME is not ready yet: state=${STATE:-unknown}; URI=${URI:-missing}."
+                PENDING=$((PENDING + 1))
+              fi
+            done
+
+            if [ "$PENDING" -eq 0 ]; then
+              echo 'All Marketing Agent callables are ACTIVE.'
+              exit 0
             fi
-            echo "$FUNCTION_NAME is ACTIVE at $URI"
+
+            if [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; then
+              sleep "$SLEEP_SECONDS"
+            fi
           done
+
+          echo '::error::Marketing Agent callables did not all become ACTIVE within 5 minutes.'
+          exit 1
