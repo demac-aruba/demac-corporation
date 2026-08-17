@@ -39,12 +39,21 @@ function slotsFor(item: ServiceType) {
   return Math.max(1, Math.min(3, Math.ceil((item.durationMinutes || 60) / 60)));
 }
 
+function formatVerification(value?: string) {
+  if (!value) return 'Sin verificar';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return 'Sin verificar';
+  return date.toLocaleString('es-AW', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
 export function CatalogScreen() {
   const {
     services,
+    commercialProductStock,
     addCatalogItem,
     updateCatalogItem,
     removeCatalogItem,
+    saveCommercialProductStock,
     dataError,
     refreshOperationalData,
   } = useAppState();
@@ -56,6 +65,10 @@ export function CatalogScreen() {
   const [form, setForm] = useState<FormState>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
+  const [showStockForm, setShowStockForm] = useState(false);
+  const [stockOnHand, setStockOnHand] = useState('0');
+  const [stockSaving, setStockSaving] = useState(false);
+  const [stockMessage, setStockMessage] = useState('');
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -68,6 +81,15 @@ export function CatalogScreen() {
   }, [services, query, filter]);
 
   const selected = services.find((item) => item.id === selectedId) ?? filtered[0];
+  const selectedStock = selected
+    ? commercialProductStock.find((stock) => stock.id === selected.id || stock.productId === selected.id)
+    : undefined;
+  const stockReserved = Number.isInteger(selectedStock?.reserved) && Number(selectedStock?.reserved) >= 0
+    ? Number(selectedStock?.reserved)
+    : 0;
+  const stockAvailable = selectedStock && Number.isInteger(selectedStock.onHand) && selectedStock.onHand >= stockReserved
+    ? selectedStock.onHand - stockReserved
+    : null;
 
   const openNew = (itemType: CatalogItemType = 'Servicio') => {
     setEditingId(null);
@@ -92,6 +114,13 @@ export function CatalogScreen() {
     });
     setMessage('');
     setShowForm(true);
+  };
+
+  const openStockEditor = () => {
+    if (!selected || normalizeType(selected) !== 'Producto') return;
+    setStockOnHand(String(selectedStock?.onHand ?? 0));
+    setStockMessage('');
+    setShowStockForm(true);
   };
 
   const saveItem = async () => {
@@ -129,6 +158,28 @@ export function CatalogScreen() {
     setShowForm(false);
   };
 
+  const saveStock = async () => {
+    if (!selected || normalizeType(selected) !== 'Producto') return;
+    const onHand = Number(stockOnHand.trim());
+    if (!Number.isInteger(onHand) || onHand < 0) {
+      setStockMessage('Escribe una cantidad física entera igual o mayor que cero.');
+      return;
+    }
+    if (onHand < stockReserved) {
+      setStockMessage(`No puedes guardar ${onHand}; existen ${stockReserved} unidad${stockReserved === 1 ? '' : 'es'} reservada${stockReserved === 1 ? '' : 's'}.`);
+      return;
+    }
+    setStockSaving(true);
+    setStockMessage('');
+    const result = await saveCommercialProductStock(selected.id, onHand);
+    setStockSaving(false);
+    if (!result.ok) {
+      setStockMessage(result.message ?? 'No se pudo actualizar el stock comercial.');
+      return;
+    }
+    setShowStockForm(false);
+  };
+
   const toggleActive = async (item: ServiceType) => {
     const result = await updateCatalogItem(item.id, { active: item.active === false, updatedAt: new Date().toISOString() });
     if (!result.ok) setMessage(result.message ?? 'No se pudo actualizar.');
@@ -154,7 +205,7 @@ export function CatalogScreen() {
 
       <SectionTitle
         title="Servicios y productos"
-        subtitle="Administra los servicios que aparecen en la agenda y los productos disponibles para ventas o trabajos."
+        subtitle="Administra servicios, productos y el stock comercial disponible para ventas."
         action={<Button label="Nuevo artículo" icon="＋" onPress={() => openNew('Servicio')} />}
       />
 
@@ -173,10 +224,14 @@ export function CatalogScreen() {
           {filtered.length ? filtered.map((item) => {
             const type = normalizeType(item);
             const active = selected?.id === item.id;
+            const itemStock = type === 'Producto' ? commercialProductStock.find((stock) => stock.id === item.id || stock.productId === item.id) : undefined;
+            const itemAvailable = itemStock && Number.isInteger(itemStock.onHand) && Number.isInteger(itemStock.reserved) && itemStock.onHand >= itemStock.reserved
+              ? itemStock.onHand - itemStock.reserved
+              : null;
             return (
               <Pressable key={item.id} onPress={() => setSelectedId(item.id)} style={[styles.itemRow, active && styles.itemRowActive]}>
                 <View style={styles.itemIcon}><Text style={styles.itemIconText}>{type === 'Servicio' ? '🔧' : '▦'}</Text></View>
-                <View style={{ flex: 1 }}><Text style={styles.itemName}>{item.name}</Text><Text style={styles.itemMeta}>{type} · {item.category}{type === 'Servicio' ? ` · ${slotsFor(item)} cupo${slotsFor(item) > 1 ? 's' : ''}` : ''}</Text></View>
+                <View style={{ flex: 1 }}><Text style={styles.itemName}>{item.name}</Text><Text style={styles.itemMeta}>{type} · {item.category}{type === 'Servicio' ? ` · ${slotsFor(item)} cupo${slotsFor(item) > 1 ? 's' : ''}` : itemAvailable === null ? ' · Stock sin verificar' : ` · ${itemAvailable} disponible${itemAvailable === 1 ? '' : 's'}`}</Text></View>
                 <View style={styles.itemRight}><Text style={styles.itemPrice}>{formatMoney(item.basePrice)}</Text><Pill label={item.active === false ? 'Inactivo' : 'Activo'} tone={item.active === false ? 'neutral' : 'success'} /></View>
               </Pressable>
             );
@@ -197,6 +252,28 @@ export function CatalogScreen() {
                 <Info label="Código / SKU" value={selected.sku || 'No registrado'} />
               </View>
               <View style={styles.descriptionBox}><Text style={styles.descriptionLabel}>DESCRIPCIÓN</Text><Text style={styles.descriptionText}>{selected.description || 'Sin descripción adicional.'}</Text></View>
+
+              {normalizeType(selected) === 'Producto' ? (
+                <View style={styles.stockBox}>
+                  <View style={styles.stockHeader}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.stockTitle}>STOCK COMERCIAL</Text>
+                      <Text style={styles.stockSubtitle}>El agente de ventas consulta estos valores antes de informar disponibilidad.</Text>
+                    </View>
+                    <Pill label={selectedStock?.verifiedAt ? 'Verificado' : 'Sin verificar'} tone={selectedStock?.verifiedAt ? 'success' : 'neutral'} />
+                  </View>
+                  <View style={styles.stockGrid}>
+                    <Info label="Físico" value={selectedStock ? String(selectedStock.onHand) : '—'} />
+                    <Info label="Reservado" value={selectedStock ? String(stockReserved) : '0'} />
+                    <Info label="Disponible" value={stockAvailable === null ? '—' : String(stockAvailable)} />
+                    <Info label="Última verificación" value={formatVerification(selectedStock?.verifiedAt)} />
+                  </View>
+                  {selectedStock?.verifiedByName ? <Text style={styles.stockVerifiedBy}>Verificado por {selectedStock.verifiedByName}</Text> : null}
+                  <Text style={styles.stockNote}>Las unidades reservadas son de solo lectura aquí. Se administrarán mediante reservas/órdenes de venta para evitar liberar o prometer stock por error.</Text>
+                  <View style={styles.stockActions}><Button label={selectedStock ? 'Actualizar stock' : 'Registrar stock'} onPress={openStockEditor} /></View>
+                </View>
+              ) : null}
+
               <View style={styles.actionRow}>
                 <Button variant="secondary" label="Editar" onPress={() => openEdit(selected)} />
                 <Button variant="secondary" label={selected.active === false ? 'Activar' : 'Desactivar'} onPress={() => void toggleActive(selected)} />
@@ -221,6 +298,21 @@ export function CatalogScreen() {
           {form.itemType === 'Servicio' ? <><Text style={styles.fieldLabel}>Visibilidad en la agenda</Text><View style={styles.optionRow}><Choice label="Servicio común" active={form.featured} onPress={() => setForm({ ...form, featured: true })} /><Choice label="Solo por búsqueda" active={!form.featured} onPress={() => setForm({ ...form, featured: false })} /></View></> : null}
           <Text style={styles.fieldLabel}>Estado</Text><View style={styles.optionRow}><Choice label="Activo" active={form.active} onPress={() => setForm({ ...form, active: true })} /><Choice label="Inactivo" active={!form.active} onPress={() => setForm({ ...form, active: false })} /></View>
           <View style={styles.modalActions}><Button variant="secondary" label="Cancelar" disabled={saving} onPress={() => setShowForm(false)} /><Button label={saving ? 'Guardando…' : 'Guardar artículo'} disabled={saving} onPress={() => void saveItem()} /></View>
+        </ScrollView>
+      </AppModal>
+
+      <AppModal visible={showStockForm} title="Actualizar stock comercial" onClose={() => !stockSaving && setShowStockForm(false)}>
+        <ScrollView>
+          {stockMessage ? <View style={styles.formError}><Text style={styles.formErrorText}>{stockMessage}</Text></View> : null}
+          <Text style={styles.stockModalProduct}>{selected?.name ?? 'Producto'}</Text>
+          {selected?.sku ? <Text style={styles.stockModalSku}>SKU: {selected.sku}</Text> : null}
+          <Input label="Stock físico" value={stockOnHand} onChangeText={setStockOnHand} keyboardType="number-pad" placeholder="0" />
+          <View style={styles.stockModalSummary}>
+            <Info label="Reservado" value={String(stockReserved)} />
+            <Info label="Disponible después de guardar" value={Number.isInteger(Number(stockOnHand)) && Number(stockOnHand) >= stockReserved ? String(Number(stockOnHand) - stockReserved) : '—'} />
+          </View>
+          <Text style={styles.stockNote}>Guardar este conteo también lo marca como verificado ahora. El valor reservado no puede editarse desde esta pantalla.</Text>
+          <View style={styles.modalActions}><Button variant="secondary" label="Cancelar" disabled={stockSaving} onPress={() => setShowStockForm(false)} /><Button label={stockSaving ? 'Guardando…' : 'Guardar y verificar stock'} disabled={stockSaving} onPress={() => void saveStock()} /></View>
         </ScrollView>
       </AppModal>
     </ScrollView>
@@ -264,12 +356,23 @@ const styles = StyleSheet.create({
   detailName: { color: colors.text, fontWeight: '900', fontSize: 22, marginTop: 5 },
   detailCategory: { color: colors.muted, marginTop: 4, fontSize: 12 },
   infoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 15, marginTop: 20, paddingTop: 17, borderTopWidth: 1, borderTopColor: colors.border },
-  info: { flex: 1, minWidth: 150 },
+  info: { flex: 1, minWidth: 135 },
   infoLabel: { color: colors.muted, fontSize: 9, fontWeight: '900', textTransform: 'uppercase' },
   infoValue: { color: colors.text, fontSize: 12, fontWeight: '800', marginTop: 5 },
   descriptionBox: { marginTop: 18, backgroundColor: '#F6F8FA', borderRadius: 8, padding: 13 },
   descriptionLabel: { color: colors.muted, fontSize: 9, fontWeight: '900' },
   descriptionText: { color: colors.text, lineHeight: 19, marginTop: 6, fontSize: 12 },
+  stockBox: { marginTop: 18, borderWidth: 1, borderColor: colors.border, borderRadius: 10, padding: 14, backgroundColor: '#FBFCFD' },
+  stockHeader: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
+  stockTitle: { color: colors.text, fontSize: 10, fontWeight: '900', letterSpacing: 0.7 },
+  stockSubtitle: { color: colors.muted, fontSize: 10, lineHeight: 15, marginTop: 4 },
+  stockGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 15 },
+  stockVerifiedBy: { color: colors.muted, fontSize: 10, marginTop: 12 },
+  stockNote: { color: colors.muted, fontSize: 10, lineHeight: 16, marginTop: 12 },
+  stockActions: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14 },
+  stockModalProduct: { color: colors.text, fontSize: 18, fontWeight: '900', marginBottom: 4 },
+  stockModalSku: { color: colors.muted, fontSize: 10, marginBottom: 14 },
+  stockModalSummary: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 8, padding: 12, borderRadius: 8, backgroundColor: '#F6F8FA' },
   actionRow: { flexDirection: 'row', gap: 9, flexWrap: 'wrap', justifyContent: 'flex-end', marginTop: 18 },
   formError: { backgroundColor: colors.dangerLight, borderRadius: 8, padding: 10, marginBottom: 12 },
   formErrorText: { color: colors.danger, fontSize: 11, fontWeight: '700' },
