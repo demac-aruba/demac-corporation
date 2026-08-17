@@ -9,6 +9,8 @@ on:
       - 'functions/marketingCampaignStrategyAruba.js'
       - 'functions/marketingCreativeBuilder.js'
       - 'functions/marketingCreativeBuilderV2.js'
+      - 'functions/marketingCreativeBuilderV2Compat.js'
+      - 'functions/marketingCreativeBuilderV21.js'
       - 'functions/marketingCreativeRead.js'
       - 'functions/package.json'
       - 'functions/bootstrap.js'
@@ -23,6 +25,8 @@ on:
       - 'functions/marketingCampaignStrategyAruba.js'
       - 'functions/marketingCreativeBuilder.js'
       - 'functions/marketingCreativeBuilderV2.js'
+      - 'functions/marketingCreativeBuilderV2Compat.js'
+      - 'functions/marketingCreativeBuilderV21.js'
       - 'functions/marketingCreativeRead.js'
       - 'functions/package.json'
       - 'functions/bootstrap.js'
@@ -53,6 +57,8 @@ jobs:
           node --check functions/marketingCampaignStrategyAruba.js
           node --check functions/marketingCreativeBuilder.js
           node --check functions/marketingCreativeBuilderV2.js
+          node --check functions/marketingCreativeBuilderV2Compat.js
+          node --check functions/marketingCreativeBuilderV21.js
           node --check functions/marketingCreativeRead.js
           node --check functions/bootstrap.js
           node - <<'NODE'
@@ -103,14 +109,15 @@ jobs:
           const fallbackIssues = aruba.papiamentoReviewWords(safeFallback, []);
           if (fallbackIssues.length) throw new Error(`Approved DEMAC fallback did not validate: ${fallbackIssues.join(', ')}`);
 
-          const v2 = require('./functions/marketingCreativeBuilderV2').__marketingCreativeBuilderV2Test;
-          if (!v2 || v2.IMAGE_MODEL !== 'gpt-image-2') throw new Error('Creative Builder V2 must require gpt-image-2.');
-          if (v2.ART_DIRECTOR_MODEL !== 'gpt-5.6-sol' || v2.QA_MODEL !== 'gpt-5.6-sol') {
-            throw new Error('Creative Builder V2 must use GPT-5.6 Sol for art direction and visual QA.');
+          const v21 = require('./functions/marketingCreativeBuilderV21').__marketingCreativeBuilderV2Test;
+          if (!v21 || v21.IMAGE_MODEL !== 'gpt-image-2') throw new Error('Creative Builder V2.1 must require gpt-image-2.');
+          if (v21.ART_DIRECTOR_MODEL !== 'gpt-5.6-sol' || v21.QA_MODEL !== 'gpt-5.6-sol') {
+            throw new Error('Creative Builder V2.1 must use GPT-5.6 Sol for art direction and visual QA.');
           }
-          if (!Array.isArray(v2.VARIANT_IDS) || v2.VARIANT_IDS.length !== 3) throw new Error('Creative Builder V2 must generate three concepts.');
-          if (v2.FOOTER_RESERVED_PX < 140) throw new Error('Footer reserve is too small.');
-          console.log('Aruba Papiamento + Marketing Creative V2 guardrails: PASS');
+          if (v21.BUILDER_VERSION !== 'V2.1') throw new Error('Creative Builder production version must be V2.1.');
+          if (!Array.isArray(v21.VARIANT_IDS) || v21.VARIANT_IDS.length !== 3) throw new Error('Creative Builder V2.1 must generate three concepts.');
+          if (v21.FOOTER_RESERVED_PX < 140) throw new Error('Footer reserve is too small.');
+          console.log('Aruba Papiamento + Marketing Creative V2.1 guardrails: PASS');
           NODE
 
   deploy-marketing-function:
