@@ -22,7 +22,7 @@ import {
   signInWithFirebaseEmail,
   updateFirestoreDocument,
 } from '../services/firebase';
-import { Client, InventoryItem, Invoice, Property, ServiceType, User, UserRole, WhatsAppLocationMessage, WorkOrder, WorkOrderEvidence, WorkOrderUnit } from '../types';
+import { Client, CommercialProductStock, InventoryItem, Invoice, Property, ServiceType, User, UserRole, WhatsAppLocationMessage, WorkOrder, WorkOrderEvidence, WorkOrderUnit } from '../types';
 
 const STORAGE_KEY = '@demac-corporation-demo-state-v3';
 const FIRESTORE_SYNC_INTERVAL_MS = 30_000;
@@ -49,6 +49,7 @@ type PersistedState = {
   clients: Client[];
   properties: Property[];
   services: ServiceType[];
+  commercialProductStock: CommercialProductStock[];
   workOrders: WorkOrder[];
   workOrderEvidence: WorkOrderEvidence[];
   workOrderUnits: WorkOrderUnit[];
@@ -66,6 +67,7 @@ type AppStateValue = {
   properties: Property[];
   equipment: typeof demoEquipment;
   services: ServiceType[];
+  commercialProductStock: CommercialProductStock[];
   vans: typeof demoVans;
   workOrders: WorkOrder[];
   workOrderEvidence: WorkOrderEvidence[];
@@ -91,6 +93,7 @@ type AppStateValue = {
   addCatalogItem: (item: ServiceType) => Promise<OperationResult>;
   updateCatalogItem: (id: string, changes: Partial<ServiceType>) => Promise<OperationResult>;
   removeCatalogItem: (id: string) => Promise<OperationResult>;
+  saveCommercialProductStock: (productId: string, onHand: number) => Promise<OperationResult>;
   addWorkOrder: (order: WorkOrder) => Promise<OperationResult>;
   updateWorkOrder: (id: string, changes: Partial<WorkOrder>) => Promise<OperationResult>;
   addWorkOrderEvidence: (evidence: WorkOrderEvidence) => Promise<OperationResult>;
@@ -127,7 +130,7 @@ function friendlyDataError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   const normalized = message.toLowerCase();
   if (normalized.includes('permission') || normalized.includes('insufficient') || normalized.includes('denied')) {
-    return 'Firebase rechazó la operación. Las reglas de Firestore deben permitir clientes, propiedades, catálogo y órdenes para tu rol.';
+    return 'Firebase rechazó la operación. Las reglas de Firestore deben permitir clientes, propiedades, catálogo, stock comercial y órdenes para tu rol.';
   }
   if (normalized.includes('session') || normalized.includes('sesión') || normalized.includes('token')) {
     return 'Tu sesión venció. Cierra sesión e inicia nuevamente.';
@@ -154,6 +157,10 @@ function sortCatalog(items: ServiceType[]) {
   });
 }
 
+function sortCommercialProductStock(items: CommercialProductStock[]) {
+  return [...items].sort((a, b) => a.productId.localeCompare(b.productId));
+}
+
 function sortWorkOrders(items: WorkOrder[]) {
   return [...items].sort((a, b) => `${b.date} ${b.time}`.localeCompare(`${a.date} ${a.time}`));
 }
@@ -163,6 +170,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [clients, setClients] = useState<Client[]>(demoClients);
   const [properties, setProperties] = useState<Property[]>(demoProperties);
   const [services, setServices] = useState<ServiceType[]>(normalizedDemoServices);
+  const [commercialProductStock, setCommercialProductStock] = useState<CommercialProductStock[]>([]);
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>(demoWorkOrders);
   const [workOrderEvidence, setWorkOrderEvidence] = useState<WorkOrderEvidence[]>([]);
   const [workOrderUnits, setWorkOrderUnits] = useState<WorkOrderUnit[]>([]);
@@ -178,10 +186,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const refreshOperationalData = useCallback(async (showLoader = true) => {
     if (showLoader) setDataLoading(true);
     try {
-      const [remoteClients, remoteProperties, remoteServices, remoteWorkOrders, remoteEvidence, remoteUnits, remoteWhatsappMessages] = await Promise.all([
+      const [remoteClients, remoteProperties, remoteServices, remoteCommercialStock, remoteWorkOrders, remoteEvidence, remoteUnits, remoteWhatsappMessages] = await Promise.all([
         listFirestoreCollection<Client>('clients'),
         listFirestoreCollection<Property>('properties'),
         listFirestoreCollection<ServiceType>('services'),
+        listFirestoreCollection<CommercialProductStock>('commercialProductStock'),
         listFirestoreCollection<WorkOrder>('workOrders'),
         listFirestoreCollection<WorkOrderEvidence>('workOrderEvidence'),
         listFirestoreCollection<WorkOrderUnit>('workOrderUnits'),
@@ -190,6 +199,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       setClients(sortClients(remoteClients));
       setProperties(sortProperties(remoteProperties));
       setServices(sortCatalog(remoteServices));
+      setCommercialProductStock(sortCommercialProductStock(remoteCommercialStock));
       setWorkOrders(sortWorkOrders(remoteWorkOrders));
       setWorkOrderEvidence([...remoteEvidence].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt)));
       setWorkOrderUnits([...remoteUnits].sort((a, b) => `${a.workOrderId}-${a.sequence}`.localeCompare(`${b.workOrderId}-${b.sequence}`)));
@@ -205,7 +215,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       setDataError(null);
       setLastSyncedAt(new Date().toISOString());
     } catch (error) {
-      console.warn('No se pudieron sincronizar clientes, propiedades, catálogo y órdenes:', error);
+      console.warn('No se pudieron sincronizar clientes, propiedades, catálogo, stock comercial y órdenes:', error);
       setDataError(friendlyDataError(error));
     } finally {
       if (showLoader) setDataLoading(false);
@@ -221,6 +231,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
           if (Array.isArray(parsed.clients)) setClients(parsed.clients);
           if (Array.isArray(parsed.properties)) setProperties(parsed.properties);
           if (Array.isArray(parsed.services)) setServices(parsed.services);
+          if (Array.isArray(parsed.commercialProductStock)) setCommercialProductStock(parsed.commercialProductStock);
           if (Array.isArray(parsed.workOrders)) setWorkOrders(parsed.workOrders);
           if (Array.isArray(parsed.workOrderEvidence)) setWorkOrderEvidence(parsed.workOrderEvidence);
           if (Array.isArray(parsed.workOrderUnits)) setWorkOrderUnits(parsed.workOrderUnits);
@@ -248,6 +259,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         setClients([]);
         setProperties([]);
         setServices([]);
+        setCommercialProductStock([]);
         setWorkOrders([]);
         setWorkOrderEvidence([]);
         setWorkOrderUnits([]);
@@ -270,16 +282,17 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!localHydrated || currentUser?.authProvider === 'firebase') return;
-    const state: PersistedState = { clients, properties, services, workOrders, workOrderEvidence, workOrderUnits, inventory, invoices };
+    const state: PersistedState = { clients, properties, services, commercialProductStock, workOrders, workOrderEvidence, workOrderUnits, inventory, invoices };
     AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(state)).catch((error) => {
       console.warn('No se pudo guardar el estado DEMO:', error);
     });
-  }, [clients, properties, services, workOrders, inventory, invoices, localHydrated, currentUser?.authProvider]);
+  }, [clients, properties, services, commercialProductStock, workOrders, workOrderEvidence, workOrderUnits, inventory, invoices, localHydrated, currentUser?.authProvider]);
 
   const restoreDemoData = () => {
     setClients(demoClients);
     setProperties(demoProperties);
     setServices(normalizedDemoServices);
+    setCommercialProductStock([]);
     setWorkOrders(demoWorkOrders);
     setWorkOrderEvidence([]);
     setWorkOrderUnits([]);
@@ -313,6 +326,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       setClients([]);
       setProperties([]);
       setServices([]);
+      setCommercialProductStock([]);
       setWorkOrders([]);
       setWorkOrderEvidence([]);
       setWorkOrderUnits([]);
@@ -552,6 +566,55 @@ const deleteTestClient = async (id: string): Promise<OperationResult> => {
     }
   };
 
+  const saveCommercialProductStock = async (productId: string, onHand: number): Promise<OperationResult> => {
+    const product = services.find((service) => service.id === productId && (service.itemType ?? 'Servicio') === 'Producto');
+    if (!product) return { ok: false, message: 'El producto ya no existe en el catálogo.' };
+    if (!Number.isInteger(onHand) || onHand < 0) return { ok: false, message: 'El stock físico debe ser un número entero igual o mayor que cero.' };
+
+    const existing = commercialProductStock.find((stock) => stock.id === productId || stock.productId === productId);
+    const reserved = Number(existing?.reserved ?? 0);
+    if (!Number.isInteger(reserved) || reserved < 0) {
+      return { ok: false, message: 'El stock reservado tiene datos inconsistentes. Debe revisarse antes de actualizar el stock físico.' };
+    }
+    if (onHand < reserved) {
+      return { ok: false, message: `No puedes bajar el stock físico a ${onHand} porque existen ${reserved} unidad${reserved === 1 ? '' : 'es'} reservada${reserved === 1 ? '' : 's'}. Libera primero esas reservas.` };
+    }
+
+    const now = new Date().toISOString();
+    const actorId = currentUser?.id ?? '';
+    const actorName = currentUser?.name ?? 'Usuario DEMAC';
+    const stock: CommercialProductStock = {
+      id: productId,
+      productId,
+      onHand,
+      reserved,
+      active: true,
+      verifiedAt: now,
+      verifiedById: actorId,
+      verifiedByName: actorName,
+      updatedAt: now,
+      updatedById: actorId,
+      updatedByName: actorName,
+    };
+
+    if (currentUser?.authProvider !== 'firebase') {
+      setCommercialProductStock((previous) => sortCommercialProductStock([stock, ...previous.filter((item) => item.id !== productId && item.productId !== productId)]));
+      return { ok: true };
+    }
+
+    try {
+      await saveFirestoreDocument('commercialProductStock', stock);
+      setCommercialProductStock((previous) => sortCommercialProductStock([stock, ...previous.filter((item) => item.id !== productId && item.productId !== productId)]));
+      setDataError(null);
+      setLastSyncedAt(now);
+      return { ok: true };
+    } catch (error) {
+      const message = friendlyDataError(error);
+      setDataError(message);
+      return { ok: false, message };
+    }
+  };
+
   const addWorkOrder = async (order: WorkOrder): Promise<OperationResult> => {
     if (currentUser?.authProvider !== 'firebase') {
       setWorkOrders((previous) => sortWorkOrders([order, ...previous]));
@@ -691,6 +754,7 @@ const deleteTestClient = async (id: string): Promise<OperationResult> => {
     properties,
     equipment: demoEquipment,
     services,
+    commercialProductStock,
     vans: demoVans,
     workOrders,
     workOrderEvidence,
@@ -716,6 +780,7 @@ const deleteTestClient = async (id: string): Promise<OperationResult> => {
     addCatalogItem,
     updateCatalogItem,
     removeCatalogItem,
+    saveCommercialProductStock,
     addWorkOrder,
     updateWorkOrder,
     addWorkOrderEvidence,
@@ -732,6 +797,7 @@ const deleteTestClient = async (id: string): Promise<OperationResult> => {
     clients,
     properties,
     services,
+    commercialProductStock,
     workOrders,
     workOrderEvidence,
     workOrderUnits,
