@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  automaticReplySupported,
   buildRuntimeBody,
   communicationMessageToRuntime,
   conversationIdentity,
@@ -11,6 +12,13 @@ const {
   shouldRunAgent,
   whatsappMessageToRuntime,
 } = require("./demacCustomerAgentCommunication");
+
+test("automatic replies are explicitly enabled only for the current wacli sender", () => {
+  assert.equal(automaticReplySupported("wacli"), true);
+  assert.equal(automaticReplySupported("WACLI"), true);
+  assert.equal(automaticReplySupported("meta"), false);
+  assert.equal(automaticReplySupported(""), false);
+});
 
 test("agent runs only for explicitly AI-owned unclaimed conversations", () => {
   assert.equal(shouldRunAgent({ aiDisposition: "ai_active" }), true);
