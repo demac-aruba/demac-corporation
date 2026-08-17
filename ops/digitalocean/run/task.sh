@@ -15,7 +15,7 @@ if grep -q 'X-Demac-Bridge-Signature\|bridgeSignatureFor\|BRIDGE_SIGNING_KEY\|wa
   echo 'ERROR: staged bridge still contains retired custom authentication/upload-ticket code.' >&2
   exit 1
 fi
-if ! grep -q "Authorization: `Bearer \${BRIDGE_TOKEN}`" "$STAGED"; then
+if ! grep -Fq 'Authorization: `Bearer ${BRIDGE_TOKEN}`' "$STAGED"; then
   echo 'ERROR: staged bridge is missing standard Bearer forwarding.' >&2
   exit 1
 fi
