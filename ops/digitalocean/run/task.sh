@@ -1,21 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo '=== DEMAC POST-ED25519 QUEUE VERIFICATION ==='
+FILE=/opt/demac-whatsapp-bridge/server-v2.mjs
+SERVICE=demac-whatsapp-bridge-v8-test.service
+
+echo '=== DEMAC DEPLOYED BRIDGE SOURCE INSPECTION ==='
 printf 'time_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-sleep 8
+echo
+echo '=== SERVICE NON-SECRET CONFIGURATION ==='
+systemctl show "$SERVICE" -p User -p Group -p WorkingDirectory -p ExecStart --no-pager
+raw="$(systemctl show "$SERVICE" -p Environment --value 2>/dev/null || true)"
+printf '%s\n' "$raw" | tr ' ' '\n' | grep -E '^(PORT|HOST|WACLI_BINARY|FFMPEG_BINARY|BRIDGE_STATE_DIR|ERP_WEBHOOK_URL|WACLI_SEND_TIMEOUT_MS|ERP_FORWARD_TIMEOUT_MS|WEBHOOK_RETRY_INTERVAL_MS)=' || true
 
 echo
-echo '=== BRIDGE HEALTH ==='
-curl -fsS http://127.0.0.1:8787/health | python3 -c 'import json,sys; x=json.load(sys.stdin); print("ok=",x.get("ok")); print("pendingWebhookEvents=",x.get("pendingWebhookEvents")); print("lastForwardSuccessAt=",x.get("lastForwardSuccessAt")); print("lastForwardError=",x.get("lastForwardError")); print("identityCache=",x.get("identityCache")); print("avatarCache=",x.get("avatarCache"))'
+echo '=== SOURCE METADATA ==='
+printf 'bytes='; wc -c < "$FILE"
+printf 'lines='; wc -l < "$FILE"
+printf 'sha256='; sha256sum "$FILE" | awk '{print $1}'
 
 echo
-echo '=== RECENT WACLI MESSAGES ==='
-sudo -n /usr/local/sbin/demac-wacli-ro messages list --limit 10
+echo '=== SOURCE BEGIN ==='
+cat "$FILE"
+echo '=== SOURCE END ==='
 
 echo
-echo '=== RECENT BRIDGE ERRORS ==='
-journalctl -u demac-whatsapp-bridge-v8-test.service --since '15 minutes ago' --no-pager | grep -Ei 'error|fail|401|signature|media|avatar' | tail -n 120 || true
+echo '=== HEALTH ==='
+curl -fsS http://127.0.0.1:8787/health | python3 -m json.tool
 
-echo 'POST_ED25519_QUEUE_VERIFICATION_COMPLETE'
+echo 'DEPLOYED_BRIDGE_SOURCE_INSPECTION_COMPLETE'
