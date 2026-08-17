@@ -17,6 +17,20 @@ export type MarketingCreativeQa = {
   score: number;
   selectionScore?: number;
   overallScore?: number;
+  benchmarkLevel?: 'amateur' | 'competent' | 'professional' | 'agency' | 'top_tier' | string;
+  adSpendReady?: boolean;
+  visibleTextExact?: boolean;
+  inventedFacts?: boolean;
+  creativeDirection?: number;
+  composition?: number;
+  typography?: number;
+  professionalFinish?: number;
+  brandDistinctiveness?: number;
+  conversionClarity?: number;
+  textFidelity?: number;
+  footerSafety?: number;
+  originality?: number;
+  thumbnailImpact?: number;
   mobileLegibility: number;
   visualHierarchy: number;
   contrast: number;
@@ -34,6 +48,7 @@ export type MarketingCreativeQa = {
   brandSystemCoherence?: number;
   offerClarity?: number;
   attempt: number;
+  amateurSignals?: string[];
   issues: string[];
   revisionInstructions: string[];
   hardChecks?: {
@@ -51,6 +66,8 @@ export type MarketingCreativeVariant = {
   conceptId: string;
   name: string;
   rationale: string;
+  stage?: string;
+  parentVariantId?: string;
   imageStoragePath?: string;
   imageUrl: string;
   imageModel?: string;
@@ -65,6 +82,10 @@ export type MarketingCreativeVariant = {
     photoFocus?: string;
     compositionTemplate?: string;
     visualEnergy?: string;
+    graphicLanguage?: string;
+    typographyDirection?: string;
+    persuasionMechanism?: string;
+    thumbnailIdea?: string;
   };
   qa: MarketingCreativeQa;
 };
@@ -93,6 +114,36 @@ export type MarketingCreative = {
   variantCount?: number;
   autoRevised?: boolean;
   variants?: MarketingCreativeVariant[];
+  providerManifest?: {
+    activeProvider?: string;
+    activeImageModel?: string;
+    providers?: {
+      openai_full_design?: boolean;
+      ideogram_v4_structured?: boolean;
+      canva_layered_production?: boolean;
+    };
+    notes?: string[];
+  };
+  designIntelligence?: {
+    explorationCount?: number;
+    shortlistCount?: number;
+    refinementCount?: number;
+    strategyDiagnosis?: string;
+    benchmarkDefinition?: string;
+    creativeNorthStar?: string;
+    exploredConcepts?: Array<{
+      id?: string;
+      name?: string;
+      archetype?: string;
+      thumbnailIdea?: string;
+      whyItCouldWin?: string;
+    }>;
+    finalJury?: {
+      spendConfidence?: number;
+      reason?: string;
+      loserWeakness?: string;
+    };
+  };
   artDirection?: {
     campaignSummary?: string;
     creativeNorthStar?: string;
