@@ -22,6 +22,7 @@ export type CommunicationCustomerContext = {
   displayName: string;
   phone: string;
   email: string;
+  avatarUrl?: string | null;
   type?: string | null;
   status?: string | null;
   preferredLanguage?: string | null;
@@ -54,6 +55,7 @@ export async function loadCommunicationCustomerContext(conversation: LiveConvers
     displayName: conversation.customer,
     phone: conversation.phone,
     email: conversation.customerEmail ?? '',
+    avatarUrl: conversation.avatarUrl ?? null,
     type: conversation.customerType ?? null,
     status: conversation.customerStatus ?? null,
     preferredLanguage: conversation.language,

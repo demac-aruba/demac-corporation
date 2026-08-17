@@ -55,6 +55,7 @@ type StoredConversation = Omit<LiveConversation, 'messages' | 'language'> & {
   id: string;
   language?: string;
   recentMessages?: LiveConversationMessage[];
+  profilePictureUrl?: string | null;
 };
 
 type StoredOperatorPresence = {
@@ -71,7 +72,7 @@ type StoredOperatorPresence = {
 
 type CommunicationSettings = { id: string; whatsappProvider?: WhatsAppProvider };
 type StoredWhatsAppMessage = { id: string; messageId?: string; sentByUserId?: string | null; sentByName?: string | null };
-type StoredClient = { id: string; name?: string; displayName?: string; phone?: string; whatsapp?: string; email?: string; preferredLanguage?: string; type?: string; status?: string; active?: boolean };
+type StoredClient = { id: string; name?: string; displayName?: string; phone?: string; whatsapp?: string; email?: string; preferredLanguage?: string; avatarUrl?: string | null; type?: string; status?: string; active?: boolean };
 type StoredProperty = { id: string; clientId?: string; name?: string; address?: string; active?: boolean };
 type StoredEquipment = { id: string; clientId?: string; propertyId?: string; locationLabel?: string; systemType?: string; active?: boolean; condition?: string };
 type MessageAttribution = { userId?: string | null; name?: string | null };
@@ -181,7 +182,7 @@ function normalizeMessage(message: LiveConversationMessage, attribution?: Messag
 
 function normalizeConversation(stored: StoredConversation, attributions: Map<string, MessageAttribution>): LiveConversation {
   const messages = Array.isArray(stored.recentMessages) ? stored.recentMessages.map((message) => normalizeMessage(message, attributions.get(safeString(message.id)))) : [];
-  return { ...stored, customer: safeString(stored.customer, stored.phone || 'WhatsApp contact'), phone: safeString(stored.phone), avatarUrl: nullableString(stored.avatarUrl), channel: stored.channel ?? 'whatsapp', status: stored.status ?? 'new', queue: stored.queue ?? 'general', unread: Number(stored.unread || 0), language: normalizeLanguage(stored.language), aiDisposition: stored.aiDisposition ?? 'human_active', lastActivityAt: safeString(stored.lastActivityAt, stored.updatedAt || ''), vip: Boolean(stored.vip), messages };
+  return { ...stored, customer: safeString(stored.customer, stored.phone || 'WhatsApp contact'), phone: safeString(stored.phone), avatarUrl: nullableString(stored.avatarUrl) || nullableString(stored.profilePictureUrl), channel: stored.channel ?? 'whatsapp', status: stored.status ?? 'new', queue: stored.queue ?? 'general', unread: Number(stored.unread || 0), language: normalizeLanguage(stored.language), aiDisposition: stored.aiDisposition ?? 'human_active', lastActivityAt: safeString(stored.lastActivityAt, stored.updatedAt || ''), vip: Boolean(stored.vip), messages };
 }
 
 function operatorQueues(role: AuthPrincipal['role']): Queue[] {
@@ -225,7 +226,7 @@ function enrichConversationWithCrm(conversation: LiveConversation, crm: CrmIndex
   const propertyPreview: CommunicationPropertyPreview[] = properties.map((property) => ({ id: property.id, name: property.name || 'Property', address: property.address || '', equipmentCount: equipment.filter((unit) => unit.propertyId === property.id).length }));
   const equipmentPreview: CommunicationEquipmentPreview[] = equipment.map((unit) => ({ id: unit.id, propertyId: unit.propertyId || null, locationLabel: unit.locationLabel || 'Registered A/C', systemType: unit.systemType || 'HVAC', active: unit.active !== false, condition: unit.condition || null }));
   const propertySummary = properties.length === 1 ? [properties[0].name, properties[0].address].filter(Boolean).join(' · ') : properties.length > 1 ? `${properties.length} properties` : conversation.property;
-  return { ...conversation, customerId: client.id, customer: client.name || client.displayName || conversation.customer, customerEmail: client.email || null, customerType: client.type || null, customerStatus: client.status || (client.active === false ? 'inactive' : 'active'), customerPropertiesCount: properties.length, customerEquipmentCount: equipment.length, customerProperties: propertyPreview, customerEquipment: equipmentPreview, property: propertySummary || conversation.property, equipment: equipment.length ? `${equipment.length} registered A/C` : conversation.equipment, language: client.preferredLanguage ? normalizeLanguage(client.preferredLanguage) : conversation.language };
+  return { ...conversation, customerId: client.id, customer: client.name || client.displayName || conversation.customer, avatarUrl: nullableString(client.avatarUrl) || conversation.avatarUrl, customerEmail: client.email || null, customerType: client.type || null, customerStatus: client.status || (client.active === false ? 'inactive' : 'active'), customerPropertiesCount: properties.length, customerEquipmentCount: equipment.length, customerProperties: propertyPreview, customerEquipment: equipmentPreview, property: propertySummary || conversation.property, equipment: equipment.length ? `${equipment.length} registered A/C` : conversation.equipment, language: client.preferredLanguage ? normalizeLanguage(client.preferredLanguage) : conversation.language };
 }
 
 export async function loadCommunicationWorkspace() {

@@ -28,6 +28,7 @@ export interface Customer extends AuditFields {
   primaryPhone?: string;
   primaryEmail?: string;
   preferredLanguage?: 'en' | 'es' | 'pap' | 'nl' | string;
+  avatarUrl?: string;
   status: 'lead' | 'active' | 'inactive' | 'on_hold';
   tags?: string[];
 }

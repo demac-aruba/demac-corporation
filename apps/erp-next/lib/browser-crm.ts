@@ -12,6 +12,7 @@ export type BrowserCrmCustomerIdentity = {
   previousPhones?: string[];
   email?: string;
   preferredLanguage?: 'Papiamento' | 'English' | 'Spanish' | 'Dutch' | string;
+  avatarUrl?: string;
   initials?: string;
   since?: string;
   health?: number;
