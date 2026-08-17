@@ -21,15 +21,21 @@ jobs:
           node-version: '22'
           package-manager-cache: false
       - run: npm install --prefix functions --no-audit --no-fund
+      - name: Authenticate Firebase deployment service account
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
       - name: Verify GPT Image 2 edits
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        shell: bash
         run: |
+          set -euo pipefail
+          export OPENAI_API_KEY="$(gcloud secrets versions access latest --secret=OPENAI_API_KEY --project=demac-corporation)"
+          test -n "$OPENAI_API_KEY"
           cd functions
           node <<'NODE'
           const sharp = require('sharp');
           (async () => {
-            if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY secret missing.');
             const input = await sharp({ create: { width: 256, height: 256, channels: 3, background: '#d8ecff' } }).png().toBuffer();
             const form = new FormData();
             form.append('model', 'gpt-image-2');
