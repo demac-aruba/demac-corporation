@@ -1,0 +1,89 @@
+name: Inspect wacli target once
+
+on:
+  push:
+    branches: [diag/wacli-target-20260816]
+    paths:
+      - '.github/workflows/inspect-wacli-target-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    env:
+      DO_HOST: 159.223.160.239
+      DO_USER: demac-deploy
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: diag/wacli-target-20260816
+          fetch-depth: 0
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          DO_SSH_KEY_B64: ${{ secrets.DO_SSH_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$HOME/.ssh"
+          printf '%s' "$DO_SSH_KEY_B64" | base64 --decode > "$HOME/.ssh/id_ed25519"
+          chmod 0600 "$HOME/.ssh/id_ed25519"
+          ssh-keyscan -T 10 -H "$DO_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 0600 "$HOME/.ssh/known_hosts"
+
+      - name: Inspect only non-sensitive target configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/inspect-target.sh" <<'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          ENV_FILE=/etc/demac-whatsapp-bridge.env
+          echo "env_file_readable=$([ -r "$ENV_FILE" ] && echo yes || echo no)"
+          stat -c 'env_file_mode=%A owner=%U group=%G' "$ENV_FILE" 2>/dev/null || true
+          systemctl show demac-whatsapp-bridge-v8-test.service -p EnvironmentFiles --value || true
+          if [ -r "$ENV_FILE" ]; then
+            python3 - <<'PY'
+          from pathlib import Path
+          from urllib.parse import urlsplit
+          value = ''
+          for raw in Path('/etc/demac-whatsapp-bridge.env').read_text(encoding='utf-8').splitlines():
+              if raw.startswith('ERP_WEBHOOK_URL='):
+                  value = raw.split('=', 1)[1].strip().strip('"').strip("'")
+                  break
+          if not value:
+              print('erp_webhook_target=missing')
+          else:
+              parts = urlsplit(value)
+              safe = f'{parts.scheme}://{parts.hostname or ""}'
+              if parts.port:
+                  safe += f':{parts.port}'
+              safe += parts.path or '/'
+              print(f'erp_webhook_target={safe}')
+          PY
+          fi
+          SCRIPT
+          chmod 0700 "$RUNNER_TEMP/inspect-target.sh"
+          scp -q "$RUNNER_TEMP/inspect-target.sh" "$DO_USER@$DO_HOST:/home/demac-deploy/run/inspect-target-once.sh"
+          ssh -o BatchMode=yes -o ConnectTimeout=10 "$DO_USER@$DO_HOST" '/home/demac-deploy/run/inspect-target-once.sh; rm -f /home/demac-deploy/run/inspect-target-once.sh'
+
+      - name: Self-clean diagnostic workflow
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/inspect-wacli-target-once.yml
+          git config user.name 'demac-aruba'
+          git config user.email 'gm.demac@gmail.com'
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m 'Remove one-shot wacli target diagnostic'
+            git push origin HEAD:diag/wacli-target-20260816
+          fi
+
+      - name: Remove runner SSH key
+        if: always()
+        shell: bash
+        run: rm -f "$HOME/.ssh/id_ed25519"
