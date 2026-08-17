@@ -62,7 +62,9 @@ function verifyWacliSignature(request) {
   const rawBody = request.rawBody instanceof Buffer
     ? request.rawBody
     : Buffer.from(JSON.stringify(request.body ?? {}));
-  const digest = crypto.createHmac("sha256", wacliWebhookSecret.value()).update(rawBody).digest("hex");
+  // Bridge -> Firebase authentication deliberately uses WACLI_BRIDGE_TOKEN.
+  // The separate WACLI_WEBHOOK_SECRET is reserved for the local wacli -> bridge hop.
+  const digest = crypto.createHmac("sha256", wacliBridgeToken.value()).update(rawBody).digest("hex");
   return safeEqual(provided, `sha256=${digest}`);
 }
 
@@ -97,16 +99,16 @@ async function chooseAvailableOperator(queue) {
 function normalizeMedia(payload) {
   const media = payload?.Media;
   if (!media || typeof media !== "object") return null;
-  const mediaType = String(media.Type ?? media.type ?? "").trim().toLowerCase();
+  const mediaType = String(media.Type ?? media.type ?? media.kind ?? "").trim().toLowerCase();
   if (!mediaType) return null;
-  const mediaSize = Number(media.FileLength ?? media.fileLength ?? media.file_length ?? 0);
+  const mediaSize = Number(media.FileLength ?? media.fileLength ?? media.file_length ?? media.size ?? 0);
   return {
     mediaType,
     mediaCaption: String(media.Caption ?? media.caption ?? "").trim() || null,
-    mediaFileName: String(media.Filename ?? media.filename ?? "").trim() || null,
+    mediaFileName: String(media.Filename ?? media.filename ?? media.fileName ?? "").trim() || null,
     mediaMimeType: String(media.MimeType ?? media.mimeType ?? media.mime_type ?? "").trim() || null,
     mediaSize: Number.isFinite(mediaSize) && mediaSize > 0 ? mediaSize : null,
-    mediaUrl: null,
+    mediaUrl: media.mediaUrl ?? media.url ?? null,
   };
 }
 
@@ -121,38 +123,38 @@ function mediaPreview(media) {
   return `[${label}]`;
 }
 
-function mediaExtension(media) {
-  const filename = String(media?.mediaFileName || "");
-  const match = filename.match(/(\.[A-Za-z0-9]{1,10})$/);
+function extensionFromMedia(media) {
+  const name = String(media?.mediaFileName || "");
+  const match = name.match(/(\.[A-Za-z0-9]{1,8})$/);
   if (match) return match[1].toLowerCase();
   const mime = String(media?.mediaMimeType || "").toLowerCase();
   if (mime.includes("jpeg")) return ".jpg";
   if (mime.includes("png")) return ".png";
   if (mime.includes("webp")) return ".webp";
+  if (mime.includes("gif")) return ".gif";
   if (mime.includes("ogg")) return ".ogg";
   if (mime.includes("mpeg")) return ".mp3";
   if (mime.includes("mp4")) return ".mp4";
+  if (mime.includes("webm")) return ".webm";
   if (mime.includes("pdf")) return ".pdf";
   return "";
 }
 
-function bridgeEndpoint(pathname = "/v1/send") {
+function bridgeEndpoint(pathname) {
   const base = String(wacliBridgeUrl.value() || "").trim().replace(/\/+$/, "");
   if (!/^https:\/\//i.test(base)) throw new Error("WACLI_BRIDGE_URL must be an HTTPS URL.");
   return `${base}${pathname}`;
 }
 
 async function fetchAndStoreWacliMedia({ chat, messageId, media }) {
-  if (!chat || !messageId || !media) return media;
-  if (media.mediaSize && media.mediaSize > MAX_MEDIA_BYTES) {
-    logger.warn("Skipping oversized WhatsApp media before bridge download.", { messageId, mediaSize: media.mediaSize });
-    return media;
-  }
+  if (!media || media.mediaUrl || !chat || !messageId) return media;
+  const token = String(wacliBridgeToken.value() || "").trim();
+  if (!token) throw new Error("WACLI_BRIDGE_TOKEN is not configured.");
 
   const response = await fetch(bridgeEndpoint("/v1/media"), {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${wacliBridgeToken.value()}`,
+      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -161,22 +163,21 @@ async function fetchAndStoreWacliMedia({ chat, messageId, media }) {
       fileName: media.mediaFileName,
       mimeType: media.mediaMimeType,
     }),
-    signal: AbortSignal.timeout(55_000),
   });
 
   if (!response.ok) {
-    const details = (await response.text().catch(() => "")).slice(0, 500);
-    throw new Error(`wacli media relay returned HTTP ${response.status}${details ? `: ${details}` : ""}`);
+    const detail = await response.text().catch(() => "");
+    throw new Error(`wacli bridge media fetch failed (${response.status}): ${detail.slice(0, 300)}`);
   }
 
-  const declaredLength = Number(response.headers.get("content-length") || 0);
-  if (declaredLength > MAX_MEDIA_BYTES) throw new Error("WhatsApp media exceeds the Firebase ingest limit.");
+  const lengthHeader = Number(response.headers.get("content-length") || 0);
+  if (lengthHeader > MAX_MEDIA_BYTES) throw new Error("WhatsApp media exceeds the configured maximum size.");
   const bytes = Buffer.from(await response.arrayBuffer());
-  if (!bytes.length) throw new Error("WhatsApp media relay returned an empty file.");
-  if (bytes.length > MAX_MEDIA_BYTES) throw new Error("WhatsApp media exceeds the Firebase ingest limit.");
+  if (!bytes.length) throw new Error("wacli bridge returned an empty media file.");
+  if (bytes.length > MAX_MEDIA_BYTES) throw new Error("WhatsApp media exceeds the configured maximum size.");
 
   const bucket = storage.bucket();
-  const extension = mediaExtension(media);
+  const extension = extensionFromMedia(media);
   const storagePath = `communication-media/wacli/${safeStorageSegment(chat)}/${safeStorageSegment(messageId)}${extension}`;
   const downloadToken = crypto.randomUUID();
   const contentType = media.mediaMimeType || response.headers.get("content-type") || "application/octet-stream";
@@ -333,8 +334,8 @@ async function updateChatPresence(payload) {
 }
 
 /**
- * Signed inbound webhook for wacli sync --follow.
- * Message payloads omit EventType; receipts and chat presence include it.
+ * Signed inbound webhook for the DEMAC bridge. The bridge separately validates
+ * the local wacli signature before it enriches and forwards each event.
  */
 exports.wacliWebhook = onRequest(
   {
@@ -350,7 +351,7 @@ exports.wacliWebhook = onRequest(
       return;
     }
     if (!verifyWacliSignature(request)) {
-      logger.warn("Rejected wacli webhook with invalid signature.");
+      logger.warn("Rejected DEMAC bridge webhook with invalid signature.");
       response.status(401).send("Invalid signature");
       return;
     }
@@ -360,169 +361,160 @@ exports.wacliWebhook = onRequest(
     const eventRef = db.collection("whatsappWebhookEvents").doc();
 
     try {
-      await eventRef.set({
-        source: "wacli",
-        eventType,
-        payload,
-        processed: false,
-        receivedAt: FieldValue.serverTimestamp(),
-      });
-
       if (eventType === "receipt") {
         await updateReceipt(payload);
       } else if (eventType === "chat_presence") {
         await updateChatPresence(payload);
       } else {
         const chat = String(payload.Chat || "");
-        const messageId = String(payload.ID || `${eventRef.id}-${chat || "unknown"}`);
-        const fromMe = Boolean(payload.FromMe);
-        const phone = phoneFromChat(chat || payload.SenderJID);
-        const at = normalizeTimestamp(payload.Timestamp);
-        const chatName = String(payload.ChatName || payload.PushName || "").trim() || phone || "WhatsApp contact";
-        const reactionToId = String(payload.ReactionToID || payload.reactionToID || "").trim() || null;
-        const reactionEmoji = String(payload.ReactionEmoji || payload.reactionEmoji || "").trim() || null;
+        const messageId = String(payload.ID || `${eventRef.id}-${Date.now()}`);
+        const inbound = payload.IsFromMe !== true;
+        const chatName = String(payload.ChatName || payload.SenderName || "").trim();
+        const resolvedPhone = digitsOnly(payload?.Identity?.ResolvedPhone || payload.ResolvedPhone || "");
+        const phone = resolvedPhone || phoneFromChat(chat);
         let media = normalizeMedia(payload);
         if (media) {
           try {
             media = await fetchAndStoreWacliMedia({ chat, messageId, media });
-          } catch (mediaError) {
-            logger.warn("Could not cache inbound WhatsApp media; storing metadata for later backfill.", {
-              chat,
-              messageId,
-              error: mediaError?.message || String(mediaError),
-            });
+          } catch (error) {
+            logger.error("Could not fetch/store wacli media; preserving the message metadata.", error);
           }
         }
-        const text = String(payload.Text || media?.mediaCaption || "");
-        const messageText = text || reactionEmoji || (media ? mediaPreview(media) : "");
-        const messageRef = db.collection("whatsappMessages").doc(safeDocumentId(messageId));
-        const message = {
-          id: messageId,
-          at,
-          author: fromMe ? "DEMAC WhatsApp" : chatName,
-          role: fromMe ? "operator" : "customer",
-          text,
-          status: fromMe ? "sent" : "received",
-          ...(media || {}),
-          reactionToId,
-          reactionEmoji,
-        };
-        const conversationId = await appendConversationMessage({
-          chat,
-          phone,
-          chatName,
-          inbound: !fromMe,
-          message,
-        });
+        const text = String(payload.Text || payload.Caption || media?.mediaCaption || (media ? mediaPreview(media) : ""));
+        const reactionEmoji = String(payload.ReactionEmoji || "").trim() || null;
+        const reactionToId = String(payload.ReactionToID || "").trim() || null;
 
-        await messageRef.set({
+        await db.collection("whatsappMessages").doc(safeDocumentId(messageId)).set({
           provider: "wacli",
+          channel: "whatsapp",
           messageId,
-          conversationId,
-          direction: fromMe ? "outbound" : "inbound",
-          from: fromMe ? null : phone || null,
-          to: fromMe ? phone || null : null,
-          chatJid: chat || null,
-          contactName: chatName,
-          type: media?.mediaType || (reactionEmoji ? "reaction" : "text"),
+          chat,
+          chatName: chatName || null,
+          phone: phone || null,
+          senderJid: payload.SenderJID || null,
+          senderName: payload.SenderName || null,
+          direction: inbound ? "inbound" : "outbound",
+          type: reactionEmoji ? "reaction" : (media?.mediaType || "text"),
           text,
-          displayText: messageText,
-          status: fromMe ? "sent" : "received",
+          reactionEmoji,
+          reactionToId,
           mediaType: media?.mediaType || null,
           mediaCaption: media?.mediaCaption || null,
           mediaFileName: media?.mediaFileName || null,
           mediaMimeType: media?.mediaMimeType || null,
           mediaSize: media?.mediaSize || null,
           mediaUrl: media?.mediaUrl || null,
-          reactionToId,
-          reactionEmoji,
           whatsappTimestamp: payload.Timestamp || null,
+          status: inbound ? "received" : "sent",
           raw: payload,
           webhookEventId: eventRef.id,
           receivedAt: FieldValue.serverTimestamp(),
         }, { merge: true });
+
+        await appendConversationMessage({
+          chat,
+          phone,
+          chatName,
+          inbound,
+          message: {
+            id: messageId,
+            at: payload.Timestamp,
+            author: inbound ? (chatName || phone || "Customer") : "DEMAC",
+            role: inbound ? "customer" : "operator",
+            text,
+            status: inbound ? "received" : "sent",
+            mediaType: media?.mediaType || null,
+            mediaCaption: media?.mediaCaption || null,
+            mediaFileName: media?.mediaFileName || null,
+            mediaMimeType: media?.mediaMimeType || null,
+            mediaSize: media?.mediaSize || null,
+            mediaUrl: media?.mediaUrl || null,
+            reactionEmoji,
+            reactionToId,
+          },
+        });
       }
 
-      await eventRef.set({ processed: true, processedAt: FieldValue.serverTimestamp() }, { merge: true });
-      response.status(200).send("EVENT_RECEIVED");
+      await eventRef.set({
+        source: "wacli",
+        eventType,
+        processed: true,
+        receivedAt: FieldValue.serverTimestamp(),
+      });
+      response.status(200).json({ ok: true });
     } catch (error) {
       logger.error("Could not process wacli webhook event.", error);
       await eventRef.set({
+        source: "wacli",
+        eventType,
         processed: false,
-        errorMessage: error?.message || String(error),
-        failedAt: FieldValue.serverTimestamp(),
-      }, { merge: true }).catch(() => undefined);
+        errorMessage: error?.message || "Unknown wacli webhook error",
+        receivedAt: FieldValue.serverTimestamp(),
+      }).catch(() => {});
       response.status(500).send("Webhook processing failed");
     }
   },
 );
 
-function validateWacliOutbound(data) {
-  const to = String(data.to || "").trim();
-  const text = String(data.text || "").trim();
-  if (!to || (!/^\+?[0-9() .-]{8,24}$/.test(to) && !/@(s\.whatsapp\.net|lid|g\.us)$/.test(to))) {
-    throw new Error("A valid WhatsApp phone number or JID is required.");
-  }
-  if (!text || text.length > 10000) {
-    throw new Error("WhatsApp text must contain between 1 and 10000 characters.");
-  }
-  return { to, text };
+function parseBridgeResponse(response) {
+  return response.json().catch(() => ({}));
 }
 
-/**
- * Processes wacli messages from the same provider-neutral outbound queue used by Meta.
- */
 exports.sendQueuedWacliMessage = onDocumentCreated(
   {
     document: "whatsappOutboundQueue/{queueId}",
     region: "us-central1",
     memory: "256MiB",
-    timeoutSeconds: 60,
+    timeoutSeconds: 120,
     secrets: [wacliBridgeUrl, wacliBridgeToken],
   },
   async (event) => {
     const snapshot = event.data;
     if (!snapshot) return;
-    const queueRef = snapshot.ref;
     const original = snapshot.data() || {};
     if (original.provider !== "wacli") return;
     if (original.status && original.status !== "queued") return;
 
-    try {
-      const message = validateWacliOutbound(original);
-      await queueRef.set({
-        status: "processing",
-        processingStartedAt: FieldValue.serverTimestamp(),
-      }, { merge: true });
+    const queueRef = snapshot.ref;
+    const to = String(original.to || original.phone || original.recipient || "").trim();
+    const text = String(original.text || "");
+    const media = original.media && typeof original.media === "object" ? original.media : null;
+    if (!to || (!text.trim() && !media)) {
+      await queueRef.set({ status: "failed", errorMessage: "Recipient and text or media are required.", failedAt: FieldValue.serverTimestamp() }, { merge: true });
+      return;
+    }
 
-      const bridgeResponse = await fetch(bridgeEndpoint("/v1/send"), {
+    try {
+      await queueRef.set({ status: "processing", processingStartedAt: FieldValue.serverTimestamp() }, { merge: true });
+      const response = await fetch(bridgeEndpoint("/v1/send"), {
         method: "POST",
         headers: {
           Authorization: `Bearer ${wacliBridgeToken.value()}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          to: message.to,
-          text: message.text,
+          to,
+          text,
+          media,
           clientMessageId: snapshot.id,
         }),
       });
-      const responseBody = await bridgeResponse.json().catch(() => ({}));
-      if (!bridgeResponse.ok || responseBody?.sent !== true) {
-        throw new Error(responseBody?.error || `wacli bridge returned HTTP ${bridgeResponse.status}`);
+      const responseBody = await parseBridgeResponse(response);
+      if (!response.ok || responseBody.sent !== true) {
+        throw new Error(responseBody?.error || `Bridge returned HTTP ${response.status}`);
       }
 
-      const messageId = String(responseBody.messageId || responseBody.id || responseBody.data?.id || snapshot.id);
-      const outboundRef = db.collection("whatsappMessages").doc(safeDocumentId(messageId));
+      const messageId = responseBody.messageId || snapshot.id;
+      const messageRef = db.collection("whatsappMessages").doc(safeDocumentId(messageId));
       const batch = db.batch();
-      batch.set(outboundRef, {
+      batch.set(messageRef, {
         provider: "wacli",
+        channel: "whatsapp",
         messageId,
-        conversationId: original.conversationId || null,
         direction: "outbound",
-        to: message.to,
-        type: "text",
-        text: message.text,
+        to,
+        type: media?.kind || media?.type || "text",
+        text,
         status: "sent",
         queueId: snapshot.id,
         sentByUserId: original.createdByUserId || null,
