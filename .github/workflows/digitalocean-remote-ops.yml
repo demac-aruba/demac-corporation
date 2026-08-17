@@ -1,0 +1,76 @@
+name: DigitalOcean Remote Ops
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'ops/digitalocean/run/task.sh'
+      - 'ops/digitalocean/deploy/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: digitalocean-remote-ops
+  cancel-in-progress: false
+
+jobs:
+  remote-ops:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DO_HOST: 159.223.160.239
+      DO_USER: demac-deploy
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configure SSH
+        shell: bash
+        env:
+          DO_SSH_KEY: ${{ secrets.DO_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DO_SSH_KEY:-}" ]; then
+            echo '::error::Repository secret DO_SSH_KEY is missing. Run ops/digitalocean/bootstrap.sh on the Droplet and add the printed private key as DO_SSH_KEY.'
+            exit 1
+          fi
+          install -d -m 0700 "$HOME/.ssh"
+          printf '%s\n' "$DO_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 0600 "$HOME/.ssh/id_ed25519"
+          ssh-keyscan -T 10 -H "$DO_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 0600 "$HOME/.ssh/known_hosts"
+
+      - name: Verify restricted remote identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o ConnectTimeout=10 "$DO_USER@$DO_HOST" \
+            'printf "REMOTE_OK user=%s host=%s\n" "$(id -un)" "$(hostname)"; id; sudo -n /usr/local/sbin/demac-service-control status both >/dev/null || true'
+
+      - name: Upload remote task
+        shell: bash
+        run: |
+          set -euo pipefail
+          scp -q ops/digitalocean/run/task.sh "$DO_USER@$DO_HOST:/home/demac-deploy/run/task.sh.new"
+          ssh "$DO_USER@$DO_HOST" 'chmod 0700 /home/demac-deploy/run/task.sh.new && mv /home/demac-deploy/run/task.sh.new /home/demac-deploy/run/task.sh'
+
+      - name: Upload optional bridge candidate
+        if: ${{ hashFiles('ops/digitalocean/deploy/server-v2.mjs') != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          scp -q ops/digitalocean/deploy/server-v2.mjs "$DO_USER@$DO_HOST:/home/demac-deploy/stage/server-v2.mjs"
+
+      - name: Execute remote task
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$DO_USER@$DO_HOST" '/home/demac-deploy/run/task.sh'
+
+      - name: Remove runner SSH key
+        if: always()
+        shell: bash
+        run: rm -f "$HOME/.ssh/id_ed25519"
