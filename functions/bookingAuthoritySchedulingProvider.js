@@ -20,11 +20,14 @@ const {
 } = require("./whatsappCopilotSchedulingCore");
 const {
   candidateAvailability,
-  generateOptions,
   normalizeOrderTime,
 } = require("./whatsappCopilotAvailability");
+const {
+  CANONICAL_SCHEDULING_ENGINE_VERSION,
+  generateCanonicalOptions,
+} = require("./bookingAuthoritySchedulingEngine");
 
-const SCHEDULING_PROVIDER_VERSION = "erp-scheduling-adapter-v1+legacy-capacity-engine";
+const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v2";
 
 async function loadSchedulingData(db, startDate, endDate) {
   const workOrderQuery = db.collection("workOrders").where("date", ">=", startDate).where("date", "<=", endDate);
@@ -97,53 +100,6 @@ function exactCustomerProperty(data, request) {
     );
   }
   return { client, property };
-}
-
-function singlePresetWork(request) {
-  const workLines = Array.isArray(request.workLines) ? request.workLines : [];
-  const presetIds = [...new Set(workLines.map((line) => cleanText(line.presetId, 120)).filter(Boolean))];
-  if (presetIds.length !== 1) {
-    throw new BookingAuthorityError(
-      BOOKING_ERROR_CODES.INVALID_REQUEST,
-      "The current scheduling engine requires one appointment preset per booking request.",
-      { presetIds },
-    );
-  }
-  return {
-    presetId: presetIds[0],
-    quantity: workLines.reduce((sum, line) => sum + Math.max(0, Number(line.quantity) || 0), 0),
-  };
-}
-
-function analysisForRequest(request, property) {
-  const work = singlePresetWork(request);
-  const address = cleanText(property.address || property.addressRaw || property.addressNormalized, 500);
-  return {
-    language: "es",
-    intent: "appointment",
-    summary: "Canonical booking request",
-    collectedInformation: {
-      serviceType: work.presetId,
-      quantity: String(work.quantity),
-      address,
-      requestedDate: request.constraints?.requestedDate || "",
-      requestedTime: request.constraints?.requestedTime || "",
-      preferredTime: request.constraints?.preferredTime || "",
-    },
-  };
-}
-
-function requestContextForEngine(request, client) {
-  const hints = [
-    request.constraints?.requestedDate,
-    request.constraints?.requestedTime,
-    request.constraints?.preferredTime,
-  ].filter(Boolean).join(" ");
-  return {
-    contactPhone: client.whatsapp || client.phone || "",
-    chatTitle: client.name || client.company || "",
-    latestCustomerTurn: hints,
-  };
 }
 
 function buildCapacityLocks(option, halfDaySchedules = []) {
@@ -254,20 +210,27 @@ function createSchedulingProvider({ db }) {
 
   return {
     version: SCHEDULING_PROVIDER_VERSION,
+    engineVersion: CANONICAL_SCHEDULING_ENGINE_VERSION,
 
     async checkAvailability({ request, now = new Date() }) {
-      const today = arubaDateParts(now).date;
+      const nowParts = arubaDateParts(now);
+      const today = nowParts.date;
       const data = await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS));
-      const { client, property } = exactCustomerProperty(data, request);
-      const analysis = analysisForRequest(request, property);
+      const { property } = exactCustomerProperty(data, request);
       const routeConfig = routeConfigFromSettings(data.businessSettings);
-      const engineRequest = requestContextForEngine(request, client);
-      const result = generateOptions({ analysis, request: engineRequest, data, routeConfig, today, currentTime: arubaDateParts(now).time });
-      const address = cleanText(property.address || property.addressRaw || property.addressNormalized, 500);
+      const result = generateCanonicalOptions({
+        request,
+        property,
+        data,
+        routeConfig,
+        today,
+        currentTime: nowParts.time,
+      });
       return {
-        options: result.options.map((option) => ({ ...option, address: option.address || address })),
+        options: result.options,
         reason: result.reason,
         providerVersion: SCHEDULING_PROVIDER_VERSION,
+        engineVersion: CANONICAL_SCHEDULING_ENGINE_VERSION,
         metadata: {
           requestedDate: result.requestedDate || "",
           requestedTime: result.requestedTime || "",
@@ -280,8 +243,9 @@ function createSchedulingProvider({ db }) {
     },
 
     async revalidateSelection({ request, option, now = new Date() }) {
-      const today = arubaDateParts(now).date;
-      if (option.date < today || (option.date === today && option.time <= arubaDateParts(now).time)) {
+      const nowParts = arubaDateParts(now);
+      const today = nowParts.date;
+      if (option.date < today || (option.date === today && option.time <= nowParts.time)) {
         return { available: false, reason: "selected-time-passed" };
       }
       const data = await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS));
@@ -292,19 +256,31 @@ function createSchedulingProvider({ db }) {
       for (const requested of option.assignments) {
         const van = data.vans.find((item) => item.id === requested.vanId);
         if (!van) return { available: false, reason: "van-unavailable", vanId: requested.vanId };
-        const assignment = resolveAssignment(van, option.date, data.staffProfiles, data.dailyVanAssignments, data.staffAbsences);
+        const assignment = resolveAssignment(
+          van,
+          option.date,
+          data.staffProfiles,
+          data.dailyVanAssignments,
+          data.staffAbsences,
+        );
         const startTime = requested.time || option.time;
         const availability = candidateAvailability({
           date: option.date,
           time: startTime,
-          allocation: { quantity: requested.quantity, slots: requested.slots, fullDay: requested.fullDay },
+          allocation: {
+            quantity: requested.quantity,
+            slots: requested.slots,
+            fullDay: requested.fullDay,
+          },
           van,
           assignment,
           data,
           routeConfig,
           candidateZone,
         });
-        if (!availability) return { available: false, reason: "capacity-or-route-changed", vanId: requested.vanId };
+        if (!availability) {
+          return { available: false, reason: "capacity-or-route-changed", vanId: requested.vanId };
+        }
         refreshedAssignments.push({ ...availability, time: startTime });
       }
       return { available: true, option: { ...option, assignments: refreshedAssignments } };
@@ -330,10 +306,16 @@ function createSchedulingProvider({ db }) {
         if (!requestedSlots.length) return { available: false, reason: "invalid-slot-map" };
         const conflict = sameDayOrders.some((order) => {
           if (order.vanId !== assignment.vanId) return false;
-          const existingSlots = occupiedSlots(normalizeOrderTime(order.time), orderSlotCount(order, services), halfDay);
+          const existingSlots = occupiedSlots(
+            normalizeOrderTime(order.time),
+            orderSlotCount(order, services),
+            halfDay,
+          );
           return existingSlots.some((slot) => requestedSlots.includes(slot));
         });
-        if (conflict) return { available: false, reason: "work-order-conflict", vanId: assignment.vanId };
+        if (conflict) {
+          return { available: false, reason: "work-order-conflict", vanId: assignment.vanId };
+        }
       }
 
       return {
@@ -350,14 +332,11 @@ function createSchedulingProvider({ db }) {
 
 module.exports = {
   SCHEDULING_PROVIDER_VERSION,
-  analysisForRequest,
   buildCapacityLocks,
   buildWorkOrders,
   createSchedulingProvider,
   exactCustomerProperty,
   loadSchedulingData,
   notificationRecipient,
-  requestContextForEngine,
   routeConfigFromSettings,
-  singlePresetWork,
 };
