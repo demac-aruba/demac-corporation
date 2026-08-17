@@ -1,38 +1,38 @@
 const crypto = require("node:crypto");
+const { getApp, getApps, initializeApp } = require("firebase-admin/app");
+const { getFirestore } = require("firebase-admin/firestore");
 const { defineSecret } = require("firebase-functions/params");
 const { onRequest } = require("firebase-functions/v2/https");
 const {
-  BOOKING_CORE_VERSION,
-} = require("./whatsappCopilotBookingRuntimeV1");
-const {
-  CONFIRMATION_GUARD_VERSION,
-  tryResolveConfirmedAppointment,
-} = require("./whatsappCopilotConfirmationGuardV32");
-const {
-  AGENT_VERSION,
-  FALLBACK_MODEL,
-  PRIMARY_MODEL,
-  REASONING_EFFORT,
-  runAgentTurn,
-} = require("./whatsappCopilotAgentV30");
+  CUSTOMER_AGENT_RUNTIME_VERSION,
+  DEFAULT_FALLBACK_MODEL,
+  DEFAULT_PRIMARY_MODEL,
+  DEFAULT_REASONING_EFFORT,
+  createCustomerAgentRuntime,
+} = require("./demacCustomerAgentRuntimeV1");
 
-// Transitional access token for the current internal agent endpoint.
-// Keep the deployed secret name until Communication Center becomes the sole caller.
+const app = getApps().length ? getApp() : initializeApp();
+const db = getFirestore(app);
+const customerAgentRuntime = createCustomerAgentRuntime({ db });
+
+// Transitional endpoint credential. The secret name is preserved until all
+// callers use the Communication Center/server bridge and this public draft
+// endpoint can be retired without a credential migration outage.
 const agentAccessToken = defineSecret("WHATSAPP_COPILOT_EXTENSION_TOKEN");
 const openAiApiKey = defineSecret("OPENAI_API_KEY");
 
-// AI handles language/intent; Booking Core v1 owns the current canonical
-// offer -> selection -> booking state until Booking Authority replaces it.
-const RUNTIME = {
+const PRIMARY_MODEL = process.env.DEMAC_CUSTOMER_AGENT_MODEL || DEFAULT_PRIMARY_MODEL;
+const FALLBACK_MODEL = process.env.DEMAC_CUSTOMER_AGENT_FALLBACK_MODEL || DEFAULT_FALLBACK_MODEL;
+const REASONING_EFFORT = process.env.DEMAC_CUSTOMER_AGENT_REASONING_EFFORT || DEFAULT_REASONING_EFFORT;
+
+const RUNTIME = Object.freeze({
   functionName: "whatsappCopilotDraft",
-  source: "openai-native-conversation-agent-v31+booking-core-v1+confirmation-guard-v32+erp-tools",
-  version: 18,
-  flowVersion: AGENT_VERSION,
-  agentVersion: AGENT_VERSION,
-  confirmationGuardVersion: CONFIRMATION_GUARD_VERSION,
-  bookingCoreVersion: BOOKING_CORE_VERSION,
-  architecture: "ai-first-native-messages+canonical-booking-session+erp-tools",
-};
+  source: "demac-customer-agent-runtime-v1+booking-authority",
+  version: CUSTOMER_AGENT_RUNTIME_VERSION,
+  architecture: "single-agent-tool-loop+erp-tools+booking-authority",
+  bookingAuthority: true,
+  toolCount: customerAgentRuntime.toolDefinitions.length - 1,
+});
 
 const FUNCTION_OPTIONS = {
   region: "us-central1",
@@ -68,11 +68,7 @@ function attachRuntime(payload) {
   };
   body.metadata = {
     ...(body.metadata || {}),
-    currentTurnPolicy: "ai-semantic-v31+booking-core-v1+confirmation-guard-v32",
-    conversationFlowVersion: AGENT_VERSION,
-    agentVersion: AGENT_VERSION,
-    confirmationGuardVersion: CONFIRMATION_GUARD_VERSION,
-    bookingCoreVersion: BOOKING_CORE_VERSION,
+    runtimeVersion: CUSTOMER_AGENT_RUNTIME_VERSION,
     architecture: RUNTIME.architecture,
   };
   return body;
@@ -98,39 +94,25 @@ exports.whatsappCopilotDraft = onRequest(FUNCTION_OPTIONS, async (request, respo
     response.status(200).json({
       ok: true,
       source: RUNTIME.source,
+      functionName: RUNTIME.functionName,
+      runtimeVersion: RUNTIME.version,
+      architecture: RUNTIME.architecture,
+      bookingAuthority: RUNTIME.bookingAuthority,
+      businessToolCount: RUNTIME.toolCount,
       model: PRIMARY_MODEL,
       primaryModel: PRIMARY_MODEL,
       fallbackModel: FALLBACK_MODEL,
       reasoningEffort: REASONING_EFFORT,
       openAiConfigured: Boolean(openAiApiKey.value()),
-      erpSchedulingConfigured: true,
-      erpKnowledgeConfigured: true,
-      conversationPolicyVersion: RUNTIME.version,
-      conversationFlowVersion: RUNTIME.flowVersion,
-      agentVersion: RUNTIME.agentVersion,
-      confirmationGuardVersion: RUNTIME.confirmationGuardVersion,
-      bookingCoreVersion: RUNTIME.bookingCoreVersion,
-      architecture: RUNTIME.architecture,
-      functionName: RUNTIME.functionName,
-      currentTurnPolicy: "ai-semantic-v31+booking-core-v1+confirmation-guard-v32",
     });
     return;
   }
 
   try {
-    // Once the ERP has already offered concrete slots, accepting one of those
-    // slots is a transaction state transition, not a creative-language task.
-    const confirmed = await tryResolveConfirmedAppointment(request.body || {});
-    if (confirmed) {
-      response.status(200).json(attachRuntime(confirmed));
-      return;
-    }
-
-    const payload = await runAgentTurn({
+    const payload = await customerAgentRuntime.runTurn({
       rawBody: request.body || {},
       apiKey: openAiApiKey.value(),
       company: String(request.body?.company || "DEMAC Professional Cooling Solutions"),
-      operator: String(request.body?.operator || "Operaciones"),
     });
     response.status(200).json(attachRuntime(payload));
   } catch (error) {
@@ -145,3 +127,4 @@ exports.whatsappCopilotDraft = onRequest(FUNCTION_OPTIONS, async (request, respo
 });
 
 module.exports.RUNTIME = RUNTIME;
+module.exports.attachRuntime = attachRuntime;
