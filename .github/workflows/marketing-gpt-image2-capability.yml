@@ -1,0 +1,55 @@
+name: Marketing GPT Image 2 Capability
+
+on:
+  push:
+    branches:
+      - agent/marketing-creative-v2
+    paths:
+      - '.github/workflows/marketing-gpt-image2-capability.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: npm install --prefix functions --no-audit --no-fund
+      - name: Verify GPT Image 2 edits
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          cd functions
+          node <<'NODE'
+          const sharp = require('sharp');
+          (async () => {
+            if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY secret missing.');
+            const input = await sharp({ create: { width: 256, height: 256, channels: 3, background: '#d8ecff' } }).png().toBuffer();
+            const form = new FormData();
+            form.append('model', 'gpt-image-2');
+            form.append('prompt', 'Preserve this simple pale blue square while adding a subtle premium cool-light gradient. No text.');
+            form.append('image', new Blob([input], { type: 'image/png' }), 'capability.png');
+            form.append('size', '1024x1024');
+            form.append('quality', 'low');
+            form.append('input_fidelity', 'high');
+            form.append('output_format', 'png');
+            const response = await fetch('https://api.openai.com/v1/images/edits', {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+              body: form,
+            });
+            const text = await response.text();
+            let payload = {};
+            try { payload = JSON.parse(text); } catch {}
+            if (!response.ok || !payload?.data?.[0]?.b64_json) {
+              throw new Error(`GPT Image 2 edit failed (${response.status}): ${payload?.error?.message || text}`);
+            }
+            console.log('GPT_IMAGE_2_EDIT_CAPABILITY_PASS', JSON.stringify({ model: 'gpt-image-2', quality: 'low', bytes: Buffer.from(payload.data[0].b64_json, 'base64').length }));
+          })().catch((error) => { console.error(error); process.exit(1); });
+          NODE
