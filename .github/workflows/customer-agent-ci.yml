@@ -75,6 +75,9 @@ jobs:
       - name: Test Customer Product Reservations
         run: node --test demacCustomerReservationTools.test.js demacCustomerProductReservationRuntime.test.js
 
+      - name: Test Maya WhatsApp formatting
+        run: node --test demacCustomerMessageFormatting.test.js
+
       - name: Test Customer Agent
         run: npm run test:customer-agent-tools
 
