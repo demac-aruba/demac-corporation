@@ -66,6 +66,10 @@ function baseTools({ customerResult = null, propertyResult = null } = {}) {
   };
 }
 
+function activeProduct(id = "p12") {
+  return { id, itemType: "Producto", name: "Adina Optima 12,000 BTU", category: "Aire acondicionado", sku: "AD-12", basePrice: 699, description: "SEER 21", active: true };
+}
+
 test("defines lead, catalog and price as strict business tools", () => {
   assert.deepEqual(CUSTOMER_BUSINESS_TOOL_DEFINITIONS.map((item) => item.name), [
     "create_or_update_lead", "get_service_catalog", "get_service_price",
@@ -73,8 +77,8 @@ test("defines lead, catalog and price as strict business tools", () => {
   assert.ok(CUSTOMER_BUSINESS_TOOL_DEFINITIONS.every((item) => item.strict));
 });
 
-test("defines ERP product catalog as a strict sales tool", () => {
-  assert.deepEqual(CUSTOMER_SALES_TOOL_DEFINITIONS.map((item) => item.name), ["get_product_catalog"]);
+test("defines ERP product catalog and stock as strict sales tools", () => {
+  assert.deepEqual(CUSTOMER_SALES_TOOL_DEFINITIONS.map((item) => item.name), ["get_product_catalog", "get_product_stock"]);
   assert.ok(CUSTOMER_SALES_TOOL_DEFINITIONS.every((item) => item.strict));
 });
 
@@ -124,9 +128,9 @@ test("price refuses silent hardcoded fallback when ERP pricing doc is missing", 
   assert.equal(result.error.code, "service_pricing_not_configured");
 });
 
-test("product catalog reads only active ERP Producto rows and never claims stock", async () => {
+test("product catalog reads only active ERP Producto rows and requires separate stock verification", async () => {
   const db = new FakeDb({ services: [
-    { id: "p12", itemType: "Producto", name: "Adina Optima 12,000 BTU", category: "Aire acondicionado", sku: "AD-12", basePrice: 699, description: "SEER 21", active: true },
+    activeProduct("p12"),
     { id: "p18", itemType: "Producto", name: "Adina Optima 18,000 BTU", category: "Aire acondicionado", sku: "AD-18", basePrice: 1199, active: false },
     { id: "s1", itemType: "Servicio", name: "Servicio estándar", basePrice: 125, active: true },
   ] });
@@ -138,10 +142,10 @@ test("product catalog reads only active ERP Producto rows and never claims stock
   assert.equal(result.products[0].id, "p12");
   assert.equal(result.products[0].basePrice, 699);
   assert.equal(result.products[0].currency, "Afl.");
-  assert.equal(result.products[0].stockTracked, false);
-  assert.equal(result.products[0].stockVerified, false);
-  assert.equal(result.stockSourceConfigured, false);
+  assert.equal(result.products[0].stockTrackedByCatalog, false);
+  assert.equal(result.products[0].stockVerificationRequired, true);
   assert.equal(result.stockVerificationRequired, true);
+  assert.equal(result.stockVerificationTool, "get_product_stock");
 });
 
 test("product catalog refuses a fabricated fallback when no active products exist", async () => {
@@ -153,6 +157,57 @@ test("product catalog refuses a fabricated fallback when no active products exis
   assert.equal(result.success, false);
   assert.equal(result.configured, false);
   assert.equal(result.error.code, "product_catalog_not_configured");
+});
+
+test("product stock returns only verified available quantity and never claims a reservation", async () => {
+  const db = new FakeDb({
+    services: [activeProduct("p12")],
+    commercialProductStock: [{ id: "p12", productId: "p12", onHand: 5, reserved: 2, active: true, verifiedAt: "2026-08-17T11:00:00Z" }],
+  });
+  const result = await createCustomerSalesTools({ db }).getProductStock({ productId: "p12" });
+  assert.equal(result.success, true);
+  assert.equal(result.configured, true);
+  assert.equal(result.stockVerified, true);
+  assert.equal(result.onHand, 5);
+  assert.equal(result.reserved, 2);
+  assert.equal(result.available, 3);
+  assert.equal(result.inStock, true);
+  assert.equal(result.reservationRequired, true);
+  assert.equal(result.stockReservedForCustomer, false);
+  assert.equal(result.verifiedAt, "2026-08-17T11:00:00.000Z");
+});
+
+test("product stock refuses a fabricated fallback when no stock record exists", async () => {
+  const db = new FakeDb({ services: [activeProduct("p12")] });
+  const result = await createCustomerSalesTools({ db }).getProductStock({ productId: "p12" });
+  assert.equal(result.success, false);
+  assert.equal(result.configured, false);
+  assert.equal(result.stockVerified, false);
+  assert.equal(result.error.code, "product_stock_not_configured");
+});
+
+test("product stock fails closed when quantities are inconsistent", async () => {
+  const db = new FakeDb({
+    services: [activeProduct("p12")],
+    commercialProductStock: [{ id: "p12", productId: "p12", onHand: 2, reserved: 3, active: true, verifiedAt: "2026-08-17T11:00:00Z" }],
+  });
+  const result = await createCustomerSalesTools({ db }).getProductStock({ productId: "p12" });
+  assert.equal(result.success, false);
+  assert.equal(result.configured, true);
+  assert.equal(result.stockVerified, false);
+  assert.equal(result.error.code, "product_stock_invalid");
+});
+
+test("product stock requires an explicit verification timestamp", async () => {
+  const db = new FakeDb({
+    services: [activeProduct("p12")],
+    commercialProductStock: [{ id: "p12", productId: "p12", onHand: 2, reserved: 0, active: true }],
+  });
+  const result = await createCustomerSalesTools({ db }).getProductStock({ productId: "p12" });
+  assert.equal(result.success, false);
+  assert.equal(result.configured, true);
+  assert.equal(result.stockVerified, false);
+  assert.equal(result.error.code, "product_stock_not_verified");
 });
 
 test("stable lead identity prefers phone then technical conversation identity", () => {
@@ -188,7 +243,7 @@ test("ambiguous existing customer is never merged", async () => {
   assert.equal(result.error.code, "ambiguous_customer");
 });
 
-test("single registry exposes all ten tools in intended order and dispatches by capability", async () => {
+test("single registry exposes all eleven tools in intended order and dispatches by capability", async () => {
   const customer = { invoke: async (name) => ({ success: true, source: "customer", name }) };
   const business = { invoke: async (name) => ({ success: true, source: "business", name }) };
   const sales = { invoke: async (name) => ({ success: true, source: "sales", name }) };
@@ -202,12 +257,13 @@ test("single registry exposes all ten tools in intended order and dispatches by 
   });
   assert.deepEqual(TOOL_ORDER, [
     "resolve_customer", "resolve_property", "create_or_update_lead", "get_service_catalog",
-    "get_service_price", "get_product_catalog", "get_company_policy", "check_availability",
-    "create_appointment", "get_appointment",
+    "get_service_price", "get_product_catalog", "get_product_stock", "get_company_policy",
+    "check_availability", "create_appointment", "get_appointment",
   ]);
-  assert.equal(registry.definitions.length, 10);
+  assert.equal(registry.definitions.length, 11);
   assert.equal((await registry.invoke("resolve_customer")).source, "customer");
   assert.equal((await registry.invoke("get_service_price")).source, "business");
   assert.equal((await registry.invoke("get_product_catalog")).source, "sales");
+  assert.equal((await registry.invoke("get_product_stock")).source, "sales");
   assert.equal((await registry.invoke("get_company_policy")).source, "policy");
 });
