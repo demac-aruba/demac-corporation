@@ -188,6 +188,19 @@ export async function assignConversation(conversationId: string, operator: Pick<
   return updateFirestoreDocument<StoredConversation>('communicationConversations', conversationId, { owner: operator.name, ownerUserId: operator.userId, status: 'assigned', aiDisposition: 'human_active', lockedBy: operator.name, lockedByUserId: operator.userId, updatedAt: new Date().toISOString() });
 }
 
+export async function returnConversationToAi(conversationId: string, principal: AuthPrincipal) {
+  return updateFirestoreDocument<StoredConversation>('communicationConversations', conversationId, {
+    owner: null,
+    ownerUserId: null,
+    lockedBy: null,
+    lockedByUserId: null,
+    status: 'waiting_demac',
+    aiDisposition: 'ai_active',
+    routeReason: `Returned to DEMAC Customer Agent by ${principal.displayName}.`,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
 export async function updateConversationStatus(conversationId: string, status: ConversationStatus) { return updateFirestoreDocument<StoredConversation>('communicationConversations', conversationId, { status, updatedAt: new Date().toISOString() }); }
 export async function markConversationRead(conversationId: string) { return updateFirestoreDocument<StoredConversation>('communicationConversations', conversationId, { unread: 0, updatedAt: new Date().toISOString() }); }
 
