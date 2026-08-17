@@ -81,6 +81,9 @@ jobs:
           node-version: '24'
           package-manager-cache: false
 
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
       - name: Authenticate Firebase deployment service account
         uses: google-github-actions/auth@v2
         with:
