@@ -1,0 +1,60 @@
+name: Temporary wacli Auth Diagnostics
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/wacli-auth-diagnostics.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Authenticate Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Read sanitized wacli signature diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/wacli-auth-logs.json"
+          gcloud logging read \
+            'resource.type="cloud_run_revision" AND resource.labels.service_name="wacliwebhook" AND timestamp>="2026-08-17T01:48:20Z"' \
+            --project=demac-corporation \
+            --limit=200 \
+            --order=desc \
+            --format=json > "$OUT"
+          python3 - "$OUT" <<'PY'
+          import json,sys
+          path=sys.argv[1]
+          rows=json.load(open(path,encoding='utf-8'))
+          matches=[]
+          for row in rows:
+              payload=row.get('jsonPayload') or {}
+              text=str(payload.get('message') or row.get('textPayload') or '')
+              if 'Rejected DEMAC bridge webhook with invalid Ed25519 signature' not in text:
+                  continue
+              matches.append({
+                  'timestamp': row.get('timestamp'),
+                  'revision': (row.get('resource') or {}).get('labels',{}).get('revision_name'),
+                  'signatureHeaderPresent': payload.get('signatureHeaderPresent'),
+                  'signatureScheme': payload.get('signatureScheme'),
+                  'signatureLength': payload.get('signatureLength'),
+                  'rawBodyBytes': payload.get('rawBodyBytes'),
+                  'bridgePublicKeyFingerprint': payload.get('bridgePublicKeyFingerprint'),
+              })
+          print('matching_rejections=', len(matches))
+          for item in matches[:20]:
+              print(json.dumps(item, sort_keys=True))
+          if not matches:
+              print('No matching structured rejection logs found in the requested window.')
+          PY
+          rm -f "$OUT"
