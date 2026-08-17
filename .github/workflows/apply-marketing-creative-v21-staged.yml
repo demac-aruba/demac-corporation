@@ -1,0 +1,357 @@
+name: Apply Marketing Creative V2.1 Staged Integration
+
+on:
+  push:
+    branches:
+      - fix/marketing-creative-v21-staged
+    paths:
+      - '.github/workflows/apply-marketing-creative-v21-staged.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/marketing-creative-v21-staged
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Patch V2 engine, bootstrap, frontend service, UI and deploy workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          # 1) V2 engine: explicit OpenAI timeouts, remove unsupported parameter,
+          # and expose server-only helpers for staged V2.1 callables.
+          p = Path('functions/marketingCreativeBuilderV2.js')
+          s = p.read_text()
+
+          anchor = "async function structuredResponse({ model, prompt, schemaName, schema, imageBuffer }) {"
+          helper = """async function fetchWithTimeout(url, options, timeoutMs, label) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+"""
+          assert s.count(anchor) == 1
+          if 'async function fetchWithTimeout(' not in s:
+            s = s.replace(anchor, helper + anchor)
+
+          old_resp = """  const response = await fetch('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${openAiApiKey.value()}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      input: [{ role: 'user', content }],
+      text: { format: { type: 'json_schema', name: schemaName, strict: true, schema } },
+    }),
+  });"""
+          new_resp = """  const response = await fetchWithTimeout('https://api.openai.com/v1/responses', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${openAiApiKey.value()}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      input: [{ role: 'user', content }],
+      text: { format: { type: 'json_schema', name: schemaName, strict: true, schema } },
+    }),
+  }, 120000, `${model} structured response`);"""
+          assert s.count(old_resp) == 1
+          s = s.replace(old_resp, new_resp)
+
+          s = s.replace("  form.append('input_fidelity', 'high');\n", '')
+          old_img = """  const response = await fetch('https://api.openai.com/v1/images/edits', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${openAiApiKey.value()}` },
+    body: form,
+  });"""
+          new_img = """  const response = await fetchWithTimeout('https://api.openai.com/v1/images/edits', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${openAiApiKey.value()}` },
+    body: form,
+  }, 420000, 'GPT Image 2 edit');"""
+          assert s.count(old_img) == 1
+          s = s.replace(old_img, new_img)
+
+          old_test = """exports.__marketingCreativeBuilderV2Test = {
+  IMAGE_MODEL,
+  ART_DIRECTOR_MODEL,
+  QA_MODEL,
+  VARIANT_IDS,
+  FOOTER_RESERVED_PX,
+};"""
+          new_test = """exports.__marketingCreativeBuilderV2Internal = {
+  safeString,
+  requireMarketingUser,
+  loadCore,
+  exactTextForCreative,
+  hardChecks,
+  setProgress,
+  fetchImageBuffer,
+  createArtDirection,
+  renderVariant,
+  nextVersion,
+  previousIssues,
+};
+
+exports.__marketingCreativeBuilderV2Test = {
+  IMAGE_MODEL,
+  ART_DIRECTOR_MODEL,
+  QA_MODEL,
+  VARIANT_IDS,
+  OUTPUT_SIZE,
+  FOOTER_RESERVED_PX,
+};"""
+          assert s.count(old_test) == 1
+          s = s.replace(old_test, new_test)
+          p.write_text(s)
+
+          # 2) Bootstrap exports V2.1 staged callables.
+          p = Path('functions/bootstrap.js')
+          s = p.read_text()
+          old = "const marketingCreativeBuilder = require(\"./marketingCreativeBuilderV2Compat\");\nconst marketingCreativeRead"
+          new = "const marketingCreativeBuilder = require(\"./marketingCreativeBuilderV2Compat\");\nconst marketingCreativeBuilderV21 = require(\"./marketingCreativeBuilderV21\");\nconst marketingCreativeRead"
+          assert s.count(old) == 1
+          s = s.replace(old, new)
+          old = "  ...marketingCreativeBuilder,\n  ...marketingCreativeRead,"
+          new = "  ...marketingCreativeBuilder,\n  ...marketingCreativeBuilderV21,\n  ...marketingCreativeRead,"
+          assert s.count(old) == 1
+          s = s.replace(old, new)
+          p.write_text(s)
+
+          # 3) Browser callable service adds staged endpoints.
+          p = Path('apps/erp-next/lib/firebase/marketing-creative.ts')
+          s = p.read_text()
+          old_union = "async function callCreativeFunction(name: 'requestMarketingCreativeBuild' | 'approveMarketingCreative' | 'getMarketingCreativeState', data: Record<string, unknown>)"
+          new_union = "async function callCreativeFunction(name: 'requestMarketingCreativeBuild' | 'requestMarketingCreativePlan' | 'requestMarketingCreativeVariant' | 'requestMarketingCreativeRevision' | 'finalizeMarketingCreativeBuild' | 'approveMarketingCreative' | 'getMarketingCreativeState', data: Record<string, unknown>)"
+          assert s.count(old_union) == 1
+          s = s.replace(old_union, new_union)
+          insert_after = """export async function requestMarketingCreativeBuild(sessionId: string) {
+  return callCreativeFunction('requestMarketingCreativeBuild', { sessionId });
+}
+"""
+          staged = """
+export async function requestMarketingCreativePlan(sessionId: string) {
+  return callCreativeFunction('requestMarketingCreativePlan', { sessionId }) as Promise<{ buildId: string; creativeId: string; version: number; conceptIds: string[]; builderVersion: string }>;
+}
+
+export async function requestMarketingCreativeVariant(sessionId: string, buildId: string, conceptId: string) {
+  return callCreativeFunction('requestMarketingCreativeVariant', { sessionId, buildId, conceptId });
+}
+
+export async function requestMarketingCreativeRevision(sessionId: string, buildId: string) {
+  return callCreativeFunction('requestMarketingCreativeRevision', { sessionId, buildId });
+}
+
+export async function finalizeMarketingCreativeBuild(sessionId: string, buildId: string) {
+  return callCreativeFunction('finalizeMarketingCreativeBuild', { sessionId, buildId }) as Promise<{ creativeId?: string; status?: string; revisionRequired?: boolean; selectedVariantId?: string; builderVersion?: string }>;
+}
+"""
+          assert s.count(insert_after) == 1
+          s = s.replace(insert_after, insert_after + staged)
+          p.write_text(s)
+
+          # 4) Creative Studio orchestrates short persistent stages with one retry per variant.
+          p = Path('apps/erp-next/components/marketing/creative-studio-v2.tsx')
+          s = p.read_text()
+          old_import = """  approveMarketingCreative,
+  listMarketingCreatives,
+  requestMarketingCreativeBuild,
+  type MarketingCreative,
+"""
+          new_import = """  approveMarketingCreative,
+  finalizeMarketingCreativeBuild,
+  listMarketingCreatives,
+  requestMarketingCreativePlan,
+  requestMarketingCreativeRevision,
+  requestMarketingCreativeVariant,
+  type MarketingCreative,
+"""
+          assert s.count(old_import) == 1
+          s = s.replace(old_import, new_import)
+          old_build = """  const build = async () => {
+    if (!selectedSessionId || working) return;
+    setWorking('build');
+    setError('');
+    setNotice('');
+    try {
+      await requestMarketingCreativeBuild(selectedSessionId);
+      await refresh();
+      setNotice('Creative Builder V2 completed. Review the selected winner and all generated variants below.');
+    } catch (buildError) {
+      await refresh().catch(() => undefined);
+      setError(buildError instanceof Error ? buildError.message : 'Creative build failed.');
+    } finally {
+      setWorking('');
+    }
+  };"""
+          new_build = """  const build = async () => {
+    if (!selectedSessionId || working) return;
+    setWorking('build');
+    setError('');
+    setNotice('');
+    const runVariantWithRetry = async (buildId: string, conceptId: string) => {
+      try {
+        await requestMarketingCreativeVariant(selectedSessionId, buildId, conceptId);
+      } catch (firstError) {
+        await refresh().catch(() => undefined);
+        await new Promise((resolve) => window.setTimeout(resolve, 1200));
+        try {
+          await requestMarketingCreativeVariant(selectedSessionId, buildId, conceptId);
+        } catch {
+          throw firstError;
+        }
+      }
+      await refresh();
+    };
+    try {
+      const plan = await requestMarketingCreativePlan(selectedSessionId);
+      for (const conceptId of plan.conceptIds) await runVariantWithRetry(plan.buildId, conceptId);
+      let finalResult = await finalizeMarketingCreativeBuild(selectedSessionId, plan.buildId);
+      if (finalResult.revisionRequired) {
+        await requestMarketingCreativeRevision(selectedSessionId, plan.buildId);
+        await refresh();
+        finalResult = await finalizeMarketingCreativeBuild(selectedSessionId, plan.buildId);
+      }
+      await refresh();
+      setNotice(`Creative Builder ${finalResult.builderVersion || 'V2.1'} completed. Review the selected winner and all generated variants below.`);
+    } catch (buildError) {
+      await refresh().catch(() => undefined);
+      setError(buildError instanceof Error ? buildError.message : 'Creative build failed.');
+    } finally {
+      setWorking('');
+    }
+  };"""
+          assert s.count(old_build) == 1
+          s = s.replace(old_build, new_build)
+          s = s.replace('GPT-5.6 Sol Art Director → 3 GPT Image 2 concepts → exact text → agency QA → winner selection.', 'GPT-5.6 Sol Art Director → staged GPT Image 2 concepts → exact text → agency QA → winner selection.')
+          s = s.replace('Do not refresh while image variants are being generated. The page is polling live progress from Firebase.', 'Each completed stage is preserved in Firebase. If one image stage fails, the system can retry without discarding the completed concepts.')
+          p.write_text(s)
+
+          # 5) Deployment workflow validates/deploys staged callables and retries eventual-consistency verification.
+          p = Path('.github/workflows/marketing-agent-function-deploy.yml')
+          s = p.read_text()
+          for marker in ["      - 'functions/marketingCreativeBuilderV2.js'\n"]:
+            replacement = marker + "      - 'functions/marketingCreativeBuilderV2Compat.js'\n      - 'functions/marketingCreativeBuilderV21.js'\n"
+            s = s.replace(marker, replacement)
+          s = s.replace("          node --check functions/marketingCreativeBuilderV2.js\n", "          node --check functions/marketingCreativeBuilderV2.js\n          node --check functions/marketingCreativeBuilderV2Compat.js\n          node --check functions/marketingCreativeBuilderV21.js\n")
+          old_names = """            'requestMarketingCreativeBuild',
+            'approveMarketingCreative',
+            'getMarketingCreativeState',
+"""
+          new_names = """            'requestMarketingCreativeBuild',
+            'requestMarketingCreativePlan',
+            'requestMarketingCreativeVariant',
+            'requestMarketingCreativeRevision',
+            'finalizeMarketingCreativeBuild',
+            'approveMarketingCreative',
+            'getMarketingCreativeState',
+"""
+          assert s.count(old_names) == 1
+          s = s.replace(old_names, new_names)
+          v2_guard = """          if (v2.FOOTER_RESERVED_PX < 140) throw new Error('Footer reserve is too small.');
+          console.log('Aruba Papiamento + Marketing Creative V2 guardrails: PASS');
+"""
+          v21_guard = """          if (v2.FOOTER_RESERVED_PX < 140) throw new Error('Footer reserve is too small.');
+          const v21 = require('./functions/marketingCreativeBuilderV21').__marketingCreativeBuilderV21Test;
+          if (!v21 || v21.builderVersion !== 'V2.1' || v21.renderMode !== 'ai_staged_v21') throw new Error('Creative Builder V2.1 staged engine missing.');
+          console.log('Aruba Papiamento + Marketing Creative V2/V2.1 guardrails: PASS');
+"""
+          assert s.count(v2_guard) == 1
+          s = s.replace(v2_guard, v21_guard)
+          deploy_anchor = """          deploy_openai_callable requestMarketingCreativeBuild 2Gi 900s
+          deploy_plain_callable approveMarketingCreative 512Mi 120s
+"""
+          deploy_new = """          deploy_openai_callable requestMarketingCreativeBuild 2Gi 900s
+          deploy_openai_callable requestMarketingCreativePlan 1Gi 300s
+          deploy_openai_callable requestMarketingCreativeVariant 2Gi 720s
+          deploy_openai_callable requestMarketingCreativeRevision 2Gi 720s
+          deploy_plain_callable finalizeMarketingCreativeBuild 512Mi 180s
+          deploy_plain_callable approveMarketingCreative 512Mi 120s
+"""
+          assert s.count(deploy_anchor) == 1
+          s = s.replace(deploy_anchor, deploy_new)
+          verify_old = """            requestMarketingCreativeBuild \\
+            approveMarketingCreative \\
+            getMarketingCreativeState
+          do
+            STATE=\"$(gcloud functions describe \"$FUNCTION_NAME\" --project=demac-corporation --gen2 --region=us-central1 --format='value(state)')\"
+            URI=\"$(gcloud functions describe \"$FUNCTION_NAME\" --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.uri)')\"
+            if [ \"$STATE\" != \"ACTIVE\" ] || [ -z \"$URI\" ]; then
+              echo \"::error::$FUNCTION_NAME state is ${STATE:-unknown}; URI=${URI:-missing}.\"
+              exit 1
+            fi
+            echo \"$FUNCTION_NAME is ACTIVE at $URI\"
+          done"""
+          verify_new = """            requestMarketingCreativeBuild \\
+            requestMarketingCreativePlan \\
+            requestMarketingCreativeVariant \\
+            requestMarketingCreativeRevision \\
+            finalizeMarketingCreativeBuild \\
+            approveMarketingCreative \\
+            getMarketingCreativeState
+          do
+            READY=''
+            for ATTEMPT in $(seq 1 18); do
+              STATE=\"$(gcloud functions describe \"$FUNCTION_NAME\" --project=demac-corporation --gen2 --region=us-central1 --format='value(state)' || true)\"
+              URI=\"$(gcloud functions describe \"$FUNCTION_NAME\" --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.uri)' || true)\"
+              if [ \"$STATE\" = \"ACTIVE\" ] && [ -n \"$URI\" ]; then
+                READY=1
+                echo \"$FUNCTION_NAME is ACTIVE at $URI\"
+                break
+              fi
+              echo \"$FUNCTION_NAME verification attempt $ATTEMPT: state=${STATE:-unknown}; waiting for control-plane convergence…\"
+              sleep 10
+            done
+            if [ -z \"$READY\" ]; then
+              echo \"::error::$FUNCTION_NAME did not become ACTIVE in the verification window.\"
+              exit 1
+            fi
+          done"""
+          assert s.count(verify_old) == 1, 'verify block anchor not found'
+          s = s.replace(verify_old, verify_new)
+          p.write_text(s)
+          PY
+
+          node --check functions/marketingCreativeBuilderV2.js
+          node --check functions/marketingCreativeBuilderV21.js
+          node --check functions/bootstrap.js
+          npm install --prefix functions --no-audit --no-fund >/dev/null
+          node - <<'NODE'
+          const mod = require('./functions/bootstrap');
+          for (const name of ['requestMarketingCreativePlan','requestMarketingCreativeVariant','requestMarketingCreativeRevision','finalizeMarketingCreativeBuild']) {
+            if (typeof mod[name] !== 'function') throw new Error(`${name} export missing`);
+          }
+          const v2 = require('./functions/marketingCreativeBuilderV2').__marketingCreativeBuilderV2Test;
+          if (v2.IMAGE_MODEL !== 'gpt-image-2' || !v2.OUTPUT_SIZE) throw new Error('V2 engine constants invalid');
+          const internal = require('./functions/marketingCreativeBuilderV2Compat').__marketingCreativeBuilderV2Internal;
+          if (!internal?.renderVariant || !internal?.createArtDirection) throw new Error('V2 staged helpers missing');
+          NODE
+          ! grep -q "form.append('input_fidelity'" functions/marketingCreativeBuilderV2.js
+          grep -q "fetchWithTimeout('https://api.openai.com/v1/images/edits'" functions/marketingCreativeBuilderV2.js
+          grep -q "requestMarketingCreativePlan" apps/erp-next/components/marketing/creative-studio-v2.tsx
+      - name: Commit integration and remove temporary patch workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/apply-marketing-creative-v21-staged.yml
+          git config user.name demac-aruba
+          git config user.email gm.demac@gmail.com
+          git add functions/marketingCreativeBuilderV2.js functions/marketingCreativeBuilderV21.js functions/bootstrap.js apps/erp-next/lib/firebase/marketing-creative.ts apps/erp-next/components/marketing/creative-studio-v2.tsx .github/workflows/marketing-agent-function-deploy.yml .github/workflows/apply-marketing-creative-v21-staged.yml
+          git commit -m "Stage Marketing Creative Builder V2.1"
+          git push origin HEAD:fix/marketing-creative-v21-staged
