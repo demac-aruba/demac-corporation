@@ -6,6 +6,7 @@ const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/
 const { createCustomerAgentRuntime, HANDOFF_QUEUES } = require("./demacCustomerAgentRuntimeV1");
 const { sessionIdentity } = require("./demacCustomerConversationState");
 const { cleanText, hashId } = require("./bookingSchedulingPrimitives");
+const { cleanCustomerFacingMessage } = require("./demacCustomerMessageFormatting");
 
 const app = getApps().length ? getApp() : initializeApp();
 const db = getFirestore(app);
@@ -259,7 +260,7 @@ async function queueAgentReply({ conversationId, conversation, inboundMessageId,
   if (!automaticReplySupported(provider)) {
     throw new Error(`Automatic customer-agent replies are not enabled for provider ${cleanText(provider, 40) || "unknown"}.`);
   }
-  const text = cleanText(result.draft, 3_000);
+  const text = cleanCustomerFacingMessage(result.draft, 3_000);
   if (!text) return { queued: false, reason: "empty-draft" };
   const id = outboundDocumentId(conversationId, inboundMessageId);
   const ref = db.collection("whatsappOutboundQueue").doc(id);
@@ -300,7 +301,7 @@ async function queueAgentReply({ conversationId, conversation, inboundMessageId,
       conversationId,
       sourceInboundMessageId: inboundMessageId,
       createdByUserId: "demac-customer-agent",
-      createdByName: "DEMAC Customer Agent",
+      createdByName: "Maya",
       createdAt: FieldValue.serverTimestamp(),
       createdAtIso: new Date().toISOString(),
     });
