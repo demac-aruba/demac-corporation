@@ -34,7 +34,6 @@ const OUTBOUND_POLL_INTERVAL_MS = Math.max(1000, Number(process.env.WACLI_OUTBOU
 const MEDIA_DOWNLOAD_ATTEMPTS = Math.max(1, Number(process.env.WACLI_MEDIA_DOWNLOAD_ATTEMPTS || 4));
 const MEDIA_DOWNLOAD_RETRY_MS = Math.max(250, Number(process.env.WACLI_MEDIA_DOWNLOAD_RETRY_MS || 1500));
 const IDENTITY_CACHE_MS = 12 * 60 * 60 * 1000;
-const AVATAR_CACHE_MS = 24 * 60 * 60 * 1000;
 
 let startedAt = new Date().toISOString();
 let lastForwardSuccessAt = null;
@@ -51,7 +50,6 @@ let lastOutboundError = null;
 let forwarding = false;
 let outboundPolling = false;
 const identityCache = new Map();
-const avatarCache = new Map();
 
 function requireConfiguration() {
   const missing = [];
@@ -267,22 +265,6 @@ async function storageChatForPayload(payload) {
   throw new Error('Unable to resolve WhatsApp LID to its canonical store JID.');
 }
 
-async function resolveProfilePicture(chat) {
-  if (!chat || chat.endsWith('@g.us') || chat.endsWith('@newsletter')) return null;
-  const cached = avatarCache.get(chat);
-  if (cached && Date.now() - cached.at < AVATAR_CACHE_MS) return cached.value;
-  try {
-    const data = await runWacliJson(['profile', 'picture-info', '--jid', chat], { timeout: 20000 });
-    const strings = collectStrings(data);
-    const sourceUrl = strings.find((entry) => /url/.test(entry.key) && /^https:\/\//i.test(entry.value))?.value;
-    const value = sourceUrl ? { sourceUrl, updatedAt: new Date().toISOString() } : null;
-    avatarCache.set(chat, { at: Date.now(), value });
-    return value;
-  } catch {
-    return null;
-  }
-}
-
 async function enrichIncomingPayload(payload) {
   if (payload.EventType) return payload;
   const chat = String(payload.Chat || '');
@@ -303,9 +285,6 @@ async function enrichIncomingPayload(payload) {
   const enriched = { ...payload, ...identity };
   const kind = detail ? mediaKindFromDetail(detail) : null;
   if (kind) enriched.Media = extractMediaMeta(detail, kind);
-
-  const profilePicture = await resolveProfilePicture(storageChat).catch(() => null);
-  if (profilePicture) enriched.ProfilePicture = profilePicture;
   return enriched;
 }
 
@@ -758,7 +737,6 @@ async function handleHealth(response) {
     pendingWebhookEvents: await pendingWebhookCount(),
     pendingDeadLetterEvents: await pendingDeadLetterCount(),
     identityCache: identityCache.size,
-    avatarCache: avatarCache.size,
     lastForwardSuccessAt,
     lastForwardError,
     lastDeadLetterAt,
