@@ -5,6 +5,10 @@ const {
   createCustomerBusinessTools,
   stableLeadIdentity,
 } = require("./demacCustomerBusinessTools");
+const {
+  CUSTOMER_SALES_TOOL_DEFINITIONS,
+  createCustomerSalesTools,
+} = require("./demacCustomerSalesTools");
 const { TOOL_ORDER, createDemacCustomerToolRegistry } = require("./demacCustomerToolRegistry");
 
 class FakeSnapshot {
@@ -69,6 +73,11 @@ test("defines lead, catalog and price as strict business tools", () => {
   assert.ok(CUSTOMER_BUSINESS_TOOL_DEFINITIONS.every((item) => item.strict));
 });
 
+test("defines ERP product catalog as a strict sales tool", () => {
+  assert.deepEqual(CUSTOMER_SALES_TOOL_DEFINITIONS.map((item) => item.name), ["get_product_catalog"]);
+  assert.ok(CUSTOMER_SALES_TOOL_DEFINITIONS.every((item) => item.strict));
+});
+
 test("catalog returns configured presets with ERP service ids", async () => {
   const db = new FakeDb({
     businessSettings: [{ id: "appointment-work-presets", version: 2, presets: [
@@ -115,6 +124,37 @@ test("price refuses silent hardcoded fallback when ERP pricing doc is missing", 
   assert.equal(result.error.code, "service_pricing_not_configured");
 });
 
+test("product catalog reads only active ERP Producto rows and never claims stock", async () => {
+  const db = new FakeDb({ services: [
+    { id: "p12", itemType: "Producto", name: "Adina Optima 12,000 BTU", category: "Aire acondicionado", sku: "AD-12", basePrice: 699, description: "SEER 21", active: true },
+    { id: "p18", itemType: "Producto", name: "Adina Optima 18,000 BTU", category: "Aire acondicionado", sku: "AD-18", basePrice: 1199, active: false },
+    { id: "s1", itemType: "Servicio", name: "Servicio estándar", basePrice: 125, active: true },
+  ] });
+  const tools = createCustomerSalesTools({ db });
+  const result = await tools.getProductCatalog({ query: "12000" });
+  assert.equal(result.success, true);
+  assert.equal(result.found, true);
+  assert.equal(result.products.length, 1);
+  assert.equal(result.products[0].id, "p12");
+  assert.equal(result.products[0].basePrice, 699);
+  assert.equal(result.products[0].currency, "Afl.");
+  assert.equal(result.products[0].stockTracked, false);
+  assert.equal(result.products[0].stockVerified, false);
+  assert.equal(result.stockSourceConfigured, false);
+  assert.equal(result.stockVerificationRequired, true);
+});
+
+test("product catalog refuses a fabricated fallback when no active products exist", async () => {
+  const db = new FakeDb({ services: [
+    { id: "s1", itemType: "Servicio", name: "Servicio estándar", basePrice: 125, active: true },
+    { id: "p1", itemType: "Producto", name: "Producto inactivo", basePrice: 10, active: false },
+  ] });
+  const result = await createCustomerSalesTools({ db }).getProductCatalog({ query: "" });
+  assert.equal(result.success, false);
+  assert.equal(result.configured, false);
+  assert.equal(result.error.code, "product_catalog_not_configured");
+});
+
 test("stable lead identity prefers phone then technical conversation identity", () => {
   assert.equal(stableLeadIdentity({ contactJid: "123@lid" }, "5600000"), "phone:2975600000");
   assert.equal(stableLeadIdentity({ contactJid: "123@lid" }, ""), "conversation:123@lid");
@@ -148,15 +188,17 @@ test("ambiguous existing customer is never merged", async () => {
   assert.equal(result.error.code, "ambiguous_customer");
 });
 
-test("single registry exposes all eight tools in intended order and dispatches by capability", async () => {
+test("single registry exposes all nine tools in intended order and dispatches by capability", async () => {
   const customer = { invoke: async (name) => ({ success: true, source: "customer", name }) };
   const business = { invoke: async (name) => ({ success: true, source: "business", name }) };
-  const registry = createDemacCustomerToolRegistry({ db: new FakeDb(), customerTools: customer, businessTools: business });
+  const sales = { invoke: async (name) => ({ success: true, source: "sales", name }) };
+  const registry = createDemacCustomerToolRegistry({ db: new FakeDb(), customerTools: customer, businessTools: business, salesTools: sales });
   assert.deepEqual(TOOL_ORDER, [
     "resolve_customer", "resolve_property", "create_or_update_lead", "get_service_catalog",
-    "get_service_price", "check_availability", "create_appointment", "get_appointment",
+    "get_service_price", "get_product_catalog", "check_availability", "create_appointment", "get_appointment",
   ]);
-  assert.equal(registry.definitions.length, 8);
+  assert.equal(registry.definitions.length, 9);
   assert.equal((await registry.invoke("resolve_customer")).source, "customer");
   assert.equal((await registry.invoke("get_service_price")).source, "business");
+  assert.equal((await registry.invoke("get_product_catalog")).source, "sales");
 });
