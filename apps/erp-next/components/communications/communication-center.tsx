@@ -27,6 +27,7 @@ import {
   type WhatsAppMediaKind,
   type WhatsAppProvider,
 } from '../../lib/browser-communications';
+import { closeCommunicationConversation } from '../../lib/communication-conversation-actions';
 import { loadFirebasePrincipal } from '../../lib/firebase/principal';
 import type { AuthPrincipal } from '../../lib/security';
 import { CommunicationAvatar, WhatsAppMessageContent, conversationMessagePreview, messageReceiptLabel } from './whatsapp-message-content';
@@ -429,6 +430,20 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
     }
   };
 
+  const closeChat = async () => {
+    if (!selected || !canManageWorkflow) return;
+    setBusy(true);
+    setError('');
+    try {
+      await closeCommunicationConversation(selected.id);
+      await refresh();
+    } catch (closeError) {
+      setError(closeError instanceof Error ? closeError.message : String(closeError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const reassign = async () => {
     if (!selected || !manager || !assignmentTarget) return;
     const operator = operators.find((item) => item.userId === assignmentTarget);
@@ -672,20 +687,11 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
             <div className={styles.chatIdentity}><CommunicationAvatar className={styles.chatAvatar} name={selected.customer} url={selected.avatarUrl} /><div><h2>{selected.customer}</h2><p>{selected.phone || selected.chatJid || 'WhatsApp identity pending'}{selected.property ? ` · ${selected.property}` : ''}</p></div></div>
           <div className={styles.chatHeaderActions}>
             <span className={styles.ownerLabel}>{selectedAiActive ? 'Maya · AI' : selected.owner ? `Assigned to ${selected.owner}` : 'Unassigned'}</span>
-            {operatorWorkspace ? <details className={workspaceStyles.actionMenu}>
-              <summary aria-label="Conversation actions">•••</summary>
-              <div className={workspaceStyles.actionMenuPanel}>
-                <label>Status<select value={selected.status} onChange={(event) => changeStatus(event.target.value as ConversationStatus)} disabled={busy || !canManageWorkflow}>{statusOptions.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select></label>
-                {manager ? <label>Assign operator<select value={assignmentTarget || selected.ownerUserId || ''} onChange={(event) => setAssignmentTarget(event.target.value)}><option value="">Select operator</option>{operators.map((operator) => <option key={operator.userId} value={operator.userId}>{operator.name} · {operator.presence.replaceAll('_', ' ')}</option>)}</select></label> : null}
-                <div className={workspaceStyles.actionMenuButtons}>
-                  {manager ? <button type="button" className={workspaceStyles.brand} onClick={reassign} disabled={busy || !assignmentTarget}>Assign</button> : null}
-                  {selectedOwnedByColleague ? <button type="button" className={workspaceStyles.brand} onClick={takeOver} disabled={busy}>Take over</button> : null}
-                  {selectedOwnedByMe && !selectedAiActive ? <button type="button" className={workspaceStyles.brand} onClick={returnToAi} disabled={busy || !canReturnToAi}>Return to Maya</button> : null}
-                  <button type="button" className={workspaceStyles.danger} onClick={() => changeStatus('escalated')} disabled={busy || !canManageWorkflow}>Escalate</button>
-                  <button type="button" className={workspaceStyles.success} onClick={() => changeStatus('resolved')} disabled={busy || !canManageWorkflow}>Complete</button>
-                </div>
-              </div>
-            </details> : <>
+            {operatorWorkspace ? <>
+              {selectedOwnedByMe && !selectedAiActive ? <button type="button" className={styles.takeover} onClick={returnToAi} disabled={busy || !canReturnToAi} title="Release this conversation to Maya so she can answer the latest customer message.">Let Maya answer this</button> : null}
+              {canManageWorkflow ? <button type="button" className={`${styles.takeover} ${styles.resolveButton}`} onClick={closeChat} disabled={busy} title="Close this chat. Maya will reactivate only when the customer writes again.">Close chat</button> : null}
+              {selectedOwnedByColleague ? <button type="button" className={styles.takeover} onClick={takeOver} disabled={busy}>Take over</button> : null}
+            </> : <>
               {selectedOwnedByMe && !selectedAiActive
                 ? <button type="button" className={styles.takeover} onClick={returnToAi} disabled={busy || !canReturnToAi}>Return to AI</button>
                 : <button type="button" className={styles.takeover} onClick={takeOver} disabled={busy || selectedOwnedByMe}>{selectedAiActive ? 'Take over from AI' : selectedOwnedByColleague ? 'Take over' : 'Take conversation'}</button>}
