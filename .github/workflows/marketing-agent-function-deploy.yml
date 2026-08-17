@@ -8,6 +8,7 @@ on:
       - 'functions/marketingCampaignStrategy.js'
       - 'functions/marketingCampaignStrategyAruba.js'
       - 'functions/marketingCreativeBuilder.js'
+      - 'functions/marketingCreativeBuilderV2.js'
       - 'functions/marketingCreativeRead.js'
       - 'functions/package.json'
       - 'functions/bootstrap.js'
@@ -21,6 +22,7 @@ on:
       - 'functions/marketingCampaignStrategy.js'
       - 'functions/marketingCampaignStrategyAruba.js'
       - 'functions/marketingCreativeBuilder.js'
+      - 'functions/marketingCreativeBuilderV2.js'
       - 'functions/marketingCreativeRead.js'
       - 'functions/package.json'
       - 'functions/bootstrap.js'
@@ -50,6 +52,7 @@ jobs:
           node --check functions/marketingCampaignStrategy.js
           node --check functions/marketingCampaignStrategyAruba.js
           node --check functions/marketingCreativeBuilder.js
+          node --check functions/marketingCreativeBuilderV2.js
           node --check functions/marketingCreativeRead.js
           node --check functions/bootstrap.js
           node - <<'NODE'
@@ -99,7 +102,15 @@ jobs:
           const safeFallback = aruba.deterministicSafeCopy(badStrategy, 'installation', {}, []);
           const fallbackIssues = aruba.papiamentoReviewWords(safeFallback, []);
           if (fallbackIssues.length) throw new Error(`Approved DEMAC fallback did not validate: ${fallbackIssues.join(', ')}`);
-          console.log('Aruba Papiamento Marketing guardrails: PASS');
+
+          const v2 = require('./functions/marketingCreativeBuilderV2').__marketingCreativeBuilderV2Test;
+          if (!v2 || v2.IMAGE_MODEL !== 'gpt-image-2') throw new Error('Creative Builder V2 must require gpt-image-2.');
+          if (v2.ART_DIRECTOR_MODEL !== 'gpt-5.6-sol' || v2.QA_MODEL !== 'gpt-5.6-sol') {
+            throw new Error('Creative Builder V2 must use GPT-5.6 Sol for art direction and visual QA.');
+          }
+          if (!Array.isArray(v2.VARIANT_IDS) || v2.VARIANT_IDS.length !== 3) throw new Error('Creative Builder V2 must generate three concepts.');
+          if (v2.FOOTER_RESERVED_PX < 140) throw new Error('Footer reserve is too small.');
+          console.log('Aruba Papiamento + Marketing Creative V2 guardrails: PASS');
           NODE
 
   deploy-marketing-function:
@@ -203,7 +214,7 @@ jobs:
 
           deploy_openai_callable requestMarketingImageAnalysis 512Mi 540s
           deploy_openai_callable requestMarketingCampaignStrategy 512Mi 540s
-          deploy_openai_callable requestMarketingCreativeBuild 1Gi 540s
+          deploy_openai_callable requestMarketingCreativeBuild 2Gi 900s
           deploy_plain_callable approveMarketingCreative 512Mi 120s
           deploy_plain_callable getMarketingCreativeState 512Mi 120s
 
