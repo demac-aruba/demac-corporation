@@ -4,15 +4,15 @@ const assert = require("node:assert/strict");
 const router = require("./whatsappCopilotRouter");
 const bootstrap = require("./bootstrap");
 
-test("exports one public whatsappCopilotDraft endpoint from AI-first agent with canonical booking core", () => {
+test("exports one public WhatsApp draft endpoint backed only by Customer Runtime V1", () => {
   assert.equal(typeof router.whatsappCopilotDraft, "function");
-  assert.equal(router.RUNTIME.version, 18);
-  assert.equal(router.RUNTIME.flowVersion, 31);
-  assert.equal(router.RUNTIME.agentVersion, 31);
-  assert.equal(router.RUNTIME.confirmationGuardVersion, 32);
-  assert.equal(router.RUNTIME.bookingCoreVersion, 1);
-  assert.equal(router.RUNTIME.architecture, "ai-first-native-messages+canonical-booking-session+erp-tools");
+  assert.equal(router.RUNTIME.version, 1);
+  assert.equal(router.RUNTIME.source, "demac-customer-agent-runtime-v1+booking-authority");
+  assert.equal(router.RUNTIME.architecture, "single-agent-tool-loop+erp-tools+booking-authority");
+  assert.equal(router.RUNTIME.bookingAuthority, true);
+  assert.equal(router.RUNTIME.toolCount, 8);
   assert.equal(router.RUNTIME.functionName, "whatsappCopilotDraft");
   assert.strictEqual(bootstrap.whatsappCopilotDraft, router.whatsappCopilotDraft);
+  assert.doesNotMatch(router.RUNTIME.source, /confirmation-guard|booking-core|agent-v31/i);
   assert.equal(router.whatsappCopilotDraftV17, undefined);
 });
