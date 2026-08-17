@@ -51,6 +51,20 @@ function sanitizeQa(qa = {}) {
     score: safeNumber(qa.score),
     selectionScore: safeNumber(qa.selectionScore),
     overallScore: safeNumber(qa.overallScore || qa.score),
+    benchmarkLevel: safeString(qa.benchmarkLevel, 40),
+    adSpendReady: Boolean(qa.adSpendReady),
+    visibleTextExact: Boolean(qa.visibleTextExact),
+    inventedFacts: Boolean(qa.inventedFacts),
+    creativeDirection: safeNumber(qa.creativeDirection),
+    composition: safeNumber(qa.composition),
+    typography: safeNumber(qa.typography),
+    professionalFinish: safeNumber(qa.professionalFinish),
+    brandDistinctiveness: safeNumber(qa.brandDistinctiveness),
+    conversionClarity: safeNumber(qa.conversionClarity),
+    textFidelity: safeNumber(qa.textFidelity),
+    footerSafety: safeNumber(qa.footerSafety),
+    originality: safeNumber(qa.originality),
+    thumbnailImpact: safeNumber(qa.thumbnailImpact),
     mobileLegibility: safeNumber(qa.mobileLegibility),
     visualHierarchy: safeNumber(qa.visualHierarchy),
     contrast: safeNumber(qa.contrast),
@@ -68,9 +82,12 @@ function sanitizeQa(qa = {}) {
     brandSystemCoherence: safeNumber(qa.brandSystemCoherence),
     offerClarity: safeNumber(qa.offerClarity),
     attempt: safeNumber(qa.attempt),
+    amateurSignals: Array.isArray(qa.amateurSignals)
+      ? qa.amateurSignals.slice(0, 10).map((item) => safeString(item, 350)).filter(Boolean)
+      : [],
     issues: Array.isArray(qa.issues) ? qa.issues.slice(0, 10).map((item) => safeString(item, 350)).filter(Boolean) : [],
     revisionInstructions: Array.isArray(qa.revisionInstructions)
-      ? qa.revisionInstructions.slice(0, 8).map((item) => safeString(item, 350)).filter(Boolean)
+      ? qa.revisionInstructions.slice(0, 10).map((item) => safeString(item, 350)).filter(Boolean)
       : [],
     hardChecks: sanitizeHardChecks(qa.hardChecks),
   };
@@ -83,6 +100,8 @@ function sanitizeVariant(item = {}) {
     conceptId: safeString(item.conceptId, 120),
     name: safeString(item.name, 180),
     rationale: safeString(item.rationale, 1000),
+    stage: safeString(item.stage, 80),
+    parentVariantId: safeString(item.parentVariantId, 140),
     imageStoragePath: safeString(item.imageStoragePath, 1200),
     imageUrl: safeString(item.imageUrl, 3000),
     imageModel: safeString(item.imageModel, 100),
@@ -95,10 +114,54 @@ function sanitizeVariant(item = {}) {
       textAlign: safeString(layout.textAlign, 40),
       accentStyle: safeString(layout.accentStyle, 80),
       photoFocus: safeString(layout.photoFocus, 80),
-      compositionTemplate: safeString(layout.compositionTemplate, 100),
+      compositionTemplate: safeString(layout.compositionTemplate, 140),
       visualEnergy: safeString(layout.visualEnergy, 60),
+      graphicLanguage: safeString(layout.graphicLanguage, 400),
+      typographyDirection: safeString(layout.typographyDirection, 400),
+      persuasionMechanism: safeString(layout.persuasionMechanism, 400),
+      thumbnailIdea: safeString(layout.thumbnailIdea, 500),
     },
     qa: sanitizeQa(item.qa || {}),
+  };
+}
+
+function sanitizeProviderManifest(value = {}) {
+  const providers = value.providers && typeof value.providers === "object" ? value.providers : {};
+  return {
+    activeProvider: safeString(value.activeProvider, 100),
+    activeImageModel: safeString(value.activeImageModel, 100),
+    providers: {
+      openai_full_design: Boolean(providers.openai_full_design),
+      ideogram_v4_structured: Boolean(providers.ideogram_v4_structured),
+      canva_layered_production: Boolean(providers.canva_layered_production),
+    },
+    notes: Array.isArray(value.notes) ? value.notes.slice(0, 8).map((item) => safeString(item, 500)).filter(Boolean) : [],
+  };
+}
+
+function sanitizeDesignIntelligence(value = {}) {
+  const jury = value.finalJury && typeof value.finalJury === "object" ? value.finalJury : {};
+  return {
+    explorationCount: safeNumber(value.explorationCount),
+    shortlistCount: safeNumber(value.shortlistCount),
+    refinementCount: safeNumber(value.refinementCount),
+    strategyDiagnosis: safeString(value.strategyDiagnosis, 1400),
+    benchmarkDefinition: safeString(value.benchmarkDefinition, 1400),
+    creativeNorthStar: safeString(value.creativeNorthStar, 1400),
+    exploredConcepts: Array.isArray(value.exploredConcepts)
+      ? value.exploredConcepts.slice(0, 12).map((item) => ({
+        id: safeString(item?.id, 100),
+        name: safeString(item?.name, 180),
+        archetype: safeString(item?.archetype, 180),
+        thumbnailIdea: safeString(item?.thumbnailIdea, 500),
+        whyItCouldWin: safeString(item?.whyItCouldWin, 600),
+      }))
+      : [],
+    finalJury: {
+      spendConfidence: safeNumber(jury.spendConfidence),
+      reason: safeString(jury.reason, 1000),
+      loserWeakness: safeString(jury.loserWeakness, 1000),
+    },
   };
 }
 
@@ -122,19 +185,21 @@ function sanitizeCreative(document) {
     width: safeNumber(source.width),
     height: safeNumber(source.height),
     reservedFooterPx: safeNumber(source.reservedFooterPx),
-    renderTemplate: safeString(source.renderTemplate, 100),
-    renderMode: safeString(source.renderMode, 100),
+    renderTemplate: safeString(source.renderTemplate, 140),
+    renderMode: safeString(source.renderMode, 140),
     artDirectorModel: safeString(source.artDirectorModel, 100),
     imageModel: safeString(source.imageModel, 100),
     qaModel: safeString(source.qaModel, 100),
     selectedVariantId: safeString(source.selectedVariantId, 140),
     variantCount: safeNumber(source.variantCount),
     autoRevised: Boolean(source.autoRevised),
+    providerManifest: sanitizeProviderManifest(source.providerManifest || {}),
+    designIntelligence: sanitizeDesignIntelligence(source.designIntelligence || {}),
     artDirection: {
       campaignSummary: safeString(artDirection.campaignSummary, 1200),
       creativeNorthStar: safeString(artDirection.creativeNorthStar, 1200),
     },
-    variants: Array.isArray(source.variants) ? source.variants.slice(0, 6).map(sanitizeVariant) : [],
+    variants: Array.isArray(source.variants) ? source.variants.slice(0, 8).map(sanitizeVariant) : [],
     exactText: {
       headline: safeString(exactText.headline, 150),
       subheadline: safeString(exactText.subheadline, 250),
