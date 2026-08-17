@@ -1,0 +1,55 @@
+name: Customer Agent Architecture
+
+on:
+  pull_request:
+    paths:
+      - "functions/bookingAuthority*.js"
+      - "functions/demacCustomer*.js"
+      - "functions/whatsappCopilotRouter.js"
+      - "functions/whatsappCopilotRouterExports.test.js"
+      - "functions/bootstrap.js"
+      - "functions/package.json"
+      - ".github/workflows/customer-agent-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "functions/bookingAuthority*.js"
+      - "functions/demacCustomer*.js"
+      - "functions/whatsappCopilotRouter.js"
+      - "functions/whatsappCopilotRouterExports.test.js"
+      - "functions/bootstrap.js"
+      - "functions/package.json"
+      - ".github/workflows/customer-agent-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate-customer-agent:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: functions
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install function dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Validate Firebase function syntax
+        run: npm run validate:firebase
+
+      - name: Test Booking Authority
+        run: npm run test:booking-authority
+
+      - name: Test Customer Agent
+        run: npm run test:customer-agent-tools
+
+      - name: Assert single customer runtime router
+        run: node --test whatsappCopilotRouterExports.test.js
