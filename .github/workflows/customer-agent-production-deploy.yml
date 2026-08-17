@@ -99,7 +99,8 @@ jobs:
           npx --yes firebase-tools@15.2.1 deploy \
             --only functions:processCustomerAgentInbound,functions:processCustomerAgentReactivation \
             --project demac-corporation \
-            --non-interactive
+            --non-interactive \
+            --force
 
       - name: Verify deployed Customer Agent functions
         shell: bash
