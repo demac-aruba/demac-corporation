@@ -10,11 +10,31 @@ function findComposerTextarea() {
   return document.querySelector<HTMLTextAreaElement>('.communication-v4 textarea');
 }
 
+function sendIsInFlight() {
+  return Array.from(document.querySelectorAll<HTMLButtonElement>('.communication-v4 button'))
+    .some((button) => {
+      const label = button.textContent?.trim();
+      return label === 'Sending…' || label === 'Uploading…';
+    });
+}
+
+function isInternalComposer(textarea: HTMLTextAreaElement) {
+  return textarea.placeholder.startsWith('Write an internal note');
+}
+
+function focusAtEnd(textarea: HTMLTextAreaElement) {
+  textarea.focus({ preventScroll: true });
+  const cursor = textarea.value.length;
+  textarea.setSelectionRange(cursor, cursor);
+}
+
 export function ComposerFocusRetention() {
   useEffect(() => {
     let pendingRestore = false;
+    let sawBusySend = false;
     let observer: MutationObserver | null = null;
     let fallbackTimer: number | null = null;
+    let safetyTimer: number | null = null;
     let frame: number | null = null;
 
     const cleanupObserver = () => {
@@ -24,26 +44,46 @@ export function ComposerFocusRetention() {
         window.clearTimeout(fallbackTimer);
         fallbackTimer = null;
       }
+      if (safetyTimer !== null) {
+        window.clearTimeout(safetyTimer);
+        safetyTimer = null;
+      }
       if (frame !== null) {
         window.cancelAnimationFrame(frame);
         frame = null;
       }
     };
 
+    const finishRestore = () => {
+      const textarea = findComposerTextarea();
+      if (textarea && !textarea.disabled) focusAtEnd(textarea);
+      pendingRestore = false;
+      sawBusySend = false;
+      cleanupObserver();
+    };
+
     const restoreWhenReady = () => {
       if (!pendingRestore) return;
       const textarea = findComposerTextarea();
-      if (!textarea || textarea.disabled) return;
+      if (!textarea) return;
 
-      pendingRestore = false;
-      cleanupObserver();
-      textarea.focus({ preventScroll: true });
-      const cursor = textarea.value.length;
-      textarea.setSelectionRange(cursor, cursor);
+      const inFlight = sendIsInFlight();
+      if (inFlight) {
+        sawBusySend = true;
+
+        if (!isInternalComposer(textarea)) {
+          if (textarea.disabled) textarea.disabled = false;
+          focusAtEnd(textarea);
+        }
+        return;
+      }
+
+      if (sawBusySend && !textarea.disabled) finishRestore();
     };
 
     const armRestore = () => {
       pendingRestore = true;
+      sawBusySend = false;
       cleanupObserver();
 
       const root = findCommunicationRoot();
@@ -52,13 +92,19 @@ export function ComposerFocusRetention() {
         observer.observe(root, {
           subtree: true,
           childList: true,
+          characterData: true,
           attributes: true,
           attributeFilter: ['disabled'],
         });
       }
 
       frame = window.requestAnimationFrame(restoreWhenReady);
-      fallbackTimer = window.setTimeout(restoreWhenReady, 500);
+      fallbackTimer = window.setTimeout(() => {
+        if (!pendingRestore || sawBusySend) return;
+        const textarea = findComposerTextarea();
+        if (textarea && !textarea.disabled) finishRestore();
+      }, 750);
+      safetyTimer = window.setTimeout(finishRestore, 10_000);
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -81,6 +127,7 @@ export function ComposerFocusRetention() {
       document.removeEventListener('keydown', handleKeyDown, true);
       document.removeEventListener('pointerdown', handlePointerDown, true);
       pendingRestore = false;
+      sawBusySend = false;
       cleanupObserver();
     };
   }, []);
