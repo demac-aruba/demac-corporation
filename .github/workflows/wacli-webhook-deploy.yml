@@ -40,22 +40,18 @@ jobs:
       - name: Install function dependencies
         run: npm install --prefix functions --no-audit --no-fund
 
-      - name: Validate canonical wacli gateway
+      - name: Validate standard bridge authentication
         shell: bash
         run: |
           set -euo pipefail
           node --check functions/whatsappWacliGateway.js
           node --check functions/bootstrap.js
-          if grep -q 'WACLI_WEBHOOK_SECRET' functions/whatsappWacliGateway.js; then
-            echo '::error::Firebase gateway must not depend on the local wacli webhook secret.'
+          if grep -Eqi 'ed25519|x-demac-bridge-signature|BRIDGE_PUBLIC_KEY' functions/whatsappWacliGateway.js; then
+            echo '::error::Retired custom Ed25519 authentication remains in Firebase gateway.'
             exit 1
           fi
-          if grep -q 'x-wacli-signature' functions/whatsappWacliGateway.js; then
-            echo '::error::Bridge-to-Firebase authentication must use only X-Demac-Bridge-Signature.'
-            exit 1
-          fi
-          if ! grep -q 'x-demac-bridge-signature' functions/whatsappWacliGateway.js; then
-            echo '::error::Canonical Ed25519 bridge verifier is missing.'
+          if ! grep -q 'authorizedBridgeRequest(request)' functions/whatsappWacliGateway.js; then
+            echo '::error::Standard Bearer bridge authentication is missing.'
             exit 1
           fi
           node - <<'NODE'
@@ -96,7 +92,7 @@ jobs:
           fi
           echo "run_service_account=${RUN_SA}" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy canonical wacliWebhook
+      - name: Deploy standard wacliWebhook
         shell: bash
         env:
           RUN_SERVICE_ACCOUNT: ${{ steps.config.outputs.run_service_account }}
@@ -118,7 +114,7 @@ jobs:
             --allow-unauthenticated \
             --quiet
 
-      - name: Verify wacliWebhook
+      - name: Verify deployed Bearer boundary
         shell: bash
         run: |
           set -euo pipefail
@@ -130,24 +126,27 @@ jobs:
             echo "::error::wacliWebhook state is ${STATE:-unknown}; URI=${URI:-missing}."
             exit 1
           fi
+          if ! printf '%s\n' "$SECRETS" | grep -qx 'WACLI_BRIDGE_TOKEN'; then
+            echo '::error::WACLI_BRIDGE_TOKEN is not bound to the Firebase runtime.'
+            exit 1
+          fi
           if printf '%s\n' "$SECRETS" | grep -qx 'WACLI_WEBHOOK_SECRET'; then
-            echo '::error::Legacy WACLI_WEBHOOK_SECRET is still bound to Firebase runtime.'
+            echo '::error::Local wacli webhook secret must not be bound to Firebase.'
             exit 1
           fi
 
           probe_endpoint() {
             local label="$1"
             local endpoint="$2"
-            local body
-            local status
+            local body status
             body="$(mktemp)"
             status="$(curl --silent --show-error --output "$body" --write-out '%{http_code}' \
               --request POST "$endpoint" \
               --header 'Content-Type: application/json' \
-              --header 'X-Demac-Bridge-Signature: ed25519=AAAA' \
+              --header 'Authorization: Bearer invalid-ci-probe' \
               --data '{}')"
             if [ "$status" != '401' ]; then
-              echo "::error::${label} returned HTTP ${status}; expected 401 from the canonical Ed25519 boundary."
+              echo "::error::${label} returned HTTP ${status}; expected 401 from the Bearer boundary."
               cat "$body"
               rm -f "$body"
               exit 1
@@ -155,28 +154,15 @@ jobs:
             python3 - "$body" "$label" <<'PY'
           import json, sys
           path, label = sys.argv[1:3]
-          try:
-              payload = json.load(open(path, encoding='utf-8'))
-          except Exception as exc:
-              raise SystemExit(f'{label} did not return canonical JSON diagnostics: {exc}')
-          diagnostics = payload.get('diagnostics') or {}
-          expected_fingerprint = '44f4ec68c8b169456bccd4a70e4a7e210a5b71034a02085da724de9bc4ba480a'
-          checks = {
-              'error': payload.get('error') == 'Invalid signature',
-              'header': diagnostics.get('header') is True,
-              'scheme': diagnostics.get('scheme') == 'ed25519',
-              'sigBytes': diagnostics.get('sigBytes') == 3,
-              'rawAvailable': diagnostics.get('rawAvailable') is True,
-              'keyFingerprint': diagnostics.get('keyFingerprint') == expected_fingerprint,
-          }
-          failed = [name for name, ok in checks.items() if not ok]
-          if failed:
-              raise SystemExit(f'{label} canonical diagnostic check failed: {failed}; payload={payload}')
-          print(f'{label} serves canonical Ed25519 diagnostics.')
+          with open(path, encoding='utf-8') as handle:
+              payload = json.load(handle)
+          if payload != {'error': 'Unauthorized'}:
+              raise SystemExit(f'{label} returned unexpected authentication payload: {payload}')
+          print(f'{label} serves standard Bearer authentication.')
           PY
             rm -f "$body"
           }
 
           probe_endpoint 'Cloud Run URI' "$URI"
           probe_endpoint 'Cloud Functions URL' "$PUBLIC_URL"
-          echo "wacliWebhook ACTIVE at $URI; both public endpoint forms serve the canonical Ed25519 boundary."
+          echo "wacliWebhook ACTIVE; both endpoint forms enforce standard Bearer authentication."
