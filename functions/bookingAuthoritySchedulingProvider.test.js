@@ -1,12 +1,12 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { BOOKING_ERROR_CODES } = require("./bookingAuthorityCore");
+const { CANONICAL_SCHEDULING_ENGINE_VERSION } = require("./bookingAuthoritySchedulingEngine");
 const {
   SCHEDULING_PROVIDER_VERSION,
-  analysisForRequest,
   buildCapacityLocks,
   buildWorkOrders,
-  singlePresetWork,
+  exactCustomerProperty,
 } = require("./bookingAuthoritySchedulingProvider");
 
 function request() {
@@ -30,29 +30,37 @@ function option() {
     presetLabel: "Servicio estándar",
     serviceId: "s1",
     durationMinutesPerUnit: 60,
-    assignments: [{ vanId: "V2", technicianIds: ["t1", "t2"], quantity: 2, slots: 2, fullDay: false }],
+    assignments: [{
+      vanId: "V2",
+      technicianIds: ["t1", "t2"],
+      quantity: 2,
+      slots: 2,
+      fullDay: false,
+    }],
   };
 }
 
-test("provider has explicit migration version", () => {
-  assert.match(SCHEDULING_PROVIDER_VERSION, /erp-scheduling-adapter-v1/);
+test("provider exposes canonical provider v2", () => {
+  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v2");
 });
 
-test("analysis is derived from canonical request rather than raw customer language", () => {
-  const analysis = analysisForRequest(request(), { address: "Wayaca 217" });
-  assert.equal(analysis.collectedInformation.serviceType, "standard_service");
-  assert.equal(analysis.collectedInformation.quantity, "2");
-  assert.equal(analysis.collectedInformation.address, "Wayaca 217");
-  assert.equal(analysis.collectedInformation.preferredTime, "afternoon");
+test("canonical scheduling engine is versioned independently", () => {
+  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 1);
 });
 
-test("current adapter rejects mixed presets instead of guessing", () => {
+test("provider verifies the exact ERP customer/property relationship", () => {
+  const pair = exactCustomerProperty({
+    clients: [{ id: "c1" }],
+    properties: [{ id: "p1", clientId: "c1" }],
+  }, request());
+  assert.equal(pair.property.id, "p1");
+
   assert.throws(
-    () => singlePresetWork({
-      ...request(),
-      workLines: [...request().workLines, { presetId: "deep_cleaning", quantity: 1 }],
-    }),
-    (error) => error.code === BOOKING_ERROR_CODES.INVALID_REQUEST,
+    () => exactCustomerProperty({
+      clients: [{ id: "c1" }],
+      properties: [{ id: "p1", clientId: "other" }],
+    }, request()),
+    (error) => error.code === BOOKING_ERROR_CODES.PROPERTY_CUSTOMER_MISMATCH,
   );
 });
 
@@ -63,7 +71,7 @@ test("capacity locks cover every occupied van slot", () => {
   assert.equal(new Set(locks.map((item) => item.id)).size, 2);
 });
 
-test("work orders link to canonical appointment and only primary order notifies client", () => {
+test("work orders link to canonical appointment and only the primary order notifies client", () => {
   const selected = {
     ...option(),
     assignments: [
