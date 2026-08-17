@@ -15,6 +15,10 @@ function safeNumber(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
+function safeStringList(value, maxItems = 10, maxLen = 350) {
+  return Array.isArray(value) ? value.slice(0, maxItems).map((item) => safeString(item, maxLen)).filter(Boolean) : [];
+}
+
 function cleanSessionId(value) {
   if (value == null || value === "") return "";
   const sessionId = typeof value === "string" ? value.trim() : "";
@@ -44,6 +48,33 @@ function sanitizeHardChecks(value) {
   };
 }
 
+function sanitizeVisualReview(value = {}) {
+  return {
+    benchmarkLevel: safeString(value.benchmarkLevel, 50),
+    composition: safeNumber(value.composition),
+    typography: safeNumber(value.typography),
+    professionalFinish: safeNumber(value.professionalFinish),
+    brandCoherence: safeNumber(value.brandCoherence),
+    photoAuthenticity: safeNumber(value.photoAuthenticity),
+    originality: safeNumber(value.originality),
+    mobileReadability: safeNumber(value.mobileReadability),
+  };
+}
+
+function sanitizePerformanceReview(value = {}) {
+  return {
+    benchmarkLevel: safeString(value.benchmarkLevel, 50),
+    scrollStopping: safeNumber(value.scrollStopping),
+    promiseClarity: safeNumber(value.promiseClarity),
+    proofStrength: safeNumber(value.proofStrength),
+    ctaProminence: safeNumber(value.ctaProminence),
+    conversionPath: safeNumber(value.conversionPath),
+    audienceRelevance: safeNumber(value.audienceRelevance),
+    modeFit: safeNumber(value.modeFit),
+    offerClarity: safeNumber(value.offerClarity),
+  };
+}
+
 function sanitizeQa(qa = {}) {
   return {
     source: safeString(qa.source, 80),
@@ -51,10 +82,18 @@ function sanitizeQa(qa = {}) {
     score: safeNumber(qa.score),
     selectionScore: safeNumber(qa.selectionScore),
     overallScore: safeNumber(qa.overallScore || qa.score),
-    benchmarkLevel: safeString(qa.benchmarkLevel, 40),
+    benchmarkLevel: safeString(qa.benchmarkLevel, 50),
+    visualBenchmarkLevel: safeString(qa.visualBenchmarkLevel, 50),
+    performanceBenchmarkLevel: safeString(qa.performanceBenchmarkLevel, 50),
+    visualScore: safeNumber(qa.visualScore),
+    performanceScore: safeNumber(qa.performanceScore),
+    visualReview: sanitizeVisualReview(qa.visualReview || {}),
+    performanceReview: sanitizePerformanceReview(qa.performanceReview || {}),
     adSpendReady: Boolean(qa.adSpendReady),
     visibleTextExact: Boolean(qa.visibleTextExact),
     inventedFacts: Boolean(qa.inventedFacts),
+    hardFailure: Boolean(qa.hardFailure),
+    hardFailureReasons: safeStringList(qa.hardFailureReasons, 10, 380),
     creativeDirection: safeNumber(qa.creativeDirection),
     composition: safeNumber(qa.composition),
     typography: safeNumber(qa.typography),
@@ -82,26 +121,44 @@ function sanitizeQa(qa = {}) {
     brandSystemCoherence: safeNumber(qa.brandSystemCoherence),
     offerClarity: safeNumber(qa.offerClarity),
     attempt: safeNumber(qa.attempt),
-    amateurSignals: Array.isArray(qa.amateurSignals)
-      ? qa.amateurSignals.slice(0, 10).map((item) => safeString(item, 350)).filter(Boolean)
-      : [],
-    issues: Array.isArray(qa.issues) ? qa.issues.slice(0, 10).map((item) => safeString(item, 350)).filter(Boolean) : [],
-    revisionInstructions: Array.isArray(qa.revisionInstructions)
-      ? qa.revisionInstructions.slice(0, 10).map((item) => safeString(item, 350)).filter(Boolean)
-      : [],
+    amateurSignals: safeStringList(qa.amateurSignals, 10, 350),
+    issues: safeStringList(qa.issues, 10, 350),
+    revisionInstructions: safeStringList(qa.revisionInstructions, 12, 400),
     hardChecks: sanitizeHardChecks(qa.hardChecks),
+  };
+}
+
+function sanitizeBlueprint(value = {}) {
+  return {
+    heroRegion: safeString(value.heroRegion, 260),
+    heroSharePercent: safeNumber(value.heroSharePercent),
+    headlineRegion: safeString(value.headlineRegion, 260),
+    headlineMaxLines: safeNumber(value.headlineMaxLines),
+    supportRegion: safeString(value.supportRegion, 260),
+    ctaRegion: safeString(value.ctaRegion, 260),
+    brandRegion: safeString(value.brandRegion, 260),
+    proofRegion: safeString(value.proofRegion, 260),
+    typographyScale: safeString(value.typographyScale, 380),
+    negativeSpacePlan: safeString(value.negativeSpacePlan, 420),
+    cropInstruction: safeString(value.cropInstruction, 420),
+    primaryGraphicDevice: safeString(value.primaryGraphicDevice, 420),
+    mobileReadSequence: safeStringList(value.mobileReadSequence, 6, 240),
+    footerExclusion: safeString(value.footerExclusion, 340),
+    mustPreserve: safeStringList(value.mustPreserve, 8, 260),
+    mustAvoid: safeStringList(value.mustAvoid, 10, 260),
   };
 }
 
 function sanitizeVariant(item = {}) {
   const layout = item.layout && typeof item.layout === "object" ? item.layout : {};
   return {
-    id: safeString(item.id, 120),
-    conceptId: safeString(item.conceptId, 120),
+    id: safeString(item.id, 140),
+    conceptId: safeString(item.conceptId, 140),
     name: safeString(item.name, 180),
     rationale: safeString(item.rationale, 1000),
+    diversityRationale: safeString(item.diversityRationale, 800),
     stage: safeString(item.stage, 80),
-    parentVariantId: safeString(item.parentVariantId, 140),
+    parentVariantId: safeString(item.parentVariantId, 160),
     imageStoragePath: safeString(item.imageStoragePath, 1200),
     imageUrl: safeString(item.imageUrl, 3000),
     imageModel: safeString(item.imageModel, 100),
@@ -114,12 +171,16 @@ function sanitizeVariant(item = {}) {
       textAlign: safeString(layout.textAlign, 40),
       accentStyle: safeString(layout.accentStyle, 80),
       photoFocus: safeString(layout.photoFocus, 80),
-      compositionTemplate: safeString(layout.compositionTemplate, 140),
+      compositionTemplate: safeString(layout.compositionTemplate, 220),
       visualEnergy: safeString(layout.visualEnergy, 60),
-      graphicLanguage: safeString(layout.graphicLanguage, 400),
-      typographyDirection: safeString(layout.typographyDirection, 400),
-      persuasionMechanism: safeString(layout.persuasionMechanism, 400),
+      graphicLanguage: safeString(layout.graphicLanguage, 500),
+      typographyDirection: safeString(layout.typographyDirection, 500),
+      persuasionMechanism: safeString(layout.persuasionMechanism, 500),
       thumbnailIdea: safeString(layout.thumbnailIdea, 500),
+      heroTreatment: safeString(layout.heroTreatment, 500),
+      proofStrategy: safeString(layout.proofStrategy, 500),
+      ctaStrategy: safeString(layout.ctaStrategy, 500),
+      blueprint: sanitizeBlueprint(layout.blueprint || {}),
     },
     qa: sanitizeQa(item.qa || {}),
   };
@@ -135,7 +196,29 @@ function sanitizeProviderManifest(value = {}) {
       ideogram_v4_structured: Boolean(providers.ideogram_v4_structured),
       canva_layered_production: Boolean(providers.canva_layered_production),
     },
-    notes: Array.isArray(value.notes) ? value.notes.slice(0, 8).map((item) => safeString(item, 500)).filter(Boolean) : [],
+    notes: safeStringList(value.notes, 8, 500),
+  };
+}
+
+function sanitizeCreativeBrief(value = {}) {
+  return {
+    creativeMode: safeString(value.creativeMode, 80),
+    modeConfidence: safeNumber(value.modeConfidence),
+    modeReason: safeString(value.modeReason, 1000),
+    conversionGoal: safeString(value.conversionGoal, 700),
+    targetAudience: safeString(value.targetAudience, 700),
+    primaryPromise: safeString(value.primaryPromise, 700),
+    supportingProof: safeStringList(value.supportingProof, 6, 360),
+    persuasionMechanism: safeString(value.persuasionMechanism, 700),
+    heroAssetRole: safeString(value.heroAssetRole, 700),
+    brandRole: safeString(value.brandRole, 700),
+    visualPriority: safeStringList(value.visualPriority, 6, 300),
+    mandatoryInformation: safeStringList(value.mandatoryInformation, 10, 300),
+    optionalInformation: safeStringList(value.optionalInformation, 8, 300),
+    forbiddenClaims: safeStringList(value.forbiddenClaims, 10, 320),
+    authenticityConstraints: safeStringList(value.authenticityConstraints, 10, 320),
+    mobileRequirements: safeStringList(value.mobileRequirements, 8, 300),
+    creativeNorthStar: safeString(value.creativeNorthStar, 1100),
   };
 }
 
@@ -148,13 +231,29 @@ function sanitizeDesignIntelligence(value = {}) {
     strategyDiagnosis: safeString(value.strategyDiagnosis, 1400),
     benchmarkDefinition: safeString(value.benchmarkDefinition, 1400),
     creativeNorthStar: safeString(value.creativeNorthStar, 1400),
+    portfolioRationale: safeString(value.portfolioRationale, 1400),
     exploredConcepts: Array.isArray(value.exploredConcepts)
       ? value.exploredConcepts.slice(0, 12).map((item) => ({
-        id: safeString(item?.id, 100),
+        id: safeString(item?.id, 120),
         name: safeString(item?.name, 180),
         archetype: safeString(item?.archetype, 180),
         thumbnailIdea: safeString(item?.thumbnailIdea, 500),
         whyItCouldWin: safeString(item?.whyItCouldWin, 600),
+        persuasionMechanism: safeString(item?.persuasionMechanism, 500),
+        heroTreatment: safeString(item?.heroTreatment, 500),
+        composition: safeString(item?.composition, 500),
+        proofStrategy: safeString(item?.proofStrategy, 500),
+        ctaStrategy: safeString(item?.ctaStrategy, 500),
+        whyItMayConvert: safeString(item?.whyItMayConvert, 650),
+        distinctnessAxis: safeString(item?.distinctnessAxis, 450),
+      }))
+      : [],
+    selectedBlueprints: Array.isArray(value.selectedBlueprints)
+      ? value.selectedBlueprints.slice(0, 4).map((item) => ({
+        id: safeString(item?.id, 120),
+        name: safeString(item?.name, 180),
+        diversityRationale: safeString(item?.diversityRationale, 700),
+        blueprint: sanitizeBlueprint(item?.blueprint || {}),
       }))
       : [],
     finalJury: {
@@ -175,6 +274,7 @@ function sanitizeCreative(document) {
     sessionId: safeString(source.sessionId, 220),
     campaignId: safeString(source.campaignId, 220),
     campaignType: safeString(source.campaignType, 100),
+    creativeMode: safeString(source.creativeMode, 100),
     version: safeNumber(source.version),
     status: safeString(source.status, 80),
     builderVersion: safeString(source.builderVersion, 40),
@@ -185,19 +285,21 @@ function sanitizeCreative(document) {
     width: safeNumber(source.width),
     height: safeNumber(source.height),
     reservedFooterPx: safeNumber(source.reservedFooterPx),
-    renderTemplate: safeString(source.renderTemplate, 140),
-    renderMode: safeString(source.renderMode, 140),
+    renderTemplate: safeString(source.renderTemplate, 220),
+    renderMode: safeString(source.renderMode, 220),
     artDirectorModel: safeString(source.artDirectorModel, 100),
     imageModel: safeString(source.imageModel, 100),
     qaModel: safeString(source.qaModel, 100),
-    selectedVariantId: safeString(source.selectedVariantId, 140),
+    selectedVariantId: safeString(source.selectedVariantId, 160),
     variantCount: safeNumber(source.variantCount),
     autoRevised: Boolean(source.autoRevised),
     providerManifest: sanitizeProviderManifest(source.providerManifest || {}),
+    creativeBrief: sanitizeCreativeBrief(source.creativeBrief || {}),
     designIntelligence: sanitizeDesignIntelligence(source.designIntelligence || {}),
     artDirection: {
       campaignSummary: safeString(artDirection.campaignSummary, 1200),
       creativeNorthStar: safeString(artDirection.creativeNorthStar, 1200),
+      creativeMode: safeString(artDirection.creativeMode, 100),
     },
     variants: Array.isArray(source.variants) ? source.variants.slice(0, 8).map(sanitizeVariant) : [],
     exactText: {
@@ -209,9 +311,7 @@ function sanitizeCreative(document) {
       offer: safeString(exactText.offer, 220),
       eyebrow: safeString(exactText.eyebrow, 120),
       proofLabel: safeString(exactText.proofLabel, 160),
-      supportPoints: Array.isArray(exactText.supportPoints)
-        ? exactText.supportPoints.slice(0, 4).map((item) => safeString(item, 180)).filter(Boolean)
-        : [],
+      supportPoints: safeStringList(exactText.supportPoints, 4, 180),
       products: Array.isArray(exactText.products)
         ? exactText.products.slice(0, 5).map((item) => ({
           source: safeString(item?.source, 600),
