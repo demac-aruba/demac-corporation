@@ -308,6 +308,20 @@ export interface ServiceType {
   updatedAt?: string;
 }
 
+export interface CommercialProductStock {
+  id: string;
+  productId: string;
+  onHand: number;
+  reserved: number;
+  active: boolean;
+  verifiedAt?: string;
+  verifiedById?: string;
+  verifiedByName?: string;
+  updatedAt?: string;
+  updatedById?: string;
+  updatedByName?: string;
+}
+
 export type SchedulingMode = 'fixed' | 'perUnit';
 
 export type AppointmentChangeOrigin = 'Cliente' | 'DEMAC' | 'Fuerza mayor' | 'Otro';
