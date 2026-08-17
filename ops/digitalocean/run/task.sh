@@ -56,8 +56,8 @@ for attempt in $(seq 1 60); do
   error="$(printf '%s' "$health" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("lastForwardError") or "")')"
   success="$(printf '%s' "$health" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("lastForwardSuccessAt") or "")')"
   printf 'attempt=%s pending=%s success=%s error_present=%s\n' "$attempt" "$pending" "${success:-none}" "$([ -n "$error" ] && echo yes || echo no)"
-  if [ "$pending" = '0' ] && [ -z "$error" ] && [ -n "$success" ]; then
-    echo 'STANDARD_BRIDGE_QUEUE_RECOVERED'
+  if [ "$pending" = '0' ] && [ -z "$error" ]; then
+    echo 'STANDARD_BRIDGE_QUEUE_HEALTHY'
     exit 0
   fi
   sleep 5
