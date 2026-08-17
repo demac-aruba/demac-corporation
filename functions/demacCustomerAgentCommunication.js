@@ -3,7 +3,7 @@ const { FieldValue, getFirestore } = require("firebase-admin/firestore");
 const logger = require("firebase-functions/logger");
 const { defineSecret } = require("firebase-functions/params");
 const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
-const { createCustomerAgentRuntime } = require("./demacCustomerAgentRuntimeV1");
+const { createCustomerAgentRuntime, HANDOFF_QUEUES } = require("./demacCustomerAgentRuntimeV1");
 const { sessionIdentity } = require("./demacCustomerConversationState");
 const { cleanText, hashId } = require("./bookingSchedulingPrimitives");
 
@@ -125,17 +125,27 @@ function buildRuntimeBody({ conversationId, conversation = {}, inboundMessage = 
   };
 }
 
+function semanticHandoffQueue(value) {
+  const queue = cleanText(value, 80);
+  return HANDOFF_QUEUES.includes(queue) ? queue : "manager";
+}
+
 function outcomeConversationPatch(result = {}) {
   const requiresHuman = result.metadata?.requiresHuman === true || result.metadata?.outcome === "handoff";
   const appointmentId = cleanText(result.metadata?.appointmentId, 180);
   if (requiresHuman) {
+    const handoffQueue = semanticHandoffQueue(result.metadata?.handoffQueue);
+    const handoffReason = cleanText(result.metadata?.handoffReason, 500)
+      || "DEMAC Customer Agent requested human review without a structured reason.";
     return {
       aiDisposition: "human_active",
       status: "escalated",
-      queue: "manager",
-      routeReason: "DEMAC Customer Agent requested human review.",
+      queue: handoffQueue,
+      routeReason: handoffReason,
       agentLastOutcome: cleanText(result.metadata?.outcome, 80) || "handoff",
       agentLastAppointmentId: appointmentId || null,
+      agentLastHandoffQueue: handoffQueue,
+      agentLastHandoffReason: handoffReason,
     };
   }
   return {
@@ -143,6 +153,8 @@ function outcomeConversationPatch(result = {}) {
     status: "waiting_customer",
     agentLastOutcome: cleanText(result.metadata?.outcome, 80) || "reply",
     agentLastAppointmentId: appointmentId || null,
+    agentLastHandoffQueue: null,
+    agentLastHandoffReason: null,
   };
 }
 
@@ -236,6 +248,8 @@ async function ensureAgentSessionActive(conversationId, provider) {
   await db.collection("customerAgentSessions").doc(identity.sessionId).set({
     status: "AI_ACTIVE",
     requiresHuman: false,
+    handoffQueue: "",
+    handoffReason: "",
     updatedAt: FieldValue.serverTimestamp(),
     updatedAtIso: new Date().toISOString(),
   }, { merge: true });
@@ -390,9 +404,15 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
     status: "processed",
     outcome: cleanText(result.metadata?.outcome, 80),
     appointmentId: cleanText(result.metadata?.appointmentId, 180),
+    handoffQueue: cleanText(result.metadata?.handoffQueue, 80),
+    handoffReason: cleanText(result.metadata?.handoffReason, 500),
     completedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
-  return { processed: true, outcome: result.metadata?.outcome || "reply" };
+  return {
+    processed: true,
+    outcome: result.metadata?.outcome || "reply",
+    handoffQueue: cleanText(result.metadata?.handoffQueue, 80),
+  };
 }
 
 async function processQueueEvent({ messageId, message, reactivate = false }) {
@@ -534,5 +554,6 @@ module.exports.outcomeConversationPatch = outcomeConversationPatch;
 module.exports.processQueueEvent = processQueueEvent;
 module.exports.queueDocumentId = queueDocumentId;
 module.exports.reactivateConversation = reactivateConversation;
+module.exports.semanticHandoffQueue = semanticHandoffQueue;
 module.exports.shouldRunAgent = shouldRunAgent;
 module.exports.whatsappMessageToRuntime = whatsappMessageToRuntime;
