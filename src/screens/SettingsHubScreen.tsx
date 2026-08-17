@@ -2,9 +2,12 @@ import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { UserManagementCard } from '../components/UserManagementCard';
 import { colors } from '../theme';
+import { CompanyRulesScreen } from './CompanyRulesScreen';
 import { SettingsScreen } from './SettingsScreen';
 
-type SettingsTab = 'users' | 'calendar';
+// WHATSAPP_KNOWLEDGE_V13: the historical migration is materialized in source; it must not rewrite this screen during builds.
+// COMPANY_RULES_V14: company operations, service pricing and approved customer responses share one ERP rules area.
+type SettingsTab = 'users' | 'calendar' | 'company-rules';
 
 export function SettingsHubScreen() {
   const [tab, setTab] = useState<SettingsTab>('users');
@@ -18,12 +21,15 @@ export function SettingsHubScreen() {
         <Pressable onPress={() => setTab('calendar')} style={[styles.tab, tab === 'calendar' && styles.tabActive]}>
           <Text style={[styles.tabText, tab === 'calendar' && styles.tabTextActive]}>Calendario y empresa</Text>
         </Pressable>
+        <Pressable onPress={() => setTab('company-rules')} style={[styles.tab, tab === 'company-rules' && styles.tabActive]}>
+          <Text style={[styles.tabText, tab === 'company-rules' && styles.tabTextActive]}>Reglas de la compañía</Text>
+        </Pressable>
       </View>
       {tab === 'users' ? (
         <ScrollView contentContainerStyle={styles.userPage} keyboardShouldPersistTaps="handled">
           <UserManagementCard />
         </ScrollView>
-      ) : <SettingsScreen />}
+      ) : tab === 'calendar' ? <SettingsScreen /> : <CompanyRulesScreen />}
     </View>
   );
 }
