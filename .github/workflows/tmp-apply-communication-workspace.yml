@@ -26,8 +26,26 @@ jobs:
           from pathlib import Path
           path = Path('tools/tmp-apply-communication-workspace.py')
           text = path.read_text()
+
           text = text.replace('"          const state =', '"            const state =')
           text = text.replace('\\n          const owner =', '\\n            const owner =')
+          text = text.replace('"              <span className={styles.rowMeta}', '"                <span className={styles.rowMeta}')
+          text = text.replace('"    </aside>\\n\\n    <main className={`${styles.panel} ${styles.chat}`}>\\n"', '"      </aside>\\n\\n      <main className={`${styles.panel} ${styles.chat}`}>\\n"')
+          text = text.replace('"        <div className={styles.messages}>\\n"', '"          <div className={styles.messages}>\\n"')
+          text = text.replace('"    {detailsVisible ? <aside className={`${styles.panel} ${styles.contextPanel}`}>\\n"', '"      {detailsVisible ? <aside className={`${styles.panel} ${styles.contextPanel}`}>\\n"')
+          text = text.replace('"          {([\'overview\', \'properties\', \'equipment\', \'actions\'] as ContextTab[]).map', '"            {([\'overview\', \'properties\', \'equipment\', \'actions\'] as ContextTab[]).map')
+          text = text.replace('r"        \\{contextTab === \'properties\'', 'r"          \\{contextTab === \'properties\'')
+          text = text.replace('drawer_anchor = "    </aside> : null}\\n  </div>\\n</section>;\\n}"', 'drawer_anchor = "      </aside> : null}\\n    </div>\\n  </section>;\\n}"')
+
+          def indent_block(source, start_marker, end_marker, spaces=2):
+              start = source.index(start_marker) + len(start_marker)
+              end = source.index(end_marker, start)
+              block = source[start:end]
+              shifted = '\n'.join(((' ' * spaces) + line if line else line) for line in block.split('\n'))
+              return source[:start] + shifted + source[end:]
+
+          text = indent_block(text, "old_header_actions = '''", "'''\nnew_header_actions =", 2)
+          text = indent_block(text, "workflow = '''", "'''\nreplace(workflow", 2)
           path.write_text(text)
           PY
           python tools/tmp-apply-communication-workspace.py
