@@ -12,13 +12,17 @@ import {
   loadCommunicationCustomerContext,
   loadCommunicationWorkspace,
   markConversationRead,
+  queueWhatsAppMedia,
   queueWhatsAppText,
   returnConversationToAi,
   saveInternalCommunicationNote,
   touchCommunicationPresence,
   updateConversationStatus,
+  validateWhatsAppAttachment,
+  whatsAppAttachmentKind,
   type CommunicationCustomerContext,
   type LiveConversation,
+  type LiveConversationMessage,
   type LiveOperator,
   type WhatsAppProvider,
 } from '../../lib/browser-communications';
@@ -26,6 +30,7 @@ import { loadFirebasePrincipal } from '../../lib/firebase/principal';
 import type { AuthPrincipal } from '../../lib/security';
 import { CommunicationAvatar, WhatsAppMessageContent, conversationMessagePreview, messageReceiptLabel } from './whatsapp-message-content';
 import styles from './communication-center.module.css';
+import mediaStyles from './communication-media.module.css';
 
 type Mode = 'communications' | 'ai' | 'escalations';
 type InboxScope = 'pending' | 'mine' | 'unassigned' | 'team';
@@ -125,6 +130,30 @@ function messageAuthorLabel(message: ConversationMessage, customer: string) {
   return message.author || (message.role === 'ai' ? 'DEMAC AI' : 'DEMAC operator');
 }
 
+function formatAttachmentSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(kb >= 100 ? 0 : 1)} KB`;
+  const mb = kb / 1024;
+  return `${mb.toFixed(mb >= 10 ? 1 : 2)} MB`;
+}
+
+function attachmentPreviewLabel(type?: string | null) {
+  const normalized = String(type || '').toLowerCase();
+  if (normalized === 'image') return '[Photo]';
+  if (normalized === 'video') return '[Video]';
+  if (normalized === 'audio') return '[Audio]';
+  return '[Document]';
+}
+
+function attachmentIcon(type?: string | null) {
+  const normalized = String(type || '').toLowerCase();
+  if (normalized === 'video') return 'VID';
+  if (normalized === 'audio') return 'AUD';
+  if (normalized === 'image') return 'IMG';
+  return 'DOC';
+}
+
 function customerActionUrl(path: string, customer: CommunicationCustomerContext | null, selected: LiveConversation | null, extra: Record<string, string> = {}) {
   const query = new URLSearchParams({ source: 'communication-center', ...extra });
   if (customer?.id) query.set('customerId', customer.id);
@@ -148,6 +177,9 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
   const [scope, setScope] = useState<InboxScope>(mode === 'escalations' ? 'team' : 'pending');
   const [search, setSearch] = useState('');
   const [draft, setDraft] = useState('');
+  const [attachment, setAttachment] = useState<File | null>(null);
+  const [attachmentPreviewUrl, setAttachmentPreviewUrl] = useState('');
+  const [dragActive, setDragActive] = useState(false);
   const [internal, setInternal] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -158,6 +190,7 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
   const [contextLoading, setContextLoading] = useState(false);
   const [contextTab, setContextTab] = useState<ContextTab>('overview');
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const refresh = useCallback(async () => {
     const workspace = await loadCommunicationWorkspace();
@@ -256,6 +289,8 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
     let cancelled = false;
     setCustomerContext(null);
     setContextTab('overview');
+    setAttachment(null);
+    setDragActive(false);
     if (!selected) return () => { cancelled = true; };
     setContextLoading(true);
     loadCommunicationCustomerContext(selected)
@@ -264,6 +299,16 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
       .finally(() => { if (!cancelled) setContextLoading(false); });
     return () => { cancelled = true; };
   }, [selected?.id]);
+
+  useEffect(() => {
+    if (!attachment || whatsAppAttachmentKind(attachment) !== 'image') {
+      setAttachmentPreviewUrl('');
+      return undefined;
+    }
+    const url = URL.createObjectURL(attachment);
+    setAttachmentPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [attachment]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ block: 'end' });
@@ -338,9 +383,30 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
     }
   };
 
+  const stageAttachment = (file: File | null) => {
+    if (!file) return;
+    if (internal) {
+      setError('Attachments are for customer WhatsApp replies. Switch back to Reply before attaching a file.');
+      return;
+    }
+    if (!canReply) {
+      setError('Take ownership of this conversation before attaching a file.');
+      return;
+    }
+    try {
+      validateWhatsAppAttachment(file);
+      setAttachment(file);
+      setError('');
+    } catch (attachmentError) {
+      setError(attachmentError instanceof Error ? attachmentError.message : String(attachmentError));
+    }
+  };
+
   const send = async () => {
     const text = draft.trim();
-    if (!text || !selected || !principal) return;
+    if (!selected || !principal) return;
+    if (internal && !text) return;
+    if (!internal && !text && !attachment) return;
     if (!internal && !canReply) {
       setError('Take ownership of this conversation before replying so the Customer Agent and an operator cannot answer the same customer.');
       return;
@@ -349,21 +415,34 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
     setBusy(true);
     setError('');
     try {
+      let queuedMedia: Awaited<ReturnType<typeof queueWhatsAppMedia>> | null = null;
       if (internal) await saveInternalCommunicationNote(selected.id, text, principal);
+      else if (attachment) queuedMedia = await queueWhatsAppMedia(selected, attachment, text, principal, provider);
       else await queueWhatsAppText(selected, text, principal, provider);
 
-      const optimistic: ConversationMessage = {
+      const mediaKind = attachment ? queuedMedia?.media.kind || whatsAppAttachmentKind(attachment) : null;
+      const optimistic: LiveConversationMessage = {
         id: `local-${Date.now()}`,
         at: new Date().toISOString(),
         author: internal ? `${principal.displayName} · internal` : principal.displayName,
         role: internal ? 'internal_note' : 'operator',
         text,
         channel: internal ? 'internal' : 'whatsapp',
+        status: internal ? null : 'queued',
+        provider: internal ? undefined : provider,
+        mediaType: mediaKind,
+        mediaCaption: attachment && text ? text : null,
+        mediaFileName: attachment?.name || null,
+        mediaMimeType: attachment?.type || null,
+        mediaSize: attachment?.size || null,
+        mediaUrl: queuedMedia?.media.url || null,
       };
+      const preview = text || attachmentPreviewLabel(mediaKind);
       setConversations((current) => current.map((conversation) => conversation.id === selected.id
-        ? { ...conversation, messages: [...conversation.messages, optimistic], lastActivityAt: optimistic.at, lastMessageText: text }
+        ? { ...conversation, messages: [...conversation.messages, optimistic], lastActivityAt: optimistic.at, lastMessageText: preview }
         : conversation));
       setDraft('');
+      setAttachment(null);
       if (!internal) setScope('mine');
     } catch (sendError) {
       setError(sendError instanceof Error ? sendError.message : String(sendError));
@@ -380,6 +459,10 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
   const heading = mode === 'ai' ? 'AI Customer Agent' : mode === 'escalations' ? 'Escalations' : 'Communication Center';
   const subtitle = mode === 'communications' ? 'WhatsApp team inbox for customer conversations, ownership and follow-up.' : mode === 'ai' ? 'AI-assisted customer conversations with human ownership controls.' : 'Conversations that require human exception handling.';
   const detailsVisible = standalone || showDetails;
+  const canSubmit = internal
+    ? Boolean(canReadBody && !busy && draft.trim())
+    : Boolean(canReply && !busy && (draft.trim() || attachment));
+  const attachmentKind = attachment ? whatsAppAttachmentKind(attachment) : null;
 
   return <section className={`${styles.page} ${standalone ? styles.standalone : ''}`}>
     <div className={styles.topLine}>
@@ -468,13 +551,33 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
           </div>
 
           <div className={`${styles.composer} ${internal ? styles.internalComposer : ''}`}>
-            <div className={styles.composerMode}><button type="button" onClick={() => setInternal(false)} className={!internal ? styles.active : ''} disabled={!canReadBody}>Reply</button><button type="button" onClick={() => setInternal(true)} className={internal ? styles.active : ''} disabled={!canReadBody}>Internal note</button><span>{internal ? 'Visible only to DEMAC staff' : selectedAiActive ? 'Customer Agent currently owns this conversation' : principal ? `Sending as ${principal.displayName}` : 'WhatsApp message'}</span></div>
-            <div className={styles.composerBox}>
-              <div className={styles.mediaTools}><button type="button" className={styles.mediaButton} disabled title="File sending will be activated after full-screen UX acceptance." aria-label="Attach file">＋</button><button type="button" className={styles.mediaButton} disabled title="Voice notes will be activated after full-screen UX acceptance." aria-label="Record voice note">●</button></div>
-              <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (!busy && draft.trim() && (internal || canReply)) void send(); } }} disabled={!canReadBody || busy} placeholder={internal ? 'Write an internal note…' : canReply ? 'Type a message…' : selectedAiActive ? 'Take over from AI before replying…' : 'Take ownership before replying…'} />
-              <button type="button" className={styles.sendButton} onClick={send} disabled={busy || !draft.trim() || (!internal && !canReply)}>{busy ? 'Sending…' : internal ? 'Save note' : 'Send'}</button>
+            <div className={styles.composerMode}><button type="button" onClick={() => setInternal(false)} className={!internal ? styles.active : ''} disabled={!canReadBody}>Reply</button><button type="button" onClick={() => { setInternal(true); setAttachment(null); }} className={internal ? styles.active : ''} disabled={!canReadBody}>Internal note</button><span>{internal ? 'Visible only to DEMAC staff' : selectedAiActive ? 'Customer Agent currently owns this conversation' : principal ? `Sending as ${principal.displayName}` : 'WhatsApp message'}</span></div>
+            {attachment ? <div className={mediaStyles.pendingAttachment}>
+              <span className={mediaStyles.pendingThumb}>{attachmentKind === 'image' && attachmentPreviewUrl ? <img src={attachmentPreviewUrl} alt="Selected attachment preview" /> : attachmentIcon(attachmentKind)}</span>
+              <span className={mediaStyles.pendingBody}><strong>{attachment.name}</strong><small>{attachmentKind} · {formatAttachmentSize(attachment.size)}</small></span>
+              <button type="button" className={mediaStyles.removeAttachment} onClick={() => setAttachment(null)} disabled={busy} aria-label="Remove attachment">×</button>
+            </div> : null}
+            <div
+              className={`${styles.composerBox} ${mediaStyles.mediaComposerBox} ${dragActive ? mediaStyles.dropActive : ''}`}
+              onDragEnter={(event) => { event.preventDefault(); if (!internal && canReply && !busy) setDragActive(true); }}
+              onDragOver={(event) => { event.preventDefault(); if (!internal && canReply && !busy) { event.dataTransfer.dropEffect = 'copy'; setDragActive(true); } }}
+              onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragActive(false); }}
+              onDrop={(event) => {
+                event.preventDefault();
+                setDragActive(false);
+                const file = event.dataTransfer.files?.[0] || null;
+                stageAttachment(file);
+              }}
+            >
+              <div className={mediaStyles.mediaTools}>
+                <input ref={fileInputRef} type="file" hidden accept="image/*,audio/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt,.zip" onChange={(event) => { stageAttachment(event.target.files?.[0] || null); event.currentTarget.value = ''; }} />
+                <button type="button" className={mediaStyles.mediaButton} onClick={() => fileInputRef.current?.click()} disabled={busy || internal || !canReply} title={canReply ? 'Attach photo, audio, video or document' : 'Take ownership before attaching a file'} aria-label="Attach file">＋</button>
+                <button type="button" className={mediaStyles.mediaButton} disabled title="Voice note recording will be activated separately." aria-label="Record voice note">●</button>
+              </div>
+              <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (canSubmit) void send(); } }} disabled={!canReadBody || busy} placeholder={internal ? 'Write an internal note…' : canReply ? attachment ? 'Add a caption or press Send…' : 'Type a message or drop a file here…' : selectedAiActive ? 'Take over from AI before replying…' : 'Take ownership before replying…'} />
+              <button type="button" className={styles.sendButton} onClick={send} disabled={!canSubmit}>{busy ? attachment && !internal ? 'Uploading…' : 'Sending…' : internal ? 'Save note' : 'Send'}</button>
             </div>
-            <div className={styles.composerHint}><span>Enter to send · Shift+Enter for new line</span><span>{internal ? 'Internal collaboration' : 'WhatsApp'}</span></div>
+            <div className={styles.composerHint}><span>{attachment ? <span className={mediaStyles.attachmentHint}>Attachment ready · Enter to send</span> : 'Enter to send · Shift+Enter for new line'}</span><span>{internal ? 'Internal collaboration' : 'WhatsApp'}</span></div>
           </div>
         </>}
       </main>

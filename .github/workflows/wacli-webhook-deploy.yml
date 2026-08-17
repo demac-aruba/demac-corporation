@@ -5,6 +5,7 @@ on:
     paths:
       - 'functions/whatsappWacliGateway.js'
       - 'functions/whatsappWacliGateway.test.js'
+      - 'functions/wacliOutboundMediaUpload.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
       - '.github/workflows/wacli-webhook-deploy.yml'
@@ -14,6 +15,7 @@ on:
     paths:
       - 'functions/whatsappWacliGateway.js'
       - 'functions/whatsappWacliGateway.test.js'
+      - 'functions/wacliOutboundMediaUpload.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
       - '.github/workflows/wacli-webhook-deploy.yml'
@@ -47,6 +49,7 @@ jobs:
         run: |
           set -euo pipefail
           node --check functions/whatsappWacliGateway.js
+          node --check functions/wacliOutboundMediaUpload.js
           node --check functions/bootstrap.js
           node --test functions/whatsappWacliGateway.test.js
           if grep -Eqi 'ed25519|x-demac-bridge-signature|BRIDGE_PUBLIC_KEY|WACLI_BRIDGE_URL|bridgeEndpoint\(|sendQueuedWacliMessage' functions/whatsappWacliGateway.js; then
@@ -59,7 +62,7 @@ jobs:
           fi
           node - <<'NODE'
           const mod = require('./functions/bootstrap');
-          for (const name of ['wacliWebhook', 'wacliMediaIngest', 'wacliOutboundPoll', 'wacliOutboundAck']) {
+          for (const name of ['wacliWebhook', 'wacliMediaIngest', 'wacliOutboundPoll', 'wacliOutboundAck', 'wacliOutboundMediaUpload']) {
             if (typeof mod[name] !== 'function') throw new Error(`${name} export missing`);
           }
           if (typeof mod.sendQueuedWacliMessage === 'function') throw new Error('Legacy sendQueuedWacliMessage export must be retired');
@@ -97,13 +100,13 @@ jobs:
           fi
           echo "run_service_account=${RUN_SA}" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy outbound-only connector endpoints
+      - name: Deploy outbound connector and ERP media upload
         shell: bash
         env:
           RUN_SERVICE_ACCOUNT: ${{ steps.config.outputs.run_service_account }}
         run: |
           set -euo pipefail
-          deploy_http() {
+          deploy_bridge_http() {
             local name="$1" memory="$2" timeout="$3"
             gcloud functions deploy "$name" \
               --project=demac-corporation \
@@ -122,10 +125,25 @@ jobs:
               --quiet
           }
 
-          deploy_http wacliMediaIngest 512Mi 120s
-          deploy_http wacliOutboundPoll 256Mi 30s
-          deploy_http wacliOutboundAck 256Mi 60s
-          deploy_http wacliWebhook 256Mi 120s
+          deploy_bridge_http wacliMediaIngest 512Mi 120s
+          deploy_bridge_http wacliOutboundPoll 256Mi 30s
+          deploy_bridge_http wacliOutboundAck 256Mi 60s
+          deploy_bridge_http wacliWebhook 256Mi 120s
+
+          gcloud functions deploy wacliOutboundMediaUpload \
+            --project=demac-corporation \
+            --gen2 \
+            --region=us-central1 \
+            --runtime=nodejs22 \
+            --source=functions \
+            --entry-point=wacliOutboundMediaUpload \
+            --memory=512Mi \
+            --timeout=120s \
+            --run-service-account="$RUN_SERVICE_ACCOUNT" \
+            --set-env-vars='FIREBASE_CONFIG={"storageBucket":"demac-corporation.firebasestorage.app"}' \
+            --trigger-http \
+            --allow-unauthenticated \
+            --quiet
 
       - name: Retire legacy Firebase-to-Droplet sender
         shell: bash
@@ -143,7 +161,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          probe_endpoint() {
+          probe_bridge_endpoint() {
             local name="$1"
             local endpoint="https://us-central1-demac-corporation.cloudfunctions.net/${name}"
             local body status state secrets
@@ -186,11 +204,67 @@ jobs:
           }
 
           for name in wacliMediaIngest wacliOutboundPoll wacliOutboundAck wacliWebhook; do
-            probe_endpoint "$name"
+            probe_bridge_endpoint "$name"
           done
+
+          media_name='wacliOutboundMediaUpload'
+          media_endpoint="https://us-central1-demac-corporation.cloudfunctions.net/${media_name}"
+          media_state="$(gcloud functions describe "$media_name" --project=demac-corporation --gen2 --region=us-central1 --format='value(state)')"
+          if [ "$media_state" != 'ACTIVE' ]; then
+            echo "::error::${media_name} state is ${media_state:-unknown}."
+            exit 1
+          fi
+          media_secrets="$(gcloud functions describe "$media_name" --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.secretEnvironmentVariables[].key)' | tr ';' '\n' | sort -u)"
+          if printf '%s\n' "$media_secrets" | grep -Eq 'WACLI_BRIDGE_TOKEN|WACLI_BRIDGE_URL|WACLI_WEBHOOK_SECRET'; then
+            echo '::error::ERP media upload must not receive bridge secrets.'
+            exit 1
+          fi
+
+          media_body="$(mktemp)"
+          media_status="$(curl --silent --show-error --output "$media_body" --write-out '%{http_code}' \
+            --request POST "$media_endpoint?fileName=probe.bin" \
+            --header 'Content-Type: application/octet-stream' \
+            --header 'Authorization: Bearer invalid-ci-probe' \
+            --data-binary 'probe')"
+          if [ "$media_status" != '401' ]; then
+            echo "::error::${media_name} returned HTTP ${media_status}; expected 401 for an invalid Firebase token."
+            cat "$media_body"
+            rm -f "$media_body"
+            exit 1
+          fi
+          python3 - "$media_body" <<'PY'
+          import json, sys
+          with open(sys.argv[1], encoding='utf-8') as handle:
+              payload = json.load(handle)
+          if payload != {'error': 'Unauthorized'}:
+              raise SystemExit(f'Unexpected media upload auth payload: {payload}')
+          print('wacliOutboundMediaUpload: Firebase ID-token auth enforced')
+          PY
+          rm -f "$media_body"
+
+          cors_headers="$(mktemp)"
+          cors_status="$(curl --silent --show-error --output /dev/null --dump-header "$cors_headers" --write-out '%{http_code}' \
+            --request OPTIONS "$media_endpoint" \
+            --header 'Origin: https://demac-corporation.vercel.app' \
+            --header 'Access-Control-Request-Method: POST' \
+            --header 'Access-Control-Request-Headers: authorization,content-type')"
+          if [ "$cors_status" != '204' ]; then
+            echo "::error::Media upload CORS preflight returned HTTP ${cors_status}; expected 204."
+            cat "$cors_headers"
+            rm -f "$cors_headers"
+            exit 1
+          fi
+          if ! grep -Eiq '^access-control-allow-origin: https://demac-corporation\.vercel\.app\r?$' "$cors_headers"; then
+            echo '::error::Media upload did not allow the production ERP Vercel origin.'
+            cat "$cors_headers"
+            rm -f "$cors_headers"
+            exit 1
+          fi
+          rm -f "$cors_headers"
 
           if gcloud functions describe sendQueuedWacliMessage --project=demac-corporation --gen2 --region=us-central1 --format='value(name)' >/dev/null 2>&1; then
             echo '::error::Legacy sendQueuedWacliMessage still exists after migration.'
             exit 1
           fi
           echo 'OUTBOUND_ONLY_FIREBASE_CONNECTOR_READY'
+          echo 'OUTBOUND_MEDIA_UPLOAD_READY'

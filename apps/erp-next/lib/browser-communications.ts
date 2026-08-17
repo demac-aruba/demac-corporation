@@ -1,8 +1,10 @@
 import type { AuthPrincipal } from './security';
 import type { Conversation, ConversationMessage, ConversationStatus, Operator, OperatorPresence, Queue } from './communications';
 import { getFirestoreDocument, listFirestoreCollection, saveFirestoreDocument, updateFirestoreDocument } from './firebase/firestore-rest';
+import { requireFirebaseWebSession } from './firebase/session';
 
 export type WhatsAppProvider = 'wacli' | 'meta';
+export type WhatsAppMediaKind = 'image' | 'video' | 'audio' | 'document';
 type ConversationLanguage = Conversation['language'];
 type OperatorLanguage = Operator['languages'][number];
 
@@ -75,13 +77,67 @@ type StoredEquipment = { id: string; clientId?: string; propertyId?: string; loc
 type MessageAttribution = { userId?: string | null; name?: string | null };
 type CrmIndex = { loadedAt: number; clients: StoredClient[]; properties: StoredProperty[]; equipment: StoredEquipment[] };
 
+type OutboundMediaUploadResponse = {
+  ok?: boolean;
+  url?: string;
+  fileName?: string;
+  mimeType?: string;
+  size?: number;
+  error?: string;
+};
+
 const operatorAttributionCache = new Map<string, MessageAttribution>();
 const CRM_CACHE_MS = 60_000;
+const MAX_WHATSAPP_MEDIA_BYTES = 25 * 1024 * 1024;
+const WACLI_MEDIA_UPLOAD_ENDPOINT = 'https://us-central1-demac-corporation.cloudfunctions.net/wacliOutboundMediaUpload';
 let crmIndexCache: CrmIndex | null = null;
 
 function safeString(value: unknown, fallback = '') { return typeof value === 'string' ? value : fallback; }
 function nullableString(value: unknown) { const normalized = safeString(value).trim(); return normalized || null; }
 function normalizePhone(value: unknown) { const digits = String(value ?? '').replace(/\D/g, ''); return !digits ? '' : digits.length === 7 ? `297${digits}` : digits; }
+
+export function whatsAppAttachmentKind(file: Pick<File, 'name' | 'type'>): WhatsAppMediaKind {
+  const mime = String(file.type || '').toLowerCase();
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime.startsWith('audio/')) return 'audio';
+  const extension = String(file.name || '').toLowerCase().split('.').pop() || '';
+  if (['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif'].includes(extension)) return 'image';
+  if (['mp4', 'mov', 'm4v', 'webm'].includes(extension)) return 'video';
+  if (['mp3', 'wav', 'm4a', 'aac', 'ogg', 'opus'].includes(extension)) return 'audio';
+  return 'document';
+}
+
+export function validateWhatsAppAttachment(file: Pick<File, 'name' | 'size' | 'type'>) {
+  if (!String(file.name || '').trim()) throw new Error('The attachment needs a file name.');
+  if (!Number.isFinite(file.size) || file.size <= 0) throw new Error('The selected attachment is empty.');
+  if (file.size > MAX_WHATSAPP_MEDIA_BYTES) throw new Error('The attachment is larger than the 25 MB WhatsApp connector limit.');
+  const mime = String(file.type || '').toLowerCase().split(';')[0].trim();
+  if (['text/html', 'application/xhtml+xml', 'image/svg+xml'].includes(mime)) throw new Error('This file type is not allowed for WhatsApp attachments.');
+}
+
+async function uploadWhatsAppAttachment(file: File) {
+  validateWhatsAppAttachment(file);
+  const session = await requireFirebaseWebSession();
+  const contentType = String(file.type || '').split(';')[0].trim() || 'application/octet-stream';
+  const response = await fetch(`${WACLI_MEDIA_UPLOAD_ENDPOINT}?fileName=${encodeURIComponent(file.name)}`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${session.idToken}`,
+      'Content-Type': contentType,
+    },
+    body: file,
+  });
+  const payload = await response.json().catch(() => ({})) as OutboundMediaUploadResponse;
+  if (!response.ok || !payload.url) throw new Error(payload.error || `Could not upload WhatsApp attachment (HTTP ${response.status}).`);
+  return {
+    kind: whatsAppAttachmentKind(file),
+    url: payload.url,
+    fileName: payload.fileName || file.name,
+    mimeType: payload.mimeType || contentType,
+    size: Number(payload.size || file.size),
+  };
+}
 
 function normalizeLanguage(value: unknown): ConversationLanguage {
   const normalized = safeString(value).trim().toLowerCase();
@@ -215,6 +271,27 @@ export async function queueWhatsAppText(conversation: LiveConversation, text: st
   if (!to) throw new Error('This conversation has no WhatsApp phone number or JID.');
   const id = `wa-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
   return saveFirestoreDocument('whatsappOutboundQueue', { id, provider: 'wacli', status: 'queued', type: 'text', to, text: text.trim(), conversationId: conversation.id, createdByUserId: principal.userId, createdByName: principal.displayName, createdAt: new Date().toISOString() });
+}
+
+export async function queueWhatsAppMedia(conversation: LiveConversation, file: File, text: string, principal: AuthPrincipal, provider: WhatsAppProvider) {
+  if (provider !== 'wacli') throw new Error('Free-form ERP media replies are currently enabled through the wacli provider.');
+  const to = conversation.chatJid || conversation.phone;
+  if (!to) throw new Error('This conversation has no WhatsApp phone number or JID.');
+  const media = await uploadWhatsAppAttachment(file);
+  const id = `wa-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  return saveFirestoreDocument('whatsappOutboundQueue', {
+    id,
+    provider: 'wacli',
+    status: 'queued',
+    type: media.kind,
+    to,
+    text: text.trim(),
+    media,
+    conversationId: conversation.id,
+    createdByUserId: principal.userId,
+    createdByName: principal.displayName,
+    createdAt: new Date().toISOString(),
+  });
 }
 
 export { loadCommunicationCustomerContext, type CommunicationCustomerContext } from './communication-customer-context';
