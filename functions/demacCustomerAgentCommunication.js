@@ -5,7 +5,7 @@ const { defineSecret } = require("firebase-functions/params");
 const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { createCustomerAgentRuntime } = require("./demacCustomerAgentRuntimeV1");
 const { sessionIdentity } = require("./demacCustomerConversationState");
-const { cleanText, hashId } = require("./whatsappCopilotSchedulingCore");
+const { cleanText, hashId } = require("./bookingSchedulingPrimitives");
 
 const app = getApps().length ? getApp() : initializeApp();
 const db = getFirestore(app);
