@@ -8,13 +8,24 @@ const { onRequest } = require("firebase-functions/v2/https");
 
 const db = getFirestore();
 const storage = getStorage();
-const wacliWebhookSecret = defineSecret("WACLI_WEBHOOK_SECRET");
 const wacliBridgeUrl = defineSecret("WACLI_BRIDGE_URL");
 const wacliBridgeToken = defineSecret("WACLI_BRIDGE_TOKEN");
+
+const BRIDGE_PUBLIC_KEY_DER_BASE64 = "MCowBQYDK2VwAyEAe01shOc9JLdWeX8OwYyzA3Mw9ckn5fg1llLtu4QtJX0=";
+const BRIDGE_PUBLIC_KEY = crypto.createPublicKey({
+  key: Buffer.from(BRIDGE_PUBLIC_KEY_DER_BASE64, "base64"),
+  format: "der",
+  type: "spki",
+});
+const BRIDGE_PUBLIC_KEY_FINGERPRINT = crypto
+  .createHash("sha256")
+  .update(Buffer.from(BRIDGE_PUBLIC_KEY_DER_BASE64, "base64"))
+  .digest("hex");
 
 const MAX_RECENT_MESSAGES = 120;
 const OPERATOR_STALE_MS = 5 * 60 * 1000;
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
+const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
 
 function safeDocumentId(value) {
   return String(value || "unknown")
@@ -51,21 +62,27 @@ function timestampMillis(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function safeEqual(left, right) {
-  const first = Buffer.from(String(left || ""));
-  const second = Buffer.from(String(right || ""));
-  return first.length === second.length && first.length > 0 && crypto.timingSafeEqual(first, second);
+function verifyBridgeSignature(request) {
+  const provided = String(request.get("x-demac-bridge-signature") || "").trim();
+  if (!provided.startsWith("ed25519=")) return false;
+  if (!(request.rawBody instanceof Buffer)) return false;
+  try {
+    const signature = Buffer.from(provided.slice("ed25519=".length), "base64");
+    return signature.length === 64 && crypto.verify(null, request.rawBody, BRIDGE_PUBLIC_KEY, signature);
+  } catch {
+    return false;
+  }
 }
 
-function verifyWacliSignature(request) {
-  const provided = String(request.get("x-wacli-signature") || "").trim();
-  const rawBody = request.rawBody instanceof Buffer
-    ? request.rawBody
-    : Buffer.from(JSON.stringify(request.body ?? {}));
-  // Bridge -> Firebase authentication deliberately uses WACLI_BRIDGE_TOKEN.
-  // The separate WACLI_WEBHOOK_SECRET is reserved for the local wacli -> bridge hop.
-  const digest = crypto.createHmac("sha256", wacliBridgeToken.value()).update(rawBody).digest("hex");
-  return safeEqual(provided, `sha256=${digest}`);
+function bridgeSignatureDiagnostics(request) {
+  const provided = String(request.get("x-demac-bridge-signature") || "").trim();
+  return {
+    signatureHeaderPresent: Boolean(provided),
+    signatureScheme: provided.includes("=") ? provided.slice(0, provided.indexOf("=")) : null,
+    signatureLength: provided.length,
+    rawBodyBytes: request.rawBody instanceof Buffer ? request.rawBody.length : null,
+    bridgePublicKeyFingerprint: BRIDGE_PUBLIC_KEY_FINGERPRINT,
+  };
 }
 
 function inferQueue(text) {
@@ -109,6 +126,17 @@ function normalizeMedia(payload) {
     mediaMimeType: String(media.MimeType ?? media.mimeType ?? media.mime_type ?? "").trim() || null,
     mediaSize: Number.isFinite(mediaSize) && mediaSize > 0 ? mediaSize : null,
     mediaUrl: media.mediaUrl ?? media.url ?? null,
+  };
+}
+
+function normalizeProfilePicture(payload) {
+  const value = payload?.ProfilePicture;
+  if (!value || typeof value !== "object") return null;
+  const sourceUrl = String(value.sourceUrl || value.url || "").trim();
+  if (!/^https:\/\//i.test(sourceUrl)) return null;
+  return {
+    sourceUrl,
+    updatedAt: normalizeTimestamp(value.updatedAt),
   };
 }
 
@@ -163,6 +191,7 @@ async function fetchAndStoreWacliMedia({ chat, messageId, media }) {
       fileName: media.mediaFileName,
       mimeType: media.mediaMimeType,
     }),
+    signal: AbortSignal.timeout(60000),
   });
 
   if (!response.ok) {
@@ -192,6 +221,50 @@ async function fetchAndStoreWacliMedia({ chat, messageId, media }) {
 
   const mediaUrl = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket.name)}/o/${encodeURIComponent(storagePath)}?alt=media&token=${encodeURIComponent(downloadToken)}`;
   return { ...media, mediaMimeType: contentType, mediaSize: bytes.length, mediaUrl };
+}
+
+async function fetchAndStoreProfilePicture({ chat, profilePicture }) {
+  if (!chat || !profilePicture?.sourceUrl) return null;
+  const conversationRef = db.collection("communicationConversations").doc(safeDocumentId(chat));
+  const currentSnapshot = await conversationRef.get();
+  const current = currentSnapshot.exists ? currentSnapshot.data() : {};
+  if (current?.profilePictureSourceUrl === profilePicture.sourceUrl && current?.profilePictureUrl) {
+    return {
+      profilePictureUrl: current.profilePictureUrl,
+      profilePictureSourceUrl: current.profilePictureSourceUrl,
+      profilePictureUpdatedAt: current.profilePictureUpdatedAt || profilePicture.updatedAt,
+    };
+  }
+
+  const response = await fetch(profilePicture.sourceUrl, {
+    signal: AbortSignal.timeout(15000),
+    redirect: "follow",
+  });
+  if (!response.ok) throw new Error(`WhatsApp profile picture returned HTTP ${response.status}`);
+  const lengthHeader = Number(response.headers.get("content-length") || 0);
+  if (lengthHeader > MAX_AVATAR_BYTES) throw new Error("WhatsApp profile picture exceeds the configured maximum size.");
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (!bytes.length) throw new Error("WhatsApp profile picture was empty.");
+  if (bytes.length > MAX_AVATAR_BYTES) throw new Error("WhatsApp profile picture exceeds the configured maximum size.");
+
+  const bucket = storage.bucket();
+  const storagePath = `communication-avatars/wacli/${safeStorageSegment(chat)}`;
+  const downloadToken = crypto.randomUUID();
+  const contentType = response.headers.get("content-type") || "image/jpeg";
+  await bucket.file(storagePath).save(bytes, {
+    resumable: false,
+    metadata: {
+      contentType,
+      cacheControl: "private, max-age=86400",
+      metadata: { firebaseStorageDownloadTokens: downloadToken },
+    },
+  });
+  const profilePictureUrl = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket.name)}/o/${encodeURIComponent(storagePath)}?alt=media&token=${encodeURIComponent(downloadToken)}`;
+  return {
+    profilePictureUrl,
+    profilePictureSourceUrl: profilePicture.sourceUrl,
+    profilePictureUpdatedAt: profilePicture.updatedAt,
+  };
 }
 
 function normalizeRecentMessage(message) {
@@ -227,7 +300,7 @@ function mergeRecentMessages(existing, incoming) {
     .slice(-MAX_RECENT_MESSAGES);
 }
 
-async function appendConversationMessage({ chat, phone, chatName, message, inbound }) {
+async function appendConversationMessage({ chat, phone, chatName, message, inbound, profilePicture }) {
   const conversationId = safeDocumentId(chat || phone);
   const queue = inferQueue(message.text);
   const routedOperator = inbound ? await chooseAvailableOperator(queue) : null;
@@ -269,6 +342,7 @@ async function appendConversationMessage({ chat, phone, chatName, message, inbou
       lastActivityAt: FieldValue.serverTimestamp(),
       customerTyping: false,
       recentMessages,
+      ...(profilePicture || {}),
       createdAt: current?.createdAt || FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
@@ -333,16 +407,12 @@ async function updateChatPresence(payload) {
   }, { merge: true });
 }
 
-/**
- * Signed inbound webhook for the DEMAC bridge. The bridge separately validates
- * the local wacli signature before it enriches and forwards each event.
- */
 exports.wacliWebhook = onRequest(
   {
     region: "us-central1",
     memory: "256MiB",
     timeoutSeconds: 120,
-    secrets: [wacliWebhookSecret, wacliBridgeUrl, wacliBridgeToken],
+    secrets: [wacliBridgeUrl, wacliBridgeToken],
   },
   async (request, response) => {
     if (request.method !== "POST") {
@@ -350,8 +420,8 @@ exports.wacliWebhook = onRequest(
       response.status(405).send("Method not allowed");
       return;
     }
-    if (!verifyWacliSignature(request)) {
-      logger.warn("Rejected DEMAC bridge webhook with invalid signature.");
+    if (!verifyBridgeSignature(request)) {
+      logger.warn("Rejected DEMAC bridge webhook with invalid Ed25519 signature.", bridgeSignatureDiagnostics(request));
       response.status(401).send("Invalid signature");
       return;
     }
@@ -370,16 +440,31 @@ exports.wacliWebhook = onRequest(
         const messageId = String(payload.ID || `${eventRef.id}-${Date.now()}`);
         const inbound = payload.IsFromMe !== true;
         const chatName = String(payload.ChatName || payload.SenderName || "").trim();
-        const resolvedPhone = digitsOnly(payload?.Identity?.ResolvedPhone || payload.ResolvedPhone || "");
+        const resolvedPhone = digitsOnly(payload?.ResolvedPhone || payload?.Identity?.ResolvedPhone || "");
         const phone = resolvedPhone || phoneFromChat(chat);
+
         let media = normalizeMedia(payload);
         if (media) {
           try {
             media = await fetchAndStoreWacliMedia({ chat, messageId, media });
           } catch (error) {
-            logger.error("Could not fetch/store wacli media; preserving the message metadata.", error);
+            logger.error("Could not fetch/store wacli media; preserving message metadata.", error);
           }
         }
+
+        let profilePicture = null;
+        const profilePictureMeta = normalizeProfilePicture(payload);
+        if (profilePictureMeta) {
+          try {
+            profilePicture = await fetchAndStoreProfilePicture({ chat, profilePicture: profilePictureMeta });
+          } catch (error) {
+            logger.warn("Could not persist WhatsApp profile picture; message processing continues.", {
+              chat,
+              errorMessage: error?.message || String(error),
+            });
+          }
+        }
+
         const text = String(payload.Text || payload.Caption || media?.mediaCaption || (media ? mediaPreview(media) : ""));
         const reactionEmoji = String(payload.ReactionEmoji || "").trim() || null;
         const reactionToId = String(payload.ReactionToID || "").trim() || null;
@@ -416,6 +501,7 @@ exports.wacliWebhook = onRequest(
           phone,
           chatName,
           inbound,
+          profilePicture,
           message: {
             id: messageId,
             at: payload.Timestamp,
@@ -439,6 +525,7 @@ exports.wacliWebhook = onRequest(
         source: "wacli",
         eventType,
         processed: true,
+        auth: "ed25519-v1",
         receivedAt: FieldValue.serverTimestamp(),
       });
       response.status(200).json({ ok: true });
@@ -498,6 +585,7 @@ exports.sendQueuedWacliMessage = onDocumentCreated(
           media,
           clientMessageId: snapshot.id,
         }),
+        signal: AbortSignal.timeout(120000),
       });
       const responseBody = await parseBridgeResponse(response);
       if (!response.ok || responseBody.sent !== true) {
@@ -540,7 +628,7 @@ exports.sendQueuedWacliMessage = onDocumentCreated(
             at: new Date().toISOString(),
             author: original.createdByName || "DEMAC",
             role: "operator",
-            text: message.text,
+            text,
             status: "sent",
           });
           transaction.set(conversationRef, {
@@ -548,7 +636,7 @@ exports.sendQueuedWacliMessage = onDocumentCreated(
             channel: "whatsapp",
             status: current?.status === "escalated" ? "escalated" : "waiting_customer",
             unread: 0,
-            lastMessageText: message.text,
+            lastMessageText: text,
             lastActivityAt: FieldValue.serverTimestamp(),
             recentMessages,
             updatedAt: FieldValue.serverTimestamp(),
