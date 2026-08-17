@@ -43,6 +43,10 @@ function outboundDocumentId(conversationId, messageId) {
   return `AI-${hashId(`${conversationId}|${messageId}|outbound`, 40).toUpperCase()}`;
 }
 
+function automaticReplySupported(provider) {
+  return cleanText(provider, 40).toLowerCase() === "wacli";
+}
+
 function shouldRunAgent(conversation = {}) {
   if (conversation.aiDisposition === "human_active") return false;
   if (conversation.ownerUserId || conversation.lockedByUserId) return false;
@@ -128,7 +132,7 @@ async function enqueueInbound({ messageId, message }) {
   const queueId = queueDocumentId(conversationId, messageId);
   const ref = db.collection(AGENT_QUEUE_COLLECTION).doc(queueId);
   const snapshot = await ref.get();
-  if (snapshot.exists && ["processed", "coalesced", "skipped_human"].includes(snapshot.data()?.status)) {
+  if (snapshot.exists && ["processed", "coalesced", "skipped_human", "skipped_provider"].includes(snapshot.data()?.status)) {
     return { ref, queueId, conversationId, completed: true };
   }
   await ref.set({
@@ -215,6 +219,9 @@ async function ensureAgentSessionActive(conversationId, provider) {
 }
 
 async function queueAgentReply({ conversationId, conversation, inboundMessageId, result, provider }) {
+  if (!automaticReplySupported(provider)) {
+    throw new Error(`Automatic customer-agent replies are not enabled for provider ${cleanText(provider, 40) || "unknown"}.`);
+  }
   const text = cleanText(result.draft, 3_000);
   if (!text) return null;
   const to = cleanText(conversation.chatJid || conversation.externalChatId || conversation.phone, 300);
@@ -225,7 +232,7 @@ async function queueAgentReply({ conversationId, conversation, inboundMessageId,
   if (existing.exists) return { id, existing: true };
   await ref.create({
     id,
-    provider: provider === "meta" ? "meta" : "wacli",
+    provider: "wacli",
     status: "queued",
     type: "text",
     to,
@@ -251,7 +258,12 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
     conversationRef.get(),
     db.collection("whatsappMessages").doc(safeDocumentId(selected.messageId)).get(),
   ]);
-  const conversation = conversationSnapshot.exists ? conversationSnapshot.data() || {} : {};
+  if (!conversationSnapshot.exists) {
+    const notReady = new Error("Communication Center conversation is not materialized yet; retry this event.");
+    notReady.code = "conversation_not_ready";
+    throw notReady;
+  }
+  const conversation = conversationSnapshot.data() || {};
   const inboundMessage = messageSnapshot.exists ? { id: messageSnapshot.id, ...messageSnapshot.data() } : {};
 
   if (!shouldRunAgent(conversation)) {
@@ -324,6 +336,9 @@ async function processQueueEvent({ messageId, message }) {
   if (!cleanText(message.text || message.mediaCaption || message.reactionEmoji, 4_000)) {
     return { ignored: true, reason: "no-customer-content" };
   }
+  if (!automaticReplySupported(message.provider || "wacli")) {
+    return { ignored: true, reason: "provider-not-enabled" };
+  }
   const queued = await enqueueInbound({ messageId, message });
   if (!queued || queued.completed) return { ignored: true, reason: queued?.completed ? "already-completed" : "no-conversation" };
 
@@ -391,6 +406,7 @@ module.exports.AGENT_LOCK_COLLECTION = AGENT_LOCK_COLLECTION;
 module.exports.AGENT_QUEUE_COLLECTION = AGENT_QUEUE_COLLECTION;
 module.exports.LEASE_MS = LEASE_MS;
 module.exports.MAX_PROCESSING_ATTEMPTS = MAX_PROCESSING_ATTEMPTS;
+module.exports.automaticReplySupported = automaticReplySupported;
 module.exports.buildRuntimeBody = buildRuntimeBody;
 module.exports.communicationMessageToRuntime = communicationMessageToRuntime;
 module.exports.conversationIdentity = conversationIdentity;
