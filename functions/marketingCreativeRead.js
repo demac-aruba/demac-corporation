@@ -10,6 +10,11 @@ function safeString(value, max = 1200) {
   return typeof value === "string" ? value.trim().slice(0, max) : "";
 }
 
+function safeNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
 function cleanSessionId(value) {
   if (value == null || value === "") return "";
   const sessionId = typeof value === "string" ? value.trim() : "";
@@ -27,32 +32,121 @@ async function requireMarketingUser(uid) {
   }
 }
 
+function sanitizeHardChecks(value) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    brandCenterLive: Boolean(value.brandCenterLive),
+    languagePassed: Boolean(value.languagePassed),
+    exactWhatsapp: Boolean(value.exactWhatsapp),
+    productFactsApproved: Boolean(value.productFactsApproved),
+    footerReserved: Boolean(value.footerReserved),
+    allPassed: Boolean(value.allPassed),
+  };
+}
+
+function sanitizeQa(qa = {}) {
+  return {
+    source: safeString(qa.source, 80),
+    status: safeString(qa.status, 40),
+    score: safeNumber(qa.score),
+    selectionScore: safeNumber(qa.selectionScore),
+    overallScore: safeNumber(qa.overallScore || qa.score),
+    mobileLegibility: safeNumber(qa.mobileLegibility),
+    visualHierarchy: safeNumber(qa.visualHierarchy),
+    contrast: safeNumber(qa.contrast),
+    footerClearance: safeNumber(qa.footerClearance),
+    authenticity: safeNumber(qa.authenticity),
+    professionalism: safeNumber(qa.professionalism),
+    creativeQuality: safeNumber(qa.creativeQuality),
+    scrollStoppingPower: safeNumber(qa.scrollStoppingPower),
+    agencyFeel: safeNumber(qa.agencyFeel),
+    photoIntegration: safeNumber(qa.photoIntegration),
+    ctaProminence: safeNumber(qa.ctaProminence),
+    visualSophistication: safeNumber(qa.visualSophistication),
+    commercialCompleteness: safeNumber(qa.commercialCompleteness),
+    layoutRichness: safeNumber(qa.layoutRichness),
+    brandSystemCoherence: safeNumber(qa.brandSystemCoherence),
+    offerClarity: safeNumber(qa.offerClarity),
+    attempt: safeNumber(qa.attempt),
+    issues: Array.isArray(qa.issues) ? qa.issues.slice(0, 10).map((item) => safeString(item, 350)).filter(Boolean) : [],
+    revisionInstructions: Array.isArray(qa.revisionInstructions)
+      ? qa.revisionInstructions.slice(0, 8).map((item) => safeString(item, 350)).filter(Boolean)
+      : [],
+    hardChecks: sanitizeHardChecks(qa.hardChecks),
+  };
+}
+
+function sanitizeVariant(item = {}) {
+  const layout = item.layout && typeof item.layout === "object" ? item.layout : {};
+  return {
+    id: safeString(item.id, 120),
+    conceptId: safeString(item.conceptId, 120),
+    name: safeString(item.name, 180),
+    rationale: safeString(item.rationale, 1000),
+    imageStoragePath: safeString(item.imageStoragePath, 1200),
+    imageUrl: safeString(item.imageUrl, 3000),
+    imageModel: safeString(item.imageModel, 100),
+    selectionScore: safeNumber(item.selectionScore),
+    revised: Boolean(item.revised),
+    layout: {
+      headlineZone: safeString(layout.headlineZone, 80),
+      ctaZone: safeString(layout.ctaZone, 80),
+      textPanelStyle: safeString(layout.textPanelStyle, 80),
+      textAlign: safeString(layout.textAlign, 40),
+      accentStyle: safeString(layout.accentStyle, 80),
+      photoFocus: safeString(layout.photoFocus, 80),
+      compositionTemplate: safeString(layout.compositionTemplate, 100),
+      visualEnergy: safeString(layout.visualEnergy, 60),
+    },
+    qa: sanitizeQa(item.qa || {}),
+  };
+}
+
 function sanitizeCreative(document) {
   const source = document.data() || {};
   const qa = source.qa || {};
   const exactText = source.exactText || {};
+  const artDirection = source.artDirection && typeof source.artDirection === "object" ? source.artDirection : {};
   return {
     id: document.id,
     sessionId: safeString(source.sessionId, 220),
     campaignId: safeString(source.campaignId, 220),
     campaignType: safeString(source.campaignType, 100),
-    version: Number(source.version) || 0,
+    version: safeNumber(source.version),
     status: safeString(source.status, 80),
+    builderVersion: safeString(source.builderVersion, 40),
     heroAssetId: safeString(source.heroAssetId, 220),
+    imageStoragePath: safeString(source.imageStoragePath, 1200),
     imageUrl: safeString(source.imageUrl, 3000),
     approvedUrl: safeString(source.approvedUrl, 3000),
-    width: Number(source.width) || 0,
-    height: Number(source.height) || 0,
-    reservedFooterPx: Number(source.reservedFooterPx) || 0,
-    renderTemplate: safeString(source.renderTemplate, 80),
-    renderMode: safeString(source.renderMode, 80),
+    width: safeNumber(source.width),
+    height: safeNumber(source.height),
+    reservedFooterPx: safeNumber(source.reservedFooterPx),
+    renderTemplate: safeString(source.renderTemplate, 100),
+    renderMode: safeString(source.renderMode, 100),
+    artDirectorModel: safeString(source.artDirectorModel, 100),
     imageModel: safeString(source.imageModel, 100),
+    qaModel: safeString(source.qaModel, 100),
+    selectedVariantId: safeString(source.selectedVariantId, 140),
+    variantCount: safeNumber(source.variantCount),
+    autoRevised: Boolean(source.autoRevised),
+    artDirection: {
+      campaignSummary: safeString(artDirection.campaignSummary, 1200),
+      creativeNorthStar: safeString(artDirection.creativeNorthStar, 1200),
+    },
+    variants: Array.isArray(source.variants) ? source.variants.slice(0, 6).map(sanitizeVariant) : [],
     exactText: {
       headline: safeString(exactText.headline, 150),
       subheadline: safeString(exactText.subheadline, 250),
+      primaryText: safeString(exactText.primaryText, 800),
       cta: safeString(exactText.cta, 100),
       whatsapp: safeString(exactText.whatsapp, 60),
       offer: safeString(exactText.offer, 220),
+      eyebrow: safeString(exactText.eyebrow, 120),
+      proofLabel: safeString(exactText.proofLabel, 160),
+      supportPoints: Array.isArray(exactText.supportPoints)
+        ? exactText.supportPoints.slice(0, 4).map((item) => safeString(item, 180)).filter(Boolean)
+        : [],
       products: Array.isArray(exactText.products)
         ? exactText.products.slice(0, 5).map((item) => ({
           source: safeString(item?.source, 600),
@@ -64,30 +158,7 @@ function sanitizeCreative(document) {
     },
     captionText: safeString(source.captionText, 800),
     papiamentoValidationStatus: safeString(source.papiamentoValidationStatus, 40),
-    qa: {
-      source: safeString(qa.source, 80),
-      status: safeString(qa.status, 40),
-      score: Number(qa.score) || 0,
-      mobileLegibility: Number(qa.mobileLegibility) || 0,
-      visualHierarchy: Number(qa.visualHierarchy) || 0,
-      contrast: Number(qa.contrast) || 0,
-      footerClearance: Number(qa.footerClearance) || 0,
-      authenticity: Number(qa.authenticity) || 0,
-      professionalism: Number(qa.professionalism) || 0,
-      attempt: Number(qa.attempt) || 0,
-      issues: Array.isArray(qa.issues) ? qa.issues.slice(0, 10).map((item) => safeString(item, 350)).filter(Boolean) : [],
-      revisionInstructions: Array.isArray(qa.revisionInstructions)
-        ? qa.revisionInstructions.slice(0, 8).map((item) => safeString(item, 350)).filter(Boolean)
-        : [],
-      hardChecks: qa.hardChecks && typeof qa.hardChecks === "object" ? {
-        brandCenterLive: Boolean(qa.hardChecks.brandCenterLive),
-        languagePassed: Boolean(qa.hardChecks.languagePassed),
-        exactWhatsapp: Boolean(qa.hardChecks.exactWhatsapp),
-        productFactsApproved: Boolean(qa.hardChecks.productFactsApproved),
-        footerReserved: Boolean(qa.hardChecks.footerReserved),
-        allPassed: Boolean(qa.hardChecks.allPassed),
-      } : null,
-    },
+    qa: sanitizeQa(qa),
     approvedAt: safeString(source.approvedAt, 80),
     approvedByName: safeString(source.approvedByName, 180),
     createdAt: safeString(source.createdAt, 80),
