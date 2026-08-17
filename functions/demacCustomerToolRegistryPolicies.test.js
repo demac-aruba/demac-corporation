@@ -14,7 +14,7 @@ function capability(source, definitions) {
   };
 }
 
-test("single Customer Agent registry exposes ten capabilities including company policy", async () => {
+test("single Customer Agent registry exposes eleven capabilities including product stock and company policy", async () => {
   const customer = capability("customer", [
     { name: "resolve_customer" },
     { name: "resolve_property" },
@@ -27,7 +27,10 @@ test("single Customer Agent registry exposes ten capabilities including company 
     { name: "get_service_catalog" },
     { name: "get_service_price" },
   ]);
-  const sales = capability("sales", [{ name: "get_product_catalog" }]);
+  const sales = capability("sales", [
+    { name: "get_product_catalog" },
+    { name: "get_product_stock" },
+  ]);
   const policies = capability("policy", [{ name: "get_company_policy" }]);
   const registry = createDemacCustomerToolRegistry({
     db: fakeDb,
@@ -37,10 +40,12 @@ test("single Customer Agent registry exposes ten capabilities including company 
     policyTools: policies,
   });
 
-  assert.equal(TOOL_ORDER.length, 10);
-  assert.equal(registry.definitions.length, 10);
-  assert.equal(TOOL_ORDER[6], "get_company_policy");
+  assert.equal(TOOL_ORDER.length, 11);
+  assert.equal(registry.definitions.length, 11);
+  assert.equal(TOOL_ORDER[6], "get_product_stock");
+  assert.equal(TOOL_ORDER[7], "get_company_policy");
   assert.equal((await registry.invoke("get_company_policy", { topic: "warranty" })).source, "policy");
   assert.equal((await registry.invoke("get_product_catalog", { query: "Adina" })).source, "sales");
+  assert.equal((await registry.invoke("get_product_stock", { productId: "p12" })).source, "sales");
   assert.equal((await registry.invoke("create_appointment", {})).source, "customer");
 });
