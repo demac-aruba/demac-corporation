@@ -243,27 +243,32 @@ test("ambiguous existing customer is never merged", async () => {
   assert.equal(result.error.code, "ambiguous_customer");
 });
 
-test("single registry exposes all eleven tools in intended order and dispatches by capability", async () => {
+test("single registry exposes all fourteen tools in intended order and dispatches by capability", async () => {
   const customer = { invoke: async (name) => ({ success: true, source: "customer", name }) };
   const business = { invoke: async (name) => ({ success: true, source: "business", name }) };
   const sales = { invoke: async (name) => ({ success: true, source: "sales", name }) };
+  const reservations = { invoke: async (name) => ({ success: true, source: "reservation", name }) };
   const policies = { invoke: async (name) => ({ success: true, source: "policy", name }) };
   const registry = createDemacCustomerToolRegistry({
     db: new FakeDb(),
     customerTools: customer,
     businessTools: business,
     salesTools: sales,
+    reservationTools: reservations,
     policyTools: policies,
   });
   assert.deepEqual(TOOL_ORDER, [
     "resolve_customer", "resolve_property", "create_or_update_lead", "get_service_catalog",
-    "get_service_price", "get_product_catalog", "get_product_stock", "get_company_policy",
+    "get_service_price", "get_product_catalog", "get_product_stock", "create_product_reservation",
+    "get_product_reservation", "release_product_reservation", "get_company_policy",
     "check_availability", "create_appointment", "get_appointment",
   ]);
-  assert.equal(registry.definitions.length, 11);
+  assert.equal(registry.definitions.length, 14);
   assert.equal((await registry.invoke("resolve_customer")).source, "customer");
   assert.equal((await registry.invoke("get_service_price")).source, "business");
   assert.equal((await registry.invoke("get_product_catalog")).source, "sales");
   assert.equal((await registry.invoke("get_product_stock")).source, "sales");
+  assert.equal((await registry.invoke("create_product_reservation")).source, "reservation");
+  assert.equal((await registry.invoke("release_product_reservation")).source, "reservation");
   assert.equal((await registry.invoke("get_company_policy")).source, "policy");
 });

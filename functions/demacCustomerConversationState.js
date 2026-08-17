@@ -3,7 +3,7 @@ const {
   hashId,
 } = require("./bookingSchedulingPrimitives");
 
-const CUSTOMER_AGENT_SESSION_VERSION = 1;
+const CUSTOMER_AGENT_SESSION_VERSION = 2;
 const CUSTOMER_AGENT_SESSION_COLLECTION = "customerAgentSessions";
 
 function timestampValue() {
@@ -88,6 +88,8 @@ function emptySession(identity) {
     activeOfferId: "",
     activeOfferVersion: 0,
     appointmentId: "",
+    reservationId: "",
+    reservationStatus: "",
     presetId: "",
     serviceId: "",
     quantity: 0,
@@ -161,6 +163,16 @@ function toolStatePatch(toolName, args = {}, result = {}) {
       activeOfferVersion: 0,
     };
   }
+  if (["create_product_reservation", "get_product_reservation", "release_product_reservation"].includes(toolName)) {
+    const reservationId = cleanText(result.reservationId || result.reservation?.reservationId || result.reservation?.id, 180);
+    const reservationStatus = cleanText(result.reservation?.status || result.status, 80);
+    if (reservationId) {
+      return {
+        reservationId,
+        reservationStatus,
+      };
+    }
+  }
   return {};
 }
 
@@ -197,6 +209,7 @@ async function recordCustomerConversationOutcome({
   language = "",
   requiresHuman = false,
   appointmentId = "",
+  reservationId = "",
   handoffQueue = "",
   handoffReason = "",
   now = new Date(),
@@ -219,6 +232,9 @@ async function recordCustomerConversationOutcome({
     updatedAtIso: now.toISOString(),
   };
   if (appointmentId) patch.appointmentId = cleanText(appointmentId, 180);
+  if (reservationId) patch.reservationId = cleanText(reservationId, 180);
+  if (outcome === "product_reserved") patch.reservationStatus = "active";
+  if (outcome === "product_reservation_released") patch.reservationStatus = "released";
   await ref.set(patch, { merge: true });
   return { updated: true, sessionId: identity.sessionId, patch };
 }
