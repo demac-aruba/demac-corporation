@@ -1,52 +1,53 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BRIDGE=demac-whatsapp-bridge-v8-test.service
 SYNC=demac-wacli-sync-v8-test.service
-CHAT='2975600140@s.whatsapp.net'
-MSG='AC70D50A47601F776CDA9258164E66AE'
-OUT='/var/lib/demac-wacli-test/media/manual-permission-probe.ogg'
 
-echo '=== DEMAC MEDIA DOWNLOAD PROBE ==='
+echo '=== DEMAC LIVE MEDIA FLOW VERIFICATION ==='
 printf 'time_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 echo
-echo '=== CURRENT MAINTENANCE STATUS ==='
+echo '=== SERVICES / MEDIA PERMISSIONS ==='
 sudo -n /usr/local/sbin/demac-maintenance status
 
 echo
-echo '=== DOWNLOAD KNOWN AUDIO INTO WACLI MEDIA STORE ==='
-sudo -n /usr/local/sbin/demac-wacli-ro media download --chat "$CHAT" --id "$MSG" --output "$OUT"
+echo '=== RECENT LOCAL MESSAGES ==='
+sudo -n /usr/local/sbin/demac-wacli-ro messages list --limit 15
 
 echo
-echo '=== VERIFY DOWNLOADED FILE ==='
-sudo -n /usr/local/sbin/demac-wacli-ro messages show --chat "$CHAT" --id "$MSG" --json 2>/dev/null \
-  | python3 - <<'PY' || true
+echo '=== RECENT MESSAGE JSON SUMMARY ==='
+sudo -n /usr/local/sbin/demac-wacli-ro messages export --limit 15 2>/dev/null | python3 -c '
 import json,sys
-try:
-    obj=json.load(sys.stdin)
-except Exception:
-    sys.exit(0)
-print('message_show_ok=true')
-for k in ('MediaType','MimeType','LocalPath','DownloadedAt'):
-    if isinstance(obj,dict):
-        data=obj.get('data',obj)
-        if isinstance(data,dict): print(f'{k}={data.get(k,"")}')
-PY
+obj=json.load(sys.stdin)
+data=obj.get("data",obj)
+msgs=data.get("messages",[]) if isinstance(data,dict) else []
+for m in msgs:
+    ts=m.get("Timestamp","")
+    chat=m.get("ChatJID","")
+    mid=m.get("MsgID","")
+    text=m.get("Text","") or m.get("DisplayText","")
+    media=m.get("MediaType","")
+    mime=m.get("MimeType","")
+    local=m.get("LocalPath","")
+    downloaded=m.get("DownloadedAt","")
+    print(f"TS={ts} CHAT={chat} ID={mid} TEXT={text!r} MEDIA={media!r} MIME={mime!r} LOCAL={local!r} DOWNLOADED={downloaded!r}")
+'
 
-# We cannot stat the 0700 store as demac-deploy, but a successful media-download
-# exit status proves the demac-wacli process can now create/write the requested file.
+echo
+echo '=== SYNC EVENTS LAST 15 MINUTES ==='
+journalctl -u "$SYNC" --since '15 minutes ago' --no-pager \
+ | grep -Ei 'media download|permission denied|webhook|error|fail|connected|disconnected|reconnect' \
+ | tail -n 160 || true
 
 echo
 echo '=== BRIDGE HEALTH ==='
 curl -fsS http://127.0.0.1:8787/health | python3 -m json.tool
 
 echo
-echo '=== SYNC ERRORS SINCE RESTART ==='
-START="$(systemctl show -p ExecMainStartTimestamp --value "$SYNC")"
-journalctl -u "$SYNC" --since "$START" --no-pager \
-  | grep -Ei 'media download failed|permission denied|error|fail|disconnected|connected' \
-  | tail -n 100 || true
+echo '=== BRIDGE JOURNAL LAST 15 MINUTES ==='
+journalctl -u demac-whatsapp-bridge-v8-test.service --since '15 minutes ago' --no-pager \
+ | grep -Ei 'error|fail|storage|upload|media|webhook|avatar|firebase' \
+ | tail -n 160 || true
 
 echo
-echo 'MEDIA_DOWNLOAD_PROBE_COMPLETE'
+echo 'LIVE_MEDIA_FLOW_VERIFICATION_COMPLETE'
