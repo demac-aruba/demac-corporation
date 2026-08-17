@@ -19,8 +19,8 @@ const {
   resolveAssignment,
   vanCanReceiveAppointments,
   weekday,
-} = require("./whatsappCopilotSchedulingCore");
-const { candidateAvailability } = require("./whatsappCopilotAvailability");
+} = require("./bookingSchedulingPrimitives");
+const { candidateAvailability } = require("./bookingCapacityAvailability");
 
 const CANONICAL_SCHEDULING_ENGINE_VERSION = 1;
 const CLIENT_OPTION_LIMIT = 2;
