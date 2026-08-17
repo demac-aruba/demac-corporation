@@ -2,7 +2,7 @@ const { getApp, getApps, initializeApp } = require("firebase-admin/app");
 const { FieldValue, getFirestore } = require("firebase-admin/firestore");
 const logger = require("firebase-functions/logger");
 const { defineSecret } = require("firebase-functions/params");
-const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { createCustomerAgentRuntime } = require("./demacCustomerAgentRuntimeV1");
 const { sessionIdentity } = require("./demacCustomerConversationState");
 const { cleanText, hashId } = require("./whatsappCopilotSchedulingCore");
@@ -10,7 +10,6 @@ const { cleanText, hashId } = require("./whatsappCopilotSchedulingCore");
 const app = getApps().length ? getApp() : initializeApp();
 const db = getFirestore(app);
 const openAiApiKey = defineSecret("OPENAI_API_KEY");
-const customerAgentRuntime = createCustomerAgentRuntime({ db });
 
 const AGENT_QUEUE_COLLECTION = "customerAgentInboundQueue";
 const AGENT_LOCK_COLLECTION = "customerAgentConversationLocks";
@@ -52,6 +51,27 @@ function shouldRunAgent(conversation = {}) {
   if (conversation.ownerUserId || conversation.lockedByUserId) return false;
   return conversation.aiDisposition === "ai_active";
 }
+
+async function communicationOwnershipGuard({ context = {} } = {}) {
+  const conversationId = safeDocumentId(context.conversationId || context.contactJid || context.contactPhone);
+  if (!conversationId || conversationId === "unknown") {
+    return { allowed: false, code: "missing_conversation_identity", reason: "Communication Center conversation identity is missing." };
+  }
+  const snapshot = await db.collection("communicationConversations").doc(conversationId).get();
+  if (!snapshot.exists) {
+    return { allowed: false, code: "conversation_missing", reason: "Communication Center conversation no longer exists." };
+  }
+  const conversation = snapshot.data() || {};
+  if (!shouldRunAgent(conversation)) {
+    return { allowed: false, code: "human_takeover", reason: "A DEMAC operator owns this conversation now." };
+  }
+  return { allowed: true };
+}
+
+const customerAgentRuntime = createCustomerAgentRuntime({
+  db,
+  executionGuard: communicationOwnershipGuard,
+});
 
 function communicationMessageToRuntime(message = {}) {
   const role = cleanText(message.role, 40);
@@ -126,13 +146,15 @@ function outcomeConversationPatch(result = {}) {
   };
 }
 
-async function enqueueInbound({ messageId, message }) {
+async function enqueueInbound({ messageId, message, reactivate = false }) {
   const conversationId = safeDocumentId(conversationIdentity(message));
   if (!conversationId || conversationId === "unknown") return null;
   const queueId = queueDocumentId(conversationId, messageId);
   const ref = db.collection(AGENT_QUEUE_COLLECTION).doc(queueId);
   const snapshot = await ref.get();
-  if (snapshot.exists && ["processed", "coalesced", "skipped_human", "skipped_provider"].includes(snapshot.data()?.status)) {
+  const currentStatus = snapshot.exists ? cleanText(snapshot.data()?.status, 40) : "";
+  const terminalStatuses = ["processed", "coalesced", "skipped_provider"];
+  if (terminalStatuses.includes(currentStatus) || (currentStatus === "skipped_human" && !reactivate)) {
     return { ref, queueId, conversationId, completed: true };
   }
   await ref.set({
@@ -143,6 +165,7 @@ async function enqueueInbound({ messageId, message }) {
     chat: cleanText(message.chat, 300),
     status: "queued",
     attempts: Number(snapshot.data()?.attempts || 0),
+    reactivated: reactivate || snapshot.data()?.reactivated === true,
     queuedAt: snapshot.data()?.queuedAt || FieldValue.serverTimestamp(),
     queuedAtIso: snapshot.data()?.queuedAtIso || new Date().toISOString(),
     updatedAt: FieldValue.serverTimestamp(),
@@ -223,28 +246,54 @@ async function queueAgentReply({ conversationId, conversation, inboundMessageId,
     throw new Error(`Automatic customer-agent replies are not enabled for provider ${cleanText(provider, 40) || "unknown"}.`);
   }
   const text = cleanText(result.draft, 3_000);
-  if (!text) return null;
-  const to = cleanText(conversation.chatJid || conversation.externalChatId || conversation.phone, 300);
-  if (!to) throw new Error("Customer Agent cannot reply because the conversation has no WhatsApp recipient.");
+  if (!text) return { queued: false, reason: "empty-draft" };
   const id = outboundDocumentId(conversationId, inboundMessageId);
   const ref = db.collection("whatsappOutboundQueue").doc(id);
-  const existing = await ref.get();
-  if (existing.exists) return { id, existing: true };
-  await ref.create({
-    id,
-    provider: "wacli",
-    status: "queued",
-    type: "text",
-    to,
-    text,
-    conversationId,
-    sourceInboundMessageId: inboundMessageId,
-    createdByUserId: "demac-customer-agent",
-    createdByName: "DEMAC Customer Agent",
-    createdAt: FieldValue.serverTimestamp(),
-    createdAtIso: new Date().toISOString(),
+  const conversationRef = db.collection("communicationConversations").doc(conversationId);
+  let outcome = { queued: false, id, reason: "not-created" };
+
+  await db.runTransaction(async (transaction) => {
+    const [conversationSnapshot, existing] = await Promise.all([
+      transaction.get(conversationRef),
+      transaction.get(ref),
+    ]);
+    if (existing.exists) {
+      outcome = { queued: true, id, existing: true };
+      return;
+    }
+    if (!conversationSnapshot.exists || !shouldRunAgent(conversationSnapshot.data() || {})) {
+      outcome = { queued: false, id, reason: "human-takeover" };
+      return;
+    }
+    const currentConversation = conversationSnapshot.data() || {};
+    const to = cleanText(
+      currentConversation.chatJid
+        || currentConversation.externalChatId
+        || currentConversation.phone
+        || conversation.chatJid
+        || conversation.externalChatId
+        || conversation.phone,
+      300,
+    );
+    if (!to) throw new Error("Customer Agent cannot reply because the conversation has no WhatsApp recipient.");
+    transaction.set(ref, {
+      id,
+      provider: "wacli",
+      status: "queued",
+      type: "text",
+      to,
+      text,
+      conversationId,
+      sourceInboundMessageId: inboundMessageId,
+      createdByUserId: "demac-customer-agent",
+      createdByName: "DEMAC Customer Agent",
+      createdAt: FieldValue.serverTimestamp(),
+      createdAtIso: new Date().toISOString(),
+    });
+    outcome = { queued: true, id, existing: false };
   });
-  return { id, existing: false };
+
+  return outcome;
 }
 
 async function processLatestQueued(conversationId, leaseOwnerId) {
@@ -295,9 +344,15 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
     company: "DEMAC Professional Cooling Solutions",
   });
 
-  // If a newer customer message arrived while the model was working, discard
-  // this now-stale answer. The newer event will be retried/processed under the
-  // same per-conversation lease instead of sending two out-of-context replies.
+  if (result.metadata?.ownershipChanged === true) {
+    await selected.ref.set({
+      status: "skipped_human",
+      discardReason: cleanText(result.metadata?.ownershipCode, 120) || "human-takeover",
+      completedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return { processed: false, reason: "human-takeover-during-agent-turn" };
+  }
+
   const newer = (await pendingQueue(conversationId)).filter((item) => item.messageId !== selected.messageId);
   if (newer.length) {
     const latest = newer[newer.length - 1];
@@ -309,13 +364,22 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
     return { processed: false, reason: "newer-message-arrived", newerMessageId: latest.messageId };
   }
 
-  await queueAgentReply({
+  const reply = await queueAgentReply({
     conversationId,
     conversation,
     inboundMessageId: selected.messageId,
     result,
     provider: selected.provider || "wacli",
   });
+  if (!reply.queued && reply.reason === "human-takeover") {
+    await selected.ref.set({
+      status: "skipped_human",
+      discardReason: "human-takeover-before-outbound-commit",
+      completedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return { processed: false, reason: "human-takeover-before-outbound-commit" };
+  }
+
   await conversationRef.set({
     ...outcomeConversationPatch(result),
     agentLastInboundMessageId: selected.messageId,
@@ -331,7 +395,7 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
   return { processed: true, outcome: result.metadata?.outcome || "reply" };
 }
 
-async function processQueueEvent({ messageId, message }) {
+async function processQueueEvent({ messageId, message, reactivate = false }) {
   if (!message || message.direction !== "inbound") return { ignored: true, reason: "not-inbound" };
   if (!cleanText(message.text || message.mediaCaption || message.reactionEmoji, 4_000)) {
     return { ignored: true, reason: "no-customer-content" };
@@ -339,7 +403,7 @@ async function processQueueEvent({ messageId, message }) {
   if (!automaticReplySupported(message.provider || "wacli")) {
     return { ignored: true, reason: "provider-not-enabled" };
   }
-  const queued = await enqueueInbound({ messageId, message });
+  const queued = await enqueueInbound({ messageId, message, reactivate });
   if (!queued || queued.completed) return { ignored: true, reason: queued?.completed ? "already-completed" : "no-conversation" };
 
   const leaseOwnerId = `${queued.queueId}:${Date.now()}`;
@@ -382,6 +446,40 @@ async function processQueueEvent({ messageId, message }) {
   }
 }
 
+function latestCustomerMessage(conversation = {}) {
+  return [...(Array.isArray(conversation.recentMessages) ? conversation.recentMessages : [])]
+    .reverse()
+    .find((message) => message?.role === "customer" && cleanText(message.text || message.mediaCaption || message.reactionEmoji, 4_000)) || null;
+}
+
+async function reactivateConversation(conversationId, conversation = {}) {
+  if (!shouldRunAgent(conversation)) return { ignored: true, reason: "not-ai-owned" };
+  const latest = latestCustomerMessage(conversation);
+  if (!latest?.id) return { ignored: true, reason: "no-pending-customer-message" };
+
+  const messageRef = db.collection("whatsappMessages").doc(safeDocumentId(latest.id));
+  const snapshot = await messageRef.get();
+  const provider = cleanText(conversation.provider || latest.provider, 40) || "wacli";
+  const message = snapshot.exists
+    ? { id: snapshot.id, ...snapshot.data() }
+    : {
+      id: latest.id,
+      messageId: latest.id,
+      provider,
+      direction: "inbound",
+      chat: cleanText(conversation.chatJid || conversation.externalChatId || conversationId, 300),
+      conversationId,
+      phone: cleanText(conversation.phone, 80),
+      text: cleanText(latest.text || latest.mediaCaption || latest.reactionEmoji, 4_000),
+    };
+
+  return processQueueEvent({
+    messageId: cleanText(message.messageId || message.id || latest.id, 300),
+    message,
+    reactivate: true,
+  });
+}
+
 exports.processCustomerAgentInbound = onDocumentCreated(
   {
     document: "whatsappMessages/{messageId}",
@@ -402,6 +500,25 @@ exports.processCustomerAgentInbound = onDocumentCreated(
   },
 );
 
+exports.processCustomerAgentReactivation = onDocumentUpdated(
+  {
+    document: "communicationConversations/{conversationId}",
+    region: "us-central1",
+    memory: "512MiB",
+    timeoutSeconds: 120,
+    retry: true,
+    secrets: [openAiApiKey],
+  },
+  async (event) => {
+    const before = event.data?.before?.data() || {};
+    const after = event.data?.after?.data() || {};
+    if (before.aiDisposition === "ai_active" || after.aiDisposition !== "ai_active") return;
+    if (after.ownerUserId || after.lockedByUserId) return;
+    await ensureAgentSessionActive(event.params.conversationId, cleanText(after.provider, 40) || "wacli");
+    await reactivateConversation(event.params.conversationId, after);
+  },
+);
+
 module.exports.AGENT_LOCK_COLLECTION = AGENT_LOCK_COLLECTION;
 module.exports.AGENT_QUEUE_COLLECTION = AGENT_QUEUE_COLLECTION;
 module.exports.LEASE_MS = LEASE_MS;
@@ -409,10 +526,13 @@ module.exports.MAX_PROCESSING_ATTEMPTS = MAX_PROCESSING_ATTEMPTS;
 module.exports.automaticReplySupported = automaticReplySupported;
 module.exports.buildRuntimeBody = buildRuntimeBody;
 module.exports.communicationMessageToRuntime = communicationMessageToRuntime;
+module.exports.communicationOwnershipGuard = communicationOwnershipGuard;
 module.exports.conversationIdentity = conversationIdentity;
+module.exports.latestCustomerMessage = latestCustomerMessage;
 module.exports.outboundDocumentId = outboundDocumentId;
 module.exports.outcomeConversationPatch = outcomeConversationPatch;
 module.exports.processQueueEvent = processQueueEvent;
 module.exports.queueDocumentId = queueDocumentId;
+module.exports.reactivateConversation = reactivateConversation;
 module.exports.shouldRunAgent = shouldRunAgent;
 module.exports.whatsappMessageToRuntime = whatsappMessageToRuntime;
