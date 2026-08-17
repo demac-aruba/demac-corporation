@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "functions/bookingAuthority*.js"
+      - "functions/officeBookingAuthority*.js"
       - "functions/commercialSalesAuthority*.js"
       - "functions/demacCustomer*.js"
       - "functions/whatsappCopilotRouter.js"
@@ -15,6 +16,7 @@ on:
     branches: [main]
     paths:
       - "functions/bookingAuthority*.js"
+      - "functions/officeBookingAuthority*.js"
       - "functions/commercialSalesAuthority*.js"
       - "functions/demacCustomer*.js"
       - "functions/whatsappCopilotRouter.js"
@@ -50,11 +52,17 @@ jobs:
       - name: Validate Commercial Sales Authority syntax
         run: node --check commercialSalesAuthority.js
 
+      - name: Validate Office Booking Authority syntax
+        run: node --check officeBookingAuthority.js
+
       - name: Validate Customer Reservation Adapter syntax
         run: node --check demacCustomerReservationTools.js
 
       - name: Test Booking Authority
         run: npm run test:booking-authority
+
+      - name: Test Office Booking Authority
+        run: node --test officeBookingAuthority.test.js
 
       - name: Test Commercial Sales Authority
         run: node --test commercialSalesAuthority.test.js
