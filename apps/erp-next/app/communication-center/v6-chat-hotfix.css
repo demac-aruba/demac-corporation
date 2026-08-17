@@ -1,0 +1,22 @@
+.communication-v4 [class*="messages"] {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  padding: 22px 24px !important;
+  gap: 11px !important;
+  background-color: var(--cc-chat) !important;
+  background-image:
+    radial-gradient(circle at 12px 12px, rgba(92, 112, 103, 0.055) 1px, transparent 1.2px),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.42) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, 0.42) 75%, rgba(255, 255, 255, 0.42)) !important;
+  background-size: 26px 26px, 52px 52px !important;
+}
+
+@media (max-width: 1500px) {
+  .communication-v4 [class*="messages"] {
+    padding: 18px !important;
+  }
+}
