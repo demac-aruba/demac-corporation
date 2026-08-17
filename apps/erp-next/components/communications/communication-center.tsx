@@ -33,12 +33,14 @@ import { CommunicationAvatar, WhatsAppMessageContent, conversationMessagePreview
 import { useVoiceNoteRecorder } from './use-voice-note-recorder';
 import styles from './communication-center.module.css';
 import mediaStyles from './communication-media.module.css';
+import workspaceStyles from './communication-center-workspace.module.css';
 
 type Mode = 'communications' | 'ai' | 'escalations';
 type InboxScope = 'pending' | 'mine' | 'unassigned' | 'team';
 type VisualState = 'overdue' | 'needs_reply' | 'assigned' | 'unassigned' | 'escalated' | 'resolved';
 type ContextTab = 'overview' | 'properties' | 'equipment' | 'actions';
 type StagedAttachment = { file: File; kind: WhatsAppMediaKind };
+type PendingOptimisticMessage = { message: LiveConversationMessage; objectUrl?: string };
 
 const queueLabels: Array<{ value: 'all' | Queue; label: string }> = [
   { value: 'all', label: 'All queues' },
@@ -123,6 +125,37 @@ function visualState(conversation: LiveConversation): { state: VisualState; labe
   return { state: 'unassigned', label: 'Unassigned' };
 }
 
+function pendingMatchesServer(local: LiveConversationMessage, server: LiveConversationMessage) {
+  if (server.role !== 'operator') return false;
+  const localText = String(local.text || local.mediaCaption || '').trim();
+  const serverText = String(server.text || server.mediaCaption || '').trim();
+  if (localText !== serverText) return false;
+  if (String(local.mediaType || '') !== String(server.mediaType || '')) return false;
+  if (local.mediaFileName && server.mediaFileName && local.mediaFileName !== server.mediaFileName) return false;
+  const localAt = Date.parse(local.at || '');
+  const serverAt = Date.parse(server.at || '');
+  return Number.isFinite(localAt) && Number.isFinite(serverAt) && Math.abs(localAt - serverAt) <= 120_000;
+}
+
+function inboxWorkflowState(conversation: LiveConversation): { state: VisualState; label: string } {
+  if (conversation.status === 'escalated') return { state: 'escalated', label: 'Escalated' };
+  if (['resolved', 'closed'].includes(conversation.status)) return { state: 'resolved', label: 'Completed' };
+  if (conversation.aiDisposition === 'ai_active') return { state: 'assigned', label: 'Maya · AI' };
+  if (needsDemacReply(conversation)) return visualState(conversation);
+  if (conversation.owner) return { state: 'assigned', label: `Assigned to ${conversation.owner.split(/\s+/)[0]}` };
+  return { state: 'unassigned', label: 'Unassigned' };
+}
+
+function pipelineWorkflowState(conversation: LiveConversation): { label: string; tone: 'normal' | 'warning' | 'danger' | 'info' } {
+  if (conversation.status === 'escalated') return { label: 'Escalated', tone: 'danger' };
+  if (conversation.status === 'waiting_customer') return { label: 'Waiting customer', tone: 'normal' };
+  if (conversation.status === 'appointment_pending') return { label: 'Booking in progress', tone: 'info' };
+  if (conversation.status === 'estimate_pending') return { label: 'Estimate pending', tone: 'info' };
+  if (conversation.status === 'payment_pending') return { label: 'Payment pending', tone: 'info' };
+  if (needsDemacReply(conversation)) return { label: 'Needs reply', tone: 'warning' };
+  return { label: 'In progress', tone: 'normal' };
+}
+
 function statusLabel(status: ConversationStatus) {
   return status.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
@@ -167,7 +200,7 @@ function attachmentIcon(type?: string | null) {
 function customerActionUrl(path: string, customer: CommunicationCustomerContext | null, selected: LiveConversation | null, extra: Record<string, string> = {}) {
   const query = new URLSearchParams({ source: 'communication-center', ...extra });
   if (customer?.id) query.set('customerId', customer.id);
-  if (customer?.properties[0]?.id) query.set('propertyId', customer.properties[0].id);
+  if (customer?.properties[0]?.id && !query.has('propertyId')) query.set('propertyId', customer.properties[0].id);
   if (selected?.id) query.set('conversationId', selected.id);
   if (selected?.phone) query.set('phone', selected.phone);
   return `${path}?${query.toString()}`;
@@ -199,16 +232,41 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
   const [customerContext, setCustomerContext] = useState<CommunicationCustomerContext | null>(null);
   const [contextLoading, setContextLoading] = useState(false);
   const [contextTab, setContextTab] = useState<ContextTab>('overview');
+  const [propertyPreviewId, setPropertyPreviewId] = useState('');
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingMessagesRef = useRef<Map<string, PendingOptimisticMessage[]>>(new Map());
+  const localObjectUrlsRef = useRef<Map<string, string>>(new Map());
 
   const refresh = useCallback(async () => {
     const workspace = await loadCommunicationWorkspace();
-    setConversations(workspace.conversations);
+    const conversationsWithPending = workspace.conversations.map((conversation) => {
+      const pending = pendingMessagesRef.current.get(conversation.id) ?? [];
+      if (!pending.length) return conversation;
+      const matchedServerIndexes = new Set<number>();
+      const remaining = pending.filter((entry) => {
+        const matchIndex = conversation.messages.findIndex((serverMessage, index) => !matchedServerIndexes.has(index) && pendingMatchesServer(entry.message, serverMessage));
+        if (matchIndex < 0) return true;
+        matchedServerIndexes.add(matchIndex);
+        const objectUrl = localObjectUrlsRef.current.get(entry.message.id);
+        if (objectUrl) {
+          URL.revokeObjectURL(objectUrl);
+          localObjectUrlsRef.current.delete(entry.message.id);
+        }
+        return false;
+      });
+      if (remaining.length) pendingMessagesRef.current.set(conversation.id, remaining);
+      else pendingMessagesRef.current.delete(conversation.id);
+      const messages = [...conversation.messages, ...remaining.map((entry) => entry.message)]
+        .sort((left, right) => Date.parse(left.at || '') - Date.parse(right.at || ''));
+      const latest = messages[messages.length - 1];
+      return latest ? { ...conversation, messages, lastActivityAt: latest.at, lastMessageText: conversationMessagePreview(latest) } : conversation;
+    });
+    setConversations(conversationsWithPending);
     setOperators(workspace.operators);
     setProvider(workspace.provider);
     setSelectedId((current) => current || workspace.conversations[0]?.id || '');
-    return workspace;
+    return { ...workspace, conversations: conversationsWithPending };
   }, []);
 
   useEffect(() => {
@@ -261,12 +319,17 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
   const unassignedCount = conversations.filter((conversation) => conversation.aiDisposition !== 'ai_active' && !conversation.ownerUserId && !['resolved', 'closed'].includes(conversation.status)).length;
   const escalatedCount = conversations.filter((conversation) => conversation.status === 'escalated').length;
   const onlineCount = operators.filter((operator) => operator.presence !== 'offline').length;
+  const operatorWorkspace = standalone && mode === 'communications';
+  const myPipeline = useMemo(() => principal ? conversations
+    .filter((conversation) => conversation.ownerUserId === principal.userId && !['resolved', 'closed'].includes(conversation.status))
+    .sort((left, right) => Date.parse(right.lastActivityAt || '1970-01-01') - Date.parse(left.lastActivityAt || '1970-01-01')) : [], [conversations, principal]);
 
   const visible = useMemo(() => conversations
     .filter((conversation) => queue === 'all' || conversation.queue === queue)
     .filter((conversation) => mode !== 'escalations' || conversation.status === 'escalated')
     .filter((conversation) => {
       if (!principal) return false;
+      if (operatorWorkspace) return true;
       if (scope === 'pending') return needsDemacReply(conversation);
       if (scope === 'mine') return conversation.ownerUserId === principal.userId;
       if (scope === 'unassigned') return conversation.aiDisposition !== 'ai_active' && !conversation.ownerUserId;
@@ -276,22 +339,24 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
       if (!normalizedSearch) return true;
       const haystack = [conversation.customer, conversation.phone, conversation.property, conversation.queue, conversation.status, conversation.owner, lastMessage(conversation)].filter(Boolean).join(' ').toLowerCase();
       return haystack.includes(normalizedSearch);
-    }), [conversations, queue, mode, principal, scope, normalizedSearch]);
+    }), [conversations, queue, mode, principal, scope, normalizedSearch, operatorWorkspace]);
 
+  const selectionPool = useMemo(() => operatorWorkspace ? conversations : visible, [operatorWorkspace, conversations, visible]);
   useEffect(() => {
-    if (visible.some((conversation) => conversation.id === selectedId)) return;
-    const fallback = visible[0];
+    if (selectionPool.some((conversation) => conversation.id === selectedId)) return;
+    const fallback = visible[0] ?? selectionPool[0];
     setSelectedId(fallback?.id ?? '');
     setAssignmentTarget(fallback?.ownerUserId || '');
-  }, [visible, selectedId]);
+  }, [visible, selectionPool, selectedId]);
 
-  const selected = visible.find((conversation) => conversation.id === selectedId) ?? visible[0] ?? null;
+  const selected = selectionPool.find((conversation) => conversation.id === selectedId) ?? visible[0] ?? selectionPool[0] ?? null;
   const selectedAiActive = Boolean(selected && selected.aiDisposition === 'ai_active');
   const selectedOwnedByMe = Boolean(selected && principal && selected.ownerUserId === principal.userId);
   const selectedUnassigned = Boolean(selected && !selected.ownerUserId && !selectedAiActive);
   const selectedOwnedByColleague = Boolean(selected && selected.ownerUserId && principal && selected.ownerUserId !== principal.userId);
   const canReadBody = Boolean(selected && (manager || selectedAiActive || selectedOwnedByMe || selectedUnassigned));
   const canReply = Boolean(selected && principal && selectedOwnedByMe && !selectedAiActive);
+  const canComposeCustomer = Boolean(selected && principal && !selectedOwnedByColleague && (selectedOwnedByMe || selectedAiActive || selectedUnassigned));
   const canManageWorkflow = Boolean(selected && !selectedAiActive && (manager || selectedOwnedByMe));
   const canReturnToAi = Boolean(selected && !selectedAiActive && principal && (manager || selectedOwnedByMe));
 
@@ -299,6 +364,7 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
     let cancelled = false;
     setCustomerContext(null);
     setContextTab('overview');
+    setPropertyPreviewId('');
     setAttachment(null);
     setDragActive(false);
     if (!selected) return () => { cancelled = true; };
@@ -399,8 +465,8 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
       setError('Attachments are for customer WhatsApp replies. Switch back to Reply before attaching a file.');
       return;
     }
-    if (!canReply) {
-      setError('Take ownership of this conversation before attaching a file.');
+    if (!canComposeCustomer) {
+      setError(selectedOwnedByColleague ? 'This conversation is assigned to another operator. Reassign it before attaching a file.' : 'Replying will assign this conversation to you before the file is sent.');
       return;
     }
     try {
@@ -410,7 +476,7 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
     } catch (attachmentError) {
       setError(attachmentError instanceof Error ? attachmentError.message : String(attachmentError));
     }
-  }, [canReply, internal]);
+  }, [canComposeCustomer, internal, selectedOwnedByColleague]);
 
   const {
     recording: voiceRecording,
@@ -426,14 +492,18 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
   });
 
   useEffect(() => () => cancelVoiceNote(), [selected?.id, cancelVoiceNote]);
+  useEffect(() => () => {
+    for (const objectUrl of localObjectUrlsRef.current.values()) URL.revokeObjectURL(objectUrl);
+    localObjectUrlsRef.current.clear();
+  }, []);
 
   const send = async () => {
     const text = draft.trim();
     if (!selected || !principal) return;
     if (internal && !text) return;
     if (!internal && !text && !attachment) return;
-    if (!internal && !canReply) {
-      setError('Take ownership of this conversation before replying so the Customer Agent and an operator cannot answer the same customer.');
+    if (!internal && !canComposeCustomer) {
+      setError(selectedOwnedByColleague ? 'This conversation is assigned to another operator. Reassign or take over before replying.' : 'This conversation cannot be replied to right now.');
       return;
     }
     if (voiceRecording) {
@@ -441,39 +511,72 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
       return;
     }
 
-    setBusy(true);
-    setError('');
-    try {
-      let queuedMedia: Awaited<ReturnType<typeof queueWhatsAppMedia>> | null = null;
-      if (internal) await saveInternalCommunicationNote(selected.id, text, principal);
-      else if (attachment) queuedMedia = await queueWhatsAppMedia(selected, attachment.file, text, principal, provider, attachment.kind);
-      else await queueWhatsAppText(selected, text, principal, provider);
+    const conversationSnapshot = selected;
+    const attachmentSnapshot = attachment;
+    let optimisticId = '';
 
-      const mediaKind = attachment ? queuedMedia?.media.kind || attachment.kind : null;
+    if (!internal) {
+      optimisticId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const objectUrl = attachmentSnapshot ? URL.createObjectURL(attachmentSnapshot.file) : '';
       const optimistic: LiveConversationMessage = {
-        id: `local-${Date.now()}`,
+        id: optimisticId,
         at: new Date().toISOString(),
-        author: internal ? `${principal.displayName} · internal` : principal.displayName,
-        role: internal ? 'internal_note' : 'operator',
+        author: principal.displayName,
+        role: 'operator',
         text,
-        channel: internal ? 'internal' : 'whatsapp',
-        status: internal ? null : 'queued',
-        provider: internal ? undefined : provider,
-        mediaType: mediaKind,
-        mediaCaption: attachment && text ? text : null,
-        mediaFileName: attachment?.file.name || null,
-        mediaMimeType: attachment?.file.type || null,
-        mediaSize: attachment?.file.size || null,
-        mediaUrl: queuedMedia?.media.url || null,
+        channel: 'whatsapp',
+        status: 'queued',
+        provider,
+        mediaType: attachmentSnapshot?.kind || null,
+        mediaCaption: attachmentSnapshot && text ? text : null,
+        mediaFileName: attachmentSnapshot?.file.name || null,
+        mediaMimeType: attachmentSnapshot?.file.type || null,
+        mediaSize: attachmentSnapshot?.file.size || null,
+        mediaUrl: objectUrl || null,
       };
-      const preview = text || attachmentPreviewLabel(mediaKind);
-      setConversations((current) => current.map((conversation) => conversation.id === selected.id
-        ? { ...conversation, messages: [...conversation.messages, optimistic], lastActivityAt: optimistic.at, lastMessageText: preview }
+      const currentPending = pendingMessagesRef.current.get(conversationSnapshot.id) ?? [];
+      pendingMessagesRef.current.set(conversationSnapshot.id, [...currentPending, { message: optimistic, objectUrl: objectUrl || undefined }]);
+      if (objectUrl) localObjectUrlsRef.current.set(optimisticId, objectUrl);
+      const preview = text || attachmentPreviewLabel(attachmentSnapshot?.kind);
+      setConversations((current) => current.map((conversation) => conversation.id === conversationSnapshot.id
+        ? {
+            ...conversation,
+            owner: principal.displayName,
+            ownerUserId: principal.userId,
+            aiDisposition: 'human_active',
+            status: 'assigned',
+            unread: 0,
+            messages: [...conversation.messages, optimistic],
+            lastActivityAt: optimistic.at,
+            lastMessageText: preview,
+          }
         : conversation));
       setDraft('');
       setAttachment(null);
-      if (!internal) setScope('mine');
+    }
+
+    setBusy(true);
+    setError('');
+    try {
+      if (internal) {
+        await saveInternalCommunicationNote(conversationSnapshot.id, text, principal);
+        setDraft('');
+      } else {
+        if (!selectedOwnedByMe) await claimConversation(conversationSnapshot.id, principal);
+        if (attachmentSnapshot) await queueWhatsAppMedia(conversationSnapshot, attachmentSnapshot.file, text, principal, provider, attachmentSnapshot.kind);
+        else await queueWhatsAppText(conversationSnapshot, text, principal, provider);
+        if (!operatorWorkspace) setScope('mine');
+        await refresh();
+      }
     } catch (sendError) {
+      if (optimisticId) {
+        const pending = pendingMessagesRef.current.get(conversationSnapshot.id) ?? [];
+        pendingMessagesRef.current.set(conversationSnapshot.id, pending.map((entry) => entry.message.id === optimisticId ? { ...entry, message: { ...entry.message, status: 'failed' } } : entry));
+        setConversations((current) => current.map((conversation) => conversation.id === conversationSnapshot.id
+          ? { ...conversation, messages: conversation.messages.map((message) => message.id === optimisticId ? { ...message, status: 'failed' } : message) }
+          : conversation));
+        refresh().catch(() => undefined);
+      }
       setError(sendError instanceof Error ? sendError.message : String(sendError));
     } finally {
       setBusy(false);
@@ -490,8 +593,9 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
   const detailsVisible = standalone || showDetails;
   const canSubmit = internal
     ? Boolean(canReadBody && !busy && draft.trim())
-    : Boolean(canReply && !busy && !voiceRecording && (draft.trim() || attachment));
+    : Boolean(canComposeCustomer && !busy && !voiceRecording && (draft.trim() || attachment));
   const attachmentKind = attachment?.kind || null;
+  const propertyPreview = customerContext?.properties.find((property) => property.id === propertyPreviewId) ?? null;
 
   return <section className={`${styles.page} ${standalone ? styles.standalone : ''}`}>
     <div className={styles.topLine}>
@@ -517,60 +621,89 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
     {provider === 'wacli' && mode === 'communications' ? <div className={styles.testNotice}><strong>TEST CONNECTION</strong><span>Personal linked WhatsApp device. Production customer traffic remains on the official channel until cutover.</span></div> : null}
     {error ? <div className={styles.notice}><strong>Communication Center</strong><span>{error}</span></div> : null}
 
-    <div className={`${styles.workspace} ${detailsVisible ? styles.withDetails : ''}`}>
+    <div className={`${styles.workspace} ${detailsVisible ? styles.withDetails : ''} ${operatorWorkspace ? workspaceStyles.operatorWorkspace : ''}`}>
       <aside className={`${styles.panel} ${styles.inboxPanel}`}>
         <div className={styles.inboxHeader}><div><strong>WhatsApp Inbox</strong><span>{loading ? 'Loading conversations…' : `${visible.length} conversations shown`}</span></div><span className={styles.inboxCount}>{conversations.length}</span></div>
         <div className={styles.inboxTools}>
           <label className={styles.inboxSearch}><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search conversations" aria-label="Search conversations" />{search ? <button type="button" onClick={() => setSearch('')} aria-label="Clear conversation search">×</button> : null}</label>
           <select className={styles.queueSelect} value={queue} onChange={(event) => setQueue(event.target.value as 'all' | Queue)} aria-label="Filter by queue">{queueLabels.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
         </div>
-        <div className={styles.scopeTabs}>
+        {operatorWorkspace ? <div className={workspaceStyles.inboxGeneralLabel}>All incoming conversations</div> : <div className={styles.scopeTabs}>
           <button type="button" className={scope === 'pending' ? styles.active : ''} onClick={() => setScope('pending')}><span>Needs reply</span><b>{pendingCount}</b></button>
           <button type="button" className={scope === 'mine' ? styles.active : ''} onClick={() => setScope('mine')}><span>Mine</span><b>{myCount}</b></button>
           <button type="button" className={scope === 'unassigned' ? styles.active : ''} onClick={() => setScope('unassigned')}><span>Unassigned</span><b>{unassignedCount}</b></button>
           <button type="button" className={scope === 'team' ? styles.active : ''} onClick={() => setScope('team')}><span>{manager ? 'All' : 'Team'}</span><b>{conversations.length}</b></button>
-        </div>
+        </div>}
         <div className={styles.conversationList}>
           {!loading && visible.length === 0 ? <div className={styles.empty}><strong>No conversations found</strong><span>Try another inbox view, queue or search.</span></div> : null}
           {visible.map((conversation) => {
-            const state = visualState(conversation);
+            const state = operatorWorkspace ? inboxWorkflowState(conversation) : visualState(conversation);
             const owner = conversation.aiDisposition === 'ai_active' ? 'DEMAC Customer Agent' : conversation.owner ?? 'No operator';
             return <button key={conversation.id} type="button" data-state={state.state} className={`${styles.conversationRow} ${selected?.id === conversation.id ? styles.selectedRow : ''}`} onClick={() => selectConversation(conversation)}>
               <CommunicationAvatar className={styles.avatar} name={conversation.customer} url={conversation.avatarUrl} />
               <span className={styles.rowBody}>
                 <span className={styles.rowTop}><strong>{conversation.customer}</strong><time>{relativeTime(conversation.lastActivityAt)}</time></span>
                 <span className={styles.rowPreview}>{lastMessage(conversation)}</span>
-                <span className={styles.rowMeta}><em className={styles.statusChip} data-state={state.state}>{state.label}</em><em>{owner}</em><em>{conversation.queue}</em></span>
+              {operatorWorkspace ? <span className={`${styles.rowMeta} ${workspaceStyles.compactInboxMeta}`}><em className={styles.statusChip} data-state={state.state}>{state.label}</em></span> : <span className={styles.rowMeta}><em className={styles.statusChip} data-state={state.state}>{state.label}</em><em>{owner}</em><em>{conversation.queue}</em></span>}
               </span>
               {conversation.unread ? <b className={styles.unreadBadge}>{conversation.unread}</b> : null}
             </button>;
           })}
         </div>
-      </aside>
+    </aside>
 
-      <main className={`${styles.panel} ${styles.chat}`}>
+    {operatorWorkspace ? <aside className={workspaceStyles.pipelinePanel}>
+      <div className={workspaceStyles.pipelineHeader}><div><strong>My Pipeline <b>{myPipeline.length}</b></strong><span>Assigned to me</span></div><button className={workspaceStyles.pipelineRefresh} type="button" onClick={() => refresh().catch(() => undefined)} aria-label="Refresh my pipeline">↻</button></div>
+      <div className={workspaceStyles.pipelineList}>
+        {myPipeline.length ? myPipeline.map((conversation) => {
+          const pipelineState = pipelineWorkflowState(conversation);
+          return <button key={conversation.id} type="button" className={`${workspaceStyles.pipelineRow} ${selected?.id === conversation.id ? workspaceStyles.pipelineRowActive : ''}`} onClick={() => selectConversation(conversation)}>
+            <CommunicationAvatar className={workspaceStyles.pipelineAvatar} name={conversation.customer} url={conversation.avatarUrl} />
+            <span className={workspaceStyles.pipelineBody}><span className={workspaceStyles.pipelineTop}><strong>{conversation.customer}</strong><time>{relativeTime(conversation.lastActivityAt)}</time></span><em className={workspaceStyles.pipelineStatus} data-tone={pipelineState.tone}>{pipelineState.label}</em></span>
+          </button>;
+        }) : <div className={workspaceStyles.pipelineEmpty}>Your active conversations will appear here automatically when you reply.</div>}
+      </div>
+      <div className={workspaceStyles.pipelineFooter}><span>Active workload</span><b>{myPipeline.length}</b></div>
+    </aside> : null}
+
+    <main className={`${styles.panel} ${styles.chat} ${operatorWorkspace ? workspaceStyles.chatWide : ''}`}>
         {!selected ? <div className={styles.emptyLarge}><span className={styles.emptyIcon}>WA</span><strong>{loading ? 'Loading Communication Center…' : 'No conversation selected'}</strong><p>Choose a conversation from the inbox to start working.</p></div> : <>
           <div className={styles.chatHeader}>
             <div className={styles.chatIdentity}><CommunicationAvatar className={styles.chatAvatar} name={selected.customer} url={selected.avatarUrl} /><div><h2>{selected.customer}</h2><p>{selected.phone || selected.chatJid || 'WhatsApp identity pending'}{selected.property ? ` · ${selected.property}` : ''}</p></div></div>
-            <div className={styles.chatHeaderActions}>
-              <span className={styles.ownerLabel}>{selectedAiActive ? 'DEMAC Customer Agent active' : selected.owner ? `Assigned to ${selected.owner}` : 'Human queue · unassigned'}</span>
+          <div className={styles.chatHeaderActions}>
+            <span className={styles.ownerLabel}>{selectedAiActive ? 'Maya · AI' : selected.owner ? `Assigned to ${selected.owner}` : 'Unassigned'}</span>
+            {operatorWorkspace ? <details className={workspaceStyles.actionMenu}>
+              <summary aria-label="Conversation actions">•••</summary>
+              <div className={workspaceStyles.actionMenuPanel}>
+                <label>Status<select value={selected.status} onChange={(event) => changeStatus(event.target.value as ConversationStatus)} disabled={busy || !canManageWorkflow}>{statusOptions.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select></label>
+                {manager ? <label>Assign operator<select value={assignmentTarget || selected.ownerUserId || ''} onChange={(event) => setAssignmentTarget(event.target.value)}><option value="">Select operator</option>{operators.map((operator) => <option key={operator.userId} value={operator.userId}>{operator.name} · {operator.presence.replaceAll('_', ' ')}</option>)}</select></label> : null}
+                <div className={workspaceStyles.actionMenuButtons}>
+                  {manager ? <button type="button" className={workspaceStyles.brand} onClick={reassign} disabled={busy || !assignmentTarget}>Assign</button> : null}
+                  {selectedOwnedByColleague ? <button type="button" className={workspaceStyles.brand} onClick={takeOver} disabled={busy}>Take over</button> : null}
+                  {selectedOwnedByMe && !selectedAiActive ? <button type="button" className={workspaceStyles.brand} onClick={returnToAi} disabled={busy || !canReturnToAi}>Return to Maya</button> : null}
+                  <button type="button" className={workspaceStyles.danger} onClick={() => changeStatus('escalated')} disabled={busy || !canManageWorkflow}>Escalate</button>
+                  <button type="button" className={workspaceStyles.success} onClick={() => changeStatus('resolved')} disabled={busy || !canManageWorkflow}>Complete</button>
+                </div>
+              </div>
+            </details> : <>
               {selectedOwnedByMe && !selectedAiActive
                 ? <button type="button" className={styles.takeover} onClick={returnToAi} disabled={busy || !canReturnToAi}>Return to AI</button>
                 : <button type="button" className={styles.takeover} onClick={takeOver} disabled={busy || selectedOwnedByMe}>{selectedAiActive ? 'Take over from AI' : selectedOwnedByColleague ? 'Take over' : 'Take conversation'}</button>}
               {!standalone ? <button type="button" className={styles.detailsButton} onClick={() => setShowDetails((current) => !current)}>{showDetails ? 'Hide details' : 'Customer details'}</button> : null}
-            </div>
+            </>}
+          </div>
           </div>
 
-          <div className={styles.workflowBar}>
-            <div className={styles.statusPills}><span className={styles.pill}>{statusLabel(selected.status)}</span><span className={styles.pill}>{selected.queue}</span><span className={styles.pill}>{selectedAiActive ? 'AI ownership' : 'Human ownership'}</span>{selected.customerTyping ? <span className={`${styles.pill} ${styles.typingPill}`}>typing…</span> : null}{selected.vip ? <span className={`${styles.pill} ${styles.vipPill}`}>VIP</span> : null}</div>
-            <div className={styles.controls}>
-              <select value={selected.status} onChange={(event) => changeStatus(event.target.value as ConversationStatus)} disabled={busy || !canManageWorkflow} aria-label="Conversation status">{statusOptions.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select>
-              {manager ? <><select value={assignmentTarget || selected.ownerUserId || ''} onChange={(event) => setAssignmentTarget(event.target.value)} aria-label="Assign conversation"><option value="">Select operator</option>{operators.map((operator) => <option key={operator.userId} value={operator.userId}>{operator.name} · {operator.presence.replaceAll('_', ' ')}</option>)}</select><button type="button" onClick={reassign} disabled={busy || !assignmentTarget}>Assign</button></> : null}
-              <button type="button" className={styles.escalateButton} onClick={() => changeStatus('escalated')} disabled={busy || !canManageWorkflow}>Escalate</button><button type="button" className={styles.resolveButton} onClick={() => changeStatus('resolved')} disabled={busy || !canManageWorkflow}>Resolve</button>
-            </div>
+        {operatorWorkspace ? <div className={workspaceStyles.assignmentHint} data-state={selectedOwnedByColleague ? 'blocked' : 'ready'}><b>{selectedOwnedByColleague ? '!' : '✓'}</b><span>{selectedOwnedByColleague ? `Assigned to ${selected.owner}. Reassign or take over before replying.` : selectedOwnedByMe ? 'This conversation is assigned to you. Replying will keep it assigned.' : selectedAiActive ? 'Replying assigns this conversation to you and pauses Maya for this chat.' : 'Replying assigns this conversation to you automatically.'}</span></div> : <div className={styles.workflowBar}>
+          <div className={styles.statusPills}><span className={styles.pill}>{statusLabel(selected.status)}</span><span className={styles.pill}>{selected.queue}</span><span className={styles.pill}>{selectedAiActive ? 'AI ownership' : 'Human ownership'}</span>{selected.customerTyping ? <span className={`${styles.pill} ${styles.typingPill}`}>typing…</span> : null}{selected.vip ? <span className={`${styles.pill} ${styles.vipPill}`}>VIP</span> : null}</div>
+          <div className={styles.controls}>
+            <select value={selected.status} onChange={(event) => changeStatus(event.target.value as ConversationStatus)} disabled={busy || !canManageWorkflow} aria-label="Conversation status">{statusOptions.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select>
+            {manager ? <><select value={assignmentTarget || selected.ownerUserId || ''} onChange={(event) => setAssignmentTarget(event.target.value)} aria-label="Assign conversation"><option value="">Select operator</option>{operators.map((operator) => <option key={operator.userId} value={operator.userId}>{operator.name} · {operator.presence.replaceAll('_', ' ')}</option>)}</select><button type="button" onClick={reassign} disabled={busy || !assignmentTarget}>Assign</button></> : null}
+            <button type="button" className={styles.escalateButton} onClick={() => changeStatus('escalated')} disabled={busy || !canManageWorkflow}>Escalate</button><button type="button" className={styles.resolveButton} onClick={() => changeStatus('resolved')} disabled={busy || !canManageWorkflow}>Resolve</button>
           </div>
+        </div>}
 
-          <div className={styles.messages}>
+        <div className={`${styles.messages} ${operatorWorkspace ? workspaceStyles.expandedMessages : ''}`}>
             {!canReadBody ? <article className={`${styles.message} ${styles.system}`}><span className={styles.messageAuthor}>Team ownership</span><p>This conversation is being handled by {selected.owner ?? 'another operator'}. Take ownership before working in the chat.</p></article> : selected.messages.length ? selected.messages.map((message) => <article key={message.id} className={`${styles.message} ${styles[message.role]}`}>
               <div className={styles.messageHeader}><span className={styles.messageAuthor}>{messageAuthorLabel(message, selected.customer)}</span></div>
               <WhatsAppMessageContent message={message} />
@@ -588,8 +721,8 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
             </div> : null}
             <div
               className={`${styles.composerBox} ${mediaStyles.mediaComposerBox} ${dragActive ? mediaStyles.dropActive : ''}`}
-              onDragEnter={(event) => { event.preventDefault(); if (!internal && canReply && !busy && !voiceRecording) setDragActive(true); }}
-              onDragOver={(event) => { event.preventDefault(); if (!internal && canReply && !busy && !voiceRecording) { event.dataTransfer.dropEffect = 'copy'; setDragActive(true); } }}
+              onDragEnter={(event) => { event.preventDefault(); if (!internal && canComposeCustomer && !busy && !voiceRecording) setDragActive(true); }}
+              onDragOver={(event) => { event.preventDefault(); if (!internal && canComposeCustomer && !busy && !voiceRecording) { event.dataTransfer.dropEffect = 'copy'; setDragActive(true); } }}
               onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragActive(false); }}
               onDrop={(event) => {
                 event.preventDefault();
@@ -601,7 +734,7 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
             >
               <div className={mediaStyles.mediaTools}>
                 <input ref={fileInputRef} type="file" hidden accept="image/*,audio/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt,.zip" onChange={(event) => { stageAttachment(event.target.files?.[0] || null); event.currentTarget.value = ''; }} />
-                <button type="button" className={mediaStyles.mediaButton} onClick={() => fileInputRef.current?.click()} disabled={busy || internal || !canReply || voiceRecording} title={canReply ? 'Attach photo, audio, video or document' : 'Take ownership before attaching a file'} aria-label="Attach file">＋</button>
+                <button type="button" className={mediaStyles.mediaButton} onClick={() => fileInputRef.current?.click()} disabled={busy || internal || !canComposeCustomer || voiceRecording} title={canComposeCustomer ? 'Attach photo, audio, video or document' : selectedOwnedByColleague ? 'Assigned to another operator' : 'Replying will assign this conversation to you'} aria-label="Attach file">＋</button>
                 <button
                   type="button"
                   className={`${mediaStyles.mediaButton} ${voiceRecording ? mediaStyles.recordingButton : ''}`}
@@ -613,12 +746,12 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
                       void startVoiceNote();
                     }
                   }}
-                  disabled={busy || internal || !canReply || !voiceSupported}
-                  title={!voiceSupported ? 'Voice-note recording is not supported by this browser' : voiceRecording ? 'Stop voice-note recording' : canReply ? 'Record voice note' : 'Take ownership before recording a voice note'}
+                  disabled={busy || internal || !canComposeCustomer || !voiceSupported}
+                  title={!voiceSupported ? 'Voice-note recording is not supported by this browser' : voiceRecording ? 'Stop voice-note recording' : canComposeCustomer ? 'Record voice note' : selectedOwnedByColleague ? 'Assigned to another operator' : 'Replying will assign this conversation to you'}
                   aria-label={voiceRecording ? 'Stop voice-note recording' : 'Record voice note'}
                 >{voiceRecording ? '■' : '●'}</button>
               </div>
-              <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (canSubmit) void send(); } }} disabled={!canReadBody || busy} placeholder={internal ? 'Write an internal note…' : voiceRecording ? `Recording voice note ${formatRecordingTime(voiceSeconds)}… click stop when finished` : canReply ? attachment ? 'Add a caption or press Send…' : 'Type a message or drop a file here…' : selectedAiActive ? 'Take over from AI before replying…' : 'Take ownership before replying…'} />
+              <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (canSubmit) void send(); } }} disabled={!canReadBody || busy} placeholder={internal ? 'Write an internal note…' : voiceRecording ? `Recording voice note ${formatRecordingTime(voiceSeconds)}… click stop when finished` : canComposeCustomer ? attachment ? 'Add a caption or press Send…' : selectedOwnedByMe ? 'Type a message or drop a file here…' : 'Type a reply to assign this conversation to you…' : selectedOwnedByColleague ? 'Assigned to another operator…' : 'Reply unavailable…'} />
               <button type="button" className={styles.sendButton} onClick={send} disabled={!canSubmit}>{busy ? attachment && !internal ? 'Uploading…' : 'Sending…' : internal ? 'Save note' : 'Send'}</button>
             </div>
             <div className={styles.composerHint}><span>{voiceRecording ? <span className={mediaStyles.recordingHint}>Recording {formatRecordingTime(voiceSeconds)} · click ■ to stop</span> : attachment ? <span className={mediaStyles.attachmentHint}>Attachment ready · Enter to send</span> : 'Enter to send · Shift+Enter for new line'}</span><span>{internal ? 'Internal collaboration' : 'WhatsApp'}</span></div>
@@ -626,13 +759,13 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
         </>}
       </main>
 
-      {detailsVisible ? <aside className={`${styles.panel} ${styles.contextPanel}`}>
+    {detailsVisible ? <aside className={`${styles.panel} ${styles.contextPanel} ${operatorWorkspace ? workspaceStyles.customer360 : ''}`}>
         <div className={styles.contextHeader}><div><strong>Customer 360</strong><span>CRM & operational context</span></div>{selected ? <span className={styles.contextChannel}>WhatsApp</span> : null}</div>
         {selected ? <div className={styles.context}>
-          <section className={styles.customerCard}><CommunicationAvatar className={styles.largeAvatar} name={customerContext?.displayName || selected.customer} url={selected.avatarUrl} /><div><strong>{customerContext?.displayName || selected.customer}</strong><p>{customerContext?.phone || selected.phone || selected.chatJid || 'Phone not resolved'}</p>{customerContext?.email ? <p>{customerContext.email}</p> : null}<small>{contextLoading ? 'Matching CRM…' : customerContext ? 'Matched CRM customer' : 'WhatsApp contact · not linked to CRM'}</small></div></section>
+          <section className={styles.customerCard}><CommunicationAvatar className={styles.largeAvatar} name={customerContext?.displayName || selected.customer} url={customerContext?.avatarUrl || selected.avatarUrl} /><div><strong>{customerContext?.displayName || selected.customer}</strong><p>{customerContext?.phone || selected.phone || selected.chatJid || 'Phone not resolved'}</p>{customerContext?.email ? <p>{customerContext.email}</p> : null}<small>{contextLoading ? 'Matching CRM…' : customerContext ? 'Matched CRM customer' : 'WhatsApp contact · not linked to CRM'}</small></div></section>
 
           <nav className={styles.contextTabs} aria-label="Customer context sections">
-            {(['overview', 'properties', 'equipment', 'actions'] as ContextTab[]).map((tab) => <button key={tab} type="button" className={contextTab === tab ? styles.contextTabActive : ''} onClick={() => setContextTab(tab)}>{tab === 'overview' ? 'Info' : tab === 'properties' ? 'Properties' : tab === 'equipment' ? 'A/C' : 'Actions'}</button>)}
+          {(operatorWorkspace ? (['overview', 'properties', 'actions'] as ContextTab[]) : (['overview', 'properties', 'equipment', 'actions'] as ContextTab[])).map((tab) => <button key={tab} type="button" className={contextTab === tab ? styles.contextTabActive : ''} onClick={() => setContextTab(tab)}>{tab === 'overview' ? 'Info' : tab === 'properties' ? 'Properties' : tab === 'equipment' ? 'A/C' : 'Actions'}</button>)}
           </nav>
 
           {contextTab === 'overview' ? <div className={styles.contextBody}>
@@ -642,9 +775,13 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
             {mode !== 'communications' ? <section className={styles.contextSection}><span>Ownership</span><strong>{selectedAiActive ? 'DEMAC Customer Agent' : selected.owner ? `Human · ${selected.owner}` : 'Human queue · unassigned'}</strong><p>{selected.routeReason || 'Ownership is controlled by the Customer Agent runtime and Communication Center.'}</p></section> : null}
           </div> : null}
 
-          {contextTab === 'properties' ? <div className={styles.contextBody}>{contextLoading ? <div className={styles.contextEmpty}>Loading customer properties…</div> : customerContext?.properties.length ? <div className={styles.recordList}>{customerContext.properties.map((property) => <article key={property.id}><div><strong>{property.name}</strong><span>{property.address}</span>{property.sector ? <small>{property.sector}</small> : null}</div><b>{property.equipment.length} A/C</b></article>)}</div> : <div className={styles.contextEmpty}>No live CRM properties are linked to this WhatsApp contact.</div>}</div> : null}
+        {contextTab === 'properties' ? <div className={styles.contextBody}>{contextLoading ? <div className={styles.contextEmpty}>Loading customer properties…</div> : customerContext?.properties.length ? operatorWorkspace ? <div className={workspaceStyles.propertyList}>{customerContext.properties.map((property, index) => <article key={property.id} className={workspaceStyles.propertyCard}>
+          <div className={workspaceStyles.propertyTitle}><span className={workspaceStyles.propertyIcon}>⌂</span><div><strong>{property.name}</strong><span>{property.address || 'Address not set'}</span></div>{index === 0 ? <small className={workspaceStyles.propertyPrimary}>Primary</small> : null}</div>
+          <dl className={workspaceStyles.propertyFacts}><div><dt>Customer</dt><dd>{customerContext.displayName}</dd></div><div><dt>Contact</dt><dd>{customerContext.phone || 'Not set'}</dd></div><div><dt>A/C count</dt><dd>{property.equipment.length}</dd></div></dl>
+          <button type="button" className={workspaceStyles.propertyOpen} onClick={() => setPropertyPreviewId(property.id)}>Open profile ↗</button>
+        </article>)}</div> : <div className={styles.recordList}>{customerContext.properties.map((property) => <article key={property.id}><div><strong>{property.name}</strong><span>{property.address}</span>{property.sector ? <small>{property.sector}</small> : null}</div><b>{property.equipment.length} A/C</b></article>)}</div> : <div className={styles.contextEmpty}>No live CRM properties are linked to this WhatsApp contact.</div>}</div> : null}
 
-          {contextTab === 'equipment' ? <div className={styles.contextBody}>{contextLoading ? <div className={styles.contextEmpty}>Loading registered equipment…</div> : customerContext?.equipment.length ? <div className={styles.recordList}>{customerContext.equipment.map((equipment) => <article key={equipment.id}><div><strong>{equipment.locationLabel}</strong><span>{equipment.systemType}</span><small>{equipment.condition || (equipment.active ? 'Active' : 'Inactive')}</small></div><b>{equipment.active ? 'Active' : 'Off'}</b></article>)}</div> : <div className={styles.contextEmpty}>No registered A/C equipment found for this customer.</div>}</div> : null}
+        {contextTab === 'equipment'  ? <div className={styles.contextBody}>{contextLoading ? <div className={styles.contextEmpty}>Loading registered equipment…</div> : customerContext?.equipment.length ? <div className={styles.recordList}>{customerContext.equipment.map((equipment) => <article key={equipment.id}><div><strong>{equipment.locationLabel}</strong><span>{equipment.systemType}</span><small>{equipment.condition || (equipment.active ? 'Active' : 'Inactive')}</small></div><b>{equipment.active ? 'Active' : 'Off'}</b></article>)}</div> : <div className={styles.contextEmpty}>No registered A/C equipment found for this customer.</div>}</div> : null}
 
           {contextTab === 'actions' ? <div className={styles.contextBody}>
             <section className={styles.contextSection}><span>Quick customer actions</span><div className={styles.quickActionGrid}>
@@ -658,7 +795,18 @@ export function CommunicationCenter({ mode = 'communications', standalone = fals
 
           {!standalone ? <details className={styles.details}><summary>Operator presence</summary><div className={styles.operators}>{operators.length ? operators.map((operator) => <article className={styles.operator} key={operator.id}><span>{initials(operator.name)}</span><div><strong>{operator.name}</strong><small>{operator.activeChats} chat{operator.activeChats === 1 ? '' : 's'}{operator.activeVoiceCall ? ' · on voice call' : ''}</small></div><b>{operator.presence.replaceAll('_', ' ')}</b></article>) : <div className={styles.empty}><span>No other operators online.</span></div>}</div></details> : null}
         </div> : <div className={styles.empty}><strong>No customer selected</strong><span>Customer context appears when you open a conversation.</span></div>}
-      </aside> : null}
-    </div>
-  </section>;
+    </aside> : null}
+  </div>
+
+  {operatorWorkspace && propertyPreview ? <div className={workspaceStyles.propertyBackdrop} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setPropertyPreviewId(''); }}>
+    <aside className={workspaceStyles.propertyDrawer} role="dialog" aria-modal="true" aria-label={`${propertyPreview.name} property profile`}>
+      <div className={workspaceStyles.propertyDrawerHeader}><div><span>Property 360</span><h3>{propertyPreview.name}</h3><p>{propertyPreview.address || 'Address not set'}</p></div><button type="button" onClick={() => setPropertyPreviewId('')} aria-label="Close property profile">×</button></div>
+      <div className={workspaceStyles.propertyDrawerBody}>
+        <section className={workspaceStyles.drawerSection}><span>Property contact</span><dl><div><dt>Customer / owner</dt><dd>{customerContext?.displayName || selected?.customer || '—'}</dd></div><div><dt>Primary contact</dt><dd>{customerContext?.phone || selected?.phone || 'Not set'}</dd></div><div><dt>Email</dt><dd>{customerContext?.email || 'Not set'}</dd></div><div><dt>Address</dt><dd>{propertyPreview.address || 'Not set'}</dd></div></dl></section>
+        <section className={workspaceStyles.drawerSection}><span>Registered A/C · {propertyPreview.equipment.length}</span>{propertyPreview.equipment.length ? <div className={workspaceStyles.equipmentList}>{propertyPreview.equipment.map((unit) => <article key={unit.id} className={workspaceStyles.equipmentItem}><div><strong>{unit.locationLabel}</strong><small>{unit.systemType}{unit.condition ? ` · ${unit.condition}` : ''}</small></div><b>{unit.active ? 'Active' : 'Inactive'}</b></article>)}</div> : <p>No registered A/C equipment for this property.</p>}</section>
+      </div>
+      <div className={workspaceStyles.drawerFooter}><button type="button" onClick={() => setPropertyPreviewId('')}>Close</button><button type="button" className={workspaceStyles.primary} onClick={() => openAction('/crm', { tab: 'Properties', action: 'open-property', propertyId: propertyPreview.id })}>Open full property ↗</button></div>
+    </aside>
+  </div> : null}
+</section>;
 }
