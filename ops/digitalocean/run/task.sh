@@ -21,6 +21,11 @@ fi
 printf 'bridge_service=%s\n' "$(systemctl is-active demac-whatsapp-bridge-v8-test.service 2>/dev/null || true)"
 printf 'sync_service=%s\n' "$(systemctl is-active demac-wacli-sync-v8-test.service 2>/dev/null || true)"
 printf 'wacli_version='; /usr/local/bin/wacli --version 2>/dev/null || true
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  echo 'ERROR: ffmpeg is required for browser-recorded WhatsApp voice notes.' >&2
+  exit 1
+fi
+printf 'ffmpeg_version='; ffmpeg -version 2>/dev/null | head -n 1
 
 test -s "$STAGED"
 node --check "$STAGED"
@@ -45,7 +50,10 @@ for required in \
   '`${FIREBASE_FUNCTIONS_BASE}/wacliOutboundPoll`' \
   '`${FIREBASE_FUNCTIONS_BASE}/wacliOutboundAck`' \
   "connectorMode: 'outbound-only-v1'" \
-  "const WACLI_STORE_DIR = String(process.env.WACLI_STORE_DIR || '/var/lib/demac-wacli-test').trim()"; do
+  "const WACLI_STORE_DIR = String(process.env.WACLI_STORE_DIR || '/var/lib/demac-wacli-test').trim()" \
+  "const DEAD_LETTER_DIR = path.join(STATE_DIR, 'webhook-dead-letter');" \
+  'pendingDeadLetterEvents: await pendingDeadLetterCount()' \
+  "if (media.kind === 'voice')"; do
   if ! grep -Fq "$required" "$STAGED"; then
     echo "ERROR: staged bridge is missing required outbound-only component: $required" >&2
     exit 1
@@ -88,14 +96,15 @@ print("|".join([
  str(p.get("mediaIngestUrl") or ""),
  str(p.get("outboundPollUrl") or ""),
  str(p.get("pendingWebhookEvents",-1)),
+ str(p.get("pendingDeadLetterEvents",-1)),
  str(p.get("pendingOutboundAcks",-1)),
  str(p.get("lastForwardError") or ""),
  str(p.get("lastOutboundPollAt") or ""),
  str(p.get("lastOutboundError") or ""),
 ]))')"
-    IFS='|' read -r ok mode store webhook media poll_url pending acks forward_error poll_at outbound_error <<<"$values"
-    printf 'attempt=%s ok=%s mode=%s pending=%s acks=%s poll=%s outbound_error=%s\n' \
-      "$attempt" "$ok" "$mode" "$pending" "$acks" "${poll_at:-none}" "$([ -n "$outbound_error" ] && echo yes || echo no)"
+    IFS='|' read -r ok mode store webhook media poll_url pending dead_letters acks forward_error poll_at outbound_error <<<"$values"
+    printf 'attempt=%s ok=%s mode=%s pending=%s dead_letters=%s acks=%s poll=%s outbound_error=%s\n' \
+      "$attempt" "$ok" "$mode" "$pending" "$dead_letters" "$acks" "${poll_at:-none}" "$([ -n "$outbound_error" ] && echo yes || echo no)"
     if [ "$ok" = 'true' ] \
       && [ "$mode" = 'outbound-only-v1' ] \
       && [ "$store" = "$EXPECTED_STORE" ] \
