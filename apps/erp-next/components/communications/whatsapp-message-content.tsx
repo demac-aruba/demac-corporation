@@ -1,4 +1,76 @@
+'use client';
+
+import { useEffect, useState } from 'react';
 import type { LiveConversationMessage } from '../../lib/browser-communications';
+import { getFirestoreDocument } from '../../lib/firebase/firestore-rest';
+
+type CanonicalWhatsAppMediaMessage = {
+  id: string;
+  mediaUrl?: string | null;
+  mediaType?: string | null;
+  mediaCaption?: string | null;
+  mediaFileName?: string | null;
+  mediaMimeType?: string | null;
+  mediaSize?: number | null;
+  raw?: {
+    Media?: Record<string, unknown>;
+  } | null;
+};
+
+type CanonicalMediaFields = Pick<LiveConversationMessage, 'mediaUrl' | 'mediaType' | 'mediaCaption' | 'mediaFileName' | 'mediaMimeType' | 'mediaSize'>;
+
+function firstString(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const normalized = value.trim();
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+function canonicalMediaFields(document: CanonicalWhatsAppMediaMessage | null): CanonicalMediaFields | null {
+  if (!document) return null;
+  const rawMedia = document.raw?.Media || {};
+  const mediaUrl = firstString(document.mediaUrl, rawMedia.mediaUrl, rawMedia.url);
+  if (!mediaUrl) return null;
+  const rawSize = Number(rawMedia.FileLength ?? rawMedia.fileLength ?? rawMedia.size ?? 0);
+  const documentSize = Number(document.mediaSize || 0);
+  return {
+    mediaUrl,
+    mediaType: firstString(document.mediaType, rawMedia.Type, rawMedia.type, rawMedia.kind),
+    mediaCaption: firstString(document.mediaCaption, rawMedia.Caption, rawMedia.caption),
+    mediaFileName: firstString(document.mediaFileName, rawMedia.Filename, rawMedia.filename, rawMedia.fileName),
+    mediaMimeType: firstString(document.mediaMimeType, rawMedia.MimeType, rawMedia.mimeType, rawMedia.mime_type),
+    mediaSize: Number.isFinite(documentSize) && documentSize > 0
+      ? documentSize
+      : Number.isFinite(rawSize) && rawSize > 0 ? rawSize : null,
+  };
+}
+
+function useCanonicalMedia(message: LiveConversationMessage) {
+  const [canonicalMedia, setCanonicalMedia] = useState<CanonicalMediaFields | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setCanonicalMedia(null);
+
+    if (!message.mediaType || message.mediaUrl || message.id.startsWith('local-')) {
+      return () => { cancelled = true; };
+    }
+
+    getFirestoreDocument<CanonicalWhatsAppMediaMessage>('whatsappMessages', message.id)
+      .then((document) => {
+        if (cancelled) return;
+        const recovered = canonicalMediaFields(document);
+        if (recovered?.mediaUrl) setCanonicalMedia(recovered);
+      })
+      .catch(() => undefined);
+
+    return () => { cancelled = true; };
+  }, [message.id, message.mediaType, message.mediaUrl]);
+
+  return canonicalMedia ? { ...message, ...canonicalMedia } : message;
+}
 
 export function communicationInitials(name: string) {
   return name.split(/\s+/).filter(Boolean).map((part) => part[0]).slice(0, 2).join('').toUpperCase() || 'WA';
@@ -41,22 +113,23 @@ function MediaPending({ type }: { type?: string | null }) {
 }
 
 export function WhatsAppMessageContent({ message }: { message: LiveConversationMessage }) {
-  const mediaType = String(message.mediaType || '').toLowerCase();
-  const caption = String(message.mediaCaption || '').trim();
-  const text = String(message.text || '').trim();
+  const resolvedMessage = useCanonicalMedia(message);
+  const mediaType = String(resolvedMessage.mediaType || '').toLowerCase();
+  const caption = String(resolvedMessage.mediaCaption || '').trim();
+  const text = String(resolvedMessage.text || '').trim();
   const visibleText = text && text !== caption ? text : '';
 
-  if (message.reactionEmoji && !mediaType) {
-    return <div data-reaction="true"><strong>{message.reactionEmoji}</strong><span>Reaction</span></div>;
+  if (resolvedMessage.reactionEmoji && !mediaType) {
+    return <div data-reaction="true"><strong>{resolvedMessage.reactionEmoji}</strong><span>Reaction</span></div>;
   }
 
   if (mediaType) {
     return <>
-      {message.mediaUrl ? <figure data-media={mediaType}>
-        {mediaType === 'image' || mediaType === 'sticker' ? <a href={message.mediaUrl} target="_blank" rel="noopener noreferrer"><img src={message.mediaUrl} alt={caption || message.mediaFileName || mediaLabel(mediaType)} loading="lazy" referrerPolicy="no-referrer" /></a> : null}
-        {mediaType === 'video' || mediaType === 'gif' ? <video controls preload="metadata" src={message.mediaUrl} /> : null}
-        {mediaType === 'audio' || mediaType === 'voice' ? <audio controls preload="metadata" src={message.mediaUrl} /> : null}
-        {mediaType === 'document' || !['image', 'sticker', 'video', 'gif', 'audio', 'voice'].includes(mediaType) ? <a data-document="true" href={message.mediaUrl} target="_blank" rel="noopener noreferrer"><span>↗</span><div><strong>{message.mediaFileName || mediaLabel(mediaType)}</strong><small>{message.mediaMimeType || 'Open attachment'}</small></div></a> : null}
+      {resolvedMessage.mediaUrl ? <figure data-media={mediaType}>
+        {mediaType === 'image' || mediaType === 'sticker' ? <a href={resolvedMessage.mediaUrl} target="_blank" rel="noopener noreferrer"><img src={resolvedMessage.mediaUrl} alt={caption || resolvedMessage.mediaFileName || mediaLabel(mediaType)} loading="lazy" referrerPolicy="no-referrer" /></a> : null}
+        {mediaType === 'video' || mediaType === 'gif' ? <video controls preload="metadata" src={resolvedMessage.mediaUrl} /> : null}
+        {mediaType === 'audio' || mediaType === 'voice' ? <audio controls preload="metadata" src={resolvedMessage.mediaUrl} /> : null}
+        {mediaType === 'document' || !['image', 'sticker', 'video', 'gif', 'audio', 'voice'].includes(mediaType) ? <a data-document="true" href={resolvedMessage.mediaUrl} target="_blank" rel="noopener noreferrer"><span>↗</span><div><strong>{resolvedMessage.mediaFileName || mediaLabel(mediaType)}</strong><small>{resolvedMessage.mediaMimeType || 'Open attachment'}</small></div></a> : null}
         {caption ? <figcaption>{caption}</figcaption> : null}
       </figure> : <MediaPending type={mediaType} />}
       {visibleText ? <p>{visibleText}</p> : null}
