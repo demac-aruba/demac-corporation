@@ -14,15 +14,21 @@ const WACLI_STORE_DIR = String(process.env.WACLI_STORE_DIR || '/var/lib/demac-wa
 const FFMPEG_BINARY = process.env.FFMPEG_BINARY || 'ffmpeg';
 const BRIDGE_TOKEN = String(process.env.BRIDGE_TOKEN || '').trim();
 const WEBHOOK_SECRET = String(process.env.WACLI_WEBHOOK_SECRET || '').trim();
-const ERP_WEBHOOK_URL = 'https://us-central1-demac-corporation.cloudfunctions.net/wacliWebhook';
+const FIREBASE_FUNCTIONS_BASE = 'https://us-central1-demac-corporation.cloudfunctions.net';
+const ERP_WEBHOOK_URL = `${FIREBASE_FUNCTIONS_BASE}/wacliWebhook`;
+const MEDIA_INGEST_URL = `${FIREBASE_FUNCTIONS_BASE}/wacliMediaIngest`;
+const OUTBOUND_POLL_URL = `${FIREBASE_FUNCTIONS_BASE}/wacliOutboundPoll`;
+const OUTBOUND_ACK_URL = `${FIREBASE_FUNCTIONS_BASE}/wacliOutboundAck`;
 const STATE_DIR = process.env.BRIDGE_STATE_DIR || '/var/lib/demac-whatsapp-bridge';
 const OUTBOX_DIR = path.join(STATE_DIR, 'webhook-outbox');
+const OUTBOUND_ACK_DIR = path.join(STATE_DIR, 'outbound-acks');
 const TEMP_DIR = path.join(STATE_DIR, 'media-temp');
 const MAX_BODY_BYTES = 256 * 1024;
-const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
+const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
 const SEND_TIMEOUT_MS = Number(process.env.WACLI_SEND_TIMEOUT_MS || 60000);
 const FORWARD_TIMEOUT_MS = Number(process.env.ERP_FORWARD_TIMEOUT_MS || 20000);
 const RETRY_INTERVAL_MS = Number(process.env.WEBHOOK_RETRY_INTERVAL_MS || 5000);
+const OUTBOUND_POLL_INTERVAL_MS = Math.max(1000, Number(process.env.WACLI_OUTBOUND_POLL_INTERVAL_MS || 2000));
 const MEDIA_DOWNLOAD_ATTEMPTS = Math.max(1, Number(process.env.WACLI_MEDIA_DOWNLOAD_ATTEMPTS || 4));
 const MEDIA_DOWNLOAD_RETRY_MS = Math.max(250, Number(process.env.WACLI_MEDIA_DOWNLOAD_RETRY_MS || 1500));
 const IDENTITY_CACHE_MS = 12 * 60 * 60 * 1000;
@@ -35,7 +41,11 @@ let lastSendSuccessAt = null;
 let lastSendError = null;
 let lastMediaSuccessAt = null;
 let lastMediaError = null;
+let lastOutboundPollAt = null;
+let lastOutboundAckAt = null;
+let lastOutboundError = null;
 let forwarding = false;
+let outboundPolling = false;
 const identityCache = new Map();
 const avatarCache = new Map();
 
@@ -55,11 +65,6 @@ function safeEqual(left, right) {
 
 function wacliSignatureFor(rawBody) {
   return `sha256=${crypto.createHmac('sha256', WEBHOOK_SECRET).update(rawBody).digest('hex')}`;
-}
-
-function authorized(request) {
-  const header = String(request.headers.authorization || '');
-  return header.startsWith('Bearer ') && safeEqual(header.slice(7).trim(), BRIDGE_TOKEN);
 }
 
 function json(response, status, payload) {
@@ -334,22 +339,136 @@ function outboxFileName() {
   return `${Date.now().toString().padStart(13, '0')}-${crypto.randomUUID()}.json`;
 }
 
+async function atomicWriteJson(finalPath, payload) {
+  const temporary = `${finalPath}.${crypto.randomUUID()}.tmp`;
+  await fs.writeFile(temporary, JSON.stringify(payload), { mode: 0o600 });
+  await fs.rename(temporary, finalPath);
+}
+
 async function persistWebhookEvent(rawBody) {
   await fs.mkdir(OUTBOX_DIR, { recursive: true, mode: 0o700 });
   const filename = outboxFileName();
-  const temporary = path.join(OUTBOX_DIR, `.${filename}.tmp`);
   const finalPath = path.join(OUTBOX_DIR, filename);
-  await fs.writeFile(temporary, JSON.stringify({
+  await atomicWriteJson(finalPath, {
     receivedAt: new Date().toISOString(),
     bodyBase64: rawBody.toString('base64'),
-  }), { mode: 0o600 });
-  await fs.rename(temporary, finalPath);
+  });
   return finalPath;
+}
+
+async function rewriteWebhookRecord(filePath, record, rawBody) {
+  await atomicWriteJson(filePath, { ...record, bodyBase64: rawBody.toString('base64') });
+}
+
+function mediaField(media, ...names) {
+  for (const name of names) {
+    if (media?.[name] !== undefined && media?.[name] !== null && String(media[name]).trim() !== '') return media[name];
+  }
+  return null;
+}
+
+async function downloadInboundMedia(chat, messageId) {
+  await fs.mkdir(TEMP_DIR, { recursive: true, mode: 0o700 });
+  const output = path.join(TEMP_DIR, `inbound-${safeName(messageId, crypto.randomUUID())}`);
+  let downloadError = null;
+  try {
+    for (let attempt = 1; attempt <= MEDIA_DOWNLOAD_ATTEMPTS; attempt += 1) {
+      await fs.unlink(output).catch(() => undefined);
+      try {
+        await execFileAsync(WACLI_BINARY, [
+          '--store', WACLI_STORE_DIR, '--read-only', 'media', 'download',
+          '--chat', chat, '--id', messageId, '--output', output,
+        ], {
+          timeout: 60000,
+          maxBuffer: 4 * 1024 * 1024,
+          env: process.env,
+          windowsHide: true,
+        });
+        downloadError = null;
+        break;
+      } catch (error) {
+        downloadError = error;
+        if (attempt < MEDIA_DOWNLOAD_ATTEMPTS) await sleep(MEDIA_DOWNLOAD_RETRY_MS * attempt);
+      }
+    }
+    if (downloadError) throw downloadError;
+    const buffer = await fs.readFile(output);
+    if (!buffer.length) throw new Error('Downloaded WhatsApp media is empty.');
+    if (buffer.length > MAX_MEDIA_BYTES) throw new Error('WhatsApp media exceeds the 25 MB connector limit.');
+    return buffer;
+  } finally {
+    await fs.unlink(output).catch(() => undefined);
+  }
+}
+
+async function uploadInboundMedia(payload) {
+  const media = payload?.Media;
+  if (!media || typeof media !== 'object') return payload;
+  const existingUrl = String(media.mediaUrl || media.url || '').trim();
+  if (existingUrl) return payload;
+
+  const chat = String(payload.Chat || '').trim();
+  const messageId = String(payload.ID || '').trim();
+  if (!chat || !messageId) throw new Error('Inbound media requires Chat and ID before forwarding.');
+
+  try {
+    const bytes = await downloadInboundMedia(chat, messageId);
+    const fileName = String(mediaField(media, 'Filename', 'filename', 'fileName') || '').trim();
+    const mediaType = String(mediaField(media, 'Type', 'type', 'kind') || '').trim().toLowerCase();
+    const mimeType = String(mediaField(media, 'MimeType', 'mimeType', 'mime_type') || 'application/octet-stream').trim();
+    const endpoint = new URL(MEDIA_INGEST_URL);
+    endpoint.searchParams.set('chat', chat);
+    endpoint.searchParams.set('messageId', messageId);
+    if (fileName) endpoint.searchParams.set('fileName', fileName);
+    if (mediaType) endpoint.searchParams.set('mediaType', mediaType);
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${BRIDGE_TOKEN}`,
+        'Content-Type': mimeType || 'application/octet-stream',
+      },
+      body: bytes,
+      signal: AbortSignal.timeout(120000),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || body?.ok !== true || !body?.mediaUrl) {
+      throw new Error(body?.error || `Firebase media ingest returned HTTP ${response.status}`);
+    }
+
+    const resolvedMime = String(body.mediaMimeType || mimeType || 'application/octet-stream');
+    const resolvedSize = Number(body.mediaSize || bytes.length);
+    lastMediaSuccessAt = new Date().toISOString();
+    lastMediaError = null;
+    return {
+      ...payload,
+      Media: {
+        ...media,
+        mediaUrl: body.mediaUrl,
+        url: body.mediaUrl,
+        MimeType: resolvedMime,
+        mimeType: resolvedMime,
+        FileLength: resolvedSize,
+        size: resolvedSize,
+      },
+    };
+  } catch (error) {
+    lastMediaError = (error instanceof Error ? error.message : String(error)).split('\n')[0].slice(0, 300);
+    throw error;
+  }
 }
 
 async function forwardRecord(filePath) {
   const record = JSON.parse(await fs.readFile(filePath, 'utf8'));
-  const rawBody = Buffer.from(record.bodyBase64, 'base64');
+  let rawBody = Buffer.from(record.bodyBase64, 'base64');
+  let payload = JSON.parse(rawBody.toString('utf8'));
+
+  if (!payload.EventType && payload.Media && !(payload.Media.mediaUrl || payload.Media.url)) {
+    payload = await uploadInboundMedia(payload);
+    rawBody = Buffer.from(JSON.stringify(payload));
+    await rewriteWebhookRecord(filePath, record, rawBody);
+  }
+
   const response = await fetch(ERP_WEBHOOK_URL, {
     method: 'POST',
     headers: {
@@ -395,82 +514,100 @@ async function pendingWebhookCount() {
   }
 }
 
-async function handleMedia(request, response) {
-  if (!authorized(request)) {
-    json(response, 401, { error: 'Unauthorized' });
-    return;
-  }
-  let output = '';
+async function pendingOutboundAckCount() {
   try {
-    const input = JSON.parse((await readBody(request)).toString('utf8'));
-    const chat = String(input.chat || '').trim();
-    const messageId = String(input.messageId || input.id || '').trim();
-    if (!chat || chat.length > 200 || !messageId || messageId.length > 220) throw new Error('chat and messageId are required.');
-    if (!/^[A-Za-z0-9_@.:-]+$/.test(chat) || !/^[A-Za-z0-9_.:-]+$/.test(messageId)) throw new Error('Invalid media identifier.');
-
-    await fs.mkdir(TEMP_DIR, { recursive: true, mode: 0o700 });
-    output = path.join(TEMP_DIR, `pull-${safeName(messageId, crypto.randomUUID())}`);
-    let downloadError = null;
-    for (let attempt = 1; attempt <= MEDIA_DOWNLOAD_ATTEMPTS; attempt += 1) {
-      await fs.unlink(output).catch(() => undefined);
-      try {
-        await execFileAsync(WACLI_BINARY, ['--store', WACLI_STORE_DIR, '--read-only', 'media', 'download', '--chat', chat, '--id', messageId, '--output', output], {
-          timeout: 60000,
-          maxBuffer: 4 * 1024 * 1024,
-          env: process.env,
-          windowsHide: true,
-        });
-        downloadError = null;
-        break;
-      } catch (error) {
-        downloadError = error;
-        if (attempt < MEDIA_DOWNLOAD_ATTEMPTS) await sleep(MEDIA_DOWNLOAD_RETRY_MS * attempt);
-      }
-    }
-    if (downloadError) throw downloadError;
-
-    const buffer = await fs.readFile(output);
-    if (!buffer.length) throw new Error('Downloaded media is empty.');
-    if (buffer.length > MAX_MEDIA_BYTES) throw new Error('WhatsApp media exceeds bridge download limit.');
-    const contentType = String(input.mimeType || 'application/octet-stream').trim() || 'application/octet-stream';
-    lastMediaSuccessAt = new Date().toISOString();
-    lastMediaError = null;
-    response.writeHead(200, {
-      'Content-Type': contentType,
-      'Content-Length': String(buffer.length),
-      'Cache-Control': 'no-store',
-    });
-    response.end(buffer);
-  } catch (error) {
-    lastMediaError = (error instanceof Error ? error.message : String(error)).split('\n')[0].slice(0, 240);
-    if (!response.headersSent) json(response, error?.statusCode || 502, { error: error instanceof Error ? error.message : String(error) });
-  } finally {
-    if (output) await fs.unlink(output).catch(() => undefined);
+    return (await fs.readdir(OUTBOUND_ACK_DIR)).filter((name) => name.endsWith('.json')).length;
+  } catch {
+    return 0;
   }
 }
 
-async function handleSend(request, response) {
-  if (!authorized(request)) {
-    json(response, 401, { sent: false, error: 'Unauthorized' });
-    return;
+async function persistOutboundAck(payload) {
+  await fs.mkdir(OUTBOUND_ACK_DIR, { recursive: true, mode: 0o700 });
+  const filePath = path.join(OUTBOUND_ACK_DIR, `${Date.now().toString().padStart(13, '0')}-${safeName(payload.queueId, crypto.randomUUID())}.json`);
+  await atomicWriteJson(filePath, payload);
+  return filePath;
+}
+
+async function postFirebaseJson(endpoint, payload, timeout = 30000) {
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${BRIDGE_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(timeout),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(body?.error || `Firebase connector returned HTTP ${response.status}`);
+    error.statusCode = response.status;
+    throw error;
   }
+  return body;
+}
+
+async function flushOutboundAcks() {
+  await fs.mkdir(OUTBOUND_ACK_DIR, { recursive: true, mode: 0o700 });
+  const files = (await fs.readdir(OUTBOUND_ACK_DIR)).filter((name) => name.endsWith('.json')).sort();
+  for (const filename of files) {
+    const filePath = path.join(OUTBOUND_ACK_DIR, filename);
+    const payload = JSON.parse(await fs.readFile(filePath, 'utf8'));
+    await postFirebaseJson(OUTBOUND_ACK_URL, payload, 60000);
+    await fs.unlink(filePath);
+    lastOutboundAckAt = new Date().toISOString();
+    lastOutboundError = null;
+  }
+  return true;
+}
+
+async function pollOutboundCommand() {
+  const body = await postFirebaseJson(OUTBOUND_POLL_URL, { bridgeId: os.hostname() }, 30000);
+  lastOutboundPollAt = new Date().toISOString();
+  lastOutboundError = null;
+  return body?.command || null;
+}
+
+async function processOutboundCycle() {
+  if (outboundPolling) return;
+  outboundPolling = true;
   try {
-    const input = JSON.parse((await readBody(request)).toString('utf8'));
-    const to = validateRecipient(input.to);
-    const text = String(input.text || '');
-    if (!input.media && !text.trim()) throw new Error('Text or media is required.');
-    const result = await sendItem({ to, text, media: input.media || null });
-    lastSendSuccessAt = new Date().toISOString();
-    lastSendError = null;
-    json(response, 200, {
-      sent: true,
-      messageId: result.messageId,
-      storeWarning: result.storeWarning,
-      clientMessageId: input.clientMessageId || null,
-    });
+    await flushOutboundAcks();
+    const command = await pollOutboundCommand();
+    if (!command) return;
+
+    const queueId = String(command.queueId || '').trim();
+    const claimToken = String(command.claimToken || '').trim();
+    if (!queueId || !claimToken) throw new Error('Firebase returned an outbound command without queueId/claimToken.');
+
+    let ack;
+    try {
+      const to = validateRecipient(command.to);
+      const textValue = String(command.text || '');
+      const media = command.media && typeof command.media === 'object' ? command.media : null;
+      if (!textValue.trim() && !media) throw new Error('Outbound command contains neither text nor media.');
+      const result = await sendItem({ to, text: textValue, media });
+      lastSendSuccessAt = new Date().toISOString();
+      lastSendError = null;
+      ack = {
+        queueId,
+        claimToken,
+        sent: true,
+        messageId: result.messageId || null,
+        storeWarning: result.storeWarning || null,
+      };
+    } catch (error) {
+      lastSendError = error instanceof Error ? error.message : String(error);
+      ack = { queueId, claimToken, sent: false, error: lastSendError };
+    }
+
+    await persistOutboundAck(ack);
+    await flushOutboundAcks();
   } catch (error) {
-    lastSendError = error instanceof Error ? error.message : String(error);
-    json(response, error?.statusCode || 502, { sent: false, error: lastSendError });
+    lastOutboundError = (error instanceof Error ? error.message : String(error)).split('\n')[0].slice(0, 400);
+  } finally {
+    outboundPolling = false;
   }
 }
 
@@ -499,7 +636,10 @@ async function handleHealth(response) {
     ok: true,
     service: 'demac-whatsapp-wacli-bridge-v2',
     bridgeAuth: 'bearer-v1',
+    connectorMode: 'outbound-only-v1',
     erpWebhookUrl: ERP_WEBHOOK_URL,
+    mediaIngestUrl: MEDIA_INGEST_URL,
+    outboundPollUrl: OUTBOUND_POLL_URL,
     wacliStoreDir: WACLI_STORE_DIR,
     startedAt,
     hostname: os.hostname(),
@@ -512,19 +652,22 @@ async function handleHealth(response) {
     lastSendError,
     lastMediaSuccessAt,
     lastMediaError,
+    pendingOutboundAcks: await pendingOutboundAckCount(),
+    lastOutboundPollAt,
+    lastOutboundAckAt,
+    lastOutboundError,
   });
 }
 
 requireConfiguration();
 await fs.mkdir(OUTBOX_DIR, { recursive: true, mode: 0o700 });
+await fs.mkdir(OUTBOUND_ACK_DIR, { recursive: true, mode: 0o700 });
 await fs.mkdir(TEMP_DIR, { recursive: true, mode: 0o700 });
 
 const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
     if (request.method === 'GET' && url.pathname === '/health') return await handleHealth(response);
-    if (request.method === 'POST' && url.pathname === '/v1/send') return await handleSend(request, response);
-    if (request.method === 'POST' && url.pathname === '/v1/media') return await handleMedia(request, response);
     if (request.method === 'POST' && url.pathname === '/v1/events') return await handleWacliEvent(request, response);
     json(response, 404, { error: 'Not found' });
   } catch (error) {
@@ -535,10 +678,14 @@ const server = http.createServer(async (request, response) => {
 server.listen(PORT, HOST, () => console.log(`DEMAC wacli bridge v2 listening on http://${HOST}:${PORT}`));
 const retryTimer = setInterval(() => flushWebhookOutbox().catch(() => undefined), RETRY_INTERVAL_MS);
 retryTimer.unref();
+const outboundTimer = setInterval(() => processOutboundCycle().catch(() => undefined), OUTBOUND_POLL_INTERVAL_MS);
+outboundTimer.unref();
+queueMicrotask(() => processOutboundCycle().catch(() => undefined));
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     clearInterval(retryTimer);
+    clearInterval(outboundTimer);
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 5000).unref();
   });
