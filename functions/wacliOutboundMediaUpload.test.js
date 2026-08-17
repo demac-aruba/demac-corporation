@@ -13,8 +13,12 @@ test('outbound media upload requires operations authorization after Firebase aut
 });
 
 test('outbound media upload blocks active-content file types by MIME and extension', () => {
-  for (const value of ['text/html', 'application/xhtml+xml', 'image/svg+xml']) assert.match(source, new RegExp(value.replace('/', '\\/')));
-  for (const extension of ['html', 'htm', 'xhtml', 'svg']) assert.match(source, new RegExp(`\\b${extension}\\b`));
+  for (const value of ['text/html', 'application/xhtml+xml', 'image/svg+xml']) {
+    assert.equal(source.includes(value), true, `blocked MIME policy is missing ${value}`);
+  }
+  for (const extension of ['html', 'htm', 'xhtml', 'svg']) {
+    assert.equal(source.includes(`"${extension}"`), true, `blocked extension policy is missing ${extension}`);
+  }
 });
 
 test('outbound media upload remains isolated from bridge credentials', () => {
