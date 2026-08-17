@@ -1,0 +1,127 @@
+name: Customer Agent Production
+
+on:
+  pull_request:
+    paths:
+      - 'functions/bookingAuthority*.js'
+      - 'functions/bookingSchedulingPrimitives.js'
+      - 'functions/bookingCapacityAvailability.js'
+      - 'functions/commercialSalesAuthority*.js'
+      - 'functions/demacCustomer*.js'
+      - 'functions/whatsappCopilotRouter.js'
+      - 'functions/whatsappCopilotRouterExports.test.js'
+      - 'functions/package.json'
+      - '.github/workflows/customer-agent-production-deploy.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'functions/bookingAuthority*.js'
+      - 'functions/bookingSchedulingPrimitives.js'
+      - 'functions/bookingCapacityAvailability.js'
+      - 'functions/commercialSalesAuthority*.js'
+      - 'functions/demacCustomer*.js'
+      - 'functions/whatsappCopilotRouter.js'
+      - 'functions/whatsappCopilotRouterExports.test.js'
+      - 'functions/package.json'
+      - '.github/workflows/customer-agent-production-deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: customer-agent-production
+  cancel-in-progress: false
+
+jobs:
+  validate-customer-agent-production:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Validate Customer Agent production boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix functions run validate:firebase
+          npm --prefix functions run test:booking-authority
+          node --test functions/commercialSalesAuthority.test.js
+          node --test functions/demacCustomerReservationTools.test.js functions/demacCustomerProductReservationRuntime.test.js
+          npm --prefix functions run test:customer-agent-tools
+          node --test functions/whatsappCopilotRouterExports.test.js
+          node - <<'NODE'
+          const mod = require('./functions/bootstrap');
+          for (const name of ['processCustomerAgentInbound', 'processCustomerAgentReactivation']) {
+            if (typeof mod[name] !== 'function') throw new Error(`${name} export missing`);
+          }
+          NODE
+
+  deploy-customer-agent-production:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate-customer-agent-production
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Authenticate Firebase deployment service account
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy Customer Agent triggers only
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --yes firebase-tools@15.2.1 deploy \
+            --only functions:processCustomerAgentInbound,functions:processCustomerAgentReactivation \
+            --project demac-corporation \
+            --non-interactive
+
+      - name: Verify deployed Customer Agent functions
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_function() {
+            local name="$1" expected_event="$2"
+            local state event_type secrets
+            state="$(gcloud functions describe "$name" --project=demac-corporation --gen2 --region=us-central1 --format='value(state)')"
+            if [ "$state" != 'ACTIVE' ]; then
+              echo "::error::${name} state is ${state:-unknown}."
+              exit 1
+            fi
+            event_type="$(gcloud functions describe "$name" --project=demac-corporation --gen2 --region=us-central1 --format='value(eventTrigger.eventType)')"
+            if [ "$event_type" != "$expected_event" ]; then
+              echo "::error::${name} event type is ${event_type:-missing}; expected ${expected_event}."
+              exit 1
+            fi
+            secrets="$(gcloud functions describe "$name" --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.secretEnvironmentVariables[].key)' | tr ';' '\n' | sort -u)"
+            if ! printf '%s\n' "$secrets" | grep -qx 'OPENAI_API_KEY'; then
+              echo "::error::${name} is missing OPENAI_API_KEY."
+              exit 1
+            fi
+            echo "${name}: ACTIVE, ${event_type}, OPENAI_API_KEY attached"
+          }
+
+          verify_function processCustomerAgentInbound google.cloud.firestore.document.v1.created
+          verify_function processCustomerAgentReactivation google.cloud.firestore.document.v1.updated
