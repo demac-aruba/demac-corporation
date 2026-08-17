@@ -9,7 +9,7 @@ const {
 const {
   arubaDateParts,
   cleanText,
-} = require("./whatsappCopilotSchedulingCore");
+} = require("./bookingSchedulingPrimitives");
 
 const CUSTOMER_AGENT_RUNTIME_VERSION = 1;
 const DEFAULT_PRIMARY_MODEL = "gpt-5.6";
