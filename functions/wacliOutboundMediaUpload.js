@@ -6,9 +6,10 @@ const { onRequest } = require("firebase-functions/v2/https");
 
 const storage = getStorage();
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
-const ALLOWED_ORIGINS = new Set([
+const EXACT_ALLOWED_ORIGINS = new Set([
   "https://demac-aruba.com",
   "https://www.demac-aruba.com",
+  "https://demac-corporation.vercel.app",
   "http://localhost:3000",
   "http://127.0.0.1:3000",
 ]);
@@ -19,16 +20,23 @@ function safeStorageSegment(value) {
     .slice(0, 180) || "file";
 }
 
+function allowedOrigin(origin) {
+  if (!origin) return true;
+  if (EXACT_ALLOWED_ORIGINS.has(origin)) return true;
+  return /^https:\/\/demac-corporation(?:-[a-z0-9-]+)?-demac-corporation\.vercel\.app$/i.test(origin);
+}
+
 function applyCors(request, response) {
   const origin = String(request.get("origin") || "");
-  if (origin && ALLOWED_ORIGINS.has(origin)) {
+  const allowed = allowedOrigin(origin);
+  if (origin && allowed) {
     response.set("Access-Control-Allow-Origin", origin);
     response.set("Vary", "Origin");
   }
   response.set("Access-Control-Allow-Methods", "POST, OPTIONS");
   response.set("Access-Control-Allow-Headers", "Authorization, Content-Type");
   response.set("Access-Control-Max-Age", "3600");
-  return !origin || ALLOWED_ORIGINS.has(origin);
+  return allowed;
 }
 
 async function authenticatedErpUser(request) {
