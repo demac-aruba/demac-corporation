@@ -3,35 +3,20 @@ set -euo pipefail
 
 SOURCE=/opt/demac-whatsapp-bridge/server-v2.mjs
 STAGED=/home/demac-deploy/stage/server-v2.mjs
-MARKER='DEMAC_TEMP_SECRET_HANDOFF_V1'
 
-echo '=== INSTALL TEMPORARY LOOPBACK SECRET HANDOFF ==='
+echo '=== REPAIR TEMPORARY LOOPBACK SECRET HANDOFF ==='
 printf 'time_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 python3 - <<'PY'
 from pathlib import Path
 source = Path('/opt/demac-whatsapp-bridge/server-v2.mjs').read_text()
-marker = 'DEMAC_TEMP_SECRET_HANDOFF_V1'
-if marker in source:
-    patched = source
-else:
-    needle = "if (request.method === 'GET' && url.pathname === '/health') return await handleHealth(response);"
-    if needle not in source:
-        raise SystemExit('ERROR: expected /health route anchor not found')
-    block = """/* DEMAC_TEMP_SECRET_HANDOFF_V1 */
-    if (request.method === 'GET' && url.pathname === '/__internal/wacli-secret') {
-      const peer = String(request.socket?.remoteAddress || '');
-      if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(peer)) {
-        return json(response, 403, { error: 'Forbidden' });
-      }
-      response.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
-      response.end(String(WACLI_WEBHOOK_SECRET || ''));
-      return;
-    }
-    /* DEMAC_TEMP_SECRET_HANDOFF_V1_END */
-    """
-    patched = source.replace(needle, block + needle, 1)
-Path('/home/demac-deploy/stage/server-v2.mjs').write_text(patched)
+old = "response.end(String(WACLI_WEBHOOK_SECRET || ''));"
+new = "response.end(String(WEBHOOK_SECRET || ''));"
+if old in source:
+    source = source.replace(old, new, 1)
+elif new not in source:
+    raise SystemExit('ERROR: temporary handoff response line not found')
+Path('/home/demac-deploy/stage/server-v2.mjs').write_text(source)
 PY
 
 node --check "$STAGED"
