@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'functions/whatsappWacliGateway.js'
+      - 'functions/applyWacliGatewayEd25519Patch.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
       - '.github/workflows/wacli-webhook-deploy.yml'
@@ -12,6 +13,7 @@ on:
       - main
     paths:
       - 'functions/whatsappWacliGateway.js'
+      - 'functions/applyWacliGatewayEd25519Patch.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
       - '.github/workflows/wacli-webhook-deploy.yml'
@@ -33,6 +35,8 @@ jobs:
           package-manager-cache: false
       - name: Install function dependencies
         run: npm install --prefix functions --no-audit --no-fund
+      - name: Apply DEMAC Ed25519 bridge verifier
+        run: node functions/applyWacliGatewayEd25519Patch.js
       - name: Validate wacli gateway syntax and export
         run: |
           node --check functions/whatsappWacliGateway.js
@@ -51,6 +55,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Apply DEMAC Ed25519 bridge verifier
+        run: node functions/applyWacliGatewayEd25519Patch.js
 
       - name: Authenticate Firebase deployment service account
         uses: google-github-actions/auth@v2
