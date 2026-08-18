@@ -1,8 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useAuth } from '../auth/auth-provider';
 import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
 import { loadLiveSchedulingAppointments } from '../../lib/live-scheduling';
+import {
+  checkOfficeRescheduleAvailability,
+  createOfficeLifecycleRequestId,
+  rescheduleOfficeAppointment,
+} from '../../lib/office-booking-authority';
 import type { DispatchJob, WorkPresetId } from '../../lib/scheduling';
 import { defaultWorkPresets, getRuntimeSchedulingSettings, minutesToTime, previewVans, timeToMinutes } from '../../lib/scheduling';
 import type { CalendarDispatchJob, OperationalDay } from '../../lib/scheduling-capacity';
@@ -12,6 +18,7 @@ import styles from './scheduling-overview-v2.module.css';
 
 type DisplaySlot = { start: string; end: string; segment: 'am' | 'pm' };
 type DisplayVan = { id: string; name: string; team: string; active: boolean };
+type JobLink = { appointmentId: string; appointment: BrowserAppointmentRecord };
 
 function appointmentAssignments(record: BrowserAppointmentRecord): CalendarDispatchJob[] {
   if (record.status === 'cancelled') return [];
@@ -101,15 +108,30 @@ function jobCrossesLunch(job: CalendarDispatchJob) {
   return timeToMinutes(job.start) < 12 * 60 && timeToMinutes(job.end) > 13 * 60;
 }
 
+function bookingBadge(name?: string) {
+  if (!name) return null;
+  const initial = name.trim().charAt(0).toUpperCase() || 'D';
+  return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, width: 'fit-content', marginTop: 4, padding: '3px 6px', borderRadius: 999, background: 'var(--brand-soft)', color: 'var(--brand)', fontSize: 5.8, fontWeight: 850 }}>
+    <b style={{ width: 14, height: 14, display: 'grid', placeItems: 'center', borderRadius: '50%', background: 'var(--brand)', color: '#fff', fontSize: 5.4 }}>{initial}</b>
+    Booked by {name}
+  </span>;
+}
+
 export function LiveSchedulingOverview() {
+  const { principal } = useAuth();
   const [today] = useState(() => currentArubaDateKey());
   const [activeDate, setActiveDate] = useState(today);
   const [appointments, setAppointments] = useState<BrowserAppointmentRecord[]>([]);
   const [selectedAppointmentId, setSelectedAppointmentId] = useState('');
+  const [moveArmedJobId, setMoveArmedJobId] = useState('');
+  const [moveBusy, setMoveBusy] = useState(false);
+  const [moveNotice, setMoveNotice] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [lastSyncedAt, setLastSyncedAt] = useState('');
+  const clickTimerRef = useRef<number | null>(null);
   const week = useMemo(() => buildOperationalWeek(activeDate), [activeDate]);
+  const canManage = principal.active && principal.capabilities.has('scheduling.manage');
 
   const refresh = useCallback(async () => {
     try {
@@ -132,17 +154,29 @@ export function LiveSchedulingOverview() {
     return () => {
       window.clearInterval(interval);
       window.removeEventListener('focus', onFocus);
+      if (clickTimerRef.current) window.clearTimeout(clickTimerRef.current);
     };
   }, [refresh]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setMoveArmedJobId('');
+        setMoveNotice('Move mode cancelled.');
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   const jobs = useMemo(() => appointments.flatMap(appointmentAssignments), [appointments]);
   const vans = useMemo<DisplayVan[]>(() => previewVans.map((van) => ({ id: van.id, name: van.name, team: van.team, active: van.active })), []);
   const canonicalVanIds = useMemo(() => new Set(vans.map((van) => van.id)), [vans]);
   const unresolvedJobs = useMemo(() => jobs.filter((job) => !canonicalVanIds.has(job.vanId)), [canonicalVanIds, jobs]);
-  const appointmentByJobId = useMemo(() => {
-    const result = new Map<string, string>();
+  const jobLinks = useMemo(() => {
+    const result = new Map<string, JobLink>();
     for (const appointment of appointments) {
-      for (const assignment of appointment.assignments) result.set(assignment.id, appointment.id);
+      for (const assignment of appointment.assignments) result.set(assignment.id, { appointmentId: appointment.id, appointment });
     }
     return result;
   }, [appointments]);
@@ -159,8 +193,100 @@ export function LiveSchedulingOverview() {
   }, 0);
 
   const openJob = (jobId: string) => {
-    const appointmentId = appointmentByJobId.get(jobId);
-    if (appointmentId) setSelectedAppointmentId(appointmentId);
+    const link = jobLinks.get(jobId);
+    if (link) setSelectedAppointmentId(link.appointmentId);
+  };
+
+  const scheduleOpenJob = (jobId: string) => {
+    if (clickTimerRef.current) window.clearTimeout(clickTimerRef.current);
+    clickTimerRef.current = window.setTimeout(() => {
+      openJob(jobId);
+      clickTimerRef.current = null;
+    }, 220);
+  };
+
+  const armMove = (jobId: string) => {
+    if (clickTimerRef.current) {
+      window.clearTimeout(clickTimerRef.current);
+      clickTimerRef.current = null;
+    }
+    if (!canManage) {
+      setMoveNotice('Your account does not have permission to move appointments.');
+      return;
+    }
+    const link = jobLinks.get(jobId);
+    if (!link) return;
+    if (link.appointment.assignments.length !== 1) {
+      setMoveNotice('This booking uses multiple vans. Use the appointment panel → Reschedule so Booking Authority can coordinate all linked capacity safely.');
+      setSelectedAppointmentId(link.appointmentId);
+      return;
+    }
+    setSelectedAppointmentId('');
+    setMoveArmedJobId(jobId);
+    setMoveNotice(`Move armed for ${link.appointment.customer}. Drag the booking to an open spot in another time or van. Press Esc to cancel.`);
+  };
+
+  const dropMove = async (targetVanId: string, targetStart: string) => {
+    if (!moveArmedJobId || moveBusy) return;
+    const link = jobLinks.get(moveArmedJobId);
+    const currentJob = jobs.find((job) => job.id === moveArmedJobId);
+    if (!link || !currentJob) return;
+    const appointment = link.appointment;
+    if (!appointment.customerId || !appointment.siteId) {
+      setMoveNotice('This appointment is missing its canonical customer/property relationship and cannot be moved safely.');
+      return;
+    }
+    if (currentJob.vanId === targetVanId && currentJob.start === targetStart) {
+      setMoveNotice('The appointment is already in that work spot.');
+      return;
+    }
+    const timeChanges = currentJob.start !== targetStart;
+    const confirmed = window.confirm(
+      `Move ${appointment.customer} from ${currentJob.vanId.replace('VAN-', 'Van ')} ${formatTime(currentJob.start)} to ${targetVanId.replace('VAN-', 'Van ')} ${formatTime(targetStart)}?\n\nBooking Authority will revalidate the full capacity before saving.${timeChanges ? '\nThe customer time changes, so a customer follow-up is recommended.' : ''}`,
+    );
+    if (!confirmed) return;
+
+    setMoveBusy(true);
+    setMoveNotice('Booking Authority is validating the target work spot…');
+    try {
+      const availability = await checkOfficeRescheduleAvailability({
+        appointmentId: appointment.id,
+        requestId: createOfficeLifecycleRequestId('drag-availability'),
+        customerId: appointment.customerId,
+        propertyId: appointment.siteId,
+        presetId: appointment.presetId,
+        quantity: appointment.totalQuantity,
+        requestedDate: activeDate,
+        requestedTime: targetStart,
+        requiredVanId: targetVanId,
+        customerFacingDescription: appointment.customerFacingDescription,
+      });
+      const option = availability.options.find((candidate) => candidate.date === activeDate
+        && candidate.time === targetStart
+        && candidate.assignments[0]?.vanId === targetVanId);
+      if (!availability.available || !availability.offer || !option) {
+        setMoveNotice('That drop target is not valid anymore. Booking Authority protected the appointment from an unsafe move.');
+        return;
+      }
+      await rescheduleOfficeAppointment({
+        appointmentId: appointment.id,
+        requestId: createOfficeLifecycleRequestId('drag-move'),
+        offerId: availability.offer.id,
+        offerVersion: availability.offer.version,
+        optionId: option.id,
+        reason: 'Drag-and-drop operational move',
+        note: `${currentJob.vanId} ${currentJob.start} → ${targetVanId} ${targetStart}`,
+      });
+      setMoveArmedJobId('');
+      await refresh();
+      setMoveNotice(timeChanges
+        ? `Appointment moved to ${targetVanId.replace('VAN-', 'Van ')} at ${formatTime(targetStart)}. Customer follow-up is recommended because the promised time changed.`
+        : `Appointment reassigned to ${targetVanId.replace('VAN-', 'Van ')} at ${formatTime(targetStart)}.`);
+    } catch (cause) {
+      setMoveNotice(cause instanceof Error ? cause.message : 'The appointment could not be moved.');
+    } finally {
+      setMoveBusy(false);
+    }
   };
 
   return (
@@ -179,6 +305,7 @@ export function LiveSchedulingOverview() {
       <div className={styles.notice}>
         <span>{error ? `Live sync error: ${error}` : loading ? 'Loading canonical Booking Authority schedule…' : `LIVE · Booking Authority${lastSyncedAt ? ` · synced ${lastSyncedAt}` : ''}`}</span>
       </div>
+      {moveNotice ? <div className={styles.notice}><span>{moveNotice}</span>{moveArmedJobId ? <button type="button" onClick={() => { setMoveArmedJobId(''); setMoveNotice('Move mode cancelled.'); }}>×</button> : null}</div> : null}
       {unresolvedJobs.length ? <div className={styles.notice}><span>Data integrity attention: {unresolvedJobs.length} assignment{unresolvedJobs.length === 1 ? '' : 's'} reference a van that cannot be resolved to Van 1–4. They are not converted into fake extra lanes.</span></div> : null}
       {activeConflictSlots ? <div className={styles.notice}><span>Capacity integrity attention: {activeConflictSlots} occupied slot{activeConflictSlots === 1 ? '' : 's'} contain overlapping appointments after duplicate fleet records were collapsed to the physical Van 1–4. Both appointments remain visible below so they can be reviewed and rescheduled safely.</span></div> : null}
 
@@ -216,7 +343,7 @@ export function LiveSchedulingOverview() {
 
       <div className={styles.board}>
         <header className={styles.boardHeader}>
-          <div><strong>Live Van Schedule</strong><span>{activeDay.weekday} {activeDay.shortDate} · one continuous block per assignment</span></div>
+          <div><strong>Live Van Schedule</strong><span>{activeDay.weekday} {activeDay.shortDate} · single click = details · double click = arm drag move</span></div>
           <b>{activeOccupancy.open} OPEN SPOTS</b>
         </header>
         <div className={styles.boardScroll}>
@@ -233,7 +360,17 @@ export function LiveSchedulingOverview() {
                     <div><span>AM anchor</span><strong>{anchorFor(activeJobs, van.id, 'am')}</strong></div>
                     <div><span>PM anchor</span><strong>{anchorFor(activeJobs, van.id, 'pm')}</strong></div>
                   </div>
-                  <VanScheduleSlots slots={activeSlots} jobs={vanJobs} onOpenAppointment={openJob} />
+                  <VanScheduleSlots
+                    slots={activeSlots}
+                    jobs={vanJobs}
+                    vanId={van.id}
+                    jobLinks={jobLinks}
+                    moveArmedJobId={moveArmedJobId}
+                    moveBusy={moveBusy}
+                    onOpenAppointment={scheduleOpenJob}
+                    onArmMove={armMove}
+                    onDropMove={dropMove}
+                  />
                   {!activeDay.isOpen ? <div className={styles.closedDay}>Operationally closed.</div> : null}
                 </section>
               );
@@ -247,7 +384,27 @@ export function LiveSchedulingOverview() {
   );
 }
 
-function VanScheduleSlots({ slots, jobs, onOpenAppointment }: { slots: DisplaySlot[]; jobs: CalendarDispatchJob[]; onOpenAppointment: (jobId: string) => void }) {
+function VanScheduleSlots({
+  slots,
+  jobs,
+  vanId,
+  jobLinks,
+  moveArmedJobId,
+  moveBusy,
+  onOpenAppointment,
+  onArmMove,
+  onDropMove,
+}: {
+  slots: DisplaySlot[];
+  jobs: CalendarDispatchJob[];
+  vanId: string;
+  jobLinks: Map<string, JobLink>;
+  moveArmedJobId: string;
+  moveBusy: boolean;
+  onOpenAppointment: (jobId: string) => void;
+  onArmMove: (jobId: string) => void;
+  onDropMove: (vanId: string, start: string) => Promise<void>;
+}) {
   const rows: React.ReactNode[] = [];
   let index = 0;
 
@@ -259,10 +416,21 @@ function VanScheduleSlots({ slots, jobs, onOpenAppointment }: { slots: DisplaySl
 
     const active = activeJobsForSlot(jobs, slot);
     if (!active.length) {
-      rows.push(<div className={styles.openSlot} key={`open-${slot.start}`}>
+      const dropEnabled = Boolean(moveArmedJobId) && !moveBusy;
+      rows.push(<div
+        className={styles.openSlot}
+        key={`open-${slot.start}`}
+        onDragOver={(event) => { if (dropEnabled) event.preventDefault(); }}
+        onDrop={(event) => {
+          if (!dropEnabled) return;
+          event.preventDefault();
+          void onDropMove(vanId, slot.start);
+        }}
+        style={dropEnabled ? { borderStyle: 'solid', borderColor: 'var(--brand)', background: 'var(--brand-soft)', cursor: 'copy' } : undefined}
+      >
         <div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div>
-        <div><strong>Available</strong><span>Open work spot</span></div>
-        <b>LIVE</b>
+        <div><strong>{dropEnabled ? 'Drop to move' : 'Available'}</strong><span>{dropEnabled ? 'Booking Authority validates before saving' : 'Open work spot'}</span></div>
+        <b>{dropEnabled ? 'MOVE' : 'LIVE'}</b>
       </div>);
       index += 1;
       continue;
@@ -270,7 +438,7 @@ function VanScheduleSlots({ slots, jobs, onOpenAppointment }: { slots: DisplaySl
 
     const span = activeSetSpan(jobs, slots, index);
     if (active.length > 1) {
-      rows.push(<ConflictBlock key={`conflict-${slot.start}-${active.map((job) => job.id).join('-')}`} jobs={active} span={span} onOpenAppointment={onOpenAppointment} />);
+      rows.push(<ConflictBlock key={`conflict-${slot.start}-${active.map((job) => job.id).join('-')}`} jobs={active} span={span} jobLinks={jobLinks} onOpenAppointment={onOpenAppointment} />);
       index += span;
       continue;
     }
@@ -279,10 +447,13 @@ function VanScheduleSlots({ slots, jobs, onOpenAppointment }: { slots: DisplaySl
     rows.push(<AppointmentBlock
       key={`${job.id}-${slot.start}`}
       job={job}
+      appointment={jobLinks.get(job.id)?.appointment}
       span={span}
       crossesLunch={jobCrossesLunch(job)}
       continuation={job.start !== slot.start}
+      armed={moveArmedJobId === job.id}
       onOpen={() => onOpenAppointment(job.id)}
+      onArm={() => onArmMove(job.id)}
     />);
     index += span;
   }
@@ -290,7 +461,16 @@ function VanScheduleSlots({ slots, jobs, onOpenAppointment }: { slots: DisplaySl
   return <div className={styles.slotList}>{rows}</div>;
 }
 
-function AppointmentBlock({ job, span, crossesLunch, continuation = false, onOpen }: { job: CalendarDispatchJob; span: number; crossesLunch: boolean; continuation?: boolean; onOpen: () => void }) {
+function AppointmentBlock({ job, appointment, span, crossesLunch, continuation = false, armed, onOpen, onArm }: {
+  job: CalendarDispatchJob;
+  appointment?: BrowserAppointmentRecord;
+  span: number;
+  crossesLunch: boolean;
+  continuation?: boolean;
+  armed: boolean;
+  onOpen: () => void;
+  onArm: () => void;
+}) {
   const minHeight = span * 64 + Math.max(0, span - 1) * 6 + (crossesLunch ? 18 : 0);
   const openFromKeyboard = (event: React.KeyboardEvent<HTMLElement>) => {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -298,27 +478,50 @@ function AppointmentBlock({ job, span, crossesLunch, continuation = false, onOpe
       onOpen();
     }
   };
-  return <div className={styles.occupiedSlot} style={{ minHeight }}>
+  return <div className={styles.occupiedSlot} style={{ minHeight, outline: armed ? '2px solid var(--brand)' : undefined, background: armed ? 'var(--brand-soft)' : undefined }}>
     <div className={styles.slotTime}><strong>{formatTime(job.start)}</strong><span>{formatTime(job.end)}</span>{span > 1 ? <span>{span} spots</span> : null}</div>
     <div className={styles.slotJobs}>
-      <article className={styles.jobCard} role="button" tabIndex={0} onClick={onOpen} onKeyDown={openFromKeyboard} style={{ minHeight: '100%', alignItems: 'center', cursor: 'pointer' }}>
+      <article
+        className={styles.jobCard}
+        role="button"
+        tabIndex={0}
+        draggable={armed}
+        onDragStart={(event) => {
+          if (!armed) {
+            event.preventDefault();
+            return;
+          }
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData('text/plain', job.id);
+        }}
+        onClick={(event) => { if (event.detail === 1) onOpen(); }}
+        onDoubleClick={(event) => { event.preventDefault(); event.stopPropagation(); onArm(); }}
+        onKeyDown={openFromKeyboard}
+        style={{ minHeight: '100%', alignItems: 'center', cursor: armed ? 'grab' : 'pointer' }}
+      >
         <div>
-          <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={slotClass(job.readiness)}>{readinessLabel(job.readiness)}</b></div>
+          <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={armed ? styles.ready : slotClass(job.readiness)}>{armed ? 'MOVE ARMED' : readinessLabel(job.readiness)}</b></div>
           {continuation ? <span>Reserved continuously until {formatTime(job.end)}</span> : <span>{presetLabel(job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span>}
           <small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small>
           {!continuation && span > 1 ? <small>Reserved continuously · {formatTime(job.start)}–{formatTime(job.end)}</small> : null}
           {crossesLunch ? <small>Lunch/reset remains protected</small> : null}
-          <small>Click for appointment details</small>
+          {bookingBadge(appointment?.bookedByName)}
+          <small>{armed ? 'Drag this block to a highlighted open spot' : 'Single click details · double click to move'}</small>
         </div>
       </article>
     </div>
   </div>;
 }
 
-function ConflictBlock({ jobs, span, onOpenAppointment }: { jobs: CalendarDispatchJob[]; span: number; onOpenAppointment: (jobId: string) => void }) {
+function ConflictBlock({ jobs, span, jobLinks, onOpenAppointment }: {
+  jobs: CalendarDispatchJob[];
+  span: number;
+  jobLinks: Map<string, JobLink>;
+  onOpenAppointment: (jobId: string) => void;
+}) {
   const start = jobs.reduce((earliest, job) => timeToMinutes(job.start) < timeToMinutes(earliest) ? job.start : earliest, jobs[0].start);
   const end = jobs.reduce((latest, job) => timeToMinutes(job.end) > timeToMinutes(latest) ? job.end : latest, jobs[0].end);
-  const minHeight = Math.max(span * 64 + Math.max(0, span - 1) * 6, jobs.length * 78 + 34);
+  const minHeight = Math.max(span * 64 + Math.max(0, span - 1) * 6, jobs.length * 86 + 34);
   return <div className={styles.occupiedSlot} style={{ minHeight, outline: '1px solid var(--danger)' }}>
     <div className={styles.slotTime}><strong>{formatTime(start)}</strong><span>{formatTime(end)}</span><span>Conflict</span></div>
     <div className={styles.slotJobs}>
@@ -333,6 +536,7 @@ function ConflictBlock({ jobs, span, onOpenAppointment }: { jobs: CalendarDispat
           <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={styles.risk}>CONFLICT</b></div>
           <span>{presetLabel(job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'} · {formatTime(job.start)}–{formatTime(job.end)}</span>
           <small>{job.site} · {job.sector}</small>
+          {bookingBadge(jobLinks.get(job.id)?.appointment.bookedByName)}
           <small>Click to review / reschedule</small>
         </div>
       </article>)}
