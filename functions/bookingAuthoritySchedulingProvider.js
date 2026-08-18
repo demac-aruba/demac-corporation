@@ -33,7 +33,7 @@ const {
 } = require("./bookingAuthoritySchedulingEngine");
 const { canonicalizeSchedulingData } = require("./bookingVanIdentity");
 
-const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v4";
+const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v5";
 
 async function loadSchedulingData(db, startDate, endDate) {
   const workOrderQuery = db.collection("workOrders").where("date", ">=", startDate).where("date", "<=", endDate);
@@ -91,13 +91,9 @@ async function loadAppointmentSchedule(db, appointmentId) {
   };
 }
 
-function operationalMoveTimeAllowed({ date, time, today, currentTime, currentSchedule }) {
-  if (!date || !time) return false;
-  if (date > today) return true;
-  if (date < today) return false;
-  if (time > currentTime) return true;
-  return cleanText(currentSchedule?.date, 20) === date
-    && cleanText(currentSchedule?.time, 20) === time;
+function operationalMoveDateAllowed({ date, currentSchedule }) {
+  const currentDate = cleanText(currentSchedule?.date, 20);
+  return Boolean(date && currentDate && date === currentDate);
 }
 
 function dataWithoutAppointment(data, appointmentId) {
@@ -247,10 +243,10 @@ function buildWorkOrders({ appointment, option, request, customer, property, now
   });
 }
 
-function operationalMoveResult({ request, property, data, routeConfig, date, time, vanId, today, currentTime, currentSchedule }) {
+function operationalMoveResult({ request, property, data, routeConfig, date, time, vanId, currentSchedule }) {
   if (!date || !time || !vanId) return { option: null, reason: "missing-operational-move-target" };
-  if (!operationalMoveTimeAllowed({ date, time, today, currentTime, currentSchedule })) {
-    return { option: null, reason: "selected-time-passed" };
+  if (!operationalMoveDateAllowed({ date, currentSchedule })) {
+    return { option: null, reason: "operational-move-date-mismatch" };
   }
 
   const work = singleWork(request);
@@ -356,8 +352,6 @@ function createSchedulingProvider({ db }) {
           date: requestedDate,
           time: requestedTime,
           vanId: requiredPrimaryVanId,
-          today,
-          currentTime: nowParts.time,
           currentSchedule,
         });
         return {
@@ -418,16 +412,13 @@ function createSchedulingProvider({ db }) {
       const currentSchedule = operationalMove
         ? await loadAppointmentSchedule(db, context.excludeAppointmentId)
         : null;
-      const timeAllowed = operationalMove
-        ? operationalMoveTimeAllowed({
-          date: option.date,
-          time: option.time,
-          today,
-          currentTime: nowParts.time,
-          currentSchedule,
-        })
-        : !(option.date < today || (option.date === today && option.time <= nowParts.time));
-      if (!timeAllowed) return { available: false, reason: "selected-time-passed" };
+      if (operationalMove) {
+        if (!operationalMoveDateAllowed({ date: option.date, currentSchedule })) {
+          return { available: false, reason: "operational-move-date-mismatch" };
+        }
+      } else if (option.date < today || (option.date === today && option.time <= nowParts.time)) {
+        return { available: false, reason: "selected-time-passed" };
+      }
 
       const loaded = operationalMove
         ? await loadSchedulingData(db, option.date, option.date)
@@ -531,8 +522,8 @@ module.exports = {
   loadAppointmentSchedule,
   loadSchedulingData,
   notificationRecipient,
+  operationalMoveDateAllowed,
   operationalMoveResult,
-  operationalMoveTimeAllowed,
   operationalRulesFromSettings,
   routeConfigFromSettings,
 };
