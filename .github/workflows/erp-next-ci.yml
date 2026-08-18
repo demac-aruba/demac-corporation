@@ -53,5 +53,7 @@ jobs:
         run: npm run test:booking-intelligence
       - name: Booking Copilot acceptance simulation
         run: npm run test:booking-copilot
+      - name: Live scheduling acceptance simulation
+        run: npm run test:live-scheduling
       - name: Build
         run: npm run build
