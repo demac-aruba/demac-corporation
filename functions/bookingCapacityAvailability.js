@@ -24,8 +24,18 @@ function normalizeOrderTime(value) {
   return "15:30";
 }
 
-function candidateAvailability({ date, time, allocation, van, assignment, data, routeConfig, candidateZone }) {
-  if (!vanCanReceiveAppointments(van, assignment)) return null;
+function vanCanReceiveOperationalMove(van, assignment) {
+  return van?.active !== false
+    && !["Mantenimiento", "Fuera de servicio"].includes(assignment?.status);
+}
+
+function candidateAvailability({ date, time, allocation, van, assignment, data, routeConfig, candidateZone, manualOperationalMove = false }) {
+  if (manualOperationalMove) {
+    if (!vanCanReceiveOperationalMove(van, assignment)) return null;
+  } else if (!vanCanReceiveAppointments(van, assignment)) {
+    return null;
+  }
+
   const halfDay = isHalfDay(van.id, date, data.vanHalfDaySchedules);
   if (allocation.fullDay && (halfDay || time !== "08:30")) return null;
   const slots = allocation.fullDay ? REGULAR_SLOTS : occupiedSlots(time, allocation.slots, halfDay);
@@ -46,15 +56,21 @@ function candidateAvailability({ date, time, allocation, van, assignment, data, 
 
   if (sameVanOrders.some((order) => order.occupied.some((slot) => slots.includes(slot)))) return null;
 
-  const office = routeConfig.zones.find((zone) => zone.id === routeConfig.officeZoneId);
-  const compatibility = routeCompatibility({
-    candidateZone,
-    existingOrders: sameVanOrders,
-    candidateTime: time,
-    officePosition: office?.position ?? 50,
-    maximumAnchorDistance: routeConfig.maximumAnchorDistance,
-  });
-  if (!compatibility.allowed) return null;
+  let routeScore = 0;
+  let routeReason = "manual-operational-move";
+  if (!manualOperationalMove) {
+    const office = routeConfig.zones.find((zone) => zone.id === routeConfig.officeZoneId);
+    const compatibility = routeCompatibility({
+      candidateZone,
+      existingOrders: sameVanOrders,
+      candidateTime: time,
+      officePosition: office?.position ?? 50,
+      maximumAnchorDistance: routeConfig.maximumAnchorDistance,
+    });
+    if (!compatibility.allowed) return null;
+    routeScore = compatibility.score;
+    routeReason = compatibility.reason;
+  }
 
   return {
     vanId: van.id,
@@ -65,12 +81,13 @@ function candidateAvailability({ date, time, allocation, van, assignment, data, 
     quantity: allocation.quantity,
     slots: allocation.fullDay ? 6 : allocation.slots,
     fullDay: allocation.fullDay,
-    routeScore: compatibility.score,
-    routeReason: compatibility.reason,
+    routeScore,
+    routeReason,
   };
 }
 
 module.exports = {
   candidateAvailability,
   normalizeOrderTime,
+  vanCanReceiveOperationalMove,
 };
