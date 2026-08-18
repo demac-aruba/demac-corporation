@@ -26,6 +26,7 @@ const {
   CANONICAL_SCHEDULING_ENGINE_VERSION,
   generateCanonicalOptions,
 } = require("./bookingAuthoritySchedulingEngine");
+const { canonicalizeSchedulingData } = require("./bookingVanIdentity");
 
 const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v2";
 
@@ -56,7 +57,7 @@ async function loadSchedulingData(db, startDate, endDate) {
     db.collection("businessSettings").get(),
     db.collection("vanHalfDaySchedules").get(),
   ]);
-  return {
+  return canonicalizeSchedulingData({
     workOrders: snapshotItems(workOrderSnapshot),
     services: snapshotItems(serviceSnapshot),
     properties: snapshotItems(propertySnapshot),
@@ -68,6 +69,15 @@ async function loadSchedulingData(db, startDate, endDate) {
     calendarClosures: snapshotItems(closureSnapshot),
     businessSettings: snapshotItems(businessSnapshot),
     vanHalfDaySchedules: snapshotItems(halfDaySnapshot),
+  });
+}
+
+function dataWithoutAppointment(data, appointmentId) {
+  const excluded = cleanText(appointmentId, 180);
+  if (!excluded) return data;
+  return {
+    ...data,
+    workOrders: data.workOrders.filter((order) => cleanText(order.appointmentId, 180) !== excluded),
   };
 }
 
@@ -212,10 +222,11 @@ function createSchedulingProvider({ db }) {
     version: SCHEDULING_PROVIDER_VERSION,
     engineVersion: CANONICAL_SCHEDULING_ENGINE_VERSION,
 
-    async checkAvailability({ request, now = new Date() }) {
+    async checkAvailability({ request, context = {}, now = new Date() }) {
       const nowParts = arubaDateParts(now);
       const today = nowParts.date;
-      const data = await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS));
+      const loaded = await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS));
+      const data = dataWithoutAppointment(loaded, context.excludeAppointmentId);
       const { property } = exactCustomerProperty(data, request);
       const routeConfig = routeConfigFromSettings(data.businessSettings);
       const result = generateCanonicalOptions({
@@ -242,13 +253,14 @@ function createSchedulingProvider({ db }) {
       };
     },
 
-    async revalidateSelection({ request, option, now = new Date() }) {
+    async revalidateSelection({ request, option, context = {}, now = new Date() }) {
       const nowParts = arubaDateParts(now);
       const today = nowParts.date;
       if (option.date < today || (option.date === today && option.time <= nowParts.time)) {
         return { available: false, reason: "selected-time-passed" };
       }
-      const data = await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS));
+      const loaded = await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS));
+      const data = dataWithoutAppointment(loaded, context.excludeAppointmentId);
       const { property } = exactCustomerProperty(data, request);
       const routeConfig = routeConfigFromSettings(data.businessSettings);
       const candidateZone = propertyZone(property, option.address, routeConfig);
@@ -335,6 +347,7 @@ module.exports = {
   buildCapacityLocks,
   buildWorkOrders,
   createSchedulingProvider,
+  dataWithoutAppointment,
   exactCustomerProperty,
   loadSchedulingData,
   notificationRecipient,
