@@ -95,6 +95,29 @@ const projectedMove = projectCommittedLiveMove({
 requireCondition(projectedMove.record.primaryVanId === target.vanId, 'A server-confirmed drag must project the destination van into the board immediately.');
 requireCondition(projectedMove.record.assignments[0].start === target.start, 'A server-confirmed drag must project the destination time into the board immediately.');
 
+// Regression for the Aug 18 operator screenshot: manual drag must expose every hard-capacity
+// destination, not just the first eight ranked booking recommendations before time filtering.
+const screenshotAppointment = {
+  ...canonical,
+  primaryVanId: 'VAN-3',
+  assignments: canonical.assignments.map((assignment) => ({ ...assignment, vanId: 'VAN-3' })),
+};
+const screenshotJobs = [
+  ...screenshotAppointment.assignments,
+  { ...screenshotAppointment.assignments[0], id: 'WO-MARIBEL-VAN1-PM', customer: 'Maribel Marquez', vanId: 'VAN-1', start: '13:30', end: '16:30', quantity: 3 },
+  { ...screenshotAppointment.assignments[0], id: 'WO-MARIBEL-VAN4-AM', customer: 'Maribel Marquez', vanId: 'VAN-4', start: '08:30', end: '11:30', quantity: 3 },
+  { ...screenshotAppointment.assignments[0], id: 'WO-MARIBEL-VAN4-PM', customer: 'Maribel Marquez', vanId: 'VAN-4', start: '13:30', end: '16:30', quantity: 3 },
+];
+const screenshotNow = new Date('2026-08-18T16:47:00.000Z'); // 12:47 PM Aruba
+const screenshotTargets = liveDragMoveCandidates(operationalDay!, screenshotAppointment, screenshotJobs, screenshotNow);
+const screenshotTargetKeys = new Set(screenshotTargets.map((slot) => liveMoveTargetKey(slot.vanId, slot.start)));
+requireCondition(screenshotTargetKeys.has('VAN-1|08:30'), 'A free same-time Van 1 destination must not disappear because recommendation ranking was capped before temporal filtering.');
+requireCondition(screenshotTargetKeys.has('VAN-2|08:30'), 'A free same-time Van 2 destination must remain available.');
+requireCondition(screenshotTargetKeys.has('VAN-2|13:30') && screenshotTargetKeys.has('VAN-2|14:30'), 'All future two-hour Van 2 windows must be exposed.');
+requireCondition(screenshotTargetKeys.has('VAN-3|13:30') && screenshotTargetKeys.has('VAN-3|14:30'), 'All future two-hour Van 3 windows must be exposed.');
+requireCondition(!screenshotTargetKeys.has('VAN-1|09:30'), 'A passed time-changing Van 1 destination must remain hidden.');
+requireCondition(screenshotTargets.length === 6, 'The screenshot scenario must expose all six physically valid operator targets.');
+
 const supportWorkOrders = [
   canonicalWorkOrders[0],
   {
@@ -169,4 +192,4 @@ const duplicatedVanAppointment = projectLiveSchedulingAppointments([
 requireCondition(duplicatedVanAppointment.length === 1, 'A booking assigned through a legacy van document must remain visible.');
 requireCondition(duplicatedVanAppointment[0].primaryVanId === 'VAN-4', 'A duplicate Van 4 document must project onto the single canonical VAN-4 lane.');
 
-console.log('Live scheduling acceptance passed: canonical fleet lanes, started same-time reassignment, valid drag targets, immediate committed move projection, creator attribution, and legacy compatibility.');
+console.log('Live scheduling acceptance passed: canonical fleet lanes, complete manual drag targets, started same-time reassignment, immediate committed move projection, creator attribution, and legacy compatibility.');
