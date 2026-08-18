@@ -300,14 +300,20 @@ function createSchedulingProvider({ db }) {
 
     async validateTransaction({ transaction, db: transactionDb, option, appointmentId }) {
       const sameDayQuery = transactionDb.collection("workOrders").where("date", "==", option.date);
-      const [sameDaySnapshot, serviceSnapshot, halfDaySnapshot] = await Promise.all([
+      const [sameDaySnapshot, serviceSnapshot, halfDaySnapshot, vanSnapshot] = await Promise.all([
         transaction.get(sameDayQuery),
         transaction.get(transactionDb.collection("services")),
         transaction.get(transactionDb.collection("vanHalfDaySchedules")),
+        transaction.get(transactionDb.collection("vans")),
       ]);
       const services = snapshotItems(serviceSnapshot);
-      const halfDaySchedules = snapshotItems(halfDaySnapshot);
-      const sameDayOrders = snapshotItems(sameDaySnapshot)
+      const canonical = canonicalizeSchedulingData({
+        vans: snapshotItems(vanSnapshot),
+        workOrders: snapshotItems(sameDaySnapshot),
+        vanHalfDaySchedules: snapshotItems(halfDaySnapshot),
+      });
+      const halfDaySchedules = canonical.vanHalfDaySchedules;
+      const sameDayOrders = canonical.workOrders
         .filter(orderBlocksCapacity)
         .filter((order) => order.appointmentId !== appointmentId);
 
