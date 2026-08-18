@@ -241,7 +241,9 @@ export function projectLiveSchedulingAppointments(
   }
 
   const appointments: BrowserAppointmentRecord[] = [];
-  for (const [appointmentId, orders] of grouped.entries()) {
+  for (const [appointmentId, allOrders] of grouped.entries()) {
+    const activeOrders = allOrders.filter((order) => !isCancelled(order.status));
+    const orders = activeOrders.length ? activeOrders : allOrders;
     const sorted = [...orders].sort((a, b) => {
       const aSupport = workOrderAssignmentRole(a) === 'support' ? 1 : 0;
       const bSupport = workOrderAssignmentRole(b) === 'support' ? 1 : 0;
@@ -260,7 +262,7 @@ export function projectLiveSchedulingAppointments(
     const supportAssignment = assignments.find((assignment) => !assignment.isPrimaryAssignment);
     const quantity = sorted.reduce((total, order) => total + workOrderQuantity(order), 0);
     const fallbackDescription = `${primaryAssignment.presetId.replaceAll('_', ' ')} x${quantity}`;
-    const cancelled = assignments.every((assignment) => assignment.status === 'cancelled');
+    const cancelled = activeOrders.length === 0 && assignments.every((assignment) => assignment.status === 'cancelled');
     const confirmedAt = text(primary.confirmedAt) || text(primary.createdAt);
 
     appointments.push({
