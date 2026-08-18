@@ -4,6 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../auth/auth-provider';
 import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
 import {
+  loadLiveOperationalCapacityState,
+  type LiveOperationalCapacityState,
+} from '../../lib/live-operational-capacity';
+import {
   enrichLiveSchedulingAttribution,
   loadLiveSchedulingAppointmentsFast,
 } from '../../lib/live-scheduling-fast';
@@ -131,6 +135,8 @@ export function LiveSchedulingOverview() {
   const [today] = useState(() => currentArubaDateKey());
   const [activeDate, setActiveDate] = useState(today);
   const [appointments, setAppointments] = useState<BrowserAppointmentRecord[]>([]);
+  const [capacityState, setCapacityState] = useState<LiveOperationalCapacityState | null>(null);
+  const [capacityError, setCapacityError] = useState('');
   const [selectedAppointmentId, setSelectedAppointmentId] = useState('');
   const [moveArmedJobId, setMoveArmedJobId] = useState('');
   const [pendingDragMove, setPendingDragMove] = useState<PendingLiveMove | null>(null);
@@ -152,9 +158,19 @@ export function LiveSchedulingOverview() {
   const refresh = useCallback(async () => {
     const sequence = ++refreshSequenceRef.current;
     try {
-      const next = await loadLiveSchedulingAppointmentsFast({ startDate: weekStartDate, endDate: weekEndDate });
+      const [next, capacityResult] = await Promise.all([
+        loadLiveSchedulingAppointmentsFast({ startDate: weekStartDate, endDate: weekEndDate }),
+        loadLiveOperationalCapacityState()
+          .then((value) => ({ value, error: '' }))
+          .catch((capacityLoadError) => ({
+            value: null,
+            error: capacityLoadError instanceof Error ? capacityLoadError.message : 'Live operational capacity could not be loaded.',
+          })),
+      ]);
       if (sequence !== refreshSequenceRef.current) return;
       setAppointments(next);
+      setCapacityState(capacityResult.value);
+      setCapacityError(capacityResult.error);
       setError('');
       setLastSyncedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
       setLoading(false);
@@ -234,8 +250,8 @@ export function LiveSchedulingOverview() {
   }, 0);
   const armedLink = moveArmedJobId ? jobLinks.get(moveArmedJobId) : undefined;
   const dragCandidates = useMemo(
-    () => liveDragMoveCandidates(activeDay, armedLink?.appointment, activeJobs),
-    [activeDay, activeJobs, armedLink?.appointment],
+    () => liveDragMoveCandidates(activeDay, armedLink?.appointment, activeJobs, capacityState),
+    [activeDay, activeJobs, armedLink?.appointment, capacityState],
   );
   const dragCandidateMap = useMemo(
     () => new Map(dragCandidates.map((slot) => [liveMoveTargetKey(slot.vanId, slot.start), slot])),
@@ -267,6 +283,10 @@ export function LiveSchedulingOverview() {
       setMoveNotice('Your account does not have permission to move appointments.');
       return;
     }
+    if (!capacityState) {
+      setMoveNotice(`Live van capacity is not ready${capacityError ? `: ${capacityError}` : '.'} Refresh the agenda before moving an appointment.`);
+      return;
+    }
     if (moveArmedJobId === jobId) {
       setMoveArmedJobId('');
       setMoveNotice('Move mode cancelled.');
@@ -279,7 +299,7 @@ export function LiveSchedulingOverview() {
       setSelectedAppointmentId(link.appointmentId);
       return;
     }
-    const candidates = liveDragMoveCandidates(activeDay, link.appointment, activeJobs);
+    const candidates = liveDragMoveCandidates(activeDay, link.appointment, activeJobs, capacityState);
     if (!candidates.length) {
       setMoveNotice(`There are no valid same-day destinations for ${link.appointment.customer}. The existing appointment was not changed.`);
       return;
@@ -302,11 +322,6 @@ export function LiveSchedulingOverview() {
       return;
     }
     const appointment = link.appointment;
-    if (!appointment.customerId || !appointment.siteId) {
-      setMoveArmedJobId('');
-      setMoveNotice('This appointment is missing its canonical customer/property relationship and cannot be moved safely.');
-      return;
-    }
 
     setMoveArmedJobId('');
     setMoveNotice('');
@@ -392,7 +407,7 @@ export function LiveSchedulingOverview() {
       reconcileTimerRef.current = window.setTimeout(() => {
         reconcileTimerRef.current = null;
         void refresh();
-      }, 500);
+      }, 350);
     } catch (cause) {
       setPendingDragMove(null);
       setMoveNotice(`${cause instanceof Error ? cause.message : 'The appointment could not be moved.'} The original appointment was preserved.`);

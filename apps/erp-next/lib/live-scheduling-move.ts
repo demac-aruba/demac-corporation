@@ -1,7 +1,10 @@
 import type { BrowserAppointmentRecord } from './browser-operational';
+import {
+  liveOperationalWindowAllows,
+  type LiveOperationalCapacityState,
+} from './live-operational-capacity';
 import type { CandidateSlot } from './scheduling';
 import {
-  calculateDurationMinutes,
   getRuntimeSchedulingSettings,
   halfDayForTime,
   minutesToTime,
@@ -11,7 +14,6 @@ import {
 import type { CalendarDispatchJob, OperationalDay } from './scheduling-capacity';
 import {
   applyAppointmentScheduleChange,
-  appointmentRequest,
   appointmentSnapshot,
   type AppointmentActor,
 } from './scheduling-appointment-lifecycle';
@@ -40,23 +42,31 @@ function overlaps(start: string, end: string, job: CalendarDispatchJob) {
   return timeToMinutes(start) < timeToMinutes(job.end) && timeToMinutes(end) > timeToMinutes(job.start);
 }
 
+function canonicalAppointmentDurationMinutes(appointment: BrowserAppointmentRecord) {
+  const assignment = appointment.assignments[0];
+  if (!assignment) return 0;
+  const duration = timeToMinutes(assignment.end) - timeToMinutes(assignment.start);
+  return Number.isFinite(duration) && duration > 0 ? duration : 0;
+}
+
 /**
- * Manual LIVE drag is an explicit office dispatch action. It intentionally ignores
- * booking-recommendation ranking, route preferences, customer preference windows and the
- * current wall clock. The operator may place the appointment anywhere on its current day
- * where the complete block physically fits. Booking Authority revalidates the same hard
- * capacity invariant before committing the canonical change.
+ * Manual LIVE drag is an explicit office dispatch action. It preserves the appointment's
+ * already-booked block instead of recalculating duration from today's preset settings.
+ * Recommendation ranking, route preferences, customer preference windows and wall-clock
+ * heuristics do not participate. The UI also consumes the same live van/half-day state
+ * that the server enforces so it does not advertise a destination the transaction will reject.
  */
 export function liveOperationalMoveCapacityCandidates(
   day: OperationalDay,
   appointment: BrowserAppointmentRecord,
   jobs: CalendarDispatchJob[],
+  capacityState: LiveOperationalCapacityState | null = null,
 ): CandidateSlot[] {
   if (!day.isOpen || appointment.status === 'cancelled' || appointment.assignments.length !== 1) return [];
 
   const settings = getRuntimeSchedulingSettings();
-  const request = appointmentRequest(appointment);
-  const duration = calculateDurationMinutes(request, settings);
+  const duration = canonicalAppointmentDurationMinutes(appointment);
+  if (!duration) return [];
   const starts = day.weekday === 'Sat' ? ['09:00', '10:00', '11:00', '12:00'] : settings.serviceStartTimes;
   const assignmentIds = new Set(appointment.assignments.map((assignment) => assignment.id));
   const otherJobs = jobs.filter((job) => !assignmentIds.has(job.id) && job.status !== 'cancelled');
@@ -66,6 +76,7 @@ export function liveOperationalMoveCapacityCandidates(
     for (const start of starts) {
       const end = minutesToTime(timeToMinutes(start) + duration);
       if (!workingWindowAllows(day, start, end)) continue;
+      if (!liveOperationalWindowAllows(capacityState, van.id, day.dateKey, start, end)) continue;
       if (otherJobs.some((job) => job.vanId === van.id && overlaps(start, end, job))) continue;
 
       candidates.push({
@@ -75,7 +86,7 @@ export function liveOperationalMoveCapacityCandidates(
         segment: halfDayForTime(start),
         sector: appointment.sector,
         score: 0,
-        reasons: ['Manual operational move: complete hard-capacity window is free'],
+        reasons: ['Manual operational move: canonical appointment block fits live hard capacity'],
         requiresSupportVan: false,
         primaryUnits: appointment.totalQuantity,
       });
@@ -89,10 +100,11 @@ export function liveDragMoveCandidates(
   day: OperationalDay,
   appointment: BrowserAppointmentRecord | undefined,
   jobs: CalendarDispatchJob[],
+  capacityState: LiveOperationalCapacityState | null = null,
 ): CandidateSlot[] {
   if (!appointment || appointment.status === 'cancelled' || appointment.assignments.length !== 1) return [];
   const current = appointmentSnapshot(appointment);
-  return liveOperationalMoveCapacityCandidates(day, appointment, jobs)
+  return liveOperationalMoveCapacityCandidates(day, appointment, jobs, capacityState)
     .filter((slot) => !(slot.vanId === current.primaryVanId && slot.start === current.primaryStart));
 }
 

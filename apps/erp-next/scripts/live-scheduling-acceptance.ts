@@ -1,3 +1,4 @@
+import type { LiveOperationalCapacityState } from '../lib/live-operational-capacity';
 import { bookingActorLabel, projectLiveSchedulingAppointments, resolveCanonicalVanId } from '../lib/live-scheduling';
 import {
   liveDragMoveCandidates,
@@ -108,6 +109,36 @@ requireCondition(!screenshotTargetKeys.has('VAN-1|10:30'), 'A two-hour appointme
 requireCondition(!screenshotTargetKeys.has('VAN-2|15:30'), 'A two-hour appointment must not be offered when it cannot finish inside the operational workday.');
 requireCondition(screenshotTargets.length === expectedTargets.length, 'The screenshot scenario must expose exactly the nine complete hard-capacity destinations.');
 
+// Regression for the reported 3-slot Maribel move. Manual drag must preserve the canonical
+// 08:30–11:30 block even if current preset settings/quantity would calculate a different duration.
+const liveCapacity: LiveOperationalCapacityState = {
+  vans: new Map(['VAN-1', 'VAN-2', 'VAN-3', 'VAN-4'].map((id) => [id, { id, active: true, status: '' }])),
+  dailyAssignments: [],
+  halfDaySchedules: [],
+};
+const threeSlotAppointment = {
+  ...canonical,
+  totalQuantity: 1,
+  assignments: canonical.assignments.map((assignment) => ({ ...assignment, start: '08:30', end: '11:30', quantity: 1 })),
+};
+const threeSlotTargets = liveDragMoveCandidates(operationalDay!, threeSlotAppointment, threeSlotAppointment.assignments, liveCapacity);
+const threeSlotAfternoon = threeSlotTargets.find((slot) => slot.vanId === 'VAN-2' && slot.start === '13:30');
+requireCondition(threeSlotAfternoon?.end === '16:30', 'Manual drag must preserve the canonical three-hour appointment block instead of recalculating it from current preset settings.');
+
+const van2HalfDay: LiveOperationalCapacityState = {
+  ...liveCapacity,
+  halfDaySchedules: [{ id: 'TUE-VAN2', active: true, vanId: 'VAN-2', weekday: 2 }],
+};
+const halfDayTargets = liveDragMoveCandidates(operationalDay!, threeSlotAppointment, threeSlotAppointment.assignments, van2HalfDay);
+requireCondition(!halfDayTargets.some((slot) => slot.vanId === 'VAN-2' && slot.start >= '13:30'), 'LIVE drag must not advertise Van 2 afternoon targets when canonical half-day capacity blocks them.');
+
+const van4Maintenance: LiveOperationalCapacityState = {
+  ...liveCapacity,
+  dailyAssignments: [{ id: 'TUE-VAN4', date: canonical.dateKey, vanId: 'VAN-4', status: 'Mantenimiento' }],
+};
+const maintenanceTargets = liveDragMoveCandidates(operationalDay!, threeSlotAppointment, threeSlotAppointment.assignments, van4Maintenance);
+requireCondition(!maintenanceTargets.some((slot) => slot.vanId === 'VAN-4'), 'LIVE drag must not advertise a van that is in maintenance for the selected date.');
+
 const supportWorkOrders = [
   canonicalWorkOrders[0],
   {
@@ -182,4 +213,4 @@ const duplicatedVanAppointment = projectLiveSchedulingAppointments([
 requireCondition(duplicatedVanAppointment.length === 1, 'A booking assigned through a legacy van document must remain visible.');
 requireCondition(duplicatedVanAppointment[0].primaryVanId === 'VAN-4', 'A duplicate Van 4 document must project onto the single canonical VAN-4 lane.');
 
-console.log('Live scheduling acceptance passed: canonical fleet lanes, unrestricted manual hard-capacity drag targets, immediate committed move projection, creator attribution, and legacy compatibility.');
+console.log('Live scheduling acceptance passed: canonical fleet lanes, canonical-duration manual drag, live van/half-day constraints, immediate committed move projection, creator attribution, and legacy compatibility.');
