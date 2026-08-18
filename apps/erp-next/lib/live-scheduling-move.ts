@@ -1,8 +1,5 @@
 import type { BrowserAppointmentRecord } from './browser-operational';
-import {
-  liveOperationalWindowAllows,
-  type LiveOperationalCapacityState,
-} from './live-operational-capacity';
+import type { LiveOperationalCapacityState } from './live-operational-capacity';
 import type { CandidateSlot } from './scheduling';
 import {
   getRuntimeSchedulingSettings,
@@ -33,8 +30,8 @@ function workingWindowAllows(day: OperationalDay, start: string, end: string) {
 
   const lunchStart = timeToMinutes(settings.lunchStart);
   const lunchEnd = timeToMinutes(settings.lunchEnd);
-  const dayEnd = timeToMinutes(settings.workdayEnd) - settings.routeMarginMinutes;
-  if (startMinutes < 12 * 60) return endMinutes <= lunchStart - settings.routeMarginMinutes;
+  const dayEnd = timeToMinutes(settings.workdayEnd);
+  if (startMinutes < lunchStart) return endMinutes <= lunchStart;
   return startMinutes >= lunchEnd && endMinutes <= dayEnd;
 }
 
@@ -50,17 +47,20 @@ function canonicalAppointmentDurationMinutes(appointment: BrowserAppointmentReco
 }
 
 /**
- * Manual LIVE drag is an explicit office dispatch action. It preserves the appointment's
- * already-booked block instead of recalculating duration from today's preset settings.
- * Recommendation ranking, route preferences, customer preference windows and wall-clock
- * heuristics do not participate. The UI also consumes the same live van/half-day state
- * that the server enforces so it does not advertise a destination the transaction will reject.
+ * Manual LIVE drag is a direct office dispatch action, not an automatic booking
+ * recommendation. There is one scheduling rule: preserve the appointment's canonical
+ * duration and allow every visible same-day van/time destination where the complete
+ * block fits without overlapping another active appointment.
+ *
+ * Route preference, customer preference, wall clock, half-day, maintenance, staffing
+ * and recommendation metadata do not remove drag destinations. The optional capacity
+ * argument is retained only for call-site compatibility and is deliberately ignored.
  */
 export function liveOperationalMoveCapacityCandidates(
   day: OperationalDay,
   appointment: BrowserAppointmentRecord,
   jobs: CalendarDispatchJob[],
-  capacityState: LiveOperationalCapacityState | null = null,
+  _capacityState: LiveOperationalCapacityState | null = null,
 ): CandidateSlot[] {
   if (!day.isOpen || appointment.status === 'cancelled' || appointment.assignments.length !== 1) return [];
 
@@ -76,7 +76,6 @@ export function liveOperationalMoveCapacityCandidates(
     for (const start of starts) {
       const end = minutesToTime(timeToMinutes(start) + duration);
       if (!workingWindowAllows(day, start, end)) continue;
-      if (!liveOperationalWindowAllows(capacityState, van.id, day.dateKey, start, end)) continue;
       if (otherJobs.some((job) => job.vanId === van.id && overlaps(start, end, job))) continue;
 
       candidates.push({
@@ -86,7 +85,7 @@ export function liveOperationalMoveCapacityCandidates(
         segment: halfDayForTime(start),
         sector: appointment.sector,
         score: 0,
-        reasons: ['Manual operational move: canonical appointment block fits live hard capacity'],
+        reasons: ['Manual operational move: complete canonical block fits visible free capacity'],
         requiresSupportVan: false,
         primaryUnits: appointment.totalQuantity,
       });
