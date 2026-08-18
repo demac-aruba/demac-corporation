@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const { BOOKING_ERROR_CODES } = require("./bookingAuthorityCore");
 const {
   createOperationalMoveAuthority,
+  manualOccupiedSlots,
   workOrderBlocksOperationalCapacity,
 } = require("./bookingOperationalMove");
 
@@ -143,6 +144,13 @@ function moveInput(overrides = {}) {
   };
 }
 
+test("manual dispatch windows use only the visible continuous schedule blocks", () => {
+  assert.deepEqual(manualOccupiedSlots("2026-08-18", "08:30", 3), ["08:30", "09:30", "10:30"]);
+  assert.deepEqual(manualOccupiedSlots("2026-08-18", "13:30", 3), ["13:30", "14:30", "15:30"]);
+  assert.deepEqual(manualOccupiedSlots("2026-08-18", "09:30", 3), []);
+  assert.deepEqual(manualOccupiedSlots("2026-08-22", "09:00", 4), ["09:00", "10:00", "11:00", "12:00"]);
+});
+
 test("operational capacity ignores cancelled/rescheduled canonical work orders exactly like LIVE scheduling", () => {
   assert.equal(workOrderBlocksOperationalCapacity({ appointmentId: "A", status: "Confirmada" }), true);
   assert.equal(workOrderBlocksOperationalCapacity({ appointmentId: "A", status: "cancelled" }), false);
@@ -152,7 +160,7 @@ test("operational capacity ignores cancelled/rescheduled canonical work orders e
   assert.equal(workOrderBlocksOperationalCapacity({ status: "Confirmada" }), false);
 });
 
-test("three-slot LIVE drag moves directly to an actually open afternoon block in one transaction", async () => {
+test("three-slot LIVE drag moves directly to an open Van 2 afternoon block in one transaction", async () => {
   const { db, authority } = fixture();
   const result = await authority.moveAppointment(moveInput());
   assert.equal(result.success, true);
@@ -178,6 +186,24 @@ test("three-slot LIVE drag moves directly to an actually open afternoon block in
   }
 });
 
+test("half-day and maintenance metadata do not hide an otherwise free manual drag destination", async () => {
+  const { db, authority } = fixture({
+    "vanHalfDaySchedules/TUE-V2": { id: "TUE-V2", active: true, vanId: "VAN-2", weekday: 2 },
+    "dailyVanAssignments/2026-08-18-V2": {
+      id: "2026-08-18-V2",
+      date: "2026-08-18",
+      vanId: "VAN-2",
+      status: "Mantenimiento",
+      driverStaffId: "tech-3",
+      helperStaffId: "tech-4",
+    },
+  });
+  const result = await authority.moveAppointment(moveInput());
+  assert.equal(result.success, true);
+  assert.equal(db.read("appointments/APT-1").primaryVanId, "VAN-2");
+  assert.equal(db.read("appointments/APT-1").startTime, "13:30");
+});
+
 test("hidden cancelled work order does not reject a visually open LIVE target", async () => {
   const { db, authority } = fixture({
     "workOrders/WO-CANCELLED": {
@@ -193,6 +219,16 @@ test("hidden cancelled work order does not reject a visually open LIVE target", 
   const result = await authority.moveAppointment(moveInput());
   assert.equal(result.success, true);
   assert.equal(db.read("appointments/APT-1").primaryVanId, "VAN-2");
+});
+
+test("detached stale capacity lock is healed instead of becoming a second hidden rule", async () => {
+  const staleLockId = `BAL-${require("node:crypto").createHash("sha256").update("2026-08-18|VAN-2|13:30").digest("hex").slice(0, 32).toUpperCase()}`;
+  const { db, authority } = fixture({
+    [`bookingCapacityLocks/${staleLockId}`]: { appointmentId: "APT-ORPHAN", active: true },
+  });
+  const result = await authority.moveAppointment(moveInput());
+  assert.equal(result.success, true);
+  assert.equal(db.read(`bookingCapacityLocks/${staleLockId}`).appointmentId, "APT-1");
 });
 
 test("real canonical occupied work still blocks the move transaction", async () => {
@@ -213,21 +249,15 @@ test("real canonical occupied work still blocks the move transaction", async () 
   );
 });
 
-test("half-day and maintenance constraints remain hard operational safety rules", async () => {
-  const halfDay = fixture({
-    "vanHalfDaySchedules/TUE-V2": { id: "TUE-V2", active: true, vanId: "VAN-2", weekday: 2 },
-  });
+test("a block that cannot fit continuously before lunch or before day end is rejected", async () => {
+  const { authority } = fixture();
   await assert.rejects(
-    () => halfDay.authority.moveAppointment(moveInput()),
-    (error) => error.code === BOOKING_ERROR_CODES.AVAILABILITY_CHANGED && error.details.reason === "target-outside-half-day-capacity",
+    () => authority.moveAppointment(moveInput({ requestedTime: "09:30" })),
+    (error) => error.code === BOOKING_ERROR_CODES.AVAILABILITY_CHANGED && error.details.reason === "target-outside-visible-capacity",
   );
-
-  const maintenance = fixture({
-    "dailyVanAssignments/2026-08-18-V2": { id: "2026-08-18-V2", date: "2026-08-18", vanId: "VAN-2", status: "Mantenimiento" },
-  });
   await assert.rejects(
-    () => maintenance.authority.moveAppointment(moveInput()),
-    (error) => error.code === BOOKING_ERROR_CODES.AVAILABILITY_CHANGED && error.details.reason === "target-van-unavailable",
+    () => authority.moveAppointment(moveInput({ requestId: "drag-test-67890", requestedTime: "14:30" })),
+    (error) => error.code === BOOKING_ERROR_CODES.AVAILABILITY_CHANGED && error.details.reason === "target-outside-visible-capacity",
   );
 });
 
