@@ -32,6 +32,15 @@ export type OfficeAvailabilityResult = {
   reason?: string;
 };
 
+export type OfficeAppointmentAttribution = {
+  appointmentId: string;
+  source?: string;
+  createdBy?: string;
+  createdByName?: string;
+  createdAtIso?: string;
+  updatedAtIso?: string;
+};
+
 type ApiError = { error?: { code?: string; message?: string; details?: Record<string, unknown> } };
 
 function endpoint() {
@@ -60,6 +69,11 @@ async function callOfficeBookingAuthority<T>(action: string, data: Record<string
 export function createOfficeLifecycleRequestId(prefix = 'schedule') {
   const random = Math.random().toString(36).slice(2, 10);
   return `${prefix}-${Date.now()}-${random}`;
+}
+
+export async function listOfficeAppointmentAttribution(appointmentIds: string[]) {
+  const result = await callOfficeBookingAuthority<{ success: true; attribution: OfficeAppointmentAttribution[] }>('list_appointment_attribution', { appointmentIds });
+  return result.attribution ?? [];
 }
 
 export async function checkOfficeRescheduleAvailability(input: {
@@ -94,6 +108,13 @@ export async function rescheduleOfficeAppointment(input: {
   optionId: string;
   reason: string;
   note?: string;
+  changeKind?: 'customer_reschedule' | 'operational_move';
 }) {
-  return callOfficeBookingAuthority<{ success: true; appointmentId: string; appointment: Record<string, unknown> }>('reschedule_appointment', input);
+  return callOfficeBookingAuthority<{
+    success: true;
+    appointmentId: string;
+    changeKind?: 'customer_reschedule' | 'operational_move';
+    customerNotificationRecommended?: boolean;
+    appointment: Record<string, unknown>;
+  }>('reschedule_appointment', input);
 }
