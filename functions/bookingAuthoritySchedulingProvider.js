@@ -21,6 +21,7 @@ const {
 const {
   candidateAvailability,
   normalizeOrderTime,
+  workOrderBlocksOperationalMoveCapacity,
 } = require("./bookingCapacityAvailability");
 const {
   CANONICAL_SCHEDULING_ENGINE_VERSION,
@@ -33,7 +34,7 @@ const {
 } = require("./bookingAuthoritySchedulingEngine");
 const { canonicalizeSchedulingData } = require("./bookingVanIdentity");
 
-const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v5";
+const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v6";
 
 async function loadSchedulingData(db, startDate, endDate) {
   const workOrderQuery = db.collection("workOrders").where("date", ">=", startDate).where("date", "<=", endDate);
@@ -462,7 +463,7 @@ function createSchedulingProvider({ db }) {
       return { available: true, option: { ...option, assignments: refreshedAssignments } };
     },
 
-    async validateTransaction({ transaction, db: transactionDb, option, appointmentId }) {
+    async validateTransaction({ transaction, db: transactionDb, option, appointmentId, context = {} }) {
       const sameDayQuery = transactionDb.collection("workOrders").where("date", "==", option.date);
       const [sameDaySnapshot, serviceSnapshot, halfDaySnapshot, vanSnapshot] = await Promise.all([
         transaction.get(sameDayQuery),
@@ -477,8 +478,11 @@ function createSchedulingProvider({ db }) {
         vanHalfDaySchedules: snapshotItems(halfDaySnapshot),
       });
       const halfDaySchedules = canonical.vanHalfDaySchedules;
+      const operationalMove = context.changeKind === "operational_move";
       const sameDayOrders = canonical.workOrders
-        .filter(orderBlocksCapacity)
+        .filter((order) => operationalMove
+          ? workOrderBlocksOperationalMoveCapacity(order)
+          : orderBlocksCapacity(order))
         .filter((order) => order.appointmentId !== appointmentId);
 
       for (const assignment of option.assignments) {
