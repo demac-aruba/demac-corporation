@@ -11,6 +11,14 @@ const {
   vanCanReceiveAppointments,
 } = require("./bookingSchedulingPrimitives");
 
+const OPERATIONAL_NON_BLOCKING_STATUSES = new Set([
+  "cancelada",
+  "cancelled",
+  "canceled",
+  "reprogramada",
+  "rescheduled",
+]);
+
 function normalizeOrderTime(value) {
   const time = normalizeTime(value);
   if (!time) return "08:30";
@@ -30,7 +38,11 @@ function vanCanReceiveOperationalMove(van, assignment) {
 }
 
 function workOrderBlocksOperationalMoveCapacity(order) {
-  return Boolean(String(order?.appointmentId ?? "").trim()) && orderBlocksCapacity(order);
+  const appointmentId = String(order?.appointmentId ?? "").trim();
+  if (!appointmentId) return false;
+  const status = String(order?.status ?? "").trim().toLowerCase();
+  if (OPERATIONAL_NON_BLOCKING_STATUSES.has(status)) return false;
+  return orderBlocksCapacity(order);
 }
 
 function candidateAvailability({ date, time, allocation, van, assignment, data, routeConfig, candidateZone, manualOperationalMove = false }) {
