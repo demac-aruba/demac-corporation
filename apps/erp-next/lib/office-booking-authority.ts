@@ -70,6 +70,8 @@ export async function checkOfficeRescheduleAvailability(input: {
   presetId: string;
   quantity: number;
   requestedDate: string;
+  requestedTime?: string;
+  requiredVanId?: string;
   customerFacingDescription?: string;
 }) {
   return callOfficeBookingAuthority<OfficeAvailabilityResult>('check_availability', input);
