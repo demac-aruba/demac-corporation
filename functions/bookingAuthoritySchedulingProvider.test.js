@@ -8,6 +8,7 @@ const {
   buildWorkOrders,
   exactCustomerProperty,
   operationalMoveResult,
+  operationalMoveTimeAllowed,
   routeConfigFromSettings,
 } = require("./bookingAuthoritySchedulingProvider");
 
@@ -62,8 +63,8 @@ function operationalData(overrides = {}) {
   };
 }
 
-test("provider exposes canonical provider v3", () => {
-  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v3");
+test("provider exposes canonical provider v4", () => {
+  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v4");
 });
 
 test("canonical scheduling engine is versioned independently", () => {
@@ -135,6 +136,78 @@ test("manual operator drag can place work on an active van before a driver is as
   assert.equal(result.option.assignments[0].vanId, "VAN-2");
   assert.equal(result.option.assignments[0].technicianIds.length, 0);
   assert.equal(result.option.time, "13:30");
+});
+
+test("started same-time operational reassignment remains valid when only the van changes", () => {
+  const currentSchedule = { date: "2098-12-20", time: "08:30" };
+  assert.equal(operationalMoveTimeAllowed({
+    date: "2098-12-20",
+    time: "08:30",
+    today: "2098-12-20",
+    currentTime: "10:27",
+    currentSchedule,
+  }), true);
+
+  const data = operationalData();
+  const result = operationalMoveResult({
+    request: request(),
+    property: data.properties[0],
+    data,
+    routeConfig: routeConfigFromSettings(data.businessSettings),
+    date: "2098-12-20",
+    time: "08:30",
+    vanId: "VAN-2",
+    today: "2098-12-20",
+    currentTime: "10:27",
+    currentSchedule,
+  });
+  assert.equal(result.reason, "available");
+  assert.equal(result.option.time, "08:30");
+  assert.equal(result.option.assignments[0].vanId, "VAN-2");
+});
+
+test("past time-changing moves remain blocked after the workday has started", () => {
+  const currentSchedule = { date: "2098-12-20", time: "08:30" };
+  assert.equal(operationalMoveTimeAllowed({
+    date: "2098-12-20",
+    time: "09:30",
+    today: "2098-12-20",
+    currentTime: "10:27",
+    currentSchedule,
+  }), false);
+
+  const data = operationalData();
+  const result = operationalMoveResult({
+    request: request(),
+    property: data.properties[0],
+    data,
+    routeConfig: routeConfigFromSettings(data.businessSettings),
+    date: "2098-12-20",
+    time: "09:30",
+    vanId: "VAN-2",
+    today: "2098-12-20",
+    currentTime: "10:27",
+    currentSchedule,
+  });
+  assert.equal(result.option, null);
+  assert.equal(result.reason, "selected-time-passed");
+});
+
+test("past dates and unverified past starts remain blocked", () => {
+  assert.equal(operationalMoveTimeAllowed({
+    date: "2098-12-19",
+    time: "08:30",
+    today: "2098-12-20",
+    currentTime: "10:27",
+    currentSchedule: { date: "2098-12-19", time: "08:30" },
+  }), false);
+  assert.equal(operationalMoveTimeAllowed({
+    date: "2098-12-20",
+    time: "08:30",
+    today: "2098-12-20",
+    currentTime: "10:27",
+    currentSchedule: null,
+  }), false);
 });
 
 test("manual operator drag still refuses a real occupied-capacity conflict", () => {
