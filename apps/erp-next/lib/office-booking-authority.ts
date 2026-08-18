@@ -72,8 +72,13 @@ export function createOfficeLifecycleRequestId(prefix = 'schedule') {
 }
 
 export async function listOfficeAppointmentAttribution(appointmentIds: string[]) {
-  const result = await callOfficeBookingAuthority<{ success: true; attribution: OfficeAppointmentAttribution[] }>('list_appointment_attribution', { appointmentIds });
-  return result.attribution ?? [];
+  const ids = [...new Set(appointmentIds.map((item) => item.trim()).filter(Boolean))];
+  const attribution: OfficeAppointmentAttribution[] = [];
+  for (let index = 0; index < ids.length; index += 500) {
+    const result = await callOfficeBookingAuthority<{ success: true; attribution: OfficeAppointmentAttribution[] }>('list_appointment_attribution', { appointmentIds: ids.slice(index, index + 500) });
+    attribution.push(...(result.attribution ?? []));
+  }
+  return attribution;
 }
 
 export async function checkOfficeRescheduleAvailability(input: {
