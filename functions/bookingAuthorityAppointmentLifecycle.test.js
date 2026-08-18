@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
+  appointmentStillOwnsLock,
   createBookingAppointmentLifecycle,
   normalizeChangeKind,
   scheduleChangeNeedsCustomerFollowUp,
@@ -97,6 +98,17 @@ function request() {
   };
 }
 
+function openOffer() {
+  return {
+    id: "OFR-RESCHEDULE-1",
+    version: 1,
+    status: "open",
+    expiresAt: "2098-12-31T23:59:59.000Z",
+    request: request(),
+    options: [option()],
+  };
+}
+
 function fixture(extra = {}) {
   const db = new FakeFirestore({
     "appointments/APT-LIVE-1": appointmentSeed(),
@@ -165,6 +177,13 @@ test("operational move classification is strict and customer follow-up depends o
   }), true);
 });
 
+test("capacity-lock ownership ignores cancelled or detached stale locks", () => {
+  assert.equal(appointmentStillOwnsLock({ status: "confirmed", capacityLockIds: ["L1"] }, "L1"), true);
+  assert.equal(appointmentStillOwnsLock({ status: "confirmed", capacityLockIds: [] }, "L1"), false);
+  assert.equal(appointmentStillOwnsLock({ status: "cancelled", capacityLockIds: ["L1"] }, "L1"), false);
+  assert.equal(appointmentStillOwnsLock(null, "L1"), false);
+});
+
 test("cancelling an appointment releases capacity and cancels linked work orders atomically", async () => {
   const { db, lifecycle } = fixture();
   const result = await lifecycle.cancelAppointment({
@@ -180,15 +199,7 @@ test("cancelling an appointment releases capacity and cancels linked work orders
 });
 
 test("rescheduling preserves appointment identity and swaps work orders plus capacity locks", async () => {
-  const openOffer = {
-    id: "OFR-RESCHEDULE-1",
-    version: 1,
-    status: "open",
-    expiresAt: "2098-12-31T23:59:59.000Z",
-    request: request(),
-    options: [option()],
-  };
-  const { db, lifecycle } = fixture({ "bookingOffers/OFR-RESCHEDULE-1": openOffer });
+  const { db, lifecycle } = fixture({ "bookingOffers/OFR-RESCHEDULE-1": openOffer() });
   const result = await lifecycle.rescheduleAppointment({
     appointmentId: "APT-LIVE-1",
     offerId: "OFR-RESCHEDULE-1",
@@ -212,4 +223,44 @@ test("rescheduling preserves appointment identity and swaps work orders plus cap
   assert.equal(db.read("bookingCapacityLocks/lock-new-1330").active, true);
   assert.equal(db.read("bookingCapacityLocks/lock-new-1330").appointmentId, "APT-LIVE-1");
   assert.equal(db.read("bookingOffers/OFR-RESCHEDULE-1").appointmentId, "APT-LIVE-1");
+});
+
+test("rescheduling heals an active capacity lock detached from its previous appointment", async () => {
+  const { db, lifecycle } = fixture({
+    "bookingOffers/OFR-RESCHEDULE-1": openOffer(),
+    "appointments/APT-STALE": { appointmentId: "APT-STALE", status: "confirmed", capacityLockIds: [] },
+    "bookingCapacityLocks/lock-new-1330": { appointmentId: "APT-STALE", active: true, date: "2098-12-22", vanId: "VAN-2", slot: "13:30" },
+  });
+  const result = await lifecycle.rescheduleAppointment({
+    appointmentId: "APT-LIVE-1",
+    offerId: "OFR-RESCHEDULE-1",
+    offerVersion: 1,
+    optionId: "OPT-NEW",
+    reason: "Operational move",
+    changeKind: "operational_move",
+    actor: { id: "owner-1", name: "Owner" },
+  });
+  assert.equal(result.success, true);
+  assert.equal(db.read("bookingCapacityLocks/lock-new-1330").appointmentId, "APT-LIVE-1");
+  assert.equal(db.read("bookingCapacityLocks/lock-new-1330").active, true);
+});
+
+test("rescheduling still blocks capacity genuinely owned by another active appointment", async () => {
+  const { lifecycle } = fixture({
+    "bookingOffers/OFR-RESCHEDULE-1": openOffer(),
+    "appointments/APT-OTHER": { appointmentId: "APT-OTHER", status: "confirmed", capacityLockIds: ["lock-new-1330"] },
+    "bookingCapacityLocks/lock-new-1330": { appointmentId: "APT-OTHER", active: true, date: "2098-12-22", vanId: "VAN-2", slot: "13:30" },
+  });
+  await assert.rejects(
+    () => lifecycle.rescheduleAppointment({
+      appointmentId: "APT-LIVE-1",
+      offerId: "OFR-RESCHEDULE-1",
+      offerVersion: 1,
+      optionId: "OPT-NEW",
+      reason: "Operational move",
+      changeKind: "operational_move",
+      actor: { id: "owner-1", name: "Owner" },
+    }),
+    /owned by another active appointment/i,
+  );
 });

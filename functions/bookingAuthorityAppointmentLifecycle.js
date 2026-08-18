@@ -14,7 +14,7 @@ const {
   validateWorkOrders,
 } = require("./bookingAuthorityFirestore");
 
-const APPOINTMENT_LIFECYCLE_VERSION = 2;
+const APPOINTMENT_LIFECYCLE_VERSION = 3;
 const RESCHEDULE_CHANGE_KINDS = new Set(["customer_reschedule", "operational_move"]);
 
 function defaultServerTimestamp() {
@@ -98,6 +98,13 @@ function scheduleChangeNeedsCustomerFollowUp(kind, from = {}, to = {}) {
   if (kind === "customer_reschedule") return true;
   return cleanText(from.dateKey, 20) !== cleanText(to.dateKey, 20)
     || cleanText(from.primaryStart, 20) !== cleanText(to.primaryStart, 20);
+}
+
+function appointmentStillOwnsLock(appointment, lockId) {
+  if (!appointment) return false;
+  const status = cleanText(appointment.status, 40).toLowerCase();
+  if (["cancelled", "canceled", "cancelada"].includes(status)) return false;
+  return Array.isArray(appointment.capacityLockIds) && appointment.capacityLockIds.includes(lockId);
 }
 
 function createBookingAppointmentLifecycle({
@@ -280,19 +287,36 @@ function createBookingAppointmentLifecycle({
 
       const newLocks = validateCapacityLocks(validation.capacityLocks);
       const newLockIds = new Set(newLocks.map((lock) => lock.id));
-      const lockSnapshots = [];
-      for (const lock of newLocks) {
+      const lockSnapshots = await Promise.all(newLocks.map(async (lock) => {
         const lockRef = db.collection(collections.capacityLocks).doc(lock.id);
-        lockSnapshots.push({ lock, lockRef, snapshot: await transaction.get(lockRef) });
-      }
-      for (const entry of lockSnapshots) {
-        if (!entry.snapshot.exists) continue;
-        const stored = entry.snapshot.data();
-        if (stored.active !== false && stored.appointmentId !== id) {
+        return { lock, lockRef, snapshot: await transaction.get(lockRef) };
+      }));
+      const foreignActiveLocks = lockSnapshots.filter((entry) => {
+        if (!entry.snapshot.exists) return false;
+        const stored = entry.snapshot.data() || {};
+        return stored.active !== false && cleanText(stored.appointmentId, 180) !== id;
+      });
+      if (foreignActiveLocks.length) {
+        const ownerIds = [...new Set(foreignActiveLocks
+          .map((entry) => cleanText(entry.snapshot.data()?.appointmentId, 180))
+          .filter(Boolean))];
+        const ownerSnapshots = await Promise.all(ownerIds.map(async (ownerId) => ({
+          ownerId,
+          snapshot: await transaction.get(db.collection(collections.appointments).doc(ownerId)),
+        })));
+        const owners = new Map(ownerSnapshots.map(({ ownerId, snapshot }) => [
+          ownerId,
+          snapshot.exists ? { id: snapshot.id, ...snapshot.data() } : null,
+        ]));
+
+        for (const entry of foreignActiveLocks) {
+          const stored = entry.snapshot.data() || {};
+          const ownerId = cleanText(stored.appointmentId, 180);
+          if (!appointmentStillOwnsLock(owners.get(ownerId), entry.lock.id)) continue;
           throw new BookingAuthorityError(
             BOOKING_ERROR_CODES.SLOT_CONFLICT,
-            "The selected reschedule capacity was occupied concurrently.",
-            { date: entry.lock.date, vanId: entry.lock.vanId, slot: entry.lock.slot },
+            "The selected reschedule capacity is owned by another active appointment.",
+            { date: entry.lock.date, vanId: entry.lock.vanId, slot: entry.lock.slot, appointmentId: ownerId },
           );
         }
       }
@@ -438,6 +462,7 @@ function createBookingAppointmentLifecycle({
 
 module.exports = {
   APPOINTMENT_LIFECYCLE_VERSION,
+  appointmentStillOwnsLock,
   createBookingAppointmentLifecycle,
   normalizeChangeKind,
   scheduleChangeNeedsCustomerFollowUp,
