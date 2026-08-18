@@ -12,7 +12,7 @@ const { createBookingAuthority } = require("./bookingAuthorityFirestore");
 const { createBookingAppointmentLifecycle } = require("./bookingAuthorityAppointmentLifecycle");
 const { createSchedulingProvider } = require("./bookingAuthoritySchedulingProvider");
 
-const OFFICE_BOOKING_API_VERSION = 2;
+const OFFICE_BOOKING_API_VERSION = 3;
 const OFFICE_BOOKING_ROLES = Object.freeze([
   "admin",
   "office",
@@ -24,6 +24,7 @@ const OFFICE_BOOKING_ROLES = Object.freeze([
 ]);
 const OFFICE_BOOKING_ACTIONS = Object.freeze({
   LIST_PRESETS: "list_presets",
+  LIST_APPOINTMENT_ATTRIBUTION: "list_appointment_attribution",
   CHECK_AVAILABILITY: "check_availability",
   CREATE_APPOINTMENT: "create_appointment",
   GET_APPOINTMENT: "get_appointment",
@@ -67,6 +68,10 @@ function officeActor(identity = {}) {
   };
 }
 
+function lifecycleChangeKind(value) {
+  return cleanText(value, 80) === "operational_move" ? "operational_move" : "customer_reschedule";
+}
+
 function bookingRequestFromOffice(data = {}) {
   const presetId = cleanText(data.presetId, 120);
   const serviceId = cleanText(data.serviceId, 120);
@@ -99,6 +104,11 @@ function compactPreset(item = {}) {
     durationMinutesPerUnit: Math.max(30, Number(item.durationMinutesPerUnit || 60)),
     active: item.active !== false,
   };
+}
+
+function normalizedAppointmentIds(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item) => cleanText(item, 180)).filter(Boolean))].slice(0, 500);
 }
 
 function apiError(error) {
@@ -194,13 +204,35 @@ function createOfficeBookingApi({ db, verifyIdToken, bookingAuthority = null, sc
     return { success: true, version: OFFICE_BOOKING_API_VERSION, presets };
   }
 
+  async function listAppointmentAttribution(data = {}) {
+    const appointmentIds = normalizedAppointmentIds(data.appointmentIds);
+    if (!appointmentIds.length) return { success: true, version: OFFICE_BOOKING_API_VERSION, attribution: [] };
+    const snapshots = await Promise.all(appointmentIds.map((id) => db.collection("appointments").doc(id).get()));
+    const attribution = snapshots
+      .filter((item) => item.exists)
+      .map((item) => {
+        const appointment = item.data() || {};
+        return {
+          appointmentId: cleanText(appointment.appointmentId || item.id, 180),
+          source: cleanText(appointment.source, 80),
+          createdBy: cleanText(appointment.createdBy, 160),
+          createdByName: cleanText(appointment.createdByName, 160),
+          createdAtIso: cleanText(appointment.createdAtIso, 80),
+          updatedAtIso: cleanText(appointment.updatedAtIso, 80),
+        };
+      });
+    return { success: true, version: OFFICE_BOOKING_API_VERSION, attribution };
+  }
+
   async function execute({ action, data = {}, identity }) {
     const actor = officeActor(identity);
     if (action === OFFICE_BOOKING_ACTIONS.LIST_PRESETS) return listPresets();
+    if (action === OFFICE_BOOKING_ACTIONS.LIST_APPOINTMENT_ATTRIBUTION) return listAppointmentAttribution(data);
     if (action === OFFICE_BOOKING_ACTIONS.CHECK_AVAILABILITY) {
       const requestId = officeRequestId(data.requestId);
       const request = bookingRequestFromOffice(data);
       const excludeAppointmentId = cleanText(data.appointmentId, 180);
+      const requiredPrimaryVanId = cleanText(data.requiredVanId, 120);
       return authority.checkAvailability({
         request,
         actor,
@@ -209,6 +241,7 @@ function createOfficeBookingApi({ db, verifyIdToken, bookingAuthority = null, sc
           requestKey: `office:${identity.uid}:${requestId}:availability`,
           officeRequestId: requestId,
           excludeAppointmentId,
+          requiredPrimaryVanId,
         },
       });
     }
@@ -256,6 +289,7 @@ function createOfficeBookingApi({ db, verifyIdToken, bookingAuthority = null, sc
         reason: data.reason,
         note: data.note,
         actor,
+        changeKind: lifecycleChangeKind(data.changeKind),
         context: {
           channel: "office",
           officeRequestId: requestId,
@@ -283,7 +317,7 @@ function createOfficeBookingApi({ db, verifyIdToken, bookingAuthority = null, sc
     }
   }
 
-  return { version: OFFICE_BOOKING_API_VERSION, authenticate, execute, handle, listPresets };
+  return { version: OFFICE_BOOKING_API_VERSION, authenticate, execute, handle, listPresets, listAppointmentAttribution };
 }
 
 let defaultApi;
@@ -318,5 +352,6 @@ module.exports.OFFICE_BOOKING_ACTIONS = OFFICE_BOOKING_ACTIONS;
 module.exports.OFFICE_BOOKING_ROLES = OFFICE_BOOKING_ROLES;
 module.exports.bookingRequestFromOffice = bookingRequestFromOffice;
 module.exports.createOfficeBookingApi = createOfficeBookingApi;
+module.exports.lifecycleChangeKind = lifecycleChangeKind;
 module.exports.officeRequestId = officeRequestId;
 module.exports.requireOfficeRole = requireOfficeRole;

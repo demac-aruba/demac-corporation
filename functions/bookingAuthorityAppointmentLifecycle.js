@@ -14,7 +14,8 @@ const {
   validateWorkOrders,
 } = require("./bookingAuthorityFirestore");
 
-const APPOINTMENT_LIFECYCLE_VERSION = 1;
+const APPOINTMENT_LIFECYCLE_VERSION = 2;
+const RESCHEDULE_CHANGE_KINDS = new Set(["customer_reschedule", "operational_move"]);
 
 function defaultServerTimestamp() {
   const { FieldValue } = require("firebase-admin/firestore");
@@ -47,6 +48,11 @@ function requireReason(value, operation) {
   return reason;
 }
 
+function normalizeChangeKind(value) {
+  const candidate = cleanText(value, 80);
+  return RESCHEDULE_CHANGE_KINDS.has(candidate) ? candidate : "customer_reschedule";
+}
+
 function activeAppointment(snapshot, appointmentId) {
   if (!snapshot.exists) {
     throw new BookingAuthorityError(
@@ -72,7 +78,7 @@ function scheduleSnapshot(appointment = {}) {
   });
 }
 
-function historyEvent({ kind, actor, reason, note, now, from, to }) {
+function historyEvent({ kind, actor, reason, note, now, from, to, customerNotificationRecommended }) {
   const actorInfo = actorFields(actor);
   return compactObject({
     id: `LIFE-${now.getTime()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -84,8 +90,14 @@ function historyEvent({ kind, actor, reason, note, now, from, to }) {
     note: cleanText(note, 1_500),
     from,
     to,
-    customerNotificationRecommended: kind === "customer_reschedule",
+    customerNotificationRecommended: customerNotificationRecommended === true,
   });
+}
+
+function scheduleChangeNeedsCustomerFollowUp(kind, from = {}, to = {}) {
+  if (kind === "customer_reschedule") return true;
+  return cleanText(from.dateKey, 20) !== cleanText(to.dateKey, 20)
+    || cleanText(from.primaryStart, 20) !== cleanText(to.primaryStart, 20);
 }
 
 function createBookingAppointmentLifecycle({
@@ -124,6 +136,7 @@ function createBookingAppointmentLifecycle({
         note,
         now,
         from: scheduleSnapshot(appointment),
+        customerNotificationRecommended: false,
       });
       const lifecycleHistory = [...(Array.isArray(appointment.lifecycleHistory) ? appointment.lifecycleHistory : []), event];
       const patch = compactObject({
@@ -170,6 +183,7 @@ function createBookingAppointmentLifecycle({
     reason,
     note = "",
     actor = {},
+    changeKind = "customer_reschedule",
     context = {},
   } = {}) {
     const id = cleanText(appointmentId, 180);
@@ -181,7 +195,8 @@ function createBookingAppointmentLifecycle({
         { appointmentId: id, offerId: canonicalOfferId },
       );
     }
-    const rescheduleReason = requireReason(reason, "Reschedule");
+    const normalizedChangeKind = normalizeChangeKind(changeKind);
+    const rescheduleReason = requireReason(reason, normalizedChangeKind === "operational_move" ? "Operational move" : "Reschedule");
     const now = asDate(clock());
     const appointmentRef = db.collection(collections.appointments).doc(id);
     const offerRef = db.collection(collections.offers).doc(canonicalOfferId);
@@ -289,7 +304,7 @@ function createBookingAppointmentLifecycle({
         customer,
         property,
         actor,
-        context: { ...context, reschedule: true },
+        context: { ...context, reschedule: true, changeKind: normalizedChangeKind },
         now,
       }), id);
       const workOrderIds = workOrders.map((item) => item.id);
@@ -297,6 +312,7 @@ function createBookingAppointmentLifecycle({
       const oldWorkOrderIds = Array.isArray(current.workOrderIds) ? current.workOrderIds : [];
       const oldLockIds = Array.isArray(current.capacityLockIds) ? current.capacityLockIds : [];
       const actorInfo = actorFields(actor);
+      const previousSchedule = scheduleSnapshot(current);
       const nextSchedule = {
         dateKey: refreshedOption.date,
         primaryVanId: cleanText(refreshedOption.assignments?.[0]?.vanId, 120),
@@ -305,14 +321,16 @@ function createBookingAppointmentLifecycle({
         supportVanId: cleanText(refreshedOption.assignments?.[1]?.vanId, 120),
         supportStart: cleanText(refreshedOption.assignments?.[1]?.time, 20),
       };
+      const customerNotificationRecommended = scheduleChangeNeedsCustomerFollowUp(normalizedChangeKind, previousSchedule, nextSchedule);
       const event = historyEvent({
-        kind: "customer_reschedule",
+        kind: normalizedChangeKind,
         actor,
         reason: rescheduleReason,
         note,
         now,
-        from: scheduleSnapshot(current),
+        from: previousSchedule,
         to: nextSchedule,
+        customerNotificationRecommended,
       });
       const lifecycleHistory = [...(Array.isArray(current.lifecycleHistory) ? current.lifecycleHistory : []), event];
 
@@ -333,6 +351,8 @@ function createBookingAppointmentLifecycle({
         capacityLockIds: newLocks.map((lock) => lock.id),
         rescheduleReason,
         rescheduleNote: cleanText(note, 1_500),
+        lastScheduleChangeKind: normalizedChangeKind,
+        customerNotificationRecommended,
         rescheduledAtIso: now.toISOString(),
         updatedAtIso: now.toISOString(),
         lifecycleHistory,
@@ -390,6 +410,8 @@ function createBookingAppointmentLifecycle({
       return {
         success: true,
         appointmentId: id,
+        changeKind: normalizedChangeKind,
+        customerNotificationRecommended,
         appointment: {
           ...current,
           status: "confirmed",
@@ -417,4 +439,6 @@ function createBookingAppointmentLifecycle({
 module.exports = {
   APPOINTMENT_LIFECYCLE_VERSION,
   createBookingAppointmentLifecycle,
+  normalizeChangeKind,
+  scheduleChangeNeedsCustomerFollowUp,
 };

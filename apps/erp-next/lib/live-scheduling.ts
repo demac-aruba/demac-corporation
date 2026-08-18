@@ -2,6 +2,7 @@ import type { BrowserAppointmentRecord } from './browser-operational';
 import type { CalendarDispatchJob } from './scheduling-capacity';
 import type { DaySegment, WorkPresetId } from './scheduling';
 import { listFirestoreCollection } from './firebase/firestore-rest';
+import { listOfficeAppointmentAttribution, type OfficeAppointmentAttribution } from './office-booking-authority';
 
 const KNOWN_PRESETS = new Set<WorkPresetId>([
   'standard_service',
@@ -190,6 +191,13 @@ function propertyLabel(property: LiveProperty | undefined, fallbackId: string) {
   return text(property?.name) || text(property?.address) || fallbackId || 'Property';
 }
 
+export function bookingActorLabel(appointment: OfficeAppointmentAttribution | undefined) {
+  if (!appointment) return '';
+  const source = text(appointment.source).toLowerCase();
+  if (source === 'demac-customer-agent') return 'Maya';
+  return text(appointment.createdByName) || (source === 'office-scheduling' ? 'Office' : '');
+}
+
 function workOrderAssignment(
   order: LiveWorkOrder,
   customer: string,
@@ -227,9 +235,11 @@ export function projectLiveSchedulingAppointments(
   clients: LiveClient[],
   properties: LiveProperty[],
   vans: LiveVan[] = [],
+  canonicalAppointments: OfficeAppointmentAttribution[] = [],
 ): BrowserAppointmentRecord[] {
   const clientById = new Map(clients.map((client) => [client.id, client]));
   const propertyById = new Map(properties.map((property) => [property.id, property]));
+  const appointmentById = new Map(canonicalAppointments.map((appointment) => [appointment.appointmentId, appointment]));
   const grouped = new Map<string, LiveWorkOrder[]>();
 
   for (const order of workOrders) {
@@ -250,6 +260,7 @@ export function projectLiveSchedulingAppointments(
       return aSupport - bSupport || text(a.time).localeCompare(text(b.time)) || a.id.localeCompare(b.id);
     });
     const primary = sorted[0];
+    const authorityAppointment = appointmentById.get(appointmentId);
     const clientId = text(primary.clientId);
     const propertyId = text(primary.propertyId);
     const client = clientById.get(clientId);
@@ -264,6 +275,7 @@ export function projectLiveSchedulingAppointments(
     const fallbackDescription = `${primaryAssignment.presetId.replaceAll('_', ' ')} x${quantity}`;
     const cancelled = activeOrders.length === 0 && assignments.every((assignment) => assignment.status === 'cancelled');
     const confirmedAt = text(primary.confirmedAt) || text(primary.createdAt);
+    const actorLabel = bookingActorLabel(authorityAppointment);
 
     appointments.push({
       id: appointmentId,
@@ -286,8 +298,11 @@ export function projectLiveSchedulingAppointments(
       assignments,
       primaryVanId: primaryAssignment.vanId,
       supportVanId: supportAssignment?.vanId,
-      createdAt: text(primary.createdAt) || confirmedAt || new Date(0).toISOString(),
-      updatedAt: text(primary.updatedAt) || undefined,
+      bookedById: text(authorityAppointment?.createdBy) || undefined,
+      bookedByName: actorLabel || undefined,
+      bookedBySource: text(authorityAppointment?.source) || undefined,
+      createdAt: text(authorityAppointment?.createdAtIso) || text(primary.createdAt) || confirmedAt || new Date(0).toISOString(),
+      updatedAt: text(authorityAppointment?.updatedAtIso) || text(primary.updatedAt) || undefined,
       confirmedAt: confirmedAt || undefined,
       workOrderId: primary.id,
     });
@@ -303,5 +318,12 @@ export async function loadLiveSchedulingAppointments() {
     listFirestoreCollection<LiveProperty>('properties', 1000),
     listFirestoreCollection<LiveVan>('vans', 250),
   ]);
-  return projectLiveSchedulingAppointments(workOrders, clients, properties, vans);
+  const appointmentIds = [...new Set(workOrders.map((order) => text(order.appointmentId)).filter(Boolean))];
+  let attribution: OfficeAppointmentAttribution[] = [];
+  try {
+    attribution = await listOfficeAppointmentAttribution(appointmentIds);
+  } catch {
+    // Attribution is supplemental. The operational board must remain available even if the authenticated metadata read is temporarily unavailable during a deployment transition.
+  }
+  return projectLiveSchedulingAppointments(workOrders, clients, properties, vans, attribution);
 }

@@ -45,6 +45,9 @@ export type BrowserAppointmentRecord = {
   assignments: CalendarDispatchJob[];
   primaryVanId: string;
   supportVanId?: string;
+  bookedById?: string;
+  bookedByName?: string;
+  bookedBySource?: string;
   lifecycleHistory?: BrowserAppointmentHistoryEvent[];
   cancellationReason?: string;
   cancellationNote?: string;

@@ -32,6 +32,15 @@ export type OfficeAvailabilityResult = {
   reason?: string;
 };
 
+export type OfficeAppointmentAttribution = {
+  appointmentId: string;
+  source?: string;
+  createdBy?: string;
+  createdByName?: string;
+  createdAtIso?: string;
+  updatedAtIso?: string;
+};
+
 type ApiError = { error?: { code?: string; message?: string; details?: Record<string, unknown> } };
 
 function endpoint() {
@@ -62,6 +71,16 @@ export function createOfficeLifecycleRequestId(prefix = 'schedule') {
   return `${prefix}-${Date.now()}-${random}`;
 }
 
+export async function listOfficeAppointmentAttribution(appointmentIds: string[]) {
+  const ids = [...new Set(appointmentIds.map((item) => item.trim()).filter(Boolean))];
+  const attribution: OfficeAppointmentAttribution[] = [];
+  for (let index = 0; index < ids.length; index += 500) {
+    const result = await callOfficeBookingAuthority<{ success: true; attribution: OfficeAppointmentAttribution[] }>('list_appointment_attribution', { appointmentIds: ids.slice(index, index + 500) });
+    attribution.push(...(result.attribution ?? []));
+  }
+  return attribution;
+}
+
 export async function checkOfficeRescheduleAvailability(input: {
   appointmentId: string;
   requestId: string;
@@ -70,6 +89,8 @@ export async function checkOfficeRescheduleAvailability(input: {
   presetId: string;
   quantity: number;
   requestedDate: string;
+  requestedTime?: string;
+  requiredVanId?: string;
   customerFacingDescription?: string;
 }) {
   return callOfficeBookingAuthority<OfficeAvailabilityResult>('check_availability', input);
@@ -92,6 +113,13 @@ export async function rescheduleOfficeAppointment(input: {
   optionId: string;
   reason: string;
   note?: string;
+  changeKind?: 'customer_reschedule' | 'operational_move';
 }) {
-  return callOfficeBookingAuthority<{ success: true; appointmentId: string; appointment: Record<string, unknown> }>('reschedule_appointment', input);
+  return callOfficeBookingAuthority<{
+    success: true;
+    appointmentId: string;
+    changeKind?: 'customer_reschedule' | 'operational_move';
+    customerNotificationRecommended?: boolean;
+    appointment: Record<string, unknown>;
+  }>('reschedule_appointment', input);
 }

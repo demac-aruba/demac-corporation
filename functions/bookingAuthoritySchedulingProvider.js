@@ -226,19 +226,42 @@ function createSchedulingProvider({ db }) {
       const today = nowParts.date;
       const loaded = await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS));
       const data = dataWithoutAppointment(loaded, context.excludeAppointmentId);
+      const requiredPrimaryVanId = cleanText(context.requiredPrimaryVanId, 120);
+      const schedulingData = requiredPrimaryVanId
+        ? { ...data, vans: data.vans.filter((van) => van.id === requiredPrimaryVanId) }
+        : data;
+      if (requiredPrimaryVanId && !schedulingData.vans.length) {
+        return {
+          options: [],
+          reason: "required-van-unavailable",
+          providerVersion: SCHEDULING_PROVIDER_VERSION,
+          engineVersion: CANONICAL_SCHEDULING_ENGINE_VERSION,
+          metadata: { requiredPrimaryVanId },
+        };
+      }
       const { property } = exactCustomerProperty(data, request);
       const routeConfig = routeConfigFromSettings(data.businessSettings);
       const result = generateCanonicalOptions({
         request,
         property,
-        data,
+        data: schedulingData,
         routeConfig,
         today,
         currentTime: nowParts.time,
       });
+      const requestedDate = cleanText(request.constraints?.requestedDate, 20);
+      const requestedTime = cleanText(request.constraints?.requestedTime, 20);
+      const options = requiredPrimaryVanId
+        ? result.options.filter((option) => {
+          const primary = option.assignments?.[0];
+          return primary?.vanId === requiredPrimaryVanId
+            && (!requestedDate || option.date === requestedDate)
+            && (!requestedTime || option.time === requestedTime);
+        })
+        : result.options;
       return {
-        options: result.options,
-        reason: result.reason,
+        options,
+        reason: options.length ? result.reason : (requiredPrimaryVanId ? "required-drag-target-unavailable" : result.reason),
         providerVersion: SCHEDULING_PROVIDER_VERSION,
         engineVersion: CANONICAL_SCHEDULING_ENGINE_VERSION,
         metadata: {
@@ -248,6 +271,7 @@ function createSchedulingProvider({ db }) {
           requestedTimeUnavailable: result.requestedTimeUnavailable === true,
           routeZone: result.candidateZone?.label || "",
           vansRequired: result.allocations?.length || 0,
+          requiredPrimaryVanId: requiredPrimaryVanId || "",
         },
       };
     },

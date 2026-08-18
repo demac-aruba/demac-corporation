@@ -10,7 +10,7 @@ function snapshot(data, exists = true) {
   return { exists, data: () => data };
 }
 
-function createDb({ role = "office", active = true, presets = [] } = {}) {
+function createDb({ role = "office", active = true, presets = [], appointments = {} } = {}) {
   return {
     collection(name) {
       return {
@@ -19,6 +19,9 @@ function createDb({ role = "office", active = true, presets = [] } = {}) {
             async get() {
               if (name === "users") return snapshot({ id, role, active, name: "Office User" });
               if (name === "businessSettings" && id === "appointment-work-presets") return snapshot({ presets });
+              if (name === "appointments") return Object.prototype.hasOwnProperty.call(appointments, id)
+                ? snapshot(appointments[id])
+                : snapshot({}, false);
               return snapshot({}, false);
             },
           };
@@ -125,7 +128,31 @@ test("list_presets exposes only active ERP appointment presets", async () => {
   assert.equal(result.body.presets[0].durationMinutesPerUnit, 60);
 });
 
-test("check_availability delegates to the canonical Booking Authority with stable office context", async () => {
+test("list_appointment_attribution exposes only safe creator metadata through authenticated office authority", async () => {
+  const db = createDb({ appointments: {
+    "APT-1": { appointmentId: "APT-1", source: "office-scheduling", createdBy: "christian-id", createdByName: "Christian", customerId: "secret-customer" },
+    "APT-2": { appointmentId: "APT-2", source: "demac-customer-agent", createdByName: "", propertyId: "secret-property" },
+  } });
+  const api = createOfficeBookingApi({ db, verifyIdToken, bookingAuthority: createAuthority(), schedulingProvider: {} });
+  const result = await api.handle(request({
+    action: OFFICE_BOOKING_ACTIONS.LIST_APPOINTMENT_ATTRIBUTION,
+    data: { appointmentIds: ["APT-1", "APT-2", "APT-MISSING", "APT-1"] },
+  }));
+  assert.equal(result.status, 200);
+  assert.equal(result.body.attribution.length, 2);
+  assert.deepEqual(result.body.attribution[0], {
+    appointmentId: "APT-1",
+    source: "office-scheduling",
+    createdBy: "christian-id",
+    createdByName: "Christian",
+    createdAtIso: "",
+    updatedAtIso: "",
+  });
+  assert.equal(Object.prototype.hasOwnProperty.call(result.body.attribution[0], "customerId"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(result.body.attribution[1], "propertyId"), false);
+});
+
+test("check_availability delegates to the canonical Booking Authority with stable office and drag context", async () => {
   let captured;
   const authority = createAuthority({
     async checkAvailability(args) {
@@ -146,6 +173,7 @@ test("check_availability delegates to the canonical Booking Authority with stabl
       quantity: 2,
       requestedDate: "2026-08-20",
       requestedTime: "09:30",
+      requiredVanId: "VAN-4",
       preferredTime: "",
       customerFacingDescription: "Servicio de dos aires",
       technicianInstructions: "Acceso por recepción",
@@ -160,6 +188,7 @@ test("check_availability delegates to the canonical Booking Authority with stabl
   assert.equal(captured.actor.id, "user-1");
   assert.equal(captured.context.requestKey, "office:user-1:office-form-123:availability");
   assert.equal(captured.context.excludeAppointmentId, "APT-EXISTING-1");
+  assert.equal(captured.context.requiredPrimaryVanId, "VAN-4");
 });
 
 test("create_appointment uses stable idempotency and returns only real Booking Authority proof", async () => {
@@ -222,7 +251,7 @@ test("cancel_appointment delegates to the canonical lifecycle authority", async 
   assert.equal(captured.actor.source, "office-scheduling");
 });
 
-test("reschedule_appointment preserves identity and delegates selected canonical offer", async () => {
+test("reschedule_appointment preserves identity and delegates operational move intent", async () => {
   let captured;
   const lifecycle = createLifecycle({
     async rescheduleAppointment(args) {
@@ -245,13 +274,15 @@ test("reschedule_appointment preserves identity and delegates selected canonical
       offerId: "OFR-NEW",
       offerVersion: 3,
       optionId: "OPT-NEW",
-      reason: "Customer requested another date",
-      note: "Customer called",
+      reason: "Drag-and-drop operational move",
+      note: "VAN-1 08:30 → VAN-2 08:30",
+      changeKind: "operational_move",
     },
   }));
   assert.equal(result.status, 200);
   assert.equal(captured.appointmentId, "APT-REAL-1");
   assert.equal(captured.offerId, "OFR-NEW");
   assert.equal(captured.optionId, "OPT-NEW");
+  assert.equal(captured.changeKind, "operational_move");
   assert.equal(captured.context.excludeAppointmentId, "APT-REAL-1");
 });
