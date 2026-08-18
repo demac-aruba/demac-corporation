@@ -12,7 +12,7 @@ import {
 type WorkOrder = Parameters<typeof projectLiveSchedulingAppointments>[0][number];
 type Client = Parameters<typeof projectLiveSchedulingAppointments>[1][number];
 type Property = Parameters<typeof projectLiveSchedulingAppointments>[2][number];
-type Van = Parameters<typeof projectLiveSchedulingAppointments>[3][number];
+type Van = NonNullable<Parameters<typeof projectLiveSchedulingAppointments>[3]>[number];
 
 type ReferenceData = {
   clients: Client[];
