@@ -201,6 +201,7 @@ function createOfficeBookingApi({ db, verifyIdToken, bookingAuthority = null, sc
       const requestId = officeRequestId(data.requestId);
       const request = bookingRequestFromOffice(data);
       const excludeAppointmentId = cleanText(data.appointmentId, 180);
+      const requiredPrimaryVanId = cleanText(data.requiredVanId, 120);
       return authority.checkAvailability({
         request,
         actor,
@@ -209,6 +210,7 @@ function createOfficeBookingApi({ db, verifyIdToken, bookingAuthority = null, sc
           requestKey: `office:${identity.uid}:${requestId}:availability`,
           officeRequestId: requestId,
           excludeAppointmentId,
+          requiredPrimaryVanId,
         },
       });
     }
