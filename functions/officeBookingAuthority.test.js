@@ -51,6 +51,18 @@ function createAuthority(overrides = {}) {
   };
 }
 
+function createLifecycle(overrides = {}) {
+  return {
+    async cancelAppointment(args) {
+      return { success: true, appointmentId: args.appointmentId, appointment: { id: args.appointmentId, status: "cancelled" }, args };
+    },
+    async rescheduleAppointment(args) {
+      return { success: true, appointmentId: args.appointmentId, appointment: { id: args.appointmentId, status: "confirmed" }, args };
+    },
+    ...overrides,
+  };
+}
+
 const verifyIdToken = async () => ({ uid: "user-1", email: "office@demac.test" });
 
 test("office request maps to canonical Booking Authority request without inventing a preset", () => {
@@ -93,6 +105,14 @@ test("office gateway requires Firebase authentication and an office scheduling r
   assert.equal(result.body.error.code, "permission_denied");
 });
 
+test("owner and super-admin roles can use the authenticated office booking authority", async () => {
+  for (const role of ["owner", "super_admin", "super-admin", "superadmin"]) {
+    const api = createOfficeBookingApi({ db: createDb({ role }), verifyIdToken, bookingAuthority: createAuthority(), schedulingProvider: {} });
+    const result = await api.handle(request({ action: OFFICE_BOOKING_ACTIONS.LIST_PRESETS }));
+    assert.equal(result.status, 200, `expected ${role} to be authorized`);
+  }
+});
+
 test("list_presets exposes only active ERP appointment presets", async () => {
   const db = createDb({ presets: [
     { id: "standard_service", label: "Servicio estándar", durationMinutesPerUnit: 60, active: true },
@@ -118,6 +138,7 @@ test("check_availability delegates to the canonical Booking Authority with stabl
     action: OFFICE_BOOKING_ACTIONS.CHECK_AVAILABILITY,
     data: {
       requestId: "office-form-123",
+      appointmentId: "APT-EXISTING-1",
       customerId: "client-1",
       propertyId: "property-1",
       presetId: "standard_service",
@@ -138,6 +159,7 @@ test("check_availability delegates to the canonical Booking Authority with stabl
   assert.equal(captured.actor.source, "office-scheduling");
   assert.equal(captured.actor.id, "user-1");
   assert.equal(captured.context.requestKey, "office:user-1:office-form-123:availability");
+  assert.equal(captured.context.excludeAppointmentId, "APT-EXISTING-1");
 });
 
 test("create_appointment uses stable idempotency and returns only real Booking Authority proof", async () => {
@@ -173,4 +195,63 @@ test("create_appointment refuses success without a verified appointment id", asy
   assert.equal(result.status, 409);
   assert.equal(result.body.success, false);
   assert.equal(result.body.error.code, "availability_provider_error");
+});
+
+test("cancel_appointment delegates to the canonical lifecycle authority", async () => {
+  let captured;
+  const lifecycle = createLifecycle({
+    async cancelAppointment(args) {
+      captured = args;
+      return { success: true, appointmentId: args.appointmentId, appointment: { status: "cancelled" } };
+    },
+  });
+  const api = createOfficeBookingApi({
+    db: createDb(),
+    verifyIdToken,
+    bookingAuthority: createAuthority(),
+    schedulingProvider: {},
+    lifecycleAuthority: lifecycle,
+  });
+  const result = await api.handle(request({
+    action: OFFICE_BOOKING_ACTIONS.CANCEL_APPOINTMENT,
+    data: { requestId: "cancel-form-123", appointmentId: "APT-REAL-1", reason: "Customer cancelled service", note: "Called office" },
+  }));
+  assert.equal(result.status, 200);
+  assert.equal(captured.appointmentId, "APT-REAL-1");
+  assert.equal(captured.reason, "Customer cancelled service");
+  assert.equal(captured.actor.source, "office-scheduling");
+});
+
+test("reschedule_appointment preserves identity and delegates selected canonical offer", async () => {
+  let captured;
+  const lifecycle = createLifecycle({
+    async rescheduleAppointment(args) {
+      captured = args;
+      return { success: true, appointmentId: args.appointmentId, appointment: { status: "confirmed" } };
+    },
+  });
+  const api = createOfficeBookingApi({
+    db: createDb(),
+    verifyIdToken,
+    bookingAuthority: createAuthority(),
+    schedulingProvider: {},
+    lifecycleAuthority: lifecycle,
+  });
+  const result = await api.handle(request({
+    action: OFFICE_BOOKING_ACTIONS.RESCHEDULE_APPOINTMENT,
+    data: {
+      requestId: "reschedule-form-123",
+      appointmentId: "APT-REAL-1",
+      offerId: "OFR-NEW",
+      offerVersion: 3,
+      optionId: "OPT-NEW",
+      reason: "Customer requested another date",
+      note: "Customer called",
+    },
+  }));
+  assert.equal(result.status, 200);
+  assert.equal(captured.appointmentId, "APT-REAL-1");
+  assert.equal(captured.offerId, "OFR-NEW");
+  assert.equal(captured.optionId, "OPT-NEW");
+  assert.equal(captured.context.excludeAppointmentId, "APT-REAL-1");
 });
