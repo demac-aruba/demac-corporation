@@ -33,7 +33,7 @@ const {
 } = require("./bookingAuthoritySchedulingEngine");
 const { canonicalizeSchedulingData } = require("./bookingVanIdentity");
 
-const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v3";
+const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v4";
 
 async function loadSchedulingData(db, startDate, endDate) {
   const workOrderQuery = db.collection("workOrders").where("date", ">=", startDate).where("date", "<=", endDate);
@@ -75,6 +75,29 @@ async function loadSchedulingData(db, startDate, endDate) {
     businessSettings: snapshotItems(businessSnapshot),
     vanHalfDaySchedules: snapshotItems(halfDaySnapshot),
   });
+}
+
+async function loadAppointmentSchedule(db, appointmentId) {
+  const id = cleanText(appointmentId, 180);
+  if (!id) return null;
+  const snapshot = await db.collection("appointments").doc(id).get();
+  if (!snapshot.exists) return null;
+  const appointment = snapshot.data() || {};
+  const assignments = Array.isArray(appointment.assignments) ? appointment.assignments : [];
+  const primary = assignments.find((item) => cleanText(item?.role, 40) !== "support") || assignments[0] || {};
+  return {
+    date: cleanText(appointment.date, 20),
+    time: cleanText(appointment.startTime || primary.time, 20),
+  };
+}
+
+function operationalMoveTimeAllowed({ date, time, today, currentTime, currentSchedule }) {
+  if (!date || !time) return false;
+  if (date > today) return true;
+  if (date < today) return false;
+  if (time > currentTime) return true;
+  return cleanText(currentSchedule?.date, 20) === date
+    && cleanText(currentSchedule?.time, 20) === time;
 }
 
 function dataWithoutAppointment(data, appointmentId) {
@@ -224,9 +247,11 @@ function buildWorkOrders({ appointment, option, request, customer, property, now
   });
 }
 
-function operationalMoveResult({ request, property, data, routeConfig, date, time, vanId, today, currentTime }) {
+function operationalMoveResult({ request, property, data, routeConfig, date, time, vanId, today, currentTime, currentSchedule }) {
   if (!date || !time || !vanId) return { option: null, reason: "missing-operational-move-target" };
-  if (date < today || (date === today && time <= currentTime)) return { option: null, reason: "selected-time-passed" };
+  if (!operationalMoveTimeAllowed({ date, time, today, currentTime, currentSchedule })) {
+    return { option: null, reason: "selected-time-passed" };
+  }
 
   const work = singleWork(request);
   const preset = exactPreset(data, work.presetId);
@@ -300,9 +325,12 @@ function createSchedulingProvider({ db }) {
       const requestedDate = cleanText(request.constraints?.requestedDate, 20);
       const requestedTime = cleanText(request.constraints?.requestedTime, 20);
       const operationalMove = context.changeKind === "operational_move" && requiredPrimaryVanId && requestedDate && requestedTime;
-      const loaded = operationalMove
-        ? await loadSchedulingData(db, requestedDate, requestedDate)
-        : await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS));
+      const [loaded, currentSchedule] = operationalMove
+        ? await Promise.all([
+          loadSchedulingData(db, requestedDate, requestedDate),
+          loadAppointmentSchedule(db, context.excludeAppointmentId),
+        ])
+        : [await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS)), null];
       const data = dataWithoutAppointment(loaded, context.excludeAppointmentId);
       const schedulingData = requiredPrimaryVanId
         ? { ...data, vans: data.vans.filter((van) => van.id === requiredPrimaryVanId) }
@@ -330,6 +358,7 @@ function createSchedulingProvider({ db }) {
           vanId: requiredPrimaryVanId,
           today,
           currentTime: nowParts.time,
+          currentSchedule,
         });
         return {
           options: exact.option ? [exact.option] : [],
@@ -385,10 +414,21 @@ function createSchedulingProvider({ db }) {
     async revalidateSelection({ request, option, context = {}, now = new Date() }) {
       const nowParts = arubaDateParts(now);
       const today = nowParts.date;
-      if (option.date < today || (option.date === today && option.time <= nowParts.time)) {
-        return { available: false, reason: "selected-time-passed" };
-      }
       const operationalMove = context.changeKind === "operational_move";
+      const currentSchedule = operationalMove
+        ? await loadAppointmentSchedule(db, context.excludeAppointmentId)
+        : null;
+      const timeAllowed = operationalMove
+        ? operationalMoveTimeAllowed({
+          date: option.date,
+          time: option.time,
+          today,
+          currentTime: nowParts.time,
+          currentSchedule,
+        })
+        : !(option.date < today || (option.date === today && option.time <= nowParts.time));
+      if (!timeAllowed) return { available: false, reason: "selected-time-passed" };
+
       const loaded = operationalMove
         ? await loadSchedulingData(db, option.date, option.date)
         : await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS));
@@ -488,9 +528,11 @@ module.exports = {
   createSchedulingProvider,
   dataWithoutAppointment,
   exactCustomerProperty,
+  loadAppointmentSchedule,
   loadSchedulingData,
   notificationRecipient,
   operationalMoveResult,
+  operationalMoveTimeAllowed,
   operationalRulesFromSettings,
   routeConfigFromSettings,
 };
