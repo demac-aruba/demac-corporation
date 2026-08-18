@@ -41,6 +41,14 @@ export type OfficeAppointmentAttribution = {
   updatedAtIso?: string;
 };
 
+export type OfficeLifecycleResult = {
+  success: true;
+  appointmentId: string;
+  changeKind?: 'customer_reschedule' | 'operational_move';
+  customerNotificationRecommended?: boolean;
+  appointment: Record<string, unknown>;
+};
+
 type ApiError = { error?: { code?: string; message?: string; details?: Record<string, unknown> } };
 
 function endpoint() {
@@ -137,11 +145,23 @@ export async function rescheduleOfficeAppointment(input: {
   note?: string;
   changeKind?: 'customer_reschedule' | 'operational_move';
 }) {
-  return callOfficeBookingAuthority<{
-    success: true;
-    appointmentId: string;
-    changeKind?: 'customer_reschedule' | 'operational_move';
-    customerNotificationRecommended?: boolean;
-    appointment: Record<string, unknown>;
-  }>('reschedule_appointment', input, 12_000);
+  return callOfficeBookingAuthority<OfficeLifecycleResult>('reschedule_appointment', input, 12_000);
+}
+
+/**
+ * Fast path for an authenticated office drag-and-drop move.
+ * Booking Authority derives the work/customer data from the canonical appointment,
+ * validates the exact van/time, and commits the lifecycle transaction inside one
+ * server request so the browser does not pay two sequential network round trips.
+ */
+export async function moveOfficeAppointment(input: {
+  appointmentId: string;
+  requestId: string;
+  requestedDate: string;
+  requestedTime: string;
+  requiredVanId: string;
+  reason: string;
+  note?: string;
+}) {
+  return callOfficeBookingAuthority<OfficeLifecycleResult>('move_appointment', input, 12_000);
 }
