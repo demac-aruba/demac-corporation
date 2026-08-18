@@ -7,6 +7,8 @@ const {
   buildCapacityLocks,
   buildWorkOrders,
   exactCustomerProperty,
+  operationalMoveResult,
+  routeConfigFromSettings,
 } = require("./bookingAuthoritySchedulingProvider");
 
 function request() {
@@ -40,8 +42,28 @@ function option() {
   };
 }
 
-test("provider exposes canonical provider v2", () => {
-  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v2");
+function operationalData(overrides = {}) {
+  return {
+    workOrders: [],
+    services: [{ id: "s1", name: "Servicio estándar", durationMinutes: 60 }],
+    properties: [{ id: "p1", clientId: "c1", address: "Wayaca 217", operationalZone: "Oranjestad" }],
+    clients: [{ id: "c1", name: "Test Customer" }],
+    vans: [{ id: "VAN-2", name: "Van 2", active: true }],
+    staffProfiles: [],
+    dailyVanAssignments: [],
+    staffAbsences: [],
+    calendarClosures: [],
+    vanHalfDaySchedules: [],
+    businessSettings: [{
+      id: "appointment-work-presets",
+      presets: [{ id: "standard_service", label: "Servicio estándar", durationMinutesPerUnit: 60, active: true }],
+    }],
+    ...overrides,
+  };
+}
+
+test("provider exposes canonical provider v3", () => {
+  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v3");
 });
 
 test("canonical scheduling engine is versioned independently", () => {
@@ -94,4 +116,71 @@ test("work orders link to canonical appointment and only the primary order notif
   assert.equal(orders[1].appointmentAssignmentRole, "support");
   assert.equal(orders[1].whatsappNotificationsEnabled, false);
   assert.equal(orders[1].parentWorkOrderId, "WO-APT-1-1");
+});
+
+test("manual operator drag can place work on an active van before a driver is assigned", () => {
+  const data = operationalData();
+  const result = operationalMoveResult({
+    request: request(),
+    property: data.properties[0],
+    data,
+    routeConfig: routeConfigFromSettings(data.businessSettings),
+    date: "2098-12-20",
+    time: "13:30",
+    vanId: "VAN-2",
+    today: "2098-12-01",
+    currentTime: "08:00",
+  });
+  assert.equal(result.reason, "available");
+  assert.equal(result.option.assignments[0].vanId, "VAN-2");
+  assert.equal(result.option.assignments[0].technicianIds.length, 0);
+  assert.equal(result.option.time, "13:30");
+});
+
+test("manual operator drag still refuses a real occupied-capacity conflict", () => {
+  const data = operationalData({
+    workOrders: [{
+      id: "WO-OTHER",
+      appointmentId: "APT-OTHER",
+      date: "2098-12-20",
+      time: "13:30",
+      status: "Confirmada",
+      vanId: "VAN-2",
+      scheduledSlots: 2,
+      propertyId: "p1",
+      zone: "Oranjestad",
+    }],
+  });
+  const result = operationalMoveResult({
+    request: request(),
+    property: data.properties[0],
+    data,
+    routeConfig: routeConfigFromSettings(data.businessSettings),
+    date: "2098-12-20",
+    time: "13:30",
+    vanId: "VAN-2",
+    today: "2098-12-01",
+    currentTime: "08:00",
+  });
+  assert.equal(result.option, null);
+  assert.equal(result.reason, "operational-target-unavailable");
+});
+
+test("manual operator drag refuses a van that is actually out of service or in maintenance", () => {
+  const data = operationalData({
+    vans: [{ id: "VAN-2", name: "Van 2", active: true, status: "Mantenimiento" }],
+  });
+  const result = operationalMoveResult({
+    request: request(),
+    property: data.properties[0],
+    data,
+    routeConfig: routeConfigFromSettings(data.businessSettings),
+    date: "2098-12-20",
+    time: "13:30",
+    vanId: "VAN-2",
+    today: "2098-12-01",
+    currentTime: "08:00",
+  });
+  assert.equal(result.option, null);
+  assert.equal(result.reason, "operational-target-unavailable");
 });
