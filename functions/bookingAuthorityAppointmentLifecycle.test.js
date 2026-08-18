@@ -72,7 +72,7 @@ function appointmentSeed() {
   };
 }
 
-function option() {
+function option(overrides = {}) {
   return {
     id: "OPT-NEW",
     date: "2098-12-22",
@@ -86,27 +86,32 @@ function option() {
     durationMinutesPerUnit: 60,
     quantity: 2,
     assignments: [{ vanId: "VAN-2", vanName: "Van 2", technicianIds: [], quantity: 2, slots: 2, fullDay: false, time: "13:30" }],
+    ...overrides,
   };
 }
 
-function request() {
+function request(requestedDate = "2098-12-22") {
   return {
     customerId: "client-1",
     propertyId: "property-1",
     workLines: [{ id: "work-1", presetId: "standard_service", serviceId: "service-1", quantity: 2 }],
-    constraints: { requestedDate: "2098-12-22" },
+    constraints: { requestedDate },
   };
 }
 
-function openOffer() {
+function openOffer(selectedOption = option()) {
   return {
     id: "OFR-RESCHEDULE-1",
     version: 1,
     status: "open",
     expiresAt: "2098-12-31T23:59:59.000Z",
-    request: request(),
-    options: [option()],
+    request: request(selectedOption.date),
+    options: [selectedOption],
   };
+}
+
+function operationalOffer() {
+  return openOffer(option({ date: "2098-12-20" }));
 }
 
 function fixture(extra = {}) {
@@ -120,13 +125,17 @@ function fixture(extra = {}) {
     ...extra,
   });
   const provider = {
-    async revalidateSelection({ option: selected }) { return { available: true, option: selected }; },
-    async validateTransaction() {
+    revalidationCalls: 0,
+    async revalidateSelection({ option: selected }) {
+      this.revalidationCalls += 1;
+      return { available: true, option: selected };
+    },
+    async validateTransaction({ option: selected }) {
       return {
         available: true,
         capacityLocks: [
-          { id: "lock-new-1330", date: "2098-12-22", vanId: "VAN-2", slot: "13:30" },
-          { id: "lock-new-1430", date: "2098-12-22", vanId: "VAN-2", slot: "14:30" },
+          { id: "lock-new-1330", date: selected.date, vanId: "VAN-2", slot: "13:30" },
+          { id: "lock-new-1430", date: selected.date, vanId: "VAN-2", slot: "14:30" },
         ],
       };
     },
@@ -154,7 +163,7 @@ function fixture(extra = {}) {
     clock: () => new Date("2098-12-01T12:00:00.000Z"),
     serverTimestamp: () => "SERVER_TIMESTAMP",
   });
-  return { db, lifecycle };
+  return { db, lifecycle, provider };
 }
 
 test("operational move classification is strict and customer follow-up depends on promised time", () => {
@@ -198,8 +207,8 @@ test("cancelling an appointment releases capacity and cancels linked work orders
   assert.equal(db.read("bookingCapacityLocks/lock-old-0930").active, false);
 });
 
-test("rescheduling preserves appointment identity and swaps work orders plus capacity locks", async () => {
-  const { db, lifecycle } = fixture({ "bookingOffers/OFR-RESCHEDULE-1": openOffer() });
+test("customer reschedule still performs full provider revalidation before the transaction", async () => {
+  const { db, lifecycle, provider } = fixture({ "bookingOffers/OFR-RESCHEDULE-1": openOffer() });
   const result = await lifecycle.rescheduleAppointment({
     appointmentId: "APT-LIVE-1",
     offerId: "OFR-RESCHEDULE-1",
@@ -209,6 +218,7 @@ test("rescheduling preserves appointment identity and swaps work orders plus cap
     actor: { id: "owner-1", name: "Owner" },
   });
   assert.equal(result.success, true);
+  assert.equal(provider.revalidationCalls, 1);
   assert.equal(result.appointmentId, "APT-LIVE-1");
   assert.equal(result.changeKind, "customer_reschedule");
   assert.equal(result.customerNotificationRecommended, true);
@@ -225,11 +235,46 @@ test("rescheduling preserves appointment identity and swaps work orders plus cap
   assert.equal(db.read("bookingOffers/OFR-RESCHEDULE-1").appointmentId, "APT-LIVE-1");
 });
 
+test("operational drag uses its server-created offer directly and skips duplicate provider revalidation", async () => {
+  const { db, lifecycle, provider } = fixture({ "bookingOffers/OFR-RESCHEDULE-1": operationalOffer() });
+  const result = await lifecycle.rescheduleAppointment({
+    appointmentId: "APT-LIVE-1",
+    offerId: "OFR-RESCHEDULE-1",
+    offerVersion: 1,
+    optionId: "OPT-NEW",
+    reason: "Operational move",
+    changeKind: "operational_move",
+    actor: { id: "owner-1", name: "Owner" },
+  });
+  assert.equal(result.success, true);
+  assert.equal(provider.revalidationCalls, 0);
+  assert.equal(db.read("appointments/APT-LIVE-1").date, "2098-12-20");
+  assert.equal(db.read("appointments/APT-LIVE-1").primaryVanId, "VAN-2");
+  assert.equal(db.read("bookingCapacityLocks/lock-new-1330").active, true);
+});
+
+test("operational drag refuses an offer whose date no longer matches the canonical appointment date", async () => {
+  const { lifecycle, provider } = fixture({ "bookingOffers/OFR-RESCHEDULE-1": openOffer() });
+  await assert.rejects(
+    () => lifecycle.rescheduleAppointment({
+      appointmentId: "APT-LIVE-1",
+      offerId: "OFR-RESCHEDULE-1",
+      offerVersion: 1,
+      optionId: "OPT-NEW",
+      reason: "Operational move",
+      changeKind: "operational_move",
+      actor: { id: "owner-1", name: "Owner" },
+    }),
+    /appointment date changed/i,
+  );
+  assert.equal(provider.revalidationCalls, 0);
+});
+
 test("rescheduling heals an active capacity lock detached from its previous appointment", async () => {
-  const { db, lifecycle } = fixture({
-    "bookingOffers/OFR-RESCHEDULE-1": openOffer(),
+  const { db, lifecycle, provider } = fixture({
+    "bookingOffers/OFR-RESCHEDULE-1": operationalOffer(),
     "appointments/APT-STALE": { appointmentId: "APT-STALE", status: "confirmed", capacityLockIds: [] },
-    "bookingCapacityLocks/lock-new-1330": { appointmentId: "APT-STALE", active: true, date: "2098-12-22", vanId: "VAN-2", slot: "13:30" },
+    "bookingCapacityLocks/lock-new-1330": { appointmentId: "APT-STALE", active: true, date: "2098-12-20", vanId: "VAN-2", slot: "13:30" },
   });
   const result = await lifecycle.rescheduleAppointment({
     appointmentId: "APT-LIVE-1",
@@ -241,15 +286,16 @@ test("rescheduling heals an active capacity lock detached from its previous appo
     actor: { id: "owner-1", name: "Owner" },
   });
   assert.equal(result.success, true);
+  assert.equal(provider.revalidationCalls, 0);
   assert.equal(db.read("bookingCapacityLocks/lock-new-1330").appointmentId, "APT-LIVE-1");
   assert.equal(db.read("bookingCapacityLocks/lock-new-1330").active, true);
 });
 
 test("rescheduling still blocks capacity genuinely owned by another active appointment", async () => {
   const { lifecycle } = fixture({
-    "bookingOffers/OFR-RESCHEDULE-1": openOffer(),
+    "bookingOffers/OFR-RESCHEDULE-1": operationalOffer(),
     "appointments/APT-OTHER": { appointmentId: "APT-OTHER", status: "confirmed", capacityLockIds: ["lock-new-1330"] },
-    "bookingCapacityLocks/lock-new-1330": { appointmentId: "APT-OTHER", active: true, date: "2098-12-22", vanId: "VAN-2", slot: "13:30" },
+    "bookingCapacityLocks/lock-new-1330": { appointmentId: "APT-OTHER", active: true, date: "2098-12-20", vanId: "VAN-2", slot: "13:30" },
   });
   await assert.rejects(
     () => lifecycle.rescheduleAppointment({

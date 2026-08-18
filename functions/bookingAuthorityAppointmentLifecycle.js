@@ -14,7 +14,7 @@ const {
   validateWorkOrders,
 } = require("./bookingAuthorityFirestore");
 
-const APPOINTMENT_LIFECYCLE_VERSION = 3;
+const APPOINTMENT_LIFECYCLE_VERSION = 4;
 const RESCHEDULE_CHANGE_KINDS = new Set(["customer_reschedule", "operational_move"]);
 
 function defaultServerTimestamp() {
@@ -224,24 +224,32 @@ function createBookingAppointmentLifecycle({
       );
     }
 
-    let revalidation;
-    try {
-      revalidation = await schedulingProvider.revalidateSelection({ request, offer, option: selected, context, now });
-    } catch (error) {
-      throw new BookingAuthorityError(
-        BOOKING_ERROR_CODES.AVAILABILITY_PROVIDER_ERROR,
-        "Booking availability provider failed while revalidating the reschedule.",
-        { cause: cleanText(error?.message || error, 500) },
-      );
+    let refreshedOption;
+    if (normalizedChangeKind === "operational_move") {
+      // The office drag preflight that created this offer already ran the exact target through
+      // the scheduling provider. Avoid repeating the same full provider scan a second time;
+      // the Firestore transaction below remains the authoritative conflict/capacity gate.
+      refreshedOption = normalizeOfferOption(selected);
+    } else {
+      let revalidation;
+      try {
+        revalidation = await schedulingProvider.revalidateSelection({ request, offer, option: selected, context, now });
+      } catch (error) {
+        throw new BookingAuthorityError(
+          BOOKING_ERROR_CODES.AVAILABILITY_PROVIDER_ERROR,
+          "Booking availability provider failed while revalidating the reschedule.",
+          { cause: cleanText(error?.message || error, 500) },
+        );
+      }
+      if (!revalidation || revalidation.available !== true || !revalidation.option) {
+        throw new BookingAuthorityError(
+          BOOKING_ERROR_CODES.AVAILABILITY_CHANGED,
+          "The selected reschedule option is no longer available.",
+          { reason: cleanText(revalidation?.reason, 240) },
+        );
+      }
+      refreshedOption = normalizeOfferOption(revalidation.option);
     }
-    if (!revalidation || revalidation.available !== true || !revalidation.option) {
-      throw new BookingAuthorityError(
-        BOOKING_ERROR_CODES.AVAILABILITY_CHANGED,
-        "The selected reschedule option is no longer available.",
-        { reason: cleanText(revalidation?.reason, 240) },
-      );
-    }
-    const refreshedOption = normalizeOfferOption(revalidation.option);
 
     return db.runTransaction(async (transaction) => {
       const [currentAppointmentSnapshot, currentOfferSnapshot] = await Promise.all([
@@ -257,6 +265,22 @@ function createBookingAppointmentLifecycle({
       const currentRequest = normalizeBookingRequest(currentOffer.request);
       if (currentRequest.customerId !== cleanText(current.customerId, 160) || currentRequest.propertyId !== cleanText(current.propertyId, 160)) {
         throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "The current reschedule offer no longer matches the appointment.", { appointmentId: id });
+      }
+      if (normalizedChangeKind === "operational_move") {
+        if (cleanText(current.date, 20) !== cleanText(refreshedOption.date, 20)) {
+          throw new BookingAuthorityError(
+            BOOKING_ERROR_CODES.AVAILABILITY_CHANGED,
+            "The appointment date changed before the operational move could be committed.",
+            { reason: "operational-move-date-mismatch" },
+          );
+        }
+        if (!Array.isArray(refreshedOption.assignments) || refreshedOption.assignments.length !== 1) {
+          throw new BookingAuthorityError(
+            BOOKING_ERROR_CODES.AVAILABILITY_CHANGED,
+            "A simple operational drag must resolve to exactly one van assignment.",
+            { reason: "multi-van-booking-requires-reschedule" },
+          );
+        }
       }
 
       const customerRef = db.collection(collections.clients).doc(currentRequest.customerId);
