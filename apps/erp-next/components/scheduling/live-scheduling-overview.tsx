@@ -44,6 +44,24 @@ function overlapsSlot(job: CalendarDispatchJob, slot: DisplaySlot) {
   return timeToMinutes(job.start) < timeToMinutes(slot.end) && timeToMinutes(job.end) > timeToMinutes(slot.start);
 }
 
+function activeJobsForSlot(jobs: CalendarDispatchJob[], slot: DisplaySlot) {
+  return jobs.filter((job) => overlapsSlot(job, slot)).sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function sameJobSet(left: CalendarDispatchJob[], right: CalendarDispatchJob[]) {
+  return left.length === right.length && left.every((job, index) => job.id === right[index]?.id);
+}
+
+function activeSetSpan(jobs: CalendarDispatchJob[], slots: DisplaySlot[], startIndex: number) {
+  const current = activeJobsForSlot(jobs, slots[startIndex]);
+  let span = 1;
+  for (let index = startIndex + 1; index < slots.length; index += 1) {
+    if (!sameJobSet(current, activeJobsForSlot(jobs, slots[index]))) break;
+    span += 1;
+  }
+  return span;
+}
+
 function occupancyForDay(day: OperationalDay, jobs: CalendarDispatchJob[], vans: DisplayVan[]) {
   const slots = displaySlotsForDay(day);
   const total = slots.length * vans.length;
@@ -77,15 +95,6 @@ function readinessLabel(value: DispatchJob['readiness']) {
 
 function slotClass(value: DispatchJob['readiness']) {
   return value === 'ready' ? styles.ready : value === 'blocked' ? styles.blocked : value === 'at_risk' ? styles.risk : styles.notChecked;
-}
-
-function jobSpanFromIndex(job: CalendarDispatchJob, slots: DisplaySlot[], startIndex: number) {
-  let span = 0;
-  for (let index = startIndex; index < slots.length; index += 1) {
-    if (!overlapsSlot(job, slots[index])) break;
-    span += 1;
-  }
-  return Math.max(1, span);
 }
 
 function jobCrossesLunch(job: CalendarDispatchJob) {
@@ -144,6 +153,10 @@ export function LiveSchedulingOverview() {
   const activeOccupancy = occupancyForDay(activeDay, jobs, vans);
   const confirmed = appointments.filter((appointment) => appointment.dateKey === activeDate && appointment.status === 'confirmed').length;
   const selectedAppointment = appointments.find((appointment) => appointment.id === selectedAppointmentId) ?? null;
+  const activeConflictSlots = vans.reduce((total, van) => {
+    const vanJobs = activeJobs.filter((job) => job.vanId === van.id);
+    return total + activeSlots.filter((slot) => activeJobsForSlot(vanJobs, slot).length > 1).length;
+  }, 0);
 
   const openJob = (jobId: string) => {
     const appointmentId = appointmentByJobId.get(jobId);
@@ -167,6 +180,7 @@ export function LiveSchedulingOverview() {
         <span>{error ? `Live sync error: ${error}` : loading ? 'Loading canonical Booking Authority schedule…' : `LIVE · Booking Authority${lastSyncedAt ? ` · synced ${lastSyncedAt}` : ''}`}</span>
       </div>
       {unresolvedJobs.length ? <div className={styles.notice}><span>Data integrity attention: {unresolvedJobs.length} assignment{unresolvedJobs.length === 1 ? '' : 's'} reference a van that cannot be resolved to Van 1–4. They are not converted into fake extra lanes.</span></div> : null}
+      {activeConflictSlots ? <div className={styles.notice}><span>Capacity integrity attention: {activeConflictSlots} occupied slot{activeConflictSlots === 1 ? '' : 's'} contain overlapping appointments after duplicate fleet records were collapsed to the physical Van 1–4. Both appointments remain visible below so they can be reviewed and rescheduled safely.</span></div> : null}
 
       <div className={styles.toolbar}>
         <div className={styles.dayNav}>
@@ -243,29 +257,34 @@ function VanScheduleSlots({ slots, jobs, onOpenAppointment }: { slots: DisplaySl
     const firstAfternoon = index > 0 && previous?.segment === 'am' && slot.segment === 'pm';
     if (firstAfternoon) rows.push(<div className={styles.lunchRow} key={`lunch-${slot.start}`}><span>12:00</span><div>Lunch / reset</div><span>1:00</span></div>);
 
-    const startingJobs = jobs.filter((job) => job.start === slot.start).sort((a, b) => a.id.localeCompare(b.id));
-    if (startingJobs.length) {
-      const job = startingJobs[0];
-      const span = jobSpanFromIndex(job, slots, index);
-      rows.push(<AppointmentBlock key={job.id} job={job} span={span} crossesLunch={jobCrossesLunch(job)} onOpen={() => onOpenAppointment(job.id)} />);
+    const active = activeJobsForSlot(jobs, slot);
+    if (!active.length) {
+      rows.push(<div className={styles.openSlot} key={`open-${slot.start}`}>
+        <div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div>
+        <div><strong>Available</strong><span>Open work spot</span></div>
+        <b>LIVE</b>
+      </div>);
+      index += 1;
+      continue;
+    }
+
+    const span = activeSetSpan(jobs, slots, index);
+    if (active.length > 1) {
+      rows.push(<ConflictBlock key={`conflict-${slot.start}-${active.map((job) => job.id).join('-')}`} jobs={active} span={span} onOpenAppointment={onOpenAppointment} />);
       index += span;
       continue;
     }
 
-    const continuingJob = jobs.find((job) => overlapsSlot(job, slot) && timeToMinutes(job.start) < timeToMinutes(slot.start));
-    if (continuingJob) {
-      const remainingSpan = jobSpanFromIndex(continuingJob, slots, index);
-      rows.push(<AppointmentBlock key={`${continuingJob.id}-visible-continuation`} job={continuingJob} span={remainingSpan} crossesLunch={jobCrossesLunch(continuingJob)} onOpen={() => onOpenAppointment(continuingJob.id)} continuation />);
-      index += remainingSpan;
-      continue;
-    }
-
-    rows.push(<div className={styles.openSlot} key={`open-${slot.start}`}>
-      <div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div>
-      <div><strong>Available</strong><span>Open work spot</span></div>
-      <b>LIVE</b>
-    </div>);
-    index += 1;
+    const job = active[0];
+    rows.push(<AppointmentBlock
+      key={`${job.id}-${slot.start}`}
+      job={job}
+      span={span}
+      crossesLunch={jobCrossesLunch(job)}
+      continuation={job.start !== slot.start}
+      onOpen={() => onOpenAppointment(job.id)}
+    />);
+    index += span;
   }
 
   return <div className={styles.slotList}>{rows}</div>;
@@ -280,18 +299,43 @@ function AppointmentBlock({ job, span, crossesLunch, continuation = false, onOpe
     }
   };
   return <div className={styles.occupiedSlot} style={{ minHeight }}>
-    <div className={styles.slotTime}><strong>{formatTime(continuation ? job.start : job.start)}</strong><span>{formatTime(job.end)}</span>{span > 1 ? <span>{span} spots</span> : null}</div>
+    <div className={styles.slotTime}><strong>{formatTime(job.start)}</strong><span>{formatTime(job.end)}</span>{span > 1 ? <span>{span} spots</span> : null}</div>
     <div className={styles.slotJobs}>
       <article className={styles.jobCard} role="button" tabIndex={0} onClick={onOpen} onKeyDown={openFromKeyboard} style={{ minHeight: '100%', alignItems: 'center', cursor: 'pointer' }}>
         <div>
           <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={slotClass(job.readiness)}>{readinessLabel(job.readiness)}</b></div>
-          <span>{presetLabel(job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span>
+          {continuation ? <span>Reserved continuously until {formatTime(job.end)}</span> : <span>{presetLabel(job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span>}
           <small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small>
-          {span > 1 ? <small>Reserved continuously · {formatTime(job.start)}–{formatTime(job.end)}</small> : null}
+          {!continuation && span > 1 ? <small>Reserved continuously · {formatTime(job.start)}–{formatTime(job.end)}</small> : null}
           {crossesLunch ? <small>Lunch/reset remains protected</small> : null}
           <small>Click for appointment details</small>
         </div>
       </article>
+    </div>
+  </div>;
+}
+
+function ConflictBlock({ jobs, span, onOpenAppointment }: { jobs: CalendarDispatchJob[]; span: number; onOpenAppointment: (jobId: string) => void }) {
+  const start = jobs.reduce((earliest, job) => timeToMinutes(job.start) < timeToMinutes(earliest) ? job.start : earliest, jobs[0].start);
+  const end = jobs.reduce((latest, job) => timeToMinutes(job.end) > timeToMinutes(latest) ? job.end : latest, jobs[0].end);
+  const minHeight = Math.max(span * 64 + Math.max(0, span - 1) * 6, jobs.length * 78 + 34);
+  return <div className={styles.occupiedSlot} style={{ minHeight, outline: '1px solid var(--danger)' }}>
+    <div className={styles.slotTime}><strong>{formatTime(start)}</strong><span>{formatTime(end)}</span><span>Conflict</span></div>
+    <div className={styles.slotJobs}>
+      <div style={{ fontSize: 8, fontWeight: 800, color: 'var(--danger)', letterSpacing: '.06em', textTransform: 'uppercase' }}>Capacity conflict · review both appointments</div>
+      {jobs.map((job) => <article key={job.id} className={styles.jobCard} role="button" tabIndex={0} onClick={() => onOpenAppointment(job.id)} onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onOpenAppointment(job.id);
+        }
+      }} style={{ cursor: 'pointer' }}>
+        <div>
+          <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={styles.risk}>CONFLICT</b></div>
+          <span>{presetLabel(job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'} · {formatTime(job.start)}–{formatTime(job.end)}</span>
+          <small>{job.site} · {job.sector}</small>
+          <small>Click to review / reschedule</small>
+        </div>
+      </article>)}
     </div>
   </div>;
 }
