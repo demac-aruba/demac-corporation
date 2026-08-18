@@ -7,6 +7,7 @@ import type { DispatchJob, WorkPresetId } from '../../lib/scheduling';
 import { defaultWorkPresets, getRuntimeSchedulingSettings, minutesToTime, previewVans, timeToMinutes } from '../../lib/scheduling';
 import type { CalendarDispatchJob, OperationalDay } from '../../lib/scheduling-capacity';
 import { buildOperationalWeek, currentArubaDateKey } from '../../lib/scheduling-capacity';
+import { LiveAppointmentDetailsDrawer } from './live-appointment-details-drawer';
 import styles from './scheduling-overview-v2.module.css';
 
 type DisplaySlot = { start: string; end: string; segment: 'am' | 'pm' };
@@ -14,7 +15,9 @@ type DisplayVan = { id: string; name: string; team: string; active: boolean };
 
 function appointmentAssignments(record: BrowserAppointmentRecord): CalendarDispatchJob[] {
   if (record.status === 'cancelled') return [];
-  return record.assignments.map((assignment) => ({ ...assignment, dateKey: record.dateKey, status: 'confirmed' }));
+  return record.assignments
+    .filter((assignment) => assignment.status !== 'cancelled')
+    .map((assignment) => ({ ...assignment, dateKey: record.dateKey, status: 'confirmed' }));
 }
 
 function formatTime(value: string) {
@@ -76,10 +79,24 @@ function slotClass(value: DispatchJob['readiness']) {
   return value === 'ready' ? styles.ready : value === 'blocked' ? styles.blocked : value === 'at_risk' ? styles.risk : styles.notChecked;
 }
 
+function jobSpanFromIndex(job: CalendarDispatchJob, slots: DisplaySlot[], startIndex: number) {
+  let span = 0;
+  for (let index = startIndex; index < slots.length; index += 1) {
+    if (!overlapsSlot(job, slots[index])) break;
+    span += 1;
+  }
+  return Math.max(1, span);
+}
+
+function jobCrossesLunch(job: CalendarDispatchJob) {
+  return timeToMinutes(job.start) < 12 * 60 && timeToMinutes(job.end) > 13 * 60;
+}
+
 export function LiveSchedulingOverview() {
   const [today] = useState(() => currentArubaDateKey());
   const [activeDate, setActiveDate] = useState(today);
   const [appointments, setAppointments] = useState<BrowserAppointmentRecord[]>([]);
+  const [selectedAppointmentId, setSelectedAppointmentId] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [lastSyncedAt, setLastSyncedAt] = useState('');
@@ -110,20 +127,28 @@ export function LiveSchedulingOverview() {
   }, [refresh]);
 
   const jobs = useMemo(() => appointments.flatMap(appointmentAssignments), [appointments]);
-  const vans = useMemo<DisplayVan[]>(() => {
-    const known = previewVans.map((van) => ({ id: van.id, name: van.name, team: van.team, active: van.active }));
-    const knownIds = new Set(known.map((van) => van.id));
-    const discovered = [...new Set(jobs.map((job) => job.vanId).filter(Boolean))]
-      .filter((vanId) => !knownIds.has(vanId))
-      .map((vanId) => ({ id: vanId, name: vanId.replace('VAN-', 'Van '), team: 'Assigned crew', active: true }));
-    return [...known, ...discovered];
-  }, [jobs]);
+  const vans = useMemo<DisplayVan[]>(() => previewVans.map((van) => ({ id: van.id, name: van.name, team: van.team, active: van.active })), []);
+  const canonicalVanIds = useMemo(() => new Set(vans.map((van) => van.id)), [vans]);
+  const unresolvedJobs = useMemo(() => jobs.filter((job) => !canonicalVanIds.has(job.vanId)), [canonicalVanIds, jobs]);
+  const appointmentByJobId = useMemo(() => {
+    const result = new Map<string, string>();
+    for (const appointment of appointments) {
+      for (const assignment of appointment.assignments) result.set(assignment.id, appointment.id);
+    }
+    return result;
+  }, [appointments]);
   const weekSummaries = useMemo(() => Object.fromEntries(week.map((day) => [day.dateKey, occupancyForDay(day, jobs, vans)])), [jobs, vans, week]);
   const activeDay = week.find((day) => day.dateKey === activeDate) ?? week[0];
   const activeJobs = jobs.filter((job) => job.dateKey === activeDate);
   const activeSlots = displaySlotsForDay(activeDay);
   const activeOccupancy = occupancyForDay(activeDay, jobs, vans);
   const confirmed = appointments.filter((appointment) => appointment.dateKey === activeDate && appointment.status === 'confirmed').length;
+  const selectedAppointment = appointments.find((appointment) => appointment.id === selectedAppointmentId) ?? null;
+
+  const openJob = (jobId: string) => {
+    const appointmentId = appointmentByJobId.get(jobId);
+    if (appointmentId) setSelectedAppointmentId(appointmentId);
+  };
 
   return (
     <section className={styles.page}>
@@ -141,6 +166,7 @@ export function LiveSchedulingOverview() {
       <div className={styles.notice}>
         <span>{error ? `Live sync error: ${error}` : loading ? 'Loading canonical Booking Authority schedule…' : `LIVE · Booking Authority${lastSyncedAt ? ` · synced ${lastSyncedAt}` : ''}`}</span>
       </div>
+      {unresolvedJobs.length ? <div className={styles.notice}><span>Data integrity attention: {unresolvedJobs.length} assignment{unresolvedJobs.length === 1 ? '' : 's'} reference a van that cannot be resolved to Van 1–4. They are not converted into fake extra lanes.</span></div> : null}
 
       <div className={styles.toolbar}>
         <div className={styles.dayNav}>
@@ -176,11 +202,11 @@ export function LiveSchedulingOverview() {
 
       <div className={styles.board}>
         <header className={styles.boardHeader}>
-          <div><strong>Live Van Schedule</strong><span>{activeDay.weekday} {activeDay.shortDate} · canonical confirmed assignments</span></div>
+          <div><strong>Live Van Schedule</strong><span>{activeDay.weekday} {activeDay.shortDate} · one continuous block per assignment</span></div>
           <b>{activeOccupancy.open} OPEN SPOTS</b>
         </header>
         <div className={styles.boardScroll}>
-          <div className={styles.vanGrid} style={{ gridTemplateColumns: `repeat(${Math.max(4, vans.length)}, minmax(230px, 1fr))` }}>
+          <div className={styles.vanGrid}>
             {vans.map((van) => {
               const vanJobs = activeJobs.filter((job) => job.vanId === van.id);
               return (
@@ -193,47 +219,79 @@ export function LiveSchedulingOverview() {
                     <div><span>AM anchor</span><strong>{anchorFor(activeJobs, van.id, 'am')}</strong></div>
                     <div><span>PM anchor</span><strong>{anchorFor(activeJobs, van.id, 'pm')}</strong></div>
                   </div>
-                  <div className={styles.slotList}>
-                    {activeSlots.length ? activeSlots.map((slot, index) => {
-                      const overlapping = vanJobs.filter((job) => overlapsSlot(job, slot));
-                      const starting = overlapping.filter((job) => job.start === slot.start);
-                      const continuing = overlapping.filter((job) => job.start !== slot.start);
-                      return (
-                        <div key={`${van.id}-${slot.start}`}>
-                          {overlapping.length === 0 ? (
-                            <div className={styles.openSlot}>
-                              <div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div>
-                              <div><strong>Available</strong><span>Open work spot</span></div>
-                              <b>LIVE</b>
-                            </div>
-                          ) : (
-                            <div className={styles.occupiedSlot}>
-                              <div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div>
-                              <div className={styles.slotJobs}>
-                                {starting.map((job) => (
-                                  <article key={job.id} className={styles.jobCard}>
-                                    <div>
-                                      <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={slotClass(job.readiness)}>{readinessLabel(job.readiness)}</b></div>
-                                      <span>{presetLabel(job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'} · until {formatTime(job.end)}</span>
-                                      <small>{job.site} · {job.sector}</small>
-                                    </div>
-                                  </article>
-                                ))}
-                                {starting.length === 0 && continuing.length ? <article className={styles.jobCard}><div><div className={styles.jobTitle}><strong>Appointment continues</strong><b className={styles.notChecked}>BOOKED</b></div><span>Reserved until {formatTime(continuing.reduce((latest, job) => timeToMinutes(job.end) > timeToMinutes(latest) ? job.end : latest, continuing[0].end))}</span><small>{continuing.map((job) => job.customer).join(', ')}</small></div></article> : null}
-                              </div>
-                            </div>
-                          )}
-                          {activeDay.weekday !== 'Sat' && index === 2 ? <div className={styles.lunchRow}><span>12:00</span><div>Lunch / reset</div><span>1:00</span></div> : null}
-                        </div>
-                      );
-                    }) : <div className={styles.closedDay}>Operationally closed.</div>}
-                  </div>
+                  <VanScheduleSlots slots={activeSlots} jobs={vanJobs} onOpenAppointment={openJob} />
+                  {!activeDay.isOpen ? <div className={styles.closedDay}>Operationally closed.</div> : null}
                 </section>
               );
             })}
           </div>
         </div>
       </div>
+
+      {selectedAppointment ? <LiveAppointmentDetailsDrawer appointment={selectedAppointment} onClose={() => setSelectedAppointmentId('')} onChanged={refresh} /> : null}
     </section>
   );
+}
+
+function VanScheduleSlots({ slots, jobs, onOpenAppointment }: { slots: DisplaySlot[]; jobs: CalendarDispatchJob[]; onOpenAppointment: (jobId: string) => void }) {
+  const rows: React.ReactNode[] = [];
+  let index = 0;
+
+  while (index < slots.length) {
+    const slot = slots[index];
+    const previous = slots[index - 1];
+    const firstAfternoon = index > 0 && previous?.segment === 'am' && slot.segment === 'pm';
+    if (firstAfternoon) rows.push(<div className={styles.lunchRow} key={`lunch-${slot.start}`}><span>12:00</span><div>Lunch / reset</div><span>1:00</span></div>);
+
+    const startingJobs = jobs.filter((job) => job.start === slot.start).sort((a, b) => a.id.localeCompare(b.id));
+    if (startingJobs.length) {
+      const job = startingJobs[0];
+      const span = jobSpanFromIndex(job, slots, index);
+      rows.push(<AppointmentBlock key={job.id} job={job} span={span} crossesLunch={jobCrossesLunch(job)} onOpen={() => onOpenAppointment(job.id)} />);
+      index += span;
+      continue;
+    }
+
+    const continuingJob = jobs.find((job) => overlapsSlot(job, slot) && timeToMinutes(job.start) < timeToMinutes(slot.start));
+    if (continuingJob) {
+      const remainingSpan = jobSpanFromIndex(continuingJob, slots, index);
+      rows.push(<AppointmentBlock key={`${continuingJob.id}-visible-continuation`} job={continuingJob} span={remainingSpan} crossesLunch={jobCrossesLunch(continuingJob)} onOpen={() => onOpenAppointment(continuingJob.id)} continuation />);
+      index += remainingSpan;
+      continue;
+    }
+
+    rows.push(<div className={styles.openSlot} key={`open-${slot.start}`}>
+      <div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div>
+      <div><strong>Available</strong><span>Open work spot</span></div>
+      <b>LIVE</b>
+    </div>);
+    index += 1;
+  }
+
+  return <div className={styles.slotList}>{rows}</div>;
+}
+
+function AppointmentBlock({ job, span, crossesLunch, continuation = false, onOpen }: { job: CalendarDispatchJob; span: number; crossesLunch: boolean; continuation?: boolean; onOpen: () => void }) {
+  const minHeight = span * 64 + Math.max(0, span - 1) * 6 + (crossesLunch ? 18 : 0);
+  const openFromKeyboard = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onOpen();
+    }
+  };
+  return <div className={styles.occupiedSlot} style={{ minHeight }}>
+    <div className={styles.slotTime}><strong>{formatTime(continuation ? job.start : job.start)}</strong><span>{formatTime(job.end)}</span>{span > 1 ? <span>{span} spots</span> : null}</div>
+    <div className={styles.slotJobs}>
+      <article className={styles.jobCard} role="button" tabIndex={0} onClick={onOpen} onKeyDown={openFromKeyboard} style={{ minHeight: '100%', alignItems: 'center', cursor: 'pointer' }}>
+        <div>
+          <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={slotClass(job.readiness)}>{readinessLabel(job.readiness)}</b></div>
+          <span>{presetLabel(job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span>
+          <small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small>
+          {span > 1 ? <small>Reserved continuously · {formatTime(job.start)}–{formatTime(job.end)}</small> : null}
+          {crossesLunch ? <small>Lunch/reset remains protected</small> : null}
+          <small>Click for appointment details</small>
+        </div>
+      </article>
+    </div>
+  </div>;
 }
