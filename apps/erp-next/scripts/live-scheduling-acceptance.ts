@@ -2,7 +2,6 @@ import { bookingActorLabel, projectLiveSchedulingAppointments, resolveCanonicalV
 import {
   liveDragMoveCandidates,
   liveMoveTargetKey,
-  liveOperationalMoveTimeAllowed,
   projectCommittedLiveMove,
 } from '../lib/live-scheduling-move';
 import { buildOperationalWeek } from '../lib/scheduling-capacity';
@@ -63,28 +62,12 @@ requireCondition(bookingActorLabel({ appointmentId: 'APT-MAYA', source: 'demac-c
 
 const operationalDay = buildOperationalWeek(canonical.dateKey).find((day) => day.dateKey === canonical.dateKey);
 requireCondition(Boolean(operationalDay), 'The live appointment date must resolve to an operational day.');
-const startedAppointmentNow = new Date('2026-08-18T14:27:00.000Z'); // 10:27 AM Aruba
-requireCondition(liveOperationalMoveTimeAllowed({
-  dateKey: canonical.dateKey,
-  targetStart: '08:30',
-  currentDateKey: canonical.dateKey,
-  currentStart: '08:30',
-  now: startedAppointmentNow,
-}), 'A started appointment must still allow an exact-time internal van reassignment.');
-requireCondition(!liveOperationalMoveTimeAllowed({
-  dateKey: canonical.dateKey,
-  targetStart: '09:30',
-  currentDateKey: canonical.dateKey,
-  currentStart: '08:30',
-  now: startedAppointmentNow,
-}), 'A started appointment must not advertise a different already-passed start time.');
-const dragCandidates = liveDragMoveCandidates(operationalDay!, canonical, canonical.assignments, startedAppointmentNow);
+const dragCandidates = liveDragMoveCandidates(operationalDay!, canonical, canonical.assignments);
 requireCondition(dragCandidates.length > 0, 'A single-van live appointment must expose valid same-day drag targets.');
-requireCondition(dragCandidates.every((slot) => slot.start !== '09:30'), 'Drag UI must hide already-passed time-changing destinations.');
-requireCondition(dragCandidates.every((slot) => slot.start !== '10:30' && slot.start !== '15:30'), 'Drag UI must not advertise starts that cannot fit the complete two-hour appointment.');
-const sameTimeTarget = dragCandidates.find((slot) => slot.vanId !== canonical.primaryVanId && slot.start === canonical.assignments[0].start);
-requireCondition(Boolean(sameTimeTarget), 'A started appointment must retain same-time cross-van drag targets.');
-const target = sameTimeTarget ?? dragCandidates[0];
+requireCondition(dragCandidates.some((slot) => slot.start === '09:30'), 'Manual drag must not hide a physically free 9:30 destination because the wall clock has passed it.');
+requireCondition(dragCandidates.every((slot) => slot.start !== '10:30' && slot.start !== '15:30'), 'Drag UI must not advertise starts that cannot fit the complete two-hour appointment inside the hard working window.');
+const target = dragCandidates.find((slot) => slot.vanId !== canonical.primaryVanId) ?? dragCandidates[0];
+requireCondition(Boolean(target), 'A valid move target must be available for projection coverage.');
 requireCondition(liveMoveTargetKey(target.vanId, target.start) === `${target.vanId}|${target.start}`, 'Live move target keys must be deterministic.');
 const projectedMove = projectCommittedLiveMove({
   appointment: canonical,
@@ -95,8 +78,9 @@ const projectedMove = projectCommittedLiveMove({
 requireCondition(projectedMove.record.primaryVanId === target.vanId, 'A server-confirmed drag must project the destination van into the board immediately.');
 requireCondition(projectedMove.record.assignments[0].start === target.start, 'A server-confirmed drag must project the destination time into the board immediately.');
 
-// Regression for the Aug 18 operator screenshot: manual drag must expose every hard-capacity
-// destination, not just the first eight ranked booking recommendations before time filtering.
+// Regression for the Aug 18 1:01 PM operator screenshot. Manual drag is not an automatic
+// scheduling recommendation: every complete hard-capacity destination on the appointment day
+// must remain selectable, even when its clock time has already passed.
 const screenshotAppointment = {
   ...canonical,
   primaryVanId: 'VAN-3',
@@ -105,18 +89,24 @@ const screenshotAppointment = {
 const screenshotJobs = [
   ...screenshotAppointment.assignments,
   { ...screenshotAppointment.assignments[0], id: 'WO-MARIBEL-VAN1-PM', customer: 'Maribel Marquez', vanId: 'VAN-1', start: '13:30', end: '16:30', quantity: 3 },
+  { ...screenshotAppointment.assignments[0], id: 'WO-MARIBEL-VAN3-PM', customer: 'Maribel Marquez', vanId: 'VAN-3', start: '13:30', end: '16:30', quantity: 3 },
   { ...screenshotAppointment.assignments[0], id: 'WO-MARIBEL-VAN4-AM', customer: 'Maribel Marquez', vanId: 'VAN-4', start: '08:30', end: '11:30', quantity: 3 },
-  { ...screenshotAppointment.assignments[0], id: 'WO-MARIBEL-VAN4-PM', customer: 'Maribel Marquez', vanId: 'VAN-4', start: '13:30', end: '16:30', quantity: 3 },
 ];
-const screenshotNow = new Date('2026-08-18T16:47:00.000Z'); // 12:47 PM Aruba
-const screenshotTargets = liveDragMoveCandidates(operationalDay!, screenshotAppointment, screenshotJobs, screenshotNow);
+const screenshotTargets = liveDragMoveCandidates(operationalDay!, screenshotAppointment, screenshotJobs);
 const screenshotTargetKeys = new Set(screenshotTargets.map((slot) => liveMoveTargetKey(slot.vanId, slot.start)));
-requireCondition(screenshotTargetKeys.has('VAN-1|08:30'), 'A free same-time Van 1 destination must not disappear because recommendation ranking was capped before temporal filtering.');
-requireCondition(screenshotTargetKeys.has('VAN-2|08:30'), 'A free same-time Van 2 destination must remain available.');
-requireCondition(screenshotTargetKeys.has('VAN-2|13:30') && screenshotTargetKeys.has('VAN-2|14:30'), 'All future two-hour Van 2 windows must be exposed.');
-requireCondition(screenshotTargetKeys.has('VAN-3|13:30') && screenshotTargetKeys.has('VAN-3|14:30'), 'All future two-hour Van 3 windows must be exposed.');
-requireCondition(!screenshotTargetKeys.has('VAN-1|09:30'), 'A passed time-changing Van 1 destination must remain hidden.');
-requireCondition(screenshotTargets.length === 6, 'The screenshot scenario must expose all six physically valid operator targets.');
+const expectedTargets = [
+  'VAN-1|08:30', 'VAN-1|09:30',
+  'VAN-2|08:30', 'VAN-2|09:30', 'VAN-2|13:30', 'VAN-2|14:30',
+  'VAN-3|09:30',
+  'VAN-4|13:30', 'VAN-4|14:30',
+];
+for (const key of expectedTargets) {
+  requireCondition(screenshotTargetKeys.has(key), `Manual drag must expose physically valid target ${key}.`);
+}
+requireCondition(!screenshotTargetKeys.has('VAN-3|08:30'), 'The appointment current position must not be offered as a move target.');
+requireCondition(!screenshotTargetKeys.has('VAN-1|10:30'), 'A two-hour appointment must not be offered at 10:30 when the protected lunch/reset window prevents a complete continuous block.');
+requireCondition(!screenshotTargetKeys.has('VAN-2|15:30'), 'A two-hour appointment must not be offered when it cannot finish inside the operational workday.');
+requireCondition(screenshotTargets.length === expectedTargets.length, 'The screenshot scenario must expose exactly the nine complete hard-capacity destinations.');
 
 const supportWorkOrders = [
   canonicalWorkOrders[0],
@@ -135,7 +125,7 @@ requireCondition(supportedAppointments.length === 1, 'Primary and support work o
 requireCondition(supportedAppointments[0].supportVanId === 'VAN-2', 'Canonical support van must be recognized.');
 const supportAssignment = supportedAppointments[0].assignments.find((assignment) => !assignment.isPrimaryAssignment);
 requireCondition(supportAssignment?.supportForJobId === 'WO-APT-CANONICAL-1-1', 'Canonical parentWorkOrderId must link the support assignment to the primary job.');
-requireCondition(liveDragMoveCandidates(operationalDay!, supportedAppointments[0], supportedAppointments[0].assignments, startedAppointmentNow).length === 0, 'A multi-van booking must not enter the simple drag workflow.');
+requireCondition(liveDragMoveCandidates(operationalDay!, supportedAppointments[0], supportedAppointments[0].assignments).length === 0, 'A multi-van booking must not enter the simple drag workflow.');
 
 const rescheduledWithStaleSupport = projectLiveSchedulingAppointments([
   canonicalWorkOrders[0],
@@ -192,4 +182,4 @@ const duplicatedVanAppointment = projectLiveSchedulingAppointments([
 requireCondition(duplicatedVanAppointment.length === 1, 'A booking assigned through a legacy van document must remain visible.');
 requireCondition(duplicatedVanAppointment[0].primaryVanId === 'VAN-4', 'A duplicate Van 4 document must project onto the single canonical VAN-4 lane.');
 
-console.log('Live scheduling acceptance passed: canonical fleet lanes, complete manual drag targets, started same-time reassignment, immediate committed move projection, creator attribution, and legacy compatibility.');
+console.log('Live scheduling acceptance passed: canonical fleet lanes, unrestricted manual hard-capacity drag targets, immediate committed move projection, creator attribution, and legacy compatibility.');

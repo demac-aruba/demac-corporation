@@ -20,46 +20,6 @@ export function liveMoveTargetKey(vanId: string, start: string) {
   return `${vanId}|${start}`;
 }
 
-function arubaClock(now: Date) {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/Aruba',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(now);
-  const read = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? '';
-  return {
-    date: `${read('year')}-${read('month')}-${read('day')}`,
-    time: `${read('hour')}:${read('minute')}`,
-  };
-}
-
-export function liveOperationalMoveTimeAllowed(args: {
-  dateKey: string;
-  targetStart: string;
-  currentDateKey: string;
-  currentStart: string;
-  now?: Date;
-}) {
-  const current = arubaClock(args.now ?? new Date());
-  if (args.dateKey > current.date) return true;
-  if (args.dateKey < current.date) return false;
-  if (args.targetStart > current.time) return true;
-  return args.dateKey === args.currentDateKey && args.targetStart === args.currentStart;
-}
-
-function restrictionAllows(start: string, appointment: BrowserAppointmentRecord) {
-  const restriction = appointment.bookingRestriction;
-  if (!restriction) return true;
-  if (restriction.halfDay && halfDayForTime(start) !== restriction.halfDay) return false;
-  if (restriction.notBefore && timeToMinutes(start) < timeToMinutes(restriction.notBefore)) return false;
-  if (restriction.notAfter && timeToMinutes(start) > timeToMinutes(restriction.notAfter)) return false;
-  return true;
-}
-
 function workingWindowAllows(day: OperationalDay, start: string, end: string) {
   const settings = getRuntimeSchedulingSettings();
   const startMinutes = timeToMinutes(start);
@@ -81,9 +41,11 @@ function overlaps(start: string, end: string, job: CalendarDispatchJob) {
 }
 
 /**
- * Manual LIVE drag is an operator dispatch action, not a booking recommendation search.
- * Enumerate every physically valid single-van target instead of reusing the ranked/capped
- * recommendation list. Booking Authority still revalidates the exact target before commit.
+ * Manual LIVE drag is an explicit office dispatch action. It intentionally ignores
+ * booking-recommendation ranking, route preferences, customer preference windows and the
+ * current wall clock. The operator may place the appointment anywhere on its current day
+ * where the complete block physically fits. Booking Authority revalidates the same hard
+ * capacity invariant before committing the canonical change.
  */
 export function liveOperationalMoveCapacityCandidates(
   day: OperationalDay,
@@ -102,7 +64,6 @@ export function liveOperationalMoveCapacityCandidates(
 
   for (const van of previewVans.filter((resource) => resource.active)) {
     for (const start of starts) {
-      if (!restrictionAllows(start, appointment)) continue;
       const end = minutesToTime(timeToMinutes(start) + duration);
       if (!workingWindowAllows(day, start, end)) continue;
       if (otherJobs.some((job) => job.vanId === van.id && overlaps(start, end, job))) continue;
@@ -128,19 +89,11 @@ export function liveDragMoveCandidates(
   day: OperationalDay,
   appointment: BrowserAppointmentRecord | undefined,
   jobs: CalendarDispatchJob[],
-  now = new Date(),
 ): CandidateSlot[] {
   if (!appointment || appointment.status === 'cancelled' || appointment.assignments.length !== 1) return [];
   const current = appointmentSnapshot(appointment);
   return liveOperationalMoveCapacityCandidates(day, appointment, jobs)
-    .filter((slot) => !(slot.vanId === current.primaryVanId && slot.start === current.primaryStart))
-    .filter((slot) => liveOperationalMoveTimeAllowed({
-      dateKey: day.dateKey,
-      targetStart: slot.start,
-      currentDateKey: current.dateKey,
-      currentStart: current.primaryStart,
-      now,
-    }));
+    .filter((slot) => !(slot.vanId === current.primaryVanId && slot.start === current.primaryStart));
 }
 
 export function projectCommittedLiveMove(args: {

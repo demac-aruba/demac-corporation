@@ -7,8 +7,8 @@ const {
   buildCapacityLocks,
   buildWorkOrders,
   exactCustomerProperty,
+  operationalMoveDateAllowed,
   operationalMoveResult,
-  operationalMoveTimeAllowed,
   routeConfigFromSettings,
 } = require("./bookingAuthoritySchedulingProvider");
 
@@ -63,8 +63,10 @@ function operationalData(overrides = {}) {
   };
 }
 
-test("provider exposes canonical provider v4", () => {
-  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v4");
+const currentSchedule = { date: "2098-12-20", time: "08:30" };
+
+test("provider exposes canonical provider v5", () => {
+  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v5");
 });
 
 test("canonical scheduling engine is versioned independently", () => {
@@ -129,8 +131,7 @@ test("manual operator drag can place work on an active van before a driver is as
     date: "2098-12-20",
     time: "13:30",
     vanId: "VAN-2",
-    today: "2098-12-01",
-    currentTime: "08:00",
+    currentSchedule,
   });
   assert.equal(result.reason, "available");
   assert.equal(result.option.assignments[0].vanId, "VAN-2");
@@ -138,15 +139,8 @@ test("manual operator drag can place work on an active van before a driver is as
   assert.equal(result.option.time, "13:30");
 });
 
-test("started same-time operational reassignment remains valid when only the van changes", () => {
-  const currentSchedule = { date: "2098-12-20", time: "08:30" };
-  assert.equal(operationalMoveTimeAllowed({
-    date: "2098-12-20",
-    time: "08:30",
-    today: "2098-12-20",
-    currentTime: "10:27",
-    currentSchedule,
-  }), true);
+test("manual operational drag may change to any physically valid time on the canonical appointment date", () => {
+  assert.equal(operationalMoveDateAllowed({ date: "2098-12-20", currentSchedule }), true);
 
   const data = operationalData();
   const result = operationalMoveResult({
@@ -155,26 +149,18 @@ test("started same-time operational reassignment remains valid when only the van
     data,
     routeConfig: routeConfigFromSettings(data.businessSettings),
     date: "2098-12-20",
-    time: "08:30",
+    time: "09:30",
     vanId: "VAN-2",
-    today: "2098-12-20",
-    currentTime: "10:27",
     currentSchedule,
   });
   assert.equal(result.reason, "available");
-  assert.equal(result.option.time, "08:30");
+  assert.equal(result.option.time, "09:30");
   assert.equal(result.option.assignments[0].vanId, "VAN-2");
 });
 
-test("past time-changing moves remain blocked after the workday has started", () => {
-  const currentSchedule = { date: "2098-12-20", time: "08:30" };
-  assert.equal(operationalMoveTimeAllowed({
-    date: "2098-12-20",
-    time: "09:30",
-    today: "2098-12-20",
-    currentTime: "10:27",
-    currentSchedule,
-  }), false);
+test("manual operational drag cannot silently move an appointment to a different date", () => {
+  assert.equal(operationalMoveDateAllowed({ date: "2098-12-21", currentSchedule }), false);
+  assert.equal(operationalMoveDateAllowed({ date: "2098-12-20", currentSchedule: null }), false);
 
   const data = operationalData();
   const result = operationalMoveResult({
@@ -182,32 +168,13 @@ test("past time-changing moves remain blocked after the workday has started", ()
     property: data.properties[0],
     data,
     routeConfig: routeConfigFromSettings(data.businessSettings),
-    date: "2098-12-20",
+    date: "2098-12-21",
     time: "09:30",
     vanId: "VAN-2",
-    today: "2098-12-20",
-    currentTime: "10:27",
     currentSchedule,
   });
   assert.equal(result.option, null);
-  assert.equal(result.reason, "selected-time-passed");
-});
-
-test("past dates and unverified past starts remain blocked", () => {
-  assert.equal(operationalMoveTimeAllowed({
-    date: "2098-12-19",
-    time: "08:30",
-    today: "2098-12-20",
-    currentTime: "10:27",
-    currentSchedule: { date: "2098-12-19", time: "08:30" },
-  }), false);
-  assert.equal(operationalMoveTimeAllowed({
-    date: "2098-12-20",
-    time: "08:30",
-    today: "2098-12-20",
-    currentTime: "10:27",
-    currentSchedule: null,
-  }), false);
+  assert.equal(result.reason, "operational-move-date-mismatch");
 });
 
 test("manual operator drag still refuses a real occupied-capacity conflict", () => {
@@ -232,8 +199,7 @@ test("manual operator drag still refuses a real occupied-capacity conflict", () 
     date: "2098-12-20",
     time: "13:30",
     vanId: "VAN-2",
-    today: "2098-12-01",
-    currentTime: "08:00",
+    currentSchedule,
   });
   assert.equal(result.option, null);
   assert.equal(result.reason, "operational-target-unavailable");
@@ -251,8 +217,7 @@ test("manual operator drag refuses a van that is actually out of service or in m
     date: "2098-12-20",
     time: "13:30",
     vanId: "VAN-2",
-    today: "2098-12-01",
-    currentTime: "08:00",
+    currentSchedule,
   });
   assert.equal(result.option, null);
   assert.equal(result.reason, "operational-target-unavailable");
