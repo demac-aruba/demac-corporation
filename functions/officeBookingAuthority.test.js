@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const {
   OFFICE_BOOKING_ACTIONS,
+  bookingRequestFromCanonicalAppointment,
   bookingRequestFromOffice,
   createOfficeBookingApi,
 } = require("./officeBookingAuthority");
@@ -94,6 +95,30 @@ test("office request maps to canonical Booking Authority request without inventi
     preferredTime: "morning",
   });
   assert.equal(mapped.notes, "Office note");
+});
+
+test("operational move request is derived from the canonical appointment rather than browser work data", () => {
+  const mapped = bookingRequestFromCanonicalAppointment({
+    appointmentId: "APT-1",
+    customerId: "client-canonical",
+    propertyId: "property-canonical",
+    workLines: [{ id: "work-1", presetId: "standard_service", serviceId: "service-1", quantity: 3 }],
+    constraints: { preferredTime: "morning" },
+    notes: "Canonical note",
+  }, {
+    requestedDate: "2026-08-20",
+    requestedTime: "13:30",
+    customerId: "browser-customer-ignored",
+    presetId: "browser-preset-ignored",
+    quantity: 99,
+  });
+  assert.equal(mapped.customerId, "client-canonical");
+  assert.equal(mapped.propertyId, "property-canonical");
+  assert.equal(mapped.workLines[0].presetId, "standard_service");
+  assert.equal(mapped.workLines[0].quantity, 3);
+  assert.equal(mapped.constraints.requestedDate, "2026-08-20");
+  assert.equal(mapped.constraints.requestedTime, "13:30");
+  assert.equal(mapped.constraints.preferredTime, "morning");
 });
 
 test("office gateway requires Firebase authentication and an office scheduling role", async () => {
@@ -256,7 +281,7 @@ test("reschedule_appointment preserves identity and delegates operational move i
   const lifecycle = createLifecycle({
     async rescheduleAppointment(args) {
       captured = args;
-      return { success: true, appointmentId: args.appointmentId, appointment: { status: "confirmed" } };
+      return { success: true, appointmentId: args.appointmentId, appointment: { id: args.appointmentId, status: "confirmed" }, args };
     },
   });
   const api = createOfficeBookingApi({
@@ -285,4 +310,84 @@ test("reschedule_appointment preserves identity and delegates operational move i
   assert.equal(captured.optionId, "OPT-NEW");
   assert.equal(captured.changeKind, "operational_move");
   assert.equal(captured.context.excludeAppointmentId, "APT-REAL-1");
+});
+
+test("move_appointment performs exact availability and lifecycle commit inside one authenticated office request", async () => {
+  let availabilityArgs;
+  let lifecycleArgs;
+  const authority = createAuthority({
+    async getAppointment(id) {
+      return {
+        id,
+        appointmentId: id,
+        status: "confirmed",
+        customerId: "client-1",
+        propertyId: "property-1",
+        date: "2026-08-20",
+        workLines: [{ id: "work-1", presetId: "standard_service", serviceId: "service-1", quantity: 2 }],
+        constraints: { preferredTime: "morning" },
+      };
+    },
+    async checkAvailability(args) {
+      availabilityArgs = args;
+      return {
+        success: true,
+        available: true,
+        offer: { id: "OFR-MOVE", version: 1 },
+        options: [{
+          id: "OPT-MOVE",
+          date: "2026-08-20",
+          time: "13:30",
+          assignments: [{ vanId: "VAN-2", quantity: 2, slots: 2 }],
+        }],
+      };
+    },
+  });
+  const lifecycle = createLifecycle({
+    async rescheduleAppointment(args) {
+      lifecycleArgs = args;
+      return {
+        success: true,
+        appointmentId: args.appointmentId,
+        changeKind: args.changeKind,
+        customerNotificationRecommended: true,
+        appointment: { id: args.appointmentId, status: "confirmed" },
+      };
+    },
+  });
+  const api = createOfficeBookingApi({
+    db: createDb(),
+    verifyIdToken,
+    bookingAuthority: authority,
+    schedulingProvider: {},
+    lifecycleAuthority: lifecycle,
+  });
+  const result = await api.handle(request({
+    action: OFFICE_BOOKING_ACTIONS.MOVE_APPOINTMENT,
+    data: {
+      requestId: "drag-move-12345",
+      appointmentId: "APT-REAL-1",
+      requestedDate: "2026-08-20",
+      requestedTime: "13:30",
+      requiredVanId: "VAN-2",
+      reason: "Drag-and-drop operational move",
+      note: "VAN-1 08:30 → VAN-2 13:30",
+      customerId: "browser-customer-must-not-control-move",
+      presetId: "browser-preset-must-not-control-move",
+      quantity: 99,
+    },
+  }));
+  assert.equal(result.status, 200);
+  assert.equal(result.body.appointmentId, "APT-REAL-1");
+  assert.equal(availabilityArgs.request.customerId, "client-1");
+  assert.equal(availabilityArgs.request.workLines[0].presetId, "standard_service");
+  assert.equal(availabilityArgs.request.workLines[0].quantity, 2);
+  assert.equal(availabilityArgs.request.constraints.requestedDate, "2026-08-20");
+  assert.equal(availabilityArgs.request.constraints.requestedTime, "13:30");
+  assert.equal(availabilityArgs.context.requiredPrimaryVanId, "VAN-2");
+  assert.equal(availabilityArgs.context.changeKind, "operational_move");
+  assert.equal(lifecycleArgs.offerId, "OFR-MOVE");
+  assert.equal(lifecycleArgs.optionId, "OPT-MOVE");
+  assert.equal(lifecycleArgs.changeKind, "operational_move");
+  assert.equal(lifecycleArgs.context.excludeAppointmentId, "APT-REAL-1");
 });
