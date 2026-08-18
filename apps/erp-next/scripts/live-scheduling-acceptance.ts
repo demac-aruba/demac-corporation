@@ -2,6 +2,7 @@ import { bookingActorLabel, projectLiveSchedulingAppointments, resolveCanonicalV
 import {
   liveDragMoveCandidates,
   liveMoveTargetKey,
+  liveOperationalMoveTimeAllowed,
   projectCommittedLiveMove,
 } from '../lib/live-scheduling-move';
 import { buildOperationalWeek } from '../lib/scheduling-capacity';
@@ -62,11 +63,28 @@ requireCondition(bookingActorLabel({ appointmentId: 'APT-MAYA', source: 'demac-c
 
 const operationalDay = buildOperationalWeek(canonical.dateKey).find((day) => day.dateKey === canonical.dateKey);
 requireCondition(Boolean(operationalDay), 'The live appointment date must resolve to an operational day.');
-const dragCandidates = liveDragMoveCandidates(operationalDay!, canonical, canonical.assignments);
+const startedAppointmentNow = new Date('2026-08-18T14:27:00.000Z'); // 10:27 AM Aruba
+requireCondition(liveOperationalMoveTimeAllowed({
+  dateKey: canonical.dateKey,
+  targetStart: '08:30',
+  currentDateKey: canonical.dateKey,
+  currentStart: '08:30',
+  now: startedAppointmentNow,
+}), 'A started appointment must still allow an exact-time internal van reassignment.');
+requireCondition(!liveOperationalMoveTimeAllowed({
+  dateKey: canonical.dateKey,
+  targetStart: '09:30',
+  currentDateKey: canonical.dateKey,
+  currentStart: '08:30',
+  now: startedAppointmentNow,
+}), 'A started appointment must not advertise a different already-passed start time.');
+const dragCandidates = liveDragMoveCandidates(operationalDay!, canonical, canonical.assignments, startedAppointmentNow);
 requireCondition(dragCandidates.length > 0, 'A single-van live appointment must expose valid same-day drag targets.');
+requireCondition(dragCandidates.every((slot) => slot.start !== '09:30'), 'Drag UI must hide already-passed time-changing destinations.');
 requireCondition(dragCandidates.every((slot) => slot.start !== '10:30' && slot.start !== '15:30'), 'Drag UI must not advertise starts that cannot fit the complete two-hour appointment.');
-const target = dragCandidates.find((slot) => slot.vanId !== canonical.primaryVanId) ?? dragCandidates[0];
-requireCondition(Boolean(target), 'A valid move target must be available for projection coverage.');
+const sameTimeTarget = dragCandidates.find((slot) => slot.vanId !== canonical.primaryVanId && slot.start === canonical.assignments[0].start);
+requireCondition(Boolean(sameTimeTarget), 'A started appointment must retain same-time cross-van drag targets.');
+const target = sameTimeTarget ?? dragCandidates[0];
 requireCondition(liveMoveTargetKey(target.vanId, target.start) === `${target.vanId}|${target.start}`, 'Live move target keys must be deterministic.');
 const projectedMove = projectCommittedLiveMove({
   appointment: canonical,
@@ -94,7 +112,7 @@ requireCondition(supportedAppointments.length === 1, 'Primary and support work o
 requireCondition(supportedAppointments[0].supportVanId === 'VAN-2', 'Canonical support van must be recognized.');
 const supportAssignment = supportedAppointments[0].assignments.find((assignment) => !assignment.isPrimaryAssignment);
 requireCondition(supportAssignment?.supportForJobId === 'WO-APT-CANONICAL-1-1', 'Canonical parentWorkOrderId must link the support assignment to the primary job.');
-requireCondition(liveDragMoveCandidates(operationalDay!, supportedAppointments[0], supportedAppointments[0].assignments).length === 0, 'A multi-van booking must not enter the simple drag workflow.');
+requireCondition(liveDragMoveCandidates(operationalDay!, supportedAppointments[0], supportedAppointments[0].assignments, startedAppointmentNow).length === 0, 'A multi-van booking must not enter the simple drag workflow.');
 
 const rescheduledWithStaleSupport = projectLiveSchedulingAppointments([
   canonicalWorkOrders[0],
@@ -151,4 +169,4 @@ const duplicatedVanAppointment = projectLiveSchedulingAppointments([
 requireCondition(duplicatedVanAppointment.length === 1, 'A booking assigned through a legacy van document must remain visible.');
 requireCondition(duplicatedVanAppointment[0].primaryVanId === 'VAN-4', 'A duplicate Van 4 document must project onto the single canonical VAN-4 lane.');
 
-console.log('Live scheduling acceptance passed: canonical fleet lanes, valid drag targets, immediate committed move projection, creator attribution, and legacy compatibility.');
+console.log('Live scheduling acceptance passed: canonical fleet lanes, started same-time reassignment, valid drag targets, immediate committed move projection, creator attribution, and legacy compatibility.');
