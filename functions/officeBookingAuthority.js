@@ -12,7 +12,7 @@ const { createBookingAuthority } = require("./bookingAuthorityFirestore");
 const { createBookingAppointmentLifecycle } = require("./bookingAuthorityAppointmentLifecycle");
 const { createSchedulingProvider } = require("./bookingAuthoritySchedulingProvider");
 
-const OFFICE_BOOKING_API_VERSION = 3;
+const OFFICE_BOOKING_API_VERSION = 4;
 const OFFICE_BOOKING_ROLES = Object.freeze([
   "admin",
   "office",
@@ -233,6 +233,7 @@ function createOfficeBookingApi({ db, verifyIdToken, bookingAuthority = null, sc
       const request = bookingRequestFromOffice(data);
       const excludeAppointmentId = cleanText(data.appointmentId, 180);
       const requiredPrimaryVanId = cleanText(data.requiredVanId, 120);
+      const changeKind = lifecycleChangeKind(data.changeKind);
       return authority.checkAvailability({
         request,
         actor,
@@ -242,6 +243,7 @@ function createOfficeBookingApi({ db, verifyIdToken, bookingAuthority = null, sc
           officeRequestId: requestId,
           excludeAppointmentId,
           requiredPrimaryVanId,
+          changeKind,
         },
       });
     }
@@ -281,6 +283,7 @@ function createOfficeBookingApi({ db, verifyIdToken, bookingAuthority = null, sc
     }
     if (action === OFFICE_BOOKING_ACTIONS.RESCHEDULE_APPOINTMENT) {
       const requestId = officeRequestId(data.requestId);
+      const changeKind = lifecycleChangeKind(data.changeKind);
       return getLifecycle().rescheduleAppointment({
         appointmentId: data.appointmentId,
         offerId: data.offerId,
@@ -289,11 +292,12 @@ function createOfficeBookingApi({ db, verifyIdToken, bookingAuthority = null, sc
         reason: data.reason,
         note: data.note,
         actor,
-        changeKind: lifecycleChangeKind(data.changeKind),
+        changeKind,
         context: {
           channel: "office",
           officeRequestId: requestId,
           excludeAppointmentId: cleanText(data.appointmentId, 180),
+          changeKind,
         },
       });
     }
