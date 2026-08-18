@@ -1,6 +1,10 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createBookingAppointmentLifecycle } = require("./bookingAuthorityAppointmentLifecycle");
+const {
+  createBookingAppointmentLifecycle,
+  normalizeChangeKind,
+  scheduleChangeNeedsCustomerFollowUp,
+} = require("./bookingAuthorityAppointmentLifecycle");
 
 class FakeSnapshot {
   constructor(id, value) {
@@ -141,6 +145,26 @@ function fixture(extra = {}) {
   return { db, lifecycle };
 }
 
+test("operational move classification is strict and customer follow-up depends on promised time", () => {
+  assert.equal(normalizeChangeKind("operational_move"), "operational_move");
+  assert.equal(normalizeChangeKind("something_else"), "customer_reschedule");
+  assert.equal(scheduleChangeNeedsCustomerFollowUp("operational_move", {
+    dateKey: "2098-12-20", primaryStart: "08:30", primaryVanId: "VAN-1",
+  }, {
+    dateKey: "2098-12-20", primaryStart: "08:30", primaryVanId: "VAN-2",
+  }), false);
+  assert.equal(scheduleChangeNeedsCustomerFollowUp("operational_move", {
+    dateKey: "2098-12-20", primaryStart: "08:30", primaryVanId: "VAN-1",
+  }, {
+    dateKey: "2098-12-20", primaryStart: "09:30", primaryVanId: "VAN-2",
+  }), true);
+  assert.equal(scheduleChangeNeedsCustomerFollowUp("customer_reschedule", {
+    dateKey: "2098-12-20", primaryStart: "08:30",
+  }, {
+    dateKey: "2098-12-20", primaryStart: "08:30",
+  }), true);
+});
+
 test("cancelling an appointment releases capacity and cancels linked work orders atomically", async () => {
   const { db, lifecycle } = fixture();
   const result = await lifecycle.cancelAppointment({
@@ -175,10 +199,13 @@ test("rescheduling preserves appointment identity and swaps work orders plus cap
   });
   assert.equal(result.success, true);
   assert.equal(result.appointmentId, "APT-LIVE-1");
+  assert.equal(result.changeKind, "customer_reschedule");
+  assert.equal(result.customerNotificationRecommended, true);
   const appointment = db.read("appointments/APT-LIVE-1");
   assert.equal(appointment.date, "2098-12-22");
   assert.equal(appointment.startTime, "13:30");
   assert.equal(appointment.primaryVanId, "VAN-2");
+  assert.equal(appointment.lastScheduleChangeKind, "customer_reschedule");
   assert.equal(db.read("workOrders/WO-APT-LIVE-1-1").date, "2098-12-22");
   assert.equal(db.read("workOrders/WO-APT-LIVE-1-1").vanId, "VAN-2");
   assert.equal(db.read("bookingCapacityLocks/lock-old-0830").active, false);
