@@ -2,6 +2,7 @@ import type { BrowserAppointmentRecord } from './browser-operational';
 import type { CalendarDispatchJob } from './scheduling-capacity';
 import type { DaySegment, WorkPresetId } from './scheduling';
 import { listFirestoreCollection } from './firebase/firestore-rest';
+import { listOfficeAppointmentAttribution, type OfficeAppointmentAttribution } from './office-booking-authority';
 
 const KNOWN_PRESETS = new Set<WorkPresetId>([
   'standard_service',
@@ -50,16 +51,6 @@ type LiveWorkOrder = {
   confirmedAt?: string;
   createdAt?: string;
   updatedAt?: string;
-};
-
-type LiveCanonicalAppointment = {
-  id: string;
-  appointmentId?: string;
-  source?: string;
-  createdBy?: string;
-  createdByName?: string;
-  createdAtIso?: string;
-  updatedAtIso?: string;
 };
 
 type LiveClient = {
@@ -200,7 +191,7 @@ function propertyLabel(property: LiveProperty | undefined, fallbackId: string) {
   return text(property?.name) || text(property?.address) || fallbackId || 'Property';
 }
 
-export function bookingActorLabel(appointment: LiveCanonicalAppointment | undefined) {
+export function bookingActorLabel(appointment: OfficeAppointmentAttribution | undefined) {
   if (!appointment) return '';
   const source = text(appointment.source).toLowerCase();
   if (source === 'demac-customer-agent') return 'Maya';
@@ -244,11 +235,11 @@ export function projectLiveSchedulingAppointments(
   clients: LiveClient[],
   properties: LiveProperty[],
   vans: LiveVan[] = [],
-  canonicalAppointments: LiveCanonicalAppointment[] = [],
+  canonicalAppointments: OfficeAppointmentAttribution[] = [],
 ): BrowserAppointmentRecord[] {
   const clientById = new Map(clients.map((client) => [client.id, client]));
   const propertyById = new Map(properties.map((property) => [property.id, property]));
-  const appointmentById = new Map(canonicalAppointments.map((appointment) => [text(appointment.appointmentId) || appointment.id, appointment]));
+  const appointmentById = new Map(canonicalAppointments.map((appointment) => [appointment.appointmentId, appointment]));
   const grouped = new Map<string, LiveWorkOrder[]>();
 
   for (const order of workOrders) {
@@ -321,12 +312,18 @@ export function projectLiveSchedulingAppointments(
 }
 
 export async function loadLiveSchedulingAppointments() {
-  const [workOrders, clients, properties, vans, canonicalAppointments] = await Promise.all([
+  const [workOrders, clients, properties, vans] = await Promise.all([
     listFirestoreCollection<LiveWorkOrder>('workOrders', 1000),
     listFirestoreCollection<LiveClient>('clients', 1000),
     listFirestoreCollection<LiveProperty>('properties', 1000),
     listFirestoreCollection<LiveVan>('vans', 250),
-    listFirestoreCollection<LiveCanonicalAppointment>('appointments', 1000),
   ]);
-  return projectLiveSchedulingAppointments(workOrders, clients, properties, vans, canonicalAppointments);
+  const appointmentIds = [...new Set(workOrders.map((order) => text(order.appointmentId)).filter(Boolean))];
+  let attribution: OfficeAppointmentAttribution[] = [];
+  try {
+    attribution = await listOfficeAppointmentAttribution(appointmentIds);
+  } catch {
+    // Attribution is supplemental. The operational board must remain available even if the authenticated metadata read is temporarily unavailable during a deployment transition.
+  }
+  return projectLiveSchedulingAppointments(workOrders, clients, properties, vans, attribution);
 }
