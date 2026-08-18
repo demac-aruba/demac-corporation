@@ -24,6 +24,18 @@ test("deduplicates multiple Firestore records that represent the same physical v
   assert.equal(catalog.aliases.get("van-1783800405341"), "VAN-4");
 });
 
+test("deduplicates the full raw fleet before applying the physical four-van capacity", () => {
+  const catalog = canonicalizeVanCatalog([
+    { id: "v4", name: "Van 4", active: true },
+    { id: "van-1783800405341", name: "Van 4", active: true },
+    { id: "v1", name: "Van 1", active: true },
+    { id: "legacy-v1", name: "Van 1", active: true },
+    { id: "VAN-2", name: "Van 2", active: true },
+    { id: "VAN-3", name: "Van 3", active: true },
+  ]);
+  assert.deepEqual(catalog.vans.map((van) => van.id), ["VAN-1", "VAN-2", "VAN-3", "VAN-4"]);
+});
+
 test("canonicalizes scheduling references before availability math", () => {
   const data = canonicalizeSchedulingData({
     vans: [
