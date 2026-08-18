@@ -21,6 +21,11 @@ type LiveWorkOrder = {
   id: string;
   appointmentId?: string;
   appointmentType?: string;
+  appointmentWorkType?: string;
+  appointmentPresetId?: string;
+  appointmentAssignmentRole?: string;
+  parentWorkOrderId?: string;
+  airConditionerCount?: number;
   assignmentRole?: string;
   supportForWorkOrderId?: string;
   clientId?: string;
@@ -33,11 +38,13 @@ type LiveWorkOrder = {
   appointmentDurationMinutes?: number;
   zone?: string;
   operationalZone?: string;
+  vanId?: string;
   van?: string;
   scheduledSlots?: string[];
   problem?: string;
   status?: string;
   source?: string;
+  confirmedAt?: string;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -68,6 +75,26 @@ function positiveInteger(value: unknown, fallback = 1) {
 function presetId(value: unknown): WorkPresetId {
   const candidate = text(value) as WorkPresetId;
   return KNOWN_PRESETS.has(candidate) ? candidate : 'other';
+}
+
+function workOrderVanId(order: LiveWorkOrder) {
+  return text(order.vanId) || text(order.van);
+}
+
+function workOrderPresetId(order: LiveWorkOrder) {
+  return presetId(order.appointmentPresetId || order.appointmentWorkType || order.presetId);
+}
+
+function workOrderAssignmentRole(order: LiveWorkOrder) {
+  return text(order.appointmentAssignmentRole || order.assignmentRole).toLowerCase();
+}
+
+function workOrderSupportForId(order: LiveWorkOrder) {
+  return text(order.parentWorkOrderId || order.supportForWorkOrderId);
+}
+
+function workOrderQuantity(order: LiveWorkOrder) {
+  return positiveInteger(order.airConditionerCount ?? order.quantity);
 }
 
 function timeToMinutes(value: string) {
@@ -125,7 +152,9 @@ function workOrderAssignment(
 ): CalendarDispatchJob {
   const start = text(order.time) || normalizedSlots(order.scheduledSlots)[0] || '08:30';
   const end = assignmentEnd({ ...order, time: start });
-  const primary = text(order.assignmentRole).toLowerCase() !== 'support';
+  const role = workOrderAssignmentRole(order);
+  const primary = role !== 'support';
+  const supportForJobId = workOrderSupportForId(order);
   return {
     id: order.id,
     dateKey: text(order.date),
@@ -135,14 +164,14 @@ function workOrderAssignment(
     start,
     end,
     segment: daySegment(start, end),
-    vanId: text(order.van) || 'UNASSIGNED',
-    presetId: presetId(order.presetId),
-    quantity: positiveInteger(order.quantity),
+    vanId: workOrderVanId(order) || 'UNASSIGNED',
+    presetId: workOrderPresetId(order),
+    quantity: workOrderQuantity(order),
     status: isCancelled(order.status) ? 'cancelled' : 'confirmed',
     readiness: 'not_checked',
     isPrimaryAssignment: primary,
     customerCommunicationOwner: primary,
-    ...(primary || !text(order.supportForWorkOrderId) ? {} : { supportForJobId: text(order.supportForWorkOrderId) }),
+    ...(primary || !supportForJobId ? {} : { supportForJobId }),
   };
 }
 
@@ -157,7 +186,7 @@ export function projectLiveSchedulingAppointments(
 
   for (const order of workOrders) {
     const appointmentId = text(order.appointmentId);
-    if (!appointmentId || !text(order.date) || !text(order.van)) continue;
+    if (!appointmentId || !text(order.date) || !workOrderVanId(order)) continue;
     const current = grouped.get(appointmentId) ?? [];
     current.push(order);
     grouped.set(appointmentId, current);
@@ -166,8 +195,8 @@ export function projectLiveSchedulingAppointments(
   const appointments: BrowserAppointmentRecord[] = [];
   for (const [appointmentId, orders] of grouped.entries()) {
     const sorted = [...orders].sort((a, b) => {
-      const aSupport = text(a.assignmentRole).toLowerCase() === 'support' ? 1 : 0;
-      const bSupport = text(b.assignmentRole).toLowerCase() === 'support' ? 1 : 0;
+      const aSupport = workOrderAssignmentRole(a) === 'support' ? 1 : 0;
+      const bSupport = workOrderAssignmentRole(b) === 'support' ? 1 : 0;
       return aSupport - bSupport || text(a.time).localeCompare(text(b.time)) || a.id.localeCompare(b.id);
     });
     const primary = sorted[0];
@@ -181,9 +210,10 @@ export function projectLiveSchedulingAppointments(
     const assignments = sorted.map((order) => workOrderAssignment(order, customer, site, sector));
     const primaryAssignment = assignments.find((assignment) => assignment.isPrimaryAssignment) ?? assignments[0];
     const supportAssignment = assignments.find((assignment) => !assignment.isPrimaryAssignment);
-    const quantity = sorted.reduce((total, order) => total + positiveInteger(order.quantity), 0);
+    const quantity = sorted.reduce((total, order) => total + workOrderQuantity(order), 0);
     const fallbackDescription = `${primaryAssignment.presetId.replaceAll('_', ' ')} x${quantity}`;
     const cancelled = assignments.every((assignment) => assignment.status === 'cancelled');
+    const confirmedAt = text(primary.confirmedAt) || text(primary.createdAt);
 
     appointments.push({
       id: appointmentId,
@@ -206,9 +236,9 @@ export function projectLiveSchedulingAppointments(
       assignments,
       primaryVanId: primaryAssignment.vanId,
       supportVanId: supportAssignment?.vanId,
-      createdAt: text(primary.createdAt) || new Date(0).toISOString(),
+      createdAt: text(primary.createdAt) || confirmedAt || new Date(0).toISOString(),
       updatedAt: text(primary.updatedAt) || undefined,
-      confirmedAt: text(primary.createdAt) || undefined,
+      confirmedAt: confirmedAt || undefined,
       workOrderId: primary.id,
     });
   }
