@@ -8,20 +8,27 @@ import {
   loadLiveSchedulingAppointmentsFast,
 } from '../../lib/live-scheduling-fast';
 import {
+  liveDragMoveCandidates,
+  liveMoveTargetKey,
+  projectCommittedLiveMove,
+} from '../../lib/live-scheduling-move';
+import {
   checkOfficeRescheduleAvailability,
   createOfficeLifecycleRequestId,
   rescheduleOfficeAppointment,
 } from '../../lib/office-booking-authority';
-import type { DispatchJob, WorkPresetId } from '../../lib/scheduling';
+import type { CandidateSlot, DispatchJob, WorkPresetId } from '../../lib/scheduling';
 import { defaultWorkPresets, getRuntimeSchedulingSettings, minutesToTime, previewVans, timeToMinutes } from '../../lib/scheduling';
 import type { CalendarDispatchJob, OperationalDay } from '../../lib/scheduling-capacity';
 import { buildOperationalWeek, currentArubaDateKey } from '../../lib/scheduling-capacity';
+import { DragMoveConfirmation, type PendingDragMove } from './drag-move-confirmation';
 import { LiveAppointmentDetailsDrawer } from './live-appointment-details-drawer';
 import styles from './scheduling-overview-v2.module.css';
 
 type DisplaySlot = { start: string; end: string; segment: 'am' | 'pm' };
 type DisplayVan = { id: string; name: string; team: string; active: boolean };
 type JobLink = { appointmentId: string; appointment: BrowserAppointmentRecord };
+type PendingLiveMove = PendingDragMove & { jobId: string; candidate: CandidateSlot };
 
 function appointmentAssignments(record: BrowserAppointmentRecord): CalendarDispatchJob[] {
   if (record.status === 'cancelled') return [];
@@ -127,20 +134,26 @@ export function LiveSchedulingOverview() {
   const [appointments, setAppointments] = useState<BrowserAppointmentRecord[]>([]);
   const [selectedAppointmentId, setSelectedAppointmentId] = useState('');
   const [moveArmedJobId, setMoveArmedJobId] = useState('');
+  const [pendingDragMove, setPendingDragMove] = useState<PendingLiveMove | null>(null);
   const [moveBusy, setMoveBusy] = useState(false);
   const [moveNotice, setMoveNotice] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [lastSyncedAt, setLastSyncedAt] = useState('');
   const clickTimerRef = useRef<number | null>(null);
+  const reconcileTimerRef = useRef<number | null>(null);
   const refreshSequenceRef = useRef(0);
   const week = useMemo(() => buildOperationalWeek(activeDate), [activeDate]);
+  const weekStartDate = week[0]?.dateKey ?? activeDate;
+  const weekEndDate = week[6]?.dateKey ?? activeDate;
   const canManage = principal.active && principal.capabilities.has('scheduling.manage');
+  const actor = useMemo(() => ({ id: principal.userId, name: principal.displayName }), [principal.displayName, principal.userId]);
+  const interactionActive = Boolean(moveArmedJobId || pendingDragMove || moveBusy);
 
   const refresh = useCallback(async () => {
     const sequence = ++refreshSequenceRef.current;
     try {
-      const next = await loadLiveSchedulingAppointmentsFast();
+      const next = await loadLiveSchedulingAppointmentsFast({ startDate: weekStartDate, endDate: weekEndDate });
       if (sequence !== refreshSequenceRef.current) return;
       setAppointments(next);
       setError('');
@@ -159,30 +172,44 @@ export function LiveSchedulingOverview() {
       setError(loadError instanceof Error ? loadError.message : 'Live scheduling data could not be loaded.');
       setLoading(false);
     }
-  }, []);
+  }, [weekEndDate, weekStartDate]);
 
   useEffect(() => {
     void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    if (interactionActive) return;
     const interval = window.setInterval(() => void refresh(), 15_000);
     const onFocus = () => void refresh();
     window.addEventListener('focus', onFocus);
     return () => {
       window.clearInterval(interval);
       window.removeEventListener('focus', onFocus);
-      if (clickTimerRef.current) window.clearTimeout(clickTimerRef.current);
     };
-  }, [refresh]);
+  }, [interactionActive, refresh]);
+
+  useEffect(() => () => {
+    if (clickTimerRef.current) window.clearTimeout(clickTimerRef.current);
+    if (reconcileTimerRef.current) window.clearTimeout(reconcileTimerRef.current);
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !moveBusy) {
+      if (event.key !== 'Escape' || moveBusy) return;
+      if (pendingDragMove) {
+        setPendingDragMove(null);
+        setMoveNotice('Move cancelled. Nothing was changed.');
+        return;
+      }
+      if (moveArmedJobId) {
         setMoveArmedJobId('');
         setMoveNotice('Move mode cancelled.');
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [moveBusy]);
+  }, [moveArmedJobId, moveBusy, pendingDragMove]);
 
   const jobs = useMemo(() => appointments.flatMap(appointmentAssignments), [appointments]);
   const vans = useMemo<DisplayVan[]>(() => previewVans.map((van) => ({ id: van.id, name: van.name, team: van.team, active: van.active })), []);
@@ -206,6 +233,16 @@ export function LiveSchedulingOverview() {
     const vanJobs = activeJobs.filter((job) => job.vanId === van.id);
     return total + activeSlots.filter((slot) => activeJobsForSlot(vanJobs, slot).length > 1).length;
   }, 0);
+  const armedLink = moveArmedJobId ? jobLinks.get(moveArmedJobId) : undefined;
+  const dragCandidates = useMemo(
+    () => liveDragMoveCandidates(activeDay, armedLink?.appointment, activeJobs),
+    [activeDay, activeJobs, armedLink?.appointment],
+  );
+  const dragCandidateMap = useMemo(
+    () => new Map(dragCandidates.map((slot) => [liveMoveTargetKey(slot.vanId, slot.start), slot])),
+    [dragCandidates],
+  );
+  const validDropTargets = useMemo(() => new Set(dragCandidateMap.keys()), [dragCandidateMap]);
 
   const openJob = (jobId: string) => {
     const link = jobLinks.get(jobId);
@@ -213,7 +250,7 @@ export function LiveSchedulingOverview() {
   };
 
   const scheduleOpenJob = (jobId: string) => {
-    if (moveBusy) return;
+    if (interactionActive) return;
     if (clickTimerRef.current) window.clearTimeout(clickTimerRef.current);
     clickTimerRef.current = window.setTimeout(() => {
       openJob(jobId);
@@ -222,13 +259,18 @@ export function LiveSchedulingOverview() {
   };
 
   const armMove = (jobId: string) => {
-    if (moveBusy) return;
+    if (moveBusy || pendingDragMove) return;
     if (clickTimerRef.current) {
       window.clearTimeout(clickTimerRef.current);
       clickTimerRef.current = null;
     }
     if (!canManage) {
       setMoveNotice('Your account does not have permission to move appointments.');
+      return;
+    }
+    if (moveArmedJobId === jobId) {
+      setMoveArmedJobId('');
+      setMoveNotice('Move mode cancelled.');
       return;
     }
     const link = jobLinks.get(jobId);
@@ -238,19 +280,26 @@ export function LiveSchedulingOverview() {
       setSelectedAppointmentId(link.appointmentId);
       return;
     }
+    const candidates = liveDragMoveCandidates(activeDay, link.appointment, activeJobs);
+    if (!candidates.length) {
+      setMoveNotice(`There are no valid same-day destinations for ${link.appointment.customer}. The existing appointment was not changed.`);
+      return;
+    }
+    refreshSequenceRef.current += 1;
     setSelectedAppointmentId('');
     setMoveArmedJobId(jobId);
-    setMoveNotice(`Move armed for ${link.appointment.customer}. Drag the booking to an open spot in another time or van. Press Esc to cancel.`);
+    setMoveNotice(`Move armed for ${link.appointment.customer}. Only the highlighted destinations can fit the complete appointment.`);
   };
 
-  const dropMove = async (targetVanId: string, targetStart: string) => {
-    if (!moveArmedJobId || moveBusy) return;
+  const dropMove = (targetVanId: string, targetStart: string) => {
+    if (!moveArmedJobId || moveBusy || pendingDragMove) return;
     const movingJobId = moveArmedJobId;
     const link = jobLinks.get(movingJobId);
     const currentJob = jobs.find((job) => job.id === movingJobId);
-    if (!link || !currentJob) {
+    const candidate = dragCandidateMap.get(liveMoveTargetKey(targetVanId, targetStart));
+    if (!link || !currentJob || !candidate) {
       setMoveArmedJobId('');
-      setMoveNotice('The selected appointment changed while move mode was active. Refresh the schedule and try again.');
+      setMoveNotice('That destination is not valid for the complete appointment. Nothing was changed.');
       return;
     }
     const appointment = link.appointment;
@@ -259,16 +308,46 @@ export function LiveSchedulingOverview() {
       setMoveNotice('This appointment is missing its canonical customer/property relationship and cannot be moved safely.');
       return;
     }
-    if (currentJob.vanId === targetVanId && currentJob.start === targetStart) {
-      setMoveArmedJobId('');
-      setMoveNotice('The appointment is already in that work spot.');
+
+    setMoveArmedJobId('');
+    setMoveNotice('');
+    setPendingDragMove({
+      appointmentId: appointment.id,
+      assignmentId: currentJob.id,
+      jobId: currentJob.id,
+      customer: appointment.customer,
+      scope: 'primary',
+      fromVanId: currentJob.vanId,
+      fromStart: currentJob.start,
+      fromEnd: currentJob.end,
+      targetVanId,
+      targetStart,
+      targetEnd: candidate.end,
+      customerNotificationRecommended: currentJob.start !== targetStart,
+      candidate,
+    });
+  };
+
+  const cancelPendingMove = () => {
+    if (moveBusy) return;
+    setPendingDragMove(null);
+    setMoveNotice('Move cancelled. Nothing was changed.');
+  };
+
+  const confirmPendingMove = async () => {
+    const pending = pendingDragMove;
+    if (!pending || moveBusy) return;
+    const appointment = appointments.find((item) => item.id === pending.appointmentId);
+    const currentJob = appointment?.assignments.find((assignment) => assignment.id === pending.assignmentId) ?? appointment?.assignments[0];
+    if (!appointment || !currentJob || !appointment.customerId || !appointment.siteId) {
+      setPendingDragMove(null);
+      setMoveNotice('The appointment changed before the move could be saved. Nothing was changed. Refresh the agenda and try again.');
       return;
     }
 
-    const timeChanges = currentJob.start !== targetStart;
-    setMoveArmedJobId('');
     setMoveBusy(true);
-    setMoveNotice(`Moving ${appointment.customer} to ${targetVanId.replace('VAN-', 'Van ')} at ${formatTime(targetStart)}… Booking Authority is checking real capacity.`);
+    setMoveNotice(`Validating and moving ${appointment.customer} to ${pending.targetVanId.replace('VAN-', 'Van ')} at ${formatTime(pending.targetStart)}…`);
+    refreshSequenceRef.current += 1;
 
     try {
       const availability = await checkOfficeRescheduleAvailability({
@@ -278,18 +357,19 @@ export function LiveSchedulingOverview() {
         propertyId: appointment.siteId,
         presetId: appointment.presetId,
         quantity: appointment.totalQuantity,
-        requestedDate: activeDate,
-        requestedTime: targetStart,
-        requiredVanId: targetVanId,
+        requestedDate: appointment.dateKey,
+        requestedTime: pending.targetStart,
+        requiredVanId: pending.targetVanId,
         customerFacingDescription: appointment.customerFacingDescription,
         changeKind: 'operational_move',
       });
-      const option = availability.options.find((candidate) => candidate.date === activeDate
-        && candidate.time === targetStart
-        && candidate.assignments[0]?.vanId === targetVanId);
+      const option = availability.options.find((candidate) => candidate.date === appointment.dateKey
+        && candidate.time === pending.targetStart
+        && candidate.assignments[0]?.vanId === pending.targetVanId);
       if (!availability.available || !availability.offer || !option) {
         const reason = availability.reason ? ` (${availability.reason})` : '';
-        setMoveNotice(`That work spot cannot accept this appointment${reason}. Nothing was changed.`);
+        setPendingDragMove(null);
+        setMoveNotice(`That destination is no longer available${reason}. Booking Authority kept the original appointment unchanged.`);
         return;
       }
 
@@ -300,15 +380,47 @@ export function LiveSchedulingOverview() {
         offerVersion: availability.offer.version,
         optionId: option.id,
         reason: 'Drag-and-drop operational move',
-        note: `${currentJob.vanId} ${currentJob.start} → ${targetVanId} ${targetStart}`,
+        note: `${currentJob.vanId} ${currentJob.start} → ${pending.targetVanId} ${pending.targetStart}`,
         changeKind: 'operational_move',
       });
-      await refresh();
-      setMoveNotice(result.customerNotificationRecommended || timeChanges
-        ? `Appointment moved to ${targetVanId.replace('VAN-', 'Van ')} at ${formatTime(targetStart)}. Customer follow-up is recommended because the promised time changed.`
-        : `Appointment reassigned to ${targetVanId.replace('VAN-', 'Van ')} at ${formatTime(targetStart)}.`);
+
+      const committedSlot: CandidateSlot = {
+        ...pending.candidate,
+        vanId: pending.targetVanId,
+        start: pending.targetStart,
+        end: option.endTime || pending.targetEnd,
+        segment: timeToMinutes(pending.targetStart) < 12 * 60 ? 'am' : 'pm',
+        requiresSupportVan: false,
+        supportVanId: undefined,
+        supportStart: undefined,
+        supportEnd: undefined,
+        supportSegment: undefined,
+        primaryUnits: appointment.totalQuantity,
+      };
+      const projected = projectCommittedLiveMove({
+        appointment,
+        slot: committedSlot,
+        dateKey: appointment.dateKey,
+        actor,
+      });
+
+      refreshSequenceRef.current += 1;
+      setAppointments((items) => items.map((item) => item.id === appointment.id ? projected.record : item));
+      setPendingDragMove(null);
+      setError('');
+      setLastSyncedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+      setMoveNotice(result.customerNotificationRecommended || pending.customerNotificationRecommended
+        ? `Appointment moved to ${pending.targetVanId.replace('VAN-', 'Van ')} at ${formatTime(pending.targetStart)}. Customer follow-up is recommended because the promised time changed.`
+        : `Appointment reassigned immediately to ${pending.targetVanId.replace('VAN-', 'Van ')} at ${formatTime(pending.targetStart)}.`);
+
+      if (reconcileTimerRef.current) window.clearTimeout(reconcileTimerRef.current);
+      reconcileTimerRef.current = window.setTimeout(() => {
+        reconcileTimerRef.current = null;
+        void refresh();
+      }, 500);
     } catch (cause) {
-      setMoveNotice(`${cause instanceof Error ? cause.message : 'The appointment could not be moved.'} Nothing was changed.`);
+      setPendingDragMove(null);
+      setMoveNotice(`${cause instanceof Error ? cause.message : 'The appointment could not be moved.'} The original appointment was preserved.`);
     } finally {
       setMoveBusy(false);
     }
@@ -323,7 +435,7 @@ export function LiveSchedulingOverview() {
           <p>Live Booking Authority schedule. Confirmed customer appointments are read from canonical Firestore work orders; local demo scheduling is not mixed into this view.</p>
         </div>
         <div className={styles.pageActions}>
-          <button type="button" className={styles.secondary} onClick={() => void refresh()} disabled={loading || moveBusy}>↻ Refresh live</button>
+          <button type="button" className={styles.secondary} onClick={() => void refresh()} disabled={loading || interactionActive}>↻ Refresh live</button>
         </div>
       </header>
 
@@ -336,12 +448,12 @@ export function LiveSchedulingOverview() {
 
       <div className={styles.toolbar}>
         <div className={styles.dayNav}>
-          <button type="button" onClick={() => setActiveDate(addDays(activeDate, -7))}>‹</button>
+          <button type="button" onClick={() => setActiveDate(addDays(activeDate, -7))} disabled={interactionActive}>‹</button>
           <div><strong>{week[0]?.shortDate} – {week[6]?.shortDate}</strong><span>Navigate the live operational week</span></div>
-          <button type="button" onClick={() => setActiveDate(addDays(activeDate, 7))}>›</button>
+          <button type="button" onClick={() => setActiveDate(addDays(activeDate, 7))} disabled={interactionActive}>›</button>
         </div>
         <div className={styles.dayNav}>
-          <button type="button" onClick={() => setActiveDate(today)} style={{ width: 'auto', padding: '0 10px' }}>Today</button>
+          <button type="button" onClick={() => setActiveDate(today)} disabled={interactionActive} style={{ width: 'auto', padding: '0 10px' }}>Today</button>
         </div>
       </div>
 
@@ -349,7 +461,7 @@ export function LiveSchedulingOverview() {
         {week.map((day) => {
           const summary = weekSummaries[day.dateKey];
           return (
-            <button key={day.dateKey} type="button" className={`${styles.dayCard} ${day.dateKey === activeDate ? styles.dayActive : ''} ${day.isToday ? styles.today : ''}`} disabled={!day.isOpen} onClick={() => setActiveDate(day.dateKey)}>
+            <button key={day.dateKey} type="button" className={`${styles.dayCard} ${day.dateKey === activeDate ? styles.dayActive : ''} ${day.isToday ? styles.today : ''}`} disabled={!day.isOpen || interactionActive} onClick={() => setActiveDate(day.dateKey)}>
               <div><span>{day.weekday}</span><strong>{day.shortDate}</strong>{day.isToday ? <b>Today</b> : null}</div>
               <small>{day.shiftLabel}</small>
               <i><em style={{ width: `${summary?.percent ?? 0}%` }} /></i>
@@ -373,7 +485,7 @@ export function LiveSchedulingOverview() {
             <span>{activeDay.weekday} {activeDay.shortDate} · single click = details · double click = arm drag move</span>
             {moveNotice ? <span style={{ marginTop: 3, fontWeight: 700 }}>{moveNotice}</span> : null}
           </div>
-          <b>{moveBusy ? 'VALIDATING MOVE…' : `${activeOccupancy.open} OPEN SPOTS`}</b>
+          <b>{moveBusy ? 'SAVING MOVE…' : moveArmedJobId ? `${validDropTargets.size} VALID TARGETS` : `${activeOccupancy.open} OPEN SPOTS`}</b>
         </header>
         <div className={styles.boardScroll}>
           <div className={styles.vanGrid}>
@@ -396,6 +508,7 @@ export function LiveSchedulingOverview() {
                     jobLinks={jobLinks}
                     moveArmedJobId={moveArmedJobId}
                     moveBusy={moveBusy}
+                    validDropTargets={validDropTargets}
                     onOpenAppointment={scheduleOpenJob}
                     onArmMove={armMove}
                     onDropMove={dropMove}
@@ -409,6 +522,7 @@ export function LiveSchedulingOverview() {
       </div>
 
       {selectedAppointment ? <LiveAppointmentDetailsDrawer appointment={selectedAppointment} onClose={() => setSelectedAppointmentId('')} onChanged={refresh} /> : null}
+      {pendingDragMove ? <DragMoveConfirmation move={pendingDragMove} busy={moveBusy} onCancel={cancelPendingMove} onConfirm={() => void confirmPendingMove()} /> : null}
     </section>
   );
 }
@@ -420,6 +534,7 @@ function VanScheduleSlots({
   jobLinks,
   moveArmedJobId,
   moveBusy,
+  validDropTargets,
   onOpenAppointment,
   onArmMove,
   onDropMove,
@@ -430,9 +545,10 @@ function VanScheduleSlots({
   jobLinks: Map<string, JobLink>;
   moveArmedJobId: string;
   moveBusy: boolean;
+  validDropTargets: Set<string>;
   onOpenAppointment: (jobId: string) => void;
   onArmMove: (jobId: string) => void;
-  onDropMove: (vanId: string, start: string) => Promise<void>;
+  onDropMove: (vanId: string, start: string) => void;
 }) {
   const rows: React.ReactNode[] = [];
   let index = 0;
@@ -445,7 +561,9 @@ function VanScheduleSlots({
 
     const active = activeJobsForSlot(jobs, slot);
     if (!active.length) {
-      const dropEnabled = Boolean(moveArmedJobId) && !moveBusy;
+      const dropEnabled = Boolean(moveArmedJobId)
+        && !moveBusy
+        && validDropTargets.has(liveMoveTargetKey(vanId, slot.start));
       rows.push(<div
         className={styles.openSlot}
         key={`open-${slot.start}`}
@@ -453,12 +571,12 @@ function VanScheduleSlots({
         onDrop={(event) => {
           if (!dropEnabled) return;
           event.preventDefault();
-          void onDropMove(vanId, slot.start);
+          onDropMove(vanId, slot.start);
         }}
         style={dropEnabled ? { borderStyle: 'solid', borderColor: 'var(--brand)', background: 'var(--brand-soft)', cursor: 'copy' } : undefined}
       >
         <div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div>
-        <div><strong>{dropEnabled ? 'Drop to move' : 'Available'}</strong><span>{dropEnabled ? 'Booking Authority validates before saving' : 'Open work spot'}</span></div>
+        <div><strong>{dropEnabled ? 'Drop to move' : 'Available'}</strong><span>{dropEnabled ? 'Valid for the complete appointment' : 'Open work spot'}</span></div>
         <b>{dropEnabled ? 'MOVE' : 'LIVE'}</b>
       </div>);
       index += 1;
@@ -535,7 +653,7 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
           {!continuation && span > 1 ? <small>Reserved continuously · {formatTime(job.start)}–{formatTime(job.end)}</small> : null}
           {crossesLunch ? <small>Lunch/reset remains protected</small> : null}
           {bookingBadge(appointment?.bookedByName)}
-          <small>{armed ? 'Drag this block to a highlighted open spot' : 'Single click details · double click to move'}</small>
+          <small>{armed ? 'Drag this block to a highlighted valid destination' : 'Single click details · double click to move'}</small>
         </div>
       </article>
     </div>
