@@ -13,9 +13,8 @@ import {
   projectCommittedLiveMove,
 } from '../../lib/live-scheduling-move';
 import {
-  checkOfficeRescheduleAvailability,
   createOfficeLifecycleRequestId,
-  rescheduleOfficeAppointment,
+  moveOfficeAppointment,
 } from '../../lib/office-booking-authority';
 import type { CandidateSlot, DispatchJob, WorkPresetId } from '../../lib/scheduling';
 import { defaultWorkPresets, getRuntimeSchedulingSettings, minutesToTime, previewVans, timeToMinutes } from '../../lib/scheduling';
@@ -339,56 +338,32 @@ export function LiveSchedulingOverview() {
     if (!pending || moveBusy) return;
     const appointment = appointments.find((item) => item.id === pending.appointmentId);
     const currentJob = appointment?.assignments.find((assignment) => assignment.id === pending.assignmentId) ?? appointment?.assignments[0];
-    if (!appointment || !currentJob || !appointment.customerId || !appointment.siteId) {
+    if (!appointment || !currentJob) {
       setPendingDragMove(null);
       setMoveNotice('The appointment changed before the move could be saved. Nothing was changed. Refresh the agenda and try again.');
       return;
     }
 
     setMoveBusy(true);
-    setMoveNotice(`Validating and moving ${appointment.customer} to ${pending.targetVanId.replace('VAN-', 'Van ')} at ${formatTime(pending.targetStart)}…`);
+    setMoveNotice(`Moving ${appointment.customer} to ${pending.targetVanId.replace('VAN-', 'Van ')} at ${formatTime(pending.targetStart)}…`);
     refreshSequenceRef.current += 1;
 
     try {
-      const availability = await checkOfficeRescheduleAvailability({
+      const result = await moveOfficeAppointment({
         appointmentId: appointment.id,
-        requestId: createOfficeLifecycleRequestId('drag-availability'),
-        customerId: appointment.customerId,
-        propertyId: appointment.siteId,
-        presetId: appointment.presetId,
-        quantity: appointment.totalQuantity,
+        requestId: createOfficeLifecycleRequestId('drag-move'),
         requestedDate: appointment.dateKey,
         requestedTime: pending.targetStart,
         requiredVanId: pending.targetVanId,
-        customerFacingDescription: appointment.customerFacingDescription,
-        changeKind: 'operational_move',
-      });
-      const option = availability.options.find((candidate) => candidate.date === appointment.dateKey
-        && candidate.time === pending.targetStart
-        && candidate.assignments[0]?.vanId === pending.targetVanId);
-      if (!availability.available || !availability.offer || !option) {
-        const reason = availability.reason ? ` (${availability.reason})` : '';
-        setPendingDragMove(null);
-        setMoveNotice(`That destination is no longer available${reason}. Booking Authority kept the original appointment unchanged.`);
-        return;
-      }
-
-      const result = await rescheduleOfficeAppointment({
-        appointmentId: appointment.id,
-        requestId: createOfficeLifecycleRequestId('drag-move'),
-        offerId: availability.offer.id,
-        offerVersion: availability.offer.version,
-        optionId: option.id,
         reason: 'Drag-and-drop operational move',
         note: `${currentJob.vanId} ${currentJob.start} → ${pending.targetVanId} ${pending.targetStart}`,
-        changeKind: 'operational_move',
       });
 
       const committedSlot: CandidateSlot = {
         ...pending.candidate,
         vanId: pending.targetVanId,
         start: pending.targetStart,
-        end: option.endTime || pending.targetEnd,
+        end: pending.targetEnd,
         segment: timeToMinutes(pending.targetStart) < 12 * 60 ? 'am' : 'pm',
         requiresSupportVan: false,
         supportVanId: undefined,
