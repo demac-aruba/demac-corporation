@@ -7,8 +7,12 @@ on:
       - 'functions/officeBookingAuthority.test.js'
       - 'functions/bookingAuthorityCore.js'
       - 'functions/bookingAuthorityFirestore.js'
+      - 'functions/bookingAuthorityAppointmentLifecycle.js'
+      - 'functions/bookingAuthorityAppointmentLifecycle.test.js'
       - 'functions/bookingAuthoritySchedulingEngine.js'
       - 'functions/bookingAuthoritySchedulingProvider.js'
+      - 'functions/bookingVanIdentity.js'
+      - 'functions/bookingVanIdentity.test.js'
       - 'functions/bookingSchedulingPrimitives.js'
       - 'functions/bookingCapacityAvailability.js'
       - 'functions/index.js'
@@ -22,8 +26,12 @@ on:
       - 'functions/officeBookingAuthority.test.js'
       - 'functions/bookingAuthorityCore.js'
       - 'functions/bookingAuthorityFirestore.js'
+      - 'functions/bookingAuthorityAppointmentLifecycle.js'
+      - 'functions/bookingAuthorityAppointmentLifecycle.test.js'
       - 'functions/bookingAuthoritySchedulingEngine.js'
       - 'functions/bookingAuthoritySchedulingProvider.js'
+      - 'functions/bookingVanIdentity.js'
+      - 'functions/bookingVanIdentity.test.js'
       - 'functions/bookingSchedulingPrimitives.js'
       - 'functions/bookingCapacityAvailability.js'
       - 'functions/index.js'
@@ -62,8 +70,12 @@ jobs:
           node --check functions/officeBookingAuthority.js
           node --check functions/bookingAuthorityCore.js
           node --check functions/bookingAuthorityFirestore.js
+          node --check functions/bookingAuthorityAppointmentLifecycle.js
           node --check functions/bookingAuthoritySchedulingEngine.js
           node --check functions/bookingAuthoritySchedulingProvider.js
+          node --check functions/bookingVanIdentity.js
+          node --test functions/bookingAuthorityAppointmentLifecycle.test.js
+          node --test functions/bookingVanIdentity.test.js
           node --test functions/officeBookingAuthority.test.js
           node - <<'NODE'
           const mod = require('./functions/index');
