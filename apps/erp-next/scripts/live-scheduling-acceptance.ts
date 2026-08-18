@@ -1,4 +1,4 @@
-import { projectLiveSchedulingAppointments, resolveCanonicalVanId } from '../lib/live-scheduling';
+import { bookingActorLabel, projectLiveSchedulingAppointments, resolveCanonicalVanId } from '../lib/live-scheduling';
 
 function requireCondition(condition: unknown, message: string) {
   if (!condition) throw new Error(`Live scheduling acceptance failed: ${message}`);
@@ -35,7 +35,11 @@ const properties = [
   { id: 'PROPERTY-STAR-MEDIA', name: 'Star Media Office', address: 'Santa Cruz 54 C, local 1', operationalZone: 'Santa Cruz' },
 ];
 
-const canonicalAppointments = projectLiveSchedulingAppointments(canonicalWorkOrders, clients, properties);
+const authorityAppointments = [
+  { id: 'APT-CANONICAL-1', appointmentId: 'APT-CANONICAL-1', source: 'office-scheduling', createdBy: 'user-christian', createdByName: 'Christian' },
+];
+
+const canonicalAppointments = projectLiveSchedulingAppointments(canonicalWorkOrders, clients, properties, [], authorityAppointments);
 requireCondition(canonicalAppointments.length === 1, 'A canonical Booking Authority work order must appear as one live appointment.');
 const canonical = canonicalAppointments[0];
 requireCondition(canonical.id === 'APT-CANONICAL-1', 'Canonical appointmentId must be preserved.');
@@ -46,6 +50,9 @@ requireCondition(canonical.customer === 'Christian', 'Canonical clientId must re
 requireCondition(canonical.site === 'Star Media Office', 'Canonical propertyId must resolve the site label.');
 requireCondition(canonical.assignments[0].start === '08:30', 'Canonical start time must be preserved.');
 requireCondition(canonical.assignments[0].end === '10:30', 'Canonical appointmentDurationMinutes must preserve the full occupied window.');
+requireCondition(canonical.bookedByName === 'Christian', 'Canonical createdByName must be shown as the booking operator.');
+requireCondition(canonical.bookedBySource === 'office-scheduling', 'Canonical booking source must be preserved.');
+requireCondition(bookingActorLabel({ id: 'APT-MAYA', source: 'demac-customer-agent' }) === 'Maya', 'Customer Agent bookings must display Maya even when an AI booking has no human createdByName.');
 
 const supportWorkOrders = [
   canonicalWorkOrders[0],
@@ -120,4 +127,4 @@ const duplicatedVanAppointment = projectLiveSchedulingAppointments([
 requireCondition(duplicatedVanAppointment.length === 1, 'A booking assigned through a legacy van document must remain visible.');
 requireCondition(duplicatedVanAppointment[0].primaryVanId === 'VAN-4', 'A duplicate Van 4 document must project onto the single canonical VAN-4 lane.');
 
-console.log('Live scheduling acceptance passed: Booking Authority appointments use canonical fleet lanes, active work orders, and legacy compatibility.');
+console.log('Live scheduling acceptance passed: canonical fleet lanes, active work orders, creator attribution, and legacy compatibility.');
