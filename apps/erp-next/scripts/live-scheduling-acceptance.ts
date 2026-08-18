@@ -36,7 +36,7 @@ const properties = [
 ];
 
 const authorityAppointments = [
-  { id: 'APT-CANONICAL-1', appointmentId: 'APT-CANONICAL-1', source: 'office-scheduling', createdBy: 'user-christian', createdByName: 'Christian' },
+  { appointmentId: 'APT-CANONICAL-1', source: 'office-scheduling', createdBy: 'user-christian', createdByName: 'Christian' },
 ];
 
 const canonicalAppointments = projectLiveSchedulingAppointments(canonicalWorkOrders, clients, properties, [], authorityAppointments);
@@ -52,7 +52,7 @@ requireCondition(canonical.assignments[0].start === '08:30', 'Canonical start ti
 requireCondition(canonical.assignments[0].end === '10:30', 'Canonical appointmentDurationMinutes must preserve the full occupied window.');
 requireCondition(canonical.bookedByName === 'Christian', 'Canonical createdByName must be shown as the booking operator.');
 requireCondition(canonical.bookedBySource === 'office-scheduling', 'Canonical booking source must be preserved.');
-requireCondition(bookingActorLabel({ id: 'APT-MAYA', source: 'demac-customer-agent' }) === 'Maya', 'Customer Agent bookings must display Maya even when an AI booking has no human createdByName.');
+requireCondition(bookingActorLabel({ appointmentId: 'APT-MAYA', source: 'demac-customer-agent' }) === 'Maya', 'Customer Agent bookings must display Maya even when an AI booking has no human createdByName.');
 
 const supportWorkOrders = [
   canonicalWorkOrders[0],
