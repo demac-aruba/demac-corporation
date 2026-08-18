@@ -12,7 +12,7 @@ const { createBookingAuthority } = require("./bookingAuthorityFirestore");
 const { createBookingAppointmentLifecycle } = require("./bookingAuthorityAppointmentLifecycle");
 const { createSchedulingProvider } = require("./bookingAuthoritySchedulingProvider");
 
-const OFFICE_BOOKING_API_VERSION = 4;
+const OFFICE_BOOKING_API_VERSION = 5;
 const OFFICE_BOOKING_ROLES = Object.freeze([
   "admin",
   "office",
@@ -30,6 +30,7 @@ const OFFICE_BOOKING_ACTIONS = Object.freeze({
   GET_APPOINTMENT: "get_appointment",
   CANCEL_APPOINTMENT: "cancel_appointment",
   RESCHEDULE_APPOINTMENT: "reschedule_appointment",
+  MOVE_APPOINTMENT: "move_appointment",
 });
 
 function requireOfficeRole(role) {
@@ -93,6 +94,40 @@ function bookingRequestFromOffice(data = {}) {
       preferredTime: data.preferredTime,
     },
     notes: cleanText(data.notes, 1_500),
+  });
+}
+
+function bookingRequestFromCanonicalAppointment(appointment = {}, data = {}) {
+  const requestedDate = cleanText(data.requestedDate, 20);
+  const requestedTime = cleanText(data.requestedTime, 20);
+  const workLines = Array.isArray(appointment.workLines) ? appointment.workLines : [];
+  if (!requestedDate || !requestedTime) {
+    throw new BookingAuthorityError(
+      BOOKING_ERROR_CODES.INVALID_REQUEST,
+      "Operational move requires requestedDate and requestedTime.",
+      { requestedDate, requestedTime },
+    );
+  }
+  if (!workLines.length) {
+    throw new BookingAuthorityError(
+      BOOKING_ERROR_CODES.INVALID_REQUEST,
+      "The canonical appointment has no work lines and cannot use simple drag-and-drop.",
+      { appointmentId: cleanText(appointment.appointmentId || appointment.id, 180) },
+    );
+  }
+  const existingConstraints = appointment.constraints && typeof appointment.constraints === "object"
+    ? appointment.constraints
+    : {};
+  return normalizeBookingRequest({
+    customerId: appointment.customerId,
+    propertyId: appointment.propertyId,
+    workLines,
+    constraints: {
+      ...existingConstraints,
+      requestedDate,
+      requestedTime,
+    },
+    notes: cleanText(appointment.notes, 1_500),
   });
 }
 
@@ -301,6 +336,54 @@ function createOfficeBookingApi({ db, verifyIdToken, bookingAuthority = null, sc
         },
       });
     }
+    if (action === OFFICE_BOOKING_ACTIONS.MOVE_APPOINTMENT) {
+      const requestId = officeRequestId(data.requestId);
+      const appointmentId = cleanText(data.appointmentId, 180);
+      const requiredPrimaryVanId = cleanText(data.requiredVanId, 120);
+      if (!appointmentId || !requiredPrimaryVanId) {
+        throw new BookingAuthorityError(
+          BOOKING_ERROR_CODES.INVALID_REQUEST,
+          "Operational move requires appointmentId and requiredVanId.",
+          { appointmentId, requiredPrimaryVanId },
+        );
+      }
+
+      const appointment = await authority.getAppointment(appointmentId);
+      const request = bookingRequestFromCanonicalAppointment(appointment, data);
+      const context = {
+        channel: "office",
+        requestKey: `office:${identity.uid}:${requestId}:move`,
+        officeRequestId: requestId,
+        excludeAppointmentId: appointmentId,
+        requiredPrimaryVanId,
+        changeKind: "operational_move",
+      };
+      const availability = await authority.checkAvailability({ request, actor, context });
+      const option = Array.isArray(availability?.options)
+        ? availability.options.find((candidate) => cleanText(candidate?.date, 20) === request.constraints.requestedDate
+          && cleanText(candidate?.time, 20) === request.constraints.requestedTime
+          && cleanText(candidate?.assignments?.[0]?.vanId, 120) === requiredPrimaryVanId)
+        : null;
+      if (!availability?.available || !availability?.offer || !option) {
+        throw new BookingAuthorityError(
+          BOOKING_ERROR_CODES.AVAILABILITY_CHANGED,
+          "The selected operational move target is no longer available.",
+          { reason: cleanText(availability?.reason, 240) || BOOKING_ERROR_CODES.NO_AVAILABILITY },
+        );
+      }
+
+      return getLifecycle().rescheduleAppointment({
+        appointmentId,
+        offerId: availability.offer.id,
+        offerVersion: availability.offer.version,
+        optionId: option.id,
+        reason: cleanText(data.reason, 500) || "Drag-and-drop operational move",
+        note: data.note,
+        actor,
+        changeKind: "operational_move",
+        context,
+      });
+    }
     throw new BookingAuthorityError(
       BOOKING_ERROR_CODES.INVALID_REQUEST,
       "Unsupported Office Booking Authority action.",
@@ -354,6 +437,7 @@ exports.officeBookingAuthority = onRequest(
 module.exports.OFFICE_BOOKING_API_VERSION = OFFICE_BOOKING_API_VERSION;
 module.exports.OFFICE_BOOKING_ACTIONS = OFFICE_BOOKING_ACTIONS;
 module.exports.OFFICE_BOOKING_ROLES = OFFICE_BOOKING_ROLES;
+module.exports.bookingRequestFromCanonicalAppointment = bookingRequestFromCanonicalAppointment;
 module.exports.bookingRequestFromOffice = bookingRequestFromOffice;
 module.exports.createOfficeBookingApi = createOfficeBookingApi;
 module.exports.lifecycleChangeKind = lifecycleChangeKind;
