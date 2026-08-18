@@ -20,6 +20,46 @@
     "regression": "Colloquial 'a la 1' can identify the only offered afternoon option when the context makes the choice unique."
   },
   {
+    "id": "bare-eight-selects-offered-eight-thirty",
+    "customerMessage": "8",
+    "options": [
+      { "id": "opt-1", "date": "2026-08-18", "time": "08:30" },
+      { "id": "opt-2", "date": "2026-08-18", "time": "09:30" }
+    ],
+    "expected": { "intent": "select_option", "optionId": "opt-1", "mayCreateAppointment": true },
+    "regression": "A bare hour after offered options identifies the only option within that hour instead of becoming a new exact-time request."
+  },
+  {
+    "id": "eight-am-selects-offered-eight-thirty",
+    "customerMessage": "8 am",
+    "options": [
+      { "id": "opt-1", "date": "2026-08-18", "time": "08:30" },
+      { "id": "opt-2", "date": "2026-08-18", "time": "09:30" }
+    ],
+    "expected": { "intent": "select_option", "optionId": "opt-1", "mayCreateAppointment": true },
+    "regression": "Natural hour shorthand with am/pm may select the sole offered option in that hour."
+  },
+  {
+    "id": "the-eight-one-selects-offered-eight-thirty",
+    "customerMessage": "dame el de las 8",
+    "options": [
+      { "id": "opt-1", "date": "2026-08-18", "time": "08:30" },
+      { "id": "opt-2", "date": "2026-08-18", "time": "09:30" }
+    ],
+    "expected": { "intent": "select_option", "optionId": "opt-1", "mayCreateAppointment": true },
+    "regression": "A human reference to 'the 8 one' selects the only offered option in the eight o'clock hour."
+  },
+  {
+    "id": "explicit-eight-zero-zero-does-not-select-eight-thirty",
+    "customerMessage": "8:00 am",
+    "options": [
+      { "id": "opt-1", "date": "2026-08-18", "time": "08:30" },
+      { "id": "opt-2", "date": "2026-08-18", "time": "09:30" }
+    ],
+    "expected": { "intent": "no_exact_match", "optionId": "", "mayCreateAppointment": false },
+    "regression": "An explicitly stated 8:00 must remain an exact request and must not be silently changed to 8:30."
+  },
+  {
     "id": "availability-question-afternoon-is-not-confirmation",
     "customerMessage": "tienes en la tarde?",
     "options": [
