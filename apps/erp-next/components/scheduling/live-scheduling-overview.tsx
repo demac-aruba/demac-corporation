@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../auth/auth-provider';
 import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
-import { loadLiveSchedulingAppointments } from '../../lib/live-scheduling';
+import {
+  enrichLiveSchedulingAttribution,
+  loadLiveSchedulingAppointmentsFast,
+} from '../../lib/live-scheduling-fast';
 import {
   checkOfficeRescheduleAvailability,
   createOfficeLifecycleRequestId,
@@ -130,18 +133,30 @@ export function LiveSchedulingOverview() {
   const [error, setError] = useState('');
   const [lastSyncedAt, setLastSyncedAt] = useState('');
   const clickTimerRef = useRef<number | null>(null);
+  const refreshSequenceRef = useRef(0);
   const week = useMemo(() => buildOperationalWeek(activeDate), [activeDate]);
   const canManage = principal.active && principal.capabilities.has('scheduling.manage');
 
   const refresh = useCallback(async () => {
+    const sequence = ++refreshSequenceRef.current;
     try {
-      const next = await loadLiveSchedulingAppointments();
+      const next = await loadLiveSchedulingAppointmentsFast();
+      if (sequence !== refreshSequenceRef.current) return;
       setAppointments(next);
       setError('');
       setLastSyncedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+      setLoading(false);
+
+      void enrichLiveSchedulingAttribution(next)
+        .then((enriched) => {
+          if (sequence === refreshSequenceRef.current) setAppointments(enriched);
+        })
+        .catch(() => {
+          // Booking attribution is supplemental; operational scheduling stays usable without it.
+        });
     } catch (loadError) {
+      if (sequence !== refreshSequenceRef.current) return;
       setError(loadError instanceof Error ? loadError.message : 'Live scheduling data could not be loaded.');
-    } finally {
       setLoading(false);
     }
   }, []);
@@ -160,14 +175,14 @@ export function LiveSchedulingOverview() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' && !moveBusy) {
         setMoveArmedJobId('');
         setMoveNotice('Move mode cancelled.');
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [moveBusy]);
 
   const jobs = useMemo(() => appointments.flatMap(appointmentAssignments), [appointments]);
   const vans = useMemo<DisplayVan[]>(() => previewVans.map((van) => ({ id: van.id, name: van.name, team: van.team, active: van.active })), []);
@@ -198,6 +213,7 @@ export function LiveSchedulingOverview() {
   };
 
   const scheduleOpenJob = (jobId: string) => {
+    if (moveBusy) return;
     if (clickTimerRef.current) window.clearTimeout(clickTimerRef.current);
     clickTimerRef.current = window.setTimeout(() => {
       openJob(jobId);
@@ -206,6 +222,7 @@ export function LiveSchedulingOverview() {
   };
 
   const armMove = (jobId: string) => {
+    if (moveBusy) return;
     if (clickTimerRef.current) {
       window.clearTimeout(clickTimerRef.current);
       clickTimerRef.current = null;
@@ -228,26 +245,31 @@ export function LiveSchedulingOverview() {
 
   const dropMove = async (targetVanId: string, targetStart: string) => {
     if (!moveArmedJobId || moveBusy) return;
-    const link = jobLinks.get(moveArmedJobId);
-    const currentJob = jobs.find((job) => job.id === moveArmedJobId);
-    if (!link || !currentJob) return;
+    const movingJobId = moveArmedJobId;
+    const link = jobLinks.get(movingJobId);
+    const currentJob = jobs.find((job) => job.id === movingJobId);
+    if (!link || !currentJob) {
+      setMoveArmedJobId('');
+      setMoveNotice('The selected appointment changed while move mode was active. Refresh the schedule and try again.');
+      return;
+    }
     const appointment = link.appointment;
     if (!appointment.customerId || !appointment.siteId) {
+      setMoveArmedJobId('');
       setMoveNotice('This appointment is missing its canonical customer/property relationship and cannot be moved safely.');
       return;
     }
     if (currentJob.vanId === targetVanId && currentJob.start === targetStart) {
+      setMoveArmedJobId('');
       setMoveNotice('The appointment is already in that work spot.');
       return;
     }
-    const timeChanges = currentJob.start !== targetStart;
-    const confirmed = window.confirm(
-      `Move ${appointment.customer} from ${currentJob.vanId.replace('VAN-', 'Van ')} ${formatTime(currentJob.start)} to ${targetVanId.replace('VAN-', 'Van ')} ${formatTime(targetStart)}?\n\nBooking Authority will revalidate the full capacity before saving.${timeChanges ? '\nThe customer time changes, so a customer follow-up is recommended.' : ''}`,
-    );
-    if (!confirmed) return;
 
+    const timeChanges = currentJob.start !== targetStart;
+    setMoveArmedJobId('');
     setMoveBusy(true);
-    setMoveNotice('Booking Authority is validating the target work spot…');
+    setMoveNotice(`Moving ${appointment.customer} to ${targetVanId.replace('VAN-', 'Van ')} at ${formatTime(targetStart)}… Booking Authority is checking real capacity.`);
+
     try {
       const availability = await checkOfficeRescheduleAvailability({
         appointmentId: appointment.id,
@@ -260,15 +282,18 @@ export function LiveSchedulingOverview() {
         requestedTime: targetStart,
         requiredVanId: targetVanId,
         customerFacingDescription: appointment.customerFacingDescription,
+        changeKind: 'operational_move',
       });
       const option = availability.options.find((candidate) => candidate.date === activeDate
         && candidate.time === targetStart
         && candidate.assignments[0]?.vanId === targetVanId);
       if (!availability.available || !availability.offer || !option) {
-        setMoveNotice('That drop target is not valid anymore. Booking Authority protected the appointment from an unsafe move.');
+        const reason = availability.reason ? ` (${availability.reason})` : '';
+        setMoveNotice(`That work spot cannot accept this appointment${reason}. Nothing was changed.`);
         return;
       }
-      await rescheduleOfficeAppointment({
+
+      const result = await rescheduleOfficeAppointment({
         appointmentId: appointment.id,
         requestId: createOfficeLifecycleRequestId('drag-move'),
         offerId: availability.offer.id,
@@ -276,14 +301,14 @@ export function LiveSchedulingOverview() {
         optionId: option.id,
         reason: 'Drag-and-drop operational move',
         note: `${currentJob.vanId} ${currentJob.start} → ${targetVanId} ${targetStart}`,
+        changeKind: 'operational_move',
       });
-      setMoveArmedJobId('');
       await refresh();
-      setMoveNotice(timeChanges
+      setMoveNotice(result.customerNotificationRecommended || timeChanges
         ? `Appointment moved to ${targetVanId.replace('VAN-', 'Van ')} at ${formatTime(targetStart)}. Customer follow-up is recommended because the promised time changed.`
         : `Appointment reassigned to ${targetVanId.replace('VAN-', 'Van ')} at ${formatTime(targetStart)}.`);
     } catch (cause) {
-      setMoveNotice(cause instanceof Error ? cause.message : 'The appointment could not be moved.');
+      setMoveNotice(`${cause instanceof Error ? cause.message : 'The appointment could not be moved.'} Nothing was changed.`);
     } finally {
       setMoveBusy(false);
     }
@@ -298,14 +323,14 @@ export function LiveSchedulingOverview() {
           <p>Live Booking Authority schedule. Confirmed customer appointments are read from canonical Firestore work orders; local demo scheduling is not mixed into this view.</p>
         </div>
         <div className={styles.pageActions}>
-          <button type="button" className={styles.secondary} onClick={() => void refresh()} disabled={loading}>↻ Refresh live</button>
+          <button type="button" className={styles.secondary} onClick={() => void refresh()} disabled={loading || moveBusy}>↻ Refresh live</button>
         </div>
       </header>
 
       <div className={styles.notice}>
         <span>{error ? `Live sync error: ${error}` : loading ? 'Loading canonical Booking Authority schedule…' : `LIVE · Booking Authority${lastSyncedAt ? ` · synced ${lastSyncedAt}` : ''}`}</span>
       </div>
-      {moveNotice ? <div className={styles.notice}><span>{moveNotice}</span>{moveArmedJobId ? <button type="button" onClick={() => { setMoveArmedJobId(''); setMoveNotice('Move mode cancelled.'); }}>×</button> : null}</div> : null}
+      {moveNotice ? <div className={styles.notice}><span>{moveNotice}</span>{moveArmedJobId && !moveBusy ? <button type="button" onClick={() => { setMoveArmedJobId(''); setMoveNotice('Move mode cancelled.'); }}>×</button> : null}</div> : null}
       {unresolvedJobs.length ? <div className={styles.notice}><span>Data integrity attention: {unresolvedJobs.length} assignment{unresolvedJobs.length === 1 ? '' : 's'} reference a van that cannot be resolved to Van 1–4. They are not converted into fake extra lanes.</span></div> : null}
       {activeConflictSlots ? <div className={styles.notice}><span>Capacity integrity attention: {activeConflictSlots} occupied slot{activeConflictSlots === 1 ? '' : 's'} contain overlapping appointments after duplicate fleet records were collapsed to the physical Van 1–4. Both appointments remain visible below so they can be reviewed and rescheduled safely.</span></div> : null}
 
@@ -343,8 +368,12 @@ export function LiveSchedulingOverview() {
 
       <div className={styles.board}>
         <header className={styles.boardHeader}>
-          <div><strong>Live Van Schedule</strong><span>{activeDay.weekday} {activeDay.shortDate} · single click = details · double click = arm drag move</span></div>
-          <b>{activeOccupancy.open} OPEN SPOTS</b>
+          <div>
+            <strong>Live Van Schedule</strong>
+            <span>{activeDay.weekday} {activeDay.shortDate} · single click = details · double click = arm drag move</span>
+            {moveNotice ? <span style={{ marginTop: 3, fontWeight: 700 }}>{moveNotice}</span> : null}
+          </div>
+          <b>{moveBusy ? 'VALIDATING MOVE…' : `${activeOccupancy.open} OPEN SPOTS`}</b>
         </header>
         <div className={styles.boardScroll}>
           <div className={styles.vanGrid}>
