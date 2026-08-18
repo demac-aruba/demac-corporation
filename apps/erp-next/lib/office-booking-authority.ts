@@ -48,6 +48,11 @@ function endpoint() {
   return `https://us-central1-${firebaseClientConfig.projectId}.cloudfunctions.net/officeBookingAuthority`;
 }
 
+function apiErrorDetail(payload: ApiError) {
+  const reason = payload.error?.details?.reason;
+  return typeof reason === 'string' && reason.trim() ? ` · ${reason.trim()}` : '';
+}
+
 async function callOfficeBookingAuthority<T>(action: string, data: Record<string, unknown>, timeoutMs = 15_000): Promise<T> {
   const session = await requireFirebaseWebSession();
   const controller = new AbortController();
@@ -65,7 +70,7 @@ async function callOfficeBookingAuthority<T>(action: string, data: Record<string
     const payload = await response.json().catch(() => ({})) as T & ApiError;
     if (!response.ok) {
       const code = payload.error?.code ? ` (${payload.error.code})` : '';
-      throw new Error(`${payload.error?.message ?? 'The appointment operation could not be completed.'}${code}`);
+      throw new Error(`${payload.error?.message ?? 'The appointment operation could not be completed.'}${code}${apiErrorDetail(payload)}`);
     }
     return payload;
   } catch (error) {
