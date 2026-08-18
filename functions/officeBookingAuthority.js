@@ -9,15 +9,18 @@ const {
   positiveInteger,
 } = require("./bookingAuthorityCore");
 const { createBookingAuthority } = require("./bookingAuthorityFirestore");
+const { createBookingAppointmentLifecycle } = require("./bookingAuthorityAppointmentLifecycle");
 const { createSchedulingProvider } = require("./bookingAuthoritySchedulingProvider");
 
-const OFFICE_BOOKING_API_VERSION = 1;
+const OFFICE_BOOKING_API_VERSION = 2;
 const OFFICE_BOOKING_ROLES = Object.freeze(["admin", "office", "supervisor"]);
 const OFFICE_BOOKING_ACTIONS = Object.freeze({
   LIST_PRESETS: "list_presets",
   CHECK_AVAILABILITY: "check_availability",
   CREATE_APPOINTMENT: "create_appointment",
   GET_APPOINTMENT: "get_appointment",
+  CANCEL_APPOINTMENT: "cancel_appointment",
+  RESCHEDULE_APPOINTMENT: "reschedule_appointment",
 });
 
 function requireOfficeRole(role) {
@@ -125,11 +128,12 @@ function apiError(error) {
   };
 }
 
-function createOfficeBookingApi({ db, verifyIdToken, bookingAuthority = null, schedulingProvider = null } = {}) {
+function createOfficeBookingApi({ db, verifyIdToken, bookingAuthority = null, schedulingProvider = null, lifecycleAuthority = null } = {}) {
   if (!db || typeof db.collection !== "function") throw new Error("A Firestore-compatible db is required.");
   if (typeof verifyIdToken !== "function") throw new Error("verifyIdToken is required.");
   const provider = schedulingProvider || createSchedulingProvider({ db });
   const authority = bookingAuthority || createBookingAuthority({ db, availabilityProvider: provider });
+  const lifecycle = lifecycleAuthority || createBookingAppointmentLifecycle({ db, schedulingProvider: provider });
 
   async function authenticate(request) {
     const token = bearerToken(request);
@@ -184,6 +188,7 @@ function createOfficeBookingApi({ db, verifyIdToken, bookingAuthority = null, sc
     if (action === OFFICE_BOOKING_ACTIONS.CHECK_AVAILABILITY) {
       const requestId = officeRequestId(data.requestId);
       const request = bookingRequestFromOffice(data);
+      const excludeAppointmentId = cleanText(data.appointmentId, 180);
       return authority.checkAvailability({
         request,
         actor,
@@ -191,6 +196,7 @@ function createOfficeBookingApi({ db, verifyIdToken, bookingAuthority = null, sc
           channel: "office",
           requestKey: `office:${identity.uid}:${requestId}:availability`,
           officeRequestId: requestId,
+          excludeAppointmentId,
         },
       });
     }
@@ -218,6 +224,32 @@ function createOfficeBookingApi({ db, verifyIdToken, bookingAuthority = null, sc
     if (action === OFFICE_BOOKING_ACTIONS.GET_APPOINTMENT) {
       const appointment = await authority.getAppointment(data.appointmentId);
       return { success: true, appointmentId: appointment.appointmentId || appointment.id, appointment };
+    }
+    if (action === OFFICE_BOOKING_ACTIONS.CANCEL_APPOINTMENT) {
+      officeRequestId(data.requestId);
+      return lifecycle.cancelAppointment({
+        appointmentId: data.appointmentId,
+        reason: data.reason,
+        note: data.note,
+        actor,
+      });
+    }
+    if (action === OFFICE_BOOKING_ACTIONS.RESCHEDULE_APPOINTMENT) {
+      const requestId = officeRequestId(data.requestId);
+      return lifecycle.rescheduleAppointment({
+        appointmentId: data.appointmentId,
+        offerId: data.offerId,
+        offerVersion: data.offerVersion,
+        optionId: data.optionId,
+        reason: data.reason,
+        note: data.note,
+        actor,
+        context: {
+          channel: "office",
+          officeRequestId: requestId,
+          excludeAppointmentId: cleanText(data.appointmentId, 180),
+        },
+      });
     }
     throw new BookingAuthorityError(
       BOOKING_ERROR_CODES.INVALID_REQUEST,
