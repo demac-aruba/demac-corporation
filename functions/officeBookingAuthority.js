@@ -160,11 +160,15 @@ function createOfficeBookingApi({
   if (typeof verifyIdToken !== "function") throw new Error("verifyIdToken is required.");
   const provider = schedulingProvider || createSchedulingProvider({ db });
   const authority = bookingAuthority || createBookingAuthority({ db, availabilityProvider: provider });
-  const operationalMove = operationalMoveAuthority || createOperationalMoveAuthority({ db });
   let lifecycle = lifecycleAuthority;
+  let operationalMove = operationalMoveAuthority;
   const getLifecycle = () => {
     if (!lifecycle) lifecycle = createBookingAppointmentLifecycle({ db, schedulingProvider: provider });
     return lifecycle;
+  };
+  const getOperationalMove = () => {
+    if (!operationalMove) operationalMove = createOperationalMoveAuthority({ db });
+    return operationalMove;
   };
 
   async function authenticate(request) {
@@ -313,7 +317,7 @@ function createOfficeBookingApi({
     }
     if (action === OFFICE_BOOKING_ACTIONS.MOVE_APPOINTMENT) {
       const requestId = officeRequestId(data.requestId);
-      return operationalMove.moveAppointment({
+      return getOperationalMove().moveAppointment({
         appointmentId: data.appointmentId,
         requestId,
         requestedDate: data.requestedDate,
