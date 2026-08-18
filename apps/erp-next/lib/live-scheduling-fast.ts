@@ -20,8 +20,15 @@ type ReferenceData = {
   vans: Van[];
 };
 
+type CachedAttribution = {
+  expiresAt: number;
+  value: OfficeAppointmentAttribution;
+};
+
 const REFERENCE_CACHE_MS = 5 * 60_000;
+const ATTRIBUTION_CACHE_MS = 5 * 60_000;
 let referenceCache: { expiresAt: number; promise: Promise<ReferenceData> } | null = null;
+const attributionCache = new Map<string, CachedAttribution>();
 
 function text(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -56,11 +63,30 @@ export async function loadLiveSchedulingAppointmentsFast() {
   );
 }
 
+async function attributionFor(appointmentIds: string[]) {
+  const now = Date.now();
+  const resolved = new Map<string, OfficeAppointmentAttribution>();
+  const missing: string[] = [];
+  for (const id of appointmentIds) {
+    const cached = attributionCache.get(id);
+    if (cached && cached.expiresAt > now) resolved.set(id, cached.value);
+    else missing.push(id);
+  }
+
+  if (missing.length) {
+    const loaded = await listOfficeAppointmentAttribution(missing);
+    for (const item of loaded) {
+      resolved.set(item.appointmentId, item);
+      attributionCache.set(item.appointmentId, { expiresAt: now + ATTRIBUTION_CACHE_MS, value: item });
+    }
+  }
+  return resolved;
+}
+
 export async function enrichLiveSchedulingAttribution(appointments: BrowserAppointmentRecord[]) {
   const appointmentIds = [...new Set(appointments.map((appointment) => text(appointment.id)).filter(Boolean))];
   if (!appointmentIds.length) return appointments;
-  const attribution = await listOfficeAppointmentAttribution(appointmentIds);
-  const byId = new Map<string, OfficeAppointmentAttribution>(attribution.map((item) => [item.appointmentId, item]));
+  const byId = await attributionFor(appointmentIds);
   return appointments.map((appointment) => {
     const authorityAppointment = byId.get(appointment.id);
     if (!authorityAppointment) return appointment;
