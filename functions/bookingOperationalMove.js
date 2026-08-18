@@ -9,8 +9,6 @@ const {
 } = require("./bookingAuthorityFirestore");
 const {
   hashId,
-  isHalfDay,
-  occupiedSlots,
   orderSlotCount,
   snapshotItems,
 } = require("./bookingSchedulingPrimitives");
@@ -21,8 +19,7 @@ const {
   canonicalizeSchedulingData,
 } = require("./bookingVanIdentity");
 
-const OPERATIONAL_MOVE_VERSION = 1;
-const BLOCKED_VAN_STATUSES = new Set(["mantenimiento", "fuera de servicio"]);
+const OPERATIONAL_MOVE_VERSION = 2;
 const INACTIVE_WORK_ORDER_STATUSES = new Set([
   "cancelada",
   "cancelled",
@@ -42,6 +39,54 @@ function asDate(value) {
   return Number.isFinite(parsed.getTime()) ? parsed : new Date();
 }
 
+function normalizedStatus(value) {
+  return cleanText(value, 80).toLowerCase();
+}
+
+function timeToMinutes(value) {
+  const match = cleanText(value, 20).match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23 || minute > 59) return null;
+  return hour * 60 + minute;
+}
+
+function minutesToTime(value) {
+  const normalized = Math.max(0, Math.round(Number(value) || 0));
+  return `${String(Math.floor(normalized / 60)).padStart(2, "0")}:${String(normalized % 60).padStart(2, "0")}`;
+}
+
+function weekday(dateKey) {
+  return new Date(`${dateKey}T12:00:00Z`).getUTCDay();
+}
+
+function manualDispatchBlocks(dateKey) {
+  const day = weekday(dateKey);
+  if (day === 0) return [];
+  if (day === 6) return [["09:00", "10:00", "11:00", "12:00"]];
+  return [
+    ["08:30", "09:30", "10:30"],
+    ["13:30", "14:30", "15:30"],
+  ];
+}
+
+function manualOccupiedSlots(dateKey, startTime, slotCount) {
+  const count = Math.max(1, Math.min(6, Math.ceil(Number(slotCount) || 0)));
+  for (const block of manualDispatchBlocks(dateKey)) {
+    const index = block.indexOf(startTime);
+    if (index < 0 || index + count > block.length) continue;
+    return block.slice(index, index + count);
+  }
+  return [];
+}
+
+function endFromSlots(slots) {
+  const last = slots[slots.length - 1];
+  const minutes = timeToMinutes(last);
+  return minutes === null ? last || "" : minutesToTime(minutes + 60);
+}
+
 function activeAppointment(snapshot, appointmentId) {
   if (!snapshot.exists) {
     throw new BookingAuthorityError(
@@ -51,7 +96,7 @@ function activeAppointment(snapshot, appointmentId) {
     );
   }
   const appointment = { id: snapshot.id, ...snapshot.data() };
-  const status = cleanText(appointment.status, 40).toLowerCase();
+  const status = normalizedStatus(appointment.status);
   if (["cancelled", "canceled", "cancelada"].includes(status)) {
     throw new BookingAuthorityError(
       BOOKING_ERROR_CODES.INVALID_REQUEST,
@@ -74,10 +119,6 @@ function primaryAssignment(appointment) {
   return assignments[0] || {};
 }
 
-function normalizedStatus(value) {
-  return cleanText(value, 80).toLowerCase();
-}
-
 function workOrderBlocksOperationalCapacity(order) {
   const appointmentId = cleanText(order?.appointmentId, 180);
   if (!appointmentId) return false;
@@ -97,12 +138,10 @@ function slotCountFromCanonicalAppointment(appointment, assignment, currentOrder
     if (derived > 0) return derived;
   }
 
-  const start = cleanText(appointment.startTime || assignment?.time, 20);
-  const end = cleanText(appointment.endTime || assignment?.endTime, 20);
-  const startMinutes = timeToMinutes(start);
-  const endMinutes = timeToMinutes(end);
-  if (startMinutes !== null && endMinutes !== null && endMinutes > startMinutes) {
-    return Math.max(1, Math.min(6, Math.ceil((endMinutes - startMinutes) / 60)));
+  const start = timeToMinutes(cleanText(appointment.startTime || assignment?.time, 20));
+  const end = timeToMinutes(cleanText(appointment.endTime || assignment?.endTime, 20));
+  if (start !== null && end !== null && end > start) {
+    return Math.max(1, Math.min(6, Math.ceil((end - start) / 60)));
   }
 
   throw new BookingAuthorityError(
@@ -110,20 +149,6 @@ function slotCountFromCanonicalAppointment(appointment, assignment, currentOrder
     "The canonical appointment has no reliable duration for drag-and-drop.",
     { appointmentId: cleanText(appointment.appointmentId || appointment.id, 180) },
   );
-}
-
-function timeToMinutes(value) {
-  const match = cleanText(value, 20).match(/^(\d{1,2}):(\d{2})$/);
-  if (!match) return null;
-  return Number(match[1]) * 60 + Number(match[2]);
-}
-
-function endFromOccupiedSlots(slots) {
-  const last = slots[slots.length - 1];
-  const minutes = timeToMinutes(last);
-  if (minutes === null) return last || "";
-  const endMinutes = minutes + 60;
-  return `${String(Math.floor(endMinutes / 60)).padStart(2, "0")}:${String(endMinutes % 60).padStart(2, "0")}`;
 }
 
 function targetCrew(van, dailyAssignment) {
@@ -136,13 +161,6 @@ function targetCrew(van, dailyAssignment) {
   };
 }
 
-function targetVanAvailable(van, dailyAssignment) {
-  if (!van || van.active === false) return false;
-  if (BLOCKED_VAN_STATUSES.has(normalizedStatus(van.status))) return false;
-  if (BLOCKED_VAN_STATUSES.has(normalizedStatus(dailyAssignment?.status))) return false;
-  return true;
-}
-
 function capacityLocks(date, vanId, slots) {
   return slots.map((slot) => ({
     id: `BAL-${hashId(`${date}|${vanId}|${slot}`, 32).toUpperCase()}`,
@@ -150,13 +168,6 @@ function capacityLocks(date, vanId, slots) {
     vanId,
     slot,
   }));
-}
-
-function appointmentStillOwnsLock(appointment, lockId) {
-  if (!appointment) return false;
-  const status = normalizedStatus(appointment.status);
-  if (["cancelled", "canceled", "cancelada"].includes(status)) return false;
-  return Array.isArray(appointment.capacityLockIds) && appointment.capacityLockIds.includes(lockId);
 }
 
 function scheduleSnapshot(appointment = {}) {
@@ -205,17 +216,19 @@ function existingLinkedWorkOrderIds(appointment, currentOrders) {
     .filter(Boolean);
 }
 
-function operationalConflict({ orders, appointmentId, vanId, requestedSlots, halfDay }) {
+function operationalConflict({ orders, appointmentId, vanId, targetStart, slotCount }) {
+  const targetStartMinutes = timeToMinutes(targetStart);
+  if (targetStartMinutes === null) return null;
+  const targetEndMinutes = targetStartMinutes + slotCount * 60;
+
   return orders.find((order) => {
     if (!workOrderBlocksOperationalCapacity(order)) return false;
     if (cleanText(order.appointmentId, 180) === appointmentId) return false;
     if (cleanText(order.vanId, 120) !== vanId) return false;
-    const existingSlots = occupiedSlots(
-      normalizeOrderTime(order.time),
-      orderSlotCount(order, []),
-      halfDay,
-    );
-    return existingSlots.some((slot) => requestedSlots.includes(slot));
+    const existingStart = timeToMinutes(normalizeOrderTime(order.time));
+    if (existingStart === null) return false;
+    const existingEnd = existingStart + orderSlotCount(order, []) * 60;
+    return targetStartMinutes < existingEnd && targetEndMinutes > existingStart;
   }) || null;
 }
 
@@ -295,38 +308,35 @@ function createOperationalMoveAuthority({
 
       const sameDayQuery = db.collection(collections.workOrders).where("date", "==", targetDate);
       const dailyAssignmentQuery = db.collection("dailyVanAssignments").where("date", "==", targetDate);
-      const [sameDaySnapshot, vanSnapshot, halfDaySnapshot, dailyAssignmentSnapshot] = await Promise.all([
+      const [sameDaySnapshot, vanSnapshot, dailyAssignmentSnapshot] = await Promise.all([
         transaction.get(sameDayQuery),
         transaction.get(db.collection("vans")),
-        transaction.get(db.collection("vanHalfDaySchedules")),
         transaction.get(dailyAssignmentQuery),
       ]);
 
       const canonical = canonicalizeSchedulingData({
         workOrders: snapshotItems(sameDaySnapshot),
         vans: snapshotItems(vanSnapshot),
-        vanHalfDaySchedules: snapshotItems(halfDaySnapshot),
         dailyVanAssignments: snapshotItems(dailyAssignmentSnapshot),
+        vanHalfDaySchedules: [],
       });
       const targetVan = canonical.vans.find((van) => van.id === requiredVanId);
-      const dailyAssignment = canonical.dailyVanAssignments.find((item) => item.vanId === requiredVanId && item.date === targetDate);
-      if (!targetVanAvailable(targetVan, dailyAssignment)) {
+      if (!targetVan) {
         throw new BookingAuthorityError(
-          BOOKING_ERROR_CODES.AVAILABILITY_CHANGED,
-          "The target van is not operationally available for this move.",
-          { reason: "target-van-unavailable", targetVanId: requiredVanId },
+          BOOKING_ERROR_CODES.INVALID_REQUEST,
+          "The selected van does not exist in the canonical fleet.",
+          { reason: "target-van-not-found", targetVanId: requiredVanId },
         );
       }
 
       const currentOrders = canonical.workOrders.filter((order) => cleanText(order.appointmentId, 180) === id);
       const slotCount = slotCountFromCanonicalAppointment(appointment, assignment, currentOrders);
-      const halfDay = isHalfDay(requiredVanId, targetDate, canonical.vanHalfDaySchedules);
-      const requestedSlots = occupiedSlots(targetTime, slotCount, halfDay);
+      const requestedSlots = manualOccupiedSlots(targetDate, targetTime, slotCount);
       if (!requestedSlots.length) {
         throw new BookingAuthorityError(
           BOOKING_ERROR_CODES.AVAILABILITY_CHANGED,
-          "The complete appointment block does not fit in the selected van/time window.",
-          { reason: halfDay ? "target-outside-half-day-capacity" : "target-outside-workday-capacity", targetVanId: requiredVanId, targetTime, slotCount },
+          "The complete appointment block does not fit in the selected time window.",
+          { reason: "target-outside-visible-capacity", targetVanId: requiredVanId, targetTime, slotCount },
         );
       }
 
@@ -334,8 +344,8 @@ function createOperationalMoveAuthority({
         orders: canonical.workOrders,
         appointmentId: id,
         vanId: requiredVanId,
-        requestedSlots,
-        halfDay,
+        targetStart: targetTime,
+        slotCount,
       });
       if (conflict) {
         throw new BookingAuthorityError(
@@ -351,33 +361,11 @@ function createOperationalMoveAuthority({
         const lockRef = db.collection(collections.capacityLocks).doc(lock.id);
         return { lock, lockRef, snapshot: await transaction.get(lockRef) };
       }));
-      const foreignOwnerIds = [...new Set(lockSnapshots
-        .filter((entry) => entry.snapshot.exists)
-        .map((entry) => entry.snapshot.data() || {})
-        .filter((stored) => stored.active !== false && cleanText(stored.appointmentId, 180) !== id)
-        .map((stored) => cleanText(stored.appointmentId, 180))
-        .filter(Boolean))];
-      const ownerSnapshots = await Promise.all(foreignOwnerIds.map(async (ownerId) => ({
-        ownerId,
-        snapshot: await transaction.get(db.collection(collections.appointments).doc(ownerId)),
-      })));
-      const owners = new Map(ownerSnapshots.map(({ ownerId, snapshot }) => [
-        ownerId,
-        snapshot.exists ? { id: snapshot.id, ...snapshot.data() } : null,
-      ]));
-      for (const entry of lockSnapshots) {
-        if (!entry.snapshot.exists) continue;
-        const stored = entry.snapshot.data() || {};
-        const ownerId = cleanText(stored.appointmentId, 180);
-        if (stored.active === false || !ownerId || ownerId === id) continue;
-        if (!appointmentStillOwnsLock(owners.get(ownerId), entry.lock.id)) continue;
-        throw new BookingAuthorityError(
-          BOOKING_ERROR_CODES.SLOT_CONFLICT,
-          "The selected destination is owned by another active appointment.",
-          { reason: "capacity-lock-conflict", appointmentId: ownerId, targetVanId: requiredVanId, slot: entry.lock.slot },
-        );
-      }
 
+      // Capacity locks are a concurrency guard, not a second hidden scheduling rule.
+      // If the visible canonical work-order schedule has no conflict, detached/stale lock
+      // ownership is healed by the atomic lock swap below. Concurrent real bookings still
+      // collide on these lock documents and Firestore retries one transaction safely.
       const workOrderIds = existingLinkedWorkOrderIds(appointment, currentOrders);
       if (!workOrderIds.length) {
         throw new BookingAuthorityError(
@@ -387,8 +375,9 @@ function createOperationalMoveAuthority({
         );
       }
 
+      const dailyAssignment = canonical.dailyVanAssignments.find((item) => item.vanId === requiredVanId && item.date === targetDate);
       const crew = targetCrew(targetVan, dailyAssignment);
-      const targetEnd = endFromOccupiedSlots(requestedSlots);
+      const targetEnd = endFromSlots(requestedSlots);
       const nextAssignment = compactObject({
         ...assignment,
         vanId: requiredVanId,
@@ -497,6 +486,6 @@ function createOperationalMoveAuthority({
 module.exports = {
   OPERATIONAL_MOVE_VERSION,
   createOperationalMoveAuthority,
-  targetVanAvailable,
+  manualOccupiedSlots,
   workOrderBlocksOperationalCapacity,
 };
