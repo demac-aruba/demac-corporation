@@ -13,7 +13,15 @@ const { createBookingAppointmentLifecycle } = require("./bookingAuthorityAppoint
 const { createSchedulingProvider } = require("./bookingAuthoritySchedulingProvider");
 
 const OFFICE_BOOKING_API_VERSION = 2;
-const OFFICE_BOOKING_ROLES = Object.freeze(["admin", "office", "supervisor"]);
+const OFFICE_BOOKING_ROLES = Object.freeze([
+  "admin",
+  "office",
+  "supervisor",
+  "owner",
+  "super_admin",
+  "super-admin",
+  "superadmin",
+]);
 const OFFICE_BOOKING_ACTIONS = Object.freeze({
   LIST_PRESETS: "list_presets",
   CHECK_AVAILABILITY: "check_availability",
@@ -133,7 +141,11 @@ function createOfficeBookingApi({ db, verifyIdToken, bookingAuthority = null, sc
   if (typeof verifyIdToken !== "function") throw new Error("verifyIdToken is required.");
   const provider = schedulingProvider || createSchedulingProvider({ db });
   const authority = bookingAuthority || createBookingAuthority({ db, availabilityProvider: provider });
-  const lifecycle = lifecycleAuthority || createBookingAppointmentLifecycle({ db, schedulingProvider: provider });
+  let lifecycle = lifecycleAuthority;
+  const getLifecycle = () => {
+    if (!lifecycle) lifecycle = createBookingAppointmentLifecycle({ db, schedulingProvider: provider });
+    return lifecycle;
+  };
 
   async function authenticate(request) {
     const token = bearerToken(request);
@@ -227,7 +239,7 @@ function createOfficeBookingApi({ db, verifyIdToken, bookingAuthority = null, sc
     }
     if (action === OFFICE_BOOKING_ACTIONS.CANCEL_APPOINTMENT) {
       officeRequestId(data.requestId);
-      return lifecycle.cancelAppointment({
+      return getLifecycle().cancelAppointment({
         appointmentId: data.appointmentId,
         reason: data.reason,
         note: data.note,
@@ -236,7 +248,7 @@ function createOfficeBookingApi({ db, verifyIdToken, bookingAuthority = null, sc
     }
     if (action === OFFICE_BOOKING_ACTIONS.RESCHEDULE_APPOINTMENT) {
       const requestId = officeRequestId(data.requestId);
-      return lifecycle.rescheduleAppointment({
+      return getLifecycle().rescheduleAppointment({
         appointmentId: data.appointmentId,
         offerId: data.offerId,
         offerVersion: data.offerVersion,
