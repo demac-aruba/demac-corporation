@@ -1,5 +1,8 @@
 import type { BrowserAppointmentRecord } from './browser-operational';
-import { listFirestoreCollection } from './firebase/firestore-rest';
+import {
+  listFirestoreCollection,
+  queryFirestoreCollectionDateRange,
+} from './firebase/firestore-rest';
 import {
   bookingActorLabel,
   projectLiveSchedulingAppointments,
@@ -23,6 +26,11 @@ type ReferenceData = {
 type CachedAttribution = {
   expiresAt: number;
   value: OfficeAppointmentAttribution;
+};
+
+export type LiveSchedulingRange = {
+  startDate: string;
+  endDate: string;
 };
 
 const REFERENCE_CACHE_MS = 5 * 60_000;
@@ -49,9 +57,28 @@ function referenceData() {
   return promise;
 }
 
-export async function loadLiveSchedulingAppointmentsFast() {
+async function workOrdersForRange(range?: LiveSchedulingRange) {
+  if (!range?.startDate || !range?.endDate) return listFirestoreCollection<WorkOrder>('workOrders', 1000);
+  try {
+    return await queryFirestoreCollectionDateRange<WorkOrder>({
+      collectionId: 'workOrders',
+      fieldPath: 'date',
+      startInclusive: range.startDate,
+      endInclusive: range.endDate,
+      limit: 1000,
+    });
+  } catch {
+    const all = await listFirestoreCollection<WorkOrder>('workOrders', 1000);
+    return all.filter((order) => {
+      const date = text(order.date);
+      return date >= range.startDate && date <= range.endDate;
+    });
+  }
+}
+
+export async function loadLiveSchedulingAppointmentsFast(range?: LiveSchedulingRange) {
   const [workOrders, references] = await Promise.all([
-    listFirestoreCollection<WorkOrder>('workOrders', 1000),
+    workOrdersForRange(range),
     referenceData(),
   ]);
   return projectLiveSchedulingAppointments(
