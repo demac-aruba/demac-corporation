@@ -5,7 +5,6 @@ const {
 } = require("./bookingAuthorityCore");
 const {
   MAX_SEARCH_DAYS,
-  MAX_VANS,
   addDays,
   arubaDateParts,
   hashId,
@@ -62,7 +61,7 @@ async function loadSchedulingData(db, startDate, endDate) {
     services: snapshotItems(serviceSnapshot),
     properties: snapshotItems(propertySnapshot),
     clients: snapshotItems(clientSnapshot),
-    vans: snapshotItems(vanSnapshot).filter((van) => van.active !== false).slice(0, MAX_VANS),
+    vans: snapshotItems(vanSnapshot).filter((van) => van.active !== false),
     staffProfiles: snapshotItems(staffSnapshot),
     dailyVanAssignments: snapshotItems(assignmentSnapshot),
     staffAbsences: snapshotItems(absenceSnapshot),
