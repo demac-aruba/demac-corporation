@@ -65,8 +65,8 @@ function operationalData(overrides = {}) {
 
 const currentSchedule = { date: "2098-12-20", time: "08:30" };
 
-test("provider exposes canonical provider v5", () => {
-  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v5");
+test("provider exposes canonical provider v6", () => {
+  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v6");
 });
 
 test("canonical scheduling engine is versioned independently", () => {
@@ -177,7 +177,34 @@ test("manual operational drag cannot silently move an appointment to a different
   assert.equal(result.reason, "operational-move-date-mismatch");
 });
 
-test("manual operator drag still refuses a real occupied-capacity conflict", () => {
+test("manual operator drag ignores legacy unlinked work orders that are not visible in LIVE Booking Authority schedule", () => {
+  const data = operationalData({
+    workOrders: [{
+      id: "WO-LEGACY",
+      date: "2098-12-20",
+      time: "13:30",
+      status: "Pendiente",
+      vanId: "VAN-2",
+      scheduledSlots: 2,
+      propertyId: "p1",
+      zone: "Oranjestad",
+    }],
+  });
+  const result = operationalMoveResult({
+    request: request(),
+    property: data.properties[0],
+    data,
+    routeConfig: routeConfigFromSettings(data.businessSettings),
+    date: "2098-12-20",
+    time: "13:30",
+    vanId: "VAN-2",
+    currentSchedule,
+  });
+  assert.equal(result.reason, "available");
+  assert.equal(result.option.assignments[0].vanId, "VAN-2");
+});
+
+test("manual operator drag still refuses a real canonical occupied-capacity conflict", () => {
   const data = operationalData({
     workOrders: [{
       id: "WO-OTHER",

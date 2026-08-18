@@ -29,6 +29,10 @@ function vanCanReceiveOperationalMove(van, assignment) {
     && !["Mantenimiento", "Fuera de servicio"].includes(assignment?.status);
 }
 
+function workOrderBlocksOperationalMoveCapacity(order) {
+  return Boolean(String(order?.appointmentId ?? "").trim()) && orderBlocksCapacity(order);
+}
+
 function candidateAvailability({ date, time, allocation, van, assignment, data, routeConfig, candidateZone, manualOperationalMove = false }) {
   if (manualOperationalMove) {
     if (!vanCanReceiveOperationalMove(van, assignment)) return null;
@@ -42,7 +46,12 @@ function candidateAvailability({ date, time, allocation, van, assignment, data, 
   if (!slots.length) return null;
 
   const sameVanOrders = data.workOrders
-    .filter((order) => order.date === date && orderBlocksCapacity(order) && order.vanId === van.id)
+    .filter((order) => {
+      if (order.date !== date || order.vanId !== van.id) return false;
+      return manualOperationalMove
+        ? workOrderBlocksOperationalMoveCapacity(order)
+        : orderBlocksCapacity(order);
+    })
     .map((order) => ({
       ...order,
       time: normalizeOrderTime(order.time),
@@ -90,4 +99,5 @@ module.exports = {
   candidateAvailability,
   normalizeOrderTime,
   vanCanReceiveOperationalMove,
+  workOrderBlocksOperationalMoveCapacity,
 };
