@@ -7,6 +7,7 @@ const {
   MAX_SEARCH_DAYS,
   addDays,
   arubaDateParts,
+  endTime,
   hashId,
   isHalfDay,
   normalizeRouteConfig,
@@ -23,11 +24,16 @@ const {
 } = require("./bookingCapacityAvailability");
 const {
   CANONICAL_SCHEDULING_ENGINE_VERSION,
+  buildAllocationPlan,
+  exactPreset,
   generateCanonicalOptions,
+  normalizeOperationalRules,
+  serviceIdForRequest,
+  singleWork,
 } = require("./bookingAuthoritySchedulingEngine");
 const { canonicalizeSchedulingData } = require("./bookingVanIdentity");
 
-const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v2";
+const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v3";
 
 async function loadSchedulingData(db, startDate, endDate) {
   const workOrderQuery = db.collection("workOrders").where("date", ">=", startDate).where("date", "<=", endDate);
@@ -82,6 +88,10 @@ function dataWithoutAppointment(data, appointmentId) {
 
 function routeConfigFromSettings(settings) {
   return normalizeRouteConfig((settings || []).find((item) => item.id === "whatsapp-copilot-routing"));
+}
+
+function operationalRulesFromSettings(settings) {
+  return normalizeOperationalRules((settings || []).find((item) => item.id === "company-operational-rules"));
 }
 
 function exactCustomerProperty(data, request) {
@@ -214,6 +224,68 @@ function buildWorkOrders({ appointment, option, request, customer, property, now
   });
 }
 
+function operationalMoveResult({ request, property, data, routeConfig, date, time, vanId, today, currentTime }) {
+  if (!date || !time || !vanId) return { option: null, reason: "missing-operational-move-target" };
+  if (date < today || (date === today && time <= currentTime)) return { option: null, reason: "selected-time-passed" };
+
+  const work = singleWork(request);
+  const preset = exactPreset(data, work.presetId);
+  const allocations = buildAllocationPlan(
+    work.quantity,
+    preset.durationMinutesPerUnit,
+    1,
+    preset,
+    operationalRulesFromSettings(data.businessSettings),
+  );
+  if (allocations.length !== 1) return { option: null, reason: "multi-van-booking-requires-reschedule" };
+
+  const van = data.vans.find((item) => item.id === vanId);
+  if (!van) return { option: null, reason: "required-van-unavailable" };
+  const assignment = resolveAssignment(
+    van,
+    date,
+    data.staffProfiles,
+    data.dailyVanAssignments,
+    data.staffAbsences,
+  );
+  const candidateZone = propertyZone(property, property.address || property.addressRaw || "", routeConfig);
+  const availability = candidateAvailability({
+    date,
+    time,
+    allocation: allocations[0],
+    van,
+    assignment,
+    data,
+    routeConfig,
+    candidateZone,
+    manualOperationalMove: true,
+  });
+  if (!availability) return { option: null, reason: "operational-target-unavailable" };
+
+  const address = cleanText(property.address || property.addressRaw || property.addressNormalized, 500);
+  const option = {
+    id: `opt-${hashId(`${date}|${time}|${vanId}|${work.quantity}|${preset.id}|operational-move`, 16)}`,
+    date,
+    time,
+    endTime: endTime(time, availability.slots),
+    quantity: work.quantity,
+    address,
+    zone: candidateZone?.label || cleanText(property.operationalZone || property.zone, 80),
+    presetId: preset.id,
+    presetLabel: preset.label,
+    durationMinutesPerUnit: preset.durationMinutesPerUnit,
+    serviceId: serviceIdForRequest(request, preset, data.services),
+    assignments: [{ ...availability, time, endTime: endTime(time, availability.slots), role: "primary" }],
+    score: 0,
+    requestedDateMatch: true,
+    requestedTimeMatch: true,
+    largeSingleProperty: false,
+    allDayCustomerNotice: false,
+    internalSupportCount: 0,
+  };
+  return { option, reason: "available", preset, candidateZone, allocations };
+}
+
 function createSchedulingProvider({ db }) {
   if (!db || typeof db.collection !== "function") throw new Error("A Firestore-compatible db is required.");
 
@@ -224,9 +296,14 @@ function createSchedulingProvider({ db }) {
     async checkAvailability({ request, context = {}, now = new Date() }) {
       const nowParts = arubaDateParts(now);
       const today = nowParts.date;
-      const loaded = await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS));
-      const data = dataWithoutAppointment(loaded, context.excludeAppointmentId);
       const requiredPrimaryVanId = cleanText(context.requiredPrimaryVanId, 120);
+      const requestedDate = cleanText(request.constraints?.requestedDate, 20);
+      const requestedTime = cleanText(request.constraints?.requestedTime, 20);
+      const operationalMove = context.changeKind === "operational_move" && requiredPrimaryVanId && requestedDate && requestedTime;
+      const loaded = operationalMove
+        ? await loadSchedulingData(db, requestedDate, requestedDate)
+        : await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS));
+      const data = dataWithoutAppointment(loaded, context.excludeAppointmentId);
       const schedulingData = requiredPrimaryVanId
         ? { ...data, vans: data.vans.filter((van) => van.id === requiredPrimaryVanId) }
         : data;
@@ -241,6 +318,37 @@ function createSchedulingProvider({ db }) {
       }
       const { property } = exactCustomerProperty(data, request);
       const routeConfig = routeConfigFromSettings(data.businessSettings);
+
+      if (operationalMove) {
+        const exact = operationalMoveResult({
+          request,
+          property,
+          data: schedulingData,
+          routeConfig,
+          date: requestedDate,
+          time: requestedTime,
+          vanId: requiredPrimaryVanId,
+          today,
+          currentTime: nowParts.time,
+        });
+        return {
+          options: exact.option ? [exact.option] : [],
+          reason: exact.reason,
+          providerVersion: SCHEDULING_PROVIDER_VERSION,
+          engineVersion: CANONICAL_SCHEDULING_ENGINE_VERSION,
+          metadata: {
+            requestedDate,
+            requestedTime,
+            requestedDateUnavailable: !exact.option,
+            requestedTimeUnavailable: !exact.option,
+            routeZone: exact.candidateZone?.label || "",
+            vansRequired: exact.allocations?.length || 1,
+            requiredPrimaryVanId,
+            operationalMove: true,
+          },
+        };
+      }
+
       const result = generateCanonicalOptions({
         request,
         property,
@@ -249,8 +357,6 @@ function createSchedulingProvider({ db }) {
         today,
         currentTime: nowParts.time,
       });
-      const requestedDate = cleanText(request.constraints?.requestedDate, 20);
-      const requestedTime = cleanText(request.constraints?.requestedTime, 20);
       const options = requiredPrimaryVanId
         ? result.options.filter((option) => {
           const primary = option.assignments?.[0];
@@ -282,7 +388,10 @@ function createSchedulingProvider({ db }) {
       if (option.date < today || (option.date === today && option.time <= nowParts.time)) {
         return { available: false, reason: "selected-time-passed" };
       }
-      const loaded = await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS));
+      const operationalMove = context.changeKind === "operational_move";
+      const loaded = operationalMove
+        ? await loadSchedulingData(db, option.date, option.date)
+        : await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS));
       const data = dataWithoutAppointment(loaded, context.excludeAppointmentId);
       const { property } = exactCustomerProperty(data, request);
       const routeConfig = routeConfigFromSettings(data.businessSettings);
@@ -312,9 +421,10 @@ function createSchedulingProvider({ db }) {
           data,
           routeConfig,
           candidateZone,
+          manualOperationalMove: operationalMove,
         });
         if (!availability) {
-          return { available: false, reason: "capacity-or-route-changed", vanId: requested.vanId };
+          return { available: false, reason: operationalMove ? "operational-target-unavailable" : "capacity-or-route-changed", vanId: requested.vanId };
         }
         refreshedAssignments.push({ ...availability, time: startTime });
       }
@@ -380,5 +490,7 @@ module.exports = {
   exactCustomerProperty,
   loadSchedulingData,
   notificationRecipient,
+  operationalMoveResult,
+  operationalRulesFromSettings,
   routeConfigFromSettings,
 };
