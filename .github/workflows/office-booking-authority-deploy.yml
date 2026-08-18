@@ -18,6 +18,7 @@ on:
       - 'functions/bookingVanIdentity.test.js'
       - 'functions/bookingSchedulingPrimitives.js'
       - 'functions/bookingCapacityAvailability.js'
+      - 'functions/bookingCapacityAvailability.test.js'
       - 'functions/index.js'
       - 'functions/package.json'
       - '.github/workflows/office-booking-authority-deploy.yml'
@@ -40,6 +41,7 @@ on:
       - 'functions/bookingVanIdentity.test.js'
       - 'functions/bookingSchedulingPrimitives.js'
       - 'functions/bookingCapacityAvailability.js'
+      - 'functions/bookingCapacityAvailability.test.js'
       - 'functions/index.js'
       - 'functions/package.json'
       - '.github/workflows/office-booking-authority-deploy.yml'
@@ -83,6 +85,7 @@ jobs:
           node --check functions/bookingCapacityAvailability.js
           node --check functions/bookingVanIdentity.js
           node --test functions/bookingOperationalMove.test.js
+          node --test functions/bookingCapacityAvailability.test.js
           node --test functions/bookingAuthorityAppointmentLifecycle.test.js
           node --test functions/bookingAuthoritySchedulingProvider.test.js
           node --test functions/bookingVanIdentity.test.js
