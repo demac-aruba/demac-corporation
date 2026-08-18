@@ -1,4 +1,10 @@
 import { bookingActorLabel, projectLiveSchedulingAppointments, resolveCanonicalVanId } from '../lib/live-scheduling';
+import {
+  liveDragMoveCandidates,
+  liveMoveTargetKey,
+  projectCommittedLiveMove,
+} from '../lib/live-scheduling-move';
+import { buildOperationalWeek } from '../lib/scheduling-capacity';
 
 function requireCondition(condition: unknown, message: string) {
   if (!condition) throw new Error(`Live scheduling acceptance failed: ${message}`);
@@ -54,6 +60,23 @@ requireCondition(canonical.bookedByName === 'Christian', 'Canonical createdByNam
 requireCondition(canonical.bookedBySource === 'office-scheduling', 'Canonical booking source must be preserved.');
 requireCondition(bookingActorLabel({ appointmentId: 'APT-MAYA', source: 'demac-customer-agent' }) === 'Maya', 'Customer Agent bookings must display Maya even when an AI booking has no human createdByName.');
 
+const operationalDay = buildOperationalWeek(canonical.dateKey).find((day) => day.dateKey === canonical.dateKey);
+requireCondition(Boolean(operationalDay), 'The live appointment date must resolve to an operational day.');
+const dragCandidates = liveDragMoveCandidates(operationalDay!, canonical, canonical.assignments);
+requireCondition(dragCandidates.length > 0, 'A single-van live appointment must expose valid same-day drag targets.');
+requireCondition(dragCandidates.every((slot) => slot.start !== '10:30' && slot.start !== '15:30'), 'Drag UI must not advertise starts that cannot fit the complete two-hour appointment.');
+const target = dragCandidates.find((slot) => slot.vanId !== canonical.primaryVanId) ?? dragCandidates[0];
+requireCondition(Boolean(target), 'A valid move target must be available for projection coverage.');
+requireCondition(liveMoveTargetKey(target.vanId, target.start) === `${target.vanId}|${target.start}`, 'Live move target keys must be deterministic.');
+const projectedMove = projectCommittedLiveMove({
+  appointment: canonical,
+  slot: target,
+  dateKey: canonical.dateKey,
+  actor: { id: 'user-office', name: 'Office User' },
+});
+requireCondition(projectedMove.record.primaryVanId === target.vanId, 'A server-confirmed drag must project the destination van into the board immediately.');
+requireCondition(projectedMove.record.assignments[0].start === target.start, 'A server-confirmed drag must project the destination time into the board immediately.');
+
 const supportWorkOrders = [
   canonicalWorkOrders[0],
   {
@@ -71,6 +94,7 @@ requireCondition(supportedAppointments.length === 1, 'Primary and support work o
 requireCondition(supportedAppointments[0].supportVanId === 'VAN-2', 'Canonical support van must be recognized.');
 const supportAssignment = supportedAppointments[0].assignments.find((assignment) => !assignment.isPrimaryAssignment);
 requireCondition(supportAssignment?.supportForJobId === 'WO-APT-CANONICAL-1-1', 'Canonical parentWorkOrderId must link the support assignment to the primary job.');
+requireCondition(liveDragMoveCandidates(operationalDay!, supportedAppointments[0], supportedAppointments[0].assignments).length === 0, 'A multi-van booking must not enter the simple drag workflow.');
 
 const rescheduledWithStaleSupport = projectLiveSchedulingAppointments([
   canonicalWorkOrders[0],
@@ -127,4 +151,4 @@ const duplicatedVanAppointment = projectLiveSchedulingAppointments([
 requireCondition(duplicatedVanAppointment.length === 1, 'A booking assigned through a legacy van document must remain visible.');
 requireCondition(duplicatedVanAppointment[0].primaryVanId === 'VAN-4', 'A duplicate Van 4 document must project onto the single canonical VAN-4 lane.');
 
-console.log('Live scheduling acceptance passed: canonical fleet lanes, active work orders, creator attribution, and legacy compatibility.');
+console.log('Live scheduling acceptance passed: canonical fleet lanes, valid drag targets, immediate committed move projection, creator attribution, and legacy compatibility.');

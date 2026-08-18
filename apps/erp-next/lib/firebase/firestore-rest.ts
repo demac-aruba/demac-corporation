@@ -25,6 +25,10 @@ type FirestoreListResponse = {
   error?: { message?: string };
 };
 
+type FirestoreRunQueryRow = {
+  document?: FirestoreDocument;
+};
+
 function baseUrl() {
   if (!isFirebaseClientConfigured || !firebaseClientConfig.projectId) {
     throw new Error('Cloud Firestore is not configured for ERP Next in this environment.');
@@ -34,6 +38,10 @@ function baseUrl() {
 
 function documentId(name: string) {
   return decodeURIComponent(name.split('/').pop() ?? '');
+}
+
+function decodeDocument<T extends { id: string }>(document: FirestoreDocument) {
+  return { ...decodeFirestoreFields(document.fields ?? {}), id: documentId(document.name) } as T;
 }
 
 function isDateTimeField(key: string, value: unknown) {
@@ -121,12 +129,54 @@ export async function listFirestoreCollection<T extends { id: string }>(collecti
     const response = await authenticatedFetch(`${baseUrl()}/${collectionPath}?${query.toString()}`);
     if (!response.ok) throw new Error(await readError(response, `Unable to list ${collectionPath}.`));
     const payload = await response.json() as FirestoreListResponse;
-    for (const document of payload.documents ?? []) {
-      result.push({ ...decodeFirestoreFields(document.fields ?? {}), id: documentId(document.name) } as T);
-    }
+    for (const document of payload.documents ?? []) result.push(decodeDocument<T>(document));
     pageToken = payload.nextPageToken ?? '';
   } while (pageToken);
   return result;
+}
+
+export async function queryFirestoreCollectionDateRange<T extends { id: string }>(args: {
+  collectionId: string;
+  fieldPath: string;
+  startInclusive: string;
+  endInclusive: string;
+  limit?: number;
+}): Promise<T[]> {
+  const limit = Math.max(1, Math.min(5000, Math.round(args.limit ?? 1000)));
+  const response = await authenticatedFetch(`${baseUrl()}:runQuery`, {
+    method: 'POST',
+    body: JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId: args.collectionId }],
+        where: {
+          compositeFilter: {
+            op: 'AND',
+            filters: [
+              {
+                fieldFilter: {
+                  field: { fieldPath: args.fieldPath },
+                  op: 'GREATER_THAN_OR_EQUAL',
+                  value: { stringValue: args.startInclusive },
+                },
+              },
+              {
+                fieldFilter: {
+                  field: { fieldPath: args.fieldPath },
+                  op: 'LESS_THAN_OR_EQUAL',
+                  value: { stringValue: args.endInclusive },
+                },
+              },
+            ],
+          },
+        },
+        orderBy: [{ field: { fieldPath: args.fieldPath }, direction: 'ASCENDING' }],
+        limit,
+      },
+    }),
+  });
+  if (!response.ok) throw new Error(await readError(response, `Unable to query ${args.collectionId} by ${args.fieldPath}.`));
+  const rows = await response.json() as FirestoreRunQueryRow[];
+  return rows.flatMap((row) => row.document ? [decodeDocument<T>(row.document)] : []);
 }
 
 export async function saveFirestoreDocument<T extends { id: string }>(collectionPath: string, document: T): Promise<T> {
