@@ -1,4 +1,4 @@
-import { projectLiveSchedulingAppointments } from '../lib/live-scheduling';
+import { projectLiveSchedulingAppointments, resolveCanonicalVanId } from '../lib/live-scheduling';
 
 function requireCondition(condition: unknown, message: string) {
   if (!condition) throw new Error(`Live scheduling acceptance failed: ${message}`);
@@ -65,6 +65,23 @@ requireCondition(supportedAppointments[0].supportVanId === 'VAN-2', 'Canonical s
 const supportAssignment = supportedAppointments[0].assignments.find((assignment) => !assignment.isPrimaryAssignment);
 requireCondition(supportAssignment?.supportForJobId === 'WO-APT-CANONICAL-1-1', 'Canonical parentWorkOrderId must link the support assignment to the primary job.');
 
+const rescheduledWithStaleSupport = projectLiveSchedulingAppointments([
+  canonicalWorkOrders[0],
+  {
+    ...canonicalWorkOrders[0],
+    id: 'WO-APT-CANONICAL-1-2',
+    vanId: 'VAN-2',
+    appointmentAssignmentRole: 'support',
+    parentWorkOrderId: 'WO-APT-CANONICAL-1-1',
+    airConditionerCount: 1,
+    appointmentDurationMinutes: 60,
+    status: 'Cancelada',
+  },
+], clients, properties);
+requireCondition(rescheduledWithStaleSupport[0].assignments.length === 1, 'A stale cancelled support work order must not remain in the active appointment projection.');
+requireCondition(rescheduledWithStaleSupport[0].totalQuantity === 2, 'A stale cancelled support work order must not inflate the active appointment quantity.');
+requireCondition(!rescheduledWithStaleSupport[0].supportVanId, 'A stale cancelled support work order must not show a support van after reschedule.');
+
 const legacyAppointments = projectLiveSchedulingAppointments([
   {
     id: 'WO-LEGACY-1',
@@ -85,4 +102,22 @@ requireCondition(legacyAppointments.length === 1, 'Legacy scheduling records mus
 requireCondition(legacyAppointments[0].primaryVanId === 'VAN-3', 'Legacy van field compatibility must be retained.');
 requireCondition(legacyAppointments[0].presetId === 'diagnostic', 'Legacy presetId compatibility must be retained.');
 
-console.log('Live scheduling acceptance passed: canonical Booking Authority fields project correctly without breaking legacy records.');
+const fleetRecords = [
+  { id: 'v4', name: 'Van 4', active: true },
+  { id: 'van-1783800405341', name: 'Van 4', active: true },
+];
+requireCondition(resolveCanonicalVanId('v4', fleetRecords) === 'VAN-4', 'Short van aliases must resolve to the canonical fleet id.');
+requireCondition(resolveCanonicalVanId('van-1783800405341', fleetRecords) === 'VAN-4', 'Legacy generated van ids must resolve through their fleet record name instead of creating another visual lane.');
+
+const duplicatedVanAppointment = projectLiveSchedulingAppointments([
+  {
+    ...canonicalWorkOrders[0],
+    id: 'WO-APT-FLEET-ALIAS-1',
+    appointmentId: 'APT-FLEET-ALIAS',
+    vanId: 'van-1783800405341',
+  },
+], clients, properties, fleetRecords);
+requireCondition(duplicatedVanAppointment.length === 1, 'A booking assigned through a legacy van document must remain visible.');
+requireCondition(duplicatedVanAppointment[0].primaryVanId === 'VAN-4', 'A duplicate Van 4 document must project onto the single canonical VAN-4 lane.');
+
+console.log('Live scheduling acceptance passed: Booking Authority appointments use canonical fleet lanes, active work orders, and legacy compatibility.');

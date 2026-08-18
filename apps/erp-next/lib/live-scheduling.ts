@@ -17,6 +17,8 @@ const KNOWN_PRESETS = new Set<WorkPresetId>([
   'other',
 ]);
 
+const CANONICAL_VAN_IDS = new Set(['VAN-1', 'VAN-2', 'VAN-3', 'VAN-4']);
+
 type LiveWorkOrder = {
   id: string;
   appointmentId?: string;
@@ -30,6 +32,7 @@ type LiveWorkOrder = {
   supportForWorkOrderId?: string;
   clientId?: string;
   propertyId?: string;
+  serviceId?: string;
   presetId?: string;
   quantity?: number;
   date?: string;
@@ -63,6 +66,17 @@ type LiveProperty = {
   operationalZone?: string;
 };
 
+export type LiveVan = {
+  id: string;
+  name?: string;
+  label?: string;
+  code?: string;
+  number?: number | string;
+  vanNumber?: number | string;
+  unitNumber?: number | string;
+  active?: boolean;
+};
+
 function text(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -77,8 +91,40 @@ function presetId(value: unknown): WorkPresetId {
   return KNOWN_PRESETS.has(candidate) ? candidate : 'other';
 }
 
-function workOrderVanId(order: LiveWorkOrder) {
-  return text(order.vanId) || text(order.van);
+function canonicalVanIdFromValue(value: unknown) {
+  const raw = text(value);
+  if (!raw) return '';
+  const upper = raw.toUpperCase().replaceAll('_', '-').replace(/\s+/g, '-');
+  if (CANONICAL_VAN_IDS.has(upper)) return upper;
+  const compact = raw.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const match = compact.match(/^(?:van|v)([1-4])$/);
+  return match ? `VAN-${match[1]}` : '';
+}
+
+function canonicalVanIdFromRecord(van: LiveVan | undefined) {
+  if (!van) return '';
+  const numericCandidates = [van.number, van.vanNumber, van.unitNumber]
+    .map((value) => Number(value))
+    .filter((value) => Number.isInteger(value) && value >= 1 && value <= 4);
+  if (numericCandidates.length) return `VAN-${numericCandidates[0]}`;
+  for (const candidate of [van.id, van.code, van.name, van.label]) {
+    const canonical = canonicalVanIdFromValue(candidate);
+    if (canonical) return canonical;
+  }
+  return '';
+}
+
+export function resolveCanonicalVanId(value: unknown, vans: LiveVan[] = []) {
+  const direct = canonicalVanIdFromValue(value);
+  if (direct) return direct;
+  const raw = text(value);
+  if (!raw) return '';
+  const matchingRecord = vans.find((van) => van.id === raw);
+  return canonicalVanIdFromRecord(matchingRecord);
+}
+
+function workOrderVanId(order: LiveWorkOrder, vans: LiveVan[] = []) {
+  return resolveCanonicalVanId(order.vanId || order.van, vans);
 }
 
 function workOrderPresetId(order: LiveWorkOrder) {
@@ -149,6 +195,7 @@ function workOrderAssignment(
   customer: string,
   site: string,
   sector: string,
+  vans: LiveVan[],
 ): CalendarDispatchJob {
   const start = text(order.time) || normalizedSlots(order.scheduledSlots)[0] || '08:30';
   const end = assignmentEnd({ ...order, time: start });
@@ -164,7 +211,7 @@ function workOrderAssignment(
     start,
     end,
     segment: daySegment(start, end),
-    vanId: workOrderVanId(order) || 'UNASSIGNED',
+    vanId: workOrderVanId(order, vans) || 'UNASSIGNED',
     presetId: workOrderPresetId(order),
     quantity: workOrderQuantity(order),
     status: isCancelled(order.status) ? 'cancelled' : 'confirmed',
@@ -179,6 +226,7 @@ export function projectLiveSchedulingAppointments(
   workOrders: LiveWorkOrder[],
   clients: LiveClient[],
   properties: LiveProperty[],
+  vans: LiveVan[] = [],
 ): BrowserAppointmentRecord[] {
   const clientById = new Map(clients.map((client) => [client.id, client]));
   const propertyById = new Map(properties.map((property) => [property.id, property]));
@@ -186,14 +234,16 @@ export function projectLiveSchedulingAppointments(
 
   for (const order of workOrders) {
     const appointmentId = text(order.appointmentId);
-    if (!appointmentId || !text(order.date) || !workOrderVanId(order)) continue;
+    if (!appointmentId || !text(order.date) || !workOrderVanId(order, vans)) continue;
     const current = grouped.get(appointmentId) ?? [];
     current.push(order);
     grouped.set(appointmentId, current);
   }
 
   const appointments: BrowserAppointmentRecord[] = [];
-  for (const [appointmentId, orders] of grouped.entries()) {
+  for (const [appointmentId, allOrders] of grouped.entries()) {
+    const activeOrders = allOrders.filter((order) => !isCancelled(order.status));
+    const orders = activeOrders.length ? activeOrders : allOrders;
     const sorted = [...orders].sort((a, b) => {
       const aSupport = workOrderAssignmentRole(a) === 'support' ? 1 : 0;
       const bSupport = workOrderAssignmentRole(b) === 'support' ? 1 : 0;
@@ -207,12 +257,12 @@ export function projectLiveSchedulingAppointments(
     const customer = clientLabel(client, clientId);
     const site = propertyLabel(property, propertyId);
     const sector = text(primary.operationalZone) || text(primary.zone) || text(property?.operationalZone) || text(property?.zone) || 'Unknown';
-    const assignments = sorted.map((order) => workOrderAssignment(order, customer, site, sector));
+    const assignments = sorted.map((order) => workOrderAssignment(order, customer, site, sector, vans));
     const primaryAssignment = assignments.find((assignment) => assignment.isPrimaryAssignment) ?? assignments[0];
     const supportAssignment = assignments.find((assignment) => !assignment.isPrimaryAssignment);
     const quantity = sorted.reduce((total, order) => total + workOrderQuantity(order), 0);
     const fallbackDescription = `${primaryAssignment.presetId.replaceAll('_', ' ')} x${quantity}`;
-    const cancelled = assignments.every((assignment) => assignment.status === 'cancelled');
+    const cancelled = activeOrders.length === 0 && assignments.every((assignment) => assignment.status === 'cancelled');
     const confirmedAt = text(primary.confirmedAt) || text(primary.createdAt);
 
     appointments.push({
@@ -247,10 +297,11 @@ export function projectLiveSchedulingAppointments(
 }
 
 export async function loadLiveSchedulingAppointments() {
-  const [workOrders, clients, properties] = await Promise.all([
+  const [workOrders, clients, properties, vans] = await Promise.all([
     listFirestoreCollection<LiveWorkOrder>('workOrders', 1000),
     listFirestoreCollection<LiveClient>('clients', 1000),
     listFirestoreCollection<LiveProperty>('properties', 1000),
+    listFirestoreCollection<LiveVan>('vans', 250),
   ]);
-  return projectLiveSchedulingAppointments(workOrders, clients, properties);
+  return projectLiveSchedulingAppointments(workOrders, clients, properties, vans);
 }

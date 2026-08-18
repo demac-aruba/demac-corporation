@@ -5,7 +5,6 @@ const {
 } = require("./bookingAuthorityCore");
 const {
   MAX_SEARCH_DAYS,
-  MAX_VANS,
   addDays,
   arubaDateParts,
   hashId,
@@ -26,6 +25,7 @@ const {
   CANONICAL_SCHEDULING_ENGINE_VERSION,
   generateCanonicalOptions,
 } = require("./bookingAuthoritySchedulingEngine");
+const { canonicalizeSchedulingData } = require("./bookingVanIdentity");
 
 const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v2";
 
@@ -56,18 +56,27 @@ async function loadSchedulingData(db, startDate, endDate) {
     db.collection("businessSettings").get(),
     db.collection("vanHalfDaySchedules").get(),
   ]);
-  return {
+  return canonicalizeSchedulingData({
     workOrders: snapshotItems(workOrderSnapshot),
     services: snapshotItems(serviceSnapshot),
     properties: snapshotItems(propertySnapshot),
     clients: snapshotItems(clientSnapshot),
-    vans: snapshotItems(vanSnapshot).filter((van) => van.active !== false).slice(0, MAX_VANS),
+    vans: snapshotItems(vanSnapshot).filter((van) => van.active !== false),
     staffProfiles: snapshotItems(staffSnapshot),
     dailyVanAssignments: snapshotItems(assignmentSnapshot),
     staffAbsences: snapshotItems(absenceSnapshot),
     calendarClosures: snapshotItems(closureSnapshot),
     businessSettings: snapshotItems(businessSnapshot),
     vanHalfDaySchedules: snapshotItems(halfDaySnapshot),
+  });
+}
+
+function dataWithoutAppointment(data, appointmentId) {
+  const excluded = cleanText(appointmentId, 180);
+  if (!excluded) return data;
+  return {
+    ...data,
+    workOrders: data.workOrders.filter((order) => cleanText(order.appointmentId, 180) !== excluded),
   };
 }
 
@@ -212,10 +221,11 @@ function createSchedulingProvider({ db }) {
     version: SCHEDULING_PROVIDER_VERSION,
     engineVersion: CANONICAL_SCHEDULING_ENGINE_VERSION,
 
-    async checkAvailability({ request, now = new Date() }) {
+    async checkAvailability({ request, context = {}, now = new Date() }) {
       const nowParts = arubaDateParts(now);
       const today = nowParts.date;
-      const data = await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS));
+      const loaded = await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS));
+      const data = dataWithoutAppointment(loaded, context.excludeAppointmentId);
       const { property } = exactCustomerProperty(data, request);
       const routeConfig = routeConfigFromSettings(data.businessSettings);
       const result = generateCanonicalOptions({
@@ -242,13 +252,14 @@ function createSchedulingProvider({ db }) {
       };
     },
 
-    async revalidateSelection({ request, option, now = new Date() }) {
+    async revalidateSelection({ request, option, context = {}, now = new Date() }) {
       const nowParts = arubaDateParts(now);
       const today = nowParts.date;
       if (option.date < today || (option.date === today && option.time <= nowParts.time)) {
         return { available: false, reason: "selected-time-passed" };
       }
-      const data = await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS));
+      const loaded = await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS));
+      const data = dataWithoutAppointment(loaded, context.excludeAppointmentId);
       const { property } = exactCustomerProperty(data, request);
       const routeConfig = routeConfigFromSettings(data.businessSettings);
       const candidateZone = propertyZone(property, option.address, routeConfig);
@@ -288,14 +299,20 @@ function createSchedulingProvider({ db }) {
 
     async validateTransaction({ transaction, db: transactionDb, option, appointmentId }) {
       const sameDayQuery = transactionDb.collection("workOrders").where("date", "==", option.date);
-      const [sameDaySnapshot, serviceSnapshot, halfDaySnapshot] = await Promise.all([
+      const [sameDaySnapshot, serviceSnapshot, halfDaySnapshot, vanSnapshot] = await Promise.all([
         transaction.get(sameDayQuery),
         transaction.get(transactionDb.collection("services")),
         transaction.get(transactionDb.collection("vanHalfDaySchedules")),
+        transaction.get(transactionDb.collection("vans")),
       ]);
       const services = snapshotItems(serviceSnapshot);
-      const halfDaySchedules = snapshotItems(halfDaySnapshot);
-      const sameDayOrders = snapshotItems(sameDaySnapshot)
+      const canonical = canonicalizeSchedulingData({
+        vans: snapshotItems(vanSnapshot),
+        workOrders: snapshotItems(sameDaySnapshot),
+        vanHalfDaySchedules: snapshotItems(halfDaySnapshot),
+      });
+      const halfDaySchedules = canonical.vanHalfDaySchedules;
+      const sameDayOrders = canonical.workOrders
         .filter(orderBlocksCapacity)
         .filter((order) => order.appointmentId !== appointmentId);
 
@@ -335,6 +352,7 @@ module.exports = {
   buildCapacityLocks,
   buildWorkOrders,
   createSchedulingProvider,
+  dataWithoutAppointment,
   exactCustomerProperty,
   loadSchedulingData,
   notificationRecipient,
