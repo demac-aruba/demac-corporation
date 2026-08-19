@@ -2,6 +2,7 @@ import type { BrowserAppointmentRecord } from './browser-operational';
 import {
   liveOperationalStartTimes,
   liveOperationalWindowAllows,
+  liveVanIsHalfDay,
   liveVanOperationallyAvailable,
   type LiveOperationalCapacityState,
 } from './live-operational-capacity';
@@ -32,10 +33,6 @@ function workingWindowAllows(day: OperationalDay, start: string, end: string) {
   if (day.weekday === 'Sat') {
     return startMinutes >= timeToMinutes('09:00') && endMinutes <= timeToMinutes('13:00');
   }
-
-  // Canonical half-days may expose the Legacy 11:30–12:30 extra morning slot.
-  // It is valid only when liveOperationalWindowAllows confirms that van's half-day.
-  if (start === '11:30') return endMinutes <= timeToMinutes('13:00');
 
   const lunchStart = timeToMinutes(settings.lunchStart);
   const lunchEnd = timeToMinutes(settings.lunchEnd);
@@ -83,10 +80,13 @@ export function liveOperationalMoveCapacityCandidates(
 
   for (const van of previewVans.filter((resource) => resource.active)) {
     if (!liveVanOperationallyAvailable(capacityState, van.id, day.dateKey)) continue;
+    const halfDay = liveVanIsHalfDay(capacityState, van.id, day.dateKey);
     const starts = liveOperationalStartTimes(capacityState, van.id, day.dateKey, baseStarts);
     for (const start of starts) {
       const end = minutesToTime(timeToMinutes(start) + duration);
-      if (!workingWindowAllows(day, start, end)) continue;
+      // A canonical half-day is one continuous morning work window through its cutoff;
+      // do not re-apply the normal full-day lunch boundary inside that shorter window.
+      if (!halfDay && !workingWindowAllows(day, start, end)) continue;
       if (!liveOperationalWindowAllows(capacityState, van.id, day.dateKey, start, end)) continue;
       if (otherJobs.some((job) => job.vanId === van.id && overlaps(start, end, job))) continue;
 
