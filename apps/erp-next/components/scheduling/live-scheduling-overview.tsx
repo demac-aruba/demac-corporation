@@ -4,6 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../auth/auth-provider';
 import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
 import {
+  liveCompanyClosureReason,
+  liveOperationalStartTimes,
+  liveOperationalWindowAllows,
+  liveVanHalfDaySchedule,
+  liveVanOperationallyAvailable,
   loadLiveOperationalCapacityState,
   type LiveOperationalCapacityState,
 } from '../../lib/live-operational-capacity';
@@ -28,7 +33,7 @@ import { DragMoveConfirmation, type PendingDragMove } from './drag-move-confirma
 import { LiveAppointmentDetailsDrawer } from './live-appointment-details-drawer';
 import styles from './scheduling-overview-v2.module.css';
 
-type DisplaySlot = { start: string; end: string; segment: 'am' | 'pm' };
+type DisplaySlot = { start: string; end: string; segment: 'am' | 'pm'; operational: boolean; offReason?: string };
 type DisplayVan = { id: string; name: string; team: string; active: boolean };
 type JobLink = { appointmentId: string; appointment: BrowserAppointmentRecord };
 type PendingLiveMove = PendingDragMove & { jobId: string; candidate: CandidateSlot };
@@ -50,12 +55,25 @@ function presetLabel(id: WorkPresetId) {
   return defaultWorkPresets.find((preset) => preset.id === id)?.label ?? 'Other work';
 }
 
-function displaySlotsForDay(day: OperationalDay): DisplaySlot[] {
+function displaySlotsForVan(day: OperationalDay, vanId: string, capacityState: LiveOperationalCapacityState | null): DisplaySlot[] {
   if (!day.isOpen) return [];
-  const starts = day.weekday === 'Sat' ? ['09:00', '10:00', '11:00', '12:00'] : getRuntimeSchedulingSettings().serviceStartTimes;
+  const baseStarts = day.weekday === 'Sat' ? ['09:00', '10:00', '11:00', '12:00'] : getRuntimeSchedulingSettings().serviceStartTimes;
+  const starts = liveOperationalStartTimes(capacityState, vanId, day.dateKey, baseStarts);
+  const halfDay = liveVanHalfDaySchedule(capacityState, vanId, day.dateKey);
+  const vanAvailable = liveVanOperationallyAvailable(capacityState, vanId, day.dateKey);
+
   return starts.map((start) => {
     const startMinutes = timeToMinutes(start);
-    return { start, end: minutesToTime(startMinutes + 60), segment: startMinutes < 12 * 60 ? 'am' : 'pm' };
+    const end = minutesToTime(startMinutes + 60);
+    const operational = vanAvailable && liveOperationalWindowAllows(capacityState, vanId, day.dateKey, start, end);
+    const offReason = operational
+      ? undefined
+      : !vanAvailable
+        ? 'Van unavailable'
+        : halfDay
+          ? `Weekly half-day · off after ${formatTime(halfDay.workdayEnd || '13:00')}`
+          : liveCompanyClosureReason(capacityState, day.dateKey) || 'Outside operating capacity';
+    return { start, end, segment: startMinutes < 12 * 60 ? 'am' : 'pm', operational, offReason };
   });
 }
 
@@ -82,17 +100,19 @@ function activeSetSpan(jobs: CalendarDispatchJob[], slots: DisplaySlot[], startI
   return span;
 }
 
-function occupancyForDay(day: OperationalDay, jobs: CalendarDispatchJob[], vans: DisplayVan[]) {
-  const slots = displaySlotsForDay(day);
-  const total = slots.length * vans.length;
-  if (!total) return { total: 0, occupied: 0, open: 0, percent: 0 };
+function occupancyForDay(day: OperationalDay, jobs: CalendarDispatchJob[], vans: DisplayVan[], capacityState: LiveOperationalCapacityState | null) {
+  if (!day.isOpen) return { total: 0, occupied: 0, open: 0, percent: 0 };
+  let total = 0;
   let occupied = 0;
   for (const van of vans) {
-    for (const slot of slots) {
+    for (const slot of displaySlotsForVan(day, van.id, capacityState)) {
+      if (!slot.operational) continue;
+      total += 1;
       if (jobs.some((job) => job.dateKey === day.dateKey && job.vanId === van.id && overlapsSlot(job, slot))) occupied += 1;
     }
   }
-  return { total, occupied, open: total - occupied, percent: Math.round((occupied / total) * 100) };
+  if (!total) return { total: 0, occupied: 0, open: 0, percent: 0 };
+  return { total, occupied, open: Math.max(0, total - occupied), percent: Math.round((occupied / total) * 100) };
 }
 
 function addDays(dateKey: string, amount: number) {
@@ -148,19 +168,23 @@ export function LiveSchedulingOverview() {
   const clickTimerRef = useRef<number | null>(null);
   const reconcileTimerRef = useRef<number | null>(null);
   const refreshSequenceRef = useRef(0);
-  const week = useMemo(() => buildOperationalWeek(activeDate), [activeDate]);
-  const weekStartDate = week[0]?.dateKey ?? activeDate;
-  const weekEndDate = week[6]?.dateKey ?? activeDate;
+  const baseWeek = useMemo(() => buildOperationalWeek(activeDate), [activeDate]);
+  const weekStartDate = baseWeek[0]?.dateKey ?? activeDate;
+  const weekEndDate = baseWeek[6]?.dateKey ?? activeDate;
+  const week = useMemo(() => baseWeek.map((day) => {
+    const closureReason = liveCompanyClosureReason(capacityState, day.dateKey);
+    return closureReason ? { ...day, isOpen: false, shiftLabel: closureReason } : day;
+  }), [baseWeek, capacityState]);
   const canManage = principal.active && principal.capabilities.has('scheduling.manage');
   const actor = useMemo(() => ({ id: principal.userId, name: principal.displayName }), [principal.displayName, principal.userId]);
   const interactionActive = Boolean(moveArmedJobId || pendingDragMove || moveBusy);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (forceCapacity = false) => {
     const sequence = ++refreshSequenceRef.current;
     try {
       const [next, capacityResult] = await Promise.all([
         loadLiveSchedulingAppointmentsFast({ startDate: weekStartDate, endDate: weekEndDate }),
-        loadLiveOperationalCapacityState()
+        loadLiveOperationalCapacityState({ startDate: weekStartDate, endDate: weekEndDate, force: forceCapacity })
           .then((value) => ({ value, error: '' }))
           .catch((capacityLoadError) => ({
             value: null,
@@ -237,17 +261,23 @@ export function LiveSchedulingOverview() {
     }
     return result;
   }, [appointments]);
-  const weekSummaries = useMemo(() => Object.fromEntries(week.map((day) => [day.dateKey, occupancyForDay(day, jobs, vans)])), [jobs, vans, week]);
+  const weekSummaries = useMemo(
+    () => Object.fromEntries(week.map((day) => [day.dateKey, occupancyForDay(day, jobs, vans, capacityState)])),
+    [capacityState, jobs, vans, week],
+  );
   const activeDay = week.find((day) => day.dateKey === activeDate) ?? week[0];
   const activeJobs = jobs.filter((job) => job.dateKey === activeDate);
-  const activeSlots = displaySlotsForDay(activeDay);
-  const activeOccupancy = occupancyForDay(activeDay, jobs, vans);
+  const activeOccupancy = occupancyForDay(activeDay, jobs, vans, capacityState);
   const confirmed = appointments.filter((appointment) => appointment.dateKey === activeDate && appointment.status === 'confirmed').length;
   const selectedAppointment = appointments.find((appointment) => appointment.id === selectedAppointmentId) ?? null;
   const activeConflictSlots = vans.reduce((total, van) => {
     const vanJobs = activeJobs.filter((job) => job.vanId === van.id);
-    return total + activeSlots.filter((slot) => activeJobsForSlot(vanJobs, slot).length > 1).length;
+    return total + displaySlotsForVan(activeDay, van.id, capacityState).filter((slot) => activeJobsForSlot(vanJobs, slot).length > 1).length;
   }, 0);
+  const outsideCapacityJobs = activeJobs.filter((job) => {
+    const slots = displaySlotsForVan(activeDay, job.vanId, capacityState);
+    return slots.some((slot) => !slot.operational && overlapsSlot(job, slot));
+  });
   const armedLink = moveArmedJobId ? jobLinks.get(moveArmedJobId) : undefined;
   const dragCandidates = useMemo(
     () => liveDragMoveCandidates(activeDay, armedLink?.appointment, activeJobs, capacityState),
@@ -307,7 +337,7 @@ export function LiveSchedulingOverview() {
     refreshSequenceRef.current += 1;
     setSelectedAppointmentId('');
     setMoveArmedJobId(jobId);
-    setMoveNotice(`Move armed for ${link.appointment.customer}. Only the highlighted destinations can fit the complete appointment.`);
+    setMoveNotice(`Move armed for ${link.appointment.customer}. Only destinations inside canonical operating capacity are highlighted.`);
   };
 
   const dropMove = (targetVanId: string, targetStart: string) => {
@@ -422,19 +452,21 @@ export function LiveSchedulingOverview() {
         <div>
           <span className={styles.eyebrow}>Operations · Aruba · Live</span>
           <h1>Scheduling &amp; Dispatch</h1>
-          <p>Live Booking Authority schedule. Confirmed customer appointments are read from canonical Firestore work orders; local demo scheduling is not mixed into this view.</p>
+          <p>Live Booking Authority schedule. Confirmed customer appointments and canonical operating capacity are read from Firestore; local demo scheduling is not mixed into this view.</p>
         </div>
         <div className={styles.pageActions}>
-          <button type="button" className={styles.secondary} onClick={() => void refresh()} disabled={loading || interactionActive}>↻ Refresh live</button>
+          <button type="button" className={styles.secondary} onClick={() => void refresh(true)} disabled={loading || interactionActive}>↻ Refresh live</button>
         </div>
       </header>
 
       <div className={styles.notice}>
         <span>{error ? `Live sync error: ${error}` : loading ? 'Loading canonical Booking Authority schedule…' : `LIVE · Booking Authority${lastSyncedAt ? ` · synced ${lastSyncedAt}` : ''}`}</span>
       </div>
+      {capacityError ? <div className={styles.notice}><span>Canonical operating-capacity policy could not be loaded: {capacityError}. Appointment data remains visible, but moves are disabled until capacity refresh succeeds.</span></div> : null}
       {moveNotice ? <div className={styles.notice}><span>{moveNotice}</span>{moveArmedJobId && !moveBusy ? <button type="button" onClick={() => { setMoveArmedJobId(''); setMoveNotice('Move mode cancelled.'); }}>×</button> : null}</div> : null}
       {unresolvedJobs.length ? <div className={styles.notice}><span>Data integrity attention: {unresolvedJobs.length} assignment{unresolvedJobs.length === 1 ? '' : 's'} reference a van that cannot be resolved to Van 1–4. They are not converted into fake extra lanes.</span></div> : null}
       {activeConflictSlots ? <div className={styles.notice}><span>Capacity integrity attention: {activeConflictSlots} occupied slot{activeConflictSlots === 1 ? '' : 's'} contain overlapping appointments after duplicate fleet records were collapsed to the physical Van 1–4. Both appointments remain visible below so they can be reviewed and rescheduled safely.</span></div> : null}
+      {outsideCapacityJobs.length ? <div className={styles.notice}><span>Operating-calendar attention: {outsideCapacityJobs.length} appointment{outsideCapacityJobs.length === 1 ? '' : 's'} currently extend into capacity that is closed by the canonical van/company calendar. They remain visible for correction but are not counted as open capacity.</span></div> : null}
 
       <div className={styles.toolbar}>
         <div className={styles.dayNav}>
@@ -455,7 +487,7 @@ export function LiveSchedulingOverview() {
               <div><span>{day.weekday}</span><strong>{day.shortDate}</strong>{day.isToday ? <b>Today</b> : null}</div>
               <small>{day.shiftLabel}</small>
               <i><em style={{ width: `${summary?.percent ?? 0}%` }} /></i>
-              <p>{day.isOpen ? `${summary?.occupied ?? 0}/${summary?.total ?? 0} spots filled · ${summary?.open ?? 0} open` : 'Operationally closed'}</p>
+              <p>{day.isOpen ? `${summary?.occupied ?? 0}/${summary?.total ?? 0} capacity spots filled · ${summary?.open ?? 0} open` : 'Operationally closed'}</p>
             </button>
           );
         })}
@@ -463,9 +495,9 @@ export function LiveSchedulingOverview() {
 
       <div className={styles.metrics}>
         <article><span>Confirmed</span><strong>{confirmed}</strong><small>{activeDay.shortDate}</small></article>
-        <article><span>Data source</span><strong className={styles.metricGood}>LIVE</strong><small>Booking Authority work orders</small></article>
+        <article><span>Data source</span><strong className={styles.metricGood}>LIVE</strong><small>Booking Authority + canonical capacity</small></article>
         <article><span>Local holds</span><strong>0</strong><small>Demo/local holds are isolated</small></article>
-        <article><span>Open spots</span><strong className={styles.metricGood}>{activeOccupancy.open}</strong><small>{activeOccupancy.occupied}/{activeOccupancy.total} occupied today</small><i style={{ width: `${activeOccupancy.percent}%` }} /></article>
+        <article><span>Open spots</span><strong className={styles.metricGood}>{activeOccupancy.open}</strong><small>{activeOccupancy.occupied}/{activeOccupancy.total} operating spots occupied</small><i style={{ width: `${activeOccupancy.percent}%` }} /></article>
       </div>
 
       <div className={styles.board}>
@@ -481,18 +513,26 @@ export function LiveSchedulingOverview() {
           <div className={styles.vanGrid}>
             {vans.map((van) => {
               const vanJobs = activeJobs.filter((job) => job.vanId === van.id);
+              const vanSlots = displaySlotsForVan(activeDay, van.id, capacityState);
+              const halfDay = liveVanHalfDaySchedule(capacityState, van.id, activeDay.dateKey);
+              const operational = liveVanOperationallyAvailable(capacityState, van.id, activeDay.dateKey);
+              const laneStatus = !operational
+                ? 'UNAVAILABLE'
+                : halfDay
+                  ? `HALF-DAY · TO ${formatTime(halfDay.workdayEnd || '13:00')}`
+                  : van.active ? 'ACTIVE' : 'INACTIVE';
               return (
                 <section key={van.id} className={styles.vanLane}>
                   <header>
                     <div className={styles.vanIdentity}><span>{van.id.replace('VAN-', 'V')}</span><div><strong>{van.name}</strong><small>{van.team}</small></div></div>
-                    <b>{van.active ? 'ACTIVE' : 'INACTIVE'}</b>
+                    <b style={{ color: !operational ? 'var(--danger)' : halfDay ? 'var(--warning)' : undefined }}>{laneStatus}</b>
                   </header>
                   <div className={styles.anchorBar}>
                     <div><span>AM anchor</span><strong>{anchorFor(activeJobs, van.id, 'am')}</strong></div>
-                    <div><span>PM anchor</span><strong>{anchorFor(activeJobs, van.id, 'pm')}</strong></div>
+                    <div><span>PM anchor</span><strong>{halfDay ? `Off after ${formatTime(halfDay.workdayEnd || '13:00')}` : anchorFor(activeJobs, van.id, 'pm')}</strong></div>
                   </div>
                   <VanScheduleSlots
-                    slots={activeSlots}
+                    slots={vanSlots}
                     jobs={vanJobs}
                     vanId={van.id}
                     jobLinks={jobLinks}
@@ -503,7 +543,7 @@ export function LiveSchedulingOverview() {
                     onArmMove={armMove}
                     onDropMove={dropMove}
                   />
-                  {!activeDay.isOpen ? <div className={styles.closedDay}>Operationally closed.</div> : null}
+                  {!activeDay.isOpen ? <div className={styles.closedDay}>{activeDay.shiftLabel || 'Operationally closed.'}</div> : null}
                 </section>
               );
             })}
@@ -550,9 +590,24 @@ function VanScheduleSlots({
     if (firstAfternoon) rows.push(<div className={styles.lunchRow} key={`lunch-${slot.start}`}><span>12:00</span><div>Lunch / reset</div><span>1:00</span></div>);
 
     const active = activeJobsForSlot(jobs, slot);
+    if (!active.length && !slot.operational) {
+      rows.push(<div
+        className={styles.openSlot}
+        key={`off-${slot.start}`}
+        style={{ borderStyle: 'solid', borderColor: 'var(--border)', background: 'var(--surface-2)', cursor: 'default', opacity: 0.76 }}
+      >
+        <div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div>
+        <div><strong style={{ color: 'var(--muted)' }}>Not available</strong><span>{slot.offReason || 'Outside operating capacity'}</span></div>
+        <b style={{ color: 'var(--muted)' }}>OFF</b>
+      </div>);
+      index += 1;
+      continue;
+    }
+
     if (!active.length) {
       const dropEnabled = Boolean(moveArmedJobId)
         && !moveBusy
+        && slot.operational
         && validDropTargets.has(liveMoveTargetKey(vanId, slot.start));
       rows.push(<div
         className={styles.openSlot}
@@ -574,6 +629,7 @@ function VanScheduleSlots({
     }
 
     const span = activeSetSpan(jobs, slots, index);
+    const spanOutsideCapacity = slots.slice(index, index + span).some((spanSlot) => !spanSlot.operational);
     if (active.length > 1) {
       rows.push(<ConflictBlock key={`conflict-${slot.start}-${active.map((job) => job.id).join('-')}`} jobs={active} span={span} jobLinks={jobLinks} onOpenAppointment={onOpenAppointment} />);
       index += span;
@@ -589,6 +645,7 @@ function VanScheduleSlots({
       crossesLunch={jobCrossesLunch(job)}
       continuation={job.start !== slot.start}
       armed={moveArmedJobId === job.id}
+      outsideCapacity={spanOutsideCapacity}
       onOpen={() => onOpenAppointment(job.id)}
       onArm={() => onArmMove(job.id)}
     />);
@@ -598,13 +655,14 @@ function VanScheduleSlots({
   return <div className={styles.slotList}>{rows}</div>;
 }
 
-function AppointmentBlock({ job, appointment, span, crossesLunch, continuation = false, armed, onOpen, onArm }: {
+function AppointmentBlock({ job, appointment, span, crossesLunch, continuation = false, armed, outsideCapacity, onOpen, onArm }: {
   job: CalendarDispatchJob;
   appointment?: BrowserAppointmentRecord;
   span: number;
   crossesLunch: boolean;
   continuation?: boolean;
   armed: boolean;
+  outsideCapacity: boolean;
   onOpen: () => void;
   onArm: () => void;
 }) {
@@ -615,7 +673,7 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
       onOpen();
     }
   };
-  return <div className={styles.occupiedSlot} style={{ minHeight, outline: armed ? '2px solid var(--brand)' : undefined, background: armed ? 'var(--brand-soft)' : undefined }}>
+  return <div className={styles.occupiedSlot} style={{ minHeight, outline: armed ? '2px solid var(--brand)' : outsideCapacity ? '1px solid var(--warning)' : undefined, background: armed ? 'var(--brand-soft)' : undefined }}>
     <div className={styles.slotTime}><strong>{formatTime(job.start)}</strong><span>{formatTime(job.end)}</span>{span > 1 ? <span>{span} spots</span> : null}</div>
     <div className={styles.slotJobs}>
       <article
@@ -642,6 +700,7 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
           <small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small>
           {!continuation && span > 1 ? <small>Reserved continuously · {formatTime(job.start)}–{formatTime(job.end)}</small> : null}
           {crossesLunch ? <small>Lunch/reset remains protected</small> : null}
+          {outsideCapacity ? <small style={{ color: 'var(--warning)', fontWeight: 800 }}>Outside canonical operating capacity · review schedule</small> : null}
           {bookingBadge(appointment?.bookedByName)}
           <small>{armed ? 'Drag this block to a highlighted valid destination' : 'Single click details · double click to move'}</small>
         </div>
