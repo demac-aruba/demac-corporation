@@ -1,4 +1,4 @@
-import { BrowserWorkforceRegistry } from '../../../components/employees/browser-workforce-registry';
+import { CanonicalWorkforceRegistry } from '../../../components/employees/canonical-workforce-registry';
 
 export default function EmployeesPage() {
   return (
@@ -8,11 +8,11 @@ export default function EmployeesPage() {
         <div className="page-actions"><button className="btn" type="button">Attendance</button></div>
       </section>
 
-      <BrowserWorkforceRegistry />
+      <CanonicalWorkforceRegistry />
 
       <section className="mo-two-col">
         <article className="panel"><header className="panel-head"><div><h2>Workforce Rules</h2><span>Operational policy foundation</span></div></header><div className="mo-rule-list"><div><strong>Weekday shift</strong><span>08:00–17:00 · lunch 12:00–13:00</span></div><div><strong>Saturday shift</strong><span>09:00–13:00</span></div><div><strong>Overtime</strong><span>Tracked after 17:00 for accounting review</span></div><div><strong>Payroll privacy</strong><span>Owner/authorized finance sees full payroll; employee sees own information only</span></div></div></article>
-        <article className="panel"><header className="panel-head"><div><h2>Crew Readiness Intelligence</h2><span>How workforce data affects dispatch</span></div></header><div className="mo-callouts"><div className="warning"><strong>Unverified skills stay AT RISK</strong><p>The ERP does not assume a technician capability from van assignment alone. Verify the skill profile before it can produce READY evidence.</p></div><div><strong>Skill changes affect future start authority</strong><p>Work Orders recalculate Crew & Required Skill from the active roster. A previously issued AT RISK release remains governed by its stored risk snapshot.</p></div></div></article>
+        <article className="panel"><header className="panel-head"><div><h2>Crew Readiness Intelligence</h2><span>How workforce data affects dispatch</span></div></header><div className="mo-callouts"><div className="warning"><strong>Canonical crew first</strong><p>Technician and helper identity now comes from Firestore staffProfiles, vans and dailyVanAssignments—the same operational records Booking Authority uses.</p></div><div><strong>Skills still require evidence</strong><p>The ERP should not infer a technician capability from van assignment alone. Skill verification remains a separate readiness control before a job can be treated as fully READY.</p></div></div></article>
       </section>
     </div>
   );
