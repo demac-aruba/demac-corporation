@@ -1,18 +1,27 @@
 .shell{height:100dvh;min-height:100dvh;display:flex;flex-direction:column;overflow:hidden;background:linear-gradient(180deg,#f7faf9 0%,#f2f6f4 100%);color:var(--text)}
-.header{height:68px;flex:0 0 68px;display:flex;align-items:center;justify-content:space-between;gap:18px;padding:0 20px;border-bottom:1px solid #e1e8e5;background:rgba(255,255,255,.96);box-shadow:0 3px 18px rgba(31,53,47,.045);backdrop-filter:blur(14px);position:relative;z-index:3}
-.brand{display:flex;align-items:center;gap:12px;min-width:0}
-.mark{width:42px;height:42px;display:grid;place-items:center;border-radius:14px;background:linear-gradient(145deg,#13ad84 0%,#0c956f 100%);color:#fff;font-size:11px;font-weight:950;letter-spacing:.04em;box-shadow:0 7px 18px rgba(16,163,127,.22),inset 0 1px 0 rgba(255,255,255,.22)}
-.brand strong{display:block;font-size:18px;letter-spacing:-.025em;color:#17211f}
-.brand span{display:block;margin-top:2px;color:#73807c;font-size:10.5px;font-weight:500}
-.headerActions{display:flex;align-items:center;gap:9px}
-.status{display:flex;align-items:center;gap:8px;color:#61716c;font-size:10.5px;font-weight:750;padding:7px 10px;border:1px solid #e3ebe7;border-radius:999px;background:#fbfdfc}
-.status i{width:8px;height:8px;border-radius:50%;background:#20b77a;box-shadow:0 0 0 4px rgba(32,183,122,.09)}
-.headerActions a{border:1px solid #dfe7e3;border-radius:10px;padding:8px 11px;background:#fff;color:#25312d;font-size:10.5px;font-weight:800;text-decoration:none;box-shadow:0 2px 6px rgba(31,53,47,.035)}
+.header{height:54px;flex:0 0 54px;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 16px;border-bottom:1px solid #e1e8e5;background:rgba(255,255,255,.96);box-shadow:0 2px 12px rgba(31,53,47,.04);backdrop-filter:blur(14px);position:relative;z-index:3}
+.brand{display:flex;align-items:center;gap:10px;min-width:0}
+.mark{width:34px;height:34px;display:grid;place-items:center;border-radius:11px;background:linear-gradient(145deg,#13ad84 0%,#0c956f 100%);color:#fff;font-size:9px;font-weight:950;letter-spacing:.04em;box-shadow:0 5px 13px rgba(16,163,127,.18),inset 0 1px 0 rgba(255,255,255,.22)}
+.brand strong{display:block;font-size:15.5px;letter-spacing:-.02em;color:#17211f}
+.brand span{display:block;margin-top:1px;color:#73807c;font-size:9px;font-weight:500}
+.headerActions{display:flex;align-items:center;gap:8px}
+.status{display:flex;align-items:center;gap:6px;color:#61716c;font-size:9.5px;font-weight:750;padding:5px 8px;border:1px solid #e3ebe7;border-radius:999px;background:#fbfdfc}
+.status i{width:7px;height:7px;border-radius:50%;background:#20b77a;box-shadow:0 0 0 3px rgba(32,183,122,.08)}
+.headerActions a{border:1px solid #dfe7e3;border-radius:9px;padding:6px 9px;background:#fff;color:#25312d;font-size:9.5px;font-weight:800;text-decoration:none;box-shadow:0 2px 6px rgba(31,53,47,.035)}
 .host{flex:1;min-height:0;overflow:hidden}
-.host>section{height:100%!important;min-height:0!important;padding:12px 14px 14px!important;gap:10px!important;box-sizing:border-box}
+.host>section{height:100%!important;min-height:0!important;padding:8px 10px 10px!important;gap:7px!important;box-sizing:border-box}
 .host>section>div:first-child{display:none!important}
+.host>section>div:nth-child(2){gap:7px!important}
+.host>section>div:nth-child(2)>article{min-height:40px!important;padding:7px 11px!important;border-radius:12px!important;gap:0!important;display:grid!important;grid-template-columns:minmax(0,1fr) auto!important;align-items:center!important}
+.host>section>div:nth-child(2)>article>span{font-size:9px!important;align-self:center}
+.host>section>div:nth-child(2)>article>strong{font-size:18px!important;line-height:1!important;grid-column:2;grid-row:1;align-self:center}
+.host>section>div:nth-child(2)>article>small{display:none!important}
+.host :global([class*="testNotice"]){display:none!important}
 .host>section>div:has(>aside[class*="inboxPanel"]){height:100%!important;max-height:none!important;min-height:0!important;grid-template-columns:minmax(255px,285px) minmax(190px,220px) minmax(520px,1fr) minmax(300px,330px)!important;gap:10px!important}
 .host :global([class*="panel"]){border-radius:16px!important}
+.host :global([class*="inboxHeader"]),.host :global([class*="contextHeader"]){min-height:50px!important;padding-top:7px!important;padding-bottom:7px!important}
+.host :global([class*="chatHeader"]){min-height:50px!important;padding:7px 12px!important}
+.host :global([class*="assignmentHint"]){min-height:28px!important;padding-top:4px!important;padding-bottom:4px!important}
 .host :global([class*="inboxHeader"]) strong,.host :global([class*="contextHeader"]) strong{font-size:15px!important}
 .host :global([class*="inboxHeader"]) span,.host :global([class*="contextHeader"]) span{font-size:10.5px!important}
 .host :global([class*="conversationRow"]){min-height:88px!important;padding-top:11px!important;padding-bottom:11px!important}
@@ -21,12 +30,12 @@
 .host :global([class*="rowMeta"]) em{font-size:8.5px!important}
 .host :global([class*="chatIdentity"]) h2{font-size:15.5px!important}
 .host :global([class*="chatIdentity"]) p,.host :global([class*="ownerLabel"]){font-size:10.5px!important}
-.host :global([class*="messages"]){padding:22px!important}
+.host :global([class*="messages"]){padding:18px!important}
 .host :global([class*="message_"]) p,.host :global([class~="message"]) p{font-size:13.5px!important;line-height:1.5!important}
 .host :global([class*="messageAuthor"]){font-size:10px!important}
 .host :global([class*="messageFooter"]){font-size:9px!important}
 .host :global([class*="composer_"]) textarea,.host :global([class~="composer"]) textarea{font-size:13px!important}
 .host :global([class*="context_"]) section,.host :global([class~="context"]) section{font-size:10.5px!important}
-@media(max-width:1450px){.host>section>div:has(>aside[class*="inboxPanel"]){grid-template-columns:minmax(230px,255px) minmax(175px,195px) minmax(430px,1fr) minmax(275px,300px)!important}.host>section{padding:10px 11px 12px!important}}
+@media(max-width:1450px){.host>section>div:has(>aside[class*="inboxPanel"]){grid-template-columns:minmax(230px,255px) minmax(175px,195px) minmax(430px,1fr) minmax(275px,300px)!important}.host>section{padding:7px 9px 9px!important}}
 @media(max-width:1180px){.host>section>div:has(>aside[class*="inboxPanel"]){grid-template-columns:minmax(230px,260px) minmax(0,1fr) minmax(260px,290px)!important}.shell{overflow:auto}.host{overflow:visible}}
 @media(max-width:860px){.host>section>div:has(>aside[class*="inboxPanel"]){grid-template-columns:1fr!important;height:auto!important}.shell{overflow:auto}.host{overflow:visible}}
