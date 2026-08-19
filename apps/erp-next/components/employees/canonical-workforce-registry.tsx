@@ -9,6 +9,7 @@ import {
   staffDisplayName,
   weekdayLabel,
   type CanonicalOperationsState,
+  type CanonicalVan,
 } from '../../lib/canonical-operations';
 import styles from './browser-workforce-registry.module.css';
 
@@ -57,8 +58,8 @@ export function CanonicalWorkforceRegistry() {
   }, [state, today]);
 
   const canonicalVans = useMemo(() => {
-    if (!state) return [];
-    const byId = new Map<string, typeof state.vans[number]>();
+    if (!state) return [] as CanonicalVan[];
+    const byId = new Map<string, CanonicalVan>();
     for (const van of state.vans) {
       const id = canonicalVanId(van.id, state.vans);
       const current = byId.get(id);
