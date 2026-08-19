@@ -82,6 +82,14 @@ test("new outbound-only conversations remain human-owned", () => {
   assert.equal(state.aiDisposition, "human_active");
 });
 
+test("message direction follows the Wacli FromMe message contract", () => {
+  const source = fs.readFileSync(path.join(__dirname, "whatsappWacliGateway.js"), "utf8");
+  assert.match(source, /const inbound = payload\.FromMe === false;/);
+  assert.doesNotMatch(source, /const inbound = payload\.IsFromMe/);
+  assert.match(source, /direction: inbound \? "inbound" : "outbound"/);
+  assert.match(source, /role: inbound \? "customer" : "operator"/);
+});
+
 test("gateway contains no language keyword router or operator auto-assignment", () => {
   const source = fs.readFileSync(path.join(__dirname, "whatsappWacliGateway.js"), "utf8");
   assert.doesNotMatch(source, /function\s+inferQueue\b/);
