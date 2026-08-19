@@ -9,6 +9,7 @@ import {
   staffDisplayName,
   weekdayLabel,
   type CanonicalOperationsState,
+  type CanonicalVan,
 } from '../lib/canonical-operations';
 
 function arubaDateKey() {
@@ -47,15 +48,16 @@ export function CanonicalTechniciansPanel() {
   const { state, error, loading, refresh } = useCanonicalOperations();
   const today = arubaDateKey();
   const active = (state?.staffProfiles ?? []).filter((profile) => profile.active !== false);
-  const drivers = active.filter((profile) => profile.canDriveVan).length;
-  const helpers = active.filter((profile) => /ayudante|helper/i.test(profile.role || '') || !profile.canDriveVan).length;
-  const unavailable = active.filter((profile) => profile.availability && profile.availability !== 'Disponible' || Boolean(activeStaffAbsence(profile.id, today, state?.staffAbsences ?? []))).length;
+  const fieldStaff = active.filter((profile) => profile.canDriveVan || Boolean(profile.primaryVanId) || /t[eé]cnico|ayudante|supervisor/i.test(profile.role || ''));
+  const drivers = fieldStaff.filter((profile) => profile.canDriveVan).length;
+  const helpers = fieldStaff.filter((profile) => /ayudante|helper/i.test(profile.role || '') || (!profile.canDriveVan && Boolean(profile.primaryVanId))).length;
+  const unavailable = fieldStaff.filter((profile) => Boolean((profile.availability && profile.availability !== 'Disponible') || activeStaffAbsence(profile.id, today, state?.staffAbsences ?? []))).length;
 
   return <div className="fa-stack">
     <section className="page-head"><div><div className="eyebrow">Field Workforce · Canonical</div><h1>Technicians</h1><p>Live staffProfiles data used by Booking Authority for crew availability, daily assignments and scheduling decisions.</p></div><div className="page-actions"><button className="btn" type="button" onClick={() => void refresh()} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh Live Data'}</button></div></section>
     {error ? <section className="panel"><strong>Unable to load canonical workforce</strong><p>{error}</p></section> : null}
-    <section className="fa-metrics"><article><span>Active Field Staff</span><strong>{active.length}</strong><small className="fa-good">Firestore staffProfiles</small></article><article><span>Authorized Drivers</span><strong>{drivers}</strong><small>canDriveVan</small></article><article><span>Helpers / Support</span><strong>{helpers}</strong><small>crew support profiles</small></article><article><span>Unavailable Today</span><strong>{unavailable}</strong><small>{today}</small></article></section>
-    <section className="panel fa-table-panel"><header className="panel-head"><div><h2>Canonical Technician & Helper Roster</h2><span>No static preview performance data</span></div><span>LIVE</span></header><div className="fa-table fa-tech-table"><div className="fa-row fa-head"><span>Employee / Role</span><span>Primary Van</span><span>Skills</span><span>Availability</span><span>Driver</span><span>Source</span></div>{active.map((profile) => {
+    <section className="fa-metrics"><article><span>Active Field Staff</span><strong>{fieldStaff.length}</strong><small className="fa-good">Firestore staffProfiles</small></article><article><span>Authorized Drivers</span><strong>{drivers}</strong><small>canDriveVan</small></article><article><span>Helpers / Support</span><strong>{helpers}</strong><small>crew support profiles</small></article><article><span>Unavailable Today</span><strong>{unavailable}</strong><small>{today}</small></article></section>
+    <section className="panel fa-table-panel"><header className="panel-head"><div><h2>Canonical Technician & Helper Roster</h2><span>No static preview performance data</span></div><span>LIVE</span></header><div className="fa-table fa-tech-table"><div className="fa-row fa-head"><span>Employee / Role</span><span>Primary Van</span><span>Skills</span><span>Availability</span><span>Driver</span><span>Source</span></div>{fieldStaff.map((profile) => {
       const absence = activeStaffAbsence(profile.id, today, state?.staffAbsences ?? []);
       return <div className="fa-row" key={profile.id}><div><strong>{staffDisplayName(profile)}</strong><small>{profile.role || 'Role not configured'}</small></div><div><strong>{profile.primaryVanId ? canonicalVanId(profile.primaryVanId, state?.vans ?? []) : 'UNASSIGNED'}</strong><small>{profile.id}</small></div><div className="fa-tags">{(profile.skills ?? []).length ? (profile.skills ?? []).map((skill) => <b key={`${profile.id}-${skill}`}>{skill}</b>) : <span>No skills recorded</span>}</div><div><strong>{absence?.reason || profile.availability || 'Disponible'}</strong><small>{absence ? `${absence.fromDate || ''} → ${absence.toDate || ''}` : 'Current profile state'}</small></div><strong>{profile.canDriveVan ? 'Yes' : 'No'}</strong><span>staffProfiles</span></div>;
     })}</div></section>
@@ -67,8 +69,8 @@ export function CanonicalVansPanel() {
   const { state, error, loading, refresh } = useCanonicalOperations();
   const today = arubaDateKey();
   const canonicalVans = useMemo(() => {
-    if (!state) return [];
-    const byId = new Map<string, typeof state.vans[number]>();
+    if (!state) return [] as CanonicalVan[];
+    const byId = new Map<string, CanonicalVan>();
     for (const van of state.vans) {
       const id = canonicalVanId(van.id, state.vans);
       const current = byId.get(id);
