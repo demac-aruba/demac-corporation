@@ -1,0 +1,163 @@
+name: Workforce Admin Functions
+
+on:
+  pull_request:
+    paths:
+      - 'functions/workforceLifecycle.js'
+      - 'functions/workforceLifecycle.test.js'
+      - 'functions/userManagement.js'
+      - 'functions/package.json'
+      - '.github/workflows/workforce-admin-deploy.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'functions/workforceLifecycle.js'
+      - 'functions/workforceLifecycle.test.js'
+      - 'functions/userManagement.js'
+      - 'functions/package.json'
+      - '.github/workflows/workforce-admin-deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workforce-admin-production
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Validate workforce admin boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check functions/workforceLifecycle.js
+          node --check functions/userManagement.js
+          node --test functions/workforceLifecycle.test.js
+          node - <<'NODE'
+          const lifecycle = require('./functions/workforceLifecycle');
+          const users = require('./functions/userManagement');
+          if (typeof lifecycle.adminWorkforceLifecycle !== 'function') {
+            throw new Error('adminWorkforceLifecycle export missing.');
+          }
+          if (typeof users.adminManageUser !== 'function') {
+            throw new Error('adminManageUser export missing.');
+          }
+          NODE
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Authenticate Firebase deployment service account
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Prepare isolated workforce function source
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/workforce-functions"
+          cp -R functions "$stage"
+          cat > "$stage/index.js" <<'NODE'
+          Object.assign(exports, require('./userManagement'));
+          Object.assign(exports, require('./workforceLifecycle'));
+          NODE
+          echo "WORKFORCE_FUNCTION_SOURCE=$stage" >> "$GITHUB_ENV"
+
+      - name: Resolve DEMAC runtime identity
+        id: config
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_FUNCTION='generateProfessionalCustomerReport'
+          if ! gcloud functions describe "$SOURCE_FUNCTION" --project=demac-corporation --gen2 --region=us-central1 --format='value(name)' >/dev/null 2>&1; then
+            SOURCE_FUNCTION='wacliWebhook'
+          fi
+          RUN_SA="$(gcloud functions describe "$SOURCE_FUNCTION" --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.serviceAccountEmail)')"
+          if [ -z "$RUN_SA" ]; then
+            echo '::error::Could not resolve the DEMAC Cloud Functions runtime service account.'
+            exit 1
+          fi
+          echo "run_service_account=${RUN_SA}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy workforce admin functions
+        shell: bash
+        env:
+          RUN_SERVICE_ACCOUNT: ${{ steps.config.outputs.run_service_account }}
+        run: |
+          set -euo pipefail
+          for name in adminManageUser adminWorkforceLifecycle; do
+            gcloud functions deploy "$name" \
+              --project=demac-corporation \
+              --gen2 \
+              --region=us-central1 \
+              --runtime=nodejs22 \
+              --source="$WORKFORCE_FUNCTION_SOURCE" \
+              --entry-point="$name" \
+              --memory=256Mi \
+              --timeout=60s \
+              --run-service-account="$RUN_SERVICE_ACCOUNT" \
+              --trigger-http \
+              --allow-unauthenticated \
+              --quiet
+          done
+
+      - name: Verify deployed workforce functions
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in adminManageUser adminWorkforceLifecycle; do
+            endpoint="https://us-central1-demac-corporation.cloudfunctions.net/${name}"
+            state="$(gcloud functions describe "$name" --project=demac-corporation --gen2 --region=us-central1 --format='value(state)')"
+            if [ "$state" != 'ACTIVE' ]; then
+              echo "::error::${name} state is ${state:-unknown}."
+              exit 1
+            fi
+
+            cors_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+              --request OPTIONS "$endpoint" \
+              --header 'Origin: https://demac-corporation.vercel.app' \
+              --header 'Access-Control-Request-Method: POST' \
+              --header 'Access-Control-Request-Headers: authorization,content-type')"
+            if [ "$cors_status" != '204' ]; then
+              echo "::error::${name} CORS preflight returned HTTP ${cors_status}; expected 204."
+              exit 1
+            fi
+
+            body="$(mktemp)"
+            status="$(curl --silent --show-error --output "$body" --write-out '%{http_code}' \
+              --request POST "$endpoint" \
+              --header 'Content-Type: application/json' \
+              --data '{"action":"list","payload":{}}')"
+            if [ "$status" != '401' ]; then
+              echo "::error::${name} returned HTTP ${status}; expected 401 without Firebase authentication."
+              cat "$body"
+              rm -f "$body"
+              exit 1
+            fi
+            rm -f "$body"
+          done
