@@ -20,7 +20,7 @@ type CanonicalWhatsAppMediaMessage = {
 
 type CanonicalMediaFields = Pick<LiveConversationMessage, 'mediaUrl' | 'mediaType' | 'mediaCaption' | 'mediaFileName' | 'mediaMimeType' | 'mediaSize'>;
 
-const voiceWaveform = [10, 18, 13, 24, 17, 28, 12, 21, 30, 16, 25, 11, 19, 27, 14, 23, 31, 17, 26, 12, 20, 29, 15, 24, 18, 32, 13, 21, 27, 16, 25, 12, 19, 30, 15, 22];
+const voiceWaveform = [6, 11, 8, 15, 10, 18, 7, 13, 17, 9, 15, 6, 12, 16, 8, 14, 18, 10, 16, 7, 12, 17, 9, 15, 10, 18, 8, 13, 16, 9];
 
 function firstString(...values: unknown[]) {
   for (const value of values) {
@@ -97,6 +97,11 @@ function generatedMediaPlaceholder(text: string) {
   return /^\[(audio|voice note|photo|image|video|gif|sticker|document|media)\]$/i.test(text.trim());
 }
 
+function visibleMediaCopy(value?: string | null) {
+  const text = String(value || '').trim();
+  return text && !generatedMediaPlaceholder(text) ? text : '';
+}
+
 function mediaTime(seconds: number) {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
   const whole = Math.floor(seconds);
@@ -112,6 +117,7 @@ function WhatsAppAudioPlayer({ src }: { src: string }) {
 
   const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0;
   const activeBars = Math.round(progress * voiceWaveform.length);
+  const displayTime = currentTime > 0 ? currentTime : duration;
 
   const updateDuration = () => {
     const audio = audioRef.current;
@@ -156,6 +162,7 @@ function WhatsAppAudioPlayer({ src }: { src: string }) {
     <div className={mediaStyles.voiceTimeline}>
       <div className={mediaStyles.voiceWaveform} aria-hidden="true">
         {voiceWaveform.map((height, index) => <i key={`${height}-${index}`} className={index < activeBars ? mediaStyles.voiceWaveActive : ''} style={{ height }} />)}
+        <span className={mediaStyles.voiceProgressDot} style={{ left: `${progress * 100}%` }} />
       </div>
       <input
         className={mediaStyles.voiceSeek}
@@ -167,7 +174,7 @@ function WhatsAppAudioPlayer({ src }: { src: string }) {
         onChange={(event) => seek(Number(event.target.value))}
         aria-label="Voice note playback position"
       />
-      <div className={mediaStyles.voiceTimes}><span>{mediaTime(currentTime)}</span><span>{mediaTime(duration)}</span></div>
+      <span className={mediaStyles.voiceTime}>{mediaTime(displayTime)}</span>
     </div>
   </div>;
 }
@@ -197,9 +204,9 @@ function MediaPending({ type }: { type?: string | null }) {
 export function WhatsAppMessageContent({ message }: { message: LiveConversationMessage }) {
   const resolvedMessage = useCanonicalMedia(message);
   const mediaType = String(resolvedMessage.mediaType || '').toLowerCase();
-  const caption = String(resolvedMessage.mediaCaption || '').trim();
-  const text = String(resolvedMessage.text || '').trim();
-  const visibleText = text && text !== caption && !generatedMediaPlaceholder(text) ? text : '';
+  const caption = visibleMediaCopy(resolvedMessage.mediaCaption);
+  const text = visibleMediaCopy(resolvedMessage.text);
+  const visibleText = text && text !== caption ? text : '';
 
   if (resolvedMessage.reactionEmoji && !mediaType) {
     return <div data-reaction="true"><strong>{resolvedMessage.reactionEmoji}</strong><span>Reaction</span></div>;
