@@ -69,6 +69,11 @@ export type OfficeCreateAppointmentResult = {
 
 type ApiError = { error?: { code?: string; message?: string; details?: Record<string, unknown> } };
 
+type PresetResponse = { success: true; version: number; presets: OfficeBookingPreset[] };
+
+const PRESET_CACHE_MS = 5 * 60_000;
+let presetCache: { expiresAt: number; promise: Promise<PresetResponse> } | null = null;
+
 function endpoint() {
   if (!firebaseClientConfig.projectId) throw new Error('Firebase project is not configured for ERP Next.');
   return `https://us-central1-${firebaseClientConfig.projectId}.cloudfunctions.net/officeBookingAuthority`;
@@ -114,12 +119,19 @@ export function createOfficeLifecycleRequestId(prefix = 'schedule') {
   return `${prefix}-${Date.now()}-${random}`;
 }
 
-export async function listOfficeBookingPresets() {
-  return callOfficeBookingAuthority<{ success: true; version: number; presets: OfficeBookingPreset[] }>(
-    'list_presets',
-    {},
-    8_000,
-  );
+export function invalidateOfficeBookingPresetCache() {
+  presetCache = null;
+}
+
+export function listOfficeBookingPresets(force = false) {
+  const now = Date.now();
+  if (!force && presetCache && presetCache.expiresAt > now) return presetCache.promise;
+  const promise = callOfficeBookingAuthority<PresetResponse>('list_presets', {}, 8_000);
+  presetCache = { expiresAt: now + PRESET_CACHE_MS, promise };
+  promise.catch(() => {
+    if (presetCache?.promise === promise) presetCache = null;
+  });
+  return promise;
 }
 
 export async function checkOfficeCreateAvailability(input: {
