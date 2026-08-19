@@ -1,4 +1,8 @@
-import { saveFirestoreDocument } from './firebase/firestore-rest';
+import {
+  createOfficeCustomerWithProperty,
+  createOfficeLifecycleRequestId,
+  createOfficeProperty,
+} from './office-booking-authority';
 import {
   invalidateLiveSchedulingReferenceCache,
   loadLiveSchedulingReferenceData,
@@ -31,11 +35,6 @@ export type NewBookingProperty = {
 
 function text(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
-}
-
-function compactId(prefix: string) {
-  const random = Math.random().toString(36).slice(2, 9);
-  return `${prefix}-${Date.now().toString(36)}-${random}`;
 }
 
 function comparable(value: unknown) {
@@ -92,51 +91,31 @@ export async function createBookingCustomerWithProperty(args: {
   if (!zone) throw new Error('The property area / zone is required.');
   assertCustomerDoesNotDuplicate(args.customer, args.references);
 
-  const now = new Date().toISOString();
-  const clientId = compactId('client');
-  const propertyId = compactId('property');
-  const customer: BookingCustomer = {
-    id: clientId,
-    name,
-    company: text(args.customer.company) || undefined,
-    phone,
-    phoneCountry: 'AW',
-    whatsapp,
-    whatsappCountry: 'AW',
-    email: text(args.customer.email) || undefined,
-    preferredLanguage: text(args.customer.preferredLanguage) || 'Papiamento',
-    address,
-    zone,
-    active: true,
-    createdAt: now,
-    updatedAt: now,
-  };
-  const property: BookingProperty = {
-    id: propertyId,
-    clientId,
-    name: text(args.property.name) || 'Primary Property',
-    type: text(args.property.type) || 'Casa',
-    address,
-    addressRaw: address,
-    addressNormalized: address,
-    neighborhood: text(args.property.neighborhood) || undefined,
-    zone,
-    operationalZone: zone,
-    notes: text(args.property.notes) || undefined,
-    active: true,
-    createdAt: now,
-    updatedAt: now,
-  };
+  const result = await createOfficeCustomerWithProperty({
+    requestId: createOfficeLifecycleRequestId('schedule-customer'),
+    customer: {
+      name,
+      company: text(args.customer.company),
+      phone,
+      whatsapp,
+      email: text(args.customer.email),
+      preferredLanguage: text(args.customer.preferredLanguage) || 'Papiamento',
+    },
+    property: {
+      name: text(args.property.name) || 'Primary Property',
+      type: text(args.property.type) || 'Casa',
+      address,
+      zone,
+      neighborhood: text(args.property.neighborhood),
+      notes: text(args.property.notes),
+    },
+  });
 
-  await saveFirestoreDocument('clients', customer);
-  try {
-    await saveFirestoreDocument('properties', property);
-  } catch (error) {
-    invalidateLiveSchedulingReferenceCache();
-    throw new Error(`${error instanceof Error ? error.message : 'The property could not be saved.'} The customer was created, but the property was not. Select the new customer and add its property before booking.`);
-  }
   invalidateLiveSchedulingReferenceCache();
-  return { customer, property };
+  return {
+    customer: result.customer as unknown as BookingCustomer,
+    property: result.property as unknown as BookingProperty,
+  };
 }
 
 export async function createBookingProperty(clientId: string, input: NewBookingProperty) {
@@ -147,24 +126,19 @@ export async function createBookingProperty(clientId: string, input: NewBookingP
   if (!address) throw new Error('Property address is required.');
   if (!zone) throw new Error('Property area / zone is required.');
 
-  const now = new Date().toISOString();
-  const property: BookingProperty = {
-    id: compactId('property'),
-    clientId: ownerId,
-    name: text(input.name) || 'Property',
-    type: text(input.type) || 'Casa',
-    address,
-    addressRaw: address,
-    addressNormalized: address,
-    neighborhood: text(input.neighborhood) || undefined,
-    zone,
-    operationalZone: zone,
-    notes: text(input.notes) || undefined,
-    active: true,
-    createdAt: now,
-    updatedAt: now,
-  };
-  await saveFirestoreDocument('properties', property);
+  const result = await createOfficeProperty({
+    requestId: createOfficeLifecycleRequestId('schedule-property'),
+    customerId: ownerId,
+    property: {
+      name: text(input.name) || 'Property',
+      type: text(input.type) || 'Casa',
+      address,
+      zone,
+      neighborhood: text(input.neighborhood),
+      notes: text(input.notes),
+    },
+  });
+
   invalidateLiveSchedulingReferenceCache();
-  return property;
+  return result.property as unknown as BookingProperty;
 }
