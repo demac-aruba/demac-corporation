@@ -13,13 +13,46 @@ import {
 } from './office-booking-authority';
 
 type WorkOrder = Parameters<typeof projectLiveSchedulingAppointments>[0][number];
-type Client = Parameters<typeof projectLiveSchedulingAppointments>[1][number];
-type Property = Parameters<typeof projectLiveSchedulingAppointments>[2][number];
 type Van = NonNullable<Parameters<typeof projectLiveSchedulingAppointments>[3]>[number];
 
-type ReferenceData = {
-  clients: Client[];
-  properties: Property[];
+export type LiveSchedulingClient = {
+  id: string;
+  name?: string;
+  company?: string;
+  phone?: string;
+  phoneCountry?: string;
+  whatsapp?: string;
+  whatsappCountry?: string;
+  email?: string;
+  preferredLanguage?: string;
+  address?: string;
+  zone?: string;
+  active?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type LiveSchedulingProperty = {
+  id: string;
+  clientId?: string;
+  name?: string;
+  type?: string;
+  address?: string;
+  addressRaw?: string;
+  addressNormalized?: string;
+  neighborhood?: string;
+  zone?: string;
+  operationalZone?: string;
+  notes?: string;
+  accessInstructions?: string;
+  active?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type LiveSchedulingReferenceData = {
+  clients: LiveSchedulingClient[];
+  properties: LiveSchedulingProperty[];
   vans: Van[];
 };
 
@@ -35,19 +68,23 @@ export type LiveSchedulingRange = {
 
 const REFERENCE_CACHE_MS = 5 * 60_000;
 const ATTRIBUTION_CACHE_MS = 5 * 60_000;
-let referenceCache: { expiresAt: number; promise: Promise<ReferenceData> } | null = null;
+let referenceCache: { expiresAt: number; promise: Promise<LiveSchedulingReferenceData> } | null = null;
 const attributionCache = new Map<string, CachedAttribution>();
 
 function text(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function referenceData() {
+export function invalidateLiveSchedulingReferenceCache() {
+  referenceCache = null;
+}
+
+export function loadLiveSchedulingReferenceData() {
   const now = Date.now();
   if (referenceCache && referenceCache.expiresAt > now) return referenceCache.promise;
   const promise = Promise.all([
-    listFirestoreCollection<Client>('clients', 1000),
-    listFirestoreCollection<Property>('properties', 1000),
+    listFirestoreCollection<LiveSchedulingClient>('clients', 1000),
+    listFirestoreCollection<LiveSchedulingProperty>('properties', 1000),
     listFirestoreCollection<Van>('vans', 250),
   ]).then(([clients, properties, vans]) => ({ clients, properties, vans }));
   referenceCache = { expiresAt: now + REFERENCE_CACHE_MS, promise };
@@ -79,7 +116,7 @@ async function workOrdersForRange(range?: LiveSchedulingRange) {
 export async function loadLiveSchedulingAppointmentsFast(range?: LiveSchedulingRange) {
   const [workOrders, references] = await Promise.all([
     workOrdersForRange(range),
-    referenceData(),
+    loadLiveSchedulingReferenceData(),
   ]);
   return projectLiveSchedulingAppointments(
     workOrders,

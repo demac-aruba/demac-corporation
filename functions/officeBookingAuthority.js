@@ -1,3 +1,4 @@
+const crypto = require("node:crypto");
 const { onRequest } = require("firebase-functions/v2/https");
 const { getAuth } = require("firebase-admin/auth");
 const { getFirestore } = require("firebase-admin/firestore");
@@ -13,7 +14,7 @@ const { createBookingAppointmentLifecycle } = require("./bookingAuthorityAppoint
 const { createOperationalMoveAuthority } = require("./bookingOperationalMove");
 const { createSchedulingProvider } = require("./bookingAuthoritySchedulingProvider");
 
-const OFFICE_BOOKING_API_VERSION = 6;
+const OFFICE_BOOKING_API_VERSION = 7;
 const OFFICE_BOOKING_ROLES = Object.freeze([
   "admin",
   "office",
@@ -26,6 +27,8 @@ const OFFICE_BOOKING_ROLES = Object.freeze([
 const OFFICE_BOOKING_ACTIONS = Object.freeze({
   LIST_PRESETS: "list_presets",
   LIST_APPOINTMENT_ATTRIBUTION: "list_appointment_attribution",
+  CREATE_CUSTOMER_PROPERTY: "create_customer_property",
+  CREATE_PROPERTY: "create_property",
   CHECK_AVAILABILITY: "check_availability",
   CREATE_APPOINTMENT: "create_appointment",
   GET_APPOINTMENT: "get_appointment",
@@ -111,6 +114,56 @@ function compactPreset(item = {}) {
 function normalizedAppointmentIds(value) {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.map((item) => cleanText(item, 180)).filter(Boolean))].slice(0, 500);
+}
+
+function masterDataId(prefix) {
+  return `${prefix}-${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`;
+}
+
+function normalizeOfficePhone(value) {
+  const raw = cleanText(value, 80);
+  if (!raw) return "";
+  const plus = raw.startsWith("+");
+  const digits = raw.replace(/\D/g, "");
+  if (!digits) return "";
+  if (plus) return `+${digits}`;
+  if (digits.length === 7) return `+297${digits}`;
+  return `+${digits}`;
+}
+
+function requiredMasterText(value, field, label, limit = 500) {
+  const result = cleanText(value, limit);
+  if (!result) {
+    throw new BookingAuthorityError(
+      BOOKING_ERROR_CODES.INVALID_REQUEST,
+      `${label} is required.`,
+      { field },
+    );
+  }
+  return result;
+}
+
+function buildOfficeProperty({ id, clientId, input, identity, now }) {
+  const address = requiredMasterText(input.address, "property.address", "Property address");
+  const zone = requiredMasterText(input.zone, "property.zone", "Property area / zone", 120);
+  return {
+    id,
+    clientId,
+    name: cleanText(input.name, 180) || "Primary Property",
+    type: cleanText(input.type, 80) || "Casa",
+    address,
+    addressRaw: address,
+    addressNormalized: address,
+    neighborhood: cleanText(input.neighborhood, 160),
+    zone,
+    operationalZone: zone,
+    notes: cleanText(input.notes, 1_500),
+    active: true,
+    createdAt: now,
+    updatedAt: now,
+    createdById: cleanText(identity.uid, 160),
+    createdByName: cleanText(identity.name || identity.email, 180),
+  };
 }
 
 function apiError(error) {
@@ -238,10 +291,83 @@ function createOfficeBookingApi({
     return { success: true, version: OFFICE_BOOKING_API_VERSION, attribution };
   }
 
+  async function createCustomerProperty(data = {}, identity = {}) {
+    if (typeof db.runTransaction !== "function") throw new Error("Firestore transactions are required for CRM master-data creation.");
+    officeRequestId(data.requestId);
+    const input = data.customer || {};
+    const propertyInput = data.property || {};
+    const name = requiredMasterText(input.name, "customer.name", "Customer name", 180);
+    const phone = normalizeOfficePhone(input.phone || input.whatsapp);
+    if (!phone) {
+      throw new BookingAuthorityError(
+        BOOKING_ERROR_CODES.INVALID_REQUEST,
+        "Customer phone / WhatsApp is required.",
+        { field: "customer.phone" },
+      );
+    }
+    const whatsapp = normalizeOfficePhone(input.whatsapp || input.phone) || phone;
+    const now = new Date().toISOString();
+    const clientId = masterDataId("client");
+    const propertyId = masterDataId("property");
+    const property = buildOfficeProperty({ id: propertyId, clientId, input: propertyInput, identity, now });
+    const customer = {
+      id: clientId,
+      name,
+      company: cleanText(input.company, 180),
+      phone,
+      phoneCountry: "AW",
+      whatsapp,
+      whatsappCountry: "AW",
+      email: cleanText(input.email, 180),
+      preferredLanguage: cleanText(input.preferredLanguage, 80) || "Papiamento",
+      address: property.address,
+      zone: property.zone,
+      balance: 0,
+      equipmentCount: 0,
+      active: true,
+      createdAt: now,
+      updatedAt: now,
+      createdById: cleanText(identity.uid, 160),
+      createdByName: cleanText(identity.name || identity.email, 180),
+    };
+    const clientRef = db.collection("clients").doc(clientId);
+    const propertyRef = db.collection("properties").doc(propertyId);
+    await db.runTransaction(async (transaction) => {
+      transaction.set(clientRef, customer);
+      transaction.set(propertyRef, property);
+    });
+    return { success: true, version: OFFICE_BOOKING_API_VERSION, customer, property };
+  }
+
+  async function createProperty(data = {}, identity = {}) {
+    if (typeof db.runTransaction !== "function") throw new Error("Firestore transactions are required for CRM master-data creation.");
+    officeRequestId(data.requestId);
+    const clientId = requiredMasterText(data.customerId, "customerId", "Customer id", 180);
+    const now = new Date().toISOString();
+    const propertyId = masterDataId("property");
+    const property = buildOfficeProperty({ id: propertyId, clientId, input: data.property || {}, identity, now });
+    const clientRef = db.collection("clients").doc(clientId);
+    const propertyRef = db.collection("properties").doc(propertyId);
+    await db.runTransaction(async (transaction) => {
+      const customerSnapshot = await transaction.get(clientRef);
+      if (!customerSnapshot.exists || customerSnapshot.data()?.active === false) {
+        throw new BookingAuthorityError(
+          BOOKING_ERROR_CODES.CUSTOMER_NOT_FOUND,
+          "The selected customer no longer exists or is inactive.",
+          { customerId: clientId },
+        );
+      }
+      transaction.set(propertyRef, property);
+    });
+    return { success: true, version: OFFICE_BOOKING_API_VERSION, property };
+  }
+
   async function execute({ action, data = {}, identity }) {
     const actor = officeActor(identity);
     if (action === OFFICE_BOOKING_ACTIONS.LIST_PRESETS) return listPresets();
     if (action === OFFICE_BOOKING_ACTIONS.LIST_APPOINTMENT_ATTRIBUTION) return listAppointmentAttribution(data);
+    if (action === OFFICE_BOOKING_ACTIONS.CREATE_CUSTOMER_PROPERTY) return createCustomerProperty(data, identity);
+    if (action === OFFICE_BOOKING_ACTIONS.CREATE_PROPERTY) return createProperty(data, identity);
     if (action === OFFICE_BOOKING_ACTIONS.CHECK_AVAILABILITY) {
       const requestId = officeRequestId(data.requestId);
       const request = bookingRequestFromOffice(data);
@@ -348,7 +474,16 @@ function createOfficeBookingApi({
     }
   }
 
-  return { version: OFFICE_BOOKING_API_VERSION, authenticate, execute, handle, listPresets, listAppointmentAttribution };
+  return {
+    version: OFFICE_BOOKING_API_VERSION,
+    authenticate,
+    execute,
+    handle,
+    listPresets,
+    listAppointmentAttribution,
+    createCustomerProperty,
+    createProperty,
+  };
 }
 
 let defaultApi;
@@ -382,7 +517,9 @@ module.exports.OFFICE_BOOKING_API_VERSION = OFFICE_BOOKING_API_VERSION;
 module.exports.OFFICE_BOOKING_ACTIONS = OFFICE_BOOKING_ACTIONS;
 module.exports.OFFICE_BOOKING_ROLES = OFFICE_BOOKING_ROLES;
 module.exports.bookingRequestFromOffice = bookingRequestFromOffice;
+module.exports.buildOfficeProperty = buildOfficeProperty;
 module.exports.createOfficeBookingApi = createOfficeBookingApi;
 module.exports.lifecycleChangeKind = lifecycleChangeKind;
+module.exports.normalizeOfficePhone = normalizeOfficePhone;
 module.exports.officeRequestId = officeRequestId;
 module.exports.requireOfficeRole = requireOfficeRole;
