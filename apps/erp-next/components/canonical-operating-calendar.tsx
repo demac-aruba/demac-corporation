@@ -6,6 +6,7 @@ import {
   loadCanonicalOperationsState,
   weekdayLabel,
   type CanonicalOperationsState,
+  type CanonicalVanHalfDaySchedule,
 } from '../lib/canonical-operations';
 
 function arubaDateKey() {
@@ -41,7 +42,7 @@ export function CanonicalOperatingCalendar() {
 
   const halfDays = useMemo(() => {
     if (!state) return [];
-    const byVan = new Map<string, typeof state.vanHalfDaySchedules[number]>();
+    const byVan = new Map<string, CanonicalVanHalfDaySchedule>();
     for (const schedule of state.vanHalfDaySchedules) {
       const id = canonicalVanId(schedule.vanId, state.vans);
       if (!byVan.has(id)) byVan.set(id, schedule);
