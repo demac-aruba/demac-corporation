@@ -67,8 +67,9 @@ export type OfficeCreateAppointmentResult = {
   workOrderIds: string[];
 };
 
-type ApiError = { error?: { code?: string; message?: string; details?: Record<string, unknown> } };
+export type OfficeMasterDataRecord = Record<string, unknown> & { id: string };
 
+type ApiError = { error?: { code?: string; message?: string; details?: Record<string, unknown> } };
 type PresetResponse = { success: true; version: number; presets: OfficeBookingPreset[] };
 
 const PRESET_CACHE_MS = 5 * 60_000;
@@ -132,6 +133,31 @@ export function listOfficeBookingPresets(force = false) {
     if (presetCache?.promise === promise) presetCache = null;
   });
   return promise;
+}
+
+export function createOfficeCustomerWithProperty(input: {
+  requestId: string;
+  customer: Record<string, unknown>;
+  property: Record<string, unknown>;
+}) {
+  return callOfficeBookingAuthority<{
+    success: true;
+    version: number;
+    customer: OfficeMasterDataRecord;
+    property: OfficeMasterDataRecord;
+  }>('create_customer_property', input, 10_000);
+}
+
+export function createOfficeProperty(input: {
+  requestId: string;
+  customerId: string;
+  property: Record<string, unknown>;
+}) {
+  return callOfficeBookingAuthority<{
+    success: true;
+    version: number;
+    property: OfficeMasterDataRecord;
+  }>('create_property', input, 10_000);
 }
 
 export async function checkOfficeCreateAvailability(input: {
