@@ -352,11 +352,10 @@ exports.wacliWebhook = onRequest(
       } else {
         const chat = String(payload.Chat || "");
         const messageId = String(payload.ID || `${eventRef.id}-${Date.now()}`);
-        const inbound = payload.IsFromMe !== true;
+        const inbound = payload.FromMe === false;
         const chatName = String(payload.ChatName || payload.SenderName || "").trim();
         const resolvedPhone = digitsOnly(payload?.ResolvedPhone || payload?.Identity?.ResolvedPhone || "");
         const phone = resolvedPhone || phoneFromChat(chat);
-
         const media = normalizeMedia(payload);
 
         let profilePicture = null;
