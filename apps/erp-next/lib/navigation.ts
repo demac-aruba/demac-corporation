@@ -13,6 +13,7 @@ export type NavigationGroup = {
 };
 
 const allManagementRoles: UserRole[] = ['super_admin', 'operations', 'office_operator', 'finance', 'warehouse', 'sales', 'project_manager', 'auditor'];
+const schedulingRoles: UserRole[] = ['super_admin', 'operations', 'office_operator', 'project_manager'];
 
 export const navigationGroups: NavigationGroup[] = [
   {
@@ -20,8 +21,10 @@ export const navigationGroups: NavigationGroup[] = [
     items: [
       { label: 'Command Center', href: '/dashboard', short: 'CC', roles: allManagementRoles },
       { label: 'KPIs', href: '/kpis', short: 'KP', roles: allManagementRoles },
-      { label: 'Scheduling & Dispatch', href: '/scheduling', short: 'SD', roles: ['super_admin', 'operations', 'office_operator', 'project_manager'] },
-      { label: 'Work Orders', href: '/work-orders', short: 'WO', roles: ['super_admin', 'operations', 'office_operator', 'project_manager'] },
+      { label: 'Scheduling & Dispatch', href: '/scheduling', short: 'SD', roles: schedulingRoles },
+      { label: 'Daily Dispatch Control', href: '/scheduling/dispatch', short: 'DC', roles: schedulingRoles },
+      { label: 'Dispatch Readiness Board', href: '/scheduling/readiness', short: 'RB', roles: schedulingRoles },
+      { label: 'Work Orders', href: '/work-orders', short: 'WO', roles: schedulingRoles },
       { label: 'Field App', href: '/field', short: 'FA', roles: ['super_admin', 'technician'] },
       { label: 'Technicians', href: '/technicians', short: 'TE', roles: ['super_admin', 'operations', 'project_manager'] },
     ],
