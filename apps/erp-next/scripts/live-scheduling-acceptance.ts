@@ -1,5 +1,6 @@
 import {
   liveOperationalWindowAllows,
+  liveVanCrew,
   liveVanIsHalfDay,
   type LiveOperationalCapacityState,
 } from '../lib/live-operational-capacity';
@@ -65,16 +66,35 @@ requireCondition(Boolean(operationalDay), 'The live appointment date must resolv
 
 const baseCapacity: LiveOperationalCapacityState = {
   vans: new Map([
-    ['VAN-1', { id: 'VAN-1', active: true, status: '' }],
+    ['VAN-1', { id: 'VAN-1', active: true, status: '', responsibleStaffId: 'STAFF-TECH-1', regularHelperId: 'STAFF-HELPER-1' }],
     ['VAN-2', { id: 'VAN-2', active: true, status: '' }],
     ['VAN-3', { id: 'VAN-3', active: true, status: '' }],
     ['VAN-4', { id: 'VAN-4', active: true, status: '' }],
   ]),
+  staffProfiles: [
+    { id: 'STAFF-TECH-1', name: 'Miguel Technician', active: true },
+    { id: 'STAFF-HELPER-1', name: 'Rafael Helper', active: true },
+    { id: 'STAFF-TECH-OVERRIDE', name: 'Daily Technician', active: true },
+  ],
   dailyAssignments: [],
   halfDaySchedules: [],
   calendarClosures: [],
   closedWeekdays: [0],
 };
+
+const regularCrew = liveVanCrew(baseCapacity, 'VAN-1', canonical.dateKey);
+requireCondition(regularCrew.label === 'Miguel Technician · Rafael Helper', 'Live van headers must show the regular technician first and helper second.');
+const dailyCrewCapacity: LiveOperationalCapacityState = {
+  ...baseCapacity,
+  dailyAssignments: [{
+    id: 'DAILY-CREW-VAN1',
+    date: canonical.dateKey,
+    vanId: 'VAN-1',
+    driverStaffId: 'STAFF-TECH-OVERRIDE',
+    helperStaffId: 'STAFF-HELPER-1',
+  }],
+};
+requireCondition(liveVanCrew(dailyCrewCapacity, 'VAN-1', canonical.dateKey).label === 'Daily Technician · Rafael Helper', 'A daily crew override must replace the regular technician without changing the helper ordering.');
 
 const dragCandidates = liveDragMoveCandidates(operationalDay!, canonical, canonical.assignments, baseCapacity);
 requireCondition(dragCandidates.length > 0, 'A single-van appointment must expose same-day drag targets.');
@@ -193,4 +213,4 @@ const fleetRecords = [
 requireCondition(resolveCanonicalVanId('v4', fleetRecords) === 'VAN-4', 'Short van aliases must resolve to canonical Van 4.');
 requireCondition(resolveCanonicalVanId('van-1783800405341', fleetRecords) === 'VAN-4', 'Legacy duplicate van documents must resolve to one physical lane.');
 
-console.log('Live scheduling acceptance passed: agenda and drag targets share canonical van half-days, closures and hard operational capacity while preserving same-day manual scheduling flexibility inside those windows.');
+console.log('Live scheduling acceptance passed: agenda and drag targets share canonical van crew, half-days, closures and hard operational capacity while preserving same-day manual scheduling flexibility inside those windows.');

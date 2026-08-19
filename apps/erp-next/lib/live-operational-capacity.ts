@@ -9,6 +9,8 @@ export type LiveDailyVanAssignment = {
   id: string;
   date?: string;
   vanId?: string;
+  driverStaffId?: string;
+  helperStaffId?: string;
   status?: string;
 };
 
@@ -34,18 +36,35 @@ export type LiveBusinessCalendar = {
   closedWeekdays?: number[];
 };
 
+export type LiveStaffProfile = {
+  id: string;
+  name?: string;
+  active?: boolean;
+};
+
 export type LiveOperationalVan = {
   id: string;
   active: boolean;
   status: string;
+  responsibleStaffId?: string;
+  regularHelperId?: string;
 };
 
 export type LiveOperationalCapacityState = {
   vans: Map<string, LiveOperationalVan>;
+  staffProfiles: LiveStaffProfile[];
   dailyAssignments: LiveDailyVanAssignment[];
   halfDaySchedules: LiveVanHalfDaySchedule[];
   calendarClosures: LiveCalendarClosure[];
   closedWeekdays: number[];
+};
+
+export type LiveVanCrew = {
+  driverStaffId?: string;
+  helperStaffId?: string;
+  driverName?: string;
+  helperName?: string;
+  label: string;
 };
 
 type CapacityLoadArgs = {
@@ -59,6 +78,8 @@ type RawVan = {
   name?: string;
   active?: boolean;
   status?: string;
+  responsibleStaffId?: string;
+  regularHelperId?: string;
 };
 
 const CACHE_TTL_MS = 60_000;
@@ -73,6 +94,10 @@ function timeMinutes(value: string) {
   const match = String(value || '').match(/^(\d{2}):(\d{2})$/);
   if (!match) return Number.NaN;
   return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function text(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 function blockedOperationalStatus(value: string | undefined) {
@@ -103,8 +128,9 @@ async function readDateScopedCollection<T extends { id: string; date?: string }>
 }
 
 async function loadCapacityState(startDate?: string, endDate?: string): Promise<LiveOperationalCapacityState> {
-  const [rawVans, rawDailyAssignments, rawHalfDays, rawClosures, businessCalendar] = await Promise.all([
+  const [rawVans, staffProfiles, rawDailyAssignments, rawHalfDays, rawClosures, businessCalendar] = await Promise.all([
     listFirestoreCollection<RawVan>('vans', 250),
+    listFirestoreCollection<LiveStaffProfile>('staffProfiles', 500),
     readDateScopedCollection<LiveDailyVanAssignment>('dailyVanAssignments', startDate, endDate, 1000),
     listFirestoreCollection<LiveVanHalfDaySchedule>('vanHalfDaySchedules', 250),
     readDateScopedCollection<LiveCalendarClosure>('calendarClosures', startDate, endDate, 500),
@@ -121,6 +147,8 @@ async function loadCapacityState(startDate?: string, endDate?: string): Promise<
         id,
         active: van.active !== false,
         status: String(van.status ?? ''),
+        responsibleStaffId: text(van.responsibleStaffId) || undefined,
+        regularHelperId: text(van.regularHelperId) || undefined,
       });
     }
   }
@@ -138,6 +166,7 @@ async function loadCapacityState(startDate?: string, endDate?: string): Promise<
 
   return {
     vans: canonicalVans,
+    staffProfiles,
     dailyAssignments,
     halfDaySchedules,
     calendarClosures: rawClosures.filter((closure) => closure.active !== false),
@@ -150,6 +179,8 @@ async function loadCapacityState(startDate?: string, endDate?: string): Promise<
  * parity with Booking Authority. This reader is deliberately date-scoped and cached:
  * appointments can refresh every 15 seconds without re-reading operational policy on
  * every poll, while a week change or a minute-old cache naturally refreshes the rules.
+ * Staff display names ride the same cached read so the live agenda does not add a second
+ * workforce-fetch path just to render the assigned technician/helper.
  */
 export async function loadLiveOperationalCapacityState(args: CapacityLoadArgs = {}): Promise<LiveOperationalCapacityState> {
   const key = capacityKey(args.startDate, args.endDate);
@@ -186,6 +217,18 @@ export function liveVanHalfDaySchedule(state: LiveOperationalCapacityState | nul
 
 export function liveVanIsHalfDay(state: LiveOperationalCapacityState | null, vanId: string, dateKey: string) {
   return Boolean(liveVanHalfDaySchedule(state, vanId, dateKey));
+}
+
+export function liveVanCrew(state: LiveOperationalCapacityState | null, vanId: string, dateKey: string): LiveVanCrew {
+  if (!state) return { label: 'Crew loading…' };
+  const van = state.vans.get(vanId);
+  const daily = state.dailyAssignments.find((assignment) => assignment.date === dateKey && assignment.vanId === vanId);
+  const driverStaffId = text(daily?.driverStaffId) || text(van?.responsibleStaffId) || undefined;
+  const helperStaffId = text(daily?.helperStaffId) || text(van?.regularHelperId) || undefined;
+  const driverName = driverStaffId ? text(state.staffProfiles.find((profile) => profile.id === driverStaffId)?.name) || undefined : undefined;
+  const helperName = helperStaffId ? text(state.staffProfiles.find((profile) => profile.id === helperStaffId)?.name) || undefined : undefined;
+  const label = [driverName, helperName].filter(Boolean).join(' · ') || 'Crew unassigned';
+  return { driverStaffId, helperStaffId, driverName, helperName, label };
 }
 
 export function liveVanOperationallyAvailable(state: LiveOperationalCapacityState | null, vanId: string, dateKey: string) {
