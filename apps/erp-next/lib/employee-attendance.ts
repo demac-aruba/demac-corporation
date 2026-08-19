@@ -172,6 +172,7 @@ export function statusFromRecords(
   if (reason.includes('enferm')) return 'Sick';
   if (reason.includes('vacacion')) return 'Vacation';
   if (reason.includes('libre')) return 'Day Off';
+  if (absence) return 'Absent';
   if ((entry?.noWorkNoPayHours ?? 0) > 0 && (entry?.noWorkNoPayHours ?? 0) * 60 >= scheduledMinutes) return 'Absent';
   if ((entry?.lateMinutes ?? 0) > 0) return 'Late';
   if (entry) return 'Present';
@@ -258,7 +259,9 @@ export async function saveAttendanceDay(input: {
       ? 'Vacaciones'
       : draft.status === 'Day Off'
         ? 'Libre'
-        : null;
+        : draft.status === 'Absent'
+          ? 'Otro'
+          : null;
 
   if (desiredAbsenceReason) {
     if (!existingAbsence) {
