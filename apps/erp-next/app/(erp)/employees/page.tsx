@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { EmployeeManagementWorkspace } from '../../../components/employees/employee-management-workspace';
+import { EmployeeProfileWorkspace } from '../../../components/employees/employee-profile-workspace';
 
 export default function EmployeesPage() {
   return (
@@ -9,7 +9,7 @@ export default function EmployeesPage() {
         <div className="page-actions"><Link className="btn" href="/employees/attendance">Attendance</Link><Link className="btn" href="/employees/payroll">Payroll</Link></div>
       </section>
 
-      <EmployeeManagementWorkspace />
+      <EmployeeProfileWorkspace />
 
       <section className="mo-two-col">
         <article className="panel"><header className="panel-head"><div><h2>Workforce Rules</h2><span>Operational policy foundation</span></div></header><div className="mo-rule-list"><div><strong>Weekday shift</strong><span>08:00–17:00 · lunch 12:00–13:00</span></div><div><strong>Saturday shift</strong><span>09:00–13:00</span></div><div><strong>Payroll cycle</strong><span>27th through 26th · restricted review</span></div><div><strong>Offboarding</strong><span>Archive employees; never delete historical work, attendance or payroll identity</span></div><div><strong>Payroll privacy</strong><span>Owner/authorized finance sees full payroll; employee sees no company-wide payroll view</span></div></div></article>
