@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { TextSizeControl } from '@/components/accessibility/text-size-control';
+import { CanonicalOperatingCalendar } from '@/components/canonical-operating-calendar';
 import { browserBusinessDefaults, loadBrowserBusinessSettings, normalizeBrowserBusinessSettings, type BrowserBusinessSettings } from '@/lib/browser-scheduling-settings';
 import { browserKeys, saveBrowserValue } from '@/lib/browser-store';
 
@@ -60,6 +61,8 @@ export function SystemSettingsWorkspace() {
           <div className="sg-rule-table"><div><strong>Monday–Friday</strong><span>08:00–17:00</span><small>Lunch 12:00–13:00</small></div><div><strong>Saturday</strong><span>09:00–13:00</span><small>Short operating day; route buffer still protects closing margin</small></div><div><strong>Sunday</strong><span>Closed</span><small>No standard residential scheduling</small></div><div><strong>Emergency</strong><span>Commercial only</span><small>Requires governed exception path</small></div></div>
         </article>
 
+        <CanonicalOperatingCalendar />
+
         <article className="panel sg-setting-card">
           <header><div><span>Dispatch</span><h2>Geography & Capacity</h2></div><b>Configurable</b></header>
           <div className="sg-rule-table"><div><strong>AM routing</strong><span>First AM job anchors sector</span><small>Later jobs same/adjacent/on route</small></div><div><strong>PM routing</strong><span>First PM job anchors sector</span><small>Afternoon cluster recalculated independently</small></div><div><strong>Standard capacity</strong><span>6 jobs / team / day</span><small>Subject to configured duration and route constraints</small></div><div><strong>Single-property capacity</strong><span>Up to 7 services</span><small>Large jobs may link support van; runtime duration must still fit the day</small></div></div>
@@ -71,7 +74,7 @@ export function SystemSettingsWorkspace() {
         </article>
       </section>
 
-      <section className="panel sg-change-banner"><div><strong>{dirty ? 'Unsaved browser configuration changes' : 'Browser configuration draft saved'}</strong><p>Saved Standard Service, Deep Cleaning and Operational Buffer values now feed the Scheduling runtime for live workflow testing. Personal accessibility preferences save independently per user and do not require the business-settings Save button.</p></div><span>{dirty ? 'Draft changed' : savedAt ? `Saved ${savedAt}` : 'Loaded from browser'}</span></section>
+      <section className="panel sg-change-banner"><div><strong>{dirty ? 'Unsaved browser configuration changes' : 'Browser configuration draft saved'}</strong><p>Saved Standard Service, Deep Cleaning and Operational Buffer values now feed the Scheduling runtime for live workflow testing. Canonical van half-days and company closures are displayed directly from Firestore above and are not overwritten by this browser draft.</p></div><span>{dirty ? 'Draft changed' : savedAt ? `Saved ${savedAt}` : 'Loaded from browser'}</span></section>
     </div>
   );
 }
