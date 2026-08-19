@@ -1,6 +1,14 @@
 import { firebaseClientConfig } from './firebase/client-config';
 import { requireFirebaseWebSession } from './firebase/session';
 
+export type OfficeBookingPreset = {
+  id: string;
+  label: string;
+  kind?: string;
+  durationMinutesPerUnit: number;
+  active: boolean;
+};
+
 export type OfficeBookingOption = {
   id: string;
   date: string;
@@ -21,6 +29,7 @@ export type OfficeBookingOption = {
     slots: number;
     fullDay?: boolean;
     time?: string;
+    endTime?: string;
   }>;
 };
 
@@ -30,6 +39,7 @@ export type OfficeAvailabilityResult = {
   offer: { id: string; version: number; status: string; expiresAt?: string } | null;
   options: OfficeBookingOption[];
   reason?: string;
+  metadata?: Record<string, unknown>;
 };
 
 export type OfficeAppointmentAttribution = {
@@ -47,6 +57,14 @@ export type OfficeLifecycleResult = {
   changeKind?: 'customer_reschedule' | 'operational_move';
   customerNotificationRecommended?: boolean;
   appointment: Record<string, unknown>;
+};
+
+export type OfficeCreateAppointmentResult = {
+  success: true;
+  replayed?: boolean;
+  appointmentId: string;
+  appointment: Record<string, unknown>;
+  workOrderIds: string[];
 };
 
 type ApiError = { error?: { code?: string; message?: string; details?: Record<string, unknown> } };
@@ -83,7 +101,7 @@ async function callOfficeBookingAuthority<T>(action: string, data: Record<string
     return payload;
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error('Booking Authority took too long to respond. The schedule was not left in move mode; refresh and try again.');
+      throw new Error('Booking Authority took too long to respond. Nothing was saved. Refresh and try again.');
     }
     throw error;
   } finally {
@@ -94,6 +112,44 @@ async function callOfficeBookingAuthority<T>(action: string, data: Record<string
 export function createOfficeLifecycleRequestId(prefix = 'schedule') {
   const random = Math.random().toString(36).slice(2, 10);
   return `${prefix}-${Date.now()}-${random}`;
+}
+
+export async function listOfficeBookingPresets() {
+  return callOfficeBookingAuthority<{ success: true; version: number; presets: OfficeBookingPreset[] }>(
+    'list_presets',
+    {},
+    8_000,
+  );
+}
+
+export async function checkOfficeCreateAvailability(input: {
+  requestId: string;
+  customerId: string;
+  propertyId: string;
+  presetId: string;
+  serviceId?: string;
+  quantity: number;
+  requestedDate: string;
+  requestedTime: string;
+  requiredVanId: string;
+  customerFacingDescription?: string;
+  technicianInstructions?: string;
+  notes?: string;
+}) {
+  return callOfficeBookingAuthority<OfficeAvailabilityResult>('check_availability', input, 12_000);
+}
+
+export async function confirmOfficeAppointment(input: {
+  requestId: string;
+  offerId: string;
+  offerVersion: number;
+  optionId: string;
+}) {
+  const result = await callOfficeBookingAuthority<OfficeCreateAppointmentResult>('create_appointment', input, 12_000);
+  if (!result.success || !result.appointmentId) {
+    throw new Error('Booking Authority did not return a verified appointment id. Nothing was marked as confirmed.');
+  }
+  return result;
 }
 
 export async function listOfficeAppointmentAttribution(appointmentIds: string[]) {
