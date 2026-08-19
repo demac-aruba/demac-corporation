@@ -213,12 +213,14 @@ export async function saveAttendanceDay(input: {
   const { employee, date, schedule, draft, existingEntry, existingAbsence, updatedByUserId, updatedByName } = input;
   const now = new Date().toISOString();
   const scheduledHours = roundHours(schedule.scheduledMinutes);
-  const paidFreeHours = roundHours(schedule.paidFreeMinutes);
+  const scheduledPaidFreeHours = roundHours(schedule.paidFreeMinutes);
   const overtimeMinutesValue = Math.max(0, Math.round(Number(draft.overtimeMinutes) || 0));
   const sickHours = draft.status === 'Sick' ? scheduledHours : 0;
   const vacationHours = draft.status === 'Vacation' ? scheduledHours : 0;
   const noWorkNoPayHours = draft.status === 'Absent' ? scheduledHours : 0;
-  const regularHours = Math.max(0, Math.round((scheduledHours - sickHours - vacationHours - noWorkNoPayHours) * 100) / 100);
+  const dayOffHours = draft.status === 'Day Off' ? scheduledHours : 0;
+  const paidFreeHours = Math.round((scheduledPaidFreeHours + dayOffHours) * 100) / 100;
+  const regularHours = Math.max(0, Math.round((scheduledHours - sickHours - vacationHours - noWorkNoPayHours - dayOffHours) * 100) / 100);
   const lateMinutesValue = draft.status === 'Late' ? lateMinutes(draft.clockInTime, schedule.startTime) : 0;
   const workedMinutesValue = workedMinutes(draft.clockInTime, draft.clockOutTime, draft.breakMinutes);
 
