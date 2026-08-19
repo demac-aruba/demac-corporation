@@ -1,4 +1,5 @@
 import { listFirestoreCollection } from './firebase/firestore-rest';
+import { normalizeWorkforceSkills, type WorkforceEmployee } from './workforce-readiness';
 
 export type CanonicalStaffAvailability = 'Disponible' | 'Enfermo' | 'Vacaciones' | 'Libre' | 'Inactivo' | string;
 
@@ -12,6 +13,7 @@ export type CanonicalStaffProfile = {
   canDriveVan?: boolean;
   primaryVanId?: string;
   skills?: string[];
+  skillsVerified?: boolean;
   availability?: CanonicalStaffAvailability;
   unavailableFrom?: string;
   unavailableUntil?: string;
@@ -138,6 +140,15 @@ export function activeStaffAbsence(profileId: string, dateKey: string, absences:
     && dateKey <= String(absence.toDate));
 }
 
+function profileUnavailable(profile: CanonicalStaffProfile | undefined, dateKey: string, state: CanonicalOperationsState) {
+  if (!profile || profile.active === false || profile.availability === 'Inactivo') return true;
+  const availability = text(profile.availability);
+  const generallyUnavailable = Boolean(availability && availability !== 'Disponible')
+    && (!profile.unavailableFrom || dateKey >= profile.unavailableFrom)
+    && (!profile.unavailableUntil || dateKey <= profile.unavailableUntil);
+  return generallyUnavailable || Boolean(activeStaffAbsence(profile.id, dateKey, state.staffAbsences));
+}
+
 export function resolveCanonicalCrew(van: CanonicalVan, dateKey: string, state: CanonicalOperationsState) {
   const vanId = canonicalVanId(van.id, state.vans);
   const daily = state.dailyVanAssignments.find((assignment) => canonicalVanId(assignment.vanId, state.vans) === vanId && assignment.date === dateKey);
@@ -150,9 +161,58 @@ export function resolveCanonicalCrew(van: CanonicalVan, dateKey: string, state: 
     daily,
     driver,
     helper,
+    driverUnavailable: profileUnavailable(driver, dateKey, state),
+    helperUnavailable: profileUnavailable(helper, dateKey, state),
     driverAbsence: driverId ? activeStaffAbsence(driverId, dateKey, state.staffAbsences) : undefined,
     helperAbsence: helperId ? activeStaffAbsence(helperId, dateKey, state.staffAbsences) : undefined,
   };
+}
+
+function canonicalPhysicalVans(state: CanonicalOperationsState) {
+  const byId = new Map<string, CanonicalVan>();
+  for (const van of state.vans) {
+    const id = canonicalVanId(van.id, state.vans);
+    const current = byId.get(id);
+    if (!current || van.id === id) byId.set(id, van);
+  }
+  return [...byId.values()];
+}
+
+/**
+ * Build a transient, date-aware crew roster from canonical Firestore operations data.
+ * This is intentionally not persisted in browser storage. Daily crew overrides and
+ * staff absences are resolved before readiness evaluates the assigned vans.
+ */
+export function canonicalCrewReadinessRoster(state: CanonicalOperationsState, dateKey: string): WorkforceEmployee[] {
+  const roster: WorkforceEmployee[] = [];
+  const seen = new Set<string>();
+
+  for (const van of canonicalPhysicalVans(state)) {
+    const crew = resolveCanonicalCrew(van, dateKey, state);
+    for (const entry of [
+      { profile: crew.driver, unavailable: crew.driverUnavailable },
+      { profile: crew.helper, unavailable: crew.helperUnavailable },
+    ]) {
+      const profile = entry.profile;
+      if (!profile || seen.has(`${crew.vanId}|${profile.id}`)) continue;
+      seen.add(`${crew.vanId}|${profile.id}`);
+      roster.push({
+        id: profile.id,
+        name: staffDisplayName(profile),
+        role: text(profile.role) || 'Field staff',
+        vanId: crew.vanId,
+        active: !entry.unavailable,
+        skills: normalizeWorkforceSkills(profile.skills ?? []),
+        // Legacy canonical staff profiles did not have a verification flag. Undefined
+        // remains unverified so old records cannot silently create false READY evidence.
+        skillsVerified: profile.skillsVerified === true,
+        source: 'canonical_firestore',
+        updatedAt: text(profile.updatedAt) || new Date(0).toISOString(),
+      });
+    }
+  }
+
+  return roster;
 }
 
 export async function loadCanonicalOperationsState(): Promise<CanonicalOperationsState> {
