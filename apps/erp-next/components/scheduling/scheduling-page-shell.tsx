@@ -14,7 +14,7 @@ type Props = {
 
 export function SchedulingPageShell({ view = 'schedule' }: Props) {
   return (
-    <div className={`${styles.shell} ${readableStyles.readable}`}>
+    <div className={`${styles.shell} ${view === 'schedule' ? styles.scheduleCompact : ''} ${readableStyles.readable}`}>
       {view === 'schedule' ? <LiveSchedulingOverview /> : null}
       {view === 'dispatch' ? <BrowserDispatchOperations /> : null}
       {view === 'readiness' ? <BrowserDispatchReadinessBoard /> : null}

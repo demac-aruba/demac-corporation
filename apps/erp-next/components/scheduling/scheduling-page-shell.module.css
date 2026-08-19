@@ -1,1 +1,181 @@
-.shell{width:100%;max-width:100%;min-width:0;min-height:100%;overflow-x:clip;background:var(--canvas)}
+.shell {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  overflow-x: clip;
+  background: var(--canvas);
+}
+
+/*
+ * Schedule & Capacity is the operator's high-frequency workspace. The shell owns
+ * its screen density while LiveSchedulingOverview keeps all scheduling state,
+ * Booking Authority interactions and canonical capacity semantics unchanged.
+ * Dispatch and Readiness keep their independent layouts.
+ */
+.scheduleCompact > section {
+  padding: 10px 14px 16px;
+}
+
+.scheduleCompact > section > header:first-child {
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.scheduleCompact > section > header:first-child > div:first-child > span:first-child {
+  letter-spacing: .09em;
+}
+
+.scheduleCompact > section > header:first-child h1 {
+  margin-top: 2px;
+  font-size: 22px;
+}
+
+.scheduleCompact > section > header:first-child p {
+  display: none;
+}
+
+.scheduleCompact > section > header:first-child button {
+  padding: 6px 9px;
+  border-radius: 8px;
+}
+
+/* Canonical sync, warnings and move feedback stay visible but no longer consume a full banner row. */
+.scheduleCompact > section > div:has(> span) {
+  gap: 8px;
+  margin-bottom: 5px;
+  padding: 5px 8px;
+  border-radius: 9px;
+}
+
+/* Week navigation becomes a compact control strip. */
+.scheduleCompact > section > div:has(> div:first-child > button):not(:has(> header)) {
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 5px 7px;
+  border-radius: 10px;
+}
+
+.scheduleCompact > section > div:has(> div:first-child > button):not(:has(> header)) button {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+}
+
+/* Seven-day strip keeps weekly context while reducing vertical chrome. */
+.scheduleCompact > section > div:has(> button:nth-of-type(7)) {
+  gap: 5px;
+  margin-bottom: 6px;
+}
+
+.scheduleCompact > section > div:has(> button:nth-of-type(7)) > button {
+  padding: 5px 7px;
+  border-radius: 10px;
+}
+
+.scheduleCompact > section > div:has(> button:nth-of-type(7)) > button > small {
+  margin-top: 2px;
+}
+
+.scheduleCompact > section > div:has(> button:nth-of-type(7)) > button > i {
+  height: 3px;
+  margin-top: 4px;
+}
+
+.scheduleCompact > section > div:has(> button:nth-of-type(7)) > button > p {
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/*
+ * LIVE is now the only production schedule mode. Keep the two useful day KPIs
+ * (confirmed and open capacity) and remove redundant LIVE/demo-era cards from
+ * the operator surface.
+ */
+.scheduleCompact > section > div:has(> article:nth-of-type(4)) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.scheduleCompact > section > div:has(> article:nth-of-type(4)) > article:nth-child(2),
+.scheduleCompact > section > div:has(> article:nth-of-type(4)) > article:nth-child(3) {
+  display: none;
+}
+
+.scheduleCompact > section > div:has(> article:nth-of-type(4)) > article {
+  padding: 6px 9px 8px;
+  border-radius: 10px;
+}
+
+.scheduleCompact > section > div:has(> article:nth-of-type(4)) > article > strong {
+  margin-top: 2px;
+  font-size: 13px;
+}
+
+.scheduleCompact > section > div:has(> article:nth-of-type(4)) > article > small {
+  margin-top: 1px;
+}
+
+/* Van board gets the recovered vertical space instead of surrounding chrome. */
+.scheduleCompact > section > div:has(> header + div) {
+  border-radius: 12px;
+}
+
+.scheduleCompact > section > div:has(> header + div) > header {
+  gap: 8px;
+  padding: 7px 10px;
+}
+
+.scheduleCompact > section > div:has(> header + div) > header span {
+  margin-top: 1px;
+}
+
+.scheduleCompact > section > div:has(> header + div) > header > b {
+  padding: 3px 6px;
+}
+
+.scheduleCompact > section > div:has(> header + div) > div > div {
+  gap: 6px;
+  padding: 6px;
+}
+
+.scheduleCompact > section > div:has(> header + div) > div > div > section {
+  border-radius: 10px;
+}
+
+.scheduleCompact > section > div:has(> header + div) > div > div > section > header {
+  gap: 7px;
+  padding: 6px 8px;
+}
+
+.scheduleCompact > section > div:has(> header + div) > div > div > section > header + div > div {
+  padding: 4px 6px;
+}
+
+.scheduleCompact > section > div:has(> header + div) > div > div > section > header + div + div {
+  gap: 4px;
+  padding: 5px;
+}
+
+.scheduleCompact > section > div:has(> header + div) > div > div > section > header + div + div > div:has(> b) {
+  padding: 6px;
+  border-radius: 8px;
+}
+
+@media (max-width: 900px) {
+  .scheduleCompact > section {
+    padding: 10px 10px 14px;
+  }
+
+  .scheduleCompact > section > header:first-child {
+    align-items: flex-start;
+  }
+
+  .scheduleCompact > section > div:has(> article:nth-of-type(4)) {
+    grid-template-columns: 1fr 1fr;
+  }
+}
