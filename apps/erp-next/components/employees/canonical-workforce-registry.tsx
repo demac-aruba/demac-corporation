@@ -68,6 +68,21 @@ export function CanonicalWorkforceRegistry() {
     return [...byId.values()].sort((a, b) => canonicalVanId(a.id, state.vans).localeCompare(canonicalVanId(b.id, state.vans)));
   }, [state]);
 
+  const regularVanIdsByStaff = useMemo(() => {
+    const result = new Map<string, string[]>();
+    if (!state) return result;
+    for (const van of canonicalVans) {
+      const vanId = canonicalVanId(van.id, state.vans);
+      for (const staffId of [van.responsibleStaffId, van.regularHelperId]) {
+        if (!staffId) continue;
+        const ids = result.get(staffId) ?? [];
+        if (!ids.includes(vanId)) ids.push(vanId);
+        result.set(staffId, ids);
+      }
+    }
+    return result;
+  }, [canonicalVans, state]);
+
   if (loading && !state) return <section className={styles.loading}>Loading canonical workforce from Firestore…</section>;
 
   return (
@@ -98,9 +113,13 @@ export function CanonicalWorkforceRegistry() {
         {(state?.staffProfiles ?? []).map((profile) => {
           const absence = activeStaffAbsence(profile.id, today, state?.staffAbsences ?? []);
           const availability = absence?.reason || profile.availability || 'Disponible';
+          const crewVans = regularVanIdsByStaff.get(profile.id) ?? [];
+          const staffProfileVan = profile.primaryVanId ? canonicalVanId(profile.primaryVanId, state?.vans ?? []) : '';
+          const mainVan = crewVans.length ? crewVans.join(', ') : staffProfileVan || 'UNASSIGNED';
+          const vanSource = crewVans.length ? 'Van crew profile' : staffProfileVan ? 'Staff profile' : '';
           return <div className={styles.row} key={profile.id}>
             <div className={styles.identity}><strong>{staffDisplayName(profile)}</strong><small>{profile.id}</small>{profile.phone ? <small>{profile.phone}</small> : null}</div>
-            <strong>{profile.primaryVanId ? canonicalVanId(profile.primaryVanId, state?.vans ?? []) : 'UNASSIGNED'}</strong>
+            <div><strong>{mainVan}</strong>{vanSource ? <small>{vanSource}</small> : null}</div>
             <div className={styles.skills}><span>{profile.role || 'Role not configured'}</span>{(profile.skills ?? []).map((skill) => <button type="button" className={styles.skillActive} key={`${profile.id}-${skill}`} tabIndex={-1}>{skill}</button>)}</div>
             <span>{availability}</span>
             <span>{profile.active === false ? 'Inactive' : absence ? 'Unavailable today' : 'Active'}</span>
@@ -127,7 +146,7 @@ export function CanonicalWorkforceRegistry() {
 
       <footer>
         <span>SOURCE-OF-TRUTH RULE</span>
-        <strong>Booking Authority and this workspace now point at the same Firestore operational collections. A future editor should mutate those canonical records directly; browser storage may only be used as a cache or isolated demo data.</strong>
+        <strong>Regular van membership is owned by the canonical van crew profile. staffProfiles.primaryVanId remains a compatibility hint only; dailyVanAssignments remain date-specific overrides.</strong>
       </footer>
     </section>
   );

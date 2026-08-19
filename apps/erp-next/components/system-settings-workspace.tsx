@@ -34,8 +34,8 @@ export function SystemSettingsWorkspace() {
   return (
     <div className="sg-stack">
       <section className="page-head">
-        <div><div className="eyebrow">Governed Configuration</div><h1>System Settings</h1><p>Business rules that are expected to change belong in controlled configuration — with permissions and history — instead of being hidden inside application code.</p></div>
-        <div className="page-actions"><button className="btn" type="button">Change History</button><button className="btn primary" type="button" onClick={saveDraft} disabled={!ready || !dirty}>Save Browser Draft</button></div>
+        <div><div className="eyebrow">Governed Configuration</div><h1>System Settings</h1><p>Operational rules that change over time belong in controlled configuration instead of being hidden inside application code. Canonical company-calendar controls below write directly to Firestore.</p></div>
+        <div className="page-actions"><button className="btn primary" type="button" onClick={saveDraft} disabled={!ready || !dirty}>Save Scheduling Preview</button></div>
       </section>
 
       <section className="sg-settings-grid">
@@ -46,14 +46,14 @@ export function SystemSettingsWorkspace() {
         </article>
 
         <article className="panel sg-setting-card">
-          <header><div><span>Scheduling</span><h2>Work Durations</h2></div><b>Live Runtime</b></header>
+          <header><div><span>Scheduling</span><h2>Work Durations</h2></div><b>Browser Preview</b></header>
           <div className="sg-form-grid">
             <label>Standard service<input type="number" min="30" max="480" step="15" value={settings.serviceMinutes} onChange={(e)=>update('serviceMinutes',Number(e.target.value))}/><small>minutes per standard-service A/C unit</small></label>
             <label>Deep cleaning<input type="number" min="45" max="480" step="15" value={settings.deepMinutes} onChange={(e)=>update('deepMinutes',Number(e.target.value))}/><small>minutes per deep-cleaning A/C unit</small></label>
             <label>Operational buffer<input type="number" min="0" max="120" step="5" value={settings.bufferMinutes} onChange={(e)=>update('bufferMinutes',Number(e.target.value))}/><small>margin before lunch / end-of-day route recovery</small></label>
             <label>Overtime threshold<input type="time" value={settings.afterHours} onChange={(e)=>update('afterHours',e.target.value)}/><small>work after this time is flagged; this does not extend scheduling capacity</small></label>
           </div>
-          <div className="sg-runtime-note"><strong>Operational effect</strong><p>After saving, Scheduling uses these service/deep-cleaning durations and the route buffer when calculating valid future options. Existing appointments keep their recorded start/end snapshots and are not silently rewritten.</p></div>
+          <div className="sg-runtime-note"><strong>Preview-only boundary</strong><p>These values currently affect only the ERP Next browser Scheduling runtime used for workflow testing. Maya and Booking Authority continue to use canonical Firestore appointment-work-presets. This section will be migrated before browser scheduling settings are retired.</p></div>
         </article>
 
         <article className="panel sg-setting-card">
@@ -74,7 +74,7 @@ export function SystemSettingsWorkspace() {
         </article>
       </section>
 
-      <section className="panel sg-change-banner"><div><strong>{dirty ? 'Unsaved browser configuration changes' : 'Browser configuration draft saved'}</strong><p>Saved Standard Service, Deep Cleaning and Operational Buffer values now feed the Scheduling runtime for live workflow testing. Canonical van half-days and company closures are displayed directly from Firestore above and are not overwritten by this browser draft.</p></div><span>{dirty ? 'Draft changed' : savedAt ? `Saved ${savedAt}` : 'Loaded from browser'}</span></section>
+      <section className="panel sg-change-banner"><div><strong>{dirty ? 'Unsaved scheduling preview changes' : 'Scheduling preview saved locally'}</strong><p>The browser preview is isolated from canonical workforce and calendar truth. Weekly van half-days and company closures above read and write the Firestore records used by Booking Authority.</p></div><span>{dirty ? 'Preview changed' : savedAt ? `Saved ${savedAt}` : 'Loaded from browser'}</span></section>
     </div>
   );
 }
