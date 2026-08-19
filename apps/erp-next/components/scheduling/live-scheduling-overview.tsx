@@ -30,6 +30,7 @@ import { defaultWorkPresets, getRuntimeSchedulingSettings, minutesToTime, previe
 import type { CalendarDispatchJob, OperationalDay } from '../../lib/scheduling-capacity';
 import { buildOperationalWeek, currentArubaDateKey } from '../../lib/scheduling-capacity';
 import { DragMoveConfirmation, type PendingDragMove } from './drag-move-confirmation';
+import { LiveAppointmentCreateDrawer, type LiveBookingTarget, type LiveCreatedBooking } from './live-appointment-create-drawer';
 import { LiveAppointmentDetailsDrawer } from './live-appointment-details-drawer';
 import styles from './scheduling-overview-v2.module.css';
 
@@ -158,6 +159,7 @@ export function LiveSchedulingOverview() {
   const [capacityState, setCapacityState] = useState<LiveOperationalCapacityState | null>(null);
   const [capacityError, setCapacityError] = useState('');
   const [selectedAppointmentId, setSelectedAppointmentId] = useState('');
+  const [bookingTarget, setBookingTarget] = useState<LiveBookingTarget | null>(null);
   const [moveArmedJobId, setMoveArmedJobId] = useState('');
   const [pendingDragMove, setPendingDragMove] = useState<PendingLiveMove | null>(null);
   const [moveBusy, setMoveBusy] = useState(false);
@@ -177,7 +179,7 @@ export function LiveSchedulingOverview() {
   }), [baseWeek, capacityState]);
   const canManage = principal.active && principal.capabilities.has('scheduling.manage');
   const actor = useMemo(() => ({ id: principal.userId, name: principal.displayName }), [principal.displayName, principal.userId]);
-  const interactionActive = Boolean(moveArmedJobId || pendingDragMove || moveBusy);
+  const interactionActive = Boolean(bookingTarget || moveArmedJobId || pendingDragMove || moveBusy);
 
   const refresh = useCallback(async (forceCapacity = false) => {
     const sequence = ++refreshSequenceRef.current;
@@ -236,6 +238,10 @@ export function LiveSchedulingOverview() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || moveBusy) return;
+      if (bookingTarget) {
+        setBookingTarget(null);
+        return;
+      }
       if (pendingDragMove) {
         setPendingDragMove(null);
         setMoveNotice('Move cancelled. Nothing was changed.');
@@ -248,7 +254,7 @@ export function LiveSchedulingOverview() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [moveArmedJobId, moveBusy, pendingDragMove]);
+  }, [bookingTarget, moveArmedJobId, moveBusy, pendingDragMove]);
 
   const jobs = useMemo(() => appointments.flatMap(appointmentAssignments), [appointments]);
   const vans = useMemo<DisplayVan[]>(() => previewVans.map((van) => ({ id: van.id, name: van.name, team: van.team, active: van.active })), []);
@@ -303,8 +309,32 @@ export function LiveSchedulingOverview() {
     }, 220);
   };
 
+  const openCreateAppointment = (vanId: string, start: string, end: string) => {
+    if (moveArmedJobId || pendingDragMove || moveBusy) return;
+    if (!canManage) {
+      setMoveNotice('Your account does not have permission to create appointments.');
+      return;
+    }
+    if (!capacityState) {
+      setMoveNotice(`Live capacity is not ready${capacityError ? `: ${capacityError}` : '.'} Refresh the agenda before creating an appointment.`);
+      return;
+    }
+    const van = vans.find((item) => item.id === vanId);
+    if (!van) return;
+    setSelectedAppointmentId('');
+    setMoveNotice('');
+    setBookingTarget({ dateKey: activeDay.dateKey, vanId, vanName: van.name, start, end });
+  };
+
+  const handleCreatedBooking = (booking: LiveCreatedBooking) => {
+    setBookingTarget(null);
+    setSelectedAppointmentId('');
+    setMoveNotice(`Appointment ${booking.appointmentId} confirmed for ${booking.customer.name || booking.customer.company || 'customer'} · ${booking.option.assignments[0]?.vanName || booking.option.assignments[0]?.vanId || bookingTarget?.vanName || 'van'} · ${formatTime(booking.option.time)}.`);
+    void refresh();
+  };
+
   const armMove = (jobId: string) => {
-    if (moveBusy || pendingDragMove) return;
+    if (moveBusy || pendingDragMove || bookingTarget) return;
     if (clickTimerRef.current) {
       window.clearTimeout(clickTimerRef.current);
       clickTimerRef.current = null;
@@ -462,7 +492,7 @@ export function LiveSchedulingOverview() {
       <div className={styles.notice}>
         <span>{error ? `Live sync error: ${error}` : loading ? 'Loading canonical Booking Authority schedule…' : `LIVE · Booking Authority${lastSyncedAt ? ` · synced ${lastSyncedAt}` : ''}`}</span>
       </div>
-      {capacityError ? <div className={styles.notice}><span>Canonical operating-capacity policy could not be loaded: {capacityError}. Appointment data remains visible, but moves are disabled until capacity refresh succeeds.</span></div> : null}
+      {capacityError ? <div className={styles.notice}><span>Canonical operating-capacity policy could not be loaded: {capacityError}. Appointment data remains visible, but scheduling changes are disabled until capacity refresh succeeds.</span></div> : null}
       {moveNotice ? <div className={styles.notice}><span>{moveNotice}</span>{moveArmedJobId && !moveBusy ? <button type="button" onClick={() => { setMoveArmedJobId(''); setMoveNotice('Move mode cancelled.'); }}>×</button> : null}</div> : null}
       {unresolvedJobs.length ? <div className={styles.notice}><span>Data integrity attention: {unresolvedJobs.length} assignment{unresolvedJobs.length === 1 ? '' : 's'} reference a van that cannot be resolved to Van 1–4. They are not converted into fake extra lanes.</span></div> : null}
       {activeConflictSlots ? <div className={styles.notice}><span>Capacity integrity attention: {activeConflictSlots} occupied slot{activeConflictSlots === 1 ? '' : 's'} contain overlapping appointments after duplicate fleet records were collapsed to the physical Van 1–4. Both appointments remain visible below so they can be reviewed and rescheduled safely.</span></div> : null}
@@ -504,7 +534,7 @@ export function LiveSchedulingOverview() {
         <header className={styles.boardHeader}>
           <div>
             <strong>Live Van Schedule</strong>
-            <span>{activeDay.weekday} {activeDay.shortDate} · single click = details · double click = arm drag move</span>
+            <span>{activeDay.weekday} {activeDay.shortDate} · click open spot = new appointment · single click booked = details · double click booked = move</span>
             {moveNotice ? <span style={{ marginTop: 3, fontWeight: 700 }}>{moveNotice}</span> : null}
           </div>
           <b>{moveBusy ? 'SAVING MOVE…' : moveArmedJobId ? `${validDropTargets.size} VALID TARGETS` : `${activeOccupancy.open} OPEN SPOTS`}</b>
@@ -538,7 +568,9 @@ export function LiveSchedulingOverview() {
                     jobLinks={jobLinks}
                     moveArmedJobId={moveArmedJobId}
                     moveBusy={moveBusy}
+                    canCreate={canManage && Boolean(capacityState)}
                     validDropTargets={validDropTargets}
+                    onCreateAppointment={openCreateAppointment}
                     onOpenAppointment={scheduleOpenJob}
                     onArmMove={armMove}
                     onDropMove={dropMove}
@@ -552,6 +584,7 @@ export function LiveSchedulingOverview() {
       </div>
 
       {selectedAppointment ? <LiveAppointmentDetailsDrawer appointment={selectedAppointment} onClose={() => setSelectedAppointmentId('')} onChanged={refresh} /> : null}
+      {bookingTarget ? <LiveAppointmentCreateDrawer target={bookingTarget} onClose={() => setBookingTarget(null)} onCreated={handleCreatedBooking} /> : null}
       {pendingDragMove ? <DragMoveConfirmation move={pendingDragMove} busy={moveBusy} onCancel={cancelPendingMove} onConfirm={() => void confirmPendingMove()} /> : null}
     </section>
   );
@@ -564,7 +597,9 @@ function VanScheduleSlots({
   jobLinks,
   moveArmedJobId,
   moveBusy,
+  canCreate,
   validDropTargets,
+  onCreateAppointment,
   onOpenAppointment,
   onArmMove,
   onDropMove,
@@ -575,7 +610,9 @@ function VanScheduleSlots({
   jobLinks: Map<string, JobLink>;
   moveArmedJobId: string;
   moveBusy: boolean;
+  canCreate: boolean;
   validDropTargets: Set<string>;
+  onCreateAppointment: (vanId: string, start: string, end: string) => void;
   onOpenAppointment: (jobId: string) => void;
   onArmMove: (jobId: string) => void;
   onDropMove: (vanId: string, start: string) => void;
@@ -609,20 +646,31 @@ function VanScheduleSlots({
         && !moveBusy
         && slot.operational
         && validDropTargets.has(liveMoveTargetKey(vanId, slot.start));
+      const createEnabled = !moveArmedJobId && !moveBusy && canCreate && slot.operational;
       rows.push(<div
         className={styles.openSlot}
         key={`open-${slot.start}`}
+        role={createEnabled ? 'button' : undefined}
+        tabIndex={createEnabled ? 0 : undefined}
+        onClick={() => { if (createEnabled) onCreateAppointment(vanId, slot.start, slot.end); }}
+        onKeyDown={(event) => {
+          if (!createEnabled || (event.key !== 'Enter' && event.key !== ' ')) return;
+          event.preventDefault();
+          onCreateAppointment(vanId, slot.start, slot.end);
+        }}
         onDragOver={(event) => { if (dropEnabled) event.preventDefault(); }}
         onDrop={(event) => {
           if (!dropEnabled) return;
           event.preventDefault();
           onDropMove(vanId, slot.start);
         }}
-        style={dropEnabled ? { borderStyle: 'solid', borderColor: 'var(--brand)', background: 'var(--brand-soft)', cursor: 'copy' } : undefined}
+        style={dropEnabled
+          ? { borderStyle: 'solid', borderColor: 'var(--brand)', background: 'var(--brand-soft)', cursor: 'copy' }
+          : createEnabled ? { cursor: 'pointer' } : undefined}
       >
         <div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div>
-        <div><strong>{dropEnabled ? 'Drop to move' : 'Available'}</strong><span>{dropEnabled ? 'Valid for the complete appointment' : 'Open work spot'}</span></div>
-        <b>{dropEnabled ? 'MOVE' : 'LIVE'}</b>
+        <div><strong>{dropEnabled ? 'Drop to move' : 'Available'}</strong><span>{dropEnabled ? 'Valid for the complete appointment' : createEnabled ? 'Click to schedule' : 'Open work spot'}</span></div>
+        <b>{dropEnabled ? 'MOVE' : createEnabled ? 'BOOK' : 'LIVE'}</b>
       </div>);
       index += 1;
       continue;
