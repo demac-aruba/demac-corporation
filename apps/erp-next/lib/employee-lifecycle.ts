@@ -16,6 +16,7 @@ export type OffboardEmployeeResult = {
   accessRetired: boolean;
   regularVanAssignmentsCleared: number;
   futureAssignmentsCleared: number;
+  cleanupWarning?: string | null;
 };
 
 type LifecycleResponse<T> = {
