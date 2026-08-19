@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { BrowserAppointmentRecord, BrowserWorkOrderRecord } from '../../lib/browser-operational';
 import type { BrowserFieldExecutionRecord } from '../../lib/browser-field';
 import { browserKeys, loadBrowserValue } from '../../lib/browser-store';
+import { canonicalCrewReadinessRoster, loadCanonicalOperationsState, type CanonicalOperationsState } from '../../lib/canonical-operations';
 import { createDispatchAtRiskRelease, deriveBrowserJobReadiness, loadDispatchAtRiskReleases, validDispatchAtRiskRelease, type BrowserDispatchAtRiskRelease } from '../../lib/browser-job-readiness';
 import styles from './browser-job-readiness.module.css';
 
@@ -18,6 +19,9 @@ export function BrowserJobReadiness() {
   const [appointments, setAppointments] = useState<BrowserAppointmentRecord[]>([]);
   const [executions, setExecutions] = useState<BrowserFieldExecutionRecord[]>([]);
   const [releases, setReleases] = useState<BrowserDispatchAtRiskRelease[]>([]);
+  const [canonicalOperations, setCanonicalOperations] = useState<CanonicalOperationsState | null>(null);
+  const [canonicalError, setCanonicalError] = useState<string | null>(null);
+  const [canonicalLoading, setCanonicalLoading] = useState(true);
   const [selectedId, setSelectedId] = useState('');
   const [releaseReason, setReleaseReason] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
@@ -29,12 +33,29 @@ export function BrowserJobReadiness() {
     setAppointments(loadBrowserValue<BrowserAppointmentRecord[]>(browserKeys.appointments, []));
     setExecutions(loadBrowserValue<BrowserFieldExecutionRecord[]>(browserKeys.fieldExecutions, []));
     setReleases(loadDispatchAtRiskReleases());
-    setSelectedId(storedOrders[storedOrders.length - 1]?.id ?? '');
+    setSelectedId((current) => current && storedOrders.some((order) => order.id === current) ? current : storedOrders[storedOrders.length - 1]?.id ?? '');
   }, [refreshKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setCanonicalLoading(true);
+    setCanonicalError(null);
+    void loadCanonicalOperationsState()
+      .then((state) => { if (!cancelled) setCanonicalOperations(state); })
+      .catch((error) => { if (!cancelled) { setCanonicalOperations(null); setCanonicalError(error instanceof Error ? error.message : String(error)); } })
+      .finally(() => { if (!cancelled) setCanonicalLoading(false); });
+    return () => { cancelled = true; };
+  }, [refreshKey]);
+
+  const readinessFor = (order: BrowserWorkOrderRecord) => {
+    if (!canonicalOperations) return null;
+    const crewRoster = canonicalCrewReadinessRoster(canonicalOperations, order.scheduledDate);
+    return deriveBrowserJobReadiness(order, { appointments, executions, crewRoster });
+  };
 
   const selectedOrder = orders.find((order) => order.id === selectedId) ?? orders[0];
   const selectedExecution = executions.find((execution) => execution.workOrderId === selectedOrder?.id);
-  const readiness = selectedOrder ? deriveBrowserJobReadiness(selectedOrder, { appointments, executions }) : null;
+  const readiness = selectedOrder ? readinessFor(selectedOrder) : null;
   const locked = selectedExecution?.technicianStatus === 'submitted';
   const validRelease = readiness ? validDispatchAtRiskRelease(readiness, releases) : undefined;
 
@@ -44,14 +65,18 @@ export function BrowserJobReadiness() {
   }, [selectedOrder?.id]);
 
   const summary = useMemo(() => {
-    const states = orders.map((order) => deriveBrowserJobReadiness(order, { appointments, executions }));
+    if (!canonicalOperations) return { ready: 0, atRisk: 0, blocked: 0, totalRisks: 0 };
+    const states = orders.map((order) => {
+      const crewRoster = canonicalCrewReadinessRoster(canonicalOperations, order.scheduledDate);
+      return deriveBrowserJobReadiness(order, { appointments, executions, crewRoster });
+    });
     return {
       ready: states.filter((item) => item.status === 'ready').length,
       atRisk: states.filter((item) => item.status === 'at_risk').length,
       blocked: states.filter((item) => item.status === 'blocked').length,
       totalRisks: states.reduce((sum, item) => sum + item.risks.length, 0),
     };
-  }, [appointments, executions, orders, refreshKey]);
+  }, [appointments, canonicalOperations, executions, orders, refreshKey]);
 
   const authorizeAtRisk = () => {
     if (!readiness || readiness.status !== 'at_risk' || locked) return;
@@ -65,7 +90,15 @@ export function BrowserJobReadiness() {
     }
   };
 
-  if (!orders.length || !selectedOrder || !readiness) return null;
+  if (!orders.length || !selectedOrder) return null;
+
+  if (canonicalLoading && !canonicalOperations) {
+    return <section className={styles.workspace}><header><div><span>PRE-DISPATCH DECISION</span><h2>Consolidated Job Readiness</h2><p>Loading canonical Firestore crew and availability before calculating dispatch readiness…</p></div></header></section>;
+  }
+
+  if (canonicalError || !readiness) {
+    return <section className={styles.workspace}><header><div><span>PRE-DISPATCH DECISION · SOURCE ERROR</span><h2>Consolidated Job Readiness</h2><p>Job readiness is not calculated with a browser workforce fallback when canonical staff data is unavailable.</p></div><div className={styles.headerActions}><button type="button" onClick={() => setRefreshKey((value) => value + 1)}>↻ Retry Canonical Facts</button></div></header><div className={styles.notice}><span>{canonicalError || 'Canonical workforce data is unavailable.'}</span></div></section>;
+  }
 
   const crewDimension = readiness.dimensions.find((dimension) => dimension.id === 'crew_skill');
   const toolsDimension = readiness.dimensions.find((dimension) => dimension.id === 'tools');
@@ -74,10 +107,10 @@ export function BrowserJobReadiness() {
 
   return (
     <section className={styles.workspace}>
-      <header><div><span>PRE-DISPATCH DECISION</span><h2>Consolidated Job Readiness</h2><p>All eight readiness dimensions are calculated from their owning operational modules. This panel cannot manually force a dimension to READY.</p></div><div className={styles.headerActions}><label>Work Order<select value={selectedOrder.id} onChange={(event) => setSelectedId(event.target.value)}>{orders.slice().reverse().map((order) => <option key={order.id} value={order.id}>{order.id} · {order.customer}</option>)}</select></label><button type="button" onClick={() => setRefreshKey((value) => value + 1)}>↻ Refresh Facts</button></div></header>
+      <header><div><span>PRE-DISPATCH DECISION · CANONICAL CREW</span><h2>Consolidated Job Readiness</h2><p>All eight readiness dimensions are calculated from their owning operational modules. Crew & Required Skill now resolves the work-date crew from Firestore staffProfiles, vans, dailyVanAssignments and staffAbsences.</p></div><div className={styles.headerActions}><label>Work Order<select value={selectedOrder.id} onChange={(event) => setSelectedId(event.target.value)}>{orders.slice().reverse().map((order) => <option key={order.id} value={order.id}>{order.id} · {order.customer}</option>)}</select></label><button type="button" onClick={() => setRefreshKey((value) => value + 1)}>↻ Refresh Facts</button></div></header>
       {notice ? <div className={styles.notice}><span>{notice}</span><button type="button" onClick={() => setNotice(null)}>×</button></div> : null}
 
-      <div className={styles.metrics}><article><span>READY</span><strong className={styles.goodText}>{summary.ready}</strong><small>All source-owned dimensions resolved</small></article><article><span>AT RISK</span><strong className={summary.atRisk ? styles.warnText : ''}>{summary.atRisk}</strong><small>Unverified or pending source evidence</small></article><article><span>BLOCKED</span><strong className={summary.blocked ? styles.dangerText : ''}>{summary.blocked}</strong><small>Hard operational blocker exists</small></article><article><span>Open Risk Dimensions</span><strong>{summary.totalRisks}</strong><small>Across browser Work Orders</small></article></div>
+      <div className={styles.metrics}><article><span>READY</span><strong className={styles.goodText}>{summary.ready}</strong><small>All source-owned dimensions resolved</small></article><article><span>AT RISK</span><strong className={summary.atRisk ? styles.warnText : ''}>{summary.atRisk}</strong><small>Unverified or pending source evidence</small></article><article><span>BLOCKED</span><strong className={summary.blocked ? styles.dangerText : ''}>{summary.blocked}</strong><small>Hard operational blocker exists</small></article><article><span>Open Risk Dimensions</span><strong>{summary.totalRisks}</strong><small>Across current Work Orders</small></article></div>
 
       <section className={styles.hero}><div><span>{selectedOrder.id}</span><h3>{selectedOrder.customer} · {selectedOrder.site}</h3><p>{selectedOrder.customerFacingDescription} · {selectedOrder.scheduledDate} {selectedOrder.scheduledStart}–{selectedOrder.scheduledEnd}</p></div><div className={`${styles.overall} ${readiness.status === 'ready' ? styles.ready : readiness.status === 'blocked' ? styles.blocked : styles.risk}`}><span>OVERALL JOB READINESS</span><strong>{readiness.status.replace('_', ' ').toUpperCase()}</strong><small>{readiness.blockers.length} blocker(s) · {readiness.risks.length} risk(s)</small></div></section>
 
@@ -102,7 +135,7 @@ export function BrowserJobReadiness() {
         </aside>
       </div>
 
-      <footer><div><span>AUTHORITY MODEL</span><strong>Readiness facts are source-owned. Job Readiness calculates. Operations may release AT RISK. Field records actual start authority.</strong></div><p>No manual READY toggle remains in this consolidated decision layer.</p></footer>
+      <footer><div><span>AUTHORITY MODEL</span><strong>Readiness facts are source-owned. Job Readiness calculates. Operations may release AT RISK. Field records actual start authority.</strong></div><p>Canonical crew facts do not fall back to stale browser workforce data.</p></footer>
     </section>
   );
 }
