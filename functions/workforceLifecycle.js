@@ -206,6 +206,7 @@ async function offboardEmployee(payload, actor) {
     offboardedByName: actor.name,
   };
 
+  let regularVanAssignmentsCleared = 0;
   try {
     const batch = db.batch();
     batch.set(staffRef, {
@@ -213,6 +214,7 @@ async function offboardEmployee(payload, actor) {
       availability: 'Inactivo',
       employmentEndedAt: endDate,
       offboardingReason: reason,
+      offboardingCleanupPending: false,
       ...nowFields,
       userId: FieldValue.delete(),
       loginEmail: FieldValue.delete(),
@@ -221,7 +223,6 @@ async function offboardEmployee(payload, actor) {
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
 
-    let regularVanAssignmentsCleared = 0;
     vansSnapshot.docs.forEach((document) => {
       const van = document.data();
       const changes = {};
@@ -268,8 +269,7 @@ async function offboardEmployee(payload, actor) {
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
 
-    const eventRef = db.collection('employeeLifecycleEvents').doc();
-    batch.set(eventRef, {
+    batch.set(db.collection('employeeLifecycleEvents').doc(), {
       type: 'offboarded',
       staffId,
       employeeName: staff.name ?? staffId,
@@ -284,20 +284,35 @@ async function offboardEmployee(payload, actor) {
     });
 
     await batch.commit();
-    const futureAssignmentsCleared = await clearFutureDailyAssignments(staffId, endDate);
-    return {
-      staffId,
-      employeeName: staff.name ?? staffId,
-      endDate,
-      releasedLoginEmail: releaseLoginEmail ? loginEmail || null : null,
-      accessRetired: Boolean(accessDocument),
-      regularVanAssignmentsCleared,
-      futureAssignmentsCleared,
-    };
   } catch (error) {
     await rollbackAuthRetirement(authChange);
     throw error;
   }
+
+  let futureAssignmentsCleared = 0;
+  let cleanupWarning = null;
+  try {
+    futureAssignmentsCleared = await clearFutureDailyAssignments(staffId, endDate);
+  } catch (error) {
+    cleanupWarning = 'El empleado fue desactivado, pero algunas asignaciones futuras requieren revisión manual.';
+    logger.error('Employee offboarding future-assignment cleanup failed.', { staffId, endDate, error });
+    await staffRef.set({
+      offboardingCleanupPending: true,
+      offboardingCleanupError: cleanText(error?.message || error, 500),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true }).catch(() => undefined);
+  }
+
+  return {
+    staffId,
+    employeeName: staff.name ?? staffId,
+    endDate,
+    releasedLoginEmail: releaseLoginEmail ? loginEmail || null : null,
+    accessRetired: Boolean(accessDocument),
+    regularVanAssignmentsCleared,
+    futureAssignmentsCleared,
+    cleanupWarning,
+  };
 }
 
 async function reactivateEmployee(payload, actor) {
@@ -326,6 +341,8 @@ async function reactivateEmployee(payload, actor) {
     offboardedAt: FieldValue.delete(),
     offboardedByUserId: FieldValue.delete(),
     offboardedByName: FieldValue.delete(),
+    offboardingCleanupPending: FieldValue.delete(),
+    offboardingCleanupError: FieldValue.delete(),
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
   batch.set(db.collection('employeePayrollSettings').doc(staffId), {
