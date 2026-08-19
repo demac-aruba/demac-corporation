@@ -7,6 +7,7 @@ import {
   liveCompanyClosureReason,
   liveOperationalStartTimes,
   liveOperationalWindowAllows,
+  liveVanCrew,
   liveVanHalfDaySchedule,
   liveVanOperationallyAvailable,
   loadLiveOperationalCapacityState,
@@ -35,7 +36,7 @@ import { LiveAppointmentDetailsDrawer } from './live-appointment-details-drawer'
 import styles from './scheduling-overview-v2.module.css';
 
 type DisplaySlot = { start: string; end: string; segment: 'am' | 'pm'; operational: boolean; offReason?: string };
-type DisplayVan = { id: string; name: string; team: string; active: boolean };
+type DisplayVan = { id: string; name: string; active: boolean };
 type JobLink = { appointmentId: string; appointment: BrowserAppointmentRecord };
 type PendingLiveMove = PendingDragMove & { jobId: string; candidate: CandidateSlot };
 
@@ -257,7 +258,7 @@ export function LiveSchedulingOverview() {
   }, [bookingTarget, moveArmedJobId, moveBusy, pendingDragMove]);
 
   const jobs = useMemo(() => appointments.flatMap(appointmentAssignments), [appointments]);
-  const vans = useMemo<DisplayVan[]>(() => previewVans.map((van) => ({ id: van.id, name: van.name, team: van.team, active: van.active })), []);
+  const vans = useMemo<DisplayVan[]>(() => previewVans.map((van) => ({ id: van.id, name: van.name, active: van.active })), []);
   const canonicalVanIds = useMemo(() => new Set(vans.map((van) => van.id)), [vans]);
   const unresolvedJobs = useMemo(() => jobs.filter((job) => !canonicalVanIds.has(job.vanId)), [canonicalVanIds, jobs]);
   const jobLinks = useMemo(() => {
@@ -544,6 +545,7 @@ export function LiveSchedulingOverview() {
             {vans.map((van) => {
               const vanJobs = activeJobs.filter((job) => job.vanId === van.id);
               const vanSlots = displaySlotsForVan(activeDay, van.id, capacityState);
+              const crew = liveVanCrew(capacityState, van.id, activeDay.dateKey);
               const halfDay = liveVanHalfDaySchedule(capacityState, van.id, activeDay.dateKey);
               const operational = liveVanOperationallyAvailable(capacityState, van.id, activeDay.dateKey);
               const laneStatus = !operational
@@ -554,7 +556,13 @@ export function LiveSchedulingOverview() {
               return (
                 <section key={van.id} className={styles.vanLane}>
                   <header>
-                    <div className={styles.vanIdentity}><span>{van.id.replace('VAN-', 'V')}</span><div><strong>{van.name}</strong><small>{van.team}</small></div></div>
+                    <div className={styles.vanIdentity}>
+                      <span>{van.id.replace('VAN-', 'V')}</span>
+                      <div>
+                        <strong>{van.name}</strong>
+                        <small title={`Technician: ${crew.driverName || 'Unassigned'} · Helper: ${crew.helperName || 'Unassigned'}`}>{crew.label}</small>
+                      </div>
+                    </div>
                     <b style={{ color: !operational ? 'var(--danger)' : halfDay ? 'var(--warning)' : undefined }}>{laneStatus}</b>
                   </header>
                   <div className={styles.anchorBar}>
