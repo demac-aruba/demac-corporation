@@ -51,7 +51,7 @@ type LifecycleProfile = CanonicalStaffProfile & { employmentStartedAt?: string; 
 
 export function EmployeePayrollWorkspace() {
   const { principal } = useAuth();
-  const canViewPayroll = principal.role === 'super_admin' || principal.role === 'finance' || principal.capabilities.has('finance.full') || principal.capabilities.has('payroll_sensitive.view');
+  const canViewPayroll = principal.role === 'super_admin' || principal.role === 'finance' || principal.capabilities.has('payroll_sensitive.view');
   const [operations, setOperations] = useState<CanonicalOperationsState | null>(null);
   const [attendance, setAttendance] = useState<EmployeeAttendanceState>({ payrollSettings: [], timesheets: [] });
   const [period, setPeriod] = useState<PayrollPeriod>(() => payrollPeriodForReference(new Date()));
