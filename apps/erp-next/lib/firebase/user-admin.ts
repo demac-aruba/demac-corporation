@@ -30,6 +30,8 @@ export type ManagedUserInput = {
   phone?: string;
   role: ManagedUserRole;
   active: boolean;
+  staffId?: string;
+  vanId?: string;
 };
 
 type AdminUserResponse = {
