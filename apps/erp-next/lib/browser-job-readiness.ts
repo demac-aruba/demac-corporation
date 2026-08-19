@@ -3,7 +3,8 @@ import type { BrowserFieldExecutionRecord } from './browser-field';
 import { browserKeys, loadBrowserValue, saveBrowserValue } from './browser-store';
 import { loadWorkOrderScopes, scopeStatus } from './browser-workorder-scope';
 import { deriveWorkOrderMaterialReadiness, loadWorkOrderMaterialPlans } from './browser-workorder-materials';
-import { deriveCrewSkillReadiness } from './browser-workforce';
+import { deriveCrewSkillReadiness, type WorkforceEmployee } from './workforce-readiness';
+import { loadBrowserWorkforce } from './browser-workforce';
 import { deriveRequiredToolsReadiness } from './browser-tools';
 import { deriveSiteAccessReadiness } from './browser-site-access';
 import { deriveCommercialClearanceReadiness } from './browser-commercial-clearance';
@@ -57,12 +58,15 @@ function assignmentDimension(order: BrowserWorkOrderRecord): JobReadinessDimensi
 export function deriveBrowserJobReadiness(order: BrowserWorkOrderRecord, options?: {
   appointments?: BrowserAppointmentRecord[];
   executions?: BrowserFieldExecutionRecord[];
+  crewRoster?: WorkforceEmployee[];
 }): BrowserJobReadiness {
   const appointments = options?.appointments ?? loadBrowserValue<BrowserAppointmentRecord[]>(browserKeys.appointments, []);
   const scope = loadWorkOrderScopes().find((item) => item.workOrderId === order.id);
   const scopeResult = scopeStatus(order, scope);
   const materials = deriveWorkOrderMaterialReadiness(order, { plans: loadWorkOrderMaterialPlans(), executions: options?.executions });
-  const crewSkill = deriveCrewSkillReadiness(order);
+  // Compatibility fallback remains for isolated preview callers. The active Work Orders UI
+  // supplies a date-aware canonical Firestore roster explicitly.
+  const crewSkill = deriveCrewSkillReadiness(order, options?.crewRoster ?? loadBrowserWorkforce());
   const requiredTools = deriveRequiredToolsReadiness(order);
   const siteAccess = deriveSiteAccessReadiness(order);
   const commercial = deriveCommercialClearanceReadiness(order);
