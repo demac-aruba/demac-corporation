@@ -82,8 +82,7 @@ function blockedOperationalStatus(value: string | undefined) {
 
 function normalizeClosedWeekdays(value: unknown) {
   if (!Array.isArray(value)) return [0];
-  const result = [...new Set(value.map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))].sort();
-  return result.length ? result : [0];
+  return [...new Set(value.map(Number).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))].sort();
 }
 
 function capacityKey(startDate?: string, endDate?: string) {
@@ -114,7 +113,6 @@ async function loadCapacityState(startDate?: string, endDate?: string): Promise<
 
   const canonicalVans = new Map<string, LiveOperationalVan>();
   for (const van of rawVans) {
-    if (van.active === false) continue;
     const id = canonicalVanId(van.id, rawVans);
     if (!/^VAN-[1-4]$/.test(id)) continue;
     const current = canonicalVans.get(id);
@@ -193,7 +191,7 @@ export function liveVanIsHalfDay(state: LiveOperationalCapacityState | null, van
 export function liveVanOperationallyAvailable(state: LiveOperationalCapacityState | null, vanId: string, dateKey: string) {
   if (!state) return true;
   const van = state.vans.get(vanId);
-  if (van && (!van.active || blockedOperationalStatus(van.status))) return false;
+  if (!van || !van.active || blockedOperationalStatus(van.status)) return false;
   const daily = state.dailyAssignments.find((assignment) => assignment.date === dateKey && assignment.vanId === vanId);
   return !blockedOperationalStatus(daily?.status);
 }
