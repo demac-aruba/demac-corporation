@@ -1,4 +1,4 @@
-import { saveFirestoreDocument } from './firebase/firestore-rest';
+import { getFirestoreDocument, saveFirestoreDocument, updateFirestoreDocument } from './firebase/firestore-rest';
 import type {
   CanonicalBusinessCalendar,
   CanonicalCalendarClosure,
@@ -13,38 +13,54 @@ function updated<T extends { id: string }>(record: T): T {
   return { ...record, updatedAt: new Date().toISOString() } as T;
 }
 
+/**
+ * Canonical operations documents may contain Legacy fields that ERP Next has not
+ * modeled yet. Existing documents are updated with an explicit field mask instead
+ * of being replaced wholesale. New records are created normally.
+ */
+async function upsertCanonicalDocument<T extends { id: string }>(collectionPath: string, record: T): Promise<T> {
+  const next = updated(record);
+  const existing = await getFirestoreDocument<T>(collectionPath, next.id);
+  if (!existing) return saveFirestoreDocument(collectionPath, next);
+  const { id, ...changes } = next;
+  return updateFirestoreDocument<T>(collectionPath, id, changes as Record<string, unknown>);
+}
+
 export function saveCanonicalStaffProfile(profile: CanonicalStaffProfile) {
-  return saveFirestoreDocument('staffProfiles', updated(profile));
+  return upsertCanonicalDocument('staffProfiles', profile);
 }
 
 export function saveCanonicalVanProfile(van: CanonicalVan) {
-  return saveFirestoreDocument('vans', updated(van));
+  return upsertCanonicalDocument('vans', van);
 }
 
 export function saveCanonicalDailyVanAssignment(assignment: CanonicalDailyVanAssignment) {
-  return saveFirestoreDocument('dailyVanAssignments', updated(assignment));
+  return upsertCanonicalDocument('dailyVanAssignments', assignment);
 }
 
 export function saveCanonicalStaffAbsence(absence: CanonicalStaffAbsence) {
-  return saveFirestoreDocument('staffAbsences', updated(absence));
+  return upsertCanonicalDocument('staffAbsences', absence);
 }
 
 export function saveCanonicalVanHalfDaySchedule(schedule: CanonicalVanHalfDaySchedule) {
-  return saveFirestoreDocument('vanHalfDaySchedules', updated(schedule));
+  return upsertCanonicalDocument('vanHalfDaySchedules', schedule);
 }
 
 export function saveCanonicalBusinessCalendar(settings: CanonicalBusinessCalendar) {
-  return saveFirestoreDocument('businessSettings', updated({
+  return upsertCanonicalDocument('businessSettings', {
     ...settings,
     id: 'business-calendar',
     closedWeekdays: [...new Set((settings.closedWeekdays ?? []).map(Number))].filter((day) => day >= 0 && day <= 6).sort(),
-  }));
+  });
 }
 
 export function saveCanonicalCalendarClosure(closure: CanonicalCalendarClosure) {
-  return saveFirestoreDocument('calendarClosures', updated({ ...closure, active: true }));
+  return upsertCanonicalDocument('calendarClosures', { ...closure, active: true });
 }
 
 export function reopenCanonicalCalendarClosure(closure: CanonicalCalendarClosure) {
-  return saveFirestoreDocument('calendarClosures', updated({ ...closure, active: false }));
+  return updateFirestoreDocument<CanonicalCalendarClosure>('calendarClosures', closure.id, {
+    active: false,
+    updatedAt: new Date().toISOString(),
+  });
 }
