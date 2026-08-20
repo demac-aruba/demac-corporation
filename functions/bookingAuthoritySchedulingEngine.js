@@ -21,12 +21,16 @@ const {
   weekday,
 } = require("./bookingSchedulingPrimitives");
 const { candidateAvailability } = require("./bookingCapacityAvailability");
+const { resolveCatalogService } = require("./serviceCatalog");
 
-const CANONICAL_SCHEDULING_ENGINE_VERSION = 3;
+const CANONICAL_SCHEDULING_ENGINE_VERSION = 4;
 const CLIENT_OPTION_LIMIT = 2;
 const ASSIGNMENT_COMBINATION_LIMIT = 8;
 const OFFICE_TARGET_OPTION_LIMIT = ASSIGNMENT_COMBINATION_LIMIT;
 
+// Transitional fallback only for service records that have not yet been migrated
+// into services/{serviceId}.serviceDefinition. New canonical services own their
+// duration and allocation rules in the service catalog instead of this object.
 const DEFAULT_OPERATIONAL_RULES = Object.freeze({
   standardService: {
     differentPropertyDailyCapacity: 6,
@@ -107,10 +111,7 @@ function normalizeOperationalRules(raw = {}) {
   );
   capacity.automaticSupportMaxUnits = Math.max(
     capacity.automaticSupportFromUnits,
-    Math.min(
-      capacity.automaticSupportMaxUnits,
-      capacity.singlePropertyMainVanMaxUnits + capacity.supportHalfDayMaxUnits,
-    ),
+    capacity.automaticSupportMaxUnits,
   );
   return normalized;
 }
@@ -121,8 +122,16 @@ function singleWork(request = {}) {
   if (presetIds.length !== 1) {
     throw new BookingAuthorityError(
       BOOKING_ERROR_CODES.INVALID_REQUEST,
-      "Canonical scheduling requires exactly one appointment preset per booking request.",
+      "Canonical scheduling requires exactly one appointment work type per booking request.",
       { presetIds },
+    );
+  }
+  const serviceIds = [...new Set(workLines.map((line) => cleanText(line.serviceId, 120)).filter(Boolean))];
+  if (serviceIds.length > 1) {
+    throw new BookingAuthorityError(
+      BOOKING_ERROR_CODES.INVALID_REQUEST,
+      "Canonical scheduling requires exactly one service catalog item per booking request.",
+      { serviceIds },
     );
   }
   const quantity = workLines.reduce((sum, line) => sum + Math.max(0, Number(line.quantity) || 0), 0);
@@ -133,10 +142,17 @@ function singleWork(request = {}) {
       { field: "workLines.quantity" },
     );
   }
-  return { presetId: presetIds[0], quantity };
+  return { presetId: presetIds[0], serviceId: serviceIds[0] || "", quantity };
 }
 
-function exactPreset(data, presetId) {
+function exactPreset(data, workOrPresetId) {
+  const work = typeof workOrPresetId === "string"
+    ? { presetId: cleanText(workOrPresetId, 120), serviceId: "" }
+    : (workOrPresetId || {});
+  const canonical = resolveCatalogService(data.services || [], work);
+  if (canonical) return canonical;
+
+  const presetId = cleanText(work.presetId, 120);
   const settings = (data.businessSettings || []).find((item) => item.id === "appointment-work-presets");
   const presets = Array.isArray(settings?.presets)
     ? settings.presets.filter((item) => item.active !== false)
@@ -145,15 +161,24 @@ function exactPreset(data, presetId) {
   if (!preset) {
     throw new BookingAuthorityError(
       BOOKING_ERROR_CODES.INVALID_REQUEST,
-      "The requested appointment preset is not configured in the ERP.",
-      { presetId },
+      "The requested service is not configured in the canonical service catalog or legacy appointment presets.",
+      { presetId, serviceId: cleanText(work.serviceId, 120) },
     );
   }
+  const matchingService = (data.services || []).find((service) => (
+    cleanText(service.id, 120) === cleanText(work.serviceId, 120)
+    || normalizeText(service.name) === normalizeText(preset.label || presetId)
+  ));
   return {
     id: presetId,
     label: cleanText(preset.label || presetId, 180),
     kind: cleanText(preset.kind, 80),
     durationMinutesPerUnit: Math.max(30, Number(preset.durationMinutesPerUnit || 60)),
+    durationMode: preset.perUnit === false ? "fixed" : "per_unit",
+    allocation: null,
+    serviceId: cleanText(matchingService?.id || work.serviceId, 120),
+    source: "appointment_work_presets",
+    serviceDefinitionVersion: 0,
   };
 }
 
@@ -166,9 +191,94 @@ function isStandardServicePreset(preset = {}) {
 
 function supportStartTimes(slotCount) {
   const slots = Math.max(1, Math.ceil(Number(slotCount) || 1));
-  if (slots >= 3) return ["08:30", "13:30"];
-  if (slots === 2) return ["08:30", "09:30", "13:30", "14:30"];
+  if (slots > REGULAR_SLOTS.length) return [];
+  // CandidateAvailability is the source of truth for whether a particular van
+  // can actually fit the requested span. Returning every operational start lets
+  // the office choose the support van and arrival time instead of hiding valid
+  // options behind coarse AM/PM rules.
   return [...MORNING_SLOTS, EXTRA_MORNING_SLOT, ...AFTERNOON_SLOTS];
+}
+
+function durationForQuantity(quantity, durationMinutesPerUnit, durationMode) {
+  const duration = Math.max(30, Number(durationMinutesPerUnit || 60));
+  return durationMode === "fixed" ? duration : Math.max(1, quantity) * duration;
+}
+
+function regularAllocation(quantity, durationMinutes, role = "primary") {
+  const slots = Math.ceil(durationMinutes / 60);
+  if (slots < 1 || slots > REGULAR_SLOTS.length) return null;
+  return {
+    quantity,
+    durationMinutes,
+    slots,
+    fullDay: false,
+    role,
+    timePolicy: "candidate",
+  };
+}
+
+function primarySupportAllocationPlan(quantity, durationMinutesPerUnit, availableVanCount, preset, fallbackCapacity = null) {
+  if (availableVanCount < 1) return [];
+  const durationMode = preset.durationMode === "fixed" ? "fixed" : "per_unit";
+  const allocation = preset.allocation || {};
+  const differentPropertyDailyMaxUnits = boundedInteger(
+    allocation.differentPropertyDailyMaxUnits,
+    fallbackCapacity?.differentPropertyDailyCapacity ?? 6,
+    1,
+    24,
+  );
+  const primaryMaxUnits = boundedInteger(
+    allocation.primaryMaxUnits,
+    fallbackCapacity?.singlePropertyMainVanMaxUnits ?? 7,
+    Math.max(1, differentPropertyDailyMaxUnits),
+    48,
+  );
+  const totalDuration = durationForQuantity(quantity, durationMinutesPerUnit, durationMode);
+
+  if (quantity <= differentPropertyDailyMaxUnits) {
+    const regular = regularAllocation(quantity, totalDuration);
+    return regular ? [regular] : [];
+  }
+
+  if (quantity <= primaryMaxUnits) {
+    return [{
+      quantity,
+      durationMinutes: totalDuration,
+      slots: REGULAR_SLOTS.length,
+      fullDay: true,
+      role: "primary",
+      fixedTime: "08:30",
+      timePolicy: "fixed",
+    }];
+  }
+
+  if (availableVanCount < 2) return [];
+  const supportQuantity = quantity - primaryMaxUnits;
+  const supportDuration = durationForQuantity(supportQuantity, durationMinutesPerUnit, durationMode);
+  const supportSlots = Math.ceil(supportDuration / 60);
+  const allowedTimes = supportStartTimes(supportSlots);
+  if (!supportQuantity || !allowedTimes.length) return [];
+
+  return [
+    {
+      quantity: primaryMaxUnits,
+      durationMinutes: durationForQuantity(primaryMaxUnits, durationMinutesPerUnit, durationMode),
+      slots: REGULAR_SLOTS.length,
+      fullDay: true,
+      role: "primary",
+      fixedTime: "08:30",
+      timePolicy: "fixed",
+    },
+    {
+      quantity: supportQuantity,
+      durationMinutes: supportDuration,
+      slots: supportSlots,
+      fullDay: false,
+      role: "support",
+      allowedTimes,
+      timePolicy: "allowed",
+    },
+  ];
 }
 
 function buildAllocationPlan(quantity, durationMinutesPerUnit, availableVanCount, preset, rawRules) {
@@ -176,64 +286,36 @@ function buildAllocationPlan(quantity, durationMinutesPerUnit, availableVanCount
   const duration = Math.max(30, Number(durationMinutesPerUnit || 60));
   if (!quantity || !availableVanCount) return [];
 
-  if (isStandardServicePreset(preset)) {
-    const capacity = rules.standardService;
-    const regularSlots = Math.ceil((quantity * duration) / 60);
-    if (quantity <= capacity.differentPropertyDailyCapacity && regularSlots <= 6) {
-      return [{
-        quantity,
-        slots: regularSlots,
-        fullDay: false,
-        role: "primary",
-        timePolicy: "candidate",
-      }];
+  if (preset?.source === "service_catalog") {
+    if (preset.allocation?.mode === "primary_with_support") {
+      return primarySupportAllocationPlan(quantity, duration, availableVanCount, preset);
     }
-    if (quantity <= capacity.singlePropertyMainVanMaxUnits && availableVanCount >= 1) {
-      return [{
-        quantity,
-        slots: 6,
-        fullDay: true,
-        role: "primary",
-        fixedTime: "08:30",
-        timePolicy: "fixed",
-      }];
-    }
-    if (
-      quantity >= capacity.automaticSupportFromUnits
-      && quantity <= capacity.automaticSupportMaxUnits
-      && availableVanCount >= 2
-    ) {
-      const supportQuantity = quantity - capacity.singlePropertyMainVanMaxUnits;
-      const supportSlots = Math.ceil((supportQuantity * duration) / 60);
-      if (
-        supportQuantity > 0
-        && supportQuantity <= capacity.supportHalfDayMaxUnits
-        && supportSlots <= 3
-      ) {
-        return [
-          {
-            quantity: capacity.singlePropertyMainVanMaxUnits,
-            slots: 6,
-            fullDay: true,
-            role: "primary",
-            fixedTime: "08:30",
-            timePolicy: "fixed",
-          },
-          {
-            quantity: supportQuantity,
-            slots: supportSlots,
-            fullDay: false,
-            role: "support",
-            allowedTimes: supportStartTimes(supportSlots),
-            timePolicy: "allowed",
-          },
-        ];
-      }
-    }
-    return [];
+    const totalDuration = durationForQuantity(quantity, duration, preset.durationMode);
+    const allocation = regularAllocation(quantity, totalDuration);
+    return allocation ? [allocation] : [];
   }
 
-  const maxUnitsPerVan = Math.max(1, Math.floor(360 / duration));
+  // Legacy fallback while existing Firestore service records are migrated. The
+  // old arbitrary 10-unit ceiling is intentionally not preserved: after the
+  // primary maximum is exceeded, one support van is requested for whatever
+  // remaining workload can physically fit in that van's operating day.
+  if (isStandardServicePreset(preset)) {
+    return primarySupportAllocationPlan(
+      quantity,
+      duration,
+      availableVanCount,
+      { ...preset, durationMode: "per_unit", allocation: { mode: "primary_with_support" } },
+      rules.standardService,
+    );
+  }
+
+  const durationMode = preset?.durationMode === "fixed" ? "fixed" : "per_unit";
+  if (durationMode === "fixed") {
+    const allocation = regularAllocation(quantity, duration);
+    return allocation ? [allocation] : [];
+  }
+
+  const maxUnitsPerVan = Math.max(1, Math.floor((REGULAR_SLOTS.length * 60) / duration));
   const requiredVans = Math.ceil(quantity / maxUnitsPerVan);
   if (requiredVans > availableVanCount) return [];
   const plan = [];
@@ -242,6 +324,7 @@ function buildAllocationPlan(quantity, durationMinutesPerUnit, availableVanCount
     const units = Math.min(maxUnitsPerVan, remaining);
     plan.push({
       quantity: units,
+      durationMinutes: units * duration,
       slots: Math.ceil((units * duration) / 60),
       fullDay: false,
       role: index === 0 ? "primary" : "support",
@@ -318,6 +401,7 @@ function selectClientOptions(options) {
 }
 
 function serviceIdForRequest(request, preset, services = []) {
+  if (cleanText(preset?.serviceId, 120)) return cleanText(preset.serviceId, 120);
   const explicit = cleanText(
     request.workLines?.find((line) => line.serviceId)?.serviceId,
     120,
@@ -425,7 +509,7 @@ function generateCanonicalOptions({
   requireRequestedTarget = false,
 }) {
   const work = singleWork(request);
-  const preset = exactPreset(data, work.presetId);
+  const preset = exactPreset(data, work);
   const operationalSettings = (data.businessSettings || []).find(
     (item) => item.id === "company-operational-rules",
   );
@@ -452,8 +536,13 @@ function generateCanonicalOptions({
   const candidateZone = propertyZone(property, address, routeConfig);
   const requestedDate = requestedDateValue(request.constraints?.requestedDate);
   const timeConstraint = parseStructuredTimeConstraint(request.constraints);
-  const largeSingleProperty = isStandardServicePreset(preset)
-    && work.quantity > operationalRules.standardService.differentPropertyDailyCapacity;
+  const canonicalRegularMax = preset.allocation?.mode === "primary_with_support"
+    ? preset.allocation.differentPropertyDailyMaxUnits
+    : null;
+  const largeSingleProperty = canonicalRegularMax
+    ? work.quantity > canonicalRegularMax
+    : isStandardServicePreset(preset)
+      && work.quantity > operationalRules.standardService.differentPropertyDailyCapacity;
   const calendarSettings = (data.businessSettings || []).find((item) => item.id === "business-calendar")
     || { closedWeekdays: [0] };
   const primaryAllocation = allocations[0];
@@ -516,7 +605,7 @@ function generateCanonicalOptions({
 
         options.push({
           id: `opt-${hashId(
-            `${date}|${primary.time}|${selected.map((item) => `${item.vanId}:${item.time}`).join(",")}|${work.quantity}|${preset.id}`,
+            `${date}|${primary.time}|${selected.map((item) => `${item.vanId}:${item.time}`).join(",")}|${work.quantity}|${preset.id}|${preset.serviceId || ""}`,
             16,
           )}`,
           date,
@@ -528,6 +617,8 @@ function generateCanonicalOptions({
           presetId: preset.id,
           presetLabel: preset.label,
           durationMinutesPerUnit: preset.durationMinutesPerUnit,
+          durationMode: preset.durationMode,
+          serviceDefinitionVersion: preset.serviceDefinitionVersion || 0,
           serviceId: serviceIdForRequest(request, preset, data.services),
           assignments: selected,
           score,
