@@ -1,3 +1,4 @@
+import type { AppointmentRecipientSelection, NewBookingContactLink } from './customer-contacts';
 import { firebaseClientConfig } from './firebase/client-config';
 import { requireFirebaseWebSession } from './firebase/session';
 
@@ -196,6 +197,29 @@ export function createOfficeProperty(input: {
   }>('create_property', input, 10_000);
 }
 
+export function saveOfficeContactAssignment(input: {
+  requestId: string;
+  customerId: string;
+  propertyId: string;
+  link: NewBookingContactLink;
+}) {
+  return callOfficeBookingAuthority<{
+    success: true;
+    version: number;
+    contactId: string;
+    assignmentId: string;
+  }>('save_contact_assignment', input, 10_000);
+}
+
+export function deactivateOfficeContactAssignment(input: {
+  requestId: string;
+  customerId: string;
+  propertyId: string;
+  assignmentId: string;
+}) {
+  return callOfficeBookingAuthority<{ success: true; version: number; assignmentId: string }>('deactivate_contact_assignment', input, 10_000);
+}
+
 export async function checkOfficeCreateAvailability(input: {
   requestId: string;
   customerId: string;
@@ -209,6 +233,7 @@ export async function checkOfficeCreateAvailability(input: {
   requiredVanId: string;
   customerFacingDescription?: string;
   technicianInstructions?: string;
+  recipientSelections?: AppointmentRecipientSelection[];
   notes?: string;
 }) {
   return callOfficeBookingAuthority<OfficeAvailabilityResult>('check_availability', input, 12_000);
