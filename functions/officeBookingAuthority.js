@@ -465,7 +465,7 @@ function createOfficeBookingApi({
 
   async function handle(request) {
     if (request.method === "OPTIONS") return { status: 204, body: null };
-    if (request.method !== "POST") return { status: 405, body: { success: false, error: { code: "method_not_allowed", message: "POST is required.", details: {} } };
+    if (request.method !== "POST") return { status: 405, body: { success: false, error: { code: "method_not_allowed", message: "POST is required.", details: {} } } };
     try {
       const identity = await authenticate(request);
       const action = cleanText(request.body?.action, 120);
