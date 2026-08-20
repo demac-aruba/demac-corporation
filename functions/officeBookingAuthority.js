@@ -13,8 +13,9 @@ const { createBookingAuthority } = require("./bookingAuthorityFirestore");
 const { createBookingAppointmentLifecycle } = require("./bookingAuthorityAppointmentLifecycle");
 const { createOperationalMoveAuthority } = require("./bookingOperationalMove");
 const { createSchedulingProvider } = require("./bookingAuthoritySchedulingProvider");
+const { mergeBookablePresets } = require("./serviceCatalog");
 
-const OFFICE_BOOKING_API_VERSION = 7;
+const OFFICE_BOOKING_API_VERSION = 8;
 const OFFICE_BOOKING_ROLES = Object.freeze([
   "admin",
   "office",
@@ -99,16 +100,6 @@ function bookingRequestFromOffice(data = {}) {
     },
     notes: cleanText(data.notes, 1_500),
   });
-}
-
-function compactPreset(item = {}) {
-  return {
-    id: cleanText(item.id, 120),
-    label: cleanText(item.label || item.id, 180),
-    kind: cleanText(item.kind, 80),
-    durationMinutesPerUnit: Math.max(30, Number(item.durationMinutesPerUnit || 60)),
-    active: item.active !== false,
-  };
 }
 
 function normalizedAppointmentIds(value) {
@@ -201,6 +192,10 @@ function apiError(error) {
   };
 }
 
+function snapshotItems(snapshot) {
+  return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+}
+
 function createOfficeBookingApi({
   db,
   verifyIdToken,
@@ -263,12 +258,19 @@ function createOfficeBookingApi({
   }
 
   async function listPresets() {
-    const snapshot = await db.collection("businessSettings").doc("appointment-work-presets").get();
-    const data = snapshot.exists ? snapshot.data() || {} : {};
-    const presets = Array.isArray(data.presets)
-      ? data.presets.map(compactPreset).filter((item) => item.id && item.active)
-      : [];
-    return { success: true, version: OFFICE_BOOKING_API_VERSION, presets };
+    const [serviceSnapshot, legacySnapshot] = await Promise.all([
+      db.collection("services").get(),
+      db.collection("businessSettings").doc("appointment-work-presets").get(),
+    ]);
+    const services = snapshotItems(serviceSnapshot);
+    const legacy = legacySnapshot.exists ? legacySnapshot.data() || {} : {};
+    const presets = mergeBookablePresets(services, [{ id: "appointment-work-presets", ...legacy }]);
+    return {
+      success: true,
+      version: OFFICE_BOOKING_API_VERSION,
+      presets,
+      catalogSource: presets.some((item) => item.source === "service_catalog") ? "services" : "legacy_fallback",
+    };
   }
 
   async function listAppointmentAttribution(data = {}) {
@@ -463,7 +465,7 @@ function createOfficeBookingApi({
 
   async function handle(request) {
     if (request.method === "OPTIONS") return { status: 204, body: null };
-    if (request.method !== "POST") return { status: 405, body: { success: false, error: { code: "method_not_allowed", message: "POST is required.", details: {} } } };
+    if (request.method !== "POST") return { status: 405, body: { success: false, error: { code: "method_not_allowed", message: "POST is required.", details: {} } };
     try {
       const identity = await authenticate(request);
       const action = cleanText(request.body?.action, 120);
@@ -518,8 +520,3 @@ module.exports.OFFICE_BOOKING_ACTIONS = OFFICE_BOOKING_ACTIONS;
 module.exports.OFFICE_BOOKING_ROLES = OFFICE_BOOKING_ROLES;
 module.exports.bookingRequestFromOffice = bookingRequestFromOffice;
 module.exports.buildOfficeProperty = buildOfficeProperty;
-module.exports.createOfficeBookingApi = createOfficeBookingApi;
-module.exports.lifecycleChangeKind = lifecycleChangeKind;
-module.exports.normalizeOfficePhone = normalizeOfficePhone;
-module.exports.officeRequestId = officeRequestId;
-module.exports.requireOfficeRole = requireOfficeRole;
