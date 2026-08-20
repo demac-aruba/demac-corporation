@@ -15,6 +15,7 @@ import {
 } from '../../lib/live-operational-capacity';
 import {
   enrichLiveSchedulingAttribution,
+  invalidateLiveSchedulingReferenceCache,
   loadLiveSchedulingAppointmentsFast,
 } from '../../lib/live-scheduling-fast';
 import {
@@ -166,6 +167,7 @@ export function LiveSchedulingOverview() {
   const [moveBusy, setMoveBusy] = useState(false);
   const [moveNotice, setMoveNotice] = useState('');
   const [loading, setLoading] = useState(true);
+  const [manualRefreshing, setManualRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [lastSyncedAt, setLastSyncedAt] = useState('');
   const clickTimerRef = useRef<number | null>(null);
@@ -180,10 +182,11 @@ export function LiveSchedulingOverview() {
   }), [baseWeek, capacityState]);
   const canManage = principal.active && principal.capabilities.has('scheduling.manage');
   const actor = useMemo(() => ({ id: principal.userId, name: principal.displayName }), [principal.displayName, principal.userId]);
-  const interactionActive = Boolean(bookingTarget || moveArmedJobId || pendingDragMove || moveBusy);
+  const interactionActive = Boolean(bookingTarget || moveArmedJobId || pendingDragMove || moveBusy || manualRefreshing);
 
   const refresh = useCallback(async (forceCapacity = false) => {
     const sequence = ++refreshSequenceRef.current;
+    if (forceCapacity) invalidateLiveSchedulingReferenceCache();
     try {
       const [next, capacityResult] = await Promise.all([
         loadLiveSchedulingAppointmentsFast({ startDate: weekStartDate, endDate: weekEndDate }),
@@ -215,6 +218,16 @@ export function LiveSchedulingOverview() {
       setLoading(false);
     }
   }, [weekEndDate, weekStartDate]);
+
+  const refreshNow = useCallback(async () => {
+    if (interactionActive) return;
+    setManualRefreshing(true);
+    try {
+      await refresh(true);
+    } finally {
+      setManualRefreshing(false);
+    }
+  }, [interactionActive, refresh]);
 
   useEffect(() => {
     void refresh();
@@ -486,13 +499,16 @@ export function LiveSchedulingOverview() {
           <p>Live Booking Authority schedule. Confirmed customer appointments and canonical operating capacity are read from Firestore; local demo scheduling is not mixed into this view.</p>
         </div>
         <div className={styles.pageActions}>
-          <button type="button" className={styles.secondary} onClick={() => void refresh(true)} disabled={loading || interactionActive}>↻ Refresh live</button>
+          <button type="button" className={styles.secondary} onClick={() => void refreshNow()} disabled={loading || interactionActive}>
+            {manualRefreshing ? '↻ Refreshing…' : '↻ Refresh live'}
+          </button>
+          <span style={{ color: error ? 'var(--danger)' : 'var(--muted)', fontSize: 7.5, fontWeight: 800, whiteSpace: 'nowrap' }}>
+            {error ? 'Sync error' : manualRefreshing ? 'Syncing now…' : loading ? 'Syncing…' : lastSyncedAt ? `Synced ${lastSyncedAt}` : 'Live'}
+          </span>
         </div>
       </header>
 
-      <div className={styles.notice}>
-        <span>{error ? `Live sync error: ${error}` : loading ? 'Loading canonical Booking Authority schedule…' : `LIVE · Booking Authority${lastSyncedAt ? ` · synced ${lastSyncedAt}` : ''}`}</span>
-      </div>
+      {error ? <div className={styles.notice}><span>Live sync error: {error}</span></div> : null}
       {capacityError ? <div className={styles.notice}><span>Canonical operating-capacity policy could not be loaded: {capacityError}. Appointment data remains visible, but scheduling changes are disabled until capacity refresh succeeds.</span></div> : null}
       {moveNotice ? <div className={styles.notice}><span>{moveNotice}</span>{moveArmedJobId && !moveBusy ? <button type="button" onClick={() => { setMoveArmedJobId(''); setMoveNotice('Move mode cancelled.'); }}>×</button> : null}</div> : null}
       {unresolvedJobs.length ? <div className={styles.notice}><span>Data integrity attention: {unresolvedJobs.length} assignment{unresolvedJobs.length === 1 ? '' : 's'} reference a van that cannot be resolved to Van 1–4. They are not converted into fake extra lanes.</span></div> : null}
