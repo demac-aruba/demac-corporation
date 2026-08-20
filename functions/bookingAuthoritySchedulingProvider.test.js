@@ -70,7 +70,7 @@ test("provider exposes canonical provider v7", () => {
 });
 
 test("canonical scheduling engine is versioned independently", () => {
-  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 2);
+  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 3);
 });
 
 test("provider verifies the exact ERP customer/property relationship", () => {
