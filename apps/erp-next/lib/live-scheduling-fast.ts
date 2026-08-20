@@ -1,5 +1,4 @@
 import type { BrowserAppointmentRecord } from './browser-operational';
-import type { BookingContact, BookingContactAssignment } from './customer-contacts';
 import {
   listFirestoreCollection,
   queryFirestoreCollectionDateRange,
@@ -46,7 +45,6 @@ export type LiveSchedulingProperty = {
   operationalZone?: string;
   notes?: string;
   accessInstructions?: string;
-  contacts?: Array<Record<string, unknown>>;
   active?: boolean;
   createdAt?: string;
   updatedAt?: string;
@@ -55,8 +53,6 @@ export type LiveSchedulingProperty = {
 export type LiveSchedulingReferenceData = {
   clients: LiveSchedulingClient[];
   properties: LiveSchedulingProperty[];
-  contacts: BookingContact[];
-  contactAssignments: BookingContactAssignment[];
   vans: Van[];
 };
 
@@ -89,10 +85,8 @@ export function loadLiveSchedulingReferenceData() {
   const promise = Promise.all([
     listFirestoreCollection<LiveSchedulingClient>('clients', 1000),
     listFirestoreCollection<LiveSchedulingProperty>('properties', 1000),
-    listFirestoreCollection<BookingContact>('contacts', 2000),
-    listFirestoreCollection<BookingContactAssignment>('contactPropertyAssignments', 4000),
     listFirestoreCollection<Van>('vans', 250),
-  ]).then(([clients, properties, contacts, contactAssignments, vans]) => ({ clients, properties, contacts, contactAssignments, vans }));
+  ]).then(([clients, properties, vans]) => ({ clients, properties, vans }));
   referenceCache = { expiresAt: now + REFERENCE_CACHE_MS, promise };
   promise.catch(() => {
     if (referenceCache?.promise === promise) referenceCache = null;
