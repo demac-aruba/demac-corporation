@@ -97,6 +97,27 @@ export function catalogMigrationState(item: CatalogItem): CatalogMigrationState 
     : 'legacy_service';
 }
 
+function activeCanonicalBookingCode(item: CatalogItem) {
+  if (catalogItemType(item) !== 'Servicio' || item.active === false || catalogMigrationState(item) !== 'canonical') return '';
+  return bookingCodeFromName(item.serviceDefinition?.bookingCode ?? '');
+}
+
+function validateCatalogMutation(item: CatalogItem, catalog: CatalogItem[], existing?: CatalogItem) {
+  if (existing && catalogItemType(existing) !== catalogItemType(item)) {
+    throw new Error('Catalog item type cannot be changed after creation. Create a separate Service or Product record instead.');
+  }
+
+  const bookingCode = activeCanonicalBookingCode(item);
+  if (!bookingCode) return;
+  const conflict = catalog.find((candidate) => (
+    candidate.id !== item.id
+    && activeCanonicalBookingCode(candidate) === bookingCode
+  ));
+  if (conflict) {
+    throw new Error(`Booking code "${bookingCode}" is already used by active service "${conflict.name}". Each active canonical service must have a unique booking code.`);
+  }
+}
+
 export function normalizedCatalogPricing(input?: Partial<CatalogPricingDefinition>, basePrice = 0): CatalogPricingDefinition {
   const mode: CatalogPricingMode = ['fixed', 'per_unit', 'tiered_btu', 'quote'].includes(String(input?.mode))
     ? input!.mode as CatalogPricingMode
@@ -240,15 +261,25 @@ export async function listCanonicalCatalog() {
 }
 
 export async function createCatalogItem(item: CatalogItem) {
+  const catalog = await listCanonicalCatalog();
+  validateCatalogMutation(item, catalog);
   return saveFirestoreDocument('services', item);
 }
 
 export async function updateCatalogItem(item: CatalogItem) {
+  const catalog = await listCanonicalCatalog();
+  const existing = catalog.find((candidate) => candidate.id === item.id);
+  if (!existing) throw new Error(`Catalog item ${item.id} no longer exists.`);
+  validateCatalogMutation(item, catalog, existing);
   const { id, ...changes } = item;
   return updateFirestoreDocument<CatalogItem>('services', id, changes);
 }
 
 export async function setCatalogItemActive(id: string, active: boolean, actorId: string, actorName: string) {
+  const catalog = await listCanonicalCatalog();
+  const existing = catalog.find((candidate) => candidate.id === id);
+  if (!existing) throw new Error(`Catalog item ${id} no longer exists.`);
+  validateCatalogMutation({ ...existing, active }, catalog, existing);
   return updateFirestoreDocument<CatalogItem>('services', id, {
     active,
     updatedAt: new Date().toISOString(),
