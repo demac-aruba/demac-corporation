@@ -16,6 +16,7 @@ const canonicalStandardService = {
   durationMinutes: 60,
   basePrice: 100,
   active: true,
+  featured: true,
   serviceDefinition: {
     version: 1,
     bookingCode: "standard_service",
@@ -59,6 +60,22 @@ test("products and services without canonical definitions do not masquerade as c
   assert.equal(normalizeCatalogService({ ...canonicalStandardService, itemType: "Producto" }), null);
   const { serviceDefinition, ...legacy } = canonicalStandardService;
   assert.equal(normalizeCatalogService(legacy), null);
+});
+
+test("Show in Scheduling filters the quick picker without making the service unresolvable", () => {
+  const hidden = { ...canonicalStandardService, id: "service-hidden", name: "12K BTU Standard Service", featured: false, serviceDefinition: { ...canonicalStandardService.serviceDefinition, bookingCode: "12k_standard" } };
+  const visible = bookableCatalogPresets([canonicalStandardService, hidden]);
+  assert.deepEqual(visible.map((item) => item.id), ["standard_service"]);
+  assert.equal(resolveCatalogService([canonicalStandardService, hidden], { serviceId: "service-hidden" }).id, "12k_standard");
+});
+
+test("a hidden canonical service cannot leak back into Scheduling through legacy fallback", () => {
+  const hidden = { ...canonicalStandardService, featured: false };
+  const merged = mergeBookablePresets(
+    [hidden],
+    [{ id: "appointment-work-presets", presets: [{ id: "standard_service", label: "Standard Service", active: true }] }],
+  );
+  assert.deepEqual(merged, []);
 });
 
 test("canonical catalog shadows matching legacy appointment presets without duplicating them", () => {
