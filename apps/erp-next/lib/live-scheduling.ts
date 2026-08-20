@@ -58,6 +58,7 @@ type LiveWorkOrder = {
   time?: string;
   duration?: number;
   appointmentDurationMinutes?: number;
+  address?: string;
   zone?: string;
   operationalZone?: string;
   vanId?: string;
