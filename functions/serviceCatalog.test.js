@@ -71,10 +71,41 @@ test("catalog lookup prefers explicit service id and also supports booking-code 
   assert.equal(resolveCatalogService(services, { presetId: "standard_service" }).serviceId, "service-standard");
 });
 
-test("bookable canonical services are unique by booking code", () => {
+test("duplicate active canonical booking codes fail closed instead of silently selecting one service", () => {
   const duplicate = {
     ...canonicalStandardService,
     id: "service-standard-copy",
+    name: "Standard Service Copy",
   };
-  assert.equal(bookableCatalogPresets([canonicalStandardService, duplicate]).length, 1);
+  assert.throws(
+    () => bookableCatalogPresets([canonicalStandardService, duplicate]),
+    /Duplicate active canonical service bookingCode "standard_service"/,
+  );
+  assert.throws(
+    () => resolveCatalogService([canonicalStandardService, duplicate], { serviceId: "service-standard" }),
+    /Duplicate active canonical service bookingCode "standard_service"/,
+  );
+});
+
+test("canonical migration may shadow its own legacy preset but rejects a legacy collision owned by another service", () => {
+  const safe = mergeBookablePresets(
+    [canonicalStandardService],
+    [{
+      id: "appointment-work-presets",
+      presets: [{ id: "standard_service", label: "Standard Service", serviceId: "service-standard", active: true }],
+    }],
+  );
+  assert.equal(safe.length, 1);
+  assert.equal(safe[0].source, SERVICE_CATALOG_SOURCE);
+
+  assert.throws(
+    () => mergeBookablePresets(
+      [canonicalStandardService, { id: "service-other", itemType: "Servicio", name: "Other Service", active: true }],
+      [{
+        id: "appointment-work-presets",
+        presets: [{ id: "standard_service", label: "Other Service", serviceId: "service-other", active: true }],
+      }],
+    ),
+    /Duplicate active canonical service bookingCode "standard_service"/,
+  );
 });
