@@ -1,20 +1,25 @@
-import type { NewBookingContactLink } from './customer-contacts';
+import type { BookingContact, BookingContactAssignment, NewBookingContactLink } from './customer-contacts';
 import {
   createOfficeCustomerWithProperty,
   createOfficeLifecycleRequestId,
   createOfficeProperty,
+  listOfficeContactDirectory,
 } from './office-booking-authority';
 import {
   invalidateLiveSchedulingReferenceCache,
   loadLiveSchedulingReferenceData,
   type LiveSchedulingClient,
   type LiveSchedulingProperty,
-  type LiveSchedulingReferenceData,
 } from './live-scheduling-fast';
 
 export type BookingCustomer = LiveSchedulingClient;
 export type BookingProperty = LiveSchedulingProperty;
-export type BookingReferenceData = Pick<LiveSchedulingReferenceData, 'clients' | 'properties' | 'contacts' | 'contactAssignments'>;
+export type BookingReferenceData = {
+  clients: BookingCustomer[];
+  properties: BookingProperty[];
+  contacts: BookingContact[];
+  contactAssignments: BookingContactAssignment[];
+};
 
 export type NewBookingCustomer = {
   name: string;
@@ -54,12 +59,15 @@ export function normalizeBookingPhone(value: string) {
 }
 
 export async function loadBookingReferenceData(): Promise<BookingReferenceData> {
-  const references = await loadLiveSchedulingReferenceData();
+  const [references, directory] = await Promise.all([
+    loadLiveSchedulingReferenceData(),
+    listOfficeContactDirectory(),
+  ]);
   return {
     clients: references.clients.filter((client) => client.active !== false),
     properties: references.properties.filter((property) => property.active !== false),
-    contacts: references.contacts.filter((contact) => contact.active !== false),
-    contactAssignments: references.contactAssignments.filter((assignment) => assignment.active !== false),
+    contacts: (directory.contacts ?? []).filter((contact) => contact.active !== false),
+    contactAssignments: (directory.assignments ?? []).filter((assignment) => assignment.active !== false),
   };
 }
 
