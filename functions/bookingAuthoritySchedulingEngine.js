@@ -22,9 +22,10 @@ const {
 } = require("./bookingSchedulingPrimitives");
 const { candidateAvailability } = require("./bookingCapacityAvailability");
 
-const CANONICAL_SCHEDULING_ENGINE_VERSION = 2;
+const CANONICAL_SCHEDULING_ENGINE_VERSION = 3;
 const CLIENT_OPTION_LIMIT = 2;
 const ASSIGNMENT_COMBINATION_LIMIT = 8;
+const OFFICE_TARGET_OPTION_LIMIT = ASSIGNMENT_COMBINATION_LIMIT;
 
 const DEFAULT_OPERATIONAL_RULES = Object.freeze({
   standardService: {
@@ -163,6 +164,13 @@ function isStandardServicePreset(preset = {}) {
     );
 }
 
+function supportStartTimes(slotCount) {
+  const slots = Math.max(1, Math.ceil(Number(slotCount) || 1));
+  if (slots >= 3) return ["08:30", "13:30"];
+  if (slots === 2) return ["08:30", "09:30", "13:30", "14:30"];
+  return [...MORNING_SLOTS, EXTRA_MORNING_SLOT, ...AFTERNOON_SLOTS];
+}
+
 function buildAllocationPlan(quantity, durationMinutesPerUnit, availableVanCount, preset, rawRules) {
   const rules = normalizeOperationalRules(rawRules);
   const duration = Math.max(30, Number(durationMinutesPerUnit || 60));
@@ -216,7 +224,7 @@ function buildAllocationPlan(quantity, durationMinutesPerUnit, availableVanCount
             slots: supportSlots,
             fullDay: false,
             role: "support",
-            allowedTimes: ["08:30", "13:30"],
+            allowedTimes: supportStartTimes(supportSlots),
             timePolicy: "allowed",
           },
         ];
@@ -553,7 +561,7 @@ function generateCanonicalOptions({
     ))
     : unique;
   const clientOptions = requireRequestedTarget
-    ? targetOptions.slice(0, CLIENT_OPTION_LIMIT)
+    ? targetOptions.slice(0, OFFICE_TARGET_OPTION_LIMIT)
     : selectClientOptions(targetOptions);
 
   return {
@@ -585,6 +593,7 @@ module.exports = {
   CANONICAL_SCHEDULING_ENGINE_VERSION,
   CLIENT_OPTION_LIMIT,
   DEFAULT_OPERATIONAL_RULES,
+  OFFICE_TARGET_OPTION_LIMIT,
   assignmentCombinations,
   buildAllocationPlan,
   exactPreset,
@@ -596,5 +605,6 @@ module.exports = {
   serviceIdForRequest,
   singleWork,
   sortAllocationCandidates,
+  supportStartTimes,
   timeAllowed,
 };
