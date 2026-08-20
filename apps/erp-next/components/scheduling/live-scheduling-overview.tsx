@@ -27,8 +27,8 @@ import {
   createOfficeLifecycleRequestId,
   moveOfficeAppointment,
 } from '../../lib/office-booking-authority';
-import type { CandidateSlot, DispatchJob, WorkPresetId } from '../../lib/scheduling';
-import { defaultWorkPresets, getRuntimeSchedulingSettings, minutesToTime, previewVans, timeToMinutes } from '../../lib/scheduling';
+import type { CandidateSlot, DispatchJob } from '../../lib/scheduling';
+import { getRuntimeSchedulingSettings, minutesToTime, previewVans, timeToMinutes } from '../../lib/scheduling';
 import type { CalendarDispatchJob, OperationalDay } from '../../lib/scheduling-capacity';
 import { buildOperationalWeek, currentArubaDateKey } from '../../lib/scheduling-capacity';
 import { DragMoveConfirmation, type PendingDragMove } from './drag-move-confirmation';
@@ -54,8 +54,10 @@ function formatTime(value: string) {
   return `${hour % 12 || 12}:${minute} ${hour >= 12 ? 'PM' : 'AM'}`;
 }
 
-function presetLabel(id: WorkPresetId) {
-  return defaultWorkPresets.find((preset) => preset.id === id)?.label ?? 'Other work';
+function appointmentWorkLabel(appointment: BrowserAppointmentRecord | undefined, fallbackId = '') {
+  if (appointment?.workLabel) return appointment.workLabel;
+  const fallback = fallbackId.replaceAll('_', ' ').trim();
+  return fallback ? fallback.replace(/\b\w/g, (letter) => letter.toUpperCase()) : 'Scheduled work';
 }
 
 function displaySlotsForVan(day: OperationalDay, vanId: string, capacityState: LiveOperationalCapacityState | null): DisplaySlot[] {
@@ -768,7 +770,7 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
       >
         <div>
           <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={armed ? styles.ready : slotClass(job.readiness)}>{armed ? 'MOVE ARMED' : readinessLabel(job.readiness)}</b></div>
-          {continuation ? <span>Reserved continuously until {formatTime(job.end)}</span> : <span>{presetLabel(job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span>}
+          {continuation ? <span>Reserved continuously until {formatTime(job.end)}</span> : <span>{appointmentWorkLabel(appointment, job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span>}
           <small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small>
           {!continuation && span > 1 ? <small>Reserved continuously · {formatTime(job.start)}–{formatTime(job.end)}</small> : null}
           {crossesLunch ? <small>Lunch/reset remains protected</small> : null}
@@ -802,7 +804,7 @@ function ConflictBlock({ jobs, span, jobLinks, onOpenAppointment }: {
       }} style={{ cursor: 'pointer' }}>
         <div>
           <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={styles.risk}>CONFLICT</b></div>
-          <span>{presetLabel(job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'} · {formatTime(job.start)}–{formatTime(job.end)}</span>
+          <span>{appointmentWorkLabel(jobLinks.get(job.id)?.appointment, job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'} · {formatTime(job.start)}–{formatTime(job.end)}</span>
           <small>{job.site} · {job.sector}</small>
           {bookingBadge(jobLinks.get(job.id)?.appointment.bookedByName)}
           <small>Click to review / reschedule</small>
