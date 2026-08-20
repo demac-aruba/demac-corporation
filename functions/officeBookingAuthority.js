@@ -15,7 +15,7 @@ const { createOperationalMoveAuthority } = require("./bookingOperationalMove");
 const { createSchedulingProvider } = require("./bookingAuthoritySchedulingProvider");
 const { mergeBookablePresets } = require("./serviceCatalog");
 
-const OFFICE_BOOKING_API_VERSION = 8;
+const OFFICE_BOOKING_API_VERSION = 9;
 const OFFICE_BOOKING_ROLES = Object.freeze([
   "admin",
   "office",
@@ -79,20 +79,29 @@ function lifecycleChangeKind(value) {
 }
 
 function bookingRequestFromOffice(data = {}) {
-  const presetId = cleanText(data.presetId, 120);
-  const serviceId = cleanText(data.serviceId, 120);
-  const quantity = positiveInteger(data.quantity);
+  const sharedDescription = cleanText(data.customerFacingDescription, 500);
+  const sharedInstructions = cleanText(data.technicianInstructions, 1_500);
+  const suppliedLines = Array.isArray(data.workLines) && data.workLines.length
+    ? data.workLines
+    : [{
+      id: "office-primary-work",
+      presetId: cleanText(data.presetId, 120),
+      serviceId: cleanText(data.serviceId, 120),
+      quantity: positiveInteger(data.quantity),
+    }];
+  const workLines = suppliedLines.map((line, index) => ({
+    id: cleanText(line?.id, 120) || `office-work-${index + 1}`,
+    presetId: cleanText(line?.presetId || line?.serviceType, 120),
+    serviceId: cleanText(line?.serviceId, 120),
+    quantity: positiveInteger(line?.quantity),
+    manualDurationMinutes: line?.manualDurationMinutes,
+    customerFacingDescription: cleanText(line?.customerFacingDescription, 500) || sharedDescription,
+    technicianInstructions: cleanText(line?.technicianInstructions, 1_500) || sharedInstructions,
+  }));
   return normalizeBookingRequest({
     customerId: data.customerId,
     propertyId: data.propertyId,
-    workLines: [{
-      id: "office-primary-work",
-      presetId,
-      serviceId,
-      quantity,
-      customerFacingDescription: cleanText(data.customerFacingDescription, 500),
-      technicianInstructions: cleanText(data.technicianInstructions, 1_500),
-    }],
+    workLines,
     constraints: {
       requestedDate: data.requestedDate,
       requestedTime: data.requestedTime,
