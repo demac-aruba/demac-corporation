@@ -8,7 +8,13 @@ function docSnapshot(data, exists = true) {
 
 function collectionSnapshot(items = []) {
   return {
-    docs: items.map((item) => ({ id: item.id, data: () => ({ ...item, id: undefined }) })),
+    docs: items.map((item) => ({
+      id: item.id,
+      data: () => {
+        const { id, ...data } = item;
+        return data;
+      },
+    })),
   };
 }
 
