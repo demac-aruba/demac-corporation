@@ -25,42 +25,33 @@ export function liveMoveTargetKey(vanId: string, start: string) {
   return `${vanId}|${start}`;
 }
 
-function workingWindowAllows(day: OperationalDay, start: string, end: string) {
-  const settings = getRuntimeSchedulingSettings();
-  const startMinutes = timeToMinutes(start);
-  const endMinutes = timeToMinutes(end);
-
-  if (day.weekday === 'Sat') {
-    return startMinutes >= timeToMinutes('09:00') && endMinutes <= timeToMinutes('13:00');
-  }
-
-  const lunchStart = timeToMinutes(settings.lunchStart);
-  const lunchEnd = timeToMinutes(settings.lunchEnd);
-  const dayEnd = timeToMinutes(settings.workdayEnd);
-  if (startMinutes < lunchStart) return endMinutes <= lunchStart;
-  return startMinutes >= lunchEnd && endMinutes <= dayEnd;
-}
-
 function overlaps(start: string, end: string, job: CalendarDispatchJob) {
   return timeToMinutes(start) < timeToMinutes(job.end) && timeToMinutes(end) > timeToMinutes(job.start);
 }
 
-function canonicalAppointmentDurationMinutes(appointment: BrowserAppointmentRecord) {
+function canonicalAppointmentSlotCount(appointment: BrowserAppointmentRecord) {
+  const stored = Number(appointment.scheduledSlotCount || 0);
+  if (Number.isFinite(stored) && stored > 0) return Math.max(1, Math.ceil(stored));
+  const duration = Number(appointment.scheduledDurationMinutes || 0);
+  if (Number.isFinite(duration) && duration > 0) return Math.max(1, Math.ceil(duration / 60));
   const assignment = appointment.assignments[0];
   if (!assignment) return 0;
-  const duration = timeToMinutes(assignment.end) - timeToMinutes(assignment.start);
-  return Number.isFinite(duration) && duration > 0 ? duration : 0;
+  const wallClock = timeToMinutes(assignment.end) - timeToMinutes(assignment.start);
+  return Number.isFinite(wallClock) && wallClock > 0 ? Math.max(1, Math.ceil(wallClock / 60)) : 0;
+}
+
+function endForOperationalSlots(starts: string[], start: string, slotCount: number) {
+  const index = starts.indexOf(start);
+  if (index < 0 || slotCount < 1 || index + slotCount > starts.length) return '';
+  const last = starts[index + slotCount - 1];
+  return minutesToTime(timeToMinutes(last) + 60);
 }
 
 /**
  * Manual LIVE drag is a direct office dispatch action rather than an automatic route
- * recommendation. It preserves the appointment's canonical duration and accepts every
- * same-day destination where the complete block fits, does not overlap another active
- * appointment, and remains inside canonical company/van operating capacity.
- *
- * Route preference, customer preference and wall clock do not remove drag targets.
- * Half-days, company closures, maintenance and out-of-service status do, because those
- * are hard operational capacity rules enforced by Booking Authority at commit time.
+ * recommendation. It preserves the appointment's canonical slot count and accepts every
+ * same-day destination where those exact operating slots fit. Booking Authority remains
+ * the commit-time source of truth for company/van capacity and revalidates the move.
  */
 export function liveOperationalMoveCapacityCandidates(
   day: OperationalDay,
@@ -71,8 +62,8 @@ export function liveOperationalMoveCapacityCandidates(
   if (!day.isOpen || appointment.status === 'cancelled' || appointment.assignments.length !== 1) return [];
 
   const settings = getRuntimeSchedulingSettings();
-  const duration = canonicalAppointmentDurationMinutes(appointment);
-  if (!duration) return [];
+  const slotCount = canonicalAppointmentSlotCount(appointment);
+  if (!slotCount) return [];
   const baseStarts = day.weekday === 'Sat' ? ['09:00', '10:00', '11:00', '12:00'] : settings.serviceStartTimes;
   const assignmentIds = new Set(appointment.assignments.map((assignment) => assignment.id));
   const otherJobs = jobs.filter((job) => !assignmentIds.has(job.id) && job.status !== 'cancelled');
@@ -83,10 +74,8 @@ export function liveOperationalMoveCapacityCandidates(
     const halfDay = liveVanIsHalfDay(capacityState, van.id, day.dateKey);
     const starts = liveOperationalStartTimes(capacityState, van.id, day.dateKey, baseStarts);
     for (const start of starts) {
-      const end = minutesToTime(timeToMinutes(start) + duration);
-      // A canonical half-day is one continuous morning work window through its cutoff;
-      // do not re-apply the normal full-day lunch boundary inside that shorter window.
-      if (!halfDay && !workingWindowAllows(day, start, end)) continue;
+      const end = endForOperationalSlots(starts, start, slotCount);
+      if (!end) continue;
       if (!liveOperationalWindowAllows(capacityState, van.id, day.dateKey, start, end)) continue;
       if (otherJobs.some((job) => job.vanId === van.id && overlaps(start, end, job))) continue;
 
@@ -94,10 +83,10 @@ export function liveOperationalMoveCapacityCandidates(
         vanId: van.id,
         start,
         end,
-        segment: halfDayForTime(start),
+        segment: halfDay ? halfDayForTime(start) : timeToMinutes(start) < 12 * 60 && timeToMinutes(end) > 13 * 60 ? 'full_day' : halfDayForTime(start),
         sector: appointment.sector,
         score: 0,
-        reasons: ['Manual operational move: complete canonical block fits visible free capacity'],
+        reasons: ['Manual operational move: canonical occupied-slot count fits live operating capacity'],
         requiresSupportVan: false,
         primaryUnits: appointment.totalQuantity,
       });
