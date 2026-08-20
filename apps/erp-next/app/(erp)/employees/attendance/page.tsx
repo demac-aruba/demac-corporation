@@ -1,18 +1,18 @@
 import Link from 'next/link';
-import { EmployeeAttendanceWorkspace } from '../../../../components/employees/employee-attendance-workspace';
+import { EmployeeAttendanceCommandCenter } from '../../../../components/employees/employee-attendance-command-center';
 
 export default function EmployeeAttendancePage() {
   return (
     <div className="mo-stack">
       <section className="page-head">
         <div>
-          <div className="eyebrow">Workforce Management · Attendance</div>
-          <h1>Attendance & Timekeeping</h1>
-          <p>Calendar-based attendance for regular hours, late arrivals, sickness/AO, vacation, days off, No Work No Pay and overtime. Operational absences remain synchronized with dispatch availability.</p>
+          <div className="eyebrow">Workforce Management · Payroll Inputs</div>
+          <h1>Attendance & Payroll Inputs</h1>
+          <p>Period-based workforce control for worked hours, overtime, AO, vacation, No Work No Pay, paid-free half-days and salary advances. Payroll input periods close on the 26th; final statutory payroll remains with accounting.</p>
         </div>
         <div className="page-actions"><Link className="btn" href="/employees">Back to Employees</Link></div>
       </section>
-      <EmployeeAttendanceWorkspace />
+      <EmployeeAttendanceCommandCenter />
     </div>
   );
 }
