@@ -129,11 +129,17 @@ function resolveCatalogService(services = [], work = {}, businessSettings = []) 
   if (serviceId) {
     const exact = canonical.find((preset) => preset.serviceId === serviceId);
     if (exact) return exact;
+
+    // An explicit serviceId that no longer has a canonical serviceDefinition is
+    // historical/legacy evidence. Do not silently reinterpret that record as a
+    // modern broad Scheduling Work Type; allow the engine's raw legacy preset
+    // compatibility path to resolve it instead.
+    return null;
   }
 
-  // When a booking carries only an operational Work Type, Scheduling owns its
-  // duration and identity. This prevents a broad "Standard Service" tile from
-  // accidentally resolving to a 12K/18K/24K commercial catalog item.
+  // When a new booking carries only an operational Work Type, Scheduling owns
+  // its duration and identity. This prevents a broad "Standard Service" tile
+  // from accidentally resolving to a 12K/18K/24K commercial catalog item.
   const scheduling = resolveSchedulingWorkType(businessSettings, work);
   if (scheduling) return scheduling;
 
