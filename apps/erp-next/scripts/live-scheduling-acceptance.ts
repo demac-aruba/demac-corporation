@@ -28,9 +28,11 @@ const canonicalWorkOrders = [
     status: 'Confirmada',
     vanId: 'VAN-1',
     appointmentPresetId: 'standard_service',
+    appointmentWorkLabel: 'Standard Service',
     appointmentAssignmentRole: 'primary',
     airConditionerCount: 2,
     appointmentDurationMinutes: 120,
+    scheduledSlots: 2,
     problem: 'Servicio estándar para 2 aires acondicionados.',
     zone: 'Santa Cruz',
     confirmedAt: '2026-08-17T20:49:00.000Z',
@@ -40,11 +42,11 @@ const canonicalWorkOrders = [
 ];
 
 const clients = [
-  { id: 'CLIENT-STAR-MEDIA', name: 'Christian', company: 'Star Media DirecTV' },
+  { id: 'CLIENT-STAR-MEDIA', name: 'Christian', company: 'Star Media DirecTV', phone: '+2975550000', whatsapp: '+2975550000', email: 'office@example.com', preferredLanguage: 'Papiamento' },
 ];
 
 const properties = [
-  { id: 'PROPERTY-STAR-MEDIA', name: 'Star Media Office', address: 'Santa Cruz 54 C, local 1', operationalZone: 'Santa Cruz' },
+  { id: 'PROPERTY-STAR-MEDIA', name: 'Star Media Office', address: 'Santa Cruz 54 C, local 1', operationalZone: 'Santa Cruz', accessInstructions: 'Use front entrance.' },
 ];
 
 const authorityAppointments = [
@@ -57,9 +59,47 @@ const canonical = canonicalAppointments[0];
 requireCondition(canonical.id === 'APT-CANONICAL-1', 'Canonical appointmentId must be preserved.');
 requireCondition(canonical.primaryVanId === 'VAN-1', 'Canonical vanId must be projected into the live schedule.');
 requireCondition(canonical.assignments[0].start === '08:30', 'Canonical start time must be preserved.');
-requireCondition(canonical.assignments[0].end === '10:30', 'Canonical appointment duration must be preserved.');
+requireCondition(canonical.assignments[0].end === '10:30', 'Canonical appointment slot span must be preserved.');
+requireCondition(canonical.scheduledSlotCount === 2, 'Numeric Work Order scheduledSlots must remain the live capacity snapshot.');
 requireCondition(canonical.bookedByName === 'Christian', 'Canonical booking operator must be preserved.');
 requireCondition(bookingActorLabel({ appointmentId: 'APT-MAYA', source: 'demac-customer-agent' }) === 'Maya', 'Customer Agent bookings must display Maya.');
+
+// Exact regression for the reported capacity bug: two Commercial Services at three
+// hours each consume all six operating slots while lunch/reset remains non-working time.
+const commercialWorkOrders = [{
+  ...canonicalWorkOrders[0],
+  id: 'WO-APT-COMMERCIAL-1-1',
+  appointmentId: 'APT-COMMERCIAL-1',
+  serviceId: '',
+  date: '2026-08-21',
+  appointmentPresetId: 'commercial_service',
+  appointmentWorkType: 'commercial_service',
+  appointmentWorkLabel: 'Commercial Service',
+  airConditionerCount: 2,
+  appointmentDurationMinutes: 360,
+  scheduledSlots: 6,
+  appointmentWorkItems: [{
+    id: 'commercial-work',
+    presetId: 'commercial_service',
+    label: 'Commercial Service',
+    quantity: 2,
+    durationMinutes: 360,
+    durationMinutesPerUnit: 180,
+    durationMode: 'per_unit',
+  }],
+  problem: 'Commercial Service × 2.',
+}];
+const commercialAppointments = projectLiveSchedulingAppointments(commercialWorkOrders, clients, properties);
+const commercial = commercialAppointments[0];
+requireCondition(Boolean(commercial), 'Commercial Service work order must project into Live Scheduling.');
+requireCondition(commercial.workTypeId === 'commercial_service', 'Live Scheduling must preserve the operational Commercial Service identity instead of coercing it to Other.');
+requireCondition(commercial.workLabel === 'Commercial Service', 'Live Scheduling must display the Work Order label snapshot.');
+requireCondition(commercial.durationMinutesPerUnit === 180, 'Commercial Service must retain its three-hour per-unit snapshot.');
+requireCondition(commercial.scheduledDurationMinutes === 360, 'Two Commercial Services must retain six total work hours.');
+requireCondition(commercial.scheduledSlotCount === 6, 'Two Commercial Services must reserve six operating spots.');
+requireCondition(commercial.assignments[0].start === '08:30' && commercial.assignments[0].end === '16:30', 'Six slots starting at 08:30 must end at 16:30, skipping lunch/reset rather than ending at 14:30.');
+requireCondition(commercial.propertyAddress === 'Santa Cruz 54 C, local 1', 'Live appointment details must expose canonical property address without a duplicate appointment copy.');
+requireCondition(commercial.customerWhatsapp === '+2975550000', 'Live appointment details must expose canonical CRM WhatsApp contact.');
 
 const operationalDay = buildOperationalWeek(canonical.dateKey).find((day) => day.dateKey === canonical.dateKey);
 requireCondition(Boolean(operationalDay), 'The live appointment date must resolve to an operational day.');
@@ -99,7 +139,7 @@ requireCondition(liveVanCrew(dailyCrewCapacity, 'VAN-1', canonical.dateKey).labe
 const dragCandidates = liveDragMoveCandidates(operationalDay!, canonical, canonical.assignments, baseCapacity);
 requireCondition(dragCandidates.length > 0, 'A single-van appointment must expose same-day drag targets.');
 requireCondition(dragCandidates.some((slot) => slot.start === '09:30'), 'Past wall-clock time must not hide a physically open manual destination.');
-requireCondition(dragCandidates.every((slot) => slot.start !== '10:30' && slot.start !== '15:30'), 'A two-hour block must not be offered where it cannot fit continuously before lunch or day end.');
+requireCondition(dragCandidates.every((slot) => slot.start !== '10:30' && slot.start !== '15:30'), 'A two-slot block must not be offered where its canonical operating slots cannot fit before lunch or day end.');
 
 const target = dragCandidates.find((slot) => slot.vanId !== canonical.primaryVanId) ?? dragCandidates[0];
 requireCondition(Boolean(target), 'A valid target must exist for committed projection coverage.');
@@ -136,6 +176,7 @@ function appointmentAt(id: string, customer: string, vanId: string, start: strin
     customer,
     primaryVanId: vanId,
     totalQuantity: quantity,
+    scheduledSlotCount: Math.max(1, Math.round((new Date(`1970-01-01T${end}:00Z`).getTime() - new Date(`1970-01-01T${start}:00Z`).getTime()) / 3_600_000)),
     assignments: canonical.assignments.map((assignment) => ({
       ...assignment,
       id: `${id}-PRIMARY`,
@@ -200,6 +241,7 @@ const supportWorkOrders = [
     parentWorkOrderId: 'WO-APT-CANONICAL-1-1',
     airConditionerCount: 1,
     appointmentDurationMinutes: 60,
+    scheduledSlots: 1,
   },
 ];
 const supportedAppointments = projectLiveSchedulingAppointments(supportWorkOrders, clients, properties);
@@ -213,4 +255,4 @@ const fleetRecords = [
 requireCondition(resolveCanonicalVanId('v4', fleetRecords) === 'VAN-4', 'Short van aliases must resolve to canonical Van 4.');
 requireCondition(resolveCanonicalVanId('van-1783800405341', fleetRecords) === 'VAN-4', 'Legacy duplicate van documents must resolve to one physical lane.');
 
-console.log('Live scheduling acceptance passed: agenda and drag targets share canonical van crew, half-days, closures and hard operational capacity while preserving same-day manual scheduling flexibility inside those windows.');
+console.log('Live scheduling acceptance passed: canonical Work Order slot snapshots drive agenda occupancy, labels and drag capacity while preserving van crew, half-days, closures and reminder authority boundaries.');
