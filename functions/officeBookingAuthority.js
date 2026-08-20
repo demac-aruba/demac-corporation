@@ -16,7 +16,7 @@ const { createSchedulingProvider } = require("./bookingAuthoritySchedulingProvid
 const { mergeBookablePresets } = require("./serviceCatalog");
 const {
   CONTACT_ASSIGNMENT_COLLECTION,
-  normalizeContactLink,
+  CONTACT_COLLECTION,
   resolveAppointmentRecipients,
   writeContactLinks,
 } = require("./customerContactDirectory");
@@ -34,6 +34,7 @@ const OFFICE_BOOKING_ROLES = Object.freeze([
 const OFFICE_BOOKING_ACTIONS = Object.freeze({
   LIST_PRESETS: "list_presets",
   LIST_APPOINTMENT_ATTRIBUTION: "list_appointment_attribution",
+  LIST_CONTACT_DIRECTORY: "list_contact_directory",
   CREATE_CUSTOMER_PROPERTY: "create_customer_property",
   CREATE_PROPERTY: "create_property",
   SAVE_CONTACT_ASSIGNMENT: "save_contact_assignment",
@@ -310,6 +311,19 @@ function createOfficeBookingApi({
     return { success: true, version: OFFICE_BOOKING_API_VERSION, attribution };
   }
 
+  async function listContactDirectory(data = {}) {
+    const clientId = cleanText(data.customerId, 180);
+    const contactQuery = clientId ? db.collection(CONTACT_COLLECTION).where("clientId", "==", clientId) : db.collection(CONTACT_COLLECTION);
+    const assignmentQuery = clientId ? db.collection(CONTACT_ASSIGNMENT_COLLECTION).where("clientId", "==", clientId) : db.collection(CONTACT_ASSIGNMENT_COLLECTION);
+    const [contactSnapshot, assignmentSnapshot] = await Promise.all([contactQuery.get(), assignmentQuery.get()]);
+    return {
+      success: true,
+      version: OFFICE_BOOKING_API_VERSION,
+      contacts: snapshotItems(contactSnapshot).filter((item) => item.active !== false),
+      assignments: snapshotItems(assignmentSnapshot).filter((item) => item.active !== false),
+    };
+  }
+
   async function createCustomerProperty(data = {}, identity = {}) {
     if (typeof db.runTransaction !== "function") throw new Error("Firestore transactions are required for CRM master-data creation.");
     officeRequestId(data.requestId);
@@ -454,6 +468,7 @@ function createOfficeBookingApi({
     const actor = officeActor(identity);
     if (action === OFFICE_BOOKING_ACTIONS.LIST_PRESETS) return listPresets();
     if (action === OFFICE_BOOKING_ACTIONS.LIST_APPOINTMENT_ATTRIBUTION) return listAppointmentAttribution(data);
+    if (action === OFFICE_BOOKING_ACTIONS.LIST_CONTACT_DIRECTORY) return listContactDirectory(data);
     if (action === OFFICE_BOOKING_ACTIONS.CREATE_CUSTOMER_PROPERTY) return createCustomerProperty(data, identity);
     if (action === OFFICE_BOOKING_ACTIONS.CREATE_PROPERTY) return createProperty(data, identity);
     if (action === OFFICE_BOOKING_ACTIONS.SAVE_CONTACT_ASSIGNMENT) return saveContactAssignment(data, identity);
@@ -577,6 +592,7 @@ function createOfficeBookingApi({
     handle,
     listPresets,
     listAppointmentAttribution,
+    listContactDirectory,
     createCustomerProperty,
     createProperty,
     saveContactAssignment,
