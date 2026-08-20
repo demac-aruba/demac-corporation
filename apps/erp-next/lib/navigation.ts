@@ -25,6 +25,7 @@ export const navigationGroups: NavigationGroup[] = [
       { label: 'Daily Dispatch Control', href: '/scheduling/dispatch', short: 'DC', roles: schedulingRoles },
       { label: 'Dispatch Readiness Board', href: '/scheduling/readiness', short: 'RB', roles: schedulingRoles },
       { label: 'Work Orders', href: '/work-orders', short: 'WO', roles: schedulingRoles },
+      { label: 'Services & Products', href: '/catalog', short: 'SP', roles: allManagementRoles },
       { label: 'Field App', href: '/field', short: 'FA', roles: ['super_admin', 'technician'] },
       { label: 'Technicians', href: '/technicians', short: 'TE', roles: ['super_admin', 'operations', 'project_manager'] },
     ],
