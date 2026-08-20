@@ -16,8 +16,6 @@ import {
   type CatalogDraft,
   type CatalogItem,
   type CatalogItemType,
-  type CatalogPriceTier,
-  type CatalogPricingMode,
 } from '@/lib/service-catalog';
 import type { AuthPrincipal } from '@/lib/security';
 import styles from './service-catalog-workspace.module.css';
@@ -42,11 +40,7 @@ function durationLabel(item: CatalogItem) {
 }
 
 function pricingLabel(item: CatalogItem) {
-  const pricing = item.pricingDefinition;
-  if (!pricing) return money(item.basePrice || 0);
-  if (pricing.mode === 'quote') return 'Quote required';
-  if (pricing.mode === 'tiered_btu') return `${pricing.tiers?.length ?? 0} BTU tiers`;
-  return `${money(item.basePrice || 0)} · ${pricing.mode === 'per_unit' ? 'per execution / unit' : 'fixed'}`;
+  return money(item.basePrice || 0);
 }
 
 function canEdit(principal: AuthPrincipal | null) {
@@ -63,6 +57,10 @@ function migrationPill(item: CatalogItem) {
 function fieldNumber(value: string) {
   const number = Number(value);
   return Number.isFinite(number) ? number : 0;
+}
+
+function incomeAccountPlaceholder(type: CatalogItemType) {
+  return type === 'Servicio' ? 'SERVICES' : 'SALES';
 }
 
 export function ServiceCatalogWorkspace() {
@@ -160,48 +158,6 @@ export function ServiceCatalogWorkspace() {
     });
   };
 
-  const updatePricingMode = (mode: CatalogPricingMode) => {
-    setDraft((current) => ({
-      ...current,
-      pricingDefinition: {
-        version: 1,
-        mode,
-        currency: 'AWG',
-        ...(mode === 'tiered_btu' ? { tiers: current.pricingDefinition.tiers ?? [] } : {}),
-      },
-    }));
-  };
-
-  const updateTier = (index: number, changes: Partial<CatalogPriceTier>) => {
-    setDraft((current) => {
-      const tiers = [...(current.pricingDefinition.tiers ?? [])];
-      tiers[index] = { ...tiers[index], ...changes };
-      return { ...current, pricingDefinition: { ...current.pricingDefinition, tiers } };
-    });
-  };
-
-  const addTier = () => {
-    setDraft((current) => {
-      const tiers = current.pricingDefinition.tiers ?? [];
-      const next: CatalogPriceTier = {
-        id: `tier-${tiers.length + 1}`,
-        label: `Tier ${tiers.length + 1}`,
-        amount: 0,
-      };
-      return { ...current, pricingDefinition: { ...current.pricingDefinition, tiers: [...tiers, next] } };
-    });
-  };
-
-  const removeTier = (index: number) => {
-    setDraft((current) => ({
-      ...current,
-      pricingDefinition: {
-        ...current.pricingDefinition,
-        tiers: (current.pricingDefinition.tiers ?? []).filter((_, tierIndex) => tierIndex !== index),
-      },
-    }));
-  };
-
   const save = async () => {
     if (!principal || !editable || saving) return;
     const name = draft.name.trim();
@@ -210,9 +166,6 @@ export function ServiceCatalogWorkspace() {
       const minutes = Number(draft.serviceDefinition?.duration.minutes || 0);
       if (minutes < 30) return setEditorError('Service duration must be at least 0.5 hours.');
       if (minutes > 720) return setEditorError('Service duration cannot exceed 12 hours.');
-    }
-    if (draft.pricingDefinition.mode === 'tiered_btu' && !(draft.pricingDefinition.tiers?.length)) {
-      return setEditorError('Add at least one BTU price tier or choose another pricing model.');
     }
 
     setSaving(true);
@@ -263,7 +216,7 @@ export function ServiceCatalogWorkspace() {
         <div>
           <div className={styles.eyebrow}>Canonical Firestore Master Data</div>
           <h1>Services & Products</h1>
-          <p>One commercial catalog for DEMAC. Service identity, pricing and duration per execution live here. Scheduling owns van allocation, capacity, conflicts and support resources. Product stock remains in Inventory rather than being duplicated in this record.</p>
+          <p>One commercial catalog for DEMAC. Services keep a simple selling price and duration per execution. Scheduling owns van allocation, capacity, conflicts and support resources. Product stock remains in Inventory rather than being duplicated in this record.</p>
         </div>
         <div className={styles.actions}>
           <button className={styles.button} type="button" onClick={() => void refresh()} disabled={loading || saving}>Refresh</button>
@@ -318,7 +271,7 @@ export function ServiceCatalogWorkspace() {
               </div>
 
               <div className={styles.facts}>
-                <div className={styles.fact}><span>Pricing</span><strong>{pricingLabel(selected)}</strong></div>
+                <div className={styles.fact}><span>Price</span><strong>{pricingLabel(selected)}</strong></div>
                 <div className={styles.fact}><span>Duration</span><strong>{catalogItemType(selected) === 'Servicio' ? durationLabel(selected) : 'Not applicable'}</strong></div>
                 <div className={styles.fact}><span>Definition</span><strong>{catalogMigrationState(selected) === 'canonical' ? 'Canonical v1' : catalogMigrationState(selected) === 'legacy_service' ? 'Legacy / review required' : 'Commercial product'}</strong></div>
               </div>
@@ -336,14 +289,7 @@ export function ServiceCatalogWorkspace() {
                 </section>
               ) : null}
 
-              {selected.pricingDefinition?.mode === 'tiered_btu' ? (
-                <section className={styles.section}>
-                  <h3>BTU pricing</h3>
-                  <div className={styles.tierTable}>{(selected.pricingDefinition.tiers ?? []).map((tier) => <div key={tier.id} className={styles.tierRow}><span>{tier.label}</span><span>{tier.minBtu ? `${tier.minBtu.toLocaleString()} min` : '—'}</span><span>{tier.maxBtu ? `${tier.maxBtu.toLocaleString()} max` : '—'}</span><strong>{money(tier.amount)}</strong></div>)}</div>
-                </section>
-              ) : null}
-
-              {catalogItemType(selected) === 'Producto' ? <section className={styles.section}><h3>Inventory boundary</h3><p>This record owns product identity and commercial pricing only. On-hand, reserved and physical location stock are managed by Inventory / commercial product stock so quantities are not duplicated here.</p></section> : null}
+              {catalogItemType(selected) === 'Producto' ? <section className={styles.section}><h3>Inventory boundary</h3><p>This record owns product identity and selling price only. On-hand, reserved and physical location stock are managed by Inventory / commercial product stock so quantities are not duplicated here.</p></section> : null}
             </div>
           ) : <div className={styles.empty}>Select or create a catalog item.</div>}
         </article>
@@ -360,33 +306,23 @@ export function ServiceCatalogWorkspace() {
               {editorError ? <div className={`${styles.notice} ${styles.error}`}>{editorError}</div> : null}
 
               <section className={styles.formSection}>
-                <header><strong>Identity</strong><span>Commercial identity shared by sales, booking and work orders.</span></header>
+                <header><strong>Basic info</strong><span>Simple commercial identity shared by sales, booking and work orders.</span></header>
                 <div className={styles.grid2}>
-                  <label className={styles.field}><span>Type</span><select className={styles.select} value={draft.itemType} onChange={(event) => updateItemType(event.target.value as CatalogItemType)} disabled={Boolean(editingId)}><option value="Servicio">Service</option><option value="Producto">Product</option></select><small>{editingId ? 'Type is fixed after creation to protect catalog references.' : 'Choose whether this record is a service or sellable product.'}</small></label>
                   <label className={styles.field}><span>Name</span><input className={styles.input} value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /></label>
+                  <label className={styles.field}><span>Type</span><select className={styles.select} value={draft.itemType} onChange={(event) => updateItemType(event.target.value as CatalogItemType)} disabled={Boolean(editingId)}><option value="Servicio">Service</option><option value="Producto">Product</option></select><small>{editingId ? 'Type is fixed after creation to protect catalog references.' : 'Choose whether this record is a service or sellable product.'}</small></label>
+                  <label className={styles.field}><span>SKU</span><input className={styles.input} value={draft.sku} onChange={(event) => setDraft((current) => ({ ...current, sku: event.target.value }))} /></label>
                   <label className={styles.field}><span>Category</span><input className={styles.input} value={draft.category} onChange={(event) => setDraft((current) => ({ ...current, category: event.target.value }))} /></label>
-                  <label className={styles.field}><span>SKU / Code</span><input className={styles.input} value={draft.sku} onChange={(event) => setDraft((current) => ({ ...current, sku: event.target.value }))} /></label>
                 </div>
-                <label className={styles.field} style={{ marginTop: 9 }}><span>Description</span><textarea className={styles.textarea} value={draft.description} onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))} /></label>
                 <div style={{ display: 'flex', gap: 18, marginTop: 9 }}><label className={styles.checkbox}><input type="checkbox" checked={draft.active} onChange={(event) => setDraft((current) => ({ ...current, active: event.target.checked }))} />Active</label>{draft.itemType === 'Servicio' ? <label className={styles.checkbox}><input type="checkbox" checked={draft.featured} onChange={(event) => setDraft((current) => ({ ...current, featured: event.target.checked }))} />Common booking service</label> : null}</div>
               </section>
 
               <section className={styles.formSection}>
-                <header><strong>Pricing</strong><span>The price model belongs to the catalog. Inventory quantities do not.</span></header>
-                <div className={styles.grid2}>
-                  <label className={styles.field}><span>Pricing model</span><select className={styles.select} value={draft.pricingDefinition.mode} onChange={(event) => updatePricingMode(event.target.value as CatalogPricingMode)}><option value="fixed">Fixed</option><option value="per_unit">{draft.itemType === 'Servicio' ? 'Per service execution' : 'Per unit'}</option><option value="tiered_btu">BTU tiers</option><option value="quote">Quote required</option></select></label>
-                  <label className={styles.field}><span>Base / reference price (AWG)</span><input className={styles.input} type="number" min="0" step="0.01" value={draft.basePrice} onChange={(event) => setDraft((current) => ({ ...current, basePrice: fieldNumber(event.target.value) }))} /><small>Keep a reference price even when detailed BTU tiers are used.</small></label>
+                <header><strong>Sales</strong><span>For now, the catalog only needs the description and selling price. Accounting integration will be governed separately later.</span></header>
+                <label className={styles.field}><span>Description</span><textarea className={styles.textarea} value={draft.description} onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))} /></label>
+                <div className={styles.grid2} style={{ marginTop: 9 }}>
+                  <label className={styles.field}><span>Price (AWG)</span><input className={styles.input} type="number" min="0" step="0.01" value={draft.basePrice} onChange={(event) => setDraft((current) => ({ ...current, basePrice: fieldNumber(event.target.value) }))} /><small>This is the selling price used by the catalog.</small></label>
+                  <label className={styles.field}><span>Income account</span><input className={styles.input} value={incomeAccountPlaceholder(draft.itemType)} disabled /><small>Reference only for now. It is not yet connected to accounting postings or a chart of accounts.</small></label>
                 </div>
-                {draft.pricingDefinition.mode === 'tiered_btu' ? <div className={styles.tierEditor} style={{ marginTop: 10 }}>
-                  {(draft.pricingDefinition.tiers ?? []).map((tier, index) => <div className={styles.tierEditorRow} key={`${tier.id}-${index}`}>
-                    <label className={styles.field}><span>Label</span><input className={styles.input} value={tier.label} onChange={(event) => updateTier(index, { label: event.target.value })} /></label>
-                    <label className={styles.field}><span>Min BTU</span><input className={styles.input} type="number" min="0" value={tier.minBtu ?? ''} onChange={(event) => updateTier(index, { minBtu: event.target.value ? fieldNumber(event.target.value) : undefined })} /></label>
-                    <label className={styles.field}><span>Max BTU</span><input className={styles.input} type="number" min="0" value={tier.maxBtu ?? ''} onChange={(event) => updateTier(index, { maxBtu: event.target.value ? fieldNumber(event.target.value) : undefined })} /></label>
-                    <label className={styles.field}><span>AWG</span><input className={styles.input} type="number" min="0" step="0.01" value={tier.amount} onChange={(event) => updateTier(index, { amount: fieldNumber(event.target.value) })} /></label>
-                    <button className={styles.remove} type="button" onClick={() => removeTier(index)}>×</button>
-                  </div>)}
-                  <div><button className={styles.button} type="button" onClick={addTier}>+ Add BTU tier</button></div>
-                </div> : null}
               </section>
 
               {draft.itemType === 'Servicio' && draft.serviceDefinition ? (
