@@ -19,6 +19,10 @@ import {
   type NewBookingCustomer,
   type NewBookingProperty,
 } from '../../lib/live-scheduling-booking-data';
+import {
+  suggestArubaAddresses,
+  type ArubaAddressEntry,
+} from '../../lib/aruba-address-directory';
 import styles from './live-appointment-create-drawer.module.css';
 
 export type LiveBookingTarget = {
@@ -50,6 +54,15 @@ type CustomerDraft = NewBookingCustomer & {
 
 type PropertyDraft = NewBookingProperty & {
   type: string;
+  addressDetail: string;
+};
+
+type ValidationState = {
+  signature: string;
+  offerId: string;
+  offerVersion: number;
+  options: OfficeBookingOption[];
+  selectedOptionId: string;
 };
 
 const emptyCustomer: CustomerDraft = {
@@ -65,6 +78,7 @@ const emptyProperty: PropertyDraft = {
   name: 'Primary Property',
   type: 'Casa',
   address: '',
+  addressDetail: '',
   zone: '',
   neighborhood: '',
   notes: '',
@@ -111,6 +125,34 @@ function optionMatchesTarget(option: OfficeBookingOption, target: LiveBookingTar
     && primary?.vanId === target.vanId;
 }
 
+function materializePropertyDraft(draft: PropertyDraft): NewBookingProperty {
+  const base = text(draft.address);
+  const detail = text(draft.addressDetail);
+  const address = detail && !base.toLowerCase().endsWith(detail.toLowerCase())
+    ? `${base} ${detail}`
+    : base;
+  return {
+    name: text(draft.name),
+    type: text(draft.type),
+    address,
+    zone: text(draft.zone),
+    neighborhood: text(draft.neighborhood),
+    notes: text(draft.notes),
+  };
+}
+
+function supportAssignment(option: OfficeBookingOption) {
+  return option.assignments?.[1];
+}
+
+function allocationDurationLabel(option: OfficeBookingOption | null, fallbackMinutes: number) {
+  if (!option) return fallbackMinutes > 360 ? 'Large job · validate allocation' : fallbackMinutes ? durationLabel(fallbackMinutes) : 'Select work type';
+  const primary = option.assignments?.[0];
+  if (!primary) return fallbackMinutes ? durationLabel(fallbackMinutes) : 'Validated';
+  const primaryLabel = primary.fullDay ? 'Full-day primary van' : durationLabel(primary.slots * 60);
+  return option.assignments.length > 1 ? `${primaryLabel} + support van` : primaryLabel;
+}
+
 export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Props) {
   const [references, setReferences] = useState<BookingReferenceData>({ clients: [], properties: [] });
   const [presets, setPresets] = useState<OfficeBookingPreset[]>([]);
@@ -133,7 +175,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
   const [checking, setChecking] = useState(false);
   const [saving, setSaving] = useState(false);
   const [authorityError, setAuthorityError] = useState('');
-  const [validated, setValidated] = useState<{ signature: string; offerId: string; offerVersion: number; option: OfficeBookingOption } | null>(null);
+  const [validated, setValidated] = useState<ValidationState | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -197,6 +239,9 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
   const estimatedMinutes = (selectedPreset?.durationMinutesPerUnit ?? 0) * quantity;
   const signature = [customerId, propertyId, presetId, quantity, description.trim(), technicianInstructions.trim(), target.dateKey, target.vanId, target.start].join('|');
   const activeValidation = validated?.signature === signature ? validated : null;
+  const selectedValidatedOption = activeValidation?.options.find((option) => option.id === activeValidation.selectedOptionId)
+    ?? activeValidation?.options[0]
+    ?? null;
 
   const selectCustomer = (customer: BookingCustomer) => {
     setCustomerId(customer.id);
@@ -207,11 +252,12 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
     setMasterError('');
     setCustomerEditorOpen(false);
     setPropertyEditorOpen(false);
+    setValidated(null);
   };
 
   const openCustomerEditor = () => {
     setCustomerDraft({ ...emptyCustomer, name: customerQuery.trim() });
-    setCustomerPropertyDraft(emptyProperty);
+    setCustomerPropertyDraft({ ...emptyProperty });
     setMasterError('');
     setCustomerEditorOpen(true);
     setPropertyEditorOpen(false);
@@ -224,7 +270,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
     try {
       const created = await createBookingCustomerWithProperty({
         customer: customerDraft,
-        property: customerPropertyDraft,
+        property: materializePropertyDraft(customerPropertyDraft),
         references,
       });
       setReferences((current) => ({
@@ -235,6 +281,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
       setPropertyId(created.property.id);
       setCustomerQuery('');
       setCustomerEditorOpen(false);
+      setValidated(null);
     } catch (error) {
       setMasterError(error instanceof Error ? error.message : 'The customer could not be created.');
     } finally {
@@ -255,10 +302,11 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
     setMasterSaving(true);
     setMasterError('');
     try {
-      const created = await createBookingProperty(selectedCustomer.id, propertyDraft);
+      const created = await createBookingProperty(selectedCustomer.id, materializePropertyDraft(propertyDraft));
       setReferences((current) => ({ ...current, properties: [...current.properties, created] }));
       setPropertyId(created.id);
       setPropertyEditorOpen(false);
+      setValidated(null);
     } catch (error) {
       setMasterError(error instanceof Error ? error.message : 'The property could not be created.');
     } finally {
@@ -287,17 +335,18 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
         technicianInstructions: technicianInstructions.trim(),
         notes: `Created from LIVE Scheduling slot ${target.vanId} ${target.dateKey} ${target.start}.`,
       });
-      const exactOption = result.options.find((option) => optionMatchesTarget(option, target));
-      if (!result.available || !result.offer || !exactOption) {
+      const exactOptions = result.options.filter((option) => optionMatchesTarget(option, target));
+      if (!result.available || !result.offer || !exactOptions.length) {
         const reason = result.reason ? ` (${result.reason})` : '';
-        setAuthorityError(`Booking Authority could not reserve this exact van/time for the selected work${reason}. The schedule was not changed.`);
+        setAuthorityError(`Booking Authority could not reserve the complete allocation for this van/time${reason}. The schedule was not changed.`);
         return;
       }
       setValidated({
         signature,
         offerId: result.offer.id,
         offerVersion: result.offer.version,
-        option: exactOption,
+        options: exactOptions,
+        selectedOptionId: exactOptions[0].id,
       });
     } catch (error) {
       setAuthorityError(error instanceof Error ? error.message : 'Booking Authority could not validate this target.');
@@ -307,10 +356,11 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
   };
 
   const confirmBooking = async () => {
-    if (!activeValidation || !selectedCustomer || !selectedProperty || !selectedPreset || saving) return;
+    if (!activeValidation || !selectedValidatedOption || !selectedCustomer || !selectedProperty || !selectedPreset || saving) return;
     setSaving(true);
     setAuthorityError('');
-    const { offerId, offerVersion, option } = activeValidation;
+    const { offerId, offerVersion } = activeValidation;
+    const option = selectedValidatedOption;
     try {
       const result = await confirmOfficeAppointment({
         requestId: `schedule-create:${offerId}:${offerVersion}:${option.id}`,
@@ -343,7 +393,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
           <div>
             <span className={styles.eyebrow}>Booking Authority · Canonical Scheduling</span>
             <h2>New appointment</h2>
-            <p>Select the real customer and work details. The appointment is committed only after Booking Authority revalidates the exact capacity.</p>
+            <p>Select the real customer and work details. Booking Authority calculates the complete primary/support allocation before anything is committed.</p>
           </div>
           <button type="button" className={styles.close} disabled={busy} onClick={onClose} aria-label="Close">×</button>
         </header>
@@ -351,7 +401,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
         <div className={styles.body}>
           <section className={styles.targetCard}>
             <div><span>DATE</span><strong>{formatDate(target.dateKey)}</strong></div>
-            <div><span>VAN</span><strong>{target.vanName}</strong></div>
+            <div><span>PRIMARY VAN</span><strong>{target.vanName}</strong></div>
             <div><span>START</span><strong>{formatTime(target.start)}</strong></div>
             <div><span>OPEN BLOCK</span><strong>{formatTime(target.start)}–{formatTime(target.end)}</strong></div>
           </section>
@@ -381,7 +431,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
 
               {customerEditorOpen ? (
                 <div className={styles.editorPanel}>
-                  <header><div><strong>Create customer + first property</strong><span>Saved directly to canonical CRM master data; no browser-only customer is created.</span></div><button type="button" onClick={() => setCustomerEditorOpen(false)}>×</button></header>
+                  <header><div><strong>Create customer + first property</strong><span>Customer and first property are committed atomically to canonical CRM.</span></div><button type="button" onClick={() => setCustomerEditorOpen(false)}>×</button></header>
                   <div className={styles.formGrid}>
                     <Field label="Customer name *" value={customerDraft.name} onChange={(value) => setCustomerDraft((current) => ({ ...current, name: value }))} />
                     <Field label="Company" value={customerDraft.company ?? ''} onChange={(value) => setCustomerDraft((current) => ({ ...current, company: value }))} />
@@ -392,9 +442,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
                     <div className={styles.formDivider}>First service property</div>
                     <Field label="Property name" value={customerPropertyDraft.name} onChange={(value) => setCustomerPropertyDraft((current) => ({ ...current, name: value }))} />
                     <label><span>Property type</span><select value={customerPropertyDraft.type} onChange={(event) => setCustomerPropertyDraft((current) => ({ ...current, type: event.target.value }))}><option>Casa</option><option>Apartamento</option><option>Oficina</option><option>Local comercial</option><option>Otro</option></select></label>
-                    <Field label="Address *" value={customerPropertyDraft.address} onChange={(value) => setCustomerPropertyDraft((current) => ({ ...current, address: value }))} wide />
-                    <Field label="Area / zone *" value={customerPropertyDraft.zone} onChange={(value) => setCustomerPropertyDraft((current) => ({ ...current, zone: value }))} />
-                    <Field label="Neighborhood" value={customerPropertyDraft.neighborhood ?? ''} onChange={(value) => setCustomerPropertyDraft((current) => ({ ...current, neighborhood: value }))} />
+                    <PropertyAddressFields draft={customerPropertyDraft} onChange={setCustomerPropertyDraft} />
                   </div>
                   <footer><button type="button" className={styles.secondaryButton} disabled={masterSaving} onClick={() => setCustomerEditorOpen(false)}>Cancel</button><button type="button" className={styles.primaryButton} disabled={masterSaving} onClick={() => void saveCustomer()}>{masterSaving ? 'Saving…' : 'Create & select'}</button></footer>
                 </div>
@@ -409,7 +457,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
                 <>
                   <div className={styles.choiceGrid}>
                     {customerProperties.map((property) => (
-                      <button type="button" key={property.id} className={`${styles.choice} ${property.id === propertyId ? styles.choiceSelected : ''}`} onClick={() => { setPropertyId(property.id); setAuthorityError(''); }}>
+                      <button type="button" key={property.id} className={`${styles.choice} ${property.id === propertyId ? styles.choiceSelected : ''}`} onClick={() => { setPropertyId(property.id); setAuthorityError(''); setValidated(null); }}>
                         <strong>{propertyLabel(property)}</strong><span>{text(property.address) || 'No address'}</span><small>{text(property.operationalZone) || text(property.zone) || 'Area not specified'}</small>
                       </button>
                     ))}
@@ -421,13 +469,11 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
 
               {propertyEditorOpen ? (
                 <div className={styles.editorPanel}>
-                  <header><div><strong>Add property for {selectedCustomer ? customerLabel(selectedCustomer) : 'customer'}</strong><span>This property becomes available throughout canonical CRM and Scheduling.</span></div><button type="button" onClick={() => setPropertyEditorOpen(false)}>×</button></header>
+                  <header><div><strong>Add property for {selectedCustomer ? customerLabel(selectedCustomer) : 'customer'}</strong><span>Use the Aruba directory to resolve the neighborhood and operational zone automatically.</span></div><button type="button" onClick={() => setPropertyEditorOpen(false)}>×</button></header>
                   <div className={styles.formGrid}>
                     <Field label="Property name *" value={propertyDraft.name} onChange={(value) => setPropertyDraft((current) => ({ ...current, name: value }))} />
                     <label><span>Property type</span><select value={propertyDraft.type} onChange={(event) => setPropertyDraft((current) => ({ ...current, type: event.target.value }))}><option>Casa</option><option>Apartamento</option><option>Oficina</option><option>Local comercial</option><option>Otro</option></select></label>
-                    <Field label="Address *" value={propertyDraft.address} onChange={(value) => setPropertyDraft((current) => ({ ...current, address: value }))} wide />
-                    <Field label="Area / zone *" value={propertyDraft.zone} onChange={(value) => setPropertyDraft((current) => ({ ...current, zone: value }))} />
-                    <Field label="Neighborhood" value={propertyDraft.neighborhood ?? ''} onChange={(value) => setPropertyDraft((current) => ({ ...current, neighborhood: value }))} />
+                    <PropertyAddressFields draft={propertyDraft} onChange={setPropertyDraft} />
                     <Field label="Notes" value={propertyDraft.notes ?? ''} onChange={(value) => setPropertyDraft((current) => ({ ...current, notes: value }))} wide />
                   </div>
                   <footer><button type="button" className={styles.secondaryButton} disabled={masterSaving} onClick={() => setPropertyEditorOpen(false)}>Cancel</button><button type="button" className={styles.primaryButton} disabled={masterSaving} onClick={() => void saveProperty()}>{masterSaving ? 'Saving…' : 'Add & select'}</button></footer>
@@ -437,11 +483,11 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
           </section>
 
           <section className={styles.section}>
-            <header><div><span>3</span><strong>Work & duration</strong><small>Duration comes from the canonical ERP work preset, not a browser-only estimate.</small></div></header>
+            <header><div><span>3</span><strong>Work & allocation</strong><small>Booking Authority applies the canonical per-van, full-day and support-van capacity rules.</small></div></header>
             <div className={styles.sectionBody}>
               <div className={styles.presetGrid}>
                 {presets.map((preset) => (
-                  <button type="button" key={preset.id} className={`${styles.preset} ${preset.id === presetId ? styles.presetSelected : ''}`} onClick={() => { setPresetId(preset.id); setAuthorityError(''); }}>
+                  <button type="button" key={preset.id} className={`${styles.preset} ${preset.id === presetId ? styles.presetSelected : ''}`} onClick={() => { setPresetId(preset.id); setAuthorityError(''); setValidated(null); }}>
                     <strong>{preset.label}</strong><span>{preset.durationMinutesPerUnit} min / unit</span>
                   </button>
                 ))}
@@ -449,44 +495,110 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
               {!presets.length && !loading ? <div className={styles.emptyResult}>No active Booking Authority work presets were found.</div> : null}
               <div className={styles.quantityRow}>
                 <div><span>Quantity</span><strong>{quantity} unit{quantity === 1 ? '' : 's'}</strong></div>
-                <div className={styles.stepper}><button type="button" disabled={quantity <= 1} onClick={() => setQuantity((value) => Math.max(1, value - 1))}>−</button><b>{quantity}</b><button type="button" disabled={quantity >= 10} onClick={() => setQuantity((value) => Math.min(10, value + 1))}>＋</button></div>
-                <div><span>Calculated work duration</span><strong>{estimatedMinutes ? durationLabel(estimatedMinutes) : 'Select work type'}</strong></div>
+                <div className={styles.stepper}><button type="button" disabled={quantity <= 1} onClick={() => { setQuantity((value) => Math.max(1, value - 1)); setValidated(null); }}>−</button><b>{quantity}</b><button type="button" disabled={quantity >= 10} onClick={() => { setQuantity((value) => Math.min(10, value + 1)); setValidated(null); }}>＋</button></div>
+                <div><span>Scheduled allocation</span><strong>{allocationDurationLabel(selectedValidatedOption, estimatedMinutes)}</strong></div>
               </div>
               <div className={styles.formGrid}>
-                <label className={styles.fieldWide}><span>Customer-facing work description</span><textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Example: Standard service for two split units; customer reports weak cooling in the bedroom." /></label>
-                <label className={styles.fieldWide}><span>Technician instructions</span><textarea value={technicianInstructions} onChange={(event) => setTechnicianInstructions(event.target.value)} placeholder="Access instructions, contact person, equipment location, diagnostic notes…" /></label>
+                <label className={styles.fieldWide}><span>Customer-facing work description</span><textarea value={description} onChange={(event) => { setDescription(event.target.value); setValidated(null); }} placeholder="Example: Standard service for two split units; customer reports weak cooling in the bedroom." /></label>
+                <label className={styles.fieldWide}><span>Technician instructions</span><textarea value={technicianInstructions} onChange={(event) => { setTechnicianInstructions(event.target.value); setValidated(null); }} placeholder="Access instructions, contact person, equipment location, diagnostic notes…" /></label>
               </div>
             </div>
           </section>
 
           <section className={styles.authoritySection}>
-            <div className={styles.authorityHeading}><div><span>4</span><strong>Final capacity validation</strong><small>The exact {target.vanName} / {formatTime(target.start)} target is revalidated server-side before anything is written.</small></div><button type="button" className={styles.validateButton} disabled={busy || !selectedCustomer || !selectedProperty || !selectedPreset} onClick={() => void validateTarget()}>{checking ? 'Validating…' : activeValidation ? 'Revalidate target' : 'Validate target'}</button></div>
+            <div className={styles.authorityHeading}><div><span>4</span><strong>Final capacity validation</strong><small>{target.vanName} stays the primary/responsible van. If support is required, Booking Authority returns valid support van/time alternatives.</small></div><button type="button" className={styles.validateButton} disabled={busy || !selectedCustomer || !selectedProperty || !selectedPreset} onClick={() => void validateTarget()}>{checking ? 'Validating…' : activeValidation ? 'Revalidate target' : 'Validate target'}</button></div>
 
-            {activeValidation ? (
+            {activeValidation && selectedValidatedOption ? (
               <div className={styles.validationSuccess}>
-                <header><div><b>✓</b><div><strong>Booking Authority approved this exact target</strong><span>Offer {activeValidation.offerId} · final transaction validation still runs on confirm.</span></div></div></header>
+                <header><div><b>✓</b><div><strong>Booking Authority approved the complete allocation</strong><span>Offer {activeValidation.offerId} · final transaction validation still runs on confirm.</span></div></div></header>
+                {activeValidation.options.length > 1 ? (
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ color: 'var(--muted)', fontSize: 6, fontWeight: 850, marginBottom: 6, textTransform: 'uppercase' }}>Choose support arrival</div>
+                    <div className={styles.choiceGrid}>
+                      {activeValidation.options.map((option) => {
+                        const support = supportAssignment(option);
+                        const selected = option.id === selectedValidatedOption.id;
+                        return (
+                          <button type="button" key={option.id} className={`${styles.choice} ${selected ? styles.choiceSelected : ''}`} onClick={() => setValidated((current) => current ? { ...current, selectedOptionId: option.id } : current)}>
+                            <strong>{support ? `${support.vanName || support.vanId} · support` : 'Primary allocation'}</strong>
+                            <span>{support ? `${formatTime(support.time || option.time)}${support.endTime ? `–${formatTime(support.endTime)}` : ''}` : `${formatTime(option.time)}–${formatTime(option.endTime || option.time)}`}</span>
+                            <small>{support ? `${support.quantity} support unit${support.quantity === 1 ? '' : 's'} · ${target.vanName} remains primary` : 'No support van required'}</small>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
                 <div className={styles.assignmentGrid}>
-                  {activeValidation.option.assignments.map((assignment, index) => (
-                    <article key={`${assignment.vanId}-${assignment.time || activeValidation.option.time}-${index}`}>
-                      <span>{index === 0 ? 'PRIMARY' : 'SUPPORT'}</span>
+                  {selectedValidatedOption.assignments.map((assignment, index) => (
+                    <article key={`${assignment.vanId}-${assignment.time || selectedValidatedOption.time}-${index}`}>
+                      <span>{index === 0 ? 'PRIMARY / RESPONSIBLE' : 'SUPPORT'}</span>
                       <strong>{assignment.vanName || assignment.vanId}</strong>
-                      <small>{formatTime(assignment.time || activeValidation.option.time)}{assignment.endTime ? `–${formatTime(assignment.endTime)}` : ''} · {assignment.quantity} unit{assignment.quantity === 1 ? '' : 's'}</small>
+                      <small>{formatTime(assignment.time || selectedValidatedOption.time)}{assignment.endTime ? `–${formatTime(assignment.endTime)}` : ''} · {assignment.quantity} unit{assignment.quantity === 1 ? '' : 's'}</small>
                     </article>
                   ))}
                 </div>
               </div>
             ) : (
-              <div className={styles.authorityIdle}>Complete the customer, property and work details, then validate. No appointment or capacity lock is created until final confirmation.</div>
+              <div className={styles.authorityIdle}>Complete the customer, property and work details, then validate. For larger single-property jobs, support capacity is calculated here rather than by multiplying hours in the browser.</div>
             )}
           </section>
         </div>
 
         <footer className={styles.footer}>
           <div><span>CANONICAL WRITE PATH</span><strong>Booking Authority → Appointment + Work Order + Capacity Locks</strong></div>
-          <div><button type="button" className={styles.secondaryButton} disabled={busy} onClick={onClose}>Cancel</button><button type="button" className={styles.confirmButton} disabled={!activeValidation || busy} onClick={() => void confirmBooking()}>{saving ? 'Confirming…' : 'Confirm appointment'}</button></div>
+          <div><button type="button" className={styles.secondaryButton} disabled={busy} onClick={onClose}>Cancel</button><button type="button" className={styles.confirmButton} disabled={!selectedValidatedOption || busy} onClick={() => void confirmBooking()}>{saving ? 'Confirming…' : 'Confirm appointment'}</button></div>
         </footer>
       </aside>
     </div>
+  );
+}
+
+function PropertyAddressFields({ draft, onChange }: {
+  draft: PropertyDraft;
+  onChange: React.Dispatch<React.SetStateAction<PropertyDraft>>;
+}) {
+  const suggestions = useMemo(() => suggestArubaAddresses(draft.address, 6), [draft.address]);
+
+  const selectSuggestion = (suggestion: ArubaAddressEntry) => {
+    onChange((current) => ({
+      ...current,
+      address: suggestion.canonical,
+      zone: suggestion.operationalZone || current.zone,
+      neighborhood: suggestion.neighborhood || current.neighborhood,
+    }));
+  };
+
+  return (
+    <>
+      <label className={styles.fieldWide}>
+        <span>Street / area *</span>
+        <input
+          value={draft.address}
+          onChange={(event) => onChange((current) => ({
+            ...current,
+            address: event.target.value,
+            ...(event.target.value.trim() ? {} : { zone: '', neighborhood: '' }),
+          }))}
+          placeholder="Start typing: Santa Cruz, Savaneta, Pampunastraat…"
+          autoComplete="off"
+        />
+      </label>
+      {suggestions.length ? (
+        <div className={`${styles.searchResults} ${styles.fieldWide}`} style={{ maxHeight: 180, marginTop: -3 }}>
+          {suggestions.map((suggestion) => (
+            <button type="button" key={`${suggestion.canonical}-${suggestion.operationalZone}`} className={styles.searchResult} onClick={() => selectSuggestion(suggestion)}>
+              <div><strong>{suggestion.canonical}</strong><span>{suggestion.neighborhood || 'Aruba address directory'}</span></div>
+              <small>{suggestion.operationalZone || 'Zone not mapped yet'}</small>
+              <b>SELECT</b>
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <Field label="House / unit" value={draft.addressDetail} onChange={(value) => onChange((current) => ({ ...current, addressDetail: value }))} placeholder="175K · 54 C · Apt 2 · Local 1" />
+      <Field label="Area / zone" value={draft.zone} onChange={(value) => onChange((current) => ({ ...current, zone: value }))} placeholder="Auto-filled when mapped" />
+      <Field label="Neighborhood" value={draft.neighborhood ?? ''} onChange={(value) => onChange((current) => ({ ...current, neighborhood: value }))} />
+    </>
   );
 }
 
