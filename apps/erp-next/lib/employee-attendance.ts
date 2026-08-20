@@ -52,6 +52,7 @@ export type EmployeeTimesheetEntry = {
 
 export type EmployeeSalaryAdvance = {
   id: string;
+  recordType: 'salaryAdvance';
   employeeId: string;
   employeeName: string;
   date: string;
@@ -111,6 +112,10 @@ function roundHours(minutes: number) {
 
 function roundNumberHours(hours: number) {
   return Math.round(Math.max(0, Number(hours) || 0) * 100) / 100;
+}
+
+function isSalaryAdvance(record: EmployeePayrollSettings | EmployeeSalaryAdvance): record is EmployeeSalaryAdvance {
+  return 'recordType' in record && record.recordType === 'salaryAdvance';
 }
 
 export function dateKey(date: Date) {
@@ -232,11 +237,12 @@ function legacyPayrollStatus(status: AttendanceStatus, scheduledHours: number, e
 }
 
 export async function loadEmployeeAttendanceState(): Promise<EmployeeAttendanceState> {
-  const [payrollSettings, timesheets, advances] = await Promise.all([
-    listFirestoreCollection<EmployeePayrollSettings>('employeePayrollSettings'),
+  const [payrollRecords, timesheets] = await Promise.all([
+    listFirestoreCollection<EmployeePayrollSettings | EmployeeSalaryAdvance>('employeePayrollSettings'),
     listFirestoreCollection<EmployeeTimesheetEntry>('employeeTimesheets'),
-    listFirestoreCollection<EmployeeSalaryAdvance>('employeeSalaryAdvances').catch(() => []),
   ]);
+  const advances = payrollRecords.filter(isSalaryAdvance);
+  const payrollSettings = payrollRecords.filter((record): record is EmployeePayrollSettings => !isSalaryAdvance(record));
   return { payrollSettings, timesheets, advances };
 }
 
@@ -260,6 +266,7 @@ export async function saveSalaryAdvance(input: {
   const id = `advance-${input.employee.id}-${input.date}-${Date.now()}`;
   const advance: EmployeeSalaryAdvance = {
     id,
+    recordType: 'salaryAdvance',
     employeeId: input.employee.id,
     employeeName: input.employee.name ?? input.employee.id,
     date: input.date,
@@ -273,7 +280,9 @@ export async function saveSalaryAdvance(input: {
     recordedByUserId: input.recordedByUserId,
     recordedByName: input.recordedByName,
   };
-  await saveFirestoreDocument('employeeSalaryAdvances', advance);
+  // Salary advances are payroll-sensitive records. They intentionally share the protected
+  // employeePayrollSettings collection so existing payroll-only Firestore permissions apply.
+  await saveFirestoreDocument('employeePayrollSettings', advance);
   return advance;
 }
 
@@ -311,7 +320,7 @@ export async function saveAttendanceDay(input: {
     id: `${employee.id}_${date}`,
     payrollPeriodId: payrollPeriodForDate(date),
     employeeId: employee.id,
-    employeeName: employee.name ?? employee.id,
+    employeeName: input.employee.name ?? input.employee.id,
     date,
     scheduledWorkHours: scheduledHours,
     paidFreeHours,
