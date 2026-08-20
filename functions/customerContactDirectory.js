@@ -282,23 +282,32 @@ function applyRecipientSelections(recipients, selections) {
   });
 }
 
+async function clientCollectionSnapshot(db, collectionName, clientId) {
+  const collection = db.collection(collectionName);
+  if (typeof collection.where === 'function') return collection.where('clientId', '==', clientId).get();
+  return collection.get();
+}
+
 async function resolveAppointmentRecipients(db, { clientId, propertyId, selections = [] }) {
   const customerRef = db.collection('clients').doc(clientId);
   const propertyRef = db.collection('properties').doc(propertyId);
   const [customerSnapshot, propertySnapshot, contactSnapshot, assignmentSnapshot] = await Promise.all([
     customerRef.get(),
     propertyRef.get(),
-    db.collection(CONTACT_COLLECTION).where('clientId', '==', clientId).get(),
-    db.collection(CONTACT_ASSIGNMENT_COLLECTION).where('clientId', '==', clientId).get(),
+    clientCollectionSnapshot(db, CONTACT_COLLECTION, clientId),
+    clientCollectionSnapshot(db, CONTACT_ASSIGNMENT_COLLECTION, clientId),
   ]);
   if (!customerSnapshot.exists || !propertySnapshot.exists) return [];
-  const customer = { id: customerSnapshot.id, ...customerSnapshot.data() };
-  const property = { id: propertySnapshot.id, ...propertySnapshot.data() };
-  const contacts = contactSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).filter((contact) => contact.active !== false);
+  const customer = { id: customerSnapshot.id || clientId, ...customerSnapshot.data() };
+  const property = { id: propertySnapshot.id || propertyId, ...propertySnapshot.data() };
+  const contacts = contactSnapshot.docs
+    .map((doc) => ({ id: doc.id, ...doc.data() }))
+    .filter((contact) => contact.active !== false && cleanText(contact.clientId, 180) === clientId);
   const contactById = new Map(contacts.map((contact) => [contact.id, contact]));
   const relevantAssignments = assignmentSnapshot.docs
     .map((doc) => ({ id: doc.id, ...doc.data() }))
     .filter((assignment) => assignment.active !== false
+      && cleanText(assignment.clientId, 180) === clientId
       && (assignment.scope === 'all_properties' || cleanText(assignment.propertyId, 180) === propertyId));
   const effective = new Map();
   relevantAssignments
