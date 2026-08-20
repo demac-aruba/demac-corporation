@@ -14,8 +14,14 @@ const { createBookingAppointmentLifecycle } = require("./bookingAuthorityAppoint
 const { createOperationalMoveAuthority } = require("./bookingOperationalMove");
 const { createSchedulingProvider } = require("./bookingAuthoritySchedulingProvider");
 const { mergeBookablePresets } = require("./serviceCatalog");
+const {
+  CONTACT_ASSIGNMENT_COLLECTION,
+  normalizeContactLink,
+  resolveAppointmentRecipients,
+  writeContactLinks,
+} = require("./customerContactDirectory");
 
-const OFFICE_BOOKING_API_VERSION = 9;
+const OFFICE_BOOKING_API_VERSION = 10;
 const OFFICE_BOOKING_ROLES = Object.freeze([
   "admin",
   "office",
@@ -30,6 +36,8 @@ const OFFICE_BOOKING_ACTIONS = Object.freeze({
   LIST_APPOINTMENT_ATTRIBUTION: "list_appointment_attribution",
   CREATE_CUSTOMER_PROPERTY: "create_customer_property",
   CREATE_PROPERTY: "create_property",
+  SAVE_CONTACT_ASSIGNMENT: "save_contact_assignment",
+  DEACTIVATE_CONTACT_ASSIGNMENT: "deactivate_contact_assignment",
   CHECK_AVAILABILITY: "check_availability",
   CREATE_APPOINTMENT: "create_appointment",
   GET_APPOINTMENT: "get_appointment",
@@ -346,6 +354,13 @@ function createOfficeBookingApi({
     await db.runTransaction(async (transaction) => {
       transaction.set(clientRef, customer);
       transaction.set(propertyRef, property);
+      await writeContactLinks(transaction, db, {
+        clientId,
+        propertyId,
+        links: propertyInput.contactLinks,
+        identity,
+        now,
+      });
     });
     return { success: true, version: OFFICE_BOOKING_API_VERSION, customer, property };
   }
@@ -354,9 +369,10 @@ function createOfficeBookingApi({
     if (typeof db.runTransaction !== "function") throw new Error("Firestore transactions are required for CRM master-data creation.");
     officeRequestId(data.requestId);
     const clientId = requiredMasterText(data.customerId, "customerId", "Customer id", 180);
+    const propertyInput = data.property || {};
     const now = new Date().toISOString();
     const propertyId = masterDataId("property");
-    const property = buildOfficeProperty({ id: propertyId, clientId, input: data.property || {}, identity, now });
+    const property = buildOfficeProperty({ id: propertyId, clientId, input: propertyInput, identity, now });
     const clientRef = db.collection("clients").doc(clientId);
     const propertyRef = db.collection("properties").doc(propertyId);
     await db.runTransaction(async (transaction) => {
@@ -369,8 +385,69 @@ function createOfficeBookingApi({
         );
       }
       transaction.set(propertyRef, property);
+      await writeContactLinks(transaction, db, {
+        clientId,
+        propertyId,
+        links: propertyInput.contactLinks,
+        identity,
+        now,
+      });
     });
     return { success: true, version: OFFICE_BOOKING_API_VERSION, property };
+  }
+
+  async function saveContactAssignment(data = {}, identity = {}) {
+    if (typeof db.runTransaction !== "function") throw new Error("Firestore transactions are required for contact assignment changes.");
+    officeRequestId(data.requestId);
+    const clientId = requiredMasterText(data.customerId, "customerId", "Customer id", 180);
+    const propertyId = requiredMasterText(data.propertyId, "propertyId", "Property id", 180);
+    const link = data.link || {};
+    const now = new Date().toISOString();
+    const customerRef = db.collection("clients").doc(clientId);
+    const propertyRef = db.collection("properties").doc(propertyId);
+    let saved = [];
+    await db.runTransaction(async (transaction) => {
+      const [customerSnapshot, propertySnapshot] = await Promise.all([
+        transaction.get(customerRef),
+        transaction.get(propertyRef),
+      ]);
+      if (!customerSnapshot.exists || customerSnapshot.data()?.active === false) {
+        throw new BookingAuthorityError(BOOKING_ERROR_CODES.CUSTOMER_NOT_FOUND, "The selected customer no longer exists or is inactive.", { customerId: clientId });
+      }
+      if (!propertySnapshot.exists || cleanText(propertySnapshot.data()?.clientId, 180) !== clientId) {
+        throw new BookingAuthorityError(BOOKING_ERROR_CODES.PROPERTY_CUSTOMER_MISMATCH, "The selected property does not belong to this customer.", { clientId, propertyId });
+      }
+      saved = await writeContactLinks(transaction, db, { clientId, propertyId, links: [link], identity, now });
+    });
+    return { success: true, version: OFFICE_BOOKING_API_VERSION, ...(saved[0] || {}) };
+  }
+
+  async function deactivateContactAssignment(data = {}, identity = {}) {
+    if (typeof db.runTransaction !== "function") throw new Error("Firestore transactions are required for contact assignment changes.");
+    officeRequestId(data.requestId);
+    const clientId = requiredMasterText(data.customerId, "customerId", "Customer id", 180);
+    const propertyId = requiredMasterText(data.propertyId, "propertyId", "Property id", 180);
+    const assignmentId = requiredMasterText(data.assignmentId, "assignmentId", "Contact assignment id", 180);
+    const assignmentRef = db.collection(CONTACT_ASSIGNMENT_COLLECTION).doc(assignmentId);
+    const now = new Date().toISOString();
+    await db.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(assignmentRef);
+      if (!snapshot.exists) return;
+      const assignment = snapshot.data() || {};
+      const belongs = cleanText(assignment.clientId, 180) === clientId
+        && (assignment.scope === "all_properties" || cleanText(assignment.propertyId, 180) === propertyId);
+      if (!belongs) {
+        throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "This contact assignment does not belong to the selected customer/property.", { assignmentId });
+      }
+      transaction.set(assignmentRef, {
+        active: false,
+        updatedAt: now,
+        archivedAt: now,
+        archivedById: cleanText(identity.uid, 160),
+        archivedByName: cleanText(identity.name || identity.email, 180),
+      }, { merge: true });
+    });
+    return { success: true, version: OFFICE_BOOKING_API_VERSION, assignmentId };
   }
 
   async function execute({ action, data = {}, identity }) {
@@ -379,12 +456,19 @@ function createOfficeBookingApi({
     if (action === OFFICE_BOOKING_ACTIONS.LIST_APPOINTMENT_ATTRIBUTION) return listAppointmentAttribution(data);
     if (action === OFFICE_BOOKING_ACTIONS.CREATE_CUSTOMER_PROPERTY) return createCustomerProperty(data, identity);
     if (action === OFFICE_BOOKING_ACTIONS.CREATE_PROPERTY) return createProperty(data, identity);
+    if (action === OFFICE_BOOKING_ACTIONS.SAVE_CONTACT_ASSIGNMENT) return saveContactAssignment(data, identity);
+    if (action === OFFICE_BOOKING_ACTIONS.DEACTIVATE_CONTACT_ASSIGNMENT) return deactivateContactAssignment(data, identity);
     if (action === OFFICE_BOOKING_ACTIONS.CHECK_AVAILABILITY) {
       const requestId = officeRequestId(data.requestId);
       const request = bookingRequestFromOffice(data);
       const excludeAppointmentId = cleanText(data.appointmentId, 180);
       const requiredPrimaryVanId = cleanText(data.requiredVanId, 120);
       const changeKind = lifecycleChangeKind(data.changeKind);
+      const notificationRecipients = await resolveAppointmentRecipients(db, {
+        clientId: request.customerId,
+        propertyId: request.propertyId,
+        selections: data.recipientSelections,
+      });
       return authority.checkAvailability({
         request,
         actor,
@@ -395,6 +479,7 @@ function createOfficeBookingApi({
           excludeAppointmentId,
           requiredPrimaryVanId,
           changeKind,
+          notificationRecipients,
         },
       });
     }
@@ -494,6 +579,8 @@ function createOfficeBookingApi({
     listAppointmentAttribution,
     createCustomerProperty,
     createProperty,
+    saveContactAssignment,
+    deactivateContactAssignment,
   };
 }
 
