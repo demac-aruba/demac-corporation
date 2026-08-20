@@ -132,7 +132,7 @@ test("owner and super-admin roles can use the authenticated office booking autho
   }
 });
 
-test("list_presets exposes only active ERP appointment presets", async () => {
+test("list_presets exposes the eight canonical Scheduling Work Types instead of Legacy picker variants", async () => {
   const db = createDb({ presets: [
     { id: "standard_service", label: "Servicio estándar", durationMinutesPerUnit: 60, active: true },
     { id: "deep_service", label: "Servicio deep", durationMinutesPerUnit: 90, active: false },
@@ -140,9 +140,17 @@ test("list_presets exposes only active ERP appointment presets", async () => {
   const api = createOfficeBookingApi({ db, verifyIdToken, bookingAuthority: createAuthority(), schedulingProvider: {} });
   const result = await api.handle(request({ action: OFFICE_BOOKING_ACTIONS.LIST_PRESETS }));
   assert.equal(result.status, 200);
-  assert.deepEqual(result.body.presets.map((item) => item.id), ["standard_service"]);
+  assert.deepEqual(result.body.presets.map((item) => item.id), [
+    "standard_service",
+    "deep_cleaning",
+    "standard_installation",
+    "installation_extended_labor",
+    "check_up",
+    "leak_repair",
+    "commercial_service",
+    "other",
+  ]);
   assert.equal(result.body.presets[0].durationMinutesPerUnit, 60);
-  assert.equal(result.body.catalogSource, "legacy_fallback");
 });
 
 test("list_appointment_attribution exposes only safe creator metadata through authenticated office authority", async () => {
