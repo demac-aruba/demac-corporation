@@ -34,8 +34,8 @@ export function SystemSettingsWorkspace() {
   return (
     <div className="sg-stack">
       <section className="page-head">
-        <div><div className="eyebrow">Governed Configuration</div><h1>System Settings</h1><p>Operational rules that change over time belong in controlled configuration instead of being hidden inside application code. Canonical company-calendar controls below write directly to Firestore.</p></div>
-        <div className="page-actions"><button className="btn primary" type="button" onClick={saveDraft} disabled={!ready || !dirty}>Save Scheduling Preview</button></div>
+        <div><div className="eyebrow">Governed Configuration</div><h1>System Settings</h1><p>General operating rules belong here. Service price, duration and service-specific allocation are owned by the canonical Services & Products catalog so Scheduling and Booking Authority do not maintain duplicate definitions.</p></div>
+        <div className="page-actions"><button className="btn primary" type="button" onClick={saveDraft} disabled={!ready || !dirty}>Save Preview Preferences</button></div>
       </section>
 
       <section className="sg-settings-grid">
@@ -46,14 +46,12 @@ export function SystemSettingsWorkspace() {
         </article>
 
         <article className="panel sg-setting-card">
-          <header><div><span>Scheduling</span><h2>Work Durations</h2></div><b>Browser Preview</b></header>
+          <header><div><span>Scheduling</span><h2>Route Buffer & Overtime</h2></div><b>Browser Preview</b></header>
           <div className="sg-form-grid">
-            <label>Standard service<input type="number" min="30" max="480" step="15" value={settings.serviceMinutes} onChange={(e)=>update('serviceMinutes',Number(e.target.value))}/><small>minutes per standard-service A/C unit</small></label>
-            <label>Deep cleaning<input type="number" min="45" max="480" step="15" value={settings.deepMinutes} onChange={(e)=>update('deepMinutes',Number(e.target.value))}/><small>minutes per deep-cleaning A/C unit</small></label>
-            <label>Operational buffer<input type="number" min="0" max="120" step="5" value={settings.bufferMinutes} onChange={(e)=>update('bufferMinutes',Number(e.target.value))}/><small>margin before lunch / end-of-day route recovery</small></label>
-            <label>Overtime threshold<input type="time" value={settings.afterHours} onChange={(e)=>update('afterHours',e.target.value)}/><small>work after this time is flagged; this does not extend scheduling capacity</small></label>
+            <label>Operational buffer<input type="number" min="0" max="120" step="5" value={settings.bufferMinutes} onChange={(e)=>update('bufferMinutes',Number(e.target.value))}/><small>preview margin before lunch / end-of-day route recovery</small></label>
+            <label>Overtime threshold<input type="time" value={settings.afterHours} onChange={(e)=>update('afterHours',e.target.value)}/><small>preview flag only; this does not extend canonical scheduling capacity</small></label>
           </div>
-          <div className="sg-runtime-note"><strong>Preview-only boundary</strong><p>These values currently affect only the ERP Next browser Scheduling runtime used for workflow testing. Maya and Booking Authority continue to use canonical Firestore appointment-work-presets. This section will be migrated before browser scheduling settings are retired.</p></div>
+          <div className="sg-runtime-note"><strong>Service duration moved to canonical catalog</strong><p>Standard Service, Deep Cleaning, installations, repairs and every other service now get their duration from the service record in Services & Products. These Settings no longer override service duration.</p></div>
         </article>
 
         <article className="panel sg-setting-card">
@@ -64,8 +62,8 @@ export function SystemSettingsWorkspace() {
         <CanonicalOperatingCalendar />
 
         <article className="panel sg-setting-card">
-          <header><div><span>Dispatch</span><h2>Geography & Capacity</h2></div><b>Configurable</b></header>
-          <div className="sg-rule-table"><div><strong>AM routing</strong><span>First AM job anchors sector</span><small>Later jobs same/adjacent/on route</small></div><div><strong>PM routing</strong><span>First PM job anchors sector</span><small>Afternoon cluster recalculated independently</small></div><div><strong>Standard capacity</strong><span>6 jobs / team / day</span><small>Subject to configured duration and route constraints</small></div><div><strong>Single-property capacity</strong><span>Up to 7 services</span><small>Large jobs may link support van; runtime duration must still fit the day</small></div></div>
+          <header><div><span>Dispatch</span><h2>Geography & Capacity</h2></div><b>Scheduling Policy</b></header>
+          <div className="sg-rule-table"><div><strong>AM routing</strong><span>First AM job anchors sector</span><small>Later jobs same/adjacent/on route</small></div><div><strong>PM routing</strong><span>First PM job anchors sector</span><small>Afternoon cluster recalculated independently</small></div><div><strong>Van availability</strong><span>Calendar + crew + existing work</span><small>Scheduling owns whether a resource is actually free.</small></div><div><strong>Service requirements</strong><span>Read from Services & Products</span><small>Scheduling consumes the service definition; it does not redefine it.</small></div></div>
         </article>
 
         <article className="panel sg-setting-card">
@@ -74,7 +72,7 @@ export function SystemSettingsWorkspace() {
         </article>
       </section>
 
-      <section className="panel sg-change-banner"><div><strong>{dirty ? 'Unsaved scheduling preview changes' : 'Scheduling preview saved locally'}</strong><p>The browser preview is isolated from canonical workforce and calendar truth. Weekly van half-days and company closures above read and write the Firestore records used by Booking Authority.</p></div><span>{dirty ? 'Preview changed' : savedAt ? `Saved ${savedAt}` : 'Loaded from browser'}</span></section>
+      <section className="panel sg-change-banner"><div><strong>{dirty ? 'Unsaved preview preference changes' : 'Preview preferences saved locally'}</strong><p>The canonical working calendar above writes to Firestore. Browser-only buffer/overtime preferences remain isolated from service definitions and do not change Booking Authority service duration.</p></div><span>{dirty ? 'Preview changed' : savedAt ? `Saved ${savedAt}` : 'Loaded from browser'}</span></section>
     </div>
   );
 }
