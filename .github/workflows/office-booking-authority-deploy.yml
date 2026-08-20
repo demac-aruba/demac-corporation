@@ -13,6 +13,7 @@ on:
       - 'functions/bookingAuthorityAppointmentLifecycle.js'
       - 'functions/bookingAuthorityAppointmentLifecycle.test.js'
       - 'functions/bookingAuthoritySchedulingEngine.js'
+      - 'functions/bookingAuthoritySchedulingEngine.test.js'
       - 'functions/bookingAuthoritySchedulingProvider.js'
       - 'functions/bookingAuthoritySchedulingProvider.test.js'
       - 'functions/bookingVanIdentity.js'
@@ -37,6 +38,7 @@ on:
       - 'functions/bookingAuthorityAppointmentLifecycle.js'
       - 'functions/bookingAuthorityAppointmentLifecycle.test.js'
       - 'functions/bookingAuthoritySchedulingEngine.js'
+      - 'functions/bookingAuthoritySchedulingEngine.test.js'
       - 'functions/bookingAuthoritySchedulingProvider.js'
       - 'functions/bookingAuthoritySchedulingProvider.test.js'
       - 'functions/bookingVanIdentity.js'
@@ -89,6 +91,7 @@ jobs:
           node --test functions/bookingOperationalMove.test.js
           node --test functions/bookingCapacityAvailability.test.js
           node --test functions/bookingAuthorityAppointmentLifecycle.test.js
+          node --test functions/bookingAuthoritySchedulingEngine.test.js
           node --test functions/bookingAuthoritySchedulingProvider.test.js
           node --test functions/bookingVanIdentity.test.js
           node --test functions/officeBookingAuthority.test.js
