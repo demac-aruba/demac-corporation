@@ -1,8 +1,6 @@
 import { listFirestoreCollection, saveFirestoreDocument, updateFirestoreDocument } from './firebase/firestore-rest';
 
 export type CatalogItemType = 'Servicio' | 'Producto';
-export type ServiceDurationMode = 'per_unit' | 'fixed';
-export type ServiceAllocationMode = 'single_van' | 'primary_with_support';
 export type CatalogPricingMode = 'fixed' | 'per_unit' | 'tiered_btu' | 'quote';
 
 export type CatalogPriceTier = {
@@ -25,17 +23,6 @@ export type ServiceDefinition = {
   bookingCode: string;
   duration: {
     minutes: number;
-    // Legacy-read compatibility only. Canonical writes always mean duration per execution.
-    mode?: ServiceDurationMode;
-  };
-  // Legacy-read compatibility only. Booking quantity is now a plain execution count.
-  quantityUnit?: string;
-  // Legacy-read compatibility only. Van allocation belongs to Scheduling, not the service catalog.
-  allocation?: {
-    mode: ServiceAllocationMode;
-    differentPropertyDailyMaxUnits?: number;
-    primaryMaxUnits?: number;
-    supportSelection?: 'operator' | 'none';
   };
 };
 
