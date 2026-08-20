@@ -1,0 +1,132 @@
+name: DEMAC Authentication Email Branding
+
+on:
+  pull_request:
+    paths:
+      - 'config/firebase-auth-email-branding.json'
+      - '.github/workflows/firebase-auth-email-branding.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'config/firebase-auth-email-branding.json'
+      - '.github/workflows/firebase-auth-email-branding.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: demac-auth-email-branding-production
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate branded email configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('fs');
+          const cfg = JSON.parse(fs.readFileSync('config/firebase-auth-email-branding.json', 'utf8'));
+          const template = cfg.resetPasswordTemplate || {};
+          const expected = {
+            projectId: 'demac-corporation',
+            customDomain: 'demac-aruba.com',
+            senderLocalPart: 'noreply',
+            senderDisplayName: 'DEMAC',
+            subject: 'DEMAC – Configure your password',
+            replyTo: 'noreply@demac-aruba.com',
+            bodyFormat: 'HTML',
+          };
+          for (const [key, value] of Object.entries(expected)) {
+            const actual = key in cfg ? cfg[key] : template[key];
+            if (actual !== value) throw new Error(`${key} must be ${JSON.stringify(value)}; got ${JSON.stringify(actual)}`);
+          }
+          if (!String(template.body || '').includes('%LINK%')) throw new Error('Password email body must contain %LINK%.');
+          if (!String(template.body || '').includes('%EMAIL%')) throw new Error('Password email body must contain %EMAIL%.');
+          if (/\bERP\b/i.test(String(template.subject || '') + ' ' + String(template.body || '') + ' ' + String(template.senderDisplayName || ''))) {
+            throw new Error('Employee-facing authentication email must use DEMAC branding without ERP wording.');
+          }
+          NODE
+
+  apply:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Authenticate Firebase configuration service account
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Apply DEMAC password email template
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONFIG='config/firebase-auth-email-branding.json'
+          PROJECT_ID="$(jq -r '.projectId' "$CONFIG")"
+          TOKEN="$(gcloud auth print-access-token)"
+          API="https://identitytoolkit.googleapis.com/admin/v2/projects/${PROJECT_ID}/config"
+          MASK='notification.sendEmail.resetPasswordTemplate.senderLocalPart,notification.sendEmail.resetPasswordTemplate.subject,notification.sendEmail.resetPasswordTemplate.senderDisplayName,notification.sendEmail.resetPasswordTemplate.body,notification.sendEmail.resetPasswordTemplate.bodyFormat,notification.sendEmail.resetPasswordTemplate.replyTo'
+          ENCODED_MASK="$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe="."))' "$MASK")"
+          PAYLOAD="$(jq -c --arg name "projects/${PROJECT_ID}/config" '{name:$name,notification:{sendEmail:{resetPasswordTemplate:.resetPasswordTemplate}}}' "$CONFIG")"
+
+          curl --silent --show-error --fail-with-body \
+            --request PATCH "${API}?updateMask=${ENCODED_MASK}" \
+            --header "Authorization: Bearer ${TOKEN}" \
+            --header 'Content-Type: application/json' \
+            --data "$PAYLOAD" \
+            > "$RUNNER_TEMP/auth-config-updated.json"
+
+          jq '{name, resetPasswordTemplate:.notification.sendEmail.resetPasswordTemplate}' "$RUNNER_TEMP/auth-config-updated.json"
+
+      - name: Start or apply DEMAC custom sender domain
+        shell: bash
+        run: |
+          set -euo pipefail
+          CONFIG='config/firebase-auth-email-branding.json'
+          PROJECT_ID="$(jq -r '.projectId' "$CONFIG")"
+          DOMAIN="$(jq -r '.customDomain' "$CONFIG")"
+          TOKEN="$(gcloud auth print-access-token)"
+          VERIFY_API="https://identitytoolkit.googleapis.com/admin/v2/projects/${PROJECT_ID}/domain:verify"
+          CONFIG_API="https://identitytoolkit.googleapis.com/admin/v2/projects/${PROJECT_ID}/config"
+
+          VERIFY_PAYLOAD="$(jq -nc --arg domain "$DOMAIN" '{domain:$domain,action:"VERIFY"}')"
+          VERIFY_RESULT="$(curl --silent --show-error --fail-with-body \
+            --request POST "$VERIFY_API" \
+            --header "Authorization: Bearer ${TOKEN}" \
+            --header 'Content-Type: application/json' \
+            --data "$VERIFY_PAYLOAD")"
+          echo "$VERIFY_RESULT" | jq .
+
+          STATE="$(echo "$VERIFY_RESULT" | jq -r '.verificationState // "UNKNOWN"')"
+          if [ "$STATE" = 'SUCCEEDED' ]; then
+            APPLY_PAYLOAD="$(jq -nc --arg domain "$DOMAIN" '{domain:$domain,action:"APPLY"}')"
+            curl --silent --show-error --fail-with-body \
+              --request POST "$VERIFY_API" \
+              --header "Authorization: Bearer ${TOKEN}" \
+              --header 'Content-Type: application/json' \
+              --data "$APPLY_PAYLOAD" \
+              | jq .
+            echo 'DEMAC custom authentication email domain verified and applied.'
+          else
+            ERROR="$(echo "$VERIFY_RESULT" | jq -r '.verificationError // "DNS verification is not complete yet."')"
+            echo "::warning::DEMAC email branding is active, but noreply@${DOMAIN} cannot be used as the Firebase From domain until DNS verification succeeds. ${ERROR}"
+          fi
+
+          CURRENT="$(curl --silent --show-error --fail-with-body \
+            --request GET "$CONFIG_API" \
+            --header "Authorization: Bearer ${TOKEN}")"
+          echo "$CURRENT" | jq '{subtype,template:.notification.sendEmail.resetPasswordTemplate,dnsInfo:.notification.sendEmail.dnsInfo}'
