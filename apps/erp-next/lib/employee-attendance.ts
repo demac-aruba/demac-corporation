@@ -3,6 +3,7 @@ import type { CanonicalStaffAbsence, CanonicalStaffProfile } from './canonical-o
 import { saveCanonicalStaffAbsence } from './canonical-operations-mutations';
 
 export type AttendanceStatus = 'Present' | 'Late' | 'Sick' | 'Vacation' | 'Day Off' | 'Absent';
+export type SalaryAdvanceMethod = 'Cash' | 'Bank Transfer';
 
 export type EmployeePayrollSettings = {
   id: string;
@@ -49,12 +50,29 @@ export type EmployeeTimesheetEntry = {
   updatedByName?: string;
 };
 
+export type EmployeeSalaryAdvance = {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  date: string;
+  payrollPeriodId: string;
+  amount: number;
+  method: SalaryAdvanceMethod;
+  reference?: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+  recordedByUserId?: string;
+  recordedByName?: string;
+};
+
 export type AttendanceDayDraft = {
   status: AttendanceStatus;
   clockInTime: string;
   clockOutTime: string;
   breakMinutes: number;
   overtimeMinutes: number;
+  exceptionHours?: number;
   notes: string;
 };
 
@@ -69,6 +87,13 @@ export type AttendanceSchedule = {
 export type EmployeeAttendanceState = {
   payrollSettings: EmployeePayrollSettings[];
   timesheets: EmployeeTimesheetEntry[];
+  advances?: EmployeeSalaryAdvance[];
+};
+
+export type PayrollPeriodBounds = {
+  id: string;
+  start: string;
+  end: string;
 };
 
 export const ATTENDANCE_STATUS_LABELS: Record<AttendanceStatus, string> = {
@@ -82,6 +107,10 @@ export const ATTENDANCE_STATUS_LABELS: Record<AttendanceStatus, string> = {
 
 function roundHours(minutes: number) {
   return Math.round((Math.max(0, minutes) / 60) * 100) / 100;
+}
+
+function roundNumberHours(hours: number) {
+  return Math.round(Math.max(0, Number(hours) || 0) * 100) / 100;
 }
 
 export function dateKey(date: Date) {
@@ -101,6 +130,12 @@ export function payrollPeriodForDate(date: string) {
   return `${start.toISOString().slice(0, 10)}_${end.toISOString().slice(0, 10)}`;
 }
 
+export function payrollPeriodBounds(date: string): PayrollPeriodBounds {
+  const id = payrollPeriodForDate(date);
+  const [start, end] = id.split('_');
+  return { id, start, end };
+}
+
 export function minutesBetween(startTime: string, endTime: string) {
   const [startHour, startMinute] = startTime.split(':').map(Number);
   const [endHour, endMinute] = endTime.split(':').map(Number);
@@ -109,13 +144,18 @@ export function minutesBetween(startTime: string, endTime: string) {
 }
 
 export function lateMinutes(clockInTime: string, scheduledStartTime: string) {
-  if (!clockInTime) return 0;
+  if (!clockInTime || !scheduledStartTime) return 0;
   return Math.max(0, minutesBetween(scheduledStartTime, clockInTime));
 }
 
 export function workedMinutes(clockInTime: string, clockOutTime: string, breakMinutes = 0) {
   if (!clockInTime || !clockOutTime) return 0;
   return Math.max(0, minutesBetween(clockInTime, clockOutTime) - Math.max(0, breakMinutes));
+}
+
+export function overtimeMinutesAfterFive(clockOutTime: string) {
+  if (!clockOutTime) return 0;
+  return Math.max(0, minutesBetween('17:00', clockOutTime));
 }
 
 export function defaultAttendanceSchedule(date: string): AttendanceSchedule {
@@ -173,31 +213,68 @@ export function statusFromRecords(
   if (reason.includes('vacacion')) return 'Vacation';
   if (reason.includes('libre')) return 'Day Off';
   if (absence) return 'Absent';
+  if ((entry?.aoHours ?? 0) > 0) return 'Sick';
+  if ((entry?.vacationHours ?? 0) > 0) return 'Vacation';
   if ((entry?.noWorkNoPayHours ?? 0) > 0 && (entry?.noWorkNoPayHours ?? 0) * 60 >= scheduledMinutes) return 'Absent';
   if ((entry?.lateMinutes ?? 0) > 0) return 'Late';
   if (entry) return 'Present';
   return null;
 }
 
-function legacyPayrollStatus(status: AttendanceStatus, scheduledHours: number) {
+function legacyPayrollStatus(status: AttendanceStatus, scheduledHours: number, exceptionHours: number) {
   if (!scheduledHours) return 'Sin jornada';
-  if (status === 'Sick') return 'AO completo';
-  if (status === 'Vacation') return 'Vacaciones completo';
-  if (status === 'Absent') return 'No Work No Pay completo';
+  const complete = exceptionHours >= scheduledHours;
+  if (status === 'Sick') return complete ? 'AO completo' : 'AO parcial';
+  if (status === 'Vacation') return complete ? 'Vacaciones completo' : 'Vacaciones parcial';
+  if (status === 'Absent') return complete ? 'No Work No Pay completo' : 'No Work No Pay parcial';
   if (status === 'Day Off') return 'Día libre programado';
   return 'Regular';
 }
 
 export async function loadEmployeeAttendanceState(): Promise<EmployeeAttendanceState> {
-  const [payrollSettings, timesheets] = await Promise.all([
+  const [payrollSettings, timesheets, advances] = await Promise.all([
     listFirestoreCollection<EmployeePayrollSettings>('employeePayrollSettings'),
     listFirestoreCollection<EmployeeTimesheetEntry>('employeeTimesheets'),
+    listFirestoreCollection<EmployeeSalaryAdvance>('employeeSalaryAdvances').catch(() => []),
   ]);
-  return { payrollSettings, timesheets };
+  return { payrollSettings, timesheets, advances };
 }
 
 export function payrollSettingsForStaff(settings: EmployeePayrollSettings[], staffId: string) {
   return settings.find((entry) => (entry.sourceStaffId ?? entry.id) === staffId);
+}
+
+export async function saveSalaryAdvance(input: {
+  employee: CanonicalStaffProfile;
+  date: string;
+  amount: number;
+  method: SalaryAdvanceMethod;
+  reference?: string;
+  notes?: string;
+  recordedByUserId?: string;
+  recordedByName?: string;
+}) {
+  const amount = Math.round(Math.max(0, Number(input.amount) || 0) * 100) / 100;
+  if (!amount) throw new Error('Advance amount must be greater than zero.');
+  const now = new Date().toISOString();
+  const id = `advance-${input.employee.id}-${input.date}-${Date.now()}`;
+  const advance: EmployeeSalaryAdvance = {
+    id,
+    employeeId: input.employee.id,
+    employeeName: input.employee.name ?? input.employee.id,
+    date: input.date,
+    payrollPeriodId: payrollPeriodForDate(input.date),
+    amount,
+    method: input.method,
+    reference: input.reference?.trim() || undefined,
+    notes: input.notes?.trim() || undefined,
+    createdAt: now,
+    updatedAt: now,
+    recordedByUserId: input.recordedByUserId,
+    recordedByName: input.recordedByName,
+  };
+  await saveFirestoreDocument('employeeSalaryAdvances', advance);
+  return advance;
 }
 
 export async function saveAttendanceDay(input: {
@@ -215,9 +292,16 @@ export async function saveAttendanceDay(input: {
   const scheduledHours = roundHours(schedule.scheduledMinutes);
   const paidFreeHours = roundHours(schedule.paidFreeMinutes);
   const overtimeMinutesValue = Math.max(0, Math.round(Number(draft.overtimeMinutes) || 0));
-  const sickHours = draft.status === 'Sick' ? scheduledHours : 0;
-  const vacationHours = draft.status === 'Vacation' ? scheduledHours : 0;
-  const noWorkNoPayHours = draft.status === 'Absent' ? scheduledHours : 0;
+  const exceptionStatus = draft.status === 'Sick' || draft.status === 'Vacation' || draft.status === 'Absent';
+  const requestedExceptionHours = exceptionStatus
+    ? draft.exceptionHours === undefined
+      ? scheduledHours
+      : roundNumberHours(draft.exceptionHours)
+    : 0;
+  const exceptionHours = Math.min(scheduledHours, requestedExceptionHours);
+  const sickHours = draft.status === 'Sick' ? exceptionHours : 0;
+  const vacationHours = draft.status === 'Vacation' ? exceptionHours : 0;
+  const noWorkNoPayHours = draft.status === 'Absent' ? exceptionHours : 0;
   const regularHours = Math.max(0, Math.round((scheduledHours - sickHours - vacationHours - noWorkNoPayHours) * 100) / 100);
   const lateMinutesValue = draft.status === 'Late' ? lateMinutes(draft.clockInTime, schedule.startTime) : 0;
   const workedMinutesValue = workedMinutes(draft.clockInTime, draft.clockOutTime, draft.breakMinutes);
@@ -237,7 +321,7 @@ export async function saveAttendanceDay(input: {
     aoHours: sickHours,
     vacationHours,
     noWorkNoPayHours,
-    status: legacyPayrollStatus(draft.status, scheduledHours),
+    status: legacyPayrollStatus(draft.status, scheduledHours, exceptionHours),
     notes: draft.notes.trim(),
     attendanceStatus: draft.status,
     clockInTime: draft.clockInTime || undefined,
@@ -253,13 +337,14 @@ export async function saveAttendanceDay(input: {
 
   await saveFirestoreDocument('employeeTimesheets', entry);
 
-  const desiredAbsenceReason = draft.status === 'Sick'
+  const fullDayException = scheduledHours > 0 && exceptionHours >= scheduledHours;
+  const desiredAbsenceReason = fullDayException && draft.status === 'Sick'
     ? 'Enfermo'
-    : draft.status === 'Vacation'
+    : fullDayException && draft.status === 'Vacation'
       ? 'Vacaciones'
       : draft.status === 'Day Off'
         ? 'Libre'
-        : draft.status === 'Absent'
+        : fullDayException && draft.status === 'Absent'
           ? 'Otro'
           : null;
 
