@@ -18,30 +18,11 @@ function serviceItem(service = {}) {
 
 function normalizeDuration(definition = {}, service = {}) {
   const raw = definition.duration || {};
-  const mode = cleanText(raw.mode, 40) === "fixed" ? "fixed" : "per_unit";
   const fallback = Number(service.durationMinutes || 60);
   const minutes = boundedInteger(raw.minutes, Number.isFinite(fallback) && fallback > 0 ? fallback : 60, 30, 720);
-  return { mode, minutes };
-}
-
-function normalizeAllocation(definition = {}) {
-  const raw = definition.allocation || {};
-  const mode = cleanText(raw.mode, 60) === "primary_with_support"
-    ? "primary_with_support"
-    : "single_van";
-  const differentPropertyDailyMaxUnits = boundedInteger(raw.differentPropertyDailyMaxUnits, 6, 1, 24);
-  const primaryMaxUnits = boundedInteger(
-    raw.primaryMaxUnits,
-    mode === "primary_with_support" ? Math.max(1, differentPropertyDailyMaxUnits) : 1,
-    1,
-    48,
-  );
-  return {
-    mode,
-    differentPropertyDailyMaxUnits: Math.min(differentPropertyDailyMaxUnits, primaryMaxUnits),
-    primaryMaxUnits,
-    supportSelection: mode === "primary_with_support" ? "operator" : "none",
-  };
+  // Canonical service duration is always the duration of one execution.
+  // Booking supplies an execution count and Scheduling multiplies it.
+  return { mode: "per_unit", minutes };
 }
 
 function normalizeCatalogService(service = {}) {
@@ -54,15 +35,12 @@ function normalizeCatalogService(service = {}) {
   if (!bookingCode || !label) return null;
 
   const duration = normalizeDuration(definition, service);
-  const allocation = normalizeAllocation(definition);
   return {
     id: bookingCode,
     label,
     kind: cleanText(definition.kind || service.category || "service", 80),
     durationMinutesPerUnit: duration.minutes,
     durationMode: duration.mode,
-    allocation,
-    quantityUnit: cleanText(definition.quantityUnit || "ac_unit", 80) || "ac_unit",
     active: true,
     serviceId: cleanText(service.id, 120),
     source: SERVICE_CATALOG_SOURCE,
@@ -160,7 +138,6 @@ module.exports = {
   bookableCatalogPresets,
   compactLegacyPreset,
   mergeBookablePresets,
-  normalizeAllocation,
   normalizeCatalogService,
   resolveCatalogService,
   serviceItem,

@@ -23,14 +23,13 @@ const {
 const { candidateAvailability } = require("./bookingCapacityAvailability");
 const { resolveCatalogService } = require("./serviceCatalog");
 
-const CANONICAL_SCHEDULING_ENGINE_VERSION = 4;
+const CANONICAL_SCHEDULING_ENGINE_VERSION = 5;
 const CLIENT_OPTION_LIMIT = 2;
 const ASSIGNMENT_COMBINATION_LIMIT = 8;
 const OFFICE_TARGET_OPTION_LIMIT = ASSIGNMENT_COMBINATION_LIMIT;
 
-// Transitional fallback only for service records that have not yet been migrated
-// into services/{serviceId}.serviceDefinition. New canonical services own their
-// duration and allocation rules in the service catalog instead of this object.
+// Scheduling owns operational capacity and van-allocation policy. The service
+// catalog contributes only the identity and duration of one service execution.
 const DEFAULT_OPERATIONAL_RULES = Object.freeze({
   standardService: {
     differentPropertyDailyCapacity: 6,
@@ -217,23 +216,21 @@ function regularAllocation(quantity, durationMinutes, role = "primary") {
   };
 }
 
-function primarySupportAllocationPlan(quantity, durationMinutesPerUnit, availableVanCount, preset, fallbackCapacity = null) {
+function primarySupportAllocationPlan(quantity, durationMinutesPerUnit, availableVanCount, capacity = {}) {
   if (availableVanCount < 1) return [];
-  const durationMode = preset.durationMode === "fixed" ? "fixed" : "per_unit";
-  const allocation = preset.allocation || {};
   const differentPropertyDailyMaxUnits = boundedInteger(
-    allocation.differentPropertyDailyMaxUnits,
-    fallbackCapacity?.differentPropertyDailyCapacity ?? 6,
+    capacity.differentPropertyDailyCapacity,
+    DEFAULT_OPERATIONAL_RULES.standardService.differentPropertyDailyCapacity,
     1,
     24,
   );
   const primaryMaxUnits = boundedInteger(
-    allocation.primaryMaxUnits,
-    fallbackCapacity?.singlePropertyMainVanMaxUnits ?? 7,
+    capacity.singlePropertyMainVanMaxUnits,
+    DEFAULT_OPERATIONAL_RULES.standardService.singlePropertyMainVanMaxUnits,
     Math.max(1, differentPropertyDailyMaxUnits),
     48,
   );
-  const totalDuration = durationForQuantity(quantity, durationMinutesPerUnit, durationMode);
+  const totalDuration = durationForQuantity(quantity, durationMinutesPerUnit, "per_unit");
 
   if (quantity <= differentPropertyDailyMaxUnits) {
     const regular = regularAllocation(quantity, totalDuration);
@@ -254,7 +251,7 @@ function primarySupportAllocationPlan(quantity, durationMinutesPerUnit, availabl
 
   if (availableVanCount < 2) return [];
   const supportQuantity = quantity - primaryMaxUnits;
-  const supportDuration = durationForQuantity(supportQuantity, durationMinutesPerUnit, durationMode);
+  const supportDuration = durationForQuantity(supportQuantity, durationMinutesPerUnit, "per_unit");
   const supportSlots = Math.ceil(supportDuration / 60);
   const allowedTimes = supportStartTimes(supportSlots);
   if (!supportQuantity || !allowedTimes.length) return [];
@@ -262,7 +259,7 @@ function primarySupportAllocationPlan(quantity, durationMinutesPerUnit, availabl
   return [
     {
       quantity: primaryMaxUnits,
-      durationMinutes: durationForQuantity(primaryMaxUnits, durationMinutesPerUnit, durationMode),
+      durationMinutes: durationForQuantity(primaryMaxUnits, durationMinutesPerUnit, "per_unit"),
       slots: REGULAR_SLOTS.length,
       fullDay: true,
       role: "primary",
@@ -286,30 +283,22 @@ function buildAllocationPlan(quantity, durationMinutesPerUnit, availableVanCount
   const duration = Math.max(30, Number(durationMinutesPerUnit || 60));
   if (!quantity || !availableVanCount) return [];
 
-  if (preset?.source === "service_catalog") {
-    if (preset.allocation?.mode === "primary_with_support") {
-      return primarySupportAllocationPlan(quantity, duration, availableVanCount, preset);
-    }
-    const totalDuration = durationForQuantity(quantity, duration, preset.durationMode);
-    const allocation = regularAllocation(quantity, totalDuration);
-    return allocation ? [allocation] : [];
-  }
-
-  // Legacy fallback while existing Firestore service records are migrated. The
-  // old arbitrary 10-unit ceiling is intentionally not preserved: after the
-  // primary maximum is exceeded, one support van is requested for whatever
-  // remaining workload can physically fit in that van's operating day.
+  // Standard Service capacity is an agenda rule regardless of whether the
+  // service duration came from the canonical catalog or the legacy fallback.
   if (isStandardServicePreset(preset)) {
     return primarySupportAllocationPlan(
       quantity,
       duration,
       availableVanCount,
-      { ...preset, durationMode: "per_unit", allocation: { mode: "primary_with_support" } },
       rules.standardService,
     );
   }
 
-  const durationMode = preset?.durationMode === "fixed" ? "fixed" : "per_unit";
+  // Fixed-duration behavior is retained only for unmigrated legacy presets.
+  // Canonical services always describe duration per execution.
+  const durationMode = preset?.source === "appointment_work_presets" && preset?.durationMode === "fixed"
+    ? "fixed"
+    : "per_unit";
   if (durationMode === "fixed") {
     const allocation = regularAllocation(quantity, duration);
     return allocation ? [allocation] : [];
@@ -536,13 +525,8 @@ function generateCanonicalOptions({
   const candidateZone = propertyZone(property, address, routeConfig);
   const requestedDate = requestedDateValue(request.constraints?.requestedDate);
   const timeConstraint = parseStructuredTimeConstraint(request.constraints);
-  const canonicalRegularMax = preset.allocation?.mode === "primary_with_support"
-    ? preset.allocation.differentPropertyDailyMaxUnits
-    : null;
-  const largeSingleProperty = canonicalRegularMax
-    ? work.quantity > canonicalRegularMax
-    : isStandardServicePreset(preset)
-      && work.quantity > operationalRules.standardService.differentPropertyDailyCapacity;
+  const largeSingleProperty = isStandardServicePreset(preset)
+    && work.quantity > operationalRules.standardService.differentPropertyDailyCapacity;
   const calendarSettings = (data.businessSettings || []).find((item) => item.id === "business-calendar")
     || { closedWeekdays: [0] };
   const primaryAllocation = allocations[0];

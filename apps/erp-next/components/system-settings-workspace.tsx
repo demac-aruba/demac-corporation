@@ -34,7 +34,7 @@ export function SystemSettingsWorkspace() {
   return (
     <div className="sg-stack">
       <section className="page-head">
-        <div><div className="eyebrow">Governed Configuration</div><h1>System Settings</h1><p>General operating rules belong here. Service price, duration and service-specific allocation are owned by the canonical Services & Products catalog so Scheduling and Booking Authority do not maintain duplicate definitions.</p></div>
+        <div><div className="eyebrow">Governed Configuration</div><h1>System Settings</h1><p>Service identity, price and duration belong to Services & Products. Scheduling owns operating capacity, van allocation, support resources, conflicts and calendar policy so those rules are not duplicated inside each service.</p></div>
         <div className="page-actions"><button className="btn primary" type="button" onClick={saveDraft} disabled={!ready || !dirty}>Save Preview Preferences</button></div>
       </section>
 
@@ -51,7 +51,7 @@ export function SystemSettingsWorkspace() {
             <label>Operational buffer<input type="number" min="0" max="120" step="5" value={settings.bufferMinutes} onChange={(e)=>update('bufferMinutes',Number(e.target.value))}/><small>preview margin before lunch / end-of-day route recovery</small></label>
             <label>Overtime threshold<input type="time" value={settings.afterHours} onChange={(e)=>update('afterHours',e.target.value)}/><small>preview flag only; this does not extend canonical scheduling capacity</small></label>
           </div>
-          <div className="sg-runtime-note"><strong>Service duration moved to canonical catalog</strong><p>Standard Service, Deep Cleaning, installations, repairs and every other service now get their duration from the service record in Services & Products. These Settings no longer override service duration.</p></div>
+          <div className="sg-runtime-note"><strong>Service duration comes from the canonical catalog</strong><p>Standard Service, Deep Cleaning, installations, repairs and every other service get the duration of one execution from Services & Products. Scheduling then multiplies that duration by the booking quantity and decides how the work fits operationally.</p></div>
         </article>
 
         <article className="panel sg-setting-card">
@@ -63,7 +63,7 @@ export function SystemSettingsWorkspace() {
 
         <article className="panel sg-setting-card">
           <header><div><span>Dispatch</span><h2>Geography & Capacity</h2></div><b>Scheduling Policy</b></header>
-          <div className="sg-rule-table"><div><strong>AM routing</strong><span>First AM job anchors sector</span><small>Later jobs same/adjacent/on route</small></div><div><strong>PM routing</strong><span>First PM job anchors sector</span><small>Afternoon cluster recalculated independently</small></div><div><strong>Van availability</strong><span>Calendar + crew + existing work</span><small>Scheduling owns whether a resource is actually free.</small></div><div><strong>Service requirements</strong><span>Read from Services & Products</span><small>Scheduling consumes the service definition; it does not redefine it.</small></div></div>
+          <div className="sg-rule-table"><div><strong>AM routing</strong><span>First AM job anchors sector</span><small>Later jobs same/adjacent/on route</small></div><div><strong>PM routing</strong><span>First PM job anchors sector</span><small>Afternoon cluster recalculated independently</small></div><div><strong>Van availability</strong><span>Calendar + crew + existing work</span><small>Scheduling owns whether a resource is actually free.</small></div><div><strong>Allocation & capacity</strong><span>Owned by Scheduling</span><small>Van limits and support behavior are agenda rules, not service fields.</small></div></div>
         </article>
 
         <article className="panel sg-setting-card">

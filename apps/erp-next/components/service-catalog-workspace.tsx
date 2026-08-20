@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { loadFirebasePrincipal } from '@/lib/firebase/principal';
 import { invalidateOfficeBookingPresetCache } from '@/lib/office-booking-authority';
 import {
-  bookingCodeFromName,
   catalogItemType,
   catalogMigrationState,
   createCatalogItem,
@@ -19,8 +18,6 @@ import {
   type CatalogItemType,
   type CatalogPriceTier,
   type CatalogPricingMode,
-  type ServiceAllocationMode,
-  type ServiceDurationMode,
 } from '@/lib/service-catalog';
 import type { AuthPrincipal } from '@/lib/security';
 import styles from './service-catalog-workspace.module.css';
@@ -32,11 +29,16 @@ function money(value: number) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'AWG', minimumFractionDigits: 2 }).format(value);
 }
 
+function formatHours(minutes: number) {
+  const hours = Math.max(0, Number(minutes || 0)) / 60;
+  const rounded = Math.round(hours * 100) / 100;
+  return `${rounded} ${rounded === 1 ? 'hour' : 'hours'}`;
+}
+
 function durationLabel(item: CatalogItem) {
-  const definition = item.serviceDefinition;
-  if (!definition) return item.durationMinutes ? `${item.durationMinutes} min · legacy` : 'Not configured';
-  const mode = definition.duration.mode === 'fixed' ? 'fixed' : 'per unit';
-  return `${definition.duration.minutes} min · ${mode}`;
+  const minutes = item.serviceDefinition?.duration.minutes ?? item.durationMinutes;
+  if (!minutes) return 'Not configured';
+  return `${formatHours(minutes)}${item.serviceDefinition ? ' per execution' : ' · legacy'}`;
 }
 
 function pricingLabel(item: CatalogItem) {
@@ -44,7 +46,7 @@ function pricingLabel(item: CatalogItem) {
   if (!pricing) return money(item.basePrice || 0);
   if (pricing.mode === 'quote') return 'Quote required';
   if (pricing.mode === 'tiered_btu') return `${pricing.tiers?.length ?? 0} BTU tiers`;
-  return `${money(item.basePrice || 0)} · ${pricing.mode === 'per_unit' ? 'per unit' : 'fixed'}`;
+  return `${money(item.basePrice || 0)} · ${pricing.mode === 'per_unit' ? 'per execution / unit' : 'fixed'}`;
 }
 
 function canEdit(principal: AuthPrincipal | null) {
@@ -101,7 +103,7 @@ export function ServiceCatalogWorkspace() {
       const type = catalogItemType(item);
       if (filter !== 'Todos' && type !== filter) return false;
       if (!needle) return true;
-      return `${item.name} ${item.category} ${item.sku ?? ''} ${item.description ?? ''} ${item.serviceDefinition?.bookingCode ?? ''}`
+      return `${item.name} ${item.category} ${item.sku ?? ''} ${item.description ?? ''}`
         .toLowerCase()
         .includes(needle);
     });
@@ -132,22 +134,6 @@ export function ServiceCatalogWorkspace() {
     setEditorOpen(true);
   };
 
-  const updateName = (name: string) => {
-    setDraft((current) => {
-      const previousAuto = bookingCodeFromName(current.name);
-      const nextCode = bookingCodeFromName(name);
-      const definition = current.serviceDefinition;
-      const canReplaceCode = !editingId && definition && (!definition.bookingCode || definition.bookingCode === previousAuto);
-      return {
-        ...current,
-        name,
-        serviceDefinition: definition
-          ? { ...definition, bookingCode: canReplaceCode ? nextCode : definition.bookingCode }
-          : undefined,
-      };
-    });
-  };
-
   const updateItemType = (itemType: CatalogItemType) => {
     setDraft((current) => ({
       ...current,
@@ -160,48 +146,15 @@ export function ServiceCatalogWorkspace() {
     }));
   };
 
-  const updateDuration = (key: 'mode' | 'minutes', value: ServiceDurationMode | number) => {
+  const updateDurationHours = (hours: number) => {
     setDraft((current) => {
       if (!current.serviceDefinition) return current;
+      const minutes = Math.round((Math.max(0, hours) * 60) / 15) * 15;
       return {
         ...current,
         serviceDefinition: {
           ...current.serviceDefinition,
-          duration: { ...current.serviceDefinition.duration, [key]: value },
-        },
-      };
-    });
-  };
-
-  const updateAllocationMode = (mode: ServiceAllocationMode) => {
-    setDraft((current) => {
-      if (!current.serviceDefinition) return current;
-      const existing = current.serviceDefinition.allocation;
-      return {
-        ...current,
-        serviceDefinition: {
-          ...current.serviceDefinition,
-          allocation: mode === 'primary_with_support'
-            ? {
-              mode,
-              differentPropertyDailyMaxUnits: existing.differentPropertyDailyMaxUnits ?? 6,
-              primaryMaxUnits: existing.primaryMaxUnits ?? 7,
-              supportSelection: 'operator',
-            }
-            : { mode, supportSelection: 'none' },
-        },
-      };
-    });
-  };
-
-  const updateAllocationNumber = (key: 'differentPropertyDailyMaxUnits' | 'primaryMaxUnits', value: number) => {
-    setDraft((current) => {
-      if (!current.serviceDefinition) return current;
-      return {
-        ...current,
-        serviceDefinition: {
-          ...current.serviceDefinition,
-          allocation: { ...current.serviceDefinition.allocation, [key]: Math.max(1, Math.round(value)) },
+          duration: { minutes },
         },
       };
     });
@@ -254,14 +207,9 @@ export function ServiceCatalogWorkspace() {
     const name = draft.name.trim();
     if (!name) return setEditorError('Name is required.');
     if (draft.itemType === 'Servicio') {
-      const definition = draft.serviceDefinition;
-      if (!definition?.bookingCode.trim()) return setEditorError('Booking code is required for a service.');
-      if (definition.duration.minutes < 30) return setEditorError('Service duration must be at least 30 minutes.');
-      if (definition.allocation.mode === 'primary_with_support') {
-        const regular = Number(definition.allocation.differentPropertyDailyMaxUnits || 0);
-        const primary = Number(definition.allocation.primaryMaxUnits || 0);
-        if (regular < 1 || primary < regular) return setEditorError('Primary maximum must be equal to or greater than the regular daily maximum.');
-      }
+      const minutes = Number(draft.serviceDefinition?.duration.minutes || 0);
+      if (minutes < 30) return setEditorError('Service duration must be at least 0.5 hours.');
+      if (minutes > 720) return setEditorError('Service duration cannot exceed 12 hours.');
     }
     if (draft.pricingDefinition.mode === 'tiered_btu' && !(draft.pricingDefinition.tiers?.length)) {
       return setEditorError('Add at least one BTU price tier or choose another pricing model.');
@@ -315,7 +263,7 @@ export function ServiceCatalogWorkspace() {
         <div>
           <div className={styles.eyebrow}>Canonical Firestore Master Data</div>
           <h1>Services & Products</h1>
-          <p>One commercial catalog for DEMAC. Service price, duration and service-specific allocation rules live here; Scheduling only decides where that work fits. Product stock remains in Inventory rather than being duplicated in this record.</p>
+          <p>One commercial catalog for DEMAC. Service identity, pricing and duration per execution live here. Scheduling owns van allocation, capacity, conflicts and support resources. Product stock remains in Inventory rather than being duplicated in this record.</p>
         </div>
         <div className={styles.actions}>
           <button className={styles.button} type="button" onClick={() => void refresh()} disabled={loading || saving}>Refresh</button>
@@ -337,7 +285,7 @@ export function ServiceCatalogWorkspace() {
       {legacyServices > 0 ? <div className={styles.notice}><strong>{legacyServices} legacy service{legacyServices === 1 ? '' : 's'}</strong> still have price/duration data but no canonical <code>serviceDefinition</code>. Editing and saving one in this workspace migrates it in place — no duplicate service record is created.</div> : null}
 
       <section className={styles.toolbar}>
-        <div className={styles.search}><input className={styles.input} placeholder="Search name, category, SKU or booking code…" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
+        <div className={styles.search}><input className={styles.input} placeholder="Search name, category, SKU or description…" value={query} onChange={(event) => setQuery(event.target.value)} /></div>
         <div className={styles.filters}>{filters.map((value) => <button key={value} className={`${styles.filter} ${filter === value ? styles.filterActive : ''}`} type="button" onClick={() => setFilter(value)}>{value}</button>)}</div>
       </section>
 
@@ -379,15 +327,11 @@ export function ServiceCatalogWorkspace() {
 
               {catalogItemType(selected) === 'Servicio' && selected.serviceDefinition ? (
                 <section className={styles.section}>
-                  <h3>Service definition</h3>
-                  <p>This definition is consumed by Booking Authority. General calendar and van availability rules remain owned by Scheduling.</p>
+                  <h3>Service timing</h3>
+                  <p>The duration below is for one execution of this service. Booking supplies the execution count; Scheduling decides van allocation and capacity.</p>
                   <div className={styles.ruleGrid}>
-                    <div><span>Booking code</span><strong>{selected.serviceDefinition.bookingCode}</strong></div>
-                    <div><span>Quantity unit</span><strong>{selected.serviceDefinition.quantityUnit}</strong></div>
-                    <div><span>Duration model</span><strong>{selected.serviceDefinition.duration.mode === 'fixed' ? 'Fixed per visit' : 'Per unit'} · {selected.serviceDefinition.duration.minutes} min</strong></div>
-                    <div><span>Allocation</span><strong>{selected.serviceDefinition.allocation.mode === 'primary_with_support' ? 'Primary + operator-selected support' : 'Single van'}</strong></div>
-                    {selected.serviceDefinition.allocation.mode === 'primary_with_support' ? <div><span>Regular daily max</span><strong>{selected.serviceDefinition.allocation.differentPropertyDailyMaxUnits}</strong></div> : null}
-                    {selected.serviceDefinition.allocation.mode === 'primary_with_support' ? <div><span>Primary van max</span><strong>{selected.serviceDefinition.allocation.primaryMaxUnits}</strong></div> : null}
+                    <div><span>Duration per execution</span><strong>{formatHours(selected.serviceDefinition.duration.minutes)}</strong></div>
+                    <div><span>Scheduling authority</span><strong>Calendar, vans, capacity & support</strong></div>
                   </div>
                 </section>
               ) : null}
@@ -418,8 +362,8 @@ export function ServiceCatalogWorkspace() {
               <section className={styles.formSection}>
                 <header><strong>Identity</strong><span>Commercial identity shared by sales, booking and work orders.</span></header>
                 <div className={styles.grid2}>
-                  <label className={styles.field}><span>Type</span><select className={styles.select} value={draft.itemType} onChange={(event) => updateItemType(event.target.value as CatalogItemType)}><option value="Servicio">Service</option><option value="Producto">Product</option></select></label>
-                  <label className={styles.field}><span>Name</span><input className={styles.input} value={draft.name} onChange={(event) => updateName(event.target.value)} /></label>
+                  <label className={styles.field}><span>Type</span><select className={styles.select} value={draft.itemType} onChange={(event) => updateItemType(event.target.value as CatalogItemType)} disabled={Boolean(editingId)}><option value="Servicio">Service</option><option value="Producto">Product</option></select><small>{editingId ? 'Type is fixed after creation to protect catalog references.' : 'Choose whether this record is a service or sellable product.'}</small></label>
+                  <label className={styles.field}><span>Name</span><input className={styles.input} value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /></label>
                   <label className={styles.field}><span>Category</span><input className={styles.input} value={draft.category} onChange={(event) => setDraft((current) => ({ ...current, category: event.target.value }))} /></label>
                   <label className={styles.field}><span>SKU / Code</span><input className={styles.input} value={draft.sku} onChange={(event) => setDraft((current) => ({ ...current, sku: event.target.value }))} /></label>
                 </div>
@@ -430,7 +374,7 @@ export function ServiceCatalogWorkspace() {
               <section className={styles.formSection}>
                 <header><strong>Pricing</strong><span>The price model belongs to the catalog. Inventory quantities do not.</span></header>
                 <div className={styles.grid2}>
-                  <label className={styles.field}><span>Pricing model</span><select className={styles.select} value={draft.pricingDefinition.mode} onChange={(event) => updatePricingMode(event.target.value as CatalogPricingMode)}><option value="fixed">Fixed</option><option value="per_unit">Per unit</option><option value="tiered_btu">BTU tiers</option><option value="quote">Quote required</option></select></label>
+                  <label className={styles.field}><span>Pricing model</span><select className={styles.select} value={draft.pricingDefinition.mode} onChange={(event) => updatePricingMode(event.target.value as CatalogPricingMode)}><option value="fixed">Fixed</option><option value="per_unit">{draft.itemType === 'Servicio' ? 'Per service execution' : 'Per unit'}</option><option value="tiered_btu">BTU tiers</option><option value="quote">Quote required</option></select></label>
                   <label className={styles.field}><span>Base / reference price (AWG)</span><input className={styles.input} type="number" min="0" step="0.01" value={draft.basePrice} onChange={(event) => setDraft((current) => ({ ...current, basePrice: fieldNumber(event.target.value) }))} /><small>Keep a reference price even when detailed BTU tiers are used.</small></label>
                 </div>
                 {draft.pricingDefinition.mode === 'tiered_btu' ? <div className={styles.tierEditor} style={{ marginTop: 10 }}>
@@ -445,27 +389,14 @@ export function ServiceCatalogWorkspace() {
                 </div> : null}
               </section>
 
-              {draft.itemType === 'Servicio' && draft.serviceDefinition ? <>
+              {draft.itemType === 'Servicio' && draft.serviceDefinition ? (
                 <section className={styles.formSection}>
-                  <header><strong>Service duration</strong><span>This describes how long the service itself requires. The agenda does not keep a second duration copy.</span></header>
-                  <div className={styles.grid3}>
-                    <label className={styles.field}><span>Booking code</span><input className={styles.input} value={draft.serviceDefinition.bookingCode} onChange={(event) => setDraft((current) => current.serviceDefinition ? ({ ...current, serviceDefinition: { ...current.serviceDefinition, bookingCode: bookingCodeFromName(event.target.value) } }) : current)} /><small>Stable machine code used by Booking Authority.</small></label>
-                    <label className={styles.field}><span>Duration model</span><select className={styles.select} value={draft.serviceDefinition.duration.mode} onChange={(event) => updateDuration('mode', event.target.value as ServiceDurationMode)}><option value="per_unit">Per unit</option><option value="fixed">Fixed per visit</option></select></label>
-                    <label className={styles.field}><span>Minutes</span><input className={styles.input} type="number" min="30" max="720" step="15" value={draft.serviceDefinition.duration.minutes} onChange={(event) => updateDuration('minutes', fieldNumber(event.target.value))} /></label>
-                    <label className={styles.field}><span>Quantity unit</span><input className={styles.input} value={draft.serviceDefinition.quantityUnit} onChange={(event) => setDraft((current) => current.serviceDefinition ? ({ ...current, serviceDefinition: { ...current.serviceDefinition, quantityUnit: event.target.value } }) : current)} /><small>Example: ac_unit, visit, installation.</small></label>
-                  </div>
-                </section>
-
-                <section className={styles.formSection}>
-                  <header><strong>Service allocation policy</strong><span>Service-specific resource requirement only. Workday, van availability, conflicts, closures and staff remain Scheduling rules.</span></header>
+                  <header><strong>Service duration</strong><span>Enter the time for one execution of this service. Booking chooses how many times it is performed; Scheduling handles vans and capacity.</span></header>
                   <div className={styles.grid2}>
-                    <label className={styles.field}><span>Allocation</span><select className={styles.select} value={draft.serviceDefinition.allocation.mode} onChange={(event) => updateAllocationMode(event.target.value as ServiceAllocationMode)}><option value="single_van">Single van</option><option value="primary_with_support">Primary van + support when threshold exceeded</option></select></label>
-                    {draft.serviceDefinition.allocation.mode === 'primary_with_support' ? <label className={styles.field}><span>Support selection</span><input className={styles.input} value="Operator chooses van + arrival time" disabled /><small>Booking Authority validates the operator's choice against live capacity.</small></label> : null}
-                    {draft.serviceDefinition.allocation.mode === 'primary_with_support' ? <label className={styles.field}><span>Regular daily max units</span><input className={styles.input} type="number" min="1" max="24" value={draft.serviceDefinition.allocation.differentPropertyDailyMaxUnits ?? 6} onChange={(event) => updateAllocationNumber('differentPropertyDailyMaxUnits', fieldNumber(event.target.value))} /><small>Example Standard Service: 6 individual services in a normal van schedule.</small></label> : null}
-                    {draft.serviceDefinition.allocation.mode === 'primary_with_support' ? <label className={styles.field}><span>Primary van max at one property</span><input className={styles.input} type="number" min="1" max="48" value={draft.serviceDefinition.allocation.primaryMaxUnits ?? 7} onChange={(event) => updateAllocationNumber('primaryMaxUnits', fieldNumber(event.target.value))} /><small>Above this number, support is required. No separate 8–10 or 11+ hard-coded rule.</small></label> : null}
+                    <label className={styles.field}><span>Duration (hours)</span><input className={styles.input} type="number" min="0.5" max="12" step="0.25" value={Math.round((draft.serviceDefinition.duration.minutes / 60) * 100) / 100} onChange={(event) => updateDurationHours(fieldNumber(event.target.value))} /><small>Examples: 0.5 = 30 min · 1 = 60 min · 1.5 = 90 min · 2 = 120 min.</small></label>
                   </div>
                 </section>
-              </> : null}
+              ) : null}
             </div>
             <footer className={styles.drawerFooter}><button className={styles.button} type="button" disabled={saving} onClick={() => setEditorOpen(false)}>Cancel</button><button className={`${styles.button} ${styles.primary}`} type="button" disabled={saving} onClick={() => void save()}>{saving ? 'Saving…' : 'Save canonical item'}</button></footer>
           </aside>
