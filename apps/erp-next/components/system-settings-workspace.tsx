@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { TextSizeControl } from '@/components/accessibility/text-size-control';
 import { CanonicalOperatingCalendar } from '@/components/canonical-operating-calendar';
+import { SchedulingWorkTypesSettings } from '@/components/scheduling-work-types-settings';
 import { browserBusinessDefaults, loadBrowserBusinessSettings, normalizeBrowserBusinessSettings, type BrowserBusinessSettings } from '@/lib/browser-scheduling-settings';
 import { browserKeys, saveBrowserValue } from '@/lib/browser-store';
 
@@ -34,11 +35,13 @@ export function SystemSettingsWorkspace() {
   return (
     <div className="sg-stack">
       <section className="page-head">
-        <div><div className="eyebrow">Governed Configuration</div><h1>System Settings</h1><p>Service identity, price and duration belong to Services & Products. Scheduling owns operating capacity, van allocation, support resources, conflicts and calendar policy so those rules are not duplicated inside each service.</p></div>
+        <div><div className="eyebrow">Governed Configuration</div><h1>System Settings</h1><p>Scheduling Work Types define the fast appointment categories and time required to reserve capacity. Services & Products remains the detailed commercial catalog for prices, BTU-specific services and reporting. Scheduling separately owns van capacity, support resources, conflicts and calendar policy.</p></div>
         <div className="page-actions"><button className="btn primary" type="button" onClick={saveDraft} disabled={!ready || !dirty}>Save Preview Preferences</button></div>
       </section>
 
       <section className="sg-settings-grid">
+        <SchedulingWorkTypesSettings />
+
         <article className="panel sg-setting-card">
           <header><div><span>My Preferences</span><h2>Accessibility</h2></div><b>Per User</b></header>
           <TextSizeControl />
@@ -51,7 +54,7 @@ export function SystemSettingsWorkspace() {
             <label>Operational buffer<input type="number" min="0" max="120" step="5" value={settings.bufferMinutes} onChange={(e)=>update('bufferMinutes',Number(e.target.value))}/><small>preview margin before lunch / end-of-day route recovery</small></label>
             <label>Overtime threshold<input type="time" value={settings.afterHours} onChange={(e)=>update('afterHours',e.target.value)}/><small>preview flag only; this does not extend canonical scheduling capacity</small></label>
           </div>
-          <div className="sg-runtime-note"><strong>Service duration comes from the canonical catalog</strong><p>Standard Service, Deep Cleaning, installations, repairs and every other service get the duration of one execution from Services & Products. Scheduling then multiplies that duration by the booking quantity and decides how the work fits operationally.</p></div>
+          <div className="sg-runtime-note"><strong>Appointment duration belongs to Scheduling Work Types</strong><p>When the office books Standard Service, Deep Cleaning, Installation, Commercial Service or another appointment category, Scheduling uses the duration configured above and multiplies it by quantity. Detailed BTU-specific commercial services do not control the agenda picker.</p></div>
         </article>
 
         <article className="panel sg-setting-card">
@@ -63,7 +66,7 @@ export function SystemSettingsWorkspace() {
 
         <article className="panel sg-setting-card">
           <header><div><span>Dispatch</span><h2>Geography & Capacity</h2></div><b>Scheduling Policy</b></header>
-          <div className="sg-rule-table"><div><strong>AM routing</strong><span>First AM job anchors sector</span><small>Later jobs same/adjacent/on route</small></div><div><strong>PM routing</strong><span>First PM job anchors sector</span><small>Afternoon cluster recalculated independently</small></div><div><strong>Van availability</strong><span>Calendar + crew + existing work</span><small>Scheduling owns whether a resource is actually free.</small></div><div><strong>Allocation & capacity</strong><span>Owned by Scheduling</span><small>Van limits and support behavior are agenda rules, not service fields.</small></div></div>
+          <div className="sg-rule-table"><div><strong>AM routing</strong><span>First AM job anchors sector</span><small>Later jobs same/adjacent/on route</small></div><div><strong>PM routing</strong><span>First PM job anchors sector</span><small>Afternoon cluster recalculated independently</small></div><div><strong>Van availability</strong><span>Calendar + crew + existing work</span><small>Scheduling owns whether a resource is actually free.</small></div><div><strong>Allocation & capacity</strong><span>Owned by Scheduling</span><small>Van limits and support behavior are agenda rules, not commercial service fields.</small></div></div>
         </article>
 
         <article className="panel sg-setting-card">
@@ -72,7 +75,7 @@ export function SystemSettingsWorkspace() {
         </article>
       </section>
 
-      <section className="panel sg-change-banner"><div><strong>{dirty ? 'Unsaved preview preference changes' : 'Preview preferences saved locally'}</strong><p>The canonical working calendar above writes to Firestore. Browser-only buffer/overtime preferences remain isolated from service definitions and do not change Booking Authority service duration.</p></div><span>{dirty ? 'Preview changed' : savedAt ? `Saved ${savedAt}` : 'Loaded from browser'}</span></section>
+      <section className="panel sg-change-banner"><div><strong>{dirty ? 'Unsaved preview preference changes' : 'Preview preferences saved locally'}</strong><p>Scheduling Work Types and the canonical working calendar above write to Firestore. Browser-only buffer/overtime preferences remain isolated from canonical appointment capacity.</p></div><span>{dirty ? 'Preview changed' : savedAt ? `Saved ${savedAt}` : 'Loaded from browser'}</span></section>
     </div>
   );
 }
