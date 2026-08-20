@@ -8,6 +8,7 @@ import {
   listOfficeBookingPresets,
   type OfficeBookingOption,
   type OfficeBookingPreset,
+  type OfficeBookingWorkLine,
 } from '../../lib/office-booking-authority';
 import {
   createBookingCustomerWithProperty,
@@ -55,6 +56,13 @@ type CustomerDraft = NewBookingCustomer & {
 type PropertyDraft = NewBookingProperty & {
   type: string;
   addressDetail: string;
+};
+
+type WorkLineDraft = {
+  id: string;
+  presetId: string;
+  quantity: number;
+  manualDurationMinutes?: number;
 };
 
 type ValidationState = {
@@ -146,11 +154,25 @@ function supportAssignment(option: OfficeBookingOption) {
 }
 
 function allocationDurationLabel(option: OfficeBookingOption | null, fallbackMinutes: number) {
-  if (!option) return fallbackMinutes > 360 ? 'Large job · validate allocation' : fallbackMinutes ? durationLabel(fallbackMinutes) : 'Select work type';
+  if (!option) return fallbackMinutes > 360 ? 'Large job · validate allocation' : fallbackMinutes ? durationLabel(fallbackMinutes) : 'Add work';
   const primary = option.assignments?.[0];
   if (!primary) return fallbackMinutes ? durationLabel(fallbackMinutes) : 'Validated';
   const primaryLabel = primary.fullDay ? 'Full-day primary van' : durationLabel(primary.slots * 60);
   return option.assignments.length > 1 ? `${primaryLabel} + support van` : primaryLabel;
+}
+
+function isOtherPreset(preset?: OfficeBookingPreset) {
+  const value = `${preset?.id ?? ''} ${preset?.label ?? ''}`.toLowerCase();
+  return /(^|[^a-z])(other|otro)([^a-z]|$)/.test(value);
+}
+
+function newWorkLine(preset: OfficeBookingPreset): WorkLineDraft {
+  return {
+    id: `work-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    presetId: preset.id,
+    quantity: 1,
+    ...(isOtherPreset(preset) ? { manualDurationMinutes: 60 } : {}),
+  };
 }
 
 export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Props) {
@@ -161,8 +183,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
   const [customerQuery, setCustomerQuery] = useState('');
   const [customerId, setCustomerId] = useState('');
   const [propertyId, setPropertyId] = useState('');
-  const [presetId, setPresetId] = useState('');
-  const [quantity, setQuantity] = useState(1);
+  const [workLines, setWorkLines] = useState<WorkLineDraft[]>([]);
   const [description, setDescription] = useState('');
   const [technicianInstructions, setTechnicianInstructions] = useState('');
   const [customerEditorOpen, setCustomerEditorOpen] = useState(false);
@@ -181,13 +202,11 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
     let active = true;
     setLoading(true);
     setLoadError('');
-    void Promise.all([loadBookingReferenceData(), listOfficeBookingPresets()])
+    void Promise.all([loadBookingReferenceData(), listOfficeBookingPresets(true)])
       .then(([referenceData, presetResult]) => {
         if (!active) return;
-        const availablePresets = presetResult.presets.filter((preset) => preset.active !== false);
         setReferences(referenceData);
-        setPresets(availablePresets);
-        setPresetId((current) => current || availablePresets[0]?.id || '');
+        setPresets(presetResult.presets.filter((preset) => preset.active !== false));
       })
       .catch((error) => {
         if (active) setLoadError(error instanceof Error ? error.message : 'Scheduling reference data could not be loaded.');
@@ -204,7 +223,8 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
     [customerId, references.properties],
   );
   const selectedProperty = customerProperties.find((property) => property.id === propertyId);
-  const selectedPreset = presets.find((preset) => preset.id === presetId);
+  const presetById = useMemo(() => new Map(presets.map((preset) => [preset.id, preset])), [presets]);
+  const selectedPresets = workLines.map((line) => presetById.get(line.presetId)).filter((preset): preset is OfficeBookingPreset => Boolean(preset));
 
   const filteredCustomers = useMemo(() => {
     const needle = customerQuery.trim().toLowerCase();
@@ -236,23 +256,70 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
     return matches.slice(0, 6);
   }, [customerQuery, references.clients, references.properties, selectedCustomer]);
 
-  const estimatedMinutes = (selectedPreset?.durationMinutesPerUnit ?? 0) * quantity;
-  const signature = [customerId, propertyId, presetId, quantity, description.trim(), technicianInstructions.trim(), target.dateKey, target.vanId, target.start].join('|');
+  const estimatedMinutes = workLines.reduce((sum, line) => {
+    const preset = presetById.get(line.presetId);
+    if (!preset) return sum;
+    return sum + (isOtherPreset(preset)
+      ? Math.max(30, line.manualDurationMinutes ?? 60)
+      : preset.durationMinutesPerUnit * line.quantity);
+  }, 0);
+  const totalQuantity = workLines.reduce((sum, line) => sum + line.quantity, 0);
+  const workSignature = workLines.map((line) => `${line.presetId}:${line.quantity}:${line.manualDurationMinutes ?? ''}`).join('|');
+  const signature = [customerId, propertyId, workSignature, description.trim(), technicianInstructions.trim(), target.dateKey, target.vanId, target.start].join('|');
   const activeValidation = validated?.signature === signature ? validated : null;
   const selectedValidatedOption = activeValidation?.options.find((option) => option.id === activeValidation.selectedOptionId)
     ?? activeValidation?.options[0]
     ?? null;
+  const workValid = workLines.length > 0 && workLines.every((line) => {
+    const preset = presetById.get(line.presetId);
+    if (!preset || line.quantity < 1) return false;
+    if (!isOtherPreset(preset)) return true;
+    const minutes = Number(line.manualDurationMinutes || 0);
+    return minutes >= 30 && minutes <= 720 && minutes % 15 === 0;
+  });
+
+  const resetValidation = () => {
+    setValidated(null);
+    setAuthorityError('');
+  };
 
   const selectCustomer = (customer: BookingCustomer) => {
     setCustomerId(customer.id);
     const firstProperty = references.properties.find((property) => property.clientId === customer.id && property.active !== false);
     setPropertyId(firstProperty?.id ?? '');
     setCustomerQuery('');
-    setAuthorityError('');
     setMasterError('');
     setCustomerEditorOpen(false);
     setPropertyEditorOpen(false);
-    setValidated(null);
+    resetValidation();
+  };
+
+  const addPreset = (preset: OfficeBookingPreset) => {
+    setWorkLines((current) => {
+      const existing = current.find((line) => line.presetId === preset.id);
+      if (!existing) return [...current, newWorkLine(preset)];
+      if (isOtherPreset(preset)) return current;
+      return current.map((line) => line.id === existing.id ? { ...line, quantity: Math.min(20, line.quantity + 1) } : line);
+    });
+    resetValidation();
+  };
+
+  const changeQuantity = (lineId: string, delta: number) => {
+    setWorkLines((current) => current.map((line) => line.id === lineId
+      ? { ...line, quantity: Math.max(1, Math.min(20, line.quantity + delta)) }
+      : line));
+    resetValidation();
+  };
+
+  const removeWorkLine = (lineId: string) => {
+    setWorkLines((current) => current.filter((line) => line.id !== lineId));
+    resetValidation();
+  };
+
+  const changeManualHours = (lineId: string, hours: number) => {
+    const minutes = Math.max(30, Math.min(720, Math.round((hours * 60) / 15) * 15));
+    setWorkLines((current) => current.map((line) => line.id === lineId ? { ...line, manualDurationMinutes: minutes } : line));
+    resetValidation();
   };
 
   const openCustomerEditor = () => {
@@ -281,7 +348,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
       setPropertyId(created.property.id);
       setCustomerQuery('');
       setCustomerEditorOpen(false);
-      setValidated(null);
+      resetValidation();
     } catch (error) {
       setMasterError(error instanceof Error ? error.message : 'The customer could not be created.');
     } finally {
@@ -306,7 +373,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
       setReferences((current) => ({ ...current, properties: [...current.properties, created] }));
       setPropertyId(created.id);
       setPropertyEditorOpen(false);
-      setValidated(null);
+      resetValidation();
     } catch (error) {
       setMasterError(error instanceof Error ? error.message : 'The property could not be created.');
     } finally {
@@ -314,10 +381,21 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
     }
   };
 
+  const workRequestLines = (): OfficeBookingWorkLine[] => workLines.map((line) => {
+    const preset = presetById.get(line.presetId)!;
+    return {
+      id: line.id,
+      presetId: preset.id,
+      serviceId: preset.serviceId,
+      quantity: line.quantity,
+      ...(isOtherPreset(preset) ? { manualDurationMinutes: line.manualDurationMinutes } : {}),
+    };
+  });
+
   const validateTarget = async () => {
     if (!selectedCustomer) return setAuthorityError('Select or create a customer first.');
     if (!selectedProperty) return setAuthorityError('Select or add a service property first.');
-    if (!selectedPreset) return setAuthorityError('Select a work type first.');
+    if (!workValid) return setAuthorityError('Add at least one valid work line. Other work requires a manual scheduled duration.');
     setChecking(true);
     setAuthorityError('');
     setValidated(null);
@@ -326,8 +404,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
         requestId: createOfficeLifecycleRequestId('schedule-create-check'),
         customerId: selectedCustomer.id,
         propertyId: selectedProperty.id,
-        presetId: selectedPreset.id,
-        quantity,
+        workLines: workRequestLines(),
         requestedDate: target.dateKey,
         requestedTime: target.start,
         requiredVanId: target.vanId,
@@ -356,7 +433,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
   };
 
   const confirmBooking = async () => {
-    if (!activeValidation || !selectedValidatedOption || !selectedCustomer || !selectedProperty || !selectedPreset || saving) return;
+    if (!activeValidation || !selectedValidatedOption || !selectedCustomer || !selectedProperty || !selectedPresets.length || saving) return;
     setSaving(true);
     setAuthorityError('');
     const { offerId, offerVersion } = activeValidation;
@@ -374,7 +451,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
         option,
         customer: selectedCustomer,
         property: selectedProperty,
-        preset: selectedPreset,
+        preset: selectedPresets[0],
       });
     } catch (error) {
       setValidated(null);
@@ -393,7 +470,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
           <div>
             <span className={styles.eyebrow}>Booking Authority · Canonical Scheduling</span>
             <h2>New appointment</h2>
-            <p>Select the real customer and work details. Booking Authority calculates the complete primary/support allocation before anything is committed.</p>
+            <p>Select the real customer and work details. Add one or more quick work types; Booking Authority validates the combined allocation before anything is committed.</p>
           </div>
           <button type="button" className={styles.close} disabled={busy} onClick={onClose} aria-label="Close">×</button>
         </header>
@@ -457,7 +534,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
                 <>
                   <div className={styles.choiceGrid}>
                     {customerProperties.map((property) => (
-                      <button type="button" key={property.id} className={`${styles.choice} ${property.id === propertyId ? styles.choiceSelected : ''}`} onClick={() => { setPropertyId(property.id); setAuthorityError(''); setValidated(null); }}>
+                      <button type="button" key={property.id} className={`${styles.choice} ${property.id === propertyId ? styles.choiceSelected : ''}`} onClick={() => { setPropertyId(property.id); resetValidation(); }}>
                         <strong>{propertyLabel(property)}</strong><span>{text(property.address) || 'No address'}</span><small>{text(property.operationalZone) || text(property.zone) || 'Area not specified'}</small>
                       </button>
                     ))}
@@ -483,37 +560,67 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
           </section>
 
           <section className={styles.section}>
-            <header><div><span>3</span><strong>Work & allocation</strong><small>Booking Authority applies the canonical per-van, full-day and support-van capacity rules.</small></div></header>
+            <header><div><span>3</span><strong>Work & allocation</strong><small>Quick booking services come from Services & Products. Click a tile to add work; click it again to increase quantity.</small></div></header>
             <div className={styles.sectionBody}>
               <div className={styles.presetGrid}>
-                {presets.map((preset) => (
-                  <button type="button" key={preset.id} className={`${styles.preset} ${preset.id === presetId ? styles.presetSelected : ''}`} onClick={() => { setPresetId(preset.id); setAuthorityError(''); setValidated(null); }}>
-                    <strong>{preset.label}</strong><span>{preset.durationMinutesPerUnit} min / unit</span>
-                  </button>
-                ))}
+                {presets.map((preset) => {
+                  const selectedLine = workLines.find((line) => line.presetId === preset.id);
+                  return (
+                    <button type="button" key={preset.id} className={`${styles.preset} ${selectedLine ? styles.presetSelected : ''}`} onClick={() => addPreset(preset)}>
+                      <strong>{preset.label}</strong>
+                      <span>{isOtherPreset(preset) ? 'Manual scheduled time' : `${preset.durationMinutesPerUnit} min / unit`}{selectedLine ? ` · selected × ${selectedLine.quantity}` : ''}</span>
+                    </button>
+                  );
+                })}
               </div>
-              {!presets.length && !loading ? <div className={styles.emptyResult}>No active Booking Authority work presets were found.</div> : null}
+              {!presets.length && !loading ? <div className={styles.emptyResult}>No services are marked “Show in Scheduling” yet. Configure the quick booking list in Services & Products.</div> : null}
+
+              {workLines.length ? (
+                <div style={{ display: 'grid', gap: 7, marginTop: 10 }}>
+                  {workLines.map((line) => {
+                    const preset = presetById.get(line.presetId);
+                    if (!preset) return null;
+                    const other = isOtherPreset(preset);
+                    const lineMinutes = other ? Math.max(30, line.manualDurationMinutes ?? 60) : preset.durationMinutesPerUnit * line.quantity;
+                    return (
+                      <div key={line.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto auto', gap: 10, alignItems: 'center', padding: '9px 10px', border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface-2)' }}>
+                        <div>
+                          <strong style={{ display: 'block', fontSize: '6.9px' }}>{preset.label}</strong>
+                          <span style={{ display: 'block', marginTop: 3, color: 'var(--muted)', fontSize: '5.7px' }}>{durationLabel(lineMinutes)} scheduled{other ? ' · manual' : ` · ${durationLabel(preset.durationMinutesPerUnit)} each`}</span>
+                        </div>
+                        {other ? (
+                          <label style={{ display: 'grid', gap: 3, minWidth: 105 }}><span>Manual hours</span><input type="number" min="0.5" max="12" step="0.25" value={(line.manualDurationMinutes ?? 60) / 60} onChange={(event) => changeManualHours(line.id, Number(event.target.value || 0.5))} /></label>
+                        ) : (
+                          <div className={styles.stepper}><button type="button" disabled={line.quantity <= 1} onClick={() => changeQuantity(line.id, -1)}>−</button><b>{line.quantity}</b><button type="button" disabled={line.quantity >= 20} onClick={() => changeQuantity(line.id, 1)}>＋</button></div>
+                        )}
+                        <button type="button" className={styles.secondaryButton} style={{ padding: '6px 8px' }} onClick={() => removeWorkLine(line.id)}>Remove</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : <div className={styles.emptyResult}>Add the work expected for this visit. BTU is not required when scheduling.</div>}
+
               <div className={styles.quantityRow}>
-                <div><span>Quantity</span><strong>{quantity} unit{quantity === 1 ? '' : 's'}</strong></div>
-                <div className={styles.stepper}><button type="button" disabled={quantity <= 1} onClick={() => { setQuantity((value) => Math.max(1, value - 1)); setValidated(null); }}>−</button><b>{quantity}</b><button type="button" disabled={quantity >= 10} onClick={() => { setQuantity((value) => Math.min(10, value + 1)); setValidated(null); }}>＋</button></div>
+                <div><span>Work lines</span><strong>{workLines.length} line{workLines.length === 1 ? '' : 's'} · {totalQuantity} item{totalQuantity === 1 ? '' : 's'}</strong></div>
+                <div><span>Estimated workload</span><strong>{estimatedMinutes ? durationLabel(estimatedMinutes) : '—'}</strong></div>
                 <div><span>Scheduled allocation</span><strong>{allocationDurationLabel(selectedValidatedOption, estimatedMinutes)}</strong></div>
               </div>
               <div className={styles.formGrid}>
-                <label className={styles.fieldWide}><span>Customer-facing work description</span><textarea value={description} onChange={(event) => { setDescription(event.target.value); setValidated(null); }} placeholder="Example: Standard service for two split units; customer reports weak cooling in the bedroom." /></label>
-                <label className={styles.fieldWide}><span>Technician instructions</span><textarea value={technicianInstructions} onChange={(event) => { setTechnicianInstructions(event.target.value); setValidated(null); }} placeholder="Access instructions, contact person, equipment location, diagnostic notes…" /></label>
+                <label className={styles.fieldWide}><span>Customer-facing work description</span><textarea value={description} onChange={(event) => { setDescription(event.target.value); resetValidation(); }} placeholder="Example: Two standard services and one installation. BTU to be confirmed by technician on site." /></label>
+                <label className={styles.fieldWide}><span>Technician instructions</span><textarea value={technicianInstructions} onChange={(event) => { setTechnicianInstructions(event.target.value); resetValidation(); }} placeholder="Access instructions, contact person, equipment location, diagnostic notes…" /></label>
               </div>
             </div>
           </section>
 
           <section className={styles.authoritySection}>
-            <div className={styles.authorityHeading}><div><span>4</span><strong>Final capacity validation</strong><small>{target.vanName} stays the primary/responsible van. If support is required, Booking Authority returns valid support van/time alternatives.</small></div><button type="button" className={styles.validateButton} disabled={busy || !selectedCustomer || !selectedProperty || !selectedPreset} onClick={() => void validateTarget()}>{checking ? 'Validating…' : activeValidation ? 'Revalidate target' : 'Validate target'}</button></div>
+            <div className={styles.authorityHeading}><div><span>4</span><strong>Final capacity validation</strong><small>{target.vanName} stays the primary/responsible van. Booking Authority validates the combined workload and any support capacity required.</small></div><button type="button" className={styles.validateButton} disabled={busy || !selectedCustomer || !selectedProperty || !workValid} onClick={() => void validateTarget()}>{checking ? 'Validating…' : activeValidation ? 'Revalidate target' : 'Validate target'}</button></div>
 
             {activeValidation && selectedValidatedOption ? (
               <div className={styles.validationSuccess}>
                 <header><div><b>✓</b><div><strong>Booking Authority approved the complete allocation</strong><span>Offer {activeValidation.offerId} · final transaction validation still runs on confirm.</span></div></div></header>
                 {activeValidation.options.length > 1 ? (
                   <div style={{ marginTop: 10 }}>
-                    <div style={{ color: 'var(--muted)', fontSize: 6, fontWeight: 850, marginBottom: 6, textTransform: 'uppercase' }}>Choose support arrival</div>
+                    <div style={{ color: 'var(--muted)', fontSize: 6, fontWeight: 850, marginBottom: 6 }}>VALID SUPPORT ALTERNATIVES</div>
                     <div className={styles.choiceGrid}>
                       {activeValidation.options.map((option) => {
                         const support = supportAssignment(option);
@@ -534,13 +641,13 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
                     <article key={`${assignment.vanId}-${assignment.time || selectedValidatedOption.time}-${index}`}>
                       <span>{index === 0 ? 'PRIMARY / RESPONSIBLE' : 'SUPPORT'}</span>
                       <strong>{assignment.vanName || assignment.vanId}</strong>
-                      <small>{formatTime(assignment.time || selectedValidatedOption.time)}{assignment.endTime ? `–${formatTime(assignment.endTime)}` : ''} · {assignment.quantity} unit{assignment.quantity === 1 ? '' : 's'}</small>
+                      <small>{formatTime(assignment.time || selectedValidatedOption.time)}{assignment.endTime ? `–${formatTime(assignment.endTime)}` : ''} · {durationLabel(assignment.durationMinutes || assignment.slots * 60)}</small>
                     </article>
                   ))}
                 </div>
               </div>
             ) : (
-              <div className={styles.authorityIdle}>Complete the customer, property and work details, then validate. For larger single-property jobs, support capacity is calculated here rather than by multiplying hours in the browser.</div>
+              <div className={styles.authorityIdle}>Complete the customer, property and work details, then validate. The browser only estimates the workload; Booking Authority remains the source of truth for schedule capacity.</div>
             )}
           </section>
         </div>
