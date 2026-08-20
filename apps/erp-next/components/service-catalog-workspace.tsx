@@ -282,7 +282,7 @@ export function ServiceCatalogWorkspace() {
       const saved = existing ? await updateCatalogItem(item) : await createCatalogItem(item);
       invalidateOfficeBookingPresetCache();
       setItems((current) => [...current.filter((candidate) => candidate.id !== saved.id), saved]
-        .sort((left, right) => `${catalogItemType(left)}-${left.name}`.localeCompare(`${catalogItemType(right)}-${right.name}`))));
+        .sort((left, right) => `${catalogItemType(left)}-${left.name}`.localeCompare(`${catalogItemType(right)}-${right.name}`)));
       setSelectedId(saved.id);
       setEditorOpen(false);
       setMessage(existing ? `${saved.name} updated in the canonical Firestore catalog.` : `${saved.name} created in the canonical Firestore catalog.`);
