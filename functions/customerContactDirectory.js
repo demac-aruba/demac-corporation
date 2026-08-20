@@ -126,32 +126,38 @@ async function writeContactLinks(transaction, db, { clientId, propertyId, links 
   const normalized = Array.isArray(links)
     ? links.filter((link) => link && typeof link === 'object').map((link) => normalizeContactLink(link, { clientId, propertyId }))
     : [];
-  const results = [];
+  if (!normalized.length) return [];
+
+  // Firestore transactions require every read to happen before the first write.
+  // Resolve both contact and assignment snapshots first, then apply writes in a second pass.
+  const prepared = [];
   for (const item of normalized) {
     const contactRef = db.collection(CONTACT_COLLECTION).doc(item.contactId);
+    const assignmentRef = db.collection(CONTACT_ASSIGNMENT_COLLECTION).doc(item.assignment.id);
+    const [contactSnapshot, assignmentSnapshot] = await Promise.all([
+      transaction.get(contactRef),
+      transaction.get(assignmentRef),
+    ]);
+
     if (item.existingContactId) {
-      const snapshot = await transaction.get(contactRef);
-      if (!snapshot.exists || cleanText(snapshot.data()?.clientId, 180) !== clientId || snapshot.data()?.active === false) {
+      if (!contactSnapshot.exists || cleanText(contactSnapshot.data()?.clientId, 180) !== clientId || contactSnapshot.data()?.active === false) {
         throw new BookingAuthorityError(
           BOOKING_ERROR_CODES.INVALID_REQUEST,
           'The selected contact does not belong to this customer or is inactive.',
           { contactId: item.contactId },
         );
       }
-    } else {
-      const contact = buildContactRecord({ id: item.contactId, clientId, input: item.contactInput, identity, now });
-      const existing = await transaction.get(contactRef);
-      if (existing.exists && cleanText(existing.data()?.clientId, 180) !== clientId) {
-        throw new BookingAuthorityError(
-          BOOKING_ERROR_CODES.INVALID_REQUEST,
-          'Contact identity conflicts with another customer.',
-          { contactId: item.contactId },
-        );
-      }
-      transaction.set(contactRef, existing.exists ? { ...contact, createdAt: existing.data()?.createdAt || now } : contact, { merge: true });
+    } else if (contactSnapshot.exists && cleanText(contactSnapshot.data()?.clientId, 180) !== clientId) {
+      throw new BookingAuthorityError(
+        BOOKING_ERROR_CODES.INVALID_REQUEST,
+        'Contact identity conflicts with another customer.',
+        { contactId: item.contactId },
+      );
     }
-    const assignmentRef = db.collection(CONTACT_ASSIGNMENT_COLLECTION).doc(item.assignment.id);
-    const assignmentSnapshot = await transaction.get(assignmentRef);
+
+    const contact = item.existingContactId
+      ? null
+      : buildContactRecord({ id: item.contactId, clientId, input: item.contactInput, identity, now });
     const assignment = {
       ...item.assignment,
       active: true,
@@ -160,10 +166,23 @@ async function writeContactLinks(transaction, db, { clientId, propertyId, links 
       createdById: assignmentSnapshot.exists ? assignmentSnapshot.data()?.createdById || cleanText(identity.uid, 160) : cleanText(identity.uid, 160),
       createdByName: assignmentSnapshot.exists ? assignmentSnapshot.data()?.createdByName || cleanText(identity.name || identity.email, 180) : cleanText(identity.name || identity.email, 180),
     };
-    transaction.set(assignmentRef, assignment, { merge: true });
-    results.push({ contactId: item.contactId, assignmentId: assignment.id });
+    prepared.push({ item, contactRef, contactSnapshot, contact, assignmentRef, assignment });
   }
-  return results;
+
+  for (const entry of prepared) {
+    if (entry.contact) {
+      transaction.set(
+        entry.contactRef,
+        entry.contactSnapshot.exists
+          ? { ...entry.contact, createdAt: entry.contactSnapshot.data()?.createdAt || now }
+          : entry.contact,
+        { merge: true },
+      );
+    }
+    transaction.set(entry.assignmentRef, entry.assignment, { merge: true });
+  }
+
+  return prepared.map((entry) => ({ contactId: entry.item.contactId, assignmentId: entry.assignment.id }));
 }
 
 function legacyContactRecipient(contact = {}) {
