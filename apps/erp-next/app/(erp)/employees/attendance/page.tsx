@@ -1,5 +1,5 @@
-import { EmployeeAttendanceCommandCenter } from '../../../../components/employees/employee-attendance-command-center';
+import { redirect } from 'next/navigation';
 
 export default function EmployeeAttendancePage() {
-  return <EmployeeAttendanceCommandCenter />;
+  redirect('/employees');
 }
