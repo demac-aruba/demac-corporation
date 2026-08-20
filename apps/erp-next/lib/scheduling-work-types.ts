@@ -15,11 +15,13 @@ export type SchedulingWorkType = {
 
 type SchedulingWorkTypeSettings = {
   id: 'appointment-work-presets';
+  workTypesVersion?: number;
   presets?: SchedulingWorkType[];
   updatedAt?: string;
 };
 
 export const SCHEDULING_WORK_TYPES_SETTINGS_ID = 'appointment-work-presets' as const;
+export const SCHEDULING_WORK_TYPES_VERSION = 2;
 
 export const DEFAULT_SCHEDULING_WORK_TYPES: SchedulingWorkType[] = [
   { id: 'standard_service', label: 'Standard Service', durationMinutesPerUnit: 60, kind: 'service', active: true, sortOrder: 10 },
@@ -100,8 +102,7 @@ export function normalizeSchedulingWorkTypes(input?: SchedulingWorkType[]) {
     };
     if (!next.label) return;
     if (defaultById.has(id)) {
-      const existing = configuredById.get(id);
-      if (!existing || normalizedId(item.id) === id) configuredById.set(id, next);
+      if (!configuredById.has(id)) configuredById.set(id, next);
     } else if (!custom.some((candidate) => candidate.id === id)) {
       custom.push(next);
     }
@@ -120,7 +121,10 @@ export function formatSchedulingDuration(minutes: number) {
 
 export async function loadSchedulingWorkTypes() {
   const settings = await getFirestoreDocument<SchedulingWorkTypeSettings>('businessSettings', SCHEDULING_WORK_TYPES_SETTINGS_ID);
-  return normalizeSchedulingWorkTypes(settings?.presets);
+  if (!settings || Number(settings.workTypesVersion || 0) < SCHEDULING_WORK_TYPES_VERSION) {
+    return DEFAULT_SCHEDULING_WORK_TYPES.map((item) => ({ ...item }));
+  }
+  return normalizeSchedulingWorkTypes(settings.presets);
 }
 
 export async function saveSchedulingWorkTypes(presets: SchedulingWorkType[]) {
@@ -136,13 +140,13 @@ export async function saveSchedulingWorkTypes(presets: SchedulingWorkType[]) {
   }));
   const existing = await getFirestoreDocument<SchedulingWorkTypeSettings>('businessSettings', SCHEDULING_WORK_TYPES_SETTINGS_ID);
   const updatedAt = new Date().toISOString();
+  const changes = { workTypesVersion: SCHEDULING_WORK_TYPES_VERSION, presets: persisted, updatedAt };
   if (existing) {
-    await updateFirestoreDocument<SchedulingWorkTypeSettings>('businessSettings', SCHEDULING_WORK_TYPES_SETTINGS_ID, { presets: persisted, updatedAt });
+    await updateFirestoreDocument<SchedulingWorkTypeSettings>('businessSettings', SCHEDULING_WORK_TYPES_SETTINGS_ID, changes);
   } else {
     await saveFirestoreDocument<SchedulingWorkTypeSettings>('businessSettings', {
       id: SCHEDULING_WORK_TYPES_SETTINGS_ID,
-      presets: persisted,
-      updatedAt,
+      ...changes,
     });
   }
   invalidateOfficeBookingPresetCache();
