@@ -70,14 +70,24 @@ function normalizeCatalogService(service = {}) {
   };
 }
 
+function duplicateBookingCodeError(bookingCode, firstServiceId, secondServiceId) {
+  return new Error(
+    `Duplicate active canonical service bookingCode "${bookingCode}" for services "${firstServiceId}" and "${secondServiceId}".`,
+  );
+}
+
 function bookableCatalogPresets(services = []) {
   const presets = [];
-  const seenCodes = new Set();
+  const codeOwners = new Map();
   const seenServices = new Set();
   for (const service of services) {
     const preset = normalizeCatalogService(service);
-    if (!preset || seenCodes.has(preset.id) || seenServices.has(preset.serviceId)) continue;
-    seenCodes.add(preset.id);
+    if (!preset || seenServices.has(preset.serviceId)) continue;
+    const existingOwner = codeOwners.get(preset.id);
+    if (existingOwner && existingOwner !== preset.serviceId) {
+      throw duplicateBookingCodeError(preset.id, existingOwner, preset.serviceId);
+    }
+    codeOwners.set(preset.id, preset.serviceId);
     seenServices.add(preset.serviceId);
     presets.push(preset);
   }
@@ -113,25 +123,34 @@ function legacyPresetSettings(businessSettings = []) {
 
 function mergeBookablePresets(services = [], businessSettings = []) {
   const canonical = bookableCatalogPresets(services);
-  const usedCodes = new Set(canonical.map((item) => item.id));
+  const canonicalByCode = new Map(canonical.map((item) => [item.id, item]));
   const usedServices = new Set(canonical.map((item) => item.serviceId).filter(Boolean));
-  const legacy = legacyPresetSettings(businessSettings)
-    .map((item) => compactLegacyPreset(item, services))
-    .filter(Boolean)
-    .filter((item) => !usedCodes.has(item.id) && (!item.serviceId || !usedServices.has(item.serviceId)));
+  const legacy = [];
+
+  for (const item of legacyPresetSettings(businessSettings).map((entry) => compactLegacyPreset(entry, services)).filter(Boolean)) {
+    const canonicalMatch = canonicalByCode.get(item.id);
+    if (canonicalMatch) {
+      if (item.serviceId && canonicalMatch.serviceId && item.serviceId !== canonicalMatch.serviceId) {
+        throw duplicateBookingCodeError(item.id, canonicalMatch.serviceId, item.serviceId);
+      }
+      continue;
+    }
+    if (item.serviceId && usedServices.has(item.serviceId)) continue;
+    legacy.push(item);
+  }
   return [...canonical, ...legacy];
 }
 
 function resolveCatalogService(services = [], work = {}) {
+  const canonical = bookableCatalogPresets(services);
   const serviceId = cleanText(work.serviceId, 120);
   if (serviceId) {
-    const exact = services.find((service) => cleanText(service.id, 120) === serviceId);
-    const normalized = normalizeCatalogService(exact);
-    if (normalized) return normalized;
+    const exact = canonical.find((preset) => preset.serviceId === serviceId);
+    if (exact) return exact;
   }
   const presetId = cleanText(work.presetId, 120);
   if (!presetId) return null;
-  return bookableCatalogPresets(services).find((preset) => preset.id === presetId) || null;
+  return canonical.find((preset) => preset.id === presetId) || null;
 }
 
 module.exports = {
