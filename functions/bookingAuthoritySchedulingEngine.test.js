@@ -241,7 +241,7 @@ test("ten-unit support still requires a complete three-hour support window", () 
   });
 
   assert.equal(result.reason, "available");
-  assert.equal(result.options.length, 2);
+  assert.equal(result.options.length, 4);
   for (const option of result.options) {
     assert.equal(option.assignments.length, 2);
     assert.equal(option.assignments[0].vanId, "VAN-1");
