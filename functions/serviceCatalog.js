@@ -16,6 +16,10 @@ function serviceItem(service = {}) {
   return service.active !== false && type !== "producto" && type !== "product";
 }
 
+function serviceVisibleInScheduling(service = {}) {
+  return serviceItem(service) && service.featured !== false;
+}
+
 function normalizeDuration(definition = {}, service = {}) {
   const raw = definition.duration || {};
   const fallback = Number(service.durationMinutes || 60);
@@ -54,7 +58,7 @@ function duplicateBookingCodeError(bookingCode, firstServiceId, secondServiceId)
   );
 }
 
-function bookableCatalogPresets(services = []) {
+function catalogServicePresets(services = []) {
   const presets = [];
   const codeOwners = new Map();
   const seenServices = new Set();
@@ -70,6 +74,13 @@ function bookableCatalogPresets(services = []) {
     presets.push(preset);
   }
   return presets.sort((left, right) => left.label.localeCompare(right.label));
+}
+
+function bookableCatalogPresets(services = []) {
+  const visibleServiceIds = new Set(
+    services.filter((service) => serviceVisibleInScheduling(service)).map((service) => cleanText(service.id, 120)),
+  );
+  return catalogServicePresets(services).filter((preset) => visibleServiceIds.has(preset.serviceId));
 }
 
 function compactLegacyPreset(item = {}, services = []) {
@@ -101,8 +112,9 @@ function legacyPresetSettings(businessSettings = []) {
 
 function mergeBookablePresets(services = [], businessSettings = []) {
   const canonical = bookableCatalogPresets(services);
-  const canonicalByCode = new Map(canonical.map((item) => [item.id, item]));
-  const usedServices = new Set(canonical.map((item) => item.serviceId).filter(Boolean));
+  const allCanonical = catalogServicePresets(services);
+  const canonicalByCode = new Map(allCanonical.map((item) => [item.id, item]));
+  const usedServices = new Set(allCanonical.map((item) => item.serviceId).filter(Boolean));
   const legacy = [];
 
   for (const item of legacyPresetSettings(businessSettings).map((entry) => compactLegacyPreset(entry, services)).filter(Boolean)) {
@@ -120,7 +132,11 @@ function mergeBookablePresets(services = [], businessSettings = []) {
 }
 
 function resolveCatalogService(services = [], work = {}) {
-  const canonical = bookableCatalogPresets(services);
+  // Resolution deliberately uses every active canonical service, not only the
+  // quick-pick services shown in Scheduling. Existing appointments and explicit
+  // service references must remain resolvable after a service is hidden from the
+  // booking picker.
+  const canonical = catalogServicePresets(services);
   const serviceId = cleanText(work.serviceId, 120);
   if (serviceId) {
     const exact = canonical.find((preset) => preset.serviceId === serviceId);
@@ -136,9 +152,11 @@ module.exports = {
   SERVICE_CATALOG_SOURCE,
   SERVICE_DEFINITION_VERSION,
   bookableCatalogPresets,
+  catalogServicePresets,
   compactLegacyPreset,
   mergeBookablePresets,
   normalizeCatalogService,
   resolveCatalogService,
   serviceItem,
+  serviceVisibleInScheduling,
 };
