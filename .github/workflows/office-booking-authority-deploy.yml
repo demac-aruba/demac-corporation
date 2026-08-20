@@ -5,6 +5,7 @@ on:
     paths:
       - 'functions/officeBookingAuthority.js'
       - 'functions/officeBookingAuthority.test.js'
+      - 'functions/officeBookingAuthorityCatalog.test.js'
       - 'functions/officeBookingAuthorityMasterData.test.js'
       - 'functions/bookingOperationalMove.js'
       - 'functions/bookingOperationalMove.test.js'
@@ -32,6 +33,7 @@ on:
     paths:
       - 'functions/officeBookingAuthority.js'
       - 'functions/officeBookingAuthority.test.js'
+      - 'functions/officeBookingAuthorityCatalog.test.js'
       - 'functions/officeBookingAuthorityMasterData.test.js'
       - 'functions/bookingOperationalMove.js'
       - 'functions/bookingOperationalMove.test.js'
@@ -101,6 +103,7 @@ jobs:
           node --test functions/bookingAuthoritySchedulingProvider.test.js
           node --test functions/bookingVanIdentity.test.js
           node --test functions/officeBookingAuthority.test.js
+          node --test functions/officeBookingAuthorityCatalog.test.js
           node --test functions/officeBookingAuthorityMasterData.test.js
           node - <<'NODE'
           const mod = require('./functions/index');
