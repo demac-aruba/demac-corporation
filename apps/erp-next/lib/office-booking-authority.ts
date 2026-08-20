@@ -6,7 +6,18 @@ export type OfficeBookingPreset = {
   label: string;
   kind?: string;
   durationMinutesPerUnit: number;
+  durationMode?: 'per_unit' | 'fixed';
   active: boolean;
+  serviceId?: string;
+  source?: 'service_catalog' | 'appointment_work_presets';
+  serviceDefinitionVersion?: number;
+  quantityUnit?: string;
+  allocation?: {
+    mode?: 'single_van' | 'primary_with_support';
+    differentPropertyDailyMaxUnits?: number;
+    primaryMaxUnits?: number;
+    supportSelection?: 'operator' | 'none';
+  };
 };
 
 export type OfficeBookingOption = {
@@ -20,16 +31,20 @@ export type OfficeBookingOption = {
   presetLabel?: string;
   serviceId?: string;
   durationMinutesPerUnit?: number;
+  durationMode?: 'per_unit' | 'fixed';
+  serviceDefinitionVersion?: number;
   quantity?: number;
   assignments: Array<{
     vanId: string;
     vanName?: string;
     technicianIds?: string[];
     quantity: number;
+    durationMinutes?: number;
     slots: number;
     fullDay?: boolean;
     time?: string;
     endTime?: string;
+    role?: 'primary' | 'support';
   }>;
 };
 
@@ -70,7 +85,12 @@ export type OfficeCreateAppointmentResult = {
 export type OfficeMasterDataRecord = Record<string, unknown> & { id: string };
 
 type ApiError = { error?: { code?: string; message?: string; details?: Record<string, unknown> } };
-type PresetResponse = { success: true; version: number; presets: OfficeBookingPreset[] };
+type PresetResponse = {
+  success: true;
+  version: number;
+  presets: OfficeBookingPreset[];
+  catalogSource?: 'services' | 'legacy_fallback';
+};
 
 const PRESET_CACHE_MS = 5 * 60_000;
 let presetCache: { expiresAt: number; promise: Promise<PresetResponse> } | null = null;
@@ -210,6 +230,7 @@ export async function checkOfficeRescheduleAvailability(input: {
   customerId: string;
   propertyId: string;
   presetId: string;
+  serviceId?: string;
   quantity: number;
   requestedDate: string;
   requestedTime?: string;
