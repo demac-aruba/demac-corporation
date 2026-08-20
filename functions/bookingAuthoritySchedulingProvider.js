@@ -34,7 +34,7 @@ const {
 } = require("./bookingAuthoritySchedulingEngine");
 const { canonicalizeSchedulingData } = require("./bookingVanIdentity");
 
-const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v6";
+const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v7";
 
 async function loadSchedulingData(db, startDate, endDate) {
   const workOrderQuery = db.collection("workOrders").where("date", ">=", startDate).where("date", "<=", endDate);
@@ -329,10 +329,7 @@ function createSchedulingProvider({ db }) {
         ])
         : [await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS)), null];
       const data = dataWithoutAppointment(loaded, context.excludeAppointmentId);
-      const schedulingData = requiredPrimaryVanId
-        ? { ...data, vans: data.vans.filter((van) => van.id === requiredPrimaryVanId) }
-        : data;
-      if (requiredPrimaryVanId && !schedulingData.vans.length) {
+      if (requiredPrimaryVanId && !data.vans.some((van) => van.id === requiredPrimaryVanId)) {
         return {
           options: [],
           reason: "required-van-unavailable",
@@ -348,7 +345,7 @@ function createSchedulingProvider({ db }) {
         const exact = operationalMoveResult({
           request,
           property,
-          data: schedulingData,
+          data,
           routeConfig,
           date: requestedDate,
           time: requestedTime,
@@ -376,22 +373,17 @@ function createSchedulingProvider({ db }) {
       const result = generateCanonicalOptions({
         request,
         property,
-        data: schedulingData,
+        data,
         routeConfig,
         today,
         currentTime: nowParts.time,
+        requiredPrimaryVanId,
+        requireRequestedTarget: Boolean(requiredPrimaryVanId),
       });
-      const options = requiredPrimaryVanId
-        ? result.options.filter((option) => {
-          const primary = option.assignments?.[0];
-          return primary?.vanId === requiredPrimaryVanId
-            && (!requestedDate || option.date === requestedDate)
-            && (!requestedTime || option.time === requestedTime);
-        })
-        : result.options;
+      const options = result.options;
       return {
         options,
-        reason: options.length ? result.reason : (requiredPrimaryVanId ? "required-drag-target-unavailable" : result.reason),
+        reason: options.length ? result.reason : (requiredPrimaryVanId ? "required-primary-target-unavailable" : result.reason),
         providerVersion: SCHEDULING_PROVIDER_VERSION,
         engineVersion: CANONICAL_SCHEDULING_ENGINE_VERSION,
         metadata: {
