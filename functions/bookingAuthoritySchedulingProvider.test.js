@@ -33,10 +33,24 @@ function option() {
     presetLabel: "Servicio estándar",
     serviceId: "s1",
     durationMinutesPerUnit: 60,
+    durationMode: "per_unit",
+    serviceDefinitionVersion: 1,
+    workItems: [{
+      id: "w1",
+      presetId: "standard_service",
+      serviceId: "s1",
+      label: "Servicio estándar",
+      quantity: 2,
+      durationMinutes: 120,
+      durationMinutesPerUnit: 60,
+      durationMode: "per_unit",
+      serviceDefinitionVersion: 1,
+    }],
     assignments: [{
       vanId: "V2",
       technicianIds: ["t1", "t2"],
       quantity: 2,
+      durationMinutes: 120,
       slots: 2,
       fullDay: false,
     }],
@@ -65,12 +79,12 @@ function operationalData(overrides = {}) {
 
 const currentSchedule = { date: "2098-12-20", time: "08:30" };
 
-test("provider exposes canonical provider v8", () => {
-  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v8");
+test("provider exposes canonical provider v9", () => {
+  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v9");
 });
 
 test("canonical scheduling engine is versioned independently", () => {
-  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 5);
+  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 6);
 });
 
 test("provider verifies the exact ERP customer/property relationship", () => {
@@ -101,7 +115,7 @@ test("work orders link to canonical appointment and only the primary order notif
     ...option(),
     assignments: [
       ...option().assignments,
-      { vanId: "V3", technicianIds: ["t3"], quantity: 1, slots: 1, fullDay: false },
+      { vanId: "V3", technicianIds: ["t3"], quantity: 1, durationMinutes: 60, slots: 1, fullDay: false },
     ],
   };
   const orders = buildWorkOrders({
@@ -114,11 +128,55 @@ test("work orders link to canonical appointment and only the primary order notif
   });
   assert.equal(orders.length, 2);
   assert.equal(orders[0].appointmentId, "APT-1");
+  assert.equal(orders[0].appointmentWorkItems[0].quantity, 2);
+  assert.equal(orders[1].appointmentWorkItems[0].quantity, 1);
   assert.equal(orders[0].appointmentAssignmentRole, "primary");
   assert.equal(orders[0].whatsappNotificationsEnabled, true);
   assert.equal(orders[1].appointmentAssignmentRole, "support");
   assert.equal(orders[1].whatsappNotificationsEnabled, false);
   assert.equal(orders[1].parentWorkOrderId, "WO-APT-1-1");
+});
+
+test("mixed work remains one appointment Work Order with every selected line", () => {
+  const mixedRequest = {
+    customerId: "c1",
+    propertyId: "p1",
+    workLines: [
+      { id: "service", presetId: "standard_service", serviceId: "s1", quantity: 2 },
+      { id: "install", presetId: "standard_installation", serviceId: "s2", quantity: 1 },
+    ],
+  };
+  const mixedOption = {
+    id: "mixed",
+    date: "2098-12-20",
+    time: "08:30",
+    endTime: "12:30",
+    address: "Wayaca 217",
+    zone: "Oranjestad",
+    presetId: "multiple_services",
+    presetLabel: "Multiple services",
+    durationMinutesPerUnit: 240,
+    durationMode: "mixed",
+    workItems: [
+      { id: "service", presetId: "standard_service", serviceId: "s1", label: "Standard Service", quantity: 2, durationMinutes: 120, durationMinutesPerUnit: 60, durationMode: "per_unit", serviceDefinitionVersion: 1 },
+      { id: "install", presetId: "standard_installation", serviceId: "s2", label: "Standard Installation", quantity: 1, durationMinutes: 120, durationMinutesPerUnit: 120, durationMode: "per_unit", serviceDefinitionVersion: 1 },
+    ],
+    assignments: [{ vanId: "VAN-1", technicianIds: ["t1"], quantity: 3, durationMinutes: 240, slots: 4, fullDay: false }],
+  };
+  const orders = buildWorkOrders({
+    appointment: { appointmentId: "APT-MIXED" },
+    option: mixedOption,
+    request: mixedRequest,
+    customer: { id: "c1", name: "Richard", whatsapp: "+2975600000" },
+    property: { id: "p1", address: "Wayaca 217" },
+    now: new Date("2098-12-01T12:00:00Z"),
+  });
+  assert.equal(orders.length, 1);
+  assert.equal(orders[0].appointmentWorkType, "multiple_services");
+  assert.equal(orders[0].appointmentWorkItems.length, 2);
+  assert.equal(orders[0].appointmentDurationMinutes, 240);
+  assert.match(orders[0].problem, /Standard Service × 2/);
+  assert.match(orders[0].problem, /Standard Installation × 1/);
 });
 
 test("manual operator drag can place work on an active van before a driver is assigned", () => {
