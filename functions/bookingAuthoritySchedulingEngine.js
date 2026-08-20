@@ -148,7 +148,7 @@ function exactPreset(data, workOrPresetId) {
   const work = typeof workOrPresetId === "string"
     ? { presetId: cleanText(workOrPresetId, 120), serviceId: "" }
     : (workOrPresetId || {});
-  const canonical = resolveCatalogService(data.services || [], work);
+  const canonical = resolveCatalogService(data.services || [], work, data.businessSettings || []);
   if (canonical) return canonical;
 
   const presetId = cleanText(work.presetId, 120);
