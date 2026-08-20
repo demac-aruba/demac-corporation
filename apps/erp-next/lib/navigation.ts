@@ -69,6 +69,7 @@ export const navigationGroups: NavigationGroup[] = [
     label: 'Finance',
     items: [
       { label: 'Finance Center', href: '/finance', short: 'FI', roles: ['super_admin', 'finance'] },
+      { label: 'Payroll Review', href: '/finance/payroll', short: 'PR', roles: ['super_admin', 'finance'] },
       { label: 'Invoices', href: '/invoices', short: 'IN', roles: ['super_admin', 'finance', 'office_operator'] },
       { label: 'Payments', href: '/payments', short: 'PA', roles: ['super_admin', 'finance', 'office_operator'] },
       { label: 'Banking Monitor', href: '/banking', short: 'BK', roles: ['super_admin', 'finance'] },
