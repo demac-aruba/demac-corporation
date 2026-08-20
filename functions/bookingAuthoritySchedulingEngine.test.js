@@ -9,6 +9,7 @@ const {
   generateCanonicalOptions,
   parseStructuredTimeConstraint,
   singleWork,
+  supportStartTimes,
   timeAllowed,
 } = require("./bookingAuthoritySchedulingEngine");
 
@@ -79,8 +80,12 @@ function exactTargetRequest(quantity) {
   });
 }
 
+function supportTimes(result) {
+  return new Set(result.options.map((option) => option.assignments.find((assignment) => assignment.role === "support")?.time).filter(Boolean));
+}
+
 test("canonical scheduling engine has an explicit version", () => {
-  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 2);
+  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 3);
 });
 
 test("canonical scheduling rejects mixed presets instead of guessing", () => {
@@ -102,6 +107,21 @@ test("exact preset resolution requires the requested ERP preset", () => {
   assert.throws(
     () => exactPreset(schedulingData(), "not-configured"),
     (error) => error.code === BOOKING_ERROR_CODES.INVALID_REQUEST,
+  );
+});
+
+test("support start times respect the amount of support work instead of coarse AM/PM anchors", () => {
+  assert.deepEqual(
+    supportStartTimes(1),
+    ["08:30", "09:30", "10:30", "11:30", "13:30", "14:30", "15:30"],
+  );
+  assert.deepEqual(
+    supportStartTimes(2),
+    ["08:30", "09:30", "13:30", "14:30"],
+  );
+  assert.deepEqual(
+    supportStartTimes(3),
+    ["08:30", "13:30"],
   );
 });
 
@@ -133,11 +153,17 @@ test("standard-service allocation preserves the canonical 2/7/8-10 unit rules", 
   assert.equal(eight.length, 2);
   assert.equal(eight[0].quantity, 7);
   assert.equal(eight[1].quantity, 1);
-  assert.deepEqual(eight[1].allowedTimes, ["08:30", "13:30"]);
+  assert.deepEqual(eight[1].allowedTimes, ["08:30", "09:30", "10:30", "11:30", "13:30", "14:30", "15:30"]);
+
+  const nine = buildAllocationPlan(9, 60, 4, standardPreset, {});
+  assert.equal(nine.length, 2);
+  assert.equal(nine[1].quantity, 2);
+  assert.deepEqual(nine[1].allowedTimes, ["08:30", "09:30", "13:30", "14:30"]);
 
   const ten = buildAllocationPlan(10, 60, 4, standardPreset, {});
   assert.equal(ten.length, 2);
   assert.equal(ten[1].quantity, 3);
+  assert.deepEqual(ten[1].allowedTimes, ["08:30", "13:30"]);
   assert.deepEqual(buildAllocationPlan(11, 60, 4, standardPreset, {}), []);
 });
 
@@ -163,7 +189,46 @@ test("a seven-unit same-property booking keeps the office-selected van as the fu
   assert.equal(result.options[0].assignments[0].fullDay, true);
 });
 
-test("an eight-to-ten-unit booking keeps the selected primary and preserves support vans for office choice", () => {
+test("eight-unit support can arrive in any one-hour opening that actually exists", () => {
+  const result = generateCanonicalOptions({
+    request: exactTargetRequest(8),
+    property: schedulingData().properties[0],
+    data: schedulingData(),
+    routeConfig: normalizeRouteConfig(),
+    today: "2098-12-21",
+    currentTime: "07:00",
+    requiredPrimaryVanId: "VAN-1",
+    requireRequestedTarget: true,
+  });
+
+  assert.equal(result.reason, "available");
+  const times = supportTimes(result);
+  assert.equal(times.has("08:30"), true);
+  assert.equal(times.has("09:30"), true);
+  assert.equal(times.has("10:30"), true);
+  assert.equal(times.has("13:30"), true);
+  assert.equal(times.has("14:30"), true);
+  assert.equal(times.has("15:30"), true);
+  assert.equal(times.has("11:30"), false, "11:30 is only an operational slot for a half-day van");
+});
+
+test("nine-unit support offers only two-hour windows that fit before lunch or before day-end", () => {
+  const result = generateCanonicalOptions({
+    request: exactTargetRequest(9),
+    property: schedulingData().properties[0],
+    data: schedulingData(),
+    routeConfig: normalizeRouteConfig(),
+    today: "2098-12-21",
+    currentTime: "07:00",
+    requiredPrimaryVanId: "VAN-1",
+    requireRequestedTarget: true,
+  });
+
+  assert.equal(result.reason, "available");
+  assert.deepEqual(supportTimes(result), new Set(["08:30", "09:30", "13:30", "14:30"]));
+});
+
+test("ten-unit support still requires a complete three-hour support window", () => {
   const result = generateCanonicalOptions({
     request: exactTargetRequest(10),
     property: schedulingData().properties[0],
@@ -186,10 +251,35 @@ test("an eight-to-ten-unit booking keeps the selected primary and preserves supp
     assert.equal(option.assignments[1].quantity, 3);
     assert.equal(option.assignments[1].role, "support");
   }
-  assert.deepEqual(
-    new Set(result.options.map((option) => option.assignments[1].time)),
-    new Set(["08:30", "13:30"]),
-  );
+  assert.deepEqual(supportTimes(result), new Set(["08:30", "13:30"]));
+});
+
+test("support alternatives skip occupied windows but preserve later valid arrivals", () => {
+  const data = schedulingData();
+  data.workOrders.push({
+    id: "existing-v2-am",
+    appointmentId: "appt-existing-v2-am",
+    date: "2098-12-22",
+    time: "08:30",
+    vanId: "VAN-2",
+    propertyId: "p1",
+    status: "Confirmada",
+    scheduledSlots: 1,
+  });
+  const result = generateCanonicalOptions({
+    request: exactTargetRequest(9),
+    property: data.properties[0],
+    data,
+    routeConfig: normalizeRouteConfig(),
+    today: "2098-12-21",
+    currentTime: "07:00",
+    requiredPrimaryVanId: "VAN-1",
+    requireRequestedTarget: true,
+  });
+
+  assert.equal(result.reason, "available");
+  assert.equal(result.options.some((option) => option.assignments[1]?.vanId === "VAN-2" && option.assignments[1]?.time === "08:30"), false);
+  assert.equal(result.options.some((option) => option.assignments[1]?.vanId === "VAN-2" && option.assignments[1]?.time === "09:30"), true);
 });
 
 test("large fixed-primary booking fails cleanly when no support van is operationally available", () => {
