@@ -55,6 +55,19 @@ function hashKey(value, length = 24) {
   return crypto.createHash("sha256").update(String(value ?? "")).digest("hex").slice(0, length);
 }
 
+function normalizeManualDuration(value, field) {
+  if (value === undefined || value === null || value === "") return 0;
+  const minutes = positiveInteger(value);
+  if (minutes < 30 || minutes > 720 || minutes % 15 !== 0) {
+    throw new BookingAuthorityError(
+      BOOKING_ERROR_CODES.INVALID_REQUEST,
+      `${field} must be between 30 and 720 minutes in 15-minute increments.`,
+      { field },
+    );
+  }
+  return minutes;
+}
+
 function normalizeWorkLines(value) {
   if (!Array.isArray(value) || value.length === 0) {
     throw new BookingAuthorityError(
@@ -74,11 +87,16 @@ function normalizeWorkLines(value) {
         { field: `workLines[${index}].quantity` },
       );
     }
+    const manualDurationMinutes = normalizeManualDuration(
+      line?.manualDurationMinutes,
+      `workLines[${index}].manualDurationMinutes`,
+    );
     return {
       id: cleanText(line?.id, 120) || `work-${index + 1}`,
       presetId,
       serviceId: cleanText(line?.serviceId, 120),
       quantity,
+      ...(manualDurationMinutes ? { manualDurationMinutes } : {}),
       customerFacingDescription: cleanText(line?.customerFacingDescription, 500),
       technicianInstructions: cleanText(line?.technicianInstructions, 1_500),
     };
@@ -109,6 +127,7 @@ function normalizeAssignment(value = {}, index = 0) {
       { field: `options.assignments[${index}]` },
     );
   }
+  const role = cleanText(value.role, 40);
   return {
     vanId: requireText(value.vanId, `options.assignments[${index}].vanId`, 120),
     vanName: cleanText(value.vanName, 160),
@@ -119,8 +138,38 @@ function normalizeAssignment(value = {}, index = 0) {
     helperStaffId: cleanText(value.helperStaffId, 120),
     quantity,
     slots,
+    durationMinutes: positiveInteger(value.durationMinutes) || slots * 60,
     fullDay: value.fullDay === true,
     time: cleanText(value.time, 20),
+    endTime: cleanText(value.endTime, 20),
+    role: role === "support" || (!role && index > 0) ? "support" : "primary",
+  };
+}
+
+function normalizeWorkItemSnapshot(value = {}, index = 0) {
+  const quantity = positiveInteger(value.quantity);
+  const durationMinutes = positiveInteger(value.durationMinutes);
+  const durationMinutesPerUnit = positiveInteger(value.durationMinutesPerUnit);
+  if (!quantity || !durationMinutes || !durationMinutesPerUnit) {
+    throw new BookingAuthorityError(
+      BOOKING_ERROR_CODES.INVALID_REQUEST,
+      `options.workItems[${index}] requires positive quantity and duration.`,
+      { field: `options.workItems[${index}]` },
+    );
+  }
+  const durationMode = ["per_unit", "fixed", "manual"].includes(cleanText(value.durationMode, 40))
+    ? cleanText(value.durationMode, 40)
+    : "per_unit";
+  return {
+    id: cleanText(value.id, 120) || `work-${index + 1}`,
+    presetId: requireText(value.presetId, `options.workItems[${index}].presetId`, 120),
+    serviceId: cleanText(value.serviceId, 120),
+    label: cleanText(value.label, 240),
+    quantity,
+    durationMinutes,
+    durationMinutesPerUnit,
+    durationMode,
+    serviceDefinitionVersion: positiveInteger(value.serviceDefinitionVersion),
   };
 }
 
@@ -135,6 +184,9 @@ function normalizeOfferOption(value = {}, index = 0) {
       { field: `options[${index}].assignments` },
     );
   }
+  const workItems = Array.isArray(value.workItems)
+    ? value.workItems.map((item, workIndex) => normalizeWorkItemSnapshot(item, workIndex))
+    : [];
   return {
     id: requireText(value.id, `options[${index}].id`, 180),
     date: requireText(value.date, `options[${index}].date`, 20),
@@ -146,7 +198,12 @@ function normalizeOfferOption(value = {}, index = 0) {
     presetLabel: cleanText(value.presetLabel, 240),
     serviceId: cleanText(value.serviceId, 120),
     durationMinutesPerUnit: positiveInteger(value.durationMinutesPerUnit) || 60,
+    durationMode: ["per_unit", "fixed", "manual", "mixed"].includes(cleanText(value.durationMode, 40))
+      ? cleanText(value.durationMode, 40)
+      : "per_unit",
+    serviceDefinitionVersion: positiveInteger(value.serviceDefinitionVersion),
     quantity: positiveInteger(value.quantity) || assignments.reduce((sum, item) => sum + item.quantity, 0),
+    workItems,
     assignments,
   };
 }
@@ -255,6 +312,7 @@ function buildAppointmentDraft({
     startTime: option.time,
     endTime: option.endTime,
     workLines: normalizedRequest.workLines,
+    workItems: option.workItems,
     constraints: normalizedRequest.constraints,
     notes: normalizedRequest.notes,
     assignments: option.assignments,

@@ -32,9 +32,10 @@ const {
   serviceIdForRequest,
   singleWork,
 } = require("./bookingAuthoritySchedulingEngine");
+const { buildWorkOrders: projectCanonicalWorkOrders } = require("./bookingAuthorityWorkOrders");
 const { canonicalizeSchedulingData } = require("./bookingVanIdentity");
 
-const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v8";
+const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v9";
 
 async function loadSchedulingData(db, startDate, endDate) {
   const workOrderQuery = db.collection("workOrders").where("date", ">=", startDate).where("date", "<=", endDate);
@@ -185,77 +186,8 @@ function notificationRecipient(client) {
   };
 }
 
-function buildWorkOrders({ appointment, option, request, customer, property, now = new Date() }) {
-  const primaryWork = request.workLines[0];
-  const recipient = notificationRecipient(customer);
-  const supportCount = Math.max(0, option.assignments.length - 1);
-  return option.assignments.map((assignment, index) => {
-    const id = `WO-${appointment.appointmentId}-${index + 1}`;
-    const quantity = assignment.quantity;
-    const equipmentLabel = quantity === 1 ? "1 aire acondicionado" : `${quantity} aires acondicionados`;
-    const presetLabel = option.presetLabel || primaryWork.presetId;
-    const problem = `${presetLabel} para ${equipmentLabel}.`;
-    const isPrimary = index === 0;
-    const durationMinutes = Math.max(
-      30,
-      Number(
-        assignment.durationMinutes
-        || (option.durationMode === "fixed"
-          ? option.durationMinutesPerUnit
-          : quantity * option.durationMinutesPerUnit),
-      ) || 60,
-    );
-    const workItem = {
-      id: primaryWork.id || primaryWork.presetId,
-      presetId: primaryWork.presetId,
-      serviceId: primaryWork.serviceId || option.serviceId || "",
-      label: presetLabel,
-      quantity,
-      durationMinutes,
-      durationMinutesPerUnit: option.durationMinutesPerUnit,
-      durationMode: option.durationMode || "per_unit",
-      serviceDefinitionVersion: option.serviceDefinitionVersion || 0,
-    };
-    return {
-      id,
-      appointmentId: appointment.appointmentId,
-      clientId: customer.id,
-      propertyId: property.id,
-      serviceId: primaryWork.serviceId || option.serviceId || "",
-      date: option.date,
-      time: assignment.time || option.time,
-      status: "Confirmada",
-      technicianIds: assignment.technicianIds || [],
-      vanId: assignment.vanId,
-      address: option.address || property.address || property.addressRaw || "",
-      zone: option.zone || property.operationalZone || property.zone || "",
-      problem: isPrimary ? problem : `Apoyo a la cita principal: ${problem}`,
-      officeNotes: isPrimary
-        ? `Cita creada por DEMAC Booking Authority${supportCount ? ` con ${supportCount} van(es) de apoyo` : ""}.`
-        : "Asignación interna de van de apoyo. No enviar confirmación ni recordatorio duplicado.",
-      appointmentWorkType: primaryWork.presetId,
-      appointmentPresetId: primaryWork.presetId,
-      appointmentWorkLabel: presetLabel,
-      appointmentDurationMinutes: durationMinutes,
-      appointmentDurationMode: option.durationMode || "per_unit",
-      serviceDefinitionVersion: option.serviceDefinitionVersion || 0,
-      appointmentWorkItems: [workItem],
-      appointmentAssignmentRole: isPrimary ? "primary" : "support",
-      parentWorkOrderId: isPrimary ? undefined : `WO-${appointment.appointmentId}-1`,
-      fullDaySingleProperty: assignment.fullDay === true,
-      amount: 0,
-      paid: 0,
-      schedulingMode: option.durationMode === "fixed" ? "fixed" : "perUnit",
-      airConditionerCount: quantity,
-      scheduledSlots: assignment.slots,
-      whatsappNotificationsEnabled: isPrimary && Boolean(recipient),
-      notificationRecipients: isPrimary && recipient ? [recipient] : [],
-      confirmedAt: now.toISOString(),
-      createdAt: now.toISOString(),
-      updatedAt: now.toISOString(),
-      createdBy: "booking-authority",
-    };
-  });
+function buildWorkOrders(args) {
+  return projectCanonicalWorkOrders(args);
 }
 
 function operationalMoveResult({ request, property, data, routeConfig, date, time, vanId, currentSchedule }) {

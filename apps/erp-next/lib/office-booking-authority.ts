@@ -13,6 +13,28 @@ export type OfficeBookingPreset = {
   serviceDefinitionVersion?: number;
 };
 
+export type OfficeBookingWorkLine = {
+  id: string;
+  presetId: string;
+  serviceId?: string;
+  quantity: number;
+  manualDurationMinutes?: number;
+  customerFacingDescription?: string;
+  technicianInstructions?: string;
+};
+
+export type OfficeBookingWorkItem = {
+  id: string;
+  presetId: string;
+  serviceId?: string;
+  label?: string;
+  quantity: number;
+  durationMinutes: number;
+  durationMinutesPerUnit: number;
+  durationMode: 'per_unit' | 'fixed' | 'manual';
+  serviceDefinitionVersion?: number;
+};
+
 export type OfficeBookingOption = {
   id: string;
   date: string;
@@ -24,9 +46,10 @@ export type OfficeBookingOption = {
   presetLabel?: string;
   serviceId?: string;
   durationMinutesPerUnit?: number;
-  durationMode?: 'per_unit' | 'fixed';
+  durationMode?: 'per_unit' | 'fixed' | 'manual' | 'mixed';
   serviceDefinitionVersion?: number;
   quantity?: number;
+  workItems?: OfficeBookingWorkItem[];
   assignments: Array<{
     vanId: string;
     vanName?: string;
@@ -177,9 +200,10 @@ export async function checkOfficeCreateAvailability(input: {
   requestId: string;
   customerId: string;
   propertyId: string;
-  presetId: string;
+  presetId?: string;
   serviceId?: string;
-  quantity: number;
+  quantity?: number;
+  workLines?: OfficeBookingWorkLine[];
   requestedDate: string;
   requestedTime: string;
   requiredVanId: string;

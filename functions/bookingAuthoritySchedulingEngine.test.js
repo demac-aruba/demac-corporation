@@ -8,6 +8,7 @@ const {
   exactPreset,
   generateCanonicalOptions,
   parseStructuredTimeConstraint,
+  resolveWorkScope,
   singleWork,
   supportStartTimes,
   timeAllowed,
@@ -25,10 +26,39 @@ const canonicalStandardService = {
   name: "Servicio estándar",
   itemType: "Servicio",
   active: true,
+  featured: true,
   durationMinutes: 60,
   serviceDefinition: {
     version: 1,
     bookingCode: "standard_service",
+    duration: { minutes: 60 },
+  },
+};
+
+const canonicalInstallation = {
+  id: "s-install",
+  name: "Standard Installation",
+  itemType: "Servicio",
+  active: true,
+  featured: true,
+  durationMinutes: 120,
+  serviceDefinition: {
+    version: 1,
+    bookingCode: "standard_installation",
+    duration: { minutes: 120 },
+  },
+};
+
+const canonicalOther = {
+  id: "s-other",
+  name: "Other",
+  itemType: "Servicio",
+  active: true,
+  featured: true,
+  durationMinutes: 60,
+  serviceDefinition: {
+    version: 1,
+    bookingCode: "other",
     duration: { minutes: 60 },
   },
 };
@@ -51,7 +81,7 @@ function bookingRequest(overrides = {}) {
 function schedulingData({ canonical = true } = {}) {
   return {
     workOrders: [],
-    services: canonical ? [canonicalStandardService] : [{ id: "s1", name: "Servicio estándar" }],
+    services: canonical ? [canonicalStandardService, canonicalInstallation, canonicalOther] : [{ id: "s1", name: "Servicio estándar" }],
     properties: [{ id: "p1", clientId: "c1", address: "Wayaca 217", operationalZone: "Oranjestad Este" }],
     clients: [{ id: "c1", name: "Test Customer" }],
     vans: [
@@ -98,18 +128,72 @@ function supportTimes(result) {
 }
 
 test("canonical scheduling engine has an explicit version", () => {
-  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 5);
+  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 6);
 });
 
-test("canonical scheduling rejects mixed work types instead of guessing", () => {
+test("single-work helper still rejects mixed work for operations that require one work type", () => {
   assert.throws(
     () => singleWork({
       ...bookingRequest(),
       workLines: [
         ...bookingRequest().workLines,
-        { presetId: "deep_cleaning", serviceId: "s2", quantity: 1 },
+        { presetId: "standard_installation", serviceId: "s-install", quantity: 1 },
       ],
     }),
+    (error) => error.code === BOOKING_ERROR_CODES.INVALID_REQUEST,
+  );
+});
+
+test("mixed appointment work resolves into one trusted combined workload", () => {
+  const data = schedulingData();
+  const request = bookingRequest({
+    workLines: [
+      { id: "service", presetId: "standard_service", serviceId: "s1", quantity: 2 },
+      { id: "install", presetId: "standard_installation", serviceId: "s-install", quantity: 1 },
+    ],
+    constraints: { requestedDate: "2098-12-22", requestedTime: "08:30" },
+  });
+  const scope = resolveWorkScope(request, data);
+  assert.equal(scope.items.length, 2);
+  assert.equal(scope.totalQuantity, 3);
+  assert.equal(scope.totalDurationMinutes, 240);
+  assert.equal(scope.singleType, false);
+
+  const result = generateCanonicalOptions({
+    request,
+    property: data.properties[0],
+    data,
+    routeConfig: normalizeRouteConfig(),
+    today: "2098-12-21",
+    currentTime: "07:00",
+    requiredPrimaryVanId: "VAN-1",
+    requireRequestedTarget: true,
+  });
+  assert.equal(result.reason, "available");
+  assert.equal(result.options.length, 1);
+  assert.equal(result.options[0].assignments.length, 1);
+  assert.equal(result.options[0].assignments[0].durationMinutes, 240);
+  assert.equal(result.options[0].workItems.length, 2);
+  assert.equal(result.options[0].durationMode, "mixed");
+});
+
+test("Other requires and uses a manual scheduled duration without changing the catalog duration", () => {
+  const data = schedulingData();
+  const request = bookingRequest({
+    workLines: [{ id: "other-work", presetId: "other", serviceId: "s-other", quantity: 1, manualDurationMinutes: 210 }],
+  });
+  const scope = resolveWorkScope(request, data);
+  assert.equal(scope.totalDurationMinutes, 210);
+  assert.equal(scope.workItems[0].durationMode, "manual");
+  assert.equal(scope.workItems[0].durationMinutes, 210);
+  assert.equal(data.services.find((item) => item.id === "s-other").durationMinutes, 60);
+
+  assert.throws(
+    () => resolveWorkScope(bookingRequest({ workLines: [{ id: "other", presetId: "other", serviceId: "s-other", quantity: 1 }] }), data),
+    (error) => error.code === BOOKING_ERROR_CODES.INVALID_REQUEST,
+  );
+  assert.throws(
+    () => resolveWorkScope(bookingRequest({ workLines: [{ id: "service", presetId: "standard_service", serviceId: "s1", quantity: 1, manualDurationMinutes: 90 }] }), data),
     (error) => error.code === BOOKING_ERROR_CODES.INVALID_REQUEST,
   );
 });
