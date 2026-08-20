@@ -56,17 +56,18 @@ function request(action) {
   };
 }
 
-test("office list_presets exposes canonical service catalog definitions before legacy duplicates", async () => {
+test("office list_presets isolates Scheduling Work Types from the detailed commercial service catalog", async () => {
   const db = dbFixture({
     services: [{
       id: "service-standard",
-      name: "Standard Service",
+      name: "12K BTU Split Unit Standard Service - First Floor",
       itemType: "Servicio",
       active: true,
+      featured: true,
       durationMinutes: 90,
       serviceDefinition: {
         version: 1,
-        bookingCode: "standard_service",
+        bookingCode: "12k_standard_service",
         quantityUnit: "ac_unit",
         duration: { mode: "per_unit", minutes: 60 },
         allocation: {
@@ -93,10 +94,19 @@ test("office list_presets exposes canonical service catalog definitions before l
   const result = await api.handle(request(OFFICE_BOOKING_ACTIONS.LIST_PRESETS));
 
   assert.equal(result.status, 200);
-  assert.equal(result.body.catalogSource, "services");
-  assert.deepEqual(result.body.presets.map((item) => item.id), ["standard_service", "deep_cleaning"]);
-  assert.equal(result.body.presets[0].source, "service_catalog");
-  assert.equal(result.body.presets[0].serviceId, "service-standard");
-  assert.equal(result.body.presets[0].durationMinutesPerUnit, 60);
-  assert.equal(result.body.presets[1].source, "appointment_work_presets");
+  assert.deepEqual(result.body.presets.map((item) => item.id), [
+    "standard_service",
+    "deep_cleaning",
+    "standard_installation",
+    "installation_extended_labor",
+    "check_up",
+    "leak_repair",
+    "commercial_service",
+    "other",
+  ]);
+  assert.equal(result.body.presets.every((item) => item.source === "scheduling_work_types"), true);
+  assert.equal(result.body.presets.some((item) => /12k/i.test(item.label)), false);
+  assert.equal(result.body.presets.some((item) => item.serviceId === "service-standard"), false);
+  assert.equal(result.body.presets.find((item) => item.id === "standard_service").durationMinutesPerUnit, 60);
+  assert.equal(result.body.presets.find((item) => item.id === "deep_cleaning").durationMinutesPerUnit, 120);
 });
