@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   checkOfficeCreateAvailability,
   confirmOfficeAppointment,
@@ -112,10 +112,9 @@ function formatDate(value: string) {
 }
 
 function durationLabel(minutes: number) {
-  if (minutes < 60) return `${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  const remainder = minutes % 60;
-  return remainder ? `${hours}h ${remainder}m` : `${hours} hour${hours === 1 ? '' : 's'}`;
+  const hours = Math.max(0, minutes) / 60;
+  const value = Number.isInteger(hours) ? String(hours) : hours.toFixed(1).replace(/\.0$/, '');
+  return `${value} hour${hours === 1 ? '' : 's'}`;
 }
 
 function customerLabel(customer: BookingCustomer) {
@@ -157,7 +156,7 @@ function allocationDurationLabel(option: OfficeBookingOption | null, fallbackMin
   if (!option) return fallbackMinutes > 360 ? 'Large job · validate allocation' : fallbackMinutes ? durationLabel(fallbackMinutes) : 'Add work';
   const primary = option.assignments?.[0];
   if (!primary) return fallbackMinutes ? durationLabel(fallbackMinutes) : 'Validated';
-  const primaryLabel = primary.fullDay ? 'Full-day primary van' : durationLabel(primary.slots * 60);
+  const primaryLabel = primary.fullDay ? 'Full-day primary van' : durationLabel(primary.durationMinutes || primary.slots * 60);
   return option.assignments.length > 1 ? `${primaryLabel} + support van` : primaryLabel;
 }
 
@@ -175,6 +174,14 @@ function newWorkLine(preset: OfficeBookingPreset): WorkLineDraft {
   };
 }
 
+function automaticCustomerDescription(workLines: WorkLineDraft[], presetById: Map<string, OfficeBookingPreset>) {
+  const entries = workLines.map((line) => {
+    const preset = presetById.get(line.presetId);
+    return preset ? `${line.quantity} × ${preset.label}` : '';
+  }).filter(Boolean);
+  return entries.length ? `Scheduled work: ${entries.join('; ')}.` : '';
+}
+
 export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Props) {
   const [references, setReferences] = useState<BookingReferenceData>({ clients: [], properties: [] });
   const [presets, setPresets] = useState<OfficeBookingPreset[]>([]);
@@ -185,6 +192,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
   const [propertyId, setPropertyId] = useState('');
   const [workLines, setWorkLines] = useState<WorkLineDraft[]>([]);
   const [description, setDescription] = useState('');
+  const lastAutoDescriptionRef = useRef('');
   const [technicianInstructions, setTechnicianInstructions] = useState('');
   const [customerEditorOpen, setCustomerEditorOpen] = useState(false);
   const [propertyEditorOpen, setPropertyEditorOpen] = useState(false);
@@ -225,6 +233,21 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
   const selectedProperty = customerProperties.find((property) => property.id === propertyId);
   const presetById = useMemo(() => new Map(presets.map((preset) => [preset.id, preset])), [presets]);
   const selectedPresets = workLines.map((line) => presetById.get(line.presetId)).filter((preset): preset is OfficeBookingPreset => Boolean(preset));
+  const autoDescription = useMemo(() => automaticCustomerDescription(workLines, presetById), [presetById, workLines]);
+
+  useEffect(() => {
+    const previousAuto = lastAutoDescriptionRef.current;
+    setDescription((current) => {
+      const currentTrimmed = current.trim();
+      const previousTrimmed = previousAuto.trim();
+      if (!currentTrimmed || currentTrimmed === previousTrimmed) return autoDescription;
+      if (previousAuto && current.startsWith(previousAuto)) {
+        return `${autoDescription}${current.slice(previousAuto.length)}`;
+      }
+      return current;
+    });
+    lastAutoDescriptionRef.current = autoDescription;
+  }, [autoDescription]);
 
   const filteredCustomers = useMemo(() => {
     const needle = customerQuery.trim().toLowerCase();
@@ -260,7 +283,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
     const preset = presetById.get(line.presetId);
     if (!preset) return sum;
     return sum + (isOtherPreset(preset)
-      ? Math.max(30, line.manualDurationMinutes ?? 60)
+      ? Math.max(60, line.manualDurationMinutes ?? 60)
       : preset.durationMinutesPerUnit * line.quantity);
   }, 0);
   const totalQuantity = workLines.reduce((sum, line) => sum + line.quantity, 0);
@@ -275,7 +298,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
     if (!preset || line.quantity < 1) return false;
     if (!isOtherPreset(preset)) return true;
     const minutes = Number(line.manualDurationMinutes || 0);
-    return minutes >= 30 && minutes <= 720 && minutes % 15 === 0;
+    return minutes >= 60 && minutes <= 720 && minutes % 30 === 0;
   });
 
   const resetValidation = () => {
@@ -317,7 +340,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
   };
 
   const changeManualHours = (lineId: string, hours: number) => {
-    const minutes = Math.max(30, Math.min(720, Math.round((hours * 60) / 15) * 15));
+    const minutes = Math.max(60, Math.min(720, Math.round(hours * 2) * 30));
     setWorkLines((current) => current.map((line) => line.id === lineId ? { ...line, manualDurationMinutes: minutes } : line));
     resetValidation();
   };
@@ -568,7 +591,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
                   return (
                     <button type="button" key={preset.id} className={`${styles.preset} ${selectedLine ? styles.presetSelected : ''}`} onClick={() => addPreset(preset)}>
                       <strong>{preset.label}</strong>
-                      <span>{isOtherPreset(preset) ? 'Manual scheduled time' : `${preset.durationMinutesPerUnit} min / unit`}{selectedLine ? ` · selected × ${selectedLine.quantity}` : ''}</span>
+                      <span>{isOtherPreset(preset) ? 'Manual scheduled time' : `${durationLabel(preset.durationMinutesPerUnit)} / unit`}{selectedLine ? ` · selected × ${selectedLine.quantity}` : ''}</span>
                     </button>
                   );
                 })}
@@ -581,7 +604,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
                     const preset = presetById.get(line.presetId);
                     if (!preset) return null;
                     const other = isOtherPreset(preset);
-                    const lineMinutes = other ? Math.max(30, line.manualDurationMinutes ?? 60) : preset.durationMinutesPerUnit * line.quantity;
+                    const lineMinutes = other ? Math.max(60, line.manualDurationMinutes ?? 60) : preset.durationMinutesPerUnit * line.quantity;
                     return (
                       <div key={line.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto auto', gap: 10, alignItems: 'center', padding: '9px 10px', border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface-2)' }}>
                         <div>
@@ -589,7 +612,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
                           <span style={{ display: 'block', marginTop: 3, color: 'var(--muted)', fontSize: '5.7px' }}>{durationLabel(lineMinutes)} scheduled{other ? ' · manual' : ` · ${durationLabel(preset.durationMinutesPerUnit)} each`}</span>
                         </div>
                         {other ? (
-                          <label style={{ display: 'grid', gap: 3, minWidth: 105 }}><span>Manual hours</span><input type="number" min="0.5" max="12" step="0.25" value={(line.manualDurationMinutes ?? 60) / 60} onChange={(event) => changeManualHours(line.id, Number(event.target.value || 0.5))} /></label>
+                          <label style={{ display: 'grid', gap: 3, minWidth: 105 }}><span>Manual hours</span><input type="number" min="1" max="12" step="0.5" value={(line.manualDurationMinutes ?? 60) / 60} onChange={(event) => changeManualHours(line.id, Number(event.target.value || 1))} /></label>
                         ) : (
                           <div className={styles.stepper}><button type="button" disabled={line.quantity <= 1} onClick={() => changeQuantity(line.id, -1)}>−</button><b>{line.quantity}</b><button type="button" disabled={line.quantity >= 20} onClick={() => changeQuantity(line.id, 1)}>＋</button></div>
                         )}
