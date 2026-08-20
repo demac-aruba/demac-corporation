@@ -127,6 +127,7 @@ function normalizeAssignment(value = {}, index = 0) {
       { field: `options.assignments[${index}]` },
     );
   }
+  const role = cleanText(value.role, 40);
   return {
     vanId: requireText(value.vanId, `options.assignments[${index}].vanId`, 120),
     vanName: cleanText(value.vanName, 160),
@@ -141,7 +142,7 @@ function normalizeAssignment(value = {}, index = 0) {
     fullDay: value.fullDay === true,
     time: cleanText(value.time, 20),
     endTime: cleanText(value.endTime, 20),
-    role: cleanText(value.role, 40) === "support" ? "support" : "primary",
+    role: role === "support" || (!role && index > 0) ? "support" : "primary",
   };
 }
 
