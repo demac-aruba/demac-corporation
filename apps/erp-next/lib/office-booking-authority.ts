@@ -11,13 +11,6 @@ export type OfficeBookingPreset = {
   serviceId?: string;
   source?: 'service_catalog' | 'appointment_work_presets';
   serviceDefinitionVersion?: number;
-  quantityUnit?: string;
-  allocation?: {
-    mode?: 'single_van' | 'primary_with_support';
-    differentPropertyDailyMaxUnits?: number;
-    primaryMaxUnits?: number;
-    supportSelection?: 'operator' | 'none';
-  };
 };
 
 export type OfficeBookingOption = {
