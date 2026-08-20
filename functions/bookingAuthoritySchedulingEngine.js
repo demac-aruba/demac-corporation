@@ -22,8 +22,9 @@ const {
 } = require("./bookingSchedulingPrimitives");
 const { candidateAvailability } = require("./bookingCapacityAvailability");
 
-const CANONICAL_SCHEDULING_ENGINE_VERSION = 1;
+const CANONICAL_SCHEDULING_ENGINE_VERSION = 2;
 const CLIENT_OPTION_LIMIT = 2;
+const ASSIGNMENT_COMBINATION_LIMIT = 8;
 
 const DEFAULT_OPERATIONAL_RULES = Object.freeze({
   standardService: {
@@ -318,7 +319,103 @@ function serviceIdForRequest(request, preset, services = []) {
   return cleanText(exact?.id, 120);
 }
 
-function generateCanonicalOptions({ request, property, data, routeConfig, today, currentTime }) {
+function sortAllocationCandidates(candidates, allocation) {
+  const sorted = [...candidates].sort((left, right) => {
+    const routeDifference = right.routeScore - left.routeScore;
+    if (routeDifference) return routeDifference;
+    if (allocation.role === "support") {
+      const leftMorning = left.block === "morning" ? 1 : 0;
+      const rightMorning = right.block === "morning" ? 1 : 0;
+      if (leftMorning !== rightMorning) return rightMorning - leftMorning;
+    }
+    return left.time.localeCompare(right.time) || left.vanId.localeCompare(right.vanId);
+  });
+  if (allocation.role !== "support") return sorted;
+
+  const firstByTime = [];
+  const used = new Set();
+  for (const allowedTime of allocation.allowedTimes || []) {
+    const candidate = sorted.find((item) => item.time === allowedTime);
+    if (!candidate) continue;
+    firstByTime.push(candidate);
+    used.add(`${candidate.vanId}|${candidate.time}`);
+  }
+  return [
+    ...firstByTime,
+    ...sorted.filter((item) => !used.has(`${item.vanId}|${item.time}`)),
+  ];
+}
+
+function assignmentCombinations({
+  allocations,
+  dateAssignments,
+  date,
+  primaryTime,
+  data,
+  routeConfig,
+  candidateZone,
+  requiredPrimaryVanId,
+}) {
+  const results = [];
+
+  function visit(allocationIndex, remainingVans, selected) {
+    if (results.length >= ASSIGNMENT_COMBINATION_LIMIT) return;
+    if (allocationIndex >= allocations.length) {
+      results.push(selected);
+      return;
+    }
+
+    const allocation = allocations[allocationIndex];
+    const allowedTimes = candidateTimesForAllocation(allocation, primaryTime);
+    const vanPool = allocation.role === "primary" && requiredPrimaryVanId
+      ? remainingVans.filter(({ van }) => van.id === requiredPrimaryVanId)
+      : remainingVans;
+    const candidates = [];
+    for (const { van, assignment } of vanPool) {
+      for (const allocationTime of allowedTimes) {
+        if (!allocationTime) continue;
+        const candidate = candidateAvailability({
+          date,
+          time: allocationTime,
+          allocation,
+          van,
+          assignment,
+          data,
+          routeConfig,
+          candidateZone,
+        });
+        if (!candidate) continue;
+        candidates.push({
+          ...candidate,
+          time: allocationTime,
+          endTime: endTime(allocationTime, candidate.slots),
+          role: allocation.role,
+          block: blockForTime(allocationTime),
+        });
+      }
+    }
+
+    for (const candidate of sortAllocationCandidates(candidates, allocation)) {
+      const nextRemaining = remainingVans.filter((item) => item.van.id !== candidate.vanId);
+      visit(allocationIndex + 1, nextRemaining, [...selected, candidate]);
+      if (results.length >= ASSIGNMENT_COMBINATION_LIMIT) break;
+    }
+  }
+
+  visit(0, dateAssignments, []);
+  return results;
+}
+
+function generateCanonicalOptions({
+  request,
+  property,
+  data,
+  routeConfig,
+  today,
+  currentTime,
+  requiredPrimaryVanId = "",
+  requireRequestedTarget = false,
+}) {
   const work = singleWork(request);
   const preset = exactPreset(data, work.presetId);
   const operationalSettings = (data.businessSettings || []).find(
@@ -359,6 +456,7 @@ function generateCanonicalOptions({ request, property, data, routeConfig, today,
 
   for (let dayOffset = 0; dayOffset < MAX_SEARCH_DAYS; dayOffset += 1) {
     const date = addDays(today, dayOffset);
+    if (requireRequestedTarget && requestedDate && date !== requestedDate) continue;
     if (dateClosed(date, calendarSettings, data.calendarClosures)) continue;
     const dateAssignments = data.vans.map((van) => ({
       van,
@@ -371,105 +469,68 @@ function generateCanonicalOptions({ request, property, data, routeConfig, today,
       ),
     })).filter(({ van, assignment }) => vanCanReceiveAppointments(van, assignment));
     if (dateAssignments.length < allocations.length) continue;
+    if (requiredPrimaryVanId && !dateAssignments.some(({ van }) => van.id === requiredPrimaryVanId)) continue;
 
     for (const primaryTime of primaryCandidateTimes) {
       if (!primaryTime) continue;
       if (date === today && primaryTime <= currentTime) continue;
       if (!timeAllowed(primaryTime, timeConstraint)) continue;
 
-      const selected = [];
-      const remainingVans = [...dateAssignments];
-      let possible = true;
-      for (const allocation of allocations) {
-        const allowedTimes = candidateTimesForAllocation(allocation, primaryTime);
-        const candidates = [];
-        for (const { van, assignment } of remainingVans) {
-          for (const allocationTime of allowedTimes) {
-            if (!allocationTime) continue;
-            if (date === today && allocationTime <= currentTime) continue;
-            const candidate = candidateAvailability({
-              date,
-              time: allocationTime,
-              allocation,
-              van,
-              assignment,
-              data,
-              routeConfig,
-              candidateZone,
-            });
-            if (!candidate) continue;
-            candidates.push({
-              ...candidate,
-              time: allocationTime,
-              endTime: endTime(allocationTime, candidate.slots),
-              role: allocation.role,
-              block: blockForTime(allocationTime),
-            });
-          }
-        }
-        candidates.sort((left, right) => {
-          const routeDifference = right.routeScore - left.routeScore;
-          if (routeDifference) return routeDifference;
-          if (allocation.role === "support") {
-            const leftMorning = left.block === "morning" ? 1 : 0;
-            const rightMorning = right.block === "morning" ? 1 : 0;
-            if (leftMorning !== rightMorning) return rightMorning - leftMorning;
-          }
-          return left.time.localeCompare(right.time);
-        });
-        const best = candidates[0];
-        if (!best) {
-          possible = false;
-          break;
-        }
-        selected.push(best);
-        const index = remainingVans.findIndex((item) => item.van.id === best.vanId);
-        if (index >= 0) remainingVans.splice(index, 1);
-      }
-      if (!possible) continue;
-
-      const primary = selected.find((item) => item.role === "primary") || selected[0];
-      const totalRouteScore = selected.reduce((sum, item) => sum + item.routeScore, 0);
-      const datePenalty = dayOffset * 9;
-      const requestedDateBonus = requestedDate && date === requestedDate ? 500 : 0;
-      const requestedDateDistancePenalty = requestedDate
-        ? Math.abs(dateDistanceInDays(date, requestedDate)) * 18
-        : 0;
-      const exactTime = timeConstraint.kind === "exact" ? timeConstraint.time : "";
-      const requestedTimeBonus = exactTime && primary.time === exactTime ? 180 : 0;
-      const morningBonus = !timeConstraint.kind && MORNING_SLOTS.includes(primary.time) ? 8 : 0;
-      const score = 1_000
-        + totalRouteScore
-        + requestedDateBonus
-        + requestedTimeBonus
-        + morningBonus
-        - datePenalty
-        - requestedDateDistancePenalty;
-
-      options.push({
-        id: `opt-${hashId(
-          `${date}|${primary.time}|${selected.map((item) => `${item.vanId}:${item.time}`).join(",")}|${work.quantity}|${preset.id}`,
-          16,
-        )}`,
+      const combinations = assignmentCombinations({
+        allocations,
+        dateAssignments,
         date,
-        time: primary.time,
-        endTime: primary.endTime,
-        quantity: work.quantity,
-        address,
-        zone: candidateZone?.label || cleanText(property.operationalZone || property.zone, 80),
-        presetId: preset.id,
-        presetLabel: preset.label,
-        durationMinutesPerUnit: preset.durationMinutesPerUnit,
-        serviceId: serviceIdForRequest(request, preset, data.services),
-        assignments: selected,
-        score,
-        requestedDateMatch: Boolean(requestedDate && date === requestedDate),
-        requestedTimeMatch: Boolean(exactTime && primary.time === exactTime),
-        largeSingleProperty,
-        allDayCustomerNotice: largeSingleProperty
-          && operationalRules.customerCommunication.largeJobAllDayNotice,
-        internalSupportCount: Math.max(0, selected.length - 1),
+        primaryTime,
+        data,
+        routeConfig,
+        candidateZone,
+        requiredPrimaryVanId,
       });
+      for (const selected of combinations) {
+        const primary = selected.find((item) => item.role === "primary") || selected[0];
+        if (!primary) continue;
+        const totalRouteScore = selected.reduce((sum, item) => sum + item.routeScore, 0);
+        const datePenalty = dayOffset * 9;
+        const requestedDateBonus = requestedDate && date === requestedDate ? 500 : 0;
+        const requestedDateDistancePenalty = requestedDate
+          ? Math.abs(dateDistanceInDays(date, requestedDate)) * 18
+          : 0;
+        const exactTime = timeConstraint.kind === "exact" ? timeConstraint.time : "";
+        const requestedTimeBonus = exactTime && primary.time === exactTime ? 180 : 0;
+        const morningBonus = !timeConstraint.kind && MORNING_SLOTS.includes(primary.time) ? 8 : 0;
+        const score = 1_000
+          + totalRouteScore
+          + requestedDateBonus
+          + requestedTimeBonus
+          + morningBonus
+          - datePenalty
+          - requestedDateDistancePenalty;
+
+        options.push({
+          id: `opt-${hashId(
+            `${date}|${primary.time}|${selected.map((item) => `${item.vanId}:${item.time}`).join(",")}|${work.quantity}|${preset.id}`,
+            16,
+          )}`,
+          date,
+          time: primary.time,
+          endTime: primary.endTime,
+          quantity: work.quantity,
+          address,
+          zone: candidateZone?.label || cleanText(property.operationalZone || property.zone, 80),
+          presetId: preset.id,
+          presetLabel: preset.label,
+          durationMinutesPerUnit: preset.durationMinutesPerUnit,
+          serviceId: serviceIdForRequest(request, preset, data.services),
+          assignments: selected,
+          score,
+          requestedDateMatch: Boolean(requestedDate && date === requestedDate),
+          requestedTimeMatch: Boolean(exactTime && primary.time === exactTime),
+          largeSingleProperty,
+          allDayCustomerNotice: largeSingleProperty
+            && operationalRules.customerCommunication.largeJobAllDayNotice,
+          internalSupportCount: Math.max(0, selected.length - 1),
+        });
+      }
     }
   }
 
@@ -482,11 +543,21 @@ function generateCanonicalOptions({ request, property, data, routeConfig, today,
     if (seen.has(key)) continue;
     seen.add(key);
     unique.push(option);
-    if (unique.length >= CLIENT_OPTION_LIMIT) break;
   }
 
+  const targetOptions = requireRequestedTarget
+    ? unique.filter((option) => (
+      (!requestedDate || option.date === requestedDate)
+      && (timeConstraint.kind !== "exact" || option.time === timeConstraint.time)
+      && (!requiredPrimaryVanId || option.assignments?.[0]?.vanId === requiredPrimaryVanId)
+    ))
+    : unique;
+  const clientOptions = requireRequestedTarget
+    ? targetOptions.slice(0, CLIENT_OPTION_LIMIT)
+    : selectClientOptions(targetOptions);
+
   return {
-    options: selectClientOptions(unique),
+    options: clientOptions,
     preset,
     quantity: work.quantity,
     allocations,
@@ -505,14 +576,16 @@ function generateCanonicalOptions({ request, property, data, routeConfig, today,
       )
     ),
     candidateZone,
-    reason: unique.length ? "available" : "no-availability",
+    reason: clientOptions.length ? "available" : "no-availability",
   };
 }
 
 module.exports = {
+  ASSIGNMENT_COMBINATION_LIMIT,
   CANONICAL_SCHEDULING_ENGINE_VERSION,
   CLIENT_OPTION_LIMIT,
   DEFAULT_OPERATIONAL_RULES,
+  assignmentCombinations,
   buildAllocationPlan,
   exactPreset,
   generateCanonicalOptions,
@@ -522,5 +595,6 @@ module.exports = {
   selectClientOptions,
   serviceIdForRequest,
   singleWork,
+  sortAllocationCandidates,
   timeAllowed,
 };
