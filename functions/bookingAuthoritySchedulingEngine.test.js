@@ -29,14 +29,7 @@ const canonicalStandardService = {
   serviceDefinition: {
     version: 1,
     bookingCode: "standard_service",
-    quantityUnit: "ac_unit",
-    duration: { mode: "per_unit", minutes: 60 },
-    allocation: {
-      mode: "primary_with_support",
-      differentPropertyDailyMaxUnits: 6,
-      primaryMaxUnits: 7,
-      supportSelection: "operator",
-    },
+    duration: { minutes: 60 },
   },
 };
 
@@ -105,7 +98,7 @@ function supportTimes(result) {
 }
 
 test("canonical scheduling engine has an explicit version", () => {
-  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 4);
+  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 5);
 });
 
 test("canonical scheduling rejects mixed work types instead of guessing", () => {
@@ -121,15 +114,35 @@ test("canonical scheduling rejects mixed work types instead of guessing", () => 
   );
 });
 
-test("canonical service catalog overrides the legacy appointment preset for duration and allocation", () => {
+test("canonical service catalog overrides legacy duration while Scheduling owns allocation", () => {
   const data = schedulingData();
   data.businessSettings[0].presets[0].durationMinutesPerUnit = 90;
   const preset = exactPreset(data, { presetId: "standard_service", serviceId: "s1" });
   assert.equal(preset.source, "service_catalog");
   assert.equal(preset.serviceId, "s1");
   assert.equal(preset.durationMinutesPerUnit, 60);
-  assert.equal(preset.allocation.mode, "primary_with_support");
-  assert.equal(preset.allocation.primaryMaxUnits, 7);
+  assert.equal(preset.durationMode, "per_unit");
+  assert.equal(preset.allocation, undefined);
+});
+
+test("stale allocation metadata on a service cannot override Scheduling policy", () => {
+  const data = schedulingData();
+  data.services[0] = {
+    ...data.services[0],
+    serviceDefinition: {
+      ...data.services[0].serviceDefinition,
+      quantityUnit: "ac_unit",
+      duration: { mode: "fixed", minutes: 60 },
+      allocation: { mode: "single_van", supportSelection: "none" },
+    },
+  };
+  const preset = exactPreset(data, { presetId: "standard_service", serviceId: "s1" });
+  const plan = buildAllocationPlan(8, preset.durationMinutesPerUnit, 4, preset, {});
+  assert.equal(preset.durationMode, "per_unit");
+  assert.equal(preset.allocation, undefined);
+  assert.equal(plan.length, 2);
+  assert.equal(plan[0].quantity, 7);
+  assert.equal(plan[1].quantity, 1);
 });
 
 test("legacy appointment presets remain a temporary fallback for unmigrated services", () => {
@@ -154,7 +167,7 @@ test("support start candidates are broad and physical capacity decides which one
   assert.deepEqual(supportStartTimes(7), []);
 });
 
-test("canonical Standard Service uses one primary van through seven and one support van above seven", () => {
+test("Scheduling policy uses one primary van through seven Standard Services and one support van above seven", () => {
   const preset = exactPreset(schedulingData(), { presetId: "standard_service", serviceId: "s1" });
 
   assert.deepEqual(
@@ -187,7 +200,7 @@ test("canonical Standard Service uses one primary van through seven and one supp
   assert.deepEqual(
     buildAllocationPlan(14, 60, 4, preset, {}),
     [],
-    "one support van cannot physically absorb seven additional one-hour units in the six-slot operating day",
+    "one support van cannot physically absorb seven additional one-hour executions in the six-slot operating day",
   );
 });
 

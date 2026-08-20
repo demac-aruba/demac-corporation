@@ -23,16 +23,19 @@ export type CatalogPricingDefinition = {
 export type ServiceDefinition = {
   version: 1;
   bookingCode: string;
-  quantityUnit: string;
   duration: {
-    mode: ServiceDurationMode;
     minutes: number;
+    // Legacy-read compatibility only. Canonical writes always mean duration per execution.
+    mode?: ServiceDurationMode;
   };
-  allocation: {
+  // Legacy-read compatibility only. Booking quantity is now a plain execution count.
+  quantityUnit?: string;
+  // Legacy-read compatibility only. Van allocation belongs to Scheduling, not the service catalog.
+  allocation?: {
     mode: ServiceAllocationMode;
     differentPropertyDailyMaxUnits?: number;
     primaryMaxUnits?: number;
-    supportSelection: 'operator' | 'none';
+    supportSelection?: 'operator' | 'none';
   };
 };
 
@@ -141,14 +144,22 @@ export function normalizedCatalogPricing(input?: Partial<CatalogPricingDefinitio
   };
 }
 
+function normalizedServiceDefinition(input: ServiceDefinition | undefined, name: string): ServiceDefinition | undefined {
+  if (!input) return undefined;
+  const duration = Math.max(30, Math.min(720, Math.round(Number(input.duration?.minutes || 60) / 15) * 15));
+  return {
+    version: 1,
+    bookingCode: bookingCodeFromName(input.bookingCode || name),
+    duration: { minutes: duration },
+  };
+}
+
 export function legacyServiceDefinition(item: CatalogItem): ServiceDefinition {
   const duration = Math.max(30, Math.round(Number(item.durationMinutes || 60) / 15) * 15);
   return {
     version: 1,
     bookingCode: bookingCodeFromName(item.name) || `service_${item.id}`,
-    quantityUnit: 'ac_unit',
-    duration: { mode: 'per_unit', minutes: duration },
-    allocation: { mode: 'single_van', supportSelection: 'none' },
+    duration: { minutes: duration },
   };
 }
 
@@ -167,9 +178,7 @@ export function draftFromCatalogItem(item?: CatalogItem): CatalogDraft {
       serviceDefinition: {
         version: 1,
         bookingCode: '',
-        quantityUnit: 'ac_unit',
-        duration: { mode: 'per_unit', minutes: 60 },
-        allocation: { mode: 'single_van', supportSelection: 'none' },
+        duration: { minutes: 60 },
       },
     };
   }
@@ -185,33 +194,8 @@ export function draftFromCatalogItem(item?: CatalogItem): CatalogDraft {
     basePrice: Math.max(0, Number(item.basePrice || 0)),
     pricingDefinition: normalizedCatalogPricing(item.pricingDefinition, item.basePrice),
     serviceDefinition: type === 'Servicio'
-      ? item.serviceDefinition ?? legacyServiceDefinition(item)
+      ? normalizedServiceDefinition(item.serviceDefinition ?? legacyServiceDefinition(item), item.name)
       : undefined,
-  };
-}
-
-function normalizedServiceDefinition(input: ServiceDefinition | undefined, name: string): ServiceDefinition | undefined {
-  if (!input) return undefined;
-  const duration = Math.max(30, Math.min(720, Math.round(Number(input.duration.minutes || 60) / 15) * 15));
-  const mode: ServiceAllocationMode = input.allocation.mode === 'primary_with_support' ? 'primary_with_support' : 'single_van';
-  const regular = Math.max(1, Math.min(24, Math.round(Number(input.allocation.differentPropertyDailyMaxUnits || 6))));
-  const primary = Math.max(regular, Math.min(48, Math.round(Number(input.allocation.primaryMaxUnits || Math.max(regular, 7)))));
-  return {
-    version: 1,
-    bookingCode: bookingCodeFromName(input.bookingCode || name),
-    quantityUnit: compactText(input.quantityUnit) || 'ac_unit',
-    duration: {
-      mode: input.duration.mode === 'fixed' ? 'fixed' : 'per_unit',
-      minutes: duration,
-    },
-    allocation: mode === 'primary_with_support'
-      ? {
-        mode,
-        differentPropertyDailyMaxUnits: regular,
-        primaryMaxUnits: primary,
-        supportSelection: 'operator',
-      }
-      : { mode, supportSelection: 'none' },
   };
 }
 

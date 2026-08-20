@@ -19,27 +19,40 @@ const canonicalStandardService = {
   serviceDefinition: {
     version: 1,
     bookingCode: "standard_service",
-    quantityUnit: "ac_unit",
-    duration: { mode: "per_unit", minutes: 60 },
-    allocation: {
-      mode: "primary_with_support",
-      differentPropertyDailyMaxUnits: 6,
-      primaryMaxUnits: 7,
-      supportSelection: "operator",
-    },
+    duration: { minutes: 60 },
   },
 };
 
-test("canonical service definition is normalized from the services collection", () => {
+test("canonical service definition exposes identity and duration per execution only", () => {
   const result = normalizeCatalogService(canonicalStandardService);
   assert.equal(result.id, "standard_service");
   assert.equal(result.serviceId, "service-standard");
   assert.equal(result.durationMinutesPerUnit, 60);
   assert.equal(result.durationMode, "per_unit");
-  assert.equal(result.allocation.mode, "primary_with_support");
-  assert.equal(result.allocation.differentPropertyDailyMaxUnits, 6);
-  assert.equal(result.allocation.primaryMaxUnits, 7);
+  assert.equal(result.allocation, undefined);
+  assert.equal(result.quantityUnit, undefined);
   assert.equal(result.source, SERVICE_CATALOG_SOURCE);
+});
+
+test("legacy service-definition allocation and quantity metadata are ignored by the canonical runtime", () => {
+  const result = normalizeCatalogService({
+    ...canonicalStandardService,
+    serviceDefinition: {
+      ...canonicalStandardService.serviceDefinition,
+      quantityUnit: "ac_unit",
+      duration: { mode: "fixed", minutes: 90 },
+      allocation: {
+        mode: "primary_with_support",
+        differentPropertyDailyMaxUnits: 3,
+        primaryMaxUnits: 4,
+        supportSelection: "operator",
+      },
+    },
+  });
+  assert.equal(result.durationMinutesPerUnit, 90);
+  assert.equal(result.durationMode, "per_unit");
+  assert.equal(result.allocation, undefined);
+  assert.equal(result.quantityUnit, undefined);
 });
 
 test("products and services without canonical definitions do not masquerade as canonical services", () => {
