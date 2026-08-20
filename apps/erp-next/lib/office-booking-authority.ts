@@ -1,4 +1,9 @@
-import type { AppointmentRecipientSelection, NewBookingContactLink } from './customer-contacts';
+import type {
+  AppointmentRecipientSelection,
+  BookingContact,
+  BookingContactAssignment,
+  NewBookingContactLink,
+} from './customer-contacts';
 import { firebaseClientConfig } from './firebase/client-config';
 import { requireFirebaseWebSession } from './firebase/session';
 
@@ -170,6 +175,15 @@ export function listOfficeBookingPresets(force = false) {
     if (presetCache?.promise === promise) presetCache = null;
   });
   return promise;
+}
+
+export function listOfficeContactDirectory(customerId?: string) {
+  return callOfficeBookingAuthority<{
+    success: true;
+    version: number;
+    contacts: BookingContact[];
+    assignments: BookingContactAssignment[];
+  }>('list_contact_directory', customerId ? { customerId } : {}, 8_000);
 }
 
 export function createOfficeCustomerWithProperty(input: {
