@@ -65,12 +65,12 @@ function operationalData(overrides = {}) {
 
 const currentSchedule = { date: "2098-12-20", time: "08:30" };
 
-test("provider exposes canonical provider v7", () => {
-  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v7");
+test("provider exposes canonical provider v8", () => {
+  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v8");
 });
 
 test("canonical scheduling engine is versioned independently", () => {
-  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 3);
+  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 4);
 });
 
 test("provider verifies the exact ERP customer/property relationship", () => {

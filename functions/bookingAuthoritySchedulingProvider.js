@@ -34,7 +34,7 @@ const {
 } = require("./bookingAuthoritySchedulingEngine");
 const { canonicalizeSchedulingData } = require("./bookingVanIdentity");
 
-const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v7";
+const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v8";
 
 async function loadSchedulingData(db, startDate, endDate) {
   const workOrderQuery = db.collection("workOrders").where("date", ">=", startDate).where("date", "<=", endDate);
@@ -196,13 +196,25 @@ function buildWorkOrders({ appointment, option, request, customer, property, now
     const presetLabel = option.presetLabel || primaryWork.presetId;
     const problem = `${presetLabel} para ${equipmentLabel}.`;
     const isPrimary = index === 0;
+    const durationMinutes = Math.max(
+      30,
+      Number(
+        assignment.durationMinutes
+        || (option.durationMode === "fixed"
+          ? option.durationMinutesPerUnit
+          : quantity * option.durationMinutesPerUnit),
+      ) || 60,
+    );
     const workItem = {
       id: primaryWork.id || primaryWork.presetId,
       presetId: primaryWork.presetId,
       serviceId: primaryWork.serviceId || option.serviceId || "",
       label: presetLabel,
       quantity,
+      durationMinutes,
       durationMinutesPerUnit: option.durationMinutesPerUnit,
+      durationMode: option.durationMode || "per_unit",
+      serviceDefinitionVersion: option.serviceDefinitionVersion || 0,
     };
     return {
       id,
@@ -224,14 +236,16 @@ function buildWorkOrders({ appointment, option, request, customer, property, now
       appointmentWorkType: primaryWork.presetId,
       appointmentPresetId: primaryWork.presetId,
       appointmentWorkLabel: presetLabel,
-      appointmentDurationMinutes: quantity * option.durationMinutesPerUnit,
+      appointmentDurationMinutes: durationMinutes,
+      appointmentDurationMode: option.durationMode || "per_unit",
+      serviceDefinitionVersion: option.serviceDefinitionVersion || 0,
       appointmentWorkItems: [workItem],
       appointmentAssignmentRole: isPrimary ? "primary" : "support",
       parentWorkOrderId: isPrimary ? undefined : `WO-${appointment.appointmentId}-1`,
       fullDaySingleProperty: assignment.fullDay === true,
       amount: 0,
       paid: 0,
-      schedulingMode: "perUnit",
+      schedulingMode: option.durationMode === "fixed" ? "fixed" : "perUnit",
       airConditionerCount: quantity,
       scheduledSlots: assignment.slots,
       whatsappNotificationsEnabled: isPrimary && Boolean(recipient),
@@ -251,7 +265,7 @@ function operationalMoveResult({ request, property, data, routeConfig, date, tim
   }
 
   const work = singleWork(request);
-  const preset = exactPreset(data, work.presetId);
+  const preset = exactPreset(data, work);
   const allocations = buildAllocationPlan(
     work.quantity,
     preset.durationMinutesPerUnit,
@@ -286,7 +300,7 @@ function operationalMoveResult({ request, property, data, routeConfig, date, tim
 
   const address = cleanText(property.address || property.addressRaw || property.addressNormalized, 500);
   const option = {
-    id: `opt-${hashId(`${date}|${time}|${vanId}|${work.quantity}|${preset.id}|operational-move`, 16)}`,
+    id: `opt-${hashId(`${date}|${time}|${vanId}|${work.quantity}|${preset.id}|${preset.serviceId || ""}|operational-move`, 16)}`,
     date,
     time,
     endTime: endTime(time, availability.slots),
@@ -296,6 +310,8 @@ function operationalMoveResult({ request, property, data, routeConfig, date, tim
     presetId: preset.id,
     presetLabel: preset.label,
     durationMinutesPerUnit: preset.durationMinutesPerUnit,
+    durationMode: preset.durationMode || "per_unit",
+    serviceDefinitionVersion: preset.serviceDefinitionVersion || 0,
     serviceId: serviceIdForRequest(request, preset, data.services),
     assignments: [{ ...availability, time, endTime: endTime(time, availability.slots), role: "primary" }],
     score: 0,
@@ -437,6 +453,7 @@ function createSchedulingProvider({ db }) {
           time: startTime,
           allocation: {
             quantity: requested.quantity,
+            durationMinutes: requested.durationMinutes,
             slots: requested.slots,
             fullDay: requested.fullDay,
           },
