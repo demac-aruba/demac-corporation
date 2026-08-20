@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { loadFirebasePrincipal } from '@/lib/firebase/principal';
-import { invalidateOfficeBookingPresetCache } from '@/lib/office-booking-authority';
 import {
   catalogItemType,
   catalogMigrationState,
@@ -117,7 +116,7 @@ export function ServiceCatalogWorkspace() {
     const next = draftFromCatalogItem();
     next.itemType = type;
     next.category = type;
-    next.featured = type === 'Servicio';
+    next.featured = false;
     next.serviceDefinition = type === 'Servicio' ? next.serviceDefinition : undefined;
     setDraft(next);
     setEditingId(null);
@@ -136,7 +135,7 @@ export function ServiceCatalogWorkspace() {
     setDraft((current) => ({
       ...current,
       itemType,
-      featured: itemType === 'Servicio' ? current.featured : false,
+      featured: false,
       category: current.category === 'Servicio' || current.category === 'Producto' ? itemType : current.category,
       serviceDefinition: itemType === 'Servicio'
         ? current.serviceDefinition ?? draftFromCatalogItem().serviceDefinition
@@ -181,7 +180,6 @@ export function ServiceCatalogWorkspace() {
         actorName: principal.displayName,
       });
       const saved = existing ? await updateCatalogItem(item) : await createCatalogItem(item);
-      invalidateOfficeBookingPresetCache();
       setItems((current) => [...current.filter((candidate) => candidate.id !== saved.id), saved]
         .sort((left, right) => `${catalogItemType(left)}-${left.name}`.localeCompare(`${catalogItemType(right)}-${right.name}`)));
       setSelectedId(saved.id);
@@ -200,7 +198,6 @@ export function ServiceCatalogWorkspace() {
     setMessage('');
     try {
       const saved = await setCatalogItemActive(item.id, item.active === false, principal.userId, principal.displayName);
-      invalidateOfficeBookingPresetCache();
       setItems((current) => current.map((candidate) => candidate.id === saved.id ? saved : candidate));
       setMessage(`${saved.name} is now ${saved.active === false ? 'inactive' : 'active'}.`);
     } catch (cause) {
@@ -216,7 +213,7 @@ export function ServiceCatalogWorkspace() {
         <div>
           <div className={styles.eyebrow}>Canonical Firestore Master Data</div>
           <h1>Services & Products</h1>
-          <p>One commercial catalog for DEMAC. Services keep a simple selling price and duration per execution. Scheduling owns van allocation, capacity, conflicts and support resources. Product stock remains in Inventory rather than being duplicated in this record.</p>
+          <p>DEMAC's detailed commercial catalog for prices, BTU-specific services, estimates and reporting. Appointment Scheduling has a separate operational Work Types configuration so the office can book quickly even when the exact BTU or equipment detail is not known yet.</p>
         </div>
         <div className={styles.actions}>
           <button className={styles.button} type="button" onClick={() => void refresh()} disabled={loading || saving}>Refresh</button>
@@ -280,11 +277,11 @@ export function ServiceCatalogWorkspace() {
 
               {catalogItemType(selected) === 'Servicio' && selected.serviceDefinition ? (
                 <section className={styles.section}>
-                  <h3>Service timing</h3>
-                  <p>The duration below is for one execution of this service. Booking supplies the execution count; Scheduling decides van allocation and capacity.</p>
+                  <h3>Commercial service timing</h3>
+                  <p>This duration describes one execution of this detailed catalog service. New Appointment uses the separate Scheduling Work Type duration unless an exact catalog service is explicitly referenced later in the workflow.</p>
                   <div className={styles.ruleGrid}>
                     <div><span>Duration per execution</span><strong>{formatHours(selected.serviceDefinition.duration.minutes)}</strong></div>
-                    <div><span>Scheduling authority</span><strong>Calendar, vans, capacity & support</strong></div>
+                    <div><span>Appointment quick types</span><strong>System Settings → Appointment Work Types</strong></div>
                   </div>
                 </section>
               ) : null}
@@ -299,21 +296,22 @@ export function ServiceCatalogWorkspace() {
         <div className={styles.overlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) setEditorOpen(false); }}>
           <aside className={styles.drawer} role="dialog" aria-modal="true" aria-label="Catalog editor">
             <header className={styles.drawerHeader}>
-              <div><div className={styles.eyebrow}>{editingId ? 'Edit canonical record' : 'New canonical record'}</div><h2>{editingId ? 'Edit catalog item' : 'Create catalog item'}</h2><p>Saving writes directly to the existing Firestore <code>services</code> collection. No parallel catalog is created.</p></div>
+              <div><div className={styles.eyebrow}>{editingId ? 'Edit canonical record' : 'New canonical record'}</div><h2>{editingId ? 'Edit catalog item' : 'Create catalog item'}</h2><p>Saving writes directly to the existing Firestore <code>services</code> collection. No parallel commercial catalog is created.</p></div>
               <button className={styles.close} type="button" disabled={saving} onClick={() => setEditorOpen(false)}>×</button>
             </header>
             <div className={styles.drawerBody}>
               {editorError ? <div className={`${styles.notice} ${styles.error}`}>{editorError}</div> : null}
 
               <section className={styles.formSection}>
-                <header><strong>Basic info</strong><span>Simple commercial identity shared by sales, booking and work orders.</span></header>
+                <header><strong>Basic info</strong><span>Commercial identity shared by sales, estimates, work orders and reporting.</span></header>
                 <div className={styles.grid2}>
                   <label className={styles.field}><span>Name</span><input className={styles.input} value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /></label>
                   <label className={styles.field}><span>Type</span><select className={styles.select} value={draft.itemType} onChange={(event) => updateItemType(event.target.value as CatalogItemType)} disabled={Boolean(editingId)}><option value="Servicio">Service</option><option value="Producto">Product</option></select><small>{editingId ? 'Type is fixed after creation to protect catalog references.' : 'Choose whether this record is a service or sellable product.'}</small></label>
                   <label className={styles.field}><span>SKU</span><input className={styles.input} value={draft.sku} onChange={(event) => setDraft((current) => ({ ...current, sku: event.target.value }))} /></label>
                   <label className={styles.field}><span>Category</span><input className={styles.input} value={draft.category} onChange={(event) => setDraft((current) => ({ ...current, category: event.target.value }))} /></label>
                 </div>
-                <div style={{ display: 'flex', gap: 18, marginTop: 9 }}><label className={styles.checkbox}><input type="checkbox" checked={draft.active} onChange={(event) => setDraft((current) => ({ ...current, active: event.target.checked }))} />Active</label>{draft.itemType === 'Servicio' ? <label className={styles.checkbox}><input type="checkbox" checked={draft.featured} onChange={(event) => setDraft((current) => ({ ...current, featured: event.target.checked }))} />Common booking service</label> : null}</div>
+                <div style={{ display: 'flex', gap: 18, marginTop: 9 }}><label className={styles.checkbox}><input type="checkbox" checked={draft.active} onChange={(event) => setDraft((current) => ({ ...current, active: event.target.checked }))} />Active</label></div>
+                {draft.itemType === 'Servicio' ? <div className={styles.notice} style={{ marginTop: 10 }}>Need this service as a fast appointment category? Configure it separately in <strong>System Settings → Appointment Work Types</strong>. Detailed BTU services remain here without cluttering Scheduling.</div> : null}
               </section>
 
               <section className={styles.formSection}>
@@ -327,7 +325,7 @@ export function ServiceCatalogWorkspace() {
 
               {draft.itemType === 'Servicio' && draft.serviceDefinition ? (
                 <section className={styles.formSection}>
-                  <header><strong>Service duration</strong><span>Enter the time for one execution of this service. Booking chooses how many times it is performed; Scheduling handles vans and capacity.</span></header>
+                  <header><strong>Commercial service duration</strong><span>Enter the expected time for one execution of this detailed service. Scheduling quick categories are configured separately in System Settings.</span></header>
                   <div className={styles.grid2}>
                     <label className={styles.field}><span>Duration (hours)</span><input className={styles.input} type="number" min="0.5" max="12" step="0.25" value={Math.round((draft.serviceDefinition.duration.minutes / 60) * 100) / 100} onChange={(event) => updateDurationHours(fieldNumber(event.target.value))} /><small>Examples: 0.5 = 30 min · 1 = 60 min · 1.5 = 90 min · 2 = 120 min.</small></label>
                   </div>
