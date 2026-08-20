@@ -366,8 +366,6 @@ function createOfficeBookingApi({
     const clientRef = db.collection("clients").doc(clientId);
     const propertyRef = db.collection("properties").doc(propertyId);
     await db.runTransaction(async (transaction) => {
-      transaction.set(clientRef, customer);
-      transaction.set(propertyRef, property);
       await writeContactLinks(transaction, db, {
         clientId,
         propertyId,
@@ -375,6 +373,8 @@ function createOfficeBookingApi({
         identity,
         now,
       });
+      transaction.set(clientRef, customer);
+      transaction.set(propertyRef, property);
     });
     return { success: true, version: OFFICE_BOOKING_API_VERSION, customer, property };
   }
@@ -398,7 +398,6 @@ function createOfficeBookingApi({
           { customerId: clientId },
         );
       }
-      transaction.set(propertyRef, property);
       await writeContactLinks(transaction, db, {
         clientId,
         propertyId,
@@ -406,6 +405,7 @@ function createOfficeBookingApi({
         identity,
         now,
       });
+      transaction.set(propertyRef, property);
     });
     return { success: true, version: OFFICE_BOOKING_API_VERSION, property };
   }
