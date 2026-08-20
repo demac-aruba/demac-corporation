@@ -26,7 +26,7 @@ const canonicalStandardService = {
 };
 
 function workTypeSettings(presets) {
-  return [{ id: "appointment-work-presets", presets }];
+  return [{ id: "appointment-work-presets", workTypesVersion: 2, presets }];
 }
 
 test("canonical service definition exposes commercial identity and duration per execution only", () => {
@@ -109,13 +109,17 @@ test("Scheduling Work Type settings control label, duration, active state and or
   assert.equal(merged.some((item) => item.id === "deep_cleaning"), false);
 });
 
-test("legacy special installation variants collapse into one Extended Labor work type", () => {
-  const merged = mergeBookablePresets([], workTypeSettings([
-    { id: "rooftop_installation", label: "Rooftop", durationMinutesPerUnit: 180, active: true, sortOrder: 40 },
-    { id: "second_floor_installation", label: "Second floor", durationMinutesPerUnit: 180, active: true, sortOrder: 41 },
-  ]));
-  const extended = merged.filter((item) => item.id === "installation_extended_labor");
-  assert.equal(extended.length, 1);
+test("legacy schema is replaced by the approved eight quick Work Types", () => {
+  const merged = mergeBookablePresets([], [{
+    id: "appointment-work-presets",
+    presets: [
+      { id: "rooftop_installation", label: "Rooftop", durationMinutesPerUnit: 180, active: true },
+      { id: "second_floor_installation", label: "Second floor", durationMinutesPerUnit: 180, active: true },
+    ],
+  }]);
+  assert.equal(merged.length, 8);
+  assert.equal(merged.filter((item) => item.id === "installation_extended_labor").length, 1);
+  assert.equal(merged.some((item) => /Rooftop|Second floor/.test(item.label)), false);
 });
 
 test("catalog lookup prefers an explicit commercial service id", () => {
