@@ -218,15 +218,23 @@ export function EmployeeAttendanceCommandCenter() {
   }, [attendance, employeeVan, employees, operations, period]);
 
   const totals = useMemo(() => periodSummaries.reduce((acc, row) => ({
-    regular: acc.regular + row.regular,
     overtime: acc.overtime + row.overtime,
     ao: acc.ao + row.ao,
     vacation: acc.vacation + row.vacation,
     nwnp: acc.nwnp + row.nwnp,
-    paidFree: acc.paidFree + row.paidFree,
     advances: acc.advances + row.advances,
-  }), { regular: 0, overtime: 0, ao: 0, vacation: 0, nwnp: 0, paidFree: 0, advances: 0 }), [periodSummaries]);
+  }), { overtime: 0, ao: 0, vacation: 0, nwnp: 0, advances: 0 }), [periodSummaries]);
 
+  const exceptionSummaries = useMemo(() => periodSummaries.filter((summary) =>
+    summary.exceptionDays > 0
+    || summary.overtime > 0
+    || summary.ao > 0
+    || summary.vacation > 0
+    || summary.nwnp > 0
+    || summary.lateMinutes > 0
+    || summary.advances > 0
+  ), [periodSummaries]);
+  const totalExceptionDays = useMemo(() => exceptionSummaries.reduce((sum, summary) => sum + summary.exceptionDays, 0), [exceptionSummaries]);
   const periodAdvances = useMemo(() => (attendance.advances ?? []).filter((advance) => advance.payrollPeriodId === period.id).sort((a, b) => b.date.localeCompare(a.date)), [attendance.advances, period.id]);
   const selectedSummary = periodSummaries.find((summary) => summary.employee.id === selectedEmployee?.id);
   const selectedRecord = selectedEmployee ? recordsFor(selectedEmployee, selectedDate) : null;
@@ -238,6 +246,7 @@ export function EmployeeAttendanceCommandCenter() {
   const selectedRegularHours = selectedRecord && draft ? Math.max(0, selectedRecord.schedule.scheduledMinutes / 60 - (['Sick', 'Vacation', 'Absent'].includes(draft.status) ? selectedExceptionHours : 0)) : 0;
   const normalScheduleNeedsNoRecord = Boolean(selectedRecord?.assumedRegular && draft?.status === 'Present' && (draft?.overtimeMinutes ?? 0) === 0 && !draft?.notes.trim());
   const selectedAbsenceRanges = useMemo(() => (operations?.staffAbsences ?? []).filter((item) => item.staffId === selectedEmployee?.id && item.active !== false).sort((a, b) => String(b.fromDate ?? '').localeCompare(String(a.fromDate ?? ''))).slice(0, 4), [operations?.staffAbsences, selectedEmployee?.id]);
+  const activeSectionLabel = tab === 'calendar' ? 'Employee Calendar' : tab === 'advances' ? 'Salary Advances' : 'Overview';
 
   function exportAccountingCsv() {
     const headers = ['Employee', 'Role', 'Van / Team', 'Scheduled Hours', 'Regular Hours', 'Overtime Hours', 'AO Hours', 'Vacation Hours', 'NWNP Hours', 'Paid Free Hours', 'Salary Advances Afl', 'Late Minutes', 'Exception Days', 'Manual Records'];
@@ -280,6 +289,46 @@ export function EmployeeAttendanceCommandCenter() {
   }
 
   if (loading) return <div className={styles.loadingCard}>Loading Attendance & Timekeeping…</div>;
+
+  const overviewWorkspace = (
+    <>
+      <section className={styles.metricsGrid}>
+        <Metric icon="timer" tone="purple" label="Overtime" value={hours(totals.overtime)} sub="Recorded overtime this payroll period" />
+        <Metric icon="heart" tone="pink" label="AO / Sick" value={hours(totals.ao)} sub="Full + partial exception hours" />
+        <Metric icon="ban" tone="orange" label="No Work No Pay" value={hours(totals.nwnp)} sub="Unpaid exception hours" />
+        <Metric icon="vacation" tone="green" label="Vacation" value={hours(totals.vacation)} sub="Recorded vacation exception hours" />
+        <Metric icon="wallet" tone="blue" label="Salary Advances" value={money(totals.advances)} sub={`${periodAdvances.length} record${periodAdvances.length === 1 ? '' : 's'} this period`} />
+      </section>
+
+      <section className={styles.advanceLedger}>
+        <div className={styles.sectionHeader}>
+          <div>
+            <span className={styles.sectionEyebrow}>Exception-driven payroll overview</span>
+            <h2>Payroll Exceptions by Employee</h2>
+            <p>Only employees with a payroll-relevant exception or salary advance appear here. Normal scheduled attendance is intentionally omitted.</p>
+          </div>
+          <span className={styles.totalPill}>{exceptionSummaries.length} employees · {totalExceptionDays} exception days</span>
+        </div>
+        <div className={styles.tableWrap}>
+          <table className={styles.advanceTable}>
+            <thead><tr><th>Employee</th><th>Team</th><th>Overtime</th><th>AO / Sick</th><th>Vacation</th><th>NWNP</th><th>Late</th><th>Advances</th><th>Exception Days</th></tr></thead>
+            <tbody>{exceptionSummaries.map((summary) => <tr key={summary.employee.id}>
+              <td><strong>{staffDisplayName(summary.employee)}</strong><br/><small>{summary.employee.role ?? summary.employee.employeeType ?? 'Employee'}</small></td>
+              <td>{summary.vanLabel}</td>
+              <td>{hours(summary.overtime)}</td>
+              <td>{hours(summary.ao)}</td>
+              <td>{hours(summary.vacation)}</td>
+              <td>{hours(summary.nwnp)}</td>
+              <td>{hoursAndMinutes(summary.lateMinutes)}</td>
+              <td>{money(summary.advances)}</td>
+              <td><strong>{summary.exceptionDays}</strong></td>
+            </tr>)}</tbody>
+          </table>
+        </div>
+        {!exceptionSummaries.length ? <div className={styles.empty}>No payroll exceptions or salary advances are recorded for this period.</div> : null}
+      </section>
+    </>
+  );
 
   const calendarWorkspace = (
     <>
@@ -379,7 +428,7 @@ export function EmployeeAttendanceCommandCenter() {
     <div className={styles.workspace}>
       <header className={styles.pageHeader}>
         <div className={styles.headerText}>
-          <div className={styles.breadcrumb}><span>Workforce</span><b>›</b><span>Attendance</span><b>›</b><span>Overview</span></div>
+          <div className={styles.breadcrumb}><span>Workforce</span><b>›</b><span>Attendance</span><b>›</b><span>{activeSectionLabel}</span></div>
           <h1>Attendance &amp; Timekeeping</h1>
           <p>Regular scheduled attendance is automatic. Record only exceptions such as late arrivals, AO/sick time, vacation, No Work No Pay, or overtime.</p>
         </div>
@@ -399,16 +448,8 @@ export function EmployeeAttendanceCommandCenter() {
       {error ? <div className={styles.error}>{error}</div> : null}
       {message ? <div className={styles.success}>{message}</div> : null}
 
-      <section className={styles.metricsGrid}>
-        <Metric icon="clock" tone="blue" label="Regular Hours" value={hours(totals.regular)} sub="Assumed from schedule unless exception" />
-        <Metric icon="timer" tone="purple" label="Overtime" value={hours(totals.overtime)} sub="After 5:00 PM" />
-        <Metric icon="heart" tone="pink" label="AO / Sick" value={hours(totals.ao)} sub="Full + partial hours" />
-        <Metric icon="ban" tone="orange" label="No Work No Pay" value={hours(totals.nwnp)} sub="Unpaid exception hours" />
-        <Metric icon="vacation" tone="green" label="Vacation / Paid Free" value={hours(totals.vacation + totals.paidFree)} sub={`Paid free ${hours(totals.paidFree)}`} />
-        <Metric icon="wallet" tone="blue" label="Salary Advances" value={money(totals.advances)} sub={`${periodAdvances.length} record${periodAdvances.length === 1 ? '' : 's'} this period`} />
-      </section>
-
-      {tab === 'overview' || tab === 'calendar' ? calendarWorkspace : null}
+      {tab === 'overview' ? overviewWorkspace : null}
+      {tab === 'calendar' ? calendarWorkspace : null}
 
       {tab === 'advances' ? (
         <div className={styles.advancesLayout}>
