@@ -78,7 +78,7 @@ function schedulingData({ canonical = true } = {}) {
     businessSettings: [{
       id: "appointment-work-presets",
       presets: [
-        legacyStandardPreset,
+        { ...legacyStandardPreset },
         {
           id: "deep_cleaning",
           label: "Deep cleaning",
