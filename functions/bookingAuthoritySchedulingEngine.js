@@ -23,7 +23,7 @@ const {
 const { candidateAvailability } = require("./bookingCapacityAvailability");
 const { resolveCatalogService } = require("./serviceCatalog");
 
-const CANONICAL_SCHEDULING_ENGINE_VERSION = 5;
+const CANONICAL_SCHEDULING_ENGINE_VERSION = 6;
 const CLIENT_OPTION_LIMIT = 2;
 const ASSIGNMENT_COMBINATION_LIMIT = 8;
 const OFFICE_TARGET_OPTION_LIMIT = ASSIGNMENT_COMBINATION_LIMIT;
@@ -121,7 +121,7 @@ function singleWork(request = {}) {
   if (presetIds.length !== 1) {
     throw new BookingAuthorityError(
       BOOKING_ERROR_CODES.INVALID_REQUEST,
-      "Canonical scheduling requires exactly one appointment work type per booking request.",
+      "This scheduling operation requires exactly one appointment work type.",
       { presetIds },
     );
   }
@@ -129,7 +129,7 @@ function singleWork(request = {}) {
   if (serviceIds.length > 1) {
     throw new BookingAuthorityError(
       BOOKING_ERROR_CODES.INVALID_REQUEST,
-      "Canonical scheduling requires exactly one service catalog item per booking request.",
+      "This scheduling operation requires exactly one service catalog item.",
       { serviceIds },
     );
   }
@@ -186,6 +186,11 @@ function isStandardServicePreset(preset = {}) {
     || /standard service|servicio estandar|servicio standard/.test(
       normalizeText(`${preset.id} ${preset.label}`),
     );
+}
+
+function isOtherPreset(preset = {}) {
+  const normalized = normalizeText(`${preset.id} ${preset.label}`).trim();
+  return /(^|\s)(other|otro)(\s|$)/.test(normalized);
 }
 
 function supportStartTimes(slotCount) {
@@ -322,6 +327,93 @@ function buildAllocationPlan(quantity, durationMinutesPerUnit, availableVanCount
     remaining -= units;
   }
   return plan;
+}
+
+function resolveWorkScope(request = {}, data = {}) {
+  const workLines = Array.isArray(request.workLines) ? request.workLines : [];
+  if (!workLines.length) {
+    throw new BookingAuthorityError(
+      BOOKING_ERROR_CODES.INVALID_REQUEST,
+      "Canonical scheduling requires at least one work line.",
+      { field: "workLines" },
+    );
+  }
+
+  const items = workLines.map((line, index) => {
+    const quantity = Math.max(0, Number(line.quantity) || 0);
+    if (!quantity) {
+      throw new BookingAuthorityError(
+        BOOKING_ERROR_CODES.INVALID_REQUEST,
+        `workLines[${index}].quantity must be positive.`,
+        { field: `workLines[${index}].quantity` },
+      );
+    }
+    const preset = exactPreset(data, line);
+    const manualDurationMinutes = Math.max(0, Number(line.manualDurationMinutes) || 0);
+    if (manualDurationMinutes && !isOtherPreset(preset)) {
+      throw new BookingAuthorityError(
+        BOOKING_ERROR_CODES.INVALID_REQUEST,
+        "Manual scheduled duration is only allowed for Other work.",
+        { field: `workLines[${index}].manualDurationMinutes`, presetId: preset.id },
+      );
+    }
+    if (isOtherPreset(preset) && !manualDurationMinutes) {
+      throw new BookingAuthorityError(
+        BOOKING_ERROR_CODES.INVALID_REQUEST,
+        "Other work requires a manual scheduled duration.",
+        { field: `workLines[${index}].manualDurationMinutes`, presetId: preset.id },
+      );
+    }
+    const legacyFixed = preset.source === "appointment_work_presets" && preset.durationMode === "fixed";
+    const durationMode = manualDurationMinutes ? "manual" : legacyFixed ? "fixed" : "per_unit";
+    const durationMinutes = manualDurationMinutes
+      || durationForQuantity(quantity, preset.durationMinutesPerUnit, legacyFixed ? "fixed" : "per_unit");
+    return {
+      id: cleanText(line.id, 120) || `work-${index + 1}`,
+      presetId: preset.id,
+      serviceId: cleanText(preset.serviceId || line.serviceId, 120),
+      label: preset.label,
+      quantity,
+      durationMinutes,
+      durationMinutesPerUnit: manualDurationMinutes || preset.durationMinutesPerUnit,
+      durationMode,
+      serviceDefinitionVersion: preset.serviceDefinitionVersion || 0,
+      preset,
+    };
+  });
+
+  const totalQuantity = items.reduce((sum, item) => sum + item.quantity, 0);
+  const totalDurationMinutes = items.reduce((sum, item) => sum + item.durationMinutes, 0);
+  const presetIds = [...new Set(items.map((item) => item.presetId))];
+  const serviceIds = [...new Set(items.map((item) => item.serviceId).filter(Boolean))];
+  const singleType = presetIds.length === 1 && serviceIds.length <= 1;
+  const singlePreset = singleType ? items[0].preset : null;
+  const hasManualDuration = items.some((item) => item.durationMode === "manual");
+
+  return {
+    items,
+    workItems: items.map(({ preset, ...item }) => item),
+    totalQuantity,
+    totalDurationMinutes,
+    singleType,
+    singlePreset,
+    hasManualDuration,
+  };
+}
+
+function allocationPlanForScope(scope, availableVanCount, rawRules) {
+  if (scope.singleType && scope.singlePreset && !scope.hasManualDuration) {
+    return buildAllocationPlan(
+      scope.totalQuantity,
+      scope.singlePreset.durationMinutesPerUnit,
+      availableVanCount,
+      scope.singlePreset,
+      rawRules,
+    );
+  }
+  if (availableVanCount < 1) return [];
+  const allocation = regularAllocation(scope.totalQuantity, scope.totalDurationMinutes);
+  return allocation ? [allocation] : [];
 }
 
 function parseStructuredTimeConstraint(constraints = {}) {
@@ -497,27 +589,35 @@ function generateCanonicalOptions({
   requiredPrimaryVanId = "",
   requireRequestedTarget = false,
 }) {
-  const work = singleWork(request);
-  const preset = exactPreset(data, work);
+  const scope = resolveWorkScope(request, data);
+  const preset = scope.singlePreset || {
+    id: "multiple_services",
+    label: "Multiple services",
+    kind: "mixed_service",
+    durationMinutesPerUnit: scope.totalDurationMinutes,
+    durationMode: "mixed",
+    serviceId: "",
+    source: "scheduling_scope",
+    serviceDefinitionVersion: 0,
+  };
   const operationalSettings = (data.businessSettings || []).find(
     (item) => item.id === "company-operational-rules",
   );
   const operationalRules = normalizeOperationalRules(operationalSettings);
-  const allocations = buildAllocationPlan(
-    work.quantity,
-    preset.durationMinutesPerUnit,
+  const allocations = allocationPlanForScope(
+    scope,
     data.vans.length,
-    preset,
     operationalRules,
   );
   if (!allocations.length) {
     return {
       options: [],
       preset,
-      quantity: work.quantity,
+      quantity: scope.totalQuantity,
+      workItems: scope.workItems,
       allocations,
       operationalRules,
-      reason: "capacity",
+      reason: scope.singleType ? "capacity" : "mixed-work-exceeds-single-van-capacity",
     };
   }
 
@@ -525,8 +625,9 @@ function generateCanonicalOptions({
   const candidateZone = propertyZone(property, address, routeConfig);
   const requestedDate = requestedDateValue(request.constraints?.requestedDate);
   const timeConstraint = parseStructuredTimeConstraint(request.constraints);
-  const largeSingleProperty = isStandardServicePreset(preset)
-    && work.quantity > operationalRules.standardService.differentPropertyDailyCapacity;
+  const largeSingleProperty = scope.singleType
+    && isStandardServicePreset(preset)
+    && scope.totalQuantity > operationalRules.standardService.differentPropertyDailyCapacity;
   const calendarSettings = (data.businessSettings || []).find((item) => item.id === "business-calendar")
     || { closedWeekdays: [0] };
   const primaryAllocation = allocations[0];
@@ -534,6 +635,7 @@ function generateCanonicalOptions({
     ? [primaryAllocation.fixedTime]
     : [...REGULAR_SLOTS, EXTRA_MORNING_SLOT].sort();
   const options = [];
+  const workSignature = scope.workItems.map((item) => `${item.presetId}:${item.serviceId}:${item.quantity}:${item.durationMinutes}`).join("|");
 
   for (let dayOffset = 0; dayOffset < MAX_SEARCH_DAYS; dayOffset += 1) {
     const date = addDays(today, dayOffset);
@@ -589,21 +691,26 @@ function generateCanonicalOptions({
 
         options.push({
           id: `opt-${hashId(
-            `${date}|${primary.time}|${selected.map((item) => `${item.vanId}:${item.time}`).join(",")}|${work.quantity}|${preset.id}|${preset.serviceId || ""}`,
+            `${date}|${primary.time}|${selected.map((item) => `${item.vanId}:${item.time}`).join(",")}|${workSignature}`,
             16,
           )}`,
           date,
           time: primary.time,
           endTime: primary.endTime,
-          quantity: work.quantity,
+          quantity: scope.totalQuantity,
           address,
           zone: candidateZone?.label || cleanText(property.operationalZone || property.zone, 80),
           presetId: preset.id,
           presetLabel: preset.label,
-          durationMinutesPerUnit: preset.durationMinutesPerUnit,
-          durationMode: preset.durationMode,
-          serviceDefinitionVersion: preset.serviceDefinitionVersion || 0,
-          serviceId: serviceIdForRequest(request, preset, data.services),
+          durationMinutesPerUnit: scope.singleType && !scope.hasManualDuration
+            ? preset.durationMinutesPerUnit
+            : scope.totalDurationMinutes,
+          durationMode: scope.singleType && !scope.hasManualDuration
+            ? preset.durationMode
+            : scope.singleType ? scope.workItems[0].durationMode : "mixed",
+          serviceDefinitionVersion: scope.singleType ? preset.serviceDefinitionVersion || 0 : 0,
+          serviceId: scope.singleType ? cleanText(preset.serviceId, 120) : "",
+          workItems: scope.workItems,
           assignments: selected,
           score,
           requestedDateMatch: Boolean(requestedDate && date === requestedDate),
@@ -642,7 +749,8 @@ function generateCanonicalOptions({
   return {
     options: clientOptions,
     preset,
-    quantity: work.quantity,
+    quantity: scope.totalQuantity,
+    workItems: scope.workItems,
     allocations,
     requestedDate,
     requestedTime: timeConstraint.kind === "exact" ? timeConstraint.time : "",
@@ -669,13 +777,16 @@ module.exports = {
   CLIENT_OPTION_LIMIT,
   DEFAULT_OPERATIONAL_RULES,
   OFFICE_TARGET_OPTION_LIMIT,
+  allocationPlanForScope,
   assignmentCombinations,
   buildAllocationPlan,
   exactPreset,
   generateCanonicalOptions,
+  isOtherPreset,
   normalizeOperationalRules,
   parseStructuredTimeConstraint,
   requestedDateValue,
+  resolveWorkScope,
   selectClientOptions,
   serviceIdForRequest,
   singleWork,
