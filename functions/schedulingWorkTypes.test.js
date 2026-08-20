@@ -67,9 +67,20 @@ test("modern settings add missing built-ins while honoring configured values", (
   ]));
   assert.equal(normalized.length, 8);
   assert.equal(normalized.find((item) => item.id === "standard_service").durationMinutesPerUnit, 90);
-  assert.equal(normalized.find((item) => item.id === "installation_extended_labor").durationMinutesPerUnit, 195);
+  assert.equal(normalized.find((item) => item.id === "installation_extended_labor").durationMinutesPerUnit, 210);
   assert.ok(normalized.find((item) => item.id === "commercial_service"));
   assert.ok(normalized.find((item) => item.id === "other"));
+});
+
+test("Scheduling durations normalize to whole or half-hour increments with a one-hour minimum", () => {
+  const normalized = normalizeSchedulingWorkTypes(modern([
+    { id: "standard_service", label: "Standard", durationMinutesPerUnit: 75, active: true, sortOrder: 10 },
+    { id: "deep_cleaning", label: "Deep", durationMinutesPerUnit: 45, active: true, sortOrder: 20 },
+    { id: "custom_quarter", label: "Custom", durationMinutesPerUnit: 105, active: true, sortOrder: 90 },
+  ]));
+  assert.equal(normalized.find((item) => item.id === "standard_service").durationMinutesPerUnit, 90);
+  assert.equal(normalized.find((item) => item.id === "deep_cleaning").durationMinutesPerUnit, 60);
+  assert.equal(normalized.find((item) => item.id === "custom_quarter").durationMinutesPerUnit, 120);
 });
 
 test("inactive modern work types stay resolvable for history but are hidden from the booking picker", () => {
@@ -84,7 +95,7 @@ test("custom future Scheduling Work Types can be added without changing the comm
   const result = bookableSchedulingWorkTypes(modern([
     { id: "duct_inspection", label: "Duct Inspection", durationMinutesPerUnit: 75, active: true, sortOrder: 90 },
   ]));
-  assert.equal(result.find((item) => item.id === "duct_inspection").durationMinutesPerUnit, 75);
+  assert.equal(result.find((item) => item.id === "duct_inspection").durationMinutesPerUnit, 90);
 });
 
 test("settings payload writes schema v2 and preserves Other as manual", () => {
