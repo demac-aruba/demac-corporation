@@ -73,7 +73,7 @@ function normalizedId(value: unknown) {
 function duration(value: unknown, fallback = 60) {
   const number = Number(value);
   const safe = Number.isFinite(number) && number > 0 ? number : fallback;
-  return Math.max(30, Math.min(720, Math.round(safe / 15) * 15));
+  return Math.max(60, Math.min(720, Math.round(safe / 30) * 30));
 }
 
 function kind(value: unknown, fallback: SchedulingWorkTypeKind): SchedulingWorkTypeKind {
@@ -113,10 +113,9 @@ export function normalizeSchedulingWorkTypes(input?: SchedulingWorkType[]) {
 }
 
 export function formatSchedulingDuration(minutes: number) {
-  if (minutes < 60) return `${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  const remainder = minutes % 60;
-  return remainder ? `${hours}h ${remainder}m` : `${hours} hour${hours === 1 ? '' : 's'}`;
+  const hours = Math.max(0, minutes) / 60;
+  const value = Number.isInteger(hours) ? String(hours) : hours.toFixed(1).replace(/\.0$/, '');
+  return `${value} hour${hours === 1 ? '' : 's'}`;
 }
 
 export async function loadSchedulingWorkTypes() {

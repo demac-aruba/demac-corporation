@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { resolveWorkScope } = require("./bookingAuthoritySchedulingEngine");
 const {
   DEFAULT_SCHEDULING_WORK_TYPES,
   bookableSchedulingWorkTypes,
@@ -67,9 +68,33 @@ test("modern settings add missing built-ins while honoring configured values", (
   ]));
   assert.equal(normalized.length, 8);
   assert.equal(normalized.find((item) => item.id === "standard_service").durationMinutesPerUnit, 90);
-  assert.equal(normalized.find((item) => item.id === "installation_extended_labor").durationMinutesPerUnit, 195);
+  assert.equal(normalized.find((item) => item.id === "installation_extended_labor").durationMinutesPerUnit, 210);
   assert.ok(normalized.find((item) => item.id === "commercial_service"));
   assert.ok(normalized.find((item) => item.id === "other"));
+});
+
+test("Scheduling durations normalize to whole or half-hour increments with a one-hour minimum", () => {
+  const normalized = normalizeSchedulingWorkTypes(modern([
+    { id: "standard_service", label: "Standard", durationMinutesPerUnit: 75, active: true, sortOrder: 10 },
+    { id: "deep_cleaning", label: "Deep", durationMinutesPerUnit: 45, active: true, sortOrder: 20 },
+    { id: "custom_quarter", label: "Custom", durationMinutesPerUnit: 105, active: true, sortOrder: 90 },
+  ]));
+  assert.equal(normalized.find((item) => item.id === "standard_service").durationMinutesPerUnit, 90);
+  assert.equal(normalized.find((item) => item.id === "deep_cleaning").durationMinutesPerUnit, 60);
+  assert.equal(normalized.find((item) => item.id === "custom_quarter").durationMinutesPerUnit, 120);
+});
+
+test("Other manual Scheduling duration accepts only 1 to 12 hours in half-hour increments", () => {
+  const data = {
+    services: [],
+    businessSettings: modern([
+      { id: "other", label: "Other", durationMinutesPerUnit: 60, kind: "other", active: true, sortOrder: 80, manualDuration: true },
+    ]),
+  };
+  const valid = resolveWorkScope({ workLines: [{ presetId: "other", quantity: 1, manualDurationMinutes: 90 }] }, data);
+  assert.equal(valid.totalDurationMinutes, 90);
+  assert.throws(() => resolveWorkScope({ workLines: [{ presetId: "other", quantity: 1, manualDurationMinutes: 75 }] }, data));
+  assert.throws(() => resolveWorkScope({ workLines: [{ presetId: "other", quantity: 1, manualDurationMinutes: 30 }] }, data));
 });
 
 test("inactive modern work types stay resolvable for history but are hidden from the booking picker", () => {
@@ -84,7 +109,7 @@ test("custom future Scheduling Work Types can be added without changing the comm
   const result = bookableSchedulingWorkTypes(modern([
     { id: "duct_inspection", label: "Duct Inspection", durationMinutesPerUnit: 75, active: true, sortOrder: 90 },
   ]));
-  assert.equal(result.find((item) => item.id === "duct_inspection").durationMinutesPerUnit, 75);
+  assert.equal(result.find((item) => item.id === "duct_inspection").durationMinutesPerUnit, 90);
 });
 
 test("settings payload writes schema v2 and preserves Other as manual", () => {

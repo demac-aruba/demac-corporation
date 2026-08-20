@@ -141,7 +141,7 @@ test("preset-only booking resolves the configured Scheduling Work Type instead o
   );
   assert.equal(result.source, "scheduling_work_types");
   assert.equal(result.label, "Quick Standard");
-  assert.equal(result.durationMinutesPerUnit, 75);
+  assert.equal(result.durationMinutesPerUnit, 90);
   assert.equal(result.serviceId, "");
 });
 

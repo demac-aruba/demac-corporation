@@ -16,6 +16,11 @@ function normalizeOrder(items: SchedulingWorkType[]) {
   return items.map((item, index) => ({ ...item, sortOrder: (index + 1) * 10 }));
 }
 
+function minutesFromHours(value: number) {
+  const safe = Number.isFinite(value) ? value : 1;
+  return Math.max(60, Math.min(720, Math.round(safe * 2) * 30));
+}
+
 export function SchedulingWorkTypesSettings() {
   const [items, setItems] = useState<SchedulingWorkType[]>(DEFAULT_SCHEDULING_WORK_TYPES.map((item) => ({ ...item })));
   const [loading, setLoading] = useState(true);
@@ -119,15 +124,15 @@ export function SchedulingWorkTypesSettings() {
               </label>
 
               <label>
-                <span>{manual ? 'Appointment duration' : 'Time / unit'}</span>
+                <span>{manual ? 'Appointment duration' : 'Time / unit (hours)'}</span>
                 <input
                   type="number"
-                  min="30"
-                  max="720"
-                  step="15"
+                  min="1"
+                  max="12"
+                  step="0.5"
                   disabled={manual}
-                  value={item.durationMinutesPerUnit}
-                  onChange={(event) => patch(item.id, { durationMinutesPerUnit: Number(event.target.value) || 60 })}
+                  value={item.durationMinutesPerUnit / 60}
+                  onChange={(event) => patch(item.id, { durationMinutesPerUnit: minutesFromHours(Number(event.target.value) || 1) })}
                 />
                 <small>{manual ? 'Entered manually on each appointment' : formatSchedulingDuration(item.durationMinutesPerUnit)}</small>
               </label>

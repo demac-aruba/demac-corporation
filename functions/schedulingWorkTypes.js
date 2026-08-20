@@ -47,7 +47,7 @@ const LEGACY_ID_ALIASES = Object.freeze({
 function boundedDuration(value, fallback = 60) {
   const number = Number(value);
   const safe = Number.isFinite(number) && number > 0 ? number : fallback;
-  return Math.max(30, Math.min(720, Math.round(safe / 15) * 15));
+  return Math.max(60, Math.min(720, Math.round(safe / 30) * 30));
 }
 
 function boundedSortOrder(value, fallback) {
