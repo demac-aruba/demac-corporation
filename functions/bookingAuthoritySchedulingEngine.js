@@ -357,6 +357,13 @@ function resolveWorkScope(request = {}, data = {}) {
         { field: `workLines[${index}].manualDurationMinutes`, presetId: preset.id },
       );
     }
+    if (manualDurationMinutes && (manualDurationMinutes < 60 || manualDurationMinutes > 720 || manualDurationMinutes % 30 !== 0)) {
+      throw new BookingAuthorityError(
+        BOOKING_ERROR_CODES.INVALID_REQUEST,
+        "Manual scheduled duration must be between 1 and 12 hours in 0.5-hour increments.",
+        { field: `workLines[${index}].manualDurationMinutes`, presetId: preset.id },
+      );
+    }
     if (isOtherPreset(preset) && !manualDurationMinutes) {
       throw new BookingAuthorityError(
         BOOKING_ERROR_CODES.INVALID_REQUEST,
