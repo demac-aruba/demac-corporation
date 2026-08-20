@@ -520,3 +520,4 @@ module.exports.OFFICE_BOOKING_ACTIONS = OFFICE_BOOKING_ACTIONS;
 module.exports.OFFICE_BOOKING_ROLES = OFFICE_BOOKING_ROLES;
 module.exports.bookingRequestFromOffice = bookingRequestFromOffice;
 module.exports.buildOfficeProperty = buildOfficeProperty;
+module.exports.createOfficeBookingApi = createOfficeBookingApi;
