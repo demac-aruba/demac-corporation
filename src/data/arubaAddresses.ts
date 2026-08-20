@@ -61,7 +61,7 @@ const curatedArubaAddressDirectory: ArubaAddressEntry[] = [
   { canonical: 'Brazil', neighborhood: 'Brazil', operationalZone: 'San Nicolas', aliases: ['Brasil'] },
   { canonical: 'Lago Heights', neighborhood: 'Lago Heights', operationalZone: 'San Nicolas' },
   { canonical: 'Zeewijk', neighborhood: 'Zeewijk', operationalZone: 'San Nicolas', aliases: ['Zee Wijk'] },
-  { canonical: 'Seroe Colorado', neighborhood: 'Seroe Colorado', operationalZone: 'San Nicolas', aliases: ['Seru Colorado'] },
+  { canonical: 'Seroe Colorado', neighborhood: 'Seroe Colorado', operationalZone: 'San Nicolas', aliases: ['Seru Colorado', 'Sero Colorado'] },
   { canonical: 'Baby Beach', neighborhood: 'Seroe Colorado', operationalZone: 'San Nicolas' },
   { canonical: 'Rodgers Beach', neighborhood: 'Seroe Colorado', operationalZone: 'San Nicolas', aliases: ['Roger Beach'] },
 ];
@@ -74,15 +74,56 @@ const curatedAddressKeys = new Set(
   curatedArubaAddressDirectory.flatMap((entry) => [entry.canonical, ...(entry.aliases ?? [])]).map(addressKey),
 );
 
+/**
+ * Localities are the curated entries whose canonical label is also their neighborhood.
+ * They are safe area-to-zone anchors. Street records such as Emmastraat are intentionally
+ * excluded so a broad OSM neighborhood like "Oranjestad" cannot accidentally inherit a
+ * more specific Centro/Este/Oeste zone from an unrelated street.
+ */
+const curatedLocalities = curatedArubaAddressDirectory.filter((entry) => (
+  addressKey(entry.canonical) === addressKey(entry.neighborhood)
+  && Boolean(entry.operationalZone)
+));
+
+const localityByKey = new Map<string, ArubaAddressEntry>();
+for (const locality of curatedLocalities) {
+  for (const label of [locality.canonical, ...(locality.aliases ?? [])]) {
+    const key = addressKey(label);
+    if (key && !localityByKey.has(key)) localityByKey.set(key, locality);
+  }
+}
+
+function inferredOsmLocation(entry: (typeof osmArubaStreetEntries)[number]) {
+  const hints = [entry.neighborhood, ...(entry.aliases ?? [])].filter(Boolean) as string[];
+  for (const hint of hints) {
+    const locality = localityByKey.get(addressKey(hint));
+    if (locality) {
+      return {
+        neighborhood: entry.neighborhood || locality.neighborhood,
+        operationalZone: locality.operationalZone,
+      };
+    }
+  }
+  return {
+    neighborhood: entry.neighborhood ?? '',
+    operationalZone: '',
+  };
+}
+
 export const arubaAddressDirectory: ArubaAddressEntry[] = [
   ...curatedArubaAddressDirectory.map((entry) => ({ ...entry, source: 'DEMAC' as const })),
   ...osmArubaStreetEntries
     .filter((entry) => !curatedAddressKeys.has(addressKey(entry.canonical)))
-    .map((entry) => ({
-      canonical: entry.canonical,
-      neighborhood: entry.neighborhood ?? '',
-      operationalZone: entry.operationalZone ?? '',
-      aliases: entry.aliases ? [...entry.aliases] : undefined,
-      source: 'OpenStreetMap' as const,
-    })),
+    .map((entry) => {
+      const inferred = entry.operationalZone
+        ? { neighborhood: entry.neighborhood ?? '', operationalZone: entry.operationalZone }
+        : inferredOsmLocation(entry);
+      return {
+        canonical: entry.canonical,
+        neighborhood: inferred.neighborhood,
+        operationalZone: inferred.operationalZone,
+        aliases: entry.aliases ? [...entry.aliases] : undefined,
+        source: 'OpenStreetMap' as const,
+      };
+    }),
 ];
