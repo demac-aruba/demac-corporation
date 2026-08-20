@@ -10,10 +10,26 @@ function snapshot(data, exists = true) {
   return { exists, data: () => data };
 }
 
-function createDb({ role = "office", active = true, presets = [], appointments = {} } = {}) {
+function collectionSnapshot(items = []) {
+  return {
+    docs: items.map((item) => ({
+      id: item.id,
+      data: () => {
+        const { id, ...data } = item;
+        return data;
+      },
+    })),
+  };
+}
+
+function createDb({ role = "office", active = true, presets = [], appointments = {}, services = [] } = {}) {
   return {
     collection(name) {
       return {
+        async get() {
+          if (name === "services") return collectionSnapshot(services);
+          return collectionSnapshot([]);
+        },
         doc(id) {
           return {
             async get() {
@@ -126,6 +142,7 @@ test("list_presets exposes only active ERP appointment presets", async () => {
   assert.equal(result.status, 200);
   assert.deepEqual(result.body.presets.map((item) => item.id), ["standard_service"]);
   assert.equal(result.body.presets[0].durationMinutesPerUnit, 60);
+  assert.equal(result.body.catalogSource, "legacy_fallback");
 });
 
 test("list_appointment_attribution exposes only safe creator metadata through authenticated office authority", async () => {
