@@ -1,9 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useAuth } from '@/components/auth/auth-provider';
 import {
-  canonicalVanId,
   loadCanonicalOperationsState,
   staffDisplayName,
   type CanonicalOperationsState,
@@ -11,25 +10,23 @@ import {
 } from '@/lib/canonical-operations';
 import {
   ATTENDANCE_STATUS_LABELS,
-  absenceForDate,
-  applyHalfDaySchedule,
   dateKey,
-  defaultAttendanceSchedule,
   loadEmployeeAttendanceState,
   overtimeMinutesAfterFive,
   payrollPeriodBounds,
-  payrollSettingsForStaff,
   saveAttendanceDay,
   saveSalaryAdvance,
-  statusFromRecords,
-  timesheetForDate,
   type AttendanceDayDraft,
-  type AttendanceSchedule,
   type AttendanceStatus,
   type EmployeeAttendanceState,
   type EmployeeSalaryAdvance,
   type SalaryAdvanceMethod,
 } from '@/lib/employee-attendance';
+import {
+  deriveAttendanceDay,
+  summarizeAttendancePeriod,
+} from '@/lib/employee-attendance-policy';
+import { employeeVan as resolveEmployeeVan } from '@/lib/employee-work-schedule';
 import styles from './employee-attendance-command-center.module.css';
 
 const STATUS_OPTIONS = Object.keys(ATTENDANCE_STATUS_LABELS) as AttendanceStatus[];
@@ -42,7 +39,6 @@ type EmployeePeriodSummary = {
   vanLabel: string;
   scheduled: number;
   regular: number;
-  workedMinutes: number;
   overtime: number;
   ao: number;
   vacation: number;
@@ -51,6 +47,7 @@ type EmployeePeriodSummary = {
   lateMinutes: number;
   advances: number;
   recordedDays: number;
+  exceptionDays: number;
 };
 
 type CalendarCell = { date: string; inMonth: boolean };
@@ -104,10 +101,6 @@ function hoursAndMinutes(minutes: number | undefined) {
   return `${h}h ${String(m).padStart(2, '0')}m`;
 }
 function hours(value: number) { return hoursAndMinutes(Math.round((Number(value) || 0) * 60)); }
-function signedHours(minutes: number) {
-  const sign = minutes < 0 ? '−' : '+';
-  return `${sign}${hoursAndMinutes(Math.abs(minutes))}`;
-}
 function money(value: number) { return `Afl. ${(Number(value) || 0).toLocaleString('en-AW', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`; }
 function errorText(error: unknown) { return error instanceof Error ? error.message : String(error); }
 function escapeCsv(value: unknown) {
@@ -120,7 +113,7 @@ function initials(name: string) {
 }
 function statusTone(status: AttendanceStatus | null) { return status ?? 'No record'; }
 function statusShort(status: AttendanceStatus | null) {
-  if (!status) return 'No record';
+  if (!status) return 'No shift';
   if (status === 'Sick') return 'AO / Sick';
   if (status === 'Absent') return 'NWNP';
   return ATTENDANCE_STATUS_LABELS[status];
@@ -183,37 +176,18 @@ export function EmployeeAttendanceCommandCenter() {
 
   const employeeVan = useCallback((profile: CanonicalStaffProfile | null) => {
     if (!operations || !profile) return null;
-    return operations.vans.find((van) => van.responsibleStaffId === profile.id || van.regularHelperId === profile.id) ?? null;
+    return resolveEmployeeVan(profile, operations.vans);
   }, [operations]);
 
-  const scheduleForDate = useCallback((profile: CanonicalStaffProfile, date: string): AttendanceSchedule => {
-    let schedule = defaultAttendanceSchedule(date);
-    const settings = payrollSettingsForStaff(attendance.payrollSettings, profile.id);
-    const van = employeeVan(profile);
-    const vanId = van ? canonicalVanId(van.id, operations?.vans ?? []) : '';
-    const halfDay = operations?.vanHalfDaySchedules.find((rule) => vanId && canonicalVanId(rule.vanId, operations.vans) === vanId);
-    const isTechnical = profile.employeeType === 'Técnico' || ['Técnico responsable', 'Técnico', 'Ayudante', 'Supervisor'].includes(profile.role ?? '');
-    if (isTechnical && halfDay?.weekday !== undefined) {
-      const ruleMinutes = minutesFromTimes(halfDay.workdayStart ?? schedule.startTime, halfDay.workdayEnd);
-      schedule = applyHalfDaySchedule(schedule, date, halfDay.weekday, ruleMinutes ? ruleMinutes / 60 : settings?.halfDayWorkedHours ?? 5, settings?.halfDayPaidFreeHours ?? 3, settings?.halfDayEffectiveFrom ?? '2026-08-01');
-    } else if (settings?.weeklyHalfDayWeekday !== undefined) {
-      schedule = applyHalfDaySchedule(schedule, date, settings.weeklyHalfDayWeekday, settings.halfDayWorkedHours, settings.halfDayPaidFreeHours, settings.halfDayEffectiveFrom);
-    }
-    return schedule;
-  }, [attendance.payrollSettings, employeeVan, operations]);
-
   const recordsFor = useCallback((profile: CanonicalStaffProfile, date: string) => {
-    const schedule = scheduleForDate(profile, date);
-    const absence = absenceForDate(operations?.staffAbsences ?? [], profile.id, date);
-    const entry = timesheetForDate(attendance.timesheets, profile.id, date);
-    const status = statusFromRecords(entry, absence, schedule.scheduledMinutes);
-    return { schedule, absence, entry, status };
-  }, [attendance.timesheets, operations?.staffAbsences, scheduleForDate]);
+    if (!operations) throw new Error('Attendance operations state is not loaded.');
+    return deriveAttendanceDay({ employee: profile, date, operations, attendance });
+  }, [attendance, operations]);
 
   const buildDraft = useCallback((profile: CanonicalStaffProfile, date: string) => {
     const record = recordsFor(profile, date);
     const defaultBreak = record.schedule.scheduledMinutes >= 480 ? 60 : 0;
-    const status = record.status ?? (record.schedule.scheduledMinutes ? 'Present' : 'Day Off');
+    const status = record.status ?? 'Day Off';
     const exceptionHours = status === 'Sick' ? record.entry?.aoHours : status === 'Vacation' ? record.entry?.vacationHours : status === 'Absent' ? record.entry?.noWorkNoPayHours : undefined;
     return {
       status,
@@ -228,26 +202,20 @@ export function EmployeeAttendanceCommandCenter() {
 
   useEffect(() => { if (selectedEmployee) setDraft(buildDraft(selectedEmployee, selectedDate)); }, [buildDraft, selectedDate, selectedEmployee]);
 
-  const periodSummaries = useMemo<EmployeePeriodSummary[]>(() => employees.map((employee) => {
-    const entries = attendance.timesheets.filter((entry) => entry.employeeId === employee.id && entry.payrollPeriodId === period.id);
-    const advances = (attendance.advances ?? []).filter((advance) => advance.employeeId === employee.id && advance.payrollPeriodId === period.id);
-    const van = employeeVan(employee);
-    return {
-      employee,
-      vanLabel: van?.name ?? van?.id ?? employee.primaryVanId ?? 'UNASSIGNED',
-      scheduled: entries.reduce((sum, entry) => sum + (entry.scheduledWorkHours ?? 0), 0),
-      regular: entries.reduce((sum, entry) => sum + (entry.regularHours ?? 0), 0),
-      workedMinutes: entries.reduce((sum, entry) => sum + (entry.workedMinutes ?? 0), 0),
-      overtime: entries.reduce((sum, entry) => sum + (entry.overtimeHours ?? 0), 0),
-      ao: entries.reduce((sum, entry) => sum + (entry.aoHours ?? 0), 0),
-      vacation: entries.reduce((sum, entry) => sum + (entry.vacationHours ?? 0), 0),
-      nwnp: entries.reduce((sum, entry) => sum + (entry.noWorkNoPayHours ?? 0), 0),
-      paidFree: entries.reduce((sum, entry) => sum + (entry.paidFreeHours ?? 0), 0),
-      lateMinutes: entries.reduce((sum, entry) => sum + (entry.lateMinutes ?? 0), 0),
-      advances: advances.reduce((sum, advance) => sum + (advance.amount ?? 0), 0),
-      recordedDays: entries.length,
-    };
-  }), [attendance.advances, attendance.timesheets, employeeVan, employees, period.id]);
+  const periodSummaries = useMemo<EmployeePeriodSummary[]>(() => {
+    if (!operations) return [];
+    return employees.map((employee) => {
+      const summary = summarizeAttendancePeriod({ employee, period, operations, attendance });
+      const advances = (attendance.advances ?? []).filter((advance) => advance.employeeId === employee.id && advance.payrollPeriodId === period.id);
+      const van = employeeVan(employee);
+      return {
+        employee,
+        vanLabel: van?.name ?? van?.id ?? employee.primaryVanId ?? 'UNASSIGNED',
+        ...summary,
+        advances: advances.reduce((sum, advance) => sum + (advance.amount ?? 0), 0),
+      };
+    });
+  }, [attendance, employeeVan, employees, operations, period]);
 
   const totals = useMemo(() => periodSummaries.reduce((acc, row) => ({
     regular: acc.regular + row.regular,
@@ -263,15 +231,17 @@ export function EmployeeAttendanceCommandCenter() {
   const selectedSummary = periodSummaries.find((summary) => summary.employee.id === selectedEmployee?.id);
   const selectedRecord = selectedEmployee ? recordsFor(selectedEmployee, selectedDate) : null;
   const suggestedOvertime = draft ? overtimeMinutesAfterFive(draft.clockOutTime) : 0;
-  const selectedWorkedMinutes = draft ? Math.max(0, (minutesFromTimes(draft.clockInTime, draft.clockOutTime) ?? 0) - draft.breakMinutes) : 0;
+  const selectedWorkedMinutes = selectedRecord?.assumedRegular
+    ? selectedRecord.schedule.scheduledMinutes
+    : draft ? Math.max(0, (minutesFromTimes(draft.clockInTime, draft.clockOutTime) ?? 0) - draft.breakMinutes) : 0;
   const selectedExceptionHours = Math.max(0, Number(draft?.exceptionHours) || 0);
   const selectedRegularHours = selectedRecord && draft ? Math.max(0, selectedRecord.schedule.scheduledMinutes / 60 - (['Sick', 'Vacation', 'Absent'].includes(draft.status) ? selectedExceptionHours : 0)) : 0;
-  const balanceMinutes = (selectedSummary?.workedMinutes ?? 0) - Math.round((selectedSummary?.scheduled ?? 0) * 60);
+  const normalScheduleNeedsNoRecord = Boolean(selectedRecord?.assumedRegular && draft?.status === 'Present' && (draft?.overtimeMinutes ?? 0) === 0 && !draft?.notes.trim());
   const selectedAbsenceRanges = useMemo(() => (operations?.staffAbsences ?? []).filter((item) => item.staffId === selectedEmployee?.id && item.active !== false).sort((a, b) => String(b.fromDate ?? '').localeCompare(String(a.fromDate ?? ''))).slice(0, 4), [operations?.staffAbsences, selectedEmployee?.id]);
 
   function exportAccountingCsv() {
-    const headers = ['Employee', 'Role', 'Van / Team', 'Scheduled Hours', 'Regular Hours', 'Worked Clock Hours', 'Overtime Hours', 'AO Hours', 'Vacation Hours', 'NWNP Hours', 'Paid Free Hours', 'Salary Advances Afl', 'Late Minutes', 'Recorded Days'];
-    const rows = periodSummaries.map((summary) => [staffDisplayName(summary.employee), summary.employee.role ?? '', summary.vanLabel, summary.scheduled.toFixed(2), summary.regular.toFixed(2), (summary.workedMinutes / 60).toFixed(2), summary.overtime.toFixed(2), summary.ao.toFixed(2), summary.vacation.toFixed(2), summary.nwnp.toFixed(2), summary.paidFree.toFixed(2), summary.advances.toFixed(2), String(summary.lateMinutes), String(summary.recordedDays)]);
+    const headers = ['Employee', 'Role', 'Van / Team', 'Scheduled Hours', 'Regular Hours', 'Overtime Hours', 'AO Hours', 'Vacation Hours', 'NWNP Hours', 'Paid Free Hours', 'Salary Advances Afl', 'Late Minutes', 'Exception Days', 'Manual Records'];
+    const rows = periodSummaries.map((summary) => [staffDisplayName(summary.employee), summary.employee.role ?? '', summary.vanLabel, summary.scheduled.toFixed(2), summary.regular.toFixed(2), summary.overtime.toFixed(2), summary.ao.toFixed(2), summary.vacation.toFixed(2), summary.nwnp.toFixed(2), summary.paidFree.toFixed(2), summary.advances.toFixed(2), String(summary.lateMinutes), String(summary.exceptionDays), String(summary.recordedDays)]);
     const csv = [headers, ...rows].map((row) => row.map(escapeCsv).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -280,11 +250,16 @@ export function EmployeeAttendanceCommandCenter() {
 
   async function saveDay() {
     if (!selectedEmployee || !draft || !selectedRecord || !canManageSensitiveAttendance) return;
+    if (normalScheduleNeedsNoRecord) {
+      setError('');
+      setMessage('Normal scheduled attendance is already counted automatically. No daily record was created.');
+      return;
+    }
     setBusy(true); setError(''); setMessage('');
     try {
       const saved = await saveAttendanceDay({ employee: selectedEmployee, date: selectedDate, schedule: selectedRecord.schedule, draft, existingEntry: selectedRecord.entry, existingAbsence: selectedRecord.absence, updatedByUserId: principal.userId, updatedByName: principal.displayName });
       setAttendance((current) => ({ ...current, timesheets: [...current.timesheets.filter((entry) => entry.id !== saved.id), saved] }));
-      setMessage('Daily attendance record saved. Payroll inputs and operational availability are synchronized.');
+      setMessage('Attendance exception saved. Payroll inputs and operational availability are synchronized.');
     } catch (cause) { setError(errorText(cause)); }
     finally { setBusy(false); }
   }
@@ -323,10 +298,10 @@ export function EmployeeAttendanceCommandCenter() {
           </div>
         </div>
         <MiniStat label="Scheduled" value={hours(selectedSummary?.scheduled ?? 0)} />
-        <MiniStat label="Clocked" value={hoursAndMinutes(selectedSummary?.workedMinutes ?? 0)} />
         <MiniStat label="Regular" value={hours(selectedSummary?.regular ?? 0)} />
         <MiniStat label="Overtime" value={hours(selectedSummary?.overtime ?? 0)} />
-        <MiniStat label="Balance" value={signedHours(balanceMinutes)} tone={balanceMinutes < 0 ? 'danger' : 'positive'} />
+        <MiniStat label="Exceptions" value={String(selectedSummary?.exceptionDays ?? 0)} />
+        <MiniStat label="Manual Records" value={String(selectedSummary?.recordedDays ?? 0)} />
         <button type="button" className={styles.profileButton}><Icon name="user" />View Profile</button>
       </section>
 
@@ -345,17 +320,19 @@ export function EmployeeAttendanceCommandCenter() {
           <div className={styles.calendarGrid}>
             {monthCells.map(({ date, inMonth }) => {
               const record = selectedEmployee ? recordsFor(selectedEmployee, date) : null;
-              const entryMinutes = record?.entry?.workedMinutes ?? Math.round((record?.entry?.regularHours ?? 0) * 60);
+              const assumedLabel = date > today ? 'Scheduled' : 'Regular';
               return (
                 <button key={date} type="button" className={`${styles.dayButton} ${!inMonth ? styles.dayOutside : ''} ${date === selectedDate ? styles.daySelected : ''}`} onClick={() => { setSelectedDate(date); if (!inMonth) setMonth(monthKey(date)); }}>
                   <span className={styles.dayNumber}>{Number(date.slice(-2))}</span>
-                  {record?.status ? <span className={styles.dayState} data-tone={statusTone(record.status)}><i />{record.status === 'Present' && entryMinutes ? hoursAndMinutes(entryMinutes) : statusShort(record.status)}</span> : <span className={styles.dayNoRecord}>No record</span>}
+                  {record?.status
+                    ? <span className={styles.dayState} data-tone={statusTone(record.status)}><i />{record.assumedRegular ? assumedLabel : statusShort(record.status)}</span>
+                    : <span className={styles.dayNoRecord}>Off</span>}
                 </button>
               );
             })}
           </div>
           <div className={styles.calendarLegend}>
-            <Legend tone="present">Present</Legend><Legend tone="late">Late</Legend><Legend tone="sick">AO / Sick</Legend><Legend tone="vacation">Vacation</Legend><Legend tone="none">No record</Legend>
+            <Legend tone="present">Regular / assumed</Legend><Legend tone="late">Late</Legend><Legend tone="sick">AO / Sick</Legend><Legend tone="vacation">Vacation</Legend><Legend tone="none">Off / no shift</Legend>
             <span className={styles.historyLink}><Icon name="calendar" />Absence History</span>
           </div>
         </section>
@@ -364,10 +341,11 @@ export function EmployeeAttendanceCommandCenter() {
           <section className={styles.dailyCard}>
             <div className={styles.dailyHeader}>
               <div><h2>Daily Record</h2><span>Selected Date</span><strong><Icon name="calendar" />{formatDate(selectedDate)}</strong><small>{selectedRecord?.schedule.label ?? 'No configured schedule'}</small></div>
-              <span className={styles.statusChip} data-tone={draft?.status ?? 'Present'}>{draft ? statusShort(draft.status) : 'No record'}⌄</span>
+              <span className={styles.statusChip} data-tone={draft?.status ?? 'Present'}>{selectedRecord?.assumedRegular ? 'Regular' : draft ? statusShort(draft.status) : 'No shift'}⌄</span>
             </div>
             {draft && selectedRecord ? (
               <div className={styles.dailyForm}>
+                {selectedRecord.assumedRegular ? <div className={styles.notice}>Normal scheduled attendance is already counted automatically. Save only if this day has an exception, overtime, or another payroll-relevant change.</div> : null}
                 <Field label="Status" full><select className={styles.control} value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as AttendanceStatus, exceptionHours: ['Sick', 'Vacation', 'Absent'].includes(event.target.value) ? (draft.exceptionHours ?? selectedRecord.schedule.scheduledMinutes / 60) : undefined })}>{STATUS_OPTIONS.map((status) => <option key={status} value={status}>{ATTENDANCE_STATUS_LABELS[status]}</option>)}</select></Field>
                 {['Sick', 'Vacation', 'Absent'].includes(draft.status) ? <Field label="Exception Hours" full><input className={styles.control} type="number" min="0" max={selectedRecord.schedule.scheduledMinutes / 60} step="0.25" value={draft.exceptionHours ?? ''} onChange={(event) => setDraft({ ...draft, exceptionHours: Number(event.target.value) })} /></Field> : null}
                 <Field label="Clock In"><input className={styles.control} type="time" value={draft.clockInTime} onChange={(event) => setDraft({ ...draft, clockInTime: event.target.value })} /></Field>
@@ -375,17 +353,17 @@ export function EmployeeAttendanceCommandCenter() {
                 <Field label="Break Minutes"><input className={styles.control} type="number" min="0" step="5" value={draft.breakMinutes} onChange={(event) => setDraft({ ...draft, breakMinutes: Number(event.target.value) })} /></Field>
                 <Field label="Overtime Minutes"><input className={styles.control} type="number" min="0" step="5" value={draft.overtimeMinutes} onChange={(event) => setDraft({ ...draft, overtimeMinutes: Number(event.target.value) })} /></Field>
                 {suggestedOvertime !== draft.overtimeMinutes ? <button type="button" className={styles.overtimeSuggestion} onClick={() => setDraft({ ...draft, overtimeMinutes: suggestedOvertime })}>Use {hoursAndMinutes(suggestedOvertime)} suggested overtime</button> : null}
-                <Field label="Notes" full><textarea className={`${styles.control} ${styles.notes}`} value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} placeholder="Add notes for this day…" /></Field>
+                <Field label="Notes" full><textarea className={`${styles.control} ${styles.notes}`} value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} placeholder="Add notes for this exception…" /></Field>
                 <div className={styles.dailySummary}>
                   <SummaryRow icon="clock" label="Scheduled" value={hours(selectedRecord.schedule.scheduledMinutes / 60)} tone="blue" />
                   <SummaryRow icon="vacation" label="Paid Free" value={hours(selectedRecord.schedule.paidFreeMinutes / 60)} tone="green" />
-                  <SummaryRow icon="timer" label="Existing Late" value={hoursAndMinutes(selectedRecord.entry?.lateMinutes ?? 0)} tone="orange" />
-                  <SummaryRow icon="briefcase" label="Existing Worked" value={hoursAndMinutes(selectedWorkedMinutes)} tone="blue" />
-                  {['Sick', 'Vacation', 'Absent'].includes(draft.status) ? <SummaryRow icon="heart" label="Regular Input" value={hours(selectedRegularHours)} tone="pink" /> : null}
+                  <SummaryRow icon="timer" label="Late" value={hoursAndMinutes(selectedRecord.entry?.lateMinutes ?? 0)} tone="orange" />
+                  <SummaryRow icon="briefcase" label="Regular Baseline" value={hoursAndMinutes(selectedWorkedMinutes)} tone="blue" />
+                  {['Sick', 'Vacation', 'Absent'].includes(draft.status) ? <SummaryRow icon="heart" label="Regular After Exception" value={hours(selectedRegularHours)} tone="pink" /> : null}
                 </div>
-                <button className={styles.saveButton} type="button" disabled={busy || !canManageSensitiveAttendance} onClick={() => void saveDay()}>{busy ? 'Saving…' : 'Save Daily Record'}</button>
+                <button className={styles.saveButton} type="button" disabled={busy || !canManageSensitiveAttendance || normalScheduleNeedsNoRecord} onClick={() => void saveDay()}>{busy ? 'Saving…' : normalScheduleNeedsNoRecord ? 'No Exception to Save' : 'Save Exception'}</button>
               </div>
-            ) : <div className={styles.empty}>Select an employee and date to record attendance.</div>}
+            ) : <div className={styles.empty}>No scheduled shift for this employee and date.</div>}
           </section>
 
           <section className={styles.rangesCard}>
@@ -403,7 +381,7 @@ export function EmployeeAttendanceCommandCenter() {
         <div className={styles.headerText}>
           <div className={styles.breadcrumb}><span>Workforce</span><b>›</b><span>Attendance</span><b>›</b><span>Overview</span></div>
           <h1>Attendance &amp; Timekeeping</h1>
-          <p>Monitor attendance, manage records, and maintain accurate timekeeping.</p>
+          <p>Regular scheduled attendance is automatic. Record only exceptions such as late arrivals, AO/sick time, vacation, No Work No Pay, or overtime.</p>
         </div>
         <div className={styles.headerActions}>
           <details className={styles.quickActions}><summary><Icon name="bolt" />Quick actions <span>⌄</span></summary><div className={styles.quickMenu}><button type="button" onClick={() => void load()}>Refresh data</button><button type="button" onClick={exportAccountingCsv} disabled={!canManageSensitiveAttendance}>Export accounting CSV</button><button type="button" onClick={() => setTab('advances')} disabled={!canManageSensitiveAttendance}>Record salary advance</button></div></details>
@@ -422,7 +400,7 @@ export function EmployeeAttendanceCommandCenter() {
       {message ? <div className={styles.success}>{message}</div> : null}
 
       <section className={styles.metricsGrid}>
-        <Metric icon="clock" tone="blue" label="Regular Hours" value={hours(totals.regular)} sub="This payroll period" />
+        <Metric icon="clock" tone="blue" label="Regular Hours" value={hours(totals.regular)} sub="Assumed from schedule unless exception" />
         <Metric icon="timer" tone="purple" label="Overtime" value={hours(totals.overtime)} sub="After 5:00 PM" />
         <Metric icon="heart" tone="pink" label="AO / Sick" value={hours(totals.ao)} sub="Full + partial hours" />
         <Metric icon="ban" tone="orange" label="No Work No Pay" value={hours(totals.nwnp)} sub="Unpaid exception hours" />
@@ -460,8 +438,8 @@ export function EmployeeAttendanceCommandCenter() {
 function Metric({ icon, tone, label, value, sub }: { icon: IconName; tone: string; label: string; value: string; sub: string }) {
   return <article className={styles.metricCard}><div className={styles.metricIcon} data-tone={tone}><Icon name={icon} /></div><div><span className={styles.metricLabel}>{label}</span><strong className={styles.metricValue}>{value}</strong><span className={styles.metricSub}>{sub}</span></div></article>;
 }
-function MiniStat({ label, value, tone }: { label: string; value: string; tone?: 'danger' | 'positive' }) {
-  return <div className={styles.miniStat}><span>{label}</span><strong className={tone ? styles[tone] : undefined}>{value}</strong><small>This period</small></div>;
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return <div className={styles.miniStat}><span>{label}</span><strong>{value}</strong><small>This period</small></div>;
 }
 function Field({ label, full, children }: { label: string; full?: boolean; children: ReactNode }) {
   return <label className={`${styles.field} ${full ? styles.fieldFull : ''}`}><span>{label}</span>{children}</label>;
