@@ -52,3 +52,33 @@ test("single-service support Work Orders receive only their assigned quantity", 
   assert.equal(orders[1].appointmentWorkItems[0].quantity, 1);
   assert.equal(orders[1].appointmentAssignmentRole, "support");
 });
+
+test("primary Work Order snapshots canonical communication recipients and support does not duplicate them", () => {
+  const option = {
+    date: "2098-12-20",
+    time: "08:30",
+    durationMode: "per_unit",
+    workItems: [{ id: "service", presetId: "standard_service", label: "Standard Service", quantity: 8, durationMinutes: 480, durationMinutesPerUnit: 60, durationMode: "per_unit" }],
+    assignments: [
+      { vanId: "VAN-1", quantity: 7, durationMinutes: 420, slots: 6 },
+      { vanId: "VAN-2", quantity: 1, durationMinutes: 60, slots: 1, role: "support" },
+    ],
+  };
+  const recipients = [
+    { recipientType: "contact", sourceId: "contact-manager", name: "Property Manager", whatsapp: "+2975641111", email: "manager@example.com", sendConfirmation: true, sendReminder: true, technicianArrival: true, sendInvoice: false, sendServiceReport: true },
+    { recipientType: "contact", sourceId: "contact-accounting", name: "Accounting", email: "accounting@example.com", sendConfirmation: false, sendReminder: false, technicianArrival: false, sendInvoice: true, sendServiceReport: true },
+  ];
+  const orders = buildWorkOrders({
+    appointment: { appointmentId: "APT-CONTACTS" },
+    option,
+    request: { workLines: [] },
+    customer: { id: "c1", whatsapp: "+2975640000" },
+    property: { id: "p1" },
+    context: { notificationRecipients: recipients },
+  });
+
+  assert.deepEqual(orders[0].notificationRecipients, recipients);
+  assert.equal(orders[0].whatsappNotificationsEnabled, true);
+  assert.deepEqual(orders[1].notificationRecipients, []);
+  assert.equal(orders[1].whatsappNotificationsEnabled, false);
+});
