@@ -3,6 +3,7 @@ const { normalizeText } = require("./bookingSchedulingPrimitives");
 
 const SCHEDULING_WORK_TYPES_SETTINGS_ID = "appointment-work-presets";
 const SCHEDULING_WORK_TYPES_SOURCE = "scheduling_work_types";
+const SCHEDULING_WORK_TYPES_VERSION = 2;
 
 const DEFAULT_SCHEDULING_WORK_TYPES = Object.freeze([
   Object.freeze({ id: "standard_service", label: "Standard Service", durationMinutesPerUnit: 60, kind: "service", active: true, sortOrder: 10 }),
@@ -90,7 +91,12 @@ function compactSchedulingWorkType(item = {}, index = 0) {
 
 function normalizeSchedulingWorkTypes(businessSettings = []) {
   const settings = settingsDocument(businessSettings);
-  const configured = Array.isArray(settings?.presets) ? settings.presets : [];
+  // V1/Legacy appointment presets were a different concept and may contain
+  // rooftop/second-floor/third-floor variants or old labels. Until the new
+  // editor saves version 2, migrate the picker to DEMAC's approved eight Work
+  // Types instead of leaking Legacy complexity into the new Scheduling flow.
+  const modern = Number(settings?.workTypesVersion || 0) >= SCHEDULING_WORK_TYPES_VERSION;
+  const configured = modern && Array.isArray(settings?.presets) ? settings.presets : [];
   const configuredById = new Map();
   const custom = [];
 
@@ -98,11 +104,7 @@ function normalizeSchedulingWorkTypes(businessSettings = []) {
     const compact = compactSchedulingWorkType(raw, index);
     if (!compact) return;
     if (DEFAULT_BY_ID.has(compact.id)) {
-      // Canonical IDs win over aliases when both exist. This lets the editor
-      // migrate legacy special-installation variants without duplicating tiles.
-      const rawId = canonicalSchedulingWorkTypeId(raw.id);
-      const existing = configuredById.get(compact.id);
-      if (!existing || rawId === compact.id) configuredById.set(compact.id, compact);
+      if (!configuredById.has(compact.id)) configuredById.set(compact.id, compact);
       return;
     }
     if (!custom.some((item) => item.id === compact.id)) custom.push(compact);
@@ -128,9 +130,14 @@ function resolveSchedulingWorkType(businessSettings = [], value = {}) {
 }
 
 function settingsPayload(presets = []) {
-  const normalized = normalizeSchedulingWorkTypes([{ id: SCHEDULING_WORK_TYPES_SETTINGS_ID, presets }]);
+  const normalized = normalizeSchedulingWorkTypes([{
+    id: SCHEDULING_WORK_TYPES_SETTINGS_ID,
+    workTypesVersion: SCHEDULING_WORK_TYPES_VERSION,
+    presets,
+  }]);
   return {
     id: SCHEDULING_WORK_TYPES_SETTINGS_ID,
+    workTypesVersion: SCHEDULING_WORK_TYPES_VERSION,
     presets: normalized.map((item) => ({
       id: item.id,
       label: item.label,
@@ -148,6 +155,7 @@ module.exports = {
   LEGACY_ID_ALIASES,
   SCHEDULING_WORK_TYPES_SETTINGS_ID,
   SCHEDULING_WORK_TYPES_SOURCE,
+  SCHEDULING_WORK_TYPES_VERSION,
   bookableSchedulingWorkTypes,
   canonicalSchedulingWorkTypeId,
   compactSchedulingWorkType,
