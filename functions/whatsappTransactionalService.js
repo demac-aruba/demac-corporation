@@ -288,8 +288,12 @@ function createWhatsAppTransactionalService({ db } = {}) {
     if (settings.transactionalProvider === "meta") {
       return queueMetaTemplate({ queueId, to, templateName, languageCode, bodyParameters, metadata });
     }
-    const canonicalText = renderTransactionalText({ templateName, bodyParameters, languageCode }) || String(text || "").trim();
-    return queueWacliText({ queueId, to, text: canonicalText, metadata });
+    // The domain notification service owns customer-facing language and copy.
+    // This transport only falls back to the legacy renderer when no explicit
+    // wacli text was supplied (for older callers and one-time data migration).
+    const explicitText = String(text || "").trim();
+    const fallbackText = explicitText ? "" : renderTransactionalText({ templateName, bodyParameters, languageCode });
+    return queueWacliText({ queueId, to, text: explicitText || fallbackText, metadata });
   }
 
   return {
