@@ -24,7 +24,7 @@ jobs:
           set -euo pipefail
           repo='${{ github.repository }}'
           workflow='inventory-consolidation-maintenance.yml'
-          echo 'Running indentation-safe inventory consolidation.'
+          echo 'Running inventory consolidation with full dependency validation.'
           gh workflow run "$workflow" --repo "$repo" --ref feature/consolidated-inventory-authority
           sleep 8
           run_id="$(gh run list --repo "$repo" --workflow "$workflow" --branch feature/consolidated-inventory-authority --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')"
