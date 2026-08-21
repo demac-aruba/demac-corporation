@@ -5,6 +5,8 @@ on:
     paths:
       - 'functions/whatsappTransactionalService.js'
       - 'functions/whatsappTransactionalService.test.js'
+      - 'functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.js'
+      - 'functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.test.js'
       - 'functions/whatsappWacliGateway.js'
       - 'functions/operatingCalendarService.js'
       - 'functions/operatingCalendarService.test.js'
@@ -25,6 +27,8 @@ on:
     paths:
       - 'functions/whatsappTransactionalService.js'
       - 'functions/whatsappTransactionalService.test.js'
+      - 'functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.js'
+      - 'functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.test.js'
       - 'functions/whatsappWacliGateway.js'
       - 'functions/operatingCalendarService.js'
       - 'functions/operatingCalendarService.test.js'
@@ -70,6 +74,7 @@ jobs:
           set -euo pipefail
           node --check functions/bootstrap.js
           node --check functions/whatsappTransactionalService.js
+          node --check functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.js
           node --check functions/whatsappWacliGateway.js
           node --check functions/operatingCalendarService.js
           node --check functions/appointmentNotificationService.js
@@ -125,6 +130,23 @@ jobs:
             --project demac-corporation \
             --non-interactive \
             --force
+
+      - name: Migrate legacy queued transactional messages to active wacli transport
+        shell: bash
+        env:
+          GCLOUD_PROJECT: demac-corporation
+          GOOGLE_CLOUD_PROJECT: demac-corporation
+        run: |
+          set -euo pipefail
+          migration_output="$(node functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.js)"
+          echo "$migration_output"
+          node - "$migration_output" <<'NODE'
+          const payload = JSON.parse(process.argv[2]);
+          if (payload.activeProvider !== 'wacli') {
+            throw new Error(`Transactional provider is ${payload.activeProvider || 'unknown'}; production is expected to use wacli in this rollout.`);
+          }
+          console.log(`Legacy queue migration: scanned=${payload.scanned}, migrated=${payload.migrated}, skipped=${payload.skipped}`);
+          NODE
 
       - name: Verify deployed notification producers
         shell: bash
