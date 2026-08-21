@@ -87,3 +87,50 @@ test("primary Work Order snapshots canonical communication recipients and suppor
   assert.deepEqual(orders[1].notificationRecipients, []);
   assert.equal(orders[1].whatsappNotificationsEnabled, false);
 });
+
+test("custom customer-facing description survives Other work without replacing the operational summary", () => {
+  const customDescription = "Inspect the cassette leak and verify the drain line before carrying out any repair.";
+  const option = {
+    date: "2098-12-20",
+    time: "14:30",
+    endTime: "16:30",
+    durationMode: "manual",
+    workItems: [{ id: "other", presetId: "other", label: "Other", quantity: 1, durationMinutes: 120, durationMinutesPerUnit: 120, durationMode: "manual" }],
+    assignments: [{ vanId: "VAN-3", quantity: 1, durationMinutes: 120, slots: 2, endTime: "16:30" }],
+  };
+
+  const [order] = buildWorkOrders({
+    appointment: { appointmentId: "APT-OTHER-CUSTOM" },
+    option,
+    request: { workLines: [{ id: "other", presetId: "other", quantity: 1, customerFacingDescription: customDescription }] },
+    customer: { id: "c1", whatsapp: "+2975640000" },
+    property: { id: "p1", address: "Balashi 27-C" },
+  });
+
+  assert.equal(order.appointmentWorkLabel, "Other");
+  assert.equal(order.problem, "Other × 1.");
+  assert.equal(order.customerFacingDescription, customDescription);
+  assert.equal(order.customerFacingDescriptionIsDefault, false);
+});
+
+test("automatic customer-facing description is marked as default so notification localization remains available", () => {
+  const option = {
+    date: "2098-12-20",
+    time: "08:30",
+    durationMode: "per_unit",
+    workItems: [{ id: "service", presetId: "standard_service", label: "Standard Service", quantity: 2, durationMinutes: 120, durationMinutesPerUnit: 60, durationMode: "per_unit" }],
+    assignments: [{ vanId: "VAN-1", quantity: 2, durationMinutes: 120, slots: 2 }],
+  };
+  const automaticDescription = "Scheduled work: 2 × Standard Service.";
+
+  const [order] = buildWorkOrders({
+    appointment: { appointmentId: "APT-AUTO-DESCRIPTION" },
+    option,
+    request: { workLines: [{ id: "service", presetId: "standard_service", quantity: 2, customerFacingDescription: automaticDescription }] },
+    customer: { id: "c1" },
+    property: { id: "p1" },
+  });
+
+  assert.equal(order.customerFacingDescription, automaticDescription);
+  assert.equal(order.customerFacingDescriptionIsDefault, true);
+});
