@@ -4,7 +4,6 @@ import { BROWSER_DISPATCH_RELEASES_KEY, deriveBrowserJobReadiness, readinessRisk
 import type { BrowserAppointmentRecord, BrowserWorkOrderRecord } from './browser-operational';
 import { browserKeys } from './browser-store';
 import { BROWSER_WORK_ORDER_SCOPE_KEY, type BrowserWorkOrderScopeRecord } from './browser-workorder-scope';
-import { BROWSER_WORKORDER_MATERIALS_KEY, type BrowserWorkOrderMaterialPlan } from './browser-workorder-materials';
 import { BROWSER_WORKFORCE_KEY, type BrowserWorkforceEmployee } from './browser-workforce';
 import { BROWSER_TOOL_ASSETS_KEY, BROWSER_TOOL_REQUIREMENTS_KEY, type BrowserToolAsset, type BrowserToolRequirementPolicy } from './browser-tools';
 import { BROWSER_SITE_ACCESS_PLANS_KEY, type BrowserSiteAccessPlan } from './browser-site-access';
@@ -280,12 +279,6 @@ function buildScopes(): BrowserWorkOrderScopeRecord[] {
   }));
 }
 
-function buildMaterialPlans(): BrowserWorkOrderMaterialPlan[] {
-  return jobSeeds
-    .filter((seed) => workOrderId(seed) !== releasedRiskId)
-    .map((seed) => ({ workOrderId: workOrderId(seed), mode: 'not_required', lines: [], updatedAt: isoAt('18:20', -24 * 60), updatedBy: 'Demo Operations' }));
-}
-
 function buildWorkforce(): BrowserWorkforceEmployee[] {
   const vanIds = ['VAN-1', 'VAN-2', 'VAN-3', 'VAN-4'] as const;
   return vanIds.flatMap((vanId, index) => [
@@ -472,7 +465,6 @@ function touchedKeys(crm: ReturnType<typeof buildCrm>) {
     browserKeys.dispatchAssignments,
     browserKeys.dispatchEvents,
     BROWSER_WORK_ORDER_SCOPE_KEY,
-    BROWSER_WORKORDER_MATERIALS_KEY,
     BROWSER_WORKFORCE_KEY,
     BROWSER_TOOL_ASSETS_KEY,
     BROWSER_TOOL_REQUIREMENTS_KEY,
@@ -510,7 +502,6 @@ function writeBaseDataset() {
   const crm = buildCrm();
   const { appointments, workOrders } = buildAppointmentsAndOrders();
   const scopes = buildScopes();
-  const materialPlans = buildMaterialPlans();
   const workforce = buildWorkforce();
   const toolAssets = buildToolAssets();
   const toolPolicies = buildToolPolicies();
@@ -526,7 +517,6 @@ function writeBaseDataset() {
   writeRaw(browserKeys.appointments, appointments);
   writeRaw(browserKeys.workOrders, workOrders);
   writeRaw(BROWSER_WORK_ORDER_SCOPE_KEY, scopes);
-  writeRaw(BROWSER_WORKORDER_MATERIALS_KEY, materialPlans);
   writeRaw(BROWSER_WORKFORCE_KEY, workforce);
   writeRaw(BROWSER_TOOL_ASSETS_KEY, toolAssets);
   writeRaw(BROWSER_TOOL_REQUIREMENTS_KEY, toolPolicies);

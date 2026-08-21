@@ -269,7 +269,11 @@ service cloud.firestore {
 
     match /commercialProductStock/{productId} {
       allow read: if activeStaff();
+      // Legacy clients may maintain only pre-location stock. Once Inventory Authority
+      // promotes a Product to v2, all physical stock mutations are server-side.
       allow create: if inventoryRole()
+        && request.resource.data.get('version', 1) != 2
+        && !request.resource.data.keys().hasAny(['balances'])
         && request.resource.data.productId == productId
         && request.resource.data.onHand is int
         && request.resource.data.onHand >= 0
@@ -280,6 +284,10 @@ service cloud.firestore {
         && request.resource.data.verifiedById == request.auth.uid
         && request.resource.data.updatedById == request.auth.uid;
       allow update: if inventoryRole()
+        && resource.data.get('version', 1) != 2
+        && request.resource.data.get('version', 1) != 2
+        && !resource.data.keys().hasAny(['balances'])
+        && !request.resource.data.keys().hasAny(['balances'])
         && request.resource.data.productId == productId
         && resource.data.productId == productId
         && request.resource.data.onHand is int
@@ -292,9 +300,10 @@ service cloud.firestore {
         && request.resource.data.verifiedAt is string
         && request.resource.data.verifiedById == request.auth.uid
         && request.resource.data.updatedById == request.auth.uid;
-      allow delete: if adminOrSupervisor();
+      allow delete: if adminOrSupervisor()
+        && resource.data.get('version', 1) != 2
+        && !resource.data.keys().hasAny(['balances']);
     }
-
     match /staffProfiles/{staffId} {
       allow read: if activeStaff();
       allow create, update: if operationsRole();
@@ -371,9 +380,20 @@ service cloud.firestore {
 
     match /warehouseInventory/{itemId} {
       allow read: if activeStaff();
-      allow create, update, delete: if inventoryRole();
+      // Legacy warehouse editing remains available only until the item is promoted
+      // to location-aware v2. Afterwards Inventory Authority is the single writer.
+      allow create: if inventoryRole()
+        && request.resource.data.get('inventoryVersion', 1) != 2
+        && !request.resource.data.keys().hasAny(['stockByLocation']);
+      allow update: if inventoryRole()
+        && resource.data.get('inventoryVersion', 1) != 2
+        && request.resource.data.get('inventoryVersion', 1) != 2
+        && !resource.data.keys().hasAny(['stockByLocation'])
+        && !request.resource.data.keys().hasAny(['stockByLocation']);
+      allow delete: if inventoryRole()
+        && resource.data.get('inventoryVersion', 1) != 2
+        && !resource.data.keys().hasAny(['stockByLocation']);
     }
-
     match /toolCatalog/{toolId} {
       allow read: if activeStaff();
       allow create, update, delete: if inventoryRole();

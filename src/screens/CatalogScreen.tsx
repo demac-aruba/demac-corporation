@@ -84,6 +84,7 @@ export function CatalogScreen() {
   const selectedStock = selected
     ? commercialProductStock.find((stock) => stock.id === selected.id || stock.productId === selected.id)
     : undefined;
+  const stockLocationManaged = selectedStock?.version === 2 || Boolean(selectedStock?.balances && Object.keys(selectedStock.balances).length);
   const stockReserved = Number.isInteger(selectedStock?.reserved) && Number(selectedStock?.reserved) >= 0
     ? Number(selectedStock?.reserved)
     : 0;
@@ -118,6 +119,10 @@ export function CatalogScreen() {
 
   const openStockEditor = () => {
     if (!selected || normalizeType(selected) !== 'Producto') return;
+    if (stockLocationManaged) {
+      setStockMessage('Este producto ya usa inventario por ubicación. Adminístralo desde ERP Next → Inventory.');
+      return;
+    }
     setStockOnHand(String(selectedStock?.onHand ?? 0));
     setStockMessage('');
     setShowStockForm(true);
@@ -260,7 +265,7 @@ export function CatalogScreen() {
                       <Text style={styles.stockTitle}>STOCK COMERCIAL</Text>
                       <Text style={styles.stockSubtitle}>El agente de ventas consulta estos valores antes de informar disponibilidad.</Text>
                     </View>
-                    <Pill label={selectedStock?.verifiedAt ? 'Verificado' : 'Sin verificar'} tone={selectedStock?.verifiedAt ? 'success' : 'neutral'} />
+                    <Pill label={stockLocationManaged ? 'Por ubicación' : selectedStock?.verifiedAt ? 'Verificado' : 'Sin verificar'} tone={stockLocationManaged || selectedStock?.verifiedAt ? 'success' : 'neutral'} />
                   </View>
                   <View style={styles.stockGrid}>
                     <Info label="Físico" value={selectedStock ? String(selectedStock.onHand) : '—'} />
@@ -270,7 +275,7 @@ export function CatalogScreen() {
                   </View>
                   {selectedStock?.verifiedByName ? <Text style={styles.stockVerifiedBy}>Verificado por {selectedStock.verifiedByName}</Text> : null}
                   <Text style={styles.stockNote}>Las unidades reservadas son de solo lectura aquí. Se administrarán mediante reservas/órdenes de venta para evitar liberar o prometer stock por error.</Text>
-                  <View style={styles.stockActions}><Button label={selectedStock ? 'Actualizar stock' : 'Registrar stock'} onPress={openStockEditor} /></View>
+                  <View style={styles.stockActions}>{stockLocationManaged ? <Text style={styles.stockNote}>El stock físico por Warehouse, Office y Vans se administra únicamente desde ERP Next → Inventory.</Text> : <Button label={selectedStock ? 'Actualizar stock' : 'Registrar stock'} onPress={openStockEditor} />}</View>
                 </View>
               ) : null}
 

@@ -2,7 +2,6 @@ import type { BrowserAppointmentRecord, BrowserWorkOrderRecord } from './browser
 import type { BrowserFieldExecutionRecord } from './browser-field';
 import { browserKeys, loadBrowserValue, saveBrowserValue } from './browser-store';
 import { loadWorkOrderScopes, scopeStatus } from './browser-workorder-scope';
-import { deriveWorkOrderMaterialReadiness, loadWorkOrderMaterialPlans } from './browser-workorder-materials';
 import { deriveCrewSkillReadiness, type WorkforceEmployee } from './workforce-readiness';
 import { loadBrowserWorkforce } from './browser-workforce';
 import { deriveRequiredToolsReadiness } from './browser-tools';
@@ -63,7 +62,13 @@ export function deriveBrowserJobReadiness(order: BrowserWorkOrderRecord, options
   const appointments = options?.appointments ?? loadBrowserValue<BrowserAppointmentRecord[]>(browserKeys.appointments, []);
   const scope = loadWorkOrderScopes().find((item) => item.workOrderId === order.id);
   const scopeResult = scopeStatus(order, scope);
-  const materials = deriveWorkOrderMaterialReadiness(order, { plans: loadWorkOrderMaterialPlans(), executions: options?.executions });
+  const materials: JobReadinessDimension = {
+    id: 'materials',
+    label: 'Materials',
+    status: 'at_risk',
+    reason: 'Canonical material requirements are not yet attached to this Work Order. Browser-local inventory is intentionally ignored.',
+    source: 'Inventory Authority',
+  };
   // Compatibility fallback remains for isolated preview callers. The active Work Orders UI
   // supplies a date-aware canonical Firestore roster explicitly.
   const crewSkill = deriveCrewSkillReadiness(order, options?.crewRoster ?? loadBrowserWorkforce());
@@ -77,7 +82,7 @@ export function deriveBrowserJobReadiness(order: BrowserWorkOrderRecord, options
     scopeResult.complete
       ? { id: 'scope', label: 'Exact HVAC Scope', status: 'ready', reason: scopeResult.reason, source: scope?.workOrderId ?? order.id }
       : { id: 'scope', label: 'Exact HVAC Scope', status: 'blocked', reason: scopeResult.reason, source: order.id },
-    { id: 'materials', label: 'Materials', status: materials.status, reason: materials.reason, source: `Material plan: ${materials.planState}` },
+    materials,
     { id: 'crew_skill', label: 'Crew & Required Skill', status: crewSkill.status, reason: crewSkill.reason, source: crewSkill.source },
     { id: 'tools', label: 'Required Tools', status: requiredTools.status, reason: requiredTools.reason, source: requiredTools.source },
     { id: 'site_access', label: 'Site Access', status: siteAccess.status, reason: siteAccess.reason, source: siteAccess.source },
