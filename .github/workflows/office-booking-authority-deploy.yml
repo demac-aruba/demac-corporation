@@ -8,6 +8,8 @@ on:
       - 'functions/officeBookingAuthorityFacade.js'
       - 'functions/appointmentCommunicationAuthority.js'
       - 'functions/appointmentCommunicationAuthority.test.js'
+      - 'functions/appointmentCommunicationRenderer.js'
+      - 'functions/appointmentCommunicationRenderer.test.js'
       - 'functions/officeBookingAuthority.test.js'
       - 'functions/officeBookingAuthorityCommunication.test.js'
       - 'functions/officeBookingAuthorityCatalog.test.js'
@@ -47,6 +49,8 @@ on:
       - 'functions/officeBookingAuthorityFacade.js'
       - 'functions/appointmentCommunicationAuthority.js'
       - 'functions/appointmentCommunicationAuthority.test.js'
+      - 'functions/appointmentCommunicationRenderer.js'
+      - 'functions/appointmentCommunicationRenderer.test.js'
       - 'functions/officeBookingAuthority.test.js'
       - 'functions/officeBookingAuthorityCommunication.test.js'
       - 'functions/officeBookingAuthorityCatalog.test.js'
@@ -111,6 +115,7 @@ jobs:
           node --check functions/officeBookingAuthority.js
           node --check functions/officeBookingAuthorityFacade.js
           node --check functions/appointmentCommunicationAuthority.js
+          node --check functions/appointmentCommunicationRenderer.js
           node --check functions/appointmentNotificationService.js
           node --check functions/customerContactDirectory.js
           node --check functions/bookingOperationalMove.js
@@ -123,6 +128,7 @@ jobs:
           node --check functions/serviceCatalog.js
           node --check functions/bookingCapacityAvailability.js
           node --check functions/bookingVanIdentity.js
+          node --test functions/appointmentCommunicationRenderer.test.js
           node --test functions/appointmentNotificationService.test.js
           node --test functions/appointmentCommunicationAuthority.test.js
           node --test functions/customerContactDirectory.test.js
