@@ -76,9 +76,11 @@ export function suggestArubaAddresses(query: string, limit = 6): ArubaAddressEnt
   const queryCompact = compact(addressQuery);
   if (queryCompact.length < 2) return [];
 
-  // Once the operator selected or typed the exact canonical address, hide the list.
-  if (arubaAddressDirectory.some((entry) => compact(entry.canonical) === queryCompact)) return [];
-
+  // Exact canonical addresses remain visible as a selectable result. The live
+  // Property editor applies geographic metadata (routing zone + neighborhood)
+  // when a result is selected. Hiding an exact match here used to leave a typed
+  // address such as "Caya G. F. Betico Croes 42" looking unregistered even
+  // though the canonical street exists in the Aruba directory.
   const scored = arubaAddressDirectory.map((entry) => {
     const candidates = [entry.canonical, ...(entry.aliases ?? [])];
     const strong = Math.max(...candidates.map((candidate) => strongMatchScore(candidate, queryWords, queryCompact)));
