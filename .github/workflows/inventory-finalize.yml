@@ -1,0 +1,235 @@
+name: Finalize Inventory Consolidation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.ref == 'refs/heads/feature/consolidated-inventory-authority'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v6
+        with:
+          ref: feature/consolidated-inventory-authority
+          fetch-depth: 0
+
+      - name: Remove final browser-local inventory dependencies and support measured consumables
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def patch(path, old, new, label, count=1):
+              file = Path(path)
+              text = file.read_text()
+              found = text.count(old)
+              if found != count:
+                  raise SystemExit(f'{label}: expected {count} match(es), found {found}')
+              file.write_text(text.replace(old, new, count))
+              print(f'updated: {label}')
+
+          # Work Orders must never use browser-local inventory to make a dispatch decision.
+          patch(
+              'apps/erp-next/app/(erp)/work-orders/page.tsx',
+              "import { BrowserWorkOrderMaterials } from '../../../components/work-orders/browser-workorder-materials';\n",
+              '',
+              'remove browser Work Order material component import',
+          )
+          patch(
+              'apps/erp-next/app/(erp)/work-orders/page.tsx',
+              '<BrowserWorkOrderHandoff /><BrowserWorkOrderMaterials /><BrowserSiteAccess />',
+              '<BrowserWorkOrderHandoff /><BrowserSiteAccess />',
+              'remove browser Work Order material component from active route',
+          )
+          patch(
+              'apps/erp-next/lib/browser-job-readiness.ts',
+              "import { deriveWorkOrderMaterialReadiness, loadWorkOrderMaterialPlans } from './browser-workorder-materials';\n",
+              '',
+              'remove browser material inventory import from job readiness',
+          )
+          patch(
+              'apps/erp-next/lib/browser-job-readiness.ts',
+              "  const materials = deriveWorkOrderMaterialReadiness(order, { plans: loadWorkOrderMaterialPlans(), executions: options?.executions });\n",
+              "  const materials: JobReadinessDimension = {\n    id: 'materials',\n    label: 'Materials',\n    status: 'at_risk',\n    reason: 'Canonical material requirements are not yet attached to this Work Order. Browser-local inventory is intentionally ignored.',\n    source: 'Inventory Authority',\n  };\n",
+              'fail closed when canonical Work Order material requirements are absent',
+          )
+          patch(
+              'apps/erp-next/lib/browser-job-readiness.ts',
+              "    { id: 'materials', label: 'Materials', status: materials.status, reason: materials.reason, source: `Material plan: ${materials.planState}` },\n",
+              "    materials,\n",
+              'use canonical-safe materials readiness dimension',
+          )
+
+          # Quantity semantics: Products are whole units; materials may be measured to 0.001.
+          authority = Path('functions/inventoryAuthority.js')
+          text = authority.read_text()
+          helper_anchor = '''function positiveInt(value) {\n  const number = Number(value);\n  return Number.isFinite(number) && number > 0 ? Math.max(1, Math.floor(number)) : 0;\n}\n'''
+          helpers = helper_anchor + '''function roundQuantity(value) {\n  return Math.round((Number(value) + Number.EPSILON) * 1000) / 1000;\n}\nfunction nonNegativeQuantity(value, fallback = 0) {\n  const number = Number(value);\n  return Number.isFinite(number) && number >= 0 ? roundQuantity(number) : fallback;\n}\nfunction quantityForKind(value, itemKind, options = {}) {\n  const number = Number(value);\n  const positive = options.positive === true;\n  const field = cleanText(options.field, 120) || "quantity";\n  if (!Number.isFinite(number) || number < 0 || (positive && number <= 0)) {\n    throw new InventoryAuthorityError("invalid_request", `${field} must be ${positive ? "greater than zero" : "zero or greater"}.`, { field, itemKind });\n  }\n  if (itemKind === "product" && !Number.isInteger(number)) {\n    throw new InventoryAuthorityError("invalid_request", "Product quantities must be whole units.", { field, itemKind, value: number });\n  }\n  return itemKind === "product" ? number : roundQuantity(number);\n}\n'''
+          if 'function roundQuantity(value)' not in text:
+              if text.count(helper_anchor) != 1: raise SystemExit('quantity helper anchor not found exactly once')
+              text = text.replace(helper_anchor, helpers, 1)
+
+          replacements = [
+            ('  const onHand = nonNegativeInt(value.onHand);\n  const reserved = Math.min(onHand, nonNegativeInt(value.reserved));\n  const minimum = nonNegativeInt(value.minimum);\n  const target = Math.max(minimum, nonNegativeInt(value.target, minimum));',
+             '  const onHand = nonNegativeQuantity(value.onHand);\n  const reserved = Math.min(onHand, nonNegativeQuantity(value.reserved));\n  const minimum = nonNegativeQuantity(value.minimum);\n  const target = Math.max(minimum, nonNegativeQuantity(value.target, minimum));', 'decimal balance normalization'),
+            ('  return Math.max(0, value.onHand - value.reserved);', '  return roundQuantity(Math.max(0, value.onHand - value.reserved));', 'decimal available stock'),
+            ('    total.onHand += value.onHand;\n    total.reserved += value.reserved;', '    total.onHand = roundQuantity(total.onHand + value.onHand);\n    total.reserved = roundQuantity(total.reserved + value.reserved);', 'decimal balance totals'),
+            ('    onHand: nonNegativeInt(item.quantity), reserved: 0, minimum,', '    onHand: nonNegativeQuantity(item.quantity), reserved: 0, minimum,', 'decimal legacy material quantity'),
+            ('  const minimum = nonNegativeInt(item.minimum);', '  const minimum = nonNegativeQuantity(item.minimum);', 'decimal legacy material minimum'),
+            ('    target: Math.max(minimum, nonNegativeInt(item.target, minimum)),', '    target: Math.max(minimum, nonNegativeQuantity(item.target, minimum)),', 'decimal legacy material target'),
+            ('    const quantity = positiveInt(raw?.quantity ?? raw?.requestedQuantity);', '    const quantity = quantityForKind(raw?.quantity ?? raw?.requestedQuantity, itemKind, { positive: true, field: "lines.quantity" });', 'kind-aware transfer quantity'),
+            ('    if (lineId) result.set(lineId, nonNegativeInt(line?.[field] ?? line?.quantity));', '    if (lineId) result.set(lineId, nonNegativeQuantity(line?.[field] ?? line?.quantity));', 'preserve supplied decimal transfer quantity'),
+            ('      itemName: cleanText(args.itemName, 240), quantity: nonNegativeInt(args.quantity), type: args.type,', '      itemName: cleanText(args.itemName, 240), quantity: nonNegativeQuantity(args.quantity), type: args.type,', 'decimal movement quantity'),
+            ('      const needed = Math.max(0, balance.target - available);', '      const needed = roundQuantity(Math.max(0, balance.target - available));', 'decimal replenishment need'),
+            ('    const onHand = nonNegativeInt(data.onHand);', '    const onHand = quantityForKind(data.onHand, itemKind, { field: "onHand" });', 'kind-aware physical count'),
+            ('    const minimum = nonNegativeInt(data.minimum);\n    const target = Math.max(minimum, nonNegativeInt(data.target, minimum));', '    const minimum = quantityForKind(data.minimum, itemKind, { field: "minimum" });\n    const target = Math.max(minimum, quantityForKind(data.target, itemKind, { field: "target" }));', 'kind-aware min target'),
+            ('        balances[sourceLocationId] = { ...sourceBalance, reserved: sourceBalance.reserved + line.requestedQuantity };', '        balances[sourceLocationId] = { ...sourceBalance, reserved: roundQuantity(sourceBalance.reserved + line.requestedQuantity) };', 'rounded transfer reservation'),
+            ('        const requested = nonNegativeInt(line.requestedQuantity);\n        const picked = quantities.has(line.lineId) ? quantities.get(line.lineId) : requested;', '        const requested = quantityForKind(line.requestedQuantity, line.itemKind, { field: "requestedQuantity" });\n        const picked = quantities.has(line.lineId) ? quantityForKind(quantities.get(line.lineId), line.itemKind, { field: "pickedQuantity" }) : requested;', 'kind-aware pickup quantity'),
+            ('        balances[current.sourceLocationId] = { ...source, onHand: source.onHand - picked, reserved: source.reserved - requested };', '        balances[current.sourceLocationId] = { ...source, onHand: roundQuantity(source.onHand - picked), reserved: roundQuantity(source.reserved - requested) };', 'rounded pickup balance'),
+            ('        nextLines.push({ ...line, pickedQuantity: picked, pickupShortfall: Math.max(0, requested - picked) });', '        nextLines.push({ ...line, pickedQuantity: picked, pickupShortfall: roundQuantity(Math.max(0, requested - picked)) });', 'rounded pickup shortfall'),
+            ('      const nextQuantities = current.lines.map((line) => ({ line, picked: nonNegativeInt(line.pickedQuantity), received: quantities.has(line.lineId) ? quantities.get(line.lineId) : nonNegativeInt(line.pickedQuantity) }));', '      const nextQuantities = current.lines.map((line) => {\n        const picked = quantityForKind(line.pickedQuantity, line.itemKind, { field: "pickedQuantity" });\n        const received = quantities.has(line.lineId) ? quantityForKind(quantities.get(line.lineId), line.itemKind, { field: "receivedQuantity" }) : picked;\n        return { line, picked, received };\n      });', 'kind-aware receipt quantity'),
+            ('        balances[current.destinationLocationId] = { ...destination, onHand: destination.onHand + received };', '        balances[current.destinationLocationId] = { ...destination, onHand: roundQuantity(destination.onHand + received) };', 'rounded receipt balance'),
+            ('        const variance = Math.max(0, picked - received);', '        const variance = roundQuantity(Math.max(0, picked - received));', 'rounded transfer variance'),
+            ('        balances[current.sourceLocationId] = { ...source, reserved: Math.max(0, source.reserved - nonNegativeInt(line.requestedQuantity)) };', '        balances[current.sourceLocationId] = { ...source, reserved: roundQuantity(Math.max(0, source.reserved - quantityForKind(line.requestedQuantity, line.itemKind, { field: "requestedQuantity" }))) };', 'kind-aware cancellation reservation'),
+            ('    const quantity = positiveInt(data.quantity);\n    if (!quantity) throw new InventoryAuthorityError("invalid_request", "Issued quantity must be greater than zero.");', '    const quantity = quantityForKind(data.quantity, itemKind, { positive: true, field: "quantity" });', 'kind-aware Work Order issue quantity'),
+            ('      balances[locationId] = { ...source, onHand: source.onHand - quantity };', '      balances[locationId] = { ...source, onHand: roundQuantity(source.onHand - quantity) };', 'rounded Work Order issue balance'),
+          ]
+          for old, new, label in replacements:
+              if old in text:
+                  if text.count(old) != 1: raise SystemExit(f'{label}: expected one match, found {text.count(old)}')
+                  text = text.replace(old, new, 1)
+                  print(f'updated: {label}')
+              elif new not in text:
+                  raise SystemExit(f'{label}: neither old nor new form found')
+          authority.write_text(text)
+
+          # Add regression coverage for measured consumables and reject fractional Products.
+          tests = Path('functions/inventoryAuthority.test.js')
+          text = tests.read_text()
+          marker = 'test("Inventory Authority HTTP boundary requires Firebase authentication", async () => {'
+          if 'measured material quantities preserve decimals through transfer and Work Order issue' not in text:
+              if text.count(marker) != 1: raise SystemExit('test insertion marker not found exactly once')
+              block = '''test("measured material quantities preserve decimals through transfer and Work Order issue", async () => {\n  const seed = productSeed();\n  seed.warehouseInventory.refrigerant = { name: "R410A Refrigerant", category: "Refrigerant", unit: "lb", quantity: 12.5, minimum: 5, target: 15, active: true };\n  const db = makeDb(seed);\n  const api = apiFor(db);\n\n  const created = await api.createTransfer({\n    requestId: "refrigerant-transfer-decimal-001",\n    sourceLocationId: WAREHOUSE_LOCATION_ID,\n    destinationLocationId: "VAN-1",\n    lines: [{ itemKind: "material", itemId: "refrigerant", quantity: 2.75 }],\n  }, actor);\n  let material = db.stores.get("warehouseInventory").get("refrigerant");\n  assert.equal(material.stockByLocation[WAREHOUSE_LOCATION_ID].onHand, 12.5);\n  assert.equal(material.stockByLocation[WAREHOUSE_LOCATION_ID].reserved, 2.75);\n\n  await api.pickupTransfer({ requestId: "refrigerant-pickup-decimal-001", transferId: created.transfer.id }, actor);\n  material = db.stores.get("warehouseInventory").get("refrigerant");\n  assert.equal(material.stockByLocation[WAREHOUSE_LOCATION_ID].onHand, 9.75);\n\n  await api.receiveTransfer({ requestId: "refrigerant-receive-decimal-001", transferId: created.transfer.id }, actor);\n  material = db.stores.get("warehouseInventory").get("refrigerant");\n  assert.equal(material.stockByLocation["VAN-1"].onHand, 2.75);\n\n  await api.issueToWorkOrder({\n    requestId: "refrigerant-workorder-decimal-001",\n    itemKind: "material",\n    itemId: "refrigerant",\n    locationId: "VAN-1",\n    workOrderId: "WO-1",\n    quantity: 0.5,\n    reason: "Measured refrigerant used on job",\n  }, actor);\n  material = db.stores.get("warehouseInventory").get("refrigerant");\n  assert.equal(material.stockByLocation["VAN-1"].onHand, 2.25);\n});\n\ntest("fractional Product quantities are rejected instead of silently rounded", async () => {\n  const db = makeDb(productSeed());\n  const api = apiFor(db);\n  await assert.rejects(\n    () => api.createTransfer({\n      requestId: "fractional-product-transfer-001",\n      sourceLocationId: WAREHOUSE_LOCATION_ID,\n      destinationLocationId: OFFICE_LOCATION_ID,\n      lines: [{ itemKind: "product", itemId: "prod-12k", quantity: 1.5 }],\n    }, actor),\n    /whole units/i,\n  );\n});\n\n'''
+              text = text.replace(marker, block + marker, 1)
+              tests.write_text(text)
+
+          # ERP Next inventory UI must preserve measured values and never add different units into one total.
+          ui = Path('apps/erp-next/components/inventory/consolidated-inventory-workspace.tsx')
+          text = ui.read_text()
+          ui_replacements = [
+            ('  const companyUnits = items.reduce((total, item) => total + Object.values(item.balances || {}).reduce((sum, row) => sum + Number(row.onHand || 0), 0), 0);', '  const companyProductUnits = products.reduce((total, item) => total + Object.values(item.balances || {}).reduce((sum, row) => sum + Number(row.onHand || 0), 0), 0);\n  const selectedTransferItem = items.find((item) => itemKey(item) === lineItemKey);', 'avoid mixed-unit inventory total'),
+            ('    const onHand = Math.max(0, Math.floor(Number(stockEdit.onHand) || 0));\n    const minimum = Math.max(0, Math.floor(Number(stockEdit.minimum) || 0));\n    const target = Math.max(minimum, Math.floor(Number(stockEdit.target) || 0));', '    const onHand = Math.max(0, Number(stockEdit.onHand) || 0);\n    const minimum = Math.max(0, Number(stockEdit.minimum) || 0);\n    const target = Math.max(minimum, Number(stockEdit.target) || 0);', 'preserve decimal count and policy values'),
+            ('    const quantity = Math.max(1, Math.floor(Number(lineQuantity) || 1));\n    if (!item) return;', '    const quantity = Number(lineQuantity);\n    if (!item || !Number.isFinite(quantity) || quantity <= 0) return;\n    if (item.itemKind === \'product\' && !Number.isInteger(quantity)) { setError(\'Products must be transferred in whole units.\'); return; }', 'preserve decimal transfer draft quantity'),
+            ("pickedQuantity: Math.max(0, Math.floor(Number(draftQuantity(transfer, line.lineId, 'picked', line.requestedQuantity)) || 0))", "pickedQuantity: Math.max(0, Number(draftQuantity(transfer, line.lineId, 'picked', line.requestedQuantity)) || 0)", 'preserve decimal pickup quantity'),
+            ("receivedQuantity: Math.max(0, Math.floor(Number(draftQuantity(transfer, line.lineId, 'received', line.pickedQuantity)) || 0))", "receivedQuantity: Math.max(0, Number(draftQuantity(transfer, line.lineId, 'received', line.pickedQuantity)) || 0)", 'preserve decimal received quantity'),
+            ('<article><span>Physical stock</span><strong>{companyUnits}</strong><small>Across all locations</small></article>', '<article><span>Product units</span><strong>{companyProductUnits}</strong><small>Whole sellable units across all locations</small></article>', 'correct mixed-unit overview metric'),
+            ('<b>{items.reduce((sum, item) => sum + balance(item, locationId).onHand, 0)} units</b>', '<b>{items.filter((item) => balance(item, locationId).onHand > 0).length} stocked lines</b>', 'correct mixed-unit location metric'),
+            ('<input type="number" min="1" value={lineQuantity}', '<input type="number" min={selectedTransferItem?.itemKind === \'product\' ? 1 : 0.001} step={selectedTransferItem?.itemKind === \'product\' ? 1 : 0.001} value={lineQuantity}', 'measured transfer input step'),
+            ('<input type="number" min="0" max={line.requestedQuantity} value={draftQuantity(transfer, line.lineId, \'picked\', line.requestedQuantity)}', '<input type="number" min="0" step={line.itemKind === \'product\' ? 1 : 0.001} max={line.requestedQuantity} value={draftQuantity(transfer, line.lineId, \'picked\', line.requestedQuantity)}', 'measured pickup input step'),
+            ('<input type="number" min="0" max={line.pickedQuantity} value={draftQuantity(transfer, line.lineId, \'received\', line.pickedQuantity)}', '<input type="number" min="0" step={line.itemKind === \'product\' ? 1 : 0.001} max={line.pickedQuantity} value={draftQuantity(transfer, line.lineId, \'received\', line.pickedQuantity)}', 'measured receipt input step'),
+            ('<label>On hand<input type="number" min="0" value={stockEdit.onHand}', '<label>On hand<input type="number" min="0" step={stockEdit.item.itemKind === \'product\' ? 1 : 0.001} value={stockEdit.onHand}', 'measured stock-count input step'),
+            ('<label>Minimum<input type="number" min="0" value={stockEdit.minimum}', '<label>Minimum<input type="number" min="0" step={stockEdit.item.itemKind === \'product\' ? 1 : 0.001} value={stockEdit.minimum}', 'measured minimum input step'),
+            ('<label>Target<input type="number" min="0" value={stockEdit.target}', '<label>Target<input type="number" min="0" step={stockEdit.item.itemKind === \'product\' ? 1 : 0.001} value={stockEdit.target}', 'measured target input step'),
+          ]
+          for old, new, label in ui_replacements:
+              if old in text:
+                  if text.count(old) != 1: raise SystemExit(f'{label}: expected one match, found {text.count(old)}')
+                  text = text.replace(old, new, 1)
+                  print(f'updated: {label}')
+              elif new not in text:
+                  raise SystemExit(f'{label}: neither old nor new form found')
+          ui.write_text(text)
+
+          # Clean formatting introduced by the guarded compatibility migration.
+          path = Path('src/state/AppState.tsx')
+          text = path.read_text()
+          old = '''    const existing = commercialProductStock.find((stock) => stock.id === productId || stock.productId === productId);\nconst locationManaged = existing?.version === 2 || Boolean(existing?.balances && Object.keys(existing.balances).length);\nif (locationManaged) {\n  return { ok: false, message: 'Este producto ya usa inventario por ubicación. Actualiza el stock desde Inventory Control para conservar Warehouse, Office y Vans.' };\n}\n'''
+          new = '''    const existing = commercialProductStock.find((stock) => stock.id === productId || stock.productId === productId);\n    const locationManaged = existing?.version === 2 || Boolean(existing?.balances && Object.keys(existing.balances).length);\n    if (locationManaged) {\n      return { ok: false, message: 'Este producto ya usa inventario por ubicación. Actualiza el stock desde Inventory Control para conservar Warehouse, Office y Vans.' };\n    }\n'''
+          if old in text: path.write_text(text.replace(old, new, 1))
+
+          path = Path('src/screens/CatalogScreen.tsx')
+          text = path.read_text()
+          old = '''    if (!selected || normalizeType(selected) !== 'Producto') return;\nif (stockLocationManaged) {\n  setStockMessage('Este producto ya usa inventario por ubicación. Adminístralo desde ERP Next → Inventory.');\n  return;\n}\n'''
+          new = '''    if (!selected || normalizeType(selected) !== 'Producto') return;\n    if (stockLocationManaged) {\n      setStockMessage('Este producto ya usa inventario por ubicación. Adminístralo desde ERP Next → Inventory.');\n      return;\n    }\n'''
+          if old in text: path.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Delete browser-local inventory layers only after dependency checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -n -F 'BrowserWorkOrderMaterials' -- apps/erp-next/app apps/erp-next/components apps/erp-next/lib | grep -v 'browser-workorder-materials.tsx'; then
+            echo '::error::BrowserWorkOrderMaterials still has an active reference.'
+            exit 1
+          fi
+          if git grep -n -F "./browser-workorder-materials" -- apps/erp-next | grep -v 'browser-workorder-materials.ts'; then
+            echo '::error::browser-workorder-materials library still has an active reference.'
+            exit 1
+          fi
+          rm -f apps/erp-next/components/work-orders/browser-workorder-materials.tsx apps/erp-next/components/work-orders/browser-workorder-materials.module.css apps/erp-next/lib/browser-workorder-materials.ts
+
+          # Remove old Inventory transfer UI now that /inventory is canonical.
+          if git grep -n -F 'BrowserInventoryTransfers' -- apps/erp-next | grep -v 'browser-inventory-transfers.tsx'; then
+            echo '::error::Old BrowserInventoryTransfers component is still referenced.'
+            exit 1
+          fi
+          rm -f apps/erp-next/components/inventory/browser-inventory-transfers.tsx apps/erp-next/components/inventory/browser-inventory-transfers.module.css
+
+          # Fixed-point cleanup for dead browser-local inventory libraries. Keep any file that still has a real caller.
+          for pass in 1 2 3; do
+            for file in \
+              apps/erp-next/lib/browser-inventory-replenishment.ts \
+              apps/erp-next/lib/browser-inventory-transfers.ts \
+              apps/erp-next/lib/browser-inventory-readiness.ts \
+              apps/erp-next/lib/browser-inventory-ledger.ts; do
+              [ -f "$file" ] || continue
+              base="$(basename "$file" .ts)"
+              refs="$(git grep -l -F "$base" -- apps/erp-next 2>/dev/null | grep -v -F "$file" || true)"
+              if [ -z "$refs" ]; then
+                echo "Removing dead browser-local inventory library: $file"
+                rm -f "$file"
+              else
+                echo "Keeping $file; still referenced by:"
+                echo "$refs"
+              fi
+            done
+          done
+
+          if git grep -n -E 'demac\.erp-next\.inventory\.(opening-balances|transfers|movements)' -- apps/erp-next/app apps/erp-next/components 2>/dev/null; then
+            echo '::error::An active ERP Next component still uses browser-local inventory persistence.'
+            exit 1
+          fi
+          if git grep -n -E 'deriveWorkOrderMaterialReadiness|loadBrowserInventoryTransfers|loadBrowserInventoryOpeningBalances' -- apps/erp-next/app apps/erp-next/components/work-orders 2>/dev/null; then
+            echo '::error::Work Orders still depends on browser-local inventory.'
+            exit 1
+          fi
+
+      - name: Validate final inventory boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix functions --no-audit --no-fund
+          node --check functions/inventoryAuthority.js
+          node --test functions/inventoryAuthority.test.js
+          npm install --prefix apps/erp-next --no-audit --no-fund
+          npm run --prefix apps/erp-next typecheck
+          npm run --prefix apps/erp-next build
+
+      - name: Commit final consolidation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- functions/inventoryAuthority.js functions/inventoryAuthority.test.js apps/erp-next/app/'(erp)'/work-orders/page.tsx apps/erp-next/lib/browser-job-readiness.ts apps/erp-next/components/inventory apps/erp-next/components/work-orders apps/erp-next/lib src/state/AppState.tsx src/screens/CatalogScreen.tsx
+          if git diff --cached --quiet; then
+            echo 'No final changes to commit.'
+            exit 0
+          fi
+          git commit -m 'Finalize canonical inventory boundary'
+          git push origin HEAD:feature/consolidated-inventory-authority
