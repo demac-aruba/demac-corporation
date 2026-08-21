@@ -108,6 +108,18 @@ function formatScheduleDate(dateKey) {
   }).format(date);
 }
 
+function renderTechnicianScheduleText(name, date, agenda) {
+  return [
+    `Hola ${name},`,
+    "",
+    `Esta es tu agenda de trabajo de DEMAC para ${date}:`,
+    "",
+    agenda,
+    "",
+    "Revisa el ERP antes de salir por cualquier cambio o actualización.",
+  ].join("\n");
+}
+
 function createTechnicianDailyScheduleService({ db } = {}) {
   if (!db || typeof db.collection !== "function") {
     throw new Error("A Firestore-compatible db is required for technician daily schedules.");
@@ -140,16 +152,16 @@ function createTechnicianDailyScheduleService({ db } = {}) {
     const to = technician.whatsapp || technician.phone;
     const normalizedTo = normalizeWhatsAppPhone(to);
     const queueId = safeDocumentId(`technician-daily-schedule-${dateKey}-${technician.id}`);
-    const result = await whatsapp.queueMetaTemplate({
+    const technicianName = normalizedText(technician.name || "Técnico");
+    const scheduleDate = formatScheduleDate(dateKey);
+    const agenda = buildTechnicianAgendaText(orders, clientsById);
+    const result = await whatsapp.queueTransactionalMessage({
       queueId,
       to,
+      text: renderTechnicianScheduleText(technicianName, scheduleDate, agenda),
       templateName: TECHNICIAN_DAILY_TEMPLATE,
       languageCode: TECHNICIAN_DAILY_LANGUAGE,
-      bodyParameters: [
-        normalizedText(technician.name || "Técnico"),
-        formatScheduleDate(dateKey),
-        buildTechnicianAgendaText(orders, clientsById),
-      ],
+      bodyParameters: [technicianName, scheduleDate, agenda],
       metadata: {
         notificationType: "technician-daily-schedule",
         recipientType: "staff",
@@ -196,5 +208,6 @@ module.exports.buildTechnicianAgendaText = buildTechnicianAgendaText;
 module.exports.createTechnicianDailyScheduleService = createTechnicianDailyScheduleService;
 module.exports.formatScheduleDate = formatScheduleDate;
 module.exports.isTechnicianProfile = isTechnicianProfile;
+module.exports.renderTechnicianScheduleText = renderTechnicianScheduleText;
 module.exports.technicianAvailableOnDate = technicianAvailableOnDate;
 module.exports.workSummary = workSummary;
