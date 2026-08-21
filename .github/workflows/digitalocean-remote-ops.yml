@@ -1,113 +1,77 @@
-name: Inventory Finalization Carrier
+name: DigitalOcean Remote Ops
 
 on:
   push:
     branches:
-      - feature/consolidated-inventory-authority
+      - main
     paths:
-      - '.github/workflows/digitalocean-remote-ops.yml'
+      - 'ops/digitalocean/run/task.sh'
+      - 'ops/digitalocean/deploy/**'
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: digitalocean-remote-ops
+  cancel-in-progress: false
 
 jobs:
-  finalize-inventory:
-    if: github.ref == 'refs/heads/feature/consolidated-inventory-authority'
+  remote-ops:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DO_HOST: 159.223.160.239
+      DO_USER: demac-deploy
     steps:
-      - name: Checkout feature branch
+      - name: Checkout
         uses: actions/checkout@v6
-        with:
-          ref: feature/consolidated-inventory-authority
-          fetch-depth: 0
 
-      - name: Remove demo dependency and tighten final dependency guards
+      - name: Configure SSH
+        shell: bash
+        env:
+          DO_SSH_KEY_B64: ${{ secrets.DO_SSH_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DO_SSH_KEY_B64:-}" ]; then
+            echo '::error::Repository secret DO_SSH_KEY_B64 is missing. Rotate the Droplet key with ops/digitalocean/rotate-github-key.sh and add the base64 value as DO_SSH_KEY_B64.'
+            exit 1
+          fi
+          install -d -m 0700 "$HOME/.ssh"
+          printf '%s' "$DO_SSH_KEY_B64" | base64 --decode > "$HOME/.ssh/id_ed25519"
+          chmod 0600 "$HOME/.ssh/id_ed25519"
+          ssh-keygen -y -f "$HOME/.ssh/id_ed25519" >/dev/null
+          ssh-keyscan -T 10 -H "$DO_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 0600 "$HOME/.ssh/known_hosts"
+
+      - name: Verify restricted remote identity
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
+          ssh -o BatchMode=yes -o ConnectTimeout=10 "$DO_USER@$DO_HOST" \
+            'printf "REMOTE_OK user=%s host=%s\n" "$(id -un)" "$(hostname)"; id; sudo -n /usr/local/sbin/demac-service-control status both >/dev/null || true'
 
-          path = Path('apps/erp-next/lib/browser-demo-data.ts')
-          text = path.read_text()
-          replacements = [
-              ("import { BROWSER_WORKORDER_MATERIALS_KEY, type BrowserWorkOrderMaterialPlan } from './browser-workorder-materials';\n", '', 'material-plan import'),
-              ("function buildMaterialPlans(): BrowserWorkOrderMaterialPlan[] {\n  return jobSeeds\n    .filter((seed) => workOrderId(seed) !== releasedRiskId)\n    .map((seed) => ({ workOrderId: workOrderId(seed), mode: 'not_required', lines: [], updatedAt: isoAt('18:20', -24 * 60), updatedBy: 'Demo Operations' }));\n}\n\n", '', 'demo material-plan builder'),
-              ('    BROWSER_WORKORDER_MATERIALS_KEY,\n', '', 'demo backup key'),
-              ('  const materialPlans = buildMaterialPlans();\n', '', 'demo material-plan seed'),
-              ('  writeRaw(BROWSER_WORKORDER_MATERIALS_KEY, materialPlans);\n', '', 'demo material-plan persistence'),
-          ]
-          for old, new, label in replacements:
-              if old in text:
-                  if text.count(old) != 1:
-                      raise SystemExit(f'{label}: expected exactly one match, found {text.count(old)}')
-                  text = text.replace(old, new, 1)
-                  print(f'updated: {label}')
-          path.write_text(text)
-
-          workflow = Path('.github/workflows/inventory-finalize.yml')
-          finalizer = workflow.read_text()
-          old_guard = """          if git grep -n -F 'BrowserInventoryTransfers' -- apps/erp-next | grep -v 'browser-inventory-transfers.tsx'; then
-            echo '::error::Old BrowserInventoryTransfers component is still referenced.'
-            exit 1
-          fi
-"""
-          new_guard = """          if git grep -n -F '<BrowserInventoryTransfers' -- apps/erp-next/app apps/erp-next/components 2>/dev/null; then
-            echo '::error::Old BrowserInventoryTransfers JSX is still referenced.'
-            exit 1
-          fi
-          if git grep -n -F \"import { BrowserInventoryTransfers }\" -- apps/erp-next/app apps/erp-next/components apps/erp-next/lib 2>/dev/null; then
-            echo '::error::Old BrowserInventoryTransfers import is still referenced.'
-            exit 1
-          fi
-"""
-          if old_guard in finalizer:
-              if finalizer.count(old_guard) != 1:
-                  raise SystemExit(f'transfer component guard: expected one match, found {finalizer.count(old_guard)}')
-              workflow.write_text(finalizer.replace(old_guard, new_guard, 1))
-              print('updated: exact BrowserInventoryTransfers component guard')
-          elif new_guard not in finalizer:
-              raise SystemExit('transfer component guard: neither old nor corrected form found')
-          PY
-
-      - name: Execute guarded finalization plan from feature branch
+      - name: Upload remote task
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          from textwrap import dedent
+          scp -q ops/digitalocean/run/task.sh "$DO_USER@$DO_HOST:/home/demac-deploy/run/task.sh.new"
+          ssh "$DO_USER@$DO_HOST" 'chmod 0700 /home/demac-deploy/run/task.sh.new && mv /home/demac-deploy/run/task.sh.new /home/demac-deploy/run/task.sh'
 
-          workflow = Path('.github/workflows/inventory-finalize.yml')
-          if not workflow.exists():
-              raise SystemExit('inventory-finalize.yml is missing from the feature branch')
+      - name: Upload optional bridge candidate
+        if: ${{ hashFiles('ops/digitalocean/deploy/server-v2.mjs') != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          scp -q ops/digitalocean/deploy/server-v2.mjs "$DO_USER@$DO_HOST:/home/demac-deploy/stage/server-v2.mjs"
 
-          lines = workflow.read_text().splitlines()
-          blocks = []
-          index = 0
-          while index < len(lines):
-              line = lines[index]
-              if line.strip() != 'run: |':
-                  index += 1
-                  continue
-              indent = len(line) - len(line.lstrip())
-              index += 1
-              body = []
-              while index < len(lines):
-                  candidate = lines[index]
-                  candidate_indent = len(candidate) - len(candidate.lstrip()) if candidate.strip() else indent + 2
-                  if candidate.strip() and candidate_indent <= indent:
-                      break
-                  body.append(candidate)
-                  index += 1
-              blocks.append(dedent('\n'.join(body)).rstrip())
+      - name: Execute remote task
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -o ServerAliveInterval=15 -o ServerAliveCountMax=3 "$DO_USER@$DO_HOST" '/home/demac-deploy/run/task.sh'
 
-          if len(blocks) != 4:
-              raise SystemExit(f'Expected exactly 4 guarded run blocks in inventory-finalize.yml, found {len(blocks)}')
-
-          script = '\n\n'.join(blocks) + '\n'
-          Path('/tmp/inventory-finalize.sh').write_text(script)
-          print('Prepared guarded inventory finalization script with 4 validated stages.')
-          PY
-          bash /tmp/inventory-finalize.sh
+      - name: Remove runner SSH key
+        if: always()
+        shell: bash
+        run: rm -f "$HOME/.ssh/id_ed25519"
