@@ -88,7 +88,7 @@ export type OfficeAppointmentAttribution = {
   updatedAtIso?: string;
 };
 
-type OfficeCommunicationQueueEntry = {
+export type OfficeCommunicationQueueEntry = {
   queueId: string;
   status: string;
   messageId?: string;
@@ -96,13 +96,44 @@ type OfficeCommunicationQueueEntry = {
   reason?: string;
 };
 
-type OfficeCommunicationState = {
+export type OfficeCommunicationState = {
   enabled: boolean;
   queueIds: string[];
   historyQueueIds: string[];
   state: string;
-  queue: OfficeCommunicationQueueEntry[];
+  queue?: OfficeCommunicationQueueEntry[];
   lastError: string;
+  canSendNow?: boolean;
+};
+
+export type OfficeCommunicationPurpose = 'confirmation' | 'reminder';
+
+export type OfficeRecipientCommunicationState = {
+  selected: boolean;
+  state: string;
+  queueIds: string[];
+  historyQueueIds: string[];
+  lastError: string;
+  canSendNow: boolean;
+  manual: boolean;
+  reason: string;
+  messageId?: string;
+  provider?: string;
+  historyAttemptCount: number;
+};
+
+export type OfficeAppointmentCommunicationRecipient = {
+  id: string;
+  recipientType: string;
+  sourceId: string;
+  name: string;
+  role: string;
+  phone: string;
+  preferredLanguage: string;
+  sendConfirmation: boolean;
+  sendReminder: boolean;
+  confirmation: OfficeRecipientCommunicationState;
+  reminder: OfficeRecipientCommunicationState;
 };
 
 export type OfficeAppointmentCommunication = {
@@ -111,18 +142,9 @@ export type OfficeAppointmentCommunication = {
   appointmentId: string;
   workOrderId: string;
   whatsappEnabled: boolean;
-  recipients: Array<{
-    id: string;
-    name: string;
-    phone: string;
-    preferredLanguage: string;
-    sendConfirmation: boolean;
-    sendReminder: boolean;
-  }>;
+  recipients: OfficeAppointmentCommunicationRecipient[];
   confirmation: OfficeCommunicationState;
-  reminder: OfficeCommunicationState & {
-    canSendNow: boolean;
-  };
+  reminder: OfficeCommunicationState;
 };
 
 export type OfficeLifecycleResult = {
@@ -325,6 +347,7 @@ export function getOfficeAppointmentCommunication(appointmentId: string) {
   );
 }
 
+/** Legacy global reminder preference contract. New appointment UI uses the per-recipient method below. */
 export function updateOfficeAppointmentReminder(input: {
   appointmentId: string;
   requestId: string;
@@ -337,12 +360,39 @@ export function updateOfficeAppointmentReminder(input: {
   );
 }
 
+export function updateOfficeAppointmentReminderRecipient(input: {
+  appointmentId: string;
+  requestId: string;
+  recipientId: string;
+  enabled: boolean;
+}) {
+  return callOfficeBookingAuthority<OfficeAppointmentCommunication>(
+    'update_appointment_communication',
+    input,
+    10_000,
+  );
+}
+
+/** Legacy global manual reminder contract. New appointment UI uses sendOfficeAppointmentCommunication. */
 export function sendOfficeAppointmentReminder(input: {
   appointmentId: string;
   requestId: string;
 }) {
   return callOfficeBookingAuthority<OfficeAppointmentCommunication>(
     'send_appointment_reminder',
+    input,
+    12_000,
+  );
+}
+
+export function sendOfficeAppointmentCommunication(input: {
+  appointmentId: string;
+  requestId: string;
+  recipientId: string;
+  purpose: OfficeCommunicationPurpose;
+}) {
+  return callOfficeBookingAuthority<OfficeAppointmentCommunication>(
+    'send_appointment_communication',
     input,
     12_000,
   );
