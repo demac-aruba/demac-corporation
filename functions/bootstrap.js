@@ -1,7 +1,7 @@
 const core = require("./index");
 const wacliGateway = require("./whatsappWacliGateway");
 const wacliOutboundMediaUpload = require("./wacliOutboundMediaUpload");
-const customerAgentCommunication = require("./demacCustomerAgentCommunication");
+const customerAgentCommunication = require("./demacCustomerAgentAllowlistCommunication");
 const appointmentNotifications = require("./appointmentNotifications");
 const userManagement = require("./userManagement");
 const voiceTranscription = require("./voiceTranscription");
@@ -15,7 +15,8 @@ const router = require("./whatsappCopilotRouter");
 // Production customer conversations have one runtime: Customer Runtime V1.
 // WhatsApp transport is exported separately through the wacli gateway and the
 // canonical Communication Center bridge. Historical Copilot modules are not
-// loaded or deployed from bootstrap.
+// loaded or deployed from bootstrap. Maya's production communication entry
+// points are gated by the server-side phone allowlist wrapper.
 module.exports = {
   ...core,
   ...wacliGateway,
