@@ -51,7 +51,7 @@ const WORK_TYPE_LABELS = Object.freeze({
     standard_installation: "Instalacion standard",
     installation_extended_labor: "Instalacion cu trabou adicional",
     check_up: "Check Up",
-    leak_repair: "Reparacion di fuga",
+    leak_repair: "Reparacion di lek",
     commercial_service: "Servicio comercial",
     other: "Otro",
   }),
