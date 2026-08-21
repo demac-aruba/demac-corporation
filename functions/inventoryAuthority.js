@@ -36,6 +36,25 @@ function positiveInt(value) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.max(1, Math.floor(number)) : 0;
 }
+function roundQuantity(value) {
+  return Math.round((Number(value) + Number.EPSILON) * 1000) / 1000;
+}
+function nonNegativeQuantity(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? roundQuantity(number) : fallback;
+}
+function quantityForKind(value, itemKind, options = {}) {
+  const number = Number(value);
+  const positive = options.positive === true;
+  const field = cleanText(options.field, 120) || "quantity";
+  if (!Number.isFinite(number) || number < 0 || (positive && number <= 0)) {
+    throw new InventoryAuthorityError("invalid_request", `${field} must be ${positive ? "greater than zero" : "zero or greater"}.`, { field, itemKind });
+  }
+  if (itemKind === "product" && !Number.isInteger(number)) {
+    throw new InventoryAuthorityError("invalid_request", "Product quantities must be whole units.", { field, itemKind, value: number });
+  }
+  return itemKind === "product" ? number : roundQuantity(number);
+}
 function deterministicId(prefix, value) {
   return `${prefix}-${crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, 24)}`;
 }
@@ -55,10 +74,10 @@ function normalizeItemKind(value) {
   throw new InventoryAuthorityError("invalid_request", "Inventory item kind must be product or material.", { field: "itemKind" });
 }
 function normalizeBalance(value = {}) {
-  const onHand = nonNegativeInt(value.onHand);
-  const reserved = Math.min(onHand, nonNegativeInt(value.reserved));
-  const minimum = nonNegativeInt(value.minimum);
-  const target = Math.max(minimum, nonNegativeInt(value.target, minimum));
+  const onHand = nonNegativeQuantity(value.onHand);
+  const reserved = Math.min(onHand, nonNegativeQuantity(value.reserved));
+  const minimum = nonNegativeQuantity(value.minimum);
+  const target = Math.max(minimum, nonNegativeQuantity(value.target, minimum));
   return { onHand, reserved, minimum, target };
 }
 function normalizeBalanceMap(value) {
@@ -82,21 +101,21 @@ function productBalanceMap(stock = {}) {
 function materialBalanceMap(item = {}) {
   const stored = normalizeBalanceMap(item.stockByLocation || item.balances);
   if (Object.keys(stored).length) return stored;
-  const minimum = nonNegativeInt(item.minimum);
+  const minimum = nonNegativeQuantity(item.minimum);
   return { [WAREHOUSE_LOCATION_ID]: {
-    onHand: nonNegativeInt(item.quantity), reserved: 0, minimum,
-    target: Math.max(minimum, nonNegativeInt(item.target, minimum)),
+    onHand: nonNegativeQuantity(item.quantity), reserved: 0, minimum,
+    target: Math.max(minimum, nonNegativeQuantity(item.target, minimum)),
   } };
 }
 function availableStock(balance) {
   const value = normalizeBalance(balance);
-  return Math.max(0, value.onHand - value.reserved);
+  return roundQuantity(Math.max(0, value.onHand - value.reserved));
 }
 function balanceMapTotals(balances) {
   return Object.values(balances).reduce((total, raw) => {
     const value = normalizeBalance(raw);
-    total.onHand += value.onHand;
-    total.reserved += value.reserved;
+    total.onHand = roundQuantity(total.onHand + value.onHand);
+    total.reserved = roundQuantity(total.reserved + value.reserved);
     return total;
   }, { onHand: 0, reserved: 0 });
 }
@@ -112,7 +131,7 @@ function normalizedTransferLines(lines) {
   for (const raw of lines) {
     const itemKind = normalizeItemKind(raw?.itemKind);
     const itemId = requiredText(raw?.itemId, "lines.itemId", "Item id", 180);
-    const quantity = positiveInt(raw?.quantity ?? raw?.requestedQuantity);
+    const quantity = quantityForKind(raw?.quantity ?? raw?.requestedQuantity, itemKind, { positive: true, field: "lines.quantity" });
     if (!quantity) throw new InventoryAuthorityError("invalid_request", "Every transfer quantity must be greater than zero.", { itemId });
     const lineId = `${itemKind}:${itemId}`;
     const current = merged.get(lineId);
@@ -125,7 +144,7 @@ function suppliedQuantityMap(lines, field) {
   if (!Array.isArray(lines)) return result;
   for (const line of lines) {
     const lineId = cleanText(line?.lineId || `${line?.itemKind || ""}:${line?.itemId || ""}`, 400);
-    if (lineId) result.set(lineId, nonNegativeInt(line?.[field] ?? line?.quantity));
+    if (lineId) result.set(lineId, nonNegativeQuantity(line?.[field] ?? line?.quantity));
   }
   return result;
 }
@@ -173,7 +192,7 @@ function buildReplenishment(items, locations) {
       const balance = normalizeBalance(raw);
       if (!balance.target) continue;
       const available = availableStock(balance);
-      const needed = Math.max(0, balance.target - available);
+      const needed = roundQuantity(Math.max(0, balance.target - available));
       if (needed > 0 && available <= balance.minimum) result.push({
         itemKind: item.itemKind, itemId: item.id, itemName: item.name, locationId,
         onHand: balance.onHand, reserved: balance.reserved, minimum: balance.minimum, target: balance.target, needed,
@@ -247,7 +266,7 @@ function createInventoryApi({ db, verifyIdToken } = {}) {
   function movement(args) {
     return {
       id: args.id, version: 1, itemKind: args.itemKind, itemId: args.itemId,
-      itemName: cleanText(args.itemName, 240), quantity: nonNegativeInt(args.quantity), type: args.type,
+      itemName: cleanText(args.itemName, 240), quantity: nonNegativeQuantity(args.quantity), type: args.type,
       sourceLocationId: cleanText(args.sourceLocationId, 160), destinationLocationId: cleanText(args.destinationLocationId, 160),
       transferId: cleanText(args.transferId, 180), workOrderId: cleanText(args.workOrderId, 180),
       previousOnHand: Number.isFinite(Number(args.previousOnHand)) ? Number(args.previousOnHand) : undefined,
@@ -285,7 +304,7 @@ function createInventoryApi({ db, verifyIdToken } = {}) {
     const itemId = requiredText(data.itemId, "itemId", "Item id", 180);
     const locationId = requiredText(data.locationId, "locationId", "Location id", 160);
     if (locationId === LEGACY_UNASSIGNED_LOCATION_ID) throw new InventoryAuthorityError("invalid_location", "Legacy unassigned stock must be allocated, not edited as a normal location.");
-    const onHand = nonNegativeInt(data.onHand);
+    const onHand = quantityForKind(data.onHand, itemKind, { field: "onHand" });
     await assertLocation(locationId, await inventoryLocations(db), "locationId");
     const eventId = deterministicId("IM", `${stable}:stock-level`);
     let result;
@@ -313,8 +332,8 @@ function createInventoryApi({ db, verifyIdToken } = {}) {
     const locationId = requiredText(data.locationId, "locationId", "Location id", 160);
     if (locationId === LEGACY_UNASSIGNED_LOCATION_ID) throw new InventoryAuthorityError("invalid_location", "Legacy unassigned stock cannot have a replenishment policy.");
     await assertLocation(locationId, await inventoryLocations(db), "locationId");
-    const minimum = nonNegativeInt(data.minimum);
-    const target = Math.max(minimum, nonNegativeInt(data.target, minimum));
+    const minimum = quantityForKind(data.minimum, itemKind, { field: "minimum" });
+    const target = Math.max(minimum, quantityForKind(data.target, itemKind, { field: "target" }));
     let balance;
     await db.runTransaction(async (transaction) => {
       const [record] = await readStockRecords(transaction, [{ itemKind, itemId }]);
@@ -384,7 +403,7 @@ function createInventoryApi({ db, verifyIdToken } = {}) {
         const balances = { ...record.balances };
         const sourceBalance = normalizeBalance(balances[sourceLocationId] || {});
         if (availableStock(sourceBalance) < line.requestedQuantity) throw new InventoryAuthorityError("insufficient_stock", `${record.catalog.name || line.itemId} does not have enough available stock at ${source.name}.`, { itemId: line.itemId, available: availableStock(sourceBalance), requested: line.requestedQuantity });
-        balances[sourceLocationId] = { ...sourceBalance, reserved: sourceBalance.reserved + line.requestedQuantity };
+        balances[sourceLocationId] = { ...sourceBalance, reserved: roundQuantity(sourceBalance.reserved + line.requestedQuantity) };
         writeStockRecord(transaction, record, balances, actor, now);
         enriched.push({ ...line, itemName: cleanText(record.catalog.name, 240) || line.itemId, unit: cleanText(record.catalog.unit, 80) || "unit", pickedQuantity: 0, receivedQuantity: 0 });
       }
@@ -420,14 +439,14 @@ function createInventoryApi({ db, verifyIdToken } = {}) {
         const record = recordsByLine.get(line.lineId);
         const balances = { ...record.balances };
         const source = normalizeBalance(balances[current.sourceLocationId] || {});
-        const requested = nonNegativeInt(line.requestedQuantity);
-        const picked = quantities.has(line.lineId) ? quantities.get(line.lineId) : requested;
+        const requested = quantityForKind(line.requestedQuantity, line.itemKind, { field: "requestedQuantity" });
+        const picked = quantities.has(line.lineId) ? quantityForKind(quantities.get(line.lineId), line.itemKind, { field: "pickedQuantity" }) : requested;
         if (picked > requested) throw new InventoryAuthorityError("invalid_request", "Picked quantity cannot exceed requested quantity.", { lineId: line.lineId });
         if (source.onHand < picked || source.reserved < requested) throw new InventoryAuthorityError("stock_changed", `${line.itemName} stock changed after this transfer was requested.`, { lineId: line.lineId });
-        balances[current.sourceLocationId] = { ...source, onHand: source.onHand - picked, reserved: source.reserved - requested };
+        balances[current.sourceLocationId] = { ...source, onHand: roundQuantity(source.onHand - picked), reserved: roundQuantity(source.reserved - requested) };
         writeStockRecord(transaction, record, balances, actor, now);
         if (picked > 0) createMovement(transaction, movement({ id: deterministicId("IM", `${transferId}:out:${line.lineId}`), itemKind: line.itemKind, itemId: line.itemId, itemName: line.itemName, quantity: picked, type: "transfer_out", sourceLocationId: current.sourceLocationId, transferId, now, actor }));
-        nextLines.push({ ...line, pickedQuantity: picked, pickupShortfall: Math.max(0, requested - picked) });
+        nextLines.push({ ...line, pickedQuantity: picked, pickupShortfall: roundQuantity(Math.max(0, requested - picked)) });
       }
       transfer = { ...current, lines: nextLines, status: "in_transit", pickedUpById: actor.uid, pickedUpByName: actor.name, pickedUpAt: now, pickupNote: cleanText(data.note, 1000), updatedAt: now };
       transaction.set(transferRef, transfer, { merge: true });
@@ -447,7 +466,11 @@ function createInventoryApi({ db, verifyIdToken } = {}) {
       const current = { id: snapshot.id, ...snapshot.data() };
       if (current.status === "completed") { transfer = current; replayed = true; return; }
       if (current.status !== "in_transit") throw new InventoryAuthorityError("invalid_transfer_state", "Only an in-transit transfer can be received.", { status: current.status });
-      const nextQuantities = current.lines.map((line) => ({ line, picked: nonNegativeInt(line.pickedQuantity), received: quantities.has(line.lineId) ? quantities.get(line.lineId) : nonNegativeInt(line.pickedQuantity) }));
+      const nextQuantities = current.lines.map((line) => {
+        const picked = quantityForKind(line.pickedQuantity, line.itemKind, { field: "pickedQuantity" });
+        const received = quantities.has(line.lineId) ? quantityForKind(quantities.get(line.lineId), line.itemKind, { field: "receivedQuantity" }) : picked;
+        return { line, picked, received };
+      });
       if (nextQuantities.some(({ picked, received }) => received > picked)) throw new InventoryAuthorityError("invalid_request", "Received quantity cannot exceed picked quantity.");
       const hasDiscrepancy = nextQuantities.some(({ picked, received }) => picked !== received);
       const discrepancyNote = cleanText(data.discrepancyNote, 1000);
@@ -460,10 +483,10 @@ function createInventoryApi({ db, verifyIdToken } = {}) {
         const record = recordsByLine.get(line.lineId);
         const balances = { ...record.balances };
         const destination = normalizeBalance(balances[current.destinationLocationId] || {});
-        balances[current.destinationLocationId] = { ...destination, onHand: destination.onHand + received };
+        balances[current.destinationLocationId] = { ...destination, onHand: roundQuantity(destination.onHand + received) };
         writeStockRecord(transaction, record, balances, actor, now);
         if (received > 0) createMovement(transaction, movement({ id: deterministicId("IM", `${transferId}:in:${line.lineId}`), itemKind: line.itemKind, itemId: line.itemId, itemName: line.itemName, quantity: received, type: "transfer_in", destinationLocationId: current.destinationLocationId, transferId, now, actor }));
-        const variance = Math.max(0, picked - received);
+        const variance = roundQuantity(Math.max(0, picked - received));
         if (variance > 0) createMovement(transaction, movement({ id: deterministicId("IM", `${transferId}:variance:${line.lineId}`), itemKind: line.itemKind, itemId: line.itemId, itemName: line.itemName, quantity: variance, type: "transfer_variance", transferId, reason: discrepancyNote, now, actor }));
         nextLines.push({ ...line, receivedQuantity: received, varianceQuantity: variance });
       }
@@ -491,7 +514,7 @@ function createInventoryApi({ db, verifyIdToken } = {}) {
         const record = recordsByLine.get(line.lineId);
         const balances = { ...record.balances };
         const source = normalizeBalance(balances[current.sourceLocationId] || {});
-        balances[current.sourceLocationId] = { ...source, reserved: Math.max(0, source.reserved - nonNegativeInt(line.requestedQuantity)) };
+        balances[current.sourceLocationId] = { ...source, reserved: roundQuantity(Math.max(0, source.reserved - quantityForKind(line.requestedQuantity, line.itemKind, { field: "requestedQuantity" }))) };
         writeStockRecord(transaction, record, balances, actor, now);
       }
       transfer = { ...current, status: "cancelled", cancelledAt: now, cancelledById: actor.uid, cancelledByName: actor.name, cancellationReason: cleanText(data.reason, 1000) || "Cancelled before pickup", updatedAt: now };
@@ -539,8 +562,7 @@ function createInventoryApi({ db, verifyIdToken } = {}) {
     const itemId = requiredText(data.itemId, "itemId", "Item id", 180);
     const locationId = requiredText(data.locationId, "locationId", "Inventory location", 160);
     const workOrderId = requiredText(data.workOrderId, "workOrderId", "Work Order", 180);
-    const quantity = positiveInt(data.quantity);
-    if (!quantity) throw new InventoryAuthorityError("invalid_request", "Issued quantity must be greater than zero.");
+    const quantity = quantityForKind(data.quantity, itemKind, { positive: true, field: "quantity" });
     await assertLocation(locationId, await inventoryLocations(db), "locationId");
     const eventId = deterministicId("IM", `${stable}:work-order-issue`);
     let result;
@@ -553,7 +575,7 @@ function createInventoryApi({ db, verifyIdToken } = {}) {
       const balances = { ...record.balances };
       const source = normalizeBalance(balances[locationId] || {});
       if (availableStock(source) < quantity) throw new InventoryAuthorityError("insufficient_stock", `${record.catalog.name} does not have enough available stock at the selected location.`, { available: availableStock(source), quantity });
-      balances[locationId] = { ...source, onHand: source.onHand - quantity };
+      balances[locationId] = { ...source, onHand: roundQuantity(source.onHand - quantity) };
       const now = new Date().toISOString();
       writeStockRecord(transaction, record, balances, actor, now);
       const event = movement({ id: eventId, itemKind, itemId, itemName: record.catalog.name, quantity, type: "issue_to_work_order", sourceLocationId: locationId, workOrderId, reason: cleanText(data.reason, 800) || "Issued to Work Order", now, actor });

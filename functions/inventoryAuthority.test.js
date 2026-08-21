@@ -288,6 +288,57 @@ test("Work Order issue reduces only the source location and is idempotent", asyn
   assert.equal(balance(db, "VAN-1").onHand, 1, "retry must not consume stock twice");
 });
 
+test("measured material quantities preserve decimals through transfer and Work Order issue", async () => {
+  const seed = productSeed();
+  seed.warehouseInventory.refrigerant = { name: "R410A Refrigerant", category: "Refrigerant", unit: "lb", quantity: 12.5, minimum: 5, target: 15, active: true };
+  const db = makeDb(seed);
+  const api = apiFor(db);
+
+  const created = await api.createTransfer({
+    requestId: "refrigerant-transfer-decimal-001",
+    sourceLocationId: WAREHOUSE_LOCATION_ID,
+    destinationLocationId: "VAN-1",
+    lines: [{ itemKind: "material", itemId: "refrigerant", quantity: 2.75 }],
+  }, actor);
+  let material = db.stores.get("warehouseInventory").get("refrigerant");
+  assert.equal(material.stockByLocation[WAREHOUSE_LOCATION_ID].onHand, 12.5);
+  assert.equal(material.stockByLocation[WAREHOUSE_LOCATION_ID].reserved, 2.75);
+
+  await api.pickupTransfer({ requestId: "refrigerant-pickup-decimal-001", transferId: created.transfer.id }, actor);
+  material = db.stores.get("warehouseInventory").get("refrigerant");
+  assert.equal(material.stockByLocation[WAREHOUSE_LOCATION_ID].onHand, 9.75);
+
+  await api.receiveTransfer({ requestId: "refrigerant-receive-decimal-001", transferId: created.transfer.id }, actor);
+  material = db.stores.get("warehouseInventory").get("refrigerant");
+  assert.equal(material.stockByLocation["VAN-1"].onHand, 2.75);
+
+  await api.issueToWorkOrder({
+    requestId: "refrigerant-workorder-decimal-001",
+    itemKind: "material",
+    itemId: "refrigerant",
+    locationId: "VAN-1",
+    workOrderId: "WO-1",
+    quantity: 0.5,
+    reason: "Measured refrigerant used on job",
+  }, actor);
+  material = db.stores.get("warehouseInventory").get("refrigerant");
+  assert.equal(material.stockByLocation["VAN-1"].onHand, 2.25);
+});
+
+test("fractional Product quantities are rejected instead of silently rounded", async () => {
+  const db = makeDb(productSeed());
+  const api = apiFor(db);
+  await assert.rejects(
+    () => api.createTransfer({
+      requestId: "fractional-product-transfer-001",
+      sourceLocationId: WAREHOUSE_LOCATION_ID,
+      destinationLocationId: OFFICE_LOCATION_ID,
+      lines: [{ itemKind: "product", itemId: "prod-12k", quantity: 1.5 }],
+    }, actor),
+    /whole units/i,
+  );
+});
+
 test("Inventory Authority HTTP boundary requires Firebase authentication", async () => {
   const db = makeDb(productSeed());
   const api = apiFor(db);

@@ -572,10 +572,10 @@ const deleteTestClient = async (id: string): Promise<OperationResult> => {
     if (!Number.isInteger(onHand) || onHand < 0) return { ok: false, message: 'El stock físico debe ser un número entero igual o mayor que cero.' };
 
     const existing = commercialProductStock.find((stock) => stock.id === productId || stock.productId === productId);
-const locationManaged = existing?.version === 2 || Boolean(existing?.balances && Object.keys(existing.balances).length);
-if (locationManaged) {
-  return { ok: false, message: 'Este producto ya usa inventario por ubicación. Actualiza el stock desde Inventory Control para conservar Warehouse, Office y Vans.' };
-}
+    const locationManaged = existing?.version === 2 || Boolean(existing?.balances && Object.keys(existing.balances).length);
+    if (locationManaged) {
+      return { ok: false, message: 'Este producto ya usa inventario por ubicación. Actualiza el stock desde Inventory Control para conservar Warehouse, Office y Vans.' };
+    }
     const reserved = Number(existing?.reserved ?? 0);
     if (!Number.isInteger(reserved) || reserved < 0) {
       return { ok: false, message: 'El stock reservado tiene datos inconsistentes. Debe revisarse antes de actualizar el stock físico.' };

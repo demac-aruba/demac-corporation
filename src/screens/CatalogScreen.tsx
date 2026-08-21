@@ -119,10 +119,10 @@ export function CatalogScreen() {
 
   const openStockEditor = () => {
     if (!selected || normalizeType(selected) !== 'Producto') return;
-if (stockLocationManaged) {
-  setStockMessage('Este producto ya usa inventario por ubicación. Adminístralo desde ERP Next → Inventory.');
-  return;
-}
+    if (stockLocationManaged) {
+      setStockMessage('Este producto ya usa inventario por ubicación. Adminístralo desde ERP Next → Inventory.');
+      return;
+    }
     setStockOnHand(String(selectedStock?.onHand ?? 0));
     setStockMessage('');
     setShowStockForm(true);
