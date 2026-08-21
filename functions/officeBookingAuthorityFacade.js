@@ -24,10 +24,12 @@ function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
     if (request.method === "OPTIONS") return { status: 204, body: null };
     if (request.method !== "POST") return { status: 405, body: { success: false, error: { code: "method_not_allowed", message: "POST is required.", details: {} } } };
     const action = cleanText(request.body?.action, 120);
-    if (!COMMUNICATION_ACTIONS.has(action)) return baseApi.handle(request);
+    const data = request.body?.data || {};
+    const legacyGlobalReminderUpdate = action === "update_appointment_communication" && !cleanText(data.recipientId, 180);
+    if (!COMMUNICATION_ACTIONS.has(action) || legacyGlobalReminderUpdate) return baseApi.handle(request);
     try {
       const identity = await baseApi.authenticate(request);
-      const result = await communication.execute({ action, data: request.body?.data || {}, identity });
+      const result = await communication.execute({ action, data, identity });
       return { status: 200, body: result };
     } catch (error) {
       return communicationError(error);
