@@ -25,34 +25,24 @@ jobs:
           from pathlib import Path
           from textwrap import dedent
 
-          def read(path):
-              return Path(path).read_text()
-
-          def write(path, text):
-              Path(path).write_text(text)
-
+          def read(path): return Path(path).read_text()
+          def write(path, text): Path(path).write_text(text)
           def unique_index(text, needle, label, start=0):
               count = text.count(needle, start)
-              if count != 1:
-                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
+              if count != 1: raise SystemExit(f'{label}: expected exactly one match, found {count}')
               return text.index(needle, start)
-
           def interface_block(path, name):
               text = read(path)
-              start_marker = f'export interface {name} {{'
-              start = unique_index(text, start_marker, f'{name} start')
+              start = unique_index(text, f'export interface {name} {{', f'{name} start')
               end = text.find('\n}\n', start)
-              if end < 0:
-                  raise SystemExit(f'{name}: closing brace not found')
+              if end < 0: raise SystemExit(f'{name}: closing brace not found')
               end += 3
               return text, start, end, text[start:end]
 
-          # Legacy type compatibility: preserve the existing Product stock record while exposing v2 location balances.
           text, start, end, block = interface_block('src/types.ts', 'CommercialProductStock')
           if 'version?: number;' not in block:
               needle = '  active: boolean;\n'
-              if block.count(needle) != 1:
-                  raise SystemExit('CommercialProductStock: active field not uniquely found')
+              if block.count(needle) != 1: raise SystemExit('CommercialProductStock: active field not uniquely found')
               block = block.replace(needle, dedent('''\
                 active: boolean;
                 version?: number;
@@ -63,28 +53,23 @@ jobs:
                   target: number;
                 }>;
               '''), 1)
-              text = text[:start] + block + text[end:]
-              write('src/types.ts', text)
-              print('updated: CommercialProductStock v2 compatibility type')
+              write('src/types.ts', text[:start] + block + text[end:])
 
-          text = read('src/inventory/v2Types.ts')
+          path = 'src/inventory/v2Types.ts'
+          text = read(path)
           old_location = "export type AssetLocationType = 'van' | 'warehouse';"
           new_location = "export type AssetLocationType = 'van' | 'warehouse' | 'office';"
           if old_location in text:
-              if text.count(old_location) != 1:
-                  raise SystemExit('AssetLocationType: legacy declaration not unique')
-              text = text.replace(old_location, new_location, 1)
-              write('src/inventory/v2Types.ts', text)
-              print('updated: tool Office location type')
+              if text.count(old_location) != 1: raise SystemExit('AssetLocationType: legacy declaration not unique')
+              write(path, text.replace(old_location, new_location, 1))
           elif new_location not in text:
               raise SystemExit('AssetLocationType: expected declaration not found')
 
-          text, start, end, block = interface_block('src/inventory/v2Types.ts', 'WarehouseInventoryItemV2')
+          text, start, end, block = interface_block(path, 'WarehouseInventoryItemV2')
           if 'stockByLocation?:' not in block:
               needle = '  latestCountAt?: string;\n'
-              if block.count(needle) != 1:
-                  raise SystemExit('WarehouseInventoryItemV2: latestCountAt field not uniquely found')
-              addition = dedent('''\
+              if block.count(needle) != 1: raise SystemExit('WarehouseInventoryItemV2: latestCountAt field not uniquely found')
+              block = block.replace(needle, dedent('''\
                 latestCountAt?: string;
                 inventoryVersion?: number;
                 stockByLocation?: Record<string, {
@@ -93,24 +78,18 @@ jobs:
                   minimum: number;
                   target: number;
                 }>;
-              ''')
-              block = block.replace(needle, addition, 1)
-              text = text[:start] + block + text[end:]
-              write('src/inventory/v2Types.ts', text)
-              print('updated: warehouse location-balance compatibility type')
+              '''), 1)
+              write(path, text[:start] + block + text[end:])
 
-          # Once Product stock is v2/location-managed, Legacy cannot overwrite it as one global number.
           path = 'src/state/AppState.tsx'
           text = read(path)
           function_start = unique_index(text, 'const saveCommercialProductStock = async', 'saveCommercialProductStock start')
           function_end = text.find('\n  const addWorkOrder = async', function_start)
-          if function_end < 0:
-              raise SystemExit('saveCommercialProductStock end not found')
+          if function_end < 0: raise SystemExit('saveCommercialProductStock end not found')
           block = text[function_start:function_end]
           if 'const locationManaged = existing?.version === 2' not in block:
               needle = '    const existing = commercialProductStock.find((stock) => stock.id === productId || stock.productId === productId);\n'
-              if block.count(needle) != 1:
-                  raise SystemExit(f'Legacy commercial-stock existing line: expected one match, found {block.count(needle)}')
+              if block.count(needle) != 1: raise SystemExit('Legacy commercial-stock existing line not unique')
               addition = needle + dedent('''\
                 const locationManaged = existing?.version === 2 || Boolean(existing?.balances && Object.keys(existing.balances).length);
                 if (locationManaged) {
@@ -118,69 +97,48 @@ jobs:
                 }
               ''')
               block = block.replace(needle, addition, 1)
-              text = text[:function_start] + block + text[function_end:]
-              write(path, text)
-              print('updated: Legacy commercial-stock write guard')
+              write(path, text[:function_start] + block + text[function_end:])
 
-          # Legacy catalog remains a readable compatibility view but hands physical v2 stock management to Inventory.
           path = 'src/screens/CatalogScreen.tsx'
           text = read(path)
           if 'const stockLocationManaged =' not in text:
               stock_start = unique_index(text, '  const selectedStock = selected\n', 'selectedStock start')
               marker = '    : undefined;\n'
               marker_pos = text.find(marker, stock_start)
-              if marker_pos < 0:
-                  raise SystemExit('selectedStock end not found')
+              if marker_pos < 0: raise SystemExit('selectedStock end not found')
               insert_at = marker_pos + len(marker)
-              line = "  const stockLocationManaged = selectedStock?.version === 2 || Boolean(selectedStock?.balances && Object.keys(selectedStock.balances).length);\n"
-              text = text[:insert_at] + line + text[insert_at:]
-              print('updated: Legacy catalog location-managed state')
-
-          if "if (stockLocationManaged) {\n      setStockMessage('Este producto ya usa inventario por ubicación." not in text:
+              text = text[:insert_at] + "  const stockLocationManaged = selectedStock?.version === 2 || Boolean(selectedStock?.balances && Object.keys(selectedStock.balances).length);\n" + text[insert_at:]
+          if "setStockMessage('Este producto ya usa inventario por ubicación." not in text:
               editor_start = unique_index(text, '  const openStockEditor = () => {\n', 'openStockEditor start')
               needle = "    if (!selected || normalizeType(selected) !== 'Producto') return;\n"
               pos = text.find(needle, editor_start)
-              if pos < 0:
-                  raise SystemExit('openStockEditor Product guard not found')
+              if pos < 0: raise SystemExit('openStockEditor Product guard not found')
               insert_at = pos + len(needle)
-              addition = dedent('''\
+              text = text[:insert_at] + dedent('''\
                 if (stockLocationManaged) {
                   setStockMessage('Este producto ya usa inventario por ubicación. Adminístralo desde ERP Next → Inventory.');
                   return;
                 }
-              ''')
-              text = text[:insert_at] + addition + text[insert_at:]
-              print('updated: Legacy catalog stock-editor guard')
-
+              ''') + text[insert_at:]
           old_pill = "<Pill label={selectedStock?.verifiedAt ? 'Verificado' : 'Sin verificar'} tone={selectedStock?.verifiedAt ? 'success' : 'neutral'} />"
           new_pill = "<Pill label={stockLocationManaged ? 'Por ubicación' : selectedStock?.verifiedAt ? 'Verificado' : 'Sin verificar'} tone={stockLocationManaged || selectedStock?.verifiedAt ? 'success' : 'neutral'} />"
           if old_pill in text:
-              if text.count(old_pill) != 1:
-                  raise SystemExit('Legacy stock status pill is not unique')
+              if text.count(old_pill) != 1: raise SystemExit('Legacy stock status pill is not unique')
               text = text.replace(old_pill, new_pill, 1)
-              print('updated: Legacy catalog location-managed status')
-          elif new_pill not in text:
-              raise SystemExit('Legacy stock status pill not found')
-
+          elif new_pill not in text: raise SystemExit('Legacy stock status pill not found')
           old_action = "<View style={styles.stockActions}><Button label={selectedStock ? 'Actualizar stock' : 'Registrar stock'} onPress={openStockEditor} /></View>"
           new_action = "<View style={styles.stockActions}>{stockLocationManaged ? <Text style={styles.stockNote}>El stock físico por Warehouse, Office y Vans se administra únicamente desde ERP Next → Inventory.</Text> : <Button label={selectedStock ? 'Actualizar stock' : 'Registrar stock'} onPress={openStockEditor} />}</View>"
           if old_action in text:
-              if text.count(old_action) != 1:
-                  raise SystemExit('Legacy stock action is not unique')
+              if text.count(old_action) != 1: raise SystemExit('Legacy stock action is not unique')
               text = text.replace(old_action, new_action, 1)
-              print('updated: Legacy catalog stock action handoff')
-          elif new_action not in text:
-              raise SystemExit('Legacy stock action not found')
+          elif new_action not in text: raise SystemExit('Legacy stock action not found')
           write(path, text)
 
-          # Firestore cutover: pre-v2 documents keep Legacy compatibility; v2 documents are Admin-SDK single-writer.
           path = 'firestore.rules'
           text = read(path)
-
           commercial_start = unique_index(text, '    match /commercialProductStock/{productId} {', 'commercialProductStock rules start')
           commercial_end = text.find('\n    match /staffProfiles/{staffId} {', commercial_start)
-          if commercial_end < 0:
-              raise SystemExit('commercialProductStock rules end not found')
+          if commercial_end < 0: raise SystemExit('commercialProductStock rules end not found')
           commercial_block = text[commercial_start:commercial_end]
           if "resource.data.get('version', 1) != 2" not in commercial_block:
               replacement = dedent('''\
@@ -224,12 +182,10 @@ jobs:
               ''')
               replacement = ''.join(('    ' + line if line else line) + '\n' for line in replacement.rstrip('\n').split('\n')).rstrip('\n')
               text = text[:commercial_start] + replacement + text[commercial_end:]
-              print('updated: commercial Product v2 single-writer rules')
 
           warehouse_start = unique_index(text, '    match /warehouseInventory/{itemId} {', 'warehouseInventory rules start')
           warehouse_end = text.find('\n    match /toolCatalog/{toolId} {', warehouse_start)
-          if warehouse_end < 0:
-              raise SystemExit('warehouseInventory rules end not found')
+          if warehouse_end < 0: raise SystemExit('warehouseInventory rules end not found')
           warehouse_block = text[warehouse_start:warehouse_end]
           if "resource.data.get('inventoryVersion', 1) != 2" not in warehouse_block:
               replacement = dedent('''\
@@ -252,7 +208,6 @@ jobs:
               ''')
               replacement = ''.join(('    ' + line if line else line) + '\n' for line in replacement.rstrip('\n').split('\n')).rstrip('\n')
               text = text[:warehouse_start] + replacement + text[warehouse_end:]
-              print('updated: warehouse material v2 single-writer rules')
           write(path, text)
           PY
 
@@ -282,6 +237,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          npm install --prefix functions --no-audit --no-fund
           node --check functions/inventoryAuthority.js
           node --test functions/inventoryAuthority.test.js
           npm install --prefix apps/erp-next --no-audit --no-fund
