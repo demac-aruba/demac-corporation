@@ -8,6 +8,7 @@ import {
   createOfficeLifecycleRequestId,
   getOfficeAppointmentCommunication,
   rescheduleOfficeAppointment,
+  sendOfficeAppointmentReminder,
   updateOfficeAppointmentReminder,
   type OfficeAppointmentCommunication,
   type OfficeAvailabilityResult,
@@ -88,7 +89,16 @@ function communicationState(value?: string) {
 }
 
 function isAlreadySent(value?: string) {
-  return ['sent', 'delivered', 'read'].includes(String(value || '').toLowerCase());
+  return ['accepted', 'sent', 'delivered', 'read'].includes(String(value || '').toLowerCase());
+}
+
+function reminderControlCopy(communication: OfficeAppointmentCommunication) {
+  const state = communication.reminder.state;
+  if (isAlreadySent(state)) return 'Reminder already sent successfully; it cannot be recalled.';
+  if (state === 'queued' || state === 'processing') return `Reminder is ${state}; another copy cannot be queued.`;
+  if (communication.reminder.lastError) return `Last attempt failed: ${communication.reminder.lastError}`;
+  if (!communication.reminder.enabled) return 'Reminder is disabled for this appointment.';
+  return 'Automatic reminder is enabled. Use manual send only when you intentionally need to send it now.';
 }
 
 function optionKey(option: OfficeBookingOption) {
@@ -153,6 +163,24 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
       setCommunication(next);
     } catch (cause) {
       setCommunicationError(cause instanceof Error ? cause.message : 'Reminder preference could not be updated.');
+    } finally {
+      setCommunicationBusy(false);
+    }
+  };
+
+  const sendReminderNow = async () => {
+    if (!communication?.reminder.canSendNow || communicationBusy) return;
+    if (!window.confirm('Send this appointment reminder now through the DEMAC WhatsApp queue?')) return;
+    setCommunicationBusy(true);
+    setCommunicationError('');
+    try {
+      const next = await sendOfficeAppointmentReminder({
+        appointmentId: appointment.id,
+        requestId: createOfficeLifecycleRequestId('manual-reminder'),
+      });
+      setCommunication(next);
+    } catch (cause) {
+      setCommunicationError(cause instanceof Error ? cause.message : 'The appointment reminder could not be queued manually.');
     } finally {
       setCommunicationBusy(false);
     }
@@ -304,7 +332,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
         </section>
 
         <section className={styles.formSection}>
-          <header><strong>Customer communication</strong><span>Uses the existing Work Order notification policy and WhatsApp outbound queue.</span></header>
+          <header><strong>Customer communication</strong><span>Uses the canonical Work Order notification policy and the shared WhatsApp outbound queue.</span></header>
           {communication ? <div className={styles.formGrid}>
             <Field label="WHATSAPP NOTIFICATIONS" value={communication.whatsappEnabled ? 'Enabled' : 'Disabled'} />
             <Field label="RECIPIENT" value={communication.recipients.map((recipient) => recipient.name || recipient.phone).filter(Boolean).join(', ') || 'No recipient'} />
@@ -312,10 +340,14 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
             <Field label="CONFIRMATION STATUS" value={communicationState(communication.confirmation.state)} />
             <Field label="REMINDER" value={communication.reminder.enabled ? 'Enabled' : 'Disabled'} />
             <Field label="REMINDER STATUS" value={communicationState(communication.reminder.state)} />
-            <div className={styles.wide} style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
-              <div><span style={{ color: 'var(--muted)', fontSize: 7 }}>REMINDER CONTROL</span><strong style={{ display: 'block', marginTop: 4 }}>{isAlreadySent(communication.reminder.state) ? 'Reminder already sent; it cannot be recalled.' : communication.reminder.enabled ? 'The next reminder is enabled.' : 'Reminder is disabled for this appointment.'}</strong></div>
-              <button type="button" className={styles.secondary} disabled={communicationBusy || isAlreadySent(communication.reminder.state)} onClick={() => void toggleReminder()}>{communicationBusy ? 'Saving…' : communication.reminder.enabled ? 'Turn Reminder Off' : 'Turn Reminder On'}</button>
+            <div className={styles.wide} style={{ display: 'grid', gap: 8 }}>
+              <div><span style={{ color: 'var(--muted)', fontSize: 7 }}>REMINDER CONTROL</span><strong style={{ display: 'block', marginTop: 4 }}>{reminderControlCopy(communication)}</strong></div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <button type="button" className={styles.secondary} disabled={communicationBusy || isAlreadySent(communication.reminder.state)} onClick={() => void toggleReminder()}>{communicationBusy ? 'Saving…' : communication.reminder.enabled ? 'Turn Reminder Off' : 'Turn Reminder On'}</button>
+                <button type="button" className={styles.primary} disabled={communicationBusy || !communication.reminder.canSendNow} onClick={() => void sendReminderNow()}>{communicationBusy ? 'Working…' : 'Send Reminder Now'}</button>
+              </div>
             </div>
+            {communication.confirmation.lastError ? <div className={styles.wide}><span style={{ color: 'var(--muted)', fontSize: 7 }}>CONFIRMATION ERROR</span><strong style={{ display: 'block', marginTop: 4 }}>{communication.confirmation.lastError}</strong></div> : null}
           </div> : <div className={styles.descriptionPreview}><span>COMMUNICATION STATUS</span><strong>{communicationError || 'Loading confirmation and reminder status…'}</strong></div>}
           {communicationError && communication ? <div className={styles.descriptionPreview}><span>COMMUNICATION ATTENTION</span><strong>{communicationError}</strong></div> : null}
         </section>
