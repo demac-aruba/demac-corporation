@@ -1,0 +1,84 @@
+name: Wacli Production Account Cutover
+
+on:
+  pull_request:
+    paths:
+      - 'functions/migrations/cutoverWacliProductionAccount.js'
+      - 'functions/migrations/cutoverWacliProductionAccount.test.js'
+      - '.github/workflows/wacli-production-account-cutover.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'functions/migrations/cutoverWacliProductionAccount.js'
+      - 'functions/migrations/cutoverWacliProductionAccount.test.js'
+      - '.github/workflows/wacli-production-account-cutover.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wacli-production-account-cutover
+  cancel-in-progress: false
+
+jobs:
+  validate-cutover:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Validate cutover migration
+        run: |
+          set -euo pipefail
+          node --check functions/migrations/cutoverWacliProductionAccount.js
+          node --test functions/migrations/cutoverWacliProductionAccount.test.js
+
+  apply-production-cutover:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate-cutover
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Authenticate Firebase production service account
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+
+      - name: Reset legacy live inbox projection and register company account
+        env:
+          GCLOUD_PROJECT: demac-corporation
+          GOOGLE_CLOUD_PROJECT: demac-corporation
+          WACLI_CUTOVER_TARGET_PHONE: '2975642625'
+          WACLI_CUTOVER_GENERATION: 'company-whatsapp-5642625-v1'
+        run: |
+          set -euo pipefail
+          output="$(node functions/migrations/cutoverWacliProductionAccount.js)"
+          echo "$output"
+          node - "$output" <<'NODE'
+          const result = JSON.parse(process.argv[2]);
+          if (result.targetPhone !== '2975642625') throw new Error(`Unexpected active WhatsApp account: ${result.targetPhone}`);
+          if (!['cutover-applied', 'already-applied'].includes(result.reason)) throw new Error(`Unexpected cutover result: ${result.reason}`);
+          console.log(`Production inbox cutover: reason=${result.reason}, deleted=${result.deletedConversations}`);
+          NODE
