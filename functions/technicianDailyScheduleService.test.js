@@ -5,8 +5,11 @@ const {
   arrivalContact,
   createTechnicianDailyScheduleService,
   deterministicQueueId,
+  geographicDistrict,
+  geographicZone,
   groupConfigForVan,
   renderVanWorkOrderText,
+  staffFirstNamesForOrder,
   technicianInstructions,
   workSummary,
 } = require("./technicianDailyScheduleService");
@@ -30,8 +33,8 @@ const order = {
   time: "08:30",
   appointmentEndTime: "10:30",
   vanId: "VAN-2",
-  address: "Piedra Plat 1C",
-  zone: "Paradera / Hooiberg",
+  address: "Caya G. F. Betico Croes 42",
+  zone: "Oranjestad / Airport",
   technicianIds: ["tech-a", "tech-b"],
   appointmentWorkItems: [
     { label: "Standard Service", quantity: 2 },
@@ -40,7 +43,7 @@ const order = {
   appointmentAssignmentRole: "primary",
   notificationRecipients: [
     { name: "Owner", role: "Owner", whatsapp: "+2975600000", technicianArrival: false },
-    { name: "Site contact", role: "On-site contact", whatsapp: "+2975611111", technicianArrival: true },
+    { name: "Site contact", role: "Manager", whatsapp: "+2975611111", technicianArrival: true },
   ],
 };
 
@@ -110,6 +113,7 @@ test("technician arrival recipient is preferred over the generic customer contac
   const contact = arrivalContact(order, { name: "Customer", whatsapp: "+2975622222" });
   assert.equal(contact.name, "Site contact");
   assert.equal(contact.phone, "+2975611111");
+  assert.equal(contact.source, "technician-arrival");
 });
 
 test("unrelated notification recipients never replace the primary customer contact", () => {
@@ -120,8 +124,22 @@ test("unrelated notification recipients never replace the primary customer conta
     ],
   }, { name: "Primary Customer", whatsapp: "+2975622222" });
   assert.equal(contact.name, "Primary Customer");
-  assert.equal(contact.phone, "+2975622222");
-  assert.equal(contact.role, "");
+  assert.equal(contact.source, "primary-customer");
+});
+
+test("staff names are shortened for the van group header", () => {
+  const names = staffFirstNamesForOrder(order, new Map([
+    ["tech-a", { name: "Miguel Reyes" }],
+    ["tech-b", { name: "Alan Baquero" }],
+  ]));
+  assert.deepEqual(names, ["Miguel", "Alan"]);
+});
+
+test("geographic labels come from the property and never from the Work Order routing bucket", () => {
+  const property = { operationalZone: "Oranjestad Centro", neighborhood: "Playa" };
+  assert.equal(geographicDistrict(property), "Oranjestad");
+  assert.equal(geographicZone(property), "Playa");
+  assert.notEqual(geographicZone(property), order.zone);
 });
 
 test("technician instructions come from the canonical appointment work lines", () => {
@@ -144,45 +162,47 @@ test("work summary keeps all work items in the same appointment message", () => 
   }), "Standard Service × 2; Leak Repair × 1");
 });
 
-test("one work order renders one complete WhatsApp group message", () => {
+test("one work order renders a private readable WhatsApp group message", () => {
   const text = renderVanWorkOrderText({
-    van: groupVan,
-    order,
-    client: { name: "Customer One", whatsapp: "+2975622222" },
-    property: { accessInstructions: "Use side gate" },
+    van: { ...groupVan, id: "VAN-1", name: "Van 1" },
+    order: { ...order, vanId: "VAN-1" },
+    client: { name: "Izaira Mansur", whatsapp: "+2975622222" },
+    property: {
+      operationalZone: "Oranjestad Centro",
+      neighborhood: "Playa",
+      accessInstructions: "Use side gate",
+    },
     appointment: { workLines: [{ technicianInstructions: "Bring coil cleaner" }] },
     staffById: new Map([
-      ["tech-a", { name: "Technician A" }],
-      ["tech-b", { name: "Technician B" }],
+      ["tech-a", { name: "Miguel Reyes" }],
+      ["tech-b", { name: "Alan Baquero" }],
     ]),
     sequence: 1,
   });
 
-  assert.match(text, /\*DEMAC · Van 2\*/);
-  assert.match(text, /\*Hora:\* 8:30 AM – 10:30 AM/);
-  assert.match(text, /\*Cliente:\* Customer One/);
-  assert.match(text, /\*Contacto:\* Site contact · On-site contact/);
-  assert.match(text, /\*Tel\/WhatsApp:\* \+2975611111/);
-  assert.match(text, /\*Dirección:\* Piedra Plat 1C/);
-  assert.match(text, /\*Equipo:\* Technician A \+ Technician B/);
-  assert.match(text, /\*Trabajo:\* Standard Service × 2/);
-  assert.match(text, /\*Descripción:\* Deep service of the two living-room units/);
-  assert.match(text, /\*Instrucciones técnico:\* Bring coil cleaner/);
-  assert.match(text, /\*Acceso:\* Use side gate/);
+  assert.match(text, /^\*DEMAC · Van 1 · Miguel y Alan\*\n\*Trabajo 1 ·/);
+  assert.match(text, /\n\n\*Hora:\* 8:30 AM – 10:30 AM\n\*Cliente:\* Izaira Mansur\n\*Contacto:\* Site contact · Manager/);
+  assert.match(text, /\n\n\*Dirección:\* Caya G\. F\. Betico Croes 42\n\*Distrito:\* Oranjestad\n\*Zona:\* Playa\n\*Acceso:\* Use side gate/);
+  assert.match(text, /\n\n\*Trabajo:\* Standard Service × 2\n\*Descripción:\* Deep service of the two living-room units/);
+  assert.match(text, /\n\n\*Instrucciones técnico:\* Bring coil cleaner$/);
+  assert.doesNotMatch(text, /Tel\/WhatsApp|\+29756/);
+  assert.doesNotMatch(text, /\*Equipo:\*/);
+  assert.doesNotMatch(text, /\*Asignación:\*/);
+  assert.doesNotMatch(text, /Oranjestad \/ Airport/);
 });
 
-test("support work order is explicitly labeled and remains a message for the support van", () => {
+test("a support Work Order does not expose internal assignment labels", () => {
   const text = renderVanWorkOrderText({
     van: { ...groupVan, id: "VAN-4", name: "Van 4" },
     order: { ...order, vanId: "VAN-4", appointmentAssignmentRole: "support" },
     client: { name: "Customer" },
-    property: {},
+    property: { operationalZone: "Santa Cruz", neighborhood: "Balashi" },
     appointment: {},
     staffById: new Map(),
     sequence: 1,
   });
   assert.match(text, /\*DEMAC · Van 4\*/);
-  assert.match(text, /\*Asignación:\* Apoyo/);
+  assert.doesNotMatch(text, /Asignación|Apoyo|Principal/);
 });
 
 test("queue IDs are deterministic per date, van, work order and delivery run", () => {
@@ -210,7 +230,10 @@ test("queueDay sends one independent group message per work order in chronologic
     vans: [{ id: "VAN-2", active: true, whatsappScheduleGroupName: "Van 2 Group", whatsappScheduleGroupJid: GROUP_JID }],
     workOrders: [secondOrder, order],
     clients: [{ id: "client-1", name: "Customer One" }, { id: "client-2", name: "Customer Two" }],
-    properties: [{ id: "property-1", accessInstructions: "Side gate" }, { id: "property-2" }],
+    properties: [
+      { id: "property-1", operationalZone: "Oranjestad Centro", neighborhood: "Playa", accessInstructions: "Side gate" },
+      { id: "property-2", operationalZone: "Noord", neighborhood: "Washington" },
+    ],
     appointments: [
       { id: "APT-1", workLines: [{ technicianInstructions: "Bring cleaner" }] },
       { id: "APT-2", workLines: [{ technicianInstructions: "Call office if compressor is locked" }] },

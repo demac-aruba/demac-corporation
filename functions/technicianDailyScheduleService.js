@@ -91,6 +91,31 @@ function staffNamesForOrder(order, staffById = new Map()) {
     .filter(Boolean))];
 }
 
+function firstName(value) {
+  return normalizedText(value).split(/\s+/).filter(Boolean)[0] || "";
+}
+
+function staffFirstNamesForOrder(order, staffById = new Map()) {
+  return [...new Set(staffNamesForOrder(order, staffById).map(firstName).filter(Boolean))];
+}
+
+function geographicDistrict(property) {
+  const explicit = normalizedText(property?.district || property?.addressDistrict);
+  if (explicit) return explicit;
+  const source = normalizedText(property?.operationalZone || property?.zone).toLowerCase();
+  if (source.includes("oranjestad")) return "Oranjestad";
+  if (source.includes("noord")) return "Noord";
+  if (source.includes("paradera")) return "Paradera";
+  if (source.includes("santa cruz")) return "Santa Cruz";
+  if (source.includes("savaneta")) return "Savaneta";
+  if (source.includes("san nicolas") || source.includes("san nicolaas")) return "San Nicolas";
+  return "";
+}
+
+function geographicZone(property) {
+  return normalizedText(property?.neighborhood || property?.addressNeighborhood);
+}
+
 function arrivalContact(order, client) {
   const recipients = Array.isArray(order.notificationRecipients) ? order.notificationRecipients : [];
   const preferred = recipients.find((recipient) => recipient?.technicianArrival === true && normalizedText(recipient.whatsapp || recipient.phone));
@@ -99,12 +124,14 @@ function arrivalContact(order, client) {
       name: normalizedText(preferred.name) || normalizedText(client?.name || client?.company) || "Cliente",
       role: normalizedText(preferred.role),
       phone: normalizedText(preferred.whatsapp || preferred.phone),
+      source: "technician-arrival",
     };
   }
   return {
     name: normalizedText(client?.name || client?.company) || "Cliente",
     role: "",
     phone: normalizedText(client?.whatsapp || client?.phone),
+    source: "primary-customer",
   };
 }
 
@@ -112,29 +139,41 @@ function renderVanWorkOrderText({ van, order, client, property, appointment, sta
   const start = formatClock(order.time);
   const end = formatClock(order.appointmentEndTime);
   const contact = arrivalContact(order, client);
-  const team = staffNamesForOrder(order, staffById);
+  const team = staffFirstNamesForOrder(order, staffById);
   const description = customerDescription(order);
   const instructions = technicianInstructions(appointment, order);
   const access = propertyAccessInstructions(property);
-  const assignmentRole = normalizedText(order.appointmentAssignmentRole).toLowerCase() === "support" ? "Apoyo" : "Principal";
-  const lines = [
-    `*DEMAC · ${van.name || van.id}*`,
+  const district = geographicDistrict(property);
+  const zone = geographicZone(property);
+  const vanLabel = normalizedText(van.name || van.id) || "Van";
+  const headerLabel = team.length ? `${vanLabel} · ${team.join(" y ")}` : vanLabel;
+
+  const header = [
+    `*DEMAC · ${headerLabel}*`,
     `*Trabajo ${sequence} · ${formatScheduleDate(order.date)}*`,
-    "",
+  ];
+
+  const customerBlock = [
     `*Hora:* ${start}${order.appointmentEndTime ? ` – ${end}` : ""}`,
     `*Cliente:* ${normalizedText(client?.name || client?.company || order.clientName) || "Cliente"}`,
   ];
-  if (contact.name || contact.phone) lines.push(`*Contacto:* ${contact.name}${contact.role ? ` · ${contact.role}` : ""}`);
-  if (contact.phone) lines.push(`*Tel/WhatsApp:* ${contact.phone}`);
-  lines.push(`*Dirección:* ${normalizedText(order.address || property?.address || property?.addressRaw) || "Dirección pendiente"}`);
-  if (normalizedText(order.zone || property?.operationalZone || property?.zone)) lines.push(`*Zona:* ${normalizedText(order.zone || property?.operationalZone || property?.zone)}`);
-  if (team.length) lines.push(`*Equipo:* ${team.join(" + ")}`);
-  lines.push(`*Asignación:* ${assignmentRole}`);
-  lines.push(`*Trabajo:* ${workSummary(order)}`);
-  if (description) lines.push(`*Descripción:* ${description}`);
-  if (instructions) lines.push(`*Instrucciones técnico:* ${instructions}`);
-  if (access) lines.push(`*Acceso:* ${access}`);
-  return lines.join("\n");
+  if (contact.source === "technician-arrival" && contact.name) {
+    customerBlock.push(`*Contacto:* ${contact.name}${contact.role ? ` · ${contact.role}` : ""}`);
+  }
+
+  const locationBlock = [
+    `*Dirección:* ${normalizedText(order.address || property?.address || property?.addressRaw) || "Dirección pendiente"}`,
+  ];
+  if (district) locationBlock.push(`*Distrito:* ${district}`);
+  if (zone) locationBlock.push(`*Zona:* ${zone}`);
+  if (access) locationBlock.push(`*Acceso:* ${access}`);
+
+  const workBlock = [`*Trabajo:* ${workSummary(order)}`];
+  if (description) workBlock.push(`*Descripción:* ${description}`);
+
+  const blocks = [header, customerBlock, locationBlock, workBlock];
+  if (instructions) blocks.push([`*Instrucciones técnico:* ${instructions}`]);
+  return blocks.map((block) => block.filter(Boolean).join("\n")).filter(Boolean).join("\n\n");
 }
 
 function groupConfigForVan(van) {
@@ -276,10 +315,14 @@ module.exports.arrivalContact = arrivalContact;
 module.exports.createTechnicianDailyScheduleService = createTechnicianDailyScheduleService;
 module.exports.customerDescription = customerDescription;
 module.exports.deterministicQueueId = deterministicQueueId;
+module.exports.firstName = firstName;
 module.exports.formatScheduleDate = formatScheduleDate;
+module.exports.geographicDistrict = geographicDistrict;
+module.exports.geographicZone = geographicZone;
 module.exports.groupConfigForVan = groupConfigForVan;
 module.exports.propertyAccessInstructions = propertyAccessInstructions;
 module.exports.renderVanWorkOrderText = renderVanWorkOrderText;
+module.exports.staffFirstNamesForOrder = staffFirstNamesForOrder;
 module.exports.staffNamesForOrder = staffNamesForOrder;
 module.exports.technicianInstructions = technicianInstructions;
 module.exports.workSummary = workSummary;
