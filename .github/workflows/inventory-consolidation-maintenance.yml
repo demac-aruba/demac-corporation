@@ -1,0 +1,305 @@
+name: Inventory Consolidation Maintenance
+
+on:
+  push:
+    branches:
+      - feature/consolidated-inventory-authority
+    paths:
+      - '.github/workflows/inventory-consolidation-maintenance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  consolidate:
+    if: github.ref == 'refs/heads/feature/consolidated-inventory-authority'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v6
+        with:
+          ref: feature/consolidated-inventory-authority
+          fetch-depth: 0
+
+      - name: Apply guarded Legacy compatibility changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_exact(path, old, new, label):
+              file = Path(path)
+              text = file.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
+              file.write_text(text.replace(old, new, 1))
+              print(f'updated: {label}')
+
+          replace_exact(
+              'src/types.ts',
+              """export interface CommercialProductStock {
+            id: string;
+            productId: string;
+            onHand: number;
+            reserved: number;
+            active: boolean;
+            verifiedAt?: string;
+            verifiedById?: string;
+            verifiedByName?: string;
+            updatedAt?: string;
+            updatedById?: string;
+            updatedByName?: string;
+          }""",
+              """export interface CommercialProductStock {
+            id: string;
+            productId: string;
+            onHand: number;
+            reserved: number;
+            active: boolean;
+            version?: number;
+            balances?: Record<string, {
+              onHand: number;
+              reserved: number;
+              minimum: number;
+              target: number;
+            }>;
+            verifiedAt?: string;
+            verifiedById?: string;
+            verifiedByName?: string;
+            updatedAt?: string;
+            updatedById?: string;
+            updatedByName?: string;
+          }""",
+              'CommercialProductStock v2 compatibility type',
+          )
+
+          replace_exact(
+              'src/inventory/v2Types.ts',
+              "export type AssetLocationType = 'van' | 'warehouse';",
+              "export type AssetLocationType = 'van' | 'warehouse' | 'office';",
+              'tool Office location type',
+          )
+
+          replace_exact(
+              'src/inventory/v2Types.ts',
+              """  latestCountAt?: string;
+            createdAt?: string;
+            updatedAt?: string;
+          }""",
+              """  latestCountAt?: string;
+            inventoryVersion?: number;
+            stockByLocation?: Record<string, {
+              onHand: number;
+              reserved: number;
+              minimum: number;
+              target: number;
+            }>;
+            createdAt?: string;
+            updatedAt?: string;
+          }""",
+              'warehouse location-balance compatibility type',
+          )
+
+          replace_exact(
+              'src/state/AppState.tsx',
+              """    const existing = commercialProductStock.find((stock) => stock.id === productId || stock.productId === productId);
+            const reserved = Number(existing?.reserved ?? 0);""",
+              """    const existing = commercialProductStock.find((stock) => stock.id === productId || stock.productId === productId);
+            const locationManaged = existing?.version === 2 || Boolean(existing?.balances && Object.keys(existing.balances).length);
+            if (locationManaged) {
+              return { ok: false, message: 'Este producto ya usa inventario por ubicación. Actualiza el stock desde Inventory Control para conservar Warehouse, Office y Vans.' };
+            }
+            const reserved = Number(existing?.reserved ?? 0);""",
+              'Legacy commercial-stock write guard',
+          )
+
+          replace_exact(
+              'src/screens/CatalogScreen.tsx',
+              """  const selectedStock = selected
+            ? commercialProductStock.find((stock) => stock.id === selected.id || stock.productId === selected.id)
+            : undefined;
+          const stockReserved""",
+              """  const selectedStock = selected
+            ? commercialProductStock.find((stock) => stock.id === selected.id || stock.productId === selected.id)
+            : undefined;
+          const stockLocationManaged = selectedStock?.version === 2 || Boolean(selectedStock?.balances && Object.keys(selectedStock.balances).length);
+          const stockReserved""",
+              'Legacy catalog location-managed state',
+          )
+
+          replace_exact(
+              'src/screens/CatalogScreen.tsx',
+              """  const openStockEditor = () => {
+            if (!selected || normalizeType(selected) !== 'Producto') return;
+            setStockOnHand(String(selectedStock?.onHand ?? 0));""",
+              """  const openStockEditor = () => {
+            if (!selected || normalizeType(selected) !== 'Producto') return;
+            if (stockLocationManaged) {
+              setStockMessage('Este producto ya usa inventario por ubicación. Adminístralo desde ERP Next → Inventory.');
+              return;
+            }
+            setStockOnHand(String(selectedStock?.onHand ?? 0));""",
+              'Legacy catalog stock-editor guard',
+          )
+
+          replace_exact(
+              'src/screens/CatalogScreen.tsx',
+              """                    <Pill label={selectedStock?.verifiedAt ? 'Verificado' : 'Sin verificar'} tone={selectedStock?.verifiedAt ? 'success' : 'neutral'} />""",
+              """                    <Pill label={stockLocationManaged ? 'Por ubicación' : selectedStock?.verifiedAt ? 'Verificado' : 'Sin verificar'} tone={stockLocationManaged || selectedStock?.verifiedAt ? 'success' : 'neutral'} />""",
+              'Legacy catalog location-managed status',
+          )
+
+          replace_exact(
+              'src/screens/CatalogScreen.tsx',
+              """                  <View style={styles.stockActions}><Button label={selectedStock ? 'Actualizar stock' : 'Registrar stock'} onPress={openStockEditor} /></View>""",
+              """                  <View style={styles.stockActions}>{stockLocationManaged
+                    ? <Text style={styles.stockNote}>El stock físico por Warehouse, Office y Vans se administra únicamente desde ERP Next → Inventory.</Text>
+                    : <Button label={selectedStock ? 'Actualizar stock' : 'Registrar stock'} onPress={openStockEditor} />}
+                  </View>""",
+              'Legacy catalog stock action handoff',
+          )
+
+          rules = Path('firestore.rules')
+          text = rules.read_text()
+          old = """    match /commercialProductStock/{productId} {
+              allow read: if activeStaff();
+              allow create: if inventoryRole()
+                && request.resource.data.productId == productId
+                && request.resource.data.onHand is int
+                && request.resource.data.onHand >= 0
+                && request.resource.data.reserved is int
+                && request.resource.data.reserved == 0
+                && request.resource.data.active is bool
+                && request.resource.data.verifiedAt is string
+                && request.resource.data.verifiedById == request.auth.uid
+                && request.resource.data.updatedById == request.auth.uid;
+              allow update: if inventoryRole()
+                && request.resource.data.productId == productId
+                && resource.data.productId == productId
+                && request.resource.data.onHand is int
+                && request.resource.data.onHand >= 0
+                && request.resource.data.reserved is int
+                && request.resource.data.reserved == resource.data.reserved
+                && request.resource.data.reserved >= 0
+                && request.resource.data.reserved <= request.resource.data.onHand
+                && request.resource.data.active is bool
+                && request.resource.data.verifiedAt is string
+                && request.resource.data.verifiedById == request.auth.uid
+                && request.resource.data.updatedById == request.auth.uid;
+              allow delete: if adminOrSupervisor();
+            }"""
+          new = """    match /commercialProductStock/{productId} {
+              allow read: if activeStaff();
+              // Legacy clients may maintain only pre-location stock. Once Inventory Authority
+              // promotes a Product to v2, all physical stock mutations are server-side.
+              allow create: if inventoryRole()
+                && request.resource.data.get('version', 1) != 2
+                && !request.resource.data.keys().hasAny(['balances'])
+                && request.resource.data.productId == productId
+                && request.resource.data.onHand is int
+                && request.resource.data.onHand >= 0
+                && request.resource.data.reserved is int
+                && request.resource.data.reserved == 0
+                && request.resource.data.active is bool
+                && request.resource.data.verifiedAt is string
+                && request.resource.data.verifiedById == request.auth.uid
+                && request.resource.data.updatedById == request.auth.uid;
+              allow update: if inventoryRole()
+                && resource.data.get('version', 1) != 2
+                && request.resource.data.get('version', 1) != 2
+                && !resource.data.keys().hasAny(['balances'])
+                && !request.resource.data.keys().hasAny(['balances'])
+                && request.resource.data.productId == productId
+                && resource.data.productId == productId
+                && request.resource.data.onHand is int
+                && request.resource.data.onHand >= 0
+                && request.resource.data.reserved is int
+                && request.resource.data.reserved == resource.data.reserved
+                && request.resource.data.reserved >= 0
+                && request.resource.data.reserved <= request.resource.data.onHand
+                && request.resource.data.active is bool
+                && request.resource.data.verifiedAt is string
+                && request.resource.data.verifiedById == request.auth.uid
+                && request.resource.data.updatedById == request.auth.uid;
+              allow delete: if adminOrSupervisor()
+                && resource.data.get('version', 1) != 2
+                && !resource.data.keys().hasAny(['balances']);
+            }"""
+          if text.count(old) != 1:
+              raise SystemExit(f'commercialProductStock rules: expected exactly one match, found {text.count(old)}')
+          text = text.replace(old, new, 1)
+
+          old = """    match /warehouseInventory/{itemId} {
+              allow read: if activeStaff();
+              allow create, update, delete: if inventoryRole();
+            }"""
+          new = """    match /warehouseInventory/{itemId} {
+              allow read: if activeStaff();
+              // Legacy warehouse editing remains available only until the item is promoted
+              // to location-aware v2. Afterwards Inventory Authority is the single writer.
+              allow create: if inventoryRole()
+                && request.resource.data.get('inventoryVersion', 1) != 2
+                && !request.resource.data.keys().hasAny(['stockByLocation']);
+              allow update: if inventoryRole()
+                && resource.data.get('inventoryVersion', 1) != 2
+                && request.resource.data.get('inventoryVersion', 1) != 2
+                && !resource.data.keys().hasAny(['stockByLocation'])
+                && !request.resource.data.keys().hasAny(['stockByLocation']);
+              allow delete: if inventoryRole()
+                && resource.data.get('inventoryVersion', 1) != 2
+                && !resource.data.keys().hasAny(['stockByLocation']);
+            }"""
+          if text.count(old) != 1:
+              raise SystemExit(f'warehouseInventory rules: expected exactly one match, found {text.count(old)}')
+          rules.write_text(text.replace(old, new, 1))
+          print('updated: Firestore v2 single-writer guards')
+          PY
+
+      - name: Remove superseded browser previews only when unreferenced
+        shell: bash
+        run: |
+          set -euo pipefail
+          remove_preview() {
+            symbol="$1"; tsx="$2"; css="$3"
+            refs="$(git grep -l -F "$symbol" -- apps/erp-next 2>/dev/null | grep -v -F "$tsx" || true)"
+            if [ -n "$refs" ]; then
+              echo "Keeping $tsx; referenced by:"
+              echo "$refs"
+              return
+            fi
+            echo "Removing superseded preview: $tsx"
+            rm -f "$tsx" "$css"
+          }
+          remove_preview BrowserInventoryReadiness apps/erp-next/components/inventory/browser-inventory-readiness.tsx apps/erp-next/components/inventory/browser-inventory-readiness.module.css
+          remove_preview BrowserInventoryReplenishment apps/erp-next/components/inventory/browser-inventory-replenishment.tsx apps/erp-next/components/inventory/browser-inventory-replenishment.module.css
+          remove_preview BrowserInventoryTransfers apps/erp-next/components/inventory/browser-inventory-transfers.tsx apps/erp-next/components/inventory/browser-inventory-transfers.module.css
+          remove_preview BrowserPurchasingReadiness apps/erp-next/components/inventory/browser-purchasing-readiness.tsx apps/erp-next/components/inventory/browser-purchasing-readiness.module.css
+          remove_preview BrowserToolRegistry apps/erp-next/components/inventory/browser-tool-registry.tsx apps/erp-next/components/inventory/browser-tool-registry.module.css
+          remove_preview InventoryCommand apps/erp-next/components/inventory/inventory-command.tsx apps/erp-next/components/inventory/inventory-command.module.css
+
+      - name: Validate changed boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check functions/inventoryAuthority.js
+          node --test functions/inventoryAuthority.test.js
+          npm install --prefix apps/erp-next --no-audit --no-fund
+          npm run --prefix apps/erp-next typecheck
+          npm run --prefix apps/erp-next build
+
+      - name: Commit consolidation patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- firestore.rules src/types.ts src/inventory/v2Types.ts src/state/AppState.tsx src/screens/CatalogScreen.tsx apps/erp-next/components/inventory
+          if git diff --cached --quiet; then
+            echo 'No changes to commit.'
+            exit 0
+          fi
+          git commit -m 'Harden Legacy inventory compatibility'
+          git push origin HEAD:feature/consolidated-inventory-authority
