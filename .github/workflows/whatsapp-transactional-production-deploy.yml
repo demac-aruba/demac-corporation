@@ -10,8 +10,12 @@ on:
       - 'functions/whatsappWacliGateway.js'
       - 'functions/operatingCalendarService.js'
       - 'functions/operatingCalendarService.test.js'
+      - 'functions/appointmentCommunicationRenderer.js'
+      - 'functions/appointmentCommunicationRenderer.test.js'
       - 'functions/appointmentNotificationService.js'
       - 'functions/appointmentNotificationService.test.js'
+      - 'functions/appointmentCommunicationAuthority.js'
+      - 'functions/appointmentCommunicationAuthority.test.js'
       - 'functions/appointmentNotifications.js'
       - 'functions/technicianDailyScheduleService.js'
       - 'functions/technicianDailyScheduleService.test.js'
@@ -32,8 +36,12 @@ on:
       - 'functions/whatsappWacliGateway.js'
       - 'functions/operatingCalendarService.js'
       - 'functions/operatingCalendarService.test.js'
+      - 'functions/appointmentCommunicationRenderer.js'
+      - 'functions/appointmentCommunicationRenderer.test.js'
       - 'functions/appointmentNotificationService.js'
       - 'functions/appointmentNotificationService.test.js'
+      - 'functions/appointmentCommunicationAuthority.js'
+      - 'functions/appointmentCommunicationAuthority.test.js'
       - 'functions/appointmentNotifications.js'
       - 'functions/technicianDailyScheduleService.js'
       - 'functions/technicianDailyScheduleService.test.js'
@@ -77,7 +85,9 @@ jobs:
           node --check functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.js
           node --check functions/whatsappWacliGateway.js
           node --check functions/operatingCalendarService.js
+          node --check functions/appointmentCommunicationRenderer.js
           node --check functions/appointmentNotificationService.js
+          node --check functions/appointmentCommunicationAuthority.js
           node --check functions/appointmentNotifications.js
           node --check functions/technicianDailyScheduleService.js
           node --check functions/technicianDailySchedules.js
