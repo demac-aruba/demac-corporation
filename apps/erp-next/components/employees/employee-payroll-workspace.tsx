@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/components/auth/auth-provider';
 import { loadCanonicalOperationsState, staffDisplayName, type CanonicalOperationsState, type CanonicalStaffProfile } from '@/lib/canonical-operations';
 import { loadEmployeeAttendanceState, type EmployeeAttendanceState } from '@/lib/employee-attendance';
@@ -177,10 +177,12 @@ export function EmployeePayrollWorkspace() {
 
   function downloadPdf() {
     setMessage('');
+    setError('');
     const ok = downloadPayrollAccountingPdf({
       filename: `DEMAC_Payroll_Contabilidad_${period.startDate}_${period.endDate}.pdf`,
       periodLabel: period.label,
       summaries,
+      advancesByEmployee: Object.fromEntries(advanceByEmployee),
     });
     if (ok) setMessage(`Payroll PDF downloaded directly. ${summaries.length <= 12 ? 'The current workforce fits on one A4 landscape page.' : 'The report continues automatically after 12 employees.'}`);
     else setError('The PDF could not be generated in this browser.');
