@@ -10,7 +10,7 @@ import {
   liveMoveTargetKey,
   projectCommittedLiveMove,
 } from '../lib/live-scheduling-move';
-import { buildOperationalWeek } from '../lib/scheduling-capacity';
+import { buildOperationalWeek, findCandidateSlotsForDay } from '../lib/scheduling-capacity';
 
 function requireCondition(condition: unknown, message: string) {
   if (!condition) throw new Error(`Live scheduling acceptance failed: ${message}`);
@@ -121,6 +121,39 @@ const baseCapacity: LiveOperationalCapacityState = {
   calendarClosures: [],
   closedWeekdays: [0],
 };
+
+// Saturdays are normal operating days. Only an explicit per-van half-day/off rule
+// may shorten a van's capacity; Sunday remains the global closed day.
+const octoberWeek = buildOperationalWeek('2026-10-03');
+const saturday = octoberWeek.find((day) => day.dateKey === '2026-10-03');
+const sunday = octoberWeek.find((day) => day.dateKey === '2026-10-04');
+requireCondition(Boolean(saturday) && saturday!.isOpen, 'Saturday must remain a normal open operating day.');
+requireCondition(saturday!.shiftLabel === '8:00 AM–5:00 PM', 'Saturday must display the configured normal full-day shift instead of a global 1 PM close.');
+requireCondition(Boolean(sunday) && !sunday!.isOpen, 'Sunday must remain the global closed day.');
+const saturdayRequest = {
+  customer: 'Saturday Customer',
+  site: 'Saturday Property',
+  sector: 'Santa Cruz',
+  presetId: 'standard_service' as const,
+  quantity: 1,
+  restriction: { halfDay: 'pm' as const },
+};
+const saturdayCandidates = findCandidateSlotsForDay(saturday!, saturdayRequest, []);
+requireCondition(saturdayCandidates.length > 0 && saturdayCandidates.every((slot) => ['13:30', '14:30', '15:30'].includes(slot.start)), 'Saturday PM requests must use the normal afternoon work starts.');
+requireCondition(findCandidateSlotsForDay(sunday!, saturdayRequest, []).length === 0, 'Sunday must not expose candidate work capacity.');
+const saturdayHalfDayCapacity: LiveOperationalCapacityState = {
+  ...baseCapacity,
+  halfDaySchedules: [{
+    id: 'HALF-SAT-VAN2',
+    active: true,
+    vanId: 'VAN-2',
+    weekday: 6,
+    workdayStart: '08:00',
+    workdayEnd: '13:00',
+  }],
+};
+requireCondition(liveOperationalWindowAllows(saturdayHalfDayCapacity, 'VAN-1', '2026-10-03', '13:30', '14:30'), 'A van without a Saturday exception must keep normal afternoon capacity.');
+requireCondition(!liveOperationalWindowAllows(saturdayHalfDayCapacity, 'VAN-2', '2026-10-03', '13:30', '14:30'), 'Only the van explicitly configured for a Saturday half-day may close after 1 PM.');
 
 const regularCrew = liveVanCrew(baseCapacity, 'VAN-1', canonical.dateKey);
 requireCondition(regularCrew.label === 'Miguel Technician · Rafael Helper', 'Live van headers must show the regular technician first and helper second.');
@@ -255,4 +288,4 @@ const fleetRecords = [
 requireCondition(resolveCanonicalVanId('v4', fleetRecords) === 'VAN-4', 'Short van aliases must resolve to canonical Van 4.');
 requireCondition(resolveCanonicalVanId('van-1783800405341', fleetRecords) === 'VAN-4', 'Legacy duplicate van documents must resolve to one physical lane.');
 
-console.log('Live scheduling acceptance passed: canonical Work Order slot snapshots drive agenda occupancy, labels and drag capacity while preserving van crew, half-days, closures and reminder authority boundaries.');
+console.log('Live scheduling acceptance passed: canonical Work Order slot snapshots drive agenda occupancy, labels and drag capacity while preserving full-day Saturdays, per-van half-days, closures and reminder authority boundaries.');
