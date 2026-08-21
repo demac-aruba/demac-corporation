@@ -17,7 +17,7 @@ jobs:
           ref: feature/consolidated-inventory-authority
           fetch-depth: 0
 
-      - name: Remove demo dependency on retired browser-local material plans
+      - name: Remove demo dependency and tighten final dependency guards
         shell: bash
         run: |
           set -euo pipefail
@@ -39,9 +39,31 @@ jobs:
                       raise SystemExit(f'{label}: expected exactly one match, found {text.count(old)}')
                   text = text.replace(old, new, 1)
                   print(f'updated: {label}')
-              elif new and new not in text:
-                  raise SystemExit(f'{label}: expected old or new form')
           path.write_text(text)
+
+          workflow = Path('.github/workflows/inventory-finalize.yml')
+          finalizer = workflow.read_text()
+          old_guard = """          if git grep -n -F 'BrowserInventoryTransfers' -- apps/erp-next | grep -v 'browser-inventory-transfers.tsx'; then
+            echo '::error::Old BrowserInventoryTransfers component is still referenced.'
+            exit 1
+          fi
+"""
+          new_guard = """          if git grep -n -F '<BrowserInventoryTransfers' -- apps/erp-next/app apps/erp-next/components 2>/dev/null; then
+            echo '::error::Old BrowserInventoryTransfers JSX is still referenced.'
+            exit 1
+          fi
+          if git grep -n -F \"import { BrowserInventoryTransfers }\" -- apps/erp-next/app apps/erp-next/components apps/erp-next/lib 2>/dev/null; then
+            echo '::error::Old BrowserInventoryTransfers import is still referenced.'
+            exit 1
+          fi
+"""
+          if old_guard in finalizer:
+              if finalizer.count(old_guard) != 1:
+                  raise SystemExit(f'transfer component guard: expected one match, found {finalizer.count(old_guard)}')
+              workflow.write_text(finalizer.replace(old_guard, new_guard, 1))
+              print('updated: exact BrowserInventoryTransfers component guard')
+          elif new_guard not in finalizer:
+              raise SystemExit('transfer component guard: neither old nor corrected form found')
           PY
 
       - name: Execute guarded finalization plan from feature branch
