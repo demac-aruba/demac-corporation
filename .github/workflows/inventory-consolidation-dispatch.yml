@@ -23,7 +23,7 @@ jobs:
         run: |
           set -euo pipefail
           repo='${{ github.repository }}'
-          workflow='inventory-finalize.yml'
+          workflow='inventory-consolidation-maintenance.yml'
           echo 'Running final inventory consolidation and dependency cleanup.'
           gh workflow run "$workflow" --repo "$repo" --ref feature/consolidated-inventory-authority
           sleep 8
