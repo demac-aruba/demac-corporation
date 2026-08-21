@@ -1,4 +1,5 @@
 const core = require("./index");
+const officeBookingAuthorityFacade = require("./officeBookingAuthorityFacade");
 const wacliGateway = require("./whatsappWacliGateway");
 const wacliOutboundMediaUpload = require("./wacliOutboundMediaUpload");
 const customerAgentCommunication = require("./demacCustomerAgentAllowlistCommunication");
@@ -18,8 +19,14 @@ const router = require("./whatsappCopilotRouter");
 // canonical Communication Center bridge. Historical Copilot modules are not
 // loaded or deployed from bootstrap. Maya's production communication entry
 // points are gated by the server-side phone allowlist wrapper.
+//
+// officeBookingAuthorityFacade deliberately overrides the core export with the
+// same public function name. Booking/lifecycle actions still delegate to the
+// canonical Office Booking Authority; only appointment communication actions
+// are projected per recipient by the dedicated communication authority.
 module.exports = {
   ...core,
+  ...officeBookingAuthorityFacade,
   ...wacliGateway,
   ...wacliOutboundMediaUpload,
   ...customerAgentCommunication,

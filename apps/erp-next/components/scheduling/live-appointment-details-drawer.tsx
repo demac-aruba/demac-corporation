@@ -1,20 +1,17 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
 import {
   cancelOfficeAppointment,
   checkOfficeRescheduleAvailability,
   createOfficeLifecycleRequestId,
-  getOfficeAppointmentCommunication,
   rescheduleOfficeAppointment,
-  sendOfficeAppointmentReminder,
-  updateOfficeAppointmentReminder,
-  type OfficeAppointmentCommunication,
   type OfficeAvailabilityResult,
   type OfficeBookingOption,
 } from '../../lib/office-booking-authority';
 import { currentArubaDateKey } from '../../lib/scheduling-capacity';
+import { AppointmentCommunicationPanel } from './appointment-communication-panel';
 import styles from './scheduling-overview-v2.module.css';
 
 type Mode = 'details' | 'reschedule' | 'cancel';
@@ -83,24 +80,6 @@ function sourceLabel(value?: string) {
   return value || 'Not recorded';
 }
 
-function communicationState(value?: string) {
-  if (!value || value === 'not_queued') return 'Not queued';
-  return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function isAlreadySent(value?: string) {
-  return ['accepted', 'sent', 'delivered', 'read'].includes(String(value || '').toLowerCase());
-}
-
-function reminderControlCopy(communication: OfficeAppointmentCommunication) {
-  const state = communication.reminder.state;
-  if (isAlreadySent(state)) return 'Reminder already sent successfully; it cannot be recalled.';
-  if (state === 'queued' || state === 'processing') return `Reminder is ${state}; another copy cannot be queued.`;
-  if (communication.reminder.lastError) return `Last attempt failed: ${communication.reminder.lastError}`;
-  if (!communication.reminder.enabled) return 'Reminder is disabled for this appointment.';
-  return 'Automatic reminder is enabled. Use manual send only when you intentionally need to send it now.';
-}
-
 function optionKey(option: OfficeBookingOption) {
   return `${option.id}|${option.date}|${option.time}`;
 }
@@ -118,9 +97,6 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
   const [selectedOptionKey, setSelectedOptionKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [communication, setCommunication] = useState<OfficeAppointmentCommunication | null>(null);
-  const [communicationBusy, setCommunicationBusy] = useState(false);
-  const [communicationError, setCommunicationError] = useState('');
 
   const primary = appointment.assignments.find((assignment) => assignment.isPrimaryAssignment && assignment.status !== 'cancelled')
     ?? appointment.assignments.find((assignment) => assignment.status !== 'cancelled')
@@ -130,16 +106,6 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
   const canManageLifecycle = Boolean(appointment.customerId && appointment.siteId && appointment.status !== 'cancelled');
   const workLabel = appointment.workLabel || appointment.workTypeId?.replaceAll('_', ' ') || appointment.customerFacingDescription || 'Scheduled work';
 
-  useEffect(() => {
-    let active = true;
-    setCommunication(null);
-    setCommunicationError('');
-    void getOfficeAppointmentCommunication(appointment.id)
-      .then((value) => { if (active) setCommunication(value); })
-      .catch((cause) => { if (active) setCommunicationError(cause instanceof Error ? cause.message : 'Communication status could not be loaded.'); });
-    return () => { active = false; };
-  }, [appointment.id]);
-
   const begin = (next: Mode) => {
     setMode(next);
     setReason('');
@@ -148,42 +114,6 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
     setAvailability(null);
     setSelectedOptionKey('');
     if (next === 'reschedule') setTargetDate(appointment.dateKey);
-  };
-
-  const toggleReminder = async () => {
-    if (!communication || communicationBusy || isAlreadySent(communication.reminder.state)) return;
-    setCommunicationBusy(true);
-    setCommunicationError('');
-    try {
-      const next = await updateOfficeAppointmentReminder({
-        appointmentId: appointment.id,
-        requestId: createOfficeLifecycleRequestId('reminder-preference'),
-        sendReminder: !communication.reminder.enabled,
-      });
-      setCommunication(next);
-    } catch (cause) {
-      setCommunicationError(cause instanceof Error ? cause.message : 'Reminder preference could not be updated.');
-    } finally {
-      setCommunicationBusy(false);
-    }
-  };
-
-  const sendReminderNow = async () => {
-    if (!communication?.reminder.canSendNow || communicationBusy) return;
-    if (!window.confirm('Send this appointment reminder now through the DEMAC WhatsApp queue?')) return;
-    setCommunicationBusy(true);
-    setCommunicationError('');
-    try {
-      const next = await sendOfficeAppointmentReminder({
-        appointmentId: appointment.id,
-        requestId: createOfficeLifecycleRequestId('manual-reminder'),
-      });
-      setCommunication(next);
-    } catch (cause) {
-      setCommunicationError(cause instanceof Error ? cause.message : 'The appointment reminder could not be queued manually.');
-    } finally {
-      setCommunicationBusy(false);
-    }
   };
 
   const cancel = async () => {
@@ -331,26 +261,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
           </div>
         </section>
 
-        <section className={styles.formSection}>
-          <header><strong>Customer communication</strong><span>Uses the canonical Work Order notification policy and the shared WhatsApp outbound queue.</span></header>
-          {communication ? <div className={styles.formGrid}>
-            <Field label="WHATSAPP NOTIFICATIONS" value={communication.whatsappEnabled ? 'Enabled' : 'Disabled'} />
-            <Field label="RECIPIENT" value={communication.recipients.map((recipient) => recipient.name || recipient.phone).filter(Boolean).join(', ') || 'No recipient'} />
-            <Field label="CONFIRMATION" value={communication.confirmation.enabled ? 'Enabled' : 'Disabled'} />
-            <Field label="CONFIRMATION STATUS" value={communicationState(communication.confirmation.state)} />
-            <Field label="REMINDER" value={communication.reminder.enabled ? 'Enabled' : 'Disabled'} />
-            <Field label="REMINDER STATUS" value={communicationState(communication.reminder.state)} />
-            <div className={styles.wide} style={{ display: 'grid', gap: 8 }}>
-              <div><span style={{ color: 'var(--muted)', fontSize: 7 }}>REMINDER CONTROL</span><strong style={{ display: 'block', marginTop: 4 }}>{reminderControlCopy(communication)}</strong></div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <button type="button" className={styles.secondary} disabled={communicationBusy || isAlreadySent(communication.reminder.state)} onClick={() => void toggleReminder()}>{communicationBusy ? 'Saving…' : communication.reminder.enabled ? 'Turn Reminder Off' : 'Turn Reminder On'}</button>
-                <button type="button" className={styles.primary} disabled={communicationBusy || !communication.reminder.canSendNow} onClick={() => void sendReminderNow()}>{communicationBusy ? 'Working…' : 'Send Reminder Now'}</button>
-              </div>
-            </div>
-            {communication.confirmation.lastError ? <div className={styles.wide}><span style={{ color: 'var(--muted)', fontSize: 7 }}>CONFIRMATION ERROR</span><strong style={{ display: 'block', marginTop: 4 }}>{communication.confirmation.lastError}</strong></div> : null}
-          </div> : <div className={styles.descriptionPreview}><span>COMMUNICATION STATUS</span><strong>{communicationError || 'Loading confirmation and reminder status…'}</strong></div>}
-          {communicationError && communication ? <div className={styles.descriptionPreview}><span>COMMUNICATION ATTENTION</span><strong>{communicationError}</strong></div> : null}
-        </section>
+        <AppointmentCommunicationPanel appointmentId={appointment.id} />
 
         {mode === 'details' ? <section className={styles.formSection}>
           <header><strong>Manage appointment</strong><span>Lifecycle changes go through Booking Authority so capacity locks and Work Orders remain synchronized.</span></header>
