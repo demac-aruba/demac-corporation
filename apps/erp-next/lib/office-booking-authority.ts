@@ -120,7 +120,9 @@ export type OfficeAppointmentCommunication = {
     sendReminder: boolean;
   }>;
   confirmation: OfficeCommunicationState;
-  reminder: OfficeCommunicationState & { canSendNow: boolean };
+  reminder: OfficeCommunicationState & {
+    canSendNow: boolean;
+  };
 };
 
 export type OfficeLifecycleResult = {
@@ -169,7 +171,10 @@ async function callOfficeBookingAuthority<T>(action: string, data: Record<string
   try {
     const response = await fetch(endpoint(), {
       method: 'POST',
-      headers: { Authorization: `Bearer ${session.idToken}`, 'Content-Type': 'application/json' },
+      headers: {
+        Authorization: `Bearer ${session.idToken}`,
+        'Content-Type': 'application/json',
+      },
       body: JSON.stringify({ action, data }),
       signal: controller.signal,
     });
@@ -194,52 +199,107 @@ export function createOfficeLifecycleRequestId(prefix = 'schedule') {
   return `${prefix}-${Date.now()}-${random}`;
 }
 
-export function invalidateOfficeBookingPresetCache() { presetCache = null; }
+export function invalidateOfficeBookingPresetCache() {
+  presetCache = null;
+}
 
 export function listOfficeBookingPresets(force = false) {
   const now = Date.now();
   if (!force && presetCache && presetCache.expiresAt > now) return presetCache.promise;
   const promise = callOfficeBookingAuthority<PresetResponse>('list_presets', {}, 8_000);
   presetCache = { expiresAt: now + PRESET_CACHE_MS, promise };
-  promise.catch(() => { if (presetCache?.promise === promise) presetCache = null; });
+  promise.catch(() => {
+    if (presetCache?.promise === promise) presetCache = null;
+  });
   return promise;
 }
 
 export function listOfficeContactDirectory(customerId?: string) {
-  return callOfficeBookingAuthority<{ success: true; version: number; contacts: BookingContact[]; assignments: BookingContactAssignment[] }>(
-    'list_contact_directory', customerId ? { customerId } : {}, 8_000,
-  );
+  return callOfficeBookingAuthority<{
+    success: true;
+    version: number;
+    contacts: BookingContact[];
+    assignments: BookingContactAssignment[];
+  }>('list_contact_directory', customerId ? { customerId } : {}, 8_000);
 }
 
-export function createOfficeCustomerWithProperty(input: { requestId: string; customer: Record<string, unknown>; property: Record<string, unknown> }) {
-  return callOfficeBookingAuthority<{ success: true; version: number; customer: OfficeMasterDataRecord; property: OfficeMasterDataRecord }>(
-    'create_customer_property', input, 10_000,
-  );
+export function createOfficeCustomerWithProperty(input: {
+  requestId: string;
+  customer: Record<string, unknown>;
+  property: Record<string, unknown>;
+}) {
+  return callOfficeBookingAuthority<{
+    success: true;
+    version: number;
+    customer: OfficeMasterDataRecord;
+    property: OfficeMasterDataRecord;
+  }>('create_customer_property', input, 10_000);
 }
 
-export function createOfficeProperty(input: { requestId: string; customerId: string; property: Record<string, unknown> }) {
-  return callOfficeBookingAuthority<{ success: true; version: number; property: OfficeMasterDataRecord }>('create_property', input, 10_000);
+export function createOfficeProperty(input: {
+  requestId: string;
+  customerId: string;
+  property: Record<string, unknown>;
+}) {
+  return callOfficeBookingAuthority<{
+    success: true;
+    version: number;
+    property: OfficeMasterDataRecord;
+  }>('create_property', input, 10_000);
 }
 
-export function saveOfficeContactAssignment(input: { requestId: string; customerId: string; propertyId: string; link: NewBookingContactLink }) {
-  return callOfficeBookingAuthority<{ success: true; version: number; contactId: string; assignmentId: string }>('save_contact_assignment', input, 10_000);
+export function saveOfficeContactAssignment(input: {
+  requestId: string;
+  customerId: string;
+  propertyId: string;
+  link: NewBookingContactLink;
+}) {
+  return callOfficeBookingAuthority<{
+    success: true;
+    version: number;
+    contactId: string;
+    assignmentId: string;
+  }>('save_contact_assignment', input, 10_000);
 }
 
-export function deactivateOfficeContactAssignment(input: { requestId: string; customerId: string; propertyId: string; assignmentId: string }) {
+export function deactivateOfficeContactAssignment(input: {
+  requestId: string;
+  customerId: string;
+  propertyId: string;
+  assignmentId: string;
+}) {
   return callOfficeBookingAuthority<{ success: true; version: number; assignmentId: string }>('deactivate_contact_assignment', input, 10_000);
 }
 
 export async function checkOfficeCreateAvailability(input: {
-  requestId: string; customerId: string; propertyId: string; presetId?: string; serviceId?: string; quantity?: number;
-  workLines?: OfficeBookingWorkLine[]; requestedDate: string; requestedTime: string; requiredVanId: string;
-  customerFacingDescription?: string; technicianInstructions?: string; recipientSelections?: AppointmentRecipientSelection[]; notes?: string;
+  requestId: string;
+  customerId: string;
+  propertyId: string;
+  presetId?: string;
+  serviceId?: string;
+  quantity?: number;
+  workLines?: OfficeBookingWorkLine[];
+  requestedDate: string;
+  requestedTime: string;
+  requiredVanId: string;
+  customerFacingDescription?: string;
+  technicianInstructions?: string;
+  recipientSelections?: AppointmentRecipientSelection[];
+  notes?: string;
 }) {
   return callOfficeBookingAuthority<OfficeAvailabilityResult>('check_availability', input, 12_000);
 }
 
-export async function confirmOfficeAppointment(input: { requestId: string; offerId: string; offerVersion: number; optionId: string }) {
+export async function confirmOfficeAppointment(input: {
+  requestId: string;
+  offerId: string;
+  offerVersion: number;
+  optionId: string;
+}) {
   const result = await callOfficeBookingAuthority<OfficeCreateAppointmentResult>('create_appointment', input, 12_000);
-  if (!result.success || !result.appointmentId) throw new Error('Booking Authority did not return a verified appointment id. Nothing was marked as confirmed.');
+  if (!result.success || !result.appointmentId) {
+    throw new Error('Booking Authority did not return a verified appointment id. Nothing was marked as confirmed.');
+  }
   return result;
 }
 
@@ -248,7 +308,9 @@ export async function listOfficeAppointmentAttribution(appointmentIds: string[])
   const attribution: OfficeAppointmentAttribution[] = [];
   for (let index = 0; index < ids.length; index += 500) {
     const result = await callOfficeBookingAuthority<{ success: true; attribution: OfficeAppointmentAttribution[] }>(
-      'list_appointment_attribution', { appointmentIds: ids.slice(index, index + 500) }, 6_000,
+      'list_appointment_attribution',
+      { appointmentIds: ids.slice(index, index + 500) },
+      6_000,
     );
     attribution.push(...(result.attribution ?? []));
   }
@@ -256,31 +318,70 @@ export async function listOfficeAppointmentAttribution(appointmentIds: string[])
 }
 
 export function getOfficeAppointmentCommunication(appointmentId: string) {
-  return callOfficeBookingAuthority<OfficeAppointmentCommunication>('get_appointment_communication', { appointmentId }, 8_000);
+  return callOfficeBookingAuthority<OfficeAppointmentCommunication>(
+    'get_appointment_communication',
+    { appointmentId },
+    8_000,
+  );
 }
 
-export function updateOfficeAppointmentReminder(input: { appointmentId: string; requestId: string; sendReminder: boolean }) {
-  return callOfficeBookingAuthority<OfficeAppointmentCommunication>('update_appointment_communication', input, 10_000);
+export function updateOfficeAppointmentReminder(input: {
+  appointmentId: string;
+  requestId: string;
+  sendReminder: boolean;
+}) {
+  return callOfficeBookingAuthority<OfficeAppointmentCommunication>(
+    'update_appointment_communication',
+    input,
+    10_000,
+  );
 }
 
-export function sendOfficeAppointmentReminder(input: { appointmentId: string; requestId: string }) {
-  return callOfficeBookingAuthority<OfficeAppointmentCommunication>('send_appointment_reminder', input, 12_000);
+export function sendOfficeAppointmentReminder(input: {
+  appointmentId: string;
+  requestId: string;
+}) {
+  return callOfficeBookingAuthority<OfficeAppointmentCommunication>(
+    'send_appointment_reminder',
+    input,
+    12_000,
+  );
 }
 
 export async function checkOfficeRescheduleAvailability(input: {
-  appointmentId: string; requestId: string; customerId: string; propertyId: string; presetId: string; serviceId?: string;
-  quantity: number; requestedDate: string; requestedTime?: string; requiredVanId?: string; customerFacingDescription?: string;
+  appointmentId: string;
+  requestId: string;
+  customerId: string;
+  propertyId: string;
+  presetId: string;
+  serviceId?: string;
+  quantity: number;
+  requestedDate: string;
+  requestedTime?: string;
+  requiredVanId?: string;
+  customerFacingDescription?: string;
   changeKind?: 'customer_reschedule' | 'operational_move';
 }) {
   return callOfficeBookingAuthority<OfficeAvailabilityResult>('check_availability', input, 12_000);
 }
 
-export async function cancelOfficeAppointment(input: { appointmentId: string; requestId: string; reason: string; note?: string }) {
+export async function cancelOfficeAppointment(input: {
+  appointmentId: string;
+  requestId: string;
+  reason: string;
+  note?: string;
+}) {
   return callOfficeBookingAuthority<{ success: true; appointmentId: string; appointment: Record<string, unknown> }>('cancel_appointment', input);
 }
 
 export async function rescheduleOfficeAppointment(input: {
-  appointmentId: string; requestId: string; offerId: string; offerVersion: number; optionId: string; reason: string; note?: string;
+  appointmentId: string;
+  requestId: string;
+  offerId: string;
+  offerVersion: number;
+  optionId: string;
+  reason: string;
+  note?: string;
   changeKind?: 'customer_reschedule' | 'operational_move';
 }) {
   return callOfficeBookingAuthority<OfficeLifecycleResult>('reschedule_appointment', input, 12_000);
@@ -293,7 +394,13 @@ export async function rescheduleOfficeAppointment(input: {
  * server request so the browser does not pay two sequential network round trips.
  */
 export async function moveOfficeAppointment(input: {
-  appointmentId: string; requestId: string; requestedDate: string; requestedTime: string; requiredVanId: string; reason: string; note?: string;
+  appointmentId: string;
+  requestId: string;
+  requestedDate: string;
+  requestedTime: string;
+  requiredVanId: string;
+  reason: string;
+  note?: string;
 }) {
   return callOfficeBookingAuthority<OfficeLifecycleResult>('move_appointment', input, 12_000);
 }
