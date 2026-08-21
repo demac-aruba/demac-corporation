@@ -313,7 +313,14 @@ export interface CommercialProductStock {
   productId: string;
   onHand: number;
   reserved: number;
-  active: boolean;
+active: boolean;
+version?: number;
+balances?: Record<string, {
+  onHand: number;
+  reserved: number;
+  minimum: number;
+  target: number;
+}>;
   verifiedAt?: string;
   verifiedById?: string;
   verifiedByName?: string;

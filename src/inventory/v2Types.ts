@@ -17,7 +17,7 @@ export type ToolOperationalStatus =
   | 'Retirada'
   | 'Desechada';
 
-export type AssetLocationType = 'van' | 'warehouse';
+export type AssetLocationType = 'van' | 'warehouse' | 'office';
 
 export type ToolLifecycleAction =
   | 'registered'
@@ -111,7 +111,14 @@ export interface WarehouseInventoryItemV2 {
   cost: number;
   location: string;
   active: boolean;
-  latestCountAt?: string;
+latestCountAt?: string;
+inventoryVersion?: number;
+stockByLocation?: Record<string, {
+  onHand: number;
+  reserved: number;
+  minimum: number;
+  target: number;
+}>;
   createdAt?: string;
   updatedAt?: string;
 }
