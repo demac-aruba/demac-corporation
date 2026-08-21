@@ -68,10 +68,10 @@ function normalizePreferredLanguage(value) {
 
 function templateLanguageForRecipient(recipient, client) {
   const candidates = [
-    recipient?.templateLanguage,
     recipient?.preferredLanguage,
-    client?.templateLanguage,
     client?.preferredLanguage,
+    recipient?.templateLanguage,
+    client?.templateLanguage,
   ];
   for (const candidate of candidates) {
     const normalized = normalizePreferredLanguage(candidate);
