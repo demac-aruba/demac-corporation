@@ -8,6 +8,7 @@ const {
   geographicDistrict,
   geographicZone,
   groupConfigForVan,
+  propertyLocationName,
   renderVanWorkOrderText,
   staffFirstNamesForOrder,
   technicianInstructions,
@@ -142,6 +143,14 @@ test("geographic labels come from the property and never from the Work Order rou
   assert.notEqual(geographicZone(property), order.zone);
 });
 
+test("property location name only exposes a real user-defined property name", () => {
+  assert.equal(propertyLocationName({ name: "Pastechi House Building" }), "Pastechi House Building");
+  assert.equal(propertyLocationName({ name: "" }), "");
+  assert.equal(propertyLocationName({ name: "Primary Property" }), "");
+  assert.equal(propertyLocationName({ name: "Property" }), "");
+  assert.equal(propertyLocationName({ name: "Property 2" }), "");
+});
+
 test("technician instructions come from the canonical appointment work lines", () => {
   const text = technicianInstructions({
     workLines: [
@@ -168,6 +177,7 @@ test("one work order renders a private readable WhatsApp group message", () => {
     order: { ...order, vanId: "VAN-1" },
     client: { name: "Izaira Mansur", whatsapp: "+2975622222" },
     property: {
+      name: "Pastechi House Building",
       operationalZone: "Oranjestad Centro",
       neighborhood: "Playa",
       accessInstructions: "Use side gate",
@@ -182,13 +192,29 @@ test("one work order renders a private readable WhatsApp group message", () => {
 
   assert.match(text, /^\*DEMAC · Van 1 · Miguel y Alan\*\n\*Trabajo 1 ·/);
   assert.match(text, /\n\n\*Hora:\* 8:30 AM – 10:30 AM\n\*Cliente:\* Izaira Mansur\n\*Contacto:\* Site contact · Manager/);
-  assert.match(text, /\n\n\*Dirección:\* Caya G\. F\. Betico Croes 42\n\*Distrito:\* Oranjestad\n\*Zona:\* Playa\n\*Acceso:\* Use side gate/);
+  assert.match(text, /\n\n\*Location:\* Pastechi House Building\n\*Dirección:\* Caya G\. F\. Betico Croes 42\n\*Distrito:\* Oranjestad\n\*Zona:\* Playa\n\*Acceso:\* Use side gate/);
   assert.match(text, /\n\n\*Trabajo:\* Standard Service × 2\n\*Descripción:\* Deep service of the two living-room units/);
   assert.match(text, /\n\n\*Instrucciones técnico:\* Bring coil cleaner$/);
   assert.doesNotMatch(text, /Tel\/WhatsApp|\+29756/);
   assert.doesNotMatch(text, /\*Equipo:\*/);
   assert.doesNotMatch(text, /\*Asignación:\*/);
   assert.doesNotMatch(text, /Oranjestad \/ Airport/);
+});
+
+test("blank or legacy generated property names do not create a Location line", () => {
+  for (const name of ["", "Primary Property", "Property", "Property 3"]) {
+    const text = renderVanWorkOrderText({
+      van: groupVan,
+      order,
+      client: { name: "Customer" },
+      property: { name, operationalZone: "Oranjestad Centro", neighborhood: "Playa" },
+      appointment: {},
+      staffById: new Map(),
+      sequence: 1,
+    });
+    assert.doesNotMatch(text, /\*Location:\*/);
+    assert.match(text, /\*Dirección:\* Caya G\. F\. Betico Croes 42/);
+  }
 });
 
 test("a support Work Order does not expose internal assignment labels", () => {
@@ -231,7 +257,7 @@ test("queueDay sends one independent group message per work order in chronologic
     workOrders: [secondOrder, order],
     clients: [{ id: "client-1", name: "Customer One" }, { id: "client-2", name: "Customer Two" }],
     properties: [
-      { id: "property-1", operationalZone: "Oranjestad Centro", neighborhood: "Playa", accessInstructions: "Side gate" },
+      { id: "property-1", name: "Pastechi House Building", operationalZone: "Oranjestad Centro", neighborhood: "Playa", accessInstructions: "Side gate" },
       { id: "property-2", operationalZone: "Noord", neighborhood: "Washington" },
     ],
     appointments: [
@@ -253,6 +279,7 @@ test("queueDay sends one independent group message per work order in chronologic
   assert.equal(queued.length, 2);
   assert.equal(queued.every((item) => item.to === GROUP_JID), true);
   assert.match(queued[0].text, /\*Trabajo 1/);
+  assert.match(queued[0].text, /\*Location:\* Pastechi House Building/);
   assert.match(queued[1].text, /\*Trabajo 2/);
   assert.match(queued[1].text, /Customer Two/);
 });
