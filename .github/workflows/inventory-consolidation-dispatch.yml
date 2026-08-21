@@ -1,0 +1,22 @@
+name: Dispatch Inventory Consolidation Maintenance
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/inventory-consolidation-dispatch.yml'
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    if: github.head_ref == 'feature/consolidated-inventory-authority'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run guarded consolidation on feature branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run inventory-consolidation-maintenance.yml --repo '${{ github.repository }}' --ref feature/consolidated-inventory-authority
