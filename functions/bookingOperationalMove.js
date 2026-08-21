@@ -19,7 +19,7 @@ const {
   canonicalizeSchedulingData,
 } = require("./bookingVanIdentity");
 
-const OPERATIONAL_MOVE_VERSION = 2;
+const OPERATIONAL_MOVE_VERSION = 3;
 const INACTIVE_WORK_ORDER_STATUSES = new Set([
   "cancelada",
   "cancelled",
@@ -62,9 +62,7 @@ function weekday(dateKey) {
 }
 
 function manualDispatchBlocks(dateKey) {
-  const day = weekday(dateKey);
-  if (day === 0) return [];
-  if (day === 6) return [["09:00", "10:00", "11:00", "12:00"]];
+  if (weekday(dateKey) === 0) return [];
   return [
     ["08:30", "09:30", "10:30"],
     ["13:30", "14:30", "15:30"],
@@ -439,6 +437,7 @@ function createOperationalMoveAuthority({
         transaction.set(db.collection(collections.workOrders).doc(workOrderId), compactObject({
           date: targetDate,
           time: targetTime,
+          appointmentEndTime: targetEnd,
           vanId: requiredVanId,
           technicianIds: crew.technicianIds,
           scheduledSlots: slotCount,

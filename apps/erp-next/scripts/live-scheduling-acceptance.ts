@@ -64,6 +64,30 @@ requireCondition(canonical.scheduledSlotCount === 2, 'Numeric Work Order schedul
 requireCondition(canonical.bookedByName === 'Christian', 'Canonical booking operator must be preserved.');
 requireCondition(bookingActorLabel({ appointmentId: 'APT-MAYA', source: 'demac-customer-agent' }) === 'Maya', 'Customer Agent bookings must display Maya.');
 
+// Regression for an AM → PM drag created before operational-move v3. The Work Order
+// start moved to 13:30 but its explicit end snapshot remained at the old 11:30 AM.
+// Live Scheduling must recover the visible 3-slot PM block instead of dropping it.
+const staleMovedWorkOrders = [{
+  ...canonicalWorkOrders[0],
+  id: 'WO-APT-STALE-MOVE-1',
+  appointmentId: 'APT-STALE-MOVE',
+  date: '2026-09-01',
+  time: '13:30',
+  vanId: 'VAN-3',
+  appointmentEndTime: '11:30',
+  scheduledSlots: 3,
+  appointmentDurationMinutes: 180,
+  airConditionerCount: 3,
+  zone: 'Paradera / Hooiberg',
+}];
+const staleMovedAppointments = projectLiveSchedulingAppointments(staleMovedWorkOrders, clients, properties);
+const staleMoved = staleMovedAppointments[0];
+requireCondition(Boolean(staleMoved), 'A moved appointment with a stale pre-fix Work Order end snapshot must remain visible.');
+requireCondition(staleMoved.primaryVanId === 'VAN-3', 'The recovered moved appointment must remain assigned to Van 3.');
+requireCondition(staleMoved.assignments[0].start === '13:30', 'The recovered moved appointment must preserve its PM start time.');
+requireCondition(staleMoved.assignments[0].end === '16:30', 'A stale 11:30 AM end snapshot must recover to 16:30 from the canonical three-slot allocation.');
+requireCondition(staleMoved.scheduledSlotCount === 3, 'The recovered moved appointment must continue reserving all three operating spots.');
+
 // Exact regression for the reported capacity bug: two Commercial Services at three
 // hours each consume all six operating slots while lunch/reset remains non-working time.
 const commercialWorkOrders = [{

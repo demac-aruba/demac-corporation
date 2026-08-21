@@ -219,14 +219,14 @@ function endFromCanonicalSlotCount(start: string, count: number) {
 }
 
 function assignmentEnd(order: LiveWorkOrder) {
+  const start = text(order.time) || '08:30';
   const explicit = validTime(order.appointmentEndTime);
-  if (explicit) return explicit;
+  if (explicit && timeToMinutes(explicit) > timeToMinutes(start)) return explicit;
 
   // Legacy records briefly stored explicit slot-start arrays. Preserve support.
   const slots = normalizedSlots(order.scheduledSlots);
   if (slots.length) return minutesToTime(timeToMinutes(slots[slots.length - 1]) + 60);
 
-  const start = text(order.time) || '08:30';
   const slotCount = numericSlotCount(order.scheduledSlots);
   if (slotCount) return endFromCanonicalSlotCount(start, slotCount);
 

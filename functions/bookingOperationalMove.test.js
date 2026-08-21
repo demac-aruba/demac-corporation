@@ -103,6 +103,7 @@ function baseSeed(extra = {}) {
       id: "WO-1",
       appointmentId: "APT-1",
       appointmentAssignmentRole: "primary",
+      appointmentEndTime: "11:30",
       status: "Confirmada",
       date: "2026-08-18",
       time: "08:30",
@@ -148,7 +149,8 @@ test("manual dispatch windows use only the visible continuous schedule blocks", 
   assert.deepEqual(manualOccupiedSlots("2026-08-18", "08:30", 3), ["08:30", "09:30", "10:30"]);
   assert.deepEqual(manualOccupiedSlots("2026-08-18", "13:30", 3), ["13:30", "14:30", "15:30"]);
   assert.deepEqual(manualOccupiedSlots("2026-08-18", "09:30", 3), []);
-  assert.deepEqual(manualOccupiedSlots("2026-08-22", "09:00", 4), ["09:00", "10:00", "11:00", "12:00"]);
+  assert.deepEqual(manualOccupiedSlots("2026-08-22", "13:30", 3), ["13:30", "14:30", "15:30"]);
+  assert.deepEqual(manualOccupiedSlots("2026-08-23", "13:30", 1), []);
 });
 
 test("operational capacity ignores cancelled/rescheduled canonical work orders exactly like LIVE scheduling", () => {
@@ -177,6 +179,7 @@ test("three-slot LIVE drag moves directly to an open Van 2 afternoon block in on
   const workOrder = db.read("workOrders/WO-1");
   assert.equal(workOrder.vanId, "VAN-2");
   assert.equal(workOrder.time, "13:30");
+  assert.equal(workOrder.appointmentEndTime, "16:30");
   assert.equal(workOrder.scheduledSlots, 3);
   assert.equal(db.read("bookingCapacityLocks/OLD-1").active, false);
   assert.equal(appointment.capacityLockIds.length, 3);
