@@ -21,22 +21,24 @@ type PayrollAccountingPdfOptions = {
   filename: string;
   periodLabel: string;
   summaries: PayrollEmployeeSummary[];
+  advancesByEmployee?: Record<string, number>;
 };
 
 type Column = {
-  key: 'employee' | 'weeklyBase' | 'overtime' | 'ao' | 'vacation' | 'noWork';
+  key: 'employee' | 'weeklyBase' | 'overtime' | 'ao' | 'vacation' | 'noWork' | 'advance';
   label: string;
   width: number;
   align?: 'left' | 'center' | 'right';
 };
 
 const COLUMNS: Column[] = [
-  { key: 'employee', label: 'Employee', width: 275, align: 'left' },
-  { key: 'weeklyBase', label: 'Weekly Base', width: 105, align: 'center' },
-  { key: 'overtime', label: 'Overtime', width: 90, align: 'center' },
-  { key: 'ao', label: 'AO / Sick', width: 80, align: 'center' },
-  { key: 'vacation', label: 'Vacation', width: 105, align: 'center' },
-  { key: 'noWork', label: 'No Work / No Pay', width: CONTENT_WIDTH - 655, align: 'center' },
+  { key: 'employee', label: 'Employee', width: 230, align: 'left' },
+  { key: 'weeklyBase', label: 'Weekly Base', width: 90, align: 'center' },
+  { key: 'overtime', label: 'Overtime', width: 80, align: 'center' },
+  { key: 'ao', label: 'AO / Sick', width: 75, align: 'center' },
+  { key: 'vacation', label: 'Vacation', width: 85, align: 'center' },
+  { key: 'noWork', label: 'No Work / No Pay', width: 105, align: 'center' },
+  { key: 'advance', label: 'Salary Advance', width: CONTENT_WIDTH - 665, align: 'center' },
 ];
 
 function formatWeeklyBase(value: number) {
@@ -51,6 +53,10 @@ function formatHoursMinutes(value: number) {
   if (!wholeHours) return `${minutes} min`;
   if (!minutes) return `${wholeHours} h`;
   return `${wholeHours} h ${minutes} min`;
+}
+
+function formatMoney(value: number) {
+  return `Afl. ${Number(value || 0).toLocaleString('en-AW', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function formatStartDate(summary: PayrollEmployeeSummary) {
@@ -74,14 +80,8 @@ function winAnsiByte(character: string) {
   const code = character.charCodeAt(0);
   if (code <= 255) return code;
   const replacements: Record<number, number> = {
-    0x2018: 0x91,
-    0x2019: 0x92,
-    0x201c: 0x93,
-    0x201d: 0x94,
-    0x2022: 0x95,
-    0x2013: 0x96,
-    0x2014: 0x97,
-    0x2026: 0x85,
+    0x2018: 0x91, 0x2019: 0x92, 0x201c: 0x93, 0x201d: 0x94,
+    0x2022: 0x95, 0x2013: 0x96, 0x2014: 0x97, 0x2026: 0x85,
   };
   return replacements[code] ?? 0x3f;
 }
@@ -123,7 +123,7 @@ function concatBytes(chunks: Uint8Array[]) {
   return output;
 }
 
-function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSummary[]) {
+function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSummary[], advancesByEmployee: Record<string, number>) {
   const groups: PayrollEmployeeSummary[][] = [];
   for (let index = 0; index < summaries.length; index += ROWS_PER_PAGE) groups.push(summaries.slice(index, index + ROWS_PER_PAGE));
   if (!groups.length) groups.push([]);
@@ -134,6 +134,7 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
     ao: summaries.reduce((sum, item) => sum + item.aoHours, 0),
     vacation: summaries.reduce((sum, item) => sum + item.vacationHours, 0),
     noWork: summaries.reduce((sum, item) => sum + item.noWorkNoPayHours, 0),
+    advance: summaries.reduce((sum, item) => sum + Number(advancesByEmployee[item.employee.id] ?? 0), 0),
   };
 
   return groups.map((group, pageIndex) => {
@@ -145,9 +146,7 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
       if (stroke) {
         commands.push(`${color(stroke)} RG 0.7 w`);
         commands.push(`${number(x)} ${number(topToY(top, height))} ${number(width)} ${number(height)} re B`);
-      } else {
-        commands.push(`${number(x)} ${number(topToY(top, height))} ${number(width)} ${number(height)} re f`);
-      }
+      } else commands.push(`${number(x)} ${number(topToY(top, height))} ${number(width)} ${number(height)} re f`);
     }
 
     function line(x1: number, top1: number, x2: number, top2: number, stroke: Rgb, width = 1) {
@@ -155,13 +154,7 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
       commands.push(`${number(x1)} ${number(topToY(top1))} m ${number(x2)} ${number(topToY(top2))} l S`);
     }
 
-    function drawText(
-      value: string | number,
-      x: number,
-      top: number,
-      size: number,
-      options?: { bold?: boolean; fill?: Rgb; align?: 'left' | 'center' | 'right'; width?: number },
-    ) {
+    function drawText(value: string | number, x: number, top: number, size: number, options?: { bold?: boolean; fill?: Rgb; align?: 'left' | 'center' | 'right'; width?: number }) {
       const text = String(value ?? '');
       const align = options?.align ?? 'left';
       const availableWidth = options?.width ?? 0;
@@ -189,12 +182,7 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
     const headerHeight = 34;
     COLUMNS.forEach((column) => {
       fillRect(x, headerTop, column.width, headerHeight, BLUE_LIGHT, BORDER);
-      drawText(column.label, x + 7, headerTop + 12, column.key === 'noWork' ? 7.2 : 8.2, {
-        bold: true,
-        fill: BLUE_DARK,
-        align: column.align,
-        width: column.width - 14,
-      });
+      drawText(column.label, x + 5, headerTop + 12, column.key === 'noWork' || column.key === 'advance' ? 6.9 : 7.9, { bold: true, fill: BLUE_DARK, align: column.align, width: column.width - 10 });
       x += column.width;
     });
 
@@ -206,23 +194,16 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
       COLUMNS.forEach((column) => {
         fillRect(x, top, column.width, rowHeight, fill, BORDER);
         if (column.key === 'employee') {
-          drawText(truncate(summary.employee.name ?? 'Employee', 40), x + 8, top + 6, 9.2, { bold: true, fill: NAVY });
-          drawText(truncate(`${summary.employee.role ?? summary.employee.employeeType ?? 'Employee'} · ${formatStartDate(summary)}`, 68), x + 8, top + 18, 6.8, { fill: MUTED });
+          drawText(truncate(summary.employee.name ?? 'Employee', 34), x + 8, top + 6, 9.1, { bold: true, fill: NAVY });
+          drawText(truncate(`${summary.employee.role ?? summary.employee.employeeType ?? 'Employee'} · ${formatStartDate(summary)}`, 55), x + 8, top + 18, 6.5, { fill: MUTED });
+        } else if (column.key === 'advance') {
+          const value = Number(advancesByEmployee[summary.employee.id] ?? 0);
+          drawText(formatMoney(value), x + 5, top + 11, 7.6, { bold: value > 0, fill: value > 0 ? BLUE_DARK : TEXT, align: column.align, width: column.width - 10 });
         } else {
-          const values = {
-            weeklyBase: summary.weeklyPaidBaseHours,
-            overtime: summary.overtimeHours,
-            ao: summary.aoHours,
-            vacation: summary.vacationHours,
-            noWork: summary.noWorkNoPayHours,
-          };
-          const display = column.key === 'weeklyBase' ? formatWeeklyBase(values[column.key]) : formatHoursMinutes(values[column.key]);
-          drawText(display, x + 7, top + 11, 8.4, {
-            bold: column.key === 'weeklyBase' || values[column.key] > 0,
-            fill: values[column.key] > 0 && column.key !== 'weeklyBase' ? NAVY : TEXT,
-            align: column.align,
-            width: column.width - 14,
-          });
+          const values = { weeklyBase: summary.weeklyPaidBaseHours, overtime: summary.overtimeHours, ao: summary.aoHours, vacation: summary.vacationHours, noWork: summary.noWorkNoPayHours };
+          const value = values[column.key];
+          const display = column.key === 'weeklyBase' ? formatWeeklyBase(value) : formatHoursMinutes(value);
+          drawText(display, x + 5, top + 11, 7.9, { bold: column.key === 'weeklyBase' || value > 0, fill: value > 0 && column.key !== 'weeklyBase' ? NAVY : TEXT, align: column.align, width: column.width - 10 });
         }
         x += column.width;
       });
@@ -234,12 +215,12 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
       x = MARGIN;
       COLUMNS.forEach((column) => {
         fillRect(x, top, column.width, rowHeight, BLUE_LIGHT, BORDER);
-        if (column.key === 'employee') {
-          drawText('TOTALS', x + 8, top + 10, 9, { bold: true, fill: BLUE_DARK });
-        } else {
+        if (column.key === 'employee') drawText('TOTALS', x + 8, top + 10, 9, { bold: true, fill: BLUE_DARK });
+        else if (column.key === 'advance') drawText(formatMoney(totals.advance), x + 5, top + 10, 7.7, { bold: true, fill: BLUE_DARK, align: column.align, width: column.width - 10 });
+        else {
           const value = totals[column.key];
           const display = column.key === 'weeklyBase' ? formatWeeklyBase(value) : formatHoursMinutes(value);
-          drawText(display, x + 7, top + 10, 8.5, { bold: true, fill: BLUE_DARK, align: column.align, width: column.width - 14 });
+          drawText(display, x + 5, top + 10, 7.8, { bold: true, fill: BLUE_DARK, align: column.align, width: column.width - 10 });
         }
         x += column.width;
       });
@@ -248,7 +229,7 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
     if (!group.length) drawText('No employees are included in the selected payroll period.', MARGIN, 190, 11, { fill: MUTED });
 
     line(MARGIN, PAGE_HEIGHT - 33, PAGE_WIDTH - MARGIN, PAGE_HEIGHT - 33, BORDER, 0.6);
-    drawText('Weekly Base is derived from the configured schedule. Overtime, AO/Sick, Vacation and NWNP are payroll exceptions.', MARGIN, PAGE_HEIGHT - 25, 7.1, { fill: MUTED });
+    drawText('Weekly Base comes from schedule. OT, AO/Sick, Vacation and NWNP are exceptions. Salary Advance is an input only; no automatic deduction is applied.', MARGIN, PAGE_HEIGHT - 25, 6.7, { fill: MUTED });
     drawText(`Page ${pageIndex + 1} of ${groups.length}`, PAGE_WIDTH - MARGIN - 90, PAGE_HEIGHT - 25, 7.1, { fill: MUTED, align: 'right', width: 90 });
     return commands.join('\n');
   });
@@ -267,11 +248,7 @@ function buildPdf(pageStreams: string[]) {
     const contentObject = pageObject + 1;
     objects[pageObject] = asciiBytes(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${number(PAGE_WIDTH)} ${number(PAGE_HEIGHT)}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentObject} 0 R >>`);
     const streamBytes = asciiBytes(stream);
-    objects[contentObject] = concatBytes([
-      asciiBytes(`<< /Length ${streamBytes.length} >>\nstream\n`),
-      streamBytes,
-      asciiBytes('\nendstream'),
-    ]);
+    objects[contentObject] = concatBytes([asciiBytes(`<< /Length ${streamBytes.length} >>\nstream\n`), streamBytes, asciiBytes('\nendstream')]);
   });
 
   const header = asciiBytes('%PDF-1.4\n%DEMAC\n');
@@ -287,16 +264,14 @@ function buildPdf(pageStreams: string[]) {
 
   const xrefOffset = cursor;
   const xrefLines = ['xref', `0 ${objects.length}`, '0000000000 65535 f '];
-  for (let objectNumber = 1; objectNumber < objects.length; objectNumber += 1) {
-    xrefLines.push(`${String(offsets[objectNumber]).padStart(10, '0')} 00000 n `);
-  }
+  for (let objectNumber = 1; objectNumber < objects.length; objectNumber += 1) xrefLines.push(`${String(offsets[objectNumber]).padStart(10, '0')} 00000 n `);
   chunks.push(asciiBytes(`${xrefLines.join('\n')}\ntrailer\n<< /Size ${objects.length} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`));
   return concatBytes(chunks);
 }
 
-export function downloadPayrollAccountingPdf({ filename, periodLabel, summaries }: PayrollAccountingPdfOptions) {
+export function downloadPayrollAccountingPdf({ filename, periodLabel, summaries, advancesByEmployee = {} }: PayrollAccountingPdfOptions) {
   if (typeof document === 'undefined' || typeof URL === 'undefined') return false;
-  const pdf = buildPdf(buildAccountingPages(periodLabel, summaries));
+  const pdf = buildPdf(buildAccountingPages(periodLabel, summaries, advancesByEmployee));
   const blob = new Blob([pdf], { type: 'application/pdf' });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
