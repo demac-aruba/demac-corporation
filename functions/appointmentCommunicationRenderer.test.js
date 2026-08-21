@@ -36,6 +36,23 @@ test("canonical scheduling work is localized instead of leaking the English pick
   }, "Standard Installation × 1", "pap"), "Instalacion standard × 1");
 });
 
+test("custom customer-facing description wins over the generic Other work label", () => {
+  const customDescription = "Revisa e cassette pa lek y controla e drain line prome cu cualkier reparacion.";
+  assert.equal(localizeServiceDescription({
+    customerFacingDescription: customDescription,
+    customerFacingDescriptionIsDefault: false,
+    appointmentWorkItems: [{ presetId: "other", label: "Other", quantity: 1 }],
+  }, "Other × 1", "pap"), customDescription);
+});
+
+test("default generated customer description still allows the canonical work label to be localized", () => {
+  assert.equal(localizeServiceDescription({
+    customerFacingDescription: "Scheduled work: 1 × Standard Installation.",
+    customerFacingDescriptionIsDefault: true,
+    appointmentWorkItems: [{ presetId: "standard_installation", label: "Standard Installation", quantity: 1 }],
+  }, "Standard Installation × 1", "pap"), "Instalacion standard × 1");
+});
+
 test("Papiamento reminder uses WhatsApp emphasis and localized labels", () => {
   const text = renderAppointmentText("appointment-reminder", [
     "Stefany Grovell",
