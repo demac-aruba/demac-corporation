@@ -75,8 +75,39 @@ function text(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function mergeReferenceRecords<T extends { id: string }>(current: T[], additions: T[] = []) {
+  if (!additions.length) return current;
+  const byId = new Map(current.map((item) => [item.id, item]));
+  for (const item of additions) byId.set(item.id, { ...(byId.get(item.id) ?? {}), ...item });
+  return [...byId.values()];
+}
+
 export function invalidateLiveSchedulingReferenceCache() {
   referenceCache = null;
+}
+
+/**
+ * A successful Booking Authority master-data write is already canonical. Prime the
+ * short-lived reference cache with that committed record so a subsequent booking
+ * drawer does not depend on an extra Firestore list round-trip before the new CRM
+ * relationship becomes selectable. This is only a cache update; Firestore remains
+ * the source of truth and normal cache expiry reloads the canonical collections.
+ */
+export function primeLiveSchedulingReferenceCache(input: {
+  clients?: LiveSchedulingClient[];
+  properties?: LiveSchedulingProperty[];
+}) {
+  const current = referenceCache;
+  if (!current) return;
+  const promise = current.promise.then((references) => ({
+    ...references,
+    clients: mergeReferenceRecords(references.clients, input.clients),
+    properties: mergeReferenceRecords(references.properties, input.properties),
+  }));
+  referenceCache = { expiresAt: Date.now() + REFERENCE_CACHE_MS, promise };
+  promise.catch(() => {
+    if (referenceCache?.promise === promise) referenceCache = null;
+  });
 }
 
 export function loadLiveSchedulingReferenceData() {
