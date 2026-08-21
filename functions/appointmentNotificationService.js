@@ -1,9 +1,22 @@
 const { FieldValue } = require("firebase-admin/firestore");
 const logger = require("firebase-functions/logger");
+const {
+  DEFAULT_CLOSED_WEEKDAYS,
+  DEFAULT_SEARCH_DAYS,
+  TIME_ZONE,
+  addDays,
+  dateKeyInTimeZone,
+  nextOpenBusinessDate,
+  weekdayForDate,
+} = require("./operatingCalendarService");
+const {
+  createWhatsAppTransactionalService,
+  digitsOnly,
+  normalizeWhatsAppPhone,
+  safeDocumentId,
+} = require("./whatsappTransactionalService");
 
-const TIME_ZONE = "America/Aruba";
-const DEFAULT_CLOSED_WEEKDAYS = Object.freeze([0]);
-const REMINDER_SEARCH_DAYS = 60;
+const REMINDER_SEARCH_DAYS = DEFAULT_SEARCH_DAYS;
 const CUSTOMER_VISIBLE_FIELDS = Object.freeze(["date", "time", "address", "problem", "serviceId", "propertyId"]);
 const NOTIFICATION_INELIGIBLE_STATUSES = new Set([
   "Solicitud recibida",
@@ -14,54 +27,6 @@ const NOTIFICATION_INELIGIBLE_STATUSES = new Set([
   "Facturada",
   "Pagada",
 ]);
-
-function digitsOnly(value) {
-  return String(value ?? "").replace(/\D/g, "");
-}
-
-function safeDocumentId(value) {
-  return String(value || "unknown")
-    .replaceAll("/", "_")
-    .replaceAll("#", "_")
-    .slice(0, 1200);
-}
-
-function isAlreadyExistsError(error) {
-  return error?.code === 6 || error?.code === "already-exists" || error?.code === "ALREADY_EXISTS";
-}
-
-function dateKeyInTimeZone(date = new Date()) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(date);
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
-}
-
-function addDays(dateKey, amount) {
-  const date = new Date(`${dateKey}T12:00:00Z`);
-  date.setUTCDate(date.getUTCDate() + amount);
-  return date.toISOString().slice(0, 10);
-}
-
-function weekdayForDate(dateKey) {
-  return new Date(`${dateKey}T12:00:00Z`).getUTCDay();
-}
-
-function nextOpenBusinessDate({ runDate, closedWeekdays = DEFAULT_CLOSED_WEEKDAYS, closedDates = new Set(), maxDays = REMINDER_SEARCH_DAYS }) {
-  const closedWeekdaySet = new Set((Array.isArray(closedWeekdays) ? closedWeekdays : DEFAULT_CLOSED_WEEKDAYS).map(Number));
-  const closedDateSet = closedDates instanceof Set ? closedDates : new Set(closedDates || []);
-  for (let offset = 1; offset <= maxDays; offset += 1) {
-    const candidate = addDays(runDate, offset);
-    if (closedWeekdaySet.has(weekdayForDate(candidate))) continue;
-    if (closedDateSet.has(candidate)) continue;
-    return candidate;
-  }
-  return null;
-}
 
 function normalizePreferredLanguage(value) {
   const language = String(value || "unknown").trim().toLowerCase();
@@ -178,7 +143,7 @@ function selectedRecipients(order, client, notificationType) {
   const unique = [];
   const seenNumbers = new Set();
   for (const recipient of selected) {
-    const to = digitsOnly(recipient?.whatsapp || recipient?.phone);
+    const to = normalizeWhatsAppPhone(recipient?.whatsapp || recipient?.phone);
     if (!to || seenNumbers.has(to)) continue;
     seenNumbers.add(to);
     unique.push(recipient);
@@ -188,21 +153,10 @@ function selectedRecipients(order, client, notificationType) {
 
 function createAppointmentNotificationService({ db } = {}) {
   if (!db || typeof db.collection !== "function") throw new Error("A Firestore-compatible db is required for appointment notifications.");
+  const whatsapp = createWhatsAppTransactionalService({ db });
 
   async function getWhatsAppPhoneNumberId() {
-    const settings = await db.collection("businessSettings").doc("whatsapp").get();
-    const configured = digitsOnly(settings.data()?.phoneNumberId);
-    if (!/^\d{5,30}$/.test(configured)) {
-      const error = new Error("DEMAC WhatsApp Meta phoneNumberId is not configured. No transactional WhatsApp message was queued.");
-      error.code = "whatsapp_phone_number_id_missing";
-      throw error;
-    }
-    if (settings.data()?.transactionalOutboundEnabled === false) {
-      const error = new Error("DEMAC transactional WhatsApp outbound messaging is disabled in business settings.");
-      error.code = "whatsapp_transactional_outbound_disabled";
-      throw error;
-    }
-    return configured;
+    return (await whatsapp.getMetaSenderSettings()).phoneNumberId;
   }
 
   async function getClient(clientId) {
@@ -228,25 +182,35 @@ function createAppointmentNotificationService({ db } = {}) {
     ];
   }
 
-  async function createQueueItem(queueId, data) {
-    const reference = db.collection("whatsappOutboundQueue").doc(queueId);
-    try {
-      await reference.create({
-        ...data,
-        provider: "meta",
-        status: "queued",
-        createdAt: FieldValue.serverTimestamp(),
-      });
-      return { created: true, reference };
-    } catch (error) {
-      if (isAlreadyExistsError(error)) return { created: false, reference };
-      throw error;
-    }
-  }
-
   async function queueAppointmentMessage({ order, client, recipient, eventId, templateName, notificationType, reason, requestedById, requestedByName }) {
-    const to = digitsOnly(recipient?.whatsapp || recipient?.phone);
-    if (!/^\d{8,15}$/.test(to)) {
+    const to = recipient?.whatsapp || recipient?.phone;
+    const languageCode = templateLanguageForRecipient(recipient, client);
+    const bodyParameters = await buildTemplateParameters(order, client, recipient, languageCode);
+    const recipientKey = recipient?.id || recipient?.sourceId || normalizeWhatsAppPhone(to);
+    const queueId = safeDocumentId(`${notificationType}-${order.id}-${eventId}-${recipientKey}`);
+    const result = await whatsapp.queueMetaTemplate({
+      queueId,
+      to,
+      templateName,
+      languageCode,
+      bodyParameters,
+      metadata: {
+        clientId: client.id,
+        appointmentId: order.appointmentId || null,
+        workOrderId: order.id,
+        notificationType,
+        reason,
+        recipientId: recipient?.id || null,
+        recipientSourceId: recipient?.sourceId || null,
+        recipientType: recipient?.recipientType || "client",
+        recipientName: recipient?.name || client.name || null,
+        recipientRole: recipient?.role || null,
+        requestedById: requestedById || null,
+        requestedByName: requestedByName || null,
+      },
+    });
+
+    if (!result.queued) {
       logger.warn("Skipping appointment notification because a selected recipient has no valid WhatsApp number.", {
         clientId: client.id,
         workOrderId: order.id,
@@ -256,33 +220,8 @@ function createAppointmentNotificationService({ db } = {}) {
       return null;
     }
 
-    const languageCode = templateLanguageForRecipient(recipient, client);
-    const phoneNumberId = await getWhatsAppPhoneNumberId();
-    const bodyParameters = await buildTemplateParameters(order, client, recipient, languageCode);
-    const recipientKey = recipient?.id || recipient?.sourceId || to;
-    const queueId = safeDocumentId(`${notificationType}-${order.id}-${eventId}-${recipientKey}`);
-    const result = await createQueueItem(queueId, {
-      to,
-      phoneNumberId,
-      templateName,
-      languageCode,
-      bodyParameters,
-      clientId: client.id,
-      appointmentId: order.appointmentId || null,
-      workOrderId: order.id,
-      notificationType,
-      reason,
-      recipientId: recipient?.id || null,
-      recipientSourceId: recipient?.sourceId || null,
-      recipientType: recipient?.recipientType || "client",
-      recipientName: recipient?.name || client.name || null,
-      recipientRole: recipient?.role || null,
-      requestedById: requestedById || null,
-      requestedByName: requestedByName || null,
-    });
-
     return {
-      queueId,
+      queueId: result.queueId,
       languageCode,
       recipientId: recipient?.id || null,
       recipientName: recipient?.name || client.name || "Customer",
