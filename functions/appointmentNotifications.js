@@ -4,20 +4,19 @@ const { onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const {
   CUSTOMER_VISIBLE_FIELDS,
-  DEFAULT_CLOSED_WEEKDAYS,
   REMINDER_SEARCH_DAYS,
   TIME_ZONE,
-  addDays,
   confirmationEligible,
   createAppointmentNotificationService,
   customerVisibleChanges,
   dateKeyInTimeZone,
-  nextOpenBusinessDate,
   reminderEligible,
 } = require("./appointmentNotificationService");
+const { createOperatingCalendarService } = require("./operatingCalendarService");
 
 const db = getFirestore();
 const notificationService = createAppointmentNotificationService({ db });
+const operatingCalendar = createOperatingCalendarService({ db });
 
 const REGION = "us-central1";
 
@@ -76,32 +75,7 @@ exports.sendDailyAppointmentReminders = onSchedule(
   },
   async () => {
     const runDate = dateKeyInTimeZone();
-    const firstCandidate = addDays(runDate, 1);
-    const lastCandidate = addDays(runDate, REMINDER_SEARCH_DAYS);
-
-    const [calendarSettings, closuresSnapshot] = await Promise.all([
-      db.collection("businessSettings").doc("business-calendar").get(),
-      db.collection("calendarClosures")
-        .where("date", ">=", firstCandidate)
-        .where("date", "<=", lastCandidate)
-        .get(),
-    ]);
-
-    const closedWeekdays = Array.isArray(calendarSettings.data()?.closedWeekdays)
-      ? calendarSettings.data().closedWeekdays.map(Number)
-      : [...DEFAULT_CLOSED_WEEKDAYS];
-    const closedDates = new Set(
-      closuresSnapshot.docs
-        .filter((document) => document.data().active !== false)
-        .map((document) => document.data().date),
-    );
-
-    const targetDate = nextOpenBusinessDate({
-      runDate,
-      closedWeekdays,
-      closedDates,
-      maxDays: REMINDER_SEARCH_DAYS,
-    });
+    const targetDate = await operatingCalendar.nextOpenDate(runDate, REMINDER_SEARCH_DAYS);
 
     if (!targetDate) {
       logger.warn("No future open business date was found for the appointment reminder run.", { runDate });
