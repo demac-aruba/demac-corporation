@@ -7,6 +7,11 @@ const { createCustomerAgentRuntime, HANDOFF_QUEUES } = require("./demacCustomerA
 const { sessionIdentity } = require("./demacCustomerConversationState");
 const { cleanText, hashId } = require("./bookingSchedulingPrimitives");
 const { cleanCustomerFacingMessage } = require("./demacCustomerMessageFormatting");
+const {
+  MAYA_SETTINGS_COLLECTION,
+  MAYA_SETTINGS_DOCUMENT,
+  mayaReplyDecision,
+} = require("./demacCustomerAgentReplyPolicy");
 
 const app = getApps().length ? getApp() : initializeApp();
 const db = getFirestore(app);
@@ -166,7 +171,7 @@ async function enqueueInbound({ messageId, message, reactivate = false }) {
   const ref = db.collection(AGENT_QUEUE_COLLECTION).doc(queueId);
   const snapshot = await ref.get();
   const currentStatus = snapshot.exists ? cleanText(snapshot.data()?.status, 40) : "";
-  const terminalStatuses = ["processed", "coalesced", "skipped_provider"];
+  const terminalStatuses = ["processed", "coalesced", "skipped_provider", "skipped_policy"];
   if (terminalStatuses.includes(currentStatus) || (currentStatus === "skipped_human" && !reactivate)) {
     return { ref, queueId, conversationId, completed: true };
   }
@@ -265,22 +270,37 @@ async function queueAgentReply({ conversationId, conversation, inboundMessageId,
   const id = outboundDocumentId(conversationId, inboundMessageId);
   const ref = db.collection("whatsappOutboundQueue").doc(id);
   const conversationRef = db.collection("communicationConversations").doc(conversationId);
+  const settingsRef = db.collection(MAYA_SETTINGS_COLLECTION).doc(MAYA_SETTINGS_DOCUMENT);
   let outcome = { queued: false, id, reason: "not-created" };
 
   await db.runTransaction(async (transaction) => {
-    const [conversationSnapshot, existing] = await Promise.all([
+    const [conversationSnapshot, existing, settingsSnapshot] = await Promise.all([
       transaction.get(conversationRef),
       transaction.get(ref),
+      transaction.get(settingsRef),
     ]);
-    if (existing.exists) {
-      outcome = { queued: true, id, existing: true };
-      return;
-    }
     if (!conversationSnapshot.exists || !shouldRunAgent(conversationSnapshot.data() || {})) {
       outcome = { queued: false, id, reason: "human-takeover" };
       return;
     }
     const currentConversation = conversationSnapshot.data() || {};
+    const replyDecision = mayaReplyDecision({
+      conversation: currentConversation,
+      settings: settingsSnapshot.exists ? settingsSnapshot.data() || {} : {},
+    });
+    if (!replyDecision.allowed) {
+      outcome = {
+        queued: false,
+        id,
+        reason: replyDecision.reason,
+        phone: replyDecision.phone || "",
+      };
+      return;
+    }
+    if (existing.exists) {
+      outcome = { queued: true, id, existing: true };
+      return;
+    }
     const to = cleanText(
       currentConversation.chatJid
         || currentConversation.externalChatId
@@ -393,6 +413,27 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
       completedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
     return { processed: false, reason: "human-takeover-before-outbound-commit" };
+  }
+  if (!reply.queued && [
+    "auto-reply-disabled",
+    "unsupported-auto-reply-mode",
+    "missing-customer-phone",
+    "phone-not-allowlisted",
+  ].includes(reply.reason)) {
+    await selected.ref.set({
+      status: "skipped_policy",
+      discardReason: `maya-reply-policy:${reply.reason}`,
+      completedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    await conversationRef.set({
+      mayaMode: "observe_only",
+      mayaAutoReplyAllowed: false,
+      mayaAutoReplyDecisionReason: reply.reason,
+      mayaAutoReplyPolicyCheckedAt: FieldValue.serverTimestamp(),
+      mayaAutoReplyPolicyCheckedAtIso: new Date().toISOString(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return { processed: false, reason: `reply-policy-blocked:${reply.reason}` };
   }
 
   await conversationRef.set({
