@@ -7,6 +7,10 @@ const {
   communicationError,
   createAppointmentCommunicationAuthority,
 } = require("./appointmentCommunicationAuthority");
+const {
+  VAN_SCHEDULE_ACTIONS,
+  createVanScheduleCommunicationAuthority,
+} = require("./vanScheduleCommunicationAuthority");
 
 const COMMUNICATION_ACTIONS = new Set([
   "get_appointment_communication",
@@ -19,6 +23,7 @@ function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
   if (typeof verifyIdToken !== "function") throw new Error("verifyIdToken is required.");
   const baseApi = createOfficeBookingApi({ db, verifyIdToken });
   const communication = createAppointmentCommunicationAuthority({ db, apiVersion: OFFICE_BOOKING_API_VERSION });
+  const vanSchedules = createVanScheduleCommunicationAuthority({ db, apiVersion: OFFICE_BOOKING_API_VERSION });
 
   async function handle(request) {
     if (request.method === "OPTIONS") return { status: 204, body: null };
@@ -26,10 +31,12 @@ function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
     const action = cleanText(request.body?.action, 120);
     const data = request.body?.data || {};
     const legacyGlobalReminderUpdate = action === "update_appointment_communication" && !cleanText(data.recipientId, 180);
-    if (!COMMUNICATION_ACTIONS.has(action) || legacyGlobalReminderUpdate) return baseApi.handle(request);
+    if ((!COMMUNICATION_ACTIONS.has(action) && !VAN_SCHEDULE_ACTIONS.has(action)) || legacyGlobalReminderUpdate) return baseApi.handle(request);
     try {
       const identity = await baseApi.authenticate(request);
-      const result = await communication.execute({ action, data, identity });
+      const result = VAN_SCHEDULE_ACTIONS.has(action)
+        ? await vanSchedules.execute({ action, data, identity })
+        : await communication.execute({ action, data, identity });
       return { status: 200, body: result };
     } catch (error) {
       return communicationError(error);
@@ -39,6 +46,7 @@ function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
   return {
     baseApi,
     communication,
+    vanSchedules,
     handle,
     version: OFFICE_BOOKING_API_VERSION,
   };

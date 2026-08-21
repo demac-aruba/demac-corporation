@@ -10,6 +10,14 @@ on:
       - 'functions/appointmentCommunicationAuthority.test.js'
       - 'functions/appointmentCommunicationRenderer.js'
       - 'functions/appointmentCommunicationRenderer.test.js'
+      - 'functions/vanScheduleCommunicationAuthority.js'
+      - 'functions/vanScheduleCommunicationAuthority.test.js'
+      - 'functions/technicianDailyScheduleService.js'
+      - 'functions/technicianDailyScheduleService.test.js'
+      - 'functions/whatsappTransactionalService.js'
+      - 'functions/whatsappTransactionalGroupRecipient.test.js'
+      - 'functions/operatingCalendarService.js'
+      - 'functions/operatingCalendarService.test.js'
       - 'functions/officeBookingAuthority.test.js'
       - 'functions/officeBookingAuthorityCommunication.test.js'
       - 'functions/officeBookingAuthorityCatalog.test.js'
@@ -51,6 +59,14 @@ on:
       - 'functions/appointmentCommunicationAuthority.test.js'
       - 'functions/appointmentCommunicationRenderer.js'
       - 'functions/appointmentCommunicationRenderer.test.js'
+      - 'functions/vanScheduleCommunicationAuthority.js'
+      - 'functions/vanScheduleCommunicationAuthority.test.js'
+      - 'functions/technicianDailyScheduleService.js'
+      - 'functions/technicianDailyScheduleService.test.js'
+      - 'functions/whatsappTransactionalService.js'
+      - 'functions/whatsappTransactionalGroupRecipient.test.js'
+      - 'functions/operatingCalendarService.js'
+      - 'functions/operatingCalendarService.test.js'
       - 'functions/officeBookingAuthority.test.js'
       - 'functions/officeBookingAuthorityCommunication.test.js'
       - 'functions/officeBookingAuthorityCatalog.test.js'
@@ -116,6 +132,10 @@ jobs:
           node --check functions/officeBookingAuthorityFacade.js
           node --check functions/appointmentCommunicationAuthority.js
           node --check functions/appointmentCommunicationRenderer.js
+          node --check functions/vanScheduleCommunicationAuthority.js
+          node --check functions/technicianDailyScheduleService.js
+          node --check functions/whatsappTransactionalService.js
+          node --check functions/operatingCalendarService.js
           node --check functions/appointmentNotificationService.js
           node --check functions/customerContactDirectory.js
           node --check functions/bookingOperationalMove.js
@@ -128,6 +148,10 @@ jobs:
           node --check functions/serviceCatalog.js
           node --check functions/bookingCapacityAvailability.js
           node --check functions/bookingVanIdentity.js
+          node --test functions/vanScheduleCommunicationAuthority.test.js
+          node --test functions/technicianDailyScheduleService.test.js
+          node --test functions/whatsappTransactionalGroupRecipient.test.js
+          node --test functions/operatingCalendarService.test.js
           node --test functions/appointmentCommunicationRenderer.test.js
           node --test functions/appointmentNotificationService.test.js
           node --test functions/appointmentCommunicationAuthority.test.js
