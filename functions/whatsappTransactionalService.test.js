@@ -33,7 +33,7 @@ test("wacli is the default transactional provider until Meta is explicitly selec
   assert.equal(normalizeTransactionalProvider("meta"), "meta");
 });
 
-test("canonical renderer converts appointment reminder template parameters to wacli text", () => {
+test("legacy renderer converts appointment reminder template parameters to wacli text", () => {
   const text = renderTransactionalText({
     templateName: "appointment_reminder_24_hours",
     languageCode: "es",
@@ -45,7 +45,7 @@ test("canonical renderer converts appointment reminder template parameters to wa
   assert.match(text, /Dirección: Piedra Plat 1C/);
 });
 
-test("canonical renderer converts technician schedule template parameters to wacli text", () => {
+test("legacy renderer converts technician schedule template parameters to wacli text", () => {
   const text = renderTransactionalText({
     templateName: "technician_daily_schedule",
     languageCode: "es",
@@ -154,7 +154,7 @@ test("transactional messages queue wacli text without requiring Meta sender sett
   assert.equal(queued.templateName, undefined);
 });
 
-test("known transactional templates use the canonical renderer for new wacli messages", async () => {
+test("explicit domain-rendered text wins for known wacli appointment templates", async () => {
   const writes = new Map();
   const db = {
     collection(name) {
@@ -184,15 +184,46 @@ test("known transactional templates use the canonical renderer for new wacli mes
     },
   };
   const service = createWhatsAppTransactionalService({ db });
+  const papiamentoText = [
+    "Bon tardi Stefany,",
+    "",
+    "Esaki ta un recordatorio pa bo cita cu *DEMAC Professional Cooling Solutions*.",
+    "",
+    "*Fecha:* diasabra, 22 di augustus 2026",
+  ].join("\n");
   await service.queueTransactionalMessage({
-    queueId: "reminder-canonical",
+    queueId: "reminder-domain-rendered",
     to: "560-6772",
-    text: "This caller-provided text should not win for a known template.",
+    text: papiamentoText,
+    templateName: "appointment_reminder_24_hours",
+    languageCode: "pap",
+    bodyParameters: ["Stefany", "diasabra, 22 di augustus 2026", "8:30 AM", "Piedra Plat 1C", "Instalacion standard × 1"],
+  });
+
+  assert.equal(writes.get("reminder-domain-rendered").text, papiamentoText);
+  assert.doesNotMatch(writes.get("reminder-domain-rendered").text, /^Hello /);
+});
+
+test("legacy renderer remains a fallback when an older wacli caller supplies no text", async () => {
+  const writes = new Map();
+  const db = {
+    collection(name) {
+      if (name === "businessSettings") {
+        return { doc() { return { async get() { return { exists: false, data: () => ({}) }; } }; } };
+      }
+      if (name === "whatsappOutboundQueue") {
+        return { doc(id) { return { async create(payload) { writes.set(id, payload); } }; } };
+      }
+      throw new Error(`Unexpected collection ${name}`);
+    },
+  };
+  const service = createWhatsAppTransactionalService({ db });
+  await service.queueTransactionalMessage({
+    queueId: "legacy-reminder-fallback",
+    to: "560-6772",
     templateName: "appointment_reminder_24_hours",
     languageCode: "es",
     bodyParameters: ["Stefany", "22 de agosto de 2026", "8:30 a. m.", "Piedra Plat 1C", "Standard Service"],
   });
-
-  assert.match(writes.get("reminder-canonical").text, /Hola Stefany/);
-  assert.match(writes.get("reminder-canonical").text, /recordatorio de tu cita/);
+  assert.match(writes.get("legacy-reminder-fallback").text, /^Hola Stefany,/);
 });

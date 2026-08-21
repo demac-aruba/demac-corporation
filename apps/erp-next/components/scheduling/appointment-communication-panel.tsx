@@ -17,6 +17,7 @@ function stateLabel(value?: string) {
   switch (String(value || '').toLowerCase()) {
     case 'not_requested': return 'Not requested';
     case 'not_sent': return 'Not sent yet';
+    case 'closed': return 'Closed';
     case 'queued': return 'Queued';
     case 'processing': return 'Sending';
     case 'accepted':
@@ -43,7 +44,18 @@ function purposeTitle(purpose: OfficeCommunicationPurpose) {
   return purpose === 'confirmation' ? 'Confirmation' : 'Reminder';
 }
 
+function lifecycleBadge(purpose: OfficeCommunicationPurpose, state: OfficeRecipientCommunicationState) {
+  if (purpose === 'confirmation' && state.state === 'closed') return 'CLOSED AFTER REMINDER';
+  if (purpose === 'confirmation') return state.selected ? 'REQUESTED AT BOOKING' : 'NOT REQUESTED';
+  return state.selected ? 'AUTOMATIC ON' : 'AUTOMATIC OFF';
+}
+
 function policyCopy(purpose: OfficeCommunicationPurpose, state: OfficeRecipientCommunicationState) {
+  if (purpose === 'confirmation' && state.state === 'closed') {
+    return state.blockedReason === 'reminder-in-progress'
+      ? 'The confirmation phase is closed because the reminder is already in progress.'
+      : 'The confirmation phase is closed because the reminder has already been sent.';
+  }
   if (purpose === 'confirmation') {
     return state.selected ? 'Requested when this appointment was booked.' : 'Not requested by the operator for this appointment.';
   }
@@ -51,6 +63,7 @@ function policyCopy(purpose: OfficeCommunicationPurpose, state: OfficeRecipientC
 }
 
 function stateCopy(purpose: OfficeCommunicationPurpose, state: OfficeRecipientCommunicationState) {
+  if (state.state === 'closed') return 'No confirmation can be sent after the reminder lifecycle has started. Previous attempts remain in the audit history only.';
   if (state.state === 'not_requested') return 'No message is expected unless an operator sends one manually.';
   if (state.state === 'not_sent') {
     return purpose === 'reminder' && state.selected
@@ -63,6 +76,14 @@ function stateCopy(purpose: OfficeCommunicationPurpose, state: OfficeRecipientCo
   if (state.state === 'failed') return state.lastError ? `Latest requested attempt failed: ${state.lastError}` : 'The latest requested attempt failed.';
   if (state.state === 'cancelled') return 'The queued attempt was cancelled.';
   return `Current status: ${stateLabel(state.state)}.`;
+}
+
+function sendButtonLabel(purpose: OfficeCommunicationPurpose, state: OfficeRecipientCommunicationState) {
+  const title = purposeTitle(purpose);
+  if (state.state === 'closed') return `${title} Closed`;
+  if (isSuccessful(state.state)) return `${title} Sent`;
+  if (isActive(state.state)) return `${title} ${stateLabel(state.state)}`;
+  return `Send ${title} Now`;
 }
 
 function PurposeCard({
@@ -79,18 +100,15 @@ function PurposeCard({
   onToggleReminder: (recipient: OfficeAppointmentCommunicationRecipient) => Promise<void>;
 }) {
   const state = recipient[purpose];
-  const title = purposeTitle(purpose);
   const successful = isSuccessful(state.state);
   return <div style={{ border: '1px solid var(--border)', borderRadius: 9, padding: 9, background: 'var(--surface)', display: 'grid', gap: 6 }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'start' }}>
       <div>
-        <span style={{ color: 'var(--muted)', fontSize: 6.2, fontWeight: 750, textTransform: 'uppercase' }}>{title}</span>
+        <span style={{ color: 'var(--muted)', fontSize: 6.2, fontWeight: 750, textTransform: 'uppercase' }}>{purposeTitle(purpose)}</span>
         <strong style={{ display: 'block', marginTop: 3, fontSize: 7.2 }}>{stateLabel(state.state)}</strong>
       </div>
-      <span style={{ fontSize: 5.8, color: state.selected ? 'var(--brand)' : 'var(--muted)', fontWeight: 750 }}>
-        {purpose === 'confirmation'
-          ? state.selected ? 'REQUESTED AT BOOKING' : 'NOT REQUESTED'
-          : state.selected ? 'AUTOMATIC ON' : 'AUTOMATIC OFF'}
+      <span style={{ fontSize: 5.8, color: state.state === 'closed' ? 'var(--muted)' : state.selected ? 'var(--brand)' : 'var(--muted)', fontWeight: 750 }}>
+        {lifecycleBadge(purpose, state)}
       </span>
     </div>
     <span style={{ color: 'var(--muted)', fontSize: 5.8, lineHeight: 1.45 }}>{policyCopy(purpose, state)}</span>
@@ -107,7 +125,7 @@ function PurposeCard({
         className={styles.primary}
         disabled={busy || !state.canSendNow}
         onClick={() => void onSend(recipient.id, purpose)}
-      >{successful ? `${title} Sent` : isActive(state.state) ? `${title} ${stateLabel(state.state)}` : `Send ${title} Now`}</button>
+      >{sendButtonLabel(purpose, state)}</button>
     </div>
   </div>;
 }

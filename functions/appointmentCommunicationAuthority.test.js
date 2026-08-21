@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const {
+  closeConfirmationAfterReminder,
   deriveRecipientPurposeState,
   projectRecipientCommunication,
 } = require("./appointmentCommunicationAuthority");
@@ -68,7 +69,54 @@ test("a manual send is visible without changing the recipient automatic selectio
   assert.equal(state.manual, true);
 });
 
-test("different contacts keep independent confirmation and reminder policy and status", () => {
+test("a sent reminder closes an unrequested confirmation for the same recipient", () => {
+  const result = projectRecipientCommunication({
+    order: { date: "2026-08-22", notificationRecipients: [stefany] },
+    confirmationQueue: [],
+    reminderQueue: [queue("sent-reminder", "sent", { reason: "manual-office-reminder", manual: true, provider: "wacli" })],
+  });
+  assert.equal(result.recipients[0].confirmation.state, "closed");
+  assert.equal(result.recipients[0].confirmation.canSendNow, false);
+  assert.equal(result.recipients[0].confirmation.blockedReason, "reminder-already-sent");
+  assert.equal(result.recipients[0].reminder.state, "sent");
+});
+
+test("a sent reminder supersedes an old failed confirmation without erasing its audit history", () => {
+  const recipient = { ...stefany, sendConfirmation: true };
+  const result = projectRecipientCommunication({
+    order: { date: "2026-08-22", notificationRecipients: [recipient] },
+    confirmationQueue: [queue("old-meta", "failed", { errorMessage: "(#133010) Account not registered", provider: "meta" })],
+    reminderQueue: [queue("sent-reminder", "sent", { reason: "daily-next-business-day-reminder", provider: "wacli" })],
+  });
+  const confirmation = result.recipients[0].confirmation;
+  assert.equal(confirmation.state, "closed");
+  assert.equal(confirmation.lastError, "");
+  assert.equal(confirmation.canSendNow, false);
+  assert.equal(confirmation.blockedReason, "reminder-already-sent");
+  assert.deepEqual(confirmation.historyQueueIds, ["old-meta"]);
+  assert.equal(confirmation.historyAttemptCount, 1);
+});
+
+test("a queued reminder closes confirmation immediately so the two lifecycle steps cannot race", () => {
+  const confirmation = closeConfirmationAfterReminder(
+    { selected: false, state: "not_requested", canSendNow: true, historyQueueIds: [] },
+    { selected: true, state: "queued", canSendNow: false },
+  );
+  assert.equal(confirmation.state, "closed");
+  assert.equal(confirmation.canSendNow, false);
+  assert.equal(confirmation.blockedReason, "reminder-in-progress");
+});
+
+test("a failed reminder does not close confirmation", () => {
+  const confirmation = closeConfirmationAfterReminder(
+    { selected: false, state: "not_requested", canSendNow: true },
+    { selected: true, state: "failed", canSendNow: true },
+  );
+  assert.equal(confirmation.state, "not_requested");
+  assert.equal(confirmation.canSendNow, true);
+});
+
+test("different contacts keep independent confirmation and reminder lifecycle", () => {
   const manager = {
     id: "contact-manager",
     recipientType: "contact",
@@ -96,9 +144,10 @@ test("different contacts keep independent confirmation and reminder policy and s
   });
   assert.equal(result.recipients[0].confirmation.state, "sent");
   assert.equal(result.recipients[0].reminder.state, "not_requested");
-  assert.equal(result.recipients[1].confirmation.state, "not_requested");
+  assert.equal(result.recipients[1].confirmation.state, "closed");
+  assert.equal(result.recipients[1].confirmation.canSendNow, false);
   assert.equal(result.recipients[1].reminder.state, "sent");
-  assert.equal(result.confirmation.state, "sent");
+  assert.equal(result.confirmation.state, "partial");
   assert.equal(result.reminder.state, "sent");
 });
 

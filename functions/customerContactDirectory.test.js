@@ -181,3 +181,21 @@ test('appointment recipient overrides change only confirmation/reminder for that
   assert.equal(result[0].sendReminder, true);
   assert.equal(result[0].sendInvoice, true);
 });
+
+test('resolver preserves an explicit appointment confirmation opt-out even when the customer default is on', async () => {
+  const db = createReadDb({
+    clients: [{ id: 'client-1', name: 'Stefany', phone: '+2975640000', whatsapp: '+2975640000', preferredLanguage: 'Papiamento' }],
+    properties: [{ id: 'property-1', clientId: 'client-1', name: 'Primary Property' }],
+    contacts: [],
+    contactPropertyAssignments: [],
+  });
+  const recipients = await resolveAppointmentRecipients(db, {
+    clientId: 'client-1',
+    propertyId: 'property-1',
+    selections: [{ recipientType: 'client', sourceId: 'client-1', sendConfirmation: false, sendReminder: true }],
+  });
+  assert.equal(recipients.length, 1);
+  assert.equal(recipients[0].sendConfirmation, false);
+  assert.equal(recipients[0].sendReminder, true);
+  assert.equal(recipients[0].preferredLanguage, 'Papiamento');
+});
