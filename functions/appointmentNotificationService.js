@@ -10,6 +10,13 @@ const {
   weekdayForDate,
 } = require("./operatingCalendarService");
 const {
+  formatAppointmentDate,
+  formatAppointmentTime,
+  localizeServiceDescription,
+  renderAppointmentText,
+  templateLanguageForRecipient,
+} = require("./appointmentCommunicationRenderer");
+const {
   createWhatsAppTransactionalService,
   digitsOnly,
   normalizeWhatsAppPhone,
@@ -27,108 +34,6 @@ const NOTIFICATION_INELIGIBLE_STATUSES = new Set([
   "Facturada",
   "Pagada",
 ]);
-
-function normalizePreferredLanguage(value) {
-  const language = String(value || "unknown").trim().toLowerCase();
-  if (["pap", "papiamento"].includes(language)) return "pap";
-  if (["es", "spa", "spanish", "español", "espanol"].includes(language)) return "es";
-  if (["nl", "dut", "dutch", "nederlands", "neerlandés", "neerlandes"].includes(language)) return "nl";
-  if (["en", "eng", "english", "inglés", "ingles"].includes(language)) return "en";
-  return "unknown";
-}
-
-function templateLanguageForRecipient(recipient, client) {
-  const explicit = String(recipient?.templateLanguage || "").trim().toLowerCase();
-  if (["en", "es", "nl"].includes(explicit)) return explicit;
-
-  const recipientPreferred = normalizePreferredLanguage(recipient?.preferredLanguage);
-  if (["es", "nl", "en"].includes(recipientPreferred)) return recipientPreferred;
-
-  const clientExplicit = String(client?.templateLanguage || "").trim().toLowerCase();
-  if (["en", "es", "nl"].includes(clientExplicit)) return clientExplicit;
-
-  const clientPreferred = normalizePreferredLanguage(client?.preferredLanguage);
-  if (clientPreferred === "es") return "es";
-  if (clientPreferred === "nl") return "nl";
-  return "en";
-}
-
-function localeForLanguage(languageCode) {
-  if (languageCode === "es") return "es-ES";
-  if (languageCode === "nl") return "nl-NL";
-  return "en-US";
-}
-
-function formatAppointmentDate(dateKey, languageCode) {
-  const date = new Date(`${dateKey}T12:00:00Z`);
-  return new Intl.DateTimeFormat(localeForLanguage(languageCode), {
-    timeZone: TIME_ZONE,
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  }).format(date);
-}
-
-function formatAppointmentTime(value, languageCode) {
-  const match = String(value || "").match(/^(\d{1,2}):(\d{2})/);
-  if (!match) return String(value || "");
-  const hour = Number(match[1]);
-  const minute = match[2];
-  if (languageCode === "nl") return `${String(hour).padStart(2, "0")}:${minute}`;
-  const suffix = hour >= 12 ? (languageCode === "es" ? "p. m." : "PM") : (languageCode === "es" ? "a. m." : "AM");
-  return `${hour % 12 || 12}:${minute} ${suffix}`;
-}
-
-function renderAppointmentText(notificationType, bodyParameters, languageCode) {
-  const [name, date, time, address, service] = bodyParameters.map((value) => String(value || "").trim());
-  const reminder = notificationType === "appointment-reminder";
-  if (languageCode === "es") {
-    return [
-      `Hola ${name},`,
-      "",
-      reminder
-        ? "Este es un recordatorio de tu cita con DEMAC Professional Cooling Solutions."
-        : "Tu cita con DEMAC Professional Cooling Solutions ha sido confirmada.",
-      "",
-      `Fecha: ${date}`,
-      `Hora: ${time}`,
-      `Dirección: ${address}`,
-      `Servicio: ${service}`,
-      "",
-      "Si necesitas hacer algún cambio, responde a este mensaje.",
-    ].join("\n");
-  }
-  if (languageCode === "nl") {
-    return [
-      `Hallo ${name},`,
-      "",
-      reminder
-        ? "Dit is een herinnering voor uw afspraak met DEMAC Professional Cooling Solutions."
-        : "Uw afspraak met DEMAC Professional Cooling Solutions is bevestigd.",
-      "",
-      `Datum: ${date}`,
-      `Tijd: ${time}`,
-      `Adres: ${address}`,
-      `Service: ${service}`,
-      "",
-      "Als u iets wilt wijzigen, kunt u op dit bericht reageren.",
-    ].join("\n");
-  }
-  return [
-    `Hello ${name},`,
-    "",
-    reminder
-      ? "This is a reminder for your appointment with DEMAC Professional Cooling Solutions."
-      : "Your appointment with DEMAC Professional Cooling Solutions has been confirmed.",
-    "",
-    `Date: ${date}`,
-    `Time: ${time}`,
-    `Address: ${address}`,
-    `Service: ${service}`,
-    "",
-    "If you need to make any changes, reply to this message.",
-  ].join("\n");
-}
 
 function orderCanNotify(order) {
   return Boolean(order)
@@ -212,11 +117,14 @@ function createAppointmentNotificationService({ db } = {}) {
     return snapshot.exists ? { id: snapshot.id, ...snapshot.data() } : null;
   }
 
-  async function getServiceDescription(order) {
-    if (String(order.problem || "").trim()) return String(order.problem).trim();
-    if (!order.serviceId) return "Air conditioning service";
-    const service = await db.collection("services").doc(order.serviceId).get();
-    return String(service.data()?.name || "Air conditioning service").trim();
+  async function getServiceDescription(order, languageCode) {
+    let fallback = String(order.problem || "").trim();
+    if (!fallback && order.serviceId) {
+      const service = await db.collection("services").doc(order.serviceId).get();
+      fallback = String(service.data()?.name || "").trim();
+    }
+    if (!fallback) fallback = languageCode === "es" ? "Servicio de aire acondicionado" : languageCode === "pap" ? "Servicio di airco" : languageCode === "nl" ? "Aircoservice" : "Air conditioning service";
+    return localizeServiceDescription(order, fallback, languageCode) || fallback;
   }
 
   async function buildTemplateParameters(order, client, recipient, languageCode) {
@@ -225,7 +133,7 @@ function createAppointmentNotificationService({ db } = {}) {
       formatAppointmentDate(order.date, languageCode),
       formatAppointmentTime(order.time, languageCode),
       String(order.address || client.address || "").trim(),
-      await getServiceDescription(order),
+      await getServiceDescription(order, languageCode),
     ];
   }
 
@@ -253,6 +161,8 @@ function createAppointmentNotificationService({ db } = {}) {
         recipientType: recipient?.recipientType || "client",
         recipientName: recipient?.name || client.name || null,
         recipientRole: recipient?.role || null,
+        preferredLanguage: recipient?.preferredLanguage || client?.preferredLanguage || null,
+        languageCode,
         requestedById: requestedById || null,
         requestedByName: requestedByName || null,
       },
@@ -405,6 +315,8 @@ module.exports.createAppointmentNotificationService = createAppointmentNotificat
 module.exports.customerVisibleChanges = customerVisibleChanges;
 module.exports.dateKeyInTimeZone = dateKeyInTimeZone;
 module.exports.digitsOnly = digitsOnly;
+module.exports.formatAppointmentDate = formatAppointmentDate;
+module.exports.formatAppointmentTime = formatAppointmentTime;
 module.exports.nextOpenBusinessDate = nextOpenBusinessDate;
 module.exports.notificationQueueIds = notificationQueueIds;
 module.exports.reminderEligible = reminderEligible;
