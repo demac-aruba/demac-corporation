@@ -1,0 +1,83 @@
+name: Customer Facing Description Backfill
+
+on:
+  pull_request:
+    paths:
+      - 'functions/migrations/backfillWorkOrderCustomerDescriptions.js'
+      - 'functions/migrations/backfillWorkOrderCustomerDescriptions.test.js'
+      - '.github/workflows/customer-facing-description-backfill.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'functions/migrations/backfillWorkOrderCustomerDescriptions.js'
+      - 'functions/migrations/backfillWorkOrderCustomerDescriptions.test.js'
+      - '.github/workflows/customer-facing-description-backfill.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: customer-facing-description-backfill-production
+  cancel-in-progress: false
+
+jobs:
+  validate-backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Validate backfill
+        run: |
+          set -euo pipefail
+          node --check functions/migrations/backfillWorkOrderCustomerDescriptions.js
+          node --test functions/migrations/backfillWorkOrderCustomerDescriptions.test.js
+
+  apply-backfill:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate-backfill
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Authenticate Firebase production service account
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+
+      - name: Backfill missing Work Order customer descriptions
+        env:
+          GCLOUD_PROJECT: demac-corporation
+          GOOGLE_CLOUD_PROJECT: demac-corporation
+        run: |
+          set -euo pipefail
+          output="$(node functions/migrations/backfillWorkOrderCustomerDescriptions.js)"
+          echo "$output"
+          node - "$output" <<'NODE'
+          const result = JSON.parse(process.argv[2]);
+          if (result.migrationId !== 'customer-facing-description-work-order-v1') {
+            throw new Error(`Unexpected migration result: ${JSON.stringify(result)}`);
+          }
+          console.log(`Customer description backfill: skipped=${result.skipped}, appointments=${result.appointmentsScanned}, workOrdersUpdated=${result.workOrdersUpdated}`);
+          NODE

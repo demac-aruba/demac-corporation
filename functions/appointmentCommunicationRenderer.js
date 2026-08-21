@@ -140,6 +140,9 @@ function workTypeLabel(presetId, fallback, languageCode) {
 }
 
 function localizeServiceDescription(order = {}, fallback = "", languageCode = "en") {
+  const explicitCustomerDescription = String(order.customerFacingDescription || "").trim();
+  if (explicitCustomerDescription && order.customerFacingDescriptionIsDefault !== true) return explicitCustomerDescription;
+
   const workItems = Array.isArray(order.appointmentWorkItems) ? order.appointmentWorkItems.filter(Boolean) : [];
   if (workItems.length) {
     return workItems.map((item) => {
@@ -154,7 +157,7 @@ function localizeServiceDescription(order = {}, fallback = "", languageCode = "e
     const quantity = Math.max(1, Number(order.airConditionerCount) || 1);
     return `${label} × ${quantity}`;
   }
-  return String(fallback || "").trim();
+  return explicitCustomerDescription || String(fallback || "").trim();
 }
 
 function renderAppointmentText(notificationType, bodyParameters, languageCode, options = {}) {

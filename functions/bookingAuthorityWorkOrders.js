@@ -65,6 +65,38 @@ function normalizedRecipientSnapshots(context, customer) {
   return fallback ? [fallback] : [];
 }
 
+function requestCustomerFacingDescription(request) {
+  const descriptions = [...new Set((Array.isArray(request?.workLines) ? request.workLines : [])
+    .map((line) => cleanText(line?.customerFacingDescription, 1500))
+    .filter(Boolean))];
+  return cleanText(descriptions.join("; "), 1500);
+}
+
+function automaticCustomerFacingDescription(option, request) {
+  const optionItems = Array.isArray(option?.workItems) ? option.workItems.filter(Boolean) : [];
+  const entries = optionItems.length
+    ? optionItems.map((item) => {
+      const label = cleanText(item?.label || item?.presetId, 180);
+      const quantity = Math.max(1, Number(item?.quantity) || 1);
+      return label ? `${quantity} × ${label}` : "";
+    }).filter(Boolean)
+    : (Array.isArray(request?.workLines) ? request.workLines : []).map((line) => {
+      const label = cleanText(line?.label || line?.presetLabel || line?.presetId, 180);
+      const quantity = Math.max(1, Number(line?.quantity) || 1);
+      return label ? `${quantity} × ${label}` : "";
+    }).filter(Boolean);
+  return entries.length ? `Scheduled work: ${entries.join("; ")}.` : "";
+}
+
+function workOrderCustomerDescription(option, request, fallback) {
+  const explicit = requestCustomerFacingDescription(request);
+  const automatic = cleanText(automaticCustomerFacingDescription(option, request), 1500);
+  return {
+    customerFacingDescription: explicit || cleanText(fallback, 1500),
+    customerFacingDescriptionIsDefault: Boolean(explicit && automatic && explicit === automatic),
+  };
+}
+
 function buildWorkOrders({ appointment, option, request, customer, property, context = {}, now = new Date() }) {
   const notificationRecipients = normalizedRecipientSnapshots(context, customer);
   const whatsappEnabled = notificationRecipients.some((recipient) =>
@@ -91,6 +123,7 @@ function buildWorkOrders({ appointment, option, request, customer, property, con
     const serviceId = singleItem?.serviceId || "";
     const durationMode = singleItem?.durationMode || (workItems.length > 1 ? "mixed" : option.durationMode || "per_unit");
     const problem = workSummary || "Scheduled HVAC work";
+    const customerDescription = workOrderCustomerDescription(option, request, problem);
     const appointmentEndTime = cleanText(assignment.endTime || option.endTime, 20);
 
     return {
@@ -107,6 +140,8 @@ function buildWorkOrders({ appointment, option, request, customer, property, con
       address: option.address || property.address || property.addressRaw || "",
       zone: option.zone || property.operationalZone || property.zone || "",
       problem: isPrimary ? `${problem}.` : `Apoyo a la cita principal: ${problem}.`,
+      customerFacingDescription: customerDescription.customerFacingDescription,
+      customerFacingDescriptionIsDefault: customerDescription.customerFacingDescriptionIsDefault,
       officeNotes: isPrimary
         ? `Cita creada por DEMAC Booking Authority${supportCount ? ` con ${supportCount} van(es) de apoyo` : ""}.`
         : "Asignación interna de van de apoyo. No enviar confirmación ni recordatorio duplicado.",
@@ -137,8 +172,11 @@ function buildWorkOrders({ appointment, option, request, customer, property, con
 }
 
 module.exports = {
+  automaticCustomerFacingDescription,
   buildWorkOrders,
   notificationRecipient,
   normalizedRecipientSnapshots,
+  requestCustomerFacingDescription,
   workItemsForAssignment,
+  workOrderCustomerDescription,
 };
