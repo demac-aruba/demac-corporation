@@ -85,7 +85,7 @@ const emptyCustomer: CustomerDraft = {
 };
 
 const emptyProperty: PropertyDraft = {
-  name: 'Primary Property',
+  name: '',
   type: 'Casa',
   address: '',
   addressDetail: '',
@@ -391,7 +391,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
 
   const openPropertyEditor = () => {
     if (!selectedCustomer) return;
-    setPropertyDraft({ ...emptyProperty, name: `Property ${customerProperties.length + 1}`, zone: text(selectedCustomer.zone), contactLinks: [] });
+    setPropertyDraft({ ...emptyProperty, zone: text(selectedCustomer.zone), contactLinks: [] });
     setMasterError('');
     setPropertyEditorOpen(true);
     setCustomerEditorOpen(false);
@@ -552,7 +552,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
                     <Field label="Email" value={customerDraft.email ?? ''} onChange={(value) => setCustomerDraft((current) => ({ ...current, email: value }))} type="email" />
                     <label><span>Preferred language</span><select value={customerDraft.preferredLanguage} onChange={(event) => setCustomerDraft((current) => ({ ...current, preferredLanguage: event.target.value }))}><option>Papiamento</option><option>English</option><option>Español</option><option>Nederlands</option></select></label>
                     <div className={styles.formDivider}>First service property</div>
-                    <Field label="Property name" value={customerPropertyDraft.name} onChange={(value) => setCustomerPropertyDraft((current) => ({ ...current, name: value }))} />
+                    <Field label="Property name (optional)" value={customerPropertyDraft.name} onChange={(value) => setCustomerPropertyDraft((current) => ({ ...current, name: value }))} placeholder="Pastechi House Building, Front Office, Rental Villa…" />
                     <label><span>Property type</span><select value={customerPropertyDraft.type} onChange={(event) => setCustomerPropertyDraft((current) => ({ ...current, type: event.target.value }))}><option>Casa</option><option>Apartamento</option><option>Oficina</option><option>Local comercial</option><option>Otro</option></select></label>
                     <PropertyAddressFields draft={customerPropertyDraft} onChange={setCustomerPropertyDraft} />
                     <PropertyContactDraftEditor clientId="new-customer" contacts={[]} links={customerPropertyDraft.contactLinks ?? []} onChange={(contactLinks) => setCustomerPropertyDraft((current) => ({ ...current, contactLinks }))} />
@@ -593,7 +593,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
                 <div className={styles.editorPanel}>
                   <header><div><strong>Add property for {selectedCustomer ? customerLabel(selectedCustomer) : 'customer'}</strong><span>Property identity stays separate from reusable customer contacts and communication rules.</span></div><button type="button" onClick={() => setPropertyEditorOpen(false)}>×</button></header>
                   <div className={styles.formGrid}>
-                    <Field label="Property name *" value={propertyDraft.name} onChange={(value) => setPropertyDraft((current) => ({ ...current, name: value }))} />
+                    <Field label="Property name (optional)" value={propertyDraft.name} onChange={(value) => setPropertyDraft((current) => ({ ...current, name: value }))} placeholder="Pastechi House Building, Front Office, Rental Villa…" />
                     <label><span>Property type</span><select value={propertyDraft.type} onChange={(event) => setPropertyDraft((current) => ({ ...current, type: event.target.value }))}><option>Casa</option><option>Apartamento</option><option>Oficina</option><option>Local comercial</option><option>Otro</option></select></label>
                     <PropertyAddressFields draft={propertyDraft} onChange={setPropertyDraft} />
                     <Field label="Notes" value={propertyDraft.notes ?? ''} onChange={(value) => setPropertyDraft((current) => ({ ...current, notes: value }))} wide />

@@ -116,6 +116,14 @@ function geographicZone(property) {
   return normalizedText(property?.neighborhood || property?.addressNeighborhood);
 }
 
+function propertyLocationName(property) {
+  const name = normalizedText(property?.name);
+  if (!name) return "";
+  const normalized = name.toLowerCase().replace(/\s+/g, " ");
+  if (normalized === "primary property" || normalized === "property" || /^property\s+\d+$/.test(normalized)) return "";
+  return name;
+}
+
 function arrivalContact(order, client) {
   const recipients = Array.isArray(order.notificationRecipients) ? order.notificationRecipients : [];
   const preferred = recipients.find((recipient) => recipient?.technicianArrival === true && normalizedText(recipient.whatsapp || recipient.phone));
@@ -145,6 +153,7 @@ function renderVanWorkOrderText({ van, order, client, property, appointment, sta
   const access = propertyAccessInstructions(property);
   const district = geographicDistrict(property);
   const zone = geographicZone(property);
+  const locationName = propertyLocationName(property);
   const vanLabel = normalizedText(van.name || van.id) || "Van";
   const headerLabel = team.length ? `${vanLabel} · ${team.join(" y ")}` : vanLabel;
 
@@ -161,9 +170,9 @@ function renderVanWorkOrderText({ van, order, client, property, appointment, sta
     customerBlock.push(`*Contacto:* ${contact.name}${contact.role ? ` · ${contact.role}` : ""}`);
   }
 
-  const locationBlock = [
-    `*Dirección:* ${normalizedText(order.address || property?.address || property?.addressRaw) || "Dirección pendiente"}`,
-  ];
+  const locationBlock = [];
+  if (locationName) locationBlock.push(`*Location:* ${locationName}`);
+  locationBlock.push(`*Dirección:* ${normalizedText(order.address || property?.address || property?.addressRaw) || "Dirección pendiente"}`);
   if (district) locationBlock.push(`*Distrito:* ${district}`);
   if (zone) locationBlock.push(`*Zona:* ${zone}`);
   if (access) locationBlock.push(`*Acceso:* ${access}`);
@@ -321,6 +330,7 @@ module.exports.geographicDistrict = geographicDistrict;
 module.exports.geographicZone = geographicZone;
 module.exports.groupConfigForVan = groupConfigForVan;
 module.exports.propertyAccessInstructions = propertyAccessInstructions;
+module.exports.propertyLocationName = propertyLocationName;
 module.exports.renderVanWorkOrderText = renderVanWorkOrderText;
 module.exports.staffFirstNamesForOrder = staffFirstNamesForOrder;
 module.exports.staffNamesForOrder = staffNamesForOrder;
