@@ -20,8 +20,13 @@ const {
   resolveAppointmentRecipients,
   writeContactLinks,
 } = require("./customerContactDirectory");
+const {
+  createAppointmentNotificationService,
+  dateKeyInTimeZone,
+  notificationQueueIds: canonicalNotificationQueueIds,
+} = require("./appointmentNotificationService");
 
-const OFFICE_BOOKING_API_VERSION = 11;
+const OFFICE_BOOKING_API_VERSION = 12;
 const OFFICE_BOOKING_ROLES = Object.freeze([
   "admin",
   "office",
@@ -37,6 +42,7 @@ const OFFICE_BOOKING_ACTIONS = Object.freeze({
   LIST_CONTACT_DIRECTORY: "list_contact_directory",
   GET_APPOINTMENT_COMMUNICATION: "get_appointment_communication",
   UPDATE_APPOINTMENT_COMMUNICATION: "update_appointment_communication",
+  SEND_APPOINTMENT_REMINDER: "send_appointment_reminder",
   CREATE_CUSTOMER_PROPERTY: "create_customer_property",
   CREATE_PROPERTY: "create_property",
   SAVE_CONTACT_ASSIGNMENT: "save_contact_assignment",
@@ -216,9 +222,11 @@ function snapshotItems(snapshot) {
   return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
 }
 
-function notificationQueueIds(value) {
-  const ids = Array.isArray(value?.queueIds) ? value.queueIds : value?.queueId ? [value.queueId] : [];
-  return [...new Set(ids.map((item) => cleanText(item, 1_200)).filter(Boolean))].slice(0, 50);
+function notificationQueueIds(value, options = {}) {
+  return canonicalNotificationQueueIds(value, options)
+    .map((item) => cleanText(item, 1_200))
+    .filter(Boolean)
+    .slice(-50);
 }
 
 function notificationEnabled(order, field) {
@@ -229,8 +237,14 @@ function notificationEnabled(order, field) {
 
 function communicationStateLabel(queueEntries) {
   if (!queueEntries.length) return "not_queued";
-  const states = [...new Set(queueEntries.map((item) => cleanText(item.status, 80).toLowerCase() || "unknown"))];
-  return states.length === 1 ? states[0] : "mixed";
+  const states = queueEntries.map((item) => cleanText(item.status, 80).toLowerCase() || "unknown");
+  const precedence = ["read", "delivered", "sent", "accepted", "processing", "queued", "failed", "cancelled", "missing", "unknown"];
+  return precedence.find((state) => states.includes(state)) || "unknown";
+}
+
+function reminderCanSendNow(reminder) {
+  if (!reminder?.enabled) return false;
+  return !["read", "delivered", "sent", "accepted", "processing", "queued"].includes(reminder.state);
 }
 
 function createOfficeBookingApi({
@@ -240,11 +254,13 @@ function createOfficeBookingApi({
   schedulingProvider = null,
   lifecycleAuthority = null,
   operationalMoveAuthority = null,
+  appointmentNotificationService = null,
 } = {}) {
   if (!db || typeof db.collection !== "function") throw new Error("A Firestore-compatible db is required.");
   if (typeof verifyIdToken !== "function") throw new Error("verifyIdToken is required.");
   const provider = schedulingProvider || createSchedulingProvider({ db });
   const authority = bookingAuthority || createBookingAuthority({ db, availabilityProvider: provider });
+  const notifications = appointmentNotificationService || createAppointmentNotificationService({ db });
   let lifecycle = lifecycleAuthority;
   let operationalMove = operationalMoveAuthority;
   const getLifecycle = () => {
@@ -363,22 +379,41 @@ function createOfficeBookingApi({
 
   async function queueEntriesForIds(ids) {
     const snapshots = await Promise.all(ids.map((id) => db.collection("whatsappOutboundQueue").doc(id).get()));
-    return snapshots.map((snapshot, index) => ({
-      queueId: ids[index],
-      status: snapshot.exists ? cleanText(snapshot.data()?.status, 80) || "unknown" : "missing",
-    }));
+    return snapshots.map((snapshot, index) => {
+      const value = snapshot.exists ? snapshot.data() || {} : {};
+      return {
+        queueId: ids[index],
+        status: snapshot.exists ? cleanText(value.status, 80) || "unknown" : "missing",
+        messageId: cleanText(value.messageId, 300),
+        errorMessage: cleanText(value.errorMessage, 500),
+        reason: cleanText(value.reason, 160),
+      };
+    });
   }
 
   async function appointmentCommunication(data = {}) {
     const { appointmentId, primary } = await appointmentWorkOrderDocs(data.appointmentId);
     const order = primary.data() || {};
     const recipients = Array.isArray(order.notificationRecipients) ? order.notificationRecipients : [];
-    const confirmationQueueIds = notificationQueueIds(order.confirmationNotifications || order.confirmationNotification);
-    const reminderQueueIds = notificationQueueIds(order.reminderNotifications || order.reminderNotification);
+    const confirmationSource = order.confirmationNotifications || order.confirmationNotification;
+    const reminderSource = order.reminderNotifications || order.reminderNotification;
+    const confirmationQueueIds = notificationQueueIds(confirmationSource, { preferLatest: true });
+    const reminderQueueIds = notificationQueueIds(reminderSource, { preferLatest: true });
     const [confirmationQueue, reminderQueue] = await Promise.all([
       queueEntriesForIds(confirmationQueueIds),
       queueEntriesForIds(reminderQueueIds),
     ]);
+    const confirmationState = communicationStateLabel(confirmationQueue);
+    const reminderState = communicationStateLabel(reminderQueue);
+    const reminder = {
+      enabled: notificationEnabled(order, "sendReminder"),
+      queueIds: reminderQueueIds,
+      historyQueueIds: notificationQueueIds(reminderSource),
+      state: reminderState,
+      queue: reminderQueue,
+      lastError: reminderQueue.find((entry) => entry.errorMessage)?.errorMessage || "",
+    };
+    reminder.canSendNow = reminderCanSendNow(reminder);
     return {
       success: true,
       version: OFFICE_BOOKING_API_VERSION,
@@ -396,15 +431,12 @@ function createOfficeBookingApi({
       confirmation: {
         enabled: notificationEnabled(order, "sendConfirmation"),
         queueIds: confirmationQueueIds,
-        state: communicationStateLabel(confirmationQueue),
+        historyQueueIds: notificationQueueIds(confirmationSource),
+        state: confirmationState,
         queue: confirmationQueue,
+        lastError: confirmationQueue.find((entry) => entry.errorMessage)?.errorMessage || "",
       },
-      reminder: {
-        enabled: notificationEnabled(order, "sendReminder"),
-        queueIds: reminderQueueIds,
-        state: communicationStateLabel(reminderQueue),
-        queue: reminderQueue,
-      },
+      reminder,
     };
   }
 
@@ -465,6 +497,60 @@ function createOfficeBookingApi({
       }
     }
 
+    return appointmentCommunication({ appointmentId });
+  }
+
+  async function sendAppointmentReminder(data = {}, identity = {}) {
+    const requestId = officeRequestId(data.requestId);
+    const { appointmentId, primary } = await appointmentWorkOrderDocs(data.appointmentId);
+    const order = { id: primary.id, ...primary.data() };
+    const current = await appointmentCommunication({ appointmentId });
+
+    if (!current.reminder.enabled) {
+      throw new BookingAuthorityError(
+        BOOKING_ERROR_CODES.INVALID_REQUEST,
+        "The appointment reminder is disabled. Turn it on before sending a manual reminder.",
+        { appointmentId },
+      );
+    }
+    if (["read", "delivered", "sent", "accepted"].includes(current.reminder.state)) {
+      throw new BookingAuthorityError(
+        BOOKING_ERROR_CODES.INVALID_REQUEST,
+        "The appointment reminder has already been sent successfully.",
+        { appointmentId, state: current.reminder.state },
+      );
+    }
+    if (["queued", "processing"].includes(current.reminder.state)) {
+      throw new BookingAuthorityError(
+        BOOKING_ERROR_CODES.INVALID_REQUEST,
+        "The appointment reminder is already queued or processing.",
+        { appointmentId, state: current.reminder.state },
+      );
+    }
+    if (cleanText(order.date, 20) && order.date < dateKeyInTimeZone()) {
+      throw new BookingAuthorityError(
+        BOOKING_ERROR_CODES.INVALID_REQUEST,
+        "A reminder cannot be sent for an appointment date that has already passed.",
+        { appointmentId, appointmentDate: order.date },
+      );
+    }
+
+    const result = await notifications.queueReminderForOrder({
+      order,
+      eventId: `manual-${requestId}`,
+      reason: "manual-office-reminder",
+      targetDate: order.date,
+      requestedById: cleanText(identity.uid, 160),
+      requestedByName: cleanText(identity.name || identity.email, 180),
+      manual: true,
+    });
+    if (!result.queued) {
+      throw new BookingAuthorityError(
+        BOOKING_ERROR_CODES.INVALID_REQUEST,
+        "The appointment reminder could not be queued.",
+        { appointmentId, reason: result.reason },
+      );
+    }
     return appointmentCommunication({ appointmentId });
   }
 
@@ -615,6 +701,7 @@ function createOfficeBookingApi({
     if (action === OFFICE_BOOKING_ACTIONS.LIST_CONTACT_DIRECTORY) return listContactDirectory(data);
     if (action === OFFICE_BOOKING_ACTIONS.GET_APPOINTMENT_COMMUNICATION) return appointmentCommunication(data);
     if (action === OFFICE_BOOKING_ACTIONS.UPDATE_APPOINTMENT_COMMUNICATION) return updateAppointmentCommunication(data, identity);
+    if (action === OFFICE_BOOKING_ACTIONS.SEND_APPOINTMENT_REMINDER) return sendAppointmentReminder(data, identity);
     if (action === OFFICE_BOOKING_ACTIONS.CREATE_CUSTOMER_PROPERTY) return createCustomerProperty(data, identity);
     if (action === OFFICE_BOOKING_ACTIONS.CREATE_PROPERTY) return createProperty(data, identity);
     if (action === OFFICE_BOOKING_ACTIONS.SAVE_CONTACT_ASSIGNMENT) return saveContactAssignment(data, identity);
@@ -741,6 +828,7 @@ function createOfficeBookingApi({
     listContactDirectory,
     appointmentCommunication,
     updateAppointmentCommunication,
+    sendAppointmentReminder,
     createCustomerProperty,
     createProperty,
     saveContactAssignment,

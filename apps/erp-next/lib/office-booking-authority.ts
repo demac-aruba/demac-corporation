@@ -88,6 +88,23 @@ export type OfficeAppointmentAttribution = {
   updatedAtIso?: string;
 };
 
+type OfficeCommunicationQueueEntry = {
+  queueId: string;
+  status: string;
+  messageId?: string;
+  errorMessage?: string;
+  reason?: string;
+};
+
+type OfficeCommunicationState = {
+  enabled: boolean;
+  queueIds: string[];
+  historyQueueIds: string[];
+  state: string;
+  queue: OfficeCommunicationQueueEntry[];
+  lastError: string;
+};
+
 export type OfficeAppointmentCommunication = {
   success: true;
   version: number;
@@ -102,17 +119,9 @@ export type OfficeAppointmentCommunication = {
     sendConfirmation: boolean;
     sendReminder: boolean;
   }>;
-  confirmation: {
-    enabled: boolean;
-    queueIds: string[];
-    state: string;
-    queue: Array<{ queueId: string; status: string }>;
-  };
-  reminder: {
-    enabled: boolean;
-    queueIds: string[];
-    state: string;
-    queue: Array<{ queueId: string; status: string }>;
+  confirmation: OfficeCommunicationState;
+  reminder: OfficeCommunicationState & {
+    canSendNow: boolean;
   };
 };
 
@@ -325,6 +334,17 @@ export function updateOfficeAppointmentReminder(input: {
     'update_appointment_communication',
     input,
     10_000,
+  );
+}
+
+export function sendOfficeAppointmentReminder(input: {
+  appointmentId: string;
+  requestId: string;
+}) {
+  return callOfficeBookingAuthority<OfficeAppointmentCommunication>(
+    'send_appointment_reminder',
+    input,
+    12_000,
   );
 }
 

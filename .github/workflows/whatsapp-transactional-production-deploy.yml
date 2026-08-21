@@ -1,0 +1,152 @@
+name: Transactional WhatsApp Production
+
+on:
+  pull_request:
+    paths:
+      - 'functions/appointmentNotificationService.js'
+      - 'functions/appointmentNotificationService.test.js'
+      - 'functions/appointmentNotifications.js'
+      - 'functions/officeBookingAuthority.js'
+      - 'functions/officeBookingAuthorityCommunication.test.js'
+      - 'functions/index.js'
+      - 'functions/bootstrap.js'
+      - 'functions/package.json'
+      - '.github/workflows/whatsapp-transactional-production-deploy.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'functions/appointmentNotificationService.js'
+      - 'functions/appointmentNotificationService.test.js'
+      - 'functions/appointmentNotifications.js'
+      - 'functions/officeBookingAuthority.js'
+      - 'functions/officeBookingAuthorityCommunication.test.js'
+      - 'functions/index.js'
+      - 'functions/bootstrap.js'
+      - 'functions/package.json'
+      - '.github/workflows/whatsapp-transactional-production-deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: transactional-whatsapp-production
+  cancel-in-progress: false
+
+jobs:
+  validate-transactional-whatsapp:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Validate transactional WhatsApp boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check functions/index.js
+          node --check functions/bootstrap.js
+          node --check functions/appointmentNotificationService.js
+          node --check functions/appointmentNotifications.js
+          node --check functions/officeBookingAuthority.js
+          node --test functions/appointmentNotificationService.test.js
+          node --test functions/officeBookingAuthorityCommunication.test.js
+          node - <<'NODE'
+          const mod = require('./functions/bootstrap');
+          for (const name of [
+            'whatsappWebhook',
+            'sendQueuedWhatsAppMessage',
+            'queueAppointmentConfirmation',
+            'sendDailyAppointmentReminders',
+          ]) {
+            if (typeof mod[name] !== 'function') throw new Error(`${name} export missing`);
+          }
+          NODE
+
+  deploy-transactional-whatsapp:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate-transactional-whatsapp
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Authenticate Firebase deployment service account
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy transactional WhatsApp functions only
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --yes firebase-tools@15.2.1 deploy \
+            --only functions:whatsappWebhook,functions:sendQueuedWhatsAppMessage,functions:queueAppointmentConfirmation,functions:sendDailyAppointmentReminders \
+            --project demac-corporation \
+            --non-interactive \
+            --force
+
+      - name: Verify deployed transactional WhatsApp functions
+        shell: bash
+        run: |
+          set -euo pipefail
+          verify_active() {
+            local name="$1"
+            local state
+            state="$(gcloud functions describe "$name" --project=demac-corporation --gen2 --region=us-central1 --format='value(state)')"
+            if [ "$state" != 'ACTIVE' ]; then
+              echo "::error::${name} state is ${state:-unknown}."
+              exit 1
+            fi
+            echo "${name}: ACTIVE"
+          }
+
+          verify_event() {
+            local name="$1" expected_event="$2"
+            local event_type
+            verify_active "$name"
+            event_type="$(gcloud functions describe "$name" --project=demac-corporation --gen2 --region=us-central1 --format='value(eventTrigger.eventType)')"
+            if [ "$event_type" != "$expected_event" ]; then
+              echo "::error::${name} event type is ${event_type:-missing}; expected ${expected_event}."
+              exit 1
+            fi
+          }
+
+          verify_secret() {
+            local name="$1" expected_secret="$2"
+            local secrets
+            secrets="$(gcloud functions describe "$name" --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.secretEnvironmentVariables[].key)' | tr ';' '\n' | sort -u)"
+            if ! printf '%s\n' "$secrets" | grep -qx "$expected_secret"; then
+              echo "::error::${name} is missing ${expected_secret}."
+              exit 1
+            fi
+          }
+
+          verify_active whatsappWebhook
+          verify_secret whatsappWebhook WHATSAPP_VERIFY_TOKEN
+          verify_event sendQueuedWhatsAppMessage google.cloud.firestore.document.v1.created
+          verify_secret sendQueuedWhatsAppMessage WHATSAPP_ACCESS_TOKEN
+          verify_event queueAppointmentConfirmation google.cloud.firestore.document.v1.written
+          verify_active sendDailyAppointmentReminders

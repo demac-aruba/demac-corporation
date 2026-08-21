@@ -15,12 +15,16 @@ function documentSnapshot(id, store, reference) {
   };
 }
 
-function createCommunicationDb() {
+function createCommunicationDb({ reminderStatus = "queued" } = {}) {
   const workOrders = {
     "WO-APT-1-1": {
       appointmentId: "APT-1",
       appointmentAssignmentRole: "primary",
       clientId: "client-1",
+      propertyId: "property-1",
+      date: "2026-08-24",
+      time: "08:30",
+      status: "Programada",
       whatsappNotificationsEnabled: true,
       notificationRecipients: [{
         id: "client-client-1",
@@ -31,13 +35,13 @@ function createCommunicationDb() {
         sendConfirmation: true,
         sendReminder: true,
       }],
-      confirmationNotifications: { queueIds: ["confirmation-1"] },
-      reminderNotifications: { queueIds: ["reminder-1"] },
+      confirmationNotifications: { queueIds: ["confirmation-1"], latestQueueIds: ["confirmation-1"] },
+      reminderNotifications: { queueIds: ["reminder-1"], latestQueueIds: ["reminder-1"] },
     },
   };
   const queues = {
-    "confirmation-1": { status: "sent" },
-    "reminder-1": { status: "queued" },
+    "confirmation-1": { status: "sent", messageId: "wamid-confirmation" },
+    "reminder-1": { status: reminderStatus, errorMessage: reminderStatus === "failed" ? "Meta temporary failure" : "" },
   };
 
   function mutableReference(store, id) {
@@ -103,9 +107,7 @@ function createCommunicationDb() {
           },
         };
       }
-      if (name === "services") {
-        return { async get() { return { docs: [] }; } };
-      }
+      if (name === "services") return { async get() { return { docs: [] }; } };
       if (name === "businessSettings") {
         return {
           doc() {
@@ -129,14 +131,41 @@ function request(action, data = {}) {
   };
 }
 
-const verifyIdToken = async () => ({ uid: "user-1", email: "office@demac.test" });
+const verifyIdToken = async () => ({ uid: "user-1", email: "office@demac.test", name: "Office User" });
 const bookingAuthority = {
   async checkAvailability() { return { success: true, available: false, offer: null, options: [] }; },
   async createAppointment() { return { success: true, appointmentId: "APT-1" }; },
   async getAppointment(id) { return { appointmentId: id }; },
 };
 
-test("appointment communication reads existing Work Order notification policy and outbound queue state", async () => {
+function fakeNotificationService(db, calls) {
+  return {
+    async queueReminderForOrder(input) {
+      calls.push(input);
+      const queueId = `manual-${input.eventId}`;
+      db.queues[queueId] = {
+        status: "queued",
+        reason: input.reason,
+        requestedById: input.requestedById,
+      };
+      const workOrder = db.workOrders[input.order.id];
+      workOrder.reminderNotifications = {
+        ...(workOrder.reminderNotifications || {}),
+        queueIds: [...new Set([...(workOrder.reminderNotifications?.queueIds || []), queueId])],
+        latestQueueIds: [queueId],
+        reason: input.reason,
+        manual: true,
+      };
+      workOrder.reminderNotification = { queueId, reason: input.reason, manual: true };
+      return {
+        queued: true,
+        notifications: [{ queueId, created: true }],
+      };
+    },
+  };
+}
+
+test("appointment communication reads latest Work Order notification attempt and outbound queue state", async () => {
   const db = createCommunicationDb();
   const api = createOfficeBookingApi({ db, verifyIdToken, bookingAuthority, schedulingProvider: {} });
   const response = await api.handle(request(OFFICE_BOOKING_ACTIONS.GET_APPOINTMENT_COMMUNICATION, { appointmentId: "APT-1" }));
@@ -147,6 +176,7 @@ test("appointment communication reads existing Work Order notification policy an
   assert.equal(response.body.confirmation.state, "sent");
   assert.equal(response.body.reminder.enabled, true);
   assert.equal(response.body.reminder.state, "queued");
+  assert.equal(response.body.reminder.canSendNow, false);
   assert.equal(response.body.recipients[0].name, "Mitch Bermudez");
 });
 
@@ -165,4 +195,57 @@ test("turning reminder off updates the existing recipient preference and cancels
   assert.equal(db.queues["confirmation-1"].status, "sent");
   assert.equal(response.body.reminder.enabled, false);
   assert.equal(response.body.reminder.state, "cancelled");
+});
+
+test("a failed reminder can be queued manually through the existing Office Booking Authority", async () => {
+  const db = createCommunicationDb({ reminderStatus: "failed" });
+  const calls = [];
+  const api = createOfficeBookingApi({
+    db,
+    verifyIdToken,
+    bookingAuthority,
+    schedulingProvider: {},
+    appointmentNotificationService: fakeNotificationService(db, calls),
+  });
+
+  const before = await api.handle(request(OFFICE_BOOKING_ACTIONS.GET_APPOINTMENT_COMMUNICATION, { appointmentId: "APT-1" }));
+  assert.equal(before.body.reminder.state, "failed");
+  assert.equal(before.body.reminder.canSendNow, true);
+  assert.equal(before.body.reminder.lastError, "Meta temporary failure");
+
+  const response = await api.handle(request(OFFICE_BOOKING_ACTIONS.SEND_APPOINTMENT_REMINDER, {
+    appointmentId: "APT-1",
+    requestId: "manual-reminder-123",
+  }));
+
+  assert.equal(response.status, 200);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].order.id, "WO-APT-1-1");
+  assert.equal(calls[0].reason, "manual-office-reminder");
+  assert.equal(calls[0].manual, true);
+  assert.equal(calls[0].requestedById, "user-1");
+  assert.equal(response.body.reminder.state, "queued");
+  assert.equal(response.body.reminder.canSendNow, false);
+  assert.equal(response.body.reminder.historyQueueIds.includes("reminder-1"), true);
+});
+
+test("a successfully sent reminder cannot be manually duplicated", async () => {
+  const db = createCommunicationDb({ reminderStatus: "sent" });
+  const calls = [];
+  const api = createOfficeBookingApi({
+    db,
+    verifyIdToken,
+    bookingAuthority,
+    schedulingProvider: {},
+    appointmentNotificationService: fakeNotificationService(db, calls),
+  });
+
+  const response = await api.handle(request(OFFICE_BOOKING_ACTIONS.SEND_APPOINTMENT_REMINDER, {
+    appointmentId: "APT-1",
+    requestId: "manual-reminder-duplicate",
+  }));
+
+  assert.equal(response.status, 409);
+  assert.match(response.body.error.message, /already been sent/i);
+  assert.equal(calls.length, 0);
 });
