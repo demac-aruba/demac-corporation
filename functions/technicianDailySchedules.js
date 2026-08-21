@@ -21,39 +21,46 @@ exports.sendDailyTechnicianSchedules = onSchedule(
     const runDate = dateKeyInTimeZone();
     const isOpen = await operatingCalendar.isOpenDate(runDate);
     if (!isOpen) {
-      logger.info("Technician daily schedules skipped because DEMAC is closed.", { runDate });
+      logger.info("Van group daily schedules skipped because DEMAC is closed.", { runDate });
       return;
     }
 
+    // Keep the existing collection name for operational continuity. The batch
+    // now records van-group delivery instead of one message per technician.
     const batchRef = db.collection("technicianDailyScheduleBatches").doc(runDate);
     const existingBatch = await batchRef.get();
     if (existingBatch.exists && existingBatch.data()?.status === "complete") {
-      logger.info("Technician daily schedules were already processed for this workday.", { runDate });
+      logger.info("Van group daily schedules were already processed for this workday.", { runDate });
       return;
     }
 
     await batchRef.set({
       runDate,
+      deliveryModel: "van-group-work-order-v1",
       status: "processing",
       startedAt: existingBatch.data()?.startedAt || FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
 
     try {
-      const result = await scheduleService.queueDay(runDate);
+      const result = await scheduleService.queueDay(runDate, { deliveryKey: "auto", reason: "daily-van-schedule" });
       const failures = result.results
         .filter((item) => item.queued !== true)
         .map((item) => ({
-          technicianId: item.technicianId,
-          technicianName: item.technicianName,
+          vanId: item.vanId,
+          groupName: item.groupName,
+          workOrderId: item.workOrderId,
           reason: item.reason || "not-queued",
         }));
       const queuedCount = result.results.filter((item) => item.created === true).length;
       const idempotentCount = result.results.filter((item) => item.queued === true && item.created === false).length;
 
       await batchRef.set({
+        deliveryModel: "van-group-work-order-v1",
         status: failures.length ? "partial" : "complete",
-        technicianCount: result.technicianCount,
+        vanCount: result.vanCount,
+        workOrderCount: result.workOrderCount,
+        messageCount: result.messageCount,
         queuedCount,
         idempotentCount,
         failedCount: failures.length,
@@ -62,9 +69,11 @@ exports.sendDailyTechnicianSchedules = onSchedule(
         updatedAt: FieldValue.serverTimestamp(),
       }, { merge: true });
 
-      logger.info("Technician daily schedule batch completed.", {
+      logger.info("Van group daily schedule batch completed.", {
         runDate,
-        technicianCount: result.technicianCount,
+        vanCount: result.vanCount,
+        workOrderCount: result.workOrderCount,
+        messageCount: result.messageCount,
         queuedCount,
         idempotentCount,
         failedCount: failures.length,
@@ -72,12 +81,13 @@ exports.sendDailyTechnicianSchedules = onSchedule(
       });
     } catch (error) {
       await batchRef.set({
+        deliveryModel: "van-group-work-order-v1",
         status: "partial",
         fatalError: error instanceof Error ? error.message : String(error),
         failedAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
       }, { merge: true });
-      logger.error("Technician daily schedule batch failed.", { runDate, error });
+      logger.error("Van group daily schedule batch failed.", { runDate, error });
       throw error;
     }
   },

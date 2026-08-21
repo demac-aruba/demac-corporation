@@ -5,6 +5,7 @@ on:
     paths:
       - 'functions/whatsappTransactionalService.js'
       - 'functions/whatsappTransactionalService.test.js'
+      - 'functions/whatsappTransactionalGroupRecipient.test.js'
       - 'functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.js'
       - 'functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.test.js'
       - 'functions/whatsappWacliGateway.js'
@@ -20,7 +21,10 @@ on:
       - 'functions/technicianDailyScheduleService.js'
       - 'functions/technicianDailyScheduleService.test.js'
       - 'functions/technicianDailySchedules.js'
+      - 'functions/vanScheduleCommunicationAuthority.js'
+      - 'functions/vanScheduleCommunicationAuthority.test.js'
       - 'functions/officeBookingAuthority.js'
+      - 'functions/officeBookingAuthorityFacade.js'
       - 'functions/officeBookingAuthorityCommunication.test.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
@@ -31,6 +35,7 @@ on:
     paths:
       - 'functions/whatsappTransactionalService.js'
       - 'functions/whatsappTransactionalService.test.js'
+      - 'functions/whatsappTransactionalGroupRecipient.test.js'
       - 'functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.js'
       - 'functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.test.js'
       - 'functions/whatsappWacliGateway.js'
@@ -46,7 +51,10 @@ on:
       - 'functions/technicianDailyScheduleService.js'
       - 'functions/technicianDailyScheduleService.test.js'
       - 'functions/technicianDailySchedules.js'
+      - 'functions/vanScheduleCommunicationAuthority.js'
+      - 'functions/vanScheduleCommunicationAuthority.test.js'
       - 'functions/officeBookingAuthority.js'
+      - 'functions/officeBookingAuthorityFacade.js'
       - 'functions/officeBookingAuthorityCommunication.test.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
@@ -91,6 +99,8 @@ jobs:
           node --check functions/appointmentNotifications.js
           node --check functions/technicianDailyScheduleService.js
           node --check functions/technicianDailySchedules.js
+          node --check functions/vanScheduleCommunicationAuthority.js
+          node --check functions/officeBookingAuthorityFacade.js
           node --check functions/officeBookingAuthority.js
           npm run test:transactional-whatsapp --prefix functions
           node - <<'NODE'

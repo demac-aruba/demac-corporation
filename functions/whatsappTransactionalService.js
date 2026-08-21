@@ -3,6 +3,7 @@ const { FieldValue } = require("firebase-admin/firestore");
 const ARUBA_COUNTRY_CODE = "297";
 const DEFAULT_TRANSACTIONAL_PROVIDER = "wacli";
 const SUPPORTED_TRANSACTIONAL_PROVIDERS = new Set(["wacli", "meta"]);
+const WACLI_JID_PATTERN = /^[^@\s]{1,120}@(s\.whatsapp\.net|lid|g\.us|newsletter)$/;
 const MIGRATABLE_TRANSACTIONAL_TEMPLATES = new Set([
   "appointment_confirmation",
   "appointment_reminder_24_hours",
@@ -20,6 +21,13 @@ function normalizeWhatsAppPhone(value, defaultCountryCode = ARUBA_COUNTRY_CODE) 
   return digits;
 }
 
+function normalizeWacliRecipient(value, defaultCountryCode = ARUBA_COUNTRY_CODE) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  if (WACLI_JID_PATTERN.test(raw)) return raw;
+  return normalizeWhatsAppPhone(raw, defaultCountryCode);
+}
+
 function safeDocumentId(value) {
   return String(value || "unknown")
     .replaceAll("/", "_")
@@ -33,6 +41,11 @@ function isAlreadyExistsError(error) {
 
 function validWhatsAppPhone(value) {
   return /^\d{8,15}$/.test(String(value || ""));
+}
+
+function validWacliRecipient(value) {
+  const recipient = String(value || "").trim();
+  return validWhatsAppPhone(recipient) || WACLI_JID_PATTERN.test(recipient);
 }
 
 function normalizeTransactionalProvider(value) {
@@ -207,9 +220,9 @@ function createWhatsAppTransactionalService({ db } = {}) {
   }
 
   async function queueWacliText({ queueId, to, text, metadata = {} } = {}) {
-    const normalizedTo = normalizeWhatsAppPhone(to);
-    if (!validWhatsAppPhone(normalizedTo)) {
-      return { queued: false, created: false, provider: "wacli", reason: "invalid-whatsapp-number", to: normalizedTo, queueId: safeDocumentId(queueId) };
+    const normalizedTo = normalizeWacliRecipient(to);
+    if (!validWacliRecipient(normalizedTo)) {
+      return { queued: false, created: false, provider: "wacli", reason: "invalid-whatsapp-recipient", to: normalizedTo, queueId: safeDocumentId(queueId) };
     }
     const normalizedText = String(text || "").trim();
     if (!normalizedText) {
@@ -288,9 +301,6 @@ function createWhatsAppTransactionalService({ db } = {}) {
     if (settings.transactionalProvider === "meta") {
       return queueMetaTemplate({ queueId, to, templateName, languageCode, bodyParameters, metadata });
     }
-    // The domain notification service owns customer-facing language and copy.
-    // This transport only falls back to the legacy renderer when no explicit
-    // wacli text was supplied (for older callers and one-time data migration).
     const explicitText = String(text || "").trim();
     const fallbackText = explicitText ? "" : renderTransactionalText({ templateName, bodyParameters, languageCode });
     return queueWacliText({ queueId, to, text: explicitText || fallbackText, metadata });
@@ -308,12 +318,15 @@ function createWhatsAppTransactionalService({ db } = {}) {
 module.exports.ARUBA_COUNTRY_CODE = ARUBA_COUNTRY_CODE;
 module.exports.DEFAULT_TRANSACTIONAL_PROVIDER = DEFAULT_TRANSACTIONAL_PROVIDER;
 module.exports.MIGRATABLE_TRANSACTIONAL_TEMPLATES = MIGRATABLE_TRANSACTIONAL_TEMPLATES;
+module.exports.WACLI_JID_PATTERN = WACLI_JID_PATTERN;
 module.exports.buildLegacyMetaToWacliMigration = buildLegacyMetaToWacliMigration;
 module.exports.createWhatsAppTransactionalService = createWhatsAppTransactionalService;
 module.exports.digitsOnly = digitsOnly;
 module.exports.isAlreadyExistsError = isAlreadyExistsError;
 module.exports.normalizeTransactionalProvider = normalizeTransactionalProvider;
+module.exports.normalizeWacliRecipient = normalizeWacliRecipient;
 module.exports.normalizeWhatsAppPhone = normalizeWhatsAppPhone;
 module.exports.renderTransactionalText = renderTransactionalText;
 module.exports.safeDocumentId = safeDocumentId;
+module.exports.validWacliRecipient = validWacliRecipient;
 module.exports.validWhatsAppPhone = validWhatsAppPhone;
