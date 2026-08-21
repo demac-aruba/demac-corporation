@@ -62,7 +62,7 @@ function appointmentWorkLabel(appointment: BrowserAppointmentRecord | undefined,
 
 function displaySlotsForVan(day: OperationalDay, vanId: string, capacityState: LiveOperationalCapacityState | null): DisplaySlot[] {
   if (!day.isOpen) return [];
-  const baseStarts = day.weekday === 'Sat' ? ['09:00', '10:00', '11:00', '12:00'] : getRuntimeSchedulingSettings().serviceStartTimes;
+  const baseStarts = getRuntimeSchedulingSettings().serviceStartTimes;
   const starts = liveOperationalStartTimes(capacityState, vanId, day.dateKey, baseStarts);
   const halfDay = liveVanHalfDaySchedule(capacityState, vanId, day.dateKey);
   const vanAvailable = liveVanOperationallyAvailable(capacityState, vanId, day.dateKey);
