@@ -3,6 +3,11 @@ const { FieldValue } = require("firebase-admin/firestore");
 const ARUBA_COUNTRY_CODE = "297";
 const DEFAULT_TRANSACTIONAL_PROVIDER = "wacli";
 const SUPPORTED_TRANSACTIONAL_PROVIDERS = new Set(["wacli", "meta"]);
+const MIGRATABLE_TRANSACTIONAL_TEMPLATES = new Set([
+  "appointment_confirmation",
+  "appointment_reminder_24_hours",
+  "technician_daily_schedule",
+]);
 
 function digitsOnly(value) {
   return String(value ?? "").replace(/\D/g, "");
@@ -33,6 +38,131 @@ function validWhatsAppPhone(value) {
 function normalizeTransactionalProvider(value) {
   const provider = String(value || "").trim().toLowerCase();
   return SUPPORTED_TRANSACTIONAL_PROVIDERS.has(provider) ? provider : DEFAULT_TRANSACTIONAL_PROVIDER;
+}
+
+function normalizedLanguage(value) {
+  const language = String(value || "en").trim().toLowerCase();
+  if (language.startsWith("es")) return "es";
+  if (language.startsWith("nl")) return "nl";
+  return "en";
+}
+
+function normalizedParameters(values) {
+  return Array.isArray(values) ? values.map((value) => String(value ?? "").trim()) : [];
+}
+
+function renderAppointmentTransactionalText({ reminder = false, bodyParameters = [], languageCode = "en" } = {}) {
+  const values = normalizedParameters(bodyParameters);
+  if (values.length < 5) return "";
+  const [name, date, time, address, service] = values;
+  const language = normalizedLanguage(languageCode);
+
+  if (language === "es") {
+    return [
+      `Hola ${name},`,
+      "",
+      reminder
+        ? "Este es un recordatorio de tu cita con DEMAC Professional Cooling Solutions."
+        : "Tu cita con DEMAC Professional Cooling Solutions ha sido confirmada.",
+      "",
+      `Fecha: ${date}`,
+      `Hora: ${time}`,
+      `Dirección: ${address}`,
+      `Servicio: ${service}`,
+      "",
+      "Si necesitas hacer algún cambio, responde a este mensaje.",
+    ].join("\n");
+  }
+
+  if (language === "nl") {
+    return [
+      `Hallo ${name},`,
+      "",
+      reminder
+        ? "Dit is een herinnering voor uw afspraak met DEMAC Professional Cooling Solutions."
+        : "Uw afspraak met DEMAC Professional Cooling Solutions is bevestigd.",
+      "",
+      `Datum: ${date}`,
+      `Tijd: ${time}`,
+      `Adres: ${address}`,
+      `Service: ${service}`,
+      "",
+      "Als u iets wilt wijzigen, kunt u op dit bericht reageren.",
+    ].join("\n");
+  }
+
+  return [
+    `Hello ${name},`,
+    "",
+    reminder
+      ? "This is a reminder for your appointment with DEMAC Professional Cooling Solutions."
+      : "Your appointment with DEMAC Professional Cooling Solutions has been confirmed.",
+    "",
+    `Date: ${date}`,
+    `Time: ${time}`,
+    `Address: ${address}`,
+    `Service: ${service}`,
+    "",
+    "If you need to make any changes, reply to this message.",
+  ].join("\n");
+}
+
+function renderTechnicianDailyScheduleText(bodyParameters = []) {
+  const values = normalizedParameters(bodyParameters);
+  if (values.length < 3) return "";
+  const [name, date, agenda] = values;
+  return [
+    `Hola ${name},`,
+    "",
+    `Esta es tu agenda de trabajo de DEMAC para ${date}:`,
+    "",
+    agenda,
+    "",
+    "Revisa el ERP antes de salir por cualquier cambio o actualización.",
+  ].join("\n");
+}
+
+function renderTransactionalText({ templateName, bodyParameters = [], languageCode = "en" } = {}) {
+  const template = String(templateName || "").trim();
+  if (template === "appointment_confirmation") {
+    return renderAppointmentTransactionalText({ reminder: false, bodyParameters, languageCode });
+  }
+  if (template === "appointment_reminder_24_hours") {
+    return renderAppointmentTransactionalText({ reminder: true, bodyParameters, languageCode });
+  }
+  if (template === "technician_daily_schedule") {
+    return renderTechnicianDailyScheduleText(bodyParameters);
+  }
+  return "";
+}
+
+function buildLegacyMetaToWacliMigration(data = {}, activeProvider = DEFAULT_TRANSACTIONAL_PROVIDER) {
+  if (normalizeTransactionalProvider(activeProvider) !== "wacli") return null;
+  if (String(data.provider || "").trim().toLowerCase() !== "meta") return null;
+  if (String(data.status || "queued").trim().toLowerCase() !== "queued") return null;
+
+  const templateName = String(data.templateName || "").trim();
+  if (!MIGRATABLE_TRANSACTIONAL_TEMPLATES.has(templateName)) return null;
+
+  const to = normalizeWhatsAppPhone(data.to || data.phone || data.recipient);
+  if (!validWhatsAppPhone(to)) return null;
+
+  const text = renderTransactionalText({
+    templateName,
+    bodyParameters: data.bodyParameters,
+    languageCode: data.languageCode,
+  });
+  if (!text) return null;
+
+  return {
+    provider: "wacli",
+    type: "text",
+    to,
+    text,
+    migratedFromProvider: "meta",
+    migratedFromTemplateName: templateName,
+    providerMigrationReason: "active-transactional-provider-wacli",
+  };
 }
 
 function createWhatsAppTransactionalService({ db } = {}) {
@@ -158,7 +288,8 @@ function createWhatsAppTransactionalService({ db } = {}) {
     if (settings.transactionalProvider === "meta") {
       return queueMetaTemplate({ queueId, to, templateName, languageCode, bodyParameters, metadata });
     }
-    return queueWacliText({ queueId, to, text, metadata });
+    const canonicalText = renderTransactionalText({ templateName, bodyParameters, languageCode }) || String(text || "").trim();
+    return queueWacliText({ queueId, to, text: canonicalText, metadata });
   }
 
   return {
@@ -172,10 +303,13 @@ function createWhatsAppTransactionalService({ db } = {}) {
 
 module.exports.ARUBA_COUNTRY_CODE = ARUBA_COUNTRY_CODE;
 module.exports.DEFAULT_TRANSACTIONAL_PROVIDER = DEFAULT_TRANSACTIONAL_PROVIDER;
+module.exports.MIGRATABLE_TRANSACTIONAL_TEMPLATES = MIGRATABLE_TRANSACTIONAL_TEMPLATES;
+module.exports.buildLegacyMetaToWacliMigration = buildLegacyMetaToWacliMigration;
 module.exports.createWhatsAppTransactionalService = createWhatsAppTransactionalService;
 module.exports.digitsOnly = digitsOnly;
 module.exports.isAlreadyExistsError = isAlreadyExistsError;
 module.exports.normalizeTransactionalProvider = normalizeTransactionalProvider;
 module.exports.normalizeWhatsAppPhone = normalizeWhatsAppPhone;
+module.exports.renderTransactionalText = renderTransactionalText;
 module.exports.safeDocumentId = safeDocumentId;
 module.exports.validWhatsAppPhone = validWhatsAppPhone;
