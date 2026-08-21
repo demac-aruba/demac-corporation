@@ -79,6 +79,57 @@ function formatAppointmentTime(value, languageCode) {
   return `${hour % 12 || 12}:${minute} ${suffix}`;
 }
 
+function renderAppointmentText(notificationType, bodyParameters, languageCode) {
+  const [name, date, time, address, service] = bodyParameters.map((value) => String(value || "").trim());
+  const reminder = notificationType === "appointment-reminder";
+  if (languageCode === "es") {
+    return [
+      `Hola ${name},`,
+      "",
+      reminder
+        ? "Este es un recordatorio de tu cita con DEMAC Professional Cooling Solutions."
+        : "Tu cita con DEMAC Professional Cooling Solutions ha sido confirmada.",
+      "",
+      `Fecha: ${date}`,
+      `Hora: ${time}`,
+      `Dirección: ${address}`,
+      `Servicio: ${service}`,
+      "",
+      "Si necesitas hacer algún cambio, responde a este mensaje.",
+    ].join("\n");
+  }
+  if (languageCode === "nl") {
+    return [
+      `Hallo ${name},`,
+      "",
+      reminder
+        ? "Dit is een herinnering voor uw afspraak met DEMAC Professional Cooling Solutions."
+        : "Uw afspraak met DEMAC Professional Cooling Solutions is bevestigd.",
+      "",
+      `Datum: ${date}`,
+      `Tijd: ${time}`,
+      `Adres: ${address}`,
+      `Service: ${service}`,
+      "",
+      "Als u iets wilt wijzigen, kunt u op dit bericht reageren.",
+    ].join("\n");
+  }
+  return [
+    `Hello ${name},`,
+    "",
+    reminder
+      ? "This is a reminder for your appointment with DEMAC Professional Cooling Solutions."
+      : "Your appointment with DEMAC Professional Cooling Solutions has been confirmed.",
+    "",
+    `Date: ${date}`,
+    `Time: ${time}`,
+    `Address: ${address}`,
+    `Service: ${service}`,
+    "",
+    "If you need to make any changes, reply to this message.",
+  ].join("\n");
+}
+
 function orderCanNotify(order) {
   return Boolean(order)
     && !NOTIFICATION_INELIGIBLE_STATUSES.has(order.status)
@@ -155,10 +206,6 @@ function createAppointmentNotificationService({ db } = {}) {
   if (!db || typeof db.collection !== "function") throw new Error("A Firestore-compatible db is required for appointment notifications.");
   const whatsapp = createWhatsAppTransactionalService({ db });
 
-  async function getWhatsAppPhoneNumberId() {
-    return (await whatsapp.getMetaSenderSettings()).phoneNumberId;
-  }
-
   async function getClient(clientId) {
     if (!clientId) return null;
     const snapshot = await db.collection("clients").doc(clientId).get();
@@ -188,9 +235,10 @@ function createAppointmentNotificationService({ db } = {}) {
     const bodyParameters = await buildTemplateParameters(order, client, recipient, languageCode);
     const recipientKey = recipient?.id || recipient?.sourceId || normalizeWhatsAppPhone(to);
     const queueId = safeDocumentId(`${notificationType}-${order.id}-${eventId}-${recipientKey}`);
-    const result = await whatsapp.queueMetaTemplate({
+    const result = await whatsapp.queueTransactionalMessage({
       queueId,
       to,
+      text: renderAppointmentText(notificationType, bodyParameters, languageCode),
       templateName,
       languageCode,
       bodyParameters,
@@ -223,6 +271,7 @@ function createAppointmentNotificationService({ db } = {}) {
     return {
       queueId: result.queueId,
       languageCode,
+      provider: result.provider,
       recipientId: recipient?.id || null,
       recipientName: recipient?.name || client.name || "Customer",
       created: result.created,
@@ -271,6 +320,7 @@ function createAppointmentNotificationService({ db } = {}) {
         queueIds: mergeQueueIds(order.confirmationNotifications || order.confirmationNotification, latestQueueIds),
         latestQueueIds,
         languageCodes: notifications.map((notification) => notification.languageCode),
+        providers: notifications.map((notification) => notification.provider),
         recipientIds: notifications.map((notification) => notification.recipientId),
         recipientNames: notifications.map((notification) => notification.recipientName),
         recipientCount: notifications.length,
@@ -281,6 +331,7 @@ function createAppointmentNotificationService({ db } = {}) {
       confirmationNotification: {
         queueId: latestQueueIds[0],
         languageCode: notifications[0].languageCode,
+        provider: notifications[0].provider,
         reason,
         changedFields,
         queuedAt: FieldValue.serverTimestamp(),
@@ -314,6 +365,7 @@ function createAppointmentNotificationService({ db } = {}) {
         queueIds: mergeQueueIds(order.reminderNotifications || order.reminderNotification, latestQueueIds),
         latestQueueIds,
         languageCodes: notifications.map((notification) => notification.languageCode),
+        providers: notifications.map((notification) => notification.provider),
         recipientIds: notifications.map((notification) => notification.recipientId),
         recipientNames: notifications.map((notification) => notification.recipientName),
         recipientCount: notifications.length,
@@ -327,6 +379,7 @@ function createAppointmentNotificationService({ db } = {}) {
       reminderNotification: {
         queueId: latestQueueIds[0],
         languageCode: notifications[0].languageCode,
+        provider: notifications[0].provider,
         targetDate,
         reason,
         manual,
@@ -337,7 +390,6 @@ function createAppointmentNotificationService({ db } = {}) {
   }
 
   return {
-    getWhatsAppPhoneNumberId,
     queueConfirmationForOrder,
     queueReminderForOrder,
   };
@@ -356,6 +408,7 @@ module.exports.digitsOnly = digitsOnly;
 module.exports.nextOpenBusinessDate = nextOpenBusinessDate;
 module.exports.notificationQueueIds = notificationQueueIds;
 module.exports.reminderEligible = reminderEligible;
+module.exports.renderAppointmentText = renderAppointmentText;
 module.exports.selectedRecipients = selectedRecipients;
 module.exports.templateLanguageForRecipient = templateLanguageForRecipient;
 module.exports.weekdayForDate = weekdayForDate;
