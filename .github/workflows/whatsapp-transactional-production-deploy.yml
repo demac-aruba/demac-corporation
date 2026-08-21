@@ -3,9 +3,16 @@ name: Transactional WhatsApp Production
 on:
   pull_request:
     paths:
+      - 'functions/whatsappTransactionalService.js'
+      - 'functions/whatsappTransactionalService.test.js'
+      - 'functions/operatingCalendarService.js'
+      - 'functions/operatingCalendarService.test.js'
       - 'functions/appointmentNotificationService.js'
       - 'functions/appointmentNotificationService.test.js'
       - 'functions/appointmentNotifications.js'
+      - 'functions/technicianDailyScheduleService.js'
+      - 'functions/technicianDailyScheduleService.test.js'
+      - 'functions/technicianDailySchedules.js'
       - 'functions/officeBookingAuthority.js'
       - 'functions/officeBookingAuthorityCommunication.test.js'
       - 'functions/index.js'
@@ -16,9 +23,16 @@ on:
     branches:
       - main
     paths:
+      - 'functions/whatsappTransactionalService.js'
+      - 'functions/whatsappTransactionalService.test.js'
+      - 'functions/operatingCalendarService.js'
+      - 'functions/operatingCalendarService.test.js'
       - 'functions/appointmentNotificationService.js'
       - 'functions/appointmentNotificationService.test.js'
       - 'functions/appointmentNotifications.js'
+      - 'functions/technicianDailyScheduleService.js'
+      - 'functions/technicianDailyScheduleService.test.js'
+      - 'functions/technicianDailySchedules.js'
       - 'functions/officeBookingAuthority.js'
       - 'functions/officeBookingAuthorityCommunication.test.js'
       - 'functions/index.js'
@@ -56,11 +70,14 @@ jobs:
           set -euo pipefail
           node --check functions/index.js
           node --check functions/bootstrap.js
+          node --check functions/whatsappTransactionalService.js
+          node --check functions/operatingCalendarService.js
           node --check functions/appointmentNotificationService.js
           node --check functions/appointmentNotifications.js
+          node --check functions/technicianDailyScheduleService.js
+          node --check functions/technicianDailySchedules.js
           node --check functions/officeBookingAuthority.js
-          node --test functions/appointmentNotificationService.test.js
-          node --test functions/officeBookingAuthorityCommunication.test.js
+          npm run test:transactional-whatsapp --prefix functions
           node - <<'NODE'
           const mod = require('./functions/bootstrap');
           for (const name of [
@@ -68,6 +85,7 @@ jobs:
             'sendQueuedWhatsAppMessage',
             'queueAppointmentConfirmation',
             'sendDailyAppointmentReminders',
+            'sendDailyTechnicianSchedules',
           ]) {
             if (typeof mod[name] !== 'function') throw new Error(`${name} export missing`);
           }
@@ -103,7 +121,7 @@ jobs:
         run: |
           set -euo pipefail
           npx --yes firebase-tools@15.2.1 deploy \
-            --only functions:whatsappWebhook,functions:sendQueuedWhatsAppMessage,functions:queueAppointmentConfirmation,functions:sendDailyAppointmentReminders \
+            --only functions:whatsappWebhook,functions:sendQueuedWhatsAppMessage,functions:queueAppointmentConfirmation,functions:sendDailyAppointmentReminders,functions:sendDailyTechnicianSchedules \
             --project demac-corporation \
             --non-interactive \
             --force
@@ -150,3 +168,4 @@ jobs:
           verify_secret sendQueuedWhatsAppMessage WHATSAPP_ACCESS_TOKEN
           verify_event queueAppointmentConfirmation google.cloud.firestore.document.v1.written
           verify_active sendDailyAppointmentReminders
+          verify_active sendDailyTechnicianSchedules
