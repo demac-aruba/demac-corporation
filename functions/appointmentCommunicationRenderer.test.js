@@ -13,6 +13,10 @@ test("Papiamento preferred language is preserved instead of falling back to Engl
   assert.equal(templateLanguageForRecipient({ preferredLanguage: "Papiamento" }, { preferredLanguage: "English" }), "pap");
   assert.equal(templateLanguageForRecipient({}, { preferredLanguage: "Papiamento" }), "pap");
   assert.equal(templateLanguageForRecipient({ preferredLanguage: "Español" }, { preferredLanguage: "Papiamento" }), "es");
+  assert.equal(templateLanguageForRecipient(
+    { preferredLanguage: "Papiamento", templateLanguage: "en" },
+    { preferredLanguage: "English", templateLanguage: "en" },
+  ), "pap");
 });
 
 test("Aruba Papiamento appointment date includes the official weekday and month", () => {
