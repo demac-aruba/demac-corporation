@@ -130,9 +130,16 @@ const sunday = octoberWeek.find((day) => day.dateKey === '2026-10-04');
 requireCondition(Boolean(saturday) && saturday!.isOpen, 'Saturday must remain a normal open operating day.');
 requireCondition(saturday!.shiftLabel === '8:00 AM–5:00 PM', 'Saturday must display the configured normal full-day shift instead of a global 1 PM close.');
 requireCondition(Boolean(sunday) && !sunday!.isOpen, 'Sunday must remain the global closed day.');
-const saturdayRequest = { customer: 'Saturday Customer', site: 'Saturday Property', sector: 'Santa Cruz', presetId: 'standard_service' as const, quantity: 1 };
+const saturdayRequest = {
+  customer: 'Saturday Customer',
+  site: 'Saturday Property',
+  sector: 'Santa Cruz',
+  presetId: 'standard_service' as const,
+  quantity: 1,
+  restriction: { halfDay: 'pm' as const },
+};
 const saturdayCandidates = findCandidateSlotsForDay(saturday!, saturdayRequest, []);
-requireCondition(saturdayCandidates.some((slot) => ['13:30', '14:30', '15:30'].includes(slot.start)), 'Saturday candidate capacity must include normal afternoon work starts.');
+requireCondition(saturdayCandidates.length > 0 && saturdayCandidates.every((slot) => ['13:30', '14:30', '15:30'].includes(slot.start)), 'Saturday PM requests must use the normal afternoon work starts.');
 requireCondition(findCandidateSlotsForDay(sunday!, saturdayRequest, []).length === 0, 'Sunday must not expose candidate work capacity.');
 const saturdayHalfDayCapacity: LiveOperationalCapacityState = {
   ...baseCapacity,
