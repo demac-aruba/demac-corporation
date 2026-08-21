@@ -1,6 +1,5 @@
-import { BrowserToolRegistry } from '../../../components/inventory/browser-tool-registry';
-import { InventoryCommand } from '../../../components/inventory/inventory-command';
+import { ConsolidatedInventoryWorkspace } from '../../../components/inventory/consolidated-inventory-workspace';
 
 export default function InventoryPage() {
-  return <><BrowserToolRegistry /><InventoryCommand /></>;
+  return <ConsolidatedInventoryWorkspace />;
 }
