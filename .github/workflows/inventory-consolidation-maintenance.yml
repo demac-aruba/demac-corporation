@@ -17,6 +17,33 @@ jobs:
           ref: feature/consolidated-inventory-authority
           fetch-depth: 0
 
+      - name: Remove demo dependency on retired browser-local material plans
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('apps/erp-next/lib/browser-demo-data.ts')
+          text = path.read_text()
+          replacements = [
+              ("import { BROWSER_WORKORDER_MATERIALS_KEY, type BrowserWorkOrderMaterialPlan } from './browser-workorder-materials';\n", '', 'material-plan import'),
+              ("function buildMaterialPlans(): BrowserWorkOrderMaterialPlan[] {\n  return jobSeeds\n    .filter((seed) => workOrderId(seed) !== releasedRiskId)\n    .map((seed) => ({ workOrderId: workOrderId(seed), mode: 'not_required', lines: [], updatedAt: isoAt('18:20', -24 * 60), updatedBy: 'Demo Operations' }));\n}\n\n", '', 'demo material-plan builder'),
+              ('    BROWSER_WORKORDER_MATERIALS_KEY,\n', '', 'demo backup key'),
+              ('  const materialPlans = buildMaterialPlans();\n', '', 'demo material-plan seed'),
+              ('  writeRaw(BROWSER_WORKORDER_MATERIALS_KEY, materialPlans);\n', '', 'demo material-plan persistence'),
+          ]
+          for old, new, label in replacements:
+              if old in text:
+                  if text.count(old) != 1:
+                      raise SystemExit(f'{label}: expected exactly one match, found {text.count(old)}')
+                  text = text.replace(old, new, 1)
+                  print(f'updated: {label}')
+              elif new and new not in text:
+                  raise SystemExit(f'{label}: expected old or new form')
+          path.write_text(text)
+          PY
+
       - name: Execute guarded finalization plan from feature branch
         shell: bash
         run: |
