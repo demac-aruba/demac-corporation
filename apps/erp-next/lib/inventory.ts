@@ -1,3 +1,6 @@
+export const WAREHOUSE_LOCATION_ID = 'WH-MAIN';
+export const OFFICE_LOCATION_ID = 'OFFICE-MAIN';
+
 export type InventoryClass =
   | 'consumable'
   | 'measured_consumable'
@@ -8,8 +11,22 @@ export type InventoryClass =
   | 'ppe'
   | 'warranty_quarantine';
 
-export type InventoryLocationType = 'warehouse' | 'van' | 'job_site' | 'warranty' | 'quarantine';
-export type InventoryMovementType = 'receive' | 'issue_to_job' | 'return_from_job' | 'transfer' | 'adjustment' | 'warranty_return' | 'quarantine';
+export type InventoryLocationType = 'warehouse' | 'office' | 'van' | 'job_site' | 'warranty' | 'quarantine';
+export type InventoryMovementType =
+  | 'receive'
+  | 'issue_to_job'
+  | 'return_from_job'
+  | 'transfer'
+  | 'adjustment'
+  | 'warranty_return'
+  | 'quarantine'
+  | 'stock_count_adjustment'
+  | 'transfer_out'
+  | 'transfer_in'
+  | 'transfer_variance'
+  | 'legacy_location_allocation'
+  | 'tool_transfer'
+  | 'issue_to_work_order';
 
 export type InventoryItem = {
   id: string;
@@ -59,7 +76,10 @@ export type InventoryMovement = {
   reason?: string;
 };
 
-export type TransferStatus = 'requested' | 'approved' | 'issued' | 'in_transit' | 'received' | 'cancelled';
+// The canonical operational transfer is requested → in_transit → completed.
+// Legacy preview statuses remain in this union only until the browser preview
+// modules are fully retired; they are not emitted by Inventory Authority.
+export type TransferStatus = 'requested' | 'approved' | 'issued' | 'in_transit' | 'received' | 'completed' | 'cancelled';
 
 export type InventoryTransferLine = {
   itemId: string;
@@ -199,6 +219,6 @@ export function nextTransferStatus(status: TransferStatus): TransferStatus {
   return order[index + 1];
 }
 
-// Inventory truth belongs to a physical/location ledger. Vans are inventory
-// locations, not loose technician lists. Accountability can be associated with
-// a team/custodian while quantity ownership remains with the location.
+// Inventory truth belongs to physical locations. Warehouse, Office and Vans
+// are locations, not separate item catalogs. Accountability may be associated
+// with a person while quantity ownership remains with the location.
