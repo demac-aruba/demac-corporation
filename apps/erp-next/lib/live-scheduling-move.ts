@@ -40,18 +40,39 @@ function canonicalAppointmentSlotCount(appointment: BrowserAppointmentRecord) {
   return Number.isFinite(wallClock) && wallClock > 0 ? Math.max(1, Math.ceil(wallClock / 60)) : 0;
 }
 
+function contiguousOperatingBlocks(starts: string[]) {
+  const ordered = [...starts].sort((left, right) => timeToMinutes(left) - timeToMinutes(right));
+  const blocks: string[][] = [];
+  for (const start of ordered) {
+    const current = blocks[blocks.length - 1];
+    const previous = current?.[current.length - 1];
+    if (!current || !previous || timeToMinutes(start) - timeToMinutes(previous) !== 60) {
+      blocks.push([start]);
+    } else {
+      current.push(start);
+    }
+  }
+  return blocks;
+}
+
 function endForOperationalSlots(starts: string[], start: string, slotCount: number) {
-  const index = starts.indexOf(start);
-  if (index < 0 || slotCount < 1 || index + slotCount > starts.length) return '';
-  const last = starts[index + slotCount - 1];
-  return minutesToTime(timeToMinutes(last) + 60);
+  if (slotCount < 1) return '';
+  for (const block of contiguousOperatingBlocks(starts)) {
+    const index = block.indexOf(start);
+    if (index < 0 || index + slotCount > block.length) continue;
+    const last = block[index + slotCount - 1];
+    return minutesToTime(timeToMinutes(last) + 60);
+  }
+  return '';
 }
 
 /**
  * Manual LIVE drag is a direct office dispatch action rather than an automatic route
  * recommendation. It preserves the appointment's canonical slot count and accepts every
- * same-day destination where those exact operating slots fit. Booking Authority remains
- * the commit-time source of truth for company/van capacity and revalidates the move.
+ * same-day destination where those exact operating slots fit inside one continuous dispatch
+ * block. This mirrors the server operational-move boundary so the browser never offers a
+ * destination that Booking Authority will reject. Booking Authority remains the commit-time
+ * source of truth for company/van capacity and revalidates the move.
  */
 export function liveOperationalMoveCapacityCandidates(
   day: OperationalDay,
@@ -86,7 +107,7 @@ export function liveOperationalMoveCapacityCandidates(
         segment: halfDay ? halfDayForTime(start) : timeToMinutes(start) < 12 * 60 && timeToMinutes(end) > 13 * 60 ? 'full_day' : halfDayForTime(start),
         sector: appointment.sector,
         score: 0,
-        reasons: ['Manual operational move: canonical occupied-slot count fits live operating capacity'],
+        reasons: ['Manual operational move: canonical occupied-slot count fits one continuous live dispatch block'],
         requiresSupportVan: false,
         primaryUnits: appointment.totalQuantity,
       });
