@@ -166,7 +166,7 @@ function buildOfficeProperty({ id, clientId, input, identity, now }) {
   return {
     id,
     clientId,
-    name: cleanText(input.name, 180) || "Primary Property",
+    name: cleanText(input.name, 180),
     type: cleanText(input.type, 80) || "Casa",
     address,
     addressRaw: address,
