@@ -1,6 +1,11 @@
 name: Inventory Finalization Carrier
 
 on:
+  push:
+    branches:
+      - feature/consolidated-inventory-authority
+    paths:
+      - '.github/workflows/digitalocean-remote-ops.yml'
   workflow_dispatch:
 
 permissions:
