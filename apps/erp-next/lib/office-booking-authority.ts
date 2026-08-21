@@ -15,7 +15,7 @@ export type OfficeBookingPreset = {
   durationMode?: 'per_unit' | 'fixed';
   active: boolean;
   serviceId?: string;
-  source?: 'service_catalog' | 'appointment_work_presets';
+  source?: 'service_catalog' | 'scheduling_work_types' | 'appointment_work_presets';
   serviceDefinitionVersion?: number;
 };
 
@@ -86,6 +86,34 @@ export type OfficeAppointmentAttribution = {
   createdByName?: string;
   createdAtIso?: string;
   updatedAtIso?: string;
+};
+
+export type OfficeAppointmentCommunication = {
+  success: true;
+  version: number;
+  appointmentId: string;
+  workOrderId: string;
+  whatsappEnabled: boolean;
+  recipients: Array<{
+    id: string;
+    name: string;
+    phone: string;
+    preferredLanguage: string;
+    sendConfirmation: boolean;
+    sendReminder: boolean;
+  }>;
+  confirmation: {
+    enabled: boolean;
+    queueIds: string[];
+    state: string;
+    queue: Array<{ queueId: string; status: string }>;
+  };
+  reminder: {
+    enabled: boolean;
+    queueIds: string[];
+    state: string;
+    queue: Array<{ queueId: string; status: string }>;
+  };
 };
 
 export type OfficeLifecycleResult = {
@@ -278,6 +306,26 @@ export async function listOfficeAppointmentAttribution(appointmentIds: string[])
     attribution.push(...(result.attribution ?? []));
   }
   return attribution;
+}
+
+export function getOfficeAppointmentCommunication(appointmentId: string) {
+  return callOfficeBookingAuthority<OfficeAppointmentCommunication>(
+    'get_appointment_communication',
+    { appointmentId },
+    8_000,
+  );
+}
+
+export function updateOfficeAppointmentReminder(input: {
+  appointmentId: string;
+  requestId: string;
+  sendReminder: boolean;
+}) {
+  return callOfficeBookingAuthority<OfficeAppointmentCommunication>(
+    'update_appointment_communication',
+    input,
+    10_000,
+  );
 }
 
 export async function checkOfficeRescheduleAvailability(input: {

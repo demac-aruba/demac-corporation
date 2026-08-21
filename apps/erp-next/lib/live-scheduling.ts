@@ -1,10 +1,14 @@
 import type { BrowserAppointmentRecord } from './browser-operational';
 import type { CalendarDispatchJob } from './scheduling-capacity';
+import { getRuntimeSchedulingSettings } from './scheduling';
 import type { DaySegment, WorkPresetId } from './scheduling';
 import { listFirestoreCollection } from './firebase/firestore-rest';
 import { listOfficeAppointmentAttribution, type OfficeAppointmentAttribution } from './office-booking-authority';
 
-const KNOWN_PRESETS = new Set<WorkPresetId>([
+// BrowserAppointmentRecord still carries the old WorkPresetId for compatibility
+// with browser-only lifecycle helpers. The live work identity is preserved
+// separately as workTypeId/workLabel and is never derived from this list.
+const LEGACY_BROWSER_PRESETS = new Set<WorkPresetId>([
   'standard_service',
   'deep_cleaning',
   'diagnostic',
@@ -20,13 +24,27 @@ const KNOWN_PRESETS = new Set<WorkPresetId>([
 
 const CANONICAL_VAN_IDS = new Set(['VAN-1', 'VAN-2', 'VAN-3', 'VAN-4']);
 
+type LiveWorkItem = {
+  id?: string;
+  presetId?: string;
+  serviceId?: string;
+  label?: string;
+  quantity?: number;
+  durationMinutes?: number;
+  durationMinutesPerUnit?: number;
+  durationMode?: string;
+};
+
 type LiveWorkOrder = {
   id: string;
   appointmentId?: string;
   appointmentType?: string;
   appointmentWorkType?: string;
   appointmentPresetId?: string;
+  appointmentWorkLabel?: string;
+  appointmentWorkItems?: LiveWorkItem[];
   appointmentAssignmentRole?: string;
+  appointmentEndTime?: string;
   parentWorkOrderId?: string;
   airConditionerCount?: number;
   assignmentRole?: string;
@@ -40,11 +58,12 @@ type LiveWorkOrder = {
   time?: string;
   duration?: number;
   appointmentDurationMinutes?: number;
+  address?: string;
   zone?: string;
   operationalZone?: string;
   vanId?: string;
   van?: string;
-  scheduledSlots?: string[];
+  scheduledSlots?: number | string[];
   problem?: string;
   status?: string;
   source?: string;
@@ -57,6 +76,10 @@ type LiveClient = {
   id: string;
   name?: string;
   company?: string;
+  phone?: string;
+  whatsapp?: string;
+  email?: string;
+  preferredLanguage?: string;
 };
 
 type LiveProperty = {
@@ -65,6 +88,7 @@ type LiveProperty = {
   address?: string;
   zone?: string;
   operationalZone?: string;
+  accessInstructions?: string;
 };
 
 export type LiveVan = {
@@ -87,9 +111,22 @@ function positiveInteger(value: unknown, fallback = 1) {
   return Number.isFinite(number) && number > 0 ? Math.max(1, Math.round(number)) : fallback;
 }
 
-function presetId(value: unknown): WorkPresetId {
+function legacyBrowserPresetId(value: unknown): WorkPresetId {
   const candidate = text(value) as WorkPresetId;
-  return KNOWN_PRESETS.has(candidate) ? candidate : 'other';
+  return LEGACY_BROWSER_PRESETS.has(candidate) ? candidate : 'other';
+}
+
+function workOrderWorkTypeId(order: LiveWorkOrder) {
+  return text(order.appointmentPresetId || order.appointmentWorkType || order.presetId) || 'other';
+}
+
+function humanizeWorkType(value: string) {
+  return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function workOrderWorkLabel(order: LiveWorkOrder) {
+  const item = Array.isArray(order.appointmentWorkItems) ? order.appointmentWorkItems[0] : undefined;
+  return text(order.appointmentWorkLabel) || text(item?.label) || humanizeWorkType(workOrderWorkTypeId(order));
 }
 
 function canonicalVanIdFromValue(value: unknown) {
@@ -129,7 +166,7 @@ function workOrderVanId(order: LiveWorkOrder, vans: LiveVan[] = []) {
 }
 
 function workOrderPresetId(order: LiveWorkOrder) {
-  return presetId(order.appointmentPresetId || order.appointmentWorkType || order.presetId);
+  return legacyBrowserPresetId(workOrderWorkTypeId(order));
 }
 
 function workOrderAssignmentRole(order: LiveWorkOrder) {
@@ -155,15 +192,45 @@ function minutesToTime(value: number) {
   return `${String(Math.floor(bounded / 60)).padStart(2, '0')}:${String(bounded % 60).padStart(2, '0')}`;
 }
 
+function validTime(value: unknown) {
+  const candidate = text(value);
+  return /^\d{2}:\d{2}$/.test(candidate) ? candidate : '';
+}
+
 function normalizedSlots(value: unknown) {
   if (!Array.isArray(value)) return [];
   return value.map(text).filter((slot) => /^\d{2}:\d{2}$/.test(slot)).sort();
 }
 
+function numericSlotCount(value: unknown) {
+  if (Array.isArray(value)) return 0;
+  const count = Number(value);
+  return Number.isFinite(count) && count > 0 ? Math.max(1, Math.min(12, Math.ceil(count))) : 0;
+}
+
+function endFromCanonicalSlotCount(start: string, count: number) {
+  const schedule = getRuntimeSchedulingSettings().serviceStartTimes;
+  const index = schedule.indexOf(start);
+  if (index >= 0 && index + count <= schedule.length) {
+    const lastStart = schedule[index + count - 1];
+    return minutesToTime(timeToMinutes(lastStart) + 60);
+  }
+  return minutesToTime(timeToMinutes(start) + count * 60);
+}
+
 function assignmentEnd(order: LiveWorkOrder) {
+  const explicit = validTime(order.appointmentEndTime);
+  if (explicit) return explicit;
+
+  // Legacy records briefly stored explicit slot-start arrays. Preserve support.
   const slots = normalizedSlots(order.scheduledSlots);
   if (slots.length) return minutesToTime(timeToMinutes(slots[slots.length - 1]) + 60);
+
   const start = text(order.time) || '08:30';
+  const slotCount = numericSlotCount(order.scheduledSlots);
+  if (slotCount) return endFromCanonicalSlotCount(start, slotCount);
+
+  // Final compatibility fallback for historical records that predate slot snapshots.
   const duration = positiveInteger(order.appointmentDurationMinutes ?? order.duration, 60);
   return minutesToTime(timeToMinutes(start) + duration);
 }
@@ -191,6 +258,19 @@ function propertyLabel(property: LiveProperty | undefined, fallbackId: string) {
   return text(property?.name) || text(property?.address) || fallbackId || 'Property';
 }
 
+function firstWorkItem(order: LiveWorkOrder) {
+  return Array.isArray(order.appointmentWorkItems) ? order.appointmentWorkItems[0] : undefined;
+}
+
+function durationPerUnit(order: LiveWorkOrder) {
+  const item = firstWorkItem(order);
+  const explicit = Number(item?.durationMinutesPerUnit || 0);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const total = Number(order.appointmentDurationMinutes || order.duration || 0);
+  const quantity = workOrderQuantity(order);
+  return total > 0 && quantity > 0 ? Math.round(total / quantity) : 0;
+}
+
 export function bookingActorLabel(appointment: OfficeAppointmentAttribution | undefined) {
   if (!appointment) return '';
   const source = text(appointment.source).toLowerCase();
@@ -205,7 +285,8 @@ function workOrderAssignment(
   sector: string,
   vans: LiveVan[],
 ): CalendarDispatchJob {
-  const start = text(order.time) || normalizedSlots(order.scheduledSlots)[0] || '08:30';
+  const legacySlots = normalizedSlots(order.scheduledSlots);
+  const start = text(order.time) || legacySlots[0] || '08:30';
   const end = assignmentEnd({ ...order, time: start });
   const role = workOrderAssignmentRole(order);
   const primary = role !== 'support';
@@ -272,10 +353,15 @@ export function projectLiveSchedulingAppointments(
     const primaryAssignment = assignments.find((assignment) => assignment.isPrimaryAssignment) ?? assignments[0];
     const supportAssignment = assignments.find((assignment) => !assignment.isPrimaryAssignment);
     const quantity = sorted.reduce((total, order) => total + workOrderQuantity(order), 0);
-    const fallbackDescription = `${primaryAssignment.presetId.replaceAll('_', ' ')} x${quantity}`;
+    const workTypeId = workOrderWorkTypeId(primary);
+    const workLabel = workOrderWorkLabel(primary);
+    const fallbackDescription = `${workLabel} × ${quantity}`;
     const cancelled = activeOrders.length === 0 && assignments.every((assignment) => assignment.status === 'cancelled');
     const confirmedAt = text(primary.confirmedAt) || text(primary.createdAt);
     const actorLabel = bookingActorLabel(authorityAppointment);
+    const durationMinutes = positiveInteger(primary.appointmentDurationMinutes ?? primary.duration, 60);
+    const slotCount = numericSlotCount(primary.scheduledSlots) || normalizedSlots(primary.scheduledSlots).length || Math.ceil(durationMinutes / 60);
+    const perUnitMinutes = durationPerUnit(primary);
 
     appointments.push({
       id: appointmentId,
@@ -286,7 +372,13 @@ export function projectLiveSchedulingAppointments(
       site,
       sector,
       presetId: primaryAssignment.presetId,
+      workTypeId,
+      workLabel,
+      serviceId: text(primary.serviceId) || undefined,
       totalQuantity: quantity,
+      scheduledDurationMinutes: durationMinutes,
+      scheduledSlotCount: slotCount,
+      durationMinutesPerUnit: perUnitMinutes || undefined,
       workLines: [{
         id: `${appointmentId}-work`,
         presetId: primaryAssignment.presetId,
@@ -294,6 +386,12 @@ export function projectLiveSchedulingAppointments(
         customerFacingDescription: cleanCustomerDescription(primary.problem, fallbackDescription),
       }],
       customerFacingDescription: cleanCustomerDescription(primary.problem, fallbackDescription),
+      customerPhone: text(client?.phone) || undefined,
+      customerWhatsapp: text(client?.whatsapp) || undefined,
+      customerEmail: text(client?.email) || undefined,
+      customerPreferredLanguage: text(client?.preferredLanguage) || undefined,
+      propertyAddress: text(property?.address) || text(primary.address) || undefined,
+      propertyAccessInstructions: text(property?.accessInstructions) || undefined,
       status: cancelled ? 'cancelled' : 'confirmed',
       assignments,
       primaryVanId: primaryAssignment.vanId,
@@ -305,6 +403,7 @@ export function projectLiveSchedulingAppointments(
       updatedAt: text(authorityAppointment?.updatedAtIso) || text(primary.updatedAt) || undefined,
       confirmedAt: confirmedAt || undefined,
       workOrderId: primary.id,
+      workOrderIds: sorted.map((order) => order.id),
     });
   }
 

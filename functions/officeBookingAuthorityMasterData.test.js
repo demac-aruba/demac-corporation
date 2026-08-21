@@ -112,7 +112,7 @@ test("booking customer creation writes customer and first property atomically th
 
   assert.equal(result.status, 200);
   assert.equal(result.body.success, true);
-  assert.equal(result.body.version, 10);
+  assert.equal(result.body.version, api.version);
   assert.match(result.body.customer.id, /^client-/);
   assert.match(result.body.property.id, /^property-/);
   assert.equal(result.body.property.clientId, result.body.customer.id);

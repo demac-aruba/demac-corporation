@@ -36,11 +36,23 @@ export type BrowserAppointmentRecord = {
   site: string;
   sector: string;
   presetId: WorkPresetId;
+  workTypeId?: string;
+  workLabel?: string;
+  serviceId?: string;
   totalQuantity: number;
+  scheduledDurationMinutes?: number;
+  scheduledSlotCount?: number;
+  durationMinutesPerUnit?: number;
   workLines?: BookingWorkLine[];
   bookingRestriction?: BookingRestriction;
   customerFacingDescription: string;
   technicianInstructions?: string;
+  customerPhone?: string;
+  customerWhatsapp?: string;
+  customerEmail?: string;
+  customerPreferredLanguage?: string;
+  propertyAddress?: string;
+  propertyAccessInstructions?: string;
   status: BrowserAppointmentStatus;
   assignments: CalendarDispatchJob[];
   primaryVanId: string;
@@ -56,6 +68,7 @@ export type BrowserAppointmentRecord = {
   updatedAt?: string;
   confirmedAt?: string;
   workOrderId?: string;
+  workOrderIds?: string[];
 };
 
 export type BrowserWorkOrderAssignment = {

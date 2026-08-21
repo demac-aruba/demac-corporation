@@ -91,6 +91,7 @@ function buildWorkOrders({ appointment, option, request, customer, property, con
     const serviceId = singleItem?.serviceId || "";
     const durationMode = singleItem?.durationMode || (workItems.length > 1 ? "mixed" : option.durationMode || "per_unit");
     const problem = workSummary || "Scheduled HVAC work";
+    const appointmentEndTime = cleanText(assignment.endTime || option.endTime, 20);
 
     return {
       id,
@@ -114,6 +115,7 @@ function buildWorkOrders({ appointment, option, request, customer, property, con
       appointmentWorkLabel: workLabel,
       appointmentDurationMinutes: durationMinutes,
       appointmentDurationMode: durationMode,
+      appointmentEndTime,
       serviceDefinitionVersion: singleItem?.serviceDefinitionVersion || 0,
       appointmentWorkItems: workItems,
       appointmentAssignmentRole: isPrimary ? "primary" : "support",
