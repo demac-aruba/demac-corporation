@@ -5,6 +5,7 @@ on:
     paths:
       - 'functions/whatsappTransactionalService.js'
       - 'functions/whatsappTransactionalService.test.js'
+      - 'functions/whatsappWacliGateway.js'
       - 'functions/operatingCalendarService.js'
       - 'functions/operatingCalendarService.test.js'
       - 'functions/appointmentNotificationService.js'
@@ -15,7 +16,6 @@ on:
       - 'functions/technicianDailySchedules.js'
       - 'functions/officeBookingAuthority.js'
       - 'functions/officeBookingAuthorityCommunication.test.js'
-      - 'functions/index.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
       - '.github/workflows/whatsapp-transactional-production-deploy.yml'
@@ -25,6 +25,7 @@ on:
     paths:
       - 'functions/whatsappTransactionalService.js'
       - 'functions/whatsappTransactionalService.test.js'
+      - 'functions/whatsappWacliGateway.js'
       - 'functions/operatingCalendarService.js'
       - 'functions/operatingCalendarService.test.js'
       - 'functions/appointmentNotificationService.js'
@@ -35,7 +36,6 @@ on:
       - 'functions/technicianDailySchedules.js'
       - 'functions/officeBookingAuthority.js'
       - 'functions/officeBookingAuthorityCommunication.test.js'
-      - 'functions/index.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
       - '.github/workflows/whatsapp-transactional-production-deploy.yml'
@@ -68,9 +68,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node --check functions/index.js
           node --check functions/bootstrap.js
           node --check functions/whatsappTransactionalService.js
+          node --check functions/whatsappWacliGateway.js
           node --check functions/operatingCalendarService.js
           node --check functions/appointmentNotificationService.js
           node --check functions/appointmentNotifications.js
@@ -81,8 +81,8 @@ jobs:
           node - <<'NODE'
           const mod = require('./functions/bootstrap');
           for (const name of [
-            'whatsappWebhook',
-            'sendQueuedWhatsAppMessage',
+            'wacliOutboundPoll',
+            'wacliOutboundAck',
             'queueAppointmentConfirmation',
             'sendDailyAppointmentReminders',
             'sendDailyTechnicianSchedules',
@@ -116,17 +116,17 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Deploy transactional WhatsApp functions only
+      - name: Deploy notification producers only
         shell: bash
         run: |
           set -euo pipefail
           npx --yes firebase-tools@15.2.1 deploy \
-            --only functions:whatsappWebhook,functions:sendQueuedWhatsAppMessage,functions:queueAppointmentConfirmation,functions:sendDailyAppointmentReminders,functions:sendDailyTechnicianSchedules \
+            --only functions:queueAppointmentConfirmation,functions:sendDailyAppointmentReminders,functions:sendDailyTechnicianSchedules \
             --project demac-corporation \
             --non-interactive \
             --force
 
-      - name: Verify deployed transactional WhatsApp functions
+      - name: Verify deployed notification producers
         shell: bash
         run: |
           set -euo pipefail
@@ -152,20 +152,6 @@ jobs:
             fi
           }
 
-          verify_secret() {
-            local name="$1" expected_secret="$2"
-            local secrets
-            secrets="$(gcloud functions describe "$name" --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.secretEnvironmentVariables[].key)' | tr ';' '\n' | sort -u)"
-            if ! printf '%s\n' "$secrets" | grep -qx "$expected_secret"; then
-              echo "::error::${name} is missing ${expected_secret}."
-              exit 1
-            fi
-          }
-
-          verify_active whatsappWebhook
-          verify_secret whatsappWebhook WHATSAPP_VERIFY_TOKEN
-          verify_event sendQueuedWhatsAppMessage google.cloud.firestore.document.v1.created
-          verify_secret sendQueuedWhatsAppMessage WHATSAPP_ACCESS_TOKEN
           verify_event queueAppointmentConfirmation google.cloud.firestore.document.v1.written
           verify_active sendDailyAppointmentReminders
           verify_active sendDailyTechnicianSchedules
