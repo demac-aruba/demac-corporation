@@ -52,17 +52,24 @@ function mondayOf(dateKey: string) {
   return addDays(dateKey, delta);
 }
 
+function clockLabel(value: string) {
+  const [hourText, minuteText = '00'] = value.split(':');
+  const hour = Number(hourText);
+  return `${hour % 12 || 12}:${minuteText} ${hour >= 12 ? 'PM' : 'AM'}`;
+}
+
 export function currentArubaDateKey() {
   return arubaDateKey(new Date());
 }
 
 export function buildOperationalWeek(referenceDateKey = currentArubaDateKey()): OperationalDay[] {
   const monday = mondayOf(referenceDateKey);
+  const settings = getRuntimeSchedulingSettings();
+  const normalShift = `${clockLabel(settings.workdayStart)}–${clockLabel(settings.workdayEnd)}`;
   return Array.from({ length: 7 }, (_, index) => {
     const dateKey = addDays(monday, index);
     const date = dateFromKey(dateKey);
     const weekdayIndex = date.getUTCDay();
-    const isSaturday = weekdayIndex === 6;
     const isSunday = weekdayIndex === 0;
     const weekday = new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: 'UTC' }).format(date);
     const shortDate = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(date);
@@ -72,7 +79,7 @@ export function buildOperationalWeek(referenceDateKey = currentArubaDateKey()): 
       shortDate,
       isToday: dateKey === referenceDateKey,
       isOpen: !isSunday,
-      shiftLabel: isSunday ? 'Closed' : isSaturday ? '9:00 AM–1:00 PM' : '8:00 AM–5:00 PM',
+      shiftLabel: isSunday ? 'Closed' : normalShift,
     };
   });
 }
@@ -147,53 +154,8 @@ export function findCandidateSlotsV2(request: BookingRequest, jobs: DispatchJob[
   return findCandidateSlots(request, jobs, vans, settings);
 }
 
-function saturdayRestrictionAllows(start: string, request: BookingRequest) {
-  const restriction = request.restriction;
-  if (!restriction) return true;
-  if (restriction.halfDay === 'pm') return false;
-  if (restriction.notBefore && timeToMinutes(start) < timeToMinutes(restriction.notBefore)) return false;
-  if (restriction.notAfter && timeToMinutes(start) > timeToMinutes(restriction.notAfter)) return false;
-  return true;
-}
-
-function saturdayAnchor(jobs: DispatchJob[], vanId: string) {
-  return jobs.filter((job) => job.vanId === vanId && job.status !== 'cancelled').sort((a, b) => a.start.localeCompare(b.start))[0];
-}
-
-export function findSaturdaySlots(request: BookingRequest, jobs: DispatchJob[], vans: VanResource[] = previewVans, settings: SchedulingSettings = getRuntimeSchedulingSettings()): CandidateSlot[] {
-  const duration = calculateDurationMinutes(request, settings);
-  const starts = ['09:00', '10:00', '11:00', '12:00'];
-  const dayEnd = timeToMinutes('13:00') - settings.routeMarginMinutes;
-  const candidates: CandidateSlot[] = [];
-
-  for (const van of vans.filter((resource) => resource.active)) {
-    const anchor = saturdayAnchor(jobs, van.id);
-    if (anchor && !sectorsCompatible(anchor.sector, request.sector)) continue;
-    for (const start of starts) {
-      if (!saturdayRestrictionAllows(start, request)) continue;
-      const startMinutes = timeToMinutes(start);
-      const endMinutes = startMinutes + duration;
-      if (endMinutes > dayEnd) continue;
-      if (conflictsWithSpan(jobs, van.id, start, minutesToTime(endMinutes))) continue;
-      candidates.push({
-        vanId: van.id,
-        start,
-        end: minutesToTime(endMinutes),
-        segment: 'am',
-        sector: request.sector,
-        score: (anchor?.sector === request.sector ? 120 : 108) - candidates.length,
-        reasons: [anchor ? 'Saturday route-compatible with existing anchor' : 'Open Saturday short-shift capacity', `Configured duration: ${duration} minutes`, `Configured route buffer: ${settings.routeMarginMinutes} minutes`],
-        requiresSupportVan: false,
-        primaryUnits: request.quantity,
-      });
-    }
-  }
-  return candidates.sort((a, b) => b.score - a.score).slice(0, 8);
-}
-
 export function findCandidateSlotsForDay(day: OperationalDay, request: BookingRequest, jobs: DispatchJob[], vans: VanResource[] = previewVans, settings: SchedulingSettings = getRuntimeSchedulingSettings()) {
   if (!day.isOpen) return [];
-  if (day.weekday === 'Sat') return findSaturdaySlots(request, jobs, vans, settings);
   return findCandidateSlotsV2(request, jobs, vans, settings);
 }
 
@@ -225,7 +187,7 @@ export function findSupportReflowPlansForDay(
   vans: VanResource[] = previewVans,
   settings: SchedulingSettings = getRuntimeSchedulingSettings(),
 ): SupportReflowPlan[] {
-  if (!day.isOpen || day.weekday === 'Sat') return [];
+  if (!day.isOpen) return [];
   if (findCandidateSlotsForDay(day, request, jobs, vans, settings).length) return [];
 
   const supportJobs = jobs.filter((job) => job.status !== 'cancelled' && !job.isPrimaryAssignment && Boolean(job.supportForJobId));
