@@ -117,6 +117,7 @@ export type OfficeRecipientCommunicationState = {
   canSendNow: boolean;
   manual: boolean;
   reason: string;
+  blockedReason?: string;
   messageId?: string;
   provider?: string;
   historyAttemptCount: number;
