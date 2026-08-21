@@ -2,6 +2,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const {
   OFFICE_BOOKING_ACTIONS,
+  buildOfficeProperty,
   createOfficeBookingApi,
   normalizeOfficePhone,
 } = require("./officeBookingAuthority");
@@ -213,6 +214,25 @@ test("adding a booking property rejects missing or inactive customers without wr
     assert.equal(result.body.error.code, "customer_not_found");
     assert.equal(db.writes.length, 0);
   }
+});
+
+test("property name is optional and an empty name remains empty at the canonical write boundary", () => {
+  const unnamed = buildOfficeProperty({
+    id: "property-empty",
+    clientId: "client-1",
+    input: { name: "", address: "Caya G. F. Betico Croes 42", zone: "Oranjestad Centro", neighborhood: "Playa" },
+    identity: { uid: "owner-1", name: "Office Owner" },
+    now: "2026-08-21T12:00:00.000Z",
+  });
+  const named = buildOfficeProperty({
+    id: "property-named",
+    clientId: "client-1",
+    input: { name: "Pastechi House Building", address: "Caya G. F. Betico Croes 42", zone: "Oranjestad Centro", neighborhood: "Playa" },
+    identity: { uid: "owner-1", name: "Office Owner" },
+    now: "2026-08-21T12:00:00.000Z",
+  });
+  assert.equal(unnamed.name, "");
+  assert.equal(named.name, "Pastechi House Building");
 });
 
 test("office phone normalization keeps Aruba booking master data canonical", () => {
