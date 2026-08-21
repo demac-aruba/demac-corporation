@@ -6,8 +6,8 @@ import {
   listOfficeContactDirectory,
 } from './office-booking-authority';
 import {
-  invalidateLiveSchedulingReferenceCache,
   loadLiveSchedulingReferenceData,
+  primeLiveSchedulingReferenceCache,
   type LiveSchedulingClient,
   type LiveSchedulingProperty,
 } from './live-scheduling-fast';
@@ -48,6 +48,18 @@ function comparable(value: unknown) {
   return text(value).toLowerCase().replace(/[^a-z0-9+]/g, '');
 }
 
+function recordTime(value: unknown) {
+  const parsed = Date.parse(text(value));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function recentCustomersFirst(a: BookingCustomer, b: BookingCustomer) {
+  const aTime = Math.max(recordTime(a.updatedAt), recordTime(a.createdAt));
+  const bTime = Math.max(recordTime(b.updatedAt), recordTime(b.createdAt));
+  if (aTime !== bTime) return bTime - aTime;
+  return (text(a.company) || text(a.name) || a.id).localeCompare(text(b.company) || text(b.name) || b.id);
+}
+
 export function normalizeBookingPhone(value: string) {
   const raw = text(value);
   if (!raw) return '';
@@ -64,7 +76,10 @@ export async function loadBookingReferenceData(): Promise<BookingReferenceData> 
     listOfficeContactDirectory(),
   ]);
   return {
-    clients: references.clients.filter((client) => client.active !== false),
+    // The empty search state only renders a short list. Put the newest canonical
+    // CRM relationships first so a customer created during booking remains visible
+    // when the user opens a different day/slot immediately afterward.
+    clients: references.clients.filter((client) => client.active !== false).sort(recentCustomersFirst),
     properties: references.properties.filter((property) => property.active !== false),
     contacts: (directory.contacts ?? []).filter((contact) => contact.active !== false),
     contactAssignments: (directory.assignments ?? []).filter((assignment) => assignment.active !== false),
@@ -124,11 +139,13 @@ export async function createBookingCustomerWithProperty(args: {
     },
   });
 
-  invalidateLiveSchedulingReferenceCache();
-  return {
-    customer: result.customer as unknown as BookingCustomer,
-    property: result.property as unknown as BookingProperty,
-  };
+  const customer = result.customer as unknown as BookingCustomer;
+  const property = result.property as unknown as BookingProperty;
+  // The Cloud Function returns only after the Firestore transaction commits. Keep
+  // that confirmed master data in the short-lived reference cache instead of
+  // invalidating it and making booking success depend on a second list request.
+  primeLiveSchedulingReferenceCache({ clients: [customer], properties: [property] });
+  return { customer, property };
 }
 
 export async function createBookingProperty(clientId: string, input: NewBookingProperty) {
@@ -153,6 +170,7 @@ export async function createBookingProperty(clientId: string, input: NewBookingP
     },
   });
 
-  invalidateLiveSchedulingReferenceCache();
-  return result.property as unknown as BookingProperty;
+  const property = result.property as unknown as BookingProperty;
+  primeLiveSchedulingReferenceCache({ properties: [property] });
+  return property;
 }
