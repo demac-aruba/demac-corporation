@@ -1,5 +1,7 @@
+const { getApps, initializeApp } = require("firebase-admin/app");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
-require("../index");
+
+if (!getApps().length) initializeApp();
 
 const MIGRATION_ID = "customer-facing-description-work-order-v1";
 
