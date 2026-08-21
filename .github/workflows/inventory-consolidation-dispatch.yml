@@ -16,21 +16,21 @@ jobs:
     if: github.head_ref == 'feature/consolidated-inventory-authority'
     runs-on: ubuntu-latest
     steps:
-      - name: Run and verify guarded consolidation on feature branch
+      - name: Run and verify final guarded inventory consolidation
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           repo='${{ github.repository }}'
-          workflow='inventory-consolidation-maintenance.yml'
-          echo 'Running inventory consolidation with full dependency validation.'
+          workflow='inventory-finalize.yml'
+          echo 'Running final inventory consolidation and dependency cleanup.'
           gh workflow run "$workflow" --repo "$repo" --ref feature/consolidated-inventory-authority
           sleep 8
           run_id="$(gh run list --repo "$repo" --workflow "$workflow" --branch feature/consolidated-inventory-authority --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId')"
           if [ -z "$run_id" ] || [ "$run_id" = 'null' ]; then
-            echo '::error::Could not resolve the dispatched inventory maintenance run.'
+            echo '::error::Could not resolve the dispatched inventory finalization run.'
             exit 1
           fi
-          echo "Waiting for inventory maintenance run $run_id"
+          echo "Waiting for inventory finalization run $run_id"
           gh run watch "$run_id" --repo "$repo" --exit-status
