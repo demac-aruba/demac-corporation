@@ -65,6 +65,8 @@ type LiveWorkOrder = {
   van?: string;
   scheduledSlots?: number | string[];
   problem?: string;
+  customerFacingDescription?: string;
+  customerFacingDescriptionIsDefault?: boolean;
   status?: string;
   source?: string;
   confirmedAt?: string;
@@ -356,6 +358,8 @@ export function projectLiveSchedulingAppointments(
     const workTypeId = workOrderWorkTypeId(primary);
     const workLabel = workOrderWorkLabel(primary);
     const fallbackDescription = `${workLabel} × ${quantity}`;
+    const customerFacingDescription = text(primary.customerFacingDescription)
+      || cleanCustomerDescription(primary.problem, fallbackDescription);
     const cancelled = activeOrders.length === 0 && assignments.every((assignment) => assignment.status === 'cancelled');
     const confirmedAt = text(primary.confirmedAt) || text(primary.createdAt);
     const actorLabel = bookingActorLabel(authorityAppointment);
@@ -383,9 +387,9 @@ export function projectLiveSchedulingAppointments(
         id: `${appointmentId}-work`,
         presetId: primaryAssignment.presetId,
         quantity,
-        customerFacingDescription: cleanCustomerDescription(primary.problem, fallbackDescription),
+        customerFacingDescription,
       }],
-      customerFacingDescription: cleanCustomerDescription(primary.problem, fallbackDescription),
+      customerFacingDescription,
       customerPhone: text(client?.phone) || undefined,
       customerWhatsapp: text(client?.whatsapp) || undefined,
       customerEmail: text(client?.email) || undefined,
