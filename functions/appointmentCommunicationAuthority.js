@@ -83,9 +83,26 @@ function deriveRecipientPurposeState({ recipient, purpose, queue = [], singleRec
     canSendNow,
     manual: latest ? isManualAttempt(latest) : false,
     reason: latest ? cleanText(latest.reason, 160) : selected ? "selected-no-send-attempt" : "not-requested-by-operator",
+    blockedReason: "",
     messageId: latest ? cleanText(latest.messageId, 300) : "",
     provider: latest ? cleanText(latest.provider, 40) : "",
     historyAttemptCount: history.length,
+  };
+}
+
+function closeConfirmationAfterReminder(confirmation, reminder) {
+  if (!confirmation || !reminder) return confirmation;
+  if (isSuccessfulState(confirmation.state)) return confirmation;
+  const reminderStarted = isActiveState(reminder.state) || isSuccessfulState(reminder.state);
+  if (!reminderStarted) return confirmation;
+  const blockedReason = isSuccessfulState(reminder.state) ? "reminder-already-sent" : "reminder-in-progress";
+  return {
+    ...confirmation,
+    state: "closed",
+    lastError: "",
+    canSendNow: false,
+    reason: blockedReason,
+    blockedReason,
   };
 }
 
@@ -118,31 +135,35 @@ function aggregatePurpose(recipients, purpose) {
 
 function projectRecipientCommunication({ order = {}, confirmationQueue = [], reminderQueue = [] } = {}) {
   const rawRecipients = Array.isArray(order.notificationRecipients) ? order.notificationRecipients.filter(Boolean) : [];
-  const recipients = rawRecipients.map((recipient) => ({
-    id: recipientIdentity(recipient),
-    recipientType: cleanText(recipient.recipientType, 40) || "recipient",
-    sourceId: cleanText(recipient.sourceId, 180),
-    name: cleanText(recipient.name, 180) || "Recipient",
-    role: cleanText(recipient.role, 120) || "Contact",
-    phone: cleanText(recipient.whatsapp || recipient.phone, 80),
-    preferredLanguage: cleanText(recipient.preferredLanguage, 80),
-    sendConfirmation: recipient.sendConfirmation === true,
-    sendReminder: recipient.sendReminder === true,
-    confirmation: deriveRecipientPurposeState({
-      recipient,
-      purpose: "confirmation",
-      queue: confirmationQueue,
-      singleRecipient: rawRecipients.length === 1,
-      appointmentDate: order.date,
-    }),
-    reminder: deriveRecipientPurposeState({
+  const recipients = rawRecipients.map((recipient) => {
+    const reminder = deriveRecipientPurposeState({
       recipient,
       purpose: "reminder",
       queue: reminderQueue,
       singleRecipient: rawRecipients.length === 1,
       appointmentDate: order.date,
-    }),
-  }));
+    });
+    const confirmation = closeConfirmationAfterReminder(deriveRecipientPurposeState({
+      recipient,
+      purpose: "confirmation",
+      queue: confirmationQueue,
+      singleRecipient: rawRecipients.length === 1,
+      appointmentDate: order.date,
+    }), reminder);
+    return {
+      id: recipientIdentity(recipient),
+      recipientType: cleanText(recipient.recipientType, 40) || "recipient",
+      sourceId: cleanText(recipient.sourceId, 180),
+      name: cleanText(recipient.name, 180) || "Recipient",
+      role: cleanText(recipient.role, 120) || "Contact",
+      phone: cleanText(recipient.whatsapp || recipient.phone, 80),
+      preferredLanguage: cleanText(recipient.preferredLanguage, 80),
+      sendConfirmation: recipient.sendConfirmation === true,
+      sendReminder: recipient.sendReminder === true,
+      confirmation,
+      reminder,
+    };
+  });
   return {
     recipients,
     confirmation: aggregatePurpose(recipients, "confirmation"),
@@ -278,7 +299,12 @@ function createAppointmentCommunicationAuthority({ db, notificationService = nul
     if (!currentRecipient) throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "The selected communication recipient is not part of this appointment.", { appointmentId, recipientId });
     const currentPurpose = currentRecipient[purpose];
     if (!currentPurpose.canSendNow) {
-      throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, `This ${purpose} cannot be sent now.`, { appointmentId, recipientId, state: currentPurpose.state });
+      throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, `This ${purpose} cannot be sent now.`, {
+        appointmentId,
+        recipientId,
+        state: currentPurpose.state,
+        blockedReason: currentPurpose.blockedReason || "",
+      });
     }
     if (purpose === "reminder" && cleanText(order.date, 20) && order.date < dateKeyInTimeZone()) {
       throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "A reminder cannot be sent for an appointment date that has already passed.", { appointmentId, appointmentDate: order.date });
@@ -335,6 +361,7 @@ module.exports.ACTIVE_STATES = ACTIVE_STATES;
 module.exports.PURPOSES = PURPOSES;
 module.exports.SUCCESS_STATES = SUCCESS_STATES;
 module.exports.aggregatePurpose = aggregatePurpose;
+module.exports.closeConfirmationAfterReminder = closeConfirmationAfterReminder;
 module.exports.communicationError = communicationError;
 module.exports.createAppointmentCommunicationAuthority = createAppointmentCommunicationAuthority;
 module.exports.deriveRecipientPurposeState = deriveRecipientPurposeState;
