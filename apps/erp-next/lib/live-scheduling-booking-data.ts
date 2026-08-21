@@ -129,7 +129,7 @@ export async function createBookingCustomerWithProperty(args: {
       preferredLanguage: text(args.customer.preferredLanguage) || 'Papiamento',
     },
     property: {
-      name: text(args.property.name) || 'Primary Property',
+      name: text(args.property.name),
       type: text(args.property.type) || 'Casa',
       address,
       zone,
@@ -160,7 +160,7 @@ export async function createBookingProperty(clientId: string, input: NewBookingP
     requestId: createOfficeLifecycleRequestId('schedule-property'),
     customerId: ownerId,
     property: {
-      name: text(input.name) || 'Property',
+      name: text(input.name),
       type: text(input.type) || 'Casa',
       address,
       zone,
