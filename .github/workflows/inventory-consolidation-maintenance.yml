@@ -17,7 +17,7 @@ jobs:
           ref: feature/consolidated-inventory-authority
           fetch-depth: 0
 
-      - name: Apply guarded Legacy compatibility changes
+      - name: Execute guarded finalization plan from feature branch
         shell: bash
         run: |
           set -euo pipefail
@@ -25,235 +25,35 @@ jobs:
           from pathlib import Path
           from textwrap import dedent
 
-          def read(path): return Path(path).read_text()
-          def write(path, text): Path(path).write_text(text)
-          def unique_index(text, needle, label, start=0):
-              count = text.count(needle, start)
-              if count != 1: raise SystemExit(f'{label}: expected exactly one match, found {count}')
-              return text.index(needle, start)
-          def interface_block(path, name):
-              text = read(path)
-              start = unique_index(text, f'export interface {name} {{', f'{name} start')
-              end = text.find('\n}\n', start)
-              if end < 0: raise SystemExit(f'{name}: closing brace not found')
-              end += 3
-              return text, start, end, text[start:end]
+          workflow = Path('.github/workflows/inventory-finalize.yml')
+          if not workflow.exists():
+              raise SystemExit('inventory-finalize.yml is missing from the feature branch')
 
-          text, start, end, block = interface_block('src/types.ts', 'CommercialProductStock')
-          if 'version?: number;' not in block:
-              needle = '  active: boolean;\n'
-              if block.count(needle) != 1: raise SystemExit('CommercialProductStock: active field not uniquely found')
-              block = block.replace(needle, dedent('''\
-                active: boolean;
-                version?: number;
-                balances?: Record<string, {
-                  onHand: number;
-                  reserved: number;
-                  minimum: number;
-                  target: number;
-                }>;
-              '''), 1)
-              write('src/types.ts', text[:start] + block + text[end:])
+          lines = workflow.read_text().splitlines()
+          blocks = []
+          index = 0
+          while index < len(lines):
+              line = lines[index]
+              if line.strip() != 'run: |':
+                  index += 1
+                  continue
+              indent = len(line) - len(line.lstrip())
+              index += 1
+              body = []
+              while index < len(lines):
+                  candidate = lines[index]
+                  candidate_indent = len(candidate) - len(candidate.lstrip()) if candidate.strip() else indent + 2
+                  if candidate.strip() and candidate_indent <= indent:
+                      break
+                  body.append(candidate)
+                  index += 1
+              blocks.append(dedent('\n'.join(body)).rstrip())
 
-          path = 'src/inventory/v2Types.ts'
-          text = read(path)
-          old_location = "export type AssetLocationType = 'van' | 'warehouse';"
-          new_location = "export type AssetLocationType = 'van' | 'warehouse' | 'office';"
-          if old_location in text:
-              if text.count(old_location) != 1: raise SystemExit('AssetLocationType: legacy declaration not unique')
-              write(path, text.replace(old_location, new_location, 1))
-          elif new_location not in text:
-              raise SystemExit('AssetLocationType: expected declaration not found')
+          if len(blocks) != 4:
+              raise SystemExit(f'Expected exactly 4 guarded run blocks in inventory-finalize.yml, found {len(blocks)}')
 
-          text, start, end, block = interface_block(path, 'WarehouseInventoryItemV2')
-          if 'stockByLocation?:' not in block:
-              needle = '  latestCountAt?: string;\n'
-              if block.count(needle) != 1: raise SystemExit('WarehouseInventoryItemV2: latestCountAt field not uniquely found')
-              block = block.replace(needle, dedent('''\
-                latestCountAt?: string;
-                inventoryVersion?: number;
-                stockByLocation?: Record<string, {
-                  onHand: number;
-                  reserved: number;
-                  minimum: number;
-                  target: number;
-                }>;
-              '''), 1)
-              write(path, text[:start] + block + text[end:])
-
-          path = 'src/state/AppState.tsx'
-          text = read(path)
-          function_start = unique_index(text, 'const saveCommercialProductStock = async', 'saveCommercialProductStock start')
-          function_end = text.find('\n  const addWorkOrder = async', function_start)
-          if function_end < 0: raise SystemExit('saveCommercialProductStock end not found')
-          block = text[function_start:function_end]
-          if 'const locationManaged = existing?.version === 2' not in block:
-              needle = '    const existing = commercialProductStock.find((stock) => stock.id === productId || stock.productId === productId);\n'
-              if block.count(needle) != 1: raise SystemExit('Legacy commercial-stock existing line not unique')
-              addition = needle + dedent('''\
-                const locationManaged = existing?.version === 2 || Boolean(existing?.balances && Object.keys(existing.balances).length);
-                if (locationManaged) {
-                  return { ok: false, message: 'Este producto ya usa inventario por ubicación. Actualiza el stock desde Inventory Control para conservar Warehouse, Office y Vans.' };
-                }
-              ''')
-              block = block.replace(needle, addition, 1)
-              write(path, text[:function_start] + block + text[function_end:])
-
-          path = 'src/screens/CatalogScreen.tsx'
-          text = read(path)
-          if 'const stockLocationManaged =' not in text:
-              stock_start = unique_index(text, '  const selectedStock = selected\n', 'selectedStock start')
-              marker = '    : undefined;\n'
-              marker_pos = text.find(marker, stock_start)
-              if marker_pos < 0: raise SystemExit('selectedStock end not found')
-              insert_at = marker_pos + len(marker)
-              text = text[:insert_at] + "  const stockLocationManaged = selectedStock?.version === 2 || Boolean(selectedStock?.balances && Object.keys(selectedStock.balances).length);\n" + text[insert_at:]
-          if "setStockMessage('Este producto ya usa inventario por ubicación." not in text:
-              editor_start = unique_index(text, '  const openStockEditor = () => {\n', 'openStockEditor start')
-              needle = "    if (!selected || normalizeType(selected) !== 'Producto') return;\n"
-              pos = text.find(needle, editor_start)
-              if pos < 0: raise SystemExit('openStockEditor Product guard not found')
-              insert_at = pos + len(needle)
-              text = text[:insert_at] + dedent('''\
-                if (stockLocationManaged) {
-                  setStockMessage('Este producto ya usa inventario por ubicación. Adminístralo desde ERP Next → Inventory.');
-                  return;
-                }
-              ''') + text[insert_at:]
-          old_pill = "<Pill label={selectedStock?.verifiedAt ? 'Verificado' : 'Sin verificar'} tone={selectedStock?.verifiedAt ? 'success' : 'neutral'} />"
-          new_pill = "<Pill label={stockLocationManaged ? 'Por ubicación' : selectedStock?.verifiedAt ? 'Verificado' : 'Sin verificar'} tone={stockLocationManaged || selectedStock?.verifiedAt ? 'success' : 'neutral'} />"
-          if old_pill in text:
-              if text.count(old_pill) != 1: raise SystemExit('Legacy stock status pill is not unique')
-              text = text.replace(old_pill, new_pill, 1)
-          elif new_pill not in text: raise SystemExit('Legacy stock status pill not found')
-          old_action = "<View style={styles.stockActions}><Button label={selectedStock ? 'Actualizar stock' : 'Registrar stock'} onPress={openStockEditor} /></View>"
-          new_action = "<View style={styles.stockActions}>{stockLocationManaged ? <Text style={styles.stockNote}>El stock físico por Warehouse, Office y Vans se administra únicamente desde ERP Next → Inventory.</Text> : <Button label={selectedStock ? 'Actualizar stock' : 'Registrar stock'} onPress={openStockEditor} />}</View>"
-          if old_action in text:
-              if text.count(old_action) != 1: raise SystemExit('Legacy stock action is not unique')
-              text = text.replace(old_action, new_action, 1)
-          elif new_action not in text: raise SystemExit('Legacy stock action not found')
-          write(path, text)
-
-          path = 'firestore.rules'
-          text = read(path)
-          commercial_start = unique_index(text, '    match /commercialProductStock/{productId} {', 'commercialProductStock rules start')
-          commercial_end = text.find('\n    match /staffProfiles/{staffId} {', commercial_start)
-          if commercial_end < 0: raise SystemExit('commercialProductStock rules end not found')
-          commercial_block = text[commercial_start:commercial_end]
-          if "resource.data.get('version', 1) != 2" not in commercial_block:
-              replacement = dedent('''\
-                match /commercialProductStock/{productId} {
-                  allow read: if activeStaff();
-                  // Legacy clients may maintain only pre-location stock. Once Inventory Authority
-                  // promotes a Product to v2, all physical stock mutations are server-side.
-                  allow create: if inventoryRole()
-                    && request.resource.data.get('version', 1) != 2
-                    && !request.resource.data.keys().hasAny(['balances'])
-                    && request.resource.data.productId == productId
-                    && request.resource.data.onHand is int
-                    && request.resource.data.onHand >= 0
-                    && request.resource.data.reserved is int
-                    && request.resource.data.reserved == 0
-                    && request.resource.data.active is bool
-                    && request.resource.data.verifiedAt is string
-                    && request.resource.data.verifiedById == request.auth.uid
-                    && request.resource.data.updatedById == request.auth.uid;
-                  allow update: if inventoryRole()
-                    && resource.data.get('version', 1) != 2
-                    && request.resource.data.get('version', 1) != 2
-                    && !resource.data.keys().hasAny(['balances'])
-                    && !request.resource.data.keys().hasAny(['balances'])
-                    && request.resource.data.productId == productId
-                    && resource.data.productId == productId
-                    && request.resource.data.onHand is int
-                    && request.resource.data.onHand >= 0
-                    && request.resource.data.reserved is int
-                    && request.resource.data.reserved == resource.data.reserved
-                    && request.resource.data.reserved >= 0
-                    && request.resource.data.reserved <= request.resource.data.onHand
-                    && request.resource.data.active is bool
-                    && request.resource.data.verifiedAt is string
-                    && request.resource.data.verifiedById == request.auth.uid
-                    && request.resource.data.updatedById == request.auth.uid;
-                  allow delete: if adminOrSupervisor()
-                    && resource.data.get('version', 1) != 2
-                    && !resource.data.keys().hasAny(['balances']);
-                }
-              ''')
-              replacement = ''.join(('    ' + line if line else line) + '\n' for line in replacement.rstrip('\n').split('\n')).rstrip('\n')
-              text = text[:commercial_start] + replacement + text[commercial_end:]
-
-          warehouse_start = unique_index(text, '    match /warehouseInventory/{itemId} {', 'warehouseInventory rules start')
-          warehouse_end = text.find('\n    match /toolCatalog/{toolId} {', warehouse_start)
-          if warehouse_end < 0: raise SystemExit('warehouseInventory rules end not found')
-          warehouse_block = text[warehouse_start:warehouse_end]
-          if "resource.data.get('inventoryVersion', 1) != 2" not in warehouse_block:
-              replacement = dedent('''\
-                match /warehouseInventory/{itemId} {
-                  allow read: if activeStaff();
-                  // Legacy warehouse editing remains available only until the item is promoted
-                  // to location-aware v2. Afterwards Inventory Authority is the single writer.
-                  allow create: if inventoryRole()
-                    && request.resource.data.get('inventoryVersion', 1) != 2
-                    && !request.resource.data.keys().hasAny(['stockByLocation']);
-                  allow update: if inventoryRole()
-                    && resource.data.get('inventoryVersion', 1) != 2
-                    && request.resource.data.get('inventoryVersion', 1) != 2
-                    && !resource.data.keys().hasAny(['stockByLocation'])
-                    && !request.resource.data.keys().hasAny(['stockByLocation']);
-                  allow delete: if inventoryRole()
-                    && resource.data.get('inventoryVersion', 1) != 2
-                    && !resource.data.keys().hasAny(['stockByLocation']);
-                }
-              ''')
-              replacement = ''.join(('    ' + line if line else line) + '\n' for line in replacement.rstrip('\n').split('\n')).rstrip('\n')
-              text = text[:warehouse_start] + replacement + text[warehouse_end:]
-          write(path, text)
+          script = '\n\n'.join(blocks) + '\n'
+          Path('/tmp/inventory-finalize.sh').write_text(script)
+          print('Prepared guarded inventory finalization script with 4 validated stages.')
           PY
-
-      - name: Remove superseded browser previews only when unreferenced
-        shell: bash
-        run: |
-          set -euo pipefail
-          remove_preview() {
-            symbol="$1"; tsx="$2"; css="$3"
-            refs="$(git grep -l -F "$symbol" -- apps/erp-next 2>/dev/null | grep -v -F "$tsx" || true)"
-            if [ -n "$refs" ]; then
-              echo "Keeping $tsx; referenced by:"
-              echo "$refs"
-              return
-            fi
-            echo "Removing superseded preview: $tsx"
-            rm -f "$tsx" "$css"
-          }
-          remove_preview BrowserInventoryReadiness apps/erp-next/components/inventory/browser-inventory-readiness.tsx apps/erp-next/components/inventory/browser-inventory-readiness.module.css
-          remove_preview BrowserInventoryReplenishment apps/erp-next/components/inventory/browser-inventory-replenishment.tsx apps/erp-next/components/inventory/browser-inventory-replenishment.module.css
-          remove_preview BrowserInventoryTransfers apps/erp-next/components/inventory/browser-inventory-transfers.tsx apps/erp-next/components/inventory/browser-inventory-transfers.module.css
-          remove_preview BrowserPurchasingReadiness apps/erp-next/components/inventory/browser-purchasing-readiness.tsx apps/erp-next/components/inventory/browser-purchasing-readiness.module.css
-          remove_preview BrowserToolRegistry apps/erp-next/components/inventory/browser-tool-registry.tsx apps/erp-next/components/inventory/browser-tool-registry.module.css
-          remove_preview InventoryCommand apps/erp-next/components/inventory/inventory-command.tsx apps/erp-next/components/inventory/inventory-command.module.css
-
-      - name: Validate changed boundaries
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm install --prefix functions --no-audit --no-fund
-          node --check functions/inventoryAuthority.js
-          node --test functions/inventoryAuthority.test.js
-          npm install --prefix apps/erp-next --no-audit --no-fund
-          npm run --prefix apps/erp-next typecheck
-          npm run --prefix apps/erp-next build
-
-      - name: Commit consolidation patch
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -- firestore.rules src/types.ts src/inventory/v2Types.ts src/state/AppState.tsx src/screens/CatalogScreen.tsx apps/erp-next/components/inventory
-          if git diff --cached --quiet; then
-            echo 'No changes to commit.'
-            exit 0
-          fi
-          git commit -m 'Harden Legacy inventory compatibility'
-          git push origin HEAD:feature/consolidated-inventory-authority
+          bash /tmp/inventory-finalize.sh
