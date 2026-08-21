@@ -4,15 +4,16 @@ const logger = require("firebase-functions/logger");
 const { defineSecret } = require("firebase-functions/params");
 const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const customerAgentCommunication = require("./demacCustomerAgentCommunication");
-const { mayaReplyDecision } = require("./demacCustomerAgentReplyPolicy");
+const {
+  MAYA_SETTINGS_COLLECTION,
+  MAYA_SETTINGS_DOCUMENT,
+  mayaReplyDecision,
+} = require("./demacCustomerAgentReplyPolicy");
 const { cleanText } = require("./bookingSchedulingPrimitives");
 
 const app = getApps().length ? getApp() : initializeApp();
 const db = getFirestore(app);
 const openAiApiKey = defineSecret("OPENAI_API_KEY");
-
-const MAYA_SETTINGS_COLLECTION = "businessSettings";
-const MAYA_SETTINGS_DOCUMENT = "customer-agent";
 
 function safeDocumentId(value) {
   return String(value || "unknown")
