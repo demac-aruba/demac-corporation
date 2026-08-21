@@ -2,6 +2,8 @@ const { cleanText } = require("./bookingSchedulingPrimitives");
 
 const DEFAULT_COUNTRY_CODE = "297";
 const DEFAULT_MODE = "allowlist";
+const MAYA_SETTINGS_COLLECTION = "businessSettings";
+const MAYA_SETTINGS_DOCUMENT = "customer-agent";
 
 function digitsOnly(value) {
   return String(value ?? "").replace(/\D/g, "");
@@ -61,6 +63,8 @@ function mayaReplyDecision({ message = {}, conversation = {}, settings = {} } = 
 
 module.exports.DEFAULT_COUNTRY_CODE = DEFAULT_COUNTRY_CODE;
 module.exports.DEFAULT_MODE = DEFAULT_MODE;
+module.exports.MAYA_SETTINGS_COLLECTION = MAYA_SETTINGS_COLLECTION;
+module.exports.MAYA_SETTINGS_DOCUMENT = MAYA_SETTINGS_DOCUMENT;
 module.exports.configuredAllowlist = configuredAllowlist;
 module.exports.digitsOnly = digitsOnly;
 module.exports.mayaReplyDecision = mayaReplyDecision;
