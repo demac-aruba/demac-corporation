@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { AppointmentRecipientSelection } from '../../lib/customer-contacts';
 import {
   checkOfficeCreateAvailability,
   confirmOfficeAppointment,
@@ -24,6 +25,7 @@ import {
   suggestArubaAddresses,
   type ArubaAddressEntry,
 } from '../../lib/aruba-address-directory';
+import { PropertyCommunicationPanel, PropertyContactDraftEditor } from './property-communication-editor';
 import styles from './live-appointment-create-drawer.module.css';
 
 export type LiveBookingTarget = {
@@ -90,6 +92,7 @@ const emptyProperty: PropertyDraft = {
   zone: '',
   neighborhood: '',
   notes: '',
+  contactLinks: [],
 };
 
 function text(value: unknown) {
@@ -145,6 +148,7 @@ function materializePropertyDraft(draft: PropertyDraft): NewBookingProperty {
     zone: text(draft.zone),
     neighborhood: text(draft.neighborhood),
     notes: text(draft.notes),
+    contactLinks: draft.contactLinks ?? [],
   };
 }
 
@@ -183,13 +187,14 @@ function automaticCustomerDescription(workLines: WorkLineDraft[], presetById: Ma
 }
 
 export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Props) {
-  const [references, setReferences] = useState<BookingReferenceData>({ clients: [], properties: [] });
+  const [references, setReferences] = useState<BookingReferenceData>({ clients: [], properties: [], contacts: [], contactAssignments: [] });
   const [presets, setPresets] = useState<OfficeBookingPreset[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [customerQuery, setCustomerQuery] = useState('');
   const [customerId, setCustomerId] = useState('');
   const [propertyId, setPropertyId] = useState('');
+  const [recipientSelections, setRecipientSelections] = useState<AppointmentRecipientSelection[]>([]);
   const [workLines, setWorkLines] = useState<WorkLineDraft[]>([]);
   const [description, setDescription] = useState('');
   const lastAutoDescriptionRef = useRef('');
@@ -205,6 +210,11 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
   const [saving, setSaving] = useState(false);
   const [authorityError, setAuthorityError] = useState('');
   const [validated, setValidated] = useState<ValidationState | null>(null);
+
+  const refreshReferences = async () => {
+    const next = await loadBookingReferenceData();
+    setReferences(next);
+  };
 
   useEffect(() => {
     let active = true;
@@ -288,7 +298,8 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
   }, 0);
   const totalQuantity = workLines.reduce((sum, line) => sum + line.quantity, 0);
   const workSignature = workLines.map((line) => `${line.presetId}:${line.quantity}:${line.manualDurationMinutes ?? ''}`).join('|');
-  const signature = [customerId, propertyId, workSignature, description.trim(), technicianInstructions.trim(), target.dateKey, target.vanId, target.start].join('|');
+  const recipientSignature = recipientSelections.map((item) => `${item.recipientType}:${item.sourceId}:${Number(item.sendConfirmation)}:${Number(item.sendReminder)}`).sort().join('|');
+  const signature = [customerId, propertyId, recipientSignature, workSignature, description.trim(), technicianInstructions.trim(), target.dateKey, target.vanId, target.start].join('|');
   const activeValidation = validated?.signature === signature ? validated : null;
   const selectedValidatedOption = activeValidation?.options.find((option) => option.id === activeValidation.selectedOptionId)
     ?? activeValidation?.options[0]
@@ -310,6 +321,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
     setCustomerId(customer.id);
     const firstProperty = references.properties.find((property) => property.clientId === customer.id && property.active !== false);
     setPropertyId(firstProperty?.id ?? '');
+    setRecipientSelections([]);
     setCustomerQuery('');
     setMasterError('');
     setCustomerEditorOpen(false);
@@ -347,7 +359,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
 
   const openCustomerEditor = () => {
     setCustomerDraft({ ...emptyCustomer, name: customerQuery.trim() });
-    setCustomerPropertyDraft({ ...emptyProperty });
+    setCustomerPropertyDraft({ ...emptyProperty, contactLinks: [] });
     setMasterError('');
     setCustomerEditorOpen(true);
     setPropertyEditorOpen(false);
@@ -363,12 +375,10 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
         property: materializePropertyDraft(customerPropertyDraft),
         references,
       });
-      setReferences((current) => ({
-        clients: [...current.clients, created.customer],
-        properties: [...current.properties, created.property],
-      }));
+      await refreshReferences();
       setCustomerId(created.customer.id);
       setPropertyId(created.property.id);
+      setRecipientSelections([]);
       setCustomerQuery('');
       setCustomerEditorOpen(false);
       resetValidation();
@@ -381,7 +391,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
 
   const openPropertyEditor = () => {
     if (!selectedCustomer) return;
-    setPropertyDraft({ ...emptyProperty, name: `Property ${customerProperties.length + 1}`, zone: text(selectedCustomer.zone) });
+    setPropertyDraft({ ...emptyProperty, name: `Property ${customerProperties.length + 1}`, zone: text(selectedCustomer.zone), contactLinks: [] });
     setMasterError('');
     setPropertyEditorOpen(true);
     setCustomerEditorOpen(false);
@@ -393,8 +403,9 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
     setMasterError('');
     try {
       const created = await createBookingProperty(selectedCustomer.id, materializePropertyDraft(propertyDraft));
-      setReferences((current) => ({ ...current, properties: [...current.properties, created] }));
+      await refreshReferences();
       setPropertyId(created.id);
+      setRecipientSelections([]);
       setPropertyEditorOpen(false);
       resetValidation();
     } catch (error) {
@@ -433,6 +444,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
         requiredVanId: target.vanId,
         customerFacingDescription: description.trim(),
         technicianInstructions: technicianInstructions.trim(),
+        recipientSelections,
         notes: `Created from LIVE Scheduling slot ${target.vanId} ${target.dateKey} ${target.start}.`,
       });
       const exactOptions = result.options.filter((option) => optionMatchesTarget(option, target));
@@ -531,7 +543,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
 
               {customerEditorOpen ? (
                 <div className={styles.editorPanel}>
-                  <header><div><strong>Create customer + first property</strong><span>Customer and first property are committed atomically to canonical CRM.</span></div><button type="button" onClick={() => setCustomerEditorOpen(false)}>×</button></header>
+                  <header><div><strong>Create customer + first property</strong><span>Customer, property and optional contact relationships are committed atomically to canonical CRM.</span></div><button type="button" onClick={() => setCustomerEditorOpen(false)}>×</button></header>
                   <div className={styles.formGrid}>
                     <Field label="Customer name *" value={customerDraft.name} onChange={(value) => setCustomerDraft((current) => ({ ...current, name: value }))} />
                     <Field label="Company" value={customerDraft.company ?? ''} onChange={(value) => setCustomerDraft((current) => ({ ...current, company: value }))} />
@@ -543,6 +555,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
                     <Field label="Property name" value={customerPropertyDraft.name} onChange={(value) => setCustomerPropertyDraft((current) => ({ ...current, name: value }))} />
                     <label><span>Property type</span><select value={customerPropertyDraft.type} onChange={(event) => setCustomerPropertyDraft((current) => ({ ...current, type: event.target.value }))}><option>Casa</option><option>Apartamento</option><option>Oficina</option><option>Local comercial</option><option>Otro</option></select></label>
                     <PropertyAddressFields draft={customerPropertyDraft} onChange={setCustomerPropertyDraft} />
+                    <PropertyContactDraftEditor clientId="new-customer" contacts={[]} links={customerPropertyDraft.contactLinks ?? []} onChange={(contactLinks) => setCustomerPropertyDraft((current) => ({ ...current, contactLinks }))} />
                   </div>
                   <footer><button type="button" className={styles.secondaryButton} disabled={masterSaving} onClick={() => setCustomerEditorOpen(false)}>Cancel</button><button type="button" className={styles.primaryButton} disabled={masterSaving} onClick={() => void saveCustomer()}>{masterSaving ? 'Saving…' : 'Create & select'}</button></footer>
                 </div>
@@ -557,24 +570,34 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
                 <>
                   <div className={styles.choiceGrid}>
                     {customerProperties.map((property) => (
-                      <button type="button" key={property.id} className={`${styles.choice} ${property.id === propertyId ? styles.choiceSelected : ''}`} onClick={() => { setPropertyId(property.id); resetValidation(); }}>
+                      <button type="button" key={property.id} className={`${styles.choice} ${property.id === propertyId ? styles.choiceSelected : ''}`} onClick={() => { setPropertyId(property.id); setRecipientSelections([]); resetValidation(); }}>
                         <strong>{propertyLabel(property)}</strong><span>{text(property.address) || 'No address'}</span><small>{text(property.operationalZone) || text(property.zone) || 'Area not specified'}</small>
                       </button>
                     ))}
                   </div>
                   {!customerProperties.length ? <div className={styles.emptyResult}>This customer has no active service property yet.</div> : null}
                   <button type="button" className={styles.inlineAction} onClick={openPropertyEditor}>＋ Add property</button>
+                  {selectedProperty ? <PropertyCommunicationPanel
+                    client={selectedCustomer}
+                    propertyId={selectedProperty.id}
+                    contacts={references.contacts}
+                    assignments={references.contactAssignments}
+                    selections={recipientSelections}
+                    onSelectionsChange={(next) => { setRecipientSelections(next); resetValidation(); }}
+                    onRefresh={refreshReferences}
+                  /> : null}
                 </>
               ) : <div className={styles.emptyResult}>Select a customer to load their properties.</div>}
 
               {propertyEditorOpen ? (
                 <div className={styles.editorPanel}>
-                  <header><div><strong>Add property for {selectedCustomer ? customerLabel(selectedCustomer) : 'customer'}</strong><span>Use the Aruba directory to resolve the neighborhood and operational zone automatically.</span></div><button type="button" onClick={() => setPropertyEditorOpen(false)}>×</button></header>
+                  <header><div><strong>Add property for {selectedCustomer ? customerLabel(selectedCustomer) : 'customer'}</strong><span>Property identity stays separate from reusable customer contacts and communication rules.</span></div><button type="button" onClick={() => setPropertyEditorOpen(false)}>×</button></header>
                   <div className={styles.formGrid}>
                     <Field label="Property name *" value={propertyDraft.name} onChange={(value) => setPropertyDraft((current) => ({ ...current, name: value }))} />
                     <label><span>Property type</span><select value={propertyDraft.type} onChange={(event) => setPropertyDraft((current) => ({ ...current, type: event.target.value }))}><option>Casa</option><option>Apartamento</option><option>Oficina</option><option>Local comercial</option><option>Otro</option></select></label>
                     <PropertyAddressFields draft={propertyDraft} onChange={setPropertyDraft} />
                     <Field label="Notes" value={propertyDraft.notes ?? ''} onChange={(value) => setPropertyDraft((current) => ({ ...current, notes: value }))} wide />
+                    {selectedCustomer ? <PropertyContactDraftEditor clientId={selectedCustomer.id} contacts={references.contacts} links={propertyDraft.contactLinks ?? []} onChange={(contactLinks) => setPropertyDraft((current) => ({ ...current, contactLinks }))} /> : null}
                   </div>
                   <footer><button type="button" className={styles.secondaryButton} disabled={masterSaving} onClick={() => setPropertyEditorOpen(false)}>Cancel</button><button type="button" className={styles.primaryButton} disabled={masterSaving} onClick={() => void saveProperty()}>{masterSaving ? 'Saving…' : 'Add & select'}</button></footer>
                 </div>

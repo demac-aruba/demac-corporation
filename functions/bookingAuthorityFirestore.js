@@ -167,6 +167,10 @@ function validateWorkOrders(workOrders, appointmentId) {
   });
 }
 
+function notificationRecipientsFrom(value) {
+  return Array.isArray(value) ? value.filter((item) => item && typeof item === "object").map((item) => compactObject({ ...item })) : [];
+}
+
 function createBookingAuthority({
   db,
   availabilityProvider,
@@ -221,6 +225,7 @@ function createBookingAuthority({
     const ttl = Math.max(5, Math.min(180, Number(offerTtlMinutes) || 30));
     const expiresAt = new Date(now.getTime() + ttl * 60_000).toISOString();
     const actorInfo = actorFields(actor);
+    const notificationRecipients = notificationRecipientsFrom(context.notificationRecipients);
     const offer = compactObject({
       id: offerId,
       bookingAuthorityVersion: BOOKING_AUTHORITY_VERSION,
@@ -230,7 +235,10 @@ function createBookingAuthority({
       requestFingerprint: requestFingerprint(normalizedRequest),
       options,
       providerVersion: cleanText(result?.providerVersion, 120),
-      metadata: result?.metadata || {},
+      metadata: {
+        ...(result?.metadata || {}),
+        ...(notificationRecipients.length ? { notificationRecipients } : {}),
+      },
       createdAtIso: now.toISOString(),
       updatedAtIso: now.toISOString(),
       expiresAt,
@@ -454,6 +462,7 @@ function createBookingAuthority({
         now,
         optionOverride: refreshedOption,
       });
+      const notificationRecipients = notificationRecipientsFrom(currentOffer?.metadata?.notificationRecipients);
       let workOrders;
       try {
         const buildWorkOrders = requireProviderMethod(availabilityProvider, "buildWorkOrders");
@@ -464,7 +473,7 @@ function createBookingAuthority({
           customer,
           property,
           actor,
-          context,
+          context: { ...context, notificationRecipients },
           now,
         }), identity.appointmentId);
       } catch (error) {
@@ -474,6 +483,7 @@ function createBookingAuthority({
       const actorInfo = actorFields(actor);
       const appointmentRecord = compactObject({
         ...appointment,
+        notificationRecipients,
         workOrderIds,
         capacityLockIds: locks.map((lock) => lock.id),
         confirmedAtIso: now.toISOString(),
@@ -549,6 +559,7 @@ module.exports = {
   canonicalOfferIdentity,
   compactObject,
   createBookingAuthority,
+  notificationRecipientsFrom,
   requestFingerprint,
   validateCapacityLocks,
   validateWorkOrders,
