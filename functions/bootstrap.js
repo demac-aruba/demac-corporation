@@ -3,6 +3,7 @@ const wacliGateway = require("./whatsappWacliGateway");
 const wacliOutboundMediaUpload = require("./wacliOutboundMediaUpload");
 const customerAgentCommunication = require("./demacCustomerAgentAllowlistCommunication");
 const appointmentNotifications = require("./appointmentNotifications");
+const technicianDailySchedules = require("./technicianDailySchedules");
 const userManagement = require("./userManagement");
 const voiceTranscription = require("./voiceTranscription");
 const professionalReports = require("./professionalReportGeneration");
@@ -23,6 +24,7 @@ module.exports = {
   ...wacliOutboundMediaUpload,
   ...customerAgentCommunication,
   ...appointmentNotifications,
+  ...technicianDailySchedules,
   ...userManagement,
   ...voiceTranscription,
   ...professionalReports,
