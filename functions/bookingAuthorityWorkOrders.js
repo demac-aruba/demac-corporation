@@ -56,8 +56,20 @@ function workItemsForAssignment(option, assignment, request) {
   return [{ ...item, quantity: assignment.quantity, durationMinutes }];
 }
 
-function buildWorkOrders({ appointment, option, request, customer, property, now = new Date() }) {
-  const recipient = notificationRecipient(customer);
+function normalizedRecipientSnapshots(context, customer) {
+  const supplied = Array.isArray(context?.notificationRecipients)
+    ? context.notificationRecipients.filter((recipient) => recipient && typeof recipient === "object")
+    : [];
+  if (supplied.length) return supplied.map((recipient) => ({ ...recipient }));
+  const fallback = notificationRecipient(customer);
+  return fallback ? [fallback] : [];
+}
+
+function buildWorkOrders({ appointment, option, request, customer, property, context = {}, now = new Date() }) {
+  const notificationRecipients = normalizedRecipientSnapshots(context, customer);
+  const whatsappEnabled = notificationRecipients.some((recipient) =>
+    (recipient.sendConfirmation === true || recipient.sendReminder === true)
+    && cleanText(recipient.whatsapp || recipient.phone, 80));
   const supportCount = Math.max(0, option.assignments.length - 1);
 
   return option.assignments.map((assignment, index) => {
@@ -112,8 +124,8 @@ function buildWorkOrders({ appointment, option, request, customer, property, now
       schedulingMode: durationMode === "per_unit" ? "perUnit" : "fixed",
       airConditionerCount: assignment.quantity,
       scheduledSlots: assignment.slots,
-      whatsappNotificationsEnabled: isPrimary && Boolean(recipient),
-      notificationRecipients: isPrimary && recipient ? [recipient] : [],
+      whatsappNotificationsEnabled: isPrimary && whatsappEnabled,
+      notificationRecipients: isPrimary ? notificationRecipients : [],
       confirmedAt: now.toISOString(),
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
@@ -125,5 +137,6 @@ function buildWorkOrders({ appointment, option, request, customer, property, now
 module.exports = {
   buildWorkOrders,
   notificationRecipient,
+  normalizedRecipientSnapshots,
   workItemsForAssignment,
 };
