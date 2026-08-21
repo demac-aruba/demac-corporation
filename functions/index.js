@@ -333,3 +333,4 @@ exports.sendQueuedWhatsAppMessage = onDocumentCreated(
 );
 
 Object.assign(exports, require("./officeBookingAuthority"));
+Object.assign(exports, require("./inventoryAuthority"));
