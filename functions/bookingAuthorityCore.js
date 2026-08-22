@@ -205,6 +205,8 @@ function normalizeOfferOption(value = {}, index = 0) {
     quantity: positiveInteger(value.quantity) || assignments.reduce((sum, item) => sum + item.quantity, 0),
     workItems,
     assignments,
+    requestedDateMatch: value.requestedDateMatch === true,
+    requestedTimeMatch: value.requestedTimeMatch === true,
   };
 }
 
