@@ -41,9 +41,32 @@ jobs:
         env:
           GCLOUD_PROJECT: demac-corporation
           GOOGLE_CLOUD_PROJECT: demac-corporation
-        run: node functions/diagnostics/readVanSchedulePolicy.js
-      - name: Mark diagnostic success
+        run: node functions/diagnostics/readVanSchedulePolicy.js | tee /tmp/van-policy.json
+      - name: Publish diagnostic summary statuses
         if: success()
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api repos/${{ github.repository }}/statuses/${{ github.sha }} -f state=success -f context='DEMAC / Van Schedule Diagnostic' -f description='Production van schedule policy read successfully'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for van in VAN-1 VAN-2 VAN-3 VAN-4; do
+            description="$(node - "$van" /tmp/van-policy.json <<'NODE'
+          const fs = require('node:fs');
+          const vanId = process.argv[2];
+          const path = process.argv[3];
+          const payload = JSON.parse(fs.readFileSync(path, 'utf8'));
+          const van = payload.vans.find((item) => item.vanId === vanId);
+          const rules = van?.rules || [];
+          const summary = rules.length ? rules.map((r) => `weekday=${r.weekday} ${r.workdayStart || '08:00'}-${r.workdayEnd || '13:00'}`).join('; ') : 'NO ACTIVE HALF-DAY RULE';
+          process.stdout.write(summary.slice(0, 140));
+          NODE
+            )"
+            gh api repos/${{ github.repository }}/statuses/${{ github.sha }} -f state=success -f context="DEMAC / ${van} Schedule" -f description="$description"
+          done
+          totals="$(node - /tmp/van-policy.json <<'NODE'
+          const fs = require('node:fs');
+          const p = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          process.stdout.write(`halfDays=${p.activeHalfDayCount}; deprecatedEmployeeDays=${p.deprecatedEmployeeDayOffs.length}`);
+          NODE
+          )"
+          gh api repos/${{ github.repository }}/statuses/${{ github.sha }} -f state=success -f context='DEMAC / Van Schedule Diagnostic' -f description="$totals"
