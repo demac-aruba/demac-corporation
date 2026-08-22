@@ -20,7 +20,9 @@ export function isTechnicalEmployee(profile: CanonicalStaffProfile) {
 }
 
 export function employeeVan(profile: CanonicalStaffProfile, vans: CanonicalVan[]) {
-  return vans.find((van) => van.responsibleStaffId === profile.id || van.regularHelperId === profile.id) ?? null;
+  return vans.find((van) => van.responsibleStaffId === profile.id
+    || van.regularHelperId === profile.id
+    || van.technicianIds?.includes(profile.id)) ?? null;
 }
 
 export function resolveEmployeeSchedule(input: {
