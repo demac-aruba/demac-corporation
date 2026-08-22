@@ -16,7 +16,7 @@ import {
   absenceForDate,
   dateKey,
   loadEmployeeAttendanceState,
-  payrollSettingsForStaff,
+  payrollSettingsForEmployee,
   saveAttendanceDay,
   statusFromRecords,
   timesheetForDate,
@@ -139,7 +139,7 @@ export function EmployeeAttendanceWorkspace() {
     return resolveEmployeeSchedule({
       profile,
       date,
-      payrollSettings: payrollSettingsForStaff(attendance.payrollSettings, profile.id),
+      payrollSettings: payrollSettingsForEmployee(attendance.payrollSettings, profile),
       vans: operations.vans,
       halfDaySchedules: operations.vanHalfDaySchedules,
     });
