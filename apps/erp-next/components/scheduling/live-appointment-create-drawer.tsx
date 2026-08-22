@@ -124,6 +124,40 @@ function customerLabel(customer: BookingCustomer) {
   return text(customer.company) || text(customer.name) || customer.id;
 }
 
+function normalizeSearch(value: unknown) {
+  return text(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function searchFieldScore(value: unknown, needle: string, priority: number) {
+  const candidate = normalizeSearch(value);
+  if (!candidate || !needle) return 0;
+  if (candidate === needle) return 100 + priority;
+  if (candidate.startsWith(needle)) return 85 + priority;
+  if (candidate.split(' ').some((part) => part.startsWith(needle))) return 72 + priority;
+  if (candidate.includes(needle)) return 55 + priority;
+  return 0;
+}
+
+function customerSearchScore(customer: BookingCustomer, needle: string, propertySearchValues: string[]) {
+  const directScores = [
+    searchFieldScore(customer.name, needle, 30),
+    searchFieldScore(customer.company, needle, 28),
+    searchFieldScore(customer.phone, needle, 25),
+    searchFieldScore(customer.whatsapp, needle, 25),
+    searchFieldScore(customer.email, needle, 20),
+    searchFieldScore(customer.address, needle, 10),
+    searchFieldScore(customer.zone, needle, 8),
+  ];
+  const propertyScore = propertySearchValues.reduce((best, value) => Math.max(best, searchFieldScore(value, needle, 5)), 0);
+  return Math.max(propertyScore, ...directScores);
+}
+
 function propertyLabel(property: BookingProperty) {
   return text(property.name) || text(property.address) || property.id;
 }
@@ -260,7 +294,9 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
   }, [autoDescription]);
 
   const filteredCustomers = useMemo(() => {
-    const needle = customerQuery.trim().toLowerCase();
+    const needle = normalizeSearch(customerQuery);
+    if (!needle) return [];
+
     const propertiesByCustomer = new Map<string, string[]>();
     for (const property of references.properties) {
       const id = text(property.clientId);
@@ -269,25 +305,18 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
       current.push(`${text(property.name)} ${text(property.address)} ${text(property.zone)} ${text(property.neighborhood)}`);
       propertiesByCustomer.set(id, current);
     }
-    const matches = references.clients.filter((customer) => {
-      if (customer.active === false) return false;
-      if (!needle) return true;
-      const haystack = [
-        customer.name,
-        customer.company,
-        customer.phone,
-        customer.whatsapp,
-        customer.email,
-        customer.address,
-        customer.zone,
-        ...(propertiesByCustomer.get(customer.id) ?? []),
-      ].map((item) => text(item)).join(' ').toLowerCase();
-      return haystack.includes(needle);
-    });
-    if (needle) return matches.slice(0, 10);
-    if (selectedCustomer) return [selectedCustomer, ...matches.filter((item) => item.id !== selectedCustomer.id).slice(0, 5)];
-    return matches.slice(0, 6);
-  }, [customerQuery, references.clients, references.properties, selectedCustomer]);
+
+    return references.clients
+      .filter((customer) => customer.active !== false)
+      .map((customer) => ({
+        customer,
+        score: customerSearchScore(customer, needle, propertiesByCustomer.get(customer.id) ?? []),
+      }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score || customerLabel(a.customer).localeCompare(customerLabel(b.customer)))
+      .slice(0, 10)
+      .map((item) => item.customer);
+  }, [customerQuery, references.clients, references.properties]);
 
   const estimatedMinutes = workLines.reduce((sum, line) => {
     const preset = presetById.get(line.presetId);
@@ -529,16 +558,18 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
                 <span>Search customer</span>
                 <input autoFocus={!loading} value={customerQuery} onChange={(event) => setCustomerQuery(event.target.value)} placeholder="Name, company, phone, WhatsApp, address or area…" />
               </label>
-              <div className={styles.searchResults}>
-                {filteredCustomers.map((customer) => (
-                  <button type="button" key={customer.id} className={`${styles.searchResult} ${customer.id === customerId ? styles.selectedResult : ''}`} onClick={() => selectCustomer(customer)}>
-                    <div><strong>{customerLabel(customer)}</strong><span>{text(customer.name) && text(customer.company) ? `${customer.name} · ` : ''}{text(customer.phone) || text(customer.whatsapp) || 'No phone'}</span></div>
-                    <small>{text(customer.zone) || 'Area not specified'}</small>
-                    <b>{customer.id === customerId ? 'SELECTED' : 'SELECT'}</b>
-                  </button>
-                ))}
-                {customerQuery.trim() && !filteredCustomers.length ? <div className={styles.emptyResult}>No existing customer matches this search.</div> : null}
-              </div>
+              {customerQuery.trim() ? (
+                <div className={styles.searchResults}>
+                  {filteredCustomers.map((customer) => (
+                    <button type="button" key={customer.id} className={`${styles.searchResult} ${customer.id === customerId ? styles.selectedResult : ''}`} onClick={() => selectCustomer(customer)}>
+                      <div><strong>{customerLabel(customer)}</strong><span>{text(customer.name) && text(customer.company) ? `${customer.name} · ` : ''}{text(customer.phone) || text(customer.whatsapp) || 'No phone'}</span></div>
+                      <small>{text(customer.zone) || 'Area not specified'}</small>
+                      <b>{customer.id === customerId ? 'SELECTED' : 'SELECT'}</b>
+                    </button>
+                  ))}
+                  {!filteredCustomers.length ? <div className={styles.emptyResult}>No existing customer matches this search.</div> : null}
+                </div>
+              ) : null}
               <button type="button" className={styles.inlineAction} onClick={openCustomerEditor}>＋ Create customer</button>
 
               {customerEditorOpen ? (
@@ -711,9 +742,14 @@ function PropertyAddressFields({ draft, onChange }: {
   draft: PropertyDraft;
   onChange: React.Dispatch<React.SetStateAction<PropertyDraft>>;
 }) {
-  const suggestions = useMemo(() => suggestArubaAddresses(draft.address, 6), [draft.address]);
+  const [selectedAddress, setSelectedAddress] = useState('');
+  const suggestions = useMemo(
+    () => selectedAddress === draft.address.trim() ? [] : suggestArubaAddresses(draft.address, 6),
+    [draft.address, selectedAddress],
+  );
 
   const selectSuggestion = (suggestion: ArubaAddressEntry) => {
+    setSelectedAddress(suggestion.canonical);
     onChange((current) => ({
       ...current,
       address: suggestion.canonical,
@@ -728,11 +764,14 @@ function PropertyAddressFields({ draft, onChange }: {
         <span>Street / area *</span>
         <input
           value={draft.address}
-          onChange={(event) => onChange((current) => ({
-            ...current,
-            address: event.target.value,
-            ...(event.target.value.trim() ? {} : { zone: '', neighborhood: '' }),
-          }))}
+          onChange={(event) => {
+            setSelectedAddress('');
+            onChange((current) => ({
+              ...current,
+              address: event.target.value,
+              ...(event.target.value.trim() ? {} : { zone: '', neighborhood: '' }),
+            }));
+          }}
           placeholder="Start typing: Santa Cruz, Savaneta, Pampunastraat…"
           autoComplete="off"
         />
