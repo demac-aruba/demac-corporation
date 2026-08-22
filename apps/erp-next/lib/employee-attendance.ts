@@ -1,9 +1,10 @@
-import { listFirestoreCollection, saveFirestoreDocument } from './firebase/firestore-rest';
+import { listFirestoreCollection, saveFirestoreDocument, updateFirestoreDocument } from './firebase/firestore-rest';
 import type { CanonicalStaffAbsence, CanonicalStaffProfile } from './canonical-operations';
 import { saveCanonicalStaffAbsence } from './canonical-operations-mutations';
 
 export type AttendanceStatus = 'Present' | 'Late' | 'Sick' | 'Vacation' | 'Day Off' | 'Absent';
 export type SalaryAdvanceMethod = 'Cash' | 'Bank Transfer';
+export type HalfDayOffPeriod = 'morning' | 'afternoon';
 
 export type EmployeePayrollSettings = {
   id: string;
@@ -14,10 +15,11 @@ export type EmployeePayrollSettings = {
   active?: boolean;
   weekdayHours?: number;
   saturdayHours?: number;
-  weeklyHalfDayWeekday?: number;
-  halfDayEffectiveFrom?: string;
+  weeklyHalfDayWeekday?: number | null;
+  halfDayEffectiveFrom?: string | null;
   halfDayWorkedHours?: number;
   halfDayPaidFreeHours?: number;
+  halfDayOffPeriod?: HalfDayOffPeriod;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -118,6 +120,10 @@ function isSalaryAdvance(record: EmployeePayrollSettings | EmployeeSalaryAdvance
   return 'recordType' in record && record.recordType === 'salaryAdvance';
 }
 
+function normalizedEmployeeName(value: unknown) {
+  return String(value ?? '').trim().toLocaleLowerCase('es').replace(/\s+/g, ' ');
+}
+
 export function dateKey(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -166,33 +172,44 @@ export function overtimeMinutesAfterFive(clockOutTime: string) {
 export function defaultAttendanceSchedule(date: string): AttendanceSchedule {
   const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
   if (weekday === 0) return { startTime: '', endTime: '', scheduledMinutes: 0, paidFreeMinutes: 0, label: 'Company closed' };
-  if (weekday === 6) return { startTime: '09:00', endTime: '13:00', scheduledMinutes: 240, paidFreeMinutes: 0, label: 'Saturday · 09:00–13:00' };
-  return { startTime: '08:00', endTime: '17:00', scheduledMinutes: 480, paidFreeMinutes: 0, label: 'Weekday · 08:00–17:00 · lunch 12:00–13:00' };
+  return {
+    startTime: '08:00',
+    endTime: '17:00',
+    scheduledMinutes: 480,
+    paidFreeMinutes: 0,
+    label: `${weekday === 6 ? 'Saturday' : 'Weekday'} · 08:00–17:00 · lunch 12:00–13:00`,
+  };
 }
 
 export function applyHalfDaySchedule(
   schedule: AttendanceSchedule,
   date: string,
-  weekday: number | undefined,
+  weekday: number | null | undefined,
   workedHours: number | undefined,
   paidFreeHours: number | undefined,
-  effectiveFrom?: string,
+  effectiveFrom?: string | null,
+  offPeriod: HalfDayOffPeriod = 'afternoon',
 ) {
   const dateWeekday = new Date(`${date}T12:00:00Z`).getUTCDay();
-  if (weekday === undefined || weekday !== dateWeekday || (effectiveFrom && date < effectiveFrom)) return schedule;
+  if (weekday == null || weekday !== dateWeekday || (effectiveFrom && date < effectiveFrom)) return schedule;
   const workedMinutesValue = Math.max(0, Math.round(Number(workedHours ?? 0) * 60));
   const paidFreeMinutesValue = Math.max(0, Math.round(Number(paidFreeHours ?? 0) * 60));
   if (!workedMinutesValue) return schedule;
-  const startMinutes = schedule.startTime ? Number(schedule.startTime.slice(0, 2)) * 60 + Number(schedule.startTime.slice(3, 5)) : 8 * 60;
-  const endMinutes = startMinutes + workedMinutesValue;
-  const endHour = String(Math.floor(endMinutes / 60)).padStart(2, '0');
-  const endMinute = String(endMinutes % 60).padStart(2, '0');
+
+  const normalStart = schedule.startTime ? Number(schedule.startTime.slice(0, 2)) * 60 + Number(schedule.startTime.slice(3, 5)) : 8 * 60;
+  const normalEnd = schedule.endTime ? Number(schedule.endTime.slice(0, 2)) * 60 + Number(schedule.endTime.slice(3, 5)) : 17 * 60;
+  const workStart = offPeriod === 'morning' ? Math.max(normalStart, normalEnd - workedMinutesValue) : normalStart;
+  const workEnd = offPeriod === 'morning' ? normalEnd : Math.min(normalEnd, normalStart + workedMinutesValue);
+  const time = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+  const offLabel = offPeriod === 'morning' ? 'morning off' : 'afternoon off';
+
   return {
     ...schedule,
-    endTime: `${endHour}:${endMinute}`,
+    startTime: time(workStart),
+    endTime: time(workEnd),
     scheduledMinutes: workedMinutesValue,
     paidFreeMinutes: paidFreeMinutesValue,
-    label: `Weekly half-day · ${roundHours(workedMinutesValue)} worked + ${roundHours(paidFreeMinutesValue)} paid free`,
+    label: `Weekly half-day · ${offLabel} · ${time(workStart)}–${time(workEnd)} · ${roundHours(workedMinutesValue)} worked + ${roundHours(paidFreeMinutesValue)} paid free`,
   };
 }
 
@@ -236,6 +253,11 @@ function legacyPayrollStatus(status: AttendanceStatus, scheduledHours: number, e
   return 'Regular';
 }
 
+export async function loadEmployeePayrollSettings(): Promise<EmployeePayrollSettings[]> {
+  const records = await listFirestoreCollection<EmployeePayrollSettings | EmployeeSalaryAdvance>('employeePayrollSettings');
+  return records.filter((record): record is EmployeePayrollSettings => !isSalaryAdvance(record));
+}
+
 export async function loadEmployeeAttendanceState(): Promise<EmployeeAttendanceState> {
   const [payrollRecords, timesheets] = await Promise.all([
     listFirestoreCollection<EmployeePayrollSettings | EmployeeSalaryAdvance>('employeePayrollSettings'),
@@ -248,6 +270,47 @@ export async function loadEmployeeAttendanceState(): Promise<EmployeeAttendanceS
 
 export function payrollSettingsForStaff(settings: EmployeePayrollSettings[], staffId: string) {
   return settings.find((entry) => (entry.sourceStaffId ?? entry.id) === staffId);
+}
+
+export function payrollSettingsForEmployee(settings: EmployeePayrollSettings[], employee: CanonicalStaffProfile) {
+  const exact = payrollSettingsForStaff(settings, employee.id);
+  if (exact) return exact;
+  const name = normalizedEmployeeName(employee.name);
+  if (!name) return undefined;
+  const matches = settings.filter((entry) => normalizedEmployeeName(entry.name) === name);
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+export async function saveEmployeeHalfDaySettings(input: {
+  employee: CanonicalStaffProfile;
+  existing?: EmployeePayrollSettings;
+  weekday: number;
+  offPeriod: HalfDayOffPeriod;
+  effectiveFrom: string;
+}) {
+  const weekday = Math.round(Number(input.weekday));
+  if (weekday < 1 || weekday > 6) throw new Error('Choose a weekday from Monday through Saturday.');
+  if (!input.effectiveFrom) throw new Error('Choose when the recurring half-day becomes effective.');
+  const now = new Date().toISOString();
+  const id = input.existing?.id ?? input.employee.id;
+  const changes: Omit<EmployeePayrollSettings, 'id'> = {
+    sourceStaffId: input.employee.id,
+    name: input.employee.name,
+    role: input.employee.role,
+    employeeType: input.employee.employeeType,
+    active: input.employee.active !== false,
+    weekdayHours: input.existing?.weekdayHours ?? 8,
+    saturdayHours: input.existing?.saturdayHours ?? 8,
+    weeklyHalfDayWeekday: weekday,
+    halfDayEffectiveFrom: input.effectiveFrom,
+    halfDayWorkedHours: 4,
+    halfDayPaidFreeHours: 4,
+    halfDayOffPeriod: input.offPeriod,
+    createdAt: input.existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+  if (input.existing) return updateFirestoreDocument<EmployeePayrollSettings>('employeePayrollSettings', id, changes as Record<string, unknown>);
+  return saveFirestoreDocument<EmployeePayrollSettings>('employeePayrollSettings', { id, ...changes });
 }
 
 export async function saveSalaryAdvance(input: {

@@ -1,7 +1,7 @@
 import type { CanonicalOperationsState, CanonicalStaffAbsence, CanonicalStaffProfile } from './canonical-operations';
 import {
   absenceForDate,
-  payrollSettingsForStaff,
+  payrollSettingsForEmployee,
   timesheetForDate,
   type EmployeeAttendanceState,
   type EmployeeTimesheetEntry,
@@ -130,7 +130,7 @@ export function calculatePayrollDay(input: {
   const schedule = resolveEmployeeSchedule({
     profile: employee,
     date,
-    payrollSettings: payrollSettingsForStaff(attendance.payrollSettings, employee.id),
+    payrollSettings: payrollSettingsForEmployee(attendance.payrollSettings, employee),
     vans: operations.vans,
     halfDaySchedules: operations.vanHalfDaySchedules,
   });
@@ -202,7 +202,7 @@ export function weeklyPaidBaseHours(input: {
     const schedule = resolveEmployeeSchedule({
       profile: employee,
       date,
-      payrollSettings: payrollSettingsForStaff(attendance.payrollSettings, employee.id),
+      payrollSettings: payrollSettingsForEmployee(attendance.payrollSettings, employee),
       vans: operations.vans,
       halfDaySchedules: operations.vanHalfDaySchedules,
     });

@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { workOrderBlocksOperationalMoveCapacity } = require("./bookingCapacityAvailability");
-const { resolveAssignment } = require("./bookingSchedulingPrimitives");
+const { isHalfDay, occupiedSlots, resolveAssignment } = require("./bookingSchedulingPrimitives");
 
 test("operational capacity matches LIVE cancelled/rescheduled status semantics", () => {
   assert.equal(workOrderBlocksOperationalMoveCapacity({ appointmentId: "APT-1", status: "Confirmada" }), true);
@@ -14,7 +14,7 @@ test("operational capacity matches LIVE cancelled/rescheduled status semantics",
   assert.equal(workOrderBlocksOperationalMoveCapacity({ status: "Confirmada" }), false);
 });
 
-test("canonical crew availability respects an employee weekly day off without changing the van", () => {
+test("employee-level full-day fields never remove a technician from canonical Van availability", () => {
   const van = {
     id: "VAN-1",
     active: true,
@@ -27,6 +27,7 @@ test("canonical crew availability respects an employee weekly day off without ch
       active: true,
       availability: "Disponible",
       canDriveVan: true,
+      // Deprecated PR #413 fields may still exist in Firestore temporarily. Runtime must ignore them.
       weeklyDayOffWeekday: 3,
       weeklyDayOffEffectiveFrom: "2026-08-01",
     },
@@ -38,15 +39,25 @@ test("canonical crew availability respects an employee weekly day off without ch
   ];
 
   const wednesday = resolveAssignment(van, "2026-08-26", profiles, [], []);
-  assert.equal(wednesday.driverStaffId, undefined);
+  assert.equal(wednesday.driverStaffId, "staff-driver");
   assert.equal(wednesday.helperStaffId, "staff-helper");
-  assert.equal(wednesday.status, "Sin personal");
+  assert.equal(wednesday.status, "Disponible");
+});
 
-  const thursday = resolveAssignment(van, "2026-08-27", profiles, [], []);
-  assert.equal(thursday.driverStaffId, "staff-driver");
-  assert.equal(thursday.helperStaffId, "staff-helper");
-  assert.equal(thursday.status, "Disponible");
+test("Van half-day closes afternoon capacity without marking the crew unavailable all day", () => {
+  const schedules = [{ id: "half-day-VAN-1", vanId: "VAN-1", weekday: 3, active: true }];
+  assert.equal(isHalfDay("VAN-1", "2026-08-26", schedules), true);
+  assert.deepEqual(occupiedSlots("08:30", 1, true), ["08:30"]);
+  assert.deepEqual(occupiedSlots("11:30", 1, true), ["11:30"]);
+  assert.deepEqual(occupiedSlots("13:30", 1, true), []);
 
-  const beforeEffectiveDate = resolveAssignment(van, "2026-07-29", profiles, [], []);
-  assert.equal(beforeEffectiveDate.driverStaffId, "staff-driver");
+  const van = { id: "VAN-1", active: true, responsibleStaffId: "staff-driver", regularHelperId: "staff-helper" };
+  const profiles = [
+    { id: "staff-driver", active: true, availability: "Disponible", canDriveVan: true },
+    { id: "staff-helper", active: true, availability: "Disponible" },
+  ];
+  const assignment = resolveAssignment(van, "2026-08-26", profiles, [], []);
+  assert.equal(assignment.driverStaffId, "staff-driver");
+  assert.equal(assignment.helperStaffId, "staff-helper");
+  assert.equal(assignment.status, "Disponible");
 });

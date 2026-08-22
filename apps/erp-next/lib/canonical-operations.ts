@@ -17,8 +17,6 @@ export type CanonicalStaffProfile = {
   availability?: CanonicalStaffAvailability;
   unavailableFrom?: string;
   unavailableUntil?: string;
-  weeklyDayOffWeekday?: number | null;
-  weeklyDayOffEffectiveFrom?: string | null;
   active?: boolean;
   notes?: string;
   updatedAt?: string;
@@ -142,23 +140,13 @@ export function activeStaffAbsence(profileId: string, dateKey: string, absences:
     && dateKey <= String(absence.toDate));
 }
 
-export function isWeeklyDayOff(profile: CanonicalStaffProfile | undefined, dateKey: string) {
-  if (!profile) return false;
-  const day = Number(profile.weeklyDayOffWeekday);
-  if (!Number.isInteger(day) || day < 1 || day > 6) return false;
-  if (profile.weeklyDayOffEffectiveFrom && dateKey < profile.weeklyDayOffEffectiveFrom) return false;
-  return new Date(`${dateKey}T12:00:00Z`).getUTCDay() === day;
-}
-
 function profileUnavailable(profile: CanonicalStaffProfile | undefined, dateKey: string, state: CanonicalOperationsState) {
   if (!profile || profile.active === false || profile.availability === 'Inactivo') return true;
   const availability = text(profile.availability);
   const generallyUnavailable = Boolean(availability && availability !== 'Disponible')
     && (!profile.unavailableFrom || dateKey >= profile.unavailableFrom)
     && (!profile.unavailableUntil || dateKey <= profile.unavailableUntil);
-  return isWeeklyDayOff(profile, dateKey)
-    || generallyUnavailable
-    || Boolean(activeStaffAbsence(profile.id, dateKey, state.staffAbsences));
+  return generallyUnavailable || Boolean(activeStaffAbsence(profile.id, dateKey, state.staffAbsences));
 }
 
 export function resolveCanonicalCrew(van: CanonicalVan, dateKey: string, state: CanonicalOperationsState) {
