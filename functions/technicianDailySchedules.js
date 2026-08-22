@@ -11,11 +11,18 @@ const scheduleService = createTechnicianDailyScheduleService({ db });
 
 exports.sendDailyTechnicianSchedules = onSchedule(
   {
-    schedule: "0 8 * * *",
+    // 8:00 AM is the canonical delivery. 8:05 and 8:10 are idempotent recovery
+    // windows only; a completed batch exits immediately and deterministic queue
+    // ids prevent duplicate Work Order messages if an earlier attempt partially ran.
+    schedule: "0,5,10 8 * * *",
     timeZone: TIME_ZONE,
     region: REGION,
     memory: "256MiB",
     timeoutSeconds: 300,
+    retryCount: 3,
+    minBackoffSeconds: 60,
+    maxBackoffSeconds: 300,
+    maxRetrySeconds: 900,
   },
   async () => {
     const runDate = dateKeyInTimeZone();
@@ -39,6 +46,8 @@ exports.sendDailyTechnicianSchedules = onSchedule(
       deliveryModel: "van-group-work-order-v1",
       status: "processing",
       startedAt: existingBatch.data()?.startedAt || FieldValue.serverTimestamp(),
+      lastAttemptAt: FieldValue.serverTimestamp(),
+      attemptCount: FieldValue.increment(1),
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
 
