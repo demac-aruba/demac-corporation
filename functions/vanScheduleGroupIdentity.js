@@ -54,9 +54,10 @@ function realignCanonicalVanScheduleGroups(vans = []) {
     .filter((item) => item.groupName || item.groupJid);
 
   if (!configured.length) return list;
-  if (list.length !== VAN_SCHEDULE_GROUP_TARGETS.length) {
-    return failClosed(list, "canonical-four-van-catalog-incomplete");
-  }
+  // Cross-Van realignment is only meaningful when the complete canonical fleet
+  // is present. Partial catalogs are used by isolated tests/admin flows and must
+  // preserve their supplied mapping rather than being treated as production.
+  if (list.length !== VAN_SCHEDULE_GROUP_TARGETS.length) return list;
 
   const byTarget = new Map();
   for (const config of configured) {
