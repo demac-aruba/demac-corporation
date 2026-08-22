@@ -8,6 +8,8 @@ on:
       - 'functions/whatsappTransactionalGroupRecipient.test.js'
       - 'functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.js'
       - 'functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.test.js'
+      - 'functions/migrations/realignVanScheduleGroups.js'
+      - 'functions/migrations/realignVanScheduleGroups.test.js'
       - 'functions/whatsappWacliGateway.js'
       - 'functions/operatingCalendarService.js'
       - 'functions/operatingCalendarService.test.js'
@@ -38,6 +40,8 @@ on:
       - 'functions/whatsappTransactionalGroupRecipient.test.js'
       - 'functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.js'
       - 'functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.test.js'
+      - 'functions/migrations/realignVanScheduleGroups.js'
+      - 'functions/migrations/realignVanScheduleGroups.test.js'
       - 'functions/whatsappWacliGateway.js'
       - 'functions/operatingCalendarService.js'
       - 'functions/operatingCalendarService.test.js'
@@ -91,6 +95,7 @@ jobs:
           node --check functions/bootstrap.js
           node --check functions/whatsappTransactionalService.js
           node --check functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.js
+          node --check functions/migrations/realignVanScheduleGroups.js
           node --check functions/whatsappWacliGateway.js
           node --check functions/operatingCalendarService.js
           node --check functions/appointmentCommunicationRenderer.js
@@ -168,7 +173,16 @@ jobs:
           console.log(`Legacy queue migration: scanned=${payload.scanned}, migrated=${payload.migrated}, skipped=${payload.skipped}`);
           NODE
 
-      - name: Verify deployed notification producers
+      - name: Realign canonical Van WhatsApp group mappings
+        shell: bash
+        env:
+          GCLOUD_PROJECT: demac-corporation
+          GOOGLE_CLOUD_PROJECT: demac-corporation
+        run: |
+          set -euo pipefail
+          node functions/migrations/realignVanScheduleGroups.js
+
+      - name: Verify deployed notification producers and 8 AM scheduler
         shell: bash
         run: |
           set -euo pipefail
@@ -194,6 +208,42 @@ jobs:
             fi
           }
 
+          verify_scheduler() {
+            local function_name="$1" expected_schedule="$2" expected_timezone="$3"
+            local job state schedule timezone
+            job="$(gcloud scheduler jobs list \
+              --project=demac-corporation \
+              --location=us-central1 \
+              --filter="name:${function_name}" \
+              --format='value(name)' | head -n 1)"
+            if [ -z "$job" ]; then
+              echo "::error::No Cloud Scheduler job found for ${function_name}."
+              exit 1
+            fi
+            state="$(gcloud scheduler jobs describe "$job" --project=demac-corporation --location=us-central1 --format='value(state)')"
+            if [ "$state" = 'PAUSED' ]; then
+              echo "${job}: PAUSED -> resuming"
+              gcloud scheduler jobs resume "$job" --project=demac-corporation --location=us-central1 --quiet
+              state="$(gcloud scheduler jobs describe "$job" --project=demac-corporation --location=us-central1 --format='value(state)')"
+            fi
+            schedule="$(gcloud scheduler jobs describe "$job" --project=demac-corporation --location=us-central1 --format='value(schedule)')"
+            timezone="$(gcloud scheduler jobs describe "$job" --project=demac-corporation --location=us-central1 --format='value(timeZone)')"
+            if [ "$state" != 'ENABLED' ]; then
+              echo "::error::${job} state is ${state:-unknown}; expected ENABLED."
+              exit 1
+            fi
+            if [ "$schedule" != "$expected_schedule" ]; then
+              echo "::error::${job} schedule is ${schedule:-missing}; expected ${expected_schedule}."
+              exit 1
+            fi
+            if [ "$timezone" != "$expected_timezone" ]; then
+              echo "::error::${job} timezone is ${timezone:-missing}; expected ${expected_timezone}."
+              exit 1
+            fi
+            echo "${job}: ENABLED · ${schedule} · ${timezone}"
+          }
+
           verify_event queueAppointmentConfirmation google.cloud.firestore.document.v1.written
           verify_active sendDailyAppointmentReminders
           verify_active sendDailyTechnicianSchedules
+          verify_scheduler sendDailyTechnicianSchedules '0,5,10 8 * * *' 'America/Aruba'
