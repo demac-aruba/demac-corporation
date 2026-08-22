@@ -19,6 +19,11 @@ const OPERATIONAL_NON_BLOCKING_STATUSES = new Set([
   "rescheduled",
 ]);
 
+const ROUTE_POLICIES = Object.freeze({
+  ENFORCED: "enforced",
+  ADVISORY: "advisory",
+});
+
 function normalizeOrderTime(value) {
   const time = normalizeTime(value);
   if (!time) return "08:30";
@@ -43,6 +48,12 @@ function workOrderBlocksOperationalMoveCapacity(order) {
   const status = String(order?.status ?? "").trim().toLowerCase();
   if (OPERATIONAL_NON_BLOCKING_STATUSES.has(status)) return false;
   return orderBlocksCapacity(order);
+}
+
+function routePolicy(routeConfig) {
+  return routeConfig?.routePolicy === ROUTE_POLICIES.ADVISORY
+    ? ROUTE_POLICIES.ADVISORY
+    : ROUTE_POLICIES.ENFORCED;
 }
 
 function candidateAvailability({ date, time, allocation, van, assignment, data, routeConfig, candidateZone, manualOperationalMove = false }) {
@@ -78,8 +89,8 @@ function candidateAvailability({ date, time, allocation, van, assignment, data, 
   if (sameVanOrders.some((order) => order.occupied.some((slot) => slots.includes(slot)))) return null;
 
   let routeScore = 0;
-  let routeReason = "manual-operational-move";
-  if (!manualOperationalMove) {
+  let routeReason = manualOperationalMove ? "manual-operational-move" : "explicit-office-target";
+  if (!manualOperationalMove && routePolicy(routeConfig) === ROUTE_POLICIES.ENFORCED) {
     const office = routeConfig.zones.find((zone) => zone.id === routeConfig.officeZoneId);
     const compatibility = routeCompatibility({
       candidateZone,
@@ -109,8 +120,10 @@ function candidateAvailability({ date, time, allocation, van, assignment, data, 
 }
 
 module.exports = {
+  ROUTE_POLICIES,
   candidateAvailability,
   normalizeOrderTime,
+  routePolicy,
   vanCanReceiveOperationalMove,
   workOrderBlocksOperationalMoveCapacity,
 };
