@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   candidateAvailability,
+  endTimeFromOccupiedSlots,
   workOrderBlocksOperationalMoveCapacity,
 } = require("./bookingCapacityAvailability");
 const { isHalfDay, occupiedSlots, resolveAssignment } = require("./bookingSchedulingPrimitives");
@@ -65,6 +66,35 @@ test("Van half-day closes afternoon capacity without marking the crew unavailabl
   assert.equal(assignment.status, "Disponible");
 });
 
+test("three reserved half-day spots end at 12:30 instead of leaking across lunch into PM capacity", () => {
+  const data = {
+    workOrders: [],
+    services: [],
+    properties: [],
+    vanHalfDaySchedules: [{ id: "half-day-VAN-1", vanId: "VAN-1", weekday: 1, active: true }],
+  };
+  const result = candidateAvailability({
+    date: "2026-08-24",
+    time: "09:30",
+    allocation: { quantity: 1, durationMinutes: 180, slots: 3, fullDay: false },
+    van: { id: "VAN-1", name: "Van 1", active: true },
+    assignment: {
+      driverStaffId: "miguel",
+      helperStaffId: "alan",
+      technicianIds: ["miguel", "alan"],
+      status: "Disponible",
+    },
+    data,
+    routeConfig: { routePolicy: "advisory", zones: [] },
+    candidateZone: null,
+  });
+  assert.ok(result);
+  assert.equal(result.slots, 3);
+  assert.equal(result.durationMinutes, 180);
+  assert.equal(result.endTime, "12:30");
+  assert.equal(endTimeFromOccupiedSlots(["09:30", "10:30", "11:30"]), "12:30");
+});
+
 function explicitTargetFixture(existingOrderTime = "08:30") {
   const routeConfig = {
     officeZoneId: "office",
@@ -119,6 +149,7 @@ test("explicit office target treats route heuristics as advisory while preservin
   assert.equal(result.vanId, "VAN-2");
   assert.equal(result.slots, 4);
   assert.equal(result.durationMinutes, 240);
+  assert.equal(result.endTime, "15:30");
   assert.equal(result.routeReason, "explicit-office-target");
 });
 
