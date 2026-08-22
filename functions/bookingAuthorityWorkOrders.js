@@ -72,6 +72,13 @@ function requestCustomerFacingDescription(request) {
   return cleanText(descriptions.join("; "), 1500);
 }
 
+function requestTechnicianInstructions(request) {
+  const instructions = [...new Set((Array.isArray(request?.workLines) ? request.workLines : [])
+    .map((line) => cleanText(line?.technicianInstructions, 1500))
+    .filter(Boolean))];
+  return cleanText(instructions.join("; "), 1500);
+}
+
 function automaticCustomerFacingDescription(option, request) {
   const optionItems = Array.isArray(option?.workItems) ? option.workItems.filter(Boolean) : [];
   const entries = optionItems.length
@@ -103,6 +110,7 @@ function buildWorkOrders({ appointment, option, request, customer, property, con
     (recipient.sendConfirmation === true || recipient.sendReminder === true)
     && cleanText(recipient.whatsapp || recipient.phone, 80));
   const supportCount = Math.max(0, option.assignments.length - 1);
+  const technicianInstructions = requestTechnicianInstructions(request);
 
   return option.assignments.map((assignment, index) => {
     const id = `WO-${appointment.appointmentId}-${index + 1}`;
@@ -142,6 +150,7 @@ function buildWorkOrders({ appointment, option, request, customer, property, con
       problem: isPrimary ? `${problem}.` : `Apoyo a la cita principal: ${problem}.`,
       customerFacingDescription: customerDescription.customerFacingDescription,
       customerFacingDescriptionIsDefault: customerDescription.customerFacingDescriptionIsDefault,
+      technicianInstructions,
       officeNotes: isPrimary
         ? `Cita creada por DEMAC Booking Authority${supportCount ? ` con ${supportCount} van(es) de apoyo` : ""}.`
         : "Asignación interna de van de apoyo. No enviar confirmación ni recordatorio duplicado.",
@@ -177,6 +186,7 @@ module.exports = {
   notificationRecipient,
   normalizedRecipientSnapshots,
   requestCustomerFacingDescription,
+  requestTechnicianInstructions,
   workItemsForAssignment,
   workOrderCustomerDescription,
 };
