@@ -11,8 +11,15 @@ import {
   type CanonicalStaffProfile,
 } from '@/lib/canonical-operations';
 import { saveCanonicalStaffAbsence, saveCanonicalStaffProfile } from '@/lib/canonical-operations-mutations';
+import {
+  loadEmployeePayrollSettings,
+  payrollSettingsForEmployee,
+  saveEmployeeHalfDaySettings,
+  type EmployeePayrollSettings,
+  type HalfDayOffPeriod,
+} from '@/lib/employee-attendance';
 import { offboardEmployee, reactivateEmployee } from '@/lib/employee-lifecycle';
-import { employeeVan } from '@/lib/employee-work-schedule';
+import { employeeVan, isTechnicalEmployee } from '@/lib/employee-work-schedule';
 import {
   createManagedUser,
   listManagedUsers,
@@ -40,8 +47,8 @@ const ABSENCE_REASONS = [
   { value: 'Libre', label: 'Day Off' },
   { value: 'Otro', label: 'Other / unavailable' },
 ] as const;
-const WEEKLY_DAY_OFF_OPTIONS = [
-  { value: '', label: 'Not assigned' },
+const HALF_DAY_WEEKDAYS = [
+  { value: '', label: 'Select weekday' },
   { value: '1', label: 'Monday' },
   { value: '2', label: 'Tuesday' },
   { value: '3', label: 'Wednesday' },
@@ -59,6 +66,9 @@ type LifecycleProfile = CanonicalStaffProfile & {
   employmentEndedAt?: string;
   offboardingReason?: string;
   offboardingCleanupPending?: boolean;
+  // Deprecated fields introduced by PR #413. They are neutralized on the next profile/schedule save.
+  weeklyDayOffWeekday?: number | null;
+  weeklyDayOffEffectiveFrom?: string | null;
 };
 type EmployeeDraft = {
   id: string;
@@ -71,14 +81,13 @@ type EmployeeDraft = {
   skillsText: string;
   notes: string;
   employmentStartedAt: string;
-  weeklyDayOffWeekday: string;
-  weeklyDayOffEffectiveFrom: string;
   createAccess: boolean;
   accessRole: ManagedUserRole;
   accessActive: boolean;
   loginEmail: string;
   loginEmailKind: LoginEmailKind;
 };
+type HalfDayDraft = { weekday: string; offPeriod: HalfDayOffPeriod; effectiveFrom: string };
 type TimeOffDraft = { fromDate: string; toDate: string; reason: string; notes: string };
 type OffboardDraft = { endDate: string; reason: string; releaseLoginEmail: boolean };
 
@@ -98,29 +107,55 @@ export function EmployeeProfileEditor({
   const { principal } = useAuth();
   const canManageEmployees = principal.capabilities.has('employees.manage');
   const canManageAccess = principal.role === 'super_admin';
+  const canManageIndividualSchedule = principal.role === 'super_admin' || principal.capabilities.has('payroll_sensitive.view');
   const today = todayKey();
   const isNew = employee === null;
   const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [payrollSettings, setPayrollSettings] = useState<EmployeePayrollSettings[]>([]);
   const [draft, setDraft] = useState<EmployeeDraft>(() => newEmployeeDraft());
+  const [halfDayDraft, setHalfDayDraft] = useState<HalfDayDraft>({ weekday: '', offPeriod: 'afternoon', effectiveFrom: today });
   const [timeOffDraft, setTimeOffDraft] = useState<TimeOffDraft>({ fromDate: today, toDate: today, reason: 'Vacaciones', notes: '' });
   const [offboardDraft, setOffboardDraft] = useState<OffboardDraft | null>(null);
   const [busy, setBusy] = useState(false);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
   useEffect(() => {
     if (!open) return;
     setDraft(employee ? draftFromProfile(employee as LifecycleProfile) : newEmployeeDraft());
+    setHalfDayDraft({ weekday: '', offPeriod: 'afternoon', effectiveFrom: today });
     setTimeOffDraft({ fromDate: today, toDate: today, reason: 'Vacaciones', notes: '' });
     setOffboardDraft(null);
+    setPayrollSettings([]);
     setError('');
     setMessage('');
+
     if (canManageAccess) {
       void listManagedUsers().then(setUsers).catch((cause) => setError(`ERP access information could not be loaded: ${errorText(cause)}`));
     } else {
       setUsers([]);
     }
-  }, [open, employee?.id, canManageAccess, today]);
+
+    if (employee && !isTechnicalEmployee(employee) && canManageIndividualSchedule) {
+      setScheduleLoading(true);
+      void loadEmployeePayrollSettings()
+        .then((settings) => {
+          setPayrollSettings(settings);
+          const existing = payrollSettingsForEmployee(settings, employee);
+          const weekday = Number(existing?.weeklyHalfDayWeekday);
+          setHalfDayDraft({
+            weekday: Number.isInteger(weekday) && weekday >= 1 && weekday <= 6 ? String(weekday) : '',
+            offPeriod: existing?.halfDayOffPeriod ?? 'afternoon',
+            effectiveFrom: existing?.halfDayEffectiveFrom ?? today,
+          });
+        })
+        .catch((cause) => setError(`Employee half-day settings could not be loaded: ${errorText(cause)}`))
+        .finally(() => setScheduleLoading(false));
+    } else {
+      setScheduleLoading(false);
+    }
+  }, [open, employee?.id, canManageAccess, canManageIndividualSchedule, today]);
 
   const userByStaffId = useMemo(() => new Map(users.filter((user) => user.staffId).map((user) => [String(user.staffId), user])), [users]);
   const userByEmail = useMemo(() => new Map(users.filter((user) => user.email).map((user) => [user.email.toLowerCase(), user])), [users]);
@@ -134,9 +169,11 @@ export function EmployeeProfileEditor({
 
   if (!open) return null;
 
+  const technical = profile ? isTechnicalEmployee(profile) : draft.employeeType === 'Técnico';
   const selectedVan = profile ? employeeVan(profile, operations.vans) : null;
   const selectedVanId = selectedVan ? canonicalVanId(selectedVan.id, operations.vans) : '';
   const selectedHalfDay = selectedVanId ? operations.vanHalfDaySchedules.find((rule) => canonicalVanId(rule.vanId, operations.vans) === selectedVanId) : undefined;
+  const individualHalfDay = profile ? payrollSettingsForEmployee(payrollSettings, profile) : undefined;
   const selectedAbsences = profile ? operations.staffAbsences.filter((absence) => absence.staffId === profile.id && absence.active !== false).sort((a, b) => String(b.fromDate ?? '').localeCompare(String(a.fromDate ?? ''))).slice(0, 5) : [];
 
   function changeEmployeeType(employeeType: string) {
@@ -162,7 +199,6 @@ export function EmployeeProfileEditor({
     if (!name) return setError('Full name is required.');
     if (!phone) return setError('Phone number is required.');
     if (draft.createAccess && canManageAccess && !loginEmail) return setError('ERP login email is required when sign-in access is enabled.');
-    if (draft.weeklyDayOffWeekday && !draft.weeklyDayOffEffectiveFrom) return setError('Choose when the weekly day off becomes effective.');
 
     const duplicate = operations.staffProfiles.find((item) => item.id !== draft.id && (
       normalizeName(item.name ?? '') === normalizeName(name)
@@ -187,8 +223,8 @@ export function EmployeeProfileEditor({
         active: current?.active !== false,
         notes: draft.notes.trim() || undefined,
         employmentStartedAt: draft.employmentStartedAt || current?.employmentStartedAt,
-        weeklyDayOffWeekday: draft.weeklyDayOffWeekday ? Number(draft.weeklyDayOffWeekday) : null,
-        weeklyDayOffEffectiveFrom: draft.weeklyDayOffWeekday ? draft.weeklyDayOffEffectiveFrom : null,
+        weeklyDayOffWeekday: null,
+        weeklyDayOffEffectiveFrom: null,
         loginEmailKind: canManageAccess && draft.createAccess ? draft.loginEmailKind : current?.loginEmailKind,
       };
       await saveCanonicalStaffProfile(next);
@@ -211,6 +247,30 @@ export function EmployeeProfileEditor({
 
       await onChanged(draft.id);
       onClose();
+    } catch (cause) { setError(errorText(cause)); }
+    finally { setBusy(false); }
+  }
+
+  async function saveRecurringHalfDay() {
+    if (!profile || isNew || technical) return;
+    if (!canManageIndividualSchedule) return setError('Only the owner / administrator or authorized finance user can change an individual office half-day.');
+    const weekday = Number(halfDayDraft.weekday);
+    if (!Number.isInteger(weekday) || weekday < 1 || weekday > 6) return setError('Choose the recurring half-day weekday.');
+    if (!halfDayDraft.effectiveFrom) return setError('Choose when the recurring half-day becomes effective.');
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const saved = await saveEmployeeHalfDaySettings({
+        employee: profile,
+        existing: individualHalfDay,
+        weekday,
+        offPeriod: halfDayDraft.offPeriod,
+        effectiveFrom: halfDayDraft.effectiveFrom,
+      });
+      setPayrollSettings((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+      // Neutralize the incorrect full-day fields introduced by PR #413. Runtime no longer reads them.
+      await saveCanonicalStaffProfile({ ...profile, weeklyDayOffWeekday: null, weeklyDayOffEffectiveFrom: null } as LifecycleProfile);
+      setMessage(`Recurring half-day saved for ${staffDisplayName(profile)}.`);
+      await onChanged(profile.id);
     } catch (cause) { setError(errorText(cause)); }
     finally { setBusy(false); }
   }
@@ -269,7 +329,34 @@ export function EmployeeProfileEditor({
 
         <Section title="ERP Access & Login" subtitle="Operational role and system permission remain separate. Contact email never silently becomes a login credential.">{canManageAccess ? <><div className={styles.formGrid}><Field label="ERP sign-in"><select className={styles.control} value={draft.createAccess ? 'enabled' : 'disabled'} onChange={(event) => setDraft({ ...draft, createAccess: event.target.value === 'enabled' })} disabled={profile?.active === false}><option value="enabled">Linked / create access</option><option value="disabled">No active sign-in access</option></select></Field>{draft.createAccess ? <Field label="ERP login email"><input className={styles.control} type="email" value={draft.loginEmail} onChange={(event) => setDraft({ ...draft, loginEmail: event.target.value })} disabled={profile?.active === false} /></Field> : null}{draft.createAccess ? <Field label="Login email ownership"><select className={styles.control} value={draft.loginEmailKind} onChange={(event) => setDraft({ ...draft, loginEmailKind: event.target.value as LoginEmailKind })} disabled={profile?.active === false}><option value="company">Company email · reusable</option><option value="personal">Personal email · not reused</option></select></Field> : null}{draft.createAccess ? <Field label="Access role"><select className={styles.control} value={draft.accessRole} onChange={(event) => setDraft({ ...draft, accessRole: event.target.value as ManagedUserRole })} disabled={profile?.active === false}>{ACCESS_ROLES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field> : null}{draft.createAccess ? <Field label="Account status"><select className={styles.control} value={draft.accessActive ? 'active' : 'disabled'} onChange={(event) => setDraft({ ...draft, accessActive: event.target.value === 'active' })} disabled={profile?.active === false}><option value="active">Active</option><option value="disabled">Disabled</option></select></Field> : null}</div>{!isNew && linkedUser ? <div className={styles.inlineActions}><button className={styles.button} type="button" onClick={() => void sendAccessEmail()} disabled={busy}>Send / Reset Password Email</button></div> : null}<div className={styles.info}>Firebase identity remains distinct from the employee record. Login changes never create a second staff profile.</div></> : <div className={styles.info}>Only the owner / administrator can create or change ERP sign-in accounts.</div>}</Section>
 
-        {!isNew ? <Section title="Work Schedule & Time Off" subtitle="The employee profile owns the recurring weekly day off. Van half-days remain separate operational exceptions, and dated time off continues to use staffAbsences."><div className={styles.scheduleGrid}><Summary label="Company schedule" value="Mon–Sat · 08:00–17:00 · lunch 12:00–13:00" /><Summary label="Weekly day off" value={draft.weeklyDayOffWeekday ? `${weekdayLabel(Number(draft.weeklyDayOffWeekday))}${draft.weeklyDayOffEffectiveFrom ? ` · from ${draft.weeklyDayOffEffectiveFrom}` : ''}` : 'Not assigned'} /><Summary label="Van half-day" value={selectedHalfDay ? `${weekdayLabel(selectedHalfDay.weekday)} · until ${selectedHalfDay.workdayEnd ?? '13:00'} · ${selectedVanId}` : 'No Van half-day assigned'} /><Summary label="Schedule source" value="Employee profile + dated absences + Van exceptions" /></div>{profile?.active !== false && canManageEmployees ? <><div className={styles.timeOffBox}><strong>Recurring weekly day off</strong><div className={styles.formGrid} style={{ marginTop: 10 }}><Field label="Weekly day off"><select className={styles.control} value={draft.weeklyDayOffWeekday} onChange={(event) => setDraft({ ...draft, weeklyDayOffWeekday: event.target.value, weeklyDayOffEffectiveFrom: event.target.value ? (draft.weeklyDayOffEffectiveFrom || today) : '' })}>{WEEKLY_DAY_OFF_OPTIONS.map((option) => <option key={option.value || 'none'} value={option.value}>{option.label}</option>)}</select></Field><Field label="Effective from"><input className={styles.control} type="date" value={draft.weeklyDayOffEffectiveFrom} onChange={(event) => setDraft({ ...draft, weeklyDayOffEffectiveFrom: event.target.value })} disabled={!draft.weeklyDayOffWeekday} /></Field></div><div className={styles.info}>This is a recurring full day off for this employee only. Save Employee to apply it. It does not change the Van schedule or another employee.</div></div><div className={styles.timeOffBox}><strong>Add time off / unavailability</strong><div className={styles.formGrid} style={{ marginTop: 10 }}><Field label="From"><input className={styles.control} type="date" value={timeOffDraft.fromDate} onChange={(event) => setTimeOffDraft({ ...timeOffDraft, fromDate: event.target.value })} /></Field><Field label="To"><input className={styles.control} type="date" value={timeOffDraft.toDate} onChange={(event) => setTimeOffDraft({ ...timeOffDraft, toDate: event.target.value })} /></Field><Field label="Type"><select className={styles.control} value={timeOffDraft.reason} onChange={(event) => setTimeOffDraft({ ...timeOffDraft, reason: event.target.value })}>{ABSENCE_REASONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field><Field label="Notes"><input className={styles.control} value={timeOffDraft.notes} onChange={(event) => setTimeOffDraft({ ...timeOffDraft, notes: event.target.value })} /></Field></div><div className={styles.inlineActions}><button className={styles.button} type="button" onClick={() => void addTimeOff()} disabled={busy}>Save Time Off</button></div></div></> : null}{selectedAbsences.length ? <div className={styles.history}><strong>Recent / current time off</strong>{selectedAbsences.map((absence) => <div className={styles.historyRow} key={absence.id}><span>{absence.reason ?? 'Unavailable'}</span><span>{absence.fromDate ?? '—'} → {absence.toDate ?? '—'}</span><small>{absence.notes ?? ''}</small></div>)}</div> : null}</Section> : null}
+        {!isNew ? <Section title="Work Schedule & Time Off" subtitle="Sunday is company-closed. Technical half-days belong to the Van/team; office half-days use the existing employee payroll schedule record; dated absences remain separate.">
+          <div className={styles.scheduleGrid}>
+            <Summary label="Company schedule" value="Mon–Sat · 08:00–17:00 · lunch 12:00–13:00" />
+            {technical
+              ? <Summary label="Weekly half-day" value={selectedHalfDay ? `${weekdayLabel(selectedHalfDay.weekday)} · works ${selectedHalfDay.workdayStart ?? '08:00'}–${selectedHalfDay.workdayEnd ?? '13:00'} · afternoon off` : 'No Van half-day configured'} />
+              : <Summary label="Weekly half-day" value={scheduleLoading ? 'Loading…' : formatIndividualHalfDay(individualHalfDay)} />}
+            <Summary label="Schedule source" value={technical ? `${selectedVanId || 'Unassigned Van'} · vanHalfDaySchedules` : 'employeePayrollSettings · individual office schedule'} />
+            <Summary label="Dated exceptions" value="staffAbsences · vacation / sick / one-off unavailability" />
+          </div>
+
+          {technical ? <div className={styles.info}>Technicians inherit the recurring half-day from their Van/team. Change that weekday in Settings → Weekly Van Half-Days; do not create an employee-level half-day for a technician.</div> : null}
+
+          {!technical && profile?.active !== false ? <div className={styles.timeOffBox}>
+            <strong>Recurring individual half-day</strong>
+            {canManageIndividualSchedule ? <>
+              <div className={styles.formGrid} style={{ marginTop: 10 }}>
+                <Field label="Half-day weekday"><select className={styles.control} value={halfDayDraft.weekday} onChange={(event) => setHalfDayDraft({ ...halfDayDraft, weekday: event.target.value })} disabled={scheduleLoading}>{HALF_DAY_WEEKDAYS.map((option) => <option key={option.value || 'none'} value={option.value}>{option.label}</option>)}</select></Field>
+                <Field label="Half-day off period"><select className={styles.control} value={halfDayDraft.offPeriod} onChange={(event) => setHalfDayDraft({ ...halfDayDraft, offPeriod: event.target.value as HalfDayOffPeriod })} disabled={scheduleLoading}><option value="afternoon">Afternoon off · works 08:00–12:00</option><option value="morning">Morning off · works 13:00–17:00</option></select></Field>
+                <Field label="Effective from"><input className={styles.control} type="date" value={halfDayDraft.effectiveFrom} onChange={(event) => setHalfDayDraft({ ...halfDayDraft, effectiveFrom: event.target.value })} disabled={scheduleLoading} /></Field>
+              </div>
+              <div className={styles.info}>Office half-days are 4 worked hours + 4 paid free hours. Legacy records without a morning/afternoon value are treated as afternoon off, matching the old work-from-morning behavior.</div>
+              <div className={styles.inlineActions}><button className={styles.button} type="button" onClick={() => void saveRecurringHalfDay()} disabled={busy || scheduleLoading}>{busy ? 'Saving…' : 'Save Half-Day Schedule'}</button></div>
+            </> : <div className={styles.info}>Individual office half-day settings are payroll-protected. The owner/administrator or authorized finance user can edit them.</div>}
+          </div> : null}
+
+          {profile?.active !== false && canManageEmployees ? <div className={styles.timeOffBox}><strong>Add dated time off / unavailability</strong><div className={styles.formGrid} style={{ marginTop: 10 }}><Field label="From"><input className={styles.control} type="date" value={timeOffDraft.fromDate} onChange={(event) => setTimeOffDraft({ ...timeOffDraft, fromDate: event.target.value })} /></Field><Field label="To"><input className={styles.control} type="date" value={timeOffDraft.toDate} onChange={(event) => setTimeOffDraft({ ...timeOffDraft, toDate: event.target.value })} /></Field><Field label="Type"><select className={styles.control} value={timeOffDraft.reason} onChange={(event) => setTimeOffDraft({ ...timeOffDraft, reason: event.target.value })}>{ABSENCE_REASONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field><Field label="Notes"><input className={styles.control} value={timeOffDraft.notes} onChange={(event) => setTimeOffDraft({ ...timeOffDraft, notes: event.target.value })} /></Field></div><div className={styles.inlineActions}><button className={styles.button} type="button" onClick={() => void addTimeOff()} disabled={busy}>Save Time Off</button></div></div> : null}
+          {selectedAbsences.length ? <div className={styles.history}><strong>Recent / current time off</strong>{selectedAbsences.map((absence) => <div className={styles.historyRow} key={absence.id}><span>{absence.reason ?? 'Unavailable'}</span><span>{absence.fromDate ?? '—'} → {absence.toDate ?? '—'}</span><small>{absence.notes ?? ''}</small></div>)}</div> : null}
+        </Section> : null}
 
         {!isNew && profile ? <Section title="Employment Lifecycle" subtitle="Former employees are archived, never deleted, so historical work, attendance and payroll references remain intact.">{profile.active !== false ? <div className={styles.dangerZone}><div><strong>Offboard employee</strong><span>Disables access and removes future crew assignments while preserving history.</span></div><button className={styles.dangerButton} type="button" onClick={() => setOffboardDraft({ endDate: today, reason: '', releaseLoginEmail: Boolean(linkedUser) && (profile.loginEmailKind ?? defaultLoginEmailKind(inferredEmployeeType(profile))) === 'company' })} disabled={!canManageAccess || busy}>Start Offboarding</button></div> : <div className={styles.dangerZone}><div><strong>Former employee</strong><span>{profile.employmentEndedAt ? `Employment ended ${profile.employmentEndedAt}. ` : ''}{profile.offboardingReason ?? ''}</span></div><button className={styles.button} type="button" onClick={() => void confirmReactivate()} disabled={!canManageAccess || busy}>Reactivate Employee</button></div>}</Section> : null}
 
@@ -292,6 +379,7 @@ function defaultRole(employeeType: string) { if (employeeType === 'Técnico') re
 function defaultAccessRole(employeeType: string): ManagedUserRole { return employeeType === 'Técnico' ? 'technician' : 'office'; }
 function defaultLoginEmailKind(employeeType: string): LoginEmailKind { return employeeType === 'Técnico' ? 'personal' : 'company'; }
 function inferredEmployeeType(profile: CanonicalStaffProfile) { if (profile.employeeType) return profile.employeeType; if (['Técnico responsable', 'Técnico', 'Ayudante', 'Supervisor'].includes(profile.role ?? '')) return 'Técnico'; if (profile.role === 'Secretaria') return 'Secretaria'; return 'Administración'; }
-function newEmployeeDraft(): EmployeeDraft { return { id: `staff-${crypto.randomUUID()}`, name: '', phone: '', contactEmail: '', employeeType: 'Secretaria', role: 'Secretaria', canDriveVan: false, skillsText: '', notes: '', employmentStartedAt: todayKey(), weeklyDayOffWeekday: '', weeklyDayOffEffectiveFrom: '', createAccess: true, accessRole: 'office', accessActive: true, loginEmail: '', loginEmailKind: 'company' }; }
-function draftFromProfile(profile: LifecycleProfile, linkedUser?: ManagedUser): EmployeeDraft { const employeeType = inferredEmployeeType(profile); const weeklyDayOffWeekday = Number(profile.weeklyDayOffWeekday); return { id: profile.id, name: profile.name ?? '', phone: profile.phone ?? '', contactEmail: profile.email ?? '', employeeType, role: profile.role ?? defaultRole(employeeType), canDriveVan: profile.canDriveVan === true, skillsText: (profile.skills ?? []).join(', '), notes: profile.notes ?? '', employmentStartedAt: profile.employmentStartedAt ?? '', weeklyDayOffWeekday: Number.isInteger(weeklyDayOffWeekday) && weeklyDayOffWeekday >= 1 && weeklyDayOffWeekday <= 6 ? String(weeklyDayOffWeekday) : '', weeklyDayOffEffectiveFrom: profile.weeklyDayOffEffectiveFrom ?? '', createAccess: Boolean(linkedUser), accessRole: linkedUser?.role ?? defaultAccessRole(employeeType), accessActive: linkedUser?.active ?? true, loginEmail: linkedUser?.email ?? profile.loginEmail ?? '', loginEmailKind: profile.loginEmailKind ?? defaultLoginEmailKind(employeeType) }; }
+function formatIndividualHalfDay(settings: EmployeePayrollSettings | undefined) { const weekday = Number(settings?.weeklyHalfDayWeekday); if (!Number.isInteger(weekday) || weekday < 1 || weekday > 6) return 'Not configured'; const offPeriod = settings?.halfDayOffPeriod ?? 'afternoon'; const workTime = offPeriod === 'morning' ? 'works 13:00–17:00' : 'works 08:00–12:00'; const offLabel = offPeriod === 'morning' ? 'morning off' : 'afternoon off'; return `${weekdayLabel(weekday)} · ${offLabel} · ${workTime}${settings?.halfDayEffectiveFrom ? ` · from ${settings.halfDayEffectiveFrom}` : ''}`; }
+function newEmployeeDraft(): EmployeeDraft { return { id: `staff-${crypto.randomUUID()}`, name: '', phone: '', contactEmail: '', employeeType: 'Secretaria', role: 'Secretaria', canDriveVan: false, skillsText: '', notes: '', employmentStartedAt: todayKey(), createAccess: true, accessRole: 'office', accessActive: true, loginEmail: '', loginEmailKind: 'company' }; }
+function draftFromProfile(profile: LifecycleProfile, linkedUser?: ManagedUser): EmployeeDraft { const employeeType = inferredEmployeeType(profile); return { id: profile.id, name: profile.name ?? '', phone: profile.phone ?? '', contactEmail: profile.email ?? '', employeeType, role: profile.role ?? defaultRole(employeeType), canDriveVan: profile.canDriveVan === true, skillsText: (profile.skills ?? []).join(', '), notes: profile.notes ?? '', employmentStartedAt: profile.employmentStartedAt ?? '', createAccess: Boolean(linkedUser), accessRole: linkedUser?.role ?? defaultAccessRole(employeeType), accessActive: linkedUser?.active ?? true, loginEmail: linkedUser?.email ?? profile.loginEmail ?? '', loginEmailKind: profile.loginEmailKind ?? defaultLoginEmailKind(employeeType) }; }
 function errorText(error: unknown) { return error instanceof Error ? error.message : String(error); }
