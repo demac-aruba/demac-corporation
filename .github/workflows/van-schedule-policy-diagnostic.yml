@@ -1,0 +1,49 @@
+name: Van Schedule Policy Diagnostic
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'functions/diagnostics/readVanSchedulePolicy.js'
+      - '.github/workflows/van-schedule-policy-diagnostic.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: van-schedule-policy-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+      - name: Validate diagnostic
+        run: node --check functions/diagnostics/readVanSchedulePolicy.js
+      - name: Authenticate Firebase production service account
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - name: Read production van schedule policy
+        env:
+          GCLOUD_PROJECT: demac-corporation
+          GOOGLE_CLOUD_PROJECT: demac-corporation
+        run: node functions/diagnostics/readVanSchedulePolicy.js
+      - name: Mark diagnostic success
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/${{ github.repository }}/statuses/${{ github.sha }} -f state=success -f context='DEMAC / Van Schedule Diagnostic' -f description='Production van schedule policy read successfully'
