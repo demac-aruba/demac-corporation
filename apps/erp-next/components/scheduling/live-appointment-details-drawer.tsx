@@ -12,9 +12,10 @@ import {
 } from '../../lib/office-booking-authority';
 import { currentArubaDateKey } from '../../lib/scheduling-capacity';
 import { AppointmentCommunicationPanel } from './appointment-communication-panel';
+import { LiveAppointmentEditPanel } from './live-appointment-edit-panel';
 import styles from './scheduling-overview-v2.module.css';
 
-type Mode = 'details' | 'reschedule' | 'cancel';
+type Mode = 'details' | 'edit' | 'reschedule' | 'cancel';
 
 type Props = {
   appointment: BrowserAppointmentRecord;
@@ -264,13 +265,20 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
         <AppointmentCommunicationPanel appointmentId={appointment.id} />
 
         {mode === 'details' ? <section className={styles.formSection}>
-          <header><strong>Manage appointment</strong><span>Lifecycle changes go through Booking Authority so capacity locks and Work Orders remain synchronized.</span></header>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: 8, padding: 11 }}>
+          <header><strong>Manage appointment</strong><span>All changes go through Booking Authority so capacity locks and Work Orders remain synchronized.</span></header>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 8, padding: 11 }}>
+            <button type="button" className={styles.secondary} disabled={!canManageLifecycle} onClick={() => begin('edit')}>Edit Appointment</button>
             <button type="button" className={styles.secondary} disabled={!canManageLifecycle} onClick={() => begin('reschedule')}>Reschedule</button>
             <button type="button" className={styles.secondary} disabled={!canManageLifecycle} onClick={() => begin('cancel')} style={{ color: 'var(--danger)' }}>Cancel Appointment</button>
           </div>
           {!canManageLifecycle && appointment.status !== 'cancelled' ? <div className={styles.descriptionPreview}><span>CANONICAL RELATIONSHIP REQUIRED</span><strong>This appointment cannot be changed until its customer and property IDs are resolved.</strong></div> : null}
         </section> : null}
+
+        {mode === 'edit' ? <LiveAppointmentEditPanel
+          appointment={appointment}
+          onBack={() => begin('details')}
+          onSaved={async () => { await onChanged(); onClose(); }}
+        /> : null}
 
         {mode === 'reschedule' ? <section className={styles.formSection}>
           <header><strong>Reschedule appointment</strong><span>Choose a date, then select only from capacity returned by Booking Authority.</span></header>
