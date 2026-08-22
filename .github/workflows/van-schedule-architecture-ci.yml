@@ -1,0 +1,85 @@
+name: Van Schedule Architecture
+
+on:
+  pull_request:
+    paths:
+      - 'apps/erp-next/lib/canonical-operations.ts'
+      - 'apps/erp-next/lib/employee-work-schedule.ts'
+      - 'apps/erp-next/lib/live-operational-capacity.ts'
+      - 'apps/erp-next/components/scheduling/live-scheduling-overview.tsx'
+      - 'apps/erp-next/components/scheduling/van-half-day-policy-banner.tsx'
+      - 'apps/erp-next/components/scheduling/scheduling-page-shell.tsx'
+      - 'apps/erp-next/scripts/employee-schedule-acceptance.ts'
+      - 'apps/erp-next/scripts/live-scheduling-acceptance.ts'
+      - 'functions/bookingSchedulingPrimitives.js'
+      - 'functions/bookingCapacityAvailability.js'
+      - 'functions/bookingCapacityAvailability.test.js'
+      - '.github/workflows/van-schedule-architecture-ci.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/erp-next/lib/canonical-operations.ts'
+      - 'apps/erp-next/lib/employee-work-schedule.ts'
+      - 'apps/erp-next/lib/live-operational-capacity.ts'
+      - 'apps/erp-next/components/scheduling/live-scheduling-overview.tsx'
+      - 'apps/erp-next/components/scheduling/van-half-day-policy-banner.tsx'
+      - 'apps/erp-next/components/scheduling/scheduling-page-shell.tsx'
+      - 'apps/erp-next/scripts/employee-schedule-acceptance.ts'
+      - 'apps/erp-next/scripts/live-scheduling-acceptance.ts'
+      - 'functions/bookingSchedulingPrimitives.js'
+      - 'functions/bookingCapacityAvailability.js'
+      - 'functions/bookingCapacityAvailability.test.js'
+      - '.github/workflows/van-schedule-architecture-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: van-schedule-architecture-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install ERP Next dependencies
+        run: npm install --prefix apps/erp-next --no-audit --no-fund
+
+      - name: Validate employee / Van schedule ownership
+        run: npm --prefix apps/erp-next run test:employee-schedule
+
+      - name: Validate live scheduling capacity
+        run: npm --prefix apps/erp-next run test:live-scheduling
+
+      - name: Typecheck ERP Next
+        run: npm --prefix apps/erp-next run typecheck
+
+      - name: Install booking authority dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Validate Booking Authority Van capacity
+        run: node --test functions/bookingCapacityAvailability.test.js
+
+      - name: Publish architecture status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$JOB_STATUS" = 'success' ]; then state=success; description='Van half-days and technician inheritance validated'; else state=failure; description='Van schedule architecture validation failed'; fi
+          gh api repos/${{ github.repository }}/statuses/${{ github.sha }} -f state="$state" -f context='DEMAC / Van Schedule Architecture' -f description="$description"
