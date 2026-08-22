@@ -1,4 +1,10 @@
-import { canonicalVanId, type CanonicalStaffProfile, type CanonicalVan, type CanonicalVanHalfDaySchedule } from './canonical-operations';
+import {
+  canonicalVanId,
+  isWeeklyDayOff,
+  type CanonicalStaffProfile,
+  type CanonicalVan,
+  type CanonicalVanHalfDaySchedule,
+} from './canonical-operations';
 import { applyHalfDaySchedule, defaultAttendanceSchedule, type AttendanceSchedule, type EmployeePayrollSettings } from './employee-attendance';
 
 function minutesFromTimes(start?: string, end?: string) {
@@ -7,6 +13,20 @@ function minutesFromTimes(start?: string, end?: string) {
   const [eh, em] = end.split(':').map(Number);
   if (![sh, sm, eh, em].every(Number.isFinite)) return undefined;
   return Math.max(0, (eh * 60 + em) - (sh * 60 + sm));
+}
+
+function companyBaseSchedule(date: string): AttendanceSchedule {
+  const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
+  if (weekday === 6) {
+    return {
+      startTime: '08:00',
+      endTime: '17:00',
+      scheduledMinutes: 480,
+      paidFreeMinutes: 0,
+      label: 'Saturday · 08:00–17:00 · lunch 12:00–13:00',
+    };
+  }
+  return defaultAttendanceSchedule(date);
 }
 
 export function isTechnicalEmployee(profile: CanonicalStaffProfile) {
@@ -26,8 +46,18 @@ export function resolveEmployeeSchedule(input: {
   halfDaySchedules: CanonicalVanHalfDaySchedule[];
 }): AttendanceSchedule {
   const { profile, date, payrollSettings, vans, halfDaySchedules } = input;
-  let schedule = defaultAttendanceSchedule(date);
+  let schedule = companyBaseSchedule(date);
   const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
+
+  if (isWeeklyDayOff(profile, date)) {
+    return {
+      startTime: '',
+      endTime: '',
+      scheduledMinutes: 0,
+      paidFreeMinutes: 0,
+      label: 'Weekly day off',
+    };
+  }
 
   if (weekday !== 0 && payrollSettings) {
     const configuredHours = weekday === 6 ? payrollSettings.saturdayHours : payrollSettings.weekdayHours;
@@ -37,7 +67,7 @@ export function resolveEmployeeSchedule(input: {
         ...schedule,
         scheduledMinutes,
         endTime: schedule.startTime && scheduledMinutes > 0
-          ? addMinutes(schedule.startTime, scheduledMinutes + (weekday >= 1 && weekday <= 5 && scheduledMinutes >= 480 ? 60 : 0))
+          ? addMinutes(schedule.startTime, scheduledMinutes + (scheduledMinutes >= 480 ? 60 : 0))
           : schedule.endTime,
         label: `${weekday === 6 ? 'Saturday' : 'Weekday'} · configured ${formatHours(scheduledMinutes)}`,
       };
