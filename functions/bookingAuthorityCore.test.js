@@ -61,6 +61,25 @@ test("normalizes offer assignments and requires positive capacity", () => {
   );
 });
 
+test("canonical offer normalization preserves exact requested date/time intent for confirm-time revalidation", () => {
+  const providerOption = {
+    ...offer().options[0],
+    requestedDateMatch: true,
+    requestedTimeMatch: true,
+  };
+  const storedOption = normalizeOfferOption(providerOption);
+  const selected = validateOfferSelection({
+    offer: offer({ options: [storedOption] }),
+    offerVersion: 4,
+    optionId: "opt-1",
+    now: new Date("2026-08-22T18:25:00-04:00"),
+  });
+  assert.equal(storedOption.requestedDateMatch, true);
+  assert.equal(storedOption.requestedTimeMatch, true);
+  assert.equal(selected.requestedDateMatch, true);
+  assert.equal(selected.requestedTimeMatch, true);
+});
+
 test("appointment identity is deterministic for the same idempotency key", () => {
   const first = canonicalAppointmentIdentity("communication:123:message:ABC:book");
   const second = canonicalAppointmentIdentity("communication:123:message:ABC:book");
