@@ -55,20 +55,35 @@ function realignCanonicalVanScheduleGroups(vans = []) {
 
   if (!configured.length) return list;
   // Cross-Van realignment is only meaningful when the complete canonical fleet
-  // is present. Partial catalogs are used by isolated tests/admin flows and must
-  // preserve their supplied mapping rather than being treated as production.
-  if (list.length !== VAN_SCHEDULE_GROUP_TARGETS.length) return list;
+  // and all four group configurations are present. Partial/admin configurations
+  // are preserved exactly as supplied.
+  if (list.length !== VAN_SCHEDULE_GROUP_TARGETS.length || configured.length !== VAN_SCHEDULE_GROUP_TARGETS.length) return list;
+
+  if (configured.some((config) => !config.groupName || !config.groupJid)) {
+    return failClosed(list, "group-name-or-jid-missing");
+  }
+
+  const recognized = configured.map((config) => ({
+    ...config,
+    targetVanId: targetVanIdForScheduleGroupName(config.groupName),
+  }));
+  const recognizedCount = recognized.filter((config) => config.targetVanId).length;
+
+  // Four explicit custom names are a legitimate configuration and already carry
+  // a direct Van -> group relationship. Do not reinterpret them by heuristics.
+  if (recognizedCount === 0) return list;
+  // A mixture of legacy/canonical identities and unknown names is unsafe: it may
+  // represent a partially shifted production map. Never guess a WhatsApp target.
+  if (recognizedCount !== VAN_SCHEDULE_GROUP_TARGETS.length) {
+    return failClosed(list, "mixed-recognized-and-custom-group-identities");
+  }
 
   const byTarget = new Map();
-  for (const config of configured) {
-    if (!config.groupName || !config.groupJid) {
-      return failClosed(list, "group-name-or-jid-missing");
+  for (const config of recognized) {
+    if (byTarget.has(config.targetVanId)) {
+      return failClosed(list, `duplicate-group-identity-${config.targetVanId}`);
     }
-    const targetVanId = targetVanIdForScheduleGroupName(config.groupName);
-    if (!targetVanId || byTarget.has(targetVanId)) {
-      return failClosed(list, targetVanId ? `duplicate-group-identity-${targetVanId}` : "unrecognized-group-identity");
-    }
-    byTarget.set(targetVanId, config);
+    byTarget.set(config.targetVanId, config);
   }
 
   const missing = VAN_SCHEDULE_GROUP_TARGETS.filter((target) => !byTarget.has(target.vanId));
