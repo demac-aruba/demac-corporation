@@ -1,6 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { workOrderBlocksOperationalMoveCapacity } = require("./bookingCapacityAvailability");
+const {
+  candidateAvailability,
+  workOrderBlocksOperationalMoveCapacity,
+} = require("./bookingCapacityAvailability");
 const { isHalfDay, occupiedSlots, resolveAssignment } = require("./bookingSchedulingPrimitives");
 
 test("operational capacity matches LIVE cancelled/rescheduled status semantics", () => {
@@ -60,4 +63,67 @@ test("Van half-day closes afternoon capacity without marking the crew unavailabl
   assert.equal(assignment.driverStaffId, "staff-driver");
   assert.equal(assignment.helperStaffId, "staff-helper");
   assert.equal(assignment.status, "Disponible");
+});
+
+function explicitTargetFixture(existingOrderTime = "08:30") {
+  const routeConfig = {
+    officeZoneId: "office",
+    maximumAnchorDistance: 100,
+    zones: [
+      { id: "office", label: "Office", position: 50, aliases: ["office"] },
+      { id: "north", label: "Noord", position: 90, aliases: ["noord"] },
+    ],
+  };
+  const data = {
+    workOrders: [{
+      id: "WO-ANCHOR",
+      appointmentId: "APT-ANCHOR",
+      date: "2098-12-22",
+      time: existingOrderTime,
+      status: "Confirmada",
+      vanId: "VAN-2",
+      scheduledSlots: 1,
+      propertyId: "p-office",
+    }],
+    services: [],
+    properties: [{ id: "p-office", operationalZone: "Office" }],
+    vanHalfDaySchedules: [],
+  };
+  return {
+    date: "2098-12-22",
+    time: "09:30",
+    allocation: { quantity: 4, durationMinutes: 240, slots: 4, fullDay: false },
+    van: { id: "VAN-2", name: "Van 2", active: true },
+    assignment: {
+      driverStaffId: "mario",
+      helperStaffId: "ronald",
+      technicianIds: ["mario", "ronald"],
+      status: "Disponible",
+    },
+    data,
+    routeConfig,
+    candidateZone: { id: "north", label: "Noord", position: 90 },
+  };
+}
+
+test("automatic routing may reject a geographically incompatible free target", () => {
+  const result = candidateAvailability(explicitTargetFixture());
+  assert.equal(result, null);
+});
+
+test("explicit office target treats route heuristics as advisory while preserving four-hour capacity", () => {
+  const fixture = explicitTargetFixture();
+  fixture.routeConfig = { ...fixture.routeConfig, routePolicy: "advisory" };
+  const result = candidateAvailability(fixture);
+  assert.ok(result);
+  assert.equal(result.vanId, "VAN-2");
+  assert.equal(result.slots, 4);
+  assert.equal(result.durationMinutes, 240);
+  assert.equal(result.routeReason, "explicit-office-target");
+});
+
+test("explicit office target still refuses a real occupied-slot conflict", () => {
+  const fixture = explicitTargetFixture("10:30");
+  fixture.routeConfig = { ...fixture.routeConfig, routePolicy: "advisory" };
+  assert.equal(candidateAvailability(fixture), null);
 });

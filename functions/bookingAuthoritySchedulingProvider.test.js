@@ -7,8 +7,10 @@ const {
   buildCapacityLocks,
   buildWorkOrders,
   exactCustomerProperty,
+  explicitOfficeRoutePolicy,
   operationalMoveDateAllowed,
   operationalMoveResult,
+  routeConfigForPolicy,
   routeConfigFromSettings,
 } = require("./bookingAuthoritySchedulingProvider");
 
@@ -79,12 +81,42 @@ function operationalData(overrides = {}) {
 
 const currentSchedule = { date: "2098-12-20", time: "08:30" };
 
-test("provider exposes canonical provider v9", () => {
-  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v9");
+test("provider exposes canonical provider v10", () => {
+  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v10");
 });
 
 test("canonical scheduling engine is versioned independently", () => {
   assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 6);
+});
+
+test("explicit office van/date/time selection makes routing advisory only", () => {
+  const exactRequest = {
+    ...request(),
+    constraints: { requestedDate: "2098-12-20", requestedTime: "09:30" },
+  };
+  assert.equal(explicitOfficeRoutePolicy({
+    context: { channel: "office", requiredPrimaryVanId: "VAN-2" },
+    request: exactRequest,
+  }), "advisory");
+  assert.equal(explicitOfficeRoutePolicy({
+    context: { channel: "customer_agent", requiredPrimaryVanId: "VAN-2" },
+    request: exactRequest,
+  }), "enforced");
+  assert.equal(explicitOfficeRoutePolicy({
+    context: { channel: "office", changeKind: "operational_move", requiredPrimaryVanId: "VAN-2" },
+    request: exactRequest,
+  }), "enforced");
+});
+
+test("explicit office policy survives confirm-time revalidation through option intent", () => {
+  const exactOption = { ...option(), requestedDateMatch: true, requestedTimeMatch: true };
+  assert.equal(explicitOfficeRoutePolicy({
+    context: { channel: "office" },
+    request: request(),
+    option: exactOption,
+  }), "advisory");
+  assert.equal(routeConfigForPolicy([], "advisory").routePolicy, "advisory");
+  assert.equal(routeConfigForPolicy([], "enforced").routePolicy, "enforced");
 });
 
 test("provider verifies the exact ERP customer/property relationship", () => {

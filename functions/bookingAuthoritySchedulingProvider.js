@@ -35,7 +35,7 @@ const {
 const { buildWorkOrders: projectCanonicalWorkOrders } = require("./bookingAuthorityWorkOrders");
 const { canonicalizeSchedulingData } = require("./bookingVanIdentity");
 
-const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v9";
+const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v10";
 
 async function loadSchedulingData(db, startDate, endDate) {
   const workOrderQuery = db.collection("workOrders").where("date", ">=", startDate).where("date", "<=", endDate);
@@ -109,6 +109,27 @@ function dataWithoutAppointment(data, appointmentId) {
 
 function routeConfigFromSettings(settings) {
   return normalizeRouteConfig((settings || []).find((item) => item.id === "whatsapp-copilot-routing"));
+}
+
+function explicitOfficeRoutePolicy({ context = {}, request = {}, option = null } = {}) {
+  if (context.channel !== "office" || context.changeKind === "operational_move") return "enforced";
+  const requestedDate = cleanText(request.constraints?.requestedDate, 20);
+  const requestedTime = cleanText(request.constraints?.requestedTime, 20);
+  const explicitPrimaryTarget = Boolean(
+    cleanText(context.requiredPrimaryVanId, 120)
+    && requestedDate
+    && requestedTime,
+  );
+  const revalidatingExplicitTarget = option?.requestedDateMatch === true
+    && option?.requestedTimeMatch === true;
+  return explicitPrimaryTarget || revalidatingExplicitTarget ? "advisory" : "enforced";
+}
+
+function routeConfigForPolicy(settings, policy) {
+  return {
+    ...routeConfigFromSettings(settings),
+    routePolicy: policy === "advisory" ? "advisory" : "enforced",
+  };
 }
 
 function operationalRulesFromSettings(settings) {
@@ -287,7 +308,8 @@ function createSchedulingProvider({ db }) {
         };
       }
       const { property } = exactCustomerProperty(data, request);
-      const routeConfig = routeConfigFromSettings(data.businessSettings);
+      const routePolicy = explicitOfficeRoutePolicy({ context, request });
+      const routeConfig = routeConfigForPolicy(data.businessSettings, routePolicy);
 
       if (operationalMove) {
         const exact = operationalMoveResult({
@@ -314,6 +336,7 @@ function createSchedulingProvider({ db }) {
             vansRequired: exact.allocations?.length || 1,
             requiredPrimaryVanId,
             operationalMove: true,
+            routePolicy,
           },
         };
       }
@@ -342,6 +365,7 @@ function createSchedulingProvider({ db }) {
           routeZone: result.candidateZone?.label || "",
           vansRequired: result.allocations?.length || 0,
           requiredPrimaryVanId: requiredPrimaryVanId || "",
+          routePolicy,
         },
       };
     },
@@ -366,7 +390,8 @@ function createSchedulingProvider({ db }) {
         : await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS));
       const data = dataWithoutAppointment(loaded, context.excludeAppointmentId);
       const { property } = exactCustomerProperty(data, request);
-      const routeConfig = routeConfigFromSettings(data.businessSettings);
+      const routePolicy = explicitOfficeRoutePolicy({ context, request, option });
+      const routeConfig = routeConfigForPolicy(data.businessSettings, routePolicy);
       const candidateZone = propertyZone(property, option.address, routeConfig);
       const refreshedAssignments = [];
       for (const requested of option.assignments) {
@@ -464,11 +489,13 @@ module.exports = {
   createSchedulingProvider,
   dataWithoutAppointment,
   exactCustomerProperty,
+  explicitOfficeRoutePolicy,
   loadAppointmentSchedule,
   loadSchedulingData,
   notificationRecipient,
   operationalMoveDateAllowed,
   operationalMoveResult,
   operationalRulesFromSettings,
+  routeConfigForPolicy,
   routeConfigFromSettings,
 };
