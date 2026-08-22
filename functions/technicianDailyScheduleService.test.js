@@ -4,11 +4,15 @@ const test = require("node:test");
 const {
   arrivalContact,
   createTechnicianDailyScheduleService,
+  deterministicLunchQueueId,
   deterministicQueueId,
+  displayedOrderEndTime,
   geographicDistrict,
   geographicZone,
   groupConfigForVan,
+  planLunchBreak,
   propertyLocationName,
+  renderLunchBreakText,
   renderVanWorkOrderText,
   staffFirstNamesForOrder,
   technicianInstructions,
@@ -110,22 +114,37 @@ test("van group config requires a valid WhatsApp group JID", () => {
   assert.equal(groupConfigForVan({ id: "VAN-2", whatsappScheduleGroupName: "Van 2 Group" }).valid, false);
 });
 
-test("technician arrival recipient is preferred over the generic customer contact", () => {
-  const contact = arrivalContact(order, { name: "Customer", whatsapp: "+2975622222" });
-  assert.equal(contact.name, "Site contact");
-  assert.equal(contact.phone, "+2975611111");
-  assert.equal(contact.source, "technician-arrival");
+test("a real additional property contact is shown without exposing its internal role", () => {
+  const contact = arrivalContact(order, { id: "client-1", name: "Customer", whatsapp: "+2975622222" });
+  assert.deepEqual(contact, { name: "Site contact", source: "additional-property-contact" });
 });
 
-test("unrelated notification recipients never replace the primary customer contact", () => {
+test("the primary customer is never repeated as an additional contact", () => {
+  const client = { id: "client-1", name: "Erick Luidens", whatsapp: "+2975622222" };
+  const contact = arrivalContact({
+    ...order,
+    notificationRecipients: [
+      {
+        recipientType: "client",
+        sourceId: "client-1",
+        name: "Erick Luidens",
+        role: "Customer / owner",
+        whatsapp: "+2975622222",
+        technicianArrival: true,
+      },
+    ],
+  }, client);
+  assert.equal(contact, null);
+});
+
+test("unrelated recipients that are not arrival contacts are omitted", () => {
   const contact = arrivalContact({
     ...order,
     notificationRecipients: [
       { name: "Accounting", role: "Accounting", whatsapp: "+2975699999", technicianArrival: false, sendInvoice: true },
     ],
-  }, { name: "Primary Customer", whatsapp: "+2975622222" });
-  assert.equal(contact.name, "Primary Customer");
-  assert.equal(contact.source, "primary-customer");
+  }, { id: "client-1", name: "Primary Customer", whatsapp: "+2975622222" });
+  assert.equal(contact, null);
 });
 
 test("staff names are shortened for the van group header", () => {
@@ -162,7 +181,7 @@ test("technician instructions come from the canonical appointment work lines", (
   assert.equal(text, "Bring tall ladder\nCheck condensate line");
 });
 
-test("work summary keeps all work items in the same appointment message", () => {
+test("work summary remains available as a description fallback", () => {
   assert.equal(workSummary({
     appointmentWorkItems: [
       { label: "Standard Service", quantity: 2 },
@@ -171,11 +190,11 @@ test("work summary keeps all work items in the same appointment message", () => 
   }), "Standard Service × 2; Leak Repair × 1");
 });
 
-test("one work order renders a private readable WhatsApp group message", () => {
+test("one work order renders without redundant client/contact or work/description lines", () => {
   const text = renderVanWorkOrderText({
     van: { ...groupVan, id: "VAN-1", name: "Van 1" },
     order: { ...order, vanId: "VAN-1" },
-    client: { name: "Izaira Mansur", whatsapp: "+2975622222" },
+    client: { id: "client-1", name: "Izaira Mansur", whatsapp: "+2975622222" },
     property: {
       name: "Pastechi House Building",
       operationalZone: "Oranjestad Centro",
@@ -191,9 +210,11 @@ test("one work order renders a private readable WhatsApp group message", () => {
   });
 
   assert.match(text, /^\*DEMAC · Van 1 · Miguel y Alan\*\n\*Trabajo 1 ·/);
-  assert.match(text, /\n\n\*Hora:\* 8:30 AM – 10:30 AM\n\*Cliente:\* Izaira Mansur\n\*Contacto:\* Site contact · Manager/);
+  assert.match(text, /\n\n\*Hora:\* 8:30 AM – 10:30 AM\n\*Cliente:\* Izaira Mansur\n\*Contacto:\* Site contact/);
+  assert.doesNotMatch(text, /Site contact · Manager/);
   assert.match(text, /\n\n\*Location:\* Pastechi House Building\n\*Dirección:\* Caya G\. F\. Betico Croes 42\n\*Distrito:\* Oranjestad\n\*Zona:\* Playa\n\*Acceso:\* Use side gate/);
-  assert.match(text, /\n\n\*Trabajo:\* Standard Service × 2\n\*Descripción:\* Deep service of the two living-room units/);
+  assert.match(text, /\n\n\*Descripción:\* Deep service of the two living-room units/);
+  assert.doesNotMatch(text, /\n\*Trabajo:\*/);
   assert.match(text, /\n\n\*Instrucciones técnico:\* Bring coil cleaner$/);
   assert.doesNotMatch(text, /Tel\/WhatsApp|\+29756/);
   assert.doesNotMatch(text, /\*Equipo:\*/);
@@ -201,12 +222,42 @@ test("one work order renders a private readable WhatsApp group message", () => {
   assert.doesNotMatch(text, /Oranjestad \/ Airport/);
 });
 
+test("same customer marked for technician arrival does not create a Contacto line", () => {
+  const client = { id: "client-1", name: "Erick Luidens", whatsapp: "+2975622222" };
+  const text = renderVanWorkOrderText({
+    van: groupVan,
+    order: {
+      ...order,
+      appointmentWorkItems: [{ label: "Standard Service", quantity: 1 }],
+      customerFacingDescription: "Scheduled work: 1 × Standard Service.",
+      notificationRecipients: [{
+        recipientType: "client",
+        sourceId: "client-1",
+        name: "Erick Luidens",
+        role: "Customer / owner",
+        whatsapp: "+2975622222",
+        technicianArrival: true,
+      }],
+    },
+    client,
+    property: { operationalZone: "Paradera", neighborhood: "Paradera" },
+    appointment: {},
+    staffById: new Map(),
+    sequence: 1,
+  });
+  assert.match(text, /\*Cliente:\* Erick Luidens/);
+  assert.doesNotMatch(text, /\*Contacto:\*/);
+  assert.doesNotMatch(text, /Customer \/ owner/);
+  assert.match(text, /\*Descripción:\* Scheduled work: 1 × Standard Service\./);
+  assert.doesNotMatch(text, /\n\*Trabajo:\*/);
+});
+
 test("blank or legacy generated property names do not create a Location line", () => {
   for (const name of ["", "Primary Property", "Property", "Property 3"]) {
     const text = renderVanWorkOrderText({
       van: groupVan,
       order,
-      client: { name: "Customer" },
+      client: { id: "client-1", name: "Customer" },
       property: { name, operationalZone: "Oranjestad Centro", neighborhood: "Playa" },
       appointment: {},
       staffById: new Map(),
@@ -221,7 +272,7 @@ test("a support Work Order does not expose internal assignment labels", () => {
   const text = renderVanWorkOrderText({
     van: { ...groupVan, id: "VAN-4", name: "Van 4" },
     order: { ...order, vanId: "VAN-4", appointmentAssignmentRole: "support" },
-    client: { name: "Customer" },
+    client: { id: "client-1", name: "Customer" },
     property: { operationalZone: "Santa Cruz", neighborhood: "Balashi" },
     appointment: {},
     staffById: new Map(),
@@ -231,30 +282,107 @@ test("a support Work Order does not expose internal assignment labels", () => {
   assert.doesNotMatch(text, /Asignación|Apoyo|Principal/);
 });
 
-test("queue IDs are deterministic per date, van, work order and delivery run", () => {
+test("technician work times use real duration instead of stretching through the lunch gap", () => {
+  assert.equal(displayedOrderEndTime({
+    time: "10:30",
+    appointmentDurationMinutes: 120,
+    appointmentEndTime: "14:30",
+  }), "12:30");
+});
+
+test("standard lunch is inserted after the morning route and before the afternoon route", () => {
+  const lunch = planLunchBreak([
+    { id: "WO-1", time: "08:30", appointmentDurationMinutes: 60 },
+    { id: "WO-2", time: "09:30", appointmentDurationMinutes: 60 },
+    { id: "WO-3", time: "10:30", appointmentDurationMinutes: 60 },
+    { id: "WO-4", time: "13:30", appointmentDurationMinutes: 60 },
+  ]);
+  assert.deepEqual(lunch, {
+    startMinutes: 720,
+    endMinutes: 780,
+    insertAfterCount: 3,
+    onSite: false,
+    reason: "standard-lunch-window",
+  });
+});
+
+test("two two-hour morning installations push lunch until both jobs are complete", () => {
+  const lunch = planLunchBreak([
+    { id: "INSTALL-1", time: "08:30", appointmentDurationMinutes: 120 },
+    { id: "INSTALL-2", time: "10:30", appointmentDurationMinutes: 120 },
+    { id: "INSTALL-3", time: "14:30", appointmentDurationMinutes: 120 },
+  ]);
+  assert.deepEqual(lunch, {
+    startMinutes: 750,
+    endMinutes: 810,
+    insertAfterCount: 2,
+    onSite: false,
+    reason: "lunch-shifted-after-work",
+  });
+});
+
+test("one all-day project receives an on-site lunch break instead of delaying lunch until project completion", () => {
+  const lunch = planLunchBreak([
+    { id: "PROJECT-1", time: "08:30", appointmentDurationMinutes: 360, scheduledSlots: 6, fullDaySingleProperty: true },
+  ]);
+  assert.deepEqual(lunch, {
+    startMinutes: 720,
+    endMinutes: 780,
+    insertAfterCount: 1,
+    onSite: true,
+    reason: "single-project-all-day",
+  });
+  const text = renderLunchBreakText({
+    van: { ...groupVan, name: "Van 1" },
+    dateKey: "2026-08-22",
+    lunch,
+    orders: [{ technicianIds: ["tech-a"] }],
+    staffById: new Map([["tech-a", { name: "Miguel Reyes" }]]),
+  });
+  assert.match(text, /\*LUNCH BREAK · ON SITE ·/);
+  assert.match(text, /\*Hora:\* 12:00 PM – 1:00 PM/);
+  assert.match(text, /\*Después de:\* Trabajo 1/);
+  assert.match(text, /\*Lugar:\* On site \/ project/);
+});
+
+test("a short morning-only route does not receive a pointless lunch message after the work is over", () => {
+  assert.equal(planLunchBreak([
+    { id: "WO-1", time: "08:30", appointmentDurationMinutes: 60 },
+  ]), null);
+});
+
+test("work and lunch queue IDs are deterministic per delivery run", () => {
   const first = deterministicQueueId({ dateKey: "2026-08-21", vanId: "VAN-2", order, deliveryKey: "auto" });
   const repeated = deterministicQueueId({ dateKey: "2026-08-21", vanId: "VAN-2", order, deliveryKey: "auto" });
   const manual = deterministicQueueId({ dateKey: "2026-08-21", vanId: "VAN-2", order, deliveryKey: "manual-test-1" });
+  const lunch = deterministicLunchQueueId({ dateKey: "2026-08-21", vanId: "VAN-2", deliveryKey: "auto" });
   assert.equal(first, repeated);
   assert.notEqual(first, manual);
   assert.match(first, /van-daily-work-2026-08-21-VAN-2-0830-WO-APT-1-1-auto/);
+  assert.match(lunch, /van-daily-lunch-2026-08-21-VAN-2-auto/);
 });
 
-test("queueDay sends one independent group message per work order in chronological order", async () => {
-  const secondOrder = {
+test("queueDay sends lunch as its own message between morning and afternoon work orders", async () => {
+  const morningOrder = {
+    ...order,
+    appointmentDurationMinutes: 60,
+    appointmentEndTime: "09:30",
+  };
+  const afternoonOrder = {
     ...order,
     id: "WO-APT-2-1",
     appointmentId: "APT-2",
     clientId: "client-2",
     propertyId: "property-2",
-    time: "10:30",
-    appointmentEndTime: "11:30",
+    time: "13:30",
+    appointmentDurationMinutes: 60,
+    appointmentEndTime: "14:30",
     customerFacingDescription: "Check bedroom air conditioner",
     appointmentWorkItems: [{ label: "Check Up", quantity: 1 }],
   };
   const db = createScheduleDb({
     vans: [{ id: "VAN-2", active: true, whatsappScheduleGroupName: "Van 2 Group", whatsappScheduleGroupJid: GROUP_JID }],
-    workOrders: [secondOrder, order],
+    workOrders: [afternoonOrder, morningOrder],
     clients: [{ id: "client-1", name: "Customer One" }, { id: "client-2", name: "Customer Two" }],
     properties: [
       { id: "property-1", name: "Pastechi House Building", operationalZone: "Oranjestad Centro", neighborhood: "Playa", accessInstructions: "Side gate" },
@@ -271,17 +399,21 @@ test("queueDay sends one independent group message per work order in chronologic
 
   assert.equal(result.vanCount, 1);
   assert.equal(result.workOrderCount, 2);
-  assert.equal(result.messageCount, 2);
+  assert.equal(result.lunchBreakCount, 1);
+  assert.equal(result.messageCount, 3);
   assert.equal(result.results.every((item) => item.queued), true);
   assert.equal(result.results[0].workOrderId, "WO-APT-1-1");
-  assert.equal(result.results[1].workOrderId, "WO-APT-2-1");
+  assert.equal(result.results[1].lunchBreak, true);
+  assert.equal(result.results[2].workOrderId, "WO-APT-2-1");
   const queued = [...db.collections.whatsappOutboundQueue.values()];
-  assert.equal(queued.length, 2);
+  assert.equal(queued.length, 3);
   assert.equal(queued.every((item) => item.to === GROUP_JID), true);
   assert.match(queued[0].text, /\*Trabajo 1/);
   assert.match(queued[0].text, /\*Location:\* Pastechi House Building/);
-  assert.match(queued[1].text, /\*Trabajo 2/);
-  assert.match(queued[1].text, /Customer Two/);
+  assert.match(queued[1].text, /\*LUNCH BREAK/);
+  assert.match(queued[1].text, /\*Después de:\* Trabajo 1/);
+  assert.match(queued[2].text, /\*Trabajo 2/);
+  assert.match(queued[2].text, /Customer Two/);
 });
 
 test("a van with zero work orders queues zero messages", async () => {
@@ -291,6 +423,7 @@ test("a van with zero work orders queues zero messages", async () => {
   const service = createTechnicianDailyScheduleService({ db });
   const result = await service.queueDay("2026-08-21", { targetVanId: "VAN-4" });
   assert.equal(result.workOrderCount, 0);
+  assert.equal(result.lunchBreakCount, 0);
   assert.equal(result.messageCount, 0);
   assert.equal(db.collections.whatsappOutboundQueue.size, 0);
 });
@@ -298,7 +431,7 @@ test("a van with zero work orders queues zero messages", async () => {
 test("missing group configuration fails closed with no technician phone fallback", async () => {
   const db = createScheduleDb({
     vans: [{ id: "VAN-2", active: true, whatsappScheduleGroupName: "Van 2 Group" }],
-    workOrders: [order],
+    workOrders: [{ ...order, appointmentDurationMinutes: 60, appointmentEndTime: "09:30" }],
     clients: [{ id: "client-1", name: "Customer One" }],
     properties: [{ id: "property-1" }],
     appointments: [{ id: "APT-1" }],
