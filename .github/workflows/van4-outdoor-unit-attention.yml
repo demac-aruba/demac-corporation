@@ -1,0 +1,48 @@
+name: Van 4 Outdoor Unit Attention
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'functions/migrations/sendVan4OutdoorUnitAttention.js'
+      - '.github/workflows/van4-outdoor-unit-attention.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: van4-outdoor-unit-attention
+  cancel-in-progress: false
+
+jobs:
+  send-message:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Validate message sender
+        run: node --check functions/migrations/sendVan4OutdoorUnitAttention.js
+
+      - name: Authenticate Firebase production service account
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+
+      - name: Send message to Van 4 WhatsApp group
+        env:
+          GCLOUD_PROJECT: demac-corporation
+          GOOGLE_CLOUD_PROJECT: demac-corporation
+        run: node functions/migrations/sendVan4OutdoorUnitAttention.js
