@@ -1,89 +1,68 @@
 const { getApps, initializeApp } = require("firebase-admin/app");
 const { FieldValue, getFirestore } = require("firebase-admin/firestore");
 const { canonicalizeVanCatalog } = require("../bookingVanIdentity");
+const {
+  VAN_SCHEDULE_GROUP_TARGETS,
+  targetVanIdForScheduleGroupName,
+} = require("../vanScheduleGroupIdentity");
 const { validWacliRecipient } = require("../whatsappTransactionalService");
 
-const TARGETS = Object.freeze([
-  { vanId: "VAN-1", label: "Miguel Reyes / Alan Baquero", signatures: [["miguel"]] },
-  { vanId: "VAN-2", label: "Mario Cornejo / Ronald Maury", signatures: [["mario", "ronald"]] },
-  { vanId: "VAN-3", label: "Alejandro Marquez / Edwin Calvo", signatures: [["alejandro", "edwin"]] },
-  { vanId: "VAN-4", label: "Jose Gregorio / Walter Rangel", signatures: [["gollo", "walter"], ["goyo", "walter"], ["gregorio", "walter"], ["jose", "gregorio", "walter"]] },
-]);
+const TARGETS = VAN_SCHEDULE_GROUP_TARGETS;
 
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function normalized(value) {
-  return text(value).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
-}
-
 function targetForGroupName(groupName) {
-  const value = normalized(groupName);
-  if (!value) return "";
-  for (const target of TARGETS) {
-    if (target.signatures.some((signature) => signature.every((token) => value.includes(token)))) return target.vanId;
-  }
-  return "";
+  return targetVanIdForScheduleGroupName(groupName);
 }
 
 function deriveVanGroupRealignment(rawVans = []) {
   const catalog = canonicalizeVanCatalog(rawVans);
-  const configs = catalog.vans.map((van) => ({
-    sourceVanId: van.sourceVanId,
-    currentVanId: van.id,
-    groupName: text(van.whatsappScheduleGroupName),
-    groupJid: text(van.whatsappScheduleGroupJid),
-    enabled: van.scheduleDeliveryEnabled !== false,
-  })).filter((item) => item.groupName && item.groupJid);
-
-  const byTarget = new Map();
-  for (const config of configs) {
-    const targetVanId = targetForGroupName(config.groupName);
-    if (!targetVanId) continue;
-    if (byTarget.has(targetVanId)) throw new Error(`Multiple WhatsApp group configurations match ${targetVanId}.`);
-    if (!config.groupJid.endsWith("@g.us") || !validWacliRecipient(config.groupJid)) {
-      throw new Error(`The WhatsApp group JID for ${config.groupName} is invalid.`);
-    }
-    byTarget.set(targetVanId, config);
+  if (catalog.vans.length !== TARGETS.length) {
+    throw new Error(`Cannot safely realign van WhatsApp groups; expected ${TARGETS.length} canonical Vans and found ${catalog.vans.length}.`);
   }
 
-  const missing = TARGETS.map((target) => target.vanId).filter((vanId) => !byTarget.has(vanId));
-  if (missing.length) throw new Error(`Cannot safely realign van WhatsApp groups; missing recognizable configuration for ${missing.join(", ")}.`);
-
-  const targetVanRecords = new Map(catalog.vans.map((van) => [van.id, van]));
   return TARGETS.map(({ vanId, label }) => {
-    const targetVan = targetVanRecords.get(vanId);
+    const targetVan = catalog.vans.find((van) => van.id === vanId);
     if (!targetVan?.sourceVanId) throw new Error(`Canonical ${vanId} is missing from the Van catalog.`);
-    const config = byTarget.get(vanId);
+    const groupJid = text(targetVan.whatsappScheduleGroupJid);
+    if (targetVan.whatsappScheduleGroupAlignment !== "canonical") {
+      throw new Error(`Cannot safely realign ${vanId}; WhatsApp group identity is ${targetVan.whatsappScheduleGroupAlignment || "unresolved"}.`);
+    }
+    if (!groupJid.endsWith("@g.us") || !validWacliRecipient(groupJid)) {
+      throw new Error(`The WhatsApp group JID resolved for ${vanId} is invalid.`);
+    }
     return {
       vanId,
       sourceVanId: targetVan.sourceVanId,
       groupName: label,
-      groupJid: config.groupJid,
-      enabled: config.enabled,
-      movedFromVanId: config.currentVanId,
-      sourceGroupName: config.groupName,
+      groupJid,
+      enabled: targetVan.scheduleDeliveryEnabled !== false,
+      movedFromVanId: text(targetVan.whatsappScheduleGroupAlignmentSourceVanId) || vanId,
+      sourceGroupName: text(targetVan.whatsappScheduleGroupName),
     };
   });
 }
 
 function verifyAlignedVanGroups(rawVans = []) {
   const catalog = canonicalizeVanCatalog(rawVans);
-  const byId = new Map(catalog.vans.map((van) => [van.id, van]));
+  const rawById = new Map(rawVans.map((van) => [text(van?.id), van]));
   const seenJids = new Set();
   for (const target of TARGETS) {
-    const van = byId.get(target.vanId);
-    if (!van) throw new Error(`Verification failed: ${target.vanId} is missing from the Van catalog.`);
-    const groupName = text(van.whatsappScheduleGroupName);
-    const groupJid = text(van.whatsappScheduleGroupJid);
+    const canonicalVan = catalog.vans.find((van) => van.id === target.vanId);
+    if (!canonicalVan?.sourceVanId) throw new Error(`Verification failed: ${target.vanId} is missing from the Van catalog.`);
+    const persistedVan = rawById.get(canonicalVan.sourceVanId);
+    if (!persistedVan) throw new Error(`Verification failed: persisted record for ${target.vanId} is missing.`);
+    const groupName = text(persistedVan.whatsappScheduleGroupName);
+    const groupJid = text(persistedVan.whatsappScheduleGroupJid);
     if (groupName !== target.label) {
-      throw new Error(`Verification failed: ${target.vanId} label is ${groupName || "missing"}; expected ${target.label}.`);
+      throw new Error(`Verification failed: ${target.vanId} persisted label is ${groupName || "missing"}; expected ${target.label}.`);
     }
     if (!groupJid.endsWith("@g.us") || !validWacliRecipient(groupJid)) {
-      throw new Error(`Verification failed: ${target.vanId} has an invalid WhatsApp group JID.`);
+      throw new Error(`Verification failed: ${target.vanId} has an invalid persisted WhatsApp group JID.`);
     }
-    if (seenJids.has(groupJid)) throw new Error(`Verification failed: WhatsApp group JID is duplicated for ${target.vanId}.`);
+    if (seenJids.has(groupJid)) throw new Error(`Verification failed: persisted WhatsApp group JID is duplicated for ${target.vanId}.`);
     seenJids.add(groupJid);
   }
   return TARGETS.map((target) => ({ vanId: target.vanId, groupName: target.label }));
@@ -104,7 +83,7 @@ async function realignVanScheduleGroups({ db } = {}) {
       whatsappScheduleGroupJid: update.groupJid,
       scheduleDeliveryEnabled: update.enabled,
       scheduleDeliveryUpdatedAt: now,
-      scheduleDeliveryMigration: "realign-van-groups-2026-08-22-v2",
+      scheduleDeliveryMigration: "realign-van-groups-2026-08-22-v3",
     }, { merge: true });
   }
   await batch.commit();
@@ -121,7 +100,6 @@ async function realignVanScheduleGroups({ db } = {}) {
       vanId: item.vanId,
       groupName: item.groupName,
       movedFromVanId: item.movedFromVanId,
-      sourceGroupName: item.sourceGroupName,
     })),
     verifiedMappings,
   };

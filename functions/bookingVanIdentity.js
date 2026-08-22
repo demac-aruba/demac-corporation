@@ -1,3 +1,5 @@
+const { realignCanonicalVanScheduleGroups } = require("./vanScheduleGroupIdentity");
+
 const CANONICAL_VAN_IDS = Object.freeze(["VAN-1", "VAN-2", "VAN-3", "VAN-4"]);
 const CANONICAL_VAN_SET = new Set(CANONICAL_VAN_IDS);
 
@@ -50,7 +52,7 @@ function canonicalizeVanCatalog(vans = []) {
   const canonicalVans = CANONICAL_VAN_IDS
     .map((id) => selected.get(id) ? { ...selected.get(id), sourceVanId: selected.get(id).id, id, name: `Van ${id.slice(-1)}` } : null)
     .filter(Boolean);
-  return { aliases, vans: canonicalVans };
+  return { aliases, vans: realignCanonicalVanScheduleGroups(canonicalVans) };
 }
 
 function resolveCanonicalVanId(value, aliases = new Map()) {
