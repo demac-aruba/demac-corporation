@@ -1,7 +1,11 @@
 const { canonicalizeVanCatalog, resolveCanonicalVanId } = require("./bookingVanIdentity");
+const { AFTERNOON_SLOTS } = require("./bookingSchedulingPrimitives");
 const { createWhatsAppTransactionalService, safeDocumentId, validWacliRecipient } = require("./whatsappTransactionalService");
 
 const VAN_DAILY_LANGUAGE = "es";
+const PREFERRED_LUNCH_START_MINUTES = 12 * 60;
+const LUNCH_DURATION_MINUTES = 60;
+const AFTERNOON_START_MINUTES = timeToMinutes(AFTERNOON_SLOTS[0]) || (13 * 60 + 30);
 const INACTIVE_WORK_ORDER_STATUSES = new Set([
   "Solicitud recibida",
   "Reserva temporal",
@@ -22,12 +26,36 @@ function normalizedText(value) {
   return String(value ?? "").trim();
 }
 
+function normalizedIdentity(value) {
+  return normalizedText(value).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function phoneDigits(value) {
+  return normalizedText(value).replace(/\D/g, "");
+}
+
 function activeWorkOrder(order) {
   return Boolean(order) && !INACTIVE_WORK_ORDER_STATUSES.has(normalizedText(order.status));
 }
 
 function orderTimeKey(order) {
   return normalizedText(order.time || "99:99").padStart(5, "0");
+}
+
+function timeToMinutes(value) {
+  const match = normalizedText(value).match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour > 23 || minute > 59) return null;
+  return hour * 60 + minute;
+}
+
+function minutesToTime(value) {
+  const total = Math.max(0, Math.round(Number(value) || 0));
+  const hour = Math.floor(total / 60) % 24;
+  const minute = total % 60;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
 function formatClock(value) {
@@ -65,6 +93,34 @@ function workSummary(order) {
 
 function customerDescription(order) {
   return normalizedText(order.customerFacingDescription || order.problem);
+}
+
+function orderDurationMinutes(order) {
+  const direct = Number(order?.appointmentDurationMinutes);
+  if (Number.isFinite(direct) && direct > 0) return Math.max(30, Math.round(direct));
+  const workItems = Array.isArray(order?.appointmentWorkItems) ? order.appointmentWorkItems : [];
+  const itemDuration = workItems.reduce((sum, item) => sum + Math.max(0, Number(item?.durationMinutes) || 0), 0);
+  if (itemDuration > 0) return Math.max(30, Math.round(itemDuration));
+  const slots = Number(order?.scheduledSlots);
+  if (Number.isFinite(slots) && slots > 0) return Math.max(30, Math.round(slots * 60));
+  const start = timeToMinutes(order?.time);
+  const end = timeToMinutes(order?.appointmentEndTime);
+  if (start !== null && end !== null && end > start) return Math.max(30, end - start);
+  return 60;
+}
+
+function projectedOrderEndMinutes(order) {
+  const start = timeToMinutes(order?.time);
+  return start === null ? null : start + orderDurationMinutes(order);
+}
+
+function displayedOrderEndTime(order) {
+  if (order?.fullDaySingleProperty === true && normalizedText(order?.appointmentEndTime)) {
+    return normalizedText(order.appointmentEndTime);
+  }
+  const projected = projectedOrderEndMinutes(order);
+  if (projected !== null) return minutesToTime(projected);
+  return normalizedText(order?.appointmentEndTime);
 }
 
 function technicianInstructions(appointment, order) {
@@ -124,31 +180,39 @@ function propertyLocationName(property) {
   return name;
 }
 
+function samePersonAsCustomer(recipient, client) {
+  if (!recipient || !client) return false;
+  if (normalizedText(recipient.recipientType).toLowerCase() === "client") return true;
+  if (normalizedText(recipient.sourceId) && normalizedText(recipient.sourceId) === normalizedText(client.id)) return true;
+  const recipientName = normalizedIdentity(recipient.name);
+  const clientName = normalizedIdentity(client.name || client.company);
+  if (recipientName && clientName && recipientName === clientName) return true;
+  const recipientPhone = phoneDigits(recipient.whatsapp || recipient.phone);
+  const clientPhone = phoneDigits(client.whatsapp || client.phone);
+  return Boolean(recipientPhone && clientPhone && recipientPhone === clientPhone);
+}
+
 function arrivalContact(order, client) {
   const recipients = Array.isArray(order.notificationRecipients) ? order.notificationRecipients : [];
-  const preferred = recipients.find((recipient) => recipient?.technicianArrival === true && normalizedText(recipient.whatsapp || recipient.phone));
-  if (preferred) {
-    return {
-      name: normalizedText(preferred.name) || normalizedText(client?.name || client?.company) || "Cliente",
-      role: normalizedText(preferred.role),
-      phone: normalizedText(preferred.whatsapp || preferred.phone),
-      source: "technician-arrival",
-    };
-  }
+  const preferred = recipients.find((recipient) => (
+    recipient?.technicianArrival === true
+      && normalizedText(recipient.name)
+      && !samePersonAsCustomer(recipient, client)
+  ));
+  if (!preferred) return null;
   return {
-    name: normalizedText(client?.name || client?.company) || "Cliente",
-    role: "",
-    phone: normalizedText(client?.whatsapp || client?.phone),
-    source: "primary-customer",
+    name: normalizedText(preferred.name),
+    source: "additional-property-contact",
   };
 }
 
 function renderVanWorkOrderText({ van, order, client, property, appointment, staffById, sequence }) {
   const start = formatClock(order.time);
-  const end = formatClock(order.appointmentEndTime);
+  const endValue = displayedOrderEndTime(order);
+  const end = endValue ? formatClock(endValue) : "";
   const contact = arrivalContact(order, client);
   const team = staffFirstNamesForOrder(order, staffById);
-  const description = customerDescription(order);
+  const description = customerDescription(order) || workSummary(order);
   const instructions = technicianInstructions(appointment, order);
   const access = propertyAccessInstructions(property);
   const district = geographicDistrict(property);
@@ -163,12 +227,10 @@ function renderVanWorkOrderText({ van, order, client, property, appointment, sta
   ];
 
   const customerBlock = [
-    `*Hora:* ${start}${order.appointmentEndTime ? ` – ${end}` : ""}`,
+    `*Hora:* ${start}${end ? ` – ${end}` : ""}`,
     `*Cliente:* ${normalizedText(client?.name || client?.company || order.clientName) || "Cliente"}`,
   ];
-  if (contact.source === "technician-arrival" && contact.name) {
-    customerBlock.push(`*Contacto:* ${contact.name}${contact.role ? ` · ${contact.role}` : ""}`);
-  }
+  if (contact?.name) customerBlock.push(`*Contacto:* ${contact.name}`);
 
   const locationBlock = [];
   if (locationName) locationBlock.push(`*Location:* ${locationName}`);
@@ -177,12 +239,86 @@ function renderVanWorkOrderText({ van, order, client, property, appointment, sta
   if (zone) locationBlock.push(`*Zona:* ${zone}`);
   if (access) locationBlock.push(`*Acceso:* ${access}`);
 
-  const workBlock = [`*Trabajo:* ${workSummary(order)}`];
-  if (description) workBlock.push(`*Descripción:* ${description}`);
-
-  const blocks = [header, customerBlock, locationBlock, workBlock];
+  const descriptionBlock = description ? [`*Descripción:* ${description}`] : [];
+  const blocks = [header, customerBlock, locationBlock, descriptionBlock];
   if (instructions) blocks.push([`*Instrucciones técnico:* ${instructions}`]);
   return blocks.map((block) => block.filter(Boolean).join("\n")).filter(Boolean).join("\n\n");
+}
+
+function longSingleProject(orders) {
+  if (!Array.isArray(orders) || orders.length !== 1) return false;
+  const [order] = orders;
+  return order.fullDaySingleProperty === true
+    || Number(order.scheduledSlots || 0) >= 5
+    || orderDurationMinutes(order) >= 300;
+}
+
+function scheduleSpansLunch(orders) {
+  if (!Array.isArray(orders) || !orders.length) return false;
+  if (longSingleProject(orders)) return true;
+  return orders.some((order) => {
+    const start = timeToMinutes(order.time);
+    const end = projectedOrderEndMinutes(order);
+    return (start !== null && start >= AFTERNOON_START_MINUTES)
+      || (end !== null && end > PREFERRED_LUNCH_START_MINUTES);
+  });
+}
+
+function planLunchBreak(orders) {
+  const sorted = [...(Array.isArray(orders) ? orders : [])]
+    .sort((a, b) => orderTimeKey(a).localeCompare(orderTimeKey(b)) || String(a.id || "").localeCompare(String(b.id || "")));
+  if (!scheduleSpansLunch(sorted)) return null;
+
+  const onSite = longSingleProject(sorted);
+  if (onSite) {
+    return {
+      startMinutes: PREFERRED_LUNCH_START_MINUTES,
+      endMinutes: PREFERRED_LUNCH_START_MINUTES + LUNCH_DURATION_MINUTES,
+      insertAfterCount: 1,
+      onSite: true,
+      reason: "single-project-all-day",
+    };
+  }
+
+  let startMinutes = PREFERRED_LUNCH_START_MINUTES;
+  for (const order of sorted) {
+    const orderStart = timeToMinutes(order.time);
+    const orderEnd = projectedOrderEndMinutes(order);
+    if (orderStart === null || orderEnd === null) continue;
+    if (orderEnd <= startMinutes) continue;
+    if (orderStart >= startMinutes + LUNCH_DURATION_MINUTES) break;
+    startMinutes = Math.max(startMinutes, orderEnd);
+  }
+
+  const endMinutes = startMinutes + LUNCH_DURATION_MINUTES;
+  const insertAfterCount = sorted.filter((order) => {
+    const start = timeToMinutes(order.time);
+    return start !== null && start < startMinutes;
+  }).length;
+  return {
+    startMinutes,
+    endMinutes,
+    insertAfterCount,
+    onSite: false,
+    reason: startMinutes === PREFERRED_LUNCH_START_MINUTES ? "standard-lunch-window" : "lunch-shifted-after-work",
+  };
+}
+
+function renderLunchBreakText({ van, dateKey, lunch, orders, staffById }) {
+  const representative = orders[0] || {};
+  const team = staffFirstNamesForOrder(representative, staffById);
+  const vanLabel = normalizedText(van.name || van.id) || "Van";
+  const headerLabel = team.length ? `${vanLabel} · ${team.join(" y ")}` : vanLabel;
+  const lines = [
+    `*DEMAC · ${headerLabel}*`,
+    `*LUNCH BREAK${lunch.onSite ? " · ON SITE" : ""} · ${formatScheduleDate(dateKey)}*`,
+    "",
+    `*Hora:* ${formatClock(minutesToTime(lunch.startMinutes))} – ${formatClock(minutesToTime(lunch.endMinutes))}`,
+  ];
+  if (lunch.insertAfterCount > 0) lines.push(`*Después de:* Trabajo ${lunch.insertAfterCount}`);
+  else if (orders.length) lines.push("*Antes de:* Trabajo 1");
+  if (lunch.onSite) lines.push("*Lugar:* On site / project");
+  return lines.join("\n");
 }
 
 function groupConfigForVan(van) {
@@ -199,6 +335,10 @@ function groupConfigForVan(van) {
 function deterministicQueueId({ dateKey, vanId, order, deliveryKey = "auto" }) {
   const time = normalizedText(order.time).replace(/\D/g, "") || "time";
   return safeDocumentId(`van-daily-work-${dateKey}-${vanId}-${time}-${order.id}-${deliveryKey}`);
+}
+
+function deterministicLunchQueueId({ dateKey, vanId, deliveryKey = "auto" }) {
+  return safeDocumentId(`van-daily-lunch-${dateKey}-${vanId}-${deliveryKey}`);
 }
 
 function createTechnicianDailyScheduleService({ db } = {}) {
@@ -277,33 +417,82 @@ function createTechnicianDailyScheduleService({ db } = {}) {
     };
   }
 
+  async function queueLunchBreak({ dateKey, van, orders, day, lunch, deliveryKey, reason }) {
+    const config = groupConfigForVan(van);
+    if (!config.enabled) {
+      return { queued: false, created: false, reason: "van-group-delivery-disabled", vanId: van.id, groupName: config.groupName, lunchBreak: true };
+    }
+    if (!config.valid) {
+      return { queued: false, created: false, reason: "van-whatsapp-group-not-configured", vanId: van.id, groupName: config.groupName, lunchBreak: true };
+    }
+    const queueId = deterministicLunchQueueId({ dateKey, vanId: van.id, deliveryKey });
+    const text = renderLunchBreakText({ van, dateKey, lunch, orders, staffById: day.staffById });
+    const result = await whatsapp.queueTransactionalMessage({
+      queueId,
+      to: config.groupJid,
+      text,
+      languageCode: VAN_DAILY_LANGUAGE,
+      metadata: {
+        notificationType: "van-daily-lunch-break",
+        recipientType: "whatsapp-group",
+        vanId: van.id,
+        groupName: config.groupName,
+        groupJid: config.groupJid,
+        scheduleDate: dateKey,
+        lunchStart: minutesToTime(lunch.startMinutes),
+        lunchEnd: minutesToTime(lunch.endMinutes),
+        afterWorkOrderCount: lunch.insertAfterCount,
+        onSite: lunch.onSite === true,
+        lunchReason: lunch.reason,
+        reason,
+      },
+    });
+    return {
+      ...result,
+      vanId: van.id,
+      groupName: config.groupName,
+      groupJid: config.groupJid,
+      lunchBreak: true,
+      lunch,
+    };
+  }
+
   async function queueDay(dateKey, { targetVanId = "", deliveryKey = "auto", reason = "daily-van-schedule" } = {}) {
     const day = await loadDay(dateKey);
     const canonicalTarget = targetVanId ? resolveCanonicalVanId(targetVanId) : "";
     const vans = day.vans.filter((van) => !canonicalTarget || van.id === canonicalTarget);
     const results = [];
     let workOrderCount = 0;
+    let lunchBreakCount = 0;
     for (const van of vans) {
       const orders = day.workOrders
         .filter((order) => order.vanId === van.id)
         .sort((a, b) => orderTimeKey(a).localeCompare(orderTimeKey(b)) || String(a.id || "").localeCompare(String(b.id || "")));
       workOrderCount += orders.length;
-      for (let index = 0; index < orders.length; index += 1) {
-        results.push(await queueWorkOrder({
-          dateKey,
-          van,
-          order: orders[index],
-          day,
-          sequence: index + 1,
-          deliveryKey,
-          reason,
-        }));
+      const lunch = planLunchBreak(orders);
+      for (let index = 0; index <= orders.length; index += 1) {
+        if (lunch && lunch.insertAfterCount === index) {
+          results.push(await queueLunchBreak({ dateKey, van, orders, day, lunch, deliveryKey, reason }));
+          lunchBreakCount += 1;
+        }
+        if (index < orders.length) {
+          results.push(await queueWorkOrder({
+            dateKey,
+            van,
+            order: orders[index],
+            day,
+            sequence: index + 1,
+            deliveryKey,
+            reason,
+          }));
+        }
       }
     }
     return {
       dateKey,
       vanCount: vans.length,
       workOrderCount,
+      lunchBreakCount,
       messageCount: results.length,
       results,
     };
@@ -312,27 +501,40 @@ function createTechnicianDailyScheduleService({ db } = {}) {
   return {
     loadDay,
     queueDay,
+    queueLunchBreak,
     queueWorkOrder,
   };
 }
 
 module.exports.DEFAULT_VAN_GROUP_NAMES = DEFAULT_VAN_GROUP_NAMES;
 module.exports.INACTIVE_WORK_ORDER_STATUSES = INACTIVE_WORK_ORDER_STATUSES;
+module.exports.LUNCH_DURATION_MINUTES = LUNCH_DURATION_MINUTES;
+module.exports.PREFERRED_LUNCH_START_MINUTES = PREFERRED_LUNCH_START_MINUTES;
 module.exports.VAN_DAILY_LANGUAGE = VAN_DAILY_LANGUAGE;
 module.exports.activeWorkOrder = activeWorkOrder;
 module.exports.arrivalContact = arrivalContact;
 module.exports.createTechnicianDailyScheduleService = createTechnicianDailyScheduleService;
 module.exports.customerDescription = customerDescription;
+module.exports.deterministicLunchQueueId = deterministicLunchQueueId;
 module.exports.deterministicQueueId = deterministicQueueId;
+module.exports.displayedOrderEndTime = displayedOrderEndTime;
 module.exports.firstName = firstName;
 module.exports.formatScheduleDate = formatScheduleDate;
 module.exports.geographicDistrict = geographicDistrict;
 module.exports.geographicZone = geographicZone;
 module.exports.groupConfigForVan = groupConfigForVan;
+module.exports.minutesToTime = minutesToTime;
+module.exports.orderDurationMinutes = orderDurationMinutes;
+module.exports.planLunchBreak = planLunchBreak;
+module.exports.projectedOrderEndMinutes = projectedOrderEndMinutes;
 module.exports.propertyAccessInstructions = propertyAccessInstructions;
 module.exports.propertyLocationName = propertyLocationName;
+module.exports.renderLunchBreakText = renderLunchBreakText;
 module.exports.renderVanWorkOrderText = renderVanWorkOrderText;
+module.exports.samePersonAsCustomer = samePersonAsCustomer;
+module.exports.scheduleSpansLunch = scheduleSpansLunch;
 module.exports.staffFirstNamesForOrder = staffFirstNamesForOrder;
 module.exports.staffNamesForOrder = staffNamesForOrder;
 module.exports.technicianInstructions = technicianInstructions;
+module.exports.timeToMinutes = timeToMinutes;
 module.exports.workSummary = workSummary;
