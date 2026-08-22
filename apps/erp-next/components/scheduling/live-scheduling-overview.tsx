@@ -65,7 +65,8 @@ function displaySlotsForVan(day: OperationalDay, vanId: string, capacityState: L
   const baseStarts = getRuntimeSchedulingSettings().serviceStartTimes;
   const starts = liveOperationalStartTimes(capacityState, vanId, day.dateKey, baseStarts);
   const halfDay = liveVanHalfDaySchedule(capacityState, vanId, day.dateKey);
-  const vanAvailable = liveVanOperationallyAvailable(capacityState, vanId, day.dateKey);
+  const capacityReady = Boolean(capacityState);
+  const vanAvailable = capacityReady && liveVanOperationallyAvailable(capacityState, vanId, day.dateKey);
 
   return starts.map((start) => {
     const startMinutes = timeToMinutes(start);
@@ -73,11 +74,13 @@ function displaySlotsForVan(day: OperationalDay, vanId: string, capacityState: L
     const operational = vanAvailable && liveOperationalWindowAllows(capacityState, vanId, day.dateKey, start, end);
     const offReason = operational
       ? undefined
-      : !vanAvailable
-        ? 'Van unavailable'
-        : halfDay
-          ? `Weekly half-day · off after ${formatTime(halfDay.workdayEnd || '13:00')}`
-          : liveCompanyClosureReason(capacityState, day.dateKey) || 'Outside operating capacity';
+      : !capacityReady
+        ? 'Capacity policy loading'
+        : !vanAvailable
+          ? 'Van unavailable'
+          : halfDay
+            ? `Weekly half-day · off after ${formatTime(halfDay.workdayEnd || '13:00')}`
+            : liveCompanyClosureReason(capacityState, day.dateKey) || 'Outside operating capacity';
     return { start, end, segment: startMinutes < 12 * 60 ? 'am' : 'pm', operational, offReason };
   });
 }
@@ -118,6 +121,13 @@ function occupancyForDay(day: OperationalDay, jobs: CalendarDispatchJob[], vans:
   }
   if (!total) return { total: 0, occupied: 0, open: 0, percent: 0 };
   return { total, occupied, open: Math.max(0, total - occupied), percent: Math.round((occupied / total) * 100) };
+}
+
+function halfDayVansForDay(day: OperationalDay, vans: DisplayVan[], capacityState: LiveOperationalCapacityState | null) {
+  if (!day.isOpen || !capacityState) return [];
+  return vans
+    .filter((van) => Boolean(liveVanHalfDaySchedule(capacityState, van.id, day.dateKey)))
+    .map((van) => van.id.replace('VAN-', 'Van '));
 }
 
 function addDays(dateKey: string, amount: number) {
@@ -531,10 +541,11 @@ export function LiveSchedulingOverview() {
       <div className={styles.weekStrip}>
         {week.map((day) => {
           const summary = weekSummaries[day.dateKey];
+          const halfDayVans = halfDayVansForDay(day, vans, capacityState);
           return (
             <button key={day.dateKey} type="button" className={`${styles.dayCard} ${day.dateKey === activeDate ? styles.dayActive : ''} ${day.isToday ? styles.today : ''}`} disabled={!day.isOpen || interactionActive} onClick={() => setActiveDate(day.dateKey)}>
               <div><span>{day.weekday}</span><strong>{day.shortDate}</strong>{day.isToday ? <b>Today</b> : null}</div>
-              <small>{day.shiftLabel}</small>
+              <small>{day.shiftLabel}{halfDayVans.length ? ` · ${halfDayVans.join(', ')} PM off` : ''}</small>
               <i><em style={{ width: `${summary?.percent ?? 0}%` }} /></i>
               <p>{day.isOpen ? `${summary?.occupied ?? 0}/${summary?.total ?? 0} capacity spots filled · ${summary?.open ?? 0} open` : 'Operationally closed'}</p>
             </button>
