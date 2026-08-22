@@ -4,10 +4,10 @@ const { canonicalizeVanCatalog } = require("../bookingVanIdentity");
 const { validWacliRecipient } = require("../whatsappTransactionalService");
 
 const TARGETS = Object.freeze([
-  { vanId: "VAN-1", signatures: [["miguel"]] },
-  { vanId: "VAN-2", signatures: [["mario", "ronald"]] },
-  { vanId: "VAN-3", signatures: [["alejandro", "edwin"]] },
-  { vanId: "VAN-4", signatures: [["gollo", "walter"], ["goyo", "walter"], ["gregorio", "walter"]] },
+  { vanId: "VAN-1", label: "Miguel Reyes / Alan Baquero", signatures: [["miguel"]] },
+  { vanId: "VAN-2", label: "Mario Cornejo / Ronald Maury", signatures: [["mario", "ronald"]] },
+  { vanId: "VAN-3", label: "Alejandro Marquez / Edwin Calvo", signatures: [["alejandro", "edwin"]] },
+  { vanId: "VAN-4", label: "Jose Gregorio / Walter Rangel", signatures: [["gollo", "walter"], ["goyo", "walter"], ["gregorio", "walter"], ["jose", "gregorio", "walter"]] },
 ]);
 
 function text(value) {
@@ -52,19 +52,41 @@ function deriveVanGroupRealignment(rawVans = []) {
   if (missing.length) throw new Error(`Cannot safely realign van WhatsApp groups; missing recognizable configuration for ${missing.join(", ")}.`);
 
   const targetVanRecords = new Map(catalog.vans.map((van) => [van.id, van]));
-  return TARGETS.map(({ vanId }) => {
+  return TARGETS.map(({ vanId, label }) => {
     const targetVan = targetVanRecords.get(vanId);
     if (!targetVan?.sourceVanId) throw new Error(`Canonical ${vanId} is missing from the Van catalog.`);
     const config = byTarget.get(vanId);
     return {
       vanId,
       sourceVanId: targetVan.sourceVanId,
-      groupName: config.groupName,
+      groupName: label,
       groupJid: config.groupJid,
       enabled: config.enabled,
       movedFromVanId: config.currentVanId,
+      sourceGroupName: config.groupName,
     };
   });
+}
+
+function verifyAlignedVanGroups(rawVans = []) {
+  const catalog = canonicalizeVanCatalog(rawVans);
+  const byId = new Map(catalog.vans.map((van) => [van.id, van]));
+  const seenJids = new Set();
+  for (const target of TARGETS) {
+    const van = byId.get(target.vanId);
+    if (!van) throw new Error(`Verification failed: ${target.vanId} is missing from the Van catalog.`);
+    const groupName = text(van.whatsappScheduleGroupName);
+    const groupJid = text(van.whatsappScheduleGroupJid);
+    if (groupName !== target.label) {
+      throw new Error(`Verification failed: ${target.vanId} label is ${groupName || "missing"}; expected ${target.label}.`);
+    }
+    if (!groupJid.endsWith("@g.us") || !validWacliRecipient(groupJid)) {
+      throw new Error(`Verification failed: ${target.vanId} has an invalid WhatsApp group JID.`);
+    }
+    if (seenJids.has(groupJid)) throw new Error(`Verification failed: WhatsApp group JID is duplicated for ${target.vanId}.`);
+    seenJids.add(groupJid);
+  }
+  return TARGETS.map((target) => ({ vanId: target.vanId, groupName: target.label }));
 }
 
 async function realignVanScheduleGroups({ db } = {}) {
@@ -82,17 +104,26 @@ async function realignVanScheduleGroups({ db } = {}) {
       whatsappScheduleGroupJid: update.groupJid,
       scheduleDeliveryEnabled: update.enabled,
       scheduleDeliveryUpdatedAt: now,
-      scheduleDeliveryMigration: "realign-van-groups-2026-08-22",
+      scheduleDeliveryMigration: "realign-van-groups-2026-08-22-v2",
     }, { merge: true });
   }
   await batch.commit();
+
+  const verificationSnapshot = await db.collection("vans").get();
+  const verifiedMappings = verifyAlignedVanGroups(
+    verificationSnapshot.docs.map((document) => ({ id: document.id, ...document.data() })),
+  );
+
   return {
     updated: updates.length,
+    verified: true,
     mappings: updates.map((item) => ({
       vanId: item.vanId,
       groupName: item.groupName,
       movedFromVanId: item.movedFromVanId,
+      sourceGroupName: item.sourceGroupName,
     })),
+    verifiedMappings,
   };
 }
 
@@ -113,3 +144,4 @@ module.exports.TARGETS = TARGETS;
 module.exports.deriveVanGroupRealignment = deriveVanGroupRealignment;
 module.exports.realignVanScheduleGroups = realignVanScheduleGroups;
 module.exports.targetForGroupName = targetForGroupName;
+module.exports.verifyAlignedVanGroups = verifyAlignedVanGroups;
