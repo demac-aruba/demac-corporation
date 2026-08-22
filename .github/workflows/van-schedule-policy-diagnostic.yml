@@ -50,23 +50,21 @@ jobs:
         run: |
           set -euo pipefail
           for van in VAN-1 VAN-2 VAN-3 VAN-4; do
-            description="$(node - "$van" /tmp/van-policy.json <<'NODE'
+            summary="$(node - "$van" /tmp/van-policy.json <<'NODE'
           const fs = require('node:fs');
           const vanId = process.argv[2];
-          const path = process.argv[3];
-          const payload = JSON.parse(fs.readFileSync(path, 'utf8'));
-          const van = payload.vans.find((item) => item.vanId === vanId);
-          const rules = van?.rules || [];
-          const summary = rules.length ? rules.map((r) => `weekday=${r.weekday} ${r.workdayStart || '08:00'}-${r.workdayEnd || '13:00'}`).join('; ') : 'NO ACTIVE HALF-DAY RULE';
-          process.stdout.write(summary.slice(0, 140));
+          const p = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+          const v = p.vans.find((item) => item.vanId === vanId);
+          const rules = v?.rules || [];
+          process.stdout.write(rules.length ? rules.map((r) => `D${r.weekday}-${r.workdayStart || '08:00'}-${r.workdayEnd || '13:00'}`).join('+') : 'NONE');
           NODE
             )"
-            gh api repos/${{ github.repository }}/statuses/${{ github.sha }} -f state=success -f context="DEMAC / ${van} Schedule" -f description="$description"
+            gh api repos/${{ github.repository }}/statuses/${{ github.sha }} -f state=success -f context="DEMAC / ${van} / ${summary}" -f description='Production van half-day rule'
           done
           totals="$(node - /tmp/van-policy.json <<'NODE'
           const fs = require('node:fs');
           const p = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          process.stdout.write(`halfDays=${p.activeHalfDayCount}; deprecatedEmployeeDays=${p.deprecatedEmployeeDayOffs.length}`);
+          process.stdout.write(`halfDays=${p.activeHalfDayCount}-deprecatedEmployeeDays=${p.deprecatedEmployeeDayOffs.length}`);
           NODE
           )"
-          gh api repos/${{ github.repository }}/statuses/${{ github.sha }} -f state=success -f context='DEMAC / Van Schedule Diagnostic' -f description="$totals"
+          gh api repos/${{ github.repository }}/statuses/${{ github.sha }} -f state=success -f context="DEMAC / Schedule Diagnostic / ${totals}" -f description='Production schedule policy snapshot'
