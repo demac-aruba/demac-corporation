@@ -1,1 +1,0 @@
-This fix removes a stale duplicated Saturday scheduling branch from LIVE drag candidate generation. It does not add a new runtime policy layer. The normal service-start grid remains owned by runtime scheduling settings, while existing canonical closure, van half-day, and van availability sources continue to provide exceptions.
