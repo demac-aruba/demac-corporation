@@ -3,6 +3,7 @@
 import { BrowserDispatchOperations } from './browser-dispatch-operations';
 import { BrowserDispatchReadinessBoard } from './browser-dispatch-readiness-board';
 import { LiveSchedulingOverview } from './live-scheduling-overview';
+import { VanHalfDayPolicyBanner } from './van-half-day-policy-banner';
 import { VanScheduleDeliveryPanel } from './van-schedule-delivery-panel';
 import readableStyles from './scheduling-readable-type.module.css';
 import styles from './scheduling-page-shell.module.css';
@@ -16,7 +17,7 @@ type Props = {
 export function SchedulingPageShell({ view = 'schedule' }: Props) {
   return (
     <div className={`${styles.shell} ${view === 'schedule' ? styles.scheduleCompact : ''} ${readableStyles.readable}`}>
-      {view === 'schedule' ? <><VanScheduleDeliveryPanel /><LiveSchedulingOverview /></> : null}
+      {view === 'schedule' ? <><VanScheduleDeliveryPanel /><VanHalfDayPolicyBanner /><LiveSchedulingOverview /></> : null}
       {view === 'dispatch' ? <BrowserDispatchOperations /> : null}
       {view === 'readiness' ? <BrowserDispatchReadinessBoard /> : null}
     </div>
