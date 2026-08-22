@@ -26,11 +26,13 @@ type SendResponse = {
   results: Array<{ queued: boolean; created?: boolean; vanId?: string; groupName?: string; workOrderId?: string; reason?: string }>;
 };
 
+// These are display fallbacks only. The persistent group name/JID continues to
+// live on the canonical Van record in Firestore.
 const EXPECTED_GROUP_NAMES: Record<string, string> = {
   'VAN-1': 'TEC - Miguel',
-  'VAN-2': 'Gollo y Walter',
-  'VAN-3': 'TEC - Mario y Ronald',
-  'VAN-4': 'TEC - Alejandro y Edwin',
+  'VAN-2': 'TEC - Mario y Ronald',
+  'VAN-3': 'TEC - Alejandro y Edwin',
+  'VAN-4': 'Gollo y Walter',
 };
 
 async function callAuthority<T>(action: string, data: Record<string, unknown>, timeoutMs = 20_000): Promise<T> {
@@ -129,7 +131,7 @@ export function VanScheduleDeliveryPanel() {
       <div style={{ padding: '11px 13px', display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
         <div>
           <strong style={{ display: 'block', fontSize: 12 }}>WhatsApp Van Schedules</strong>
-          <span style={{ color: 'var(--muted)', fontSize: 10 }}>8:00 AM automatic delivery · one message per Work Order · {configuredCount}/4 van groups configured</span>
+          <span style={{ color: 'var(--muted)', fontSize: 10 }}>8:00 AM automatic delivery · 8:05 / 8:10 recovery · one message per Work Order · {configuredCount}/4 van groups configured</span>
         </div>
         <div style={{ display: 'flex', gap: 7, alignItems: 'center', flexWrap: 'wrap' }}>
           <input aria-label="Schedule date" type="date" value={dateKey} onChange={(event) => setDateKey(event.target.value)} disabled={busy} style={{ minHeight: 34 }} />
