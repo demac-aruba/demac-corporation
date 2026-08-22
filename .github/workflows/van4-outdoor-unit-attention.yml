@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
   group: van4-outdoor-unit-attention
@@ -21,6 +22,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Mark delivery pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state=pending \
+            -f context='DEMAC / Van 4 WhatsApp Message' \
+            -f description='Sending message to Van 4 WhatsApp group'
+
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -46,3 +56,20 @@ jobs:
           GCLOUD_PROJECT: demac-corporation
           GOOGLE_CLOUD_PROJECT: demac-corporation
         run: node functions/migrations/sendVan4OutdoorUnitAttention.js
+
+      - name: Publish delivery result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            state=success
+            description='WhatsApp message acknowledged as sent'
+          else
+            state=failure
+            description='WhatsApp message delivery workflow failed'
+          fi
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -f state="$state" \
+            -f context='DEMAC / Van 4 WhatsApp Message' \
+            -f description="$description"
