@@ -160,19 +160,12 @@ function occupiedSlots(startTime, slotCount, halfDay) {
   return schedule.slice(start, start + slotCount);
 }
 
-function weeklyDayOff(profile, date) {
-  const day = Number(profile?.weeklyDayOffWeekday);
-  if (!Number.isInteger(day) || day < 1 || day > 6) return false;
-  if (profile?.weeklyDayOffEffectiveFrom && date < profile.weeklyDayOffEffectiveFrom) return false;
-  return weekday(date) === day;
-}
-
 function staffUnavailable(profile, date, absences) {
   if (!profile || profile.active === false || profile.availability === "Inactivo") return true;
   const generallyUnavailable = profile.availability && profile.availability !== "Disponible"
     && (!profile.unavailableFrom || date >= profile.unavailableFrom)
     && (!profile.unavailableUntil || date <= profile.unavailableUntil);
-  return weeklyDayOff(profile, date) || Boolean(generallyUnavailable) || absences.some((absence) =>
+  return Boolean(generallyUnavailable) || absences.some((absence) =>
     absence.active !== false
     && absence.staffId === profile.id
     && date >= absence.fromDate
@@ -340,5 +333,4 @@ module.exports = {
   snapshotItems,
   vanCanReceiveAppointments,
   weekday,
-  weeklyDayOff,
 };
