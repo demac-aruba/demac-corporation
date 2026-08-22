@@ -85,7 +85,9 @@ export function liveOperationalMoveCapacityCandidates(
   const settings = getRuntimeSchedulingSettings();
   const slotCount = canonicalAppointmentSlotCount(appointment);
   if (!slotCount) return [];
-  const baseStarts = day.weekday === 'Sat' ? ['09:00', '10:00', '11:00', '12:00'] : settings.serviceStartTimes;
+  // Monday through Saturday share the same canonical service starts. Per-van half-days
+  // are applied below by liveOperationalStartTimes/liveOperationalWindowAllows.
+  const baseStarts = settings.serviceStartTimes;
   const assignmentIds = new Set(appointment.assignments.map((assignment) => assignment.id));
   const otherJobs = jobs.filter((job) => !assignmentIds.has(job.id) && job.status !== 'cancelled');
   const candidates: CandidateSlot[] = [];
