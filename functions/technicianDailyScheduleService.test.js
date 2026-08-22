@@ -321,7 +321,7 @@ test("two two-hour morning installations push lunch until both jobs are complete
   });
 });
 
-test("one all-day project receives an on-site lunch break instead of delaying lunch until project completion", () => {
+test("one all-day project keeps the lunch placement on site but renders only the minimal lunch message", () => {
   const lunch = planLunchBreak([
     { id: "PROJECT-1", time: "08:30", appointmentDurationMinutes: 360, scheduledSlots: 6, fullDaySingleProperty: true },
   ]);
@@ -339,10 +339,7 @@ test("one all-day project receives an on-site lunch break instead of delaying lu
     orders: [{ technicianIds: ["tech-a"] }],
     staffById: new Map([["tech-a", { name: "Miguel Reyes" }]]),
   });
-  assert.match(text, /\*LUNCH BREAK · ON SITE ·/);
-  assert.match(text, /\*Hora:\* 12:00 PM – 1:00 PM/);
-  assert.match(text, /\*Después de:\* Trabajo 1/);
-  assert.match(text, /\*Lugar:\* On site \/ project/);
+  assert.equal(text, "*LUNCH BREAK*");
 });
 
 test("a short morning-only route does not receive a pointless lunch message after the work is over", () => {
@@ -362,7 +359,7 @@ test("work and lunch queue IDs are deterministic per delivery run", () => {
   assert.match(lunch, /van-daily-lunch-2026-08-21-VAN-2-auto/);
 });
 
-test("queueDay sends lunch as its own message between morning and afternoon work orders", async () => {
+test("queueDay sends a minimal lunch message between morning and afternoon work orders", async () => {
   const morningOrder = {
     ...order,
     appointmentDurationMinutes: 60,
@@ -410,8 +407,7 @@ test("queueDay sends lunch as its own message between morning and afternoon work
   assert.equal(queued.every((item) => item.to === GROUP_JID), true);
   assert.match(queued[0].text, /\*Trabajo 1/);
   assert.match(queued[0].text, /\*Location:\* Pastechi House Building/);
-  assert.match(queued[1].text, /\*LUNCH BREAK/);
-  assert.match(queued[1].text, /\*Después de:\* Trabajo 1/);
+  assert.equal(queued[1].text, "*LUNCH BREAK*");
   assert.match(queued[2].text, /\*Trabajo 2/);
   assert.match(queued[2].text, /Customer Two/);
 });

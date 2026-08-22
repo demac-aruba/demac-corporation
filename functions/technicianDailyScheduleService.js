@@ -304,21 +304,8 @@ function planLunchBreak(orders) {
   };
 }
 
-function renderLunchBreakText({ van, dateKey, lunch, orders, staffById }) {
-  const representative = orders[0] || {};
-  const team = staffFirstNamesForOrder(representative, staffById);
-  const vanLabel = normalizedText(van.name || van.id) || "Van";
-  const headerLabel = team.length ? `${vanLabel} · ${team.join(" y ")}` : vanLabel;
-  const lines = [
-    `*DEMAC · ${headerLabel}*`,
-    `*LUNCH BREAK${lunch.onSite ? " · ON SITE" : ""} · ${formatScheduleDate(dateKey)}*`,
-    "",
-    `*Hora:* ${formatClock(minutesToTime(lunch.startMinutes))} – ${formatClock(minutesToTime(lunch.endMinutes))}`,
-  ];
-  if (lunch.insertAfterCount > 0) lines.push(`*Después de:* Trabajo ${lunch.insertAfterCount}`);
-  else if (orders.length) lines.push("*Antes de:* Trabajo 1");
-  if (lunch.onSite) lines.push("*Lugar:* On site / project");
-  return lines.join("\n");
+function renderLunchBreakText() {
+  return "*LUNCH BREAK*";
 }
 
 function groupConfigForVan(van) {
