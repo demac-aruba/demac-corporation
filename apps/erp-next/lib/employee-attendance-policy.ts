@@ -1,7 +1,7 @@
 import type { CanonicalOperationsState, CanonicalStaffProfile } from './canonical-operations';
 import {
   absenceForDate,
-  payrollSettingsForStaff,
+  payrollSettingsForEmployee,
   statusFromRecords,
   timesheetForDate,
   type AttendanceStatus,
@@ -70,7 +70,7 @@ export function deriveAttendanceDay(input: {
   const schedule = resolveEmployeeSchedule({
     profile: employee,
     date,
-    payrollSettings: payrollSettingsForStaff(attendance.payrollSettings, employee.id),
+    payrollSettings: payrollSettingsForEmployee(attendance.payrollSettings, employee),
     vans: operations.vans,
     halfDaySchedules: operations.vanHalfDaySchedules,
   });
