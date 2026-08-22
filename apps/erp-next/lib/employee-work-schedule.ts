@@ -1,6 +1,5 @@
 import {
   canonicalVanId,
-  isWeeklyDayOff,
   type CanonicalStaffProfile,
   type CanonicalVan,
   type CanonicalVanHalfDaySchedule,
@@ -13,20 +12,6 @@ function minutesFromTimes(start?: string, end?: string) {
   const [eh, em] = end.split(':').map(Number);
   if (![sh, sm, eh, em].every(Number.isFinite)) return undefined;
   return Math.max(0, (eh * 60 + em) - (sh * 60 + sm));
-}
-
-function companyBaseSchedule(date: string): AttendanceSchedule {
-  const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
-  if (weekday === 6) {
-    return {
-      startTime: '08:00',
-      endTime: '17:00',
-      scheduledMinutes: 480,
-      paidFreeMinutes: 0,
-      label: 'Saturday · 08:00–17:00 · lunch 12:00–13:00',
-    };
-  }
-  return defaultAttendanceSchedule(date);
 }
 
 export function isTechnicalEmployee(profile: CanonicalStaffProfile) {
@@ -46,72 +31,41 @@ export function resolveEmployeeSchedule(input: {
   halfDaySchedules: CanonicalVanHalfDaySchedule[];
 }): AttendanceSchedule {
   const { profile, date, payrollSettings, vans, halfDaySchedules } = input;
-  let schedule = companyBaseSchedule(date);
-  const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
-
-  if (isWeeklyDayOff(profile, date)) {
-    return {
-      startTime: '',
-      endTime: '',
-      scheduledMinutes: 0,
-      paidFreeMinutes: 0,
-      label: 'Weekly day off',
-    };
-  }
-
-  if (weekday !== 0 && payrollSettings) {
-    const configuredHours = weekday === 6 ? payrollSettings.saturdayHours : payrollSettings.weekdayHours;
-    if (Number(configuredHours) >= 0) {
-      const scheduledMinutes = Math.round(Number(configuredHours) * 60);
-      schedule = {
-        ...schedule,
-        scheduledMinutes,
-        endTime: schedule.startTime && scheduledMinutes > 0
-          ? addMinutes(schedule.startTime, scheduledMinutes + (scheduledMinutes >= 480 ? 60 : 0))
-          : schedule.endTime,
-        label: `${weekday === 6 ? 'Saturday' : 'Weekday'} · configured ${formatHours(scheduledMinutes)}`,
-      };
-    }
-  }
-
+  const schedule = defaultAttendanceSchedule(date);
+  const technical = isTechnicalEmployee(profile);
   const van = employeeVan(profile, vans);
   const vanId = van ? canonicalVanId(van.id, vans) : '';
   const vanHalfDay = halfDaySchedules.find((rule) => vanId && canonicalVanId(rule.vanId, vans) === vanId);
 
-  if (isTechnicalEmployee(profile) && vanHalfDay?.weekday !== undefined) {
+  // Field technicians inherit the recurring half-day from their canonical Van/team.
+  // Employee payroll settings never override the operational Van half-day policy.
+  if (technical && vanHalfDay?.weekday !== undefined) {
     const ruleMinutes = minutesFromTimes(vanHalfDay.workdayStart ?? schedule.startTime, vanHalfDay.workdayEnd);
     return applyHalfDaySchedule(
       schedule,
       date,
       vanHalfDay.weekday,
-      ruleMinutes ? ruleMinutes / 60 : payrollSettings?.halfDayWorkedHours ?? 5,
-      payrollSettings?.halfDayPaidFreeHours ?? 3,
+      ruleMinutes ? ruleMinutes / 60 : 5,
+      3,
+      undefined,
+      'afternoon',
     );
   }
 
-  if (payrollSettings?.weeklyHalfDayWeekday !== undefined) {
+  // Office/non-technical staff use the existing employeePayrollSettings record as the
+  // single employee-specific recurring half-day source. Legacy records without a period
+  // keep their historical behavior: work the morning and take the afternoon off.
+  if (!technical && payrollSettings?.weeklyHalfDayWeekday != null) {
     return applyHalfDaySchedule(
       schedule,
       date,
       payrollSettings.weeklyHalfDayWeekday,
-      payrollSettings.halfDayWorkedHours,
-      payrollSettings.halfDayPaidFreeHours,
+      payrollSettings.halfDayWorkedHours ?? 4,
+      payrollSettings.halfDayPaidFreeHours ?? 4,
       payrollSettings.halfDayEffectiveFrom,
+      payrollSettings.halfDayOffPeriod ?? 'afternoon',
     );
   }
 
   return schedule;
-}
-
-function addMinutes(startTime: string, minutes: number) {
-  const [hour, minute] = startTime.split(':').map(Number);
-  const total = (hour * 60 + minute + Math.max(0, minutes)) % (24 * 60);
-  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
-}
-
-function formatHours(minutes: number) {
-  const value = Math.max(0, minutes);
-  const hours = Math.floor(value / 60);
-  const remainder = value % 60;
-  return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
 }
