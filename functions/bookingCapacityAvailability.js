@@ -37,6 +37,14 @@ function normalizeOrderTime(value) {
   return "15:30";
 }
 
+function endTimeFromOccupiedSlots(slots) {
+  if (!Array.isArray(slots) || !slots.length) return "";
+  const match = String(slots[slots.length - 1] || "").match(/^(\d{2}):(\d{2})$/);
+  if (!match) return "";
+  const total = Number(match[1]) * 60 + Number(match[2]) + 60;
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
 function vanCanReceiveOperationalMove(van, assignment) {
   return van?.active !== false
     && !["Mantenimiento", "Fuera de servicio"].includes(assignment?.status);
@@ -65,8 +73,8 @@ function candidateAvailability({ date, time, allocation, van, assignment, data, 
 
   const halfDay = isHalfDay(van.id, date, data.vanHalfDaySchedules);
   if (allocation.fullDay && (halfDay || time !== "08:30")) return null;
-  const slots = allocation.fullDay ? REGULAR_SLOTS : occupiedSlots(time, allocation.slots, halfDay);
-  if (!slots.length) return null;
+  const occupied = allocation.fullDay ? REGULAR_SLOTS : occupiedSlots(time, allocation.slots, halfDay);
+  if (!occupied.length) return null;
 
   const sameVanOrders = data.workOrders
     .filter((order) => {
@@ -86,7 +94,7 @@ function candidateAvailability({ date, time, allocation, van, assignment, data, 
       ),
     }));
 
-  if (sameVanOrders.some((order) => order.occupied.some((slot) => slots.includes(slot)))) return null;
+  if (sameVanOrders.some((order) => order.occupied.some((slot) => occupied.includes(slot)))) return null;
 
   let routeScore = 0;
   let routeReason = manualOperationalMove ? "manual-operational-move" : "explicit-office-target";
@@ -112,7 +120,8 @@ function candidateAvailability({ date, time, allocation, van, assignment, data, 
     helperStaffId: assignment.helperStaffId,
     quantity: allocation.quantity,
     durationMinutes: Number(allocation.durationMinutes || allocation.slots * 60),
-    slots: allocation.fullDay ? 6 : allocation.slots,
+    slots: allocation.fullDay ? REGULAR_SLOTS.length : allocation.slots,
+    endTime: endTimeFromOccupiedSlots(occupied),
     fullDay: allocation.fullDay,
     routeScore,
     routeReason,
@@ -122,6 +131,7 @@ function candidateAvailability({ date, time, allocation, van, assignment, data, 
 module.exports = {
   ROUTE_POLICIES,
   candidateAvailability,
+  endTimeFromOccupiedSlots,
   normalizeOrderTime,
   routePolicy,
   vanCanReceiveOperationalMove,
