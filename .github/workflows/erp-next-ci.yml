@@ -55,5 +55,7 @@ jobs:
         run: npm run test:booking-copilot
       - name: Live scheduling acceptance simulation
         run: npm run test:live-scheduling
+      - name: Employee schedule architecture acceptance
+        run: npm run test:employee-schedule
       - name: Build
         run: npm run build
