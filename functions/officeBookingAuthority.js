@@ -26,7 +26,7 @@ const {
   notificationQueueIds: canonicalNotificationQueueIds,
 } = require("./appointmentNotificationService");
 
-const OFFICE_BOOKING_API_VERSION = 12;
+const OFFICE_BOOKING_API_VERSION = 13;
 const OFFICE_BOOKING_ROLES = Object.freeze([
   "admin",
   "office",
@@ -92,7 +92,9 @@ function officeActor(identity = {}) {
 }
 
 function lifecycleChangeKind(value) {
-  return cleanText(value, 80) === "operational_move" ? "operational_move" : "customer_reschedule";
+  const normalized = cleanText(value, 80);
+  if (normalized === "operational_move" || normalized === "details_edited") return normalized;
+  return "customer_reschedule";
 }
 
 function bookingRequestFromOffice(data = {}) {
