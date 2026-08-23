@@ -18,7 +18,13 @@ provider callbacks, and cached projections are never authority by themselves.
 | Technical recurring half-day | `vanHalfDaySchedules` for the Van/team | Authorized operations/scheduling flows | Technical staff inherit the Van/team rule; no employee-level duplicate |
 | Office/non-technical recurring half-day and payroll schedule | `employeePayrollSettings` | Authorized workforce/payroll flows | Payroll permission boundary and employee linkage |
 | Temporary crew override | `dailyVanAssignments` | Authorized operations/scheduling flows | Date-scoped override; does not rewrite recurring crew ownership |
-| Inventory | Inventory Authority over the append-oriented inventory transaction ledger | Warehouse/authorized work-order flows | Atomic movement, no direct balance edits, reconciliation |
+| Commercial Product / Service catalog | `services` | Authorized catalog and operational flows | One canonical commercial catalog; no duplicate Product or Service authority |
+| Sellable Product stock | `commercialProductStock`, including location balances | Warehouse/authorized work-order flows through Firebase `inventoryAuthority` for transactional operations | Atomic validated balance updates, stable Product/location identity, reconciliation and audit |
+| Material / consumable stock | `warehouseInventory`, including location balances | Warehouse/authorized work-order flows through Firebase `inventoryAuthority` for transactional operations | Atomic validated balance updates, stable item/location identity, reconciliation and audit |
+| Tool catalog | `toolCatalog` | Authorized catalog and warehouse flows | One canonical Tool catalog; no location-specific duplicate catalogs |
+| Physical Tool assets | `vanToolAssets`, supporting Warehouse, Office, and Van locations | Authorized warehouse/custody flows through governed operations | Stable asset/location identity, custody validation, reconciliation and audit |
+| Inventory transfer workflow / custody state | `inventoryTransfers` | Authorized warehouse/custody flows | Workflow state only; never treated as canonical stock balance or another ledger |
+| Inventory physical-movement audit | Immutable `inventoryMovements` | Firebase `inventoryAuthority` and authorized audit/reconciliation readers | Append-only audit evidence; never treated as canonical balance authority |
 | Operational finance records | DEMAC ERP governed operational workflows | Finance roles and verified integrations | Operational traceability; no competing accounting balances or books |
 | Accounting books | QuickBooks Online, the planned/official accounting system of record, through a governed integration | Authorized finance integration | No parallel accounting engine, duplicate official numbering authority, or competing reconstruction of QBO history |
 | Transactional WhatsApp | Communication authority using canonical provider configuration; current default is `wacli` | Governed producers and the configured transport adapter | One queue/sender/contact model/notification authority; another provider such as Meta requires explicit canonical configuration |
@@ -29,6 +35,16 @@ provider callbacks, and cached projections are never authority by themselves.
 
 When two sources disagree, do not use recency alone. Prefer the designated authority,
 record the discrepancy, and require reconciliation before a high-impact write.
+
+## Inventory boundary
+
+Warehouse, Office, and Vans are locations, not separate Product, Consumable, Material, or
+Tool catalogs. Canonical balances remain on `commercialProductStock`, `warehouseInventory`,
+and the applicable physical Tool asset records. Firebase `inventoryAuthority` is the
+authenticated transactional operation boundary that validates and applies inventory
+operations; it is not another catalog, stock ledger, or balance authority. No agent may
+introduce a second Product, Consumable, Material, or Tool authority without an explicitly
+approved architecture decision and human approval for the new source-of-truth boundary.
 
 ## Identity and communication history constraints
 

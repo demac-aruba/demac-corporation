@@ -60,8 +60,10 @@ escalated, and it remains `FAIL` until an authorized resolution is recorded.
 ## Engineering constraints
 
 - Keep domain rules out of presentation components and provider adapters.
-- Preserve canonical identity across customer, site, asset, appointment, work order,
-  invoice, payment, inventory transaction, and communication records.
+- Preserve canonical identity across Customer, Property (also named `Site`/`siteId` only in
+  technical or compatibility contexts), Asset, Appointment, Work Order, Invoice, Payment,
+  inventory, and communication records. Do not create a second Site identity, database, or
+  collection for a Property unless a future explicitly approved ADR changes the model.
 - Never expose secrets, credentials, tokens, private customer data, or internal AI
   prompts in source, logs, fixtures, screenshots, or customer-facing responses.
 - Treat Firestore rules, Storage rules, authentication checks, CORS, webhook

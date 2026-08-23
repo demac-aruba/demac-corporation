@@ -16,7 +16,16 @@ Status: living foundation document. Confirm details against code before changing
 ## Current authority notes
 
 - Booking Authority owns commit-time scheduling validation and writes.
-- Inventory Authority owns inventory transaction-ledger truth; balances are derived views.
+- Inventory catalog and stock truth is split by item type: `services` owns the canonical
+  commercial Product / Service catalog; `commercialProductStock` owns sellable Product stock
+  and location balances; `warehouseInventory` owns material / consumable stock and location
+  balances; `toolCatalog` owns the Tool catalog; and `vanToolAssets` owns physical Tool assets.
+- Warehouse, Office, and Vans are locations, not separate item catalogs. `inventoryTransfers`
+  owns workflow/custody state only, while immutable `inventoryMovements` records physical
+  movement audit only. Neither is a stock ledger or canonical balance authority.
+- Firebase `inventoryAuthority` is the authenticated transactional operation boundary. It
+  updates the existing canonical stock records atomically and does not create another catalog,
+  stock ledger, or Product, Consumable, Material, or Tool authority.
 - `staffProfiles` owns employee master identity. Firebase users authenticate people but do
   not create a second employee master.
 - Canonical Customer, Property, and Contact records own CRM identity;
@@ -49,7 +58,7 @@ human approval for the new source-of-truth boundary.
 
 `Work Order -> Assignment -> Labor + Materials + Evidence`
 
-`Inventory Item -> Location -> Transaction`
+`Canonical Catalog Item -> Location -> Canonical Stock Record -> audited physical movement`
 
 `Conversation -> Communication Case -> governed business action`
 
