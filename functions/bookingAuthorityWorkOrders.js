@@ -105,7 +105,13 @@ function workOrderCustomerDescription(option, request, fallback) {
 }
 
 function buildWorkOrders({ appointment, option, request, customer, property, context = {}, now = new Date() }) {
-  const notificationRecipients = normalizedRecipientSnapshots(context, customer);
+  // Communication preferences and delivery history belong to the existing Work Order.
+  // A lifecycle rebuild (reschedule or details edit) must not silently replace the
+  // user's recipient selections with CRM defaults. The lifecycle transaction writes
+  // the operational projection with merge:true, so omitting these fields preserves
+  // the existing communication state. New appointments still snapshot recipients.
+  const preserveCommunication = context.reschedule === true || context.detailsEdit === true;
+  const notificationRecipients = preserveCommunication ? [] : normalizedRecipientSnapshots(context, customer);
   const whatsappEnabled = notificationRecipients.some((recipient) =>
     (recipient.sendConfirmation === true || recipient.sendReminder === true)
     && cleanText(recipient.whatsapp || recipient.phone, 80));
@@ -133,6 +139,12 @@ function buildWorkOrders({ appointment, option, request, customer, property, con
     const problem = workSummary || "Scheduled HVAC work";
     const customerDescription = workOrderCustomerDescription(option, request, problem);
     const appointmentEndTime = cleanText(assignment.endTime || option.endTime, 20);
+    const communicationSnapshot = preserveCommunication
+      ? {}
+      : {
+        whatsappNotificationsEnabled: isPrimary && whatsappEnabled,
+        notificationRecipients: isPrimary ? notificationRecipients : [],
+      };
 
     return {
       id,
@@ -170,8 +182,7 @@ function buildWorkOrders({ appointment, option, request, customer, property, con
       schedulingMode: durationMode === "per_unit" ? "perUnit" : "fixed",
       airConditionerCount: assignment.quantity,
       scheduledSlots: assignment.slots,
-      whatsappNotificationsEnabled: isPrimary && whatsappEnabled,
-      notificationRecipients: isPrimary ? notificationRecipients : [],
+      ...communicationSnapshot,
       confirmedAt: now.toISOString(),
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
