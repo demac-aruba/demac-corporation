@@ -14,7 +14,7 @@ const {
   validateWorkOrders,
 } = require("./bookingAuthorityFirestore");
 
-const APPOINTMENT_LIFECYCLE_VERSION = 5;
+const APPOINTMENT_LIFECYCLE_VERSION = 6;
 const RESCHEDULE_CHANGE_KINDS = new Set(["customer_reschedule", "operational_move", "details_edited"]);
 
 function defaultServerTimestamp() {
@@ -447,13 +447,17 @@ function createBookingAppointmentLifecycle({
         updatedAt: serverTimestamp(),
       }), { merge: true });
 
+      // Lifecycle changes update Scheduling-owned fields on the same Work Order IDs.
+      // Merge the projection instead of replacing the document so communication
+      // delivery history, recipient policy, invoice/report state and other domains
+      // that Scheduling does not own cannot be erased by an edit or reschedule.
       for (const workOrder of workOrders) {
         transaction.set(db.collection(collections.workOrders).doc(workOrder.id), compactObject({
           ...workOrder,
           status: "Confirmada",
           bookingOfferId: canonicalOfferId,
           updatedAt: now.toISOString(),
-        }));
+        }), { merge: true });
       }
       for (const oldWorkOrderId of oldWorkOrderIds) {
         if (newWorkOrderIds.has(oldWorkOrderId)) continue;
