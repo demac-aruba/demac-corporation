@@ -14,7 +14,7 @@
  * Dispatch and Readiness keep their independent layouts.
  */
 .scheduleCompact > section {
-  padding: 10px 14px 16px;
+  padding: 6px 14px 16px;
 }
 
 .scheduleCompact > section > header:first-child {
@@ -168,7 +168,7 @@
 
 @media (max-width: 900px) {
   .scheduleCompact > section {
-    padding: 10px 10px 14px;
+    padding: 7px 10px 14px;
   }
 
   .scheduleCompact > section > header:first-child {
