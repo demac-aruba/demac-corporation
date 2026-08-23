@@ -88,6 +88,60 @@ test("primary Work Order snapshots canonical communication recipients and suppor
   assert.equal(orders[1].whatsappNotificationsEnabled, false);
 });
 
+test("lifecycle Work Order rebuild omits communication policy so the transaction can preserve it by merge", () => {
+  const option = {
+    date: "2098-12-20",
+    time: "09:30",
+    endTime: "12:30",
+    durationMode: "manual",
+    workItems: [{ id: "other", presetId: "other", label: "Other", quantity: 1, durationMinutes: 180, durationMinutesPerUnit: 180, durationMode: "manual" }],
+    assignments: [{ vanId: "VAN-1", quantity: 1, durationMinutes: 180, slots: 3, endTime: "12:30" }],
+  };
+  const [order] = buildWorkOrders({
+    appointment: { appointmentId: "APT-EDIT-COMM" },
+    option,
+    request: { workLines: [{ id: "other", presetId: "other", quantity: 1, manualDurationMinutes: 180 }] },
+    customer: { id: "c1", whatsapp: "+2975640000" },
+    property: { id: "p1" },
+    context: {
+      detailsEdit: true,
+      notificationRecipients: [{ recipientType: "client", sourceId: "c1", sendConfirmation: true, sendReminder: true }],
+    },
+  });
+
+  assert.equal(Object.prototype.hasOwnProperty.call(order, "notificationRecipients"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(order, "whatsappNotificationsEnabled"), false);
+  assert.equal(order.scheduledSlots, 3);
+  assert.equal(order.appointmentEndTime, "12:30");
+});
+
+test("technician instructions are projected from appointment work lines into the Work Order", () => {
+  const option = {
+    date: "2098-12-20",
+    time: "08:30",
+    endTime: "09:30",
+    durationMode: "per_unit",
+    workItems: [{ id: "service", presetId: "standard_service", label: "Standard Service", quantity: 1, durationMinutes: 60, durationMinutesPerUnit: 60, durationMode: "per_unit" }],
+    assignments: [{ vanId: "VAN-4", quantity: 1, durationMinutes: 60, slots: 1, endTime: "09:30" }],
+  };
+  const [order] = buildWorkOrders({
+    appointment: { appointmentId: "APT-INSTRUCTIONS" },
+    option,
+    request: {
+      workLines: [{
+        id: "service",
+        presetId: "standard_service",
+        quantity: 1,
+        technicianInstructions: "Call reception before entering the mechanical room.",
+      }],
+    },
+    customer: { id: "c1" },
+    property: { id: "p1" },
+  });
+
+  assert.equal(order.technicianInstructions, "Call reception before entering the mechanical room.");
+});
+
 test("custom customer-facing description survives Other work without replacing the operational summary", () => {
   const customDescription = "Inspect the cassette leak and verify the drain line before carrying out any repair.";
   const option = {
