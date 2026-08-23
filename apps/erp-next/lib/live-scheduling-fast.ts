@@ -7,6 +7,7 @@ import {
   bookingActorLabel,
   projectLiveSchedulingAppointments,
 } from './live-scheduling';
+import { loadLiveOperationalCapacityState } from './live-operational-capacity';
 import {
   listOfficeAppointmentAttribution,
   type OfficeAppointmentAttribution,
@@ -145,9 +146,13 @@ async function workOrdersForRange(range?: LiveSchedulingRange) {
 }
 
 export async function loadLiveSchedulingAppointmentsFast(range?: LiveSchedulingRange) {
-  const [workOrders, references] = await Promise.all([
+  const [workOrders, references, operationalState] = await Promise.all([
     workOrdersForRange(range),
     loadLiveSchedulingReferenceData(),
+    loadLiveOperationalCapacityState({
+      startDate: range?.startDate,
+      endDate: range?.endDate,
+    }).catch(() => null),
   ]);
   return projectLiveSchedulingAppointments(
     workOrders,
@@ -155,6 +160,7 @@ export async function loadLiveSchedulingAppointmentsFast(range?: LiveSchedulingR
     references.properties,
     references.vans,
     [],
+    operationalState,
   );
 }
 
