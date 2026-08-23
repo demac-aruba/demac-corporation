@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useAuth } from './auth/auth-provider';
 import {
   activeStaffAbsence,
   canonicalVanId,
@@ -11,6 +12,11 @@ import {
   type CanonicalOperationsState,
   type CanonicalVan,
 } from '../lib/canonical-operations';
+import {
+  getVanScheduleGroupSettings,
+  saveVanScheduleGroupSetting,
+  type VanScheduleGroupSetting,
+} from '../lib/van-schedule-settings';
 
 function arubaDateKey() {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -66,8 +72,32 @@ export function CanonicalTechniciansPanel() {
 }
 
 export function CanonicalVansPanel() {
+  const { principal } = useAuth();
   const { state, error, loading, refresh } = useCanonicalOperations();
+  const [scheduleGroups, setScheduleGroups] = useState<VanScheduleGroupSetting[]>([]);
+  const [scheduleGroupsLoading, setScheduleGroupsLoading] = useState(false);
+  const [scheduleGroupsError, setScheduleGroupsError] = useState('');
+  const [savingVanId, setSavingVanId] = useState('');
+  const [scheduleGroupsMessage, setScheduleGroupsMessage] = useState('');
   const today = arubaDateKey();
+  const canManageScheduleGroups = principal.active && principal.capabilities.has('scheduling.manage');
+
+  const loadScheduleGroups = async () => {
+    if (!canManageScheduleGroups) return;
+    setScheduleGroupsLoading(true);
+    setScheduleGroupsError('');
+    try {
+      const result = await getVanScheduleGroupSettings();
+      setScheduleGroups(result.groups);
+    } catch (cause) {
+      setScheduleGroupsError(cause instanceof Error ? cause.message : 'Van WhatsApp schedule settings could not be loaded.');
+    } finally {
+      setScheduleGroupsLoading(false);
+    }
+  };
+
+  useEffect(() => { void loadScheduleGroups(); }, [canManageScheduleGroups]);
+
   const canonicalVans = useMemo(() => {
     if (!state) return [] as CanonicalVan[];
     const byId = new Map<string, CanonicalVan>();
@@ -79,20 +109,76 @@ export function CanonicalVansPanel() {
     return [...byId.values()].sort((a, b) => canonicalVanId(a.id, state.vans).localeCompare(canonicalVanId(b.id, state.vans)));
   }, [state]);
 
+  const scheduleGroupByVan = useMemo(() => new Map(scheduleGroups.map((group) => [group.vanId, group])), [scheduleGroups]);
   const available = canonicalVans.filter((van) => !['Mantenimiento', 'Fuera de servicio'].includes(van.status || '')).length;
-  const halfDays = state?.vanHalfDaySchedules.length ?? 0;
+  const configuredGroups = scheduleGroups.filter((group) => group.configured && group.enabled).length;
+
+  const updateScheduleGroup = (vanId: string, patch: Partial<VanScheduleGroupSetting>) => {
+    setScheduleGroups((current) => current.map((group) => group.vanId === vanId ? { ...group, ...patch } : group));
+    setScheduleGroupsMessage('');
+    setScheduleGroupsError('');
+  };
+
+  const saveScheduleGroup = async (vanId: string) => {
+    const group = scheduleGroupByVan.get(vanId);
+    if (!group || !canManageScheduleGroups) return;
+    setSavingVanId(vanId);
+    setScheduleGroupsMessage('');
+    setScheduleGroupsError('');
+    try {
+      const result = await saveVanScheduleGroupSetting({
+        vanId,
+        groupName: group.groupName,
+        groupJid: group.groupJid.trim(),
+        enabled: group.enabled,
+      });
+      setScheduleGroups(result.groups);
+      setScheduleGroupsMessage(`${vanId.replace('VAN-', 'Van ')} WhatsApp schedule group saved.`);
+      await refresh();
+    } catch (cause) {
+      setScheduleGroupsError(cause instanceof Error ? cause.message : 'Van WhatsApp schedule settings could not be saved.');
+    } finally {
+      setSavingVanId('');
+    }
+  };
+
+  const refreshAll = async () => {
+    await Promise.all([refresh(), loadScheduleGroups()]);
+  };
 
   return <div className="fa-stack">
-    <section className="page-head"><div><div className="eyebrow">Mobile Warehouses · Canonical Fleet</div><h1>Vans & Readiness</h1><p>Live van profiles, regular crews, daily assignment overrides and weekly half-day rules from the same Firestore records used by Booking Authority.</p></div><div className="page-actions"><button className="btn" type="button" onClick={() => void refresh()} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh Live Data'}</button></div></section>
+    <section className="page-head"><div><div className="eyebrow">Mobile Warehouses · Canonical Fleet</div><h1>Vans & Readiness</h1><p>Live Van profiles, regular crews, weekly half-day rules and WhatsApp schedule delivery settings from the same canonical fleet records used by Booking Authority.</p></div><div className="page-actions"><button className="btn" type="button" onClick={() => void refreshAll()} disabled={loading || scheduleGroupsLoading}>{loading || scheduleGroupsLoading ? 'Refreshing…' : 'Refresh Live Data'}</button></div></section>
     {error ? <section className="panel"><strong>Unable to load canonical fleet</strong><p>{error}</p></section> : null}
-    <section className="fa-metrics"><article><span>Canonical Vans</span><strong>{canonicalVans.length} / 4</strong><small className="fa-good">physical fleet lanes</small></article><article><span>Operational Profiles</span><strong>{available}</strong><small>not maintenance / out of service</small></article><article><span>Half-Day Rules</span><strong>{halfDays}</strong><small>vanHalfDaySchedules</small></article><article><span>Date Evaluated</span><strong>{today.slice(5)}</strong><small>America/Aruba</small></article></section>
+    {scheduleGroupsError ? <section className="panel"><strong>WhatsApp schedule configuration</strong><p>{scheduleGroupsError}</p></section> : null}
+    {scheduleGroupsMessage ? <section className="panel"><strong>{scheduleGroupsMessage}</strong></section> : null}
+    <section className="fa-metrics"><article><span>Canonical Vans</span><strong>{canonicalVans.length} / 4</strong><small className="fa-good">physical fleet lanes</small></article><article><span>Operational Profiles</span><strong>{available}</strong><small>not maintenance / out of service</small></article><article><span>WhatsApp Groups</span><strong>{canManageScheduleGroups ? `${configuredGroups} / ${canonicalVans.length || 4}` : '—'}</strong><small>automatic Van schedule delivery</small></article><article><span>Date Evaluated</span><strong>{today.slice(5)}</strong><small>America/Aruba</small></article></section>
     <section className="fa-van-grid">{canonicalVans.map((van) => {
       const vanId = state ? canonicalVanId(van.id, state.vans) : van.id;
       const crew = state ? resolveCanonicalCrew(van, today, state) : null;
       const halfDay = state?.vanHalfDaySchedules.find((schedule) => canonicalVanId(schedule.vanId, state.vans) === vanId);
       const blocked = ['Mantenimiento', 'Fuera de servicio', 'Sin personal'].includes(crew?.daily?.status || van.status || '');
-      return <article className="panel fa-van-card" key={vanId}><div className="fa-van-head"><div><span>{van.plate || 'Fleet profile'}</span><h2>{van.name || vanId}</h2><p>{staffDisplayName(crew?.driver)}{crew?.helper ? ` + ${staffDisplayName(crew.helper)}` : ''}</p></div><b className={blocked ? 'risk' : ''}>{crew?.daily?.status || van.status || 'Disponible'}</b></div><div className="fa-van-context"><div><span>Canonical ID</span><strong>{vanId}</strong></div><div><span>Crew source</span><strong>{crew?.daily ? 'Daily override' : 'Van profile'}</strong></div></div><div className="fa-van-alert"><span>Weekly half-day</span><strong>{halfDay ? weekdayLabel(halfDay.weekday) : 'Not configured'}</strong></div><div className="fa-van-alert"><span>Regular driver / helper</span><strong>{staffDisplayName(crew?.driver)} · {staffDisplayName(crew?.helper)}</strong></div></article>;
+      const group = scheduleGroupByVan.get(vanId);
+      return <article className="panel fa-van-card" key={vanId}>
+        <div className="fa-van-head"><div><span>{van.plate || 'Fleet profile'}</span><h2>{van.name || vanId}</h2><p>{staffDisplayName(crew?.driver)}{crew?.helper ? ` + ${staffDisplayName(crew.helper)}` : ''}</p></div><b className={blocked ? 'risk' : ''}>{crew?.daily?.status || van.status || 'Disponible'}</b></div>
+        <div className="fa-van-context"><div><span>Canonical ID</span><strong>{vanId}</strong></div><div><span>Crew source</span><strong>{crew?.daily ? 'Daily override' : 'Van profile'}</strong></div></div>
+        <div className="fa-van-alert"><span>Weekly half-day</span><strong>{halfDay ? weekdayLabel(halfDay.weekday) : 'Not configured'}</strong></div>
+        <div className="fa-van-alert"><span>Regular driver / helper</span><strong>{staffDisplayName(crew?.driver)} · {staffDisplayName(crew?.helper)}</strong></div>
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)', display: 'grid', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <div><strong style={{ display: 'block', fontSize: 12 }}>WhatsApp Schedule Group</strong><span style={{ display: 'block', marginTop: 2, color: 'var(--muted)', fontSize: 10 }}>Used automatically for this Van's daily Work Order messages.</span></div>
+            <b className={group?.configured && group.enabled ? '' : 'risk'}>{scheduleGroupsLoading ? 'Loading…' : group?.configured && group.enabled ? 'Configured' : 'Not configured'}</b>
+          </div>
+          {canManageScheduleGroups ? <>
+            <label style={{ display: 'grid', gap: 4 }}><span style={{ fontSize: 10, color: 'var(--muted)' }}>Group name</span><input value={group?.groupName ?? ''} onChange={(event) => updateScheduleGroup(vanId, { groupName: event.target.value })} disabled={!group || savingVanId === vanId} /></label>
+            <label style={{ display: 'grid', gap: 4 }}><span style={{ fontSize: 10, color: 'var(--muted)' }}>WhatsApp Group JID</span><input value={group?.groupJid ?? ''} onChange={(event) => updateScheduleGroup(vanId, { groupJid: event.target.value, configured: Boolean(event.target.value.trim()) })} placeholder="…@g.us" autoCapitalize="none" autoCorrect="off" disabled={!group || savingVanId === vanId} style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }} /></label>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10 }}><input type="checkbox" checked={group?.enabled ?? true} onChange={(event) => updateScheduleGroup(vanId, { enabled: event.target.checked })} disabled={!group || savingVanId === vanId} /> Automatic schedule delivery active</label>
+              <button className="btn" type="button" onClick={() => void saveScheduleGroup(vanId)} disabled={!group || savingVanId === vanId}>{savingVanId === vanId ? 'Saving…' : 'Save Group'}</button>
+            </div>
+          </> : <div className="fa-callout"><strong>{group?.configured ? 'Configured' : 'Managed by Scheduling administrators'}</strong><p>WhatsApp group IDs can only be changed by users with Scheduling management access.</p></div>}
+        </div>
+      </article>;
     })}</section>
-    <section className="fa-two-col"><article className="panel"><header className="panel-head"><div><h2>Canonical Capacity Rules</h2><span>Automatic booking</span></div></header><div className="fa-rules"><div><strong>Crew</strong><span>Driver/helper resolve from vans, then dailyVanAssignments.</span></div><div><strong>Availability</strong><span>staffAbsences and staff availability can block automatic assignment.</span></div><div><strong>Half-day</strong><span>vanHalfDaySchedules affects automatic booking capacity.</span></div></div></article><article className="panel"><header className="panel-head"><div><h2>Manual Dispatch</h2><span>Operator intent</span></div></header><div className="fa-callout"><strong>Separate from automatic booking</strong><p>Manual drag of an existing appointment follows visible free capacity, while Maya and Booking Authority continue to respect canonical crew and half-day rules for new bookings.</p></div></article></section>
+    <section className="fa-two-col"><article className="panel"><header className="panel-head"><div><h2>Canonical Capacity Rules</h2><span>Automatic booking</span></div></header><div className="fa-rules"><div><strong>Crew</strong><span>Driver/helper resolve from vans, then dailyVanAssignments.</span></div><div><strong>Availability</strong><span>staffAbsences and staff availability can block automatic assignment.</span></div><div><strong>Half-day</strong><span>vanHalfDaySchedules affects automatic booking capacity.</span></div></div></article><article className="panel"><header className="panel-head"><div><h2>Van Communication</h2><span>One configuration per canonical Van</span></div></header><div className="fa-callout"><strong>The Van record owns its WhatsApp group</strong><p>Scheduling reads the same canonical Van configuration for automatic daily delivery. There is no separate group-mapping screen or duplicate configuration.</p></div></article></section>
   </div>;
 }
