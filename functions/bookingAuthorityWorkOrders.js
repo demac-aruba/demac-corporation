@@ -72,6 +72,13 @@ function requestCustomerFacingDescription(request) {
   return cleanText(descriptions.join("; "), 1500);
 }
 
+function requestTechnicianInstructions(request) {
+  const instructions = [...new Set((Array.isArray(request?.workLines) ? request.workLines : [])
+    .map((line) => cleanText(line?.technicianInstructions, 1500))
+    .filter(Boolean))];
+  return cleanText(instructions.join("; "), 1500);
+}
+
 function automaticCustomerFacingDescription(option, request) {
   const optionItems = Array.isArray(option?.workItems) ? option.workItems.filter(Boolean) : [];
   const entries = optionItems.length
@@ -98,15 +105,25 @@ function workOrderCustomerDescription(option, request, fallback) {
 }
 
 function buildWorkOrders({ appointment, option, request, customer, property, context = {}, now = new Date() }) {
-  const notificationRecipients = normalizedRecipientSnapshots(context, customer);
+  // Lifecycle changes update Scheduling-owned fields on existing Work Orders. They
+  // must not replace communication policy, payment state, or creation audit fields.
+  // Newly created support Work Orders still receive their normal initialization.
+  const lifecycleRebuild = context.reschedule === true || context.detailsEdit === true;
+  const existingWorkOrderIds = new Set([
+    ...(Array.isArray(appointment?.workOrderIds) ? appointment.workOrderIds : []),
+    cleanText(appointment?.workOrderId, 180),
+  ].filter(Boolean));
+  const notificationRecipients = lifecycleRebuild ? [] : normalizedRecipientSnapshots(context, customer);
   const whatsappEnabled = notificationRecipients.some((recipient) =>
     (recipient.sendConfirmation === true || recipient.sendReminder === true)
     && cleanText(recipient.whatsapp || recipient.phone, 80));
   const supportCount = Math.max(0, option.assignments.length - 1);
+  const technicianInstructions = requestTechnicianInstructions(request);
 
   return option.assignments.map((assignment, index) => {
     const id = `WO-${appointment.appointmentId}-${index + 1}`;
     const isPrimary = index === 0;
+    const alreadyExists = existingWorkOrderIds.has(id);
     const workItems = workItemsForAssignment(option, assignment, request);
     const singleItem = workItems.length === 1 ? workItems[0] : null;
     const workSummary = workItems
@@ -125,6 +142,22 @@ function buildWorkOrders({ appointment, option, request, customer, property, con
     const problem = workSummary || "Scheduled HVAC work";
     const customerDescription = workOrderCustomerDescription(option, request, problem);
     const appointmentEndTime = cleanText(assignment.endTime || option.endTime, 20);
+    const preserveExistingDomainState = lifecycleRebuild && alreadyExists;
+    const communicationSnapshot = preserveExistingDomainState
+      ? {}
+      : {
+        whatsappNotificationsEnabled: isPrimary && whatsappEnabled,
+        notificationRecipients: isPrimary ? notificationRecipients : [],
+      };
+    const initializationSnapshot = preserveExistingDomainState
+      ? {}
+      : {
+        amount: 0,
+        paid: 0,
+        confirmedAt: now.toISOString(),
+        createdAt: now.toISOString(),
+        createdBy: "booking-authority",
+      };
 
     return {
       id,
@@ -142,6 +175,7 @@ function buildWorkOrders({ appointment, option, request, customer, property, con
       problem: isPrimary ? `${problem}.` : `Apoyo a la cita principal: ${problem}.`,
       customerFacingDescription: customerDescription.customerFacingDescription,
       customerFacingDescriptionIsDefault: customerDescription.customerFacingDescriptionIsDefault,
+      technicianInstructions,
       officeNotes: isPrimary
         ? `Cita creada por DEMAC Booking Authority${supportCount ? ` con ${supportCount} van(es) de apoyo` : ""}.`
         : "Asignación interna de van de apoyo. No enviar confirmación ni recordatorio duplicado.",
@@ -156,17 +190,12 @@ function buildWorkOrders({ appointment, option, request, customer, property, con
       appointmentAssignmentRole: isPrimary ? "primary" : "support",
       parentWorkOrderId: isPrimary ? undefined : `WO-${appointment.appointmentId}-1`,
       fullDaySingleProperty: assignment.fullDay === true,
-      amount: 0,
-      paid: 0,
       schedulingMode: durationMode === "per_unit" ? "perUnit" : "fixed",
       airConditionerCount: assignment.quantity,
       scheduledSlots: assignment.slots,
-      whatsappNotificationsEnabled: isPrimary && whatsappEnabled,
-      notificationRecipients: isPrimary ? notificationRecipients : [],
-      confirmedAt: now.toISOString(),
-      createdAt: now.toISOString(),
+      ...communicationSnapshot,
+      ...initializationSnapshot,
       updatedAt: now.toISOString(),
-      createdBy: "booking-authority",
     };
   });
 }
@@ -177,6 +206,7 @@ module.exports = {
   notificationRecipient,
   normalizedRecipientSnapshots,
   requestCustomerFacingDescription,
+  requestTechnicianInstructions,
   workItemsForAssignment,
   workOrderCustomerDescription,
 };

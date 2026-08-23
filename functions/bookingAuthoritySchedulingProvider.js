@@ -7,7 +7,6 @@ const {
   MAX_SEARCH_DAYS,
   addDays,
   arubaDateParts,
-  endTime,
   hashId,
   isHalfDay,
   normalizeRouteConfig,
@@ -35,7 +34,7 @@ const {
 const { buildWorkOrders: projectCanonicalWorkOrders } = require("./bookingAuthorityWorkOrders");
 const { canonicalizeSchedulingData } = require("./bookingVanIdentity");
 
-const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v10";
+const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v11";
 
 async function loadSchedulingData(db, startDate, endDate) {
   const workOrderQuery = db.collection("workOrders").where("date", ">=", startDate).where("date", "<=", endDate);
@@ -256,7 +255,7 @@ function operationalMoveResult({ request, property, data, routeConfig, date, tim
     id: `opt-${hashId(`${date}|${time}|${vanId}|${work.quantity}|${preset.id}|${preset.serviceId || ""}|operational-move`, 16)}`,
     date,
     time,
-    endTime: endTime(time, availability.slots),
+    endTime: availability.endTime,
     quantity: work.quantity,
     address,
     zone: candidateZone?.label || cleanText(property.operationalZone || property.zone, 80),
@@ -266,7 +265,7 @@ function operationalMoveResult({ request, property, data, routeConfig, date, tim
     durationMode: preset.durationMode || "per_unit",
     serviceDefinitionVersion: preset.serviceDefinitionVersion || 0,
     serviceId: serviceIdForRequest(request, preset, data.services),
-    assignments: [{ ...availability, time, endTime: endTime(time, availability.slots), role: "primary" }],
+    assignments: [{ ...availability, time, endTime: availability.endTime, role: "primary" }],
     score: 0,
     requestedDateMatch: true,
     requestedTimeMatch: true,
@@ -424,9 +423,17 @@ function createSchedulingProvider({ db }) {
         if (!availability) {
           return { available: false, reason: operationalMove ? "operational-target-unavailable" : "capacity-or-route-changed", vanId: requested.vanId };
         }
-        refreshedAssignments.push({ ...availability, time: startTime });
+        refreshedAssignments.push({ ...availability, time: startTime, endTime: availability.endTime, role: requested.role });
       }
-      return { available: true, option: { ...option, assignments: refreshedAssignments } };
+      const primary = refreshedAssignments.find((assignment) => assignment.role !== "support") || refreshedAssignments[0];
+      return {
+        available: true,
+        option: {
+          ...option,
+          endTime: primary?.endTime || option.endTime,
+          assignments: refreshedAssignments,
+        },
+      };
     },
 
     async validateTransaction({ transaction, db: transactionDb, option, appointmentId, context = {} }) {

@@ -11,7 +11,6 @@ const {
   REGULAR_SLOTS,
   addDays,
   dateDistanceInDays,
-  endTime,
   hashId,
   normalizeText,
   normalizeTime,
@@ -23,7 +22,7 @@ const {
 const { candidateAvailability } = require("./bookingCapacityAvailability");
 const { resolveCatalogService } = require("./serviceCatalog");
 
-const CANONICAL_SCHEDULING_ENGINE_VERSION = 6;
+const CANONICAL_SCHEDULING_ENGINE_VERSION = 7;
 const CLIENT_OPTION_LIMIT = 2;
 const ASSIGNMENT_COMBINATION_LIMIT = 8;
 const OFFICE_TARGET_OPTION_LIMIT = ASSIGNMENT_COMBINATION_LIMIT;
@@ -568,7 +567,7 @@ function assignmentCombinations({
         candidates.push({
           ...candidate,
           time: allocationTime,
-          endTime: endTime(allocationTime, candidate.slots),
+          endTime: candidate.endTime,
           role: allocation.role,
           block: blockForTime(allocationTime),
         });

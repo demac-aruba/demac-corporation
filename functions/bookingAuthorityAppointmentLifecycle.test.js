@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   appointmentStillOwnsLock,
+  assertDetailsEditKeepsPlacement,
   createBookingAppointmentLifecycle,
   normalizeChangeKind,
   scheduleChangeNeedsCustomerFollowUp,
@@ -117,7 +118,18 @@ function operationalOffer() {
 function fixture(extra = {}) {
   const db = new FakeFirestore({
     "appointments/APT-LIVE-1": appointmentSeed(),
-    "workOrders/WO-APT-LIVE-1-1": { appointmentId: "APT-LIVE-1", status: "Confirmada", date: "2098-12-20", time: "08:30", vanId: "VAN-1" },
+    "workOrders/WO-APT-LIVE-1-1": {
+      appointmentId: "APT-LIVE-1",
+      status: "Confirmada",
+      date: "2098-12-20",
+      time: "08:30",
+      vanId: "VAN-1",
+      whatsappNotificationsEnabled: true,
+      notificationRecipients: [{ id: "client-1", sendConfirmation: true, sendReminder: true }],
+      confirmationNotifications: { queueIds: ["confirmation-existing"] },
+      reminderNotifications: { queueIds: ["reminder-existing"] },
+      invoiceState: { status: "pending" },
+    },
     "bookingCapacityLocks/lock-old-0830": { appointmentId: "APT-LIVE-1", active: true, date: "2098-12-20", vanId: "VAN-1", slot: "08:30" },
     "bookingCapacityLocks/lock-old-0930": { appointmentId: "APT-LIVE-1", active: true, date: "2098-12-20", vanId: "VAN-1", slot: "09:30" },
     "clients/client-1": { name: "Christian" },
@@ -166,9 +178,15 @@ function fixture(extra = {}) {
   return { db, lifecycle, provider };
 }
 
-test("operational move classification is strict and customer follow-up depends on promised time", () => {
+test("operational move and details edit classification preserve their lifecycle semantics", () => {
   assert.equal(normalizeChangeKind("operational_move"), "operational_move");
+  assert.equal(normalizeChangeKind("details_edited"), "details_edited");
   assert.equal(normalizeChangeKind("something_else"), "customer_reschedule");
+  assert.equal(scheduleChangeNeedsCustomerFollowUp("details_edited", {
+    dateKey: "2098-12-20", primaryStart: "08:30", primaryVanId: "VAN-1",
+  }, {
+    dateKey: "2098-12-20", primaryStart: "08:30", primaryVanId: "VAN-1",
+  }), false);
   assert.equal(scheduleChangeNeedsCustomerFollowUp("operational_move", {
     dateKey: "2098-12-20", primaryStart: "08:30", primaryVanId: "VAN-1",
   }, {
@@ -184,6 +202,25 @@ test("operational move classification is strict and customer follow-up depends o
   }, {
     dateKey: "2098-12-20", primaryStart: "08:30",
   }), true);
+});
+
+test("details edit may change workload but never date, start time, or primary Van", () => {
+  assert.doesNotThrow(() => assertDetailsEditKeepsPlacement(appointmentSeed(), {
+    date: "2098-12-20",
+    time: "08:30",
+    endTime: "11:30",
+    assignments: [{ vanId: "VAN-1", time: "08:30", slots: 3 }],
+  }));
+  assert.throws(() => assertDetailsEditKeepsPlacement(appointmentSeed(), {
+    date: "2098-12-20",
+    time: "09:30",
+    assignments: [{ vanId: "VAN-1", time: "09:30", slots: 2 }],
+  }), /not its date, start time, or primary van/i);
+  assert.throws(() => assertDetailsEditKeepsPlacement(appointmentSeed(), {
+    date: "2098-12-20",
+    time: "08:30",
+    assignments: [{ vanId: "VAN-2", time: "08:30", slots: 2 }],
+  }), /not its date, start time, or primary van/i);
 });
 
 test("capacity-lock ownership ignores cancelled or detached stale locks", () => {
@@ -207,7 +244,7 @@ test("cancelling an appointment releases capacity and cancels linked work orders
   assert.equal(db.read("bookingCapacityLocks/lock-old-0930").active, false);
 });
 
-test("customer reschedule still performs full provider revalidation before the transaction", async () => {
+test("customer reschedule revalidates capacity and preserves Work Order fields owned by other domains", async () => {
   const { db, lifecycle, provider } = fixture({ "bookingOffers/OFR-RESCHEDULE-1": openOffer() });
   const result = await lifecycle.rescheduleAppointment({
     appointmentId: "APT-LIVE-1",
@@ -227,8 +264,14 @@ test("customer reschedule still performs full provider revalidation before the t
   assert.equal(appointment.startTime, "13:30");
   assert.equal(appointment.primaryVanId, "VAN-2");
   assert.equal(appointment.lastScheduleChangeKind, "customer_reschedule");
-  assert.equal(db.read("workOrders/WO-APT-LIVE-1-1").date, "2098-12-22");
-  assert.equal(db.read("workOrders/WO-APT-LIVE-1-1").vanId, "VAN-2");
+  const workOrder = db.read("workOrders/WO-APT-LIVE-1-1");
+  assert.equal(workOrder.date, "2098-12-22");
+  assert.equal(workOrder.vanId, "VAN-2");
+  assert.equal(workOrder.whatsappNotificationsEnabled, true);
+  assert.deepEqual(workOrder.notificationRecipients, [{ id: "client-1", sendConfirmation: true, sendReminder: true }]);
+  assert.deepEqual(workOrder.confirmationNotifications, { queueIds: ["confirmation-existing"] });
+  assert.deepEqual(workOrder.reminderNotifications, { queueIds: ["reminder-existing"] });
+  assert.deepEqual(workOrder.invoiceState, { status: "pending" });
   assert.equal(db.read("bookingCapacityLocks/lock-old-0830").active, false);
   assert.equal(db.read("bookingCapacityLocks/lock-new-1330").active, true);
   assert.equal(db.read("bookingCapacityLocks/lock-new-1330").appointmentId, "APT-LIVE-1");

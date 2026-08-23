@@ -4,6 +4,11 @@ import { getRuntimeSchedulingSettings } from './scheduling';
 import type { DaySegment, WorkPresetId } from './scheduling';
 import { listFirestoreCollection } from './firebase/firestore-rest';
 import { listOfficeAppointmentAttribution, type OfficeAppointmentAttribution } from './office-booking-authority';
+import {
+  liveVanHalfDaySchedule,
+  loadLiveOperationalCapacityState,
+  type LiveOperationalCapacityState,
+} from './live-operational-capacity';
 
 // BrowserAppointmentRecord still carries the old WorkPresetId for compatibility
 // with browser-only lifecycle helpers. The live work identity is preserved
@@ -210,8 +215,33 @@ function numericSlotCount(value: unknown) {
   return Number.isFinite(count) && count > 0 ? Math.max(1, Math.min(12, Math.ceil(count))) : 0;
 }
 
-function endFromCanonicalSlotCount(start: string, count: number) {
-  const schedule = getRuntimeSchedulingSettings().serviceStartTimes;
+function canonicalSlotStarts(
+  state: LiveOperationalCapacityState | null,
+  vanId: string,
+  dateKey: string,
+) {
+  const regular = getRuntimeSchedulingSettings().serviceStartTimes;
+  const halfDay = liveVanHalfDaySchedule(state, vanId, dateKey);
+  if (!halfDay) return regular;
+  const windowStart = timeToMinutes(validTime(halfDay.workdayStart) || '08:00');
+  const windowEnd = timeToMinutes(validTime(halfDay.workdayEnd) || '13:00');
+  const extraMorning = validTime(halfDay.extraMorningSlot) || '11:30';
+  return [...new Set([...regular, extraMorning])]
+    .filter((slot) => {
+      const minute = timeToMinutes(slot);
+      return minute >= windowStart && minute < windowEnd;
+    })
+    .sort((left, right) => timeToMinutes(left) - timeToMinutes(right));
+}
+
+function endFromCanonicalSlotCount(
+  start: string,
+  count: number,
+  state: LiveOperationalCapacityState | null,
+  vanId: string,
+  dateKey: string,
+) {
+  const schedule = canonicalSlotStarts(state, vanId, dateKey);
   const index = schedule.indexOf(start);
   if (index >= 0 && index + count <= schedule.length) {
     const lastStart = schedule[index + count - 1];
@@ -220,17 +250,33 @@ function endFromCanonicalSlotCount(start: string, count: number) {
   return minutesToTime(timeToMinutes(start) + count * 60);
 }
 
-function assignmentEnd(order: LiveWorkOrder) {
+function assignmentEnd(
+  order: LiveWorkOrder,
+  vans: LiveVan[],
+  operationalState: LiveOperationalCapacityState | null,
+) {
   const start = text(order.time) || '08:30';
-  const explicit = validTime(order.appointmentEndTime);
-  if (explicit && timeToMinutes(explicit) > timeToMinutes(start)) return explicit;
 
-  // Legacy records briefly stored explicit slot-start arrays. Preserve support.
+  // Canonical capacity is the authority. Older records can contain a stale
+  // appointmentEndTime generated with the regular-day slot map even though their
+  // scheduledSlots correctly reflect a half-day Van. Prefer the reserved slots so
+  // LIVE heals those records at projection time instead of displaying fake capacity.
   const slots = normalizedSlots(order.scheduledSlots);
   if (slots.length) return minutesToTime(timeToMinutes(slots[slots.length - 1]) + 60);
 
   const slotCount = numericSlotCount(order.scheduledSlots);
-  if (slotCount) return endFromCanonicalSlotCount(start, slotCount);
+  if (slotCount) {
+    return endFromCanonicalSlotCount(
+      start,
+      slotCount,
+      operationalState,
+      workOrderVanId(order, vans),
+      text(order.date),
+    );
+  }
+
+  const explicit = validTime(order.appointmentEndTime);
+  if (explicit && timeToMinutes(explicit) > timeToMinutes(start)) return explicit;
 
   // Final compatibility fallback for historical records that predate slot snapshots.
   const duration = positiveInteger(order.appointmentDurationMinutes ?? order.duration, 60);
@@ -286,10 +332,11 @@ function workOrderAssignment(
   site: string,
   sector: string,
   vans: LiveVan[],
+  operationalState: LiveOperationalCapacityState | null,
 ): CalendarDispatchJob {
   const legacySlots = normalizedSlots(order.scheduledSlots);
   const start = text(order.time) || legacySlots[0] || '08:30';
-  const end = assignmentEnd({ ...order, time: start });
+  const end = assignmentEnd({ ...order, time: start }, vans, operationalState);
   const role = workOrderAssignmentRole(order);
   const primary = role !== 'support';
   const supportForJobId = workOrderSupportForId(order);
@@ -319,6 +366,7 @@ export function projectLiveSchedulingAppointments(
   properties: LiveProperty[],
   vans: LiveVan[] = [],
   canonicalAppointments: OfficeAppointmentAttribution[] = [],
+  operationalState: LiveOperationalCapacityState | null = null,
 ): BrowserAppointmentRecord[] {
   const clientById = new Map(clients.map((client) => [client.id, client]));
   const propertyById = new Map(properties.map((property) => [property.id, property]));
@@ -351,7 +399,7 @@ export function projectLiveSchedulingAppointments(
     const customer = clientLabel(client, clientId);
     const site = propertyLabel(property, propertyId);
     const sector = text(primary.operationalZone) || text(primary.zone) || text(property?.operationalZone) || text(property?.zone) || 'Unknown';
-    const assignments = sorted.map((order) => workOrderAssignment(order, customer, site, sector, vans));
+    const assignments = sorted.map((order) => workOrderAssignment(order, customer, site, sector, vans, operationalState));
     const primaryAssignment = assignments.find((assignment) => assignment.isPrimaryAssignment) ?? assignments[0];
     const supportAssignment = assignments.find((assignment) => !assignment.isPrimaryAssignment);
     const quantity = sorted.reduce((total, order) => total + workOrderQuantity(order), 0);
@@ -415,11 +463,12 @@ export function projectLiveSchedulingAppointments(
 }
 
 export async function loadLiveSchedulingAppointments() {
-  const [workOrders, clients, properties, vans] = await Promise.all([
+  const [workOrders, clients, properties, vans, operationalState] = await Promise.all([
     listFirestoreCollection<LiveWorkOrder>('workOrders', 1000),
     listFirestoreCollection<LiveClient>('clients', 1000),
     listFirestoreCollection<LiveProperty>('properties', 1000),
     listFirestoreCollection<LiveVan>('vans', 250),
+    loadLiveOperationalCapacityState(),
   ]);
   const appointmentIds = [...new Set(workOrders.map((order) => text(order.appointmentId)).filter(Boolean))];
   let attribution: OfficeAppointmentAttribution[] = [];
@@ -428,5 +477,5 @@ export async function loadLiveSchedulingAppointments() {
   } catch {
     // Attribution is supplemental. The operational board must remain available even if the authenticated metadata read is temporarily unavailable during a deployment transition.
   }
-  return projectLiveSchedulingAppointments(workOrders, clients, properties, vans, attribution);
+  return projectLiveSchedulingAppointments(workOrders, clients, properties, vans, attribution, operationalState);
 }

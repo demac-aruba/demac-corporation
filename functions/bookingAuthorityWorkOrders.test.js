@@ -88,6 +88,101 @@ test("primary Work Order snapshots canonical communication recipients and suppor
   assert.equal(orders[1].whatsappNotificationsEnabled, false);
 });
 
+test("lifecycle rebuild of an existing Work Order changes only Scheduling-owned projection", () => {
+  const option = {
+    date: "2098-12-20",
+    time: "09:30",
+    endTime: "12:30",
+    durationMode: "manual",
+    workItems: [{ id: "other", presetId: "other", label: "Other", quantity: 1, durationMinutes: 180, durationMinutesPerUnit: 180, durationMode: "manual" }],
+    assignments: [{ vanId: "VAN-1", quantity: 1, durationMinutes: 180, slots: 3, endTime: "12:30" }],
+  };
+  const workOrderId = "WO-APT-EDIT-COMM-1";
+  const [order] = buildWorkOrders({
+    appointment: { appointmentId: "APT-EDIT-COMM", workOrderIds: [workOrderId] },
+    option,
+    request: { workLines: [{ id: "other", presetId: "other", quantity: 1, manualDurationMinutes: 180 }] },
+    customer: { id: "c1", whatsapp: "+2975640000" },
+    property: { id: "p1" },
+    context: {
+      detailsEdit: true,
+      notificationRecipients: [{ recipientType: "client", sourceId: "c1", sendConfirmation: true, sendReminder: true }],
+    },
+  });
+
+  assert.equal(order.id, workOrderId);
+  for (const preservedField of [
+    "notificationRecipients",
+    "whatsappNotificationsEnabled",
+    "amount",
+    "paid",
+    "confirmedAt",
+    "createdAt",
+    "createdBy",
+  ]) {
+    assert.equal(Object.prototype.hasOwnProperty.call(order, preservedField), false, `${preservedField} must remain owned by the existing Work Order`);
+  }
+  assert.equal(order.scheduledSlots, 3);
+  assert.equal(order.appointmentEndTime, "12:30");
+});
+
+test("a new support Work Order introduced by a lifecycle change still receives safe initialization", () => {
+  const option = {
+    date: "2098-12-20",
+    time: "08:30",
+    endTime: "16:30",
+    durationMode: "per_unit",
+    workItems: [{ id: "service", presetId: "standard_service", label: "Standard Service", quantity: 8, durationMinutes: 480, durationMinutesPerUnit: 60, durationMode: "per_unit" }],
+    assignments: [
+      { vanId: "VAN-1", quantity: 7, durationMinutes: 420, slots: 6, fullDay: true, endTime: "16:30" },
+      { vanId: "VAN-2", quantity: 1, durationMinutes: 60, slots: 1, role: "support", time: "13:30", endTime: "14:30" },
+    ],
+  };
+  const orders = buildWorkOrders({
+    appointment: { appointmentId: "APT-ADD-SUPPORT", workOrderIds: ["WO-APT-ADD-SUPPORT-1"] },
+    option,
+    request: { workLines: [{ id: "service", presetId: "standard_service", quantity: 8 }] },
+    customer: { id: "c1", whatsapp: "+2975640000" },
+    property: { id: "p1" },
+    context: { reschedule: true },
+    now: new Date("2098-12-01T12:00:00Z"),
+  });
+
+  assert.equal(Object.prototype.hasOwnProperty.call(orders[0], "amount"), false, "existing primary keeps financial state");
+  assert.equal(orders[1].amount, 0);
+  assert.equal(orders[1].paid, 0);
+  assert.equal(orders[1].whatsappNotificationsEnabled, false);
+  assert.deepEqual(orders[1].notificationRecipients, []);
+  assert.equal(orders[1].createdBy, "booking-authority");
+});
+
+test("technician instructions are projected from appointment work lines into the Work Order", () => {
+  const option = {
+    date: "2098-12-20",
+    time: "08:30",
+    endTime: "09:30",
+    durationMode: "per_unit",
+    workItems: [{ id: "service", presetId: "standard_service", label: "Standard Service", quantity: 1, durationMinutes: 60, durationMinutesPerUnit: 60, durationMode: "per_unit" }],
+    assignments: [{ vanId: "VAN-4", quantity: 1, durationMinutes: 60, slots: 1, endTime: "09:30" }],
+  };
+  const [order] = buildWorkOrders({
+    appointment: { appointmentId: "APT-INSTRUCTIONS" },
+    option,
+    request: {
+      workLines: [{
+        id: "service",
+        presetId: "standard_service",
+        quantity: 1,
+        technicianInstructions: "Call reception before entering the mechanical room.",
+      }],
+    },
+    customer: { id: "c1" },
+    property: { id: "p1" },
+  });
+
+  assert.equal(order.technicianInstructions, "Call reception before entering the mechanical room.");
+});
+
 test("custom customer-facing description survives Other work without replacing the operational summary", () => {
   const customDescription = "Inspect the cassette leak and verify the drain line before carrying out any repair.";
   const option = {

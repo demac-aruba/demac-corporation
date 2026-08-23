@@ -148,10 +148,12 @@ export type OfficeAppointmentCommunication = {
   reminder: OfficeCommunicationState;
 };
 
+export type OfficeLifecycleChangeKind = 'customer_reschedule' | 'operational_move' | 'details_edited';
+
 export type OfficeLifecycleResult = {
   success: true;
   appointmentId: string;
-  changeKind?: 'customer_reschedule' | 'operational_move';
+  changeKind?: OfficeLifecycleChangeKind;
   customerNotificationRecommended?: boolean;
   appointment: Record<string, unknown>;
 };
@@ -298,6 +300,7 @@ export async function checkOfficeCreateAvailability(input: {
   requestId: string;
   customerId: string;
   propertyId: string;
+  appointmentId?: string;
   presetId?: string;
   serviceId?: string;
   quantity?: number;
@@ -309,6 +312,7 @@ export async function checkOfficeCreateAvailability(input: {
   technicianInstructions?: string;
   recipientSelections?: AppointmentRecipientSelection[];
   notes?: string;
+  changeKind?: OfficeLifecycleChangeKind;
 }) {
   return callOfficeBookingAuthority<OfficeAvailabilityResult>('check_availability', input, 12_000);
 }
@@ -324,6 +328,14 @@ export async function confirmOfficeAppointment(input: {
     throw new Error('Booking Authority did not return a verified appointment id. Nothing was marked as confirmed.');
   }
   return result;
+}
+
+export function getOfficeAppointment(appointmentId: string) {
+  return callOfficeBookingAuthority<{
+    success: true;
+    appointmentId: string;
+    appointment: Record<string, unknown>;
+  }>('get_appointment', { appointmentId }, 8_000);
 }
 
 export async function listOfficeAppointmentAttribution(appointmentIds: string[]) {
@@ -404,14 +416,17 @@ export async function checkOfficeRescheduleAvailability(input: {
   requestId: string;
   customerId: string;
   propertyId: string;
-  presetId: string;
+  presetId?: string;
   serviceId?: string;
-  quantity: number;
+  quantity?: number;
+  workLines?: OfficeBookingWorkLine[];
   requestedDate: string;
   requestedTime?: string;
   requiredVanId?: string;
   customerFacingDescription?: string;
-  changeKind?: 'customer_reschedule' | 'operational_move';
+  technicianInstructions?: string;
+  notes?: string;
+  changeKind?: OfficeLifecycleChangeKind;
 }) {
   return callOfficeBookingAuthority<OfficeAvailabilityResult>('check_availability', input, 12_000);
 }
@@ -433,7 +448,7 @@ export async function rescheduleOfficeAppointment(input: {
   optionId: string;
   reason: string;
   note?: string;
-  changeKind?: 'customer_reschedule' | 'operational_move';
+  changeKind?: OfficeLifecycleChangeKind;
 }) {
   return callOfficeBookingAuthority<OfficeLifecycleResult>('reschedule_appointment', input, 12_000);
 }

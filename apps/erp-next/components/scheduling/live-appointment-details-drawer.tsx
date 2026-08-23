@@ -6,15 +6,18 @@ import {
   cancelOfficeAppointment,
   checkOfficeRescheduleAvailability,
   createOfficeLifecycleRequestId,
+  getOfficeAppointment,
   rescheduleOfficeAppointment,
   type OfficeAvailabilityResult,
   type OfficeBookingOption,
+  type OfficeBookingWorkLine,
 } from '../../lib/office-booking-authority';
 import { currentArubaDateKey } from '../../lib/scheduling-capacity';
 import { AppointmentCommunicationPanel } from './appointment-communication-panel';
+import { LiveAppointmentEditPanel } from './live-appointment-edit-panel';
 import styles from './scheduling-overview-v2.module.css';
 
-type Mode = 'details' | 'reschedule' | 'cancel';
+type Mode = 'details' | 'edit' | 'reschedule' | 'cancel';
 
 type Props = {
   appointment: BrowserAppointmentRecord;
@@ -41,6 +44,32 @@ const rescheduleReasons = [
   'Weather / external condition',
   'Other',
 ];
+
+function text(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function canonicalWorkLines(value: unknown): OfficeBookingWorkLine[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((raw, index) => {
+    const item = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+    const quantity = Math.max(1, Math.round(Number(item.quantity) || 1));
+    const manualDuration = Number(item.manualDurationMinutes || 0);
+    return {
+      id: text(item.id) || `work-${index + 1}`,
+      presetId: text(item.presetId || item.serviceType || item.bookingCode),
+      ...(text(item.serviceId) ? { serviceId: text(item.serviceId) } : {}),
+      quantity,
+      ...(Number.isFinite(manualDuration) && manualDuration > 0 ? { manualDurationMinutes: manualDuration } : {}),
+      ...(text(item.customerFacingDescription) ? { customerFacingDescription: text(item.customerFacingDescription) } : {}),
+      ...(text(item.technicianInstructions) ? { technicianInstructions: text(item.technicianInstructions) } : {}),
+    };
+  }).filter((line) => Boolean(line.presetId));
+}
+
+function sharedWorkText(lines: OfficeBookingWorkLine[], field: 'customerFacingDescription' | 'technicianInstructions') {
+  return [...new Set(lines.map((line) => text(line[field])).filter(Boolean))].join('; ');
+}
 
 function formatTime(value?: string) {
   if (!value) return '—';
@@ -152,16 +181,29 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
     setError('');
     setSelectedOptionKey('');
     try {
+      // Reschedule must preserve the exact canonical workload. Never reconstruct a
+      // multi-service appointment from the calendar summary (e.g. "multiple_services").
+      const canonicalResult = await getOfficeAppointment(appointment.id);
+      const canonical = canonicalResult.appointment;
+      const workLines = canonicalWorkLines(canonical.workLines);
+      if (!workLines.length) {
+        throw new Error('This appointment has no canonical work lines. Edit the appointment work first before rescheduling it.');
+      }
+      const customerId = text(canonical.customerId) || appointment.customerId;
+      const propertyId = text(canonical.propertyId) || appointment.siteId;
+      if (!customerId || !propertyId) {
+        throw new Error('This appointment is missing its canonical customer/property relationship.');
+      }
       const result = await checkOfficeRescheduleAvailability({
         appointmentId: appointment.id,
         requestId: createOfficeLifecycleRequestId('reschedule-availability'),
-        customerId: appointment.customerId,
-        propertyId: appointment.siteId,
-        presetId: appointment.workTypeId || appointment.presetId,
-        serviceId: appointment.serviceId,
-        quantity: appointment.totalQuantity,
+        customerId,
+        propertyId,
+        workLines,
         requestedDate: targetDate,
-        customerFacingDescription: appointment.customerFacingDescription,
+        customerFacingDescription: sharedWorkText(workLines, 'customerFacingDescription') || appointment.customerFacingDescription,
+        technicianInstructions: sharedWorkText(workLines, 'technicianInstructions') || appointment.technicianInstructions,
+        changeKind: 'customer_reschedule',
       });
       setAvailability(result);
       if (!result.available || !result.options.length) setError('No valid Booking Authority capacity is available for that date.');
@@ -192,6 +234,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
         optionId: selectedOption.id,
         reason,
         note,
+        changeKind: 'customer_reschedule',
       });
       await onChanged();
       onClose();
@@ -264,16 +307,23 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
         <AppointmentCommunicationPanel appointmentId={appointment.id} />
 
         {mode === 'details' ? <section className={styles.formSection}>
-          <header><strong>Manage appointment</strong><span>Lifecycle changes go through Booking Authority so capacity locks and Work Orders remain synchronized.</span></header>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: 8, padding: 11 }}>
+          <header><strong>Manage appointment</strong><span>All changes go through Booking Authority so capacity locks and Work Orders remain synchronized.</span></header>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 8, padding: 11 }}>
+            <button type="button" className={styles.secondary} disabled={!canManageLifecycle} onClick={() => begin('edit')}>Edit Appointment</button>
             <button type="button" className={styles.secondary} disabled={!canManageLifecycle} onClick={() => begin('reschedule')}>Reschedule</button>
             <button type="button" className={styles.secondary} disabled={!canManageLifecycle} onClick={() => begin('cancel')} style={{ color: 'var(--danger)' }}>Cancel Appointment</button>
           </div>
           {!canManageLifecycle && appointment.status !== 'cancelled' ? <div className={styles.descriptionPreview}><span>CANONICAL RELATIONSHIP REQUIRED</span><strong>This appointment cannot be changed until its customer and property IDs are resolved.</strong></div> : null}
         </section> : null}
 
+        {mode === 'edit' ? <LiveAppointmentEditPanel
+          appointment={appointment}
+          onBack={() => begin('details')}
+          onSaved={async () => { await onChanged(); onClose(); }}
+        /> : null}
+
         {mode === 'reschedule' ? <section className={styles.formSection}>
-          <header><strong>Reschedule appointment</strong><span>Choose a date, then select only from capacity returned by Booking Authority.</span></header>
+          <header><strong>Reschedule appointment</strong><span>Choose a date, then select only from capacity returned by Booking Authority using the appointment's canonical work lines.</span></header>
           <div className={styles.formGrid}>
             <label><span>New date</span><input type="date" min={currentArubaDateKey()} value={targetDate} onChange={(event) => { setTargetDate(event.target.value); setAvailability(null); setSelectedOptionKey(''); setError(''); }} /></label>
             <label><span>Reason</span><select value={reason} onChange={(event) => setReason(event.target.value)}><option value="">Select reason</option>{rescheduleReasons.map((item) => <option key={item}>{item}</option>)}</select></label>

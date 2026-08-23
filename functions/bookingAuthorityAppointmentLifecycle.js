@@ -14,8 +14,8 @@ const {
   validateWorkOrders,
 } = require("./bookingAuthorityFirestore");
 
-const APPOINTMENT_LIFECYCLE_VERSION = 4;
-const RESCHEDULE_CHANGE_KINDS = new Set(["customer_reschedule", "operational_move"]);
+const APPOINTMENT_LIFECYCLE_VERSION = 6;
+const RESCHEDULE_CHANGE_KINDS = new Set(["customer_reschedule", "operational_move", "details_edited"]);
 
 function defaultServerTimestamp() {
   const { FieldValue } = require("firebase-admin/firestore");
@@ -51,6 +51,12 @@ function requireReason(value, operation) {
 function normalizeChangeKind(value) {
   const candidate = cleanText(value, 80);
   return RESCHEDULE_CHANGE_KINDS.has(candidate) ? candidate : "customer_reschedule";
+}
+
+function changeOperationLabel(kind) {
+  if (kind === "operational_move") return "Operational move";
+  if (kind === "details_edited") return "Appointment edit";
+  return "Reschedule";
 }
 
 function activeAppointment(snapshot, appointmentId) {
@@ -95,6 +101,7 @@ function historyEvent({ kind, actor, reason, note, now, from, to, customerNotifi
 }
 
 function scheduleChangeNeedsCustomerFollowUp(kind, from = {}, to = {}) {
+  if (kind === "details_edited") return false;
   if (kind === "customer_reschedule") return true;
   return cleanText(from.dateKey, 20) !== cleanText(to.dateKey, 20)
     || cleanText(from.primaryStart, 20) !== cleanText(to.primaryStart, 20);
@@ -105,6 +112,27 @@ function appointmentStillOwnsLock(appointment, lockId) {
   const status = cleanText(appointment.status, 40).toLowerCase();
   if (["cancelled", "canceled", "cancelada"].includes(status)) return false;
   return Array.isArray(appointment.capacityLockIds) && appointment.capacityLockIds.includes(lockId);
+}
+
+function assertDetailsEditKeepsPlacement(current, refreshedOption) {
+  const currentSchedule = scheduleSnapshot(current);
+  const nextPrimary = refreshedOption.assignments?.find((item) => cleanText(item?.role, 40) !== "support")
+    || refreshedOption.assignments?.[0]
+    || {};
+  const nextDate = cleanText(refreshedOption.date, 20);
+  const nextStart = cleanText(nextPrimary.time || refreshedOption.time, 20);
+  const nextVanId = cleanText(nextPrimary.vanId, 120);
+  if (
+    nextDate !== cleanText(currentSchedule.dateKey, 20)
+    || nextStart !== cleanText(currentSchedule.primaryStart, 20)
+    || nextVanId !== cleanText(currentSchedule.primaryVanId, 120)
+  ) {
+    throw new BookingAuthorityError(
+      BOOKING_ERROR_CODES.AVAILABILITY_CHANGED,
+      "Edit appointment may change work details and required capacity, but not its date, start time, or primary van. Use Reschedule or Move for schedule changes.",
+      { reason: "details-edit-placement-changed" },
+    );
+  }
 }
 
 function createBookingAppointmentLifecycle({
@@ -203,7 +231,7 @@ function createBookingAppointmentLifecycle({
       );
     }
     const normalizedChangeKind = normalizeChangeKind(changeKind);
-    const rescheduleReason = requireReason(reason, normalizedChangeKind === "operational_move" ? "Operational move" : "Reschedule");
+    const lifecycleReason = requireReason(reason, changeOperationLabel(normalizedChangeKind));
     const now = asDate(clock());
     const appointmentRef = db.collection(collections.appointments).doc(id);
     const offerRef = db.collection(collections.offers).doc(canonicalOfferId);
@@ -211,7 +239,7 @@ function createBookingAppointmentLifecycle({
     const [appointmentSnapshot, offerSnapshot] = await Promise.all([appointmentRef.get(), offerRef.get()]);
     const existing = activeAppointment(appointmentSnapshot, id);
     if (["cancelled", "canceled", "cancelada"].includes(cleanText(existing.status, 40).toLowerCase())) {
-      throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "A cancelled appointment cannot be rescheduled.", { appointmentId: id });
+      throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "A cancelled appointment cannot be changed.", { appointmentId: id });
     }
     const offer = offerSnapshot.exists ? { id: offerSnapshot.id, ...offerSnapshot.data() } : null;
     const selected = validateOfferSelection({ offer, offerVersion, optionId, now });
@@ -219,16 +247,13 @@ function createBookingAppointmentLifecycle({
     if (request.customerId !== cleanText(existing.customerId, 160) || request.propertyId !== cleanText(existing.propertyId, 160)) {
       throw new BookingAuthorityError(
         BOOKING_ERROR_CODES.INVALID_REQUEST,
-        "The reschedule offer does not belong to this appointment customer/property.",
+        "The lifecycle offer does not belong to this appointment customer/property.",
         { appointmentId: id },
       );
     }
 
     let refreshedOption;
     if (normalizedChangeKind === "operational_move") {
-      // The office drag preflight that created this offer already ran the exact target through
-      // the scheduling provider. Avoid repeating the same full provider scan a second time;
-      // the Firestore transaction below remains the authoritative conflict/capacity gate.
       refreshedOption = normalizeOfferOption(selected);
     } else {
       let revalidation;
@@ -237,19 +262,20 @@ function createBookingAppointmentLifecycle({
       } catch (error) {
         throw new BookingAuthorityError(
           BOOKING_ERROR_CODES.AVAILABILITY_PROVIDER_ERROR,
-          "Booking availability provider failed while revalidating the reschedule.",
+          "Booking availability provider failed while revalidating the appointment change.",
           { cause: cleanText(error?.message || error, 500) },
         );
       }
       if (!revalidation || revalidation.available !== true || !revalidation.option) {
         throw new BookingAuthorityError(
           BOOKING_ERROR_CODES.AVAILABILITY_CHANGED,
-          "The selected reschedule option is no longer available.",
+          "The selected appointment option is no longer available.",
           { reason: cleanText(revalidation?.reason, 240) },
         );
       }
       refreshedOption = normalizeOfferOption(revalidation.option);
     }
+    if (normalizedChangeKind === "details_edited") assertDetailsEditKeepsPlacement(existing, refreshedOption);
 
     return db.runTransaction(async (transaction) => {
       const [currentAppointmentSnapshot, currentOfferSnapshot] = await Promise.all([
@@ -258,13 +284,13 @@ function createBookingAppointmentLifecycle({
       ]);
       const current = activeAppointment(currentAppointmentSnapshot, id);
       if (["cancelled", "canceled", "cancelada"].includes(cleanText(current.status, 40).toLowerCase())) {
-        throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "A cancelled appointment cannot be rescheduled.", { appointmentId: id });
+        throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "A cancelled appointment cannot be changed.", { appointmentId: id });
       }
       const currentOffer = currentOfferSnapshot.exists ? { id: currentOfferSnapshot.id, ...currentOfferSnapshot.data() } : null;
       validateOfferSelection({ offer: currentOffer, offerVersion, optionId, now });
       const currentRequest = normalizeBookingRequest(currentOffer.request);
       if (currentRequest.customerId !== cleanText(current.customerId, 160) || currentRequest.propertyId !== cleanText(current.propertyId, 160)) {
-        throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "The current reschedule offer no longer matches the appointment.", { appointmentId: id });
+        throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "The current lifecycle offer no longer matches the appointment.", { appointmentId: id });
       }
       if (normalizedChangeKind === "operational_move") {
         if (cleanText(current.date, 20) !== cleanText(refreshedOption.date, 20)) {
@@ -282,6 +308,7 @@ function createBookingAppointmentLifecycle({
           );
         }
       }
+      if (normalizedChangeKind === "details_edited") assertDetailsEditKeepsPlacement(current, refreshedOption);
 
       const customerRef = db.collection(collections.clients).doc(currentRequest.customerId);
       const propertyRef = db.collection(collections.properties).doc(currentRequest.propertyId);
@@ -304,7 +331,7 @@ function createBookingAppointmentLifecycle({
       if (!validation || validation.available !== true) {
         throw new BookingAuthorityError(
           BOOKING_ERROR_CODES.SLOT_CONFLICT,
-          "The selected reschedule capacity was occupied before it could be committed.",
+          "The selected appointment capacity was occupied before the change could be committed.",
           { reason: cleanText(validation?.reason, 240) },
         );
       }
@@ -339,7 +366,7 @@ function createBookingAppointmentLifecycle({
           if (!appointmentStillOwnsLock(owners.get(ownerId), entry.lock.id)) continue;
           throw new BookingAuthorityError(
             BOOKING_ERROR_CODES.SLOT_CONFLICT,
-            "The selected reschedule capacity is owned by another active appointment.",
+            "The selected appointment capacity is owned by another active appointment.",
             { date: entry.lock.date, vanId: entry.lock.vanId, slot: entry.lock.slot, appointmentId: ownerId },
           );
         }
@@ -352,7 +379,7 @@ function createBookingAppointmentLifecycle({
         customer,
         property,
         actor,
-        context: { ...context, reschedule: true, changeKind: normalizedChangeKind },
+        context: { ...context, reschedule: normalizedChangeKind !== "details_edited", detailsEdit: normalizedChangeKind === "details_edited", changeKind: normalizedChangeKind },
         now,
       }), id);
       const workOrderIds = workOrders.map((item) => item.id);
@@ -373,7 +400,7 @@ function createBookingAppointmentLifecycle({
       const event = historyEvent({
         kind: normalizedChangeKind,
         actor,
-        reason: rescheduleReason,
+        reason: lifecycleReason,
         note,
         now,
         from: previousSchedule,
@@ -381,6 +408,17 @@ function createBookingAppointmentLifecycle({
         customerNotificationRecommended,
       });
       const lifecycleHistory = [...(Array.isArray(current.lifecycleHistory) ? current.lifecycleHistory : []), event];
+      const lifecycleMetadata = normalizedChangeKind === "details_edited"
+        ? {
+          detailsEditReason: lifecycleReason,
+          detailsEditNote: cleanText(note, 1_500),
+          detailsEditedAtIso: now.toISOString(),
+        }
+        : {
+          rescheduleReason: lifecycleReason,
+          rescheduleNote: cleanText(note, 1_500),
+          rescheduledAtIso: now.toISOString(),
+        };
 
       transaction.set(appointmentRef, compactObject({
         status: "confirmed",
@@ -391,17 +429,16 @@ function createBookingAppointmentLifecycle({
         startTime: refreshedOption.time,
         endTime: refreshedOption.endTime,
         workLines: currentRequest.workLines,
+        workItems: refreshedOption.workItems,
         constraints: currentRequest.constraints,
         notes: currentRequest.notes,
         assignments: refreshedOption.assignments,
         primaryVanId: cleanText(refreshedOption.assignments?.[0]?.vanId, 120),
         workOrderIds,
         capacityLockIds: newLocks.map((lock) => lock.id),
-        rescheduleReason,
-        rescheduleNote: cleanText(note, 1_500),
+        ...lifecycleMetadata,
         lastScheduleChangeKind: normalizedChangeKind,
         customerNotificationRecommended,
-        rescheduledAtIso: now.toISOString(),
         updatedAtIso: now.toISOString(),
         lifecycleHistory,
         lastLifecycleActorId: actorInfo.actorId,
@@ -410,19 +447,24 @@ function createBookingAppointmentLifecycle({
         updatedAt: serverTimestamp(),
       }), { merge: true });
 
+      // Lifecycle changes update Scheduling-owned fields on the same Work Order IDs.
+      // Merge the projection instead of replacing the document so communication
+      // delivery history, recipient policy, invoice/report state and other domains
+      // that Scheduling does not own cannot be erased by an edit or reschedule.
       for (const workOrder of workOrders) {
         transaction.set(db.collection(collections.workOrders).doc(workOrder.id), compactObject({
           ...workOrder,
           status: "Confirmada",
           bookingOfferId: canonicalOfferId,
           updatedAt: now.toISOString(),
-        }));
+        }), { merge: true });
       }
       for (const oldWorkOrderId of oldWorkOrderIds) {
         if (newWorkOrderIds.has(oldWorkOrderId)) continue;
         transaction.set(db.collection(collections.workOrders).doc(oldWorkOrderId), compactObject({
           status: "Cancelada",
-          replacedByReschedule: true,
+          replacedByReschedule: normalizedChangeKind !== "details_edited",
+          replacedByDetailsEdit: normalizedChangeKind === "details_edited",
           updatedAt: now.toISOString(),
         }), { merge: true });
       }
@@ -466,6 +508,10 @@ function createBookingAppointmentLifecycle({
           date: refreshedOption.date,
           startTime: refreshedOption.time,
           endTime: refreshedOption.endTime,
+          workLines: currentRequest.workLines,
+          workItems: refreshedOption.workItems,
+          constraints: currentRequest.constraints,
+          notes: currentRequest.notes,
           assignments: refreshedOption.assignments,
           primaryVanId: cleanText(refreshedOption.assignments?.[0]?.vanId, 120),
           workOrderIds,
@@ -487,6 +533,7 @@ function createBookingAppointmentLifecycle({
 module.exports = {
   APPOINTMENT_LIFECYCLE_VERSION,
   appointmentStillOwnsLock,
+  assertDetailsEditKeepsPlacement,
   createBookingAppointmentLifecycle,
   normalizeChangeKind,
   scheduleChangeNeedsCustomerFollowUp,
