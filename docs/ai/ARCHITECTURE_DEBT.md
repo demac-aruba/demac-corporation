@@ -1,0 +1,20 @@
+# Architecture Debt Register
+
+| ID | Debt | Risk | Exit condition |
+| --- | --- | --- | --- |
+| AD-001 | Root package depends on sequential source-patching scripts before start/typecheck/build | Non-reproducible changes and fragile builds | Replace generated patch chain with reviewed source and clean deterministic build |
+| AD-002 | Root/Legacy documentation contains stale descriptions, including old MVP/local-persistence assumptions, while production-capable Firebase functions coexist | Stale documentation can be mistaken for current architecture and create boundary/data-flow errors | Reconcile root/Legacy documentation against approved current authorities, mark superseded material, and publish an environment-specific runtime/data ownership map |
+| AD-003 | Legacy and ERP Next duplicate product concepts | Rule drift and inconsistent identity | Canonical contracts and parity ledger cover every migrated module |
+| AD-004 | Quality gates are fragmented across package scripts and path-filtered workflows | Changes can miss relevant validation | One documented, dependency-aware required check set |
+| AD-005 | Multiple external communication and deployment paths exist | Duplicate messages or partial rollout | Single communication authority and deployment inventory with owners |
+| AD-006 | ERP Next acceptance scripts generate temporary compiled directories | Cleanup and CI consistency risk | Adopt a standard test runner with isolated managed artifacts |
+| AD-007 | Repository documentation is extensive but lacks uniform status/ownership metadata | Stale guidance may appear authoritative | Add owner, status, reviewed date, and supersession links to governing docs |
+| AD-008 | ERP Next still contains fixed four-Van assumptions, including `VAN-1` through `VAN-4` patterns, fixed arrays, and `/4` metrics | Fleet growth or configuration changes can produce incorrect allocation, reporting, and UI behavior | Fleet behavior is data-driven end to end with no fixed fleet-size assumptions |
+| AD-009 | Dispatch Control and Dispatch Readiness remain browser/local or hybrid rather than fully canonical live operational views | Operators can see stale or non-authoritative state and make inconsistent dispatch decisions | Both views read governed live operational models from canonical authorities, with reconciliation and failure behavior proven |
+| AD-010 | Work Orders and Field/Technician execution retain browser, preview, or hybrid paths and have not achieved full Legacy parity | Field execution can lose state or diverge between preview and canonical workflows | Canonical persisted end-to-end Work Order and field execution flows pass approved Legacy parity scenarios |
+| AD-011 | Technician Portal/mobile field workflow parity is incomplete, including technician agenda, evidence, measurements, reports, and Office Review | Technicians and office reviewers lack a proven complete operational path | Approved end-to-end parity evidence covers agenda, evidence, measurements, reports, and Office Review on the intended field surfaces |
+| AD-012 | Older code, PR assumptions, and root/Legacy documentation can remain after architecture decisions change | Superseded architecture can be mistaken for current authority and reintroduced | Governing ADRs and authority documents have explicit supersession links, and stale code/document assumptions are classified and reconciled |
+| AD-013 | The repository is currently public, while its licensing and intellectual-property posture has not been reviewed for proprietary engineering knowledge or a future commercial platform | Public exposure and unclear licensing may undermine confidentiality, ownership expectations, or commercialization options | An authorized human governance/legal review records the intended visibility, licensing, contribution, and IP posture; no automatic visibility or license change is implied |
+
+Debt changes require evidence. Do not erase an item because a partial mitigation exists;
+link the verifying change and record residual risk.
