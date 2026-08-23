@@ -128,7 +128,7 @@ function supportTimes(result) {
 }
 
 test("canonical scheduling engine has an explicit version", () => {
-  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 6);
+  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 7);
 });
 
 test("single-work helper still rejects mixed work for operations that require one work type", () => {
