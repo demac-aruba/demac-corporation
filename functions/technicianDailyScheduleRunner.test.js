@@ -261,6 +261,24 @@ test("no active work orders is an explicit successful skip", async () => {
   assert.equal(db.batch().skipReason, "no-active-work-orders");
 });
 
+test("concurrent completion stays terminal even if this invocation later fails", async () => {
+  const db = createDb();
+  const run = createRunner({
+    db,
+    queueDay: async () => {
+      db.collections.technicianDailyScheduleBatches.get("2026-08-24").status = "complete";
+      throw new Error("late concurrent error");
+    },
+  });
+
+  const result = await run();
+  assert.equal(result.status, "complete");
+  assert.equal(result.idempotent, true);
+  assert.equal(result.concurrentCompletion, true);
+  assert.equal(db.batch().status, "complete");
+  assert.equal(db.batch().fatalError, null);
+});
+
 test("queue service exception is persisted as a failed automatic attempt", async () => {
   const db = createDb();
   const run = createRunner({
