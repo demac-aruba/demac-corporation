@@ -41,6 +41,8 @@ on:
       - 'functions/whatsappTransactionalService.js'
       - 'functions/whatsappTransactionalService.test.js'
       - 'functions/whatsappTransactionalGroupRecipient.test.js'
+      - 'functions/package-lock.json'
+      - 'firebase.json'
       - 'functions/operatingCalendarService.js'
       - 'functions/operatingCalendarService.test.js'
       - 'functions/appointmentCommunicationRenderer.js'
@@ -66,8 +68,6 @@ on:
       - 'functions/officeBookingAuthorityCommunication.test.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
-      - 'functions/package-lock.json'
-      - 'firebase.json'
   workflow_dispatch:
     inputs:
       deploy_to_production:
