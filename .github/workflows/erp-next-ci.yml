@@ -4,24 +4,60 @@ on:
   pull_request:
     paths:
       - 'apps/erp-next/**'
+      - 'functions/fieldOperationsAuthority*.js'
+      - 'functions/bookingSchedulingPrimitives.js'
+      - 'functions/bookingSchedulingPrimitives.test.js'
+      - 'functions/bookingVanIdentity.js'
+      - 'functions/bookingVanIdentity.test.js'
+      - 'functions/package.json'
       - 'functions/whatsappWacliGateway.js'
       - 'services/whatsapp-bridge/**'
       - 'docs/ERP_NEXT_**'
+      - 'docs/ai/TECHNICIAN_PORTAL_**'
       - '.github/workflows/erp-next-ci.yml'
   push:
     branches:
       - main
     paths:
       - 'apps/erp-next/**'
+      - 'functions/fieldOperationsAuthority*.js'
+      - 'functions/bookingSchedulingPrimitives.js'
+      - 'functions/bookingSchedulingPrimitives.test.js'
+      - 'functions/bookingVanIdentity.js'
+      - 'functions/bookingVanIdentity.test.js'
+      - 'functions/package.json'
       - 'functions/whatsappWacliGateway.js'
       - 'services/whatsapp-bridge/**'
       - 'docs/ERP_NEXT_**'
+      - 'docs/ai/TECHNICIAN_PORTAL_**'
       - '.github/workflows/erp-next-ci.yml'
 
 permissions:
   contents: read
 
 jobs:
+  field-functions:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: functions
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Functions Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install Functions
+        run: npm install --no-audit --no-fund
+      - name: Validate Firebase Functions syntax
+        run: npm run validate:firebase
+      - name: Field authority acceptance
+        run: npm run test:field-authority
+      - name: Booking and scheduling regression
+        run: npm run test:booking-authority
+
   validate:
     runs-on: ubuntu-latest
     defaults:
