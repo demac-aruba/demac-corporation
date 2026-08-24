@@ -1,0 +1,231 @@
+name: Van Schedule Delivery Health
+
+on:
+  pull_request:
+    paths:
+      - 'functions/diagnostics/vanScheduleDeliveryHealth.js'
+      - 'functions/diagnostics/vanScheduleDeliveryHealth.test.js'
+      - 'functions/operatingCalendarService.js'
+      - 'functions/technicianDailyScheduleRunner.js'
+      - 'functions/vanScheduleDeliveryConfig.js'
+      - 'functions/package.json'
+      - 'functions/package-lock.json'
+      - '.github/workflows/van-schedule-delivery-health.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'functions/diagnostics/vanScheduleDeliveryHealth.js'
+      - 'functions/diagnostics/vanScheduleDeliveryHealth.test.js'
+      - 'functions/operatingCalendarService.js'
+      - 'functions/technicianDailyScheduleRunner.js'
+      - 'functions/vanScheduleDeliveryConfig.js'
+      - 'functions/package.json'
+      - 'functions/package-lock.json'
+      - '.github/workflows/van-schedule-delivery-health.yml'
+  schedule:
+    # GitHub cron is UTC. Aruba is UTC-4 year-round, so 12:20 UTC = 08:20 Aruba.
+    # This is intentionally outside the Cloud Scheduler failure domain used by the producer.
+    - cron: '20 12 * * *'
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'Optional Aruba business date to inspect (YYYY-MM-DD). Historical dates are evaluated immediately.'
+        required: false
+        type: string
+
+concurrency:
+  group: van-schedule-delivery-health-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Validate Firebase function surface
+        run: npm run validate:firebase --prefix functions
+
+      - name: Validate delivery health diagnostic syntax
+        run: node --check functions/diagnostics/vanScheduleDeliveryHealth.js
+
+      - name: Test delivery health and shared queue reconciliation
+        run: >-
+          node --test
+          functions/diagnostics/vanScheduleDeliveryHealth.test.js
+          functions/technicianDailyScheduleRunner.test.js
+
+  check-production:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      issues: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Authenticate Firebase diagnostic identity
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+
+      - name: Read canonical Van schedule delivery health
+        id: health
+        continue-on-error: true
+        env:
+          GCLOUD_PROJECT: demac-corporation
+          GOOGLE_CLOUD_PROJECT: demac-corporation
+          HEALTH_DATE: ${{ github.event.inputs.date || '' }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          target_date="${HEALTH_DATE:-$(node -p \"require('./functions/operatingCalendarService').dateKeyInTimeZone()\")}"
+          echo "run_date=${target_date}" >> "$GITHUB_OUTPUT"
+
+          set +e
+          HEALTH_DATE="$target_date" node functions/diagnostics/vanScheduleDeliveryHealth.js > /tmp/van-schedule-health.json
+          diagnostic_exit=$?
+          set -e
+
+          if [ "$diagnostic_exit" -ne 0 ]; then
+            echo 'healthy=false' >> "$GITHUB_OUTPUT"
+            echo 'status=monitor-error' >> "$GITHUB_OUTPUT"
+            echo 'reason=diagnostic-execution-failed' >> "$GITHUB_OUTPUT"
+            {
+              echo '## Van Schedule Delivery Health'
+              echo
+              echo "- Date: ${target_date}"
+              echo '- Healthy: false'
+              echo '- Status: monitor-error'
+              echo '- Reason: diagnostic-execution-failed'
+              echo '- The read-only diagnostic could not complete; inspect this workflow before taking any resend action.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit "$diagnostic_exit"
+          fi
+
+          cat /tmp/van-schedule-health.json
+          node - /tmp/van-schedule-health.json "$GITHUB_OUTPUT" "$GITHUB_STEP_SUMMARY" <<'NODE'
+          const fs = require('node:fs');
+          const [jsonPath, outputPath, summaryPath] = process.argv.slice(2);
+          const p = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+          const summary = [
+            '## Van Schedule Delivery Health',
+            '',
+            `- Date: ${p.runDate}`,
+            `- Healthy: ${p.healthy}`,
+            `- Status: ${p.status}`,
+            `- Reason: ${p.reason}`,
+            `- Batch status: ${p.batch?.status || 'none'}`,
+            `- Invocation count: ${p.batch?.invocationCount || 0}`,
+            `- Expected queue messages: ${p.batch?.expectedQueueCount || 0}`,
+            `- Delivered: ${p.delivery?.successful || 0}`,
+            `- Pending: ${p.delivery?.pending || 0}`,
+            `- Failed: ${p.delivery?.failed || 0}`,
+            `- Missing/unknown: ${p.delivery?.unknown || 0}`,
+          ].join('\n');
+          fs.appendFileSync(summaryPath, `${summary}\n`);
+          fs.appendFileSync(outputPath, `healthy=${p.healthy}\n`);
+          fs.appendFileSync(outputPath, `run_date=${p.runDate}\n`);
+          fs.appendFileSync(outputPath, `status=${p.status}\n`);
+          fs.appendFileSync(outputPath, `reason=${String(p.reason || '').replace(/[\r\n]/g, ' ')}\n`);
+          NODE
+
+      - name: Create or update health alert issue
+        if: always() && (steps.health.outcome == 'failure' || steps.health.outputs.healthy == 'false')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEALTH_OUTCOME: ${{ steps.health.outcome }}
+          RUN_DATE: ${{ steps.health.outputs.run_date }}
+          REASON: ${{ steps.health.outputs.reason }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          title="[ALERT] Van schedule delivery unhealthy ${RUN_DATE:-unknown}"
+
+          if [ -s /tmp/van-schedule-health.json ]; then
+            node - /tmp/van-schedule-health.json > /tmp/van-schedule-alert.md <<'NODE'
+          const fs = require('node:fs');
+          const p = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const lines = [
+            '@demac-aruba',
+            '',
+            'The independent post-08:10 Van schedule delivery health check detected an unhealthy result.',
+            '',
+            `- Aruba business date: **${p.runDate}**`,
+            `- Health reason: **${p.reason}**`,
+            `- Batch status: **${p.batch?.status || 'none'}**`,
+            `- Invocation count: **${p.batch?.invocationCount || 0}**`,
+            `- Expected queue messages: **${p.batch?.expectedQueueCount || 0}**`,
+            `- Delivered: **${p.delivery?.successful || 0}**`,
+            `- Pending: **${p.delivery?.pending || 0}**`,
+            `- Failed: **${p.delivery?.failed || 0}**`,
+            `- Missing/unknown: **${p.delivery?.unknown || 0}**`,
+            '',
+            'This monitor is read-only. It did **not** resend schedules, invoke Cloud Scheduler, modify Van mappings, or write DEMAC production data.',
+            '',
+            'Investigate the canonical batch/queue evidence and Cloud Scheduler deployment state before any manual resend.',
+            '',
+            `Workflow run: ${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+          ];
+          process.stdout.write(`${lines.join('\n')}\n`);
+          NODE
+          else
+            cat > /tmp/van-schedule-alert.md <<EOF
+          @demac-aruba
+
+          The independent Van schedule health monitor itself failed before it could produce canonical delivery health evidence.
+
+          - Aruba business date: **${RUN_DATE:-unknown}**
+          - Monitor outcome: **${HEALTH_OUTCOME}**
+          - Reason: **${REASON:-diagnostic-execution-failed}**
+
+          This monitor is read-only. It did **not** resend schedules, invoke Cloud Scheduler, modify Van mappings, or write DEMAC production data.
+
+          Inspect the workflow execution and restore monitoring before making any resend decision.
+
+          Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          EOF
+          fi
+
+          existing="$(gh issue list --state open --search "$title in:title" --limit 20 --json number,title | jq -r --arg title "$title" '.[] | select(.title == $title) | .number' | head -n 1)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file /tmp/van-schedule-alert.md
+          else
+            gh issue create --title "$title" --body-file /tmp/van-schedule-alert.md
+          fi
+
+      - name: Fail unhealthy delivery health check
+        if: always() && (steps.health.outcome == 'failure' || steps.health.outputs.healthy == 'false')
+        env:
+          RUN_DATE: ${{ steps.health.outputs.run_date }}
+          REASON: ${{ steps.health.outputs.reason }}
+        shell: bash
+        run: |
+          echo "::error::Van schedule delivery health failed for ${RUN_DATE:-unknown}: ${REASON:-health-monitor-error}"
+          exit 1
