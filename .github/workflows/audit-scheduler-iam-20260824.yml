@@ -1,0 +1,51 @@
+name: Audit Scheduler IAM 2026-08-24
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/audit-scheduler-iam-20260824.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Authenticate Firebase production service account
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Read Cloud Function IAM policy
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -u
+          echo 'FUNCTION_IAM'
+          gcloud functions get-iam-policy sendDailyTechnicianSchedules \
+            --gen2 --region=us-central1 --project=demac-corporation \
+            --format='yaml(bindings)' 2>&1 || true
+      - name: Read Cloud Run IAM policy
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -u
+          echo 'RUN_IAM'
+          gcloud run services get-iam-policy senddailytechnicianschedules \
+            --region=us-central1 --project=demac-corporation \
+            --format='yaml(bindings)' 2>&1 || true
+      - name: Read project IAM roles for relevant principals
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -u
+          echo 'PROJECT_IAM_RELEVANT'
+          gcloud projects get-iam-policy demac-corporation \
+            --flatten='bindings[].members' \
+            --filter='bindings.members:(firebase-adminsdk-fbsvc@demac-corporation.iam.gserviceaccount.com OR 1053571783393-compute@developer.gserviceaccount.com)' \
+            --format='table(bindings.role,bindings.members)' 2>&1 || true
