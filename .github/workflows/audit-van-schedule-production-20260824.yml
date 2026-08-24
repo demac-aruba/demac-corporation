@@ -28,7 +28,7 @@ jobs:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
-      - name: Read calendar batch and queue history
+      - name: Read calendar batch queue and raw Van history
         env:
           GCLOUD_PROJECT: demac-corporation
           GOOGLE_CLOUD_PROJECT: demac-corporation
@@ -38,33 +38,64 @@ jobs:
           node <<'NODE'
           const admin = require('./functions/node_modules/firebase-admin');
           const { createOperatingCalendarService } = require('./functions/operatingCalendarService');
+          const { canonicalVanIdFromRecord } = require('./functions/bookingVanIdentity');
           if (!admin.apps.length) admin.initializeApp();
           const db = admin.firestore();
           const calendar = createOperatingCalendarService({ db });
-          const dates = ['2026-08-17','2026-08-18','2026-08-19','2026-08-20','2026-08-21','2026-08-22','2026-08-23','2026-08-24'];
+          const dates = ['2026-08-21','2026-08-22','2026-08-23','2026-08-24'];
           const safeTs = (v) => v && typeof v.toDate === 'function' ? v.toDate().toISOString() : v ?? null;
           (async () => {
-            const settingsSnap = await db.collection('businessSettings').doc('business-calendar').get();
-            const whatsappSnap = await db.collection('businessSettings').doc('whatsapp').get();
-            const closureSnap = await db.collection('calendarClosures').where('date','>=','2026-08-17').where('date','<=','2026-08-24').get();
+            const [settingsSnap, whatsappSnap, vanSnap] = await Promise.all([
+              db.collection('businessSettings').doc('business-calendar').get(),
+              db.collection('businessSettings').doc('whatsapp').get(),
+              db.collection('vans').get(),
+            ]);
             const calendarSettings = settingsSnap.exists ? settingsSnap.data() : {};
             const whatsappSettings = whatsappSnap.exists ? whatsappSnap.data() : {};
-            console.log('CALENDAR_SETTINGS', JSON.stringify({ exists: settingsSnap.exists, closedWeekdays: calendarSettings.closedWeekdays ?? null, closures: closureSnap.docs.map(d => ({ id:d.id, date:d.data().date, active:d.data().active !== false, reason:d.data().reason || d.data().name || null })) }));
+            console.log('CALENDAR_SETTINGS', JSON.stringify({ exists: settingsSnap.exists, closedWeekdays: calendarSettings.closedWeekdays ?? null }));
             console.log('WHATSAPP_SETTINGS', JSON.stringify({ exists: whatsappSnap.exists, transactionalOutboundEnabled: whatsappSettings.transactionalOutboundEnabled !== false, transactionalProvider: whatsappSettings.transactionalProvider || null }));
+            console.log('RAW_VANS', JSON.stringify(vanSnap.docs.map(d => {
+              const v = { id:d.id, ...d.data() };
+              return {
+                sourceVanId: d.id,
+                canonicalVanId: canonicalVanIdFromRecord(v) || null,
+                groupName: v.whatsappScheduleGroupName || null,
+                hasGroupJid: Boolean(String(v.whatsappScheduleGroupJid || '').trim()),
+                deliveryEnabled: v.scheduleDeliveryEnabled !== false,
+                correction: v.scheduleDeliveryGroupCorrection || null,
+                alignmentMigration: v.scheduleDeliveryGroupAlignmentMigration || v.scheduleGroupAlignmentMigration || null,
+              };
+            }))));
             for (const dateKey of dates) {
               const [open, batchSnap, woSnap, queueSnap] = await Promise.all([
                 calendar.isOpenDate(dateKey),
                 db.collection('technicianDailyScheduleBatches').doc(dateKey).get(),
                 db.collection('workOrders').where('date','==',dateKey).get(),
-                db.collection('whatsappOutboundQueue').where('metadata.scheduleDate','==',dateKey).get(),
+                db.collection('whatsappOutboundQueue').where('scheduleDate','==',dateKey).get(),
               ]);
               const batch = batchSnap.exists ? batchSnap.data() : null;
               const queues = queueSnap.docs.map(d => ({ id:d.id,...d.data() }));
-              const automatic = queues.filter(q => String(q.metadata?.reason || q.reason || '') === 'daily-van-schedule');
-              const manual = queues.filter(q => String(q.metadata?.reason || q.reason || '').includes('manual'));
-              const byStatus = {};
-              for (const q of queues) byStatus[String(q.status || 'unknown')] = (byStatus[String(q.status || 'unknown')] || 0) + 1;
-              console.log('DAY', JSON.stringify({ dateKey, open, workOrderCount: woSnap.size, batch: batch ? { status: batch.status || null, attemptCount: batch.attemptCount || 0, workOrderCount: batch.workOrderCount ?? null, messageCount: batch.messageCount ?? null, failedCount: batch.failedCount ?? null, fatalError: batch.fatalError || null, startedAt: safeTs(batch.startedAt), lastAttemptAt: safeTs(batch.lastAttemptAt), completedAt: safeTs(batch.completedAt), failedAt: safeTs(batch.failedAt) } : null, queueCount: queues.length, automaticCount: automatic.length, manualCount: manual.length, queueByStatus: byStatus }));
+              const byReason = {}, byStatus = {}, byType = {}, byProvider = {};
+              for (const q of queues) {
+                const reason = String(q.reason || 'unknown');
+                const status = String(q.status || 'unknown');
+                const type = String(q.notificationType || 'unknown');
+                const provider = String(q.provider || 'unknown');
+                byReason[reason] = (byReason[reason] || 0) + 1;
+                byStatus[status] = (byStatus[status] || 0) + 1;
+                byType[type] = (byType[type] || 0) + 1;
+                byProvider[provider] = (byProvider[provider] || 0) + 1;
+              }
+              console.log('DAY', JSON.stringify({
+                dateKey, open, workOrderCount: woSnap.size,
+                batch: batch ? {
+                  status: batch.status || null, attemptCount: batch.attemptCount || 0,
+                  workOrderCount: batch.workOrderCount ?? null, messageCount: batch.messageCount ?? null,
+                  failedCount: batch.failedCount ?? null, fatalError: batch.fatalError || null,
+                  startedAt: safeTs(batch.startedAt), lastAttemptAt: safeTs(batch.lastAttemptAt), completedAt: safeTs(batch.completedAt), failedAt: safeTs(batch.failedAt),
+                } : null,
+                queueCount: queues.length, byReason, byStatus, byType, byProvider,
+              }));
             }
           })().catch(e => { console.error(e); process.exit(1); });
           NODE
@@ -73,9 +104,22 @@ jobs:
         run: |
           set -u
           gcloud functions describe sendDailyTechnicianSchedules --project=demac-corporation --gen2 --region=us-central1 --format='yaml(name,state,updateTime,labels,serviceConfig.serviceAccountEmail,serviceConfig.uri,eventTrigger)'
+      - name: Probe likely Firebase Scheduler job names read-only
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -u
+          for job in \
+            firebase-schedule-sendDailyTechnicianSchedules-us-central1 \
+            firebase-schedule-senddailytechnicianschedules-us-central1 \
+            sendDailyTechnicianSchedules \
+            senddailytechnicianschedules; do
+            echo "JOB_PROBE $job"
+            gcloud scheduler jobs describe "$job" --project=demac-corporation --location=us-central1 --format='yaml(name,state,schedule,timeZone,lastAttemptTime,status)' 2>&1 || true
+          done
       - name: Read schedule-function logs around recent 8 AM windows
         continue-on-error: true
         shell: bash
         run: |
           set -u
-          gcloud logging read 'timestamp>="2026-08-17T11:45:00Z" AND timestamp<="2026-08-24T12:30:00Z" AND (textPayload:"Van group daily schedules" OR jsonPayload.message:"Van group daily schedules")' --project=demac-corporation --limit=200 --order=asc --format='table(timestamp,resource.type,resource.labels.service_name,jsonPayload.message,textPayload,severity)' || true
+          gcloud logging read 'timestamp>="2026-08-22T11:45:00Z" AND timestamp<="2026-08-24T12:30:00Z" AND (textPayload:"Van group daily schedules" OR jsonPayload.message:"Van group daily schedules")' --project=demac-corporation --limit=200 --order=asc --format='table(timestamp,resource.type,resource.labels.service_name,jsonPayload.message,textPayload,severity)' || true
