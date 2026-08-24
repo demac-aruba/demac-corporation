@@ -9,6 +9,7 @@ const {
 const FIELD_WORK_VISIT_STORAGE_VERSION = 1;
 
 const WORK_ORDER_TO_VISIT_STATUS = Object.freeze({
+  Confirmada: 'not_started',
   'En camino': 'on_the_way',
   'En el sitio': 'on_site',
   'En proceso': 'in_progress',
@@ -64,7 +65,12 @@ function initialVisitDocumentId(workOrderId) {
 }
 
 function storageStatusFromWorkOrder(order) {
-  return WORK_ORDER_TO_VISIT_STATUS[text(order?.status, 80)] || 'not_started';
+  const workOrderStatus = text(order?.status, 80);
+  const storageStatus = WORK_ORDER_TO_VISIT_STATUS[workOrderStatus];
+  if (!storageStatus) {
+    throw fieldError('invalid_work_order_status', `Unsupported Work Order status for Field preparation: ${workOrderStatus || 'missing'}.`, 409, { workOrderStatus });
+  }
+  return storageStatus;
 }
 
 function canonicalStatusFromStorage(value) {
