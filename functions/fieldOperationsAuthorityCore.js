@@ -161,19 +161,20 @@ function profileVanFallbackAllowed(identity, context) {
   const profileVanId = canonicalVanReference(identity?.vanId, context);
   if (!staffId || !profileVanId) return false;
 
-  // A dated assignment is the authoritative override for that date. If the technician was
-  // explicitly placed on any dated crew, their stale profile Van must not also grant access.
-  const hasDatedStaffAssignment = context.memberships.some((membership) => (
-    membership.source === 'daily_assignment' && membershipIncludesStaff(membership, staffId)
+  // A dated assignment is the authoritative override for that date even if its Van reference is
+  // historical/malformed and therefore cannot enter the canonical Van membership projection.
+  const hasDatedStaffAssignment = context.dailyAssignments.some((assignment) => (
+    text(assignment.driverStaffId, 180) === staffId
+    || text(assignment.helperStaffId, 180) === staffId
   ));
   if (hasDatedStaffAssignment) return false;
 
   // Likewise, if the profile Van itself has a dated override to other staff, the old profile
   // value cannot grant read access to that Van's work for the day.
-  const profileVanMembership = context.memberships.find((membership) => (
-    canonicalVanReference(membership.vanId, context) === profileVanId
+  const profileVanHasDatedOverride = context.dailyAssignments.some((assignment) => (
+    canonicalVanReference(assignment.vanId, context) === profileVanId
   ));
-  return profileVanMembership?.source !== 'daily_assignment';
+  return !profileVanHasDatedOverride;
 }
 
 function fieldAssignmentForIdentity(identity, order, dateKey, context) {
