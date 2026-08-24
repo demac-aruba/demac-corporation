@@ -145,6 +145,7 @@ function commandFixture(options = {}) {
 
 test('status compatibility is allowlisted and has no unsafe fallback', () => {
   assert.equal(storageStatusFromWorkOrder({ status: 'Confirmada' }), 'not_started');
+  assert.equal(storageStatusFromWorkOrder({ status: 'Asignada' }), 'not_started');
   assert.equal(storageStatusFromWorkOrder({ status: 'En camino' }), 'on_the_way');
   assert.equal(storageStatusFromWorkOrder({ status: 'En el sitio' }), 'on_site');
   assert.equal(storageStatusFromWorkOrder({ status: 'En proceso' }), 'in_progress');
@@ -203,13 +204,21 @@ test('prepare WorkVisit is transaction-backed, audited, Legacy-compatible and do
   assert.deepEqual(store.get('appointments', 'APT-1'), beforeAppointment);
 });
 
-test('unknown active-looking Work Order lifecycle fails before creating a WorkVisit', async () => {
+test('Asignada Work Order can prepare the initial scheduled WorkVisit', async () => {
+  const seed = structuredClone(baseSeed);
+  seed.workOrders[0].status = 'Asignada';
+  const { prepare } = commandFixture({ seed });
+  const result = await prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-assigned-status' });
+  assert.equal(result.visit.status, 'scheduled');
+});
+
+test('unknown Work Order lifecycle fails before creating a WorkVisit', async () => {
   const seed = structuredClone(baseSeed);
   seed.workOrders[0].status = 'Estado futuro';
   const { store, auditEvents, prepare } = commandFixture({ seed });
   await assert.rejects(
     () => prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-unknown-status' }),
-    /Unsupported Work Order status/,
+    /not released for active Field execution/,
   );
   assert.equal(store.all('workVisits').length, 0);
   assert.equal(auditEvents.length, 0);
@@ -237,7 +246,17 @@ test('replaying preparation reuses deterministic initial WorkVisit and does not 
   assert.equal(auditEvents.length, 1);
 });
 
-test('compatible pre-existing deterministic Legacy initial WorkVisit is projected without pretending Field Authority created it', async () => {
+test('duplicate execution with a different retry key still reuses the already prepared initial visit', async () => {
+  const { store, auditEvents, prepare } = commandFixture();
+  const first = await prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-WO-1-A' });
+  const second = await prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-WO-1-B' });
+  assert.equal(first.replayed, false);
+  assert.equal(second.replayed, true);
+  assert.equal(store.all('workVisits').length, 1);
+  assert.equal(auditEvents.length, 1);
+});
+
+test('deterministic Legacy initial visit fills only missing canonical Appointment identity from the validated Work Order', async () => {
   const legacyVisit = {
     id: initialVisitDocumentId('WO-1'),
     workOrderId: 'WO-1',
@@ -246,17 +265,21 @@ test('compatible pre-existing deterministic Legacy initial WorkVisit is projecte
     status: 'not_started',
     participatingStaffIds: ['staff-tech'],
     requiresSecondVisit: false,
-    scheduledScopeSnapshot: { estimatedUnitCount: 0, problemDescription: 'Legacy snapshot' },
+    scheduledScopeSnapshot: { estimatedUnitCount: 1, problemDescription: 'Legacy snapshot' },
     createdAt: '2026-08-24T10:00:00Z', createdByUserId: 'legacy-user',
     updatedAt: '2026-08-24T10:00:00Z', updatedByUserId: 'legacy-user', version: 1,
   };
   const seed = { ...baseSeed, workVisits: [legacyVisit] };
-  const { auditEvents, prepare } = commandFixture({ seed });
+  const { store, auditEvents, prepare } = commandFixture({ seed });
   const result = await prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-WO-1-legacy' });
 
   assert.equal(result.replayed, true);
   assert.equal(result.source, 'legacy_existing');
   assert.equal(result.visit.status, 'scheduled');
+  assert.equal(result.visit.appointmentId, 'APT-1');
+  assert.equal(result.visit.scheduledScopeSnapshot.appointmentId, 'APT-1');
+  assert.deepEqual(result.visit.scheduledScopeSnapshot.workLines, []);
+  assert.equal(store.get('workVisits', initialVisitDocumentId('WO-1')).appointmentId, undefined);
   assert.equal(auditEvents.length, 0);
 });
 
@@ -266,11 +289,10 @@ test('a single compatible Legacy initial WorkVisit with a historical id is adopt
     workOrderId: 'WO-1',
     clientId: 'CLIENT-1',
     propertyId: 'PROPERTY-1',
-    appointmentId: 'APT-1',
     status: 'not_started',
     participatingStaffIds: ['staff-tech'],
     requiresSecondVisit: false,
-    scheduledScopeSnapshot: { appointmentId: 'APT-1', estimatedUnitCount: 0, problemDescription: 'Historical snapshot' },
+    scheduledScopeSnapshot: { estimatedUnitCount: 0, problemDescription: 'Historical snapshot' },
     createdAt: '2026-08-24T09:00:00Z', createdByUserId: 'legacy-user',
     updatedAt: '2026-08-24T09:00:00Z', updatedByUserId: 'legacy-user', version: 1,
   };
@@ -280,9 +302,31 @@ test('a single compatible Legacy initial WorkVisit with a historical id is adopt
   assert.equal(result.replayed, true);
   assert.equal(result.source, 'legacy_existing');
   assert.equal(result.visit.id, 'historical-visit-id');
+  assert.equal(result.visit.appointmentId, 'APT-1');
   assert.equal(store.all('workVisits').length, 1);
   assert.equal(store.get('workVisits', initialVisitDocumentId('WO-1')), undefined);
   assert.equal(auditEvents.length, 0);
+});
+
+test('one historical initial visit plus multiple return visits resolves to the initial visit', async () => {
+  const initial = {
+    id: 'legacy-initial', workOrderId: 'WO-1', clientId: 'CLIENT-1', propertyId: 'PROPERTY-1', status: 'pending',
+    scheduledScopeSnapshot: { estimatedUnitCount: 1 }, createdAt: '2026-08-20T10:00:00Z', updatedAt: '2026-08-20T10:00:00Z', version: 1,
+  };
+  const returns = Array.from({ length: 5 }, (_, index) => ({
+    id: `legacy-return-${index + 1}`,
+    workOrderId: 'WO-1',
+    clientId: 'CLIENT-1',
+    propertyId: 'PROPERTY-1',
+    status: 'pending',
+    previousVisitId: index === 0 ? 'legacy-initial' : `legacy-return-${index}`,
+    scheduledScopeSnapshot: { estimatedUnitCount: 1 },
+  }));
+  const { store, prepare } = commandFixture({ seed: { ...baseSeed, workVisits: [initial, ...returns] } });
+  const result = await prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-with-returns' });
+  assert.equal(result.replayed, true);
+  assert.equal(result.visit.id, 'legacy-initial');
+  assert.equal(store.all('workVisits').length, 6);
 });
 
 test('ambiguous historical WorkVisit history fails closed instead of creating or guessing an initial visit', async () => {
@@ -299,11 +343,42 @@ test('ambiguous historical WorkVisit history fails closed instead of creating or
   const { store, auditEvents, prepare } = commandFixture({ seed: { ...baseSeed, workVisits: visits } });
   await assert.rejects(
     () => prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-ambiguous-history' }),
-    /cannot be adopted as one unambiguous initial visit/,
+    /cannot be resolved to one unambiguous initial visit/,
   );
   assert.equal(store.all('workVisits').length, 2);
   assert.equal(store.get('workVisits', initialVisitDocumentId('WO-1')), undefined);
   assert.equal(auditEvents.length, 0);
+});
+
+test('deterministic initial plus another historical initial fails closed', async () => {
+  const deterministic = {
+    id: initialVisitDocumentId('WO-1'), workOrderId: 'WO-1', clientId: 'CLIENT-1', propertyId: 'PROPERTY-1', status: 'not_started',
+    scheduledScopeSnapshot: { estimatedUnitCount: 1 },
+  };
+  const duplicateInitial = {
+    id: 'other-initial', workOrderId: 'WO-1', clientId: 'CLIENT-1', propertyId: 'PROPERTY-1', status: 'pending',
+    scheduledScopeSnapshot: { estimatedUnitCount: 1 },
+  };
+  const { prepare } = commandFixture({ seed: { ...baseSeed, workVisits: [deterministic, duplicateInitial] } });
+  await assert.rejects(
+    () => prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-duplicate-initial' }),
+    /more than one possible initial visit/,
+  );
+});
+
+test('deterministic initial plus valid return history remains an idempotent replay', async () => {
+  const deterministic = {
+    id: initialVisitDocumentId('WO-1'), workOrderId: 'WO-1', clientId: 'CLIENT-1', propertyId: 'PROPERTY-1', status: 'pending',
+    scheduledScopeSnapshot: { estimatedUnitCount: 1 },
+  };
+  const returnVisit = {
+    id: 'return-1', workOrderId: 'WO-1', clientId: 'CLIENT-1', propertyId: 'PROPERTY-1', status: 'pending',
+    previousVisitId: initialVisitDocumentId('WO-1'), scheduledScopeSnapshot: { estimatedUnitCount: 1 },
+  };
+  const { prepare } = commandFixture({ seed: { ...baseSeed, workVisits: [deterministic, returnVisit] } });
+  const result = await prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-existing-with-return' });
+  assert.equal(result.replayed, true);
+  assert.equal(result.visit.id, initialVisitDocumentId('WO-1'));
 });
 
 test('return-only historical WorkVisit cannot be silently adopted as the initial visit', async () => {
@@ -314,7 +389,7 @@ test('return-only historical WorkVisit cannot be silently adopted as the initial
   const { store, auditEvents, prepare } = commandFixture({ seed: { ...baseSeed, workVisits: [returnVisit] } });
   await assert.rejects(
     () => prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-return-only' }),
-    /cannot be adopted as one unambiguous initial visit/,
+    /cannot be resolved to one unambiguous initial visit/,
   );
   assert.equal(store.all('workVisits').length, 1);
   assert.equal(store.get('workVisits', initialVisitDocumentId('WO-1')), undefined);
