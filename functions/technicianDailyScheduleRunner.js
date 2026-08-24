@@ -242,7 +242,11 @@ function createTechnicianDailyScheduleRunner({
         failedAt: fieldValue.serverTimestamp(),
         updatedAt: fieldValue.serverTimestamp(),
       });
-      if (!outcome.preservedComplete) log.error("Van group daily schedule batch failed.", { runDate, error });
+      if (outcome.preservedComplete) {
+        log.info("Concurrent Van schedule invocation failed after another invocation completed delivery.", { runDate });
+        return { runDate, status: "complete", idempotent: true, concurrentCompletion: true };
+      }
+      log.error("Van group daily schedule batch failed.", { runDate, error });
       throw error;
     }
   };
