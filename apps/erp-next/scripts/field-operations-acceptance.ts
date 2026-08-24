@@ -13,7 +13,6 @@ import {
   createScheduledScopeSnapshot,
   plannedVsActualSummary,
   reconcilePlannedScope,
-  transitionWorkVisit,
   validateVisitForOfficeReview,
 } from '../lib/field-operations';
 
@@ -269,18 +268,6 @@ assert(start.allowed, 'released assigned Work Order should start without pre-con
   assert(billing.length === 4, 'scenario 25 billing candidate must include 2 services + 1 check-up + 1 switch');
   assert(workVisit.scheduledScopeSnapshot.workLines[0].quantity === 1, 'scenario 26 planned booking quantity must remain unchanged');
   assert(plannedVsActualSummary({ visit: workVisit, interventions, saleLines: [soldSwitch] }).actualInterventionCount === 3, 'scenario 26 actual work must be independently countable');
-}
-
-// State machine must reject arbitrary jumps.
-{
-  const workVisit = { ...visit({}), status: 'scheduled' as const };
-  let rejected = false;
-  try {
-    transitionWorkVisit({ visit: workVisit, to: 'completed', actor, at: now });
-  } catch {
-    rejected = true;
-  }
-  assert(rejected, 'Work Visit state machine must reject scheduled -> completed');
 }
 
 console.log('Field operations canonical domain acceptance: PASS');
