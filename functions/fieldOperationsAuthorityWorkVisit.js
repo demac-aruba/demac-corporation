@@ -21,8 +21,10 @@ const STORAGE_TO_CANONICAL_STATUS = Object.freeze({
   on_site: 'on_site',
   in_progress: 'in_progress',
   pending: 'pending',
+  requires_return_visit: 'requires_return_visit',
   ready_for_office_review: 'ready_for_office_review',
   completed: 'completed',
+  no_access: 'no_access',
   cancelled: 'cancelled',
 });
 
@@ -61,7 +63,12 @@ function storageStatusFromWorkOrder(order) {
 }
 
 function canonicalStatusFromStorage(value) {
-  return STORAGE_TO_CANONICAL_STATUS[text(value, 80)] || 'scheduled';
+  const storageStatus = text(value, 80);
+  const canonicalStatus = STORAGE_TO_CANONICAL_STATUS[storageStatus];
+  if (!canonicalStatus) {
+    throw fieldError('invalid_visit_status', `Unknown persisted Work Visit status: ${storageStatus || 'missing'}.`, 409, { storageStatus });
+  }
+  return canonicalStatus;
 }
 
 function nonNegativeQuantity(value) {
