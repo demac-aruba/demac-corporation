@@ -1,5 +1,6 @@
 import { fieldActionAllowed, type FieldAllowedAction } from '../lib/field-authorization';
 import { hasCapability as hasLegacyCapability } from '../lib/capabilities';
+import { defaultAuthenticatedRoute, isAuthenticatedRouteAllowed } from '../lib/role-routing';
 import { requireCapability, roleCapabilities, type AuthPrincipal, type Capability } from '../lib/security';
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -13,6 +14,13 @@ function hasFieldCapability(role: keyof typeof roleCapabilities, capability: Cap
 // Canonical ERP capability vocabulary is authoritative; old `*.read` vocabulary is only a projection.
 assert(hasLegacyCapability('super_admin', 'work_orders.read'), 'legacy work_orders.read adapter should project canonical super-admin access');
 assert(!hasLegacyCapability('technician', 'inventory.read'), 'legacy adapter must not re-grant inventory access removed from canonical technician policy');
+
+// Navigation authority is reused for post-login routing and direct-route guards.
+assert(defaultAuthenticatedRoute('technician') === '/field', 'technician login should enter the canonical Field App');
+assert(isAuthenticatedRouteAllowed('/field', 'technician'), 'technician should be allowed to open Field App');
+assert(!isAuthenticatedRouteAllowed('/dashboard', 'technician'), 'technician must not open management dashboard directly');
+assert(defaultAuthenticatedRoute('super_admin') === '/dashboard', 'super admin should keep the management dashboard as default');
+assert(isAuthenticatedRouteAllowed('/scheduling/dispatch', 'operations'), 'operations nested scheduling route should remain allowed');
 
 // Authentication-role capabilities stay coarse. Assignment responsibility and action-level authority are server decisions.
 assert(hasFieldCapability('technician', 'field.read_assigned'), 'technician role should enter assigned Field work');
@@ -76,4 +84,4 @@ assert(inactiveDenied, 'inactive client principal should fail the coarse capabil
 
 // Mandatory scenarios 17 (helper scope denial) and 18 (other-team known-ID denial) are
 // canonical server-security claims and are exercised in fieldOperationsAuthorityCore.test.js.
-console.log('Field client capability and server-action projection acceptance: PASS');
+console.log('Field client capability, route guard and server-action projection acceptance: PASS');
