@@ -199,9 +199,12 @@ function DetailView({ job, loading, error, onBack }: {
 export function TechnicianFieldHome() {
   const { principal } = useAuth();
   const [jobs, setJobs] = useState<FieldScheduleJob[]>([]);
+  const [jobsOwnerUserId, setJobsOwnerUserId] = useState<string | null>(null);
   const [range, setRange] = useState<RangeKey>('today');
   const [selectedWorkOrderId, setSelectedWorkOrderId] = useState<string | null>(null);
+  const [selectedOwnerUserId, setSelectedOwnerUserId] = useState<string | null>(null);
   const [detail, setDetail] = useState<FieldJobDetail | null>(null);
+  const [detailOwnerUserId, setDetailOwnerUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
@@ -215,18 +218,22 @@ export function TechnicianFieldHome() {
 
   const loadSchedule = useCallback(async () => {
     const requestId = ++scheduleRequestRef.current;
+    const requestPrincipalUserId = principal.userId;
     // Assigned work is authorization-sensitive. Never keep a previous successful assignment
     // visible while a new identity/date request is pending or after it fails.
     setJobs([]);
+    setJobsOwnerUserId(null);
     setLoading(true);
     setScheduleError(null);
     try {
       const response = await getFieldSchedule(today, weekEnd);
       if (requestId !== scheduleRequestRef.current) return;
       setJobs(response.jobs);
+      setJobsOwnerUserId(requestPrincipalUserId);
     } catch (loadError) {
       if (requestId !== scheduleRequestRef.current) return;
       setJobs([]);
+      setJobsOwnerUserId(null);
       setScheduleError(loadError instanceof Error ? loadError.message : 'No se pudo cargar el itinerario del técnico.');
     } finally {
       if (requestId === scheduleRequestRef.current) setLoading(false);
@@ -240,41 +247,50 @@ export function TechnicianFieldHome() {
 
   useEffect(() => {
     // A principal transition invalidates any selected detail immediately, even if an older
-    // request resolves later. AuthGate controls route access; this prevents stale customer data.
+    // request resolves later. Render guards below prevent even a one-frame stale disclosure.
     detailRequestRef.current += 1;
     setSelectedWorkOrderId(null);
+    setSelectedOwnerUserId(null);
     setDetail(null);
+    setDetailOwnerUserId(null);
     setDetailError(null);
     setDetailLoading(false);
   }, [principal.userId]);
 
   useEffect(() => {
-    if (!selectedWorkOrderId) {
+    if (!selectedWorkOrderId || selectedOwnerUserId !== principal.userId) {
       setDetail(null);
+      setDetailOwnerUserId(null);
       setDetailError(null);
       setDetailLoading(false);
       return undefined;
     }
     const requestId = ++detailRequestRef.current;
+    const requestPrincipalUserId = principal.userId;
     setDetail(null);
+    setDetailOwnerUserId(null);
     setDetailLoading(true);
     setDetailError(null);
     void getFieldJob(selectedWorkOrderId)
       .then((response) => {
-        if (requestId === detailRequestRef.current) setDetail(response.job);
+        if (requestId !== detailRequestRef.current) return;
+        setDetail(response.job);
+        setDetailOwnerUserId(requestPrincipalUserId);
       })
       .catch((loadError) => {
         if (requestId !== detailRequestRef.current) return;
         setDetail(null);
+        setDetailOwnerUserId(null);
         setDetailError(loadError instanceof Error ? loadError.message : 'No se pudo abrir el trabajo.');
       })
       .finally(() => {
         if (requestId === detailRequestRef.current) setDetailLoading(false);
       });
     return () => { detailRequestRef.current += 1; };
-  }, [principal.userId, selectedWorkOrderId]);
+  }, [principal.userId, selectedOwnerUserId, selectedWorkOrderId]);
 
-  const todayJobs = useMemo(() => jobs.filter((job) => job.date === today), [jobs, today]);
+  const authorizedJobs = jobsOwnerUserId === principal.userId ? jobs : [];
+  const todayJobs = useMemo(() => authorizedJobs.filter((job) => job.date === today), [authorizedJobs, today]);
   const summary = useMemo(() => {
     const completed = todayJobs.filter((job) => COMPLETED_STATUSES.has(job.status)).length;
     const inProgress = todayJobs.filter((job) => IN_PROGRESS_STATUSES.has(job.status)).length;
@@ -282,10 +298,10 @@ export function TechnicianFieldHome() {
   }, [todayJobs]);
 
   const visibleJobs = useMemo(() => {
-    if (range === 'today') return jobs.filter((job) => job.date === today);
-    if (range === 'tomorrow') return jobs.filter((job) => job.date === tomorrow);
-    return jobs;
-  }, [jobs, range, today, tomorrow]);
+    if (range === 'today') return authorizedJobs.filter((job) => job.date === today);
+    if (range === 'tomorrow') return authorizedJobs.filter((job) => job.date === tomorrow);
+    return authorizedJobs;
+  }, [authorizedJobs, range, today, tomorrow]);
 
   const nextJob = useMemo(() => {
     const open = todayJobs.filter((job) => !COMPLETED_STATUSES.has(job.status));
@@ -295,8 +311,23 @@ export function TechnicianFieldHome() {
     return open.find((job) => job.time && job.time >= now) ?? open[0] ?? null;
   }, [todayJobs]);
 
-  if (selectedWorkOrderId) {
-    return <DetailView job={detail} loading={detailLoading} error={detailError} onBack={() => setSelectedWorkOrderId(null)} />;
+  const openJob = (workOrderId: string) => {
+    setSelectedOwnerUserId(principal.userId);
+    setSelectedWorkOrderId(workOrderId);
+  };
+  const closeJob = () => {
+    detailRequestRef.current += 1;
+    setSelectedWorkOrderId(null);
+    setSelectedOwnerUserId(null);
+    setDetail(null);
+    setDetailOwnerUserId(null);
+    setDetailError(null);
+    setDetailLoading(false);
+  };
+
+  if (selectedWorkOrderId && selectedOwnerUserId === principal.userId) {
+    const authorizedDetail = detailOwnerUserId === principal.userId ? detail : null;
+    return <DetailView job={authorizedDetail} loading={detailLoading} error={detailError} onBack={closeJob} />;
   }
 
   return (
@@ -323,7 +354,7 @@ export function TechnicianFieldHome() {
 
       {range === 'today' ? <section className={styles.panel}>
         <div className={styles.panelHead}><h2>Próximo trabajo</h2><span>{formatArubaDateKey(today, { weekday: 'long', month: 'long', day: 'numeric' })}</span></div>
-        {loading ? <div className={styles.loading}>Cargando ruta asignada…</div> : nextJob ? <div className={styles.next}><JobCard job={nextJob} onOpen={() => setSelectedWorkOrderId(nextJob.workOrderId)} /></div> : <div className={styles.empty}>No quedan trabajos activos asignados para hoy.</div>}
+        {loading ? <div className={styles.loading}>Cargando ruta asignada…</div> : nextJob ? <div className={styles.next}><JobCard job={nextJob} onOpen={() => openJob(nextJob.workOrderId)} /></div> : <div className={styles.empty}>No quedan trabajos activos asignados para hoy.</div>}
       </section> : null}
 
       <section className={styles.panel}>
@@ -331,7 +362,7 @@ export function TechnicianFieldHome() {
           <h2>{range === 'today' ? 'Hoy' : range === 'tomorrow' ? 'Mañana' : 'Próximos 7 días'}</h2>
           <span>{loading ? 'Cargando…' : `${visibleJobs.length} trabajo${visibleJobs.length === 1 ? '' : 's'}`}</span>
         </div>
-        {loading ? <div className={styles.loading}>Cargando itinerario autorizado…</div> : visibleJobs.length ? visibleJobs.map((job) => <JobCard key={job.workOrderId} job={job} onOpen={() => setSelectedWorkOrderId(job.workOrderId)} />) : <div className={styles.empty}>No hay trabajos asignados en este período.</div>}
+        {loading ? <div className={styles.loading}>Cargando itinerario autorizado…</div> : visibleJobs.length ? visibleJobs.map((job) => <JobCard key={job.workOrderId} job={job} onOpen={() => openJob(job.workOrderId)} />) : <div className={styles.empty}>No hay trabajos asignados en este período.</div>}
       </section>
     </div>
   );
