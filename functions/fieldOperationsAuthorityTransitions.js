@@ -59,13 +59,7 @@ function transitionCanonicalWorkVisit({ visit, to, at }) {
   return { changed: true, previousStatus: decision.current, next };
 }
 
-function workVisitTransitionTargets(status) {
-  return [...WORK_VISIT_TRANSITIONS[validStatus(status)]];
-}
-
 module.exports = {
-  WORK_VISIT_TRANSITIONS,
   assertWorkVisitTransition,
   transitionCanonicalWorkVisit,
-  workVisitTransitionTargets,
 };
