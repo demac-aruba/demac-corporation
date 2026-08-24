@@ -48,8 +48,8 @@ const baseSeed = {
     { id: '2026-08-24-VAN-2', date: '2026-08-24', vanId: 'VAN-2', driverStaffId: 'staff-other' },
   ],
   vans: [
-    { id: 'VAN-1', responsibleStaffId: 'staff-lead', regularHelperId: 'staff-helper' },
-    { id: 'VAN-2', responsibleStaffId: 'staff-other' },
+    { id: 'VAN-1', name: 'Van 1', responsibleStaffId: 'staff-lead', regularHelperId: 'staff-helper' },
+    { id: 'VAN-2', name: 'Van 2', responsibleStaffId: 'staff-other' },
   ],
   workOrders: [
     {
@@ -77,8 +77,14 @@ const baseSeed = {
     { id: 'APT-2', workLines: [{ id: 'line-2', serviceId: 'service-checkup', quantity: 1 }] },
   ],
   equipmentSystems: [
-    { id: 'AC-1', clientId: 'client-1', propertyId: 'property-1', qrCode: 'DEMAC-0001', locationLabel: 'Sala', systemType: 'Split', btu: 12000, active: true },
-    { id: 'AC-OTHER', clientId: 'client-2', propertyId: 'property-2', qrCode: 'DEMAC-9999', locationLabel: 'Office', active: true },
+    {
+      id: 'AC-1', clientId: 'client-1', propertyId: 'property-1', qrCode: 'DEMAC-0001', locationLabel: 'Sala', systemType: 'Split wall mounted', active: true,
+      components: [
+        { id: 'indoor-1', componentType: 'indoor', brand: 'Adina', model: 'OPT-12', serialNumber: 'IN-001', btu: 12000, refrigerant: 'R32', voltage: '220' },
+        { id: 'outdoor-1', componentType: 'outdoor', brand: 'Adina', model: 'OPT-12-OD', serialNumber: 'OUT-001', btu: 12000, refrigerant: 'R32', voltage: '220' },
+      ],
+    },
+    { id: 'AC-OTHER', clientId: 'client-2', propertyId: 'property-2', qrCode: 'DEMAC-9999', locationLabel: 'Office', active: true, components: [] },
   ],
 };
 
@@ -99,22 +105,31 @@ test('technician identity requires canonical staff linkage', () => {
   assert.throws(() => normalizeFieldIdentity({ uid: 'uid-x', profile: { active: true, role: 'technician' } }), /staff profile/);
 });
 
-test('assigned schedule query returns only the technician van/team work', async () => {
+test('assigned schedule query returns only the technician van/team work with lead actions', async () => {
   const db = createDb(baseSeed);
   const jobs = await loadAssignedSchedule(db, technician('staff-lead', 'VAN-1'), '2026-08-24', '2026-08-24');
   assert.equal(jobs.length, 1);
   assert.equal(jobs[0].workOrderId, 'WO-1');
   assert.equal(jobs[0].customerName, 'Assigned Customer');
   assert.equal(jobs[0].responsibility, 'lead');
+  assert.equal(jobs[0].assignmentSource, 'daily_assignment');
   assert.equal(jobs[0].plannedWork[0].quantity, 1);
+  assert.ok(jobs[0].allowedActions.includes('visit.complete'));
+  assert.ok(jobs[0].allowedActions.includes('intervention.add'));
 });
 
-test('helper receives only assigned work and helper responsibility', async () => {
+test('helper receives reporting actions but cannot receive billable or scope actions', async () => {
   const db = createDb(baseSeed);
   const jobs = await loadAssignedSchedule(db, technician('staff-helper', 'VAN-1'), '2026-08-24', '2026-08-24');
   assert.equal(jobs.length, 1);
   assert.equal(jobs[0].workOrderId, 'WO-1');
   assert.equal(jobs[0].responsibility, 'helper');
+  assert.ok(jobs[0].allowedActions.includes('report.edit'));
+  assert.ok(jobs[0].allowedActions.includes('evidence.add'));
+  assert.ok(!jobs[0].allowedActions.includes('asset.add'));
+  assert.ok(!jobs[0].allowedActions.includes('intervention.add'));
+  assert.ok(!jobs[0].allowedActions.includes('sale.propose'));
+  assert.ok(!jobs[0].allowedActions.includes('visit.complete'));
 });
 
 test('another team work order is denied even when its id is known', async () => {
@@ -122,14 +137,80 @@ test('another team work order is denied even when its id is known', async () => 
   await assert.rejects(() => loadAssignedJob(db, technician('staff-lead', 'VAN-1'), 'WO-2'), /not assigned/);
 });
 
-test('assigned job exposes only equipment from the assigned customer/property', async () => {
+test('assigned job adapts production-shaped equipment components without inventing root technical fields', async () => {
   const db = createDb(baseSeed);
   const job = await loadAssignedJob(db, technician('staff-lead', 'VAN-1'), 'WO-1');
   assert.equal(job.workOrderId, 'WO-1');
   assert.equal(job.knownEquipment.length, 1);
-  assert.equal(job.knownEquipment[0].id, 'AC-1');
-  assert.equal(job.knownEquipment[0].btu, 12000);
+  assert.deepEqual(job.knownEquipment[0], {
+    id: 'AC-1',
+    qrCode: 'DEMAC-0001',
+    locationLabel: 'Sala',
+    systemType: 'Split wall mounted',
+    brand: 'Adina',
+    model: 'OPT-12',
+    serial: 'IN-001',
+    btu: 12000,
+    refrigerant: 'R32',
+    voltage: '220',
+    condition: '',
+    active: true,
+  });
   assert.equal(job.accessInstructions, 'Side gate');
+});
+
+test('direct staff assignment remains authoritative even outside the dated Van crew', async () => {
+  const seed = {
+    ...baseSeed,
+    workOrders: [...baseSeed.workOrders, {
+      id: 'WO-DIRECT', appointmentId: 'APT-DIRECT', clientId: 'client-1', propertyId: 'property-1', date: '2026-08-24', time: '10:30',
+      status: 'Confirmada', vanId: 'VAN-2', technicianIds: ['staff-direct'], airConditionerCount: 0,
+    }],
+    appointments: [...baseSeed.appointments, { id: 'APT-DIRECT', workLines: [] }],
+  };
+  const jobs = await loadAssignedSchedule(createDb(seed), technician('staff-direct'), '2026-08-24', '2026-08-24');
+  assert.deepEqual(jobs.map((job) => job.workOrderId), ['WO-DIRECT']);
+  assert.equal(jobs[0].responsibility, 'technician');
+  assert.equal(jobs[0].assignmentSource, 'direct_staff');
+  assert.ok(jobs[0].allowedActions.includes('intervention.add'));
+  assert.ok(!jobs[0].allowedActions.includes('visit.complete'));
+});
+
+test('profile Van fallback is discoverable but remains read-only without resolved staff membership', async () => {
+  const seed = {
+    ...baseSeed,
+    dailyVanAssignments: baseSeed.dailyVanAssignments.filter((assignment) => assignment.vanId !== 'VAN-1'),
+    vans: [
+      { id: 'VAN-1', name: 'Van 1', responsibleStaffId: 'someone-else', regularHelperId: 'another-person' },
+      ...baseSeed.vans.filter((van) => van.id !== 'VAN-1'),
+    ],
+    workOrders: baseSeed.workOrders.map((order) => order.id === 'WO-1' ? { ...order, technicianIds: [] } : order),
+  };
+  const jobs = await loadAssignedSchedule(createDb(seed), technician('staff-fallback', 'VAN-1'), '2026-08-24', '2026-08-24');
+  assert.deepEqual(jobs.map((job) => job.workOrderId), ['WO-1']);
+  assert.equal(jobs[0].assignmentSource, 'profile_van_fallback');
+  assert.deepEqual(jobs[0].allowedActions, ['read']);
+});
+
+test('canonical Van aliases resolve historical Work Order and daily assignment identifiers', async () => {
+  const seed = {
+    dailyVanAssignments: [{ id: 'alias-day', date: '2026-08-24', vanId: 'v4', driverStaffId: 'staff-alias' }],
+    vans: [{ id: 'van-1783800405341', name: 'Van 4', responsibleStaffId: 'regular-four' }],
+    workOrders: [{
+      id: 'WO-ALIAS', appointmentId: 'APT-ALIAS', clientId: 'client-1', propertyId: 'property-1', date: '2026-08-24', time: '13:30',
+      status: 'Confirmada', vanId: 'van-1783800405341', technicianIds: [], airConditionerCount: 1,
+    }],
+    clients: baseSeed.clients,
+    properties: baseSeed.properties,
+    appointments: [{ id: 'APT-ALIAS', workLines: [] }],
+    equipmentSystems: baseSeed.equipmentSystems,
+  };
+  const jobs = await loadAssignedSchedule(createDb(seed), technician('staff-alias'), '2026-08-24', '2026-08-24');
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].workOrderId, 'WO-ALIAS');
+  assert.equal(jobs[0].vanId, 'VAN-4');
+  assert.equal(jobs[0].responsibility, 'lead');
+  assert.equal(jobs[0].assignmentSource, 'daily_assignment');
 });
 
 test('operations may inspect field schedule without impersonating a technician assignment', async () => {
@@ -138,4 +219,15 @@ test('operations may inspect field schedule without impersonating a technician a
   const jobs = await loadAssignedSchedule(db, office, '2026-08-24', '2026-08-24');
   assert.deepEqual(jobs.map((job) => job.workOrderId), ['WO-1', 'WO-2']);
   assert.ok(jobs.every((job) => job.responsibility === 'office'));
+  assert.ok(jobs.every((job) => job.allowedActions.includes('office.review')));
+  assert.ok(jobs.every((job) => !job.allowedActions.includes('execute')));
+  assert.ok(jobs.every((job) => !job.allowedActions.includes('price.override')));
+});
+
+test('operations supervisor may receive price override without technician execution authority', async () => {
+  const db = createDb(baseSeed);
+  const supervisor = normalizeFieldIdentity({ uid: 'ops-1', profile: { active: true, role: 'supervisor', name: 'Operations' }, decoded: {} });
+  const jobs = await loadAssignedSchedule(db, supervisor, '2026-08-24', '2026-08-24');
+  assert.ok(jobs.every((job) => job.allowedActions.includes('price.override')));
+  assert.ok(jobs.every((job) => !job.allowedActions.includes('execute')));
 });
