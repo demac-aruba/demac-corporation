@@ -9,8 +9,6 @@ import type {
 } from '../lib/field-operations-domain';
 import {
   buildBillingCandidateLines,
-  canStartWorkVisit,
-  createScheduledScopeSnapshot,
   plannedVsActualSummary,
   reconcilePlannedScope,
   validateVisitForOfficeReview,
@@ -35,12 +33,12 @@ function visit(args: { id?: string; plannedQuantity?: number; requiresSecondVisi
     workOrderId: 'wo-1',
     customerId: 'customer-1',
     propertyId: 'property-1',
-    scheduledScopeSnapshot: createScheduledScopeSnapshot({
+    scheduledScopeSnapshot: {
       appointmentId: 'apt-1',
       capturedAt: now,
       estimatedUnitCount: quantity,
       workLines: [{ id: 'planned-service', schedulingWorkTypeId: 'standard_service', description: 'Standard Service', quantity }],
-    }),
+    },
     status: 'in_progress',
     leadTechnicianStaffId: actor.staffId,
     participatingStaffIds: [actor.staffId!],
@@ -143,14 +141,8 @@ function gate(args: {
   });
 }
 
-// Start gate: exact equipment count is intentionally NOT an input.
-const start = canStartWorkVisit({
-  workOrderAuthorized: true,
-  assignmentAuthorized: true,
-  customerId: 'customer-1',
-  propertyId: 'property-1',
-});
-assert(start.allowed, 'released assigned Work Order should start without pre-confirming exact equipment quantity');
+// Visit preparation/start invariants, including unknown/zero estimated equipment count, are
+// covered by the server Field WorkVisit command tests now that preparation is server-owned.
 
 // Scenario 1: booked 1, actual 1.
 {
@@ -204,12 +196,12 @@ assert(start.allowed, 'released assigned Work Order should start without pre-con
   assert(workVisit.scheduledScopeSnapshot.workLines[0].quantity === 2, 'scenario 4 original booked quantity must remain 2');
 }
 
-// Scenario 5: BTU is not part of the visit start or final field-domain gate.
+// Scenario 5: BTU is not part of the visit final field-domain gate.
 {
   const workVisit = visit({});
   const visitAssets = [asset('va-1')];
   const interventions = [intervention({ id: 'i-1', visitAssetId: 'va-1', assetId: 'asset-va-1', plannedWorkLineId: 'planned-service' })];
-  assert(gate({ workVisit, visitAssets, interventions }).allowed, 'scenario 5 must not require BTU during booking/visit orchestration');
+  assert(gate({ workVisit, visitAssets, interventions }).allowed, 'scenario 5 must not require BTU during visit orchestration');
 }
 
 // Scenario 6: on-site registration can start unresolved, but must resolve to canonical Asset before Office Review.
