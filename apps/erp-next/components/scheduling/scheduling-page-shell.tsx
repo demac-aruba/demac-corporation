@@ -3,6 +3,7 @@
 import { BrowserDispatchOperations } from './browser-dispatch-operations';
 import { BrowserDispatchReadinessBoard } from './browser-dispatch-readiness-board';
 import { LiveSchedulingOverview } from './live-scheduling-overview';
+import { VanScheduleManualSend } from './van-schedule-manual-send';
 import readableStyles from './scheduling-readable-type.module.css';
 import styles from './scheduling-page-shell.module.css';
 
@@ -15,7 +16,7 @@ type Props = {
 export function SchedulingPageShell({ view = 'schedule' }: Props) {
   return (
     <div className={`${styles.shell} ${view === 'schedule' ? styles.scheduleCompact : ''} ${readableStyles.readable}`}>
-      {view === 'schedule' ? <LiveSchedulingOverview /> : null}
+      {view === 'schedule' ? <><VanScheduleManualSend /><LiveSchedulingOverview /></> : null}
       {view === 'dispatch' ? <BrowserDispatchOperations /> : null}
       {view === 'readiness' ? <BrowserDispatchReadinessBoard /> : null}
     </div>
