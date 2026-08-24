@@ -6,7 +6,9 @@ const WORK_VISIT_TRANSITIONS = Object.freeze({
   on_site: Object.freeze(['in_progress', 'pending', 'requires_return_visit', 'no_access', 'cancelled']),
   in_progress: Object.freeze(['pending', 'requires_return_visit', 'ready_for_office_review', 'cancelled']),
   pending: Object.freeze(['in_progress', 'requires_return_visit', 'ready_for_office_review', 'cancelled']),
-  requires_return_visit: Object.freeze(['in_progress', 'ready_for_office_review', 'cancelled']),
+  // A return is another physical WorkVisit. Once this visit requires a return, it may be
+  // submitted/cancelled but must never resume onsite execution as if the return were the same visit.
+  requires_return_visit: Object.freeze(['ready_for_office_review', 'cancelled']),
   ready_for_office_review: Object.freeze(['in_progress', 'completed']),
   completed: Object.freeze([]),
   no_access: Object.freeze([]),
