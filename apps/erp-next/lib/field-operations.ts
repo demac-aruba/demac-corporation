@@ -1,8 +1,6 @@
-import type { AuditEventInput } from './persistence';
 import type {
   FieldApproval,
   FieldSaleLine,
-  FieldSaleLineStatus,
   PlannedWorkDisposition,
   PlannedWorkLineSnapshot,
   ScheduledScopeSnapshot,
@@ -13,13 +11,6 @@ import type {
   WorkVisit,
   WorkVisitStatus,
 } from './field-operations-domain';
-
-export type FieldDomainActor = {
-  userId: string;
-  role: string;
-  staffId?: string;
-  correlationId?: string;
-};
 
 export type FieldStartContext = {
   workOrderAuthorized: boolean;
@@ -43,81 +34,14 @@ export type PlannedScopeReconciliation = {
   overLinkedQuantity: number;
 };
 
-export type FieldTransitionResult<T> = {
-  next: T;
-  audit: AuditEventInput;
-};
-
-const visitTransitions: Record<WorkVisitStatus, readonly WorkVisitStatus[]> = {
-  scheduled: ['en_route', 'no_access', 'cancelled'],
-  en_route: ['on_site', 'pending', 'no_access', 'cancelled'],
-  on_site: ['in_progress', 'pending', 'requires_return_visit', 'no_access', 'cancelled'],
-  in_progress: ['pending', 'requires_return_visit', 'ready_for_office_review', 'cancelled'],
-  pending: ['in_progress', 'requires_return_visit', 'ready_for_office_review', 'cancelled'],
-  requires_return_visit: ['in_progress', 'ready_for_office_review', 'cancelled'],
-  ready_for_office_review: ['in_progress', 'completed'],
-  completed: [],
-  no_access: [],
-  cancelled: [],
-};
-
-const interventionTransitions: Record<WorkInterventionStatus, readonly WorkInterventionStatus[]> = {
-  planned: ['confirmed', 'not_performed', 'cancelled'],
-  confirmed: ['in_progress', 'pending_authorization', 'declined', 'cancelled'],
-  in_progress: ['completed', 'pending_part', 'not_performed', 'cancelled'],
-  pending_authorization: ['confirmed', 'declined', 'cancelled'],
-  pending_part: ['in_progress', 'completed', 'cancelled'],
-  not_performed: [],
-  declined: [],
-  cancelled: [],
-  completed: [],
-};
-
-const saleLineTransitions: Record<FieldSaleLineStatus, readonly FieldSaleLineStatus[]> = {
-  proposed: ['customer_approved', 'declined', 'voided'],
-  customer_approved: ['installed', 'delivered', 'sold', 'voided'],
-  installed: ['sold', 'voided'],
-  delivered: ['sold', 'voided'],
-  sold: [],
-  declined: [],
-  voided: [],
-};
-
 function unique(values: string[]) {
   return [...new Set(values.filter(Boolean))];
 }
 
-function transitionAudit<T extends { id: string }>(args: {
-  actor: FieldDomainActor;
-  action: string;
-  entityType: string;
-  before: T;
-  after: T;
-  occurredAt: string;
-  reason?: string;
-}): AuditEventInput {
-  return {
-    actorId: args.actor.userId,
-    actorRole: args.actor.role,
-    action: args.action,
-    entityType: args.entityType,
-    entityId: args.before.id,
-    module: 'field_operations',
-    correlationId: args.actor.correlationId,
-    before: args.before,
-    after: args.after,
-    reason: args.reason,
-    occurredAt: args.occurredAt,
-  };
-}
-
-function assertAllowedTransition<T extends string>(current: T, next: T, map: Record<T, readonly T[]>, entity: string) {
-  if (current === next) return;
-  if (!map[current].includes(next)) {
-    throw new Error(`Invalid ${entity} transition: ${current} -> ${next}.`);
-  }
-}
-
+/**
+ * Pure client/domain preflight only. Canonical WorkVisit status transitions are owned by
+ * the server-side Field Operations Authority and must never be reconstructed here.
+ */
 export function canStartWorkVisit(context: FieldStartContext): GateResult {
   const blockers: string[] = [];
   if (!context.workOrderAuthorized) blockers.push('Work Order is not authorized/released for field execution.');
@@ -149,93 +73,6 @@ export function createScheduledScopeSnapshot(args: {
     workLines: args.workLines.map((line) => ({ ...line })),
     customerFacingDescription: args.customerFacingDescription,
     technicianInstructions: args.technicianInstructions,
-  };
-}
-
-export function transitionWorkVisit(args: {
-  visit: WorkVisit;
-  to: WorkVisitStatus;
-  actor: FieldDomainActor;
-  at: string;
-  reason?: string;
-}): FieldTransitionResult<WorkVisit> {
-  assertAllowedTransition(args.visit.status, args.to, visitTransitions, 'Work Visit');
-  if (args.visit.status === args.to) {
-    return {
-      next: args.visit,
-      audit: transitionAudit({ actor: args.actor, action: 'visit.status.noop', entityType: 'work_visit', before: args.visit, after: args.visit, occurredAt: args.at, reason: args.reason }),
-    };
-  }
-
-  const next: WorkVisit = {
-    ...args.visit,
-    status: args.to,
-    updatedAt: args.at,
-    updatedBy: args.actor.userId,
-    ...(args.to === 'en_route' && !args.visit.departedAt ? { departedAt: args.at } : {}),
-    ...(args.to === 'on_site' && !args.visit.arrivedAt ? { arrivedAt: args.at } : {}),
-    ...(args.to === 'in_progress' && !args.visit.startedAt ? { startedAt: args.at } : {}),
-    ...(args.to === 'ready_for_office_review' ? { submittedAt: args.at } : {}),
-    ...(args.to === 'completed' ? { completedAt: args.at } : {}),
-    ...(args.to === 'requires_return_visit' ? { requiresSecondVisit: true } : {}),
-  };
-  return {
-    next,
-    audit: transitionAudit({ actor: args.actor, action: `visit.status.${args.to}`, entityType: 'work_visit', before: args.visit, after: next, occurredAt: args.at, reason: args.reason }),
-  };
-}
-
-export function transitionWorkIntervention(args: {
-  intervention: WorkIntervention;
-  to: WorkInterventionStatus;
-  actor: FieldDomainActor;
-  at: string;
-  reason?: string;
-}): FieldTransitionResult<WorkIntervention> {
-  assertAllowedTransition(args.intervention.status, args.to, interventionTransitions, 'Work Intervention');
-  if (args.intervention.status === args.to) {
-    return {
-      next: args.intervention,
-      audit: transitionAudit({ actor: args.actor, action: 'intervention.status.noop', entityType: 'work_intervention', before: args.intervention, after: args.intervention, occurredAt: args.at, reason: args.reason }),
-    };
-  }
-  const next: WorkIntervention = {
-    ...args.intervention,
-    status: args.to,
-    updatedAt: args.at,
-    updatedBy: args.actor.userId,
-    ...(args.to === 'in_progress' && !args.intervention.startedAt ? { startedAt: args.at } : {}),
-    ...(args.to === 'completed' ? { completedAt: args.at } : {}),
-  };
-  return {
-    next,
-    audit: transitionAudit({ actor: args.actor, action: `intervention.status.${args.to}`, entityType: 'work_intervention', before: args.intervention, after: next, occurredAt: args.at, reason: args.reason }),
-  };
-}
-
-export function transitionFieldSaleLine(args: {
-  line: FieldSaleLine;
-  to: FieldSaleLineStatus;
-  actor: FieldDomainActor;
-  at: string;
-  reason?: string;
-}): FieldTransitionResult<FieldSaleLine> {
-  assertAllowedTransition(args.line.status, args.to, saleLineTransitions, 'Field Sale Line');
-  if (args.line.status === args.to) {
-    return {
-      next: args.line,
-      audit: transitionAudit({ actor: args.actor, action: 'sale_line.status.noop', entityType: 'field_sale_line', before: args.line, after: args.line, occurredAt: args.at, reason: args.reason }),
-    };
-  }
-  const next: FieldSaleLine = {
-    ...args.line,
-    status: args.to,
-    updatedAt: args.at,
-    updatedBy: args.actor.userId,
-  };
-  return {
-    next,
-    audit: transitionAudit({ actor: args.actor, action: `sale_line.status.${args.to}`, entityType: 'field_sale_line', before: args.line, after: next, occurredAt: args.at, reason: args.reason }),
   };
 }
 
