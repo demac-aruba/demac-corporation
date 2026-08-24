@@ -102,13 +102,24 @@ function createVanScheduleCommunicationAuthority({ db, scheduleService = null, o
       throw new Error("Firestore transaction support is required to update Van WhatsApp groups safely.");
     }
 
+    const targetVanIds = new Set(groups.map((group) => group.vanId));
     const now = new Date().toISOString();
     await db.runTransaction(async (transaction) => {
       const currentByVan = new Map();
       for (const van of catalog.vans) {
         const reference = db.collection("vans").doc(van.sourceVanId);
         const snapshot = await transaction.get(reference);
-        const persisted = snapshot.exists ? (snapshot.data() || {}) : {};
+        if (!snapshot.exists || snapshot.data()?.active === false) {
+          if (targetVanIds.has(van.id)) {
+            throw new BookingAuthorityError(
+              BOOKING_ERROR_CODES.INVALID_REQUEST,
+              "The requested Van changed or is no longer active. Reload the Van configuration before saving.",
+              { vanId: van.id },
+            );
+          }
+          continue;
+        }
+        const persisted = snapshot.data() || {};
         currentByVan.set(van.id, {
           vanId: van.id,
           groupName: cleanText(persisted.whatsappScheduleGroupName, 180) || defaultGroupName(van.id, van.name),
@@ -118,7 +129,14 @@ function createVanScheduleCommunicationAuthority({ db, scheduleService = null, o
       }
 
       for (const group of groups) {
-        const current = currentByVan.get(group.vanId) || {};
+        const current = currentByVan.get(group.vanId);
+        if (!current) {
+          throw new BookingAuthorityError(
+            BOOKING_ERROR_CODES.INVALID_REQUEST,
+            "The requested Van changed or is no longer active. Reload the Van configuration before saving.",
+            { vanId: group.vanId },
+          );
+        }
         currentByVan.set(group.vanId, {
           ...group,
           groupName: group.groupName || current.groupName || defaultGroupName(group.vanId),
