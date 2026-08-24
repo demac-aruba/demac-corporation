@@ -3,7 +3,6 @@ const test = require('node:test');
 const {
   assertWorkVisitTransition,
   transitionCanonicalWorkVisit,
-  workVisitTransitionTargets,
 } = require('./fieldOperationsAuthorityTransitions');
 
 function visit(status = 'scheduled', overrides = {}) {
@@ -69,14 +68,14 @@ test('pending visit can resume without replacing its original started timestamp'
   assert.equal(resumed.next.startedAt, t1);
 });
 
+test('allowed branch decisions remain server-owned and explicit', () => {
+  assert.deepEqual(assertWorkVisitTransition('scheduled', 'en_route'), { current: 'scheduled', next: 'en_route', noop: false });
+  assert.deepEqual(assertWorkVisitTransition('scheduled', 'scheduled'), { current: 'scheduled', next: 'scheduled', noop: true });
+});
+
 test('arbitrary or terminal transitions fail closed', () => {
   assert.throws(() => assertWorkVisitTransition('scheduled', 'completed'), /scheduled -> completed/);
   assert.throws(() => assertWorkVisitTransition('completed', 'in_progress'), /completed -> in_progress/);
   assert.throws(() => assertWorkVisitTransition('unknown', 'scheduled'), /Unknown Work Visit status/);
   assert.throws(() => transitionCanonicalWorkVisit({ visit: visit(), to: 'en_route', at: '' }), /timestamp is required/);
-});
-
-test('transition targets are projected from the single server transition map', () => {
-  assert.deepEqual(workVisitTransitionTargets('scheduled'), ['en_route', 'no_access', 'cancelled']);
-  assert.deepEqual(workVisitTransitionTargets('completed'), []);
 });
