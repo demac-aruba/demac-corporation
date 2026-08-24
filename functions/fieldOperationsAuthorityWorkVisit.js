@@ -48,12 +48,17 @@ function deterministicId(prefix, value) {
   return `${prefix}-${crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, 24)}`;
 }
 
-function visitDocumentId(workOrderId) {
+/**
+ * Compatibility identity for the first WorkVisit created from a Work Order.
+ * It intentionally matches active Legacy `idPart()` behavior. Return visits must use a
+ * distinct physical-visit identity in their own later command; never reuse this helper for them.
+ */
+function initialVisitDocumentId(workOrderId) {
   const safe = text(workOrderId, 180)
     .replace(/[^a-zA-Z0-9_-]/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
-    .slice(0, 120);
+    .slice(0, 80);
   if (!safe) throw fieldError('work_order_required', 'A Work Order id is required.');
   return `visit-${safe}`;
 }
@@ -119,15 +124,16 @@ function buildLegacyCompatibleWorkVisit({ order, appointment, identity, assignme
   if (!clientId) throw fieldError('customer_required', 'The Work Order is missing its Customer reference.', 409);
   if (!propertyId) throw fieldError('property_required', 'The Work Order is missing its Property reference.', 409);
 
+  // Canonical participatingStaffIds contains staff-profile IDs only. Work Order technicianIds
+  // is a compatibility field that may historically contain a Firebase uid, so it is not copied.
   const participatingStaffIds = unique([
-    ...(Array.isArray(order.technicianIds) ? order.technicianIds : []),
     identity.staffId,
     assignment?.leadTechnicianStaffId,
     ...(Array.isArray(assignment?.participatingStaffIds) ? assignment.participatingStaffIds : []),
   ]);
 
   return {
-    id: visitDocumentId(workOrderId),
+    id: initialVisitDocumentId(workOrderId),
     fieldAuthorityVersion: FIELD_WORK_VISIT_STORAGE_VERSION,
     workOrderId,
     appointmentId,
@@ -239,13 +245,13 @@ function requireMutationAssignment(identity, assignment) {
   return actions;
 }
 
-function createPrepareWorkVisitCommand({ db, resolveAssignment, appendAudit, now = () => new Date().toISOString() } = {}) {
+function createPrepareWorkVisitCommand({ db, resolveAssignment, appendAuditInTransaction, now = () => new Date().toISOString() } = {}) {
   if (!db || typeof db.collection !== 'function' || typeof db.runTransaction !== 'function') {
     throw new Error('A transaction-capable Firestore db is required.');
   }
   if (typeof resolveAssignment !== 'function') throw new Error('resolveAssignment is required.');
-  if (typeof appendAudit !== 'function') {
-    throw new Error('appendAudit is required before canonical Field mutations may be enabled.');
+  if (typeof appendAuditInTransaction !== 'function') {
+    throw new Error('appendAuditInTransaction is required before canonical Field mutations may be enabled.');
   }
 
   return async function prepareWorkVisit({ identity, workOrderId, requestId }) {
@@ -287,7 +293,7 @@ function createPrepareWorkVisitCommand({ db, resolveAssignment, appendAudit, now
 
       const assignment = await resolveAssignment({ transaction, identity, order });
       const allowedActions = requireMutationAssignment(identity, assignment);
-      const visitId = visitDocumentId(normalizedWorkOrderId);
+      const visitId = initialVisitDocumentId(normalizedWorkOrderId);
       const visitRef = db.collection('workVisits').doc(visitId);
       const existingSnapshot = await transaction.get(visitRef);
       if (existingSnapshot.exists) {
@@ -308,7 +314,7 @@ function createPrepareWorkVisitCommand({ db, resolveAssignment, appendAudit, now
       const event = visitAuditEvent({ requestId: stable, visit, identity, now: occurredAt });
 
       transaction.create(visitRef, visit);
-      await appendAudit({ transaction, event, visit, identity });
+      await appendAuditInTransaction({ transaction, event, visit, identity });
       result = {
         replayed: false,
         source: 'field_authority',
@@ -328,9 +334,9 @@ module.exports = {
   buildScheduledScopeSnapshot,
   canonicalStatusFromStorage,
   createPrepareWorkVisitCommand,
+  initialVisitDocumentId,
   projectCanonicalWorkVisit,
   stableRequestId,
   storageStatusFromWorkOrder,
   visitAuditEvent,
-  visitDocumentId,
 };
