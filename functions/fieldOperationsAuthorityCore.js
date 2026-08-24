@@ -292,6 +292,12 @@ function plannedWorkItems(order, appointment) {
   }));
 }
 
+function finiteNumberOrNull(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
 function projectScheduleJob({ order, client, property, appointment, identity, assignment }) {
   return {
     id: order.id,
@@ -306,8 +312,8 @@ function projectScheduleJob({ order, client, property, appointment, identity, as
     propertyId: text(order.propertyId, 180),
     propertyName: text(property?.name, 240),
     address: text(order.address || property?.address || property?.addressRaw, 500),
-    latitude: Number.isFinite(Number(property?.latitude)) ? Number(property.latitude) : null,
-    longitude: Number.isFinite(Number(property?.longitude)) ? Number(property.longitude) : null,
+    latitude: finiteNumberOrNull(property?.latitude),
+    longitude: finiteNumberOrNull(property?.longitude),
     arrivalPhone: text(client?.phone, 80),
     arrivalWhatsapp: text(client?.whatsapp || client?.phone, 80),
     accessInstructions: text(property?.accessInstructions || property?.propertyAccessInstructions || property?.entryInstructions || property?.accessNotes, 1500),
