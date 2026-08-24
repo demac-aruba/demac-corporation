@@ -1,26 +1,10 @@
+import type { FieldAllowedAction } from './field-authorization';
 import { firebaseClientConfig } from './firebase/client-config';
 import { requireFirebaseWebSession } from './firebase/session';
 
-export type FieldResponsibility = 'lead' | 'technician' | 'helper' | 'office';
+export type { FieldAllowedAction } from './field-authorization';
 
-/**
- * Server-projected Field action names. This TypeScript union is a client contract only;
- * authorization is recalculated by Field Operations Authority for every future mutation.
- */
-export type FieldAllowedAction =
-  | 'read'
-  | 'execute'
-  | 'report.edit'
-  | 'evidence.add'
-  | 'measurement.add'
-  | 'finding.add'
-  | 'asset.add'
-  | 'intervention.add'
-  | 'sale.propose'
-  | 'intervention.complete'
-  | 'visit.complete'
-  | 'office.review'
-  | 'price.override';
+export type FieldResponsibility = 'lead' | 'technician' | 'helper' | 'office';
 
 export type FieldAssignmentSource =
   | 'office'
