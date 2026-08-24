@@ -200,11 +200,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "function=$(node -p \"require('./functions/vanScheduleDeliveryConfig').VAN_SCHEDULE_FUNCTION_NAME\")" >> "$GITHUB_OUTPUT"
-          echo "region=$(node -p \"require('./functions/vanScheduleDeliveryConfig').VAN_SCHEDULE_REGION\")" >> "$GITHUB_OUTPUT"
-          echo "timezone=$(node -p \"require('./functions/vanScheduleDeliveryConfig').VAN_SCHEDULE_TIME_ZONE\")" >> "$GITHUB_OUTPUT"
-          echo "cron=$(node -p \"require('./functions/vanScheduleDeliveryConfig').VAN_SCHEDULE_CRON\")" >> "$GITHUB_OUTPUT"
-          echo "job=$(node -p \"require('./functions/vanScheduleDeliveryConfig').VAN_SCHEDULE_SCHEDULER_JOB\")" >> "$GITHUB_OUTPUT"
+          node <<'NODE' >> "$GITHUB_OUTPUT"
+          const config = require('./functions/vanScheduleDeliveryConfig');
+          const outputs = {
+            function: config.VAN_SCHEDULE_FUNCTION_NAME,
+            region: config.VAN_SCHEDULE_REGION,
+            timezone: config.VAN_SCHEDULE_TIME_ZONE,
+            cron: config.VAN_SCHEDULE_CRON,
+            job: config.VAN_SCHEDULE_SCHEDULER_JOB,
+          };
+          for (const [key, value] of Object.entries(outputs)) {
+            if (!String(value || '').trim()) throw new Error(`${key} deployment config is missing`);
+            console.log(`${key}=${value}`);
+          }
+          NODE
 
       - name: Preflight governed Cloud Scheduler deployment authority
         shell: bash
