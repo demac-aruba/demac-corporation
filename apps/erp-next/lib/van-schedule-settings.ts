@@ -17,6 +17,23 @@ type GroupResponse = {
   groups: VanScheduleGroupSetting[];
 };
 
+export type VanScheduleSendResult = {
+  success: true;
+  version: number;
+  dateKey: string;
+  vanCount: number;
+  workOrderCount: number;
+  messageCount: number;
+  results: Array<{
+    queued: boolean;
+    created?: boolean;
+    vanId?: string;
+    groupName?: string;
+    workOrderId?: string;
+    reason?: string;
+  }>;
+};
+
 function endpoint() {
   if (!firebaseClientConfig.projectId) throw new Error('Firebase project is not configured for ERP Next.');
   return `https://us-central1-${firebaseClientConfig.projectId}.cloudfunctions.net/officeBookingAuthority`;
@@ -37,11 +54,11 @@ async function callVanScheduleAuthority<T>(action: string, data: Record<string, 
       signal: controller.signal,
     });
     const payload = await response.json().catch(() => ({})) as T & { error?: { message?: string } };
-    if (!response.ok) throw new Error(payload.error?.message || 'Van WhatsApp schedule settings could not be saved.');
+    if (!response.ok) throw new Error(payload.error?.message || 'Van WhatsApp schedule operation failed.');
     return payload;
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error('Van WhatsApp schedule settings took too long to respond. Nothing was saved.');
+      throw new Error('Van WhatsApp schedule operation took too long to respond. Nothing was changed.');
     }
     throw error;
   } finally {
@@ -60,4 +77,12 @@ export function saveVanScheduleGroupSetting(input: {
   enabled: boolean;
 }) {
   return callVanScheduleAuthority<GroupResponse>('save_van_schedule_groups', { groups: [input] });
+}
+
+export function sendVanSchedulesNow(input: {
+  dateKey: string;
+  vanId?: string;
+  requestId: string;
+}) {
+  return callVanScheduleAuthority<VanScheduleSendResult>('send_van_schedules_now', input, 30_000);
 }
