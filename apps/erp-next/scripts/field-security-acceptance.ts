@@ -22,18 +22,15 @@ function hasFieldCapability(role: keyof typeof roleCapabilities, capability: Cap
   return roleCapabilities[role].has(capability);
 }
 
-// Canonical ERP capability vocabulary is authoritative; old `*.read` vocabulary is only a projection.
 assert(hasLegacyCapability('super_admin', 'work_orders.read'), 'legacy work_orders.read adapter should project canonical super-admin access');
 assert(!hasLegacyCapability('technician', 'inventory.read'), 'legacy adapter must not re-grant inventory access removed from canonical technician policy');
 
-// Navigation authority is reused for post-login routing and direct-route guards.
 assert(defaultAuthenticatedRoute('technician') === '/field', 'technician login should enter the canonical Field App');
 assert(isAuthenticatedRouteAllowed('/field', 'technician'), 'technician should be allowed to open Field App');
 assert(!isAuthenticatedRouteAllowed('/dashboard', 'technician'), 'technician must not open management dashboard directly');
 assert(defaultAuthenticatedRoute('super_admin') === '/dashboard', 'super admin should keep the management dashboard as default');
 assert(isAuthenticatedRouteAllowed('/scheduling/dispatch', 'operations'), 'operations nested scheduling route should remain allowed');
 
-// Authentication-role capabilities stay coarse. Assignment responsibility and action-level authority are server decisions.
 assert(hasFieldCapability('technician', 'field.read_assigned'), 'technician role should enter assigned Field work');
 assert(hasFieldCapability('technician', 'field.execute'), 'technician role should be eligible for Field execution');
 assert(hasFieldCapability('technician', 'field.scope.manage'), 'technician role should be eligible for actual-scope work');
@@ -52,7 +49,6 @@ assert(hasFieldCapability('operations', 'field.review'), 'operations should revi
 assert(hasFieldCapability('operations', 'field.price.override'), 'operations capability vocabulary includes governed price override');
 assert(!hasFieldCapability('operations', 'field.execute'), 'operations role must not impersonate technician execution');
 
-// The client must obey the server projection literally instead of reconstructing responsibility rules.
 const leadProjection: { allowedActions: FieldAllowedAction[] } = {
   allowedActions: ['read', 'execute', 'report.edit', 'evidence.add', 'measurement.add', 'finding.add', 'asset.add', 'intervention.add', 'sale.propose', 'intervention.complete', 'visit.complete'],
 };
@@ -76,8 +72,6 @@ const deniedProjection: { allowedActions: FieldAllowedAction[] } = { allowedActi
 assert(!fieldActionAllowed(deniedProjection, 'read'), 'client must not expose another-team work when server projects no actions');
 assert(!fieldActionAllowed(deniedProjection, 'execute'), 'client must not infer execution for a denied job');
 
-// Read transport must fail closed on malformed/old 2xx payloads instead of crashing the UI or
-// displaying stale assumptions about assignment/action data.
 const representativeJob = {
   id: 'WO-1',
   workOrderId: 'WO-1',
@@ -104,10 +98,10 @@ assert(validJob.job.knownEquipment.length === 0, 'valid job transport should par
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 2, jobs: [] }), 'unknown API version must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1 }), 'missing jobs array must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1, jobs: [{ ...representativeJob, allowedActions: null }] }), 'malformed action projection must fail closed');
+assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1, jobs: [{ ...representativeJob, allowedActions: ['read', 'future.action'] }] }), 'unknown server action name must fail closed');
 assertThrows(() => parseFieldJobResponse({ success: true, version: 1, job: representativeJob }), 'missing knownEquipment must fail closed');
 assertThrows(() => parseFieldJobResponse({ success: true, version: 1, job: { ...representativeJob, knownEquipment: [{ id: 'AC-1' }] } }), 'malformed equipment row must fail closed');
 
-// Client capability guards also fail closed for inactive principals; server identity checks remain authoritative.
 const inactive: AuthPrincipal = {
   userId: 'user-disabled',
   displayName: 'Disabled',
@@ -124,6 +118,4 @@ try {
 }
 assert(inactiveDenied, 'inactive client principal should fail the coarse capability guard');
 
-// Mandatory scenarios 17 (helper scope denial) and 18 (other-team known-ID denial) are
-// canonical server-security claims and are exercised in fieldOperationsAuthorityCore.test.js.
 console.log('Field client capability, route guard and transport-contract acceptance: PASS');
