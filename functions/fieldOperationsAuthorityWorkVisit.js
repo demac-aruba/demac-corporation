@@ -214,6 +214,30 @@ function assertExistingVisitCompatible(existing, order) {
   }
 }
 
+function snapshotRecords(snapshot) {
+  return (snapshot?.docs || []).map((document) => ({ id: document.id, ...document.data() }));
+}
+
+async function findLegacyInitialVisit({ db, transaction, order, expectedVisitId }) {
+  const query = db.collection('workVisits').where('workOrderId', '==', text(order.id, 180)).limit(4);
+  const records = snapshotRecords(await transaction.get(query)).filter((record) => record.id !== expectedVisitId);
+  if (!records.length) return null;
+
+  const initialCandidates = records.filter((record) => !text(record.previousVisitId, 180));
+  if (initialCandidates.length !== 1 || records.length !== 1) {
+    throw fieldError(
+      'legacy_visit_identity_ambiguous',
+      'Existing Work Visit history for this Work Order cannot be adopted as one unambiguous initial visit.',
+      409,
+      { workOrderId: text(order.id, 180), visitIds: records.map((record) => record.id) },
+    );
+  }
+
+  const existing = initialCandidates[0];
+  assertExistingVisitCompatible(existing, order);
+  return existing;
+}
+
 function visitAuditEvent({ requestId, visit, identity, now }) {
   return {
     id: deterministicId('FE', `${requestId}:work_visit_prepared:${visit.id}`),
@@ -309,6 +333,20 @@ function createPrepareWorkVisitCommand({ db, resolveAssignment, appendAuditInTra
           replayed: true,
           source: existing.fieldAuthorityVersion ? 'field_authority' : 'legacy_existing',
           visit: projectCanonicalWorkVisit(existing),
+          allowedActions,
+        };
+        return;
+      }
+
+      // Active Legacy resolves existing visits by workOrderId, not only by deterministic id.
+      // Adopt one unambiguous historical initial visit; ambiguous/multi-visit history fails closed
+      // so the canonical boundary never creates a second initial source of truth.
+      const legacyExisting = await findLegacyInitialVisit({ db, transaction, order, expectedVisitId: visitId });
+      if (legacyExisting) {
+        result = {
+          replayed: true,
+          source: legacyExisting.fieldAuthorityVersion ? 'field_authority' : 'legacy_existing',
+          visit: projectCanonicalWorkVisit(legacyExisting),
           allowedActions,
         };
         return;
