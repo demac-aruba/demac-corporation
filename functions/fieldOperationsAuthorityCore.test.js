@@ -118,6 +118,26 @@ test('assigned schedule query returns only the technician van/team work with lea
   assert.ok(jobs[0].allowedActions.includes('intervention.add'));
 });
 
+test('completed assigned work remains visible in schedule/detail but is read-only', async () => {
+  const seed = {
+    ...baseSeed,
+    workOrders: [...baseSeed.workOrders, {
+      id: 'WO-COMPLETE', appointmentId: 'APT-COMPLETE', clientId: 'client-1', propertyId: 'property-1', date: '2026-08-24', time: '11:30',
+      status: 'Completada', vanId: 'VAN-1', technicianIds: ['staff-lead', 'staff-helper'], airConditionerCount: 2,
+      appointmentWorkItems: [{ id: 'complete-line', serviceId: 'service-standard', label: 'Standard Service', quantity: 2, durationMinutes: 120 }],
+    }],
+    appointments: [...baseSeed.appointments, { id: 'APT-COMPLETE', workLines: [] }],
+  };
+  const db = createDb(seed);
+  const jobs = await loadAssignedSchedule(db, technician('staff-lead', 'VAN-1'), '2026-08-24', '2026-08-24');
+  assert.deepEqual(jobs.map((job) => job.workOrderId), ['WO-1', 'WO-COMPLETE']);
+  const completed = jobs.find((job) => job.workOrderId === 'WO-COMPLETE');
+  assert.deepEqual(completed.allowedActions, ['read']);
+  const detail = await loadAssignedJob(db, technician('staff-lead', 'VAN-1'), 'WO-COMPLETE');
+  assert.equal(detail.status, 'Completada');
+  assert.deepEqual(detail.allowedActions, ['read']);
+});
+
 test('helper receives reporting actions but cannot receive billable or scope actions', async () => {
   const db = createDb(baseSeed);
   const jobs = await loadAssignedSchedule(db, technician('staff-helper', 'VAN-1'), '2026-08-24', '2026-08-24');
