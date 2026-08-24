@@ -3,6 +3,32 @@ import { requireFirebaseWebSession } from './firebase/session';
 
 export type FieldResponsibility = 'lead' | 'technician' | 'helper' | 'office';
 
+/**
+ * Server-projected Field action names. This TypeScript union is a client contract only;
+ * authorization is recalculated by Field Operations Authority for every future mutation.
+ */
+export type FieldAllowedAction =
+  | 'read'
+  | 'execute'
+  | 'report.edit'
+  | 'evidence.add'
+  | 'measurement.add'
+  | 'finding.add'
+  | 'asset.add'
+  | 'intervention.add'
+  | 'sale.propose'
+  | 'intervention.complete'
+  | 'visit.complete'
+  | 'office.review'
+  | 'price.override';
+
+export type FieldAssignmentSource =
+  | 'office'
+  | 'daily_assignment'
+  | 'regular_crew'
+  | 'direct_staff'
+  | 'profile_van_fallback';
+
 export type FieldPlannedWork = {
   id: string;
   serviceId?: string;
@@ -37,6 +63,8 @@ export type FieldScheduleJob = {
   vanId: string;
   technicianIds: string[];
   responsibility: FieldResponsibility;
+  assignmentSource: FieldAssignmentSource;
+  allowedActions: FieldAllowedAction[];
   assignmentRole?: string;
 };
 
@@ -92,6 +120,10 @@ async function callFieldAuthority<T>(action: string, data: Record<string, unknow
   } finally {
     window.clearTimeout(timer);
   }
+}
+
+export function fieldActionAllowed(job: Pick<FieldScheduleJob, 'allowedActions'>, action: FieldAllowedAction) {
+  return job.allowedActions.includes(action);
 }
 
 export async function getFieldSchedule(startDate: string, endDate = startDate) {
