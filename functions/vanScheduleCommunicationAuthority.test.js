@@ -1,6 +1,10 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { createVanScheduleCommunicationAuthority, normalizeGroupInput } = require("./vanScheduleCommunicationAuthority");
+const {
+  assertUniqueEnabledGroupJids,
+  createVanScheduleCommunicationAuthority,
+  normalizeGroupInput,
+} = require("./vanScheduleCommunicationAuthority");
 
 function snapshot(id, value) {
   return { id, exists: value !== undefined, data: () => value };
@@ -41,6 +45,13 @@ test("van schedule group input requires a group JID when enabled", () => {
   assert.equal(normalizeGroupInput(groups[0]).groupJid, groups[0].groupJid);
 });
 
+test("the same enabled WhatsApp group cannot belong to two Vans", () => {
+  assert.throws(() => assertUniqueEnabledGroupJids([
+    groups[0],
+    { ...groups[1], groupJid: groups[0].groupJid },
+  ]), /cannot be assigned to more than one enabled Van/);
+});
+
 test("configuration is stored on the canonical source van records", async () => {
   const db = fakeDb([
     { id: "legacy-van-1", number: 1, active: true },
@@ -59,6 +70,23 @@ test("configuration is stored on the canonical source van records", async () => 
   assert.equal(db.vans.get("legacy-van-1").whatsappScheduleGroupJid, groups[0].groupJid);
   assert.equal(db.vans.get("VAN-2").whatsappScheduleGroupName, "Van 2 Group");
   assert.equal(result.groups.every((item) => item.configured), true);
+});
+
+test("save rejects a duplicate JID against an existing Van not included in the partial update", async () => {
+  const db = fakeDb([
+    { id: "VAN-1", active: true, whatsappScheduleGroupJid: groups[0].groupJid, scheduleDeliveryEnabled: true },
+    { id: "VAN-2", active: true, whatsappScheduleGroupJid: groups[1].groupJid, scheduleDeliveryEnabled: true },
+  ]);
+  const authority = createVanScheduleCommunicationAuthority({
+    db,
+    scheduleService: { async queueDay() { throw new Error("not expected"); } },
+    operatingCalendar: { async isOpenDate() { return true; } },
+  });
+
+  await assert.rejects(
+    () => authority.saveConfiguration({ groups: [{ ...groups[1], groupJid: groups[0].groupJid }] }, {}),
+    /cannot be assigned to more than one enabled Van/,
+  );
 });
 
 test("manual schedule send reuses queueDay and scopes idempotency to the request id", async () => {
