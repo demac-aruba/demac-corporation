@@ -104,6 +104,14 @@ The transactional producer workflow must:
 6. verify the deployed functions are ACTIVE;
 7. verify the exact canonical Scheduler job exists, is ENABLED, has the expected cron/timezone, and has an HTTP target and OIDC invoker.
 
+The same workflow supports a controlled pre-merge production test through `workflow_dispatch`; this is not a second deployment path. Manual deployment is fail-closed and requires all three of the following on the selected ref:
+
+- `deploy_to_production=true`;
+- confirmation text exactly `DEPLOY_TRANSACTIONAL_WHATSAPP`;
+- `expected_sha` exactly equal to the workflow `GITHUB_SHA`.
+
+If any manual authorization input does not match, the deployment job is skipped. Normal pushes to `main` retain the governed automatic deployment behavior. GitHub requires write access to run `workflow_dispatch`, and the workflow file already exists on the default branch so a selected non-default ref can be run explicitly.
+
 A paused Scheduler job is not silently resumed by deployment. A pause is an operational state that requires investigation.
 
 Historical data migrations must not run on every ordinary application deployment.
@@ -159,9 +167,12 @@ At minimum:
 - Booking Authority Van identity regression tests;
 - Office Booking Authority communication regression tests;
 - TypeScript/web build validation;
+- controlled `workflow_dispatch` of the exact PR commit after #428 IAM is granted, using the required confirmation/SHA guard;
 - production deployment preflight;
 - post-deploy exact Cloud Scheduler verification;
-- controlled production execution evidence before declaring the automatic 08:00 delivery repaired.
+- controlled automatic execution evidence before declaring the automatic 08:00 delivery repaired.
+
+The controlled deployment test must not manually run Cloud Scheduler and must not send a duplicate schedule merely to prove deployment. The next natural automatic execution window provides the heartbeat/delivery proof.
 
 ## Rollback
 
