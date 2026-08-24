@@ -179,32 +179,43 @@ jobs:
           echo "cron=$(node -p \"require('./functions/vanScheduleDeliveryConfig').VAN_SCHEDULE_CRON\")" >> "$GITHUB_OUTPUT"
           echo "job=$(node -p \"require('./functions/vanScheduleDeliveryConfig').VAN_SCHEDULE_SCHEDULER_JOB\")" >> "$GITHUB_OUTPUT"
 
-      - name: Preflight Cloud Scheduler deployment authority
+      - name: Preflight Cloud Scheduler access
         shell: bash
         run: |
           set -euo pipefail
           principal="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n 1)"
+          region='${{ steps.schedule.outputs.region }}'
+          job='${{ steps.schedule.outputs.job }}'
           if [ -z "$principal" ]; then
             echo '::error::No active Google Cloud deployment principal is available.'
             exit 1
           fi
 
-          required_role='roles/cloudscheduler.admin'
-          binding="$(gcloud projects get-iam-policy demac-corporation \
-            --flatten='bindings[].members' \
-            --filter="bindings.role=${required_role} AND bindings.members=serviceAccount:${principal}" \
-            --format='value(bindings.role)' | head -n 1)"
-          if [ "$binding" != "$required_role" ]; then
-            echo "::error::Deployment principal ${principal} is missing ${required_role}. Refusing to deploy a scheduled function because the Cloud Scheduler job could not be safely created, updated, or verified."
+          if ! gcloud scheduler jobs list \
+            --project=demac-corporation \
+            --location="$region" \
+            --limit=1 \
+            --format='value(name)' >/dev/null; then
+            echo "::error::Deployment principal ${principal} cannot list Cloud Scheduler jobs. Refusing to deploy a scheduled function because Scheduler state cannot be governed or verified. Grant the deployment identity Cloud Scheduler management permissions (the predefined roles/cloudscheduler.admin role or an approved equivalent custom role)."
             exit 1
           fi
 
-          gcloud scheduler jobs list \
+          describe_error="$(mktemp)"
+          if gcloud scheduler jobs describe "$job" \
             --project=demac-corporation \
-            --location='${{ steps.schedule.outputs.region }}' \
-            --limit=1 \
-            --format='value(name)' >/dev/null
-          echo "Cloud Scheduler deployment authority verified for ${principal}."
+            --location="$region" \
+            --format='value(name)' >/dev/null 2>"$describe_error"; then
+            echo "Existing Scheduler job is readable by ${principal}: ${job}"
+          elif grep -Eqi 'NOT_FOUND|not found|does not exist' "$describe_error"; then
+            echo "Canonical Scheduler job does not currently exist; Firebase deployment will be responsible for creating ${job}."
+          else
+            cat "$describe_error" >&2
+            rm -f "$describe_error"
+            echo "::error::Deployment principal ${principal} cannot read the canonical Scheduler job. Refusing to deploy."
+            exit 1
+          fi
+          rm -f "$describe_error"
+          echo "Cloud Scheduler preflight passed for ${principal}."
 
       - name: Deploy notification producers only
         shell: bash
