@@ -1,4 +1,3 @@
-import type { FieldAllowedAction } from './field-authority';
 import type { AuthPrincipal, Capability } from './security';
 
 export type FieldResponsibility = 'lead' | 'technician' | 'helper';
@@ -18,6 +17,25 @@ export type FieldAssignmentScope = {
   members: readonly FieldAssignmentMember[];
   vanIds: readonly string[];
 };
+
+/**
+ * Client-side Field API action contract only. The server remains authoritative for
+ * deciding which of these actions are allowed for a principal on a specific job.
+ */
+export type FieldAllowedAction =
+  | 'read'
+  | 'execute'
+  | 'report.edit'
+  | 'evidence.add'
+  | 'measurement.add'
+  | 'finding.add'
+  | 'asset.add'
+  | 'intervention.add'
+  | 'sale.propose'
+  | 'intervention.complete'
+  | 'visit.complete'
+  | 'office.review'
+  | 'price.override';
 
 export type FieldAction = FieldAllowedAction;
 
