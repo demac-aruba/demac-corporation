@@ -10,7 +10,7 @@ function snapshot(id, value) {
   return { id, exists: value !== undefined, data: () => value === undefined ? undefined : { ...value } };
 }
 
-function fakeDb(initialVans = []) {
+function fakeDb(initialVans = [], { beforeTransaction = null } = {}) {
   const vans = new Map(initialVans.map((van) => [van.id, { ...van }]));
   function reference(id) {
     return {
@@ -34,6 +34,7 @@ function fakeDb(initialVans = []) {
       };
     },
     async runTransaction(callback) {
+      if (typeof beforeTransaction === "function") await beforeTransaction(vans);
       return callback({
         async get(ref) { return ref.get(); },
         set(ref, value, options) { return ref.set(value, options); },
@@ -117,6 +118,43 @@ test("save rejects a duplicate JID against an existing Van not included in the p
     () => authority.saveConfiguration({ groups: [{ ...groups[1], groupJid: groups[0].groupJid }] }, {}),
     /cannot be assigned to more than one enabled Van/,
   );
+});
+
+test("save aborts if a target Van disappears before the transaction and does not recreate it", async () => {
+  const db = fakeDb(
+    [{ id: "VAN-1", active: true, name: "Van 1", whatsappScheduleGroupJid: groups[0].groupJid, scheduleDeliveryEnabled: true }],
+    { beforeTransaction(vans) { vans.delete("VAN-1"); } },
+  );
+  const authority = createVanScheduleCommunicationAuthority({
+    db,
+    scheduleService: { async queueDay() { throw new Error("not expected"); } },
+    operatingCalendar: { async isOpenDate() { return true; } },
+  });
+
+  await assert.rejects(
+    () => authority.saveConfiguration({ groups: [groups[0]] }, {}),
+    /changed or is no longer active/,
+  );
+  assert.equal(db.vans.has("VAN-1"), false);
+});
+
+test("save aborts if a target Van becomes inactive before the transaction", async () => {
+  const db = fakeDb(
+    [{ id: "VAN-1", active: true, name: "Van 1", whatsappScheduleGroupJid: groups[0].groupJid, scheduleDeliveryEnabled: true }],
+    { beforeTransaction(vans) { vans.set("VAN-1", { ...vans.get("VAN-1"), active: false }); } },
+  );
+  const authority = createVanScheduleCommunicationAuthority({
+    db,
+    scheduleService: { async queueDay() { throw new Error("not expected"); } },
+    operatingCalendar: { async isOpenDate() { return true; } },
+  });
+
+  await assert.rejects(
+    () => authority.saveConfiguration({ groups: [groups[0]] }, {}),
+    /changed or is no longer active/,
+  );
+  assert.equal(db.vans.get("VAN-1").active, false);
+  assert.equal(db.vans.get("VAN-1").whatsappScheduleGroupName, undefined);
 });
 
 test("manual schedule send reuses queueDay and scopes idempotency to the request id", async () => {
