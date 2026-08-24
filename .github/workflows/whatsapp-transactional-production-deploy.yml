@@ -68,22 +68,23 @@ on:
       - 'functions/package.json'
       - 'functions/package-lock.json'
       - 'firebase.json'
-      - '.github/workflows/whatsapp-transactional-production-deploy.yml'
   workflow_dispatch:
     inputs:
       deploy_to_production:
-        description: 'Deploy this exact selected ref to DEMAC production after validation.'
+        description: 'Explicitly authorize the guarded production deployment path'
         required: true
-        default: false
         type: boolean
+        default: false
       confirmation:
-        description: 'Type DEPLOY_TRANSACTIONAL_WHATSAPP to authorize production deployment.'
+        description: 'Type DEPLOY_TRANSACTIONAL_WHATSAPP exactly when deploy_to_production=true'
         required: false
         type: string
+        default: ''
       expected_sha:
-        description: 'Exact commit SHA expected to be deployed. Must equal the workflow GITHUB_SHA.'
+        description: 'Exact commit SHA selected for the controlled deployment'
         required: false
         type: string
+        default: ''
 
 permissions:
   contents: read
