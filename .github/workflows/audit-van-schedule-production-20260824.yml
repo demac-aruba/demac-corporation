@@ -54,8 +54,8 @@ jobs:
             const whatsappSettings = whatsappSnap.exists ? whatsappSnap.data() : {};
             console.log('CALENDAR_SETTINGS', JSON.stringify({ exists: settingsSnap.exists, closedWeekdays: calendarSettings.closedWeekdays ?? null }));
             console.log('WHATSAPP_SETTINGS', JSON.stringify({ exists: whatsappSnap.exists, transactionalOutboundEnabled: whatsappSettings.transactionalOutboundEnabled !== false, transactionalProvider: whatsappSettings.transactionalProvider || null }));
-            console.log('RAW_VANS', JSON.stringify(vanSnap.docs.map(d => {
-              const v = { id:d.id, ...d.data() };
+            console.log('RAW_VANS', JSON.stringify(vanSnap.docs.map((d) => {
+              const v = { id: d.id, ...d.data() };
               return {
                 sourceVanId: d.id,
                 canonicalVanId: canonicalVanIdFromRecord(v) || null,
@@ -65,7 +65,7 @@ jobs:
                 correction: v.scheduleDeliveryGroupCorrection || null,
                 alignmentMigration: v.scheduleDeliveryGroupAlignmentMigration || v.scheduleGroupAlignmentMigration || null,
               };
-            }))));
+            })));
             for (const dateKey of dates) {
               const [open, batchSnap, woSnap, queueSnap] = await Promise.all([
                 calendar.isOpenDate(dateKey),
@@ -74,7 +74,7 @@ jobs:
                 db.collection('whatsappOutboundQueue').where('scheduleDate','==',dateKey).get(),
               ]);
               const batch = batchSnap.exists ? batchSnap.data() : null;
-              const queues = queueSnap.docs.map(d => ({ id:d.id,...d.data() }));
+              const queues = queueSnap.docs.map(d => ({ id: d.id, ...d.data() }));
               const byReason = {}, byStatus = {}, byType = {}, byProvider = {};
               for (const q of queues) {
                 const reason = String(q.reason || 'unknown');
@@ -87,14 +87,26 @@ jobs:
                 byProvider[provider] = (byProvider[provider] || 0) + 1;
               }
               console.log('DAY', JSON.stringify({
-                dateKey, open, workOrderCount: woSnap.size,
+                dateKey,
+                open,
+                workOrderCount: woSnap.size,
                 batch: batch ? {
-                  status: batch.status || null, attemptCount: batch.attemptCount || 0,
-                  workOrderCount: batch.workOrderCount ?? null, messageCount: batch.messageCount ?? null,
-                  failedCount: batch.failedCount ?? null, fatalError: batch.fatalError || null,
-                  startedAt: safeTs(batch.startedAt), lastAttemptAt: safeTs(batch.lastAttemptAt), completedAt: safeTs(batch.completedAt), failedAt: safeTs(batch.failedAt),
+                  status: batch.status || null,
+                  attemptCount: batch.attemptCount || 0,
+                  workOrderCount: batch.workOrderCount ?? null,
+                  messageCount: batch.messageCount ?? null,
+                  failedCount: batch.failedCount ?? null,
+                  fatalError: batch.fatalError || null,
+                  startedAt: safeTs(batch.startedAt),
+                  lastAttemptAt: safeTs(batch.lastAttemptAt),
+                  completedAt: safeTs(batch.completedAt),
+                  failedAt: safeTs(batch.failedAt),
                 } : null,
-                queueCount: queues.length, byReason, byStatus, byType, byProvider,
+                queueCount: queues.length,
+                byReason,
+                byStatus,
+                byType,
+                byProvider,
               }));
             }
           })().catch(e => { console.error(e); process.exit(1); });
