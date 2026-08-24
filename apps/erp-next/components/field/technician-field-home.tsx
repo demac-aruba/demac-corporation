@@ -215,10 +215,14 @@ export function TechnicianFieldHome() {
   const today = arubaDateKey();
   const tomorrow = addDaysToDateKey(today, 1);
   const weekEnd = addDaysToDateKey(today, 6);
+  // This is only a render/request ownership key. Authorization remains server-side. Including
+  // role/staff/van ensures refreshPrincipal() invalidates data when the same Firebase user is
+  // reassigned or reprovisioned without changing uid.
+  const principalFieldIdentityKey = `${principal.userId}|${principal.role}|${principal.staffId ?? ''}|${principal.vanId ?? ''}`;
 
   const loadSchedule = useCallback(async () => {
     const requestId = ++scheduleRequestRef.current;
-    const requestPrincipalUserId = principal.userId;
+    const requestPrincipalKey = principalFieldIdentityKey;
     // Assigned work is authorization-sensitive. Never keep a previous successful assignment
     // visible while a new identity/date request is pending or after it fails.
     setJobs([]);
@@ -229,7 +233,7 @@ export function TechnicianFieldHome() {
       const response = await getFieldSchedule(today, weekEnd);
       if (requestId !== scheduleRequestRef.current) return;
       setJobs(response.jobs);
-      setJobsOwnerUserId(requestPrincipalUserId);
+      setJobsOwnerUserId(requestPrincipalKey);
     } catch (loadError) {
       if (requestId !== scheduleRequestRef.current) return;
       setJobs([]);
@@ -238,7 +242,7 @@ export function TechnicianFieldHome() {
     } finally {
       if (requestId === scheduleRequestRef.current) setLoading(false);
     }
-  }, [principal.userId, today, weekEnd]);
+  }, [principalFieldIdentityKey, today, weekEnd]);
 
   useEffect(() => {
     void loadSchedule();
@@ -246,7 +250,7 @@ export function TechnicianFieldHome() {
   }, [loadSchedule]);
 
   useEffect(() => {
-    // A principal transition invalidates any selected detail immediately, even if an older
+    // A Field identity transition invalidates any selected detail immediately, even if an older
     // request resolves later. Render guards below prevent even a one-frame stale disclosure.
     detailRequestRef.current += 1;
     setSelectedWorkOrderId(null);
@@ -255,10 +259,10 @@ export function TechnicianFieldHome() {
     setDetailOwnerUserId(null);
     setDetailError(null);
     setDetailLoading(false);
-  }, [principal.userId]);
+  }, [principalFieldIdentityKey]);
 
   useEffect(() => {
-    if (!selectedWorkOrderId || selectedOwnerUserId !== principal.userId) {
+    if (!selectedWorkOrderId || selectedOwnerUserId !== principalFieldIdentityKey) {
       setDetail(null);
       setDetailOwnerUserId(null);
       setDetailError(null);
@@ -266,7 +270,7 @@ export function TechnicianFieldHome() {
       return undefined;
     }
     const requestId = ++detailRequestRef.current;
-    const requestPrincipalUserId = principal.userId;
+    const requestPrincipalKey = principalFieldIdentityKey;
     setDetail(null);
     setDetailOwnerUserId(null);
     setDetailLoading(true);
@@ -275,7 +279,7 @@ export function TechnicianFieldHome() {
       .then((response) => {
         if (requestId !== detailRequestRef.current) return;
         setDetail(response.job);
-        setDetailOwnerUserId(requestPrincipalUserId);
+        setDetailOwnerUserId(requestPrincipalKey);
       })
       .catch((loadError) => {
         if (requestId !== detailRequestRef.current) return;
@@ -287,9 +291,9 @@ export function TechnicianFieldHome() {
         if (requestId === detailRequestRef.current) setDetailLoading(false);
       });
     return () => { detailRequestRef.current += 1; };
-  }, [principal.userId, selectedOwnerUserId, selectedWorkOrderId]);
+  }, [principalFieldIdentityKey, selectedOwnerUserId, selectedWorkOrderId]);
 
-  const authorizedJobs = jobsOwnerUserId === principal.userId ? jobs : [];
+  const authorizedJobs = jobsOwnerUserId === principalFieldIdentityKey ? jobs : [];
   const todayJobs = useMemo(() => authorizedJobs.filter((job) => job.date === today), [authorizedJobs, today]);
   const summary = useMemo(() => {
     const completed = todayJobs.filter((job) => COMPLETED_STATUSES.has(job.status)).length;
@@ -312,7 +316,7 @@ export function TechnicianFieldHome() {
   }, [todayJobs]);
 
   const openJob = (workOrderId: string) => {
-    setSelectedOwnerUserId(principal.userId);
+    setSelectedOwnerUserId(principalFieldIdentityKey);
     setSelectedWorkOrderId(workOrderId);
   };
   const closeJob = () => {
@@ -325,8 +329,8 @@ export function TechnicianFieldHome() {
     setDetailLoading(false);
   };
 
-  if (selectedWorkOrderId && selectedOwnerUserId === principal.userId) {
-    const authorizedDetail = detailOwnerUserId === principal.userId ? detail : null;
+  if (selectedWorkOrderId && selectedOwnerUserId === principalFieldIdentityKey) {
+    const authorizedDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
     return <DetailView job={authorizedDetail} loading={detailLoading} error={detailError} onBack={closeJob} />;
   }
 
