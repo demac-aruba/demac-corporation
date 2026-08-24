@@ -1,5 +1,5 @@
-import { BrowserFieldExecution } from '../../../components/field/browser-field-execution';
+import { TechnicianFieldHome } from '../../../components/field/technician-field-home';
 
 export default function FieldPage() {
-  return <BrowserFieldExecution />;
+  return <TechnicianFieldHome />;
 }
