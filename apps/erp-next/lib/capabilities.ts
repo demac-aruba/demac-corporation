@@ -72,16 +72,25 @@ export const legacyCapabilityToCanonical: Readonly<Record<Capability, CanonicalC
 
 const legacyCapabilities = Object.keys(legacyCapabilityToCanonical) as Capability[];
 
+function legacyCapabilitiesFor(role: UserRole): readonly Capability[] {
+  return legacyCapabilities.filter((capability) => canCanonical(role, legacyCapabilityToCanonical[capability]));
+}
+
 /**
  * @deprecated Read-only projection generated from the canonical policy.
  * It is intentionally not an independent role matrix.
  */
-export const roleCapabilities: Record<UserRole, readonly Capability[]> = Object.fromEntries(
-  (Object.keys(canonicalRoleCapabilities) as UserRole[]).map((role) => [
-    role,
-    legacyCapabilities.filter((capability) => canCanonical(role, legacyCapabilityToCanonical[capability])),
-  ]),
-) as Record<UserRole, readonly Capability[]>;
+export const roleCapabilities: Record<UserRole, readonly Capability[]> = {
+  super_admin: legacyCapabilitiesFor('super_admin'),
+  operations: legacyCapabilitiesFor('operations'),
+  office_operator: legacyCapabilitiesFor('office_operator'),
+  finance: legacyCapabilitiesFor('finance'),
+  warehouse: legacyCapabilitiesFor('warehouse'),
+  sales: legacyCapabilitiesFor('sales'),
+  project_manager: legacyCapabilitiesFor('project_manager'),
+  technician: legacyCapabilitiesFor('technician'),
+  auditor: legacyCapabilitiesFor('auditor'),
+};
 
 export function hasCapability(role: UserRole, capability: Capability) {
   return canCanonical(role, legacyCapabilityToCanonical[capability]);
