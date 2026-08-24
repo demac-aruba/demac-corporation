@@ -126,6 +126,17 @@ test('server role normalization matches ERP canonical vocabulary while preservin
   );
 });
 
+test('missing governed profile role cannot be filled from a token claim', () => {
+  assert.throws(
+    () => normalizeFieldIdentity({
+      uid: 'uid-token-only-role',
+      profile: { active: true, staffId: 'staff-token-only' },
+      decoded: { role: 'technician' },
+    }),
+    /not authorized for Field Operations/,
+  );
+});
+
 test('assigned schedule query returns only the technician van/team work with lead actions', async () => {
   const db = createDb(baseSeed);
   const jobs = await loadAssignedSchedule(db, technician('staff-lead', 'VAN-1'), '2026-08-24', '2026-08-24');
@@ -137,6 +148,27 @@ test('assigned schedule query returns only the technician van/team work with lea
   assert.equal(jobs[0].plannedWork[0].quantity, 1);
   assert.ok(jobs[0].allowedActions.includes('visit.complete'));
   assert.ok(jobs[0].allowedActions.includes('intervention.add'));
+});
+
+test('Asignada is a supported active Field Work Order status', async () => {
+  const seed = structuredClone(baseSeed);
+  seed.workOrders[0].status = 'Asignada';
+  const jobs = await loadAssignedSchedule(createDb(seed), technician('staff-lead', 'VAN-1'), '2026-08-24', '2026-08-24');
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].status, 'Asignada');
+  assert.ok(jobs[0].allowedActions.includes('execute'));
+});
+
+test('unknown Work Order lifecycle is hidden and cannot project execution actions', async () => {
+  const seed = structuredClone(baseSeed);
+  seed.workOrders[0].status = 'Estado futuro';
+  const db = createDb(seed);
+  const jobs = await loadAssignedSchedule(db, technician('staff-lead', 'VAN-1'), '2026-08-24', '2026-08-24');
+  assert.deepEqual(jobs, []);
+  await assert.rejects(
+    () => loadAssignedJob(db, technician('staff-lead', 'VAN-1'), 'WO-1'),
+    /not available/,
+  );
 });
 
 test('completed assigned work remains visible in schedule/detail but is read-only', async () => {
@@ -217,7 +249,7 @@ test('direct staff assignment remains authoritative even outside the dated Van c
   assert.ok(!jobs[0].allowedActions.includes('visit.complete'));
 });
 
-test('profile Van fallback is discoverable but remains read-only without resolved staff membership', async () => {
+test('profile Van fallback is discoverable but remains read-only without resolved staff membership or dated override', async () => {
   const seed = {
     ...baseSeed,
     dailyVanAssignments: baseSeed.dailyVanAssignments.filter((assignment) => assignment.vanId !== 'VAN-1'),
@@ -231,6 +263,27 @@ test('profile Van fallback is discoverable but remains read-only without resolve
   assert.deepEqual(jobs.map((job) => job.workOrderId), ['WO-1']);
   assert.equal(jobs[0].assignmentSource, 'profile_van_fallback');
   assert.deepEqual(jobs[0].allowedActions, ['read']);
+});
+
+test('dated override on the profile Van suppresses stale profile-Van fallback access', async () => {
+  const seed = structuredClone(baseSeed);
+  seed.workOrders[0].technicianIds = [];
+  const jobs = await loadAssignedSchedule(createDb(seed), technician('staff-fallback', 'VAN-1'), '2026-08-24', '2026-08-24');
+  assert.deepEqual(jobs, []);
+});
+
+test('moving a technician by dated assignment suppresses access to their old profile Van', async () => {
+  const seed = structuredClone(baseSeed);
+  seed.dailyVanAssignments = [
+    { id: '2026-08-24-VAN-1', date: '2026-08-24', vanId: 'VAN-1', driverStaffId: 'staff-lead', helperStaffId: 'staff-helper' },
+    { id: '2026-08-24-VAN-2', date: '2026-08-24', vanId: 'VAN-2', driverStaffId: 'staff-moved' },
+  ];
+  seed.workOrders[0].technicianIds = [];
+  seed.workOrders[1].technicianIds = [];
+  const jobs = await loadAssignedSchedule(createDb(seed), technician('staff-moved', 'VAN-1'), '2026-08-24', '2026-08-24');
+  assert.deepEqual(jobs.map((job) => job.workOrderId), ['WO-2']);
+  assert.equal(jobs[0].responsibility, 'lead');
+  assert.equal(jobs[0].assignmentSource, 'daily_assignment');
 });
 
 test('canonical Van aliases resolve historical Work Order and daily assignment identifiers', async () => {
