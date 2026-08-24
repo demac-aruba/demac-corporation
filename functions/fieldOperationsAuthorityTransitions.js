@@ -25,6 +25,14 @@ function validStatus(value) {
   return status;
 }
 
+function validTimestamp(value) {
+  const timestamp = text(value, 80);
+  if (!timestamp || Number.isNaN(Date.parse(timestamp))) {
+    throw fieldError('transition_time_required', 'A valid transition timestamp is required.', 400);
+  }
+  return timestamp;
+}
+
 function assertWorkVisitTransition(currentValue, nextValue) {
   const current = validStatus(currentValue);
   const next = validStatus(nextValue);
@@ -39,8 +47,7 @@ function transitionCanonicalWorkVisit({ visit, to, at }) {
   if (!visit || typeof visit !== 'object') throw fieldError('visit_required', 'A canonical Work Visit is required.', 400);
   const id = text(visit.id, 180);
   if (!id) throw fieldError('visit_required', 'Work Visit id is required.', 400);
-  const occurredAt = text(at, 80);
-  if (!occurredAt) throw fieldError('transition_time_required', 'A transition timestamp is required.', 400);
+  const occurredAt = validTimestamp(at);
 
   const decision = assertWorkVisitTransition(visit.status, to);
   if (decision.noop) return { changed: false, previousStatus: decision.current, next: visit };
@@ -51,8 +58,8 @@ function transitionCanonicalWorkVisit({ visit, to, at }) {
     ...(decision.next === 'en_route' && !visit.departedAt ? { departedAt: occurredAt } : {}),
     ...(decision.next === 'on_site' && !visit.arrivedAt ? { arrivedAt: occurredAt } : {}),
     ...(decision.next === 'in_progress' && !visit.startedAt ? { startedAt: occurredAt } : {}),
-    ...(decision.next === 'ready_for_office_review' ? { submittedAt: occurredAt } : {}),
-    ...(decision.next === 'completed' ? { completedAt: occurredAt } : {}),
+    ...(decision.next === 'ready_for_office_review' && !visit.submittedAt ? { submittedAt: occurredAt } : {}),
+    ...(decision.next === 'completed' && !visit.completedAt ? { completedAt: occurredAt } : {}),
     ...(decision.next === 'requires_return_visit' ? { requiresSecondVisit: true } : {}),
   };
 
