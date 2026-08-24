@@ -403,29 +403,33 @@ async function loadAssignedJob(db, identity, workOrderId) {
   const assignment = assignmentWithContext(identity, order, dateKey, context);
   if (!assignment.assigned) throw fieldError('permission_denied', 'You are not assigned to this Work Order.', 403);
   const maps = await loadRelatedMaps(db, [order]);
-  const equipmentQuery = db.collection('equipmentSystems').where('clientId', '==', text(order.clientId, 180));
-  const equipmentSnapshot = text(order.propertyId, 180)
-    ? await equipmentQuery.where('propertyId', '==', text(order.propertyId, 180)).get()
-    : await equipmentQuery.get();
-  const equipment = snapshotItems(equipmentSnapshot)
-    .filter((item) => item.active !== false)
-    .map((item) => {
-      const technical = equipmentTechnicalProjection(item);
-      return {
-        id: item.id,
-        qrCode: text(item.qrCode, 180),
-        locationLabel: text(item.locationLabel, 240),
-        systemType: text(item.systemType, 120),
-        ...technical,
-        condition: text(item.condition, 120),
-        active: item.active !== false,
-      };
-    });
+  const propertyId = text(order.propertyId, 180);
+  let equipment = [];
+  if (propertyId) {
+    const equipmentSnapshot = await db.collection('equipmentSystems')
+      .where('clientId', '==', text(order.clientId, 180))
+      .where('propertyId', '==', propertyId)
+      .get();
+    equipment = snapshotItems(equipmentSnapshot)
+      .filter((item) => item.active !== false)
+      .map((item) => {
+        const technical = equipmentTechnicalProjection(item);
+        return {
+          id: item.id,
+          qrCode: text(item.qrCode, 180),
+          locationLabel: text(item.locationLabel, 240),
+          systemType: text(item.systemType, 120),
+          ...technical,
+          condition: text(item.condition, 120),
+          active: item.active !== false,
+        };
+      });
+  }
   return {
     ...projectScheduleJob({
       order,
       client: maps.clients.get(text(order.clientId, 180)),
-      property: maps.properties.get(text(order.propertyId, 180)),
+      property: maps.properties.get(propertyId),
       appointment: maps.appointments.get(text(order.appointmentId, 180)),
       identity,
       assignment,
