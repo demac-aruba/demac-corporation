@@ -1,0 +1,284 @@
+const assert = require('node:assert/strict');
+const test = require('node:test');
+const {
+  buildScheduledScopeSnapshot,
+  canonicalStatusFromStorage,
+  createPrepareWorkVisitCommand,
+  projectCanonicalWorkVisit,
+  storageStatusFromWorkOrder,
+  visitDocumentId,
+} = require('./fieldOperationsAuthorityWorkVisit');
+
+function snapshot(id, value) {
+  return { id, exists: value !== undefined, data: () => value };
+}
+
+function createDb(seed = {}) {
+  const collections = new Map(
+    Object.entries(seed).map(([name, values]) => [name, new Map(values.map((item) => [item.id, { ...item }]))]),
+  );
+  const commits = [];
+
+  function ensure(name) {
+    if (!collections.has(name)) collections.set(name, new Map());
+    return collections.get(name);
+  }
+
+  function ref(name, id) {
+    return { collectionName: name, id };
+  }
+
+  const db = {
+    collection(name) {
+      return {
+        doc(id) { return ref(name, id); },
+      };
+    },
+    async runTransaction(callback) {
+      const writes = [];
+      const transaction = {
+        async get(documentRef) {
+          const values = ensure(documentRef.collectionName);
+          return snapshot(documentRef.id, values.get(documentRef.id));
+        },
+        create(documentRef, value) {
+          const values = ensure(documentRef.collectionName);
+          if (values.has(documentRef.id) || writes.some((write) => write.ref.collectionName === documentRef.collectionName && write.ref.id === documentRef.id)) {
+            throw new Error(`Document already exists: ${documentRef.collectionName}/${documentRef.id}`);
+          }
+          writes.push({ type: 'create', ref: documentRef, value: { ...value } });
+        },
+      };
+      const result = await callback(transaction);
+      for (const write of writes) ensure(write.ref.collectionName).set(write.ref.id, { ...write.value });
+      commits.push(writes);
+      return result;
+    },
+  };
+
+  return {
+    db,
+    commits,
+    get(name, id) { return ensure(name).get(id); },
+    all(name) { return [...ensure(name).values()]; },
+  };
+}
+
+const baseSeed = {
+  workOrders: [{
+    id: 'WO-1',
+    appointmentId: 'APT-1',
+    clientId: 'CLIENT-1',
+    propertyId: 'PROPERTY-1',
+    status: 'Confirmada',
+    date: '2026-08-24',
+    technicianIds: ['staff-tech'],
+    airConditionerCount: 0,
+    customerFacingDescription: 'Standard Service; quantity to be confirmed on site',
+    technicianInstructions: 'Confirm actual equipment before work.',
+    appointmentWorkItems: [{ id: 'planned-1', serviceId: 'service-standard', label: 'Standard Service', quantity: 1, durationMinutes: 60 }],
+  }],
+  appointments: [{
+    id: 'APT-1', clientId: 'CLIENT-1', propertyId: 'PROPERTY-1',
+    workLines: [{ id: 'planned-1', serviceId: 'service-standard', label: 'Standard Service', quantity: 1 }],
+  }],
+  clients: [{ id: 'CLIENT-1', name: 'Customer' }],
+  properties: [{ id: 'PROPERTY-1', clientId: 'CLIENT-1', address: 'Santa Cruz 1' }],
+  workVisits: [],
+};
+
+function identity(staffId = 'staff-tech') {
+  return { uid: `uid-${staffId}`, staffId, name: staffId, email: `${staffId}@demac.invalid`, role: 'technician', operations: false };
+}
+
+function assignment(overrides = {}) {
+  return {
+    assigned: true,
+    responsibility: 'technician',
+    source: 'direct_staff',
+    readOnly: false,
+    leadTechnicianStaffId: 'staff-lead',
+    participatingStaffIds: ['staff-lead', 'staff-tech'],
+    ...overrides,
+  };
+}
+
+function commandFixture(options = {}) {
+  const store = createDb(options.seed || baseSeed);
+  const auditEvents = [];
+  const prepare = createPrepareWorkVisitCommand({
+    db: store.db,
+    now: () => '2026-08-24T18:30:00.000-04:00',
+    resolveAssignment: options.resolveAssignment || (async () => assignment()),
+    appendAudit: options.appendAudit || (async ({ event }) => { auditEvents.push(event); }),
+  });
+  return { store, auditEvents, prepare };
+}
+
+test('status compatibility maps only one mutable storage status into canonical Field status', () => {
+  assert.equal(storageStatusFromWorkOrder({ status: 'Confirmada' }), 'not_started');
+  assert.equal(storageStatusFromWorkOrder({ status: 'En camino' }), 'on_the_way');
+  assert.equal(canonicalStatusFromStorage('not_started'), 'scheduled');
+  assert.equal(canonicalStatusFromStorage('on_the_way'), 'en_route');
+});
+
+test('planned quantity zero stays zero instead of inventing one actual or expected asset', () => {
+  const order = baseSeed.workOrders[0];
+  const appointment = baseSeed.appointments[0];
+  const snapshotValue = buildScheduledScopeSnapshot(order, appointment, '2026-08-24T18:30:00.000-04:00');
+  assert.equal(snapshotValue.estimatedUnitCount, 0);
+  assert.equal(snapshotValue.workLines.length, 1);
+  assert.equal(snapshotValue.workLines[0].quantity, 1);
+});
+
+test('prepare WorkVisit is transaction-backed, audited, Legacy-compatible and does not mutate planned authorities', async () => {
+  const { store, auditEvents, prepare } = commandFixture();
+  const beforeOrder = structuredClone(store.get('workOrders', 'WO-1'));
+  const beforeAppointment = structuredClone(store.get('appointments', 'APT-1'));
+
+  const result = await prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-WO-1-001' });
+
+  assert.equal(result.success, true);
+  assert.equal(result.replayed, false);
+  assert.equal(result.visit.status, 'scheduled');
+  assert.equal(result.visit.scheduledScopeSnapshot.estimatedUnitCount, 0);
+  assert.equal(result.visit.workOrderId, 'WO-1');
+  assert.equal(result.visit.customerId, 'CLIENT-1');
+  assert.ok(result.allowedActions.includes('execute'));
+  assert.equal(auditEvents.length, 1);
+  assert.equal(auditEvents[0].type, 'work_visit_prepared');
+  assert.equal(auditEvents[0].entityId, visitDocumentId('WO-1'));
+
+  const stored = store.get('workVisits', visitDocumentId('WO-1'));
+  assert.equal(stored.status, 'not_started');
+  assert.equal(stored.clientId, 'CLIENT-1');
+  assert.equal(stored.fieldAuthorityVersion, 1);
+  assert.equal(stored.scheduledScopeSnapshot.appointmentId, 'APT-1');
+  assert.equal(stored.scheduledScopeSnapshot.problemDescription, stored.scheduledScopeSnapshot.customerFacingDescription);
+  assert.deepEqual(store.get('workOrders', 'WO-1'), beforeOrder);
+  assert.deepEqual(store.get('appointments', 'APT-1'), beforeAppointment);
+});
+
+test('replaying preparation reuses deterministic WorkVisit and does not append a duplicate event', async () => {
+  const { store, auditEvents, prepare } = commandFixture();
+  const first = await prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-WO-1-001' });
+  const second = await prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-WO-1-001' });
+
+  assert.equal(first.replayed, false);
+  assert.equal(second.replayed, true);
+  assert.equal(second.source, 'field_authority');
+  assert.equal(first.visit.id, second.visit.id);
+  assert.equal(store.all('workVisits').length, 1);
+  assert.equal(auditEvents.length, 1);
+});
+
+test('compatible pre-existing Legacy WorkVisit is projected without pretending Field Authority created it', async () => {
+  const legacyVisit = {
+    id: visitDocumentId('WO-1'),
+    workOrderId: 'WO-1',
+    clientId: 'CLIENT-1',
+    propertyId: 'PROPERTY-1',
+    status: 'not_started',
+    participatingStaffIds: ['staff-tech'],
+    requiresSecondVisit: false,
+    scheduledScopeSnapshot: { estimatedUnitCount: 0, problemDescription: 'Legacy snapshot' },
+    createdAt: '2026-08-24T10:00:00Z', createdByUserId: 'legacy-user',
+    updatedAt: '2026-08-24T10:00:00Z', updatedByUserId: 'legacy-user', version: 1,
+  };
+  const seed = { ...baseSeed, workVisits: [legacyVisit] };
+  const { auditEvents, prepare } = commandFixture({ seed });
+  const result = await prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-WO-1-legacy' });
+
+  assert.equal(result.replayed, true);
+  assert.equal(result.source, 'legacy_existing');
+  assert.equal(result.visit.status, 'scheduled');
+  assert.equal(auditEvents.length, 0);
+});
+
+test('existing visit with conflicting identity fails closed', async () => {
+  const conflicting = {
+    id: visitDocumentId('WO-1'), workOrderId: 'WO-1', clientId: 'OTHER', propertyId: 'PROPERTY-1', status: 'not_started',
+  };
+  const { prepare } = commandFixture({ seed: { ...baseSeed, workVisits: [conflicting] } });
+  await assert.rejects(
+    () => prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-WO-1-conflict' }),
+    /different Customer/,
+  );
+});
+
+test('helper cannot prepare a WorkVisit', async () => {
+  const { store, prepare } = commandFixture({
+    resolveAssignment: async () => assignment({ responsibility: 'helper', source: 'daily_assignment' }),
+  });
+  await assert.rejects(
+    () => prepare({ identity: identity('staff-helper'), workOrderId: 'WO-1', requestId: 'prepare-helper-001' }),
+    /cannot prepare a Work Visit/,
+  );
+  assert.equal(store.all('workVisits').length, 0);
+});
+
+test('van-only compatibility assignment remains read-only for preparation', async () => {
+  const { store, prepare } = commandFixture({
+    resolveAssignment: async () => assignment({ responsibility: 'technician', source: 'profile_van_fallback', readOnly: true }),
+  });
+  await assert.rejects(
+    () => prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-van-only' }),
+    /cannot prepare a Work Visit/,
+  );
+  assert.equal(store.all('workVisits').length, 0);
+});
+
+test('unassigned technician cannot prepare another team WorkVisit', async () => {
+  const { store, prepare } = commandFixture({
+    resolveAssignment: async () => assignment({ assigned: false, responsibility: null, source: 'unassigned', readOnly: true }),
+  });
+  await assert.rejects(
+    () => prepare({ identity: identity('staff-other'), workOrderId: 'WO-1', requestId: 'prepare-other-team' }),
+    /not assigned/,
+  );
+  assert.equal(store.all('workVisits').length, 0);
+});
+
+test('CRM relationship mismatch aborts preparation before any write or audit', async () => {
+  const seed = structuredClone(baseSeed);
+  seed.properties[0].clientId = 'OTHER-CLIENT';
+  const { store, auditEvents, prepare } = commandFixture({ seed });
+  await assert.rejects(
+    () => prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-bad-property' }),
+    /Property does not belong/,
+  );
+  assert.equal(store.all('workVisits').length, 0);
+  assert.equal(auditEvents.length, 0);
+});
+
+test('audit failure aborts the transaction and leaves no canonical WorkVisit behind', async () => {
+  const { store, prepare } = commandFixture({
+    appendAudit: async () => { throw new Error('audit unavailable'); },
+  });
+  await assert.rejects(
+    () => prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-audit-fail' }),
+    /audit unavailable/,
+  );
+  assert.equal(store.all('workVisits').length, 0);
+});
+
+test('command cannot be constructed without an audit writer', () => {
+  const { db } = createDb(baseSeed);
+  assert.throws(
+    () => createPrepareWorkVisitCommand({ db, resolveAssignment: async () => assignment() }),
+    /appendAudit is required/,
+  );
+});
+
+test('canonical projection keeps historical Legacy aliases out of the domain surface', () => {
+  const projected = projectCanonicalWorkVisit({
+    id: 'visit-WO-1', workOrderId: 'WO-1', appointmentId: 'APT-1', clientId: 'CLIENT-1', propertyId: 'PROPERTY-1',
+    status: 'on_the_way', participatingStaffIds: [], requiresSecondVisit: false,
+    scheduledScopeSnapshot: { appointmentId: 'APT-1', capturedAt: '2026-08-24T10:00:00Z', estimatedUnitCount: 0, workLines: [] },
+    createdAt: '2026-08-24T10:00:00Z', createdByUserId: 'u1', updatedAt: '2026-08-24T10:00:00Z', updatedByUserId: 'u1', version: 1,
+  });
+  assert.equal(projected.status, 'en_route');
+  assert.equal(projected.customerId, 'CLIENT-1');
+  assert.equal('clientId' in projected, false);
+  assert.equal('not_started' in projected, false);
+});
