@@ -1,7 +1,36 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { profileVanFallbackAllowed } = require('./fieldOperationsAuthorityCore');
+const { loadAssignedJob, profileVanFallbackAllowed } = require('./fieldOperationsAuthorityCore');
 const { projectCanonicalWorkVisit } = require('./fieldOperationsAuthorityWorkVisit');
+
+function doc(id, value) {
+  return { id, exists: value !== undefined, data: () => value };
+}
+
+function createReadDb(seed) {
+  const collections = new Map(Object.entries(seed).map(([name, values]) => [name, new Map(values.map((item) => [item.id, item]))]));
+  function collection(name) {
+    const values = collections.get(name) || new Map();
+    const query = (filters = []) => ({
+      where(field, op, expected) {
+        assert.equal(op, '==');
+        return query([...filters, { field, expected }]);
+      },
+      async get() {
+        return {
+          docs: [...values.entries()]
+            .filter(([, value]) => filters.every((filter) => value?.[filter.field] === filter.expected))
+            .map(([id, value]) => doc(id, value)),
+        };
+      },
+      doc(id) {
+        return { async get() { return doc(id, values.get(id)); } };
+      },
+    });
+    return query();
+  }
+  return { collection };
+}
 
 test('any dated staff assignment suppresses stale profile-Van fallback even when its Van id is unresolved', () => {
   const identity = { staffId: 'staff-moved', vanId: 'VAN-1' };
@@ -45,4 +74,40 @@ test('Legacy WorkVisit projection may fill validated structural ids without inve
   assert.equal(projected.scheduledScopeSnapshot.appointmentId, 'APT-1');
   assert.deepEqual(projected.scheduledScopeSnapshot.workLines, []);
   assert.equal(projected.scheduledScopeSnapshot.customerFacingDescription, 'Legacy scope text');
+});
+
+test('missing Work Order property never broadens known-equipment read to every property for the customer', async () => {
+  const db = createReadDb({
+    dailyVanAssignments: [],
+    vans: [],
+    workOrders: [{
+      id: 'WO-NO-PROPERTY',
+      appointmentId: 'APT-1',
+      clientId: 'CLIENT-1',
+      propertyId: '',
+      date: '2026-08-24',
+      time: '08:30',
+      status: 'Confirmada',
+      technicianIds: ['staff-tech'],
+      vanId: '',
+      appointmentWorkItems: [],
+    }],
+    clients: [{ id: 'CLIENT-1', name: 'Multi-property customer' }],
+    properties: [],
+    appointments: [{ id: 'APT-1', workLines: [] }],
+    equipmentSystems: [
+      { id: 'AC-A', clientId: 'CLIENT-1', propertyId: 'PROPERTY-A', active: true },
+      { id: 'AC-B', clientId: 'CLIENT-1', propertyId: 'PROPERTY-B', active: true },
+    ],
+  });
+  const identity = {
+    uid: 'uid-tech',
+    staffId: 'staff-tech',
+    vanId: '',
+    role: 'technician',
+    operations: false,
+  };
+  const job = await loadAssignedJob(db, identity, 'WO-NO-PROPERTY');
+  assert.equal(job.propertyId, '');
+  assert.deepEqual(job.knownEquipment, []);
 });
