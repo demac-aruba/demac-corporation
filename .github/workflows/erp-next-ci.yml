@@ -59,5 +59,7 @@ jobs:
         run: npm run test:employee-schedule
       - name: Field operations domain acceptance
         run: npm run test:field-domain
+      - name: Field assignment security acceptance
+        run: npm run test:field-security
       - name: Build
         run: npm run build
