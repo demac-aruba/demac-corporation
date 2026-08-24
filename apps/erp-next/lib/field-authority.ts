@@ -2,6 +2,7 @@ import type { FieldAllowedAction } from './field-authorization';
 import { firebaseClientConfig } from './firebase/client-config';
 import { requireFirebaseWebSession } from './firebase/session';
 
+export { fieldActionAllowed } from './field-authorization';
 export type { FieldAllowedAction } from './field-authorization';
 
 export type FieldResponsibility = 'lead' | 'technician' | 'helper' | 'office';
@@ -104,10 +105,6 @@ async function callFieldAuthority<T>(action: string, data: Record<string, unknow
   } finally {
     window.clearTimeout(timer);
   }
-}
-
-export function fieldActionAllowed(job: Pick<FieldScheduleJob, 'allowedActions'>, action: FieldAllowedAction) {
-  return job.allowedActions.includes(action);
 }
 
 export async function getFieldSchedule(startDate: string, endDate = startDate) {
