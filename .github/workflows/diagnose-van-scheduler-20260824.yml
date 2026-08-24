@@ -1,0 +1,120 @@
+name: Diagnose Van Scheduler 2026-08-24
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/diagnose-van-scheduler-20260824.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Authenticate Firebase production service account
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Inspect Cloud Scheduler and deployed function
+        shell: bash
+        run: |
+          set -euo pipefail
+          job="$(gcloud scheduler jobs list --project=demac-corporation --location=us-central1 --filter='name:sendDailyTechnicianSchedules' --format='value(name)' | head -n 1)"
+          if [ -z "$job" ]; then
+            echo 'SCHEDULER_JOB_NOT_FOUND'
+          else
+            echo 'SCHEDULER_JOB'
+            gcloud scheduler jobs describe "$job" --project=demac-corporation --location=us-central1 --format='yaml(name,state,schedule,timeZone,lastAttemptTime,status)'
+          fi
+          echo 'FUNCTION'
+          gcloud functions describe sendDailyTechnicianSchedules --project=demac-corporation --gen2 --region=us-central1 --format='yaml(name,state,updateTime,buildConfig.runtime)'
+
+      - name: Inspect 2026-08-24 batch and queue state
+        shell: bash
+        env:
+          GCLOUD_PROJECT: demac-corporation
+          GOOGLE_CLOUD_PROJECT: demac-corporation
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const admin = require('./functions/node_modules/firebase-admin');
+          const { canonicalizeVanCatalog } = require('./functions/bookingVanIdentity');
+          if (!admin.apps.length) admin.initializeApp();
+          const db = admin.firestore();
+          const dateKey = '2026-08-24';
+          const inactive = new Set(['Solicitud recibida','Reserva temporal','Cancelada','Reprogramada','Completada','Facturada','Pagada']);
+          const safeTs = (value) => value && typeof value.toDate === 'function' ? value.toDate().toISOString() : value ?? null;
+          (async () => {
+            const [batchSnap, woSnap, vanSnap] = await Promise.all([
+              db.collection('technicianDailyScheduleBatches').doc(dateKey).get(),
+              db.collection('workOrders').where('date', '==', dateKey).get(),
+              db.collection('vans').get(),
+            ]);
+            const workOrders = woSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+            const activeWorkOrders = workOrders.filter(w => !inactive.has(String(w.status || '').trim()));
+            const catalog = canonicalizeVanCatalog(vanSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+            let queueDocs = [];
+            try {
+              const q = await db.collection('whatsappOutboundQueue').where('metadata.scheduleDate', '==', dateKey).get();
+              queueDocs = q.docs.map(d => ({ id: d.id, ...d.data() }));
+            } catch (error) {
+              console.log('QUEUE_QUERY_ERROR', error.message);
+            }
+            const queueByStatus = {};
+            const queueByType = {};
+            for (const item of queueDocs) {
+              const status = String(item.status || 'unknown');
+              const type = String(item.metadata?.notificationType || 'unknown');
+              queueByStatus[status] = (queueByStatus[status] || 0) + 1;
+              queueByType[type] = (queueByType[type] || 0) + 1;
+            }
+            const batch = batchSnap.exists ? batchSnap.data() : null;
+            console.log('PRODUCTION_DIAGNOSTIC', JSON.stringify({
+              dateKey,
+              batch: batch ? {
+                exists: true,
+                status: batch.status || null,
+                attemptCount: batch.attemptCount || 0,
+                vanCount: batch.vanCount ?? null,
+                workOrderCount: batch.workOrderCount ?? null,
+                messageCount: batch.messageCount ?? null,
+                queuedCount: batch.queuedCount ?? null,
+                idempotentCount: batch.idempotentCount ?? null,
+                failedCount: batch.failedCount ?? null,
+                fatalError: batch.fatalError || null,
+                failures: Array.isArray(batch.failures) ? batch.failures.map(f => ({ vanId: f.vanId, workOrderId: f.workOrderId, reason: f.reason })) : [],
+                startedAt: safeTs(batch.startedAt),
+                lastAttemptAt: safeTs(batch.lastAttemptAt),
+                completedAt: safeTs(batch.completedAt),
+                failedAt: safeTs(batch.failedAt),
+              } : { exists: false },
+              workOrders: { total: workOrders.length, active: activeWorkOrders.length },
+              vans: catalog.vans.map(v => ({
+                vanId: v.id,
+                deliveryEnabled: v.scheduleDeliveryEnabled !== false,
+                hasGroupJid: Boolean(String(v.whatsappScheduleGroupJid || '').trim()),
+                alignment: v.whatsappScheduleGroupAlignment || null,
+                alignmentReason: v.whatsappScheduleGroupAlignmentReason || null,
+              })),
+              queue: { count: queueDocs.length, byStatus: queueByStatus, byType: queueByType },
+            }, null, 2));
+          })().catch((error) => { console.error(error); process.exit(1); });
+          NODE
