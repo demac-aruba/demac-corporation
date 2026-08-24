@@ -1,5 +1,5 @@
 name: Audit Van Schedule Production 2026-08-24
-
+# Read-only: this workflow never sends WhatsApp messages or mutates production data.
 on:
   pull_request:
     paths:
