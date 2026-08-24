@@ -57,5 +57,7 @@ jobs:
         run: npm run test:live-scheduling
       - name: Employee schedule architecture acceptance
         run: npm run test:employee-schedule
+      - name: Field operations domain acceptance
+        run: npm run test:field-domain
       - name: Build
         run: npm run build
