@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/components/auth/auth-provider';
 import { addDaysToDateKey, arubaDateKey, arubaTimeKey, formatArubaDateKey } from '@/lib/aruba-date';
 import {
@@ -206,42 +206,73 @@ export function TechnicianFieldHome() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const scheduleRequestRef = useRef(0);
+  const detailRequestRef = useRef(0);
 
   const today = arubaDateKey();
   const tomorrow = addDaysToDateKey(today, 1);
   const weekEnd = addDaysToDateKey(today, 6);
 
   const loadSchedule = useCallback(async () => {
+    const requestId = ++scheduleRequestRef.current;
+    // Assigned work is authorization-sensitive. Never keep a previous successful assignment
+    // visible while a new identity/date request is pending or after it fails.
+    setJobs([]);
     setLoading(true);
     setScheduleError(null);
     try {
       const response = await getFieldSchedule(today, weekEnd);
+      if (requestId !== scheduleRequestRef.current) return;
       setJobs(response.jobs);
     } catch (loadError) {
+      if (requestId !== scheduleRequestRef.current) return;
+      setJobs([]);
       setScheduleError(loadError instanceof Error ? loadError.message : 'No se pudo cargar el itinerario del técnico.');
     } finally {
-      setLoading(false);
+      if (requestId === scheduleRequestRef.current) setLoading(false);
     }
-  }, [today, weekEnd]);
+  }, [principal.userId, today, weekEnd]);
 
-  useEffect(() => { void loadSchedule(); }, [loadSchedule]);
+  useEffect(() => {
+    void loadSchedule();
+    return () => { scheduleRequestRef.current += 1; };
+  }, [loadSchedule]);
+
+  useEffect(() => {
+    // A principal transition invalidates any selected detail immediately, even if an older
+    // request resolves later. AuthGate controls route access; this prevents stale customer data.
+    detailRequestRef.current += 1;
+    setSelectedWorkOrderId(null);
+    setDetail(null);
+    setDetailError(null);
+    setDetailLoading(false);
+  }, [principal.userId]);
 
   useEffect(() => {
     if (!selectedWorkOrderId) {
       setDetail(null);
       setDetailError(null);
+      setDetailLoading(false);
       return undefined;
     }
-    let active = true;
+    const requestId = ++detailRequestRef.current;
     setDetail(null);
     setDetailLoading(true);
     setDetailError(null);
     void getFieldJob(selectedWorkOrderId)
-      .then((response) => { if (active) setDetail(response.job); })
-      .catch((loadError) => { if (active) setDetailError(loadError instanceof Error ? loadError.message : 'No se pudo abrir el trabajo.'); })
-      .finally(() => { if (active) setDetailLoading(false); });
-    return () => { active = false; };
-  }, [selectedWorkOrderId]);
+      .then((response) => {
+        if (requestId === detailRequestRef.current) setDetail(response.job);
+      })
+      .catch((loadError) => {
+        if (requestId !== detailRequestRef.current) return;
+        setDetail(null);
+        setDetailError(loadError instanceof Error ? loadError.message : 'No se pudo abrir el trabajo.');
+      })
+      .finally(() => {
+        if (requestId === detailRequestRef.current) setDetailLoading(false);
+      });
+    return () => { detailRequestRef.current += 1; };
+  }, [principal.userId, selectedWorkOrderId]);
 
   const todayJobs = useMemo(() => jobs.filter((job) => job.date === today), [jobs, today]);
   const summary = useMemo(() => {
