@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { loadAssignedJob, profileVanFallbackAllowed } = require('./fieldOperationsAuthorityCore');
+const { loadAssignedJob, profileVanFallbackAllowed, projectScheduleJob } = require('./fieldOperationsAuthorityCore');
 const { projectCanonicalWorkVisit } = require('./fieldOperationsAuthorityWorkVisit');
 
 function doc(id, value) {
@@ -110,4 +110,32 @@ test('missing Work Order property never broadens known-equipment read to every p
   const job = await loadAssignedJob(db, identity, 'WO-NO-PROPERTY');
   assert.equal(job.propertyId, '');
   assert.deepEqual(job.knownEquipment, []);
+});
+
+test('missing or blank coordinates remain null instead of becoming the real coordinate 0,0', () => {
+  const identity = { operations: false };
+  const assignment = {
+    responsibility: 'technician',
+    source: 'direct_staff',
+    assigned: true,
+    readOnly: false,
+    context: { vanAliases: new Map() },
+  };
+  const base = {
+    order: {
+      id: 'WO-COORD', appointmentId: 'APT-1', clientId: 'CLIENT-1', propertyId: 'PROPERTY-1', date: '2026-08-24', time: '08:30',
+      status: 'Confirmada', technicianIds: ['staff-tech'], vanId: '', appointmentWorkItems: [],
+    },
+    client: { id: 'CLIENT-1', name: 'Customer' },
+    appointment: { id: 'APT-1', workLines: [] },
+    identity,
+    assignment,
+  };
+  const missing = projectScheduleJob({ ...base, property: { id: 'PROPERTY-1', latitude: null, longitude: '' } });
+  assert.equal(missing.latitude, null);
+  assert.equal(missing.longitude, null);
+
+  const valid = projectScheduleJob({ ...base, property: { id: 'PROPERTY-1', latitude: '12.51', longitude: '-70.03' } });
+  assert.equal(valid.latitude, 12.51);
+  assert.equal(valid.longitude, -70.03);
 });
