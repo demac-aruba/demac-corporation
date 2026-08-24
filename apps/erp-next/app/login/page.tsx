@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/auth-provider';
+import { defaultAuthenticatedRoute } from '@/lib/role-routing';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -13,8 +14,10 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (mode === 'firebase' && status === 'ready' && principal.active) router.replace('/dashboard');
-  }, [mode, principal.active, router, status]);
+    if (mode === 'firebase' && status === 'ready' && principal.active) {
+      router.replace(defaultAuthenticatedRoute(principal.role));
+    }
+  }, [mode, principal.active, principal.role, router, status]);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -23,7 +26,6 @@ export default function LoginPage() {
     setError(null);
     try {
       await signIn(email, password);
-      router.replace('/dashboard');
     } catch (signInError) {
       setError(signInError instanceof Error ? signInError.message : 'Sign-in failed.');
     } finally {
@@ -52,7 +54,7 @@ export default function LoginPage() {
 
           <div className={`auth-config-status ${firebaseConfigured ? 'ready' : ''}`}><i /><div><strong>{firebaseConfigured ? 'Secure Firebase sign-in is active' : 'Secure sign-in is unavailable'}</strong><span>{firebaseConfigured ? 'Your password is verified directly by Firebase Authentication and is never stored in ERP Next code.' : 'ERP access is locked because the Firebase authentication configuration is not available in this deployment.'}</span></div></div>
 
-          {mode === 'firebase' ? <div className="auth-config-status ready"><i /><div><strong>Authenticated session detected</strong><span>{principal.displayName} · redirecting to ERP…</span></div></div> : null}
+          {mode === 'firebase' ? <div className="auth-config-status ready"><i /><div><strong>Authenticated session detected</strong><span>{principal.displayName} · opening your authorized ERP workspace…</span></div></div> : null}
 
           <form className="auth-form" onSubmit={submit}>
             <label>Email<input type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} disabled={!firebaseConfigured || busy} placeholder="Authorized DEMAC email" /></label>
