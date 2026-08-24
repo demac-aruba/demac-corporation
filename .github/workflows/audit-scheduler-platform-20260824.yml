@@ -1,0 +1,40 @@
+name: Audit Scheduler Platform 2026-08-24
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/audit-scheduler-platform-20260824.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Authenticate Firebase production service account
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Check Cloud Scheduler API
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -u
+          gcloud services list --enabled --project=demac-corporation \
+            --filter='config.name=cloudscheduler.googleapis.com' \
+            --format='table(config.name,state)' 2>&1 || true
+      - name: Check Cloud Scheduler service agent role
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -u
+          gcloud projects get-iam-policy demac-corporation \
+            --flatten='bindings[].members' \
+            --filter='bindings.members:service-1053571783393@gcp-sa-cloudscheduler.iam.gserviceaccount.com' \
+            --format='table(bindings.role,bindings.members)' 2>&1 || true
