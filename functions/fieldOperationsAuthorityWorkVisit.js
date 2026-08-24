@@ -1,0 +1,329 @@
+const crypto = require('node:crypto');
+const {
+  activeWorkOrder,
+  allowedActionsForAssignment,
+  fieldError,
+  plannedWorkItems,
+} = require('./fieldOperationsAuthorityCore');
+
+const FIELD_WORK_VISIT_STORAGE_VERSION = 1;
+
+const WORK_ORDER_TO_VISIT_STATUS = Object.freeze({
+  'En camino': 'on_the_way',
+  'En el sitio': 'on_site',
+  'En proceso': 'in_progress',
+  Pendiente: 'pending',
+});
+
+const STORAGE_TO_CANONICAL_STATUS = Object.freeze({
+  not_started: 'scheduled',
+  on_the_way: 'en_route',
+  on_site: 'on_site',
+  in_progress: 'in_progress',
+  pending: 'pending',
+  ready_for_office_review: 'ready_for_office_review',
+  completed: 'completed',
+  cancelled: 'cancelled',
+});
+
+function text(value, limit = 1000) {
+  return String(value ?? '').trim().slice(0, limit);
+}
+
+function unique(values) {
+  return [...new Set(values.map((value) => text(value, 180)).filter(Boolean))];
+}
+
+function stableRequestId(value) {
+  const result = text(value, 240);
+  if (result.length < 8) {
+    throw fieldError('invalid_request', 'A stable requestId of at least 8 characters is required.', 400, { field: 'requestId' });
+  }
+  return result;
+}
+
+function deterministicId(prefix, value) {
+  return `${prefix}-${crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, 24)}`;
+}
+
+function visitDocumentId(workOrderId) {
+  const safe = text(workOrderId, 180)
+    .replace(/[^a-zA-Z0-9_-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 120);
+  if (!safe) throw fieldError('work_order_required', 'A Work Order id is required.');
+  return `visit-${safe}`;
+}
+
+function storageStatusFromWorkOrder(order) {
+  return WORK_ORDER_TO_VISIT_STATUS[text(order?.status, 80)] || 'not_started';
+}
+
+function canonicalStatusFromStorage(value) {
+  return STORAGE_TO_CANONICAL_STATUS[text(value, 80)] || 'scheduled';
+}
+
+function nonNegativeQuantity(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
+}
+
+function buildScheduledScopeSnapshot(order, appointment, capturedAt) {
+  const workLines = plannedWorkItems(order, appointment);
+  const customerFacingDescription = text(order.customerFacingDescription || order.problem, 1500);
+  const technicianInstructions = text(order.technicianInstructions || order.officeNotes, 1500);
+  const primary = workLines[0] || {};
+  return {
+    appointmentId: text(order.appointmentId, 180),
+    capturedAt,
+    estimatedUnitCount: nonNegativeQuantity(order.airConditionerCount),
+    workLines,
+    customerFacingDescription,
+    technicianInstructions,
+    // Legacy compatibility aliases are derived from the same immutable snapshot.
+    serviceId: text(order.serviceId || primary.serviceId, 180),
+    serviceName: text(order.serviceName || primary.label, 240),
+    problemDescription: customerFacingDescription,
+  };
+}
+
+function actorFields(identity, now) {
+  return {
+    createdAt: now,
+    createdByUserId: text(identity.uid, 180),
+    createdByStaffId: text(identity.staffId, 180) || undefined,
+    createdByName: text(identity.name, 180) || text(identity.email, 180) || text(identity.uid, 180),
+    updatedAt: now,
+    updatedByUserId: text(identity.uid, 180),
+    updatedByStaffId: text(identity.staffId, 180) || undefined,
+    updatedByName: text(identity.name, 180) || text(identity.email, 180) || text(identity.uid, 180),
+    version: 1,
+  };
+}
+
+function buildLegacyCompatibleWorkVisit({ order, appointment, identity, assignment, now }) {
+  const workOrderId = text(order.id, 180);
+  const appointmentId = text(order.appointmentId, 180);
+  const clientId = text(order.clientId, 180);
+  const propertyId = text(order.propertyId, 180);
+  if (!workOrderId) throw fieldError('work_order_required', 'A Work Order id is required.');
+  if (!appointmentId) throw fieldError('appointment_required', 'The Work Order is missing its Appointment reference.', 409);
+  if (!clientId) throw fieldError('customer_required', 'The Work Order is missing its Customer reference.', 409);
+  if (!propertyId) throw fieldError('property_required', 'The Work Order is missing its Property reference.', 409);
+
+  const participatingStaffIds = unique([
+    ...(Array.isArray(order.technicianIds) ? order.technicianIds : []),
+    identity.staffId,
+    assignment?.leadTechnicianStaffId,
+    ...(Array.isArray(assignment?.participatingStaffIds) ? assignment.participatingStaffIds : []),
+  ]);
+
+  return {
+    id: visitDocumentId(workOrderId),
+    fieldAuthorityVersion: FIELD_WORK_VISIT_STORAGE_VERSION,
+    workOrderId,
+    appointmentId,
+    clientId,
+    propertyId,
+    scheduledScopeSnapshot: buildScheduledScopeSnapshot(order, appointment, now),
+    status: storageStatusFromWorkOrder(order),
+    leadTechnicianStaffId: text(assignment?.leadTechnicianStaffId, 180) || undefined,
+    participatingStaffIds,
+    requiresSecondVisit: false,
+    ...actorFields(identity, now),
+  };
+}
+
+function projectCanonicalWorkVisit(record) {
+  const snapshot = record?.scheduledScopeSnapshot || {};
+  return {
+    id: text(record?.id, 180),
+    appointmentId: text(record?.appointmentId || snapshot.appointmentId, 180),
+    workOrderId: text(record?.workOrderId, 180),
+    customerId: text(record?.clientId || record?.customerId, 180),
+    propertyId: text(record?.propertyId, 180),
+    scheduledScopeSnapshot: {
+      appointmentId: text(snapshot.appointmentId || record?.appointmentId, 180),
+      capturedAt: text(snapshot.capturedAt || record?.createdAt, 80),
+      estimatedUnitCount: nonNegativeQuantity(snapshot.estimatedUnitCount),
+      workLines: Array.isArray(snapshot.workLines) ? snapshot.workLines : [],
+      customerFacingDescription: text(snapshot.customerFacingDescription || snapshot.problemDescription, 1500),
+      technicianInstructions: text(snapshot.technicianInstructions, 1500),
+    },
+    status: canonicalStatusFromStorage(record?.status),
+    leadTechnicianStaffId: text(record?.leadTechnicianStaffId, 180) || undefined,
+    participatingStaffIds: unique(Array.isArray(record?.participatingStaffIds) ? record.participatingStaffIds : []),
+    departedAt: text(record?.departedAt, 80) || undefined,
+    arrivedAt: text(record?.arrivedAt, 80) || undefined,
+    startedAt: text(record?.startedAt, 80) || undefined,
+    submittedAt: text(record?.submittedAt, 80) || undefined,
+    completedAt: text(record?.completedAt, 80) || undefined,
+    requiresSecondVisit: record?.requiresSecondVisit === true,
+    secondVisitReason: text(record?.secondVisitReason, 1000) || undefined,
+    previousVisitId: text(record?.previousVisitId, 180) || undefined,
+    createdAt: text(record?.createdAt, 80),
+    createdBy: text(record?.createdByUserId || record?.createdBy, 180),
+    updatedAt: text(record?.updatedAt, 80),
+    updatedBy: text(record?.updatedByUserId || record?.updatedBy, 180),
+    version: Math.max(1, Number(record?.version) || 1),
+  };
+}
+
+function assertReferenceMatches(record, expectedId, fields, code, label) {
+  for (const field of fields) {
+    const actual = text(record?.[field], 180);
+    if (actual && actual !== expectedId) {
+      throw fieldError(code, `${label} does not belong to this Work Order.`, 409, { field, expectedId, actual });
+    }
+  }
+}
+
+function assertExistingVisitCompatible(existing, order) {
+  if (text(existing.workOrderId, 180) !== text(order.id, 180)) {
+    throw fieldError('visit_identity_conflict', 'The existing Work Visit belongs to a different Work Order.', 409);
+  }
+  if (text(existing.clientId || existing.customerId, 180) !== text(order.clientId, 180)) {
+    throw fieldError('visit_identity_conflict', 'The existing Work Visit belongs to a different Customer.', 409);
+  }
+  if (text(existing.propertyId, 180) !== text(order.propertyId, 180)) {
+    throw fieldError('visit_identity_conflict', 'The existing Work Visit belongs to a different Property.', 409);
+  }
+  const existingAppointmentId = text(existing.appointmentId || existing.scheduledScopeSnapshot?.appointmentId, 180);
+  if (existingAppointmentId && existingAppointmentId !== text(order.appointmentId, 180)) {
+    throw fieldError('visit_identity_conflict', 'The existing Work Visit belongs to a different Appointment.', 409);
+  }
+}
+
+function visitAuditEvent({ requestId, visit, identity, now }) {
+  return {
+    id: deterministicId('FE', `${requestId}:work_visit_prepared:${visit.id}`),
+    type: 'work_visit_prepared',
+    entityType: 'WorkVisit',
+    entityId: visit.id,
+    workOrderId: visit.workOrderId,
+    appointmentId: visit.appointmentId,
+    customerId: visit.clientId,
+    propertyId: visit.propertyId,
+    requestId,
+    occurredAt: now,
+    performedByUserId: text(identity.uid, 180),
+    performedByStaffId: text(identity.staffId, 180) || undefined,
+    performedByName: text(identity.name, 180) || text(identity.email, 180) || text(identity.uid, 180),
+    after: {
+      status: canonicalStatusFromStorage(visit.status),
+      version: visit.version,
+      estimatedUnitCount: visit.scheduledScopeSnapshot?.estimatedUnitCount ?? 0,
+    },
+  };
+}
+
+function requireMutationAssignment(identity, assignment) {
+  if (!assignment?.assigned) {
+    throw fieldError('permission_denied', 'You are not assigned to this Work Order.', 403);
+  }
+  const actions = allowedActionsForAssignment(identity, assignment);
+  if (!actions.includes('execute')) {
+    throw fieldError('permission_denied', 'This assignment may view the Work Order but cannot prepare a Work Visit.', 403, {
+      responsibility: assignment.responsibility || null,
+      source: assignment.source || null,
+    });
+  }
+  return actions;
+}
+
+function createPrepareWorkVisitCommand({ db, resolveAssignment, appendAudit, now = () => new Date().toISOString() } = {}) {
+  if (!db || typeof db.collection !== 'function' || typeof db.runTransaction !== 'function') {
+    throw new Error('A transaction-capable Firestore db is required.');
+  }
+  if (typeof resolveAssignment !== 'function') throw new Error('resolveAssignment is required.');
+  if (typeof appendAudit !== 'function') {
+    throw new Error('appendAudit is required before canonical Field mutations may be enabled.');
+  }
+
+  return async function prepareWorkVisit({ identity, workOrderId, requestId }) {
+    const normalizedWorkOrderId = text(workOrderId, 180);
+    if (!normalizedWorkOrderId) throw fieldError('work_order_required', 'A Work Order id is required.');
+    const stable = stableRequestId(requestId);
+    let result;
+
+    await db.runTransaction(async (transaction) => {
+      const workOrderRef = db.collection('workOrders').doc(normalizedWorkOrderId);
+      const workOrderSnapshot = await transaction.get(workOrderRef);
+      if (!workOrderSnapshot.exists) throw fieldError('work_order_not_found', 'The requested Work Order is not available.', 404);
+      const order = { id: workOrderSnapshot.id, ...workOrderSnapshot.data() };
+      if (!activeWorkOrder(order)) throw fieldError('work_order_not_available', 'This Work Order is not released for active Field execution.', 409);
+
+      const appointmentId = text(order.appointmentId, 180);
+      const clientId = text(order.clientId, 180);
+      const propertyId = text(order.propertyId, 180);
+      if (!appointmentId) throw fieldError('appointment_required', 'The Work Order is missing its Appointment reference.', 409);
+      if (!clientId) throw fieldError('customer_required', 'The Work Order is missing its Customer reference.', 409);
+      if (!propertyId) throw fieldError('property_required', 'The Work Order is missing its Property reference.', 409);
+
+      const [appointmentSnapshot, customerSnapshot, propertySnapshot] = await Promise.all([
+        transaction.get(db.collection('appointments').doc(appointmentId)),
+        transaction.get(db.collection('clients').doc(clientId)),
+        transaction.get(db.collection('properties').doc(propertyId)),
+      ]);
+      if (!appointmentSnapshot.exists) throw fieldError('appointment_not_found', 'The Work Order Appointment no longer exists.', 409);
+      if (!customerSnapshot.exists) throw fieldError('customer_not_found', 'The Work Order Customer no longer exists.', 409);
+      if (!propertySnapshot.exists) throw fieldError('property_not_found', 'The Work Order Property no longer exists.', 409);
+
+      const appointment = { id: appointmentSnapshot.id, ...appointmentSnapshot.data() };
+      const customer = { id: customerSnapshot.id, ...customerSnapshot.data() };
+      const property = { id: propertySnapshot.id, ...propertySnapshot.data() };
+      assertReferenceMatches(appointment, clientId, ['clientId', 'customerId'], 'appointment_customer_mismatch', 'Appointment');
+      assertReferenceMatches(appointment, propertyId, ['propertyId', 'siteId'], 'appointment_property_mismatch', 'Appointment');
+      assertReferenceMatches(property, clientId, ['clientId', 'customerId'], 'property_customer_mismatch', 'Property');
+      if (text(customer.id, 180) !== clientId) throw fieldError('customer_identity_mismatch', 'Customer identity mismatch.', 409);
+
+      const assignment = await resolveAssignment({ transaction, identity, order });
+      const allowedActions = requireMutationAssignment(identity, assignment);
+      const visitId = visitDocumentId(normalizedWorkOrderId);
+      const visitRef = db.collection('workVisits').doc(visitId);
+      const existingSnapshot = await transaction.get(visitRef);
+      if (existingSnapshot.exists) {
+        const existing = { id: existingSnapshot.id, ...existingSnapshot.data() };
+        assertExistingVisitCompatible(existing, order);
+        result = {
+          replayed: true,
+          source: existing.fieldAuthorityVersion ? 'field_authority' : 'legacy_existing',
+          visit: projectCanonicalWorkVisit(existing),
+          allowedActions,
+        };
+        return;
+      }
+
+      const occurredAt = text(now(), 80);
+      if (!occurredAt) throw new Error('Clock returned an invalid timestamp.');
+      const visit = buildLegacyCompatibleWorkVisit({ order, appointment, identity, assignment, now: occurredAt });
+      const event = visitAuditEvent({ requestId: stable, visit, identity, now: occurredAt });
+
+      transaction.create(visitRef, visit);
+      await appendAudit({ transaction, event, visit, identity });
+      result = {
+        replayed: false,
+        source: 'field_authority',
+        visit: projectCanonicalWorkVisit(visit),
+        allowedActions,
+        auditEventId: event.id,
+      };
+    });
+
+    return { success: true, ...result };
+  };
+}
+
+module.exports = {
+  FIELD_WORK_VISIT_STORAGE_VERSION,
+  buildLegacyCompatibleWorkVisit,
+  buildScheduledScopeSnapshot,
+  canonicalStatusFromStorage,
+  createPrepareWorkVisitCommand,
+  projectCanonicalWorkVisit,
+  stableRequestId,
+  storageStatusFromWorkOrder,
+  visitAuditEvent,
+  visitDocumentId,
+};
