@@ -4,9 +4,9 @@ const {
   buildScheduledScopeSnapshot,
   canonicalStatusFromStorage,
   createPrepareWorkVisitCommand,
+  initialVisitDocumentId,
   projectCanonicalWorkVisit,
   storageStatusFromWorkOrder,
-  visitDocumentId,
 } = require('./fieldOperationsAuthorityWorkVisit');
 
 function snapshot(id, value) {
@@ -110,7 +110,7 @@ function commandFixture(options = {}) {
     db: store.db,
     now: () => '2026-08-24T18:30:00.000-04:00',
     resolveAssignment: options.resolveAssignment || (async () => assignment()),
-    appendAudit: options.appendAudit || (async ({ event }) => { auditEvents.push(event); }),
+    appendAuditInTransaction: options.appendAuditInTransaction || (async ({ event }) => { auditEvents.push(event); }),
   });
   return { store, auditEvents, prepare };
 }
@@ -124,6 +124,12 @@ test('status compatibility maps legacy and canonical extension statuses without 
   assert.equal(canonicalStatusFromStorage('no_access'), 'no_access');
   assert.throws(() => canonicalStatusFromStorage('mystery_state'), /Unknown persisted Work Visit status/);
   assert.throws(() => canonicalStatusFromStorage(''), /Unknown persisted Work Visit status/);
+});
+
+test('initial WorkVisit identity matches active Legacy id truncation and is not a return-visit id factory', () => {
+  const id = initialVisitDocumentId(`WO-${'x'.repeat(120)}`);
+  assert.equal(id.length, 'visit-'.length + 80);
+  assert.ok(id.startsWith('visit-WO-'));
 });
 
 test('planned quantity zero stays zero instead of inventing one actual or expected asset', () => {
@@ -148,12 +154,13 @@ test('prepare WorkVisit is transaction-backed, audited, Legacy-compatible and do
   assert.equal(result.visit.scheduledScopeSnapshot.estimatedUnitCount, 0);
   assert.equal(result.visit.workOrderId, 'WO-1');
   assert.equal(result.visit.customerId, 'CLIENT-1');
+  assert.deepEqual(result.visit.participatingStaffIds, ['staff-tech', 'staff-lead']);
   assert.ok(result.allowedActions.includes('execute'));
   assert.equal(auditEvents.length, 1);
   assert.equal(auditEvents[0].type, 'work_visit_prepared');
-  assert.equal(auditEvents[0].entityId, visitDocumentId('WO-1'));
+  assert.equal(auditEvents[0].entityId, initialVisitDocumentId('WO-1'));
 
-  const stored = store.get('workVisits', visitDocumentId('WO-1'));
+  const stored = store.get('workVisits', initialVisitDocumentId('WO-1'));
   assert.equal(stored.status, 'not_started');
   assert.equal(stored.clientId, 'CLIENT-1');
   assert.equal(stored.fieldAuthorityVersion, 1);
@@ -163,7 +170,16 @@ test('prepare WorkVisit is transaction-backed, audited, Legacy-compatible and do
   assert.deepEqual(store.get('appointments', 'APT-1'), beforeAppointment);
 });
 
-test('replaying preparation reuses deterministic WorkVisit and does not append a duplicate event', async () => {
+test('Work Order technicianIds are not copied into canonical staff-only participation', async () => {
+  const seed = structuredClone(baseSeed);
+  seed.workOrders[0].technicianIds = ['uid-staff-tech'];
+  const { prepare } = commandFixture({ seed });
+  const result = await prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-staff-namespace' });
+  assert.deepEqual(result.visit.participatingStaffIds, ['staff-tech', 'staff-lead']);
+  assert.ok(!result.visit.participatingStaffIds.includes('uid-staff-tech'));
+});
+
+test('replaying preparation reuses deterministic initial WorkVisit and does not append a duplicate event', async () => {
   const { store, auditEvents, prepare } = commandFixture();
   const first = await prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-WO-1-001' });
   const second = await prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-WO-1-001' });
@@ -176,9 +192,9 @@ test('replaying preparation reuses deterministic WorkVisit and does not append a
   assert.equal(auditEvents.length, 1);
 });
 
-test('compatible pre-existing Legacy WorkVisit is projected without pretending Field Authority created it', async () => {
+test('compatible pre-existing Legacy initial WorkVisit is projected without pretending Field Authority created it', async () => {
   const legacyVisit = {
-    id: visitDocumentId('WO-1'),
+    id: initialVisitDocumentId('WO-1'),
     workOrderId: 'WO-1',
     clientId: 'CLIENT-1',
     propertyId: 'PROPERTY-1',
@@ -201,7 +217,7 @@ test('compatible pre-existing Legacy WorkVisit is projected without pretending F
 
 test('existing visit with conflicting identity fails closed', async () => {
   const conflicting = {
-    id: visitDocumentId('WO-1'), workOrderId: 'WO-1', clientId: 'OTHER', propertyId: 'PROPERTY-1', status: 'not_started',
+    id: initialVisitDocumentId('WO-1'), workOrderId: 'WO-1', clientId: 'OTHER', propertyId: 'PROPERTY-1', status: 'not_started',
   };
   const { prepare } = commandFixture({ seed: { ...baseSeed, workVisits: [conflicting] } });
   await assert.rejects(
@@ -212,7 +228,7 @@ test('existing visit with conflicting identity fails closed', async () => {
 
 test('malformed existing visit status fails closed instead of being reopened as scheduled', async () => {
   const malformed = {
-    id: visitDocumentId('WO-1'), workOrderId: 'WO-1', clientId: 'CLIENT-1', propertyId: 'PROPERTY-1', status: 'mystery_state',
+    id: initialVisitDocumentId('WO-1'), workOrderId: 'WO-1', clientId: 'CLIENT-1', propertyId: 'PROPERTY-1', status: 'mystery_state',
   };
   const { prepare } = commandFixture({ seed: { ...baseSeed, workVisits: [malformed] } });
   await assert.rejects(
@@ -268,7 +284,7 @@ test('CRM relationship mismatch aborts preparation before any write or audit', a
 
 test('audit failure aborts the transaction and leaves no canonical WorkVisit behind', async () => {
   const { store, prepare } = commandFixture({
-    appendAudit: async () => { throw new Error('audit unavailable'); },
+    appendAuditInTransaction: async () => { throw new Error('audit unavailable'); },
   });
   await assert.rejects(
     () => prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-audit-fail' }),
@@ -277,11 +293,11 @@ test('audit failure aborts the transaction and leaves no canonical WorkVisit beh
   assert.equal(store.all('workVisits').length, 0);
 });
 
-test('command cannot be constructed without an audit writer', () => {
+test('command cannot be constructed without a transaction-scoped audit writer', () => {
   const { db } = createDb(baseSeed);
   assert.throws(
     () => createPrepareWorkVisitCommand({ db, resolveAssignment: async () => assignment() }),
-    /appendAudit is required/,
+    /appendAuditInTransaction is required/,
   );
 });
 
