@@ -1,6 +1,6 @@
 # DEMAC ERP Next — Technician Portal Canonical Architecture
 
-Status: Phase 0 architecture checkpoint + architecture design checkpoint
+Status: Phase 0 architecture checkpoint + architecture design checkpoint + Slice 1 implementation checkpoint
 Date: 2026-08-24
 Scope: ERP Next field execution only. Legacy remains operational fallback; production deployment is out of scope.
 
@@ -43,7 +43,7 @@ Downstream projections/handoffs:
 
 ## B. Architecture conflicts found in current code
 
-1. **Two capability vocabularies exist.** `lib/capabilities.ts` uses `*.read`; `lib/security.ts` uses `*.view` and contains Field capabilities. Firebase principal resolution consumes `lib/security.ts`, so the old duplicate matrix must remain a compatibility projection only and must not regain authority.
+1. **Two capability vocabularies existed.** `lib/capabilities.ts` uses legacy `*.read`; `lib/security.ts` contains canonical ERP capabilities. The old matrix remains compatibility-only and may not regain authority.
 2. **Field execution is browser-local preview state.** `/field` renders `BrowserFieldExecution`; `browser-field.ts`, `browser-workorder-scope.ts` and the active component persist execution/review state in browser storage. This is non-canonical by repository governance.
 3. **Exact-scope hard gate is incompatible with DEMAC operations.** `scopeStatus()` requires selected equipment count to equal booked Work Order quantity before field start. This incorrectly treats scheduling estimate as field truth.
 4. **Current browser field model conflates equipment and performed work.** Each equipment row owns one progress/result record, preventing multiple independent interventions on the same A/C.
@@ -52,14 +52,14 @@ Downstream projections/handoffs:
 7. **A second non-active demo implementation exists.** `components/field/field-execution.tsx` contains hard-coded assets and prices. It is useful only as UX reference and must not become another domain authority.
 8. **`data-schema.ts` contains early greenfield collection names that do not fully reflect current Property/catalog/inventory authorities.** New field collections must be additive and must not revive stale collection boundaries.
 9. **Legacy Technician has multiple generations of runtime logic produced by `patch:*` scripts.** Root `package.json` runs `patch:all` before Legacy start/web/typecheck/build; those scripts rewrite Technician source files. New ERP Next Field architecture must not add another patch generation or depend on modifying generated Legacy source without first tracing its patch owner.
-10. **Assignment/responsibility is currently duplicated.** `field-authorization.ts` defines lead/technician/helper action policy while `fieldOperationsAuthorityCore.js` independently rebuilds crew responsibility and assignment from raw strings. Future writes cannot extend both implementations.
-11. **Van normalization is duplicated.** `bookingVanIdentity.js` already canonicalizes aliases such as historical van IDs; Field Authority currently compares raw Work Order/user van IDs.
-12. **Scheduling crew readiness and Field assignment ownership are related but not identical.** `resolveAssignment()` considers absences, `canDriveVan`, maintenance and availability. Field authorization needs stable dated crew membership without retroactively rewriting historical assignment because a readiness input later changes.
+10. **Assignment/responsibility was duplicated.** Before Slice 1, `field-authorization.ts` and `fieldOperationsAuthorityCore.js` both decided lead/technician/helper actions. Slice 1 removes client action-decision logic; Field Authority now projects `allowedActions`, and the client only renders that projection.
+11. **Van normalization was duplicated.** Slice 1 reuses `bookingVanIdentity.js` in Field Authority instead of raw Work Order/user van string equality.
+12. **Scheduling crew readiness and Field assignment ownership are related but not identical.** Slice 1 extracts pure dated crew membership from `bookingSchedulingPrimitives.js`; Scheduling keeps absence/driver/van readiness semantics in `resolveAssignment()`, while Field consumes membership for authorization.
 13. **Legacy WorkIntervention status conflates technical execution and report review.** `ready_for_review`/`changes_requested` are editorial review states while the canonical WorkIntervention lifecycle represents actual technical work. They must not be merged into one state machine.
 14. **Technician V2 defines a local WORK_TYPES catalog and template IDs.** This duplicates Service Catalog and report-template relationships in UI code.
-15. **Field Authority equipment projection does not match the active equipment contract.** Legacy equipment stores technical identity primarily in `components[]`; the current `get_job` mapper reads root `brand/model/serial/btu/refrigerant/voltage`, and its fake fixture mirrors that mapper instead of production-shaped data.
+15. **Field Authority equipment projection did not match the active equipment contract.** Slice 1 corrects `get_job` to adapt technical identity from `equipmentSystems.components[]`, retaining root-field compatibility fallback only.
 16. **Client persistence has incompatible write semantics and no optimistic concurrency contract.** Legacy helpers perform full/partial REST PATCH operations without a Field transaction/application-service boundary. Canonical Field mutations must not introduce a third client writer.
-17. **Field server tests are outside the effective ERP Next feature gate.** `fieldOperationsAuthorityCore.test.js` exists, but the ERP Next CI path/steps and `functions/validate:firebase` do not currently make those Field Function files part of the feature's mandatory validation.
+17. **Field server tests were outside the effective ERP Next feature gate.** Slice 1 adds Field Function syntax, authority tests and Booking/Scheduling regression tests to the existing feature CI.
 
 ## C. Canonical field entities
 
@@ -87,55 +87,37 @@ Catalog-backed field sale/add-on line with price snapshot, status and optional l
 ### FieldEvidence / FieldMeasurement / FieldFinding
 Structured, intervention-aware technical truth. AI may summarize or translate these records but may not create technical facts.
 
-### FieldReviewRevision
-A versioned submission/review snapshot inside the Field Operations authority. It preserves each technician submission, Office return note, correction/resubmission and final approval without reusing WorkIntervention technical status as report-review state. This is a child record of Field Operations, not a new business authority.
-
 ## D. Data ownership
 
 - Appointment / planned work: Scheduling / Booking Authority.
 - Work Order release/readiness: Work Order application service / Operations authority.
-- Work Visit and field child records: Field Operations authority.
+- Work Visit and field child records: Field Operations domain.
 - Customer / Property / Asset identity: CRM.
 - Service/Product definitions and base prices: `services` catalog.
-- Field execution template metadata: optional governed metadata on the canonical service definition, resolved centrally through the existing Service Catalog adapter; never a UI-local Field catalog.
 - Field price actually presented/approved: immutable snapshot on field line/intervention.
 - Inventory effect: Inventory Authority only.
 - Billing result: Billing/Invoice authority; Field only emits governed billing candidates/handoff data.
 - Customer and equipment history: read projections from canonical Work Visits, Interventions, Sales, Findings and Evidence; never writable duplicate history tables.
-- Authentication identity: Firebase Auth + `users/{uid}`.
-- Employee identity: `staffProfiles`.
-- Van identity: `bookingVanIdentity`/canonical van records.
-- Dated crew override: `dailyVanAssignments`; recurring van crew is fallback, not a second employee master.
 
-## E. State machines
+## E. State machines and mutation authority
 
 ### WorkVisit
 
 `scheduled -> en_route -> on_site -> in_progress -> ready_for_office_review -> completed`
 
-Allowed branches from active states: `pending`, `requires_return_visit`, `no_access`, `cancelled`.
+Allowed branches from active states: `pending`, `requires_return_visit`, `no_access`, `cancelled`. Transitions are centralized and auditable; arbitrary UI status writes are forbidden.
 
 ### WorkIntervention
 
-`planned -> confirmed -> in_progress -> completed`
+`planned | added_on_site -> confirmed -> in_progress -> completed`
 
-Added work uses `origin=added_on_site_*`; origin is not a status. Branches: `pending_authorization`, `pending_part`, `not_performed`, `declined`, `cancelled`.
+Branches: `pending_authorization`, `pending_part`, `not_performed`, `declined`, `cancelled`. Origin remains separate from status.
 
 ### FieldSaleLine
 
 `proposed -> customer_approved -> installed|delivered -> sold`
 
-Branches: `declined`, `voided`.
-
-### FieldReviewRevision
-
-`submitted -> pending_review -> approved`
-
-Return path: `pending_review -> returned -> corrected/resubmitted -> pending_review`.
-
-Every resubmission creates/preserves a revision snapshot. Approval locks the approved revision from normal technician mutation. Corrections after approval require a new amendment/revision event; approved technical truth is never silently rewritten.
-
-### Transition authority decision
+Branches: `declined`, `voided`. Inventory and billing effects are transition-driven, not raw checkbox changes.
 
 The **server-side Field Authority is the only mutation/transition decision boundary**. ERP Next may display server-projected allowed actions and validation messages, but it must not own an independent transition map for canonical writes.
 
@@ -160,10 +142,10 @@ A helper is not a separate Firebase authentication role.
 
 ### Server action policy
 
-Field Authority resolves assignment and returns an `allowedActions` projection with the job/visit. Examples:
+Field Authority resolves assignment and returns an `allowedActions` projection with the job/visit. Current read-model actions include:
 
 - read assigned work;
-- en route / arrive / execute;
+- en route / arrive / execute eligibility;
 - edit report section;
 - add evidence / measurement / finding;
 - add asset;
@@ -174,24 +156,22 @@ Field Authority resolves assignment and returns an `allowedActions` projection w
 - office review;
 - price override where separately authorized.
 
-ERP Next uses this projection only for UX. Every mutation recalculates authorization on the server using current canonical identity and assignment data; a client-supplied `allowedActions` value is never trusted.
+ERP Next uses this projection only for UX. Every future mutation recalculates authorization on the server using current canonical identity and assignment data; a client-supplied `allowedActions` value is never trusted.
 
 ### Crew membership reuse/refactor
 
 Do not use raw van-string equality as the canonical crew test.
 
 1. Reuse `bookingVanIdentity.js` for canonical van identity/aliases.
-2. Refactor `bookingSchedulingPrimitives.js` so a pure dated **crew membership** helper is reusable independently of readiness.
+2. `bookingSchedulingPrimitives.js` now exposes pure dated **crew membership** separately from readiness.
 3. Existing `resolveAssignment()` continues to apply absence/driver/van-readiness logic for Scheduling capacity by consuming that membership helper.
 4. Field Authority consumes membership without treating a later absence/readiness change as a destructive rewrite of an already explicit Work Order assignment.
 5. Explicit Work Order `technicianIds` remains a direct assignment source.
 6. Van-only compatibility may allow discovery/read when necessary, but mutations require resolved explicit staff membership/responsibility.
 
-This preserves Scheduling behavior while preventing a second Field crew engine.
-
 ### Client capability vocabulary
 
-`lib/security.ts` remains the typed ERP client capability vocabulary/navigation projection. `lib/capabilities.ts` remains compatibility-only. Neither replaces server authorization. As Field server actions become available, action-level UI logic must use server `allowedActions` rather than add a second role/responsibility matrix in React.
+`lib/security.ts` remains the typed ERP client capability vocabulary/navigation projection. `lib/capabilities.ts` remains compatibility-only. Neither replaces server authorization. `lib/field-authorization.ts` now contains only the Field action type contract and a literal `allowedActions` membership helper; it contains no assignment/role/responsibility decision matrix.
 
 ## G. Read model and adapter decisions
 
@@ -201,13 +181,14 @@ Field read models snapshot planned intent from Work Order appointment snapshots 
 
 ### Equipment
 
-`get_job` must adapt the existing `equipmentSystems` contract instead of inventing a new equipment representation:
+`get_job` adapts the existing `equipmentSystems` contract instead of inventing a new equipment representation:
 
 - preserve canonical equipment ID/QR/customer/property identity;
 - derive display brand/model/serial/BTU/refrigerant/voltage from the applicable component data;
+- retain root technical fields only as historical compatibility fallback;
 - do not require BTU, brand, model or both nameplate photos merely to create/identify an Asset;
 - incomplete technical metadata is explicit and may be enriched during the visit;
-- QR belonging to a different customer/property must be rejected for silent reassignment.
+- QR belonging to a different customer/property must be rejected for silent reassignment when the write workflow is introduced.
 
 ### Service and report-template relationship
 
@@ -276,20 +257,34 @@ No new `patchTechnician*.cjs` or patch-chain generation is allowed for ERP Next 
 
 ## L. Smallest architecturally correct implementation slices
 
-### Slice 1 — close the current read/security boundary before any writes
+### Slice 1 — read/security boundary — IMPLEMENTED / VALIDATED
 
-1. Add Field Function syntax/tests to existing Functions validation and ERP Next feature CI paths/steps; do not create a parallel quality gate.
-2. Replace fake equipment fixtures with production-contract-shaped `equipmentSystems.components[]` data and fix the existing `get_job` adapter.
-3. Reuse `bookingVanIdentity.js` in Field Authority.
-4. Refactor/extract dated crew membership inside `bookingSchedulingPrimitives.js` and reuse it from both Scheduling and Field without changing Scheduling capacity behavior.
-5. Make Field Authority return server-derived `allowedActions`/responsibility for assigned jobs.
-6. Keep Field endpoints read-only through this slice.
+Implemented:
 
-**Exit:** Phase 2/3 read authorization is contract-real, tested and single-boundary. No canonical Field record has been mutated.
+1. Field Function syntax/tests are part of existing Functions validation and ERP Next feature CI.
+2. Equipment test fixtures use production-contract-shaped `equipmentSystems.components[]`, and `get_job` projects component technical fields with historical root fallback.
+3. Field Authority reuses `bookingVanIdentity.js`.
+4. Dated crew membership is factored into `bookingSchedulingPrimitives.js` and reused by Scheduling and Field while Scheduling retains readiness/capacity behavior.
+5. Field Authority returns server-derived `responsibility`, `assignmentSource` and `allowedActions`.
+6. Field HTTP actions remain exactly `get_schedule` and `get_job`; no mutation endpoint was introduced.
+7. Client Field authorization no longer reconstructs lead/helper/technician policy; it consumes the server projection literally.
+8. The newly enforced gate exposed and corrected a real off-by-one defect where a nominal seven-day Field range admitted eight days.
 
-### Slice 2 — first governed WorkVisit mutation
+Validated on the feature branch with:
 
-Only after Slice 1 passes all applicable gates:
+- Functions syntax validation;
+- Field Authority tests;
+- Booking/Scheduling regression tests;
+- ERP Next typecheck;
+- Dispatch, Appointment lifecycle, Booking Intelligence, Booking Copilot, Live Scheduling, Employee Schedule, Field domain and Field security acceptance suites;
+- ERP Next production build;
+- Legacy/root TypeScript and Expo web build validation.
+
+**Slice 1 exit: PASS.** The read/security boundary is contract-real and single-authority. No canonical Field record was mutated and no production Function was deployed.
+
+### Slice 2 — first governed WorkVisit mutation — NOT STARTED
+
+Only after a subsequent implementation phase explicitly opens canonical writes:
 
 1. Add one transaction-backed Visit command at a time, beginning with preparation/start/status transition rather than broad CRUD.
 2. Server validates Work Order release, Customer/Property, assignment and transition.
@@ -307,23 +302,20 @@ Each slice reuses the existing authority for the downstream domain and must pass
 
 ## M. Affected systems/files
 
-### Architecture/design checkpoint
-
-Only this document changes.
-
-### Expected Slice 1 implementation files
+### Slice 1 implementation
 
 - `functions/package.json`
 - `.github/workflows/erp-next-ci.yml`
 - `functions/fieldOperationsAuthorityCore.js`
-- `functions/fieldOperationsAuthority.js`
 - `functions/fieldOperationsAuthorityCore.test.js`
-- `functions/bookingVanIdentity.js` (reuse; modify only if a demonstrated compatibility bug requires it)
+- `functions/fieldOperationsAuthority.test.js`
 - `functions/bookingSchedulingPrimitives.js`
-- corresponding Scheduling primitive tests
+- `functions/bookingSchedulingPrimitives.test.js`
 - `apps/erp-next/lib/field-authority.ts`
-- `apps/erp-next/lib/field-authorization.ts` (reduce/refactor action-decision responsibility as server projection becomes available)
-- `apps/erp-next/scripts/field-security-acceptance.ts` (keep client projection tests, not server-security claims)
+- `apps/erp-next/lib/field-authorization.ts`
+- `apps/erp-next/scripts/field-security-acceptance.ts`
+
+`bookingVanIdentity.js` is reused unchanged. `fieldOperationsAuthority.js` remains read-only and unchanged in Slice 1.
 
 ### Later slices
 
@@ -334,7 +326,7 @@ Only this document changes.
 - `functions/serviceCatalog.js` and tests when Field template metadata is introduced
 - Firestore/Storage rules + emulator tests in their governed security phase
 
-Legacy source/patch scripts are not expected implementation targets unless a specific compatibility defect is proven and its patch owner is traced first.
+Legacy source/patch scripts are not implementation targets unless a specific compatibility defect is proven and its patch owner is traced first.
 
 ## N. Source-of-truth map after this design
 
@@ -347,7 +339,7 @@ Legacy source/patch scripts are not expected implementation targets unless a spe
 | Scheduling plan | Booking Authority / Appointment | WorkVisit scheduled-scope snapshot |
 | Work Order release/lifecycle | Work Order application boundary | Field read projection |
 | Actual visit/work | Field Operations Authority | ERP Next view models, offline drafts |
-| Field action authorization | Field Operations Authority using identity + assignment | `security.ts`, React button visibility |
+| Field action authorization | Field Operations Authority using identity + assignment | `security.ts`, server `allowedActions` rendered by client |
 | Customer/Property/Asset identity | CRM | Field snapshots/VisitAsset participation |
 | Service/product | `services` | Scheduling Work Type / UI labels |
 | Report template definition | governed template registry referenced by service execution metadata | rendered form sections |
@@ -364,56 +356,58 @@ Legacy source/patch scripts are not expected implementation targets unless a spe
 
 **Risk:** a technician sees/changes another team's job, or loses an explicitly assigned job because readiness data changed.
 
-**Control:** canonical van normalization; one reusable dated crew membership primitive; explicit Work Order membership precedence for mutation; negative known-ID tests.
+**Control:** canonical van normalization; one reusable dated crew membership primitive; explicit Work Order assignment plus resolved crew membership; negative known-ID tests; van-only profile fallback is read-only.
 
-### High risk — duplicate transition policy
+### High risk — duplicate transition/action policy
 
-**Risk:** UI permits a transition that server rejects or vice versa.
+**Risk:** UI permits an action that server rejects or vice versa.
 
-**Control:** server is sole mutation decision boundary; client receives allowed-actions projection; remove local transition ownership as each mutation becomes server-backed.
+**Control:** server is sole action/mutation decision boundary; client receives `allowedActions`; Slice 1 removes client responsibility/action reconstruction.
 
 ### High risk — Scheduling regression
 
 **Risk:** extracting crew membership changes booking capacity behavior.
 
-**Control:** refactor `resolveAssignment()` to consume the new membership helper without changing its readiness calculation; run existing booking/scheduling suites plus focused equivalence tests.
+**Control:** `resolveAssignment()` consumes the new membership helper without changing readiness calculation; existing Booking/Scheduling suites and focused membership/readiness tests pass.
 
 ### High risk — equipment contract mismatch
 
 **Risk:** Job Detail loses BTU/brand/model or creates a second Asset representation.
 
-**Control:** contract-real fixtures and component adapter; no new equipment collection.
+**Control:** contract-real `components[]` fixtures and compatibility adapter; no new equipment collection.
 
 ### High risk — lost updates / multi-device edits
 
 **Risk:** whole-document client PATCH overwrites another technician's section/change.
 
-**Control:** server transaction/batch, expected version/update token, narrow commands, section-level records, idempotency keys.
+**Control:** future writes require server transaction/batch, expected version/update token, narrow commands, section-level records and idempotency keys. Slice 1 remains read-only.
 
 ### Medium risk — Legacy patch regeneration
 
 **Risk:** manual Legacy source fix is overwritten on the next build.
 
-**Control:** Legacy changes require tracing patch owner first; ERP Next Field must not depend on Legacy patch scripts.
+**Control:** Legacy changes require tracing patch owner first; ERP Next Field does not depend on Legacy patch scripts. Root Legacy typecheck/Expo build remains green after Slice 1.
 
 ### Medium risk — service/template mismatch
 
 **Risk:** UI hardcodes a work/template combination different from catalog configuration.
 
-**Control:** central service-definition resolver and template registry reference; compatibility aliases stay in adapter only.
+**Control:** central service-definition resolver and template registry reference in the governed catalog phase; compatibility aliases stay in adapter only.
 
 ## P. Testing and evidence plan
 
-### Slice 1 mandatory evidence
+### Slice 1 evidence — PASS
 
-- `node --check` for `fieldOperationsAuthority.js` and `fieldOperationsAuthorityCore.js` through existing `functions/validate:firebase`.
-- focused `node --test fieldOperationsAuthorityCore.test.js` through an explicit Functions script.
-- production-contract-shaped equipment fixture including `components[]`.
-- tests for van alias normalization in Field assignment.
-- tests for direct technician assignment, dated driver/lead, helper, van fallback read-only, another-team known-ID deny, inactive principal deny and Office read behavior.
-- tests proving the extracted crew membership helper leaves existing Scheduling assignment/readiness outcomes unchanged for representative cases.
-- ERP Next `test:field-security`, existing field-domain acceptance, typecheck and build.
-- existing Scheduling/Booking suites affected by the refactor.
+- `node --check` for `fieldOperationsAuthority.js` and `fieldOperationsAuthorityCore.js` through existing `functions/validate:firebase` — PASS.
+- focused `test:field-authority`, including read-only HTTP surface — PASS.
+- production-contract-shaped equipment fixture including `components[]` — PASS.
+- canonical van alias tests — PASS.
+- direct technician assignment, dated lead/helper, van fallback read-only, another-team known-ID deny, inactive principal deny and Office behavior — PASS.
+- crew membership/readiness regression against Scheduling primitives — PASS.
+- ERP Next `test:field-security` now validates coarse client capability vocabulary and literal server-action projection instead of duplicating server assignment rules — PASS.
+- ERP Next field-domain acceptance, typecheck and build — PASS.
+- existing Scheduling/Booking suites affected by the refactor — PASS.
+- Legacy/root TypeScript and Expo web build validation — PASS.
 
 ### Before any security-rule deployment
 
@@ -438,18 +432,18 @@ Migration is additive and phased.
 
 - Slice 1 performs no data migration.
 - Existing Work Orders/Appointments/equipment remain readable through adapters.
-- First canonical WorkVisit is created only through a governed server mutation after Slice 1.
+- First canonical WorkVisit is created only through a governed server mutation after Slice 1 and an explicit subsequent implementation phase.
 - New Field records reference existing canonical identities; they do not rewrite Scheduling planned records.
 - Historical Legacy records may be projected/adapted during parity work; destructive conversion is prohibited.
 - Production backfills/service metadata migration require explicit human approval and a separate reviewed migration plan.
 
 ### Recovery
 
-Every mutation uses idempotent commands and auditable records so a retry can recover without creating duplicate visits/interventions/sales. Failed multi-record operations must transactionally commit all required canonical changes or none of them, except external blob upload where orphan cleanup/reconciliation is explicitly handled.
+Every future mutation uses idempotent commands and auditable records so a retry can recover without creating duplicate visits/interventions/sales. Failed multi-record operations must transactionally commit all required canonical changes or none of them, except external blob upload where orphan cleanup/reconciliation is explicitly handled.
 
 ### Rollback
 
-Before route cutover, rollback is simply to leave `/field` on the existing fallback while reverting the feature-branch code commit; no data cleanup is needed.
+Slice 1 rollback is code-only: the active `/field` route was not cut over, no canonical Field records were written, and no production Function/rule deployment occurred.
 
 After additive canonical writes begin, rollback must **never delete the new canonical records**. The safe rollback is to disable/hide the new mutation surface, preserve those records read-only/auditable, and restore the previous UI route while the defect is corrected. Any data repair/backfill requires a separate reviewed recovery operation.
 
@@ -465,19 +459,19 @@ Production function/rule deployment rollback is a human-controlled operational a
 
 This preserves `planned != actual` without weakening completion integrity.
 
-## Architecture design review passes
+## Slice 1 implementation review passes
 
 ### PASS 1 — Correctness
-The design traces Scheduling intent to immutable planned snapshots and Field actual truth without requiring booked quantity to equal discovered scope. It preserves multiple interventions per asset, partial work, second visits and review revisions.
+Read assignment, responsibility, `allowedActions`, component-shaped equipment projection, seven-day range enforcement and read-only HTTP surface are covered by focused server tests. The new gate exposed and corrected the prior eight-day off-by-one defect instead of weakening its test.
 
-### PASS 2 — Architecture
-The smallest change extends existing Field Authority, Booking van/crew primitives, Service Catalog and template registry. It does not create a new Field catalog, crew engine, cross-package framework, browser source of truth or patch generation.
+### PASS 2 — Architecture / duplication
+Field server is the only action-decision authority. Client responsibility/action reconstruction was removed. Van identity and dated crew membership reuse existing Scheduling authorities. No new catalog, crew engine, cross-package policy framework, persistence source or patch generation was created.
 
 ### PASS 3 — Integration / regression
-Assignment refactoring is constrained to reusable membership while Scheduling retains its readiness calculation. Legacy remains fallback. Inventory and Billing remain downstream authorities. Slice 1 is deliberately read-only.
+Functions syntax, Field authority, Booking/Scheduling regressions, ERP Next typecheck/acceptance/build and Legacy/root TypeScript/Expo build all pass after the final refactor. Scheduling readiness behavior remains behind `resolveAssignment()`; Field consumes membership only.
 
-### PASS 4 — Production readiness
-No production deployment, security-rule application, destructive migration, secret/access change, production communication or merge is performed by this checkpoint. Function/rule deployment, production migration and final merge remain human-only boundaries.
+### PASS 4 — Production readiness for this slice
+Slice 1 is safe as a validated feature-branch read/security foundation, not as a completed Technician Portal. No Field mutation endpoint exists, `/field` was not cut over, no production deployment/rules/migration occurred, and PR #435 remains draft/unmerged. Production access-policy work and canonical writes remain gated.
 
 ## Human-only boundaries
 
