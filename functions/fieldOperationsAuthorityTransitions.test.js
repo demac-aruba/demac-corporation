@@ -62,6 +62,13 @@ test('Office Review submission and completion timestamps are transition-owned', 
   assert.equal(completed.next.completedAt, t3);
 });
 
+test('returned report resubmission preserves the original submitted timestamp', () => {
+  const firstSubmission = transitionCanonicalWorkVisit({ visit: visit('in_progress'), to: 'ready_for_office_review', at: t1 });
+  const returned = transitionCanonicalWorkVisit({ visit: firstSubmission.next, to: 'in_progress', at: t2 });
+  const resubmitted = transitionCanonicalWorkVisit({ visit: returned.next, to: 'ready_for_office_review', at: t3 });
+  assert.equal(resubmitted.next.submittedAt, t1);
+});
+
 test('pending visit can resume without replacing its original started timestamp', () => {
   const current = visit('pending', { startedAt: t1 });
   const resumed = transitionCanonicalWorkVisit({ visit: current, to: 'in_progress', at: t3 });
@@ -73,9 +80,10 @@ test('allowed branch decisions remain server-owned and explicit', () => {
   assert.deepEqual(assertWorkVisitTransition('scheduled', 'scheduled'), { current: 'scheduled', next: 'scheduled', noop: true });
 });
 
-test('arbitrary or terminal transitions fail closed', () => {
+test('arbitrary, terminal or invalid-time transitions fail closed', () => {
   assert.throws(() => assertWorkVisitTransition('scheduled', 'completed'), /scheduled -> completed/);
   assert.throws(() => assertWorkVisitTransition('completed', 'in_progress'), /completed -> in_progress/);
   assert.throws(() => assertWorkVisitTransition('unknown', 'scheduled'), /Unknown Work Visit status/);
-  assert.throws(() => transitionCanonicalWorkVisit({ visit: visit(), to: 'en_route', at: '' }), /timestamp is required/);
+  assert.throws(() => transitionCanonicalWorkVisit({ visit: visit(), to: 'en_route', at: '' }), /valid transition timestamp is required/);
+  assert.throws(() => transitionCanonicalWorkVisit({ visit: visit(), to: 'en_route', at: 'not-a-time' }), /valid transition timestamp is required/);
 });
