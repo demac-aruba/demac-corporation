@@ -24,29 +24,57 @@ function createDb(seed = {}) {
     return collections.get(name);
   }
 
-  function ref(name, id) {
-    return { collectionName: name, id };
+  function documentRef(name, id) {
+    return { kind: 'document', collectionName: name, id };
+  }
+
+  function queryRef(name, filters = [], limitCount = null) {
+    return {
+      kind: 'query',
+      collectionName: name,
+      filters,
+      limitCount,
+      where(field, op, expected) {
+        return queryRef(name, [...filters, { field, op, expected }], limitCount);
+      },
+      limit(count) {
+        return queryRef(name, filters, count);
+      },
+    };
+  }
+
+  function matches(value, filter) {
+    if (filter.op === '==') return value?.[filter.field] === filter.expected;
+    throw new Error(`Unsupported fake query operator ${filter.op}`);
   }
 
   const db = {
     collection(name) {
       return {
-        doc(id) { return ref(name, id); },
+        doc(id) { return documentRef(name, id); },
+        where(field, op, expected) { return queryRef(name, [{ field, op, expected }]); },
       };
     },
     async runTransaction(callback) {
       const writes = [];
       const transaction = {
-        async get(documentRef) {
-          const values = ensure(documentRef.collectionName);
-          return snapshot(documentRef.id, values.get(documentRef.id));
-        },
-        create(documentRef, value) {
-          const values = ensure(documentRef.collectionName);
-          if (values.has(documentRef.id) || writes.some((write) => write.ref.collectionName === documentRef.collectionName && write.ref.id === documentRef.id)) {
-            throw new Error(`Document already exists: ${documentRef.collectionName}/${documentRef.id}`);
+        async get(target) {
+          const values = ensure(target.collectionName);
+          if (target.kind === 'query') {
+            const docs = [...values.entries()]
+              .filter(([, value]) => target.filters.every((filter) => matches(value, filter)))
+              .slice(0, target.limitCount ?? undefined)
+              .map(([id, value]) => snapshot(id, value));
+            return { docs };
           }
-          writes.push({ type: 'create', ref: documentRef, value: { ...value } });
+          return snapshot(target.id, values.get(target.id));
+        },
+        create(ref, value) {
+          const values = ensure(ref.collectionName);
+          if (values.has(ref.id) || writes.some((write) => write.ref.collectionName === ref.collectionName && write.ref.id === ref.id)) {
+            throw new Error(`Document already exists: ${ref.collectionName}/${ref.id}`);
+          }
+          writes.push({ type: 'create', ref, value: { ...value } });
         },
       };
       const result = await callback(transaction);
@@ -209,7 +237,7 @@ test('replaying preparation reuses deterministic initial WorkVisit and does not 
   assert.equal(auditEvents.length, 1);
 });
 
-test('compatible pre-existing Legacy initial WorkVisit is projected without pretending Field Authority created it', async () => {
+test('compatible pre-existing deterministic Legacy initial WorkVisit is projected without pretending Field Authority created it', async () => {
   const legacyVisit = {
     id: initialVisitDocumentId('WO-1'),
     workOrderId: 'WO-1',
@@ -232,7 +260,68 @@ test('compatible pre-existing Legacy initial WorkVisit is projected without pret
   assert.equal(auditEvents.length, 0);
 });
 
-test('existing visit with conflicting identity fails closed', async () => {
+test('a single compatible Legacy initial WorkVisit with a historical id is adopted by workOrderId instead of duplicated', async () => {
+  const legacyVisit = {
+    id: 'historical-visit-id',
+    workOrderId: 'WO-1',
+    clientId: 'CLIENT-1',
+    propertyId: 'PROPERTY-1',
+    appointmentId: 'APT-1',
+    status: 'not_started',
+    participatingStaffIds: ['staff-tech'],
+    requiresSecondVisit: false,
+    scheduledScopeSnapshot: { appointmentId: 'APT-1', estimatedUnitCount: 0, problemDescription: 'Historical snapshot' },
+    createdAt: '2026-08-24T09:00:00Z', createdByUserId: 'legacy-user',
+    updatedAt: '2026-08-24T09:00:00Z', updatedByUserId: 'legacy-user', version: 1,
+  };
+  const { store, auditEvents, prepare } = commandFixture({ seed: { ...baseSeed, workVisits: [legacyVisit] } });
+  const result = await prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-historical-id' });
+
+  assert.equal(result.replayed, true);
+  assert.equal(result.source, 'legacy_existing');
+  assert.equal(result.visit.id, 'historical-visit-id');
+  assert.equal(store.all('workVisits').length, 1);
+  assert.equal(store.get('workVisits', initialVisitDocumentId('WO-1')), undefined);
+  assert.equal(auditEvents.length, 0);
+});
+
+test('ambiguous historical WorkVisit history fails closed instead of creating or guessing an initial visit', async () => {
+  const visits = [
+    {
+      id: 'legacy-initial-a', workOrderId: 'WO-1', clientId: 'CLIENT-1', propertyId: 'PROPERTY-1', appointmentId: 'APT-1',
+      status: 'not_started', scheduledScopeSnapshot: { appointmentId: 'APT-1', estimatedUnitCount: 0 },
+    },
+    {
+      id: 'legacy-initial-b', workOrderId: 'WO-1', clientId: 'CLIENT-1', propertyId: 'PROPERTY-1', appointmentId: 'APT-1',
+      status: 'pending', scheduledScopeSnapshot: { appointmentId: 'APT-1', estimatedUnitCount: 0 },
+    },
+  ];
+  const { store, auditEvents, prepare } = commandFixture({ seed: { ...baseSeed, workVisits: visits } });
+  await assert.rejects(
+    () => prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-ambiguous-history' }),
+    /cannot be adopted as one unambiguous initial visit/,
+  );
+  assert.equal(store.all('workVisits').length, 2);
+  assert.equal(store.get('workVisits', initialVisitDocumentId('WO-1')), undefined);
+  assert.equal(auditEvents.length, 0);
+});
+
+test('return-only historical WorkVisit cannot be silently adopted as the initial visit', async () => {
+  const returnVisit = {
+    id: 'legacy-return', workOrderId: 'WO-1', clientId: 'CLIENT-1', propertyId: 'PROPERTY-1', appointmentId: 'APT-1',
+    status: 'pending', previousVisitId: 'missing-initial', scheduledScopeSnapshot: { appointmentId: 'APT-1', estimatedUnitCount: 0 },
+  };
+  const { store, auditEvents, prepare } = commandFixture({ seed: { ...baseSeed, workVisits: [returnVisit] } });
+  await assert.rejects(
+    () => prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-return-only' }),
+    /cannot be adopted as one unambiguous initial visit/,
+  );
+  assert.equal(store.all('workVisits').length, 1);
+  assert.equal(store.get('workVisits', initialVisitDocumentId('WO-1')), undefined);
+  assert.equal(auditEvents.length, 0);
+});
+
+test('existing deterministic visit with conflicting identity fails closed', async () => {
   const conflicting = {
     id: initialVisitDocumentId('WO-1'), workOrderId: 'WO-1', clientId: 'OTHER', propertyId: 'PROPERTY-1', status: 'not_started',
   };
