@@ -70,6 +70,20 @@ on:
       - 'firebase.json'
       - '.github/workflows/whatsapp-transactional-production-deploy.yml'
   workflow_dispatch:
+    inputs:
+      deploy_to_production:
+        description: 'Deploy this exact selected ref to DEMAC production after validation.'
+        required: true
+        default: false
+        type: boolean
+      confirmation:
+        description: 'Type DEPLOY_TRANSACTIONAL_WHATSAPP to authorize production deployment.'
+        required: false
+        type: string
+      expected_sha:
+        description: 'Exact commit SHA expected to be deployed. Must equal the workflow GITHUB_SHA.'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -144,10 +158,22 @@ jobs:
           NODE
 
   deploy-transactional-whatsapp:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' &&
+       inputs.deploy_to_production == true &&
+       inputs.confirmation == 'DEPLOY_TRANSACTIONAL_WHATSAPP' &&
+       inputs.expected_sha == github.sha)
     needs: validate-transactional-whatsapp
     runs-on: ubuntu-latest
     steps:
+      - name: Record manual deployment authorization
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Manual production deployment authorized for exact commit ${GITHUB_SHA} on ${GITHUB_REF}."
+
       - name: Checkout
         uses: actions/checkout@v6
 
