@@ -1,7 +1,8 @@
 const { BOOKING_ERROR_CODES, BookingAuthorityError, cleanText } = require("./bookingAuthorityCore");
 const { canonicalizeVanCatalog, canonicalVanIdFromValue } = require("./bookingVanIdentity");
 const { createOperatingCalendarService, dateKeyInTimeZone } = require("./operatingCalendarService");
-const { DEFAULT_VAN_GROUP_NAMES, createTechnicianDailyScheduleService } = require("./technicianDailyScheduleService");
+const { createTechnicianDailyScheduleService } = require("./technicianDailyScheduleService");
+const { canonicalVanScheduleGroupLabel } = require("./vanScheduleGroupIdentity");
 const { validWacliRecipient } = require("./whatsappTransactionalService");
 
 const VAN_SCHEDULE_ACTIONS = new Set([
@@ -15,6 +16,10 @@ function groupJid(value) {
   return jid.endsWith("@g.us") && validWacliRecipient(jid) ? jid : "";
 }
 
+function defaultGroupName(vanId, fallback = "") {
+  return canonicalVanScheduleGroupLabel(vanId) || fallback || vanId;
+}
+
 function normalizeGroupInput(value = {}) {
   const vanId = canonicalVanIdFromValue(value.vanId);
   if (!vanId) {
@@ -26,10 +31,26 @@ function normalizeGroupInput(value = {}) {
   }
   return {
     vanId,
-    groupName: cleanText(value.groupName, 180) || DEFAULT_VAN_GROUP_NAMES[vanId] || vanId,
+    groupName: cleanText(value.groupName, 180) || defaultGroupName(vanId),
     groupJid: jid,
     enabled: value.enabled !== false,
   };
+}
+
+function assertUniqueEnabledGroupJids(groups = []) {
+  const seen = new Map();
+  for (const group of groups) {
+    if (group.enabled === false || !group.groupJid) continue;
+    const priorVanId = seen.get(group.groupJid);
+    if (priorVanId && priorVanId !== group.vanId) {
+      throw new BookingAuthorityError(
+        BOOKING_ERROR_CODES.INVALID_REQUEST,
+        "The same WhatsApp group JID cannot be assigned to more than one enabled Van.",
+        { field: "groupJid", vanId: group.vanId, conflictingVanId: priorVanId },
+      );
+    }
+    seen.set(group.groupJid, group.vanId);
+  }
 }
 
 function createVanScheduleCommunicationAuthority({ db, scheduleService = null, operatingCalendar = null, apiVersion = 12 } = {}) {
@@ -52,7 +73,7 @@ function createVanScheduleCommunicationAuthority({ db, scheduleService = null, o
         vanId: van.id,
         sourceVanId: van.sourceVanId,
         vanName: van.name,
-        groupName: cleanText(van.whatsappScheduleGroupName, 180) || DEFAULT_VAN_GROUP_NAMES[van.id] || van.name,
+        groupName: cleanText(van.whatsappScheduleGroupName, 180) || defaultGroupName(van.id, van.name),
         groupJid: cleanText(van.whatsappScheduleGroupJid, 180),
         enabled: van.scheduleDeliveryEnabled !== false,
         configured: Boolean(groupJid(van.whatsappScheduleGroupJid)),
@@ -70,8 +91,18 @@ function createVanScheduleCommunicationAuthority({ db, scheduleService = null, o
     if (unique.size !== groups.length) {
       throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "Each van can appear only once in the group configuration.", { field: "groups" });
     }
+
     const catalog = await loadVanCatalog();
     const byId = new Map(catalog.vans.map((van) => [van.id, van]));
+    const proposedByVan = new Map(catalog.vans.map((van) => [van.id, {
+      vanId: van.id,
+      groupName: cleanText(van.whatsappScheduleGroupName, 180) || defaultGroupName(van.id, van.name),
+      groupJid: groupJid(van.whatsappScheduleGroupJid),
+      enabled: van.scheduleDeliveryEnabled !== false,
+    }]));
+    for (const group of groups) proposedByVan.set(group.vanId, group);
+    assertUniqueEnabledGroupJids([...proposedByVan.values()]);
+
     const now = new Date().toISOString();
     for (const group of groups) {
       const van = byId.get(group.vanId);
@@ -133,6 +164,8 @@ function createVanScheduleCommunicationAuthority({ db, scheduleService = null, o
 }
 
 module.exports.VAN_SCHEDULE_ACTIONS = VAN_SCHEDULE_ACTIONS;
+module.exports.assertUniqueEnabledGroupJids = assertUniqueEnabledGroupJids;
 module.exports.createVanScheduleCommunicationAuthority = createVanScheduleCommunicationAuthority;
+module.exports.defaultGroupName = defaultGroupName;
 module.exports.groupJid = groupJid;
 module.exports.normalizeGroupInput = normalizeGroupInput;
