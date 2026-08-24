@@ -62,8 +62,23 @@ on:
       - 'functions/officeBookingAuthorityCommunication.test.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
-      - '.github/workflows/whatsapp-transactional-production-deploy.yml'
   workflow_dispatch:
+    inputs:
+      deploy_to_production:
+        description: 'Explicitly authorize the guarded production deployment path'
+        required: true
+        type: boolean
+        default: false
+      confirmation:
+        description: 'Type DEPLOY_TRANSACTIONAL_WHATSAPP exactly when deploy_to_production=true'
+        required: false
+        type: string
+        default: ''
+      expected_sha:
+        description: 'Exact commit SHA selected for the controlled deployment'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
