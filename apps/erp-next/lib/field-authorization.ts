@@ -1,3 +1,4 @@
+import type { FieldAllowedAction } from './field-authority';
 import type { AuthPrincipal, Capability } from './security';
 
 export type FieldResponsibility = 'lead' | 'technician' | 'helper';
@@ -8,10 +9,9 @@ export type FieldAssignmentMember = {
 };
 
 /**
- * Server/domain assignment context for one Work Order / Work Visit.
- * `members` should be resolved from direct assignment and canonical date-aware van crew.
- * `vanIds` supports read scoping for legacy Work Orders that currently carry van assignments;
- * mutations still require an explicit member so a helper cannot inherit lead authority from a van id.
+ * Compatibility/test projection for one Work Order / Work Visit.
+ * Canonical Field authorization is server-side in Field Operations Authority.
+ * This shape remains useful for client regression tests while migration is in progress.
  */
 export type FieldAssignmentScope = {
   workOrderId: string;
@@ -19,20 +19,7 @@ export type FieldAssignmentScope = {
   vanIds: readonly string[];
 };
 
-export type FieldAction =
-  | 'read'
-  | 'execute'
-  | 'report.edit'
-  | 'evidence.add'
-  | 'measurement.add'
-  | 'finding.add'
-  | 'asset.add'
-  | 'intervention.add'
-  | 'sale.propose'
-  | 'intervention.complete'
-  | 'visit.complete'
-  | 'office.review'
-  | 'price.override';
+export type FieldAction = FieldAllowedAction;
 
 export type FieldAuthorizationDecision = {
   allowed: boolean;
@@ -94,6 +81,11 @@ function capabilityForAction(action: FieldAction): Capability | null {
   }
 }
 
+/**
+ * Compatibility-only client projection. Do not use this function as authorization for
+ * canonical writes. Future mutations must use server-projected allowedActions for UX and
+ * Field Operations Authority must recalculate authorization before persisting anything.
+ */
 export function authorizeFieldAction(principal: AuthPrincipal, scope: FieldAssignmentScope, action: FieldAction): FieldAuthorizationDecision {
   if (!principal.active) return { allowed: false, reason: 'Principal is inactive.' };
 
@@ -102,7 +94,6 @@ export function authorizeFieldAction(principal: AuthPrincipal, scope: FieldAssig
     return { allowed: false, reason: `Missing capability ${capability ?? 'unknown'}.` };
   }
 
-  // Office/reviewer authority is intentionally separate from technician assignment authority.
   if (action === 'office.review' || action === 'price.override') return { allowed: true };
 
   if (!isAssignedForRead(principal, scope)) {
@@ -138,8 +129,8 @@ export function requireFieldAction(principal: AuthPrincipal, scope: FieldAssignm
 }
 
 /**
- * Query-boundary helper: do not fetch every field job and hide unauthorized rows in React.
- * Repository/adapters may use this predicate only after narrowing to the relevant date/status set.
+ * Compatibility query-boundary helper for client tests/preview only.
+ * Production Field reads are assignment-scoped by Field Operations Authority.
  */
 export function filterAssignedFieldScopes(principal: AuthPrincipal, scopes: readonly FieldAssignmentScope[]) {
   return scopes.filter((scope) => authorizeFieldAction(principal, scope, 'read').allowed);
