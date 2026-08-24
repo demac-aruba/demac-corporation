@@ -1,15 +1,12 @@
-import type { FieldAllowedAction } from './field-authorization';
+import { FIELD_ALLOWED_ACTIONS, type FieldAllowedAction } from './field-authorization';
 
 export const FIELD_AUTHORITY_API_VERSION = 1 as const;
 
-export type FieldResponsibility = 'lead' | 'technician' | 'helper' | 'office';
+const FIELD_RESPONSIBILITIES = ['lead', 'technician', 'helper', 'office'] as const;
+export type FieldResponsibility = (typeof FIELD_RESPONSIBILITIES)[number];
 
-export type FieldAssignmentSource =
-  | 'office'
-  | 'daily_assignment'
-  | 'regular_crew'
-  | 'direct_staff'
-  | 'profile_van_fallback';
+const FIELD_ASSIGNMENT_SOURCES = ['office', 'daily_assignment', 'regular_crew', 'direct_staff', 'profile_van_fallback'] as const;
+export type FieldAssignmentSource = (typeof FIELD_ASSIGNMENT_SOURCES)[number];
 
 export type FieldPlannedWork = {
   id: string;
@@ -69,8 +66,9 @@ export type FieldJobDetail = FieldScheduleJob & { knownEquipment: FieldKnownEqui
 export type FieldScheduleResponse = { success: true; version: typeof FIELD_AUTHORITY_API_VERSION; jobs: FieldScheduleJob[] };
 export type FieldJobResponse = { success: true; version: typeof FIELD_AUTHORITY_API_VERSION; job: FieldJobDetail };
 
-const RESPONSIBILITIES = new Set<FieldResponsibility>(['lead', 'technician', 'helper', 'office']);
-const ASSIGNMENT_SOURCES = new Set<FieldAssignmentSource>(['office', 'daily_assignment', 'regular_crew', 'direct_staff', 'profile_van_fallback']);
+const RESPONSIBILITIES = new Set<string>(FIELD_RESPONSIBILITIES);
+const ASSIGNMENT_SOURCES = new Set<string>(FIELD_ASSIGNMENT_SOURCES);
+const ALLOWED_ACTIONS = new Set<string>(FIELD_ALLOWED_ACTIONS);
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -136,11 +134,11 @@ function scheduleJobValid(value: unknown): value is FieldScheduleJob {
     && Array.isArray(job.technicianIds)
     && job.technicianIds.every(string)
     && string(job.responsibility)
-    && RESPONSIBILITIES.has(job.responsibility as FieldResponsibility)
+    && RESPONSIBILITIES.has(job.responsibility)
     && string(job.assignmentSource)
-    && ASSIGNMENT_SOURCES.has(job.assignmentSource as FieldAssignmentSource)
+    && ASSIGNMENT_SOURCES.has(job.assignmentSource)
     && Array.isArray(job.allowedActions)
-    && job.allowedActions.every(string)
+    && job.allowedActions.every((action) => string(action) && ALLOWED_ACTIONS.has(action))
     && optionalString(job.assignmentRole);
 }
 
