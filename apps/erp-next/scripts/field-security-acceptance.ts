@@ -1,12 +1,12 @@
 import { fieldActionAllowed, type FieldAllowedAction } from '../lib/field-authorization';
 import { hasCapability as hasLegacyCapability } from '../lib/capabilities';
-import { requireCapability, roleCapabilities, type AuthPrincipal } from '../lib/security';
+import { requireCapability, roleCapabilities, type AuthPrincipal, type Capability } from '../lib/security';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`FIELD SECURITY ACCEPTANCE FAILED: ${message}`);
 }
 
-function hasFieldCapability(role: keyof typeof roleCapabilities, capability: Parameters<typeof roleCapabilities[typeof role]['has']>[0]) {
+function hasFieldCapability(role: keyof typeof roleCapabilities, capability: Capability) {
   return roleCapabilities[role].has(capability);
 }
 
