@@ -45,17 +45,20 @@ Legacy Expo remains the operational fallback during the transition. Legacy behav
 
 ### Current baseline
 
-Verified before this objective contract was recorded:
+Verified on the feature branch as of the current implementation/self-audit checkpoint:
 
-- Phase 0 architecture/current-state audit exists in `docs/ai/TECHNICIAN_PORTAL_ARCHITECTURE.md`.
-- Phase 1 canonical domain foundation exists and previously passed focused ERP Next validation.
-- Authorization vocabulary consolidation has begun: `lib/security.ts` is the canonical policy and older capability vocabulary is compatibility-derived.
-- Firebase principal resolution now carries field identity linkage needed for staff/van assignment.
-- Assignment-scoped read logic has begun in `functions/fieldOperationsAuthority*`.
-- The Field Operations Authority is exported by `functions/bootstrap.js`.
-- Phase 2 is **PARTIAL**, not complete: full redirect, full read/mutation enforcement, Firebase rule allow/deny evidence, and Functions validation coverage still require completion.
-- Phase 3 is **PARTIAL/STARTED**, not complete: mobile Technician Home styles/read contracts exist, but the functional canonical Technician Home is not complete and browser-preview field code still exists for compatibility.
-- Production has not been deployed or migrated by this workstream.
+- Phase 0 architecture/current-state audit and the canonical architecture are recorded in `docs/ai/TECHNICIAN_PORTAL_ARCHITECTURE.md`.
+- Phase 1 canonical domain foundation is present and validated at its foundation checkpoint.
+- `lib/security.ts` is the canonical ERP capability vocabulary; the older capability vocabulary is compatibility-derived rather than a second authority.
+- Firebase principal resolution carries canonical `staffId`/`vanId` linkage and technicians without a staff profile fail closed.
+- Slice 1 read/security boundary is validated: Field Authority performs assignment-scoped schedule/job reads, reuses canonical Van identity and shared dated crew membership, projects `responsibility`/`assignmentSource`/`allowedActions`, and denies another-team known-ID access server-side.
+- Field Function syntax/tests are included in the ERP feature CI together with Booking/Scheduling regression coverage.
+- Phase 3 read-only Technician Home is validated: `/field` renders the canonical `TechnicianFieldHome`, technician login/direct-route access resolves to `/field` through the existing navigation authority, and BrowserFieldExecution is no longer the active ERP Next route.
+- Slice 2 server-local WorkVisit preparation and WorkVisit transition boundaries are implemented and test-gated but **not HTTP-activated**. Client WorkVisit start/snapshot/transition authority has been removed.
+- The initial WorkVisit preparation boundary preserves unknown/zero planned equipment quantity, reuses Legacy-compatible `workVisits`, is idempotent/transaction-backed, validates CRM identity/assignment, fails closed on unknown lifecycle values and requires `appendAuditInTransaction`.
+- Phase 2 remains **PARTIAL overall** because Firestore/Storage assignment perimeter and emulator allow/deny evidence remain incomplete; production access-policy changes are not authorized by this workstream.
+- WorkVisit mutation activation is **BLOCKED / NEEDS_HUMAN** until DEMAC approves the canonical persistent Field lifecycle/audit event boundary. No new Field event collection/source of truth has been created.
+- Production has not been deployed or migrated by this workstream; PR #435 remains a draft implementation branch until later review/approval.
 
 A green CI result on an intermediate commit is checkpoint evidence only; it does not satisfy the full Technician Portal Definition of Done.
 
@@ -91,7 +94,7 @@ A green CI result on an intermediate commit is checkpoint evidence only; it does
 - production customer messages;
 - automatic production invoice creation;
 - replacing QuickBooks as accounting authority;
-- creating a second Customer, Property, Asset, service/product catalog, pricing engine, inventory ledger, permission system, scheduling authority, billing authority, or writable service-history source;
+- creating a second Customer, Property, Asset, service/product catalog, pricing engine, inventory ledger, permission system, scheduling authority, billing authority, writable service-history source, or unapproved Field audit/event source of truth;
 - unrelated repository cleanup.
 
 ### Canonical authority boundaries
@@ -113,6 +116,7 @@ A green CI result on an intermediate commit is checkpoint evidence only; it does
 | Billing/accounting handoff | governed billing candidate / operational finance; QuickBooks remains official accounting record |
 | Customer/asset service history | read projections from canonical field truth |
 | Permissions | `apps/erp-next/lib/security.ts` plus server/data assignment enforcement |
+| Field lifecycle audit persistence | **NEEDS_HUMAN** before a persistent canonical boundary is created/activated; `userAuditLogs` is not repurposed |
 
 ## Governance
 
@@ -229,7 +233,8 @@ The following are `NEEDS_HUMAN` whenever reached:
 7. live production integration activation;
 8. production data deletion/overwrite;
 9. automatic production invoice/accounting write when not separately approved;
-10. architectural creation of any new system of record/source of truth.
+10. architectural creation of any new system of record/source of truth;
+11. approval/creation of the canonical persistent Field lifecycle/audit event boundary required before `prepare_visit` or later canonical Field mutations may be activated.
 
 These boundaries do not block branch-local design, implementation, tests, emulator security tests, dry-run/reconciliation planning or other reversible safe work.
 
@@ -310,16 +315,22 @@ The portal is complete only when all of the following are demonstrated:
 
 These are related blockers/status facts, not permission to broaden scope:
 
-- Phase 2 remains incomplete until role-aware technician redirect, end-to-end assignment enforcement, deny-by-ID behavior and security-rule test evidence are complete.
-- The branch Field Operations Authority is not yet included in the Functions `validate:firebase` command and therefore cannot claim Functions validation coverage.
-- Existing Firestore read policy previously observed for field/work-order collections is broader than the target assigned-only policy; branch-local corrected rules and emulator tests may be prepared, but production rule deployment is `NEEDS_HUMAN`.
-- Phase 3 has styles/read foundations but not a completed canonical Technician Home flow.
-- Browser field/localStorage implementations remain compatibility/preview until canonical persistence/UI reaches proven parity; they must not be deleted merely because they are old.
-- No later phase may be marked complete based on the Phase 0/1 checkpoint tests alone.
+- Phase 2 remains incomplete because assignment enforcement across Firestore/Storage data perimeter and emulator allow/deny evidence are still pending. API/server assigned-only reads and known-ID denial are already implemented/tested, but that does not prove the database/storage perimeter.
+- Existing repository Firestore/Storage policy previously observed for field/work-order/evidence access is broader than the target assigned-only model. Branch-local policy design/tests may be prepared, but any actual access-rule change/deployment is `NEEDS_HUMAN`.
+- Phase 3 read-only Technician Home is implemented/validated. It is intentionally not an active-visit execution shell and exposes no canonical mutation buttons.
+- Initial WorkVisit preparation and the WorkVisit transition graph exist server-side and are test-gated, but HTTP activation remains blocked by the unresolved Field lifecycle/audit persistence boundary and by the requirement to re-resolve current assignment safely in the activated mutation path.
+- Phase 4 active visit/status mutation flow therefore remains incomplete even though its pure server transition graph exists.
+- VisitAsset/on-site registration/QR mutation, WorkInterventions, templates/evidence/measurements/findings, Field sales, partial/return visits, Office Review, histories, offline sync and downstream Inventory/Billing handoffs remain future phases.
+- `validateVisitForOfficeReview` and billing/planned-vs-actual helpers in ERP Next remain Phase 1 specification/read-projection utilities; they must not become production mutation authority. Office Review validation must move server-side before Phase 8 activation.
+- Browser field/localStorage implementations remain compatibility/fallback until canonical persistence/UI reaches proven parity; they must not be deleted merely because they are old.
+- Full Firestore/Storage emulator evidence, all 26 mandatory scenarios, all 42 Definition-of-Done items and formal four-pass production hardening are still required before engineering completion.
+- No later phase may be marked complete based only on an earlier green checkpoint.
 
 ## Recovery / migration posture
 
 Any persistence migration must be additive first, idempotent, dry-run capable, backward-compatible where needed, reconcilable and paired with rollback or forward-recovery planning. No destructive production migration is authorized by this task.
+
+The unexposed initial WorkVisit command uses a deterministic Legacy-compatible first-visit identity only for idempotency/adoption. A second physical return must create a distinct WorkVisit and preserve the first visit; the initial compatibility helper must not be reused as a return-visit ID generator.
 
 ## Completion decision
 
