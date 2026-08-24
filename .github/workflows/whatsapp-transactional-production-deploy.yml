@@ -62,7 +62,6 @@ on:
       - 'functions/officeBookingAuthorityCommunication.test.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
-      - '.github/workflows/whatsapp-transactional-production-deploy.yml'
   workflow_dispatch:
     inputs:
       deploy_to_production:
