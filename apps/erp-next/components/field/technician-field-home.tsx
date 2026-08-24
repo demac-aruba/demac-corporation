@@ -24,18 +24,18 @@ function workSummary(job: Pick<FieldScheduleJob, 'plannedWork' | 'customerFacing
 }
 
 function roleLabel(value: FieldScheduleJob['responsibility']) {
-  if (value === 'lead') return 'Lead';
-  if (value === 'helper') return 'Helper';
-  if (value === 'office') return 'Office';
-  return 'Technician';
+  if (value === 'lead') return 'Líder';
+  if (value === 'helper') return 'Ayudante';
+  if (value === 'office') return 'Oficina';
+  return 'Técnico';
 }
 
 function assignmentLabel(value: FieldScheduleJob['assignmentSource']) {
-  if (value === 'daily_assignment') return 'Crew del día';
-  if (value === 'regular_crew') return 'Crew regular';
+  if (value === 'daily_assignment') return 'Equipo del día';
+  if (value === 'regular_crew') return 'Equipo regular';
   if (value === 'direct_staff') return 'Asignación directa';
   if (value === 'profile_van_fallback') return 'Van · solo lectura';
-  return 'Office';
+  return 'Oficina';
 }
 
 function whatsappDigits(value?: string) {
@@ -73,9 +73,9 @@ function JobActions({ job, onOpen }: { job: FieldScheduleJob; onOpen: () => void
   const links = contactLinks(job);
   return (
     <div className={styles.actions}>
-      <button className={`${styles.action} ${styles.primary}`} type="button" onClick={onOpen}>Open</button>
-      {links.map ? <a className={styles.action} href={links.map} target="_blank" rel="noreferrer">Navigate</a> : null}
-      {links.call ? <a className={styles.action} href={links.call}>Call</a> : null}
+      <button className={`${styles.action} ${styles.primary}`} type="button" onClick={onOpen}>Abrir</button>
+      {links.map ? <a className={styles.action} href={links.map} target="_blank" rel="noreferrer">Navegar</a> : null}
+      {links.call ? <a className={styles.action} href={links.call}>Llamar</a> : null}
       {links.whatsapp ? <a className={styles.action} href={links.whatsapp} target="_blank" rel="noreferrer">WhatsApp</a> : null}
     </div>
   );
@@ -102,15 +102,36 @@ function JobCard({ job, onOpen }: { job: FieldScheduleJob; onOpen: () => void })
   );
 }
 
-function DetailView({ job, loading, onBack }: { job: FieldJobDetail | null; loading: boolean; onBack: () => void }) {
-  if (loading) return <div className={styles.loading}>Cargando información del trabajo…</div>;
-  if (!job) return <div className={styles.error}>No se pudo abrir este trabajo.</div>;
-  const links = contactLinks(job);
+function DetailView({ job, loading, error, onBack }: {
+  job: FieldJobDetail | null;
+  loading: boolean;
+  error: string | null;
+  onBack: () => void;
+}) {
+  if (loading || error || !job) {
+    return (
+      <div className={styles.shell}>
+        <div className={styles.detailHeader}>
+          <button className={styles.back} type="button" onClick={onBack} aria-label="Volver al itinerario">←</button>
+          <div className={styles.detailTitle}>
+            <h1>Detalle del trabajo</h1>
+            <p>{loading ? 'Cargando…' : 'No disponible'}</p>
+          </div>
+        </div>
+        <section className={styles.panel}>
+          <div className={error ? styles.error : styles.loading}>
+            {loading ? 'Cargando información del trabajo…' : error || 'No se pudo abrir este trabajo.'}
+          </div>
+        </section>
+      </div>
+    );
+  }
 
+  const links = contactLinks(job);
   return (
     <div className={styles.shell}>
       <div className={styles.detailHeader}>
-        <button className={styles.back} type="button" onClick={onBack} aria-label="Back to schedule">←</button>
+        <button className={styles.back} type="button" onClick={onBack} aria-label="Volver al itinerario">←</button>
         <div className={styles.detailTitle}>
           <h1>{job.customerName}</h1>
           <p>{job.time || 'Sin hora'} · {job.status} · {job.workOrderId}</p>
@@ -122,7 +143,7 @@ function DetailView({ job, loading, onBack }: { job: FieldJobDetail | null; load
           <section className={styles.section}>
             <h2>PROGRAMADO POR LA OFICINA</h2>
             <div className={styles.planned}>
-              <div className={styles.plannedTitle}>Planned scope · no se modifica en campo</div>
+              <div className={styles.plannedTitle}>Alcance planificado · no se modifica en campo</div>
               {job.plannedWork.length ? job.plannedWork.map((line) => (
                 <div className={styles.plannedItem} key={line.id}><span>{line.label}</span><strong>{line.quantity}×</strong></div>
               )) : <p className={styles.helper}>No hay líneas programadas estructuradas. Revisa la descripción del cliente.</p>}
@@ -158,8 +179,8 @@ function DetailView({ job, loading, onBack }: { job: FieldJobDetail | null; load
               <div className={styles.info} style={{ gridColumn: '1 / -1' }}><span>Dirección</span><strong>{job.address || 'No disponible'}</strong></div>
             </div>
             <div className={styles.contactActions}>
-              {links.map ? <a href={links.map} target="_blank" rel="noreferrer">Navigate</a> : null}
-              {links.call ? <a href={links.call}>Call</a> : null}
+              {links.map ? <a href={links.map} target="_blank" rel="noreferrer">Navegar</a> : null}
+              {links.call ? <a href={links.call}>Llamar</a> : null}
               {links.whatsapp ? <a href={links.whatsapp} target="_blank" rel="noreferrer">WhatsApp</a> : null}
             </div>
           </section>
@@ -168,11 +189,6 @@ function DetailView({ job, loading, onBack }: { job: FieldJobDetail | null; load
             <h2>INSTRUCCIONES</h2>
             <div className={styles.info}><span>Acceso</span><strong>{job.accessInstructions || 'Sin instrucciones especiales'}</strong></div>
             <div className={styles.info} style={{ marginTop: 10 }}><span>Nota para técnico</span><strong>{job.technicianInstructions || 'Sin instrucciones adicionales'}</strong></div>
-          </section>
-
-          <section className={styles.section}>
-            <h2>FIELD AUTHORITY</h2>
-            <p className={styles.helper}>Esta vista consume información autorizada por servidor. Las acciones de ejecución permanecen deshabilitadas en ERP Next hasta que exista la mutation transaccional y auditada correspondiente.</p>
           </section>
         </aside>
       </div>
@@ -188,7 +204,8 @@ export function TechnicianFieldHome() {
   const [detail, setDetail] = useState<FieldJobDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
 
   const today = arubaDateKey();
   const tomorrow = addDaysToDateKey(today, 1);
@@ -196,12 +213,12 @@ export function TechnicianFieldHome() {
 
   const loadSchedule = useCallback(async () => {
     setLoading(true);
-    setError(null);
+    setScheduleError(null);
     try {
       const response = await getFieldSchedule(today, weekEnd);
       setJobs(response.jobs);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'No se pudo cargar el schedule del técnico.');
+      setScheduleError(loadError instanceof Error ? loadError.message : 'No se pudo cargar el itinerario del técnico.');
     } finally {
       setLoading(false);
     }
@@ -212,14 +229,16 @@ export function TechnicianFieldHome() {
   useEffect(() => {
     if (!selectedWorkOrderId) {
       setDetail(null);
+      setDetailError(null);
       return undefined;
     }
     let active = true;
+    setDetail(null);
     setDetailLoading(true);
-    setError(null);
+    setDetailError(null);
     void getFieldJob(selectedWorkOrderId)
       .then((response) => { if (active) setDetail(response.job); })
-      .catch((loadError) => { if (active) setError(loadError instanceof Error ? loadError.message : 'No se pudo abrir el trabajo.'); })
+      .catch((loadError) => { if (active) setDetailError(loadError instanceof Error ? loadError.message : 'No se pudo abrir el trabajo.'); })
       .finally(() => { if (active) setDetailLoading(false); });
     return () => { active = false; };
   }, [selectedWorkOrderId]);
@@ -246,47 +265,42 @@ export function TechnicianFieldHome() {
   }, [todayJobs]);
 
   if (selectedWorkOrderId) {
-    return <DetailView job={detail} loading={detailLoading} onBack={() => { setSelectedWorkOrderId(null); setError(null); }} />;
+    return <DetailView job={detail} loading={detailLoading} error={detailError} onBack={() => setSelectedWorkOrderId(null)} />;
   }
 
   return (
     <div className={styles.shell}>
       <header className={styles.head}>
-        <div><div className={styles.eyebrow}>Field Operations · Authorized Schedule</div><h1>Mi ruta de trabajo</h1></div>
+        <div><div className={styles.eyebrow}>DEMAC · Trabajo de campo</div><h1>Mi ruta de trabajo</h1></div>
         <div className={styles.identity}>{principal.displayName}{principal.staffId ? ` · ${principal.staffId}` : ''}</div>
       </header>
 
-      <div className={styles.tabs} role="tablist" aria-label="Schedule range">
-        <button className={`${styles.tab} ${range === 'today' ? styles.tabActive : ''}`} type="button" onClick={() => setRange('today')}>Today</button>
-        <button className={`${styles.tab} ${range === 'tomorrow' ? styles.tabActive : ''}`} type="button" onClick={() => setRange('tomorrow')}>Tomorrow</button>
-        <button className={`${styles.tab} ${range === 'week' ? styles.tabActive : ''}`} type="button" onClick={() => setRange('week')}>Week</button>
+      <div className={styles.tabs} role="tablist" aria-label="Período del itinerario">
+        <button className={`${styles.tab} ${range === 'today' ? styles.tabActive : ''}`} type="button" onClick={() => setRange('today')}>Hoy</button>
+        <button className={`${styles.tab} ${range === 'tomorrow' ? styles.tabActive : ''}`} type="button" onClick={() => setRange('tomorrow')}>Mañana</button>
+        <button className={`${styles.tab} ${range === 'week' ? styles.tabActive : ''}`} type="button" onClick={() => setRange('week')}>Semana</button>
       </div>
 
-      <section className={styles.summary} aria-label="Today summary">
+      <section className={styles.summary} aria-label="Resumen de hoy">
         <div className={styles.metric}><strong>{summary.scheduled}</strong><span>Programados hoy</span></div>
         <div className={styles.metric}><strong>{summary.completed}</strong><span>Completados</span></div>
         <div className={styles.metric}><strong>{summary.inProgress}</strong><span>En curso</span></div>
         <div className={styles.metric}><strong>{summary.remaining}</strong><span>Restantes</span></div>
       </section>
 
-      {error ? <section className={styles.panel}><div className={styles.error}>{error}<div style={{ marginTop: 12 }}><button className={styles.action} type="button" onClick={() => void loadSchedule()}>Retry</button></div></div></section> : null}
+      {scheduleError ? <section className={styles.panel}><div className={styles.error}>{scheduleError}<div style={{ marginTop: 12 }}><button className={styles.action} type="button" onClick={() => void loadSchedule()}>Reintentar</button></div></div></section> : null}
 
       {range === 'today' ? <section className={styles.panel}>
-        <div className={styles.panelHead}><h2>Next job</h2><span>{formatArubaDateKey(today, { weekday: 'long', month: 'long', day: 'numeric' })}</span></div>
+        <div className={styles.panelHead}><h2>Próximo trabajo</h2><span>{formatArubaDateKey(today, { weekday: 'long', month: 'long', day: 'numeric' })}</span></div>
         {loading ? <div className={styles.loading}>Cargando ruta asignada…</div> : nextJob ? <div className={styles.next}><JobCard job={nextJob} onOpen={() => setSelectedWorkOrderId(nextJob.workOrderId)} /></div> : <div className={styles.empty}>No quedan trabajos activos asignados para hoy.</div>}
       </section> : null}
 
       <section className={styles.panel}>
         <div className={styles.panelHead}>
-          <h2>{range === 'today' ? 'Today' : range === 'tomorrow' ? 'Tomorrow' : 'Next 7 days'}</h2>
-          <span>{loading ? 'Loading…' : `${visibleJobs.length} job${visibleJobs.length === 1 ? '' : 's'}`}</span>
+          <h2>{range === 'today' ? 'Hoy' : range === 'tomorrow' ? 'Mañana' : 'Próximos 7 días'}</h2>
+          <span>{loading ? 'Cargando…' : `${visibleJobs.length} trabajo${visibleJobs.length === 1 ? '' : 's'}`}</span>
         </div>
-        {loading ? <div className={styles.loading}>Cargando schedule autorizado…</div> : visibleJobs.length ? visibleJobs.map((job) => <JobCard key={job.workOrderId} job={job} onOpen={() => setSelectedWorkOrderId(job.workOrderId)} />) : <div className={styles.empty}>No hay trabajos asignados en este período.</div>}
-      </section>
-
-      <section className={styles.section}>
-        <h2>Modo seguro de lectura</h2>
-        <p className={styles.helper}>El schedule y el detalle vienen de Field Operations Authority y respetan la asignación del técnico. ERP Next todavía no envía cambios de estado ni alcance hasta que el command transaccional y su audit ledger estén aprobados.</p>
+        {loading ? <div className={styles.loading}>Cargando itinerario autorizado…</div> : visibleJobs.length ? visibleJobs.map((job) => <JobCard key={job.workOrderId} job={job} onOpen={() => setSelectedWorkOrderId(job.workOrderId)} />) : <div className={styles.empty}>No hay trabajos asignados en este período.</div>}
       </section>
     </div>
   );
