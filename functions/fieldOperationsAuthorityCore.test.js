@@ -5,6 +5,7 @@ const {
   loadAssignedJob,
   loadAssignedSchedule,
   normalizeFieldIdentity,
+  normalizeFieldRole,
 } = require('./fieldOperationsAuthorityCore');
 
 function doc(id, value) {
@@ -103,6 +104,26 @@ test('date range is bounded to one technician week', () => {
 
 test('technician identity requires canonical staff linkage', () => {
   assert.throws(() => normalizeFieldIdentity({ uid: 'uid-x', profile: { active: true, role: 'technician' } }), /staff profile/);
+});
+
+test('server role normalization matches ERP canonical vocabulary while preserving legacy aliases', () => {
+  assert.equal(normalizeFieldRole('office_operator'), 'office_operator');
+  assert.equal(normalizeFieldRole('office'), 'office_operator');
+  assert.equal(normalizeFieldRole('operations'), 'operations');
+  assert.equal(normalizeFieldRole('supervisor'), 'operations');
+  assert.equal(normalizeFieldRole('super-admin'), 'super_admin');
+  assert.equal(normalizeFieldRole('tech'), 'technician');
+
+  const office = normalizeFieldIdentity({ uid: 'office-canonical', profile: { active: true, role: 'office_operator', name: 'Office' }, decoded: {} });
+  const operations = normalizeFieldIdentity({ uid: 'ops-canonical', profile: { active: true, role: 'operations', name: 'Operations' }, decoded: {} });
+  assert.equal(office.role, 'office_operator');
+  assert.equal(office.operations, true);
+  assert.equal(operations.role, 'operations');
+  assert.equal(operations.operations, true);
+  assert.throws(
+    () => normalizeFieldIdentity({ uid: 'finance-1', profile: { active: true, role: 'finance', name: 'Finance' }, decoded: {} }),
+    /not authorized for Field Operations/,
+  );
 });
 
 test('assigned schedule query returns only the technician van/team work with lead actions', async () => {
@@ -233,21 +254,28 @@ test('canonical Van aliases resolve historical Work Order and daily assignment i
   assert.equal(jobs[0].assignmentSource, 'daily_assignment');
 });
 
-test('operations may inspect field schedule without impersonating a technician assignment', async () => {
+test('canonical office_operator and legacy office aliases share Office Field behavior', async () => {
   const db = createDb(baseSeed);
-  const office = normalizeFieldIdentity({ uid: 'office-1', profile: { active: true, role: 'office', name: 'Office' }, decoded: {} });
-  const jobs = await loadAssignedSchedule(db, office, '2026-08-24', '2026-08-24');
-  assert.deepEqual(jobs.map((job) => job.workOrderId), ['WO-1', 'WO-2']);
-  assert.ok(jobs.every((job) => job.responsibility === 'office'));
-  assert.ok(jobs.every((job) => job.allowedActions.includes('office.review')));
-  assert.ok(jobs.every((job) => !job.allowedActions.includes('execute')));
-  assert.ok(jobs.every((job) => !job.allowedActions.includes('price.override')));
+  for (const role of ['office_operator', 'office']) {
+    const office = normalizeFieldIdentity({ uid: `office-${role}`, profile: { active: true, role, name: 'Office' }, decoded: {} });
+    const jobs = await loadAssignedSchedule(db, office, '2026-08-24', '2026-08-24');
+    assert.equal(office.role, 'office_operator');
+    assert.deepEqual(jobs.map((job) => job.workOrderId), ['WO-1', 'WO-2']);
+    assert.ok(jobs.every((job) => job.responsibility === 'office'));
+    assert.ok(jobs.every((job) => job.allowedActions.includes('office.review')));
+    assert.ok(jobs.every((job) => !job.allowedActions.includes('execute')));
+    assert.ok(jobs.every((job) => !job.allowedActions.includes('price.override')));
+  }
 });
 
-test('operations supervisor may receive price override without technician execution authority', async () => {
+test('canonical operations and legacy supervisor aliases share governed price override', async () => {
   const db = createDb(baseSeed);
-  const supervisor = normalizeFieldIdentity({ uid: 'ops-1', profile: { active: true, role: 'supervisor', name: 'Operations' }, decoded: {} });
-  const jobs = await loadAssignedSchedule(db, supervisor, '2026-08-24', '2026-08-24');
-  assert.ok(jobs.every((job) => job.allowedActions.includes('price.override')));
-  assert.ok(jobs.every((job) => !job.allowedActions.includes('execute')));
+  for (const role of ['operations', 'supervisor']) {
+    const operations = normalizeFieldIdentity({ uid: `ops-${role}`, profile: { active: true, role, name: 'Operations' }, decoded: {} });
+    const jobs = await loadAssignedSchedule(db, operations, '2026-08-24', '2026-08-24');
+    assert.equal(operations.role, 'operations');
+    assert.ok(jobs.every((job) => job.allowedActions.includes('price.override')));
+    assert.ok(jobs.every((job) => job.allowedActions.includes('office.review')));
+    assert.ok(jobs.every((job) => !job.allowedActions.includes('execute')));
+  }
 });
