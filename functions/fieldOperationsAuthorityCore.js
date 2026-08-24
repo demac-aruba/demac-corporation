@@ -2,9 +2,9 @@ const { canonicalizeVanCatalog, resolveCanonicalVanId } = require('./bookingVanI
 const { resolveCrewMembership } = require('./bookingSchedulingPrimitives');
 
 const FIELD_OPERATIONS_API_VERSION = 1;
-const FIELD_ROLES = new Set(['technician', 'admin', 'office', 'supervisor', 'owner', 'super_admin', 'super-admin', 'superadmin']);
-const OPERATIONS_ROLES = new Set(['admin', 'office', 'supervisor', 'owner', 'super_admin', 'super-admin', 'superadmin']);
-const PRICE_OVERRIDE_ROLES = new Set(['admin', 'supervisor', 'owner', 'super_admin', 'super-admin', 'superadmin']);
+const FIELD_ROLES = new Set(['technician', 'operations', 'office_operator', 'super_admin']);
+const OPERATIONS_ROLES = new Set(['operations', 'office_operator', 'super_admin']);
+const PRICE_OVERRIDE_ROLES = new Set(['operations', 'super_admin']);
 const INACTIVE_WORK_ORDER_STATUSES = new Set(['Solicitud recibida', 'Reserva temporal', 'Cancelada', 'Reprogramada', 'Completada', 'Facturada', 'Pagada']);
 const HIDDEN_SCHEDULE_WORK_ORDER_STATUSES = new Set(['Solicitud recibida', 'Reserva temporal', 'Cancelada', 'Reprogramada', 'Facturada', 'Pagada']);
 const FIELD_ALLOWED_ACTIONS = Object.freeze([
@@ -51,8 +51,17 @@ function fieldError(code, message, status = 400, details = {}) {
   return error;
 }
 
+function normalizeFieldRole(value) {
+  const raw = text(value, 80).toLowerCase().replace(/[\s-]+/g, '_');
+  if (raw === 'owner' || raw === 'admin' || raw === 'superadmin' || raw === 'super_admin') return 'super_admin';
+  if (raw === 'operation' || raw === 'operations' || raw === 'manager' || raw === 'supervisor') return 'operations';
+  if (raw === 'office' || raw === 'operator' || raw === 'office_operator') return 'office_operator';
+  if (raw === 'technician' || raw === 'tech') return 'technician';
+  return raw;
+}
+
 function normalizeFieldIdentity({ uid, profile = {}, decoded = {} }) {
-  const role = text(profile.role || decoded.role, 80).toLowerCase();
+  const role = normalizeFieldRole(profile.role || decoded.role);
   if (!FIELD_ROLES.has(role)) throw fieldError('permission_denied', 'This user is not authorized for Field Operations.', 403);
   if (!profile || profile.active !== true) throw fieldError('permission_denied', 'This DEMAC ERP user is inactive or not provisioned.', 403);
   const staffId = text(profile.staffId, 180);
@@ -412,6 +421,7 @@ module.exports = {
   loadAssignedOrdersForDate,
   loadAssignedSchedule,
   normalizeFieldIdentity,
+  normalizeFieldRole,
   orderAssignedToIdentity,
   plannedWorkItems,
   projectScheduleJob,
