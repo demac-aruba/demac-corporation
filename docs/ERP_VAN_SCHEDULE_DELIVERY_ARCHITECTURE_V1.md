@@ -99,7 +99,7 @@ The transactional producer workflow must:
 1. validate the producer boundary and focused regression tests;
 2. authenticate the configured deployment identity;
 3. read canonical schedule configuration from `vanScheduleDeliveryConfig.js`;
-4. prove Cloud Scheduler is readable before changing production;
+4. require the active deployment principal to have an unconditional project-level `roles/cloudscheduler.admin` binding on `demac-corporation` and independently prove the live Scheduler API can list/read jobs before changing production;
 5. deploy the existing notification producers through Firebase CLI;
 6. verify the deployed functions are ACTIVE;
 7. verify the exact canonical Scheduler job exists, is ENABLED, has the expected cron/timezone, and has an HTTP target and OIDC invoker.
@@ -110,11 +110,11 @@ Historical data migrations must not run on every ordinary application deployment
 
 ## Infrastructure prerequisite / blocker
 
-The current GitHub Firebase deployment credential previously failed `cloudscheduler.jobs.list`. Until the deployment identity has effective Cloud Scheduler management capability, the production deploy must fail closed before deploying the scheduled producer.
+The current GitHub Firebase deployment credential previously failed `cloudscheduler.jobs.list`. Until the deployment identity has the governed Scheduler authority required by issue #428, the production deploy must fail closed before deploying the scheduled producer.
 
-Google Cloud's predefined `roles/cloudscheduler.admin` includes create, update, delete, get, list, enable/pause/run and related Scheduler permissions. An approved equivalent custom role may be used if DEMAC later standardizes a narrower deployment role. Service-agent roles must not be granted to the GitHub deployment principal.
+For Architecture V1 the accepted contract is an **unconditional project-level `roles/cloudscheduler.admin` binding** on project `demac-corporation` for the active Firebase/GitHub deployment principal. The workflow intentionally does not accept an arbitrary custom role in this version because the lifecycle permission set must be explicit and operationally auditable. Service-agent roles must not be granted to the GitHub deployment principal.
 
-Longer-term security hardening should move GitHub deployment away from a general Firebase Admin SDK service account to a dedicated CI/deployment service account with only the roles needed for the governed deployment boundaries.
+Longer-term security hardening may move GitHub deployment away from the general Firebase Admin SDK service account to a dedicated CI/deployment service account, but that is a separate reviewed infrastructure change rather than a bypass for this incident repair.
 
 ## Removed / consolidated behavior
 
@@ -122,12 +122,24 @@ This architecture removes from the normal production path:
 
 - runtime JID realignment based on technician/group names;
 - hardcoded crew-name defaults inside the daily schedule producer;
-- recurring execution of historical Van-group and Meta→wacli migrations during ordinary producer deploys;
-- the completed 2026-08-22 one-time sender;
-- live WhatsApp group probe workflow/script;
-- probe-confirmed JID correction workflow/script.
+- recurring execution of historical Van-group and Meta→wacli migrations during ordinary producer deploys.
 
-Historical migration modules that remain in the repository are explicit legacy tools only and are not runtime authority.
+### Legacy / one-time artifact retirement classification
+
+The deleted operational artifacts were reference-analyzed and are not removed merely because of age or naming. Their classification is:
+
+| Artifact | Prior classification | Retirement classification | Evidence / reason |
+| --- | --- | --- | --- |
+| `.github/workflows/one-time-van-schedule-send-20260822.yml` | ONE-TIME OPS | `DEAD` | Entry point is explicitly date-scoped to 2026-08-22; the authorized send completed; keeping a push-triggered real sender creates duplicate-send risk after its purpose ended. |
+| `functions/ops/sendVanSchedules20260822.js` | ONE-TIME OPS | `DEAD` | Hardcoded 2026-08-22 execution helper used only by the one-time workflow; no runtime/bootstrap/package-script authority depends on it. |
+| `.github/workflows/van-group-id-probe.yml` | MIGRATION / DIAGNOSTIC | `DEAD` | Physical WhatsApp group identity probe completed on 2026-08-22; repeated live probes are no longer an application requirement. |
+| `functions/migrations/probeVanScheduleGroupIds.js` | MIGRATION / DIAGNOSTIC | `DEAD` | Probe helper existed to discover physical JID ownership; canonical persisted Van records are now the authority and production audit verified the corrected mappings. |
+| `.github/workflows/van-group-id-correction.yml` | MIGRATION | `DEAD` | Its only purpose was to apply the observed VAN-1/VAN-4 correction and then send four live verification probes; rerunning it would mutate/communicate production unnecessarily. |
+| `functions/migrations/applyObservedVanGroupIdCorrection.js` | MIGRATION | `DEAD` after completed migration | The migration is explicitly identified as `observed-van-group-jid-correction-2026-08-22-v1`, writes a persistent correction marker, and production read-only audit confirmed that marker and four unique corrected canonical mappings. Runtime no longer imports or needs this migration. |
+
+Reference analysis also confirms `functions/package.json` does not expose the deleted correction/probe/one-time sender as a package script or validation dependency. Once their dedicated workflows are removed, they have no supported executable consumer.
+
+The remaining historical modules such as `migrations/realignVanScheduleGroups.js` and `migrations/migrateLegacyMetaTransactionalQueueToWacli.js` are **not** deleted by this PR. They remain explicit migration/compatibility tools, are still covered by validation/tests where applicable, and ordinary production deployment no longer executes them automatically.
 
 ## Testing required before integration
 
@@ -161,4 +173,4 @@ Do not manually invent a replacement Cloud Scheduler job or a second sending pat
 
 - The broader Booking Van identity model still explicitly recognizes the current physical VAN-1 through VAN-4 fleet. This predates this repair and must be generalized as a separate fleet-scalability change because it affects booking/capacity architecture beyond WhatsApp delivery.
 - `technicianDailyScheduleBatches` is a last-observed snapshot, not asynchronous provider truth. If delivery acknowledgement arrives after the last scheduled reconciliation, `whatsappOutboundQueue` remains authoritative.
-- Independent post-08:10 health alerting is still required so an absent/failed batch is surfaced proactively rather than discovered by a technician. That monitor must be independent of the same Cloud Scheduler failure domain and must not become a second message producer.
+- Independent post-08:10 health alerting is implemented as the stacked follow-up in PR #431 and remains separately review/test gated; it must not become a second message producer.
