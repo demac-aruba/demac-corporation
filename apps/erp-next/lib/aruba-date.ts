@@ -6,7 +6,7 @@ function parts(date: Date, includeTime = false) {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-    ...(includeTime ? { hour: '2-digit', minute: '2-digit', hour12: false } : {}),
+    ...(includeTime ? { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' as const } : {}),
   });
   return Object.fromEntries(formatter.formatToParts(date).map((part) => [part.type, part.value]));
 }
