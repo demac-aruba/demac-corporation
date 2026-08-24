@@ -6,6 +6,7 @@ const FIELD_ROLES = new Set(['technician', 'admin', 'office', 'supervisor', 'own
 const OPERATIONS_ROLES = new Set(['admin', 'office', 'supervisor', 'owner', 'super_admin', 'super-admin', 'superadmin']);
 const PRICE_OVERRIDE_ROLES = new Set(['admin', 'supervisor', 'owner', 'super_admin', 'super-admin', 'superadmin']);
 const INACTIVE_WORK_ORDER_STATUSES = new Set(['Solicitud recibida', 'Reserva temporal', 'Cancelada', 'Reprogramada', 'Completada', 'Facturada', 'Pagada']);
+const HIDDEN_SCHEDULE_WORK_ORDER_STATUSES = new Set(['Solicitud recibida', 'Reserva temporal', 'Cancelada', 'Reprogramada', 'Facturada', 'Pagada']);
 const FIELD_ALLOWED_ACTIONS = Object.freeze([
   'read',
   'execute',
@@ -94,6 +95,10 @@ function activeWorkOrder(order) {
   return Boolean(order) && !INACTIVE_WORK_ORDER_STATUSES.has(text(order.status, 80));
 }
 
+function scheduleVisibleWorkOrder(order) {
+  return Boolean(order) && !HIDDEN_SCHEDULE_WORK_ORDER_STATUSES.has(text(order.status, 80));
+}
+
 function snapshotItems(snapshot) {
   return (snapshot?.docs || []).map((document) => ({ id: document.id, ...document.data() }));
 }
@@ -170,6 +175,12 @@ function allowedActionsForAssignment(identity, assignment) {
   }
   if (assignment.readOnly) return ['read'];
   return [...(RESPONSIBILITY_ACTIONS[assignment.responsibility] || ['read'])];
+}
+
+function allowedActionsForWorkOrder(identity, assignment, order) {
+  const actions = allowedActionsForAssignment(identity, assignment);
+  if (activeWorkOrder(order)) return actions;
+  return actions.includes('read') ? ['read'] : [];
 }
 
 function crewResponsibility({ identity, dateKey, workOrder, ...context }) {
@@ -270,7 +281,7 @@ function projectScheduleJob({ order, client, property, appointment, identity, as
     technicianIds: unique(Array.isArray(order.technicianIds) ? order.technicianIds : []),
     responsibility: assignment.responsibility,
     assignmentSource: assignment.source,
-    allowedActions: allowedActionsForAssignment(identity, assignment),
+    allowedActions: allowedActionsForWorkOrder(identity, assignment, order),
     assignmentRole: text(order.appointmentAssignmentRole, 40),
   };
 }
@@ -302,7 +313,7 @@ async function loadAssignedSchedule(db, identity, startDate, endDate) {
   const rows = [];
   for (const dateKey of dates) {
     const context = await loadCrewContext(db, dateKey);
-    const orders = (await loadAssignedOrdersForDate(db, identity, dateKey, context)).filter(activeWorkOrder);
+    const orders = (await loadAssignedOrdersForDate(db, identity, dateKey, context)).filter(scheduleVisibleWorkOrder);
     const maps = await loadRelatedMaps(db, orders);
     for (const order of orders) {
       const assignment = assignmentWithContext(identity, order, dateKey, context);
@@ -348,7 +359,7 @@ function equipmentTechnicalProjection(item) {
 
 async function loadAssignedJob(db, identity, workOrderId) {
   const order = await getDocument(db, 'workOrders', workOrderId);
-  if (!order || !activeWorkOrder(order)) throw fieldError('work_order_not_found', 'The requested Work Order is not available.', 404);
+  if (!order || !scheduleVisibleWorkOrder(order)) throw fieldError('work_order_not_found', 'The requested Work Order is not available.', 404);
   const dateKey = validDateKey(order.date);
   const context = await loadCrewContext(db, dateKey);
   const assignment = assignmentWithContext(identity, order, dateKey, context);
@@ -390,6 +401,7 @@ module.exports = {
   FIELD_OPERATIONS_API_VERSION,
   activeWorkOrder,
   allowedActionsForAssignment,
+  allowedActionsForWorkOrder,
   assignedVanIds,
   crewResponsibility,
   dateRange,
@@ -403,5 +415,6 @@ module.exports = {
   orderAssignedToIdentity,
   plannedWorkItems,
   projectScheduleJob,
+  scheduleVisibleWorkOrder,
   validDateKey,
 };
