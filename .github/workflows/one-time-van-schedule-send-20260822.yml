@@ -42,10 +42,13 @@ jobs:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
 
       - name: Send 2026-08-22 schedules through canonical WhatsApp queue
+        shell: bash
         env:
           GCLOUD_PROJECT: demac-corporation
           GOOGLE_CLOUD_PROJECT: demac-corporation
-        run: node functions/ops/sendVanSchedules20260822.js | tee /tmp/van-send-result.json
+        run: |
+          set -euo pipefail
+          node functions/ops/sendVanSchedules20260822.js | tee /tmp/van-send-result.json
 
       - name: Publish verified send status
         if: success()
@@ -69,7 +72,9 @@ jobs:
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
+          set -euo pipefail
           gh api --method POST "repos/${{ github.repository }}/statuses/${{ github.sha }}" \
             -f state=failure \
             -f context='DEMAC / Van Schedule Send / 2026-08-22' \
