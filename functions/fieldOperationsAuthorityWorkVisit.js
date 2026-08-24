@@ -158,15 +158,16 @@ function buildLegacyCompatibleWorkVisit({ order, appointment, identity, assignme
 function projectCanonicalWorkVisit(record, identityFallback = {}) {
   const snapshot = record?.scheduledScopeSnapshot || {};
   const appointmentId = text(record?.appointmentId || snapshot.appointmentId || identityFallback.appointmentId, 180);
+  const propertyId = text(record?.propertyId || identityFallback.propertyId, 180);
   return {
     id: text(record?.id, 180),
     appointmentId,
     workOrderId: text(record?.workOrderId, 180),
     customerId: text(record?.clientId || record?.customerId, 180),
-    propertyId: text(record?.propertyId, 180),
+    propertyId,
     scheduledScopeSnapshot: {
-      // Active Legacy snapshots predate appointmentId/workLines. Fill only the structural
-      // Appointment identity from the already-validated Work Order; never invent historical lines.
+      // Active Legacy snapshots predate appointmentId/workLines. Fill only structural identity
+      // from the already-validated Work Order; never invent historical planned work lines.
       appointmentId,
       capturedAt: text(snapshot.capturedAt || record?.createdAt, 80),
       estimatedUnitCount: nonNegativeQuantity(snapshot.estimatedUnitCount),
@@ -209,7 +210,8 @@ function assertExistingVisitCompatible(existing, order) {
   if (text(existing.clientId || existing.customerId, 180) !== text(order.clientId, 180)) {
     throw fieldError('visit_identity_conflict', 'The existing Work Visit belongs to a different Customer.', 409);
   }
-  if (text(existing.propertyId, 180) !== text(order.propertyId, 180)) {
+  const existingPropertyId = text(existing.propertyId, 180);
+  if (existingPropertyId && existingPropertyId !== text(order.propertyId, 180)) {
     throw fieldError('visit_identity_conflict', 'The existing Work Visit belongs to a different Property.', 409);
   }
   const existingAppointmentId = text(existing.appointmentId || existing.scheduledScopeSnapshot?.appointmentId, 180);
@@ -349,7 +351,7 @@ function createPrepareWorkVisitCommand({ db, resolveAssignment, appendAuditInTra
         result = {
           replayed: true,
           source: existing.fieldAuthorityVersion ? 'field_authority' : 'legacy_existing',
-          visit: projectCanonicalWorkVisit(existing, { appointmentId }),
+          visit: projectCanonicalWorkVisit(existing, { appointmentId, propertyId }),
           allowedActions,
         };
         return;
@@ -363,7 +365,7 @@ function createPrepareWorkVisitCommand({ db, resolveAssignment, appendAuditInTra
         result = {
           replayed: true,
           source: legacyExisting.fieldAuthorityVersion ? 'field_authority' : 'legacy_existing',
-          visit: projectCanonicalWorkVisit(legacyExisting, { appointmentId }),
+          visit: projectCanonicalWorkVisit(legacyExisting, { appointmentId, propertyId }),
           allowedActions,
         };
         return;
