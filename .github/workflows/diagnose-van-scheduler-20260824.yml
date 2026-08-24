@@ -34,18 +34,14 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Inspect Cloud Scheduler and deployed function
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
-          job="$(gcloud scheduler jobs list --project=demac-corporation --location=us-central1 --filter='name:sendDailyTechnicianSchedules' --format='value(name)' | head -n 1)"
-          if [ -z "$job" ]; then
-            echo 'SCHEDULER_JOB_NOT_FOUND'
-          else
-            echo 'SCHEDULER_JOB'
-            gcloud scheduler jobs describe "$job" --project=demac-corporation --location=us-central1 --format='yaml(name,state,schedule,timeZone,lastAttemptTime,status)'
-          fi
-          echo 'FUNCTION'
-          gcloud functions describe sendDailyTechnicianSchedules --project=demac-corporation --gen2 --region=us-central1 --format='yaml(name,state,updateTime,buildConfig.runtime)'
+          set -u
+          echo 'SCHEDULER_INSPECTION'
+          gcloud scheduler jobs list --project=demac-corporation --location=us-central1 --filter='name:sendDailyTechnicianSchedules' --format='yaml(name,state,schedule,timeZone,lastAttemptTime,status)' || true
+          echo 'FUNCTION_INSPECTION'
+          gcloud functions describe sendDailyTechnicianSchedules --project=demac-corporation --gen2 --region=us-central1 --format='yaml(name,state,updateTime,buildConfig.runtime)' || true
 
       - name: Inspect 2026-08-24 batch and queue state
         shell: bash
@@ -72,19 +68,23 @@ jobs:
             const activeWorkOrders = workOrders.filter(w => !inactive.has(String(w.status || '').trim()));
             const catalog = canonicalizeVanCatalog(vanSnap.docs.map(d => ({ id: d.id, ...d.data() })));
             let queueDocs = [];
+            let queueQueryError = null;
             try {
               const q = await db.collection('whatsappOutboundQueue').where('metadata.scheduleDate', '==', dateKey).get();
               queueDocs = q.docs.map(d => ({ id: d.id, ...d.data() }));
             } catch (error) {
-              console.log('QUEUE_QUERY_ERROR', error.message);
+              queueQueryError = error.message;
             }
             const queueByStatus = {};
             const queueByType = {};
+            const queueByReason = {};
             for (const item of queueDocs) {
               const status = String(item.status || 'unknown');
               const type = String(item.metadata?.notificationType || 'unknown');
+              const reason = String(item.metadata?.reason || 'unknown');
               queueByStatus[status] = (queueByStatus[status] || 0) + 1;
               queueByType[type] = (queueByType[type] || 0) + 1;
+              queueByReason[reason] = (queueByReason[reason] || 0) + 1;
             }
             const batch = batchSnap.exists ? batchSnap.data() : null;
             console.log('PRODUCTION_DIAGNOSTIC', JSON.stringify({
@@ -114,7 +114,7 @@ jobs:
                 alignment: v.whatsappScheduleGroupAlignment || null,
                 alignmentReason: v.whatsappScheduleGroupAlignmentReason || null,
               })),
-              queue: { count: queueDocs.length, byStatus: queueByStatus, byType: queueByType },
+              queue: { count: queueDocs.length, byStatus: queueByStatus, byType: queueByType, byReason: queueByReason, queryError: queueQueryError },
             }, null, 2));
           })().catch((error) => { console.error(error); process.exit(1); });
           NODE
