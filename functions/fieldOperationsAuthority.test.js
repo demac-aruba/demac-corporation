@@ -11,7 +11,7 @@ test('inactive Field principals fail closed before assignment resolution', () =>
   }), /inactive or not provisioned/);
 });
 
-test('Field HTTP authority remains read-only during Slice 1', async () => {
+test('Field HTTP authority remains read-only until governed Field audit persistence exists', async () => {
   assert.deepEqual([...FIELD_ACTIONS].sort(), ['get_job', 'get_schedule']);
 
   const api = createFieldOperationsApi({
@@ -19,8 +19,10 @@ test('Field HTTP authority remains read-only during Slice 1', async () => {
     verifyIdToken: async () => ({ uid: 'unused' }),
   });
 
-  await assert.rejects(
-    () => api.execute({ action: 'start_visit', data: {}, identity: { operations: false } }),
-    /Unsupported Field Operations action/,
-  );
+  for (const action of ['prepare_visit', 'start_visit']) {
+    await assert.rejects(
+      () => api.execute({ action, data: {}, identity: { operations: false } }),
+      /Unsupported Field Operations action/,
+    );
+  }
 });
