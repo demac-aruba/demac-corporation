@@ -1,22 +1,29 @@
-const { FieldValue, getFirestore } = require("firebase-admin/firestore");
-const logger = require("firebase-functions/logger");
+const { getFirestore } = require("firebase-admin/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
-const { createOperatingCalendarService, dateKeyInTimeZone, TIME_ZONE } = require("./operatingCalendarService");
+const { createOperatingCalendarService, dateKeyInTimeZone } = require("./operatingCalendarService");
+const { createTechnicianDailyScheduleRunner } = require("./technicianDailyScheduleRunner");
 const { createTechnicianDailyScheduleService } = require("./technicianDailyScheduleService");
+const {
+  VAN_SCHEDULE_CRON,
+  VAN_SCHEDULE_REGION,
+  VAN_SCHEDULE_TIME_ZONE,
+} = require("./vanScheduleDeliveryConfig");
 
-const REGION = "us-central1";
 const db = getFirestore();
-const operatingCalendar = createOperatingCalendarService({ db });
-const scheduleService = createTechnicianDailyScheduleService({ db });
+const runTechnicianDailySchedule = createTechnicianDailyScheduleRunner({
+  db,
+  operatingCalendar: createOperatingCalendarService({ db }),
+  scheduleService: createTechnicianDailyScheduleService({ db }),
+  dateKey: dateKeyInTimeZone,
+});
 
 exports.sendDailyTechnicianSchedules = onSchedule(
   {
-    // 8:00 AM is the canonical delivery. 8:05 and 8:10 are idempotent recovery
-    // windows only; a completed batch exits immediately and deterministic queue
-    // ids prevent duplicate Work Order messages if an earlier attempt partially ran.
-    schedule: "0,5,10 8 * * *",
-    timeZone: TIME_ZONE,
-    region: REGION,
+    // 8:00 AM is canonical delivery. 8:05 and 8:10 are retries inside the same
+    // Cloud Scheduler job, so independent health monitoring is still required.
+    schedule: VAN_SCHEDULE_CRON,
+    timeZone: VAN_SCHEDULE_TIME_ZONE,
+    region: VAN_SCHEDULE_REGION,
     memory: "256MiB",
     timeoutSeconds: 300,
     retryCount: 3,
@@ -24,80 +31,5 @@ exports.sendDailyTechnicianSchedules = onSchedule(
     maxBackoffSeconds: 300,
     maxRetrySeconds: 900,
   },
-  async () => {
-    const runDate = dateKeyInTimeZone();
-    const isOpen = await operatingCalendar.isOpenDate(runDate);
-    if (!isOpen) {
-      logger.info("Van group daily schedules skipped because DEMAC is closed.", { runDate });
-      return;
-    }
-
-    // Keep the existing collection name for operational continuity. The batch
-    // now records van-group delivery instead of one message per technician.
-    const batchRef = db.collection("technicianDailyScheduleBatches").doc(runDate);
-    const existingBatch = await batchRef.get();
-    if (existingBatch.exists && existingBatch.data()?.status === "complete") {
-      logger.info("Van group daily schedules were already processed for this workday.", { runDate });
-      return;
-    }
-
-    await batchRef.set({
-      runDate,
-      deliveryModel: "van-group-work-order-v1",
-      status: "processing",
-      startedAt: existingBatch.data()?.startedAt || FieldValue.serverTimestamp(),
-      lastAttemptAt: FieldValue.serverTimestamp(),
-      attemptCount: FieldValue.increment(1),
-      updatedAt: FieldValue.serverTimestamp(),
-    }, { merge: true });
-
-    try {
-      const result = await scheduleService.queueDay(runDate, { deliveryKey: "auto", reason: "daily-van-schedule" });
-      const failures = result.results
-        .filter((item) => item.queued !== true)
-        .map((item) => ({
-          vanId: item.vanId,
-          groupName: item.groupName,
-          workOrderId: item.workOrderId,
-          reason: item.reason || "not-queued",
-        }));
-      const queuedCount = result.results.filter((item) => item.created === true).length;
-      const idempotentCount = result.results.filter((item) => item.queued === true && item.created === false).length;
-
-      await batchRef.set({
-        deliveryModel: "van-group-work-order-v1",
-        status: failures.length ? "partial" : "complete",
-        vanCount: result.vanCount,
-        workOrderCount: result.workOrderCount,
-        messageCount: result.messageCount,
-        queuedCount,
-        idempotentCount,
-        failedCount: failures.length,
-        failures,
-        completedAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
-      }, { merge: true });
-
-      logger.info("Van group daily schedule batch completed.", {
-        runDate,
-        vanCount: result.vanCount,
-        workOrderCount: result.workOrderCount,
-        messageCount: result.messageCount,
-        queuedCount,
-        idempotentCount,
-        failedCount: failures.length,
-        status: failures.length ? "partial" : "complete",
-      });
-    } catch (error) {
-      await batchRef.set({
-        deliveryModel: "van-group-work-order-v1",
-        status: "partial",
-        fatalError: error instanceof Error ? error.message : String(error),
-        failedAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
-      }, { merge: true });
-      logger.error("Van group daily schedule batch failed.", { runDate, error });
-      throw error;
-    }
-  },
+  runTechnicianDailySchedule,
 );
