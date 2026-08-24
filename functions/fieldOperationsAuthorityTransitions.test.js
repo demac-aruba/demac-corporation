@@ -55,6 +55,17 @@ test('return-visit branch marks second visit requirement without inventing a rea
   assert.equal(result.next.secondVisitReason, undefined);
 });
 
+test('a required physical return cannot resume execution on the same WorkVisit', () => {
+  assert.throws(
+    () => assertWorkVisitTransition('requires_return_visit', 'in_progress'),
+    /requires_return_visit -> in_progress/,
+  );
+  assert.deepEqual(
+    assertWorkVisitTransition('requires_return_visit', 'ready_for_office_review'),
+    { current: 'requires_return_visit', next: 'ready_for_office_review', noop: false },
+  );
+});
+
 test('Office Review submission and completion timestamps are transition-owned', () => {
   const submitted = transitionCanonicalWorkVisit({ visit: visit('in_progress'), to: 'ready_for_office_review', at: t2 });
   assert.equal(submitted.next.submittedAt, t2);
