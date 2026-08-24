@@ -2,7 +2,6 @@ import type {
   FieldApproval,
   FieldSaleLine,
   PlannedWorkDisposition,
-  PlannedWorkLineSnapshot,
   ScheduledScopeSnapshot,
   ScopeChange,
   VisitAsset,
@@ -11,14 +10,6 @@ import type {
   WorkVisit,
   WorkVisitStatus,
 } from './field-operations-domain';
-
-export type FieldStartContext = {
-  workOrderAuthorized: boolean;
-  assignmentAuthorized: boolean;
-  customerId?: string;
-  propertyId?: string;
-  safetyBlockers?: string[];
-};
 
 export type GateResult = {
   allowed: boolean;
@@ -39,43 +30,9 @@ function unique(values: string[]) {
 }
 
 /**
- * Pure client/domain preflight only. Canonical WorkVisit status transitions are owned by
- * the server-side Field Operations Authority and must never be reconstructed here.
+ * Read/reconciliation helpers only. WorkVisit preparation and status transitions are owned by
+ * the server-side Field Operations Authority and must never be reconstructed in this module.
  */
-export function canStartWorkVisit(context: FieldStartContext): GateResult {
-  const blockers: string[] = [];
-  if (!context.workOrderAuthorized) blockers.push('Work Order is not authorized/released for field execution.');
-  if (!context.assignmentAuthorized) blockers.push('Current field principal is not assigned to this Work Order.');
-  if (!context.customerId) blockers.push('Work Order has no canonical Customer reference.');
-  if (!context.propertyId) blockers.push('Work Order has no canonical Property reference.');
-  blockers.push(...(context.safetyBlockers ?? []).filter(Boolean));
-  return { allowed: blockers.length === 0, blockers: unique(blockers) };
-}
-
-export function createScheduledScopeSnapshot(args: {
-  appointmentId: string;
-  capturedAt: string;
-  estimatedUnitCount: number;
-  workLines: PlannedWorkLineSnapshot[];
-  customerFacingDescription?: string;
-  technicianInstructions?: string;
-}): ScheduledScopeSnapshot {
-  if (!args.appointmentId.trim()) throw new Error('Scheduled scope snapshot requires an Appointment id.');
-  if (!Number.isInteger(args.estimatedUnitCount) || args.estimatedUnitCount < 0) throw new Error('Estimated unit count must be a non-negative integer.');
-  for (const line of args.workLines) {
-    if (!line.id.trim()) throw new Error('Every planned work line snapshot requires an id.');
-    if (!Number.isInteger(line.quantity) || line.quantity <= 0) throw new Error(`Planned work line ${line.id} requires a positive integer quantity.`);
-  }
-  return {
-    appointmentId: args.appointmentId,
-    capturedAt: args.capturedAt,
-    estimatedUnitCount: args.estimatedUnitCount,
-    workLines: args.workLines.map((line) => ({ ...line })),
-    customerFacingDescription: args.customerFacingDescription,
-    technicianInstructions: args.technicianInstructions,
-  };
-}
-
 export function reconcilePlannedScope(args: {
   snapshot: ScheduledScopeSnapshot;
   interventions: WorkIntervention[];
@@ -119,6 +76,11 @@ function approvalForIntervention(intervention: WorkIntervention, approvals: Fiel
   ));
 }
 
+/**
+ * Domain-specification gate used by the Phase 1 acceptance suite. It is not an active UI
+ * mutation authority. Before Office Review submission is exposed, this validation must move
+ * behind the server Field Operations command boundary rather than be called by React.
+ */
 export function validateVisitForOfficeReview(args: {
   visit: WorkVisit;
   visitAssets: VisitAsset[];
