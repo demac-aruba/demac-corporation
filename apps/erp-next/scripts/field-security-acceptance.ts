@@ -1,110 +1,79 @@
-import { authorizeFieldAction, filterAssignedFieldScopes, type FieldAssignmentScope } from '../lib/field-authorization';
+import { fieldActionAllowed, type FieldAllowedAction } from '../lib/field-authorization';
 import { hasCapability as hasLegacyCapability } from '../lib/capabilities';
-import { roleCapabilities, type AuthPrincipal } from '../lib/security';
+import { requireCapability, roleCapabilities, type AuthPrincipal } from '../lib/security';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`FIELD SECURITY ACCEPTANCE FAILED: ${message}`);
 }
 
-function principal(args: {
-  userId: string;
-  staffId?: string;
-  vanId?: string;
-  role?: AuthPrincipal['role'];
-  active?: boolean;
-}): AuthPrincipal {
-  const role = args.role ?? 'technician';
-  return {
-    userId: args.userId,
-    displayName: args.userId,
-    role,
-    active: args.active ?? true,
-    staffId: args.staffId,
-    vanId: args.vanId,
-    capabilities: roleCapabilities[role],
-  };
+function hasFieldCapability(role: keyof typeof roleCapabilities, capability: Parameters<typeof roleCapabilities[typeof role]['has']>[0]) {
+  return roleCapabilities[role].has(capability);
 }
 
-const assigned: FieldAssignmentScope = {
-  workOrderId: 'wo-team-1',
-  vanIds: ['VAN-1'],
-  members: [
-    { staffId: 'staff-lead', responsibility: 'lead' },
-    { staffId: 'staff-tech', responsibility: 'technician' },
-    { staffId: 'staff-helper', responsibility: 'helper' },
-  ],
-};
-
-const otherTeam: FieldAssignmentScope = {
-  workOrderId: 'wo-team-2',
-  vanIds: ['VAN-2'],
-  members: [{ staffId: 'staff-other', responsibility: 'lead' }],
-};
-
-// Canonical security vocabulary is authoritative; old `*.read` vocabulary is only a projection.
+// Canonical ERP capability vocabulary is authoritative; old `*.read` vocabulary is only a projection.
 assert(hasLegacyCapability('super_admin', 'work_orders.read'), 'legacy work_orders.read adapter should project canonical super-admin access');
 assert(!hasLegacyCapability('technician', 'inventory.read'), 'legacy adapter must not re-grant inventory access removed from canonical technician policy');
 
-// Lead can coordinate and finish an assigned visit.
-{
-  const lead = principal({ userId: 'user-lead', staffId: 'staff-lead', vanId: 'VAN-1' });
-  assert(authorizeFieldAction(lead, assigned, 'read').allowed, 'lead should read assigned work');
-  assert(authorizeFieldAction(lead, assigned, 'intervention.add').allowed, 'lead should add interventions');
-  assert(authorizeFieldAction(lead, assigned, 'sale.propose').allowed, 'lead should propose catalog sales');
-  assert(authorizeFieldAction(lead, assigned, 'visit.complete').allowed, 'lead should finalize visit');
-}
+// Authentication-role capabilities stay coarse. Assignment responsibility and action-level authority are server decisions.
+assert(hasFieldCapability('technician', 'field.read_assigned'), 'technician role should enter assigned Field work');
+assert(hasFieldCapability('technician', 'field.execute'), 'technician role should be eligible for Field execution');
+assert(hasFieldCapability('technician', 'field.scope.manage'), 'technician role should be eligible for actual-scope work');
+assert(hasFieldCapability('technician', 'field.sale.propose'), 'technician role should be eligible to propose Field sales');
+assert(hasFieldCapability('technician', 'field.complete'), 'technician role may be eligible to complete when server responsibility allows it');
+assert(!hasFieldCapability('technician', 'field.review'), 'technician role must not gain Office Review capability');
+assert(!hasFieldCapability('technician', 'field.price.override'), 'technician role must not gain price override capability');
 
-// Normal technician can execute and add actual work, but cannot close the whole visit unless assigned lead responsibility.
-{
-  const tech = principal({ userId: 'user-tech', staffId: 'staff-tech', vanId: 'VAN-1' });
-  assert(authorizeFieldAction(tech, assigned, 'read').allowed, 'technician should read assigned work');
-  assert(authorizeFieldAction(tech, assigned, 'asset.add').allowed, 'technician should add equipment where allowed');
-  assert(authorizeFieldAction(tech, assigned, 'intervention.add').allowed, 'technician should add interventions');
-  assert(authorizeFieldAction(tech, assigned, 'sale.propose').allowed, 'technician should propose field sale');
-  assert(!authorizeFieldAction(tech, assigned, 'visit.complete').allowed, 'non-lead technician must not finalize visit');
-}
+assert(hasFieldCapability('office_operator', 'field.read_assigned'), 'office should read Field projections');
+assert(hasFieldCapability('office_operator', 'field.review'), 'office should review Field submissions');
+assert(!hasFieldCapability('office_operator', 'field.execute'), 'office role must not impersonate technician execution');
+assert(!hasFieldCapability('office_operator', 'field.scope.manage'), 'office role must not inherit technician scope mutation');
+assert(!hasFieldCapability('office_operator', 'field.price.override'), 'office operator must not receive price override by default');
 
-// Mandatory scenario 17: helper cannot alter billable/operational scope.
-{
-  const helper = principal({ userId: 'user-helper', staffId: 'staff-helper', vanId: 'VAN-1' });
-  assert(authorizeFieldAction(helper, assigned, 'report.edit').allowed, 'helper should edit assigned report sections');
-  assert(authorizeFieldAction(helper, assigned, 'evidence.add').allowed, 'helper should upload evidence');
-  assert(authorizeFieldAction(helper, assigned, 'measurement.add').allowed, 'helper should enter measurements');
-  assert(authorizeFieldAction(helper, assigned, 'finding.add').allowed, 'helper should record findings');
-  assert(!authorizeFieldAction(helper, assigned, 'asset.add').allowed, 'helper must not add assets');
-  assert(!authorizeFieldAction(helper, assigned, 'intervention.add').allowed, 'helper must not change scope');
-  assert(!authorizeFieldAction(helper, assigned, 'sale.propose').allowed, 'helper must not add billable work');
-  assert(!authorizeFieldAction(helper, assigned, 'visit.complete').allowed, 'helper must not close visit');
-}
+assert(hasFieldCapability('operations', 'field.review'), 'operations should review Field submissions');
+assert(hasFieldCapability('operations', 'field.price.override'), 'operations capability vocabulary includes governed price override');
+assert(!hasFieldCapability('operations', 'field.execute'), 'operations role must not impersonate technician execution');
 
-// Mandatory scenario 18: knowing another team's Work Order id does not grant access.
-{
-  const tech = principal({ userId: 'user-tech', staffId: 'staff-tech', vanId: 'VAN-1' });
-  assert(!authorizeFieldAction(tech, otherTeam, 'read').allowed, 'technician must not read another team work order by id');
-  assert(!authorizeFieldAction(tech, otherTeam, 'execute').allowed, 'technician must not mutate another team work order by id');
-  const visible = filterAssignedFieldScopes(tech, [assigned, otherTeam]);
-  assert(visible.length === 1 && visible[0].workOrderId === assigned.workOrderId, 'assigned query projection must exclude other team work');
-}
+// The client must obey the server projection literally instead of reconstructing responsibility rules.
+const leadProjection: { allowedActions: FieldAllowedAction[] } = {
+  allowedActions: ['read', 'execute', 'report.edit', 'evidence.add', 'measurement.add', 'finding.add', 'asset.add', 'intervention.add', 'sale.propose', 'intervention.complete', 'visit.complete'],
+};
+assert(fieldActionAllowed(leadProjection, 'visit.complete'), 'client should render a server-authorized lead completion action');
+assert(!fieldActionAllowed(leadProjection, 'office.review'), 'client must not infer Office Review from lead responsibility');
 
-// A legacy Work Order carrying only a van id may be visible, but may not be mutated until canonical crew membership is resolved.
-{
-  const vanOnlyScope: FieldAssignmentScope = { workOrderId: 'wo-legacy-van', vanIds: ['VAN-1'], members: [] };
-  const tech = principal({ userId: 'user-tech', staffId: 'staff-tech', vanId: 'VAN-1' });
-  assert(authorizeFieldAction(tech, vanOnlyScope, 'read').allowed, 'van-scoped legacy work should remain discoverable');
-  assert(!authorizeFieldAction(tech, vanOnlyScope, 'execute').allowed, 'van-only fallback must be read-only until explicit staff membership is resolved');
-}
+const helperProjection: { allowedActions: FieldAllowedAction[] } = {
+  allowedActions: ['read', 'report.edit', 'evidence.add', 'measurement.add', 'finding.add'],
+};
+assert(fieldActionAllowed(helperProjection, 'report.edit'), 'client should render helper report editing when server projects it');
+assert(!fieldActionAllowed(helperProjection, 'asset.add'), 'client must not invent helper asset authority');
+assert(!fieldActionAllowed(helperProjection, 'intervention.add'), 'client must not invent helper scope authority');
+assert(!fieldActionAllowed(helperProjection, 'sale.propose'), 'client must not invent helper billable authority');
+assert(!fieldActionAllowed(helperProjection, 'visit.complete'), 'client must not invent helper completion authority');
 
-// Office Review is a separate authority and does not impersonate a technician assignment.
-{
-  const office = principal({ userId: 'user-office', role: 'office_operator' });
-  assert(authorizeFieldAction(office, otherTeam, 'office.review').allowed, 'office should review field submissions without technician assignment');
-  assert(!authorizeFieldAction(office, otherTeam, 'execute').allowed, 'office reviewer must not inherit technician execution authority');
-}
+const vanFallbackProjection: { allowedActions: FieldAllowedAction[] } = { allowedActions: ['read'] };
+assert(fieldActionAllowed(vanFallbackProjection, 'read'), 'van compatibility projection should remain discoverable when server allows read');
+assert(!fieldActionAllowed(vanFallbackProjection, 'execute'), 'client must preserve server read-only fallback');
 
-// Inactive principals fail closed even if all other identifiers match.
-{
-  const inactive = principal({ userId: 'user-disabled', staffId: 'staff-lead', vanId: 'VAN-1', active: false });
-  assert(!authorizeFieldAction(inactive, assigned, 'read').allowed, 'inactive principal must be denied');
-}
+const deniedProjection: { allowedActions: FieldAllowedAction[] } = { allowedActions: [] };
+assert(!fieldActionAllowed(deniedProjection, 'read'), 'client must not expose another-team work when server projects no actions');
+assert(!fieldActionAllowed(deniedProjection, 'execute'), 'client must not infer execution for a denied job');
 
-console.log('Field assignment and authorization acceptance: PASS');
+// Client capability guards also fail closed for inactive principals; server identity checks remain authoritative.
+const inactive: AuthPrincipal = {
+  userId: 'user-disabled',
+  displayName: 'Disabled',
+  role: 'technician',
+  active: false,
+  staffId: 'staff-disabled',
+  capabilities: roleCapabilities.technician,
+};
+let inactiveDenied = false;
+try {
+  requireCapability(inactive, 'field.read_assigned');
+} catch {
+  inactiveDenied = true;
+}
+assert(inactiveDenied, 'inactive client principal should fail the coarse capability guard');
+
+// Mandatory scenarios 17 (helper scope denial) and 18 (other-team known-ID denial) are
+// canonical server-security claims and are exercised in fieldOperationsAuthorityCore.test.js.
+console.log('Field client capability and server-action projection acceptance: PASS');
