@@ -179,30 +179,61 @@ jobs:
           echo "cron=$(node -p \"require('./functions/vanScheduleDeliveryConfig').VAN_SCHEDULE_CRON\")" >> "$GITHUB_OUTPUT"
           echo "job=$(node -p \"require('./functions/vanScheduleDeliveryConfig').VAN_SCHEDULE_SCHEDULER_JOB\")" >> "$GITHUB_OUTPUT"
 
-      - name: Preflight Cloud Scheduler access
+      - name: Preflight effective Cloud Scheduler deployment permissions
         shell: bash
         run: |
           set -euo pipefail
           principal="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n 1)"
           region='${{ steps.schedule.outputs.region }}'
           job='${{ steps.schedule.outputs.job }}'
+          project='demac-corporation'
           if [ -z "$principal" ]; then
             echo '::error::No active Google Cloud deployment principal is available.'
             exit 1
           fi
 
+          required_permissions=(
+            cloudscheduler.jobs.create
+            cloudscheduler.jobs.update
+            cloudscheduler.jobs.delete
+            cloudscheduler.jobs.get
+            cloudscheduler.jobs.list
+          )
+          permissions_json="$(printf '%s\n' "${required_permissions[@]}" | jq -R . | jq -s '{permissions: .}')"
+          access_token="$(gcloud auth print-access-token)"
+          permission_response="$(curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Authorization: Bearer ${access_token}" \
+            -H 'Content-Type: application/json; charset=utf-8' \
+            -d "$permissions_json" \
+            "https://cloudresourcemanager.googleapis.com/v1/projects/${project}:testIamPermissions")"
+
+          mapfile -t granted_permissions < <(jq -r '.permissions[]?' <<<"$permission_response" | sort)
+          missing_permissions=()
+          for permission in "${required_permissions[@]}"; do
+            if ! printf '%s\n' "${granted_permissions[@]}" | grep -Fxq "$permission"; then
+              missing_permissions+=("$permission")
+            fi
+          done
+          if [ "${#missing_permissions[@]}" -gt 0 ]; then
+            printf '::error::Deployment principal %s is missing required effective Cloud Scheduler permissions: %s. Refusing to deploy because Firebase must be able to create/update/delete and then verify the managed Scheduler job. Grant roles/cloudscheduler.admin or an approved equivalent custom role.\n' \
+              "$principal" "${missing_permissions[*]}"
+            exit 1
+          fi
+          echo "Effective Cloud Scheduler deployment permissions confirmed for ${principal}."
+
           if ! gcloud scheduler jobs list \
-            --project=demac-corporation \
+            --project="$project" \
             --location="$region" \
             --limit=1 \
             --format='value(name)' >/dev/null; then
-            echo "::error::Deployment principal ${principal} cannot list Cloud Scheduler jobs. Refusing to deploy a scheduled function because Scheduler state cannot be governed or verified. Grant the deployment identity Cloud Scheduler management permissions (the predefined roles/cloudscheduler.admin role or an approved equivalent custom role)."
+            echo "::error::Deployment principal ${principal} passed project permission evaluation but cannot list Cloud Scheduler jobs in ${region}. Refusing to deploy because Scheduler state cannot be verified."
             exit 1
           fi
 
           describe_error="$(mktemp)"
           if gcloud scheduler jobs describe "$job" \
-            --project=demac-corporation \
+            --project="$project" \
             --location="$region" \
             --format='value(name)' >/dev/null 2>"$describe_error"; then
             echo "Existing Scheduler job is readable by ${principal}: ${job}"
