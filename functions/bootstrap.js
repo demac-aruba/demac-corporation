@@ -1,5 +1,6 @@
 const core = require("./index");
 const officeBookingAuthorityFacade = require("./officeBookingAuthorityFacade");
+const fieldOperationsAuthority = require("./fieldOperationsAuthority");
 const wacliGateway = require("./whatsappWacliGateway");
 const wacliOutboundMediaUpload = require("./wacliOutboundMediaUpload");
 const customerAgentCommunication = require("./demacCustomerAgentAllowlistCommunication");
@@ -27,6 +28,7 @@ const router = require("./whatsappCopilotRouter");
 module.exports = {
   ...core,
   ...officeBookingAuthorityFacade,
+  ...fieldOperationsAuthority,
   ...wacliGateway,
   ...wacliOutboundMediaUpload,
   ...customerAgentCommunication,
