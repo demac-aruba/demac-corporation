@@ -115,11 +115,15 @@ function commandFixture(options = {}) {
   return { store, auditEvents, prepare };
 }
 
-test('status compatibility maps only one mutable storage status into canonical Field status', () => {
+test('status compatibility maps legacy and canonical extension statuses without unsafe fallback', () => {
   assert.equal(storageStatusFromWorkOrder({ status: 'Confirmada' }), 'not_started');
   assert.equal(storageStatusFromWorkOrder({ status: 'En camino' }), 'on_the_way');
   assert.equal(canonicalStatusFromStorage('not_started'), 'scheduled');
   assert.equal(canonicalStatusFromStorage('on_the_way'), 'en_route');
+  assert.equal(canonicalStatusFromStorage('requires_return_visit'), 'requires_return_visit');
+  assert.equal(canonicalStatusFromStorage('no_access'), 'no_access');
+  assert.throws(() => canonicalStatusFromStorage('mystery_state'), /Unknown persisted Work Visit status/);
+  assert.throws(() => canonicalStatusFromStorage(''), /Unknown persisted Work Visit status/);
 });
 
 test('planned quantity zero stays zero instead of inventing one actual or expected asset', () => {
@@ -203,6 +207,17 @@ test('existing visit with conflicting identity fails closed', async () => {
   await assert.rejects(
     () => prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-WO-1-conflict' }),
     /different Customer/,
+  );
+});
+
+test('malformed existing visit status fails closed instead of being reopened as scheduled', async () => {
+  const malformed = {
+    id: visitDocumentId('WO-1'), workOrderId: 'WO-1', clientId: 'CLIENT-1', propertyId: 'PROPERTY-1', status: 'mystery_state',
+  };
+  const { prepare } = commandFixture({ seed: { ...baseSeed, workVisits: [malformed] } });
+  await assert.rejects(
+    () => prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-WO-1-malformed' }),
+    /Unknown persisted Work Visit status/,
   );
 });
 
