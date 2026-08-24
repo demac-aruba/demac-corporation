@@ -5,8 +5,8 @@ const FIELD_OPERATIONS_API_VERSION = 1;
 const FIELD_ROLES = new Set(['technician', 'operations', 'office_operator', 'super_admin']);
 const OPERATIONS_ROLES = new Set(['operations', 'office_operator', 'super_admin']);
 const PRICE_OVERRIDE_ROLES = new Set(['operations', 'super_admin']);
-const INACTIVE_WORK_ORDER_STATUSES = new Set(['Solicitud recibida', 'Reserva temporal', 'Cancelada', 'Reprogramada', 'Completada', 'Facturada', 'Pagada']);
-const HIDDEN_SCHEDULE_WORK_ORDER_STATUSES = new Set(['Solicitud recibida', 'Reserva temporal', 'Cancelada', 'Reprogramada', 'Facturada', 'Pagada']);
+const FIELD_ACTIVE_WORK_ORDER_STATUSES = new Set(['Confirmada', 'Asignada', 'En camino', 'En el sitio', 'En proceso', 'Pendiente']);
+const FIELD_SCHEDULE_VISIBLE_WORK_ORDER_STATUSES = new Set([...FIELD_ACTIVE_WORK_ORDER_STATUSES, 'Completada']);
 const FIELD_ALLOWED_ACTIONS = Object.freeze([
   'read',
   'execute',
@@ -61,7 +61,9 @@ function normalizeFieldRole(value) {
 }
 
 function normalizeFieldIdentity({ uid, profile = {}, decoded = {} }) {
-  const role = normalizeFieldRole(profile.role || decoded.role);
+  // `users/{uid}.role` is the governed ERP role authority. Token claims may describe the
+  // authenticated Firebase session but must never fill a missing/invalid DEMAC profile role.
+  const role = normalizeFieldRole(profile.role);
   if (!FIELD_ROLES.has(role)) throw fieldError('permission_denied', 'This user is not authorized for Field Operations.', 403);
   if (!profile || profile.active !== true) throw fieldError('permission_denied', 'This DEMAC ERP user is inactive or not provisioned.', 403);
   const staffId = text(profile.staffId, 180);
@@ -101,11 +103,11 @@ function dateRange(startDate, endDate, maximumDays = 7) {
 }
 
 function activeWorkOrder(order) {
-  return Boolean(order) && !INACTIVE_WORK_ORDER_STATUSES.has(text(order.status, 80));
+  return Boolean(order) && FIELD_ACTIVE_WORK_ORDER_STATUSES.has(text(order.status, 80));
 }
 
 function scheduleVisibleWorkOrder(order) {
-  return Boolean(order) && !HIDDEN_SCHEDULE_WORK_ORDER_STATUSES.has(text(order.status, 80));
+  return Boolean(order) && FIELD_SCHEDULE_VISIBLE_WORK_ORDER_STATUSES.has(text(order.status, 80));
 }
 
 function snapshotItems(snapshot) {
@@ -147,6 +149,33 @@ async function loadCrewContext(db, dateKey) {
   };
 }
 
+function membershipIncludesStaff(membership, staffId) {
+  return Boolean(membership) && (
+    text(membership.driverStaffId, 180) === staffId
+    || text(membership.helperStaffId, 180) === staffId
+  );
+}
+
+function profileVanFallbackAllowed(identity, context) {
+  const staffId = text(identity?.staffId, 180);
+  const profileVanId = canonicalVanReference(identity?.vanId, context);
+  if (!staffId || !profileVanId) return false;
+
+  // A dated assignment is the authoritative override for that date. If the technician was
+  // explicitly placed on any dated crew, their stale profile Van must not also grant access.
+  const hasDatedStaffAssignment = context.memberships.some((membership) => (
+    membership.source === 'daily_assignment' && membershipIncludesStaff(membership, staffId)
+  ));
+  if (hasDatedStaffAssignment) return false;
+
+  // Likewise, if the profile Van itself has a dated override to other staff, the old profile
+  // value cannot grant read access to that Van's work for the day.
+  const profileVanMembership = context.memberships.find((membership) => (
+    canonicalVanReference(membership.vanId, context) === profileVanId
+  ));
+  return profileVanMembership?.source !== 'daily_assignment';
+}
+
 function fieldAssignmentForIdentity(identity, order, dateKey, context) {
   if (identity.operations) {
     return { assigned: true, responsibility: 'office', source: 'office', readOnly: true };
@@ -168,7 +197,7 @@ function fieldAssignmentForIdentity(identity, order, dateKey, context) {
   }
 
   const profileVanId = canonicalVanReference(identity.vanId, context);
-  if (profileVanId && orderVanId && profileVanId === orderVanId) {
+  if (profileVanFallbackAllowed(identity, context) && profileVanId && orderVanId && profileVanId === orderVanId) {
     return { assigned: true, responsibility: 'technician', source: 'profile_van_fallback', readOnly: true };
   }
 
@@ -199,12 +228,11 @@ function crewResponsibility({ identity, dateKey, workOrder, ...context }) {
 function assignedVanIds(identity, _dateKey, context) {
   if (identity.operations) return [];
   const membershipVanIds = context.memberships
-    .filter((membership) => (
-      text(membership.driverStaffId, 180) === identity.staffId
-      || text(membership.helperStaffId, 180) === identity.staffId
-    ))
+    .filter((membership) => membershipIncludesStaff(membership, identity.staffId))
     .map((membership) => canonicalVanReference(membership.vanId, context));
-  const profileVanId = canonicalVanReference(identity.vanId, context);
+  const profileVanId = profileVanFallbackAllowed(identity, context)
+    ? canonicalVanReference(identity.vanId, context)
+    : '';
   return unique([...membershipVanIds, profileVanId]);
 }
 
@@ -214,7 +242,7 @@ function vanQueryIds(identity, dateKey, context) {
   for (const [rawVanId, canonicalVanId] of context.vanAliases.entries()) {
     if (canonicalIds.has(canonicalVanId)) queryIds.add(rawVanId);
   }
-  if (identity.vanId) queryIds.add(identity.vanId);
+  if (identity.vanId && profileVanFallbackAllowed(identity, context)) queryIds.add(identity.vanId);
   return unique([...queryIds]);
 }
 
@@ -424,6 +452,7 @@ module.exports = {
   normalizeFieldRole,
   orderAssignedToIdentity,
   plannedWorkItems,
+  profileVanFallbackAllowed,
   projectScheduleJob,
   scheduleVisibleWorkOrder,
   validDateKey,
