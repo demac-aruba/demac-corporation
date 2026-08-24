@@ -10,6 +10,7 @@ const FIELD_WORK_VISIT_STORAGE_VERSION = 1;
 
 const WORK_ORDER_TO_VISIT_STATUS = Object.freeze({
   Confirmada: 'not_started',
+  Asignada: 'not_started',
   'En camino': 'on_the_way',
   'En el sitio': 'on_site',
   'En proceso': 'in_progress',
@@ -154,16 +155,19 @@ function buildLegacyCompatibleWorkVisit({ order, appointment, identity, assignme
   };
 }
 
-function projectCanonicalWorkVisit(record) {
+function projectCanonicalWorkVisit(record, identityFallback = {}) {
   const snapshot = record?.scheduledScopeSnapshot || {};
+  const appointmentId = text(record?.appointmentId || snapshot.appointmentId || identityFallback.appointmentId, 180);
   return {
     id: text(record?.id, 180),
-    appointmentId: text(record?.appointmentId || snapshot.appointmentId, 180),
+    appointmentId,
     workOrderId: text(record?.workOrderId, 180),
     customerId: text(record?.clientId || record?.customerId, 180),
     propertyId: text(record?.propertyId, 180),
     scheduledScopeSnapshot: {
-      appointmentId: text(snapshot.appointmentId || record?.appointmentId, 180),
+      // Active Legacy snapshots predate appointmentId/workLines. Fill only the structural
+      // Appointment identity from the already-validated Work Order; never invent historical lines.
+      appointmentId,
       capturedAt: text(snapshot.capturedAt || record?.createdAt, 80),
       estimatedUnitCount: nonNegativeQuantity(snapshot.estimatedUnitCount),
       workLines: Array.isArray(snapshot.workLines) ? snapshot.workLines : [],
@@ -218,16 +222,28 @@ function snapshotRecords(snapshot) {
   return (snapshot?.docs || []).map((document) => ({ id: document.id, ...document.data() }));
 }
 
-async function findLegacyInitialVisit({ db, transaction, order, expectedVisitId }) {
-  const query = db.collection('workVisits').where('workOrderId', '==', text(order.id, 180)).limit(4);
+async function findLegacyInitialVisit({ db, transaction, order, expectedVisitId, expectedInitialExists = false }) {
+  const query = db.collection('workVisits').where('workOrderId', '==', text(order.id, 180));
   const records = snapshotRecords(await transaction.get(query)).filter((record) => record.id !== expectedVisitId);
-  if (!records.length) return null;
-
   const initialCandidates = records.filter((record) => !text(record.previousVisitId, 180));
-  if (initialCandidates.length !== 1 || records.length !== 1) {
+
+  if (expectedInitialExists) {
+    if (initialCandidates.length) {
+      throw fieldError(
+        'legacy_visit_identity_ambiguous',
+        'Existing Work Visit history contains more than one possible initial visit.',
+        409,
+        { workOrderId: text(order.id, 180), visitIds: [expectedVisitId, ...initialCandidates.map((record) => record.id)] },
+      );
+    }
+    return null;
+  }
+
+  if (!records.length) return null;
+  if (initialCandidates.length !== 1) {
     throw fieldError(
       'legacy_visit_identity_ambiguous',
-      'Existing Work Visit history for this Work Order cannot be adopted as one unambiguous initial visit.',
+      'Existing Work Visit history for this Work Order cannot be resolved to one unambiguous initial visit.',
       409,
       { workOrderId: text(order.id, 180), visitIds: records.map((record) => record.id) },
     );
@@ -329,24 +345,25 @@ function createPrepareWorkVisitCommand({ db, resolveAssignment, appendAuditInTra
       if (existingSnapshot.exists) {
         const existing = { id: existingSnapshot.id, ...existingSnapshot.data() };
         assertExistingVisitCompatible(existing, order);
+        await findLegacyInitialVisit({ db, transaction, order, expectedVisitId: visitId, expectedInitialExists: true });
         result = {
           replayed: true,
           source: existing.fieldAuthorityVersion ? 'field_authority' : 'legacy_existing',
-          visit: projectCanonicalWorkVisit(existing),
+          visit: projectCanonicalWorkVisit(existing, { appointmentId }),
           allowedActions,
         };
         return;
       }
 
       // Active Legacy resolves existing visits by workOrderId, not only by deterministic id.
-      // Adopt one unambiguous historical initial visit; ambiguous/multi-visit history fails closed
-      // so the canonical boundary never creates a second initial source of truth.
+      // Adopt one unambiguous historical initial visit even when valid return visits also exist;
+      // return-only or duplicate-initial history fails closed rather than creating/guessing truth.
       const legacyExisting = await findLegacyInitialVisit({ db, transaction, order, expectedVisitId: visitId });
       if (legacyExisting) {
         result = {
           replayed: true,
           source: legacyExisting.fieldAuthorityVersion ? 'field_authority' : 'legacy_existing',
-          visit: projectCanonicalWorkVisit(legacyExisting),
+          visit: projectCanonicalWorkVisit(legacyExisting, { appointmentId }),
           allowedActions,
         };
         return;
