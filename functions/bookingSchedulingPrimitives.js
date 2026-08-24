@@ -173,17 +173,36 @@ function staffUnavailable(profile, date, absences) {
   );
 }
 
-function resolveAssignment(van, date, profiles, assignments, absences) {
+/**
+ * Resolve dated crew membership only. This deliberately does not apply staff absence,
+ * driver eligibility, Van maintenance or other Scheduling readiness rules. Field uses
+ * membership for authorization while Scheduling layers readiness on top in resolveAssignment().
+ */
+function resolveCrewMembership(van, date, assignments) {
   const saved = assignments.find((item) => item.vanId === van.id && item.date === date);
-  const driver = profiles.find((item) => item.id === (saved?.driverStaffId ?? van.responsibleStaffId));
-  const helper = profiles.find((item) => item.id === (saved?.helperStaffId ?? van.regularHelperId));
+  const driverStaffId = saved?.driverStaffId ?? van.responsibleStaffId;
+  const helperStaffId = saved?.helperStaffId ?? van.regularHelperId;
+  return {
+    vanId: van.id,
+    driverStaffId,
+    helperStaffId,
+    technicianIds: [driverStaffId, helperStaffId].filter(Boolean),
+    source: saved ? "daily_assignment" : "regular_crew",
+    assignmentStatus: saved?.status,
+  };
+}
+
+function resolveAssignment(van, date, profiles, assignments, absences) {
+  const membership = resolveCrewMembership(van, date, assignments);
+  const driver = profiles.find((item) => item.id === membership.driverStaffId);
+  const helper = profiles.find((item) => item.id === membership.helperStaffId);
   const driverStaffId = driver?.canDriveVan && !staffUnavailable(driver, date, absences) ? driver.id : undefined;
   const helperStaffId = helper && !staffUnavailable(helper, date, absences) ? helper.id : undefined;
   let status;
-  if (van.active === false || van.status === "Fuera de servicio" || saved?.status === "Fuera de servicio") status = "Fuera de servicio";
-  else if (van.status === "Mantenimiento" || saved?.status === "Mantenimiento") status = "Mantenimiento";
-  else if (!driverStaffId || saved?.status === "Sin personal") status = "Sin personal";
-  else if (!helperStaffId || saved?.status === "Trabajo liviano") status = "Trabajo liviano";
+  if (van.active === false || van.status === "Fuera de servicio" || membership.assignmentStatus === "Fuera de servicio") status = "Fuera de servicio";
+  else if (van.status === "Mantenimiento" || membership.assignmentStatus === "Mantenimiento") status = "Mantenimiento";
+  else if (!driverStaffId || membership.assignmentStatus === "Sin personal") status = "Sin personal";
+  else if (!helperStaffId || membership.assignmentStatus === "Trabajo liviano") status = "Trabajo liviano";
   else status = "Disponible";
   return {
     vanId: van.id,
@@ -329,6 +348,7 @@ module.exports = {
   orderSlotCount,
   propertyZone,
   resolveAssignment,
+  resolveCrewMembership,
   routeCompatibility,
   snapshotItems,
   vanCanReceiveAppointments,
