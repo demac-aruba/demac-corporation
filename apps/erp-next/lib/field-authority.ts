@@ -23,6 +23,12 @@ function endpoint() {
   return `https://us-central1-${firebaseClientConfig.projectId}.cloudfunctions.net/fieldOperationsAuthority`;
 }
 
+function asApiErrorPayload(value: unknown): FieldApiError {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as FieldApiError
+    : {};
+}
+
 async function callFieldAuthority(action: string, data: Record<string, unknown>, timeoutMs = 12_000): Promise<unknown> {
   const session = await requireFirebaseWebSession();
   const controller = new AbortController();
@@ -37,10 +43,11 @@ async function callFieldAuthority(action: string, data: Record<string, unknown>,
       body: JSON.stringify({ action, data }),
       signal: controller.signal,
     });
-    const payload = await response.json().catch(() => ({})) as FieldApiError;
+    const payload: unknown = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const code = payload.error?.code ? ` (${payload.error.code})` : '';
-      throw new Error(`${payload.error?.message ?? 'Field Operations could not complete the request.'}${code}`);
+      const apiError = asApiErrorPayload(payload);
+      const code = apiError.error?.code ? ` (${apiError.error.code})` : '';
+      throw new Error(`${apiError.error?.message ?? 'Field Operations could not complete the request.'}${code}`);
     }
     return payload;
   } catch (error) {
