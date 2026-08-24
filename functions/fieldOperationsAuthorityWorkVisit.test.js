@@ -115,9 +115,14 @@ function commandFixture(options = {}) {
   return { store, auditEvents, prepare };
 }
 
-test('status compatibility maps legacy and canonical extension statuses without unsafe fallback', () => {
+test('status compatibility is allowlisted and has no unsafe fallback', () => {
   assert.equal(storageStatusFromWorkOrder({ status: 'Confirmada' }), 'not_started');
   assert.equal(storageStatusFromWorkOrder({ status: 'En camino' }), 'on_the_way');
+  assert.equal(storageStatusFromWorkOrder({ status: 'En el sitio' }), 'on_site');
+  assert.equal(storageStatusFromWorkOrder({ status: 'En proceso' }), 'in_progress');
+  assert.equal(storageStatusFromWorkOrder({ status: 'Pendiente' }), 'pending');
+  assert.throws(() => storageStatusFromWorkOrder({ status: 'Estado futuro' }), /Unsupported Work Order status/);
+  assert.throws(() => storageStatusFromWorkOrder({}), /Unsupported Work Order status/);
   assert.equal(canonicalStatusFromStorage('not_started'), 'scheduled');
   assert.equal(canonicalStatusFromStorage('on_the_way'), 'en_route');
   assert.equal(canonicalStatusFromStorage('requires_return_visit'), 'requires_return_visit');
@@ -168,6 +173,18 @@ test('prepare WorkVisit is transaction-backed, audited, Legacy-compatible and do
   assert.equal(stored.scheduledScopeSnapshot.problemDescription, stored.scheduledScopeSnapshot.customerFacingDescription);
   assert.deepEqual(store.get('workOrders', 'WO-1'), beforeOrder);
   assert.deepEqual(store.get('appointments', 'APT-1'), beforeAppointment);
+});
+
+test('unknown active-looking Work Order lifecycle fails before creating a WorkVisit', async () => {
+  const seed = structuredClone(baseSeed);
+  seed.workOrders[0].status = 'Estado futuro';
+  const { store, auditEvents, prepare } = commandFixture({ seed });
+  await assert.rejects(
+    () => prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-unknown-status' }),
+    /Unsupported Work Order status/,
+  );
+  assert.equal(store.all('workVisits').length, 0);
+  assert.equal(auditEvents.length, 0);
 });
 
 test('Work Order technicianIds are not copied into canonical staff-only participation', async () => {
