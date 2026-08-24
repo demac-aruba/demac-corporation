@@ -1,10 +1,21 @@
 import { fieldActionAllowed, type FieldAllowedAction } from '../lib/field-authorization';
 import { hasCapability as hasLegacyCapability } from '../lib/capabilities';
+import { parseFieldJobResponse, parseFieldScheduleResponse } from '../lib/field-authority-contract';
 import { defaultAuthenticatedRoute, isAuthenticatedRouteAllowed } from '../lib/role-routing';
 import { requireCapability, roleCapabilities, type AuthPrincipal, type Capability } from '../lib/security';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`FIELD SECURITY ACCEPTANCE FAILED: ${message}`);
+}
+
+function assertThrows(action: () => unknown, message: string) {
+  let threw = false;
+  try {
+    action();
+  } catch {
+    threw = true;
+  }
+  assert(threw, message);
 }
 
 function hasFieldCapability(role: keyof typeof roleCapabilities, capability: Capability) {
@@ -65,6 +76,37 @@ const deniedProjection: { allowedActions: FieldAllowedAction[] } = { allowedActi
 assert(!fieldActionAllowed(deniedProjection, 'read'), 'client must not expose another-team work when server projects no actions');
 assert(!fieldActionAllowed(deniedProjection, 'execute'), 'client must not infer execution for a denied job');
 
+// Read transport must fail closed on malformed/old 2xx payloads instead of crashing the UI or
+// displaying stale assumptions about assignment/action data.
+const representativeJob = {
+  id: 'WO-1',
+  workOrderId: 'WO-1',
+  appointmentId: 'APT-1',
+  date: '2026-08-24',
+  time: '08:30',
+  status: 'Confirmada',
+  customerId: 'CLIENT-1',
+  customerName: 'Customer',
+  propertyId: 'PROPERTY-1',
+  address: 'Santa Cruz 1',
+  plannedWork: [{ id: 'line-1', label: 'Standard Service', quantity: 1 }],
+  estimatedQuantity: 0,
+  vanId: 'VAN-1',
+  technicianIds: ['staff-tech'],
+  responsibility: 'technician',
+  assignmentSource: 'direct_staff',
+  allowedActions: ['read', 'execute'],
+};
+const validSchedule = parseFieldScheduleResponse({ success: true, version: 1, jobs: [representativeJob] });
+assert(validSchedule.jobs[0].workOrderId === 'WO-1', 'valid schedule transport should parse');
+const validJob = parseFieldJobResponse({ success: true, version: 1, job: { ...representativeJob, knownEquipment: [] } });
+assert(validJob.job.knownEquipment.length === 0, 'valid job transport should parse');
+assertThrows(() => parseFieldScheduleResponse({ success: true, version: 2, jobs: [] }), 'unknown API version must fail closed');
+assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1 }), 'missing jobs array must fail closed');
+assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1, jobs: [{ ...representativeJob, allowedActions: null }] }), 'malformed action projection must fail closed');
+assertThrows(() => parseFieldJobResponse({ success: true, version: 1, job: representativeJob }), 'missing knownEquipment must fail closed');
+assertThrows(() => parseFieldJobResponse({ success: true, version: 1, job: { ...representativeJob, knownEquipment: [{ id: 'AC-1' }] } }), 'malformed equipment row must fail closed');
+
 // Client capability guards also fail closed for inactive principals; server identity checks remain authoritative.
 const inactive: AuthPrincipal = {
   userId: 'user-disabled',
@@ -84,4 +126,4 @@ assert(inactiveDenied, 'inactive client principal should fail the coarse capabil
 
 // Mandatory scenarios 17 (helper scope denial) and 18 (other-team known-ID denial) are
 // canonical server-security claims and are exercised in fieldOperationsAuthorityCore.test.js.
-console.log('Field client capability, route guard and server-action projection acceptance: PASS');
+console.log('Field client capability, route guard and transport-contract acceptance: PASS');
