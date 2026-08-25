@@ -1,4 +1,5 @@
 import {
+  parseFieldCreateAdditionalInterventionResponse,
   parseFieldCreatePlannedInterventionResponse,
   parseFieldExecutionJobResponse,
 } from '../lib/field-intervention-contract';
@@ -76,6 +77,46 @@ const intervention = {
   version: 1,
 };
 
+const additionalIntervention = {
+  id: 'WI-2',
+  visitId: 'visit-WO-1',
+  visitAssetId: 'VA-1',
+  assetId: 'AC-1',
+  serviceCatalogItemId: 'service-repair',
+  interventionType: 'Drain Repair',
+  origin: 'added_on_site_technician_discovery',
+  requestedBy: 'technician',
+  status: 'pending_authorization',
+  scopeChangeId: 'SC-1',
+  performedByStaffIds: [],
+  createdAt: '2026-08-25T12:40:00.000Z',
+  createdBy: 'uid-1',
+  updatedAt: '2026-08-25T12:40:00.000Z',
+  updatedBy: 'uid-1',
+  version: 1,
+};
+
+const scopeChange = {
+  id: 'SC-1',
+  visitId: 'visit-WO-1',
+  visitAssetId: 'VA-1',
+  interventionId: 'WI-2',
+  origin: 'technician_discovered_additional_need',
+  reason: 'Condensate drain repair is also required.',
+  requestedByStaffId: 'staff-1',
+  requestedAt: '2026-08-25T12:40:00.000Z',
+  createdAt: '2026-08-25T12:40:00.000Z',
+  createdBy: 'uid-1',
+  updatedAt: '2026-08-25T12:40:00.000Z',
+  updatedBy: 'uid-1',
+  version: 1,
+};
+
+const availableFieldServices = [
+  { id: 'service-standard', bookingCode: '12k_standard', label: '12K Standard Service', kind: 'Maintenance', durationMinutesPerUnit: 60 },
+  { id: 'service-repair', bookingCode: 'drain_repair', label: 'Drain Repair', kind: 'Repair', durationMinutesPerUnit: 60 },
+];
+
 const job = {
   id: 'WO-1',
   workOrderId: 'WO-1',
@@ -101,13 +142,18 @@ const job = {
   workInterventions: [],
   plannedWorkProgress: [{ id: 'line-standard', plannedQuantity: 1, linkedActualQuantity: 0, remainingQuantity: 1 }],
   plannedInterventionOptions: [{ visitAssetId: 'VA-1', plannedWorkLineIds: ['line-standard'] }],
-  availableFieldServices: [{ id: 'service-standard', bookingCode: '12k_standard', label: '12K Standard Service', kind: 'Maintenance', durationMinutesPerUnit: 60 }],
+  availableFieldServices,
   canAddPlannedIntervention: true,
+  scopeChanges: [],
+  additionalInterventionVisitAssetIds: ['VA-1'],
+  canAddAdditionalIntervention: true,
 };
 
 const valid = parseFieldExecutionJobResponse({ success: true, version: 1, job });
 assert(valid.job.canAddPlannedIntervention, 'valid intervention-enabled job should parse');
-assert(valid.job.plannedInterventionOptions[0].visitAssetId === 'VA-1', 'server per-Asset option must survive transport parsing');
+assert(valid.job.canAddAdditionalIntervention, 'valid additional-work eligibility should parse');
+assert(valid.job.plannedInterventionOptions[0].visitAssetId === 'VA-1', 'server per-Asset planned option must survive transport parsing');
+assert(valid.job.additionalInterventionVisitAssetIds[0] === 'VA-1', 'server per-Asset additional-work eligibility must survive transport parsing');
 
 const created = parseFieldCreatePlannedInterventionResponse({
   success: true,
@@ -119,17 +165,44 @@ const created = parseFieldCreatePlannedInterventionResponse({
 });
 assert(created.workIntervention.performedByStaffIds.length === 0, 'confirmed work must not require a false performer claim');
 
+const additionalCreated = parseFieldCreateAdditionalInterventionResponse({
+  success: true,
+  version: 1,
+  replayed: false,
+  scopeChange,
+  workIntervention: additionalIntervention,
+  allowedActions: ['read', 'execute', 'intervention.add'],
+});
+assert(additionalCreated.workIntervention.status === 'pending_authorization', 'additional work must remain pending authorization after proposal');
+assert(additionalCreated.scopeChange.interventionId === additionalCreated.workIntervention.id, 'ScopeChange and additional WorkIntervention must remain linked');
+
 assertThrows(
   () => parseFieldExecutionJobResponse({ success: true, version: 1, job: { ...job, workInterventions: undefined } }),
   'missing WorkIntervention projection must fail closed',
 );
 assertThrows(
+  () => parseFieldExecutionJobResponse({ success: true, version: 1, job: { ...job, scopeChanges: undefined } }),
+  'missing ScopeChange projection must fail closed',
+);
+assertThrows(
   () => parseFieldExecutionJobResponse({ success: true, version: 1, job: { ...job, plannedInterventionOptions: [{ visitAssetId: 'VA-OTHER', plannedWorkLineIds: ['line-standard'] }] } }),
-  'per-Asset option referencing a foreign VisitAsset must fail closed',
+  'per-Asset planned option referencing a foreign VisitAsset must fail closed',
 );
 assertThrows(
   () => parseFieldExecutionJobResponse({ success: true, version: 1, job: { ...job, plannedInterventionOptions: [{ visitAssetId: 'VA-1', plannedWorkLineIds: ['line-missing'] }] } }),
-  'option referencing unknown planned work must fail closed',
+  'planned option referencing unknown planned work must fail closed',
+);
+assertThrows(
+  () => parseFieldExecutionJobResponse({ success: true, version: 1, job: { ...job, additionalInterventionVisitAssetIds: ['VA-OTHER'] } }),
+  'additional-work eligibility referencing a foreign VisitAsset must fail closed',
+);
+assertThrows(
+  () => parseFieldExecutionJobResponse({ success: true, version: 1, job: { ...job, canAddAdditionalIntervention: true, additionalInterventionVisitAssetIds: [] } }),
+  'true additional-work eligibility without a server VisitAsset option must fail closed',
+);
+assertThrows(
+  () => parseFieldExecutionJobResponse({ success: true, version: 1, job: { ...job, canAddAdditionalIntervention: false, additionalInterventionVisitAssetIds: ['VA-1'] } }),
+  'additional-work option cannot survive when server eligibility is false',
 );
 assertThrows(
   () => parseFieldExecutionJobResponse({ success: true, version: 1, job: { ...job, availableFieldServices: [{ ...job.availableFieldServices[0], id: '' }] } }),
@@ -137,7 +210,7 @@ assertThrows(
 );
 assertThrows(
   () => parseFieldExecutionJobResponse({ success: true, version: 1, job: { ...job, canAddPlannedIntervention: true, plannedInterventionOptions: [] } }),
-  'true mutation eligibility without server options must fail closed',
+  'true planned mutation eligibility without server options must fail closed',
 );
 assertThrows(
   () => parseFieldExecutionJobResponse({ success: true, version: 1, job: { ...job, workInterventions: [{ ...intervention, visitId: 'visit-other' }] } }),
@@ -146,6 +219,30 @@ assertThrows(
 assertThrows(
   () => parseFieldExecutionJobResponse({ success: true, version: 1, job: { ...job, workInterventions: [{ ...intervention, assetId: 'AC-OTHER' }] } }),
   'intervention Asset must match its VisitAsset',
+);
+assertThrows(
+  () => parseFieldExecutionJobResponse({
+    success: true,
+    version: 1,
+    job: { ...job, workInterventions: [additionalIntervention], scopeChanges: [] },
+  }),
+  'additional WorkIntervention without its ScopeChange must fail closed',
+);
+assertThrows(
+  () => parseFieldExecutionJobResponse({
+    success: true,
+    version: 1,
+    job: { ...job, workInterventions: [additionalIntervention], scopeChanges: [{ ...scopeChange, interventionId: 'WI-OTHER' }] },
+  }),
+  'ScopeChange with inconsistent WorkIntervention linkage must fail closed',
+);
+assertThrows(
+  () => parseFieldExecutionJobResponse({
+    success: true,
+    version: 1,
+    job: { ...job, workInterventions: [additionalIntervention], scopeChanges: [{ ...scopeChange, requestedAt: 'not-a-timestamp' }] },
+  }),
+  'malformed ScopeChange timestamp must fail closed',
 );
 assertThrows(
   () => parseFieldCreatePlannedInterventionResponse({ success: true, version: 2, replayed: false, workIntervention: intervention, allowedActions: ['intervention.add'] }),
@@ -159,8 +256,41 @@ assertThrows(
   () => parseFieldCreatePlannedInterventionResponse({ success: true, version: 1, replayed: false, workIntervention: intervention, allowedActions: ['intervention.add', 'future.action'] }),
   'unknown action vocabulary must fail closed',
 );
+assertThrows(
+  () => parseFieldCreateAdditionalInterventionResponse({
+    success: true,
+    version: 1,
+    replayed: false,
+    scopeChange,
+    workIntervention: { ...additionalIntervention, status: 'completed' },
+    allowedActions: ['intervention.add'],
+  }),
+  'additional-work creation response cannot claim automatic completion',
+);
+assertThrows(
+  () => parseFieldCreateAdditionalInterventionResponse({
+    success: true,
+    version: 1,
+    replayed: false,
+    scopeChange: { ...scopeChange, interventionId: 'WI-OTHER' },
+    workIntervention: additionalIntervention,
+    allowedActions: ['intervention.add'],
+  }),
+  'additional-work mutation must fail closed on ScopeChange linkage drift',
+);
+assertThrows(
+  () => parseFieldCreateAdditionalInterventionResponse({
+    success: true,
+    version: 1,
+    replayed: false,
+    scopeChange: { ...scopeChange, origin: 'office_updated_scope' },
+    workIntervention: additionalIntervention,
+    allowedActions: ['intervention.add'],
+  }),
+  'Technician additional-work command cannot return an office-only ScopeChange origin',
+);
 
-const withIntervention = parseFieldExecutionJobResponse({
+const withPlannedIntervention = parseFieldExecutionJobResponse({
   success: true,
   version: 1,
   job: {
@@ -168,10 +298,25 @@ const withIntervention = parseFieldExecutionJobResponse({
     workInterventions: [intervention],
     plannedWorkProgress: [{ id: 'line-standard', plannedQuantity: 1, linkedActualQuantity: 1, remainingQuantity: 0 }],
     plannedInterventionOptions: [],
-    availableFieldServices: [],
+    availableFieldServices,
     canAddPlannedIntervention: false,
+    scopeChanges: [],
+    additionalInterventionVisitAssetIds: ['VA-1'],
+    canAddAdditionalIntervention: true,
   },
 });
-assert(withIntervention.job.workInterventions[0].status === 'confirmed', 'existing canonical WorkIntervention should remain readable after planned quantity is linked');
+assert(withPlannedIntervention.job.workInterventions[0].status === 'confirmed', 'planned WorkIntervention should remain readable after planned quantity is linked');
+assert(withPlannedIntervention.job.canAddAdditionalIntervention, 'exhausting planned quantity must not hide governed additional-work scope');
 
-console.log('Field WorkIntervention transport-contract acceptance: PASS');
+const withAdditionalIntervention = parseFieldExecutionJobResponse({
+  success: true,
+  version: 1,
+  job: {
+    ...job,
+    workInterventions: [additionalIntervention],
+    scopeChanges: [scopeChange],
+  },
+});
+assert(withAdditionalIntervention.job.scopeChanges[0].reason === scopeChange.reason, 'canonical ScopeChange reason must remain readable with its pending intervention');
+
+console.log('Field WorkIntervention + ScopeChange transport-contract acceptance: PASS');

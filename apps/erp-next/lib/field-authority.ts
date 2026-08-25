@@ -8,8 +8,10 @@ import {
   type FieldActiveVisitTransition,
 } from './field-authority-contract';
 import {
+  parseFieldCreateAdditionalInterventionResponse,
   parseFieldCreatePlannedInterventionResponse,
   parseFieldExecutionJobResponse,
+  type FieldTechnicianScopeChangeOrigin,
 } from './field-intervention-contract';
 
 export { fieldActionAllowed } from './field-authorization';
@@ -35,10 +37,14 @@ export type {
 } from './field-authority-contract';
 export type {
   FieldAvailableService,
+  FieldCreateAdditionalInterventionResponse,
   FieldCreatePlannedInterventionResponse,
   FieldExecutionJobDetail,
   FieldPlannedInterventionOption,
   FieldPlannedWorkProgress,
+  FieldScopeChange,
+  FieldScopeChangeOrigin,
+  FieldTechnicianScopeChangeOrigin,
   FieldWorkIntervention,
   FieldWorkInterventionOrigin,
   FieldWorkInterventionRequester,
@@ -161,6 +167,24 @@ export async function createPlannedFieldIntervention(
     visitAssetId,
     plannedWorkLineId,
     serviceCatalogItemId,
+    requestId,
+  }));
+}
+
+export async function createAdditionalFieldIntervention(
+  visitId: string,
+  visitAssetId: string,
+  serviceCatalogItemId: string,
+  origin: FieldTechnicianScopeChangeOrigin,
+  reason: string,
+  requestId: string,
+) {
+  return parseFieldCreateAdditionalInterventionResponse(await callFieldAuthority('create_additional_intervention', {
+    visitId,
+    visitAssetId,
+    serviceCatalogItemId,
+    origin,
+    reason,
     requestId,
   }));
 }

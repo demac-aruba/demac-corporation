@@ -25,6 +25,17 @@ const WORK_INTERVENTION_STATUSES = new Set([
   'completed',
 ] as const);
 const WORK_INTERVENTION_REQUESTERS = new Set(['office', 'client', 'technician'] as const);
+const SCOPE_CHANGE_ORIGINS = new Set([
+  'client_requested_additional_work',
+  'technician_discovered_additional_need',
+  'office_updated_scope',
+  'safety_requirement',
+  'other',
+] as const);
+const TECHNICIAN_SCOPE_CHANGE_ORIGINS = new Set([
+  'client_requested_additional_work',
+  'technician_discovered_additional_need',
+] as const);
 const ALLOWED_ACTIONS = new Set<string>(FIELD_ALLOWED_ACTIONS);
 
 export type FieldWorkInterventionOrigin =
@@ -44,6 +55,15 @@ export type FieldWorkInterventionStatus =
   | 'cancelled'
   | 'completed';
 export type FieldWorkInterventionRequester = 'office' | 'client' | 'technician';
+export type FieldScopeChangeOrigin =
+  | 'client_requested_additional_work'
+  | 'technician_discovered_additional_need'
+  | 'office_updated_scope'
+  | 'safety_requirement'
+  | 'other';
+export type FieldTechnicianScopeChangeOrigin =
+  | 'client_requested_additional_work'
+  | 'technician_discovered_additional_need';
 
 export type FieldWorkIntervention = {
   id: string;
@@ -64,6 +84,24 @@ export type FieldWorkIntervention = {
   performedByStaffIds: string[];
   resultCode?: string;
   resultNotes?: string;
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+  updatedBy: string;
+  version: number;
+};
+
+export type FieldScopeChange = {
+  id: string;
+  visitId: string;
+  visitAssetId: string;
+  interventionId: string;
+  origin: FieldScopeChangeOrigin;
+  reason: string;
+  plannedWorkLineId?: string;
+  requestedByStaffId?: string;
+  requestedAt: string;
+  resolvedAt?: string;
   createdAt: string;
   createdBy: string;
   updatedAt: string;
@@ -97,6 +135,9 @@ export type FieldExecutionJobDetail = FieldJobDetail & {
   plannedInterventionOptions: FieldPlannedInterventionOption[];
   availableFieldServices: FieldAvailableService[];
   canAddPlannedIntervention: boolean;
+  scopeChanges: FieldScopeChange[];
+  additionalInterventionVisitAssetIds: string[];
+  canAddAdditionalIntervention: boolean;
 };
 
 export type FieldCreatePlannedInterventionResponse = {
@@ -106,6 +147,15 @@ export type FieldCreatePlannedInterventionResponse = {
   workIntervention: FieldWorkIntervention;
   allowedActions: FieldAllowedAction[];
   auditEventId?: string;
+};
+
+export type FieldCreateAdditionalInterventionResponse = {
+  success: true;
+  version: typeof FIELD_AUTHORITY_API_VERSION;
+  replayed: boolean;
+  scopeChange: FieldScopeChange;
+  workIntervention: FieldWorkIntervention;
+  allowedActions: FieldAllowedAction[];
 };
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -120,6 +170,14 @@ function string(value: unknown): value is string {
 
 function optionalString(value: unknown) {
   return value === undefined || typeof value === 'string';
+}
+
+function timestamp(value: unknown) {
+  return string(value) && Number.isFinite(Date.parse(value));
+}
+
+function optionalTimestamp(value: unknown) {
+  return value === undefined || timestamp(value);
 }
 
 function positiveSafeInteger(value: unknown) {
@@ -178,6 +236,27 @@ function workInterventionValid(value: unknown): value is FieldWorkIntervention {
     && positiveSafeInteger(item.version);
 }
 
+function scopeChangeValid(value: unknown): value is FieldScopeChange {
+  const item = record(value);
+  if (!item) return false;
+  const origin = typeof item.origin === 'string' ? item.origin : '';
+  if (!SCOPE_CHANGE_ORIGINS.has(origin as FieldScopeChangeOrigin)) return false;
+  return string(item.id)
+    && string(item.visitId)
+    && string(item.visitAssetId)
+    && string(item.interventionId)
+    && string(item.reason)
+    && optionalString(item.plannedWorkLineId)
+    && optionalString(item.requestedByStaffId)
+    && timestamp(item.requestedAt)
+    && optionalTimestamp(item.resolvedAt)
+    && string(item.createdAt)
+    && string(item.createdBy)
+    && string(item.updatedAt)
+    && string(item.updatedBy)
+    && positiveSafeInteger(item.version);
+}
+
 function plannedWorkProgressValid(value: unknown): value is FieldPlannedWorkProgress[] {
   if (!Array.isArray(value)) return false;
   const ids = new Set<string>();
@@ -223,12 +302,31 @@ function executionRelationsValid(job: FieldExecutionJobDetail) {
   const currentVisitId = job.fieldVisit?.id ?? '';
   const assetByVisitAssetId = new Map(job.visitAssets.map((asset) => [asset.id, asset]));
   const progressById = new Map(job.plannedWorkProgress.map((progress) => [progress.id, progress]));
+  const interventionById = new Map(job.workInterventions.map((intervention) => [intervention.id, intervention]));
+  const scopeChangeById = new Map(job.scopeChanges.map((scopeChange) => [scopeChange.id, scopeChange]));
 
-  if (job.workInterventions.length > 0 && !currentVisitId) return false;
+  if ((job.workInterventions.length > 0 || job.scopeChanges.length > 0) && !currentVisitId) return false;
   for (const intervention of job.workInterventions) {
     const visitAsset = assetByVisitAssetId.get(intervention.visitAssetId);
     if (!visitAsset || intervention.visitId !== currentVisitId || intervention.assetId !== visitAsset.assetId) return false;
     if (intervention.plannedWorkLineId && !progressById.has(intervention.plannedWorkLineId)) return false;
+    if (intervention.origin !== 'planned') {
+      const scopeChange = intervention.scopeChangeId ? scopeChangeById.get(intervention.scopeChangeId) : undefined;
+      if (!scopeChange
+        || scopeChange.interventionId !== intervention.id
+        || scopeChange.visitAssetId !== intervention.visitAssetId) return false;
+    }
+  }
+
+  for (const scopeChange of job.scopeChanges) {
+    const visitAsset = assetByVisitAssetId.get(scopeChange.visitAssetId);
+    const intervention = interventionById.get(scopeChange.interventionId);
+    if (!visitAsset
+      || scopeChange.visitId !== currentVisitId
+      || !intervention
+      || intervention.origin === 'planned'
+      || intervention.scopeChangeId !== scopeChange.id
+      || intervention.visitAssetId !== scopeChange.visitAssetId) return false;
   }
 
   for (const option of job.plannedInterventionOptions) {
@@ -236,9 +334,31 @@ function executionRelationsValid(job: FieldExecutionJobDetail) {
     if (option.plannedWorkLineIds.some((id) => !progressById.has(id))) return false;
   }
 
+  for (const visitAssetId of job.additionalInterventionVisitAssetIds) {
+    if (!assetByVisitAssetId.has(visitAssetId)) return false;
+  }
+
   if (job.canAddPlannedIntervention
     && (job.plannedInterventionOptions.length === 0 || job.availableFieldServices.length === 0)) return false;
+  if (job.canAddAdditionalIntervention !== (job.additionalInterventionVisitAssetIds.length > 0)) return false;
+  if (job.canAddAdditionalIntervention && job.availableFieldServices.length === 0) return false;
   return true;
+}
+
+function additionalMutationRelationsValid(scopeChange: FieldScopeChange, intervention: FieldWorkIntervention) {
+  if (!TECHNICIAN_SCOPE_CHANGE_ORIGINS.has(scopeChange.origin as FieldTechnicianScopeChangeOrigin)) return false;
+  if (scopeChange.visitId !== intervention.visitId
+    || scopeChange.visitAssetId !== intervention.visitAssetId
+    || scopeChange.interventionId !== intervention.id
+    || intervention.scopeChangeId !== scopeChange.id
+    || intervention.status !== 'pending_authorization'
+    || scopeChange.plannedWorkLineId !== undefined
+    || intervention.plannedWorkLineId !== undefined) return false;
+
+  if (scopeChange.origin === 'client_requested_additional_work') {
+    return intervention.origin === 'added_on_site_client_request' && intervention.requestedBy === 'client';
+  }
+  return intervention.origin === 'added_on_site_technician_discovery' && intervention.requestedBy === 'technician';
 }
 
 export function parseFieldExecutionJobResponse(value: unknown): { success: true; version: typeof FIELD_AUTHORITY_API_VERSION; job: FieldExecutionJobDetail } {
@@ -251,7 +371,11 @@ export function parseFieldExecutionJobResponse(value: unknown): { success: true;
     || !plannedWorkProgressValid(rawJob.plannedWorkProgress)
     || !plannedInterventionOptionsValid(rawJob.plannedInterventionOptions)
     || !availableServicesValid(rawJob.availableFieldServices)
-    || typeof rawJob.canAddPlannedIntervention !== 'boolean') {
+    || typeof rawJob.canAddPlannedIntervention !== 'boolean'
+    || !Array.isArray(rawJob.scopeChanges)
+    || !rawJob.scopeChanges.every(scopeChangeValid)
+    || !uniqueStrings(rawJob.additionalInterventionVisitAssetIds)
+    || typeof rawJob.canAddAdditionalIntervention !== 'boolean') {
     throw new Error('Field Operations returned malformed intervention data. Refresh and try again.');
   }
   const job = base.job as FieldExecutionJobDetail;
@@ -273,4 +397,23 @@ export function parseFieldCreatePlannedInterventionResponse(value: unknown): Fie
     throw new Error('Field Operations returned malformed Work Intervention data. Refresh and try again.');
   }
   return payload as FieldCreatePlannedInterventionResponse;
+}
+
+export function parseFieldCreateAdditionalInterventionResponse(value: unknown): FieldCreateAdditionalInterventionResponse {
+  const payload = record(value);
+  if (!payload
+    || payload.success !== true
+    || payload.version !== FIELD_AUTHORITY_API_VERSION
+    || typeof payload.replayed !== 'boolean'
+    || !scopeChangeValid(payload.scopeChange)
+    || !workInterventionValid(payload.workIntervention)
+    || !allowedActionsValid(payload.allowedActions)) {
+    throw new Error('Field Operations returned malformed additional-work data. Refresh and try again.');
+  }
+  const scopeChange = payload.scopeChange as FieldScopeChange;
+  const workIntervention = payload.workIntervention as FieldWorkIntervention;
+  if (!additionalMutationRelationsValid(scopeChange, workIntervention)) {
+    throw new Error('Field Operations returned inconsistent additional-work data. Refresh and try again.');
+  }
+  return payload as FieldCreateAdditionalInterventionResponse;
 }
