@@ -10,9 +10,13 @@ import {
 import {
   parseFieldCreateAdditionalInterventionResponse,
   parseFieldCreatePlannedInterventionResponse,
-  parseFieldExecutionJobResponse,
   type FieldTechnicianScopeChangeOrigin,
 } from './field-intervention-contract';
+import {
+  parseFieldApprovalJobResponse,
+  parseFieldRecordAdditionalWorkDecisionResponse,
+  type FieldAdditionalWorkDecision,
+} from './field-approval-contract';
 
 export { fieldActionAllowed } from './field-authorization';
 export type {
@@ -39,7 +43,6 @@ export type {
   FieldAvailableService,
   FieldCreateAdditionalInterventionResponse,
   FieldCreatePlannedInterventionResponse,
-  FieldExecutionJobDetail,
   FieldPlannedInterventionOption,
   FieldPlannedWorkProgress,
   FieldPriceSnapshot,
@@ -51,6 +54,16 @@ export type {
   FieldWorkInterventionRequester,
   FieldWorkInterventionStatus,
 } from './field-intervention-contract';
+export type {
+  FieldAdditionalWorkDecision,
+  FieldApproval,
+  FieldApprovalMethod,
+  FieldApprovalReference,
+  FieldApprovalReferenceType,
+  FieldApprovalStatus,
+  FieldExecutionJobDetail,
+  FieldRecordAdditionalWorkDecisionResponse,
+} from './field-approval-contract';
 
 type FieldApiError = { error?: { code?: string; message?: string; details?: Record<string, unknown> } };
 
@@ -125,7 +138,7 @@ export async function getFieldSchedule(startDate: string, endDate = startDate) {
 }
 
 export async function getFieldJob(workOrderId: string) {
-  return parseFieldExecutionJobResponse(await callFieldAuthority('get_job', { workOrderId }));
+  return parseFieldApprovalJobResponse(await callFieldAuthority('get_job', { workOrderId }));
 }
 
 export async function prepareFieldVisit(workOrderId: string, requestId: string) {
@@ -184,6 +197,24 @@ export async function createAdditionalFieldIntervention(
     serviceCatalogItemId,
     origin,
     reason,
+    requestId,
+  }));
+}
+
+export async function recordAdditionalFieldInterventionDecision(
+  visitId: string,
+  interventionId: string,
+  decision: FieldAdditionalWorkDecision,
+  receiverName: string,
+  note: string,
+  requestId: string,
+) {
+  return parseFieldRecordAdditionalWorkDecisionResponse(await callFieldAuthority('record_additional_intervention_decision', {
+    visitId,
+    interventionId,
+    decision,
+    receiverName,
+    note,
     requestId,
   }));
 }
