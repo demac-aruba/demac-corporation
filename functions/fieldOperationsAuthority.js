@@ -18,6 +18,10 @@ const {
   attachWorkInterventionsToJob,
   createPlannedWorkInterventionCommand,
 } = require('./fieldOperationsVisitInterventions');
+const {
+  attachScopeChangesToJob,
+  createAdditionalWorkInterventionCommand,
+} = require('./fieldOperationsScopeChanges');
 const { attachCurrentWorkVisitState, attachCurrentWorkVisitStates } = require('./fieldOperationsVisitRead');
 const { createTransitionWorkVisitCommand } = require('./fieldOperationsVisitMutation');
 
@@ -28,6 +32,7 @@ const FIELD_ACTIONS = new Set([
   'transition_visit',
   'attach_visit_asset',
   'create_planned_intervention',
+  'create_additional_intervention',
 ]);
 
 function cleanText(value, limit = 1000) {
@@ -74,6 +79,7 @@ function createFieldOperationsApi({
   transitionWorkVisit,
   attachExistingVisitAsset,
   createPlannedWorkIntervention,
+  createAdditionalWorkIntervention,
 } = {}) {
   if (!db || typeof db.collection !== 'function') throw new Error('A Firestore-compatible db is required.');
   if (typeof verifyIdToken !== 'function') throw new Error('verifyIdToken is required.');
@@ -82,6 +88,7 @@ function createFieldOperationsApi({
   if (transitionWorkVisit !== undefined && typeof transitionWorkVisit !== 'function') throw new Error('transitionWorkVisit must be a function when provided.');
   if (attachExistingVisitAsset !== undefined && typeof attachExistingVisitAsset !== 'function') throw new Error('attachExistingVisitAsset must be a function when provided.');
   if (createPlannedWorkIntervention !== undefined && typeof createPlannedWorkIntervention !== 'function') throw new Error('createPlannedWorkIntervention must be a function when provided.');
+  if (createAdditionalWorkIntervention !== undefined && typeof createAdditionalWorkIntervention !== 'function') throw new Error('createAdditionalWorkIntervention must be a function when provided.');
 
   async function authenticate(request) {
     const token = bearerToken(request);
@@ -113,10 +120,11 @@ function createFieldOperationsApi({
       const job = await loadAssignedJob(db, identity, workOrderId);
       const withVisit = await attachCurrentWorkVisitState(db, job);
       const withAssets = await attachVisitAssetsToJob(db, withVisit);
+      const withInterventions = await attachWorkInterventionsToJob(db, withAssets);
       return {
         success: true,
         version: FIELD_OPERATIONS_API_VERSION,
-        job: publicJobProjection(await attachWorkInterventionsToJob(db, withAssets)),
+        job: publicJobProjection(await attachScopeChangesToJob(db, withInterventions)),
       };
     }
     if (action === 'prepare_visit') {
@@ -173,6 +181,21 @@ function createFieldOperationsApi({
       });
       return { ...created, version: FIELD_OPERATIONS_API_VERSION };
     }
+    if (action === 'create_additional_intervention') {
+      if (typeof createAdditionalWorkIntervention !== 'function') {
+        throw fieldError('mutation_not_configured', 'Additional Field work intervention creation is not configured in this runtime.', 503);
+      }
+      const created = await createAdditionalWorkIntervention({
+        identity,
+        visitId: cleanText(data.visitId, 180),
+        visitAssetId: cleanText(data.visitAssetId, 180),
+        serviceCatalogItemId: cleanText(data.serviceCatalogItemId, 180),
+        origin: cleanText(data.origin, 80),
+        reason: cleanText(data.reason, 1500),
+        requestId: cleanText(data.requestId, 240),
+      });
+      return { ...created, version: FIELD_OPERATIONS_API_VERSION };
+    }
     throw fieldError('unsupported_action', `Unsupported Field Operations action: ${action || 'missing'}.`, 400);
   }
 
@@ -211,6 +234,7 @@ function getDefaultApi() {
     const transitionWorkVisit = createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditInTransaction });
     const attachExistingVisitAsset = createAttachExistingVisitAssetCommand({ db, resolveAssignment, appendAuditInTransaction });
     const createPlannedWorkIntervention = createPlannedWorkInterventionCommand({ db, resolveAssignment, appendAuditInTransaction });
+    const createAdditionalWorkIntervention = createAdditionalWorkInterventionCommand({ db, resolveAssignment, appendAuditInTransaction });
     defaultApi = createFieldOperationsApi({
       db,
       verifyIdToken: (token) => getAuth().verifyIdToken(token, true),
@@ -218,6 +242,7 @@ function getDefaultApi() {
       transitionWorkVisit,
       attachExistingVisitAsset,
       createPlannedWorkIntervention,
+      createAdditionalWorkIntervention,
       reportError: ({ action, status, code, error }) => logger.error('Field Operations request failed', {
         action: cleanText(action, 120) || 'unknown',
         status,
