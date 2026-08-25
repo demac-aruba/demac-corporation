@@ -323,62 +323,48 @@ The implementation phase must place evidence at the boundary where the failure c
 - transport integration: bridge Bearer + communication-account binding on webhook/media/poll/ack; poll never claims another account; Maya conversational command rejected on stale epoch; human conversational command rejected after ownership loss; transactional appointment/van notification remains sendable without conversation ownership;
 - voice integration: new eligible audio -> stored media -> one transcript -> same canonical input/turn; historical/replayed old audio -> zero automatic transcription/action; duplicate audio webhook -> one transcript/turn;
 - regression: linked-device `FromMe` outbound protection, technician transcription, technician schedule, Booking availability/commit-time revalidation, unknown-price behavior, ERP Communication Center ownership/send actions;
-- quality gates: add all new P0 files/tests to `validate:firebase` and focused suites; run ERP Next typecheck/build where the Communication Center is touched; syntax/contract-check the deployed DigitalOcean bridge source on pull requests.
+- quality gates: add all new P0 files/tests to `validate:firebase` and focused suites; run ERP Next typecheck/build where touched; run relevant PR workflows on the final HEAD; complete four review passes plus independent Reviewer evidence.
 
-The specification's 30 named P0 scenarios remain the final required scenario set. The implementation must not collapse them into one mocked unit suite.
+Critical transaction/concurrency scenarios should use Firestore-emulator or equivalently realistic transaction evidence rather than proving cross-document races only with isolated pure mocks.
 
 ### Migration and recovery design
 
-No production migration is authorized by this design phase.
+No production migration is authorized by this architecture phase.
 
-Before account-scoped IDs can be activated, implementation must provide a dry-run planner that can report legacy conversation/message/session/outbound mappings and conflicts without mutating production. The activation path is **copy + retire**, not destructive delete:
+Before any account-scoped identity activation, prepare a **dry-run only** inventory/map of current Wacli live projection records. The production cutover, if approved, must be non-destructive by default:
 
-1. identify legacy conversation records that belong to the deliberately approved account;
-2. calculate canonical account-scoped IDs;
-3. stop on collisions/ambiguous account provenance rather than guessing;
-4. copy required ownership/status/customer/recent operational state to canonical projection;
-5. mark the legacy conversation projection superseded/read-only for a bounded compatibility period;
-6. activate canonical writers only after counts/conflicts are verified;
-7. preserve raw historical messages and audio; do not backfill historical transcription;
-8. migrate only provably attributable active Maya sessions/offers;
-9. drain or explicitly map already-queued conversational outbound items before a sender cutover; do not infer a queue item's account from its recipient phone.
+- choose and verify the canonical `communicationAccountId` against the actual corporate Wacli bridge (`NEEDS_HUMAN`);
+- require the bridge deployment binding to match `businessSettings/whatsapp.communicationAccountId` before accepting ingress/poll;
+- map each live Wacli conversation to its new canonical account-scoped conversation ID and stop on missing/ambiguous remote identity or target conflict;
+- copy active live conversation state to the canonical document, preserving customer link, ownership/status, `ownershipVersion`, recent messages and operational state; mark the old projection retired/superseded rather than deleting it during initial cutover;
+- inspect active `customerAgentSessions` and migrate only sessions whose canonical identity can be proved and whose live offer/state must survive; otherwise fail closed rather than guess;
+- require conversational outbound queue items to be drained, cancelled, or explicitly mapped before cutover. Unknown legacy queue account identity is not auto-inferred from the current customer/recipient;
+- historical `whatsappMessages` do not require broad backfill for P0. They remain historical evidence; no historical audio becomes eligible because of migration. New post-cutover messages use canonical account-scoped IDs only;
+- if an account+status Firestore query requires a composite index, add a tracked index deliberately rather than weakening account filtering; production index deployment is part of the human-approved cutover.
 
-The existing `cutoverWacliProductionAccount.js` performed a different historic inbox cutover and includes destructive live-projection reset behavior. It is not the migration implementation for this architecture and must not be repurposed as a patch.
+The existing `cutoverWacliProductionAccount.js` is a separate prior production projection cutover and is not to be repurposed casually; its workflow can mutate production on main. Any new migration requires its own reviewed dry-run evidence and explicit approval before an apply mode exists.
 
-Recovery rules:
+### Rollback and kill-switch design
 
-- if dry-run identifies an ambiguity/conflict, abort before canonical-writer activation and keep legacy projection untouched;
-- inbound/provider replay remains safe because canonical IDs are deterministic;
-- a failed delayed wake-up leaves `customerAgentInboundQueue` as recoverable truth and can be retried without recreating intent from model memory;
-- a failed send leaves the one outbound queue/audit state intact; it is never reconstructed from chat text.
+Rollback is intentionally asymmetric so the system never returns to split-brain identity writes:
 
-### Rollback design
+- **Before identity activation:** normal code rollback is safe because canonical writes were never enabled.
+- **After canonical identity activation:** do not revert ingress to legacy raw-chat document IDs. Preserve canonical writes and roll back Maya capability instead. Disable Maya auto-reply/business autonomy and customer voice processing with existing policy flags; queued delayed work then fails closed on policy/epoch checks.
+- **Outbound incident:** pause/disable the affected account's bridge sending under human control; queue records remain auditable and are not rewritten to another provider/account automatically.
+- **Task wake-up incident:** leave canonical queue records intact. Duplicate tasks remain idempotent; missed tasks are recoverable by re-enqueueing wake-ups after fixing the execution layer without reconstructing customer intent.
+- **Migration conflict:** stop before activating canonical ingress; retained legacy projection remains available for read/reference. Never delete the old projection as the first migration step.
+- **Case/dispatch incident:** disabling Maya communication does not clear existing holds automatically. Holds are resolved only by the governed Dispatch Safety/Booking workflow or an explicitly authorized human resolution, preserving operational safety.
 
-Rollback is intentionally asymmetric because reverting code after an identity cutover must not reintroduce split-brain identity.
+### Implementation dependency order after this design
 
-- Before production identity activation: ordinary code rollback is allowed after verification.
-- After canonical IDs are activated: do **not** revert writers to raw `chat` document IDs. Disable Maya capabilities through existing policy/feature flags while preserving canonical communication identity.
-- If delayed task execution is unhealthy: disable Maya reply/action activation; keep queue records and Observer-safe/manual workflows available. Do not add a second polling work store as a hotfix.
-- If outbound epoch validation blocks valid traffic: pause the affected conversational sender class and diagnose the canonical queue/ownership data. Do not bypass the guard globally; transactional notification class remains independently governed.
-- If a Case/Dispatch Safety defect is suspected: disabling Maya does not silently clear an active hold. Holds are resolved only through governed Dispatch Safety/Booking transitions or explicit authorized human intervention.
-- If bridge/account binding fails: stop/pause the affected account transport, correct the verified deployment binding, and replay its durable outbox/ACK records. Do not accept an unknown/mismatched account to restore traffic.
+1. Correct source/CI ownership for the deployed DigitalOcean bridge; add account-binding contract tests without deploying it.
+2. Extend canonical communication identity and account-bound ingress so new writes can be proved isolated before any Maya behavior depends on them.
+3. Add `customerInputVersion`, shared canonical current-turn derivation, and account-scoped Customer Agent session identity.
+4. Refactor the existing Maya queue into deferred `eligibleAt` processing with one wake-up task and one Observer -> Policy -> Runtime pipeline.
+5. Extend existing ownership guard/Communication Authority so both epochs survive through business-tool and outbound commit boundaries.
+6. Standardize the existing outbound queue envelope and enforce account/class/epoch rules at Wacli claim time without breaking transactional notifications.
+7. Extend canonical CRM party resolution; wire genuinely-new classification only after identity/current-turn foundations are proven.
+8. Make Communication Case + Dispatch Safety current-turn atomic and integrate hold resolution into Booking lifecycle.
+9. Extend explicit quality gates and run the named P0 regression/integration suites, followed by four review passes and independent Reviewer evidence.
 
-Any production rollback that changes deployment/configuration still requires explicit human approval.
-
-### Implementation dependency order
-
-The smallest safe build sequence after this architecture-design phase is:
-
-1. canonical bridge/account binding + canonical ingress message/conversation IDs;
-2. replay-safe `customerInputVersion` assignment at ingress;
-3. one shared current-turn derivation for text + voice transcript;
-4. account-scoped Maya session identity and new/existing party resolution;
-5. deferred `eligibleAt` queue + wake-up transport;
-6. exact ownership/input epoch guards through model/tools/outbound commit;
-7. account/epoch-aware outbound envelope and claim validation while preserving transactional traffic;
-8. stale-safe Observer/Case + atomic Dispatch Safety;
-9. Booking lifecycle hold convergence;
-10. named integration/regression suite and dependency-aware quality gates;
-11. four review passes plus independent Reviewer evidence.
-
-Do not skip an earlier identity/epoch dependency by compensating with a later guard.
+This order is a dependency sequence, not permission to deploy. All production/account/config/migration/merge actions remain behind the human-only boundaries above.
