@@ -1,9 +1,7 @@
 const crypto = require("node:crypto");
 const { getApp, getApps, initializeApp } = require("firebase-admin/app");
 const { FieldValue, getFirestore } = require("firebase-admin/firestore");
-const logger = require("firebase-functions/logger");
 const { defineSecret } = require("firebase-functions/params");
-const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { cleanText, hashId } = require("./bookingSchedulingPrimitives");
 const { createMayaCustomerObserver, MAYA_OBSERVER_VERSION } = require("./demacCustomerObserver");
 const { createCommunicationCaseService } = require("./demacCommunicationCaseService");
@@ -263,41 +261,9 @@ function transcriptBecameReady(before = {}, after = {}) {
   return after.transcriptionStatus === "completed" && Boolean(afterText) && afterText !== beforeText;
 }
 
-exports.observeCustomerInboundMessage = onDocumentCreated(
-  {
-    document: "whatsappMessages/{messageId}",
-    region: "us-central1",
-    memory: "512MiB",
-    timeoutSeconds: 120,
-    retry: true,
-    secrets: [openAiApiKey],
-  },
-  async (event) => {
-    const snapshot = event.data;
-    if (!snapshot) return;
-    const message = { id: snapshot.id, ...snapshot.data() };
-    if (["audio", "voice"].includes(messageMediaType(message)) && !observerContent(message)) return;
-    await processObservedMessage({ messageId: snapshot.id, message });
-  },
-);
-
-exports.observeCustomerVoiceTranscript = onDocumentUpdated(
-  {
-    document: "whatsappMessages/{messageId}",
-    region: "us-central1",
-    memory: "512MiB",
-    timeoutSeconds: 120,
-    retry: true,
-    secrets: [openAiApiKey],
-  },
-  async (event) => {
-    const before = event.data?.before?.data() || {};
-    const after = event.data?.after?.data() || {};
-    if (!transcriptBecameReady(before, after)) return;
-    await processObservedMessage({ messageId: event.params.messageId, message: { id: event.params.messageId, ...after } });
-  },
-);
-
+// Service-only module: Firestore wake-up ownership belongs to the deferred customer-turn
+// orchestrator. Keeping Observer as a service prevents parallel trigger families from
+// independently racing Case/Dispatch and Reply Policy for the same customer turn.
 module.exports.OBSERVER_LEASE_MS = OBSERVER_LEASE_MS;
 module.exports.claimObservation = claimObservation;
 module.exports.conversationDocumentId = conversationDocumentId;
