@@ -42,8 +42,8 @@ test('inactive Field principals fail closed before assignment resolution', () =>
   }), /inactive or not provisioned/);
 });
 
-test('Field HTTP authority exposes only governed read actions plus audited visit preparation', async () => {
-  assert.deepEqual([...FIELD_ACTIONS].sort(), ['get_job', 'get_schedule', 'prepare_visit']);
+test('Field HTTP authority exposes governed reads plus audited visit preparation and active transitions', async () => {
+  assert.deepEqual([...FIELD_ACTIONS].sort(), ['get_job', 'get_schedule', 'prepare_visit', 'transition_visit']);
 
   const api = createFieldOperationsApi({
     db: { collection() { return {}; } },
@@ -52,6 +52,10 @@ test('Field HTTP authority exposes only governed read actions plus audited visit
 
   await assert.rejects(
     () => api.execute({ action: 'prepare_visit', data: {}, identity: { operations: false } }),
+    (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
+  );
+  await assert.rejects(
+    () => api.execute({ action: 'transition_visit', data: {}, identity: { operations: false } }),
     (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
   );
   await assert.rejects(
@@ -100,7 +104,12 @@ test('prepare_visit authenticates first and returns the same versioned contract 
     },
     prepareWorkVisit: async (input) => {
       calls.push(input);
-      return { success: true, replayed: false, visit: { id: 'visit-WO-1', status: 'scheduled' }, allowedActions: ['execute'] };
+      return {
+        success: true,
+        replayed: false,
+        visit: { id: 'visit-WO-1', status: 'scheduled' },
+        allowedActions: ['execute'],
+      };
     },
   });
 
@@ -113,6 +122,7 @@ test('prepare_visit authenticates first and returns the same versioned contract 
   assert.equal(result.status, 200);
   assert.equal(result.body.success, true);
   assert.equal(result.body.version, 1);
+  assert.deepEqual(result.body.visit.availableTransitions, ['en_route']);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].workOrderId, 'WO-1');
   assert.equal(calls[0].requestId, 'prepare-WO-1-001');
@@ -121,18 +131,64 @@ test('prepare_visit authenticates first and returns the same versioned contract 
   assert.equal(calls[0].identity.role, 'technician', 'token role must not override governed profile role');
 });
 
-test('prepare_visit cannot execute without authentication', async () => {
-  let called = false;
+test('transition_visit authenticates and forwards optimistic concurrency inputs without trusting client authority', async () => {
+  const calls = [];
+  const api = createFieldOperationsApi({
+    db: authDb({ active: true, role: 'technician', staffId: 'staff-1', name: 'Tech One', vanId: 'VAN-1' }),
+    verifyIdToken: async () => ({ uid: 'uid-1' }),
+    transitionWorkVisit: async (input) => {
+      calls.push(input);
+      return {
+        success: true,
+        replayed: false,
+        visit: { id: 'visit-WO-1', status: 'en_route', version: 2, availableTransitions: ['on_site'] },
+        allowedActions: ['read', 'execute'],
+      };
+    },
+  });
+
+  const result = await api.handle(request({
+    token: 'valid-token',
+    action: 'transition_visit',
+    data: {
+      visitId: ' visit-WO-1 ',
+      to: ' en_route ',
+      expectedVersion: 1,
+      requestId: ' transition-route-001 ',
+      allowedActions: ['execute', 'price.override'],
+    },
+  }));
+
+  assert.equal(result.status, 200);
+  assert.equal(result.body.version, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].visitId, 'visit-WO-1');
+  assert.equal(calls[0].to, 'en_route');
+  assert.equal(calls[0].expectedVersion, 1);
+  assert.equal(calls[0].requestId, 'transition-route-001');
+  assert.equal(calls[0].identity.staffId, 'staff-1');
+  assert.equal('allowedActions' in calls[0], false, 'client action projection must not be forwarded as authority');
+});
+
+test('Field mutation actions cannot execute without authentication', async () => {
+  let prepareCalled = false;
+  let transitionCalled = false;
   const api = createFieldOperationsApi({
     db: authDb({ active: true, role: 'technician', staffId: 'staff-1' }),
     verifyIdToken: async () => ({ uid: 'uid-1' }),
-    prepareWorkVisit: async () => { called = true; return { success: true }; },
+    prepareWorkVisit: async () => { prepareCalled = true; return { success: true }; },
+    transitionWorkVisit: async () => { transitionCalled = true; return { success: true }; },
   });
 
-  const result = await api.handle(request({ action: 'prepare_visit', data: { workOrderId: 'WO-1', requestId: 'prepare-WO-1-001' } }));
-  assert.equal(result.status, 401);
-  assert.equal(result.body.error.code, 'unauthenticated');
-  assert.equal(called, false);
+  const prepare = await api.handle(request({ action: 'prepare_visit', data: { workOrderId: 'WO-1', requestId: 'prepare-WO-1-001' } }));
+  assert.equal(prepare.status, 401);
+  assert.equal(prepare.body.error.code, 'unauthenticated');
+
+  const transition = await api.handle(request({ action: 'transition_visit', data: { visitId: 'visit-WO-1', to: 'en_route', expectedVersion: 1, requestId: 'transition-route-001' } }));
+  assert.equal(transition.status, 401);
+  assert.equal(transition.body.error.code, 'unauthenticated');
+  assert.equal(prepareCalled, false);
+  assert.equal(transitionCalled, false);
 });
 
 test('missing and expired Firebase sessions return controlled unauthenticated errors', async () => {
