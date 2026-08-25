@@ -25,6 +25,12 @@ const WORK_INTERVENTION_STATUSES = new Set([
   'completed',
 ] as const);
 const WORK_INTERVENTION_REQUESTERS = new Set(['office', 'client', 'technician'] as const);
+const WORK_INTERVENTION_EXECUTION_TARGETS = new Set([
+  'in_progress',
+  'completed',
+  'pending_part',
+  'not_performed',
+] as const);
 const PRICED_ADDITIONAL_INTERVENTION_ORIGINS = new Set([
   'added_on_site_client_request',
   'added_on_site_technician_discovery',
@@ -59,6 +65,7 @@ export type FieldWorkInterventionStatus =
   | 'cancelled'
   | 'completed';
 export type FieldWorkInterventionRequester = 'office' | 'client' | 'technician';
+export type FieldInterventionExecutionTarget = 'in_progress' | 'completed' | 'pending_part' | 'not_performed';
 export type FieldScopeChangeOrigin =
   | 'client_requested_additional_work'
   | 'technician_discovered_additional_need'
@@ -137,6 +144,11 @@ export type FieldPlannedInterventionOption = {
   plannedWorkLineIds: string[];
 };
 
+export type FieldInterventionExecutionOption = {
+  interventionId: string;
+  allowedTargets: FieldInterventionExecutionTarget[];
+};
+
 export type FieldAvailableService = {
   id: string;
   bookingCode: string;
@@ -149,6 +161,7 @@ export type FieldExecutionJobDetail = FieldJobDetail & {
   workInterventions: FieldWorkIntervention[];
   plannedWorkProgress: FieldPlannedWorkProgress[];
   plannedInterventionOptions: FieldPlannedInterventionOption[];
+  interventionExecutionOptions: FieldInterventionExecutionOption[];
   availableFieldServices: FieldAvailableService[];
   canAddPlannedIntervention: boolean;
   scopeChanges: FieldScopeChange[];
@@ -172,6 +185,15 @@ export type FieldCreateAdditionalInterventionResponse = {
   scopeChange: FieldScopeChange;
   workIntervention: FieldWorkIntervention;
   allowedActions: FieldAllowedAction[];
+};
+
+export type FieldTransitionInterventionResponse = {
+  success: true;
+  version: typeof FIELD_AUTHORITY_API_VERSION;
+  replayed: boolean;
+  workIntervention: FieldWorkIntervention;
+  allowedActions: FieldAllowedAction[];
+  auditEventId?: string;
 };
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -241,6 +263,39 @@ function priceSnapshotValid(value: unknown, serviceCatalogItemId: string): value
     && timestamp(item.capturedAt));
 }
 
+function executionStateValid(item: Record<string, unknown>, status: FieldWorkInterventionStatus) {
+  if (!optionalTimestamp(item.startedAt) || !optionalTimestamp(item.completedAt)) return false;
+  if (!uniqueStrings(item.performedByStaffIds)) return false;
+  const performers = item.performedByStaffIds as string[];
+  if (status === 'confirmed' || status === 'pending_authorization') {
+    return item.startedAt === undefined && item.completedAt === undefined && performers.length === 0;
+  }
+  if (status === 'in_progress') {
+    return timestamp(item.startedAt) && item.completedAt === undefined && performers.length > 0;
+  }
+  if (status === 'completed') {
+    return timestamp(item.startedAt)
+      && timestamp(item.completedAt)
+      && performers.length > 0
+      && item.resultCode === 'completed';
+  }
+  if (status === 'pending_part') {
+    return timestamp(item.startedAt)
+      && item.completedAt === undefined
+      && performers.length > 0
+      && item.resultCode === 'pending_part'
+      && string(item.resultNotes);
+  }
+  if (status === 'not_performed') {
+    return item.startedAt === undefined
+      && item.completedAt === undefined
+      && performers.length === 0
+      && item.resultCode === 'not_performed'
+      && string(item.resultNotes);
+  }
+  return true;
+}
+
 function workInterventionValid(value: unknown): value is FieldWorkIntervention {
   const item = record(value);
   if (!item) return false;
@@ -256,6 +311,7 @@ function workInterventionValid(value: unknown): value is FieldWorkIntervention {
   const requiresPrice = PRICED_ADDITIONAL_INTERVENTION_ORIGINS.has(origin as 'added_on_site_client_request' | 'added_on_site_technician_discovery');
   if (requiresPrice && !priceSnapshotValid(item.priceSnapshot, item.serviceCatalogItemId)) return false;
   if (!requiresPrice && item.priceSnapshot !== undefined && !priceSnapshotValid(item.priceSnapshot, item.serviceCatalogItemId)) return false;
+  if (!executionStateValid(item, status as FieldWorkInterventionStatus)) return false;
   return string(item.id)
     && string(item.visitId)
     && string(item.visitAssetId)
@@ -265,14 +321,11 @@ function workInterventionValid(value: unknown): value is FieldWorkIntervention {
     && optionalString(item.templateId)
     && (item.templateVersion === undefined || positiveSafeInteger(item.templateVersion))
     && optionalString(item.scopeChangeId)
-    && optionalString(item.startedAt)
-    && optionalString(item.completedAt)
-    && uniqueStrings(item.performedByStaffIds)
     && optionalString(item.resultCode)
     && optionalString(item.resultNotes)
-    && string(item.createdAt)
+    && timestamp(item.createdAt)
     && string(item.createdBy)
-    && string(item.updatedAt)
+    && timestamp(item.updatedAt)
     && string(item.updatedBy)
     && positiveSafeInteger(item.version);
 }
@@ -291,9 +344,9 @@ function scopeChangeValid(value: unknown): value is FieldScopeChange {
     && optionalString(item.requestedByStaffId)
     && timestamp(item.requestedAt)
     && optionalTimestamp(item.resolvedAt)
-    && string(item.createdAt)
+    && timestamp(item.createdAt)
     && string(item.createdBy)
-    && string(item.updatedAt)
+    && timestamp(item.updatedAt)
     && string(item.updatedBy)
     && positiveSafeInteger(item.version);
 }
@@ -320,6 +373,20 @@ function plannedInterventionOptionsValid(value: unknown): value is FieldPlannedI
     if (!item || !string(item.visitAssetId) || visitAssetIds.has(item.visitAssetId)) return false;
     visitAssetIds.add(item.visitAssetId);
     if (!uniqueStrings(item.plannedWorkLineIds, { allowEmpty: false })) return false;
+  }
+  return true;
+}
+
+function interventionExecutionOptionsValid(value: unknown): value is FieldInterventionExecutionOption[] {
+  if (!Array.isArray(value)) return false;
+  const interventionIds = new Set<string>();
+  for (const candidate of value) {
+    const item = record(candidate);
+    if (!item || !string(item.interventionId) || interventionIds.has(item.interventionId)) return false;
+    interventionIds.add(item.interventionId);
+    if (!Array.isArray(item.allowedTargets) || item.allowedTargets.length === 0) return false;
+    if (!item.allowedTargets.every((target) => typeof target === 'string' && WORK_INTERVENTION_EXECUTION_TARGETS.has(target as FieldInterventionExecutionTarget))) return false;
+    if (item.allowedTargets.length !== new Set(item.allowedTargets).size) return false;
   }
   return true;
 }
@@ -375,6 +442,17 @@ function executionRelationsValid(job: FieldExecutionJobDetail) {
     if (option.plannedWorkLineIds.some((id) => !progressById.has(id))) return false;
   }
 
+  for (const option of job.interventionExecutionOptions) {
+    const intervention = interventionById.get(option.interventionId);
+    if (!intervention) return false;
+    const expectedTargets = intervention.status === 'confirmed'
+      ? new Set<FieldInterventionExecutionTarget>(['in_progress', 'not_performed'])
+      : intervention.status === 'in_progress'
+        ? new Set<FieldInterventionExecutionTarget>(['completed', 'pending_part'])
+        : new Set<FieldInterventionExecutionTarget>();
+    if (option.allowedTargets.some((target) => !expectedTargets.has(target))) return false;
+  }
+
   for (const visitAssetId of job.additionalInterventionVisitAssetIds) {
     if (!assetByVisitAssetId.has(visitAssetId)) return false;
   }
@@ -412,6 +490,7 @@ export function parseFieldExecutionJobResponse(value: unknown): { success: true;
     || !rawJob.workInterventions.every(workInterventionValid)
     || !plannedWorkProgressValid(rawJob.plannedWorkProgress)
     || !plannedInterventionOptionsValid(rawJob.plannedInterventionOptions)
+    || !interventionExecutionOptionsValid(rawJob.interventionExecutionOptions)
     || !availableServicesValid(rawJob.availableFieldServices)
     || typeof rawJob.canAddPlannedIntervention !== 'boolean'
     || !Array.isArray(rawJob.scopeChanges)
@@ -458,4 +537,22 @@ export function parseFieldCreateAdditionalInterventionResponse(value: unknown): 
     throw new Error('Field Operations returned inconsistent additional-work data. Refresh and try again.');
   }
   return payload as FieldCreateAdditionalInterventionResponse;
+}
+
+export function parseFieldTransitionInterventionResponse(value: unknown): FieldTransitionInterventionResponse {
+  const payload = record(value);
+  if (!payload
+    || payload.success !== true
+    || payload.version !== FIELD_AUTHORITY_API_VERSION
+    || typeof payload.replayed !== 'boolean'
+    || !workInterventionValid(payload.workIntervention)
+    || !allowedActionsValid(payload.allowedActions)
+    || !optionalString(payload.auditEventId)) {
+    throw new Error('Field Operations returned malformed intervention execution data. Refresh and try again.');
+  }
+  const intervention = payload.workIntervention as FieldWorkIntervention;
+  if (!WORK_INTERVENTION_EXECUTION_TARGETS.has(intervention.status as FieldInterventionExecutionTarget)) {
+    throw new Error('Field Operations returned an invalid intervention execution state. Refresh and try again.');
+  }
+  return payload as FieldTransitionInterventionResponse;
 }
