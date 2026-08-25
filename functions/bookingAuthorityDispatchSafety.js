@@ -2,7 +2,7 @@ const { FieldValue, getFirestore } = require("firebase-admin/firestore");
 const { BOOKING_COLLECTIONS, compactObject } = require("./bookingAuthorityFirestore");
 const { cleanText } = require("./bookingSchedulingPrimitives");
 
-const DISPATCH_SAFETY_VERSION = 1;
+const DISPATCH_SAFETY_VERSION = 2;
 const HOLD_REASON = "customer_change_unresolved";
 const CANCELLED_STATUSES = new Set(["cancelled", "canceled", "cancelada"]);
 
@@ -23,6 +23,18 @@ function dispatchReadinessDecision(appointment = {}) {
     };
   }
   return { safeToDispatch: true, reason: "appointment-dispatch-ready" };
+}
+
+function workOrderDispatchProjection(appointment = {}) {
+  const decision = dispatchReadinessDecision(appointment);
+  return {
+    dispatchSafety: decision.safeToDispatch ? "ready" : "do_not_dispatch",
+    dispatchHoldActive: dispatchHoldActive(appointment),
+    dispatchHoldCaseId: cleanText(appointment.dispatchHold?.caseId, 180) || null,
+    dispatchHoldReason: dispatchHoldActive(appointment)
+      ? cleanText(appointment.dispatchHold?.reason, 120) || HOLD_REASON
+      : decision.safeToDispatch ? null : decision.reason,
+  };
 }
 
 function holdActor(actor = {}) {
@@ -79,8 +91,17 @@ function createBookingDispatchSafetyAuthority({
         return { success: true, replayed: true, reason: "appointment-already-cancelled", appointmentId: id };
       }
       const existing = current.dispatchHold || {};
-      if (existing.active === true && cleanText(existing.caseId, 180) === canonicalCaseId) {
+      const existingCaseId = cleanText(existing.caseId, 180);
+      if (existing.active === true && existingCaseId === canonicalCaseId) {
         return { success: true, replayed: true, reason: "dispatch-hold-already-active", appointmentId: id, dispatchHold: existing };
+      }
+      if (existing.active === true && existingCaseId && existingCaseId !== canonicalCaseId) {
+        return {
+          success: false,
+          reason: "dispatch-hold-owned-by-other-case",
+          appointmentId: id,
+          activeCaseId: existingCaseId,
+        };
       }
 
       const event = holdHistoryEvent({
@@ -110,12 +131,10 @@ function createBookingDispatchSafetyAuthority({
         updatedAtIso: now.toISOString(),
       }, { merge: true });
 
+      const projection = workOrderDispatchProjection({ ...current, dispatchHold });
       for (const workOrderId of Array.isArray(current.workOrderIds) ? current.workOrderIds : []) {
         transaction.set(db.collection(collections.workOrders).doc(workOrderId), {
-          dispatchHoldActive: true,
-          dispatchHoldCaseId: canonicalCaseId,
-          dispatchHoldReason: HOLD_REASON,
-          dispatchSafety: "do_not_dispatch",
+          ...projection,
           dispatchSafetySourceAppointmentId: id,
           updatedAt: now.toISOString(),
         }, { merge: true });
@@ -168,12 +187,11 @@ function createBookingDispatchSafetyAuthority({
         updatedAt: FieldValue.serverTimestamp(),
         updatedAtIso: now.toISOString(),
       }, { merge: true });
+
+      const projection = workOrderDispatchProjection({ ...current, dispatchHold });
       for (const workOrderId of Array.isArray(current.workOrderIds) ? current.workOrderIds : []) {
         transaction.set(db.collection(collections.workOrders).doc(workOrderId), {
-          dispatchHoldActive: false,
-          dispatchHoldCaseId: existingCaseId || null,
-          dispatchHoldReason: null,
-          dispatchSafety: "ready",
+          ...projection,
           dispatchSafetySourceAppointmentId: id,
           updatedAt: now.toISOString(),
         }, { merge: true });
@@ -193,4 +211,5 @@ module.exports = {
   dispatchHoldActive,
   dispatchReadinessDecision,
   holdHistoryEvent,
+  workOrderDispatchProjection,
 };
