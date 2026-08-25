@@ -8,6 +8,7 @@ const FIELD_VISIT_ASSET_STORAGE_VERSION = 1;
 const VISIT_ASSET_COLLECTION = 'visitAssets';
 const VISIT_ASSET_MUTABLE_VISIT_STATUSES = new Set(['on_site', 'in_progress']);
 const VISIT_ASSET_SOURCES = new Set(['scheduled', 'existing_asset', 'qr_scan', 'registered_on_site']);
+const VISIT_ASSET_ATTACH_SOURCES = new Set(['existing_asset', 'qr_scan', 'registered_on_site']);
 const VISIT_ASSET_STATUSES = new Set(['identified', 'in_progress', 'completed', 'pending', 'not_performed']);
 
 function text(value, limit = 1000) {
@@ -72,6 +73,20 @@ function canonicalVisitAssetVersion(value) {
     throw fieldError('invalid_visit_asset_version', 'Persisted Visit Asset version is invalid.', 409);
   }
   return value;
+}
+
+function canonicalVisitAssetAttachSource(value = 'existing_asset') {
+  const source = text(value, 80) || 'existing_asset';
+  if (!VISIT_ASSET_ATTACH_SOURCES.has(source)) {
+    throw fieldError('invalid_visit_asset_source', `Visit Asset attach source is not allowed: ${source || 'missing'}.`, 400);
+  }
+  return source;
+}
+
+function visitAssetAddedReason(source) {
+  if (source === 'registered_on_site') return 'A/C registered during this Work Visit.';
+  if (source === 'qr_scan') return 'A/C identified by QR during this Work Visit.';
+  return undefined;
 }
 
 function projectVisitAsset(record, expectedContext = {}) {
@@ -204,9 +219,10 @@ function createAttachExistingVisitAssetCommand({
   if (typeof resolveAssignment !== 'function') throw new Error('resolveAssignment is required.');
   if (typeof appendAuditInTransaction !== 'function') throw new Error('appendAuditInTransaction is required.');
 
-  return async function attachExistingVisitAsset({ identity, visitId, assetId, requestId } = {}) {
+  return async function attachExistingVisitAsset({ identity, visitId, assetId, requestId, source = 'existing_asset' } = {}) {
     const normalizedVisitId = text(visitId, 180);
     const normalizedAssetId = text(assetId, 180);
+    const attachSource = canonicalVisitAssetAttachSource(source);
     if (!normalizedVisitId) throw fieldError('visit_required', 'A Work Visit id is required.', 400);
     if (!normalizedAssetId) throw fieldError('asset_required', 'A canonical A/C Asset id is required.', 400);
     const stable = stableRequestId(requestId);
@@ -288,9 +304,10 @@ function createAttachExistingVisitAssetCommand({
         assetId: normalizedAssetId,
         sequence,
         locationLabel: text(equipment.locationLabel, 240),
-        source: 'existing_asset',
+        source: attachSource,
         status: 'identified',
         addedOnSite: true,
+        addedReason: visitAssetAddedReason(attachSource),
         ...actorFields(identity, occurredAt),
       }, 'visitAsset');
       const event = visitAssetAuditEvent({
@@ -321,6 +338,7 @@ module.exports.VISIT_ASSET_COLLECTION = VISIT_ASSET_COLLECTION;
 module.exports.VISIT_ASSET_MUTABLE_VISIT_STATUSES = VISIT_ASSET_MUTABLE_VISIT_STATUSES;
 module.exports.attachVisitAssetsToJob = attachVisitAssetsToJob;
 module.exports.canAttachExistingAsset = canAttachExistingAsset;
+module.exports.canonicalVisitAssetAttachSource = canonicalVisitAssetAttachSource;
 module.exports.createAttachExistingVisitAssetCommand = createAttachExistingVisitAssetCommand;
 module.exports.loadVisitAssets = loadVisitAssets;
 module.exports.projectVisitAsset = projectVisitAsset;
