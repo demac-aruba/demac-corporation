@@ -4,50 +4,27 @@ const { getStorage } = require("firebase-admin/storage");
 const logger = require("firebase-functions/logger");
 const { defineSecret } = require("firebase-functions/params");
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const {
+  DEFAULT_TRANSCRIPTION_MODEL,
+  transcribeStoredAudio,
+} = require("./demacTranscriptionService");
 
 const app = getApps().length ? getApp() : initializeApp();
 const storage = getStorage(app);
 const openAiApiKey = defineSecret("OPENAI_API_KEY");
-const TRANSCRIPTION_MODEL = "gpt-4o-transcribe";
-
-function audioFileName(storagePath, contentType) {
-  const existingName = String(storagePath || "voice-note").split("/").pop();
-  if (existingName?.includes(".")) return existingName;
-  if (contentType?.includes("webm")) return `${existingName || "voice-note"}.webm`;
-  if (contentType?.includes("mpeg")) return `${existingName || "voice-note"}.mp3`;
-  return `${existingName || "voice-note"}.m4a`;
-}
-
-async function requestTranscription(audioBuffer, fileName, contentType) {
-  const form = new FormData();
-  form.append("file", new Blob([audioBuffer], { type: contentType || "audio/mp4" }), fileName);
-  form.append("model", TRANSCRIPTION_MODEL);
-  form.append("response_format", "json");
-  form.append(
-    "prompt",
-    "Nota técnica de servicio de aire acondicionado de DEMAC. Conserva marcas, BTU, PSI, voltajes, refrigerantes, nombres de piezas y recomendaciones. El técnico puede hablar español, inglés o papiamento.",
-  );
-
-  const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${openAiApiKey.value()}` },
-    body: form,
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const message = payload?.error?.message || `OpenAI returned HTTP ${response.status}`;
-    const error = new Error(message);
-    error.code = payload?.error?.code || response.status;
-    throw error;
-  }
-  const transcript = String(payload?.text || "").trim();
-  if (!transcript) throw new Error("OpenAI no devolvió texto para la nota de voz.");
-  return transcript;
-}
+const TRANSCRIPTION_MODEL = DEFAULT_TRANSCRIPTION_MODEL;
+const TECHNICIAN_TRANSCRIPTION_PROMPT = [
+  "Nota técnica de servicio de aire acondicionado de DEMAC.",
+  "Conserva marcas, BTU, PSI, voltajes, refrigerantes, nombres de piezas y recomendaciones.",
+  "El técnico puede hablar español, inglés o papiamento.",
+].join(" ");
 
 /**
  * Transcribes newly created work-order voice evidence on the server. The
  * OpenAI key remains in Firebase Secret Manager and is never sent to the app.
+ * Audio retrieval and OpenAI invocation are owned by the shared DEMAC
+ * transcription service so customer communication voice can reuse the same
+ * infrastructure without creating a second transcription authority.
  */
 exports.transcribeWorkOrderVoiceNote = onDocumentCreated(
   {
@@ -74,19 +51,20 @@ exports.transcribeWorkOrderVoiceNote = onDocumentCreated(
         transcriptionStartedAt: FieldValue.serverTimestamp(),
       }, { merge: true });
 
-      const file = storage.bucket().file(original.storagePath);
-      const [metadata, contents] = await Promise.all([file.getMetadata(), file.download()]);
-      const contentType = original.contentType || metadata?.[0]?.contentType || "audio/mp4";
-      const transcript = await requestTranscription(
-        contents[0],
-        audioFileName(original.storagePath, contentType),
-        contentType,
-      );
+      const result = await transcribeStoredAudio({
+        storage,
+        storagePath: original.storagePath,
+        contentType: original.contentType,
+        apiKey: openAiApiKey.value(),
+        model: TRANSCRIPTION_MODEL,
+        prompt: TECHNICIAN_TRANSCRIPTION_PROMPT,
+      });
 
       await evidenceRef.set({
-        transcript,
+        transcript: result.transcript,
         transcriptionStatus: "completed",
-        transcriptionModel: TRANSCRIPTION_MODEL,
+        transcriptionModel: result.model,
+        transcriptionServiceVersion: result.serviceVersion,
         transcriptionError: FieldValue.delete(),
         transcribedAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -108,3 +86,6 @@ exports.transcribeWorkOrderVoiceNote = onDocumentCreated(
     }
   },
 );
+
+module.exports.TECHNICIAN_TRANSCRIPTION_PROMPT = TECHNICIAN_TRANSCRIPTION_PROMPT;
+module.exports.TRANSCRIPTION_MODEL = TRANSCRIPTION_MODEL;
