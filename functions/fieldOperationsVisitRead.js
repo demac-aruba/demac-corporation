@@ -1,8 +1,7 @@
 const { fieldError } = require('./fieldOperationsAuthorityCore');
 const {
-  canonicalStatusFromStorage,
   projectCanonicalWorkVisit,
-  storageStatusFromWorkOrder,
+  workOrderAllowsInitialVisitPreparation,
 } = require('./fieldOperationsAuthorityWorkVisit');
 const { activatedVisitTransitions } = require('./fieldOperationsVisitActions');
 
@@ -86,12 +85,10 @@ function projectFieldVisitState(record, job) {
 }
 
 function canPrepareInitialVisit(job, fieldVisit) {
-  if (fieldVisit || !Array.isArray(job?.allowedActions) || !job.allowedActions.includes('execute')) return false;
-  try {
-    return canonicalStatusFromStorage(storageStatusFromWorkOrder({ status: job?.status })) === 'scheduled';
-  } catch {
-    return false;
-  }
+  return !fieldVisit
+    && Array.isArray(job?.allowedActions)
+    && job.allowedActions.includes('execute')
+    && workOrderAllowsInitialVisitPreparation({ status: job?.status });
 }
 
 async function loadCurrentWorkVisitState(db, job) {
