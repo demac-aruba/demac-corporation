@@ -29,11 +29,37 @@ function asApiErrorPayload(value: unknown): FieldApiError {
     : {};
 }
 
+function abortError() {
+  const error = new Error('Field Operations request timed out.');
+  error.name = 'AbortError';
+  return error;
+}
+
+function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortError());
+    signal.addEventListener('abort', onAbort, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 async function callFieldAuthority(action: string, data: Record<string, unknown>, timeoutMs = 12_000): Promise<unknown> {
-  const session = await requireFirebaseWebSession();
+  // One deadline covers token refresh plus the protected Field request. Otherwise a stalled
+  // Firebase refresh could bypass the Field fetch timeout and leave stale assignments visible.
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
+    const session = await abortable(requireFirebaseWebSession(), controller.signal);
     const response = await fetch(endpoint(), {
       method: 'POST',
       headers: {
