@@ -1,5 +1,6 @@
 const { fieldError } = require('./fieldOperationsAuthorityCore');
 const {
+  assertExistingVisitCompatible,
   projectCanonicalWorkVisit,
   workOrderAllowsInitialVisitPreparation,
 } = require('./fieldOperationsAuthorityWorkVisit');
@@ -95,7 +96,15 @@ async function loadCurrentWorkVisitState(db, job) {
   const workOrderId = text(job?.workOrderId, 180);
   if (!workOrderId) throw fieldError('work_order_required', 'A Work Order id is required.');
   const snapshot = await db.collection('workVisits').where('workOrderId', '==', workOrderId).get();
-  const record = selectCurrentWorkVisit(snapshotRecords(snapshot), workOrderId);
+  const records = snapshotRecords(snapshot);
+  const expectedOrderIdentity = {
+    id: workOrderId,
+    appointmentId: text(job?.appointmentId, 180),
+    clientId: text(job?.customerId, 180),
+    propertyId: text(job?.propertyId, 180),
+  };
+  for (const record of records) assertExistingVisitCompatible(record, expectedOrderIdentity);
+  const record = selectCurrentWorkVisit(records, workOrderId);
   return projectFieldVisitState(record, job);
 }
 
