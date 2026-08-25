@@ -6,6 +6,7 @@ on:
       - 'functions/whatsappTransactionalService.js'
       - 'functions/whatsappTransactionalService.test.js'
       - 'functions/whatsappTransactionalGroupRecipient.test.js'
+      - 'functions/demacCorePrimitives.js'
       - 'functions/demacCommunicationIdentity.js'
       - 'functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.js'
       - 'functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.test.js'
@@ -39,6 +40,7 @@ on:
       - 'functions/whatsappTransactionalService.js'
       - 'functions/whatsappTransactionalService.test.js'
       - 'functions/whatsappTransactionalGroupRecipient.test.js'
+      - 'functions/demacCorePrimitives.js'
       - 'functions/demacCommunicationIdentity.js'
       - 'functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.js'
       - 'functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.test.js'
@@ -111,6 +113,7 @@ jobs:
           set -euo pipefail
           node --check functions/bootstrap.js
           node --check functions/whatsappTransactionalService.js
+          node --check functions/demacCorePrimitives.js
           node --check functions/demacCommunicationIdentity.js
           node --check functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.js
           node --check functions/migrations/realignVanScheduleGroups.js
