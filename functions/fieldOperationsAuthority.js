@@ -2,6 +2,8 @@ const { getAuth } = require('firebase-admin/auth');
 const { getFirestore } = require('firebase-admin/firestore');
 const logger = require('firebase-functions/logger');
 const { onRequest } = require('firebase-functions/v2/https');
+const { createFieldAuditAppender } = require('./fieldOperationsAudit');
+const { createMutationAssignmentResolver } = require('./fieldOperationsMutationAssignment');
 const {
   FIELD_OPERATIONS_API_VERSION,
   fieldError,
@@ -9,8 +11,9 @@ const {
   loadAssignedSchedule,
   normalizeFieldIdentity,
 } = require('./fieldOperationsAuthorityCore');
+const { createPrepareWorkVisitCommand } = require('./fieldOperationsAuthorityWorkVisit');
 
-const FIELD_ACTIONS = new Set(['get_schedule', 'get_job']);
+const FIELD_ACTIONS = new Set(['get_schedule', 'get_job', 'prepare_visit']);
 
 function cleanText(value, limit = 1000) {
   return String(value ?? '').trim().slice(0, limit);
@@ -48,10 +51,11 @@ function apiError(error) {
   };
 }
 
-function createFieldOperationsApi({ db, verifyIdToken, reportError = () => {} } = {}) {
+function createFieldOperationsApi({ db, verifyIdToken, reportError = () => {}, prepareWorkVisit } = {}) {
   if (!db || typeof db.collection !== 'function') throw new Error('A Firestore-compatible db is required.');
   if (typeof verifyIdToken !== 'function') throw new Error('verifyIdToken is required.');
   if (typeof reportError !== 'function') throw new Error('reportError must be a function when provided.');
+  if (prepareWorkVisit !== undefined && typeof prepareWorkVisit !== 'function') throw new Error('prepareWorkVisit must be a function when provided.');
 
   async function authenticate(request) {
     const token = bearerToken(request);
@@ -81,6 +85,16 @@ function createFieldOperationsApi({ db, verifyIdToken, reportError = () => {} } 
       if (!workOrderId) throw fieldError('work_order_required', 'A Work Order id is required.');
       const job = await loadAssignedJob(db, identity, workOrderId);
       return { success: true, version: FIELD_OPERATIONS_API_VERSION, job: publicJobProjection(job) };
+    }
+    if (action === 'prepare_visit') {
+      if (typeof prepareWorkVisit !== 'function') {
+        throw fieldError('mutation_not_configured', 'Field visit preparation is not configured in this runtime.', 503);
+      }
+      return prepareWorkVisit({
+        identity,
+        workOrderId: cleanText(data.workOrderId, 180),
+        requestId: cleanText(data.requestId, 240),
+      });
     }
     throw fieldError('unsupported_action', `Unsupported Field Operations action: ${action || 'missing'}.`, 400);
   }
@@ -113,9 +127,14 @@ function createFieldOperationsApi({ db, verifyIdToken, reportError = () => {} } 
 let defaultApi;
 function getDefaultApi() {
   if (!defaultApi) {
+    const db = getFirestore();
+    const resolveAssignment = createMutationAssignmentResolver({ db });
+    const appendAuditInTransaction = createFieldAuditAppender({ db });
+    const prepareWorkVisit = createPrepareWorkVisitCommand({ db, resolveAssignment, appendAuditInTransaction });
     defaultApi = createFieldOperationsApi({
-      db: getFirestore(),
+      db,
       verifyIdToken: (token) => getAuth().verifyIdToken(token, true),
+      prepareWorkVisit,
       reportError: ({ action, status, code, error }) => logger.error('Field Operations request failed', {
         action: cleanText(action, 120) || 'unknown',
         status,
