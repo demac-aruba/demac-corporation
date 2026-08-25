@@ -35,13 +35,14 @@ function canonicalRuntimeMessage(message = {}, limit = 4_000) {
     ? customerSemanticContent(message, limit)
     : outboundSemanticContent(message, limit);
   if (!text) return null;
+  const inputVersion = Number(message.customerInputVersion);
   return {
     id: cleanText(message.messageId || message.id, 300),
     direction,
     text,
-    customerInputVersion: direction === "inbound" && Number.isSafeInteger(Number(message.customerInputVersion))
-      ? Number(message.customerInputVersion)
-      : null,
+    ...(direction === "inbound" && Number.isSafeInteger(inputVersion) && inputVersion >= 0
+      ? { customerInputVersion: inputVersion }
+      : {}),
   };
 }
 
