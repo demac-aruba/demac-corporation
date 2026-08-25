@@ -1,5 +1,5 @@
 const crypto = require('node:crypto');
-const { fieldFirestoreData } = require('./fieldOperationsFirestoreData');
+const { fieldFirestoreData, fieldSnapshotRecord } = require('./fieldOperationsFirestoreData');
 const { fieldError } = require('./fieldOperationsAuthorityCore');
 const { stableRequestId } = require('./fieldOperationsAuthorityWorkVisit');
 const { loadCurrentVisitMutationContext } = require('./fieldOperationsVisitMutationContext');
@@ -19,7 +19,7 @@ function deterministicId(prefix, value) {
 }
 
 function snapshotRecords(snapshot) {
-  return (snapshot?.docs || []).map((document) => ({ id: document.id, ...document.data() }));
+  return (snapshot?.docs || []).map(fieldSnapshotRecord);
 }
 
 function consistentRequiredReference(record, names, label) {
@@ -242,8 +242,7 @@ function createAttachExistingVisitAssetCommand({
       const visitAssetRef = db.collection(VISIT_ASSET_COLLECTION).doc(visitAssetId);
       const existingSnapshot = await transaction.get(visitAssetRef);
       if (existingSnapshot.exists) {
-        const existing = { id: existingSnapshot.id, ...existingSnapshot.data() };
-        const projected = projectVisitAsset(existing, expectedContext);
+        const projected = projectVisitAsset(fieldSnapshotRecord(existingSnapshot), expectedContext);
         if (projected.assetId !== normalizedAssetId) {
           throw fieldError('visit_asset_identity_conflict', 'The existing Visit Asset identity conflicts with this request.', 409);
         }
@@ -261,7 +260,7 @@ function createAttachExistingVisitAssetCommand({
       if (!equipmentSnapshot.exists) {
         throw fieldError('asset_not_available_for_visit', 'The selected A/C is not available for this visit.', 404);
       }
-      const equipment = { id: equipmentSnapshot.id, ...equipmentSnapshot.data() };
+      const equipment = fieldSnapshotRecord(equipmentSnapshot);
       requireEquipmentIdentity(equipment, context.customerId, context.propertyId);
 
       const existingAssetsSnapshot = await transaction.get(
