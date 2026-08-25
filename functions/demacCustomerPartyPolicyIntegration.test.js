@@ -8,13 +8,20 @@ const { mayaReplyDecision } = require('./demacCustomerAgentReplyPolicy');
 
 const ACCOUNT_ID = 'demac-wa-corporate';
 const PHONE = '2975642625';
+const REMOTE_CONVERSATION_ID = `${PHONE}@s.whatsapp.net`;
 const message = {
   direction: 'inbound',
   communicationAccountId: ACCOUNT_ID,
+  provider: 'wacli',
+  channel: 'whatsapp',
+  remoteConversationId: REMOTE_CONVERSATION_ID,
   phone: PHONE,
 };
 const conversation = {
   communicationAccountId: ACCOUNT_ID,
+  provider: 'wacli',
+  channel: 'whatsapp',
+  remoteConversationId: REMOTE_CONVERSATION_ID,
   phone: PHONE,
   aiDisposition: 'ai_active',
 };
