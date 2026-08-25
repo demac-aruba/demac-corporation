@@ -7,7 +7,7 @@ const {
   normalizeCommunicationAccountId,
   normalizeRemoteConversationId,
 } = require("./demacCommunicationIdentity");
-const { communicationEpochDecision, nonNegativeEpoch } = require("./demacCustomerTurn");
+const { communicationEpochDecision, nonNegativeEpoch } = require("./demacCommunicationEpoch");
 
 const WACLI_CHANNEL = "whatsapp";
 const WACLI_PROVIDER = "wacli";
