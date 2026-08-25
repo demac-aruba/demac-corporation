@@ -4,10 +4,13 @@ import {
   parseFieldJobResponse,
   parseFieldPrepareVisitResponse,
   parseFieldScheduleResponse,
+  parseFieldTransitionVisitResponse,
+  type FieldActiveVisitTransition,
 } from './field-authority-contract';
 
 export { fieldActionAllowed } from './field-authorization';
 export type {
+  FieldActiveVisitTransition,
   FieldAllowedAction,
   FieldAssignmentSource,
   FieldJobDetail,
@@ -18,6 +21,8 @@ export type {
   FieldPrepareVisitResponse,
   FieldResponsibility,
   FieldScheduleJob,
+  FieldTransitionVisitResponse,
+  FieldVisitState,
   FieldVisitStatus,
 } from './field-authority-contract';
 
@@ -101,4 +106,18 @@ export async function getFieldJob(workOrderId: string) {
 
 export async function prepareFieldVisit(workOrderId: string, requestId: string) {
   return parseFieldPrepareVisitResponse(await callFieldAuthority('prepare_visit', { workOrderId, requestId }));
+}
+
+export async function transitionFieldVisit(
+  visitId: string,
+  to: FieldActiveVisitTransition,
+  expectedVersion: number,
+  requestId: string,
+) {
+  return parseFieldTransitionVisitResponse(await callFieldAuthority('transition_visit', {
+    visitId,
+    to,
+    expectedVersion,
+    requestId,
+  }));
 }
