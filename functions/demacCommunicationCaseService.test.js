@@ -10,6 +10,7 @@ const {
   matchRelevantAppointment,
   shouldApplyDispatchHold,
   upcomingAppointmentCandidates,
+  withdrawalAppointmentResolution,
 } = require("./demacCommunicationCaseService");
 
 const appointments = [
@@ -106,4 +107,51 @@ test("dispatch hold requires high confidence, no critical ambiguity, and exact a
   assert.equal(shouldApplyDispatchHold({ ...base, criticalValueAmbiguous: true }, match), false);
   assert.equal(shouldApplyDispatchHold({ ...base, intent: "general" }, match), false);
   assert.equal(shouldApplyDispatchHold(base, { matched: false, appointment: null }), false);
+});
+
+test("withdrawal can recover the exact active hold by case identity before the prior case write finishes", () => {
+  const resolution = withdrawalAppointmentResolution({
+    previousCase: {},
+    caseId: "COMMCASE-1",
+    appointments: [
+      { id: "APT-1", dispatchHold: { active: true, caseId: "COMMCASE-1" } },
+      { id: "APT-2", dispatchHold: { active: true, caseId: "COMMCASE-OTHER" } },
+    ],
+  });
+  assert.deepEqual(resolution, {
+    appointmentId: "APT-1",
+    ambiguous: false,
+    reason: "active-hold-for-case",
+  });
+});
+
+test("withdrawal refuses to guess if invalid data contains multiple active holds for the same case", () => {
+  const resolution = withdrawalAppointmentResolution({
+    previousCase: { appointmentId: "APT-OLD" },
+    caseId: "COMMCASE-1",
+    appointments: [
+      { id: "APT-1", dispatchHold: { active: true, caseId: "COMMCASE-1" } },
+      { id: "APT-2", dispatchHold: { active: true, caseId: "COMMCASE-1" } },
+    ],
+  });
+  assert.deepEqual(resolution, {
+    appointmentId: "",
+    ambiguous: true,
+    reason: "multiple-dispatch-holds-for-case",
+  });
+});
+
+test("withdrawal falls back to the durable prior case appointment only when no active matching hold is discoverable", () => {
+  const resolution = withdrawalAppointmentResolution({
+    previousCase: { appointmentId: "APT-PRIOR" },
+    caseId: "COMMCASE-1",
+    appointments: [
+      { id: "APT-2", dispatchHold: { active: true, caseId: "COMMCASE-OTHER" } },
+    ],
+  });
+  assert.deepEqual(resolution, {
+    appointmentId: "APT-PRIOR",
+    ambiguous: false,
+    reason: "previous-case-appointment",
+  });
 });
