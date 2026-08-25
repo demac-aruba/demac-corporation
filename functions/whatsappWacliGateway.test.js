@@ -9,6 +9,7 @@ if (!getApps().length) {
 }
 
 const {
+  authorizedBridgeRequest,
   claimOutboundCommandWithDb,
   conversationIngressState,
   outboundQueueAccountMatches,
@@ -106,6 +107,25 @@ function aiConversation(overrides = {}) {
     ...overrides,
   };
 }
+
+test("bridge bearer authorization fails closed for missing, malformed, and incorrect credentials", () => {
+  const previous = process.env.WACLI_BRIDGE_TOKEN;
+  process.env.WACLI_BRIDGE_TOKEN = "test-bridge-token";
+  const request = (authorization = "") => ({
+    get(name) {
+      return name.toLowerCase() === "authorization" ? authorization : "";
+    },
+  });
+  try {
+    assert.equal(authorizedBridgeRequest(request()), false);
+    assert.equal(authorizedBridgeRequest(request("Basic test-bridge-token")), false);
+    assert.equal(authorizedBridgeRequest(request("Bearer wrong-token")), false);
+    assert.equal(authorizedBridgeRequest(request("Bearer test-bridge-token")), true);
+  } finally {
+    if (previous === undefined) delete process.env.WACLI_BRIDGE_TOKEN;
+    else process.env.WACLI_BRIDGE_TOKEN = previous;
+  }
+});
 
 test("new inbound WhatsApp conversations start under AI ownership", () => {
   const state = conversationIngressState({ current: {}, exists: false, inbound: true });
