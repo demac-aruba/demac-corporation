@@ -116,6 +116,27 @@ function sourceMessagePatch(messageId) {
     : {};
 }
 
+function withdrawalAppointmentResolution({ previousCase = {}, appointments = [], caseId = "" } = {}) {
+  const canonicalCaseId = cleanText(caseId, 180);
+  const matchingHolds = canonicalCaseId
+    ? appointments.filter((appointment) => (
+      appointment?.dispatchHold?.active === true
+      && cleanText(appointment.dispatchHold.caseId, 180) === canonicalCaseId
+      && cleanText(appointment.id, 180)
+    ))
+    : [];
+  if (matchingHolds.length > 1) {
+    return { appointmentId: "", ambiguous: true, reason: "multiple-dispatch-holds-for-case" };
+  }
+  if (matchingHolds.length === 1) {
+    return { appointmentId: cleanText(matchingHolds[0].id, 180), ambiguous: false, reason: "active-hold-for-case" };
+  }
+  const previousAppointmentId = cleanText(previousCase?.appointmentId, 180);
+  return previousAppointmentId
+    ? { appointmentId: previousAppointmentId, ambiguous: false, reason: "previous-case-appointment" }
+    : { appointmentId: "", ambiguous: false, reason: "no-known-held-appointment" };
+}
+
 async function queryCustomerByPhone(db, phone) {
   const normalized = normalizeArubaWhatsAppPhone(phone);
   if (!normalized) return { customer: null, ambiguous: false };
@@ -210,7 +231,23 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
     const previous = await existingCase(canonicalCaseId);
 
     if (observation.intent === "customer_withdrew_change") {
-      const appointmentId = cleanText(previous?.appointmentId, 180);
+      const customerResolution = await resolveCustomer({ conversation, message });
+      const appointments = customerResolution.customer
+        ? await loadUpcomingAppointments(customerResolution.customer.id)
+        : [];
+      const withdrawalResolution = withdrawalAppointmentResolution({
+        previousCase: previous || {},
+        appointments,
+        caseId: canonicalCaseId,
+      });
+      if (withdrawalResolution.ambiguous) {
+        return {
+          processed: false,
+          reason: withdrawalResolution.reason,
+          attentionReason: withdrawalResolution.reason,
+        };
+      }
+      const appointmentId = withdrawalResolution.appointmentId;
       if (appointmentId) {
         const release = await safety.releaseDispatchHold({
           appointmentId,
@@ -223,6 +260,9 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
         });
         if (!release.success && release.reason === "stale-communication-epoch") {
           return { processed: false, reason: release.reason, epochReason: release.epochReason };
+        }
+        if (!release.success && release.reason === "dispatch-hold-case-mismatch") {
+          return { processed: false, reason: release.reason, attentionReason: release.reason };
         }
       }
       const event = caseHistoryEvent({ kind: "customer_withdrew_change", messageId, observation, appointmentId, now });
@@ -378,4 +418,5 @@ module.exports = {
   shouldApplyDispatchHold,
   sourceMessagePatch,
   upcomingAppointmentCandidates,
+  withdrawalAppointmentResolution,
 };
