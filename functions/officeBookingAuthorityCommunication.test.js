@@ -4,6 +4,7 @@ const {
   OFFICE_BOOKING_ACTIONS,
   createOfficeBookingApi,
 } = require("./officeBookingAuthority");
+const { addDays, dateKeyInTimeZone } = require("./operatingCalendarService");
 
 function documentSnapshot(id, store, reference) {
   const exists = Object.prototype.hasOwnProperty.call(store, id);
@@ -15,14 +16,14 @@ function documentSnapshot(id, store, reference) {
   };
 }
 
-function createCommunicationDb({ reminderStatus = "queued" } = {}) {
+function createCommunicationDb({ reminderStatus = "queued", appointmentDate = addDays(dateKeyInTimeZone(), 1) } = {}) {
   const workOrders = {
     "WO-APT-1-1": {
       appointmentId: "APT-1",
       appointmentAssignmentRole: "primary",
       clientId: "client-1",
       propertyId: "property-1",
-      date: "2026-08-24",
+      date: appointmentDate,
       time: "08:30",
       status: "Programada",
       whatsappNotificationsEnabled: true,
