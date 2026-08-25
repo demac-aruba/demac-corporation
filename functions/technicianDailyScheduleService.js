@@ -1,5 +1,6 @@
 const { canonicalizeVanCatalog, resolveCanonicalVanId } = require("./bookingVanIdentity");
 const { AFTERNOON_SLOTS } = require("./bookingSchedulingPrimitives");
+const { dispatchReadinessDecision } = require("./bookingAuthorityDispatchSafety");
 const { createWhatsAppTransactionalService, safeDocumentId, validWacliRecipient } = require("./whatsappTransactionalService");
 
 const VAN_DAILY_LANGUAGE = "es";
@@ -35,7 +36,10 @@ function phoneDigits(value) {
 }
 
 function activeWorkOrder(order) {
-  return Boolean(order) && !INACTIVE_WORK_ORDER_STATUSES.has(normalizedText(order.status));
+  return Boolean(order)
+    && !INACTIVE_WORK_ORDER_STATUSES.has(normalizedText(order.status))
+    && order.dispatchHoldActive !== true
+    && normalizedText(order.dispatchSafety) !== "do_not_dispatch";
 }
 
 function orderTimeKey(order) {
@@ -351,13 +355,17 @@ function createTechnicianDailyScheduleService({ db } = {}) {
     ]);
     const rawVans = vanSnapshot.docs.map((document) => ({ id: document.id, ...document.data() }));
     const catalog = canonicalizeVanCatalog(rawVans);
-    const workOrders = workOrderSnapshot.docs
+    const candidateWorkOrders = workOrderSnapshot.docs
       .map((document) => ({ id: document.id, ...document.data() }))
       .filter(activeWorkOrder)
       .map((order) => ({ ...order, vanId: resolveCanonicalVanId(order.vanId, catalog.aliases) || normalizedText(order.vanId) }));
-    const clientsById = await loadDocuments("clients", workOrders.map((order) => order.clientId));
-    const propertiesById = await loadDocuments("properties", workOrders.map((order) => order.propertyId));
-    const appointmentsById = await loadDocuments("appointments", workOrders.map((order) => order.appointmentId));
+    const clientsById = await loadDocuments("clients", candidateWorkOrders.map((order) => order.clientId));
+    const propertiesById = await loadDocuments("properties", candidateWorkOrders.map((order) => order.propertyId));
+    const appointmentsById = await loadDocuments("appointments", candidateWorkOrders.map((order) => order.appointmentId));
+    const workOrders = candidateWorkOrders.filter((order) => {
+      const appointment = appointmentsById.get(String(order.appointmentId || ""));
+      return !appointment || dispatchReadinessDecision(appointment).safeToDispatch;
+    });
     const staffById = new Map(staffSnapshot.docs.map((document) => [document.id, { id: document.id, ...document.data() }]));
     return { vans: catalog.vans, workOrders, clientsById, propertiesById, appointmentsById, staffById };
   }
@@ -373,6 +381,17 @@ function createTechnicianDailyScheduleService({ db } = {}) {
     const client = day.clientsById.get(String(order.clientId || ""));
     const property = day.propertiesById.get(String(order.propertyId || ""));
     const appointment = day.appointmentsById.get(String(order.appointmentId || ""));
+    if (appointment && !dispatchReadinessDecision(appointment).safeToDispatch) {
+      return {
+        queued: false,
+        created: false,
+        reason: "appointment-dispatch-hold",
+        vanId: van.id,
+        groupName: config.groupName,
+        workOrderId: order.id,
+        appointmentId: order.appointmentId || null,
+      };
+    }
     const queueId = deterministicQueueId({ dateKey, vanId: van.id, order, deliveryKey });
     const text = renderVanWorkOrderText({ van, order, client, property, appointment, staffById: day.staffById, sequence });
     const result = await whatsapp.queueTransactionalMessage({
