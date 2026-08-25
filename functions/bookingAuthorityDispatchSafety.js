@@ -1,8 +1,9 @@
 const { FieldValue, getFirestore } = require("firebase-admin/firestore");
 const { BOOKING_COLLECTIONS, compactObject } = require("./bookingAuthorityFirestore");
 const { cleanText } = require("./bookingSchedulingPrimitives");
+const { communicationEpochDecision } = require("./demacCustomerTurn");
 
-const DISPATCH_SAFETY_VERSION = 2;
+const DISPATCH_SAFETY_VERSION = 3;
 const HOLD_REASON = "customer_change_unresolved";
 const CANCELLED_STATUSES = new Set(["cancelled", "canceled", "cancelada"]);
 
@@ -59,6 +60,28 @@ function holdHistoryEvent({ kind, caseId, requestedAction, reasonCategory, sourc
   });
 }
 
+async function communicationEpochGuardInTransaction(transaction, db, {
+  conversationId = "",
+  expectedOwnershipVersion,
+  expectedCustomerInputVersion,
+} = {}) {
+  const canonicalConversationId = cleanText(conversationId, 300);
+  const epochGuardRequested = Boolean(
+    canonicalConversationId
+    || expectedOwnershipVersion !== undefined
+    || expectedCustomerInputVersion !== undefined,
+  );
+  if (!epochGuardRequested) return { allowed: true, reason: "communication-epoch-guard-not-requested" };
+  if (!canonicalConversationId) return { allowed: false, reason: "communication-conversation-missing" };
+  const snapshot = await transaction.get(db.collection("communicationConversations").doc(canonicalConversationId));
+  if (!snapshot.exists) return { allowed: false, reason: "communication-conversation-not-found" };
+  return communicationEpochDecision({
+    conversation: snapshot.data() || {},
+    expectedOwnershipVersion,
+    expectedCustomerInputVersion,
+  });
+}
+
 function createBookingDispatchSafetyAuthority({
   db = getFirestore(),
   clock = () => new Date(),
@@ -75,6 +98,9 @@ function createBookingDispatchSafetyAuthority({
     reasonCategory = "customer_change_unresolved",
     sourceMessageIds = [],
     actor = {},
+    conversationId = "",
+    expectedOwnershipVersion,
+    expectedCustomerInputVersion,
   } = {}) {
     const id = cleanText(appointmentId, 180);
     const canonicalCaseId = cleanText(caseId, 180);
@@ -83,7 +109,17 @@ function createBookingDispatchSafetyAuthority({
     const now = clock();
 
     return db.runTransaction(async (transaction) => {
-      const snapshot = await transaction.get(appointmentRef);
+      const [snapshot, epochDecision] = await Promise.all([
+        transaction.get(appointmentRef),
+        communicationEpochGuardInTransaction(transaction, db, {
+          conversationId,
+          expectedOwnershipVersion,
+          expectedCustomerInputVersion,
+        }),
+      ]);
+      if (!epochDecision.allowed) {
+        return { success: false, reason: "stale-communication-epoch", epochReason: epochDecision.reason, appointmentId: id };
+      }
       if (!snapshot.exists) return { success: false, reason: "appointment-not-found", appointmentId: id };
       const current = { id: snapshot.id, ...snapshot.data() };
       const status = cleanText(current.status, 40).toLowerCase();
@@ -144,14 +180,32 @@ function createBookingDispatchSafetyAuthority({
     });
   }
 
-  async function releaseDispatchHold({ appointmentId, caseId = "", resolution = "resolved", actor = {} } = {}) {
+  async function releaseDispatchHold({
+    appointmentId,
+    caseId = "",
+    resolution = "resolved",
+    actor = {},
+    conversationId = "",
+    expectedOwnershipVersion,
+    expectedCustomerInputVersion,
+  } = {}) {
     const id = cleanText(appointmentId, 180);
     if (!id) throw new Error("appointmentId is required to release a dispatch hold.");
     const appointmentRef = db.collection(collections.appointments).doc(id);
     const now = clock();
 
     return db.runTransaction(async (transaction) => {
-      const snapshot = await transaction.get(appointmentRef);
+      const [snapshot, epochDecision] = await Promise.all([
+        transaction.get(appointmentRef),
+        communicationEpochGuardInTransaction(transaction, db, {
+          conversationId,
+          expectedOwnershipVersion,
+          expectedCustomerInputVersion,
+        }),
+      ]);
+      if (!epochDecision.allowed) {
+        return { success: false, reason: "stale-communication-epoch", epochReason: epochDecision.reason, appointmentId: id };
+      }
       if (!snapshot.exists) return { success: false, reason: "appointment-not-found", appointmentId: id };
       const current = { id: snapshot.id, ...snapshot.data() };
       const existing = current.dispatchHold || {};
@@ -207,6 +261,7 @@ module.exports = {
   CANCELLED_STATUSES,
   DISPATCH_SAFETY_VERSION,
   HOLD_REASON,
+  communicationEpochGuardInTransaction,
   createBookingDispatchSafetyAuthority,
   dispatchHoldActive,
   dispatchReadinessDecision,
