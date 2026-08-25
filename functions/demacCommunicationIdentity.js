@@ -1,4 +1,4 @@
-const { cleanText, hashId } = require("./bookingSchedulingPrimitives");
+const { cleanText, hashId } = require("./demacCorePrimitives");
 
 const COMMUNICATION_IDENTITY_VERSION = 2;
 const COMMUNICATION_SETTINGS_COLLECTION = "businessSettings";
