@@ -247,6 +247,12 @@ function mergeRecentMessages(existing, incoming) {
     .slice(-MAX_RECENT_MESSAGES);
 }
 
+function existingMessageMatchesIdentity(existing = {}, identity = {}, providerMessageId = "") {
+  return String(existing.communicationAccountId || "").trim().toLowerCase() === String(identity.communicationAccountId || "").trim().toLowerCase()
+    && String(existing.conversationId || "") === String(identity.conversationId || "")
+    && String(existing.providerMessageId || existing.remoteMessageId || "") === String(providerMessageId || "");
+}
+
 async function persistCanonicalMessage({
   communicationAccountId,
   payload,
@@ -275,13 +281,28 @@ async function persistCanonicalMessage({
       transaction.get(messageRef),
       transaction.get(conversationRef),
     ]);
-    const existingMessage = messageSnapshot.exists ? messageSnapshot.data() || {} : {};
+    if (messageSnapshot.exists) {
+      const existingMessage = messageSnapshot.data() || {};
+      if (!existingMessageMatchesIdentity(existingMessage, { ...identity, communicationAccountId }, providerMessageId)) {
+        throw httpError(409, "Canonical provider message identity conflicts with an existing record.", "provider-message-identity-conflict");
+      }
+      return {
+        conversationId: identity.conversationId,
+        messageId: identity.messageId,
+        providerMessageId,
+        customerInputVersion: Number.isSafeInteger(Number(existingMessage.customerInputVersion))
+          ? Number(existingMessage.customerInputVersion)
+          : null,
+        replayed: true,
+      };
+    }
+
     const current = conversationSnapshot.exists ? conversationSnapshot.data() || {} : {};
     const customerInputVersion = assignedCustomerInputVersion({
       currentConversation: current,
-      existingMessage,
+      existingMessage: {},
       inbound,
-      messageExists: messageSnapshot.exists,
+      messageExists: false,
     });
     const recentMessages = mergeRecentMessages(current.recentMessages, {
       id: identity.messageId,
@@ -303,9 +324,7 @@ async function persistCanonicalMessage({
     });
     const ingress = conversationIngressState({ current, exists: conversationSnapshot.exists, inbound });
     const lastMessageText = String(text || media?.mediaCaption || reactionEmoji || (media ? mediaPreview(media) : ""));
-    const unread = inbound && !messageSnapshot.exists
-      ? Number(current.unread || 0) + 1
-      : Number(current.unread || 0);
+    const unread = inbound ? Number(current.unread || 0) + 1 : Number(current.unread || 0);
     const conversationInputVersion = inbound
       ? Math.max(safeEpoch(current.customerInputVersion), Number(customerInputVersion || 0))
       : safeEpoch(current.customerInputVersion);
@@ -340,11 +359,11 @@ async function persistCanonicalMessage({
       status: inbound ? "received" : "sent",
       raw: payload,
       webhookEventId,
-      receivedAt: existingMessage.receivedAt || FieldValue.serverTimestamp(),
-      firstReceivedAt: existingMessage.firstReceivedAt || FieldValue.serverTimestamp(),
-      firstIngestedAtIso: existingMessage.firstIngestedAtIso || nowIso,
+      receivedAt: FieldValue.serverTimestamp(),
+      firstReceivedAt: FieldValue.serverTimestamp(),
+      firstIngestedAtIso: nowIso,
       updatedAt: FieldValue.serverTimestamp(),
-    }, { merge: true });
+    });
 
     transaction.set(conversationRef, {
       channel: "whatsapp",
@@ -385,7 +404,7 @@ async function persistCanonicalMessage({
       messageId: identity.messageId,
       providerMessageId,
       customerInputVersion,
-      replayed: messageSnapshot.exists,
+      replayed: false,
     };
   });
 }
@@ -463,14 +482,10 @@ async function updateChatPresence(communicationAccountId, payload) {
   if (!chat) return;
   const identity = wacliCanonicalIdentity({ communicationAccountId, chat });
   if (!identity.conversationId) return;
-  await db.collection("communicationConversations").doc(identity.conversationId).set({
-    provider: "wacli",
-    channel: "whatsapp",
-    communicationAccountId,
-    conversationId: identity.conversationId,
-    remoteConversationId: identity.remoteConversationId,
-    externalChatId: chat,
-    chatJid: chat,
+  const ref = db.collection("communicationConversations").doc(identity.conversationId);
+  const snapshot = await ref.get();
+  if (!snapshot.exists) return;
+  await ref.set({
     customerTyping: payload.State === "composing",
     typingMedia: payload.Media || null,
     lastPresenceAt: FieldValue.serverTimestamp(),
@@ -676,12 +691,11 @@ function outboundQueueAccountMatches(queueItem = {}, communicationAccountId = ""
 async function claimOutboundCommand(bridgeId, communicationAccountId) {
   const now = Date.now();
   const snapshot = await db.collection("whatsappOutboundQueue")
-    .where("status", "in", ["queued", "processing"])
-    .limit(50)
+    .where("communicationAccountId", "==", communicationAccountId)
     .get();
   const candidates = snapshot.docs
     .filter((doc) => String(doc.data()?.provider || "") === "wacli")
-    .filter((doc) => outboundQueueAccountMatches(doc.data(), communicationAccountId))
+    .filter((doc) => ["queued", "processing"].includes(String(doc.data()?.status || "queued")))
     .filter((doc) => {
       const data = doc.data() || {};
       return data.status === "queued" || timestampMillis(data.leaseUntil) <= now;
@@ -958,6 +972,8 @@ exports.appendCommunicationInternalNote = onDocumentCreated(
 module.exports.authorizedBridgeRequest = authorizedBridgeRequest;
 module.exports.claimOutboundCommand = claimOutboundCommand;
 module.exports.conversationIngressState = conversationIngressState;
+module.exports.existingMessageMatchesIdentity = existingMessageMatchesIdentity;
 module.exports.outboundQueueAccountMatches = outboundQueueAccountMatches;
 module.exports.persistCanonicalMessage = persistCanonicalMessage;
 module.exports.requireBoundCommunicationAccount = requireBoundCommunicationAccount;
+module.exports.updateChatPresence = updateChatPresence;
