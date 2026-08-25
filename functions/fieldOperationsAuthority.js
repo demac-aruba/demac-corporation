@@ -1,5 +1,6 @@
 const { getAuth } = require('firebase-admin/auth');
 const { getFirestore } = require('firebase-admin/firestore');
+const logger = require('firebase-functions/logger');
 const { onRequest } = require('firebase-functions/v2/https');
 const {
   FIELD_OPERATIONS_API_VERSION,
@@ -32,23 +33,25 @@ function bearerToken(request) {
 
 function apiError(error) {
   const status = Number(error?.status) || (error?.code === 'permission_denied' ? 403 : error?.code === 'unauthenticated' ? 401 : 500);
+  const internal = status >= 500;
   return {
     status,
     body: {
       success: false,
       version: FIELD_OPERATIONS_API_VERSION,
       error: {
-        code: cleanText(error?.code || 'internal_error', 120),
-        message: cleanText(error?.message || 'Unexpected Field Operations error.', 500),
-        details: error?.details && typeof error.details === 'object' ? error.details : {},
+        code: internal ? 'internal_error' : cleanText(error?.code || 'internal_error', 120),
+        message: internal ? 'Unexpected Field Operations error.' : cleanText(error?.message || 'Field Operations request failed.', 500),
+        details: internal ? {} : error?.details && typeof error.details === 'object' ? error.details : {},
       },
     },
   };
 }
 
-function createFieldOperationsApi({ db, verifyIdToken } = {}) {
+function createFieldOperationsApi({ db, verifyIdToken, reportError = () => {} } = {}) {
   if (!db || typeof db.collection !== 'function') throw new Error('A Firestore-compatible db is required.');
   if (typeof verifyIdToken !== 'function') throw new Error('verifyIdToken is required.');
+  if (typeof reportError !== 'function') throw new Error('reportError must be a function when provided.');
 
   async function authenticate(request) {
     const token = bearerToken(request);
@@ -85,14 +88,22 @@ function createFieldOperationsApi({ db, verifyIdToken } = {}) {
   async function handle(request) {
     if (request.method === 'OPTIONS') return { status: 204, body: null };
     if (request.method !== 'POST') return { status: 405, body: { success: false, version: FIELD_OPERATIONS_API_VERSION, error: { code: 'method_not_allowed', message: 'POST is required.', details: {} } } };
+    const action = cleanText(request.body?.action, 120);
     try {
-      const action = cleanText(request.body?.action, 120);
       if (!FIELD_ACTIONS.has(action)) throw fieldError('unsupported_action', `Unsupported Field Operations action: ${action || 'missing'}.`, 400);
       const identity = await authenticate(request);
       const body = await execute({ action, data: request.body?.data || {}, identity });
       return { status: 200, body };
     } catch (error) {
-      return apiError(error);
+      const result = apiError(error);
+      if (result.status >= 500) {
+        try {
+          reportError({ action, status: result.status, code: result.body.error.code, error });
+        } catch (_reportingError) {
+          // Error reporting must never replace the original API failure.
+        }
+      }
+      return result;
     }
   }
 
@@ -105,6 +116,13 @@ function getDefaultApi() {
     defaultApi = createFieldOperationsApi({
       db: getFirestore(),
       verifyIdToken: (token) => getAuth().verifyIdToken(token, true),
+      reportError: ({ action, status, code, error }) => logger.error('Field Operations request failed', {
+        action: cleanText(action, 120) || 'unknown',
+        status,
+        code: cleanText(code, 120) || 'internal_error',
+        errorName: cleanText(error?.name, 120) || 'Error',
+        errorMessage: cleanText(error?.message, 500),
+      }),
     });
   }
   return defaultApi;
