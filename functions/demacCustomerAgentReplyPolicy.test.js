@@ -70,6 +70,23 @@ test("explicit off switch always overrides the allowlist", () => {
   assert.equal(decision.reason, "auto-reply-disabled");
 });
 
+test("global Maya disable overrides reply allowlist and autonomy flags", () => {
+  const settings = {
+    enabled: false,
+    autoReplyEnabled: true,
+    autoReplyMode: "allowlist",
+    autoReplyAllowlist: ["2975600000"],
+    autoCancelEnabled: true,
+  };
+  const reply = mayaReplyDecision({ message: { phone: "2975600000" }, settings });
+  assert.equal(reply.allowed, false);
+  assert.equal(reply.reason, "maya-disabled");
+  assert.deepEqual(
+    mayaBusinessActionDecision({ action: "cancel_appointment", settings, ownershipAllowed: true }),
+    { allowed: false, reason: "maya-disabled" },
+  );
+});
+
 const pilotSettings = {
   enabled: true,
   observationEnabled: true,
