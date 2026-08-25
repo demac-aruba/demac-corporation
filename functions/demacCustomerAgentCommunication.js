@@ -4,7 +4,13 @@ const logger = require("firebase-functions/logger");
 const { defineSecret } = require("firebase-functions/params");
 const { createCustomerAgentRuntime, HANDOFF_QUEUES } = require("./demacCustomerAgentRuntimeV1");
 const { sessionIdentity, stableConversationIdentity } = require("./demacCustomerConversationState");
-const { canonicalRuntimeMessage, customerSemanticContent } = require("./demacCustomerTurn");
+const {
+  canonicalRuntimeMessage,
+  communicationEpochDecision,
+  customerSemanticContent,
+  nonNegativeEpoch,
+  positiveEpoch,
+} = require("./demacCustomerTurn");
 const { cleanText, hashId } = require("./bookingSchedulingPrimitives");
 const { cleanCustomerFacingMessage } = require("./demacCustomerMessageFormatting");
 const {
@@ -36,13 +42,14 @@ function safeDocumentId(value) {
 function timestampMillis(value) {
   if (!value) return 0;
   if (typeof value?.toMillis === "function") return value.toMillis();
+  if (typeof value?.toDate === "function") return value.toDate().getTime();
   const parsed = Date.parse(String(value));
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function safeEpoch(value) {
-  const number = Number(value);
-  return Number.isSafeInteger(number) && number >= 0 ? number : 0;
+function safeAttemptCount(value) {
+  const normalized = Number(value);
+  return Number.isSafeInteger(normalized) && normalized >= 0 ? normalized : 0;
 }
 
 function conversationIdentity(message = {}) {
@@ -79,19 +86,29 @@ async function communicationOwnershipGuard({ context = {} } = {}) {
   const conversation = snapshot.data() || {};
   const expectedAccount = cleanText(context.communicationAccountId, 180).toLowerCase();
   const currentAccount = cleanText(conversation.communicationAccountId, 180).toLowerCase();
-  if (expectedAccount && currentAccount && expectedAccount !== currentAccount) {
+  if (!expectedAccount || !currentAccount) {
+    return { allowed: false, code: "communication_account_missing", reason: "Communication account identity is missing for this autonomous turn." };
+  }
+  if (expectedAccount !== currentAccount) {
     return { allowed: false, code: "communication_account_changed", reason: "Communication account identity changed before this action." };
   }
   if (!shouldRunAgent(conversation)) {
     return { allowed: false, code: "human_takeover", reason: "A DEMAC operator owns or paused this conversation now." };
   }
+  const epochDecision = communicationEpochDecision({
+    conversation,
+    expectedOwnershipVersion: context.expectedOwnershipVersion,
+    expectedCustomerInputVersion: context.expectedCustomerInputVersion,
+  });
+  if (!epochDecision.allowed) {
+    return {
+      allowed: false,
+      code: epochDecision.reason,
+      reason: "Communication ownership or the current customer turn changed before this action.",
+    };
+  }
   return { allowed: true };
 }
-
-const customerAgentRuntime = createCustomerAgentRuntime({
-  db,
-  executionGuard: communicationOwnershipGuard,
-});
 
 function communicationMessageToRuntime(message = {}) {
   return canonicalRuntimeMessage(message, 4_000);
@@ -112,15 +129,19 @@ function buildRuntimeBody({ conversationId, conversation = {}, inboundMessage = 
   const normalizedMessages = messages.slice(-40);
   const latestInbound = inbound || [...normalizedMessages].reverse().find((message) => message.direction === "inbound");
   const communicationAccountId = cleanText(conversation.communicationAccountId || inboundMessage.communicationAccountId, 180).toLowerCase();
-  const customerInputVersion = Number.isSafeInteger(Number(latestInbound?.customerInputVersion))
-    ? Number(latestInbound.customerInputVersion)
-    : safeEpoch(inboundMessage.customerInputVersion || conversation.customerInputVersion);
+  const customerInputVersion = positiveEpoch(latestInbound?.customerInputVersion)
+    ?? positiveEpoch(inboundMessage.customerInputVersion);
+  const ownershipVersion = nonNegativeEpoch(conversation.ownershipVersion);
+  if (!communicationAccountId) throw new Error("Customer Agent runtime requires canonical communicationAccountId.");
+  if (customerInputVersion === null) throw new Error("Customer Agent runtime requires a positive customerInputVersion.");
+  if (ownershipVersion === null) throw new Error("Customer Agent runtime requires ownershipVersion.");
   return {
     provider,
     channel: "whatsapp",
     communicationAccountId,
     conversationId: canonicalConversationId,
     inboundMessageId: latestInbound?.id || cleanText(inboundMessage.messageId, 300),
+    ownershipVersion,
     customerInputVersion,
     conversation: {
       id: canonicalConversationId,
@@ -134,6 +155,7 @@ function buildRuntimeBody({ conversationId, conversation = {}, inboundMessage = 
       customerTurn: {
         id: latestInbound?.id || "",
         text: latestInbound?.text || "",
+        ownershipVersion,
         customerInputVersion,
       },
     },
@@ -175,15 +197,22 @@ function outcomeConversationPatch(result = {}) {
 
 async function enqueueInbound({ messageId, message, reactivate = false }) {
   const conversationId = conversationIdentity(message);
-  if (!conversationId) return null;
+  const messageInputVersion = positiveEpoch(message.customerInputVersion);
+  if (!conversationId || messageInputVersion === null) return null;
   const queueId = queueDocumentId(conversationId, messageId);
   const ref = db.collection(AGENT_QUEUE_COLLECTION).doc(queueId);
   const snapshot = await ref.get();
   const current = snapshot.exists ? snapshot.data() || {} : {};
   const currentStatus = cleanText(current.status, 40);
-  const terminalStatuses = ["processed", "coalesced", "skipped_provider", "skipped_policy"];
+  const terminalStatuses = ["processed", "coalesced", "skipped_provider", "skipped_policy", "failed"];
   if (terminalStatuses.includes(currentStatus) || (currentStatus === "skipped_human" && !reactivate)) {
     return { ref, queueId, conversationId, completed: true };
+  }
+  if (currentStatus === "processing") {
+    const startedAt = timestampMillis(current.processingStartedAt);
+    if (startedAt && startedAt + LEASE_MS > Date.now()) {
+      return { ref, queueId, conversationId, completed: true, processing: true };
+    }
   }
   await ref.set({
     id: queueId,
@@ -191,11 +220,9 @@ async function enqueueInbound({ messageId, message, reactivate = false }) {
     communicationAccountId: cleanText(message.communicationAccountId, 180).toLowerCase() || current.communicationAccountId || "",
     provider: cleanText(message.provider, 40) || "wacli",
     messageId,
-    customerInputVersion: Number.isSafeInteger(Number(message.customerInputVersion))
-      ? Number(message.customerInputVersion)
-      : current.customerInputVersion ?? null,
+    customerInputVersion: messageInputVersion,
     status: "queued",
-    attempts: Number(current.attempts || 0),
+    attempts: safeAttemptCount(current.attempts),
     reactivated: reactivate || current.reactivated === true,
     queuedAt: current.queuedAt || FieldValue.serverTimestamp(),
     queuedAtIso: current.queuedAtIso || new Date().toISOString(),
@@ -241,8 +268,10 @@ async function pendingQueue(conversationId) {
   const snapshot = await db.collection(AGENT_QUEUE_COLLECTION).where("conversationId", "==", conversationId).get();
   return snapshot.docs
     .map((doc) => ({ ref: doc.ref, id: doc.id, ...doc.data() }))
-    .filter((item) => item.status === "queued")
+    .filter((item) => item.status === "queued" && positiveEpoch(item.customerInputVersion) !== null)
     .sort((left, right) => {
+      const versionDelta = positiveEpoch(left.customerInputVersion) - positiveEpoch(right.customerInputVersion);
+      if (versionDelta) return versionDelta;
       const leftTime = timestampMillis(left.queuedAt) || Date.parse(left.queuedAtIso || "") || 0;
       const rightTime = timestampMillis(right.queuedAt) || Date.parse(right.queuedAtIso || "") || 0;
       return leftTime - rightTime || String(left.messageId).localeCompare(String(right.messageId));
@@ -250,7 +279,8 @@ async function pendingQueue(conversationId) {
 }
 
 async function markOlderAsCoalesced(items, selected) {
-  const older = items.filter((item) => item.id !== selected.id);
+  const selectedVersion = positiveEpoch(selected.customerInputVersion);
+  const older = items.filter((item) => item.id !== selected.id && positiveEpoch(item.customerInputVersion) <= selectedVersion);
   if (!older.length) return;
   const batch = db.batch();
   older.forEach((item) => batch.set(item.ref, {
@@ -284,7 +314,8 @@ async function queueAgentReply({
   inboundMessageId,
   result,
   provider,
-  expectedCustomerInputVersion = null,
+  expectedOwnershipVersion,
+  expectedCustomerInputVersion,
 }) {
   if (!automaticReplySupported(provider)) {
     throw new Error(`Automatic customer-agent replies are not enabled for provider ${cleanText(provider, 40) || "unknown"}.`);
@@ -315,13 +346,13 @@ async function queueAgentReply({
       outcome = { queued: false, id, reason: "missing-communication-account-id" };
       return;
     }
-    const currentInputVersion = safeEpoch(currentConversation.customerInputVersion);
-    if (
-      Number.isSafeInteger(Number(expectedCustomerInputVersion))
-      && Number(expectedCustomerInputVersion) >= 0
-      && Number(expectedCustomerInputVersion) !== currentInputVersion
-    ) {
-      outcome = { queued: false, id, reason: "stale-customer-input" };
+    const epochDecision = communicationEpochDecision({
+      conversation: currentConversation,
+      expectedOwnershipVersion,
+      expectedCustomerInputVersion,
+    });
+    if (!epochDecision.allowed) {
+      outcome = { queued: false, id, reason: "stale-communication-epoch", epochReason: epochDecision.reason };
       return;
     }
     const replyDecision = mayaReplyDecision({
@@ -333,34 +364,35 @@ async function queueAgentReply({
       outcome = { queued: false, id, reason: replyDecision.reason, phone: replyDecision.phone || "" };
       return;
     }
-    if (existing.exists) {
-      outcome = { queued: true, id, existing: true };
-      return;
-    }
-    const to = cleanText(
-      currentConversation.chatJid || currentConversation.externalChatId || currentConversation.phone,
-      300,
-    );
+    const to = cleanText(currentConversation.chatJid || currentConversation.externalChatId || currentConversation.phone, 300);
     if (!to) throw new Error("Customer Agent cannot reply because the canonical conversation has no WhatsApp recipient.");
-    transaction.set(ref, {
-      id,
-      provider: "wacli",
-      communicationAccountId,
-      outboundClass: "conversation_maya",
-      status: "queued",
-      type: "text",
-      to,
-      text,
-      conversationId,
-      sourceInboundMessageId: inboundMessageId,
-      expectedOwnershipVersion: safeEpoch(currentConversation.ownershipVersion),
-      expectedCustomerInputVersion: currentInputVersion,
-      createdByUserId: "demac-customer-agent",
-      createdByName: "Maya",
-      createdAt: FieldValue.serverTimestamp(),
-      createdAtIso: new Date().toISOString(),
-    });
-    outcome = { queued: true, id, existing: false };
+    if (!existing.exists) {
+      transaction.set(ref, {
+        id,
+        provider: "wacli",
+        communicationAccountId,
+        outboundClass: "conversation_maya",
+        status: "queued",
+        type: "text",
+        to,
+        text,
+        conversationId,
+        sourceInboundMessageId: inboundMessageId,
+        expectedOwnershipVersion: epochDecision.ownershipVersion,
+        expectedCustomerInputVersion: epochDecision.customerInputVersion,
+        createdByUserId: "demac-customer-agent",
+        createdByName: "Maya",
+        createdAt: FieldValue.serverTimestamp(),
+        createdAtIso: new Date().toISOString(),
+      });
+    }
+    transaction.set(conversationRef, {
+      ...outcomeConversationPatch(result),
+      agentLastInboundMessageId: inboundMessageId,
+      agentLastProcessedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    outcome = { queued: true, id, existing: existing.exists };
   });
 
   return outcome;
@@ -391,30 +423,44 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
   const inboundMessage = { id: messageSnapshot.id, ...messageSnapshot.data() };
   const currentAccount = cleanText(conversation.communicationAccountId, 180).toLowerCase();
   const queuedAccount = cleanText(selected.communicationAccountId, 180).toLowerCase();
-  if (queuedAccount && currentAccount && queuedAccount !== currentAccount) {
-    await selected.ref.set({ status: "skipped_policy", discardReason: "communication-account-changed", completedAt: FieldValue.serverTimestamp() }, { merge: true });
-    return { processed: false, reason: "communication-account-changed" };
+  if (!currentAccount || !queuedAccount || queuedAccount !== currentAccount) {
+    await selected.ref.set({ status: "skipped_policy", discardReason: "communication-account-changed-or-missing", completedAt: FieldValue.serverTimestamp() }, { merge: true });
+    return { processed: false, reason: "communication-account-changed-or-missing" };
   }
   if (!customerSemanticContent(inboundMessage, 4_000)) {
     await selected.ref.set({ status: "skipped_policy", discardReason: "no-canonical-customer-content", completedAt: FieldValue.serverTimestamp() }, { merge: true });
     return { processed: false, reason: "no-canonical-customer-content" };
   }
-
-  if (!shouldRunAgent(conversation)) {
+  const expectedOwnershipVersion = nonNegativeEpoch(conversation.ownershipVersion);
+  const currentInputVersion = positiveEpoch(conversation.customerInputVersion);
+  const queuedInputVersion = positiveEpoch(selected.customerInputVersion);
+  const messageInputVersion = positiveEpoch(inboundMessage.customerInputVersion);
+  if (
+    expectedOwnershipVersion === null
+    || currentInputVersion === null
+    || queuedInputVersion === null
+    || messageInputVersion === null
+    || queuedInputVersion !== messageInputVersion
+    || currentInputVersion !== messageInputVersion
+  ) {
     await selected.ref.set({
-      status: "skipped_human",
+      status: "coalesced",
+      discardReason: "stale-or-invalid-customer-input-version",
       completedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
+    return { processed: false, reason: "stale-or-invalid-customer-input-version" };
+  }
+  if (!shouldRunAgent(conversation)) {
+    await selected.ref.set({ status: "skipped_human", completedAt: FieldValue.serverTimestamp() }, { merge: true });
     return { processed: false, reason: "human-active" };
   }
 
-  const attempts = Number(selected.attempts || 0) + 1;
-  const currentInputVersion = safeEpoch(conversation.customerInputVersion);
+  const attempts = safeAttemptCount(selected.attempts) + 1;
   await selected.ref.set({
     status: "processing",
     attempts,
     leaseOwnerId,
-    expectedOwnershipVersion: safeEpoch(conversation.ownershipVersion),
+    expectedOwnershipVersion,
     expectedCustomerInputVersion: currentInputVersion,
     processingStartedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
@@ -426,7 +472,18 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
     inboundMessage,
     provider: selected.provider || "wacli",
   });
-  const result = await customerAgentRuntime.runTurn({
+  const turnRuntime = createCustomerAgentRuntime({
+    db,
+    executionGuard: ({ context = {} } = {}) => communicationOwnershipGuard({
+      context: {
+        ...context,
+        communicationAccountId: currentAccount,
+        expectedOwnershipVersion,
+        expectedCustomerInputVersion: currentInputVersion,
+      },
+    }),
+  });
+  const result = await turnRuntime.runTurn({
     rawBody,
     apiKey: openAiApiKey.value(),
     company: "DEMAC Professional Cooling Solutions",
@@ -434,14 +491,15 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
 
   if (result.metadata?.ownershipChanged === true) {
     await selected.ref.set({
-      status: "skipped_human",
-      discardReason: cleanText(result.metadata?.ownershipCode, 120) || "human-takeover",
+      status: result.metadata?.ownershipCode === "customer-input-version-changed" ? "coalesced" : "skipped_human",
+      discardReason: cleanText(result.metadata?.ownershipCode, 120) || "communication-epoch-changed",
       completedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
-    return { processed: false, reason: "human-takeover-during-agent-turn" };
+    return { processed: false, reason: "communication-epoch-changed-during-agent-turn" };
   }
 
-  const newer = (await pendingQueue(conversationId)).filter((item) => item.messageId !== selected.messageId);
+  const newer = (await pendingQueue(conversationId))
+    .filter((item) => positiveEpoch(item.customerInputVersion) > currentInputVersion);
   if (newer.length) {
     const latest = newer[newer.length - 1];
     await selected.ref.set({
@@ -457,23 +515,21 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
     inboundMessageId: selected.messageId,
     result,
     provider: selected.provider || "wacli",
+    expectedOwnershipVersion,
     expectedCustomerInputVersion: currentInputVersion,
   });
   if (!reply.queued && reply.reason === "human-takeover") {
-    await selected.ref.set({
-      status: "skipped_human",
-      discardReason: "human-takeover-before-outbound-commit",
-      completedAt: FieldValue.serverTimestamp(),
-    }, { merge: true });
+    await selected.ref.set({ status: "skipped_human", discardReason: "human-takeover-before-outbound-commit", completedAt: FieldValue.serverTimestamp() }, { merge: true });
     return { processed: false, reason: "human-takeover-before-outbound-commit" };
   }
-  if (!reply.queued && reply.reason === "stale-customer-input") {
+  if (!reply.queued && reply.reason === "stale-communication-epoch") {
+    const customerStale = reply.epochReason === "customer-input-version-changed" || reply.epochReason === "current-customer-input-version-missing";
     await selected.ref.set({
-      status: "coalesced",
-      discardReason: "stale-customer-input-before-outbound-commit",
+      status: customerStale ? "coalesced" : "skipped_human",
+      discardReason: `stale-communication-epoch:${reply.epochReason || "unknown"}`,
       completedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
-    return { processed: false, reason: "stale-customer-input-before-outbound-commit" };
+    return { processed: false, reason: "stale-communication-epoch-before-outbound-commit" };
   }
   if (!reply.queued && reply.reason !== "empty-draft") {
     await selected.ref.set({
@@ -493,12 +549,6 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
   }
   if (!reply.queued) throw new Error(`Customer Agent produced no outbound message: ${reply.reason || "unknown"}.`);
 
-  await conversationRef.set({
-    ...outcomeConversationPatch(result),
-    agentLastInboundMessageId: selected.messageId,
-    agentLastProcessedAt: FieldValue.serverTimestamp(),
-    updatedAt: FieldValue.serverTimestamp(),
-  }, { merge: true });
   await selected.ref.set({
     status: "processed",
     outcome: cleanText(result.metadata?.outcome, 80),
@@ -517,9 +567,12 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
 async function processQueueEvent({ messageId, message, reactivate = false }) {
   if (!message || message.direction !== "inbound") return { ignored: true, reason: "not-inbound" };
   if (!customerSemanticContent(message, 4_000)) return { ignored: true, reason: "no-customer-content" };
+  if (positiveEpoch(message.customerInputVersion) === null) return { ignored: true, reason: "missing-customer-input-version" };
   if (!automaticReplySupported(message.provider || "wacli")) return { ignored: true, reason: "provider-not-enabled" };
   const queued = await enqueueInbound({ messageId, message, reactivate });
-  if (!queued || queued.completed) return { ignored: true, reason: queued?.completed ? "already-completed" : "no-canonical-conversation" };
+  if (!queued || queued.completed) {
+    return { ignored: true, reason: queued?.processing ? "already-processing" : queued?.completed ? "already-completed" : "no-canonical-conversation" };
+  }
 
   const leaseOwnerId = `${queued.queueId}:${Date.now()}`;
   const lease = await acquireLease(queued.conversationId, leaseOwnerId);
@@ -533,7 +586,7 @@ async function processQueueEvent({ messageId, message, reactivate = false }) {
     return await processLatestQueued(queued.conversationId, leaseOwnerId);
   } catch (error) {
     const snapshot = await queued.ref.get();
-    const attempts = Number(snapshot.data()?.attempts || 0);
+    const attempts = safeAttemptCount(snapshot.data()?.attempts);
     if (attempts >= MAX_PROCESSING_ATTEMPTS) {
       await queued.ref.set({
         status: "failed",
@@ -582,6 +635,7 @@ async function reactivateConversation(conversationId, conversation = {}) {
     return { ignored: true, reason: "canonical-message-conversation-mismatch" };
   }
   if (!customerSemanticContent(message, 4_000)) return { ignored: true, reason: "no-canonical-customer-content" };
+  if (positiveEpoch(message.customerInputVersion) === null) return { ignored: true, reason: "missing-customer-input-version" };
 
   return processQueueEvent({
     messageId: cleanText(message.messageId || message.id, 300),
@@ -604,11 +658,13 @@ module.exports.ensureAgentSessionActive = ensureAgentSessionActive;
 module.exports.latestCustomerMessage = latestCustomerMessage;
 module.exports.outboundDocumentId = outboundDocumentId;
 module.exports.outcomeConversationPatch = outcomeConversationPatch;
+module.exports.pendingQueue = pendingQueue;
 module.exports.processLatestQueued = processLatestQueued;
 module.exports.processQueueEvent = processQueueEvent;
 module.exports.queueAgentReply = queueAgentReply;
 module.exports.queueDocumentId = queueDocumentId;
 module.exports.reactivateConversation = reactivateConversation;
+module.exports.safeAttemptCount = safeAttemptCount;
 module.exports.semanticHandoffQueue = semanticHandoffQueue;
 module.exports.shouldRunAgent = shouldRunAgent;
 module.exports.whatsappMessageToRuntime = whatsappMessageToRuntime;
