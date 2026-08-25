@@ -1,6 +1,6 @@
-import { fieldActionAllowed, type FieldAllowedAction } from '../lib/field-authorization';
+import { fieldActionAllowed } from '../lib/field-authorization';
 import { hasCapability as hasLegacyCapability } from '../lib/capabilities';
-import { parseFieldJobResponse, parseFieldScheduleResponse } from '../lib/field-authority-contract';
+import { parseFieldJobResponse, parseFieldScheduleResponse, type FieldAllowedAction } from '../lib/field-authority-contract';
 import { defaultAuthenticatedRoute, isAuthenticatedRouteAllowed } from '../lib/role-routing';
 import { requireCapability, roleCapabilities, type AuthPrincipal, type Capability } from '../lib/security';
 
@@ -29,6 +29,9 @@ assert(defaultAuthenticatedRoute('technician') === '/field', 'technician login s
 assert(isAuthenticatedRouteAllowed('/field', 'technician'), 'technician should be allowed to open Field App');
 assert(!isAuthenticatedRouteAllowed('/dashboard', 'technician'), 'technician must not open management dashboard directly');
 assert(defaultAuthenticatedRoute('super_admin') === '/dashboard', 'super admin should keep the management dashboard as default');
+assert(isAuthenticatedRouteAllowed('/field', 'super_admin'), 'super admin should retain access to the read-only Technician Home for support/verification');
+assert(!isAuthenticatedRouteAllowed('/field', 'operations'), 'operations Field read/review capability must not imply access to the Technician Home route');
+assert(!isAuthenticatedRouteAllowed('/field', 'office_operator'), 'office Field read/review capability must not imply access to the Technician Home route');
 assert(isAuthenticatedRouteAllowed('/scheduling/dispatch', 'operations'), 'operations nested scheduling route should remain allowed');
 
 assert(hasFieldCapability('technician', 'field.read_assigned'), 'technician role should enter assigned Field work');
@@ -86,15 +89,14 @@ const representativeJob = {
   plannedWork: [{ id: 'line-1', label: 'Standard Service', quantity: 1 }],
   estimatedQuantity: 0,
   vanId: 'VAN-1',
-  technicianIds: ['staff-tech'],
   responsibility: 'technician',
   assignmentSource: 'direct_staff',
   allowedActions: ['read', 'execute'],
 };
 const validSchedule = parseFieldScheduleResponse({ success: true, version: 1, jobs: [representativeJob] });
-assert(validSchedule.jobs[0].workOrderId === 'WO-1', 'valid schedule transport should parse');
+assert(validSchedule.jobs[0].workOrderId === 'WO-1', 'valid public schedule transport should parse');
 const validJob = parseFieldJobResponse({ success: true, version: 1, job: { ...representativeJob, knownEquipment: [] } });
-assert(validJob.job.knownEquipment.length === 0, 'valid job transport should parse');
+assert(validJob.job.knownEquipment.length === 0, 'valid public job transport should parse');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 2, jobs: [] }), 'unknown API version must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1 }), 'missing jobs array must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1, jobs: [{ ...representativeJob, allowedActions: null }] }), 'malformed action projection must fail closed');
