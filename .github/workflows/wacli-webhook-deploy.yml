@@ -10,9 +10,9 @@ on:
       - 'functions/wacliBridgeAccountBinding.test.js'
       - 'functions/wacliOutboundMediaUpload.js'
       - 'functions/wacliOutboundMediaUpload.test.js'
+      - 'functions/demacCorePrimitives.js'
       - 'functions/demacCommunicationIdentity.js'
       - 'functions/demacCommunicationEpoch.js'
-      - 'functions/bookingSchedulingPrimitives.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
       - 'ops/digitalocean/deploy/server-v2.mjs'
@@ -28,9 +28,9 @@ on:
       - 'functions/wacliBridgeAccountBinding.test.js'
       - 'functions/wacliOutboundMediaUpload.js'
       - 'functions/wacliOutboundMediaUpload.test.js'
+      - 'functions/demacCorePrimitives.js'
       - 'functions/demacCommunicationIdentity.js'
       - 'functions/demacCommunicationEpoch.js'
-      - 'functions/bookingSchedulingPrimitives.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
       - '.github/workflows/wacli-webhook-deploy.yml'
@@ -66,9 +66,9 @@ jobs:
           node --check functions/whatsappWacliGateway.js
           node --check functions/wacliCommunicationBoundary.js
           node --check functions/wacliOutboundMediaUpload.js
+          node --check functions/demacCorePrimitives.js
           node --check functions/demacCommunicationIdentity.js
           node --check functions/demacCommunicationEpoch.js
-          node --check functions/bookingSchedulingPrimitives.js
           node --check functions/bootstrap.js
           node --check ops/digitalocean/deploy/server-v2.mjs
           node --test \
@@ -86,6 +86,14 @@ jobs:
           fi
           if ! grep -Fq 'demacCommunicationEpoch' functions/wacliCommunicationBoundary.js; then
             echo '::error::Wacli sender epoch checks must use the neutral Communication primitive.'
+            exit 1
+          fi
+          if grep -Fq 'bookingSchedulingPrimitives' functions/demacCommunicationIdentity.js; then
+            echo '::error::Communication identity must not depend on Booking scheduling primitives.'
+            exit 1
+          fi
+          if ! grep -Fq 'demacCorePrimitives' functions/demacCommunicationIdentity.js; then
+            echo '::error::Communication identity must use the neutral DEMAC core primitives.'
             exit 1
           fi
           if ! grep -q 'authorizedBridgeRequest(request)' functions/whatsappWacliGateway.js; then
@@ -142,7 +150,7 @@ jobs:
             deploy='true'
           else
             git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA" > /tmp/changed-files.txt
-            if grep -Eq '^functions/(whatsappWacliGateway\.js|whatsappWacliGateway\.test\.js|wacliCommunicationBoundary\.js|wacliCommunicationBoundary\.test\.js|wacliBridgeAccountBinding\.test\.js|wacliOutboundMediaUpload\.js|demacCommunicationIdentity\.js|demacCommunicationEpoch\.js|bookingSchedulingPrimitives\.js|bootstrap\.js|package\.json)$' /tmp/changed-files.txt; then
+            if grep -Eq '^functions/(whatsappWacliGateway\.js|whatsappWacliGateway\.test\.js|wacliCommunicationBoundary\.js|wacliCommunicationBoundary\.test\.js|wacliBridgeAccountBinding\.test\.js|wacliOutboundMediaUpload\.js|demacCorePrimitives\.js|demacCommunicationIdentity\.js|demacCommunicationEpoch\.js|bootstrap\.js|package\.json)$' /tmp/changed-files.txt; then
               deploy='true'
             fi
           fi
@@ -333,7 +341,7 @@ jobs:
           with open(sys.argv[1], encoding='utf-8') as handle:
               payload = json.load(handle)
           if payload != {'error': 'Unauthorized'}:
-              raise SystemExit(f'Unexpected media upload application-auth payload: {payload}')
+            raise SystemExit(f'Unexpected media upload application-auth payload: {payload}')
           print('wacliOutboundMediaUpload: Firebase application authentication required')
           PY
           rm -f "$media_body"
