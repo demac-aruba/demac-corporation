@@ -17,6 +17,7 @@ import {
   parseFieldRecordAdditionalWorkDecisionResponse,
   type FieldAdditionalWorkDecision,
 } from './field-approval-contract';
+import { parseFieldRegisterVisitAssetResponse } from './field-equipment-registration-contract';
 
 export { fieldActionAllowed } from './field-authorization';
 export type {
@@ -64,8 +65,31 @@ export type {
   FieldExecutionJobDetail,
   FieldRecordAdditionalWorkDecisionResponse,
 } from './field-approval-contract';
+export type {
+  FieldEquipmentRegistrationEvidence,
+  FieldEquipmentRegistrationEvidenceKind,
+  FieldRegisteredEquipment,
+  FieldRegisterVisitAssetResponse,
+} from './field-equipment-registration-contract';
 
 type FieldApiError = { error?: { code?: string; message?: string; details?: Record<string, unknown> } };
+
+export type RegisterOnSiteFieldEquipmentInput = {
+  visitId: string;
+  requestId: string;
+  locationLabel: string;
+  systemType: string;
+  brand: string;
+  btu: number;
+  refrigerant: string;
+  voltage: string;
+  qrCode?: string;
+  evidencePaths: {
+    equipment_reference: string;
+    indoor_nameplate: string;
+    outdoor_nameplate: string;
+  };
+};
 
 function endpoint() {
   if (!firebaseClientConfig.projectId) throw new Error('Firebase project is not configured for ERP Next.');
@@ -165,6 +189,21 @@ export async function attachExistingFieldAsset(visitId: string, assetId: string,
     assetId,
     requestId,
   }));
+}
+
+export async function registerOnSiteFieldEquipment(input: RegisterOnSiteFieldEquipmentInput) {
+  return parseFieldRegisterVisitAssetResponse(await callFieldAuthority('register_visit_asset', {
+    visitId: input.visitId,
+    requestId: input.requestId,
+    locationLabel: input.locationLabel,
+    systemType: input.systemType,
+    brand: input.brand,
+    btu: input.btu,
+    refrigerant: input.refrigerant,
+    voltage: input.voltage,
+    qrCode: input.qrCode ?? '',
+    evidencePaths: input.evidencePaths,
+  }, 20_000));
 }
 
 export async function createPlannedFieldIntervention(
