@@ -34,11 +34,12 @@ function trustedProviderTimestamp(message = {}) {
 }
 
 function trustedFirstSeenTimestamp(message = {}) {
+  // Deliberately exclude mutable generic receivedAt. firstReceivedAt / firstIngestedAt
+  // must be stamped once when the canonical message is first created.
   return timestampMillis(
     message.firstReceivedAt
       || message.firstIngestedAt
-      || message.firstSeenAt
-      || message.receivedAt,
+      || message.firstSeenAt,
   );
 }
 
