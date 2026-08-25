@@ -1,10 +1,11 @@
 const crypto = require('node:crypto');
 const { fieldFirestoreData } = require('./fieldOperationsFirestoreData');
-const { allowedActionsForAssignment, fieldError } = require('./fieldOperationsAuthorityCore');
+const { activeWorkOrder, allowedActionsForAssignment, fieldError } = require('./fieldOperationsAuthorityCore');
 const { canonicalStatusFromStorage, projectCanonicalWorkVisit, stableRequestId } = require('./fieldOperationsAuthorityWorkVisit');
 const { transitionCanonicalWorkVisit } = require('./fieldOperationsAuthorityTransitions');
+const { ACTIVE_VISIT_TARGETS, activatedVisitTransitions } = require('./fieldOperationsVisitActions');
 
-const ACTIVE_VISIT_TARGETS = new Set(['en_route', 'on_site', 'in_progress']);
+const ACTIVE_VISIT_TARGET_SET = new Set(ACTIVE_VISIT_TARGETS);
 
 function text(value, limit = 1000) {
   return String(value ?? '').trim().slice(0, limit);
@@ -69,6 +70,13 @@ function requireExecuteAssignment(identity, assignment) {
   return allowedActions;
 }
 
+function responseVisit(visit, allowedActions) {
+  return {
+    ...visit,
+    availableTransitions: activatedVisitTransitions(visit.status, allowedActions),
+  };
+}
+
 function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditInTransaction, now = () => new Date().toISOString() } = {}) {
   if (!db || typeof db.collection !== 'function' || typeof db.runTransaction !== 'function') throw new Error('A transaction-capable Firestore db is required.');
   if (typeof resolveAssignment !== 'function') throw new Error('resolveAssignment is required.');
@@ -78,7 +86,7 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
     const normalizedVisitId = text(visitId, 180);
     if (!normalizedVisitId) throw fieldError('visit_required', 'A Work Visit id is required.', 400);
     const target = text(to, 80);
-    if (!ACTIVE_VISIT_TARGETS.has(target)) {
+    if (!ACTIVE_VISIT_TARGET_SET.has(target)) {
       throw fieldError('transition_not_activated', `Work Visit transition is not activated in this slice: ${target || 'missing'}.`, 400);
     }
     const stable = stableRequestId(requestId);
@@ -97,6 +105,8 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
       const workOrderSnapshot = await transaction.get(workOrderRef);
       if (!workOrderSnapshot.exists) throw fieldError('work_order_not_found', 'The Work Order for this visit is not available.', 404);
       const order = { id: workOrderSnapshot.id, ...workOrderSnapshot.data() };
+      if (!activeWorkOrder(order)) throw fieldError('work_order_not_available', 'This Work Order is no longer released for active Field execution.', 409);
+
       const assignment = await resolveAssignment({ transaction, identity, order });
       const allowedActions = requireExecuteAssignment(identity, assignment);
 
@@ -104,7 +114,7 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
       if (currentStatus === target) {
         // Retry after a successful transaction is a no-op even if the caller still holds the
         // pre-transition version. The first transition and audit event already committed atomically.
-        result = { success: true, replayed: true, visit: canonicalVisit, allowedActions };
+        result = { success: true, replayed: true, visit: responseVisit(canonicalVisit, allowedActions), allowedActions };
         return;
       }
 
@@ -133,7 +143,13 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
 
       transaction.update(visitRef, patch);
       await appendAuditInTransaction({ transaction, event, visit: nextStoredVisit, identity });
-      result = { success: true, replayed: false, visit: nextVisit, allowedActions, auditEventId: event.id };
+      result = {
+        success: true,
+        replayed: false,
+        visit: responseVisit(nextVisit, allowedActions),
+        allowedActions,
+        auditEventId: event.id,
+      };
     });
 
     return result;
