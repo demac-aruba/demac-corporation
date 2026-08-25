@@ -172,10 +172,8 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
   }) {
     return db.runTransaction(async (transaction) => {
       const conversationRef = db.collection("communicationConversations").doc(conversationId);
-      const [conversationSnapshot, caseSnapshot] = await Promise.all([
-        transaction.get(conversationRef),
-        transaction.get(caseRef),
-      ]);
+      const conversationSnapshot = await transaction.get(conversationRef);
+      const caseSnapshot = await transaction.get(caseRef);
       if (!conversationSnapshot.exists) return { written: false, reason: "communication-conversation-not-found" };
       const epochDecision = communicationEpochDecision({
         conversation: conversationSnapshot.data() || {},
