@@ -18,18 +18,45 @@ function createDb(seed = {}) {
   }
 
   function documentRef(name, id) {
-    return { collectionName: name, id };
+    return { kind: 'document', collectionName: name, id };
+  }
+
+  function queryRef(name, filters = []) {
+    return {
+      kind: 'query',
+      collectionName: name,
+      filters,
+      where(field, op, expected) {
+        return queryRef(name, [...filters, { field, op, expected }]);
+      },
+    };
+  }
+
+  function matches(value, filter) {
+    if (filter.op === '==') return value?.[filter.field] === filter.expected;
+    throw new Error(`Unsupported fake query operator ${filter.op}`);
   }
 
   const db = {
     collection(name) {
-      return { doc(id) { return documentRef(name, id); } };
+      return {
+        doc(id) { return documentRef(name, id); },
+        where(field, op, expected) { return queryRef(name, [{ field, op, expected }]); },
+      };
     },
     async runTransaction(callback) {
       const writes = [];
       const transaction = {
-        async get(ref) {
-          return snapshot(ref.id, ensure(ref.collectionName).get(ref.id));
+        async get(target) {
+          const values = ensure(target.collectionName);
+          if (target.kind === 'query') {
+            return {
+              docs: [...values.entries()]
+                .filter(([, value]) => target.filters.every((filter) => matches(value, filter)))
+                .map(([id, value]) => snapshot(id, value)),
+            };
+          }
+          return snapshot(target.id, values.get(target.id));
         },
         update(ref, patch) {
           if (!ensure(ref.collectionName).has(ref.id)) throw new Error(`Missing document: ${ref.collectionName}/${ref.id}`);
@@ -123,7 +150,7 @@ function assignment(overrides = {}) {
 
 function fixture(options = {}) {
   const store = createDb({
-    workVisits: [options.visit || baseVisit()],
+    workVisits: options.visits || [options.visit || baseVisit()],
     workOrders: [options.order || baseOrder()],
   });
   const auditEvents = [];
@@ -231,6 +258,47 @@ test('current Work Order lifecycle is revalidated inside the same transaction be
   );
   assert.equal(assignmentCalled, false);
   assert.equal(store.get('workVisits', 'visit-WO-1').status, 'not_started');
+});
+
+test('transition revalidates WorkVisit identity against the current Work Order before mutation', async () => {
+  const { store, transition } = fixture({
+    visit: baseVisit({ clientId: 'CLIENT-OTHER' }),
+  });
+
+  await assert.rejects(
+    () => transition({ identity: identity(), visitId: 'visit-WO-1', to: 'en_route', expectedVersion: 1, requestId: 'transition-identity-conflict' }),
+    (error) => error?.code === 'visit_identity_conflict' && error?.status === 409,
+  );
+  assert.equal(store.get('workVisits', 'visit-WO-1').status, 'not_started');
+});
+
+test('an older physical WorkVisit cannot be transitioned after a return visit exists', async () => {
+  const initial = baseVisit({ id: 'visit-initial' });
+  const current = baseVisit({
+    id: 'visit-return',
+    previousVisitId: 'visit-initial',
+    status: 'on_site',
+    arrivedAt: '2026-08-24T12:45:00.000Z',
+  });
+  const { store, transition } = fixture({ visits: [initial, current] });
+
+  await assert.rejects(
+    () => transition({ identity: identity(), visitId: 'visit-initial', to: 'en_route', expectedVersion: 1, requestId: 'transition-old-visit' }),
+    (error) => error?.code === 'visit_not_current' && error?.status === 409,
+  );
+  assert.equal(store.get('workVisits', 'visit-initial').status, 'not_started');
+  assert.equal(store.get('workVisits', 'visit-return').status, 'on_site');
+});
+
+test('malformed persisted concurrency version fails closed instead of being normalized into a writable visit', async () => {
+  const { store, transition } = fixture({ visit: baseVisit({ version: 1.5 }) });
+
+  await assert.rejects(
+    () => transition({ identity: identity(), visitId: 'visit-WO-1', to: 'en_route', expectedVersion: 1, requestId: 'transition-bad-stored-version' }),
+    (error) => error?.code === 'invalid_visit_version' && error?.status === 409,
+  );
+  assert.equal(store.get('workVisits', 'visit-WO-1').status, 'not_started');
+  assert.equal(store.get('workVisits', 'visit-WO-1').version, 1.5);
 });
 
 test('audit failure aborts the surrounding transaction and leaves WorkVisit unchanged', async () => {
