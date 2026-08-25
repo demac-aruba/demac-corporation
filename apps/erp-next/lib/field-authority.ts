@@ -6,8 +6,8 @@ import {
 } from './field-authority-contract';
 
 export { fieldActionAllowed } from './field-authorization';
-export type { FieldAllowedAction } from './field-authorization';
 export type {
+  FieldAllowedAction,
   FieldAssignmentSource,
   FieldJobDetail,
   FieldKnownEquipment,
