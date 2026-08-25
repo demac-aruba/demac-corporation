@@ -43,6 +43,7 @@ export function PlannedInterventionControls({
   const serviceById = new Map(job.availableFieldServices.map((service) => [service.id, service]));
   const visitAssetById = new Map(job.visitAssets.map((asset) => [asset.id, asset]));
   const equipmentById = new Map(job.knownEquipment.map((equipment) => [equipment.id, equipment]));
+  const scopeChangeById = new Map(job.scopeChanges.map((scopeChange) => [scopeChange.id, scopeChange]));
 
   const setDraft = (visitAssetId: string, changes: Partial<Draft>) => {
     setDrafts((current) => ({
@@ -62,12 +63,14 @@ export function PlannedInterventionControls({
         const visitAsset = visitAssetById.get(intervention.visitAssetId);
         const equipment = visitAsset ? equipmentById.get(visitAsset.assetId) : undefined;
         const plannedLine = intervention.plannedWorkLineId ? plannedWorkById.get(intervention.plannedWorkLineId) : undefined;
+        const scopeChange = intervention.scopeChangeId ? scopeChangeById.get(intervention.scopeChangeId) : undefined;
         return (
           <div className={styles.interventionCard} key={intervention.id}>
             <div>
               <strong>{visitAsset?.locationLabel || equipment?.locationLabel || 'A/C confirmado'}</strong>
               <span>{intervention.interventionType}</span>
               <span>{plannedLine ? `Programado: ${plannedLine.label}` : 'Trabajo adicional'} · {interventionStatusLabel(intervention.status)}</span>
+              {scopeChange ? <span>Razón: {scopeChange.reason}</span> : null}
             </div>
             <span className={`${styles.badge} ${styles.badgeBrand}`}>{intervention.origin === 'planned' ? 'Plan original' : 'Alcance adicional'}</span>
           </div>

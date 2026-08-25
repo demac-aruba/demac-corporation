@@ -5,6 +5,7 @@ import { useAuth } from '@/components/auth/auth-provider';
 import { addDaysToDateKey, arubaDateKey, arubaTimeKey, formatArubaDateKey } from '@/lib/aruba-date';
 import {
   attachExistingFieldAsset,
+  createAdditionalFieldIntervention,
   createPlannedFieldIntervention,
   getFieldJob,
   getFieldSchedule,
@@ -13,8 +14,10 @@ import {
   type FieldActiveVisitTransition,
   type FieldExecutionJobDetail,
   type FieldScheduleJob,
+  type FieldTechnicianScopeChangeOrigin,
   type FieldVisitStatus,
 } from '@/lib/field-authority';
+import { AdditionalInterventionControls } from './additional-intervention-controls';
 import { PlannedInterventionControls } from './planned-intervention-controls';
 import styles from './technician-field-home.module.css';
 
@@ -24,6 +27,13 @@ type PlannedInterventionInput = {
   visitAssetId: string;
   plannedWorkLineId: string;
   serviceCatalogItemId: string;
+};
+
+type AdditionalInterventionInput = {
+  visitAssetId: string;
+  serviceCatalogItemId: string;
+  origin: FieldTechnicianScopeChangeOrigin;
+  reason: string;
 };
 
 const COMPLETED_WORK_ORDER_STATUSES = new Set(['Completada']);
@@ -158,12 +168,15 @@ function DetailView({
   transitionError,
   assetError,
   interventionError,
+  additionalInterventionError,
   transitioning,
   attachingAssetId,
   creatingInterventionVisitAssetId,
+  creatingAdditionalInterventionVisitAssetId,
   onTransition,
   onAttachAsset,
   onCreatePlannedIntervention,
+  onCreateAdditionalIntervention,
   onBack,
 }: {
   job: FieldExecutionJobDetail | null;
@@ -172,12 +185,15 @@ function DetailView({
   transitionError: string | null;
   assetError: string | null;
   interventionError: string | null;
+  additionalInterventionError: string | null;
   transitioning: FieldActiveVisitTransition | null;
   attachingAssetId: string | null;
   creatingInterventionVisitAssetId: string | null;
+  creatingAdditionalInterventionVisitAssetId: string | null;
   onTransition: (target: FieldActiveVisitTransition) => void;
   onAttachAsset: (assetId: string) => void;
   onCreatePlannedIntervention: (input: PlannedInterventionInput) => void;
+  onCreateAdditionalIntervention: (input: AdditionalInterventionInput) => void;
   onBack: () => void;
 }) {
   if (loading || error || !job) {
@@ -207,7 +223,10 @@ function DetailView({
       : [];
   const attachedAssetIds = new Set(job.visitAssets.map((visitAsset) => visitAsset.assetId));
   const knownEquipmentById = new Map(job.knownEquipment.map((equipment) => [equipment.id, equipment]));
-  const mutationBusy = transitioning !== null || attachingAssetId !== null || creatingInterventionVisitAssetId !== null;
+  const mutationBusy = transitioning !== null
+    || attachingAssetId !== null
+    || creatingInterventionVisitAssetId !== null
+    || creatingAdditionalInterventionVisitAssetId !== null;
 
   return (
     <div className={styles.shell}>
@@ -301,6 +320,13 @@ function DetailView({
               error={interventionError}
               onCreate={onCreatePlannedIntervention}
             />
+            <AdditionalInterventionControls
+              job={job}
+              mutationBusy={mutationBusy}
+              creatingVisitAssetId={creatingAdditionalInterventionVisitAssetId}
+              error={additionalInterventionError}
+              onCreate={onCreateAdditionalIntervention}
+            />
             {assetError ? <div className={styles.mutationError}>{assetError}</div> : null}
           </section>
 
@@ -383,6 +409,8 @@ export function TechnicianFieldHome() {
   const [assetError, setAssetError] = useState<string | null>(null);
   const [creatingInterventionVisitAssetId, setCreatingInterventionVisitAssetId] = useState<string | null>(null);
   const [interventionError, setInterventionError] = useState<string | null>(null);
+  const [creatingAdditionalInterventionVisitAssetId, setCreatingAdditionalInterventionVisitAssetId] = useState<string | null>(null);
+  const [additionalInterventionError, setAdditionalInterventionError] = useState<string | null>(null);
   const scheduleRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
   const mutationRequestRef = useRef(0);
@@ -415,6 +443,8 @@ export function TechnicianFieldHome() {
     setAssetError(null);
     setCreatingInterventionVisitAssetId(null);
     setInterventionError(null);
+    setCreatingAdditionalInterventionVisitAssetId(null);
+    setAdditionalInterventionError(null);
   }, []);
 
   const loadDetail = useCallback(async (workOrderId: string, background = false) => {
@@ -490,6 +520,7 @@ export function TechnicianFieldHome() {
     setTransitionError(null);
     setAssetError(null);
     setInterventionError(null);
+    setAdditionalInterventionError(null);
     try {
       let visit = currentDetail.fieldVisit;
       if (!visit) {
@@ -547,6 +578,7 @@ export function TechnicianFieldHome() {
     setAssetError(null);
     setTransitionError(null);
     setInterventionError(null);
+    setAdditionalInterventionError(null);
     try {
       await attachExistingFieldAsset(
         currentDetail.fieldVisit.id,
@@ -586,6 +618,7 @@ export function TechnicianFieldHome() {
     const workOrderId = currentDetail.workOrderId;
     setCreatingInterventionVisitAssetId(input.visitAssetId);
     setInterventionError(null);
+    setAdditionalInterventionError(null);
     setTransitionError(null);
     setAssetError(null);
     try {
@@ -608,6 +641,52 @@ export function TechnicianFieldHome() {
       void loadDetail(workOrderId, true);
     } finally {
       if (mutationId === mutationRequestRef.current) setCreatingInterventionVisitAssetId(null);
+      if (mutationLockRef.current === mutationId) mutationLockRef.current = null;
+    }
+  }, [detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
+
+  const runCreateAdditionalIntervention = useCallback(async (input: AdditionalInterventionInput) => {
+    if (mutationLockRef.current !== null) return;
+    const currentDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
+    if (!currentDetail?.fieldVisit) {
+      setAdditionalInterventionError('La visita todavía no está disponible para registrar alcance adicional.');
+      return;
+    }
+    if (!currentDetail.canAddAdditionalIntervention
+      || !currentDetail.additionalInterventionVisitAssetIds.includes(input.visitAssetId)) {
+      setAdditionalInterventionError('Field Authority no autoriza alcance adicional para este A/C en el estado o asignación actual.');
+      return;
+    }
+
+    const mutationId = ++mutationRequestRef.current;
+    mutationLockRef.current = mutationId;
+    const workOrderId = currentDetail.workOrderId;
+    setCreatingAdditionalInterventionVisitAssetId(input.visitAssetId);
+    setAdditionalInterventionError(null);
+    setInterventionError(null);
+    setTransitionError(null);
+    setAssetError(null);
+    try {
+      await createAdditionalFieldIntervention(
+        currentDetail.fieldVisit.id,
+        input.visitAssetId,
+        input.serviceCatalogItemId,
+        input.origin,
+        input.reason,
+        clientRequestId('additional-intervention', workOrderId),
+      );
+      if (mutationId !== mutationRequestRef.current) return;
+      // ScopeChange + WorkIntervention are transaction-owned canonical children. Re-read the job
+      // instead of inventing approval or additional-scope state in React.
+      await loadDetail(workOrderId, true);
+    } catch (mutationError) {
+      if (mutationId !== mutationRequestRef.current) return;
+      setAdditionalInterventionError(mutationError instanceof Error ? mutationError.message : 'No se pudo registrar el alcance adicional.');
+      // A timeout may have occurred after commit. Canonical re-read decides whether the proposal
+      // exists; browser state never retries by assuming failure or approval.
+      void loadDetail(workOrderId, true);
+    } finally {
+      if (mutationId === mutationRequestRef.current) setCreatingAdditionalInterventionVisitAssetId(null);
       if (mutationLockRef.current === mutationId) mutationLockRef.current = null;
     }
   }, [detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
@@ -691,12 +770,15 @@ export function TechnicianFieldHome() {
         transitionError={transitionError}
         assetError={assetError}
         interventionError={interventionError}
+        additionalInterventionError={additionalInterventionError}
         transitioning={transitioning}
         attachingAssetId={attachingAssetId}
         creatingInterventionVisitAssetId={creatingInterventionVisitAssetId}
+        creatingAdditionalInterventionVisitAssetId={creatingAdditionalInterventionVisitAssetId}
         onTransition={(target) => void runVisitTransition(target)}
         onAttachAsset={(assetId) => void runAttachAsset(assetId)}
         onCreatePlannedIntervention={(input) => void runCreatePlannedIntervention(input)}
+        onCreateAdditionalIntervention={(input) => void runCreateAdditionalIntervention(input)}
         onBack={closeJob}
       />
     );
