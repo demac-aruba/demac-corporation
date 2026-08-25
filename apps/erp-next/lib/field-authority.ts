@@ -42,6 +42,7 @@ export type {
   FieldExecutionJobDetail,
   FieldPlannedInterventionOption,
   FieldPlannedWorkProgress,
+  FieldPriceSnapshot,
   FieldScopeChange,
   FieldScopeChangeOrigin,
   FieldTechnicianScopeChangeOrigin,
@@ -89,8 +90,6 @@ function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
 }
 
 async function callFieldAuthority(action: string, data: Record<string, unknown>, timeoutMs = 12_000): Promise<unknown> {
-  // One deadline covers token refresh plus the protected Field request. Otherwise a stalled
-  // Firebase refresh could bypass the Field fetch timeout and leave stale assignments visible.
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
