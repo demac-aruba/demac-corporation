@@ -77,6 +77,14 @@ const intervention = {
   version: 1,
 };
 
+const priceSnapshot = {
+  currency: 'AWG',
+  unitPrice: 75,
+  sourceCatalogItemId: 'service-repair',
+  pricingVersion: 'service-catalog:service-repair:fixed',
+  capturedAt: '2026-08-25T12:40:00.000Z',
+};
+
 const additionalIntervention = {
   id: 'WI-2',
   visitId: 'visit-WO-1',
@@ -87,6 +95,7 @@ const additionalIntervention = {
   origin: 'added_on_site_technician_discovery',
   requestedBy: 'technician',
   status: 'pending_authorization',
+  priceSnapshot,
   scopeChangeId: 'SC-1',
   performedByStaffIds: [],
   createdAt: '2026-08-25T12:40:00.000Z',
@@ -175,6 +184,7 @@ const additionalCreated = parseFieldCreateAdditionalInterventionResponse({
 });
 assert(additionalCreated.workIntervention.status === 'pending_authorization', 'additional work must remain pending authorization after proposal');
 assert(additionalCreated.scopeChange.interventionId === additionalCreated.workIntervention.id, 'ScopeChange and additional WorkIntervention must remain linked');
+assert(additionalCreated.workIntervention.priceSnapshot?.unitPrice === 75, 'additional work must carry the exact governed price snapshot presented for authorization');
 
 assertThrows(
   () => parseFieldExecutionJobResponse({ success: true, version: 1, job: { ...job, workInterventions: undefined } }),
@@ -219,6 +229,30 @@ assertThrows(
 assertThrows(
   () => parseFieldExecutionJobResponse({ success: true, version: 1, job: { ...job, workInterventions: [{ ...intervention, assetId: 'AC-OTHER' }] } }),
   'intervention Asset must match its VisitAsset',
+);
+assertThrows(
+  () => parseFieldExecutionJobResponse({
+    success: true,
+    version: 1,
+    job: { ...job, workInterventions: [{ ...additionalIntervention, priceSnapshot: undefined }], scopeChanges: [scopeChange] },
+  }),
+  'priced additional WorkIntervention without its governed price snapshot must fail closed',
+);
+assertThrows(
+  () => parseFieldExecutionJobResponse({
+    success: true,
+    version: 1,
+    job: { ...job, workInterventions: [{ ...additionalIntervention, priceSnapshot: { ...priceSnapshot, sourceCatalogItemId: 'service-other' } }], scopeChanges: [scopeChange] },
+  }),
+  'additional WorkIntervention price must reference the same canonical Service',
+);
+assertThrows(
+  () => parseFieldExecutionJobResponse({
+    success: true,
+    version: 1,
+    job: { ...job, workInterventions: [{ ...additionalIntervention, priceSnapshot: { ...priceSnapshot, unitPrice: -1 } }], scopeChanges: [scopeChange] },
+  }),
+  'negative or malformed presented price must fail closed',
 );
 assertThrows(
   () => parseFieldExecutionJobResponse({
@@ -272,6 +306,17 @@ assertThrows(
     success: true,
     version: 1,
     replayed: false,
+    scopeChange,
+    workIntervention: { ...additionalIntervention, priceSnapshot: undefined },
+    allowedActions: ['intervention.add'],
+  }),
+  'additional-work creation response must include the governed price presented for authorization',
+);
+assertThrows(
+  () => parseFieldCreateAdditionalInterventionResponse({
+    success: true,
+    version: 1,
+    replayed: false,
     scopeChange: { ...scopeChange, interventionId: 'WI-OTHER' },
     workIntervention: additionalIntervention,
     allowedActions: ['intervention.add'],
@@ -318,5 +363,6 @@ const withAdditionalIntervention = parseFieldExecutionJobResponse({
   },
 });
 assert(withAdditionalIntervention.job.scopeChanges[0].reason === scopeChange.reason, 'canonical ScopeChange reason must remain readable with its pending intervention');
+assert(withAdditionalIntervention.job.workInterventions[0].priceSnapshot?.unitPrice === 75, 'canonical presented price must remain readable with pending authorization');
 
-console.log('Field WorkIntervention + ScopeChange transport-contract acceptance: PASS');
+console.log('Field WorkIntervention + ScopeChange + PriceSnapshot transport-contract acceptance: PASS');

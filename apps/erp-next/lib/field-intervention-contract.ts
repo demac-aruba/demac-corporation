@@ -25,6 +25,10 @@ const WORK_INTERVENTION_STATUSES = new Set([
   'completed',
 ] as const);
 const WORK_INTERVENTION_REQUESTERS = new Set(['office', 'client', 'technician'] as const);
+const PRICED_ADDITIONAL_INTERVENTION_ORIGINS = new Set([
+  'added_on_site_client_request',
+  'added_on_site_technician_discovery',
+] as const);
 const SCOPE_CHANGE_ORIGINS = new Set([
   'client_requested_additional_work',
   'technician_discovered_additional_need',
@@ -65,6 +69,17 @@ export type FieldTechnicianScopeChangeOrigin =
   | 'client_requested_additional_work'
   | 'technician_discovered_additional_need';
 
+export type FieldPriceSnapshot = {
+  currency: string;
+  unitPrice: number;
+  discountAmount?: number;
+  taxAmount?: number;
+  lineTotal?: number;
+  sourceCatalogItemId: string;
+  pricingVersion: string | number;
+  capturedAt: string;
+};
+
 export type FieldWorkIntervention = {
   id: string;
   visitId: string;
@@ -78,6 +93,7 @@ export type FieldWorkIntervention = {
   status: FieldWorkInterventionStatus;
   templateId?: string;
   templateVersion?: number;
+  priceSnapshot?: FieldPriceSnapshot;
   scopeChangeId?: string;
   startedAt?: string;
   completedAt?: string;
@@ -192,6 +208,14 @@ function nonNegativeSafeInteger(value: unknown) {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
+function optionalNonNegativeFiniteNumber(value: unknown) {
+  return value === undefined || nonNegativeFiniteNumber(value);
+}
+
+function pricingVersion(value: unknown) {
+  return string(value) || positiveSafeInteger(value);
+}
+
 function uniqueStrings(value: unknown, { allowEmpty = true } = {}) {
   if (!Array.isArray(value) || (!allowEmpty && value.length === 0)) return false;
   if (!value.every(string)) return false;
@@ -201,6 +225,20 @@ function uniqueStrings(value: unknown, { allowEmpty = true } = {}) {
 function allowedActionsValid(value: unknown): value is FieldAllowedAction[] {
   return Array.isArray(value)
     && value.every((action) => typeof action === 'string' && ALLOWED_ACTIONS.has(action));
+}
+
+function priceSnapshotValid(value: unknown, serviceCatalogItemId: string): value is FieldPriceSnapshot {
+  const item = record(value);
+  return Boolean(item
+    && string(item.currency)
+    && nonNegativeFiniteNumber(item.unitPrice)
+    && optionalNonNegativeFiniteNumber(item.discountAmount)
+    && optionalNonNegativeFiniteNumber(item.taxAmount)
+    && optionalNonNegativeFiniteNumber(item.lineTotal)
+    && string(item.sourceCatalogItemId)
+    && item.sourceCatalogItemId === serviceCatalogItemId
+    && pricingVersion(item.pricingVersion)
+    && timestamp(item.capturedAt));
 }
 
 function workInterventionValid(value: unknown): value is FieldWorkIntervention {
@@ -214,12 +252,15 @@ function workInterventionValid(value: unknown): value is FieldWorkIntervention {
   if (requester && !WORK_INTERVENTION_REQUESTERS.has(requester as FieldWorkInterventionRequester)) return false;
   if (origin === 'planned' && !string(item.plannedWorkLineId)) return false;
   if (origin !== 'planned' && !string(item.scopeChangeId)) return false;
+  if (!string(item.serviceCatalogItemId)) return false;
+  const requiresPrice = PRICED_ADDITIONAL_INTERVENTION_ORIGINS.has(origin as 'added_on_site_client_request' | 'added_on_site_technician_discovery');
+  if (requiresPrice && !priceSnapshotValid(item.priceSnapshot, item.serviceCatalogItemId)) return false;
+  if (!requiresPrice && item.priceSnapshot !== undefined && !priceSnapshotValid(item.priceSnapshot, item.serviceCatalogItemId)) return false;
   return string(item.id)
     && string(item.visitId)
     && string(item.visitAssetId)
     && string(item.assetId)
     && optionalString(item.plannedWorkLineId)
-    && string(item.serviceCatalogItemId)
     && string(item.interventionType)
     && optionalString(item.templateId)
     && (item.templateVersion === undefined || positiveSafeInteger(item.templateVersion))
@@ -352,6 +393,7 @@ function additionalMutationRelationsValid(scopeChange: FieldScopeChange, interve
     || scopeChange.interventionId !== intervention.id
     || intervention.scopeChangeId !== scopeChange.id
     || intervention.status !== 'pending_authorization'
+    || !intervention.priceSnapshot
     || scopeChange.plannedWorkLineId !== undefined
     || intervention.plannedWorkLineId !== undefined) return false;
 
