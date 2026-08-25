@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const { fieldFirestoreData } = require('./fieldOperationsFirestoreData');
 const { allowedActionsForAssignment, fieldError } = require('./fieldOperationsAuthorityCore');
 const { canonicalStatusFromStorage, projectCanonicalWorkVisit, stableRequestId } = require('./fieldOperationsAuthorityWorkVisit');
 const { transitionCanonicalWorkVisit } = require('./fieldOperationsAuthorityTransitions');
@@ -32,7 +33,7 @@ function activeTransitionPatch({ storedVisit, transitionedVisit, target, identit
   if (transitionedVisit.departedAt && !storedVisit.departedAt) patch.departedAt = transitionedVisit.departedAt;
   if (transitionedVisit.arrivedAt && !storedVisit.arrivedAt) patch.arrivedAt = transitionedVisit.arrivedAt;
   if (transitionedVisit.startedAt && !storedVisit.startedAt) patch.startedAt = transitionedVisit.startedAt;
-  return patch;
+  return fieldFirestoreData(patch, 'workVisitTransition');
 }
 
 function transitionAuditEvent({ requestId, visit, previousStatus, nextStatus, identity, occurredAt, nextVersion }) {
