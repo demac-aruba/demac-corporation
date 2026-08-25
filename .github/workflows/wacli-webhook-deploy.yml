@@ -5,10 +5,14 @@ on:
     paths:
       - 'functions/whatsappWacliGateway.js'
       - 'functions/whatsappWacliGateway.test.js'
+      - 'functions/wacliCommunicationBoundary.js'
+      - 'functions/wacliCommunicationBoundary.test.js'
+      - 'functions/wacliBridgeAccountBinding.test.js'
       - 'functions/wacliOutboundMediaUpload.js'
       - 'functions/wacliOutboundMediaUpload.test.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
+      - 'ops/digitalocean/deploy/server-v2.mjs'
       - '.github/workflows/wacli-webhook-deploy.yml'
   push:
     branches:
@@ -16,6 +20,9 @@ on:
     paths:
       - 'functions/whatsappWacliGateway.js'
       - 'functions/whatsappWacliGateway.test.js'
+      - 'functions/wacliCommunicationBoundary.js'
+      - 'functions/wacliCommunicationBoundary.test.js'
+      - 'functions/wacliBridgeAccountBinding.test.js'
       - 'functions/wacliOutboundMediaUpload.js'
       - 'functions/wacliOutboundMediaUpload.test.js'
       - 'functions/bootstrap.js'
@@ -51,15 +58,33 @@ jobs:
         run: |
           set -euo pipefail
           node --check functions/whatsappWacliGateway.js
+          node --check functions/wacliCommunicationBoundary.js
           node --check functions/wacliOutboundMediaUpload.js
           node --check functions/bootstrap.js
-          node --test functions/whatsappWacliGateway.test.js functions/wacliOutboundMediaUpload.test.js
+          node --check ops/digitalocean/deploy/server-v2.mjs
+          node --test \
+            functions/whatsappWacliGateway.test.js \
+            functions/wacliCommunicationBoundary.test.js \
+            functions/wacliBridgeAccountBinding.test.js \
+            functions/wacliOutboundMediaUpload.test.js
           if grep -Eqi 'ed25519|x-demac-bridge-signature|BRIDGE_PUBLIC_KEY|WACLI_BRIDGE_URL|bridgeEndpoint\(|sendQueuedWacliMessage' functions/whatsappWacliGateway.js; then
             echo '::error::Retired inbound-to-Droplet or custom-auth code remains in Firebase gateway.'
             exit 1
           fi
           if ! grep -q 'authorizedBridgeRequest(request)' functions/whatsappWacliGateway.js; then
             echo '::error::Standard Bearer bridge authentication is missing.'
+            exit 1
+          fi
+          if ! grep -q 'requireBoundCommunicationAccount(request)' functions/whatsappWacliGateway.js; then
+            echo '::error::Communication account binding is missing from the Firebase connector boundary.'
+            exit 1
+          fi
+          if ! grep -q 'COMMUNICATION_ACCOUNT_ID' ops/digitalocean/deploy/server-v2.mjs; then
+            echo '::error::DigitalOcean bridge is missing its communication-account deployment assertion.'
+            exit 1
+          fi
+          if ! grep -q 'firebaseConnectorHeaders' ops/digitalocean/deploy/server-v2.mjs; then
+            echo '::error::DigitalOcean bridge must centralize Firebase Bearer/account headers.'
             exit 1
           fi
           if ! grep -q 'authorizedOperationsUser(user.uid)' functions/wacliOutboundMediaUpload.js; then
@@ -100,7 +125,7 @@ jobs:
             deploy='true'
           else
             git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA" > /tmp/changed-files.txt
-            if grep -Eq '^functions/(whatsappWacliGateway\.js|whatsappWacliGateway\.test\.js|wacliOutboundMediaUpload\.js|bootstrap\.js|package\.json)$' /tmp/changed-files.txt; then
+            if grep -Eq '^functions/(whatsappWacliGateway\.js|whatsappWacliGateway\.test\.js|wacliCommunicationBoundary\.js|wacliCommunicationBoundary\.test\.js|wacliBridgeAccountBinding\.test\.js|wacliOutboundMediaUpload\.js|bootstrap\.js|package\.json)$' /tmp/changed-files.txt; then
               deploy='true'
             fi
           fi
