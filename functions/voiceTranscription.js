@@ -167,9 +167,9 @@ async function claimCustomerVoiceTranscription(messageRef, settings, communicati
   return result;
 }
 
-async function finalizeCustomerVoiceClaim(messageRef, claimId, transcriptionVersion, patch) {
+async function finalizeCustomerVoiceClaim(messageRef, claimId, transcriptionVersion, patch, database = db) {
   let written = false;
-  await db.runTransaction(async (transaction) => {
+  await database.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(messageRef);
     if (!snapshot.exists) return;
     const current = snapshot.data() || {};
