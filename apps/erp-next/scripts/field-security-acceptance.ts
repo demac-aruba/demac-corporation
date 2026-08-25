@@ -1,6 +1,12 @@
 import { fieldActionAllowed } from '../lib/field-authorization';
 import { hasCapability as hasLegacyCapability } from '../lib/capabilities';
-import { parseFieldJobResponse, parseFieldPrepareVisitResponse, parseFieldScheduleResponse, type FieldAllowedAction } from '../lib/field-authority-contract';
+import {
+  parseFieldJobResponse,
+  parseFieldPrepareVisitResponse,
+  parseFieldScheduleResponse,
+  parseFieldTransitionVisitResponse,
+  type FieldAllowedAction,
+} from '../lib/field-authority-contract';
 import { defaultAuthenticatedRoute, isAuthenticatedRouteAllowed } from '../lib/role-routing';
 import { requireCapability, roleCapabilities, type AuthPrincipal, type Capability } from '../lib/security';
 
@@ -29,7 +35,7 @@ assert(defaultAuthenticatedRoute('technician') === '/field', 'technician login s
 assert(isAuthenticatedRouteAllowed('/field', 'technician'), 'technician should be allowed to open Field App');
 assert(!isAuthenticatedRouteAllowed('/dashboard', 'technician'), 'technician must not open management dashboard directly');
 assert(defaultAuthenticatedRoute('super_admin') === '/dashboard', 'super admin should keep the management dashboard as default');
-assert(isAuthenticatedRouteAllowed('/field', 'super_admin'), 'super admin should retain access to the read-only Technician Home for support/verification');
+assert(isAuthenticatedRouteAllowed('/field', 'super_admin'), 'super admin should retain access to the Technician Home for support/verification');
 assert(!isAuthenticatedRouteAllowed('/field', 'operations'), 'operations Field read/review capability must not imply access to the Technician Home route');
 assert(!isAuthenticatedRouteAllowed('/field', 'office_operator'), 'office Field read/review capability must not imply access to the Technician Home route');
 assert(isAuthenticatedRouteAllowed('/scheduling/dispatch', 'operations'), 'operations nested scheduling route should remain allowed');
@@ -75,29 +81,6 @@ const deniedProjection: { allowedActions: FieldAllowedAction[] } = { allowedActi
 assert(!fieldActionAllowed(deniedProjection, 'read'), 'client must not expose another-team work when server projects no actions');
 assert(!fieldActionAllowed(deniedProjection, 'execute'), 'client must not infer execution for a denied job');
 
-const representativeJob = {
-  id: 'WO-1',
-  workOrderId: 'WO-1',
-  appointmentId: 'APT-1',
-  date: '2026-08-24',
-  time: '08:30',
-  status: 'Confirmada',
-  customerId: 'CLIENT-1',
-  customerName: 'Customer',
-  propertyId: 'PROPERTY-1',
-  address: 'Santa Cruz 1',
-  plannedWork: [{ id: 'line-1', label: 'Standard Service', quantity: 1 }],
-  estimatedQuantity: 0,
-  vanId: 'VAN-1',
-  responsibility: 'technician',
-  assignmentSource: 'direct_staff',
-  allowedActions: ['read', 'execute'],
-};
-const validSchedule = parseFieldScheduleResponse({ success: true, version: 1, jobs: [representativeJob] });
-assert(validSchedule.jobs[0].workOrderId === 'WO-1', 'valid public schedule transport should parse');
-const validJob = parseFieldJobResponse({ success: true, version: 1, job: { ...representativeJob, knownEquipment: [] } });
-assert(validJob.job.knownEquipment.length === 0, 'valid public job transport should parse');
-
 const representativeVisit = {
   id: 'visit-WO-1',
   appointmentId: 'APT-1',
@@ -118,7 +101,35 @@ const representativeVisit = {
   updatedAt: '2026-08-24T12:00:00.000Z',
   updatedBy: 'uid-1',
   version: 1,
+  availableTransitions: ['en_route'],
 };
+
+const representativeJob = {
+  id: 'WO-1',
+  workOrderId: 'WO-1',
+  appointmentId: 'APT-1',
+  date: '2026-08-24',
+  time: '08:30',
+  status: 'Confirmada',
+  customerId: 'CLIENT-1',
+  customerName: 'Customer',
+  propertyId: 'PROPERTY-1',
+  address: 'Santa Cruz 1',
+  plannedWork: [{ id: 'line-1', label: 'Standard Service', quantity: 1 }],
+  estimatedQuantity: 0,
+  vanId: 'VAN-1',
+  responsibility: 'technician',
+  assignmentSource: 'direct_staff',
+  allowedActions: ['read', 'execute'],
+  fieldVisit: null,
+};
+const validSchedule = parseFieldScheduleResponse({ success: true, version: 1, jobs: [representativeJob] });
+assert(validSchedule.jobs[0].workOrderId === 'WO-1', 'valid public schedule transport should parse');
+assert(validSchedule.jobs[0].fieldVisit === null, 'scheduled job may be readable before a physical WorkVisit is prepared');
+const validJob = parseFieldJobResponse({ success: true, version: 1, job: { ...representativeJob, fieldVisit: representativeVisit, knownEquipment: [] } });
+assert(validJob.job.knownEquipment.length === 0, 'valid public job transport should parse');
+assert(validJob.job.fieldVisit?.status === 'scheduled', 'job transport should preserve canonical WorkVisit state separately from WorkOrder status');
+
 const validPrepare = parseFieldPrepareVisitResponse({
   success: true,
   version: 1,
@@ -130,15 +141,28 @@ const validPrepare = parseFieldPrepareVisitResponse({
 });
 assert(validPrepare.visit.status === 'scheduled' && validPrepare.replayed === false, 'valid visit preparation transport should parse');
 
+const validTransition = parseFieldTransitionVisitResponse({
+  success: true,
+  version: 1,
+  replayed: false,
+  visit: { ...representativeVisit, status: 'en_route', version: 2, availableTransitions: ['on_site'] },
+  allowedActions: ['read', 'execute'],
+  auditEventId: 'FE-2',
+});
+assert(validTransition.visit.status === 'en_route' && validTransition.visit.version === 2, 'valid visit transition transport should parse');
+
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 2, jobs: [] }), 'unknown API version must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1 }), 'missing jobs array must fail closed');
+assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1, jobs: [{ ...representativeJob, fieldVisit: undefined }] }), 'missing current-visit projection must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1, jobs: [{ ...representativeJob, allowedActions: null }] }), 'malformed action projection must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1, jobs: [{ ...representativeJob, allowedActions: ['read', 'future.action'] }] }), 'unknown server action name must fail closed');
 assertThrows(() => parseFieldJobResponse({ success: true, version: 1, job: representativeJob }), 'missing knownEquipment must fail closed');
 assertThrows(() => parseFieldJobResponse({ success: true, version: 1, job: { ...representativeJob, knownEquipment: [{ id: 'AC-1' }] } }), 'malformed equipment row must fail closed');
 assertThrows(() => parseFieldPrepareVisitResponse({ success: true, version: 2, replayed: false, source: 'field_authority', visit: representativeVisit, allowedActions: ['read'] }), 'prepare response with unknown API version must fail closed');
 assertThrows(() => parseFieldPrepareVisitResponse({ success: true, version: 1, replayed: false, source: 'field_authority', visit: { ...representativeVisit, status: 'future_status' }, allowedActions: ['read'] }), 'prepare response with unknown visit status must fail closed');
+assertThrows(() => parseFieldPrepareVisitResponse({ success: true, version: 1, replayed: false, source: 'field_authority', visit: { ...representativeVisit, availableTransitions: ['future_transition'] }, allowedActions: ['execute'] }), 'prepare response with unknown transition must fail closed');
 assertThrows(() => parseFieldPrepareVisitResponse({ success: true, version: 1, replayed: false, source: 'field_authority', visit: representativeVisit, allowedActions: ['execute', 'future.action'] }), 'prepare response with unknown action must fail closed');
+assertThrows(() => parseFieldTransitionVisitResponse({ success: true, version: 1, replayed: false, visit: { ...representativeVisit, availableTransitions: ['future_transition'] }, allowedActions: ['execute'] }), 'transition response with unknown next transition must fail closed');
 
 const inactive: AuthPrincipal = {
   userId: 'user-disabled',
