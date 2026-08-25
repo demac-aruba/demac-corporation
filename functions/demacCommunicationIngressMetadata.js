@@ -3,6 +3,7 @@ const { FieldValue, getFirestore } = require("firebase-admin/firestore");
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { cleanText } = require("./bookingSchedulingPrimitives");
 const {
+  canonicalConversationDocumentId,
   communicationIdentityDecision,
   resolveCommunicationAccountId,
 } = require("./demacCommunicationIdentity");
@@ -29,8 +30,25 @@ function ingressIdentityFromMessage(message = {}) {
   return { communicationAccountId, remoteConversationId, provider, channel, decision };
 }
 
-function conversationVerificationDecision({ identity = {}, conversationExists = false, conversation = {} } = {}) {
+function expectedCanonicalConversationId(identity = {}) {
+  if (identity.decision?.valid !== true) return "";
+  return canonicalConversationDocumentId({
+    message: {
+      communicationAccountId: identity.communicationAccountId,
+      remoteConversationId: identity.remoteConversationId,
+      provider: identity.provider,
+      channel: identity.channel,
+    },
+  });
+}
+
+function conversationVerificationDecision({ identity = {}, conversationId = "", conversationExists = false, conversation = {} } = {}) {
   if (!conversationExists) return { valid: false, reason: "canonical-conversation-missing" };
+  const expectedConversationId = expectedCanonicalConversationId(identity);
+  const actualConversationId = cleanText(conversationId, 300);
+  if (!expectedConversationId || !actualConversationId || actualConversationId !== expectedConversationId) {
+    return { valid: false, reason: "canonical-conversation-id-mismatch" };
+  }
   const messageAccount = cleanText(identity.communicationAccountId, 180).toLowerCase();
   const conversationAccount = cleanText(conversation.communicationAccountId, 180).toLowerCase();
   if (messageAccount && conversationAccount && messageAccount !== conversationAccount) {
@@ -80,6 +98,7 @@ exports.stampCommunicationMessageFirstSeen = onDocumentCreated(
       const conversation = conversationSnapshot.exists ? conversationSnapshot.data() || {} : {};
       const verification = conversationVerificationDecision({
         identity,
+        conversationId,
         conversationExists: conversationSnapshot.exists,
         conversation,
       });
@@ -100,4 +119,5 @@ exports.stampCommunicationMessageFirstSeen = onDocumentCreated(
 
 module.exports.INGRESS_METADATA_VERSION = INGRESS_METADATA_VERSION;
 module.exports.conversationVerificationDecision = conversationVerificationDecision;
+module.exports.expectedCanonicalConversationId = expectedCanonicalConversationId;
 module.exports.ingressIdentityFromMessage = ingressIdentityFromMessage;
