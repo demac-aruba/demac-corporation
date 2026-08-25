@@ -51,6 +51,7 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
     'get_schedule',
     'prepare_visit',
     'record_additional_intervention_decision',
+    'register_visit_asset',
     'transition_visit',
   ]);
 
@@ -69,6 +70,10 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
   );
   await assert.rejects(
     () => api.execute({ action: 'attach_visit_asset', data: {}, identity: { operations: false } }),
+    (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
+  );
+  await assert.rejects(
+    () => api.execute({ action: 'register_visit_asset', data: {}, identity: { operations: false } }),
     (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
   );
   await assert.rejects(
@@ -232,6 +237,7 @@ test('attach_visit_asset authenticates and forwards only canonical visit/asset i
       visitId: ' visit-WO-1 ',
       assetId: ' AC-1 ',
       requestId: ' attach-asset-001 ',
+      source: 'registered_on_site',
       allowedActions: ['price.override'],
       customerId: 'CLIENT-OTHER',
     },
@@ -243,6 +249,7 @@ test('attach_visit_asset authenticates and forwards only canonical visit/asset i
   assert.equal(calls[0].visitId, 'visit-WO-1');
   assert.equal(calls[0].assetId, 'AC-1');
   assert.equal(calls[0].requestId, 'attach-asset-001');
+  assert.equal(calls[0].source, 'existing_asset');
   assert.equal(calls[0].identity.staffId, 'staff-1');
   assert.equal('allowedActions' in calls[0], false);
   assert.equal('customerId' in calls[0], false);
@@ -316,6 +323,7 @@ test('Field mutation actions cannot execute without authentication', async () =>
   let prepareCalled = false;
   let transitionCalled = false;
   let attachCalled = false;
+  let registerCalled = false;
   let interventionCalled = false;
   let additionalInterventionCalled = false;
   let decisionCalled = false;
@@ -325,6 +333,7 @@ test('Field mutation actions cannot execute without authentication', async () =>
     prepareWorkVisit: async () => { prepareCalled = true; return { success: true }; },
     transitionWorkVisit: async () => { transitionCalled = true; return { success: true }; },
     attachExistingVisitAsset: async () => { attachCalled = true; return { success: true }; },
+    registerEquipmentSystem: async () => { registerCalled = true; return { success: true }; },
     createPlannedWorkIntervention: async () => { interventionCalled = true; return { success: true }; },
     createAdditionalWorkIntervention: async () => { additionalInterventionCalled = true; return { success: true }; },
     recordAdditionalWorkDecision: async () => { decisionCalled = true; return { success: true }; },
@@ -342,6 +351,10 @@ test('Field mutation actions cannot execute without authentication', async () =>
   assert.equal(attach.status, 401);
   assert.equal(attach.body.error.code, 'unauthenticated');
 
+  const registration = await api.handle(request({ action: 'register_visit_asset', data: { visitId: 'visit-WO-1', requestId: 'register-asset-001' } }));
+  assert.equal(registration.status, 401);
+  assert.equal(registration.body.error.code, 'unauthenticated');
+
   const intervention = await api.handle(request({ action: 'create_planned_intervention', data: { visitId: 'visit-WO-1', visitAssetId: 'VA-1', plannedWorkLineId: 'line-standard', serviceCatalogItemId: 'service-standard', requestId: 'planned-intervention-001' } }));
   assert.equal(intervention.status, 401);
   assert.equal(intervention.body.error.code, 'unauthenticated');
@@ -357,6 +370,7 @@ test('Field mutation actions cannot execute without authentication', async () =>
   assert.equal(prepareCalled, false);
   assert.equal(transitionCalled, false);
   assert.equal(attachCalled, false);
+  assert.equal(registerCalled, false);
   assert.equal(interventionCalled, false);
   assert.equal(additionalInterventionCalled, false);
   assert.equal(decisionCalled, false);
