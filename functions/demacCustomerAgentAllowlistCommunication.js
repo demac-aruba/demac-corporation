@@ -23,7 +23,7 @@ function safeDocumentId(value) {
 }
 
 function conversationIdentity(message = {}) {
-  return cleanText(message.chat || message.conversationId || message.phone, 300);
+  return cleanText(message.conversationId || message.chat || message.phone, 300);
 }
 
 async function loadMayaReplySettings() {
@@ -35,7 +35,7 @@ async function recordObservationState({ conversationId, decision }) {
   if (!conversationId) return;
   try {
     await db.collection("communicationConversations").doc(safeDocumentId(conversationId)).set({
-      mayaMode: decision.allowed ? "test_active" : "observe_only",
+      mayaMode: decision.allowed ? "pilot_active" : "observe_only",
       mayaAutoReplyAllowed: decision.allowed,
       mayaAutoReplyDecisionReason: decision.reason,
       mayaAutoReplyPolicyCheckedAt: FieldValue.serverTimestamp(),
@@ -49,12 +49,22 @@ async function recordObservationState({ conversationId, decision }) {
   }
 }
 
-async function evaluateInboundPolicy(message = {}) {
+async function evaluateInboundPolicy(message = {}, policyContext = {}) {
   const settings = await loadMayaReplySettings();
-  const decision = mayaReplyDecision({ message, settings });
   const conversationId = conversationIdentity(message);
+  const conversationSnapshot = conversationId
+    ? await db.collection("communicationConversations").doc(safeDocumentId(conversationId)).get()
+    : null;
+  const conversation = conversationSnapshot?.exists ? conversationSnapshot.data() || {} : {};
+  const decision = mayaReplyDecision({
+    message,
+    conversation,
+    settings,
+    isNewContact: policyContext.isNewContact === true,
+    authorizedWorkflow: cleanText(policyContext.authorizedWorkflow, 80),
+  });
   await recordObservationState({ conversationId, decision });
-  return { decision, conversationId };
+  return { decision, conversationId, conversation, settings };
 }
 
 async function evaluateConversationPolicy(conversationId, conversation = {}) {
@@ -62,6 +72,25 @@ async function evaluateConversationPolicy(conversationId, conversation = {}) {
   const decision = mayaReplyDecision({ conversation, settings });
   await recordObservationState({ conversationId, decision });
   return decision;
+}
+
+function voiceTranscriptBecameReady(before = {}, after = {}) {
+  const mediaType = cleanText(after.mediaType || after.type, 40).toLowerCase();
+  if (!["audio", "voice"].includes(mediaType) || after.direction !== "inbound") return false;
+  const beforeTranscript = cleanText(before.rawTranscript || before.transcript, 8_000);
+  const afterTranscript = cleanText(after.rawTranscript || after.transcript, 8_000);
+  return after.transcriptionStatus === "completed" && Boolean(afterTranscript) && afterTranscript !== beforeTranscript;
+}
+
+function voiceTranscriptRuntimeMessage(message = {}) {
+  const transcript = cleanText(message.rawTranscript || message.transcript, 8_000);
+  if (!transcript) return null;
+  return {
+    ...message,
+    text: transcript,
+    mediaCaption: "",
+    mayaInputModality: "voice_transcript",
+  };
 }
 
 exports.processCustomerAgentInbound = onDocumentCreated(
@@ -78,8 +107,16 @@ exports.processCustomerAgentInbound = onDocumentCreated(
     if (!snapshot) return;
     const message = { id: snapshot.id, ...snapshot.data() };
     if (!message || message.direction !== "inbound") return;
+    const mediaType = cleanText(message.mediaType || message.type, 40).toLowerCase();
+    if (["audio", "voice"].includes(mediaType) && !cleanText(message.rawTranscript || message.transcript, 8_000)) {
+      return;
+    }
 
-    const { decision } = await evaluateInboundPolicy(message);
+    const runtimeMessage = ["audio", "voice"].includes(mediaType)
+      ? voiceTranscriptRuntimeMessage(message)
+      : message;
+    if (!runtimeMessage) return;
+    const { decision } = await evaluateInboundPolicy(runtimeMessage);
     if (!decision.allowed) {
       logger.info("Maya observed inbound WhatsApp message without replying.", {
         messageId: cleanText(message.messageId || snapshot.id, 300),
@@ -91,7 +128,38 @@ exports.processCustomerAgentInbound = onDocumentCreated(
 
     await customerAgentCommunication.processQueueEvent({
       messageId: cleanText(message.messageId || snapshot.id, 300),
-      message,
+      message: runtimeMessage,
+    });
+  },
+);
+
+exports.processCustomerAgentVoiceTranscript = onDocumentUpdated(
+  {
+    document: "whatsappMessages/{messageId}",
+    region: "us-central1",
+    memory: "512MiB",
+    timeoutSeconds: 120,
+    retry: true,
+    secrets: [openAiApiKey],
+  },
+  async (event) => {
+    const before = event.data?.before?.data() || {};
+    const after = event.data?.after?.data() || {};
+    if (!voiceTranscriptBecameReady(before, after)) return;
+    const runtimeMessage = voiceTranscriptRuntimeMessage({ id: event.params.messageId, ...after });
+    if (!runtimeMessage) return;
+    const { decision } = await evaluateInboundPolicy(runtimeMessage);
+    if (!decision.allowed) {
+      logger.info("Maya understood customer voice but Reply Policy kept it observe-only.", {
+        messageId: cleanText(after.messageId || event.params.messageId, 300),
+        phone: decision.phone || null,
+        reason: decision.reason,
+      });
+      return;
+    }
+    await customerAgentCommunication.processQueueEvent({
+      messageId: cleanText(after.messageId || event.params.messageId, 300),
+      message: runtimeMessage,
     });
   },
 );
@@ -113,7 +181,7 @@ exports.processCustomerAgentReactivation = onDocumentUpdated(
 
     const decision = await evaluateConversationPolicy(event.params.conversationId, after);
     if (!decision.allowed) {
-      logger.info("Maya conversation reactivation stayed in observe-only mode because the phone is not allowlisted.", {
+      logger.info("Maya conversation reactivation stayed in observe-only mode because Reply Policy blocked it.", {
         conversationId: event.params.conversationId,
         phone: decision.phone || null,
         reason: decision.reason,
@@ -131,3 +199,5 @@ module.exports.conversationIdentity = conversationIdentity;
 module.exports.evaluateConversationPolicy = evaluateConversationPolicy;
 module.exports.evaluateInboundPolicy = evaluateInboundPolicy;
 module.exports.loadMayaReplySettings = loadMayaReplySettings;
+module.exports.voiceTranscriptBecameReady = voiceTranscriptBecameReady;
+module.exports.voiceTranscriptRuntimeMessage = voiceTranscriptRuntimeMessage;
