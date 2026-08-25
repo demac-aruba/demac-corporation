@@ -8,7 +8,10 @@ if (!getApps().length) {
   initializeApp({ projectId: "demo-demac", storageBucket: "demo-demac.appspot.com" });
 }
 
-const { conversationIngressState } = require("./whatsappWacliGateway");
+const {
+  conversationIngressState,
+  outboundQueueAccountMatches,
+} = require("./whatsappWacliGateway");
 
 test("new inbound WhatsApp conversations start under AI ownership", () => {
   const state = conversationIngressState({ current: {}, exists: false, inbound: true });
@@ -82,12 +85,31 @@ test("new outbound-only conversations remain human-owned", () => {
   assert.equal(state.aiDisposition, "human_active");
 });
 
+test("outbound polling is strictly scoped to the bridge communication account", () => {
+  assert.equal(outboundQueueAccountMatches({ communicationAccountId: "demac-wa-corporate" }, "DEMAC-WA-CORPORATE"), true);
+  assert.equal(outboundQueueAccountMatches({ communicationAccountId: "demac-wa-test" }, "demac-wa-corporate"), false);
+  assert.equal(outboundQueueAccountMatches({}, "demac-wa-corporate"), false);
+});
+
 test("message direction follows the Wacli FromMe message contract", () => {
   const source = fs.readFileSync(path.join(__dirname, "whatsappWacliGateway.js"), "utf8");
   assert.match(source, /const inbound = payload\.FromMe === false;/);
   assert.doesNotMatch(source, /const inbound = payload\.IsFromMe/);
   assert.match(source, /direction: inbound \? "inbound" : "outbound"/);
   assert.match(source, /role: inbound \? "customer" : "operator"/);
+});
+
+test("gateway creates canonical account-scoped message identity before persistence", () => {
+  const source = fs.readFileSync(path.join(__dirname, "whatsappWacliGateway.js"), "utf8");
+  assert.match(source, /wacliCanonicalIdentity\(\{ communicationAccountId, chat, providerMessageId \}\)/);
+  assert.match(source, /persistCanonicalMessage\(\{/);
+  assert.doesNotMatch(source, /whatsappMessages"\)\.doc\(safeDocumentId\(messageId\)\)\.set/);
+});
+
+test("gateway requires the authenticated bridge account boundary before webhook media poll and ack work", () => {
+  const source = fs.readFileSync(path.join(__dirname, "whatsappWacliGateway.js"), "utf8");
+  const matches = source.match(/requireBoundCommunicationAccount\(request\)/g) || [];
+  assert.ok(matches.length >= 4, `expected account binding on four connector endpoints, found ${matches.length}`);
 });
 
 test("gateway contains no language keyword router or operator auto-assignment", () => {

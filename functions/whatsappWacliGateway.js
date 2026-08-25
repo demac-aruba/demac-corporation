@@ -5,11 +5,17 @@ const logger = require("firebase-functions/logger");
 const { defineSecret } = require("firebase-functions/params");
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { onRequest } = require("firebase-functions/v2/https");
+const {
+  assignedCustomerInputVersion,
+  safeEpoch,
+  wacliCanonicalIdentity,
+  wacliCanonicalStatusId,
+  wacliCommunicationAccountDecision,
+} = require("./wacliCommunicationBoundary");
 
 const db = getFirestore();
 const storage = getStorage();
 const wacliBridgeToken = defineSecret("WACLI_BRIDGE_TOKEN");
-
 
 const MAX_RECENT_MESSAGES = 120;
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
@@ -60,6 +66,22 @@ function authorizedBridgeRequest(request) {
   const header = String(request.get("authorization") || "");
   if (!header.startsWith("Bearer ")) return false;
   return safeSecretEqual(header.slice(7).trim(), String(wacliBridgeToken.value() || "").trim());
+}
+
+function httpError(statusCode, message, code = "") {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  if (code) error.code = code;
+  return error;
+}
+
+async function requireBoundCommunicationAccount(request) {
+  const snapshot = await db.collection("businessSettings").doc("whatsapp").get();
+  const settings = snapshot.exists ? snapshot.data() || {} : {};
+  const decision = wacliCommunicationAccountDecision({ request, settings });
+  if (decision.allowed) return decision.assertedAccountId;
+  const statusCode = decision.reason === "communication-account-not-configured" ? 503 : 403;
+  throw httpError(statusCode, `Wacli communication account rejected: ${decision.reason}.`, decision.reason);
 }
 
 function conversationIngressState({ current = {}, exists = false, inbound = false } = {}) {
@@ -144,9 +166,9 @@ function extensionFromMedia(media) {
   return "";
 }
 
-async function fetchAndStoreProfilePicture({ chat, profilePicture }) {
-  if (!chat || !profilePicture?.sourceUrl) return null;
-  const conversationRef = db.collection("communicationConversations").doc(safeDocumentId(chat));
+async function fetchAndStoreProfilePicture({ communicationAccountId, conversationId, profilePicture }) {
+  if (!communicationAccountId || !conversationId || !profilePicture?.sourceUrl) return null;
+  const conversationRef = db.collection("communicationConversations").doc(conversationId);
   const currentSnapshot = await conversationRef.get();
   const current = currentSnapshot.exists ? currentSnapshot.data() : {};
   if (current?.profilePictureSourceUrl === profilePicture.sourceUrl && current?.profilePictureUrl) {
@@ -169,7 +191,7 @@ async function fetchAndStoreProfilePicture({ chat, profilePicture }) {
   if (bytes.length > MAX_AVATAR_BYTES) throw new Error("WhatsApp profile picture exceeds the configured maximum size.");
 
   const bucket = storage.bucket();
-  const storagePath = `communication-avatars/wacli/${safeStorageSegment(chat)}`;
+  const storagePath = `communication-avatars/wacli/${safeStorageSegment(communicationAccountId)}/${safeStorageSegment(conversationId)}`;
   const downloadToken = crypto.randomUUID();
   const contentType = response.headers.get("content-type") || "image/jpeg";
   await bucket.file(storagePath).save(bytes, {
@@ -191,6 +213,7 @@ async function fetchAndStoreProfilePicture({ chat, profilePicture }) {
 function normalizeRecentMessage(message) {
   return {
     id: String(message.id || `msg-${Date.now()}`),
+    providerMessageId: message.providerMessageId || null,
     at: normalizeTimestamp(message.at),
     author: String(message.author || "WhatsApp"),
     role: message.role || "customer",
@@ -206,6 +229,9 @@ function normalizeRecentMessage(message) {
     mediaUrl: message.mediaUrl || null,
     reactionToId: message.reactionToId || null,
     reactionEmoji: message.reactionEmoji || null,
+    customerInputVersion: Number.isSafeInteger(Number(message.customerInputVersion))
+      ? Number(message.customerInputVersion)
+      : null,
   };
 }
 
@@ -221,28 +247,119 @@ function mergeRecentMessages(existing, incoming) {
     .slice(-MAX_RECENT_MESSAGES);
 }
 
-async function appendConversationMessage({ chat, phone, chatName, message, inbound, profilePicture }) {
-  const conversationId = safeDocumentId(chat || phone);
-  const ref = db.collection("communicationConversations").doc(conversationId);
+async function persistCanonicalMessage({
+  communicationAccountId,
+  payload,
+  providerMessageId,
+  chat,
+  phone,
+  chatName,
+  inbound,
+  profilePicture,
+  media,
+  text,
+  reactionEmoji,
+  reactionToId,
+  webhookEventId,
+}) {
+  const identity = wacliCanonicalIdentity({ communicationAccountId, chat, providerMessageId });
+  if (!identity.conversationId || !identity.messageId) {
+    throw httpError(400, "Canonical Wacli conversation/message identity is incomplete.", "invalid-canonical-identity");
+  }
+  const messageRef = db.collection("whatsappMessages").doc(identity.messageId);
+  const conversationRef = db.collection("communicationConversations").doc(identity.conversationId);
+  const nowIso = new Date().toISOString();
 
-  await db.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(ref);
-    const current = snapshot.exists ? snapshot.data() : {};
-    const recentMessages = mergeRecentMessages(current?.recentMessages, message);
-    const ingress = conversationIngressState({ current, exists: snapshot.exists, inbound });
-    const lastMessageText = String(message.text || message.mediaCaption || message.reactionEmoji || (message.mediaType ? mediaPreview(message) : ""));
+  return db.runTransaction(async (transaction) => {
+    const [messageSnapshot, conversationSnapshot] = await Promise.all([
+      transaction.get(messageRef),
+      transaction.get(conversationRef),
+    ]);
+    const existingMessage = messageSnapshot.exists ? messageSnapshot.data() || {} : {};
+    const current = conversationSnapshot.exists ? conversationSnapshot.data() || {} : {};
+    const customerInputVersion = assignedCustomerInputVersion({
+      currentConversation: current,
+      existingMessage,
+      inbound,
+      messageExists: messageSnapshot.exists,
+    });
+    const recentMessages = mergeRecentMessages(current.recentMessages, {
+      id: identity.messageId,
+      providerMessageId,
+      at: payload.Timestamp,
+      author: inbound ? (chatName || phone || "Customer") : "DEMAC",
+      role: inbound ? "customer" : "operator",
+      text,
+      status: inbound ? "received" : "sent",
+      mediaType: media?.mediaType || null,
+      mediaCaption: media?.mediaCaption || null,
+      mediaFileName: media?.mediaFileName || null,
+      mediaMimeType: media?.mediaMimeType || null,
+      mediaSize: media?.mediaSize || null,
+      mediaUrl: media?.mediaUrl || null,
+      reactionEmoji,
+      reactionToId,
+      customerInputVersion,
+    });
+    const ingress = conversationIngressState({ current, exists: conversationSnapshot.exists, inbound });
+    const lastMessageText = String(text || media?.mediaCaption || reactionEmoji || (media ? mediaPreview(media) : ""));
+    const unread = inbound && !messageSnapshot.exists
+      ? Number(current.unread || 0) + 1
+      : Number(current.unread || 0);
+    const conversationInputVersion = inbound
+      ? Math.max(safeEpoch(current.customerInputVersion), Number(customerInputVersion || 0))
+      : safeEpoch(current.customerInputVersion);
 
-    transaction.set(ref, {
+    transaction.set(messageRef, {
+      provider: "wacli",
+      channel: "whatsapp",
+      messageId: identity.messageId,
+      providerMessageId,
+      remoteMessageId: providerMessageId,
+      conversationId: identity.conversationId,
+      communicationAccountId,
+      remoteConversationId: identity.remoteConversationId,
+      chat,
+      chatName: chatName || null,
+      phone: phone || null,
+      senderJid: payload.SenderJID || null,
+      senderName: payload.SenderName || null,
+      direction: inbound ? "inbound" : "outbound",
+      type: reactionEmoji ? "reaction" : (media?.mediaType || "text"),
+      text,
+      reactionEmoji,
+      reactionToId,
+      mediaType: media?.mediaType || null,
+      mediaCaption: media?.mediaCaption || null,
+      mediaFileName: media?.mediaFileName || null,
+      mediaMimeType: media?.mediaMimeType || null,
+      mediaSize: media?.mediaSize || null,
+      mediaUrl: media?.mediaUrl || null,
+      whatsappTimestamp: payload.Timestamp || null,
+      customerInputVersion,
+      status: inbound ? "received" : "sent",
+      raw: payload,
+      webhookEventId,
+      receivedAt: existingMessage.receivedAt || FieldValue.serverTimestamp(),
+      firstReceivedAt: existingMessage.firstReceivedAt || FieldValue.serverTimestamp(),
+      firstIngestedAtIso: existingMessage.firstIngestedAtIso || nowIso,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    transaction.set(conversationRef, {
       channel: "whatsapp",
       provider: "wacli",
+      communicationAccountId,
+      conversationId: identity.conversationId,
+      remoteConversationId: identity.remoteConversationId,
       externalChatId: chat || null,
       chatJid: chat || null,
-      phone: phone || current?.phone || null,
-      customer: chatName || current?.customer || phone || "WhatsApp contact",
-      customerId: current?.customerId || null,
-      property: current?.property || null,
-      equipment: current?.equipment || null,
-      language: current?.language || "unknown",
+      phone: phone || current.phone || null,
+      customer: chatName || current.customer || phone || "WhatsApp contact",
+      customerId: current.customerId || null,
+      property: current.property || null,
+      equipment: current.equipment || null,
+      language: current.language || "unknown",
       queue: ingress.queue,
       status: ingress.status,
       owner: ingress.owner,
@@ -251,43 +368,73 @@ async function appendConversationMessage({ chat, phone, chatName, message, inbou
       aiDisposition: ingress.aiDisposition,
       lockedBy: ingress.lockedBy,
       lockedByUserId: ingress.lockedByUserId,
-      unread: inbound ? FieldValue.increment(1) : Number(current?.unread || 0),
+      ownershipVersion: safeEpoch(current.ownershipVersion),
+      customerInputVersion: conversationInputVersion,
+      unread,
       lastMessageText,
       lastActivityAt: FieldValue.serverTimestamp(),
       customerTyping: false,
       recentMessages,
       ...(profilePicture || {}),
-      createdAt: current?.createdAt || FieldValue.serverTimestamp(),
+      createdAt: current.createdAt || FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
-  });
 
-  return conversationId;
+    return {
+      conversationId: identity.conversationId,
+      messageId: identity.messageId,
+      providerMessageId,
+      customerInputVersion,
+      replayed: messageSnapshot.exists,
+    };
+  });
 }
 
-async function updateReceipt(payload) {
-  const messageIds = Array.isArray(payload.MessageIDs) ? payload.MessageIDs.filter(Boolean) : [];
-  if (!messageIds.length) return;
+async function updateReceipt(communicationAccountId, payload) {
+  const providerMessageIds = Array.isArray(payload.MessageIDs) ? payload.MessageIDs.filter(Boolean) : [];
+  if (!providerMessageIds.length) return;
   const status = String(payload.Type || "delivered");
-  const chat = String(payload.Chat || "");
-  const conversationRef = chat ? db.collection("communicationConversations").doc(safeDocumentId(chat)) : null;
+  const chat = String(payload.Chat || "").trim();
+  if (!chat) throw httpError(400, "Receipt Chat is required for account-scoped message identity.", "receipt-chat-missing");
+  const conversationIdentity = wacliCanonicalIdentity({ communicationAccountId, chat });
+  if (!conversationIdentity.conversationId) throw httpError(400, "Receipt conversation identity is invalid.");
+  const conversationRef = db.collection("communicationConversations").doc(conversationIdentity.conversationId);
+  const canonicalMessageIds = [];
 
-  for (const messageId of messageIds) {
-    const messageRef = db.collection("whatsappMessages").doc(safeDocumentId(messageId));
-    await messageRef.set({
-      messageId,
-      provider: "wacli",
+  for (const providerMessageId of providerMessageIds) {
+    const identity = wacliCanonicalIdentity({ communicationAccountId, chat, providerMessageId });
+    if (!identity.messageId) continue;
+    canonicalMessageIds.push(identity.messageId);
+    const messageRef = db.collection("whatsappMessages").doc(identity.messageId);
+    const messageSnapshot = await messageRef.get();
+    if (messageSnapshot.exists) {
+      await messageRef.set({
+        communicationAccountId,
+        conversationId: identity.conversationId,
+        remoteConversationId: identity.remoteConversationId,
+        providerMessageId,
+        status,
+        lastStatusAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+
+    const statusId = wacliCanonicalStatusId({
+      communicationAccountId,
+      chat,
+      providerMessageId,
       status,
-      lastStatusAt: FieldValue.serverTimestamp(),
-    }, { merge: true });
-
-    const statusRef = db.collection("whatsappMessageStatuses").doc(
-      safeDocumentId(`${messageId}-${status}-${payload.Timestamp || Date.now()}`),
-    );
-    await statusRef.set({
+      providerTimestamp: payload.Timestamp,
+    });
+    if (!statusId) continue;
+    await db.collection("whatsappMessageStatuses").doc(statusId).set({
       provider: "wacli",
-      messageId,
-      chat: chat || null,
+      channel: "whatsapp",
+      communicationAccountId,
+      conversationId: identity.conversationId,
+      messageId: identity.messageId,
+      providerMessageId,
+      remoteConversationId: identity.remoteConversationId,
+      chat,
       status,
       whatsappTimestamp: payload.Timestamp || null,
       raw: payload,
@@ -295,13 +442,13 @@ async function updateReceipt(payload) {
     }, { merge: true });
   }
 
-  if (conversationRef) {
+  if (canonicalMessageIds.length) {
     await db.runTransaction(async (transaction) => {
       const snapshot = await transaction.get(conversationRef);
       if (!snapshot.exists) return;
       const current = snapshot.data() || {};
       const recentMessages = (Array.isArray(current.recentMessages) ? current.recentMessages : []).map((message) => (
-        messageIds.includes(String(message?.id)) ? { ...message, status } : message
+        canonicalMessageIds.includes(String(message?.id)) ? { ...message, status } : message
       ));
       transaction.set(conversationRef, {
         recentMessages,
@@ -311,13 +458,23 @@ async function updateReceipt(payload) {
   }
 }
 
-async function updateChatPresence(payload) {
-  const chat = String(payload.Chat || "");
+async function updateChatPresence(communicationAccountId, payload) {
+  const chat = String(payload.Chat || "").trim();
   if (!chat) return;
-  await db.collection("communicationConversations").doc(safeDocumentId(chat)).set({
+  const identity = wacliCanonicalIdentity({ communicationAccountId, chat });
+  if (!identity.conversationId) return;
+  await db.collection("communicationConversations").doc(identity.conversationId).set({
+    provider: "wacli",
+    channel: "whatsapp",
+    communicationAccountId,
+    conversationId: identity.conversationId,
+    remoteConversationId: identity.remoteConversationId,
+    externalChatId: chat,
+    chatJid: chat,
     customerTyping: payload.State === "composing",
     typingMedia: payload.Media || null,
     lastPresenceAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
 }
 
@@ -340,32 +497,44 @@ exports.wacliWebhook = onRequest(
       return;
     }
 
-    const payload = request.body ?? {};
-    const eventType = String(payload.EventType || "message");
-    const eventRef = db.collection("whatsappWebhookEvents").doc();
-
+    let eventRef = null;
     try {
+      const communicationAccountId = await requireBoundCommunicationAccount(request);
+      const payload = request.body ?? {};
+      const eventType = String(payload.EventType || "message");
+      eventRef = db.collection("whatsappWebhookEvents").doc();
+
       if (eventType === "receipt") {
-        await updateReceipt(payload);
+        await updateReceipt(communicationAccountId, payload);
       } else if (eventType === "chat_presence") {
-        await updateChatPresence(payload);
+        await updateChatPresence(communicationAccountId, payload);
       } else {
-        const chat = String(payload.Chat || "");
-        const messageId = String(payload.ID || `${eventRef.id}-${Date.now()}`);
+        const chat = String(payload.Chat || "").trim();
+        const providerMessageId = String(payload.ID || "").trim();
+        if (!chat || !providerMessageId) {
+          throw httpError(400, "Wacli message events require Chat and provider message ID.", "message-identity-missing");
+        }
         const inbound = payload.FromMe === false;
         const chatName = String(payload.ChatName || payload.SenderName || "").trim();
         const resolvedPhone = digitsOnly(payload?.ResolvedPhone || payload?.Identity?.ResolvedPhone || "");
         const phone = resolvedPhone || phoneFromChat(chat);
         const media = normalizeMedia(payload);
+        const identity = wacliCanonicalIdentity({ communicationAccountId, chat, providerMessageId });
+        if (!identity.conversationId || !identity.messageId) throw httpError(400, "Wacli message identity is invalid.");
 
         let profilePicture = null;
         const profilePictureMeta = normalizeProfilePicture(payload);
         if (profilePictureMeta) {
           try {
-            profilePicture = await fetchAndStoreProfilePicture({ chat, profilePicture: profilePictureMeta });
+            profilePicture = await fetchAndStoreProfilePicture({
+              communicationAccountId,
+              conversationId: identity.conversationId,
+              profilePicture: profilePictureMeta,
+            });
           } catch (error) {
             logger.warn("Could not persist WhatsApp profile picture; message processing continues.", {
-              chat,
+              communicationAccountId,
+              conversationId: identity.conversationId,
               errorMessage: error?.message || String(error),
             });
           }
@@ -374,77 +543,47 @@ exports.wacliWebhook = onRequest(
         const text = String(payload.Text || payload.Caption || media?.mediaCaption || (media ? mediaPreview(media) : ""));
         const reactionEmoji = String(payload.ReactionEmoji || "").trim() || null;
         const reactionToId = String(payload.ReactionToID || "").trim() || null;
-
-        await db.collection("whatsappMessages").doc(safeDocumentId(messageId)).set({
-          provider: "wacli",
-          channel: "whatsapp",
-          messageId,
-          chat,
-          chatName: chatName || null,
-          phone: phone || null,
-          senderJid: payload.SenderJID || null,
-          senderName: payload.SenderName || null,
-          direction: inbound ? "inbound" : "outbound",
-          type: reactionEmoji ? "reaction" : (media?.mediaType || "text"),
-          text,
-          reactionEmoji,
-          reactionToId,
-          mediaType: media?.mediaType || null,
-          mediaCaption: media?.mediaCaption || null,
-          mediaFileName: media?.mediaFileName || null,
-          mediaMimeType: media?.mediaMimeType || null,
-          mediaSize: media?.mediaSize || null,
-          mediaUrl: media?.mediaUrl || null,
-          whatsappTimestamp: payload.Timestamp || null,
-          status: inbound ? "received" : "sent",
-          raw: payload,
-          webhookEventId: eventRef.id,
-          receivedAt: FieldValue.serverTimestamp(),
-        }, { merge: true });
-
-        await appendConversationMessage({
+        await persistCanonicalMessage({
+          communicationAccountId,
+          payload,
+          providerMessageId,
           chat,
           phone,
           chatName,
           inbound,
           profilePicture,
-          message: {
-            id: messageId,
-            at: payload.Timestamp,
-            author: inbound ? (chatName || phone || "Customer") : "DEMAC",
-            role: inbound ? "customer" : "operator",
-            text,
-            status: inbound ? "received" : "sent",
-            mediaType: media?.mediaType || null,
-            mediaCaption: media?.mediaCaption || null,
-            mediaFileName: media?.mediaFileName || null,
-            mediaMimeType: media?.mediaMimeType || null,
-            mediaSize: media?.mediaSize || null,
-            mediaUrl: media?.mediaUrl || null,
-            reactionEmoji,
-            reactionToId,
-          },
+          media,
+          text,
+          reactionEmoji,
+          reactionToId,
+          webhookEventId: eventRef.id,
         });
       }
 
       await eventRef.set({
         source: "wacli",
+        provider: "wacli",
+        channel: "whatsapp",
+        communicationAccountId,
         eventType,
         processed: true,
-        auth: "bridge-bearer-v1",
+        auth: "bridge-bearer-account-bound-v1",
         receivedAt: FieldValue.serverTimestamp(),
       });
       response.status(200).json({ ok: true });
     } catch (error) {
       logger.error("Could not process wacli webhook event.", error);
-      await eventRef.set({
-        source: "wacli",
-        eventType,
-        processed: false,
-        errorMessage: error?.message || "Unknown wacli webhook error",
-        receivedAt: FieldValue.serverTimestamp(),
-      }).catch(() => {});
-      response.status(500).send("Webhook processing failed");
+      if (eventRef) {
+        await eventRef.set({
+          source: "wacli",
+          processed: false,
+          errorCode: error?.code || null,
+          errorMessage: error?.message || "Unknown wacli webhook error",
+          receivedAt: FieldValue.serverTimestamp(),
+        }).catch(() => {});
+      }
+      const status = Number(error?.statusCode || 500);
+      response.status(status).json({ error: error?.message || "Webhook processing failed", code: error?.code || null });
     }
   },
 );
@@ -453,12 +592,6 @@ function requestRawBody(request) {
   if (Buffer.isBuffer(request.rawBody)) return request.rawBody;
   if (Buffer.isBuffer(request.body)) return request.body;
   return Buffer.alloc(0);
-}
-
-function httpError(statusCode, message) {
-  const error = new Error(message);
-  error.statusCode = statusCode;
-  return error;
 }
 
 function outboundMediaKind(media) {
@@ -490,21 +623,24 @@ exports.wacliMediaIngest = onRequest(
     }
 
     try {
+      const communicationAccountId = await requireBoundCommunicationAccount(request);
       const chat = String(request.query.chat || "").trim();
-      const messageId = String(request.query.messageId || "").trim();
+      const providerMessageId = String(request.query.messageId || "").trim();
       const fileName = String(request.query.fileName || "").trim();
       const mediaType = String(request.query.mediaType || "").trim().toLowerCase();
-      if (!chat || !messageId) throw httpError(400, "chat and messageId are required.");
-      if (chat.length > 220 || messageId.length > 240 || fileName.length > 240) throw httpError(400, "Media metadata is too long.");
+      if (!chat || !providerMessageId) throw httpError(400, "chat and messageId are required.");
+      if (chat.length > 220 || providerMessageId.length > 240 || fileName.length > 240) throw httpError(400, "Media metadata is too long.");
 
       const bytes = requestRawBody(request);
       if (!bytes.length) throw httpError(400, "Media body is empty.");
       if (bytes.length > MAX_MEDIA_BYTES) throw httpError(413, "WhatsApp media exceeds the configured maximum size.");
 
+      const identity = wacliCanonicalIdentity({ communicationAccountId, chat, providerMessageId });
+      if (!identity.conversationId || !identity.messageId) throw httpError(400, "Media canonical identity is invalid.");
       const contentType = String(request.get("content-type") || "application/octet-stream").split(";")[0].trim() || "application/octet-stream";
       const extension = extensionFromMedia({ mediaFileName: fileName, mediaMimeType: contentType });
       const bucket = storage.bucket();
-      const storagePath = `communication-media/wacli/${safeStorageSegment(chat)}/${safeStorageSegment(messageId)}${extension}`;
+      const storagePath = `communication-media/wacli/${safeStorageSegment(communicationAccountId)}/${safeStorageSegment(identity.conversationId)}/${safeStorageSegment(identity.messageId)}${extension}`;
       const downloadToken = crypto.randomUUID();
       await bucket.file(storagePath).save(bytes, {
         resumable: false,
@@ -517,6 +653,10 @@ exports.wacliMediaIngest = onRequest(
       const mediaUrl = `https://firebasestorage.googleapis.com/v0/b/${encodeURIComponent(bucket.name)}/o/${encodeURIComponent(storagePath)}?alt=media&token=${encodeURIComponent(downloadToken)}`;
       response.status(200).json({
         ok: true,
+        communicationAccountId,
+        conversationId: identity.conversationId,
+        messageId: identity.messageId,
+        providerMessageId,
         mediaUrl,
         mediaType: mediaType || null,
         mediaMimeType: contentType,
@@ -524,12 +664,16 @@ exports.wacliMediaIngest = onRequest(
       });
     } catch (error) {
       logger.error("Could not ingest wacli media.", error);
-      response.status(error?.statusCode || 500).json({ error: error?.message || "Media ingest failed" });
+      response.status(error?.statusCode || 500).json({ error: error?.message || "Media ingest failed", code: error?.code || null });
     }
   },
 );
 
-async function claimOutboundCommand(bridgeId) {
+function outboundQueueAccountMatches(queueItem = {}, communicationAccountId = "") {
+  return String(queueItem.communicationAccountId || "").trim().toLowerCase() === String(communicationAccountId || "").trim().toLowerCase();
+}
+
+async function claimOutboundCommand(bridgeId, communicationAccountId) {
   const now = Date.now();
   const snapshot = await db.collection("whatsappOutboundQueue")
     .where("status", "in", ["queued", "processing"])
@@ -537,6 +681,7 @@ async function claimOutboundCommand(bridgeId) {
     .get();
   const candidates = snapshot.docs
     .filter((doc) => String(doc.data()?.provider || "") === "wacli")
+    .filter((doc) => outboundQueueAccountMatches(doc.data(), communicationAccountId))
     .filter((doc) => {
       const data = doc.data() || {};
       return data.status === "queued" || timestampMillis(data.leaseUntil) <= now;
@@ -552,6 +697,7 @@ async function claimOutboundCommand(bridgeId) {
       if (!currentSnapshot.exists) return null;
       const current = currentSnapshot.data() || {};
       if (current.provider !== "wacli") return null;
+      if (!outboundQueueAccountMatches(current, communicationAccountId)) return null;
       if (!["queued", "processing"].includes(current.status || "queued")) return null;
       if (current.status === "processing" && timestampMillis(current.leaseUntil) > Date.now()) return null;
 
@@ -564,6 +710,7 @@ async function claimOutboundCommand(bridgeId) {
         status: "processing",
         claimToken,
         claimedBy: bridgeId || "demac-wacli-bridge",
+        claimedCommunicationAccountId: communicationAccountId,
         claimedAt: FieldValue.serverTimestamp(),
         processingStartedAt: current.processingStartedAt || FieldValue.serverTimestamp(),
         leaseUntil,
@@ -573,6 +720,7 @@ async function claimOutboundCommand(bridgeId) {
       return {
         queueId: candidate.id,
         claimToken,
+        communicationAccountId,
         to,
         text,
         media,
@@ -601,12 +749,13 @@ exports.wacliOutboundPoll = onRequest(
       return;
     }
     try {
+      const communicationAccountId = await requireBoundCommunicationAccount(request);
       const bridgeId = String(request.body?.bridgeId || "demac-wacli-bridge").trim().slice(0, 120);
-      const command = await claimOutboundCommand(bridgeId);
+      const command = await claimOutboundCommand(bridgeId, communicationAccountId);
       response.status(200).json({ ok: true, command });
     } catch (error) {
       logger.error("Could not poll wacli outbound queue.", error);
-      response.status(500).json({ error: "Outbound poll failed" });
+      response.status(error?.statusCode || 500).json({ error: error?.message || "Outbound poll failed", code: error?.code || null });
     }
   },
 );
@@ -630,10 +779,11 @@ exports.wacliOutboundAck = onRequest(
     }
 
     try {
+      const communicationAccountId = await requireBoundCommunicationAccount(request);
       const queueId = String(request.body?.queueId || "").trim();
       const claimToken = String(request.body?.claimToken || "").trim();
       const sent = request.body?.sent === true;
-      const reportedMessageId = String(request.body?.messageId || "").trim();
+      const reportedProviderMessageId = String(request.body?.messageId || "").trim();
       const storeWarning = String(request.body?.storeWarning || "").trim().slice(0, 1000) || null;
       const errorMessage = String(request.body?.error || "WhatsApp send failed").trim().slice(0, 1500);
       if (!queueId || !claimToken || queueId.includes("/")) throw httpError(400, "queueId and claimToken are required.");
@@ -644,13 +794,19 @@ exports.wacliOutboundAck = onRequest(
         const queueSnapshot = await transaction.get(queueRef);
         if (!queueSnapshot.exists) throw httpError(404, "Outbound queue item not found.");
         const current = queueSnapshot.data() || {};
+        if (!outboundQueueAccountMatches(current, communicationAccountId)) {
+          throw httpError(409, "Outbound queue item belongs to another communication account.", "communication-account-mismatch");
+        }
 
         if (current.status === "sent" && sent) {
-          ackResult = { alreadyAcknowledged: true, messageId: current.messageId || reportedMessageId || queueId };
+          ackResult = { alreadyAcknowledged: true, messageId: current.messageId || reportedProviderMessageId || queueId };
           return;
         }
         if (current.status !== "processing" || current.claimToken !== claimToken) {
           throw httpError(409, "Outbound queue claim is no longer active.");
+        }
+        if (String(current.claimedCommunicationAccountId || "").trim().toLowerCase() !== communicationAccountId) {
+          throw httpError(409, "Outbound queue claim account no longer matches the bridge account.", "claim-account-mismatch");
         }
 
         if (!sent) {
@@ -666,22 +822,45 @@ exports.wacliOutboundAck = onRequest(
           return;
         }
 
-        const messageId = reportedMessageId || queueId;
+        const providerMessageId = reportedProviderMessageId || queueId;
         const media = current.media && typeof current.media === "object" ? current.media : null;
         const text = String(current.text || "");
-        const messageRef = db.collection("whatsappMessages").doc(safeDocumentId(messageId));
         let conversationRef = null;
         let conversationCurrent = null;
         if (current.conversationId) {
           conversationRef = db.collection("communicationConversations").doc(String(current.conversationId));
           const conversationSnapshot = await transaction.get(conversationRef);
-          conversationCurrent = conversationSnapshot.exists ? conversationSnapshot.data() : {};
+          conversationCurrent = conversationSnapshot.exists ? conversationSnapshot.data() || {} : {};
+          if (conversationSnapshot.exists && String(conversationCurrent.communicationAccountId || "").trim().toLowerCase() !== communicationAccountId) {
+            throw httpError(409, "Conversation belongs to another communication account.", "conversation-account-mismatch");
+          }
         }
+        const remoteConversationId = String(
+          conversationCurrent?.remoteConversationId
+            || conversationCurrent?.chatJid
+            || conversationCurrent?.externalChatId
+            || current.to
+            || current.phone
+            || current.recipient
+            || "",
+        ).trim();
+        const identity = wacliCanonicalIdentity({
+          communicationAccountId,
+          chat: remoteConversationId,
+          providerMessageId,
+        });
+        if (!identity.messageId) throw httpError(409, "Outbound acknowledgement has no canonical message identity.");
+        const messageRef = db.collection("whatsappMessages").doc(identity.messageId);
 
         transaction.set(messageRef, {
           provider: "wacli",
           channel: "whatsapp",
-          messageId,
+          communicationAccountId,
+          conversationId: current.conversationId || identity.conversationId,
+          remoteConversationId: identity.remoteConversationId,
+          messageId: identity.messageId,
+          providerMessageId,
+          remoteMessageId: providerMessageId,
           direction: "outbound",
           to: String(current.to || current.phone || current.recipient || "").trim(),
           type: outboundMediaKind(media),
@@ -690,13 +869,14 @@ exports.wacliOutboundAck = onRequest(
           queueId,
           sentByUserId: current.createdByUserId || null,
           sentByName: current.createdByName || "DEMAC",
-          bridgeResponse: { sent: true, messageId, storeWarning },
+          bridgeResponse: { sent: true, messageId: providerMessageId, storeWarning },
           createdAt: FieldValue.serverTimestamp(),
         }, { merge: true });
         transaction.set(queueRef, {
           status: "sent",
-          messageId,
-          bridgeResponse: { sent: true, messageId, storeWarning },
+          messageId: identity.messageId,
+          providerMessageId,
+          bridgeResponse: { sent: true, messageId: providerMessageId, storeWarning },
           completedAt: FieldValue.serverTimestamp(),
           claimToken: null,
           leaseUntil: null,
@@ -706,7 +886,8 @@ exports.wacliOutboundAck = onRequest(
 
         if (conversationRef) {
           const recentMessages = mergeRecentMessages(conversationCurrent?.recentMessages, {
-            id: messageId,
+            id: identity.messageId,
+            providerMessageId,
             at: new Date().toISOString(),
             author: current.createdByName || "DEMAC",
             role: "operator",
@@ -720,6 +901,7 @@ exports.wacliOutboundAck = onRequest(
           transaction.set(conversationRef, {
             provider: "wacli",
             channel: "whatsapp",
+            communicationAccountId,
             status: conversationCurrent?.status === "escalated" ? "escalated" : "waiting_customer",
             unread: 0,
             lastMessageText: outboundPreview(text, media),
@@ -728,14 +910,14 @@ exports.wacliOutboundAck = onRequest(
             updatedAt: FieldValue.serverTimestamp(),
           }, { merge: true });
         }
-        ackResult = { sent: true, messageId };
+        ackResult = { sent: true, messageId: identity.messageId, providerMessageId };
       });
 
       response.status(200).json({ ok: true, ...ackResult });
     } catch (error) {
       const status = Number(error?.statusCode || 500);
       if (status >= 500) logger.error("Could not acknowledge wacli outbound queue item.", error);
-      response.status(status).json({ error: error?.message || "Outbound acknowledgement failed" });
+      response.status(status).json({ error: error?.message || "Outbound acknowledgement failed", code: error?.code || null });
     }
   },
 );
@@ -773,4 +955,9 @@ exports.appendCommunicationInternalNote = onDocumentCreated(
   },
 );
 
+module.exports.authorizedBridgeRequest = authorizedBridgeRequest;
+module.exports.claimOutboundCommand = claimOutboundCommand;
 module.exports.conversationIngressState = conversationIngressState;
+module.exports.outboundQueueAccountMatches = outboundQueueAccountMatches;
+module.exports.persistCanonicalMessage = persistCanonicalMessage;
+module.exports.requireBoundCommunicationAccount = requireBoundCommunicationAccount;

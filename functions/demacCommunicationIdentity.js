@@ -1,6 +1,6 @@
 const { cleanText, hashId } = require("./bookingSchedulingPrimitives");
 
-const COMMUNICATION_IDENTITY_VERSION = 1;
+const COMMUNICATION_IDENTITY_VERSION = 2;
 const SUPPORTED_CHANNELS = new Set(["whatsapp"]);
 const SUPPORTED_PROVIDERS = new Set(["wacli", "meta"]);
 
@@ -28,7 +28,9 @@ function normalizeRemoteConversationId(value) {
 
 function configuredCommunicationAccountId(settings = {}) {
   return normalizeCommunicationAccountId(
-    settings.activeCommunicationAccountId || settings.wacliCommunicationAccountId,
+    settings.communicationAccountId
+      || settings.activeCommunicationAccountId
+      || settings.wacliCommunicationAccountId,
   );
 }
 
@@ -97,6 +99,19 @@ function canonicalProviderMessageKey({ providerMessageId, ...input } = {}) {
   return `${conversationKey}|${normalizedMessageId}`;
 }
 
+function canonicalProviderMessageDocumentId(input = {}) {
+  const key = canonicalProviderMessageKey(input);
+  return key ? `MSG-${hashId(key, 40).toUpperCase()}` : "";
+}
+
+function canonicalMessageStatusDocumentId({ providerMessageId, status, providerTimestamp, ...input } = {}) {
+  const messageKey = canonicalProviderMessageKey({ providerMessageId, ...input });
+  const normalizedStatus = normalizedIdentityText(status, 80).toLowerCase();
+  const normalizedTimestamp = normalizedIdentityText(providerTimestamp, 120);
+  if (!messageKey || !normalizedStatus) return "";
+  return `MSGSTATUS-${hashId(`${messageKey}|${normalizedStatus}|${normalizedTimestamp}`, 40).toUpperCase()}`;
+}
+
 function activeAccountDecision({ message = {}, conversation = {}, settings = {}, payload = {} } = {}) {
   const decision = communicationIdentityDecision({ message, conversation, payload });
   if (!decision.valid) return { allowed: false, reason: decision.reason, identity: decision.identity };
@@ -115,6 +130,8 @@ module.exports = {
   activeAccountDecision,
   canonicalConversationDocumentId,
   canonicalConversationKey,
+  canonicalMessageStatusDocumentId,
+  canonicalProviderMessageDocumentId,
   canonicalProviderMessageKey,
   communicationIdentityDecision,
   communicationIdentityParts,

@@ -9,7 +9,7 @@ const {
 
 const app = getApps().length ? getApp() : initializeApp();
 const db = getFirestore(app);
-const INGRESS_METADATA_VERSION = 1;
+const INGRESS_METADATA_VERSION = 2;
 
 function safeDocumentId(value) {
   return String(value || "unknown").replaceAll("/", "_").replaceAll("#", "_").slice(0, 1200);
@@ -47,8 +47,8 @@ exports.stampCommunicationMessageFirstSeen = onDocumentCreated(
     const identity = ingressIdentityFromMessage(message);
     const conversationId = safeDocumentId(message.conversationId || message.chat || message.phone);
     const messagePatch = {
-      firstReceivedAt: FieldValue.serverTimestamp(),
-      firstIngestedAtIso: new Date().toISOString(),
+      firstReceivedAt: message.firstReceivedAt || FieldValue.serverTimestamp(),
+      firstIngestedAtIso: cleanText(message.firstIngestedAtIso, 120) || new Date().toISOString(),
       ingressMetadataVersion: INGRESS_METADATA_VERSION,
       remoteConversationId: identity.remoteConversationId || null,
       ...(identity.communicationAccountId ? { communicationAccountId: identity.communicationAccountId } : {}),
@@ -77,10 +77,14 @@ exports.stampCommunicationMessageFirstSeen = onDocumentCreated(
       }, { merge: true });
       if (!accountConflict) {
         transaction.set(conversationRef, {
+          conversationId,
           remoteConversationId: identity.remoteConversationId || conversation.remoteConversationId || null,
           ...(identity.communicationAccountId ? { communicationAccountId: identity.communicationAccountId } : {}),
           ownershipVersion: Number.isSafeInteger(Number(conversation.ownershipVersion))
             ? Number(conversation.ownershipVersion)
+            : 0,
+          customerInputVersion: Number.isSafeInteger(Number(conversation.customerInputVersion))
+            ? Number(conversation.customerInputVersion)
             : 0,
           communicationIdentityStatus: identity.decision.valid ? "verified" : identity.decision.reason,
           updatedAt: FieldValue.serverTimestamp(),

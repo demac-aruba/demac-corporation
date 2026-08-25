@@ -14,6 +14,8 @@ const WACLI_STORE_DIR = String(process.env.WACLI_STORE_DIR || '/var/lib/demac-wa
 const FFMPEG_BINARY = process.env.FFMPEG_BINARY || 'ffmpeg';
 const BRIDGE_TOKEN = String(process.env.BRIDGE_TOKEN || '').trim();
 const WEBHOOK_SECRET = String(process.env.WACLI_WEBHOOK_SECRET || '').trim();
+const COMMUNICATION_ACCOUNT_ID = String(process.env.COMMUNICATION_ACCOUNT_ID || '').trim().toLowerCase();
+const COMMUNICATION_ACCOUNT_HEADER = 'X-Demac-Communication-Account-Id';
 const FIREBASE_FUNCTIONS_BASE = 'https://us-central1-demac-corporation.cloudfunctions.net';
 const ERP_WEBHOOK_URL = `${FIREBASE_FUNCTIONS_BASE}/wacliWebhook`;
 const MEDIA_INGEST_URL = `${FIREBASE_FUNCTIONS_BASE}/wacliMediaIngest`;
@@ -56,7 +58,16 @@ function requireConfiguration() {
   if (!BRIDGE_TOKEN) missing.push('BRIDGE_TOKEN');
   if (!WEBHOOK_SECRET) missing.push('WACLI_WEBHOOK_SECRET');
   if (!WACLI_STORE_DIR) missing.push('WACLI_STORE_DIR');
+  if (!COMMUNICATION_ACCOUNT_ID) missing.push('COMMUNICATION_ACCOUNT_ID');
   if (missing.length) throw new Error(`Missing bridge configuration: ${missing.join(', ')}`);
+}
+
+function firebaseConnectorHeaders(extra = {}) {
+  return {
+    Authorization: `Bearer ${BRIDGE_TOKEN}`,
+    [COMMUNICATION_ACCOUNT_HEADER]: COMMUNICATION_ACCOUNT_ID,
+    ...extra,
+  };
 }
 
 function safeEqual(left, right) {
@@ -478,10 +489,7 @@ async function uploadInboundMedia(payload) {
     try {
       response = await fetch(endpoint, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${BRIDGE_TOKEN}`,
-          'Content-Type': mimeType || 'application/octet-stream',
-        },
+        headers: firebaseConnectorHeaders({ 'Content-Type': mimeType || 'application/octet-stream' }),
         body: bytes,
         signal: AbortSignal.timeout(120000),
       });
@@ -540,10 +548,7 @@ async function forwardRecord(filePath) {
   try {
     response = await fetch(ERP_WEBHOOK_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${BRIDGE_TOKEN}`,
-      },
+      headers: firebaseConnectorHeaders({ 'Content-Type': 'application/json' }),
       body: rawBody,
       signal: AbortSignal.timeout(FORWARD_TIMEOUT_MS),
     });
@@ -619,10 +624,7 @@ async function persistOutboundAck(payload) {
 async function postFirebaseJson(endpoint, payload, timeout = 30000) {
   const response = await fetch(endpoint, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${BRIDGE_TOKEN}`,
-      'Content-Type': 'application/json',
-    },
+    headers: firebaseConnectorHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(timeout),
   });
@@ -666,7 +668,11 @@ async function processOutboundCycle() {
 
     const queueId = String(command.queueId || '').trim();
     const claimToken = String(command.claimToken || '').trim();
+    const commandAccountId = String(command.communicationAccountId || '').trim().toLowerCase();
     if (!queueId || !claimToken) throw new Error('Firebase returned an outbound command without queueId/claimToken.');
+    if (!commandAccountId || commandAccountId !== COMMUNICATION_ACCOUNT_ID) {
+      throw new Error('Firebase returned an outbound command for a different communication account.');
+    }
 
     let ack;
     try {
@@ -680,13 +686,20 @@ async function processOutboundCycle() {
       ack = {
         queueId,
         claimToken,
+        communicationAccountId: COMMUNICATION_ACCOUNT_ID,
         sent: true,
         messageId: result.messageId || null,
         storeWarning: result.storeWarning || null,
       };
     } catch (error) {
       lastSendError = error instanceof Error ? error.message : String(error);
-      ack = { queueId, claimToken, sent: false, error: lastSendError };
+      ack = {
+        queueId,
+        claimToken,
+        communicationAccountId: COMMUNICATION_ACCOUNT_ID,
+        sent: false,
+        error: lastSendError,
+      };
     }
 
     await persistOutboundAck(ack);
@@ -728,6 +741,7 @@ async function handleHealth(response) {
     service: 'demac-whatsapp-wacli-bridge-v2',
     bridgeAuth: 'bearer-v1',
     connectorMode: 'outbound-only-v1',
+    communicationAccountId: COMMUNICATION_ACCOUNT_ID,
     erpWebhookUrl: ERP_WEBHOOK_URL,
     mediaIngestUrl: MEDIA_INGEST_URL,
     outboundPollUrl: OUTBOUND_POLL_URL,
