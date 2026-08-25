@@ -75,7 +75,6 @@ const pilotSettings = {
   observationEnabled: true,
   autoReplyEnabled: true,
   replyMode: "pilot",
-  activeCommunicationAccountId: "demac-wa-corporate",
   autoReplyAllowlist: ["2975600140", "2975606772"],
   newContactAutoReplyEnabled: true,
   cancellationAutoReplyEnabled: true,
@@ -83,6 +82,7 @@ const pilotSettings = {
   autoCancelEnabled: false,
   autoRescheduleEnabled: false,
 };
+const communicationSettings = { communicationAccountId: "demac-wa-corporate" };
 
 function inbound(phone = "2975820000", overrides = {}) {
   return {
@@ -97,23 +97,45 @@ function inbound(phone = "2975820000", overrides = {}) {
 }
 
 test("observation is independent from reply permission", () => {
-  assert.equal(mayaObservationDecision({ message: inbound(), settings: pilotSettings }).allowed, true);
-  const reply = mayaReplyDecision({ message: inbound(), settings: pilotSettings });
+  assert.equal(mayaObservationDecision({
+    message: inbound(),
+    settings: pilotSettings,
+    communicationSettings,
+  }).allowed, true);
+  const reply = mayaReplyDecision({ message: inbound(), settings: pilotSettings, communicationSettings });
   assert.equal(reply.allowed, false);
   assert.equal(reply.reason, "existing-customer-observe-only");
 });
 
-test("pilot mode requires a first-class active communication account", () => {
+test("pilot mode requires canonical WhatsApp account configuration instead of Maya-local account duplication", () => {
+  const missingCanonicalSettings = mayaReplyDecision({
+    message: inbound("2975600140"),
+    settings: { ...pilotSettings, activeCommunicationAccountId: "demac-wa-corporate" },
+  });
+  assert.equal(missingCanonicalSettings.allowed, false);
+  assert.equal(missingCanonicalSettings.reason, "active-communication-account-not-configured");
+
   const missingIdentity = mayaReplyDecision({
     message: inbound("2975600140", { communicationAccountId: "" }),
     settings: pilotSettings,
+    communicationSettings,
   });
   assert.equal(missingIdentity.allowed, false);
   assert.equal(missingIdentity.reason, "missing-communication-account-id");
 });
 
+test("pilot mode rejects a message from another communication account", () => {
+  const decision = mayaReplyDecision({
+    message: inbound("2975600140", { communicationAccountId: "demac-wa-other" }),
+    settings: pilotSettings,
+    communicationSettings,
+  });
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.reason, "communication-account-not-active");
+});
+
 test("approved pilot test numbers receive reply permission without action bypass", () => {
-  const reply = mayaReplyDecision({ message: inbound("2975600140"), settings: pilotSettings });
+  const reply = mayaReplyDecision({ message: inbound("2975600140"), settings: pilotSettings, communicationSettings });
   assert.equal(reply.allowed, true);
   assert.equal(reply.reason, "allowlisted");
   assert.deepEqual(
@@ -126,6 +148,7 @@ test("genuinely new contact can reply only when the dedicated pilot switch is en
   const reply = mayaReplyDecision({
     message: inbound(),
     settings: pilotSettings,
+    communicationSettings,
     isNewContact: true,
   });
   assert.equal(reply.allowed, true);
@@ -136,11 +159,12 @@ test("existing customer cancellation workflow can reply without enabling general
   const reply = mayaReplyDecision({
     message: inbound(),
     settings: pilotSettings,
+    communicationSettings,
     authorizedWorkflow: "cancellation",
   });
   assert.equal(reply.allowed, true);
   assert.equal(reply.reason, "authorized-cancellation-workflow");
-  const general = mayaReplyDecision({ message: inbound(), settings: pilotSettings });
+  const general = mayaReplyDecision({ message: inbound(), settings: pilotSettings, communicationSettings });
   assert.equal(general.allowed, false);
 });
 
