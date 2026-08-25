@@ -123,24 +123,40 @@ export async function sendCommunicationConversationReply(args: {
 // Compatibility adapters for the current Communication Center component. The
 // authenticated principal is resolved server-side from the Firebase token;
 // browser-supplied actor identity is deliberately ignored as authority.
-export async function claimConversation(conversationId: string, _principal?: PrincipalLike) {
-  return claimCommunicationConversation(conversationId);
+export async function claimConversation(
+  conversationId: string,
+  _principal?: PrincipalLike,
+  expectedOwnershipVersion?: number,
+) {
+  return claimCommunicationConversation(conversationId, expectedOwnershipVersion);
 }
 
-export async function assignConversation(conversationId: string, operator: OperatorLike) {
-  return assignCommunicationConversation(conversationId, operator);
+export async function assignConversation(
+  conversationId: string,
+  operator: OperatorLike,
+  expectedOwnershipVersion?: number,
+) {
+  return assignCommunicationConversation(conversationId, operator, expectedOwnershipVersion);
 }
 
-export async function returnConversationToAi(conversationId: string, _principal?: PrincipalLike) {
-  return returnCommunicationConversationToMaya(conversationId);
+export async function returnConversationToAi(
+  conversationId: string,
+  _principal?: PrincipalLike,
+  expectedOwnershipVersion?: number,
+) {
+  return returnCommunicationConversationToMaya(conversationId, expectedOwnershipVersion);
 }
 
-export async function updateConversationStatus(conversationId: string, status: ConversationStatus) {
-  return updateCommunicationConversationStatus(conversationId, status);
+export async function updateConversationStatus(
+  conversationId: string,
+  status: ConversationStatus,
+  expectedOwnershipVersion?: number,
+) {
+  return updateCommunicationConversationStatus(conversationId, status, expectedOwnershipVersion);
 }
 
-export async function markConversationRead(conversationId: string) {
-  return markCommunicationConversationRead(conversationId);
+export async function markConversationRead(conversationId: string, expectedOwnershipVersion?: number) {
+  return markCommunicationConversationRead(conversationId, expectedOwnershipVersion);
 }
 
 export async function queueWhatsAppText(
