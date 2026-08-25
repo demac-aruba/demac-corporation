@@ -235,6 +235,30 @@ export function TechnicianFieldHome() {
     setDetailLoading(false);
   }, []);
 
+  const loadDetail = useCallback(async (workOrderId: string, background = false) => {
+    const requestId = ++detailRequestRef.current;
+    const requestPrincipalKey = principalFieldIdentityKey;
+    if (!background) {
+      setDetail(null);
+      setDetailOwnerUserId(null);
+      setDetailLoading(true);
+    }
+    setDetailError(null);
+    try {
+      const response = await getFieldJob(workOrderId);
+      if (requestId !== detailRequestRef.current) return;
+      setDetail(response.job);
+      setDetailOwnerUserId(requestPrincipalKey);
+    } catch (loadError) {
+      if (requestId !== detailRequestRef.current) return;
+      setDetail(null);
+      setDetailOwnerUserId(null);
+      setDetailError(loadError instanceof Error ? loadError.message : 'No se pudo abrir el trabajo.');
+    } finally {
+      if (requestId === detailRequestRef.current) setDetailLoading(false);
+    }
+  }, [principalFieldIdentityKey]);
+
   const loadSchedule = useCallback(async (background = false) => {
     const requestId = ++scheduleRequestRef.current;
     const requestPrincipalKey = principalFieldIdentityKey;
@@ -254,8 +278,12 @@ export function TechnicianFieldHome() {
       setJobsOwnerUserId(requestPrincipalKey);
 
       const selectedId = selectedWorkOrderRef.current;
-      if (selectedId && !response.jobs.some((job) => job.workOrderId === selectedId)) {
-        closeJob();
+      if (selectedId) {
+        if (response.jobs.some((job) => job.workOrderId === selectedId)) {
+          void loadDetail(selectedId, true);
+        } else {
+          closeJob();
+        }
       }
     } catch (loadError) {
       if (requestId !== scheduleRequestRef.current) return;
@@ -266,7 +294,7 @@ export function TechnicianFieldHome() {
     } finally {
       if (requestId === scheduleRequestRef.current) setLoading(false);
     }
-  }, [closeJob, principalFieldIdentityKey, today, weekEnd]);
+  }, [closeJob, loadDetail, principalFieldIdentityKey, today, weekEnd]);
 
   useEffect(() => {
     void loadSchedule();
@@ -306,29 +334,9 @@ export function TechnicianFieldHome() {
       setDetailLoading(false);
       return undefined;
     }
-    const requestId = ++detailRequestRef.current;
-    const requestPrincipalKey = principalFieldIdentityKey;
-    setDetail(null);
-    setDetailOwnerUserId(null);
-    setDetailLoading(true);
-    setDetailError(null);
-    void getFieldJob(selectedWorkOrderId)
-      .then((response) => {
-        if (requestId !== detailRequestRef.current) return;
-        setDetail(response.job);
-        setDetailOwnerUserId(requestPrincipalKey);
-      })
-      .catch((loadError) => {
-        if (requestId !== detailRequestRef.current) return;
-        setDetail(null);
-        setDetailOwnerUserId(null);
-        setDetailError(loadError instanceof Error ? loadError.message : 'No se pudo abrir el trabajo.');
-      })
-      .finally(() => {
-        if (requestId === detailRequestRef.current) setDetailLoading(false);
-      });
+    void loadDetail(selectedWorkOrderId);
     return () => { detailRequestRef.current += 1; };
-  }, [principalFieldIdentityKey, selectedOwnerUserId, selectedWorkOrderId]);
+  }, [loadDetail, principalFieldIdentityKey, selectedOwnerUserId, selectedWorkOrderId]);
 
   const authorizedJobs = jobsOwnerUserId === principalFieldIdentityKey ? jobs : [];
   const todayJobs = useMemo(() => authorizedJobs.filter((job) => job.date === today), [authorizedJobs, today]);
