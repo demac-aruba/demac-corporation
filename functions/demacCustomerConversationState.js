@@ -3,7 +3,7 @@ const {
   hashId,
 } = require("./bookingSchedulingPrimitives");
 
-const CUSTOMER_AGENT_SESSION_VERSION = 2;
+const CUSTOMER_AGENT_SESSION_VERSION = 3;
 const CUSTOMER_AGENT_SESSION_COLLECTION = "customerAgentSessions";
 
 function timestampValue() {
@@ -16,23 +16,21 @@ function timestampValue() {
 }
 
 function stableConversationIdentity(context = {}) {
-  return cleanText(
-    context.conversationId
-      || context.conversationKey
-      || context.contactJid
-      || context.contactPhone,
-    300,
-  );
+  return cleanText(context.conversationId || context.conversationKey, 300);
 }
 
 function sessionIdentity(context = {}) {
-  const provider = cleanText(context.provider || context.channel || "whatsapp", 80) || "whatsapp";
+  const communicationAccountId = cleanText(context.communicationAccountId, 180).toLowerCase();
+  const channel = cleanText(context.channel || "whatsapp", 80).toLowerCase() || "whatsapp";
+  const provider = cleanText(context.provider, 80).toLowerCase();
   const conversation = stableConversationIdentity(context);
-  if (!conversation) return null;
+  if (!communicationAccountId || !provider || !conversation) return null;
   return {
+    communicationAccountId,
+    channel,
     provider,
     conversation,
-    sessionId: `CAS-${hashId(`${provider}|${conversation}`, 40).toUpperCase()}`,
+    sessionId: `CAS-${hashId(`${communicationAccountId}|${channel}|${provider}|${conversation}`, 40).toUpperCase()}`,
   };
 }
 
@@ -80,6 +78,8 @@ function emptySession(identity) {
   return {
     id: identity?.sessionId || "",
     version: CUSTOMER_AGENT_SESSION_VERSION,
+    communicationAccountId: identity?.communicationAccountId || "",
+    channel: identity?.channel || "",
     provider: identity?.provider || "",
     conversationId: identity?.conversation || "",
     status: "AI_ACTIVE",
@@ -176,6 +176,16 @@ function toolStatePatch(toolName, args = {}, result = {}) {
   return {};
 }
 
+function identityPatch(identity) {
+  return {
+    version: CUSTOMER_AGENT_SESSION_VERSION,
+    communicationAccountId: identity.communicationAccountId,
+    channel: identity.channel,
+    provider: identity.provider,
+    conversationId: identity.conversation,
+  };
+}
+
 async function updateCustomerConversationStateAfterTool({
   db,
   context = {},
@@ -189,9 +199,7 @@ async function updateCustomerConversationStateAfterTool({
   const patch = toolStatePatch(toolName, args, result);
   const ref = db.collection(CUSTOMER_AGENT_SESSION_COLLECTION).doc(identity.sessionId);
   await ref.set({
-    version: CUSTOMER_AGENT_SESSION_VERSION,
-    provider: identity.provider,
-    conversationId: identity.conversation,
+    ...identityPatch(identity),
     status: "AI_ACTIVE",
     ...patch,
     lastTool: cleanText(toolName, 120),
@@ -219,9 +227,7 @@ async function recordCustomerConversationOutcome({
   const isHandoff = Boolean(requiresHuman || outcome === "handoff");
   const ref = db.collection(CUSTOMER_AGENT_SESSION_COLLECTION).doc(identity.sessionId);
   const patch = {
-    version: CUSTOMER_AGENT_SESSION_VERSION,
-    provider: identity.provider,
-    conversationId: identity.conversation,
+    ...identityPatch(identity),
     status: isHandoff ? "HUMAN_ACTIVE" : "AI_ACTIVE",
     lastOutcome: cleanText(outcome, 80),
     language: cleanText(language, 40),
@@ -244,6 +250,7 @@ module.exports = {
   CUSTOMER_AGENT_SESSION_VERSION,
   compactCanonicalOffer,
   emptySession,
+  identityPatch,
   loadCustomerConversationState,
   offerUsable,
   recordCustomerConversationOutcome,
