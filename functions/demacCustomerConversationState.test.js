@@ -46,30 +46,42 @@ class Db {
   read(collection, id) { return this.map(collection).get(id); }
 }
 
+const CANONICAL_CONVERSATION = "COMM-1111111111111111111111111111111111111111";
+const OTHER_CANONICAL_CONVERSATION = "COMM-2222222222222222222222222222222222222222";
+
 function context(overrides = {}) {
   return {
     communicationAccountId: "demac-wa-corporate",
     channel: "whatsapp",
     provider: "wacli",
-    conversationId: "COMM-1",
+    conversationId: CANONICAL_CONVERSATION,
     ...overrides,
   };
 }
 
-test("session identity is stable and account scoped", () => {
+test("session identity is stable and follows the account-scoped canonical conversation id", () => {
   const first = sessionIdentity(context());
   const duplicate = sessionIdentity(context());
-  const otherAccount = sessionIdentity(context({ communicationAccountId: "demac-wa-test" }));
+  const otherConversation = sessionIdentity(context({
+    communicationAccountId: "demac-wa-test",
+    conversationId: OTHER_CANONICAL_CONVERSATION,
+  }));
   assert.equal(first.sessionId, duplicate.sessionId);
-  assert.notEqual(first.sessionId, otherAccount.sessionId);
+  assert.notEqual(first.sessionId, otherConversation.sessionId);
   assert.match(first.sessionId, /^CAS-[A-F0-9]{40}$/);
 });
 
-test("session identity fails closed without canonical account/provider/conversation", () => {
-  assert.equal(sessionIdentity(context({ communicationAccountId: "" })), null);
+test("session identity does not re-key when account metadata is added to the same canonical conversation", () => {
+  const withoutMetadata = sessionIdentity(context({ communicationAccountId: "" }));
+  const withMetadata = sessionIdentity(context());
+  assert.equal(withoutMetadata.sessionId, withMetadata.sessionId);
+});
+
+test("session identity fails closed for raw phone JID or noncanonical conversation fallbacks", () => {
   assert.equal(sessionIdentity(context({ provider: "" })), null);
-  assert.equal(sessionIdentity({ communicationAccountId: "a", provider: "wacli", contactPhone: "2975600000" }), null);
-  assert.equal(sessionIdentity({ communicationAccountId: "a", provider: "wacli", contactJid: "2975600000@s.whatsapp.net" }), null);
+  assert.equal(sessionIdentity(context({ conversationId: "conv-1" })), null);
+  assert.equal(sessionIdentity({ provider: "wacli", contactPhone: "2975600000" }), null);
+  assert.equal(sessionIdentity({ provider: "wacli", contactJid: "2975600000@s.whatsapp.net" }), null);
 });
 
 test("session stores only activeOfferId/version and loads offer canonically", async () => {
@@ -137,7 +149,7 @@ test("appointment success clears active offer and stores appointment id", () => 
   });
 });
 
-test("state updates persist canonical communication identity", async () => {
+test("state updates persist canonical communication metadata when available", async () => {
   const db = new Db();
   const ctx = context({ inboundMessageId: "MSG-1" });
   await updateCustomerConversationStateAfterTool({ db, context: ctx, toolName: "resolve_customer", result: { success: true, resolved: true, customerId: "c1" } });
@@ -147,7 +159,7 @@ test("state updates persist canonical communication identity", async () => {
   assert.equal(state.propertyId, "p1");
   assert.equal(state.lastInboundMessageId, "MSG-1");
   assert.equal(state.communicationAccountId, "demac-wa-corporate");
-  assert.equal(state.conversationId, "COMM-1");
+  assert.equal(state.conversationId, CANONICAL_CONVERSATION);
 });
 
 test("terminal handoff outcome stores semantic routing state without changing Communication Center ownership", async () => {
