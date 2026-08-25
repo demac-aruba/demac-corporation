@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'apps/erp-next/**'
+      - 'functions/bootstrap.js'
+      - 'functions/index.js'
       - 'functions/fieldOperationsAuthority*.js'
       - 'functions/bookingSchedulingPrimitives.js'
       - 'functions/bookingSchedulingPrimitives.test.js'
@@ -20,6 +22,8 @@ on:
       - main
     paths:
       - 'apps/erp-next/**'
+      - 'functions/bootstrap.js'
+      - 'functions/index.js'
       - 'functions/fieldOperationsAuthority*.js'
       - 'functions/bookingSchedulingPrimitives.js'
       - 'functions/bookingSchedulingPrimitives.test.js'
