@@ -83,6 +83,8 @@ test('server preparation projection is limited to not-started active Work Orders
   assert.equal(canPrepareInitialVisit(job({ status: 'Asignada' }), null), true);
   assert.equal(canPrepareInitialVisit(job({ status: 'En camino' }), null), false);
   assert.equal(canPrepareInitialVisit(job({ status: 'En el sitio' }), null), false);
+  assert.equal(canPrepareInitialVisit(job({ status: 'En proceso' }), null), false);
+  assert.equal(canPrepareInitialVisit(job({ status: 'Pendiente' }), null), false);
   assert.equal(canPrepareInitialVisit(job({ allowedActions: ['read'] }), null), false);
   assert.equal(canPrepareInitialVisit(job(), visit()), false);
 });
@@ -104,6 +106,19 @@ test('helper/read-only projection receives visit state without execution transit
   const projected = projectFieldVisitState(visit({ status: 'on_site' }), job({ allowedActions: ['read', 'report.edit'] }));
   assert.equal(projected.status, 'on_site');
   assert.deepEqual(projected.availableTransitions, []);
+});
+
+test('missing Legacy version defaults to one but malformed persisted versions fail closed', () => {
+  const legacy = projectFieldVisitState(visit({ version: undefined }), job());
+  assert.equal(legacy.version, 1);
+  assert.throws(
+    () => projectFieldVisitState(visit({ version: 1.5 }), job()),
+    (error) => error?.code === 'invalid_visit_version' && error?.status === 409,
+  );
+  assert.throws(
+    () => projectFieldVisitState(visit({ version: 0 }), job()),
+    (error) => error?.code === 'invalid_visit_version' && error?.status === 409,
+  );
 });
 
 test('a linear return-visit chain resolves to its physical chain tip', () => {
