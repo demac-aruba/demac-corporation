@@ -33,6 +33,9 @@ function storageStatusForActiveTarget(target) {
 }
 
 function activeTransitionPatch({ storedVisit, transitionedVisit, target, identity, occurredAt }) {
+  if (!Number.isSafeInteger(transitionedVisit.version) || transitionedVisit.version < 1 || transitionedVisit.version >= Number.MAX_SAFE_INTEGER) {
+    throw fieldError('visit_version_exhausted', 'Work Visit version cannot be advanced safely.', 409, { version: transitionedVisit.version });
+  }
   const patch = {
     status: storageStatusForActiveTarget(target),
     updatedAt: occurredAt,
@@ -100,8 +103,10 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
       throw fieldError('transition_not_activated', `Work Visit transition is not activated in this slice: ${target || 'missing'}.`, 400);
     }
     const stable = stableRequestId(requestId);
-    const expected = Number(expectedVersion);
-    if (!Number.isSafeInteger(expected) || expected < 1) throw fieldError('expected_version_required', 'A positive safe-integer expectedVersion is required.', 400);
+    if (typeof expectedVersion !== 'number' || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+      throw fieldError('expected_version_required', 'A positive safe-integer expectedVersion is required.', 400);
+    }
+    const expected = expectedVersion;
 
     let result;
     await db.runTransaction(async (transaction) => {
@@ -133,20 +138,20 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
         });
       }
 
-      // The read model and mutation command must agree on which physical visit is current. A
-      // caller that knows an older visit id may not mutate historical Field truth after a return
-      // visit exists. Identity is revalidated against the current WorkOrder inside this transaction.
-      assertExistingVisitCompatible(storedVisit, order);
-      const canonicalVisit = projectCanonicalWorkVisit(storedVisit, { appointmentId, propertyId });
+      // Read and mutation use the same physical-history rule. Every record in the linked chain
+      // must be identity-compatible with the current WorkOrder, and only the chain tip may change.
       const historySnapshot = await transaction.get(
         db.collection('workVisits').where('workOrderId', '==', workOrderId),
       );
-      const currentRecord = selectCurrentWorkVisit(snapshotRecords(historySnapshot), workOrderId);
+      const historyRecords = snapshotRecords(historySnapshot);
+      for (const record of historyRecords) assertExistingVisitCompatible(record, order);
+      const currentRecord = selectCurrentWorkVisit(historyRecords, workOrderId);
       if (!currentRecord || text(currentRecord.id, 180) !== normalizedVisitId) {
         throw fieldError('visit_not_current', 'Only the current physical Work Visit may be transitioned.', 409, {
           currentVisitId: text(currentRecord?.id, 180) || null,
         });
       }
+      const canonicalVisit = projectCanonicalWorkVisit(storedVisit, { appointmentId, propertyId });
 
       const currentStatus = canonicalStatusFromStorage(storedVisit.status);
       if (currentStatus === target) {
