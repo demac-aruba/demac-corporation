@@ -42,20 +42,22 @@ test('inactive Field principals fail closed before assignment resolution', () =>
   }), /inactive or not provisioned/);
 });
 
-test('Field HTTP authority remains read-only until governed Field audit persistence exists', async () => {
-  assert.deepEqual([...FIELD_ACTIONS].sort(), ['get_job', 'get_schedule']);
+test('Field HTTP authority exposes only governed read actions plus audited visit preparation', async () => {
+  assert.deepEqual([...FIELD_ACTIONS].sort(), ['get_job', 'get_schedule', 'prepare_visit']);
 
   const api = createFieldOperationsApi({
     db: { collection() { return {}; } },
     verifyIdToken: async () => ({ uid: 'unused' }),
   });
 
-  for (const action of ['prepare_visit', 'start_visit']) {
-    await assert.rejects(
-      () => api.execute({ action, data: {}, identity: { operations: false } }),
-      /Unsupported Field Operations action/,
-    );
-  }
+  await assert.rejects(
+    () => api.execute({ action: 'prepare_visit', data: {}, identity: { operations: false } }),
+    (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
+  );
+  await assert.rejects(
+    () => api.execute({ action: 'start_visit', data: {}, identity: { operations: false } }),
+    /Unsupported Field Operations action/,
+  );
 });
 
 test('public Field DTO does not expose Legacy mixed-namespace technicianIds', () => {
@@ -71,7 +73,7 @@ test('public Field DTO does not expose Legacy mixed-namespace technicianIds', ()
   assert.deepEqual(projected.allowedActions, ['read']);
 });
 
-test('HTTP method and unsupported action fail before protected business execution', async () => {
+test('HTTP method and truly unsupported action fail before protected business execution', async () => {
   let verified = false;
   const api = createFieldOperationsApi({
     db: authDb({ active: true, role: 'technician', staffId: 'staff-1' }),
@@ -82,10 +84,54 @@ test('HTTP method and unsupported action fail before protected business executio
   assert.equal(wrongMethod.status, 405);
   assert.equal(wrongMethod.body.error.code, 'method_not_allowed');
 
-  const unsupported = await api.handle(request({ token: 'token', action: 'prepare_visit' }));
+  const unsupported = await api.handle(request({ token: 'token', action: 'start_visit' }));
   assert.equal(unsupported.status, 400);
   assert.equal(unsupported.body.error.code, 'unsupported_action');
   assert.equal(verified, false);
+});
+
+test('prepare_visit authenticates first and forwards only server-derived identity plus stable request data', async () => {
+  const calls = [];
+  const api = createFieldOperationsApi({
+    db: authDb({ active: true, role: 'technician', staffId: 'staff-1', name: 'Tech One', vanId: 'VAN-1' }),
+    verifyIdToken: async (token) => {
+      assert.equal(token, 'valid-token');
+      return { uid: 'uid-1', role: 'super_admin', email: 'token@example.invalid' };
+    },
+    prepareWorkVisit: async (input) => {
+      calls.push(input);
+      return { success: true, replayed: false, visit: { id: 'visit-WO-1', status: 'scheduled' }, allowedActions: ['execute'] };
+    },
+  });
+
+  const result = await api.handle(request({
+    token: 'valid-token',
+    action: 'prepare_visit',
+    data: { workOrderId: ' WO-1 ', requestId: ' prepare-WO-1-001 ' },
+  }));
+
+  assert.equal(result.status, 200);
+  assert.equal(result.body.success, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].workOrderId, 'WO-1');
+  assert.equal(calls[0].requestId, 'prepare-WO-1-001');
+  assert.equal(calls[0].identity.uid, 'uid-1');
+  assert.equal(calls[0].identity.staffId, 'staff-1');
+  assert.equal(calls[0].identity.role, 'technician', 'token role must not override governed profile role');
+});
+
+test('prepare_visit cannot execute without authentication', async () => {
+  let called = false;
+  const api = createFieldOperationsApi({
+    db: authDb({ active: true, role: 'technician', staffId: 'staff-1' }),
+    verifyIdToken: async () => ({ uid: 'uid-1' }),
+    prepareWorkVisit: async () => { called = true; return { success: true }; },
+  });
+
+  const result = await api.handle(request({ action: 'prepare_visit', data: { workOrderId: 'WO-1', requestId: 'prepare-WO-1-001' } }));
+  assert.equal(result.status, 401);
+  assert.equal(result.body.error.code, 'unauthenticated');
+  assert.equal(called, false);
 });
 
 test('missing and expired Firebase sessions return controlled unauthenticated errors', async () => {
