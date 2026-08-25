@@ -1,5 +1,9 @@
 const { fieldError } = require('./fieldOperationsAuthorityCore');
-const { projectCanonicalWorkVisit } = require('./fieldOperationsAuthorityWorkVisit');
+const {
+  canonicalStatusFromStorage,
+  projectCanonicalWorkVisit,
+  storageStatusFromWorkOrder,
+} = require('./fieldOperationsAuthorityWorkVisit');
 const { activatedVisitTransitions } = require('./fieldOperationsVisitActions');
 
 function text(value, limit = 1000) {
@@ -81,6 +85,15 @@ function projectFieldVisitState(record, job) {
   };
 }
 
+function canPrepareInitialVisit(job, fieldVisit) {
+  if (fieldVisit || !Array.isArray(job?.allowedActions) || !job.allowedActions.includes('execute')) return false;
+  try {
+    return canonicalStatusFromStorage(storageStatusFromWorkOrder({ status: job?.status })) === 'scheduled';
+  } catch {
+    return false;
+  }
+}
+
 async function loadCurrentWorkVisitState(db, job) {
   const workOrderId = text(job?.workOrderId, 180);
   if (!workOrderId) throw fieldError('work_order_required', 'A Work Order id is required.');
@@ -90,9 +103,11 @@ async function loadCurrentWorkVisitState(db, job) {
 }
 
 async function attachCurrentWorkVisitState(db, job) {
+  const fieldVisit = await loadCurrentWorkVisitState(db, job);
   return {
     ...job,
-    fieldVisit: await loadCurrentWorkVisitState(db, job),
+    fieldVisit,
+    canPrepareVisit: canPrepareInitialVisit(job, fieldVisit),
   };
 }
 
@@ -102,6 +117,7 @@ async function attachCurrentWorkVisitStates(db, jobs) {
 
 module.exports.attachCurrentWorkVisitState = attachCurrentWorkVisitState;
 module.exports.attachCurrentWorkVisitStates = attachCurrentWorkVisitStates;
+module.exports.canPrepareInitialVisit = canPrepareInitialVisit;
 module.exports.loadCurrentWorkVisitState = loadCurrentWorkVisitState;
 module.exports.projectFieldVisitState = projectFieldVisitState;
 module.exports.selectCurrentWorkVisit = selectCurrentWorkVisit;
