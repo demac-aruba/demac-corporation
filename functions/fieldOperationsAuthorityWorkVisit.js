@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const { fieldFirestoreData } = require('./fieldOperationsFirestoreData');
 const {
   activeWorkOrder,
   allowedActionsForAssignment,
@@ -372,11 +373,11 @@ function createPrepareWorkVisitCommand({ db, resolveAssignment, appendAuditInTra
       }
 
       const occurredAt = text(now(), 80);
-      if (!occurredAt) throw new Error('Clock returned an invalid timestamp.');
+      if (!occurredAt || Number.isNaN(Date.parse(occurredAt))) throw new Error('Clock returned an invalid timestamp.');
       const visit = buildLegacyCompatibleWorkVisit({ order, appointment, identity, assignment, now: occurredAt });
       const event = visitAuditEvent({ requestId: stable, visit, identity, now: occurredAt });
 
-      transaction.create(visitRef, visit);
+      transaction.create(visitRef, fieldFirestoreData(visit, 'workVisit'));
       await appendAuditInTransaction({ transaction, event, visit, identity });
       result = {
         replayed: false,
