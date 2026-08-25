@@ -4,10 +4,13 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const {
+  LEASE_MS,
   automaticReplySupported,
   buildRuntimeBody,
   communicationMessageToRuntime,
   conversationIdentity,
+  enqueueInbound,
+  mayaOutboundReplayDecision,
   outboundDocumentId,
   outcomeConversationPatch,
   queueDocumentId,
@@ -18,6 +21,62 @@ const {
 } = require("./demacCustomerAgentCommunication");
 
 const CONVERSATION_ID = "COMM-1111111111111111111111111111111111111111";
+
+class FakeSnapshot {
+  constructor(ref, value) {
+    this.ref = ref;
+    this.id = ref.id;
+    this._value = value;
+    this.exists = value !== undefined;
+  }
+  data() { return this._value; }
+}
+
+class FakeRef {
+  constructor(db, collectionName, id) {
+    this.db = db;
+    this.collectionName = collectionName;
+    this.id = id;
+    this.path = `${collectionName}/${id}`;
+  }
+}
+
+class FakeDb {
+  constructor(seed = {}) {
+    this.docs = new Map(Object.entries(seed).map(([key, value]) => [key, { ...value }]));
+    this.transactionCount = 0;
+  }
+  collection(name) {
+    return { doc: (id) => new FakeRef(this, name, id) };
+  }
+  async runTransaction(callback) {
+    this.transactionCount += 1;
+    const writes = [];
+    const transaction = {
+      get: async (ref) => new FakeSnapshot(ref, this.docs.get(ref.path)),
+      set: (ref, value, options = {}) => writes.push({ ref, value, merge: options.merge === true }),
+    };
+    const result = await callback(transaction);
+    for (const write of writes) {
+      const current = this.docs.get(write.ref.path) || {};
+      this.docs.set(write.ref.path, write.merge ? { ...current, ...write.value } : { ...write.value });
+    }
+    return result;
+  }
+  read(path) { return this.docs.get(path); }
+}
+
+function inboundMessage(overrides = {}) {
+  return {
+    conversationId: CONVERSATION_ID,
+    communicationAccountId: "demac-wa-corporate",
+    provider: "wacli",
+    direction: "inbound",
+    customerInputVersion: 3,
+    text: "Hola",
+    ...overrides,
+  };
+}
 
 test("automatic replies are explicitly enabled only for the current wacli sender", () => {
   assert.equal(automaticReplySupported("wacli"), true);
@@ -150,6 +209,94 @@ test("malformed retry counters fail to zero instead of disabling retry limits", 
   assert.equal(safeAttemptCount("not-a-number"), 0);
   assert.equal(safeAttemptCount(-1), 0);
   assert.equal(safeAttemptCount(3), 3);
+});
+
+test("enqueue uses a transaction and cannot reset an active processing lease", async () => {
+  const messageId = "MSG-ACTIVE";
+  const queueId = queueDocumentId(CONVERSATION_ID, messageId);
+  const processingStartedAt = new Date(Date.now() - Math.floor(LEASE_MS / 2)).toISOString();
+  const db = new FakeDb({
+    [`customerAgentInboundQueue/${queueId}`]: {
+      id: queueId,
+      conversationId: CONVERSATION_ID,
+      messageId,
+      customerInputVersion: 3,
+      status: "processing",
+      processingStartedAt,
+      leaseOwnerId: "worker-active",
+      attempts: 1,
+    },
+  });
+  const result = await enqueueInbound({ messageId, message: inboundMessage() }, db);
+  assert.equal(result.completed, true);
+  assert.equal(result.processing, true);
+  assert.equal(db.transactionCount, 1);
+  assert.equal(db.read(`customerAgentInboundQueue/${queueId}`).status, "processing");
+  assert.equal(db.read(`customerAgentInboundQueue/${queueId}`).leaseOwnerId, "worker-active");
+});
+
+test("terminal failed inbound queue item cannot be resurrected by provider replay", async () => {
+  const messageId = "MSG-FAILED";
+  const queueId = queueDocumentId(CONVERSATION_ID, messageId);
+  const db = new FakeDb({
+    [`customerAgentInboundQueue/${queueId}`]: {
+      id: queueId,
+      conversationId: CONVERSATION_ID,
+      messageId,
+      customerInputVersion: 3,
+      status: "failed",
+      attempts: 5,
+    },
+  });
+  const result = await enqueueInbound({ messageId, message: inboundMessage() }, db);
+  assert.equal(result.completed, true);
+  assert.equal(db.read(`customerAgentInboundQueue/${queueId}`).status, "failed");
+  assert.equal(db.read(`customerAgentInboundQueue/${queueId}`).attempts, 5);
+});
+
+test("expired processing lease may be deliberately recovered without losing retry count", async () => {
+  const messageId = "MSG-EXPIRED";
+  const queueId = queueDocumentId(CONVERSATION_ID, messageId);
+  const db = new FakeDb({
+    [`customerAgentInboundQueue/${queueId}`]: {
+      id: queueId,
+      conversationId: CONVERSATION_ID,
+      messageId,
+      customerInputVersion: 3,
+      status: "processing",
+      processingStartedAt: new Date(Date.now() - LEASE_MS - 1000).toISOString(),
+      leaseOwnerId: "worker-expired",
+      attempts: 2,
+    },
+  });
+  const result = await enqueueInbound({ messageId, message: inboundMessage() }, db);
+  assert.equal(result.completed, false);
+  const current = db.read(`customerAgentInboundQueue/${queueId}`);
+  assert.equal(current.status, "queued");
+  assert.equal(current.attempts, 2);
+});
+
+test("Maya outbound replay is accepted only for the exact same command and live/sent lifecycle", () => {
+  const expected = {
+    communicationAccountId: "demac-wa-corporate",
+    conversationId: CONVERSATION_ID,
+    sourceInboundMessageId: "MSG-1",
+    to: "2975600000@s.whatsapp.net",
+    text: "Claro, podemos ayudar.",
+    expectedOwnershipVersion: 0,
+    expectedCustomerInputVersion: 3,
+  };
+  const existing = {
+    provider: "wacli",
+    outboundClass: "conversation_maya",
+    status: "processing",
+    ...expected,
+  };
+  assert.equal(mayaOutboundReplayDecision({ existing, expected }).allowed, true);
+  assert.equal(mayaOutboundReplayDecision({ existing: { ...existing, status: "sent" }, expected }).allowed, true);
+  assert.equal(mayaOutboundReplayDecision({ existing: { ...existing, text: "Different text" }, expected }).reason, "outbound-command-conflict");
+  assert.equal(mayaOutboundReplayDecision({ existing: { ...existing, status: "failed" }, expected }).reason, "outbound-terminal-failure");
+  assert.equal(mayaOutboundReplayDecision({ existing: { ...existing, status: "mystery" }, expected }).reason, "outbound-status-not-replayable");
 });
 
 test("normal agent result returns conversation to waiting_customer under AI ownership", () => {
