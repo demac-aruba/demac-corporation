@@ -43,18 +43,25 @@ async function loadMutationCrewContext({ db, transaction, dateKey }) {
   };
 }
 
-function requireMutationExecution(identity, assignment, deniedMessage = 'This assignment cannot execute Field mutations.') {
+function requireMutationAction(identity, assignment, action, deniedMessage = 'This assignment cannot execute the requested Field action.') {
   if (!assignment?.assigned) {
     throw fieldError('permission_denied', 'You are not assigned to this Field work.', 403);
   }
+  const normalizedAction = text(action, 120);
+  if (!normalizedAction) throw new Error('A Field mutation action is required.');
   const allowedActions = allowedActionsForAssignment(identity, assignment);
-  if (!allowedActions.includes('execute')) {
+  if (!allowedActions.includes(normalizedAction)) {
     throw fieldError('permission_denied', deniedMessage, 403, {
+      action: normalizedAction,
       responsibility: assignment.responsibility || null,
       source: assignment.source || null,
     });
   }
   return allowedActions;
+}
+
+function requireMutationExecution(identity, assignment, deniedMessage = 'This assignment cannot execute Field mutations.') {
+  return requireMutationAction(identity, assignment, 'execute', deniedMessage);
 }
 
 function createMutationAssignmentResolver({ db } = {}) {
@@ -73,4 +80,5 @@ function createMutationAssignmentResolver({ db } = {}) {
 
 module.exports.createMutationAssignmentResolver = createMutationAssignmentResolver;
 module.exports.loadMutationCrewContext = loadMutationCrewContext;
+module.exports.requireMutationAction = requireMutationAction;
 module.exports.requireMutationExecution = requireMutationExecution;

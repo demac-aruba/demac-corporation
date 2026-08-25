@@ -13,10 +13,11 @@ const {
 } = require('./fieldOperationsAuthorityCore');
 const { createPrepareWorkVisitCommand } = require('./fieldOperationsAuthorityWorkVisit');
 const { projectActivatedVisit } = require('./fieldOperationsVisitActions');
+const { createAttachExistingVisitAssetCommand, attachVisitAssetsToJob } = require('./fieldOperationsVisitAssets');
 const { attachCurrentWorkVisitState, attachCurrentWorkVisitStates } = require('./fieldOperationsVisitRead');
 const { createTransitionWorkVisitCommand } = require('./fieldOperationsVisitMutation');
 
-const FIELD_ACTIONS = new Set(['get_schedule', 'get_job', 'prepare_visit', 'transition_visit']);
+const FIELD_ACTIONS = new Set(['get_schedule', 'get_job', 'prepare_visit', 'transition_visit', 'attach_visit_asset']);
 
 function cleanText(value, limit = 1000) {
   return String(value ?? '').trim().slice(0, limit);
@@ -54,12 +55,20 @@ function apiError(error) {
   };
 }
 
-function createFieldOperationsApi({ db, verifyIdToken, reportError = () => {}, prepareWorkVisit, transitionWorkVisit } = {}) {
+function createFieldOperationsApi({
+  db,
+  verifyIdToken,
+  reportError = () => {},
+  prepareWorkVisit,
+  transitionWorkVisit,
+  attachExistingVisitAsset,
+} = {}) {
   if (!db || typeof db.collection !== 'function') throw new Error('A Firestore-compatible db is required.');
   if (typeof verifyIdToken !== 'function') throw new Error('verifyIdToken is required.');
   if (typeof reportError !== 'function') throw new Error('reportError must be a function when provided.');
   if (prepareWorkVisit !== undefined && typeof prepareWorkVisit !== 'function') throw new Error('prepareWorkVisit must be a function when provided.');
   if (transitionWorkVisit !== undefined && typeof transitionWorkVisit !== 'function') throw new Error('transitionWorkVisit must be a function when provided.');
+  if (attachExistingVisitAsset !== undefined && typeof attachExistingVisitAsset !== 'function') throw new Error('attachExistingVisitAsset must be a function when provided.');
 
   async function authenticate(request) {
     const token = bearerToken(request);
@@ -89,7 +98,12 @@ function createFieldOperationsApi({ db, verifyIdToken, reportError = () => {}, p
       const workOrderId = cleanText(data.workOrderId, 180);
       if (!workOrderId) throw fieldError('work_order_required', 'A Work Order id is required.');
       const job = await loadAssignedJob(db, identity, workOrderId);
-      return { success: true, version: FIELD_OPERATIONS_API_VERSION, job: publicJobProjection(await attachCurrentWorkVisitState(db, job)) };
+      const withVisit = await attachCurrentWorkVisitState(db, job);
+      return {
+        success: true,
+        version: FIELD_OPERATIONS_API_VERSION,
+        job: publicJobProjection(await attachVisitAssetsToJob(db, withVisit)),
+      };
     }
     if (action === 'prepare_visit') {
       if (typeof prepareWorkVisit !== 'function') {
@@ -118,6 +132,18 @@ function createFieldOperationsApi({ db, verifyIdToken, reportError = () => {}, p
         requestId: cleanText(data.requestId, 240),
       });
       return { ...transitioned, version: FIELD_OPERATIONS_API_VERSION };
+    }
+    if (action === 'attach_visit_asset') {
+      if (typeof attachExistingVisitAsset !== 'function') {
+        throw fieldError('mutation_not_configured', 'Field visit equipment attachment is not configured in this runtime.', 503);
+      }
+      const attached = await attachExistingVisitAsset({
+        identity,
+        visitId: cleanText(data.visitId, 180),
+        assetId: cleanText(data.assetId, 180),
+        requestId: cleanText(data.requestId, 240),
+      });
+      return { ...attached, version: FIELD_OPERATIONS_API_VERSION };
     }
     throw fieldError('unsupported_action', `Unsupported Field Operations action: ${action || 'missing'}.`, 400);
   }
@@ -155,11 +181,13 @@ function getDefaultApi() {
     const appendAuditInTransaction = createFieldAuditAppender({ db });
     const prepareWorkVisit = createPrepareWorkVisitCommand({ db, resolveAssignment, appendAuditInTransaction });
     const transitionWorkVisit = createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditInTransaction });
+    const attachExistingVisitAsset = createAttachExistingVisitAssetCommand({ db, resolveAssignment, appendAuditInTransaction });
     defaultApi = createFieldOperationsApi({
       db,
       verifyIdToken: (token) => getAuth().verifyIdToken(token, true),
       prepareWorkVisit,
       transitionWorkVisit,
+      attachExistingVisitAsset,
       reportError: ({ action, status, code, error }) => logger.error('Field Operations request failed', {
         action: cleanText(action, 120) || 'unknown',
         status,

@@ -42,8 +42,14 @@ test('inactive Field principals fail closed before assignment resolution', () =>
   }), /inactive or not provisioned/);
 });
 
-test('Field HTTP authority exposes governed reads plus audited visit preparation and active transitions', async () => {
-  assert.deepEqual([...FIELD_ACTIONS].sort(), ['get_job', 'get_schedule', 'prepare_visit', 'transition_visit']);
+test('Field HTTP authority exposes only governed reads and activated audited mutations', async () => {
+  assert.deepEqual([...FIELD_ACTIONS].sort(), [
+    'attach_visit_asset',
+    'get_job',
+    'get_schedule',
+    'prepare_visit',
+    'transition_visit',
+  ]);
 
   const api = createFieldOperationsApi({
     db: { collection() { return {}; } },
@@ -56,6 +62,10 @@ test('Field HTTP authority exposes governed reads plus audited visit preparation
   );
   await assert.rejects(
     () => api.execute({ action: 'transition_visit', data: {}, identity: { operations: false } }),
+    (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
+  );
+  await assert.rejects(
+    () => api.execute({ action: 'attach_visit_asset', data: {}, identity: { operations: false } }),
     (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
   );
   await assert.rejects(
@@ -170,14 +180,69 @@ test('transition_visit authenticates and forwards optimistic concurrency inputs 
   assert.equal('allowedActions' in calls[0], false, 'client action projection must not be forwarded as authority');
 });
 
+test('attach_visit_asset authenticates and forwards only canonical visit/asset identity plus request id', async () => {
+  const calls = [];
+  const api = createFieldOperationsApi({
+    db: authDb({ active: true, role: 'technician', staffId: 'staff-1', name: 'Tech One', vanId: 'VAN-1' }),
+    verifyIdToken: async () => ({ uid: 'uid-1' }),
+    attachExistingVisitAsset: async (input) => {
+      calls.push(input);
+      return {
+        success: true,
+        replayed: false,
+        visitAsset: {
+          id: 'VA-1',
+          visitId: 'visit-WO-1',
+          assetId: 'AC-1',
+          sequence: 1,
+          locationLabel: 'Sala',
+          source: 'existing_asset',
+          status: 'identified',
+          addedOnSite: true,
+          createdAt: '2026-08-25T10:00:00.000Z',
+          createdBy: 'uid-1',
+          updatedAt: '2026-08-25T10:00:00.000Z',
+          updatedBy: 'uid-1',
+          version: 1,
+        },
+        allowedActions: ['read', 'execute', 'asset.add'],
+      };
+    },
+  });
+
+  const result = await api.handle(request({
+    token: 'valid-token',
+    action: 'attach_visit_asset',
+    data: {
+      visitId: ' visit-WO-1 ',
+      assetId: ' AC-1 ',
+      requestId: ' attach-asset-001 ',
+      allowedActions: ['price.override'],
+      customerId: 'CLIENT-OTHER',
+    },
+  }));
+
+  assert.equal(result.status, 200);
+  assert.equal(result.body.version, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].visitId, 'visit-WO-1');
+  assert.equal(calls[0].assetId, 'AC-1');
+  assert.equal(calls[0].requestId, 'attach-asset-001');
+  assert.equal(calls[0].identity.staffId, 'staff-1');
+  assert.equal('allowedActions' in calls[0], false);
+  assert.equal('customerId' in calls[0], false);
+});
+
 test('Field mutation actions cannot execute without authentication', async () => {
   let prepareCalled = false;
   let transitionCalled = false;
+  let attachCalled = false;
   const api = createFieldOperationsApi({
     db: authDb({ active: true, role: 'technician', staffId: 'staff-1' }),
     verifyIdToken: async () => ({ uid: 'uid-1' }),
     prepareWorkVisit: async () => { prepareCalled = true; return { success: true }; },
     transitionWorkVisit: async () => { transitionCalled = true; return { success: true }; },
+    attachExistingVisitAsset: async () => { attachCalled = true; return { success: true }; },
   });
 
   const prepare = await api.handle(request({ action: 'prepare_visit', data: { workOrderId: 'WO-1', requestId: 'prepare-WO-1-001' } }));
@@ -187,8 +252,14 @@ test('Field mutation actions cannot execute without authentication', async () =>
   const transition = await api.handle(request({ action: 'transition_visit', data: { visitId: 'visit-WO-1', to: 'en_route', expectedVersion: 1, requestId: 'transition-route-001' } }));
   assert.equal(transition.status, 401);
   assert.equal(transition.body.error.code, 'unauthenticated');
+
+  const attach = await api.handle(request({ action: 'attach_visit_asset', data: { visitId: 'visit-WO-1', assetId: 'AC-1', requestId: 'attach-asset-001' } }));
+  assert.equal(attach.status, 401);
+  assert.equal(attach.body.error.code, 'unauthenticated');
+
   assert.equal(prepareCalled, false);
   assert.equal(transitionCalled, false);
+  assert.equal(attachCalled, false);
 });
 
 test('missing and expired Firebase sessions return controlled unauthenticated errors', async () => {

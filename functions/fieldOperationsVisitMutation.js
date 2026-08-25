@@ -1,26 +1,20 @@
 const crypto = require('node:crypto');
 const { fieldFirestoreData } = require('./fieldOperationsFirestoreData');
-const { activeWorkOrder, fieldError } = require('./fieldOperationsAuthorityCore');
+const { fieldError } = require('./fieldOperationsAuthorityCore');
 const {
-  assertExistingVisitCompatible,
   canonicalStatusFromStorage,
   projectCanonicalWorkVisit,
   stableRequestId,
   storageStatusFromCanonical,
 } = require('./fieldOperationsAuthorityWorkVisit');
-const { requireMutationExecution } = require('./fieldOperationsMutationAssignment');
 const { transitionCanonicalWorkVisit } = require('./fieldOperationsAuthorityTransitions');
 const { ACTIVE_VISIT_TARGETS, projectActivatedVisit } = require('./fieldOperationsVisitActions');
-const { selectCurrentWorkVisit } = require('./fieldOperationsVisitRead');
+const { loadCurrentVisitMutationContext } = require('./fieldOperationsVisitMutationContext');
 
 const ACTIVE_VISIT_TARGET_SET = new Set(ACTIVE_VISIT_TARGETS);
 
 function text(value, limit = 1000) {
   return String(value ?? '').trim().slice(0, limit);
-}
-
-function snapshotRecords(snapshot) {
-  return (snapshot?.docs || []).map((document) => ({ id: document.id, ...document.data() }));
 }
 
 function deterministicEventId(requestId, visitId, target) {
@@ -86,52 +80,23 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
 
     let result;
     await db.runTransaction(async (transaction) => {
-      const visitRef = db.collection('workVisits').doc(normalizedVisitId);
-      const visitSnapshot = await transaction.get(visitRef);
-      if (!visitSnapshot.exists) throw fieldError('visit_not_found', 'The requested Work Visit is not available.', 404);
-      const storedVisit = { id: visitSnapshot.id, ...visitSnapshot.data() };
-      const initialProjection = projectCanonicalWorkVisit(storedVisit);
-      const workOrderId = text(initialProjection.workOrderId, 180);
-      if (!workOrderId) throw fieldError('visit_identity_conflict', 'The Work Visit is missing its Work Order identity.', 409);
-
-      const workOrderRef = db.collection('workOrders').doc(workOrderId);
-      const workOrderSnapshot = await transaction.get(workOrderRef);
-      if (!workOrderSnapshot.exists) throw fieldError('work_order_not_found', 'The Work Order for this visit is not available.', 404);
-      const order = { id: workOrderSnapshot.id, ...workOrderSnapshot.data() };
-      if (!activeWorkOrder(order)) throw fieldError('work_order_not_available', 'This Work Order is no longer released for active Field execution.', 409);
-
-      const assignment = await resolveAssignment({ transaction, identity, order });
-      const allowedActions = requireMutationExecution(
+      const context = await loadCurrentVisitMutationContext({
+        db,
+        transaction,
         identity,
-        assignment,
-        'This assignment cannot change active Work Visit status.',
-      );
-
-      const appointmentId = text(order.appointmentId, 180);
-      const customerId = text(order.clientId, 180);
-      const propertyId = text(order.propertyId, 180);
-      if (!appointmentId || !customerId || !propertyId) {
-        throw fieldError('work_order_identity_incomplete', 'The Work Order is missing required Field identity references.', 409, {
-          appointmentId: appointmentId || null,
-          customerId: customerId || null,
-          propertyId: propertyId || null,
-        });
-      }
-
-      // Read and mutation use the same physical-history rule. Every record in the linked chain
-      // must be identity-compatible with the current WorkOrder, and only the chain tip may change.
-      const historySnapshot = await transaction.get(
-        db.collection('workVisits').where('workOrderId', '==', workOrderId),
-      );
-      const historyRecords = snapshotRecords(historySnapshot);
-      for (const record of historyRecords) assertExistingVisitCompatible(record, order);
-      const currentRecord = selectCurrentWorkVisit(historyRecords, workOrderId);
-      if (!currentRecord || text(currentRecord.id, 180) !== normalizedVisitId) {
-        throw fieldError('visit_not_current', 'Only the current physical Work Visit may be transitioned.', 409, {
-          currentVisitId: text(currentRecord?.id, 180) || null,
-        });
-      }
-      const canonicalVisit = projectCanonicalWorkVisit(storedVisit, { appointmentId, propertyId });
+        visitId: normalizedVisitId,
+        resolveAssignment,
+        action: 'execute',
+        deniedMessage: 'This assignment cannot change active Work Visit status.',
+      });
+      const {
+        allowedActions,
+        appointmentId,
+        canonicalVisit,
+        propertyId,
+        storedVisit,
+        visitRef,
+      } = context;
 
       const currentStatus = canonicalStatusFromStorage(storedVisit.status);
       if (currentStatus === target) {
