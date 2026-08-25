@@ -305,7 +305,7 @@ function validateFinalResponse(
       return { ok: false, code: "requires_human_requires_handoff", message: "requiresHuman=true is only valid with outcome=handoff." };
     }
     if (final.handoffQueue || final.handoffReason) {
-      return { ok: false, code: "non_handoff_must_clear_routing", message: "Non-handoff outcomes must leave handoffQueue and handoffReason empty." };
+      return { ok: false, code: "non_handoff_must_clear_routing", message: "Non-handoff outcomes must leave handoffQueue and handoffReason empty strings." };
     }
   }
   if (final.outcome === "appointment_confirmed") {
@@ -445,18 +445,7 @@ function createCustomerAgentRuntime({
         : { allowed: true };
     }
 
-    async function humanOwnershipResult(decision = {}) {
-      await outcomeRecorder({
-        db,
-        context: normalized.context,
-        outcome: "handoff",
-        language: cleanText(state.session?.language, 40),
-        requiresHuman: true,
-        appointmentId: cleanText(state.session?.appointmentId, 180),
-        reservationId: cleanText(state.session?.reservationId, 180),
-        handoffQueue: cleanText(state.session?.handoffQueue, 80),
-        handoffReason: cleanText(state.session?.handoffReason, 500),
-      });
+    function humanOwnershipResult(decision = {}) {
       return {
         draft: "",
         source: "demac-customer-agent-runtime-v1",
