@@ -29,6 +29,23 @@ export type FieldResponsibility = (typeof FIELD_RESPONSIBILITIES)[number];
 const FIELD_ASSIGNMENT_SOURCES = ['office', 'daily_assignment', 'regular_crew', 'direct_staff', 'profile_van_fallback'] as const;
 export type FieldAssignmentSource = (typeof FIELD_ASSIGNMENT_SOURCES)[number];
 
+const FIELD_VISIT_STATUSES = [
+  'scheduled',
+  'en_route',
+  'on_site',
+  'in_progress',
+  'pending',
+  'requires_return_visit',
+  'ready_for_office_review',
+  'completed',
+  'no_access',
+  'cancelled',
+] as const;
+export type FieldVisitStatus = (typeof FIELD_VISIT_STATUSES)[number];
+
+const FIELD_PREPARE_SOURCES = ['field_authority', 'legacy_existing'] as const;
+export type FieldPrepareSource = (typeof FIELD_PREPARE_SOURCES)[number];
+
 export type FieldPlannedWork = {
   id: string;
   serviceId?: string;
@@ -82,13 +99,58 @@ export type FieldKnownEquipment = {
   active: boolean;
 };
 
+export type FieldScheduledScopeSnapshot = {
+  appointmentId: string;
+  capturedAt: string;
+  estimatedUnitCount: number;
+  workLines: FieldPlannedWork[];
+  customerFacingDescription?: string;
+  technicianInstructions?: string;
+};
+
+export type FieldPreparedVisit = {
+  id: string;
+  appointmentId: string;
+  workOrderId: string;
+  customerId: string;
+  propertyId: string;
+  scheduledScopeSnapshot: FieldScheduledScopeSnapshot;
+  status: FieldVisitStatus;
+  leadTechnicianStaffId?: string;
+  participatingStaffIds: string[];
+  departedAt?: string;
+  arrivedAt?: string;
+  startedAt?: string;
+  submittedAt?: string;
+  completedAt?: string;
+  requiresSecondVisit: boolean;
+  secondVisitReason?: string;
+  previousVisitId?: string;
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+  updatedBy: string;
+  version: number;
+};
+
 export type FieldJobDetail = FieldScheduleJob & { knownEquipment: FieldKnownEquipment[] };
 export type FieldScheduleResponse = { success: true; version: typeof FIELD_AUTHORITY_API_VERSION; jobs: FieldScheduleJob[] };
 export type FieldJobResponse = { success: true; version: typeof FIELD_AUTHORITY_API_VERSION; job: FieldJobDetail };
+export type FieldPrepareVisitResponse = {
+  success: true;
+  version: typeof FIELD_AUTHORITY_API_VERSION;
+  replayed: boolean;
+  source: FieldPrepareSource;
+  visit: FieldPreparedVisit;
+  allowedActions: FieldAllowedAction[];
+  auditEventId?: string;
+};
 
 const RESPONSIBILITIES = new Set<string>(FIELD_RESPONSIBILITIES);
 const ASSIGNMENT_SOURCES = new Set<string>(FIELD_ASSIGNMENT_SOURCES);
 const ALLOWED_ACTIONS = new Set<string>(FIELD_ALLOWED_ACTIONS);
+const VISIT_STATUSES = new Set<string>(FIELD_VISIT_STATUSES);
+const PREPARE_SOURCES = new Set<string>(FIELD_PREPARE_SOURCES);
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -106,6 +168,10 @@ function optionalString(value: unknown) {
 
 function optionalFiniteNumber(value: unknown) {
   return value === undefined || value === null || (typeof value === 'number' && Number.isFinite(value));
+}
+
+function allowedActionsValid(value: unknown): value is FieldAllowedAction[] {
+  return Array.isArray(value) && value.every((action) => string(action) && ALLOWED_ACTIONS.has(action));
 }
 
 function plannedWorkValid(value: unknown) {
@@ -155,8 +221,7 @@ function scheduleJobValid(value: unknown): value is FieldScheduleJob {
     && RESPONSIBILITIES.has(job.responsibility)
     && string(job.assignmentSource)
     && ASSIGNMENT_SOURCES.has(job.assignmentSource)
-    && Array.isArray(job.allowedActions)
-    && job.allowedActions.every((action) => string(action) && ALLOWED_ACTIONS.has(action))
+    && allowedActionsValid(job.allowedActions)
     && optionalString(job.assignmentRole);
 }
 
@@ -178,6 +243,46 @@ function knownEquipmentValid(value: unknown) {
       && optionalString(equipment!.condition)
       && typeof equipment!.active === 'boolean';
   });
+}
+
+function preparedVisitValid(value: unknown): value is FieldPreparedVisit {
+  const visit = record(value);
+  if (!visit) return false;
+  const snapshot = record(visit.scheduledScopeSnapshot);
+  return string(visit.id)
+    && string(visit.appointmentId)
+    && string(visit.workOrderId)
+    && string(visit.customerId)
+    && string(visit.propertyId)
+    && Boolean(snapshot)
+    && string(snapshot!.appointmentId)
+    && string(snapshot!.capturedAt)
+    && typeof snapshot!.estimatedUnitCount === 'number'
+    && Number.isFinite(snapshot!.estimatedUnitCount)
+    && snapshot!.estimatedUnitCount >= 0
+    && plannedWorkValid(snapshot!.workLines)
+    && optionalString(snapshot!.customerFacingDescription)
+    && optionalString(snapshot!.technicianInstructions)
+    && string(visit.status)
+    && VISIT_STATUSES.has(visit.status)
+    && optionalString(visit.leadTechnicianStaffId)
+    && Array.isArray(visit.participatingStaffIds)
+    && visit.participatingStaffIds.every(string)
+    && optionalString(visit.departedAt)
+    && optionalString(visit.arrivedAt)
+    && optionalString(visit.startedAt)
+    && optionalString(visit.submittedAt)
+    && optionalString(visit.completedAt)
+    && typeof visit.requiresSecondVisit === 'boolean'
+    && optionalString(visit.secondVisitReason)
+    && optionalString(visit.previousVisitId)
+    && string(visit.createdAt)
+    && string(visit.createdBy)
+    && string(visit.updatedAt)
+    && string(visit.updatedBy)
+    && typeof visit.version === 'number'
+    && Number.isFinite(visit.version)
+    && visit.version >= 1;
 }
 
 function envelope(value: unknown): Record<string, unknown> {
@@ -206,4 +311,17 @@ export function parseFieldJobResponse(value: unknown): FieldJobResponse {
     throw new Error('Field Operations returned malformed equipment data. Refresh and try again.');
   }
   return payload as FieldJobResponse;
+}
+
+export function parseFieldPrepareVisitResponse(value: unknown): FieldPrepareVisitResponse {
+  const payload = envelope(value);
+  if (typeof payload.replayed !== 'boolean'
+    || !string(payload.source)
+    || !PREPARE_SOURCES.has(payload.source)
+    || !preparedVisitValid(payload.visit)
+    || !allowedActionsValid(payload.allowedActions)
+    || !optionalString(payload.auditEventId)) {
+    throw new Error('Field Operations returned malformed visit preparation data. Refresh and try again.');
+  }
+  return payload as FieldPrepareVisitResponse;
 }
