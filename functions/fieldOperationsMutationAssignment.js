@@ -1,6 +1,11 @@
 const { canonicalizeVanCatalog, resolveCanonicalVanId } = require('./bookingVanIdentity');
 const { resolveCrewMembership } = require('./bookingSchedulingPrimitives');
-const { fieldAssignmentForIdentity, validDateKey } = require('./fieldOperationsAuthorityCore');
+const {
+  allowedActionsForAssignment,
+  fieldAssignmentForIdentity,
+  fieldError,
+  validDateKey,
+} = require('./fieldOperationsAuthorityCore');
 
 function text(value, limit = 1000) {
   return String(value ?? '').trim().slice(0, limit);
@@ -38,6 +43,20 @@ async function loadMutationCrewContext({ db, transaction, dateKey }) {
   };
 }
 
+function requireMutationExecution(identity, assignment, deniedMessage = 'This assignment cannot execute Field mutations.') {
+  if (!assignment?.assigned) {
+    throw fieldError('permission_denied', 'You are not assigned to this Field work.', 403);
+  }
+  const allowedActions = allowedActionsForAssignment(identity, assignment);
+  if (!allowedActions.includes('execute')) {
+    throw fieldError('permission_denied', deniedMessage, 403, {
+      responsibility: assignment.responsibility || null,
+      source: assignment.source || null,
+    });
+  }
+  return allowedActions;
+}
+
 function createMutationAssignmentResolver({ db } = {}) {
   if (!db || typeof db.collection !== 'function') throw new Error('A Firestore-compatible db is required.');
 
@@ -54,3 +73,4 @@ function createMutationAssignmentResolver({ db } = {}) {
 
 module.exports.createMutationAssignmentResolver = createMutationAssignmentResolver;
 module.exports.loadMutationCrewContext = loadMutationCrewContext;
+module.exports.requireMutationExecution = requireMutationExecution;

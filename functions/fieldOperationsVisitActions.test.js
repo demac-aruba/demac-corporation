@@ -1,12 +1,24 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { activatedVisitTransitions } = require('./fieldOperationsVisitActions');
+const { activatedVisitTransitions, projectActivatedVisit } = require('./fieldOperationsVisitActions');
 
 test('activated transitions are projected from the canonical server graph', () => {
   assert.deepEqual(activatedVisitTransitions('scheduled', ['read', 'execute']), ['en_route']);
   assert.deepEqual(activatedVisitTransitions('en_route', ['execute']), ['on_site']);
   assert.deepEqual(activatedVisitTransitions('on_site', ['execute']), ['in_progress']);
   assert.deepEqual(activatedVisitTransitions('in_progress', ['execute']), []);
+});
+
+test('one projector owns activated-transition decoration for Field visit responses', () => {
+  const visit = { id: 'visit-1', status: 'en_route', version: 2 };
+  assert.deepEqual(projectActivatedVisit(visit, ['read', 'execute']), {
+    ...visit,
+    availableTransitions: ['on_site'],
+  });
+  assert.deepEqual(projectActivatedVisit(visit, ['read']), {
+    ...visit,
+    availableTransitions: [],
+  });
 });
 
 test('non-executing assignments receive no active transition projection', () => {

@@ -4,7 +4,7 @@ const {
   projectCanonicalWorkVisit,
   workOrderAllowsInitialVisitPreparation,
 } = require('./fieldOperationsAuthorityWorkVisit');
-const { activatedVisitTransitions } = require('./fieldOperationsVisitActions');
+const { projectActivatedVisit } = require('./fieldOperationsVisitActions');
 
 function text(value, limit = 1000) {
   return String(value ?? '').trim().slice(0, limit);
@@ -79,10 +79,7 @@ function projectFieldVisitState(record, job) {
     || visit.appointmentId !== text(job?.appointmentId, 180)) {
     throw fieldError('visit_identity_conflict', 'The current Work Visit identity does not match this Work Order.', 409);
   }
-  return {
-    ...visit,
-    availableTransitions: activatedVisitTransitions(visit.status, job?.allowedActions),
-  };
+  return projectActivatedVisit(visit, job?.allowedActions);
 }
 
 function canPrepareInitialVisit(job, fieldVisit) {

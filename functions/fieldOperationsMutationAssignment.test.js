@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { createMutationAssignmentResolver } = require('./fieldOperationsMutationAssignment');
+const { createMutationAssignmentResolver, requireMutationExecution } = require('./fieldOperationsMutationAssignment');
 
 function snapshot(id, value) {
   return { id, exists: value !== undefined, data: () => value };
@@ -140,5 +140,23 @@ test('invalid Work Order date fails closed before any mutation assignment is gra
   await assert.rejects(
     () => resolveAssignment({ transaction: fixture.transaction, identity: identity(), order: order({ date: 'not-a-date' }) }),
     /YYYY-MM-DD|invalid/i,
+  );
+});
+
+test('mutation execution gate reuses server action policy instead of caller-specific role inference', () => {
+  const executable = { assigned: true, responsibility: 'lead', source: 'regular_crew', readOnly: false };
+  assert.ok(requireMutationExecution(identity(), executable).includes('execute'));
+
+  assert.throws(
+    () => requireMutationExecution(identity(), { ...executable, responsibility: 'helper' }, 'helper denied'),
+    (error) => error?.code === 'permission_denied' && /helper denied/.test(error.message),
+  );
+  assert.throws(
+    () => requireMutationExecution(identity(), { ...executable, readOnly: true, source: 'profile_van_fallback' }, 'read only denied'),
+    (error) => error?.code === 'permission_denied' && /read only denied/.test(error.message),
+  );
+  assert.throws(
+    () => requireMutationExecution(identity(), { assigned: false, responsibility: null, source: 'unassigned', readOnly: true }),
+    (error) => error?.code === 'permission_denied' && /not assigned/.test(error.message),
   );
 });

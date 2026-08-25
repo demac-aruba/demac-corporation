@@ -1,14 +1,16 @@
 const crypto = require('node:crypto');
 const { fieldFirestoreData } = require('./fieldOperationsFirestoreData');
-const { activeWorkOrder, allowedActionsForAssignment, fieldError } = require('./fieldOperationsAuthorityCore');
+const { activeWorkOrder, fieldError } = require('./fieldOperationsAuthorityCore');
 const {
   assertExistingVisitCompatible,
   canonicalStatusFromStorage,
   projectCanonicalWorkVisit,
   stableRequestId,
+  storageStatusFromCanonical,
 } = require('./fieldOperationsAuthorityWorkVisit');
+const { requireMutationExecution } = require('./fieldOperationsMutationAssignment');
 const { transitionCanonicalWorkVisit } = require('./fieldOperationsAuthorityTransitions');
-const { ACTIVE_VISIT_TARGETS, activatedVisitTransitions } = require('./fieldOperationsVisitActions');
+const { ACTIVE_VISIT_TARGETS, projectActivatedVisit } = require('./fieldOperationsVisitActions');
 const { selectCurrentWorkVisit } = require('./fieldOperationsVisitRead');
 
 const ACTIVE_VISIT_TARGET_SET = new Set(ACTIVE_VISIT_TARGETS);
@@ -25,19 +27,12 @@ function deterministicEventId(requestId, visitId, target) {
   return `FE-${crypto.createHash('sha256').update(`${requestId}:work_visit_transition:${visitId}:${target}`).digest('hex').slice(0, 24)}`;
 }
 
-function storageStatusForActiveTarget(target) {
-  if (target === 'en_route') return 'on_the_way';
-  if (target === 'on_site') return 'on_site';
-  if (target === 'in_progress') return 'in_progress';
-  throw fieldError('transition_not_activated', `Work Visit transition is not activated in this slice: ${target || 'missing'}.`, 400);
-}
-
 function activeTransitionPatch({ storedVisit, transitionedVisit, target, identity, occurredAt }) {
   if (!Number.isSafeInteger(transitionedVisit.version) || transitionedVisit.version < 1 || transitionedVisit.version >= Number.MAX_SAFE_INTEGER) {
     throw fieldError('visit_version_exhausted', 'Work Visit version cannot be advanced safely.', 409, { version: transitionedVisit.version });
   }
   const patch = {
-    status: storageStatusForActiveTarget(target),
+    status: storageStatusFromCanonical(target),
     updatedAt: occurredAt,
     updatedByUserId: text(identity.uid, 180),
     updatedByStaffId: text(identity.staffId, 180) || undefined,
@@ -68,25 +63,6 @@ function transitionAuditEvent({ requestId, visit, previousStatus, nextStatus, id
     performedByName: text(identity.name, 180) || text(identity.email, 180) || text(identity.uid, 180),
     before: { status: previousStatus, version: visit.version },
     after: { status: nextStatus, version: nextVersion },
-  };
-}
-
-function requireExecuteAssignment(identity, assignment) {
-  if (!assignment?.assigned) throw fieldError('permission_denied', 'You are not assigned to this Work Visit.', 403);
-  const allowedActions = allowedActionsForAssignment(identity, assignment);
-  if (!allowedActions.includes('execute')) {
-    throw fieldError('permission_denied', 'This assignment cannot change active Work Visit status.', 403, {
-      responsibility: assignment.responsibility || null,
-      source: assignment.source || null,
-    });
-  }
-  return allowedActions;
-}
-
-function responseVisit(visit, allowedActions) {
-  return {
-    ...visit,
-    availableTransitions: activatedVisitTransitions(visit.status, allowedActions),
   };
 }
 
@@ -125,7 +101,11 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
       if (!activeWorkOrder(order)) throw fieldError('work_order_not_available', 'This Work Order is no longer released for active Field execution.', 409);
 
       const assignment = await resolveAssignment({ transaction, identity, order });
-      const allowedActions = requireExecuteAssignment(identity, assignment);
+      const allowedActions = requireMutationExecution(
+        identity,
+        assignment,
+        'This assignment cannot change active Work Visit status.',
+      );
 
       const appointmentId = text(order.appointmentId, 180);
       const customerId = text(order.clientId, 180);
@@ -157,7 +137,12 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
       if (currentStatus === target) {
         // Retry after a successful transaction is a no-op even if the caller still holds the
         // pre-transition version. The first transition and audit event already committed atomically.
-        result = { success: true, replayed: true, visit: responseVisit(canonicalVisit, allowedActions), allowedActions };
+        result = {
+          success: true,
+          replayed: true,
+          visit: projectActivatedVisit(canonicalVisit, allowedActions),
+          allowedActions,
+        };
         return;
       }
 
@@ -189,7 +174,7 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
       result = {
         success: true,
         replayed: false,
-        visit: responseVisit(nextVisit, allowedActions),
+        visit: projectActivatedVisit(nextVisit, allowedActions),
         allowedActions,
         auditEventId: event.id,
       };
@@ -202,5 +187,4 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
 module.exports.ACTIVE_VISIT_TARGETS = ACTIVE_VISIT_TARGETS;
 module.exports.activeTransitionPatch = activeTransitionPatch;
 module.exports.createTransitionWorkVisitCommand = createTransitionWorkVisitCommand;
-module.exports.storageStatusForActiveTarget = storageStatusForActiveTarget;
 module.exports.transitionAuditEvent = transitionAuditEvent;

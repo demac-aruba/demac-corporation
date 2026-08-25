@@ -2,25 +2,17 @@ const crypto = require('node:crypto');
 const { fieldFirestoreData } = require('./fieldOperationsFirestoreData');
 const {
   activeWorkOrder,
-  allowedActionsForAssignment,
   fieldError,
   plannedWorkItems,
 } = require('./fieldOperationsAuthorityCore');
+const { requireMutationExecution } = require('./fieldOperationsMutationAssignment');
 
 const FIELD_WORK_VISIT_STORAGE_VERSION = 1;
+const INITIAL_VISIT_WORK_ORDER_STATUSES = new Set(['Confirmada', 'Asignada']);
 
-const WORK_ORDER_TO_VISIT_STATUS = Object.freeze({
-  Confirmada: 'not_started',
-  Asignada: 'not_started',
-  'En camino': 'on_the_way',
-  'En el sitio': 'on_site',
-  'En proceso': 'in_progress',
-  Pendiente: 'pending',
-});
-
-const STORAGE_TO_CANONICAL_STATUS = Object.freeze({
-  not_started: 'scheduled',
-  on_the_way: 'en_route',
+const CANONICAL_TO_STORAGE_STATUS = Object.freeze({
+  scheduled: 'not_started',
+  en_route: 'on_the_way',
   on_site: 'on_site',
   in_progress: 'in_progress',
   pending: 'pending',
@@ -30,6 +22,9 @@ const STORAGE_TO_CANONICAL_STATUS = Object.freeze({
   no_access: 'no_access',
   cancelled: 'cancelled',
 });
+const STORAGE_TO_CANONICAL_STATUS = Object.freeze(
+  Object.fromEntries(Object.entries(CANONICAL_TO_STORAGE_STATUS).map(([canonical, storage]) => [storage, canonical])),
+);
 
 function text(value, limit = 1000) {
   return String(value ?? '').trim().slice(0, limit);
@@ -66,11 +61,16 @@ function initialVisitDocumentId(workOrderId) {
   return `visit-${safe}`;
 }
 
-function storageStatusFromWorkOrder(order) {
-  const workOrderStatus = text(order?.status, 80);
-  const storageStatus = WORK_ORDER_TO_VISIT_STATUS[workOrderStatus];
+function storageStatusFromCanonical(value) {
+  const canonicalStatus = text(value, 80);
+  const storageStatus = CANONICAL_TO_STORAGE_STATUS[canonicalStatus];
   if (!storageStatus) {
-    throw fieldError('invalid_work_order_status', `Unsupported Work Order status for Field preparation: ${workOrderStatus || 'missing'}.`, 409, { workOrderStatus });
+    throw fieldError(
+      'invalid_visit_status',
+      `Unknown canonical Work Visit status: ${canonicalStatus || 'missing'}.`,
+      400,
+      { canonicalStatus },
+    );
   }
   return storageStatus;
 }
@@ -85,11 +85,20 @@ function canonicalStatusFromStorage(value) {
 }
 
 function workOrderAllowsInitialVisitPreparation(order) {
-  try {
-    return canonicalStatusFromStorage(storageStatusFromWorkOrder(order)) === 'scheduled';
-  } catch {
-    return false;
+  return INITIAL_VISIT_WORK_ORDER_STATUSES.has(text(order?.status, 80));
+}
+
+function storageStatusFromWorkOrder(order) {
+  const workOrderStatus = text(order?.status, 80);
+  if (!workOrderAllowsInitialVisitPreparation(order)) {
+    throw fieldError(
+      'invalid_work_order_status',
+      `Unsupported Work Order status for initial Field preparation: ${workOrderStatus || 'missing'}.`,
+      409,
+      { workOrderStatus },
+    );
   }
+  return storageStatusFromCanonical('scheduled');
 }
 
 function canonicalVisitVersion(value) {
@@ -320,20 +329,6 @@ function visitAuditEvent({ requestId, visit, identity, now }) {
   };
 }
 
-function requireMutationAssignment(identity, assignment) {
-  if (!assignment?.assigned) {
-    throw fieldError('permission_denied', 'You are not assigned to this Work Order.', 403);
-  }
-  const actions = allowedActionsForAssignment(identity, assignment);
-  if (!actions.includes('execute')) {
-    throw fieldError('permission_denied', 'This assignment may view the Work Order but cannot prepare a Work Visit.', 403, {
-      responsibility: assignment.responsibility || null,
-      source: assignment.source || null,
-    });
-  }
-  return actions;
-}
-
 function createPrepareWorkVisitCommand({ db, resolveAssignment, appendAuditInTransaction, now = () => new Date().toISOString() } = {}) {
   if (!db || typeof db.collection !== 'function' || typeof db.runTransaction !== 'function') {
     throw new Error('A transaction-capable Firestore db is required.');
@@ -381,7 +376,11 @@ function createPrepareWorkVisitCommand({ db, resolveAssignment, appendAuditInTra
       if (text(customer.id, 180) !== clientId) throw fieldError('customer_identity_mismatch', 'Customer identity mismatch.', 409);
 
       const assignment = await resolveAssignment({ transaction, identity, order });
-      const allowedActions = requireMutationAssignment(identity, assignment);
+      const allowedActions = requireMutationExecution(
+        identity,
+        assignment,
+        'This assignment may view the Work Order but cannot prepare a Work Visit.',
+      );
       const visitId = initialVisitDocumentId(normalizedWorkOrderId);
       const visitRef = db.collection('workVisits').doc(visitId);
       const existingSnapshot = await transaction.get(visitRef);
@@ -455,6 +454,7 @@ module.exports = {
   initialVisitDocumentId,
   projectCanonicalWorkVisit,
   stableRequestId,
+  storageStatusFromCanonical,
   storageStatusFromWorkOrder,
   visitAuditEvent,
   workOrderAllowsInitialVisitPreparation,

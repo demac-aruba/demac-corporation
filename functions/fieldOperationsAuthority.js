@@ -12,7 +12,7 @@ const {
   normalizeFieldIdentity,
 } = require('./fieldOperationsAuthorityCore');
 const { createPrepareWorkVisitCommand } = require('./fieldOperationsAuthorityWorkVisit');
-const { activatedVisitTransitions } = require('./fieldOperationsVisitActions');
+const { projectActivatedVisit } = require('./fieldOperationsVisitActions');
 const { attachCurrentWorkVisitState, attachCurrentWorkVisitStates } = require('./fieldOperationsVisitRead');
 const { createTransitionWorkVisitCommand } = require('./fieldOperationsVisitMutation');
 
@@ -51,14 +51,6 @@ function apiError(error) {
         details: internal ? {} : error?.details && typeof error.details === 'object' ? error.details : {},
       },
     },
-  };
-}
-
-function visitWithProjectedTransitions(visit, allowedActions) {
-  if (!visit || typeof visit !== 'object') return visit;
-  return {
-    ...visit,
-    availableTransitions: activatedVisitTransitions(visit.status, allowedActions),
   };
 }
 
@@ -110,7 +102,7 @@ function createFieldOperationsApi({ db, verifyIdToken, reportError = () => {}, p
       });
       return {
         ...prepared,
-        visit: visitWithProjectedTransitions(prepared.visit, prepared.allowedActions),
+        visit: projectActivatedVisit(prepared.visit, prepared.allowedActions),
         version: FIELD_OPERATIONS_API_VERSION,
       };
     }
@@ -202,4 +194,3 @@ module.exports.apiError = apiError;
 module.exports.bearerToken = bearerToken;
 module.exports.createFieldOperationsApi = createFieldOperationsApi;
 module.exports.publicJobProjection = publicJobProjection;
-module.exports.visitWithProjectedTransitions = visitWithProjectedTransitions;

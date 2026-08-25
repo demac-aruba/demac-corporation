@@ -8,5 +8,14 @@ function activatedVisitTransitions(status, allowedActions = []) {
   return allowedWorkVisitTransitions(status).filter((target) => ACTIVE_VISIT_TARGET_SET.has(target));
 }
 
+function projectActivatedVisit(visit, allowedActions = []) {
+  if (!visit || typeof visit !== 'object') return visit;
+  return {
+    ...visit,
+    availableTransitions: activatedVisitTransitions(visit.status, allowedActions),
+  };
+}
+
 module.exports.ACTIVE_VISIT_TARGETS = ACTIVE_VISIT_TARGETS;
 module.exports.activatedVisitTransitions = activatedVisitTransitions;
+module.exports.projectActivatedVisit = projectActivatedVisit;

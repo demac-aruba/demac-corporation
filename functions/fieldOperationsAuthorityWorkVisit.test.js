@@ -6,7 +6,9 @@ const {
   createPrepareWorkVisitCommand,
   initialVisitDocumentId,
   projectCanonicalWorkVisit,
+  storageStatusFromCanonical,
   storageStatusFromWorkOrder,
+  workOrderAllowsInitialVisitPreparation,
 } = require('./fieldOperationsAuthorityWorkVisit');
 
 function snapshot(id, value) {
@@ -143,15 +145,23 @@ function commandFixture(options = {}) {
   return { store, auditEvents, prepare };
 }
 
-test('status compatibility is allowlisted and has no unsafe fallback', () => {
+test('Work Order preparation eligibility is separate from Work Visit storage status compatibility', () => {
+  assert.equal(workOrderAllowsInitialVisitPreparation({ status: 'Confirmada' }), true);
+  assert.equal(workOrderAllowsInitialVisitPreparation({ status: 'Asignada' }), true);
+  for (const status of ['En camino', 'En el sitio', 'En proceso', 'Pendiente', 'Estado futuro', '']) {
+    assert.equal(workOrderAllowsInitialVisitPreparation({ status }), false);
+    assert.throws(() => storageStatusFromWorkOrder({ status }), /Unsupported Work Order status/);
+  }
   assert.equal(storageStatusFromWorkOrder({ status: 'Confirmada' }), 'not_started');
   assert.equal(storageStatusFromWorkOrder({ status: 'Asignada' }), 'not_started');
-  assert.equal(storageStatusFromWorkOrder({ status: 'En camino' }), 'on_the_way');
-  assert.equal(storageStatusFromWorkOrder({ status: 'En el sitio' }), 'on_site');
-  assert.equal(storageStatusFromWorkOrder({ status: 'En proceso' }), 'in_progress');
-  assert.equal(storageStatusFromWorkOrder({ status: 'Pendiente' }), 'pending');
-  assert.throws(() => storageStatusFromWorkOrder({ status: 'Estado futuro' }), /Unsupported Work Order status/);
-  assert.throws(() => storageStatusFromWorkOrder({}), /Unsupported Work Order status/);
+
+  assert.equal(storageStatusFromCanonical('scheduled'), 'not_started');
+  assert.equal(storageStatusFromCanonical('en_route'), 'on_the_way');
+  assert.equal(storageStatusFromCanonical('requires_return_visit'), 'requires_return_visit');
+  assert.equal(storageStatusFromCanonical('no_access'), 'no_access');
+  assert.throws(() => storageStatusFromCanonical('future_status'), /Unknown canonical Work Visit status/);
+  assert.throws(() => storageStatusFromCanonical(''), /Unknown canonical Work Visit status/);
+
   assert.equal(canonicalStatusFromStorage('not_started'), 'scheduled');
   assert.equal(canonicalStatusFromStorage('on_the_way'), 'en_route');
   assert.equal(canonicalStatusFromStorage('requires_return_visit'), 'requires_return_visit');
