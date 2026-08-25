@@ -6,6 +6,7 @@ const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/
 const { cleanText, hashId } = require("./bookingSchedulingPrimitives");
 const { createMayaCustomerObserver, MAYA_OBSERVER_VERSION } = require("./demacCustomerObserver");
 const { createCommunicationCaseService } = require("./demacCommunicationCaseService");
+const { customerSemanticContent, messageMediaType } = require("./demacCustomerTurn");
 const {
   MAYA_SETTINGS_COLLECTION,
   MAYA_SETTINGS_DOCUMENT,
@@ -27,11 +28,7 @@ function safeDocumentId(value) {
 }
 
 function observerContent(message = {}) {
-  const mediaType = cleanText(message.mediaType || message.type, 40).toLowerCase();
-  if (["audio", "voice"].includes(mediaType)) {
-    return cleanText(message.rawTranscript || message.transcript || message.normalizedTranscript, 8_000);
-  }
-  return cleanText(message.text || message.mediaCaption || message.reactionEmoji, 8_000);
+  return customerSemanticContent(message, 8_000);
 }
 
 function observerSourceFingerprint(message = {}, text = "") {
@@ -141,10 +138,9 @@ async function processObservedMessage({ messageId, message = {} } = {}) {
 }
 
 function transcriptBecameReady(before = {}, after = {}) {
-  const mediaType = cleanText(after.mediaType || after.type, 40).toLowerCase();
-  if (!["audio", "voice"].includes(mediaType)) return false;
-  const beforeText = cleanText(before.rawTranscript || before.transcript || before.normalizedTranscript, 8_000);
-  const afterText = cleanText(after.rawTranscript || after.transcript || after.normalizedTranscript, 8_000);
+  if (!["audio", "voice"].includes(messageMediaType(after))) return false;
+  const beforeText = observerContent(before);
+  const afterText = observerContent(after);
   return after.transcriptionStatus === "completed" && Boolean(afterText) && afterText !== beforeText;
 }
 
@@ -161,8 +157,7 @@ exports.observeCustomerInboundMessage = onDocumentCreated(
     const snapshot = event.data;
     if (!snapshot) return;
     const message = { id: snapshot.id, ...snapshot.data() };
-    const mediaType = cleanText(message.mediaType || message.type, 40).toLowerCase();
-    if (["audio", "voice"].includes(mediaType) && !observerContent(message)) return;
+    if (["audio", "voice"].includes(messageMediaType(message)) && !observerContent(message)) return;
     await processObservedMessage({ messageId: snapshot.id, message });
   },
 );
