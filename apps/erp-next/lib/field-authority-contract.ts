@@ -139,6 +139,7 @@ export type FieldScheduleJob = {
   allowedActions: FieldAllowedAction[];
   assignmentRole?: string;
   fieldVisit: FieldVisitState | null;
+  canPrepareVisit: boolean;
 };
 
 export type FieldJobDetail = FieldScheduleJob & { knownEquipment: FieldKnownEquipment[] };
@@ -289,7 +290,8 @@ function scheduleJobValid(value: unknown): value is FieldScheduleJob {
     && ASSIGNMENT_SOURCES.has(job.assignmentSource)
     && allowedActionsValid(job.allowedActions)
     && optionalString(job.assignmentRole)
-    && (job.fieldVisit === null || visitStateValid(job.fieldVisit));
+    && (job.fieldVisit === null || visitStateValid(job.fieldVisit))
+    && typeof job.canPrepareVisit === 'boolean';
 }
 
 function knownEquipmentValid(value: unknown) {
