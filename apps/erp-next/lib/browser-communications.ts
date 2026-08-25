@@ -5,6 +5,7 @@ import { requireFirebaseWebSession } from './firebase/session';
 import {
   assignConversation as assignConversationCommand,
   claimConversation as claimConversationCommand,
+  closeCommunicationConversation,
   markConversationRead as markConversationReadCommand,
   queueWhatsAppText as queueWhatsAppTextCommand,
   returnConversationToAi as returnConversationToAiCommand,
@@ -241,6 +242,16 @@ function enrichConversationWithCrm(conversation: LiveConversation, crm: CrmIndex
   return { ...conversation, customerId: client.id, customer: client.name || client.displayName || conversation.customer, avatarUrl: nullableString(client.avatarUrl) || conversation.avatarUrl, customerEmail: client.email || null, customerType: client.type || null, customerStatus: client.status || (client.active === false ? 'inactive' : 'active'), customerPropertiesCount: properties.length, customerEquipmentCount: equipment.length, customerProperties: propertyPreview, customerEquipment: equipmentPreview, property: propertySummary || conversation.property, equipment: equipment.length ? `${equipment.length} registered A/C` : conversation.equipment, language: client.preferredLanguage ? normalizeLanguage(client.preferredLanguage) : conversation.language };
 }
 
+async function currentConversationOwnershipVersion(conversationId: string) {
+  const current = await getFirestoreDocument<StoredConversation>('communicationConversations', conversationId);
+  if (!current) throw new Error('Communication conversation is no longer available.');
+  const ownershipVersion = Number(current.ownershipVersion ?? 0);
+  if (!Number.isSafeInteger(ownershipVersion) || ownershipVersion < 0) {
+    throw new Error('Communication conversation has an invalid ownership version.');
+  }
+  return ownershipVersion;
+}
+
 export async function loadCommunicationWorkspace() {
   const [storedConversations, storedOperators, settings] = await Promise.all([listFirestoreCollection<StoredConversation>('communicationConversations'), listFirestoreCollection<StoredOperatorPresence>('communicationOperatorPresence'), getFirestoreDocument<CommunicationSettings>('businessSettings', 'communications').catch(() => null)]);
   const [attributions, crm] = await Promise.all([loadOperatorAttributions(storedConversations), loadCrmIndex().catch(() => null)]);
@@ -255,19 +266,26 @@ export async function touchCommunicationPresence(principal: AuthPrincipal, prese
 }
 
 export async function claimConversation(conversationId: string, principal: AuthPrincipal) {
-  return claimConversationCommand(conversationId, principal);
+  const ownershipVersion = await currentConversationOwnershipVersion(conversationId);
+  return claimConversationCommand(conversationId, principal, ownershipVersion);
 }
 
 export async function assignConversation(conversationId: string, operator: Pick<LiveOperator, 'userId' | 'name'>) {
-  return assignConversationCommand(conversationId, operator);
+  const ownershipVersion = await currentConversationOwnershipVersion(conversationId);
+  return assignConversationCommand(conversationId, operator, ownershipVersion);
 }
 
 export async function returnConversationToAi(conversationId: string, principal: AuthPrincipal) {
-  return returnConversationToAiCommand(conversationId, principal);
+  const ownershipVersion = await currentConversationOwnershipVersion(conversationId);
+  return returnConversationToAiCommand(conversationId, principal, ownershipVersion);
 }
 
 export async function updateConversationStatus(conversationId: string, status: ConversationStatus) {
-  return updateConversationStatusCommand(conversationId, status);
+  const ownershipVersion = await currentConversationOwnershipVersion(conversationId);
+  if (status === 'resolved' || status === 'closed') {
+    return closeCommunicationConversation(conversationId, ownershipVersion);
+  }
+  return updateConversationStatusCommand(conversationId, status, ownershipVersion);
 }
 
 export async function markConversationRead(conversationId: string) {
@@ -280,17 +298,19 @@ export async function saveInternalCommunicationNote(conversationId: string, text
 }
 
 export async function queueWhatsAppText(conversation: LiveConversation, text: string, principal: AuthPrincipal, provider: WhatsAppProvider) {
-  return queueWhatsAppTextCommand(conversation, text, principal, provider);
+  const ownershipVersion = await currentConversationOwnershipVersion(conversation.id);
+  return queueWhatsAppTextCommand({ id: conversation.id, ownershipVersion }, text, principal, provider);
 }
 
 export async function queueWhatsAppMedia(conversation: LiveConversation, file: File, text: string, _principal: AuthPrincipal, provider: WhatsAppProvider, kindOverride?: WhatsAppMediaKind) {
   if (provider !== 'wacli') throw new Error('Free-form ERP media replies are currently enabled through the wacli provider.');
   const media = await uploadWhatsAppAttachment(file, kindOverride);
+  const ownershipVersion = await currentConversationOwnershipVersion(conversation.id);
   return sendCommunicationConversationReply({
     conversationId: conversation.id,
     text: text.trim(),
     media,
-    expectedOwnershipVersion: conversation.ownershipVersion,
+    expectedOwnershipVersion: ownershipVersion,
   });
 }
 
