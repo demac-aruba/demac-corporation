@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { FIELD_ACTIONS, createFieldOperationsApi } = require('./fieldOperationsAuthority');
+const { FIELD_ACTIONS, createFieldOperationsApi, publicJobProjection } = require('./fieldOperationsAuthority');
 const { normalizeFieldIdentity } = require('./fieldOperationsAuthorityCore');
 
 function authDb(profile) {
@@ -56,6 +56,19 @@ test('Field HTTP authority remains read-only until governed Field audit persiste
       /Unsupported Field Operations action/,
     );
   }
+});
+
+test('public Field DTO does not expose Legacy mixed-namespace technicianIds', () => {
+  const projected = publicJobProjection({
+    workOrderId: 'WO-1',
+    technicianIds: ['uid-legacy', 'staff-1'],
+    responsibility: 'technician',
+    allowedActions: ['read'],
+  });
+  assert.equal('technicianIds' in projected, false);
+  assert.equal(projected.workOrderId, 'WO-1');
+  assert.equal(projected.responsibility, 'technician');
+  assert.deepEqual(projected.allowedActions, ['read']);
 });
 
 test('HTTP method and unsupported action fail before protected business execution', async () => {
