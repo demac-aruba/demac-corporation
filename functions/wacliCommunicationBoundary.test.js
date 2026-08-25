@@ -7,6 +7,7 @@ const {
   wacliCanonicalIdentity,
   wacliCanonicalStatusId,
   wacliCommunicationAccountDecision,
+  wacliOutboundClaimDecision,
 } = require("./wacliCommunicationBoundary");
 
 function request(accountId) {
@@ -14,6 +15,17 @@ function request(accountId) {
     get(name) {
       return name.toLowerCase() === WACLI_COMMUNICATION_ACCOUNT_HEADER ? accountId : "";
     },
+  };
+}
+
+function conversation(overrides = {}) {
+  return {
+    communicationAccountId: "demac-wa-corporate",
+    provider: "wacli",
+    aiDisposition: "ai_active",
+    ownershipVersion: 2,
+    customerInputVersion: 8,
+    ...overrides,
   };
 }
 
@@ -96,4 +108,92 @@ test("only a newly committed unique inbound message advances customerInputVersio
     messageExists: true,
   }), 8);
   assert.equal(assignedCustomerInputVersion({ currentConversation: { customerInputVersion: 8 }, inbound: false, messageExists: false }), null);
+});
+
+test("transactional outbound is account-scoped but independent from conversation ownership", () => {
+  const decision = wacliOutboundClaimDecision({
+    communicationAccountId: "demac-wa-corporate",
+    queueItem: {
+      provider: "wacli",
+      communicationAccountId: "demac-wa-corporate",
+      outboundClass: "transactional",
+    },
+  });
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.reason, "transactional-send-authorized");
+});
+
+test("Maya outbound requires exact current ownership and customer-turn epochs", () => {
+  const queueItem = {
+    provider: "wacli",
+    communicationAccountId: "demac-wa-corporate",
+    outboundClass: "conversation_maya",
+    expectedOwnershipVersion: 2,
+    expectedCustomerInputVersion: 8,
+  };
+  assert.equal(wacliOutboundClaimDecision({
+    communicationAccountId: "demac-wa-corporate",
+    queueItem,
+    conversation: conversation(),
+  }).allowed, true);
+  const takeoverReturn = wacliOutboundClaimDecision({
+    communicationAccountId: "demac-wa-corporate",
+    queueItem,
+    conversation: conversation({ ownershipVersion: 4 }),
+  });
+  assert.equal(takeoverReturn.allowed, false);
+  assert.equal(takeoverReturn.reason, "stale-communication-epoch");
+  assert.equal(takeoverReturn.epochReason, "ownership-version-changed");
+  const newerTurn = wacliOutboundClaimDecision({
+    communicationAccountId: "demac-wa-corporate",
+    queueItem,
+    conversation: conversation({ customerInputVersion: 9 }),
+  });
+  assert.equal(newerTurn.allowed, false);
+  assert.equal(newerTurn.epochReason, "customer-input-version-changed");
+});
+
+test("Maya outbound is blocked immediately by human ownership even with matching epochs", () => {
+  const decision = wacliOutboundClaimDecision({
+    communicationAccountId: "demac-wa-corporate",
+    queueItem: {
+      provider: "wacli",
+      communicationAccountId: "demac-wa-corporate",
+      outboundClass: "conversation_maya",
+      expectedOwnershipVersion: 2,
+      expectedCustomerInputVersion: 8,
+    },
+    conversation: conversation({ aiDisposition: "human_active", ownerUserId: "operator-1" }),
+  });
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.reason, "maya-sender-ownership-invalid");
+});
+
+test("human outbound requires active human ownership and the same ownership epoch", () => {
+  const queueItem = {
+    provider: "wacli",
+    communicationAccountId: "demac-wa-corporate",
+    outboundClass: "conversation_human",
+    expectedOwnershipVersion: 5,
+  };
+  assert.equal(wacliOutboundClaimDecision({
+    communicationAccountId: "demac-wa-corporate",
+    queueItem,
+    conversation: conversation({ aiDisposition: "human_active", ownerUserId: "operator-1", ownershipVersion: 5 }),
+  }).allowed, true);
+  assert.equal(wacliOutboundClaimDecision({
+    communicationAccountId: "demac-wa-corporate",
+    queueItem,
+    conversation: conversation({ aiDisposition: "human_active", ownerUserId: "operator-1", ownershipVersion: 6 }),
+  }).reason, "ownership-version-changed");
+});
+
+test("missing or unknown outbound class fails closed", () => {
+  const decision = wacliOutboundClaimDecision({
+    communicationAccountId: "demac-wa-corporate",
+    queueItem: { provider: "wacli", communicationAccountId: "demac-wa-corporate" },
+    conversation: conversation(),
+  });
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.reason, "outbound-class-missing-or-unsupported");
 });
