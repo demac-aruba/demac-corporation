@@ -12,8 +12,11 @@ const {
   normalizeFieldIdentity,
 } = require('./fieldOperationsAuthorityCore');
 const { createPrepareWorkVisitCommand } = require('./fieldOperationsAuthorityWorkVisit');
+const { activatedVisitTransitions } = require('./fieldOperationsVisitActions');
+const { attachCurrentWorkVisitState, attachCurrentWorkVisitStates } = require('./fieldOperationsVisitRead');
+const { createTransitionWorkVisitCommand } = require('./fieldOperationsVisitMutation');
 
-const FIELD_ACTIONS = new Set(['get_schedule', 'get_job', 'prepare_visit']);
+const FIELD_ACTIONS = new Set(['get_schedule', 'get_job', 'prepare_visit', 'transition_visit']);
 
 function cleanText(value, limit = 1000) {
   return String(value ?? '').trim().slice(0, limit);
@@ -51,11 +54,20 @@ function apiError(error) {
   };
 }
 
-function createFieldOperationsApi({ db, verifyIdToken, reportError = () => {}, prepareWorkVisit } = {}) {
+function visitWithProjectedTransitions(visit, allowedActions) {
+  if (!visit || typeof visit !== 'object') return visit;
+  return {
+    ...visit,
+    availableTransitions: activatedVisitTransitions(visit.status, allowedActions),
+  };
+}
+
+function createFieldOperationsApi({ db, verifyIdToken, reportError = () => {}, prepareWorkVisit, transitionWorkVisit } = {}) {
   if (!db || typeof db.collection !== 'function') throw new Error('A Firestore-compatible db is required.');
   if (typeof verifyIdToken !== 'function') throw new Error('verifyIdToken is required.');
   if (typeof reportError !== 'function') throw new Error('reportError must be a function when provided.');
   if (prepareWorkVisit !== undefined && typeof prepareWorkVisit !== 'function') throw new Error('prepareWorkVisit must be a function when provided.');
+  if (transitionWorkVisit !== undefined && typeof transitionWorkVisit !== 'function') throw new Error('transitionWorkVisit must be a function when provided.');
 
   async function authenticate(request) {
     const token = bearerToken(request);
@@ -78,13 +90,14 @@ function createFieldOperationsApi({ db, verifyIdToken, reportError = () => {}, p
   async function execute({ action, data = {}, identity }) {
     if (action === 'get_schedule') {
       const jobs = await loadAssignedSchedule(db, identity, data.startDate, data.endDate || data.startDate);
-      return { success: true, version: FIELD_OPERATIONS_API_VERSION, jobs: jobs.map(publicJobProjection) };
+      const enriched = await attachCurrentWorkVisitStates(db, jobs);
+      return { success: true, version: FIELD_OPERATIONS_API_VERSION, jobs: enriched.map(publicJobProjection) };
     }
     if (action === 'get_job') {
       const workOrderId = cleanText(data.workOrderId, 180);
       if (!workOrderId) throw fieldError('work_order_required', 'A Work Order id is required.');
       const job = await loadAssignedJob(db, identity, workOrderId);
-      return { success: true, version: FIELD_OPERATIONS_API_VERSION, job: publicJobProjection(job) };
+      return { success: true, version: FIELD_OPERATIONS_API_VERSION, job: publicJobProjection(await attachCurrentWorkVisitState(db, job)) };
     }
     if (action === 'prepare_visit') {
       if (typeof prepareWorkVisit !== 'function') {
@@ -95,7 +108,24 @@ function createFieldOperationsApi({ db, verifyIdToken, reportError = () => {}, p
         workOrderId: cleanText(data.workOrderId, 180),
         requestId: cleanText(data.requestId, 240),
       });
-      return { ...prepared, version: FIELD_OPERATIONS_API_VERSION };
+      return {
+        ...prepared,
+        visit: visitWithProjectedTransitions(prepared.visit, prepared.allowedActions),
+        version: FIELD_OPERATIONS_API_VERSION,
+      };
+    }
+    if (action === 'transition_visit') {
+      if (typeof transitionWorkVisit !== 'function') {
+        throw fieldError('mutation_not_configured', 'Field visit transitions are not configured in this runtime.', 503);
+      }
+      const transitioned = await transitionWorkVisit({
+        identity,
+        visitId: cleanText(data.visitId, 180),
+        to: cleanText(data.to, 80),
+        expectedVersion: data.expectedVersion,
+        requestId: cleanText(data.requestId, 240),
+      });
+      return { ...transitioned, version: FIELD_OPERATIONS_API_VERSION };
     }
     throw fieldError('unsupported_action', `Unsupported Field Operations action: ${action || 'missing'}.`, 400);
   }
@@ -132,10 +162,12 @@ function getDefaultApi() {
     const resolveAssignment = createMutationAssignmentResolver({ db });
     const appendAuditInTransaction = createFieldAuditAppender({ db });
     const prepareWorkVisit = createPrepareWorkVisitCommand({ db, resolveAssignment, appendAuditInTransaction });
+    const transitionWorkVisit = createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditInTransaction });
     defaultApi = createFieldOperationsApi({
       db,
       verifyIdToken: (token) => getAuth().verifyIdToken(token, true),
       prepareWorkVisit,
+      transitionWorkVisit,
       reportError: ({ action, status, code, error }) => logger.error('Field Operations request failed', {
         action: cleanText(action, 120) || 'unknown',
         status,
@@ -170,3 +202,4 @@ module.exports.apiError = apiError;
 module.exports.bearerToken = bearerToken;
 module.exports.createFieldOperationsApi = createFieldOperationsApi;
 module.exports.publicJobProjection = publicJobProjection;
+module.exports.visitWithProjectedTransitions = visitWithProjectedTransitions;
