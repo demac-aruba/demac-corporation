@@ -1,5 +1,6 @@
 const { getAuth } = require('firebase-admin/auth');
 const { getFirestore } = require('firebase-admin/firestore');
+const { getStorage } = require('firebase-admin/storage');
 const logger = require('firebase-functions/logger');
 const { onRequest } = require('firebase-functions/v2/https');
 const { createFieldAuditAppender } = require('./fieldOperationsAudit');
@@ -14,6 +15,7 @@ const {
 const { createPrepareWorkVisitCommand } = require('./fieldOperationsAuthorityWorkVisit');
 const { projectActivatedVisit } = require('./fieldOperationsVisitActions');
 const { createAttachExistingVisitAssetCommand, attachVisitAssetsToJob } = require('./fieldOperationsVisitAssets');
+const { createRegisterEquipmentSystemCommand } = require('./fieldOperationsEquipmentRegistration');
 const {
   attachWorkInterventionsToJob,
   createPlannedWorkInterventionCommand,
@@ -35,6 +37,7 @@ const FIELD_ACTIONS = new Set([
   'prepare_visit',
   'transition_visit',
   'attach_visit_asset',
+  'register_visit_asset',
   'create_planned_intervention',
   'create_additional_intervention',
   'record_additional_intervention_decision',
@@ -42,6 +45,15 @@ const FIELD_ACTIONS = new Set([
 
 function cleanText(value, limit = 1000) {
   return String(value ?? '').trim().slice(0, limit);
+}
+
+function equipmentRegistrationEvidencePaths(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return {
+    equipment_reference: cleanText(source.equipment_reference, 1000),
+    indoor_nameplate: cleanText(source.indoor_nameplate, 1000),
+    outdoor_nameplate: cleanText(source.outdoor_nameplate, 1000),
+  };
 }
 
 function publicJobProjection(job) {
@@ -80,6 +92,7 @@ function createFieldOperationsApi({
   prepareWorkVisit,
   transitionWorkVisit,
   attachExistingVisitAsset,
+  registerEquipmentSystem,
   createPlannedWorkIntervention,
   createAdditionalWorkIntervention,
   recordAdditionalWorkDecision,
@@ -90,6 +103,7 @@ function createFieldOperationsApi({
   if (prepareWorkVisit !== undefined && typeof prepareWorkVisit !== 'function') throw new Error('prepareWorkVisit must be a function when provided.');
   if (transitionWorkVisit !== undefined && typeof transitionWorkVisit !== 'function') throw new Error('transitionWorkVisit must be a function when provided.');
   if (attachExistingVisitAsset !== undefined && typeof attachExistingVisitAsset !== 'function') throw new Error('attachExistingVisitAsset must be a function when provided.');
+  if (registerEquipmentSystem !== undefined && typeof registerEquipmentSystem !== 'function') throw new Error('registerEquipmentSystem must be a function when provided.');
   if (createPlannedWorkIntervention !== undefined && typeof createPlannedWorkIntervention !== 'function') throw new Error('createPlannedWorkIntervention must be a function when provided.');
   if (createAdditionalWorkIntervention !== undefined && typeof createAdditionalWorkIntervention !== 'function') throw new Error('createAdditionalWorkIntervention must be a function when provided.');
   if (recordAdditionalWorkDecision !== undefined && typeof recordAdditionalWorkDecision !== 'function') throw new Error('recordAdditionalWorkDecision must be a function when provided.');
@@ -169,8 +183,51 @@ function createFieldOperationsApi({
         visitId: cleanText(data.visitId, 180),
         assetId: cleanText(data.assetId, 180),
         requestId: cleanText(data.requestId, 240),
+        source: 'existing_asset',
       });
       return { ...attached, version: FIELD_OPERATIONS_API_VERSION };
+    }
+    if (action === 'register_visit_asset') {
+      if (typeof registerEquipmentSystem !== 'function' || typeof attachExistingVisitAsset !== 'function') {
+        throw fieldError('mutation_not_configured', 'On-site A/C registration is not configured in this runtime.', 503);
+      }
+      const visitId = cleanText(data.visitId, 180);
+      const requestId = cleanText(data.requestId, 240);
+      const registered = await registerEquipmentSystem({
+        identity,
+        visitId,
+        requestId,
+        locationLabel: cleanText(data.locationLabel, 240),
+        systemType: cleanText(data.systemType, 120),
+        brand: cleanText(data.brand, 120),
+        btu: data.btu,
+        refrigerant: cleanText(data.refrigerant, 80),
+        voltage: cleanText(data.voltage, 80),
+        qrCode: cleanText(data.qrCode, 512),
+        evidencePaths: equipmentRegistrationEvidencePaths(data.evidencePaths),
+      });
+      const attached = await attachExistingVisitAsset({
+        identity,
+        visitId,
+        assetId: registered.equipment.id,
+        requestId,
+        source: 'registered_on_site',
+      });
+      return {
+        success: true,
+        version: FIELD_OPERATIONS_API_VERSION,
+        replayed: Boolean(registered.replayed && attached.replayed),
+        registrationReplayed: Boolean(registered.replayed),
+        attachReplayed: Boolean(attached.replayed),
+        equipment: registered.equipment,
+        evidence: Array.isArray(registered.evidence) ? registered.evidence : [],
+        visitAsset: attached.visitAsset,
+        allowedActions: attached.allowedActions,
+        auditEventIds: [
+          ...(Array.isArray(registered.auditEventIds) ? registered.auditEventIds : []),
+          attached.auditEventId,
+        ].filter(Boolean),
+      };
     }
     if (action === 'create_planned_intervention') {
       if (typeof createPlannedWorkIntervention !== 'function') {
@@ -243,6 +300,14 @@ function createFieldOperationsApi({
   return { authenticate, execute, handle, version: FIELD_OPERATIONS_API_VERSION };
 }
 
+async function verifyStoredFieldImage(storagePath) {
+  const [metadata] = await getStorage().bucket().file(storagePath).getMetadata();
+  return {
+    contentType: cleanText(metadata?.contentType, 120),
+    sizeBytes: Number(metadata?.size),
+  };
+}
+
 let defaultApi;
 function getDefaultApi() {
   if (!defaultApi) {
@@ -252,6 +317,12 @@ function getDefaultApi() {
     const prepareWorkVisit = createPrepareWorkVisitCommand({ db, resolveAssignment, appendAuditInTransaction });
     const transitionWorkVisit = createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditInTransaction });
     const attachExistingVisitAsset = createAttachExistingVisitAssetCommand({ db, resolveAssignment, appendAuditInTransaction });
+    const registerEquipmentSystem = createRegisterEquipmentSystemCommand({
+      db,
+      resolveAssignment,
+      appendAuditInTransaction,
+      verifyStoredImage: verifyStoredFieldImage,
+    });
     const createPlannedWorkIntervention = createPlannedWorkInterventionCommand({ db, resolveAssignment, appendAuditInTransaction });
     const createAdditionalWorkIntervention = createAdditionalWorkInterventionCommand({ db, resolveAssignment, appendAuditInTransaction });
     const recordAdditionalWorkDecision = createRecordAdditionalWorkDecisionCommand({ db, resolveAssignment, appendAuditInTransaction });
@@ -261,6 +332,7 @@ function getDefaultApi() {
       prepareWorkVisit,
       transitionWorkVisit,
       attachExistingVisitAsset,
+      registerEquipmentSystem,
       createPlannedWorkIntervention,
       createAdditionalWorkIntervention,
       recordAdditionalWorkDecision,
@@ -297,4 +369,6 @@ module.exports.FIELD_ACTIONS = FIELD_ACTIONS;
 module.exports.apiError = apiError;
 module.exports.bearerToken = bearerToken;
 module.exports.createFieldOperationsApi = createFieldOperationsApi;
+module.exports.equipmentRegistrationEvidencePaths = equipmentRegistrationEvidencePaths;
 module.exports.publicJobProjection = publicJobProjection;
+module.exports.verifyStoredFieldImage = verifyStoredFieldImage;
