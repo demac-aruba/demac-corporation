@@ -84,6 +84,23 @@ function canonicalStatusFromStorage(value) {
   return canonicalStatus;
 }
 
+function workOrderAllowsInitialVisitPreparation(order) {
+  try {
+    return canonicalStatusFromStorage(storageStatusFromWorkOrder(order)) === 'scheduled';
+  } catch {
+    return false;
+  }
+}
+
+function canonicalVisitVersion(value) {
+  if (value === undefined || value === null || value === '') return 1;
+  const version = Number(value);
+  if (!Number.isInteger(version) || version < 1) {
+    throw fieldError('invalid_visit_version', 'Persisted Work Visit version is invalid.', 409, { version: text(value, 80) });
+  }
+  return version;
+}
+
 function nonNegativeQuantity(value) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
@@ -191,7 +208,7 @@ function projectCanonicalWorkVisit(record, identityFallback = {}) {
     createdBy: text(record?.createdByUserId || record?.createdBy, 180),
     updatedAt: text(record?.updatedAt, 80),
     updatedBy: text(record?.updatedByUserId || record?.updatedBy, 180),
-    version: Math.max(1, Number(record?.version) || 1),
+    version: canonicalVisitVersion(record?.version),
   };
 }
 
@@ -372,6 +389,18 @@ function createPrepareWorkVisitCommand({ db, resolveAssignment, appendAuditInTra
         return;
       }
 
+      // Never manufacture physical history from an already in-flight WorkOrder status. A new
+      // canonical WorkVisit may only begin from not-started planning/release state. Existing
+      // Legacy in-flight records require explicit reconciliation instead of silent conversion.
+      if (!workOrderAllowsInitialVisitPreparation(order)) {
+        throw fieldError(
+          'work_visit_preparation_not_allowed',
+          'A new Work Visit can only be prepared from a not-started Work Order.',
+          409,
+          { workOrderStatus: text(order.status, 80) },
+        );
+      }
+
       const occurredAt = text(now(), 80);
       if (!occurredAt || Number.isNaN(Date.parse(occurredAt))) throw new Error('Clock returned an invalid timestamp.');
       const visit = buildLegacyCompatibleWorkVisit({ order, appointment, identity, assignment, now: occurredAt });
@@ -394,13 +423,16 @@ function createPrepareWorkVisitCommand({ db, resolveAssignment, appendAuditInTra
 
 module.exports = {
   FIELD_WORK_VISIT_STORAGE_VERSION,
+  assertExistingVisitCompatible,
   buildLegacyCompatibleWorkVisit,
   buildScheduledScopeSnapshot,
   canonicalStatusFromStorage,
+  canonicalVisitVersion,
   createPrepareWorkVisitCommand,
   initialVisitDocumentId,
   projectCanonicalWorkVisit,
   stableRequestId,
   storageStatusFromWorkOrder,
   visitAuditEvent,
+  workOrderAllowsInitialVisitPreparation,
 };
