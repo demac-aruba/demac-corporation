@@ -17,7 +17,11 @@ const {
   COMMUNICATION_SETTINGS_DOCUMENT,
 } = require("./demacCommunicationIdentity");
 const { cleanText } = require("./bookingSchedulingPrimitives");
-const { positiveEpoch } = require("./demacCustomerTurn");
+const {
+  communicationEpochDecision,
+  nonNegativeEpoch,
+  positiveEpoch,
+} = require("./demacCustomerTurn");
 
 const app = getApps().length ? getApp() : initializeApp();
 const db = getFirestore(app);
@@ -84,6 +88,10 @@ function latestDeferredTurn(items = []) {
     .at(-1) || null;
 }
 
+function staleTurnStatus(epochReason = "") {
+  return String(epochReason).includes("ownership") ? "skipped_human" : "coalesced";
+}
+
 function createCustomerTurnOrchestrator({
   database = db,
   taskQueue = null,
@@ -91,7 +99,11 @@ function createCustomerTurnOrchestrator({
   agentCommunication = customerAgentCommunication,
   clock = () => Date.now(),
 } = {}) {
-  const queue = taskQueue || getFunctions(app).taskQueue(TURN_TASK_FUNCTION);
+  let resolvedTaskQueue = taskQueue;
+  function queueClient() {
+    if (!resolvedTaskQueue) resolvedTaskQueue = getFunctions(app).taskQueue(TURN_TASK_FUNCTION);
+    return resolvedTaskQueue;
+  }
 
   async function loadSettings() {
     const [settingsSnapshot, communicationSettingsSnapshot] = await Promise.all([
@@ -151,24 +163,26 @@ function createCustomerTurnOrchestrator({
   async function observationPreflight(message = {}) {
     const { settings, communicationSettings } = await loadSettings();
     const conversationId = cleanText(message.conversationId, 300);
-    if (!conversationId) return { allowed: false, reason: "missing-canonical-conversation-id", settings, communicationSettings };
+    if (!conversationId) return { allowed: false, reason: "missing-canonical-conversation-id", settings, communicationSettings, conversation: {} };
     const snapshot = await database.collection("communicationConversations").doc(conversationId).get();
-    if (!snapshot.exists) return { allowed: false, reason: "canonical-conversation-not-materialized", settings, communicationSettings };
+    if (!snapshot.exists) return { allowed: false, reason: "canonical-conversation-not-materialized", settings, communicationSettings, conversation: {} };
+    const conversation = snapshot.data() || {};
     const decision = mayaObservationDecision({
       message,
-      conversation: snapshot.data() || {},
+      conversation,
       settings,
       communicationSettings,
     });
-    return { ...decision, settings, communicationSettings };
+    return { ...decision, settings, communicationSettings, conversation };
   }
 
-  async function enqueueWake({ conversationId, messageId, customerInputVersion, eligibleAtMs }) {
+  async function enqueueWake({ conversationId, messageId, customerInputVersion, ownershipVersion, eligibleAtMs }) {
     const delayMs = Math.max(0, eligibleAtMs - clock());
-    await queue.enqueue({
+    await queueClient().enqueue({
       conversationId,
       messageId,
       customerInputVersion,
+      ownershipVersion,
     }, {
       scheduleDelaySeconds: Math.ceil(delayMs / 1000),
       dispatchDeadlineSeconds: 120,
@@ -184,6 +198,13 @@ function createCustomerTurnOrchestrator({
 
     const preflight = await observationPreflight(message);
     if (!preflight.allowed) return { scheduled: false, reason: preflight.reason };
+    const expectedOwnershipVersion = nonNegativeEpoch(preflight.conversation?.ownershipVersion);
+    if (expectedOwnershipVersion === null) return { scheduled: false, reason: "missing-ownership-version" };
+    const currentInputVersion = positiveEpoch(preflight.conversation?.customerInputVersion);
+    if (currentInputVersion === null || currentInputVersion !== inputVersion) {
+      return { scheduled: false, reason: "stale-customer-turn-before-schedule" };
+    }
+
     const eligibleAtMs = eligibleAtMillis({ message, settings: preflight.settings, reactivate, now: clock() });
     const queued = await agentCommunication.enqueueInbound({ messageId, message, reactivate }, database);
     if (!queued || queued.completed) {
@@ -194,6 +215,8 @@ function createCustomerTurnOrchestrator({
     }
     await queued.ref.set({
       status: "deferred",
+      expectedOwnershipVersion,
+      expectedCustomerInputVersion: inputVersion,
       eligibleAt: Timestamp.fromMillis(eligibleAtMs),
       eligibleAtIso: new Date(eligibleAtMs).toISOString(),
       debounceMs: configuredDebounceMs(preflight.settings),
@@ -204,9 +227,17 @@ function createCustomerTurnOrchestrator({
       conversationId,
       messageId,
       customerInputVersion: inputVersion,
+      ownershipVersion: expectedOwnershipVersion,
       eligibleAtMs,
     });
-    return { scheduled: true, conversationId, messageId, customerInputVersion: inputVersion, eligibleAtMs };
+    return {
+      scheduled: true,
+      conversationId,
+      messageId,
+      ownershipVersion: expectedOwnershipVersion,
+      customerInputVersion: inputVersion,
+      eligibleAtMs,
+    };
   }
 
   async function loadDeferredTurns(conversationId) {
@@ -266,6 +297,16 @@ function createCustomerTurnOrchestrator({
     return { promoted, reason };
   }
 
+  async function suppressStaleTurn(selected, epochReason, phase) {
+    const status = staleTurnStatus(epochReason);
+    await selected.ref.set({
+      status,
+      discardReason: `${phase}:${epochReason || "unknown"}`,
+      completedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return { processed: false, reason: phase, epochReason, status };
+  }
+
   async function wakeConversationTurn({ conversationId } = {}) {
     const canonicalConversationId = cleanText(conversationId, 300);
     if (!canonicalConversationId) return { processed: false, reason: "missing-canonical-conversation-id" };
@@ -279,11 +320,18 @@ function createCustomerTurnOrchestrator({
       await selected.ref.set({ status: "failed", errorMessage: "Deferred turn is missing eligibleAt.", completedAt: FieldValue.serverTimestamp() }, { merge: true });
       return { processed: false, reason: "missing-eligible-at" };
     }
+    const expectedOwnershipVersion = nonNegativeEpoch(selected.expectedOwnershipVersion);
+    const expectedCustomerInputVersion = positiveEpoch(selected.expectedCustomerInputVersion || selected.customerInputVersion);
+    if (expectedOwnershipVersion === null || expectedCustomerInputVersion === null) {
+      await selected.ref.set({ status: "failed", errorMessage: "Deferred turn is missing communication epochs.", completedAt: FieldValue.serverTimestamp() }, { merge: true });
+      return { processed: false, reason: "missing-deferred-turn-epochs" };
+    }
     if (selectedEligibleAt > now) {
       await enqueueWake({
         conversationId: canonicalConversationId,
         messageId: selected.messageId,
-        customerInputVersion: positiveEpoch(selected.customerInputVersion),
+        customerInputVersion: expectedCustomerInputVersion,
+        ownershipVersion: expectedOwnershipVersion,
         eligibleAtMs: selectedEligibleAt,
       });
       return { processed: false, deferred: true, reason: "turn-not-eligible-yet", eligibleAtMs: selectedEligibleAt };
@@ -292,16 +340,13 @@ function createCustomerTurnOrchestrator({
     const conversationRef = database.collection("communicationConversations").doc(canonicalConversationId);
     const conversationSnapshot = await conversationRef.get();
     if (!conversationSnapshot.exists) return { processed: false, reason: "canonical-conversation-not-materialized" };
-    const conversation = conversationSnapshot.data() || {};
-    const selectedVersion = positiveEpoch(selected.customerInputVersion);
-    const currentVersion = positiveEpoch(conversation.customerInputVersion);
-    if (selectedVersion === null || currentVersion === null || selectedVersion !== currentVersion) {
-      await selected.ref.set({
-        status: "coalesced",
-        discardReason: "stale-customer-turn-before-debounce-wakeup",
-        completedAt: FieldValue.serverTimestamp(),
-      }, { merge: true });
-      return { processed: false, reason: "stale-customer-turn-before-debounce-wakeup" };
+    const initialEpoch = communicationEpochDecision({
+      conversation: conversationSnapshot.data() || {},
+      expectedOwnershipVersion,
+      expectedCustomerInputVersion,
+    });
+    if (!initialEpoch.allowed) {
+      return suppressStaleTurn(selected, initialEpoch.reason, "stale-communication-epoch-before-debounce-wakeup");
     }
 
     const promotion = await promoteIfEligible(selected, now);
@@ -312,18 +357,31 @@ function createCustomerTurnOrchestrator({
     if (!messageSnapshot.exists) throw new Error("Canonical customer message is missing at deferred turn wake-up.");
     const message = { id: messageSnapshot.id, ...messageSnapshot.data() };
 
-    const observation = await observerProcessor({ messageId: messageSnapshot.id, message });
+    const observation = await observerProcessor({
+      messageId: messageSnapshot.id,
+      message,
+      expectedOwnershipVersion,
+      expectedCustomerInputVersion,
+    });
 
     const currentConversationSnapshot = await conversationRef.get();
     if (!currentConversationSnapshot.exists) return { processed: false, reason: "canonical-conversation-not-materialized" };
-    const latestVersion = positiveEpoch(currentConversationSnapshot.data()?.customerInputVersion);
-    if (latestVersion === null || latestVersion !== selectedVersion) {
+    const currentConversation = currentConversationSnapshot.data() || {};
+    const postObserverEpoch = communicationEpochDecision({
+      conversation: currentConversation,
+      expectedOwnershipVersion,
+      expectedCustomerInputVersion,
+    });
+    if (!postObserverEpoch.allowed) {
+      return suppressStaleTurn(selected, postObserverEpoch.reason, "stale-communication-epoch-after-observer");
+    }
+    if (!agentCommunication.shouldRunAgent(currentConversation)) {
       await selected.ref.set({
-        status: "coalesced",
-        discardReason: "newer-customer-turn-arrived-during-observer",
+        status: "skipped_human",
+        discardReason: "human-active-after-observer",
         completedAt: FieldValue.serverTimestamp(),
       }, { merge: true });
-      return { processed: false, reason: "newer-customer-turn-arrived-during-observer", observation };
+      return { processed: false, observed: observation?.observed === true, reason: "human-active-after-observer" };
     }
 
     const { decision } = await evaluateInboundPolicy(message);
@@ -372,6 +430,7 @@ function createCustomerTurnOrchestrator({
     recordPolicyState,
     scheduleConversationReactivation,
     scheduleInboundTurn,
+    suppressStaleTurn,
     wakeConversationTurn,
   };
 }
@@ -408,4 +467,5 @@ module.exports.eligibleAtMillis = eligibleAtMillis;
 module.exports.inboundBaseTimestamp = inboundBaseTimestamp;
 module.exports.latestDeferredTurn = latestDeferredTurn;
 module.exports.queueEligibilityMillis = queueEligibilityMillis;
+module.exports.staleTurnStatus = staleTurnStatus;
 module.exports.timestampMillis = timestampMillis;
