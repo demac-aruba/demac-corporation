@@ -1,5 +1,5 @@
 const crypto = require('node:crypto');
-const { fieldFirestoreData } = require('./fieldOperationsFirestoreData');
+const { fieldFirestoreData, fieldSnapshotRecord } = require('./fieldOperationsFirestoreData');
 const { fieldError } = require('./fieldOperationsAuthorityCore');
 const { stableRequestId } = require('./fieldOperationsAuthorityWorkVisit');
 const { loadCurrentVisitMutationContext } = require('./fieldOperationsVisitMutationContext');
@@ -194,7 +194,7 @@ async function loadScopeChanges(db, visitId, expectedContext = {}) {
   if (!normalizedVisitId) return [];
   const snapshot = await db.collection(SCOPE_CHANGE_COLLECTION).where('visitId', '==', normalizedVisitId).get();
   return (snapshot?.docs || [])
-    .map((document) => projectScopeChange({ id: document.id, ...document.data() }, { ...expectedContext, visitId: normalizedVisitId }))
+    .map((document) => projectScopeChange(fieldSnapshotRecord(document), { ...expectedContext, visitId: normalizedVisitId }))
     .sort((left, right) => left.requestedAt.localeCompare(right.requestedAt) || left.id.localeCompare(right.id));
 }
 
@@ -342,11 +342,11 @@ function createAdditionalWorkInterventionCommand({
           throw fieldError('scope_change_request_conflict', 'This requestId has incomplete persisted additional-work state.', 409);
         }
         const existingScope = projectScopeChange(
-          { id: existingScopeSnapshot.id, ...existingScopeSnapshot.data() },
+          fieldSnapshotRecord(existingScopeSnapshot),
           expectedContext,
         );
         const existingIntervention = projectWorkIntervention(
-          { id: existingInterventionSnapshot.id, ...existingInterventionSnapshot.data() },
+          fieldSnapshotRecord(existingInterventionSnapshot),
           expectedContext,
         );
         if (
@@ -377,7 +377,7 @@ function createAdditionalWorkInterventionCommand({
         throw fieldError('visit_asset_not_found', 'The selected Visit Asset is not available for this visit.', 404);
       }
       const visitAsset = projectVisitAsset(
-        { id: visitAssetSnapshot.id, ...visitAssetSnapshot.data() },
+        fieldSnapshotRecord(visitAssetSnapshot),
         expectedContext,
       );
 
@@ -385,7 +385,7 @@ function createAdditionalWorkInterventionCommand({
       if (!serviceSnapshot.exists) {
         throw fieldError('service_not_available', 'The selected Service is not available in the canonical catalog.', 404);
       }
-      const canonicalService = normalizeCatalogService({ id: serviceSnapshot.id, ...serviceSnapshot.data() });
+      const canonicalService = normalizeCatalogService(fieldSnapshotRecord(serviceSnapshot));
       if (!canonicalService || canonicalService.serviceId !== normalizedServiceId) {
         throw fieldError('service_not_available', 'The selected Service is not an active canonical Field service.', 409);
       }
