@@ -1,5 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { getApps, initializeApp } = require("firebase-admin/app");
+
+if (!getApps().length) initializeApp({ projectId: "demo-demac", storageBucket: "demo-demac.appspot.com" });
 
 const {
   DEFAULT_CUSTOMER_VOICE_MAX_ATTEMPTS,
