@@ -109,14 +109,12 @@ function createBookingDispatchSafetyAuthority({
     const now = clock();
 
     return db.runTransaction(async (transaction) => {
-      const [snapshot, epochDecision] = await Promise.all([
-        transaction.get(appointmentRef),
-        communicationEpochGuardInTransaction(transaction, db, {
-          conversationId,
-          expectedOwnershipVersion,
-          expectedCustomerInputVersion,
-        }),
-      ]);
+      const snapshot = await transaction.get(appointmentRef);
+      const epochDecision = await communicationEpochGuardInTransaction(transaction, db, {
+        conversationId,
+        expectedOwnershipVersion,
+        expectedCustomerInputVersion,
+      });
       if (!epochDecision.allowed) {
         return { success: false, reason: "stale-communication-epoch", epochReason: epochDecision.reason, appointmentId: id };
       }
@@ -195,14 +193,12 @@ function createBookingDispatchSafetyAuthority({
     const now = clock();
 
     return db.runTransaction(async (transaction) => {
-      const [snapshot, epochDecision] = await Promise.all([
-        transaction.get(appointmentRef),
-        communicationEpochGuardInTransaction(transaction, db, {
-          conversationId,
-          expectedOwnershipVersion,
-          expectedCustomerInputVersion,
-        }),
-      ]);
+      const snapshot = await transaction.get(appointmentRef);
+      const epochDecision = await communicationEpochGuardInTransaction(transaction, db, {
+        conversationId,
+        expectedOwnershipVersion,
+        expectedCustomerInputVersion,
+      });
       if (!epochDecision.allowed) {
         return { success: false, reason: "stale-communication-epoch", epochReason: epochDecision.reason, appointmentId: id };
       }
