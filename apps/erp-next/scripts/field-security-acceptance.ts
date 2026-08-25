@@ -1,6 +1,7 @@
 import { fieldActionAllowed } from '../lib/field-authorization';
 import { hasCapability as hasLegacyCapability } from '../lib/capabilities';
 import {
+  parseFieldAttachVisitAssetResponse,
   parseFieldJobResponse,
   parseFieldPrepareVisitResponse,
   parseFieldScheduleResponse,
@@ -104,6 +105,22 @@ const representativeVisit = {
   availableTransitions: ['en_route'],
 };
 
+const representativeVisitAsset = {
+  id: 'VA-1',
+  visitId: 'visit-WO-1',
+  assetId: 'AC-1',
+  sequence: 1,
+  locationLabel: 'Sala',
+  source: 'existing_asset',
+  status: 'identified',
+  addedOnSite: true,
+  createdAt: '2026-08-24T12:30:00.000Z',
+  createdBy: 'uid-1',
+  updatedAt: '2026-08-24T12:30:00.000Z',
+  updatedBy: 'uid-1',
+  version: 1,
+};
+
 const representativeJob = {
   id: 'WO-1',
   workOrderId: 'WO-1',
@@ -128,8 +145,21 @@ const validSchedule = parseFieldScheduleResponse({ success: true, version: 1, jo
 assert(validSchedule.jobs[0].workOrderId === 'WO-1', 'valid public schedule transport should parse');
 assert(validSchedule.jobs[0].fieldVisit === null, 'scheduled job may be readable before a physical WorkVisit is prepared');
 assert(validSchedule.jobs[0].canPrepareVisit === true, 'server should explicitly project preparation eligibility');
-const validJob = parseFieldJobResponse({ success: true, version: 1, job: { ...representativeJob, fieldVisit: representativeVisit, canPrepareVisit: false, knownEquipment: [] } });
+const validJob = parseFieldJobResponse({
+  success: true,
+  version: 1,
+  job: {
+    ...representativeJob,
+    fieldVisit: representativeVisit,
+    canPrepareVisit: false,
+    knownEquipment: [],
+    visitAssets: [],
+    canAddExistingAsset: false,
+  },
+});
 assert(validJob.job.knownEquipment.length === 0, 'valid public job transport should parse');
+assert(validJob.job.visitAssets.length === 0, 'valid job transport should project actual VisitAsset scope explicitly');
+assert(validJob.job.canAddExistingAsset === false, 'server should explicitly project actual-scope mutation eligibility');
 assert(validJob.job.fieldVisit?.status === 'scheduled', 'job transport should preserve canonical WorkVisit state separately from WorkOrder status');
 
 const validPrepare = parseFieldPrepareVisitResponse({
@@ -153,14 +183,28 @@ const validTransition = parseFieldTransitionVisitResponse({
 });
 assert(validTransition.visit.status === 'en_route' && validTransition.visit.version === 2, 'valid visit transition transport should parse');
 
+const validAttach = parseFieldAttachVisitAssetResponse({
+  success: true,
+  version: 1,
+  replayed: false,
+  visitAsset: representativeVisitAsset,
+  allowedActions: ['read', 'execute', 'asset.add'],
+  auditEventId: 'FE-3',
+});
+assert(validAttach.visitAsset.assetId === 'AC-1' && validAttach.replayed === false, 'valid VisitAsset attachment transport should parse');
+
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 2, jobs: [] }), 'unknown API version must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1 }), 'missing jobs array must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1, jobs: [{ ...representativeJob, fieldVisit: undefined }] }), 'missing current-visit projection must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1, jobs: [{ ...representativeJob, canPrepareVisit: undefined }] }), 'missing preparation projection must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1, jobs: [{ ...representativeJob, allowedActions: null }] }), 'malformed action projection must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1, jobs: [{ ...representativeJob, allowedActions: ['read', 'future.action'] }] }), 'unknown server action name must fail closed');
-assertThrows(() => parseFieldJobResponse({ success: true, version: 1, job: representativeJob }), 'missing knownEquipment must fail closed');
-assertThrows(() => parseFieldJobResponse({ success: true, version: 1, job: { ...representativeJob, knownEquipment: [{ id: 'AC-1' }] } }), 'malformed equipment row must fail closed');
+assertThrows(() => parseFieldJobResponse({ success: true, version: 1, job: representativeJob }), 'missing knownEquipment and actual-scope projection must fail closed');
+assertThrows(() => parseFieldJobResponse({ success: true, version: 1, job: { ...representativeJob, knownEquipment: [{ id: 'AC-1' }], visitAssets: [], canAddExistingAsset: false } }), 'malformed equipment row must fail closed');
+assertThrows(() => parseFieldJobResponse({ success: true, version: 1, job: { ...representativeJob, knownEquipment: [], canAddExistingAsset: false } }), 'missing VisitAsset projection must fail closed');
+assertThrows(() => parseFieldJobResponse({ success: true, version: 1, job: { ...representativeJob, knownEquipment: [], visitAssets: [], canAddExistingAsset: undefined } }), 'missing actual-scope eligibility must fail closed');
+assertThrows(() => parseFieldJobResponse({ success: true, version: 1, job: { ...representativeJob, knownEquipment: [], visitAssets: [{ ...representativeVisitAsset, status: 'future_status' }], canAddExistingAsset: true } }), 'unknown VisitAsset status must fail closed');
+assertThrows(() => parseFieldJobResponse({ success: true, version: 1, job: { ...representativeJob, knownEquipment: [], visitAssets: [{ ...representativeVisitAsset, version: 1.5 }], canAddExistingAsset: true } }), 'fractional VisitAsset version must fail closed');
 assertThrows(() => parseFieldPrepareVisitResponse({ success: true, version: 2, replayed: false, source: 'field_authority', visit: representativeVisit, allowedActions: ['read'] }), 'prepare response with unknown API version must fail closed');
 assertThrows(() => parseFieldPrepareVisitResponse({ success: true, version: 1, replayed: false, source: 'field_authority', visit: { ...representativeVisit, status: 'future_status' }, allowedActions: ['read'] }), 'prepare response with unknown visit status must fail closed');
 assertThrows(() => parseFieldPrepareVisitResponse({ success: true, version: 1, replayed: false, source: 'field_authority', visit: { ...representativeVisit, availableTransitions: ['future_transition'] }, allowedActions: ['execute'] }), 'prepare response with unknown transition must fail closed');
@@ -168,6 +212,9 @@ assertThrows(() => parseFieldPrepareVisitResponse({ success: true, version: 1, r
 assertThrows(() => parseFieldTransitionVisitResponse({ success: true, version: 1, replayed: false, visit: { ...representativeVisit, availableTransitions: ['future_transition'] }, allowedActions: ['execute'] }), 'transition response with unknown next transition must fail closed');
 assertThrows(() => parseFieldTransitionVisitResponse({ success: true, version: 1, replayed: false, visit: { ...representativeVisit, version: 1.5 }, allowedActions: ['execute'] }), 'fractional visit version must fail closed at the transport boundary');
 assertThrows(() => parseFieldTransitionVisitResponse({ success: true, version: 1, replayed: false, visit: { ...representativeVisit, version: Number.MAX_SAFE_INTEGER + 1 }, allowedActions: ['execute'] }), 'unsafe visit version must fail closed at the transport boundary');
+assertThrows(() => parseFieldAttachVisitAssetResponse({ success: true, version: 2, replayed: false, visitAsset: representativeVisitAsset, allowedActions: ['asset.add'] }), 'VisitAsset response with unknown API version must fail closed');
+assertThrows(() => parseFieldAttachVisitAssetResponse({ success: true, version: 1, replayed: false, visitAsset: { ...representativeVisitAsset, source: 'future_source' }, allowedActions: ['asset.add'] }), 'VisitAsset response with unknown source must fail closed');
+assertThrows(() => parseFieldAttachVisitAssetResponse({ success: true, version: 1, replayed: false, visitAsset: representativeVisitAsset, allowedActions: ['asset.add', 'future.action'] }), 'VisitAsset response with unknown action must fail closed');
 
 const inactive: AuthPrincipal = {
   userId: 'user-disabled',

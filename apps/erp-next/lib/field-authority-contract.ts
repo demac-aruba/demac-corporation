@@ -49,6 +49,12 @@ export type FieldActiveVisitTransition = (typeof FIELD_ACTIVE_VISIT_TRANSITIONS)
 const FIELD_PREPARE_SOURCES = ['field_authority', 'legacy_existing'] as const;
 export type FieldPrepareSource = (typeof FIELD_PREPARE_SOURCES)[number];
 
+const FIELD_VISIT_ASSET_SOURCES = ['scheduled', 'existing_asset', 'qr_scan', 'registered_on_site'] as const;
+export type FieldVisitAssetSource = (typeof FIELD_VISIT_ASSET_SOURCES)[number];
+
+const FIELD_VISIT_ASSET_STATUSES = ['identified', 'in_progress', 'completed', 'pending', 'not_performed'] as const;
+export type FieldVisitAssetStatus = (typeof FIELD_VISIT_ASSET_STATUSES)[number];
+
 export type FieldPlannedWork = {
   id: string;
   serviceId?: string;
@@ -71,6 +77,23 @@ export type FieldKnownEquipment = {
   voltage?: string;
   condition?: string;
   active: boolean;
+};
+
+export type FieldVisitAsset = {
+  id: string;
+  visitId: string;
+  assetId: string;
+  sequence: number;
+  locationLabel: string;
+  source: FieldVisitAssetSource;
+  status: FieldVisitAssetStatus;
+  addedOnSite: boolean;
+  addedReason?: string;
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+  updatedBy: string;
+  version: number;
 };
 
 export type FieldScheduledScopeSnapshot = {
@@ -142,7 +165,11 @@ export type FieldScheduleJob = {
   canPrepareVisit: boolean;
 };
 
-export type FieldJobDetail = FieldScheduleJob & { knownEquipment: FieldKnownEquipment[] };
+export type FieldJobDetail = FieldScheduleJob & {
+  knownEquipment: FieldKnownEquipment[];
+  visitAssets: FieldVisitAsset[];
+  canAddExistingAsset: boolean;
+};
 export type FieldScheduleResponse = { success: true; version: typeof FIELD_AUTHORITY_API_VERSION; jobs: FieldScheduleJob[] };
 export type FieldJobResponse = { success: true; version: typeof FIELD_AUTHORITY_API_VERSION; job: FieldJobDetail };
 export type FieldPrepareVisitResponse = {
@@ -162,6 +189,14 @@ export type FieldTransitionVisitResponse = {
   allowedActions: FieldAllowedAction[];
   auditEventId?: string;
 };
+export type FieldAttachVisitAssetResponse = {
+  success: true;
+  version: typeof FIELD_AUTHORITY_API_VERSION;
+  replayed: boolean;
+  visitAsset: FieldVisitAsset;
+  allowedActions: FieldAllowedAction[];
+  auditEventId?: string;
+};
 
 const RESPONSIBILITIES = new Set<string>(FIELD_RESPONSIBILITIES);
 const ASSIGNMENT_SOURCES = new Set<string>(FIELD_ASSIGNMENT_SOURCES);
@@ -169,6 +204,8 @@ const ALLOWED_ACTIONS = new Set<string>(FIELD_ALLOWED_ACTIONS);
 const VISIT_STATUSES = new Set<string>(FIELD_VISIT_STATUSES);
 const ACTIVE_VISIT_TRANSITIONS = new Set<string>(FIELD_ACTIVE_VISIT_TRANSITIONS);
 const PREPARE_SOURCES = new Set<string>(FIELD_PREPARE_SOURCES);
+const VISIT_ASSET_SOURCES = new Set<string>(FIELD_VISIT_ASSET_SOURCES);
+const VISIT_ASSET_STATUSES = new Set<string>(FIELD_VISIT_ASSET_STATUSES);
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -186,6 +223,10 @@ function optionalString(value: unknown) {
 
 function optionalFiniteNumber(value: unknown) {
   return value === undefined || value === null || (typeof value === 'number' && Number.isFinite(value));
+}
+
+function positiveSafeInteger(value: unknown) {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
 }
 
 function allowedActionsValid(value: unknown): value is FieldAllowedAction[] {
@@ -247,9 +288,7 @@ function preparedVisitValid(value: unknown): value is FieldPreparedVisit {
     && string(visit.createdBy)
     && string(visit.updatedAt)
     && string(visit.updatedBy)
-    && typeof visit.version === 'number'
-    && Number.isSafeInteger(visit.version)
-    && visit.version >= 1;
+    && positiveSafeInteger(visit.version);
 }
 
 function visitStateValid(value: unknown): value is FieldVisitState {
@@ -314,6 +353,31 @@ function knownEquipmentValid(value: unknown) {
   });
 }
 
+function visitAssetValid(value: unknown): value is FieldVisitAsset {
+  const asset = record(value);
+  return Boolean(asset)
+    && string(asset!.id)
+    && string(asset!.visitId)
+    && string(asset!.assetId)
+    && positiveSafeInteger(asset!.sequence)
+    && string(asset!.locationLabel)
+    && string(asset!.source)
+    && VISIT_ASSET_SOURCES.has(asset!.source as string)
+    && string(asset!.status)
+    && VISIT_ASSET_STATUSES.has(asset!.status as string)
+    && typeof asset!.addedOnSite === 'boolean'
+    && optionalString(asset!.addedReason)
+    && string(asset!.createdAt)
+    && string(asset!.createdBy)
+    && string(asset!.updatedAt)
+    && string(asset!.updatedBy)
+    && positiveSafeInteger(asset!.version);
+}
+
+function visitAssetsValid(value: unknown): value is FieldVisitAsset[] {
+  return Array.isArray(value) && value.every(visitAssetValid);
+}
+
 function envelope(value: unknown): Record<string, unknown> {
   const payload = record(value);
   if (!payload || payload.success !== true || payload.version !== FIELD_AUTHORITY_API_VERSION) {
@@ -338,6 +402,9 @@ export function parseFieldJobResponse(value: unknown): FieldJobResponse {
   const job = payload.job as unknown as Record<string, unknown>;
   if (!knownEquipmentValid(job.knownEquipment)) {
     throw new Error('Field Operations returned malformed equipment data. Refresh and try again.');
+  }
+  if (!visitAssetsValid(job.visitAssets) || typeof job.canAddExistingAsset !== 'boolean') {
+    throw new Error('Field Operations returned malformed actual-scope data. Refresh and try again.');
   }
   return payload as FieldJobResponse;
 }
@@ -364,4 +431,15 @@ export function parseFieldTransitionVisitResponse(value: unknown): FieldTransiti
     throw new Error('Field Operations returned malformed visit transition data. Refresh and try again.');
   }
   return payload as FieldTransitionVisitResponse;
+}
+
+export function parseFieldAttachVisitAssetResponse(value: unknown): FieldAttachVisitAssetResponse {
+  const payload = envelope(value);
+  if (typeof payload.replayed !== 'boolean'
+    || !visitAssetValid(payload.visitAsset)
+    || !allowedActionsValid(payload.allowedActions)
+    || !optionalString(payload.auditEventId)) {
+    throw new Error('Field Operations returned malformed Visit Asset data. Refresh and try again.');
+  }
+  return payload as FieldAttachVisitAssetResponse;
 }

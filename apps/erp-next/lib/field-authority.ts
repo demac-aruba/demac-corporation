@@ -1,6 +1,7 @@
 import { firebaseClientConfig } from './firebase/client-config';
 import { requireFirebaseWebSession } from './firebase/session';
 import {
+  parseFieldAttachVisitAssetResponse,
   parseFieldJobResponse,
   parseFieldPrepareVisitResponse,
   parseFieldScheduleResponse,
@@ -13,6 +14,7 @@ export type {
   FieldActiveVisitTransition,
   FieldAllowedAction,
   FieldAssignmentSource,
+  FieldAttachVisitAssetResponse,
   FieldJobDetail,
   FieldKnownEquipment,
   FieldPlannedWork,
@@ -22,6 +24,9 @@ export type {
   FieldResponsibility,
   FieldScheduleJob,
   FieldTransitionVisitResponse,
+  FieldVisitAsset,
+  FieldVisitAssetSource,
+  FieldVisitAssetStatus,
   FieldVisitState,
   FieldVisitStatus,
 } from './field-authority-contract';
@@ -118,6 +123,14 @@ export async function transitionFieldVisit(
     visitId,
     to,
     expectedVersion,
+    requestId,
+  }));
+}
+
+export async function attachExistingFieldAsset(visitId: string, assetId: string, requestId: string) {
+  return parseFieldAttachVisitAssetResponse(await callFieldAuthority('attach_visit_asset', {
+    visitId,
+    assetId,
     requestId,
   }));
 }

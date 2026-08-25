@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/components/auth/auth-provider';
 import { addDaysToDateKey, arubaDateKey, arubaTimeKey, formatArubaDateKey } from '@/lib/aruba-date';
 import {
+  attachExistingFieldAsset,
   getFieldJob,
   getFieldSchedule,
   prepareFieldVisit,
@@ -142,13 +143,27 @@ function JobCard({ job, onOpen }: { job: FieldScheduleJob; onOpen: () => void })
   );
 }
 
-function DetailView({ job, loading, error, transitionError, transitioning, onTransition, onBack }: {
+function DetailView({
+  job,
+  loading,
+  error,
+  transitionError,
+  assetError,
+  transitioning,
+  attachingAssetId,
+  onTransition,
+  onAttachAsset,
+  onBack,
+}: {
   job: FieldJobDetail | null;
   loading: boolean;
   error: string | null;
   transitionError: string | null;
+  assetError: string | null;
   transitioning: FieldActiveVisitTransition | null;
+  attachingAssetId: string | null;
   onTransition: (target: FieldActiveVisitTransition) => void;
+  onAttachAsset: (assetId: string) => void;
   onBack: () => void;
 }) {
   if (loading || error || !job) {
@@ -176,6 +191,9 @@ function DetailView({ job, loading, error, transitionError, transitioning, onTra
     : job.canPrepareVisit
       ? ['en_route']
       : [];
+  const attachedAssetIds = new Set(job.visitAssets.map((visitAsset) => visitAsset.assetId));
+  const knownEquipmentById = new Map(job.knownEquipment.map((equipment) => [equipment.id, equipment]));
+  const mutationBusy = transitioning !== null || attachingAssetId !== null;
 
   return (
     <div className={styles.shell}>
@@ -201,7 +219,7 @@ function DetailView({ job, loading, error, transitionError, transitioning, onTra
             {availableTransitions.map((target) => (
               <button
                 className={`${styles.action} ${styles.primary}`}
-                disabled={transitioning !== null}
+                disabled={mutationBusy}
                 key={target}
                 onClick={() => onTransition(target)}
                 type="button"
@@ -232,17 +250,59 @@ function DetailView({ job, loading, error, transitionError, transitioning, onTra
           </section>
 
           <section className={styles.section}>
-            <h2>EQUIPOS CONOCIDOS EN ESTA PROPIEDAD</h2>
-            {job.knownEquipment.length ? job.knownEquipment.map((equipment) => (
-              <div className={styles.equipment} key={equipment.id}>
-                <div>
-                  <strong>{equipment.locationLabel || 'Ubicación no registrada'}</strong>
-                  <span>{[equipment.brand, equipment.model, equipment.systemType].filter(Boolean).join(' · ') || 'Información técnica incompleta'}</span>
-                  <span>{equipment.btu ? `${equipment.btu} BTU` : 'BTU por confirmar'}{equipment.refrigerant ? ` · ${equipment.refrigerant}` : ''}{equipment.voltage ? ` · ${equipment.voltage}V` : ''}</span>
+            <h2>CONFIRMADO EN SITIO</h2>
+            <div className={styles.infoGrid}>
+              <div className={styles.info}><span>Programado</span><strong>{job.estimatedQuantity > 0 ? `${job.estimatedQuantity} A/C` : 'Cantidad desconocida'}</strong></div>
+              <div className={styles.info}><span>Confirmado físicamente</span><strong>{job.visitAssets.length} A/C</strong></div>
+            </div>
+            {job.visitAssets.length ? job.visitAssets.map((visitAsset) => {
+              const equipment = knownEquipmentById.get(visitAsset.assetId);
+              return (
+                <div className={styles.equipment} key={visitAsset.id}>
+                  <div>
+                    <strong>{visitAsset.locationLabel || equipment?.locationLabel || `A/C ${visitAsset.sequence}`}</strong>
+                    <span>{[equipment?.brand, equipment?.model, equipment?.systemType].filter(Boolean).join(' · ') || 'Equipo confirmado para esta visita'}</span>
+                    <span>{equipment?.btu ? `${equipment.btu} BTU` : 'BTU por confirmar'} · {visitAsset.source === 'existing_asset' ? 'Equipo CRM existente' : visitAsset.source}</span>
+                  </div>
+                  <div className={styles.badges}>
+                    <span className={`${styles.badge} ${styles.badgeBrand}`}>Confirmado #{visitAsset.sequence}</span>
+                  </div>
                 </div>
-                <span>{equipment.qrCode || 'Sin QR'}</span>
-              </div>
-            )) : <div className={styles.empty}>No hay equipos registrados todavía. El alcance real se confirmará en sitio.</div>}
+              );
+            }) : <p className={styles.helper}>Todavía no hay A/C confirmados físicamente para esta visita. La cantidad programada permanece intacta.</p>}
+            {assetError ? <div className={styles.mutationError}>{assetError}</div> : null}
+          </section>
+
+          <section className={styles.section}>
+            <h2>EQUIPOS CONOCIDOS EN ESTA PROPIEDAD</h2>
+            {job.knownEquipment.length ? job.knownEquipment.map((equipment) => {
+              const attached = attachedAssetIds.has(equipment.id);
+              return (
+                <div className={styles.equipment} key={equipment.id}>
+                  <div>
+                    <strong>{equipment.locationLabel || 'Ubicación no registrada'}</strong>
+                    <span>{[equipment.brand, equipment.model, equipment.systemType].filter(Boolean).join(' · ') || 'Información técnica incompleta'}</span>
+                    <span>{equipment.btu ? `${equipment.btu} BTU` : 'BTU por confirmar'}{equipment.refrigerant ? ` · ${equipment.refrigerant}` : ''}{equipment.voltage ? ` · ${equipment.voltage}V` : ''}</span>
+                  </div>
+                  <div className={styles.actions}>
+                    <span className={styles.badge}>{equipment.qrCode || 'Sin QR'}</span>
+                    {attached ? <span className={`${styles.badge} ${styles.badgeBrand}`}>Incluido en visita</span> : null}
+                    {!attached && !equipment.active ? <span className={styles.badge}>Equipo inactivo</span> : null}
+                    {!attached && equipment.active && job.canAddExistingAsset ? (
+                      <button
+                        className={`${styles.action} ${styles.primary}`}
+                        disabled={mutationBusy}
+                        onClick={() => onAttachAsset(equipment.id)}
+                        type="button"
+                      >
+                        {attachingAssetId === equipment.id ? 'Agregando…' : 'Agregar a esta visita'}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            }) : <div className={styles.empty}>No hay equipos registrados todavía. El alcance real se confirmará en sitio.</div>}
+            {!job.canAddExistingAsset && job.fieldVisit ? <p className={styles.helper}>La disponibilidad para agregar equipos es calculada por Field Authority según el estado y la asignación actual.</p> : null}
           </section>
         </div>
 
@@ -288,9 +348,12 @@ export function TechnicianFieldHome() {
   const [detailError, setDetailError] = useState<string | null>(null);
   const [transitioning, setTransitioning] = useState<FieldActiveVisitTransition | null>(null);
   const [transitionError, setTransitionError] = useState<string | null>(null);
+  const [attachingAssetId, setAttachingAssetId] = useState<string | null>(null);
+  const [assetError, setAssetError] = useState<string | null>(null);
   const scheduleRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
   const mutationRequestRef = useRef(0);
+  const mutationLockRef = useRef<number | null>(null);
   const selectedWorkOrderRef = useRef<string | null>(null);
 
   const today = arubaDateKey(clockNow);
@@ -305,6 +368,7 @@ export function TechnicianFieldHome() {
   const closeJob = useCallback(() => {
     detailRequestRef.current += 1;
     mutationRequestRef.current += 1;
+    mutationLockRef.current = null;
     selectedWorkOrderRef.current = null;
     setSelectedWorkOrderId(null);
     setSelectedOwnerUserId(null);
@@ -314,6 +378,8 @@ export function TechnicianFieldHome() {
     setDetailLoading(false);
     setTransitioning(null);
     setTransitionError(null);
+    setAttachingAssetId(null);
+    setAssetError(null);
   }, []);
 
   const loadDetail = useCallback(async (workOrderId: string, background = false) => {
@@ -378,14 +444,16 @@ export function TechnicianFieldHome() {
   }, [closeJob, loadDetail, principalFieldIdentityKey, today, weekEnd]);
 
   const runVisitTransition = useCallback(async (target: FieldActiveVisitTransition) => {
-    if (transitioning) return;
+    if (mutationLockRef.current !== null) return;
     const currentDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
     if (!currentDetail) return;
 
     const mutationId = ++mutationRequestRef.current;
+    mutationLockRef.current = mutationId;
     const workOrderId = currentDetail.workOrderId;
     setTransitioning(target);
     setTransitionError(null);
+    setAssetError(null);
     try {
       let visit = currentDetail.fieldVisit;
       if (!visit) {
@@ -419,8 +487,50 @@ export function TechnicianFieldHome() {
       void loadSchedule(true);
     } finally {
       if (mutationId === mutationRequestRef.current) setTransitioning(null);
+      if (mutationLockRef.current === mutationId) mutationLockRef.current = null;
     }
-  }, [detail, detailOwnerUserId, loadDetail, loadSchedule, principalFieldIdentityKey, transitioning]);
+  }, [detail, detailOwnerUserId, loadDetail, loadSchedule, principalFieldIdentityKey]);
+
+  const runAttachAsset = useCallback(async (assetId: string) => {
+    if (mutationLockRef.current !== null) return;
+    const currentDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
+    if (!currentDetail?.fieldVisit) {
+      setAssetError('La visita todavía no está disponible para confirmar equipos en sitio.');
+      return;
+    }
+    if (!currentDetail.canAddExistingAsset) {
+      setAssetError('Field Authority no autoriza agregar equipos en el estado o asignación actual.');
+      return;
+    }
+    if (currentDetail.visitAssets.some((visitAsset) => visitAsset.assetId === assetId)) return;
+
+    const mutationId = ++mutationRequestRef.current;
+    mutationLockRef.current = mutationId;
+    const workOrderId = currentDetail.workOrderId;
+    setAttachingAssetId(assetId);
+    setAssetError(null);
+    setTransitionError(null);
+    try {
+      await attachExistingFieldAsset(
+        currentDetail.fieldVisit.id,
+        assetId,
+        clientRequestId('attach-asset', workOrderId),
+      );
+      if (mutationId !== mutationRequestRef.current) return;
+      // Re-read the entire canonical job. VisitAsset is additive truth and another technician/device
+      // may have changed actual scope concurrently; the client must not reconstruct that collection.
+      await loadDetail(workOrderId, true);
+    } catch (mutationError) {
+      if (mutationId !== mutationRequestRef.current) return;
+      setAssetError(mutationError instanceof Error ? mutationError.message : 'No se pudo agregar el A/C a esta visita.');
+      // A timeout may occur after the transaction committed. Re-read instead of retrying blindly or
+      // inventing an optimistic VisitAsset record in browser state.
+      void loadDetail(workOrderId, true);
+    } finally {
+      if (mutationId === mutationRequestRef.current) setAttachingAssetId(null);
+      if (mutationLockRef.current === mutationId) mutationLockRef.current = null;
+    }
+  }, [detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
 
   useEffect(() => {
     void loadSchedule();
@@ -499,8 +609,11 @@ export function TechnicianFieldHome() {
         loading={detailLoading}
         error={detailError}
         transitionError={transitionError}
+        assetError={assetError}
         transitioning={transitioning}
+        attachingAssetId={attachingAssetId}
         onTransition={(target) => void runVisitTransition(target)}
+        onAttachAsset={(assetId) => void runAttachAsset(assetId)}
         onBack={closeJob}
       />
     );
