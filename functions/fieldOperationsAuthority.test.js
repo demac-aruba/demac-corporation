@@ -123,3 +123,37 @@ test('missing or incompletely governed user profile cannot inherit token role au
   assert.equal(missingRole.status, 403);
   assert.equal(missingRole.body.error.code, 'permission_denied');
 });
+
+test('unexpected internal failures are logged internally and sanitized from the public response', async () => {
+  const reports = [];
+  const api = createFieldOperationsApi({
+    db: {
+      collection(name) {
+        assert.equal(name, 'users');
+        return {
+          doc() {
+            return {
+              async get() {
+                throw new Error('sensitive Firestore/runtime diagnostic');
+              },
+            };
+          },
+        };
+      },
+    },
+    verifyIdToken: async () => ({ uid: 'uid-1' }),
+    reportError: (report) => reports.push(report),
+  });
+
+  const result = await api.handle(request({ token: 'valid-token', action: 'get_schedule' }));
+  assert.equal(result.status, 500);
+  assert.equal(result.body.error.code, 'internal_error');
+  assert.equal(result.body.error.message, 'Unexpected Field Operations error.');
+  assert.deepEqual(result.body.error.details, {});
+  assert.equal(JSON.stringify(result.body).includes('sensitive Firestore/runtime diagnostic'), false);
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].action, 'get_schedule');
+  assert.equal(reports[0].status, 500);
+  assert.equal(reports[0].code, 'internal_error');
+  assert.equal(reports[0].error.message, 'sensitive Firestore/runtime diagnostic');
+});
