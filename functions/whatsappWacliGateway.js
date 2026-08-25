@@ -11,6 +11,7 @@ const {
   wacliCanonicalIdentity,
   wacliCanonicalStatusId,
   wacliCommunicationAccountDecision,
+  wacliOutboundClaimDecision,
 } = require("./wacliCommunicationBoundary");
 
 const db = getFirestore();
@@ -688,9 +689,8 @@ function outboundQueueAccountMatches(queueItem = {}, communicationAccountId = ""
   return String(queueItem.communicationAccountId || "").trim().toLowerCase() === String(communicationAccountId || "").trim().toLowerCase();
 }
 
-async function claimOutboundCommand(bridgeId, communicationAccountId) {
-  const now = Date.now();
-  const snapshot = await db.collection("whatsappOutboundQueue")
+async function claimOutboundCommandWithDb(database, bridgeId, communicationAccountId, now = Date.now()) {
+  const snapshot = await database.collection("whatsappOutboundQueue")
     .where("communicationAccountId", "==", communicationAccountId)
     .get();
   const candidates = snapshot.docs
@@ -706,20 +706,61 @@ async function claimOutboundCommand(bridgeId, communicationAccountId) {
     });
 
   for (const candidate of candidates) {
-    const command = await db.runTransaction(async (transaction) => {
+    const command = await database.runTransaction(async (transaction) => {
       const currentSnapshot = await transaction.get(candidate.ref);
       if (!currentSnapshot.exists) return null;
       const current = currentSnapshot.data() || {};
       if (current.provider !== "wacli") return null;
       if (!outboundQueueAccountMatches(current, communicationAccountId)) return null;
       if (!["queued", "processing"].includes(current.status || "queued")) return null;
-      if (current.status === "processing" && timestampMillis(current.leaseUntil) > Date.now()) return null;
+      if (current.status === "processing" && timestampMillis(current.leaseUntil) > now) return null;
+
+      let conversation = null;
+      if (String(current.outboundClass || "").trim().toLowerCase() !== "transactional") {
+        const conversationId = String(current.conversationId || "").trim();
+        if (conversationId && !conversationId.includes("/")) {
+          const conversationSnapshot = await transaction.get(database.collection("communicationConversations").doc(conversationId));
+          conversation = conversationSnapshot.exists ? conversationSnapshot.data() || {} : null;
+        }
+      }
+      const authorization = wacliOutboundClaimDecision({
+        queueItem: current,
+        conversation,
+        communicationAccountId,
+      });
+      if (!authorization.allowed) {
+        transaction.set(candidate.ref, {
+          status: "failed",
+          errorCode: "outbound_authorization_failed",
+          authorizationReason: authorization.reason,
+          authorizationEpochReason: authorization.epochReason || null,
+          errorMessage: `Outbound command blocked before provider delivery: ${authorization.reason}.`,
+          failedAt: FieldValue.serverTimestamp(),
+          claimToken: null,
+          leaseUntil: null,
+          updatedAt: FieldValue.serverTimestamp(),
+        }, { merge: true });
+        return null;
+      }
 
       const to = String(current.to || current.phone || current.recipient || "").trim();
       const text = String(current.text || "");
       const media = current.media && typeof current.media === "object" ? current.media : null;
+      if (!to || (!text.trim() && !media)) {
+        transaction.set(candidate.ref, {
+          status: "failed",
+          errorCode: "invalid_outbound_command",
+          errorMessage: "Outbound command has no recipient or customer-visible content.",
+          failedAt: FieldValue.serverTimestamp(),
+          claimToken: null,
+          leaseUntil: null,
+          updatedAt: FieldValue.serverTimestamp(),
+        }, { merge: true });
+        return null;
+      }
+
       const claimToken = crypto.randomUUID();
-      const leaseUntil = Timestamp.fromMillis(Date.now() + 3 * 60 * 1000);
+      const leaseUntil = Timestamp.fromMillis(now + 3 * 60 * 1000);
       transaction.set(candidate.ref, {
         status: "processing",
         claimToken,
@@ -743,6 +784,10 @@ async function claimOutboundCommand(bridgeId, communicationAccountId) {
     if (command) return command;
   }
   return null;
+}
+
+async function claimOutboundCommand(bridgeId, communicationAccountId) {
+  return claimOutboundCommandWithDb(db, bridgeId, communicationAccountId);
 }
 
 exports.wacliOutboundPoll = onRequest(
@@ -971,6 +1016,7 @@ exports.appendCommunicationInternalNote = onDocumentCreated(
 
 module.exports.authorizedBridgeRequest = authorizedBridgeRequest;
 module.exports.claimOutboundCommand = claimOutboundCommand;
+module.exports.claimOutboundCommandWithDb = claimOutboundCommandWithDb;
 module.exports.conversationIngressState = conversationIngressState;
 module.exports.existingMessageMatchesIdentity = existingMessageMatchesIdentity;
 module.exports.outboundQueueAccountMatches = outboundQueueAccountMatches;
