@@ -1,20 +1,6 @@
-export const FIELD_ALLOWED_ACTIONS = [
-  'read',
-  'execute',
-  'report.edit',
-  'evidence.add',
-  'measurement.add',
-  'finding.add',
-  'asset.add',
-  'intervention.add',
-  'sale.propose',
-  'intervention.complete',
-  'visit.complete',
-  'office.review',
-  'price.override',
-] as const;
+import type { FieldAllowedAction } from './field-authority-contract';
 
-export type FieldAllowedAction = (typeof FIELD_ALLOWED_ACTIONS)[number];
+export type { FieldAllowedAction } from './field-authority-contract';
 
 /**
  * Server-projected action contract for Field UI.
