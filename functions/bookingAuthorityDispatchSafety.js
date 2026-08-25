@@ -1,7 +1,7 @@
 const { FieldValue, getFirestore } = require("firebase-admin/firestore");
 const { BOOKING_COLLECTIONS, compactObject } = require("./bookingAuthorityFirestore");
 const { cleanText } = require("./bookingSchedulingPrimitives");
-const { communicationEpochDecision } = require("./demacCustomerTurn");
+const { communicationEpochDecision } = require("./demacCommunicationEpoch");
 
 const DISPATCH_SAFETY_VERSION = 3;
 const HOLD_REASON = "customer_change_unresolved";
