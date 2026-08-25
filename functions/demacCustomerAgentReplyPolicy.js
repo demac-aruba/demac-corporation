@@ -93,6 +93,9 @@ function mayaReplyDecision({
   const phone = resolveConversationPhone({ message, conversation });
   const allowlist = configuredAllowlist(settings);
 
+  if (settings.enabled === false) {
+    return { allowed: false, mode, phone, reason: "maya-disabled" };
+  }
   if (settings.autoReplyEnabled !== true || mode === "off") {
     return { allowed: false, mode, phone, reason: "auto-reply-disabled" };
   }
