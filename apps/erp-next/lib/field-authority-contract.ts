@@ -3,8 +3,8 @@ export const FIELD_AUTHORITY_API_VERSION = 1 as const;
 /**
  * Versioned transport vocabulary mirrored by the Field Operations server.
  * This is not an authorization decision table: the server remains the sole authority that
- * chooses which actions appear for a principal/assignment. If this wire vocabulary changes,
- * the API version must change with it so older clients fail closed instead of guessing.
+ * chooses which actions and transitions appear for a principal/assignment. Incompatible wire
+ * changes must bump the API version so older clients fail closed instead of guessing.
  */
 export const FIELD_ALLOWED_ACTIONS = [
   'read',
@@ -43,6 +43,9 @@ const FIELD_VISIT_STATUSES = [
 ] as const;
 export type FieldVisitStatus = (typeof FIELD_VISIT_STATUSES)[number];
 
+const FIELD_ACTIVE_VISIT_TRANSITIONS = ['en_route', 'on_site', 'in_progress'] as const;
+export type FieldActiveVisitTransition = (typeof FIELD_ACTIVE_VISIT_TRANSITIONS)[number];
+
 const FIELD_PREPARE_SOURCES = ['field_authority', 'legacy_existing'] as const;
 export type FieldPrepareSource = (typeof FIELD_PREPARE_SOURCES)[number];
 
@@ -53,35 +56,6 @@ export type FieldPlannedWork = {
   label: string;
   quantity: number;
   durationMinutes?: number;
-};
-
-export type FieldScheduleJob = {
-  id: string;
-  workOrderId: string;
-  appointmentId: string;
-  date: string;
-  time: string;
-  endTime?: string;
-  status: string;
-  customerId: string;
-  customerName: string;
-  propertyId: string;
-  propertyName?: string;
-  address: string;
-  latitude?: number | null;
-  longitude?: number | null;
-  arrivalPhone?: string;
-  arrivalWhatsapp?: string;
-  accessInstructions?: string;
-  customerFacingDescription?: string;
-  technicianInstructions?: string;
-  plannedWork: FieldPlannedWork[];
-  estimatedQuantity: number;
-  vanId: string;
-  responsibility: FieldResponsibility;
-  assignmentSource: FieldAssignmentSource;
-  allowedActions: FieldAllowedAction[];
-  assignmentRole?: string;
 };
 
 export type FieldKnownEquipment = {
@@ -133,6 +107,40 @@ export type FieldPreparedVisit = {
   version: number;
 };
 
+export type FieldVisitState = FieldPreparedVisit & {
+  availableTransitions: FieldActiveVisitTransition[];
+};
+
+export type FieldScheduleJob = {
+  id: string;
+  workOrderId: string;
+  appointmentId: string;
+  date: string;
+  time: string;
+  endTime?: string;
+  status: string;
+  customerId: string;
+  customerName: string;
+  propertyId: string;
+  propertyName?: string;
+  address: string;
+  latitude?: number | null;
+  longitude?: number | null;
+  arrivalPhone?: string;
+  arrivalWhatsapp?: string;
+  accessInstructions?: string;
+  customerFacingDescription?: string;
+  technicianInstructions?: string;
+  plannedWork: FieldPlannedWork[];
+  estimatedQuantity: number;
+  vanId: string;
+  responsibility: FieldResponsibility;
+  assignmentSource: FieldAssignmentSource;
+  allowedActions: FieldAllowedAction[];
+  assignmentRole?: string;
+  fieldVisit: FieldVisitState | null;
+};
+
 export type FieldJobDetail = FieldScheduleJob & { knownEquipment: FieldKnownEquipment[] };
 export type FieldScheduleResponse = { success: true; version: typeof FIELD_AUTHORITY_API_VERSION; jobs: FieldScheduleJob[] };
 export type FieldJobResponse = { success: true; version: typeof FIELD_AUTHORITY_API_VERSION; job: FieldJobDetail };
@@ -141,7 +149,15 @@ export type FieldPrepareVisitResponse = {
   version: typeof FIELD_AUTHORITY_API_VERSION;
   replayed: boolean;
   source: FieldPrepareSource;
-  visit: FieldPreparedVisit;
+  visit: FieldVisitState;
+  allowedActions: FieldAllowedAction[];
+  auditEventId?: string;
+};
+export type FieldTransitionVisitResponse = {
+  success: true;
+  version: typeof FIELD_AUTHORITY_API_VERSION;
+  replayed: boolean;
+  visit: FieldVisitState;
   allowedActions: FieldAllowedAction[];
   auditEventId?: string;
 };
@@ -150,6 +166,7 @@ const RESPONSIBILITIES = new Set<string>(FIELD_RESPONSIBILITIES);
 const ASSIGNMENT_SOURCES = new Set<string>(FIELD_ASSIGNMENT_SOURCES);
 const ALLOWED_ACTIONS = new Set<string>(FIELD_ALLOWED_ACTIONS);
 const VISIT_STATUSES = new Set<string>(FIELD_VISIT_STATUSES);
+const ACTIVE_VISIT_TRANSITIONS = new Set<string>(FIELD_ACTIVE_VISIT_TRANSITIONS);
 const PREPARE_SOURCES = new Set<string>(FIELD_PREPARE_SOURCES);
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -174,6 +191,10 @@ function allowedActionsValid(value: unknown): value is FieldAllowedAction[] {
   return Array.isArray(value) && value.every((action) => string(action) && ALLOWED_ACTIONS.has(action));
 }
 
+function activeVisitTransitionsValid(value: unknown): value is FieldActiveVisitTransition[] {
+  return Array.isArray(value) && value.every((transition) => string(transition) && ACTIVE_VISIT_TRANSITIONS.has(transition));
+}
+
 function plannedWorkValid(value: unknown) {
   if (!Array.isArray(value)) return false;
   return value.every((candidate) => {
@@ -187,61 +208,6 @@ function plannedWorkValid(value: unknown) {
       && optionalString(item!.serviceId)
       && optionalString(item!.presetId)
       && (item!.durationMinutes === undefined || (typeof item!.durationMinutes === 'number' && Number.isFinite(item!.durationMinutes) && item!.durationMinutes >= 0));
-  });
-}
-
-function scheduleJobValid(value: unknown): value is FieldScheduleJob {
-  const job = record(value);
-  if (!job) return false;
-  return string(job.id)
-    && string(job.workOrderId)
-    && string(job.appointmentId)
-    && string(job.date)
-    && string(job.time)
-    && optionalString(job.endTime)
-    && string(job.status)
-    && string(job.customerId)
-    && string(job.customerName)
-    && string(job.propertyId)
-    && optionalString(job.propertyName)
-    && string(job.address)
-    && optionalFiniteNumber(job.latitude)
-    && optionalFiniteNumber(job.longitude)
-    && optionalString(job.arrivalPhone)
-    && optionalString(job.arrivalWhatsapp)
-    && optionalString(job.accessInstructions)
-    && optionalString(job.customerFacingDescription)
-    && optionalString(job.technicianInstructions)
-    && plannedWorkValid(job.plannedWork)
-    && typeof job.estimatedQuantity === 'number'
-    && Number.isFinite(job.estimatedQuantity)
-    && job.estimatedQuantity >= 0
-    && string(job.vanId)
-    && string(job.responsibility)
-    && RESPONSIBILITIES.has(job.responsibility)
-    && string(job.assignmentSource)
-    && ASSIGNMENT_SOURCES.has(job.assignmentSource)
-    && allowedActionsValid(job.allowedActions)
-    && optionalString(job.assignmentRole);
-}
-
-function knownEquipmentValid(value: unknown) {
-  if (!Array.isArray(value)) return false;
-  return value.every((candidate) => {
-    const equipment = record(candidate);
-    return Boolean(equipment)
-      && string(equipment!.id)
-      && optionalString(equipment!.qrCode)
-      && optionalString(equipment!.locationLabel)
-      && optionalString(equipment!.systemType)
-      && optionalString(equipment!.brand)
-      && optionalString(equipment!.model)
-      && optionalString(equipment!.serial)
-      && (equipment!.btu === undefined || equipment!.btu === null || typeof equipment!.btu === 'string' || (typeof equipment!.btu === 'number' && Number.isFinite(equipment!.btu)))
-      && optionalString(equipment!.refrigerant)
-      && optionalString(equipment!.voltage)
-      && optionalString(equipment!.condition)
-      && typeof equipment!.active === 'boolean';
   });
 }
 
@@ -285,6 +251,67 @@ function preparedVisitValid(value: unknown): value is FieldPreparedVisit {
     && visit.version >= 1;
 }
 
+function visitStateValid(value: unknown): value is FieldVisitState {
+  const visit = record(value);
+  return preparedVisitValid(value) && Boolean(visit) && activeVisitTransitionsValid(visit!.availableTransitions);
+}
+
+function scheduleJobValid(value: unknown): value is FieldScheduleJob {
+  const job = record(value);
+  if (!job) return false;
+  return string(job.id)
+    && string(job.workOrderId)
+    && string(job.appointmentId)
+    && string(job.date)
+    && string(job.time)
+    && optionalString(job.endTime)
+    && string(job.status)
+    && string(job.customerId)
+    && string(job.customerName)
+    && string(job.propertyId)
+    && optionalString(job.propertyName)
+    && string(job.address)
+    && optionalFiniteNumber(job.latitude)
+    && optionalFiniteNumber(job.longitude)
+    && optionalString(job.arrivalPhone)
+    && optionalString(job.arrivalWhatsapp)
+    && optionalString(job.accessInstructions)
+    && optionalString(job.customerFacingDescription)
+    && optionalString(job.technicianInstructions)
+    && plannedWorkValid(job.plannedWork)
+    && typeof job.estimatedQuantity === 'number'
+    && Number.isFinite(job.estimatedQuantity)
+    && job.estimatedQuantity >= 0
+    && string(job.vanId)
+    && string(job.responsibility)
+    && RESPONSIBILITIES.has(job.responsibility)
+    && string(job.assignmentSource)
+    && ASSIGNMENT_SOURCES.has(job.assignmentSource)
+    && allowedActionsValid(job.allowedActions)
+    && optionalString(job.assignmentRole)
+    && (job.fieldVisit === null || visitStateValid(job.fieldVisit));
+}
+
+function knownEquipmentValid(value: unknown) {
+  if (!Array.isArray(value)) return false;
+  return value.every((candidate) => {
+    const equipment = record(candidate);
+    return Boolean(equipment)
+      && string(equipment!.id)
+      && optionalString(equipment!.qrCode)
+      && optionalString(equipment!.locationLabel)
+      && optionalString(equipment!.systemType)
+      && optionalString(equipment!.brand)
+      && optionalString(equipment!.model)
+      && optionalString(equipment!.serial)
+      && (equipment!.btu === undefined || equipment!.btu === null || typeof equipment!.btu === 'string' || (typeof equipment!.btu === 'number' && Number.isFinite(equipment!.btu)))
+      && optionalString(equipment!.refrigerant)
+      && optionalString(equipment!.voltage)
+      && optionalString(equipment!.condition)
+      && typeof equipment!.active === 'boolean';
+  });
+}
+
 function envelope(value: unknown): Record<string, unknown> {
   const payload = record(value);
   if (!payload || payload.success !== true || payload.version !== FIELD_AUTHORITY_API_VERSION) {
@@ -318,10 +345,21 @@ export function parseFieldPrepareVisitResponse(value: unknown): FieldPrepareVisi
   if (typeof payload.replayed !== 'boolean'
     || !string(payload.source)
     || !PREPARE_SOURCES.has(payload.source)
-    || !preparedVisitValid(payload.visit)
+    || !visitStateValid(payload.visit)
     || !allowedActionsValid(payload.allowedActions)
     || !optionalString(payload.auditEventId)) {
     throw new Error('Field Operations returned malformed visit preparation data. Refresh and try again.');
   }
   return payload as FieldPrepareVisitResponse;
+}
+
+export function parseFieldTransitionVisitResponse(value: unknown): FieldTransitionVisitResponse {
+  const payload = envelope(value);
+  if (typeof payload.replayed !== 'boolean'
+    || !visitStateValid(payload.visit)
+    || !allowedActionsValid(payload.allowedActions)
+    || !optionalString(payload.auditEventId)) {
+    throw new Error('Field Operations returned malformed visit transition data. Refresh and try again.');
+  }
+  return payload as FieldTransitionVisitResponse;
 }
