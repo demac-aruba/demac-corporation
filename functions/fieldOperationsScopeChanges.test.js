@@ -130,10 +130,31 @@ function visitAsset(overrides = {}) {
   };
 }
 
+function equipment(overrides = {}) {
+  return {
+    id: 'AC-2', clientId: 'CLIENT-1', propertyId: 'PROPERTY-1', active: true,
+    locationLabel: 'Habitación', btu: 12000,
+    ...overrides,
+  };
+}
+
+function pricingRules(overrides = {}) {
+  return {
+    id: 'company-service-pricing-rules',
+    version: 7,
+    currency: 'Afl.',
+    standardServiceSplit: [{ btu: 12000, price: 125, durationMinutes: 60 }],
+    deepCleaningSplit: [{ btu: 12000, price: 195, durationMinutes: 120 }],
+    standardInstallationAdinaDemac: [{ btu: 12000, price: 200, durationMinutes: 120 }],
+    ...overrides,
+  };
+}
+
 function service(overrides = {}) {
   return {
     id: 'service-standard', itemType: 'Servicio', name: '12K Standard Service', category: 'Maintenance',
-    active: true, durationMinutes: 60,
+    active: true, durationMinutes: 60, basePrice: 999,
+    pricingDefinition: { version: 1, mode: 'fixed', currency: 'AWG' },
     serviceDefinition: { version: 1, bookingCode: '12k_standard', duration: { minutes: 60 } },
     ...overrides,
   };
@@ -152,6 +173,8 @@ function fixture(options = {}) {
     workVisits: [options.visit || visit()],
     workOrders: [options.order || order()],
     visitAssets: options.visitAssets || [visitAsset()],
+    equipmentSystems: options.equipmentSystems || [equipment()],
+    businessSettings: options.businessSettings === undefined ? [pricingRules()] : options.businessSettings,
     services: options.services || [service()],
     scopeChanges: options.scopeChanges || [],
     workInterventions: options.workInterventions || [],
@@ -179,6 +202,17 @@ function input(overrides = {}) {
   };
 }
 
+function governedPriceSnapshot(overrides = {}) {
+  return {
+    currency: 'AWG',
+    unitPrice: 125,
+    sourceCatalogItemId: 'service-standard',
+    pricingVersion: 'company-service-pricing-rules:v7:standard_service:12000',
+    capturedAt: '2026-08-25T10:30:00.000Z',
+    ...overrides,
+  };
+}
+
 test('additional work creates ScopeChange + pending authorization WorkIntervention atomically without rewriting planned truth', async () => {
   const { store, events, create } = fixture();
   const beforeVisit = structuredClone(store.get('workVisits', 'visit-WO-1'));
@@ -195,11 +229,13 @@ test('additional work creates ScopeChange + pending authorization WorkInterventi
   assert.equal(result.workIntervention.status, 'pending_authorization');
   assert.equal(result.workIntervention.scopeChangeId, result.scopeChange.id);
   assert.deepEqual(result.workIntervention.performedByStaffIds, []);
+  assert.deepEqual(result.workIntervention.priceSnapshot, governedPriceSnapshot(), 'Company Rules must override conflicting catalog basePrice at proposal time');
   assert.deepEqual(store.get('workVisits', 'visit-WO-1'), beforeVisit);
   assert.deepEqual(store.get('workOrders', 'WO-1'), beforeOrder);
   assert.equal(store.all('scopeChanges').length, 1);
   assert.equal(store.all('workInterventions').length, 1);
   assert.deepEqual(events.map((event) => event.type), ['scope_change_created', 'additional_work_intervention_proposed']);
+  assert.equal(events[1].after.priceSnapshot.unitPrice, 125);
 });
 
 test('technician-discovered work remains pending authorization and records technician origin without claiming execution', async () => {
@@ -212,15 +248,20 @@ test('technician-discovered work remains pending authorization and records techn
   assert.equal(result.workIntervention.origin, 'added_on_site_technician_discovery');
   assert.equal(result.workIntervention.requestedBy, 'technician');
   assert.equal(result.workIntervention.status, 'pending_authorization');
+  assert.equal(result.workIntervention.priceSnapshot.unitPrice, 125);
 });
 
-test('same request id replays only exact additional-work input and partial persisted state fails closed', async () => {
+test('same request id replays exact original price snapshot even if pricing changes after proposal', async () => {
   const { store, events, create } = fixture();
   const first = await create(input());
+  store.set('businessSettings', 'company-service-pricing-rules', pricingRules({
+    standardServiceSplit: [{ btu: 12000, price: 130, durationMinutes: 60 }],
+  }));
   const replay = await create(input());
   assert.equal(replay.replayed, true);
   assert.equal(replay.scopeChange.id, first.scopeChange.id);
   assert.equal(replay.workIntervention.id, first.workIntervention.id);
+  assert.equal(replay.workIntervention.priceSnapshot.unitPrice, 125, 'idempotent replay must preserve the price actually presented');
   assert.equal(events.length, 2, 'idempotent replay must not append duplicate audit');
 
   await assert.rejects(
@@ -233,6 +274,53 @@ test('same request id replays only exact additional-work input and partial persi
   await assert.rejects(
     () => partial.create(input()),
     (error) => error?.code === 'scope_change_request_conflict' && error?.status === 409,
+  );
+});
+
+test('governed price fails closed when canonical A/C identity, BTU or Company Rules price is unavailable', async () => {
+  const missingAsset = fixture({ equipmentSystems: [] });
+  await assert.rejects(
+    () => missingAsset.create(input({ requestId: 'additional-missing-crm-asset-001' })),
+    (error) => error?.code === 'asset_not_available_for_visit' && error?.status === 409,
+  );
+
+  const missingBtu = fixture({ equipmentSystems: [equipment({ btu: undefined })] });
+  await assert.rejects(
+    () => missingBtu.create(input({ requestId: 'additional-missing-btu-001' })),
+    (error) => error?.code === 'service_pricing_btu_required' && error?.status === 409,
+  );
+
+  const missingRules = fixture({ businessSettings: [] });
+  await assert.rejects(
+    () => missingRules.create(input({ requestId: 'additional-missing-rules-001' })),
+    (error) => error?.code === 'service_pricing_not_configured' && error?.status === 409,
+  );
+
+  const missingRow = fixture({ businessSettings: [pricingRules({ standardServiceSplit: [{ btu: 18000, price: 135 }] })] });
+  await assert.rejects(
+    () => missingRow.create(input({ requestId: 'additional-missing-price-row-001' })),
+    (error) => error?.code === 'service_pricing_not_found' && error?.status === 409,
+  );
+});
+
+test('non-matrix service uses canonical catalog base price while quote mode requires office quote', async () => {
+  const checkup = service({
+    id: 'service-checkup', name: 'Check-up', basePrice: 75,
+    serviceDefinition: { version: 1, bookingCode: 'check_up', duration: { minutes: 60 } },
+  });
+  const fixed = fixture({ services: [checkup] });
+  const fixedResult = await fixed.create(input({ serviceCatalogItemId: 'service-checkup', requestId: 'additional-checkup-001' }));
+  assert.equal(fixedResult.workIntervention.priceSnapshot.unitPrice, 75);
+  assert.equal(fixedResult.workIntervention.priceSnapshot.pricingVersion, 'service-catalog:service-checkup:fixed');
+
+  const quoted = fixture({ services: [service({
+    id: 'service-quoted', name: 'Quoted service', basePrice: 0,
+    pricingDefinition: { version: 1, mode: 'quote', currency: 'AWG' },
+    serviceDefinition: { version: 1, bookingCode: 'custom_quote', duration: { minutes: 60 } },
+  })] });
+  await assert.rejects(
+    () => quoted.create(input({ serviceCatalogItemId: 'service-quoted', requestId: 'additional-quoted-001' })),
+    (error) => error?.code === 'service_pricing_quote_required' && error?.status === 409,
   );
 });
 
@@ -308,7 +396,7 @@ test('ScopeChange projection fails closed on schema, identity, origin, reason, t
   assert.throws(() => projectScopeChange({ ...valid, version: 1.5 }), /version is invalid/);
 });
 
-test('job projection links ScopeChanges to additional WorkInterventions and server-projects eligible VisitAssets', async () => {
+test('job projection links ScopeChanges to priced additional WorkInterventions and server-projects eligible VisitAssets', async () => {
   const storedScope = {
     id: 'SC-1', fieldAuthorityVersion: 1, visitId: 'visit-WO-1', workOrderId: 'WO-1', clientId: 'CLIENT-1',
     propertyId: 'PROPERTY-1', visitAssetId: 'VA-2', interventionId: 'WI-2', origin: 'client_requested_additional_work',
@@ -325,7 +413,7 @@ test('job projection links ScopeChanges to additional WorkInterventions and serv
     workInterventions: [{
       id: 'WI-2', visitId: 'visit-WO-1', visitAssetId: 'VA-2', assetId: 'AC-2', serviceCatalogItemId: 'service-standard',
       interventionType: '12K Standard Service', origin: 'added_on_site_client_request', requestedBy: 'client',
-      status: 'pending_authorization', scopeChangeId: 'SC-1', performedByStaffIds: [],
+      status: 'pending_authorization', priceSnapshot: governedPriceSnapshot(), scopeChangeId: 'SC-1', performedByStaffIds: [],
     }],
     availableFieldServices: [],
   };
@@ -343,5 +431,12 @@ test('job projection links ScopeChanges to additional WorkInterventions and serv
   await assert.rejects(
     () => attachScopeChangesToJob(store.db, { ...job, workInterventions: [] }),
     (error) => error?.code === 'scope_change_identity_conflict' && error?.status === 409,
+  );
+  await assert.rejects(
+    () => attachScopeChangesToJob(store.db, {
+      ...job,
+      workInterventions: [{ ...job.workInterventions[0], priceSnapshot: undefined }],
+    }),
+    (error) => error?.code === 'work_intervention_price_snapshot_required' && error?.status === 409,
   );
 });

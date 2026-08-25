@@ -4,6 +4,10 @@ const { fieldError } = require('./fieldOperationsAuthorityCore');
 const { stableRequestId } = require('./fieldOperationsAuthorityWorkVisit');
 const { loadCurrentVisitMutationContext } = require('./fieldOperationsVisitMutationContext');
 const { projectVisitAsset } = require('./fieldOperationsVisitAssets');
+const {
+  priceSnapshotRequiredForOrigin,
+  projectFieldPriceSnapshot,
+} = require('./fieldOperationsPriceSnapshots');
 const { catalogServicePresets, normalizeCatalogService } = require('./serviceCatalog');
 
 const FIELD_WORK_INTERVENTION_STORAGE_VERSION = 1;
@@ -113,6 +117,16 @@ function projectWorkIntervention(record, expectedContext = {}) {
   if (origin !== 'planned' && !scopeChangeId) {
     throw fieldError('work_intervention_identity_conflict', 'An added-on-site Work Intervention must reference its Scope Change.', 409);
   }
+  const priceSnapshot = record?.priceSnapshot === undefined
+    ? undefined
+    : projectFieldPriceSnapshot(record.priceSnapshot, serviceCatalogItemId);
+  if (priceSnapshotRequiredForOrigin(origin) && !priceSnapshot) {
+    throw fieldError(
+      'work_intervention_price_snapshot_required',
+      'Persisted additional Work Intervention is missing the governed price presented for authorization.',
+      409,
+    );
+  }
   assertExpectedReference(visitId, expectedContext.visitId, 'Work Visit');
   assertExpectedReference(workOrderId, expectedContext.workOrderId, 'Work Order');
   assertExpectedReference(customerId, expectedContext.customerId, 'Customer');
@@ -130,6 +144,7 @@ function projectWorkIntervention(record, expectedContext = {}) {
     status,
     templateId: text(record?.templateId, 180) || undefined,
     templateVersion: record?.templateVersion,
+    priceSnapshot,
     scopeChangeId,
     startedAt: text(record?.startedAt, 80) || undefined,
     completedAt: text(record?.completedAt, 80) || undefined,
@@ -442,8 +457,6 @@ function createPlannedWorkInterventionCommand({
         origin: 'planned',
         requestedBy: 'office',
         status: 'confirmed',
-        // Confirmation records what work is linked to this Asset. Actual performers are recorded
-        // only when the intervention execution lifecycle starts/completes; do not pre-claim work.
         performedByStaffIds: [],
         ...actorFields(identity, occurredAt),
       }, 'workIntervention');

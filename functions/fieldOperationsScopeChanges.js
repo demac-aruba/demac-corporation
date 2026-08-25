@@ -1,9 +1,9 @@
 const crypto = require('node:crypto');
 const { fieldFirestoreData, fieldSnapshotRecord } = require('./fieldOperationsFirestoreData');
-const { fieldError } = require('./fieldOperationsAuthorityCore');
+const { equipmentTechnicalProjection, fieldError } = require('./fieldOperationsAuthorityCore');
 const { stableRequestId } = require('./fieldOperationsAuthorityWorkVisit');
 const { loadCurrentVisitMutationContext } = require('./fieldOperationsVisitMutationContext');
-const { projectVisitAsset } = require('./fieldOperationsVisitAssets');
+const { projectVisitAsset, requireEquipmentIdentity } = require('./fieldOperationsVisitAssets');
 const {
   FIELD_WORK_INTERVENTION_STORAGE_VERSION,
   WORK_INTERVENTION_COLLECTION,
@@ -12,6 +12,7 @@ const {
   projectWorkIntervention,
 } = require('./fieldOperationsVisitInterventions');
 const { normalizeCatalogService } = require('./serviceCatalog');
+const { resolveServicePriceSnapshot } = require('./servicePricingAuthority');
 
 const FIELD_SCOPE_CHANGE_STORAGE_VERSION = 1;
 const SCOPE_CHANGE_COLLECTION = 'scopeChanges';
@@ -135,6 +136,16 @@ function additionalOrigin(scopeOrigin) {
   throw fieldError('invalid_scope_change_origin', 'This Technician Portal command supports only client-requested or technician-discovered additional work.', 400);
 }
 
+function pricingFieldError(error) {
+  const code = text(error?.code, 120);
+  if (!code.startsWith('service_pricing_')) return error;
+  return fieldError(
+    code,
+    text(error?.message, 500) || 'The governed service price is not available for this additional work.',
+    409,
+  );
+}
+
 function scopeChangeAuditEvent({ requestId, scopeChange, intervention, context, identity, occurredAt }) {
   return {
     id: deterministicId('FE', `${requestId}:scope_change_created:${scopeChange.id}`),
@@ -185,6 +196,13 @@ function additionalInterventionAuditEvent({ requestId, scopeChange, intervention
       status: intervention.status,
       serviceCatalogItemId: intervention.serviceCatalogItemId,
       scopeChangeId: scopeChange.id,
+      priceSnapshot: intervention.priceSnapshot ? {
+        currency: intervention.priceSnapshot.currency,
+        unitPrice: intervention.priceSnapshot.unitPrice,
+        sourceCatalogItemId: intervention.priceSnapshot.sourceCatalogItemId,
+        pricingVersion: intervention.priceSnapshot.pricingVersion,
+        capturedAt: intervention.priceSnapshot.capturedAt,
+      } : undefined,
     },
   };
 }
@@ -222,6 +240,9 @@ function validateAdditionalLinks(job, scopeChanges) {
     const intervention = interventionById.get(scopeChange.interventionId);
     if (!intervention || intervention.scopeChangeId !== scopeChange.id || intervention.visitAssetId !== scopeChange.visitAssetId) {
       throw fieldError('scope_change_identity_conflict', 'Scope Change and Work Intervention linkage is inconsistent.', 409);
+    }
+    if (!intervention.priceSnapshot) {
+      throw fieldError('work_intervention_price_snapshot_required', 'Additional Work Intervention is missing its governed price snapshot.', 409);
     }
   }
   for (const intervention of interventions) {
@@ -359,6 +380,7 @@ function createAdditionalWorkInterventionCommand({
           || existingIntervention.scopeChangeId !== existingScope.id
           || existingIntervention.origin !== mappedOrigin.interventionOrigin
           || existingIntervention.status !== 'pending_authorization'
+          || !existingIntervention.priceSnapshot
         ) {
           throw fieldError('scope_change_request_conflict', 'This requestId was already used for different additional-work input.', 409);
         }
@@ -385,13 +407,39 @@ function createAdditionalWorkInterventionCommand({
       if (!serviceSnapshot.exists) {
         throw fieldError('service_not_available', 'The selected Service is not available in the canonical catalog.', 404);
       }
-      const canonicalService = normalizeCatalogService(fieldSnapshotRecord(serviceSnapshot));
+      const serviceRecord = fieldSnapshotRecord(serviceSnapshot);
+      const canonicalService = normalizeCatalogService(serviceRecord);
       if (!canonicalService || canonicalService.serviceId !== normalizedServiceId) {
         throw fieldError('service_not_available', 'The selected Service is not an active canonical Field service.', 409);
       }
 
+      const equipmentRef = db.collection('equipmentSystems').doc(visitAsset.assetId);
+      const pricingRulesRef = db.collection('businessSettings').doc('company-service-pricing-rules');
+      const [equipmentSnapshot, pricingRulesSnapshot] = await Promise.all([
+        transaction.get(equipmentRef),
+        transaction.get(pricingRulesRef),
+      ]);
+      if (!equipmentSnapshot.exists) {
+        throw fieldError('asset_not_available_for_visit', 'The A/C linked to this Visit Asset is no longer available in canonical CRM.', 409);
+      }
+      const equipment = fieldSnapshotRecord(equipmentSnapshot);
+      requireEquipmentIdentity(equipment, context.customerId, context.propertyId);
+      const technical = equipmentTechnicalProjection(equipment);
+
       const occurredAt = text(now(), 80);
       if (!occurredAt || Number.isNaN(Date.parse(occurredAt))) throw new Error('Clock returned an invalid timestamp.');
+      let priceSnapshot;
+      try {
+        priceSnapshot = resolveServicePriceSnapshot({
+          service: serviceRecord,
+          pricingSettings: pricingRulesSnapshot.exists ? fieldSnapshotRecord(pricingRulesSnapshot) : null,
+          btu: technical.btu,
+          capturedAt: occurredAt,
+        });
+      } catch (error) {
+        throw pricingFieldError(error);
+      }
+
       const commonActor = actorFields(identity, occurredAt);
       const storedScopeChange = fieldFirestoreData({
         id: scopeChangeId,
@@ -423,6 +471,7 @@ function createAdditionalWorkInterventionCommand({
         origin: mappedOrigin.interventionOrigin,
         requestedBy: mappedOrigin.requestedBy,
         status: 'pending_authorization',
+        priceSnapshot,
         scopeChangeId,
         performedByStaffIds: [],
         ...commonActor,
@@ -465,5 +514,6 @@ module.exports.additionalOrigin = additionalOrigin;
 module.exports.attachScopeChangesToJob = attachScopeChangesToJob;
 module.exports.createAdditionalWorkInterventionCommand = createAdditionalWorkInterventionCommand;
 module.exports.loadScopeChanges = loadScopeChanges;
+module.exports.pricingFieldError = pricingFieldError;
 module.exports.projectScopeChange = projectScopeChange;
 module.exports.validateAdditionalLinks = validateAdditionalLinks;
