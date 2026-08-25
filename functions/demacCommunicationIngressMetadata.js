@@ -9,11 +9,7 @@ const {
 
 const app = getApps().length ? getApp() : initializeApp();
 const db = getFirestore(app);
-const INGRESS_METADATA_VERSION = 2;
-
-function safeDocumentId(value) {
-  return String(value || "unknown").replaceAll("/", "_").replaceAll("#", "_").slice(0, 1200);
-}
+const INGRESS_METADATA_VERSION = 3;
 
 function ingressIdentityFromMessage(message = {}) {
   const raw = message.raw && typeof message.raw === "object" ? message.raw : {};
@@ -33,6 +29,21 @@ function ingressIdentityFromMessage(message = {}) {
   return { communicationAccountId, remoteConversationId, provider, channel, decision };
 }
 
+function conversationVerificationDecision({ identity = {}, conversationExists = false, conversation = {} } = {}) {
+  if (!conversationExists) return { valid: false, reason: "canonical-conversation-missing" };
+  const messageAccount = cleanText(identity.communicationAccountId, 180).toLowerCase();
+  const conversationAccount = cleanText(conversation.communicationAccountId, 180).toLowerCase();
+  if (messageAccount && conversationAccount && messageAccount !== conversationAccount) {
+    return { valid: false, reason: "communication-account-conflict" };
+  }
+  const messageRemote = cleanText(identity.remoteConversationId, 300);
+  const conversationRemote = cleanText(conversation.remoteConversationId, 300);
+  if (messageRemote && conversationRemote && messageRemote !== conversationRemote) {
+    return { valid: false, reason: "remote-conversation-conflict" };
+  }
+  return { valid: identity.decision?.valid === true, reason: identity.decision?.valid ? "verified" : identity.decision?.reason || "identity-unverified" };
+}
+
 exports.stampCommunicationMessageFirstSeen = onDocumentCreated(
   {
     document: "whatsappMessages/{messageId}",
@@ -45,7 +56,7 @@ exports.stampCommunicationMessageFirstSeen = onDocumentCreated(
     if (!snapshot) return;
     const message = { id: snapshot.id, ...snapshot.data() };
     const identity = ingressIdentityFromMessage(message);
-    const conversationId = safeDocumentId(message.conversationId || message.chat || message.phone);
+    const conversationId = cleanText(message.conversationId, 300);
     const messagePatch = {
       firstReceivedAt: message.firstReceivedAt || FieldValue.serverTimestamp(),
       firstIngestedAtIso: cleanText(message.firstIngestedAtIso, 120) || new Date().toISOString(),
@@ -55,8 +66,11 @@ exports.stampCommunicationMessageFirstSeen = onDocumentCreated(
       communicationIdentityStatus: identity.decision.valid ? "verified" : identity.decision.reason,
     };
 
-    if (!conversationId || conversationId === "unknown") {
-      await snapshot.ref.set(messagePatch, { merge: true });
+    if (!conversationId || conversationId.includes("/")) {
+      await snapshot.ref.set({
+        ...messagePatch,
+        communicationIdentityStatus: conversationId ? "invalid-canonical-conversation-id" : "missing-canonical-conversation-id",
+      }, { merge: true });
       return;
     }
 
@@ -64,30 +78,20 @@ exports.stampCommunicationMessageFirstSeen = onDocumentCreated(
     await db.runTransaction(async (transaction) => {
       const conversationSnapshot = await transaction.get(conversationRef);
       const conversation = conversationSnapshot.exists ? conversationSnapshot.data() || {} : {};
-      const existingAccount = cleanText(conversation.communicationAccountId, 180).toLowerCase();
-      const accountConflict = Boolean(
-        identity.communicationAccountId
-        && existingAccount
-        && identity.communicationAccountId !== existingAccount,
-      );
+      const verification = conversationVerificationDecision({
+        identity,
+        conversationExists: conversationSnapshot.exists,
+        conversation,
+      });
       transaction.set(snapshot.ref, {
         ...messagePatch,
         conversationId,
-        communicationIdentityStatus: accountConflict ? "communication-account-conflict" : messagePatch.communicationIdentityStatus,
+        communicationIdentityStatus: verification.reason,
       }, { merge: true });
-      if (!accountConflict) {
+      if (conversationSnapshot.exists && verification.valid) {
         transaction.set(conversationRef, {
-          conversationId,
-          remoteConversationId: identity.remoteConversationId || conversation.remoteConversationId || null,
-          ...(identity.communicationAccountId ? { communicationAccountId: identity.communicationAccountId } : {}),
-          ownershipVersion: Number.isSafeInteger(Number(conversation.ownershipVersion))
-            ? Number(conversation.ownershipVersion)
-            : 0,
-          customerInputVersion: Number.isSafeInteger(Number(conversation.customerInputVersion))
-            ? Number(conversation.customerInputVersion)
-            : 0,
-          communicationIdentityStatus: identity.decision.valid ? "verified" : identity.decision.reason,
-          updatedAt: FieldValue.serverTimestamp(),
+          communicationIdentityStatus: "verified",
+          communicationIdentityVerifiedAt: FieldValue.serverTimestamp(),
         }, { merge: true });
       }
     });
@@ -95,4 +99,5 @@ exports.stampCommunicationMessageFirstSeen = onDocumentCreated(
 );
 
 module.exports.INGRESS_METADATA_VERSION = INGRESS_METADATA_VERSION;
+module.exports.conversationVerificationDecision = conversationVerificationDecision;
 module.exports.ingressIdentityFromMessage = ingressIdentityFromMessage;
