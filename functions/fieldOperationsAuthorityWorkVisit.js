@@ -93,12 +93,13 @@ function workOrderAllowsInitialVisitPreparation(order) {
 }
 
 function canonicalVisitVersion(value) {
-  if (value === undefined || value === null || value === '') return 1;
-  const version = Number(value);
-  if (!Number.isInteger(version) || version < 1) {
+  // Active Legacy visits may predate versioning entirely. Only true field absence receives the
+  // compatibility default; an explicitly persisted null/string/fractional value is corruption.
+  if (value === undefined) return 1;
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
     throw fieldError('invalid_visit_version', 'Persisted Work Visit version is invalid.', 409, { version: text(value, 80) });
   }
-  return version;
+  return value;
 }
 
 function nonNegativeQuantity(value) {
@@ -222,19 +223,41 @@ function assertReferenceMatches(record, expectedId, fields, code, label) {
 }
 
 function assertExistingVisitCompatible(existing, order) {
-  if (text(existing.workOrderId, 180) !== text(order.id, 180)) {
+  const expectedWorkOrderId = text(order.id, 180);
+  const expectedCustomerId = text(order.clientId, 180);
+  const expectedPropertyId = text(order.propertyId, 180);
+  const expectedAppointmentId = text(order.appointmentId, 180);
+  if (text(existing.workOrderId, 180) !== expectedWorkOrderId) {
     throw fieldError('visit_identity_conflict', 'The existing Work Visit belongs to a different Work Order.', 409);
   }
-  if (text(existing.clientId || existing.customerId, 180) !== text(order.clientId, 180)) {
-    throw fieldError('visit_identity_conflict', 'The existing Work Visit belongs to a different Customer.', 409);
+
+  const customerReferences = [
+    ['clientId', existing.clientId],
+    ['customerId', existing.customerId],
+  ];
+  const presentCustomers = customerReferences.map(([field, value]) => [field, text(value, 180)]).filter(([, value]) => value);
+  if (!presentCustomers.length || presentCustomers.some(([, value]) => value !== expectedCustomerId)) {
+    throw fieldError('visit_identity_conflict', 'The existing Work Visit belongs to a different Customer.', 409, {
+      expectedCustomerId,
+      references: Object.fromEntries(presentCustomers),
+    });
   }
-  const existingPropertyId = text(existing.propertyId, 180);
-  if (existingPropertyId && existingPropertyId !== text(order.propertyId, 180)) {
-    throw fieldError('visit_identity_conflict', 'The existing Work Visit belongs to a different Property.', 409);
-  }
-  const existingAppointmentId = text(existing.appointmentId || existing.scheduledScopeSnapshot?.appointmentId, 180);
-  if (existingAppointmentId && existingAppointmentId !== text(order.appointmentId, 180)) {
-    throw fieldError('visit_identity_conflict', 'The existing Work Visit belongs to a different Appointment.', 409);
+
+  const optionalReferences = [
+    ['propertyId', existing.propertyId, expectedPropertyId, 'Property'],
+    ['siteId', existing.siteId, expectedPropertyId, 'Property'],
+    ['appointmentId', existing.appointmentId, expectedAppointmentId, 'Appointment'],
+    ['scheduledScopeSnapshot.appointmentId', existing.scheduledScopeSnapshot?.appointmentId, expectedAppointmentId, 'Appointment'],
+  ];
+  for (const [field, rawValue, expectedId, label] of optionalReferences) {
+    const actual = text(rawValue, 180);
+    if (actual && actual !== expectedId) {
+      throw fieldError('visit_identity_conflict', `The existing Work Visit belongs to a different ${label}.`, 409, {
+        field,
+        expectedId,
+        actual,
+      });
+    }
   }
 }
 
