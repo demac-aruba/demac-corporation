@@ -1,6 +1,6 @@
 import { fieldActionAllowed } from '../lib/field-authorization';
 import { hasCapability as hasLegacyCapability } from '../lib/capabilities';
-import { parseFieldJobResponse, parseFieldScheduleResponse, type FieldAllowedAction } from '../lib/field-authority-contract';
+import { parseFieldJobResponse, parseFieldPrepareVisitResponse, parseFieldScheduleResponse, type FieldAllowedAction } from '../lib/field-authority-contract';
 import { defaultAuthenticatedRoute, isAuthenticatedRouteAllowed } from '../lib/role-routing';
 import { requireCapability, roleCapabilities, type AuthPrincipal, type Capability } from '../lib/security';
 
@@ -97,12 +97,48 @@ const validSchedule = parseFieldScheduleResponse({ success: true, version: 1, jo
 assert(validSchedule.jobs[0].workOrderId === 'WO-1', 'valid public schedule transport should parse');
 const validJob = parseFieldJobResponse({ success: true, version: 1, job: { ...representativeJob, knownEquipment: [] } });
 assert(validJob.job.knownEquipment.length === 0, 'valid public job transport should parse');
+
+const representativeVisit = {
+  id: 'visit-WO-1',
+  appointmentId: 'APT-1',
+  workOrderId: 'WO-1',
+  customerId: 'CLIENT-1',
+  propertyId: 'PROPERTY-1',
+  scheduledScopeSnapshot: {
+    appointmentId: 'APT-1',
+    capturedAt: '2026-08-24T12:00:00.000Z',
+    estimatedUnitCount: 0,
+    workLines: [{ id: 'line-1', label: 'Standard Service', quantity: 1 }],
+  },
+  status: 'scheduled',
+  participatingStaffIds: ['staff-1'],
+  requiresSecondVisit: false,
+  createdAt: '2026-08-24T12:00:00.000Z',
+  createdBy: 'uid-1',
+  updatedAt: '2026-08-24T12:00:00.000Z',
+  updatedBy: 'uid-1',
+  version: 1,
+};
+const validPrepare = parseFieldPrepareVisitResponse({
+  success: true,
+  version: 1,
+  replayed: false,
+  source: 'field_authority',
+  visit: representativeVisit,
+  allowedActions: ['read', 'execute'],
+  auditEventId: 'FE-1',
+});
+assert(validPrepare.visit.status === 'scheduled' && validPrepare.replayed === false, 'valid visit preparation transport should parse');
+
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 2, jobs: [] }), 'unknown API version must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1 }), 'missing jobs array must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1, jobs: [{ ...representativeJob, allowedActions: null }] }), 'malformed action projection must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1, jobs: [{ ...representativeJob, allowedActions: ['read', 'future.action'] }] }), 'unknown server action name must fail closed');
 assertThrows(() => parseFieldJobResponse({ success: true, version: 1, job: representativeJob }), 'missing knownEquipment must fail closed');
 assertThrows(() => parseFieldJobResponse({ success: true, version: 1, job: { ...representativeJob, knownEquipment: [{ id: 'AC-1' }] } }), 'malformed equipment row must fail closed');
+assertThrows(() => parseFieldPrepareVisitResponse({ success: true, version: 2, replayed: false, source: 'field_authority', visit: representativeVisit, allowedActions: ['read'] }), 'prepare response with unknown API version must fail closed');
+assertThrows(() => parseFieldPrepareVisitResponse({ success: true, version: 1, replayed: false, source: 'field_authority', visit: { ...representativeVisit, status: 'future_status' }, allowedActions: ['read'] }), 'prepare response with unknown visit status must fail closed');
+assertThrows(() => parseFieldPrepareVisitResponse({ success: true, version: 1, replayed: false, source: 'field_authority', visit: representativeVisit, allowedActions: ['execute', 'future.action'] }), 'prepare response with unknown action must fail closed');
 
 const inactive: AuthPrincipal = {
   userId: 'user-disabled',
