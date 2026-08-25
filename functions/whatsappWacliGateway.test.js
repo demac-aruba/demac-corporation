@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { getApps, initializeApp } = require("firebase-admin/app");
+const { getFirestore } = require("firebase-admin/firestore");
 
 if (!getApps().length) {
   initializeApp({ projectId: "demo-demac", storageBucket: "demo-demac.appspot.com" });
@@ -12,8 +13,12 @@ const {
   authorizedBridgeRequest,
   claimOutboundCommandWithDb,
   conversationIngressState,
+  existingMessageMatchesIdentity,
   outboundQueueAccountMatches,
+  persistCanonicalMessage,
+  updateChatPresence,
 } = require("./whatsappWacliGateway");
+const { wacliCanonicalIdentity } = require("./wacliCommunicationBoundary");
 
 class FakeSnapshot {
   constructor(ref, value) {
@@ -32,6 +37,8 @@ class FakeRef {
     this.id = id;
     this.path = `${collectionName}/${id}`;
   }
+  async get() { return new FakeSnapshot(this, this.db.docs.get(this.path)); }
+  async set(value, options = {}) { this.db.write(this, value, options.merge === true); }
 }
 
 class FakeCollection {
@@ -61,8 +68,14 @@ class FakeCollection {
 class FakeDb {
   constructor(seed = {}) {
     this.docs = new Map(Object.entries(seed).map(([key, value]) => [key, { ...value }]));
+    this.writeCount = 0;
   }
   collection(name) { return new FakeCollection(this, name); }
+  write(ref, value, merge) {
+    const current = this.docs.get(ref.path) || {};
+    this.docs.set(ref.path, merge ? { ...current, ...value } : { ...value });
+    this.writeCount += 1;
+  }
   async runTransaction(callback) {
     const writes = [];
     const transaction = {
@@ -70,13 +83,28 @@ class FakeDb {
       set: (ref, value, options = {}) => writes.push({ ref, value, merge: options.merge === true }),
     };
     const result = await callback(transaction);
-    for (const write of writes) {
-      const current = this.docs.get(write.ref.path) || {};
-      this.docs.set(write.ref.path, write.merge ? { ...current, ...write.value } : { ...write.value });
-    }
+    for (const write of writes) this.write(write.ref, write.value, write.merge);
     return result;
   }
   read(path) { return this.docs.get(path); }
+}
+
+async function withGatewayDb(fakeDb, callback) {
+  const firestore = getFirestore();
+  const ownCollection = Object.prototype.hasOwnProperty.call(firestore, "collection");
+  const ownRunTransaction = Object.prototype.hasOwnProperty.call(firestore, "runTransaction");
+  const originalCollection = firestore.collection;
+  const originalRunTransaction = firestore.runTransaction;
+  firestore.collection = fakeDb.collection.bind(fakeDb);
+  firestore.runTransaction = fakeDb.runTransaction.bind(fakeDb);
+  try {
+    return await callback();
+  } finally {
+    if (ownCollection) firestore.collection = originalCollection;
+    else delete firestore.collection;
+    if (ownRunTransaction) firestore.runTransaction = originalRunTransaction;
+    else delete firestore.runTransaction;
+  }
 }
 
 function outbound(overrides = {}) {
@@ -199,10 +227,126 @@ test("new outbound-only conversations remain human-owned", () => {
   assert.equal(state.aiDisposition, "human_active");
 });
 
+test("provider-message replay identity must match the exact canonical account conversation and provider id", () => {
+  const identity = {
+    communicationAccountId: "demac-wa-corporate",
+    conversationId: "COMM-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  };
+  assert.equal(existingMessageMatchesIdentity({
+    communicationAccountId: "DEMAC-WA-CORPORATE",
+    conversationId: identity.conversationId,
+    providerMessageId: "provider-1",
+  }, identity, "provider-1"), true);
+  assert.equal(existingMessageMatchesIdentity({
+    communicationAccountId: "demac-wa-other",
+    conversationId: identity.conversationId,
+    providerMessageId: "provider-1",
+  }, identity, "provider-1"), false);
+});
+
+test("replaying the same canonical inbound three times is a true no-op", async () => {
+  const communicationAccountId = "demac-wa-corporate";
+  const chat = "2975600000@s.whatsapp.net";
+  const providerMessageId = "provider-replay-1";
+  const identity = wacliCanonicalIdentity({ communicationAccountId, chat, providerMessageId });
+  const originalConversation = {
+    provider: "wacli",
+    communicationAccountId,
+    conversationId: identity.conversationId,
+    remoteConversationId: chat,
+    customerInputVersion: 5,
+    unread: 2,
+    lastMessageText: "Original customer turn",
+  };
+  const fakeDb = new FakeDb({
+    [`whatsappMessages/${identity.messageId}`]: {
+      provider: "wacli",
+      communicationAccountId,
+      conversationId: identity.conversationId,
+      providerMessageId,
+      customerInputVersion: 5,
+      text: "Original customer turn",
+    },
+    [`communicationConversations/${identity.conversationId}`]: originalConversation,
+  });
+
+  await withGatewayDb(fakeDb, async () => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const result = await persistCanonicalMessage({
+        communicationAccountId,
+        payload: { Timestamp: "2026-08-25T04:00:00.000Z", FromMe: false },
+        providerMessageId,
+        chat,
+        phone: "2975600000",
+        chatName: "Replay Customer",
+        inbound: true,
+        profilePicture: null,
+        media: null,
+        text: "Replay should not overwrite chronology",
+        reactionEmoji: null,
+        reactionToId: null,
+        webhookEventId: `event-${attempt}`,
+      });
+      assert.equal(result.replayed, true);
+      assert.equal(result.customerInputVersion, 5);
+    }
+  });
+
+  assert.equal(fakeDb.writeCount, 0, "replay must not rewrite canonical message or conversation");
+  assert.deepEqual(fakeDb.read(`communicationConversations/${identity.conversationId}`), originalConversation);
+});
+
+test("conflicting data at a canonical provider-message id fails closed without writes", async () => {
+  const communicationAccountId = "demac-wa-corporate";
+  const chat = "2975600000@s.whatsapp.net";
+  const providerMessageId = "provider-conflict-1";
+  const identity = wacliCanonicalIdentity({ communicationAccountId, chat, providerMessageId });
+  const fakeDb = new FakeDb({
+    [`whatsappMessages/${identity.messageId}`]: {
+      communicationAccountId: "demac-wa-other",
+      conversationId: identity.conversationId,
+      providerMessageId,
+      customerInputVersion: 2,
+    },
+    [`communicationConversations/${identity.conversationId}`]: { communicationAccountId, customerInputVersion: 2 },
+  });
+
+  await withGatewayDb(fakeDb, async () => {
+    await assert.rejects(
+      () => persistCanonicalMessage({
+        communicationAccountId,
+        payload: { Timestamp: "2026-08-25T04:00:00.000Z", FromMe: false },
+        providerMessageId,
+        chat,
+        phone: "2975600000",
+        inbound: true,
+        text: "conflict",
+      }),
+      (error) => error?.code === "provider-message-identity-conflict",
+    );
+  });
+  assert.equal(fakeDb.writeCount, 0);
+});
+
+test("chat presence cannot materialize a missing canonical conversation", async () => {
+  const fakeDb = new FakeDb();
+  await withGatewayDb(fakeDb, async () => {
+    await updateChatPresence("demac-wa-corporate", {
+      Chat: "2975600000@s.whatsapp.net",
+      State: "composing",
+      Media: "text",
+    });
+  });
+  assert.equal(fakeDb.writeCount, 0);
+  assert.equal(fakeDb.docs.size, 0);
+});
+
 test("outbound polling is strictly scoped to the bridge communication account", () => {
   assert.equal(outboundQueueAccountMatches({ communicationAccountId: "demac-wa-corporate" }, "DEMAC-WA-CORPORATE"), true);
   assert.equal(outboundQueueAccountMatches({ communicationAccountId: "demac-wa-test" }, "demac-wa-corporate"), false);
   assert.equal(outboundQueueAccountMatches({}, "demac-wa-corporate"), false);
+  const source = fs.readFileSync(path.join(__dirname, "whatsappWacliGateway.js"), "utf8");
+  assert.match(source, /collection\("whatsappOutboundQueue"\)\s*\.where\("communicationAccountId", "==", communicationAccountId\)\s*\.get\(\)/);
 });
 
 test("actual poll claim blocks stale Maya command before it reaches the bridge", async () => {
