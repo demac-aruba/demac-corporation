@@ -3,11 +3,17 @@ const { arubaDateParts, cleanText, hashId } = require("./bookingSchedulingPrimit
 const { normalizeArubaWhatsAppPhone } = require("./demacCustomerAgentReplyPolicy");
 const { createBookingDispatchSafetyAuthority } = require("./bookingAuthorityDispatchSafety");
 
-const COMMUNICATION_CASE_VERSION = 1;
+const COMMUNICATION_CASE_VERSION = 2;
 const COMMUNICATION_CASE_COLLECTION = "communicationCases";
 const DISPATCH_HOLD_CONFIDENCE = 0.86;
 const ACTIVE_APPOINTMENT_CHANGE_INTENTS = new Set(["cancellation", "reschedule"]);
 const CANCELLED_STATUSES = new Set(["cancelled", "canceled", "cancelada"]);
+
+function caseTypeForObservation(observation = {}) {
+  const intent = cleanText(observation.intent, 80);
+  if ([...ACTIVE_APPOINTMENT_CHANGE_INTENTS, "customer_withdrew_change"].includes(intent)) return "appointment_change";
+  return intent;
+}
 
 function communicationCaseId({ communicationAccountId, conversationId, caseType = "appointment_change" } = {}) {
   const account = cleanText(communicationAccountId, 180).toLowerCase();
@@ -83,16 +89,30 @@ function shouldApplyDispatchHold(observation = {}, match = {}) {
 }
 
 function caseHistoryEvent({ kind, messageId, observation, appointmentId = "", now }) {
+  const sourceMessageId = cleanText(messageId, 300);
+  const normalizedAppointmentId = cleanText(appointmentId, 180);
   return {
-    id: `CASEEV-${hashId(`${messageId}|${kind}|${now.toISOString()}`, 24).toUpperCase()}`,
+    id: `CASEEV-${hashId(`${sourceMessageId}|${kind}|${normalizedAppointmentId}`, 24).toUpperCase()}`,
     kind,
     at: now.toISOString(),
-    sourceMessageId: cleanText(messageId, 300),
+    sourceMessageId,
     intent: cleanText(observation?.intent, 80),
     confidence: Number(observation?.confidence || 0),
-    appointmentId: cleanText(appointmentId, 180),
+    appointmentId: normalizedAppointmentId,
     summary: cleanText(observation?.summary, 800),
   };
+}
+
+function appendCaseHistory(existing, event, limit = 100) {
+  const prior = Array.isArray(existing) ? existing.filter((item) => item?.id && item.id !== event.id) : [];
+  return [...prior, event].slice(-limit);
+}
+
+function sourceMessagePatch(messageId) {
+  const normalized = cleanText(messageId, 300);
+  return normalized
+    ? { sourceMessageIds: FieldValue.arrayUnion(normalized), lastSourceMessageId: normalized }
+    : {};
 }
 
 async function queryCustomerByPhone(db, phone) {
@@ -146,9 +166,10 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
     message = {},
     observation = {},
   } = {}) {
-    const canonicalCaseId = communicationCaseId({ communicationAccountId, conversationId });
-    if (!canonicalCaseId) return { processed: false, reason: "missing-case-identity" };
     if (!materialCaseIntent(observation)) return { processed: false, reason: "no-material-operational-case" };
+    const caseType = caseTypeForObservation(observation);
+    const canonicalCaseId = communicationCaseId({ communicationAccountId, conversationId, caseType });
+    if (!canonicalCaseId) return { processed: false, reason: "missing-case-identity" };
     const now = clock();
     const messageId = cleanText(message.messageId || message.id, 300);
     const caseRef = db.collection(COMMUNICATION_CASE_COLLECTION).doc(canonicalCaseId);
@@ -170,13 +191,13 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
         version: COMMUNICATION_CASE_VERSION,
         communicationAccountId: cleanText(communicationAccountId, 180).toLowerCase(),
         conversationId: cleanText(conversationId, 300),
-        caseType: "appointment_change",
+        caseType,
         state: "RESOLVED_CUSTOMER_WITHDREW_CHANGE",
         intent: observation.intent,
         confidence: Number(observation.confidence || 0),
         dispatchHoldActive: false,
-        sourceMessageIds: FieldValue.arrayUnion(messageId),
-        history: [...(Array.isArray(previous?.history) ? previous.history : []), event].slice(-100),
+        ...sourceMessagePatch(messageId),
+        history: appendCaseHistory(previous?.history, event),
         resolvedAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
         updatedAtIso: now.toISOString(),
@@ -190,7 +211,7 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
     const match = matchRelevantAppointment({ appointments, observation });
     let state = "DETECTED";
     let attentionReason = "";
-    let appointmentId = match.matched ? cleanText(match.appointment?.id, 180) : "";
+    const appointmentId = match.matched ? cleanText(match.appointment?.id, 180) : "";
     let dispatchHoldActive = false;
 
     if (!customer) {
@@ -212,11 +233,15 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
         caseId: canonicalCaseId,
         requestedAction: observation.intent,
         reasonCategory: observation.reason ? "customer_provided_reason" : "no_reason_provided",
-        sourceMessageIds: [messageId],
+        sourceMessageIds: messageId ? [messageId] : [],
         actor: { id: "demac-customer-agent", name: "Maya", source: "maya-observer" },
       });
       dispatchHoldActive = hold.success === true;
       if (dispatchHoldActive) state = "AWAITING_CUSTOMER_DECISION";
+      if (!hold.success && hold.reason === "dispatch-hold-owned-by-other-case") {
+        attentionReason = hold.reason;
+        state = "ESCALATED";
+      }
     }
 
     const event = caseHistoryEvent({
@@ -228,7 +253,6 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
       appointmentId,
       now,
     });
-    const history = [...(Array.isArray(previous?.history) ? previous.history : []), event].slice(-100);
     await caseRef.set({
       id: canonicalCaseId,
       version: COMMUNICATION_CASE_VERSION,
@@ -236,7 +260,7 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
       conversationId: cleanText(conversationId, 300),
       customerId: customer?.id || null,
       appointmentId: appointmentId || null,
-      caseType: ACTIVE_APPOINTMENT_CHANGE_INTENTS.has(observation.intent) ? "appointment_change" : observation.intent,
+      caseType,
       state,
       intent: observation.intent,
       confidence: Number(observation.confidence || 0),
@@ -249,9 +273,8 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
       dispatchRisk: observation.dispatchRisk === true,
       dispatchHoldActive,
       candidateAppointmentIds: match.candidates?.map((item) => item.id).filter(Boolean).slice(0, 10) || [],
-      sourceMessageIds: FieldValue.arrayUnion(messageId),
-      lastSourceMessageId: messageId,
-      history,
+      ...sourceMessagePatch(messageId),
+      history: appendCaseHistory(previous?.history, event),
       createdAt: previous?.createdAt || FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
       updatedAtIso: now.toISOString(),
@@ -281,7 +304,10 @@ module.exports = {
   COMMUNICATION_CASE_COLLECTION,
   COMMUNICATION_CASE_VERSION,
   DISPATCH_HOLD_CONFIDENCE,
+  appendCaseHistory,
   appointmentStartKey,
+  caseHistoryEvent,
+  caseTypeForObservation,
   communicationCaseId,
   createCommunicationCaseService,
   materialCaseIntent,
@@ -290,5 +316,6 @@ module.exports = {
   normalizedRequestedTime,
   queryCustomerByPhone,
   shouldApplyDispatchHold,
+  sourceMessagePatch,
   upcomingAppointmentCandidates,
 };
