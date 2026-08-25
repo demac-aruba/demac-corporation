@@ -4,8 +4,8 @@ const communicationConversationAuthority = require("./communicationConversationA
 const wacliGateway = require("./whatsappWacliGateway");
 const wacliOutboundMediaUpload = require("./wacliOutboundMediaUpload");
 const communicationIngressMetadata = require("./demacCommunicationIngressMetadata");
-const customerObserverCommunication = require("./demacCustomerObserverCommunication");
 const customerAgentCommunication = require("./demacCustomerAgentAllowlistCommunication");
+const customerTurnOrchestrator = require("./demacCustomerTurnOrchestrator");
 const appointmentNotifications = require("./appointmentNotifications");
 const technicianDailySchedules = require("./technicianDailySchedules");
 const userManagement = require("./userManagement");
@@ -18,12 +18,17 @@ const marketingCreativeRead = require("./marketingCreativeRead");
 const router = require("./whatsappCopilotRouter");
 
 // Production customer conversations have one customer-facing runtime: Customer
-// Runtime V1. The read-only Maya Observer is a separate interpretation stage,
-// not a second booking/cancellation agent and not a sender authority.
+// Runtime V1. Maya Observer is a service stage inside the deferred customer-turn
+// orchestrator, not an independently triggered agent or sender authority.
+//
+// Inbound/voice/reactivation triggers only schedule persistent queue truth. The
+// task handler wakes the latest eligible turn, runs Observer/Case first, then
+// Reply Policy and the same Customer Runtime. The task payload is never business
+// truth and duplicate wake-ups remain governed by queue/epoch/lease idempotency.
 //
 // Trusted communication ingress metadata is stamped once on canonical message
 // creation. Customer voice uses the same shared DEMAC transcription service and
-// converges back into Customer Runtime V1 only after transcription succeeds.
+// converges into this same deferred current-turn path only after transcription.
 //
 // Human conversation ownership/sending commands converge through the backend
 // Communication Conversation Authority. This keeps ownershipVersion and final
@@ -40,8 +45,8 @@ module.exports = {
   ...wacliGateway,
   ...wacliOutboundMediaUpload,
   ...communicationIngressMetadata,
-  ...customerObserverCommunication,
   ...customerAgentCommunication,
+  processCustomerAgentTurnWakeup: customerTurnOrchestrator.processCustomerAgentTurnWakeup,
   ...appointmentNotifications,
   ...technicianDailySchedules,
   ...userManagement,
