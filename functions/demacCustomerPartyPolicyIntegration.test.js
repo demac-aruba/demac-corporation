@@ -130,10 +130,10 @@ test('canonical absence enables the new-contact pilot path for text without pret
 });
 
 test('new-contact voice uses the same party policy path; media type does not create a second policy brain', () => {
-  const voiceMessage = { ...message, mediaType: 'audio', transcriptionStatus: 'completed', transcriptionText: 'Mi kier hasi un cita' };
+  const voiceMessage = { ...message, mediaType: 'audio', transcriptionStatus: 'completed', transcriptionText: 'Mi kier haci un cita' };
   const context = replyPolicyContext({
     partyResolution: { status: 'new_contact', isNewContact: true, ambiguous: false, clientId: '' },
-    observationResult: { observed: true, observation: { intent: 'booking_request', language: 'pap' }, caseResult: { processed: false } },
+    observationResult: { observed: true, observation: { intent: 'booking_request', language: 'pap-aw' }, caseResult: { processed: false } },
   });
   const decision = mayaReplyDecision({ message: voiceMessage, conversation, settings: settings(), communicationSettings, ...context });
   assert.equal(decision.allowed, true);
@@ -144,7 +144,7 @@ test('existing-customer general voice remains observe-only', () => {
   const voiceMessage = { ...message, mediaType: 'audio', transcriptionStatus: 'completed', transcriptionText: 'Mi tin un pregunta' };
   const context = replyPolicyContext({
     partyResolution: existingParty(),
-    observationResult: { observed: true, observation: { intent: 'general_question', language: 'pap' }, caseResult: { processed: false } },
+    observationResult: { observed: true, observation: { intent: 'general_question', language: 'pap-aw' }, caseResult: { processed: false } },
   });
   const decision = mayaReplyDecision({ message: voiceMessage, conversation, settings: settings(), communicationSettings, ...context });
   assert.equal(decision.allowed, false);
