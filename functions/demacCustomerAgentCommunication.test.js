@@ -11,6 +11,7 @@ const {
   outboundDocumentId,
   outcomeConversationPatch,
   queueDocumentId,
+  safeAttemptCount,
   semanticHandoffQueue,
   shouldRunAgent,
   whatsappMessageToRuntime,
@@ -85,11 +86,11 @@ test("raw WhatsApp voice mapping uses completed transcript and never audio place
     direction: "inbound",
     mediaType: "audio",
     text: "[Audio]",
-    transcriptionStatus: "waiting_media",
+    rawTranscript: "No debe usarse todavía",
   }), null);
 });
 
-test("runtime body appends current canonical inbound when conversation projection is racing", () => {
+test("runtime body carries exact communication epochs for every guarded runtime stage", () => {
   const body = buildRuntimeBody({
     conversationId: CONVERSATION_ID,
     provider: "wacli",
@@ -98,6 +99,7 @@ test("runtime body appends current canonical inbound when conversation projectio
       phone: "2975600000",
       chatJid: "2975600000@s.whatsapp.net",
       customer: "Richard",
+      ownershipVersion: 0,
       customerInputVersion: 2,
       recentMessages: [
         { id: "m0", role: "operator", text: "Buenas tardes" },
@@ -115,20 +117,39 @@ test("runtime body appends current canonical inbound when conversation projectio
   assert.equal(body.conversationId, CONVERSATION_ID);
   assert.equal(body.communicationAccountId, "demac-wa-corporate");
   assert.equal(body.inboundMessageId, "MSG-1");
+  assert.equal(body.ownershipVersion, 0);
   assert.equal(body.customerInputVersion, 2);
   assert.deepEqual(body.conversation.messages, [
     { id: "m0", direction: "outbound", text: "Buenas tardes" },
     { id: "MSG-1", direction: "inbound", text: "Necesito servicio para dos aires", customerInputVersion: 2 },
   ]);
   assert.equal(body.conversation.customerTurn.text, "Necesito servicio para dos aires");
+  assert.equal(body.conversation.customerTurn.ownershipVersion, 0);
+  assert.equal(body.conversation.customerTurn.customerInputVersion, 2);
 });
 
-test("runtime body fails closed on a noncanonical conversation identity", () => {
+test("runtime body fails closed on noncanonical identity or missing autonomous epochs", () => {
   assert.throws(() => buildRuntimeBody({
     conversationId: "2975600000@s.whatsapp.net",
     conversation: {},
-    inboundMessage: { direction: "inbound", text: "Hola" },
+    inboundMessage: { direction: "inbound", text: "Hola", customerInputVersion: 1 },
   }), /canonical Communication Center conversation ID/i);
+  assert.throws(() => buildRuntimeBody({
+    conversationId: CONVERSATION_ID,
+    conversation: { communicationAccountId: "demac-wa-corporate", ownershipVersion: 0 },
+    inboundMessage: { direction: "inbound", text: "Hola" },
+  }), /positive customerInputVersion/i);
+  assert.throws(() => buildRuntimeBody({
+    conversationId: CONVERSATION_ID,
+    conversation: { communicationAccountId: "demac-wa-corporate", customerInputVersion: 1 },
+    inboundMessage: { direction: "inbound", text: "Hola", customerInputVersion: 1 },
+  }), /ownershipVersion/i);
+});
+
+test("malformed retry counters fail to zero instead of disabling retry limits", () => {
+  assert.equal(safeAttemptCount("not-a-number"), 0);
+  assert.equal(safeAttemptCount(-1), 0);
+  assert.equal(safeAttemptCount(3), 3);
 });
 
 test("normal agent result returns conversation to waiting_customer under AI ownership", () => {
