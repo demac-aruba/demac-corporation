@@ -1,5 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const {
   automaticReplySupported,
@@ -14,6 +16,8 @@ const {
   whatsappMessageToRuntime,
 } = require("./demacCustomerAgentCommunication");
 
+const CONVERSATION_ID = "COMM-1111111111111111111111111111111111111111";
+
 test("automatic replies are explicitly enabled only for the current wacli sender", () => {
   assert.equal(automaticReplySupported("wacli"), true);
   assert.equal(automaticReplySupported("WACLI"), true);
@@ -24,22 +28,23 @@ test("automatic replies are explicitly enabled only for the current wacli sender
 test("agent runs only for explicitly AI-owned unclaimed conversations", () => {
   assert.equal(shouldRunAgent({ aiDisposition: "ai_active" }), true);
   assert.equal(shouldRunAgent({ aiDisposition: "human_active" }), false);
+  assert.equal(shouldRunAgent({ aiDisposition: "handoff_pending" }), false);
   assert.equal(shouldRunAgent({ aiDisposition: "ai_active", ownerUserId: "operator-1" }), false);
   assert.equal(shouldRunAgent({ aiDisposition: "ai_active", lockedByUserId: "operator-1" }), false);
   assert.equal(shouldRunAgent({}), false);
 });
 
-test("conversation identity prefers stable WhatsApp chat/JID", () => {
-  assert.equal(conversationIdentity({ chat: "2975600000@s.whatsapp.net", phone: "2975600000" }), "2975600000@s.whatsapp.net");
-  assert.equal(conversationIdentity({ conversationId: "conv-1", phone: "2975600000" }), "conv-1");
-  assert.equal(conversationIdentity({ phone: "2975600000" }), "2975600000");
+test("conversation identity accepts only canonical Communication Center identity", () => {
+  assert.equal(conversationIdentity({ conversationId: CONVERSATION_ID, chat: "2975600000@s.whatsapp.net" }), CONVERSATION_ID);
+  assert.equal(conversationIdentity({ conversationId: "conv-1", phone: "2975600000" }), "");
+  assert.equal(conversationIdentity({ chat: "2975600000@s.whatsapp.net", phone: "2975600000" }), "");
 });
 
 test("queue and outbound IDs are deterministic and distinct", () => {
-  const queue1 = queueDocumentId("conv-1", "msg-1");
-  const queue2 = queueDocumentId("conv-1", "msg-1");
-  const outbound1 = outboundDocumentId("conv-1", "msg-1");
-  const outbound2 = outboundDocumentId("conv-1", "msg-1");
+  const queue1 = queueDocumentId(CONVERSATION_ID, "MSG-1");
+  const queue2 = queueDocumentId(CONVERSATION_ID, "MSG-1");
+  const outbound1 = outboundDocumentId(CONVERSATION_ID, "MSG-1");
+  const outbound2 = outboundDocumentId(CONVERSATION_ID, "MSG-1");
   assert.equal(queue1, queue2);
   assert.equal(outbound1, outbound2);
   assert.notEqual(queue1, outbound1);
@@ -60,37 +65,70 @@ test("communication messages map to native runtime directions", () => {
   assert.equal(communicationMessageToRuntime({ id: "m4", role: "internal_note", text: "private" }), null);
 });
 
-test("raw WhatsApp message mapping preserves provider message id", () => {
-  assert.deepEqual(whatsappMessageToRuntime({ messageId: "wamid-1", direction: "inbound", text: "Necesito servicio" }), {
-    id: "wamid-1", direction: "inbound", text: "Necesito servicio",
+test("raw WhatsApp voice mapping uses completed transcript and never audio placeholder", () => {
+  assert.deepEqual(whatsappMessageToRuntime({
+    messageId: "MSG-VOICE-1",
+    direction: "inbound",
+    mediaType: "audio",
+    text: "[Audio]",
+    transcriptionStatus: "completed",
+    rawTranscript: "Necesito servicio",
+    customerInputVersion: 4,
+  }), {
+    id: "MSG-VOICE-1",
+    direction: "inbound",
+    text: "Necesito servicio",
+    customerInputVersion: 4,
   });
+  assert.equal(whatsappMessageToRuntime({
+    messageId: "MSG-VOICE-2",
+    direction: "inbound",
+    mediaType: "audio",
+    text: "[Audio]",
+    transcriptionStatus: "waiting_media",
+  }), null);
 });
 
-test("runtime body appends current inbound when conversation write is racing", () => {
+test("runtime body appends current canonical inbound when conversation projection is racing", () => {
   const body = buildRuntimeBody({
-    conversationId: "2975600000@s.whatsapp.net",
+    conversationId: CONVERSATION_ID,
     provider: "wacli",
     conversation: {
+      communicationAccountId: "demac-wa-corporate",
       phone: "2975600000",
       chatJid: "2975600000@s.whatsapp.net",
       customer: "Richard",
+      customerInputVersion: 2,
       recentMessages: [
         { id: "m0", role: "operator", text: "Buenas tardes" },
       ],
     },
     inboundMessage: {
-      messageId: "m1",
+      messageId: "MSG-1",
+      conversationId: CONVERSATION_ID,
+      communicationAccountId: "demac-wa-corporate",
       direction: "inbound",
       text: "Necesito servicio para dos aires",
+      customerInputVersion: 2,
     },
   });
-  assert.equal(body.conversationId, "2975600000@s.whatsapp.net");
-  assert.equal(body.inboundMessageId, "m1");
+  assert.equal(body.conversationId, CONVERSATION_ID);
+  assert.equal(body.communicationAccountId, "demac-wa-corporate");
+  assert.equal(body.inboundMessageId, "MSG-1");
+  assert.equal(body.customerInputVersion, 2);
   assert.deepEqual(body.conversation.messages, [
     { id: "m0", direction: "outbound", text: "Buenas tardes" },
-    { id: "m1", direction: "inbound", text: "Necesito servicio para dos aires" },
+    { id: "MSG-1", direction: "inbound", text: "Necesito servicio para dos aires", customerInputVersion: 2 },
   ]);
   assert.equal(body.conversation.customerTurn.text, "Necesito servicio para dos aires");
+});
+
+test("runtime body fails closed on a noncanonical conversation identity", () => {
+  assert.throws(() => buildRuntimeBody({
+    conversationId: "2975600000@s.whatsapp.net",
+    conversation: {},
+    inboundMessage: { direction: "inbound", text: "Hola" },
+  }), /canonical Communication Center conversation ID/i);
 });
 
 test("normal agent result returns conversation to waiting_customer under AI ownership", () => {
@@ -104,7 +142,7 @@ test("normal agent result returns conversation to waiting_customer under AI owne
   assert.equal(patch.agentLastHandoffReason, null);
 });
 
-test("semantic handoff result preserves agent-selected Communication Center queue and reason", () => {
+test("semantic handoff requests human attention without fabricating human ownership", () => {
   const patch = outcomeConversationPatch({
     metadata: {
       outcome: "handoff",
@@ -114,7 +152,7 @@ test("semantic handoff result preserves agent-selected Communication Center queu
       handoffReason: "Customer disputes payment allocation for an open invoice.",
     },
   });
-  assert.equal(patch.aiDisposition, "human_active");
+  assert.equal(patch.aiDisposition, "handoff_pending");
   assert.equal(patch.status, "escalated");
   assert.equal(patch.queue, "finance");
   assert.equal(patch.routeReason, "Customer disputes payment allocation for an open invoice.");
@@ -128,4 +166,11 @@ test("Communication Center validates queue contract without interpreting custome
   assert.equal(semanticHandoffQueue("commercial_vip"), "manager");
   assert.equal(semanticHandoffQueue("invented-queue"), "manager");
   assert.equal(semanticHandoffQueue(""), "manager");
+});
+
+test("internal Customer Agent module is a service and no longer declares parallel Firestore triggers", () => {
+  const source = fs.readFileSync(path.join(__dirname, "demacCustomerAgentCommunication.js"), "utf8");
+  assert.doesNotMatch(source, /onDocumentCreated|onDocumentUpdated/);
+  assert.doesNotMatch(source, /exports\.processCustomerAgentInbound\s*=/);
+  assert.doesNotMatch(source, /exports\.processCustomerAgentReactivation\s*=/);
 });
