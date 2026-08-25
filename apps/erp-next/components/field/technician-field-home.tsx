@@ -15,6 +15,7 @@ type RangeKey = 'today' | 'tomorrow' | 'week';
 
 const COMPLETED_STATUSES = new Set(['Completada']);
 const IN_PROGRESS_STATUSES = new Set(['En camino', 'En el sitio', 'En proceso']);
+const SCHEDULE_REVALIDATE_MS = 60_000;
 
 function workSummary(job: Pick<FieldScheduleJob, 'plannedWork' | 'customerFacingDescription'>) {
   if (job.plannedWork.length) {
@@ -198,6 +199,7 @@ function DetailView({ job, loading, error, onBack }: {
 
 export function TechnicianFieldHome() {
   const { principal } = useAuth();
+  const [clockNow, setClockNow] = useState(() => new Date());
   const [jobs, setJobs] = useState<FieldScheduleJob[]>([]);
   const [jobsOwnerUserId, setJobsOwnerUserId] = useState<string | null>(null);
   const [range, setRange] = useState<RangeKey>('today');
@@ -211,8 +213,10 @@ export function TechnicianFieldHome() {
   const [detailError, setDetailError] = useState<string | null>(null);
   const scheduleRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
+  const selectedWorkOrderRef = useRef<string | null>(null);
 
-  const today = arubaDateKey();
+  const today = arubaDateKey(clockNow);
+  const nowTime = arubaTimeKey(clockNow);
   const tomorrow = addDaysToDateKey(today, 1);
   const weekEnd = addDaysToDateKey(today, 6);
   // This is only a render/request ownership key. Authorization remains server-side. Including
@@ -220,29 +224,49 @@ export function TechnicianFieldHome() {
   // reassigned or reprovisioned without changing uid.
   const principalFieldIdentityKey = `${principal.userId}|${principal.role}|${principal.staffId ?? ''}|${principal.vanId ?? ''}`;
 
-  const loadSchedule = useCallback(async () => {
+  const closeJob = useCallback(() => {
+    detailRequestRef.current += 1;
+    selectedWorkOrderRef.current = null;
+    setSelectedWorkOrderId(null);
+    setSelectedOwnerUserId(null);
+    setDetail(null);
+    setDetailOwnerUserId(null);
+    setDetailError(null);
+    setDetailLoading(false);
+  }, []);
+
+  const loadSchedule = useCallback(async (background = false) => {
     const requestId = ++scheduleRequestRef.current;
     const requestPrincipalKey = principalFieldIdentityKey;
-    // Assigned work is authorization-sensitive. Never keep a previous successful assignment
-    // visible while a new identity/date request is pending or after it fails.
-    setJobs([]);
-    setJobsOwnerUserId(null);
-    setLoading(true);
+    // Assigned work is authorization-sensitive. Foreground loads hide previous data immediately;
+    // background revalidation may keep it only while the same server request is in flight. Any
+    // failure still clears prior assignments rather than preserving stale access indefinitely.
+    if (!background) {
+      setJobs([]);
+      setJobsOwnerUserId(null);
+      setLoading(true);
+    }
     setScheduleError(null);
     try {
       const response = await getFieldSchedule(today, weekEnd);
       if (requestId !== scheduleRequestRef.current) return;
       setJobs(response.jobs);
       setJobsOwnerUserId(requestPrincipalKey);
+
+      const selectedId = selectedWorkOrderRef.current;
+      if (selectedId && !response.jobs.some((job) => job.workOrderId === selectedId)) {
+        closeJob();
+      }
     } catch (loadError) {
       if (requestId !== scheduleRequestRef.current) return;
       setJobs([]);
       setJobsOwnerUserId(null);
+      closeJob();
       setScheduleError(loadError instanceof Error ? loadError.message : 'No se pudo cargar el itinerario del técnico.');
     } finally {
       if (requestId === scheduleRequestRef.current) setLoading(false);
     }
-  }, [principalFieldIdentityKey, today, weekEnd]);
+  }, [closeJob, principalFieldIdentityKey, today, weekEnd]);
 
   useEffect(() => {
     void loadSchedule();
@@ -250,16 +274,29 @@ export function TechnicianFieldHome() {
   }, [loadSchedule]);
 
   useEffect(() => {
+    const revalidate = () => {
+      setClockNow(new Date());
+      if (document.visibilityState === 'visible') void loadSchedule(true);
+    };
+    const handleFocus = () => revalidate();
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') revalidate();
+    };
+    const timer = window.setInterval(revalidate, SCHEDULE_REVALIDATE_MS);
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [loadSchedule]);
+
+  useEffect(() => {
     // A Field identity transition invalidates any selected detail immediately, even if an older
     // request resolves later. Render guards below prevent even a one-frame stale disclosure.
-    detailRequestRef.current += 1;
-    setSelectedWorkOrderId(null);
-    setSelectedOwnerUserId(null);
-    setDetail(null);
-    setDetailOwnerUserId(null);
-    setDetailError(null);
-    setDetailLoading(false);
-  }, [principalFieldIdentityKey]);
+    closeJob();
+  }, [closeJob, principalFieldIdentityKey]);
 
   useEffect(() => {
     if (!selectedWorkOrderId || selectedOwnerUserId !== principalFieldIdentityKey) {
@@ -311,22 +348,13 @@ export function TechnicianFieldHome() {
     const open = todayJobs.filter((job) => !COMPLETED_STATUSES.has(job.status));
     const active = open.find((job) => IN_PROGRESS_STATUSES.has(job.status));
     if (active) return active;
-    const now = arubaTimeKey();
-    return open.find((job) => job.time && job.time >= now) ?? open[0] ?? null;
-  }, [todayJobs]);
+    return open.find((job) => job.time && job.time >= nowTime) ?? open[0] ?? null;
+  }, [nowTime, todayJobs]);
 
   const openJob = (workOrderId: string) => {
+    selectedWorkOrderRef.current = workOrderId;
     setSelectedOwnerUserId(principalFieldIdentityKey);
     setSelectedWorkOrderId(workOrderId);
-  };
-  const closeJob = () => {
-    detailRequestRef.current += 1;
-    setSelectedWorkOrderId(null);
-    setSelectedOwnerUserId(null);
-    setDetail(null);
-    setDetailOwnerUserId(null);
-    setDetailError(null);
-    setDetailLoading(false);
   };
 
   if (selectedWorkOrderId && selectedOwnerUserId === principalFieldIdentityKey) {
