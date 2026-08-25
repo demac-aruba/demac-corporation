@@ -11,6 +11,10 @@ const {
   MAYA_SETTINGS_DOCUMENT,
   mayaObservationDecision,
 } = require("./demacCustomerAgentReplyPolicy");
+const {
+  COMMUNICATION_SETTINGS_COLLECTION,
+  COMMUNICATION_SETTINGS_DOCUMENT,
+} = require("./demacCommunicationIdentity");
 
 const app = getApps().length ? getApp() : initializeApp();
 const db = getFirestore(app);
@@ -40,7 +44,7 @@ function observerSourceFingerprint(message = {}, text = "") {
 }
 
 function conversationDocumentId(message = {}) {
-  return safeDocumentId(message.conversationId || message.chat || message.phone);
+  return cleanText(message.conversationId, 300);
 }
 
 async function processObservedMessage({ messageId, message = {} } = {}) {
@@ -48,14 +52,19 @@ async function processObservedMessage({ messageId, message = {} } = {}) {
   const text = observerContent(message);
   if (!text) return { observed: false, reason: "no-observer-content" };
 
-  const settingsSnapshot = await db.collection(MAYA_SETTINGS_COLLECTION).doc(MAYA_SETTINGS_DOCUMENT).get();
-  const settings = settingsSnapshot.exists ? settingsSnapshot.data() || {} : {};
   const conversationId = conversationDocumentId(message);
-  if (!conversationId || conversationId === "unknown") return { observed: false, reason: "missing-conversation-identity" };
-  const conversationRef = db.collection("communicationConversations").doc(conversationId);
-  const conversationSnapshot = await conversationRef.get();
-  const conversation = conversationSnapshot.exists ? conversationSnapshot.data() || {} : {};
-  const decision = mayaObservationDecision({ message, conversation, settings });
+  if (!conversationId) return { observed: false, reason: "missing-canonical-conversation-id" };
+  const [settingsSnapshot, communicationSettingsSnapshot, conversationSnapshot] = await Promise.all([
+    db.collection(MAYA_SETTINGS_COLLECTION).doc(MAYA_SETTINGS_DOCUMENT).get(),
+    db.collection(COMMUNICATION_SETTINGS_COLLECTION).doc(COMMUNICATION_SETTINGS_DOCUMENT).get(),
+    db.collection("communicationConversations").doc(conversationId).get(),
+  ]);
+  if (!conversationSnapshot.exists) return { observed: false, reason: "canonical-conversation-not-materialized" };
+
+  const settings = settingsSnapshot.exists ? settingsSnapshot.data() || {} : {};
+  const communicationSettings = communicationSettingsSnapshot.exists ? communicationSettingsSnapshot.data() || {} : {};
+  const conversation = conversationSnapshot.data() || {};
+  const decision = mayaObservationDecision({ message, conversation, settings, communicationSettings });
   if (!decision.allowed) return { observed: false, reason: decision.reason };
 
   const fingerprint = observerSourceFingerprint(message, text);
@@ -67,6 +76,7 @@ async function processObservedMessage({ messageId, message = {} } = {}) {
   }
 
   const messageRef = db.collection("whatsappMessages").doc(safeDocumentId(messageId));
+  const conversationRef = db.collection("communicationConversations").doc(conversationId);
   await messageRef.set({
     mayaObservationStatus: "processing",
     mayaObservationVersion: MAYA_OBSERVER_VERSION,
