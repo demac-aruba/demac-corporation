@@ -4,6 +4,7 @@ const {
   OFFICE_BOOKING_ACTIONS,
   createOfficeBookingApi,
 } = require("./officeBookingAuthority");
+const { addDays, dateKeyInTimeZone } = require("./operatingCalendarService");
 
 function documentSnapshot(id, store, reference) {
   const exists = Object.prototype.hasOwnProperty.call(store, id);
@@ -22,7 +23,9 @@ function createCommunicationDb({ reminderStatus = "queued" } = {}) {
       appointmentAssignmentRole: "primary",
       clientId: "client-1",
       propertyId: "property-1",
-      date: "2026-08-24",
+      // This fixture exercises reminder lifecycle, not historical-date rejection. Keep the
+      // appointment safely in the future using the same Aruba calendar primitive as production.
+      date: addDays(dateKeyInTimeZone(), 1),
       time: "08:30",
       status: "Programada",
       whatsappNotificationsEnabled: true,
