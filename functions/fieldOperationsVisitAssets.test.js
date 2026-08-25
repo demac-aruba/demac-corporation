@@ -174,6 +174,29 @@ function assignment(overrides = {}) {
   };
 }
 
+function visitAsset(id = 'VA-1', overrides = {}) {
+  return {
+    id,
+    fieldAuthorityVersion: 1,
+    visitId: 'visit-WO-1',
+    workOrderId: 'WO-1',
+    clientId: 'CLIENT-1',
+    propertyId: 'PROPERTY-1',
+    assetId: 'AC-1',
+    sequence: 1,
+    locationLabel: 'Sala',
+    source: 'existing_asset',
+    status: 'identified',
+    addedOnSite: true,
+    createdAt: '2026-08-25T10:30:00.000Z',
+    createdByUserId: 'uid-1',
+    updatedAt: '2026-08-25T10:30:00.000Z',
+    updatedByUserId: 'uid-1',
+    version: 1,
+    ...overrides,
+  };
+}
+
 function fixture(options = {}) {
   const store = createDb({
     workVisits: options.visits || [options.visit || baseVisit()],
@@ -330,50 +353,73 @@ test('audit failure aborts VisitAsset persistence atomically', async () => {
   assert.equal(store.all('visitAssets').length, 0);
 });
 
-test('VisitAsset read projection fails closed on corrupted source, status, sequence and identity', () => {
-  const valid = {
-    id: 'VA-1',
-    visitId: 'visit-WO-1',
-    assetId: 'AC-1',
-    sequence: 1,
-    locationLabel: 'Sala',
-    source: 'existing_asset',
-    status: 'identified',
-    addedOnSite: true,
-    createdAt: '2026-08-25T10:30:00.000Z',
-    createdByUserId: 'uid-1',
-    updatedAt: '2026-08-25T10:30:00.000Z',
-    updatedByUserId: 'uid-1',
-    version: 1,
-  };
+test('VisitAsset projection fails closed on corrupted schema, identity, vocabulary, sequence, version and boolean state', () => {
+  const valid = visitAsset();
   assert.equal(projectVisitAsset(valid).assetId, 'AC-1');
+  assert.throws(() => projectVisitAsset({ ...valid, fieldAuthorityVersion: 2 }), /Unsupported Visit Asset storage version/);
   assert.throws(() => projectVisitAsset({ ...valid, source: 'unknown' }), /Unknown persisted Visit Asset source/);
   assert.throws(() => projectVisitAsset({ ...valid, status: 'unknown' }), /Unknown persisted Visit Asset status/);
   assert.throws(() => projectVisitAsset({ ...valid, sequence: 0 }), /sequence is invalid/);
-  assert.throws(() => projectVisitAsset({ ...valid, assetId: '' }), /identity is incomplete/);
+  assert.throws(() => projectVisitAsset({ ...valid, version: undefined }), /version is invalid/);
+  assert.throws(() => projectVisitAsset({ ...valid, addedOnSite: 'yes' }), /addedOnSite flag is invalid/);
+  assert.throws(() => projectVisitAsset({ ...valid, assetId: '' }), /Asset identity is missing or conflicting/);
+  assert.throws(() => projectVisitAsset({ ...valid, clientId: 'CLIENT-1', customerId: 'CLIENT-OTHER' }), /Customer identity is missing or conflicting/);
+  assert.throws(() => projectVisitAsset({ ...valid, propertyId: 'PROPERTY-1', siteId: 'PROPERTY-OTHER' }), /Property identity is missing or conflicting/);
+});
+
+test('VisitAsset read validates denormalized WorkOrder, Customer and Property identity against the authorized job context', async () => {
+  for (const corrupted of [
+    visitAsset('VA-WO', { workOrderId: 'WO-OTHER' }),
+    visitAsset('VA-CUSTOMER', { clientId: 'CLIENT-OTHER' }),
+    visitAsset('VA-PROPERTY', { propertyId: 'PROPERTY-OTHER' }),
+  ]) {
+    const store = createDb({ visitAssets: [corrupted] });
+    await assert.rejects(
+      () => attachVisitAssetsToJob(store.db, {
+        workOrderId: 'WO-1',
+        customerId: 'CLIENT-1',
+        propertyId: 'PROPERTY-1',
+        fieldVisit: { id: 'visit-WO-1', status: 'on_site' },
+        allowedActions: ['read', 'asset.add'],
+      }),
+      (error) => error?.code === 'visit_asset_identity_conflict' && error?.status === 409,
+    );
+  }
+});
+
+test('corrupted deterministic VisitAsset cannot be accepted as an idempotent replay', async () => {
+  const firstFixture = fixture();
+  const first = await firstFixture.attach({
+    identity: identity(),
+    visitId: 'visit-WO-1',
+    assetId: 'AC-1',
+    requestId: 'seed-deterministic-asset-001',
+  });
+  assert.ok(first.visitAsset.id.startsWith('VA-'));
+
+  const corrupted = visitAsset(first.visitAsset.id, { propertyId: 'PROPERTY-OTHER' });
+  const replayFixture = fixture({ visitAssets: [corrupted] });
+  await assert.rejects(
+    () => replayFixture.attach({
+      identity: identity(),
+      visitId: 'visit-WO-1',
+      assetId: 'AC-1',
+      requestId: 'replay-corrupted-asset-001',
+    }),
+    (error) => error?.code === 'visit_asset_identity_conflict' && error?.status === 409,
+  );
 });
 
 test('job read projection exposes VisitAssets and server-derived add eligibility only in active on-site states', async () => {
-  const store = createDb({
-    visitAssets: [{
-      id: 'VA-1',
-      visitId: 'visit-WO-1',
-      assetId: 'AC-1',
-      sequence: 1,
-      locationLabel: 'Sala',
-      source: 'existing_asset',
-      status: 'identified',
-      addedOnSite: true,
-      createdAt: '2026-08-25T10:30:00.000Z',
-      createdByUserId: 'uid-1',
-      updatedAt: '2026-08-25T10:30:00.000Z',
-      updatedByUserId: 'uid-1',
-      version: 1,
-    }],
-  });
+  const store = createDb({ visitAssets: [visitAsset()] });
+  const baseJob = {
+    workOrderId: 'WO-1',
+    customerId: 'CLIENT-1',
+    propertyId: 'PROPERTY-1',
+  };
 
   const active = await attachVisitAssetsToJob(store.db, {
-    workOrderId: 'WO-1',
+    ...baseJob,
     fieldVisit: { id: 'visit-WO-1', status: 'on_site' },
     allowedActions: ['read', 'asset.add'],
   });
@@ -381,14 +427,14 @@ test('job read projection exposes VisitAssets and server-derived add eligibility
   assert.equal(active.visitAssets.length, 1);
 
   const helper = await attachVisitAssetsToJob(store.db, {
-    workOrderId: 'WO-1',
+    ...baseJob,
     fieldVisit: { id: 'visit-WO-1', status: 'on_site' },
     allowedActions: ['read'],
   });
   assert.equal(helper.canAddExistingAsset, false);
 
   const enRoute = await attachVisitAssetsToJob(store.db, {
-    workOrderId: 'WO-1',
+    ...baseJob,
     fieldVisit: { id: 'visit-WO-1', status: 'en_route' },
     allowedActions: ['read', 'asset.add'],
   });
