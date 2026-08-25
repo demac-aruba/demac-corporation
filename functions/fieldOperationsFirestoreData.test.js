@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { fieldFirestoreData } = require('./fieldOperationsFirestoreData');
+const { fieldFirestoreData, fieldSnapshotRecord } = require('./fieldOperationsFirestoreData');
 
 function containsUndefined(value) {
   if (value === undefined) return true;
@@ -40,4 +40,20 @@ test('preserves Firestore-native style object instances instead of flattening pr
   const native = new NativeValue('timestamp-like');
   const result = fieldFirestoreData({ native });
   assert.equal(result.native, native);
+});
+
+test('Firestore snapshot document id overrides any redundant persisted id field', () => {
+  const result = fieldSnapshotRecord({
+    id: 'canonical-document-id',
+    data: () => ({ id: 'corrupted-payload-id', visitId: 'visit-1' }),
+  });
+
+  assert.deepEqual(result, { id: 'canonical-document-id', visitId: 'visit-1' });
+});
+
+test('Firestore snapshot adapter fails closed on missing identity or malformed data', () => {
+  assert.throws(() => fieldSnapshotRecord(null), /requires a document with data/);
+  assert.throws(() => fieldSnapshotRecord({ id: '', data: () => ({}) }), /requires a document id/);
+  assert.throws(() => fieldSnapshotRecord({ id: 'doc-1', data: () => null }), /requires object document data/);
+  assert.throws(() => fieldSnapshotRecord({ id: 'doc-1', data: () => [] }), /requires object document data/);
 });
