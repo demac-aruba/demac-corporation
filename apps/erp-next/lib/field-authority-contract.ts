@@ -248,7 +248,7 @@ function preparedVisitValid(value: unknown): value is FieldPreparedVisit {
     && string(visit.updatedAt)
     && string(visit.updatedBy)
     && typeof visit.version === 'number'
-    && Number.isFinite(visit.version)
+    && Number.isSafeInteger(visit.version)
     && visit.version >= 1;
 }
 
