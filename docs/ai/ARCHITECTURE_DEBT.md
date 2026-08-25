@@ -16,5 +16,16 @@
 | AD-012 | Older code, PR assumptions, and root/Legacy documentation can remain after architecture decisions change | Superseded architecture can be mistaken for current authority and reintroduced | Governing ADRs and authority documents have explicit supersession links, and stale code/document assumptions are classified and reconciled |
 | AD-013 | The repository is currently public, while its licensing and intellectual-property posture has not been reviewed for proprietary engineering knowledge or a future commercial platform | Public exposure and unclear licensing may undermine confidentiality, ownership expectations, or commercialization options | An authorized human governance/legal review records the intended visibility, licensing, contribution, and IP posture; no automatic visibility or license change is implied |
 
+## Evidence / partial mitigations
+
+### 2026-08-25 — Maya Communication V1.1 P0 architecture pass
+
+- **AD-005 remains open.** The reviewed Wacli connector now has one canonical account-bound Firebase boundary and the current DigitalOcean source is `ops/digitalocean/deploy/server-v2.mjs`, validated by `.github/workflows/wacli-webhook-deploy.yml` and `functions/wacliBridgeAccountBinding.test.js`. Canonical communication-account configuration remains `businessSettings/whatsapp`; downstream Booking, Technician, and Maya consumers must not own duplicate account IDs.
+- The older `services/whatsapp-bridge/server.mjs`, environment example, and systemd files remain in the repository because repository evidence alone does not prove what is installed on the live host. `services/whatsapp-bridge/README.md` now classifies them as superseded and points to the current account-bound pull topology. **Residual risk:** an operator could still manually deploy the old artifacts. Exit still requires an authorized host/deployment inventory and safe removal or archival after live-host verification.
+- **AD-012 remains open.** The stale bridge instructions were reconciled, but the superseded executable artifacts have not been deleted. The Wacli workflow also rejects resurrection of the retired Firebase-to-Droplet `sendQueuedWacliMessage` path.
+- Communication concurrency epochs were moved from the Maya-specific `demacCustomerTurn` layer into neutral `demacCommunicationEpoch.js`; Wacli transport and Booking dispatch safety consume the neutral primitive. `demacCustomerTurn` reexports it only for compatibility, so there is one implementation rather than duplicated epoch logic.
+- Ingress verification now recomputes the deterministic canonical conversation document ID from account/channel/provider/remote identity before marking a message/conversation verified. This is a partial mitigation for cross-path identity drift, not a replacement for end-to-end ingress/replay acceptance evidence.
+- Legacy global appointment-reminder endpoints remain as compatibility paths behind the Office Booking facade while ERP Next uses the per-recipient `appointmentCommunicationAuthority`. They are intentionally not duplicated/refactored further in this Maya P0 change. Removal requires separate parity evidence proving no remaining consumer depends on the legacy contract.
+
 Debt changes require evidence. Do not erase an item because a partial mitigation exists;
 link the verifying change and record residual risk.
