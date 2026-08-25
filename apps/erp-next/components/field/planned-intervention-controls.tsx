@@ -1,7 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import type { FieldExecutionJobDetail, FieldPriceSnapshot, FieldWorkInterventionStatus } from '@/lib/field-authority';
+import type { FieldExecutionJobDetail, FieldWorkInterventionStatus } from '@/lib/field-authority';
+import { presentedFieldPriceLabel } from './field-price-display';
 import styles from './technician-field-home.module.css';
 
 type Draft = {
@@ -23,12 +24,6 @@ function interventionStatusLabel(status: FieldWorkInterventionStatus) {
   if (status === 'declined') return 'Rechazada';
   if (status === 'cancelled') return 'Cancelada';
   return 'Completada';
-}
-
-function presentedPriceLabel(price: FieldPriceSnapshot) {
-  const amount = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-    .format(price.unitPrice);
-  return price.currency === 'AWG' ? `Afl. ${amount}` : `${price.currency} ${amount}`;
 }
 
 export function PlannedInterventionControls({
@@ -78,7 +73,7 @@ export function PlannedInterventionControls({
               <span>{plannedLine ? `Programado: ${plannedLine.label}` : 'Trabajo adicional'} · {interventionStatusLabel(intervention.status)}</span>
               {scopeChange ? <span>Razón: {scopeChange.reason}</span> : null}
               {intervention.priceSnapshot ? (
-                <span><strong>Precio presentado: {presentedPriceLabel(intervention.priceSnapshot)}</strong></span>
+                <span><strong>Precio presentado: {presentedFieldPriceLabel(intervention.priceSnapshot)}</strong></span>
               ) : null}
             </div>
             <span className={`${styles.badge} ${styles.badgeBrand}`}>{intervention.origin === 'planned' ? 'Plan original' : 'Alcance adicional'}</span>

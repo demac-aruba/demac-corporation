@@ -10,13 +10,16 @@ import {
   getFieldJob,
   getFieldSchedule,
   prepareFieldVisit,
+  recordAdditionalFieldInterventionDecision,
   transitionFieldVisit,
   type FieldActiveVisitTransition,
+  type FieldAdditionalWorkDecision,
   type FieldExecutionJobDetail,
   type FieldScheduleJob,
   type FieldTechnicianScopeChangeOrigin,
   type FieldVisitStatus,
 } from '@/lib/field-authority';
+import { AdditionalApprovalControls } from './additional-approval-controls';
 import { AdditionalInterventionControls } from './additional-intervention-controls';
 import { PlannedInterventionControls } from './planned-intervention-controls';
 import styles from './technician-field-home.module.css';
@@ -34,6 +37,13 @@ type AdditionalInterventionInput = {
   serviceCatalogItemId: string;
   origin: FieldTechnicianScopeChangeOrigin;
   reason: string;
+};
+
+type AdditionalApprovalInput = {
+  interventionId: string;
+  decision: FieldAdditionalWorkDecision;
+  receiverName: string;
+  note: string;
 };
 
 const COMPLETED_WORK_ORDER_STATUSES = new Set(['Completada']);
@@ -169,14 +179,17 @@ function DetailView({
   assetError,
   interventionError,
   additionalInterventionError,
+  approvalError,
   transitioning,
   attachingAssetId,
   creatingInterventionVisitAssetId,
   creatingAdditionalInterventionVisitAssetId,
+  decidingApprovalInterventionId,
   onTransition,
   onAttachAsset,
   onCreatePlannedIntervention,
   onCreateAdditionalIntervention,
+  onRecordAdditionalDecision,
   onBack,
 }: {
   job: FieldExecutionJobDetail | null;
@@ -186,14 +199,17 @@ function DetailView({
   assetError: string | null;
   interventionError: string | null;
   additionalInterventionError: string | null;
+  approvalError: string | null;
   transitioning: FieldActiveVisitTransition | null;
   attachingAssetId: string | null;
   creatingInterventionVisitAssetId: string | null;
   creatingAdditionalInterventionVisitAssetId: string | null;
+  decidingApprovalInterventionId: string | null;
   onTransition: (target: FieldActiveVisitTransition) => void;
   onAttachAsset: (assetId: string) => void;
   onCreatePlannedIntervention: (input: PlannedInterventionInput) => void;
   onCreateAdditionalIntervention: (input: AdditionalInterventionInput) => void;
+  onRecordAdditionalDecision: (input: AdditionalApprovalInput) => void;
   onBack: () => void;
 }) {
   if (loading || error || !job) {
@@ -226,7 +242,8 @@ function DetailView({
   const mutationBusy = transitioning !== null
     || attachingAssetId !== null
     || creatingInterventionVisitAssetId !== null
-    || creatingAdditionalInterventionVisitAssetId !== null;
+    || creatingAdditionalInterventionVisitAssetId !== null
+    || decidingApprovalInterventionId !== null;
 
   return (
     <div className={styles.shell}>
@@ -327,6 +344,13 @@ function DetailView({
               error={additionalInterventionError}
               onCreate={onCreateAdditionalIntervention}
             />
+            <AdditionalApprovalControls
+              job={job}
+              mutationBusy={mutationBusy}
+              decidingInterventionId={decidingApprovalInterventionId}
+              error={approvalError}
+              onDecide={onRecordAdditionalDecision}
+            />
             {assetError ? <div className={styles.mutationError}>{assetError}</div> : null}
           </section>
 
@@ -411,6 +435,8 @@ export function TechnicianFieldHome() {
   const [interventionError, setInterventionError] = useState<string | null>(null);
   const [creatingAdditionalInterventionVisitAssetId, setCreatingAdditionalInterventionVisitAssetId] = useState<string | null>(null);
   const [additionalInterventionError, setAdditionalInterventionError] = useState<string | null>(null);
+  const [decidingApprovalInterventionId, setDecidingApprovalInterventionId] = useState<string | null>(null);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
   const scheduleRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
   const mutationRequestRef = useRef(0);
@@ -421,9 +447,6 @@ export function TechnicianFieldHome() {
   const nowTime = arubaTimeKey(clockNow);
   const tomorrow = addDaysToDateKey(today, 1);
   const weekEnd = addDaysToDateKey(today, 6);
-  // This is only a render/request ownership key. Authorization remains server-side. Including
-  // role/staff/van ensures refreshPrincipal() invalidates data when the same Firebase user is
-  // reassigned or reprovisioned without changing uid.
   const principalFieldIdentityKey = `${principal.userId}|${principal.role}|${principal.staffId ?? ''}|${principal.vanId ?? ''}`;
 
   const closeJob = useCallback(() => {
@@ -445,6 +468,8 @@ export function TechnicianFieldHome() {
     setInterventionError(null);
     setCreatingAdditionalInterventionVisitAssetId(null);
     setAdditionalInterventionError(null);
+    setDecidingApprovalInterventionId(null);
+    setApprovalError(null);
   }, []);
 
   const loadDetail = useCallback(async (workOrderId: string, background = false) => {
@@ -474,9 +499,6 @@ export function TechnicianFieldHome() {
   const loadSchedule = useCallback(async (background = false) => {
     const requestId = ++scheduleRequestRef.current;
     const requestPrincipalKey = principalFieldIdentityKey;
-    // Assigned work is authorization-sensitive. Foreground loads hide previous data immediately;
-    // background revalidation may keep it only while the same server request is in flight. Any
-    // failure still clears prior assignments rather than preserving stale access indefinitely.
     if (!background) {
       setJobs([]);
       setJobsOwnerUserId(null);
@@ -508,6 +530,14 @@ export function TechnicianFieldHome() {
     }
   }, [closeJob, loadDetail, principalFieldIdentityKey, today, weekEnd]);
 
+  const clearMutationErrors = useCallback(() => {
+    setTransitionError(null);
+    setAssetError(null);
+    setInterventionError(null);
+    setAdditionalInterventionError(null);
+    setApprovalError(null);
+  }, []);
+
   const runVisitTransition = useCallback(async (target: FieldActiveVisitTransition) => {
     if (mutationLockRef.current !== null) return;
     const currentDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
@@ -517,10 +547,7 @@ export function TechnicianFieldHome() {
     mutationLockRef.current = mutationId;
     const workOrderId = currentDetail.workOrderId;
     setTransitioning(target);
-    setTransitionError(null);
-    setAssetError(null);
-    setInterventionError(null);
-    setAdditionalInterventionError(null);
+    clearMutationErrors();
     try {
       let visit = currentDetail.fieldVisit;
       if (!visit) {
@@ -543,20 +570,17 @@ export function TechnicianFieldHome() {
       setDetail((current) => current?.workOrderId === workOrderId
         ? { ...current, fieldVisit: transitioned.visit, canPrepareVisit: false }
         : current);
-      setTransitionError(null);
       void loadSchedule(true);
     } catch (mutationError) {
       if (mutationId !== mutationRequestRef.current) return;
       setTransitionError(mutationError instanceof Error ? mutationError.message : 'No se pudo actualizar el estado de la visita.');
-      // A timeout may occur after the server committed. Re-read authority instead of guessing or
-      // applying an optimistic local transition.
       void loadDetail(workOrderId, true);
       void loadSchedule(true);
     } finally {
       if (mutationId === mutationRequestRef.current) setTransitioning(null);
       if (mutationLockRef.current === mutationId) mutationLockRef.current = null;
     }
-  }, [detail, detailOwnerUserId, loadDetail, loadSchedule, principalFieldIdentityKey]);
+  }, [clearMutationErrors, detail, detailOwnerUserId, loadDetail, loadSchedule, principalFieldIdentityKey]);
 
   const runAttachAsset = useCallback(async (assetId: string) => {
     if (mutationLockRef.current !== null) return;
@@ -575,10 +599,7 @@ export function TechnicianFieldHome() {
     mutationLockRef.current = mutationId;
     const workOrderId = currentDetail.workOrderId;
     setAttachingAssetId(assetId);
-    setAssetError(null);
-    setTransitionError(null);
-    setInterventionError(null);
-    setAdditionalInterventionError(null);
+    clearMutationErrors();
     try {
       await attachExistingFieldAsset(
         currentDetail.fieldVisit.id,
@@ -586,20 +607,16 @@ export function TechnicianFieldHome() {
         clientRequestId('attach-asset', workOrderId),
       );
       if (mutationId !== mutationRequestRef.current) return;
-      // Re-read the entire canonical job. VisitAsset is additive truth and another technician/device
-      // may have changed actual scope concurrently; the client must not reconstruct that collection.
       await loadDetail(workOrderId, true);
     } catch (mutationError) {
       if (mutationId !== mutationRequestRef.current) return;
       setAssetError(mutationError instanceof Error ? mutationError.message : 'No se pudo agregar el A/C a esta visita.');
-      // A timeout may occur after the transaction committed. Re-read instead of retrying blindly or
-      // inventing an optimistic VisitAsset record in browser state.
       void loadDetail(workOrderId, true);
     } finally {
       if (mutationId === mutationRequestRef.current) setAttachingAssetId(null);
       if (mutationLockRef.current === mutationId) mutationLockRef.current = null;
     }
-  }, [detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
+  }, [clearMutationErrors, detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
 
   const runCreatePlannedIntervention = useCallback(async (input: PlannedInterventionInput) => {
     if (mutationLockRef.current !== null) return;
@@ -617,10 +634,7 @@ export function TechnicianFieldHome() {
     mutationLockRef.current = mutationId;
     const workOrderId = currentDetail.workOrderId;
     setCreatingInterventionVisitAssetId(input.visitAssetId);
-    setInterventionError(null);
-    setAdditionalInterventionError(null);
-    setTransitionError(null);
-    setAssetError(null);
+    clearMutationErrors();
     try {
       await createPlannedFieldIntervention(
         currentDetail.fieldVisit.id,
@@ -630,20 +644,16 @@ export function TechnicianFieldHome() {
         clientRequestId('planned-intervention', workOrderId),
       );
       if (mutationId !== mutationRequestRef.current) return;
-      // WorkIntervention is canonical child truth. Never synthesize it in React after a write;
-      // re-read so concurrent technician/device changes and server progress projection are retained.
       await loadDetail(workOrderId, true);
     } catch (mutationError) {
       if (mutationId !== mutationRequestRef.current) return;
       setInterventionError(mutationError instanceof Error ? mutationError.message : 'No se pudo vincular el trabajo planificado al A/C.');
-      // The transaction may have committed before a timeout. Re-read before allowing another user
-      // action instead of optimistically retrying with browser-owned truth.
       void loadDetail(workOrderId, true);
     } finally {
       if (mutationId === mutationRequestRef.current) setCreatingInterventionVisitAssetId(null);
       if (mutationLockRef.current === mutationId) mutationLockRef.current = null;
     }
-  }, [detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
+  }, [clearMutationErrors, detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
 
   const runCreateAdditionalIntervention = useCallback(async (input: AdditionalInterventionInput) => {
     if (mutationLockRef.current !== null) return;
@@ -662,10 +672,7 @@ export function TechnicianFieldHome() {
     mutationLockRef.current = mutationId;
     const workOrderId = currentDetail.workOrderId;
     setCreatingAdditionalInterventionVisitAssetId(input.visitAssetId);
-    setAdditionalInterventionError(null);
-    setInterventionError(null);
-    setTransitionError(null);
-    setAssetError(null);
+    clearMutationErrors();
     try {
       await createAdditionalFieldIntervention(
         currentDetail.fieldVisit.id,
@@ -676,20 +683,55 @@ export function TechnicianFieldHome() {
         clientRequestId('additional-intervention', workOrderId),
       );
       if (mutationId !== mutationRequestRef.current) return;
-      // ScopeChange + WorkIntervention are transaction-owned canonical children. Re-read the job
-      // instead of inventing approval or additional-scope state in React.
       await loadDetail(workOrderId, true);
     } catch (mutationError) {
       if (mutationId !== mutationRequestRef.current) return;
       setAdditionalInterventionError(mutationError instanceof Error ? mutationError.message : 'No se pudo registrar el alcance adicional.');
-      // A timeout may have occurred after commit. Canonical re-read decides whether the proposal
-      // exists; browser state never retries by assuming failure or approval.
       void loadDetail(workOrderId, true);
     } finally {
       if (mutationId === mutationRequestRef.current) setCreatingAdditionalInterventionVisitAssetId(null);
       if (mutationLockRef.current === mutationId) mutationLockRef.current = null;
     }
-  }, [detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
+  }, [clearMutationErrors, detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
+
+  const runRecordAdditionalDecision = useCallback(async (input: AdditionalApprovalInput) => {
+    if (mutationLockRef.current !== null) return;
+    const currentDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
+    if (!currentDetail?.fieldVisit) {
+      setApprovalError('La visita todavía no está disponible para registrar una decisión del cliente.');
+      return;
+    }
+    if (!currentDetail.canRecordAdditionalApproval
+      || !currentDetail.additionalApprovalInterventionIds.includes(input.interventionId)) {
+      setApprovalError('Field Authority no autoriza una decisión de cliente para este trabajo adicional.');
+      return;
+    }
+
+    const mutationId = ++mutationRequestRef.current;
+    mutationLockRef.current = mutationId;
+    const workOrderId = currentDetail.workOrderId;
+    setDecidingApprovalInterventionId(input.interventionId);
+    clearMutationErrors();
+    try {
+      await recordAdditionalFieldInterventionDecision(
+        currentDetail.fieldVisit.id,
+        input.interventionId,
+        input.decision,
+        input.receiverName,
+        input.note,
+        clientRequestId('additional-decision', workOrderId),
+      );
+      if (mutationId !== mutationRequestRef.current) return;
+      await loadDetail(workOrderId, true);
+    } catch (mutationError) {
+      if (mutationId !== mutationRequestRef.current) return;
+      setApprovalError(mutationError instanceof Error ? mutationError.message : 'No se pudo registrar la decisión del cliente.');
+      void loadDetail(workOrderId, true);
+    } finally {
+      if (mutationId === mutationRequestRef.current) setDecidingApprovalInterventionId(null);
+      if (mutationLockRef.current === mutationId) mutationLockRef.current = null;
+    }
+  }, [clearMutationErrors, detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
 
   useEffect(() => {
     void loadSchedule();
@@ -716,8 +758,6 @@ export function TechnicianFieldHome() {
   }, [loadSchedule]);
 
   useEffect(() => {
-    // A Field identity transition invalidates any selected detail immediately, even if an older
-    // request resolves later. Render guards below prevent even a one-frame stale disclosure.
     closeJob();
   }, [closeJob, principalFieldIdentityKey]);
 
@@ -771,14 +811,17 @@ export function TechnicianFieldHome() {
         assetError={assetError}
         interventionError={interventionError}
         additionalInterventionError={additionalInterventionError}
+        approvalError={approvalError}
         transitioning={transitioning}
         attachingAssetId={attachingAssetId}
         creatingInterventionVisitAssetId={creatingInterventionVisitAssetId}
         creatingAdditionalInterventionVisitAssetId={creatingAdditionalInterventionVisitAssetId}
+        decidingApprovalInterventionId={decidingApprovalInterventionId}
         onTransition={(target) => void runVisitTransition(target)}
         onAttachAsset={(assetId) => void runAttachAsset(assetId)}
         onCreatePlannedIntervention={(input) => void runCreatePlannedIntervention(input)}
         onCreateAdditionalIntervention={(input) => void runCreateAdditionalIntervention(input)}
+        onRecordAdditionalDecision={(input) => void runRecordAdditionalDecision(input)}
         onBack={closeJob}
       />
     );
