@@ -1,6 +1,9 @@
-import { firebaseClientConfig, isFirebaseClientConfigured } from './client-config';
-import { requireFirebaseWebSession } from './session';
 import type { PublicWebsiteContent } from '../public-website-content';
+import {
+  FirebaseStorageUploadError,
+  firebaseStorageMediaUrl,
+  uploadAuthenticatedFirebaseStorageObject,
+} from './storage-upload';
 
 export const PUBLIC_WEBSITE_CONFIG_PATH = 'public-website/config/published.json';
 
@@ -10,46 +13,10 @@ export type WebsiteImageUpload = {
   persistence: 'firebase-storage' | 'browser-draft';
 };
 
-class FirebaseStorageUploadError extends Error {
-  status: number;
-
-  constructor(status: number, message: string) {
-    super(message);
-    this.name = 'FirebaseStorageUploadError';
-    this.status = status;
-  }
-}
-
 function cleanFileName(name: string) {
   const extension = name.includes('.') ? `.${name.split('.').pop()?.toLowerCase().replace(/[^a-z0-9]/g, '')}` : '';
   const stem = name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'image';
   return `${stem}${extension}`;
-}
-
-function storageMediaUrl(path: string) {
-  if (!firebaseClientConfig.storageBucket) return '';
-  return `https://firebasestorage.googleapis.com/v0/b/${firebaseClientConfig.storageBucket}/o/${encodeURIComponent(path)}?alt=media`;
-}
-
-async function uploadMedia(path: string, body: Blob | string, contentType: string) {
-  if (!isFirebaseClientConfigured || !firebaseClientConfig.storageBucket) {
-    throw new Error('Firebase Storage is not configured for this deployment.');
-  }
-  const session = await requireFirebaseWebSession();
-  const endpoint = `https://firebasestorage.googleapis.com/v0/b/${firebaseClientConfig.storageBucket}/o?uploadType=media&name=${encodeURIComponent(path)}`;
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${session.idToken}`,
-      'Content-Type': contentType,
-    },
-    body,
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new FirebaseStorageUploadError(response.status, text || 'Website media upload failed.');
-  }
-  return storageMediaUrl(path);
 }
 
 function blobAsDataUrl(blob: Blob) {
@@ -113,8 +80,8 @@ export async function uploadPublicWebsiteImage(file: File, scope = 'hero'): Prom
   const path = `public-website/${scope}/${Date.now()}-${cleanFileName(file.name)}`;
 
   try {
-    const mediaUrl = await uploadMedia(path, file, file.type || 'application/octet-stream');
-    return { path, mediaUrl, persistence: 'firebase-storage' };
+    const stored = await uploadAuthenticatedFirebaseStorageObject(path, file, file.type || 'application/octet-stream');
+    return { ...stored, persistence: 'firebase-storage' };
   } catch (error) {
     // Firebase Storage rules are deployed independently from the Vercel app.
     // During that deployment gap, do not break the owner's editing flow or
@@ -130,9 +97,9 @@ export async function uploadPublicWebsiteImage(file: File, scope = 'hero'): Prom
 export async function publishPublicWebsiteConfig(content: PublicWebsiteContent) {
   const payload = JSON.stringify(content);
   if (new Blob([payload]).size > 512 * 1024) throw new Error('Published website configuration is too large.');
-  return uploadMedia(PUBLIC_WEBSITE_CONFIG_PATH, payload, 'application/json');
+  return uploadAuthenticatedFirebaseStorageObject(PUBLIC_WEBSITE_CONFIG_PATH, payload, 'application/json');
 }
 
 export function publicWebsiteConfigUrl() {
-  return storageMediaUrl(PUBLIC_WEBSITE_CONFIG_PATH);
+  return firebaseStorageMediaUrl(PUBLIC_WEBSITE_CONFIG_PATH);
 }
