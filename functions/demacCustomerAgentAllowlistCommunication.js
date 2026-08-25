@@ -9,6 +9,10 @@ const {
   MAYA_SETTINGS_DOCUMENT,
   mayaReplyDecision,
 } = require("./demacCustomerAgentReplyPolicy");
+const {
+  COMMUNICATION_SETTINGS_COLLECTION,
+  COMMUNICATION_SETTINGS_DOCUMENT,
+} = require("./demacCommunicationIdentity");
 const { cleanText } = require("./bookingSchedulingPrimitives");
 
 const app = getApps().length ? getApp() : initializeApp();
@@ -23,11 +27,16 @@ function safeDocumentId(value) {
 }
 
 function conversationIdentity(message = {}) {
-  return cleanText(message.conversationId || message.chat || message.phone, 300);
+  return cleanText(message.conversationId, 300);
 }
 
 async function loadMayaReplySettings() {
   const snapshot = await db.collection(MAYA_SETTINGS_COLLECTION).doc(MAYA_SETTINGS_DOCUMENT).get();
+  return snapshot.exists ? snapshot.data() || {} : {};
+}
+
+async function loadCommunicationSettings() {
+  const snapshot = await db.collection(COMMUNICATION_SETTINGS_COLLECTION).doc(COMMUNICATION_SETTINGS_DOCUMENT).get();
   return snapshot.exists ? snapshot.data() || {} : {};
 }
 
@@ -50,26 +59,40 @@ async function recordObservationState({ conversationId, decision }) {
 }
 
 async function evaluateInboundPolicy(message = {}, policyContext = {}) {
-  const settings = await loadMayaReplySettings();
+  const [settings, communicationSettings] = await Promise.all([
+    loadMayaReplySettings(),
+    loadCommunicationSettings(),
+  ]);
   const conversationId = conversationIdentity(message);
-  const conversationSnapshot = conversationId
-    ? await db.collection("communicationConversations").doc(safeDocumentId(conversationId)).get()
-    : null;
-  const conversation = conversationSnapshot?.exists ? conversationSnapshot.data() || {} : {};
+  if (!conversationId) {
+    return {
+      decision: { allowed: false, reason: "missing-canonical-conversation-id" },
+      conversationId: "",
+      conversation: {},
+      settings,
+      communicationSettings,
+    };
+  }
+  const conversationSnapshot = await db.collection("communicationConversations").doc(conversationId).get();
+  const conversation = conversationSnapshot.exists ? conversationSnapshot.data() || {} : {};
   const decision = mayaReplyDecision({
     message,
     conversation,
     settings,
+    communicationSettings,
     isNewContact: policyContext.isNewContact === true,
     authorizedWorkflow: cleanText(policyContext.authorizedWorkflow, 80),
   });
   await recordObservationState({ conversationId, decision });
-  return { decision, conversationId, conversation, settings };
+  return { decision, conversationId, conversation, settings, communicationSettings };
 }
 
 async function evaluateConversationPolicy(conversationId, conversation = {}) {
-  const settings = await loadMayaReplySettings();
-  const decision = mayaReplyDecision({ conversation, settings });
+  const [settings, communicationSettings] = await Promise.all([
+    loadMayaReplySettings(),
+    loadCommunicationSettings(),
+  ]);
+  const decision = mayaReplyDecision({ conversation, settings, communicationSettings });
   await recordObservationState({ conversationId, decision });
   return decision;
 }
@@ -198,6 +221,7 @@ module.exports.MAYA_SETTINGS_DOCUMENT = MAYA_SETTINGS_DOCUMENT;
 module.exports.conversationIdentity = conversationIdentity;
 module.exports.evaluateConversationPolicy = evaluateConversationPolicy;
 module.exports.evaluateInboundPolicy = evaluateInboundPolicy;
+module.exports.loadCommunicationSettings = loadCommunicationSettings;
 module.exports.loadMayaReplySettings = loadMayaReplySettings;
 module.exports.voiceTranscriptBecameReady = voiceTranscriptBecameReady;
 module.exports.voiceTranscriptRuntimeMessage = voiceTranscriptRuntimeMessage;
