@@ -108,7 +108,7 @@ test("smoke: routine inbound stays AI-owned from canonical wacli ingress through
   assert.equal(ingress.ownerUserId, null);
   assert.equal(rawBody.conversationId, identity.conversationId);
   assert.equal(rawBody.communicationAccountId, "demac-wa-primary");
-  assert.equal(rawBody.expectedOwnershipVersion, 0);
+  assert.equal(rawBody.ownershipVersion, 0);
   assert.equal(rawBody.customerInputVersion, 1);
   assert.equal(rawBody.inboundMessageId, identity.messageId);
 
