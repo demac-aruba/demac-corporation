@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { parseFieldRegisterVisitAssetResponse } from '../lib/field-equipment-registration-contract';
 
-function validResponse() {
+// Acceptance fixtures are intentionally mutable so this script can exercise malformed 2xx
+// shapes. The production parser remains the strict runtime authority for the response contract.
+function validResponse(): any {
   const capturedAt = '2026-08-25T19:15:00.000Z';
   return {
     success: true,
@@ -79,7 +81,7 @@ const withQr = validResponse();
 withQr.equipment = { ...withQr.equipment, qrCode: 'DEMAC-QR-0001' };
 assert.equal(parseFieldRegisterVisitAssetResponse(withQr).equipment.qrCode, 'DEMAC-QR-0001');
 
-const corruptions: Array<(value: ReturnType<typeof validResponse>) => void> = [
+const corruptions: Array<(value: any) => void> = [
   (value) => { value.equipment = { ...value.equipment, brand: '' }; },
   (value) => { value.equipment = { ...value.equipment, btu: 0 }; },
   (value) => { value.equipment = { ...value.equipment, refrigerant: '' }; },
