@@ -52,14 +52,19 @@ function accountRequiredForMode(mode) {
   return mode === PILOT_MODE;
 }
 
-function mayaObservationDecision({ message = {}, conversation = {}, settings = {} } = {}) {
+function mayaObservationDecision({
+  message = {},
+  conversation = {},
+  settings = {},
+  communicationSettings = {},
+} = {}) {
   if (settings.enabled === false || settings.observationEnabled !== true) {
     return { allowed: false, reason: "observation-disabled" };
   }
   if (message.direction !== "inbound") {
     return { allowed: false, reason: "not-canonical-inbound" };
   }
-  const account = activeAccountDecision({ message, conversation, settings });
+  const account = activeAccountDecision({ message, conversation, settings: communicationSettings });
   if (!account.allowed) return { allowed: false, reason: account.reason, identity: account.identity };
   return { allowed: true, reason: "observation-enabled", identity: account.identity };
 }
@@ -80,6 +85,7 @@ function mayaReplyDecision({
   message = {},
   conversation = {},
   settings = {},
+  communicationSettings = {},
   isNewContact = false,
   authorizedWorkflow = "",
 } = {}) {
@@ -98,7 +104,7 @@ function mayaReplyDecision({
   }
 
   if (accountRequiredForMode(mode)) {
-    const account = activeAccountDecision({ message, conversation, settings });
+    const account = activeAccountDecision({ message, conversation, settings: communicationSettings });
     if (!account.allowed) {
       return { allowed: false, mode, phone, reason: account.reason, identity: account.identity };
     }
