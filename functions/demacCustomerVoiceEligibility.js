@@ -1,7 +1,7 @@
 const { cleanText } = require("./bookingSchedulingPrimitives");
 const { activeAccountDecision } = require("./demacCommunicationIdentity");
 
-const CUSTOMER_VOICE_POLICY_VERSION = 1;
+const CUSTOMER_VOICE_POLICY_VERSION = 2;
 const VOICE_MEDIA_TYPES = new Set(["audio", "voice"]);
 
 function timestampMillis(value) {
@@ -62,7 +62,11 @@ function existingTranscriptionVersion(message = {}) {
   return cleanText(message.transcriptionVersion, 80);
 }
 
-function customerVoiceEligibilityDecision({ message = {}, settings = {} } = {}) {
+function customerVoiceEligibilityDecision({
+  message = {},
+  settings = {},
+  communicationSettings = {},
+} = {}) {
   if (settings.voiceTranscriptionEnabled !== true) {
     return { eligible: false, reason: "voice-transcription-disabled" };
   }
@@ -76,9 +80,9 @@ function customerVoiceEligibilityDecision({ message = {}, settings = {} } = {}) 
     return { eligible: false, reason: "not-customer-voice-media" };
   }
 
-  const accountDecision = activeAccountDecision({ message, settings });
+  const accountDecision = activeAccountDecision({ message, settings: communicationSettings });
   if (!accountDecision.allowed) {
-    return { eligible: false, reason: accountDecision.reason };
+    return { eligible: false, reason: accountDecision.reason, identity: accountDecision.identity };
   }
 
   const activationAt = configuredActivationTimestamp(settings);
@@ -113,6 +117,7 @@ function customerVoiceEligibilityDecision({ message = {}, settings = {} } = {}) 
     providerAt,
     firstSeenAt,
     activationAt,
+    identity: accountDecision.identity,
   };
 }
 
