@@ -9,6 +9,10 @@ const {
   MAYA_SETTINGS_COLLECTION,
   MAYA_SETTINGS_DOCUMENT,
 } = require("./demacCustomerAgentReplyPolicy");
+const {
+  COMMUNICATION_SETTINGS_COLLECTION,
+  COMMUNICATION_SETTINGS_DOCUMENT,
+} = require("./demacCommunicationIdentity");
 const { customerVoiceEligibilityDecision, customerVoiceMedia, timestampMillis } = require("./demacCustomerVoiceEligibility");
 const {
   DEFAULT_TRANSCRIPTION_MODEL,
@@ -41,6 +45,13 @@ function customerVoiceStoragePath(message = {}) {
   return firebaseStoragePathFromMediaUrl(message.mediaUrl, bucketName);
 }
 
+function sameEligibilityValue(field, beforeValue, afterValue) {
+  if (["firstReceivedAt", "firstIngestedAt"].includes(field)) {
+    return timestampMillis(beforeValue) === timestampMillis(afterValue);
+  }
+  return beforeValue === afterValue;
+}
+
 function customerVoiceUpdateMayChangeEligibility(before = {}, after = {}) {
   if (!customerVoiceMedia(after)) return false;
   const fields = [
@@ -54,12 +65,18 @@ function customerVoiceUpdateMayChangeEligibility(before = {}, after = {}) {
     "transcriptionStatus",
     "transcriptionVersion",
   ];
-  return fields.some((field) => before[field] !== after[field]);
+  return fields.some((field) => !sameEligibilityValue(field, before[field], after[field]));
 }
 
 async function customerVoiceSettings() {
-  const snapshot = await db.collection(MAYA_SETTINGS_COLLECTION).doc(MAYA_SETTINGS_DOCUMENT).get();
-  return snapshot.exists ? snapshot.data() || {} : {};
+  const [policySnapshot, communicationSnapshot] = await Promise.all([
+    db.collection(MAYA_SETTINGS_COLLECTION).doc(MAYA_SETTINGS_DOCUMENT).get(),
+    db.collection(COMMUNICATION_SETTINGS_COLLECTION).doc(COMMUNICATION_SETTINGS_DOCUMENT).get(),
+  ]);
+  return {
+    settings: policySnapshot.exists ? policySnapshot.data() || {} : {},
+    communicationSettings: communicationSnapshot.exists ? communicationSnapshot.data() || {} : {},
+  };
 }
 
 function processingLeaseActive(message = {}, version, now = Date.now()) {
@@ -68,7 +85,7 @@ function processingLeaseActive(message = {}, version, now = Date.now()) {
   return Boolean(started && started + 10 * 60 * 1000 > now);
 }
 
-async function claimCustomerVoiceTranscription(messageRef, settings) {
+async function claimCustomerVoiceTranscription(messageRef, settings, communicationSettings = {}) {
   let result = { claimed: false, reason: "unknown" };
   await db.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(messageRef);
@@ -77,7 +94,7 @@ async function claimCustomerVoiceTranscription(messageRef, settings) {
       return;
     }
     const current = { id: snapshot.id, ...snapshot.data() };
-    const decision = customerVoiceEligibilityDecision({ message: current, settings });
+    const decision = customerVoiceEligibilityDecision({ message: current, settings, communicationSettings });
     if (!decision.eligible) {
       result = { claimed: false, reason: decision.reason, decision };
       transaction.set(messageRef, {
@@ -134,8 +151,8 @@ async function claimCustomerVoiceTranscription(messageRef, settings) {
 }
 
 async function transcribeCustomerVoiceMessage(messageRef) {
-  const settings = await customerVoiceSettings();
-  const claim = await claimCustomerVoiceTranscription(messageRef, settings);
+  const { settings, communicationSettings } = await customerVoiceSettings();
+  const claim = await claimCustomerVoiceTranscription(messageRef, settings, communicationSettings);
   if (!claim.claimed) return claim;
   let transcriptionResult = null;
   try {
@@ -172,9 +189,6 @@ async function transcribeCustomerVoiceMessage(messageRef) {
       transcriptionModel: claim.model,
       transcriptionFailedAt: FieldValue.serverTimestamp(),
     };
-    // If OpenAI already returned a transcript but the primary completion write
-    // failed, preserve the derived transcript during the failure write so a
-    // retry cannot silently lose provenance or pay to rediscover content.
     if (transcriptionResult?.transcript) {
       failurePatch.rawTranscript = transcriptionResult.transcript;
       failurePatch.transcript = transcriptionResult.transcript;
@@ -190,13 +204,6 @@ async function transcribeCustomerVoiceMessage(messageRef) {
   }
 }
 
-/**
- * Transcribes newly created work-order voice evidence on the server. The
- * OpenAI key remains in Firebase Secret Manager and is never sent to the app.
- * Audio retrieval and OpenAI invocation are owned by the shared DEMAC
- * transcription service so customer communication voice reuses the same
- * infrastructure instead of creating a second transcription authority.
- */
 exports.transcribeWorkOrderVoiceNote = onDocumentCreated(
   {
     document: "workOrderEvidence/{evidenceId}",
@@ -298,7 +305,9 @@ module.exports.DEFAULT_CUSTOMER_VOICE_MAX_ATTEMPTS = DEFAULT_CUSTOMER_VOICE_MAX_
 module.exports.TECHNICIAN_TRANSCRIPTION_PROMPT = TECHNICIAN_TRANSCRIPTION_PROMPT;
 module.exports.TRANSCRIPTION_MODEL = TRANSCRIPTION_MODEL;
 module.exports.claimCustomerVoiceTranscription = claimCustomerVoiceTranscription;
+module.exports.customerVoiceSettings = customerVoiceSettings;
 module.exports.customerVoiceStoragePath = customerVoiceStoragePath;
 module.exports.customerVoiceUpdateMayChangeEligibility = customerVoiceUpdateMayChangeEligibility;
 module.exports.processingLeaseActive = processingLeaseActive;
+module.exports.sameEligibilityValue = sameEligibilityValue;
 module.exports.transcribeCustomerVoiceMessage = transcribeCustomerVoiceMessage;
