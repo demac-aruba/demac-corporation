@@ -12,10 +12,12 @@ import {
   prepareFieldVisit,
   recordAdditionalFieldInterventionDecision,
   registerOnSiteFieldEquipment,
+  transitionFieldIntervention,
   transitionFieldVisit,
   type FieldActiveVisitTransition,
   type FieldAdditionalWorkDecision,
   type FieldExecutionJobDetail,
+  type FieldInterventionExecutionTarget,
   type FieldScheduleJob,
   type FieldTechnicianScopeChangeOrigin,
   type FieldVisitStatus,
@@ -27,6 +29,7 @@ import {
   EquipmentRegistrationControls,
   type EquipmentRegistrationInput,
 } from './equipment-registration-controls';
+import { InterventionExecutionControls } from './intervention-execution-controls';
 import { PlannedInterventionControls } from './planned-intervention-controls';
 import styles from './technician-field-home.module.css';
 
@@ -49,6 +52,13 @@ type AdditionalApprovalInput = {
   interventionId: string;
   decision: FieldAdditionalWorkDecision;
   receiverName: string;
+  note: string;
+};
+
+type InterventionExecutionInput = {
+  interventionId: string;
+  target: FieldInterventionExecutionTarget;
+  expectedVersion: number;
   note: string;
 };
 
@@ -194,18 +204,21 @@ function DetailView({
   interventionError,
   additionalInterventionError,
   approvalError,
+  executionError,
   transitioning,
   attachingAssetId,
   registeringEquipment,
   creatingInterventionVisitAssetId,
   creatingAdditionalInterventionVisitAssetId,
   decidingApprovalInterventionId,
+  transitioningInterventionId,
   onTransition,
   onAttachAsset,
   onRegisterEquipment,
   onCreatePlannedIntervention,
   onCreateAdditionalIntervention,
   onRecordAdditionalDecision,
+  onTransitionIntervention,
   onBack,
 }: {
   job: FieldExecutionJobDetail | null;
@@ -217,18 +230,21 @@ function DetailView({
   interventionError: string | null;
   additionalInterventionError: string | null;
   approvalError: string | null;
+  executionError: string | null;
   transitioning: FieldActiveVisitTransition | null;
   attachingAssetId: string | null;
   registeringEquipment: boolean;
   creatingInterventionVisitAssetId: string | null;
   creatingAdditionalInterventionVisitAssetId: string | null;
   decidingApprovalInterventionId: string | null;
+  transitioningInterventionId: string | null;
   onTransition: (target: FieldActiveVisitTransition) => void;
   onAttachAsset: (assetId: string) => void;
   onRegisterEquipment: (input: EquipmentRegistrationInput) => Promise<boolean>;
   onCreatePlannedIntervention: (input: PlannedInterventionInput) => void;
   onCreateAdditionalIntervention: (input: AdditionalInterventionInput) => void;
   onRecordAdditionalDecision: (input: AdditionalApprovalInput) => void;
+  onTransitionIntervention: (input: InterventionExecutionInput) => void;
   onBack: () => void;
 }) {
   if (loading || error || !job) {
@@ -263,7 +279,8 @@ function DetailView({
     || registeringEquipment
     || creatingInterventionVisitAssetId !== null
     || creatingAdditionalInterventionVisitAssetId !== null
-    || decidingApprovalInterventionId !== null;
+    || decidingApprovalInterventionId !== null
+    || transitioningInterventionId !== null;
 
   return (
     <div className={styles.shell}>
@@ -378,6 +395,13 @@ function DetailView({
               error={approvalError}
               onDecide={onRecordAdditionalDecision}
             />
+            <InterventionExecutionControls
+              job={job}
+              mutationBusy={mutationBusy}
+              transitioningInterventionId={transitioningInterventionId}
+              error={executionError}
+              onTransition={onTransitionIntervention}
+            />
             {assetError ? <div className={styles.mutationError}>{assetError}</div> : null}
           </section>
 
@@ -466,6 +490,8 @@ export function TechnicianFieldHome() {
   const [additionalInterventionError, setAdditionalInterventionError] = useState<string | null>(null);
   const [decidingApprovalInterventionId, setDecidingApprovalInterventionId] = useState<string | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [transitioningInterventionId, setTransitioningInterventionId] = useState<string | null>(null);
+  const [executionError, setExecutionError] = useState<string | null>(null);
   const scheduleRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
   const mutationRequestRef = useRef(0);
@@ -503,6 +529,8 @@ export function TechnicianFieldHome() {
     setAdditionalInterventionError(null);
     setDecidingApprovalInterventionId(null);
     setApprovalError(null);
+    setTransitioningInterventionId(null);
+    setExecutionError(null);
   }, []);
 
   const loadDetail = useCallback(async (workOrderId: string, background = false) => {
@@ -570,6 +598,7 @@ export function TechnicianFieldHome() {
     setInterventionError(null);
     setAdditionalInterventionError(null);
     setApprovalError(null);
+    setExecutionError(null);
   }, []);
 
   const runVisitTransition = useCallback(async (target: FieldActiveVisitTransition) => {
@@ -842,6 +871,47 @@ export function TechnicianFieldHome() {
     }
   }, [clearMutationErrors, detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
 
+  const runTransitionIntervention = useCallback(async (input: InterventionExecutionInput) => {
+    if (mutationLockRef.current !== null) return;
+    const currentDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
+    if (!currentDetail?.fieldVisit) {
+      setExecutionError('La visita todavía no está disponible para ejecutar trabajo técnico.');
+      return;
+    }
+    const option = currentDetail.interventionExecutionOptions.find((candidate) => candidate.interventionId === input.interventionId);
+    const intervention = currentDetail.workInterventions.find((candidate) => candidate.id === input.interventionId);
+    if (!option || !intervention || !option.allowedTargets.includes(input.target) || intervention.version !== input.expectedVersion) {
+      setExecutionError('Field Authority ya no autoriza esta transición para el trabajo actual. Actualiza el trabajo e intenta nuevamente.');
+      void loadDetail(currentDetail.workOrderId, true);
+      return;
+    }
+
+    const mutationId = ++mutationRequestRef.current;
+    mutationLockRef.current = mutationId;
+    const workOrderId = currentDetail.workOrderId;
+    setTransitioningInterventionId(input.interventionId);
+    clearMutationErrors();
+    try {
+      await transitionFieldIntervention(
+        currentDetail.fieldVisit.id,
+        input.interventionId,
+        input.target,
+        input.expectedVersion,
+        input.note,
+        clientRequestId(`intervention-${input.target}`, workOrderId),
+      );
+      if (mutationId !== mutationRequestRef.current) return;
+      await loadDetail(workOrderId, true);
+    } catch (mutationError) {
+      if (mutationId !== mutationRequestRef.current) return;
+      setExecutionError(mutationError instanceof Error ? mutationError.message : 'No se pudo actualizar la ejecución del trabajo.');
+      void loadDetail(workOrderId, true);
+    } finally {
+      if (mutationId === mutationRequestRef.current) setTransitioningInterventionId(null);
+      if (mutationLockRef.current === mutationId) mutationLockRef.current = null;
+    }
+  }, [clearMutationErrors, detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
+
   useEffect(() => {
     void loadSchedule();
     return () => { scheduleRequestRef.current += 1; };
@@ -922,18 +992,21 @@ export function TechnicianFieldHome() {
         interventionError={interventionError}
         additionalInterventionError={additionalInterventionError}
         approvalError={approvalError}
+        executionError={executionError}
         transitioning={transitioning}
         attachingAssetId={attachingAssetId}
         registeringEquipment={registeringEquipment}
         creatingInterventionVisitAssetId={creatingInterventionVisitAssetId}
         creatingAdditionalInterventionVisitAssetId={creatingAdditionalInterventionVisitAssetId}
         decidingApprovalInterventionId={decidingApprovalInterventionId}
+        transitioningInterventionId={transitioningInterventionId}
         onTransition={(target) => void runVisitTransition(target)}
         onAttachAsset={(assetId) => void runAttachAsset(assetId)}
         onRegisterEquipment={runRegisterEquipment}
         onCreatePlannedIntervention={(input) => void runCreatePlannedIntervention(input)}
         onCreateAdditionalIntervention={(input) => void runCreateAdditionalIntervention(input)}
         onRecordAdditionalDecision={(input) => void runRecordAdditionalDecision(input)}
+        onTransitionIntervention={(input) => void runTransitionIntervention(input)}
         onBack={closeJob}
       />
     );
