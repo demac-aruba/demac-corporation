@@ -90,11 +90,12 @@ function createFieldOperationsApi({ db, verifyIdToken, reportError = () => {}, p
       if (typeof prepareWorkVisit !== 'function') {
         throw fieldError('mutation_not_configured', 'Field visit preparation is not configured in this runtime.', 503);
       }
-      return prepareWorkVisit({
+      const prepared = await prepareWorkVisit({
         identity,
         workOrderId: cleanText(data.workOrderId, 180),
         requestId: cleanText(data.requestId, 240),
       });
+      return { ...prepared, version: FIELD_OPERATIONS_API_VERSION };
     }
     throw fieldError('unsupported_action', `Unsupported Field Operations action: ${action || 'missing'}.`, 400);
   }
