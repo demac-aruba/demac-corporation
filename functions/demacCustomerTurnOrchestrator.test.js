@@ -121,7 +121,7 @@ function seed(overrides = {}) {
       phone: PHONE,
       chatJid: `${PHONE}@s.whatsapp.net`,
       customerInputVersion: overrides.customerInputVersion || 1,
-      ownershipVersion: 0,
+      ownershipVersion: overrides.ownershipVersion ?? 0,
       aiDisposition: "ai_active",
       recentMessages: [],
     }],
@@ -189,7 +189,11 @@ function harness({ now = 1_000_000, autoReplyEnabled = true, observerHook = null
     },
   };
   const observerProcessor = async (args) => {
-    observerCalls.push(args.messageId);
+    observerCalls.push({
+      messageId: args.messageId,
+      expectedOwnershipVersion: args.expectedOwnershipVersion,
+      expectedCustomerInputVersion: args.expectedCustomerInputVersion,
+    });
     if (observerHook) await observerHook({ db, args });
     return { observed: true, observation: { intent: "general_question" } };
   };
@@ -262,7 +266,7 @@ test("latest deferred customer input wins even when an older task wakes first", 
   h.setNow(start + 18_000);
   const final = await h.orchestrator.wakeConversationTurn({ conversationId: CONVERSATION_ID });
   assert.equal(final.processed, true);
-  assert.deepEqual(h.observerCalls, ["MSG-2"]);
+  assert.deepEqual(h.observerCalls, [{ messageId: "MSG-2", expectedOwnershipVersion: 0, expectedCustomerInputVersion: 2 }]);
   assert.deepEqual(h.runtimeCalls, [{ messageId: "MSG-2", version: 2 }]);
   assert.equal(h.db.read("customerAgentInboundQueue", "Q-MSG-1").status, "coalesced");
   assert.equal(h.db.read("customerAgentInboundQueue", "Q-MSG-2").status, "processed");
@@ -280,7 +284,7 @@ test("Observer always runs before Reply Policy can suppress the customer-facing 
   const result = await h.orchestrator.wakeConversationTurn({ conversationId: CONVERSATION_ID });
   assert.equal(result.processed, false);
   assert.equal(result.reason, "reply-policy-blocked:auto-reply-disabled");
-  assert.deepEqual(h.observerCalls, ["MSG-OBSERVE"]);
+  assert.equal(h.observerCalls.length, 1);
   assert.equal(h.runtimeCalls.length, 0);
   assert.equal(h.db.read("customerAgentInboundQueue", "Q-MSG-OBSERVE").status, "skipped_policy");
 });
@@ -301,10 +305,60 @@ test("a newer customer input arriving during Observer suppresses the stale runti
 
   const result = await h.orchestrator.wakeConversationTurn({ conversationId: CONVERSATION_ID });
   assert.equal(result.processed, false);
-  assert.equal(result.reason, "newer-customer-turn-arrived-during-observer");
-  assert.deepEqual(h.observerCalls, ["MSG-STALE"]);
+  assert.equal(result.reason, "stale-communication-epoch-after-observer");
+  assert.equal(result.epochReason, "customer-input-version-changed");
+  assert.equal(h.observerCalls.length, 1);
   assert.equal(h.runtimeCalls.length, 0);
   assert.equal(h.db.read("customerAgentInboundQueue", "Q-MSG-STALE").status, "coalesced");
+});
+
+test("human takeover during debounce invalidates the pending turn before Observer or Runtime", async () => {
+  const start = 3_500_000;
+  const h = harness({ now: start });
+  const message = inbound("MSG-TAKEOVER", 1, start);
+  await persistMessage(h, message);
+  await setConversationVersion(h, 1);
+  const scheduled = await h.orchestrator.scheduleInboundTurn({ messageId: message.id, message });
+  assert.equal(scheduled.ownershipVersion, 0);
+
+  await h.db.collection("communicationConversations").doc(CONVERSATION_ID).set({
+    ownershipVersion: 1,
+    ownerUserId: "operator-1",
+    lockedByUserId: "operator-1",
+    aiDisposition: "human_active",
+  }, { merge: true });
+  h.setNow(start + 12_000);
+
+  const result = await h.orchestrator.wakeConversationTurn({ conversationId: CONVERSATION_ID });
+  assert.equal(result.processed, false);
+  assert.equal(result.reason, "stale-communication-epoch-before-debounce-wakeup");
+  assert.equal(result.epochReason, "ownership-version-changed");
+  assert.equal(result.status, "skipped_human");
+  assert.equal(h.observerCalls.length, 0);
+  assert.equal(h.runtimeCalls.length, 0);
+});
+
+test("takeover then return cannot revive the old deferred epoch without a fresh reactivation schedule", async () => {
+  const start = 3_750_000;
+  const h = harness({ now: start });
+  const message = inbound("MSG-TAKEOVER-RETURN", 1, start);
+  await persistMessage(h, message);
+  await setConversationVersion(h, 1);
+  await h.orchestrator.scheduleInboundTurn({ messageId: message.id, message });
+
+  await h.db.collection("communicationConversations").doc(CONVERSATION_ID).set({
+    ownershipVersion: 2,
+    ownerUserId: null,
+    lockedByUserId: null,
+    aiDisposition: "ai_active",
+  }, { merge: true });
+  h.setNow(start + 12_000);
+
+  const result = await h.orchestrator.wakeConversationTurn({ conversationId: CONVERSATION_ID });
+  assert.equal(result.processed, false);
+  assert.equal(result.epochReason, "ownership-version-changed");
+  assert.equal(h.observerCalls.length, 0);
+  assert.equal(h.runtimeCalls.length, 0);
 });
 
 test("duplicate task wake after a processed turn cannot execute Runtime twice", async () => {
@@ -331,11 +385,13 @@ test("reactivation creates a fresh deferred eligibility window instead of immedi
   await persistMessage(h, message);
   await h.db.collection("communicationConversations").doc(CONVERSATION_ID).set({
     customerInputVersion: 3,
+    ownershipVersion: 4,
     recentMessages: [{ id: message.id, role: "customer", customerInputVersion: 3 }],
   }, { merge: true });
 
   const result = await h.orchestrator.scheduleConversationReactivation(CONVERSATION_ID, h.db.read("communicationConversations", CONVERSATION_ID));
   assert.equal(result.scheduled, true);
+  assert.equal(result.ownershipVersion, 4);
   assert.equal(result.eligibleAtMs, start + 12_000);
   assert.equal(h.runtimeCalls.length, 0);
   assert.equal(h.db.read("customerAgentInboundQueue", "Q-MSG-REACTIVATE").status, "deferred");
