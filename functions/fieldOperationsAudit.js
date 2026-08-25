@@ -1,3 +1,5 @@
+const { fieldFirestoreData } = require('./fieldOperationsFirestoreData');
+
 const FIELD_OPERATION_EVENT_COLLECTION = 'fieldOperationEvents';
 const FIELD_OPERATION_EVENT_VERSION = 1;
 
@@ -24,7 +26,7 @@ function optionalObject(value, field) {
   if (typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`Field audit event ${field} must be an object when provided.`);
   }
-  return value;
+  return fieldFirestoreData(value, `fieldAuditEvent.${field}`);
 }
 
 function normalizeFieldOperationEvent(event) {
@@ -71,7 +73,7 @@ function normalizeFieldOperationEvent(event) {
   if (after) normalized.after = after;
   if (metadata) normalized.metadata = metadata;
 
-  return normalized;
+  return fieldFirestoreData(normalized, 'fieldAuditEvent');
 }
 
 function createFieldAuditAppender({ db, collectionName = FIELD_OPERATION_EVENT_COLLECTION } = {}) {
