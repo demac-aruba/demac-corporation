@@ -35,6 +35,11 @@ function validTimestamp(value) {
   return timestamp;
 }
 
+function allowedWorkVisitTransitions(value) {
+  const status = validStatus(value);
+  return [...WORK_VISIT_TRANSITIONS[status]];
+}
+
 function assertWorkVisitTransition(currentValue, nextValue) {
   const current = validStatus(currentValue);
   const next = validStatus(nextValue);
@@ -69,6 +74,7 @@ function transitionCanonicalWorkVisit({ visit, to, at }) {
 }
 
 module.exports = {
+  allowedWorkVisitTransitions,
   assertWorkVisitTransition,
   transitionCanonicalWorkVisit,
 };
