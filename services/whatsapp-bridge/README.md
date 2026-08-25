@@ -8,12 +8,12 @@ The current reviewed bridge implementation is:
 
 - `ops/digitalocean/deploy/server-v2.mjs`
 
-The current connector validation/deployment contract is:
+The current deployment and validation contracts are split deliberately:
 
-- `.github/workflows/wacli-webhook-deploy.yml`
-- `functions/whatsappWacliGateway.js`
-- `functions/wacliCommunicationBoundary.js`
-- `functions/wacliBridgeAccountBinding.test.js`
+- `.github/workflows/digitalocean-remote-ops.yml` stages the reviewed `server-v2.mjs` candidate on the DigitalOcean host when the guarded `main` path is used.
+- `ops/digitalocean/run/task.sh` validates the staged candidate, invokes the restricted host-side bridge deploy command, and verifies the outbound-only local runtime.
+- `.github/workflows/wacli-webhook-deploy.yml` validates and, on its guarded `main` path, deploys the Firebase connector functions.
+- `functions/whatsappWacliGateway.js`, `functions/wacliCommunicationBoundary.js`, and `functions/wacliBridgeAccountBinding.test.js` define/test the Firebase/provider boundary.
 
 Do **not** deploy `services/whatsapp-bridge/server.mjs`, the environment example in this folder, or the `systemd/` files as the current bridge architecture. They describe an older Firebase-to-Droplet sender topology and are retained only so the previous deployment can be understood or recovered during an authorized migration review. Removing them requires evidence about the actual host and is therefore not performed automatically.
 
@@ -81,9 +81,11 @@ Original customer media remains canonical evidence. The bridge may transport/dow
 
 ## Validation
 
-The repository quality gate for this boundary is the **WhatsApp wacli Connector** workflow. It validates the current `server-v2.mjs`, the Firebase gateway/boundary, account-binding tests, outbound media authorization, and rejects resurrection of retired Firebase-to-Droplet sender code.
+The repository quality gate for the Firebase/provider boundary is the **WhatsApp wacli Connector** workflow. It validates the current `server-v2.mjs`, the Firebase gateway/boundary, account-binding tests, outbound media authorization, shared Communication dependencies, and rejects resurrection of retired Firebase-to-Droplet sender code.
 
-A green pull-request validation does not deploy the bridge or change the host. The workflow's production deployment steps are restricted to the approved `main` push path; this documentation does not authorize a production deployment.
+The **DigitalOcean Remote Ops** workflow is the guarded host-deployment path for `server-v2.mjs`; its remote task verifies that retired `/v1/send` and `/v1/media` surfaces are absent before and after deployment and that the bridge reaches the account-bound outbound-only Firebase endpoints.
+
+A pull-request validation does not deploy the bridge or change the host. Production deployment paths are restricted to their approved `main`/manual controls; this documentation does not authorize a production deployment or service restart.
 
 ## Legacy files in this folder
 
@@ -95,7 +97,7 @@ The following are **superseded implementation artifacts**, not current deploymen
 - `systemd/demac-wacli-sync.service`
 - `package.json`
 
-They currently remain because repository evidence alone does not prove which files are installed on the live DigitalOcean host. Deleting or replacing host files, changing environment variables, restarting services, rotating credentials, or changing the linked WhatsApp account is a production operation and requires explicit human approval.
+They currently remain because repository evidence proves the intended current deployment path but does not by itself prove the exact files/environment presently installed on the live DigitalOcean host. Deleting or replacing host files, changing environment variables, restarting services, rotating credentials, or changing the linked WhatsApp account is a production operation and requires explicit human approval.
 
 ## NEEDS_HUMAN before legacy removal or production activation
 
