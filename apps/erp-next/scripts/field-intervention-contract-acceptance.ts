@@ -2,6 +2,7 @@ import {
   parseFieldCreateAdditionalInterventionResponse,
   parseFieldCreatePlannedInterventionResponse,
   parseFieldExecutionJobResponse,
+  parseFieldTransitionInterventionResponse,
 } from '../lib/field-intervention-contract';
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -151,6 +152,7 @@ const job = {
   workInterventions: [],
   plannedWorkProgress: [{ id: 'line-standard', plannedQuantity: 1, linkedActualQuantity: 0, remainingQuantity: 1 }],
   plannedInterventionOptions: [{ visitAssetId: 'VA-1', plannedWorkLineIds: ['line-standard'] }],
+  interventionExecutionOptions: [],
   availableFieldServices,
   canAddPlannedIntervention: true,
   scopeChanges: [],
@@ -193,6 +195,10 @@ assertThrows(
 assertThrows(
   () => parseFieldExecutionJobResponse({ success: true, version: 1, job: { ...job, scopeChanges: undefined } }),
   'missing ScopeChange projection must fail closed',
+);
+assertThrows(
+  () => parseFieldExecutionJobResponse({ success: true, version: 1, job: { ...job, interventionExecutionOptions: undefined } }),
+  'missing execution-option projection must fail closed',
 );
 assertThrows(
   () => parseFieldExecutionJobResponse({ success: true, version: 1, job: { ...job, plannedInterventionOptions: [{ visitAssetId: 'VA-OTHER', plannedWorkLineIds: ['line-standard'] }] } }),
@@ -343,6 +349,7 @@ const withPlannedIntervention = parseFieldExecutionJobResponse({
     workInterventions: [intervention],
     plannedWorkProgress: [{ id: 'line-standard', plannedQuantity: 1, linkedActualQuantity: 1, remainingQuantity: 0 }],
     plannedInterventionOptions: [],
+    interventionExecutionOptions: [],
     availableFieldServices,
     canAddPlannedIntervention: false,
     scopeChanges: [],
@@ -365,4 +372,144 @@ const withAdditionalIntervention = parseFieldExecutionJobResponse({
 assert(withAdditionalIntervention.job.scopeChanges[0].reason === scopeChange.reason, 'canonical ScopeChange reason must remain readable with its pending intervention');
 assert(withAdditionalIntervention.job.workInterventions[0].priceSnapshot?.unitPrice === 75, 'canonical presented price must remain readable with pending authorization');
 
-console.log('Field WorkIntervention + ScopeChange + PriceSnapshot transport-contract acceptance: PASS');
+const activeVisit = { ...visit, status: 'in_progress', startedAt: '2026-08-25T12:45:00.000Z', updatedAt: '2026-08-25T12:45:00.000Z', version: 4, availableTransitions: [] };
+const executionJob = parseFieldExecutionJobResponse({
+  success: true,
+  version: 1,
+  job: {
+    ...job,
+    status: 'En proceso',
+    fieldVisit: activeVisit,
+    allowedActions: ['read', 'execute', 'intervention.complete'],
+    workInterventions: [intervention],
+    plannedWorkProgress: [{ id: 'line-standard', plannedQuantity: 1, linkedActualQuantity: 1, remainingQuantity: 0 }],
+    plannedInterventionOptions: [],
+    interventionExecutionOptions: [{ interventionId: 'WI-1', allowedTargets: ['in_progress', 'not_performed'] }],
+    canAddPlannedIntervention: false,
+    additionalInterventionVisitAssetIds: [],
+    canAddAdditionalIntervention: false,
+  },
+});
+assert(executionJob.job.interventionExecutionOptions[0].allowedTargets.includes('in_progress'), 'server-authorized start target must survive transport parsing');
+assertThrows(
+  () => parseFieldExecutionJobResponse({
+    success: true,
+    version: 1,
+    job: {
+      ...executionJob.job,
+      interventionExecutionOptions: [{ interventionId: 'WI-OTHER', allowedTargets: ['in_progress'] }],
+    },
+  }),
+  'execution option referencing unknown WorkIntervention must fail closed',
+);
+assertThrows(
+  () => parseFieldExecutionJobResponse({
+    success: true,
+    version: 1,
+    job: {
+      ...executionJob.job,
+      interventionExecutionOptions: [{ interventionId: 'WI-1', allowedTargets: ['completed'] }],
+    },
+  }),
+  'server execution option inconsistent with confirmed intervention status must fail closed',
+);
+
+const startedIntervention = {
+  ...intervention,
+  status: 'in_progress',
+  startedAt: '2026-08-25T12:50:00.000Z',
+  performedByStaffIds: ['staff-1'],
+  updatedAt: '2026-08-25T12:50:00.000Z',
+  version: 2,
+};
+const started = parseFieldTransitionInterventionResponse({
+  success: true,
+  version: 1,
+  replayed: false,
+  workIntervention: startedIntervention,
+  allowedActions: ['read', 'execute', 'intervention.complete'],
+  auditEventId: 'FE-START',
+});
+assert(started.workIntervention.startedAt === '2026-08-25T12:50:00.000Z', 'started intervention must include actual start timestamp');
+
+const completedIntervention = {
+  ...startedIntervention,
+  status: 'completed',
+  completedAt: '2026-08-25T13:30:00.000Z',
+  resultCode: 'completed',
+  resultNotes: 'Service completed normally.',
+  updatedAt: '2026-08-25T13:30:00.000Z',
+  version: 3,
+};
+assert(parseFieldTransitionInterventionResponse({
+  success: true,
+  version: 1,
+  replayed: false,
+  workIntervention: completedIntervention,
+  allowedActions: ['read', 'intervention.complete'],
+}).workIntervention.status === 'completed', 'completed intervention with execution evidence should parse');
+
+const pendingPartIntervention = {
+  ...startedIntervention,
+  status: 'pending_part',
+  resultCode: 'pending_part',
+  resultNotes: 'Replacement capacitor required.',
+  updatedAt: '2026-08-25T13:00:00.000Z',
+  version: 3,
+};
+assert(parseFieldTransitionInterventionResponse({
+  success: true,
+  version: 1,
+  replayed: false,
+  workIntervention: pendingPartIntervention,
+  allowedActions: ['read', 'intervention.complete'],
+}).workIntervention.status === 'pending_part', 'pending part must carry reason and performed-work identity');
+
+const notPerformedIntervention = {
+  ...intervention,
+  status: 'not_performed',
+  resultCode: 'not_performed',
+  resultNotes: 'Customer asked us not to service this unit.',
+  updatedAt: '2026-08-25T12:50:00.000Z',
+  version: 2,
+};
+assert(parseFieldTransitionInterventionResponse({
+  success: true,
+  version: 1,
+  replayed: false,
+  workIntervention: notPerformedIntervention,
+  allowedActions: ['read', 'intervention.complete'],
+}).workIntervention.performedByStaffIds.length === 0, 'not performed must not falsely claim a performer');
+
+assertThrows(
+  () => parseFieldTransitionInterventionResponse({
+    success: true,
+    version: 1,
+    replayed: false,
+    workIntervention: { ...completedIntervention, completedAt: undefined },
+    allowedActions: ['intervention.complete'],
+  }),
+  'completed response without completion timestamp must fail closed',
+);
+assertThrows(
+  () => parseFieldTransitionInterventionResponse({
+    success: true,
+    version: 1,
+    replayed: false,
+    workIntervention: { ...pendingPartIntervention, resultNotes: '' },
+    allowedActions: ['intervention.complete'],
+  }),
+  'pending-part response without reason must fail closed',
+);
+assertThrows(
+  () => parseFieldTransitionInterventionResponse({
+    success: true,
+    version: 1,
+    replayed: false,
+    workIntervention: { ...notPerformedIntervention, performedByStaffIds: ['staff-1'] },
+    allowedActions: ['intervention.complete'],
+  }),
+  'not-performed response cannot falsely claim a performer',
+);
+
+console.log('Field WorkIntervention + ScopeChange + PriceSnapshot + execution transport-contract acceptance: PASS');
