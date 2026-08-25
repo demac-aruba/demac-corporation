@@ -101,7 +101,7 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
     }
     const stable = stableRequestId(requestId);
     const expected = Number(expectedVersion);
-    if (!Number.isInteger(expected) || expected < 1) throw fieldError('expected_version_required', 'A positive expectedVersion is required.', 400);
+    if (!Number.isSafeInteger(expected) || expected < 1) throw fieldError('expected_version_required', 'A positive safe-integer expectedVersion is required.', 400);
 
     let result;
     await db.runTransaction(async (transaction) => {
@@ -109,9 +109,11 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
       const visitSnapshot = await transaction.get(visitRef);
       if (!visitSnapshot.exists) throw fieldError('visit_not_found', 'The requested Work Visit is not available.', 404);
       const storedVisit = { id: visitSnapshot.id, ...visitSnapshot.data() };
-      const canonicalVisit = projectCanonicalWorkVisit(storedVisit);
+      const initialProjection = projectCanonicalWorkVisit(storedVisit);
+      const workOrderId = text(initialProjection.workOrderId, 180);
+      if (!workOrderId) throw fieldError('visit_identity_conflict', 'The Work Visit is missing its Work Order identity.', 409);
 
-      const workOrderRef = db.collection('workOrders').doc(canonicalVisit.workOrderId);
+      const workOrderRef = db.collection('workOrders').doc(workOrderId);
       const workOrderSnapshot = await transaction.get(workOrderRef);
       if (!workOrderSnapshot.exists) throw fieldError('work_order_not_found', 'The Work Order for this visit is not available.', 404);
       const order = { id: workOrderSnapshot.id, ...workOrderSnapshot.data() };
@@ -120,14 +122,26 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
       const assignment = await resolveAssignment({ transaction, identity, order });
       const allowedActions = requireExecuteAssignment(identity, assignment);
 
+      const appointmentId = text(order.appointmentId, 180);
+      const customerId = text(order.clientId, 180);
+      const propertyId = text(order.propertyId, 180);
+      if (!appointmentId || !customerId || !propertyId) {
+        throw fieldError('work_order_identity_incomplete', 'The Work Order is missing required Field identity references.', 409, {
+          appointmentId: appointmentId || null,
+          customerId: customerId || null,
+          propertyId: propertyId || null,
+        });
+      }
+
       // The read model and mutation command must agree on which physical visit is current. A
       // caller that knows an older visit id may not mutate historical Field truth after a return
       // visit exists. Identity is revalidated against the current WorkOrder inside this transaction.
       assertExistingVisitCompatible(storedVisit, order);
+      const canonicalVisit = projectCanonicalWorkVisit(storedVisit, { appointmentId, propertyId });
       const historySnapshot = await transaction.get(
-        db.collection('workVisits').where('workOrderId', '==', canonicalVisit.workOrderId),
+        db.collection('workVisits').where('workOrderId', '==', workOrderId),
       );
-      const currentRecord = selectCurrentWorkVisit(snapshotRecords(historySnapshot), canonicalVisit.workOrderId);
+      const currentRecord = selectCurrentWorkVisit(snapshotRecords(historySnapshot), workOrderId);
       if (!currentRecord || text(currentRecord.id, 180) !== normalizedVisitId) {
         throw fieldError('visit_not_current', 'Only the current physical Work Visit may be transitioned.', 409, {
           currentVisitId: text(currentRecord?.id, 180) || null,
@@ -154,7 +168,7 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
       const transition = transitionCanonicalWorkVisit({ visit: canonicalVisit, to: target, at: occurredAt });
       const patch = activeTransitionPatch({ storedVisit, transitionedVisit: transition.next, target, identity, occurredAt });
       const nextStoredVisit = { ...storedVisit, ...patch };
-      const nextVisit = projectCanonicalWorkVisit(nextStoredVisit);
+      const nextVisit = projectCanonicalWorkVisit(nextStoredVisit, { appointmentId, propertyId });
       const event = transitionAuditEvent({
         requestId: stable,
         visit: canonicalVisit,
