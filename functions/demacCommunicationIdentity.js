@@ -1,6 +1,8 @@
 const { cleanText, hashId } = require("./bookingSchedulingPrimitives");
 
 const COMMUNICATION_IDENTITY_VERSION = 2;
+const COMMUNICATION_SETTINGS_COLLECTION = "businessSettings";
+const COMMUNICATION_SETTINGS_DOCUMENT = "whatsapp";
 const SUPPORTED_CHANNELS = new Set(["whatsapp"]);
 const SUPPORTED_PROVIDERS = new Set(["wacli", "meta"]);
 
@@ -127,6 +129,8 @@ function activeAccountDecision({ message = {}, conversation = {}, settings = {},
 
 module.exports = {
   COMMUNICATION_IDENTITY_VERSION,
+  COMMUNICATION_SETTINGS_COLLECTION,
+  COMMUNICATION_SETTINGS_DOCUMENT,
   activeAccountDecision,
   canonicalConversationDocumentId,
   canonicalConversationKey,
