@@ -5,18 +5,26 @@ import { useAuth } from '@/components/auth/auth-provider';
 import { addDaysToDateKey, arubaDateKey, arubaTimeKey, formatArubaDateKey } from '@/lib/aruba-date';
 import {
   attachExistingFieldAsset,
+  createPlannedFieldIntervention,
   getFieldJob,
   getFieldSchedule,
   prepareFieldVisit,
   transitionFieldVisit,
   type FieldActiveVisitTransition,
-  type FieldJobDetail,
+  type FieldExecutionJobDetail,
   type FieldScheduleJob,
   type FieldVisitStatus,
 } from '@/lib/field-authority';
+import { PlannedInterventionControls } from './planned-intervention-controls';
 import styles from './technician-field-home.module.css';
 
 type RangeKey = 'today' | 'tomorrow' | 'week';
+
+type PlannedInterventionInput = {
+  visitAssetId: string;
+  plannedWorkLineId: string;
+  serviceCatalogItemId: string;
+};
 
 const COMPLETED_WORK_ORDER_STATUSES = new Set(['Completada']);
 const ACTIVE_VISIT_STATUSES = new Set<FieldVisitStatus>(['en_route', 'on_site', 'in_progress']);
@@ -149,21 +157,27 @@ function DetailView({
   error,
   transitionError,
   assetError,
+  interventionError,
   transitioning,
   attachingAssetId,
+  creatingInterventionVisitAssetId,
   onTransition,
   onAttachAsset,
+  onCreatePlannedIntervention,
   onBack,
 }: {
-  job: FieldJobDetail | null;
+  job: FieldExecutionJobDetail | null;
   loading: boolean;
   error: string | null;
   transitionError: string | null;
   assetError: string | null;
+  interventionError: string | null;
   transitioning: FieldActiveVisitTransition | null;
   attachingAssetId: string | null;
+  creatingInterventionVisitAssetId: string | null;
   onTransition: (target: FieldActiveVisitTransition) => void;
   onAttachAsset: (assetId: string) => void;
+  onCreatePlannedIntervention: (input: PlannedInterventionInput) => void;
   onBack: () => void;
 }) {
   if (loading || error || !job) {
@@ -193,7 +207,7 @@ function DetailView({
       : [];
   const attachedAssetIds = new Set(job.visitAssets.map((visitAsset) => visitAsset.assetId));
   const knownEquipmentById = new Map(job.knownEquipment.map((equipment) => [equipment.id, equipment]));
-  const mutationBusy = transitioning !== null || attachingAssetId !== null;
+  const mutationBusy = transitioning !== null || attachingAssetId !== null || creatingInterventionVisitAssetId !== null;
 
   return (
     <div className={styles.shell}>
@@ -246,6 +260,16 @@ function DetailView({
               <div className={styles.info}><span>Cantidad estimada</span><strong>{job.estimatedQuantity > 0 ? `${job.estimatedQuantity} A/C` : 'Por confirmar en sitio'}</strong></div>
               <div className={styles.info}><span>Asignación</span><strong>{roleLabel(job.responsibility)} · {assignmentLabel(job.assignmentSource)}</strong></div>
             </div>
+            {job.plannedWorkProgress.length ? (
+              <div className={styles.infoGrid} style={{ marginTop: 12 }}>
+                {job.plannedWorkProgress.map((progress) => (
+                  <div className={styles.info} key={progress.id}>
+                    <span>{job.plannedWork.find((line) => line.id === progress.id)?.label || progress.id}</span>
+                    <strong>{progress.linkedActualQuantity} vinculada(s) · {progress.remainingQuantity} restante(s) de {progress.plannedQuantity}</strong>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             {job.customerFacingDescription ? <p className={styles.helper}>{job.customerFacingDescription}</p> : null}
           </section>
 
@@ -270,6 +294,13 @@ function DetailView({
                 </div>
               );
             }) : <p className={styles.helper}>Todavía no hay A/C confirmados físicamente para esta visita. La cantidad programada permanece intacta.</p>}
+            <PlannedInterventionControls
+              job={job}
+              mutationBusy={mutationBusy}
+              creatingVisitAssetId={creatingInterventionVisitAssetId}
+              error={interventionError}
+              onCreate={onCreatePlannedIntervention}
+            />
             {assetError ? <div className={styles.mutationError}>{assetError}</div> : null}
           </section>
 
@@ -340,7 +371,7 @@ export function TechnicianFieldHome() {
   const [range, setRange] = useState<RangeKey>('today');
   const [selectedWorkOrderId, setSelectedWorkOrderId] = useState<string | null>(null);
   const [selectedOwnerUserId, setSelectedOwnerUserId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<FieldJobDetail | null>(null);
+  const [detail, setDetail] = useState<FieldExecutionJobDetail | null>(null);
   const [detailOwnerUserId, setDetailOwnerUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -350,6 +381,8 @@ export function TechnicianFieldHome() {
   const [transitionError, setTransitionError] = useState<string | null>(null);
   const [attachingAssetId, setAttachingAssetId] = useState<string | null>(null);
   const [assetError, setAssetError] = useState<string | null>(null);
+  const [creatingInterventionVisitAssetId, setCreatingInterventionVisitAssetId] = useState<string | null>(null);
+  const [interventionError, setInterventionError] = useState<string | null>(null);
   const scheduleRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
   const mutationRequestRef = useRef(0);
@@ -380,6 +413,8 @@ export function TechnicianFieldHome() {
     setTransitionError(null);
     setAttachingAssetId(null);
     setAssetError(null);
+    setCreatingInterventionVisitAssetId(null);
+    setInterventionError(null);
   }, []);
 
   const loadDetail = useCallback(async (workOrderId: string, background = false) => {
@@ -454,6 +489,7 @@ export function TechnicianFieldHome() {
     setTransitioning(target);
     setTransitionError(null);
     setAssetError(null);
+    setInterventionError(null);
     try {
       let visit = currentDetail.fieldVisit;
       if (!visit) {
@@ -510,6 +546,7 @@ export function TechnicianFieldHome() {
     setAttachingAssetId(assetId);
     setAssetError(null);
     setTransitionError(null);
+    setInterventionError(null);
     try {
       await attachExistingFieldAsset(
         currentDetail.fieldVisit.id,
@@ -528,6 +565,49 @@ export function TechnicianFieldHome() {
       void loadDetail(workOrderId, true);
     } finally {
       if (mutationId === mutationRequestRef.current) setAttachingAssetId(null);
+      if (mutationLockRef.current === mutationId) mutationLockRef.current = null;
+    }
+  }, [detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
+
+  const runCreatePlannedIntervention = useCallback(async (input: PlannedInterventionInput) => {
+    if (mutationLockRef.current !== null) return;
+    const currentDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
+    if (!currentDetail?.fieldVisit) {
+      setInterventionError('La visita todavía no está disponible para vincular trabajo a un A/C.');
+      return;
+    }
+    if (!currentDetail.canAddPlannedIntervention) {
+      setInterventionError('Field Authority no autoriza vincular trabajo planificado en el estado o asignación actual.');
+      return;
+    }
+
+    const mutationId = ++mutationRequestRef.current;
+    mutationLockRef.current = mutationId;
+    const workOrderId = currentDetail.workOrderId;
+    setCreatingInterventionVisitAssetId(input.visitAssetId);
+    setInterventionError(null);
+    setTransitionError(null);
+    setAssetError(null);
+    try {
+      await createPlannedFieldIntervention(
+        currentDetail.fieldVisit.id,
+        input.visitAssetId,
+        input.plannedWorkLineId,
+        input.serviceCatalogItemId,
+        clientRequestId('planned-intervention', workOrderId),
+      );
+      if (mutationId !== mutationRequestRef.current) return;
+      // WorkIntervention is canonical child truth. Never synthesize it in React after a write;
+      // re-read so concurrent technician/device changes and server progress projection are retained.
+      await loadDetail(workOrderId, true);
+    } catch (mutationError) {
+      if (mutationId !== mutationRequestRef.current) return;
+      setInterventionError(mutationError instanceof Error ? mutationError.message : 'No se pudo vincular el trabajo planificado al A/C.');
+      // The transaction may have committed before a timeout. Re-read before allowing another user
+      // action instead of optimistically retrying with browser-owned truth.
+      void loadDetail(workOrderId, true);
+    } finally {
+      if (mutationId === mutationRequestRef.current) setCreatingInterventionVisitAssetId(null);
       if (mutationLockRef.current === mutationId) mutationLockRef.current = null;
     }
   }, [detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
@@ -610,10 +690,13 @@ export function TechnicianFieldHome() {
         error={detailError}
         transitionError={transitionError}
         assetError={assetError}
+        interventionError={interventionError}
         transitioning={transitioning}
         attachingAssetId={attachingAssetId}
+        creatingInterventionVisitAssetId={creatingInterventionVisitAssetId}
         onTransition={(target) => void runVisitTransition(target)}
         onAttachAsset={(assetId) => void runAttachAsset(assetId)}
+        onCreatePlannedIntervention={(input) => void runCreatePlannedIntervention(input)}
         onBack={closeJob}
       />
     );
