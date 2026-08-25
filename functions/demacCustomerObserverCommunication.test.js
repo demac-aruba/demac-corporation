@@ -1,5 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const { getApps, initializeApp } = require("firebase-admin/app");
 
 if (!getApps().length) initializeApp({ projectId: "demo-demac", storageBucket: "demo-demac.appspot.com" });
@@ -53,4 +55,14 @@ test("voice Observer consumes only completed transcript provenance", () => {
   assert.equal(observerContent(before), "");
   assert.equal(observerContent(after), "Cancela mi cita");
   assert.equal(transcriptBecameReady(before, after), true);
+});
+
+test("Observer remains a service stage and cannot regain its own Firestore wake-up triggers", () => {
+  const source = fs.readFileSync(path.join(__dirname, "demacCustomerObserverCommunication.js"), "utf8");
+  assert.doesNotMatch(source, /onDocumentCreated|onDocumentUpdated/);
+  assert.doesNotMatch(source, /exports\.observeCustomerInboundMessage|exports\.observeCustomerVoiceTranscript/);
+
+  const bootstrap = fs.readFileSync(path.join(__dirname, "bootstrap.js"), "utf8");
+  assert.doesNotMatch(bootstrap, /customerObserverCommunication/);
+  assert.match(bootstrap, /processCustomerAgentTurnWakeup:\s*customerTurnOrchestrator\.processCustomerAgentTurnWakeup/);
 });
