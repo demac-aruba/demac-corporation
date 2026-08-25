@@ -5,6 +5,11 @@ const { defineSecret } = require("firebase-functions/params");
 const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const customerAgentCommunication = require("./demacCustomerAgentCommunication");
 const {
+  canonicalVoiceRuntimeMessage,
+  customerSemanticContent,
+  messageMediaType,
+} = require("./demacCustomerTurn");
+const {
   MAYA_SETTINGS_COLLECTION,
   MAYA_SETTINGS_DOCUMENT,
   mayaReplyDecision,
@@ -98,22 +103,14 @@ async function evaluateConversationPolicy(conversationId, conversation = {}) {
 }
 
 function voiceTranscriptBecameReady(before = {}, after = {}) {
-  const mediaType = cleanText(after.mediaType || after.type, 40).toLowerCase();
-  if (!["audio", "voice"].includes(mediaType) || after.direction !== "inbound") return false;
-  const beforeTranscript = cleanText(before.rawTranscript || before.transcript, 8_000);
-  const afterTranscript = cleanText(after.rawTranscript || after.transcript, 8_000);
+  if (!["audio", "voice"].includes(messageMediaType(after)) || after.direction !== "inbound") return false;
+  const beforeTranscript = customerSemanticContent(before, 8_000);
+  const afterTranscript = customerSemanticContent(after, 8_000);
   return after.transcriptionStatus === "completed" && Boolean(afterTranscript) && afterTranscript !== beforeTranscript;
 }
 
 function voiceTranscriptRuntimeMessage(message = {}) {
-  const transcript = cleanText(message.rawTranscript || message.transcript, 8_000);
-  if (!transcript) return null;
-  return {
-    ...message,
-    text: transcript,
-    mediaCaption: "",
-    mayaInputModality: "voice_transcript",
-  };
+  return canonicalVoiceRuntimeMessage(message);
 }
 
 exports.processCustomerAgentInbound = onDocumentCreated(
@@ -130,10 +127,8 @@ exports.processCustomerAgentInbound = onDocumentCreated(
     if (!snapshot) return;
     const message = { id: snapshot.id, ...snapshot.data() };
     if (!message || message.direction !== "inbound") return;
-    const mediaType = cleanText(message.mediaType || message.type, 40).toLowerCase();
-    if (["audio", "voice"].includes(mediaType) && !cleanText(message.rawTranscript || message.transcript, 8_000)) {
-      return;
-    }
+    const mediaType = messageMediaType(message);
+    if (["audio", "voice"].includes(mediaType) && !customerSemanticContent(message, 8_000)) return;
 
     const runtimeMessage = ["audio", "voice"].includes(mediaType)
       ? voiceTranscriptRuntimeMessage(message)
