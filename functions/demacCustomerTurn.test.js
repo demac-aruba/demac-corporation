@@ -55,6 +55,5 @@ test("outbound voice remains conversation context only when it has explicit outb
     id: "OUT-1",
     direction: "outbound",
     text: "Te envío la nota.",
-    customerInputVersion: null,
   });
 });
