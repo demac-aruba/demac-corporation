@@ -10,6 +10,8 @@ import {
 import {
   parseFieldCreateAdditionalInterventionResponse,
   parseFieldCreatePlannedInterventionResponse,
+  parseFieldTransitionInterventionResponse,
+  type FieldInterventionExecutionTarget,
   type FieldTechnicianScopeChangeOrigin,
 } from './field-intervention-contract';
 import {
@@ -44,12 +46,15 @@ export type {
   FieldAvailableService,
   FieldCreateAdditionalInterventionResponse,
   FieldCreatePlannedInterventionResponse,
+  FieldInterventionExecutionOption,
+  FieldInterventionExecutionTarget,
   FieldPlannedInterventionOption,
   FieldPlannedWorkProgress,
   FieldPriceSnapshot,
   FieldScopeChange,
   FieldScopeChangeOrigin,
   FieldTechnicianScopeChangeOrigin,
+  FieldTransitionInterventionResponse,
   FieldWorkIntervention,
   FieldWorkInterventionOrigin,
   FieldWorkInterventionRequester,
@@ -253,6 +258,24 @@ export async function recordAdditionalFieldInterventionDecision(
     interventionId,
     decision,
     receiverName,
+    note,
+    requestId,
+  }));
+}
+
+export async function transitionFieldIntervention(
+  visitId: string,
+  interventionId: string,
+  to: FieldInterventionExecutionTarget,
+  expectedVersion: number,
+  note: string,
+  requestId: string,
+) {
+  return parseFieldTransitionInterventionResponse(await callFieldAuthority('transition_intervention', {
+    visitId,
+    interventionId,
+    to,
+    expectedVersion,
     note,
     requestId,
   }));
