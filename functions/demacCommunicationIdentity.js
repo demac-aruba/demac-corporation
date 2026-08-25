@@ -26,7 +26,13 @@ function normalizeRemoteConversationId(value) {
   return normalizedIdentityText(value, 300);
 }
 
-function resolveCommunicationAccountId({ message = {}, conversation = {}, settings = {}, payload = {} } = {}) {
+function configuredCommunicationAccountId(settings = {}) {
+  return normalizeCommunicationAccountId(
+    settings.activeCommunicationAccountId || settings.wacliCommunicationAccountId,
+  );
+}
+
+function resolveCommunicationAccountId({ message = {}, conversation = {}, payload = {} } = {}) {
   return normalizeCommunicationAccountId(
     message.communicationAccountId
       || conversation.communicationAccountId
@@ -36,20 +42,18 @@ function resolveCommunicationAccountId({ message = {}, conversation = {}, settin
       || payload.AccountID
       || payload?.Identity?.CommunicationAccountId
       || payload?.Identity?.AccountId
-      || payload?.Identity?.AccountID
-      || settings.activeCommunicationAccountId
-      || settings.wacliCommunicationAccountId,
+      || payload?.Identity?.AccountID,
   );
 }
 
-function communicationIdentityParts({ message = {}, conversation = {}, settings = {}, payload = {} } = {}) {
+function communicationIdentityParts({ message = {}, conversation = {}, payload = {} } = {}) {
   const provider = normalizeCommunicationProvider(
     message.provider || conversation.provider || payload.provider || payload.Provider || "wacli",
   );
   const channel = normalizeCommunicationChannel(
     message.channel || conversation.channel || payload.channel || payload.Channel || "whatsapp",
   );
-  const communicationAccountId = resolveCommunicationAccountId({ message, conversation, settings, payload });
+  const communicationAccountId = resolveCommunicationAccountId({ message, conversation, payload });
   const remoteConversationId = normalizeRemoteConversationId(
     message.remoteConversationId
       || conversation.remoteConversationId
@@ -94,9 +98,9 @@ function canonicalProviderMessageKey({ providerMessageId, ...input } = {}) {
 }
 
 function activeAccountDecision({ message = {}, conversation = {}, settings = {}, payload = {} } = {}) {
-  const decision = communicationIdentityDecision({ message, conversation, settings, payload });
+  const decision = communicationIdentityDecision({ message, conversation, payload });
   if (!decision.valid) return { allowed: false, reason: decision.reason, identity: decision.identity };
-  const activeCommunicationAccountId = normalizeCommunicationAccountId(settings.activeCommunicationAccountId);
+  const activeCommunicationAccountId = configuredCommunicationAccountId(settings);
   if (!activeCommunicationAccountId) {
     return { allowed: false, reason: "active-communication-account-not-configured", identity: decision.identity };
   }
@@ -114,6 +118,7 @@ module.exports = {
   canonicalProviderMessageKey,
   communicationIdentityDecision,
   communicationIdentityParts,
+  configuredCommunicationAccountId,
   normalizeCommunicationAccountId,
   normalizeCommunicationChannel,
   normalizeCommunicationProvider,
