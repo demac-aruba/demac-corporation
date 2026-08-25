@@ -6,6 +6,7 @@ const { defineSecret } = require("firebase-functions/params");
 const { onTaskDispatched } = require("firebase-functions/tasks");
 const customerAgentCommunication = require("./demacCustomerAgentCommunication");
 const customerObserverCommunication = require("./demacCustomerObserverCommunication");
+const { resolveInboundParty } = require("./customerContactDirectory");
 const {
   MAYA_SETTINGS_COLLECTION,
   MAYA_SETTINGS_DOCUMENT,
@@ -32,6 +33,8 @@ const MIN_DEBOUNCE_MS = 10_000;
 const MAX_DEBOUNCE_MS = 15_000;
 const TURN_TASK_FUNCTION = "processCustomerAgentTurnWakeup";
 const DEFERRED_QUEUE_STATUSES = new Set(["deferred", "queued"]);
+const AUTHORIZED_CASE_STATES = new Set(["APPOINTMENT_MATCHED", "AWAITING_CUSTOMER_DECISION"]);
+const AUTHORIZED_CASE_WORKFLOWS = new Set(["cancellation", "reschedule"]);
 
 function safeDocumentId(value) {
   return String(value || "unknown")
@@ -92,10 +95,34 @@ function staleTurnStatus(epochReason = "") {
   return String(epochReason).includes("ownership") ? "skipped_human" : "coalesced";
 }
 
+function authorizedWorkflowFromObservation(observationResult = {}, partyResolution = {}) {
+  if (partyResolution.status !== "existing" || partyResolution.ambiguous === true) return "";
+  const observation = observationResult.observation || {};
+  const caseResult = observationResult.caseResult || {};
+  const workflow = cleanText(observation.intent, 80).toLowerCase();
+  if (!AUTHORIZED_CASE_WORKFLOWS.has(workflow)) return "";
+  if (caseResult.processed !== true || !cleanText(caseResult.appointmentId, 180)) return "";
+  if (!AUTHORIZED_CASE_STATES.has(cleanText(caseResult.state, 80))) return "";
+  if (cleanText(caseResult.attentionReason, 180)) return "";
+  const partyClientId = cleanText(partyResolution.clientId, 180);
+  const caseClientId = cleanText(caseResult.customerId, 180);
+  if (!partyClientId || !caseClientId || partyClientId !== caseClientId) return "";
+  return workflow;
+}
+
+function replyPolicyContext({ partyResolution = {}, observationResult = {} } = {}) {
+  return {
+    isNewContact: partyResolution.status === "new_contact" && partyResolution.isNewContact === true,
+    authorizedWorkflow: authorizedWorkflowFromObservation(observationResult, partyResolution),
+    partyResolution,
+  };
+}
+
 function createCustomerTurnOrchestrator({
   database = db,
   taskQueue = null,
   observerProcessor = customerObserverCommunication.processObservedMessage,
+  partyResolver = resolveInboundParty,
   agentCommunication = customerAgentCommunication,
   clock = () => Date.now(),
 } = {}) {
@@ -167,23 +194,13 @@ function createCustomerTurnOrchestrator({
     const snapshot = await database.collection("communicationConversations").doc(conversationId).get();
     if (!snapshot.exists) return { allowed: false, reason: "canonical-conversation-not-materialized", settings, communicationSettings, conversation: {} };
     const conversation = snapshot.data() || {};
-    const decision = mayaObservationDecision({
-      message,
-      conversation,
-      settings,
-      communicationSettings,
-    });
+    const decision = mayaObservationDecision({ message, conversation, settings, communicationSettings });
     return { ...decision, settings, communicationSettings, conversation };
   }
 
   async function enqueueWake({ conversationId, messageId, customerInputVersion, ownershipVersion, eligibleAtMs }) {
     const delayMs = Math.max(0, eligibleAtMs - clock());
-    await queueClient().enqueue({
-      conversationId,
-      messageId,
-      customerInputVersion,
-      ownershipVersion,
-    }, {
+    await queueClient().enqueue({ conversationId, messageId, customerInputVersion, ownershipVersion }, {
       scheduleDelaySeconds: Math.ceil(delayMs / 1000),
       dispatchDeadlineSeconds: 120,
     });
@@ -201,17 +218,12 @@ function createCustomerTurnOrchestrator({
     const expectedOwnershipVersion = nonNegativeEpoch(preflight.conversation?.ownershipVersion);
     if (expectedOwnershipVersion === null) return { scheduled: false, reason: "missing-ownership-version" };
     const currentInputVersion = positiveEpoch(preflight.conversation?.customerInputVersion);
-    if (currentInputVersion === null || currentInputVersion !== inputVersion) {
-      return { scheduled: false, reason: "stale-customer-turn-before-schedule" };
-    }
+    if (currentInputVersion === null || currentInputVersion !== inputVersion) return { scheduled: false, reason: "stale-customer-turn-before-schedule" };
 
     const eligibleAtMs = eligibleAtMillis({ message, settings: preflight.settings, reactivate, now: clock() });
     const queued = await agentCommunication.enqueueInbound({ messageId, message, reactivate }, database);
     if (!queued || queued.completed) {
-      return {
-        scheduled: false,
-        reason: queued?.processing ? "already-processing" : queued?.completed ? "already-completed" : "queue-not-created",
-      };
+      return { scheduled: false, reason: queued?.processing ? "already-processing" : queued?.completed ? "already-completed" : "queue-not-created" };
     }
     await queued.ref.set({
       status: "deferred",
@@ -223,27 +235,12 @@ function createCustomerTurnOrchestrator({
       deferredAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
-    await enqueueWake({
-      conversationId,
-      messageId,
-      customerInputVersion: inputVersion,
-      ownershipVersion: expectedOwnershipVersion,
-      eligibleAtMs,
-    });
-    return {
-      scheduled: true,
-      conversationId,
-      messageId,
-      ownershipVersion: expectedOwnershipVersion,
-      customerInputVersion: inputVersion,
-      eligibleAtMs,
-    };
+    await enqueueWake({ conversationId, messageId, customerInputVersion: inputVersion, ownershipVersion: expectedOwnershipVersion, eligibleAtMs });
+    return { scheduled: true, conversationId, messageId, ownershipVersion: expectedOwnershipVersion, customerInputVersion: inputVersion, eligibleAtMs };
   }
 
   async function loadDeferredTurns(conversationId) {
-    const snapshot = await database.collection(agentCommunication.AGENT_QUEUE_COLLECTION)
-      .where("conversationId", "==", conversationId)
-      .get();
+    const snapshot = await database.collection(agentCommunication.AGENT_QUEUE_COLLECTION).where("conversationId", "==", conversationId).get();
     return snapshot.docs.map((doc) => ({ ref: doc.ref, id: doc.id, ...doc.data() }));
   }
 
@@ -258,11 +255,7 @@ function createCustomerTurnOrchestrator({
     if (!older.length) return;
     const batch = database.batch();
     for (const item of older) {
-      batch.set(item.ref, {
-        status: "coalesced",
-        coalescedIntoMessageId: selected.messageId,
-        completedAt: FieldValue.serverTimestamp(),
-      }, { merge: true });
+      batch.set(item.ref, { status: "coalesced", coalescedIntoMessageId: selected.messageId, completedAt: FieldValue.serverTimestamp() }, { merge: true });
     }
     await batch.commit();
   }
@@ -272,25 +265,12 @@ function createCustomerTurnOrchestrator({
     let reason = "unknown";
     await database.runTransaction(async (transaction) => {
       const snapshot = await transaction.get(selected.ref);
-      if (!snapshot.exists) {
-        reason = "queue-item-missing";
-        return;
-      }
+      if (!snapshot.exists) { reason = "queue-item-missing"; return; }
       const current = { id: snapshot.id, ...snapshot.data() };
-      if (!DEFERRED_QUEUE_STATUSES.has(cleanText(current.status, 40))) {
-        reason = "queue-item-not-deferred";
-        return;
-      }
+      if (!DEFERRED_QUEUE_STATUSES.has(cleanText(current.status, 40))) { reason = "queue-item-not-deferred"; return; }
       const eligibleAtMs = queueEligibilityMillis(current);
-      if (!eligibleAtMs || eligibleAtMs > now) {
-        reason = "turn-not-eligible-yet";
-        return;
-      }
-      transaction.set(selected.ref, {
-        status: "queued",
-        wakeupClaimedAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
-      }, { merge: true });
+      if (!eligibleAtMs || eligibleAtMs > now) { reason = "turn-not-eligible-yet"; return; }
+      transaction.set(selected.ref, { status: "queued", wakeupClaimedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
       promoted = true;
       reason = "eligible";
     });
@@ -299,11 +279,7 @@ function createCustomerTurnOrchestrator({
 
   async function suppressStaleTurn(selected, epochReason, phase) {
     const status = staleTurnStatus(epochReason);
-    await selected.ref.set({
-      status,
-      discardReason: `${phase}:${epochReason || "unknown"}`,
-      completedAt: FieldValue.serverTimestamp(),
-    }, { merge: true });
+    await selected.ref.set({ status, discardReason: `${phase}:${epochReason || "unknown"}`, completedAt: FieldValue.serverTimestamp() }, { merge: true });
     return { processed: false, reason: phase, epochReason, status };
   }
 
@@ -327,27 +303,15 @@ function createCustomerTurnOrchestrator({
       return { processed: false, reason: "missing-deferred-turn-epochs" };
     }
     if (selectedEligibleAt > now) {
-      await enqueueWake({
-        conversationId: canonicalConversationId,
-        messageId: selected.messageId,
-        customerInputVersion: expectedCustomerInputVersion,
-        ownershipVersion: expectedOwnershipVersion,
-        eligibleAtMs: selectedEligibleAt,
-      });
+      await enqueueWake({ conversationId: canonicalConversationId, messageId: selected.messageId, customerInputVersion: expectedCustomerInputVersion, ownershipVersion: expectedOwnershipVersion, eligibleAtMs: selectedEligibleAt });
       return { processed: false, deferred: true, reason: "turn-not-eligible-yet", eligibleAtMs: selectedEligibleAt };
     }
 
     const conversationRef = database.collection("communicationConversations").doc(canonicalConversationId);
     const conversationSnapshot = await conversationRef.get();
     if (!conversationSnapshot.exists) return { processed: false, reason: "canonical-conversation-not-materialized" };
-    const initialEpoch = communicationEpochDecision({
-      conversation: conversationSnapshot.data() || {},
-      expectedOwnershipVersion,
-      expectedCustomerInputVersion,
-    });
-    if (!initialEpoch.allowed) {
-      return suppressStaleTurn(selected, initialEpoch.reason, "stale-communication-epoch-before-debounce-wakeup");
-    }
+    const initialEpoch = communicationEpochDecision({ conversation: conversationSnapshot.data() || {}, expectedOwnershipVersion, expectedCustomerInputVersion });
+    if (!initialEpoch.allowed) return suppressStaleTurn(selected, initialEpoch.reason, "stale-communication-epoch-before-debounce-wakeup");
 
     const promotion = await promoteIfEligible(selected, now);
     if (!promotion.promoted) return { processed: false, deferred: promotion.reason === "turn-not-eligible-yet", reason: promotion.reason };
@@ -357,47 +321,36 @@ function createCustomerTurnOrchestrator({
     if (!messageSnapshot.exists) throw new Error("Canonical customer message is missing at deferred turn wake-up.");
     const message = { id: messageSnapshot.id, ...messageSnapshot.data() };
 
-    const observation = await observerProcessor({
-      messageId: messageSnapshot.id,
-      message,
-      expectedOwnershipVersion,
-      expectedCustomerInputVersion,
-    });
+    const observation = await observerProcessor({ messageId: messageSnapshot.id, message, expectedOwnershipVersion, expectedCustomerInputVersion });
 
     const currentConversationSnapshot = await conversationRef.get();
     if (!currentConversationSnapshot.exists) return { processed: false, reason: "canonical-conversation-not-materialized" };
     const currentConversation = currentConversationSnapshot.data() || {};
-    const postObserverEpoch = communicationEpochDecision({
-      conversation: currentConversation,
-      expectedOwnershipVersion,
-      expectedCustomerInputVersion,
-    });
-    if (!postObserverEpoch.allowed) {
-      return suppressStaleTurn(selected, postObserverEpoch.reason, "stale-communication-epoch-after-observer");
-    }
+    const postObserverEpoch = communicationEpochDecision({ conversation: currentConversation, expectedOwnershipVersion, expectedCustomerInputVersion });
+    if (!postObserverEpoch.allowed) return suppressStaleTurn(selected, postObserverEpoch.reason, "stale-communication-epoch-after-observer");
     if (!agentCommunication.shouldRunAgent(currentConversation)) {
-      await selected.ref.set({
-        status: "skipped_human",
-        discardReason: "human-active-after-observer",
-        completedAt: FieldValue.serverTimestamp(),
-      }, { merge: true });
+      await selected.ref.set({ status: "skipped_human", discardReason: "human-active-after-observer", completedAt: FieldValue.serverTimestamp() }, { merge: true });
       return { processed: false, observed: observation?.observed === true, reason: "human-active-after-observer" };
     }
 
-    const { decision } = await evaluateInboundPolicy(message);
+    const partyResolution = await partyResolver(database, {
+      clientId: cleanText(currentConversation.customerId || message.customerId, 180),
+      phone: currentConversation.phone || message.phone,
+      whatsapp: currentConversation.whatsapp || message.whatsapp || currentConversation.phone || message.phone,
+    });
+    const policyContext = replyPolicyContext({ partyResolution, observationResult: observation });
+    const { decision } = await evaluateInboundPolicy(message, policyContext);
     if (!decision.allowed) {
       await selected.ref.set({
         status: "skipped_policy",
         discardReason: `maya-reply-policy:${decision.reason}`,
+        partyResolutionStatus: cleanText(partyResolution.status, 40) || "unknown",
         completedAt: FieldValue.serverTimestamp(),
       }, { merge: true });
       return { processed: false, observed: observation?.observed === true, reason: `reply-policy-blocked:${decision.reason}` };
     }
 
-    return agentCommunication.processQueueEvent({
-      messageId: cleanText(message.messageId || message.id, 300),
-      message,
-    });
+    return agentCommunication.processQueueEvent({ messageId: cleanText(message.messageId || message.id, 300), message });
   }
 
   async function scheduleConversationReactivation(conversationId, conversation = {}) {
@@ -409,14 +362,8 @@ function createCustomerTurnOrchestrator({
     const snapshot = await database.collection("whatsappMessages").doc(cleanText(latest.id, 300)).get();
     if (!snapshot.exists) return { scheduled: false, reason: "canonical-message-missing" };
     const message = { id: snapshot.id, ...snapshot.data() };
-    if (cleanText(message.conversationId, 300) !== canonicalConversationId) {
-      return { scheduled: false, reason: "canonical-message-conversation-mismatch" };
-    }
-    return scheduleInboundTurn({
-      messageId: cleanText(message.messageId || message.id, 300),
-      message,
-      reactivate: true,
-    });
+    if (cleanText(message.conversationId, 300) !== canonicalConversationId) return { scheduled: false, reason: "canonical-message-conversation-mismatch" };
+    return scheduleInboundTurn({ messageId: cleanText(message.messageId || message.id, 300), message, reactivate: true });
   }
 
   return {
@@ -443,29 +390,25 @@ exports.processCustomerAgentTurnWakeup = onTaskDispatched(
     memory: "512MiB",
     timeoutSeconds: 180,
     secrets: [openAiApiKey],
-    retryConfig: {
-      maxAttempts: 5,
-      minBackoffSeconds: 5,
-      maxBackoffSeconds: 60,
-      maxDoublings: 3,
-    },
-    rateLimits: {
-      maxConcurrentDispatches: 10,
-      maxDispatchesPerSecond: 20,
-    },
+    retryConfig: { maxAttempts: 5, minBackoffSeconds: 5, maxBackoffSeconds: 60, maxDoublings: 3 },
+    rateLimits: { maxConcurrentDispatches: 10, maxDispatchesPerSecond: 20 },
   },
   async (request) => orchestrator.wakeConversationTurn(request.data || {}),
 );
 
+module.exports.AUTHORIZED_CASE_STATES = AUTHORIZED_CASE_STATES;
+module.exports.AUTHORIZED_CASE_WORKFLOWS = AUTHORIZED_CASE_WORKFLOWS;
 module.exports.DEFAULT_DEBOUNCE_MS = DEFAULT_DEBOUNCE_MS;
 module.exports.MIN_DEBOUNCE_MS = MIN_DEBOUNCE_MS;
 module.exports.MAX_DEBOUNCE_MS = MAX_DEBOUNCE_MS;
 module.exports.TURN_TASK_FUNCTION = TURN_TASK_FUNCTION;
+module.exports.authorizedWorkflowFromObservation = authorizedWorkflowFromObservation;
 module.exports.configuredDebounceMs = configuredDebounceMs;
 module.exports.createCustomerTurnOrchestrator = createCustomerTurnOrchestrator;
 module.exports.eligibleAtMillis = eligibleAtMillis;
 module.exports.inboundBaseTimestamp = inboundBaseTimestamp;
 module.exports.latestDeferredTurn = latestDeferredTurn;
 module.exports.queueEligibilityMillis = queueEligibilityMillis;
+module.exports.replyPolicyContext = replyPolicyContext;
 module.exports.staleTurnStatus = staleTurnStatus;
 module.exports.timestampMillis = timestampMillis;
