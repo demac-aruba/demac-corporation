@@ -142,7 +142,12 @@ async function updateConversationIfCurrent({
   return result;
 }
 
-async function processObservedMessage({ messageId, message = {} } = {}) {
+async function processObservedMessage({
+  messageId,
+  message = {},
+  expectedOwnershipVersion: suppliedOwnershipVersion,
+  expectedCustomerInputVersion: suppliedCustomerInputVersion,
+} = {}) {
   if (message.direction !== "inbound") return { observed: false, reason: "not-canonical-inbound" };
   const text = observerContent(message);
   if (!text) return { observed: false, reason: "no-observer-content" };
@@ -162,8 +167,26 @@ async function processObservedMessage({ messageId, message = {} } = {}) {
   const decision = mayaObservationDecision({ message, conversation, settings, communicationSettings });
   if (!decision.allowed) return { observed: false, reason: decision.reason };
 
-  const expectedOwnershipVersion = nonNegativeEpoch(conversation.ownershipVersion);
-  const expectedCustomerInputVersion = positiveEpoch(message.customerInputVersion);
+  const currentOwnershipVersion = nonNegativeEpoch(conversation.ownershipVersion);
+  const currentCustomerInputVersion = positiveEpoch(message.customerInputVersion);
+  const expectedOwnershipVersion = suppliedOwnershipVersion === undefined
+    ? currentOwnershipVersion
+    : nonNegativeEpoch(suppliedOwnershipVersion);
+  const expectedCustomerInputVersion = suppliedCustomerInputVersion === undefined
+    ? currentCustomerInputVersion
+    : positiveEpoch(suppliedCustomerInputVersion);
+  if (expectedOwnershipVersion === null || expectedCustomerInputVersion === null) {
+    return { observed: false, reason: "stale-communication-epoch", epochReason: "observer-epoch-missing" };
+  }
+  const initialEpochDecision = communicationEpochDecision({
+    conversation,
+    expectedOwnershipVersion,
+    expectedCustomerInputVersion,
+  });
+  if (!initialEpochDecision.allowed) {
+    return { observed: false, reason: "stale-communication-epoch", epochReason: initialEpochDecision.reason };
+  }
+
   const fingerprint = observerSourceFingerprint(message, text);
   const messageRef = db.collection("whatsappMessages").doc(safeDocumentId(messageId));
   const claim = await claimObservation(messageRef, fingerprint);
@@ -174,18 +197,15 @@ async function processObservedMessage({ messageId, message = {} } = {}) {
 
   try {
     const observation = await observer.observe({ apiKey: openAiApiKey.value(), text });
-    let caseResult = { processed: false, reason: "stale-communication-epoch" };
-    if (expectedOwnershipVersion !== null && expectedCustomerInputVersion !== null) {
-      caseResult = await cases.processObservation({
-        communicationAccountId: decision.identity?.communicationAccountId,
-        conversationId,
-        conversation,
-        message: { id: messageId, ...message },
-        observation,
-        expectedOwnershipVersion,
-        expectedCustomerInputVersion,
-      });
-    }
+    const caseResult = await cases.processObservation({
+      communicationAccountId: decision.identity?.communicationAccountId,
+      conversationId,
+      conversation,
+      message: { id: messageId, ...message },
+      observation,
+      expectedOwnershipVersion,
+      expectedCustomerInputVersion,
+    });
     const operationalInsight = {
       intent: observation.intent,
       confidence: observation.confidence,
@@ -198,24 +218,22 @@ async function processObservedMessage({ messageId, message = {} } = {}) {
       appointmentId: caseResult.appointmentId || null,
       dispatchHoldActive: caseResult.dispatchHoldActive === true,
     };
-    const conversationUpdate = expectedOwnershipVersion !== null && expectedCustomerInputVersion !== null
-      ? await updateConversationIfCurrent({
-        conversationRef,
-        expectedOwnershipVersion,
-        expectedCustomerInputVersion,
-        patch: {
-          mayaObservationEnabled: true,
-          mayaLastObservedMessageId: cleanText(message.messageId || messageId, 300),
-          mayaLastObservedAt: FieldValue.serverTimestamp(),
-          mayaInsight: operationalInsight,
-          mayaAttentionRequired: operationalInsight.requiresAttention === true || Boolean(caseResult.attentionReason),
-          mayaAttentionReason: caseResult.attentionReason || null,
-          mayaCaseId: caseResult.caseId || null,
-          mayaDispatchRisk: operationalInsight.dispatchRisk === true,
-          updatedAt: FieldValue.serverTimestamp(),
-        },
-      })
-      : { updated: false, reason: "stale-communication-epoch", epochReason: "observer-epoch-missing" };
+    const conversationUpdate = await updateConversationIfCurrent({
+      conversationRef,
+      expectedOwnershipVersion,
+      expectedCustomerInputVersion,
+      patch: {
+        mayaObservationEnabled: true,
+        mayaLastObservedMessageId: cleanText(message.messageId || messageId, 300),
+        mayaLastObservedAt: FieldValue.serverTimestamp(),
+        mayaInsight: operationalInsight,
+        mayaAttentionRequired: operationalInsight.requiresAttention === true || Boolean(caseResult.attentionReason),
+        mayaAttentionReason: caseResult.attentionReason || null,
+        mayaCaseId: caseResult.caseId || null,
+        mayaDispatchRisk: operationalInsight.dispatchRisk === true,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+    });
     const suppressedReason = caseResult.reason === "stale-communication-epoch"
       ? caseResult.epochReason || caseResult.reason
       : conversationUpdate.reason === "stale-communication-epoch"
@@ -238,18 +256,16 @@ async function processObservedMessage({ messageId, message = {} } = {}) {
       mayaObservationError: cleanText(error?.message || error, 500),
       mayaObservationFailedAt: FieldValue.serverTimestamp(),
     });
-    if (expectedOwnershipVersion !== null && expectedCustomerInputVersion !== null) {
-      await updateConversationIfCurrent({
-        conversationRef,
-        expectedOwnershipVersion,
-        expectedCustomerInputVersion,
-        patch: {
-          mayaAttentionRequired: true,
-          mayaAttentionReason: "observer-failed",
-          updatedAt: FieldValue.serverTimestamp(),
-        },
-      });
-    }
+    await updateConversationIfCurrent({
+      conversationRef,
+      expectedOwnershipVersion,
+      expectedCustomerInputVersion,
+      patch: {
+        mayaAttentionRequired: true,
+        mayaAttentionReason: "observer-failed",
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+    });
     throw error;
   }
 }
