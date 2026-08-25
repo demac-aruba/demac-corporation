@@ -122,11 +122,13 @@ const representativeJob = {
   assignmentSource: 'direct_staff',
   allowedActions: ['read', 'execute'],
   fieldVisit: null,
+  canPrepareVisit: true,
 };
 const validSchedule = parseFieldScheduleResponse({ success: true, version: 1, jobs: [representativeJob] });
 assert(validSchedule.jobs[0].workOrderId === 'WO-1', 'valid public schedule transport should parse');
 assert(validSchedule.jobs[0].fieldVisit === null, 'scheduled job may be readable before a physical WorkVisit is prepared');
-const validJob = parseFieldJobResponse({ success: true, version: 1, job: { ...representativeJob, fieldVisit: representativeVisit, knownEquipment: [] } });
+assert(validSchedule.jobs[0].canPrepareVisit === true, 'server should explicitly project preparation eligibility');
+const validJob = parseFieldJobResponse({ success: true, version: 1, job: { ...representativeJob, fieldVisit: representativeVisit, canPrepareVisit: false, knownEquipment: [] } });
 assert(validJob.job.knownEquipment.length === 0, 'valid public job transport should parse');
 assert(validJob.job.fieldVisit?.status === 'scheduled', 'job transport should preserve canonical WorkVisit state separately from WorkOrder status');
 
@@ -154,6 +156,7 @@ assert(validTransition.visit.status === 'en_route' && validTransition.visit.vers
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 2, jobs: [] }), 'unknown API version must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1 }), 'missing jobs array must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1, jobs: [{ ...representativeJob, fieldVisit: undefined }] }), 'missing current-visit projection must fail closed');
+assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1, jobs: [{ ...representativeJob, canPrepareVisit: undefined }] }), 'missing preparation projection must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1, jobs: [{ ...representativeJob, allowedActions: null }] }), 'malformed action projection must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1, jobs: [{ ...representativeJob, allowedActions: ['read', 'future.action'] }] }), 'unknown server action name must fail closed');
 assertThrows(() => parseFieldJobResponse({ success: true, version: 1, job: representativeJob }), 'missing knownEquipment must fail closed');
