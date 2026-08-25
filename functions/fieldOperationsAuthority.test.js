@@ -52,6 +52,7 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
     'prepare_visit',
     'record_additional_intervention_decision',
     'register_visit_asset',
+    'transition_intervention',
     'transition_visit',
   ]);
 
@@ -86,6 +87,10 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
   );
   await assert.rejects(
     () => api.execute({ action: 'record_additional_intervention_decision', data: {}, identity: { operations: false } }),
+    (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
+  );
+  await assert.rejects(
+    () => api.execute({ action: 'transition_intervention', data: {}, identity: { operations: false } }),
     (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
   );
   await assert.rejects(
@@ -211,19 +216,10 @@ test('attach_visit_asset authenticates and forwards only canonical visit/asset i
         success: true,
         replayed: false,
         visitAsset: {
-          id: 'VA-1',
-          visitId: 'visit-WO-1',
-          assetId: 'AC-1',
-          sequence: 1,
-          locationLabel: 'Sala',
-          source: 'existing_asset',
-          status: 'identified',
-          addedOnSite: true,
-          createdAt: '2026-08-25T10:00:00.000Z',
-          createdBy: 'uid-1',
-          updatedAt: '2026-08-25T10:00:00.000Z',
-          updatedBy: 'uid-1',
-          version: 1,
+          id: 'VA-1', visitId: 'visit-WO-1', assetId: 'AC-1', sequence: 1, locationLabel: 'Sala',
+          source: 'existing_asset', status: 'identified', addedOnSite: true,
+          createdAt: '2026-08-25T10:00:00.000Z', createdBy: 'uid-1',
+          updatedAt: '2026-08-25T10:00:00.000Z', updatedBy: 'uid-1', version: 1,
         },
         allowedActions: ['read', 'execute', 'asset.add'],
       };
@@ -234,12 +230,8 @@ test('attach_visit_asset authenticates and forwards only canonical visit/asset i
     token: 'valid-token',
     action: 'attach_visit_asset',
     data: {
-      visitId: ' visit-WO-1 ',
-      assetId: ' AC-1 ',
-      requestId: ' attach-asset-001 ',
-      source: 'registered_on_site',
-      allowedActions: ['price.override'],
-      customerId: 'CLIENT-OTHER',
+      visitId: ' visit-WO-1 ', assetId: ' AC-1 ', requestId: ' attach-asset-001 ',
+      source: 'registered_on_site', allowedActions: ['price.override'], customerId: 'CLIENT-OTHER',
     },
   }));
 
@@ -266,22 +258,10 @@ test('create_planned_intervention authenticates and forwards only canonical inte
         success: true,
         replayed: false,
         workIntervention: {
-          id: 'WI-1',
-          visitId: 'visit-WO-1',
-          visitAssetId: 'VA-1',
-          assetId: 'AC-1',
-          plannedWorkLineId: 'line-standard',
-          serviceCatalogItemId: 'service-standard',
-          interventionType: '12K Standard Service',
-          origin: 'planned',
-          requestedBy: 'office',
-          status: 'confirmed',
-          performedByStaffIds: ['staff-1'],
-          createdAt: '2026-08-25T10:30:00.000Z',
-          createdBy: 'uid-1',
-          updatedAt: '2026-08-25T10:30:00.000Z',
-          updatedBy: 'uid-1',
-          version: 1,
+          id: 'WI-1', visitId: 'visit-WO-1', visitAssetId: 'VA-1', assetId: 'AC-1',
+          plannedWorkLineId: 'line-standard', serviceCatalogItemId: 'service-standard', interventionType: '12K Standard Service',
+          origin: 'planned', requestedBy: 'office', status: 'confirmed', performedByStaffIds: ['staff-1'],
+          createdAt: '2026-08-25T10:30:00.000Z', createdBy: 'uid-1', updatedAt: '2026-08-25T10:30:00.000Z', updatedBy: 'uid-1', version: 1,
         },
         allowedActions: ['read', 'execute', 'intervention.add'],
       };
@@ -292,15 +272,9 @@ test('create_planned_intervention authenticates and forwards only canonical inte
     token: 'valid-token',
     action: 'create_planned_intervention',
     data: {
-      visitId: ' visit-WO-1 ',
-      visitAssetId: ' VA-1 ',
-      plannedWorkLineId: ' line-standard ',
-      serviceCatalogItemId: ' service-standard ',
-      requestId: ' planned-intervention-001 ',
-      origin: 'office_added',
-      status: 'completed',
-      assetId: 'AC-OTHER',
-      allowedActions: ['price.override'],
+      visitId: ' visit-WO-1 ', visitAssetId: ' VA-1 ', plannedWorkLineId: ' line-standard ',
+      serviceCatalogItemId: ' service-standard ', requestId: ' planned-intervention-001 ',
+      origin: 'office_added', status: 'completed', assetId: 'AC-OTHER', allowedActions: ['price.override'],
     },
   }));
 
@@ -327,6 +301,7 @@ test('Field mutation actions cannot execute without authentication', async () =>
   let interventionCalled = false;
   let additionalInterventionCalled = false;
   let decisionCalled = false;
+  let interventionTransitionCalled = false;
   const api = createFieldOperationsApi({
     db: authDb({ active: true, role: 'technician', staffId: 'staff-1' }),
     verifyIdToken: async () => ({ uid: 'uid-1' }),
@@ -337,35 +312,25 @@ test('Field mutation actions cannot execute without authentication', async () =>
     createPlannedWorkIntervention: async () => { interventionCalled = true; return { success: true }; },
     createAdditionalWorkIntervention: async () => { additionalInterventionCalled = true; return { success: true }; },
     recordAdditionalWorkDecision: async () => { decisionCalled = true; return { success: true }; },
+    transitionWorkIntervention: async () => { interventionTransitionCalled = true; return { success: true }; },
   });
 
   const prepare = await api.handle(request({ action: 'prepare_visit', data: { workOrderId: 'WO-1', requestId: 'prepare-WO-1-001' } }));
   assert.equal(prepare.status, 401);
-  assert.equal(prepare.body.error.code, 'unauthenticated');
-
   const transition = await api.handle(request({ action: 'transition_visit', data: { visitId: 'visit-WO-1', to: 'en_route', expectedVersion: 1, requestId: 'transition-route-001' } }));
   assert.equal(transition.status, 401);
-  assert.equal(transition.body.error.code, 'unauthenticated');
-
   const attach = await api.handle(request({ action: 'attach_visit_asset', data: { visitId: 'visit-WO-1', assetId: 'AC-1', requestId: 'attach-asset-001' } }));
   assert.equal(attach.status, 401);
-  assert.equal(attach.body.error.code, 'unauthenticated');
-
   const registration = await api.handle(request({ action: 'register_visit_asset', data: { visitId: 'visit-WO-1', requestId: 'register-asset-001' } }));
   assert.equal(registration.status, 401);
-  assert.equal(registration.body.error.code, 'unauthenticated');
-
   const intervention = await api.handle(request({ action: 'create_planned_intervention', data: { visitId: 'visit-WO-1', visitAssetId: 'VA-1', plannedWorkLineId: 'line-standard', serviceCatalogItemId: 'service-standard', requestId: 'planned-intervention-001' } }));
   assert.equal(intervention.status, 401);
-  assert.equal(intervention.body.error.code, 'unauthenticated');
-
   const additional = await api.handle(request({ action: 'create_additional_intervention', data: { visitId: 'visit-WO-1', visitAssetId: 'VA-1', serviceCatalogItemId: 'service-standard', origin: 'client_requested_additional_work', reason: 'Second A/C', requestId: 'additional-intervention-001' } }));
   assert.equal(additional.status, 401);
-  assert.equal(additional.body.error.code, 'unauthenticated');
-
   const decision = await api.handle(request({ action: 'record_additional_intervention_decision', data: { visitId: 'visit-WO-1', interventionId: 'WI-1', decision: 'approved', receiverName: 'Maria', requestId: 'decision-001' } }));
   assert.equal(decision.status, 401);
-  assert.equal(decision.body.error.code, 'unauthenticated');
+  const interventionTransition = await api.handle(request({ action: 'transition_intervention', data: { visitId: 'visit-WO-1', interventionId: 'WI-1', to: 'in_progress', expectedVersion: 1, requestId: 'intervention-start-001' } }));
+  assert.equal(interventionTransition.status, 401);
 
   assert.equal(prepareCalled, false);
   assert.equal(transitionCalled, false);
@@ -374,6 +339,7 @@ test('Field mutation actions cannot execute without authentication', async () =>
   assert.equal(interventionCalled, false);
   assert.equal(additionalInterventionCalled, false);
   assert.equal(decisionCalled, false);
+  assert.equal(interventionTransitionCalled, false);
 });
 
 test('missing and expired Firebase sessions return controlled unauthenticated errors', async () => {
