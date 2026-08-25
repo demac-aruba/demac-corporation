@@ -15,6 +15,15 @@ function cleanText(value, limit = 1000) {
   return String(value ?? '').trim().slice(0, limit);
 }
 
+function publicJobProjection(job) {
+  if (!job || typeof job !== 'object') return job;
+  // WorkOrder.technicianIds is a Legacy compatibility field that may mix Firebase uid and
+  // staff-profile ids. Assignment has already been resolved server-side, so never expose that
+  // storage detail as part of the public Field contract where a client could treat it as truth.
+  const { technicianIds: _legacyTechnicianIds, ...publicJob } = job;
+  return publicJob;
+}
+
 function bearerToken(request) {
   const header = cleanText(request?.headers?.authorization || request?.get?.('authorization'), 5000);
   const match = header.match(/^Bearer\s+(.+)$/i);
@@ -62,13 +71,13 @@ function createFieldOperationsApi({ db, verifyIdToken } = {}) {
   async function execute({ action, data = {}, identity }) {
     if (action === 'get_schedule') {
       const jobs = await loadAssignedSchedule(db, identity, data.startDate, data.endDate || data.startDate);
-      return { success: true, version: FIELD_OPERATIONS_API_VERSION, jobs };
+      return { success: true, version: FIELD_OPERATIONS_API_VERSION, jobs: jobs.map(publicJobProjection) };
     }
     if (action === 'get_job') {
       const workOrderId = cleanText(data.workOrderId, 180);
       if (!workOrderId) throw fieldError('work_order_required', 'A Work Order id is required.');
       const job = await loadAssignedJob(db, identity, workOrderId);
-      return { success: true, version: FIELD_OPERATIONS_API_VERSION, job };
+      return { success: true, version: FIELD_OPERATIONS_API_VERSION, job: publicJobProjection(job) };
     }
     throw fieldError('unsupported_action', `Unsupported Field Operations action: ${action || 'missing'}.`, 400);
   }
@@ -122,3 +131,4 @@ module.exports.FIELD_ACTIONS = FIELD_ACTIONS;
 module.exports.apiError = apiError;
 module.exports.bearerToken = bearerToken;
 module.exports.createFieldOperationsApi = createFieldOperationsApi;
+module.exports.publicJobProjection = publicJobProjection;
