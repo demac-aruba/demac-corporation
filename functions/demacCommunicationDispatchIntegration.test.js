@@ -205,6 +205,32 @@ test("Observer cancellation output creates a case, protects dispatch, and remove
   assert.deepEqual(day.workOrders, [], "held work must not reach the technician dispatch projection");
 });
 
+test("replaying the same cancellation remains one logical case and one logical dispatch hold", async () => {
+  const db = new FakeDb(baseSeed());
+  const first = await processCancellation(db);
+  const second = await processCancellation(db);
+
+  assert.equal(first.processed, true);
+  assert.equal(second.processed, true);
+  assert.equal(first.caseId, second.caseId);
+  assert.equal(first.appointmentId, "APT-1");
+  assert.equal(second.appointmentId, "APT-1");
+  assert.equal(second.dispatchHoldActive, true);
+
+  const cases = db.values("communicationCases");
+  assert.equal(cases.length, 1);
+  assert.equal(cases[0].history.length, 1, "same source message/case transition must replace rather than duplicate history");
+  assert.equal(cases[0].history[0].sourceMessageId, "MSG-CANCEL-1");
+
+  const appointmentCurrent = db.read("appointments", "APT-1");
+  assert.equal(appointmentCurrent.dispatchHold.active, true);
+  assert.equal(appointmentCurrent.dispatchSafetyHistory.length, 1, "dispatch hold replay must not append a second hold event");
+
+  const workOrderCurrent = db.read("workOrders", "WO-1");
+  assert.equal(workOrderCurrent.dispatchSafety, "do_not_dispatch");
+  assert.equal(workOrderCurrent.dispatchHoldCaseId, first.caseId);
+});
+
 test("stale customer-turn epoch suppresses case and dispatch mutations", async () => {
   const db = new FakeDb(baseSeed({ customerInputVersion: 8 }));
   const result = await processCancellation(db, cancellationObservation(), 7);
