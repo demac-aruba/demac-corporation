@@ -276,9 +276,12 @@ function createCommunicationConversationAuthority({ db, verifyIdToken, clock = (
     const uid = cleanText(decoded?.uid || decoded?.sub, 160);
     if (!uid) throw new CommunicationCommandError("unauthenticated", "The authenticated user has no uid.");
     const profileSnapshot = await db.collection("users").doc(uid).get();
-    const profile = profileSnapshot.exists ? profileSnapshot.data() || {} : {};
-    const role = roleValue(profile.role || decoded.role);
-    if (!COMMUNICATION_ROLES.has(role) || profile.active === false) {
+    if (!profileSnapshot.exists) {
+      throw new CommunicationCommandError("permission_denied", "This user is not allowed to control customer conversations.");
+    }
+    const profile = profileSnapshot.data() || {};
+    const role = roleValue(profile.role);
+    if (!COMMUNICATION_ROLES.has(role) || profile.active !== true) {
       throw new CommunicationCommandError("permission_denied", "This user is not allowed to control customer conversations.");
     }
     return {
@@ -330,7 +333,7 @@ function createCommunicationConversationAuthority({ db, verifyIdToken, clock = (
           const targetSnapshot = await transaction.get(db.collection("users").doc(targetId));
           const targetProfile = targetSnapshot.exists ? targetSnapshot.data() || {} : {};
           const targetRole = roleValue(targetProfile.role);
-          if (!targetSnapshot.exists || targetProfile.active === false || !COMMUNICATION_ROLES.has(targetRole)) {
+          if (!targetSnapshot.exists || targetProfile.active !== true || !COMMUNICATION_ROLES.has(targetRole)) {
             throw new CommunicationCommandError("invalid_assignment", "Target operator is missing, inactive, or not allowed to handle communications.");
           }
           target.name = cleanText(targetProfile.name || targetProfile.email, 180);
