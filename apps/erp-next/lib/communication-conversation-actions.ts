@@ -30,6 +30,12 @@ type CommunicationCommandResult = {
   error?: { code?: string; message?: string; details?: Record<string, unknown> };
 };
 
+type PrincipalLike = { userId?: string; displayName?: string };
+type OperatorLike = { userId: string; name: string };
+type ReplyConversationLike = { id: string; ownershipVersion?: number };
+
+type ProviderLike = 'wacli' | 'meta';
+
 function commandRequestId(action: CommunicationCommandAction, conversationId: string) {
   const suffix = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
@@ -111,5 +117,42 @@ export async function sendCommunicationConversationReply(args: {
     text: args.text ?? '',
     media: args.media ?? null,
     expectedOwnershipVersion: args.expectedOwnershipVersion,
+  });
+}
+
+// Compatibility adapters for the current Communication Center component. The
+// authenticated principal is resolved server-side from the Firebase token;
+// browser-supplied actor identity is deliberately ignored as authority.
+export async function claimConversation(conversationId: string, _principal?: PrincipalLike) {
+  return claimCommunicationConversation(conversationId);
+}
+
+export async function assignConversation(conversationId: string, operator: OperatorLike) {
+  return assignCommunicationConversation(conversationId, operator);
+}
+
+export async function returnConversationToAi(conversationId: string, _principal?: PrincipalLike) {
+  return returnCommunicationConversationToMaya(conversationId);
+}
+
+export async function updateConversationStatus(conversationId: string, status: ConversationStatus) {
+  return updateCommunicationConversationStatus(conversationId, status);
+}
+
+export async function markConversationRead(conversationId: string) {
+  return markCommunicationConversationRead(conversationId);
+}
+
+export async function queueWhatsAppText(
+  conversation: ReplyConversationLike,
+  text: string,
+  _principal: PrincipalLike,
+  provider: ProviderLike,
+) {
+  if (provider !== 'wacli') throw new Error('Free-form ERP replies are currently enabled through the wacli provider.');
+  return sendCommunicationConversationReply({
+    conversationId: conversation.id,
+    text: text.trim(),
+    expectedOwnershipVersion: conversation.ownershipVersion,
   });
 }
