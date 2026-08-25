@@ -1,4 +1,4 @@
-const { cleanText } = require("./bookingSchedulingPrimitives");
+const { cleanText } = require("./demacCorePrimitives");
 const {
   canonicalConversationDocumentId,
   canonicalMessageStatusDocumentId,
