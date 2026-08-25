@@ -47,9 +47,21 @@ function interventionExecutionOptions({ interventions = [], visitStatus, allowed
   })).filter((option) => option.interventionId && option.allowedTargets.length > 0);
 }
 
+function attachInterventionExecutionOptionsToJob(job) {
+  return {
+    ...job,
+    interventionExecutionOptions: interventionExecutionOptions({
+      interventions: Array.isArray(job?.workInterventions) ? job.workInterventions : [],
+      visitStatus: job?.fieldVisit?.status,
+      allowedActions: Array.isArray(job?.allowedActions) ? job.allowedActions : [],
+    }),
+  };
+}
+
 module.exports.WORK_INTERVENTION_EXECUTION_GRAPH = WORK_INTERVENTION_EXECUTION_GRAPH;
 module.exports.WORK_INTERVENTION_EXECUTION_TARGETS = WORK_INTERVENTION_EXECUTION_TARGETS;
 module.exports.activatedWorkInterventionTransitions = activatedWorkInterventionTransitions;
 module.exports.allowedWorkInterventionTransitions = allowedWorkInterventionTransitions;
+module.exports.attachInterventionExecutionOptionsToJob = attachInterventionExecutionOptionsToJob;
 module.exports.interventionExecutionOptions = interventionExecutionOptions;
 module.exports.requiredFieldActionForInterventionTarget = requiredFieldActionForInterventionTarget;
