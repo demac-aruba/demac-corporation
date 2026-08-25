@@ -22,6 +22,10 @@ const {
   attachScopeChangesToJob,
   createAdditionalWorkInterventionCommand,
 } = require('./fieldOperationsScopeChanges');
+const {
+  attachFieldApprovalsToJob,
+  createRecordAdditionalWorkDecisionCommand,
+} = require('./fieldOperationsApprovals');
 const { attachCurrentWorkVisitState, attachCurrentWorkVisitStates } = require('./fieldOperationsVisitRead');
 const { createTransitionWorkVisitCommand } = require('./fieldOperationsVisitMutation');
 
@@ -33,6 +37,7 @@ const FIELD_ACTIONS = new Set([
   'attach_visit_asset',
   'create_planned_intervention',
   'create_additional_intervention',
+  'record_additional_intervention_decision',
 ]);
 
 function cleanText(value, limit = 1000) {
@@ -41,9 +46,6 @@ function cleanText(value, limit = 1000) {
 
 function publicJobProjection(job) {
   if (!job || typeof job !== 'object') return job;
-  // WorkOrder.technicianIds is a Legacy compatibility field that may mix Firebase uid and
-  // staff-profile ids. Assignment has already been resolved server-side, so never expose that
-  // storage detail as part of the public Field contract where a client could treat it as truth.
   const { technicianIds: _legacyTechnicianIds, ...publicJob } = job;
   return publicJob;
 }
@@ -80,6 +82,7 @@ function createFieldOperationsApi({
   attachExistingVisitAsset,
   createPlannedWorkIntervention,
   createAdditionalWorkIntervention,
+  recordAdditionalWorkDecision,
 } = {}) {
   if (!db || typeof db.collection !== 'function') throw new Error('A Firestore-compatible db is required.');
   if (typeof verifyIdToken !== 'function') throw new Error('verifyIdToken is required.');
@@ -89,6 +92,7 @@ function createFieldOperationsApi({
   if (attachExistingVisitAsset !== undefined && typeof attachExistingVisitAsset !== 'function') throw new Error('attachExistingVisitAsset must be a function when provided.');
   if (createPlannedWorkIntervention !== undefined && typeof createPlannedWorkIntervention !== 'function') throw new Error('createPlannedWorkIntervention must be a function when provided.');
   if (createAdditionalWorkIntervention !== undefined && typeof createAdditionalWorkIntervention !== 'function') throw new Error('createAdditionalWorkIntervention must be a function when provided.');
+  if (recordAdditionalWorkDecision !== undefined && typeof recordAdditionalWorkDecision !== 'function') throw new Error('recordAdditionalWorkDecision must be a function when provided.');
 
   async function authenticate(request) {
     const token = bearerToken(request);
@@ -121,10 +125,11 @@ function createFieldOperationsApi({
       const withVisit = await attachCurrentWorkVisitState(db, job);
       const withAssets = await attachVisitAssetsToJob(db, withVisit);
       const withInterventions = await attachWorkInterventionsToJob(db, withAssets);
+      const withScopeChanges = await attachScopeChangesToJob(db, withInterventions);
       return {
         success: true,
         version: FIELD_OPERATIONS_API_VERSION,
-        job: publicJobProjection(await attachScopeChangesToJob(db, withInterventions)),
+        job: publicJobProjection(await attachFieldApprovalsToJob(db, withScopeChanges)),
       };
     }
     if (action === 'prepare_visit') {
@@ -196,6 +201,21 @@ function createFieldOperationsApi({
       });
       return { ...created, version: FIELD_OPERATIONS_API_VERSION };
     }
+    if (action === 'record_additional_intervention_decision') {
+      if (typeof recordAdditionalWorkDecision !== 'function') {
+        throw fieldError('mutation_not_configured', 'Additional Field work customer decision recording is not configured in this runtime.', 503);
+      }
+      const decided = await recordAdditionalWorkDecision({
+        identity,
+        visitId: cleanText(data.visitId, 180),
+        interventionId: cleanText(data.interventionId, 180),
+        decision: cleanText(data.decision, 40),
+        receiverName: cleanText(data.receiverName, 180),
+        note: cleanText(data.note, 1000),
+        requestId: cleanText(data.requestId, 240),
+      });
+      return { ...decided, version: FIELD_OPERATIONS_API_VERSION };
+    }
     throw fieldError('unsupported_action', `Unsupported Field Operations action: ${action || 'missing'}.`, 400);
   }
 
@@ -214,7 +234,6 @@ function createFieldOperationsApi({
         try {
           reportError({ action, status: result.status, code: result.body.error.code, error });
         } catch (_reportingError) {
-          // Error reporting must never replace the original API failure.
         }
       }
       return result;
@@ -235,6 +254,7 @@ function getDefaultApi() {
     const attachExistingVisitAsset = createAttachExistingVisitAssetCommand({ db, resolveAssignment, appendAuditInTransaction });
     const createPlannedWorkIntervention = createPlannedWorkInterventionCommand({ db, resolveAssignment, appendAuditInTransaction });
     const createAdditionalWorkIntervention = createAdditionalWorkInterventionCommand({ db, resolveAssignment, appendAuditInTransaction });
+    const recordAdditionalWorkDecision = createRecordAdditionalWorkDecisionCommand({ db, resolveAssignment, appendAuditInTransaction });
     defaultApi = createFieldOperationsApi({
       db,
       verifyIdToken: (token) => getAuth().verifyIdToken(token, true),
@@ -243,6 +263,7 @@ function getDefaultApi() {
       attachExistingVisitAsset,
       createPlannedWorkIntervention,
       createAdditionalWorkIntervention,
+      recordAdditionalWorkDecision,
       reportError: ({ action, status, code, error }) => logger.error('Field Operations request failed', {
         action: cleanText(action, 120) || 'unknown',
         status,

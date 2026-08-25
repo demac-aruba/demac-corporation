@@ -50,6 +50,7 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
     'get_job',
     'get_schedule',
     'prepare_visit',
+    'record_additional_intervention_decision',
     'transition_visit',
   ]);
 
@@ -76,6 +77,10 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
   );
   await assert.rejects(
     () => api.execute({ action: 'create_additional_intervention', data: {}, identity: { operations: false } }),
+    (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
+  );
+  await assert.rejects(
+    () => api.execute({ action: 'record_additional_intervention_decision', data: {}, identity: { operations: false } }),
     (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
   );
   await assert.rejects(
@@ -313,6 +318,7 @@ test('Field mutation actions cannot execute without authentication', async () =>
   let attachCalled = false;
   let interventionCalled = false;
   let additionalInterventionCalled = false;
+  let decisionCalled = false;
   const api = createFieldOperationsApi({
     db: authDb({ active: true, role: 'technician', staffId: 'staff-1' }),
     verifyIdToken: async () => ({ uid: 'uid-1' }),
@@ -321,6 +327,7 @@ test('Field mutation actions cannot execute without authentication', async () =>
     attachExistingVisitAsset: async () => { attachCalled = true; return { success: true }; },
     createPlannedWorkIntervention: async () => { interventionCalled = true; return { success: true }; },
     createAdditionalWorkIntervention: async () => { additionalInterventionCalled = true; return { success: true }; },
+    recordAdditionalWorkDecision: async () => { decisionCalled = true; return { success: true }; },
   });
 
   const prepare = await api.handle(request({ action: 'prepare_visit', data: { workOrderId: 'WO-1', requestId: 'prepare-WO-1-001' } }));
@@ -343,11 +350,16 @@ test('Field mutation actions cannot execute without authentication', async () =>
   assert.equal(additional.status, 401);
   assert.equal(additional.body.error.code, 'unauthenticated');
 
+  const decision = await api.handle(request({ action: 'record_additional_intervention_decision', data: { visitId: 'visit-WO-1', interventionId: 'WI-1', decision: 'approved', receiverName: 'Maria', requestId: 'decision-001' } }));
+  assert.equal(decision.status, 401);
+  assert.equal(decision.body.error.code, 'unauthenticated');
+
   assert.equal(prepareCalled, false);
   assert.equal(transitionCalled, false);
   assert.equal(attachCalled, false);
   assert.equal(interventionCalled, false);
   assert.equal(additionalInterventionCalled, false);
+  assert.equal(decisionCalled, false);
 });
 
 test('missing and expired Firebase sessions return controlled unauthenticated errors', async () => {
