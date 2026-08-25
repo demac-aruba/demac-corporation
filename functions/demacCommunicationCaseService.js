@@ -1,6 +1,6 @@
 const { FieldValue, getFirestore } = require("firebase-admin/firestore");
 const { arubaDateParts, cleanText, hashId } = require("./bookingSchedulingPrimitives");
-const { normalizeArubaWhatsAppPhone } = require("./demacCustomerAgentReplyPolicy");
+const { resolveInboundParty } = require("./customerContactDirectory");
 const { createBookingDispatchSafetyAuthority } = require("./bookingAuthorityDispatchSafety");
 const { communicationEpochDecision } = require("./demacCustomerTurn");
 
@@ -138,22 +138,12 @@ function withdrawalAppointmentResolution({ previousCase = {}, appointments = [],
 }
 
 async function queryCustomerByPhone(db, phone) {
-  const normalized = normalizeArubaWhatsAppPhone(phone);
-  if (!normalized) return { customer: null, ambiguous: false };
-  const local = normalized.startsWith("297") ? normalized.slice(3) : normalized;
-  const candidates = [...new Set([normalized, `+${normalized}`, local])].filter(Boolean);
-  const matches = new Map();
-  for (const field of ["phone", "whatsapp"]) {
-    for (const value of candidates) {
-      const snapshot = await db.collection("clients").where(field, "==", value).limit(2).get();
-      snapshot.docs.forEach((doc) => {
-        const data = { id: doc.id, ...doc.data() };
-        if (normalizeArubaWhatsAppPhone(data.phone || data.whatsapp) === normalized) matches.set(doc.id, data);
-      });
-    }
-  }
-  const values = [...matches.values()].filter((item) => item.active !== false);
-  return { customer: values.length === 1 ? values[0] : null, ambiguous: values.length > 1 };
+  const resolution = await resolveInboundParty(db, { phone });
+  return {
+    customer: resolution.customer || null,
+    ambiguous: resolution.ambiguous === true,
+    resolution,
+  };
 }
 
 function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = null, clock = () => new Date() } = {}) {
@@ -163,12 +153,16 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
   const safety = dispatchSafety || createBookingDispatchSafetyAuthority({ db, clock });
 
   async function resolveCustomer({ conversation = {}, message = {} } = {}) {
-    const customerId = cleanText(conversation.customerId || message.customerId, 160);
-    if (customerId) {
-      const snapshot = await db.collection("clients").doc(customerId).get();
-      if (snapshot.exists) return { customer: { id: snapshot.id, ...snapshot.data() }, ambiguous: false };
-    }
-    return queryCustomerByPhone(db, conversation.phone || message.phone);
+    const resolution = await resolveInboundParty(db, {
+      clientId: cleanText(conversation.customerId || message.customerId, 160),
+      phone: conversation.phone || message.phone,
+      whatsapp: conversation.whatsapp || message.whatsapp || conversation.phone || message.phone,
+    });
+    return {
+      customer: resolution.customer || null,
+      ambiguous: resolution.ambiguous === true,
+      resolution,
+    };
   }
 
   async function loadUpcomingAppointments(customerId) {
