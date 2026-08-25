@@ -2,12 +2,15 @@ import { firebaseClientConfig } from './firebase/client-config';
 import { requireFirebaseWebSession } from './firebase/session';
 import {
   parseFieldAttachVisitAssetResponse,
-  parseFieldJobResponse,
   parseFieldPrepareVisitResponse,
   parseFieldScheduleResponse,
   parseFieldTransitionVisitResponse,
   type FieldActiveVisitTransition,
 } from './field-authority-contract';
+import {
+  parseFieldCreatePlannedInterventionResponse,
+  parseFieldExecutionJobResponse,
+} from './field-intervention-contract';
 
 export { fieldActionAllowed } from './field-authorization';
 export type {
@@ -30,6 +33,17 @@ export type {
   FieldVisitState,
   FieldVisitStatus,
 } from './field-authority-contract';
+export type {
+  FieldAvailableService,
+  FieldCreatePlannedInterventionResponse,
+  FieldExecutionJobDetail,
+  FieldPlannedInterventionOption,
+  FieldPlannedWorkProgress,
+  FieldWorkIntervention,
+  FieldWorkInterventionOrigin,
+  FieldWorkInterventionRequester,
+  FieldWorkInterventionStatus,
+} from './field-intervention-contract';
 
 type FieldApiError = { error?: { code?: string; message?: string; details?: Record<string, unknown> } };
 
@@ -106,7 +120,7 @@ export async function getFieldSchedule(startDate: string, endDate = startDate) {
 }
 
 export async function getFieldJob(workOrderId: string) {
-  return parseFieldJobResponse(await callFieldAuthority('get_job', { workOrderId }));
+  return parseFieldExecutionJobResponse(await callFieldAuthority('get_job', { workOrderId }));
 }
 
 export async function prepareFieldVisit(workOrderId: string, requestId: string) {
@@ -131,6 +145,22 @@ export async function attachExistingFieldAsset(visitId: string, assetId: string,
   return parseFieldAttachVisitAssetResponse(await callFieldAuthority('attach_visit_asset', {
     visitId,
     assetId,
+    requestId,
+  }));
+}
+
+export async function createPlannedFieldIntervention(
+  visitId: string,
+  visitAssetId: string,
+  plannedWorkLineId: string,
+  serviceCatalogItemId: string,
+  requestId: string,
+) {
+  return parseFieldCreatePlannedInterventionResponse(await callFieldAuthority('create_planned_intervention', {
+    visitId,
+    visitAssetId,
+    plannedWorkLineId,
+    serviceCatalogItemId,
     requestId,
   }));
 }
