@@ -6,6 +6,7 @@ const {
   dispatchHoldActive,
   dispatchReadinessDecision,
   holdHistoryEvent,
+  workOrderDispatchProjection,
 } = require("./bookingAuthorityDispatchSafety");
 
 test("dispatch hold is derived safety, not a second cancellation status", () => {
@@ -34,6 +35,31 @@ test("canonical cancellation remains authoritative", () => {
   assert.deepEqual(dispatchReadinessDecision({ status: "scheduled" }), {
     safeToDispatch: true,
     reason: "appointment-dispatch-ready",
+  });
+});
+
+test("work-order projection cannot become ready when canonical appointment is cancelled", () => {
+  assert.deepEqual(workOrderDispatchProjection({
+    status: "cancelled",
+    dispatchHold: { active: false, caseId: "CASE-1" },
+  }), {
+    dispatchSafety: "do_not_dispatch",
+    dispatchHoldActive: false,
+    dispatchHoldCaseId: "CASE-1",
+    dispatchHoldReason: "appointment-cancelled",
+  });
+  assert.equal(workOrderDispatchProjection({ status: "scheduled", dispatchHold: { active: false } }).dispatchSafety, "ready");
+});
+
+test("work-order projection preserves an active hold as do_not_dispatch", () => {
+  assert.deepEqual(workOrderDispatchProjection({
+    status: "scheduled",
+    dispatchHold: { active: true, caseId: "CASE-1", reason: HOLD_REASON },
+  }), {
+    dispatchSafety: "do_not_dispatch",
+    dispatchHoldActive: true,
+    dispatchHoldCaseId: "CASE-1",
+    dispatchHoldReason: HOLD_REASON,
   });
 });
 
