@@ -264,7 +264,7 @@ test('helper, read-only fallback and unassigned principals cannot record custome
 });
 
 test('decision requires active on-site visit, additional origin, exact price and unresolved pending scope', async () => {
-  const preArrival = fixture({ visit: visit({ status: 'scheduled', arrivedAt: undefined }) });
+  const preArrival = fixture({ visit: visit({ status: 'on_the_way', departedAt: '2026-08-25T10:10:00.000Z', arrivedAt: undefined }) });
   await assert.rejects(
     () => preArrival.recordDecision(input({ requestId: 'decision-prearrival' })),
     (error) => error?.code === 'approval_not_allowed' && error?.status === 409,
