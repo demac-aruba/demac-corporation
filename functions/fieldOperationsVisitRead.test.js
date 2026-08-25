@@ -108,17 +108,15 @@ test('helper/read-only projection receives visit state without execution transit
   assert.deepEqual(projected.availableTransitions, []);
 });
 
-test('missing Legacy version defaults to one but malformed persisted versions fail closed', () => {
+test('missing Legacy version defaults to one but explicit malformed versions fail closed', () => {
   const legacy = projectFieldVisitState(visit({ version: undefined }), job());
   assert.equal(legacy.version, 1);
-  assert.throws(
-    () => projectFieldVisitState(visit({ version: 1.5 }), job()),
-    (error) => error?.code === 'invalid_visit_version' && error?.status === 409,
-  );
-  assert.throws(
-    () => projectFieldVisitState(visit({ version: 0 }), job()),
-    (error) => error?.code === 'invalid_visit_version' && error?.status === 409,
-  );
+  for (const version of [1.5, 0, null, '', '1', Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(
+      () => projectFieldVisitState(visit({ version }), job()),
+      (error) => error?.code === 'invalid_visit_version' && error?.status === 409,
+    );
+  }
 });
 
 test('a linear return-visit chain resolves to its physical chain tip', () => {
@@ -146,4 +144,26 @@ test('visit identity mismatch fails closed before it can be shown under another 
     () => projectFieldVisitState(visit({ clientId: 'CLIENT-OTHER' }), job()),
     /identity does not match/i,
   );
+});
+
+test('read projection rejects an identity-conflicting ancestor instead of hiding it behind a valid chain tip', async () => {
+  const initial = visit({ id: 'visit-1', clientId: 'CLIENT-OTHER' });
+  const current = visit({ id: 'visit-2', previousVisitId: 'visit-1', status: 'on_site' });
+  await assert.rejects(
+    () => attachCurrentWorkVisitState(createDb([initial, current]), job()),
+    (error) => error?.code === 'visit_identity_conflict' && error?.status === 409,
+  );
+});
+
+test('read projection rejects conflicting identity aliases and snapshot appointment identity', async () => {
+  for (const conflicting of [
+    visit({ customerId: 'CLIENT-OTHER' }),
+    visit({ siteId: 'PROPERTY-OTHER' }),
+    visit({ scheduledScopeSnapshot: { appointmentId: 'APT-OTHER', capturedAt: '2026-08-24T12:00:00.000Z', estimatedUnitCount: 1, workLines: [] } }),
+  ]) {
+    await assert.rejects(
+      () => attachCurrentWorkVisitState(createDb([conflicting]), job()),
+      (error) => error?.code === 'visit_identity_conflict' && error?.status === 409,
+    );
+  }
 });
