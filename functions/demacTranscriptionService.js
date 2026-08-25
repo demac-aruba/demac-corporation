@@ -15,6 +15,24 @@ function audioFileName(storagePath, contentType) {
   return `${existingName || "voice-note"}.m4a`;
 }
 
+function firebaseStoragePathFromMediaUrl(mediaUrl, expectedBucketName = "") {
+  const raw = cleanText(mediaUrl, 4_000);
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "https:" || parsed.hostname !== "firebasestorage.googleapis.com") return "";
+    const match = parsed.pathname.match(/^\/v0\/b\/([^/]+)\/o\/(.+)$/);
+    if (!match) return "";
+    const bucketName = decodeURIComponent(match[1]);
+    const expected = cleanText(expectedBucketName, 300);
+    if (expected && bucketName !== expected) return "";
+    const storagePath = decodeURIComponent(match[2]);
+    return cleanText(storagePath, 1_500);
+  } catch {
+    return "";
+  }
+}
+
 function transcriptionPrompt(value) {
   return cleanText(value, 2_000);
 }
@@ -108,6 +126,7 @@ module.exports = {
   DEFAULT_TRANSCRIPTION_MODEL,
   DEMAC_TRANSCRIPTION_SERVICE_VERSION,
   audioFileName,
+  firebaseStoragePathFromMediaUrl,
   loadStorageAudio,
   requestTranscription,
   transcribeStoredAudio,
