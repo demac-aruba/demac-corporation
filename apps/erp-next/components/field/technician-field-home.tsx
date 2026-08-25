@@ -11,6 +11,7 @@ import {
   getFieldSchedule,
   prepareFieldVisit,
   recordAdditionalFieldInterventionDecision,
+  registerOnSiteFieldEquipment,
   transitionFieldVisit,
   type FieldActiveVisitTransition,
   type FieldAdditionalWorkDecision,
@@ -19,8 +20,13 @@ import {
   type FieldTechnicianScopeChangeOrigin,
   type FieldVisitStatus,
 } from '@/lib/field-authority';
+import { uploadFieldEquipmentRegistrationImage } from '@/lib/field-evidence-upload';
 import { AdditionalApprovalControls } from './additional-approval-controls';
 import { AdditionalInterventionControls } from './additional-intervention-controls';
+import {
+  EquipmentRegistrationControls,
+  type EquipmentRegistrationInput,
+} from './equipment-registration-controls';
 import { PlannedInterventionControls } from './planned-intervention-controls';
 import styles from './technician-field-home.module.css';
 
@@ -89,6 +95,13 @@ function visitStatusLabel(value?: FieldVisitStatus) {
   if (value === 'completed') return 'Completada';
   if (value === 'no_access') return 'Sin acceso';
   return 'Cancelada';
+}
+
+function visitAssetSourceLabel(value: FieldExecutionJobDetail['visitAssets'][number]['source']) {
+  if (value === 'existing_asset') return 'Equipo CRM existente';
+  if (value === 'registered_on_site') return 'Registrado en sitio';
+  if (value === 'qr_scan') return 'Identificado por QR';
+  return 'Equipo programado';
 }
 
 function jobCompleted(job: FieldScheduleJob) {
@@ -177,16 +190,19 @@ function DetailView({
   error,
   transitionError,
   assetError,
+  equipmentRegistrationError,
   interventionError,
   additionalInterventionError,
   approvalError,
   transitioning,
   attachingAssetId,
+  registeringEquipment,
   creatingInterventionVisitAssetId,
   creatingAdditionalInterventionVisitAssetId,
   decidingApprovalInterventionId,
   onTransition,
   onAttachAsset,
+  onRegisterEquipment,
   onCreatePlannedIntervention,
   onCreateAdditionalIntervention,
   onRecordAdditionalDecision,
@@ -197,16 +213,19 @@ function DetailView({
   error: string | null;
   transitionError: string | null;
   assetError: string | null;
+  equipmentRegistrationError: string | null;
   interventionError: string | null;
   additionalInterventionError: string | null;
   approvalError: string | null;
   transitioning: FieldActiveVisitTransition | null;
   attachingAssetId: string | null;
+  registeringEquipment: boolean;
   creatingInterventionVisitAssetId: string | null;
   creatingAdditionalInterventionVisitAssetId: string | null;
   decidingApprovalInterventionId: string | null;
   onTransition: (target: FieldActiveVisitTransition) => void;
   onAttachAsset: (assetId: string) => void;
+  onRegisterEquipment: (input: EquipmentRegistrationInput) => Promise<boolean>;
   onCreatePlannedIntervention: (input: PlannedInterventionInput) => void;
   onCreateAdditionalIntervention: (input: AdditionalInterventionInput) => void;
   onRecordAdditionalDecision: (input: AdditionalApprovalInput) => void;
@@ -241,6 +260,7 @@ function DetailView({
   const knownEquipmentById = new Map(job.knownEquipment.map((equipment) => [equipment.id, equipment]));
   const mutationBusy = transitioning !== null
     || attachingAssetId !== null
+    || registeringEquipment
     || creatingInterventionVisitAssetId !== null
     || creatingAdditionalInterventionVisitAssetId !== null
     || decidingApprovalInterventionId !== null;
@@ -322,7 +342,7 @@ function DetailView({
                   <div>
                     <strong>{visitAsset.locationLabel || equipment?.locationLabel || `A/C ${visitAsset.sequence}`}</strong>
                     <span>{[equipment?.brand, equipment?.model, equipment?.systemType].filter(Boolean).join(' · ') || 'Equipo confirmado para esta visita'}</span>
-                    <span>{equipment?.btu ? `${equipment.btu} BTU` : 'BTU por confirmar'} · {visitAsset.source === 'existing_asset' ? 'Equipo CRM existente' : visitAsset.source}</span>
+                    <span>{equipment?.btu ? `${equipment.btu} BTU` : 'BTU por confirmar'} · {visitAssetSourceLabel(visitAsset.source)}</span>
                   </div>
                   <div className={styles.badges}>
                     <span className={`${styles.badge} ${styles.badgeBrand}`}>Confirmado #{visitAsset.sequence}</span>
@@ -330,6 +350,13 @@ function DetailView({
                 </div>
               );
             }) : <p className={styles.helper}>Todavía no hay A/C confirmados físicamente para esta visita. La cantidad programada permanece intacta.</p>}
+            <EquipmentRegistrationControls
+              job={job}
+              mutationBusy={mutationBusy}
+              registering={registeringEquipment}
+              error={equipmentRegistrationError}
+              onRegister={onRegisterEquipment}
+            />
             <PlannedInterventionControls
               job={job}
               mutationBusy={mutationBusy}
@@ -363,7 +390,7 @@ function DetailView({
                   <div>
                     <strong>{equipment.locationLabel || 'Ubicación no registrada'}</strong>
                     <span>{[equipment.brand, equipment.model, equipment.systemType].filter(Boolean).join(' · ') || 'Información técnica incompleta'}</span>
-                    <span>{equipment.btu ? `${equipment.btu} BTU` : 'BTU por confirmar'}{equipment.refrigerant ? ` · ${equipment.refrigerant}` : ''}{equipment.voltage ? ` · ${equipment.voltage}V` : ''}</span>
+                    <span>{equipment.btu ? `${equipment.btu} BTU` : 'BTU por confirmar'}{equipment.refrigerant ? ` · ${equipment.refrigerant}` : ''}{equipment.voltage ? ` · ${equipment.voltage}` : ''}</span>
                   </div>
                   <div className={styles.actions}>
                     <span className={styles.badge}>{equipment.qrCode || 'Sin QR'}</span>
@@ -431,6 +458,8 @@ export function TechnicianFieldHome() {
   const [transitionError, setTransitionError] = useState<string | null>(null);
   const [attachingAssetId, setAttachingAssetId] = useState<string | null>(null);
   const [assetError, setAssetError] = useState<string | null>(null);
+  const [registeringEquipment, setRegisteringEquipment] = useState(false);
+  const [equipmentRegistrationError, setEquipmentRegistrationError] = useState<string | null>(null);
   const [creatingInterventionVisitAssetId, setCreatingInterventionVisitAssetId] = useState<string | null>(null);
   const [interventionError, setInterventionError] = useState<string | null>(null);
   const [creatingAdditionalInterventionVisitAssetId, setCreatingAdditionalInterventionVisitAssetId] = useState<string | null>(null);
@@ -441,6 +470,7 @@ export function TechnicianFieldHome() {
   const detailRequestRef = useRef(0);
   const mutationRequestRef = useRef(0);
   const mutationLockRef = useRef<number | null>(null);
+  const equipmentRegistrationRequestRef = useRef<string | null>(null);
   const selectedWorkOrderRef = useRef<string | null>(null);
 
   const today = arubaDateKey(clockNow);
@@ -453,6 +483,7 @@ export function TechnicianFieldHome() {
     detailRequestRef.current += 1;
     mutationRequestRef.current += 1;
     mutationLockRef.current = null;
+    equipmentRegistrationRequestRef.current = null;
     selectedWorkOrderRef.current = null;
     setSelectedWorkOrderId(null);
     setSelectedOwnerUserId(null);
@@ -464,6 +495,8 @@ export function TechnicianFieldHome() {
     setTransitionError(null);
     setAttachingAssetId(null);
     setAssetError(null);
+    setRegisteringEquipment(false);
+    setEquipmentRegistrationError(null);
     setCreatingInterventionVisitAssetId(null);
     setInterventionError(null);
     setCreatingAdditionalInterventionVisitAssetId(null);
@@ -533,6 +566,7 @@ export function TechnicianFieldHome() {
   const clearMutationErrors = useCallback(() => {
     setTransitionError(null);
     setAssetError(null);
+    setEquipmentRegistrationError(null);
     setInterventionError(null);
     setAdditionalInterventionError(null);
     setApprovalError(null);
@@ -614,6 +648,81 @@ export function TechnicianFieldHome() {
       void loadDetail(workOrderId, true);
     } finally {
       if (mutationId === mutationRequestRef.current) setAttachingAssetId(null);
+      if (mutationLockRef.current === mutationId) mutationLockRef.current = null;
+    }
+  }, [clearMutationErrors, detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
+
+  const runRegisterEquipment = useCallback(async (input: EquipmentRegistrationInput) => {
+    if (mutationLockRef.current !== null) return false;
+    const currentDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
+    if (!currentDetail?.fieldVisit) {
+      setEquipmentRegistrationError('La visita todavía no está disponible para registrar equipos en sitio.');
+      return false;
+    }
+    if (!currentDetail.canAddExistingAsset) {
+      setEquipmentRegistrationError('Field Authority no autoriza registrar equipos en el estado o asignación actual.');
+      return false;
+    }
+
+    const mutationId = ++mutationRequestRef.current;
+    mutationLockRef.current = mutationId;
+    const workOrderId = currentDetail.workOrderId;
+    const requestId = equipmentRegistrationRequestRef.current
+      ?? clientRequestId('register-asset', workOrderId);
+    equipmentRegistrationRequestRef.current = requestId;
+    setRegisteringEquipment(true);
+    clearMutationErrors();
+    try {
+      const [equipmentReferencePath, indoorNameplatePath, outdoorNameplatePath] = await Promise.all([
+        uploadFieldEquipmentRegistrationImage({
+          visitId: currentDetail.fieldVisit.id,
+          requestId,
+          kind: 'equipment_reference',
+          file: input.equipmentReference,
+        }),
+        uploadFieldEquipmentRegistrationImage({
+          visitId: currentDetail.fieldVisit.id,
+          requestId,
+          kind: 'indoor_nameplate',
+          file: input.indoorNameplate,
+        }),
+        uploadFieldEquipmentRegistrationImage({
+          visitId: currentDetail.fieldVisit.id,
+          requestId,
+          kind: 'outdoor_nameplate',
+          file: input.outdoorNameplate,
+        }),
+      ]);
+      if (mutationId !== mutationRequestRef.current) return false;
+
+      await registerOnSiteFieldEquipment({
+        visitId: currentDetail.fieldVisit.id,
+        requestId,
+        locationLabel: input.locationLabel,
+        systemType: input.systemType,
+        brand: input.brand,
+        btu: input.btu,
+        refrigerant: input.refrigerant,
+        voltage: input.voltage,
+        qrCode: input.qrCode,
+        evidencePaths: {
+          equipment_reference: equipmentReferencePath,
+          indoor_nameplate: indoorNameplatePath,
+          outdoor_nameplate: outdoorNameplatePath,
+        },
+      });
+      if (mutationId !== mutationRequestRef.current) return false;
+
+      equipmentRegistrationRequestRef.current = null;
+      await loadDetail(workOrderId, true);
+      return true;
+    } catch (mutationError) {
+      if (mutationId !== mutationRequestRef.current) return false;
+      setEquipmentRegistrationError(mutationError instanceof Error ? mutationError.message : 'No se pudo registrar el A/C en esta propiedad.');
+      void loadDetail(workOrderId, true);
+      return false;
+    } finally {
+      if (mutationId === mutationRequestRef.current) setRegisteringEquipment(false);
       if (mutationLockRef.current === mutationId) mutationLockRef.current = null;
     }
   }, [clearMutationErrors, detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
@@ -809,16 +918,19 @@ export function TechnicianFieldHome() {
         error={detailError}
         transitionError={transitionError}
         assetError={assetError}
+        equipmentRegistrationError={equipmentRegistrationError}
         interventionError={interventionError}
         additionalInterventionError={additionalInterventionError}
         approvalError={approvalError}
         transitioning={transitioning}
         attachingAssetId={attachingAssetId}
+        registeringEquipment={registeringEquipment}
         creatingInterventionVisitAssetId={creatingInterventionVisitAssetId}
         creatingAdditionalInterventionVisitAssetId={creatingAdditionalInterventionVisitAssetId}
         decidingApprovalInterventionId={decidingApprovalInterventionId}
         onTransition={(target) => void runVisitTransition(target)}
         onAttachAsset={(assetId) => void runAttachAsset(assetId)}
+        onRegisterEquipment={runRegisterEquipment}
         onCreatePlannedIntervention={(input) => void runCreatePlannedIntervention(input)}
         onCreateAdditionalIntervention={(input) => void runCreateAdditionalIntervention(input)}
         onRecordAdditionalDecision={(input) => void runRecordAdditionalDecision(input)}
