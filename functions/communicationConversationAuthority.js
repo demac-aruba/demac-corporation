@@ -1,7 +1,7 @@
 const { getAuth } = require("firebase-admin/auth");
 const { FieldValue, getFirestore } = require("firebase-admin/firestore");
 const { onRequest } = require("firebase-functions/v2/https");
-const { cleanText, hashId } = require("./bookingSchedulingPrimitives");
+const { cleanText, hashId } = require("./demacCorePrimitives");
 
 const COMMUNICATION_COMMAND_VERSION = 2;
 const COMMUNICATION_COMMAND_ACTIONS = Object.freeze({
