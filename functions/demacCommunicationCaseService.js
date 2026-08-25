@@ -2,8 +2,9 @@ const { FieldValue, getFirestore } = require("firebase-admin/firestore");
 const { arubaDateParts, cleanText, hashId } = require("./bookingSchedulingPrimitives");
 const { normalizeArubaWhatsAppPhone } = require("./demacCustomerAgentReplyPolicy");
 const { createBookingDispatchSafetyAuthority } = require("./bookingAuthorityDispatchSafety");
+const { communicationEpochDecision } = require("./demacCustomerTurn");
 
-const COMMUNICATION_CASE_VERSION = 2;
+const COMMUNICATION_CASE_VERSION = 3;
 const COMMUNICATION_CASE_COLLECTION = "communicationCases";
 const DISPATCH_HOLD_CONFIDENCE = 0.86;
 const ACTIVE_APPOINTMENT_CHANGE_INTENTS = new Set(["cancellation", "reschedule"]);
@@ -135,7 +136,9 @@ async function queryCustomerByPhone(db, phone) {
 }
 
 function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = null, clock = () => new Date() } = {}) {
-  if (!db || typeof db.collection !== "function") throw new Error("A Firestore-compatible db is required for Communication Cases.");
+  if (!db || typeof db.collection !== "function" || typeof db.runTransaction !== "function") {
+    throw new Error("A Firestore-compatible transactional db is required for Communication Cases.");
+  }
   const safety = dispatchSafety || createBookingDispatchSafetyAuthority({ db, clock });
 
   async function resolveCustomer({ conversation = {}, message = {} } = {}) {
@@ -159,12 +162,45 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
     return snapshot.exists ? { id: snapshot.id, ...snapshot.data() } : null;
   }
 
+  async function writeCaseIfCurrent({
+    caseRef,
+    conversationId,
+    expectedOwnershipVersion,
+    expectedCustomerInputVersion,
+    patch,
+    event,
+  }) {
+    return db.runTransaction(async (transaction) => {
+      const conversationRef = db.collection("communicationConversations").doc(conversationId);
+      const [conversationSnapshot, caseSnapshot] = await Promise.all([
+        transaction.get(conversationRef),
+        transaction.get(caseRef),
+      ]);
+      if (!conversationSnapshot.exists) return { written: false, reason: "communication-conversation-not-found" };
+      const epochDecision = communicationEpochDecision({
+        conversation: conversationSnapshot.data() || {},
+        expectedOwnershipVersion,
+        expectedCustomerInputVersion,
+      });
+      if (!epochDecision.allowed) return { written: false, reason: "stale-communication-epoch", epochReason: epochDecision.reason };
+      const currentCase = caseSnapshot.exists ? caseSnapshot.data() || {} : {};
+      transaction.set(caseRef, {
+        ...patch,
+        ...(event ? { history: appendCaseHistory(currentCase.history, event) } : {}),
+        createdAt: currentCase.createdAt || patch.createdAt || FieldValue.serverTimestamp(),
+      }, { merge: true });
+      return { written: true };
+    });
+  }
+
   async function processObservation({
     communicationAccountId,
     conversationId,
     conversation = {},
     message = {},
     observation = {},
+    expectedOwnershipVersion,
+    expectedCustomerInputVersion,
   } = {}) {
     if (!materialCaseIntent(observation)) return { processed: false, reason: "no-material-operational-case" };
     const caseType = caseTypeForObservation(observation);
@@ -178,30 +214,43 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
     if (observation.intent === "customer_withdrew_change") {
       const appointmentId = cleanText(previous?.appointmentId, 180);
       if (appointmentId) {
-        await safety.releaseDispatchHold({
+        const release = await safety.releaseDispatchHold({
           appointmentId,
           caseId: canonicalCaseId,
           resolution: "customer_withdrew_change",
           actor: { id: "demac-customer-agent", name: "Maya", source: "maya-observer" },
+          conversationId,
+          expectedOwnershipVersion,
+          expectedCustomerInputVersion,
         });
+        if (!release.success && release.reason === "stale-communication-epoch") {
+          return { processed: false, reason: release.reason, epochReason: release.epochReason };
+        }
       }
       const event = caseHistoryEvent({ kind: "customer_withdrew_change", messageId, observation, appointmentId, now });
-      await caseRef.set({
-        id: canonicalCaseId,
-        version: COMMUNICATION_CASE_VERSION,
-        communicationAccountId: cleanText(communicationAccountId, 180).toLowerCase(),
-        conversationId: cleanText(conversationId, 300),
-        caseType,
-        state: "RESOLVED_CUSTOMER_WITHDREW_CHANGE",
-        intent: observation.intent,
-        confidence: Number(observation.confidence || 0),
-        dispatchHoldActive: false,
-        ...sourceMessagePatch(messageId),
-        history: appendCaseHistory(previous?.history, event),
-        resolvedAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
-        updatedAtIso: now.toISOString(),
-      }, { merge: true });
+      const write = await writeCaseIfCurrent({
+        caseRef,
+        conversationId,
+        expectedOwnershipVersion,
+        expectedCustomerInputVersion,
+        event,
+        patch: {
+          id: canonicalCaseId,
+          version: COMMUNICATION_CASE_VERSION,
+          communicationAccountId: cleanText(communicationAccountId, 180).toLowerCase(),
+          conversationId: cleanText(conversationId, 300),
+          caseType,
+          state: "RESOLVED_CUSTOMER_WITHDREW_CHANGE",
+          intent: observation.intent,
+          confidence: Number(observation.confidence || 0),
+          dispatchHoldActive: false,
+          ...sourceMessagePatch(messageId),
+          resolvedAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+          updatedAtIso: now.toISOString(),
+        },
+      });
+      if (!write.written) return { processed: false, reason: write.reason, epochReason: write.epochReason };
       return { processed: true, caseId: canonicalCaseId, state: "RESOLVED_CUSTOMER_WITHDREW_CHANGE", appointmentId };
     }
 
@@ -235,8 +284,14 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
         reasonCategory: observation.reason ? "customer_provided_reason" : "no_reason_provided",
         sourceMessageIds: messageId ? [messageId] : [],
         actor: { id: "demac-customer-agent", name: "Maya", source: "maya-observer" },
+        conversationId,
+        expectedOwnershipVersion,
+        expectedCustomerInputVersion,
       });
-      dispatchHoldActive = hold.success === true;
+      if (!hold.success && hold.reason === "stale-communication-epoch") {
+        return { processed: false, reason: hold.reason, epochReason: hold.epochReason };
+      }
+      dispatchHoldActive = hold.dispatchHold?.active === true;
       if (dispatchHoldActive) state = "AWAITING_CUSTOMER_DECISION";
       if (!hold.success && hold.reason === "dispatch-hold-owned-by-other-case") {
         attentionReason = hold.reason;
@@ -253,32 +308,38 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
       appointmentId,
       now,
     });
-    await caseRef.set({
-      id: canonicalCaseId,
-      version: COMMUNICATION_CASE_VERSION,
-      communicationAccountId: cleanText(communicationAccountId, 180).toLowerCase(),
-      conversationId: cleanText(conversationId, 300),
-      customerId: customer?.id || null,
-      appointmentId: appointmentId || null,
-      caseType,
-      state,
-      intent: observation.intent,
-      confidence: Number(observation.confidence || 0),
-      language: cleanText(observation.language, 40),
-      summary: cleanText(observation.summary, 800),
-      reasonProvided: observation.reasonAlreadyProvided === true,
-      reason: cleanText(observation.reason, 500) || null,
-      attentionRequired: observation.requiresAttention === true || Boolean(attentionReason),
-      attentionReason: attentionReason || null,
-      dispatchRisk: observation.dispatchRisk === true,
-      dispatchHoldActive,
-      candidateAppointmentIds: match.candidates?.map((item) => item.id).filter(Boolean).slice(0, 10) || [],
-      ...sourceMessagePatch(messageId),
-      history: appendCaseHistory(previous?.history, event),
-      createdAt: previous?.createdAt || FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
-      updatedAtIso: now.toISOString(),
-    }, { merge: true });
+    const write = await writeCaseIfCurrent({
+      caseRef,
+      conversationId,
+      expectedOwnershipVersion,
+      expectedCustomerInputVersion,
+      event,
+      patch: {
+        id: canonicalCaseId,
+        version: COMMUNICATION_CASE_VERSION,
+        communicationAccountId: cleanText(communicationAccountId, 180).toLowerCase(),
+        conversationId: cleanText(conversationId, 300),
+        customerId: customer?.id || null,
+        appointmentId: appointmentId || null,
+        caseType,
+        state,
+        intent: observation.intent,
+        confidence: Number(observation.confidence || 0),
+        language: cleanText(observation.language, 40),
+        summary: cleanText(observation.summary, 800),
+        reasonProvided: observation.reasonAlreadyProvided === true,
+        reason: cleanText(observation.reason, 500) || null,
+        attentionRequired: observation.requiresAttention === true || Boolean(attentionReason),
+        attentionReason: attentionReason || null,
+        dispatchRisk: observation.dispatchRisk === true,
+        dispatchHoldActive,
+        candidateAppointmentIds: match.candidates?.map((item) => item.id).filter(Boolean).slice(0, 10) || [],
+        ...sourceMessagePatch(messageId),
+        updatedAt: FieldValue.serverTimestamp(),
+        updatedAtIso: now.toISOString(),
+      },
+    });
+    if (!write.written) return { processed: false, reason: write.reason, epochReason: write.epochReason };
 
     return {
       processed: true,
@@ -296,6 +357,7 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
     loadUpcomingAppointments,
     processObservation,
     resolveCustomer,
+    writeCaseIfCurrent,
   };
 }
 
