@@ -5,6 +5,7 @@ const {
 
 const CUSTOMER_AGENT_SESSION_VERSION = 3;
 const CUSTOMER_AGENT_SESSION_COLLECTION = "customerAgentSessions";
+const CANONICAL_CONVERSATION_ID = /^COMM-[A-F0-9]{40}$/i;
 
 function timestampValue() {
   try {
@@ -16,21 +17,21 @@ function timestampValue() {
 }
 
 function stableConversationIdentity(context = {}) {
-  return cleanText(context.conversationId || context.conversationKey, 300);
+  const conversation = cleanText(context.conversationId || context.conversationKey, 300);
+  return CANONICAL_CONVERSATION_ID.test(conversation) ? conversation.toUpperCase() : "";
 }
 
 function sessionIdentity(context = {}) {
-  const communicationAccountId = cleanText(context.communicationAccountId, 180).toLowerCase();
   const channel = cleanText(context.channel || "whatsapp", 80).toLowerCase() || "whatsapp";
   const provider = cleanText(context.provider, 80).toLowerCase();
   const conversation = stableConversationIdentity(context);
-  if (!communicationAccountId || !provider || !conversation) return null;
+  if (!provider || !conversation) return null;
   return {
-    communicationAccountId,
+    communicationAccountId: cleanText(context.communicationAccountId, 180).toLowerCase(),
     channel,
     provider,
     conversation,
-    sessionId: `CAS-${hashId(`${communicationAccountId}|${channel}|${provider}|${conversation}`, 40).toUpperCase()}`,
+    sessionId: `CAS-${hashId(`${channel}|${provider}|${conversation}`, 40).toUpperCase()}`,
   };
 }
 
@@ -179,7 +180,7 @@ function toolStatePatch(toolName, args = {}, result = {}) {
 function identityPatch(identity) {
   return {
     version: CUSTOMER_AGENT_SESSION_VERSION,
-    communicationAccountId: identity.communicationAccountId,
+    ...(identity.communicationAccountId ? { communicationAccountId: identity.communicationAccountId } : {}),
     channel: identity.channel,
     provider: identity.provider,
     conversationId: identity.conversation,
@@ -246,6 +247,7 @@ async function recordCustomerConversationOutcome({
 }
 
 module.exports = {
+  CANONICAL_CONVERSATION_ID,
   CUSTOMER_AGENT_SESSION_COLLECTION,
   CUSTOMER_AGENT_SESSION_VERSION,
   compactCanonicalOffer,
