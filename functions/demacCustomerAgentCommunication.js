@@ -2,9 +2,9 @@ const { getApp, getApps, initializeApp } = require("firebase-admin/app");
 const { FieldValue, getFirestore } = require("firebase-admin/firestore");
 const logger = require("firebase-functions/logger");
 const { defineSecret } = require("firebase-functions/params");
-const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { createCustomerAgentRuntime, HANDOFF_QUEUES } = require("./demacCustomerAgentRuntimeV1");
-const { sessionIdentity } = require("./demacCustomerConversationState");
+const { sessionIdentity, stableConversationIdentity } = require("./demacCustomerConversationState");
+const { canonicalRuntimeMessage, customerSemanticContent } = require("./demacCustomerTurn");
 const { cleanText, hashId } = require("./bookingSchedulingPrimitives");
 const { cleanCustomerFacingMessage } = require("./demacCustomerMessageFormatting");
 const {
@@ -12,6 +12,10 @@ const {
   MAYA_SETTINGS_DOCUMENT,
   mayaReplyDecision,
 } = require("./demacCustomerAgentReplyPolicy");
+const {
+  COMMUNICATION_SETTINGS_COLLECTION,
+  COMMUNICATION_SETTINGS_DOCUMENT,
+} = require("./demacCommunicationIdentity");
 
 const app = getApps().length ? getApp() : initializeApp();
 const db = getFirestore(app);
@@ -36,8 +40,13 @@ function timestampMillis(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function safeEpoch(value) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0 ? number : 0;
+}
+
 function conversationIdentity(message = {}) {
-  return cleanText(message.chat || message.conversationId || message.phone, 300);
+  return stableConversationIdentity({ conversationId: message.conversationId });
 }
 
 function queueDocumentId(conversationId, messageId) {
@@ -59,17 +68,22 @@ function shouldRunAgent(conversation = {}) {
 }
 
 async function communicationOwnershipGuard({ context = {} } = {}) {
-  const conversationId = safeDocumentId(context.conversationId || context.contactJid || context.contactPhone);
-  if (!conversationId || conversationId === "unknown") {
-    return { allowed: false, code: "missing_conversation_identity", reason: "Communication Center conversation identity is missing." };
+  const conversationId = stableConversationIdentity(context);
+  if (!conversationId) {
+    return { allowed: false, code: "missing_conversation_identity", reason: "Canonical Communication Center conversation identity is missing." };
   }
   const snapshot = await db.collection("communicationConversations").doc(conversationId).get();
   if (!snapshot.exists) {
     return { allowed: false, code: "conversation_missing", reason: "Communication Center conversation no longer exists." };
   }
   const conversation = snapshot.data() || {};
+  const expectedAccount = cleanText(context.communicationAccountId, 180).toLowerCase();
+  const currentAccount = cleanText(conversation.communicationAccountId, 180).toLowerCase();
+  if (expectedAccount && currentAccount && expectedAccount !== currentAccount) {
+    return { allowed: false, code: "communication_account_changed", reason: "Communication account identity changed before this action." };
+  }
   if (!shouldRunAgent(conversation)) {
-    return { allowed: false, code: "human_takeover", reason: "A DEMAC operator owns this conversation now." };
+    return { allowed: false, code: "human_takeover", reason: "A DEMAC operator owns or paused this conversation now." };
   }
   return { allowed: true };
 }
@@ -80,29 +94,16 @@ const customerAgentRuntime = createCustomerAgentRuntime({
 });
 
 function communicationMessageToRuntime(message = {}) {
-  const role = cleanText(message.role, 40);
-  const direction = role === "customer" ? "inbound" : role === "operator" || role === "ai" ? "outbound" : "";
-  const text = cleanText(message.text || message.mediaCaption || message.reactionEmoji, 4_000);
-  if (!direction || !text) return null;
-  return {
-    id: cleanText(message.id, 300),
-    direction,
-    text,
-  };
+  return canonicalRuntimeMessage(message, 4_000);
 }
 
 function whatsappMessageToRuntime(message = {}) {
-  const direction = message.direction === "inbound" ? "inbound" : message.direction === "outbound" ? "outbound" : "";
-  const text = cleanText(message.text || message.mediaCaption || message.reactionEmoji, 4_000);
-  if (!direction || !text) return null;
-  return {
-    id: cleanText(message.messageId || message.id, 300),
-    direction,
-    text,
-  };
+  return canonicalRuntimeMessage(message, 4_000);
 }
 
 function buildRuntimeBody({ conversationId, conversation = {}, inboundMessage = {}, provider = "wacli" }) {
+  const canonicalConversationId = stableConversationIdentity({ conversationId });
+  if (!canonicalConversationId) throw new Error("Customer Agent runtime requires a canonical Communication Center conversation ID.");
   const inbound = whatsappMessageToRuntime(inboundMessage);
   const messages = (Array.isArray(conversation.recentMessages) ? conversation.recentMessages : [])
     .map(communicationMessageToRuntime)
@@ -110,14 +111,21 @@ function buildRuntimeBody({ conversationId, conversation = {}, inboundMessage = 
   if (inbound && !messages.some((message) => message.id === inbound.id)) messages.push(inbound);
   const normalizedMessages = messages.slice(-40);
   const latestInbound = inbound || [...normalizedMessages].reverse().find((message) => message.direction === "inbound");
+  const communicationAccountId = cleanText(conversation.communicationAccountId || inboundMessage.communicationAccountId, 180).toLowerCase();
+  const customerInputVersion = Number.isSafeInteger(Number(latestInbound?.customerInputVersion))
+    ? Number(latestInbound.customerInputVersion)
+    : safeEpoch(inboundMessage.customerInputVersion || conversation.customerInputVersion);
   return {
     provider,
     channel: "whatsapp",
-    conversationId,
+    communicationAccountId,
+    conversationId: canonicalConversationId,
     inboundMessageId: latestInbound?.id || cleanText(inboundMessage.messageId, 300),
+    customerInputVersion,
     conversation: {
-      id: conversationId,
-      conversationId,
+      id: canonicalConversationId,
+      conversationId: canonicalConversationId,
+      communicationAccountId,
       provider,
       contactPhone: cleanText(conversation.phone || inboundMessage.phone, 80),
       contactJid: cleanText(conversation.chatJid || conversation.externalChatId || inboundMessage.chat, 180),
@@ -126,6 +134,7 @@ function buildRuntimeBody({ conversationId, conversation = {}, inboundMessage = 
       customerTurn: {
         id: latestInbound?.id || "",
         text: latestInbound?.text || "",
+        customerInputVersion,
       },
     },
   };
@@ -144,7 +153,7 @@ function outcomeConversationPatch(result = {}) {
     const handoffReason = cleanText(result.metadata?.handoffReason, 500)
       || "DEMAC Customer Agent requested human review without a structured reason.";
     return {
-      aiDisposition: "human_active",
+      aiDisposition: "handoff_pending",
       status: "escalated",
       queue: handoffQueue,
       routeReason: handoffReason,
@@ -165,12 +174,13 @@ function outcomeConversationPatch(result = {}) {
 }
 
 async function enqueueInbound({ messageId, message, reactivate = false }) {
-  const conversationId = safeDocumentId(conversationIdentity(message));
-  if (!conversationId || conversationId === "unknown") return null;
+  const conversationId = conversationIdentity(message);
+  if (!conversationId) return null;
   const queueId = queueDocumentId(conversationId, messageId);
   const ref = db.collection(AGENT_QUEUE_COLLECTION).doc(queueId);
   const snapshot = await ref.get();
-  const currentStatus = snapshot.exists ? cleanText(snapshot.data()?.status, 40) : "";
+  const current = snapshot.exists ? snapshot.data() || {} : {};
+  const currentStatus = cleanText(current.status, 40);
   const terminalStatuses = ["processed", "coalesced", "skipped_provider", "skipped_policy"];
   if (terminalStatuses.includes(currentStatus) || (currentStatus === "skipped_human" && !reactivate)) {
     return { ref, queueId, conversationId, completed: true };
@@ -178,14 +188,17 @@ async function enqueueInbound({ messageId, message, reactivate = false }) {
   await ref.set({
     id: queueId,
     conversationId,
+    communicationAccountId: cleanText(message.communicationAccountId, 180).toLowerCase() || current.communicationAccountId || "",
     provider: cleanText(message.provider, 40) || "wacli",
     messageId,
-    chat: cleanText(message.chat, 300),
+    customerInputVersion: Number.isSafeInteger(Number(message.customerInputVersion))
+      ? Number(message.customerInputVersion)
+      : current.customerInputVersion ?? null,
     status: "queued",
-    attempts: Number(snapshot.data()?.attempts || 0),
-    reactivated: reactivate || snapshot.data()?.reactivated === true,
-    queuedAt: snapshot.data()?.queuedAt || FieldValue.serverTimestamp(),
-    queuedAtIso: snapshot.data()?.queuedAtIso || new Date().toISOString(),
+    attempts: Number(current.attempts || 0),
+    reactivated: reactivate || current.reactivated === true,
+    queuedAt: current.queuedAt || FieldValue.serverTimestamp(),
+    queuedAtIso: current.queuedAtIso || new Date().toISOString(),
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
   return { ref, queueId, conversationId, completed: false };
@@ -248,10 +261,15 @@ async function markOlderAsCoalesced(items, selected) {
   await batch.commit();
 }
 
-async function ensureAgentSessionActive(conversationId, provider) {
-  const identity = sessionIdentity({ provider, conversationId });
-  if (!identity) return;
+async function ensureAgentSessionActive(conversationId, provider, communicationAccountId = "") {
+  const identity = sessionIdentity({ communicationAccountId, channel: "whatsapp", provider, conversationId });
+  if (!identity) throw new Error("Customer Agent session requires a canonical Communication Center conversation identity.");
   await db.collection("customerAgentSessions").doc(identity.sessionId).set({
+    version: 3,
+    ...(communicationAccountId ? { communicationAccountId: cleanText(communicationAccountId, 180).toLowerCase() } : {}),
+    channel: "whatsapp",
+    provider: identity.provider,
+    conversationId: identity.conversation,
     status: "AI_ACTIVE",
     requiresHuman: false,
     handoffQueue: "",
@@ -261,7 +279,13 @@ async function ensureAgentSessionActive(conversationId, provider) {
   }, { merge: true });
 }
 
-async function queueAgentReply({ conversationId, conversation, inboundMessageId, result, provider }) {
+async function queueAgentReply({
+  conversationId,
+  inboundMessageId,
+  result,
+  provider,
+  expectedCustomerInputVersion = null,
+}) {
   if (!automaticReplySupported(provider)) {
     throw new Error(`Automatic customer-agent replies are not enabled for provider ${cleanText(provider, 40) || "unknown"}.`);
   }
@@ -271,30 +295,42 @@ async function queueAgentReply({ conversationId, conversation, inboundMessageId,
   const ref = db.collection("whatsappOutboundQueue").doc(id);
   const conversationRef = db.collection("communicationConversations").doc(conversationId);
   const settingsRef = db.collection(MAYA_SETTINGS_COLLECTION).doc(MAYA_SETTINGS_DOCUMENT);
+  const communicationSettingsRef = db.collection(COMMUNICATION_SETTINGS_COLLECTION).doc(COMMUNICATION_SETTINGS_DOCUMENT);
   let outcome = { queued: false, id, reason: "not-created" };
 
   await db.runTransaction(async (transaction) => {
-    const [conversationSnapshot, existing, settingsSnapshot] = await Promise.all([
+    const [conversationSnapshot, existing, settingsSnapshot, communicationSettingsSnapshot] = await Promise.all([
       transaction.get(conversationRef),
       transaction.get(ref),
       transaction.get(settingsRef),
+      transaction.get(communicationSettingsRef),
     ]);
     if (!conversationSnapshot.exists || !shouldRunAgent(conversationSnapshot.data() || {})) {
       outcome = { queued: false, id, reason: "human-takeover" };
       return;
     }
     const currentConversation = conversationSnapshot.data() || {};
+    const communicationAccountId = cleanText(currentConversation.communicationAccountId, 180).toLowerCase();
+    if (!communicationAccountId) {
+      outcome = { queued: false, id, reason: "missing-communication-account-id" };
+      return;
+    }
+    const currentInputVersion = safeEpoch(currentConversation.customerInputVersion);
+    if (
+      Number.isSafeInteger(Number(expectedCustomerInputVersion))
+      && Number(expectedCustomerInputVersion) >= 0
+      && Number(expectedCustomerInputVersion) !== currentInputVersion
+    ) {
+      outcome = { queued: false, id, reason: "stale-customer-input" };
+      return;
+    }
     const replyDecision = mayaReplyDecision({
       conversation: currentConversation,
       settings: settingsSnapshot.exists ? settingsSnapshot.data() || {} : {},
+      communicationSettings: communicationSettingsSnapshot.exists ? communicationSettingsSnapshot.data() || {} : {},
     });
     if (!replyDecision.allowed) {
-      outcome = {
-        queued: false,
-        id,
-        reason: replyDecision.reason,
-        phone: replyDecision.phone || "",
-      };
+      outcome = { queued: false, id, reason: replyDecision.reason, phone: replyDecision.phone || "" };
       return;
     }
     if (existing.exists) {
@@ -302,24 +338,23 @@ async function queueAgentReply({ conversationId, conversation, inboundMessageId,
       return;
     }
     const to = cleanText(
-      currentConversation.chatJid
-        || currentConversation.externalChatId
-        || currentConversation.phone
-        || conversation.chatJid
-        || conversation.externalChatId
-        || conversation.phone,
+      currentConversation.chatJid || currentConversation.externalChatId || currentConversation.phone,
       300,
     );
-    if (!to) throw new Error("Customer Agent cannot reply because the conversation has no WhatsApp recipient.");
+    if (!to) throw new Error("Customer Agent cannot reply because the canonical conversation has no WhatsApp recipient.");
     transaction.set(ref, {
       id,
       provider: "wacli",
+      communicationAccountId,
+      outboundClass: "conversation_maya",
       status: "queued",
       type: "text",
       to,
       text,
       conversationId,
       sourceInboundMessageId: inboundMessageId,
+      expectedOwnershipVersion: safeEpoch(currentConversation.ownershipVersion),
+      expectedCustomerInputVersion: currentInputVersion,
       createdByUserId: "demac-customer-agent",
       createdByName: "Maya",
       createdAt: FieldValue.serverTimestamp(),
@@ -340,15 +375,30 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
   const conversationRef = db.collection("communicationConversations").doc(conversationId);
   const [conversationSnapshot, messageSnapshot] = await Promise.all([
     conversationRef.get(),
-    db.collection("whatsappMessages").doc(safeDocumentId(selected.messageId)).get(),
+    db.collection("whatsappMessages").doc(cleanText(selected.messageId, 300)).get(),
   ]);
   if (!conversationSnapshot.exists) {
-    const notReady = new Error("Communication Center conversation is not materialized yet; retry this event.");
+    const notReady = new Error("Canonical Communication Center conversation is not materialized yet; retry this event.");
     notReady.code = "conversation_not_ready";
     throw notReady;
   }
+  if (!messageSnapshot.exists) {
+    const missing = new Error("Canonical inbound WhatsApp message is missing; autonomous processing cannot reconstruct it from phone/JID fallbacks.");
+    missing.code = "canonical_message_missing";
+    throw missing;
+  }
   const conversation = conversationSnapshot.data() || {};
-  const inboundMessage = messageSnapshot.exists ? { id: messageSnapshot.id, ...messageSnapshot.data() } : {};
+  const inboundMessage = { id: messageSnapshot.id, ...messageSnapshot.data() };
+  const currentAccount = cleanText(conversation.communicationAccountId, 180).toLowerCase();
+  const queuedAccount = cleanText(selected.communicationAccountId, 180).toLowerCase();
+  if (queuedAccount && currentAccount && queuedAccount !== currentAccount) {
+    await selected.ref.set({ status: "skipped_policy", discardReason: "communication-account-changed", completedAt: FieldValue.serverTimestamp() }, { merge: true });
+    return { processed: false, reason: "communication-account-changed" };
+  }
+  if (!customerSemanticContent(inboundMessage, 4_000)) {
+    await selected.ref.set({ status: "skipped_policy", discardReason: "no-canonical-customer-content", completedAt: FieldValue.serverTimestamp() }, { merge: true });
+    return { processed: false, reason: "no-canonical-customer-content" };
+  }
 
   if (!shouldRunAgent(conversation)) {
     await selected.ref.set({
@@ -359,13 +409,16 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
   }
 
   const attempts = Number(selected.attempts || 0) + 1;
+  const currentInputVersion = safeEpoch(conversation.customerInputVersion);
   await selected.ref.set({
     status: "processing",
     attempts,
     leaseOwnerId,
+    expectedOwnershipVersion: safeEpoch(conversation.ownershipVersion),
+    expectedCustomerInputVersion: currentInputVersion,
     processingStartedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
-  await ensureAgentSessionActive(conversationId, selected.provider || "wacli");
+  await ensureAgentSessionActive(conversationId, selected.provider || "wacli", currentAccount);
 
   const rawBody = buildRuntimeBody({
     conversationId,
@@ -401,10 +454,10 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
 
   const reply = await queueAgentReply({
     conversationId,
-    conversation,
     inboundMessageId: selected.messageId,
     result,
     provider: selected.provider || "wacli",
+    expectedCustomerInputVersion: currentInputVersion,
   });
   if (!reply.queued && reply.reason === "human-takeover") {
     await selected.ref.set({
@@ -414,12 +467,15 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
     }, { merge: true });
     return { processed: false, reason: "human-takeover-before-outbound-commit" };
   }
-  if (!reply.queued && [
-    "auto-reply-disabled",
-    "unsupported-auto-reply-mode",
-    "missing-customer-phone",
-    "phone-not-allowlisted",
-  ].includes(reply.reason)) {
+  if (!reply.queued && reply.reason === "stale-customer-input") {
+    await selected.ref.set({
+      status: "coalesced",
+      discardReason: "stale-customer-input-before-outbound-commit",
+      completedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return { processed: false, reason: "stale-customer-input-before-outbound-commit" };
+  }
+  if (!reply.queued && reply.reason !== "empty-draft") {
     await selected.ref.set({
       status: "skipped_policy",
       discardReason: `maya-reply-policy:${reply.reason}`,
@@ -435,6 +491,7 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
     }, { merge: true });
     return { processed: false, reason: `reply-policy-blocked:${reply.reason}` };
   }
+  if (!reply.queued) throw new Error(`Customer Agent produced no outbound message: ${reply.reason || "unknown"}.`);
 
   await conversationRef.set({
     ...outcomeConversationPatch(result),
@@ -459,14 +516,10 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
 
 async function processQueueEvent({ messageId, message, reactivate = false }) {
   if (!message || message.direction !== "inbound") return { ignored: true, reason: "not-inbound" };
-  if (!cleanText(message.text || message.mediaCaption || message.reactionEmoji, 4_000)) {
-    return { ignored: true, reason: "no-customer-content" };
-  }
-  if (!automaticReplySupported(message.provider || "wacli")) {
-    return { ignored: true, reason: "provider-not-enabled" };
-  }
+  if (!customerSemanticContent(message, 4_000)) return { ignored: true, reason: "no-customer-content" };
+  if (!automaticReplySupported(message.provider || "wacli")) return { ignored: true, reason: "provider-not-enabled" };
   const queued = await enqueueInbound({ messageId, message, reactivate });
-  if (!queued || queued.completed) return { ignored: true, reason: queued?.completed ? "already-completed" : "no-conversation" };
+  if (!queued || queued.completed) return { ignored: true, reason: queued?.completed ? "already-completed" : "no-canonical-conversation" };
 
   const leaseOwnerId = `${queued.queueId}:${Date.now()}`;
   const lease = await acquireLease(queued.conversationId, leaseOwnerId);
@@ -488,7 +541,7 @@ async function processQueueEvent({ messageId, message, reactivate = false }) {
         completedAt: FieldValue.serverTimestamp(),
       }, { merge: true });
       await db.collection("communicationConversations").doc(queued.conversationId).set({
-        aiDisposition: "human_active",
+        aiDisposition: "handoff_pending",
         status: "escalated",
         queue: "manager",
         routeReason: "Customer Agent failed repeatedly and requires human review.",
@@ -511,75 +564,31 @@ async function processQueueEvent({ messageId, message, reactivate = false }) {
 function latestCustomerMessage(conversation = {}) {
   return [...(Array.isArray(conversation.recentMessages) ? conversation.recentMessages : [])]
     .reverse()
-    .find((message) => message?.role === "customer" && cleanText(message.text || message.mediaCaption || message.reactionEmoji, 4_000)) || null;
+    .find((message) => message?.role === "customer" && cleanText(message.id, 300)) || null;
 }
 
 async function reactivateConversation(conversationId, conversation = {}) {
+  const canonicalConversationId = stableConversationIdentity({ conversationId });
+  if (!canonicalConversationId) return { ignored: true, reason: "missing-canonical-conversation" };
   if (!shouldRunAgent(conversation)) return { ignored: true, reason: "not-ai-owned" };
   const latest = latestCustomerMessage(conversation);
   if (!latest?.id) return { ignored: true, reason: "no-pending-customer-message" };
 
-  const messageRef = db.collection("whatsappMessages").doc(safeDocumentId(latest.id));
+  const messageRef = db.collection("whatsappMessages").doc(cleanText(latest.id, 300));
   const snapshot = await messageRef.get();
-  const provider = cleanText(conversation.provider || latest.provider, 40) || "wacli";
-  const message = snapshot.exists
-    ? { id: snapshot.id, ...snapshot.data() }
-    : {
-      id: latest.id,
-      messageId: latest.id,
-      provider,
-      direction: "inbound",
-      chat: cleanText(conversation.chatJid || conversation.externalChatId || conversationId, 300),
-      conversationId,
-      phone: cleanText(conversation.phone, 80),
-      text: cleanText(latest.text || latest.mediaCaption || latest.reactionEmoji, 4_000),
-    };
+  if (!snapshot.exists) return { ignored: true, reason: "canonical-message-missing" };
+  const message = { id: snapshot.id, ...snapshot.data() };
+  if (stableConversationIdentity({ conversationId: message.conversationId }) !== canonicalConversationId) {
+    return { ignored: true, reason: "canonical-message-conversation-mismatch" };
+  }
+  if (!customerSemanticContent(message, 4_000)) return { ignored: true, reason: "no-canonical-customer-content" };
 
   return processQueueEvent({
-    messageId: cleanText(message.messageId || message.id || latest.id, 300),
+    messageId: cleanText(message.messageId || message.id, 300),
     message,
     reactivate: true,
   });
 }
-
-exports.processCustomerAgentInbound = onDocumentCreated(
-  {
-    document: "whatsappMessages/{messageId}",
-    region: "us-central1",
-    memory: "512MiB",
-    timeoutSeconds: 120,
-    retry: true,
-    secrets: [openAiApiKey],
-  },
-  async (event) => {
-    const snapshot = event.data;
-    if (!snapshot) return;
-    const message = { id: snapshot.id, ...snapshot.data() };
-    await processQueueEvent({
-      messageId: cleanText(message.messageId || snapshot.id, 300),
-      message,
-    });
-  },
-);
-
-exports.processCustomerAgentReactivation = onDocumentUpdated(
-  {
-    document: "communicationConversations/{conversationId}",
-    region: "us-central1",
-    memory: "512MiB",
-    timeoutSeconds: 120,
-    retry: true,
-    secrets: [openAiApiKey],
-  },
-  async (event) => {
-    const before = event.data?.before?.data() || {};
-    const after = event.data?.after?.data() || {};
-    if (before.aiDisposition === "ai_active" || after.aiDisposition !== "ai_active") return;
-    if (after.ownerUserId || after.lockedByUserId) return;
-    await ensureAgentSessionActive(event.params.conversationId, cleanText(after.provider, 40) || "wacli");
-    await reactivateConversation(event.params.conversationId, after);
-  },
-);
 
 module.exports.AGENT_LOCK_COLLECTION = AGENT_LOCK_COLLECTION;
 module.exports.AGENT_QUEUE_COLLECTION = AGENT_QUEUE_COLLECTION;
@@ -590,10 +599,14 @@ module.exports.buildRuntimeBody = buildRuntimeBody;
 module.exports.communicationMessageToRuntime = communicationMessageToRuntime;
 module.exports.communicationOwnershipGuard = communicationOwnershipGuard;
 module.exports.conversationIdentity = conversationIdentity;
+module.exports.enqueueInbound = enqueueInbound;
+module.exports.ensureAgentSessionActive = ensureAgentSessionActive;
 module.exports.latestCustomerMessage = latestCustomerMessage;
 module.exports.outboundDocumentId = outboundDocumentId;
 module.exports.outcomeConversationPatch = outcomeConversationPatch;
+module.exports.processLatestQueued = processLatestQueued;
 module.exports.processQueueEvent = processQueueEvent;
+module.exports.queueAgentReply = queueAgentReply;
 module.exports.queueDocumentId = queueDocumentId;
 module.exports.reactivateConversation = reactivateConversation;
 module.exports.semanticHandoffQueue = semanticHandoffQueue;
