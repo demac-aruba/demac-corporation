@@ -403,7 +403,7 @@ test('WorkIntervention projection fails closed on schema, identity, origin, stat
   assert.throws(() => projectWorkIntervention({ ...valid, version: 1.5 }), /version is invalid/);
 });
 
-test('job projection derives planned-vs-actual progress and exposes catalog choices only to eligible intervention writers', async () => {
+test('job projection derives per-Asset planned intervention options and exposes catalog choices only to eligible writers', async () => {
   const store = createDb({
     services: [service('service-standard'), service('service-checkup')],
     workInterventions: [storedIntervention()],
@@ -425,6 +425,9 @@ test('job projection derives planned-vs-actual progress and exposes catalog choi
   assert.deepEqual(result.plannedWorkProgress[0], {
     id: 'line-standard', plannedQuantity: 2, linkedActualQuantity: 1, remainingQuantity: 1,
   });
+  assert.deepEqual(result.plannedInterventionOptions, [
+    { visitAssetId: 'VA-2', plannedWorkLineIds: ['line-standard'] },
+  ], 'server must own the per-Asset eligibility rule instead of forcing React to reconstruct it');
   assert.deepEqual(result.availableFieldServices.map((item) => item.id), ['service-standard', 'service-checkup']);
   assert.equal(result.canAddPlannedIntervention, true);
 
@@ -432,6 +435,7 @@ test('job projection derives planned-vs-actual progress and exposes catalog choi
     ...baseJob,
     allowedActions: ['read'],
   });
+  assert.deepEqual(helper.plannedInterventionOptions, [], 'read-only users must not receive mutation options');
   assert.deepEqual(helper.availableFieldServices, [], 'read-only users must not receive mutation-only service choices');
   assert.equal(helper.canAddPlannedIntervention, false);
 
@@ -441,6 +445,7 @@ test('job projection derives planned-vs-actual progress and exposes catalog choi
     allowedActions: ['read', 'intervention.add'],
   });
   assert.equal(full.plannedWorkProgress[0].remainingQuantity, 0);
+  assert.deepEqual(full.plannedInterventionOptions, []);
   assert.deepEqual(full.availableFieldServices, [], 'fully linked plan does not need mutation-only service choices');
   assert.equal(full.canAddPlannedIntervention, false);
 });

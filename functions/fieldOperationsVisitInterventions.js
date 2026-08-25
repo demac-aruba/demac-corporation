@@ -163,6 +163,22 @@ function plannedWorkProgress(plannedWork = [], interventions = []) {
   });
 }
 
+function plannedInterventionOptions(job, progress, interventions) {
+  if (!plannedInterventionBaseEligible(job, progress)) return [];
+  return job.visitAssets.map((visitAsset) => {
+    const visitAssetId = text(visitAsset?.id, 180);
+    const plannedWorkLineIds = progress
+      .filter((line) => line.remainingQuantity > 0)
+      .filter((line) => !interventions.some((intervention) => (
+        intervention.visitAssetId === visitAssetId
+        && intervention.plannedWorkLineId === line.id
+        && coveringIntervention(intervention)
+      )))
+      .map((line) => line.id);
+    return { visitAssetId, plannedWorkLineIds };
+  }).filter((option) => option.visitAssetId && option.plannedWorkLineIds.length > 0);
+}
+
 function projectFieldService(preset) {
   return {
     id: text(preset?.serviceId, 180),
@@ -201,8 +217,8 @@ function plannedInterventionBaseEligible(job, progress) {
   );
 }
 
-function canAddPlannedIntervention(job, progress, services) {
-  return plannedInterventionBaseEligible(job, progress) && services.length > 0;
+function canAddPlannedIntervention(options, services) {
+  return Array.isArray(options) && options.length > 0 && Array.isArray(services) && services.length > 0;
 }
 
 async function attachWorkInterventionsToJob(db, job) {
@@ -212,6 +228,7 @@ async function attachWorkInterventionsToJob(db, job) {
       ...job,
       workInterventions: [],
       plannedWorkProgress: plannedWorkProgress(job?.plannedWork || [], []),
+      plannedInterventionOptions: [],
       availableFieldServices: [],
       canAddPlannedIntervention: false,
     };
@@ -223,15 +240,15 @@ async function attachWorkInterventionsToJob(db, job) {
   };
   const workInterventions = await loadWorkInterventions(db, visitId, expectedContext);
   const progress = plannedWorkProgress(job?.plannedWork || [], workInterventions);
-  const availableFieldServices = plannedInterventionBaseEligible(job, progress)
-    ? await loadFieldServiceCatalog(db)
-    : [];
+  const options = plannedInterventionOptions(job, progress, workInterventions);
+  const availableFieldServices = options.length > 0 ? await loadFieldServiceCatalog(db) : [];
   return {
     ...job,
     workInterventions,
     plannedWorkProgress: progress,
+    plannedInterventionOptions: options,
     availableFieldServices,
-    canAddPlannedIntervention: canAddPlannedIntervention(job, progress, availableFieldServices),
+    canAddPlannedIntervention: canAddPlannedIntervention(options, availableFieldServices),
   };
 }
 
@@ -464,6 +481,7 @@ module.exports.coveringIntervention = coveringIntervention;
 module.exports.createPlannedWorkInterventionCommand = createPlannedWorkInterventionCommand;
 module.exports.loadFieldServiceCatalog = loadFieldServiceCatalog;
 module.exports.loadWorkInterventions = loadWorkInterventions;
+module.exports.plannedInterventionOptions = plannedInterventionOptions;
 module.exports.plannedWorkProgress = plannedWorkProgress;
 module.exports.projectWorkIntervention = projectWorkIntervention;
 module.exports.workInterventionAuditEvent = workInterventionAuditEvent;
