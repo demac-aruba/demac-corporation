@@ -1,5 +1,5 @@
 const crypto = require('node:crypto');
-const { fieldFirestoreData } = require('./fieldOperationsFirestoreData');
+const { fieldFirestoreData, fieldSnapshotRecord } = require('./fieldOperationsFirestoreData');
 const { fieldError } = require('./fieldOperationsAuthorityCore');
 const { stableRequestId } = require('./fieldOperationsAuthorityWorkVisit');
 const { loadCurrentVisitMutationContext } = require('./fieldOperationsVisitMutationContext');
@@ -39,7 +39,7 @@ function deterministicId(prefix, value) {
 }
 
 function snapshotRecords(snapshot) {
-  return (snapshot?.docs || []).map((document) => ({ id: document.id, ...document.data() }));
+  return (snapshot?.docs || []).map(fieldSnapshotRecord);
 }
 
 function requiredReference(record, names, label) {
@@ -353,7 +353,7 @@ function createPlannedWorkInterventionCommand({
       const interventionRef = db.collection(WORK_INTERVENTION_COLLECTION).doc(interventionId);
       const existingSnapshot = await transaction.get(interventionRef);
       if (existingSnapshot.exists) {
-        const existing = projectWorkIntervention({ id: existingSnapshot.id, ...existingSnapshot.data() }, expectedContext);
+        const existing = projectWorkIntervention(fieldSnapshotRecord(existingSnapshot), expectedContext);
         if (
           existing.visitAssetId !== normalizedVisitAssetId
           || existing.plannedWorkLineId !== normalizedPlannedWorkLineId
@@ -387,7 +387,7 @@ function createPlannedWorkInterventionCommand({
         throw fieldError('visit_asset_not_found', 'The selected Visit Asset is not available for this visit.', 404);
       }
       const visitAsset = projectVisitAsset(
-        { id: visitAssetSnapshot.id, ...visitAssetSnapshot.data() },
+        fieldSnapshotRecord(visitAssetSnapshot),
         expectedContext,
       );
 
@@ -396,8 +396,7 @@ function createPlannedWorkInterventionCommand({
       if (!serviceSnapshot.exists) {
         throw fieldError('service_not_available', 'The selected Service is not available in the canonical catalog.', 404);
       }
-      const service = { id: serviceSnapshot.id, ...serviceSnapshot.data() };
-      const canonicalService = normalizeCatalogService(service);
+      const canonicalService = normalizeCatalogService(fieldSnapshotRecord(serviceSnapshot));
       if (!canonicalService || canonicalService.serviceId !== normalizedServiceId) {
         throw fieldError('service_not_available', 'The selected Service is not an active canonical Field service.', 409);
       }
