@@ -64,7 +64,9 @@ function createScheduleDb({ vans = [], workOrders = [], clients = [], properties
     properties: new Map(properties.map((item) => [item.id, { ...item }])),
     appointments: new Map(appointments.map((item) => [item.id, { ...item }])),
     staffProfiles: new Map(staff.map((item) => [item.id, { ...item }])),
-    businessSettings: new Map(),
+    businessSettings: new Map([
+      ["whatsapp", { communicationAccountId: "demac-wa-primary", transactionalProvider: "wacli" }],
+    ]),
     whatsappOutboundQueue: new Map(),
   };
   return {
@@ -405,6 +407,8 @@ test("queueDay sends a minimal lunch message between morning and afternoon work 
   const queued = [...db.collections.whatsappOutboundQueue.values()];
   assert.equal(queued.length, 3);
   assert.equal(queued.every((item) => item.to === GROUP_JID), true);
+  assert.equal(queued.every((item) => item.communicationAccountId === "demac-wa-primary"), true);
+  assert.equal(queued.every((item) => item.outboundClass === "transactional"), true);
   assert.match(queued[0].text, /\*Trabajo 1/);
   assert.match(queued[0].text, /\*Location:\* Pastechi House Building/);
   assert.equal(queued[1].text, "*LUNCH BREAK*");
