@@ -1,7 +1,16 @@
 import type { AuthPrincipal } from './security';
 import type { Conversation, ConversationMessage, ConversationStatus, Operator, OperatorPresence, Queue } from './communications';
-import { getFirestoreDocument, listFirestoreCollection, saveFirestoreDocument, updateFirestoreDocument } from './firebase/firestore-rest';
+import { getFirestoreDocument, listFirestoreCollection, saveFirestoreDocument } from './firebase/firestore-rest';
 import { requireFirebaseWebSession } from './firebase/session';
+import {
+  assignConversation as assignConversationCommand,
+  claimConversation as claimConversationCommand,
+  markConversationRead as markConversationReadCommand,
+  queueWhatsAppText as queueWhatsAppTextCommand,
+  returnConversationToAi as returnConversationToAiCommand,
+  sendCommunicationConversationReply,
+  updateConversationStatus as updateConversationStatusCommand,
+} from './communication-conversation-actions';
 
 export type WhatsAppProvider = 'wacli' | 'meta';
 export type WhatsAppMediaKind = 'image' | 'video' | 'audio' | 'voice' | 'document';
@@ -28,6 +37,9 @@ export type LiveConversation = Omit<Conversation, 'messages'> & {
   channel?: ConversationMessage['channel'];
   ownerUserId?: string | null;
   provider?: WhatsAppProvider;
+  communicationAccountId?: string | null;
+  remoteConversationId?: string | null;
+  ownershipVersion?: number;
   externalChatId?: string | null;
   chatJid?: string | null;
   lastMessageText?: string | null;
@@ -182,7 +194,7 @@ function normalizeMessage(message: LiveConversationMessage, attribution?: Messag
 
 function normalizeConversation(stored: StoredConversation, attributions: Map<string, MessageAttribution>): LiveConversation {
   const messages = Array.isArray(stored.recentMessages) ? stored.recentMessages.map((message) => normalizeMessage(message, attributions.get(safeString(message.id)))) : [];
-  return { ...stored, customer: safeString(stored.customer, stored.phone || 'WhatsApp contact'), phone: safeString(stored.phone), avatarUrl: nullableString(stored.avatarUrl) || nullableString(stored.profilePictureUrl), channel: stored.channel ?? 'whatsapp', status: stored.status ?? 'new', queue: stored.queue ?? 'general', unread: Number(stored.unread || 0), language: normalizeLanguage(stored.language), aiDisposition: stored.aiDisposition ?? 'human_active', lastActivityAt: safeString(stored.lastActivityAt, stored.updatedAt || ''), vip: Boolean(stored.vip), messages };
+  return { ...stored, customer: safeString(stored.customer, stored.phone || 'WhatsApp contact'), phone: safeString(stored.phone), avatarUrl: nullableString(stored.avatarUrl) || nullableString(stored.profilePictureUrl), channel: stored.channel ?? 'whatsapp', status: stored.status ?? 'new', queue: stored.queue ?? 'general', unread: Number(stored.unread || 0), language: normalizeLanguage(stored.language), aiDisposition: stored.aiDisposition ?? 'human_active', lastActivityAt: safeString(stored.lastActivityAt, stored.updatedAt || ''), vip: Boolean(stored.vip), ownershipVersion: Number(stored.ownershipVersion || 0), messages };
 }
 
 function operatorQueues(role: AuthPrincipal['role']): Queue[] {
@@ -243,27 +255,24 @@ export async function touchCommunicationPresence(principal: AuthPrincipal, prese
 }
 
 export async function claimConversation(conversationId: string, principal: AuthPrincipal) {
-  return updateFirestoreDocument<StoredConversation>('communicationConversations', conversationId, { owner: principal.displayName, ownerUserId: principal.userId, status: 'assigned', aiDisposition: 'human_active', lockedBy: principal.displayName, lockedByUserId: principal.userId, unread: 0, updatedAt: new Date().toISOString() });
+  return claimConversationCommand(conversationId, principal);
 }
 
 export async function assignConversation(conversationId: string, operator: Pick<LiveOperator, 'userId' | 'name'>) {
-  return updateFirestoreDocument<StoredConversation>('communicationConversations', conversationId, { owner: operator.name, ownerUserId: operator.userId, status: 'assigned', aiDisposition: 'human_active', lockedBy: operator.name, lockedByUserId: operator.userId, updatedAt: new Date().toISOString() });
+  return assignConversationCommand(conversationId, operator);
 }
 
 export async function returnConversationToAi(conversationId: string, principal: AuthPrincipal) {
-  return updateFirestoreDocument<StoredConversation>('communicationConversations', conversationId, {
-    owner: null,
-    ownerUserId: null,
-    lockedBy: null,
-    lockedByUserId: null,
-    status: 'waiting_demac',
-    aiDisposition: 'ai_active',
-    updatedAt: new Date().toISOString(),
-  });
+  return returnConversationToAiCommand(conversationId, principal);
 }
 
-export async function updateConversationStatus(conversationId: string, status: ConversationStatus) { return updateFirestoreDocument<StoredConversation>('communicationConversations', conversationId, { status, updatedAt: new Date().toISOString() }); }
-export async function markConversationRead(conversationId: string) { return updateFirestoreDocument<StoredConversation>('communicationConversations', conversationId, { unread: 0, updatedAt: new Date().toISOString() }); }
+export async function updateConversationStatus(conversationId: string, status: ConversationStatus) {
+  return updateConversationStatusCommand(conversationId, status);
+}
+
+export async function markConversationRead(conversationId: string) {
+  return markConversationReadCommand(conversationId);
+}
 
 export async function saveInternalCommunicationNote(conversationId: string, text: string, principal: AuthPrincipal) {
   const id = `note-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -271,31 +280,17 @@ export async function saveInternalCommunicationNote(conversationId: string, text
 }
 
 export async function queueWhatsAppText(conversation: LiveConversation, text: string, principal: AuthPrincipal, provider: WhatsAppProvider) {
-  if (provider !== 'wacli') throw new Error('Free-form ERP replies are currently enabled through the wacli provider. Meta remains available for the existing approved-template flow.');
-  const to = conversation.chatJid || conversation.phone;
-  if (!to) throw new Error('This conversation has no WhatsApp phone number or JID.');
-  const id = `wa-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-  return saveFirestoreDocument('whatsappOutboundQueue', { id, provider: 'wacli', status: 'queued', type: 'text', to, text: text.trim(), conversationId: conversation.id, createdByUserId: principal.userId, createdByName: principal.displayName, createdAt: new Date().toISOString() });
+  return queueWhatsAppTextCommand(conversation, text, principal, provider);
 }
 
-export async function queueWhatsAppMedia(conversation: LiveConversation, file: File, text: string, principal: AuthPrincipal, provider: WhatsAppProvider, kindOverride?: WhatsAppMediaKind) {
+export async function queueWhatsAppMedia(conversation: LiveConversation, file: File, text: string, _principal: AuthPrincipal, provider: WhatsAppProvider, kindOverride?: WhatsAppMediaKind) {
   if (provider !== 'wacli') throw new Error('Free-form ERP media replies are currently enabled through the wacli provider.');
-  const to = conversation.chatJid || conversation.phone;
-  if (!to) throw new Error('This conversation has no WhatsApp phone number or JID.');
   const media = await uploadWhatsAppAttachment(file, kindOverride);
-  const id = `wa-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-  return saveFirestoreDocument('whatsappOutboundQueue', {
-    id,
-    provider: 'wacli',
-    status: 'queued',
-    type: media.kind,
-    to,
+  return sendCommunicationConversationReply({
+    conversationId: conversation.id,
     text: text.trim(),
     media,
-    conversationId: conversation.id,
-    createdByUserId: principal.userId,
-    createdByName: principal.displayName,
-    createdAt: new Date().toISOString(),
+    expectedOwnershipVersion: conversation.ownershipVersion,
   });
 }
 
