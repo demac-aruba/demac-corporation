@@ -6,16 +6,25 @@ import { addDaysToDateKey, arubaDateKey, arubaTimeKey, formatArubaDateKey } from
 import {
   getFieldJob,
   getFieldSchedule,
+  prepareFieldVisit,
+  transitionFieldVisit,
+  type FieldActiveVisitTransition,
   type FieldJobDetail,
   type FieldScheduleJob,
+  type FieldVisitStatus,
 } from '@/lib/field-authority';
 import styles from './technician-field-home.module.css';
 
 type RangeKey = 'today' | 'tomorrow' | 'week';
 
-const COMPLETED_STATUSES = new Set(['Completada']);
-const IN_PROGRESS_STATUSES = new Set(['En camino', 'En el sitio', 'En proceso']);
+const COMPLETED_WORK_ORDER_STATUSES = new Set(['Completada']);
+const ACTIVE_VISIT_STATUSES = new Set<FieldVisitStatus>(['en_route', 'on_site', 'in_progress']);
 const SCHEDULE_REVALIDATE_MS = 60_000;
+const ACTIVE_TRANSITION_LABELS: Record<FieldActiveVisitTransition, string> = {
+  en_route: 'En camino',
+  on_site: 'Llegué',
+  in_progress: 'Iniciar trabajo',
+};
 
 function workSummary(job: Pick<FieldScheduleJob, 'plannedWork' | 'customerFacingDescription'>) {
   if (job.plannedWork.length) {
@@ -37,6 +46,35 @@ function assignmentLabel(value: FieldScheduleJob['assignmentSource']) {
   if (value === 'direct_staff') return 'Asignación directa';
   if (value === 'profile_van_fallback') return 'Van · solo lectura';
   return 'Oficina';
+}
+
+function visitStatusLabel(value?: FieldVisitStatus) {
+  if (!value) return 'No iniciada';
+  if (value === 'scheduled') return 'Lista para salir';
+  if (value === 'en_route') return 'En camino';
+  if (value === 'on_site') return 'En el sitio';
+  if (value === 'in_progress') return 'En proceso';
+  if (value === 'pending') return 'Pendiente';
+  if (value === 'requires_return_visit') return 'Requiere segunda visita';
+  if (value === 'ready_for_office_review') return 'Lista para revisión';
+  if (value === 'completed') return 'Completada';
+  if (value === 'no_access') return 'Sin acceso';
+  return 'Cancelada';
+}
+
+function jobCompleted(job: FieldScheduleJob) {
+  return job.fieldVisit?.status === 'completed' || COMPLETED_WORK_ORDER_STATUSES.has(job.status);
+}
+
+function jobInProgress(job: FieldScheduleJob) {
+  return job.fieldVisit ? ACTIVE_VISIT_STATUSES.has(job.fieldVisit.status) : false;
+}
+
+function clientRequestId(prefix: string, workOrderId: string) {
+  const random = typeof globalThis.crypto?.randomUUID === 'function'
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+  return `${prefix}-${workOrderId}-${random}`.slice(0, 240);
 }
 
 function whatsappDigits(value?: string) {
@@ -91,7 +129,8 @@ function JobCard({ job, onOpen }: { job: FieldScheduleJob; onOpen: () => void })
         <div className={styles.address}>{job.propertyName ? `${job.propertyName} · ` : ''}{job.address || 'Dirección no disponible'}</div>
         <div className={styles.work}>{workSummary(job)}</div>
         <div className={styles.badges}>
-          <span className={`${styles.badge} ${styles.badgeBrand}`}>{job.status}</span>
+          <span className={`${styles.badge} ${styles.badgeBrand}`}>Campo: {visitStatusLabel(job.fieldVisit?.status)}</span>
+          <span className={styles.badge}>Programación: {job.status}</span>
           <span className={styles.badge}>{job.vanId || 'Sin van'}</span>
           <span className={styles.badge}>{roleLabel(job.responsibility)}</span>
           <span className={styles.badge}>{assignmentLabel(job.assignmentSource)}</span>
@@ -103,10 +142,13 @@ function JobCard({ job, onOpen }: { job: FieldScheduleJob; onOpen: () => void })
   );
 }
 
-function DetailView({ job, loading, error, onBack }: {
+function DetailView({ job, loading, error, transitionError, transitioning, onTransition, onBack }: {
   job: FieldJobDetail | null;
   loading: boolean;
   error: string | null;
+  transitionError: string | null;
+  transitioning: FieldActiveVisitTransition | null;
+  onTransition: (target: FieldActiveVisitTransition) => void;
   onBack: () => void;
 }) {
   if (loading || error || !job) {
@@ -129,15 +171,48 @@ function DetailView({ job, loading, error, onBack }: {
   }
 
   const links = contactLinks(job);
+  const availableTransitions: FieldActiveVisitTransition[] = job.fieldVisit
+    ? job.fieldVisit.availableTransitions
+    : job.canPrepareVisit
+      ? ['en_route']
+      : [];
+
   return (
     <div className={styles.shell}>
       <div className={styles.detailHeader}>
         <button className={styles.back} type="button" onClick={onBack} aria-label="Volver al itinerario">←</button>
         <div className={styles.detailTitle}>
           <h1>{job.customerName}</h1>
-          <p>{job.time || 'Sin hora'} · {job.status} · {job.workOrderId}</p>
+          <p>{job.time || 'Sin hora'} · Campo: {visitStatusLabel(job.fieldVisit?.status)} · {job.workOrderId}</p>
         </div>
       </div>
+
+      <section className={styles.section}>
+        <h2>ESTADO DE LA VISITA</h2>
+        <div className={styles.infoGrid}>
+          <div className={styles.info}><span>Programación / Work Order</span><strong>{job.status}</strong></div>
+          <div className={styles.info}><span>Estado físico en campo</span><strong>{visitStatusLabel(job.fieldVisit?.status)}</strong></div>
+          {job.fieldVisit?.departedAt ? <div className={styles.info}><span>Salida registrada</span><strong>{new Date(job.fieldVisit.departedAt).toLocaleTimeString('es-AW', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Aruba' })}</strong></div> : null}
+          {job.fieldVisit?.arrivedAt ? <div className={styles.info}><span>Llegada registrada</span><strong>{new Date(job.fieldVisit.arrivedAt).toLocaleTimeString('es-AW', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Aruba' })}</strong></div> : null}
+          {job.fieldVisit?.startedAt ? <div className={styles.info}><span>Trabajo iniciado</span><strong>{new Date(job.fieldVisit.startedAt).toLocaleTimeString('es-AW', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Aruba' })}</strong></div> : null}
+        </div>
+        {availableTransitions.length ? (
+          <div className={styles.visitActions}>
+            {availableTransitions.map((target) => (
+              <button
+                className={`${styles.action} ${styles.primary}`}
+                disabled={transitioning !== null}
+                key={target}
+                onClick={() => onTransition(target)}
+                type="button"
+              >
+                {transitioning === target ? 'Procesando…' : ACTIVE_TRANSITION_LABELS[target]}
+              </button>
+            ))}
+          </div>
+        ) : <p className={styles.helper}>No hay otra transición activa disponible para esta visita en este slice.</p>}
+        {transitionError ? <div className={styles.mutationError}>{transitionError}</div> : null}
+      </section>
 
       <div className={styles.detailGrid}>
         <div>
@@ -211,8 +286,11 @@ export function TechnicianFieldHome() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [transitioning, setTransitioning] = useState<FieldActiveVisitTransition | null>(null);
+  const [transitionError, setTransitionError] = useState<string | null>(null);
   const scheduleRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
+  const mutationRequestRef = useRef(0);
   const selectedWorkOrderRef = useRef<string | null>(null);
 
   const today = arubaDateKey(clockNow);
@@ -226,6 +304,7 @@ export function TechnicianFieldHome() {
 
   const closeJob = useCallback(() => {
     detailRequestRef.current += 1;
+    mutationRequestRef.current += 1;
     selectedWorkOrderRef.current = null;
     setSelectedWorkOrderId(null);
     setSelectedOwnerUserId(null);
@@ -233,6 +312,8 @@ export function TechnicianFieldHome() {
     setDetailOwnerUserId(null);
     setDetailError(null);
     setDetailLoading(false);
+    setTransitioning(null);
+    setTransitionError(null);
   }, []);
 
   const loadDetail = useCallback(async (workOrderId: string, background = false) => {
@@ -296,6 +377,51 @@ export function TechnicianFieldHome() {
     }
   }, [closeJob, loadDetail, principalFieldIdentityKey, today, weekEnd]);
 
+  const runVisitTransition = useCallback(async (target: FieldActiveVisitTransition) => {
+    if (transitioning) return;
+    const currentDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
+    if (!currentDetail) return;
+
+    const mutationId = ++mutationRequestRef.current;
+    const workOrderId = currentDetail.workOrderId;
+    setTransitioning(target);
+    setTransitionError(null);
+    try {
+      let visit = currentDetail.fieldVisit;
+      if (!visit) {
+        if (!currentDetail.canPrepareVisit || target !== 'en_route') {
+          throw new Error('La visita todavía no está disponible para esta transición. Actualiza el trabajo e intenta nuevamente.');
+        }
+        const prepared = await prepareFieldVisit(workOrderId, clientRequestId('prepare', workOrderId));
+        if (mutationId !== mutationRequestRef.current) return;
+        visit = prepared.visit;
+      }
+
+      const transitioned = await transitionFieldVisit(
+        visit.id,
+        target,
+        visit.version,
+        clientRequestId(`transition-${target}`, workOrderId),
+      );
+      if (mutationId !== mutationRequestRef.current) return;
+
+      setDetail((current) => current?.workOrderId === workOrderId
+        ? { ...current, fieldVisit: transitioned.visit, canPrepareVisit: false }
+        : current);
+      setTransitionError(null);
+      void loadSchedule(true);
+    } catch (mutationError) {
+      if (mutationId !== mutationRequestRef.current) return;
+      setTransitionError(mutationError instanceof Error ? mutationError.message : 'No se pudo actualizar el estado de la visita.');
+      // A timeout may occur after the server committed. Re-read authority instead of guessing or
+      // applying an optimistic local transition.
+      void loadDetail(workOrderId, true);
+      void loadSchedule(true);
+    } finally {
+      if (mutationId === mutationRequestRef.current) setTransitioning(null);
+    }
+  }, [detail, detailOwnerUserId, loadDetail, loadSchedule, principalFieldIdentityKey, transitioning]);
+
   useEffect(() => {
     void loadSchedule();
     return () => { scheduleRequestRef.current += 1; };
@@ -341,8 +467,8 @@ export function TechnicianFieldHome() {
   const authorizedJobs = jobsOwnerUserId === principalFieldIdentityKey ? jobs : [];
   const todayJobs = useMemo(() => authorizedJobs.filter((job) => job.date === today), [authorizedJobs, today]);
   const summary = useMemo(() => {
-    const completed = todayJobs.filter((job) => COMPLETED_STATUSES.has(job.status)).length;
-    const inProgress = todayJobs.filter((job) => IN_PROGRESS_STATUSES.has(job.status)).length;
+    const completed = todayJobs.filter(jobCompleted).length;
+    const inProgress = todayJobs.filter(jobInProgress).length;
     return { scheduled: todayJobs.length, completed, inProgress, remaining: Math.max(0, todayJobs.length - completed) };
   }, [todayJobs]);
 
@@ -353,8 +479,8 @@ export function TechnicianFieldHome() {
   }, [authorizedJobs, range, today, tomorrow]);
 
   const nextJob = useMemo(() => {
-    const open = todayJobs.filter((job) => !COMPLETED_STATUSES.has(job.status));
-    const active = open.find((job) => IN_PROGRESS_STATUSES.has(job.status));
+    const open = todayJobs.filter((job) => !jobCompleted(job));
+    const active = open.find(jobInProgress);
     if (active) return active;
     return open.find((job) => job.time && job.time >= nowTime) ?? open[0] ?? null;
   }, [nowTime, todayJobs]);
@@ -367,7 +493,17 @@ export function TechnicianFieldHome() {
 
   if (selectedWorkOrderId && selectedOwnerUserId === principalFieldIdentityKey) {
     const authorizedDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
-    return <DetailView job={authorizedDetail} loading={detailLoading} error={detailError} onBack={closeJob} />;
+    return (
+      <DetailView
+        job={authorizedDetail}
+        loading={detailLoading}
+        error={detailError}
+        transitionError={transitionError}
+        transitioning={transitioning}
+        onTransition={(target) => void runVisitTransition(target)}
+        onBack={closeJob}
+      />
+    );
   }
 
   return (
