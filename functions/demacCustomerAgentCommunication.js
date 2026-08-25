@@ -31,6 +31,7 @@ const AGENT_QUEUE_COLLECTION = "customerAgentInboundQueue";
 const AGENT_LOCK_COLLECTION = "customerAgentConversationLocks";
 const LEASE_MS = 2 * 60 * 1000;
 const MAX_PROCESSING_ATTEMPTS = 5;
+const REPLAYABLE_OUTBOUND_STATUSES = new Set(["queued", "processing", "sent"]);
 
 function safeDocumentId(value) {
   return String(value || "unknown")
@@ -195,40 +196,50 @@ function outcomeConversationPatch(result = {}) {
   };
 }
 
-async function enqueueInbound({ messageId, message, reactivate = false }) {
+async function enqueueInbound({ messageId, message, reactivate = false }, database = db) {
   const conversationId = conversationIdentity(message);
   const messageInputVersion = positiveEpoch(message.customerInputVersion);
   if (!conversationId || messageInputVersion === null) return null;
   const queueId = queueDocumentId(conversationId, messageId);
-  const ref = db.collection(AGENT_QUEUE_COLLECTION).doc(queueId);
-  const snapshot = await ref.get();
-  const current = snapshot.exists ? snapshot.data() || {} : {};
-  const currentStatus = cleanText(current.status, 40);
-  const terminalStatuses = ["processed", "coalesced", "skipped_provider", "skipped_policy", "failed"];
-  if (terminalStatuses.includes(currentStatus) || (currentStatus === "skipped_human" && !reactivate)) {
-    return { ref, queueId, conversationId, completed: true };
-  }
-  if (currentStatus === "processing") {
-    const startedAt = timestampMillis(current.processingStartedAt);
-    if (startedAt && startedAt + LEASE_MS > Date.now()) {
-      return { ref, queueId, conversationId, completed: true, processing: true };
+  const ref = database.collection(AGENT_QUEUE_COLLECTION).doc(queueId);
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  let decision = { completed: false, processing: false };
+
+  await database.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(ref);
+    const current = snapshot.exists ? snapshot.data() || {} : {};
+    const currentStatus = cleanText(current.status, 40);
+    const terminalStatuses = ["processed", "coalesced", "skipped_provider", "skipped_policy", "failed"];
+    if (terminalStatuses.includes(currentStatus) || (currentStatus === "skipped_human" && !reactivate)) {
+      decision = { completed: true, processing: false };
+      return;
     }
-  }
-  await ref.set({
-    id: queueId,
-    conversationId,
-    communicationAccountId: cleanText(message.communicationAccountId, 180).toLowerCase() || current.communicationAccountId || "",
-    provider: cleanText(message.provider, 40) || "wacli",
-    messageId,
-    customerInputVersion: messageInputVersion,
-    status: "queued",
-    attempts: safeAttemptCount(current.attempts),
-    reactivated: reactivate || current.reactivated === true,
-    queuedAt: current.queuedAt || FieldValue.serverTimestamp(),
-    queuedAtIso: current.queuedAtIso || new Date().toISOString(),
-    updatedAt: FieldValue.serverTimestamp(),
-  }, { merge: true });
-  return { ref, queueId, conversationId, completed: false };
+    if (currentStatus === "processing") {
+      const startedAt = timestampMillis(current.processingStartedAt);
+      if (startedAt && startedAt + LEASE_MS > now) {
+        decision = { completed: true, processing: true };
+        return;
+      }
+    }
+    transaction.set(ref, {
+      id: queueId,
+      conversationId,
+      communicationAccountId: cleanText(message.communicationAccountId, 180).toLowerCase() || current.communicationAccountId || "",
+      provider: cleanText(message.provider, 40) || "wacli",
+      messageId,
+      customerInputVersion: messageInputVersion,
+      status: "queued",
+      attempts: safeAttemptCount(current.attempts),
+      reactivated: reactivate || current.reactivated === true,
+      queuedAt: current.queuedAt || FieldValue.serverTimestamp(),
+      queuedAtIso: current.queuedAtIso || nowIso,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    decision = { completed: false, processing: false };
+  });
+
+  return { ref, queueId, conversationId, ...decision };
 }
 
 async function acquireLease(conversationId, ownerId) {
@@ -309,6 +320,23 @@ async function ensureAgentSessionActive(conversationId, provider, communicationA
   }, { merge: true });
 }
 
+function mayaOutboundReplayDecision({ existing = {}, expected = {} } = {}) {
+  const status = cleanText(existing.status, 40).toLowerCase();
+  const sameIntent = cleanText(existing.provider, 40).toLowerCase() === "wacli"
+    && cleanText(existing.outboundClass, 80).toLowerCase() === "conversation_maya"
+    && cleanText(existing.communicationAccountId, 180).toLowerCase() === cleanText(expected.communicationAccountId, 180).toLowerCase()
+    && cleanText(existing.conversationId, 300) === cleanText(expected.conversationId, 300)
+    && cleanText(existing.sourceInboundMessageId, 300) === cleanText(expected.sourceInboundMessageId, 300)
+    && cleanText(existing.to, 300) === cleanText(expected.to, 300)
+    && cleanText(existing.text, 3_000) === cleanText(expected.text, 3_000)
+    && nonNegativeEpoch(existing.expectedOwnershipVersion) === nonNegativeEpoch(expected.expectedOwnershipVersion)
+    && positiveEpoch(existing.expectedCustomerInputVersion) === positiveEpoch(expected.expectedCustomerInputVersion);
+  if (!sameIntent) return { allowed: false, reason: "outbound-command-conflict" };
+  if (status === "failed") return { allowed: false, reason: "outbound-terminal-failure" };
+  if (!REPLAYABLE_OUTBOUND_STATUSES.has(status)) return { allowed: false, reason: "outbound-status-not-replayable" };
+  return { allowed: true, reason: "matching-outbound-replay", status };
+}
+
 async function queueAgentReply({
   conversationId,
   inboundMessageId,
@@ -366,7 +394,23 @@ async function queueAgentReply({
     }
     const to = cleanText(currentConversation.chatJid || currentConversation.externalChatId || currentConversation.phone, 300);
     if (!to) throw new Error("Customer Agent cannot reply because the canonical conversation has no WhatsApp recipient.");
-    if (!existing.exists) {
+    const expectedOutbound = {
+      communicationAccountId,
+      conversationId,
+      sourceInboundMessageId: inboundMessageId,
+      to,
+      text,
+      expectedOwnershipVersion: epochDecision.ownershipVersion,
+      expectedCustomerInputVersion: epochDecision.customerInputVersion,
+    };
+    if (existing.exists) {
+      const replayDecision = mayaOutboundReplayDecision({ existing: existing.data() || {}, expected: expectedOutbound });
+      if (!replayDecision.allowed) {
+        const error = new Error(`Existing Maya outbound cannot be reused safely: ${replayDecision.reason}.`);
+        error.code = replayDecision.reason;
+        throw error;
+      }
+    } else {
       transaction.set(ref, {
         id,
         provider: "wacli",
@@ -656,6 +700,7 @@ module.exports.conversationIdentity = conversationIdentity;
 module.exports.enqueueInbound = enqueueInbound;
 module.exports.ensureAgentSessionActive = ensureAgentSessionActive;
 module.exports.latestCustomerMessage = latestCustomerMessage;
+module.exports.mayaOutboundReplayDecision = mayaOutboundReplayDecision;
 module.exports.outboundDocumentId = outboundDocumentId;
 module.exports.outcomeConversationPatch = outcomeConversationPatch;
 module.exports.pendingQueue = pendingQueue;
