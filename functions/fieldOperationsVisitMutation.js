@@ -1,14 +1,24 @@
 const crypto = require('node:crypto');
 const { fieldFirestoreData } = require('./fieldOperationsFirestoreData');
 const { activeWorkOrder, allowedActionsForAssignment, fieldError } = require('./fieldOperationsAuthorityCore');
-const { canonicalStatusFromStorage, projectCanonicalWorkVisit, stableRequestId } = require('./fieldOperationsAuthorityWorkVisit');
+const {
+  assertExistingVisitCompatible,
+  canonicalStatusFromStorage,
+  projectCanonicalWorkVisit,
+  stableRequestId,
+} = require('./fieldOperationsAuthorityWorkVisit');
 const { transitionCanonicalWorkVisit } = require('./fieldOperationsAuthorityTransitions');
 const { ACTIVE_VISIT_TARGETS, activatedVisitTransitions } = require('./fieldOperationsVisitActions');
+const { selectCurrentWorkVisit } = require('./fieldOperationsVisitRead');
 
 const ACTIVE_VISIT_TARGET_SET = new Set(ACTIVE_VISIT_TARGETS);
 
 function text(value, limit = 1000) {
   return String(value ?? '').trim().slice(0, limit);
+}
+
+function snapshotRecords(snapshot) {
+  return (snapshot?.docs || []).map((document) => ({ id: document.id, ...document.data() }));
 }
 
 function deterministicEventId(requestId, visitId, target) {
@@ -29,7 +39,7 @@ function activeTransitionPatch({ storedVisit, transitionedVisit, target, identit
     updatedByUserId: text(identity.uid, 180),
     updatedByStaffId: text(identity.staffId, 180) || undefined,
     updatedByName: text(identity.name, 180) || text(identity.email, 180) || text(identity.uid, 180),
-    version: Math.max(1, Number(storedVisit.version) || 1) + 1,
+    version: transitionedVisit.version + 1,
   };
   if (transitionedVisit.departedAt && !storedVisit.departedAt) patch.departedAt = transitionedVisit.departedAt;
   if (transitionedVisit.arrivedAt && !storedVisit.arrivedAt) patch.arrivedAt = transitionedVisit.arrivedAt;
@@ -109,6 +119,20 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
 
       const assignment = await resolveAssignment({ transaction, identity, order });
       const allowedActions = requireExecuteAssignment(identity, assignment);
+
+      // The read model and mutation command must agree on which physical visit is current. A
+      // caller that knows an older visit id may not mutate historical Field truth after a return
+      // visit exists. Identity is revalidated against the current WorkOrder inside this transaction.
+      assertExistingVisitCompatible(storedVisit, order);
+      const historySnapshot = await transaction.get(
+        db.collection('workVisits').where('workOrderId', '==', canonicalVisit.workOrderId),
+      );
+      const currentRecord = selectCurrentWorkVisit(snapshotRecords(historySnapshot), canonicalVisit.workOrderId);
+      if (!currentRecord || text(currentRecord.id, 180) !== normalizedVisitId) {
+        throw fieldError('visit_not_current', 'Only the current physical Work Visit may be transitioned.', 409, {
+          currentVisitId: text(currentRecord?.id, 180) || null,
+        });
+      }
 
       const currentStatus = canonicalStatusFromStorage(storedVisit.status);
       if (currentStatus === target) {
