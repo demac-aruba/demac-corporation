@@ -1,6 +1,27 @@
-import { FIELD_ALLOWED_ACTIONS, type FieldAllowedAction } from './field-authorization';
-
 export const FIELD_AUTHORITY_API_VERSION = 1 as const;
+
+/**
+ * Versioned transport vocabulary mirrored by the Field Operations server.
+ * This is not an authorization decision table: the server remains the sole authority that
+ * chooses which actions appear for a principal/assignment. If this wire vocabulary changes,
+ * the API version must change with it so older clients fail closed instead of guessing.
+ */
+export const FIELD_ALLOWED_ACTIONS = [
+  'read',
+  'execute',
+  'report.edit',
+  'evidence.add',
+  'measurement.add',
+  'finding.add',
+  'asset.add',
+  'intervention.add',
+  'sale.propose',
+  'intervention.complete',
+  'visit.complete',
+  'office.review',
+  'price.override',
+] as const;
+export type FieldAllowedAction = (typeof FIELD_ALLOWED_ACTIONS)[number];
 
 const FIELD_RESPONSIBILITIES = ['lead', 'technician', 'helper', 'office'] as const;
 export type FieldResponsibility = (typeof FIELD_RESPONSIBILITIES)[number];
@@ -40,7 +61,6 @@ export type FieldScheduleJob = {
   plannedWork: FieldPlannedWork[];
   estimatedQuantity: number;
   vanId: string;
-  technicianIds: string[];
   responsibility: FieldResponsibility;
   assignmentSource: FieldAssignmentSource;
   allowedActions: FieldAllowedAction[];
@@ -131,8 +151,6 @@ function scheduleJobValid(value: unknown): value is FieldScheduleJob {
     && Number.isFinite(job.estimatedQuantity)
     && job.estimatedQuantity >= 0
     && string(job.vanId)
-    && Array.isArray(job.technicianIds)
-    && job.technicianIds.every(string)
     && string(job.responsibility)
     && RESPONSIBILITIES.has(job.responsibility)
     && string(job.assignmentSource)
