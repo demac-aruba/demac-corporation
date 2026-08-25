@@ -45,22 +45,25 @@ Legacy Expo remains the operational fallback during the transition. Legacy behav
 
 ### Current baseline
 
-Verified on the feature branch as of the current implementation/self-audit checkpoint:
+Verified on the feature branch as of the active-visit implementation checkpoint:
 
 - Phase 0 architecture/current-state audit and the canonical architecture are recorded in `docs/ai/TECHNICIAN_PORTAL_ARCHITECTURE.md`.
 - Phase 1 canonical domain foundation is present and validated at its foundation checkpoint.
 - `lib/security.ts` is the canonical ERP capability vocabulary; the older capability vocabulary is compatibility-derived rather than a second authority.
 - Firebase principal resolution carries canonical `staffId`/`vanId` linkage and technicians without a staff profile fail closed.
 - Slice 1 read/security boundary is validated: Field Authority performs assignment-scoped schedule/job reads, reuses canonical Van identity and shared dated crew membership, projects `responsibility`/`assignmentSource`/`allowedActions`, and denies another-team known-ID access server-side.
-- Field Function syntax/tests are included in the ERP feature CI together with Booking/Scheduling regression coverage.
-- Phase 3 read-only Technician Home is validated: `/field` renders the canonical `TechnicianFieldHome`, technician login/direct-route access resolves to `/field` through the existing navigation authority, and BrowserFieldExecution is no longer the active ERP Next route.
-- Slice 2 server-local WorkVisit preparation and WorkVisit transition boundaries are implemented and test-gated but **not HTTP-activated**. Client WorkVisit start/snapshot/transition authority has been removed.
-- The initial WorkVisit preparation boundary preserves unknown/zero planned equipment quantity, reuses Legacy-compatible `workVisits`, is idempotent/transaction-backed, validates CRM identity/assignment, fails closed on unknown lifecycle values and requires `appendAuditInTransaction`.
+- Field Function syntax/tests are included in the ERP feature CI together with Booking/Scheduling regression coverage. The CI trigger covers all `functions/fieldOperations*.js` modules.
+- Phase 3 Technician Home is the canonical ERP Next `/field` surface. It preserves Today/Tomorrow/Week, assignment-scoped detail, known equipment and contact/navigation affordances.
+- DEMAC approved the canonical persistent Field lifecycle/audit boundary. Append-only `fieldOperationEvents` is implemented through `functions/fieldOperationsAudit.js`; `userAuditLogs` is not repurposed.
+- `prepare_visit` is HTTP-activated on this feature branch. It creates/adopts the initial Legacy-compatible `workVisits` record transactionally, re-resolves assignment inside the transaction, preserves planned scope, and appends the Field audit event atomically.
+- Phase 4 active physical visit status is implemented on this feature branch for `scheduled -> en_route -> on_site -> in_progress` through `transition_visit`. WorkVisit, not WorkOrder, is the actual physical-state authority.
+- The Field read model projects `fieldVisit`, `canPrepareVisit`, version, timestamps and server-derived `availableTransitions`; ERP Next does not reconstruct the transition graph or preparation policy.
+- The Technician Home exposes only the activated physical controls: **En camino**, **Llegué**, and **Iniciar trabajo**. It does not directly mutate WorkOrder status and it does not optimistically invent successful Field state.
+- Mutation commands use current transaction-scoped assignment, expected-version conflict detection, retry-safe same-target behavior, and append-only audit. A cancelled/unreleased WorkOrder blocks a later WorkVisit transition.
 - Phase 2 remains **PARTIAL overall** because Firestore/Storage assignment perimeter and emulator allow/deny evidence remain incomplete; production access-policy changes are not authorized by this workstream.
-- WorkVisit mutation activation is **BLOCKED / NEEDS_HUMAN** until DEMAC approves the canonical persistent Field lifecycle/audit event boundary. No new Field event collection/source of truth has been created.
 - Production has not been deployed or migrated by this workstream; PR #435 remains a draft implementation branch until later review/approval.
 
-A green CI result on an intermediate commit is checkpoint evidence only; it does not satisfy the full Technician Portal Definition of Done.
+At the active-visit checkpoint, ERP Next CI is green with **107/107 Field Authority tests** and **94/94 Booking/Scheduling regression tests**, plus ERP Next typecheck, Field security acceptance and production build. This is checkpoint evidence only; it does not satisfy the full Technician Portal Definition of Done.
 
 ## Scope
 
@@ -94,7 +97,7 @@ A green CI result on an intermediate commit is checkpoint evidence only; it does
 - production customer messages;
 - automatic production invoice creation;
 - replacing QuickBooks as accounting authority;
-- creating a second Customer, Property, Asset, service/product catalog, pricing engine, inventory ledger, permission system, scheduling authority, billing authority, writable service-history source, or unapproved Field audit/event source of truth;
+- creating a second Customer, Property, Asset, service/product catalog, pricing engine, inventory ledger, permission system, scheduling authority, billing authority, writable service-history source, or another unapproved business source of truth;
 - unrelated repository cleanup.
 
 ### Canonical authority boundaries
@@ -108,7 +111,7 @@ A green CI result on an intermediate commit is checkpoint evidence only; it does
 | Property | CRM Property (`Site/siteId` only as compatibility terminology) |
 | Permanent A/C identity | canonical CRM Equipment Asset |
 | Appointment / planned scope | Booking Authority / Scheduling |
-| Work Order release/lifecycle | Work Order application boundary |
+| Work Order release/lifecycle | Work Order application boundary / existing governed WorkOrder record semantics; Field does not invent a second WorkOrder state writer |
 | Physical visit and actual field truth | Field Operations (`WorkVisit` and child records) |
 | Product/Service definitions | canonical `services` catalog |
 | Presented/approved field price | immutable snapshot derived from canonical approved price at action time |
@@ -116,7 +119,7 @@ A green CI result on an intermediate commit is checkpoint evidence only; it does
 | Billing/accounting handoff | governed billing candidate / operational finance; QuickBooks remains official accounting record |
 | Customer/asset service history | read projections from canonical field truth |
 | Permissions | `apps/erp-next/lib/security.ts` plus server/data assignment enforcement |
-| Field lifecycle audit persistence | **NEEDS_HUMAN** before a persistent canonical boundary is created/activated; `userAuditLogs` is not repurposed |
+| Field lifecycle audit persistence | approved append-only `fieldOperationEvents` written only through the governed Field server transaction boundary |
 
 ## Governance
 
@@ -233,8 +236,9 @@ The following are `NEEDS_HUMAN` whenever reached:
 7. live production integration activation;
 8. production data deletion/overwrite;
 9. automatic production invoice/accounting write when not separately approved;
-10. architectural creation of any new system of record/source of truth;
-11. approval/creation of the canonical persistent Field lifecycle/audit event boundary required before `prepare_visit` or later canonical Field mutations may be activated.
+10. architectural creation of any additional system of record/source of truth not already explicitly approved.
+
+The canonical `fieldOperationEvents` lifecycle/audit persistence boundary has already received human approval for this Field Operations architecture and is therefore no longer an unresolved blocker. That approval does **not** authorize production deployment, Rules changes, destructive migration, or a different/new source of truth.
 
 These boundaries do not block branch-local design, implementation, tests, emulator security tests, dry-run/reconciliation planning or other reversible safe work.
 
@@ -315,11 +319,12 @@ The portal is complete only when all of the following are demonstrated:
 
 These are related blockers/status facts, not permission to broaden scope:
 
-- Phase 2 remains incomplete because assignment enforcement across Firestore/Storage data perimeter and emulator allow/deny evidence are still pending. API/server assigned-only reads and known-ID denial are already implemented/tested, but that does not prove the database/storage perimeter.
+- Phase 2 remains incomplete because assignment enforcement across the Firestore/Storage data perimeter and emulator allow/deny evidence are still pending. API/server assigned-only reads and known-ID denial are implemented/tested, but that does not prove the database/storage perimeter.
 - Existing repository Firestore/Storage policy previously observed for field/work-order/evidence access is broader than the target assigned-only model. Branch-local policy design/tests may be prepared, but any actual access-rule change/deployment is `NEEDS_HUMAN`.
-- Phase 3 read-only Technician Home is implemented/validated. It is intentionally not an active-visit execution shell and exposes no canonical mutation buttons.
-- Initial WorkVisit preparation and the WorkVisit transition graph exist server-side and are test-gated, but HTTP activation remains blocked by the unresolved Field lifecycle/audit persistence boundary and by the requirement to re-resolve current assignment safely in the activated mutation path.
-- Phase 4 active visit/status mutation flow therefore remains incomplete even though its pure server transition graph exists.
+- Phase 3 Technician Home now includes the first canonical active-visit controls, but only for the explicitly activated Phase 4 path. It is not yet the complete visit-execution application.
+- Initial WorkVisit preparation is HTTP-activated on the feature branch. The active transition command is also HTTP-activated on the feature branch for `en_route`, `on_site`, and `in_progress`. Both re-resolve assignment on the server and use the approved audit boundary.
+- The read model resolves the current physical WorkVisit and keeps `WorkOrder.status` separate from actual Field state. Existing Legacy in-flight WorkOrders that have no WorkVisit are not silently converted into canonical physical history; they remain compatibility/fallback cases rather than guessed truth.
+- Phase 4 remains **PARTIAL overall**: pending/no-access/cancelled/return-visit/submission/completion paths are not activated by this slice.
 - VisitAsset/on-site registration/QR mutation, WorkInterventions, templates/evidence/measurements/findings, Field sales, partial/return visits, Office Review, histories, offline sync and downstream Inventory/Billing handoffs remain future phases.
 - `validateVisitForOfficeReview` and billing/planned-vs-actual helpers in ERP Next remain Phase 1 specification/read-projection utilities; they must not become production mutation authority. Office Review validation must move server-side before Phase 8 activation.
 - Browser field/localStorage implementations remain compatibility/fallback until canonical persistence/UI reaches proven parity; they must not be deleted merely because they are old.
@@ -330,7 +335,9 @@ These are related blockers/status facts, not permission to broaden scope:
 
 Any persistence migration must be additive first, idempotent, dry-run capable, backward-compatible where needed, reconcilable and paired with rollback or forward-recovery planning. No destructive production migration is authorized by this task.
 
-The unexposed initial WorkVisit command uses a deterministic Legacy-compatible first-visit identity only for idempotency/adoption. A second physical return must create a distinct WorkVisit and preserve the first visit; the initial compatibility helper must not be reused as a return-visit ID generator.
+The initial WorkVisit command uses a deterministic Legacy-compatible first-visit identity only for idempotency/adoption. A second physical return must create a distinct WorkVisit and preserve the first visit; the initial compatibility helper must not be reused as a return-visit ID generator.
+
+The feature-branch HTTP activation is code activation only. No production Function deployment has occurred. A later authorized rollout must deploy the server authority before the ERP Next consumer, verify authenticated allow/deny behavior, and preserve all canonical records on rollback.
 
 ## Completion decision
 
