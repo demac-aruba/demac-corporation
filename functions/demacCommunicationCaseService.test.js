@@ -3,6 +3,9 @@ const assert = require("node:assert/strict");
 
 const {
   DISPATCH_HOLD_CONFIDENCE,
+  appendCaseHistory,
+  caseHistoryEvent,
+  caseTypeForObservation,
   communicationCaseId,
   matchRelevantAppointment,
   shouldApplyDispatchHold,
@@ -15,11 +18,42 @@ const appointments = [
   { id: "APT-C", date: "2026-08-25", startTime: "13:30", status: "cancelled" },
 ];
 
-test("communication case identity is account scoped", () => {
-  const first = communicationCaseId({ communicationAccountId: "demac-wa-corporate", conversationId: "conv-1" });
-  const second = communicationCaseId({ communicationAccountId: "demac-wa-test", conversationId: "conv-1" });
+test("communication case identity is account and workflow scoped", () => {
+  const first = communicationCaseId({ communicationAccountId: "demac-wa-corporate", conversationId: "conv-1", caseType: "appointment_change" });
+  const second = communicationCaseId({ communicationAccountId: "demac-wa-test", conversationId: "conv-1", caseType: "appointment_change" });
+  const complaint = communicationCaseId({ communicationAccountId: "demac-wa-corporate", conversationId: "conv-1", caseType: "complaint" });
   assert.ok(first.startsWith("COMMCASE-"));
   assert.notEqual(first, second);
+  assert.notEqual(first, complaint);
+});
+
+test("appointment changes share one workflow case while other material intents do not", () => {
+  assert.equal(caseTypeForObservation({ intent: "cancellation" }), "appointment_change");
+  assert.equal(caseTypeForObservation({ intent: "reschedule" }), "appointment_change");
+  assert.equal(caseTypeForObservation({ intent: "customer_withdrew_change" }), "appointment_change");
+  assert.equal(caseTypeForObservation({ intent: "complaint" }), "complaint");
+  assert.equal(caseTypeForObservation({ intent: "human_request" }), "human_request");
+});
+
+test("case history retries replace the same logical event instead of duplicating it", () => {
+  const first = caseHistoryEvent({
+    kind: "cancellation_detected",
+    messageId: "MSG-1",
+    observation: { intent: "cancellation", confidence: 0.95 },
+    appointmentId: "APT-1",
+    now: new Date("2026-08-25T01:00:00Z"),
+  });
+  const replay = caseHistoryEvent({
+    kind: "cancellation_detected",
+    messageId: "MSG-1",
+    observation: { intent: "cancellation", confidence: 0.95 },
+    appointmentId: "APT-1",
+    now: new Date("2026-08-25T01:00:10Z"),
+  });
+  assert.equal(first.id, replay.id);
+  const history = appendCaseHistory([first], replay);
+  assert.equal(history.length, 1);
+  assert.equal(history[0].at, "2026-08-25T01:00:10.000Z");
 });
 
 test("cancelled appointments are not candidates", () => {
