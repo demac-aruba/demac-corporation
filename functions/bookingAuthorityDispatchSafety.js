@@ -3,7 +3,7 @@ const { BOOKING_COLLECTIONS, compactObject } = require("./bookingAuthorityFirest
 const { cleanText } = require("./bookingSchedulingPrimitives");
 const { communicationEpochDecision } = require("./demacCommunicationEpoch");
 
-const DISPATCH_SAFETY_VERSION = 3;
+const DISPATCH_SAFETY_VERSION = 4;
 const HOLD_REASON = "customer_change_unresolved";
 const CANCELLED_STATUSES = new Set(["cancelled", "canceled", "cancelada"]);
 
@@ -82,6 +82,229 @@ async function communicationEpochGuardInTransaction(transaction, db, {
   });
 }
 
+function normalizedWorkOrderIds(appointment = {}, workOrderIds) {
+  const values = Array.isArray(workOrderIds) ? workOrderIds : appointment.workOrderIds;
+  return [...new Set((Array.isArray(values) ? values : [])
+    .map((value) => cleanText(value, 180))
+    .filter(Boolean))];
+}
+
+function writeWorkOrderDispatchProjectionInTransaction({
+  transaction,
+  db,
+  collections = BOOKING_COLLECTIONS,
+  appointmentId,
+  appointment = {},
+  workOrderIds,
+  now = new Date(),
+} = {}) {
+  if (!transaction || typeof transaction.set !== "function") {
+    throw new Error("A Firestore transaction is required for dispatch projection.");
+  }
+  const id = cleanText(appointmentId || appointment.id, 180);
+  if (!id) throw new Error("appointmentId is required for dispatch projection.");
+  const projection = workOrderDispatchProjection(appointment);
+  for (const workOrderId of normalizedWorkOrderIds(appointment, workOrderIds)) {
+    transaction.set(db.collection(collections.workOrders).doc(workOrderId), {
+      ...projection,
+      dispatchSafetySourceAppointmentId: id,
+      updatedAt: now.toISOString(),
+    }, { merge: true });
+  }
+  return projection;
+}
+
+async function appointmentForTransaction({ transaction, appointmentRef, appointmentSnapshot, appointment }) {
+  if (appointment && typeof appointment === "object" && Object.keys(appointment).length) {
+    return { exists: true, current: { ...appointment } };
+  }
+  const snapshot = appointmentSnapshot || await transaction.get(appointmentRef);
+  if (!snapshot?.exists) return { exists: false, current: null };
+  return { exists: true, current: { id: snapshot.id, ...snapshot.data() } };
+}
+
+async function applyDispatchHoldInTransaction({
+  transaction,
+  db,
+  collections = BOOKING_COLLECTIONS,
+  appointmentRef,
+  appointmentSnapshot,
+  appointment,
+  appointmentId,
+  caseId,
+  requestedAction = "customer_change",
+  reasonCategory = "customer_change_unresolved",
+  sourceMessageIds = [],
+  actor = {},
+  now = new Date(),
+  projectWorkOrders = true,
+} = {}) {
+  const id = cleanText(appointmentId || appointmentRef?.id || appointment?.id, 180);
+  const canonicalCaseId = cleanText(caseId, 180);
+  if (!id || !canonicalCaseId) throw new Error("appointmentId and caseId are required for a dispatch hold.");
+  const ref = appointmentRef || db.collection(collections.appointments).doc(id);
+  const loaded = await appointmentForTransaction({ transaction, appointmentRef: ref, appointmentSnapshot, appointment });
+  if (!loaded.exists) return { success: false, reason: "appointment-not-found", appointmentId: id };
+  const current = { id, ...loaded.current };
+  const status = cleanText(current.status, 40).toLowerCase();
+  if (CANCELLED_STATUSES.has(status)) {
+    return { success: true, replayed: true, reason: "appointment-already-cancelled", appointmentId: id };
+  }
+
+  const existing = current.dispatchHold || {};
+  const existingCaseId = cleanText(existing.caseId, 180);
+  if (existing.active === true && existingCaseId === canonicalCaseId) {
+    if (projectWorkOrders) {
+      writeWorkOrderDispatchProjectionInTransaction({
+        transaction,
+        db,
+        collections,
+        appointmentId: id,
+        appointment: current,
+        now,
+      });
+    }
+    return { success: true, replayed: true, reason: "dispatch-hold-already-active", appointmentId: id, dispatchHold: existing };
+  }
+  if (existing.active === true && existingCaseId && existingCaseId !== canonicalCaseId) {
+    return {
+      success: false,
+      reason: "dispatch-hold-owned-by-other-case",
+      appointmentId: id,
+      activeCaseId: existingCaseId,
+    };
+  }
+
+  const event = holdHistoryEvent({
+    kind: "dispatch_hold_applied",
+    caseId: canonicalCaseId,
+    requestedAction,
+    reasonCategory,
+    sourceMessageIds,
+    actor,
+    now,
+  });
+  const dispatchHold = compactObject({
+    active: true,
+    reason: HOLD_REASON,
+    caseId: canonicalCaseId,
+    requestedAction: cleanText(requestedAction, 80) || "customer_change",
+    reasonCategory: cleanText(reasonCategory, 120) || "customer_change_unresolved",
+    sourceMessageIds: event.sourceMessageIds,
+    appliedAtIso: now.toISOString(),
+    ...holdActor(actor),
+  });
+  const history = [...(Array.isArray(current.dispatchSafetyHistory) ? current.dispatchSafetyHistory : []), event].slice(-80);
+  const nextAppointment = { ...current, dispatchHold, dispatchSafetyHistory: history };
+  transaction.set(ref, {
+    dispatchHold,
+    dispatchSafetyHistory: history,
+    updatedAt: FieldValue.serverTimestamp(),
+    updatedAtIso: now.toISOString(),
+  }, { merge: true });
+
+  if (projectWorkOrders) {
+    writeWorkOrderDispatchProjectionInTransaction({
+      transaction,
+      db,
+      collections,
+      appointmentId: id,
+      appointment: nextAppointment,
+      now,
+    });
+  }
+
+  return { success: true, replayed: false, appointmentId: id, dispatchHold, appointment: nextAppointment };
+}
+
+async function releaseDispatchHoldInTransaction({
+  transaction,
+  db,
+  collections = BOOKING_COLLECTIONS,
+  appointmentRef,
+  appointmentSnapshot,
+  appointment,
+  appointmentId,
+  caseId = "",
+  resolution = "resolved",
+  actor = {},
+  now = new Date(),
+  projectWorkOrders = true,
+  projectionAppointment = null,
+  workOrderIds,
+} = {}) {
+  const id = cleanText(appointmentId || appointmentRef?.id || appointment?.id, 180);
+  if (!id) throw new Error("appointmentId is required to release a dispatch hold.");
+  const ref = appointmentRef || db.collection(collections.appointments).doc(id);
+  const loaded = await appointmentForTransaction({ transaction, appointmentRef: ref, appointmentSnapshot, appointment });
+  if (!loaded.exists) return { success: false, reason: "appointment-not-found", appointmentId: id };
+  const current = { id, ...loaded.current };
+  const existing = current.dispatchHold || {};
+  const requestedCaseId = cleanText(caseId, 180);
+  const existingCaseId = cleanText(existing.caseId, 180);
+
+  if (existing.active === true && requestedCaseId && existingCaseId && requestedCaseId !== existingCaseId) {
+    return { success: false, reason: "dispatch-hold-case-mismatch", appointmentId: id, activeCaseId: existingCaseId };
+  }
+
+  let dispatchHold = existing;
+  let history = Array.isArray(current.dispatchSafetyHistory) ? current.dispatchSafetyHistory : [];
+  let replayed = existing.active !== true;
+  if (existing.active === true) {
+    const event = holdHistoryEvent({
+      kind: "dispatch_hold_released",
+      caseId: existingCaseId,
+      requestedAction: cleanText(existing.requestedAction, 80),
+      reasonCategory: cleanText(resolution, 120),
+      sourceMessageIds: existing.sourceMessageIds,
+      actor,
+      now,
+    });
+    dispatchHold = compactObject({
+      ...existing,
+      active: false,
+      releasedAtIso: now.toISOString(),
+      resolution: cleanText(resolution, 120) || "resolved",
+      releasedBy: holdActor(actor),
+    });
+    history = [...history, event].slice(-80);
+    transaction.set(ref, {
+      dispatchHold,
+      dispatchSafetyHistory: history,
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedAtIso: now.toISOString(),
+    }, { merge: true });
+    replayed = false;
+  }
+
+  const nextAppointment = {
+    ...current,
+    ...(projectionAppointment && typeof projectionAppointment === "object" ? projectionAppointment : {}),
+    dispatchHold,
+    dispatchSafetyHistory: history,
+  };
+  if (projectWorkOrders) {
+    writeWorkOrderDispatchProjectionInTransaction({
+      transaction,
+      db,
+      collections,
+      appointmentId: id,
+      appointment: nextAppointment,
+      workOrderIds,
+      now,
+    });
+  }
+
+  return {
+    success: true,
+    replayed,
+    reason: replayed ? "dispatch-hold-not-active" : "dispatch-hold-released",
+    appointmentId: id,
+    dispatchHold,
+    appointment: nextAppointment,
+  };
+}
+
 function createBookingDispatchSafetyAuthority({
   db = getFirestore(),
   clock = () => new Date(),
@@ -118,28 +341,13 @@ function createBookingDispatchSafetyAuthority({
       if (!epochDecision.allowed) {
         return { success: false, reason: "stale-communication-epoch", epochReason: epochDecision.reason, appointmentId: id };
       }
-      if (!snapshot.exists) return { success: false, reason: "appointment-not-found", appointmentId: id };
-      const current = { id: snapshot.id, ...snapshot.data() };
-      const status = cleanText(current.status, 40).toLowerCase();
-      if (CANCELLED_STATUSES.has(status)) {
-        return { success: true, replayed: true, reason: "appointment-already-cancelled", appointmentId: id };
-      }
-      const existing = current.dispatchHold || {};
-      const existingCaseId = cleanText(existing.caseId, 180);
-      if (existing.active === true && existingCaseId === canonicalCaseId) {
-        return { success: true, replayed: true, reason: "dispatch-hold-already-active", appointmentId: id, dispatchHold: existing };
-      }
-      if (existing.active === true && existingCaseId && existingCaseId !== canonicalCaseId) {
-        return {
-          success: false,
-          reason: "dispatch-hold-owned-by-other-case",
-          appointmentId: id,
-          activeCaseId: existingCaseId,
-        };
-      }
-
-      const event = holdHistoryEvent({
-        kind: "dispatch_hold_applied",
+      return applyDispatchHoldInTransaction({
+        transaction,
+        db,
+        collections,
+        appointmentRef,
+        appointmentSnapshot: snapshot,
+        appointmentId: id,
         caseId: canonicalCaseId,
         requestedAction,
         reasonCategory,
@@ -147,34 +355,6 @@ function createBookingDispatchSafetyAuthority({
         actor,
         now,
       });
-      const dispatchHold = compactObject({
-        active: true,
-        reason: HOLD_REASON,
-        caseId: canonicalCaseId,
-        requestedAction: cleanText(requestedAction, 80) || "customer_change",
-        reasonCategory: cleanText(reasonCategory, 120) || "customer_change_unresolved",
-        sourceMessageIds: event.sourceMessageIds,
-        appliedAtIso: now.toISOString(),
-        ...holdActor(actor),
-      });
-      const history = [...(Array.isArray(current.dispatchSafetyHistory) ? current.dispatchSafetyHistory : []), event].slice(-80);
-      transaction.set(appointmentRef, {
-        dispatchHold,
-        dispatchSafetyHistory: history,
-        updatedAt: FieldValue.serverTimestamp(),
-        updatedAtIso: now.toISOString(),
-      }, { merge: true });
-
-      const projection = workOrderDispatchProjection({ ...current, dispatchHold });
-      for (const workOrderId of Array.isArray(current.workOrderIds) ? current.workOrderIds : []) {
-        transaction.set(db.collection(collections.workOrders).doc(workOrderId), {
-          ...projection,
-          dispatchSafetySourceAppointmentId: id,
-          updatedAt: now.toISOString(),
-        }, { merge: true });
-      }
-
-      return { success: true, replayed: false, appointmentId: id, dispatchHold };
     });
   }
 
@@ -202,65 +382,41 @@ function createBookingDispatchSafetyAuthority({
       if (!epochDecision.allowed) {
         return { success: false, reason: "stale-communication-epoch", epochReason: epochDecision.reason, appointmentId: id };
       }
-      if (!snapshot.exists) return { success: false, reason: "appointment-not-found", appointmentId: id };
-      const current = { id: snapshot.id, ...snapshot.data() };
-      const existing = current.dispatchHold || {};
-      if (existing.active !== true) {
-        return { success: true, replayed: true, reason: "dispatch-hold-not-active", appointmentId: id };
-      }
-      const requestedCaseId = cleanText(caseId, 180);
-      const existingCaseId = cleanText(existing.caseId, 180);
-      if (requestedCaseId && existingCaseId && requestedCaseId !== existingCaseId) {
-        return { success: false, reason: "dispatch-hold-case-mismatch", appointmentId: id, activeCaseId: existingCaseId };
-      }
-
-      const event = holdHistoryEvent({
-        kind: "dispatch_hold_released",
-        caseId: existingCaseId,
-        requestedAction: cleanText(existing.requestedAction, 80),
-        reasonCategory: cleanText(resolution, 120),
-        sourceMessageIds: existing.sourceMessageIds,
+      return releaseDispatchHoldInTransaction({
+        transaction,
+        db,
+        collections,
+        appointmentRef,
+        appointmentSnapshot: snapshot,
+        appointmentId: id,
+        caseId,
+        resolution,
         actor,
         now,
       });
-      const dispatchHold = compactObject({
-        ...existing,
-        active: false,
-        releasedAtIso: now.toISOString(),
-        resolution: cleanText(resolution, 120) || "resolved",
-        releasedBy: holdActor(actor),
-      });
-      const history = [...(Array.isArray(current.dispatchSafetyHistory) ? current.dispatchSafetyHistory : []), event].slice(-80);
-      transaction.set(appointmentRef, {
-        dispatchHold,
-        dispatchSafetyHistory: history,
-        updatedAt: FieldValue.serverTimestamp(),
-        updatedAtIso: now.toISOString(),
-      }, { merge: true });
-
-      const projection = workOrderDispatchProjection({ ...current, dispatchHold });
-      for (const workOrderId of Array.isArray(current.workOrderIds) ? current.workOrderIds : []) {
-        transaction.set(db.collection(collections.workOrders).doc(workOrderId), {
-          ...projection,
-          dispatchSafetySourceAppointmentId: id,
-          updatedAt: now.toISOString(),
-        }, { merge: true });
-      }
-      return { success: true, replayed: false, appointmentId: id, dispatchHold };
     });
   }
 
-  return { applyDispatchHold, releaseDispatchHold };
+  return {
+    applyDispatchHold,
+    applyDispatchHoldInTransaction: (transaction, args = {}) => applyDispatchHoldInTransaction({ transaction, db, collections, ...args }),
+    releaseDispatchHold,
+    releaseDispatchHoldInTransaction: (transaction, args = {}) => releaseDispatchHoldInTransaction({ transaction, db, collections, ...args }),
+    writeWorkOrderDispatchProjectionInTransaction: (transaction, args = {}) => writeWorkOrderDispatchProjectionInTransaction({ transaction, db, collections, ...args }),
+  };
 }
 
 module.exports = {
   CANCELLED_STATUSES,
   DISPATCH_SAFETY_VERSION,
   HOLD_REASON,
+  applyDispatchHoldInTransaction,
   communicationEpochGuardInTransaction,
   createBookingDispatchSafetyAuthority,
   dispatchHoldActive,
   dispatchReadinessDecision,
   holdHistoryEvent,
+  releaseDispatchHoldInTransaction,
   workOrderDispatchProjection,
+  writeWorkOrderDispatchProjectionInTransaction,
 };
