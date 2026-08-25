@@ -7,6 +7,7 @@ const {
 } = require("./whatsappTransactionalService");
 
 const GROUP_JID = "120000000000000099@g.us";
+const COMMUNICATION_ACCOUNT_ID = "demac-wa-primary";
 
 test("wacli preserves WhatsApp group JIDs as canonical recipients", () => {
   assert.equal(normalizeWacliRecipient(GROUP_JID), GROUP_JID);
@@ -20,10 +21,12 @@ test("transactional wacli queue accepts a group JID without phone normalization"
     collection(name) {
       if (name === "businessSettings") {
         return {
-          doc() {
+          doc(id) {
             return {
               async get() {
-                return { exists: false, data: () => ({}) };
+                return id === "whatsapp"
+                  ? { exists: true, data: () => ({ communicationAccountId: COMMUNICATION_ACCOUNT_ID, transactionalProvider: "wacli" }) }
+                  : { exists: false, data: () => ({}) };
               },
             };
           },
@@ -56,5 +59,7 @@ test("transactional wacli queue accepts a group JID without phone normalization"
   assert.equal(result.to, GROUP_JID);
   assert.equal(writes.get("van-2-job-1").to, GROUP_JID);
   assert.equal(writes.get("van-2-job-1").provider, "wacli");
+  assert.equal(writes.get("van-2-job-1").communicationAccountId, COMMUNICATION_ACCOUNT_ID);
+  assert.equal(writes.get("van-2-job-1").outboundClass, "transactional");
   assert.equal(writes.get("van-2-job-1").type, "text");
 });
