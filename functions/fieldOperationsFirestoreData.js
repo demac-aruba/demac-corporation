@@ -28,4 +28,20 @@ function fieldFirestoreData(value, path = 'field') {
   return result;
 }
 
+function fieldSnapshotRecord(document) {
+  if (!document || typeof document.data !== 'function') {
+    throw new Error('Field Firestore snapshot record requires a document with data().');
+  }
+  const id = String(document.id ?? '').trim();
+  if (!id) throw new Error('Field Firestore snapshot record requires a document id.');
+  const data = document.data();
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error('Field Firestore snapshot record requires object document data.');
+  }
+  // Firestore document identity is authoritative. A redundant persisted `id` field may be
+  // useful for compatibility, but it must never override the actual document id on reads.
+  return { ...data, id };
+}
+
 module.exports.fieldFirestoreData = fieldFirestoreData;
+module.exports.fieldSnapshotRecord = fieldSnapshotRecord;
