@@ -2,6 +2,7 @@ import { firebaseClientConfig } from './firebase/client-config';
 import { requireFirebaseWebSession } from './firebase/session';
 import {
   parseFieldJobResponse,
+  parseFieldPrepareVisitResponse,
   parseFieldScheduleResponse,
 } from './field-authority-contract';
 
@@ -12,8 +13,12 @@ export type {
   FieldJobDetail,
   FieldKnownEquipment,
   FieldPlannedWork,
+  FieldPreparedVisit,
+  FieldPrepareSource,
+  FieldPrepareVisitResponse,
   FieldResponsibility,
   FieldScheduleJob,
+  FieldVisitStatus,
 } from './field-authority-contract';
 
 type FieldApiError = { error?: { code?: string; message?: string; details?: Record<string, unknown> } };
@@ -92,4 +97,8 @@ export async function getFieldSchedule(startDate: string, endDate = startDate) {
 
 export async function getFieldJob(workOrderId: string) {
   return parseFieldJobResponse(await callFieldAuthority('get_job', { workOrderId }));
+}
+
+export async function prepareFieldVisit(workOrderId: string, requestId: string) {
+  return parseFieldPrepareVisitResponse(await callFieldAuthority('prepare_visit', { workOrderId, requestId }));
 }
