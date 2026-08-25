@@ -1,3 +1,4 @@
+const crypto = require("node:crypto");
 const { getApp, getApps, initializeApp } = require("firebase-admin/app");
 const { FieldValue, getFirestore } = require("firebase-admin/firestore");
 const { getStorage } = require("firebase-admin/storage");
@@ -26,6 +27,7 @@ const storage = getStorage(app);
 const openAiApiKey = defineSecret("OPENAI_API_KEY");
 const TRANSCRIPTION_MODEL = DEFAULT_TRANSCRIPTION_MODEL;
 const DEFAULT_CUSTOMER_VOICE_MAX_ATTEMPTS = 3;
+const MAX_CUSTOMER_VOICE_ATTEMPTS = 10;
 const CUSTOMER_TRANSCRIPTION_PROMPT = [
   "Transcribe the customer exactly in the language spoken; do not translate.",
   "The customer may speak Aruba Papiamento, Spanish, or English.",
@@ -85,7 +87,21 @@ function processingLeaseActive(message = {}, version, now = Date.now()) {
   return Boolean(started && started + 10 * 60 * 1000 > now);
 }
 
+function configuredVoiceMaxAttempts(value) {
+  if (value === null || value === undefined || value === "") return DEFAULT_CUSTOMER_VOICE_MAX_ATTEMPTS;
+  const normalized = Number(value);
+  return Number.isSafeInteger(normalized) && normalized >= 1 && normalized <= MAX_CUSTOMER_VOICE_ATTEMPTS
+    ? normalized
+    : DEFAULT_CUSTOMER_VOICE_MAX_ATTEMPTS;
+}
+
+function safeTranscriptionAttempts(value) {
+  const normalized = Number(value);
+  return Number.isSafeInteger(normalized) && normalized >= 0 ? normalized : 0;
+}
+
 async function claimCustomerVoiceTranscription(messageRef, settings, communicationSettings = {}) {
+  const claimId = crypto.randomUUID();
   let result = { claimed: false, reason: "unknown" };
   await db.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(messageRef);
@@ -108,8 +124,8 @@ async function claimCustomerVoiceTranscription(messageRef, settings, communicati
       return;
     }
 
-    const maxAttempts = Math.max(1, Number(settings.voiceTranscriptionMaxAttempts || DEFAULT_CUSTOMER_VOICE_MAX_ATTEMPTS));
-    const attempts = Number(current.transcriptionAttempts || 0);
+    const maxAttempts = configuredVoiceMaxAttempts(settings.voiceTranscriptionMaxAttempts);
+    const attempts = safeTranscriptionAttempts(current.transcriptionAttempts);
     if (attempts >= maxAttempts) {
       result = { claimed: false, reason: "transcription-attempt-limit-reached", decision };
       transaction.set(messageRef, {
@@ -141,13 +157,46 @@ async function claimCustomerVoiceTranscription(messageRef, settings, communicati
       transcriptionEligibilityStatus: "eligible-processing",
       transcriptionVersion: decision.transcriptionVersion,
       transcriptionModel: model,
-      transcriptionAttempts: FieldValue.increment(1),
+      transcriptionAttempts: attempts + 1,
+      transcriptionClaimId: claimId,
       transcriptionError: FieldValue.delete(),
       transcriptionStartedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
-    result = { claimed: true, reason: "claimed", decision, storagePath, model };
+    result = { claimed: true, reason: "claimed", claimId, decision, storagePath, model };
   });
   return result;
+}
+
+async function finalizeCustomerVoiceClaim(messageRef, claimId, transcriptionVersion, patch) {
+  let written = false;
+  await db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(messageRef);
+    if (!snapshot.exists) return;
+    const current = snapshot.data() || {};
+    if (cleanText(current.transcriptionClaimId, 120) !== cleanText(claimId, 120)) return;
+    if (cleanText(current.transcriptionVersion, 80) !== cleanText(transcriptionVersion, 80)) return;
+    transaction.set(messageRef, {
+      ...patch,
+      transcriptionClaimId: FieldValue.delete(),
+    }, { merge: true });
+    written = true;
+  });
+  return written;
+}
+
+function completedTranscriptionPatch(transcriptionResult, transcriptionVersion, eligibilityStatus = "completed") {
+  return {
+    rawTranscript: transcriptionResult.transcript,
+    transcript: transcriptionResult.transcript,
+    transcriptionStatus: "completed",
+    transcriptionEligibilityStatus: eligibilityStatus,
+    transcriptionVersion,
+    transcriptionModel: transcriptionResult.model,
+    transcriptionServiceVersion: transcriptionResult.serviceVersion,
+    transcriptionError: FieldValue.delete(),
+    transcribedAt: FieldValue.serverTimestamp(),
+    transcribedAtIso: new Date().toISOString(),
+  };
 }
 
 async function transcribeCustomerVoiceMessage(messageRef) {
@@ -166,41 +215,37 @@ async function transcribeCustomerVoiceMessage(messageRef) {
       model: claim.model,
       prompt: CUSTOMER_TRANSCRIPTION_PROMPT,
     });
-    await messageRef.set({
-      rawTranscript: transcriptionResult.transcript,
-      transcript: transcriptionResult.transcript,
-      transcriptionStatus: "completed",
-      transcriptionEligibilityStatus: "completed",
-      transcriptionVersion: claim.decision.transcriptionVersion,
-      transcriptionModel: transcriptionResult.model,
-      transcriptionServiceVersion: transcriptionResult.serviceVersion,
-      transcriptionError: FieldValue.delete(),
-      transcribedAt: FieldValue.serverTimestamp(),
-      transcribedAtIso: new Date().toISOString(),
-    }, { merge: true });
+    const finalized = await finalizeCustomerVoiceClaim(
+      messageRef,
+      claim.claimId,
+      claim.decision.transcriptionVersion,
+      completedTranscriptionPatch(transcriptionResult, claim.decision.transcriptionVersion),
+    );
+    if (!finalized) return { claimed: true, completed: false, staleClaim: true, reason: "transcription-claim-superseded" };
     return { claimed: true, completed: true, transcriptionVersion: claim.decision.transcriptionVersion };
   } catch (error) {
-    logger.error("Could not transcribe customer WhatsApp voice note.", error);
-    const failurePatch = {
+    if (transcriptionResult?.transcript) {
+      const recovered = await finalizeCustomerVoiceClaim(
+        messageRef,
+        claim.claimId,
+        claim.decision.transcriptionVersion,
+        completedTranscriptionPatch(transcriptionResult, claim.decision.transcriptionVersion, "completed-after-write-retry"),
+      );
+      if (recovered) return { claimed: true, completed: true, recoveredWrite: true };
+      return { claimed: true, completed: false, staleClaim: true, reason: "transcription-claim-superseded" };
+    }
+
+    const failed = await finalizeCustomerVoiceClaim(messageRef, claim.claimId, claim.decision.transcriptionVersion, {
       transcriptionStatus: "failed",
       transcriptionEligibilityStatus: "eligible-transcription-failed",
       transcriptionError: cleanText(error?.message || error, 500) || "Unknown transcription error",
       transcriptionVersion: claim.decision.transcriptionVersion,
       transcriptionModel: claim.model,
       transcriptionFailedAt: FieldValue.serverTimestamp(),
-    };
-    if (transcriptionResult?.transcript) {
-      failurePatch.rawTranscript = transcriptionResult.transcript;
-      failurePatch.transcript = transcriptionResult.transcript;
-      failurePatch.transcriptionStatus = "completed";
-      failurePatch.transcriptionEligibilityStatus = "completed-after-write-retry";
-      failurePatch.transcriptionServiceVersion = transcriptionResult.serviceVersion;
-      failurePatch.transcribedAt = FieldValue.serverTimestamp();
-      failurePatch.transcribedAtIso = new Date().toISOString();
-    }
-    await messageRef.set(failurePatch, { merge: true });
-    if (!transcriptionResult?.transcript) throw error;
-    return { claimed: true, completed: true, recoveredWrite: true };
+    });
+    if (!failed) return { claimed: true, completed: false, staleClaim: true, reason: "transcription-claim-superseded" };
+    logger.error("Could not transcribe customer WhatsApp voice note.", error);
+    throw error;
   }
 }
 
@@ -302,12 +347,17 @@ exports.transcribeCustomerVoiceWhenReady = onDocumentUpdated(
 
 module.exports.CUSTOMER_TRANSCRIPTION_PROMPT = CUSTOMER_TRANSCRIPTION_PROMPT;
 module.exports.DEFAULT_CUSTOMER_VOICE_MAX_ATTEMPTS = DEFAULT_CUSTOMER_VOICE_MAX_ATTEMPTS;
+module.exports.MAX_CUSTOMER_VOICE_ATTEMPTS = MAX_CUSTOMER_VOICE_ATTEMPTS;
 module.exports.TECHNICIAN_TRANSCRIPTION_PROMPT = TECHNICIAN_TRANSCRIPTION_PROMPT;
 module.exports.TRANSCRIPTION_MODEL = TRANSCRIPTION_MODEL;
 module.exports.claimCustomerVoiceTranscription = claimCustomerVoiceTranscription;
+module.exports.completedTranscriptionPatch = completedTranscriptionPatch;
+module.exports.configuredVoiceMaxAttempts = configuredVoiceMaxAttempts;
 module.exports.customerVoiceSettings = customerVoiceSettings;
 module.exports.customerVoiceStoragePath = customerVoiceStoragePath;
 module.exports.customerVoiceUpdateMayChangeEligibility = customerVoiceUpdateMayChangeEligibility;
+module.exports.finalizeCustomerVoiceClaim = finalizeCustomerVoiceClaim;
 module.exports.processingLeaseActive = processingLeaseActive;
+module.exports.safeTranscriptionAttempts = safeTranscriptionAttempts;
 module.exports.sameEligibilityValue = sameEligibilityValue;
 module.exports.transcribeCustomerVoiceMessage = transcribeCustomerVoiceMessage;
