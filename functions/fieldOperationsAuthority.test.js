@@ -90,7 +90,7 @@ test('HTTP method and truly unsupported action fail before protected business ex
   assert.equal(verified, false);
 });
 
-test('prepare_visit authenticates first and forwards only server-derived identity plus stable request data', async () => {
+test('prepare_visit authenticates first and returns the same versioned contract as Field reads', async () => {
   const calls = [];
   const api = createFieldOperationsApi({
     db: authDb({ active: true, role: 'technician', staffId: 'staff-1', name: 'Tech One', vanId: 'VAN-1' }),
@@ -112,6 +112,7 @@ test('prepare_visit authenticates first and forwards only server-derived identit
 
   assert.equal(result.status, 200);
   assert.equal(result.body.success, true);
+  assert.equal(result.body.version, 1);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].workOrderId, 'WO-1');
   assert.equal(calls[0].requestId, 'prepare-WO-1-001');
