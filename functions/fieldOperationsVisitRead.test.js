@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
   attachCurrentWorkVisitState,
+  canPrepareInitialVisit,
   projectFieldVisitState,
   selectCurrentWorkVisit,
 } = require('./fieldOperationsVisitRead');
@@ -39,6 +40,7 @@ function job(overrides = {}) {
     appointmentId: 'APT-1',
     customerId: 'CLIENT-1',
     propertyId: 'PROPERTY-1',
+    status: 'Confirmada',
     allowedActions: ['read', 'execute'],
     ...overrides,
   };
@@ -69,18 +71,29 @@ function visit(overrides = {}) {
   };
 }
 
-test('read model keeps planned Work Order state separate and returns null before a WorkVisit exists', async () => {
-  const result = await attachCurrentWorkVisitState(createDb([]), job({ status: 'Confirmada' }));
+test('read model keeps planned Work Order state separate and projects preparation eligibility before a WorkVisit exists', async () => {
+  const result = await attachCurrentWorkVisitState(createDb([]), job());
   assert.equal(result.status, 'Confirmada');
   assert.equal(result.fieldVisit, null);
+  assert.equal(result.canPrepareVisit, true);
+});
+
+test('server preparation projection is limited to not-started active Work Orders with execute authority', () => {
+  assert.equal(canPrepareInitialVisit(job({ status: 'Confirmada' }), null), true);
+  assert.equal(canPrepareInitialVisit(job({ status: 'Asignada' }), null), true);
+  assert.equal(canPrepareInitialVisit(job({ status: 'En camino' }), null), false);
+  assert.equal(canPrepareInitialVisit(job({ status: 'En el sitio' }), null), false);
+  assert.equal(canPrepareInitialVisit(job({ allowedActions: ['read'] }), null), false);
+  assert.equal(canPrepareInitialVisit(job(), visit()), false);
 });
 
 test('read model projects current WorkVisit status, version and next active server transition', async () => {
   const result = await attachCurrentWorkVisitState(createDb([
     visit({ status: 'on_the_way', departedAt: '2026-08-24T12:30:00.000Z', version: 2 }),
-  ]), job({ status: 'Confirmada' }));
+  ]), job());
 
   assert.equal(result.status, 'Confirmada', 'planned/release status must remain independent');
+  assert.equal(result.canPrepareVisit, false);
   assert.equal(result.fieldVisit.status, 'en_route');
   assert.equal(result.fieldVisit.version, 2);
   assert.equal(result.fieldVisit.departedAt, '2026-08-24T12:30:00.000Z');
