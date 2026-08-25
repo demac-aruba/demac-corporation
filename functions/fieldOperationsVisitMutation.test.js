@@ -261,10 +261,7 @@ test('current Work Order lifecycle is revalidated inside the same transaction be
 });
 
 test('transition revalidates WorkVisit identity against the current Work Order before mutation', async () => {
-  const { store, transition } = fixture({
-    visit: baseVisit({ clientId: 'CLIENT-OTHER' }),
-  });
-
+  const { store, transition } = fixture({ visit: baseVisit({ clientId: 'CLIENT-OTHER' }) });
   await assert.rejects(
     () => transition({ identity: identity(), visitId: 'visit-WO-1', to: 'en_route', expectedVersion: 1, requestId: 'transition-identity-conflict' }),
     (error) => error?.code === 'visit_identity_conflict' && error?.status === 409,
@@ -272,14 +269,24 @@ test('transition revalidates WorkVisit identity against the current Work Order b
   assert.equal(store.get('workVisits', 'visit-WO-1').status, 'not_started');
 });
 
+test('conflicting identity aliases and immutable snapshot identity fail closed', async () => {
+  for (const visit of [
+    baseVisit({ customerId: 'CLIENT-OTHER' }),
+    baseVisit({ siteId: 'PROPERTY-OTHER' }),
+    baseVisit({ scheduledScopeSnapshot: { appointmentId: 'APT-OTHER', capturedAt: '2026-08-24T12:00:00.000Z', estimatedUnitCount: 1, workLines: [] } }),
+  ]) {
+    const { store, transition } = fixture({ visit });
+    await assert.rejects(
+      () => transition({ identity: identity(), visitId: 'visit-WO-1', to: 'en_route', expectedVersion: 1, requestId: 'transition-alias-conflict' }),
+      (error) => error?.code === 'visit_identity_conflict' && error?.status === 409,
+    );
+    assert.equal(store.get('workVisits', 'visit-WO-1').status, 'not_started');
+  }
+});
+
 test('an older physical WorkVisit cannot be transitioned after a return visit exists', async () => {
   const initial = baseVisit({ id: 'visit-initial' });
-  const current = baseVisit({
-    id: 'visit-return',
-    previousVisitId: 'visit-initial',
-    status: 'on_site',
-    arrivedAt: '2026-08-24T12:45:00.000Z',
-  });
+  const current = baseVisit({ id: 'visit-return', previousVisitId: 'visit-initial', status: 'on_site', arrivedAt: '2026-08-24T12:45:00.000Z' });
   const { store, transition } = fixture({ visits: [initial, current] });
 
   await assert.rejects(
@@ -290,22 +297,78 @@ test('an older physical WorkVisit cannot be transitioned after a return visit ex
   assert.equal(store.get('workVisits', 'visit-return').status, 'on_site');
 });
 
-test('malformed persisted concurrency version fails closed instead of being normalized into a writable visit', async () => {
-  const { store, transition } = fixture({ visit: baseVisit({ version: 1.5 }) });
+test('an identity-conflicting ancestor blocks mutation of an otherwise valid current return visit', async () => {
+  const initial = baseVisit({ id: 'visit-initial', clientId: 'CLIENT-OTHER' });
+  const current = baseVisit({ id: 'visit-return', previousVisitId: 'visit-initial', status: 'on_site', arrivedAt: '2026-08-24T12:45:00.000Z' });
+  const { store, transition } = fixture({ visits: [initial, current] });
 
   await assert.rejects(
-    () => transition({ identity: identity(), visitId: 'visit-WO-1', to: 'en_route', expectedVersion: 1, requestId: 'transition-bad-stored-version' }),
-    (error) => error?.code === 'invalid_visit_version' && error?.status === 409,
+    () => transition({ identity: identity(), visitId: 'visit-return', to: 'in_progress', expectedVersion: 1, requestId: 'transition-bad-ancestor' }),
+    (error) => error?.code === 'visit_identity_conflict' && error?.status === 409,
   );
-  assert.equal(store.get('workVisits', 'visit-WO-1').status, 'not_started');
-  assert.equal(store.get('workVisits', 'visit-WO-1').version, 1.5);
+  assert.equal(store.get('workVisits', 'visit-return').status, 'on_site');
+});
+
+test('Legacy visit may use validated Work Order fallback for missing structural ids during transition', async () => {
+  const legacySnapshot = { capturedAt: '2026-08-24T12:00:00.000Z', estimatedUnitCount: 1, workLines: [] };
+  const { store, auditEvents, transition } = fixture({
+    visit: baseVisit({ appointmentId: undefined, propertyId: undefined, scheduledScopeSnapshot: legacySnapshot }),
+  });
+  const result = await transition({ identity: identity(), visitId: 'visit-WO-1', to: 'en_route', expectedVersion: 1, requestId: 'transition-legacy-fallback' });
+
+  assert.equal(result.visit.appointmentId, 'APT-1');
+  assert.equal(result.visit.propertyId, 'PROPERTY-1');
+  assert.equal(result.visit.scheduledScopeSnapshot.appointmentId, 'APT-1');
+  assert.equal(store.get('workVisits', 'visit-WO-1').appointmentId, undefined, 'compatibility projection must not rewrite Legacy structural history');
+  assert.equal(auditEvents[0].appointmentId, 'APT-1');
+  assert.equal(auditEvents[0].propertyId, 'PROPERTY-1');
+});
+
+test('missing WorkVisit Work Order identity and incomplete Work Order identity both fail closed', async () => {
+  const missingVisitIdentity = fixture({ visit: baseVisit({ workOrderId: '' }) });
+  await assert.rejects(
+    () => missingVisitIdentity.transition({ identity: identity(), visitId: 'visit-WO-1', to: 'en_route', expectedVersion: 1, requestId: 'transition-no-work-order' }),
+    (error) => error?.code === 'visit_identity_conflict' && error?.status === 409,
+  );
+  assert.equal(missingVisitIdentity.store.get('workVisits', 'visit-WO-1').status, 'not_started');
+
+  const missingOrderIdentity = fixture({ order: baseOrder({ propertyId: '' }) });
+  await assert.rejects(
+    () => missingOrderIdentity.transition({ identity: identity(), visitId: 'visit-WO-1', to: 'en_route', expectedVersion: 1, requestId: 'transition-incomplete-order' }),
+    (error) => error?.code === 'work_order_identity_incomplete' && error?.status === 409,
+  );
+  assert.equal(missingOrderIdentity.store.get('workVisits', 'visit-WO-1').status, 'not_started');
+});
+
+test('malformed persisted concurrency version fails closed instead of being normalized into a writable visit', async () => {
+  for (const version of [1.5, 0, null, '', '1']) {
+    const { store, transition } = fixture({ visit: baseVisit({ version }) });
+    await assert.rejects(
+      () => transition({ identity: identity(), visitId: 'visit-WO-1', to: 'en_route', expectedVersion: 1, requestId: 'transition-bad-stored-version' }),
+      (error) => error?.code === 'invalid_visit_version' && error?.status === 409,
+    );
+    assert.equal(store.get('workVisits', 'visit-WO-1').status, 'not_started');
+  }
+});
+
+test('expectedVersion must be a numeric safe integer and cannot overflow the next persisted version', async () => {
+  const normal = fixture();
+  await assert.rejects(
+    () => normal.transition({ identity: identity(), visitId: 'visit-WO-1', to: 'en_route', expectedVersion: '1', requestId: 'transition-string-version' }),
+    (error) => error?.code === 'expected_version_required' && error?.status === 400,
+  );
+  assert.equal(normal.store.get('workVisits', 'visit-WO-1').status, 'not_started');
+
+  const exhausted = fixture({ visit: baseVisit({ version: Number.MAX_SAFE_INTEGER }) });
+  await assert.rejects(
+    () => exhausted.transition({ identity: identity(), visitId: 'visit-WO-1', to: 'en_route', expectedVersion: Number.MAX_SAFE_INTEGER, requestId: 'transition-version-exhausted' }),
+    (error) => error?.code === 'visit_version_exhausted' && error?.status === 409,
+  );
+  assert.equal(exhausted.store.get('workVisits', 'visit-WO-1').status, 'not_started');
 });
 
 test('audit failure aborts the surrounding transaction and leaves WorkVisit unchanged', async () => {
-  const { store, transition } = fixture({
-    appendAuditInTransaction: async () => { throw new Error('audit unavailable'); },
-  });
-
+  const { store, transition } = fixture({ appendAuditInTransaction: async () => { throw new Error('audit unavailable'); } });
   await assert.rejects(
     () => transition({ identity: identity(), visitId: 'visit-WO-1', to: 'en_route', expectedVersion: 1, requestId: 'transition-audit-failure' }),
     /audit unavailable/,
