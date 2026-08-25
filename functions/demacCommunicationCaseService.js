@@ -4,7 +4,7 @@ const { normalizeArubaWhatsAppPhone } = require("./demacCustomerAgentReplyPolicy
 const { createBookingDispatchSafetyAuthority } = require("./bookingAuthorityDispatchSafety");
 const { communicationEpochDecision } = require("./demacCustomerTurn");
 
-const COMMUNICATION_CASE_VERSION = 3;
+const COMMUNICATION_CASE_VERSION = 4;
 const COMMUNICATION_CASE_COLLECTION = "communicationCases";
 const DISPATCH_HOLD_CONFIDENCE = 0.86;
 const ACTIVE_APPOINTMENT_CHANGE_INTENTS = new Set(["cancellation", "reschedule"]);
@@ -183,13 +183,14 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
     return snapshot.exists ? { id: snapshot.id, ...snapshot.data() } : null;
   }
 
-  async function writeCaseIfCurrent({
+  async function commitCaseIfCurrent({
     caseRef,
     conversationId,
     expectedOwnershipVersion,
     expectedCustomerInputVersion,
     patch,
     event,
+    dispatchMutation = null,
   }) {
     return db.runTransaction(async (transaction) => {
       const conversationRef = db.collection("communicationConversations").doc(conversationId);
@@ -202,14 +203,32 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
         expectedCustomerInputVersion,
       });
       if (!epochDecision.allowed) return { written: false, reason: "stale-communication-epoch", epochReason: epochDecision.reason };
+
+      const dispatchResult = typeof dispatchMutation === "function"
+        ? await dispatchMutation(transaction)
+        : null;
+      if (dispatchResult?.abort === true) {
+        return {
+          written: false,
+          reason: dispatchResult.reason || "dispatch-mutation-rejected",
+          epochReason: dispatchResult.epochReason,
+          dispatchResult,
+        };
+      }
+
       const currentCase = caseSnapshot.exists ? caseSnapshot.data() || {} : {};
+      const resolvedPatch = typeof patch === "function" ? patch(dispatchResult) : patch;
       transaction.set(caseRef, {
-        ...patch,
+        ...resolvedPatch,
         ...(event ? { history: appendCaseHistory(currentCase.history, event) } : {}),
-        createdAt: currentCase.createdAt || patch.createdAt || FieldValue.serverTimestamp(),
+        createdAt: currentCase.createdAt || resolvedPatch.createdAt || FieldValue.serverTimestamp(),
       }, { merge: true });
-      return { written: true };
+      return { written: true, dispatchResult };
     });
+  }
+
+  async function writeCaseIfCurrent(args) {
+    return commitCaseIfCurrent(args);
   }
 
   async function processObservation({
@@ -248,30 +267,27 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
         };
       }
       const appointmentId = withdrawalResolution.appointmentId;
-      if (appointmentId) {
-        const release = await safety.releaseDispatchHold({
-          appointmentId,
-          caseId: canonicalCaseId,
-          resolution: "customer_withdrew_change",
-          actor: { id: "demac-customer-agent", name: "Maya", source: "maya-observer" },
-          conversationId,
-          expectedOwnershipVersion,
-          expectedCustomerInputVersion,
-        });
-        if (!release.success && release.reason === "stale-communication-epoch") {
-          return { processed: false, reason: release.reason, epochReason: release.epochReason };
-        }
-        if (!release.success && release.reason === "dispatch-hold-case-mismatch") {
-          return { processed: false, reason: release.reason, attentionReason: release.reason };
-        }
-      }
       const event = caseHistoryEvent({ kind: "customer_withdrew_change", messageId, observation, appointmentId, now });
-      const write = await writeCaseIfCurrent({
+      const write = await commitCaseIfCurrent({
         caseRef,
         conversationId,
         expectedOwnershipVersion,
         expectedCustomerInputVersion,
         event,
+        dispatchMutation: appointmentId
+          ? async (transaction) => {
+            const release = await safety.releaseDispatchHoldInTransaction(transaction, {
+              appointmentId,
+              caseId: canonicalCaseId,
+              resolution: "customer_withdrew_change",
+              actor: { id: "demac-customer-agent", name: "Maya", source: "maya-observer" },
+              now,
+            });
+            return release.success
+              ? release
+              : { ...release, abort: true };
+          }
+          : null,
         patch: {
           id: canonicalCaseId,
           version: COMMUNICATION_CASE_VERSION,
@@ -288,7 +304,14 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
           updatedAtIso: now.toISOString(),
         },
       });
-      if (!write.written) return { processed: false, reason: write.reason, epochReason: write.epochReason };
+      if (!write.written) {
+        return {
+          processed: false,
+          reason: write.reason,
+          epochReason: write.epochReason,
+          attentionReason: write.reason === "dispatch-hold-case-mismatch" ? write.reason : undefined,
+        };
+      }
       return { processed: true, caseId: canonicalCaseId, state: "RESOLVED_CUSTOMER_WITHDREW_CHANGE", appointmentId };
     }
 
@@ -299,7 +322,6 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
     let state = "DETECTED";
     let attentionReason = "";
     const appointmentId = match.matched ? cleanText(match.appointment?.id, 180) : "";
-    let dispatchHoldActive = false;
 
     if (!customer) {
       state = "ESCALATED";
@@ -314,29 +336,7 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
       state = "APPOINTMENT_MATCHED";
     }
 
-    if (shouldApplyDispatchHold(observation, match)) {
-      const hold = await safety.applyDispatchHold({
-        appointmentId,
-        caseId: canonicalCaseId,
-        requestedAction: observation.intent,
-        reasonCategory: observation.reason ? "customer_provided_reason" : "no_reason_provided",
-        sourceMessageIds: messageId ? [messageId] : [],
-        actor: { id: "demac-customer-agent", name: "Maya", source: "maya-observer" },
-        conversationId,
-        expectedOwnershipVersion,
-        expectedCustomerInputVersion,
-      });
-      if (!hold.success && hold.reason === "stale-communication-epoch") {
-        return { processed: false, reason: hold.reason, epochReason: hold.epochReason };
-      }
-      dispatchHoldActive = hold.dispatchHold?.active === true;
-      if (dispatchHoldActive) state = "AWAITING_CUSTOMER_DECISION";
-      if (!hold.success && hold.reason === "dispatch-hold-owned-by-other-case") {
-        attentionReason = hold.reason;
-        state = "ESCALATED";
-      }
-    }
-
+    const holdRequired = shouldApplyDispatchHold(observation, match);
     const event = caseHistoryEvent({
       kind: observation.intent === "cancellation" ? "cancellation_detected"
         : observation.intent === "reschedule" ? "reschedule_detected"
@@ -346,51 +346,79 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
       appointmentId,
       now,
     });
-    const write = await writeCaseIfCurrent({
+    const baseState = state;
+    const baseAttentionReason = attentionReason;
+    const write = await commitCaseIfCurrent({
       caseRef,
       conversationId,
       expectedOwnershipVersion,
       expectedCustomerInputVersion,
       event,
-      patch: {
-        id: canonicalCaseId,
-        version: COMMUNICATION_CASE_VERSION,
-        communicationAccountId: cleanText(communicationAccountId, 180).toLowerCase(),
-        conversationId: cleanText(conversationId, 300),
-        customerId: customer?.id || null,
-        appointmentId: appointmentId || null,
-        caseType,
-        state,
-        intent: observation.intent,
-        confidence: Number(observation.confidence || 0),
-        language: cleanText(observation.language, 40),
-        summary: cleanText(observation.summary, 800),
-        reasonProvided: observation.reasonAlreadyProvided === true,
-        reason: cleanText(observation.reason, 500) || null,
-        attentionRequired: observation.requiresAttention === true || Boolean(attentionReason),
-        attentionReason: attentionReason || null,
-        dispatchRisk: observation.dispatchRisk === true,
-        dispatchHoldActive,
-        candidateAppointmentIds: match.candidates?.map((item) => item.id).filter(Boolean).slice(0, 10) || [],
-        ...sourceMessagePatch(messageId),
-        updatedAt: FieldValue.serverTimestamp(),
-        updatedAtIso: now.toISOString(),
+      dispatchMutation: holdRequired
+        ? async (transaction) => {
+          const hold = await safety.applyDispatchHoldInTransaction(transaction, {
+            appointmentId,
+            caseId: canonicalCaseId,
+            requestedAction: observation.intent,
+            reasonCategory: observation.reason ? "customer_provided_reason" : "no_reason_provided",
+            sourceMessageIds: messageId ? [messageId] : [],
+            actor: { id: "demac-customer-agent", name: "Maya", source: "maya-observer" },
+            now,
+          });
+          if (!hold.success && hold.reason !== "dispatch-hold-owned-by-other-case") {
+            return { ...hold, abort: true };
+          }
+          return hold;
+        }
+        : null,
+      patch: (dispatchResult) => {
+        const dispatchHoldActive = dispatchResult?.dispatchHold?.active === true;
+        const holdConflict = dispatchResult?.success === false && dispatchResult?.reason === "dispatch-hold-owned-by-other-case";
+        const finalState = holdConflict ? "ESCALATED" : dispatchHoldActive ? "AWAITING_CUSTOMER_DECISION" : baseState;
+        const finalAttentionReason = holdConflict ? dispatchResult.reason : baseAttentionReason;
+        return {
+          id: canonicalCaseId,
+          version: COMMUNICATION_CASE_VERSION,
+          communicationAccountId: cleanText(communicationAccountId, 180).toLowerCase(),
+          conversationId: cleanText(conversationId, 300),
+          customerId: customer?.id || null,
+          appointmentId: appointmentId || null,
+          caseType,
+          state: finalState,
+          intent: observation.intent,
+          confidence: Number(observation.confidence || 0),
+          language: cleanText(observation.language, 40),
+          summary: cleanText(observation.summary, 800),
+          reasonProvided: observation.reasonAlreadyProvided === true,
+          reason: cleanText(observation.reason, 500) || null,
+          attentionRequired: observation.requiresAttention === true || Boolean(finalAttentionReason),
+          attentionReason: finalAttentionReason || null,
+          dispatchRisk: observation.dispatchRisk === true,
+          dispatchHoldActive,
+          candidateAppointmentIds: match.candidates?.map((item) => item.id).filter(Boolean).slice(0, 10) || [],
+          ...sourceMessagePatch(messageId),
+          updatedAt: FieldValue.serverTimestamp(),
+          updatedAtIso: now.toISOString(),
+        };
       },
     });
     if (!write.written) return { processed: false, reason: write.reason, epochReason: write.epochReason };
 
+    const dispatchHoldActive = write.dispatchResult?.dispatchHold?.active === true;
+    const holdConflict = write.dispatchResult?.success === false && write.dispatchResult?.reason === "dispatch-hold-owned-by-other-case";
     return {
       processed: true,
       caseId: canonicalCaseId,
-      state,
+      state: holdConflict ? "ESCALATED" : dispatchHoldActive ? "AWAITING_CUSTOMER_DECISION" : baseState,
       customerId: customer?.id || "",
       appointmentId,
       dispatchHoldActive,
-      attentionReason,
+      attentionReason: holdConflict ? write.dispatchResult.reason : baseAttentionReason,
     };
   }
 
   return {
+    commitCaseIfCurrent,
     existingCase,
     loadUpcomingAppointments,
     processObservation,
