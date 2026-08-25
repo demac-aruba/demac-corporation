@@ -3,6 +3,8 @@ const officeBookingAuthorityFacade = require("./officeBookingAuthorityFacade");
 const communicationConversationAuthority = require("./communicationConversationAuthority");
 const wacliGateway = require("./whatsappWacliGateway");
 const wacliOutboundMediaUpload = require("./wacliOutboundMediaUpload");
+const communicationIngressMetadata = require("./demacCommunicationIngressMetadata");
+const customerObserverCommunication = require("./demacCustomerObserverCommunication");
 const customerAgentCommunication = require("./demacCustomerAgentAllowlistCommunication");
 const appointmentNotifications = require("./appointmentNotifications");
 const technicianDailySchedules = require("./technicianDailySchedules");
@@ -15,11 +17,13 @@ const marketingCreativeBuilder = require("./marketingCreativeBuilderV2Compat");
 const marketingCreativeRead = require("./marketingCreativeRead");
 const router = require("./whatsappCopilotRouter");
 
-// Production customer conversations have one runtime: Customer Runtime V1.
-// WhatsApp transport is exported separately through the wacli gateway and the
-// canonical Communication Center bridge. Historical Copilot modules are not
-// loaded or deployed from bootstrap. Maya's production communication entry
-// points are gated by the server-side phone allowlist wrapper.
+// Production customer conversations have one customer-facing runtime: Customer
+// Runtime V1. The read-only Maya Observer is a separate interpretation stage,
+// not a second booking/cancellation agent and not a sender authority.
+//
+// Trusted communication ingress metadata is stamped once on canonical message
+// creation. Customer voice uses the same shared DEMAC transcription service and
+// converges back into Customer Runtime V1 only after transcription succeeds.
 //
 // Human conversation ownership/sending commands converge through the backend
 // Communication Conversation Authority. This keeps ownershipVersion and final
@@ -35,6 +39,8 @@ module.exports = {
   ...communicationConversationAuthority,
   ...wacliGateway,
   ...wacliOutboundMediaUpload,
+  ...communicationIngressMetadata,
+  ...customerObserverCommunication,
   ...customerAgentCommunication,
   ...appointmentNotifications,
   ...technicianDailySchedules,
