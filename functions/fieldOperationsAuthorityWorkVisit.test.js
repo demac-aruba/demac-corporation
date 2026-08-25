@@ -212,6 +212,42 @@ test('Asignada Work Order can prepare the initial scheduled WorkVisit', async ()
   assert.equal(result.visit.status, 'scheduled');
 });
 
+test('in-flight Work Order status cannot synthesize a new physical WorkVisit', async () => {
+  for (const status of ['En camino', 'En el sitio', 'En proceso', 'Pendiente']) {
+    const seed = structuredClone(baseSeed);
+    seed.workOrders[0].status = status;
+    const { store, auditEvents, prepare } = commandFixture({ seed });
+    await assert.rejects(
+      () => prepare({ identity: identity(), workOrderId: 'WO-1', requestId: `prepare-in-flight-${status}` }),
+      (error) => error?.code === 'work_visit_preparation_not_allowed' && error?.status === 409,
+    );
+    assert.equal(store.all('workVisits').length, 0, `${status} must not create a WorkVisit`);
+    assert.equal(auditEvents.length, 0);
+  }
+});
+
+test('existing in-flight Legacy WorkVisit can be replayed without manufacturing new history', async () => {
+  const seed = structuredClone(baseSeed);
+  seed.workOrders[0].status = 'En camino';
+  seed.workVisits = [{
+    id: 'legacy-in-flight',
+    workOrderId: 'WO-1',
+    appointmentId: 'APT-1',
+    clientId: 'CLIENT-1',
+    propertyId: 'PROPERTY-1',
+    status: 'on_the_way',
+    scheduledScopeSnapshot: { appointmentId: 'APT-1', estimatedUnitCount: 1, workLines: [] },
+    version: 1,
+  }];
+  const { store, auditEvents, prepare } = commandFixture({ seed });
+  const result = await prepare({ identity: identity(), workOrderId: 'WO-1', requestId: 'prepare-existing-in-flight' });
+  assert.equal(result.replayed, true);
+  assert.equal(result.visit.id, 'legacy-in-flight');
+  assert.equal(result.visit.status, 'en_route');
+  assert.equal(store.all('workVisits').length, 1);
+  assert.equal(auditEvents.length, 0);
+});
+
 test('unknown Work Order lifecycle fails before creating a WorkVisit', async () => {
   const seed = structuredClone(baseSeed);
   seed.workOrders[0].status = 'Estado futuro';
