@@ -16,6 +16,7 @@ on:
       - 'functions/technicianDailyScheduleService.test.js'
       - 'functions/whatsappTransactionalService.js'
       - 'functions/whatsappTransactionalGroupRecipient.test.js'
+      - 'functions/demacCommunicationIdentity.js'
       - 'functions/operatingCalendarService.js'
       - 'functions/operatingCalendarService.test.js'
       - 'functions/officeBookingAuthority.test.js'
@@ -65,6 +66,7 @@ on:
       - 'functions/technicianDailyScheduleService.test.js'
       - 'functions/whatsappTransactionalService.js'
       - 'functions/whatsappTransactionalGroupRecipient.test.js'
+      - 'functions/demacCommunicationIdentity.js'
       - 'functions/operatingCalendarService.js'
       - 'functions/operatingCalendarService.test.js'
       - 'functions/officeBookingAuthority.test.js'
@@ -135,6 +137,7 @@ jobs:
           node --check functions/vanScheduleCommunicationAuthority.js
           node --check functions/technicianDailyScheduleService.js
           node --check functions/whatsappTransactionalService.js
+          node --check functions/demacCommunicationIdentity.js
           node --check functions/operatingCalendarService.js
           node --check functions/appointmentNotificationService.js
           node --check functions/customerContactDirectory.js
