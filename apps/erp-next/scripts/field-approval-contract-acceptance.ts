@@ -126,6 +126,7 @@ const baseJob = {
   workInterventions: [pendingIntervention],
   plannedWorkProgress: [{ id: 'line-standard', plannedQuantity: 1, linkedActualQuantity: 0, remainingQuantity: 1 }],
   plannedInterventionOptions: [],
+  interventionExecutionOptions: [],
   availableFieldServices: [{ id: 'service-standard', bookingCode: 'standard_service', label: 'Standard Service', kind: 'Maintenance', durationMinutesPerUnit: 60 }],
   canAddPlannedIntervention: false,
   scopeChanges: [pendingScopeChange],
