@@ -9,13 +9,13 @@ const {
   FIELD_EVIDENCE_COLLECTION,
   FIELD_EVIDENCE_STORAGE_VERSION,
 } = require('./fieldOperationsEvidence');
-const { REPORT_EVIDENCE_TARGET_TYPE } = require('./fieldOperationsReportEvidence');
 const { projectStoredReportTemplateSnapshot, requireReportTemplateSection } = require('./fieldOperationsReportTemplates');
 const {
   WORK_INTERVENTION_COLLECTION,
   projectWorkIntervention,
 } = require('./fieldOperationsVisitInterventions');
 
+const REPORT_VOICE_TARGET_TYPE = 'work_intervention_report_voice';
 const REPORT_VOICE_EVIDENCE_KIND = 'voice_note';
 const MAX_REPORT_VOICE_BYTES = 6 * 1024 * 1024;
 const MAX_REPORT_VOICE_DURATION_SECONDS = 120;
@@ -26,6 +26,10 @@ function text(value, limit = 1000) {
 
 function deterministicId(prefix, value) {
   return `${prefix}-${crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, 24)}`;
+}
+
+function snapshotRecords(snapshot) {
+  return (snapshot?.docs || []).map(fieldSnapshotRecord);
 }
 
 function canonicalVoiceDuration(value) {
@@ -72,7 +76,7 @@ function projectReportVoiceEvidence(record, expectedContext = {}) {
   if (record?.fieldAuthorityVersion !== FIELD_EVIDENCE_STORAGE_VERSION) {
     throw fieldError('invalid_field_evidence_schema', `Unsupported Field Evidence storage version: ${text(record?.fieldAuthorityVersion, 40) || 'missing'}.`, 409);
   }
-  if (text(record?.targetType, 80) !== REPORT_EVIDENCE_TARGET_TYPE || text(record?.evidenceKind, 80) !== REPORT_VOICE_EVIDENCE_KIND) {
+  if (text(record?.targetType, 80) !== REPORT_VOICE_TARGET_TYPE || text(record?.evidenceKind, 80) !== REPORT_VOICE_EVIDENCE_KIND) {
     throw fieldError('invalid_report_voice_target', 'Persisted report voice evidence target is invalid.', 409);
   }
   const required = {
@@ -122,6 +126,87 @@ function projectReportVoiceEvidence(record, expectedContext = {}) {
     createdAt: text(record?.createdAt, 80),
     createdBy: text(record?.createdByUserId || record?.createdBy, 180),
     version: 1,
+  };
+}
+
+async function loadReportVoiceEvidence(db, visitId, expectedContext = {}) {
+  const normalizedVisitId = text(visitId, 180);
+  if (!normalizedVisitId) return [];
+  const snapshot = await db.collection(FIELD_EVIDENCE_COLLECTION).where('visitId', '==', normalizedVisitId).get();
+  return snapshotRecords(snapshot)
+    .filter((record) => text(record?.targetType, 80) === REPORT_VOICE_TARGET_TYPE)
+    .map((record) => projectReportVoiceEvidence(record, { ...expectedContext, visitId: normalizedVisitId }));
+}
+
+function reportVoiceNoteOptions(job, reports) {
+  if (text(job?.fieldVisit?.status, 80) !== 'in_progress') return [];
+  if (!Array.isArray(job?.allowedActions) || !job.allowedActions.includes('evidence.add')) return [];
+  const interventionById = new Map((job?.workInterventions || []).map((intervention) => [intervention.id, intervention]));
+  return reports.map((report) => {
+    const intervention = interventionById.get(report.interventionId);
+    if (!intervention || intervention.status !== 'in_progress') return null;
+    const recorded = new Set((report.voiceNotes || []).map((item) => item.sectionId));
+    const sectionIds = report.template.sections
+      .filter((section) => section.type === 'voice_note')
+      .filter((section) => report.sectionStatus?.[section.id] !== 'completed' && !recorded.has(section.id))
+      .map((section) => section.id);
+    return sectionIds.length ? { interventionId: report.interventionId, sectionIds } : null;
+  }).filter(Boolean);
+}
+
+async function attachReportVoiceEvidenceToJob(db, job) {
+  const reports = Array.isArray(job?.interventionReports)
+    ? job.interventionReports.map((report) => ({ ...report, voiceNotes: [] }))
+    : [];
+  const visitId = text(job?.fieldVisit?.id, 180);
+  if (visitId && reports.length) {
+    const evidence = await loadReportVoiceEvidence(db, visitId, {
+      workOrderId: text(job.workOrderId, 180),
+      customerId: text(job.customerId, 180),
+      propertyId: text(job.propertyId, 180),
+    });
+    const reportByInterventionId = new Map(reports.map((report) => [report.interventionId, report]));
+    const keys = new Set();
+    for (const item of evidence) {
+      const report = reportByInterventionId.get(item.interventionId);
+      if (!report) {
+        throw fieldError('report_voice_identity_conflict', 'Persisted voice evidence references an intervention without a canonical report projection.', 409);
+      }
+      const section = report.template.sections.find((candidate) => candidate.id === item.sectionId);
+      if (!section || section.type !== 'voice_note') {
+        throw fieldError('report_voice_identity_conflict', 'Persisted voice evidence references an invalid frozen report section.', 409);
+      }
+      if (item.visitAssetId !== report.visitAssetId || item.assetId !== report.assetId) {
+        throw fieldError('report_voice_identity_conflict', 'Persisted voice evidence does not match its Work Intervention equipment identity.', 409);
+      }
+      const key = `${item.interventionId}:${item.sectionId}`;
+      if (keys.has(key)) {
+        throw fieldError('report_voice_identity_conflict', 'More than one canonical voice note exists for the same report section.', 409);
+      }
+      keys.add(key);
+      report.voiceNotes.push(item);
+    }
+    for (const report of reports) {
+      report.voiceNotes.sort((left, right) => left.sectionId.localeCompare(right.sectionId));
+      const recorded = new Set(report.voiceNotes.map((item) => item.sectionId));
+      for (const section of report.template.sections.filter((candidate) => candidate.type === 'voice_note')) {
+        const hasVoice = recorded.has(section.id);
+        const completed = report.sectionStatus?.[section.id] === 'completed';
+        if (hasVoice !== completed) {
+          throw fieldError('report_voice_state_conflict', 'Voice evidence does not match the persisted report section completion state.', 409, {
+            interventionId: report.interventionId,
+            sectionId: section.id,
+          });
+        }
+      }
+    }
+  }
+  const options = reportVoiceNoteOptions(job, reports);
+  return {
+    ...job,
+    interventionReports: reports,
+    reportVoiceNoteOptions: options,
+    canAddReportVoiceNote: options.length > 0,
   };
 }
 
@@ -178,12 +263,7 @@ function createAddReportVoiceEvidenceCommand({
     if (!normalizedSectionId) throw fieldError('report_section_required', 'A report section id is required.', 400);
     const stable = stableRequestId(requestId);
     const duration = canonicalVoiceDuration(durationSeconds);
-    const normalizedStoragePath = validateReportVoiceStoragePath(
-      storagePath,
-      normalizedVisitId,
-      normalizedInterventionId,
-      normalizedSectionId,
-    );
+    const normalizedStoragePath = validateReportVoiceStoragePath(storagePath, normalizedVisitId, normalizedInterventionId, normalizedSectionId);
 
     await db.runTransaction(async (transaction) => {
       const context = await loadCurrentVisitMutationContext({
@@ -297,7 +377,7 @@ function createAddReportVoiceEvidenceCommand({
         interventionId: intervention.id,
         sectionId: normalizedSectionId,
         evidenceKind: REPORT_VOICE_EVIDENCE_KIND,
-        targetType: REPORT_EVIDENCE_TARGET_TYPE,
+        targetType: REPORT_VOICE_TARGET_TYPE,
         storagePath: normalizedStoragePath,
         contentType: media.contentType,
         sizeBytes: media.sizeBytes,
@@ -345,10 +425,14 @@ function createAddReportVoiceEvidenceCommand({
 module.exports.MAX_REPORT_VOICE_BYTES = MAX_REPORT_VOICE_BYTES;
 module.exports.MAX_REPORT_VOICE_DURATION_SECONDS = MAX_REPORT_VOICE_DURATION_SECONDS;
 module.exports.REPORT_VOICE_EVIDENCE_KIND = REPORT_VOICE_EVIDENCE_KIND;
+module.exports.REPORT_VOICE_TARGET_TYPE = REPORT_VOICE_TARGET_TYPE;
+module.exports.attachReportVoiceEvidenceToJob = attachReportVoiceEvidenceToJob;
 module.exports.canonicalVoiceDuration = canonicalVoiceDuration;
 module.exports.createAddReportVoiceEvidenceCommand = createAddReportVoiceEvidenceCommand;
+module.exports.loadReportVoiceEvidence = loadReportVoiceEvidence;
 module.exports.projectReportVoiceEvidence = projectReportVoiceEvidence;
 module.exports.reportVoiceAuditEvent = reportVoiceAuditEvent;
 module.exports.reportVoiceEvidenceId = reportVoiceEvidenceId;
 module.exports.reportVoiceMetadata = reportVoiceMetadata;
+module.exports.reportVoiceNoteOptions = reportVoiceNoteOptions;
 module.exports.validateReportVoiceStoragePath = validateReportVoiceStoragePath;
