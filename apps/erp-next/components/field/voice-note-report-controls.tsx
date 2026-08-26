@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FieldExecutionJobDetail } from '@/lib/field-authority';
 import { MAX_REPORT_VOICE_DURATION_SECONDS } from '@/lib/field-voice-note-contract';
+import { ProfessionalReportPreview } from './professional-report-preview';
 import styles from './technician-field-home.module.css';
 
 export type ReportVoiceNoteInput = {
@@ -240,24 +241,28 @@ export function VoiceNoteReportControls({
       }));
   });
 
-  if (sections.length === 0) return null;
   return (
-    <div className={styles.interventionGroup}>
-      <div className={styles.plannedTitle}>NOTAS DE VOZ DEL REPORTE</div>
-      <p className={styles.helper}>Cada sección conserva una sola grabación canónica de hasta dos minutos.</p>
-      {sections.map((section) => {
-        const key = `${section.interventionId}:${section.sectionId}`;
-        return (
-          <VoiceNoteSection
-            key={key}
-            {...section}
-            mutationBusy={mutationBusy}
-            saving={savingKey === key}
-            onSave={onSave}
-          />
-        );
-      })}
-      {error ? <div className={styles.mutationError}>{error}</div> : null}
-    </div>
+    <>
+      {sections.length > 0 ? (
+        <div className={styles.interventionGroup}>
+          <div className={styles.plannedTitle}>NOTAS DE VOZ DEL REPORTE</div>
+          <p className={styles.helper}>Cada sección conserva una sola grabación canónica de hasta dos minutos.</p>
+          {sections.map((section) => {
+            const key = `${section.interventionId}:${section.sectionId}`;
+            return (
+              <VoiceNoteSection
+                key={key}
+                {...section}
+                mutationBusy={mutationBusy}
+                saving={savingKey === key}
+                onSave={onSave}
+              />
+            );
+          })}
+          {error ? <div className={styles.mutationError}>{error}</div> : null}
+        </div>
+      ) : null}
+      <ProfessionalReportPreview job={job} />
+    </>
   );
 }
