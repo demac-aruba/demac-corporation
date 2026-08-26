@@ -16,6 +16,7 @@ import {
   recordAdditionalFieldInterventionDecision,
   registerOnSiteFieldEquipment,
   setFieldReportChecklistItem,
+  setFieldReportFreeText,
   transitionFieldIntervention,
   transitionFieldVisit,
   type FieldActiveVisitTransition,
@@ -36,6 +37,10 @@ import {
   EquipmentRegistrationControls,
   type EquipmentRegistrationInput,
 } from './equipment-registration-controls';
+import {
+  FreeTextReportControls,
+  type ReportFreeTextInput,
+} from './free-text-report-controls';
 import {
   InterventionReportControls,
   type ReportChecklistInput,
@@ -193,6 +198,15 @@ function reportChecklistSignature(input: ReportChecklistInput) {
   ].join('|');
 }
 
+function reportFreeTextSignature(input: ReportFreeTextInput) {
+  return [
+    input.interventionId,
+    input.sectionId,
+    input.value.trim(),
+    String(input.expectedVersion),
+  ].join('|');
+}
+
 function whatsappDigits(value?: string) {
   const digits = String(value ?? '').replace(/\D/g, '');
   if (!digits) return '';
@@ -270,6 +284,7 @@ function DetailView({
   approvalError,
   executionError,
   reportError,
+  freeTextError,
   transitioning,
   attachingAssetId,
   registeringEquipment,
@@ -281,6 +296,7 @@ function DetailView({
   savingReportMeasurementKey,
   savingReportFindingKey,
   savingChecklistKey,
+  savingFreeTextKey,
   onTransition,
   onAttachAsset,
   onRegisterEquipment,
@@ -292,6 +308,7 @@ function DetailView({
   onAddReportMeasurement,
   onAddReportFinding,
   onSetChecklistItem,
+  onSaveFreeText,
   onBack,
 }: {
   job: FieldExecutionJobDetail | null;
@@ -305,6 +322,7 @@ function DetailView({
   approvalError: string | null;
   executionError: string | null;
   reportError: string | null;
+  freeTextError: string | null;
   transitioning: FieldActiveVisitTransition | null;
   attachingAssetId: string | null;
   registeringEquipment: boolean;
@@ -316,6 +334,7 @@ function DetailView({
   savingReportMeasurementKey: string | null;
   savingReportFindingKey: string | null;
   savingChecklistKey: string | null;
+  savingFreeTextKey: string | null;
   onTransition: (target: FieldActiveVisitTransition) => void;
   onAttachAsset: (assetId: string) => void;
   onRegisterEquipment: (input: EquipmentRegistrationInput) => Promise<boolean>;
@@ -327,6 +346,7 @@ function DetailView({
   onAddReportMeasurement: (input: ReportMeasurementInput) => Promise<boolean>;
   onAddReportFinding: (input: ReportFindingInput) => Promise<boolean>;
   onSetChecklistItem: (input: ReportChecklistInput) => Promise<boolean>;
+  onSaveFreeText: (input: ReportFreeTextInput) => Promise<boolean>;
   onBack: () => void;
 }) {
   if (loading || error || !job) {
@@ -366,7 +386,8 @@ function DetailView({
     || uploadingReportPhotoKey !== null
     || savingReportMeasurementKey !== null
     || savingReportFindingKey !== null
-    || savingChecklistKey !== null;
+    || savingChecklistKey !== null
+    || savingFreeTextKey !== null;
 
   return (
     <div className={styles.shell}>
@@ -501,6 +522,13 @@ function DetailView({
               onAddFinding={onAddReportFinding}
               onSetChecklistItem={onSetChecklistItem}
             />
+            <FreeTextReportControls
+              job={job}
+              mutationBusy={mutationBusy}
+              savingKey={savingFreeTextKey}
+              error={freeTextError}
+              onSave={onSaveFreeText}
+            />
             {assetError ? <div className={styles.mutationError}>{assetError}</div> : null}
           </section>
 
@@ -595,10 +623,12 @@ export function TechnicianFieldHome() {
   const [savingReportMeasurementKey, setSavingReportMeasurementKey] = useState<string | null>(null);
   const [savingReportFindingKey, setSavingReportFindingKey] = useState<string | null>(null);
   const [savingChecklistKey, setSavingChecklistKey] = useState<string | null>(null);
+  const [savingFreeTextKey, setSavingFreeTextKey] = useState<string | null>(null);
   const [reportPhotoError, setReportPhotoError] = useState<string | null>(null);
   const [reportMeasurementError, setReportMeasurementError] = useState<string | null>(null);
   const [reportFindingError, setReportFindingError] = useState<string | null>(null);
   const [reportChecklistError, setReportChecklistError] = useState<string | null>(null);
+  const [reportFreeTextError, setReportFreeTextError] = useState<string | null>(null);
   const scheduleRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
   const mutationRequestRef = useRef(0);
@@ -608,6 +638,7 @@ export function TechnicianFieldHome() {
   const reportMeasurementRequestRef = useRef<ReportMutationRetry | null>(null);
   const reportFindingRequestRef = useRef<ReportMutationRetry | null>(null);
   const reportChecklistRequestRef = useRef<ReportMutationRetry | null>(null);
+  const reportFreeTextRequestRef = useRef<ReportMutationRetry | null>(null);
   const selectedWorkOrderRef = useRef<string | null>(null);
 
   const today = arubaDateKey(clockNow);
@@ -625,6 +656,7 @@ export function TechnicianFieldHome() {
     reportMeasurementRequestRef.current = null;
     reportFindingRequestRef.current = null;
     reportChecklistRequestRef.current = null;
+    reportFreeTextRequestRef.current = null;
     selectedWorkOrderRef.current = null;
     setSelectedWorkOrderId(null);
     setSelectedOwnerUserId(null);
@@ -650,10 +682,12 @@ export function TechnicianFieldHome() {
     setSavingReportMeasurementKey(null);
     setSavingReportFindingKey(null);
     setSavingChecklistKey(null);
+    setSavingFreeTextKey(null);
     setReportPhotoError(null);
     setReportMeasurementError(null);
     setReportFindingError(null);
     setReportChecklistError(null);
+    setReportFreeTextError(null);
   }, []);
 
   const loadDetail = useCallback(async (workOrderId: string, background = false) => {
@@ -726,6 +760,7 @@ export function TechnicianFieldHome() {
     setReportMeasurementError(null);
     setReportFindingError(null);
     setReportChecklistError(null);
+    setReportFreeTextError(null);
   }, []);
 
   const runVisitTransition = useCallback(async (target: FieldActiveVisitTransition) => {
@@ -1270,6 +1305,71 @@ export function TechnicianFieldHome() {
     }
   }, [clearMutationErrors, detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
 
+  const runSetReportFreeText = useCallback(async (input: ReportFreeTextInput) => {
+    if (mutationLockRef.current !== null) return false;
+    const currentDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
+    if (!currentDetail?.fieldVisit) {
+      setReportFreeTextError('La visita todavía no está disponible para guardar notas técnicas.');
+      return false;
+    }
+    const option = currentDetail.reportFreeTextOptions.find((candidate) => candidate.interventionId === input.interventionId);
+    if (!currentDetail.canEditReportFreeText || !option?.sectionIds.includes(input.sectionId)) {
+      setReportFreeTextError('Field Authority ya no autoriza editar esta nota. Actualiza el trabajo e intenta nuevamente.');
+      void loadDetail(currentDetail.workOrderId, true);
+      return false;
+    }
+    if (input.value.length > 5000) {
+      setReportFreeTextError('La nota técnica no puede superar 5000 caracteres.');
+      return false;
+    }
+    const report = currentDetail.interventionReports.find((candidate) => candidate.interventionId === input.interventionId);
+    const section = report?.template.sections.find((candidate) => candidate.id === input.sectionId && candidate.type === 'free_text');
+    const currentResponse = report?.freeTextResponses.find((candidate) => candidate.sectionId === input.sectionId);
+    const actualVersion = currentResponse?.version ?? 0;
+    if (!report || !section || actualVersion !== input.expectedVersion) {
+      setReportFreeTextError('La nota técnica cambió o ya no coincide con el template canónico. Actualiza el trabajo e intenta nuevamente.');
+      void loadDetail(currentDetail.workOrderId, true);
+      return false;
+    }
+
+    const key = `${input.interventionId}:${input.sectionId}`;
+    const signature = reportFreeTextSignature(input);
+    const workOrderId = currentDetail.workOrderId;
+    const prior = reportFreeTextRequestRef.current;
+    const requestId = prior?.key === key && prior.signature === signature
+      ? prior.requestId
+      : clientRequestId('report-free-text', workOrderId);
+    reportFreeTextRequestRef.current = { key, signature, requestId };
+
+    const mutationId = ++mutationRequestRef.current;
+    mutationLockRef.current = mutationId;
+    setSavingFreeTextKey(key);
+    clearMutationErrors();
+    try {
+      await setFieldReportFreeText(
+        currentDetail.fieldVisit.id,
+        input.interventionId,
+        input.sectionId,
+        input.value,
+        input.expectedVersion,
+        requestId,
+      );
+      if (mutationId !== mutationRequestRef.current) return false;
+
+      reportFreeTextRequestRef.current = null;
+      await loadDetail(workOrderId, true);
+      return true;
+    } catch (mutationError) {
+      if (mutationId !== mutationRequestRef.current) return false;
+      setReportFreeTextError(mutationError instanceof Error ? mutationError.message : 'No se pudo guardar la nota técnica.');
+      void loadDetail(workOrderId, true);
+      return false;
+    } finally {
+      if (mutationId === mutationRequestRef.current) setSavingFreeTextKey(null);
+      if (mutationLockRef.current === mutationId) mutationLockRef.current = null;
+    }
+  }, [clearMutationErrors, detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
+
   useEffect(() => {
     void loadSchedule();
     return () => { scheduleRequestRef.current += 1; };
@@ -1352,6 +1452,7 @@ export function TechnicianFieldHome() {
         approvalError={approvalError}
         executionError={executionError}
         reportError={reportChecklistError || reportFindingError || reportMeasurementError || reportPhotoError}
+        freeTextError={reportFreeTextError}
         transitioning={transitioning}
         attachingAssetId={attachingAssetId}
         registeringEquipment={registeringEquipment}
@@ -1363,6 +1464,7 @@ export function TechnicianFieldHome() {
         savingReportMeasurementKey={savingReportMeasurementKey}
         savingReportFindingKey={savingReportFindingKey}
         savingChecklistKey={savingChecklistKey}
+        savingFreeTextKey={savingFreeTextKey}
         onTransition={(target) => void runVisitTransition(target)}
         onAttachAsset={(assetId) => void runAttachAsset(assetId)}
         onRegisterEquipment={runRegisterEquipment}
@@ -1374,6 +1476,7 @@ export function TechnicianFieldHome() {
         onAddReportMeasurement={runAddReportMeasurement}
         onAddReportFinding={runAddReportFinding}
         onSetChecklistItem={runSetReportChecklistItem}
+        onSaveFreeText={runSetReportFreeText}
         onBack={closeJob}
       />
     );
