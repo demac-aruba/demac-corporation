@@ -11,7 +11,12 @@ const {
   WORK_INTERVENTION_COLLECTION,
   projectWorkIntervention,
 } = require('./fieldOperationsVisitInterventions');
-const { fieldReportTemplateSnapshotForService } = require('./fieldOperationsReportTemplates');
+const {
+  fieldReportTemplateSnapshotForService,
+  projectStoredReportSectionStatus,
+  projectStoredReportTemplateSnapshot,
+  reportTemplateCompletion,
+} = require('./fieldOperationsReportTemplates');
 
 function text(value, limit = 1000) {
   return String(value ?? '').trim().slice(0, limit);
@@ -135,6 +140,36 @@ async function loadReportTemplateSnapshot({ db, transaction, intervention }) {
   return fieldReportTemplateSnapshotForService(fieldSnapshotRecord(serviceSnapshot));
 }
 
+function requireCompletedReport(stored, projected) {
+  const template = projectStoredReportTemplateSnapshot(
+    stored?.reportTemplateSnapshot,
+    projected.serviceCatalogItemId,
+  );
+  const sectionStatus = projectStoredReportSectionStatus(stored?.reportSectionStatus, template);
+  if (!template) {
+    if (projected.templateId || projected.templateVersion !== undefined) {
+      throw fieldError('work_intervention_report_state_conflict', 'Work Intervention template identity exists without a frozen report template.', 409);
+    }
+    return reportTemplateCompletion(undefined, undefined);
+  }
+  if (projected.templateId !== template.id || projected.templateVersion !== template.version) {
+    throw fieldError('work_intervention_template_identity_conflict', 'Work Intervention template identity does not match its frozen report template.', 409);
+  }
+  const completion = reportTemplateCompletion(template, sectionStatus);
+  if (!completion.complete) {
+    throw fieldError(
+      'work_intervention_report_incomplete',
+      'Complete every required report section before completing this Work Intervention.',
+      409,
+      {
+        interventionId: projected.id,
+        incompleteSections: completion.incompleteRequiredSections,
+      },
+    );
+  }
+  return completion;
+}
+
 function createTransitionWorkInterventionCommand({
   db,
   resolveAssignment,
@@ -233,6 +268,7 @@ function createTransitionWorkInterventionCommand({
         });
       }
 
+      if (target === 'completed') requireCompletedReport(stored, current);
       const reportTemplateSnapshot = target === 'in_progress'
         ? await loadReportTemplateSnapshot({ db, transaction, intervention: current })
         : undefined;
@@ -276,5 +312,6 @@ function createTransitionWorkInterventionCommand({
 
 module.exports.createTransitionWorkInterventionCommand = createTransitionWorkInterventionCommand;
 module.exports.loadReportTemplateSnapshot = loadReportTemplateSnapshot;
+module.exports.requireCompletedReport = requireCompletedReport;
 module.exports.transitionAuditEvent = transitionAuditEvent;
 module.exports.transitionPatch = transitionPatch;
