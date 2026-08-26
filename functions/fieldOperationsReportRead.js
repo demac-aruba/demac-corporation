@@ -9,6 +9,7 @@ const {
 } = require('./fieldOperationsReportEvidence');
 const { loadFieldMeasurements } = require('./fieldOperationsMeasurements');
 const { loadFieldFindings } = require('./fieldOperationsFindings');
+const { loadFieldChecklistResponses } = require('./fieldOperationsChecklistResponses');
 const {
   WORK_INTERVENTION_COLLECTION,
   projectWorkIntervention,
@@ -75,6 +76,7 @@ function reportProjectionFromStored(storedRecord, projectedIntervention) {
     evidence: [],
     measurements: [],
     findings: [],
+    checklistResponses: [],
   };
 }
 
@@ -196,6 +198,55 @@ async function attachReportFindings(db, job, reports) {
   return reports;
 }
 
+async function attachReportChecklistResponses(db, job, reports) {
+  const visitId = text(job?.fieldVisit?.id, 180);
+  if (!visitId || reports.length === 0) return reports;
+  const responses = await loadFieldChecklistResponses(db, visitId, {
+    workOrderId: text(job.workOrderId, 180),
+    customerId: text(job.customerId, 180),
+    propertyId: text(job.propertyId, 180),
+  });
+  const reportByInterventionId = new Map(reports.map((report) => [report.interventionId, report]));
+  for (const response of responses) {
+    const report = reportByInterventionId.get(response.interventionId);
+    if (!report) {
+      throw fieldError('field_checklist_response_identity_conflict', 'Persisted checklist response references an intervention without a canonical report projection.', 409);
+    }
+    const section = report.template.sections.find((candidate) => candidate.id === response.sectionId);
+    const item = section?.type === 'checklist'
+      ? section.checklistItems?.find((candidate) => candidate.id === response.itemId)
+      : null;
+    if (!section || section.type !== 'checklist' || !item) {
+      throw fieldError('field_checklist_response_identity_conflict', 'Persisted checklist response references an invalid frozen checklist item.', 409);
+    }
+    if (response.visitAssetId !== report.visitAssetId || response.assetId !== report.assetId) {
+      throw fieldError('field_checklist_response_identity_conflict', 'Persisted checklist response does not match its Work Intervention equipment identity.', 409);
+    }
+    report.checklistResponses.push(response);
+  }
+  for (const report of reports) {
+    report.checklistResponses.sort((left, right) => left.sectionId.localeCompare(right.sectionId) || left.itemId.localeCompare(right.itemId));
+    for (const section of report.template.sections.filter((candidate) => candidate.type === 'checklist')) {
+      const responsesByItemId = new Map(
+        report.checklistResponses
+          .filter((response) => response.sectionId === section.id)
+          .map((response) => [response.itemId, response.checked]),
+      );
+      const completed = section.checklistItems.length > 0
+        && section.checklistItems.every((item) => responsesByItemId.get(item.id) === true);
+      if (completed !== (report.sectionStatus?.[section.id] === 'completed')) {
+        if (completed || report.sectionStatus?.[section.id] === 'completed') {
+          throw fieldError('field_checklist_report_state_conflict', 'Checklist responses do not match the persisted report section completion state.', 409, {
+            interventionId: report.interventionId,
+            sectionId: section.id,
+          });
+        }
+      }
+    }
+  }
+  return reports;
+}
+
 function reportSectionOptions(job, reports, action, sectionType) {
   if (text(job?.fieldVisit?.status, 80) !== 'in_progress') return [];
   if (!Array.isArray(job?.allowedActions) || !job.allowedActions.includes(action)) return [];
@@ -205,7 +256,7 @@ function reportSectionOptions(job, reports, action, sectionType) {
     if (!intervention || intervention.status !== 'in_progress') return null;
     const sectionIds = report.template.sections
       .filter((section) => section.type === sectionType)
-      .filter((section) => report.sectionStatus?.[section.id] !== 'completed')
+      .filter((section) => sectionType === 'checklist' || report.sectionStatus?.[section.id] !== 'completed')
       .map((section) => section.id);
     return sectionIds.length > 0 ? { interventionId: report.interventionId, sectionIds } : null;
   }).filter(Boolean);
@@ -223,14 +274,20 @@ function reportFindingOptions(job, reports) {
   return reportSectionOptions(job, reports, 'finding.add', 'findings');
 }
 
+function reportChecklistOptions(job, reports) {
+  return reportSectionOptions(job, reports, 'report.edit', 'checklist');
+}
+
 async function attachInterventionReportsToJob(db, job) {
   let reports = await loadInterventionReportRecords(db, job);
   reports = await attachReportEvidence(db, job, reports);
   reports = await attachReportMeasurements(db, job, reports);
   reports = await attachReportFindings(db, job, reports);
+  reports = await attachReportChecklistResponses(db, job, reports);
   const photoOptions = reportPhotoOptions(job, reports);
   const measurementOptions = reportMeasurementOptions(job, reports);
   const findingOptions = reportFindingOptions(job, reports);
+  const checklistOptions = reportChecklistOptions(job, reports);
   return {
     ...job,
     interventionReports: reports,
@@ -240,16 +297,20 @@ async function attachInterventionReportsToJob(db, job) {
     canAddReportMeasurement: measurementOptions.length > 0,
     reportFindingOptions: findingOptions,
     canAddReportFinding: findingOptions.length > 0,
+    reportChecklistOptions: checklistOptions,
+    canEditReportChecklist: checklistOptions.length > 0,
   };
 }
 
 module.exports.REPORT_SECTION_STATUSES = REPORT_SECTION_STATUSES;
 module.exports.attachInterventionReportsToJob = attachInterventionReportsToJob;
+module.exports.attachReportChecklistResponses = attachReportChecklistResponses;
 module.exports.attachReportEvidence = attachReportEvidence;
 module.exports.attachReportFindings = attachReportFindings;
 module.exports.attachReportMeasurements = attachReportMeasurements;
 module.exports.loadInterventionReportRecords = loadInterventionReportRecords;
 module.exports.projectReportSectionStatus = projectReportSectionStatus;
+module.exports.reportChecklistOptions = reportChecklistOptions;
 module.exports.reportFindingOptions = reportFindingOptions;
 module.exports.reportMeasurementOptions = reportMeasurementOptions;
 module.exports.reportPhotoOptions = reportPhotoOptions;
