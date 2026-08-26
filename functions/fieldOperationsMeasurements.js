@@ -234,7 +234,13 @@ function createAddFieldMeasurementCommand({
         ) {
           throw fieldError('field_measurement_request_conflict', 'This requestId was already used for different measurement input.', 409);
         }
-        result = { success: true, replayed: true, measurement: existing, allowedActions: context.allowedActions };
+        result = {
+          success: true,
+          replayed: true,
+          measurement: existing,
+          workInterventionVersion: intervention.version,
+          allowedActions: context.allowedActions,
+        };
         return;
       }
 
