@@ -9,6 +9,7 @@ const REPORT_SECTION_TYPES = new Set([
   'free_text',
   'customer_acknowledgement',
 ]);
+const REPORT_SECTION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
 
 function text(value, limit = 1000) {
   return String(value ?? '').trim().slice(0, limit);
@@ -34,7 +35,7 @@ function normalizeSection(section, index) {
   const id = text(section.id, 120);
   const title = text(section.title, 240);
   const type = text(section.type, 80);
-  if (!id || !title || !REPORT_SECTION_TYPES.has(type)) {
+  if (!id || !REPORT_SECTION_ID_PATTERN.test(id) || !title || !REPORT_SECTION_TYPES.has(type)) {
     throw templateError('Field report template section identity, title, or type is invalid.', { index, id, type });
   }
   if (typeof section.required !== 'boolean') {
@@ -111,6 +112,7 @@ function projectStoredReportTemplateSnapshot(value, serviceId) {
 }
 
 module.exports.FIELD_EXECUTION_DEFINITION_VERSION = FIELD_EXECUTION_DEFINITION_VERSION;
+module.exports.REPORT_SECTION_ID_PATTERN = REPORT_SECTION_ID_PATTERN;
 module.exports.REPORT_SECTION_TYPES = REPORT_SECTION_TYPES;
 module.exports.fieldReportTemplateSnapshotForService = fieldReportTemplateSnapshotForService;
 module.exports.projectStoredReportTemplateSnapshot = projectStoredReportTemplateSnapshot;
