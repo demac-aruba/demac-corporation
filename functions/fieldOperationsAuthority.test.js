@@ -55,6 +55,7 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
     'prepare_visit',
     'record_additional_intervention_decision',
     'register_visit_asset',
+    'set_report_checklist_item',
     'transition_intervention',
     'transition_visit',
   ]);
@@ -76,6 +77,7 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
     'add_report_photo_evidence',
     'add_report_measurement',
     'add_report_finding',
+    'set_report_checklist_item',
   ]) {
     await assert.rejects(
       () => api.execute({ action, data: {}, identity: { operations: false } }),
@@ -299,6 +301,7 @@ test('Field mutation actions cannot execute without authentication', async () =>
     addReportPhotoEvidence: mark('reportPhoto'),
     addFieldMeasurement: mark('reportMeasurement'),
     addFieldFinding: mark('reportFinding'),
+    setFieldChecklistItem: mark('reportChecklist'),
   });
 
   const cases = [
@@ -313,6 +316,7 @@ test('Field mutation actions cannot execute without authentication', async () =>
     ['add_report_photo_evidence', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'photos', storagePath: 'field-evidence/visit-WO-1/interventions/WI-1/photos/photo.jpg', requestId: 'report-photo-001' }],
     ['add_report_measurement', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'measurements', metric: 'Temperature', value: 18, unit: 'C', moment: 'after', requestId: 'report-measurement-001' }],
     ['add_report_finding', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'findings', summary: 'Drain issue', details: 'Standing water observed.', requestId: 'report-finding-001' }],
+    ['set_report_checklist_item', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'condition', itemId: 'filter-clean', checked: true, expectedVersion: 0, requestId: 'report-checklist-001' }],
   ];
   for (const [action, data] of cases) {
     const result = await api.handle(request({ action, data }));
