@@ -111,8 +111,33 @@ function projectStoredReportTemplateSnapshot(value, serviceId) {
   return snapshot;
 }
 
+function requireReportTemplateSection(template, sectionId, expectedType) {
+  const normalizedSectionId = text(sectionId, 120);
+  if (!normalizedSectionId || !REPORT_SECTION_ID_PATTERN.test(normalizedSectionId)) {
+    throw fieldError('report_section_not_available', 'The selected report section is invalid.', 409, {
+      sectionId: normalizedSectionId || null,
+    });
+  }
+  const section = template?.sections?.find((candidate) => candidate.id === normalizedSectionId);
+  if (!section) {
+    throw fieldError('report_section_not_available', 'The selected report section is not part of this Work Intervention template.', 409, {
+      sectionId: normalizedSectionId,
+    });
+  }
+  const normalizedType = text(expectedType, 80);
+  if (normalizedType && section.type !== normalizedType) {
+    throw fieldError('report_section_type_mismatch', 'The selected report section does not accept this kind of report data.', 409, {
+      sectionId: normalizedSectionId,
+      expectedType: normalizedType,
+      sectionType: section.type,
+    });
+  }
+  return section;
+}
+
 module.exports.FIELD_EXECUTION_DEFINITION_VERSION = FIELD_EXECUTION_DEFINITION_VERSION;
 module.exports.REPORT_SECTION_ID_PATTERN = REPORT_SECTION_ID_PATTERN;
 module.exports.REPORT_SECTION_TYPES = REPORT_SECTION_TYPES;
 module.exports.fieldReportTemplateSnapshotForService = fieldReportTemplateSnapshotForService;
 module.exports.projectStoredReportTemplateSnapshot = projectStoredReportTemplateSnapshot;
+module.exports.requireReportTemplateSection = requireReportTemplateSection;
