@@ -19,8 +19,10 @@ import {
   type FieldAdditionalWorkDecision,
 } from './field-approval-contract';
 import {
+  parseFieldAddReportMeasurementResponse,
   parseFieldAddReportPhotoEvidenceResponse,
   parseFieldReportJobResponse,
+  type FieldMeasurementMoment,
 } from './field-report-contract';
 import { parseFieldRegisterVisitAssetResponse } from './field-equipment-registration-contract';
 
@@ -73,13 +75,18 @@ export type {
   FieldRecordAdditionalWorkDecisionResponse,
 } from './field-approval-contract';
 export type {
+  FieldAddReportMeasurementResponse,
   FieldAddReportPhotoEvidenceResponse,
   FieldInterventionReport,
+  FieldMeasurementMoment,
   FieldReportJobDetail,
   FieldReportJobDetail as FieldExecutionJobDetail,
+  FieldReportMeasurement,
+  FieldReportMeasurementOption,
   FieldReportPhotoEvidence,
   FieldReportPhotoOption,
   FieldReportSection,
+  FieldReportSectionOption,
   FieldReportSectionStatus,
   FieldReportSectionType,
   FieldReportTemplateSnapshot,
@@ -311,4 +318,26 @@ export async function addFieldReportPhotoEvidence(
     caption,
     requestId,
   }, 20_000));
+}
+
+export async function addFieldReportMeasurement(
+  visitId: string,
+  interventionId: string,
+  sectionId: string,
+  metric: string,
+  value: number | string,
+  unit: string,
+  moment: FieldMeasurementMoment,
+  requestId: string,
+) {
+  return parseFieldAddReportMeasurementResponse(await callFieldAuthority('add_report_measurement', {
+    visitId,
+    interventionId,
+    sectionId,
+    metric,
+    value,
+    unit,
+    moment,
+    requestId,
+  }));
 }
