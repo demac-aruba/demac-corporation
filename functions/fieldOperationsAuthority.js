@@ -22,6 +22,8 @@ const {
 } = require('./fieldOperationsVisitInterventions');
 const { attachInterventionExecutionOptionsToJob } = require('./fieldOperationsInterventionTransitions');
 const { createTransitionWorkInterventionCommand } = require('./fieldOperationsInterventionMutation');
+const { createAddReportPhotoEvidenceCommand } = require('./fieldOperationsReportEvidence');
+const { attachInterventionReportsToJob } = require('./fieldOperationsReportRead');
 const {
   attachScopeChangesToJob,
   createAdditionalWorkInterventionCommand,
@@ -44,6 +46,7 @@ const FIELD_ACTIONS = new Set([
   'create_additional_intervention',
   'record_additional_intervention_decision',
   'transition_intervention',
+  'add_report_photo_evidence',
 ]);
 
 function cleanText(value, limit = 1000) {
@@ -100,6 +103,7 @@ function createFieldOperationsApi({
   createAdditionalWorkIntervention,
   recordAdditionalWorkDecision,
   transitionWorkIntervention,
+  addReportPhotoEvidence,
 } = {}) {
   if (!db || typeof db.collection !== 'function') throw new Error('A Firestore-compatible db is required.');
   if (typeof verifyIdToken !== 'function') throw new Error('verifyIdToken is required.');
@@ -112,6 +116,7 @@ function createFieldOperationsApi({
   if (createAdditionalWorkIntervention !== undefined && typeof createAdditionalWorkIntervention !== 'function') throw new Error('createAdditionalWorkIntervention must be a function when provided.');
   if (recordAdditionalWorkDecision !== undefined && typeof recordAdditionalWorkDecision !== 'function') throw new Error('recordAdditionalWorkDecision must be a function when provided.');
   if (transitionWorkIntervention !== undefined && typeof transitionWorkIntervention !== 'function') throw new Error('transitionWorkIntervention must be a function when provided.');
+  if (addReportPhotoEvidence !== undefined && typeof addReportPhotoEvidence !== 'function') throw new Error('addReportPhotoEvidence must be a function when provided.');
 
   async function authenticate(request) {
     const token = bearerToken(request);
@@ -146,10 +151,12 @@ function createFieldOperationsApi({
       const withInterventions = await attachWorkInterventionsToJob(db, withAssets);
       const withExecutionOptions = attachInterventionExecutionOptionsToJob(withInterventions);
       const withScopeChanges = await attachScopeChangesToJob(db, withExecutionOptions);
+      const withApprovals = await attachFieldApprovalsToJob(db, withScopeChanges);
+      const withReports = await attachInterventionReportsToJob(db, withApprovals);
       return {
         success: true,
         version: FIELD_OPERATIONS_API_VERSION,
-        job: publicJobProjection(await attachFieldApprovalsToJob(db, withScopeChanges)),
+        job: publicJobProjection(withReports),
       };
     }
     if (action === 'prepare_visit') {
@@ -294,6 +301,21 @@ function createFieldOperationsApi({
       });
       return { ...transitioned, version: FIELD_OPERATIONS_API_VERSION };
     }
+    if (action === 'add_report_photo_evidence') {
+      if (typeof addReportPhotoEvidence !== 'function') {
+        throw fieldError('mutation_not_configured', 'Work Intervention report photo evidence is not configured in this runtime.', 503);
+      }
+      const added = await addReportPhotoEvidence({
+        identity,
+        visitId: cleanText(data.visitId, 180),
+        interventionId: cleanText(data.interventionId, 180),
+        sectionId: cleanText(data.sectionId, 120),
+        storagePath: cleanText(data.storagePath, 1000),
+        caption: cleanText(data.caption, 500),
+        requestId: cleanText(data.requestId, 240),
+      });
+      return { ...added, version: FIELD_OPERATIONS_API_VERSION };
+    }
     throw fieldError('unsupported_action', `Unsupported Field Operations action: ${action || 'missing'}.`, 400);
   }
 
@@ -348,6 +370,12 @@ function getDefaultApi() {
     const createAdditionalWorkIntervention = createAdditionalWorkInterventionCommand({ db, resolveAssignment, appendAuditInTransaction });
     const recordAdditionalWorkDecision = createRecordAdditionalWorkDecisionCommand({ db, resolveAssignment, appendAuditInTransaction });
     const transitionWorkIntervention = createTransitionWorkInterventionCommand({ db, resolveAssignment, appendAuditInTransaction });
+    const addReportPhotoEvidence = createAddReportPhotoEvidenceCommand({
+      db,
+      resolveAssignment,
+      appendAuditInTransaction,
+      verifyStoredImage: verifyStoredFieldImage,
+    });
     defaultApi = createFieldOperationsApi({
       db,
       verifyIdToken: (token) => getAuth().verifyIdToken(token, true),
@@ -359,6 +387,7 @@ function getDefaultApi() {
       createAdditionalWorkIntervention,
       recordAdditionalWorkDecision,
       transitionWorkIntervention,
+      addReportPhotoEvidence,
       reportError: ({ action, status, code, error }) => logger.error('Field Operations request failed', {
         action: cleanText(action, 120) || 'unknown',
         status,
