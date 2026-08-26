@@ -23,6 +23,10 @@ const {
 const { attachInterventionExecutionOptionsToJob } = require('./fieldOperationsInterventionTransitions');
 const { createTransitionWorkInterventionCommand } = require('./fieldOperationsInterventionMutation');
 const { createAddReportPhotoEvidenceCommand } = require('./fieldOperationsReportEvidence');
+const {
+  attachReportVoiceEvidenceToJob,
+  createAddReportVoiceEvidenceCommand,
+} = require('./fieldOperationsReportVoiceEvidence');
 const { createAddFieldMeasurementCommand } = require('./fieldOperationsMeasurements');
 const { createAddFieldFindingCommand } = require('./fieldOperationsFindings');
 const { createSetFieldChecklistItemCommand } = require('./fieldOperationsChecklistResponses');
@@ -53,6 +57,7 @@ const FIELD_ACTIONS = new Set([
   'record_additional_intervention_decision',
   'transition_intervention',
   'add_report_photo_evidence',
+  'add_report_voice_evidence',
   'add_report_measurement',
   'add_report_finding',
   'set_report_checklist_item',
@@ -115,6 +120,7 @@ function createFieldOperationsApi({
   recordAdditionalWorkDecision,
   transitionWorkIntervention,
   addReportPhotoEvidence,
+  addReportVoiceEvidence,
   addFieldMeasurement,
   addFieldFinding,
   setFieldChecklistItem,
@@ -133,6 +139,7 @@ function createFieldOperationsApi({
   if (recordAdditionalWorkDecision !== undefined && typeof recordAdditionalWorkDecision !== 'function') throw new Error('recordAdditionalWorkDecision must be a function when provided.');
   if (transitionWorkIntervention !== undefined && typeof transitionWorkIntervention !== 'function') throw new Error('transitionWorkIntervention must be a function when provided.');
   if (addReportPhotoEvidence !== undefined && typeof addReportPhotoEvidence !== 'function') throw new Error('addReportPhotoEvidence must be a function when provided.');
+  if (addReportVoiceEvidence !== undefined && typeof addReportVoiceEvidence !== 'function') throw new Error('addReportVoiceEvidence must be a function when provided.');
   if (addFieldMeasurement !== undefined && typeof addFieldMeasurement !== 'function') throw new Error('addFieldMeasurement must be a function when provided.');
   if (addFieldFinding !== undefined && typeof addFieldFinding !== 'function') throw new Error('addFieldFinding must be a function when provided.');
   if (setFieldChecklistItem !== undefined && typeof setFieldChecklistItem !== 'function') throw new Error('setFieldChecklistItem must be a function when provided.');
@@ -174,7 +181,8 @@ function createFieldOperationsApi({
       const withScopeChanges = await attachScopeChangesToJob(db, withExecutionOptions);
       const withApprovals = await attachFieldApprovalsToJob(db, withScopeChanges);
       const withReports = await attachInterventionReportsToJob(db, withApprovals);
-      const withCustomerAcknowledgements = await attachCustomerAcknowledgementsToJob(db, withReports);
+      const withVoiceEvidence = await attachReportVoiceEvidenceToJob(db, withReports);
+      const withCustomerAcknowledgements = await attachCustomerAcknowledgementsToJob(db, withVoiceEvidence);
       return {
         success: true,
         version: FIELD_OPERATIONS_API_VERSION,
@@ -338,6 +346,21 @@ function createFieldOperationsApi({
       });
       return { ...added, version: FIELD_OPERATIONS_API_VERSION };
     }
+    if (action === 'add_report_voice_evidence') {
+      if (typeof addReportVoiceEvidence !== 'function') {
+        throw fieldError('mutation_not_configured', 'Work Intervention report voice evidence is not configured in this runtime.', 503);
+      }
+      const added = await addReportVoiceEvidence({
+        identity,
+        visitId: cleanText(data.visitId, 180),
+        interventionId: cleanText(data.interventionId, 180),
+        sectionId: cleanText(data.sectionId, 120),
+        storagePath: cleanText(data.storagePath, 1000),
+        durationSeconds: data.durationSeconds,
+        requestId: cleanText(data.requestId, 240),
+      });
+      return { ...added, version: FIELD_OPERATIONS_API_VERSION };
+    }
     if (action === 'add_report_measurement') {
       if (typeof addFieldMeasurement !== 'function') {
         throw fieldError('mutation_not_configured', 'Work Intervention report measurement is not configured in this runtime.', 503);
@@ -452,6 +475,14 @@ async function verifyStoredFieldImage(storagePath) {
   };
 }
 
+async function verifyStoredFieldAudio(storagePath) {
+  const [metadata] = await getStorage().bucket().file(storagePath).getMetadata();
+  return {
+    contentType: cleanText(metadata?.contentType, 120),
+    sizeBytes: Number(metadata?.size),
+  };
+}
+
 let defaultApi;
 function getDefaultApi() {
   if (!defaultApi) {
@@ -477,6 +508,12 @@ function getDefaultApi() {
       appendAuditInTransaction,
       verifyStoredImage: verifyStoredFieldImage,
     });
+    const addReportVoiceEvidence = createAddReportVoiceEvidenceCommand({
+      db,
+      resolveAssignment,
+      appendAuditInTransaction,
+      verifyStoredAudio: verifyStoredFieldAudio,
+    });
     const addFieldMeasurement = createAddFieldMeasurementCommand({ db, resolveAssignment, appendAuditInTransaction });
     const addFieldFinding = createAddFieldFindingCommand({ db, resolveAssignment, appendAuditInTransaction });
     const setFieldChecklistItem = createSetFieldChecklistItemCommand({ db, resolveAssignment, appendAuditInTransaction });
@@ -494,6 +531,7 @@ function getDefaultApi() {
       recordAdditionalWorkDecision,
       transitionWorkIntervention,
       addReportPhotoEvidence,
+      addReportVoiceEvidence,
       addFieldMeasurement,
       addFieldFinding,
       setFieldChecklistItem,
@@ -534,4 +572,5 @@ module.exports.bearerToken = bearerToken;
 module.exports.createFieldOperationsApi = createFieldOperationsApi;
 module.exports.equipmentRegistrationEvidencePaths = equipmentRegistrationEvidencePaths;
 module.exports.publicJobProjection = publicJobProjection;
+module.exports.verifyStoredFieldAudio = verifyStoredFieldAudio;
 module.exports.verifyStoredFieldImage = verifyStoredFieldImage;
