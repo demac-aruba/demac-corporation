@@ -90,7 +90,10 @@ function reportTemplate() {
     serviceId: 'service-standard',
     version: 3,
     sections: [
-      { id: 'condition', title: 'Condition', type: 'checklist', required: true },
+      {
+        id: 'condition', title: 'Condition', type: 'checklist', required: true,
+        checklistItems: [{ id: 'filter-clean', label: 'Filter cleaned and reinstalled' }],
+      },
       { id: 'photos', title: 'Photos', type: 'photos', required: true, minEvidenceCount: 2 },
       { id: 'notes', title: 'Notes', type: 'free_text', required: false },
     ],
@@ -309,6 +312,7 @@ test('same report photo request is idempotent only for exact storage path and ca
   const replay = await command(input());
   assert.equal(first.replayed, false);
   assert.equal(replay.replayed, true);
+  assert.equal(replay.workInterventionVersion, 3);
   assert.equal(store.values('fieldEvidence').length, 1);
   assert.equal(store.get('workInterventions', 'WI-1').version, 3);
   assert.equal(auditEvents.length, 1);
