@@ -165,7 +165,10 @@ function serviceWithTemplate(overrides = {}) {
         name: 'Standard Service Report',
         version: 3,
         sections: [
-          { id: 'condition', title: 'Condition', type: 'checklist', required: true },
+          {
+            id: 'condition', title: 'Condition', type: 'checklist', required: true,
+            checklistItems: [{ id: 'filter-clean', label: 'Filter cleaned and reinstalled' }],
+          },
           { id: 'photos', title: 'Photos', type: 'photos', required: true, minEvidenceCount: 2 },
         ],
       },
@@ -248,7 +251,10 @@ test('starting execution freezes configured Service report template and initiali
     serviceId: 'service-standard',
     version: 3,
     sections: [
-      { id: 'condition', title: 'Condition', type: 'checklist', required: true },
+      {
+        id: 'condition', title: 'Condition', type: 'checklist', required: true,
+        checklistItems: [{ id: 'filter-clean', label: 'Filter cleaned and reinstalled' }],
+      },
       { id: 'photos', title: 'Photos', type: 'photos', required: true, minEvidenceCount: 2 },
     ],
   });
