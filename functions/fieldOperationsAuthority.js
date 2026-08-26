@@ -23,6 +23,7 @@ const {
 const { attachInterventionExecutionOptionsToJob } = require('./fieldOperationsInterventionTransitions');
 const { createTransitionWorkInterventionCommand } = require('./fieldOperationsInterventionMutation');
 const { createAddReportPhotoEvidenceCommand } = require('./fieldOperationsReportEvidence');
+const { createAddFieldMeasurementCommand } = require('./fieldOperationsMeasurements');
 const { attachInterventionReportsToJob } = require('./fieldOperationsReportRead');
 const {
   attachScopeChangesToJob,
@@ -47,6 +48,7 @@ const FIELD_ACTIONS = new Set([
   'record_additional_intervention_decision',
   'transition_intervention',
   'add_report_photo_evidence',
+  'add_report_measurement',
 ]);
 
 function cleanText(value, limit = 1000) {
@@ -104,6 +106,7 @@ function createFieldOperationsApi({
   recordAdditionalWorkDecision,
   transitionWorkIntervention,
   addReportPhotoEvidence,
+  addFieldMeasurement,
 } = {}) {
   if (!db || typeof db.collection !== 'function') throw new Error('A Firestore-compatible db is required.');
   if (typeof verifyIdToken !== 'function') throw new Error('verifyIdToken is required.');
@@ -117,6 +120,7 @@ function createFieldOperationsApi({
   if (recordAdditionalWorkDecision !== undefined && typeof recordAdditionalWorkDecision !== 'function') throw new Error('recordAdditionalWorkDecision must be a function when provided.');
   if (transitionWorkIntervention !== undefined && typeof transitionWorkIntervention !== 'function') throw new Error('transitionWorkIntervention must be a function when provided.');
   if (addReportPhotoEvidence !== undefined && typeof addReportPhotoEvidence !== 'function') throw new Error('addReportPhotoEvidence must be a function when provided.');
+  if (addFieldMeasurement !== undefined && typeof addFieldMeasurement !== 'function') throw new Error('addFieldMeasurement must be a function when provided.');
 
   async function authenticate(request) {
     const token = bearerToken(request);
@@ -316,6 +320,23 @@ function createFieldOperationsApi({
       });
       return { ...added, version: FIELD_OPERATIONS_API_VERSION };
     }
+    if (action === 'add_report_measurement') {
+      if (typeof addFieldMeasurement !== 'function') {
+        throw fieldError('mutation_not_configured', 'Work Intervention report measurement is not configured in this runtime.', 503);
+      }
+      const added = await addFieldMeasurement({
+        identity,
+        visitId: cleanText(data.visitId, 180),
+        interventionId: cleanText(data.interventionId, 180),
+        sectionId: cleanText(data.sectionId, 120),
+        metric: cleanText(data.metric, 160),
+        value: data.value,
+        unit: cleanText(data.unit, 80),
+        moment: cleanText(data.moment, 40),
+        requestId: cleanText(data.requestId, 240),
+      });
+      return { ...added, version: FIELD_OPERATIONS_API_VERSION };
+    }
     throw fieldError('unsupported_action', `Unsupported Field Operations action: ${action || 'missing'}.`, 400);
   }
 
@@ -376,6 +397,7 @@ function getDefaultApi() {
       appendAuditInTransaction,
       verifyStoredImage: verifyStoredFieldImage,
     });
+    const addFieldMeasurement = createAddFieldMeasurementCommand({ db, resolveAssignment, appendAuditInTransaction });
     defaultApi = createFieldOperationsApi({
       db,
       verifyIdToken: (token) => getAuth().verifyIdToken(token, true),
@@ -388,6 +410,7 @@ function getDefaultApi() {
       recordAdditionalWorkDecision,
       transitionWorkIntervention,
       addReportPhotoEvidence,
+      addFieldMeasurement,
       reportError: ({ action, status, code, error }) => logger.error('Field Operations request failed', {
         action: cleanText(action, 120) || 'unknown',
         status,
