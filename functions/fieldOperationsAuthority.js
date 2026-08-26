@@ -28,6 +28,7 @@ const { createAddFieldFindingCommand } = require('./fieldOperationsFindings');
 const { createSetFieldChecklistItemCommand } = require('./fieldOperationsChecklistResponses');
 const { createSetFieldFreeTextResponseCommand } = require('./fieldOperationsFreeTextResponses');
 const { createRecordCustomerAcknowledgementCommand } = require('./fieldOperationsCustomerAcknowledgements');
+const { attachCustomerAcknowledgementsToJob } = require('./fieldOperationsCustomerAcknowledgementRead');
 const { attachInterventionReportsToJob } = require('./fieldOperationsReportRead');
 const {
   attachScopeChangesToJob,
@@ -173,10 +174,11 @@ function createFieldOperationsApi({
       const withScopeChanges = await attachScopeChangesToJob(db, withExecutionOptions);
       const withApprovals = await attachFieldApprovalsToJob(db, withScopeChanges);
       const withReports = await attachInterventionReportsToJob(db, withApprovals);
+      const withCustomerAcknowledgements = await attachCustomerAcknowledgementsToJob(db, withReports);
       return {
         success: true,
         version: FIELD_OPERATIONS_API_VERSION,
-        job: publicJobProjection(withReports),
+        job: publicJobProjection(withCustomerAcknowledgements),
       };
     }
     if (action === 'prepare_visit') {
