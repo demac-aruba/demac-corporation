@@ -23,10 +23,11 @@ import {
   parseFieldAddReportPhotoEvidenceResponse,
   type FieldMeasurementMoment,
 } from './field-report-contract';
+import { parseFieldAddReportFindingResponse } from './field-finding-contract';
 import {
-  parseFieldAddReportFindingResponse,
-  parseFieldFindingJobResponse,
-} from './field-finding-contract';
+  parseFieldChecklistJobResponse,
+  parseFieldSetReportChecklistItemResponse,
+} from './field-checklist-contract';
 import { parseFieldRegisterVisitAssetResponse } from './field-equipment-registration-contract';
 
 export { fieldActionAllowed } from './field-authorization';
@@ -97,10 +98,20 @@ export type {
   FieldAddReportFindingResponse,
   FieldFindingInterventionReport,
   FieldFindingJobDetail,
-  FieldFindingJobDetail as FieldExecutionJobDetail,
   FieldReportFinding,
   FieldReportFindingOption,
 } from './field-finding-contract';
+export type {
+  FieldChecklistInterventionReport,
+  FieldChecklistJobDetail,
+  FieldChecklistJobDetail as FieldExecutionJobDetail,
+  FieldChecklistReportSection,
+  FieldChecklistReportTemplateSnapshot,
+  FieldReportChecklistItem,
+  FieldReportChecklistOption,
+  FieldReportChecklistResponse,
+  FieldSetReportChecklistItemResponse,
+} from './field-checklist-contract';
 export type {
   FieldEquipmentRegistrationEvidence,
   FieldEquipmentRegistrationEvidenceKind,
@@ -198,7 +209,7 @@ export async function getFieldSchedule(startDate: string, endDate = startDate) {
 }
 
 export async function getFieldJob(workOrderId: string) {
-  return parseFieldFindingJobResponse(await callFieldAuthority('get_job', { workOrderId }));
+  return parseFieldChecklistJobResponse(await callFieldAuthority('get_job', { workOrderId }));
 }
 
 export async function prepareFieldVisit(workOrderId: string, requestId: string) {
@@ -368,6 +379,26 @@ export async function addFieldReportFinding(
     summary,
     details,
     recommendation,
+    requestId,
+  }));
+}
+
+export async function setFieldReportChecklistItem(
+  visitId: string,
+  interventionId: string,
+  sectionId: string,
+  itemId: string,
+  checked: boolean,
+  expectedVersion: number,
+  requestId: string,
+) {
+  return parseFieldSetReportChecklistItemResponse(await callFieldAuthority('set_report_checklist_item', {
+    visitId,
+    interventionId,
+    sectionId,
+    itemId,
+    checked,
+    expectedVersion,
     requestId,
   }));
 }
