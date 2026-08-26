@@ -51,6 +51,7 @@ export type FieldProfessionalReportPreview = {
   propertyId: string;
   status: FieldProfessionalReportStatus;
   plannedQuantity: number;
+  unreconciledPlannedQuantity: number;
   actualAssetCount: number;
   interventionCount: number;
   completedInterventionCount: number;
@@ -108,9 +109,14 @@ function completionValid(value: unknown, report: FieldVoiceNoteInterventionRepor
   });
 }
 
+function expectedUnreconciledPlannedQuantity(job: FieldProfessionalReportJobDetail) {
+  return job.plannedWorkProgress.reduce((total, line) => total + line.remainingQuantity, 0);
+}
+
 function expectedPreviewStatus(job: FieldProfessionalReportJobDetail): FieldProfessionalReportStatus {
   if (job.workInterventions.some((intervention) => intervention.status === 'pending_part')) return 'partial';
   if (job.interventionReports.some((report) => !report.completion.complete)) return 'incomplete_report';
+  if (expectedUnreconciledPlannedQuantity(job) > 0) return 'in_progress';
   if (job.workInterventions.length > 0
     && job.workInterventions.every((intervention) => TERMINAL_INTERVENTION_STATUSES.has(intervention.status))) return 'field_complete';
   return 'in_progress';
@@ -128,10 +134,12 @@ function previewValid(value: unknown, job: FieldProfessionalReportJobDetail): va
     || item.propertyId !== job.propertyId
     || !nonEmptyString(item.status)
     || !PROFESSIONAL_REPORT_STATUSES.has(item.status as FieldProfessionalReportStatus)
+    || !nonNegativeSafeInteger(item.unreconciledPlannedQuantity)
     || !Array.isArray(item.incompleteRequiredSections)) return false;
   const missingSections = item.incompleteRequiredSections as unknown[];
 
   const plannedQuantity = job.plannedWork.reduce((total, line) => total + Math.max(0, line.quantity), 0);
+  const unreconciledPlannedQuantity = expectedUnreconciledPlannedQuantity(job);
   const requiredSectionCount = job.interventionReports.reduce((total, report) => total + report.completion.requiredSectionCount, 0);
   const completedRequiredSectionCount = job.interventionReports.reduce((total, report) => total + report.completion.completedRequiredSectionCount, 0);
   const expectedMissing = job.interventionReports.flatMap((report) => report.completion.incompleteRequiredSections.map((section) => ({
@@ -143,6 +151,7 @@ function previewValid(value: unknown, job: FieldProfessionalReportJobDetail): va
   })));
   if (item.status !== expectedPreviewStatus(job)
     || item.plannedQuantity !== plannedQuantity
+    || item.unreconciledPlannedQuantity !== unreconciledPlannedQuantity
     || item.actualAssetCount !== job.visitAssets.length
     || item.interventionCount !== job.workInterventions.length
     || item.completedInterventionCount !== job.workInterventions.filter((entry) => entry.status === 'completed').length
