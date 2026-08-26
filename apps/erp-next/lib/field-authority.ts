@@ -25,10 +25,11 @@ import {
 } from './field-report-contract';
 import { parseFieldAddReportFindingResponse } from './field-finding-contract';
 import { parseFieldSetReportChecklistItemResponse } from './field-checklist-contract';
+import { parseFieldSetReportFreeTextResponse } from './field-free-text-contract';
 import {
-  parseFieldFreeTextJobResponse,
-  parseFieldSetReportFreeTextResponse,
-} from './field-free-text-contract';
+  parseFieldCustomerAcknowledgementJobResponse,
+  parseFieldRecordCustomerAcknowledgementResponse,
+} from './field-customer-acknowledgement-contract';
 import { parseFieldRegisterVisitAssetResponse } from './field-equipment-registration-contract';
 
 export { fieldActionAllowed } from './field-authorization';
@@ -115,11 +116,19 @@ export type {
 export type {
   FieldFreeTextInterventionReport,
   FieldFreeTextJobDetail,
-  FieldFreeTextJobDetail as FieldExecutionJobDetail,
   FieldReportFreeTextOption,
   FieldReportFreeTextResponse,
   FieldSetReportFreeTextResponse,
 } from './field-free-text-contract';
+export type {
+  FieldCustomerAcknowledgement,
+  FieldCustomerAcknowledgementInterventionReport,
+  FieldCustomerAcknowledgementJobDetail,
+  FieldCustomerAcknowledgementJobDetail as FieldExecutionJobDetail,
+  FieldCustomerAcknowledgementMethod,
+  FieldCustomerAcknowledgementOption,
+  FieldRecordCustomerAcknowledgementResponse,
+} from './field-customer-acknowledgement-contract';
 export type {
   FieldEquipmentRegistrationEvidence,
   FieldEquipmentRegistrationEvidenceKind,
@@ -217,7 +226,7 @@ export async function getFieldSchedule(startDate: string, endDate = startDate) {
 }
 
 export async function getFieldJob(workOrderId: string) {
-  return parseFieldFreeTextJobResponse(await callFieldAuthority('get_job', { workOrderId }));
+  return parseFieldCustomerAcknowledgementJobResponse(await callFieldAuthority('get_job', { workOrderId }));
 }
 
 export async function prepareFieldVisit(workOrderId: string, requestId: string) {
@@ -273,4 +282,10 @@ export async function setFieldReportChecklistItem(visitId: string, interventionI
 
 export async function setFieldReportFreeText(visitId: string, interventionId: string, sectionId: string, value: string, expectedVersion: number, requestId: string) {
   return parseFieldSetReportFreeTextResponse(await callFieldAuthority('set_report_free_text', { visitId, interventionId, sectionId, value, expectedVersion, requestId }));
+}
+
+export async function recordFieldCustomerAcknowledgement(visitId: string, interventionId: string, sectionId: string, receiverName: string, note: string, requestId: string) {
+  return parseFieldRecordCustomerAcknowledgementResponse(await callFieldAuthority('record_customer_report_acknowledgement', {
+    visitId, interventionId, sectionId, receiverName, note, requestId,
+  }));
 }
