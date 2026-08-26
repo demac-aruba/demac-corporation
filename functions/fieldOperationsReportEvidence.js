@@ -27,6 +27,20 @@ function deterministicId(prefix, value) {
   return `${prefix}-${crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, 24)}`;
 }
 
+function reportImageMetadata(value) {
+  try {
+    return canonicalImageMetadata(value);
+  } catch (cause) {
+    if (cause?.code === 'invalid_report_evidence') throw cause;
+    if (cause?.code === 'equipment_evidence_unavailable' || cause?.code === 'invalid_equipment_evidence') {
+      const error = fieldError('invalid_report_evidence', 'Report photo must be a valid image of up to 12 MB.', 409);
+      error.cause = cause;
+      throw error;
+    }
+    throw cause;
+  }
+}
+
 function reportPhotoEvidenceId(interventionId, sectionId, requestId) {
   const normalizedInterventionId = text(interventionId, 180);
   const normalizedSectionId = text(sectionId, 120);
@@ -89,7 +103,7 @@ function projectReportPhotoEvidence(record, expectedContext = {}) {
       throw fieldError('report_evidence_identity_conflict', 'Persisted report photo evidence does not match its authorized context.', 409, { key });
     }
   }
-  const image = canonicalImageMetadata({ contentType: record?.contentType, sizeBytes: record?.sizeBytes });
+  const image = reportImageMetadata({ contentType: record?.contentType, sizeBytes: record?.sizeBytes });
   const capturedAt = text(record?.capturedAt, 80);
   if (!capturedAt || Number.isNaN(Date.parse(capturedAt))) {
     throw fieldError('invalid_field_evidence_timestamp', 'Persisted report photo capturedAt is invalid.', 409);
@@ -199,12 +213,15 @@ function createAddReportPhotoEvidenceCommand({
     try {
       storageMetadata = await verifyStoredImage(normalizedStoragePath);
     } catch (cause) {
-      if (cause?.code && String(cause.code).startsWith('invalid_')) throw cause;
+      if (cause?.code === 'invalid_report_evidence') throw cause;
+      if (cause?.code === 'equipment_evidence_unavailable' || cause?.code === 'invalid_equipment_evidence') {
+        reportImageMetadata({});
+      }
       const error = fieldError('report_evidence_unavailable', 'The report photo could not be verified.', 409);
       error.cause = cause;
       throw error;
     }
-    canonicalImageMetadata(storageMetadata);
+    reportImageMetadata(storageMetadata);
 
     let result;
     await db.runTransaction(async (transaction) => {
@@ -270,7 +287,7 @@ function createAddReportPhotoEvidenceCommand({
       }
       const occurredAt = text(now(), 80);
       if (!occurredAt || Number.isNaN(Date.parse(occurredAt))) throw new Error('Clock returned an invalid timestamp.');
-      const image = canonicalImageMetadata(storageMetadata);
+      const image = reportImageMetadata(storageMetadata);
       const evidenceRecord = fieldFirestoreData({
         id: evidenceId,
         fieldAuthorityVersion: FIELD_EVIDENCE_STORAGE_VERSION,
@@ -335,6 +352,7 @@ module.exports.REPORT_EVIDENCE_TARGET_TYPE = REPORT_EVIDENCE_TARGET_TYPE;
 module.exports.REPORT_PHOTO_EVIDENCE_KIND = REPORT_PHOTO_EVIDENCE_KIND;
 module.exports.createAddReportPhotoEvidenceCommand = createAddReportPhotoEvidenceCommand;
 module.exports.projectReportPhotoEvidence = projectReportPhotoEvidence;
+module.exports.reportImageMetadata = reportImageMetadata;
 module.exports.reportPhotoEvidenceId = reportPhotoEvidenceId;
 module.exports.reportPhotoAuditEvent = reportPhotoAuditEvent;
 module.exports.reportSection = reportSection;
