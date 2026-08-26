@@ -19,6 +19,7 @@ function job(overrides = {}) {
     workOrderId: 'WO-1', customerId: 'CLIENT-1', propertyId: 'PROPERTY-1',
     fieldVisit: { id: 'visit-WO-1', status: 'in_progress' },
     plannedWork: [{ id: 'line-1', label: 'Standard Service', quantity: 1 }],
+    plannedWorkProgress: [{ id: 'line-1', plannedQuantity: 1, linkedActualQuantity: 1, remainingQuantity: 0 }],
     visitAssets: [{ id: 'VA-1' }],
     workInterventions: [{
       id: 'WI-1', visitId: 'visit-WO-1', visitAssetId: 'VA-1', assetId: 'AC-1',
@@ -38,12 +39,33 @@ test('completed canonical field work projects a field-complete professional repo
   assert.equal(preview.source, 'canonical_field_truth');
   assert.equal(preview.status, 'field_complete');
   assert.equal(preview.plannedQuantity, 1);
+  assert.equal(preview.unreconciledPlannedQuantity, 0);
   assert.equal(preview.actualAssetCount, 1);
   assert.equal(preview.interventionCount, 1);
   assert.equal(preview.completedInterventionCount, 1);
   assert.equal(preview.requiredSectionCount, 1);
   assert.equal(preview.completedRequiredSectionCount, 1);
   assert.deepEqual(preview.incompleteRequiredSections, []);
+});
+
+test('planned two actual one remains in progress until the remaining planned unit is explicitly reconciled', () => {
+  const preview = buildProfessionalReportPreview(job({
+    plannedWork: [{ id: 'line-1', label: 'Standard Service', quantity: 2 }],
+    plannedWorkProgress: [{ id: 'line-1', plannedQuantity: 2, linkedActualQuantity: 1, remainingQuantity: 1 }],
+  }));
+  assert.equal(preview.plannedQuantity, 2);
+  assert.equal(preview.completedInterventionCount, 1);
+  assert.equal(preview.unreconciledPlannedQuantity, 1);
+  assert.equal(preview.status, 'in_progress');
+});
+
+test('invalid planned-work reconciliation state fails closed', () => {
+  assert.throws(
+    () => buildProfessionalReportPreview(job({
+      plannedWorkProgress: [{ id: 'line-1', plannedQuantity: 1, linkedActualQuantity: 1, remainingQuantity: -1 }],
+    })),
+    (error) => error?.code === 'professional_report_state_conflict' && error?.status === 409,
+  );
 });
 
 test('required report gaps project incomplete-report status with exact intervention and section identity', () => {
