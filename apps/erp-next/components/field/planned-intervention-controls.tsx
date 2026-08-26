@@ -1,7 +1,11 @@
 'use client';
 
 import { useState } from 'react';
-import type { FieldExecutionJobDetail, FieldWorkInterventionStatus } from '@/lib/field-authority';
+import type {
+  FieldExecutionJobDetail,
+  FieldPlannedWorkDispositionReason,
+  FieldWorkInterventionStatus,
+} from '@/lib/field-authority';
 import { presentedFieldPriceLabel } from './field-price-display';
 import styles from './technician-field-home.module.css';
 
@@ -10,8 +14,34 @@ type Draft = {
   serviceCatalogItemId: string;
 };
 
-type CreateInput = Draft & {
-  visitAssetId: string;
+type DispositionDraft = {
+  quantity: number;
+  reasonCode: FieldPlannedWorkDispositionReason | '';
+  note: string;
+};
+
+export type PlannedWorkMutationInput =
+  | {
+      kind: 'intervention';
+      visitAssetId: string;
+      plannedWorkLineId: string;
+      serviceCatalogItemId: string;
+    }
+  | {
+      kind: 'disposition';
+      plannedWorkLineId: string;
+      quantity: number;
+      reasonCode: FieldPlannedWorkDispositionReason;
+      note: string;
+    };
+
+const REASON_LABELS: Record<FieldPlannedWorkDispositionReason, string> = {
+  customer_cancelled: 'Cliente canceló esta parte',
+  inaccessible: 'Equipo / área inaccesible',
+  unsafe: 'Condición insegura',
+  deferred: 'Trabajo diferido para otra visita',
+  equipment_unavailable: 'Equipo no estaba disponible',
+  other: 'Otra razón',
 };
 
 function interventionStatusLabel(status: FieldWorkInterventionStatus) {
@@ -37,9 +67,10 @@ export function PlannedInterventionControls({
   mutationBusy: boolean;
   creatingVisitAssetId: string | null;
   error: string | null;
-  onCreate: (input: CreateInput) => void;
+  onCreate: (input: PlannedWorkMutationInput) => void;
 }) {
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
+  const [dispositionDrafts, setDispositionDrafts] = useState<Record<string, DispositionDraft>>({});
   const plannedWorkById = new Map(job.plannedWork.map((line) => [line.id, line]));
   const serviceById = new Map(job.availableFieldServices.map((service) => [service.id, service]));
   const visitAssetById = new Map(job.visitAssets.map((asset) => [asset.id, asset]));
@@ -53,6 +84,19 @@ export function PlannedInterventionControls({
         plannedWorkLineId: current[visitAssetId]?.plannedWorkLineId ?? '',
         serviceCatalogItemId: current[visitAssetId]?.serviceCatalogItemId ?? '',
         ...changes,
+      },
+    }));
+  };
+
+  const setDispositionDraft = (plannedWorkLineId: string, changes: Partial<DispositionDraft>, maxQuantity: number) => {
+    setDispositionDrafts((current) => ({
+      ...current,
+      [plannedWorkLineId]: {
+        quantity: current[plannedWorkLineId]?.quantity ?? 1,
+        reasonCode: current[plannedWorkLineId]?.reasonCode ?? '',
+        note: current[plannedWorkLineId]?.note ?? '',
+        ...changes,
+        quantity: Math.max(1, Math.min(maxQuantity, changes.quantity ?? current[plannedWorkLineId]?.quantity ?? 1)),
       },
     }));
   };
@@ -81,6 +125,22 @@ export function PlannedInterventionControls({
         );
       }) : <p className={styles.helper}>Todavía no hay trabajo real vinculado a los A/C confirmados.</p>}
 
+      {job.plannedWorkDispositions.length ? (
+        <div className={styles.planned}>
+          <div className={styles.plannedTitle}>CANTIDAD PROGRAMADA NO REALIZADA</div>
+          {job.plannedWorkDispositions.map((disposition) => (
+            <div className={styles.plannedItem} key={disposition.id}>
+              <span>
+                {plannedWorkById.get(disposition.plannedWorkLineId)?.label || disposition.plannedWorkLineId}
+                {' · '}{REASON_LABELS[disposition.reasonCode]}
+                {disposition.note ? ` · ${disposition.note}` : ''}
+              </span>
+              <strong>{disposition.quantity}×</strong>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       {job.plannedInterventionOptions.map((option) => {
         const visitAsset = visitAssetById.get(option.visitAssetId);
         if (!visitAsset) return null;
@@ -98,12 +158,7 @@ export function PlannedInterventionControls({
             <strong>{visitAsset.locationLabel || equipment?.locationLabel || `A/C ${visitAsset.sequence}`}</strong>
             <label>
               <span>Línea programada</span>
-              <select
-                className={styles.select}
-                disabled={mutationBusy}
-                value={plannedWorkLineId}
-                onChange={(event) => setDraft(option.visitAssetId, { plannedWorkLineId: event.target.value })}
-              >
+              <select className={styles.select} disabled={mutationBusy} value={plannedWorkLineId} onChange={(event) => setDraft(option.visitAssetId, { plannedWorkLineId: event.target.value })}>
                 <option value="">Selecciona el trabajo programado</option>
                 {option.plannedWorkLineIds.map((lineId) => (
                   <option key={lineId} value={lineId}>{plannedWorkById.get(lineId)?.label || lineId}</option>
@@ -112,32 +167,56 @@ export function PlannedInterventionControls({
             </label>
             <label>
               <span>Servicio real realizado / a realizar</span>
-              <select
-                className={styles.select}
-                disabled={mutationBusy}
-                value={serviceCatalogItemId}
-                onChange={(event) => setDraft(option.visitAssetId, { serviceCatalogItemId: event.target.value })}
-              >
+              <select className={styles.select} disabled={mutationBusy} value={serviceCatalogItemId} onChange={(event) => setDraft(option.visitAssetId, { serviceCatalogItemId: event.target.value })}>
                 <option value="">Selecciona el servicio canónico</option>
                 {job.availableFieldServices.map((service) => (
                   <option key={service.id} value={service.id}>{service.label}</option>
                 ))}
               </select>
             </label>
-            <button
-              className={`${styles.action} ${styles.primary}`}
-              disabled={!canSubmit}
-              type="button"
-              onClick={() => onCreate({ visitAssetId: option.visitAssetId, plannedWorkLineId, serviceCatalogItemId })}
-            >
+            <button className={`${styles.action} ${styles.primary}`} disabled={!canSubmit} type="button" onClick={() => onCreate({ kind: 'intervention', visitAssetId: option.visitAssetId, plannedWorkLineId, serviceCatalogItemId })}>
               {creatingVisitAssetId === option.visitAssetId ? 'Vinculando…' : 'Vincular trabajo planificado'}
             </button>
           </div>
         );
       })}
 
-      {!job.canAddPlannedIntervention && job.fieldVisit ? (
-        <p className={styles.helper}>Las opciones para vincular trabajo planificado son calculadas por Field Authority según el plan restante, el A/C, el estado de visita y la asignación actual.</p>
+      {job.plannedWorkDispositionOptions.map((option) => {
+        const draft = dispositionDrafts[option.plannedWorkLineId] ?? { quantity: 1, reasonCode: '', note: '' };
+        const reasonCode = draft.reasonCode;
+        const needsNote = reasonCode === 'other';
+        const canSubmit = Boolean(reasonCode && (!needsNote || draft.note.trim().length >= 3)) && !mutationBusy;
+        const busyKey = `disposition:${option.plannedWorkLineId}`;
+        return (
+          <div className={styles.interventionForm} key={busyKey}>
+            <strong>Reconciliar: {plannedWorkById.get(option.plannedWorkLineId)?.label || option.plannedWorkLineId}</strong>
+            <p className={styles.helper} style={{ gridColumn: '1 / -1', marginTop: 0 }}>
+              Registra sólo cantidad programada que realmente no se ejecutó. Esto no crea un A/C ni modifica la cita original.
+            </p>
+            <label>
+              <span>Cantidad no realizada</span>
+              <input className={styles.select} disabled={mutationBusy} type="number" min={1} max={option.maxQuantity} step={1} value={draft.quantity} onChange={(event) => setDispositionDraft(option.plannedWorkLineId, { quantity: Number(event.target.value) }, option.maxQuantity)} />
+            </label>
+            <label>
+              <span>Razón</span>
+              <select className={styles.select} disabled={mutationBusy} value={reasonCode} onChange={(event) => setDispositionDraft(option.plannedWorkLineId, { reasonCode: event.target.value as FieldPlannedWorkDispositionReason }, option.maxQuantity)}>
+                <option value="">Selecciona una razón</option>
+                {Object.entries(REASON_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </label>
+            <label style={{ gridColumn: '1 / -1' }}>
+              <span>Nota {needsNote ? '(requerida)' : '(opcional)'}</span>
+              <textarea className={styles.select} disabled={mutationBusy} rows={2} value={draft.note} onChange={(event) => setDispositionDraft(option.plannedWorkLineId, { note: event.target.value }, option.maxQuantity)} placeholder="Explica brevemente cuando sea necesario." />
+            </label>
+            <button className={`${styles.action} ${styles.primary}`} disabled={!canSubmit} type="button" onClick={() => reasonCode && onCreate({ kind: 'disposition', plannedWorkLineId: option.plannedWorkLineId, quantity: draft.quantity, reasonCode, note: draft.note.trim() })}>
+              {creatingVisitAssetId === busyKey ? 'Registrando…' : 'Registrar trabajo no realizado'}
+            </button>
+          </div>
+        );
+      })}
+
+      {!job.canAddPlannedIntervention && !job.canRecordPlannedWorkDisposition && job.fieldVisit ? (
+        <p className={styles.helper}>Las opciones de trabajo planificado son calculadas por Field Authority según el plan restante, los A/C confirmados, el estado de visita y la asignación actual.</p>
       ) : null}
       {error ? <div className={styles.mutationError}>{error}</div> : null}
     </div>
