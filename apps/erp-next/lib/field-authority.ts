@@ -15,10 +15,13 @@ import {
   type FieldTechnicianScopeChangeOrigin,
 } from './field-intervention-contract';
 import {
-  parseFieldApprovalJobResponse,
   parseFieldRecordAdditionalWorkDecisionResponse,
   type FieldAdditionalWorkDecision,
 } from './field-approval-contract';
+import {
+  parseFieldAddReportPhotoEvidenceResponse,
+  parseFieldReportJobResponse,
+} from './field-report-contract';
 import { parseFieldRegisterVisitAssetResponse } from './field-equipment-registration-contract';
 
 export { fieldActionAllowed } from './field-authorization';
@@ -67,9 +70,20 @@ export type {
   FieldApprovalReference,
   FieldApprovalReferenceType,
   FieldApprovalStatus,
-  FieldExecutionJobDetail,
   FieldRecordAdditionalWorkDecisionResponse,
 } from './field-approval-contract';
+export type {
+  FieldAddReportPhotoEvidenceResponse,
+  FieldInterventionReport,
+  FieldReportJobDetail,
+  FieldReportJobDetail as FieldExecutionJobDetail,
+  FieldReportPhotoEvidence,
+  FieldReportPhotoOption,
+  FieldReportSection,
+  FieldReportSectionStatus,
+  FieldReportSectionType,
+  FieldReportTemplateSnapshot,
+} from './field-report-contract';
 export type {
   FieldEquipmentRegistrationEvidence,
   FieldEquipmentRegistrationEvidenceKind,
@@ -167,7 +181,7 @@ export async function getFieldSchedule(startDate: string, endDate = startDate) {
 }
 
 export async function getFieldJob(workOrderId: string) {
-  return parseFieldApprovalJobResponse(await callFieldAuthority('get_job', { workOrderId }));
+  return parseFieldReportJobResponse(await callFieldAuthority('get_job', { workOrderId }));
 }
 
 export async function prepareFieldVisit(workOrderId: string, requestId: string) {
@@ -279,4 +293,22 @@ export async function transitionFieldIntervention(
     note,
     requestId,
   }));
+}
+
+export async function addFieldReportPhotoEvidence(
+  visitId: string,
+  interventionId: string,
+  sectionId: string,
+  storagePath: string,
+  caption: string,
+  requestId: string,
+) {
+  return parseFieldAddReportPhotoEvidenceResponse(await callFieldAuthority('add_report_photo_evidence', {
+    visitId,
+    interventionId,
+    sectionId,
+    storagePath,
+    caption,
+    requestId,
+  }, 20_000));
 }
