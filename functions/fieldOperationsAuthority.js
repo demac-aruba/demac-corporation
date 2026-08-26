@@ -34,6 +34,7 @@ const { createSetFieldFreeTextResponseCommand } = require('./fieldOperationsFree
 const { createRecordCustomerAcknowledgementCommand } = require('./fieldOperationsCustomerAcknowledgements');
 const { attachCustomerAcknowledgementsToJob } = require('./fieldOperationsCustomerAcknowledgementRead');
 const { attachInterventionReportsToJob } = require('./fieldOperationsReportRead');
+const { attachProfessionalReportPreviewToJob } = require('./fieldOperationsProfessionalReport');
 const {
   attachScopeChangesToJob,
   createAdditionalWorkInterventionCommand,
@@ -183,10 +184,11 @@ function createFieldOperationsApi({
       const withReports = await attachInterventionReportsToJob(db, withApprovals);
       const withVoiceEvidence = await attachReportVoiceEvidenceToJob(db, withReports);
       const withCustomerAcknowledgements = await attachCustomerAcknowledgementsToJob(db, withVoiceEvidence);
+      const withProfessionalReport = attachProfessionalReportPreviewToJob(withCustomerAcknowledgements);
       return {
         success: true,
         version: FIELD_OPERATIONS_API_VERSION,
-        job: publicJobProjection(withCustomerAcknowledgements),
+        job: publicJobProjection(withProfessionalReport),
       };
     }
     if (action === 'prepare_visit') {
