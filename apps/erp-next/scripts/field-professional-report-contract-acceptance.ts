@@ -43,7 +43,7 @@ const reportBase = {
 };
 const preview = {
   version: 1, source: 'canonical_field_truth', visitId: 'visit-WO-1', workOrderId: 'WO-1', customerId: 'CLIENT-1', propertyId: 'PROPERTY-1',
-  status: 'incomplete_report', plannedQuantity: 1, actualAssetCount: 1, interventionCount: 1, completedInterventionCount: 0,
+  status: 'incomplete_report', plannedQuantity: 1, unreconciledPlannedQuantity: 0, actualAssetCount: 1, interventionCount: 1, completedInterventionCount: 0,
   pendingPartInterventionCount: 0, notPerformedInterventionCount: 0, activeInterventionCount: 1,
   requiredSectionCount: 1, completedRequiredSectionCount: 0,
   incompleteRequiredSections: [{ interventionId: 'WI-1', sectionId: 'voice', title: 'Nota de voz', type: 'voice_note', status: 'pending' }],
@@ -64,6 +64,7 @@ const baseJob = {
 
 const parsed = parseFieldProfessionalReportJobResponse({ success: true, version: 1, job: baseJob });
 assert(parsed.job.professionalReportPreview?.status === 'incomplete_report', 'server Professional Report readiness should survive strict parsing');
+assert(parsed.job.professionalReportPreview?.unreconciledPlannedQuantity === 0, 'canonical reconciliation count should survive strict parsing');
 assert(parsed.job.interventionReports[0].completion.incompleteRequiredSections[0].id === 'voice', 'exact required blocker should survive strict parsing');
 
 const completedReport = {
@@ -81,9 +82,21 @@ const readyJob = { ...baseJob, interventionReports: [completedReport], reportVoi
 const ready = parseFieldProfessionalReportJobResponse({ success: true, version: 1, job: readyJob });
 assert(ready.job.interventionReports[0].completion.complete, 'completed required sections should parse as complete while execution remains in progress');
 
+const unreconciledJob = {
+  ...readyJob,
+  plannedWork: [{ id: 'line-standard', label: 'Standard Service', quantity: 2 }],
+  plannedWorkProgress: [{ id: 'line-standard', plannedQuantity: 2, linkedActualQuantity: 1, remainingQuantity: 1 }],
+  professionalReportPreview: { ...readyPreview, plannedQuantity: 2, unreconciledPlannedQuantity: 1 },
+};
+const unreconciled = parseFieldProfessionalReportJobResponse({ success: true, version: 1, job: unreconciledJob });
+assert(unreconciled.job.professionalReportPreview?.status === 'in_progress', 'unreconciled planned work must prevent field-complete projection');
+
 assertThrows(() => parseFieldProfessionalReportJobResponse({
   success: true, version: 1, job: { ...baseJob, professionalReportPreview: { ...preview, actualAssetCount: 2 } },
 }), 'preview counts cannot drift from canonical VisitAssets');
+assertThrows(() => parseFieldProfessionalReportJobResponse({
+  success: true, version: 1, job: { ...baseJob, professionalReportPreview: { ...preview, unreconciledPlannedQuantity: 1 } },
+}), 'preview unreconciled quantity cannot drift from canonical planned-work progress');
 assertThrows(() => parseFieldProfessionalReportJobResponse({
   success: true, version: 1, job: { ...baseJob, interventionReports: [{ ...reportBase, completion: { ...reportBase.completion, complete: true } }] },
 }), 'completion flag cannot contradict required section state');
