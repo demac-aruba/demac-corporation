@@ -26,10 +26,11 @@ import {
 import { parseFieldAddReportFindingResponse } from './field-finding-contract';
 import { parseFieldSetReportChecklistItemResponse } from './field-checklist-contract';
 import { parseFieldSetReportFreeTextResponse } from './field-free-text-contract';
+import { parseFieldRecordCustomerAcknowledgementResponse } from './field-customer-acknowledgement-contract';
 import {
-  parseFieldCustomerAcknowledgementJobResponse,
-  parseFieldRecordCustomerAcknowledgementResponse,
-} from './field-customer-acknowledgement-contract';
+  parseFieldAddReportVoiceNoteResponse,
+  parseFieldVoiceNoteJobResponse,
+} from './field-voice-note-contract';
 import { parseFieldRegisterVisitAssetResponse } from './field-equipment-registration-contract';
 
 export { fieldActionAllowed } from './field-authorization';
@@ -124,11 +125,18 @@ export type {
   FieldCustomerAcknowledgement,
   FieldCustomerAcknowledgementInterventionReport,
   FieldCustomerAcknowledgementJobDetail,
-  FieldCustomerAcknowledgementJobDetail as FieldExecutionJobDetail,
   FieldCustomerAcknowledgementMethod,
   FieldCustomerAcknowledgementOption,
   FieldRecordCustomerAcknowledgementResponse,
 } from './field-customer-acknowledgement-contract';
+export type {
+  FieldAddReportVoiceNoteResponse,
+  FieldReportVoiceNoteEvidence,
+  FieldReportVoiceNoteOption,
+  FieldVoiceNoteInterventionReport,
+  FieldVoiceNoteJobDetail,
+  FieldVoiceNoteJobDetail as FieldExecutionJobDetail,
+} from './field-voice-note-contract';
 export type {
   FieldEquipmentRegistrationEvidence,
   FieldEquipmentRegistrationEvidenceKind,
@@ -226,7 +234,7 @@ export async function getFieldSchedule(startDate: string, endDate = startDate) {
 }
 
 export async function getFieldJob(workOrderId: string) {
-  return parseFieldCustomerAcknowledgementJobResponse(await callFieldAuthority('get_job', { workOrderId }));
+  return parseFieldVoiceNoteJobResponse(await callFieldAuthority('get_job', { workOrderId }));
 }
 
 export async function prepareFieldVisit(workOrderId: string, requestId: string) {
@@ -266,6 +274,12 @@ export async function transitionFieldIntervention(visitId: string, interventionI
 
 export async function addFieldReportPhotoEvidence(visitId: string, interventionId: string, sectionId: string, storagePath: string, caption: string, requestId: string) {
   return parseFieldAddReportPhotoEvidenceResponse(await callFieldAuthority('add_report_photo_evidence', { visitId, interventionId, sectionId, storagePath, caption, requestId }, 20_000));
+}
+
+export async function addFieldReportVoiceEvidence(visitId: string, interventionId: string, sectionId: string, storagePath: string, durationSeconds: number, requestId: string) {
+  return parseFieldAddReportVoiceNoteResponse(await callFieldAuthority('add_report_voice_evidence', {
+    visitId, interventionId, sectionId, storagePath, durationSeconds, requestId,
+  }, 20_000));
 }
 
 export async function addFieldReportMeasurement(visitId: string, interventionId: string, sectionId: string, metric: string, value: number | string, unit: string, moment: FieldMeasurementMoment, requestId: string) {
