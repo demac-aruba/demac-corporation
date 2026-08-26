@@ -278,7 +278,13 @@ function createAddReportPhotoEvidenceCommand({
         if (existing.storagePath !== normalizedStoragePath || (existing.caption || '') !== text(caption, 500)) {
           throw fieldError('report_evidence_request_conflict', 'This requestId was already used for different report photo input.', 409);
         }
-        result = { success: true, replayed: true, evidence: existing, allowedActions: context.allowedActions };
+        result = {
+          success: true,
+          replayed: true,
+          evidence: existing,
+          workInterventionVersion: intervention.version,
+          allowedActions: context.allowedActions,
+        };
         return;
       }
 
