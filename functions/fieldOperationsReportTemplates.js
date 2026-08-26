@@ -10,6 +10,7 @@ const REPORT_SECTION_TYPES = new Set([
   'customer_acknowledgement',
 ]);
 const REPORT_SECTION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
+const REPORT_CHECKLIST_ITEM_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
 
 function text(value, limit = 1000) {
   return String(value ?? '').trim().slice(0, limit);
@@ -26,6 +27,18 @@ function optionalNonNegativeSafeInteger(value) {
 
 function templateError(message, details = {}) {
   return fieldError('invalid_field_report_template', message, 409, details);
+}
+
+function normalizeChecklistItem(item, index, sectionId) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    throw templateError('Field report checklist contains an invalid item.', { sectionId, index });
+  }
+  const id = text(item.id, 120);
+  const label = text(item.label, 240);
+  if (!id || !REPORT_CHECKLIST_ITEM_ID_PATTERN.test(id) || !label) {
+    throw templateError('Field report checklist item id or label is invalid.', { sectionId, index, itemId: id || null });
+  }
+  return { id, label };
 }
 
 function normalizeSection(section, index) {
@@ -46,6 +59,20 @@ function normalizeSection(section, index) {
   if (minEvidenceCount === null || minMeasurementCount === null) {
     throw templateError('Field report template section minimum counts must be non-negative safe integers.', { index, id });
   }
+
+  let checklistItems;
+  if (type === 'checklist') {
+    if (!Array.isArray(section.checklistItems) || section.checklistItems.length === 0 || section.checklistItems.length > 100) {
+      throw templateError('Checklist report sections must define between 1 and 100 canonical checklist items.', { index, id });
+    }
+    checklistItems = section.checklistItems.map((item, itemIndex) => normalizeChecklistItem(item, itemIndex, id));
+    if (checklistItems.length !== new Set(checklistItems.map((item) => item.id)).size) {
+      throw templateError('Checklist item ids must be unique within their report section.', { index, id });
+    }
+  } else if (section.checklistItems !== undefined) {
+    throw templateError('Only checklist report sections may define checklistItems.', { index, id, type });
+  }
+
   return {
     id,
     title,
@@ -53,6 +80,7 @@ function normalizeSection(section, index) {
     required: section.required,
     ...(minEvidenceCount === undefined ? {} : { minEvidenceCount }),
     ...(minMeasurementCount === undefined ? {} : { minMeasurementCount }),
+    ...(checklistItems === undefined ? {} : { checklistItems }),
   };
 }
 
@@ -135,9 +163,30 @@ function requireReportTemplateSection(template, sectionId, expectedType) {
   return section;
 }
 
+function requireReportChecklistItem(template, sectionId, itemId) {
+  const section = requireReportTemplateSection(template, sectionId, 'checklist');
+  const normalizedItemId = text(itemId, 120);
+  if (!normalizedItemId || !REPORT_CHECKLIST_ITEM_ID_PATTERN.test(normalizedItemId)) {
+    throw fieldError('report_checklist_item_not_available', 'The selected checklist item is invalid.', 409, {
+      sectionId: section.id,
+      itemId: normalizedItemId || null,
+    });
+  }
+  const item = section.checklistItems?.find((candidate) => candidate.id === normalizedItemId);
+  if (!item) {
+    throw fieldError('report_checklist_item_not_available', 'The selected checklist item is not part of this frozen report template.', 409, {
+      sectionId: section.id,
+      itemId: normalizedItemId,
+    });
+  }
+  return { section, item };
+}
+
 module.exports.FIELD_EXECUTION_DEFINITION_VERSION = FIELD_EXECUTION_DEFINITION_VERSION;
+module.exports.REPORT_CHECKLIST_ITEM_ID_PATTERN = REPORT_CHECKLIST_ITEM_ID_PATTERN;
 module.exports.REPORT_SECTION_ID_PATTERN = REPORT_SECTION_ID_PATTERN;
 module.exports.REPORT_SECTION_TYPES = REPORT_SECTION_TYPES;
 module.exports.fieldReportTemplateSnapshotForService = fieldReportTemplateSnapshotForService;
 module.exports.projectStoredReportTemplateSnapshot = projectStoredReportTemplateSnapshot;
+module.exports.requireReportChecklistItem = requireReportChecklistItem;
 module.exports.requireReportTemplateSection = requireReportTemplateSection;
