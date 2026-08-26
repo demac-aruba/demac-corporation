@@ -52,6 +52,7 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
     'prepare_visit',
     'record_additional_intervention_decision',
     'record_customer_report_acknowledgement',
+    'record_planned_work_disposition',
     'register_visit_asset',
     'set_report_checklist_item',
     'set_report_free_text',
@@ -62,7 +63,7 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
   const api = createFieldOperationsApi({ db: { collection() { return {}; } }, verifyIdToken: async () => ({ uid: 'unused' }) });
   for (const action of [
     'prepare_visit', 'transition_visit', 'attach_visit_asset', 'register_visit_asset',
-    'create_planned_intervention', 'create_additional_intervention', 'record_additional_intervention_decision',
+    'create_planned_intervention', 'record_planned_work_disposition', 'create_additional_intervention', 'record_additional_intervention_decision',
     'transition_intervention', 'add_report_photo_evidence', 'add_report_voice_evidence', 'add_report_measurement', 'add_report_finding',
     'set_report_checklist_item', 'set_report_free_text', 'record_customer_report_acknowledgement',
   ]) {
@@ -185,6 +186,36 @@ test('create_planned_intervention authenticates and forwards only canonical inte
   assert.equal('allowedActions' in calls[0], false);
 });
 
+test('record_planned_work_disposition forwards only governed reconciliation inputs', async () => {
+  const calls = [];
+  const api = createFieldOperationsApi({
+    db: authDb({ active: true, role: 'technician', staffId: 'staff-1', name: 'Tech One' }),
+    verifyIdToken: async () => ({ uid: 'uid-1' }),
+    recordPlannedWorkDisposition: async (input) => {
+      calls.push(input);
+      return { success: true, replayed: false, disposition: { id: 'PWD-1' }, allowedActions: ['read', 'intervention.complete'] };
+    },
+  });
+  const result = await api.handle(request({
+    token: 'valid-token',
+    action: 'record_planned_work_disposition',
+    data: {
+      visitId: ' visit-WO-1 ', plannedWorkLineId: ' line-standard ', quantity: 1,
+      reasonCode: ' customer_cancelled ', note: ' Customer cancelled second unit. ', requestId: ' disposition-001 ',
+      customerId: 'CLIENT-OTHER', propertyId: 'PROPERTY-OTHER', status: 'completed', disposedQuantity: 99, allowedActions: ['price.override'],
+    },
+  }));
+  assert.equal(result.status, 200);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].visitId, 'visit-WO-1');
+  assert.equal(calls[0].plannedWorkLineId, 'line-standard');
+  assert.equal(calls[0].quantity, 1);
+  assert.equal(calls[0].reasonCode, 'customer_cancelled');
+  assert.equal(calls[0].note, 'Customer cancelled second unit.');
+  assert.equal(calls[0].requestId, 'disposition-001');
+  assert.deepEqual(Object.keys(calls[0]).sort(), ['identity', 'note', 'plannedWorkLineId', 'quantity', 'reasonCode', 'requestId', 'visitId']);
+});
+
 test('add_report_voice_evidence forwards only governed voice inputs', async () => {
   const calls = [];
   const api = createFieldOperationsApi({
@@ -246,7 +277,7 @@ test('Field mutation actions cannot execute without authentication', async () =>
     db: authDb({ active: true, role: 'technician', staffId: 'staff-1' }),
     verifyIdToken: async () => ({ uid: 'uid-1' }),
     prepareWorkVisit: mark('prepare'), transitionWorkVisit: mark('transition'), attachExistingVisitAsset: mark('attach'), registerEquipmentSystem: mark('register'),
-    createPlannedWorkIntervention: mark('intervention'), createAdditionalWorkIntervention: mark('additional'), recordAdditionalWorkDecision: mark('decision'),
+    createPlannedWorkIntervention: mark('intervention'), recordPlannedWorkDisposition: mark('disposition'), createAdditionalWorkIntervention: mark('additional'), recordAdditionalWorkDecision: mark('decision'),
     transitionWorkIntervention: mark('interventionTransition'), addReportPhotoEvidence: mark('reportPhoto'), addReportVoiceEvidence: mark('reportVoice'), addFieldMeasurement: mark('reportMeasurement'),
     addFieldFinding: mark('reportFinding'), setFieldChecklistItem: mark('reportChecklist'), setFieldFreeTextResponse: mark('reportFreeText'),
     recordCustomerAcknowledgement: mark('reportCustomerAcknowledgement'),
@@ -257,6 +288,7 @@ test('Field mutation actions cannot execute without authentication', async () =>
     ['attach_visit_asset', { visitId: 'visit-WO-1', assetId: 'AC-1', requestId: 'attach-asset-001' }],
     ['register_visit_asset', { visitId: 'visit-WO-1', requestId: 'register-asset-001' }],
     ['create_planned_intervention', { visitId: 'visit-WO-1', visitAssetId: 'VA-1', plannedWorkLineId: 'line-standard', serviceCatalogItemId: 'service-standard', requestId: 'planned-intervention-001' }],
+    ['record_planned_work_disposition', { visitId: 'visit-WO-1', plannedWorkLineId: 'line-standard', quantity: 1, reasonCode: 'customer_cancelled', requestId: 'disposition-001' }],
     ['create_additional_intervention', { visitId: 'visit-WO-1', visitAssetId: 'VA-1', serviceCatalogItemId: 'service-standard', origin: 'client_requested_additional_work', reason: 'Second A/C', requestId: 'additional-intervention-001' }],
     ['record_additional_intervention_decision', { visitId: 'visit-WO-1', interventionId: 'WI-1', decision: 'approved', receiverName: 'Maria', requestId: 'decision-001' }],
     ['transition_intervention', { visitId: 'visit-WO-1', interventionId: 'WI-1', to: 'in_progress', expectedVersion: 1, requestId: 'intervention-start-001' }],
