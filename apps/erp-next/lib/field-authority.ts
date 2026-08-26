@@ -24,10 +24,11 @@ import {
   type FieldMeasurementMoment,
 } from './field-report-contract';
 import { parseFieldAddReportFindingResponse } from './field-finding-contract';
+import { parseFieldSetReportChecklistItemResponse } from './field-checklist-contract';
 import {
-  parseFieldChecklistJobResponse,
-  parseFieldSetReportChecklistItemResponse,
-} from './field-checklist-contract';
+  parseFieldFreeTextJobResponse,
+  parseFieldSetReportFreeTextResponse,
+} from './field-free-text-contract';
 import { parseFieldRegisterVisitAssetResponse } from './field-equipment-registration-contract';
 
 export { fieldActionAllowed } from './field-authorization';
@@ -104,7 +105,6 @@ export type {
 export type {
   FieldChecklistInterventionReport,
   FieldChecklistJobDetail,
-  FieldChecklistJobDetail as FieldExecutionJobDetail,
   FieldChecklistReportSection,
   FieldChecklistReportTemplateSnapshot,
   FieldReportChecklistItem,
@@ -112,6 +112,14 @@ export type {
   FieldReportChecklistResponse,
   FieldSetReportChecklistItemResponse,
 } from './field-checklist-contract';
+export type {
+  FieldFreeTextInterventionReport,
+  FieldFreeTextJobDetail,
+  FieldFreeTextJobDetail as FieldExecutionJobDetail,
+  FieldReportFreeTextOption,
+  FieldReportFreeTextResponse,
+  FieldSetReportFreeTextResponse,
+} from './field-free-text-contract';
 export type {
   FieldEquipmentRegistrationEvidence,
   FieldEquipmentRegistrationEvidenceKind,
@@ -209,196 +217,60 @@ export async function getFieldSchedule(startDate: string, endDate = startDate) {
 }
 
 export async function getFieldJob(workOrderId: string) {
-  return parseFieldChecklistJobResponse(await callFieldAuthority('get_job', { workOrderId }));
+  return parseFieldFreeTextJobResponse(await callFieldAuthority('get_job', { workOrderId }));
 }
 
 export async function prepareFieldVisit(workOrderId: string, requestId: string) {
   return parseFieldPrepareVisitResponse(await callFieldAuthority('prepare_visit', { workOrderId, requestId }));
 }
 
-export async function transitionFieldVisit(
-  visitId: string,
-  to: FieldActiveVisitTransition,
-  expectedVersion: number,
-  requestId: string,
-) {
-  return parseFieldTransitionVisitResponse(await callFieldAuthority('transition_visit', {
-    visitId,
-    to,
-    expectedVersion,
-    requestId,
-  }));
+export async function transitionFieldVisit(visitId: string, to: FieldActiveVisitTransition, expectedVersion: number, requestId: string) {
+  return parseFieldTransitionVisitResponse(await callFieldAuthority('transition_visit', { visitId, to, expectedVersion, requestId }));
 }
 
 export async function attachExistingFieldAsset(visitId: string, assetId: string, requestId: string) {
-  return parseFieldAttachVisitAssetResponse(await callFieldAuthority('attach_visit_asset', {
-    visitId,
-    assetId,
-    requestId,
-  }));
+  return parseFieldAttachVisitAssetResponse(await callFieldAuthority('attach_visit_asset', { visitId, assetId, requestId }));
 }
 
 export async function registerOnSiteFieldEquipment(input: RegisterOnSiteFieldEquipmentInput) {
   return parseFieldRegisterVisitAssetResponse(await callFieldAuthority('register_visit_asset', {
-    visitId: input.visitId,
-    requestId: input.requestId,
-    locationLabel: input.locationLabel,
-    systemType: input.systemType,
-    brand: input.brand,
-    btu: input.btu,
-    refrigerant: input.refrigerant,
-    voltage: input.voltage,
-    qrCode: input.qrCode ?? '',
-    evidencePaths: input.evidencePaths,
+    visitId: input.visitId, requestId: input.requestId, locationLabel: input.locationLabel, systemType: input.systemType,
+    brand: input.brand, btu: input.btu, refrigerant: input.refrigerant, voltage: input.voltage, qrCode: input.qrCode ?? '', evidencePaths: input.evidencePaths,
   }, 20_000));
 }
 
-export async function createPlannedFieldIntervention(
-  visitId: string,
-  visitAssetId: string,
-  plannedWorkLineId: string,
-  serviceCatalogItemId: string,
-  requestId: string,
-) {
-  return parseFieldCreatePlannedInterventionResponse(await callFieldAuthority('create_planned_intervention', {
-    visitId,
-    visitAssetId,
-    plannedWorkLineId,
-    serviceCatalogItemId,
-    requestId,
-  }));
+export async function createPlannedFieldIntervention(visitId: string, visitAssetId: string, plannedWorkLineId: string, serviceCatalogItemId: string, requestId: string) {
+  return parseFieldCreatePlannedInterventionResponse(await callFieldAuthority('create_planned_intervention', { visitId, visitAssetId, plannedWorkLineId, serviceCatalogItemId, requestId }));
 }
 
-export async function createAdditionalFieldIntervention(
-  visitId: string,
-  visitAssetId: string,
-  serviceCatalogItemId: string,
-  origin: FieldTechnicianScopeChangeOrigin,
-  reason: string,
-  requestId: string,
-) {
-  return parseFieldCreateAdditionalInterventionResponse(await callFieldAuthority('create_additional_intervention', {
-    visitId,
-    visitAssetId,
-    serviceCatalogItemId,
-    origin,
-    reason,
-    requestId,
-  }));
+export async function createAdditionalFieldIntervention(visitId: string, visitAssetId: string, serviceCatalogItemId: string, origin: FieldTechnicianScopeChangeOrigin, reason: string, requestId: string) {
+  return parseFieldCreateAdditionalInterventionResponse(await callFieldAuthority('create_additional_intervention', { visitId, visitAssetId, serviceCatalogItemId, origin, reason, requestId }));
 }
 
-export async function recordAdditionalFieldInterventionDecision(
-  visitId: string,
-  interventionId: string,
-  decision: FieldAdditionalWorkDecision,
-  receiverName: string,
-  note: string,
-  requestId: string,
-) {
-  return parseFieldRecordAdditionalWorkDecisionResponse(await callFieldAuthority('record_additional_intervention_decision', {
-    visitId,
-    interventionId,
-    decision,
-    receiverName,
-    note,
-    requestId,
-  }));
+export async function recordAdditionalFieldInterventionDecision(visitId: string, interventionId: string, decision: FieldAdditionalWorkDecision, receiverName: string, note: string, requestId: string) {
+  return parseFieldRecordAdditionalWorkDecisionResponse(await callFieldAuthority('record_additional_intervention_decision', { visitId, interventionId, decision, receiverName, note, requestId }));
 }
 
-export async function transitionFieldIntervention(
-  visitId: string,
-  interventionId: string,
-  to: FieldInterventionExecutionTarget,
-  expectedVersion: number,
-  note: string,
-  requestId: string,
-) {
-  return parseFieldTransitionInterventionResponse(await callFieldAuthority('transition_intervention', {
-    visitId,
-    interventionId,
-    to,
-    expectedVersion,
-    note,
-    requestId,
-  }));
+export async function transitionFieldIntervention(visitId: string, interventionId: string, to: FieldInterventionExecutionTarget, expectedVersion: number, note: string, requestId: string) {
+  return parseFieldTransitionInterventionResponse(await callFieldAuthority('transition_intervention', { visitId, interventionId, to, expectedVersion, note, requestId }));
 }
 
-export async function addFieldReportPhotoEvidence(
-  visitId: string,
-  interventionId: string,
-  sectionId: string,
-  storagePath: string,
-  caption: string,
-  requestId: string,
-) {
-  return parseFieldAddReportPhotoEvidenceResponse(await callFieldAuthority('add_report_photo_evidence', {
-    visitId,
-    interventionId,
-    sectionId,
-    storagePath,
-    caption,
-    requestId,
-  }, 20_000));
+export async function addFieldReportPhotoEvidence(visitId: string, interventionId: string, sectionId: string, storagePath: string, caption: string, requestId: string) {
+  return parseFieldAddReportPhotoEvidenceResponse(await callFieldAuthority('add_report_photo_evidence', { visitId, interventionId, sectionId, storagePath, caption, requestId }, 20_000));
 }
 
-export async function addFieldReportMeasurement(
-  visitId: string,
-  interventionId: string,
-  sectionId: string,
-  metric: string,
-  value: number | string,
-  unit: string,
-  moment: FieldMeasurementMoment,
-  requestId: string,
-) {
-  return parseFieldAddReportMeasurementResponse(await callFieldAuthority('add_report_measurement', {
-    visitId,
-    interventionId,
-    sectionId,
-    metric,
-    value,
-    unit,
-    moment,
-    requestId,
-  }));
+export async function addFieldReportMeasurement(visitId: string, interventionId: string, sectionId: string, metric: string, value: number | string, unit: string, moment: FieldMeasurementMoment, requestId: string) {
+  return parseFieldAddReportMeasurementResponse(await callFieldAuthority('add_report_measurement', { visitId, interventionId, sectionId, metric, value, unit, moment, requestId }));
 }
 
-export async function addFieldReportFinding(
-  visitId: string,
-  interventionId: string,
-  sectionId: string,
-  summary: string,
-  details: string,
-  recommendation: string,
-  requestId: string,
-) {
-  return parseFieldAddReportFindingResponse(await callFieldAuthority('add_report_finding', {
-    visitId,
-    interventionId,
-    sectionId,
-    summary,
-    details,
-    recommendation,
-    requestId,
-  }));
+export async function addFieldReportFinding(visitId: string, interventionId: string, sectionId: string, summary: string, details: string, recommendation: string, requestId: string) {
+  return parseFieldAddReportFindingResponse(await callFieldAuthority('add_report_finding', { visitId, interventionId, sectionId, summary, details, recommendation, requestId }));
 }
 
-export async function setFieldReportChecklistItem(
-  visitId: string,
-  interventionId: string,
-  sectionId: string,
-  itemId: string,
-  checked: boolean,
-  expectedVersion: number,
-  requestId: string,
-) {
-  return parseFieldSetReportChecklistItemResponse(await callFieldAuthority('set_report_checklist_item', {
-    visitId,
-    interventionId,
-    sectionId,
-    itemId,
-    checked,
-    expectedVersion,
-    requestId,
-  }));
+export async function setFieldReportChecklistItem(visitId: string, interventionId: string, sectionId: string, itemId: string, checked: boolean, expectedVersion: number, requestId: string) {
+  return parseFieldSetReportChecklistItemResponse(await callFieldAuthority('set_report_checklist_item', { visitId, interventionId, sectionId, itemId, checked, expectedVersion, requestId }));
+}
+
+export async function setFieldReportFreeText(visitId: string, interventionId: string, sectionId: string, value: string, expectedVersion: number, requestId: string) {
+  return parseFieldSetReportFreeTextResponse(await callFieldAuthority('set_report_free_text', { visitId, interventionId, sectionId, value, expectedVersion, requestId }));
 }
