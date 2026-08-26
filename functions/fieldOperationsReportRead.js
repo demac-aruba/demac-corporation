@@ -8,6 +8,10 @@ const {
   projectReportPhotoEvidence,
 } = require('./fieldOperationsReportEvidence');
 const {
+  loadFieldMeasurements,
+  projectFieldMeasurement,
+} = require('./fieldOperationsMeasurements');
+const {
   WORK_INTERVENTION_COLLECTION,
   projectWorkIntervention,
 } = require('./fieldOperationsVisitInterventions');
@@ -71,6 +75,7 @@ function reportProjectionFromStored(storedRecord, projectedIntervention) {
     template,
     sectionStatus,
     evidence: [],
+    measurements: [],
   };
 }
 
@@ -134,36 +139,83 @@ async function attachReportEvidence(db, job, reports) {
   return reports;
 }
 
-function reportPhotoOptions(job, reports) {
+async function attachReportMeasurements(db, job, reports) {
+  const visitId = text(job?.fieldVisit?.id, 180);
+  if (!visitId || reports.length === 0) return reports;
+  const measurements = await loadFieldMeasurements(db, visitId);
+  const reportByInterventionId = new Map(reports.map((report) => [report.interventionId, report]));
+  for (const rawMeasurement of measurements) {
+    const report = reportByInterventionId.get(rawMeasurement.interventionId);
+    if (!report) {
+      throw fieldError('field_measurement_identity_conflict', 'Persisted Field Measurement references an intervention without a canonical report projection.', 409);
+    }
+    const section = report.template.sections.find((candidate) => candidate.id === rawMeasurement.sectionId);
+    if (!section || section.type !== 'measurement_table') {
+      throw fieldError('field_measurement_identity_conflict', 'Persisted Field Measurement references an invalid report section.', 409);
+    }
+    report.measurements.push(projectFieldMeasurement(rawMeasurement, {
+      visitId,
+      workOrderId: text(job.workOrderId, 180),
+      customerId: text(job.customerId, 180),
+      propertyId: text(job.propertyId, 180),
+      visitAssetId: report.visitAssetId,
+      assetId: report.assetId,
+      interventionId: report.interventionId,
+      sectionId: section.id,
+    }));
+  }
+  for (const report of reports) {
+    report.measurements.sort((left, right) => left.measuredAt.localeCompare(right.measuredAt) || left.id.localeCompare(right.id));
+  }
+  return reports;
+}
+
+function reportSectionOptions(job, reports, action, sectionType) {
   if (text(job?.fieldVisit?.status, 80) !== 'in_progress') return [];
-  if (!Array.isArray(job?.allowedActions) || !job.allowedActions.includes('evidence.add')) return [];
+  if (!Array.isArray(job?.allowedActions) || !job.allowedActions.includes(action)) return [];
   const interventionById = new Map((job?.workInterventions || []).map((intervention) => [intervention.id, intervention]));
   return reports.map((report) => {
     const intervention = interventionById.get(report.interventionId);
     if (!intervention || intervention.status !== 'in_progress') return null;
     const sectionIds = report.template.sections
-      .filter((section) => section.type === 'photos')
+      .filter((section) => section.type === sectionType)
       .filter((section) => report.sectionStatus?.[section.id] !== 'completed')
       .map((section) => section.id);
     return sectionIds.length > 0 ? { interventionId: report.interventionId, sectionIds } : null;
   }).filter(Boolean);
 }
 
+function reportPhotoOptions(job, reports) {
+  return reportSectionOptions(job, reports, 'evidence.add', 'photos');
+}
+
+function reportMeasurementOptions(job, reports) {
+  return reportSectionOptions(job, reports, 'measurement.add', 'measurement_table');
+}
+
 async function attachInterventionReportsToJob(db, job) {
-  const reports = await attachReportEvidence(db, job, await loadInterventionReportRecords(db, job));
-  const options = reportPhotoOptions(job, reports);
+  let reports = await loadInterventionReportRecords(db, job);
+  reports = await attachReportEvidence(db, job, reports);
+  reports = await attachReportMeasurements(db, job, reports);
+  const photoOptions = reportPhotoOptions(job, reports);
+  const measurementOptions = reportMeasurementOptions(job, reports);
   return {
     ...job,
     interventionReports: reports,
-    reportPhotoOptions: options,
-    canAddReportPhoto: options.length > 0,
+    reportPhotoOptions: photoOptions,
+    canAddReportPhoto: photoOptions.length > 0,
+    reportMeasurementOptions: measurementOptions,
+    canAddReportMeasurement: measurementOptions.length > 0,
   };
 }
 
 module.exports.REPORT_SECTION_STATUSES = REPORT_SECTION_STATUSES;
 module.exports.attachInterventionReportsToJob = attachInterventionReportsToJob;
 module.exports.attachReportEvidence = attachReportEvidence;
+module.exports.attachReportMeasurements = attachReportMeasurements;
 module.exports.loadInterventionReportRecords = loadInterventionReportRecords;
 module.exports.projectReportSectionStatus = projectReportSectionStatus;
+module.exports.reportMeasurementOptions = reportMeasurementOptions;
 module.exports.reportPhotoOptions = reportPhotoOptions;
 module.exports.reportProjectionFromStored = reportProjectionFromStored;
+module.exports.reportSectionOptions = reportSectionOptions;
