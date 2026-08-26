@@ -50,6 +50,7 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
     'get_schedule',
     'prepare_visit',
     'record_additional_intervention_decision',
+    'record_customer_report_acknowledgement',
     'register_visit_asset',
     'set_report_checklist_item',
     'set_report_free_text',
@@ -62,7 +63,7 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
     'prepare_visit', 'transition_visit', 'attach_visit_asset', 'register_visit_asset',
     'create_planned_intervention', 'create_additional_intervention', 'record_additional_intervention_decision',
     'transition_intervention', 'add_report_photo_evidence', 'add_report_measurement', 'add_report_finding',
-    'set_report_checklist_item', 'set_report_free_text',
+    'set_report_checklist_item', 'set_report_free_text', 'record_customer_report_acknowledgement',
   ]) {
     await assert.rejects(
       () => api.execute({ action, data: {}, identity: { operations: false } }),
@@ -183,6 +184,32 @@ test('create_planned_intervention authenticates and forwards only canonical inte
   assert.equal('allowedActions' in calls[0], false);
 });
 
+test('record_customer_report_acknowledgement forwards only governed acknowledgement inputs', async () => {
+  const calls = [];
+  const api = createFieldOperationsApi({
+    db: authDb({ active: true, role: 'technician', staffId: 'staff-1', name: 'Tech One' }),
+    verifyIdToken: async () => ({ uid: 'uid-1' }),
+    recordCustomerAcknowledgement: async (input) => { calls.push(input); return { success: true, replayed: false, acknowledgement: { id: 'CACK-1' }, workInterventionVersion: 3, allowedActions: ['read', 'execute'] }; },
+  });
+  const result = await api.handle(request({
+    token: 'valid-token',
+    action: 'record_customer_report_acknowledgement',
+    data: {
+      visitId: ' visit-WO-1 ', interventionId: ' WI-1 ', sectionId: ' ack ', receiverName: ' Maria Customer ', note: ' Reviewed on site ', requestId: ' customer-ack-001 ',
+      method: 'signature', acknowledgedAt: '2000-01-01T00:00:00.000Z', recordedByStaffId: 'attacker', assetId: 'AC-X', allowedActions: ['price.override'],
+    },
+  }));
+  assert.equal(result.status, 200);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].visitId, 'visit-WO-1');
+  assert.equal(calls[0].interventionId, 'WI-1');
+  assert.equal(calls[0].sectionId, 'ack');
+  assert.equal(calls[0].receiverName, 'Maria Customer');
+  assert.equal(calls[0].note, 'Reviewed on site');
+  assert.equal(calls[0].requestId, 'customer-ack-001');
+  assert.deepEqual(Object.keys(calls[0]).sort(), ['identity', 'interventionId', 'note', 'receiverName', 'requestId', 'sectionId', 'visitId']);
+});
+
 test('Field mutation actions cannot execute without authentication', async () => {
   const called = new Map();
   const mark = (name) => async () => { called.set(name, true); return { success: true }; };
@@ -193,6 +220,7 @@ test('Field mutation actions cannot execute without authentication', async () =>
     createPlannedWorkIntervention: mark('intervention'), createAdditionalWorkIntervention: mark('additional'), recordAdditionalWorkDecision: mark('decision'),
     transitionWorkIntervention: mark('interventionTransition'), addReportPhotoEvidence: mark('reportPhoto'), addFieldMeasurement: mark('reportMeasurement'),
     addFieldFinding: mark('reportFinding'), setFieldChecklistItem: mark('reportChecklist'), setFieldFreeTextResponse: mark('reportFreeText'),
+    recordCustomerAcknowledgement: mark('reportCustomerAcknowledgement'),
   });
   const cases = [
     ['prepare_visit', { workOrderId: 'WO-1', requestId: 'prepare-WO-1-001' }],
@@ -208,6 +236,7 @@ test('Field mutation actions cannot execute without authentication', async () =>
     ['add_report_finding', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'findings', summary: 'Drain issue', details: 'Standing water observed.', requestId: 'report-finding-001' }],
     ['set_report_checklist_item', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'condition', itemId: 'filter-clean', checked: true, expectedVersion: 0, requestId: 'report-checklist-001' }],
     ['set_report_free_text', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'notes', value: 'Technical note', expectedVersion: 0, requestId: 'report-free-text-001' }],
+    ['record_customer_report_acknowledgement', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'ack', receiverName: 'Maria', requestId: 'customer-ack-001' }],
   ];
   for (const [action, data] of cases) {
     const result = await api.handle(request({ action, data }));
