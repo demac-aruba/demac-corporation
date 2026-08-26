@@ -7,6 +7,7 @@ const REPORT_SECTION_TYPES = new Set([
   'findings',
   'photos',
   'free_text',
+  'voice_note',
   'customer_acknowledgement',
 ]);
 const REPORT_SECTION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
