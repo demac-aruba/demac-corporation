@@ -14,6 +14,7 @@ import {
   getFieldSchedule,
   prepareFieldVisit,
   recordAdditionalFieldInterventionDecision,
+  recordFieldCustomerAcknowledgement,
   registerOnSiteFieldEquipment,
   setFieldReportChecklistItem,
   setFieldReportFreeText,
@@ -33,6 +34,10 @@ import {
 } from '@/lib/field-evidence-upload';
 import { AdditionalApprovalControls } from './additional-approval-controls';
 import { AdditionalInterventionControls } from './additional-intervention-controls';
+import {
+  CustomerAcknowledgementControls,
+  type CustomerAcknowledgementInput,
+} from './customer-acknowledgement-controls';
 import {
   EquipmentRegistrationControls,
   type EquipmentRegistrationInput,
@@ -207,6 +212,15 @@ function reportFreeTextSignature(input: ReportFreeTextInput) {
   ].join('|');
 }
 
+function customerAcknowledgementSignature(input: CustomerAcknowledgementInput) {
+  return [
+    input.interventionId,
+    input.sectionId,
+    input.receiverName.trim(),
+    input.note.trim(),
+  ].join('|');
+}
+
 function whatsappDigits(value?: string) {
   const digits = String(value ?? '').replace(/\D/g, '');
   if (!digits) return '';
@@ -285,6 +299,7 @@ function DetailView({
   executionError,
   reportError,
   freeTextError,
+  customerAcknowledgementError,
   transitioning,
   attachingAssetId,
   registeringEquipment,
@@ -297,6 +312,7 @@ function DetailView({
   savingReportFindingKey,
   savingChecklistKey,
   savingFreeTextKey,
+  savingCustomerAcknowledgementKey,
   onTransition,
   onAttachAsset,
   onRegisterEquipment,
@@ -309,6 +325,7 @@ function DetailView({
   onAddReportFinding,
   onSetChecklistItem,
   onSaveFreeText,
+  onRecordCustomerAcknowledgement,
   onBack,
 }: {
   job: FieldExecutionJobDetail | null;
@@ -323,6 +340,7 @@ function DetailView({
   executionError: string | null;
   reportError: string | null;
   freeTextError: string | null;
+  customerAcknowledgementError: string | null;
   transitioning: FieldActiveVisitTransition | null;
   attachingAssetId: string | null;
   registeringEquipment: boolean;
@@ -335,6 +353,7 @@ function DetailView({
   savingReportFindingKey: string | null;
   savingChecklistKey: string | null;
   savingFreeTextKey: string | null;
+  savingCustomerAcknowledgementKey: string | null;
   onTransition: (target: FieldActiveVisitTransition) => void;
   onAttachAsset: (assetId: string) => void;
   onRegisterEquipment: (input: EquipmentRegistrationInput) => Promise<boolean>;
@@ -347,6 +366,7 @@ function DetailView({
   onAddReportFinding: (input: ReportFindingInput) => Promise<boolean>;
   onSetChecklistItem: (input: ReportChecklistInput) => Promise<boolean>;
   onSaveFreeText: (input: ReportFreeTextInput) => Promise<boolean>;
+  onRecordCustomerAcknowledgement: (input: CustomerAcknowledgementInput) => Promise<boolean>;
   onBack: () => void;
 }) {
   if (loading || error || !job) {
@@ -387,7 +407,8 @@ function DetailView({
     || savingReportMeasurementKey !== null
     || savingReportFindingKey !== null
     || savingChecklistKey !== null
-    || savingFreeTextKey !== null;
+    || savingFreeTextKey !== null
+    || savingCustomerAcknowledgementKey !== null;
 
   return (
     <div className={styles.shell}>
@@ -529,6 +550,13 @@ function DetailView({
               error={freeTextError}
               onSave={onSaveFreeText}
             />
+            <CustomerAcknowledgementControls
+              job={job}
+              mutationBusy={mutationBusy}
+              savingKey={savingCustomerAcknowledgementKey}
+              error={customerAcknowledgementError}
+              onRecord={onRecordCustomerAcknowledgement}
+            />
             {assetError ? <div className={styles.mutationError}>{assetError}</div> : null}
           </section>
 
@@ -624,11 +652,13 @@ export function TechnicianFieldHome() {
   const [savingReportFindingKey, setSavingReportFindingKey] = useState<string | null>(null);
   const [savingChecklistKey, setSavingChecklistKey] = useState<string | null>(null);
   const [savingFreeTextKey, setSavingFreeTextKey] = useState<string | null>(null);
+  const [savingCustomerAcknowledgementKey, setSavingCustomerAcknowledgementKey] = useState<string | null>(null);
   const [reportPhotoError, setReportPhotoError] = useState<string | null>(null);
   const [reportMeasurementError, setReportMeasurementError] = useState<string | null>(null);
   const [reportFindingError, setReportFindingError] = useState<string | null>(null);
   const [reportChecklistError, setReportChecklistError] = useState<string | null>(null);
   const [reportFreeTextError, setReportFreeTextError] = useState<string | null>(null);
+  const [customerAcknowledgementError, setCustomerAcknowledgementError] = useState<string | null>(null);
   const scheduleRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
   const mutationRequestRef = useRef(0);
@@ -639,6 +669,7 @@ export function TechnicianFieldHome() {
   const reportFindingRequestRef = useRef<ReportMutationRetry | null>(null);
   const reportChecklistRequestRef = useRef<ReportMutationRetry | null>(null);
   const reportFreeTextRequestRef = useRef<ReportMutationRetry | null>(null);
+  const customerAcknowledgementRequestRef = useRef<ReportMutationRetry | null>(null);
   const selectedWorkOrderRef = useRef<string | null>(null);
 
   const today = arubaDateKey(clockNow);
@@ -657,6 +688,7 @@ export function TechnicianFieldHome() {
     reportFindingRequestRef.current = null;
     reportChecklistRequestRef.current = null;
     reportFreeTextRequestRef.current = null;
+    customerAcknowledgementRequestRef.current = null;
     selectedWorkOrderRef.current = null;
     setSelectedWorkOrderId(null);
     setSelectedOwnerUserId(null);
@@ -683,11 +715,13 @@ export function TechnicianFieldHome() {
     setSavingReportFindingKey(null);
     setSavingChecklistKey(null);
     setSavingFreeTextKey(null);
+    setSavingCustomerAcknowledgementKey(null);
     setReportPhotoError(null);
     setReportMeasurementError(null);
     setReportFindingError(null);
     setReportChecklistError(null);
     setReportFreeTextError(null);
+    setCustomerAcknowledgementError(null);
   }, []);
 
   const loadDetail = useCallback(async (workOrderId: string, background = false) => {
@@ -761,6 +795,7 @@ export function TechnicianFieldHome() {
     setReportFindingError(null);
     setReportChecklistError(null);
     setReportFreeTextError(null);
+    setCustomerAcknowledgementError(null);
   }, []);
 
   const runVisitTransition = useCallback(async (target: FieldActiveVisitTransition) => {
@@ -1370,6 +1405,66 @@ export function TechnicianFieldHome() {
     }
   }, [clearMutationErrors, detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
 
+  const runRecordCustomerAcknowledgement = useCallback(async (input: CustomerAcknowledgementInput) => {
+    if (mutationLockRef.current !== null) return false;
+    const currentDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
+    if (!currentDetail?.fieldVisit) {
+      setCustomerAcknowledgementError('La visita todavía no está disponible para registrar la confirmación del cliente.');
+      return false;
+    }
+    const option = currentDetail.reportCustomerAcknowledgementOptions.find((candidate) => candidate.interventionId === input.interventionId);
+    if (!currentDetail.canRecordCustomerAcknowledgement || !option?.sectionIds.includes(input.sectionId)) {
+      setCustomerAcknowledgementError('Field Authority ya no autoriza registrar esta confirmación del cliente. Actualiza el trabajo e intenta nuevamente.');
+      void loadDetail(currentDetail.workOrderId, true);
+      return false;
+    }
+    const report = currentDetail.interventionReports.find((candidate) => candidate.interventionId === input.interventionId);
+    const section = report?.template.sections.find((candidate) => candidate.id === input.sectionId && candidate.type === 'customer_acknowledgement');
+    const existing = report?.customerAcknowledgements.find((candidate) => candidate.sectionId === input.sectionId);
+    if (!report || !section || existing) {
+      setCustomerAcknowledgementError('La confirmación cambió o ya fue registrada. Actualiza el trabajo e intenta nuevamente.');
+      void loadDetail(currentDetail.workOrderId, true);
+      return false;
+    }
+
+    const key = `${input.interventionId}:${input.sectionId}`;
+    const signature = customerAcknowledgementSignature(input);
+    const workOrderId = currentDetail.workOrderId;
+    const prior = customerAcknowledgementRequestRef.current;
+    const requestId = prior?.key === key && prior.signature === signature
+      ? prior.requestId
+      : clientRequestId('customer-acknowledgement', workOrderId);
+    customerAcknowledgementRequestRef.current = { key, signature, requestId };
+
+    const mutationId = ++mutationRequestRef.current;
+    mutationLockRef.current = mutationId;
+    setSavingCustomerAcknowledgementKey(key);
+    clearMutationErrors();
+    try {
+      await recordFieldCustomerAcknowledgement(
+        currentDetail.fieldVisit.id,
+        input.interventionId,
+        input.sectionId,
+        input.receiverName,
+        input.note,
+        requestId,
+      );
+      if (mutationId !== mutationRequestRef.current) return false;
+
+      customerAcknowledgementRequestRef.current = null;
+      await loadDetail(workOrderId, true);
+      return true;
+    } catch (mutationError) {
+      if (mutationId !== mutationRequestRef.current) return false;
+      setCustomerAcknowledgementError(mutationError instanceof Error ? mutationError.message : 'No se pudo registrar la confirmación del cliente.');
+      void loadDetail(workOrderId, true);
+      return false;
+    } finally {
+      if (mutationId === mutationRequestRef.current) setSavingCustomerAcknowledgementKey(null);
+      if (mutationLockRef.current === mutationId) mutationLockRef.current = null;
+    }
+  }, [clearMutationErrors, detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
+
   useEffect(() => {
     void loadSchedule();
     return () => { scheduleRequestRef.current += 1; };
@@ -1453,6 +1548,7 @@ export function TechnicianFieldHome() {
         executionError={executionError}
         reportError={reportChecklistError || reportFindingError || reportMeasurementError || reportPhotoError}
         freeTextError={reportFreeTextError}
+        customerAcknowledgementError={customerAcknowledgementError}
         transitioning={transitioning}
         attachingAssetId={attachingAssetId}
         registeringEquipment={registeringEquipment}
@@ -1465,6 +1561,7 @@ export function TechnicianFieldHome() {
         savingReportFindingKey={savingReportFindingKey}
         savingChecklistKey={savingChecklistKey}
         savingFreeTextKey={savingFreeTextKey}
+        savingCustomerAcknowledgementKey={savingCustomerAcknowledgementKey}
         onTransition={(target) => void runVisitTransition(target)}
         onAttachAsset={(assetId) => void runAttachAsset(assetId)}
         onRegisterEquipment={runRegisterEquipment}
@@ -1477,6 +1574,7 @@ export function TechnicianFieldHome() {
         onAddReportFinding={runAddReportFinding}
         onSetChecklistItem={runSetReportChecklistItem}
         onSaveFreeText={runSetReportFreeText}
+        onRecordCustomerAcknowledgement={runRecordCustomerAcknowledgement}
         onBack={closeJob}
       />
     );
