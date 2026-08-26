@@ -16,27 +16,36 @@ function createDb(seed = {}) {
     return collections.get(name);
   }
   function documentRef(name, id) { return { kind: 'document', collectionName: name, id }; }
+  function queryRef(name, filters = []) {
+    return {
+      kind: 'query', collectionName: name, filters,
+      where(field, op, expected) { return queryRef(name, [...filters, { field, op, expected }]); },
+    };
+  }
+  function matches(value, filter) {
+    return filter.op === '==' && value?.[filter.field] === filter.expected;
+  }
   const db = {
     collection(name) {
       return {
         doc(id) { return documentRef(name, id); },
-        where(field, op, expected) {
-          return {
-            async get() {
-              return {
-                docs: [...ensure(name).entries()]
-                  .filter(([, value]) => op === '==' && value?.[field] === expected)
-                  .map(([id, value]) => snapshot(id, value)),
-              };
-            },
-          };
-        },
+        where(field, op, expected) { return queryRef(name, [{ field, op, expected }]); },
       };
     },
     async runTransaction(callback) {
       const writes = [];
       const transaction = {
-        async get(target) { return snapshot(target.id, ensure(target.collectionName).get(target.id)); },
+        async get(target) {
+          const values = ensure(target.collectionName);
+          if (target.kind === 'query') {
+            return {
+              docs: [...values.entries()]
+                .filter(([, value]) => target.filters.every((filter) => matches(value, filter)))
+                .map(([id, value]) => snapshot(id, value)),
+            };
+          }
+          return snapshot(target.id, values.get(target.id));
+        },
         create(ref, value) {
           if (ensure(ref.collectionName).has(ref.id)) throw new Error(`Document already exists: ${ref.collectionName}/${ref.id}`);
           writes.push({ type: 'create', ref, value: { ...value } });
