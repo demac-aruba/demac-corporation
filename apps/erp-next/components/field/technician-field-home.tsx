@@ -16,6 +16,7 @@ import {
   prepareFieldVisit,
   recordAdditionalFieldInterventionDecision,
   recordFieldCustomerAcknowledgement,
+  recordFieldPlannedWorkDisposition,
   registerOnSiteFieldEquipment,
   setFieldReportChecklistItem,
   setFieldReportFreeText,
@@ -56,7 +57,10 @@ import {
   type ReportPhotoInput,
 } from './intervention-report-controls';
 import { InterventionExecutionControls } from './intervention-execution-controls';
-import { PlannedInterventionControls } from './planned-intervention-controls';
+import {
+  PlannedInterventionControls,
+  type PlannedWorkMutationInput,
+} from './planned-intervention-controls';
 import {
   VoiceNoteReportControls,
   type ReportVoiceNoteInput,
@@ -64,12 +68,6 @@ import {
 import styles from './technician-field-home.module.css';
 
 type RangeKey = 'today' | 'tomorrow' | 'week';
-
-type PlannedInterventionInput = {
-  visitAssetId: string;
-  plannedWorkLineId: string;
-  serviceCatalogItemId: string;
-};
 
 type AdditionalInterventionInput = {
   visitAssetId: string;
@@ -378,7 +376,7 @@ function DetailView({
   onTransition: (target: FieldActiveVisitTransition) => void;
   onAttachAsset: (assetId: string) => void;
   onRegisterEquipment: (input: EquipmentRegistrationInput) => Promise<boolean>;
-  onCreatePlannedIntervention: (input: PlannedInterventionInput) => void;
+  onCreatePlannedIntervention: (input: PlannedWorkMutationInput) => void;
   onCreateAdditionalIntervention: (input: AdditionalInterventionInput) => void;
   onRecordAdditionalDecision: (input: AdditionalApprovalInput) => void;
   onTransitionIntervention: (input: InterventionExecutionInput) => void;
@@ -489,7 +487,7 @@ function DetailView({
                 {job.plannedWorkProgress.map((progress) => (
                   <div className={styles.info} key={progress.id}>
                     <span>{job.plannedWork.find((line) => line.id === progress.id)?.label || progress.id}</span>
-                    <strong>{progress.linkedActualQuantity} vinculada(s) · {progress.remainingQuantity} restante(s) de {progress.plannedQuantity}</strong>
+                    <strong>{progress.linkedActualQuantity} vinculada(s) · {progress.disposedQuantity} no realizada(s) reconciliada(s) · {progress.remainingQuantity} restante(s) de {progress.plannedQuantity}</strong>
                   </div>
                 ))}
               </div>
@@ -990,36 +988,73 @@ export function TechnicianFieldHome() {
     }
   }, [clearMutationErrors, detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
 
-  const runCreatePlannedIntervention = useCallback(async (input: PlannedInterventionInput) => {
+  const runCreatePlannedIntervention = useCallback(async (input: PlannedWorkMutationInput) => {
     if (mutationLockRef.current !== null) return;
     const currentDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
     if (!currentDetail?.fieldVisit) {
-      setInterventionError('La visita todavía no está disponible para vincular trabajo a un A/C.');
+      setInterventionError(input.kind === 'disposition'
+        ? 'La visita todavía no está disponible para reconciliar trabajo planificado.'
+        : 'La visita todavía no está disponible para vincular trabajo a un A/C.');
       return;
     }
-    if (!currentDetail.canAddPlannedIntervention) {
-      setInterventionError('Field Authority no autoriza vincular trabajo planificado en el estado o asignación actual.');
-      return;
+
+    if (input.kind === 'disposition') {
+      const option = currentDetail.plannedWorkDispositionOptions.find((candidate) => candidate.plannedWorkLineId === input.plannedWorkLineId);
+      if (!currentDetail.canRecordPlannedWorkDisposition
+        || !option
+        || !Number.isSafeInteger(input.quantity)
+        || input.quantity < 1
+        || input.quantity > option.maxQuantity) {
+        setInterventionError('Field Authority ya no autoriza reconciliar esa cantidad programada. Actualiza el trabajo e intenta nuevamente.');
+        void loadDetail(currentDetail.workOrderId, true);
+        return;
+      }
+    } else {
+      const option = currentDetail.plannedInterventionOptions.find((candidate) => candidate.visitAssetId === input.visitAssetId);
+      const serviceExists = currentDetail.availableFieldServices.some((service) => service.id === input.serviceCatalogItemId);
+      if (!currentDetail.canAddPlannedIntervention
+        || !option?.plannedWorkLineIds.includes(input.plannedWorkLineId)
+        || !serviceExists) {
+        setInterventionError('Field Authority ya no autoriza vincular ese trabajo planificado al A/C. Actualiza el trabajo e intenta nuevamente.');
+        void loadDetail(currentDetail.workOrderId, true);
+        return;
+      }
     }
 
     const mutationId = ++mutationRequestRef.current;
     mutationLockRef.current = mutationId;
     const workOrderId = currentDetail.workOrderId;
-    setCreatingInterventionVisitAssetId(input.visitAssetId);
+    const busyKey = input.kind === 'disposition' ? `disposition:${input.plannedWorkLineId}` : input.visitAssetId;
+    setCreatingInterventionVisitAssetId(busyKey);
     clearMutationErrors();
     try {
-      await createPlannedFieldIntervention(
-        currentDetail.fieldVisit.id,
-        input.visitAssetId,
-        input.plannedWorkLineId,
-        input.serviceCatalogItemId,
-        clientRequestId('planned-intervention', workOrderId),
-      );
+      if (input.kind === 'disposition') {
+        await recordFieldPlannedWorkDisposition(
+          currentDetail.fieldVisit.id,
+          input.plannedWorkLineId,
+          input.quantity,
+          input.reasonCode,
+          input.note,
+          clientRequestId('planned-disposition', workOrderId),
+        );
+      } else {
+        await createPlannedFieldIntervention(
+          currentDetail.fieldVisit.id,
+          input.visitAssetId,
+          input.plannedWorkLineId,
+          input.serviceCatalogItemId,
+          clientRequestId('planned-intervention', workOrderId),
+        );
+      }
       if (mutationId !== mutationRequestRef.current) return;
       await loadDetail(workOrderId, true);
     } catch (mutationError) {
       if (mutationId !== mutationRequestRef.current) return;
-      setInterventionError(mutationError instanceof Error ? mutationError.message : 'No se pudo vincular el trabajo planificado al A/C.');
+      setInterventionError(mutationError instanceof Error
+        ? mutationError.message
+        : input.kind === 'disposition'
+          ? 'No se pudo registrar el trabajo planificado no realizado.'
+          : 'No se pudo vincular el trabajo planificado al A/C.');
       void loadDetail(workOrderId, true);
     } finally {
       if (mutationId === mutationRequestRef.current) setCreatingInterventionVisitAssetId(null);
