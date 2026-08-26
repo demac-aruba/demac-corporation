@@ -27,6 +27,7 @@ const { createAddFieldMeasurementCommand } = require('./fieldOperationsMeasureme
 const { createAddFieldFindingCommand } = require('./fieldOperationsFindings');
 const { createSetFieldChecklistItemCommand } = require('./fieldOperationsChecklistResponses');
 const { createSetFieldFreeTextResponseCommand } = require('./fieldOperationsFreeTextResponses');
+const { createRecordCustomerAcknowledgementCommand } = require('./fieldOperationsCustomerAcknowledgements');
 const { attachInterventionReportsToJob } = require('./fieldOperationsReportRead');
 const {
   attachScopeChangesToJob,
@@ -55,6 +56,7 @@ const FIELD_ACTIONS = new Set([
   'add_report_finding',
   'set_report_checklist_item',
   'set_report_free_text',
+  'record_customer_report_acknowledgement',
 ]);
 
 function cleanText(value, limit = 1000) {
@@ -116,6 +118,7 @@ function createFieldOperationsApi({
   addFieldFinding,
   setFieldChecklistItem,
   setFieldFreeTextResponse,
+  recordCustomerAcknowledgement,
 } = {}) {
   if (!db || typeof db.collection !== 'function') throw new Error('A Firestore-compatible db is required.');
   if (typeof verifyIdToken !== 'function') throw new Error('verifyIdToken is required.');
@@ -133,6 +136,7 @@ function createFieldOperationsApi({
   if (addFieldFinding !== undefined && typeof addFieldFinding !== 'function') throw new Error('addFieldFinding must be a function when provided.');
   if (setFieldChecklistItem !== undefined && typeof setFieldChecklistItem !== 'function') throw new Error('setFieldChecklistItem must be a function when provided.');
   if (setFieldFreeTextResponse !== undefined && typeof setFieldFreeTextResponse !== 'function') throw new Error('setFieldFreeTextResponse must be a function when provided.');
+  if (recordCustomerAcknowledgement !== undefined && typeof recordCustomerAcknowledgement !== 'function') throw new Error('recordCustomerAcknowledgement must be a function when provided.');
 
   async function authenticate(request) {
     const token = bearerToken(request);
@@ -396,6 +400,21 @@ function createFieldOperationsApi({
       });
       return { ...updated, version: FIELD_OPERATIONS_API_VERSION };
     }
+    if (action === 'record_customer_report_acknowledgement') {
+      if (typeof recordCustomerAcknowledgement !== 'function') {
+        throw fieldError('mutation_not_configured', 'Customer report acknowledgement is not configured in this runtime.', 503);
+      }
+      const recorded = await recordCustomerAcknowledgement({
+        identity,
+        visitId: cleanText(data.visitId, 180),
+        interventionId: cleanText(data.interventionId, 180),
+        sectionId: cleanText(data.sectionId, 120),
+        receiverName: cleanText(data.receiverName, 180),
+        note: cleanText(data.note, 1000),
+        requestId: cleanText(data.requestId, 240),
+      });
+      return { ...recorded, version: FIELD_OPERATIONS_API_VERSION };
+    }
     throw fieldError('unsupported_action', `Unsupported Field Operations action: ${action || 'missing'}.`, 400);
   }
 
@@ -460,6 +479,7 @@ function getDefaultApi() {
     const addFieldFinding = createAddFieldFindingCommand({ db, resolveAssignment, appendAuditInTransaction });
     const setFieldChecklistItem = createSetFieldChecklistItemCommand({ db, resolveAssignment, appendAuditInTransaction });
     const setFieldFreeTextResponse = createSetFieldFreeTextResponseCommand({ db, resolveAssignment, appendAuditInTransaction });
+    const recordCustomerAcknowledgement = createRecordCustomerAcknowledgementCommand({ db, resolveAssignment, appendAuditInTransaction });
     defaultApi = createFieldOperationsApi({
       db,
       verifyIdToken: (token) => getAuth().verifyIdToken(token, true),
@@ -476,6 +496,7 @@ function getDefaultApi() {
       addFieldFinding,
       setFieldChecklistItem,
       setFieldFreeTextResponse,
+      recordCustomerAcknowledgement,
       reportError: ({ action, status, code, error }) => logger.error('Field Operations request failed', {
         action: cleanText(action, 120) || 'unknown',
         status,
