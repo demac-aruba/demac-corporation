@@ -28,7 +28,11 @@ import { parseFieldSetReportChecklistItemResponse } from './field-checklist-cont
 import { parseFieldSetReportFreeTextResponse } from './field-free-text-contract';
 import { parseFieldRecordCustomerAcknowledgementResponse } from './field-customer-acknowledgement-contract';
 import { parseFieldAddReportVoiceNoteResponse } from './field-voice-note-contract';
-import { parseFieldProfessionalReportJobResponse } from './field-professional-report-contract';
+import {
+  parseFieldPlannedWorkDispositionJobResponse,
+  parseFieldRecordPlannedWorkDispositionResponse,
+  type FieldPlannedWorkDispositionReason,
+} from './field-planned-work-disposition-contract';
 import { parseFieldRegisterVisitAssetResponse } from './field-equipment-registration-contract';
 
 export { fieldActionAllowed } from './field-authorization';
@@ -136,14 +140,21 @@ export type {
 } from './field-voice-note-contract';
 export type {
   FieldProfessionalReportInterventionReport,
-  FieldProfessionalReportJobDetail,
-  FieldProfessionalReportJobDetail as FieldExecutionJobDetail,
   FieldProfessionalReportMissingSection,
   FieldProfessionalReportPreview,
   FieldProfessionalReportStatus,
   FieldReportCompletion,
   FieldRequiredReportSectionBlocker,
 } from './field-professional-report-contract';
+export type {
+  FieldDispositionPlannedWorkProgress,
+  FieldPlannedWorkDisposition,
+  FieldPlannedWorkDispositionJobDetail,
+  FieldPlannedWorkDispositionJobDetail as FieldExecutionJobDetail,
+  FieldPlannedWorkDispositionOption,
+  FieldPlannedWorkDispositionReason,
+  FieldRecordPlannedWorkDispositionResponse,
+} from './field-planned-work-disposition-contract';
 export type {
   FieldEquipmentRegistrationEvidence,
   FieldEquipmentRegistrationEvidenceKind,
@@ -241,7 +252,7 @@ export async function getFieldSchedule(startDate: string, endDate = startDate) {
 }
 
 export async function getFieldJob(workOrderId: string) {
-  return parseFieldProfessionalReportJobResponse(await callFieldAuthority('get_job', { workOrderId }));
+  return parseFieldPlannedWorkDispositionJobResponse(await callFieldAuthority('get_job', { workOrderId }));
 }
 
 export async function prepareFieldVisit(workOrderId: string, requestId: string) {
@@ -265,6 +276,19 @@ export async function registerOnSiteFieldEquipment(input: RegisterOnSiteFieldEqu
 
 export async function createPlannedFieldIntervention(visitId: string, visitAssetId: string, plannedWorkLineId: string, serviceCatalogItemId: string, requestId: string) {
   return parseFieldCreatePlannedInterventionResponse(await callFieldAuthority('create_planned_intervention', { visitId, visitAssetId, plannedWorkLineId, serviceCatalogItemId, requestId }));
+}
+
+export async function recordFieldPlannedWorkDisposition(
+  visitId: string,
+  plannedWorkLineId: string,
+  quantity: number,
+  reasonCode: FieldPlannedWorkDispositionReason,
+  note: string,
+  requestId: string,
+) {
+  return parseFieldRecordPlannedWorkDispositionResponse(await callFieldAuthority('record_planned_work_disposition', {
+    visitId, plannedWorkLineId, quantity, reasonCode, note, requestId,
+  }));
 }
 
 export async function createAdditionalFieldIntervention(visitId: string, visitAssetId: string, serviceCatalogItemId: string, origin: FieldTechnicianScopeChangeOrigin, reason: string, requestId: string) {
