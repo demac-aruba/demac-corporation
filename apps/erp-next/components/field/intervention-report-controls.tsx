@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react';
 import type {
   FieldExecutionJobDetail,
-  FieldInterventionReport,
+  FieldFindingInterventionReport,
   FieldMeasurementMoment,
   FieldReportSection,
   FieldReportSectionStatus,
@@ -24,6 +24,14 @@ export type ReportMeasurementInput = {
   value: number | string;
   unit: string;
   moment: FieldMeasurementMoment;
+};
+
+export type ReportFindingInput = {
+  interventionId: string;
+  sectionId: string;
+  summary: string;
+  details: string;
+  recommendation: string;
 };
 
 const MEASUREMENT_MOMENTS: Array<{ value: FieldMeasurementMoment; label: string }> = [
@@ -49,12 +57,16 @@ function sectionTypeLabel(section: FieldReportSection) {
   return 'Confirmación del cliente';
 }
 
-function evidenceCount(report: FieldInterventionReport, sectionId: string) {
+function evidenceCount(report: FieldFindingInterventionReport, sectionId: string) {
   return report.evidence.filter((item) => item.sectionId === sectionId).length;
 }
 
-function measurementCount(report: FieldInterventionReport, sectionId: string) {
+function measurementCount(report: FieldFindingInterventionReport, sectionId: string) {
   return report.measurements.filter((item) => item.sectionId === sectionId).length;
+}
+
+function findingCount(report: FieldFindingInterventionReport, sectionId: string) {
+  return report.findings.filter((item) => item.sectionId === sectionId).length;
 }
 
 function PhotoSectionInput({
@@ -65,7 +77,7 @@ function PhotoSectionInput({
   uploading,
   onAddPhoto,
 }: {
-  report: FieldInterventionReport;
+  report: FieldFindingInterventionReport;
   section: FieldReportSection;
   allowed: boolean;
   mutationBusy: boolean;
@@ -164,7 +176,7 @@ function MeasurementSectionInput({
   saving,
   onAddMeasurement,
 }: {
-  report: FieldInterventionReport;
+  report: FieldFindingInterventionReport;
   section: FieldReportSection;
   allowed: boolean;
   mutationBusy: boolean;
@@ -259,22 +271,119 @@ function MeasurementSectionInput({
   );
 }
 
+function FindingSectionInput({
+  report,
+  section,
+  allowed,
+  mutationBusy,
+  saving,
+  onAddFinding,
+}: {
+  report: FieldFindingInterventionReport;
+  section: FieldReportSection;
+  allowed: boolean;
+  mutationBusy: boolean;
+  saving: boolean;
+  onAddFinding: (input: ReportFindingInput) => Promise<boolean>;
+}) {
+  const [summary, setSummary] = useState('');
+  const [details, setDetails] = useState('');
+  const [recommendation, setRecommendation] = useState('');
+  const [localError, setLocalError] = useState<string | null>(null);
+  const findings = report.findings.filter((item) => item.sectionId === section.id);
+
+  const submit = async () => {
+    const normalizedSummary = summary.trim();
+    const normalizedDetails = details.trim();
+    const normalizedRecommendation = recommendation.trim();
+    if (normalizedSummary.length < 3) {
+      setLocalError('Escribe un resumen corto del hallazgo.');
+      return;
+    }
+    if (normalizedDetails.length < 3) {
+      setLocalError('Describe el hallazgo técnico observado.');
+      return;
+    }
+    setLocalError(null);
+    const success = await onAddFinding({
+      interventionId: report.interventionId,
+      sectionId: section.id,
+      summary: normalizedSummary,
+      details: normalizedDetails,
+      recommendation: normalizedRecommendation,
+    });
+    if (success) {
+      setSummary('');
+      setDetails('');
+      setRecommendation('');
+    }
+  };
+
+  return (
+    <div className={styles.interventionForm}>
+      <strong>{section.title}</strong>
+      <div className={styles.helper} style={{ gridColumn: '1 / -1', marginTop: 0 }}>
+        {section.required ? 'Requerida' : 'Opcional'} · {findings.length} hallazgo{findings.length === 1 ? '' : 's'} registrado{findings.length === 1 ? '' : 's'}
+      </div>
+      {findings.length ? (
+        <div className={styles.infoGrid} style={{ gridColumn: '1 / -1' }}>
+          {findings.map((finding) => (
+            <div className={styles.info} key={finding.id}>
+              <span>{finding.summary}</span>
+              <strong>{finding.details}</strong>
+              {finding.recommendation ? <small className={styles.helper}>Recomendación: {finding.recommendation}</small> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {allowed ? (
+        <>
+          <label>
+            <span>Resumen del hallazgo</span>
+            <input className={styles.select} disabled={mutationBusy} value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="Ej. Drenaje parcialmente obstruido" />
+          </label>
+          <label style={{ gridColumn: '1 / -1' }}>
+            <span>Detalle técnico</span>
+            <textarea className={styles.select} disabled={mutationBusy} value={details} onChange={(event) => setDetails(event.target.value)} placeholder="Describe exactamente lo observado en el equipo." rows={3} />
+          </label>
+          <label style={{ gridColumn: '1 / -1' }}>
+            <span>Recomendación (opcional)</span>
+            <textarea className={styles.select} disabled={mutationBusy} value={recommendation} onChange={(event) => setRecommendation(event.target.value)} placeholder="Ej. Recomendar limpieza profunda del drenaje." rows={2} />
+          </label>
+          <button className={`${styles.action} ${styles.primary}`} disabled={mutationBusy} type="button" onClick={() => void submit()}>
+            {saving ? 'Guardando hallazgo…' : 'Agregar hallazgo'}
+          </button>
+        </>
+      ) : (
+        <p className={styles.helper} style={{ gridColumn: '1 / -1', marginTop: 0 }}>
+          Field Authority no proyecta otro hallazgo para esta sección en el estado actual.
+        </p>
+      )}
+      {localError ? <div className={styles.mutationError} style={{ gridColumn: '1 / -1' }}>{localError}</div> : null}
+    </div>
+  );
+}
+
 export function InterventionReportControls({
   job,
   mutationBusy,
   uploadingPhotoKey,
   savingMeasurementKey,
+  savingFindingKey,
   error,
   onAddPhoto,
   onAddMeasurement,
+  onAddFinding,
 }: {
   job: FieldExecutionJobDetail;
   mutationBusy: boolean;
   uploadingPhotoKey: string | null;
   savingMeasurementKey: string | null;
+  savingFindingKey: string | null;
   error: string | null;
   onAddPhoto: (input: ReportPhotoInput) => Promise<boolean>;
   onAddMeasurement: (input: ReportMeasurementInput) => Promise<boolean>;
+  onAddFinding: (input: ReportFindingInput) => Promise<boolean>;
 }) {
   const photoOptionsByIntervention = useMemo(() => new Map(
     job.reportPhotoOptions.map((option) => [option.interventionId, new Set(option.sectionIds)]),
@@ -282,6 +391,9 @@ export function InterventionReportControls({
   const measurementOptionsByIntervention = useMemo(() => new Map(
     job.reportMeasurementOptions.map((option) => [option.interventionId, new Set(option.sectionIds)]),
   ), [job.reportMeasurementOptions]);
+  const findingOptionsByIntervention = useMemo(() => new Map(
+    job.reportFindingOptions.map((option) => [option.interventionId, new Set(option.sectionIds)]),
+  ), [job.reportFindingOptions]);
 
   if (job.interventionReports.length === 0) {
     return (
@@ -300,6 +412,7 @@ export function InterventionReportControls({
         const intervention = job.workInterventions.find((item) => item.id === report.interventionId);
         const allowedPhotoSections = photoOptionsByIntervention.get(report.interventionId) ?? new Set<string>();
         const allowedMeasurementSections = measurementOptionsByIntervention.get(report.interventionId) ?? new Set<string>();
+        const allowedFindingSections = findingOptionsByIntervention.get(report.interventionId) ?? new Set<string>();
         return (
           <div className={styles.interventionGroup} key={report.interventionId}>
             <div className={styles.interventionCard}>
@@ -339,8 +452,23 @@ export function InterventionReportControls({
                   />
                 );
               }
+              if (section.type === 'findings') {
+                const key = `${report.interventionId}:${section.id}`;
+                return (
+                  <FindingSectionInput
+                    key={section.id}
+                    report={report}
+                    section={section}
+                    allowed={allowedFindingSections.has(section.id)}
+                    mutationBusy={mutationBusy}
+                    saving={savingFindingKey === key}
+                    onAddFinding={onAddFinding}
+                  />
+                );
+              }
               const evidence = evidenceCount(report, section.id);
               const measurements = measurementCount(report, section.id);
+              const findings = findingCount(report, section.id);
               return (
                 <div className={styles.interventionCard} key={section.id}>
                   <div>
@@ -350,6 +478,7 @@ export function InterventionReportControls({
                   <div className={styles.badges}>
                     {evidence > 0 ? <span className={styles.badge}>{evidence} evidencia{evidence === 1 ? '' : 's'}</span> : null}
                     {measurements > 0 ? <span className={styles.badge}>{measurements} medición{measurements === 1 ? '' : 'es'}</span> : null}
+                    {findings > 0 ? <span className={styles.badge}>{findings} hallazgo{findings === 1 ? '' : 's'}</span> : null}
                     <span className={status === 'completed' ? `${styles.badge} ${styles.badgeBrand}` : styles.badge}>{statusLabel(status)}</span>
                   </div>
                 </div>
