@@ -22,6 +22,21 @@ function countPlannedQuantity(job) {
   }, 0);
 }
 
+function unreconciledPlannedQuantity(job) {
+  return (job?.plannedWorkProgress || []).reduce((total, line) => {
+    const remainingQuantity = line?.remainingQuantity;
+    if (!Number.isSafeInteger(remainingQuantity) || remainingQuantity < 0) {
+      throw fieldError(
+        'professional_report_state_conflict',
+        'Professional Report received invalid planned-work reconciliation state.',
+        409,
+        { plannedWorkLineId: text(line?.id, 180) || null, remainingQuantity: remainingQuantity ?? null },
+      );
+    }
+    return total + remainingQuantity;
+  }, 0);
+}
+
 function reportCompletionSummary(job) {
   const reportByInterventionId = new Map((job?.interventionReports || []).map((report) => [report.interventionId, report]));
   let requiredSectionCount = 0;
@@ -71,9 +86,10 @@ function reportCompletionSummary(job) {
   return { requiredSectionCount, completedRequiredSectionCount, incompleteRequiredSections };
 }
 
-function professionalReportStatus({ interventions, incompleteRequiredSections }) {
+function professionalReportStatus({ interventions, incompleteRequiredSections, unreconciledQuantity = 0 }) {
   if (interventions.some((intervention) => intervention.status === 'pending_part')) return 'partial';
   if (incompleteRequiredSections.length > 0) return 'incomplete_report';
+  if (unreconciledQuantity > 0) return 'in_progress';
   if (interventions.length > 0 && interventions.every((intervention) => TERMINAL_INTERVENTION_STATUSES.has(intervention.status))) {
     return 'field_complete';
   }
@@ -92,7 +108,12 @@ function buildProfessionalReportPreview(job) {
 
   const interventions = Array.isArray(job?.workInterventions) ? job.workInterventions : [];
   const completion = reportCompletionSummary(job);
-  const status = professionalReportStatus({ interventions, incompleteRequiredSections: completion.incompleteRequiredSections });
+  const unreconciledQuantity = unreconciledPlannedQuantity(job);
+  const status = professionalReportStatus({
+    interventions,
+    incompleteRequiredSections: completion.incompleteRequiredSections,
+    unreconciledQuantity,
+  });
   if (!PROFESSIONAL_REPORT_STATUSES.has(status)) throw new Error('Professional Report status projection is invalid.');
 
   return {
@@ -104,6 +125,7 @@ function buildProfessionalReportPreview(job) {
     propertyId,
     status,
     plannedQuantity: countPlannedQuantity(job),
+    unreconciledPlannedQuantity: unreconciledQuantity,
     actualAssetCount: Array.isArray(job?.visitAssets) ? job.visitAssets.length : 0,
     interventionCount: interventions.length,
     completedInterventionCount: interventions.filter((item) => item.status === 'completed').length,
@@ -129,3 +151,4 @@ module.exports.attachProfessionalReportPreviewToJob = attachProfessionalReportPr
 module.exports.buildProfessionalReportPreview = buildProfessionalReportPreview;
 module.exports.professionalReportStatus = professionalReportStatus;
 module.exports.reportCompletionSummary = reportCompletionSummary;
+module.exports.unreconciledPlannedQuantity = unreconciledPlannedQuantity;
