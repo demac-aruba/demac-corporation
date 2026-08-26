@@ -176,9 +176,13 @@ test('duration, media metadata, storage scope and section type fail closed', asy
   await assert.rejects(() => oversize.command(input()), (error) => error?.code === 'invalid_report_voice');
 });
 
-test('helper, read-only and inactive execution cannot record voice evidence', async () => {
+test('helper may contribute voice evidence while read-only, unassigned and inactive execution remain denied', async () => {
+  const helper = fixture({ resolveAssignment: async () => assignment({ responsibility: 'helper', source: 'dated_crew' }) });
+  const helperResult = await helper.command(input({ requestId: 'helper-voice-001' }));
+  assert.equal(helperResult.success, true);
+  assert.equal(helper.store.values('fieldEvidence').length, 1);
+
   for (const denied of [
-    assignment({ responsibility: 'helper', source: 'dated_crew' }),
     assignment({ readOnly: true, source: 'profile_van_fallback' }),
     assignment({ assigned: false, responsibility: null, source: 'unassigned', readOnly: true }),
   ]) {
