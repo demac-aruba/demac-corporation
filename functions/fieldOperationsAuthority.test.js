@@ -43,6 +43,7 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
     'add_report_finding',
     'add_report_measurement',
     'add_report_photo_evidence',
+    'add_report_voice_evidence',
     'attach_visit_asset',
     'create_additional_intervention',
     'create_planned_intervention',
@@ -62,7 +63,7 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
   for (const action of [
     'prepare_visit', 'transition_visit', 'attach_visit_asset', 'register_visit_asset',
     'create_planned_intervention', 'create_additional_intervention', 'record_additional_intervention_decision',
-    'transition_intervention', 'add_report_photo_evidence', 'add_report_measurement', 'add_report_finding',
+    'transition_intervention', 'add_report_photo_evidence', 'add_report_voice_evidence', 'add_report_measurement', 'add_report_finding',
     'set_report_checklist_item', 'set_report_free_text', 'record_customer_report_acknowledgement',
   ]) {
     await assert.rejects(
@@ -184,6 +185,34 @@ test('create_planned_intervention authenticates and forwards only canonical inte
   assert.equal('allowedActions' in calls[0], false);
 });
 
+test('add_report_voice_evidence forwards only governed voice inputs', async () => {
+  const calls = [];
+  const api = createFieldOperationsApi({
+    db: authDb({ active: true, role: 'technician', staffId: 'staff-1', name: 'Tech One' }),
+    verifyIdToken: async () => ({ uid: 'uid-1' }),
+    addReportVoiceEvidence: async (input) => { calls.push(input); return { success: true, replayed: false, evidence: { id: 'EVID-1' }, workInterventionVersion: 3, allowedActions: ['read', 'evidence.add'] }; },
+  });
+  const result = await api.handle(request({
+    token: 'valid-token',
+    action: 'add_report_voice_evidence',
+    data: {
+      visitId: ' visit-WO-1 ', interventionId: ' WI-1 ', sectionId: ' voice ',
+      storagePath: ' field-evidence/visit-WO-1/interventions/WI-1/voice/voice/report-voice-001.webm ',
+      durationSeconds: 42.25, requestId: ' report-voice-001 ',
+      contentType: 'audio/fake', sizeBytes: 1, status: 'completed', assetId: 'AC-X', allowedActions: ['price.override'],
+    },
+  }));
+  assert.equal(result.status, 200);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].visitId, 'visit-WO-1');
+  assert.equal(calls[0].interventionId, 'WI-1');
+  assert.equal(calls[0].sectionId, 'voice');
+  assert.equal(calls[0].storagePath, 'field-evidence/visit-WO-1/interventions/WI-1/voice/voice/report-voice-001.webm');
+  assert.equal(calls[0].durationSeconds, 42.25);
+  assert.equal(calls[0].requestId, 'report-voice-001');
+  assert.deepEqual(Object.keys(calls[0]).sort(), ['durationSeconds', 'identity', 'interventionId', 'requestId', 'sectionId', 'storagePath', 'visitId']);
+});
+
 test('record_customer_report_acknowledgement forwards only governed acknowledgement inputs', async () => {
   const calls = [];
   const api = createFieldOperationsApi({
@@ -218,7 +247,7 @@ test('Field mutation actions cannot execute without authentication', async () =>
     verifyIdToken: async () => ({ uid: 'uid-1' }),
     prepareWorkVisit: mark('prepare'), transitionWorkVisit: mark('transition'), attachExistingVisitAsset: mark('attach'), registerEquipmentSystem: mark('register'),
     createPlannedWorkIntervention: mark('intervention'), createAdditionalWorkIntervention: mark('additional'), recordAdditionalWorkDecision: mark('decision'),
-    transitionWorkIntervention: mark('interventionTransition'), addReportPhotoEvidence: mark('reportPhoto'), addFieldMeasurement: mark('reportMeasurement'),
+    transitionWorkIntervention: mark('interventionTransition'), addReportPhotoEvidence: mark('reportPhoto'), addReportVoiceEvidence: mark('reportVoice'), addFieldMeasurement: mark('reportMeasurement'),
     addFieldFinding: mark('reportFinding'), setFieldChecklistItem: mark('reportChecklist'), setFieldFreeTextResponse: mark('reportFreeText'),
     recordCustomerAcknowledgement: mark('reportCustomerAcknowledgement'),
   });
@@ -232,6 +261,7 @@ test('Field mutation actions cannot execute without authentication', async () =>
     ['record_additional_intervention_decision', { visitId: 'visit-WO-1', interventionId: 'WI-1', decision: 'approved', receiverName: 'Maria', requestId: 'decision-001' }],
     ['transition_intervention', { visitId: 'visit-WO-1', interventionId: 'WI-1', to: 'in_progress', expectedVersion: 1, requestId: 'intervention-start-001' }],
     ['add_report_photo_evidence', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'photos', storagePath: 'field-evidence/visit-WO-1/interventions/WI-1/photos/photo.jpg', requestId: 'report-photo-001' }],
+    ['add_report_voice_evidence', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'voice', storagePath: 'field-evidence/visit-WO-1/interventions/WI-1/voice/voice/report-voice-001.webm', durationSeconds: 42.25, requestId: 'report-voice-001' }],
     ['add_report_measurement', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'measurements', metric: 'Temperature', value: 18, unit: 'C', moment: 'after', requestId: 'report-measurement-001' }],
     ['add_report_finding', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'findings', summary: 'Drain issue', details: 'Standing water observed.', requestId: 'report-finding-001' }],
     ['set_report_checklist_item', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'condition', itemId: 'filter-clean', checked: true, expectedVersion: 0, requestId: 'report-checklist-001' }],
