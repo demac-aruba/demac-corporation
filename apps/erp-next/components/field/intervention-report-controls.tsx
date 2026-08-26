@@ -2,8 +2,9 @@
 
 import { useMemo, useState } from 'react';
 import type {
+  FieldChecklistInterventionReport,
+  FieldChecklistReportSection,
   FieldExecutionJobDetail,
-  FieldFindingInterventionReport,
   FieldMeasurementMoment,
   FieldReportSection,
   FieldReportSectionStatus,
@@ -34,6 +35,14 @@ export type ReportFindingInput = {
   recommendation: string;
 };
 
+export type ReportChecklistInput = {
+  interventionId: string;
+  sectionId: string;
+  itemId: string;
+  checked: boolean;
+  expectedVersion: number;
+};
+
 const MEASUREMENT_MOMENTS: Array<{ value: FieldMeasurementMoment; label: string }> = [
   { value: 'before', label: 'Antes' },
   { value: 'during', label: 'Durante' },
@@ -57,15 +66,15 @@ function sectionTypeLabel(section: FieldReportSection) {
   return 'Confirmación del cliente';
 }
 
-function evidenceCount(report: FieldFindingInterventionReport, sectionId: string) {
+function evidenceCount(report: FieldChecklistInterventionReport, sectionId: string) {
   return report.evidence.filter((item) => item.sectionId === sectionId).length;
 }
 
-function measurementCount(report: FieldFindingInterventionReport, sectionId: string) {
+function measurementCount(report: FieldChecklistInterventionReport, sectionId: string) {
   return report.measurements.filter((item) => item.sectionId === sectionId).length;
 }
 
-function findingCount(report: FieldFindingInterventionReport, sectionId: string) {
+function findingCount(report: FieldChecklistInterventionReport, sectionId: string) {
   return report.findings.filter((item) => item.sectionId === sectionId).length;
 }
 
@@ -77,7 +86,7 @@ function PhotoSectionInput({
   uploading,
   onAddPhoto,
 }: {
-  report: FieldFindingInterventionReport;
+  report: FieldChecklistInterventionReport;
   section: FieldReportSection;
   allowed: boolean;
   mutationBusy: boolean;
@@ -176,7 +185,7 @@ function MeasurementSectionInput({
   saving,
   onAddMeasurement,
 }: {
-  report: FieldFindingInterventionReport;
+  report: FieldChecklistInterventionReport;
   section: FieldReportSection;
   allowed: boolean;
   mutationBusy: boolean;
@@ -279,7 +288,7 @@ function FindingSectionInput({
   saving,
   onAddFinding,
 }: {
-  report: FieldFindingInterventionReport;
+  report: FieldChecklistInterventionReport;
   section: FieldReportSection;
   allowed: boolean;
   mutationBusy: boolean;
@@ -364,26 +373,95 @@ function FindingSectionInput({
   );
 }
 
+function ChecklistSectionInput({
+  report,
+  section,
+  allowed,
+  mutationBusy,
+  savingChecklistKey,
+  onSetChecklistItem,
+}: {
+  report: FieldChecklistInterventionReport;
+  section: FieldChecklistReportSection;
+  allowed: boolean;
+  mutationBusy: boolean;
+  savingChecklistKey: string | null;
+  onSetChecklistItem: (input: ReportChecklistInput) => Promise<boolean>;
+}) {
+  const items = section.checklistItems ?? [];
+  const responsesByItemId = new Map(
+    report.checklistResponses
+      .filter((response) => response.sectionId === section.id)
+      .map((response) => [response.itemId, response]),
+  );
+  const checkedCount = items.filter((item) => responsesByItemId.get(item.id)?.checked === true).length;
+
+  return (
+    <div className={styles.interventionForm}>
+      <strong>{section.title}</strong>
+      <div className={styles.helper} style={{ gridColumn: '1 / -1', marginTop: 0 }}>
+        {section.required ? 'Requerida' : 'Opcional'} · {checkedCount} de {items.length} verificados
+      </div>
+      <div style={{ display: 'grid', gap: 10, gridColumn: '1 / -1' }}>
+        {items.map((item) => {
+          const response = responsesByItemId.get(item.id);
+          const checked = response?.checked === true;
+          const key = `${report.interventionId}:${section.id}:${item.id}`;
+          return (
+            <label className={styles.info} key={item.id} style={{ cursor: allowed && !mutationBusy ? 'pointer' : 'default' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={!allowed || mutationBusy}
+                  onChange={() => void onSetChecklistItem({
+                    interventionId: report.interventionId,
+                    sectionId: section.id,
+                    itemId: item.id,
+                    checked: !checked,
+                    expectedVersion: response?.version ?? 0,
+                  })}
+                />
+                {item.label}
+              </span>
+              {savingChecklistKey === key ? <small className={styles.helper}>Guardando…</small> : null}
+            </label>
+          );
+        })}
+      </div>
+      {!allowed ? (
+        <p className={styles.helper} style={{ gridColumn: '1 / -1', marginTop: 0 }}>
+          Field Authority no autoriza editar esta checklist en el estado actual.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 export function InterventionReportControls({
   job,
   mutationBusy,
   uploadingPhotoKey,
   savingMeasurementKey,
   savingFindingKey,
+  savingChecklistKey,
   error,
   onAddPhoto,
   onAddMeasurement,
   onAddFinding,
+  onSetChecklistItem,
 }: {
   job: FieldExecutionJobDetail;
   mutationBusy: boolean;
   uploadingPhotoKey: string | null;
   savingMeasurementKey: string | null;
   savingFindingKey: string | null;
+  savingChecklistKey: string | null;
   error: string | null;
   onAddPhoto: (input: ReportPhotoInput) => Promise<boolean>;
   onAddMeasurement: (input: ReportMeasurementInput) => Promise<boolean>;
   onAddFinding: (input: ReportFindingInput) => Promise<boolean>;
+  onSetChecklistItem: (input: ReportChecklistInput) => Promise<boolean>;
 }) {
   const photoOptionsByIntervention = useMemo(() => new Map(
     job.reportPhotoOptions.map((option) => [option.interventionId, new Set(option.sectionIds)]),
@@ -394,6 +472,9 @@ export function InterventionReportControls({
   const findingOptionsByIntervention = useMemo(() => new Map(
     job.reportFindingOptions.map((option) => [option.interventionId, new Set(option.sectionIds)]),
   ), [job.reportFindingOptions]);
+  const checklistOptionsByIntervention = useMemo(() => new Map(
+    job.reportChecklistOptions.map((option) => [option.interventionId, new Set(option.sectionIds)]),
+  ), [job.reportChecklistOptions]);
 
   if (job.interventionReports.length === 0) {
     return (
@@ -413,6 +494,7 @@ export function InterventionReportControls({
         const allowedPhotoSections = photoOptionsByIntervention.get(report.interventionId) ?? new Set<string>();
         const allowedMeasurementSections = measurementOptionsByIntervention.get(report.interventionId) ?? new Set<string>();
         const allowedFindingSections = findingOptionsByIntervention.get(report.interventionId) ?? new Set<string>();
+        const allowedChecklistSections = checklistOptionsByIntervention.get(report.interventionId) ?? new Set<string>();
         return (
           <div className={styles.interventionGroup} key={report.interventionId}>
             <div className={styles.interventionCard}>
@@ -463,6 +545,19 @@ export function InterventionReportControls({
                     mutationBusy={mutationBusy}
                     saving={savingFindingKey === key}
                     onAddFinding={onAddFinding}
+                  />
+                );
+              }
+              if (section.type === 'checklist') {
+                return (
+                  <ChecklistSectionInput
+                    key={section.id}
+                    report={report}
+                    section={section}
+                    allowed={allowedChecklistSections.has(section.id)}
+                    mutationBusy={mutationBusy}
+                    savingChecklistKey={savingChecklistKey}
+                    onSetChecklistItem={onSetChecklistItem}
                   />
                 );
               }
