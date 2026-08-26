@@ -10,6 +10,7 @@ const REPORT_SECTION_TYPES = new Set([
   'voice_note',
   'customer_acknowledgement',
 ]);
+const REPORT_SECTION_STATUSES = new Set(['pending', 'in_progress', 'completed']);
 const REPORT_SECTION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
 const REPORT_CHECKLIST_ITEM_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
 
@@ -140,6 +141,62 @@ function projectStoredReportTemplateSnapshot(value, serviceId) {
   return snapshot;
 }
 
+function projectStoredReportSectionStatus(value, template) {
+  if (!template) {
+    if (value !== undefined && value !== null) {
+      throw fieldError('work_intervention_report_state_conflict', 'Work Intervention has report section state without a frozen report template.', 409);
+    }
+    return undefined;
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw fieldError('invalid_work_intervention_report_state', 'Work Intervention report section state is missing or invalid.', 409);
+  }
+  const expectedIds = template.sections.map((section) => section.id);
+  const actualIds = Object.keys(value);
+  if (actualIds.length !== expectedIds.length || expectedIds.some((id) => !Object.prototype.hasOwnProperty.call(value, id))) {
+    throw fieldError('invalid_work_intervention_report_state', 'Work Intervention report section state does not match its frozen template.', 409);
+  }
+  const result = {};
+  for (const id of expectedIds) {
+    const status = text(value[id], 40);
+    if (!REPORT_SECTION_STATUSES.has(status)) {
+      throw fieldError('invalid_work_intervention_report_state', 'Work Intervention report section status is invalid.', 409, { sectionId: id, status: status || null });
+    }
+    result[id] = status;
+  }
+  return result;
+}
+
+function reportTemplateCompletion(template, sectionStatus) {
+  if (!template) {
+    if (sectionStatus !== undefined && sectionStatus !== null) {
+      throw fieldError('work_intervention_report_state_conflict', 'Work Intervention has report section state without a frozen report template.', 409);
+    }
+    return {
+      requiredSectionCount: 0,
+      completedRequiredSectionCount: 0,
+      incompleteRequiredSections: [],
+      complete: true,
+    };
+  }
+  const canonicalStatus = projectStoredReportSectionStatus(sectionStatus, template);
+  const requiredSections = template.sections.filter((section) => section.required);
+  const incompleteRequiredSections = requiredSections
+    .filter((section) => canonicalStatus[section.id] !== 'completed')
+    .map((section) => ({
+      id: section.id,
+      title: section.title,
+      type: section.type,
+      status: canonicalStatus[section.id],
+    }));
+  return {
+    requiredSectionCount: requiredSections.length,
+    completedRequiredSectionCount: requiredSections.length - incompleteRequiredSections.length,
+    incompleteRequiredSections,
+    complete: incompleteRequiredSections.length === 0,
+  };
+}
+
 function requireReportTemplateSection(template, sectionId, expectedType) {
   const normalizedSectionId = text(sectionId, 120);
   if (!normalizedSectionId || !REPORT_SECTION_ID_PATTERN.test(normalizedSectionId)) {
@@ -186,8 +243,11 @@ function requireReportChecklistItem(template, sectionId, itemId) {
 module.exports.FIELD_EXECUTION_DEFINITION_VERSION = FIELD_EXECUTION_DEFINITION_VERSION;
 module.exports.REPORT_CHECKLIST_ITEM_ID_PATTERN = REPORT_CHECKLIST_ITEM_ID_PATTERN;
 module.exports.REPORT_SECTION_ID_PATTERN = REPORT_SECTION_ID_PATTERN;
+module.exports.REPORT_SECTION_STATUSES = REPORT_SECTION_STATUSES;
 module.exports.REPORT_SECTION_TYPES = REPORT_SECTION_TYPES;
 module.exports.fieldReportTemplateSnapshotForService = fieldReportTemplateSnapshotForService;
+module.exports.projectStoredReportSectionStatus = projectStoredReportSectionStatus;
 module.exports.projectStoredReportTemplateSnapshot = projectStoredReportTemplateSnapshot;
+module.exports.reportTemplateCompletion = reportTemplateCompletion;
 module.exports.requireReportChecklistItem = requireReportChecklistItem;
 module.exports.requireReportTemplateSection = requireReportTemplateSection;
