@@ -214,7 +214,13 @@ function createAddFieldFindingCommand({
         ) {
           throw fieldError('field_finding_request_conflict', 'This requestId was already used for different finding input.', 409);
         }
-        result = { success: true, replayed: true, finding: existing, allowedActions: context.allowedActions };
+        result = {
+          success: true,
+          replayed: true,
+          finding: existing,
+          workInterventionVersion: intervention.version,
+          allowedActions: context.allowedActions,
+        };
         return;
       }
 
