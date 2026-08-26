@@ -302,13 +302,13 @@ function createAddFieldMeasurementCommand({
   };
 }
 
-async function loadFieldMeasurements(db, visitId) {
+async function loadFieldMeasurements(db, visitId, expectedContext = {}) {
   const normalizedVisitId = text(visitId, 180);
   if (!normalizedVisitId) return [];
   const snapshot = await db.collection(FIELD_MEASUREMENT_COLLECTION).where('visitId', '==', normalizedVisitId).get();
   return (snapshot?.docs || [])
     .map(fieldSnapshotRecord)
-    .map((record) => projectFieldMeasurement(record, { visitId: normalizedVisitId }))
+    .map((record) => projectFieldMeasurement(record, { ...expectedContext, visitId: normalizedVisitId }))
     .sort((left, right) => left.measuredAt.localeCompare(right.measuredAt) || left.id.localeCompare(right.id));
 }
 
