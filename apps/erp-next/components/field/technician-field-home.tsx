@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/components/auth/auth-provider';
 import { addDaysToDateKey, arubaDateKey, arubaTimeKey, formatArubaDateKey } from '@/lib/aruba-date';
 import {
+  addFieldReportPhotoEvidence,
   attachExistingFieldAsset,
   createAdditionalFieldIntervention,
   createPlannedFieldIntervention,
@@ -22,7 +23,10 @@ import {
   type FieldTechnicianScopeChangeOrigin,
   type FieldVisitStatus,
 } from '@/lib/field-authority';
-import { uploadFieldEquipmentRegistrationImage } from '@/lib/field-evidence-upload';
+import {
+  uploadFieldEquipmentRegistrationImage,
+  uploadFieldReportPhoto,
+} from '@/lib/field-evidence-upload';
 import { AdditionalApprovalControls } from './additional-approval-controls';
 import { AdditionalInterventionControls } from './additional-intervention-controls';
 import {
@@ -31,6 +35,10 @@ import {
 } from './equipment-registration-controls';
 import { InterventionExecutionControls } from './intervention-execution-controls';
 import { PlannedInterventionControls } from './planned-intervention-controls';
+import {
+  ReportPhotoControls,
+  type ReportPhotoInput,
+} from './report-photo-controls';
 import styles from './technician-field-home.module.css';
 
 type RangeKey = 'today' | 'tomorrow' | 'week';
@@ -60,6 +68,12 @@ type InterventionExecutionInput = {
   target: FieldInterventionExecutionTarget;
   expectedVersion: number;
   note: string;
+};
+
+type ReportPhotoRetry = {
+  key: string;
+  signature: string;
+  requestId: string;
 };
 
 const COMPLETED_WORK_ORDER_STATUSES = new Set(['Completada']);
@@ -127,6 +141,18 @@ function clientRequestId(prefix: string, workOrderId: string) {
     ? globalThis.crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
   return `${prefix}-${workOrderId}-${random}`.slice(0, 240);
+}
+
+function reportPhotoSignature(input: ReportPhotoInput) {
+  return [
+    input.interventionId,
+    input.sectionId,
+    input.file.name,
+    input.file.type,
+    input.file.size,
+    input.file.lastModified,
+    input.caption.trim(),
+  ].join('|');
 }
 
 function whatsappDigits(value?: string) {
@@ -205,6 +231,7 @@ function DetailView({
   additionalInterventionError,
   approvalError,
   executionError,
+  reportPhotoError,
   transitioning,
   attachingAssetId,
   registeringEquipment,
@@ -212,6 +239,7 @@ function DetailView({
   creatingAdditionalInterventionVisitAssetId,
   decidingApprovalInterventionId,
   transitioningInterventionId,
+  uploadingReportPhotoKey,
   onTransition,
   onAttachAsset,
   onRegisterEquipment,
@@ -219,6 +247,7 @@ function DetailView({
   onCreateAdditionalIntervention,
   onRecordAdditionalDecision,
   onTransitionIntervention,
+  onAddReportPhoto,
   onBack,
 }: {
   job: FieldExecutionJobDetail | null;
@@ -231,6 +260,7 @@ function DetailView({
   additionalInterventionError: string | null;
   approvalError: string | null;
   executionError: string | null;
+  reportPhotoError: string | null;
   transitioning: FieldActiveVisitTransition | null;
   attachingAssetId: string | null;
   registeringEquipment: boolean;
@@ -238,6 +268,7 @@ function DetailView({
   creatingAdditionalInterventionVisitAssetId: string | null;
   decidingApprovalInterventionId: string | null;
   transitioningInterventionId: string | null;
+  uploadingReportPhotoKey: string | null;
   onTransition: (target: FieldActiveVisitTransition) => void;
   onAttachAsset: (assetId: string) => void;
   onRegisterEquipment: (input: EquipmentRegistrationInput) => Promise<boolean>;
@@ -245,6 +276,7 @@ function DetailView({
   onCreateAdditionalIntervention: (input: AdditionalInterventionInput) => void;
   onRecordAdditionalDecision: (input: AdditionalApprovalInput) => void;
   onTransitionIntervention: (input: InterventionExecutionInput) => void;
+  onAddReportPhoto: (input: ReportPhotoInput) => Promise<boolean>;
   onBack: () => void;
 }) {
   if (loading || error || !job) {
@@ -280,7 +312,8 @@ function DetailView({
     || creatingInterventionVisitAssetId !== null
     || creatingAdditionalInterventionVisitAssetId !== null
     || decidingApprovalInterventionId !== null
-    || transitioningInterventionId !== null;
+    || transitioningInterventionId !== null
+    || uploadingReportPhotoKey !== null;
 
   return (
     <div className={styles.shell}>
@@ -402,6 +435,13 @@ function DetailView({
               error={executionError}
               onTransition={onTransitionIntervention}
             />
+            <ReportPhotoControls
+              job={job}
+              mutationBusy={mutationBusy}
+              uploadingKey={uploadingReportPhotoKey}
+              error={reportPhotoError}
+              onAddPhoto={onAddReportPhoto}
+            />
             {assetError ? <div className={styles.mutationError}>{assetError}</div> : null}
           </section>
 
@@ -492,11 +532,14 @@ export function TechnicianFieldHome() {
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [transitioningInterventionId, setTransitioningInterventionId] = useState<string | null>(null);
   const [executionError, setExecutionError] = useState<string | null>(null);
+  const [uploadingReportPhotoKey, setUploadingReportPhotoKey] = useState<string | null>(null);
+  const [reportPhotoError, setReportPhotoError] = useState<string | null>(null);
   const scheduleRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
   const mutationRequestRef = useRef(0);
   const mutationLockRef = useRef<number | null>(null);
   const equipmentRegistrationRequestRef = useRef<string | null>(null);
+  const reportPhotoRequestRef = useRef<ReportPhotoRetry | null>(null);
   const selectedWorkOrderRef = useRef<string | null>(null);
 
   const today = arubaDateKey(clockNow);
@@ -510,6 +553,7 @@ export function TechnicianFieldHome() {
     mutationRequestRef.current += 1;
     mutationLockRef.current = null;
     equipmentRegistrationRequestRef.current = null;
+    reportPhotoRequestRef.current = null;
     selectedWorkOrderRef.current = null;
     setSelectedWorkOrderId(null);
     setSelectedOwnerUserId(null);
@@ -531,6 +575,8 @@ export function TechnicianFieldHome() {
     setApprovalError(null);
     setTransitioningInterventionId(null);
     setExecutionError(null);
+    setUploadingReportPhotoKey(null);
+    setReportPhotoError(null);
   }, []);
 
   const loadDetail = useCallback(async (workOrderId: string, background = false) => {
@@ -599,6 +645,7 @@ export function TechnicianFieldHome() {
     setAdditionalInterventionError(null);
     setApprovalError(null);
     setExecutionError(null);
+    setReportPhotoError(null);
   }, []);
 
   const runVisitTransition = useCallback(async (target: FieldActiveVisitTransition) => {
@@ -912,6 +959,67 @@ export function TechnicianFieldHome() {
     }
   }, [clearMutationErrors, detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
 
+  const runAddReportPhoto = useCallback(async (input: ReportPhotoInput) => {
+    if (mutationLockRef.current !== null) return false;
+    const currentDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
+    if (!currentDetail?.fieldVisit) {
+      setReportPhotoError('La visita todavía no está disponible para guardar evidencia del reporte.');
+      return false;
+    }
+    const option = currentDetail.reportPhotoOptions.find((candidate) => candidate.interventionId === input.interventionId);
+    if (!currentDetail.canAddReportPhoto || !option?.sectionIds.includes(input.sectionId)) {
+      setReportPhotoError('Field Authority ya no autoriza fotos para esta sección del reporte. Actualiza el trabajo e intenta nuevamente.');
+      void loadDetail(currentDetail.workOrderId, true);
+      return false;
+    }
+
+    const key = `${input.interventionId}:${input.sectionId}`;
+    const signature = reportPhotoSignature(input);
+    const workOrderId = currentDetail.workOrderId;
+    const prior = reportPhotoRequestRef.current;
+    const requestId = prior?.key === key && prior.signature === signature
+      ? prior.requestId
+      : clientRequestId('report-photo', workOrderId);
+    reportPhotoRequestRef.current = { key, signature, requestId };
+
+    const mutationId = ++mutationRequestRef.current;
+    mutationLockRef.current = mutationId;
+    setUploadingReportPhotoKey(key);
+    clearMutationErrors();
+    try {
+      const storagePath = await uploadFieldReportPhoto({
+        visitId: currentDetail.fieldVisit.id,
+        interventionId: input.interventionId,
+        sectionId: input.sectionId,
+        requestId,
+        file: input.file,
+      });
+      if (mutationId !== mutationRequestRef.current) return false;
+
+      await addFieldReportPhotoEvidence(
+        currentDetail.fieldVisit.id,
+        input.interventionId,
+        input.sectionId,
+        storagePath,
+        input.caption,
+        requestId,
+      );
+      if (mutationId !== mutationRequestRef.current) return false;
+
+      reportPhotoRequestRef.current = null;
+      await loadDetail(workOrderId, true);
+      return true;
+    } catch (mutationError) {
+      if (mutationId !== mutationRequestRef.current) return false;
+      setReportPhotoError(mutationError instanceof Error ? mutationError.message : 'No se pudo guardar la foto del reporte.');
+      void loadDetail(workOrderId, true);
+      return false;
+    } finally {
+      if (mutationId === mutationRequestRef.current) setUploadingReportPhotoKey(null);
+      if (mutationLockRef.current === mutationId) mutationLockRef.current = null;
+    }
+  }, [clearMutationErrors, detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
+
   useEffect(() => {
     void loadSchedule();
     return () => { scheduleRequestRef.current += 1; };
@@ -993,6 +1101,7 @@ export function TechnicianFieldHome() {
         additionalInterventionError={additionalInterventionError}
         approvalError={approvalError}
         executionError={executionError}
+        reportPhotoError={reportPhotoError}
         transitioning={transitioning}
         attachingAssetId={attachingAssetId}
         registeringEquipment={registeringEquipment}
@@ -1000,6 +1109,7 @@ export function TechnicianFieldHome() {
         creatingAdditionalInterventionVisitAssetId={creatingAdditionalInterventionVisitAssetId}
         decidingApprovalInterventionId={decidingApprovalInterventionId}
         transitioningInterventionId={transitioningInterventionId}
+        uploadingReportPhotoKey={uploadingReportPhotoKey}
         onTransition={(target) => void runVisitTransition(target)}
         onAttachAsset={(assetId) => void runAttachAsset(assetId)}
         onRegisterEquipment={runRegisterEquipment}
@@ -1007,6 +1117,7 @@ export function TechnicianFieldHome() {
         onCreateAdditionalIntervention={(input) => void runCreateAdditionalIntervention(input)}
         onRecordAdditionalDecision={(input) => void runRecordAdditionalDecision(input)}
         onTransitionIntervention={(input) => void runTransitionIntervention(input)}
+        onAddReportPhoto={runAddReportPhoto}
         onBack={closeJob}
       />
     );
