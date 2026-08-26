@@ -8,6 +8,7 @@ const {
   projectReportPhotoEvidence,
 } = require('./fieldOperationsReportEvidence');
 const { loadFieldMeasurements } = require('./fieldOperationsMeasurements');
+const { loadFieldFindings } = require('./fieldOperationsFindings');
 const {
   WORK_INTERVENTION_COLLECTION,
   projectWorkIntervention,
@@ -73,6 +74,7 @@ function reportProjectionFromStored(storedRecord, projectedIntervention) {
     sectionStatus,
     evidence: [],
     measurements: [],
+    findings: [],
   };
 }
 
@@ -165,6 +167,35 @@ async function attachReportMeasurements(db, job, reports) {
   return reports;
 }
 
+async function attachReportFindings(db, job, reports) {
+  const visitId = text(job?.fieldVisit?.id, 180);
+  if (!visitId || reports.length === 0) return reports;
+  const findings = await loadFieldFindings(db, visitId, {
+    workOrderId: text(job.workOrderId, 180),
+    customerId: text(job.customerId, 180),
+    propertyId: text(job.propertyId, 180),
+  });
+  const reportByInterventionId = new Map(reports.map((report) => [report.interventionId, report]));
+  for (const finding of findings) {
+    const report = reportByInterventionId.get(finding.interventionId);
+    if (!report) {
+      throw fieldError('field_finding_identity_conflict', 'Persisted Field Finding references an intervention without a canonical report projection.', 409);
+    }
+    const section = report.template.sections.find((candidate) => candidate.id === finding.sectionId);
+    if (!section || section.type !== 'findings') {
+      throw fieldError('field_finding_identity_conflict', 'Persisted Field Finding references an invalid report section.', 409);
+    }
+    if (finding.visitAssetId !== report.visitAssetId || finding.assetId !== report.assetId) {
+      throw fieldError('field_finding_identity_conflict', 'Persisted Field Finding does not match its Work Intervention equipment identity.', 409);
+    }
+    report.findings.push(finding);
+  }
+  for (const report of reports) {
+    report.findings.sort((left, right) => left.observedAt.localeCompare(right.observedAt) || left.id.localeCompare(right.id));
+  }
+  return reports;
+}
+
 function reportSectionOptions(job, reports, action, sectionType) {
   if (text(job?.fieldVisit?.status, 80) !== 'in_progress') return [];
   if (!Array.isArray(job?.allowedActions) || !job.allowedActions.includes(action)) return [];
@@ -188,12 +219,18 @@ function reportMeasurementOptions(job, reports) {
   return reportSectionOptions(job, reports, 'measurement.add', 'measurement_table');
 }
 
+function reportFindingOptions(job, reports) {
+  return reportSectionOptions(job, reports, 'finding.add', 'findings');
+}
+
 async function attachInterventionReportsToJob(db, job) {
   let reports = await loadInterventionReportRecords(db, job);
   reports = await attachReportEvidence(db, job, reports);
   reports = await attachReportMeasurements(db, job, reports);
+  reports = await attachReportFindings(db, job, reports);
   const photoOptions = reportPhotoOptions(job, reports);
   const measurementOptions = reportMeasurementOptions(job, reports);
+  const findingOptions = reportFindingOptions(job, reports);
   return {
     ...job,
     interventionReports: reports,
@@ -201,15 +238,19 @@ async function attachInterventionReportsToJob(db, job) {
     canAddReportPhoto: photoOptions.length > 0,
     reportMeasurementOptions: measurementOptions,
     canAddReportMeasurement: measurementOptions.length > 0,
+    reportFindingOptions: findingOptions,
+    canAddReportFinding: findingOptions.length > 0,
   };
 }
 
 module.exports.REPORT_SECTION_STATUSES = REPORT_SECTION_STATUSES;
 module.exports.attachInterventionReportsToJob = attachInterventionReportsToJob;
 module.exports.attachReportEvidence = attachReportEvidence;
+module.exports.attachReportFindings = attachReportFindings;
 module.exports.attachReportMeasurements = attachReportMeasurements;
 module.exports.loadInterventionReportRecords = loadInterventionReportRecords;
 module.exports.projectReportSectionStatus = projectReportSectionStatus;
+module.exports.reportFindingOptions = reportFindingOptions;
 module.exports.reportMeasurementOptions = reportMeasurementOptions;
 module.exports.reportPhotoOptions = reportPhotoOptions;
 module.exports.reportProjectionFromStored = reportProjectionFromStored;
