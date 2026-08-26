@@ -57,6 +57,8 @@ test('malformed configured Field metadata fails closed rather than silently drop
     { version: 1, reportTemplate: { ...service().fieldExecutionDefinition.reportTemplate, sections: [{ id: 'x', title: 'X', type: 'future_type', required: true }] } },
     { version: 1, reportTemplate: { ...service().fieldExecutionDefinition.reportTemplate, sections: [{ id: 'x', title: 'X', type: 'photos' }] } },
     { version: 1, reportTemplate: { ...service().fieldExecutionDefinition.reportTemplate, sections: [{ id: 'x', title: 'X', type: 'photos', required: true, minEvidenceCount: -1 }] } },
+    { version: 1, reportTemplate: { ...service().fieldExecutionDefinition.reportTemplate, sections: [{ id: '../photos', title: 'Unsafe', type: 'photos', required: true }] } },
+    { version: 1, reportTemplate: { ...service().fieldExecutionDefinition.reportTemplate, sections: [{ id: 'photos/other', title: 'Unsafe', type: 'photos', required: true }] } },
     { version: 1, reportTemplate: { ...service().fieldExecutionDefinition.reportTemplate, sections: [
       { id: 'same', title: 'A', type: 'photos', required: true },
       { id: 'same', title: 'B', type: 'findings', required: false },
