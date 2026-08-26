@@ -7,10 +7,7 @@ const {
   REPORT_EVIDENCE_TARGET_TYPE,
   projectReportPhotoEvidence,
 } = require('./fieldOperationsReportEvidence');
-const {
-  loadFieldMeasurements,
-  projectFieldMeasurement,
-} = require('./fieldOperationsMeasurements');
+const { loadFieldMeasurements } = require('./fieldOperationsMeasurements');
 const {
   WORK_INTERVENTION_COLLECTION,
   projectWorkIntervention,
@@ -142,27 +139,25 @@ async function attachReportEvidence(db, job, reports) {
 async function attachReportMeasurements(db, job, reports) {
   const visitId = text(job?.fieldVisit?.id, 180);
   if (!visitId || reports.length === 0) return reports;
-  const measurements = await loadFieldMeasurements(db, visitId);
+  const measurements = await loadFieldMeasurements(db, visitId, {
+    workOrderId: text(job.workOrderId, 180),
+    customerId: text(job.customerId, 180),
+    propertyId: text(job.propertyId, 180),
+  });
   const reportByInterventionId = new Map(reports.map((report) => [report.interventionId, report]));
-  for (const rawMeasurement of measurements) {
-    const report = reportByInterventionId.get(rawMeasurement.interventionId);
+  for (const measurement of measurements) {
+    const report = reportByInterventionId.get(measurement.interventionId);
     if (!report) {
       throw fieldError('field_measurement_identity_conflict', 'Persisted Field Measurement references an intervention without a canonical report projection.', 409);
     }
-    const section = report.template.sections.find((candidate) => candidate.id === rawMeasurement.sectionId);
+    const section = report.template.sections.find((candidate) => candidate.id === measurement.sectionId);
     if (!section || section.type !== 'measurement_table') {
       throw fieldError('field_measurement_identity_conflict', 'Persisted Field Measurement references an invalid report section.', 409);
     }
-    report.measurements.push(projectFieldMeasurement(rawMeasurement, {
-      visitId,
-      workOrderId: text(job.workOrderId, 180),
-      customerId: text(job.customerId, 180),
-      propertyId: text(job.propertyId, 180),
-      visitAssetId: report.visitAssetId,
-      assetId: report.assetId,
-      interventionId: report.interventionId,
-      sectionId: section.id,
-    }));
+    if (measurement.visitAssetId !== report.visitAssetId || measurement.assetId !== report.assetId) {
+      throw fieldError('field_measurement_identity_conflict', 'Persisted Field Measurement does not match its Work Intervention equipment identity.', 409);
+    }
+    report.measurements.push(measurement);
   }
   for (const report of reports) {
     report.measurements.sort((left, right) => left.measuredAt.localeCompare(right.measuredAt) || left.id.localeCompare(right.id));
