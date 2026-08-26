@@ -143,6 +143,37 @@ function intervention(overrides = {}) {
   };
 }
 
+function service(overrides = {}) {
+  return {
+    id: 'service-standard',
+    itemType: 'Servicio',
+    name: '12K Standard Service',
+    category: 'Maintenance',
+    durationMinutes: 60,
+    active: true,
+    serviceDefinition: { version: 1, bookingCode: '12k_standard', duration: { minutes: 60 } },
+    ...overrides,
+  };
+}
+
+function serviceWithTemplate(overrides = {}) {
+  return service({
+    fieldExecutionDefinition: {
+      version: 1,
+      reportTemplate: {
+        id: 'standard-service-report',
+        name: 'Standard Service Report',
+        version: 3,
+        sections: [
+          { id: 'condition', title: 'Condition', type: 'checklist', required: true },
+          { id: 'photos', title: 'Photos', type: 'photos', required: true, minEvidenceCount: 2 },
+        ],
+      },
+    },
+    ...overrides,
+  });
+}
+
 function identity(overrides = {}) {
   return {
     uid: 'uid-1', staffId: 'staff-1', name: 'Tech One', email: 'tech@example.invalid',
@@ -159,6 +190,7 @@ function fixture(options = {}) {
     workVisits: options.visits || [options.visit || baseVisit()],
     workOrders: [options.order || baseOrder()],
     workInterventions: [options.intervention || intervention()],
+    services: options.services || [options.service || service()],
   });
   const auditEvents = [];
   let clock = 0;
@@ -202,6 +234,48 @@ test('confirmed intervention starts actual execution with performer, timestamp, 
   assert.equal(auditEvents.length, 1);
   assert.deepEqual(auditEvents[0].before, { status: 'confirmed', version: 1 });
   assert.equal(auditEvents[0].after.status, 'in_progress');
+});
+
+test('starting execution freezes configured Service report template and initializes section status', async () => {
+  const { store, auditEvents, transition } = fixture({ service: serviceWithTemplate() });
+  const result = await transition(input());
+  assert.equal(result.workIntervention.templateId, 'standard-service-report');
+  assert.equal(result.workIntervention.templateVersion, 3);
+  const stored = store.get('workInterventions', 'WI-1');
+  assert.deepEqual(stored.reportTemplateSnapshot, {
+    id: 'standard-service-report',
+    name: 'Standard Service Report',
+    serviceId: 'service-standard',
+    version: 3,
+    sections: [
+      { id: 'condition', title: 'Condition', type: 'checklist', required: true },
+      { id: 'photos', title: 'Photos', type: 'photos', required: true, minEvidenceCount: 2 },
+    ],
+  });
+  assert.deepEqual(stored.reportSectionStatus, { condition: 'pending', photos: 'pending' });
+  assert.equal(auditEvents[0].after.templateId, 'standard-service-report');
+  assert.equal(auditEvents[0].after.templateVersion, 3);
+});
+
+test('starting execution fails closed when canonical Service is missing or configured template is malformed', async () => {
+  const missing = fixture({ services: [] });
+  await assert.rejects(
+    () => missing.transition(input({ requestId: 'missing-service' })),
+    (error) => error?.code === 'service_not_available' && error?.status === 409,
+  );
+  assert.equal(missing.store.get('workInterventions', 'WI-1').status, 'confirmed');
+
+  const malformed = fixture({ service: serviceWithTemplate({
+    fieldExecutionDefinition: {
+      version: 1,
+      reportTemplate: { id: 'bad', name: 'Bad', version: 1, sections: [] },
+    },
+  }) });
+  await assert.rejects(
+    () => malformed.transition(input({ requestId: 'bad-template' })),
+    (error) => error?.code === 'invalid_field_report_template' && error?.status === 409,
+  );
+  assert.equal(malformed.store.get('workInterventions', 'WI-1').status, 'confirmed');
 });
 
 test('started intervention completes only after execution and adds the resolving technician without erasing prior performers', async () => {
@@ -326,8 +400,9 @@ test('stale expectedVersion fails closed and exact retry is idempotent only for 
   );
 });
 
-test('audit failure rolls back intervention mutation', async () => {
+test('audit failure rolls back intervention mutation including report-template snapshot', async () => {
   const { store, transition } = fixture({
+    service: serviceWithTemplate(),
     appendAuditInTransaction: async () => { throw new Error('audit unavailable'); },
   });
   await assert.rejects(() => transition(input()), /audit unavailable/);
@@ -335,4 +410,5 @@ test('audit failure rolls back intervention mutation', async () => {
   assert.equal(stored.status, 'confirmed');
   assert.equal(stored.version, 1);
   assert.equal(stored.startedAt, undefined);
+  assert.equal(stored.reportTemplateSnapshot, undefined);
 });
