@@ -14,6 +14,7 @@ const REPORT_SECTION_TYPES = new Set([
   'findings',
   'photos',
   'free_text',
+  'voice_note',
   'customer_acknowledgement',
 ] as const);
 const REPORT_SECTION_STATUSES = new Set(['pending', 'in_progress', 'completed'] as const);
@@ -28,6 +29,7 @@ export type FieldReportSectionType =
   | 'findings'
   | 'photos'
   | 'free_text'
+  | 'voice_note'
   | 'customer_acknowledgement';
 export type FieldReportSectionStatus = 'pending' | 'in_progress' | 'completed';
 export type FieldMeasurementMoment = 'before' | 'during' | 'after' | 'diagnostic' | 'general';
