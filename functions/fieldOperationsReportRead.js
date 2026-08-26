@@ -10,6 +10,7 @@ const {
 const { loadFieldMeasurements } = require('./fieldOperationsMeasurements');
 const { loadFieldFindings } = require('./fieldOperationsFindings');
 const { loadFieldChecklistResponses } = require('./fieldOperationsChecklistResponses');
+const { loadFieldFreeTextResponses } = require('./fieldOperationsFreeTextResponses');
 const {
   WORK_INTERVENTION_COLLECTION,
   projectWorkIntervention,
@@ -77,6 +78,7 @@ function reportProjectionFromStored(storedRecord, projectedIntervention) {
     measurements: [],
     findings: [],
     checklistResponses: [],
+    freeTextResponses: [],
   };
 }
 
@@ -247,6 +249,54 @@ async function attachReportChecklistResponses(db, job, reports) {
   return reports;
 }
 
+async function attachReportFreeTextResponses(db, job, reports) {
+  const visitId = text(job?.fieldVisit?.id, 180);
+  if (!visitId || reports.length === 0) return reports;
+  const responses = await loadFieldFreeTextResponses(db, visitId, {
+    workOrderId: text(job.workOrderId, 180),
+    customerId: text(job.customerId, 180),
+    propertyId: text(job.propertyId, 180),
+  });
+  const reportByInterventionId = new Map(reports.map((report) => [report.interventionId, report]));
+  const responseKeys = new Set();
+  for (const response of responses) {
+    const report = reportByInterventionId.get(response.interventionId);
+    if (!report) {
+      throw fieldError('field_free_text_response_identity_conflict', 'Persisted free-text response references an intervention without a canonical report projection.', 409);
+    }
+    const section = report.template.sections.find((candidate) => candidate.id === response.sectionId);
+    if (!section || section.type !== 'free_text') {
+      throw fieldError('field_free_text_response_identity_conflict', 'Persisted free-text response references an invalid frozen report section.', 409);
+    }
+    if (response.visitAssetId !== report.visitAssetId || response.assetId !== report.assetId) {
+      throw fieldError('field_free_text_response_identity_conflict', 'Persisted free-text response does not match its Work Intervention equipment identity.', 409);
+    }
+    const key = `${response.interventionId}:${response.sectionId}`;
+    if (responseKeys.has(key)) {
+      throw fieldError('field_free_text_response_identity_conflict', 'More than one canonical free-text response exists for the same report section.', 409);
+    }
+    responseKeys.add(key);
+    report.freeTextResponses.push(response);
+  }
+  for (const report of reports) {
+    report.freeTextResponses.sort((left, right) => left.sectionId.localeCompare(right.sectionId));
+    const responseBySectionId = new Map(report.freeTextResponses.map((response) => [response.sectionId, response]));
+    for (const section of report.template.sections.filter((candidate) => candidate.type === 'free_text')) {
+      const response = responseBySectionId.get(section.id);
+      const completed = Boolean(response && response.value.length > 0);
+      if (completed !== (report.sectionStatus?.[section.id] === 'completed')) {
+        if (completed || report.sectionStatus?.[section.id] === 'completed') {
+          throw fieldError('field_free_text_report_state_conflict', 'Free-text response does not match the persisted report section completion state.', 409, {
+            interventionId: report.interventionId,
+            sectionId: section.id,
+          });
+        }
+      }
+    }
+  }
+  return reports;
+}
+
 function reportSectionOptions(job, reports, action, sectionType) {
   if (text(job?.fieldVisit?.status, 80) !== 'in_progress') return [];
   if (!Array.isArray(job?.allowedActions) || !job.allowedActions.includes(action)) return [];
@@ -256,7 +306,7 @@ function reportSectionOptions(job, reports, action, sectionType) {
     if (!intervention || intervention.status !== 'in_progress') return null;
     const sectionIds = report.template.sections
       .filter((section) => section.type === sectionType)
-      .filter((section) => sectionType === 'checklist' || report.sectionStatus?.[section.id] !== 'completed')
+      .filter((section) => sectionType === 'checklist' || sectionType === 'free_text' || report.sectionStatus?.[section.id] !== 'completed')
       .map((section) => section.id);
     return sectionIds.length > 0 ? { interventionId: report.interventionId, sectionIds } : null;
   }).filter(Boolean);
@@ -278,16 +328,22 @@ function reportChecklistOptions(job, reports) {
   return reportSectionOptions(job, reports, 'report.edit', 'checklist');
 }
 
+function reportFreeTextOptions(job, reports) {
+  return reportSectionOptions(job, reports, 'report.edit', 'free_text');
+}
+
 async function attachInterventionReportsToJob(db, job) {
   let reports = await loadInterventionReportRecords(db, job);
   reports = await attachReportEvidence(db, job, reports);
   reports = await attachReportMeasurements(db, job, reports);
   reports = await attachReportFindings(db, job, reports);
   reports = await attachReportChecklistResponses(db, job, reports);
+  reports = await attachReportFreeTextResponses(db, job, reports);
   const photoOptions = reportPhotoOptions(job, reports);
   const measurementOptions = reportMeasurementOptions(job, reports);
   const findingOptions = reportFindingOptions(job, reports);
   const checklistOptions = reportChecklistOptions(job, reports);
+  const freeTextOptions = reportFreeTextOptions(job, reports);
   return {
     ...job,
     interventionReports: reports,
@@ -299,6 +355,8 @@ async function attachInterventionReportsToJob(db, job) {
     canAddReportFinding: findingOptions.length > 0,
     reportChecklistOptions: checklistOptions,
     canEditReportChecklist: checklistOptions.length > 0,
+    reportFreeTextOptions: freeTextOptions,
+    canEditReportFreeText: freeTextOptions.length > 0,
   };
 }
 
@@ -307,11 +365,13 @@ module.exports.attachInterventionReportsToJob = attachInterventionReportsToJob;
 module.exports.attachReportChecklistResponses = attachReportChecklistResponses;
 module.exports.attachReportEvidence = attachReportEvidence;
 module.exports.attachReportFindings = attachReportFindings;
+module.exports.attachReportFreeTextResponses = attachReportFreeTextResponses;
 module.exports.attachReportMeasurements = attachReportMeasurements;
 module.exports.loadInterventionReportRecords = loadInterventionReportRecords;
 module.exports.projectReportSectionStatus = projectReportSectionStatus;
 module.exports.reportChecklistOptions = reportChecklistOptions;
 module.exports.reportFindingOptions = reportFindingOptions;
+module.exports.reportFreeTextOptions = reportFreeTextOptions;
 module.exports.reportMeasurementOptions = reportMeasurementOptions;
 module.exports.reportPhotoOptions = reportPhotoOptions;
 module.exports.reportProjectionFromStored = reportProjectionFromStored;
