@@ -19,6 +19,7 @@ const REPORT_SECTION_TYPES = new Set([
 const REPORT_SECTION_STATUSES = new Set(['pending', 'in_progress', 'completed'] as const);
 const REPORT_SECTION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
 const REPORTABLE_INTERVENTION_STATUSES = new Set(['in_progress', 'pending_part', 'completed'] as const);
+const MEASUREMENT_MOMENTS = new Set(['before', 'during', 'after', 'diagnostic', 'general'] as const);
 const ALLOWED_ACTIONS = new Set<string>(FIELD_ALLOWED_ACTIONS);
 
 export type FieldReportSectionType =
@@ -29,6 +30,7 @@ export type FieldReportSectionType =
   | 'free_text'
   | 'customer_acknowledgement';
 export type FieldReportSectionStatus = 'pending' | 'in_progress' | 'completed';
+export type FieldMeasurementMoment = 'before' | 'during' | 'after' | 'diagnostic' | 'general';
 
 export type FieldReportSection = {
   id: string;
@@ -67,6 +69,26 @@ export type FieldReportPhotoEvidence = {
   version: number;
 };
 
+export type FieldReportMeasurement = {
+  id: string;
+  visitId: string;
+  visitAssetId: string;
+  assetId: string;
+  interventionId: string;
+  sectionId: string;
+  metric: string;
+  value: number | string;
+  unit: string;
+  moment: FieldMeasurementMoment;
+  technicianStaffId: string;
+  measuredAt: string;
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+  updatedBy: string;
+  version: number;
+};
+
 export type FieldInterventionReport = {
   interventionId: string;
   visitAssetId: string;
@@ -75,17 +97,23 @@ export type FieldInterventionReport = {
   template: FieldReportTemplateSnapshot;
   sectionStatus: Record<string, FieldReportSectionStatus>;
   evidence: FieldReportPhotoEvidence[];
+  measurements: FieldReportMeasurement[];
 };
 
-export type FieldReportPhotoOption = {
+export type FieldReportSectionOption = {
   interventionId: string;
   sectionIds: string[];
 };
+
+export type FieldReportPhotoOption = FieldReportSectionOption;
+export type FieldReportMeasurementOption = FieldReportSectionOption;
 
 export type FieldReportJobDetail = FieldApprovalJobDetail & {
   interventionReports: FieldInterventionReport[];
   reportPhotoOptions: FieldReportPhotoOption[];
   canAddReportPhoto: boolean;
+  reportMeasurementOptions: FieldReportMeasurementOption[];
+  canAddReportMeasurement: boolean;
 };
 
 export type FieldAddReportPhotoEvidenceResponse = {
@@ -93,6 +121,16 @@ export type FieldAddReportPhotoEvidenceResponse = {
   version: typeof FIELD_AUTHORITY_API_VERSION;
   replayed: boolean;
   evidence: FieldReportPhotoEvidence;
+  workInterventionVersion: number;
+  allowedActions: FieldAllowedAction[];
+  auditEventId?: string;
+};
+
+export type FieldAddReportMeasurementResponse = {
+  success: true;
+  version: typeof FIELD_AUTHORITY_API_VERSION;
+  replayed: boolean;
+  measurement: FieldReportMeasurement;
   workInterventionVersion: number;
   allowedActions: FieldAllowedAction[];
   auditEventId?: string;
@@ -126,6 +164,10 @@ function nonNegativeSafeInteger(value: unknown) {
 
 function optionalNonNegativeSafeInteger(value: unknown) {
   return value === undefined || nonNegativeSafeInteger(value);
+}
+
+function finiteNumberOrNonEmptyString(value: unknown): value is number | string {
+  return (typeof value === 'number' && Number.isFinite(value)) || nonEmptyString(value);
 }
 
 function uniqueStrings(value: unknown, { allowEmpty = true } = {}) {
@@ -199,6 +241,29 @@ function reportPhotoEvidenceValid(value: unknown): value is FieldReportPhotoEvid
     && positiveSafeInteger(item.version));
 }
 
+function reportMeasurementValid(value: unknown): value is FieldReportMeasurement {
+  const item = record(value);
+  return Boolean(item
+    && nonEmptyString(item.id)
+    && nonEmptyString(item.visitId)
+    && nonEmptyString(item.visitAssetId)
+    && nonEmptyString(item.assetId)
+    && nonEmptyString(item.interventionId)
+    && nonEmptyString(item.sectionId)
+    && nonEmptyString(item.metric)
+    && finiteNumberOrNonEmptyString(item.value)
+    && nonEmptyString(item.unit)
+    && nonEmptyString(item.moment)
+    && MEASUREMENT_MOMENTS.has(item.moment as FieldMeasurementMoment)
+    && nonEmptyString(item.technicianStaffId)
+    && timestamp(item.measuredAt)
+    && timestamp(item.createdAt)
+    && nonEmptyString(item.createdBy)
+    && timestamp(item.updatedAt)
+    && nonEmptyString(item.updatedBy)
+    && positiveSafeInteger(item.version));
+}
+
 function interventionReportValid(value: unknown): value is FieldInterventionReport {
   const item = record(value);
   if (!item
@@ -209,11 +274,13 @@ function interventionReportValid(value: unknown): value is FieldInterventionRepo
     || !reportTemplateValid(item.template)
     || !sectionStatusValid(item.sectionStatus, item.template as FieldReportTemplateSnapshot)
     || !Array.isArray(item.evidence)
-    || !item.evidence.every(reportPhotoEvidenceValid)) return false;
+    || !item.evidence.every(reportPhotoEvidenceValid)
+    || !Array.isArray(item.measurements)
+    || !item.measurements.every(reportMeasurementValid)) return false;
   return (item.template as FieldReportTemplateSnapshot).serviceId === item.serviceCatalogItemId;
 }
 
-function reportPhotoOptionsValid(value: unknown): value is FieldReportPhotoOption[] {
+function reportSectionOptionsValid(value: unknown): value is FieldReportSectionOption[] {
   if (!Array.isArray(value)) return false;
   const interventionIds = new Set<string>();
   for (const candidate of value) {
@@ -225,12 +292,32 @@ function reportPhotoOptionsValid(value: unknown): value is FieldReportPhotoOptio
   return true;
 }
 
+function reportOptionRelationsValid(
+  options: FieldReportSectionOption[],
+  reportsByInterventionId: Map<string, FieldInterventionReport>,
+  interventionById: Map<string, FieldApprovalJobDetail['workInterventions'][number]>,
+  sectionType: FieldReportSectionType,
+) {
+  for (const option of options) {
+    const report = reportsByInterventionId.get(option.interventionId);
+    const intervention = interventionById.get(option.interventionId);
+    if (!report || !intervention || intervention.status !== 'in_progress') return false;
+    const eligibleSections = new Map(
+      report.template.sections
+        .filter((section) => section.type === sectionType)
+        .map((section) => [section.id, section]),
+    );
+    if (option.sectionIds.some((sectionId) => !eligibleSections.has(sectionId) || report.sectionStatus[sectionId] === 'completed')) return false;
+  }
+  return true;
+}
+
 function reportRelationsValid(job: FieldReportJobDetail) {
   const visitId = job.fieldVisit?.id ?? '';
   const interventionById = new Map(job.workInterventions.map((intervention) => [intervention.id, intervention]));
   const reportsByInterventionId = new Map<string, FieldInterventionReport>();
 
-  if ((job.interventionReports.length > 0 || job.reportPhotoOptions.length > 0) && !visitId) return false;
+  if ((job.interventionReports.length > 0 || job.reportPhotoOptions.length > 0 || job.reportMeasurementOptions.length > 0) && !visitId) return false;
   for (const report of job.interventionReports) {
     if (reportsByInterventionId.has(report.interventionId)) return false;
     const intervention = interventionById.get(report.interventionId);
@@ -256,6 +343,19 @@ function reportRelationsValid(job: FieldReportJobDetail) {
         || evidence.assetId !== report.assetId
         || evidence.interventionId !== report.interventionId) return false;
     }
+
+    const measurementIds = new Set<string>();
+    for (const measurement of report.measurements) {
+      if (measurementIds.has(measurement.id)) return false;
+      measurementIds.add(measurement.id);
+      const section = sectionById.get(measurement.sectionId);
+      if (!section
+        || section.type !== 'measurement_table'
+        || measurement.visitId !== visitId
+        || measurement.visitAssetId !== report.visitAssetId
+        || measurement.assetId !== report.assetId
+        || measurement.interventionId !== report.interventionId) return false;
+    }
     reportsByInterventionId.set(report.interventionId, report);
   }
 
@@ -265,21 +365,16 @@ function reportRelationsValid(job: FieldReportJobDetail) {
     if (hasTemplateIdentity !== Boolean(report)) return false;
   }
 
-  for (const option of job.reportPhotoOptions) {
-    const report = reportsByInterventionId.get(option.interventionId);
-    const intervention = interventionById.get(option.interventionId);
-    if (!report || !intervention || intervention.status !== 'in_progress') return false;
-    const photoSections = new Map(
-      report.template.sections
-        .filter((section) => section.type === 'photos')
-        .map((section) => [section.id, section]),
-    );
-    if (option.sectionIds.some((sectionId) => !photoSections.has(sectionId) || report.sectionStatus[sectionId] === 'completed')) return false;
-  }
+  if (!reportOptionRelationsValid(job.reportPhotoOptions, reportsByInterventionId, interventionById, 'photos')) return false;
+  if (!reportOptionRelationsValid(job.reportMeasurementOptions, reportsByInterventionId, interventionById, 'measurement_table')) return false;
 
   if (job.canAddReportPhoto !== (job.reportPhotoOptions.length > 0)) return false;
   if (job.canAddReportPhoto) {
     if (job.fieldVisit?.status !== 'in_progress' || !job.allowedActions.includes('evidence.add')) return false;
+  }
+  if (job.canAddReportMeasurement !== (job.reportMeasurementOptions.length > 0)) return false;
+  if (job.canAddReportMeasurement) {
+    if (job.fieldVisit?.status !== 'in_progress' || !job.allowedActions.includes('measurement.add')) return false;
   }
   return true;
 }
@@ -291,8 +386,10 @@ export function parseFieldReportJobResponse(value: unknown): { success: true; ve
   if (!rawJob
     || !Array.isArray(rawJob.interventionReports)
     || !rawJob.interventionReports.every(interventionReportValid)
-    || !reportPhotoOptionsValid(rawJob.reportPhotoOptions)
-    || typeof rawJob.canAddReportPhoto !== 'boolean') {
+    || !reportSectionOptionsValid(rawJob.reportPhotoOptions)
+    || typeof rawJob.canAddReportPhoto !== 'boolean'
+    || !reportSectionOptionsValid(rawJob.reportMeasurementOptions)
+    || typeof rawJob.canAddReportMeasurement !== 'boolean') {
     throw new Error('Field Operations returned malformed report data. Refresh and try again.');
   }
   const job = base.job as FieldReportJobDetail;
@@ -315,4 +412,19 @@ export function parseFieldAddReportPhotoEvidenceResponse(value: unknown): FieldA
     throw new Error('Field Operations returned malformed report photo data. Refresh and try again.');
   }
   return payload as FieldAddReportPhotoEvidenceResponse;
+}
+
+export function parseFieldAddReportMeasurementResponse(value: unknown): FieldAddReportMeasurementResponse {
+  const payload = record(value);
+  if (!payload
+    || payload.success !== true
+    || payload.version !== FIELD_AUTHORITY_API_VERSION
+    || typeof payload.replayed !== 'boolean'
+    || !reportMeasurementValid(payload.measurement)
+    || !positiveSafeInteger(payload.workInterventionVersion)
+    || !allowedActionsValid(payload.allowedActions)
+    || !optionalString(payload.auditEventId)) {
+    throw new Error('Field Operations returned malformed report measurement data. Refresh and try again.');
+  }
+  return payload as FieldAddReportMeasurementResponse;
 }
