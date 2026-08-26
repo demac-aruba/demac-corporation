@@ -26,6 +26,7 @@ const { createAddReportPhotoEvidenceCommand } = require('./fieldOperationsReport
 const { createAddFieldMeasurementCommand } = require('./fieldOperationsMeasurements');
 const { createAddFieldFindingCommand } = require('./fieldOperationsFindings');
 const { createSetFieldChecklistItemCommand } = require('./fieldOperationsChecklistResponses');
+const { createSetFieldFreeTextResponseCommand } = require('./fieldOperationsFreeTextResponses');
 const { attachInterventionReportsToJob } = require('./fieldOperationsReportRead');
 const {
   attachScopeChangesToJob,
@@ -53,6 +54,7 @@ const FIELD_ACTIONS = new Set([
   'add_report_measurement',
   'add_report_finding',
   'set_report_checklist_item',
+  'set_report_free_text',
 ]);
 
 function cleanText(value, limit = 1000) {
@@ -113,6 +115,7 @@ function createFieldOperationsApi({
   addFieldMeasurement,
   addFieldFinding,
   setFieldChecklistItem,
+  setFieldFreeTextResponse,
 } = {}) {
   if (!db || typeof db.collection !== 'function') throw new Error('A Firestore-compatible db is required.');
   if (typeof verifyIdToken !== 'function') throw new Error('verifyIdToken is required.');
@@ -129,6 +132,7 @@ function createFieldOperationsApi({
   if (addFieldMeasurement !== undefined && typeof addFieldMeasurement !== 'function') throw new Error('addFieldMeasurement must be a function when provided.');
   if (addFieldFinding !== undefined && typeof addFieldFinding !== 'function') throw new Error('addFieldFinding must be a function when provided.');
   if (setFieldChecklistItem !== undefined && typeof setFieldChecklistItem !== 'function') throw new Error('setFieldChecklistItem must be a function when provided.');
+  if (setFieldFreeTextResponse !== undefined && typeof setFieldFreeTextResponse !== 'function') throw new Error('setFieldFreeTextResponse must be a function when provided.');
 
   async function authenticate(request) {
     const token = bearerToken(request);
@@ -377,6 +381,21 @@ function createFieldOperationsApi({
       });
       return { ...updated, version: FIELD_OPERATIONS_API_VERSION };
     }
+    if (action === 'set_report_free_text') {
+      if (typeof setFieldFreeTextResponse !== 'function') {
+        throw fieldError('mutation_not_configured', 'Work Intervention report free-text editing is not configured in this runtime.', 503);
+      }
+      const updated = await setFieldFreeTextResponse({
+        identity,
+        visitId: cleanText(data.visitId, 180),
+        interventionId: cleanText(data.interventionId, 180),
+        sectionId: cleanText(data.sectionId, 120),
+        value: typeof data.value === 'string' ? data.value.slice(0, 5001) : data.value,
+        expectedVersion: data.expectedVersion,
+        requestId: cleanText(data.requestId, 240),
+      });
+      return { ...updated, version: FIELD_OPERATIONS_API_VERSION };
+    }
     throw fieldError('unsupported_action', `Unsupported Field Operations action: ${action || 'missing'}.`, 400);
   }
 
@@ -440,6 +459,7 @@ function getDefaultApi() {
     const addFieldMeasurement = createAddFieldMeasurementCommand({ db, resolveAssignment, appendAuditInTransaction });
     const addFieldFinding = createAddFieldFindingCommand({ db, resolveAssignment, appendAuditInTransaction });
     const setFieldChecklistItem = createSetFieldChecklistItemCommand({ db, resolveAssignment, appendAuditInTransaction });
+    const setFieldFreeTextResponse = createSetFieldFreeTextResponseCommand({ db, resolveAssignment, appendAuditInTransaction });
     defaultApi = createFieldOperationsApi({
       db,
       verifyIdToken: (token) => getAuth().verifyIdToken(token, true),
@@ -455,6 +475,7 @@ function getDefaultApi() {
       addFieldMeasurement,
       addFieldFinding,
       setFieldChecklistItem,
+      setFieldFreeTextResponse,
       reportError: ({ action, status, code, error }) => logger.error('Field Operations request failed', {
         action: cleanText(action, 120) || 'unknown',
         status,
