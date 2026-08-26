@@ -2,7 +2,12 @@
 
 const { fieldSnapshotRecord } = require('./fieldOperationsFirestoreData');
 const { fieldError } = require('./fieldOperationsAuthorityCore');
-const { projectStoredReportTemplateSnapshot } = require('./fieldOperationsReportTemplates');
+const {
+  REPORT_SECTION_STATUSES,
+  projectStoredReportSectionStatus,
+  projectStoredReportTemplateSnapshot,
+  reportTemplateCompletion,
+} = require('./fieldOperationsReportTemplates');
 const {
   REPORT_EVIDENCE_TARGET_TYPE,
   projectReportPhotoEvidence,
@@ -16,8 +21,6 @@ const {
   projectWorkIntervention,
 } = require('./fieldOperationsVisitInterventions');
 
-const REPORT_SECTION_STATUSES = new Set(['pending', 'in_progress', 'completed']);
-
 function text(value, limit = 1000) {
   return String(value ?? '').trim().slice(0, limit);
 }
@@ -26,38 +29,12 @@ function snapshotRecords(snapshot) {
   return (snapshot?.docs || []).map(fieldSnapshotRecord);
 }
 
-function projectReportSectionStatus(value, template) {
-  if (!template) {
-    if (value !== undefined && value !== null) {
-      throw fieldError('work_intervention_report_state_conflict', 'Work Intervention has report section state without a frozen report template.', 409);
-    }
-    return undefined;
-  }
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw fieldError('invalid_work_intervention_report_state', 'Work Intervention report section state is missing or invalid.', 409);
-  }
-  const expectedIds = template.sections.map((section) => section.id);
-  const actualIds = Object.keys(value);
-  if (actualIds.length !== expectedIds.length || expectedIds.some((id) => !Object.prototype.hasOwnProperty.call(value, id))) {
-    throw fieldError('invalid_work_intervention_report_state', 'Work Intervention report section state does not match its frozen template.', 409);
-  }
-  const result = {};
-  for (const id of expectedIds) {
-    const status = text(value[id], 40);
-    if (!REPORT_SECTION_STATUSES.has(status)) {
-      throw fieldError('invalid_work_intervention_report_state', 'Work Intervention report section status is invalid.', 409, { sectionId: id, status: status || null });
-    }
-    result[id] = status;
-  }
-  return result;
-}
-
 function reportProjectionFromStored(storedRecord, projectedIntervention) {
   const template = projectStoredReportTemplateSnapshot(
     storedRecord?.reportTemplateSnapshot,
     projectedIntervention.serviceCatalogItemId,
   );
-  const sectionStatus = projectReportSectionStatus(storedRecord?.reportSectionStatus, template);
+  const sectionStatus = projectStoredReportSectionStatus(storedRecord?.reportSectionStatus, template);
   if (!template) {
     if (projectedIntervention.templateId || projectedIntervention.templateVersion !== undefined) {
       throw fieldError('work_intervention_report_state_conflict', 'Work Intervention template identity exists without a frozen report template.', 409);
@@ -74,6 +51,7 @@ function reportProjectionFromStored(storedRecord, projectedIntervention) {
     serviceCatalogItemId: projectedIntervention.serviceCatalogItemId,
     template,
     sectionStatus,
+    completion: reportTemplateCompletion(template, sectionStatus),
     evidence: [],
     measurements: [],
     findings: [],
@@ -368,7 +346,7 @@ module.exports.attachReportFindings = attachReportFindings;
 module.exports.attachReportFreeTextResponses = attachReportFreeTextResponses;
 module.exports.attachReportMeasurements = attachReportMeasurements;
 module.exports.loadInterventionReportRecords = loadInterventionReportRecords;
-module.exports.projectReportSectionStatus = projectReportSectionStatus;
+module.exports.projectReportSectionStatus = projectStoredReportSectionStatus;
 module.exports.reportChecklistOptions = reportChecklistOptions;
 module.exports.reportFindingOptions = reportFindingOptions;
 module.exports.reportFreeTextOptions = reportFreeTextOptions;
