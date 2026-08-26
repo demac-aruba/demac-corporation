@@ -44,6 +44,7 @@ test('inactive Field principals fail closed before assignment resolution', () =>
 
 test('Field HTTP authority exposes only governed reads and activated audited mutations', async () => {
   assert.deepEqual([...FIELD_ACTIONS].sort(), [
+    'add_report_finding',
     'add_report_measurement',
     'add_report_photo_evidence',
     'attach_visit_asset',
@@ -63,46 +64,24 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
     verifyIdToken: async () => ({ uid: 'unused' }),
   });
 
-  await assert.rejects(
-    () => api.execute({ action: 'prepare_visit', data: {}, identity: { operations: false } }),
-    (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
-  );
-  await assert.rejects(
-    () => api.execute({ action: 'transition_visit', data: {}, identity: { operations: false } }),
-    (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
-  );
-  await assert.rejects(
-    () => api.execute({ action: 'attach_visit_asset', data: {}, identity: { operations: false } }),
-    (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
-  );
-  await assert.rejects(
-    () => api.execute({ action: 'register_visit_asset', data: {}, identity: { operations: false } }),
-    (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
-  );
-  await assert.rejects(
-    () => api.execute({ action: 'create_planned_intervention', data: {}, identity: { operations: false } }),
-    (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
-  );
-  await assert.rejects(
-    () => api.execute({ action: 'create_additional_intervention', data: {}, identity: { operations: false } }),
-    (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
-  );
-  await assert.rejects(
-    () => api.execute({ action: 'record_additional_intervention_decision', data: {}, identity: { operations: false } }),
-    (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
-  );
-  await assert.rejects(
-    () => api.execute({ action: 'transition_intervention', data: {}, identity: { operations: false } }),
-    (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
-  );
-  await assert.rejects(
-    () => api.execute({ action: 'add_report_photo_evidence', data: {}, identity: { operations: false } }),
-    (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
-  );
-  await assert.rejects(
-    () => api.execute({ action: 'add_report_measurement', data: {}, identity: { operations: false } }),
-    (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
-  );
+  for (const action of [
+    'prepare_visit',
+    'transition_visit',
+    'attach_visit_asset',
+    'register_visit_asset',
+    'create_planned_intervention',
+    'create_additional_intervention',
+    'record_additional_intervention_decision',
+    'transition_intervention',
+    'add_report_photo_evidence',
+    'add_report_measurement',
+    'add_report_finding',
+  ]) {
+    await assert.rejects(
+      () => api.execute({ action, data: {}, identity: { operations: false } }),
+      (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
+    );
+  }
   await assert.rejects(
     () => api.execute({ action: 'start_visit', data: {}, identity: { operations: false } }),
     /Unsupported Field Operations action/,
@@ -304,62 +283,42 @@ test('create_planned_intervention authenticates and forwards only canonical inte
 });
 
 test('Field mutation actions cannot execute without authentication', async () => {
-  let prepareCalled = false;
-  let transitionCalled = false;
-  let attachCalled = false;
-  let registerCalled = false;
-  let interventionCalled = false;
-  let additionalInterventionCalled = false;
-  let decisionCalled = false;
-  let interventionTransitionCalled = false;
-  let reportPhotoCalled = false;
-  let reportMeasurementCalled = false;
+  const called = new Map();
+  const mark = (name) => async () => { called.set(name, true); return { success: true }; };
   const api = createFieldOperationsApi({
     db: authDb({ active: true, role: 'technician', staffId: 'staff-1' }),
     verifyIdToken: async () => ({ uid: 'uid-1' }),
-    prepareWorkVisit: async () => { prepareCalled = true; return { success: true }; },
-    transitionWorkVisit: async () => { transitionCalled = true; return { success: true }; },
-    attachExistingVisitAsset: async () => { attachCalled = true; return { success: true }; },
-    registerEquipmentSystem: async () => { registerCalled = true; return { success: true }; },
-    createPlannedWorkIntervention: async () => { interventionCalled = true; return { success: true }; },
-    createAdditionalWorkIntervention: async () => { additionalInterventionCalled = true; return { success: true }; },
-    recordAdditionalWorkDecision: async () => { decisionCalled = true; return { success: true }; },
-    transitionWorkIntervention: async () => { interventionTransitionCalled = true; return { success: true }; },
-    addReportPhotoEvidence: async () => { reportPhotoCalled = true; return { success: true }; },
-    addFieldMeasurement: async () => { reportMeasurementCalled = true; return { success: true }; },
+    prepareWorkVisit: mark('prepare'),
+    transitionWorkVisit: mark('transition'),
+    attachExistingVisitAsset: mark('attach'),
+    registerEquipmentSystem: mark('register'),
+    createPlannedWorkIntervention: mark('intervention'),
+    createAdditionalWorkIntervention: mark('additional'),
+    recordAdditionalWorkDecision: mark('decision'),
+    transitionWorkIntervention: mark('interventionTransition'),
+    addReportPhotoEvidence: mark('reportPhoto'),
+    addFieldMeasurement: mark('reportMeasurement'),
+    addFieldFinding: mark('reportFinding'),
   });
 
-  const prepare = await api.handle(request({ action: 'prepare_visit', data: { workOrderId: 'WO-1', requestId: 'prepare-WO-1-001' } }));
-  assert.equal(prepare.status, 401);
-  const transition = await api.handle(request({ action: 'transition_visit', data: { visitId: 'visit-WO-1', to: 'en_route', expectedVersion: 1, requestId: 'transition-route-001' } }));
-  assert.equal(transition.status, 401);
-  const attach = await api.handle(request({ action: 'attach_visit_asset', data: { visitId: 'visit-WO-1', assetId: 'AC-1', requestId: 'attach-asset-001' } }));
-  assert.equal(attach.status, 401);
-  const registration = await api.handle(request({ action: 'register_visit_asset', data: { visitId: 'visit-WO-1', requestId: 'register-asset-001' } }));
-  assert.equal(registration.status, 401);
-  const intervention = await api.handle(request({ action: 'create_planned_intervention', data: { visitId: 'visit-WO-1', visitAssetId: 'VA-1', plannedWorkLineId: 'line-standard', serviceCatalogItemId: 'service-standard', requestId: 'planned-intervention-001' } }));
-  assert.equal(intervention.status, 401);
-  const additional = await api.handle(request({ action: 'create_additional_intervention', data: { visitId: 'visit-WO-1', visitAssetId: 'VA-1', serviceCatalogItemId: 'service-standard', origin: 'client_requested_additional_work', reason: 'Second A/C', requestId: 'additional-intervention-001' } }));
-  assert.equal(additional.status, 401);
-  const decision = await api.handle(request({ action: 'record_additional_intervention_decision', data: { visitId: 'visit-WO-1', interventionId: 'WI-1', decision: 'approved', receiverName: 'Maria', requestId: 'decision-001' } }));
-  assert.equal(decision.status, 401);
-  const interventionTransition = await api.handle(request({ action: 'transition_intervention', data: { visitId: 'visit-WO-1', interventionId: 'WI-1', to: 'in_progress', expectedVersion: 1, requestId: 'intervention-start-001' } }));
-  assert.equal(interventionTransition.status, 401);
-  const reportPhoto = await api.handle(request({ action: 'add_report_photo_evidence', data: { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'photos', storagePath: 'field-evidence/visit-WO-1/interventions/WI-1/photos/photo.jpg', requestId: 'report-photo-001' } }));
-  assert.equal(reportPhoto.status, 401);
-  const reportMeasurement = await api.handle(request({ action: 'add_report_measurement', data: { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'measurements', metric: 'Temperature', value: 18, unit: 'C', moment: 'after', requestId: 'report-measurement-001' } }));
-  assert.equal(reportMeasurement.status, 401);
-
-  assert.equal(prepareCalled, false);
-  assert.equal(transitionCalled, false);
-  assert.equal(attachCalled, false);
-  assert.equal(registerCalled, false);
-  assert.equal(interventionCalled, false);
-  assert.equal(additionalInterventionCalled, false);
-  assert.equal(decisionCalled, false);
-  assert.equal(interventionTransitionCalled, false);
-  assert.equal(reportPhotoCalled, false);
-  assert.equal(reportMeasurementCalled, false);
+  const cases = [
+    ['prepare_visit', { workOrderId: 'WO-1', requestId: 'prepare-WO-1-001' }],
+    ['transition_visit', { visitId: 'visit-WO-1', to: 'en_route', expectedVersion: 1, requestId: 'transition-route-001' }],
+    ['attach_visit_asset', { visitId: 'visit-WO-1', assetId: 'AC-1', requestId: 'attach-asset-001' }],
+    ['register_visit_asset', { visitId: 'visit-WO-1', requestId: 'register-asset-001' }],
+    ['create_planned_intervention', { visitId: 'visit-WO-1', visitAssetId: 'VA-1', plannedWorkLineId: 'line-standard', serviceCatalogItemId: 'service-standard', requestId: 'planned-intervention-001' }],
+    ['create_additional_intervention', { visitId: 'visit-WO-1', visitAssetId: 'VA-1', serviceCatalogItemId: 'service-standard', origin: 'client_requested_additional_work', reason: 'Second A/C', requestId: 'additional-intervention-001' }],
+    ['record_additional_intervention_decision', { visitId: 'visit-WO-1', interventionId: 'WI-1', decision: 'approved', receiverName: 'Maria', requestId: 'decision-001' }],
+    ['transition_intervention', { visitId: 'visit-WO-1', interventionId: 'WI-1', to: 'in_progress', expectedVersion: 1, requestId: 'intervention-start-001' }],
+    ['add_report_photo_evidence', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'photos', storagePath: 'field-evidence/visit-WO-1/interventions/WI-1/photos/photo.jpg', requestId: 'report-photo-001' }],
+    ['add_report_measurement', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'measurements', metric: 'Temperature', value: 18, unit: 'C', moment: 'after', requestId: 'report-measurement-001' }],
+    ['add_report_finding', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'findings', summary: 'Drain issue', details: 'Standing water observed.', requestId: 'report-finding-001' }],
+  ];
+  for (const [action, data] of cases) {
+    const result = await api.handle(request({ action, data }));
+    assert.equal(result.status, 401);
+  }
+  assert.equal(called.size, 0);
 });
 
 test('missing and expired Firebase sessions return controlled unauthenticated errors', async () => {
