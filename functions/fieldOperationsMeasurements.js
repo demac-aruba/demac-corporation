@@ -305,10 +305,11 @@ function createAddFieldMeasurementCommand({
 async function loadFieldMeasurements(db, visitId, expectedContext = {}) {
   const normalizedVisitId = text(visitId, 180);
   if (!normalizedVisitId) return [];
+  const context = { ...expectedContext, visitId: normalizedVisitId };
   const snapshot = await db.collection(FIELD_MEASUREMENT_COLLECTION).where('visitId', '==', normalizedVisitId).get();
   return (snapshot?.docs || [])
     .map(fieldSnapshotRecord)
-    .map((record) => projectFieldMeasurement(record, { ...expectedContext, visitId: normalizedVisitId }))
+    .map((record) => projectFieldMeasurement(record, context))
     .sort((left, right) => left.measuredAt.localeCompare(right.measuredAt) || left.id.localeCompare(right.id));
 }
 
