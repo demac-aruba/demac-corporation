@@ -11,6 +11,7 @@ const {
   WORK_INTERVENTION_COLLECTION,
   projectWorkIntervention,
 } = require('./fieldOperationsVisitInterventions');
+const { fieldReportTemplateSnapshotForService } = require('./fieldOperationsReportTemplates');
 
 function text(value, limit = 1000) {
   return String(value ?? '').trim().slice(0, limit);
@@ -26,7 +27,7 @@ function uniqueStaffIds(values = [], currentStaffId = '') {
   return [...new Set(actor ? [...normalized, actor] : normalized)];
 }
 
-function transitionPatch({ stored, projected, target, note, identity, requestId, occurredAt }) {
+function transitionPatch({ projected, target, note, identity, requestId, occurredAt, reportTemplateSnapshot }) {
   if (!Number.isSafeInteger(projected.version) || projected.version < 1 || projected.version >= Number.MAX_SAFE_INTEGER) {
     throw fieldError('work_intervention_version_exhausted', 'Work Intervention version cannot be advanced safely.', 409, {
       version: projected.version,
@@ -58,6 +59,18 @@ function transitionPatch({ stored, projected, target, note, identity, requestId,
     if (!staffId) throw fieldError('technician_staff_required', 'Actual intervention execution requires a DEMAC staff identity.', 403);
     patch.startedAt = projected.startedAt || occurredAt;
     patch.performedByStaffIds = uniqueStaffIds(projected.performedByStaffIds, staffId);
+    if (reportTemplateSnapshot) {
+      if (projected.templateId && projected.templateId !== reportTemplateSnapshot.id) {
+        throw fieldError('work_intervention_template_conflict', 'Existing Work Intervention template identity conflicts with the canonical Service template.', 409);
+      }
+      if (projected.templateVersion !== undefined && projected.templateVersion !== reportTemplateSnapshot.version) {
+        throw fieldError('work_intervention_template_conflict', 'Existing Work Intervention template version conflicts with the canonical Service template.', 409);
+      }
+      patch.templateId = reportTemplateSnapshot.id;
+      patch.templateVersion = reportTemplateSnapshot.version;
+      patch.reportTemplateSnapshot = reportTemplateSnapshot;
+      patch.reportSectionStatus = Object.fromEntries(reportTemplateSnapshot.sections.map((section) => [section.id, 'pending']));
+    }
   } else if (target === 'completed' || target === 'pending_part') {
     const staffId = text(identity.staffId, 180);
     if (!staffId) throw fieldError('technician_staff_required', 'Actual intervention resolution requires a DEMAC staff identity.', 403);
@@ -103,9 +116,23 @@ function transitionAuditEvent({ requestId, before, after, context, identity, occ
       status: after.status,
       version: after.version,
       resultCode: after.resultCode,
+      templateId: after.templateId,
+      templateVersion: after.templateVersion,
       note: text(note, 500) || undefined,
     },
   };
+}
+
+async function loadReportTemplateSnapshot({ db, transaction, intervention }) {
+  const serviceId = text(intervention?.serviceCatalogItemId, 180);
+  if (!serviceId) {
+    throw fieldError('service_required', 'Work Intervention is missing its canonical Service identity.', 409);
+  }
+  const serviceSnapshot = await transaction.get(db.collection('services').doc(serviceId));
+  if (!serviceSnapshot.exists) {
+    throw fieldError('service_not_available', 'The Work Intervention Service is no longer available in the canonical catalog.', 409);
+  }
+  return fieldReportTemplateSnapshotForService(fieldSnapshotRecord(serviceSnapshot));
 }
 
 function createTransitionWorkInterventionCommand({
@@ -206,16 +233,19 @@ function createTransitionWorkInterventionCommand({
         });
       }
 
+      const reportTemplateSnapshot = target === 'in_progress'
+        ? await loadReportTemplateSnapshot({ db, transaction, intervention: current })
+        : undefined;
       const occurredAt = text(now(), 80);
       if (!occurredAt || Number.isNaN(Date.parse(occurredAt))) throw new Error('Clock returned an invalid timestamp.');
       const patch = transitionPatch({
-        stored,
         projected: current,
         target,
         note,
         identity,
         requestId: stable,
         occurredAt,
+        reportTemplateSnapshot,
       });
       const nextStored = { ...stored, ...patch };
       const next = projectWorkIntervention(nextStored, expectedContext);
@@ -245,5 +275,6 @@ function createTransitionWorkInterventionCommand({
 }
 
 module.exports.createTransitionWorkInterventionCommand = createTransitionWorkInterventionCommand;
+module.exports.loadReportTemplateSnapshot = loadReportTemplateSnapshot;
 module.exports.transitionAuditEvent = transitionAuditEvent;
 module.exports.transitionPatch = transitionPatch;
