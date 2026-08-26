@@ -89,16 +89,17 @@ function completionValid(value: unknown, report: FieldVoiceNoteInterventionRepor
     || (item.completedRequiredSectionCount as number) > (item.requiredSectionCount as number)
     || !Array.isArray(item.incompleteRequiredSections)
     || typeof item.complete !== 'boolean') return false;
+  const blockers = item.incompleteRequiredSections as unknown[];
 
   const requiredSections = report.template.sections.filter((section) => section.required);
   const expectedIncomplete = requiredSections.filter((section) => report.sectionStatus[section.id] !== 'completed');
   if (item.requiredSectionCount !== requiredSections.length
     || item.completedRequiredSectionCount !== requiredSections.length - expectedIncomplete.length
     || item.complete !== (expectedIncomplete.length === 0)
-    || item.incompleteRequiredSections.length !== expectedIncomplete.length) return false;
+    || blockers.length !== expectedIncomplete.length) return false;
 
   return expectedIncomplete.every((section, index) => {
-    const blocker = record(item.incompleteRequiredSections[index]);
+    const blocker = record(blockers[index]);
     return Boolean(blocker
       && blocker.id === section.id
       && blocker.title === section.title
@@ -126,7 +127,9 @@ function previewValid(value: unknown, job: FieldProfessionalReportJobDetail): va
     || item.customerId !== job.customerId
     || item.propertyId !== job.propertyId
     || !nonEmptyString(item.status)
-    || !PROFESSIONAL_REPORT_STATUSES.has(item.status as FieldProfessionalReportStatus)) return false;
+    || !PROFESSIONAL_REPORT_STATUSES.has(item.status as FieldProfessionalReportStatus)
+    || !Array.isArray(item.incompleteRequiredSections)) return false;
+  const missingSections = item.incompleteRequiredSections as unknown[];
 
   const plannedQuantity = job.plannedWork.reduce((total, line) => total + Math.max(0, line.quantity), 0);
   const requiredSectionCount = job.interventionReports.reduce((total, report) => total + report.completion.requiredSectionCount, 0);
@@ -148,11 +151,10 @@ function previewValid(value: unknown, job: FieldProfessionalReportJobDetail): va
     || item.activeInterventionCount !== job.workInterventions.filter((entry) => ['planned', 'confirmed', 'in_progress', 'pending_authorization'].includes(entry.status)).length
     || item.requiredSectionCount !== requiredSectionCount
     || item.completedRequiredSectionCount !== completedRequiredSectionCount
-    || !Array.isArray(item.incompleteRequiredSections)
-    || item.incompleteRequiredSections.length !== expectedMissing.length) return false;
+    || missingSections.length !== expectedMissing.length) return false;
 
   return expectedMissing.every((expected, index) => {
-    const actual = record(item.incompleteRequiredSections[index]);
+    const actual = record(missingSections[index]);
     return Boolean(actual
       && actual.interventionId === expected.interventionId
       && actual.sectionId === expected.sectionId
