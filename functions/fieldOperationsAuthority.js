@@ -25,6 +25,7 @@ const { createTransitionWorkInterventionCommand } = require('./fieldOperationsIn
 const { createAddReportPhotoEvidenceCommand } = require('./fieldOperationsReportEvidence');
 const { createAddFieldMeasurementCommand } = require('./fieldOperationsMeasurements');
 const { createAddFieldFindingCommand } = require('./fieldOperationsFindings');
+const { createSetFieldChecklistItemCommand } = require('./fieldOperationsChecklistResponses');
 const { attachInterventionReportsToJob } = require('./fieldOperationsReportRead');
 const {
   attachScopeChangesToJob,
@@ -51,6 +52,7 @@ const FIELD_ACTIONS = new Set([
   'add_report_photo_evidence',
   'add_report_measurement',
   'add_report_finding',
+  'set_report_checklist_item',
 ]);
 
 function cleanText(value, limit = 1000) {
@@ -110,6 +112,7 @@ function createFieldOperationsApi({
   addReportPhotoEvidence,
   addFieldMeasurement,
   addFieldFinding,
+  setFieldChecklistItem,
 } = {}) {
   if (!db || typeof db.collection !== 'function') throw new Error('A Firestore-compatible db is required.');
   if (typeof verifyIdToken !== 'function') throw new Error('verifyIdToken is required.');
@@ -125,6 +128,7 @@ function createFieldOperationsApi({
   if (addReportPhotoEvidence !== undefined && typeof addReportPhotoEvidence !== 'function') throw new Error('addReportPhotoEvidence must be a function when provided.');
   if (addFieldMeasurement !== undefined && typeof addFieldMeasurement !== 'function') throw new Error('addFieldMeasurement must be a function when provided.');
   if (addFieldFinding !== undefined && typeof addFieldFinding !== 'function') throw new Error('addFieldFinding must be a function when provided.');
+  if (setFieldChecklistItem !== undefined && typeof setFieldChecklistItem !== 'function') throw new Error('setFieldChecklistItem must be a function when provided.');
 
   async function authenticate(request) {
     const token = bearerToken(request);
@@ -357,6 +361,22 @@ function createFieldOperationsApi({
       });
       return { ...added, version: FIELD_OPERATIONS_API_VERSION };
     }
+    if (action === 'set_report_checklist_item') {
+      if (typeof setFieldChecklistItem !== 'function') {
+        throw fieldError('mutation_not_configured', 'Work Intervention report checklist editing is not configured in this runtime.', 503);
+      }
+      const updated = await setFieldChecklistItem({
+        identity,
+        visitId: cleanText(data.visitId, 180),
+        interventionId: cleanText(data.interventionId, 180),
+        sectionId: cleanText(data.sectionId, 120),
+        itemId: cleanText(data.itemId, 120),
+        checked: data.checked,
+        expectedVersion: data.expectedVersion,
+        requestId: cleanText(data.requestId, 240),
+      });
+      return { ...updated, version: FIELD_OPERATIONS_API_VERSION };
+    }
     throw fieldError('unsupported_action', `Unsupported Field Operations action: ${action || 'missing'}.`, 400);
   }
 
@@ -419,6 +439,7 @@ function getDefaultApi() {
     });
     const addFieldMeasurement = createAddFieldMeasurementCommand({ db, resolveAssignment, appendAuditInTransaction });
     const addFieldFinding = createAddFieldFindingCommand({ db, resolveAssignment, appendAuditInTransaction });
+    const setFieldChecklistItem = createSetFieldChecklistItemCommand({ db, resolveAssignment, appendAuditInTransaction });
     defaultApi = createFieldOperationsApi({
       db,
       verifyIdToken: (token) => getAuth().verifyIdToken(token, true),
@@ -433,6 +454,7 @@ function getDefaultApi() {
       addReportPhotoEvidence,
       addFieldMeasurement,
       addFieldFinding,
+      setFieldChecklistItem,
       reportError: ({ action, status, code, error }) => logger.error('Field Operations request failed', {
         action: cleanText(action, 120) || 'unknown',
         status,
