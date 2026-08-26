@@ -1,4 +1,5 @@
 import {
+  parseFieldAddReportMeasurementResponse,
   parseFieldAddReportPhotoEvidenceResponse,
   parseFieldReportJobResponse,
 } from '../lib/field-report-contract';
@@ -87,6 +88,7 @@ const reportTemplate = {
   version: 2,
   sections: [
     { id: 'condition', title: 'Condition', type: 'checklist', required: true },
+    { id: 'measurements', title: 'Measurements', type: 'measurement_table', required: true, minMeasurementCount: 1 },
     { id: 'photos', title: 'Photos', type: 'photos', required: true, minEvidenceCount: 2 },
   ],
 };
@@ -111,14 +113,35 @@ const evidence = {
   version: 1,
 };
 
+const measurement = {
+  id: 'MEAS-1',
+  visitId: 'visit-WO-1',
+  visitAssetId: 'VA-1',
+  assetId: 'AC-1',
+  interventionId: 'WI-1',
+  sectionId: 'measurements',
+  metric: 'Supply temperature',
+  value: 18.5,
+  unit: '°C',
+  moment: 'after',
+  technicianStaffId: 'staff-1',
+  measuredAt: '2026-08-25T12:29:00.000Z',
+  createdAt: '2026-08-25T12:29:00.000Z',
+  createdBy: 'uid-1',
+  updatedAt: '2026-08-25T12:29:00.000Z',
+  updatedBy: 'uid-1',
+  version: 1,
+};
+
 const report = {
   interventionId: 'WI-1',
   visitAssetId: 'VA-1',
   assetId: 'AC-1',
   serviceCatalogItemId: 'service-standard',
   template: reportTemplate,
-  sectionStatus: { condition: 'pending', photos: 'in_progress' },
+  sectionStatus: { condition: 'pending', measurements: 'in_progress', photos: 'in_progress' },
   evidence: [evidence],
+  measurements: [measurement],
 };
 
 const baseJob = {
@@ -137,7 +160,7 @@ const baseJob = {
   vanId: 'VAN-1',
   responsibility: 'technician',
   assignmentSource: 'direct_staff',
-  allowedActions: ['read', 'execute', 'report.edit', 'evidence.add', 'intervention.complete'],
+  allowedActions: ['read', 'execute', 'report.edit', 'evidence.add', 'measurement.add', 'intervention.complete'],
   fieldVisit: visit,
   canPrepareVisit: false,
   knownEquipment: [],
@@ -158,13 +181,17 @@ const baseJob = {
   interventionReports: [report],
   reportPhotoOptions: [{ interventionId: 'WI-1', sectionIds: ['photos'] }],
   canAddReportPhoto: true,
+  reportMeasurementOptions: [{ interventionId: 'WI-1', sectionIds: ['measurements'] }],
+  canAddReportMeasurement: true,
 };
 
 const parsed = parseFieldReportJobResponse({ success: true, version: 1, job: baseJob });
 assert(parsed.job.interventionReports.length === 1, 'frozen intervention report should survive strict transport parsing');
 assert(parsed.job.interventionReports[0].template.id === 'standard-report', 'template identity should survive strict parsing');
 assert(parsed.job.interventionReports[0].evidence[0].id === 'EVID-1', 'report photo evidence should survive strict parsing');
+assert(parsed.job.interventionReports[0].measurements[0].id === 'MEAS-1', 'report measurement should survive strict parsing');
 assert(parsed.job.reportPhotoOptions[0].sectionIds[0] === 'photos', 'server-owned photo option should survive strict parsing');
+assert(parsed.job.reportMeasurementOptions[0].sectionIds[0] === 'measurements', 'server-owned measurement option should survive strict parsing');
 
 const photoResponse = parseFieldAddReportPhotoEvidenceResponse({
   success: true,
@@ -177,6 +204,18 @@ const photoResponse = parseFieldAddReportPhotoEvidenceResponse({
 });
 assert(photoResponse.evidence.sectionId === 'photos', 'valid report photo mutation response should parse');
 assert(photoResponse.workInterventionVersion === 3, 'report photo mutation must expose authoritative intervention version');
+
+const measurementResponse = parseFieldAddReportMeasurementResponse({
+  success: true,
+  version: 1,
+  replayed: false,
+  measurement,
+  workInterventionVersion: 3,
+  allowedActions: ['read', 'report.edit', 'measurement.add'],
+  auditEventId: 'FE-2',
+});
+assert(measurementResponse.measurement.value === 18.5, 'valid report measurement mutation response should parse');
+assert(measurementResponse.workInterventionVersion === 3, 'report measurement mutation must expose authoritative intervention version');
 
 assertThrows(
   () => parseFieldReportJobResponse({ success: true, version: 1, job: { ...baseJob, interventionReports: undefined } }),
@@ -194,7 +233,7 @@ assertThrows(
   () => parseFieldReportJobResponse({
     success: true,
     version: 1,
-    job: { ...baseJob, interventionReports: [{ ...report, sectionStatus: { condition: 'pending' } }] },
+    job: { ...baseJob, interventionReports: [{ ...report, sectionStatus: { condition: 'pending', photos: 'in_progress' } }] },
   }),
   'missing frozen section status must fail closed',
 );
@@ -202,7 +241,7 @@ assertThrows(
   () => parseFieldReportJobResponse({
     success: true,
     version: 1,
-    job: { ...baseJob, interventionReports: [{ ...report, sectionStatus: { condition: 'pending', photos: 'future' } }] },
+    job: { ...baseJob, interventionReports: [{ ...report, sectionStatus: { condition: 'pending', measurements: 'pending', photos: 'future' } }] },
   }),
   'unknown section status must fail closed',
 );
@@ -218,21 +257,49 @@ assertThrows(
   () => parseFieldReportJobResponse({
     success: true,
     version: 1,
+    job: { ...baseJob, interventionReports: [{ ...report, measurements: [{ ...measurement, sectionId: 'photos' }] }] },
+  }),
+  'measurement targeting a non-measurement section must fail closed',
+);
+assertThrows(
+  () => parseFieldReportJobResponse({
+    success: true,
+    version: 1,
     job: { ...baseJob, reportPhotoOptions: [{ interventionId: 'WI-1', sectionIds: ['condition'] }] },
   }),
   'photo mutation option targeting a non-photo section must fail closed',
+);
+assertThrows(
+  () => parseFieldReportJobResponse({
+    success: true,
+    version: 1,
+    job: { ...baseJob, reportMeasurementOptions: [{ interventionId: 'WI-1', sectionIds: ['photos'] }] },
+  }),
+  'measurement mutation option targeting a non-measurement section must fail closed',
 );
 assertThrows(
   () => parseFieldReportJobResponse({ success: true, version: 1, job: { ...baseJob, canAddReportPhoto: false } }),
   'report photo eligibility boolean cannot contradict its projected targets',
 );
 assertThrows(
+  () => parseFieldReportJobResponse({ success: true, version: 1, job: { ...baseJob, canAddReportMeasurement: false } }),
+  'report measurement eligibility boolean cannot contradict its projected targets',
+);
+assertThrows(
   () => parseFieldReportJobResponse({
     success: true,
     version: 1,
-    job: { ...baseJob, allowedActions: ['read', 'report.edit'], canAddReportPhoto: true },
+    job: { ...baseJob, allowedActions: ['read', 'report.edit', 'measurement.add'], canAddReportPhoto: true },
   }),
   'client cannot acquire report photo authority without server evidence.add action',
+);
+assertThrows(
+  () => parseFieldReportJobResponse({
+    success: true,
+    version: 1,
+    job: { ...baseJob, allowedActions: ['read', 'report.edit', 'evidence.add'], canAddReportMeasurement: true },
+  }),
+  'client cannot acquire report measurement authority without server measurement.add action',
 );
 assertThrows(
   () => parseFieldReportJobResponse({
@@ -258,6 +325,28 @@ assertThrows(
   'report photo mutation cannot accept non-image evidence',
 );
 assertThrows(
+  () => parseFieldAddReportMeasurementResponse({
+    success: true,
+    version: 1,
+    replayed: false,
+    measurement: { ...measurement, value: Number.NaN },
+    workInterventionVersion: 3,
+    allowedActions: ['read', 'measurement.add'],
+  }),
+  'report measurement mutation cannot accept non-finite numeric values',
+);
+assertThrows(
+  () => parseFieldAddReportMeasurementResponse({
+    success: true,
+    version: 1,
+    replayed: false,
+    measurement: { ...measurement, moment: 'future' },
+    workInterventionVersion: 3,
+    allowedActions: ['read', 'measurement.add'],
+  }),
+  'report measurement mutation cannot accept unknown measurement moments',
+);
+assertThrows(
   () => parseFieldAddReportPhotoEvidenceResponse({
     success: true,
     version: 1,
@@ -267,6 +356,17 @@ assertThrows(
     allowedActions: ['read', 'evidence.add'],
   }),
   'report photo mutation response must carry a positive canonical Work Intervention version',
+);
+assertThrows(
+  () => parseFieldAddReportMeasurementResponse({
+    success: true,
+    version: 1,
+    replayed: false,
+    measurement,
+    workInterventionVersion: 0,
+    allowedActions: ['read', 'measurement.add'],
+  }),
+  'report measurement mutation response must carry a positive canonical Work Intervention version',
 );
 
 console.log('Field report contract acceptance passed.');
