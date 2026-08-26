@@ -27,10 +27,8 @@ import { parseFieldAddReportFindingResponse } from './field-finding-contract';
 import { parseFieldSetReportChecklistItemResponse } from './field-checklist-contract';
 import { parseFieldSetReportFreeTextResponse } from './field-free-text-contract';
 import { parseFieldRecordCustomerAcknowledgementResponse } from './field-customer-acknowledgement-contract';
-import {
-  parseFieldAddReportVoiceNoteResponse,
-  parseFieldVoiceNoteJobResponse,
-} from './field-voice-note-contract';
+import { parseFieldAddReportVoiceNoteResponse } from './field-voice-note-contract';
+import { parseFieldProfessionalReportJobResponse } from './field-professional-report-contract';
 import { parseFieldRegisterVisitAssetResponse } from './field-equipment-registration-contract';
 
 export { fieldActionAllowed } from './field-authorization';
@@ -135,8 +133,17 @@ export type {
   FieldReportVoiceNoteOption,
   FieldVoiceNoteInterventionReport,
   FieldVoiceNoteJobDetail,
-  FieldVoiceNoteJobDetail as FieldExecutionJobDetail,
 } from './field-voice-note-contract';
+export type {
+  FieldProfessionalReportInterventionReport,
+  FieldProfessionalReportJobDetail,
+  FieldProfessionalReportJobDetail as FieldExecutionJobDetail,
+  FieldProfessionalReportMissingSection,
+  FieldProfessionalReportPreview,
+  FieldProfessionalReportStatus,
+  FieldReportCompletion,
+  FieldRequiredReportSectionBlocker,
+} from './field-professional-report-contract';
 export type {
   FieldEquipmentRegistrationEvidence,
   FieldEquipmentRegistrationEvidenceKind,
@@ -234,7 +241,7 @@ export async function getFieldSchedule(startDate: string, endDate = startDate) {
 }
 
 export async function getFieldJob(workOrderId: string) {
-  return parseFieldVoiceNoteJobResponse(await callFieldAuthority('get_job', { workOrderId }));
+  return parseFieldProfessionalReportJobResponse(await callFieldAuthority('get_job', { workOrderId }));
 }
 
 export async function prepareFieldVisit(workOrderId: string, requestId: string) {
