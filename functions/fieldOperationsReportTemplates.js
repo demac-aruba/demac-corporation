@@ -1,0 +1,116 @@
+const { fieldError } = require('./fieldOperationsAuthorityCore');
+
+const FIELD_EXECUTION_DEFINITION_VERSION = 1;
+const REPORT_SECTION_TYPES = new Set([
+  'checklist',
+  'measurement_table',
+  'findings',
+  'photos',
+  'free_text',
+  'customer_acknowledgement',
+]);
+
+function text(value, limit = 1000) {
+  return String(value ?? '').trim().slice(0, limit);
+}
+
+function positiveSafeInteger(value) {
+  return Number.isSafeInteger(value) && value >= 1 ? value : null;
+}
+
+function optionalNonNegativeSafeInteger(value) {
+  if (value === undefined) return undefined;
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function templateError(message, details = {}) {
+  return fieldError('invalid_field_report_template', message, 409, details);
+}
+
+function normalizeSection(section, index) {
+  if (!section || typeof section !== 'object' || Array.isArray(section)) {
+    throw templateError('Field report template contains an invalid section.', { index });
+  }
+  const id = text(section.id, 120);
+  const title = text(section.title, 240);
+  const type = text(section.type, 80);
+  if (!id || !title || !REPORT_SECTION_TYPES.has(type)) {
+    throw templateError('Field report template section identity, title, or type is invalid.', { index, id, type });
+  }
+  if (typeof section.required !== 'boolean') {
+    throw templateError('Field report template section required flag is invalid.', { index, id });
+  }
+  const minEvidenceCount = optionalNonNegativeSafeInteger(section.minEvidenceCount);
+  const minMeasurementCount = optionalNonNegativeSafeInteger(section.minMeasurementCount);
+  if (minEvidenceCount === null || minMeasurementCount === null) {
+    throw templateError('Field report template section minimum counts must be non-negative safe integers.', { index, id });
+  }
+  return {
+    id,
+    title,
+    type,
+    required: section.required,
+    ...(minEvidenceCount === undefined ? {} : { minEvidenceCount }),
+    ...(minMeasurementCount === undefined ? {} : { minMeasurementCount }),
+  };
+}
+
+function normalizeTemplate(template, serviceId) {
+  if (!template || typeof template !== 'object' || Array.isArray(template)) {
+    throw templateError('Field execution reportTemplate must be an object.', { serviceId });
+  }
+  const id = text(template.id, 180);
+  const name = text(template.name, 240);
+  const version = positiveSafeInteger(template.version);
+  if (!id || !name || !version) {
+    throw templateError('Field report template id, name, or version is invalid.', { serviceId, templateId: id });
+  }
+  if (!Array.isArray(template.sections) || template.sections.length === 0) {
+    throw templateError('Field report template must contain at least one section.', { serviceId, templateId: id });
+  }
+  if (template.sections.length > 50) {
+    throw templateError('Field report template exceeds the maximum supported section count.', { serviceId, templateId: id });
+  }
+  const sections = template.sections.map(normalizeSection);
+  if (sections.length !== new Set(sections.map((section) => section.id)).size) {
+    throw templateError('Field report template section ids must be unique.', { serviceId, templateId: id });
+  }
+  return { id, name, serviceId, version, sections };
+}
+
+function fieldReportTemplateSnapshotForService(service = {}) {
+  const serviceId = text(service.id, 180);
+  if (!serviceId) throw templateError('Canonical Service id is required before resolving Field execution metadata.');
+  const definition = service.fieldExecutionDefinition;
+  if (definition === undefined || definition === null) return undefined;
+  if (!definition || typeof definition !== 'object' || Array.isArray(definition)) {
+    throw templateError('Service fieldExecutionDefinition must be an object.', { serviceId });
+  }
+  if (definition.version !== FIELD_EXECUTION_DEFINITION_VERSION) {
+    throw templateError('Unsupported Service fieldExecutionDefinition version.', {
+      serviceId,
+      version: definition.version ?? null,
+    });
+  }
+  if (definition.reportTemplate === undefined || definition.reportTemplate === null) return undefined;
+  return normalizeTemplate(definition.reportTemplate, serviceId);
+}
+
+function projectStoredReportTemplateSnapshot(value, serviceId) {
+  if (value === undefined || value === null) return undefined;
+  const normalizedServiceId = text(serviceId, 180);
+  const snapshot = normalizeTemplate(value, normalizedServiceId);
+  if (snapshot.serviceId !== normalizedServiceId || text(value.serviceId, 180) !== normalizedServiceId) {
+    throw fieldError(
+      'work_intervention_template_identity_conflict',
+      'Persisted Work Intervention report template does not match its canonical Service.',
+      409,
+    );
+  }
+  return snapshot;
+}
+
+module.exports.FIELD_EXECUTION_DEFINITION_VERSION = FIELD_EXECUTION_DEFINITION_VERSION;
+module.exports.REPORT_SECTION_TYPES = REPORT_SECTION_TYPES;
+module.exports.fieldReportTemplateSnapshotForService = fieldReportTemplateSnapshotForService;
+module.exports.projectStoredReportTemplateSnapshot = projectStoredReportTemplateSnapshot;
