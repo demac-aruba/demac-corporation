@@ -20,6 +20,10 @@ const {
   attachWorkInterventionsToJob,
   createPlannedWorkInterventionCommand,
 } = require('./fieldOperationsVisitInterventions');
+const {
+  attachPlannedWorkDispositionsToJob,
+  createRecordPlannedWorkDispositionCommand,
+} = require('./fieldOperationsPlannedWorkDispositions');
 const { attachInterventionExecutionOptionsToJob } = require('./fieldOperationsInterventionTransitions');
 const { createTransitionWorkInterventionCommand } = require('./fieldOperationsInterventionMutation');
 const { createAddReportPhotoEvidenceCommand } = require('./fieldOperationsReportEvidence');
@@ -54,6 +58,7 @@ const FIELD_ACTIONS = new Set([
   'attach_visit_asset',
   'register_visit_asset',
   'create_planned_intervention',
+  'record_planned_work_disposition',
   'create_additional_intervention',
   'record_additional_intervention_decision',
   'transition_intervention',
@@ -117,6 +122,7 @@ function createFieldOperationsApi({
   attachExistingVisitAsset,
   registerEquipmentSystem,
   createPlannedWorkIntervention,
+  recordPlannedWorkDisposition,
   createAdditionalWorkIntervention,
   recordAdditionalWorkDecision,
   transitionWorkIntervention,
@@ -136,6 +142,7 @@ function createFieldOperationsApi({
   if (attachExistingVisitAsset !== undefined && typeof attachExistingVisitAsset !== 'function') throw new Error('attachExistingVisitAsset must be a function when provided.');
   if (registerEquipmentSystem !== undefined && typeof registerEquipmentSystem !== 'function') throw new Error('registerEquipmentSystem must be a function when provided.');
   if (createPlannedWorkIntervention !== undefined && typeof createPlannedWorkIntervention !== 'function') throw new Error('createPlannedWorkIntervention must be a function when provided.');
+  if (recordPlannedWorkDisposition !== undefined && typeof recordPlannedWorkDisposition !== 'function') throw new Error('recordPlannedWorkDisposition must be a function when provided.');
   if (createAdditionalWorkIntervention !== undefined && typeof createAdditionalWorkIntervention !== 'function') throw new Error('createAdditionalWorkIntervention must be a function when provided.');
   if (recordAdditionalWorkDecision !== undefined && typeof recordAdditionalWorkDecision !== 'function') throw new Error('recordAdditionalWorkDecision must be a function when provided.');
   if (transitionWorkIntervention !== undefined && typeof transitionWorkIntervention !== 'function') throw new Error('transitionWorkIntervention must be a function when provided.');
@@ -178,7 +185,8 @@ function createFieldOperationsApi({
       const withVisit = await attachCurrentWorkVisitState(db, job);
       const withAssets = await attachVisitAssetsToJob(db, withVisit);
       const withInterventions = await attachWorkInterventionsToJob(db, withAssets);
-      const withExecutionOptions = attachInterventionExecutionOptionsToJob(withInterventions);
+      const withPlannedWorkDispositions = await attachPlannedWorkDispositionsToJob(db, withInterventions);
+      const withExecutionOptions = attachInterventionExecutionOptionsToJob(withPlannedWorkDispositions);
       const withScopeChanges = await attachScopeChangesToJob(db, withExecutionOptions);
       const withApprovals = await attachFieldApprovalsToJob(db, withScopeChanges);
       const withReports = await attachInterventionReportsToJob(db, withApprovals);
@@ -287,6 +295,21 @@ function createFieldOperationsApi({
         requestId: cleanText(data.requestId, 240),
       });
       return { ...created, version: FIELD_OPERATIONS_API_VERSION };
+    }
+    if (action === 'record_planned_work_disposition') {
+      if (typeof recordPlannedWorkDisposition !== 'function') {
+        throw fieldError('mutation_not_configured', 'Planned Work Disposition recording is not configured in this runtime.', 503);
+      }
+      const recorded = await recordPlannedWorkDisposition({
+        identity,
+        visitId: cleanText(data.visitId, 180),
+        plannedWorkLineId: cleanText(data.plannedWorkLineId, 180),
+        quantity: data.quantity,
+        reasonCode: cleanText(data.reasonCode, 80),
+        note: cleanText(data.note, 1500),
+        requestId: cleanText(data.requestId, 240),
+      });
+      return { ...recorded, version: FIELD_OPERATIONS_API_VERSION };
     }
     if (action === 'create_additional_intervention') {
       if (typeof createAdditionalWorkIntervention !== 'function') {
@@ -501,6 +524,7 @@ function getDefaultApi() {
       verifyStoredImage: verifyStoredFieldImage,
     });
     const createPlannedWorkIntervention = createPlannedWorkInterventionCommand({ db, resolveAssignment, appendAuditInTransaction });
+    const recordPlannedWorkDisposition = createRecordPlannedWorkDispositionCommand({ db, resolveAssignment, appendAuditInTransaction });
     const createAdditionalWorkIntervention = createAdditionalWorkInterventionCommand({ db, resolveAssignment, appendAuditInTransaction });
     const recordAdditionalWorkDecision = createRecordAdditionalWorkDecisionCommand({ db, resolveAssignment, appendAuditInTransaction });
     const transitionWorkIntervention = createTransitionWorkInterventionCommand({ db, resolveAssignment, appendAuditInTransaction });
@@ -529,6 +553,7 @@ function getDefaultApi() {
       attachExistingVisitAsset,
       registerEquipmentSystem,
       createPlannedWorkIntervention,
+      recordPlannedWorkDisposition,
       createAdditionalWorkIntervention,
       recordAdditionalWorkDecision,
       transitionWorkIntervention,
