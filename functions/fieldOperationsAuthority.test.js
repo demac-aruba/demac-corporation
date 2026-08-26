@@ -11,11 +11,7 @@ function authDb(profile) {
         doc(uid) {
           return {
             async get() {
-              return {
-                id: uid,
-                exists: profile !== undefined,
-                data: () => profile,
-              };
+              return { id: uid, exists: profile !== undefined, data: () => profile };
             },
           };
         },
@@ -56,47 +52,28 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
     'record_additional_intervention_decision',
     'register_visit_asset',
     'set_report_checklist_item',
+    'set_report_free_text',
     'transition_intervention',
     'transition_visit',
   ]);
 
-  const api = createFieldOperationsApi({
-    db: { collection() { return {}; } },
-    verifyIdToken: async () => ({ uid: 'unused' }),
-  });
-
+  const api = createFieldOperationsApi({ db: { collection() { return {}; } }, verifyIdToken: async () => ({ uid: 'unused' }) });
   for (const action of [
-    'prepare_visit',
-    'transition_visit',
-    'attach_visit_asset',
-    'register_visit_asset',
-    'create_planned_intervention',
-    'create_additional_intervention',
-    'record_additional_intervention_decision',
-    'transition_intervention',
-    'add_report_photo_evidence',
-    'add_report_measurement',
-    'add_report_finding',
-    'set_report_checklist_item',
+    'prepare_visit', 'transition_visit', 'attach_visit_asset', 'register_visit_asset',
+    'create_planned_intervention', 'create_additional_intervention', 'record_additional_intervention_decision',
+    'transition_intervention', 'add_report_photo_evidence', 'add_report_measurement', 'add_report_finding',
+    'set_report_checklist_item', 'set_report_free_text',
   ]) {
     await assert.rejects(
       () => api.execute({ action, data: {}, identity: { operations: false } }),
       (error) => error?.code === 'mutation_not_configured' && error?.status === 503,
     );
   }
-  await assert.rejects(
-    () => api.execute({ action: 'start_visit', data: {}, identity: { operations: false } }),
-    /Unsupported Field Operations action/,
-  );
+  await assert.rejects(() => api.execute({ action: 'start_visit', data: {}, identity: { operations: false } }), /Unsupported Field Operations action/);
 });
 
 test('public Field DTO does not expose Legacy mixed-namespace technicianIds', () => {
-  const projected = publicJobProjection({
-    workOrderId: 'WO-1',
-    technicianIds: ['uid-legacy', 'staff-1'],
-    responsibility: 'technician',
-    allowedActions: ['read'],
-  });
+  const projected = publicJobProjection({ workOrderId: 'WO-1', technicianIds: ['uid-legacy', 'staff-1'], responsibility: 'technician', allowedActions: ['read'] });
   assert.equal('technicianIds' in projected, false);
   assert.equal(projected.workOrderId, 'WO-1');
   assert.equal(projected.responsibility, 'technician');
@@ -109,11 +86,9 @@ test('HTTP method and truly unsupported action fail before protected business ex
     db: authDb({ active: true, role: 'technician', staffId: 'staff-1' }),
     verifyIdToken: async () => { verified = true; return { uid: 'uid-1' }; },
   });
-
   const wrongMethod = await api.handle(request({ method: 'GET', token: 'token' }));
   assert.equal(wrongMethod.status, 405);
   assert.equal(wrongMethod.body.error.code, 'method_not_allowed');
-
   const unsupported = await api.handle(request({ token: 'token', action: 'start_visit' }));
   assert.equal(unsupported.status, 400);
   assert.equal(unsupported.body.error.code, 'unsupported_action');
@@ -124,27 +99,10 @@ test('prepare_visit authenticates first and returns the same versioned contract 
   const calls = [];
   const api = createFieldOperationsApi({
     db: authDb({ active: true, role: 'technician', staffId: 'staff-1', name: 'Tech One', vanId: 'VAN-1' }),
-    verifyIdToken: async (token) => {
-      assert.equal(token, 'valid-token');
-      return { uid: 'uid-1', role: 'super_admin', email: 'token@example.invalid' };
-    },
-    prepareWorkVisit: async (input) => {
-      calls.push(input);
-      return {
-        success: true,
-        replayed: false,
-        visit: { id: 'visit-WO-1', status: 'scheduled' },
-        allowedActions: ['execute'],
-      };
-    },
+    verifyIdToken: async (token) => { assert.equal(token, 'valid-token'); return { uid: 'uid-1', role: 'super_admin', email: 'token@example.invalid' }; },
+    prepareWorkVisit: async (input) => { calls.push(input); return { success: true, replayed: false, visit: { id: 'visit-WO-1', status: 'scheduled' }, allowedActions: ['execute'] }; },
   });
-
-  const result = await api.handle(request({
-    token: 'valid-token',
-    action: 'prepare_visit',
-    data: { workOrderId: ' WO-1 ', requestId: ' prepare-WO-1-001 ' },
-  }));
-
+  const result = await api.handle(request({ token: 'valid-token', action: 'prepare_visit', data: { workOrderId: ' WO-1 ', requestId: ' prepare-WO-1-001 ' } }));
   assert.equal(result.status, 200);
   assert.equal(result.body.success, true);
   assert.equal(result.body.version, 1);
@@ -154,7 +112,7 @@ test('prepare_visit authenticates first and returns the same versioned contract 
   assert.equal(calls[0].requestId, 'prepare-WO-1-001');
   assert.equal(calls[0].identity.uid, 'uid-1');
   assert.equal(calls[0].identity.staffId, 'staff-1');
-  assert.equal(calls[0].identity.role, 'technician', 'token role must not override governed profile role');
+  assert.equal(calls[0].identity.role, 'technician');
 });
 
 test('transition_visit authenticates and forwards optimistic concurrency inputs without trusting client authority', async () => {
@@ -162,29 +120,9 @@ test('transition_visit authenticates and forwards optimistic concurrency inputs 
   const api = createFieldOperationsApi({
     db: authDb({ active: true, role: 'technician', staffId: 'staff-1', name: 'Tech One', vanId: 'VAN-1' }),
     verifyIdToken: async () => ({ uid: 'uid-1' }),
-    transitionWorkVisit: async (input) => {
-      calls.push(input);
-      return {
-        success: true,
-        replayed: false,
-        visit: { id: 'visit-WO-1', status: 'en_route', version: 2, availableTransitions: ['on_site'] },
-        allowedActions: ['read', 'execute'],
-      };
-    },
+    transitionWorkVisit: async (input) => { calls.push(input); return { success: true, replayed: false, visit: { id: 'visit-WO-1', status: 'en_route', version: 2, availableTransitions: ['on_site'] }, allowedActions: ['read', 'execute'] }; },
   });
-
-  const result = await api.handle(request({
-    token: 'valid-token',
-    action: 'transition_visit',
-    data: {
-      visitId: ' visit-WO-1 ',
-      to: ' en_route ',
-      expectedVersion: 1,
-      requestId: ' transition-route-001 ',
-      allowedActions: ['execute', 'price.override'],
-    },
-  }));
-
+  const result = await api.handle(request({ token: 'valid-token', action: 'transition_visit', data: { visitId: ' visit-WO-1 ', to: ' en_route ', expectedVersion: 1, requestId: ' transition-route-001 ', allowedActions: ['execute', 'price.override'] } }));
   assert.equal(result.status, 200);
   assert.equal(result.body.version, 1);
   assert.equal(calls.length, 1);
@@ -193,7 +131,7 @@ test('transition_visit authenticates and forwards optimistic concurrency inputs 
   assert.equal(calls[0].expectedVersion, 1);
   assert.equal(calls[0].requestId, 'transition-route-001');
   assert.equal(calls[0].identity.staffId, 'staff-1');
-  assert.equal('allowedActions' in calls[0], false, 'client action projection must not be forwarded as authority');
+  assert.equal('allowedActions' in calls[0], false);
 });
 
 test('attach_visit_asset authenticates and forwards only canonical visit/asset identity plus request id', async () => {
@@ -203,29 +141,10 @@ test('attach_visit_asset authenticates and forwards only canonical visit/asset i
     verifyIdToken: async () => ({ uid: 'uid-1' }),
     attachExistingVisitAsset: async (input) => {
       calls.push(input);
-      return {
-        success: true,
-        replayed: false,
-        visitAsset: {
-          id: 'VA-1', visitId: 'visit-WO-1', assetId: 'AC-1', sequence: 1, locationLabel: 'Sala',
-          source: 'existing_asset', status: 'identified', addedOnSite: true,
-          createdAt: '2026-08-25T10:00:00.000Z', createdBy: 'uid-1',
-          updatedAt: '2026-08-25T10:00:00.000Z', updatedBy: 'uid-1', version: 1,
-        },
-        allowedActions: ['read', 'execute', 'asset.add'],
-      };
+      return { success: true, replayed: false, visitAsset: { id: 'VA-1', visitId: 'visit-WO-1', assetId: 'AC-1', sequence: 1, locationLabel: 'Sala', source: 'existing_asset', status: 'identified', addedOnSite: true, createdAt: '2026-08-25T10:00:00.000Z', createdBy: 'uid-1', updatedAt: '2026-08-25T10:00:00.000Z', updatedBy: 'uid-1', version: 1 }, allowedActions: ['read', 'execute', 'asset.add'] };
     },
   });
-
-  const result = await api.handle(request({
-    token: 'valid-token',
-    action: 'attach_visit_asset',
-    data: {
-      visitId: ' visit-WO-1 ', assetId: ' AC-1 ', requestId: ' attach-asset-001 ',
-      source: 'registered_on_site', allowedActions: ['price.override'], customerId: 'CLIENT-OTHER',
-    },
-  }));
-
+  const result = await api.handle(request({ token: 'valid-token', action: 'attach_visit_asset', data: { visitId: ' visit-WO-1 ', assetId: ' AC-1 ', requestId: ' attach-asset-001 ', source: 'registered_on_site', allowedActions: ['price.override'], customerId: 'CLIENT-OTHER' } }));
   assert.equal(result.status, 200);
   assert.equal(result.body.version, 1);
   assert.equal(calls.length, 1);
@@ -245,30 +164,10 @@ test('create_planned_intervention authenticates and forwards only canonical inte
     verifyIdToken: async () => ({ uid: 'uid-1' }),
     createPlannedWorkIntervention: async (input) => {
       calls.push(input);
-      return {
-        success: true,
-        replayed: false,
-        workIntervention: {
-          id: 'WI-1', visitId: 'visit-WO-1', visitAssetId: 'VA-1', assetId: 'AC-1',
-          plannedWorkLineId: 'line-standard', serviceCatalogItemId: 'service-standard', interventionType: '12K Standard Service',
-          origin: 'planned', requestedBy: 'office', status: 'confirmed', performedByStaffIds: ['staff-1'],
-          createdAt: '2026-08-25T10:30:00.000Z', createdBy: 'uid-1', updatedAt: '2026-08-25T10:30:00.000Z', updatedBy: 'uid-1', version: 1,
-        },
-        allowedActions: ['read', 'execute', 'intervention.add'],
-      };
+      return { success: true, replayed: false, workIntervention: { id: 'WI-1', visitId: 'visit-WO-1', visitAssetId: 'VA-1', assetId: 'AC-1', plannedWorkLineId: 'line-standard', serviceCatalogItemId: 'service-standard', interventionType: '12K Standard Service', origin: 'planned', requestedBy: 'office', status: 'confirmed', performedByStaffIds: ['staff-1'], createdAt: '2026-08-25T10:30:00.000Z', createdBy: 'uid-1', updatedAt: '2026-08-25T10:30:00.000Z', updatedBy: 'uid-1', version: 1 }, allowedActions: ['read', 'execute', 'intervention.add'] };
     },
   });
-
-  const result = await api.handle(request({
-    token: 'valid-token',
-    action: 'create_planned_intervention',
-    data: {
-      visitId: ' visit-WO-1 ', visitAssetId: ' VA-1 ', plannedWorkLineId: ' line-standard ',
-      serviceCatalogItemId: ' service-standard ', requestId: ' planned-intervention-001 ',
-      origin: 'office_added', status: 'completed', assetId: 'AC-OTHER', allowedActions: ['price.override'],
-    },
-  }));
-
+  const result = await api.handle(request({ token: 'valid-token', action: 'create_planned_intervention', data: { visitId: ' visit-WO-1 ', visitAssetId: ' VA-1 ', plannedWorkLineId: ' line-standard ', serviceCatalogItemId: ' service-standard ', requestId: ' planned-intervention-001 ', origin: 'office_added', status: 'completed', assetId: 'AC-OTHER', allowedActions: ['price.override'] } }));
   assert.equal(result.status, 200);
   assert.equal(result.body.version, 1);
   assert.equal(calls.length, 1);
@@ -290,20 +189,11 @@ test('Field mutation actions cannot execute without authentication', async () =>
   const api = createFieldOperationsApi({
     db: authDb({ active: true, role: 'technician', staffId: 'staff-1' }),
     verifyIdToken: async () => ({ uid: 'uid-1' }),
-    prepareWorkVisit: mark('prepare'),
-    transitionWorkVisit: mark('transition'),
-    attachExistingVisitAsset: mark('attach'),
-    registerEquipmentSystem: mark('register'),
-    createPlannedWorkIntervention: mark('intervention'),
-    createAdditionalWorkIntervention: mark('additional'),
-    recordAdditionalWorkDecision: mark('decision'),
-    transitionWorkIntervention: mark('interventionTransition'),
-    addReportPhotoEvidence: mark('reportPhoto'),
-    addFieldMeasurement: mark('reportMeasurement'),
-    addFieldFinding: mark('reportFinding'),
-    setFieldChecklistItem: mark('reportChecklist'),
+    prepareWorkVisit: mark('prepare'), transitionWorkVisit: mark('transition'), attachExistingVisitAsset: mark('attach'), registerEquipmentSystem: mark('register'),
+    createPlannedWorkIntervention: mark('intervention'), createAdditionalWorkIntervention: mark('additional'), recordAdditionalWorkDecision: mark('decision'),
+    transitionWorkIntervention: mark('interventionTransition'), addReportPhotoEvidence: mark('reportPhoto'), addFieldMeasurement: mark('reportMeasurement'),
+    addFieldFinding: mark('reportFinding'), setFieldChecklistItem: mark('reportChecklist'), setFieldFreeTextResponse: mark('reportFreeText'),
   });
-
   const cases = [
     ['prepare_visit', { workOrderId: 'WO-1', requestId: 'prepare-WO-1-001' }],
     ['transition_visit', { visitId: 'visit-WO-1', to: 'en_route', expectedVersion: 1, requestId: 'transition-route-001' }],
@@ -317,6 +207,7 @@ test('Field mutation actions cannot execute without authentication', async () =>
     ['add_report_measurement', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'measurements', metric: 'Temperature', value: 18, unit: 'C', moment: 'after', requestId: 'report-measurement-001' }],
     ['add_report_finding', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'findings', summary: 'Drain issue', details: 'Standing water observed.', requestId: 'report-finding-001' }],
     ['set_report_checklist_item', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'condition', itemId: 'filter-clean', checked: true, expectedVersion: 0, requestId: 'report-checklist-001' }],
+    ['set_report_free_text', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'notes', value: 'Technical note', expectedVersion: 0, requestId: 'report-free-text-001' }],
   ];
   for (const [action, data] of cases) {
     const result = await api.handle(request({ action, data }));
@@ -326,36 +217,22 @@ test('Field mutation actions cannot execute without authentication', async () =>
 });
 
 test('missing and expired Firebase sessions return controlled unauthenticated errors', async () => {
-  const missingTokenApi = createFieldOperationsApi({
-    db: authDb({ active: true, role: 'technician', staffId: 'staff-1' }),
-    verifyIdToken: async () => ({ uid: 'uid-1' }),
-  });
+  const missingTokenApi = createFieldOperationsApi({ db: authDb({ active: true, role: 'technician', staffId: 'staff-1' }), verifyIdToken: async () => ({ uid: 'uid-1' }) });
   const missing = await missingTokenApi.handle(request());
   assert.equal(missing.status, 401);
   assert.equal(missing.body.error.code, 'unauthenticated');
-
-  const expiredApi = createFieldOperationsApi({
-    db: authDb({ active: true, role: 'technician', staffId: 'staff-1' }),
-    verifyIdToken: async () => { throw new Error('expired'); },
-  });
+  const expiredApi = createFieldOperationsApi({ db: authDb({ active: true, role: 'technician', staffId: 'staff-1' }), verifyIdToken: async () => { throw new Error('expired'); } });
   const expired = await expiredApi.handle(request({ token: 'expired-token' }));
   assert.equal(expired.status, 401);
   assert.equal(expired.body.error.code, 'unauthenticated');
 });
 
 test('missing or incompletely governed user profile cannot inherit token role authority', async () => {
-  const missingProfileApi = createFieldOperationsApi({
-    db: authDb(undefined),
-    verifyIdToken: async () => ({ uid: 'uid-missing', role: 'technician' }),
-  });
+  const missingProfileApi = createFieldOperationsApi({ db: authDb(undefined), verifyIdToken: async () => ({ uid: 'uid-missing', role: 'technician' }) });
   const missingProfile = await missingProfileApi.handle(request({ token: 'valid-token' }));
   assert.equal(missingProfile.status, 403);
   assert.equal(missingProfile.body.error.code, 'permission_denied');
-
-  const missingRoleApi = createFieldOperationsApi({
-    db: authDb({ active: true, staffId: 'staff-token-only' }),
-    verifyIdToken: async () => ({ uid: 'uid-token-only', role: 'technician' }),
-  });
+  const missingRoleApi = createFieldOperationsApi({ db: authDb({ active: true, staffId: 'staff-token-only' }), verifyIdToken: async () => ({ uid: 'uid-token-only', role: 'technician' }) });
   const missingRole = await missingRoleApi.handle(request({ token: 'valid-token' }));
   assert.equal(missingRole.status, 403);
   assert.equal(missingRole.body.error.code, 'permission_denied');
@@ -364,24 +241,9 @@ test('missing or incompletely governed user profile cannot inherit token role au
 test('unexpected internal failures are logged internally and sanitized from the public response', async () => {
   const reports = [];
   const api = createFieldOperationsApi({
-    db: {
-      collection(name) {
-        assert.equal(name, 'users');
-        return {
-          doc() {
-            return {
-              async get() {
-                throw new Error('sensitive Firestore/runtime diagnostic');
-              },
-            };
-          },
-        };
-      },
-    },
-    verifyIdToken: async () => ({ uid: 'uid-1' }),
-    reportError: (report) => reports.push(report),
+    db: { collection(name) { assert.equal(name, 'users'); return { doc() { return { async get() { throw new Error('sensitive Firestore/runtime diagnostic'); } }; } }; } },
+    verifyIdToken: async () => ({ uid: 'uid-1' }), reportError: (report) => reports.push(report),
   });
-
   const result = await api.handle(request({ token: 'valid-token', action: 'get_schedule' }));
   assert.equal(result.status, 500);
   assert.equal(result.body.error.code, 'internal_error');
