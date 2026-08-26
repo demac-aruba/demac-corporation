@@ -92,7 +92,6 @@ export function PlannedInterventionControls({
     setDispositionDrafts((current) => ({
       ...current,
       [plannedWorkLineId]: {
-        quantity: current[plannedWorkLineId]?.quantity ?? 1,
         reasonCode: current[plannedWorkLineId]?.reasonCode ?? '',
         note: current[plannedWorkLineId]?.note ?? '',
         ...changes,
