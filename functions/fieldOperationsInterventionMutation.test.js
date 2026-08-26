@@ -177,6 +177,16 @@ function serviceWithTemplate(overrides = {}) {
   });
 }
 
+function frozenReportTemplate(sections) {
+  return {
+    id: 'standard-service-report',
+    name: 'Standard Service Report',
+    serviceId: 'service-standard',
+    version: 3,
+    sections,
+  };
+}
+
 function identity(overrides = {}) {
   return {
     uid: 'uid-1', staffId: 'staff-1', name: 'Tech One', email: 'tech@example.invalid',
@@ -304,6 +314,64 @@ test('started intervention completes only after execution and adds the resolving
   assert.deepEqual(result.workIntervention.performedByStaffIds, ['staff-2', 'staff-1']);
   assert.equal(auditEvents[0].after.status, 'completed');
   assert.equal(store.get('workInterventions', 'WI-1').lastExecutionTarget, 'completed');
+});
+
+test('required report sections block completion until the frozen template is satisfied', async () => {
+  const sections = [
+    {
+      id: 'condition', title: 'Condition', type: 'checklist', required: true,
+      checklistItems: [{ id: 'filter-clean', label: 'Filter cleaned and reinstalled' }],
+    },
+    { id: 'photos', title: 'Photos', type: 'photos', required: true, minEvidenceCount: 2 },
+  ];
+  const started = intervention({
+    status: 'in_progress',
+    startedAt: '2026-08-25T10:25:00.000Z',
+    performedByStaffIds: ['staff-1'],
+    templateId: 'standard-service-report',
+    templateVersion: 3,
+    reportTemplateSnapshot: frozenReportTemplate(sections),
+    reportSectionStatus: { condition: 'completed', photos: 'pending' },
+    version: 4,
+  });
+  const { store, transition } = fixture({ intervention: started });
+  await assert.rejects(
+    () => transition(input({
+      to: 'completed', expectedVersion: 4, note: 'Attempted close.', requestId: 'incomplete-report-close',
+    })),
+    (error) => error?.code === 'work_intervention_report_incomplete'
+      && error?.status === 409
+      && error?.details?.incompleteSections?.[0]?.id === 'photos',
+  );
+  assert.equal(store.get('workInterventions', 'WI-1').status, 'in_progress');
+  assert.equal(store.get('workInterventions', 'WI-1').version, 4);
+  assert.equal(store.get('workInterventions', 'WI-1').completedAt, undefined);
+});
+
+test('optional report sections may remain pending once every required section is complete', async () => {
+  const sections = [
+    {
+      id: 'condition', title: 'Condition', type: 'checklist', required: true,
+      checklistItems: [{ id: 'filter-clean', label: 'Filter cleaned and reinstalled' }],
+    },
+    { id: 'voice', title: 'Voice note', type: 'voice_note', required: false },
+  ];
+  const started = intervention({
+    status: 'in_progress',
+    startedAt: '2026-08-25T10:25:00.000Z',
+    performedByStaffIds: ['staff-1'],
+    templateId: 'standard-service-report',
+    templateVersion: 3,
+    reportTemplateSnapshot: frozenReportTemplate(sections),
+    reportSectionStatus: { condition: 'completed', voice: 'pending' },
+    version: 4,
+  });
+  const { transition } = fixture({ intervention: started });
+  const result = await transition(input({
+    to: 'completed', expectedVersion: 4, note: 'Required report complete.', requestId: 'required-report-complete',
+  }));
+  assert.equal(result.workIntervention.status, 'completed');
+  assert.equal(result.workIntervention.version, 5);
 });
 
 test('pending part is a performed-work outcome and requires a reason', async () => {
