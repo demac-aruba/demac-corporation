@@ -216,6 +216,7 @@ test('measurement request replay is idempotent only for exact input', async () =
   const replay = await command(input());
   assert.equal(first.replayed, false);
   assert.equal(replay.replayed, true);
+  assert.equal(replay.workInterventionVersion, 3);
   assert.equal(store.values('fieldMeasurements').length, 1);
   assert.equal(store.get('workInterventions', 'WI-1').version, 3);
   assert.equal(events.length, 1);
