@@ -21,9 +21,12 @@ import {
 import {
   parseFieldAddReportMeasurementResponse,
   parseFieldAddReportPhotoEvidenceResponse,
-  parseFieldReportJobResponse,
   type FieldMeasurementMoment,
 } from './field-report-contract';
+import {
+  parseFieldAddReportFindingResponse,
+  parseFieldFindingJobResponse,
+} from './field-finding-contract';
 import { parseFieldRegisterVisitAssetResponse } from './field-equipment-registration-contract';
 
 export { fieldActionAllowed } from './field-authorization';
@@ -80,7 +83,6 @@ export type {
   FieldInterventionReport,
   FieldMeasurementMoment,
   FieldReportJobDetail,
-  FieldReportJobDetail as FieldExecutionJobDetail,
   FieldReportMeasurement,
   FieldReportMeasurementOption,
   FieldReportPhotoEvidence,
@@ -91,6 +93,14 @@ export type {
   FieldReportSectionType,
   FieldReportTemplateSnapshot,
 } from './field-report-contract';
+export type {
+  FieldAddReportFindingResponse,
+  FieldFindingInterventionReport,
+  FieldFindingJobDetail,
+  FieldFindingJobDetail as FieldExecutionJobDetail,
+  FieldReportFinding,
+  FieldReportFindingOption,
+} from './field-finding-contract';
 export type {
   FieldEquipmentRegistrationEvidence,
   FieldEquipmentRegistrationEvidenceKind,
@@ -188,7 +198,7 @@ export async function getFieldSchedule(startDate: string, endDate = startDate) {
 }
 
 export async function getFieldJob(workOrderId: string) {
-  return parseFieldReportJobResponse(await callFieldAuthority('get_job', { workOrderId }));
+  return parseFieldFindingJobResponse(await callFieldAuthority('get_job', { workOrderId }));
 }
 
 export async function prepareFieldVisit(workOrderId: string, requestId: string) {
@@ -338,6 +348,26 @@ export async function addFieldReportMeasurement(
     value,
     unit,
     moment,
+    requestId,
+  }));
+}
+
+export async function addFieldReportFinding(
+  visitId: string,
+  interventionId: string,
+  sectionId: string,
+  summary: string,
+  details: string,
+  recommendation: string,
+  requestId: string,
+) {
+  return parseFieldAddReportFindingResponse(await callFieldAuthority('add_report_finding', {
+    visitId,
+    interventionId,
+    sectionId,
+    summary,
+    details,
+    recommendation,
     requestId,
   }));
 }
