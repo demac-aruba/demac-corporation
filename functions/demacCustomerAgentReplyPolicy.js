@@ -52,6 +52,16 @@ function accountRequiredForMode(mode) {
   return mode === PILOT_MODE;
 }
 
+function mayaSenderOwnershipDecision({ conversation = {} } = {}) {
+  if (conversation.ownerUserId || conversation.lockedByUserId) {
+    return { allowed: false, reason: "human-owner-present" };
+  }
+  if (cleanText(conversation.aiDisposition, 40).toLowerCase() !== "ai_active") {
+    return { allowed: false, reason: "maya-not-active-owner" };
+  }
+  return { allowed: true, reason: "maya-active-owner" };
+}
+
 function mayaObservationDecision({
   message = {},
   conversation = {},
@@ -165,6 +175,7 @@ module.exports.digitsOnly = digitsOnly;
 module.exports.mayaBusinessActionDecision = mayaBusinessActionDecision;
 module.exports.mayaObservationDecision = mayaObservationDecision;
 module.exports.mayaReplyDecision = mayaReplyDecision;
+module.exports.mayaSenderOwnershipDecision = mayaSenderOwnershipDecision;
 module.exports.normalizeArubaWhatsAppPhone = normalizeArubaWhatsAppPhone;
 module.exports.pilotWorkflowReplyDecision = pilotWorkflowReplyDecision;
 module.exports.resolveConversationPhone = resolveConversationPhone;
