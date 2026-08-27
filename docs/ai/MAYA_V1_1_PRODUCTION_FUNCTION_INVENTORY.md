@@ -1,37 +1,46 @@
 # Maya V1.1 Production Function Inventory
 
-Status: **DEPLOYMENT DESIGN ONLY — NO PRODUCTION DEPLOYMENT AUTHORIZED**
+Status: **DEPLOYMENT OWNER PREPARED — NO PRODUCTION DEPLOYMENT AUTHORIZED**
 
-Reviewed source: Maya V1.1 P0 HEAD `f70665fbb9dbae89d874e05beb0ca58705cb7385`.
+Reviewed baseline source: Maya V1.1 P0 HEAD `f70665fbb9dbae89d874e05beb0ca58705cb7385`.
+Prepared rollout-control integration: PR `#447`.
 
-This inventory closes the ambiguity around which exported Functions belong to the P0 production path. It does not authorize deployment.
+This inventory defines which exported Functions belong to the P0 production path, their single deployment owner, and the verification required after an authorized production deploy. It does not authorize deployment.
 
-## Current deployment gap
+## Baseline gap and prepared resolution
 
-`.github/workflows/customer-agent-production-deploy.yml` currently deploys only:
+At the reviewed P0 baseline, `.github/workflows/customer-agent-production-deploy.yml` deployed only:
 
 1. `processCustomerAgentInbound`
 2. `processCustomerAgentReactivation`
 
-The reviewed P0 architecture exports additional required surfaces from `functions/bootstrap.js`. Export alone is not deployment evidence.
+The P0 architecture exports additional required surfaces from `functions/bootstrap.js`; export alone is not deployment evidence.
+
+PR `#447` prepares the existing Customer Agent Production workflow as the **single manual deployment owner** for all eight governed Maya Communication surfaces. The prepared workflow validates automatically on PR/push but its deployment job requires:
+
+- `workflow_dispatch`;
+- `github.ref == refs/heads/main`;
+- `confirm_production_deploy == true`.
+
+Therefore B3's engineering ownership ambiguity is resolved in the prepared rollout package, while actual production deployment/live verification remains open.
 
 ## Required P0 production surfaces
 
-| Function | Trigger | Canonical source | Secret | Role in rollout | Current explicit production owner |
+| Function | Trigger | Canonical source | Secret | Role in rollout | Prepared production owner |
 | --- | --- | --- | --- | --- | --- |
-| `wacliWebhook` | HTTPS | `whatsappWacliGateway.js` | `WACLI_BRIDGE_TOKEN` | Canonical account-scoped inbound webhook | Wacli Connector workflow |
-| `wacliMediaIngest` | HTTPS | `whatsappWacliGateway.js` | `WACLI_BRIDGE_TOKEN` | Canonical bridge media ingest | Wacli Connector workflow |
-| `wacliOutboundPoll` | HTTPS | `whatsappWacliGateway.js` | `WACLI_BRIDGE_TOKEN` | Account-scoped outbound claim / last-mile authorization | Wacli Connector workflow |
-| `wacliOutboundAck` | HTTPS | `whatsappWacliGateway.js` | `WACLI_BRIDGE_TOKEN` | Account-scoped outbound acknowledgement | Wacli Connector workflow |
-| `wacliOutboundMediaUpload` | HTTPS | `wacliOutboundMediaUpload.js` | none of the bridge secrets | ERP authenticated outbound media staging | Wacli Connector workflow |
-| `stampCommunicationMessageFirstSeen` | Firestore document created: `whatsappMessages/{messageId}` | `demacCommunicationIngressMetadata.js` | none | Immutable first-seen/canonical-identity verification metadata | **MISSING** |
-| `processCustomerAgentInbound` | Firestore document created: `whatsappMessages/{messageId}` | `demacCustomerAgentAllowlistCommunication.js` | `OPENAI_API_KEY` currently attached | Schedules eligible text/current-turn work; voice without transcript is ignored at create time | Customer Agent Production |
-| `transcribeNewCustomerVoiceNote` | Firestore document created: `whatsappMessages/{messageId}` | `voiceTranscription.js` | `OPENAI_API_KEY` | Claims/transcribes newly eligible inbound voice; historical backfill remains prohibited by policy | **MISSING** |
-| `transcribeCustomerVoiceWhenReady` | Firestore document updated: `whatsappMessages/{messageId}` | `voiceTranscription.js` | `OPENAI_API_KEY` | Retries/starts voice transcription when media/eligibility metadata becomes ready | **MISSING** |
-| `processCustomerAgentVoiceTranscript` | Firestore document updated: `whatsappMessages/{messageId}` | `demacCustomerAgentAllowlistCommunication.js` | `OPENAI_API_KEY` | Converts completed transcript into the same governed Customer Turn path | **MISSING** |
-| `processCustomerAgentReactivation` | Firestore document updated: `communicationConversations/{conversationId}` | `demacCustomerAgentAllowlistCommunication.js` | `OPENAI_API_KEY` currently attached | Schedules pending customer turn after explicit return to Maya | Customer Agent Production |
-| `processCustomerAgentTurnWakeup` | Cloud Tasks / task-dispatched | `demacCustomerTurnOrchestrator.js` | `OPENAI_API_KEY` | Persistent debounce wakeup; Observer -> policy -> single Customer Runtime | **MISSING** |
-| `communicationConversationAuthority` | HTTPS | `communicationConversationAuthority.js` | no declared Functions secret; verifies Firebase ID token and canonical `users/{uid}` profile | Canonical human ownership/status/send command authority | **MISSING** |
+| `wacliWebhook` | HTTPS | `whatsappWacliGateway.js` | `WACLI_BRIDGE_TOKEN` | Canonical account-scoped inbound webhook | Wacli Connector workflow — manual cutover |
+| `wacliMediaIngest` | HTTPS | `whatsappWacliGateway.js` | `WACLI_BRIDGE_TOKEN` | Canonical bridge media ingest | Wacli Connector workflow — manual cutover |
+| `wacliOutboundPoll` | HTTPS | `whatsappWacliGateway.js` | `WACLI_BRIDGE_TOKEN` | Account-scoped outbound claim / last-mile authorization | Wacli Connector workflow — manual cutover |
+| `wacliOutboundAck` | HTTPS | `whatsappWacliGateway.js` | `WACLI_BRIDGE_TOKEN` | Account-scoped outbound acknowledgement | Wacli Connector workflow — manual cutover |
+| `wacliOutboundMediaUpload` | HTTPS | `wacliOutboundMediaUpload.js` | none of the bridge secrets | ERP authenticated outbound media staging | Wacli Connector workflow — manual cutover |
+| `stampCommunicationMessageFirstSeen` | Firestore document created: `whatsappMessages/{messageId}` | `demacCommunicationIngressMetadata.js` | none | Immutable first-seen/canonical-identity verification metadata | Customer Agent Production — manual Maya deploy |
+| `processCustomerAgentInbound` | Firestore document created: `whatsappMessages/{messageId}` | `demacCustomerAgentAllowlistCommunication.js` | `OPENAI_API_KEY` | Schedules eligible text/current-turn work; voice without transcript is ignored at create time | Customer Agent Production — manual Maya deploy |
+| `transcribeNewCustomerVoiceNote` | Firestore document created: `whatsappMessages/{messageId}` | `voiceTranscription.js` | `OPENAI_API_KEY` | Claims/transcribes newly eligible inbound voice; historical backfill remains prohibited | Customer Agent Production — manual Maya deploy |
+| `transcribeCustomerVoiceWhenReady` | Firestore document updated: `whatsappMessages/{messageId}` | `voiceTranscription.js` | `OPENAI_API_KEY` | Retries/starts voice transcription when media/eligibility metadata becomes ready | Customer Agent Production — manual Maya deploy |
+| `processCustomerAgentVoiceTranscript` | Firestore document updated: `whatsappMessages/{messageId}` | `demacCustomerAgentAllowlistCommunication.js` | `OPENAI_API_KEY` | Converts completed transcript into the same governed Customer Turn path | Customer Agent Production — manual Maya deploy |
+| `processCustomerAgentReactivation` | Firestore document updated: `communicationConversations/{conversationId}` | `demacCustomerAgentAllowlistCommunication.js` | `OPENAI_API_KEY` | Schedules pending customer turn after explicit return to Maya | Customer Agent Production — manual Maya deploy |
+| `processCustomerAgentTurnWakeup` | Cloud Tasks / task-dispatched | `demacCustomerTurnOrchestrator.js` | `OPENAI_API_KEY` | Persistent debounce wakeup; Observer -> policy -> single Customer Runtime | Customer Agent Production — manual Maya deploy |
+| `communicationConversationAuthority` | HTTPS | `communicationConversationAuthority.js` | no declared Functions secret; verifies Firebase ID token and canonical `users/{uid}` profile | Canonical human ownership/status/send command authority | Customer Agent Production — manual Maya deploy |
 
 ## Trigger composition and why these are not duplicate customer runtimes
 
@@ -43,22 +52,22 @@ Three create-time consumers may observe a new `whatsappMessages` document, but t
 
 Completed voice then flows through `processCustomerAgentVoiceTranscript` into the same Customer Turn orchestrator. `processCustomerAgentTurnWakeup` is the single deferred execution stage that runs Observer/Case before Reply Policy and the existing Customer Runtime. No additional customer-facing runtime or sender authority is introduced by deploying these triggers.
 
-## Required deployment ownership decision
+## Single deployment ownership decision
 
-Do **not** opportunistically add missing functions to unrelated workflows.
-
-Recommended architecture:
+Do **not** opportunistically add these Functions to unrelated workflows.
 
 ### Wacli Connector Production owner
-Keep transport-only surfaces under `.github/workflows/wacli-webhook-deploy.yml`:
+Transport-only surfaces remain under `.github/workflows/wacli-webhook-deploy.yml`:
 - `wacliWebhook`
 - `wacliMediaIngest`
 - `wacliOutboundPoll`
 - `wacliOutboundAck`
 - `wacliOutboundMediaUpload`
 
+The prepared rollout requires an explicit Wacli production cutover confirmation plus explicit conditional authorization to retire `sendQueuedWacliMessage` if it still exists. This prevents an approved cutover path from intentionally leaving two sender paths active.
+
 ### Maya Communication Production owner
-Create one deliberate deployment owner for the governed communication/runtime surfaces:
+The existing `.github/workflows/customer-agent-production-deploy.yml` is deliberately evolved into the one owner for:
 - `stampCommunicationMessageFirstSeen`
 - `processCustomerAgentInbound`
 - `transcribeNewCustomerVoiceNote`
@@ -68,21 +77,22 @@ Create one deliberate deployment owner for the governed communication/runtime su
 - `processCustomerAgentTurnWakeup`
 - `communicationConversationAuthority`
 
-The existing Customer Agent Production workflow can either be evolved into this owner in a reviewed rollout change or be superseded by a dedicated workflow. There must be exactly one production deployment owner per Function; do not keep two workflows capable of deploying the same Function.
+There must be exactly one production deployment owner per Function; no second workflow may deploy the same Function set.
 
 ## Deployment-order dependency
 
-The deployment owner must not activate the Maya Communication surfaces before the Wacli account-bound gateway is healthy.
+The Maya Communication owner must not activate before the account-bound Wacli gateway is healthy.
 
 Required order:
 
-1. account-bound DigitalOcean bridge verified;
-2. canonical communication account setting verified;
-3. Wacli Connector Production deployed/verified;
-4. Maya Communication Production functions deployed/verified;
-5. ERP client parity verified against `communicationConversationAuthority`;
-6. only then consider the separately approved Firestore Rules cutover;
-7. only then activate pilot/voice settings.
+1. read-only production/account preflight passes;
+2. account-bound DigitalOcean bridge deployed/verified under explicit approval;
+3. canonical communication account setting verified;
+4. Wacli Connector Production deployed/verified and legacy sender absent after authorized retirement;
+5. Maya Communication Production functions deployed/verified;
+6. ERP client parity verified against `communicationConversationAuthority`;
+7. only then consider the separately approved Firestore Rules cutover;
+8. only then activate pilot/voice settings.
 
 ## Per-function verification contract
 
@@ -121,15 +131,13 @@ Additional checks:
 
 ## Rollback ownership
 
-- Wacli transport rollback: pause/restore through the authorized bridge/gateway recovery path while preserving canonical account-scoped data.
+- Wacli transport rollback: pause/restore through the authorized bridge/gateway recovery path while preserving canonical account-scoped data. Never restore a second sender.
 - Maya Communication rollback: disable/pause Maya/voice policy or undeploy the newly activated trigger set only through an approved recovery change. Do not restore legacy raw-chat identity writes or a second sender.
 - Security rules rollback must be a separately approved security action; do not use a permissive emergency rule as an unreviewed shortcut.
 
-## Exit criterion for deployment-inventory blocker B3
+## B3 classification
 
-B3 is closed only when:
-1. one production owner is selected for every row above;
-2. that owner has deterministic deployment commands and post-deploy verification;
-3. duplicate deployment ownership is eliminated;
-4. the ordered rollout dependency on the Wacli bridge/gateway is explicit;
-5. the resulting workflow change passes Solo Maintainer Adversarial Review before any production execution.
+- **B3a — engineering deployment owner/inventory: READY in the rollout-control integration.**
+- **B3b — production deployment and live verification: OPEN / NEEDS_HUMAN before execution.**
+
+B3a is considered complete only while the final integrated workflow continues to pass Solo Maintainer Adversarial Review and CI with its production deployment job skipped outside an explicitly confirmed `workflow_dispatch` on `main`.
