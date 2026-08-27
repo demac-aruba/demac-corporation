@@ -10,7 +10,7 @@ test("exports one public WhatsApp customer endpoint backed only by the unified C
   assert.equal(router.RUNTIME.source, "demac-customer-agent-runtime-v1+booking-authority");
   assert.equal(router.RUNTIME.architecture, "single-agent-tool-loop+erp-tools+booking-authority");
   assert.equal(router.RUNTIME.bookingAuthority, true);
-  assert.equal(router.RUNTIME.toolCount, 16);
+  assert.equal(router.RUNTIME.toolCount, 17);
   assert.equal(router.RUNTIME.functionName, "whatsappCopilotDraft");
   assert.strictEqual(bootstrap.whatsappCopilotDraft, router.whatsappCopilotDraft);
   assert.doesNotMatch(router.RUNTIME.source, /confirmation-guard|booking-core|agent-v31/i);
