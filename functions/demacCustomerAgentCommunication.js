@@ -17,6 +17,7 @@ const {
   MAYA_SETTINGS_COLLECTION,
   MAYA_SETTINGS_DOCUMENT,
   mayaReplyDecision,
+  mayaSenderOwnershipDecision,
 } = require("./demacCustomerAgentReplyPolicy");
 const {
   COMMUNICATION_SETTINGS_COLLECTION,
@@ -70,9 +71,7 @@ function automaticReplySupported(provider) {
 }
 
 function shouldRunAgent(conversation = {}) {
-  if (conversation.aiDisposition === "human_active") return false;
-  if (conversation.ownerUserId || conversation.lockedByUserId) return false;
-  return conversation.aiDisposition === "ai_active";
+  return mayaSenderOwnershipDecision({ conversation }).allowed;
 }
 
 async function communicationOwnershipGuard({ context = {} } = {}) {
