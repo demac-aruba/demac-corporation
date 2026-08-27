@@ -1,6 +1,7 @@
 const {
   BOOKING_ERROR_CODES,
   BookingAuthorityError,
+  hashKey,
 } = require("./bookingAuthorityCore");
 const { cleanText } = require("./bookingSchedulingPrimitives");
 const {
@@ -20,7 +21,14 @@ const MAYA_APPOINTMENT_MUTATION_ACTIONS = new Set([
   "cancel_appointment",
   "reschedule_appointment",
 ]);
+const MAYA_APPOINTMENT_WORKFLOWS = new Set(["cancellation", "reschedule"]);
+const MAYA_APPOINTMENT_WORKFLOW_STATES = new Set(["APPOINTMENT_MATCHED", "AWAITING_CUSTOMER_DECISION"]);
+const ACTION_WORKFLOW = Object.freeze({
+  cancel_appointment: "cancellation",
+  reschedule_appointment: "reschedule",
+});
 const CUSTOMER_AGENT_QUEUE_COLLECTION = "customerAgentInboundQueue";
+const MAYA_MUTATION_RECEIPT_COLLECTION = "customerAgentMutationReceipts";
 
 function mutationContextIdentity(context = {}) {
   return {
@@ -31,6 +39,119 @@ function mutationContextIdentity(context = {}) {
 
 function denied(reason, details = {}) {
   return { allowed: false, reason: cleanText(reason, 160) || "maya-mutation-not-authorized", ...details };
+}
+
+function appointmentWorkflowContextFromConversation(conversation = {}, inboundMessageId = "") {
+  const insight = conversation.mayaInsight && typeof conversation.mayaInsight === "object"
+    ? conversation.mayaInsight
+    : {};
+  const observedMessageId = cleanText(conversation.mayaLastObservedMessageId, 300);
+  const expectedMessageId = cleanText(inboundMessageId, 300);
+  const workflow = cleanText(insight.intent, 80).toLowerCase();
+  const appointmentId = cleanText(insight.appointmentId, 180);
+  const caseId = cleanText(insight.caseId || conversation.mayaCaseId, 180);
+  const caseState = cleanText(insight.caseState, 80);
+  if (!expectedMessageId || observedMessageId !== expectedMessageId) {
+    return { valid: false, reason: "appointment-workflow-not-current" };
+  }
+  if (!MAYA_APPOINTMENT_WORKFLOWS.has(workflow)) {
+    return { valid: false, reason: "appointment-workflow-not-authorized" };
+  }
+  if (!appointmentId || !caseId || !MAYA_APPOINTMENT_WORKFLOW_STATES.has(caseState)) {
+    return { valid: false, reason: "appointment-workflow-context-incomplete" };
+  }
+  if (cleanText(conversation.mayaAttentionReason, 180)) {
+    return { valid: false, reason: "appointment-workflow-requires-human-attention" };
+  }
+  return {
+    valid: true,
+    workflow,
+    appointmentId,
+    caseId,
+    caseState,
+  };
+}
+
+async function loadCurrentAppointmentWorkflowContext({ db, context = {} } = {}) {
+  const identity = mutationContextIdentity(context);
+  if (!identity.conversationId || !identity.inboundMessageId) {
+    return { success: false, error: { code: "appointment_workflow_context_missing", reason: "missing-turn-identity" } };
+  }
+  const conversationSnapshot = await db.collection("communicationConversations").doc(identity.conversationId).get();
+  if (!conversationSnapshot.exists) {
+    return { success: false, error: { code: "appointment_workflow_context_missing", reason: "conversation-missing" } };
+  }
+  const workflowContext = appointmentWorkflowContextFromConversation(conversationSnapshot.data() || {}, identity.inboundMessageId);
+  if (!workflowContext.valid) {
+    return { success: false, error: { code: "appointment_workflow_context_missing", reason: workflowContext.reason } };
+  }
+  const appointmentSnapshot = await db.collection("appointments").doc(workflowContext.appointmentId).get();
+  if (!appointmentSnapshot.exists) {
+    return { success: false, error: { code: "appointment_workflow_context_missing", reason: "appointment-missing" } };
+  }
+  const appointment = { id: appointmentSnapshot.id, ...appointmentSnapshot.data() };
+  return {
+    success: true,
+    workflow: workflowContext.workflow,
+    caseId: workflowContext.caseId,
+    appointmentId: workflowContext.appointmentId,
+    appointment,
+  };
+}
+
+function mutationReceiptIdentity(action, args = {}, context = {}) {
+  const normalizedAction = cleanText(action, 80).toLowerCase();
+  const identity = mutationContextIdentity(context);
+  const appointmentId = cleanText(args.appointmentId, 180);
+  const offerId = cleanText(args.offerId, 180);
+  const offerVersion = Number.isSafeInteger(Number(args.offerVersion)) ? Number(args.offerVersion) : 0;
+  const optionId = cleanText(args.optionId, 180);
+  const material = {
+    action: normalizedAction,
+    conversationId: identity.conversationId,
+    inboundMessageId: identity.inboundMessageId,
+    appointmentId,
+    offerId,
+    offerVersion,
+    optionId,
+    reason: cleanText(args.reason, 500),
+    note: cleanText(args.note, 1_500),
+  };
+  return {
+    id: `MAM-${hashKey(`${identity.conversationId}|${identity.inboundMessageId}|${normalizedAction}`, 40).toUpperCase()}`,
+    requestFingerprint: hashKey(JSON.stringify(material), 40),
+    ...material,
+  };
+}
+
+function mutationReplayDecision({ receipt = {}, expected = {}, appointment = {} } = {}) {
+  if (!receipt || cleanText(receipt.status, 40) !== "committed") return { allowed: false, reason: "mutation-receipt-not-committed" };
+  if (cleanText(receipt.requestFingerprint, 80) !== cleanText(expected.requestFingerprint, 80)) {
+    return { allowed: false, reason: "mutation-idempotency-conflict" };
+  }
+  const appointmentId = cleanText(appointment.appointmentId || appointment.id, 180);
+  if (!appointmentId || appointmentId !== cleanText(expected.appointmentId, 180)) {
+    return { allowed: false, reason: "mutation-replay-appointment-changed" };
+  }
+  if (expected.action === "cancel_appointment") {
+    const status = cleanText(appointment.status, 40).toLowerCase();
+    if (!["cancelled", "canceled", "cancelada"].includes(status)) {
+      return { allowed: false, reason: "mutation-replay-state-changed" };
+    }
+    return { allowed: true, replayed: true, action: expected.action };
+  }
+  if (expected.action === "reschedule_appointment") {
+    if (
+      cleanText(appointment.offerId, 180) !== expected.offerId
+      || Number(appointment.offerVersion || 0) !== expected.offerVersion
+      || cleanText(appointment.selectedOptionId, 180) !== expected.optionId
+      || cleanText(appointment.lastScheduleChangeKind, 80) !== "customer_reschedule"
+    ) {
+      return { allowed: false, reason: "mutation-replay-state-changed" };
+    }
+    return { allowed: true, replayed: true, action: expected.action };
+  }
+  return { allowed: false, reason: "mutation-replay-action-invalid" };
 }
 
 async function loadMutationEpochReceipt({ db, transaction, conversationId, inboundMessageId } = {}) {
@@ -103,6 +224,16 @@ async function mayaAppointmentMutationDecisionInTransaction({
     return denied("communication-account-changed");
   }
 
+  const workflowContext = appointmentWorkflowContextFromConversation(conversation, identity.inboundMessageId);
+  if (!workflowContext.valid) return denied(workflowContext.reason);
+  const expectedWorkflow = ACTION_WORKFLOW[normalizedAction] || "";
+  if (workflowContext.workflow !== expectedWorkflow) return denied("appointment-workflow-action-mismatch");
+  const requestedAppointmentId = cleanText(context.requestedAppointmentId, 180);
+  if (!requestedAppointmentId) return denied("requested-appointment-id-missing");
+  if (requestedAppointmentId !== workflowContext.appointmentId) {
+    return denied("appointment-workflow-context-mismatch");
+  }
+
   const accountDecision = activeAccountDecision({
     conversation,
     settings: communicationSettingsSnapshot.exists ? communicationSettingsSnapshot.data() || {} : {},
@@ -132,6 +263,9 @@ async function mayaAppointmentMutationDecisionInTransaction({
     communicationAccountId: epochReceipt.communicationAccountId,
     ownershipVersion: epochDecision.ownershipVersion,
     customerInputVersion: epochDecision.customerInputVersion,
+    workflow: workflowContext.workflow,
+    appointmentId: workflowContext.appointmentId,
+    caseId: workflowContext.caseId,
   };
 }
 
@@ -146,7 +280,7 @@ function mutationAuthorizationError(action, decision = {}) {
   );
 }
 
-function createMayaGuardedBookingDb({ db, action, context = {} } = {}) {
+function createMayaGuardedBookingDb({ db, action, context = {}, mutationReceipt = null } = {}) {
   if (!db || typeof db.collection !== "function" || typeof db.runTransaction !== "function") {
     throw new Error("A Firestore-compatible transactional db is required.");
   }
@@ -161,17 +295,58 @@ function createMayaGuardedBookingDb({ db, action, context = {} } = {}) {
         context,
       });
       if (!decision.allowed) throw mutationAuthorizationError(normalizedAction, decision);
-      return callback(transaction);
+
+      let receiptRef = null;
+      if (mutationReceipt?.id && mutationReceipt?.requestFingerprint) {
+        receiptRef = db.collection(MAYA_MUTATION_RECEIPT_COLLECTION).doc(mutationReceipt.id);
+        const existingReceipt = await transaction.get(receiptRef);
+        if (existingReceipt.exists) {
+          const stored = existingReceipt.data() || {};
+          if (cleanText(stored.requestFingerprint, 80) !== cleanText(mutationReceipt.requestFingerprint, 80)) {
+            throw new BookingAuthorityError(
+              BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
+              "The same Maya customer turn cannot be reused for a different appointment mutation.",
+              { receiptId: mutationReceipt.id, mayaMutationReplay: false },
+            );
+          }
+          throw new BookingAuthorityError(
+            BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
+            "This Maya appointment mutation was already committed.",
+            { receiptId: mutationReceipt.id, mayaMutationReplay: true },
+          );
+        }
+      }
+
+      const result = await callback(transaction);
+      if (receiptRef) {
+        transaction.set(receiptRef, {
+          ...mutationReceipt,
+          status: "committed",
+          communicationAccountId: decision.communicationAccountId,
+          workflow: decision.workflow,
+          caseId: decision.caseId,
+          committedAtIso: new Date().toISOString(),
+        });
+      }
+      return result;
     }),
   };
 }
 
 module.exports = {
+  ACTION_WORKFLOW,
   CUSTOMER_AGENT_QUEUE_COLLECTION,
   MAYA_APPOINTMENT_MUTATION_ACTIONS,
+  MAYA_APPOINTMENT_WORKFLOWS,
+  MAYA_APPOINTMENT_WORKFLOW_STATES,
+  MAYA_MUTATION_RECEIPT_COLLECTION,
+  appointmentWorkflowContextFromConversation,
   createMayaGuardedBookingDb,
+  loadCurrentAppointmentWorkflowContext,
   loadMutationEpochReceipt,
   mayaAppointmentMutationDecisionInTransaction,
   mutationAuthorizationError,
   mutationContextIdentity,
+  mutationReceiptIdentity,
+  mutationReplayDecision,
 };
