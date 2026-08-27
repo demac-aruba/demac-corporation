@@ -189,7 +189,11 @@ function createCustomerAppointmentLifecycleTools({ db, schedulingProvider = null
 
   async function executeMutation(action, args, context, runner) {
     requireMutationContext(context);
-    const executionContext = { ...context, requestedAppointmentId: cleanText(args.appointmentId, 180) };
+    const executionContext = {
+      ...context,
+      requestedAppointmentId: cleanText(args.appointmentId, 180),
+      requestedOfferId: cleanText(args.offerId, 180),
+    };
     let replayState = await loadCommittedReplay(action, args, executionContext);
     if (replayState.replay) return replayState.replay;
     try {
