@@ -185,7 +185,7 @@ test('scheduled visit transitions to en route atomically with first timestamp, v
   assert.equal(result.visit.status, 'en_route');
   assert.equal(result.visit.version, 2);
   assert.equal(result.visit.departedAt, '2026-08-24T12:30:00.000Z');
-  assert.deepEqual(result.visit.availableTransitions, ['on_site']);
+  assert.deepEqual(result.visit.availableTransitions, ['on_site', 'pending']);
   assert.equal(store.get('workVisits', 'visit-WO-1').status, 'on_the_way');
   assert.equal(store.get('workVisits', 'visit-WO-1').version, 2);
   assert.equal(auditEvents.length, 1);
@@ -203,8 +203,86 @@ test('visit progresses en route -> on site -> in progress without overwriting fi
   assert.equal(inProgress.visit.startedAt, '2026-08-24T13:00:00.000Z');
   assert.equal(inProgress.visit.departedAt, '2026-08-24T12:30:00.000Z');
   assert.equal(inProgress.visit.arrivedAt, '2026-08-24T12:45:00.000Z');
-  assert.deepEqual(inProgress.visit.availableTransitions, []);
+  assert.deepEqual(inProgress.visit.availableTransitions, ['pending']);
   assert.equal(store.get('workVisits', 'visit-WO-1').version, 4);
+});
+
+test('in-progress visit pauses with a required reason, optional next action and auditable canonical fields', async () => {
+  const visit = baseVisit({
+    status: 'in_progress',
+    departedAt: '2026-08-24T12:00:00.000Z',
+    arrivedAt: '2026-08-24T12:15:00.000Z',
+    startedAt: '2026-08-24T12:20:00.000Z',
+    version: 4,
+  });
+  const { store, auditEvents, transition } = fixture({ visit });
+  const result = await transition({
+    identity: identity(),
+    visitId: 'visit-WO-1',
+    to: 'pending',
+    expectedVersion: 4,
+    pendingReason: ' Replacement control board required. ',
+    pendingAction: 'Office should source the compatible board.',
+    requestId: 'transition-pending-001',
+  });
+
+  assert.equal(result.visit.status, 'pending');
+  assert.equal(result.visit.pendingReason, 'Replacement control board required.');
+  assert.equal(result.visit.pendingAction, 'Office should source the compatible board.');
+  assert.equal(result.visit.pendingAt, '2026-08-24T12:30:00.000Z');
+  assert.deepEqual(result.visit.availableTransitions, ['in_progress']);
+  assert.equal(store.get('workVisits', 'visit-WO-1').pendingRequestId, 'transition-pending-001');
+  assert.deepEqual(auditEvents[0].after, {
+    status: 'pending',
+    version: 5,
+    pendingReason: 'Replacement control board required.',
+    pendingAction: 'Office should source the compatible board.',
+  });
+});
+
+test('pending transition requires a reason and exact retry payload', async () => {
+  const visit = baseVisit({ status: 'in_progress', startedAt: '2026-08-24T12:20:00.000Z', version: 4 });
+  const { store, auditEvents, transition } = fixture({ visit });
+  await assert.rejects(
+    () => transition({ identity: identity(), visitId: 'visit-WO-1', to: 'pending', expectedVersion: 4, requestId: 'transition-pending-empty' }),
+    (error) => error?.code === 'pending_reason_required' && error?.status === 400,
+  );
+  assert.equal(store.get('workVisits', 'visit-WO-1').status, 'in_progress');
+
+  const input = {
+    identity: identity(), visitId: 'visit-WO-1', to: 'pending', expectedVersion: 4,
+    pendingReason: 'Awaiting part', pendingAction: 'Order part', requestId: 'transition-pending-exact',
+  };
+  await transition(input);
+  const replay = await transition(input);
+  assert.equal(replay.replayed, true);
+  assert.equal(auditEvents.length, 1);
+  await assert.rejects(
+    () => transition({ ...input, pendingReason: 'Different reason' }),
+    (error) => error?.code === 'pending_transition_conflict' && error?.status === 409,
+  );
+});
+
+test('pending visit resumes without erasing the recorded pending context', async () => {
+  const visit = baseVisit({
+    status: 'pending',
+    startedAt: '2026-08-24T12:20:00.000Z',
+    pendingAt: '2026-08-24T12:30:00.000Z',
+    pendingReason: 'Awaiting access approval',
+    pendingAction: 'Customer will call DEMAC',
+    pendingRequestId: 'transition-pending-001',
+    version: 5,
+  });
+  const { store, transition } = fixture({ visit, times: ['2026-08-25T13:00:00.000Z'] });
+  const result = await transition({
+    identity: identity(), visitId: 'visit-WO-1', to: 'in_progress', expectedVersion: 5, requestId: 'transition-resume-001',
+  });
+  assert.equal(result.visit.status, 'in_progress');
+  assert.equal(result.visit.resumedAt, '2026-08-25T13:00:00.000Z');
+  assert.equal(result.visit.pendingReason, 'Awaiting access approval');
+  assert.equal(result.visit.pendingAction, 'Customer will call DEMAC');
+  assert.deepEqual(result.visit.availableTransitions, ['pending']);
+  assert.equal(store.get('workVisits', 'visit-WO-1').version, 6);
 });
 
 test('retrying an already committed target is an idempotent no-op even with the stale prior version', async () => {
@@ -380,7 +458,7 @@ test('audit failure aborts the surrounding transaction and leaves WorkVisit unch
 test('non-activated branch targets and malformed expectedVersion fail before persistence', async () => {
   const { store, transition } = fixture();
   await assert.rejects(
-    () => transition({ identity: identity(), visitId: 'visit-WO-1', to: 'pending', expectedVersion: 1, requestId: 'transition-pending-001' }),
+    () => transition({ identity: identity(), visitId: 'visit-WO-1', to: 'no_access', expectedVersion: 1, requestId: 'transition-no-access-001' }),
     (error) => error?.code === 'transition_not_activated',
   );
   await assert.rejects(

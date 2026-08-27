@@ -4,16 +4,17 @@ const { activatedVisitTransitions, projectActivatedVisit } = require('./fieldOpe
 
 test('activated transitions are projected from the canonical server graph', () => {
   assert.deepEqual(activatedVisitTransitions('scheduled', ['read', 'execute']), ['en_route']);
-  assert.deepEqual(activatedVisitTransitions('en_route', ['execute']), ['on_site']);
-  assert.deepEqual(activatedVisitTransitions('on_site', ['execute']), ['in_progress']);
-  assert.deepEqual(activatedVisitTransitions('in_progress', ['execute']), []);
+  assert.deepEqual(activatedVisitTransitions('en_route', ['execute']), ['on_site', 'pending']);
+  assert.deepEqual(activatedVisitTransitions('on_site', ['execute']), ['in_progress', 'pending']);
+  assert.deepEqual(activatedVisitTransitions('in_progress', ['execute']), ['pending']);
+  assert.deepEqual(activatedVisitTransitions('pending', ['execute']), ['in_progress']);
 });
 
 test('one projector owns activated-transition decoration for Field visit responses', () => {
   const visit = { id: 'visit-1', status: 'en_route', version: 2 };
   assert.deepEqual(projectActivatedVisit(visit, ['read', 'execute']), {
     ...visit,
-    availableTransitions: ['on_site'],
+    availableTransitions: ['on_site', 'pending'],
   });
   assert.deepEqual(projectActivatedVisit(visit, ['read']), {
     ...visit,

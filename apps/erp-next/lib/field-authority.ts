@@ -259,8 +259,17 @@ export async function prepareFieldVisit(workOrderId: string, requestId: string) 
   return parseFieldPrepareVisitResponse(await callFieldAuthority('prepare_visit', { workOrderId, requestId }));
 }
 
-export async function transitionFieldVisit(visitId: string, to: FieldActiveVisitTransition, expectedVersion: number, requestId: string) {
-  return parseFieldTransitionVisitResponse(await callFieldAuthority('transition_visit', { visitId, to, expectedVersion, requestId }));
+export async function transitionFieldVisit(
+  visitId: string,
+  to: FieldActiveVisitTransition,
+  expectedVersion: number,
+  requestId: string,
+  pendingReason = '',
+  pendingAction = '',
+) {
+  return parseFieldTransitionVisitResponse(await callFieldAuthority('transition_visit', {
+    visitId, to, expectedVersion, requestId, pendingReason, pendingAction,
+  }));
 }
 
 export async function attachExistingFieldAsset(visitId: string, assetId: string, requestId: string) {

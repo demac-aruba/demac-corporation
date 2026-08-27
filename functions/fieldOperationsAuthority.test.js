@@ -125,13 +125,15 @@ test('transition_visit authenticates and forwards optimistic concurrency inputs 
     verifyIdToken: async () => ({ uid: 'uid-1' }),
     transitionWorkVisit: async (input) => { calls.push(input); return { success: true, replayed: false, visit: { id: 'visit-WO-1', status: 'en_route', version: 2, availableTransitions: ['on_site'] }, allowedActions: ['read', 'execute'] }; },
   });
-  const result = await api.handle(request({ token: 'valid-token', action: 'transition_visit', data: { visitId: ' visit-WO-1 ', to: ' en_route ', expectedVersion: 1, requestId: ' transition-route-001 ', allowedActions: ['execute', 'price.override'] } }));
+  const result = await api.handle(request({ token: 'valid-token', action: 'transition_visit', data: { visitId: ' visit-WO-1 ', to: ' pending ', expectedVersion: 1, pendingReason: ' Waiting for part ', pendingAction: ' Office orders it ', requestId: ' transition-route-001 ', allowedActions: ['execute', 'price.override'] } }));
   assert.equal(result.status, 200);
   assert.equal(result.body.version, 1);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].visitId, 'visit-WO-1');
-  assert.equal(calls[0].to, 'en_route');
+  assert.equal(calls[0].to, 'pending');
   assert.equal(calls[0].expectedVersion, 1);
+  assert.equal(calls[0].pendingReason, 'Waiting for part');
+  assert.equal(calls[0].pendingAction, 'Office orders it');
   assert.equal(calls[0].requestId, 'transition-route-001');
   assert.equal(calls[0].identity.staffId, 'staff-1');
   assert.equal('allowedActions' in calls[0], false);

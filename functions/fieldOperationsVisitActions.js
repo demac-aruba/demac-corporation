@@ -1,6 +1,6 @@
 const { allowedWorkVisitTransitions } = require('./fieldOperationsAuthorityTransitions');
 
-const ACTIVE_VISIT_TARGETS = Object.freeze(['en_route', 'on_site', 'in_progress']);
+const ACTIVE_VISIT_TARGETS = Object.freeze(['en_route', 'on_site', 'in_progress', 'pending']);
 const ACTIVE_VISIT_TARGET_SET = new Set(ACTIVE_VISIT_TARGETS);
 
 function activatedVisitTransitions(status, allowedActions = []) {

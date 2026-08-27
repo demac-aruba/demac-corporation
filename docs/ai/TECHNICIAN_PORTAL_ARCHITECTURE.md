@@ -116,7 +116,7 @@ Append-only audit evidence for material Field lifecycle actions. `fieldOperation
 
 Allowed branches from active states: `pending`, `requires_return_visit`, `no_access`, `cancelled`. Transitions are centralized and auditable; arbitrary UI status writes are forbidden.
 
-The canonical WorkVisit transition graph is implemented server-side in `functions/fieldOperationsAuthorityTransitions.js`. `allowedWorkVisitTransitions()` exposes the graph to other server modules without duplicating it. `fieldOperationsVisitActions.js` filters that canonical graph to the transitions actually activated in the current slice. The HTTP `transition_visit` command currently exposes only `en_route`, `on_site`, and `in_progress`; nonactivated branches continue to fail closed. First transition timestamps are server-owned and invalid/terminal transitions are rejected.
+The canonical WorkVisit transition graph is implemented server-side in `functions/fieldOperationsAuthorityTransitions.js`. `allowedWorkVisitTransitions()` exposes the graph to other server modules without duplicating it. `fieldOperationsVisitActions.js` filters that canonical graph to the transitions actually activated in the current slice. The HTTP `transition_visit` command exposes `en_route`, `on_site`, `in_progress`, and the governed `pending -> in_progress` pause/resume branch; nonactivated branches continue to fail closed. Entering `pending` requires a canonical reason, preserves an optional next action, uses exact retry semantics for that payload, and records server-owned pause/resume timestamps plus atomic audit. First transition timestamps are server-owned and invalid/terminal transitions are rejected.
 
 ### WorkIntervention
 
@@ -338,7 +338,7 @@ Implemented:
 7. On uncertain timeout/error, the client re-fetches server state instead of guessing whether the transaction committed.
 8. WorkOrder planned/release status is not rewritten to simulate physical Field status.
 
-Still deferred within Phase 4 or later dependencies: `pending`, `no_access`, `cancelled`, `requires_return_visit`, Office Review submission/completion and distinct return-visit creation.
+Still deferred within Phase 4 or later dependencies: `no_access`, `cancelled`, `requires_return_visit`, Office Review submission/completion and distinct return-visit creation. The `pending -> in_progress` pause/resume branch is activated independently and does not claim that a return visit exists.
 
 ### Slice 3+ — progress by domain dependency
 

@@ -65,6 +65,7 @@ import {
   VoiceNoteReportControls,
   type ReportVoiceNoteInput,
 } from './voice-note-report-controls';
+import { VisitPendingControls, type VisitPendingInput } from './visit-pending-controls';
 import styles from './technician-field-home.module.css';
 
 type RangeKey = 'today' | 'tomorrow' | 'week';
@@ -96,6 +97,12 @@ type ReportMutationRetry = {
   requestId: string;
 };
 
+type VisitTransitionInput = {
+  target: FieldActiveVisitTransition;
+  pendingReason?: string;
+  pendingAction?: string;
+};
+
 const COMPLETED_WORK_ORDER_STATUSES = new Set(['Completada']);
 const ACTIVE_VISIT_STATUSES = new Set<FieldVisitStatus>(['en_route', 'on_site', 'in_progress']);
 const SCHEDULE_REVALIDATE_MS = 60_000;
@@ -103,6 +110,7 @@ const ACTIVE_TRANSITION_LABELS: Record<FieldActiveVisitTransition, string> = {
   en_route: 'En camino',
   on_site: 'Llegué',
   in_progress: 'Iniciar trabajo',
+  pending: 'Dejar pendiente',
 };
 
 function workSummary(job: Pick<FieldScheduleJob, 'plannedWork' | 'customerFacingDescription'>) {
@@ -373,7 +381,7 @@ function DetailView({
   savingFreeTextKey: string | null;
   savingVoiceNoteKey: string | null;
   savingCustomerAcknowledgementKey: string | null;
-  onTransition: (target: FieldActiveVisitTransition) => void;
+  onTransition: (input: VisitTransitionInput) => void;
   onAttachAsset: (assetId: string) => void;
   onRegisterEquipment: (input: EquipmentRegistrationInput) => Promise<boolean>;
   onCreatePlannedIntervention: (input: PlannedWorkMutationInput) => void;
@@ -452,19 +460,37 @@ function DetailView({
         </div>
         {availableTransitions.length ? (
           <div className={styles.visitActions}>
-            {availableTransitions.map((target) => (
+            {availableTransitions.filter((target) => target !== 'pending').map((target) => (
               <button
                 className={`${styles.action} ${styles.primary}`}
                 disabled={mutationBusy}
                 key={target}
-                onClick={() => onTransition(target)}
+                onClick={() => onTransition({ target })}
                 type="button"
               >
-                {transitioning === target ? 'Procesando…' : ACTIVE_TRANSITION_LABELS[target]}
+                {transitioning === target
+                  ? 'Procesando…'
+                  : target === 'in_progress' && job.fieldVisit?.status === 'pending'
+                    ? 'Reanudar trabajo'
+                    : ACTIVE_TRANSITION_LABELS[target]}
               </button>
             ))}
           </div>
         ) : <p className={styles.helper}>No hay otra transición activa disponible para esta visita en este slice.</p>}
+        {availableTransitions.includes('pending') ? (
+          <VisitPendingControls
+            disabled={mutationBusy}
+            onSubmit={(input: VisitPendingInput) => onTransition(input)}
+            saving={transitioning === 'pending'}
+          />
+        ) : null}
+        {job.fieldVisit?.pendingReason ? (
+          <div className={styles.planned} style={{ marginTop: 12 }}>
+            <div className={styles.plannedTitle}>Último motivo pendiente</div>
+            <strong>{job.fieldVisit.pendingReason}</strong>
+            {job.fieldVisit.pendingAction ? <p>Próxima acción: {job.fieldVisit.pendingAction}</p> : null}
+          </div>
+        ) : null}
         {transitionError ? <div className={styles.mutationError}>{transitionError}</div> : null}
       </section>
 
@@ -693,6 +719,7 @@ export function TechnicianFieldHome() {
   const detailRequestRef = useRef(0);
   const mutationRequestRef = useRef(0);
   const mutationLockRef = useRef<number | null>(null);
+  const visitTransitionRequestRef = useRef<ReportMutationRetry | null>(null);
   const equipmentRegistrationRequestRef = useRef<string | null>(null);
   const reportPhotoRequestRef = useRef<ReportMutationRetry | null>(null);
   const reportMeasurementRequestRef = useRef<ReportMutationRetry | null>(null);
@@ -713,6 +740,7 @@ export function TechnicianFieldHome() {
     detailRequestRef.current += 1;
     mutationRequestRef.current += 1;
     mutationLockRef.current = null;
+    visitTransitionRequestRef.current = null;
     equipmentRegistrationRequestRef.current = null;
     reportPhotoRequestRef.current = null;
     reportMeasurementRequestRef.current = null;
@@ -833,10 +861,18 @@ export function TechnicianFieldHome() {
     setCustomerAcknowledgementError(null);
   }, []);
 
-  const runVisitTransition = useCallback(async (target: FieldActiveVisitTransition) => {
+  const runVisitTransition = useCallback(async (input: VisitTransitionInput) => {
     if (mutationLockRef.current !== null) return;
     const currentDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
     if (!currentDetail) return;
+
+    const target = input.target;
+    const signature = `${target}|${input.pendingReason?.trim() || ''}|${input.pendingAction?.trim() || ''}`;
+    const prior = visitTransitionRequestRef.current;
+    const transitionRequestId = prior?.key === target && prior.signature === signature
+      ? prior.requestId
+      : clientRequestId(`transition-${target}`, currentDetail.workOrderId);
+    visitTransitionRequestRef.current = { key: target, signature, requestId: transitionRequestId };
 
     const mutationId = ++mutationRequestRef.current;
     mutationLockRef.current = mutationId;
@@ -858,13 +894,16 @@ export function TechnicianFieldHome() {
         visit.id,
         target,
         visit.version,
-        clientRequestId(`transition-${target}`, workOrderId),
+        transitionRequestId,
+        input.pendingReason,
+        input.pendingAction,
       );
       if (mutationId !== mutationRequestRef.current) return;
 
       setDetail((current) => current?.workOrderId === workOrderId
         ? { ...current, fieldVisit: transitioned.visit, canPrepareVisit: false }
         : current);
+      visitTransitionRequestRef.current = null;
       void loadSchedule(true);
     } catch (mutationError) {
       if (mutationId !== mutationRequestRef.current) return;
@@ -1706,7 +1745,7 @@ export function TechnicianFieldHome() {
         savingFreeTextKey={savingFreeTextKey}
         savingVoiceNoteKey={savingVoiceNoteKey}
         savingCustomerAcknowledgementKey={savingCustomerAcknowledgementKey}
-        onTransition={(target) => void runVisitTransition(target)}
+        onTransition={(input) => void runVisitTransition(input)}
         onAttachAsset={(assetId) => void runAttachAsset(assetId)}
         onRegisterEquipment={runRegisterEquipment}
         onCreatePlannedIntervention={(input) => void runCreatePlannedIntervention(input)}

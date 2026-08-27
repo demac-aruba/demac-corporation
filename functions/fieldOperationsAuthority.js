@@ -223,6 +223,8 @@ function createFieldOperationsApi({
         visitId: cleanText(data.visitId, 180),
         to: cleanText(data.to, 80),
         expectedVersion: data.expectedVersion,
+        pendingReason: cleanText(data.pendingReason, 1000),
+        pendingAction: cleanText(data.pendingAction, 1500),
         requestId: cleanText(data.requestId, 240),
       });
       return { ...transitioned, version: FIELD_OPERATIONS_API_VERSION };

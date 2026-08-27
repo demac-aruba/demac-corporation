@@ -99,7 +99,7 @@ test('read model projects current WorkVisit status, version and next active serv
   assert.equal(result.fieldVisit.status, 'en_route');
   assert.equal(result.fieldVisit.version, 2);
   assert.equal(result.fieldVisit.departedAt, '2026-08-24T12:30:00.000Z');
-  assert.deepEqual(result.fieldVisit.availableTransitions, ['on_site']);
+  assert.deepEqual(result.fieldVisit.availableTransitions, ['on_site', 'pending']);
 });
 
 test('helper/read-only projection receives visit state without execution transitions', () => {

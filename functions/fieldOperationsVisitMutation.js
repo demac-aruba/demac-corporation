@@ -21,7 +21,19 @@ function deterministicEventId(requestId, visitId, target) {
   return `FE-${crypto.createHash('sha256').update(`${requestId}:work_visit_transition:${visitId}:${target}`).digest('hex').slice(0, 24)}`;
 }
 
-function activeTransitionPatch({ storedVisit, transitionedVisit, target, identity, occurredAt }) {
+function pendingDetails({ target, pendingReason, pendingAction }) {
+  if (target !== 'pending') return {};
+  const reason = text(pendingReason, 1000);
+  if (!reason) {
+    throw fieldError('pending_reason_required', 'A reason is required before leaving a Work Visit pending.', 400);
+  }
+  return {
+    pendingReason: reason,
+    pendingAction: text(pendingAction, 1500) || undefined,
+  };
+}
+
+function activeTransitionPatch({ storedVisit, transitionedVisit, target, identity, occurredAt, pendingReason, pendingAction, requestId }) {
   if (!Number.isSafeInteger(transitionedVisit.version) || transitionedVisit.version < 1 || transitionedVisit.version >= Number.MAX_SAFE_INTEGER) {
     throw fieldError('visit_version_exhausted', 'Work Visit version cannot be advanced safely.', 409, { version: transitionedVisit.version });
   }
@@ -32,14 +44,22 @@ function activeTransitionPatch({ storedVisit, transitionedVisit, target, identit
     updatedByStaffId: text(identity.staffId, 180) || undefined,
     updatedByName: text(identity.name, 180) || text(identity.email, 180) || text(identity.uid, 180),
     version: transitionedVisit.version + 1,
+    ...pendingDetails({ target, pendingReason, pendingAction }),
   };
   if (transitionedVisit.departedAt && !storedVisit.departedAt) patch.departedAt = transitionedVisit.departedAt;
   if (transitionedVisit.arrivedAt && !storedVisit.arrivedAt) patch.arrivedAt = transitionedVisit.arrivedAt;
   if (transitionedVisit.startedAt && !storedVisit.startedAt) patch.startedAt = transitionedVisit.startedAt;
+  if (target === 'pending') {
+    patch.pendingAt = occurredAt;
+    patch.pendingRequestId = requestId;
+  }
+  if (target === 'in_progress' && canonicalStatusFromStorage(storedVisit.status) === 'pending') {
+    patch.resumedAt = occurredAt;
+  }
   return fieldFirestoreData(patch, 'workVisitTransition');
 }
 
-function transitionAuditEvent({ requestId, visit, previousStatus, nextStatus, identity, occurredAt, nextVersion }) {
+function transitionAuditEvent({ requestId, visit, previousStatus, nextStatus, identity, occurredAt, nextVersion, pendingReason, pendingAction }) {
   return {
     id: deterministicEventId(requestId, visit.id, nextStatus),
     type: 'work_visit_status_changed',
@@ -56,7 +76,14 @@ function transitionAuditEvent({ requestId, visit, previousStatus, nextStatus, id
     performedByStaffId: text(identity.staffId, 180) || undefined,
     performedByName: text(identity.name, 180) || text(identity.email, 180) || text(identity.uid, 180),
     before: { status: previousStatus, version: visit.version },
-    after: { status: nextStatus, version: nextVersion },
+    after: {
+      status: nextStatus,
+      version: nextVersion,
+      ...(nextStatus === 'pending' ? {
+        pendingReason: text(pendingReason, 1000),
+        pendingAction: text(pendingAction, 1500) || undefined,
+      } : {}),
+    },
   };
 }
 
@@ -65,7 +92,7 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
   if (typeof resolveAssignment !== 'function') throw new Error('resolveAssignment is required.');
   if (typeof appendAuditInTransaction !== 'function') throw new Error('appendAuditInTransaction is required.');
 
-  return async function transitionWorkVisit({ identity, visitId, to, expectedVersion, requestId } = {}) {
+  return async function transitionWorkVisit({ identity, visitId, to, expectedVersion, pendingReason, pendingAction, requestId } = {}) {
     const normalizedVisitId = text(visitId, 180);
     if (!normalizedVisitId) throw fieldError('visit_required', 'A Work Visit id is required.', 400);
     const target = text(to, 80);
@@ -100,6 +127,14 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
 
       const currentStatus = canonicalStatusFromStorage(storedVisit.status);
       if (currentStatus === target) {
+        if (target === 'pending') {
+          const requested = pendingDetails({ target, pendingReason, pendingAction });
+          if (text(storedVisit.pendingRequestId, 240) !== stable
+            || text(storedVisit.pendingReason, 1000) !== requested.pendingReason
+            || text(storedVisit.pendingAction, 1500) !== text(requested.pendingAction, 1500)) {
+            throw fieldError('pending_transition_conflict', 'This Work Visit is already pending with different details. Refresh before trying again.', 409);
+          }
+        }
         // Retry after a successful transaction is a no-op even if the caller still holds the
         // pre-transition version. The first transition and audit event already committed atomically.
         result = {
@@ -121,7 +156,16 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
       const occurredAt = text(now(), 80);
       if (!occurredAt || Number.isNaN(Date.parse(occurredAt))) throw new Error('Clock returned an invalid timestamp.');
       const transition = transitionCanonicalWorkVisit({ visit: canonicalVisit, to: target, at: occurredAt });
-      const patch = activeTransitionPatch({ storedVisit, transitionedVisit: transition.next, target, identity, occurredAt });
+      const patch = activeTransitionPatch({
+        storedVisit,
+        transitionedVisit: transition.next,
+        target,
+        identity,
+        occurredAt,
+        pendingReason,
+        pendingAction,
+        requestId: stable,
+      });
       const nextStoredVisit = { ...storedVisit, ...patch };
       const nextVisit = projectCanonicalWorkVisit(nextStoredVisit, { appointmentId, propertyId });
       const event = transitionAuditEvent({
@@ -132,6 +176,8 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
         identity,
         occurredAt,
         nextVersion: patch.version,
+        pendingReason,
+        pendingAction,
       });
 
       transaction.update(visitRef, patch);

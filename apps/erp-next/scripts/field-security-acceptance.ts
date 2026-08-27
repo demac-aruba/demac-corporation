@@ -181,6 +181,23 @@ const validTransition = parseFieldTransitionVisitResponse({
   allowedActions: ['read', 'execute'],
   auditEventId: 'FE-2',
 });
+const validPendingTransition = parseFieldTransitionVisitResponse({
+  success: true,
+  version: 1,
+  replayed: false,
+  visit: {
+    ...representativeVisit,
+    status: 'pending',
+    pendingAt: '2026-08-24T13:00:00.000Z',
+    pendingReason: 'Awaiting replacement part',
+    pendingAction: 'Office orders the part',
+    version: 5,
+    availableTransitions: ['in_progress'],
+  },
+  allowedActions: ['read', 'execute'],
+});
+assert(validPendingTransition.visit.pendingReason === 'Awaiting replacement part', 'pending visit transport must preserve the canonical reason');
+assert(validPendingTransition.visit.availableTransitions[0] === 'in_progress', 'pending visit transport must accept the server-projected resume transition');
 assert(validTransition.visit.status === 'en_route' && validTransition.visit.version === 2, 'valid visit transition transport should parse');
 
 const validAttach = parseFieldAttachVisitAssetResponse({
@@ -210,6 +227,7 @@ assertThrows(() => parseFieldPrepareVisitResponse({ success: true, version: 1, r
 assertThrows(() => parseFieldPrepareVisitResponse({ success: true, version: 1, replayed: false, source: 'field_authority', visit: { ...representativeVisit, availableTransitions: ['future_transition'] }, allowedActions: ['execute'] }), 'prepare response with unknown transition must fail closed');
 assertThrows(() => parseFieldPrepareVisitResponse({ success: true, version: 1, replayed: false, source: 'field_authority', visit: representativeVisit, allowedActions: ['execute', 'future.action'] }), 'prepare response with unknown action must fail closed');
 assertThrows(() => parseFieldTransitionVisitResponse({ success: true, version: 1, replayed: false, visit: { ...representativeVisit, availableTransitions: ['future_transition'] }, allowedActions: ['execute'] }), 'transition response with unknown next transition must fail closed');
+assertThrows(() => parseFieldTransitionVisitResponse({ success: true, version: 1, replayed: false, visit: { ...representativeVisit, pendingReason: 42 }, allowedActions: ['execute'] }), 'transition response with malformed pending context must fail closed');
 assertThrows(() => parseFieldTransitionVisitResponse({ success: true, version: 1, replayed: false, visit: { ...representativeVisit, version: 1.5 }, allowedActions: ['execute'] }), 'fractional visit version must fail closed at the transport boundary');
 assertThrows(() => parseFieldTransitionVisitResponse({ success: true, version: 1, replayed: false, visit: { ...representativeVisit, version: Number.MAX_SAFE_INTEGER + 1 }, allowedActions: ['execute'] }), 'unsafe visit version must fail closed at the transport boundary');
 assertThrows(() => parseFieldAttachVisitAssetResponse({ success: true, version: 2, replayed: false, visitAsset: representativeVisitAsset, allowedActions: ['asset.add'] }), 'VisitAsset response with unknown API version must fail closed');
