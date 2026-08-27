@@ -1,0 +1,189 @@
+name: Maya V1.1 Production Preflight
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/maya-production-preflight.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: maya-v1-1-production-preflight
+  cancel-in-progress: false
+
+jobs:
+  validate-preflight-design:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Prove preflight is read-only by design
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow='.github/workflows/maya-production-preflight.yml'
+          for forbidden in \
+            'scp ' \
+            'demac-deploy-bridge' \
+            'gcloud functions deploy' \
+            'gcloud functions delete' \
+            'firebase deploy' \
+            'firebase firestore:delete' \
+            'curl .*--request PATCH' \
+            'curl .*--request POST' \
+            'curl .*--request DELETE'; do
+            if grep -Eqi "$forbidden" "$workflow"; then
+              echo "::error::Read-only production preflight contains forbidden mutation surface: $forbidden"
+              exit 1
+            fi
+          done
+          if ! grep -Fq "curl -fsS http://127.0.0.1:8787/health" "$workflow"; then
+            echo '::error::Bridge health read is missing.'
+            exit 1
+          fi
+          if ! grep -Fq 'businessSettings/whatsapp' "$workflow"; then
+            echo '::error::Canonical Firestore communication-account read is missing.'
+            exit 1
+          fi
+          echo 'READ_ONLY_PREFLIGHT_DESIGN_VALID'
+
+  read-production-preflight:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: validate-preflight-design
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DO_HOST: 159.223.160.239
+      DO_USER: demac-deploy
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configure read-only SSH session
+        shell: bash
+        env:
+          DO_SSH_KEY_B64: ${{ secrets.DO_SSH_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DO_SSH_KEY_B64:-}" ]; then
+            echo '::error::Repository secret DO_SSH_KEY_B64 is missing.'
+            exit 1
+          fi
+          install -d -m 0700 "$HOME/.ssh"
+          printf '%s' "$DO_SSH_KEY_B64" | base64 --decode > "$HOME/.ssh/id_ed25519"
+          chmod 0600 "$HOME/.ssh/id_ed25519"
+          ssh-keygen -y -f "$HOME/.ssh/id_ed25519" >/dev/null
+          ssh-keyscan -T 10 -H "$DO_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 0600 "$HOME/.ssh/known_hosts"
+
+      - name: Read bridge health without host mutation
+        id: bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          health_file="$(mktemp)"
+          ssh -o BatchMode=yes -o ConnectTimeout=10 "$DO_USER@$DO_HOST" \
+            'curl -fsS http://127.0.0.1:8787/health' > "$health_file"
+
+          python3 - "$health_file" "$GITHUB_OUTPUT" <<'PY'
+          import json, sys
+          path, output_path = sys.argv[1:3]
+          with open(path, encoding='utf-8') as handle:
+              data = json.load(handle)
+
+          required = {
+              'ok': data.get('ok') is True,
+              'connectorMode': data.get('connectorMode') == 'outbound-only-v1',
+              'communicationAccountId': bool(str(data.get('communicationAccountId') or '').strip()),
+              'pendingWebhookEvents': data.get('pendingWebhookEvents') == 0,
+              'pendingDeadLetterEvents': data.get('pendingDeadLetterEvents') == 0,
+              'pendingOutboundAcks': data.get('pendingOutboundAcks') == 0,
+              'lastForwardError': not str(data.get('lastForwardError') or '').strip(),
+              'lastOutboundPollAt': bool(str(data.get('lastOutboundPollAt') or '').strip()),
+              'lastOutboundError': not str(data.get('lastOutboundError') or '').strip(),
+          }
+          failed = [name for name, ok in required.items() if not ok]
+          if failed:
+              raise SystemExit(f'Bridge read-only preflight failed: {failed}')
+
+          account = str(data.get('communicationAccountId') or '').strip().lower()
+          webhook = str(data.get('erpWebhookUrl') or '').strip()
+          media = str(data.get('mediaIngestUrl') or '').strip()
+          poll = str(data.get('outboundPollUrl') or '').strip()
+          expected_base = 'https://us-central1-demac-corporation.cloudfunctions.net'
+          expected = {
+              'erpWebhookUrl': f'{expected_base}/wacliWebhook',
+              'mediaIngestUrl': f'{expected_base}/wacliMediaIngest',
+              'outboundPollUrl': f'{expected_base}/wacliOutboundPoll',
+          }
+          actual = {'erpWebhookUrl': webhook, 'mediaIngestUrl': media, 'outboundPollUrl': poll}
+          mismatches = [name for name, value in expected.items() if actual[name] != value]
+          if mismatches:
+              raise SystemExit(f'Bridge endpoint preflight failed: {mismatches}')
+
+          with open(output_path, 'a', encoding='utf-8') as output:
+              output.write(f'communication_account_id={account}\n')
+          print('BRIDGE_READ_ONLY_HEALTH_PASS')
+          PY
+          rm -f "$health_file"
+
+      - name: Authenticate Firebase read-only query
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Read canonical Firestore communication account
+        id: firestore
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(gcloud auth print-access-token)"
+          document_file="$(mktemp)"
+          curl -fsS \
+            -H "Authorization: Bearer ${token}" \
+            'https://firestore.googleapis.com/v1/projects/demac-corporation/databases/(default)/documents/businessSettings/whatsapp' \
+            > "$document_file"
+
+          python3 - "$document_file" "$GITHUB_OUTPUT" <<'PY'
+          import json, sys
+          path, output_path = sys.argv[1:3]
+          with open(path, encoding='utf-8') as handle:
+              data = json.load(handle)
+          fields = data.get('fields') or {}
+          field = fields.get('communicationAccountId') or {}
+          account = str(field.get('stringValue') or '').strip().lower()
+          if not account:
+              raise SystemExit('Canonical businessSettings/whatsapp.communicationAccountId is missing.')
+          with open(output_path, 'a', encoding='utf-8') as output:
+              output.write(f'communication_account_id={account}\n')
+          print('FIRESTORE_COMMUNICATION_ACCOUNT_READ_PASS')
+          PY
+          rm -f "$document_file"
+
+      - name: Compare live bridge and canonical account identity
+        shell: bash
+        env:
+          BRIDGE_ACCOUNT: ${{ steps.bridge.outputs.communication_account_id }}
+          FIRESTORE_ACCOUNT: ${{ steps.firestore.outputs.communication_account_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BRIDGE_ACCOUNT" ] || [ -z "$FIRESTORE_ACCOUNT" ]; then
+            echo '::error::Communication account preflight produced an empty account identity.'
+            exit 1
+          fi
+          if [ "$BRIDGE_ACCOUNT" != "$FIRESTORE_ACCOUNT" ]; then
+            echo '::error::Live bridge communication account does not match canonical Firestore communication account.'
+            exit 1
+          fi
+          echo 'MAYA_PRODUCTION_ACCOUNT_PREFLIGHT_PASS'
+
+      - name: Remove runner SSH key
+        if: always()
+        shell: bash
+        run: rm -f "$HOME/.ssh/id_ed25519"
