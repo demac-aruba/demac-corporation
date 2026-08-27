@@ -6,8 +6,9 @@ This runbook converts the reviewed Maya V1.1 engineering work into a controlled 
 
 ## Scope and reviewed inputs
 
-- Parent P0 PR: `#436` — reviewed HEAD `f70665fbb9dbae89d874e05beb0ca58705cb7385`.
-- Cancellation/reschedule slice: `#440` — reviewed HEAD `dd6a0b602d94eeedc271e53fbc4dc83712348926`.
+- Parent P0 PR: `#436` — reviewed HEAD `f70665fbb9dbae89d874e05beb0ca58705cb7385` before rollout-control integration.
+- Rollout-control integration: `#447` — prepares manual production gates on top of the P0 without deploying them.
+- Cancellation/reschedule slice: `#440` — reviewed HEAD `dd6a0b602d94eeedc271e53fbc4dc83712348926` before inheriting the rollout-control base.
 - Governance: Solo Maintainer Adversarial Review mode is already merged to `main` via `#441`.
 - Canonical WhatsApp account authority: `businessSettings/whatsapp.communicationAccountId`.
 - Canonical scheduling/lifecycle authority: Booking Authority.
@@ -23,12 +24,15 @@ This runbook converts the reviewed Maya V1.1 engineering work into a controlled 
 5. **No historical voice backfill.** Voice transcription begins only at a deliberate activation cutoff and only for newly received eligible inbound audio.
 6. **Mutation autonomy stays OFF by default.** `autoCancelEnabled=false` and `autoRescheduleEnabled=false` unless a later explicit approval changes them.
 7. **Rollback must not reintroduce legacy raw-chat identity writes after canonical identity activation.** Post-cutover rollback means disabling Maya/voice/reply capability or pausing the bridge while preserving canonical data.
+8. **Production execution is two-step gated.** A production workflow must be manually dispatched on `main` and its explicit confirmation input must be true before any live read/deploy/delete action can run.
 
 ## Current blockers confirmed from repository evidence
 
 ### B1 — Production communication account / bridge binding is not yet live-verified
 
 The P0 bridge requires `COMMUNICATION_ACCOUNT_ID` and includes that value in every Firebase connector request. `/health` exposes the bound communication account. The rollout must verify the deployed bridge value equals the canonical Firestore setting before the Firebase gateway is activated.
+
+A read-only B1 preflight workflow is prepared in `#447`, but it has not been executed against production. The live job requires an explicit `workflow_dispatch` on `main` plus `confirm_read_only_production_access=true`.
 
 **Pass evidence required**
 - bridge `/health`: `ok=true`, `connectorMode=outbound-only-v1`, expected `communicationAccountId`;
@@ -38,30 +42,42 @@ The P0 bridge requires `COMMUNICATION_ACCOUNT_ID` and includes that value in eve
 **Stop condition**
 Any mismatch, missing account ID, pending ACKs, dead-letter growth, or connector error blocks rollout.
 
-### B2 — Deployment ordering is not atomic
+### B2 — Deployment ordering controls are prepared but not production-active
 
-`DigitalOcean Remote Ops` and `WhatsApp wacli Connector` are independent `main` workflows. A direct merge can start them without cross-workflow ordering.
+The reviewed P0 baseline had independent DigitalOcean and Wacli `main` workflows whose production jobs could start from a push. `#447` changes the prepared rollout path so:
+
+- DigitalOcean bridge deployment validates automatically but requires `workflow_dispatch` on `main` plus `confirm_bridge_cutover=true` to modify the host;
+- Wacli Firebase validates automatically but requires `workflow_dispatch` on `main`, `confirm_production_cutover=true`, and `retire_legacy_sender=true` before cutover/deletion can run;
+- Maya Communication Functions validate automatically but require `workflow_dispatch` on `main` plus `confirm_production_deploy=true` before deployment.
+
+These controls are engineering-ready in the rollout branch but are **not production-active until the reviewed rollout package itself reaches `main`**. No direct unordered merge/deploy should be treated as a valid cutover.
 
 **Required rollout order**
 1. verify/drain current bridge state;
 2. install/verify account-bound bridge;
 3. verify canonical account configuration/migration readiness;
-4. deploy account-bound Firebase Wacli gateway;
+4. deploy account-bound Firebase Wacli gateway and retire the legacy sender if it still exists under the same explicitly authorized cutover;
 5. verify connector endpoints and live bridge polling;
-6. only then activate new Maya triggers/authority surfaces.
+6. only then deploy/activate new Maya triggers/authority surfaces.
 
-A direct unordered `main` merge is not an acceptable rollout mechanism until this order is explicitly controlled.
+### B3 — P0 runtime deployment inventory/owner is prepared but not deployed
 
-### B3 — New P0 runtime deployment inventory is incomplete
-
-The current Customer Agent production workflow deploys only:
+The reviewed P0 baseline Customer Agent production workflow deployed only:
 - `processCustomerAgentInbound`
 - `processCustomerAgentReactivation`
 
-The P0 bootstrap also exports newer runtime surfaces including `processCustomerAgentTurnWakeup`, Communication ingress metadata, customer voice/transcription integration, and `communicationConversationAuthority`. These require an explicit production deployment owner/inventory; they must not be assumed to deploy merely because they are exported.
+`#447` prepares the existing Customer Agent Production workflow as the single manual deployment owner for the eight governed Maya Communication surfaces:
 
-**Pass evidence required**
-A reviewed deployment matrix listing every required function, trigger type, secret requirement, runtime service account, deployment workflow/step, post-deploy verification and rollback owner.
+- `stampCommunicationMessageFirstSeen`
+- `processCustomerAgentInbound`
+- `transcribeNewCustomerVoiceNote`
+- `transcribeCustomerVoiceWhenReady`
+- `processCustomerAgentVoiceTranscript`
+- `processCustomerAgentReactivation`
+- `processCustomerAgentTurnWakeup`
+- `communicationConversationAuthority`
+
+The workflow verifies expected exports, trigger types, secret boundaries, task entry point, and unauthenticated rejection for the Communication Authority. This closes the **engineering ownership ambiguity**, but it is not production deployment evidence until the workflow is on `main`, explicitly authorized, dispatched, and verified live.
 
 ### B4 — Firestore direct-write bypass remains
 
@@ -99,11 +115,13 @@ Required before scale: bounded indexed active-queue query plus retention/archive
 
 ### Phase 0 — Human authorization checkpoint
 
-Required explicit approvals must name the exact boundary being approved. Approval to continue engineering is **not** approval to deploy.
+Required explicit approvals must name the exact boundary being approved. Approval to continue engineering is **not** approval to deploy or access production.
 
 Minimum approvals before production activation:
-- production bridge/account binding verification and any needed config change;
-- production function deployment/merge;
+- read-only production preflight access;
+- production bridge/account binding deployment and any needed config change;
+- production Wacli/Maya Function deployment;
+- conditional retirement/deletion of the legacy sender if it still exists;
 - Firestore Rules/security cutover;
 - voice activation cutoff/settings;
 - any irreversible appointment autonomy enablement.
@@ -119,6 +137,8 @@ Collect without changing production state:
 - current Firestore communication-account value;
 - current queue/dead-letter/ACK counts;
 - current Maya/voice settings values.
+
+The prepared automated B1 preflight covers bridge health/account identity only; the broader inventory above remains part of the production evidence package.
 
 **Gate:** no unexplained drift from the reviewed architecture.
 
@@ -146,23 +166,30 @@ Before gateway activation:
 
 ### Phase 4 — Firebase Wacli gateway
 
-Only after bridge/account gate passes:
-- deploy Wacli HTTP functions from the reviewed P0 source;
+Only after bridge/account gate passes and the legacy-sender retirement boundary is explicitly authorized:
+- deploy Wacli HTTP functions from the reviewed source;
+- conditionally delete `sendQueuedWacliMessage` if it still exists;
 - verify all four bridge endpoints are ACTIVE and Bearer-protected;
 - verify account-binding rejection for missing/wrong account;
 - verify ERP media upload is isolated from bridge secrets and production CORS remains valid;
+- verify the legacy sender is absent after an authorized retirement;
 - verify live bridge resumes successful polling/forwarding with zero pending ACKs.
 
-**Rollback:** pause affected bridge/gateway traffic; do not revert storage to legacy raw chat IDs after canonical writes begin.
+**Rollback:** pause affected bridge/gateway traffic; do not restore a second sender or revert storage to legacy raw chat IDs after canonical writes begin.
 
 ### Phase 5 — Communication Authority and Customer Turn deployment inventory
 
-Deploy only the explicitly approved function set. At minimum the inventory must account for:
-- `communicationConversationAuthority`;
+Only after Phase 4 is healthy and explicit Maya Function deployment approval exists, dispatch the prepared Customer Agent Production owner with `confirm_production_deploy=true`.
+
+The approved function set is:
+- `stampCommunicationMessageFirstSeen`;
 - `processCustomerAgentInbound`;
+- `transcribeNewCustomerVoiceNote`;
+- `transcribeCustomerVoiceWhenReady`;
+- `processCustomerAgentVoiceTranscript`;
 - `processCustomerAgentReactivation`;
 - `processCustomerAgentTurnWakeup`;
-- required ingress metadata / voice-trigger surfaces exported by the reviewed bootstrap.
+- `communicationConversationAuthority`.
 
 For each function verify:
 - ACTIVE state;
@@ -218,11 +245,12 @@ If any safety invariant is violated, disable/pause the narrowest affected capabi
 ## Merge sequencing for the reviewed PRs
 
 The safest logical dependency order is:
-1. `#436` P0 foundation;
-2. validate controlled production cutover and base behavior;
-3. `#440` cancellation/reschedule lifecycle slice;
-4. keep irreversible mutation flags OFF initially;
-5. separately authorize any later mutation-autonomy rollout.
+1. integrate the rollout controls into the P0 branch and revalidate that exact P0 HEAD;
+2. merge the approved P0/rollout revision to `main` only when production cutover is explicitly authorized;
+3. execute the controlled production cutover and validate base behavior;
+4. rebase/revalidate `#440` cancellation/reschedule lifecycle slice on the final P0 lineage;
+5. keep irreversible mutation flags OFF initially;
+6. separately authorize any later mutation-autonomy rollout.
 
 Do not merge `#440` to `main` ahead of the P0 foundation it depends on.
 
