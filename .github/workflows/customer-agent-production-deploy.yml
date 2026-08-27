@@ -131,15 +131,7 @@ jobs:
         run: |
           set -euo pipefail
           npx --yes firebase-tools@15.2.1 deploy \
-            --only \
-functions:stampCommunicationMessageFirstSeen,\
-functions:processCustomerAgentInbound,\
-functions:transcribeNewCustomerVoiceNote,\
-functions:transcribeCustomerVoiceWhenReady,\
-functions:processCustomerAgentVoiceTranscript,\
-functions:processCustomerAgentReactivation,\
-functions:processCustomerAgentTurnWakeup,\
-functions:communicationConversationAuthority \
+            --only 'functions:stampCommunicationMessageFirstSeen,functions:processCustomerAgentInbound,functions:transcribeNewCustomerVoiceNote,functions:transcribeCustomerVoiceWhenReady,functions:processCustomerAgentVoiceTranscript,functions:processCustomerAgentReactivation,functions:processCustomerAgentTurnWakeup,functions:communicationConversationAuthority' \
             --project demac-corporation \
             --non-interactive \
             --force
