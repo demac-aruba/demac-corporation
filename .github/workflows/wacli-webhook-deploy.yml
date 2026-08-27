@@ -35,6 +35,17 @@ on:
       - 'functions/package.json'
       - '.github/workflows/wacli-webhook-deploy.yml'
   workflow_dispatch:
+    inputs:
+      confirm_production_cutover:
+        description: 'Confirm that the production bridge/account preflight has passed and this Wacli Firebase cutover is authorized.'
+        required: true
+        type: boolean
+        default: false
+      retire_legacy_sender:
+        description: 'Separately authorize deletion of the retired sendQueuedWacliMessage Function if it still exists.'
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -76,6 +87,7 @@ jobs:
             functions/wacliCommunicationBoundary.test.js \
             functions/wacliBridgeAccountBinding.test.js \
             functions/wacliOutboundMediaUpload.test.js
+
           if grep -Eqi 'ed25519|x-demac-bridge-signature|BRIDGE_PUBLIC_KEY|WACLI_BRIDGE_URL|bridgeEndpoint\(|sendQueuedWacliMessage' functions/whatsappWacliGateway.js; then
             echo '::error::Retired inbound-to-Droplet or custom-auth code remains in Firebase gateway.'
             exit 1
@@ -120,6 +132,7 @@ jobs:
             echo '::error::ERP media upload source must remain isolated from bridge secrets.'
             exit 1
           fi
+
           node - <<'NODE'
           const mod = require('./functions/bootstrap');
           for (const name of ['wacliWebhook', 'wacliMediaIngest', 'wacliOutboundPoll', 'wacliOutboundAck', 'wacliOutboundMediaUpload']) {
@@ -129,33 +142,14 @@ jobs:
           NODE
 
   deploy-wacli-connector:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Pushes to main validate only. Production connector activation is an explicit
+    # manual cutover after the account-bound DigitalOcean bridge preflight passes.
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.confirm_production_cutover == true
     needs: validate-wacli-connector
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout exact main revision
         uses: actions/checkout@v6
-        with:
-          fetch-depth: 2
-
-      - name: Detect deployable function changes
-        id: changes
-        shell: bash
-        env:
-          BEFORE_SHA: ${{ github.event.before }}
-        run: |
-          set -euo pipefail
-          deploy='false'
-          if [ -z "${BEFORE_SHA:-}" ] || [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
-            deploy='true'
-          else
-            git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA" > /tmp/changed-files.txt
-            if grep -Eq '^functions/(whatsappWacliGateway\.js|whatsappWacliGateway\.test\.js|wacliCommunicationBoundary\.js|wacliCommunicationBoundary\.test\.js|wacliBridgeAccountBinding\.test\.js|wacliOutboundMediaUpload\.js|demacCorePrimitives\.js|demacCommunicationIdentity\.js|demacCommunicationEpoch\.js|bootstrap\.js|package\.json)$' /tmp/changed-files.txt; then
-              deploy='true'
-            fi
-          fi
-          echo "deploy=${deploy}" >> "$GITHUB_OUTPUT"
-          echo "Function source deployment required: ${deploy}"
 
       - name: Authenticate Firebase deployment service account
         uses: google-github-actions/auth@v2
@@ -166,7 +160,6 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
 
       - name: Resolve DEMAC runtime identity
-        if: steps.changes.outputs.deploy == 'true'
         id: config
         shell: bash
         run: |
@@ -183,7 +176,6 @@ jobs:
           echo "run_service_account=${RUN_SA}" >> "$GITHUB_OUTPUT"
 
       - name: Deploy outbound connector and ERP media upload
-        if: steps.changes.outputs.deploy == 'true'
         shell: bash
         env:
           RUN_SERVICE_ACCOUNT: ${{ steps.config.outputs.run_service_account }}
@@ -228,7 +220,8 @@ jobs:
             --allow-unauthenticated \
             --quiet
 
-      - name: Retire legacy Firebase-to-Droplet sender
+      - name: Retire legacy Firebase-to-Droplet sender when separately authorized
+        if: inputs.retire_legacy_sender == true
         shell: bash
         run: |
           set -euo pipefail
@@ -242,6 +235,8 @@ jobs:
 
       - name: Verify deployed outbound-only boundary
         shell: bash
+        env:
+          RETIRE_LEGACY_SENDER: ${{ inputs.retire_legacy_sender }}
         run: |
           set -euo pipefail
           probe_bridge_endpoint() {
@@ -302,7 +297,6 @@ jobs:
             echo '::error::ERP media upload must not receive bridge secrets.'
             exit 1
           fi
-          echo 'wacliOutboundMediaUpload: ACTIVE and isolated from bridge secrets'
 
           cors_headers="$(mktemp)"
           cors_status="$(curl --silent --show-error --output /dev/null --dump-header "$cors_headers" --write-out '%{http_code}' \
@@ -323,7 +317,6 @@ jobs:
             exit 1
           fi
           rm -f "$cors_headers"
-          echo 'wacliOutboundMediaUpload: production ERP CORS allowed'
 
           media_body="$(mktemp)"
           media_status="$(curl --silent --show-error --output "$media_body" --write-out '%{http_code}' \
@@ -341,14 +334,17 @@ jobs:
           with open(sys.argv[1], encoding='utf-8') as handle:
               payload = json.load(handle)
           if payload != {'error': 'Unauthorized'}:
-            raise SystemExit(f'Unexpected media upload application-auth payload: {payload}')
+              raise SystemExit(f'Unexpected media upload application-auth payload: {payload}')
           print('wacliOutboundMediaUpload: Firebase application authentication required')
           PY
           rm -f "$media_body"
 
-          if gcloud functions describe sendQueuedWacliMessage --project=demac-corporation --gen2 --region=us-central1 --format='value(name)' >/dev/null 2>&1; then
-            echo '::error::Legacy sendQueuedWacliMessage still exists after migration.'
-            exit 1
+          if [ "$RETIRE_LEGACY_SENDER" = 'true' ]; then
+            if gcloud functions describe sendQueuedWacliMessage --project=demac-corporation --gen2 --region=us-central1 --format='value(name)' >/dev/null 2>&1; then
+              echo '::error::Legacy sendQueuedWacliMessage still exists after its separately authorized retirement.'
+              exit 1
+            fi
           fi
+
           echo 'OUTBOUND_ONLY_FIREBASE_CONNECTOR_READY'
           echo 'OUTBOUND_MEDIA_UPLOAD_READY'
