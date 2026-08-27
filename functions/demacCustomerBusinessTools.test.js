@@ -243,7 +243,7 @@ test("ambiguous existing customer is never merged", async () => {
   assert.equal(result.error.code, "ambiguous_customer");
 });
 
-test("single registry exposes all sixteen tools in intended order and dispatches by capability", async () => {
+test("single registry exposes all seventeen tools in intended order and dispatches by capability", async () => {
   const customer = { invoke: async (name) => ({ success: true, source: "customer", name }) };
   const appointmentLifecycle = { invoke: async (name) => ({ success: true, source: "appointment-lifecycle", name }) };
   const business = { invoke: async (name) => ({ success: true, source: "business", name }) };
@@ -263,9 +263,9 @@ test("single registry exposes all sixteen tools in intended order and dispatches
     "resolve_customer", "resolve_property", "create_or_update_lead", "get_service_catalog",
     "get_service_price", "get_product_catalog", "get_product_stock", "create_product_reservation",
     "get_product_reservation", "release_product_reservation", "get_company_policy",
-    "check_availability", "create_appointment", "get_appointment", "cancel_appointment", "reschedule_appointment",
+    "check_availability", "create_appointment", "get_appointment", "get_appointment_change_context", "cancel_appointment", "reschedule_appointment",
   ]);
-  assert.equal(registry.definitions.length, 16);
+  assert.equal(registry.definitions.length, 17);
   assert.equal((await registry.invoke("resolve_customer")).source, "customer");
   assert.equal((await registry.invoke("get_service_price")).source, "business");
   assert.equal((await registry.invoke("get_product_catalog")).source, "sales");
@@ -273,6 +273,7 @@ test("single registry exposes all sixteen tools in intended order and dispatches
   assert.equal((await registry.invoke("create_product_reservation")).source, "reservation");
   assert.equal((await registry.invoke("release_product_reservation")).source, "reservation");
   assert.equal((await registry.invoke("get_company_policy")).source, "policy");
+  assert.equal((await registry.invoke("get_appointment_change_context")).source, "appointment-lifecycle");
   assert.equal((await registry.invoke("cancel_appointment")).source, "appointment-lifecycle");
   assert.equal((await registry.invoke("reschedule_appointment")).source, "appointment-lifecycle");
 });
