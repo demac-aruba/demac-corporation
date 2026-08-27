@@ -25,6 +25,12 @@ jobs:
         run: |
           set -euo pipefail
           workflow='.github/workflows/maya-production-preflight.yml'
+          live_section="$(mktemp)"
+          awk '/^  read-production-preflight:/{flag=1} flag{print}' "$workflow" > "$live_section"
+          if [ ! -s "$live_section" ]; then
+            echo '::error::Live production preflight job is missing.'
+            exit 1
+          fi
           for forbidden in \
             'scp ' \
             'demac-deploy-bridge' \
@@ -35,19 +41,20 @@ jobs:
             'curl .*--request PATCH' \
             'curl .*--request POST' \
             'curl .*--request DELETE'; do
-            if grep -Eqi "$forbidden" "$workflow"; then
+            if grep -Eqi "$forbidden" "$live_section"; then
               echo "::error::Read-only production preflight contains forbidden mutation surface: $forbidden"
               exit 1
             fi
           done
-          if ! grep -Fq "curl -fsS http://127.0.0.1:8787/health" "$workflow"; then
+          if ! grep -Fq "curl -fsS http://127.0.0.1:8787/health" "$live_section"; then
             echo '::error::Bridge health read is missing.'
             exit 1
           fi
-          if ! grep -Fq 'businessSettings/whatsapp' "$workflow"; then
+          if ! grep -Fq 'businessSettings/whatsapp' "$live_section"; then
             echo '::error::Canonical Firestore communication-account read is missing.'
             exit 1
           fi
+          rm -f "$live_section"
           echo 'READ_ONLY_PREFLIGHT_DESIGN_VALID'
 
   read-production-preflight:
