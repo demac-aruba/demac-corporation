@@ -22,7 +22,7 @@ const MAYA_APPOINTMENT_MUTATION_ACTIONS = new Set([
   "reschedule_appointment",
 ]);
 const MAYA_APPOINTMENT_WORKFLOWS = new Set(["cancellation", "reschedule"]);
-const MAYA_APPOINTMENT_WORKFLOW_STATES = new Set(["APPOINTMENT_MATCHED", "AWAITING_CUSTOMER_DECISION"]);
+const MAYA_APPOINTMENT_WORKFLOW_STATES = new Set(["APPOINTMENT_MATCHED"]);
 const ACTION_WORKFLOW = Object.freeze({
   cancel_appointment: "cancellation",
   reschedule_appointment: "reschedule",
