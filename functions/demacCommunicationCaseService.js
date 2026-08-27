@@ -165,10 +165,13 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
     };
   }
 
-  async function loadUpcomingAppointments(customerId) {
+  async function loadUpcomingAppointments(customerId, today = arubaDateParts(clock()).date) {
     if (!customerId) return [];
     const snapshot = await db.collection("appointments").where("customerId", "==", customerId).get();
-    return upcomingAppointmentCandidates(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
+    return upcomingAppointmentCandidates(
+      snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
+      today,
+    );
   }
 
   async function existingCase(caseId) {
@@ -239,6 +242,7 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
     const canonicalCaseId = communicationCaseId({ communicationAccountId, conversationId, caseType });
     if (!canonicalCaseId) return { processed: false, reason: "missing-case-identity" };
     const now = clock();
+    const today = arubaDateParts(now).date;
     const messageId = cleanText(message.messageId || message.id, 300);
     const caseRef = db.collection(COMMUNICATION_CASE_COLLECTION).doc(canonicalCaseId);
     const previous = await existingCase(canonicalCaseId);
@@ -246,7 +250,7 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
     if (observation.intent === "customer_withdrew_change") {
       const customerResolution = await resolveCustomer({ conversation, message });
       const appointments = customerResolution.customer
-        ? await loadUpcomingAppointments(customerResolution.customer.id)
+        ? await loadUpcomingAppointments(customerResolution.customer.id, today)
         : [];
       const withdrawalResolution = withdrawalAppointmentResolution({
         previousCase: previous || {},
@@ -311,8 +315,8 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
 
     const customerResolution = await resolveCustomer({ conversation, message });
     const customer = customerResolution.customer;
-    const appointments = customer ? await loadUpcomingAppointments(customer.id) : [];
-    const match = matchRelevantAppointment({ appointments, observation });
+    const appointments = customer ? await loadUpcomingAppointments(customer.id, today) : [];
+    const match = matchRelevantAppointment({ appointments, observation, today });
     let state = "DETECTED";
     let attentionReason = "";
     const appointmentId = match.matched ? cleanText(match.appointment?.id, 180) : "";
