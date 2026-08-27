@@ -44,6 +44,12 @@ on:
       - 'functions/package.json'
       - '.github/workflows/customer-agent-production-deploy.yml'
   workflow_dispatch:
+    inputs:
+      confirm_production_deploy:
+        description: 'Confirm that the staged Maya Communication production deployment is explicitly authorized for the current main revision.'
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -102,7 +108,7 @@ jobs:
     # Production deployment is deliberately manual so Wacli bridge/gateway
     # cutover can be verified first. Pushes to main validate but never deploy
     # this Maya Communication function set automatically.
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.confirm_production_deploy == true
     needs: validate-customer-agent-production
     runs-on: ubuntu-latest
     steps:
