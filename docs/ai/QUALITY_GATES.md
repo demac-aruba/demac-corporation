@@ -9,7 +9,10 @@ destructive, deployment, migration, or production command as verification.
 - Git diff contains only intended changes and no secrets, generated junk, or debug output.
 - Types/syntax, focused tests, negative authorization cases, and failure paths are verified.
 - Documentation, parity status, debt, and ADRs are updated when their evidence changes.
-- Reviewer records findings independently from Builder claims.
+- Reviewer findings are recorded separately from Builder claims. In Independent Review mode,
+  the reviewer did not implement the reviewed change. In Solo Maintainer Adversarial Review
+  mode, the same maintainer may perform the review only as a fresh, explicitly separate
+  adversarial pass and must not represent it as independent.
 - Required tests and checks may never be disabled, skipped, weakened, deleted, waived, or
   bypassed merely to obtain `PASS`. A failure must be fixed or explicitly escalated with
   the failing evidence; it remains a failure until the authorized resolution is recorded.
