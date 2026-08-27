@@ -67,6 +67,7 @@ import {
 } from './voice-note-report-controls';
 import { VisitPendingControls, type VisitPendingInput } from './visit-pending-controls';
 import { VisitNoAccessControls, type VisitNoAccessInput } from './visit-no-access-controls';
+import { VisitCancellationControls, type VisitCancellationInput } from './visit-cancellation-controls';
 import styles from './technician-field-home.module.css';
 
 type RangeKey = 'today' | 'tomorrow' | 'week';
@@ -103,6 +104,7 @@ type VisitTransitionInput = {
   pendingReason?: string;
   pendingAction?: string;
   noAccessReason?: string;
+  cancellationReason?: string;
 };
 
 const COMPLETED_WORK_ORDER_STATUSES = new Set(['Completada']);
@@ -114,6 +116,7 @@ const ACTIVE_TRANSITION_LABELS: Record<FieldActiveVisitTransition, string> = {
   in_progress: 'Iniciar trabajo',
   pending: 'Dejar pendiente',
   no_access: 'Sin acceso',
+  cancelled: 'Cancelar visita',
 };
 
 function workSummary(job: Pick<FieldScheduleJob, 'plannedWork' | 'customerFacingDescription'>) {
@@ -423,7 +426,7 @@ function DetailView({
   const availableTransitions: FieldActiveVisitTransition[] = job.fieldVisit
     ? job.fieldVisit.availableTransitions
     : job.canPrepareVisit
-      ? ['en_route', 'no_access']
+      ? ['en_route', 'no_access', 'cancelled']
       : [];
   const attachedAssetIds = new Set(job.visitAssets.map((visitAsset) => visitAsset.assetId));
   const knownEquipmentById = new Map(job.knownEquipment.map((equipment) => [equipment.id, equipment]));
@@ -463,7 +466,7 @@ function DetailView({
         </div>
         {availableTransitions.length ? (
           <div className={styles.visitActions}>
-            {availableTransitions.filter((target) => target !== 'pending' && target !== 'no_access').map((target) => (
+            {availableTransitions.filter((target) => target !== 'pending' && target !== 'no_access' && target !== 'cancelled').map((target) => (
               <button
                 className={`${styles.action} ${styles.primary}`}
                 disabled={mutationBusy}
@@ -494,6 +497,13 @@ function DetailView({
             saving={transitioning === 'no_access'}
           />
         ) : null}
+        {availableTransitions.includes('cancelled') ? (
+          <VisitCancellationControls
+            disabled={mutationBusy}
+            onSubmit={(input: VisitCancellationInput) => onTransition(input)}
+            saving={transitioning === 'cancelled'}
+          />
+        ) : null}
         {job.fieldVisit?.pendingReason ? (
           <div className={styles.planned} style={{ marginTop: 12 }}>
             <div className={styles.plannedTitle}>Último motivo pendiente</div>
@@ -505,6 +515,12 @@ function DetailView({
           <div className={styles.planned} style={{ marginTop: 12 }}>
             <div className={styles.plannedTitle}>Motivo de falta de acceso</div>
             <strong>{job.fieldVisit.noAccessReason}</strong>
+          </div>
+        ) : null}
+        {job.fieldVisit?.cancellationReason ? (
+          <div className={styles.planned} style={{ marginTop: 12 }}>
+            <div className={styles.plannedTitle}>Motivo de cancelación de la visita</div>
+            <strong>{job.fieldVisit.cancellationReason}</strong>
           </div>
         ) : null}
         {transitionError ? <div className={styles.mutationError}>{transitionError}</div> : null}
@@ -883,7 +899,7 @@ export function TechnicianFieldHome() {
     if (!currentDetail) return;
 
     const target = input.target;
-    const signature = `${target}|${input.pendingReason?.trim() || ''}|${input.pendingAction?.trim() || ''}|${input.noAccessReason?.trim() || ''}`;
+    const signature = `${target}|${input.pendingReason?.trim() || ''}|${input.pendingAction?.trim() || ''}|${input.noAccessReason?.trim() || ''}|${input.cancellationReason?.trim() || ''}`;
     const prior = visitTransitionRequestRef.current;
     const transitionRequestId = prior?.key === target && prior.signature === signature
       ? prior.requestId
@@ -898,7 +914,7 @@ export function TechnicianFieldHome() {
     try {
       let visit = currentDetail.fieldVisit;
       if (!visit) {
-        if (!currentDetail.canPrepareVisit || (target !== 'en_route' && target !== 'no_access')) {
+        if (!currentDetail.canPrepareVisit || (target !== 'en_route' && target !== 'no_access' && target !== 'cancelled')) {
           throw new Error('La visita todavía no está disponible para esta transición. Actualiza el trabajo e intenta nuevamente.');
         }
         const prepared = await prepareFieldVisit(workOrderId, clientRequestId('prepare', workOrderId));
@@ -914,6 +930,7 @@ export function TechnicianFieldHome() {
         input.pendingReason,
         input.pendingAction,
         input.noAccessReason,
+        input.cancellationReason,
       );
       if (mutationId !== mutationRequestRef.current) return;
 

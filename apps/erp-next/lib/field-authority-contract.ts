@@ -43,7 +43,7 @@ const FIELD_VISIT_STATUSES = [
 ] as const;
 export type FieldVisitStatus = (typeof FIELD_VISIT_STATUSES)[number];
 
-const FIELD_ACTIVE_VISIT_TRANSITIONS = ['en_route', 'on_site', 'in_progress', 'pending', 'no_access'] as const;
+const FIELD_ACTIVE_VISIT_TRANSITIONS = ['en_route', 'on_site', 'in_progress', 'pending', 'no_access', 'cancelled'] as const;
 export type FieldActiveVisitTransition = (typeof FIELD_ACTIVE_VISIT_TRANSITIONS)[number];
 
 const FIELD_PREPARE_SOURCES = ['field_authority', 'legacy_existing'] as const;
@@ -124,6 +124,8 @@ export type FieldPreparedVisit = {
   resumedAt?: string;
   noAccessAt?: string;
   noAccessReason?: string;
+  cancelledAt?: string;
+  cancellationReason?: string;
   submittedAt?: string;
   completedAt?: string;
   requiresSecondVisit: boolean;
@@ -291,6 +293,8 @@ function preparedVisitValid(value: unknown): value is FieldPreparedVisit {
     && optionalString(visit.resumedAt)
     && optionalString(visit.noAccessAt)
     && optionalString(visit.noAccessReason)
+    && optionalString(visit.cancelledAt)
+    && optionalString(visit.cancellationReason)
     && optionalString(visit.submittedAt)
     && optionalString(visit.completedAt)
     && typeof visit.requiresSecondVisit === 'boolean'

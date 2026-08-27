@@ -116,7 +116,7 @@ Append-only audit evidence for material Field lifecycle actions. `fieldOperation
 
 Allowed branches from active states: `pending`, `requires_return_visit`, `no_access`, `cancelled`. Transitions are centralized and auditable; arbitrary UI status writes are forbidden.
 
-The canonical WorkVisit transition graph is implemented server-side in `functions/fieldOperationsAuthorityTransitions.js`. `allowedWorkVisitTransitions()` exposes the graph to other server modules without duplicating it. `fieldOperationsVisitActions.js` filters that canonical graph to the transitions actually activated in the current slice. The HTTP `transition_visit` command exposes `en_route`, `on_site`, `in_progress`, the governed `pending -> in_progress` pause/resume branch, and terminal `no_access`. Entering `pending` requires a canonical reason, preserves an optional next action, uses exact retry semantics for that payload, and records server-owned pause/resume timestamps plus atomic audit. Entering `no_access` requires a canonical reason, uses exact retry semantics, records a server-owned terminal timestamp plus atomic audit, and does not mutate Appointment or WorkOrder lifecycle. First transition timestamps are server-owned and invalid/terminal transitions are rejected.
+The canonical WorkVisit transition graph is implemented server-side in `functions/fieldOperationsAuthorityTransitions.js`. `allowedWorkVisitTransitions()` exposes the graph to other server modules without duplicating it. `fieldOperationsVisitActions.js` filters that canonical graph to the transitions actually activated in the current slice. The HTTP `transition_visit` command exposes `en_route`, `on_site`, `in_progress`, the governed `pending -> in_progress` pause/resume branch, and terminal `no_access` / `cancelled`. Entering `pending` requires a canonical reason, preserves an optional next action, uses exact retry semantics for that payload, and records server-owned pause/resume timestamps plus atomic audit. Entering `no_access` or `cancelled` requires its own canonical reason, uses exact retry semantics, records a server-owned terminal timestamp plus atomic audit, and does not mutate Appointment or WorkOrder lifecycle. First transition timestamps are server-owned and invalid/terminal transitions are rejected.
 
 ### WorkIntervention
 
@@ -270,7 +270,7 @@ Office Review may return a revision for correction, but it must not silently mut
 
 ## K. Runtime boundary and UI migration
 
-Current ERP Next `/field` renders `TechnicianFieldHome`, backed by Field Operations Authority. `get_schedule` / `get_job` are assignment-scoped reads; `prepare_visit` and `transition_visit` are the only activated Field mutation actions in this slice. The UI exposes **En camino**, **Llegué**, **Iniciar trabajo**, governed pending/resume, and terminal **Sin acceso** only when server projections permit them. Legacy Technician and browser/localStorage Field implementations remain fallback/compatibility paths over older models.
+Current ERP Next `/field` renders `TechnicianFieldHome`, backed by Field Operations Authority. `get_schedule` / `get_job` are assignment-scoped reads; `prepare_visit` and `transition_visit` are the only activated Field mutation actions in this slice. The UI exposes **En camino**, **Llegué**, **Iniciar trabajo**, governed pending/resume, terminal **Sin acceso**, and terminal **Cancelar visita** only when server projections permit them. Legacy Technician and browser/localStorage Field implementations remain fallback/compatibility paths over older models.
 
 Migration rule:
 
@@ -338,7 +338,7 @@ Implemented:
 7. On uncertain timeout/error, the client re-fetches server state instead of guessing whether the transaction committed.
 8. WorkOrder planned/release status is not rewritten to simulate physical Field status.
 
-Still deferred within Phase 4 or later dependencies: `cancelled`, `requires_return_visit`, Office Review submission/completion and distinct return-visit creation. The `pending -> in_progress` pause/resume and terminal `no_access` branches are activated independently and do not claim that a return visit exists.
+Still deferred within Phase 4 or later dependencies: `requires_return_visit`, Office Review submission/completion and distinct return-visit creation. The `pending -> in_progress` pause/resume and terminal `no_access` / `cancelled` branches are activated independently and do not claim that a return visit exists or that Appointment/WorkOrder was cancelled.
 
 ### Slice 3+ — progress by domain dependency
 
@@ -569,8 +569,8 @@ This preserves `planned != actual` without weakening completion integrity.
 
 - canonical transition graph remains server-owned;
 - current-visit resolution and preparation/transition eligibility are server-projected;
-- `en_route`, `on_site`, `in_progress`, `pending -> in_progress`, and terminal `no_access` are activated through `transition_visit`;
-- Technician Home exposes only those server-authorized controls, with a required canonical reason before `no_access`;
+- `en_route`, `on_site`, `in_progress`, `pending -> in_progress`, and terminal `no_access` / `cancelled` are activated through `transition_visit`;
+- Technician Home exposes only those server-authorized controls, with a required canonical reason before either terminal outcome;
 - WorkOrder planned/release status remains separate and is not mutated by Field;
 - return-visit/submission/completion behavior remains future work;
 - formal four-pass review of this newer slice remains separate from this implementation phase.

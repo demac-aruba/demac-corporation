@@ -102,7 +102,7 @@ const representativeVisit = {
   updatedAt: '2026-08-24T12:00:00.000Z',
   updatedBy: 'uid-1',
   version: 1,
-  availableTransitions: ['en_route', 'no_access'],
+  availableTransitions: ['en_route', 'no_access', 'cancelled'],
 };
 
 const representativeVisitAsset = {
@@ -214,6 +214,22 @@ const validNoAccessTransition = parseFieldTransitionVisitResponse({
 });
 assert(validNoAccessTransition.visit.noAccessReason === 'Property was locked', 'no-access transport must preserve the canonical reason');
 assert(validNoAccessTransition.visit.availableTransitions.length === 0, 'no-access transport must remain terminal');
+const validCancelledTransition = parseFieldTransitionVisitResponse({
+  success: true,
+  version: 1,
+  replayed: false,
+  visit: {
+    ...representativeVisit,
+    status: 'cancelled',
+    cancelledAt: '2026-08-24T13:00:00.000Z',
+    cancellationReason: 'Customer cancelled this field visit',
+    version: 2,
+    availableTransitions: [],
+  },
+  allowedActions: ['read', 'execute'],
+});
+assert(validCancelledTransition.visit.cancellationReason === 'Customer cancelled this field visit', 'cancelled transport must preserve the canonical reason');
+assert(validCancelledTransition.visit.availableTransitions.length === 0, 'cancelled transport must remain terminal');
 assert(validTransition.visit.status === 'en_route' && validTransition.visit.version === 2, 'valid visit transition transport should parse');
 
 const validAttach = parseFieldAttachVisitAssetResponse({
@@ -245,6 +261,7 @@ assertThrows(() => parseFieldPrepareVisitResponse({ success: true, version: 1, r
 assertThrows(() => parseFieldTransitionVisitResponse({ success: true, version: 1, replayed: false, visit: { ...representativeVisit, availableTransitions: ['future_transition'] }, allowedActions: ['execute'] }), 'transition response with unknown next transition must fail closed');
 assertThrows(() => parseFieldTransitionVisitResponse({ success: true, version: 1, replayed: false, visit: { ...representativeVisit, pendingReason: 42 }, allowedActions: ['execute'] }), 'transition response with malformed pending context must fail closed');
 assertThrows(() => parseFieldTransitionVisitResponse({ success: true, version: 1, replayed: false, visit: { ...representativeVisit, noAccessReason: 42 }, allowedActions: ['execute'] }), 'transition response with malformed no-access context must fail closed');
+assertThrows(() => parseFieldTransitionVisitResponse({ success: true, version: 1, replayed: false, visit: { ...representativeVisit, cancellationReason: 42 }, allowedActions: ['execute'] }), 'transition response with malformed cancellation context must fail closed');
 assertThrows(() => parseFieldTransitionVisitResponse({ success: true, version: 1, replayed: false, visit: { ...representativeVisit, version: 1.5 }, allowedActions: ['execute'] }), 'fractional visit version must fail closed at the transport boundary');
 assertThrows(() => parseFieldTransitionVisitResponse({ success: true, version: 1, replayed: false, visit: { ...representativeVisit, version: Number.MAX_SAFE_INTEGER + 1 }, allowedActions: ['execute'] }), 'unsafe visit version must fail closed at the transport boundary');
 assertThrows(() => parseFieldAttachVisitAssetResponse({ success: true, version: 2, replayed: false, visitAsset: representativeVisitAsset, allowedActions: ['asset.add'] }), 'VisitAsset response with unknown API version must fail closed');

@@ -226,6 +226,7 @@ function createFieldOperationsApi({
         pendingReason: cleanText(data.pendingReason, 1000),
         pendingAction: cleanText(data.pendingAction, 1500),
         noAccessReason: cleanText(data.noAccessReason, 1000),
+        cancellationReason: cleanText(data.cancellationReason, 1000),
         requestId: cleanText(data.requestId, 240),
       });
       return { ...transitioned, version: FIELD_OPERATIONS_API_VERSION };

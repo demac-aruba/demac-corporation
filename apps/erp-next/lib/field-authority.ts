@@ -267,9 +267,10 @@ export async function transitionFieldVisit(
   pendingReason = '',
   pendingAction = '',
   noAccessReason = '',
+  cancellationReason = '',
 ) {
   return parseFieldTransitionVisitResponse(await callFieldAuthority('transition_visit', {
-    visitId, to, expectedVersion, requestId, pendingReason, pendingAction, noAccessReason,
+    visitId, to, expectedVersion, requestId, pendingReason, pendingAction, noAccessReason, cancellationReason,
   }));
 }
 

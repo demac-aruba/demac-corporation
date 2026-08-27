@@ -185,7 +185,7 @@ test('scheduled visit transitions to en route atomically with first timestamp, v
   assert.equal(result.visit.status, 'en_route');
   assert.equal(result.visit.version, 2);
   assert.equal(result.visit.departedAt, '2026-08-24T12:30:00.000Z');
-  assert.deepEqual(result.visit.availableTransitions, ['on_site', 'pending', 'no_access']);
+  assert.deepEqual(result.visit.availableTransitions, ['on_site', 'pending', 'no_access', 'cancelled']);
   assert.equal(store.get('workVisits', 'visit-WO-1').status, 'on_the_way');
   assert.equal(store.get('workVisits', 'visit-WO-1').version, 2);
   assert.equal(auditEvents.length, 1);
@@ -203,7 +203,7 @@ test('visit progresses en route -> on site -> in progress without overwriting fi
   assert.equal(inProgress.visit.startedAt, '2026-08-24T13:00:00.000Z');
   assert.equal(inProgress.visit.departedAt, '2026-08-24T12:30:00.000Z');
   assert.equal(inProgress.visit.arrivedAt, '2026-08-24T12:45:00.000Z');
-  assert.deepEqual(inProgress.visit.availableTransitions, ['pending']);
+  assert.deepEqual(inProgress.visit.availableTransitions, ['pending', 'cancelled']);
   assert.equal(store.get('workVisits', 'visit-WO-1').version, 4);
 });
 
@@ -230,7 +230,7 @@ test('in-progress visit pauses with a required reason, optional next action and 
   assert.equal(result.visit.pendingReason, 'Replacement control board required.');
   assert.equal(result.visit.pendingAction, 'Office should source the compatible board.');
   assert.equal(result.visit.pendingAt, '2026-08-24T12:30:00.000Z');
-  assert.deepEqual(result.visit.availableTransitions, ['in_progress']);
+  assert.deepEqual(result.visit.availableTransitions, ['in_progress', 'cancelled']);
   assert.equal(store.get('workVisits', 'visit-WO-1').pendingRequestId, 'transition-pending-001');
   assert.deepEqual(auditEvents[0].after, {
     status: 'pending',
@@ -256,7 +256,12 @@ test('pending transition requires a reason and exact retry payload', async () =>
   await transition(input);
   const replay = await transition(input);
   assert.equal(replay.replayed, true);
+  assert.equal(store.commits[1].length, 0);
   assert.equal(auditEvents.length, 1);
+  await assert.rejects(
+    () => transition({ ...input, requestId: 'transition-pending-other-request' }),
+    (error) => error?.code === 'pending_transition_conflict' && error?.status === 409,
+  );
   await assert.rejects(
     () => transition({ ...input, pendingReason: 'Different reason' }),
     (error) => error?.code === 'pending_transition_conflict' && error?.status === 409,
@@ -281,7 +286,7 @@ test('pending visit resumes without erasing the recorded pending context', async
   assert.equal(result.visit.resumedAt, '2026-08-25T13:00:00.000Z');
   assert.equal(result.visit.pendingReason, 'Awaiting access approval');
   assert.equal(result.visit.pendingAction, 'Customer will call DEMAC');
-  assert.deepEqual(result.visit.availableTransitions, ['pending']);
+  assert.deepEqual(result.visit.availableTransitions, ['pending', 'cancelled']);
   assert.equal(store.get('workVisits', 'visit-WO-1').version, 6);
 });
 
@@ -328,6 +333,58 @@ test('no-access transition requires a reason and exact retry payload', async () 
   await assert.rejects(
     () => transition({ ...input, noAccessReason: 'Different reason' }),
     (error) => error?.code === 'no_access_transition_conflict' && error?.status === 409,
+  );
+});
+
+test('scheduled visit cancels with required canonical reason, terminal projection and audit', async () => {
+  const { store, auditEvents, transition } = fixture();
+  const result = await transition({
+    identity: identity(),
+    visitId: 'visit-WO-1',
+    to: 'cancelled',
+    expectedVersion: 1,
+    cancellationReason: ' Customer asked to stop this visit. ',
+    requestId: 'transition-cancelled-001',
+  });
+
+  assert.equal(result.visit.status, 'cancelled');
+  assert.equal(result.visit.version, 2);
+  assert.equal(result.visit.cancelledAt, '2026-08-24T12:30:00.000Z');
+  assert.equal(result.visit.cancellationReason, 'Customer asked to stop this visit.');
+  assert.deepEqual(result.visit.availableTransitions, []);
+  assert.equal(store.get('workVisits', 'visit-WO-1').cancelledRequestId, 'transition-cancelled-001');
+  assert.equal(store.get('workOrders', 'WO-1').status, 'Confirmada');
+  assert.deepEqual(auditEvents[0].after, {
+    status: 'cancelled',
+    version: 2,
+    cancellationReason: 'Customer asked to stop this visit.',
+  });
+});
+
+test('cancelled transition requires a reason and exact retry payload', async () => {
+  const { store, auditEvents, transition } = fixture();
+  await assert.rejects(
+    () => transition({ identity: identity(), visitId: 'visit-WO-1', to: 'cancelled', expectedVersion: 1, requestId: 'transition-cancelled-empty' }),
+    (error) => error?.code === 'cancellation_reason_required' && error?.status === 400,
+  );
+  assert.equal(store.get('workVisits', 'visit-WO-1').status, 'not_started');
+
+  const input = {
+    identity: identity(), visitId: 'visit-WO-1', to: 'cancelled', expectedVersion: 1,
+    cancellationReason: 'Customer cancelled field visit', requestId: 'transition-cancelled-exact',
+  };
+  await transition(input);
+  const replay = await transition(input);
+  assert.equal(replay.replayed, true);
+  assert.equal(store.commits[1].length, 0);
+  assert.equal(auditEvents.length, 1);
+  await assert.rejects(
+    () => transition({ ...input, requestId: 'transition-cancelled-other-request' }),
+    (error) => error?.code === 'cancelled_transition_conflict' && error?.status === 409,
+  );
+  await assert.rejects(
+    () => transition({ ...input, cancellationReason: 'Different reason' }),
+    (error) => error?.code === 'cancelled_transition_conflict' && error?.status === 409,
   );
 });
 
@@ -504,7 +561,7 @@ test('audit failure aborts the surrounding transaction and leaves WorkVisit unch
 test('non-activated branch targets and malformed expectedVersion fail before persistence', async () => {
   const { store, transition } = fixture();
   await assert.rejects(
-    () => transition({ identity: identity(), visitId: 'visit-WO-1', to: 'cancelled', expectedVersion: 1, requestId: 'transition-cancelled-001' }),
+    () => transition({ identity: identity(), visitId: 'visit-WO-1', to: 'requires_return_visit', expectedVersion: 1, requestId: 'transition-return-001' }),
     (error) => error?.code === 'transition_not_activated',
   );
   await assert.rejects(

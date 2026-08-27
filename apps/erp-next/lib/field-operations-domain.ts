@@ -147,6 +147,8 @@ export interface WorkVisit extends AuditFields {
   resumedAt?: ISODateTime;
   noAccessAt?: ISODateTime;
   noAccessReason?: string;
+  cancelledAt?: ISODateTime;
+  cancellationReason?: string;
   submittedAt?: ISODateTime;
   completedAt?: ISODateTime;
   requiresSecondVisit: boolean;
