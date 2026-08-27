@@ -41,6 +41,9 @@ escalated, and it remains `FAIL` until an authorized resolution is recorded.
   quality gates, record findings, and state residual risk.
 - A solo-maintainer review must never be described as an "independent review." It is a
   documented adversarial self-review under constrained team staffing.
+- The business owner is not required to act as a technical code reviewer. The owner's role
+  is to define/approve business intent and provide explicit human approval for actions that
+  cross the Human Approval Boundary; technical review evidence remains the maintainer's job.
 - Green CI alone is never sufficient review evidence.
 - Production deployment, destructive or irreversible actions, security/access changes,
   secret changes, destructive migrations, production-data deletion, and creation of a
