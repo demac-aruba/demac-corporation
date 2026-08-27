@@ -23,7 +23,8 @@ import {
   type SalaryAdvanceMethod,
 } from '@/lib/employee-attendance';
 import { deriveAttendanceDay, summarizeAttendancePeriod } from '@/lib/employee-attendance-policy';
-import { downloadEmployeePayrollSummaryPdf } from '@/lib/employee-payroll-summary-pdf';
+import { payrollPeriodFromDates, summarizeEmployee } from '@/lib/employee-payroll';
+import { downloadPayrollAccountingPdf } from '@/lib/payroll-accounting-pdf';
 import { employeeVan as resolveEmployeeVan } from '@/lib/employee-work-schedule';
 import { EmployeeDirectoryOverview, type EmployeeDirectoryPeriodSummary } from './employee-directory-overview';
 import { EmployeeProfileDialog } from './employee-profile-dialog';
@@ -194,9 +195,20 @@ export function EmployeeWorkspace() {
   function exportPayrollPdf() {
     setError('');
     setMessage('');
+    if (!operations) return;
     try {
-      const downloaded = downloadEmployeePayrollSummaryPdf({ period, summaries: periodSummaries });
-      setMessage(downloaded ? 'Payroll / timesheet summary downloaded in PDF.' : 'PDF export is available from the browser version.');
+      const payrollPeriod = payrollPeriodFromDates(period.start, period.end);
+      const summaries = employees.map((employee) => summarizeEmployee({ employee, period: payrollPeriod, operations, attendance }));
+      const advancesByEmployee = Object.fromEntries(periodSummaries.map((summary) => [summary.employee.id, summary.advances]));
+      const downloaded = downloadPayrollAccountingPdf({
+        filename: `DEMAC_Payroll_Contabilidad_${period.start}_${period.end}.pdf`,
+        periodLabel: payrollPeriod.label,
+        summaries,
+        advancesByEmployee,
+      });
+      setMessage(downloaded
+        ? `Premium payroll accounting PDF downloaded. ${summaries.length <= 12 ? 'The current workforce fits on one A4 landscape page.' : 'The report continues automatically after 12 employees.'}`
+        : 'PDF export is available from the browser version.');
     } catch (cause) {
       setError(`Payroll PDF could not be generated: ${errorText(cause)}`);
     }
