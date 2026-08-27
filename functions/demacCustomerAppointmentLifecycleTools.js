@@ -18,7 +18,7 @@ const CUSTOMER_APPOINTMENT_LIFECYCLE_TOOL_DEFINITIONS = Object.freeze([
   {
     type: "function",
     name: CUSTOMER_APPOINTMENT_LIFECYCLE_TOOL_NAMES.CANCEL_APPOINTMENT,
-    description: "Cancel one existing ERP appointment through canonical Booking Authority. This mutation is server-gated by Maya pilot policy and current communication ownership. Never claim cancellation unless this tool returns success=true and the canonical appointment is cancelled.",
+    description: "Cancel one existing ERP appointment through canonical Booking Authority. This mutation is server-gated by Maya pilot policy and the exact current communication turn. Never claim cancellation unless this tool returns success=true and the canonical appointment is cancelled.",
     strict: true,
     parameters: {
       type: "object",
@@ -34,7 +34,7 @@ const CUSTOMER_APPOINTMENT_LIFECYCLE_TOOL_DEFINITIONS = Object.freeze([
   {
     type: "function",
     name: CUSTOMER_APPOINTMENT_LIFECYCLE_TOOL_NAMES.RESCHEDULE_APPOINTMENT,
-    description: "Reschedule one existing ERP appointment through canonical Booking Authority using an exact current booking offer and option. The selected capacity is revalidated transactionally. This mutation is server-gated by Maya pilot policy and current communication ownership.",
+    description: "Reschedule one existing ERP appointment through canonical Booking Authority using an exact current booking offer and option. The selected capacity is revalidated transactionally. This mutation is server-gated by Maya pilot policy and the exact current communication turn.",
     strict: true,
     parameters: {
       type: "object",
@@ -75,14 +75,14 @@ function lifecycleToolError(error) {
 
 function requireMutationContext(context = {}) {
   const conversationId = cleanText(context.conversationId || context.conversationKey, 300);
-  const communicationAccountId = cleanText(context.communicationAccountId, 180).toLowerCase();
-  if (!conversationId || !communicationAccountId) {
+  const inboundMessageId = cleanText(context.inboundMessageId || context.messageId, 300);
+  if (!conversationId || !inboundMessageId) {
     throw new BookingAuthorityError(
       BOOKING_ERROR_CODES.INVALID_REQUEST,
-      "Canonical communication identity is required for Maya appointment mutations.",
+      "Canonical conversation and inbound-message identity are required for Maya appointment mutations.",
       {
         conversationIdPresent: Boolean(conversationId),
-        communicationAccountIdPresent: Boolean(communicationAccountId),
+        inboundMessageIdPresent: Boolean(inboundMessageId),
       },
     );
   }
