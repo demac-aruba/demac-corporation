@@ -2,11 +2,15 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  appointmentWorkflowContextFromConversation,
   mayaAppointmentMutationDecisionInTransaction,
+  mutationReceiptIdentity,
+  mutationReplayDecision,
 } = require("./demacCustomerAppointmentMutationGuard");
 
 const CONVERSATION_ID = "COMM-1111111111111111111111111111111111111111";
 const MESSAGE_ID = "MSG-1";
+const APPOINTMENT_ID = "APT-1";
 
 class FakeSnapshot {
   constructor(ref, value) {
@@ -84,6 +88,11 @@ function seed({
   receiptCustomerInputVersion = 8,
   communicationAccountId = "demac-wa-corporate",
   activeCommunicationAccountId = "demac-wa-corporate",
+  workflow = "cancellation",
+  workflowAppointmentId = APPOINTMENT_ID,
+  observedMessageId = MESSAGE_ID,
+  caseState = "APPOINTMENT_MATCHED",
+  attentionReason = "",
 } = {}) {
   return {
     businessSettings: [
@@ -108,6 +117,15 @@ function seed({
       aiDisposition,
       ownershipVersion,
       customerInputVersion,
+      mayaLastObservedMessageId: observedMessageId,
+      mayaCaseId: "CASE-1",
+      mayaAttentionReason: attentionReason,
+      mayaInsight: {
+        intent: workflow,
+        appointmentId: workflowAppointmentId,
+        caseId: "CASE-1",
+        caseState,
+      },
     }],
     customerAgentInboundQueue: [{
       id: "CAQ-1",
@@ -122,15 +140,29 @@ function seed({
   };
 }
 
-async function decide(options, action = "cancel_appointment") {
-  const db = new FakeDb(seed(options));
+async function decide(options = {}, action = "cancel_appointment") {
+  const workflow = action === "reschedule_appointment" ? "reschedule" : "cancellation";
+  const db = new FakeDb(seed({ workflow, ...options }));
   return mayaAppointmentMutationDecisionInTransaction({
     db,
     transaction: db.transaction(),
     action,
-    context: { conversationId: CONVERSATION_ID, inboundMessageId: MESSAGE_ID },
+    context: {
+      conversationId: CONVERSATION_ID,
+      inboundMessageId: MESSAGE_ID,
+      requestedAppointmentId: options.requestedAppointmentId || APPOINTMENT_ID,
+    },
   });
 }
+
+test("current appointment workflow context is bound to the exact observed inbound message", () => {
+  const current = appointmentWorkflowContextFromConversation(seed().communicationConversations[0], MESSAGE_ID);
+  assert.equal(current.valid, true);
+  assert.equal(current.appointmentId, APPOINTMENT_ID);
+  const stale = appointmentWorkflowContextFromConversation(seed().communicationConversations[0], "MSG-OLDER");
+  assert.equal(stale.valid, false);
+  assert.equal(stale.reason, "appointment-workflow-not-current");
+});
 
 test("auto-cancel is fail-closed even while Maya owns the conversation", async () => {
   const decision = await decide({ autoCancelEnabled: false });
@@ -138,21 +170,35 @@ test("auto-cancel is fail-closed even while Maya owns the conversation", async (
   assert.equal(decision.reason, "auto-cancel-disabled");
 });
 
-test("auto-cancel may commit only with active account, Maya ownership, current epoch and enabled flag", async () => {
+test("auto-cancel may commit only with active account, Maya ownership, current epoch, exact case appointment and enabled flag", async () => {
   const decision = await decide({ autoCancelEnabled: true });
   assert.equal(decision.allowed, true);
   assert.equal(decision.reason, "auto-cancel-enabled");
   assert.equal(decision.ownershipVersion, 3);
   assert.equal(decision.customerInputVersion, 8);
+  assert.equal(decision.appointmentId, APPOINTMENT_ID);
+  assert.equal(decision.caseId, "CASE-1");
 });
 
-test("auto-reschedule has an independent feature flag", async () => {
+test("auto-reschedule has an independent feature flag and matching case workflow", async () => {
   const off = await decide({ autoRescheduleEnabled: false }, "reschedule_appointment");
   assert.equal(off.allowed, false);
   assert.equal(off.reason, "auto-reschedule-disabled");
   const on = await decide({ autoRescheduleEnabled: true }, "reschedule_appointment");
   assert.equal(on.allowed, true);
   assert.equal(on.reason, "auto-reschedule-enabled");
+});
+
+test("model cannot mutate a different appointment than the Communication Case correlated", async () => {
+  const decision = await decide({ autoCancelEnabled: true, requestedAppointmentId: "APT-WRONG" });
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.reason, "appointment-workflow-context-mismatch");
+});
+
+test("cancellation action cannot consume a reschedule workflow or vice versa", async () => {
+  const decision = await decide({ autoCancelEnabled: true, workflow: "reschedule" }, "cancel_appointment");
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.reason, "appointment-workflow-action-mismatch");
 });
 
 test("human takeover blocks a lifecycle mutation even when autonomy is enabled", async () => {
@@ -191,4 +237,47 @@ test("cross-account mutation attempts fail closed", async () => {
   });
   assert.equal(decision.allowed, false);
   assert.equal(decision.reason, "communication-account-not-active");
+});
+
+test("reschedule mutation receipt replays only while canonical appointment still matches exact committed option", () => {
+  const context = { conversationId: CONVERSATION_ID, inboundMessageId: MESSAGE_ID };
+  const args = {
+    appointmentId: APPOINTMENT_ID,
+    offerId: "OFR-1",
+    offerVersion: 2,
+    optionId: "OPT-2",
+    reason: "Customer requested another day",
+    note: "",
+  };
+  const expected = mutationReceiptIdentity("reschedule_appointment", args, context);
+  const receipt = { ...expected, status: "committed" };
+  const appointment = {
+    id: APPOINTMENT_ID,
+    status: "confirmed",
+    offerId: "OFR-1",
+    offerVersion: 2,
+    selectedOptionId: "OPT-2",
+    lastScheduleChangeKind: "customer_reschedule",
+  };
+  assert.equal(mutationReplayDecision({ receipt, expected, appointment }).allowed, true);
+  assert.equal(mutationReplayDecision({ receipt, expected, appointment: { ...appointment, selectedOptionId: "OPT-LATER" } }).allowed, false);
+});
+
+test("same Maya turn cannot replay a different mutation fingerprint", () => {
+  const context = { conversationId: CONVERSATION_ID, inboundMessageId: MESSAGE_ID };
+  const first = mutationReceiptIdentity("cancel_appointment", {
+    appointmentId: APPOINTMENT_ID,
+    reason: "Customer unavailable",
+    note: "",
+  }, context);
+  const changed = mutationReceiptIdentity("cancel_appointment", {
+    appointmentId: APPOINTMENT_ID,
+    reason: "Different reason after commit",
+    note: "",
+  }, context);
+  const receipt = { ...first, status: "committed" };
+  const appointment = { id: APPOINTMENT_ID, status: "cancelled" };
+  const decision = mutationReplayDecision({ receipt, expected: changed, appointment });
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.reason, "mutation-idempotency-conflict");
 });
