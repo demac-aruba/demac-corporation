@@ -8,7 +8,7 @@ const {
   COMMUNICATION_SETTINGS_DOCUMENT,
   activeAccountDecision,
 } = require("./demacCommunicationIdentity");
-const { communicationEpochDecision } = require("./demacCustomerTurn");
+const { communicationEpochDecision, positiveEpoch, nonNegativeEpoch } = require("./demacCustomerTurn");
 const {
   MAYA_SETTINGS_COLLECTION,
   MAYA_SETTINGS_DOCUMENT,
@@ -20,18 +20,45 @@ const MAYA_APPOINTMENT_MUTATION_ACTIONS = new Set([
   "cancel_appointment",
   "reschedule_appointment",
 ]);
+const CUSTOMER_AGENT_QUEUE_COLLECTION = "customerAgentInboundQueue";
 
 function mutationContextIdentity(context = {}) {
   return {
     conversationId: cleanText(context.conversationId || context.conversationKey, 300),
-    communicationAccountId: cleanText(context.communicationAccountId, 180).toLowerCase(),
-    expectedOwnershipVersion: context.expectedOwnershipVersion,
-    expectedCustomerInputVersion: context.expectedCustomerInputVersion,
+    inboundMessageId: cleanText(context.inboundMessageId || context.messageId, 300),
   };
 }
 
 function denied(reason, details = {}) {
   return { allowed: false, reason: cleanText(reason, 160) || "maya-mutation-not-authorized", ...details };
+}
+
+async function loadMutationEpochReceipt({ db, transaction, conversationId, inboundMessageId } = {}) {
+  const query = db.collection(CUSTOMER_AGENT_QUEUE_COLLECTION)
+    .where("conversationId", "==", conversationId)
+    .where("messageId", "==", inboundMessageId)
+    .limit(2);
+  const snapshot = await transaction.get(query);
+  const docs = Array.isArray(snapshot?.docs) ? snapshot.docs : [];
+  if (docs.length !== 1) {
+    return {
+      valid: false,
+      reason: docs.length > 1 ? "ambiguous-customer-agent-queue-receipt" : "customer-agent-queue-receipt-missing",
+    };
+  }
+  const receipt = docs[0].data() || {};
+  const communicationAccountId = cleanText(receipt.communicationAccountId, 180).toLowerCase();
+  const expectedOwnershipVersion = nonNegativeEpoch(receipt.expectedOwnershipVersion);
+  const expectedCustomerInputVersion = positiveEpoch(receipt.expectedCustomerInputVersion || receipt.customerInputVersion);
+  if (!communicationAccountId) return { valid: false, reason: "queue-receipt-missing-communication-account" };
+  if (expectedOwnershipVersion === null) return { valid: false, reason: "queue-receipt-missing-ownership-version" };
+  if (expectedCustomerInputVersion === null) return { valid: false, reason: "queue-receipt-missing-customer-input-version" };
+  return {
+    valid: true,
+    communicationAccountId,
+    expectedOwnershipVersion,
+    expectedCustomerInputVersion,
+  };
 }
 
 async function mayaAppointmentMutationDecisionInTransaction({
@@ -50,7 +77,15 @@ async function mayaAppointmentMutationDecisionInTransaction({
 
   const identity = mutationContextIdentity(context);
   if (!identity.conversationId) return denied("missing-conversation-identity");
-  if (!identity.communicationAccountId) return denied("missing-communication-account-id");
+  if (!identity.inboundMessageId) return denied("missing-inbound-message-identity");
+
+  const epochReceipt = await loadMutationEpochReceipt({
+    db,
+    transaction,
+    conversationId: identity.conversationId,
+    inboundMessageId: identity.inboundMessageId,
+  });
+  if (!epochReceipt.valid) return denied(epochReceipt.reason);
 
   const conversationRef = db.collection("communicationConversations").doc(identity.conversationId);
   const mayaSettingsRef = db.collection(MAYA_SETTINGS_COLLECTION).doc(MAYA_SETTINGS_DOCUMENT);
@@ -64,7 +99,7 @@ async function mayaAppointmentMutationDecisionInTransaction({
   if (!conversationSnapshot.exists) return denied("conversation-missing");
   const conversation = conversationSnapshot.data() || {};
   const currentAccount = cleanText(conversation.communicationAccountId, 180).toLowerCase();
-  if (!currentAccount || currentAccount !== identity.communicationAccountId) {
+  if (!currentAccount || currentAccount !== epochReceipt.communicationAccountId) {
     return denied("communication-account-changed");
   }
 
@@ -79,8 +114,8 @@ async function mayaAppointmentMutationDecisionInTransaction({
 
   const epochDecision = communicationEpochDecision({
     conversation,
-    expectedOwnershipVersion: identity.expectedOwnershipVersion,
-    expectedCustomerInputVersion: identity.expectedCustomerInputVersion,
+    expectedOwnershipVersion: epochReceipt.expectedOwnershipVersion,
+    expectedCustomerInputVersion: epochReceipt.expectedCustomerInputVersion,
   });
   if (!epochDecision.allowed) return denied(epochDecision.reason);
 
@@ -94,6 +129,7 @@ async function mayaAppointmentMutationDecisionInTransaction({
   return {
     allowed: true,
     reason: actionDecision.reason,
+    communicationAccountId: epochReceipt.communicationAccountId,
     ownershipVersion: epochDecision.ownershipVersion,
     customerInputVersion: epochDecision.customerInputVersion,
   };
@@ -131,8 +167,10 @@ function createMayaGuardedBookingDb({ db, action, context = {} } = {}) {
 }
 
 module.exports = {
+  CUSTOMER_AGENT_QUEUE_COLLECTION,
   MAYA_APPOINTMENT_MUTATION_ACTIONS,
   createMayaGuardedBookingDb,
+  loadMutationEpochReceipt,
   mayaAppointmentMutationDecisionInTransaction,
   mutationAuthorizationError,
   mutationContextIdentity,
