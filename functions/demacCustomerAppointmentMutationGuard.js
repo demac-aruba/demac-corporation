@@ -72,6 +72,39 @@ function appointmentWorkflowContextFromConversation(conversation = {}, inboundMe
   };
 }
 
+function normalizedWorkLine(line = {}) {
+  return {
+    presetId: cleanText(line.presetId || line.serviceType, 120),
+    serviceId: cleanText(line.serviceId, 120),
+    quantity: Number(line.quantity || 0),
+    manualDurationMinutes: Number(line.manualDurationMinutes || 0),
+  };
+}
+
+function workLinesSignature(lines = []) {
+  if (!Array.isArray(lines) || !lines.length) return "";
+  return JSON.stringify(lines
+    .map(normalizedWorkLine)
+    .filter((line) => line.presetId && Number.isInteger(line.quantity) && line.quantity > 0)
+    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))));
+}
+
+function rescheduleScopeDecision(appointment = {}, offer = {}) {
+  const request = offer?.request && typeof offer.request === "object" ? offer.request : {};
+  if (
+    cleanText(appointment.customerId, 160) !== cleanText(request.customerId, 160)
+    || cleanText(appointment.propertyId, 160) !== cleanText(request.propertyId, 160)
+  ) {
+    return denied("reschedule-customer-property-changed");
+  }
+  const currentWork = workLinesSignature(appointment.workLines);
+  const offeredWork = workLinesSignature(request.workLines);
+  if (!currentWork || !offeredWork || currentWork !== offeredWork) {
+    return denied("reschedule-workload-changed");
+  }
+  return { allowed: true, reason: "reschedule-scope-preserved" };
+}
+
 async function loadCurrentAppointmentWorkflowContext({ db, context = {} } = {}) {
   const identity = mutationContextIdentity(context);
   if (!identity.conversationId || !identity.inboundMessageId) {
@@ -114,13 +147,13 @@ function mutationReceiptIdentity(action, args = {}, context = {}) {
     offerId,
     offerVersion,
     optionId,
-    reason: cleanText(args.reason, 500),
-    note: cleanText(args.note, 1_500),
   };
   return {
     id: `MAM-${hashKey(`${identity.conversationId}|${identity.inboundMessageId}|${normalizedAction}`, 40).toUpperCase()}`,
     requestFingerprint: hashKey(JSON.stringify(material), 40),
     ...material,
+    reason: cleanText(args.reason, 500),
+    note: cleanText(args.note, 1_500),
   };
 }
 
@@ -257,6 +290,22 @@ async function mayaAppointmentMutationDecisionInTransaction({
   });
   if (!actionDecision.allowed) return denied(actionDecision.reason);
 
+  if (normalizedAction === "reschedule_appointment") {
+    const requestedOfferId = cleanText(context.requestedOfferId, 180);
+    if (!requestedOfferId) return denied("requested-reschedule-offer-missing");
+    const [appointmentSnapshot, offerSnapshot] = await Promise.all([
+      transaction.get(db.collection("appointments").doc(requestedAppointmentId)),
+      transaction.get(db.collection("bookingOffers").doc(requestedOfferId)),
+    ]);
+    if (!appointmentSnapshot.exists) return denied("requested-appointment-missing");
+    if (!offerSnapshot.exists) return denied("requested-reschedule-offer-missing");
+    const scopeDecision = rescheduleScopeDecision(
+      { id: appointmentSnapshot.id, ...appointmentSnapshot.data() },
+      { id: offerSnapshot.id, ...offerSnapshot.data() },
+    );
+    if (!scopeDecision.allowed) return scopeDecision;
+  }
+
   return {
     allowed: true,
     reason: actionDecision.reason,
@@ -349,4 +398,7 @@ module.exports = {
   mutationContextIdentity,
   mutationReceiptIdentity,
   mutationReplayDecision,
+  normalizedWorkLine,
+  rescheduleScopeDecision,
+  workLinesSignature,
 };
