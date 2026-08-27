@@ -25,13 +25,27 @@ Required tests and checks may never be disabled, skipped, weakened, deleted, wai
 or bypassed merely to obtain `PASS`. A failing required check must be fixed or explicitly
 escalated, and it remains `FAIL` until an authorized resolution is recorded.
 
-## Branch and independent review policy
+## Branch and review policy
 
 - A Builder must never implement directly on `main`. Every implementation must use an
   approved `feature/`, `fix/`, `chore/`, or other explicitly approved task branch.
-- A Builder may not approve its own implementation. Reviewer evidence must come from a
-  separate review pass by a reviewer who did not implement the reviewed change during
-  that pass.
+- When an independent qualified reviewer is available, prefer an independent review by
+  someone who did not implement the reviewed change.
+- DEMAC is currently allowed to operate in **Solo Maintainer Review Mode** when no
+  independent engineer/reviewer is reasonably available. In that mode, absence of an
+  external reviewer must not block otherwise complete engineering work.
+- Solo Maintainer Review Mode requires a fresh adversarial review pass that is explicitly
+  separate from the implementation pass. The reviewer pass must re-read the request,
+  inspect the complete diff and affected callers, verify authority/security boundaries,
+  challenge concurrency/idempotency and failure/recovery behavior, run the applicable
+  quality gates, record findings, and state residual risk.
+- A solo-maintainer review must never be described as an "independent review." It is a
+  documented adversarial self-review under constrained team staffing.
+- Green CI alone is never sufficient review evidence.
+- Production deployment, destructive or irreversible actions, security/access changes,
+  secret changes, destructive migrations, production-data deletion, and creation of a
+  new source of truth still require explicit human approval under the Human Approval
+  Boundary below.
 
 ## Product boundaries
 
@@ -88,14 +102,17 @@ unreferenced may be removed, and only within an approved task. `UNKNOWN` blocks 
 
 ## Required delivery workflow
 
-Use the role contracts in `docs/ai/roles/` as review lenses; one person or agent may
-perform multiple roles, but Builder and Reviewer evidence must remain distinct.
+Use the role contracts in `docs/ai/roles/` as review lenses. In Solo Maintainer Review
+Mode, one person or agent may perform both Builder and Reviewer passes, but the evidence
+must remain explicitly separated and the reviewer pass must not be represented as
+independent.
 
 1. Define the task with `docs/ai/templates/TASK_TEMPLATE.md`.
 2. Map affected authorities, rules, parity obligations, failure modes, and risks.
 3. Implement the narrowest coherent change.
 4. Run the applicable gates in [docs/ai/QUALITY_GATES.md](docs/ai/QUALITY_GATES.md).
-5. Review with `docs/ai/templates/REVIEW_TEMPLATE.md`.
+5. Review with `docs/ai/templates/REVIEW_TEMPLATE.md` using either Independent Review or
+   Solo Maintainer Adversarial Review mode.
 6. Record durable architecture decisions with `docs/ai/templates/ADR_TEMPLATE.md`.
 7. Update the AI engineering documents when evidence changes them.
 
