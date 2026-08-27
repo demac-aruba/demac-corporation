@@ -28,6 +28,32 @@ const secretary: CanonicalStaffProfile = {
   availability: 'Disponible',
 };
 
+const newlyHiredSecretary = {
+  ...secretary,
+  id: 'staff-new-hire',
+  name: 'New Hire',
+  employmentStartedAt: '2026-08-11',
+} as CanonicalStaffProfile & { employmentStartedAt: string };
+const beforeEmployment = schedule({ profile: newlyHiredSecretary, date: '2026-08-10' });
+assert.deepEqual(
+  {
+    start: beforeEmployment.startTime,
+    end: beforeEmployment.endTime,
+    worked: beforeEmployment.scheduledMinutes,
+    paidFree: beforeEmployment.paidFreeMinutes,
+  },
+  { start: '', end: '', worked: 0, paidFree: 0 },
+  'Dates before employmentStartedAt must never create automatic scheduled or regular attendance.',
+);
+assert.equal(beforeEmployment.label, 'Employment starts 2026-08-11');
+
+const firstEmploymentDay = schedule({ profile: newlyHiredSecretary, date: '2026-08-11' });
+assert.deepEqual(
+  { start: firstEmploymentDay.startTime, end: firstEmploymentDay.endTime, worked: firstEmploymentDay.scheduledMinutes },
+  { start: '08:00', end: '17:00', worked: 480 },
+  'The employment start date is inclusive and must use the normal configured schedule.',
+);
+
 const wednesdayAfternoonOff = schedule({
   profile: secretary,
   date: '2026-08-26',
@@ -151,4 +177,4 @@ assert.deepEqual(
   'Technicians must inherit their recurring half-day only from the Van/team rule.',
 );
 
-console.log('Employee schedule acceptance passed: one company calendar, Van half-days for technicians, individual half-days for office staff.');
+console.log('Employee schedule acceptance passed: employment dates, one company calendar, Van half-days for technicians, individual half-days for office staff.');
