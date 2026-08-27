@@ -18,6 +18,8 @@ provider callbacks, and cached projections are never authority by themselves.
 | Technical recurring half-day | `vanHalfDaySchedules` for the Van/team | Authorized operations/scheduling flows | Technical staff inherit the Van/team rule; no employee-level duplicate |
 | Office/non-technical recurring half-day and payroll schedule | `employeePayrollSettings` | Authorized workforce/payroll flows | Payroll permission boundary and employee linkage |
 | Temporary crew override | `dailyVanAssignments` | Authorized operations/scheduling flows | Date-scoped override; does not rewrite recurring crew ownership |
+| Van daily schedule WhatsApp destination | Active canonical record in `vans`: `whatsappScheduleGroupJid`, optional `whatsappScheduleGroupName`, and `scheduleDeliveryEnabled` | Van schedule communication authority and daily schedule producer | JID uniqueness for enabled Vans; transactional updates; never infer or move JIDs from crew/group names at runtime |
+| Van daily schedule execution snapshot | `technicianDailyScheduleBatches/{date}` | Scheduled Van runner and operational readers | Heartbeat/last reconciliation only; monotonic completion; never treated as the message-delivery ledger |
 | Commercial Product / Service catalog | `services` | Authorized catalog and operational flows | One canonical commercial catalog; no duplicate Product or Service authority |
 | Sellable Product stock | `commercialProductStock`, including location balances | Warehouse/authorized work-order flows through Firebase `inventoryAuthority` for transactional operations | Atomic validated balance updates, stable Product/location identity, reconciliation and audit |
 | Material / consumable stock | `warehouseInventory`, including location balances | Warehouse/authorized work-order flows through Firebase `inventoryAuthority` for transactional operations | Atomic validated balance updates, stable item/location identity, reconciliation and audit |
@@ -27,7 +29,7 @@ provider callbacks, and cached projections are never authority by themselves.
 | Inventory physical-movement audit | Immutable `inventoryMovements` | Firebase `inventoryAuthority` and authorized audit/reconciliation readers | Append-only audit evidence; never treated as canonical balance authority |
 | Operational finance records | DEMAC ERP governed operational workflows | Finance roles and verified integrations | Operational traceability; no competing accounting balances or books |
 | Accounting books | QuickBooks Online, the planned/official accounting system of record, through a governed integration | Authorized finance integration | No parallel accounting engine, duplicate official numbering authority, or competing reconstruction of QBO history |
-| Transactional WhatsApp | Communication authority using canonical provider configuration; current default is `wacli` | Governed producers and the configured transport adapter | One queue/sender/contact model/notification authority; another provider such as Meta requires explicit canonical configuration |
+| Transactional WhatsApp | Communication authority using canonical provider configuration and `whatsappOutboundQueue`; current default provider is `wacli` | Governed producers and the configured transport adapter | One queue/sender/contact model/notification authority; queue/provider state is delivery truth; another provider such as Meta requires explicit canonical configuration |
 | AI actions | Allowlists and domain tools | Approved agent runtimes | Risk tier, explicit approval where required, bounded inputs, audit |
 | External provider state | Provider adapter, translated into canonical records | Verified webhook/poll workers | Signature/auth verification, replay protection, raw-event trace ID |
 
@@ -60,6 +62,12 @@ approved architecture decision and human approval for the new source-of-truth bo
 - No agent may introduce another WhatsApp queue, sender, contact model, or notification
   authority without an approved architecture decision and explicit human approval for the
   new source-of-truth boundary.
+- Van-to-WhatsApp-group ownership must be read from the active canonical Van record. Crew
+  names, technician names, display labels, probes, and historical migration heuristics are
+  not runtime identity authority and may not move a JID between Vans.
+- `technicianDailyScheduleBatches` is operational evidence of scheduled invocation and the
+  runner's last delivery reconciliation. `whatsappOutboundQueue` and the configured provider
+  state remain authoritative for whether an individual WhatsApp message was actually sent.
 
 ## Accounting boundary
 

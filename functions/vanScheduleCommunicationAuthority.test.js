@@ -1,13 +1,27 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { createVanScheduleCommunicationAuthority, normalizeGroupInput } = require("./vanScheduleCommunicationAuthority");
+const {
+  assertUniqueEnabledGroupJids,
+  createVanScheduleCommunicationAuthority,
+  normalizeGroupInput,
+} = require("./vanScheduleCommunicationAuthority");
 
 function snapshot(id, value) {
-  return { id, exists: value !== undefined, data: () => value };
+  return { id, exists: value !== undefined, data: () => value === undefined ? undefined : { ...value } };
 }
 
-function fakeDb(initialVans = []) {
+function fakeDb(initialVans = [], { beforeTransaction = null } = {}) {
   const vans = new Map(initialVans.map((van) => [van.id, { ...van }]));
+  function reference(id) {
+    return {
+      id,
+      async get() { return snapshot(id, vans.get(id)); },
+      async set(value, options = {}) {
+        const current = vans.get(id) || {};
+        vans.set(id, options.merge ? { ...current, ...value } : { ...value });
+      },
+    };
+  }
   return {
     vans,
     collection(name) {
@@ -16,15 +30,15 @@ function fakeDb(initialVans = []) {
         async get() {
           return { docs: [...vans.entries()].map(([id, value]) => snapshot(id, value)) };
         },
-        doc(id) {
-          return {
-            async set(value, options = {}) {
-              const current = vans.get(id) || {};
-              vans.set(id, options.merge ? { ...current, ...value } : { ...value });
-            },
-          };
-        },
+        doc(id) { return reference(id); },
       };
+    },
+    async runTransaction(callback) {
+      if (typeof beforeTransaction === "function") await beforeTransaction(vans);
+      return callback({
+        async get(ref) { return ref.get(); },
+        set(ref, value, options) { return ref.set(value, options); },
+      });
     },
   };
 }
@@ -41,12 +55,24 @@ test("van schedule group input requires a group JID when enabled", () => {
   assert.equal(normalizeGroupInput(groups[0]).groupJid, groups[0].groupJid);
 });
 
-test("configuration is stored on the canonical source van records", async () => {
+test("group display name is optional and is not synthesized from a crew mapping", () => {
+  const normalized = normalizeGroupInput({ vanId: "VAN-1", groupJid: groups[0].groupJid, enabled: true });
+  assert.equal(normalized.groupName, "");
+});
+
+test("the same enabled WhatsApp group cannot belong to two Vans", () => {
+  assert.throws(() => assertUniqueEnabledGroupJids([
+    groups[0],
+    { ...groups[1], groupJid: groups[0].groupJid },
+  ]), /cannot be assigned to more than one enabled Van/);
+});
+
+test("configuration is stored atomically on canonical source Van records", async () => {
   const db = fakeDb([
-    { id: "legacy-van-1", number: 1, active: true },
-    { id: "VAN-2", active: true },
-    { id: "VAN-3", active: true },
-    { id: "VAN-4", active: true },
+    { id: "legacy-van-1", number: 1, active: true, name: "Van 1" },
+    { id: "VAN-2", active: true, name: "Van 2" },
+    { id: "VAN-3", active: true, name: "Van 3" },
+    { id: "VAN-4", active: true, name: "Van 4" },
   ]);
   const authority = createVanScheduleCommunicationAuthority({
     db,
@@ -59,6 +85,76 @@ test("configuration is stored on the canonical source van records", async () => 
   assert.equal(db.vans.get("legacy-van-1").whatsappScheduleGroupJid, groups[0].groupJid);
   assert.equal(db.vans.get("VAN-2").whatsappScheduleGroupName, "Van 2 Group");
   assert.equal(result.groups.every((item) => item.configured), true);
+});
+
+test("blank display name preserves the persisted Van group name instead of inventing a crew label", async () => {
+  const db = fakeDb([
+    { id: "VAN-1", active: true, name: "Van 1", whatsappScheduleGroupName: "Operations Group One", whatsappScheduleGroupJid: groups[0].groupJid, scheduleDeliveryEnabled: true },
+  ]);
+  const authority = createVanScheduleCommunicationAuthority({
+    db,
+    scheduleService: { async queueDay() { throw new Error("not expected"); } },
+    operatingCalendar: { async isOpenDate() { return true; } },
+  });
+
+  await authority.saveConfiguration({
+    groups: [{ vanId: "VAN-1", groupName: "", groupJid: groups[0].groupJid, enabled: true }],
+  }, {});
+  assert.equal(db.vans.get("VAN-1").whatsappScheduleGroupName, "Operations Group One");
+});
+
+test("save rejects a duplicate JID against an existing Van not included in the partial update", async () => {
+  const db = fakeDb([
+    { id: "VAN-1", active: true, whatsappScheduleGroupJid: groups[0].groupJid, scheduleDeliveryEnabled: true },
+    { id: "VAN-2", active: true, whatsappScheduleGroupJid: groups[1].groupJid, scheduleDeliveryEnabled: true },
+  ]);
+  const authority = createVanScheduleCommunicationAuthority({
+    db,
+    scheduleService: { async queueDay() { throw new Error("not expected"); } },
+    operatingCalendar: { async isOpenDate() { return true; } },
+  });
+
+  await assert.rejects(
+    () => authority.saveConfiguration({ groups: [{ ...groups[1], groupJid: groups[0].groupJid }] }, {}),
+    /cannot be assigned to more than one enabled Van/,
+  );
+});
+
+test("save aborts if a target Van disappears before the transaction and does not recreate it", async () => {
+  const db = fakeDb(
+    [{ id: "VAN-1", active: true, name: "Van 1", whatsappScheduleGroupJid: groups[0].groupJid, scheduleDeliveryEnabled: true }],
+    { beforeTransaction(vans) { vans.delete("VAN-1"); } },
+  );
+  const authority = createVanScheduleCommunicationAuthority({
+    db,
+    scheduleService: { async queueDay() { throw new Error("not expected"); } },
+    operatingCalendar: { async isOpenDate() { return true; } },
+  });
+
+  await assert.rejects(
+    () => authority.saveConfiguration({ groups: [groups[0]] }, {}),
+    /changed or is no longer active/,
+  );
+  assert.equal(db.vans.has("VAN-1"), false);
+});
+
+test("save aborts if a target Van becomes inactive before the transaction", async () => {
+  const db = fakeDb(
+    [{ id: "VAN-1", active: true, name: "Van 1", whatsappScheduleGroupJid: groups[0].groupJid, scheduleDeliveryEnabled: true }],
+    { beforeTransaction(vans) { vans.set("VAN-1", { ...vans.get("VAN-1"), active: false }); } },
+  );
+  const authority = createVanScheduleCommunicationAuthority({
+    db,
+    scheduleService: { async queueDay() { throw new Error("not expected"); } },
+    operatingCalendar: { async isOpenDate() { return true; } },
+  });
+
+  await assert.rejects(
+    () => authority.saveConfiguration({ groups: [groups[0]] }, {}),
+    /changed or is no longer active/,
+  );
+  assert.equal(db.vans.get("VAN-1").active, false);
+  assert.equal(db.vans.get("VAN-1").whatsappScheduleGroupName, undefined);
 });
 
 test("manual schedule send reuses queueDay and scopes idempotency to the request id", async () => {
@@ -86,6 +182,20 @@ test("manual schedule send reuses queueDay and scopes idempotency to the request
   assert.equal(received.options.deliveryKey, "manual-schedule-test-123");
   assert.equal(received.options.reason, "manual-office-van-schedule");
   assert.equal(result.messageCount, 2);
+});
+
+test("manual schedule send rejects a Van that is not in the active catalog", async () => {
+  const db = fakeDb([{ id: "VAN-1", active: true }]);
+  const authority = createVanScheduleCommunicationAuthority({
+    db,
+    scheduleService: { async queueDay() { throw new Error("should not run"); } },
+    operatingCalendar: { async isOpenDate() { return true; } },
+  });
+
+  await assert.rejects(
+    () => authority.sendNow({ dateKey: "2026-08-21", vanId: "VAN-2", requestId: "schedule-test-123" }, {}),
+    /not present in the active Van catalog/,
+  );
 });
 
 test("manual schedule send refuses closed business dates", async () => {

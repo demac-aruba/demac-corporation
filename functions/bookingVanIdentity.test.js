@@ -24,7 +24,7 @@ test("deduplicates multiple Firestore records that represent the same physical v
   assert.equal(catalog.aliases.get("van-1783800405341"), "VAN-4");
 });
 
-test("deduplicates the full raw fleet before applying the physical four-van capacity", () => {
+test("deduplicates the full raw fleet before applying the current physical fleet identity model", () => {
   const catalog = canonicalizeVanCatalog([
     { id: "v4", name: "Van 4", active: true },
     { id: "van-1783800405341", name: "Van 4", active: true },
@@ -53,24 +53,21 @@ test("canonicalizes scheduling references before availability math", () => {
   assert.equal(data.vanHalfDaySchedules[0].vanId, "VAN-4");
 });
 
-test("canonical Van catalog realigns shifted WhatsApp group records without changing the live Van identities", () => {
+test("canonical Van catalog preserves persisted WhatsApp group ownership exactly", () => {
   const catalog = canonicalizeVanCatalog([
-    { id: "VAN-1", name: "Van 1", active: true, whatsappScheduleGroupName: "TEC - Miguel", whatsappScheduleGroupJid: "120000000000000001@g.us", scheduleDeliveryEnabled: true },
-    { id: "VAN-2", name: "Van 2", active: true, whatsappScheduleGroupName: "Gollo y Walter", whatsappScheduleGroupJid: "120000000000000002@g.us", scheduleDeliveryEnabled: true },
-    { id: "VAN-3", name: "Van 3", active: true, whatsappScheduleGroupName: "TEC - Mario y Ronald", whatsappScheduleGroupJid: "120000000000000003@g.us", scheduleDeliveryEnabled: true },
-    { id: "VAN-4", name: "Van 4", active: true, whatsappScheduleGroupName: "TEC - Alejandro y Edwin", whatsappScheduleGroupJid: "120000000000000004@g.us", scheduleDeliveryEnabled: true },
+    { id: "VAN-1", name: "Van 1", active: true, whatsappScheduleGroupName: "Group One", whatsappScheduleGroupJid: "120000000000000001@g.us", scheduleDeliveryEnabled: true },
+    { id: "VAN-2", name: "Van 2", active: true, whatsappScheduleGroupName: "Group Two", whatsappScheduleGroupJid: "120000000000000002@g.us", scheduleDeliveryEnabled: true },
+    { id: "VAN-3", name: "Van 3", active: true, whatsappScheduleGroupName: "Group Three", whatsappScheduleGroupJid: "120000000000000003@g.us", scheduleDeliveryEnabled: true },
+    { id: "VAN-4", name: "Van 4", active: true, whatsappScheduleGroupName: "Group Four", whatsappScheduleGroupJid: "120000000000000004@g.us", scheduleDeliveryEnabled: true },
   ]);
   const byId = new Map(catalog.vans.map((van) => [van.id, van]));
 
-  assert.equal(byId.get("VAN-1").name, "Van 1");
-  assert.equal(byId.get("VAN-2").name, "Van 2");
-  assert.equal(byId.get("VAN-3").name, "Van 3");
-  assert.equal(byId.get("VAN-4").name, "Van 4");
-  assert.equal(byId.get("VAN-1").whatsappScheduleGroupName, "Miguel Reyes / Alan Baquero");
-  assert.equal(byId.get("VAN-2").whatsappScheduleGroupName, "Mario Cornejo / Ronald Maury");
-  assert.equal(byId.get("VAN-2").whatsappScheduleGroupJid, "120000000000000003@g.us");
-  assert.equal(byId.get("VAN-3").whatsappScheduleGroupName, "Alejandro Marquez / Edwin Calvo");
-  assert.equal(byId.get("VAN-3").whatsappScheduleGroupJid, "120000000000000004@g.us");
-  assert.equal(byId.get("VAN-4").whatsappScheduleGroupName, "Jose Gregorio / Walter Rangel");
-  assert.equal(byId.get("VAN-4").whatsappScheduleGroupJid, "120000000000000002@g.us");
+  assert.equal(byId.get("VAN-1").whatsappScheduleGroupName, "Group One");
+  assert.equal(byId.get("VAN-1").whatsappScheduleGroupJid, "120000000000000001@g.us");
+  assert.equal(byId.get("VAN-2").whatsappScheduleGroupName, "Group Two");
+  assert.equal(byId.get("VAN-2").whatsappScheduleGroupJid, "120000000000000002@g.us");
+  assert.equal(byId.get("VAN-3").whatsappScheduleGroupName, "Group Three");
+  assert.equal(byId.get("VAN-3").whatsappScheduleGroupJid, "120000000000000003@g.us");
+  assert.equal(byId.get("VAN-4").whatsappScheduleGroupName, "Group Four");
+  assert.equal(byId.get("VAN-4").whatsappScheduleGroupJid, "120000000000000004@g.us");
 });

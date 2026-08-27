@@ -1,7 +1,7 @@
 const { BOOKING_ERROR_CODES, BookingAuthorityError, cleanText } = require("./bookingAuthorityCore");
 const { canonicalizeVanCatalog, canonicalVanIdFromValue } = require("./bookingVanIdentity");
 const { createOperatingCalendarService, dateKeyInTimeZone } = require("./operatingCalendarService");
-const { DEFAULT_VAN_GROUP_NAMES, createTechnicianDailyScheduleService } = require("./technicianDailyScheduleService");
+const { createTechnicianDailyScheduleService } = require("./technicianDailyScheduleService");
 const { validWacliRecipient } = require("./whatsappTransactionalService");
 
 const VAN_SCHEDULE_ACTIONS = new Set([
@@ -15,10 +15,14 @@ function groupJid(value) {
   return jid.endsWith("@g.us") && validWacliRecipient(jid) ? jid : "";
 }
 
+function defaultGroupName(vanId, fallback = "") {
+  return cleanText(fallback, 180) || cleanText(vanId, 80) || "Van";
+}
+
 function normalizeGroupInput(value = {}) {
   const vanId = canonicalVanIdFromValue(value.vanId);
   if (!vanId) {
-    throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "A canonical VAN-1 through VAN-4 id is required.", { field: "vanId" });
+    throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "An active canonical Van id is required.", { field: "vanId" });
   }
   const jid = groupJid(value.groupJid);
   if (value.enabled !== false && !jid) {
@@ -26,10 +30,26 @@ function normalizeGroupInput(value = {}) {
   }
   return {
     vanId,
-    groupName: cleanText(value.groupName, 180) || DEFAULT_VAN_GROUP_NAMES[vanId] || vanId,
+    groupName: cleanText(value.groupName, 180),
     groupJid: jid,
     enabled: value.enabled !== false,
   };
+}
+
+function assertUniqueEnabledGroupJids(groups = []) {
+  const seen = new Map();
+  for (const group of groups) {
+    if (group.enabled === false || !group.groupJid) continue;
+    const priorVanId = seen.get(group.groupJid);
+    if (priorVanId && priorVanId !== group.vanId) {
+      throw new BookingAuthorityError(
+        BOOKING_ERROR_CODES.INVALID_REQUEST,
+        "The same WhatsApp group JID cannot be assigned to more than one enabled Van.",
+        { field: "groupJid", vanId: group.vanId, conflictingVanId: priorVanId },
+      );
+    }
+    seen.set(group.groupJid, group.vanId);
+  }
 }
 
 function createVanScheduleCommunicationAuthority({ db, scheduleService = null, operatingCalendar = null, apiVersion = 12 } = {}) {
@@ -52,7 +72,7 @@ function createVanScheduleCommunicationAuthority({ db, scheduleService = null, o
         vanId: van.id,
         sourceVanId: van.sourceVanId,
         vanName: van.name,
-        groupName: cleanText(van.whatsappScheduleGroupName, 180) || DEFAULT_VAN_GROUP_NAMES[van.id] || van.name,
+        groupName: cleanText(van.whatsappScheduleGroupName, 180) || defaultGroupName(van.id, van.name),
         groupJid: cleanText(van.whatsappScheduleGroupJid, 180),
         enabled: van.scheduleDeliveryEnabled !== false,
         configured: Boolean(groupJid(van.whatsappScheduleGroupJid)),
@@ -62,31 +82,81 @@ function createVanScheduleCommunicationAuthority({ db, scheduleService = null, o
 
   async function saveConfiguration(data = {}, identity = {}) {
     const supplied = Array.isArray(data.groups) ? data.groups : [];
-    if (!supplied.length || supplied.length > 4) {
-      throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "One to four van group configurations are required.", { field: "groups" });
+    if (!supplied.length) {
+      throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "At least one Van group configuration is required.", { field: "groups" });
     }
     const groups = supplied.map(normalizeGroupInput);
     const unique = new Set(groups.map((item) => item.vanId));
     if (unique.size !== groups.length) {
       throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "Each van can appear only once in the group configuration.", { field: "groups" });
     }
+
     const catalog = await loadVanCatalog();
     const byId = new Map(catalog.vans.map((van) => [van.id, van]));
-    const now = new Date().toISOString();
     for (const group of groups) {
-      const van = byId.get(group.vanId);
-      if (!van?.sourceVanId) {
-        throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "The canonical van is not present in the active van catalog.", { vanId: group.vanId });
+      if (!byId.get(group.vanId)?.sourceVanId) {
+        throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "The requested Van is not present in the active Van catalog.", { vanId: group.vanId });
       }
-      await db.collection("vans").doc(van.sourceVanId).set({
-        whatsappScheduleGroupName: group.groupName,
-        whatsappScheduleGroupJid: group.groupJid,
-        scheduleDeliveryEnabled: group.enabled,
-        scheduleDeliveryUpdatedAt: now,
-        scheduleDeliveryUpdatedBy: cleanText(identity.uid, 160),
-        scheduleDeliveryUpdatedByName: cleanText(identity.name || identity.email, 180),
-      }, { merge: true });
     }
+    if (typeof db.runTransaction !== "function") {
+      throw new Error("Firestore transaction support is required to update Van WhatsApp groups safely.");
+    }
+
+    const targetVanIds = new Set(groups.map((group) => group.vanId));
+    const now = new Date().toISOString();
+    await db.runTransaction(async (transaction) => {
+      const currentByVan = new Map();
+      for (const van of catalog.vans) {
+        const reference = db.collection("vans").doc(van.sourceVanId);
+        const snapshot = await transaction.get(reference);
+        if (!snapshot.exists || snapshot.data()?.active === false) {
+          if (targetVanIds.has(van.id)) {
+            throw new BookingAuthorityError(
+              BOOKING_ERROR_CODES.INVALID_REQUEST,
+              "The requested Van changed or is no longer active. Reload the Van configuration before saving.",
+              { vanId: van.id },
+            );
+          }
+          continue;
+        }
+        const persisted = snapshot.data() || {};
+        currentByVan.set(van.id, {
+          vanId: van.id,
+          groupName: cleanText(persisted.whatsappScheduleGroupName, 180) || defaultGroupName(van.id, van.name),
+          groupJid: groupJid(persisted.whatsappScheduleGroupJid),
+          enabled: persisted.scheduleDeliveryEnabled !== false,
+        });
+      }
+
+      for (const group of groups) {
+        const current = currentByVan.get(group.vanId);
+        if (!current) {
+          throw new BookingAuthorityError(
+            BOOKING_ERROR_CODES.INVALID_REQUEST,
+            "The requested Van changed or is no longer active. Reload the Van configuration before saving.",
+            { vanId: group.vanId },
+          );
+        }
+        currentByVan.set(group.vanId, {
+          ...group,
+          groupName: group.groupName || current.groupName || defaultGroupName(group.vanId),
+        });
+      }
+      assertUniqueEnabledGroupJids([...currentByVan.values()]);
+
+      for (const group of groups) {
+        const van = byId.get(group.vanId);
+        const proposed = currentByVan.get(group.vanId);
+        transaction.set(db.collection("vans").doc(van.sourceVanId), {
+          whatsappScheduleGroupName: proposed.groupName,
+          whatsappScheduleGroupJid: proposed.groupJid,
+          scheduleDeliveryEnabled: proposed.enabled,
+          scheduleDeliveryUpdatedAt: now,
+          scheduleDeliveryUpdatedBy: cleanText(identity.uid, 160),
+          scheduleDeliveryUpdatedByName: cleanText(identity.name || identity.email, 180),
+        }, { merge: true });
+      }
+    });
     return getConfiguration();
   }
 
@@ -94,7 +164,13 @@ function createVanScheduleCommunicationAuthority({ db, scheduleService = null, o
     const dateKey = cleanText(data.dateKey, 20) || dateKeyInTimeZone();
     const targetVanId = data.vanId ? canonicalVanIdFromValue(data.vanId) : "";
     if (data.vanId && !targetVanId) {
-      throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "vanId must be VAN-1 through VAN-4 when supplied.", { field: "vanId" });
+      throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "An active canonical Van id is required when vanId is supplied.", { field: "vanId" });
+    }
+    if (targetVanId) {
+      const catalog = await loadVanCatalog();
+      if (!catalog.vans.some((van) => van.id === targetVanId)) {
+        throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "The requested Van is not present in the active Van catalog.", { vanId: targetVanId });
+      }
     }
     const requestId = cleanText(data.requestId, 240);
     if (requestId.length < 8) {
@@ -133,6 +209,8 @@ function createVanScheduleCommunicationAuthority({ db, scheduleService = null, o
 }
 
 module.exports.VAN_SCHEDULE_ACTIONS = VAN_SCHEDULE_ACTIONS;
+module.exports.assertUniqueEnabledGroupJids = assertUniqueEnabledGroupJids;
 module.exports.createVanScheduleCommunicationAuthority = createVanScheduleCommunicationAuthority;
+module.exports.defaultGroupName = defaultGroupName;
 module.exports.groupJid = groupJid;
 module.exports.normalizeGroupInput = normalizeGroupInput;

@@ -15,12 +15,6 @@ const INACTIVE_WORK_ORDER_STATUSES = new Set([
   "Facturada",
   "Pagada",
 ]);
-const DEFAULT_VAN_GROUP_NAMES = Object.freeze({
-  "VAN-1": "TEC - Miguel",
-  "VAN-2": "Gollo y Walter",
-  "VAN-3": "TEC - Mario y Ronald",
-  "VAN-4": "TEC - Alejandro y Edwin",
-});
 
 function normalizedText(value) {
   return String(value ?? "").trim();
@@ -310,7 +304,7 @@ function renderLunchBreakText() {
 
 function groupConfigForVan(van) {
   const groupJid = normalizedText(van?.whatsappScheduleGroupJid);
-  const groupName = normalizedText(van?.whatsappScheduleGroupName) || DEFAULT_VAN_GROUP_NAMES[van?.id] || van?.name || van?.id;
+  const groupName = normalizedText(van?.whatsappScheduleGroupName) || normalizedText(van?.name) || normalizedText(van?.id);
   return {
     enabled: van?.scheduleDeliveryEnabled !== false,
     groupJid,
@@ -493,7 +487,6 @@ function createTechnicianDailyScheduleService({ db } = {}) {
   };
 }
 
-module.exports.DEFAULT_VAN_GROUP_NAMES = DEFAULT_VAN_GROUP_NAMES;
 module.exports.INACTIVE_WORK_ORDER_STATUSES = INACTIVE_WORK_ORDER_STATUSES;
 module.exports.LUNCH_DURATION_MINUTES = LUNCH_DURATION_MINUTES;
 module.exports.PREFERRED_LUNCH_START_MINUTES = PREFERRED_LUNCH_START_MINUTES;

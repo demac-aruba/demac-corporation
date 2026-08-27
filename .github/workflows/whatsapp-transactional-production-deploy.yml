@@ -6,11 +6,6 @@ on:
       - 'functions/whatsappTransactionalService.js'
       - 'functions/whatsappTransactionalService.test.js'
       - 'functions/whatsappTransactionalGroupRecipient.test.js'
-      - 'functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.js'
-      - 'functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.test.js'
-      - 'functions/migrations/realignVanScheduleGroups.js'
-      - 'functions/migrations/realignVanScheduleGroups.test.js'
-      - 'functions/whatsappWacliGateway.js'
       - 'functions/operatingCalendarService.js'
       - 'functions/operatingCalendarService.test.js'
       - 'functions/appointmentCommunicationRenderer.js'
@@ -22,14 +17,22 @@ on:
       - 'functions/appointmentNotifications.js'
       - 'functions/technicianDailyScheduleService.js'
       - 'functions/technicianDailyScheduleService.test.js'
+      - 'functions/technicianDailyScheduleRunner.js'
+      - 'functions/technicianDailyScheduleRunner.test.js'
       - 'functions/technicianDailySchedules.js'
+      - 'functions/vanScheduleDeliveryConfig.js'
       - 'functions/vanScheduleCommunicationAuthority.js'
       - 'functions/vanScheduleCommunicationAuthority.test.js'
+      - 'functions/bookingVanIdentity.js'
+      - 'functions/bookingVanIdentity.test.js'
+      - 'functions/bookingSchedulingPrimitives.js'
       - 'functions/officeBookingAuthority.js'
       - 'functions/officeBookingAuthorityFacade.js'
       - 'functions/officeBookingAuthorityCommunication.test.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
+      - 'functions/package-lock.json'
+      - 'firebase.json'
       - '.github/workflows/whatsapp-transactional-production-deploy.yml'
   push:
     branches:
@@ -38,11 +41,8 @@ on:
       - 'functions/whatsappTransactionalService.js'
       - 'functions/whatsappTransactionalService.test.js'
       - 'functions/whatsappTransactionalGroupRecipient.test.js'
-      - 'functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.js'
-      - 'functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.test.js'
-      - 'functions/migrations/realignVanScheduleGroups.js'
-      - 'functions/migrations/realignVanScheduleGroups.test.js'
-      - 'functions/whatsappWacliGateway.js'
+      - 'functions/package-lock.json'
+      - 'firebase.json'
       - 'functions/operatingCalendarService.js'
       - 'functions/operatingCalendarService.test.js'
       - 'functions/appointmentCommunicationRenderer.js'
@@ -54,9 +54,15 @@ on:
       - 'functions/appointmentNotifications.js'
       - 'functions/technicianDailyScheduleService.js'
       - 'functions/technicianDailyScheduleService.test.js'
+      - 'functions/technicianDailyScheduleRunner.js'
+      - 'functions/technicianDailyScheduleRunner.test.js'
       - 'functions/technicianDailySchedules.js'
+      - 'functions/vanScheduleDeliveryConfig.js'
       - 'functions/vanScheduleCommunicationAuthority.js'
       - 'functions/vanScheduleCommunicationAuthority.test.js'
+      - 'functions/bookingVanIdentity.js'
+      - 'functions/bookingVanIdentity.test.js'
+      - 'functions/bookingSchedulingPrimitives.js'
       - 'functions/officeBookingAuthority.js'
       - 'functions/officeBookingAuthorityFacade.js'
       - 'functions/officeBookingAuthorityCommunication.test.js'
@@ -103,51 +109,79 @@ jobs:
       - name: Install function dependencies
         run: npm install --prefix functions --no-audit --no-fund
 
-      - name: Validate transactional WhatsApp boundary
+      - name: Validate transactional WhatsApp producer boundary
         shell: bash
         run: |
           set -euo pipefail
           node --check functions/bootstrap.js
           node --check functions/whatsappTransactionalService.js
-          node --check functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.js
-          node --check functions/migrations/realignVanScheduleGroups.js
-          node --check functions/whatsappWacliGateway.js
           node --check functions/operatingCalendarService.js
           node --check functions/appointmentCommunicationRenderer.js
           node --check functions/appointmentNotificationService.js
           node --check functions/appointmentCommunicationAuthority.js
           node --check functions/appointmentNotifications.js
           node --check functions/technicianDailyScheduleService.js
+          node --check functions/technicianDailyScheduleRunner.js
           node --check functions/technicianDailySchedules.js
+          node --check functions/vanScheduleDeliveryConfig.js
           node --check functions/vanScheduleCommunicationAuthority.js
+          node --check functions/bookingVanIdentity.js
+          node --check functions/bookingSchedulingPrimitives.js
           node --check functions/officeBookingAuthorityFacade.js
           node --check functions/officeBookingAuthority.js
-          npm run test:transactional-whatsapp --prefix functions
+
+          node --test \
+            functions/whatsappTransactionalService.test.js \
+            functions/whatsappTransactionalGroupRecipient.test.js \
+            functions/operatingCalendarService.test.js \
+            functions/appointmentCommunicationRenderer.test.js \
+            functions/appointmentNotificationService.test.js \
+            functions/appointmentCommunicationAuthority.test.js \
+            functions/technicianDailyScheduleRunner.test.js \
+            functions/technicianDailyScheduleService.test.js \
+            functions/vanScheduleCommunicationAuthority.test.js \
+            functions/bookingVanIdentity.test.js \
+            functions/officeBookingAuthorityCommunication.test.js
+
           node - <<'NODE'
           const mod = require('./functions/bootstrap');
           for (const name of [
-            'wacliOutboundPoll',
-            'wacliOutboundAck',
             'queueAppointmentConfirmation',
             'sendDailyAppointmentReminders',
             'sendDailyTechnicianSchedules',
           ]) {
             if (typeof mod[name] !== 'function') throw new Error(`${name} export missing`);
           }
+          const config = require('./functions/vanScheduleDeliveryConfig');
+          for (const key of ['VAN_SCHEDULE_FUNCTION_NAME', 'VAN_SCHEDULE_REGION', 'VAN_SCHEDULE_TIME_ZONE', 'VAN_SCHEDULE_CRON', 'VAN_SCHEDULE_SCHEDULER_JOB']) {
+            if (!String(config[key] || '').trim()) throw new Error(`${key} is missing`);
+          }
           NODE
 
   deploy-transactional-whatsapp:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' &&
+       inputs.deploy_to_production == true &&
+       inputs.confirmation == 'DEPLOY_TRANSACTIONAL_WHATSAPP' &&
+       inputs.expected_sha == github.sha)
     needs: validate-transactional-whatsapp
     runs-on: ubuntu-latest
     steps:
+      - name: Record manual deployment authorization
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Manual production deployment authorized for exact commit ${GITHUB_SHA} on ${GITHUB_REF}."
+
       - name: Checkout
         uses: actions/checkout@v6
 
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version: '22'
           package-manager-cache: false
 
       - name: Install function dependencies
@@ -161,52 +195,105 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
 
+      - name: Resolve canonical Van schedule deployment configuration
+        id: schedule
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE' >> "$GITHUB_OUTPUT"
+          const config = require('./functions/vanScheduleDeliveryConfig');
+          const outputs = {
+            function: config.VAN_SCHEDULE_FUNCTION_NAME,
+            region: config.VAN_SCHEDULE_REGION,
+            timezone: config.VAN_SCHEDULE_TIME_ZONE,
+            cron: config.VAN_SCHEDULE_CRON,
+            job: config.VAN_SCHEDULE_SCHEDULER_JOB,
+          };
+          for (const [key, value] of Object.entries(outputs)) {
+            if (!String(value || '').trim()) throw new Error(`${key} deployment config is missing`);
+            console.log(`${key}=${value}`);
+          }
+          NODE
+
+      - name: Preflight governed Cloud Scheduler deployment authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          principal="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | head -n 1)"
+          region='${{ steps.schedule.outputs.region }}'
+          job='${{ steps.schedule.outputs.job }}'
+          project='demac-corporation'
+          if [ -z "$principal" ]; then
+            echo '::error::No active Google Cloud deployment principal is available.'
+            exit 1
+          fi
+
+          # DEMAC deliberately requires an unconditional project-level Scheduler Admin
+          # binding for the deployment service account. This makes scheduled-function
+          # create/update/delete authority explicit and auditable instead of inferring it
+          # from a weaker read-only probe. Cloud Scheduler operational reads below remain
+          # a second independent check of the live API path.
+          iam_policy="$(gcloud projects get-iam-policy "$project" --format=json)"
+          member="serviceAccount:${principal}"
+          if ! jq -e --arg member "$member" '
+            any(
+              .bindings[]?;
+              .role == "roles/cloudscheduler.admin"
+              and (.condition == null)
+              and any(.members[]?; . == $member)
+            )
+          ' <<<"$iam_policy" >/dev/null; then
+            echo "::error::Deployment principal ${principal} does not have an unconditional project-level roles/cloudscheduler.admin binding on ${project}. Refusing to deploy a Firebase scheduled function because Scheduler create/update/delete authority is not explicitly governed."
+            exit 1
+          fi
+          echo "Governed Cloud Scheduler Admin role confirmed for ${principal}."
+
+          if ! gcloud scheduler jobs list \
+            --project="$project" \
+            --location="$region" \
+            --limit=1 \
+            --format='value(name)' >/dev/null; then
+            echo "::error::Deployment principal ${principal} has the required IAM binding but cannot list Cloud Scheduler jobs in ${region}. Refusing to deploy because the live Scheduler API path cannot be verified."
+            exit 1
+          fi
+
+          describe_error="$(mktemp)"
+          if gcloud scheduler jobs describe "$job" \
+            --project="$project" \
+            --location="$region" \
+            --format='value(name)' >/dev/null 2>"$describe_error"; then
+            echo "Existing Scheduler job is readable by ${principal}: ${job}"
+          elif grep -Eqi 'NOT_FOUND|not found|does not exist' "$describe_error"; then
+            echo "Canonical Scheduler job does not currently exist; Firebase deployment will be responsible for creating ${job}."
+          else
+            cat "$describe_error" >&2
+            rm -f "$describe_error"
+            echo "::error::Deployment principal ${principal} cannot read the canonical Scheduler job. Refusing to deploy."
+            exit 1
+          fi
+          rm -f "$describe_error"
+          echo "Cloud Scheduler preflight passed for ${principal}."
+
       - name: Deploy notification producers only
         shell: bash
         run: |
           set -euo pipefail
           npx --yes firebase-tools@15.2.1 deploy \
-            --only functions:queueAppointmentConfirmation,functions:sendDailyAppointmentReminders,functions:sendDailyTechnicianSchedules \
+            --only functions:queueAppointmentConfirmation,functions:sendDailyAppointmentReminders,functions:${{ steps.schedule.outputs.function }} \
             --project demac-corporation \
             --non-interactive \
             --force
 
-      - name: Migrate legacy queued transactional messages to active wacli transport
-        shell: bash
-        env:
-          GCLOUD_PROJECT: demac-corporation
-          GOOGLE_CLOUD_PROJECT: demac-corporation
-        run: |
-          set -euo pipefail
-          migration_output="$(node functions/migrations/migrateLegacyMetaTransactionalQueueToWacli.js)"
-          echo "$migration_output"
-          node - "$migration_output" <<'NODE'
-          const payload = JSON.parse(process.argv[2]);
-          if (payload.activeProvider !== 'wacli') {
-            throw new Error(`Transactional provider is ${payload.activeProvider || 'unknown'}; production is expected to use wacli in this rollout.`);
-          }
-          console.log(`Legacy queue migration: scanned=${payload.scanned}, migrated=${payload.migrated}, skipped=${payload.skipped}`);
-          NODE
-
-      - name: Realign canonical Van WhatsApp group mappings
-        shell: bash
-        env:
-          GCLOUD_PROJECT: demac-corporation
-          GOOGLE_CLOUD_PROJECT: demac-corporation
-        run: |
-          set -euo pipefail
-          node functions/migrations/realignVanScheduleGroups.js
-
-      - name: Verify deployed notification producers and 8 AM scheduler
+      - name: Verify deployed notification producers
         shell: bash
         run: |
           set -euo pipefail
           verify_active() {
             local name="$1"
             local state
-            state="$(gcloud functions describe "$name" --project=demac-corporation --gen2 --region=us-central1 --format='value(state)')"
+            state="$(gcloud functions describe "$name" --project=demac-corporation --gen2 --region='${{ steps.schedule.outputs.region }}' --format='value(state)')"
             if [ "$state" != 'ACTIVE' ]; then
-              echo "::error::${name} state is ${state:-unknown}."
+              echo "::error::${name} state is ${state:-unknown}; expected ACTIVE."
               exit 1
             fi
             echo "${name}: ACTIVE"
@@ -216,49 +303,46 @@ jobs:
             local name="$1" expected_event="$2"
             local event_type
             verify_active "$name"
-            event_type="$(gcloud functions describe "$name" --project=demac-corporation --gen2 --region=us-central1 --format='value(eventTrigger.eventType)')"
+            event_type="$(gcloud functions describe "$name" --project=demac-corporation --gen2 --region='${{ steps.schedule.outputs.region }}' --format='value(eventTrigger.eventType)')"
             if [ "$event_type" != "$expected_event" ]; then
               echo "::error::${name} event type is ${event_type:-missing}; expected ${expected_event}."
               exit 1
             fi
           }
 
-          verify_scheduler() {
-            local function_name="$1" expected_schedule="$2" expected_timezone="$3"
-            local job state schedule timezone
-            job="$(gcloud scheduler jobs list \
-              --project=demac-corporation \
-              --location=us-central1 \
-              --filter="name:${function_name}" \
-              --format='value(name)' | head -n 1)"
-            if [ -z "$job" ]; then
-              echo "::error::No Cloud Scheduler job found for ${function_name}."
-              exit 1
-            fi
-            state="$(gcloud scheduler jobs describe "$job" --project=demac-corporation --location=us-central1 --format='value(state)')"
-            if [ "$state" = 'PAUSED' ]; then
-              echo "${job}: PAUSED -> resuming"
-              gcloud scheduler jobs resume "$job" --project=demac-corporation --location=us-central1 --quiet
-              state="$(gcloud scheduler jobs describe "$job" --project=demac-corporation --location=us-central1 --format='value(state)')"
-            fi
-            schedule="$(gcloud scheduler jobs describe "$job" --project=demac-corporation --location=us-central1 --format='value(schedule)')"
-            timezone="$(gcloud scheduler jobs describe "$job" --project=demac-corporation --location=us-central1 --format='value(timeZone)')"
-            if [ "$state" != 'ENABLED' ]; then
-              echo "::error::${job} state is ${state:-unknown}; expected ENABLED."
-              exit 1
-            fi
-            if [ "$schedule" != "$expected_schedule" ]; then
-              echo "::error::${job} schedule is ${schedule:-missing}; expected ${expected_schedule}."
-              exit 1
-            fi
-            if [ "$timezone" != "$expected_timezone" ]; then
-              echo "::error::${job} timezone is ${timezone:-missing}; expected ${expected_timezone}."
-              exit 1
-            fi
-            echo "${job}: ENABLED · ${schedule} · ${timezone}"
-          }
-
           verify_event queueAppointmentConfirmation google.cloud.firestore.document.v1.written
           verify_active sendDailyAppointmentReminders
-          verify_active sendDailyTechnicianSchedules
-          verify_scheduler sendDailyTechnicianSchedules '0,5,10 8 * * *' 'America/Aruba'
+          verify_active '${{ steps.schedule.outputs.function }}'
+
+      - name: Verify canonical Cloud Scheduler job
+        shell: bash
+        run: |
+          set -euo pipefail
+          job='${{ steps.schedule.outputs.job }}'
+          region='${{ steps.schedule.outputs.region }}'
+          expected_cron='${{ steps.schedule.outputs.cron }}'
+          expected_timezone='${{ steps.schedule.outputs.timezone }}'
+
+          state="$(gcloud scheduler jobs describe "$job" --project=demac-corporation --location="$region" --format='value(state)')"
+          schedule="$(gcloud scheduler jobs describe "$job" --project=demac-corporation --location="$region" --format='value(schedule)')"
+          timezone="$(gcloud scheduler jobs describe "$job" --project=demac-corporation --location="$region" --format='value(timeZone)')"
+          target_uri="$(gcloud scheduler jobs describe "$job" --project=demac-corporation --location="$region" --format='value(httpTarget.uri)')"
+          invoker="$(gcloud scheduler jobs describe "$job" --project=demac-corporation --location="$region" --format='value(httpTarget.oidcToken.serviceAccountEmail)')"
+
+          if [ "$state" != 'ENABLED' ]; then
+            echo "::error::${job} state is ${state:-unknown}; expected ENABLED. A paused Scheduler job is not resumed implicitly by deployment."
+            exit 1
+          fi
+          if [ "$schedule" != "$expected_cron" ]; then
+            echo "::error::${job} schedule is ${schedule:-missing}; expected ${expected_cron}."
+            exit 1
+          fi
+          if [ "$timezone" != "$expected_timezone" ]; then
+            echo "::error::${job} timezone is ${timezone:-missing}; expected ${expected_timezone}."
+            exit 1
+          fi
+          if [ -z "$target_uri" ] || [ -z "$invoker" ]; then
+            echo "::error::${job} is missing its HTTP target or OIDC invoker identity."
+            exit 1
+          fi
+          echo "${job}: ENABLED · ${schedule} · ${timezone} · invoker=${invoker}"
