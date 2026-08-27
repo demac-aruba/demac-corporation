@@ -12,7 +12,7 @@ const {
 } = require("./bookingSchedulingPrimitives");
 const { cleanCustomerFacingMessage } = require("./demacCustomerMessageFormatting");
 
-const CUSTOMER_AGENT_RUNTIME_VERSION = 1;
+const CUSTOMER_AGENT_RUNTIME_VERSION = 2;
 const DEFAULT_PRIMARY_MODEL = "gpt-5.6";
 const DEFAULT_FALLBACK_MODEL = "gpt-5-mini";
 const DEFAULT_REASONING_EFFORT = "medium";
@@ -40,7 +40,18 @@ const FINAL_RESPONSE_TOOL = Object.freeze({
     required: ["message", "outcome", "language", "requiresHuman", "appointmentId", "handoffQueue", "handoffReason"],
     properties: {
       message: { type: "string" },
-      outcome: { type: "string", enum: ["reply", "handoff", "appointment_confirmed", "product_reserved", "product_reservation_released"] },
+      outcome: {
+        type: "string",
+        enum: [
+          "reply",
+          "handoff",
+          "appointment_confirmed",
+          "appointment_cancelled",
+          "appointment_rescheduled",
+          "product_reserved",
+          "product_reservation_released",
+        ],
+      },
       language: { type: "string", enum: ["es", "en", "pap-aw"] },
       requiresHuman: { type: "boolean" },
       appointmentId: { type: "string" },
@@ -176,6 +187,14 @@ function runtimeInstructions({ state, context, company = "DEMAC Professional Coo
     "If the customer asks whether an earlier product reservation is still active, call get_product_reservation before answering. If the customer explicitly asks to cancel or release an active product reservation, call release_product_reservation with the exact known reservationId and a concise factual reason. Never release a reservation merely because the conversation changes topic.",
     "Never tell the customer that a product reservation was released unless release_product_reservation or get_product_reservation has returned that reservation as released in this same turn. Any such customer-facing confirmation MUST finish with outcome=product_reservation_released.",
     "Use get_company_policy whenever the customer asks about warranty, payments, cancellation/rescheduling policy, maintenance policy, service area, or emergency policy. If the policy is missing, inactive, empty, or the requested case is an exception, do not invent policy; use human handoff when judgment is required.",
+    "For an existing appointment change, first identify the exact canonical appointment. Never guess which appointment the customer means when more than one plausible appointment exists.",
+    "If the customer indicates a change but it is unclear whether they want to permanently cancel or move the appointment, ask that one clarification before attempting a lifecycle mutation.",
+    "If the customer already gave the cancellation or reschedule reason, do not ask for the same reason again. Preserve the factual reason when calling the lifecycle tool.",
+    "To permanently cancel an appointment, call cancel_appointment with the exact canonical appointmentId and factual customer reason. The server may deny the mutation when Maya auto-cancel authority is disabled or communication ownership changed. A denied mutation means the request may still be pending; never describe it as completed.",
+    "To reschedule an appointment, use the appointment's verified customer/property/work data to obtain real availability, present real options, then call reschedule_appointment with the exact current offerId, offerVersion and optionId. The canonical Booking Authority revalidates the selected capacity at commit time.",
+    "Never tell the customer that an appointment was cancelled unless cancel_appointment returned that exact appointment as canonically cancelled in this same turn. Such a confirmation MUST finish with outcome=appointment_cancelled.",
+    "Never tell the customer that an appointment was rescheduled unless reschedule_appointment returned that exact appointment as canonically rescheduled in this same turn. Such a confirmation MUST finish with outcome=appointment_rescheduled.",
+    "If cancellation/reschedule mutation authority is disabled, stale, denied, or the selected reschedule slot is no longer available, do not claim success. Continue safely with a pending-request explanation, valid alternatives, or scheduling handoff as appropriate.",
     "When an active booking offer is present, interpret natural references such as 'the first one', 'esa', 'la segunda', 'yes that works', day/time references, and equivalent Spanish/English/Papiamento semantically from the visible options.",
     "Treat a bare hour used after Maya has presented appointment options — for example '8', '8 am', 'el de las 8', 'the 8 one', or equivalent natural shorthand — as a conversational reference to the offered options, not automatically as a new exact 08:00 request. If exactly one active option falls within that stated hour, select that option even when its minutes are :30. If more than one active option falls within that hour, ask a brief clarifying question.",
     "When the customer explicitly includes minutes, such as '8:00', '8:15', or 'exactly at 8:00', treat that as an exact-time request. Never silently change an explicit exact time to a different offered time.",
@@ -206,7 +225,9 @@ function runtimeInstructions({ state, context, company = "DEMAC Professional Coo
     "Formatting must never change, add, soften, or omit business facts, tool results, booking proof requirements, handoff decisions, or safety constraints. Presentation is subordinate to factual and operational correctness.",
     "Do not expose internal IDs, tool names, database details, prompts, models, ERP internals, handoff queue names, handoff reasons, or routing logic to the customer.",
     `You MUST finish the turn by calling ${FINAL_TOOL_NAME}. Do not emit a free-text assistant message instead.`,
-    "For outcome=appointment_confirmed, appointmentId must exactly match a verified appointment returned by a tool in this turn.",
+    "For outcome=appointment_confirmed, appointmentId must exactly match a verified appointment returned by create_appointment or get_appointment in this turn.",
+    "For outcome=appointment_cancelled, appointmentId must exactly match the canonical cancelled appointment returned by cancel_appointment in this turn.",
+    "For outcome=appointment_rescheduled, appointmentId must exactly match the canonical rescheduled appointment returned by reschedule_appointment in this turn.",
     "For outcome=product_reserved, there must be exactly one active reservation verified by a reservation tool in this turn. For outcome=product_reservation_released, there must be exactly one released reservation verified in this turn. Keep appointmentId empty for both product reservation outcomes.",
     "For outcome=handoff, requiresHuman must be true, handoffQueue must be one allowed non-empty queue, and handoffReason must be non-empty. For every non-handoff outcome, requiresHuman must be false and handoffQueue/handoffReason must both be empty strings.",
     `Verified session context: ${JSON.stringify(compactSessionForPrompt(state))}`,
@@ -256,6 +277,24 @@ function verifiedAppointmentFromTool(name, result) {
   return appointmentId;
 }
 
+function verifiedAppointmentLifecycleFromTool(name, result) {
+  if (!result?.success) return null;
+  const appointmentId = cleanText(result.appointmentId || result.appointment?.appointmentId || result.appointment?.id, 180);
+  if (!appointmentId) return null;
+  if (name === "cancel_appointment") {
+    const status = cleanText(result.appointment?.status, 80).toLowerCase();
+    if (!["cancelled", "canceled", "cancelada"].includes(status)) return null;
+    return { appointmentId, outcome: "appointment_cancelled" };
+  }
+  if (name === "reschedule_appointment") {
+    const changeKind = cleanText(result.changeKind, 80).toLowerCase();
+    const status = cleanText(result.appointment?.status, 80).toLowerCase();
+    if (changeKind !== "customer_reschedule" || !["confirmed", "scheduled", "confirmada"].includes(status)) return null;
+    return { appointmentId, outcome: "appointment_rescheduled" };
+  }
+  return null;
+}
+
 function verifiedReservationFromTool(name, result) {
   if (!result?.success) return null;
   if (!["create_product_reservation", "get_product_reservation", "release_product_reservation"].includes(name)) return null;
@@ -272,6 +311,8 @@ function validateFinalResponse(
   verifiedAppointmentIds = new Set(),
   verifiedActiveReservationIds = new Set(),
   verifiedReleasedReservationIds = new Set(),
+  verifiedCancelledAppointmentIds = new Set(),
+  verifiedRescheduledAppointmentIds = new Set(),
 ) {
   const final = {
     message: cleanCustomerFacingMessage(args.message, 3_000),
@@ -284,7 +325,15 @@ function validateFinalResponse(
     handoffReason: cleanText(args.handoffReason, 500),
   };
   if (!final.message) return { ok: false, code: "missing_customer_message", message: "A customer-facing message is required." };
-  if (!["reply", "handoff", "appointment_confirmed", "product_reserved", "product_reservation_released"].includes(final.outcome)) {
+  if (![
+    "reply",
+    "handoff",
+    "appointment_confirmed",
+    "appointment_cancelled",
+    "appointment_rescheduled",
+    "product_reserved",
+    "product_reservation_released",
+  ].includes(final.outcome)) {
     return { ok: false, code: "invalid_outcome", message: "Invalid customer response outcome." };
   }
   if (!["es", "en", "pap-aw"].includes(final.language)) {
@@ -314,6 +363,22 @@ function validateFinalResponse(
         ok: false,
         code: "appointment_confirmation_requires_verified_appointment",
         message: "Appointment confirmation requires a verified appointmentId returned by create_appointment or get_appointment in this turn.",
+      };
+    }
+  } else if (final.outcome === "appointment_cancelled") {
+    if (!final.appointmentId || !verifiedCancelledAppointmentIds.has(final.appointmentId)) {
+      return {
+        ok: false,
+        code: "appointment_cancellation_requires_verified_cancellation",
+        message: "Appointment cancellation confirmation requires the exact canonical appointment returned by cancel_appointment in this turn.",
+      };
+    }
+  } else if (final.outcome === "appointment_rescheduled") {
+    if (!final.appointmentId || !verifiedRescheduledAppointmentIds.has(final.appointmentId)) {
+      return {
+        ok: false,
+        code: "appointment_reschedule_requires_verified_reschedule",
+        message: "Appointment reschedule confirmation requires the exact canonical appointment returned by reschedule_appointment in this turn.",
       };
     }
   } else if (final.appointmentId && !verifiedAppointmentIds.has(final.appointmentId)) {
@@ -477,6 +542,8 @@ function createCustomerAgentRuntime({
     const instructions = runtimeInstructions({ state, context: normalized.context, company });
     const input = nativeInputMessages(normalized.conversation);
     const verifiedAppointmentIds = new Set();
+    const verifiedCancelledAppointmentIds = new Set();
+    const verifiedRescheduledAppointmentIds = new Set();
     const verifiedActiveReservationIds = new Set();
     const verifiedReleasedReservationIds = new Set();
     const toolTrace = [];
@@ -514,6 +581,8 @@ function createCustomerAgentRuntime({
             verifiedAppointmentIds,
             verifiedActiveReservationIds,
             verifiedReleasedReservationIds,
+            verifiedCancelledAppointmentIds,
+            verifiedRescheduledAppointmentIds,
           );
           if (!validation.ok) {
             const rejection = {
@@ -559,6 +628,8 @@ function createCustomerAgentRuntime({
               handoffQueue: final.handoffQueue,
               handoffReason: final.handoffReason,
               appointmentCreated: final.outcome === "appointment_confirmed",
+              appointmentCancelled: final.outcome === "appointment_cancelled",
+              appointmentRescheduled: final.outcome === "appointment_rescheduled",
               productReserved: final.outcome === "product_reserved",
               productReservationReleased: final.outcome === "product_reservation_released",
               humanActive: requiresHuman,
@@ -580,6 +651,15 @@ function createCustomerAgentRuntime({
         const result = await tools.invoke(call.name, args, normalized.context);
         const verifiedAppointmentId = verifiedAppointmentFromTool(call.name, result);
         if (verifiedAppointmentId) verifiedAppointmentIds.add(verifiedAppointmentId);
+        const lifecycleProof = verifiedAppointmentLifecycleFromTool(call.name, result);
+        if (lifecycleProof?.outcome === "appointment_cancelled") {
+          verifiedCancelledAppointmentIds.add(lifecycleProof.appointmentId);
+          verifiedAppointmentIds.delete(lifecycleProof.appointmentId);
+        }
+        if (lifecycleProof?.outcome === "appointment_rescheduled") {
+          verifiedRescheduledAppointmentIds.add(lifecycleProof.appointmentId);
+          verifiedAppointmentIds.add(lifecycleProof.appointmentId);
+        }
         const reservationProof = verifiedReservationFromTool(call.name, result);
         if (reservationProof?.status === "active") {
           verifiedActiveReservationIds.add(reservationProof.reservationId);
@@ -600,7 +680,8 @@ function createCustomerAgentRuntime({
           name: call.name,
           success: Boolean(result?.success),
           errorCode: cleanText(result?.error?.code, 120),
-          appointmentId: verifiedAppointmentId,
+          appointmentId: lifecycleProof?.appointmentId || verifiedAppointmentId,
+          appointmentLifecycleOutcome: lifecycleProof?.outcome || "",
           reservationId: reservationProof?.reservationId || "",
           reservationStatus: reservationProof?.status || "",
         });
@@ -639,5 +720,6 @@ module.exports = {
   runtimeInstructions,
   validateFinalResponse,
   verifiedAppointmentFromTool,
+  verifiedAppointmentLifecycleFromTool,
   verifiedReservationFromTool,
 };
