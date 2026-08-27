@@ -6,12 +6,34 @@ import {
 } from './canonical-operations';
 import { applyHalfDaySchedule, defaultAttendanceSchedule, type AttendanceSchedule, type EmployeePayrollSettings } from './employee-attendance';
 
+type EmploymentDatedStaffProfile = CanonicalStaffProfile & {
+  employmentStartedAt?: string;
+  employmentEndedAt?: string;
+};
+
 function minutesFromTimes(start?: string, end?: string) {
   if (!start || !end) return undefined;
   const [sh, sm] = start.split(':').map(Number);
   const [eh, em] = end.split(':').map(Number);
   if (![sh, sm, eh, em].every(Number.isFinite)) return undefined;
   return Math.max(0, (eh * 60 + em) - (sh * 60 + sm));
+}
+
+export function isEmployeeEmployedOnDate(profile: CanonicalStaffProfile, date: string) {
+  const lifecycle = profile as EmploymentDatedStaffProfile;
+  if (lifecycle.employmentStartedAt && date < lifecycle.employmentStartedAt) return false;
+  if (lifecycle.employmentEndedAt && date > lifecycle.employmentEndedAt) return false;
+  return true;
+}
+
+function outsideEmploymentSchedule(profile: CanonicalStaffProfile, date: string): AttendanceSchedule {
+  const lifecycle = profile as EmploymentDatedStaffProfile;
+  const label = lifecycle.employmentStartedAt && date < lifecycle.employmentStartedAt
+    ? `Employment starts ${lifecycle.employmentStartedAt}`
+    : lifecycle.employmentEndedAt && date > lifecycle.employmentEndedAt
+      ? `Employment ended ${lifecycle.employmentEndedAt}`
+      : 'Outside employment period';
+  return { startTime: '', endTime: '', scheduledMinutes: 0, paidFreeMinutes: 0, label };
 }
 
 export function isTechnicalEmployee(profile: CanonicalStaffProfile) {
@@ -33,6 +55,8 @@ export function resolveEmployeeSchedule(input: {
   halfDaySchedules: CanonicalVanHalfDaySchedule[];
 }): AttendanceSchedule {
   const { profile, date, payrollSettings, vans, halfDaySchedules } = input;
+  if (!isEmployeeEmployedOnDate(profile, date)) return outsideEmploymentSchedule(profile, date);
+
   const schedule = defaultAttendanceSchedule(date);
   const technical = isTechnicalEmployee(profile);
   const van = employeeVan(profile, vans);
