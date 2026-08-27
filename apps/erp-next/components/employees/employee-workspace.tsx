@@ -23,6 +23,8 @@ import {
   type SalaryAdvanceMethod,
 } from '@/lib/employee-attendance';
 import { deriveAttendanceDay, summarizeAttendancePeriod } from '@/lib/employee-attendance-policy';
+import { payrollPeriodFromDates, summarizeEmployee } from '@/lib/employee-payroll';
+import { downloadPayrollAccountingPdf } from '@/lib/payroll-accounting-pdf';
 import { employeeVan as resolveEmployeeVan } from '@/lib/employee-work-schedule';
 import { EmployeeDirectoryOverview, type EmployeeDirectoryPeriodSummary } from './employee-directory-overview';
 import { EmployeeProfileDialog } from './employee-profile-dialog';
@@ -190,6 +192,28 @@ export function EmployeeWorkspace() {
     URL.revokeObjectURL(url);
   }
 
+  function exportPayrollPdf() {
+    setError('');
+    setMessage('');
+    if (!operations) return;
+    try {
+      const payrollPeriod = payrollPeriodFromDates(period.start, period.end);
+      const summaries = employees.map((employee) => summarizeEmployee({ employee, period: payrollPeriod, operations, attendance }));
+      const advancesByEmployee = Object.fromEntries(periodSummaries.map((summary) => [summary.employee.id, summary.advances]));
+      const downloaded = downloadPayrollAccountingPdf({
+        filename: `DEMAC_Payroll_Contabilidad_${period.start}_${period.end}.pdf`,
+        periodLabel: payrollPeriod.label,
+        summaries,
+        advancesByEmployee,
+      });
+      setMessage(downloaded
+        ? `Premium payroll accounting PDF downloaded. ${summaries.length <= 12 ? 'The current workforce fits on one A4 landscape page.' : 'The report continues automatically after 12 employees.'}`
+        : 'PDF export is available from the browser version.');
+    } catch (cause) {
+      setError(`Payroll PDF could not be generated: ${errorText(cause)}`);
+    }
+  }
+
   async function saveDay() {
     if (!selectedEmployee || !draft || !selectedRecord || !canManageSensitiveAttendance) return;
     if (normalScheduleNeedsNoRecord) {
@@ -235,7 +259,7 @@ export function EmployeeWorkspace() {
           <p>One canonical workspace for employee profiles, attendance exceptions and salary advances. Normal scheduled attendance is automatic.</p>
         </div>
         <div className={styles.headerActions}>
-          <details className={styles.quickActions}><summary><Icon name="bolt" />Quick actions <span>⌄</span></summary><div className={styles.quickMenu}><button type="button" onClick={() => void load(false)}>Refresh data</button><button type="button" onClick={() => setProfileTargetId(null)} disabled={!canManageEmployees}>Add employee</button><button type="button" onClick={exportAccountingCsv} disabled={!canManageSensitiveAttendance}>Export accounting CSV</button><button type="button" onClick={() => setTab('advances')} disabled={!canManageSensitiveAttendance}>Record salary advance</button></div></details>
+          <details className={styles.quickActions}><summary><Icon name="bolt" />Quick actions <span>⌄</span></summary><div className={styles.quickMenu}><button type="button" onClick={() => void load(false)}>Refresh data</button><button type="button" onClick={() => setProfileTargetId(null)} disabled={!canManageEmployees}>Add employee</button><button type="button" onClick={exportPayrollPdf} disabled={!canManageSensitiveAttendance}>Export payroll summary PDF</button><button type="button" onClick={exportAccountingCsv} disabled={!canManageSensitiveAttendance}>Export accounting CSV</button><button type="button" onClick={() => setTab('advances')} disabled={!canManageSensitiveAttendance}>Record salary advance</button></div></details>
           <div className={styles.periodSelector}><Icon name="calendar" /><div><span>Payroll Period</span><strong>{periodLabel(period.start, period.end)}</strong></div><button type="button" onClick={() => setPeriodAnchor((value) => shiftDateMonth(value, -1))}>‹</button><button type="button" onClick={() => setPeriodAnchor((value) => shiftDateMonth(value, 1))}>›</button></div>
         </div>
       </header>
