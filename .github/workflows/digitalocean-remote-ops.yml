@@ -1,13 +1,25 @@
 name: DigitalOcean Remote Ops
 
 on:
+  pull_request:
+    paths:
+      - 'ops/digitalocean/run/task.sh'
+      - 'ops/digitalocean/deploy/**'
+      - '.github/workflows/digitalocean-remote-ops.yml'
   push:
     branches:
       - main
     paths:
       - 'ops/digitalocean/run/task.sh'
       - 'ops/digitalocean/deploy/**'
+      - '.github/workflows/digitalocean-remote-ops.yml'
   workflow_dispatch:
+    inputs:
+      confirm_bridge_cutover:
+        description: 'Confirm that the production bridge deployment is explicitly authorized for the current main revision.'
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -17,14 +29,48 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-bridge-rollout:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate bridge deployment artifacts without production access
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ops/digitalocean/run/task.sh
+          node --check ops/digitalocean/deploy/server-v2.mjs
+          if ! grep -Fq 'COMMUNICATION_ACCOUNT_ID' ops/digitalocean/deploy/server-v2.mjs; then
+            echo '::error::Bridge candidate is missing COMMUNICATION_ACCOUNT_ID binding.'
+            exit 1
+          fi
+          if ! grep -Fq 'firebaseConnectorHeaders' ops/digitalocean/deploy/server-v2.mjs; then
+            echo '::error::Bridge candidate is missing centralized Firebase connector headers.'
+            exit 1
+          fi
+          if grep -Eq "url\.pathname === '/v1/(send|media)'|WACLI_BRIDGE_URL|X-Demac-Bridge-Signature|BRIDGE_SIGNING_KEY" ops/digitalocean/deploy/server-v2.mjs; then
+            echo '::error::Bridge candidate contains a retired connector surface.'
+            exit 1
+          fi
+          if ! grep -Fq '/usr/local/sbin/demac-deploy-bridge' ops/digitalocean/run/task.sh; then
+            echo '::error::Restricted deployment authority is missing from the controlled remote task.'
+            exit 1
+          fi
+          echo 'DIGITALOCEAN_BRIDGE_ROLLOUT_ARTIFACTS_VALID'
+
   remote-ops:
+    # Pushes to main validate only. The production host is modified only by an
+    # explicit workflow_dispatch on main with confirm_bridge_cutover=true.
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.confirm_bridge_cutover == true
+    needs: validate-bridge-rollout
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       DO_HOST: 159.223.160.239
       DO_USER: demac-deploy
     steps:
-      - name: Checkout
+      - name: Checkout exact main revision
         uses: actions/checkout@v6
 
       - name: Configure SSH
@@ -58,14 +104,14 @@ jobs:
           scp -q ops/digitalocean/run/task.sh "$DO_USER@$DO_HOST:/home/demac-deploy/run/task.sh.new"
           ssh "$DO_USER@$DO_HOST" 'chmod 0700 /home/demac-deploy/run/task.sh.new && mv /home/demac-deploy/run/task.sh.new /home/demac-deploy/run/task.sh'
 
-      - name: Upload optional bridge candidate
-        if: ${{ hashFiles('ops/digitalocean/deploy/server-v2.mjs') != '' }}
+      - name: Upload bridge candidate
         shell: bash
         run: |
           set -euo pipefail
+          test -s ops/digitalocean/deploy/server-v2.mjs
           scp -q ops/digitalocean/deploy/server-v2.mjs "$DO_USER@$DO_HOST:/home/demac-deploy/stage/server-v2.mjs"
 
-      - name: Execute remote task
+      - name: Execute controlled bridge deployment task
         shell: bash
         run: |
           set -euo pipefail
