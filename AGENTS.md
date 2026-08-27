@@ -11,13 +11,27 @@ Do not rely on unversioned examples or remembered APIs.
 
 ## Start every task with evidence
 
-1. Read the request, this file, and any nearer `AGENTS.md`.
+1. Read the request, this file, any nearer `AGENTS.md`, and for significant development
+   work read [docs/ai/ENGINEERING_PROTOCOL.md](docs/ai/ENGINEERING_PROTOCOL.md).
 2. Inspect Git status and the files that own the behavior. Preserve unrelated work.
 3. Identify the product surface, authority boundary, business-rule IDs, security
    impact, and required quality gates before editing.
 4. Prefer the smallest reversible change. Do not deploy, migrate production data,
    rotate secrets, or modify production configuration without explicit authority.
 5. Do not claim success without reporting the exact verification performed.
+
+## Architecture-first engineering protocol
+
+Significant features, bug fixes, refactors, integrations, automations, upgrades, and
+architectural changes must follow
+[docs/ai/ENGINEERING_PROTOCOL.md](docs/ai/ENGINEERING_PROTOCOL.md).
+
+The protocol requires investigation and architecture design before implementation,
+root-cause correction instead of patch chains, reuse/refactor before duplication,
+explicit single-source-of-truth analysis, integration/regression validation, and four
+builder review passes: correctness, architecture, integration/regression, and
+production readiness. These self-review passes do not replace the independent
+Builder/Reviewer evidence required below.
 
 ## Absolute quality-gate rule
 
@@ -92,12 +106,14 @@ Use the role contracts in `docs/ai/roles/` as review lenses; one person or agent
 perform multiple roles, but Builder and Reviewer evidence must remain distinct.
 
 1. Define the task with `docs/ai/templates/TASK_TEMPLATE.md`.
-2. Map affected authorities, rules, parity obligations, failure modes, and risks.
-3. Implement the narrowest coherent change.
-4. Run the applicable gates in [docs/ai/QUALITY_GATES.md](docs/ai/QUALITY_GATES.md).
-5. Review with `docs/ai/templates/REVIEW_TEMPLATE.md`.
-6. Record durable architecture decisions with `docs/ai/templates/ADR_TEMPLATE.md`.
-7. Update the AI engineering documents when evidence changes them.
+2. Follow the investigation, impact mapping, architecture design, implementation, and
+   four-pass validation sequence in `docs/ai/ENGINEERING_PROTOCOL.md`.
+3. Map affected authorities, rules, parity obligations, failure modes, and risks.
+4. Implement the narrowest coherent change.
+5. Run the applicable gates in [docs/ai/QUALITY_GATES.md](docs/ai/QUALITY_GATES.md).
+6. Review with `docs/ai/templates/REVIEW_TEMPLATE.md`.
+7. Record durable architecture decisions with `docs/ai/templates/ADR_TEMPLATE.md`.
+8. Update the AI engineering documents when evidence changes them.
 
 ## Definition of done
 
@@ -107,6 +123,7 @@ unrelated files changed; documentation is current; and remaining risk is stated.
 
 Repository guidance:
 
+- [Engineering protocol](docs/ai/ENGINEERING_PROTOCOL.md)
 - [System map](docs/ai/SYSTEM_MAP.md)
 - [Authority matrix](docs/ai/AUTHORITY_MATRIX.md)
 - [Business rules](docs/ai/BUSINESS_RULES.md)
