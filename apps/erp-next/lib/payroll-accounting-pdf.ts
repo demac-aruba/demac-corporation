@@ -13,7 +13,7 @@ const MUTED: Rgb = [0.4, 0.47, 0.56];
 const BORDER: Rgb = [0.84, 0.88, 0.93];
 const LIGHT_GRAY: Rgb = [0.975, 0.982, 0.99];
 const WHITE: Rgb = [1, 1, 1];
-const ROWS_PER_PAGE = 12;
+const ROWS_PER_PAGE = 13;
 
 type Rgb = [number, number, number];
 
@@ -186,7 +186,7 @@ function buildAccountingPages(periodLabel: string, summaries: PayrollEmployeeSum
       x += column.width;
     });
 
-    const rowHeight = 31;
+    const rowHeight = 27;
     group.forEach((summary, rowIndex) => {
       const top = headerTop + headerHeight + rowIndex * rowHeight;
       const fill = rowIndex % 2 === 0 ? WHITE : LIGHT_GRAY;
