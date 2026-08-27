@@ -33,7 +33,16 @@ function pendingDetails({ target, pendingReason, pendingAction }) {
   };
 }
 
-function activeTransitionPatch({ storedVisit, transitionedVisit, target, identity, occurredAt, pendingReason, pendingAction, requestId }) {
+function noAccessDetails({ target, noAccessReason }) {
+  if (target !== 'no_access') return {};
+  const reason = text(noAccessReason, 1000);
+  if (!reason) {
+    throw fieldError('no_access_reason_required', 'A reason is required before closing a Work Visit as no access.', 400);
+  }
+  return { noAccessReason: reason };
+}
+
+function activeTransitionPatch({ storedVisit, transitionedVisit, target, identity, occurredAt, pendingReason, pendingAction, noAccessReason, requestId }) {
   if (!Number.isSafeInteger(transitionedVisit.version) || transitionedVisit.version < 1 || transitionedVisit.version >= Number.MAX_SAFE_INTEGER) {
     throw fieldError('visit_version_exhausted', 'Work Visit version cannot be advanced safely.', 409, { version: transitionedVisit.version });
   }
@@ -45,6 +54,7 @@ function activeTransitionPatch({ storedVisit, transitionedVisit, target, identit
     updatedByName: text(identity.name, 180) || text(identity.email, 180) || text(identity.uid, 180),
     version: transitionedVisit.version + 1,
     ...pendingDetails({ target, pendingReason, pendingAction }),
+    ...noAccessDetails({ target, noAccessReason }),
   };
   if (transitionedVisit.departedAt && !storedVisit.departedAt) patch.departedAt = transitionedVisit.departedAt;
   if (transitionedVisit.arrivedAt && !storedVisit.arrivedAt) patch.arrivedAt = transitionedVisit.arrivedAt;
@@ -56,10 +66,14 @@ function activeTransitionPatch({ storedVisit, transitionedVisit, target, identit
   if (target === 'in_progress' && canonicalStatusFromStorage(storedVisit.status) === 'pending') {
     patch.resumedAt = occurredAt;
   }
+  if (target === 'no_access') {
+    patch.noAccessAt = occurredAt;
+    patch.noAccessRequestId = requestId;
+  }
   return fieldFirestoreData(patch, 'workVisitTransition');
 }
 
-function transitionAuditEvent({ requestId, visit, previousStatus, nextStatus, identity, occurredAt, nextVersion, pendingReason, pendingAction }) {
+function transitionAuditEvent({ requestId, visit, previousStatus, nextStatus, identity, occurredAt, nextVersion, pendingReason, pendingAction, noAccessReason }) {
   return {
     id: deterministicEventId(requestId, visit.id, nextStatus),
     type: 'work_visit_status_changed',
@@ -83,6 +97,9 @@ function transitionAuditEvent({ requestId, visit, previousStatus, nextStatus, id
         pendingReason: text(pendingReason, 1000),
         pendingAction: text(pendingAction, 1500) || undefined,
       } : {}),
+      ...(nextStatus === 'no_access' ? {
+        noAccessReason: text(noAccessReason, 1000),
+      } : {}),
     },
   };
 }
@@ -92,7 +109,7 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
   if (typeof resolveAssignment !== 'function') throw new Error('resolveAssignment is required.');
   if (typeof appendAuditInTransaction !== 'function') throw new Error('appendAuditInTransaction is required.');
 
-  return async function transitionWorkVisit({ identity, visitId, to, expectedVersion, pendingReason, pendingAction, requestId } = {}) {
+  return async function transitionWorkVisit({ identity, visitId, to, expectedVersion, pendingReason, pendingAction, noAccessReason, requestId } = {}) {
     const normalizedVisitId = text(visitId, 180);
     if (!normalizedVisitId) throw fieldError('visit_required', 'A Work Visit id is required.', 400);
     const target = text(to, 80);
@@ -135,6 +152,13 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
             throw fieldError('pending_transition_conflict', 'This Work Visit is already pending with different details. Refresh before trying again.', 409);
           }
         }
+        if (target === 'no_access') {
+          const requested = noAccessDetails({ target, noAccessReason });
+          if (text(storedVisit.noAccessRequestId, 240) !== stable
+            || text(storedVisit.noAccessReason, 1000) !== requested.noAccessReason) {
+            throw fieldError('no_access_transition_conflict', 'This Work Visit is already closed as no access with different details.', 409);
+          }
+        }
         // Retry after a successful transaction is a no-op even if the caller still holds the
         // pre-transition version. The first transition and audit event already committed atomically.
         result = {
@@ -164,6 +188,7 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
         occurredAt,
         pendingReason,
         pendingAction,
+        noAccessReason,
         requestId: stable,
       });
       const nextStoredVisit = { ...storedVisit, ...patch };
@@ -178,6 +203,7 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
         nextVersion: patch.version,
         pendingReason,
         pendingAction,
+        noAccessReason,
       });
 
       transaction.update(visitRef, patch);

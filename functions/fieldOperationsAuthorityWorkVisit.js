@@ -213,6 +213,8 @@ function projectCanonicalWorkVisit(record, identityFallback = {}) {
     pendingReason: text(record?.pendingReason, 1000) || undefined,
     pendingAction: text(record?.pendingAction, 1500) || undefined,
     resumedAt: text(record?.resumedAt, 80) || undefined,
+    noAccessAt: text(record?.noAccessAt, 80) || undefined,
+    noAccessReason: text(record?.noAccessReason, 1000) || undefined,
     submittedAt: text(record?.submittedAt, 80) || undefined,
     completedAt: text(record?.completedAt, 80) || undefined,
     requiresSecondVisit: record?.requiresSecondVisit === true,

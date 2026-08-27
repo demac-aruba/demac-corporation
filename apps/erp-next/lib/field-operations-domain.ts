@@ -145,6 +145,8 @@ export interface WorkVisit extends AuditFields {
   pendingReason?: string;
   pendingAction?: string;
   resumedAt?: ISODateTime;
+  noAccessAt?: ISODateTime;
+  noAccessReason?: string;
   submittedAt?: ISODateTime;
   completedAt?: ISODateTime;
   requiresSecondVisit: boolean;

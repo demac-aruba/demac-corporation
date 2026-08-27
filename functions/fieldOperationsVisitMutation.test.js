@@ -185,7 +185,7 @@ test('scheduled visit transitions to en route atomically with first timestamp, v
   assert.equal(result.visit.status, 'en_route');
   assert.equal(result.visit.version, 2);
   assert.equal(result.visit.departedAt, '2026-08-24T12:30:00.000Z');
-  assert.deepEqual(result.visit.availableTransitions, ['on_site', 'pending']);
+  assert.deepEqual(result.visit.availableTransitions, ['on_site', 'pending', 'no_access']);
   assert.equal(store.get('workVisits', 'visit-WO-1').status, 'on_the_way');
   assert.equal(store.get('workVisits', 'visit-WO-1').version, 2);
   assert.equal(auditEvents.length, 1);
@@ -283,6 +283,52 @@ test('pending visit resumes without erasing the recorded pending context', async
   assert.equal(result.visit.pendingAction, 'Customer will call DEMAC');
   assert.deepEqual(result.visit.availableTransitions, ['pending']);
   assert.equal(store.get('workVisits', 'visit-WO-1').version, 6);
+});
+
+test('scheduled visit closes as no access with required canonical reason, terminal projection and audit', async () => {
+  const { store, auditEvents, transition } = fixture();
+  const result = await transition({
+    identity: identity(),
+    visitId: 'visit-WO-1',
+    to: 'no_access',
+    expectedVersion: 1,
+    noAccessReason: ' Customer did not provide site access. ',
+    requestId: 'transition-no-access-001',
+  });
+
+  assert.equal(result.visit.status, 'no_access');
+  assert.equal(result.visit.version, 2);
+  assert.equal(result.visit.noAccessAt, '2026-08-24T12:30:00.000Z');
+  assert.equal(result.visit.noAccessReason, 'Customer did not provide site access.');
+  assert.deepEqual(result.visit.availableTransitions, []);
+  assert.equal(store.get('workVisits', 'visit-WO-1').noAccessRequestId, 'transition-no-access-001');
+  assert.deepEqual(auditEvents[0].after, {
+    status: 'no_access',
+    version: 2,
+    noAccessReason: 'Customer did not provide site access.',
+  });
+});
+
+test('no-access transition requires a reason and exact retry payload', async () => {
+  const { store, auditEvents, transition } = fixture();
+  await assert.rejects(
+    () => transition({ identity: identity(), visitId: 'visit-WO-1', to: 'no_access', expectedVersion: 1, requestId: 'transition-no-access-empty' }),
+    (error) => error?.code === 'no_access_reason_required' && error?.status === 400,
+  );
+  assert.equal(store.get('workVisits', 'visit-WO-1').status, 'not_started');
+
+  const input = {
+    identity: identity(), visitId: 'visit-WO-1', to: 'no_access', expectedVersion: 1,
+    noAccessReason: 'Locked property', requestId: 'transition-no-access-exact',
+  };
+  await transition(input);
+  const replay = await transition(input);
+  assert.equal(replay.replayed, true);
+  assert.equal(auditEvents.length, 1);
+  await assert.rejects(
+    () => transition({ ...input, noAccessReason: 'Different reason' }),
+    (error) => error?.code === 'no_access_transition_conflict' && error?.status === 409,
+  );
 });
 
 test('retrying an already committed target is an idempotent no-op even with the stale prior version', async () => {
@@ -458,7 +504,7 @@ test('audit failure aborts the surrounding transaction and leaves WorkVisit unch
 test('non-activated branch targets and malformed expectedVersion fail before persistence', async () => {
   const { store, transition } = fixture();
   await assert.rejects(
-    () => transition({ identity: identity(), visitId: 'visit-WO-1', to: 'no_access', expectedVersion: 1, requestId: 'transition-no-access-001' }),
+    () => transition({ identity: identity(), visitId: 'visit-WO-1', to: 'cancelled', expectedVersion: 1, requestId: 'transition-cancelled-001' }),
     (error) => error?.code === 'transition_not_activated',
   );
   await assert.rejects(
