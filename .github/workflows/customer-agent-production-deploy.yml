@@ -7,12 +7,18 @@ on:
       - 'functions/bookingSchedulingPrimitives.js'
       - 'functions/bookingCapacityAvailability.js'
       - 'functions/commercialSalesAuthority*.js'
+      - 'functions/communicationConversationAuthority.js'
+      - 'functions/communicationConversationAuthority*.test.js'
       - 'functions/demacCorePrimitives.js'
       - 'functions/demacCommunicationEpoch.js'
       - 'functions/demacCommunicationIdentity.js'
+      - 'functions/demacCommunicationIngressMetadata.js'
       - 'functions/demacCustomer*.js'
+      - 'functions/voiceTranscription.js'
+      - 'functions/voiceTranscription*.test.js'
       - 'functions/whatsappCopilotRouter.js'
       - 'functions/whatsappCopilotRouterExports.test.js'
+      - 'functions/bootstrap.js'
       - 'functions/package.json'
       - '.github/workflows/customer-agent-production-deploy.yml'
   push:
@@ -23,12 +29,18 @@ on:
       - 'functions/bookingSchedulingPrimitives.js'
       - 'functions/bookingCapacityAvailability.js'
       - 'functions/commercialSalesAuthority*.js'
+      - 'functions/communicationConversationAuthority.js'
+      - 'functions/communicationConversationAuthority*.test.js'
       - 'functions/demacCorePrimitives.js'
       - 'functions/demacCommunicationEpoch.js'
       - 'functions/demacCommunicationIdentity.js'
+      - 'functions/demacCommunicationIngressMetadata.js'
       - 'functions/demacCustomer*.js'
+      - 'functions/voiceTranscription.js'
+      - 'functions/voiceTranscription*.test.js'
       - 'functions/whatsappCopilotRouter.js'
       - 'functions/whatsappCopilotRouterExports.test.js'
+      - 'functions/bootstrap.js'
       - 'functions/package.json'
       - '.github/workflows/customer-agent-production-deploy.yml'
   workflow_dispatch:
@@ -63,18 +75,34 @@ jobs:
           npm --prefix functions run validate:firebase
           npm --prefix functions run test:booking-authority
           node --test functions/commercialSalesAuthority.test.js
+          node --test functions/communicationConversationAuthority.test.js functions/communicationConversationAuthorityAuth.test.js
+          node --test functions/demacCommunicationIngressMetadata.test.js
           node --test functions/demacCustomerReservationTools.test.js functions/demacCustomerProductReservationRuntime.test.js
           npm --prefix functions run test:customer-agent-tools
+          node --test functions/voiceTranscription.test.js functions/voiceTranscriptionPolicy.test.js
           node --test functions/whatsappCopilotRouterExports.test.js
           node - <<'NODE'
           const mod = require('./functions/bootstrap');
-          for (const name of ['processCustomerAgentInbound', 'processCustomerAgentReactivation']) {
+          const required = [
+            'stampCommunicationMessageFirstSeen',
+            'processCustomerAgentInbound',
+            'transcribeNewCustomerVoiceNote',
+            'transcribeCustomerVoiceWhenReady',
+            'processCustomerAgentVoiceTranscript',
+            'processCustomerAgentReactivation',
+            'processCustomerAgentTurnWakeup',
+            'communicationConversationAuthority',
+          ];
+          for (const name of required) {
             if (typeof mod[name] !== 'function') throw new Error(`${name} export missing`);
           }
           NODE
 
   deploy-customer-agent-production:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Production deployment is deliberately manual so Wacli bridge/gateway
+    # cutover can be verified first. Pushes to main validate but never deploy
+    # this Maya Communication function set automatically.
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     needs: validate-customer-agent-production
     runs-on: ubuntu-latest
     steps:
@@ -98,40 +126,120 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Deploy Customer Agent triggers only
+      - name: Deploy governed Maya Communication functions
         shell: bash
         run: |
           set -euo pipefail
           npx --yes firebase-tools@15.2.1 deploy \
-            --only functions:processCustomerAgentInbound,functions:processCustomerAgentReactivation \
+            --only \
+functions:stampCommunicationMessageFirstSeen,\
+functions:processCustomerAgentInbound,\
+functions:transcribeNewCustomerVoiceNote,\
+functions:transcribeCustomerVoiceWhenReady,\
+functions:processCustomerAgentVoiceTranscript,\
+functions:processCustomerAgentReactivation,\
+functions:processCustomerAgentTurnWakeup,\
+functions:communicationConversationAuthority \
             --project demac-corporation \
             --non-interactive \
             --force
 
-      - name: Verify deployed Customer Agent functions
+      - name: Verify deployed Maya Communication functions
         shell: bash
         run: |
           set -euo pipefail
-          verify_function() {
-            local name="$1" expected_event="$2"
-            local state event_type secrets
-            state="$(gcloud functions describe "$name" --project=demac-corporation --gen2 --region=us-central1 --format='value(state)')"
+
+          function_state() {
+            gcloud functions describe "$1" \
+              --project=demac-corporation \
+              --gen2 \
+              --region=us-central1 \
+              --format='value(state)'
+          }
+
+          function_secrets() {
+            gcloud functions describe "$1" \
+              --project=demac-corporation \
+              --gen2 \
+              --region=us-central1 \
+              --format='value(serviceConfig.secretEnvironmentVariables[].key)' \
+              | tr ';' '\n' | sort -u
+          }
+
+          verify_active() {
+            local name="$1"
+            local state
+            state="$(function_state "$name")"
             if [ "$state" != 'ACTIVE' ]; then
               echo "::error::${name} state is ${state:-unknown}."
               exit 1
             fi
+          }
+
+          verify_firestore() {
+            local name="$1" expected_event="$2" openai="$3"
+            local event_type secrets
+            verify_active "$name"
             event_type="$(gcloud functions describe "$name" --project=demac-corporation --gen2 --region=us-central1 --format='value(eventTrigger.eventType)')"
             if [ "$event_type" != "$expected_event" ]; then
               echo "::error::${name} event type is ${event_type:-missing}; expected ${expected_event}."
               exit 1
             fi
-            secrets="$(gcloud functions describe "$name" --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.secretEnvironmentVariables[].key)' | tr ';' '\n' | sort -u)"
-            if ! printf '%s\n' "$secrets" | grep -qx 'OPENAI_API_KEY'; then
-              echo "::error::${name} is missing OPENAI_API_KEY."
+            secrets="$(function_secrets "$name")"
+            if [ "$openai" = 'required' ]; then
+              if ! printf '%s\n' "$secrets" | grep -qx 'OPENAI_API_KEY'; then
+                echo "::error::${name} is missing OPENAI_API_KEY."
+                exit 1
+              fi
+            elif printf '%s\n' "$secrets" | grep -qx 'OPENAI_API_KEY'; then
+              echo "::error::${name} unexpectedly carries OPENAI_API_KEY."
               exit 1
             fi
-            echo "${name}: ACTIVE, ${event_type}, OPENAI_API_KEY attached"
+            echo "${name}: ACTIVE, ${event_type}, openai=${openai}"
           }
 
-          verify_function processCustomerAgentInbound google.cloud.firestore.document.v1.created
-          verify_function processCustomerAgentReactivation google.cloud.firestore.document.v1.updated
+          verify_firestore stampCommunicationMessageFirstSeen google.cloud.firestore.document.v1.created forbidden
+          verify_firestore processCustomerAgentInbound google.cloud.firestore.document.v1.created required
+          verify_firestore transcribeNewCustomerVoiceNote google.cloud.firestore.document.v1.created required
+          verify_firestore transcribeCustomerVoiceWhenReady google.cloud.firestore.document.v1.updated required
+          verify_firestore processCustomerAgentVoiceTranscript google.cloud.firestore.document.v1.updated required
+          verify_firestore processCustomerAgentReactivation google.cloud.firestore.document.v1.updated required
+
+          verify_active processCustomerAgentTurnWakeup
+          task_secrets="$(function_secrets processCustomerAgentTurnWakeup)"
+          if ! printf '%s\n' "$task_secrets" | grep -qx 'OPENAI_API_KEY'; then
+            echo '::error::processCustomerAgentTurnWakeup is missing OPENAI_API_KEY.'
+            exit 1
+          fi
+          task_entry="$(gcloud functions describe processCustomerAgentTurnWakeup --project=demac-corporation --gen2 --region=us-central1 --format='value(buildConfig.entryPoint)')"
+          if [ "$task_entry" != 'processCustomerAgentTurnWakeup' ]; then
+            echo "::error::processCustomerAgentTurnWakeup entry point is ${task_entry:-missing}."
+            exit 1
+          fi
+          echo 'processCustomerAgentTurnWakeup: ACTIVE and OPENAI_API_KEY attached'
+
+          verify_active communicationConversationAuthority
+          authority_secrets="$(function_secrets communicationConversationAuthority)"
+          if [ -n "$authority_secrets" ]; then
+            echo "::error::communicationConversationAuthority unexpectedly carries function secrets: ${authority_secrets}."
+            exit 1
+          fi
+          authority_entry="$(gcloud functions describe communicationConversationAuthority --project=demac-corporation --gen2 --region=us-central1 --format='value(buildConfig.entryPoint)')"
+          if [ "$authority_entry" != 'communicationConversationAuthority' ]; then
+            echo "::error::communicationConversationAuthority entry point is ${authority_entry:-missing}."
+            exit 1
+          fi
+          authority_endpoint='https://us-central1-demac-corporation.cloudfunctions.net/communicationConversationAuthority'
+          authority_body="$(mktemp)"
+          authority_status="$(curl --silent --show-error --output "$authority_body" --write-out '%{http_code}' \
+            --request POST "$authority_endpoint" \
+            --header 'Content-Type: application/json' \
+            --data '{"action":"mark_read","data":{"conversationId":"ci-probe","requestId":"ci-probe-unauthenticated"}}')"
+          if [ "$authority_status" != '401' ]; then
+            echo "::error::communicationConversationAuthority returned HTTP ${authority_status}; expected 401 without Firebase authentication."
+            cat "$authority_body"
+            rm -f "$authority_body"
+            exit 1
+          fi
+          rm -f "$authority_body"
+          echo 'communicationConversationAuthority: ACTIVE and Firebase authentication required'
