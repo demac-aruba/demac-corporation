@@ -6,11 +6,14 @@ const {
   mayaAppointmentMutationDecisionInTransaction,
   mutationReceiptIdentity,
   mutationReplayDecision,
+  rescheduleScopeDecision,
 } = require("./demacCustomerAppointmentMutationGuard");
 
 const CONVERSATION_ID = "COMM-1111111111111111111111111111111111111111";
 const MESSAGE_ID = "MSG-1";
 const APPOINTMENT_ID = "APT-1";
+const OFFER_ID = "OFR-1";
+const CANONICAL_WORK_LINES = [{ id: "work-1", presetId: "standard_service", serviceId: "s1", quantity: 1 }];
 
 class FakeSnapshot {
   constructor(ref, value) {
@@ -93,6 +96,8 @@ function seed({
   observedMessageId = MESSAGE_ID,
   caseState = "APPOINTMENT_MATCHED",
   attentionReason = "",
+  appointmentWorkLines = CANONICAL_WORK_LINES,
+  offerWorkLines = CANONICAL_WORK_LINES,
 } = {}) {
   return {
     businessSettings: [
@@ -137,6 +142,22 @@ function seed({
       customerInputVersion: receiptCustomerInputVersion,
       status: "processing",
     }],
+    appointments: [{
+      id: APPOINTMENT_ID,
+      appointmentId: APPOINTMENT_ID,
+      customerId: "C-1",
+      propertyId: "P-1",
+      status: "confirmed",
+      workLines: appointmentWorkLines,
+    }],
+    bookingOffers: [{
+      id: OFFER_ID,
+      request: {
+        customerId: "C-1",
+        propertyId: "P-1",
+        workLines: offerWorkLines,
+      },
+    }],
   };
 }
 
@@ -151,6 +172,7 @@ async function decide(options = {}, action = "cancel_appointment") {
       conversationId: CONVERSATION_ID,
       inboundMessageId: MESSAGE_ID,
       requestedAppointmentId: options.requestedAppointmentId || APPOINTMENT_ID,
+      requestedOfferId: options.requestedOfferId || (action === "reschedule_appointment" ? OFFER_ID : ""),
     },
   });
 }
@@ -239,11 +261,25 @@ test("cross-account mutation attempts fail closed", async () => {
   assert.equal(decision.reason, "communication-account-not-active");
 });
 
+test("reschedule preserves exact canonical customer, property and workload", async () => {
+  const changedScope = await decide({
+    autoRescheduleEnabled: true,
+    offerWorkLines: [{ id: "work-1", presetId: "standard_service", serviceId: "s1", quantity: 2 }],
+  }, "reschedule_appointment");
+  assert.equal(changedScope.allowed, false);
+  assert.equal(changedScope.reason, "reschedule-workload-changed");
+
+  assert.equal(rescheduleScopeDecision(
+    { customerId: "C-1", propertyId: "P-1", workLines: CANONICAL_WORK_LINES },
+    { request: { customerId: "C-1", propertyId: "P-1", workLines: CANONICAL_WORK_LINES } },
+  ).allowed, true);
+});
+
 test("reschedule mutation receipt replays only while canonical appointment still matches exact committed option", () => {
   const context = { conversationId: CONVERSATION_ID, inboundMessageId: MESSAGE_ID };
   const args = {
     appointmentId: APPOINTMENT_ID,
-    offerId: "OFR-1",
+    offerId: OFFER_ID,
     offerVersion: 2,
     optionId: "OPT-2",
     reason: "Customer requested another day",
@@ -254,7 +290,7 @@ test("reschedule mutation receipt replays only while canonical appointment still
   const appointment = {
     id: APPOINTMENT_ID,
     status: "confirmed",
-    offerId: "OFR-1",
+    offerId: OFFER_ID,
     offerVersion: 2,
     selectedOptionId: "OPT-2",
     lastScheduleChangeKind: "customer_reschedule",
@@ -263,20 +299,51 @@ test("reschedule mutation receipt replays only while canonical appointment still
   assert.equal(mutationReplayDecision({ receipt, expected, appointment: { ...appointment, selectedOptionId: "OPT-LATER" } }).allowed, false);
 });
 
-test("same Maya turn cannot replay a different mutation fingerprint", () => {
+test("retry wording may change without changing the material mutation fingerprint", () => {
   const context = { conversationId: CONVERSATION_ID, inboundMessageId: MESSAGE_ID };
   const first = mutationReceiptIdentity("cancel_appointment", {
     appointmentId: APPOINTMENT_ID,
     reason: "Customer unavailable",
+    note: "Original wording",
+  }, context);
+  const rewritten = mutationReceiptIdentity("cancel_appointment", {
+    appointmentId: APPOINTMENT_ID,
+    reason: "Client cannot attend",
+    note: "Different wording on retry",
+  }, context);
+  assert.equal(first.requestFingerprint, rewritten.requestFingerprint);
+  const receipt = { ...first, status: "committed" };
+  const appointment = { id: APPOINTMENT_ID, status: "cancelled" };
+  assert.equal(mutationReplayDecision({ receipt, expected: rewritten, appointment }).allowed, true);
+});
+
+test("same Maya turn cannot replay a materially different reschedule mutation", () => {
+  const context = { conversationId: CONVERSATION_ID, inboundMessageId: MESSAGE_ID };
+  const first = mutationReceiptIdentity("reschedule_appointment", {
+    appointmentId: APPOINTMENT_ID,
+    offerId: OFFER_ID,
+    offerVersion: 2,
+    optionId: "OPT-1",
+    reason: "Customer request",
     note: "",
   }, context);
-  const changed = mutationReceiptIdentity("cancel_appointment", {
+  const changed = mutationReceiptIdentity("reschedule_appointment", {
     appointmentId: APPOINTMENT_ID,
-    reason: "Different reason after commit",
+    offerId: OFFER_ID,
+    offerVersion: 2,
+    optionId: "OPT-2",
+    reason: "Customer request",
     note: "",
   }, context);
   const receipt = { ...first, status: "committed" };
-  const appointment = { id: APPOINTMENT_ID, status: "cancelled" };
+  const appointment = {
+    id: APPOINTMENT_ID,
+    status: "confirmed",
+    offerId: OFFER_ID,
+    offerVersion: 2,
+    selectedOptionId: "OPT-1",
+    lastScheduleChangeKind: "customer_reschedule",
+  };
   const decision = mutationReplayDecision({ receipt, expected: changed, appointment });
   assert.equal(decision.allowed, false);
   assert.equal(decision.reason, "mutation-idempotency-conflict");
