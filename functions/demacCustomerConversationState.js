@@ -3,7 +3,7 @@ const {
   hashId,
 } = require("./bookingSchedulingPrimitives");
 
-const CUSTOMER_AGENT_SESSION_VERSION = 4;
+const CUSTOMER_AGENT_SESSION_VERSION = 3;
 const CUSTOMER_AGENT_SESSION_COLLECTION = "customerAgentSessions";
 const CANONICAL_CONVERSATION_ID = /^COMM-[A-F0-9]{40}$/i;
 
@@ -89,7 +89,6 @@ function emptySession(identity) {
     activeOfferId: "",
     activeOfferVersion: 0,
     appointmentId: "",
-    appointmentStatus: "",
     reservationId: "",
     reservationStatus: "",
     presetId: "",
@@ -158,26 +157,9 @@ function toolStatePatch(toolName, args = {}, result = {}) {
       quantity: Number(work.quantity || 0),
     };
   }
-  if (toolName === "create_appointment" && result.appointmentId) {
+  if (["create_appointment", "cancel_appointment", "reschedule_appointment"].includes(toolName) && result.appointmentId) {
     return {
       appointmentId: cleanText(result.appointmentId, 180),
-      appointmentStatus: cleanText(result.appointment?.status, 80) || "confirmed",
-      activeOfferId: "",
-      activeOfferVersion: 0,
-    };
-  }
-  if (toolName === "cancel_appointment" && result.appointmentId) {
-    return {
-      appointmentId: cleanText(result.appointmentId, 180),
-      appointmentStatus: cleanText(result.appointment?.status, 80) || "cancelled",
-      activeOfferId: "",
-      activeOfferVersion: 0,
-    };
-  }
-  if (toolName === "reschedule_appointment" && result.appointmentId) {
-    return {
-      appointmentId: cleanText(result.appointmentId, 180),
-      appointmentStatus: cleanText(result.appointment?.status, 80) || "confirmed",
       activeOfferId: "",
       activeOfferVersion: 0,
     };
@@ -257,9 +239,6 @@ async function recordCustomerConversationOutcome({
     updatedAtIso: now.toISOString(),
   };
   if (appointmentId) patch.appointmentId = cleanText(appointmentId, 180);
-  if (outcome === "appointment_confirmed") patch.appointmentStatus = "confirmed";
-  if (outcome === "appointment_cancelled") patch.appointmentStatus = "cancelled";
-  if (outcome === "appointment_rescheduled") patch.appointmentStatus = "confirmed";
   if (reservationId) patch.reservationId = cleanText(reservationId, 180);
   if (outcome === "product_reserved") patch.reservationStatus = "active";
   if (outcome === "product_reservation_released") patch.reservationStatus = "released";
