@@ -140,7 +140,7 @@ async function loadCapacityState(startDate?: string, endDate?: string): Promise<
   const canonicalVans = new Map<string, LiveOperationalVan>();
   for (const van of rawVans) {
     const id = canonicalVanId(van.id, rawVans);
-    if (!/^VAN-[1-4]$/.test(id)) continue;
+    if (!/^VAN-\d+$/.test(id)) continue;
     const current = canonicalVans.get(id);
     if (!current || van.id === id) {
       canonicalVans.set(id, {

@@ -1,6 +1,25 @@
 import { listFirestoreCollection, saveFirestoreDocument, updateFirestoreDocument } from './firebase/firestore-rest';
 import type { CanonicalStaffAbsence, CanonicalStaffProfile } from './canonical-operations';
 import { saveCanonicalStaffAbsence } from './canonical-operations-mutations';
+import {
+  attendanceExceptionTotals,
+  calculateAttendanceVariance,
+  classifyAttendanceExceptions,
+  hasValidWorkedTimeRange,
+  minutesBetween,
+  scheduledBreakMinutes,
+  workedMinutes,
+  type AttendanceExceptionClassification,
+  type AttendanceExceptionSegment,
+} from './employee-attendance-calculation';
+
+export { minutesBetween, workedMinutes } from './employee-attendance-calculation';
+export type {
+  AttendanceExceptionClassification,
+  AttendanceExceptionKind,
+  AttendanceExceptionSegment,
+  AttendancePaymentTreatment,
+} from './employee-attendance-calculation';
 
 export type AttendanceStatus = 'Present' | 'Late' | 'Sick' | 'Vacation' | 'Day Off' | 'Absent';
 export type SalaryAdvanceMethod = 'Cash' | 'Bank Transfer';
@@ -46,6 +65,11 @@ export type EmployeeTimesheetEntry = {
   breakMinutes?: number;
   lateMinutes?: number;
   workedMinutes?: number;
+  attendanceExceptions?: AttendanceExceptionSegment[];
+  scheduledStartTime?: string;
+  scheduledEndTime?: string;
+  scheduledBreakMinutes?: number;
+  scheduledPaidFreeMinutes?: number;
   createdAt?: string;
   updatedAt: string;
   updatedByUserId?: string;
@@ -74,8 +98,10 @@ export type AttendanceDayDraft = {
   clockInTime: string;
   clockOutTime: string;
   breakMinutes: number;
+  /** Legacy draft field retained for compatibility. saveAttendanceDay does not trust it. */
   overtimeMinutes: number;
   exceptionHours?: number;
+  attendanceExceptionClassifications?: AttendanceExceptionClassification[];
   notes: string;
 };
 
@@ -147,23 +173,12 @@ export function payrollPeriodBounds(date: string): PayrollPeriodBounds {
   return { id, start, end };
 }
 
-export function minutesBetween(startTime: string, endTime: string) {
-  const [startHour, startMinute] = startTime.split(':').map(Number);
-  const [endHour, endMinute] = endTime.split(':').map(Number);
-  if (![startHour, startMinute, endHour, endMinute].every(Number.isFinite)) return 0;
-  return Math.max(0, (endHour * 60 + endMinute) - (startHour * 60 + startMinute));
-}
-
 export function lateMinutes(clockInTime: string, scheduledStartTime: string) {
   if (!clockInTime || !scheduledStartTime) return 0;
   return Math.max(0, minutesBetween(scheduledStartTime, clockInTime));
 }
 
-export function workedMinutes(clockInTime: string, clockOutTime: string, breakMinutes = 0) {
-  if (!clockInTime || !clockOutTime) return 0;
-  return Math.max(0, minutesBetween(clockInTime, clockOutTime) - Math.max(0, breakMinutes));
-}
-
+/** @deprecated Overtime must be derived from the employee's resolved schedule. */
 export function overtimeMinutesAfterFive(clockOutTime: string) {
   if (!clockOutTime) return 0;
   return Math.max(0, minutesBetween('17:00', clockOutTime));
@@ -186,14 +201,13 @@ export function applyHalfDaySchedule(
   date: string,
   weekday: number | null | undefined,
   workedHours: number | undefined,
-  paidFreeHours: number | undefined,
+  _paidFreeHours: number | undefined,
   effectiveFrom?: string | null,
   offPeriod: HalfDayOffPeriod = 'afternoon',
 ) {
   const dateWeekday = new Date(`${date}T12:00:00Z`).getUTCDay();
   if (weekday == null || weekday !== dateWeekday || (effectiveFrom && date < effectiveFrom)) return schedule;
   const workedMinutesValue = Math.max(0, Math.round(Number(workedHours ?? 0) * 60));
-  const paidFreeMinutesValue = Math.max(0, Math.round(Number(paidFreeHours ?? 0) * 60));
   if (!workedMinutesValue) return schedule;
 
   const normalStart = schedule.startTime ? Number(schedule.startTime.slice(0, 2)) * 60 + Number(schedule.startTime.slice(3, 5)) : 8 * 60;
@@ -201,15 +215,15 @@ export function applyHalfDaySchedule(
   const workStart = offPeriod === 'morning' ? Math.max(normalStart, normalEnd - workedMinutesValue) : normalStart;
   const workEnd = offPeriod === 'morning' ? normalEnd : Math.min(normalEnd, normalStart + workedMinutesValue);
   const time = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
-  const offLabel = offPeriod === 'morning' ? 'morning off' : 'afternoon off';
+  const placementLabel = offPeriod === 'morning' ? 'work last part of day' : 'work first part of day';
 
   return {
     ...schedule,
     startTime: time(workStart),
     endTime: time(workEnd),
     scheduledMinutes: workedMinutesValue,
-    paidFreeMinutes: paidFreeMinutesValue,
-    label: `Weekly half-day · ${offLabel} · ${time(workStart)}–${time(workEnd)} · ${roundHours(workedMinutesValue)} worked + ${roundHours(paidFreeMinutesValue)} paid free`,
+    paidFreeMinutes: 0,
+    label: `Weekly partial day · ${placementLabel} · ${time(workStart)}–${time(workEnd)} · ${roundHours(workedMinutesValue)} worked`,
   };
 }
 
@@ -281,6 +295,7 @@ export function payrollSettingsForEmployee(settings: EmployeePayrollSettings[], 
   return matches.length === 1 ? matches[0] : undefined;
 }
 
+/** @deprecated Existing employee schedule editing uses saveEmployeeScheduleSettings with exact partial-day times. */
 export async function saveEmployeeHalfDaySettings(input: {
   employee: CanonicalStaffProfile;
   existing?: EmployeePayrollSettings;
@@ -290,7 +305,7 @@ export async function saveEmployeeHalfDaySettings(input: {
 }) {
   const weekday = Math.round(Number(input.weekday));
   if (weekday < 1 || weekday > 6) throw new Error('Choose a weekday from Monday through Saturday.');
-  if (!input.effectiveFrom) throw new Error('Choose when the recurring half-day becomes effective.');
+  if (!input.effectiveFrom) throw new Error('Choose when the recurring partial day becomes effective.');
   const now = new Date().toISOString();
   const id = input.existing?.id ?? input.employee.id;
   const changes: Omit<EmployeePayrollSettings, 'id'> = {
@@ -304,7 +319,7 @@ export async function saveEmployeeHalfDaySettings(input: {
     weeklyHalfDayWeekday: weekday,
     halfDayEffectiveFrom: input.effectiveFrom,
     halfDayWorkedHours: 4,
-    halfDayPaidFreeHours: 4,
+    halfDayPaidFreeHours: 0,
     halfDayOffPeriod: input.offPeriod,
     createdAt: input.existing?.createdAt ?? now,
     updatedAt: now,
@@ -362,9 +377,27 @@ export async function saveAttendanceDay(input: {
   const { employee, date, schedule, draft, existingEntry, existingAbsence, updatedByUserId, updatedByName } = input;
   const now = new Date().toISOString();
   const scheduledHours = roundHours(schedule.scheduledMinutes);
-  const paidFreeHours = roundHours(schedule.paidFreeMinutes);
-  const overtimeMinutesValue = Math.max(0, Math.round(Number(draft.overtimeMinutes) || 0));
+  const scheduledPaidFreeMinutes = Math.max(0, Math.round(schedule.paidFreeMinutes));
+  const scheduledBreakMinutesValue = scheduledBreakMinutes(schedule);
   const exceptionStatus = draft.status === 'Sick' || draft.status === 'Vacation' || draft.status === 'Absent';
+  const workedStatus = draft.status === 'Present' || draft.status === 'Late';
+
+  if (workedStatus && schedule.scheduledMinutes > 0) {
+    if (!draft.clockInTime || !draft.clockOutTime) throw new Error('Clock In and Clock Out are required for a worked attendance day.');
+    if (!hasValidWorkedTimeRange(draft.clockInTime, draft.clockOutTime)) throw new Error('Clock Out must be later than Clock In.');
+  }
+
+  const variance = calculateAttendanceVariance({
+    schedule,
+    clockInTime: draft.clockInTime,
+    clockOutTime: draft.clockOutTime,
+    breakMinutes: draft.breakMinutes,
+  });
+  const attendanceExceptions = workedStatus
+    ? classifyAttendanceExceptions(variance, draft.attendanceExceptionClassifications)
+    : [];
+  const partialTotals = attendanceExceptionTotals(attendanceExceptions);
+
   const requestedExceptionHours = exceptionStatus
     ? draft.exceptionHours === undefined
       ? scheduledHours
@@ -373,9 +406,16 @@ export async function saveAttendanceDay(input: {
   const exceptionHours = Math.min(scheduledHours, requestedExceptionHours);
   const sickHours = draft.status === 'Sick' ? exceptionHours : 0;
   const vacationHours = draft.status === 'Vacation' ? exceptionHours : 0;
-  const noWorkNoPayHours = draft.status === 'Absent' ? exceptionHours : 0;
-  const regularHours = Math.max(0, Math.round((scheduledHours - sickHours - vacationHours - noWorkNoPayHours) * 100) / 100);
-  const lateMinutesValue = draft.status === 'Late' ? lateMinutes(draft.clockInTime, schedule.startTime) : 0;
+  const fullDayNoWorkNoPayHours = draft.status === 'Absent' ? exceptionHours : 0;
+
+  const regularMinutesValue = workedStatus
+    ? Math.max(0, schedule.scheduledMinutes - variance.missingScheduledMinutes)
+    : Math.max(0, schedule.scheduledMinutes - Math.round((sickHours + vacationHours + fullDayNoWorkNoPayHours) * 60));
+  const paidFreeMinutesValue = scheduledPaidFreeMinutes + (workedStatus ? partialTotals.paidMinutes : 0);
+  const noWorkNoPayMinutesValue = workedStatus
+    ? partialTotals.noWorkNoPayMinutes
+    : Math.round(fullDayNoWorkNoPayHours * 60);
+  const overtimeMinutesValue = variance.overtimeMinutes;
   const workedMinutesValue = workedMinutes(draft.clockInTime, draft.clockOutTime, draft.breakMinutes);
 
   const entry: EmployeeTimesheetEntry = {
@@ -386,21 +426,26 @@ export async function saveAttendanceDay(input: {
     employeeName: input.employee.name ?? input.employee.id,
     date,
     scheduledWorkHours: scheduledHours,
-    paidFreeHours,
-    regularHours,
+    paidFreeHours: roundHours(paidFreeMinutesValue),
+    regularHours: roundHours(regularMinutesValue),
     overtimeHours: roundHours(overtimeMinutesValue),
     overtimeMinutes: overtimeMinutesValue,
     aoHours: sickHours,
     vacationHours,
-    noWorkNoPayHours,
-    status: legacyPayrollStatus(draft.status, scheduledHours, exceptionHours),
+    noWorkNoPayHours: roundHours(noWorkNoPayMinutesValue),
+    status: legacyPayrollStatus(draft.status, scheduledHours, exceptionStatus ? exceptionHours : roundHours(variance.missingScheduledMinutes)),
     notes: draft.notes.trim(),
     attendanceStatus: draft.status,
     clockInTime: draft.clockInTime || undefined,
     clockOutTime: draft.clockOutTime || undefined,
     breakMinutes: Math.max(0, Math.round(Number(draft.breakMinutes) || 0)),
-    lateMinutes: lateMinutesValue,
+    lateMinutes: workedStatus ? variance.lateArrivalMinutes : 0,
     workedMinutes: workedMinutesValue,
+    attendanceExceptions,
+    scheduledStartTime: schedule.startTime || undefined,
+    scheduledEndTime: schedule.endTime || undefined,
+    scheduledBreakMinutes: scheduledBreakMinutesValue,
+    scheduledPaidFreeMinutes,
     createdAt: existingEntry?.createdAt ?? now,
     updatedAt: now,
     updatedByUserId,
