@@ -177,8 +177,10 @@ function resolveAssignment(van, date, profiles, assignments, absences) {
   const saved = assignments.find((item) => item.vanId === van.id && item.date === date);
   const driver = profiles.find((item) => item.id === (saved?.driverStaffId ?? van.responsibleStaffId));
   const helper = profiles.find((item) => item.id === (saved?.helperStaffId ?? van.regularHelperId));
+  const additionalHelper = profiles.find((item) => item.id === (saved?.additionalHelperStaffId ?? van.additionalHelperId));
   const driverStaffId = driver?.canDriveVan && !staffUnavailable(driver, date, absences) ? driver.id : undefined;
   const helperStaffId = helper && !staffUnavailable(helper, date, absences) ? helper.id : undefined;
+  const additionalHelperStaffId = additionalHelper && !staffUnavailable(additionalHelper, date, absences) ? additionalHelper.id : undefined;
   let status;
   if (van.active === false || van.status === "Fuera de servicio" || saved?.status === "Fuera de servicio") status = "Fuera de servicio";
   else if (van.status === "Mantenimiento" || saved?.status === "Mantenimiento") status = "Mantenimiento";
@@ -189,7 +191,10 @@ function resolveAssignment(van, date, profiles, assignments, absences) {
     vanId: van.id,
     driverStaffId,
     helperStaffId,
-    technicianIds: [driverStaffId, helperStaffId].filter(Boolean),
+    additionalHelperStaffId,
+    // The optional third helper is crew identity only. It does not alter the protected
+    // Booking Authority slot/unit capacity model unless a separately approved rule changes it.
+    technicianIds: [driverStaffId, helperStaffId, additionalHelperStaffId].filter(Boolean),
     status,
   };
 }
