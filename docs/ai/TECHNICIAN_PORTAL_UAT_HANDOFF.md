@@ -56,3 +56,5 @@ After every precondition and UAT item passes, a human may decide whether to appr
 ## Recovery posture
 
 If later non-production validation fails, stop the rollout, preserve all canonical test records for diagnosis, hide/disable the affected UI only through an approved reversible change, and fix forward. Never delete canonical Field history automatically. Server authority must be deployed before its client consumer in any future authorized rollout.
+
+<!-- CI synchronize trigger; reverted by the next commit. -->
