@@ -19,13 +19,16 @@ function targetForGroupName(groupName) {
 
 function deriveVanGroupRealignment(rawVans = []) {
   const catalog = canonicalizeVanCatalog(rawVans);
-  if (catalog.vans.length !== TARGETS.length) {
-    throw new Error(`Cannot safely realign van WhatsApp groups; expected ${TARGETS.length} canonical Vans and found ${catalog.vans.length}.`);
+  const targetVans = TARGETS.map(({ vanId }) => catalog.vans.find((van) => van.id === vanId));
+  const missingTargets = TARGETS
+    .filter((_, index) => !targetVans[index]?.sourceVanId)
+    .map(({ vanId }) => vanId);
+  if (missingTargets.length) {
+    throw new Error(`Cannot safely realign van WhatsApp groups; missing canonical target Vans: ${missingTargets.join(", ")}.`);
   }
 
-  return TARGETS.map(({ vanId, label }) => {
-    const targetVan = catalog.vans.find((van) => van.id === vanId);
-    if (!targetVan?.sourceVanId) throw new Error(`Canonical ${vanId} is missing from the Van catalog.`);
+  return TARGETS.map(({ vanId, label }, index) => {
+    const targetVan = targetVans[index];
     const groupJid = text(targetVan.whatsappScheduleGroupJid);
     if (targetVan.whatsappScheduleGroupAlignment !== "canonical") {
       throw new Error(`Cannot safely realign ${vanId}; WhatsApp group identity is ${targetVan.whatsappScheduleGroupAlignment || "unresolved"}.`);
