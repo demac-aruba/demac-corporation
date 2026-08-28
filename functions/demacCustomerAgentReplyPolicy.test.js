@@ -3,6 +3,8 @@ const assert = require("node:assert/strict");
 
 const {
   configuredAllowlist,
+  mayaBusinessActionDecision,
+  mayaObservationDecision,
   mayaReplyDecision,
   normalizeArubaWhatsAppPhone,
   resolveConversationPhone,
@@ -40,7 +42,7 @@ test("Maya is fail-closed when settings are missing", () => {
   });
 });
 
-test("Maya replies only to explicitly allowlisted phones", () => {
+test("legacy allowlist mode remains backward compatible", () => {
   const settings = {
     autoReplyEnabled: true,
     autoReplyMode: "allowlist",
@@ -66,4 +68,134 @@ test("explicit off switch always overrides the allowlist", () => {
   });
   assert.equal(decision.allowed, false);
   assert.equal(decision.reason, "auto-reply-disabled");
+});
+
+test("global Maya disable overrides reply allowlist and autonomy flags", () => {
+  const settings = {
+    enabled: false,
+    autoReplyEnabled: true,
+    autoReplyMode: "allowlist",
+    autoReplyAllowlist: ["2975600000"],
+    autoCancelEnabled: true,
+  };
+  const reply = mayaReplyDecision({ message: { phone: "2975600000" }, settings });
+  assert.equal(reply.allowed, false);
+  assert.equal(reply.reason, "maya-disabled");
+  assert.deepEqual(
+    mayaBusinessActionDecision({ action: "cancel_appointment", settings, ownershipAllowed: true }),
+    { allowed: false, reason: "maya-disabled" },
+  );
+});
+
+const pilotSettings = {
+  enabled: true,
+  observationEnabled: true,
+  autoReplyEnabled: true,
+  replyMode: "pilot",
+  autoReplyAllowlist: ["2975600140", "2975606772"],
+  newContactAutoReplyEnabled: true,
+  cancellationAutoReplyEnabled: true,
+  rescheduleAutoReplyEnabled: true,
+  autoCancelEnabled: false,
+  autoRescheduleEnabled: false,
+};
+const communicationSettings = { communicationAccountId: "demac-wa-corporate" };
+
+function inbound(phone = "2975820000", overrides = {}) {
+  return {
+    direction: "inbound",
+    phone,
+    communicationAccountId: "demac-wa-corporate",
+    provider: "wacli",
+    channel: "whatsapp",
+    chat: `${phone}@s.whatsapp.net`,
+    ...overrides,
+  };
+}
+
+test("observation is independent from reply permission", () => {
+  assert.equal(mayaObservationDecision({
+    message: inbound(),
+    settings: pilotSettings,
+    communicationSettings,
+  }).allowed, true);
+  const reply = mayaReplyDecision({ message: inbound(), settings: pilotSettings, communicationSettings });
+  assert.equal(reply.allowed, false);
+  assert.equal(reply.reason, "existing-customer-observe-only");
+});
+
+test("pilot mode requires canonical WhatsApp account configuration instead of Maya-local account duplication", () => {
+  const missingCanonicalSettings = mayaReplyDecision({
+    message: inbound("2975600140"),
+    settings: { ...pilotSettings, activeCommunicationAccountId: "demac-wa-corporate" },
+  });
+  assert.equal(missingCanonicalSettings.allowed, false);
+  assert.equal(missingCanonicalSettings.reason, "active-communication-account-not-configured");
+
+  const missingIdentity = mayaReplyDecision({
+    message: inbound("2975600140", { communicationAccountId: "" }),
+    settings: pilotSettings,
+    communicationSettings,
+  });
+  assert.equal(missingIdentity.allowed, false);
+  assert.equal(missingIdentity.reason, "missing-communication-account-id");
+});
+
+test("pilot mode rejects a message from another communication account", () => {
+  const decision = mayaReplyDecision({
+    message: inbound("2975600140", { communicationAccountId: "demac-wa-other" }),
+    settings: pilotSettings,
+    communicationSettings,
+  });
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.reason, "communication-account-not-active");
+});
+
+test("approved pilot test numbers receive reply permission without action bypass", () => {
+  const reply = mayaReplyDecision({ message: inbound("2975600140"), settings: pilotSettings, communicationSettings });
+  assert.equal(reply.allowed, true);
+  assert.equal(reply.reason, "allowlisted");
+  assert.deepEqual(
+    mayaBusinessActionDecision({ action: "cancel_appointment", settings: pilotSettings, ownershipAllowed: true }),
+    { allowed: false, reason: "auto-cancel-disabled" },
+  );
+});
+
+test("genuinely new contact can reply only when the dedicated pilot switch is enabled", () => {
+  const reply = mayaReplyDecision({
+    message: inbound(),
+    settings: pilotSettings,
+    communicationSettings,
+    isNewContact: true,
+  });
+  assert.equal(reply.allowed, true);
+  assert.equal(reply.reason, "new-contact-pilot");
+});
+
+test("existing customer cancellation workflow can reply without enabling general autonomy", () => {
+  const reply = mayaReplyDecision({
+    message: inbound(),
+    settings: pilotSettings,
+    communicationSettings,
+    authorizedWorkflow: "cancellation",
+  });
+  assert.equal(reply.allowed, true);
+  assert.equal(reply.reason, "authorized-cancellation-workflow");
+  const general = mayaReplyDecision({ message: inbound(), settings: pilotSettings, communicationSettings });
+  assert.equal(general.allowed, false);
+});
+
+test("business mutation permission remains separate from reply permission and ownership", () => {
+  assert.equal(
+    mayaBusinessActionDecision({ action: "reschedule_appointment", settings: pilotSettings, ownershipAllowed: true }).allowed,
+    false,
+  );
+  assert.equal(
+    mayaBusinessActionDecision({
+      action: "reschedule_appointment",
+      settings: { ...pilotSettings, autoRescheduleEnabled: true },
+      ownershipAllowed: false,
+    }).reason,
+    "sender-ownership-not-valid",
+  );
 });

@@ -1,67 +1,70 @@
 const { getApp, getApps, initializeApp } = require("firebase-admin/app");
-const { FieldValue, getFirestore } = require("firebase-admin/firestore");
+const { getFirestore } = require("firebase-admin/firestore");
 const logger = require("firebase-functions/logger");
 const { defineSecret } = require("firebase-functions/params");
 const { onDocumentCreated, onDocumentUpdated } = require("firebase-functions/v2/firestore");
-const customerAgentCommunication = require("./demacCustomerAgentCommunication");
 const {
-  MAYA_SETTINGS_COLLECTION,
-  MAYA_SETTINGS_DOCUMENT,
-  mayaReplyDecision,
-} = require("./demacCustomerAgentReplyPolicy");
+  canonicalVoiceRuntimeMessage,
+  customerSemanticContent,
+  messageMediaType,
+} = require("./demacCustomerTurn");
+const { mayaReplyDecision } = require("./demacCustomerAgentReplyPolicy");
 const { cleanText } = require("./bookingSchedulingPrimitives");
+const { createCustomerTurnOrchestrator } = require("./demacCustomerTurnOrchestrator");
 
 const app = getApps().length ? getApp() : initializeApp();
 const db = getFirestore(app);
 const openAiApiKey = defineSecret("OPENAI_API_KEY");
-
-function safeDocumentId(value) {
-  return String(value || "unknown")
-    .replaceAll("/", "_")
-    .replaceAll("#", "_")
-    .slice(0, 1200);
-}
+const turnOrchestrator = createCustomerTurnOrchestrator({ database: db });
 
 function conversationIdentity(message = {}) {
-  return cleanText(message.chat || message.conversationId || message.phone, 300);
+  return cleanText(message.conversationId, 300);
 }
 
 async function loadMayaReplySettings() {
-  const snapshot = await db.collection(MAYA_SETTINGS_COLLECTION).doc(MAYA_SETTINGS_DOCUMENT).get();
-  return snapshot.exists ? snapshot.data() || {} : {};
+  return (await turnOrchestrator.loadSettings()).settings;
+}
+
+async function loadCommunicationSettings() {
+  return (await turnOrchestrator.loadSettings()).communicationSettings;
 }
 
 async function recordObservationState({ conversationId, decision }) {
-  if (!conversationId) return;
-  try {
-    await db.collection("communicationConversations").doc(safeDocumentId(conversationId)).set({
-      mayaMode: decision.allowed ? "test_active" : "observe_only",
-      mayaAutoReplyAllowed: decision.allowed,
-      mayaAutoReplyDecisionReason: decision.reason,
-      mayaAutoReplyPolicyCheckedAt: FieldValue.serverTimestamp(),
-      mayaAutoReplyPolicyCheckedAtIso: new Date().toISOString(),
-    }, { merge: true });
-  } catch (error) {
-    logger.warn("Could not persist Maya observation policy state; message remains stored in Communication Center.", {
-      conversationId,
-      errorMessage: error?.message || String(error),
-    });
-  }
+  return turnOrchestrator.recordPolicyState({ conversationId, decision });
 }
 
-async function evaluateInboundPolicy(message = {}) {
-  const settings = await loadMayaReplySettings();
-  const decision = mayaReplyDecision({ message, settings });
-  const conversationId = conversationIdentity(message);
-  await recordObservationState({ conversationId, decision });
-  return { decision, conversationId };
+async function evaluateInboundPolicy(message = {}, policyContext = {}) {
+  return turnOrchestrator.evaluateInboundPolicy(message, policyContext);
 }
 
 async function evaluateConversationPolicy(conversationId, conversation = {}) {
-  const settings = await loadMayaReplySettings();
-  const decision = mayaReplyDecision({ conversation, settings });
-  await recordObservationState({ conversationId, decision });
+  const { settings, communicationSettings } = await turnOrchestrator.loadSettings();
+  const decision = mayaReplyDecision({ conversation, settings, communicationSettings });
+  await turnOrchestrator.recordPolicyState({ conversationId, decision });
   return decision;
+}
+
+function voiceTranscriptBecameReady(before = {}, after = {}) {
+  if (!["audio", "voice"].includes(messageMediaType(after)) || after.direction !== "inbound") return false;
+  const beforeTranscript = customerSemanticContent(before, 8_000);
+  const afterTranscript = customerSemanticContent(after, 8_000);
+  return after.transcriptionStatus === "completed" && Boolean(afterTranscript) && afterTranscript !== beforeTranscript;
+}
+
+function voiceTranscriptRuntimeMessage(message = {}) {
+  return canonicalVoiceRuntimeMessage(message);
+}
+
+async function scheduleRuntimeMessage(messageId, message) {
+  const result = await turnOrchestrator.scheduleInboundTurn({ messageId, message });
+  if (!result.scheduled) {
+    logger.info("Maya customer turn was not scheduled.", {
+      messageId,
+      conversationId: conversationIdentity(message) || null,
+      reason: result.reason,
+    });
+  }
+  return result;
 }
 
 exports.processCustomerAgentInbound = onDocumentCreated(
@@ -71,28 +74,41 @@ exports.processCustomerAgentInbound = onDocumentCreated(
     memory: "512MiB",
     timeoutSeconds: 120,
     retry: true,
+    // Keep the existing secret attachment until the production deployment inventory
+    // is deliberately cut over; the trigger itself only schedules the governed turn.
     secrets: [openAiApiKey],
   },
   async (event) => {
     const snapshot = event.data;
     if (!snapshot) return;
     const message = { id: snapshot.id, ...snapshot.data() };
-    if (!message || message.direction !== "inbound") return;
+    if (message.direction !== "inbound") return;
+    const mediaType = messageMediaType(message);
+    if (["audio", "voice"].includes(mediaType) && !customerSemanticContent(message, 8_000)) return;
+    const runtimeMessage = ["audio", "voice"].includes(mediaType)
+      ? voiceTranscriptRuntimeMessage(message)
+      : message;
+    if (!runtimeMessage) return;
+    await scheduleRuntimeMessage(cleanText(message.messageId || snapshot.id, 300), runtimeMessage);
+  },
+);
 
-    const { decision } = await evaluateInboundPolicy(message);
-    if (!decision.allowed) {
-      logger.info("Maya observed inbound WhatsApp message without replying.", {
-        messageId: cleanText(message.messageId || snapshot.id, 300),
-        phone: decision.phone || null,
-        reason: decision.reason,
-      });
-      return;
-    }
-
-    await customerAgentCommunication.processQueueEvent({
-      messageId: cleanText(message.messageId || snapshot.id, 300),
-      message,
-    });
+exports.processCustomerAgentVoiceTranscript = onDocumentUpdated(
+  {
+    document: "whatsappMessages/{messageId}",
+    region: "us-central1",
+    memory: "512MiB",
+    timeoutSeconds: 120,
+    retry: true,
+    secrets: [openAiApiKey],
+  },
+  async (event) => {
+    const before = event.data?.before?.data() || {};
+    const after = event.data?.after?.data() || {};
+    if (!voiceTranscriptBecameReady(before, after)) return;
+    const runtimeMessage = voiceTranscriptRuntimeMessage({ id: event.params.messageId, ...after });
+    if (!runtimeMessage) return;
+    await scheduleRuntimeMessage(cleanText(after.messageId || event.params.messageId, 300), runtimeMessage);
   },
 );
 
@@ -110,24 +126,22 @@ exports.processCustomerAgentReactivation = onDocumentUpdated(
     const after = event.data?.after?.data() || {};
     if (before.aiDisposition === "ai_active" || after.aiDisposition !== "ai_active") return;
     if (after.ownerUserId || after.lockedByUserId) return;
-
-    const decision = await evaluateConversationPolicy(event.params.conversationId, after);
-    if (!decision.allowed) {
-      logger.info("Maya conversation reactivation stayed in observe-only mode because the phone is not allowlisted.", {
+    const result = await turnOrchestrator.scheduleConversationReactivation(event.params.conversationId, after);
+    if (!result.scheduled) {
+      logger.info("Maya reactivation did not schedule a customer turn.", {
         conversationId: event.params.conversationId,
-        phone: decision.phone || null,
-        reason: decision.reason,
+        reason: result.reason,
       });
-      return;
     }
-
-    await customerAgentCommunication.reactivateConversation(event.params.conversationId, after);
   },
 );
 
-module.exports.MAYA_SETTINGS_COLLECTION = MAYA_SETTINGS_COLLECTION;
-module.exports.MAYA_SETTINGS_DOCUMENT = MAYA_SETTINGS_DOCUMENT;
 module.exports.conversationIdentity = conversationIdentity;
 module.exports.evaluateConversationPolicy = evaluateConversationPolicy;
 module.exports.evaluateInboundPolicy = evaluateInboundPolicy;
+module.exports.loadCommunicationSettings = loadCommunicationSettings;
 module.exports.loadMayaReplySettings = loadMayaReplySettings;
+module.exports.recordObservationState = recordObservationState;
+module.exports.scheduleRuntimeMessage = scheduleRuntimeMessage;
+module.exports.voiceTranscriptBecameReady = voiceTranscriptBecameReady;
+module.exports.voiceTranscriptRuntimeMessage = voiceTranscriptRuntimeMessage;

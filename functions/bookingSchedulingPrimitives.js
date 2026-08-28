@@ -1,4 +1,4 @@
-const crypto = require("node:crypto");
+const { cleanText, hashId } = require("./demacCorePrimitives");
 
 const ARUBA_TIME_ZONE = "America/Aruba";
 const MORNING_SLOTS = ["08:30", "09:30", "10:30"];
@@ -41,10 +41,6 @@ const DEFAULT_ROUTE_CONFIG = {
   ],
 };
 
-function cleanText(value, maxLength = 500) {
-  return String(value ?? "").replace(/\s+/g, " ").trim().slice(0, maxLength);
-}
-
 function normalizeText(value) {
   return cleanText(value, 2_000)
     .normalize("NFD")
@@ -59,10 +55,6 @@ function normalizePhone(value) {
   if (!digits) return "";
   if (digits.length === 7) return `297${digits}`;
   return digits;
-}
-
-function hashId(value, length = 32) {
-  return crypto.createHash("sha256").update(String(value ?? "")).digest("hex").slice(0, length);
 }
 
 function snapshotItems(snapshot) {

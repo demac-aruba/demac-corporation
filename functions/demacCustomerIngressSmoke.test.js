@@ -7,6 +7,7 @@ if (!getApps().length) {
 }
 
 const { conversationIngressState } = require("./whatsappWacliGateway");
+const { wacliCanonicalIdentity } = require("./wacliCommunicationBoundary");
 const {
   buildRuntimeBody,
   outcomeConversationPatch,
@@ -45,9 +46,20 @@ function createSmokeRuntime(finalArgs, recordedOutcomes) {
   });
 }
 
-function inboundFixture({ text, messageId = "wamid-smoke-1", chat = "2975600000@s.whatsapp.net" }) {
+function inboundFixture({
+  text,
+  messageId = "wamid-smoke-1",
+  chat = "2975600000@s.whatsapp.net",
+  communicationAccountId = "demac-wa-primary",
+}) {
   const ingress = conversationIngressState({ current: {}, exists: false, inbound: true });
+  const identity = wacliCanonicalIdentity({ communicationAccountId, chat, providerMessageId: messageId });
+  assert.ok(identity.conversationId, "smoke fixture requires canonical account-scoped conversation identity");
+  assert.ok(identity.messageId, "smoke fixture requires canonical account-scoped message identity");
   const conversation = {
+    conversationId: identity.conversationId,
+    communicationAccountId,
+    remoteConversationId: identity.remoteConversationId,
     provider: "wacli",
     phone: "2975600000",
     chatJid: chat,
@@ -58,21 +70,30 @@ function inboundFixture({ text, messageId = "wamid-smoke-1", chat = "2975600000@
     aiDisposition: ingress.aiDisposition,
     owner: ingress.owner,
     ownerUserId: ingress.ownerUserId,
+    ownershipVersion: 0,
+    customerInputVersion: 1,
     recentMessages: [],
   };
   const inboundMessage = {
-    messageId,
+    id: identity.messageId,
+    messageId: identity.messageId,
+    providerMessageId: messageId,
+    conversationId: identity.conversationId,
+    communicationAccountId,
+    remoteConversationId: identity.remoteConversationId,
     provider: "wacli",
     direction: "inbound",
     chat,
     phone: "2975600000",
     chatName: "Smoke Test Customer",
+    customerInputVersion: 1,
     text,
   };
   return {
     ingress,
+    identity,
     rawBody: buildRuntimeBody({
-      conversationId: chat,
+      conversationId: identity.conversationId,
       conversation,
       inboundMessage,
       provider: "wacli",
@@ -80,13 +101,16 @@ function inboundFixture({ text, messageId = "wamid-smoke-1", chat = "2975600000@
   };
 }
 
-test("smoke: routine inbound stays AI-owned from wacli ingress through customer reply", async () => {
-  const { ingress, rawBody } = inboundFixture({ text: "Buenas, necesito información sobre servicio." });
+test("smoke: routine inbound stays AI-owned from canonical wacli ingress through customer reply", async () => {
+  const { ingress, identity, rawBody } = inboundFixture({ text: "Buenas, necesito información sobre servicio." });
   assert.equal(ingress.queue, "general");
   assert.equal(ingress.aiDisposition, "ai_active");
   assert.equal(ingress.ownerUserId, null);
-  assert.equal(rawBody.conversationId, "2975600000@s.whatsapp.net");
-  assert.equal(rawBody.inboundMessageId, "wamid-smoke-1");
+  assert.equal(rawBody.conversationId, identity.conversationId);
+  assert.equal(rawBody.communicationAccountId, "demac-wa-primary");
+  assert.equal(rawBody.ownershipVersion, 0);
+  assert.equal(rawBody.customerInputVersion, 1);
+  assert.equal(rawBody.inboundMessageId, identity.messageId);
 
   const recorded = [];
   const runtime = createSmokeRuntime({
@@ -111,7 +135,7 @@ test("smoke: routine inbound stays AI-owned from wacli ingress through customer 
   assert.equal(recorded[0].outcome, "reply");
 });
 
-test("smoke: payment dispute enters general but Customer Agent hands off semantically to finance", async () => {
+test("smoke: payment dispute enters general but Customer Agent requests finance handoff without fabricating human ownership", async () => {
   const { ingress, rawBody } = inboundFixture({
     text: "No reconozco este pago en mi factura y quiero que una persona lo revise.",
     messageId: "wamid-smoke-finance",
@@ -136,7 +160,7 @@ test("smoke: payment dispute enters general but Customer Agent hands off semanti
 
   assert.equal(result.metadata.outcome, "handoff");
   assert.equal(result.metadata.handoffQueue, "finance");
-  assert.equal(patch.aiDisposition, "human_active");
+  assert.equal(patch.aiDisposition, "handoff_pending");
   assert.equal(patch.status, "escalated");
   assert.equal(patch.queue, "finance");
   assert.equal(patch.routeReason, "Customer disputes a payment shown on the invoice and requested human review.");

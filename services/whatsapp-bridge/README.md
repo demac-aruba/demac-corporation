@@ -1,212 +1,106 @@
 # DEMAC WhatsApp wacli Bridge
 
-This service is the replaceable transport layer between DEMAC ERP/Firebase and the currently linked WhatsApp Business account.
+Status: **current architecture guide; legacy runtime files remain in this folder only as superseded reference until the deployed host is independently verified.**
 
-It is deliberately separate from ERP business logic. Today the provider can be `wacli`; later the ERP can switch to Meta Cloud API without rebuilding the Communication Center, CRM, scheduling or operator workflow.
+## Canonical runtime boundary
 
-## Runtime topology
+The current reviewed bridge implementation is:
+
+- `ops/digitalocean/deploy/server-v2.mjs`
+
+The current deployment and validation contracts are split deliberately:
+
+- `.github/workflows/digitalocean-remote-ops.yml` stages the reviewed `server-v2.mjs` candidate on the DigitalOcean host when the guarded `main` path is used.
+- `ops/digitalocean/run/task.sh` validates the staged candidate, invokes the restricted host-side bridge deploy command, and verifies the outbound-only local runtime.
+- `.github/workflows/wacli-webhook-deploy.yml` validates and, on its guarded `main` path, deploys the Firebase connector functions.
+- `functions/whatsappWacliGateway.js`, `functions/wacliCommunicationBoundary.js`, and `functions/wacliBridgeAccountBinding.test.js` define/test the Firebase/provider boundary.
+
+Do **not** deploy `services/whatsapp-bridge/server.mjs`, the environment example in this folder, or the `systemd/` files as the current bridge architecture. They describe an older Firebase-to-Droplet sender topology and are retained only so the previous deployment can be understood or recovered during an authorized migration review. Removing them requires evidence about the actual host and is therefore not performed automatically.
+
+## Current topology
 
 ```text
-DEMAC ERP (Vercel)
+WhatsApp linked device / wacli sync
         |
-        | Firestore whatsappOutboundQueue
+        | local signed webhook + media
         v
-Firebase Functions
+DigitalOcean bridge
+ops/digitalocean/deploy/server-v2.mjs
         |
-        | HTTPS + Bearer token
+        | Authorization: Bearer <bridge token>
+        | X-Demac-Communication-Account-Id: <explicit account>
         v
-Public HTTPS reverse proxy
-        |
-        v
-127.0.0.1:8787  demac-whatsapp-bridge
-        |
-        | wacli --json send text
-        v
-wacli sync --follow  <---->  WhatsApp linked device
-        |
-        | signed local webhook
-        v
-demac-whatsapp-bridge durable webhook outbox
-        |
-        | retrying HTTPS delivery + original HMAC signature
-        v
-Firebase wacliWebhook
+Firebase Communication connector
+  - wacliWebhook
+  - wacliMediaIngest
+  - wacliOutboundPoll
+  - wacliOutboundAck
         |
         v
-Firestore Communication Center
+Canonical Communication Center records
+  - communicationConversations
+  - whatsappMessages
+  - whatsappOutboundQueue
 ```
 
-## Why the local durable outbox exists
+Outbound delivery is **pull based** from the DigitalOcean bridge. Firebase no longer pushes customer/transactional commands to a public `/v1/send` endpoint. The retired `sendQueuedWacliMessage` Firebase-to-Droplet sender must not be reintroduced.
 
-`wacli sync --webhook` is intentionally best-effort. The bridge therefore receives the webhook on localhost, verifies the wacli HMAC, writes the exact signed payload to disk, immediately acknowledges wacli, and retries delivery to Firebase until Firebase accepts it.
+## Authority and configuration ownership
 
-This protects daily operations from a temporary Firebase/internet failure without writing directly into either of wacli's SQLite databases.
+The bridge is a transport adapter, not a business source of truth. It must not decide customer intent, booking state, pricing, conversation ownership, or Maya policy.
 
-## Host requirements
+The canonical WhatsApp communication-account configuration is owned by `businessSettings/whatsapp` and interpreted by `functions/demacCommunicationIdentity.js`. The bridge must assert the exact configured account on every Firebase connector request through `COMMUNICATION_ACCOUNT_ID` and `X-Demac-Communication-Account-Id`.
 
-- Always-on Linux host/VPS.
-- Node.js 22+ for this bridge.
-- Current official `wacli` Linux binary.
-- Public HTTPS hostname for the `/v1/send` endpoint. Put Caddy, nginx, Cloudflare Tunnel, or an equivalent trusted TLS reverse proxy in front of `127.0.0.1:8787`.
-- Outbound HTTPS access to Firebase/Google and WhatsApp.
-- The host must not be ephemeral; `/var/lib/demac-wacli` contains the linked-device session and `/var/lib/demac-whatsapp-bridge` contains any pending webhook events.
+`ops/digitalocean/deploy/server-v2.mjs` fails startup when the required account binding or bridge credentials are missing. Firebase independently verifies the Bearer credential and account binding before accepting ingress, media, outbound poll, or outbound acknowledgement requests.
 
-## 1. Create the service account and directories
+Do not copy a communication account ID into Booking, Technician, Maya, or other domain settings. Those domains consume the canonical Communication configuration through the approved transport/service boundary.
 
-```bash
-sudo useradd --system --home /var/lib/demac-wacli --create-home --shell /usr/sbin/nologin demac-wacli
-sudo install -d -o demac-wacli -g demac-wacli -m 700 /var/lib/demac-wacli
-sudo install -d -o demac-wacli -g demac-wacli -m 700 /var/lib/demac-whatsapp-bridge
-sudo install -d -o root -g root -m 755 /opt/demac-whatsapp-bridge
-```
+## Inbound contract
 
-Copy `server.mjs` and `package.json` from this folder into `/opt/demac-whatsapp-bridge`.
+The bridge forwards provider events; Firebase owns canonicalization and persistence.
 
-Install the current official wacli binary as `/usr/local/bin/wacli` and verify:
+The canonical local identity is derived from:
 
-```bash
-/usr/local/bin/wacli version
-```
+`communicationAccountId + channel + provider + remoteConversationId`
 
-## 2. Create secrets
+Provider message identity is additionally scoped by the provider message ID. The same remote WhatsApp number on two communication accounts must therefore produce different local conversation/message identities.
 
-Copy `demac-whatsapp-bridge.env.example` to `/etc/demac-whatsapp-bridge.env` and replace all placeholders.
+The transport layer must not perform language/intent routing or operator assignment. New inbound communication enters the canonical Communication Center first; Maya Observation/Reply Policy and human ownership are evaluated in their respective governed layers.
 
-Generate two independent secrets, for example:
+## Outbound contract
 
-```bash
-openssl rand -hex 32
-openssl rand -hex 32
-```
+All Wacli outbound commands use `whatsappOutboundQueue` through approved Communication services.
 
-Use one as `BRIDGE_TOKEN` and the other as `WACLI_WEBHOOK_SECRET`.
+The bridge polls Firebase for commands scoped to its one `COMMUNICATION_ACCOUNT_ID`. Before a conversational Maya/human command can be claimed, Firebase revalidates the current sender/ownership epoch. Transactional notifications remain account-scoped but are intentionally independent from conversation ownership.
 
-Protect the file:
+The bridge must reject a command returned for a different communication account and must acknowledge the exact claimed command back to Firebase.
 
-```bash
-sudo chown root:root /etc/demac-whatsapp-bridge.env
-sudo chmod 600 /etc/demac-whatsapp-bridge.env
-```
+## Media and voice
 
-The same values must later be configured in Firebase Secrets:
+Original customer media remains canonical evidence. The bridge may transport/download media, but transcription is a derived server-side capability in Firebase. Customer voice auto-processing is governed separately by Maya voice eligibility, including the deliberate activation cutoff and no-historical-backfill rule.
 
-- `WACLI_BRIDGE_TOKEN` = `BRIDGE_TOKEN`
-- `WACLI_WEBHOOK_SECRET` = the same local HMAC secret
-- `WACLI_BRIDGE_URL` = the public HTTPS origin of this bridge, without `/v1/send`
+## Validation
 
-## 3. Pair the DEMAC WhatsApp Business account
+The repository quality gate for the Firebase/provider boundary is the **WhatsApp wacli Connector** workflow. It validates the current `server-v2.mjs`, the Firebase gateway/boundary, account-binding tests, outbound media authorization, shared Communication dependencies, and rejects resurrection of retired Firebase-to-Droplet sender code.
 
-This is the one required interactive step.
+The **DigitalOcean Remote Ops** workflow is the guarded host-deployment path for `server-v2.mjs`; its remote task verifies that retired `/v1/send` and `/v1/media` surfaces are absent before and after deployment and that the bridge reaches the account-bound outbound-only Firebase endpoints.
 
-Temporarily give the service user a shell or run the command as that user from an interactive root shell:
+A pull-request validation does not deploy the bridge or change the host. Production deployment paths are restricted to their approved `main`/manual controls; this documentation does not authorize a production deployment or service restart.
 
-```bash
-sudo -u demac-wacli env WACLI_STORE_DIR=/var/lib/demac-wacli /usr/local/bin/wacli auth
-```
+## Legacy files in this folder
 
-On the DEMAC WhatsApp Business primary phone:
+The following are **superseded implementation artifacts**, not current deployment instructions:
 
-1. Open **Linked devices**.
-2. Choose **Link a device**.
-3. Scan the QR code shown by `wacli auth`.
-4. Let the initial synchronization finish.
+- `server.mjs`
+- `demac-whatsapp-bridge.env.example`
+- `systemd/demac-whatsapp-bridge.service`
+- `systemd/demac-wacli-sync.service`
+- `package.json`
 
-Then verify:
+They currently remain because repository evidence proves the intended current deployment path but does not by itself prove the exact files/environment presently installed on the live DigitalOcean host. Deleting or replacing host files, changing environment variables, restarting services, rotating credentials, or changing the linked WhatsApp account is a production operation and requires explicit human approval.
 
-```bash
-sudo -u demac-wacli env WACLI_STORE_DIR=/var/lib/demac-wacli /usr/local/bin/wacli auth status
-sudo -u demac-wacli env WACLI_STORE_DIR=/var/lib/demac-wacli /usr/local/bin/wacli doctor --connect
-```
+## NEEDS_HUMAN before legacy removal or production activation
 
-Do not copy `session.db` or expose the wacli state directory. It contains linked-device identity/keys.
+Before the legacy artifacts above can be deleted, an authorized operator must verify the live host is running the account-bound `server-v2.mjs` topology and record the installed service/environment source. Production activation also requires confirmation of the canonical corporate `communicationAccountId` and any other production-only Maya/voice activation settings required by the governing engineering specification.
 
-## 4. Install the services
-
-```bash
-sudo cp systemd/demac-whatsapp-bridge.service /etc/systemd/system/
-sudo cp systemd/demac-wacli-sync.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now demac-whatsapp-bridge.service
-sudo systemctl enable --now demac-wacli-sync.service
-```
-
-Check them:
-
-```bash
-sudo systemctl status demac-whatsapp-bridge.service
-sudo systemctl status demac-wacli-sync.service
-curl -s http://127.0.0.1:8787/health
-```
-
-`demac-wacli-sync.service` intentionally uses:
-
-- `--max-reconnect 0` to keep reconnecting.
-- `--stale-threshold 2m` for stuck connection recovery.
-- `--presence-mode quiet` so the linked device does not continuously advertise available presence.
-- `--send-spacing 2s-5s` to pace delegated sends.
-- `--max-db-size 2GB` as a local storage guardrail.
-- signed webhooks for `message,receipt`.
-- `--webhook-allow-private` because the trusted webhook target is the loopback bridge.
-
-Typing events are not enabled by default because wacli requires normal presence mode for `chat_presence`. DEMAC can enable them later if that tradeoff is desired.
-
-## 5. Publish `/v1/send` over HTTPS
-
-The Node service listens only on `127.0.0.1`. A TLS reverse proxy must expose it to Firebase.
-
-Example conceptual Caddy configuration:
-
-```caddy
-YOUR_BRIDGE_HOSTNAME {
-    reverse_proxy 127.0.0.1:8787
-}
-```
-
-Firewall policy should expose only HTTPS (and SSH/admin access as required). The send endpoint additionally requires `Authorization: Bearer <BRIDGE_TOKEN>`.
-
-The local `/v1/events` endpoint is HMAC-signed and is intended for wacli on localhost; it does not need to be called from the public internet.
-
-## 6. Deploy the Firebase side
-
-From an authenticated Firebase CLI for project `demac-corporation`:
-
-```bash
-firebase functions:secrets:set WACLI_WEBHOOK_SECRET
-firebase functions:secrets:set WACLI_BRIDGE_URL
-firebase functions:secrets:set WACLI_BRIDGE_TOKEN
-```
-
-Then deploy the new/changed functions and rules. A full safe project deployment is acceptable; if deploying selectively, include at least:
-
-- `wacliWebhook`
-- `sendQueuedWacliMessage`
-- `appendCommunicationInternalNote`
-- existing `sendQueuedWhatsAppMessage` because it now ignores explicit non-Meta queue items
-- Firestore rules
-
-After deployment, confirm the actual `wacliWebhook` HTTPS URL and put it into `ERP_WEBHOOK_URL` on the bridge host. Restart the bridge if that value changed.
-
-## 7. End-to-end acceptance test
-
-Use a second WhatsApp number, not the DEMAC number itself.
-
-1. Open ERP Next `/communications` as manager and one office operator in separate sessions.
-2. Both users should appear in the operator presence panel.
-3. From the second phone, send a normal WhatsApp message to DEMAC.
-4. The conversation should appear in **Unassigned** or be auto-routed to an available operator.
-5. Manager view should show the entire conversation and current owner.
-6. A non-owning operator should see pipeline ownership/status and be prevented from replying until taking ownership.
-7. Owner sends a multiline reply from the ERP.
-8. Verify it arrives in WhatsApp with line breaks preserved.
-9. Verify the queue item becomes `sent` and the canonical wacli message appears in the conversation.
-10. Read the message on the second phone and confirm the `read` receipt is stored.
-11. Stop internet/Firebase access briefly, send a WhatsApp message, then restore access. `/health` should show pending webhook events return to zero after successful retry.
-12. Restart both systemd services and confirm the linked session reconnects without another QR.
-
-## Operational notes
-
-- Keep `wacli` and the bridge under the same Linux user/store so sends delegate to the running `sync --follow` process instead of opening competing sessions.
-- Never write directly to `session.db` or `wacli.db`.
-- Back up the host securely, but treat the wacli store as sensitive credentials.
-- The ERP transport is provider-neutral. When Meta Business Verification is approved, switch the configured provider to Meta after acceptance testing; do not rebuild the inbox.
-- This bridge is intended for normal DEMAC customer-service/operational traffic, not bulk marketing automation.
+Until that evidence exists, keep the legacy artifacts classified as superseded and do not use them for new deployments.

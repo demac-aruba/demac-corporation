@@ -325,15 +325,161 @@ async function resolveAppointmentRecipients(db, { clientId, propertyId, selectio
   return applyRecipientSelections(recipients, selections);
 }
 
+function inboundPhoneCandidates(value) {
+  const normalized = normalizePhone(value);
+  if (!normalized) return [];
+  const digits = normalized.replace(/\D/g, '');
+  const local = digits.length === 10 && digits.startsWith('297') ? digits.slice(3) : '';
+  return [...new Set([normalized, digits, local].filter(Boolean))];
+}
+
+async function canonicalPhoneMatches(db, collectionName, phone) {
+  const normalized = normalizePhone(phone);
+  if (!normalized) return [];
+  const candidates = inboundPhoneCandidates(phone);
+  const matches = new Map();
+  for (const field of ['phone', 'whatsapp']) {
+    for (const candidate of candidates) {
+      const snapshot = await db.collection(collectionName).where(field, '==', candidate).get();
+      for (const doc of snapshot.docs) {
+        const data = { id: doc.id, ...doc.data() };
+        if (data.active === false) continue;
+        const identities = [data.phone, data.whatsapp].map(normalizePhone).filter(Boolean);
+        if (identities.includes(normalized)) matches.set(doc.id, data);
+      }
+    }
+  }
+  return [...matches.values()];
+}
+
+async function resolveInboundParty(db, { clientId = '', phone = '', whatsapp = '' } = {}) {
+  const knownClientId = cleanText(clientId, 180);
+  if (knownClientId) {
+    const snapshot = await db.collection('clients').doc(knownClientId).get();
+    if (snapshot.exists && snapshot.data()?.active !== false) {
+      return {
+        status: 'existing',
+        isNewContact: false,
+        ambiguous: false,
+        clientId: snapshot.id || knownClientId,
+        contactIds: [],
+        customer: { id: snapshot.id || knownClientId, ...snapshot.data() },
+        source: 'canonical_client_id',
+      };
+    }
+    return {
+      status: 'ambiguous',
+      isNewContact: false,
+      ambiguous: true,
+      clientId: '',
+      contactIds: [],
+      customer: null,
+      source: 'invalid_canonical_client_id',
+    };
+  }
+
+  const inboundPhone = normalizePhone(whatsapp || phone);
+  if (!inboundPhone) {
+    return {
+      status: 'missing_identity',
+      isNewContact: false,
+      ambiguous: false,
+      clientId: '',
+      contactIds: [],
+      customer: null,
+      source: 'missing_phone',
+    };
+  }
+
+  const [clientMatches, contactMatches] = await Promise.all([
+    canonicalPhoneMatches(db, 'clients', inboundPhone),
+    canonicalPhoneMatches(db, CONTACT_COLLECTION, inboundPhone),
+  ]);
+  const clientIds = new Set(clientMatches.map((item) => cleanText(item.id, 180)).filter(Boolean));
+  for (const contact of contactMatches) {
+    const ownerId = cleanText(contact.clientId, 180);
+    if (!ownerId) {
+      return {
+        status: 'ambiguous',
+        isNewContact: false,
+        ambiguous: true,
+        clientId: '',
+        contactIds: contactMatches.map((item) => item.id).filter(Boolean),
+        customer: null,
+        source: 'orphan_canonical_contact',
+      };
+    }
+    clientIds.add(ownerId);
+  }
+
+  if (!clientIds.size) {
+    return {
+      status: 'new_contact',
+      isNewContact: true,
+      ambiguous: false,
+      clientId: '',
+      contactIds: [],
+      customer: null,
+      source: 'canonical_directory_absence',
+    };
+  }
+  if (clientIds.size !== 1) {
+    return {
+      status: 'ambiguous',
+      isNewContact: false,
+      ambiguous: true,
+      clientId: '',
+      contactIds: contactMatches.map((item) => item.id).filter(Boolean),
+      customer: null,
+      source: 'multiple_canonical_clients',
+    };
+  }
+
+  const resolvedClientId = [...clientIds][0];
+  let customer = clientMatches.find((item) => cleanText(item.id, 180) === resolvedClientId) || null;
+  if (!customer) {
+    const snapshot = await db.collection('clients').doc(resolvedClientId).get();
+    if (!snapshot.exists || snapshot.data()?.active === false) {
+      return {
+        status: 'ambiguous',
+        isNewContact: false,
+        ambiguous: true,
+        clientId: '',
+        contactIds: contactMatches.map((item) => item.id).filter(Boolean),
+        customer: null,
+        source: 'contact_owner_not_active',
+      };
+    }
+    customer = { id: snapshot.id || resolvedClientId, ...snapshot.data() };
+  }
+
+  return {
+    status: 'existing',
+    isNewContact: false,
+    ambiguous: false,
+    clientId: resolvedClientId,
+    contactIds: contactMatches
+      .filter((item) => cleanText(item.clientId, 180) === resolvedClientId)
+      .map((item) => item.id)
+      .filter(Boolean),
+    customer,
+    source: contactMatches.length ? 'canonical_contact' : 'canonical_client_phone',
+  };
+}
+
 module.exports = {
   CONTACT_ASSIGNMENT_COLLECTION,
   CONTACT_COLLECTION,
   applyRecipientSelections,
   assignmentIdFor,
   buildContactRecord,
+  canonicalPhoneMatches,
   contactIdFor,
+  inboundPhoneCandidates,
   normalizeContactLink,
+  normalizePhone,
   normalizeRules,
   resolveAppointmentRecipients,
+  resolveInboundParty,
   writeContactLinks,
 };

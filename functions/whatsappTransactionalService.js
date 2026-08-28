@@ -1,4 +1,5 @@
 const { FieldValue } = require("firebase-admin/firestore");
+const { configuredCommunicationAccountId } = require("./demacCommunicationIdentity");
 
 const ARUBA_COUNTRY_CODE = "297";
 const DEFAULT_TRANSACTIONAL_PROVIDER = "wacli";
@@ -178,6 +179,14 @@ function buildLegacyMetaToWacliMigration(data = {}, activeProvider = DEFAULT_TRA
   };
 }
 
+function requireWacliCommunicationAccount(settings = {}) {
+  const communicationAccountId = configuredCommunicationAccountId(settings);
+  if (communicationAccountId) return communicationAccountId;
+  const error = new Error("DEMAC Wacli communicationAccountId is not configured. No transactional WhatsApp message was queued.");
+  error.code = "whatsapp_communication_account_missing";
+  throw error;
+}
+
 function createWhatsAppTransactionalService({ db } = {}) {
   if (!db || typeof db.collection !== "function") {
     throw new Error("A Firestore-compatible db is required for transactional WhatsApp messaging.");
@@ -193,6 +202,7 @@ function createWhatsAppTransactionalService({ db } = {}) {
     }
     return {
       ...settings,
+      communicationAccountId: configuredCommunicationAccountId(settings),
       transactionalProvider: normalizeTransactionalProvider(settings.transactionalProvider),
     };
   }
@@ -219,7 +229,7 @@ function createWhatsAppTransactionalService({ db } = {}) {
     }
   }
 
-  async function queueWacliText({ queueId, to, text, metadata = {} } = {}) {
+  async function queueWacliText({ queueId, to, text, metadata = {}, transportSettings = null } = {}) {
     const normalizedTo = normalizeWacliRecipient(to);
     if (!validWacliRecipient(normalizedTo)) {
       return { queued: false, created: false, provider: "wacli", reason: "invalid-whatsapp-recipient", to: normalizedTo, queueId: safeDocumentId(queueId) };
@@ -230,10 +240,14 @@ function createWhatsAppTransactionalService({ db } = {}) {
       error.code = "whatsapp_text_missing";
       throw error;
     }
+    const settings = transportSettings || await getTransportSettings();
+    const communicationAccountId = requireWacliCommunicationAccount(settings);
     const id = safeDocumentId(queueId);
     const result = await createQueueItem(id, {
       ...metadata,
       provider: "wacli",
+      communicationAccountId,
+      outboundClass: "transactional",
       type: "text",
       to: normalizedTo,
       text: normalizedText,
@@ -243,7 +257,15 @@ function createWhatsAppTransactionalService({ db } = {}) {
       createdAt: FieldValue.serverTimestamp(),
       createdAtIso: new Date().toISOString(),
     });
-    return { queued: true, created: result.created, existing: !result.created, provider: "wacli", queueId: id, to: normalizedTo };
+    return {
+      queued: true,
+      created: result.created,
+      existing: !result.created,
+      provider: "wacli",
+      communicationAccountId,
+      queueId: id,
+      to: normalizedTo,
+    };
   }
 
   async function queueMetaTemplate({
@@ -269,6 +291,7 @@ function createWhatsAppTransactionalService({ db } = {}) {
     const result = await createQueueItem(id, {
       ...metadata,
       provider: "meta",
+      outboundClass: "transactional",
       to: normalizedTo,
       phoneNumberId: settings.phoneNumberId,
       templateName: normalizedTemplateName,
@@ -303,7 +326,13 @@ function createWhatsAppTransactionalService({ db } = {}) {
     }
     const explicitText = String(text || "").trim();
     const fallbackText = explicitText ? "" : renderTransactionalText({ templateName, bodyParameters, languageCode });
-    return queueWacliText({ queueId, to, text: explicitText || fallbackText, metadata });
+    return queueWacliText({
+      queueId,
+      to,
+      text: explicitText || fallbackText,
+      metadata,
+      transportSettings: settings,
+    });
   }
 
   return {
@@ -327,6 +356,7 @@ module.exports.normalizeTransactionalProvider = normalizeTransactionalProvider;
 module.exports.normalizeWacliRecipient = normalizeWacliRecipient;
 module.exports.normalizeWhatsAppPhone = normalizeWhatsAppPhone;
 module.exports.renderTransactionalText = renderTransactionalText;
+module.exports.requireWacliCommunicationAccount = requireWacliCommunicationAccount;
 module.exports.safeDocumentId = safeDocumentId;
 module.exports.validWacliRecipient = validWacliRecipient;
 module.exports.validWhatsAppPhone = validWhatsAppPhone;

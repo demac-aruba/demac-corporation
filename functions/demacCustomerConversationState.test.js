@@ -1,16 +1,210 @@
-const test=require('node:test');
-const assert=require('node:assert/strict');
-const {compactCanonicalOffer,loadCustomerConversationState,recordCustomerConversationOutcome,sessionIdentity,toolStatePatch,updateCustomerConversationStateAfterTool}=require('./demacCustomerConversationState');
-class Snap{constructor(id,v){this.id=id;this.v=v;this.exists=v!==undefined}data(){return this.v}}
-class Doc{constructor(db,c,id){this.db=db;this.c=c;this.id=id}async get(){return new Snap(this.id,this.db.map(this.c).get(this.id))}async set(v,o){const m=this.db.map(this.c),cur=m.get(this.id);m.set(this.id,o?.merge?{...(cur||{}),...v}:v)}}
-class Coll{constructor(db,c){this.db=db;this.c=c}doc(id){return new Doc(this.db,this.c,id)}}
-class Db{constructor(seed={}){this.m=new Map();for(const [c,items] of Object.entries(seed)){const mm=new Map();for(const x of items){const {id,...r}=x;mm.set(id,r)}this.m.set(c,mm)}}map(c){if(!this.m.has(c))this.m.set(c,new Map());return this.m.get(c)}collection(c){return new Coll(this,c)}read(c,id){return this.map(c).get(id)}}
-test('session identity is stable by provider plus conversation',()=>{const a=sessionIdentity({provider:'wacli',conversationId:'conv-1'});const b=sessionIdentity({provider:'wacli',conversationId:'conv-1'});assert.equal(a.sessionId,b.sessionId);assert.match(a.sessionId,/^CAS-[A-F0-9]{40}$/)});
-test('session stores only activeOfferId/version and loads offer canonically',async()=>{const ctx={provider:'wacli',conversationId:'conv-1'};const id=sessionIdentity(ctx).sessionId;const db=new Db({customerAgentSessions:[{id,activeOfferId:'OFR-1',activeOfferVersion:2,customerId:'c1'}],bookingOffers:[{id:'OFR-1',version:2,status:'open',expiresAt:'2099-01-01T00:00:00Z',request:{customerId:'c1',propertyId:'p1',workLines:[{presetId:'standard_service',serviceId:'s1',quantity:2}]},options:[{id:'o1',date:'2098-12-20',time:'13:30',address:'Wayaca 217'}]}]});const r=await loadCustomerConversationState({db,context:ctx,now:new Date('2098-12-01T00:00:00Z')});assert.equal(r.session.activeOfferId,'OFR-1');assert.equal(r.activeOffer.id,'OFR-1');assert.equal(r.activeOffer.options[0].id,'o1');assert.equal('activeOffer' in db.read('customerAgentSessions',id),false)});
-test('expired canonical offer is cleared from session reference',async()=>{const ctx={conversationId:'conv-1'};const id=sessionIdentity(ctx).sessionId;const db=new Db({customerAgentSessions:[{id,activeOfferId:'OFR-old',activeOfferVersion:1}],bookingOffers:[{id:'OFR-old',version:1,status:'open',expiresAt:'2020-01-01T00:00:00Z',options:[]}]});const r=await loadCustomerConversationState({db,context:ctx,now:new Date('2026-08-16T00:00:00Z')});assert.equal(r.activeOffer,null);assert.equal(r.session.activeOfferId,'');assert.equal(db.read('customerAgentSessions',id).activeOfferId,'')});
-test('check availability patch references canonical offer without duplicating options',()=>{const p=toolStatePatch('check_availability',{}, {success:true,available:true,offer:{id:'OFR-1',version:3,request:{customerId:'c1',propertyId:'p1',workLines:[{presetId:'standard_service',serviceId:'s1',quantity:2}]},options:[{id:'o1'}]}});assert.deepEqual(p,{activeOfferId:'OFR-1',activeOfferVersion:3,customerId:'c1',propertyId:'p1',presetId:'standard_service',serviceId:'s1',quantity:2});assert.equal('options' in p,false)});
-test('appointment success clears active offer and stores appointment id',()=>{assert.deepEqual(toolStatePatch('create_appointment',{}, {success:true,appointmentId:'APT-1'}),{appointmentId:'APT-1',activeOfferId:'',activeOfferVersion:0})});
-test('state updates after customer and booking tools',async()=>{const db=new Db();const ctx={provider:'wacli',conversationId:'conv-1',inboundMessageId:'msg-1'};await updateCustomerConversationStateAfterTool({db,context:ctx,toolName:'resolve_customer',result:{success:true,resolved:true,customerId:'c1'}});await updateCustomerConversationStateAfterTool({db,context:ctx,toolName:'resolve_property',result:{success:true,resolved:true,propertyId:'p1'}});const s=db.read('customerAgentSessions',sessionIdentity(ctx).sessionId);assert.equal(s.customerId,'c1');assert.equal(s.propertyId,'p1');assert.equal(s.lastInboundMessageId,'msg-1')});
-test('terminal handoff outcome stores semantic routing state',async()=>{const db=new Db();const ctx={conversationId:'conv-1'};await recordCustomerConversationOutcome({db,context:ctx,outcome:'handoff',language:'es',requiresHuman:true,handoffQueue:'finance',handoffReason:'Customer disputes payment allocation.'});const s=db.read('customerAgentSessions',sessionIdentity(ctx).sessionId);assert.equal(s.status,'HUMAN_ACTIVE');assert.equal(s.requiresHuman,true);assert.equal(s.lastOutcome,'handoff');assert.equal(s.handoffQueue,'finance');assert.equal(s.handoffReason,'Customer disputes payment allocation.')});
-test('non-handoff outcome clears stale semantic routing state',async()=>{const ctx={conversationId:'conv-1'};const id=sessionIdentity(ctx).sessionId;const db=new Db({customerAgentSessions:[{id,status:'HUMAN_ACTIVE',requiresHuman:true,handoffQueue:'complaints',handoffReason:'Old complaint'}]});await recordCustomerConversationOutcome({db,context:ctx,outcome:'reply',language:'es',requiresHuman:false});const s=db.read('customerAgentSessions',id);assert.equal(s.status,'AI_ACTIVE');assert.equal(s.requiresHuman,false);assert.equal(s.handoffQueue,'');assert.equal(s.handoffReason,'')});
-test('compact offer exposes only booking facts needed for reasoning',()=>{const o=compactCanonicalOffer({id:'OFR-1',version:1,status:'open',expiresAt:'2099-01-01',secret:'x',request:{customerId:'c1',propertyId:'p1',workLines:[{id:'w1',presetId:'p',serviceId:'s',quantity:1}]},options:[{id:'o1',date:'2098-01-01',time:'08:30',assignments:[{technicianIds:['secret']}]}]});assert.equal(o.secret,undefined);assert.equal(o.options[0].assignments,undefined);assert.equal(o.request.customerId,'c1')});
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const {
+  compactCanonicalOffer,
+  loadCustomerConversationState,
+  recordCustomerConversationOutcome,
+  sessionIdentity,
+  toolStatePatch,
+  updateCustomerConversationStateAfterTool,
+} = require("./demacCustomerConversationState");
+
+class Snap {
+  constructor(id, value) { this.id = id; this.value = value; this.exists = value !== undefined; }
+  data() { return this.value; }
+}
+class Doc {
+  constructor(db, collection, id) { this.db = db; this.collection = collection; this.id = id; }
+  async get() { return new Snap(this.id, this.db.map(this.collection).get(this.id)); }
+  async set(value, options) {
+    const map = this.db.map(this.collection);
+    const current = map.get(this.id);
+    map.set(this.id, options?.merge ? { ...(current || {}), ...value } : value);
+  }
+}
+class Coll {
+  constructor(db, collection) { this.db = db; this.collection = collection; }
+  doc(id) { return new Doc(this.db, this.collection, id); }
+}
+class Db {
+  constructor(seed = {}) {
+    this.maps = new Map();
+    for (const [collection, items] of Object.entries(seed)) {
+      const map = new Map();
+      for (const item of items) {
+        const { id, ...rest } = item;
+        map.set(id, rest);
+      }
+      this.maps.set(collection, map);
+    }
+  }
+  map(collection) {
+    if (!this.maps.has(collection)) this.maps.set(collection, new Map());
+    return this.maps.get(collection);
+  }
+  collection(collection) { return new Coll(this, collection); }
+  read(collection, id) { return this.map(collection).get(id); }
+}
+
+const CANONICAL_CONVERSATION = "COMM-1111111111111111111111111111111111111111";
+const OTHER_CANONICAL_CONVERSATION = "COMM-2222222222222222222222222222222222222222";
+
+function context(overrides = {}) {
+  return {
+    communicationAccountId: "demac-wa-corporate",
+    channel: "whatsapp",
+    provider: "wacli",
+    conversationId: CANONICAL_CONVERSATION,
+    ...overrides,
+  };
+}
+
+test("session identity is stable and follows the account-scoped canonical conversation id", () => {
+  const first = sessionIdentity(context());
+  const duplicate = sessionIdentity(context());
+  const otherConversation = sessionIdentity(context({
+    communicationAccountId: "demac-wa-test",
+    conversationId: OTHER_CANONICAL_CONVERSATION,
+  }));
+  assert.equal(first.sessionId, duplicate.sessionId);
+  assert.notEqual(first.sessionId, otherConversation.sessionId);
+  assert.match(first.sessionId, /^CAS-[A-F0-9]{40}$/);
+});
+
+test("session identity does not re-key when account metadata is added to the same canonical conversation", () => {
+  const withoutMetadata = sessionIdentity(context({ communicationAccountId: "" }));
+  const withMetadata = sessionIdentity(context());
+  assert.equal(withoutMetadata.sessionId, withMetadata.sessionId);
+});
+
+test("session identity fails closed for raw phone JID or noncanonical conversation fallbacks", () => {
+  assert.equal(sessionIdentity(context({ provider: "" })), null);
+  assert.equal(sessionIdentity(context({ conversationId: "conv-1" })), null);
+  assert.equal(sessionIdentity({ provider: "wacli", contactPhone: "2975600000" }), null);
+  assert.equal(sessionIdentity({ provider: "wacli", contactJid: "2975600000@s.whatsapp.net" }), null);
+});
+
+test("session stores only activeOfferId/version and loads offer canonically", async () => {
+  const ctx = context();
+  const id = sessionIdentity(ctx).sessionId;
+  const db = new Db({
+    customerAgentSessions: [{ id, activeOfferId: "OFR-1", activeOfferVersion: 2, customerId: "c1" }],
+    bookingOffers: [{
+      id: "OFR-1",
+      version: 2,
+      status: "open",
+      expiresAt: "2099-01-01T00:00:00Z",
+      request: { customerId: "c1", propertyId: "p1", workLines: [{ presetId: "standard_service", serviceId: "s1", quantity: 2 }] },
+      options: [{ id: "o1", date: "2098-12-20", time: "13:30", address: "Wayaca 217" }],
+    }],
+  });
+  const result = await loadCustomerConversationState({ db, context: ctx, now: new Date("2098-12-01T00:00:00Z") });
+  assert.equal(result.session.activeOfferId, "OFR-1");
+  assert.equal(result.activeOffer.id, "OFR-1");
+  assert.equal(result.activeOffer.options[0].id, "o1");
+  assert.equal("activeOffer" in db.read("customerAgentSessions", id), false);
+});
+
+test("expired canonical offer is cleared from session reference", async () => {
+  const ctx = context();
+  const id = sessionIdentity(ctx).sessionId;
+  const db = new Db({
+    customerAgentSessions: [{ id, activeOfferId: "OFR-old", activeOfferVersion: 1 }],
+    bookingOffers: [{ id: "OFR-old", version: 1, status: "open", expiresAt: "2020-01-01T00:00:00Z", options: [] }],
+  });
+  const result = await loadCustomerConversationState({ db, context: ctx, now: new Date("2026-08-16T00:00:00Z") });
+  assert.equal(result.activeOffer, null);
+  assert.equal(result.session.activeOfferId, "");
+  assert.equal(db.read("customerAgentSessions", id).activeOfferId, "");
+});
+
+test("check availability patch references canonical offer without duplicating options", () => {
+  const patch = toolStatePatch("check_availability", {}, {
+    success: true,
+    available: true,
+    offer: {
+      id: "OFR-1",
+      version: 3,
+      request: { customerId: "c1", propertyId: "p1", workLines: [{ presetId: "standard_service", serviceId: "s1", quantity: 2 }] },
+      options: [{ id: "o1" }],
+    },
+  });
+  assert.deepEqual(patch, {
+    activeOfferId: "OFR-1",
+    activeOfferVersion: 3,
+    customerId: "c1",
+    propertyId: "p1",
+    presetId: "standard_service",
+    serviceId: "s1",
+    quantity: 2,
+  });
+  assert.equal("options" in patch, false);
+});
+
+test("appointment success clears active offer and stores appointment id", () => {
+  assert.deepEqual(toolStatePatch("create_appointment", {}, { success: true, appointmentId: "APT-1" }), {
+    appointmentId: "APT-1",
+    activeOfferId: "",
+    activeOfferVersion: 0,
+  });
+});
+
+test("state updates persist canonical communication metadata when available", async () => {
+  const db = new Db();
+  const ctx = context({ inboundMessageId: "MSG-1" });
+  await updateCustomerConversationStateAfterTool({ db, context: ctx, toolName: "resolve_customer", result: { success: true, resolved: true, customerId: "c1" } });
+  await updateCustomerConversationStateAfterTool({ db, context: ctx, toolName: "resolve_property", result: { success: true, resolved: true, propertyId: "p1" } });
+  const state = db.read("customerAgentSessions", sessionIdentity(ctx).sessionId);
+  assert.equal(state.customerId, "c1");
+  assert.equal(state.propertyId, "p1");
+  assert.equal(state.lastInboundMessageId, "MSG-1");
+  assert.equal(state.communicationAccountId, "demac-wa-corporate");
+  assert.equal(state.conversationId, CANONICAL_CONVERSATION);
+});
+
+test("terminal handoff outcome stores semantic routing state without changing Communication Center ownership", async () => {
+  const db = new Db();
+  const ctx = context();
+  await recordCustomerConversationOutcome({
+    db,
+    context: ctx,
+    outcome: "handoff",
+    language: "es",
+    requiresHuman: true,
+    handoffQueue: "finance",
+    handoffReason: "Customer disputes payment allocation.",
+  });
+  const state = db.read("customerAgentSessions", sessionIdentity(ctx).sessionId);
+  assert.equal(state.status, "HUMAN_ACTIVE");
+  assert.equal(state.requiresHuman, true);
+  assert.equal(state.lastOutcome, "handoff");
+  assert.equal(state.handoffQueue, "finance");
+  assert.equal(state.handoffReason, "Customer disputes payment allocation.");
+});
+
+test("non-handoff outcome clears stale semantic routing state", async () => {
+  const ctx = context();
+  const id = sessionIdentity(ctx).sessionId;
+  const db = new Db({ customerAgentSessions: [{ id, status: "HUMAN_ACTIVE", requiresHuman: true, handoffQueue: "complaints", handoffReason: "Old complaint" }] });
+  await recordCustomerConversationOutcome({ db, context: ctx, outcome: "reply", language: "es", requiresHuman: false });
+  const state = db.read("customerAgentSessions", id);
+  assert.equal(state.status, "AI_ACTIVE");
+  assert.equal(state.requiresHuman, false);
+  assert.equal(state.handoffQueue, "");
+  assert.equal(state.handoffReason, "");
+});
+
+test("compact offer exposes only booking facts needed for reasoning", () => {
+  const offer = compactCanonicalOffer({
+    id: "OFR-1",
+    version: 1,
+    status: "open",
+    expiresAt: "2099-01-01",
+    secret: "x",
+    request: { customerId: "c1", propertyId: "p1", workLines: [{ id: "w1", presetId: "p", serviceId: "s", quantity: 1 }] },
+    options: [{ id: "o1", date: "2098-01-01", time: "08:30", assignments: [{ technicianIds: ["secret"] }] }],
+  });
+  assert.equal(offer.secret, undefined);
+  assert.equal(offer.options[0].assignments, undefined);
+  assert.equal(offer.request.customerId, "c1");
+});

@@ -13,8 +13,9 @@ const {
   validateCapacityLocks,
   validateWorkOrders,
 } = require("./bookingAuthorityFirestore");
+const { createBookingDispatchSafetyAuthority } = require("./bookingAuthorityDispatchSafety");
 
-const APPOINTMENT_LIFECYCLE_VERSION = 6;
+const APPOINTMENT_LIFECYCLE_VERSION = 7;
 const RESCHEDULE_CHANGE_KINDS = new Set(["customer_reschedule", "operational_move", "details_edited"]);
 
 function defaultServerTimestamp() {
@@ -146,6 +147,7 @@ function createBookingAppointmentLifecycle({
     throw new Error("A Firestore-compatible db is required.");
   }
   if (!schedulingProvider) throw new Error("A schedulingProvider is required.");
+  const dispatchSafety = createBookingDispatchSafetyAuthority({ db, clock, collections });
 
   async function cancelAppointment({ appointmentId, reason, note = "", actor = {} } = {}) {
     const id = cleanText(appointmentId, 180);
@@ -186,6 +188,21 @@ function createBookingAppointmentLifecycle({
         lastLifecycleSource: actorInfo.source,
         updatedAt: serverTimestamp(),
       });
+
+      const dispatchResolution = await dispatchSafety.releaseDispatchHoldInTransaction(transaction, {
+        appointmentRef,
+        appointment,
+        appointmentId: id,
+        resolution: "booking_cancelled",
+        actor: { ...actor, source: actor.source || "booking-authority-lifecycle" },
+        now,
+        projectWorkOrders: false,
+      });
+      const finalAppointment = {
+        ...appointment,
+        ...patch,
+        dispatchHold: dispatchResolution.dispatchHold || appointment.dispatchHold,
+      };
       transaction.set(appointmentRef, patch, { merge: true });
 
       for (const workOrderId of Array.isArray(appointment.workOrderIds) ? appointment.workOrderIds : []) {
@@ -197,6 +214,12 @@ function createBookingAppointmentLifecycle({
           updatedAt: now.toISOString(),
         }), { merge: true });
       }
+      dispatchSafety.writeWorkOrderDispatchProjectionInTransaction(transaction, {
+        appointmentId: id,
+        appointment: finalAppointment,
+        workOrderIds: appointment.workOrderIds,
+        now,
+      });
       for (const lockId of Array.isArray(appointment.capacityLockIds) ? appointment.capacityLockIds : []) {
         transaction.set(db.collection(collections.capacityLocks).doc(lockId), compactObject({
           active: false,
@@ -206,7 +229,7 @@ function createBookingAppointmentLifecycle({
         }), { merge: true });
       }
 
-      return { success: true, replayed: false, appointmentId: id, appointment: { ...appointment, ...patch } };
+      return { success: true, replayed: false, appointmentId: id, appointment: finalAppointment };
     });
   }
 
@@ -420,7 +443,19 @@ function createBookingAppointmentLifecycle({
           rescheduledAtIso: now.toISOString(),
         };
 
-      transaction.set(appointmentRef, compactObject({
+      const dispatchResolution = normalizedChangeKind === "details_edited"
+        ? { dispatchHold: current.dispatchHold }
+        : await dispatchSafety.releaseDispatchHoldInTransaction(transaction, {
+          appointmentRef,
+          appointment: current,
+          appointmentId: id,
+          resolution: normalizedChangeKind === "operational_move" ? "booking_operational_move" : "booking_rescheduled",
+          actor: { ...actor, source: actor.source || "booking-authority-lifecycle" },
+          now,
+          projectWorkOrders: false,
+        });
+      const finalAppointment = {
+        ...current,
         status: "confirmed",
         offerId: canonicalOfferId,
         offerVersion: Number(offerVersion),
@@ -444,6 +479,33 @@ function createBookingAppointmentLifecycle({
         lastLifecycleActorId: actorInfo.actorId,
         lastLifecycleActorName: actorInfo.actorName,
         lastLifecycleSource: actorInfo.source,
+        dispatchHold: dispatchResolution.dispatchHold || current.dispatchHold,
+      };
+
+      transaction.set(appointmentRef, compactObject({
+        status: finalAppointment.status,
+        offerId: finalAppointment.offerId,
+        offerVersion: finalAppointment.offerVersion,
+        selectedOptionId: finalAppointment.selectedOptionId,
+        date: finalAppointment.date,
+        startTime: finalAppointment.startTime,
+        endTime: finalAppointment.endTime,
+        workLines: finalAppointment.workLines,
+        workItems: finalAppointment.workItems,
+        constraints: finalAppointment.constraints,
+        notes: finalAppointment.notes,
+        assignments: finalAppointment.assignments,
+        primaryVanId: finalAppointment.primaryVanId,
+        workOrderIds: finalAppointment.workOrderIds,
+        capacityLockIds: finalAppointment.capacityLockIds,
+        ...lifecycleMetadata,
+        lastScheduleChangeKind: finalAppointment.lastScheduleChangeKind,
+        customerNotificationRecommended,
+        updatedAtIso: now.toISOString(),
+        lifecycleHistory,
+        lastLifecycleActorId: actorInfo.actorId,
+        lastLifecycleActorName: actorInfo.actorName,
+        lastLifecycleSource: actorInfo.source,
         updatedAt: serverTimestamp(),
       }), { merge: true });
 
@@ -459,14 +521,28 @@ function createBookingAppointmentLifecycle({
           updatedAt: now.toISOString(),
         }), { merge: true });
       }
-      for (const oldWorkOrderId of oldWorkOrderIds) {
-        if (newWorkOrderIds.has(oldWorkOrderId)) continue;
+      dispatchSafety.writeWorkOrderDispatchProjectionInTransaction(transaction, {
+        appointmentId: id,
+        appointment: finalAppointment,
+        workOrderIds,
+        now,
+      });
+      const replacedWorkOrderIds = oldWorkOrderIds.filter((oldWorkOrderId) => !newWorkOrderIds.has(oldWorkOrderId));
+      for (const oldWorkOrderId of replacedWorkOrderIds) {
         transaction.set(db.collection(collections.workOrders).doc(oldWorkOrderId), compactObject({
           status: "Cancelada",
           replacedByReschedule: normalizedChangeKind !== "details_edited",
           replacedByDetailsEdit: normalizedChangeKind === "details_edited",
           updatedAt: now.toISOString(),
         }), { merge: true });
+      }
+      if (replacedWorkOrderIds.length) {
+        dispatchSafety.writeWorkOrderDispatchProjectionInTransaction(transaction, {
+          appointmentId: id,
+          appointment: { ...finalAppointment, status: "cancelled", dispatchHold: { ...(finalAppointment.dispatchHold || {}), active: false } },
+          workOrderIds: replacedWorkOrderIds,
+          now,
+        });
       }
       for (const oldLockId of oldLockIds) {
         if (newLockIds.has(oldLockId)) continue;
@@ -502,22 +578,7 @@ function createBookingAppointmentLifecycle({
         appointmentId: id,
         changeKind: normalizedChangeKind,
         customerNotificationRecommended,
-        appointment: {
-          ...current,
-          status: "confirmed",
-          date: refreshedOption.date,
-          startTime: refreshedOption.time,
-          endTime: refreshedOption.endTime,
-          workLines: currentRequest.workLines,
-          workItems: refreshedOption.workItems,
-          constraints: currentRequest.constraints,
-          notes: currentRequest.notes,
-          assignments: refreshedOption.assignments,
-          primaryVanId: cleanText(refreshedOption.assignments?.[0]?.vanId, 120),
-          workOrderIds,
-          capacityLockIds: newLocks.map((lock) => lock.id),
-          lifecycleHistory,
-        },
+        appointment: finalAppointment,
         workOrderIds,
       };
     });

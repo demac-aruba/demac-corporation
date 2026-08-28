@@ -12,6 +12,43 @@ const {
   validWhatsAppPhone,
 } = require("./whatsappTransactionalService");
 
+const WACLI_SETTINGS = Object.freeze({ communicationAccountId: "demac-wa-corporate" });
+
+function queueTestDb(writes, settings = WACLI_SETTINGS) {
+  return {
+    collection(name) {
+      if (name === "businessSettings") {
+        return {
+          doc() {
+            return {
+              async get() {
+                return { exists: Boolean(settings), data: () => settings || {} };
+              },
+            };
+          },
+        };
+      }
+      if (name === "whatsappOutboundQueue") {
+        return {
+          doc(id) {
+            return {
+              async create(payload) {
+                if (writes.has(id)) {
+                  const error = new Error("already exists");
+                  error.code = 6;
+                  throw error;
+                }
+                writes.set(id, payload);
+              },
+            };
+          },
+        };
+      }
+      throw new Error(`Unexpected collection ${name}`);
+    },
+  };
+}
+
 test("Aruba local seven-digit numbers are normalized to country code 297", () => {
   assert.equal(normalizeWhatsAppPhone("560-6772"), "2975606772");
   assert.equal(normalizeWhatsAppPhone("+297 560 6772"), "2975606772");
@@ -102,41 +139,9 @@ test("legacy Meta adoption rejects failed, processing, unknown, or malformed mes
   assert.equal(buildLegacyMetaToWacliMigration({ ...base, to: "123" }, "wacli"), null);
 });
 
-test("transactional messages queue wacli text without requiring Meta sender settings", async () => {
+test("transactional messages queue account-scoped wacli text without requiring Meta sender settings", async () => {
   const writes = new Map();
-  const db = {
-    collection(name) {
-      if (name === "businessSettings") {
-        return {
-          doc() {
-            return {
-              async get() {
-                return { exists: false, data: () => ({}) };
-              },
-            };
-          },
-        };
-      }
-      if (name === "whatsappOutboundQueue") {
-        return {
-          doc(id) {
-            return {
-              async create(payload) {
-                if (writes.has(id)) {
-                  const error = new Error("already exists");
-                  error.code = 6;
-                  throw error;
-                }
-                writes.set(id, payload);
-              },
-            };
-          },
-        };
-      }
-      throw new Error(`Unexpected collection ${name}`);
-    },
-  };
-  const service = createWhatsAppTransactionalService({ db });
+  const service = createWhatsAppTransactionalService({ db: queueTestDb(writes) });
   const result = await service.queueTransactionalMessage({
     queueId: "reminder-1",
     to: "560-6772",
@@ -147,43 +152,33 @@ test("transactional messages queue wacli text without requiring Meta sender sett
 
   assert.equal(result.provider, "wacli");
   assert.equal(result.to, "2975606772");
+  assert.equal(result.communicationAccountId, "demac-wa-corporate");
   assert.equal(queued.provider, "wacli");
+  assert.equal(queued.communicationAccountId, "demac-wa-corporate");
+  assert.equal(queued.outboundClass, "transactional");
   assert.equal(queued.type, "text");
   assert.equal(queued.text, "Reminder test");
   assert.equal(queued.phoneNumberId, undefined);
   assert.equal(queued.templateName, undefined);
 });
 
+test("wacli transactional queue fails closed when canonical communication account is missing", async () => {
+  const writes = new Map();
+  const service = createWhatsAppTransactionalService({ db: queueTestDb(writes, null) });
+  await assert.rejects(
+    service.queueTransactionalMessage({
+      queueId: "missing-account",
+      to: "560-6772",
+      text: "Should not queue",
+    }),
+    (error) => error?.code === "whatsapp_communication_account_missing",
+  );
+  assert.equal(writes.size, 0);
+});
+
 test("explicit domain-rendered text wins for known wacli appointment templates", async () => {
   const writes = new Map();
-  const db = {
-    collection(name) {
-      if (name === "businessSettings") {
-        return {
-          doc() {
-            return {
-              async get() {
-                return { exists: false, data: () => ({}) };
-              },
-            };
-          },
-        };
-      }
-      if (name === "whatsappOutboundQueue") {
-        return {
-          doc(id) {
-            return {
-              async create(payload) {
-                writes.set(id, payload);
-              },
-            };
-          },
-        };
-      }
-      throw new Error(`Unexpected collection ${name}`);
-    },
-  };
-  const service = createWhatsAppTransactionalService({ db });
+  const service = createWhatsAppTransactionalService({ db: queueTestDb(writes) });
   const papiamentoText = [
     "Bon tardi Stefany,",
     "",
@@ -201,23 +196,13 @@ test("explicit domain-rendered text wins for known wacli appointment templates",
   });
 
   assert.equal(writes.get("reminder-domain-rendered").text, papiamentoText);
+  assert.equal(writes.get("reminder-domain-rendered").communicationAccountId, "demac-wa-corporate");
   assert.doesNotMatch(writes.get("reminder-domain-rendered").text, /^Hello /);
 });
 
 test("legacy renderer remains a fallback when an older wacli caller supplies no text", async () => {
   const writes = new Map();
-  const db = {
-    collection(name) {
-      if (name === "businessSettings") {
-        return { doc() { return { async get() { return { exists: false, data: () => ({}) }; } }; } };
-      }
-      if (name === "whatsappOutboundQueue") {
-        return { doc(id) { return { async create(payload) { writes.set(id, payload); } }; } };
-      }
-      throw new Error(`Unexpected collection ${name}`);
-    },
-  };
-  const service = createWhatsAppTransactionalService({ db });
+  const service = createWhatsAppTransactionalService({ db: queueTestDb(writes) });
   await service.queueTransactionalMessage({
     queueId: "legacy-reminder-fallback",
     to: "560-6772",
@@ -226,4 +211,5 @@ test("legacy renderer remains a fallback when an older wacli caller supplies no 
     bodyParameters: ["Stefany", "22 de agosto de 2026", "8:30 a. m.", "Piedra Plat 1C", "Standard Service"],
   });
   assert.match(writes.get("legacy-reminder-fallback").text, /^Hola Stefany,/);
+  assert.equal(writes.get("legacy-reminder-fallback").outboundClass, "transactional");
 });
