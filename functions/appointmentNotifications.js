@@ -15,6 +15,7 @@ const {
 const { createOperatingCalendarService } = require("./operatingCalendarService");
 const {
   createTechnicianScheduleChangeService,
+  isAdhocSupportOrder,
   sameDayScheduleChangeRequired,
 } = require("./technicianScheduleChangeService");
 
@@ -41,19 +42,26 @@ exports.queueAppointmentConfirmation = onDocumentWritten(
     const order = { id: afterSnapshot.id, ...afterSnapshot.data() };
     const created = !beforeSnapshot?.exists;
 
-    // The existing Work Order trigger remains the one write boundary for both
-    // customer confirmations and internal Van schedule-change alerts. Internal
-    // alerts use the transactional WhatsApp authority but never inherit customer
-    // recipients, so support assignments cannot create duplicate customer messages.
+    // The Work Order write remains the single event boundary for customer
+    // communication and internal Van schedule changes. Ad-hoc support is a SUPPORT
+    // Work Order on the same appointment, so it receives a specialized dual-Van
+    // internal notification while still owning no customer communication.
     if (sameDayScheduleChangeRequired(before, order)) {
       try {
-        const result = await technicianScheduleChanges.queueSameDayChange({
-          order,
-          eventId: event.id,
-          reason: created ? "same-day-work-created" : "same-day-schedule-updated",
-        });
+        const supportChange = isAdhocSupportOrder(order);
+        const result = supportChange
+          ? await technicianScheduleChanges.queueAdhocSupportChange({
+            order,
+            eventId: event.id,
+            reason: created ? "same-day-adhoc-support-created" : "same-day-adhoc-support-updated",
+          })
+          : await technicianScheduleChanges.queueSameDayChange({
+            order,
+            eventId: event.id,
+            reason: created ? "same-day-work-created" : "same-day-schedule-updated",
+          });
         if (!result.queued) {
-          logger.info("Same-day Van schedule change was not queued.", {
+          logger.info(supportChange ? "Same-day support Van alerts were not queued." : "Same-day Van schedule change was not queued.", {
             workOrderId: order.id,
             reason: result.reason,
           });
@@ -61,6 +69,7 @@ exports.queueAppointmentConfirmation = onDocumentWritten(
       } catch (error) {
         logger.error("Could not queue a same-day Van schedule change.", {
           workOrderId: order.id,
+          supportChange: isAdhocSupportOrder(order),
           error,
         });
         throw error;
