@@ -60,7 +60,14 @@ export function validateVanCrew(van: CanonicalVan, staffProfiles: CanonicalStaff
   return true;
 }
 
-export function buildVanSaveRecord(van: CanonicalVan, staffProfiles: CanonicalStaffProfile[], existingVans: CanonicalVan[] = [], now = new Date().toISOString()) {
+export function buildVanSaveRecord(
+  van: CanonicalVan,
+  staffProfiles: CanonicalStaffProfile[],
+  existingVansOrNow: CanonicalVan[] | string = [],
+  explicitNow?: string,
+) {
+  const existingVans = Array.isArray(existingVansOrNow) ? existingVansOrNow : [];
+  const now = typeof existingVansOrNow === 'string' ? existingVansOrNow : explicitNow ?? new Date().toISOString();
   validateVanCrew(van, staffProfiles, existingVans);
   const crewIds = regularCrewIds(van);
   return {
