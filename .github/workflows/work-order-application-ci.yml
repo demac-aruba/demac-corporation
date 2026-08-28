@@ -3,6 +3,8 @@ name: Work Order Application
 on:
   pull_request:
     paths:
+      - 'apps/erp-next/components/scheduling/**'
+      - 'apps/erp-next/lib/after-hours-booking.ts'
       - 'functions/bootstrap.js'
       - 'functions/bookingAfterHours.js'
       - 'functions/bookingAfterHours.test.js'
@@ -16,9 +18,9 @@ on:
       - 'functions/package.json'
       - '.github/workflows/work-order-application-ci.yml'
   push:
-    branches:
-      - main
     paths:
+      - 'apps/erp-next/components/scheduling/**'
+      - 'apps/erp-next/lib/after-hours-booking.ts'
       - 'functions/bootstrap.js'
       - 'functions/bookingAfterHours.js'
       - 'functions/bookingAfterHours.test.js'
@@ -77,6 +79,18 @@ jobs:
             throw new Error('workOrderApplication export missing from functions/bootstrap.js');
           }
           NODE
+
+      - name: Install ERP Next dependencies
+        run: npm install --prefix apps/erp-next --no-audit --no-fund
+
+      - name: Typecheck ERP Next scheduling integration
+        run: npm run --prefix apps/erp-next typecheck
+
+      - name: Run live scheduling acceptance
+        run: npm run --prefix apps/erp-next test:live-scheduling
+
+      - name: Build ERP Next
+        run: npm run --prefix apps/erp-next build
 
   deploy-work-order-application:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
