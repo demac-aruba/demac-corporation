@@ -235,37 +235,14 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
         if (managed) {
           if (managed.staffId && managed.staffId !== profile.id) throw new Error(`The login email ${loginEmail} is assigned to another employee.`);
           const emailChanged = managed.email.trim().toLowerCase() !== loginEmail;
-          await updateManagedUser({
-            uid: managed.uid,
-            name,
-            email: loginEmail,
-            phone,
-            role: profileDraft.accessRole,
-            active: profileDraft.accessActive,
-            staffId: profile.id,
-          });
+          await updateManagedUser({ uid: managed.uid, name, email: loginEmail, phone, role: profileDraft.accessRole, active: profileDraft.accessActive, staffId: profile.id });
           if (emailChanged) await sendPasswordSetupEmail(loginEmail);
         } else {
-          await createManagedUser({
-            name,
-            email: loginEmail,
-            phone,
-            role: profileDraft.accessRole,
-            active: profileDraft.accessActive,
-            staffId: profile.id,
-          });
+          await createManagedUser({ name, email: loginEmail, phone, role: profileDraft.accessRole, active: profileDraft.accessActive, staffId: profile.id });
           await sendPasswordSetupEmail(loginEmail);
         }
       } else if (canManageAccess && linkedUser?.active) {
-        await updateManagedUser({
-          uid: linkedUser.uid,
-          name,
-          email: linkedUser.email,
-          phone,
-          role: linkedUser.role,
-          active: false,
-          staffId: profile.id,
-        });
+        await updateManagedUser({ uid: linkedUser.uid, name, email: linkedUser.email, phone, role: linkedUser.role, active: false, staffId: profile.id });
       }
 
       await onChanged(profile.id);
@@ -306,15 +283,7 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
     if (!timeOff.fromDate || !timeOff.toDate || timeOff.toDate < timeOff.fromDate) return setError('Choose a valid time-off range.');
     setBusy(true); setError(''); setMessage('');
     try {
-      await saveCanonicalStaffAbsence({
-        id: `profile-${profile.id}-${crypto.randomUUID()}`,
-        staffId: profile.id,
-        fromDate: timeOff.fromDate,
-        toDate: timeOff.toDate,
-        reason: timeOff.reason,
-        notes: timeOff.notes.trim() || undefined,
-        active: true,
-      });
+      await saveCanonicalStaffAbsence({ id: `profile-${profile.id}-${crypto.randomUUID()}`, staffId: profile.id, fromDate: timeOff.fromDate, toDate: timeOff.toDate, reason: timeOff.reason, notes: timeOff.notes.trim() || undefined, active: true });
       setTimeOff({ fromDate: today, toDate: today, reason: 'Vacaciones', notes: '' });
       await onChanged(profile.id);
       setMessage('Dated exception saved separately from the recurring schedule.');
@@ -326,10 +295,8 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
     const email = linkedUser?.email ?? profileDraft.loginEmail.trim().toLowerCase();
     if (!linkedUser || !email) return setError('Create or link ERP access first.');
     setBusy(true); setError(''); setMessage('');
-    try {
-      await sendPasswordSetupEmail(email);
-      setMessage(`Password setup / reset email sent to ${email}.`);
-    } catch (cause) { setError(errorText(cause)); }
+    try { await sendPasswordSetupEmail(email); setMessage(`Password setup / reset email sent to ${email}.`); }
+    catch (cause) { setError(errorText(cause)); }
     finally { setBusy(false); }
   }
 
@@ -338,12 +305,7 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
     if (!offboardDraft.reason.trim()) return setError('Enter a short offboarding reason for the audit history.');
     setBusy(true); setError(''); setMessage('');
     try {
-      await offboardEmployee({
-        staffId: profile.id,
-        endDate: offboardDraft.endDate,
-        reason: offboardDraft.reason.trim(),
-        releaseLoginEmail: offboardDraft.releaseLoginEmail,
-      });
+      await offboardEmployee({ staffId: profile.id, endDate: offboardDraft.endDate, reason: offboardDraft.reason.trim(), releaseLoginEmail: offboardDraft.releaseLoginEmail });
       await onChanged(profile.id);
       onClose();
     } catch (cause) { setError(errorText(cause)); }
@@ -354,11 +316,8 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
     if (!canManageAccess) return;
     if (!window.confirm(`Reactivate ${staffDisplayName(profile)}? ERP access and van assignments will not be restored automatically.`)) return;
     setBusy(true); setError(''); setMessage('');
-    try {
-      await reactivateEmployee(profile.id);
-      await onChanged(profile.id);
-      onClose();
-    } catch (cause) { setError(errorText(cause)); }
+    try { await reactivateEmployee(profile.id); await onChanged(profile.id); onClose(); }
+    catch (cause) { setError(errorText(cause)); }
     finally { setBusy(false); }
   }
 
@@ -369,42 +328,17 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
       const weeklySchedule = defaultEmployeeWeeklySchedule(template.startTime, template.endTime, template.breakMinutes);
       const weekday = Number(current.halfDayWeekday);
       const key = String(weekday) as EmployeeScheduleWeekdayKey;
-      const partialDay = weekday >= 1 && weekday <= 6
-        ? defaultPartialDayWindow(weeklySchedule[key]!, current.halfDayOffPeriod, 240)
-        : null;
-      return {
-        ...current,
-        mode: 'custom',
-        templateId,
-        weeklySchedule,
-        halfDayStartTime: partialDay?.startTime ?? current.halfDayStartTime,
-        halfDayEndTime: partialDay?.endTime ?? current.halfDayEndTime,
-        halfDayBreakMinutes: partialDay?.breakMinutes ?? current.halfDayBreakMinutes,
-      };
+      const partialDay = weekday >= 1 && weekday <= 6 ? defaultPartialDayWindow(weeklySchedule[key]!, current.halfDayOffPeriod, 240) : null;
+      return { ...current, mode: 'custom', templateId, weeklySchedule, halfDayStartTime: partialDay?.startTime ?? current.halfDayStartTime, halfDayEndTime: partialDay?.endTime ?? current.halfDayEndTime, halfDayBreakMinutes: partialDay?.breakMinutes ?? current.halfDayBreakMinutes };
     });
   }
 
   function updateDay(day: EmployeeScheduleWeekdayKey, field: 'startTime' | 'endTime' | 'breakMinutes', value: string) {
     setScheduleDraft((draft) => {
       const partial = Number(draft.halfDayWeekday) === Number(day);
-      if (partial) {
-        return {
-          ...draft,
-          halfDayStartTime: field === 'startTime' ? value : draft.halfDayStartTime,
-          halfDayEndTime: field === 'endTime' ? value : draft.halfDayEndTime,
-          halfDayBreakMinutes: field === 'breakMinutes' ? Number(value) : draft.halfDayBreakMinutes,
-        };
-      }
+      if (partial) return { ...draft, halfDayStartTime: field === 'startTime' ? value : draft.halfDayStartTime, halfDayEndTime: field === 'endTime' ? value : draft.halfDayEndTime, halfDayBreakMinutes: field === 'breakMinutes' ? Number(value) : draft.halfDayBreakMinutes };
       const current = draft.weeklySchedule[day] ?? { startTime: '08:00', endTime: '17:00', breakMinutes: 60 };
-      return {
-        ...draft,
-        mode: 'custom',
-        templateId: 'custom',
-        weeklySchedule: {
-          ...draft.weeklySchedule,
-          [day]: { ...current, [field]: field === 'breakMinutes' ? Number(value) : value },
-        },
-      };
+      return { ...draft, mode: 'custom', templateId: 'custom', weeklySchedule: { ...draft.weeklySchedule, [day]: { ...current, [field]: field === 'breakMinutes' ? Number(value) : value } } };
     });
   }
 
@@ -415,12 +349,14 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
     { id: 'timeoff', label: 'Time Off & Exceptions' },
     { id: 'payroll', label: 'Payroll & Lifecycle' },
   ];
+  const headerSavesSchedule = tab === 'schedule' && !technical;
+  const canUseHeaderSave = profile.active !== false && (headerSavesSchedule ? canManageSchedule : canManageEmployees);
 
   return <div className={styles.backdrop} role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target && !busy) onClose(); }}>
     <section className={styles.shell} role="dialog" aria-modal="true" aria-label="Employee profile">
       <header className={styles.topbar}>
         <div className={styles.identity}><div className={styles.avatar}>{initials(profileDraft.name)}</div><div><span className={styles.eyebrow}>Canonical employee profile</span><div className={styles.titleRow}><h2>{profileDraft.name}</h2><span className={profile.active === false ? styles.inactiveBadge : styles.activeBadge}>{profile.active === false ? 'Former employee' : 'Active employee'}</span></div><p>{profileDraft.role} · {profileDraft.employeeType}</p></div></div>
-        <div className={styles.headerActions}><button className={styles.secondaryButton} type="button" onClick={onClose} disabled={busy}>Cancel</button>{profile.active !== false && canManageEmployees ? <button className={styles.primaryButton} type="button" onClick={() => void saveProfile()} disabled={busy}>{busy ? 'Saving…' : 'Save Changes'}</button> : null}<button className={styles.closeButton} type="button" onClick={onClose} disabled={busy}>×</button></div>
+        <div className={styles.headerActions}><button className={styles.secondaryButton} type="button" onClick={onClose} disabled={busy}>Cancel</button>{canUseHeaderSave ? <button className={styles.primaryButton} type="button" onClick={() => void (headerSavesSchedule ? saveSchedule() : saveProfile())} disabled={busy || (headerSavesSchedule && loadingSchedule)}>{busy ? 'Saving…' : headerSavesSchedule ? 'Save Work Schedule' : 'Save Changes'}</button> : null}<button className={styles.closeButton} type="button" onClick={onClose} disabled={busy}>×</button></div>
       </header>
 
       <div className={styles.metaGrid}><Meta label="Employee ID" value={profile.id} /><Meta label="Type" value={profileDraft.employeeType} /><Meta label="Position" value={profileDraft.role} /><Meta label="Email" value={profileDraft.contactEmail || '—'} /><Meta label="Phone" value={profileDraft.phone || '—'} /><Meta label="Availability" value={availability} /></div>
@@ -468,9 +404,7 @@ function ScheduleEditor({ technical, canManage, loading, draft, setDraft, onAppl
   settings?: EmployeePayrollSettings;
 }) {
   if (technical) {
-    const partialWorkedMinutes = vanHalfDay?.workdayStart && vanHalfDay?.workdayEnd
-      ? Math.max(0, timeMinutes(vanHalfDay.workdayEnd) - timeMinutes(vanHalfDay.workdayStart))
-      : 300;
+    const partialWorkedMinutes = vanHalfDay?.workdayStart && vanHalfDay?.workdayEnd ? Math.max(0, timeMinutes(vanHalfDay.workdayEnd) - timeMinutes(vanHalfDay.workdayStart)) : 300;
     return <div className={styles.scheduleLayout}><div className={styles.stack}><Card title="Work Schedule" subtitle="Technician recurring partial day is inherited from the Van/team."><div className={styles.scheduleTable}><div className={styles.scheduleHead}><span>Day</span><span>Status</span><span>Start</span><span>End</span><span>Rule</span></div>{WEEKDAYS.map((day) => { const partial = vanHalfDay?.weekday === Number(day.key); return <div className={styles.scheduleRow} key={day.key}><strong>{day.label}</strong><span className={partial ? styles.halfChip : styles.workChip}>{partial ? 'Partial day' : 'Working day'}</span><span>{partial ? vanHalfDay?.workdayStart ?? '08:00' : '08:00'}</span><span>{partial ? vanHalfDay?.workdayEnd ?? '13:00' : '17:00'}</span><span>{partial ? `${formatWorkedHours(partialWorkedMinutes)} worked` : 'Company shift'}</span></div>; })}<SundayRow /></div><Info>Change technician partial-day hours in the Van/team schedule. Only the actual worked hours are counted.</Info></Card></div><aside className={styles.stack}><Card title="Schedule Source" subtitle="Protected authority"><Status label="Base schedule" value="Company calendar" /><Status label="Recurring partial day" value={vanId ? `${vanId} · vanHalfDaySchedules` : 'Van not assigned'} /><Status label="Worked time" value={formatWorkedHours(partialWorkedMinutes)} /><Status label="Sunday" value="Company closed" /></Card></aside></div>;
   }
 
@@ -493,13 +427,7 @@ function ScheduleEditor({ technical, canManage, loading, draft, setDraft, onAppl
       const companyDay = defaultEmployeeWeeklySchedule()[key]!;
       const fullDay = current.mode === 'custom' ? current.weeklySchedule[key] ?? companyDay : companyDay;
       const partial = defaultPartialDayWindow(fullDay, current.halfDayOffPeriod, 240);
-      return {
-        ...current,
-        halfDayWeekday: value,
-        halfDayStartTime: partial.startTime,
-        halfDayEndTime: partial.endTime,
-        halfDayBreakMinutes: partial.breakMinutes,
-      };
+      return { ...current, halfDayWeekday: value, halfDayStartTime: partial.startTime, halfDayEndTime: partial.endTime, halfDayBreakMinutes: partial.breakMinutes };
     });
   }
 
@@ -511,13 +439,7 @@ function ScheduleEditor({ technical, canManage, loading, draft, setDraft, onAppl
       const companyDay = defaultEmployeeWeeklySchedule()[key]!;
       const fullDay = current.mode === 'custom' ? current.weeklySchedule[key] ?? companyDay : companyDay;
       const partial = defaultPartialDayWindow(fullDay, value, 240);
-      return {
-        ...current,
-        halfDayOffPeriod: value,
-        halfDayStartTime: partial.startTime,
-        halfDayEndTime: partial.endTime,
-        halfDayBreakMinutes: partial.breakMinutes,
-      };
+      return { ...current, halfDayOffPeriod: value, halfDayStartTime: partial.startTime, halfDayEndTime: partial.endTime, halfDayBreakMinutes: partial.breakMinutes };
     });
   }
 
