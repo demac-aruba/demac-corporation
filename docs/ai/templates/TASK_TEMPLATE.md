@@ -1,40 +1,65 @@
 # Task: <concise outcome>
 
-## Context
+Use this template in proportion to the task. LOW-risk product iteration may use only the short
+sections. MEDIUM/HIGH work should complete the relevant governance/risk sections before release.
+
+## Stage and risk
+
+- Risk: LOW / MEDIUM / HIGH
+- Current stage: Authority Check / Prototype / Product Review / Product Accepted / Hardening / Release
+
+## Product intent
 
 - Request/source:
-- Product surface and users:
+- Product surface/users:
+- Desired behavior:
 - Current behavior/evidence:
 
-## Scope
+## Authority & Safety Check
 
-- In scope:
-- Out of scope:
+- Existing source of truth / owner:
+- Write path affected:
+- Adjacent modules/integrations:
+- Security/financial/destructive/messaging/data risk:
+- Why this risk class applies:
+
+## Prototype scope
+
+- In scope now:
+- Explicitly deferred until product acceptance:
 - Files/boundaries expected:
 
-## Governance
+## Product-review acceptance
 
-- Authority owner(s):
-- Business-rule IDs:
-- Security/privacy impact:
-- Legacy parity impact:
-- ADR/debt impact:
+- [ ] Primary user flow works:
+- [ ] Important failure/denial behavior:
+- [ ] Known limitations stated:
+- Focused verification:
 
-## Acceptance criteria
+## Owner product review
 
-- [ ] Given/when/then:
-- [ ] Failure/denial behavior:
-- [ ] Audit/observability behavior:
+- [ ] 🟡 READY FOR PRODUCT REVIEW
+- Owner feedback / requested iteration:
+- [ ] PRODUCT ACCEPTED
+- Accepted behavior/date:
 
-## Plan and risk
+## Engineering Hardening
 
-- Implementation outline:
-- Migration/rollback or recovery:
-- Key risks and mitigations:
+Complete after product acceptance, or earlier where HIGH risk requires it.
 
-## Verification
+- Authority/source-of-truth review:
+- Architecture/layering/integration review:
+- Security/privacy/permission review:
+- Retry/concurrency/idempotency review:
+- Failure/recovery/data-history review:
+- Regression coverage:
+- Rules/parity/debt/ADR documentation changes:
+- Residual risk:
 
-- Automated gates:
+## Final release verification
+
+- Required final automated gates:
 - Manual scenarios:
 - Evidence/results:
 - Not run and why:
+- [ ] 🟢 READY FOR MERGE
