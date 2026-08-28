@@ -1,3 +1,4 @@
+import { canonicalVanId } from './canonical-operations';
 import type {
   CanonicalDailyVanAssignment,
   CanonicalStaffProfile,
@@ -26,7 +27,7 @@ export function nextCanonicalVanId(vans: CanonicalVan[]) {
   return `VAN-${highest + 1}`;
 }
 
-export function validateVanCrew(van: CanonicalVan, staffProfiles: CanonicalStaffProfile[]) {
+export function validateVanCrew(van: CanonicalVan, staffProfiles: CanonicalStaffProfile[], existingVans: CanonicalVan[] = []) {
   const ids = regularCrewIds(van);
   if (new Set(ids).size !== ids.length) throw new Error('The same employee cannot occupy more than one regular crew position on the same Van.');
 
@@ -43,6 +44,15 @@ export function validateVanCrew(van: CanonicalVan, staffProfiles: CanonicalStaff
     if (profile.active === false || !isTechnicalStaff(profile)) throw new Error(`The selected ${label} must be an active technical employee.`);
   }
 
+  const targetVanId = canonicalVanId(van.id, existingVans.length ? existingVans : [van]);
+  for (const crewId of ids) {
+    const conflict = existingVans.find((existing) => canonicalVanId(existing.id, existingVans) !== targetVanId && regularCrewIds(existing).includes(crewId));
+    if (conflict) {
+      const employee = staffById.get(crewId);
+      throw new Error(`${employee?.name ?? 'This employee'} is already part of the regular crew for ${conflict.name ?? canonicalVanId(conflict.id, existingVans)}. Remove that regular assignment before assigning the employee to another Van.`);
+    }
+  }
+
   if ((van.status ?? 'Disponible') === 'Disponible') {
     if (!driver) throw new Error('An available Van requires a responsible technician / driver.');
     if (!helper) throw new Error('An available Van requires a regular helper.');
@@ -50,8 +60,8 @@ export function validateVanCrew(van: CanonicalVan, staffProfiles: CanonicalStaff
   return true;
 }
 
-export function buildVanSaveRecord(van: CanonicalVan, staffProfiles: CanonicalStaffProfile[], now = new Date().toISOString()) {
-  validateVanCrew(van, staffProfiles);
+export function buildVanSaveRecord(van: CanonicalVan, staffProfiles: CanonicalStaffProfile[], existingVans: CanonicalVan[] = [], now = new Date().toISOString()) {
+  validateVanCrew(van, staffProfiles, existingVans);
   const crewIds = regularCrewIds(van);
   return {
     ...van,
@@ -67,7 +77,12 @@ export function buildVanSaveRecord(van: CanonicalVan, staffProfiles: CanonicalSt
   } satisfies CanonicalVan;
 }
 
-export function validateDailyVanAssignment(assignment: CanonicalDailyVanAssignment, staffProfiles: CanonicalStaffProfile[]) {
+export function validateDailyVanAssignment(
+  assignment: CanonicalDailyVanAssignment,
+  staffProfiles: CanonicalStaffProfile[],
+  vans: CanonicalVan[] = [],
+  assignments: CanonicalDailyVanAssignment[] = [],
+) {
   if (!assignment.date) throw new Error('Choose a date for the temporary crew override.');
   if (!assignment.vanId) throw new Error('Choose a Van for the temporary crew override.');
   const ids = [assignment.driverStaffId, assignment.helperStaffId, assignment.additionalHelperStaffId].filter((value): value is string => Boolean(value));
@@ -82,6 +97,25 @@ export function validateDailyVanAssignment(assignment: CanonicalDailyVanAssignme
     if (!id) continue;
     const profile = staffById.get(id);
     if (!profile || profile.active === false || !isTechnicalStaff(profile)) throw new Error('Temporary helpers must be active technical employees.');
+  }
+
+  if (vans.length) {
+    const targetVanId = canonicalVanId(assignment.vanId, vans);
+    for (const crewId of ids) {
+      const conflict = vans.find((van) => {
+        const vanId = canonicalVanId(van.id, vans);
+        if (vanId === targetVanId) return false;
+        const dated = assignments.find((item) => item.date === assignment.date && canonicalVanId(item.vanId, vans) === vanId);
+        const effectiveIds = dated
+          ? [dated.driverStaffId || van.responsibleStaffId, dated.helperStaffId || van.regularHelperId, dated.additionalHelperStaffId || van.additionalHelperId].filter(Boolean)
+          : regularCrewIds(van);
+        return effectiveIds.includes(crewId);
+      });
+      if (conflict) {
+        const employee = staffById.get(crewId);
+        throw new Error(`${employee?.name ?? 'This employee'} is already assigned to ${conflict.name ?? canonicalVanId(conflict.id, vans)} on ${assignment.date}. Resolve that Van's daily crew first to prevent simultaneous assignments.`);
+      }
+    }
   }
   return true;
 }
