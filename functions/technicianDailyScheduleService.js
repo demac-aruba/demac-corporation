@@ -97,17 +97,22 @@ function customerDescription(order) {
   return normalizedText(order.customerFacingDescription || order.problem);
 }
 
-function orderDurationMinutes(order) {
+function explicitOrderDurationMinutes(order) {
   const direct = Number(order?.appointmentDurationMinutes);
   if (Number.isFinite(direct) && direct > 0) return Math.max(30, Math.round(direct));
   const workItems = Array.isArray(order?.appointmentWorkItems) ? order.appointmentWorkItems : [];
   const itemDuration = workItems.reduce((sum, item) => sum + Math.max(0, Number(item?.durationMinutes) || 0), 0);
-  if (itemDuration > 0) return Math.max(30, Math.round(itemDuration));
-  const slots = Number(order?.scheduledSlots);
-  if (Number.isFinite(slots) && slots > 0) return Math.max(30, Math.round(slots * 60));
+  return itemDuration > 0 ? Math.max(30, Math.round(itemDuration)) : 0;
+}
+
+function orderDurationMinutes(order) {
+  const explicit = explicitOrderDurationMinutes(order);
+  if (explicit > 0) return explicit;
   const start = timeToMinutes(order?.time);
   const end = timeToMinutes(order?.appointmentEndTime);
   if (start !== null && end !== null && end > start) return Math.max(30, end - start);
+  const slots = Number(order?.scheduledSlots);
+  if (Number.isFinite(slots) && slots > 0) return Math.max(30, Math.round(slots * 60));
   return 60;
 }
 
@@ -135,17 +140,22 @@ function canonicalReservedEndTime(order, halfDaySchedules = []) {
     const end = endTimeFromOccupiedSlots(stored);
     if (end) return end;
   }
-  return normalizedText(order?.appointmentEndTime);
+  return "";
 }
 
 function displayedOrderEndTime(order, halfDaySchedules = []) {
-  const canonicalEnd = canonicalReservedEndTime(order, halfDaySchedules);
-  if (canonicalEnd) return canonicalEnd;
+  const start = timeToMinutes(order?.time);
+  const explicitDuration = explicitOrderDurationMinutes(order);
+  if (start !== null && explicitDuration > 0) return minutesToTime(start + explicitDuration);
+
   const storedEnd = normalizedText(order?.appointmentEndTime);
-  if (order?.fullDaySingleProperty === true && storedEnd) return storedEnd;
-  const projected = projectedOrderEndMinutes(order);
-  if (projected !== null) return minutesToTime(projected);
-  return storedEnd;
+  const storedEndMinutes = timeToMinutes(storedEnd);
+  if (start !== null && storedEndMinutes !== null && storedEndMinutes > start) return storedEnd;
+
+  // scheduledSlots is historical/capacity metadata only. It remains a fallback for
+  // records that predate canonical duration/end snapshots, never the modern timing
+  // authority. This prevents lunch gaps from being added to technician-visible time.
+  return canonicalReservedEndTime(order, halfDaySchedules);
 }
 
 function technicianInstructions(appointment, order) {
@@ -575,6 +585,7 @@ module.exports.deterministicLunchQueueId = deterministicLunchQueueId;
 module.exports.deterministicPendingQueueId = deterministicPendingQueueId;
 module.exports.deterministicQueueId = deterministicQueueId;
 module.exports.displayedOrderEndTime = displayedOrderEndTime;
+module.exports.explicitOrderDurationMinutes = explicitOrderDurationMinutes;
 module.exports.firstName = firstName;
 module.exports.formatScheduleDate = formatScheduleDate;
 module.exports.geographicDistrict = geographicDistrict;
