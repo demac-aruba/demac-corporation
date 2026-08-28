@@ -1,4 +1,6 @@
-import { deleteFirestoreDocument, getFirestoreDocument, saveFirestoreDocument, updateFirestoreDocument } from './firebase/firestore-rest';
+import { deleteFirestoreDocument, getFirestoreDocument, listFirestoreCollection, saveFirestoreDocument, updateFirestoreDocument } from './firebase/firestore-rest';
+import { canonicalVanId } from './canonical-operations';
+import { validateDailyVanAssignment, validateVanCrew } from './van-profile';
 import type {
   CanonicalBusinessCalendar,
   CanonicalCalendarClosure,
@@ -31,12 +33,36 @@ export function saveCanonicalStaffProfile(profile: CanonicalStaffProfile) {
   return upsertCanonicalDocument('staffProfiles', profile);
 }
 
-export function saveCanonicalVanProfile(van: CanonicalVan) {
-  return upsertCanonicalDocument('vans', van);
+export async function saveCanonicalVanProfile(van: CanonicalVan) {
+  const [vans, staffProfiles] = await Promise.all([
+    listFirestoreCollection<CanonicalVan>('vans', 250),
+    listFirestoreCollection<CanonicalStaffProfile>('staffProfiles', 500),
+  ]);
+  const normalized: CanonicalVan = {
+    ...van,
+    responsibleStaffId: van.responsibleStaffId || '',
+    regularHelperId: van.regularHelperId || '',
+    additionalHelperId: van.additionalHelperId || '',
+    technicianIds: [van.responsibleStaffId, van.regularHelperId, van.additionalHelperId].filter((value): value is string => Boolean(value)),
+  };
+  validateVanCrew(normalized, staffProfiles, vans);
+  return upsertCanonicalDocument('vans', normalized);
 }
 
-export function saveCanonicalDailyVanAssignment(assignment: CanonicalDailyVanAssignment) {
-  return upsertCanonicalDocument('dailyVanAssignments', assignment);
+export async function saveCanonicalDailyVanAssignment(assignment: CanonicalDailyVanAssignment) {
+  const [vans, staffProfiles, assignments] = await Promise.all([
+    listFirestoreCollection<CanonicalVan>('vans', 250),
+    listFirestoreCollection<CanonicalStaffProfile>('staffProfiles', 500),
+    listFirestoreCollection<CanonicalDailyVanAssignment>('dailyVanAssignments', 1000),
+  ]);
+  const normalized: CanonicalDailyVanAssignment = {
+    ...assignment,
+    driverStaffId: assignment.driverStaffId || '',
+    helperStaffId: assignment.helperStaffId || '',
+    additionalHelperStaffId: assignment.additionalHelperStaffId || '',
+  };
+  validateDailyVanAssignment(normalized, staffProfiles, vans, assignments.filter((item) => item.id !== assignment.id));
+  return upsertCanonicalDocument('dailyVanAssignments', normalized);
 }
 
 export function deleteCanonicalDailyVanAssignment(id: string) {
