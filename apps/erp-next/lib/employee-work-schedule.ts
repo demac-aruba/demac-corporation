@@ -5,7 +5,6 @@ import {
   type CanonicalVanHalfDaySchedule,
 } from './canonical-operations';
 import {
-  applyHalfDaySchedule,
   defaultAttendanceSchedule,
   minutesBetween,
   type AttendanceSchedule,
@@ -119,15 +118,44 @@ function exactPartialDaySchedule(version: EmployeeScheduleVersion, fallback: Att
   };
 }
 
+function derivedPartialDaySchedule(version: EmployeeScheduleVersion, fallback: AttendanceSchedule): AttendanceSchedule | null {
+  const workedMinutes = Math.max(0, Math.round(Number(version.halfDayWorkedHours ?? 0) * 60));
+  if (!workedMinutes) return null;
+  const normalStart = fallback.startTime || '08:00';
+  const normalEnd = fallback.endTime || '17:00';
+  const startMinutes = timeToMinutes(normalStart);
+  const endMinutes = timeToMinutes(normalEnd);
+  const workStart = version.halfDayOffPeriod === 'morning' ? Math.max(startMinutes, endMinutes - workedMinutes) : startMinutes;
+  const workEnd = version.halfDayOffPeriod === 'morning' ? endMinutes : Math.min(endMinutes, startMinutes + workedMinutes);
+  const startTime = minutesToTime(workStart);
+  const endTime = minutesToTime(workEnd);
+  return {
+    ...fallback,
+    startTime,
+    endTime,
+    scheduledMinutes: Math.max(0, workEnd - workStart),
+    paidFreeMinutes: 0,
+    label: `Weekly partial day · ${startTime}–${endTime} · ${workedHoursLabel(Math.max(0, workEnd - workStart))} worked`,
+  };
+}
+
 function workedHoursLabel(minutes: number) {
   const hours = Math.round((Math.max(0, minutes) / 60) * 100) / 100;
   return Number.isInteger(hours) ? `${hours}h` : `${hours.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')}h`;
 }
 
+function timeToMinutes(time: string) {
+  const [hours, minutes] = time.split(':').map(Number);
+  return hours * 60 + minutes;
+}
+
+function minutesToTime(total: number) {
+  const clamped = Math.max(0, Math.min(23 * 60 + 59, Math.round(total)));
+  return `${String(Math.floor(clamped / 60)).padStart(2, '0')}:${String(clamped % 60).padStart(2, '0')}`;
+}
+
 function addMinutes(time: string, minutes: number) {
-  const [hours, mins] = time.split(':').map(Number);
-  const total = Math.max(0, Math.min(23 * 60 + 59, hours * 60 + mins + minutes));
-  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+  return minutesToTime(timeToMinutes(time) + minutes);
 }
 
 export function employeeVan(profile: CanonicalStaffProfile, vans: CanonicalVan[]) {
@@ -182,18 +210,10 @@ export function resolveEmployeeSchedule(input: {
   if (version?.halfDayWeekday != null) {
     const dateWeekday = new Date(`${date}T12:00:00Z`).getUTCDay();
     if (version.halfDayWeekday === dateWeekday) {
-      const exact = exactPartialDaySchedule(version, schedule);
-      if (exact) return exact;
+      return exactPartialDaySchedule(version, schedule)
+        ?? derivedPartialDaySchedule(version, schedule)
+        ?? schedule;
     }
-    return applyHalfDaySchedule(
-      schedule,
-      date,
-      version.halfDayWeekday,
-      version.halfDayWorkedHours,
-      0,
-      version.effectiveFrom,
-      version.halfDayOffPeriod,
-    );
   }
 
   return schedule;
