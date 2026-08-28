@@ -18,6 +18,7 @@ import {
   type EmployeePayrollSettings,
   type HalfDayOffPeriod,
 } from '@/lib/employee-attendance';
+import { offboardEmployee, reactivateEmployee } from '@/lib/employee-lifecycle';
 import { employeeVan, isTechnicalEmployee } from '@/lib/employee-work-schedule';
 import {
   OFFICE_SCHEDULE_TEMPLATES,
@@ -31,6 +32,7 @@ import {
   type EmployeeWeeklySchedule,
 } from '@/lib/employee-schedule-settings';
 import {
+  createManagedUser,
   listManagedUsers,
   sendPasswordSetupEmail,
   updateManagedUser,
@@ -73,6 +75,7 @@ type LifecycleProfile = CanonicalStaffProfile & {
   loginEmailKind?: LoginEmailKind;
   employmentStartedAt?: string;
   employmentEndedAt?: string;
+  offboardingReason?: string;
   weeklyDayOffWeekday?: number | null;
   weeklyDayOffEffectiveFrom?: string | null;
 };
@@ -86,7 +89,9 @@ type ProfileDraft = {
   canDriveVan: boolean;
   skills: string;
   notes: string;
+  createAccess: boolean;
   loginEmail: string;
+  loginEmailKind: LoginEmailKind;
   accessRole: ManagedUserRole;
   accessActive: boolean;
 };
@@ -100,6 +105,7 @@ type ScheduleDraft = {
   effectiveUntil: string;
 };
 type TimeOffDraft = { fromDate: string; toDate: string; reason: string; notes: string };
+type OffboardDraft = { endDate: string; reason: string; releaseLoginEmail: boolean };
 
 type Props = {
   open: boolean;
@@ -128,6 +134,7 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
   const [profileDraft, setProfileDraft] = useState(() => profileDraftFrom(profile));
   const [scheduleDraft, setScheduleDraft] = useState(() => scheduleDraftFrom(undefined, profile, today));
   const [timeOff, setTimeOff] = useState<TimeOffDraft>({ fromDate: today, toDate: today, reason: 'Vacaciones', notes: '' });
+  const [offboardDraft, setOffboardDraft] = useState<OffboardDraft | null>(null);
   const [loadingSchedule, setLoadingSchedule] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -139,6 +146,7 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
     setProfileDraft(profileDraftFrom(profile));
     setScheduleDraft(scheduleDraftFrom(undefined, profile, today));
     setTimeOff({ fromDate: today, toDate: today, reason: 'Vacaciones', notes: '' });
+    setOffboardDraft(null);
     setError('');
     setMessage('');
     setUsers([]);
@@ -164,7 +172,9 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
     }
   }, [open, employee.id, canManageAccess, canManageSchedule, technical, today]);
 
-  const linkedUser = useMemo(() => users.find((user) => user.staffId === profile.id), [profile.id, users]);
+  const userByStaffId = useMemo(() => new Map(users.filter((user) => user.staffId).map((user) => [String(user.staffId), user])), [users]);
+  const userByEmail = useMemo(() => new Map(users.filter((user) => user.email).map((user) => [user.email.trim().toLowerCase(), user])), [users]);
+  const linkedUser = userByStaffId.get(profile.id);
   const payrollSettings = payrollSettingsForEmployee(settings, profile);
   const van = employeeVan(profile, operations.vans);
   const vanId = van ? canonicalVanId(van.id, operations.vans) : '';
@@ -185,7 +195,10 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
     if (!canManageEmployees || profile.active === false) return;
     const name = profileDraft.name.trim();
     const phone = profileDraft.phone.trim();
+    const contactEmail = profileDraft.contactEmail.trim().toLowerCase();
+    const loginEmail = profileDraft.loginEmail.trim().toLowerCase();
     if (!name || !phone) return setError('Full name and phone number are required.');
+    if (canManageAccess && profileDraft.createAccess && !loginEmail) return setError('ERP login email is required when sign-in access is enabled.');
     const duplicate = operations.staffProfiles.find((item) => item.id !== profile.id && (
       normalizeName(item.name ?? '') === normalizeName(name)
       || (normalizePhone(phone) && normalizePhone(item.phone ?? '') === normalizePhone(phone))
@@ -198,7 +211,7 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
         ...profile,
         name,
         phone,
-        email: profileDraft.contactEmail.trim().toLowerCase() || undefined,
+        email: contactEmail || undefined,
         employeeType: profileDraft.employeeType,
         role: profileDraft.role,
         employmentStartedAt: profileDraft.employmentStartedAt || profile.employmentStartedAt,
@@ -207,21 +220,49 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
           ? profileDraft.skills.split(',').map((value) => value.trim()).filter(Boolean)
           : [],
         notes: profileDraft.notes.trim() || undefined,
+        loginEmailKind: canManageAccess && profileDraft.createAccess ? profileDraft.loginEmailKind : profile.loginEmailKind,
         weeklyDayOffWeekday: null,
         weeklyDayOffEffectiveFrom: null,
       } as LifecycleProfile);
 
-      if (canManageAccess && linkedUser) {
+      if (canManageAccess && profileDraft.createAccess) {
+        const managed = linkedUser ?? userByEmail.get(loginEmail);
+        if (managed) {
+          if (managed.staffId && managed.staffId !== profile.id) throw new Error(`The login email ${loginEmail} is assigned to another employee.`);
+          const emailChanged = managed.email.trim().toLowerCase() !== loginEmail;
+          await updateManagedUser({
+            uid: managed.uid,
+            name,
+            email: loginEmail,
+            phone,
+            role: profileDraft.accessRole,
+            active: profileDraft.accessActive,
+            staffId: profile.id,
+          });
+          if (emailChanged) await sendPasswordSetupEmail(loginEmail);
+        } else {
+          await createManagedUser({
+            name,
+            email: loginEmail,
+            phone,
+            role: profileDraft.accessRole,
+            active: profileDraft.accessActive,
+            staffId: profile.id,
+          });
+          await sendPasswordSetupEmail(loginEmail);
+        }
+      } else if (canManageAccess && linkedUser?.active) {
         await updateManagedUser({
           uid: linkedUser.uid,
           name,
-          email: profileDraft.loginEmail.trim().toLowerCase() || linkedUser.email,
+          email: linkedUser.email,
           phone,
-          role: profileDraft.accessRole,
-          active: profileDraft.accessActive,
+          role: linkedUser.role,
+          active: false,
           staffId: profile.id,
         });
       }
+
       await onChanged(profile.id);
       setMessage('Employee profile saved without changing the employee identity or historical records.');
     } catch (cause) { setError(errorText(cause)); }
@@ -273,6 +314,46 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
     finally { setBusy(false); }
   }
 
+  async function resetPassword() {
+    const email = linkedUser?.email ?? profileDraft.loginEmail.trim().toLowerCase();
+    if (!linkedUser || !email) return setError('Create or link ERP access first.');
+    setBusy(true); setError(''); setMessage('');
+    try {
+      await sendPasswordSetupEmail(email);
+      setMessage(`Password setup / reset email sent to ${email}.`);
+    } catch (cause) { setError(errorText(cause)); }
+    finally { setBusy(false); }
+  }
+
+  async function confirmOffboard() {
+    if (!offboardDraft || !canManageAccess) return;
+    if (!offboardDraft.reason.trim()) return setError('Enter a short offboarding reason for the audit history.');
+    setBusy(true); setError(''); setMessage('');
+    try {
+      await offboardEmployee({
+        staffId: profile.id,
+        endDate: offboardDraft.endDate,
+        reason: offboardDraft.reason.trim(),
+        releaseLoginEmail: offboardDraft.releaseLoginEmail,
+      });
+      await onChanged(profile.id);
+      onClose();
+    } catch (cause) { setError(errorText(cause)); }
+    finally { setBusy(false); }
+  }
+
+  async function confirmReactivate() {
+    if (!canManageAccess) return;
+    if (!window.confirm(`Reactivate ${staffDisplayName(profile)}? ERP access and van assignments will not be restored automatically.`)) return;
+    setBusy(true); setError(''); setMessage('');
+    try {
+      await reactivateEmployee(profile.id);
+      await onChanged(profile.id);
+      onClose();
+    } catch (cause) { setError(errorText(cause)); }
+    finally { setBusy(false); }
+  }
+
   function applyTemplate(templateId: Exclude<EmployeeScheduleTemplateId, 'custom'>) {
     const template = OFFICE_SCHEDULE_TEMPLATES.find((item) => item.id === templateId);
     if (!template) return;
@@ -302,7 +383,7 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
     { id: 'employment', label: 'Employment Details' },
     { id: 'schedule', label: 'Work Schedule' },
     { id: 'timeoff', label: 'Time Off & Exceptions' },
-    { id: 'payroll', label: 'Payroll Notes' },
+    { id: 'payroll', label: 'Payroll & Lifecycle' },
   ];
 
   return <div className={styles.backdrop} role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target && !busy) onClose(); }}>
@@ -320,23 +401,23 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
         {error ? <div className={styles.error}>{error}</div> : null}
 
         {tab === 'profile' ? <div className={styles.twoColumn}>
-          <Card title="Profile & Access" subtitle="Employee master data and authentication remain separate."><div className={styles.formGrid}><Field label="Full name"><input className={styles.control} value={profileDraft.name} onChange={(event) => setProfileDraft({ ...profileDraft, name: event.target.value })} disabled={!canManageEmployees} /></Field><Field label="Phone"><input className={styles.control} value={profileDraft.phone} onChange={(event) => setProfileDraft({ ...profileDraft, phone: event.target.value })} disabled={!canManageEmployees} /></Field><Field label="Contact email"><input className={styles.control} type="email" value={profileDraft.contactEmail} onChange={(event) => setProfileDraft({ ...profileDraft, contactEmail: event.target.value })} disabled={!canManageEmployees} /></Field></div>{canManageAccess && linkedUser ? <div className={styles.subsection}><div className={styles.formGrid}><Field label="ERP login email"><input className={styles.control} type="email" value={profileDraft.loginEmail} onChange={(event) => setProfileDraft({ ...profileDraft, loginEmail: event.target.value })} /></Field><Field label="Access role"><select className={styles.control} value={profileDraft.accessRole} onChange={(event) => setProfileDraft({ ...profileDraft, accessRole: event.target.value as ManagedUserRole })}>{ACCESS_ROLES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field><Field label="Account status"><select className={styles.control} value={profileDraft.accessActive ? 'active' : 'disabled'} onChange={(event) => setProfileDraft({ ...profileDraft, accessActive: event.target.value === 'active' })}><option value="active">Active</option><option value="disabled">Disabled</option></select></Field></div><button className={styles.secondaryButton} type="button" disabled={busy} onClick={() => void sendPasswordSetupEmail(profileDraft.loginEmail)}>Send / Reset Password Email</button></div> : <Info>ERP access is owner-controlled. Editing this profile never creates a duplicate employee master.</Info>}</Card>
-          <Card title="Identity Safety" subtitle="Existing history stays linked to the same employee ID."><Status label="Employee master" value="staffProfiles" /><Status label="Authentication" value="Firebase Auth" /><Status label="Historical work/payroll" value="Preserved" /></Card>
+          <Card title="Profile & Access" subtitle="Employee master data and authentication remain separate."><div className={styles.formGrid}><Field label="Full name"><input className={styles.control} value={profileDraft.name} onChange={(event) => setProfileDraft({ ...profileDraft, name: event.target.value })} disabled={!canManageEmployees || profile.active === false} /></Field><Field label="Phone"><input className={styles.control} value={profileDraft.phone} onChange={(event) => setProfileDraft({ ...profileDraft, phone: event.target.value })} disabled={!canManageEmployees || profile.active === false} /></Field><Field label="Contact email"><input className={styles.control} type="email" value={profileDraft.contactEmail} onChange={(event) => setProfileDraft({ ...profileDraft, contactEmail: event.target.value })} disabled={!canManageEmployees || profile.active === false} /></Field></div>{canManageAccess ? <div className={styles.subsection}><div className={styles.formGrid}><Field label="ERP sign-in"><select className={styles.control} value={profileDraft.createAccess ? 'enabled' : 'disabled'} onChange={(event) => setProfileDraft({ ...profileDraft, createAccess: event.target.value === 'enabled' })} disabled={profile.active === false}><option value="enabled">Linked / create access</option><option value="disabled">No active sign-in access</option></select></Field>{profileDraft.createAccess ? <Field label="ERP login email"><input className={styles.control} type="email" value={profileDraft.loginEmail} onChange={(event) => setProfileDraft({ ...profileDraft, loginEmail: event.target.value })} disabled={profile.active === false} /></Field> : null}{profileDraft.createAccess ? <Field label="Login email ownership"><select className={styles.control} value={profileDraft.loginEmailKind} onChange={(event) => setProfileDraft({ ...profileDraft, loginEmailKind: event.target.value as LoginEmailKind })} disabled={profile.active === false}><option value="company">Company email · reusable</option><option value="personal">Personal email · not reused</option></select></Field> : null}{profileDraft.createAccess ? <Field label="Access role"><select className={styles.control} value={profileDraft.accessRole} onChange={(event) => setProfileDraft({ ...profileDraft, accessRole: event.target.value as ManagedUserRole })} disabled={profile.active === false}>{ACCESS_ROLES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field> : null}{profileDraft.createAccess ? <Field label="Account status"><select className={styles.control} value={profileDraft.accessActive ? 'active' : 'disabled'} onChange={(event) => setProfileDraft({ ...profileDraft, accessActive: event.target.value === 'active' })} disabled={profile.active === false}><option value="active">Active</option><option value="disabled">Disabled</option></select></Field> : null}</div>{linkedUser ? <button className={styles.secondaryButton} type="button" disabled={busy} onClick={() => void resetPassword()}>Send / Reset Password Email</button> : null}</div> : <Info>ERP access is owner-controlled. Editing this profile never creates a duplicate employee master.</Info>}</Card>
+          <Card title="Identity Safety" subtitle="Existing history stays linked to the same employee ID."><Status label="Employee master" value="staffProfiles" /><Status label="Authentication" value="Firebase Auth" /><Status label="Historical work/payroll" value="Preserved" /><Status label="Access create/disable" value="Preserved from previous profile" /></Card>
         </div> : null}
 
         {tab === 'employment' ? <div className={styles.twoColumn}>
-          <Card title="Employment Details" subtitle="These dates bound generated schedules and assumed attendance."><div className={styles.formGrid}><Field label="Employment start date"><input className={styles.control} type="date" value={profileDraft.employmentStartedAt} onChange={(event) => setProfileDraft({ ...profileDraft, employmentStartedAt: event.target.value })} disabled={!canManageEmployees} /></Field><Field label="Employee type"><select className={styles.control} value={profileDraft.employeeType} onChange={(event) => setProfileDraft({ ...profileDraft, employeeType: event.target.value, role: defaultRole(event.target.value) })} disabled={!canManageEmployees}>{EMPLOYEE_TYPES.map((type) => <option key={type}>{type}</option>)}</select></Field><Field label="Operational role"><select className={styles.control} value={profileDraft.role} onChange={(event) => setProfileDraft({ ...profileDraft, role: event.target.value })} disabled={!canManageEmployees}>{rolesForType(profileDraft.employeeType).map((role) => <option key={role}>{role}</option>)}</select></Field>{profileDraft.employeeType === 'Técnico' ? <Field label="Can drive vans"><select className={styles.control} value={profileDraft.canDriveVan ? 'yes' : 'no'} onChange={(event) => setProfileDraft({ ...profileDraft, canDriveVan: event.target.value === 'yes' })}><option value="yes">Yes</option><option value="no">No</option></select></Field> : null}{profileDraft.employeeType === 'Técnico' ? <Field label="Skills" full><input className={styles.control} value={profileDraft.skills} onChange={(event) => setProfileDraft({ ...profileDraft, skills: event.target.value })} /></Field> : null}</div></Card>
+          <Card title="Employment Details" subtitle="These dates bound generated schedules and assumed attendance."><div className={styles.formGrid}><Field label="Employment start date"><input className={styles.control} type="date" value={profileDraft.employmentStartedAt} onChange={(event) => setProfileDraft({ ...profileDraft, employmentStartedAt: event.target.value })} disabled={!canManageEmployees || profile.active === false} /></Field><Field label="Employee type"><select className={styles.control} value={profileDraft.employeeType} onChange={(event) => setProfileDraft({ ...profileDraft, employeeType: event.target.value, role: defaultRole(event.target.value), canDriveVan: event.target.value === 'Técnico' ? profileDraft.canDriveVan : false, skills: event.target.value === 'Técnico' ? profileDraft.skills : '', accessRole: defaultAccessRole(event.target.value), loginEmailKind: defaultLoginEmailKind(event.target.value) })} disabled={!canManageEmployees || profile.active === false}>{EMPLOYEE_TYPES.map((type) => <option key={type}>{type}</option>)}</select></Field><Field label="Operational role"><select className={styles.control} value={profileDraft.role} onChange={(event) => setProfileDraft({ ...profileDraft, role: event.target.value })} disabled={!canManageEmployees || profile.active === false}>{rolesForType(profileDraft.employeeType).map((role) => <option key={role}>{role}</option>)}</select></Field>{profileDraft.employeeType === 'Técnico' ? <Field label="Can drive vans"><select className={styles.control} value={profileDraft.canDriveVan ? 'yes' : 'no'} onChange={(event) => setProfileDraft({ ...profileDraft, canDriveVan: event.target.value === 'yes' })} disabled={profile.active === false}><option value="yes">Yes</option><option value="no">No</option></select></Field> : null}{profileDraft.employeeType === 'Técnico' ? <Field label="Skills" full><input className={styles.control} value={profileDraft.skills} onChange={(event) => setProfileDraft({ ...profileDraft, skills: event.target.value })} disabled={profile.active === false} /></Field> : null}</div></Card>
           <Card title="Employment Boundary" subtitle="Same rule is consumed by Calendar, Attendance and Payroll."><Status label="Before start date" value="0 scheduled hours" /><Status label="Start date" value="Inclusive" /><Status label="After employment end" value="0 scheduled hours" /><Info>Historical explicit records are not deleted or rewritten.</Info></Card>
         </div> : null}
 
         {tab === 'schedule' ? <ScheduleEditor technical={technical} canManage={canManageSchedule && profile.active !== false} loading={loadingSchedule} draft={scheduleDraft} setDraft={setScheduleDraft} onApplyTemplate={applyTemplate} onUpdateDay={updateDay} onSave={() => void saveSchedule()} busy={busy} vanId={vanId} vanHalfDay={vanHalfDay} settings={payrollSettings} /> : null}
 
         {tab === 'timeoff' ? <div className={styles.twoColumn}>
-          <Card title="Time Off & Exceptions" subtitle="Vacation, sickness and one-off unavailability stay date-scoped."><div className={styles.formGrid}><Field label="From"><input className={styles.control} type="date" value={timeOff.fromDate} onChange={(event) => setTimeOff({ ...timeOff, fromDate: event.target.value })} /></Field><Field label="To"><input className={styles.control} type="date" value={timeOff.toDate} onChange={(event) => setTimeOff({ ...timeOff, toDate: event.target.value })} /></Field><Field label="Type"><select className={styles.control} value={timeOff.reason} onChange={(event) => setTimeOff({ ...timeOff, reason: event.target.value })}>{ABSENCE_REASONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field><Field label="Notes"><input className={styles.control} value={timeOff.notes} onChange={(event) => setTimeOff({ ...timeOff, notes: event.target.value })} /></Field></div><div className={styles.actionRow}><button className={styles.primaryButton} type="button" onClick={() => void saveTimeOff()} disabled={!canManageEmployees || busy}>Save Time Off</button></div></Card>
+          <Card title="Time Off & Exceptions" subtitle="Vacation, sickness and one-off unavailability stay date-scoped."><div className={styles.formGrid}><Field label="From"><input className={styles.control} type="date" value={timeOff.fromDate} onChange={(event) => setTimeOff({ ...timeOff, fromDate: event.target.value })} disabled={profile.active === false} /></Field><Field label="To"><input className={styles.control} type="date" value={timeOff.toDate} onChange={(event) => setTimeOff({ ...timeOff, toDate: event.target.value })} disabled={profile.active === false} /></Field><Field label="Type"><select className={styles.control} value={timeOff.reason} onChange={(event) => setTimeOff({ ...timeOff, reason: event.target.value })} disabled={profile.active === false}>{ABSENCE_REASONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field><Field label="Notes"><input className={styles.control} value={timeOff.notes} onChange={(event) => setTimeOff({ ...timeOff, notes: event.target.value })} disabled={profile.active === false} /></Field></div><div className={styles.actionRow}><button className={styles.primaryButton} type="button" onClick={() => void saveTimeOff()} disabled={!canManageEmployees || busy || profile.active === false}>Save Time Off</button></div></Card>
           <Card title="Recent / Current Exceptions" subtitle="Source: staffAbsences">{absences.length ? <div className={styles.history}>{absences.map((absence) => <div className={styles.historyRow} key={absence.id}><div><strong>{absence.reason ?? 'Unavailable'}</strong><span>{absence.notes ?? 'No notes'}</span></div><time>{absence.fromDate ?? '—'} → {absence.toDate ?? '—'}</time></div>)}</div> : <Info>No current or recent exceptions.</Info>}</Card>
         </div> : null}
 
-        {tab === 'payroll' ? <div className={styles.twoColumn}><Card title="Payroll Notes" subtitle="Notes do not alter schedule calculations."><Field label="Internal notes"><textarea className={styles.textarea} value={profileDraft.notes} onChange={(event) => setProfileDraft({ ...profileDraft, notes: event.target.value })} disabled={!canManageEmployees} /></Field></Card><Card title="Payroll Schedule Source" subtitle="Protected, backward-compatible source"><Status label="Employee identity" value={profile.id} /><Status label="Schedule record" value={payrollSettings?.id ?? 'Not configured'} /><Status label="Historical records" value="Preserved" /><Info>New schedule fields are additive on the existing payroll settings record.</Info></Card></div> : null}
+        {tab === 'payroll' ? <div className={styles.twoColumn}><Card title="Payroll Notes" subtitle="Notes do not alter schedule calculations."><Field label="Internal notes"><textarea className={styles.textarea} value={profileDraft.notes} onChange={(event) => setProfileDraft({ ...profileDraft, notes: event.target.value })} disabled={!canManageEmployees || profile.active === false} /></Field><Info>New schedule fields are additive on the existing payroll settings record. Existing attendance and payroll documents are not rewritten.</Info></Card><Card title="Employment Lifecycle" subtitle="Former employees are archived, never deleted.">{profile.active !== false ? <>{offboardDraft ? <div className={styles.subsection}><Field label="Last employment date"><input className={styles.control} type="date" value={offboardDraft.endDate} onChange={(event) => setOffboardDraft({ ...offboardDraft, endDate: event.target.value })} /></Field><Field label="Reason"><input className={styles.control} value={offboardDraft.reason} onChange={(event) => setOffboardDraft({ ...offboardDraft, reason: event.target.value })} placeholder="Resigned, contract ended, terminated…" /></Field><label className={styles.checkbox}><input type="checkbox" checked={offboardDraft.releaseLoginEmail} onChange={(event) => setOffboardDraft({ ...offboardDraft, releaseLoginEmail: event.target.checked })} /> Release reusable company login email</label><div className={styles.actionRow}><button className={styles.secondaryButton} type="button" onClick={() => setOffboardDraft(null)} disabled={busy}>Cancel</button><button className={styles.dangerButton} type="button" onClick={() => void confirmOffboard()} disabled={!canManageAccess || busy}>Confirm Offboarding</button></div></div> : <div className={styles.dangerCard}><div><strong>Offboard employee</strong><span>Disables access and removes future crew assignments while preserving history.</span></div><button className={styles.dangerButton} type="button" onClick={() => setOffboardDraft({ endDate: today, reason: '', releaseLoginEmail: Boolean(linkedUser) && (profile.loginEmailKind ?? defaultLoginEmailKind(profileDraft.employeeType)) === 'company' })} disabled={!canManageAccess || busy}>Start Offboarding</button></div>}</> : <div className={styles.dangerCard}><div><strong>Former employee</strong><span>{profile.employmentEndedAt ? `Employment ended ${profile.employmentEndedAt}. ` : ''}{profile.offboardingReason ?? ''}</span></div><button className={styles.secondaryButton} type="button" onClick={() => void confirmReactivate()} disabled={!canManageAccess || busy}>Reactivate Employee</button></div>}<div className={styles.subsection}><Status label="Payroll schedule record" value={payrollSettings?.id ?? 'Not configured'} /><Status label="Historical records" value="Preserved" /></div></Card></div> : null}
       </div>
     </section>
   </div>;
@@ -388,7 +469,8 @@ function normalizePhone(value: string) { return value.replace(/\D/g, ''); }
 function rolesForType(type: string) { return type === 'Técnico' ? TECHNICAL_ROLES : OFFICE_ROLES; }
 function defaultRole(type: string) { if (type === 'Técnico') return 'Ayudante'; if (type === 'Secretaria') return 'Secretaria'; if (type === 'Administración') return 'Administración'; return 'Otro'; }
 function defaultAccessRole(type: string): ManagedUserRole { return type === 'Técnico' ? 'technician' : 'office'; }
-function profileDraftFrom(profile: LifecycleProfile, user?: ManagedUser): ProfileDraft { const type = profile.employeeType ?? (isTechnicalEmployee(profile) ? 'Técnico' : profile.role === 'Secretaria' ? 'Secretaria' : 'Administración'); return { name: profile.name ?? '', phone: profile.phone ?? '', contactEmail: profile.email ?? '', employeeType: type, role: profile.role ?? defaultRole(type), employmentStartedAt: profile.employmentStartedAt ?? '', canDriveVan: profile.canDriveVan === true, skills: (profile.skills ?? []).join(', '), notes: profile.notes ?? '', loginEmail: user?.email ?? profile.loginEmail ?? '', accessRole: user?.role ?? defaultAccessRole(type), accessActive: user?.active ?? true }; }
+function defaultLoginEmailKind(type: string): LoginEmailKind { return type === 'Técnico' ? 'personal' : 'company'; }
+function profileDraftFrom(profile: LifecycleProfile, user?: ManagedUser): ProfileDraft { const type = profile.employeeType ?? (isTechnicalEmployee(profile) ? 'Técnico' : profile.role === 'Secretaria' ? 'Secretaria' : 'Administración'); return { name: profile.name ?? '', phone: profile.phone ?? '', contactEmail: profile.email ?? '', employeeType: type, role: profile.role ?? defaultRole(type), employmentStartedAt: profile.employmentStartedAt ?? '', canDriveVan: profile.canDriveVan === true, skills: (profile.skills ?? []).join(', '), notes: profile.notes ?? '', createAccess: Boolean(user), loginEmail: user?.email ?? profile.loginEmail ?? '', loginEmailKind: profile.loginEmailKind ?? defaultLoginEmailKind(type), accessRole: user?.role ?? defaultAccessRole(type), accessActive: user?.active ?? true }; }
 function scheduleDraftFrom(settings: EmployeePayrollSettings | undefined, profile: LifecycleProfile, today: string): ScheduleDraft { const extended = asEmployeePayrollScheduleSettings(settings); const weekday = Number(settings?.weeklyHalfDayWeekday); return { mode: extended?.scheduleMode ?? 'company', templateId: extended?.scheduleTemplateId ?? 'office-8-5', weeklySchedule: employeeWeeklyScheduleFromSettings(settings), halfDayWeekday: Number.isInteger(weekday) && weekday >= 1 && weekday <= 6 ? String(weekday) : '', halfDayOffPeriod: settings?.halfDayOffPeriod ?? 'afternoon', effectiveFrom: extended?.scheduleEffectiveFrom ?? settings?.halfDayEffectiveFrom ?? profile.employmentStartedAt ?? today, effectiveUntil: extended?.scheduleEffectiveUntil ?? '' }; }
 function initials(value: string) { return value.trim().split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || 'DE'; }
 function timeMinutes(value: string) { const [hours, minutes] = value.split(':').map(Number); return hours * 60 + minutes; }
