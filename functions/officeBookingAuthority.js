@@ -15,6 +15,7 @@ const {
 } = require("./bookingAuthorityFirestore");
 const { createBookingAppointmentLifecycle } = require("./bookingAuthorityAppointmentLifecycle");
 const { createOperationalMoveAuthority } = require("./bookingOperationalMove");
+const { createAdhocSupportAuthority } = require("./bookingAdhocSupport");
 const { createSchedulingProvider } = require("./bookingAuthoritySchedulingProvider");
 const { mergeBookablePresets } = require("./serviceCatalog");
 const {
@@ -29,7 +30,7 @@ const {
   notificationQueueIds: canonicalNotificationQueueIds,
 } = require("./appointmentNotificationService");
 
-const OFFICE_BOOKING_API_VERSION = 14;
+const OFFICE_BOOKING_API_VERSION = 15;
 const OFFICE_BOOKING_ROLES = Object.freeze([
   "admin",
   "office",
@@ -58,6 +59,7 @@ const OFFICE_BOOKING_ACTIONS = Object.freeze({
   CANCEL_APPOINTMENT: "cancel_appointment",
   RESCHEDULE_APPOINTMENT: "reschedule_appointment",
   MOVE_APPOINTMENT: "move_appointment",
+  ADD_ADHOC_SUPPORT: "add_adhoc_support",
 });
 
 function requireOfficeRole(role) {
@@ -261,6 +263,7 @@ function createOfficeBookingApi({
   schedulingProvider = null,
   lifecycleAuthority = null,
   operationalMoveAuthority = null,
+  adhocSupportAuthority = null,
   appointmentNotificationService = null,
 } = {}) {
   if (!db || typeof db.collection !== "function") throw new Error("A Firestore-compatible db is required.");
@@ -270,6 +273,7 @@ function createOfficeBookingApi({
   const notifications = appointmentNotificationService || createAppointmentNotificationService({ db });
   let lifecycle = lifecycleAuthority;
   let operationalMove = operationalMoveAuthority;
+  let adhocSupport = adhocSupportAuthority;
   const getLifecycle = () => {
     if (!lifecycle) lifecycle = createBookingAppointmentLifecycle({ db, schedulingProvider: provider });
     return lifecycle;
@@ -277,6 +281,10 @@ function createOfficeBookingApi({
   const getOperationalMove = () => {
     if (!operationalMove) operationalMove = createOperationalMoveAuthority({ db });
     return operationalMove;
+  };
+  const getAdhocSupport = () => {
+    if (!adhocSupport) adhocSupport = createAdhocSupportAuthority({ db });
+    return adhocSupport;
   };
 
   async function authenticate(request) {
@@ -812,6 +820,18 @@ function createOfficeBookingApi({
         targetVanId: data.requiredVanId,
         reason: data.reason,
         note: data.note,
+        actor,
+      });
+    }
+    if (action === OFFICE_BOOKING_ACTIONS.ADD_ADHOC_SUPPORT) {
+      const requestId = officeRequestId(data.requestId);
+      return getAdhocSupport().addSupport({
+        appointmentId: data.appointmentId,
+        requestId,
+        requestedDate: data.requestedDate,
+        requestedTime: data.requestedTime,
+        targetVanId: data.requiredVanId,
+        reason: data.reason,
         actor,
       });
     }
