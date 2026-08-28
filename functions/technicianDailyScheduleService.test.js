@@ -5,6 +5,7 @@ const {
   arrivalContact,
   createTechnicianDailyScheduleService,
   deterministicLunchQueueId,
+  deterministicPendingQueueId,
   deterministicQueueId,
   displayedOrderEndTime,
   geographicDistrict,
@@ -13,6 +14,7 @@ const {
   planLunchBreak,
   propertyLocationName,
   renderLunchBreakText,
+  renderPendingSlotText,
   renderVanWorkOrderText,
   staffFirstNamesForOrder,
   technicianInstructions,
@@ -56,7 +58,18 @@ function doc(id, value) {
   return { id, exists: value !== undefined, data: () => value };
 }
 
-function createScheduleDb({ vans = [], workOrders = [], clients = [], properties = [], appointments = [], staff = [] } = {}) {
+function createScheduleDb({
+  vans = [],
+  workOrders = [],
+  clients = [],
+  properties = [],
+  appointments = [],
+  staff = [],
+  services = [],
+  assignments = [],
+  absences = [],
+  halfDays = [],
+} = {}) {
   const collections = {
     vans: new Map(vans.map((item) => [item.id, { ...item }])),
     workOrders: new Map(workOrders.map((item) => [item.id, { ...item }])),
@@ -64,6 +77,10 @@ function createScheduleDb({ vans = [], workOrders = [], clients = [], properties
     properties: new Map(properties.map((item) => [item.id, { ...item }])),
     appointments: new Map(appointments.map((item) => [item.id, { ...item }])),
     staffProfiles: new Map(staff.map((item) => [item.id, { ...item }])),
+    services: new Map(services.map((item) => [item.id, { ...item }])),
+    dailyVanAssignments: new Map(assignments.map((item) => [item.id, { ...item }])),
+    staffAbsences: new Map(absences.map((item) => [item.id, { ...item }])),
+    vanHalfDaySchedules: new Map(halfDays.map((item) => [item.id, { ...item }])),
     businessSettings: new Map(),
     whatsappOutboundQueue: new Map(),
   };
@@ -348,15 +365,21 @@ test("a short morning-only route does not receive a pointless lunch message afte
   ]), null);
 });
 
-test("work and lunch queue IDs are deterministic per delivery run", () => {
+test("pending period text exposes the exact free hour without creating a fake customer job", () => {
+  assert.equal(renderPendingSlotText("13:30"), "*PENDIENTE*\n*Hora:* 1:30 PM – 2:30 PM");
+});
+
+test("work, lunch and pending queue IDs are deterministic per delivery run", () => {
   const first = deterministicQueueId({ dateKey: "2026-08-21", vanId: "VAN-2", order, deliveryKey: "auto" });
   const repeated = deterministicQueueId({ dateKey: "2026-08-21", vanId: "VAN-2", order, deliveryKey: "auto" });
   const manual = deterministicQueueId({ dateKey: "2026-08-21", vanId: "VAN-2", order, deliveryKey: "manual-test-1" });
   const lunch = deterministicLunchQueueId({ dateKey: "2026-08-21", vanId: "VAN-2", deliveryKey: "auto" });
+  const pending = deterministicPendingQueueId({ dateKey: "2026-08-21", vanId: "VAN-2", slot: "13:30", deliveryKey: "auto" });
   assert.equal(first, repeated);
   assert.notEqual(first, manual);
   assert.match(first, /van-daily-work-2026-08-21-VAN-2-0830-WO-APT-1-1-auto/);
   assert.match(lunch, /van-daily-lunch-2026-08-21-VAN-2-auto/);
+  assert.match(pending, /van-daily-pending-2026-08-21-VAN-2-1330-auto/);
 });
 
 test("queueDay sends a minimal lunch message between morning and afternoon work orders", async () => {
@@ -396,6 +419,7 @@ test("queueDay sends a minimal lunch message between morning and afternoon work 
 
   assert.equal(result.vanCount, 1);
   assert.equal(result.workOrderCount, 2);
+  assert.equal(result.pendingPeriodCount, 0);
   assert.equal(result.lunchBreakCount, 1);
   assert.equal(result.messageCount, 3);
   assert.equal(result.results.every((item) => item.queued), true);
@@ -412,13 +436,39 @@ test("queueDay sends a minimal lunch message between morning and afternoon work 
   assert.match(queued[2].text, /Customer Two/);
 });
 
-test("a van with zero work orders queues zero messages", async () => {
+test("an operationally available empty regular day queues only the six sellable periods as PENDIENTE", async () => {
+  const db = createScheduleDb({
+    vans: [{
+      id: "VAN-2",
+      active: true,
+      responsibleStaffId: "driver-1",
+      whatsappScheduleGroupName: "Van 2 Group",
+      whatsappScheduleGroupJid: GROUP_JID,
+    }],
+    staff: [{ id: "driver-1", name: "Driver One", active: true, availability: "Disponible", canDriveVan: true }],
+  });
+  const service = createTechnicianDailyScheduleService({ db });
+  const result = await service.queueDay("2026-08-21", { targetVanId: "VAN-2", deliveryKey: "pending-test" });
+
+  assert.equal(result.workOrderCount, 0);
+  assert.equal(result.lunchBreakCount, 0);
+  assert.equal(result.pendingPeriodCount, 6);
+  assert.equal(result.messageCount, 6);
+  assert.deepEqual(result.results.map((item) => item.pendingSlot), ["08:30", "09:30", "10:30", "13:30", "14:30", "15:30"]);
+  const texts = [...db.collections.whatsappOutboundQueue.values()].map((item) => item.text);
+  assert.equal(texts.every((value) => value.startsWith("*PENDIENTE*")), true);
+  assert.equal(texts.some((value) => value.includes("11:30 AM")), false);
+  assert.equal(texts.some((value) => value.includes("12:30 PM")), false);
+});
+
+test("a van with zero work orders but no operational driver queues zero messages", async () => {
   const db = createScheduleDb({
     vans: [{ id: "VAN-4", active: true, whatsappScheduleGroupName: "Van 4 Group", whatsappScheduleGroupJid: "120000000000000004@g.us" }],
   });
   const service = createTechnicianDailyScheduleService({ db });
   const result = await service.queueDay("2026-08-21", { targetVanId: "VAN-4" });
   assert.equal(result.workOrderCount, 0);
+  assert.equal(result.pendingPeriodCount, 0);
   assert.equal(result.lunchBreakCount, 0);
   assert.equal(result.messageCount, 0);
   assert.equal(db.collections.whatsappOutboundQueue.size, 0);
