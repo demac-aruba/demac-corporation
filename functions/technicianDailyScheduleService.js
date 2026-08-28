@@ -1,5 +1,6 @@
 const { canonicalizeVanCatalog, resolveCanonicalVanId } = require("./bookingVanIdentity");
-const { AFTERNOON_SLOTS } = require("./bookingSchedulingPrimitives");
+const { endTimeFromOccupiedSlots } = require("./bookingCapacityAvailability");
+const { AFTERNOON_SLOTS, isHalfDay, occupiedSlots } = require("./bookingSchedulingPrimitives");
 const { createWhatsAppTransactionalService, safeDocumentId, validWacliRecipient } = require("./whatsappTransactionalService");
 
 const VAN_DAILY_LANGUAGE = "es";
@@ -120,20 +121,35 @@ function hasCanonicalReservedCapacity(order) {
   return Number.isFinite(slots) && slots > 0;
 }
 
-function displayedOrderEndTime(order) {
-  const canonicalEnd = normalizedText(order?.appointmentEndTime);
+function canonicalReservedEndTime(order, halfDaySchedules = []) {
+  if (!hasCanonicalReservedCapacity(order)) return "";
+  if (Array.isArray(order?.scheduledSlots)) {
+    const stored = order.scheduledSlots.map((slot) => normalizedText(slot)).filter(Boolean);
+    const end = endTimeFromOccupiedSlots(stored);
+    if (end) return end;
+  } else {
+    const slotCount = Math.max(1, Math.round(Number(order?.scheduledSlots) || 0));
+    const halfDay = isHalfDay(normalizedText(order?.vanId), normalizedText(order?.date), halfDaySchedules);
+    const stored = occupiedSlots(normalizedText(order?.time), slotCount, halfDay);
+    const end = endTimeFromOccupiedSlots(stored);
+    if (end) return end;
+  }
+  return normalizedText(order?.appointmentEndTime);
+}
 
-  // Booking Authority persists both reserved capacity (`scheduledSlots`) and the
-  // committed assignment end. When those reservation fields exist, the technician
-  // schedule must display that committed schedule span instead of recomputing a
-  // different end from service-duration minutes. Duration remains a compatibility
-  // fallback for older records and is still used independently by lunch planning.
-  if (hasCanonicalReservedCapacity(order) && canonicalEnd) return canonicalEnd;
-  if (order?.fullDaySingleProperty === true && canonicalEnd) return canonicalEnd;
+function displayedOrderEndTime(order, halfDaySchedules = []) {
+  const canonicalEnd = canonicalReservedEndTime(order, halfDaySchedules);
+
+  // Booking Authority capacity is the technician-visible schedule authority. Service
+  // duration remains a compatibility fallback for older Work Orders and continues to
+  // drive lunch-placement calculations; it must not redefine a committed slot span.
+  if (canonicalEnd) return canonicalEnd;
+  const storedEnd = normalizedText(order?.appointmentEndTime);
+  if (order?.fullDaySingleProperty === true && storedEnd) return storedEnd;
 
   const projected = projectedOrderEndMinutes(order);
   if (projected !== null) return minutesToTime(projected);
-  return canonicalEnd;
+  return storedEnd;
 }
 
 function technicianInstructions(appointment, order) {
@@ -219,9 +235,9 @@ function arrivalContact(order, client) {
   };
 }
 
-function renderVanWorkOrderText({ van, order, client, property, appointment, staffById, sequence }) {
+function renderVanWorkOrderText({ van, order, client, property, appointment, staffById, halfDaySchedules = [], sequence }) {
   const start = formatClock(order.time);
-  const endValue = displayedOrderEndTime(order);
+  const endValue = displayedOrderEndTime(order, halfDaySchedules);
   const end = endValue ? formatClock(endValue) : "";
   const contact = arrivalContact(order, client);
   const team = staffFirstNamesForOrder(order, staffById);
@@ -368,11 +384,14 @@ function createTechnicianDailyScheduleService({ db } = {}) {
       .map((document) => ({ id: document.id, ...document.data() }))
       .filter(activeWorkOrder)
       .map((order) => ({ ...order, vanId: resolveCanonicalVanId(order.vanId, catalog.aliases) || normalizedText(order.vanId) }));
+    const halfDaySchedules = workOrders.some(hasCanonicalReservedCapacity)
+      ? (await db.collection("vanHalfDaySchedules").get()).docs.map((document) => ({ id: document.id, ...document.data() }))
+      : [];
     const clientsById = await loadDocuments("clients", workOrders.map((order) => order.clientId));
     const propertiesById = await loadDocuments("properties", workOrders.map((order) => order.propertyId));
     const appointmentsById = await loadDocuments("appointments", workOrders.map((order) => order.appointmentId));
     const staffById = new Map(staffSnapshot.docs.map((document) => [document.id, { id: document.id, ...document.data() }]));
-    return { vans: catalog.vans, workOrders, clientsById, propertiesById, appointmentsById, staffById };
+    return { vans: catalog.vans, workOrders, clientsById, propertiesById, appointmentsById, staffById, halfDaySchedules };
   }
 
   async function queueWorkOrder({ dateKey, van, order, day, sequence, deliveryKey, reason }) {
@@ -387,7 +406,7 @@ function createTechnicianDailyScheduleService({ db } = {}) {
     const property = day.propertiesById.get(String(order.propertyId || ""));
     const appointment = day.appointmentsById.get(String(order.appointmentId || ""));
     const queueId = deterministicQueueId({ dateKey, vanId: van.id, order, deliveryKey });
-    const text = renderVanWorkOrderText({ van, order, client, property, appointment, staffById: day.staffById, sequence });
+    const text = renderVanWorkOrderText({ van, order, client, property, appointment, staffById: day.staffById, halfDaySchedules: day.halfDaySchedules, sequence });
     const result = await whatsapp.queueTransactionalMessage({
       queueId,
       to: config.groupJid,
@@ -513,6 +532,7 @@ module.exports.PREFERRED_LUNCH_START_MINUTES = PREFERRED_LUNCH_START_MINUTES;
 module.exports.VAN_DAILY_LANGUAGE = VAN_DAILY_LANGUAGE;
 module.exports.activeWorkOrder = activeWorkOrder;
 module.exports.arrivalContact = arrivalContact;
+module.exports.canonicalReservedEndTime = canonicalReservedEndTime;
 module.exports.createTechnicianDailyScheduleService = createTechnicianDailyScheduleService;
 module.exports.customerDescription = customerDescription;
 module.exports.deterministicLunchQueueId = deterministicLunchQueueId;
