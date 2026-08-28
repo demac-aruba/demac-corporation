@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useAuth } from '@/components/auth/auth-provider';
 import {
   loadCanonicalOperationsState,
@@ -62,6 +62,7 @@ export function EmployeeWorkspace() {
   const canManageSensitiveAttendance = principal.role === 'super_admin' || principal.capabilities.has('payroll_sensitive.view');
   const canManageEmployees = principal.capabilities.has('employees.manage');
   const today = dateKey(new Date());
+  const quickActionsRef = useRef<HTMLDetailsElement>(null);
   const [operations, setOperations] = useState<CanonicalOperationsState | null>(null);
   const [attendance, setAttendance] = useState<EmployeeAttendanceState>({ payrollSettings: [], timesheets: [], advances: [] });
   const [loading, setLoading] = useState(true);
@@ -75,6 +76,7 @@ export function EmployeeWorkspace() {
   const [draft, setDraft] = useState<AttendanceDayDraft | null>(null);
   const [advanceDraft, setAdvanceDraft] = useState({ employeeId: '', date: today, amount: '', method: 'Bank Transfer' as SalaryAdvanceMethod, reference: '', notes: '' });
   const [profileTargetId, setProfileTargetId] = useState<string | null | undefined>(undefined);
+  const [quickActionsOpen, setQuickActionsOpen] = useState(false);
 
   const load = useCallback(async (showLoading = true) => {
     if (showLoading) setLoading(true);
@@ -98,6 +100,23 @@ export function EmployeeWorkspace() {
   }, [canManageSensitiveAttendance]);
 
   useEffect(() => { void load(true); }, [load]);
+
+  useEffect(() => {
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!quickActionsOpen) return;
+      const target = event.target;
+      if (target instanceof Node && !quickActionsRef.current?.contains(target)) setQuickActionsOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setQuickActionsOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer);
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [quickActionsOpen]);
 
   const employees = useMemo(() => (operations?.staffProfiles ?? []).filter((profile) => profile.active !== false), [operations]);
   const selectedEmployee = employees.find((profile) => profile.id === selectedEmployeeId) ?? employees[0] ?? null;
@@ -321,8 +340,21 @@ export function EmployeeWorkspace() {
           <p>One canonical workspace for employee profiles, attendance exceptions and salary advances. Normal scheduled attendance is automatic.</p>
         </div>
         <div className={styles.headerActions}>
-          <details className={styles.quickActions}><summary><Icon name="bolt" />Quick actions <span>⌄</span></summary><div className={styles.quickMenu}><button type="button" onClick={() => void load(false)}>Refresh data</button><button type="button" onClick={() => setProfileTargetId(null)} disabled={!canManageEmployees}>Add employee</button><button type="button" onClick={exportPayrollPdf} disabled={!canManageSensitiveAttendance}>Export payroll summary PDF</button><button type="button" onClick={exportAccountingCsv} disabled={!canManageSensitiveAttendance}>Export accounting CSV</button><button type="button" onClick={() => setTab('advances')} disabled={!canManageSensitiveAttendance}>Record salary advance</button></div></details>
-          <div className={styles.periodSelector}><Icon name="calendar" /><div><span>Payroll Period</span><strong>{periodLabel(period.start, period.end)}</strong></div><button type="button" onClick={() => movePayrollPeriod(-1)}>‹</button><button type="button" onClick={() => movePayrollPeriod(1)}>›</button></div>
+          <details
+            ref={quickActionsRef}
+            className={styles.quickActions}
+            open={quickActionsOpen}
+            onToggle={(event) => setQuickActionsOpen(event.currentTarget.open)}
+          >
+            <summary><Icon name="bolt" />Quick actions <span>⌄</span></summary>
+            <div className={styles.quickMenu}>
+              <button type="button" onClick={() => { setQuickActionsOpen(false); void load(false); }}>Refresh data</button>
+              <button type="button" onClick={() => { setQuickActionsOpen(false); setProfileTargetId(null); }} disabled={!canManageEmployees}>Add employee</button>
+              <button type="button" onClick={() => { setQuickActionsOpen(false); exportPayrollPdf(); }} disabled={!canManageSensitiveAttendance}>Export payroll summary PDF</button>
+              <button type="button" onClick={() => { setQuickActionsOpen(false); exportAccountingCsv(); }} disabled={!canManageSensitiveAttendance}>Export accounting CSV</button>
+              <button type="button" onClick={() => { setQuickActionsOpen(false); setTab('advances'); }} disabled={!canManageSensitiveAttendance}>Record salary advance</button>
+            </div>
+          </details>
         </div>
       </header>
 
@@ -375,7 +407,19 @@ export function EmployeeWorkspace() {
 
         <div className={styles.mainGrid}>
           <section className={styles.calendarCard}>
-            <div className={styles.calendarToolbar}><h2>{monthLabel(monthKey(period.end))}</h2><div className={styles.calendarActions}><button className={styles.squareButton} type="button" onClick={() => movePayrollPeriod(-1)}>‹</button><button className={styles.ghostButton} type="button" onClick={goToToday}>Today</button><span className={styles.viewBadge}>Payroll⌄</span><button className={styles.squareButton} type="button" onClick={() => movePayrollPeriod(1)}>›</button></div></div>
+            <div className={styles.calendarToolbar}>
+              <div>
+                <h2>{monthLabel(monthKey(period.end))}</h2>
+                <span style={{ display: 'block', marginTop: 3, color: 'var(--muted, #738197)', fontSize: 10, fontWeight: 700 }}>
+                  Payroll period · {periodLabel(period.start, period.end)}
+                </span>
+              </div>
+              <div className={styles.calendarActions}>
+                <button className={styles.squareButton} type="button" onClick={() => movePayrollPeriod(-1)}>‹</button>
+                <button className={styles.ghostButton} type="button" onClick={goToToday}>Today</button>
+                <button className={styles.squareButton} type="button" onClick={() => movePayrollPeriod(1)}>›</button>
+              </div>
+            </div>
             <div className={styles.weekHeader}>{WEEKDAY_LABELS.map((day) => <span key={day}>{day}</span>)}</div>
             <div className={styles.calendarGrid}>{calendarCells.map(({ date, inPeriod }) => {
               const record = inPeriod && selectedEmployee ? recordsFor(selectedEmployee, date) : null;
