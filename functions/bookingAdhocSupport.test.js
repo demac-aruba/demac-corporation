@@ -161,19 +161,23 @@ function baseSeed(extra = {}) {
       name: "Van 2",
       responsibleStaffId: "support-driver-default",
       regularHelperId: "support-helper-default",
+      additionalHelperId: "support-third-default",
     },
     "staffProfiles/primary-driver": { id: "primary-driver", name: "Miguel Reyes", active: true, availability: "Disponible", canDriveVan: true },
     "staffProfiles/primary-helper": { id: "primary-helper", name: "Alan Baquero", active: true, availability: "Disponible", canDriveVan: false },
     "staffProfiles/support-driver-default": { id: "support-driver-default", name: "Default Driver", active: true, availability: "Disponible", canDriveVan: true },
     "staffProfiles/support-helper-default": { id: "support-helper-default", name: "Default Helper", active: true, availability: "Disponible", canDriveVan: false },
+    "staffProfiles/support-third-default": { id: "support-third-default", name: "Default Third", active: true, availability: "Disponible", canDriveVan: false },
     "staffProfiles/support-driver-date": { id: "support-driver-date", name: "Walter Gomez", active: true, availability: "Disponible", canDriveVan: true },
     "staffProfiles/support-helper-date": { id: "support-helper-date", name: "Goyo Perez", active: true, availability: "Disponible", canDriveVan: false },
+    "staffProfiles/support-third-date": { id: "support-third-date", name: "Third Helper", active: true, availability: "Disponible", canDriveVan: false },
     "dailyVanAssignments/VAN-2-2026-08-27": {
       id: "VAN-2-2026-08-27",
       date: DATE,
       vanId: "VAN-2",
       driverStaffId: "support-driver-date",
       helperStaffId: "support-helper-date",
+      additionalHelperStaffId: "support-third-date",
       status: "Disponible",
     },
     "businessSettings/business-calendar": { id: "business-calendar", closedWeekdays: [0] },
@@ -181,11 +185,11 @@ function baseSeed(extra = {}) {
   };
 }
 
-function fixture(extra = {}) {
+function fixture(extra = {}, clock = "2026-08-27T14:00:00.000Z") {
   const db = new FakeFirestore(baseSeed(extra));
   const authority = createAdhocSupportAuthority({
     db,
-    clock: () => new Date("2026-08-27T14:00:00.000Z"),
+    clock: () => new Date(clock),
     serverTimestamp: () => "SERVER_TIMESTAMP",
   });
   return { db, authority };
@@ -217,7 +221,7 @@ test("ad hoc support creates one linked SUPPORT work order and one canonical cap
   assert.equal(appointment.assignments[1].role, "support");
   assert.equal(appointment.assignments[1].vanId, "VAN-2");
   assert.equal(appointment.assignments[1].time, "13:30");
-  assert.deepEqual(appointment.assignments[1].technicianIds, ["support-driver-date", "support-helper-date"]);
+  assert.deepEqual(appointment.assignments[1].technicianIds, ["support-driver-date", "support-helper-date", "support-third-date"]);
   assert.equal(appointment.lastScheduleChangeKind, "support_added");
   assert.equal(appointment.customerNotificationRecommended, false);
 
@@ -230,7 +234,7 @@ test("ad hoc support creates one linked SUPPORT work order and one canonical cap
   assert.equal(supportOrder.vanId, "VAN-2");
   assert.equal(supportOrder.time, "13:30");
   assert.equal(supportOrder.appointmentEndTime, "14:30");
-  assert.deepEqual(supportOrder.technicianIds, ["support-driver-date", "support-helper-date"]);
+  assert.deepEqual(supportOrder.technicianIds, ["support-driver-date", "support-helper-date", "support-third-date"]);
   assert.equal(supportOrder.whatsappNotificationsEnabled, false);
   assert.deepEqual(supportOrder.notificationRecipients, []);
   assert.equal(supportOrder.customerCommunicationOwner, false);
@@ -253,11 +257,32 @@ test("retrying the same support request is idempotent and does not append anothe
   assert.equal(db.read("appointments/APT-SUPPORT-1").assignments.length, 2);
 });
 
+test("ad hoc coworker support is same-day only", async () => {
+  const { authority } = fixture({}, "2026-08-28T14:00:00.000Z");
+  await assert.rejects(
+    authority.addSupport(addInput()),
+    (error) => error.code === BOOKING_ERROR_CODES.INVALID_REQUEST && error.details?.reason === "adhoc-support-same-day-only",
+  );
+});
+
 test("support cannot target the primary van", async () => {
   const { authority } = fixture();
   await assert.rejects(
     authority.addSupport(addInput({ targetVanId: "VAN-1" })),
     (error) => error.code === BOOKING_ERROR_CODES.INVALID_REQUEST && /different from the primary Van/i.test(error.message),
+  );
+});
+
+test("support refuses a confirmed appointment whose primary work is already completed", async () => {
+  const { authority } = fixture({
+    "workOrders/WO-APT-SUPPORT-1-1": {
+      ...baseSeed()["workOrders/WO-APT-SUPPORT-1-1"],
+      status: "Completada",
+    },
+  });
+  await assert.rejects(
+    authority.addSupport(addInput()),
+    (error) => error.code === BOOKING_ERROR_CODES.INVALID_REQUEST && /no active primary Work Order/i.test(error.message),
   );
 });
 
