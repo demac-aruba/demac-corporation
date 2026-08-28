@@ -45,8 +45,8 @@ assert.equal(validateDailyVanAssignment(override, staff), true, 'Daily override 
 assert.throws(() => validateDailyVanAssignment({ ...override, additionalHelperStaffId: helper.id }, staff), /same employee/i, 'Daily override cannot duplicate the same person across crew slots.');
 assert.throws(() => validateDailyVanAssignment({ ...override, driverStaffId: third.id, additionalHelperStaffId: undefined }, staff), /authorized to drive/i, 'Temporary driver must also be authorized to drive Vans.');
 assert.throws(
-  () => validateDailyVanAssignment({ ...override, driverStaffId: driver.id, helperStaffId: undefined, additionalHelperStaffId: undefined }, staff, [legacyVan, vanTwo], []),
-  /already assigned to Van 1|already assigned to Van 2/i,
+  () => validateDailyVanAssignment({ id: 'daily-conflict', date: '2026-08-31', vanId: 'VAN-2', driverStaffId: driver.id }, staff, [legacyVan, vanTwo], []),
+  /already assigned to Van 1/i,
   'Date-scoped overrides must prevent the same person from resolving onto two Vans simultaneously.',
 );
 const vanTwoReplacement: CanonicalDailyVanAssignment = { id: 'daily-VAN-2-2026-08-31', date: '2026-08-31', vanId: 'VAN-2', driverStaffId: driver.id, helperStaffId: third.id };
