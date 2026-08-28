@@ -133,12 +133,14 @@ export function calculateAttendanceVariance(input: {
   const rawOvertimeMinutes = earlyStartMinutes + lateFinishMinutes + unusedBreakMinutes;
   const overtimeMinutes = Math.min(workedMinutesValue, rawOvertimeMinutes);
 
-  const lateArrivalMinutes = actualStart > scheduleStart
+  const rawLateArrivalMinutes = actualStart > scheduleStart
     ? Math.max(0, Math.min(actualStart, scheduleEnd) - scheduleStart)
     : 0;
-  const earlyDepartureMinutes = actualEnd < scheduleEnd
+  const rawEarlyDepartureMinutes = actualEnd < scheduleEnd
     ? Math.max(0, scheduleEnd - Math.max(actualEnd, scheduleStart))
     : 0;
+  const lateArrivalMinutes = Math.min(schedule.scheduledMinutes, rawLateArrivalMinutes);
+  const earlyDepartureMinutes = Math.min(schedule.scheduledMinutes, rawEarlyDepartureMinutes);
   const missingBeforeBreak = Math.min(schedule.scheduledMinutes, lateArrivalMinutes + earlyDepartureMinutes);
   const remainingScheduledMinutes = Math.max(0, schedule.scheduledMinutes - missingBeforeBreak);
   const extendedBreakMinutes = Math.min(
