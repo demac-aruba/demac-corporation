@@ -1,6 +1,6 @@
 # Task: Canonical Technician Portal / Field Operations
 
-Status: Objective contract established — implementation remains phased
+Status: Engineering complete on feature branch — human UAT/merge pending
 Date: 2026-08-24
 Branch: `feature/technician-portal-canonical-foundation`
 Source: DEMAC Technician Portal / Field Operations master implementation request plus repository governance
@@ -330,20 +330,20 @@ The portal is complete only when all of the following are demonstrated:
 
 Production deployment is not a 42nd feature or engineering deliverable. It remains a separate human-only release boundary and cannot occur without explicit human approval.
 
-## Current known gaps carried into the next engineering phase
+## Residual release and compatibility facts
 
-These are related blockers/status facts, not permission to broaden scope:
+These are residual status facts, not permission to broaden scope:
 
 - Phase 2 assignment enforcement is complete at branch level. `TECHNICIAN_PORTAL_RULES_EVIDENCE.md` records 5/5 Firestore groups and 16/16 Storage runtime scenarios PASS after the explicitly authorized Rules hardening. No Rules deployment is authorized or performed.
-- Phase 3 Technician Home now includes the first canonical active-visit controls, but only for the explicitly activated Phase 4 path. It is not yet the complete visit-execution application.
+- Phase 3 Technician Home and the activated visit-execution flow are complete for the canonical deliverables and mandatory branch-level scenarios.
 - Initial WorkVisit preparation is HTTP-activated on the feature branch. The active transition command is also HTTP-activated for `en_route`, `on_site`, `in_progress`, governed pending/resume, return-required, and terminal no-access/cancelled outcomes. Both re-resolve assignment on the server and use the approved audit boundary.
 - The read model resolves the current physical WorkVisit and keeps `WorkOrder.status` separate from actual Field state. Existing Legacy in-flight WorkOrders that have no WorkVisit are not silently converted into canonical physical history; they remain compatibility/fallback cases rather than guessed truth.
-- Phase 4 remains **PARTIAL overall**: distinct return-visit creation and governed Office Review submission/completion are activated. Pending/return-required/no-access/cancelled remain separately governed WorkVisit outcomes, and a chain tip that still requires another physical visit cannot be submitted as final Office Review.
+- Phase 4 is complete at branch level: distinct return-visit creation and governed Office Review submission/completion are activated. Pending/return-required/no-access/cancelled remain separately governed WorkVisit outcomes, and a chain tip that still requires another physical visit cannot be submitted as final Office Review.
 - VisitAsset/on-site registration, optional canonical QR identification, WorkInterventions, report templates/evidence/measurements/findings, customer approvals, planned-work dispositions, partial/return visits, Professional Report readiness, canonical Field Sale Lines, Office Review revisions, non-destructive correction/resubmission context, Customer/Equipment history projections, immutable Field-to-Inventory/Field-to-Billing candidates, user-scoped offline cache/draft/outbox behavior and assignment-aware Rules are implemented on the branch. Downstream Inventory/invoice authority consumption remains outside this portal deliverable.
 - The old ERP Next `validateVisitForOfficeReview` helper remains specification/compatibility code only. Production submission validation is now server-owned by `fieldOperationsOfficeReview.js`; the client consumes blockers and never acts as a second submission authority.
 - Browser field/localStorage implementations remain compatibility/fallback until canonical persistence/UI reaches proven parity; they must not be deleted merely because they are old.
-- The 26 mandatory scenarios have executable evidence in `TECHNICIAN_PORTAL_ACCEPTANCE_EVIDENCE.md`; Firestore/Storage target policy also passes its recorded runtime evidence. The final current-head four-pass review and remote CI remain before engineering completion.
-- Human UAT and merge prerequisites are prepared in `TECHNICIAN_PORTAL_UAT_HANDOFF.md`; the current decision remains HOLD and no merge/deployment is authorized.
+- The 26 mandatory scenarios, Firestore/Storage target policy, current-main four-pass review and exact-candidate remote CI all pass. The branch has reached engineering completion at **41/41** canonical deliverables.
+- Human UAT and merge prerequisites are prepared in `TECHNICIAN_PORTAL_UAT_HANDOFF.md`; release remains HOLD and no merge/deployment is authorized.
 - No later phase may be marked complete based only on an earlier green checkpoint.
 
 ## Recovery / migration posture
@@ -356,4 +356,4 @@ The feature-branch HTTP activation is code activation only. No production Functi
 
 ## Completion decision
 
-This task reaches engineering completion only when the 41 canonical Definition-of-Done deliverables, the mandatory scenario suite, applicable quality gates, security allow/deny evidence, parity evidence, documentation and current-main review requirements are all satisfied. Production rollout remains a separate human-approved action even after engineering completion.
+This task has reached branch-level engineering completion: all 41 canonical Definition-of-Done deliverables, the mandatory scenario suite, applicable quality gates, security allow/deny evidence, documentation and current-main Solo Maintainer review requirements are satisfied. Production rollout remains a separate human-approved action; human UAT and merge approval are release boundaries, not additional features.

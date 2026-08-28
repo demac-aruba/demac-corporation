@@ -7,8 +7,9 @@ This packet prepares human validation only. It does not authorize merge, additio
 ## Current branch state
 
 - Branch: `feature/technician-portal-canonical-foundation`
-- Prepared through implementation commit: `edc9f3899418a0ac665300625ffaea101d3cf844`
-- Canonical deliverable count: **40 completed / 41 total / 1 remaining**
+- Prepared through local current-main merge: `0ceb618e8263aca7342312599df7ac0687ef0fd2`
+- Remote code candidate with identical tree and passing CI: `54766097e028a9d7e43fab8f675e1e294279ffb5`
+- Canonical deliverable count: **41 completed / 41 total / 0 remaining**
 - Mandatory scenarios: 26/26 branch-level acceptance evidence PASS
 - Rules gate: 5/5 Firestore groups and 16/16 Storage runtime scenarios PASS; no production Rules deployment occurred
 - Review mode: current-main Solo Maintainer Review Mode applied; absence of an external reviewer is not itself a blocker
@@ -16,9 +17,9 @@ This packet prepares human validation only. It does not authorize merge, additio
 
 ## Preconditions before human UAT can approve release readiness
 
-1. The current branch is pushed and all required GitHub workflows pass at the exact remote head.
-2. A final fresh adversarial review covers the complete release candidate under current-main Solo Maintainer Review Mode; an available external reviewer may add evidence but is not mandatory.
-3. UAT uses non-production test identities and data only.
+1. **PASS:** the current code tree is published and all 10 required GitHub workflows pass at remote candidate `54766097e028a9d7e43fab8f675e1e294279ffb5`.
+2. **PASS:** a final fresh adversarial review covers the complete release candidate under current-main Solo Maintainer Review Mode; it is not described as independent review.
+3. **REQUIRED FOR UAT:** use non-production test identities and data only.
 
 ## Human UAT script
 

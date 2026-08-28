@@ -10,9 +10,9 @@ This register maps each of the 26 mandatory scenarios to executable evidence. Te
 - `npm run test:field-domain --prefix apps/erp-next`: **PASS**
 - `npm run test:field-offline --prefix apps/erp-next`: **PASS**
 - `node --test functions/fieldOperationsSaleLines.test.js`: **PASS (10/10)**
-- Functions Field Authority core, in-process equivalent of the CI file manifest: **PASS (340/340)**
-- Functions Booking Authority, in-process equivalent of the CI file manifest: **PASS (94/94)**
-- Functions Field extension gate (`pretest:field-authority`): **PASS (45/45)**
+- Functions Field Authority core, in-process equivalent of the CI file manifest: **PASS (347/347)**
+- Functions Booking Authority, in-process equivalent of the CI file manifest: **PASS (95/95)**
+- Functions Field extension gate: **PASS (47/47)**
 - ERP Next typecheck and Field security contracts: **PASS**
 - Firebase static validation: **PASS**
 
@@ -49,4 +49,4 @@ This register maps each of the 26 mandatory scenarios to executable evidence. Te
 
 ## Interpretation
 
-The mandatory scenario deliverable is **PASS** at branch level. Firestore/Storage target-policy evidence also passes separately in `TECHNICIAN_PORTAL_RULES_EVIDENCE.md`. Neither evidence authorizes deployment or satisfies the remaining current-head Solo Maintainer review, remote CI or human UAT/merge boundaries.
+The mandatory scenario deliverable is **PASS** at branch level. Firestore/Storage target-policy evidence also passes separately in `TECHNICIAN_PORTAL_RULES_EVIDENCE.md`; the current-main Solo Maintainer review and exact-candidate remote CI are PASS. This evidence does not authorize deployment and does not replace the human UAT/merge boundaries.
