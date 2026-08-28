@@ -1,4 +1,4 @@
-import { getFirestoreDocument, saveFirestoreDocument, updateFirestoreDocument } from './firebase/firestore-rest';
+import { deleteFirestoreDocument, getFirestoreDocument, saveFirestoreDocument, updateFirestoreDocument } from './firebase/firestore-rest';
 import type {
   CanonicalBusinessCalendar,
   CanonicalCalendarClosure,
@@ -7,6 +7,7 @@ import type {
   CanonicalStaffProfile,
   CanonicalVan,
   CanonicalVanHalfDaySchedule,
+  CanonicalVanMaintenanceLog,
 } from './canonical-operations';
 
 function updated<T extends { id: string }>(record: T): T {
@@ -36,6 +37,14 @@ export function saveCanonicalVanProfile(van: CanonicalVan) {
 
 export function saveCanonicalDailyVanAssignment(assignment: CanonicalDailyVanAssignment) {
   return upsertCanonicalDocument('dailyVanAssignments', assignment);
+}
+
+export function deleteCanonicalDailyVanAssignment(id: string) {
+  return deleteFirestoreDocument('dailyVanAssignments', id);
+}
+
+export function saveCanonicalVanMaintenanceLog(log: CanonicalVanMaintenanceLog) {
+  return upsertCanonicalDocument('vanMaintenanceLogs', log);
 }
 
 export function saveCanonicalStaffAbsence(absence: CanonicalStaffAbsence) {
