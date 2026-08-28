@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import type { CanonicalDailyVanAssignment, CanonicalStaffProfile, CanonicalVan } from '../lib/canonical-operations';
+import { canonicalVanId, type CanonicalDailyVanAssignment, type CanonicalStaffProfile, type CanonicalVan } from '../lib/canonical-operations';
 import { buildVanSaveRecord, nextCanonicalVanId, validateDailyVanAssignment, validateVanCrew, workedMinutes } from '../lib/van-profile';
 
 const driver: CanonicalStaffProfile = { id: 'staff-driver', name: 'Driver', employeeType: 'Técnico', role: 'Técnico responsable', canDriveVan: true, active: true };
@@ -7,6 +7,20 @@ const helper: CanonicalStaffProfile = { id: 'staff-helper', name: 'Helper', empl
 const third: CanonicalStaffProfile = { id: 'staff-third', name: 'Third Helper', employeeType: 'Técnico', role: 'Ayudante', canDriveVan: false, active: true };
 const otherDriver: CanonicalStaffProfile = { id: 'staff-driver-2', name: 'Second Driver', employeeType: 'Técnico', role: 'Técnico', canDriveVan: true, active: true };
 const staff = [driver, helper, third, otherDriver];
+
+const historicalVans: CanonicalVan[] = [
+  { id: 'VAN-1783801335935', name: 'Van 2', plate: 'A-V2' },
+  { id: 'VAN-1783801335936', name: 'Van 4', plate: 'A-25921' },
+  { id: 'VAN-1783801335937', name: 'Van 1', plate: 'A-58347' },
+  { id: 'VAN-1783801335938', name: 'Van 3', plate: 'A-59742' },
+];
+assert.equal(canonicalVanId(historicalVans[0].id, historicalVans), 'VAN-2', 'A legacy Firestore document ID must resolve through the Van name instead of masquerading as the scheduling lane.');
+assert.equal(canonicalVanId('VAN-2', historicalVans), 'VAN-2', 'Direct canonical references must continue to resolve unchanged for WhatsApp and Scheduling lookups.');
+assert.equal(canonicalVanId('VAN-5', [...historicalVans, { id: 'VAN-5', name: 'Van 5' }]), 'VAN-5', 'Future canonical Van IDs must remain supported.');
+const historicalOrder = [...historicalVans]
+  .sort((a, b) => canonicalVanId(a.id, historicalVans).localeCompare(canonicalVanId(b.id, historicalVans), undefined, { numeric: true }))
+  .map((van) => canonicalVanId(van.id, historicalVans));
+assert.deepEqual(historicalOrder, ['VAN-1', 'VAN-2', 'VAN-3', 'VAN-4'], 'Legacy physical Vans must sort by canonical lane number, not Firestore document ID.');
 
 const legacyVan: CanonicalVan = {
   id: 'VAN-1', name: 'Van 1', status: 'Disponible', responsibleStaffId: driver.id, regularHelperId: helper.id, technicianIds: [driver.id, helper.id], active: true,
@@ -82,4 +96,4 @@ assert.equal(workedMinutes('08:00', '13:00'), 300, 'Van partial day 08:00–13:0
 assert.equal(workedMinutes('09:00', '13:00'), 240, 'Van partial day may use exact custom worked hours.');
 assert.throws(() => workedMinutes('13:00', '09:00'), /after start time/i, 'Invalid partial-day windows must be rejected.');
 
-console.log('Van profile acceptance passed: canonical crew ownership, optional third helper, cross-Van exclusivity, daily overrides, cancelled-override recovery, safe clearing, protected future-Van activation, new-Van defaults and exact partial-day hours.');
+console.log('Van profile acceptance passed: legacy Van IDs resolve to canonical lanes, Vans sort naturally, WhatsApp/Scheduling direct lane references remain stable, canonical crew ownership, optional third helper, cross-Van exclusivity, daily overrides, cancelled-override recovery, safe clearing, protected future-Van activation, new-Van defaults and exact partial-day hours.');
