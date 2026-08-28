@@ -14,6 +14,14 @@ on:
       - 'functions/bookingSchedulingPrimitives.js'
       - 'functions/bookingCapacityAvailability.js'
       - 'functions/bookingCapacityAvailability.test.js'
+      - 'functions/technicianScheduleAvailability.js'
+      - 'functions/technicianScheduleAvailability.test.js'
+      - 'functions/technicianScheduleChangeService.js'
+      - 'functions/technicianScheduleChangeService.test.js'
+      - 'functions/technicianDailyScheduleService.js'
+      - 'functions/technicianDailyScheduleService.test.js'
+      - 'functions/technicianDailyScheduleCanonicalTime.test.js'
+      - 'functions/technicianDailySchedules.js'
       - '.github/workflows/van-schedule-architecture-ci.yml'
   push:
     branches:
@@ -30,6 +38,14 @@ on:
       - 'functions/bookingSchedulingPrimitives.js'
       - 'functions/bookingCapacityAvailability.js'
       - 'functions/bookingCapacityAvailability.test.js'
+      - 'functions/technicianScheduleAvailability.js'
+      - 'functions/technicianScheduleAvailability.test.js'
+      - 'functions/technicianScheduleChangeService.js'
+      - 'functions/technicianScheduleChangeService.test.js'
+      - 'functions/technicianDailyScheduleService.js'
+      - 'functions/technicianDailyScheduleService.test.js'
+      - 'functions/technicianDailyScheduleCanonicalTime.test.js'
+      - 'functions/technicianDailySchedules.js'
       - '.github/workflows/van-schedule-architecture-ci.yml'
   workflow_dispatch:
 
@@ -73,6 +89,9 @@ jobs:
       - name: Validate Booking Authority Van capacity
         run: node --test functions/bookingCapacityAvailability.test.js
 
+      - name: Validate technician schedule capacity projection
+        run: node --test functions/technicianDailyScheduleCanonicalTime.test.js functions/technicianScheduleAvailability.test.js functions/technicianScheduleChangeService.test.js functions/technicianDailyScheduleService.test.js
+
       - name: Publish architecture status
         if: always()
         env:
@@ -81,5 +100,5 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$JOB_STATUS" = 'success' ]; then state=success; description='Van half-days and technician inheritance validated'; else state=failure; description='Van schedule architecture validation failed'; fi
+          if [ "$JOB_STATUS" = 'success' ]; then state=success; description='Van capacity, pending periods and same-day changes validated'; else state=failure; description='Van schedule architecture validation failed'; fi
           gh api repos/${{ github.repository }}/statuses/${{ github.sha }} -f state="$state" -f context='DEMAC / Van Schedule Architecture' -f description="$description"
