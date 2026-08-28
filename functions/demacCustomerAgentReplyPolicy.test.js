@@ -7,6 +7,7 @@ const {
   mayaObservationDecision,
   mayaReplyDecision,
   normalizeArubaWhatsAppPhone,
+  projectedReplyPolicyContext,
   resolveConversationPhone,
 } = require("./demacCustomerAgentReplyPolicy");
 
@@ -113,6 +114,17 @@ function inbound(phone = "2975820000", overrides = {}) {
   };
 }
 
+function canonicalConversation(phone = "2975820000", overrides = {}) {
+  return {
+    phone,
+    communicationAccountId: "demac-wa-corporate",
+    provider: "wacli",
+    channel: "whatsapp",
+    remoteConversationId: `${phone}@s.whatsapp.net`,
+    ...overrides,
+  };
+}
+
 test("observation is independent from reply permission", () => {
   assert.equal(mayaObservationDecision({
     message: inbound(),
@@ -183,6 +195,49 @@ test("existing customer cancellation workflow can reply without enabling general
   assert.equal(reply.reason, "authorized-cancellation-workflow");
   const general = mayaReplyDecision({ message: inbound(), settings: pilotSettings, communicationSettings });
   assert.equal(general.allowed, false);
+});
+
+test("outbound commit can reuse the orchestrator-projected new-contact policy decision", () => {
+  const conversation = canonicalConversation("2975820000", { mayaAutoReplyDecisionReason: "new-contact-pilot" });
+  assert.deepEqual(projectedReplyPolicyContext(conversation), {
+    isNewContact: true,
+    authorizedWorkflow: "",
+    reason: "new-contact-pilot",
+  });
+  const decision = mayaReplyDecision({ conversation, settings: pilotSettings, communicationSettings });
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.reason, "new-contact-pilot");
+});
+
+test("outbound commit can reuse an authorized cancellation or reschedule projection", () => {
+  const cancellation = mayaReplyDecision({
+    conversation: canonicalConversation("2975820000", { mayaAutoReplyDecisionReason: "authorized-cancellation-workflow" }),
+    settings: pilotSettings,
+    communicationSettings,
+  });
+  assert.equal(cancellation.allowed, true);
+  assert.equal(cancellation.reason, "authorized-cancellation-workflow");
+
+  const reschedule = mayaReplyDecision({
+    conversation: canonicalConversation("2975820000", { mayaAutoReplyDecisionReason: "authorized-reschedule-workflow" }),
+    settings: pilotSettings,
+    communicationSettings,
+  });
+  assert.equal(reschedule.allowed, true);
+  assert.equal(reschedule.reason, "authorized-reschedule-workflow");
+});
+
+test("explicit policy context from the orchestrator overrides any older conversation projection", () => {
+  const conversation = canonicalConversation("2975820000", { mayaAutoReplyDecisionReason: "new-contact-pilot" });
+  const decision = mayaReplyDecision({
+    conversation,
+    settings: pilotSettings,
+    communicationSettings,
+    isNewContact: false,
+    authorizedWorkflow: "",
+  });
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.reason, "existing-customer-observe-only");
 });
 
 test("business mutation permission remains separate from reply permission and ownership", () => {

@@ -157,7 +157,7 @@ function toolStatePatch(toolName, args = {}, result = {}) {
       quantity: Number(work.quantity || 0),
     };
   }
-  if (toolName === "create_appointment" && result.appointmentId) {
+  if (["create_appointment", "cancel_appointment", "reschedule_appointment"].includes(toolName) && result.appointmentId) {
     return {
       appointmentId: cleanText(result.appointmentId, 180),
       activeOfferId: "",

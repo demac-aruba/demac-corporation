@@ -52,6 +52,30 @@ function accountRequiredForMode(mode) {
   return mode === PILOT_MODE;
 }
 
+function mayaSenderOwnershipDecision({ conversation = {} } = {}) {
+  if (conversation.ownerUserId || conversation.lockedByUserId) {
+    return { allowed: false, reason: "human-owner-present" };
+  }
+  if (cleanText(conversation.aiDisposition, 40).toLowerCase() !== "ai_active") {
+    return { allowed: false, reason: "maya-not-active-owner" };
+  }
+  return { allowed: true, reason: "maya-active-owner" };
+}
+
+function projectedReplyPolicyContext(conversation = {}) {
+  const reason = cleanText(conversation.mayaAutoReplyDecisionReason, 120).toLowerCase();
+  if (reason === "new-contact-pilot") {
+    return { isNewContact: true, authorizedWorkflow: "", reason };
+  }
+  if (reason === "authorized-cancellation-workflow") {
+    return { isNewContact: false, authorizedWorkflow: "cancellation", reason };
+  }
+  if (reason === "authorized-reschedule-workflow") {
+    return { isNewContact: false, authorizedWorkflow: "reschedule", reason };
+  }
+  return { isNewContact: false, authorizedWorkflow: "", reason };
+}
+
 function mayaObservationDecision({
   message = {},
   conversation = {},
@@ -81,14 +105,20 @@ function pilotWorkflowReplyDecision({ workflow, settings = {} } = {}) {
   return { allowed: false, reason: "workflow-auto-reply-disabled" };
 }
 
-function mayaReplyDecision({
-  message = {},
-  conversation = {},
-  settings = {},
-  communicationSettings = {},
-  isNewContact = false,
-  authorizedWorkflow = "",
-} = {}) {
+function mayaReplyDecision(input = {}) {
+  const {
+    message = {},
+    conversation = {},
+    settings = {},
+    communicationSettings = {},
+  } = input;
+  const projection = projectedReplyPolicyContext(conversation);
+  const isNewContact = Object.prototype.hasOwnProperty.call(input, "isNewContact")
+    ? input.isNewContact === true
+    : projection.isNewContact;
+  const authorizedWorkflow = Object.prototype.hasOwnProperty.call(input, "authorizedWorkflow")
+    ? cleanText(input.authorizedWorkflow, 80).toLowerCase()
+    : projection.authorizedWorkflow;
   const mode = configuredReplyMode(settings);
   const phone = resolveConversationPhone({ message, conversation });
   const allowlist = configuredAllowlist(settings);
@@ -165,6 +195,8 @@ module.exports.digitsOnly = digitsOnly;
 module.exports.mayaBusinessActionDecision = mayaBusinessActionDecision;
 module.exports.mayaObservationDecision = mayaObservationDecision;
 module.exports.mayaReplyDecision = mayaReplyDecision;
+module.exports.mayaSenderOwnershipDecision = mayaSenderOwnershipDecision;
 module.exports.normalizeArubaWhatsAppPhone = normalizeArubaWhatsAppPhone;
 module.exports.pilotWorkflowReplyDecision = pilotWorkflowReplyDecision;
+module.exports.projectedReplyPolicyContext = projectedReplyPolicyContext;
 module.exports.resolveConversationPhone = resolveConversationPhone;
