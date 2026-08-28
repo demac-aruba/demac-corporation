@@ -209,12 +209,6 @@ export async function updateFirestoreDocument<T extends { id: string }>(collecti
   return { ...decodeFirestoreFields(payload.fields ?? {}), id } as T;
 }
 
-export async function deleteFirestoreDocument(collectionPath: string, id: string): Promise<void> {
-  const response = await authenticatedFetch(`${baseUrl()}/${collectionPath}/${encodeURIComponent(id)}`, { method: 'DELETE' });
-  if (response.status === 404) return;
-  if (!response.ok) throw new Error(await readError(response, `Unable to delete ${collectionPath}/${id}.`));
-}
-
 export async function getFirebaseUserProfile<T extends { id: string }>(uid: string): Promise<T | null> {
   return getFirestoreDocument<T>('users', uid);
 }
