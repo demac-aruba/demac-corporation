@@ -153,20 +153,26 @@ function canonicalVanIdFromRecord(van: LiveVan | undefined) {
     .map((value) => Number(value))
     .filter((value) => Number.isInteger(value) && value >= 1);
   if (numericCandidates.length) return `VAN-${numericCandidates[0]}`;
-  for (const candidate of [van.id, van.code, van.name, van.label]) {
+
+  // Human/canonical metadata owns lane identity for an existing document. A Firestore
+  // legacy id such as `van-1783800405341` must not be parsed as a future Van number.
+  for (const candidate of [van.name, van.label, van.code]) {
     const canonical = canonicalVanIdFromValue(candidate);
     if (canonical) return canonical;
   }
-  return '';
+  return canonicalVanIdFromValue(van.id);
 }
 
 export function resolveCanonicalVanId(value: unknown, vans: LiveVan[] = []) {
-  const direct = canonicalVanIdFromValue(value);
-  if (direct) return direct;
   const raw = text(value);
   if (!raw) return '';
+
+  // Resolve an exact stored record first, matching the canonical operations authority.
+  // Direct future lanes such as VAN-5 still work when no legacy record shadows the id.
   const matchingRecord = vans.find((van) => van.id === raw);
-  return canonicalVanIdFromRecord(matchingRecord);
+  const fromRecord = canonicalVanIdFromRecord(matchingRecord);
+  if (fromRecord) return fromRecord;
+  return canonicalVanIdFromValue(raw);
 }
 
 function workOrderVanId(order: LiveWorkOrder, vans: LiveVan[] = []) {
