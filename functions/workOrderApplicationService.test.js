@@ -120,15 +120,40 @@ function input(actor = { uid: "tech-user-1", role: "technician", staffId: "drive
   return { requestId: "complete-after-hours-0001", workOrderId: WORK_ORDER_ID, actor };
 }
 
-test("canonical after-hours completion closes the Work Order, releases capacity and writes crew overtime", async () => {
+function existingAttendance(overrides = {}) {
+  return {
+    id: `driver-1_${WORK_DATE}`,
+    employeeId: "driver-1",
+    employeeName: "Miguel Reyes",
+    date: WORK_DATE,
+    payrollPeriodId: "2026-07-27_2026-08-26",
+    scheduledWorkHours: 8,
+    paidFreeHours: 0,
+    regularHours: 8,
+    overtimeMinutes: 0,
+    overtimeHours: 0,
+    aoHours: 0,
+    vacationHours: 0,
+    noWorkNoPayHours: 0,
+    status: "Regular",
+    attendanceStatus: "Present",
+    clockInTime: "08:00",
+    clockOutTime: "17:00",
+    breakMinutes: 60,
+    updatedAt: "2026-08-27T21:00:00.000Z",
+    ...overrides,
+  };
+}
+
+test("canonical after-hours completion closes the Work Order, releases capacity and writes attendance evidence", async () => {
   const { db, service } = fixture();
   const result = await service.completeAfterHours(input());
 
   assert.equal(result.success, true);
   assert.equal(result.replayed, false);
-  assert.equal(result.overtimeMinutes, 105);
+  assert.equal(result.afterHoursWorkedMinutes, 105);
   assert.deepEqual(result.technicianIds, CREW);
-  assert.deepEqual(result.timesheetIds, CREW.map((staffId) => `${staffId}_${WORK_DATE}`));
+  assert.deepEqual(result.timesheets.map((entry) => entry.id), CREW.map((staffId) => `${staffId}_${WORK_DATE}`));
 
   const workOrder = db.read(`workOrders/${WORK_ORDER_ID}`);
   assert.equal(workOrder.status, "Completada");
@@ -149,22 +174,30 @@ test("canonical after-hours completion closes the Work Order, releases capacity 
     const entry = db.read(`employeeTimesheets/${staffId}_${WORK_DATE}`);
     assert.equal(entry.employeeId, staffId);
     assert.equal(entry.scheduledWorkHours, 8);
-    assert.equal(entry.regularHours, 8);
+    assert.equal(entry.regularHours, 0, "Work Order completion must not fabricate regular attendance hours.");
     assert.equal(entry.overtimeMinutes, 105);
     assert.equal(entry.overtimeHours, 1.75);
-    assert.equal(entry.automatedWorkOrderOvertimeMinutes, 105);
-    assert.equal(entry.manualOvertimeMinutes, 0);
-    assert.equal(entry.clockOutTime, "19:15");
+    assert.equal(entry.clockOutTime, undefined, "Work Order evidence must not extend Clock Out across an unproven gap.");
     assert.equal(entry.scheduledStartTime, "08:00");
     assert.equal(entry.scheduledEndTime, "17:00");
     assert.equal(entry.scheduledBreakMinutes, 60);
-    assert.equal(entry.workOrderOvertimeSources.length, 1);
-    assert.equal(entry.workOrderOvertimeSources[0].workOrderId, WORK_ORDER_ID);
-    assert.equal(entry.workOrderOvertimeSources[0].minutes, 105);
+    assert.equal(entry.overtimeCalculationSource, "attendance_authority_with_work_segments");
+    assert.equal(entry.overtimeReconciliationRequired, false);
+    assert.equal(entry.workOrderAttendanceSegments.length, 1);
+    assert.deepEqual(entry.workOrderAttendanceSegments[0], {
+      workOrderId: WORK_ORDER_ID,
+      appointmentId: APPOINTMENT_ID,
+      kind: "after_hours_emergency",
+      startDate: WORK_DATE,
+      startTime: "17:30",
+      endDate: WORK_DATE,
+      endTime: "19:15",
+      completedAt: "2026-08-27T23:15:00.000Z",
+    });
   }
 });
 
-test("completion uses the Van/team partial-day schedule snapshot without changing after-hours worked minutes", async () => {
+test("completion uses the Van/team partial-day schedule snapshot without converting the gap into overtime", async () => {
   const { db, service } = fixture({
     "vanHalfDaySchedules/van1-thursday": {
       id: "van1-thursday",
@@ -176,46 +209,68 @@ test("completion uses the Van/team partial-day schedule snapshot without changin
     },
   });
   const result = await service.completeAfterHours(input());
-  assert.equal(result.overtimeMinutes, 105);
+  assert.equal(result.afterHoursWorkedMinutes, 105);
   const entry = db.read(`employeeTimesheets/driver-1_${WORK_DATE}`);
   assert.equal(entry.scheduledWorkHours, 5);
-  assert.equal(entry.regularHours, 5);
+  assert.equal(entry.regularHours, 0);
+  assert.equal(entry.overtimeMinutes, 105, "Only the evidenced 17:30–19:15 segment is overtime; 13:00–17:30 is not fabricated work.");
   assert.equal(entry.scheduledStartTime, "08:00");
   assert.equal(entry.scheduledEndTime, "13:00");
   assert.equal(entry.scheduleSnapshotSource, "van_team_partial_day");
 });
 
-test("existing manual overtime is preserved and flagged for reconciliation while automated evidence is additive", async () => {
+test("existing attendance and after-hours evidence are unioned without double counting overlap", async () => {
   const existingId = `driver-1_${WORK_DATE}`;
   const { db, service } = fixture({
-    [`employeeTimesheets/${existingId}`]: {
-      id: existingId,
-      employeeId: "driver-1",
-      employeeName: "Miguel Reyes",
-      date: WORK_DATE,
-      payrollPeriodId: "2026-07-27_2026-08-26",
-      scheduledWorkHours: 8,
-      paidFreeHours: 0,
-      regularHours: 8,
-      overtimeMinutes: 30,
-      overtimeHours: 0.5,
-      aoHours: 0,
-      vacationHours: 0,
-      noWorkNoPayHours: 0,
-      status: "Regular",
-      attendanceStatus: "Present",
-      clockOutTime: "17:30",
-      updatedAt: "2026-08-27T21:30:00.000Z",
-    },
+    [`employeeTimesheets/${existingId}`]: existingAttendance({
+      clockOutTime: "18:00",
+      overtimeMinutes: 60,
+      overtimeHours: 1,
+      workedMinutes: 540,
+      overtimeCalculationSource: "attendance_authority",
+    }),
   });
   await service.completeAfterHours(input());
   const entry = db.read(`employeeTimesheets/${existingId}`);
-  assert.equal(entry.manualOvertimeMinutes, 30);
-  assert.equal(entry.automatedWorkOrderOvertimeMinutes, 105);
+  assert.equal(entry.overtimeMinutes, 135, "08:00–18:00 contributes 60 minutes and only 18:00–19:15 adds another 75 minutes.");
+  assert.equal(entry.overtimeHours, 2.25);
+  assert.equal(entry.clockOutTime, "18:00", "Completion must preserve the separately recorded attendance Clock Out.");
+  assert.equal(entry.workOrderAttendanceSegments.length, 1);
+  assert.equal(entry.overtimeReconciliationRequired, false);
+});
+
+test("work-order evidence fully covered by the attendance interval is not added twice", async () => {
+  const existingId = `driver-1_${WORK_DATE}`;
+  const { db, service } = fixture({
+    [`employeeTimesheets/${existingId}`]: existingAttendance({
+      clockOutTime: "19:15",
+      overtimeMinutes: 135,
+      overtimeHours: 2.25,
+      workedMinutes: 615,
+      overtimeCalculationSource: "attendance_authority",
+    }),
+  });
+  await service.completeAfterHours(input());
+  const entry = db.read(`employeeTimesheets/${existingId}`);
   assert.equal(entry.overtimeMinutes, 135);
   assert.equal(entry.overtimeHours, 2.25);
+});
+
+test("legacy overtime without a valid Clock In/Out is preserved conservatively and flagged for reconciliation", async () => {
+  const existingId = `driver-1_${WORK_DATE}`;
+  const { db, service } = fixture({
+    [`employeeTimesheets/${existingId}`]: existingAttendance({
+      clockInTime: undefined,
+      clockOutTime: undefined,
+      overtimeMinutes: 30,
+      overtimeHours: 0.5,
+      overtimeCalculationSource: undefined,
+    }),
+  });
+  await service.completeAfterHours(input());
+  const entry = db.read(`employeeTimesheets/${existingId}`);
+  assert.equal(entry.overtimeMinutes, 105, "Unknown legacy overtime must not be blindly added to the 105-minute Work Order segment.");
   assert.equal(entry.overtimeReconciliationRequired, true);
-  assert.equal(entry.clockOutTime, "19:15");
 });
 
 test("technician cannot complete an after-hours Work Order assigned to another crew", async () => {
@@ -226,7 +281,7 @@ test("technician cannot complete an after-hours Work Order assigned to another c
   );
 });
 
-test("replaying completion does not duplicate overtime evidence", async () => {
+test("replaying completion does not duplicate attendance evidence", async () => {
   const { db, service } = fixture();
   const first = await service.completeAfterHours(input());
   const second = await service.completeAfterHours(input());
@@ -234,16 +289,18 @@ test("replaying completion does not duplicate overtime evidence", async () => {
   assert.equal(second.replayed, true);
   const entry = db.read(`employeeTimesheets/driver-1_${WORK_DATE}`);
   assert.equal(entry.overtimeMinutes, 105);
-  assert.equal(entry.workOrderOvertimeSources.length, 1);
+  assert.equal(entry.workOrderAttendanceSegments.length, 1);
 });
 
-test("after-hours duration remains correct when work finishes after midnight", async () => {
+test("after-hours evidence and payroll overtime remain correct when work finishes after midnight", async () => {
   const { db, service } = fixture({}, "2026-08-28T04:30:00.000Z");
   const result = await service.completeAfterHours(input());
-  assert.equal(result.overtimeMinutes, 420);
+  assert.equal(result.afterHoursWorkedMinutes, 420);
   const entry = db.read(`employeeTimesheets/driver-1_${WORK_DATE}`);
   assert.equal(entry.overtimeMinutes, 420);
   assert.equal(entry.overtimeHours, 7);
   assert.equal(entry.clockOutTime, undefined);
-  assert.equal(entry.workOrderOvertimeSources[0].completedAt, "2026-08-28T04:30:00.000Z");
+  assert.equal(entry.workOrderAttendanceSegments[0].endDate, "2026-08-28");
+  assert.equal(entry.workOrderAttendanceSegments[0].endTime, "00:30");
+  assert.equal(entry.workOrderAttendanceSegments[0].completedAt, "2026-08-28T04:30:00.000Z");
 });

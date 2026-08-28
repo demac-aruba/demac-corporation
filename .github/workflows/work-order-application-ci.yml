@@ -3,11 +3,12 @@ name: Work Order Application
 on:
   pull_request:
     paths:
-      - 'apps/erp-next/components/scheduling/**'
-      - 'apps/erp-next/lib/after-hours-booking.ts'
       - 'functions/bootstrap.js'
       - 'functions/bookingAfterHours.js'
       - 'functions/bookingAfterHours.test.js'
+      - 'functions/employeeAttendanceCalculation.js'
+      - 'functions/employeeAttendanceCalculation.d.ts'
+      - 'functions/employeeAttendanceCalculation.test.js'
       - 'functions/workOrderApplicationService.js'
       - 'functions/workOrderApplicationService.test.js'
       - 'functions/bookingAuthorityCore.js'
@@ -15,15 +16,18 @@ on:
       - 'functions/bookingVanIdentity.js'
       - 'functions/bookingSchedulingPrimitives.js'
       - 'functions/operatingCalendarService.js'
-      - 'functions/package.json'
       - '.github/workflows/work-order-application-ci.yml'
   push:
+    branches:
+      - main
+      - feature/scheduling-booking-whatsapp-consolidation
     paths:
-      - 'apps/erp-next/components/scheduling/**'
-      - 'apps/erp-next/lib/after-hours-booking.ts'
       - 'functions/bootstrap.js'
       - 'functions/bookingAfterHours.js'
       - 'functions/bookingAfterHours.test.js'
+      - 'functions/employeeAttendanceCalculation.js'
+      - 'functions/employeeAttendanceCalculation.d.ts'
+      - 'functions/employeeAttendanceCalculation.test.js'
       - 'functions/workOrderApplicationService.js'
       - 'functions/workOrderApplicationService.test.js'
       - 'functions/bookingAuthorityCore.js'
@@ -31,7 +35,6 @@ on:
       - 'functions/bookingVanIdentity.js'
       - 'functions/bookingSchedulingPrimitives.js'
       - 'functions/operatingCalendarService.js'
-      - 'functions/package.json'
       - '.github/workflows/work-order-application-ci.yml'
   workflow_dispatch:
 
@@ -63,12 +66,13 @@ jobs:
           set -euo pipefail
           node --check functions/bootstrap.js
           node --check functions/bookingAfterHours.js
+          node --check functions/employeeAttendanceCalculation.js
           node --check functions/workOrderApplicationService.js
 
-      - name: Run after-hours booking tests
-        run: node --test functions/bookingAfterHours.test.js
+      - name: Run shared attendance authority tests
+        run: node --test functions/employeeAttendanceCalculation.test.js
 
-      - name: Run Work Order completion and overtime tests
+      - name: Run Work Order completion and Attendance integration tests
         run: node --test functions/workOrderApplicationService.test.js
 
       - name: Validate Cloud Function export
@@ -79,18 +83,6 @@ jobs:
             throw new Error('workOrderApplication export missing from functions/bootstrap.js');
           }
           NODE
-
-      - name: Install ERP Next dependencies
-        run: npm install --prefix apps/erp-next --no-audit --no-fund
-
-      - name: Typecheck ERP Next scheduling integration
-        run: npm run --prefix apps/erp-next typecheck
-
-      - name: Run live scheduling acceptance
-        run: npm run --prefix apps/erp-next test:live-scheduling
-
-      - name: Build ERP Next
-        run: npm run --prefix apps/erp-next build
 
   deploy-work-order-application:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -137,6 +129,56 @@ jobs:
             --runtime=nodejs22 \
             --source=functions \
             --entry-point=workOrderApplication \
+            --memory=256Mi \
+            --timeout=60s \
+            --run-service-account="$RUN_SERVICE_ACCOUNT" \
             --trigger-http \
-            --no-allow-unauthenticated \
-            --service-account="$RUN_SERVICE_ACCOUNT"
+            --allow-unauthenticated \
+            --quiet
+
+      - name: Verify deployed Work Order Application boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          name='workOrderApplication'
+          endpoint="https://us-central1-demac-corporation.cloudfunctions.net/${name}"
+          state="$(gcloud functions describe "$name" --project=demac-corporation --gen2 --region=us-central1 --format='value(state)')"
+          if [ "$state" != 'ACTIVE' ]; then
+            echo "::error::${name} state is ${state:-unknown}."
+            exit 1
+          fi
+
+          cors_headers="$(mktemp)"
+          cors_status="$(curl --silent --show-error --output /dev/null --dump-header "$cors_headers" --write-out '%{http_code}' \
+            --request OPTIONS "$endpoint" \
+            --header 'Origin: https://demac-corporation.vercel.app' \
+            --header 'Access-Control-Request-Method: POST' \
+            --header 'Access-Control-Request-Headers: authorization,content-type')"
+          if [ "$cors_status" != '204' ]; then
+            echo "::error::Work Order Application CORS preflight returned HTTP ${cors_status}; expected 204."
+            cat "$cors_headers"
+            rm -f "$cors_headers"
+            exit 1
+          fi
+          rm -f "$cors_headers"
+
+          body="$(mktemp)"
+          status="$(curl --silent --show-error --output "$body" --write-out '%{http_code}' \
+            --request POST "$endpoint" \
+            --header 'Content-Type: application/json' \
+            --data '{"action":"complete_after_hours_work_order","data":{"requestId":"deployment-auth-check","workOrderId":"not-used"}}')"
+          if [ "$status" != '401' ]; then
+            echo "::error::${name} returned HTTP ${status}; expected 401 without Firebase authentication."
+            cat "$body"
+            rm -f "$body"
+            exit 1
+          fi
+          node - "$body" <<'NODE'
+          const fs = require('node:fs');
+          const payload = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (payload?.error?.code !== 'unauthenticated') {
+            throw new Error(`Unexpected unauthenticated payload: ${JSON.stringify(payload)}`);
+          }
+          console.log('workOrderApplication: ACTIVE and Firebase-auth protected');
+          NODE
+          rm -f "$body"

@@ -2,12 +2,15 @@ const { getAuth } = require("firebase-admin/auth");
 const { getFirestore } = require("firebase-admin/firestore");
 const { onRequest } = require("firebase-functions/v2/https");
 const { cleanText } = require("./bookingAuthorityCore");
-const { compactObject } = require("./bookingAuthorityFirestore");
 const { AFTER_HOURS_KIND } = require("./bookingAfterHours");
 const { canonicalVanIdFromValue } = require("./bookingVanIdentity");
 const { TIME_ZONE } = require("./operatingCalendarService");
+const {
+  calculateAttendanceVarianceWithWorkSegments,
+  hasValidWorkedTimeRange,
+} = require("./employeeAttendanceCalculation");
 
-const WORK_ORDER_APPLICATION_API_VERSION = 1;
+const WORK_ORDER_APPLICATION_API_VERSION = 2;
 const WORK_ORDER_ACTIONS = Object.freeze({
   COMPLETE_AFTER_HOURS: "complete_after_hours_work_order",
 });
@@ -93,6 +96,7 @@ function wallClockValue(dateKey, time) {
   return Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Math.floor(minutes / 60), minutes % 60);
 }
 
+// Operational duration of the Work Order. This is evidence, not the payroll overtime formula.
 function afterHoursWorkedMinutes(workDate, startTime, completion) {
   const start = wallClockValue(workDate, startTime);
   const end = wallClockValue(completion.date, completion.time);
@@ -147,42 +151,49 @@ function resolvedTechnicalSchedule(date, vanId, halfDaySchedules = []) {
   };
 }
 
-function laterClockTime(current, candidate) {
-  const currentMinutes = minutesOfDay(current);
-  const candidateMinutes = minutesOfDay(candidate);
-  if (!Number.isFinite(candidateMinutes)) return cleanText(current, 20) || undefined;
-  if (!Number.isFinite(currentMinutes) || candidateMinutes > currentMinutes) return candidate;
-  return current;
-}
-
-function buildTimesheet({ existing = {}, staff, workOrder, completion, overtimeMinutes, schedule, actor }) {
-  const workDate = cleanText(workOrder.date, 20);
-  const sources = Array.isArray(existing.workOrderOvertimeSources)
-    ? existing.workOrderOvertimeSources.filter((source) => source && typeof source === "object")
-    : [];
-  const sourceExists = sources.some((source) => cleanText(source.workOrderId, 180) === workOrder.id);
-  const nextSources = sourceExists ? sources : [...sources, {
+function attendanceSegment(workOrder, completion) {
+  return {
     workOrderId: workOrder.id,
     appointmentId: cleanText(workOrder.appointmentId, 180),
     kind: AFTER_HOURS_KIND,
-    date: workDate,
+    startDate: cleanText(workOrder.date, 20),
     startTime: cleanText(workOrder.afterHoursStartTime || workOrder.time, 20),
+    endDate: completion.date,
+    endTime: completion.time,
     completedAt: completion.iso,
-    minutes: overtimeMinutes,
-  }];
-  const automatedMinutes = nextSources.reduce((sum, source) => sum + Math.max(0, Math.round(Number(source.minutes) || 0)), 0);
-  const previousAutomated = Math.max(0, Math.round(Number(existing.automatedWorkOrderOvertimeMinutes) || 0));
+  };
+}
+
+function buildTimesheet({ existing = {}, staff, workOrder, completion, schedule, actor }) {
+  const workDate = cleanText(workOrder.date, 20);
+  const existingSegments = Array.isArray(existing.workOrderAttendanceSegments)
+    ? existing.workOrderAttendanceSegments.filter((segment) => segment && typeof segment === "object")
+    : [];
+  const segment = attendanceSegment(workOrder, completion);
+  const sourceExists = existingSegments.some((source) => cleanText(source.workOrderId, 180) === workOrder.id);
+  const workOrderAttendanceSegments = sourceExists ? existingSegments : [...existingSegments, segment];
+  const clockInTime = cleanText(existing.clockInTime, 20);
+  const clockOutTime = cleanText(existing.clockOutTime, 20);
+  const breakMinutes = Math.max(0, Math.round(Number(existing.breakMinutes) || 0));
+  const hasBaseAttendance = hasValidWorkedTimeRange(clockInTime, clockOutTime);
+  const variance = calculateAttendanceVarianceWithWorkSegments({
+    workDate,
+    schedule,
+    clockInTime,
+    clockOutTime,
+    breakMinutes,
+    workSegments: workOrderAttendanceSegments,
+  });
   const existingOvertime = Math.max(0, Math.round(Number(existing.overtimeMinutes) || Math.round((Number(existing.overtimeHours) || 0) * 60)));
-  const manualBaseline = Number.isFinite(Number(existing.manualOvertimeMinutes))
-    ? Math.max(0, Math.round(Number(existing.manualOvertimeMinutes)))
-    : Math.max(0, existingOvertime - previousAutomated);
-  const totalOvertime = manualBaseline + automatedMinutes;
+  const alreadyAuthorityCalculated = cleanText(existing.overtimeCalculationSource, 120).startsWith("attendance_authority");
+  const overtimeReconciliationRequired = !hasBaseAttendance && !alreadyAuthorityCalculated && existingOvertime > 0;
+  const overtimeMinutes = overtimeReconciliationRequired
+    ? Math.max(existingOvertime, variance.overtimeMinutes)
+    : variance.overtimeMinutes;
   const scheduledHours = roundHours(schedule.scheduledMinutes);
-  const sameDayCompletion = completion.date === workDate;
-  const nextClockOut = sameDayCompletion ? laterClockTime(existing.clockOutTime, completion.time) : existing.clockOutTime;
   const now = completion.iso;
 
-  return compactObject({
+  return {
     ...existing,
     id: `${staff.id}_${workDate}`,
     payrollPeriodId: payrollPeriodForDate(workDate),
@@ -190,34 +201,34 @@ function buildTimesheet({ existing = {}, staff, workOrder, completion, overtimeM
     employeeName: cleanText(staff.name, 180) || staff.id,
     date: workDate,
     scheduledWorkHours: Number.isFinite(Number(existing.scheduledWorkHours)) ? Number(existing.scheduledWorkHours) : scheduledHours,
-    paidFreeHours: Number.isFinite(Number(existing.paidFreeHours)) ? Number(existing.paidFreeHours) : roundHours(schedule.paidFreeMinutes),
-    regularHours: Number.isFinite(Number(existing.regularHours)) ? Number(existing.regularHours) : scheduledHours,
-    overtimeHours: roundHours(totalOvertime),
-    overtimeMinutes: totalOvertime,
+    paidFreeHours: Number.isFinite(Number(existing.paidFreeHours)) ? Number(existing.paidFreeHours) : 0,
+    regularHours: Number.isFinite(Number(existing.regularHours)) ? Number(existing.regularHours) : 0,
+    overtimeHours: roundHours(overtimeMinutes),
+    overtimeMinutes,
     aoHours: Number.isFinite(Number(existing.aoHours)) ? Number(existing.aoHours) : 0,
     vacationHours: Number.isFinite(Number(existing.vacationHours)) ? Number(existing.vacationHours) : 0,
     noWorkNoPayHours: Number.isFinite(Number(existing.noWorkNoPayHours)) ? Number(existing.noWorkNoPayHours) : 0,
-    status: cleanText(existing.status, 120) || "Regular",
-    attendanceStatus: existing.attendanceStatus || "Present",
-    clockInTime: existing.clockInTime || undefined,
-    clockOutTime: nextClockOut || undefined,
-    breakMinutes: Number.isFinite(Number(existing.breakMinutes)) ? Number(existing.breakMinutes) : schedule.expectedBreakMinutes,
+    status: cleanText(existing.status, 120) || "Pending attendance reconciliation",
+    attendanceStatus: existing.attendanceStatus || undefined,
+    clockInTime: clockInTime || undefined,
+    clockOutTime: clockOutTime || undefined,
+    breakMinutes,
     lateMinutes: Number.isFinite(Number(existing.lateMinutes)) ? Number(existing.lateMinutes) : 0,
+    workedMinutes: variance.workedMinutes,
     scheduledStartTime: schedule.startTime || undefined,
     scheduledEndTime: schedule.endTime || undefined,
     scheduledBreakMinutes: schedule.expectedBreakMinutes,
     scheduledPaidFreeMinutes: schedule.paidFreeMinutes,
     scheduleSnapshotSource: schedule.source,
-    manualOvertimeMinutes: manualBaseline,
-    automatedWorkOrderOvertimeMinutes: automatedMinutes,
-    workOrderOvertimeSources: nextSources,
+    workOrderAttendanceSegments,
+    overtimeCalculationSource: "attendance_authority_with_work_segments",
+    overtimeReconciliationRequired,
     lastWorkOrderCompletedAt: completion.iso,
-    overtimeReconciliationRequired: previousAutomated === 0 && existingOvertime > 0 && !sourceExists,
     createdAt: existing.createdAt || now,
     updatedAt: now,
     updatedByUserId: cleanText(actor?.uid || actor?.id, 160) || "work-order-application",
     updatedByName: cleanText(actor?.name || actor?.email, 180) || "Work Order Application",
-  });
+  };
 }
 
 function createWorkOrderApplicationService({ db, clock = () => new Date() } = {}) {
@@ -262,14 +273,14 @@ function createWorkOrderApplicationService({ db, clock = () => new Date() } = {}
           workOrderId: id,
           appointmentId: cleanText(workOrder.appointmentId, 180),
           completedAt: workOrder.actualCompletedAt,
-          overtimeMinutes: Math.max(0, Math.round(Number(workOrder.afterHoursWorkedMinutes) || 0)),
+          afterHoursWorkedMinutes: Math.max(0, Math.round(Number(workOrder.afterHoursWorkedMinutes) || 0)),
           technicianIds,
         };
       }
 
       const workDate = requiredText(workOrder.date, "workOrder.date", "Work date", 20);
       const startTime = requiredText(workOrder.afterHoursStartTime || workOrder.time, "workOrder.afterHoursStartTime", "After-hours start time", 20);
-      const overtimeMinutes = afterHoursWorkedMinutes(workDate, startTime, completion);
+      const actualWorkedMinutes = afterHoursWorkedMinutes(workDate, startTime, completion);
       const appointmentId = requiredText(workOrder.appointmentId, "workOrder.appointmentId", "Appointment id", 180);
       const appointmentRef = db.collection("appointments").doc(appointmentId);
       const appointmentSnapshot = await transaction.get(appointmentRef);
@@ -303,14 +314,14 @@ function createWorkOrderApplicationService({ db, clock = () => new Date() } = {}
       for (let index = 0; index < technicianIds.length; index += 1) {
         const staff = { id: staffSnapshots[index].id, ...staffSnapshots[index].data() };
         const existing = timesheetSnapshots[index].exists ? timesheetSnapshots[index].data() || {} : {};
-        const entry = buildTimesheet({ existing, staff, workOrder, completion, overtimeMinutes, schedule, actor });
+        const entry = buildTimesheet({ existing, staff, workOrder, completion, schedule, actor });
         transaction.set(db.collection("employeeTimesheets").doc(entry.id), entry, { merge: false });
         attendanceEntries.push(entry);
       }
 
       const completionPatch = {
         actualCompletedAt: completion.iso,
-        afterHoursWorkedMinutes: overtimeMinutes,
+        afterHoursWorkedMinutes: actualWorkedMinutes,
         lifecycle: "technician_complete",
         status: "Completada",
         completionRequestId: stableRequestId,
@@ -321,7 +332,7 @@ function createWorkOrderApplicationService({ db, clock = () => new Date() } = {}
       transaction.set(workOrderRef, completionPatch, { merge: true });
       transaction.set(appointmentRef, {
         actualCompletedAt: completion.iso,
-        afterHoursWorkedMinutes: overtimeMinutes,
+        afterHoursWorkedMinutes: actualWorkedMinutes,
         lifecycleStatus: "technician_complete",
         completionRequestId: stableRequestId,
         completedById: cleanText(actor.uid || actor.id, 160),
@@ -345,9 +356,14 @@ function createWorkOrderApplicationService({ db, clock = () => new Date() } = {}
         workOrderId: id,
         appointmentId,
         completedAt: completion.iso,
-        overtimeMinutes,
+        afterHoursWorkedMinutes: actualWorkedMinutes,
         technicianIds,
-        timesheetIds: attendanceEntries.map((entry) => entry.id),
+        timesheets: attendanceEntries.map((entry) => ({
+          id: entry.id,
+          employeeId: entry.employeeId,
+          overtimeMinutes: entry.overtimeMinutes,
+          overtimeReconciliationRequired: entry.overtimeReconciliationRequired === true,
+        })),
       };
     });
   }
@@ -455,6 +471,7 @@ module.exports.WORK_ORDER_ACTIONS = WORK_ORDER_ACTIONS;
 module.exports.WORK_ORDER_APPLICATION_API_VERSION = WORK_ORDER_APPLICATION_API_VERSION;
 module.exports.WorkOrderApplicationError = WorkOrderApplicationError;
 module.exports.afterHoursWorkedMinutes = afterHoursWorkedMinutes;
+module.exports.attendanceSegment = attendanceSegment;
 module.exports.buildTimesheet = buildTimesheet;
 module.exports.createWorkOrderApplicationApi = createWorkOrderApplicationApi;
 module.exports.createWorkOrderApplicationService = createWorkOrderApplicationService;

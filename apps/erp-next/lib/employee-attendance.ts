@@ -1,6 +1,16 @@
 import { listFirestoreCollection, saveFirestoreDocument, updateFirestoreDocument } from './firebase/firestore-rest';
 import type { CanonicalStaffAbsence, CanonicalStaffProfile } from './canonical-operations';
 import { saveCanonicalStaffAbsence } from './canonical-operations-mutations';
+import {
+  calculateAttendanceVarianceWithWorkSegments,
+  hasValidWorkedTimeRange,
+  minutesBetween,
+  workedMinutes,
+  type AttendanceWorkSegment,
+} from './employee-attendance-calculation';
+
+export { minutesBetween, workedMinutes } from './employee-attendance-calculation';
+export type { AttendanceWorkSegment } from './employee-attendance-calculation';
 
 export type AttendanceStatus = 'Present' | 'Late' | 'Sick' | 'Vacation' | 'Day Off' | 'Absent';
 export type SalaryAdvanceMethod = 'Cash' | 'Bank Transfer';
@@ -46,6 +56,15 @@ export type EmployeeTimesheetEntry = {
   breakMinutes?: number;
   lateMinutes?: number;
   workedMinutes?: number;
+  workOrderAttendanceSegments?: AttendanceWorkSegment[];
+  overtimeCalculationSource?: 'attendance_authority' | 'attendance_authority_with_work_segments';
+  overtimeReconciliationRequired?: boolean;
+  lastWorkOrderCompletedAt?: string;
+  scheduledStartTime?: string;
+  scheduledEndTime?: string;
+  scheduledBreakMinutes?: number;
+  scheduledPaidFreeMinutes?: number;
+  scheduleSnapshotSource?: string;
   createdAt?: string;
   updatedAt: string;
   updatedByUserId?: string;
@@ -74,6 +93,7 @@ export type AttendanceDayDraft = {
   clockInTime: string;
   clockOutTime: string;
   breakMinutes: number;
+  /** Compatibility-only display value. Persistence derives overtime from attendance facts. */
   overtimeMinutes: number;
   exceptionHours?: number;
   notes: string;
@@ -147,23 +167,12 @@ export function payrollPeriodBounds(date: string): PayrollPeriodBounds {
   return { id, start, end };
 }
 
-export function minutesBetween(startTime: string, endTime: string) {
-  const [startHour, startMinute] = startTime.split(':').map(Number);
-  const [endHour, endMinute] = endTime.split(':').map(Number);
-  if (![startHour, startMinute, endHour, endMinute].every(Number.isFinite)) return 0;
-  return Math.max(0, (endHour * 60 + endMinute) - (startHour * 60 + startMinute));
-}
-
 export function lateMinutes(clockInTime: string, scheduledStartTime: string) {
   if (!clockInTime || !scheduledStartTime) return 0;
   return Math.max(0, minutesBetween(scheduledStartTime, clockInTime));
 }
 
-export function workedMinutes(clockInTime: string, clockOutTime: string, breakMinutes = 0) {
-  if (!clockInTime || !clockOutTime) return 0;
-  return Math.max(0, minutesBetween(clockInTime, clockOutTime) - Math.max(0, breakMinutes));
-}
-
+/** @deprecated Overtime must be derived from the resolved schedule and real attendance evidence. */
 export function overtimeMinutesAfterFive(clockOutTime: string) {
   if (!clockOutTime) return 0;
   return Math.max(0, minutesBetween('17:00', clockOutTime));
@@ -343,8 +352,6 @@ export async function saveSalaryAdvance(input: {
     recordedByUserId: input.recordedByUserId,
     recordedByName: input.recordedByName,
   };
-  // Salary advances are payroll-sensitive records. They intentionally share the protected
-  // employeePayrollSettings collection so existing payroll-only Firestore permissions apply.
   await saveFirestoreDocument('employeePayrollSettings', advance);
   return advance;
 }
@@ -363,7 +370,19 @@ export async function saveAttendanceDay(input: {
   const now = new Date().toISOString();
   const scheduledHours = roundHours(schedule.scheduledMinutes);
   const paidFreeHours = roundHours(schedule.paidFreeMinutes);
-  const overtimeMinutesValue = Math.max(0, Math.round(Number(draft.overtimeMinutes) || 0));
+  const workOrderAttendanceSegments = existingEntry?.workOrderAttendanceSegments ?? [];
+  const hasBaseAttendance = hasValidWorkedTimeRange(draft.clockInTime, draft.clockOutTime);
+  const variance = calculateAttendanceVarianceWithWorkSegments({
+    workDate: date,
+    schedule,
+    clockInTime: draft.clockInTime,
+    clockOutTime: draft.clockOutTime,
+    breakMinutes: draft.breakMinutes,
+    workSegments: workOrderAttendanceSegments,
+  });
+  const existingOvertimeMinutes = Math.max(0, Math.round(Number(existingEntry?.overtimeMinutes) || Math.round((Number(existingEntry?.overtimeHours) || 0) * 60)));
+  const preserveUnknownLegacyOvertime = !hasBaseAttendance && !workOrderAttendanceSegments.length && existingOvertimeMinutes > 0;
+  const overtimeMinutesValue = preserveUnknownLegacyOvertime ? existingOvertimeMinutes : variance.overtimeMinutes;
   const exceptionStatus = draft.status === 'Sick' || draft.status === 'Vacation' || draft.status === 'Absent';
   const requestedExceptionHours = exceptionStatus
     ? draft.exceptionHours === undefined
@@ -376,7 +395,6 @@ export async function saveAttendanceDay(input: {
   const noWorkNoPayHours = draft.status === 'Absent' ? exceptionHours : 0;
   const regularHours = Math.max(0, Math.round((scheduledHours - sickHours - vacationHours - noWorkNoPayHours) * 100) / 100);
   const lateMinutesValue = draft.status === 'Late' ? lateMinutes(draft.clockInTime, schedule.startTime) : 0;
-  const workedMinutesValue = workedMinutes(draft.clockInTime, draft.clockOutTime, draft.breakMinutes);
 
   const entry: EmployeeTimesheetEntry = {
     ...existingEntry,
@@ -400,7 +418,10 @@ export async function saveAttendanceDay(input: {
     clockOutTime: draft.clockOutTime || undefined,
     breakMinutes: Math.max(0, Math.round(Number(draft.breakMinutes) || 0)),
     lateMinutes: lateMinutesValue,
-    workedMinutes: workedMinutesValue,
+    workedMinutes: variance.workedMinutes,
+    workOrderAttendanceSegments,
+    overtimeCalculationSource: workOrderAttendanceSegments.length ? 'attendance_authority_with_work_segments' : 'attendance_authority',
+    overtimeReconciliationRequired: preserveUnknownLegacyOvertime,
     createdAt: existingEntry?.createdAt ?? now,
     updatedAt: now,
     updatedByUserId,
