@@ -17,6 +17,7 @@ provider callbacks, and cached projections are never authority by themselves.
 | Dated staff unavailability | `staffAbsences` | Authorized workforce/operations flows | Vacation, sickness, and one-off dated ranges only |
 | Technical recurring half-day | `vanHalfDaySchedules` for the Van/team | Authorized operations/scheduling flows | Technical staff inherit the Van/team rule; no employee-level duplicate |
 | Office/non-technical recurring half-day and payroll schedule | `employeePayrollSettings` | Authorized workforce/payroll flows | Payroll permission boundary and employee linkage |
+| Explicit daily attendance/payroll exception | `employeeTimesheets`, interpreted against the canonical resolved employee schedule | Authorized payroll-sensitive Employees/Payroll flows | Deterministic employee/date ID, schedule-derived overtime, classified partial missing-time segments, schedule snapshot, actor/time audit, payroll-only Firestore access |
 | Temporary crew override | `dailyVanAssignments` | Authorized operations/scheduling flows | Date-scoped override; does not rewrite recurring crew ownership |
 | Commercial Product / Service catalog | `services` | Authorized catalog and operational flows | One canonical commercial catalog; no duplicate Product or Service authority |
 | Sellable Product stock | `commercialProductStock`, including location balances | Warehouse/authorized work-order flows through Firebase `inventoryAuthority` for transactional operations | Atomic validated balance updates, stable Product/location identity, reconciliation and audit |
@@ -35,6 +36,17 @@ provider callbacks, and cached projections are never authority by themselves.
 
 When two sources disagree, do not use recency alone. Prefer the designated authority,
 record the discrepancy, and require reconciliation before a high-impact write.
+
+## Workforce attendance boundary
+
+- `employeeTimesheets` is not a second recurring schedule authority. Explicit daily records
+  are interpreted against the employee schedule resolved from the existing schedule authorities.
+- Normal scheduled attendance remains synthesized and is not materialized as a daily record.
+- `staffAbsences` remains the dated full-day/operational unavailability authority. A partial
+  late arrival, early departure, or extended break is stored on the explicit daily timesheet
+  so separate payroll treatment can be preserved without inventing another absence collection.
+- Schedule snapshot fields on a timesheet are audit evidence for the calculation used when
+  that explicit record was edited; they do not supersede canonical schedule history.
 
 ## Inventory boundary
 
