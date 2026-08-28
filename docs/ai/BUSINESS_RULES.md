@@ -19,6 +19,8 @@ engineering index; it does not replace that registry.
 - `OPS-ROUTE-*`: route anchors and calculated availability precede customer preference.
 - `OPS-STAFF-SCHEDULE-*`: employee schedule authority, employment-date boundaries, recurring
   partial-day ownership, effective schedule versions, exact worked-hour windows, and Sunday closure.
+- `OPS-STAFF-ATTENDANCE-*`: 27–26 payroll-period membership, schedule-derived overtime,
+  separately classified partial missing-time segments, and explicit attendance schedule snapshots.
 - `COMMS-*`: current-turn priority, answer-first behavior, natural language, contextual
   option selection, hidden internal van splitting, one confirmation, and no invention.
 
@@ -54,3 +56,23 @@ Ambiguity blocks automation and is escalated to an authorized human.
   unavailability; it never becomes a recurring partial-day rule.
 - `dailyVanAssignments` is a date-scoped temporary crew assignment/override and does not
   redefine recurring ownership.
+
+## Current payroll-attendance ownership
+
+- Payroll attendance periods are canonical 27th-through-26th ranges. The selected day is a
+  child selection inside that range; selecting July 27 in the July 27–August 26 period does
+  not change the payroll period to July.
+- Normal scheduled attendance remains synthesized from the canonical employee schedule.
+  Explicit `employeeTimesheets` records are created only for payroll-relevant exceptions.
+- For a worked day, overtime is derived deterministically from the resolved schedule and
+  actual Clock In, Clock Out, and Break Minutes. Early start, late finish, and unused
+  scheduled break add independently; overtime is not a manual payroll input.
+- Late arrival, early departure, and break time beyond the scheduled break are independent
+  missing-scheduled-time segments. Each segment must be explicitly classified as Paid or
+  No Work No Pay and carry a reason before it can be saved.
+- Overtime and missing scheduled time never offset each other. Payroll retains both facts.
+- Paid partial missing time contributes to paid-free time; unpaid partial missing time
+  contributes to No Work No Pay. A partially affected employee can remain `Present`.
+- New or edited explicit attendance records preserve an additive snapshot of the resolved
+  scheduled start, end, break allowance, and scheduled paid-free minutes. Existing records
+  without snapshot fields remain valid; no historical backfill is required.
