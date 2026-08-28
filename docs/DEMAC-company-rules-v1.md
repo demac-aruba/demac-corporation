@@ -1,4 +1,4 @@
-# DEMAC Company Rules Registry — Version 3
+# DEMAC Company Rules Registry — Version 4
 
 This registry is the operational reference for the DEMAC ERP and WhatsApp Copilot. Runtime values that may change are stored in Firestore; protected behavior is implemented in versioned code and tested.
 
@@ -85,13 +85,14 @@ No 9,000 BTU installation price is defined in this rule because no approved valu
 
 ## Employee workforce schedule rules
 
-### OPS-STAFF-SCHEDULE-001 — Effective office/non-technical work schedule
+### OPS-STAFF-SCHEDULE-001 — Effective individual employee work schedule
 
-Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
+Owner: DEMAC owner/administrator. Updated effective rule: 2026-08-28.
 
 - Office/non-technical employees may use the company schedule or an individual effective schedule stored in the existing `employeePayrollSettings` authority.
+- A technical employee who is not assigned to any canonical Van may also use that same existing `employeePayrollSettings` authority for an individual effective schedule. This is not a new source of truth.
 - The primary approved individual full-day templates are 08:00–17:00 with a one-hour break and 09:00–18:00 with a one-hour break.
-- An office/non-technical full workday must contain exactly eight worked hours after the break.
+- An individual full workday must contain exactly eight worked hours after the break.
 - A recurring partial day is configured separately from the full-day shift and therefore is not subject to the eight-hour full-day validation.
 - An individual schedule may have an `effectiveFrom` date and an optional `effectiveUntil` date.
 - Later schedule versions must not retroactively replace the schedule used for earlier payroll, attendance or calendar dates.
@@ -111,14 +112,19 @@ Owner: DEMAC owner/administrator. Corrected effective rule: 2026-08-27.
 - Legacy records that contain `halfDayWorkedHours`, `halfDayPaidFreeHours` or morning/afternoon placement metadata remain readable. Their stored metadata is not deleted, but recurring schedule resolution uses worked time only and does not count the legacy paid-free field as scheduled time.
 - Explicit historical timesheet/payroll records are not rewritten by this correction.
 
-### OPS-STAFF-SCHEDULE-003 — Technical recurring partial day
+### OPS-STAFF-SCHEDULE-003 — Technical recurring schedule authority
 
-Owner: DEMAC owner/administrator. Corrected effective rule: 2026-08-27.
+Owner: DEMAC owner/administrator. Updated effective rule: 2026-08-28.
 
-- A field technician's recurring partial day belongs only to the canonical Van/team through `vanHalfDaySchedules`.
-- The Van/team's exact `workdayStart` and `workdayEnd` determine the technician's recurring partial-day worked hours.
+- A technical employee assigned to a canonical regular Van crew inherits the recurring schedule from that Van/team. The Van's partial day belongs to `vanHalfDaySchedules`.
+- The Van/team's exact `workdayStart` and `workdayEnd` determine the assigned technician's recurring partial-day worked hours.
 - Only the actual worked window is counted; no synthetic paid-free hours are added.
-- An employee-level payroll schedule must never override or duplicate the Van/team technical partial day.
+- An individual employee schedule must never override or duplicate the active Van/team schedule while the technical employee is assigned to a Van.
+- A technical employee with no canonical Van assignment may instead use the existing versioned `employeePayrollSettings` individual schedule, including an administrator-defined exact partial-day weekday, Start, End and optional Break.
+- Assigning that employee to a Van immediately makes the Van/team schedule authoritative for Calendar, Attendance and Payroll without deleting the employee's saved individual schedule history.
+- Moving the employee from one Van to another changes the inherited Van partial day automatically.
+- Removing the employee from all canonical Vans makes the applicable preserved individual schedule authoritative and editable again.
+- Before the supported Employee Profile flow saves an individual technical schedule, it rechecks current canonical Van membership. The schedule write contract rejects technical writes by default unless the caller explicitly confirms that the technician has no canonical Van assignment.
 
 ### OPS-STAFF-SCHEDULE-004 — Employment-date schedule boundary
 
@@ -263,6 +269,10 @@ Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
 - Office employee on a 09:00–18:00 schedule with Wednesday exact partial day 09:00–13:00 and no break → Wednesday resolves to exactly 4 worked hours.
 - Office employee configured for an exact partial day 09:00–14:00 and no break → that day resolves to exactly 5 worked hours, proving partial duration is administrator-defined rather than hard-coded.
 - Employee whose employment starts on 2026-08-11 → 2026-08-10 resolves to zero synthesized scheduled hours; 2026-08-11 is included.
+- Technical employee with no Van, individual 09:00–18:00 schedule and Wednesday 09:00–13:00 partial day → Wednesday resolves to 4 worked hours and Payroll receives 4 regular hours with zero synthetic paid-free time.
+- That same technical employee assigned to a Van whose partial day is Thursday 08:00–13:00 → the saved individual Wednesday partial day becomes inactive; Thursday resolves from the Van to 5 worked hours.
+- Moving that technician to another Van → the inherited partial day changes automatically to the new Van's rule.
+- Removing that technician from all Vans → the applicable preserved individual schedule becomes active and editable again without a migration or recreated record.
 - Technician assigned to a Van with Wednesday 08:00–13:00 partial day → Wednesday resolves to 5 worked hours with zero synthetic paid-free schedule hours even if an employee payroll record contains another schedule.
 - Any employee custom schedule on Sunday → Sunday remains closed with zero scheduled hours.
 - Saving a new schedule effective 2026-09-01 on an employee with a legacy schedule → dates before September continue resolving against the preserved legacy schedule version; explicit historical records are not deleted or rewritten.
