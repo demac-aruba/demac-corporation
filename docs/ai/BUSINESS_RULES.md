@@ -19,8 +19,8 @@ engineering index; it does not replace that registry.
 - `OPS-VAN-PROFILE-*`: canonical Van ownership of regular crew, date-scoped override separation,
   optional third-helper semantics, Van profile lifecycle, and vehicle maintenance/repair history.
 - `OPS-ROUTE-*`: route anchors and calculated availability precede customer preference.
-- `OPS-STAFF-SCHEDULE-*`: employee schedule authority, employment-date boundaries, recurring
-  partial-day ownership, effective schedule versions, exact worked-hour windows, and Sunday closure.
+- `OPS-STAFF-SCHEDULE-*`: employee schedule authority, employment-date boundaries, Van-aware
+  technical schedule precedence, effective schedule versions, exact worked-hour windows, and Sunday closure.
 - `OPS-STAFF-ATTENDANCE-*`: 27–26 payroll-period membership, schedule-derived overtime,
   separately classified partial missing-time segments, and explicit attendance schedule snapshots.
 - `COMMS-*`: current-turn priority, answer-first behavior, natural language, contextual
@@ -46,8 +46,9 @@ Ambiguity blocks automation and is escalated to an authorized human.
   same date. Moving a person between Vans for one date requires the source Van's dated crew to be
   resolved as well.
 - `OPS-VAN-PROFILE-003` — Technical recurring partial-day configuration belongs to
-  `vanHalfDaySchedules`; weekday plus exact Start/End are authoritative for worked time. Sunday
-  remains governed by the company calendar and is not a Van partial-day choice.
+  `vanHalfDaySchedules` whenever the technical employee is part of a canonical regular Van crew;
+  weekday plus exact Start/End are authoritative for worked time. Sunday remains governed by the
+  company calendar and is not a Van partial-day choice.
 - `OPS-VAN-PROFILE-004` — Vehicle maintenance and repair history remains in the existing
   `vanMaintenanceLogs` collection. Current odometer/service/insurance/registration milestones may
   also be projected on the canonical `vans` profile; no duplicate maintenance authority is created.
@@ -68,10 +69,20 @@ Ambiguity blocks automation and is escalated to an authorized human.
   `employeePayrollSettings`. Its Start, End, and optional Break are stored as exact worked-time
   values. Attendance and payroll count the resulting worked hours only; the system must not add a
   synthetic paid-free block.
-- A technical field employee's recurring partial day belongs to the canonical Van/team through
-  `vanHalfDaySchedules`. The exact Van/team Start and End determine the worked hours. An
-  employee-level payroll schedule must not override the Van/team rule, and no synthetic paid-free
-  hours are added.
+- A technical employee who is assigned to a canonical regular Van crew inherits the recurring
+  schedule from that Van/team. `vanHalfDaySchedules` owns the exact Van partial-day Start and End;
+  any existing individual employee schedule is preserved but must not override the active Van rule.
+- A technical employee who is not assigned to any canonical Van may use the existing
+  `employeePayrollSettings` authority for an effective individual schedule, including an exact
+  recurring partial-day window. This does not create a new schedule collection or duplicate active
+  authority.
+- Assigning an unassigned technical employee to a Van immediately makes the Van/team schedule
+  authoritative for Calendar, Attendance and Payroll. Removing the employee from all Vans makes the
+  applicable preserved individual schedule active again. Moving the employee between Vans changes
+  the inherited Van partial day automatically.
+- The Employee Profile revalidates current canonical Van membership before saving an individual
+  technical schedule. The domain write path defaults to rejecting technical individual schedules
+  unless the caller explicitly confirms that no canonical Van currently owns the schedule.
 - Effective employee schedule versions preserve historical schedule resolution instead of
   retroactively applying a later schedule change to earlier payroll/attendance dates.
 - `employmentStartedAt` and `employmentEndedAt` bound synthesized schedule/attendance/payroll
@@ -80,7 +91,7 @@ Ambiguity blocks automation and is escalated to an authorized human.
 - `staffAbsences` remains separate and represents dated vacation, sickness, or one-off
   unavailability; it never becomes a recurring partial-day rule.
 - `dailyVanAssignments` is a date-scoped temporary crew assignment/override and does not
-  redefine recurring ownership.
+  redefine recurring schedule ownership.
 
 ## Current payroll-attendance ownership
 

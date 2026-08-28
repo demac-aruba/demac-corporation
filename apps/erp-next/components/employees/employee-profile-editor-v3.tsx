@@ -5,6 +5,7 @@ import { useAuth } from '@/components/auth/auth-provider';
 import {
   activeStaffAbsence,
   canonicalVanId,
+  loadCanonicalOperationsState,
   staffDisplayName,
   weekdayLabel,
   type CanonicalOperationsState,
@@ -133,6 +134,9 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
   const today = todayKey();
   const profile = (operations.staffProfiles.find((item) => item.id === employee.id) ?? employee) as LifecycleProfile;
   const technical = isTechnicalEmployee(profile);
+  const van = employeeVan(profile, operations.vans);
+  const vanId = van ? canonicalVanId(van.id, operations.vans) : '';
+  const scheduleLockedToVan = technical && Boolean(van);
   const [tab, setTab] = useState<Tab>('schedule');
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [settings, setSettings] = useState<EmployeePayrollSettings[]>([]);
@@ -165,7 +169,7 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
         })
         .catch((cause) => setError(`ERP access could not be loaded: ${errorText(cause)}`));
     }
-    if (!technical && canManageSchedule) {
+    if (!scheduleLockedToVan && canManageSchedule) {
       setLoadingSchedule(true);
       void loadEmployeePayrollSettings()
         .then((records) => {
@@ -175,14 +179,12 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
         .catch((cause) => setError(`Work schedule could not be loaded: ${errorText(cause)}`))
         .finally(() => setLoadingSchedule(false));
     }
-  }, [open, employee.id, canManageAccess, canManageSchedule, technical, today]);
+  }, [open, employee.id, canManageAccess, canManageSchedule, scheduleLockedToVan, today]);
 
   const userByStaffId = useMemo(() => new Map(users.filter((user) => user.staffId).map((user) => [String(user.staffId), user])), [users]);
   const userByEmail = useMemo(() => new Map(users.filter((user) => user.email).map((user) => [user.email.trim().toLowerCase(), user])), [users]);
   const linkedUser = userByStaffId.get(profile.id);
   const payrollSettings = payrollSettingsForEmployee(settings, profile);
-  const van = employeeVan(profile, operations.vans);
-  const vanId = van ? canonicalVanId(van.id, operations.vans) : '';
   const vanHalfDay = vanId
     ? operations.vanHalfDaySchedules.find((rule) => canonicalVanId(rule.vanId, operations.vans) === vanId)
     : undefined;
@@ -252,10 +254,20 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
   }
 
   async function saveSchedule() {
-    if (technical) return setError('Technician recurring schedules are governed by the Van/team.');
+    if (scheduleLockedToVan) return setError(`This technician's recurring schedule is governed by ${vanId || 'the assigned Van/team'}.`);
     if (!canManageSchedule) return setError('This schedule is payroll-protected.');
     setBusy(true); setError(''); setMessage('');
     try {
+      let technicalVanAssigned: boolean | undefined;
+      if (technical) {
+        const latestOperations = await loadCanonicalOperationsState();
+        const latestVan = employeeVan(profile, latestOperations.vans);
+        if (latestVan) {
+          const latestVanId = canonicalVanId(latestVan.id, latestOperations.vans);
+          throw new Error(`${staffDisplayName(profile)} is now assigned to ${latestVanId}. Refresh the profile; the Van/team schedule is authoritative.`);
+        }
+        technicalVanAssigned = false;
+      }
       const saved = await saveEmployeeScheduleSettings({
         employee: profile,
         existing: payrollSettings,
@@ -269,11 +281,14 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
         halfDayStartTime: scheduleDraft.halfDayWeekday ? scheduleDraft.halfDayStartTime : null,
         halfDayEndTime: scheduleDraft.halfDayWeekday ? scheduleDraft.halfDayEndTime : null,
         halfDayBreakMinutes: scheduleDraft.halfDayWeekday ? scheduleDraft.halfDayBreakMinutes : 0,
+        technicalVanAssigned,
       });
       setSettings((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
       await saveCanonicalStaffProfile({ ...profile, weeklyDayOffWeekday: null, weeklyDayOffEffectiveFrom: null } as LifecycleProfile);
       await onChanged(profile.id);
-      setMessage('Work schedule saved. Partial days use the exact worked hours you entered.');
+      setMessage(technical
+        ? 'Individual technician schedule saved. It remains active only while the technician has no canonical Van assignment.'
+        : 'Work schedule saved. Partial days use the exact worked hours you entered.');
     } catch (cause) { setError(errorText(cause)); }
     finally { setBusy(false); }
   }
@@ -349,7 +364,7 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
     { id: 'timeoff', label: 'Time Off & Exceptions' },
     { id: 'payroll', label: 'Payroll & Lifecycle' },
   ];
-  const headerSavesSchedule = tab === 'schedule' && !technical;
+  const headerSavesSchedule = tab === 'schedule' && !scheduleLockedToVan;
   const canUseHeaderSave = profile.active !== false && (headerSavesSchedule ? canManageSchedule : canManageEmployees);
 
   return <div className={styles.backdrop} role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target && !busy) onClose(); }}>
@@ -403,9 +418,29 @@ function ScheduleEditor({ technical, canManage, loading, draft, setDraft, onAppl
   vanHalfDay?: CanonicalVanHalfDaySchedule;
   settings?: EmployeePayrollSettings;
 }) {
-  if (technical) {
+  const vanGoverned = technical && Boolean(vanId);
+  if (vanGoverned) {
     const partialWorkedMinutes = vanHalfDay?.workdayStart && vanHalfDay?.workdayEnd ? Math.max(0, timeMinutes(vanHalfDay.workdayEnd) - timeMinutes(vanHalfDay.workdayStart)) : 300;
-    return <div className={styles.scheduleLayout}><div className={styles.stack}><Card title="Work Schedule" subtitle="Technician recurring partial day is inherited from the Van/team."><div className={styles.scheduleTable}><div className={styles.scheduleHead}><span>Day</span><span>Status</span><span>Start</span><span>End</span><span>Rule</span></div>{WEEKDAYS.map((day) => { const partial = vanHalfDay?.weekday === Number(day.key); return <div className={styles.scheduleRow} key={day.key}><strong>{day.label}</strong><span className={partial ? styles.halfChip : styles.workChip}>{partial ? 'Partial day' : 'Working day'}</span><span>{partial ? vanHalfDay?.workdayStart ?? '08:00' : '08:00'}</span><span>{partial ? vanHalfDay?.workdayEnd ?? '13:00' : '17:00'}</span><span>{partial ? `${formatWorkedHours(partialWorkedMinutes)} worked` : 'Company shift'}</span></div>; })}<SundayRow /></div><Info>Change technician partial-day hours in the Van/team schedule. Only the actual worked hours are counted.</Info></Card></div><aside className={styles.stack}><Card title="Schedule Source" subtitle="Protected authority"><Status label="Base schedule" value="Company calendar" /><Status label="Recurring partial day" value={vanId ? `${vanId} · vanHalfDaySchedules` : 'Van not assigned'} /><Status label="Worked time" value={formatWorkedHours(partialWorkedMinutes)} /><Status label="Sunday" value="Company closed" /></Card></aside></div>;
+    const rows = WEEKDAYS.map((day) => {
+      const partial = vanHalfDay?.weekday === Number(day.key);
+      const startTime = partial ? vanHalfDay?.workdayStart ?? '08:00' : '08:00';
+      const endTime = partial ? vanHalfDay?.workdayEnd ?? '13:00' : '17:00';
+      return { ...day, partial, startTime, endTime, workedMinutes: partial ? partialWorkedMinutes : 480 };
+    });
+    const scheduledWorkedMinutes = rows.reduce((sum, row) => sum + row.workedMinutes, 0);
+    return <div className={styles.scheduleLayout}>
+      <div className={styles.stack}>
+        <Card title="1 · Schedule Authority" subtitle="The assigned Van automatically owns this technician's recurring schedule."><div className={styles.modeGrid}><div className={styles.modeSelected}><strong>Use Van/team schedule</strong><span>{vanId} · protected operational authority</span></div><div className={styles.modeCard}><strong>Individual employee schedule</strong><span>Preserved but inactive while assigned to a Van.</span></div></div></Card>
+        <Card title="2 · Van Assignment" subtitle="Changing the employee's regular Van automatically changes the inherited recurring partial day."><div className={styles.formGrid}><Status label="Assigned Van" value={vanId} /><Status label="Base schedule" value="Company calendar · 08:00–17:00" /><Status label="Recurring partial day" value={vanHalfDay?.weekday != null ? `${weekdayLabel(vanHalfDay.weekday)} · ${vanHalfDay.workdayStart ?? '08:00'}–${vanHalfDay.workdayEnd ?? '13:00'}` : 'Not configured'} /><Status label="Schedule ownership" value="Vans → Crew & Schedule" /></div></Card>
+        <Card title="3 · Weekly Schedule" subtitle="Read-only projection of the effective Van/team schedule."><div className={styles.scheduleTable}><div className={styles.scheduleHead}><span>Day</span><span>Status</span><span>Start</span><span>End</span><span>Rule</span></div>{rows.map((row) => <div className={styles.scheduleRow} key={row.key}><strong>{row.label}</strong><span className={row.partial ? styles.halfChip : styles.workChip}>{row.partial ? 'Partial day' : 'Working day'}</span><span>{row.startTime}</span><span>{row.endTime}</span><span>{row.partial ? `${formatWorkedHours(row.workedMinutes)} worked` : 'Company shift'}</span></div>)}<SundayRow /></div></Card>
+        <Card title="4 · Schedule Rule" subtitle="One authority at a time prevents duplicate recurring schedules."><Info>To change this technician's recurring partial day, edit <strong>{vanId}</strong> in Vans → Crew & Schedule. If the technician is removed from all Vans, the individual Employee Profile schedule becomes editable and authoritative again.</Info></Card>
+      </div>
+      <aside className={styles.stack}>
+        <Card title="Weekly Overview" subtitle="Effective worked-hour preview"><div className={styles.overview}>{rows.map((row) => <div className={styles.overviewRow} key={row.key}><strong>{row.short}</strong><span>{`${row.startTime}–${row.endTime}`}</span><div className={row.partial ? styles.halfBar : styles.workBar} /><b>{formatWorkedHours(row.workedMinutes)}</b></div>)}<div className={styles.overviewRow}><strong>Sun</strong><span>Closed</span><div className={styles.offBar} /><b>0h</b></div></div><div className={styles.totalRow}><span>Scheduled worked hours</span><strong>{formatWorkedHours(scheduledWorkedMinutes)}</strong></div></Card>
+        <Card title="Payroll & Attendance Impact" subtitle="Shared effective schedule"><Status label="Attendance" value="Van/team exact worked hours" /><Status label="Calendar" value="Van/team schedule" /><Status label="Payroll" value="Van/team schedule dates" /><Status label="Employment start" value="Respected" /><Status label="Existing individual schedule" value="Preserved, inactive while assigned" /></Card>
+        <Card title="Current Authority" subtitle="Protected source"><Status label="Van" value={vanId} /><Status label="Recurring partial day" value={vanHalfDay ? 'vanHalfDaySchedules' : 'Not configured'} /><Status label="Sunday" value="Company closed" /></Card>
+      </aside>
+    </div>;
   }
 
   const rows = WEEKDAYS.map((day) => {
@@ -445,12 +480,12 @@ function ScheduleEditor({ technical, canManage, loading, draft, setDraft, onAppl
 
   return <div className={styles.scheduleLayout}>
     <div className={styles.stack}>
-      <Card title="1 · Schedule Mode" subtitle="Choose company default or a custom employee schedule."><div className={styles.modeGrid}><button className={draft.mode === 'company' ? styles.modeSelected : styles.modeCard} type="button" disabled={!canManage || loading} onClick={() => setDraft((current) => ({ ...current, mode: 'company' }))}><strong>Use company default</strong><span>08:00–17:00 · 1h break</span></button><button className={draft.mode === 'custom' ? styles.modeSelected : styles.modeCard} type="button" disabled={!canManage || loading} onClick={() => setDraft((current) => ({ ...current, mode: 'custom' }))}><strong>Use custom employee schedule</strong><span>Assign an individual eight-work-hour full-day shift.</span></button></div></Card>
-      <Card title="2 · Shift Templates" subtitle="Fast starting points for office employees."><div className={styles.templateGrid}>{OFFICE_SCHEDULE_TEMPLATES.map((template) => <button key={template.id} className={draft.templateId === template.id && draft.mode === 'custom' ? styles.templateSelected : styles.templateCard} type="button" disabled={!canManage || loading} onClick={() => onApplyTemplate(template.id)}><strong>{template.label}</strong><span>{template.startTime}–{template.endTime}</span><small>{template.breakMinutes / 60}h break</small></button>)}<div className={styles.templateReadonly}><strong>Technician Shift</strong><span>Van/team governed</span><small>Partial-day hours come from the Van schedule</small></div></div></Card>
+      <Card title="1 · Schedule Mode" subtitle="Choose company default or a custom employee schedule."><div className={styles.modeGrid}><button className={draft.mode === 'company' ? styles.modeSelected : styles.modeCard} type="button" disabled={!canManage || loading} onClick={() => setDraft((current) => ({ ...current, mode: 'company' }))}><strong>Use company default</strong><span>08:00–17:00 · 1h break</span></button><button className={draft.mode === 'custom' ? styles.modeSelected : styles.modeCard} type="button" disabled={!canManage || loading} onClick={() => setDraft((current) => ({ ...current, mode: 'custom' }))}><strong>Use custom employee schedule</strong><span>Assign an individual eight-work-hour full-day shift.</span></button></div>{technical ? <Info>This technician is not assigned to a canonical Van, so the individual Employee Profile schedule is currently authoritative. A future Van assignment will automatically take priority without deleting this schedule history.</Info> : null}</Card>
+      <Card title="2 · Shift Templates" subtitle="Fast starting points for individual employee schedules."><div className={styles.templateGrid}>{OFFICE_SCHEDULE_TEMPLATES.map((template) => <button key={template.id} className={draft.templateId === template.id && draft.mode === 'custom' ? styles.templateSelected : styles.templateCard} type="button" disabled={!canManage || loading} onClick={() => onApplyTemplate(template.id)}><strong>{template.label}</strong><span>{template.startTime}–{template.endTime}</span><small>{template.breakMinutes / 60}h break</small></button>)}<div className={styles.templateReadonly}><strong>{technical ? 'Van/team schedule' : 'Technician Shift'}</strong><span>{technical ? 'Not assigned to a Van' : 'Van/team governed'}</span><small>{technical ? 'Activates automatically when this employee joins a Van crew.' : 'Partial-day hours come from the Van schedule'}</small></div></div></Card>
       <Card title="3 · Weekly Schedule" subtitle="Enter the employee's exact worked Start / End times. Sunday is company-closed and locked."><div className={styles.scheduleTable}><div className={styles.scheduleHead}><span>Day</span><span>Status</span><span>Start</span><span>End</span><span>Break / Worked</span></div>{rows.map((row) => <div className={styles.scheduleRow} key={row.key}><strong>{row.label}</strong><span className={row.partial ? styles.halfChip : styles.workChip}>{row.partial ? 'Partial day' : 'Working day'}</span><input className={styles.timeControl} type="time" value={row.startTime} disabled={!canManage || loading || (!row.partial && draft.mode === 'company')} onChange={(event) => onUpdateDay(row.key, 'startTime', event.target.value)} /><input className={styles.timeControl} type="time" value={row.endTime} disabled={!canManage || loading || (!row.partial && draft.mode === 'company')} onChange={(event) => onUpdateDay(row.key, 'endTime', event.target.value)} />{row.partial ? <div className={styles.actionRow}><select className={styles.miniSelect} value={row.breakMinutes} disabled={!canManage || loading} onChange={(event) => onUpdateDay(row.key, 'breakMinutes', event.target.value)}><option value="0">No break</option><option value="30">30m break</option><option value="60">1h break</option></select><span className={styles.ruleText}>{formatWorkedHours(row.workedMinutes)} worked</span></div> : <select className={styles.miniSelect} value={row.breakMinutes} disabled={!canManage || loading || draft.mode === 'company'} onChange={(event) => onUpdateDay(row.key, 'breakMinutes', event.target.value)}><option value="60">1h break</option></select>}</div>)}<SundayRow /></div></Card>
       <Card title="4 · Schedule Details" subtitle="Effective dates prevent future changes from rewriting historical schedule logic."><div className={styles.detailGrid}><Field label="Partial-day weekday"><select className={styles.control} value={draft.halfDayWeekday} onChange={(event) => selectPartialDay(event.target.value)} disabled={!canManage || loading}><option value="">Not configured</option>{WEEKDAYS.map((day) => <option key={day.key} value={day.key}>{day.label}</option>)}</select></Field><Field label="Default placement"><select className={styles.control} value={draft.halfDayOffPeriod} onChange={(event) => selectPartialPlacement(event.target.value as HalfDayOffPeriod)} disabled={!canManage || loading}><option value="afternoon">Work first part of day</option><option value="morning">Work last part of day</option></select></Field><Field label="Effective from"><input className={styles.control} type="date" value={draft.effectiveFrom} onChange={(event) => setDraft((current) => ({ ...current, effectiveFrom: event.target.value }))} disabled={!canManage || loading} /></Field><Field label="Effective until"><input className={styles.control} type="date" value={draft.effectiveUntil} onChange={(event) => setDraft((current) => ({ ...current, effectiveUntil: event.target.value }))} disabled={!canManage || loading} /></Field></div><Info>The partial day uses the exact Start, End and Break shown above. Attendance and payroll count the resulting <strong>worked hours only</strong>.</Info><div className={styles.actionRow}><button className={styles.primaryButton} type="button" onClick={onSave} disabled={!canManage || loading || busy}>{busy ? 'Saving…' : 'Save Work Schedule'}</button></div></Card>
     </div>
-    <aside className={styles.stack}><Card title="Weekly Overview" subtitle="Worked-hour preview"><div className={styles.overview}>{rows.map((row) => <div className={styles.overviewRow} key={row.key}><strong>{row.short}</strong><span>{`${row.startTime}–${row.endTime}`}</span><div className={row.partial ? styles.halfBar : styles.workBar} /><b>{formatWorkedHours(row.workedMinutes)}</b></div>)}<div className={styles.overviewRow}><strong>Sun</strong><span>Closed</span><div className={styles.offBar} /><b>0h</b></div></div><div className={styles.totalRow}><span>Scheduled worked hours</span><strong>{formatWorkedHours(scheduledWorkedMinutes)}</strong></div></Card><Card title="Payroll & Attendance Impact" subtitle="Shared effective schedule"><Status label="Attendance" value="Exact worked hours" /><Status label="Calendar" value="Exact schedule" /><Status label="Payroll" value="Worked-hour schedule dates" /><Status label="Employment start" value="Respected" /><Status label="Existing records" value="Not rewritten" /></Card>{settings ? <Card title="Current Record" subtitle="Backward-compatible source"><Status label="Record ID" value={settings.id} /><Status label="Legacy partial-day weekday" value={settings.weeklyHalfDayWeekday ? weekdayLabel(settings.weeklyHalfDayWeekday) : 'Not configured'} /><Status label="V2 mode" value={asEmployeePayrollScheduleSettings(settings)?.scheduleMode ?? 'Legacy / company default'} /></Card> : null}</aside>
+    <aside className={styles.stack}><Card title="Weekly Overview" subtitle="Worked-hour preview"><div className={styles.overview}>{rows.map((row) => <div className={styles.overviewRow} key={row.key}><strong>{row.short}</strong><span>{`${row.startTime}–${row.endTime}`}</span><div className={row.partial ? styles.halfBar : styles.workBar} /><b>{formatWorkedHours(row.workedMinutes)}</b></div>)}<div className={styles.overviewRow}><strong>Sun</strong><span>Closed</span><div className={styles.offBar} /><b>0h</b></div></div><div className={styles.totalRow}><span>Scheduled worked hours</span><strong>{formatWorkedHours(scheduledWorkedMinutes)}</strong></div></Card><Card title="Payroll & Attendance Impact" subtitle="Shared effective schedule"><Status label="Attendance" value="Exact worked hours" /><Status label="Calendar" value="Exact schedule" /><Status label="Payroll" value="Worked-hour schedule dates" /><Status label="Employment start" value="Respected" /><Status label="Existing records" value="Not rewritten" /></Card>{technical ? <Card title="Schedule Source" subtitle="Current authority"><Status label="Van assignment" value="Not assigned" /><Status label="Recurring schedule" value="Individual employeePayrollSettings" /><Status label="Automatic switch" value="Van/team when assigned" /><Status label="Sunday" value="Company closed" /></Card> : null}{settings ? <Card title="Current Record" subtitle="Backward-compatible source"><Status label="Record ID" value={settings.id} /><Status label="Legacy partial-day weekday" value={settings.weeklyHalfDayWeekday ? weekdayLabel(settings.weeklyHalfDayWeekday) : 'Not configured'} /><Status label="V2 mode" value={asEmployeePayrollScheduleSettings(settings)?.scheduleMode ?? 'Legacy / company default'} /></Card> : null}</aside>
   </div>;
 }
 
