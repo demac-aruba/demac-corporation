@@ -11,6 +11,7 @@ on:
   push:
     branches:
       - main
+      - feature/employee-profile-schedule-redesign
     paths:
       - 'apps/erp-next/**'
       - 'functions/whatsappWacliGateway.js'
