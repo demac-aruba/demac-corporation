@@ -6,6 +6,7 @@ import {
   checkOfficeCreateAvailability,
   confirmOfficeAppointment,
   createOfficeLifecycleRequestId,
+  createOfficeTemporaryHold,
   listOfficeBookingPresets,
   type OfficeBookingOption,
   type OfficeBookingPreset,
@@ -47,6 +48,7 @@ export type LiveCreatedBooking = {
   customer: BookingCustomer;
   property: BookingProperty;
   preset: OfficeBookingPreset;
+  status: 'confirmed' | 'temporary_hold';
 };
 
 type Props = {
@@ -249,6 +251,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
   const [masterError, setMasterError] = useState('');
   const [checking, setChecking] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [holding, setHolding] = useState(false);
   const [authorityError, setAuthorityError] = useState('');
   const [validated, setValidated] = useState<ValidationState | null>(null);
 
@@ -536,13 +539,13 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
   }, [description, recipientSelections, selectedCustomer, selectedProperty, signature, target, technicianInstructions, workRequestLines, workValid]);
 
   useEffect(() => {
-    if (loading || masterSaving || saving || !selectedCustomer || !selectedProperty || !workValid) return;
+    if (loading || masterSaving || saving || holding || !selectedCustomer || !selectedProperty || !workValid) return;
     const timer = window.setTimeout(() => { void validateTarget(true); }, 350);
     return () => window.clearTimeout(timer);
-  }, [loading, masterSaving, saving, selectedCustomer, selectedProperty, validateTarget, workValid]);
+  }, [holding, loading, masterSaving, saving, selectedCustomer, selectedProperty, validateTarget, workValid]);
 
   const confirmBooking = async () => {
-    if (!activeValidation || !selectedValidatedOption || !selectedCustomer || !selectedProperty || !selectedPresets.length || saving) return;
+    if (!activeValidation || !selectedValidatedOption || !selectedCustomer || !selectedProperty || !selectedPresets.length || saving || holding) return;
     setSaving(true);
     setAuthorityError('');
     const { offerId, offerVersion } = activeValidation;
@@ -561,6 +564,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
         customer: selectedCustomer,
         property: selectedProperty,
         preset: selectedPresets[0],
+        status: 'confirmed',
       });
     } catch (error) {
       setValidated(null);
@@ -570,7 +574,37 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
     }
   };
 
-  const busy = loading || masterSaving || saving;
+  const holdBooking = async () => {
+    if (!activeValidation || !selectedValidatedOption || !selectedCustomer || !selectedProperty || !selectedPresets.length || saving || holding) return;
+    setHolding(true);
+    setAuthorityError('');
+    const { offerId, offerVersion } = activeValidation;
+    const option = selectedValidatedOption;
+    try {
+      const result = await createOfficeTemporaryHold({
+        requestId: `schedule-hold:${offerId}:${offerVersion}:${option.id}`,
+        offerId,
+        offerVersion,
+        optionId: option.id,
+      });
+      onCreated({
+        appointmentId: result.appointmentId,
+        workOrderIds: result.workOrderIds ?? [],
+        option,
+        customer: selectedCustomer,
+        property: selectedProperty,
+        preset: selectedPresets[0],
+        status: 'temporary_hold',
+      });
+    } catch (error) {
+      setValidated(null);
+      setAuthorityError(error instanceof Error ? error.message : 'The temporary hold could not be created.');
+    } finally {
+      setHolding(false);
+    }
+  };
+
+  const busy = loading || masterSaving || saving || holding;
 
   return (
     <div className={styles.overlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
@@ -735,11 +769,11 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
           </section>
 
           <section className={styles.authoritySection}>
-            <div className={styles.authorityHeading}><div><span>4</span><strong>Live capacity validation</strong><small>{target.vanName} stays the primary/responsible van. Booking Authority validates automatically as the complete workload changes; final transaction validation still runs on confirm.</small></div><button type="button" className={styles.validateButton} disabled={busy || checking || !selectedCustomer || !selectedProperty || !workValid} onClick={() => void validateTarget(false)}>{checking ? 'Checking…' : 'Recheck now'}</button></div>
+            <div className={styles.authorityHeading}><div><span>4</span><strong>Live capacity validation</strong><small>{target.vanName} stays the primary/responsible van. Booking Authority validates automatically as the complete workload changes; final transaction validation still runs on confirm or hold.</small></div><button type="button" className={styles.validateButton} disabled={busy || checking || !selectedCustomer || !selectedProperty || !workValid} onClick={() => void validateTarget(false)}>{checking ? 'Checking…' : 'Recheck now'}</button></div>
 
             {activeValidation && selectedValidatedOption ? (
               <div className={styles.validationSuccess}>
-                <header><div><b>✓</b><div><strong>Booking Authority approved the complete allocation</strong><span>Offer {activeValidation.offerId} · final transaction validation still runs on confirm.</span></div></div></header>
+                <header><div><b>✓</b><div><strong>Booking Authority approved the complete allocation</strong><span>Offer {activeValidation.offerId} · final transaction validation still runs on commit.</span></div></div></header>
                 {activeValidation.options.length > 1 ? (
                   <div style={{ marginTop: 10 }}>
                     <div style={{ color: 'var(--muted)', fontSize: 6, fontWeight: 850, marginBottom: 6 }}>VALID SUPPORT ALTERNATIVES</div>
@@ -767,6 +801,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
                     </article>
                   ))}
                 </div>
+                <div className={styles.authorityIdle} style={{ marginTop: 8 }}><strong>Temporary hold:</strong> reserves these same canonical capacity locks but sends no customer confirmation or reminder until an office user manually confirms it. No automatic expiry is assumed.</div>
               </div>
             ) : (
               <div className={styles.authorityIdle}>{checking ? 'Checking the complete allocation with Booking Authority…' : 'Complete the customer, property and work details. Booking Authority validates the live target automatically; the browser never becomes the source of truth for capacity.'}</div>
@@ -776,7 +811,11 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
 
         <footer className={styles.footer}>
           <div><span>CANONICAL WRITE PATH</span><strong>Booking Authority → Appointment + Work Order + Capacity Locks</strong></div>
-          <div><button type="button" className={styles.secondaryButton} disabled={busy} onClick={onClose}>Cancel</button><button type="button" className={styles.confirmButton} disabled={!selectedValidatedOption || busy || checking} onClick={() => void confirmBooking()}>{saving ? 'Confirming…' : 'Confirm appointment'}</button></div>
+          <div>
+            <button type="button" className={styles.secondaryButton} disabled={busy} onClick={onClose}>Cancel</button>
+            <button type="button" className={styles.secondaryButton} style={{ color: 'var(--warning, #b45309)', borderColor: 'var(--warning, #f59e0b)' }} disabled={!selectedValidatedOption || busy || checking} onClick={() => void holdBooking()}>{holding ? 'Holding…' : 'Temporary hold'}</button>
+            <button type="button" className={styles.confirmButton} disabled={!selectedValidatedOption || busy || checking} onClick={() => void confirmBooking()}>{saving ? 'Confirming…' : 'Confirm appointment'}</button>
+          </div>
         </footer>
       </aside>
     </div>
