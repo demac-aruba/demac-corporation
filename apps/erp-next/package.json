@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "prebuild": "npm run test:employee-schedule",
+    "prebuild": "npm run test:employee-schedule && npm run test:employee-attendance",
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
@@ -13,7 +13,8 @@
     "test:booking-intelligence": "node -e \"require('fs').rmSync('.booking-intelligence-test',{recursive:true,force:true})\" && tsc --ignoreConfig scripts/booking-intelligence-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --types node --outDir .booking-intelligence-test --rootDir ../.. --lib ES2022,DOM && node .booking-intelligence-test/apps/erp-next/scripts/booking-intelligence-acceptance.js",
     "test:booking-copilot": "node -e \"require('fs').rmSync('.booking-copilot-test',{recursive:true,force:true})\" && tsc --ignoreConfig scripts/booking-copilot-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --outDir .booking-copilot-test --rootDir ../.. --lib ES2022,DOM && node .booking-copilot-test/apps/erp-next/scripts/booking-copilot-acceptance.js",
     "test:live-scheduling": "node -e \"require('fs').rmSync('.live-scheduling-test',{recursive:true,force:true})\" && tsc --ignoreConfig scripts/live-scheduling-acceptance.ts scripts/live-drag-saturday-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --types node --outDir .live-scheduling-test --rootDir . --lib ES2022,DOM && node .live-scheduling-test/scripts/live-scheduling-acceptance.js && node .live-scheduling-test/scripts/live-drag-saturday-acceptance.js",
-    "test:employee-schedule": "node -e \"require('fs').rmSync('.employee-schedule-test',{recursive:true,force:true})\" && tsc --ignoreConfig scripts/employee-schedule-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --types node --outDir .employee-schedule-test --rootDir . --lib ES2022,DOM && node .employee-schedule-test/scripts/employee-schedule-acceptance.js"
+    "test:employee-schedule": "node -e \"require('fs').rmSync('.employee-schedule-test',{recursive:true,force:true})\" && tsc --ignoreConfig scripts/employee-schedule-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --types node --outDir .employee-schedule-test --rootDir . --lib ES2022,DOM && node .employee-schedule-test/scripts/employee-schedule-acceptance.js",
+    "test:employee-attendance": "node -e \"require('fs').rmSync('.employee-attendance-test',{recursive:true,force:true})\" && tsc --ignoreConfig scripts/employee-attendance-acceptance.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --types node --outDir .employee-attendance-test --rootDir . --lib ES2022,DOM && node .employee-attendance-test/scripts/employee-attendance-acceptance.js"
   },
   "dependencies": {
     "next": "16.2.11",
