@@ -55,6 +55,11 @@ export function buildVanSaveRecord(van: CanonicalVan, staffProfiles: CanonicalSt
   const crewIds = regularCrewIds(van);
   return {
     ...van,
+    // Empty strings are intentional here: Firestore update masks must be able to clear an
+    // existing optional crew slot instead of silently leaving the old employee assigned.
+    responsibleStaffId: van.responsibleStaffId || '',
+    regularHelperId: van.regularHelperId || '',
+    additionalHelperId: van.additionalHelperId || '',
     technicianIds: crewIds,
     active: van.active !== false,
     createdAt: van.createdAt ?? now,
