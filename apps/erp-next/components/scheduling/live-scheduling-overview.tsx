@@ -26,11 +26,13 @@ import {
 import {
   createOfficeLifecycleRequestId,
   moveOfficeAppointment,
+  type OfficeAdhocSupportResult,
 } from '../../lib/office-booking-authority';
 import type { CandidateSlot, DispatchJob } from '../../lib/scheduling';
 import { getRuntimeSchedulingSettings, minutesToTime, previewVans, timeToMinutes } from '../../lib/scheduling';
 import type { CalendarDispatchJob, OperationalDay } from '../../lib/scheduling-capacity';
 import { buildOperationalWeek, currentArubaDateKey } from '../../lib/scheduling-capacity';
+import { AdhocSupportDrawer, type AdhocSupportTarget } from './adhoc-support-drawer';
 import { DragMoveConfirmation, type PendingDragMove } from './drag-move-confirmation';
 import { LiveAppointmentCreateDrawer, type LiveBookingTarget, type LiveCreatedBooking } from './live-appointment-create-drawer';
 import { LiveAppointmentDetailsDrawer } from './live-appointment-details-drawer';
@@ -175,6 +177,7 @@ export function LiveSchedulingOverview() {
   const [capacityError, setCapacityError] = useState('');
   const [selectedAppointmentId, setSelectedAppointmentId] = useState('');
   const [bookingTarget, setBookingTarget] = useState<LiveBookingTarget | null>(null);
+  const [supportTarget, setSupportTarget] = useState<AdhocSupportTarget | null>(null);
   const [moveArmedJobId, setMoveArmedJobId] = useState('');
   const [pendingDragMove, setPendingDragMove] = useState<PendingLiveMove | null>(null);
   const [moveBusy, setMoveBusy] = useState(false);
@@ -195,7 +198,7 @@ export function LiveSchedulingOverview() {
   }), [baseWeek, capacityState]);
   const canManage = principal.active && principal.capabilities.has('scheduling.manage');
   const actor = useMemo(() => ({ id: principal.userId, name: principal.displayName }), [principal.displayName, principal.userId]);
-  const interactionActive = Boolean(bookingTarget || moveArmedJobId || pendingDragMove || moveBusy || manualRefreshing);
+  const interactionActive = Boolean(bookingTarget || supportTarget || moveArmedJobId || pendingDragMove || moveBusy || manualRefreshing);
 
   const refresh = useCallback(async (forceCapacity = false) => {
     const sequence = ++refreshSequenceRef.current;
@@ -265,6 +268,10 @@ export function LiveSchedulingOverview() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || moveBusy) return;
+      if (supportTarget) {
+        setSupportTarget(null);
+        return;
+      }
       if (bookingTarget) {
         setBookingTarget(null);
         return;
@@ -281,7 +288,7 @@ export function LiveSchedulingOverview() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [bookingTarget, moveArmedJobId, moveBusy, pendingDragMove]);
+  }, [bookingTarget, moveArmedJobId, moveBusy, pendingDragMove, supportTarget]);
 
   const jobs = useMemo(() => appointments.flatMap(appointmentAssignments), [appointments]);
   const vans = useMemo<DisplayVan[]>(() => previewVans.map((van) => ({ id: van.id, name: van.name, active: van.active })), []);
@@ -338,7 +345,7 @@ export function LiveSchedulingOverview() {
   };
 
   const openCreateAppointment = (vanId: string, start: string, end: string) => {
-    if (moveArmedJobId || pendingDragMove || moveBusy) return;
+    if (moveArmedJobId || pendingDragMove || moveBusy || supportTarget) return;
     if (!canManage) {
       setMoveNotice('Your account does not have permission to create appointments.');
       return;
@@ -354,6 +361,27 @@ export function LiveSchedulingOverview() {
     setBookingTarget({ dateKey: activeDay.dateKey, vanId, vanName: van.name, start, end });
   };
 
+  const openSupportAssignment = (vanId: string, start: string, end: string) => {
+    if (moveArmedJobId || pendingDragMove || moveBusy || bookingTarget) return;
+    if (!canManage) {
+      setMoveNotice('Your account does not have permission to assign operational support.');
+      return;
+    }
+    if (!capacityState) {
+      setMoveNotice(`Live capacity is not ready${capacityError ? `: ${capacityError}` : '.'} Refresh the agenda before assigning support.`);
+      return;
+    }
+    if (activeDay.dateKey !== today) {
+      setMoveNotice('Ad-hoc coworker support is a same-day operational action. Future multi-Van work must use the planned Booking Authority support allocation.');
+      return;
+    }
+    const van = vans.find((item) => item.id === vanId);
+    if (!van) return;
+    setSelectedAppointmentId('');
+    setMoveNotice('');
+    setSupportTarget({ dateKey: activeDay.dateKey, vanId, vanName: van.name, start, end });
+  };
+
   const handleCreatedBooking = (booking: LiveCreatedBooking) => {
     setBookingTarget(null);
     setSelectedAppointmentId('');
@@ -365,8 +393,18 @@ export function LiveSchedulingOverview() {
     void refresh();
   };
 
+  const handleCreatedSupport = async (result: OfficeAdhocSupportResult, appointment: BrowserAppointmentRecord) => {
+    const target = supportTarget;
+    setSupportTarget(null);
+    setSelectedAppointmentId('');
+    setMoveNotice(target
+      ? `${target.vanName} was assigned to support ${appointment.customer} at ${formatTime(target.start)}. The primary appointment remains unchanged and same-day Van alerts use the internal WhatsApp authority.`
+      : `Operational support ${result.supportWorkOrderId} was assigned to ${appointment.customer}.`);
+    await refresh();
+  };
+
   const armMove = (jobId: string) => {
-    if (moveBusy || pendingDragMove || bookingTarget) return;
+    if (moveBusy || pendingDragMove || bookingTarget || supportTarget) return;
     if (clickTimerRef.current) {
       window.clearTimeout(clickTimerRef.current);
       clickTimerRef.current = null;
@@ -575,7 +613,7 @@ export function LiveSchedulingOverview() {
         <header className={styles.boardHeader}>
           <div>
             <strong>Live Van Schedule</strong>
-            <span>{activeDay.weekday} {activeDay.shortDate} · click open spot = new appointment · single click occupied = details · double click confirmed = move</span>
+            <span>{activeDay.weekday} {activeDay.shortDate} · open spot = book customer or send coworker support · single click occupied = details · double click confirmed = move</span>
             {moveNotice ? <span style={{ marginTop: 3, fontWeight: 700 }}>{moveNotice}</span> : null}
           </div>
           <b>{moveBusy ? 'SAVING MOVE…' : moveArmedJobId ? `${validDropTargets.size} VALID TARGETS` : `${activeOccupancy.open} OPEN SPOTS`}</b>
@@ -617,8 +655,10 @@ export function LiveSchedulingOverview() {
                     moveArmedJobId={moveArmedJobId}
                     moveBusy={moveBusy}
                     canCreate={canManage && Boolean(capacityState)}
+                    canSupport={canManage && Boolean(capacityState) && activeDay.dateKey === today}
                     validDropTargets={validDropTargets}
                     onCreateAppointment={openCreateAppointment}
+                    onSendSupport={openSupportAssignment}
                     onOpenAppointment={scheduleOpenJob}
                     onArmMove={armMove}
                     onDropMove={dropMove}
@@ -633,6 +673,7 @@ export function LiveSchedulingOverview() {
 
       {selectedAppointment ? <LiveAppointmentDetailsDrawer appointment={selectedAppointment} onClose={() => setSelectedAppointmentId('')} onChanged={refresh} /> : null}
       {bookingTarget ? <LiveAppointmentCreateDrawer target={bookingTarget} onClose={() => setBookingTarget(null)} onCreated={handleCreatedBooking} /> : null}
+      {supportTarget ? <AdhocSupportDrawer target={supportTarget} appointments={appointments} onClose={() => setSupportTarget(null)} onCreated={handleCreatedSupport} /> : null}
       {pendingDragMove ? <DragMoveConfirmation move={pendingDragMove} busy={moveBusy} onCancel={cancelPendingMove} onConfirm={() => void confirmPendingMove()} /> : null}
     </section>
   );
@@ -646,8 +687,10 @@ function VanScheduleSlots({
   moveArmedJobId,
   moveBusy,
   canCreate,
+  canSupport,
   validDropTargets,
   onCreateAppointment,
+  onSendSupport,
   onOpenAppointment,
   onArmMove,
   onDropMove,
@@ -659,8 +702,10 @@ function VanScheduleSlots({
   moveArmedJobId: string;
   moveBusy: boolean;
   canCreate: boolean;
+  canSupport: boolean;
   validDropTargets: Set<string>;
   onCreateAppointment: (vanId: string, start: string, end: string) => void;
+  onSendSupport: (vanId: string, start: string, end: string) => void;
   onOpenAppointment: (jobId: string) => void;
   onArmMove: (jobId: string) => void;
   onDropMove: (vanId: string, start: string) => void;
@@ -695,17 +740,10 @@ function VanScheduleSlots({
         && slot.operational
         && validDropTargets.has(liveMoveTargetKey(vanId, slot.start));
       const createEnabled = !moveArmedJobId && !moveBusy && canCreate && slot.operational;
+      const supportEnabled = !moveArmedJobId && !moveBusy && canSupport && slot.operational;
       rows.push(<div
         className={styles.openSlot}
         key={`open-${slot.start}`}
-        role={createEnabled ? 'button' : undefined}
-        tabIndex={createEnabled ? 0 : undefined}
-        onClick={() => { if (createEnabled) onCreateAppointment(vanId, slot.start, slot.end); }}
-        onKeyDown={(event) => {
-          if (!createEnabled || (event.key !== 'Enter' && event.key !== ' ')) return;
-          event.preventDefault();
-          onCreateAppointment(vanId, slot.start, slot.end);
-        }}
         onDragOver={(event) => { if (dropEnabled) event.preventDefault(); }}
         onDrop={(event) => {
           if (!dropEnabled) return;
@@ -714,11 +752,14 @@ function VanScheduleSlots({
         }}
         style={dropEnabled
           ? { borderStyle: 'solid', borderColor: 'var(--brand)', background: 'var(--brand-soft)', cursor: 'copy' }
-          : createEnabled ? { cursor: 'pointer' } : undefined}
+          : undefined}
       >
         <div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div>
-        <div><strong>{dropEnabled ? 'Drop to move' : 'Available'}</strong><span>{dropEnabled ? 'Valid for the complete appointment' : createEnabled ? 'Click to schedule' : 'Open work spot'}</span></div>
-        <b>{dropEnabled ? 'MOVE' : createEnabled ? 'BOOK' : 'LIVE'}</b>
+        <div><strong>{dropEnabled ? 'Drop to move' : 'Available'}</strong><span>{dropEnabled ? 'Valid for the complete appointment' : createEnabled || supportEnabled ? 'Choose how to use this operating capacity' : 'Open work spot'}</span></div>
+        {dropEnabled ? <b>MOVE</b> : createEnabled || supportEnabled ? <div style={{ display: 'flex', gap: 5, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          {createEnabled ? <button type="button" className={styles.secondary} style={{ padding: '5px 7px', minHeight: 0 }} onClick={() => onCreateAppointment(vanId, slot.start, slot.end)}>BOOK</button> : null}
+          {supportEnabled ? <button type="button" className={styles.secondary} style={{ padding: '5px 7px', minHeight: 0 }} onClick={() => onSendSupport(vanId, slot.start, slot.end)}>SUPPORT</button> : null}
+        </div> : <b>LIVE</b>}
       </div>);
       index += 1;
       continue;
