@@ -4,7 +4,23 @@ import {
   type CanonicalVan,
   type CanonicalVanHalfDaySchedule,
 } from './canonical-operations';
-import { applyHalfDaySchedule, defaultAttendanceSchedule, type AttendanceSchedule, type EmployeePayrollSettings } from './employee-attendance';
+import {
+  applyHalfDaySchedule,
+  defaultAttendanceSchedule,
+  minutesBetween,
+  type AttendanceSchedule,
+  type EmployeePayrollSettings,
+} from './employee-attendance';
+import { isTechnicalEmployee } from './employee-classification';
+import {
+  asEmployeePayrollScheduleSettings,
+  defaultEmployeeWeeklySchedule,
+  scheduleVersionForDate,
+  type EmployeeScheduleVersion,
+  type EmployeeScheduleWeekdayKey,
+} from './employee-schedule-settings';
+
+export { isTechnicalEmployee } from './employee-classification';
 
 type EmploymentDatedStaffProfile = CanonicalStaffProfile & {
   employmentStartedAt?: string;
@@ -13,10 +29,8 @@ type EmploymentDatedStaffProfile = CanonicalStaffProfile & {
 
 function minutesFromTimes(start?: string, end?: string) {
   if (!start || !end) return undefined;
-  const [sh, sm] = start.split(':').map(Number);
-  const [eh, em] = end.split(':').map(Number);
-  if (![sh, sm, eh, em].every(Number.isFinite)) return undefined;
-  return Math.max(0, (eh * 60 + em) - (sh * 60 + sm));
+  const minutes = minutesBetween(start, end);
+  return minutes > 0 ? minutes : undefined;
 }
 
 export function isEmployeeEmployedOnDate(profile: CanonicalStaffProfile, date: string) {
@@ -36,9 +50,52 @@ function outsideEmploymentSchedule(profile: CanonicalStaffProfile, date: string)
   return { startTime: '', endTime: '', scheduledMinutes: 0, paidFreeMinutes: 0, label };
 }
 
-export function isTechnicalEmployee(profile: CanonicalStaffProfile) {
-  return profile.employeeType === 'Técnico'
-    || ['Técnico responsable', 'Técnico', 'Ayudante', 'Supervisor'].includes(profile.role ?? '');
+function officeScheduleVersion(settings: EmployeePayrollSettings | undefined, date: string): EmployeeScheduleVersion | null {
+  const extended = asEmployeePayrollScheduleSettings(settings);
+  if (!extended) return null;
+  if (extended.scheduleVersions?.length) return scheduleVersionForDate(extended, date) ?? null;
+
+  // Backward-compatible projection for records created before schedule versioning.
+  const effectiveFrom = extended.scheduleEffectiveFrom ?? extended.halfDayEffectiveFrom ?? '0001-01-01';
+  const effectiveUntil = extended.scheduleEffectiveUntil ?? null;
+  if (date < effectiveFrom || (effectiveUntil && date > effectiveUntil)) return null;
+  const hasV2Schedule = extended.scheduleMode !== undefined || extended.weeklySchedule !== undefined;
+  const hasLegacyHalfDay = extended.weeklyHalfDayWeekday != null;
+  if (!hasV2Schedule && !hasLegacyHalfDay) return null;
+
+  return {
+    id: 'legacy-runtime',
+    effectiveFrom,
+    effectiveUntil,
+    mode: extended.scheduleMode ?? 'company',
+    templateId: extended.scheduleTemplateId ?? 'office-8-5',
+    weeklySchedule: extended.weeklySchedule ?? defaultEmployeeWeeklySchedule(),
+    halfDayWeekday: extended.weeklyHalfDayWeekday ?? null,
+    halfDayOffPeriod: extended.halfDayOffPeriod ?? 'afternoon',
+    halfDayWorkedHours: extended.halfDayWorkedHours ?? 4,
+    halfDayPaidFreeHours: extended.halfDayPaidFreeHours ?? 4,
+    createdAt: extended.createdAt ?? '',
+    updatedAt: extended.updatedAt ?? '',
+  };
+}
+
+function baseScheduleForVersion(version: EmployeeScheduleVersion | null, date: string, fallback: AttendanceSchedule) {
+  if (!version || version.mode !== 'custom') return fallback;
+  const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
+  if (weekday < 1 || weekday > 6) return fallback;
+  const key = String(weekday) as EmployeeScheduleWeekdayKey;
+  const day = version.weeklySchedule[key] ?? defaultEmployeeWeeklySchedule()[key];
+  if (!day) return fallback;
+
+  const spanMinutes = minutesBetween(day.startTime, day.endTime);
+  const scheduledMinutes = Math.max(0, spanMinutes - Math.max(0, day.breakMinutes));
+  return {
+    startTime: day.startTime,
+    endTime: day.endTime,
+    scheduledMinutes,
+    paidFreeMinutes: 0,
+    label: `Custom employee schedule · ${day.startTime}–${day.endTime} · ${day.breakMinutes}m break`,
+  } satisfies AttendanceSchedule;
 }
 
 export function employeeVan(profile: CanonicalStaffProfile, vans: CanonicalVan[]) {
@@ -57,18 +114,22 @@ export function resolveEmployeeSchedule(input: {
   const { profile, date, payrollSettings, vans, halfDaySchedules } = input;
   if (!isEmployeeEmployedOnDate(profile, date)) return outsideEmploymentSchedule(profile, date);
 
-  const schedule = defaultAttendanceSchedule(date);
+  const companySchedule = defaultAttendanceSchedule(date);
+  // Sunday is a protected company closure and cannot be overridden by an employee schedule.
+  if (!companySchedule.scheduledMinutes) return companySchedule;
+
   const technical = isTechnicalEmployee(profile);
   const van = employeeVan(profile, vans);
   const vanId = van ? canonicalVanId(van.id, vans) : '';
   const vanHalfDay = halfDaySchedules.find((rule) => vanId && canonicalVanId(rule.vanId, vans) === vanId);
 
-  // Field technicians inherit the recurring half-day from their canonical Van/team.
-  // Employee payroll settings never override the operational Van half-day policy.
-  if (technical && vanHalfDay?.weekday !== undefined) {
-    const ruleMinutes = minutesFromTimes(vanHalfDay.workdayStart ?? schedule.startTime, vanHalfDay.workdayEnd);
+  // Field technicians inherit their recurring half-day from the canonical Van/team only.
+  // Individual employee payroll settings never override this operational authority.
+  if (technical) {
+    if (vanHalfDay?.weekday === undefined) return companySchedule;
+    const ruleMinutes = minutesFromTimes(vanHalfDay.workdayStart ?? companySchedule.startTime, vanHalfDay.workdayEnd);
     return applyHalfDaySchedule(
-      schedule,
+      companySchedule,
       date,
       vanHalfDay.weekday,
       ruleMinutes ? ruleMinutes / 60 : 5,
@@ -78,18 +139,20 @@ export function resolveEmployeeSchedule(input: {
     );
   }
 
-  // Office/non-technical staff use the existing employeePayrollSettings record as the
-  // single employee-specific recurring half-day source. Legacy records without a period
-  // keep their historical behavior: work the morning and take the afternoon off.
-  if (!technical && payrollSettings?.weeklyHalfDayWeekday != null) {
+  const version = officeScheduleVersion(payrollSettings, date);
+  const schedule = baseScheduleForVersion(version, date, companySchedule);
+
+  // Office/non-technical staff use the effective version in employeePayrollSettings.
+  // Existing legacy half-day records are projected through the same resolver.
+  if (version?.halfDayWeekday != null) {
     return applyHalfDaySchedule(
       schedule,
       date,
-      payrollSettings.weeklyHalfDayWeekday,
-      payrollSettings.halfDayWorkedHours ?? 4,
-      payrollSettings.halfDayPaidFreeHours ?? 4,
-      payrollSettings.halfDayEffectiveFrom,
-      payrollSettings.halfDayOffPeriod ?? 'afternoon',
+      version.halfDayWeekday,
+      version.halfDayWorkedHours,
+      version.halfDayPaidFreeHours,
+      version.effectiveFrom,
+      version.halfDayOffPeriod,
     );
   }
 

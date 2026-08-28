@@ -83,6 +83,54 @@ No 9,000 BTU installation price is defined in this rule because no approved valu
 - Saved daily assignments and absences override regular van assignments.
 - Work requiring support validates the personnel of every participating van before an option is offered and again before booking.
 
+## Employee workforce schedule rules
+
+### OPS-STAFF-SCHEDULE-001 — Effective office/non-technical work schedule
+
+Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
+
+- Office/non-technical employees may use the company schedule or an individual effective schedule stored in the existing `employeePayrollSettings` authority.
+- The primary approved individual templates are 08:00–17:00 with a one-hour break and 09:00–18:00 with a one-hour break.
+- An office/non-technical full workday must contain exactly eight worked hours after the break.
+- An individual schedule may have an `effectiveFrom` date and an optional `effectiveUntil` date.
+- Later schedule versions must not retroactively replace the schedule used for earlier payroll, attendance or calendar dates.
+- Migration impact: additive fields only; no production backfill or destructive migration is required.
+
+### OPS-STAFF-SCHEDULE-002 — Office/non-technical recurring half-day
+
+Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
+
+- The recurring half-day for office, administration and operator staff belongs to `employeePayrollSettings`.
+- The half-day weekday is employee-specific and may be Monday through Saturday.
+- The approved payroll rule is 4 worked hours + 4 paid-free hours.
+- Morning-off and afternoon-off variants are supported.
+- Existing legacy half-day records without the newer schedule-version fields remain valid and keep their historical behavior.
+
+### OPS-STAFF-SCHEDULE-003 — Technical recurring half-day
+
+Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
+
+- A field technician's recurring half-day belongs only to the canonical Van/team through `vanHalfDaySchedules`.
+- The approved technical half-day payroll rule is 5 worked hours + 3 paid-free hours.
+- An employee-level payroll schedule must never override or duplicate the Van/team technical half-day.
+
+### OPS-STAFF-SCHEDULE-004 — Employment-date schedule boundary
+
+Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
+
+- `employmentStartedAt` is the first date on which the ERP may synthesize scheduled work for an employee.
+- Dates before `employmentStartedAt` resolve to zero scheduled hours when generating calendar, assumed attendance and payroll projections.
+- If `employmentEndedAt` exists, dates after it resolve to zero scheduled hours.
+- The employment start and end dates themselves are inclusive.
+- Explicit historical records are preserved; this rule does not delete or rewrite existing timesheets, absences or payroll documents.
+
+### OPS-STAFF-SCHEDULE-005 — Sunday company closure
+
+Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
+
+- Sunday is globally company-closed.
+- An individual employee schedule may not override Sunday closure.
+
 ## Routing rules
 
 ### OPS-ROUTE-001 — Morning route anchor
@@ -160,6 +208,16 @@ No 9,000 BTU installation price is defined in this rule because no approved valu
 - Approved WhatsApp answers and multilingual trigger examples.
 
 ## Acceptance scenarios
+
+### Employee schedule regression examples
+
+- Existing office employee with a legacy Wednesday half-day → Wednesday resolves to 08:00–12:00 with 4 worked + 4 paid-free hours unless an approved later version applies.
+- Office employee on a 09:00–18:00 schedule with one-hour break → normal day resolves to 8 worked hours.
+- Office employee on a 09:00–18:00 schedule with Wednesday afternoon off → Wednesday resolves to 09:00–13:00 with 4 worked + 4 paid-free hours.
+- Employee whose employment starts on 2026-08-11 → 2026-08-10 resolves to zero synthesized scheduled hours; 2026-08-11 is included.
+- Technician assigned to a Van with Wednesday 08:00–13:00 half-day → Wednesday resolves to 5 worked + 3 paid-free hours even if an employee payroll record contains another schedule.
+- Any employee custom schedule on Sunday → Sunday remains closed with zero scheduled hours.
+- Saving a new schedule effective 2026-09-01 on an employee with a legacy schedule → dates before September continue resolving against the preserved legacy schedule version.
 
 ### Ten standard-service units
 
