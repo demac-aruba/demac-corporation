@@ -17,8 +17,8 @@ provider callbacks, and cached projections are never authority by themselves.
 | Regular Van crew and Van vehicle profile | `vans` | Authorized operations/scheduling flows | Van owns responsible driver, regular helper, optional third helper; employee `primaryVanId` is compatibility/read metadata only; no simultaneous regular assignment |
 | Van maintenance / repair history | `vanMaintenanceLogs` plus current service milestone projection on `vans` | Authorized operations/scheduling flows | Additive history, stable Van identity, no duplicate maintenance source |
 | Dated staff unavailability | `staffAbsences` | Authorized workforce/operations flows | Vacation, sickness, and one-off dated ranges only |
-| Technical recurring half-day | `vanHalfDaySchedules` for the Van/team | Authorized operations/scheduling flows | Technical staff inherit the Van/team rule; exact worked window; no employee-level duplicate |
-| Office/non-technical recurring half-day and payroll schedule | `employeePayrollSettings` | Authorized workforce/payroll flows | Payroll permission boundary and employee linkage |
+| Van-assigned technical recurring schedule | `vanHalfDaySchedules` for the Van/team plus company calendar | Authorized operations/scheduling flows | Assigned technical staff inherit the Van/team rule; exact worked window; employee schedule cannot override active Van authority |
+| Individual recurring employee schedule | `employeePayrollSettings` | Authorized workforce/payroll flows | Office/non-technical employees and technical employees with no canonical Van assignment only; payroll permission boundary, effective versions, employee linkage; Van assignment takes precedence for technical staff |
 | Explicit daily attendance/payroll exception | `employeeTimesheets`, interpreted against the canonical resolved employee schedule | Authorized payroll-sensitive Employees/Payroll flows | Deterministic employee/date ID, schedule-derived overtime, classified partial missing-time segments, schedule snapshot, actor/time audit, payroll-only Firestore access |
 | Temporary crew override | `dailyVanAssignments` | Authorized operations/scheduling flows | Date-scoped driver/helper/optional third helper; no simultaneous dated assignment; does not rewrite regular crew ownership |
 | Commercial Product / Service catalog | `services` | Authorized catalog and operational flows | One canonical commercial catalog; no duplicate Product or Service authority |
@@ -50,6 +50,22 @@ record the discrepancy, and require reconciliation before a high-impact write.
 - A person must not resolve onto two Vans on the same date. Regular and dated writes validate this
   before persistence.
 - New Van profiles begin out of service and therefore do not silently expand booking capacity.
+
+## Employee recurring schedule boundary
+
+- A technical employee who is part of a canonical regular Van crew resolves recurring schedule
+  authority from that Van/team. `vanHalfDaySchedules` controls the Van partial-day window and an
+  employee-level payroll schedule must not override it.
+- A technical employee who is not assigned to any canonical Van may use the existing
+  `employeePayrollSettings` authority for an effective individual schedule, using the same
+  versioning, worked-hour and payroll controls as other individual employee schedules.
+- Assigning that employee to a Van immediately makes the Van/team schedule authoritative for active
+  resolution without deleting the employee's versioned individual schedule history. Removing the
+  employee from all Vans makes the applicable individual schedule active again.
+- The supported Employee Profile write flow revalidates canonical Van membership before saving an
+  individual technical schedule. Domain writes also require explicit confirmation that no Van owns
+  that schedule; omission defaults to rejection.
+- Sunday remains a protected company closure regardless of individual or Van schedule authority.
 
 ## Workforce attendance boundary
 
