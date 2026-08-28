@@ -131,6 +131,47 @@ Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
 - Sunday is globally company-closed.
 - An individual employee schedule may not override Sunday closure.
 
+## Employee payroll attendance rules
+
+### OPS-STAFF-ATTENDANCE-001 — Canonical 27–26 payroll calendar
+
+Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
+
+- A payroll period starts on the 27th of the previous calendar month and ends on the 26th of the payroll month.
+- Payroll navigation moves exactly one canonical payroll period at a time. September payroll (Aug 27–Sep 26) moved one period backward becomes August payroll (Jul 27–Aug 26), not July payroll.
+- The selected attendance date is subordinate to the active payroll period and does not redefine it.
+- Selecting Jul 27 while viewing Jul 27–Aug 26 keeps the active payroll calendar as August payroll.
+- Surrounding dates rendered only to complete a calendar week are contextual and must not silently create or edit records in another payroll period.
+
+### OPS-STAFF-ATTENDANCE-002 — Schedule-derived overtime
+
+Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
+
+- Overtime for a worked attendance day is derived from the employee's canonical resolved schedule plus actual Clock In, Clock Out and Break Minutes; it is not manually entered.
+- Overtime minutes are the sum of work before the scheduled start, work after the scheduled end, and unused scheduled break minutes.
+- Overtime is independent from missing scheduled time. A late arrival, early departure or extended break does not erase overtime worked elsewhere in the same day.
+- Example for 09:00–18:00 with a 60-minute scheduled break: 09:00–18:00/60 = 0 OT; 08:00–18:00/60 = 60m; 09:00–18:30/60 = 30m; 08:00–18:30/60 = 90m; 09:00–18:00/30 = 30m; 09:00–18:00/0 = 60m.
+
+### OPS-STAFF-ATTENDANCE-003 — Partial missing-time classification
+
+Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
+
+- A worked day may contain separate missing-scheduled-time segments for late arrival, early departure and break time beyond the scheduled break allowance.
+- Each detected segment must be classified independently as `Paid` or `No Work No Pay` and must contain a reason before the attendance exception can be saved.
+- Different segments on the same date may use different treatments and reasons.
+- Paid missing time contributes to payroll paid-free time; unpaid missing time contributes to No Work No Pay. Regular worked scheduled time remains separate.
+- A partially affected employee may remain `Present`; partial exceptions do not force the entire day to `Absent`.
+- Example: a 09:00–18:00 employee working 11:00–16:30 has a 09:00–11:00 late-arrival segment and a 16:30–18:00 early-departure segment. The two segments are classified separately.
+- Example: a 60-minute scheduled break with 90 minutes taken creates a separate 30-minute extended-break segment.
+
+### OPS-STAFF-ATTENDANCE-004 — Explicit attendance schedule snapshot
+
+Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
+
+- When a payroll-relevant daily attendance exception is explicitly saved, the `employeeTimesheets` record preserves additive snapshot fields for the resolved scheduled start, scheduled end, scheduled break allowance and scheduled paid-free minutes used for that edit.
+- Existing historical timesheet records without these snapshot fields remain valid and are not destructively backfilled.
+- Canonical schedule version history remains the authority for synthesized historical days; the snapshot is audit evidence for the explicit attendance record, not a second schedule authority.
+
 ## Routing rules
 
 ### OPS-ROUTE-001 — Morning route anchor
@@ -218,6 +259,15 @@ Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
 - Technician assigned to a Van with Wednesday 08:00–13:00 half-day → Wednesday resolves to 5 worked + 3 paid-free hours even if an employee payroll record contains another schedule.
 - Any employee custom schedule on Sunday → Sunday remains closed with zero scheduled hours.
 - Saving a new schedule effective 2026-09-01 on an employee with a legacy schedule → dates before September continue resolving against the preserved legacy schedule version.
+
+### Employee payroll-attendance regression examples
+
+- September payroll Aug 27–Sep 26 → Previous once = Jul 27–Aug 26; Previous again = Jun 27–Jul 26.
+- While Jul 27–Aug 26 is active, selecting Jul 27 keeps August payroll active.
+- 09:00–18:00/60 break → 0m overtime; 08:00–18:00/60 → 60m; 09:00–18:30/60 → 30m; 08:00–18:30/60 → 90m; 09:00–18:00/30 → 30m; 09:00–18:00/0 → 60m.
+- 09:00–18:00 employee working 11:00–16:30 → two independent missing-time segments: 09:00–11:00 and 16:30–18:00. Saving is blocked until both have treatment and reason.
+- 09:00–18:00 with a 90-minute break instead of 60 → 30-minute extended-break segment.
+- A paid morning medical absence and an unpaid afternoon personal permission on the same day remain separate; overtime, if any, is retained independently.
 
 ### Ten standard-service units
 
