@@ -22,6 +22,23 @@ const BOOKING_COLLECTIONS = Object.freeze({
   properties: "properties",
 });
 
+const BOOKING_CREATE_MODES = Object.freeze({
+  CONFIRMED: "confirmed",
+  TEMPORARY_HOLD: "temporary_hold",
+});
+
+function normalizeCreateMode(value) {
+  return value === BOOKING_CREATE_MODES.TEMPORARY_HOLD
+    ? BOOKING_CREATE_MODES.TEMPORARY_HOLD
+    : BOOKING_CREATE_MODES.CONFIRMED;
+}
+
+function createModeFromAppointment(appointment) {
+  return cleanText(appointment?.status, 40) === BOOKING_CREATE_MODES.TEMPORARY_HOLD
+    ? BOOKING_CREATE_MODES.TEMPORARY_HOLD
+    : BOOKING_CREATE_MODES.CONFIRMED;
+}
+
 function defaultServerTimestamp() {
   const { FieldValue } = require("firebase-admin/firestore");
   return FieldValue.serverTimestamp();
@@ -277,6 +294,7 @@ function createBookingAuthority({
     idempotencyKey,
     actor = {},
     context = {},
+    createMode = BOOKING_CREATE_MODES.CONFIRMED,
   } = {}) {
     const canonicalOfferId = cleanText(offerId, 180);
     if (!canonicalOfferId) {
@@ -286,6 +304,8 @@ function createBookingAuthority({
         { field: "offerId" },
       );
     }
+    const normalizedCreateMode = normalizeCreateMode(createMode);
+    const temporaryHold = normalizedCreateMode === BOOKING_CREATE_MODES.TEMPORARY_HOLD;
     const now = asDate(clock());
     const identity = canonicalAppointmentIdentity(idempotencyKey);
     const offerRef = db.collection(collections.offers).doc(canonicalOfferId);
@@ -297,7 +317,8 @@ function createBookingAuthority({
       const sameRequest = record.offerId === canonicalOfferId
         && Number(record.offerVersion) === Number(offerVersion)
         && record.optionId === cleanText(optionId, 180)
-        && record.appointmentId === identity.appointmentId;
+        && record.appointmentId === identity.appointmentId
+        && normalizeCreateMode(record.createMode) === normalizedCreateMode;
       if (!sameRequest) {
         throw new BookingAuthorityError(
           BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
@@ -309,6 +330,7 @@ function createBookingAuthority({
       return {
         success: true,
         replayed: true,
+        createMode: createModeFromAppointment(replay),
         appointmentId: replay.appointmentId || replay.id,
         appointment: replay,
         workOrderIds: replay.workOrderIds || [],
@@ -354,7 +376,8 @@ function createBookingAuthority({
         const sameRequest = record.offerId === canonicalOfferId
           && Number(record.offerVersion) === Number(offerVersion)
           && record.optionId === cleanText(optionId, 180)
-          && record.appointmentId === identity.appointmentId;
+          && record.appointmentId === identity.appointmentId
+          && normalizeCreateMode(record.createMode) === normalizedCreateMode;
         if (!sameRequest) {
           throw new BookingAuthorityError(
             BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
@@ -376,6 +399,7 @@ function createBookingAuthority({
         return {
           success: true,
           replayed: true,
+          createMode: createModeFromAppointment(replay),
           appointmentId: replay.appointmentId || replay.id,
           appointment: replay,
           workOrderIds: replay.workOrderIds || [],
@@ -394,6 +418,7 @@ function createBookingAuthority({
         return {
           success: true,
           replayed: true,
+          createMode: createModeFromAppointment(existing),
           appointmentId: existing.appointmentId || existing.id,
           appointment: existing,
           workOrderIds: existing.workOrderIds || [],
@@ -467,13 +492,13 @@ function createBookingAuthority({
       try {
         const buildWorkOrders = requireProviderMethod(availabilityProvider, "buildWorkOrders");
         workOrders = validateWorkOrders(await buildWorkOrders({
-          appointment,
+          appointment: { ...appointment, status: normalizedCreateMode },
           option: refreshedOption,
           request,
           customer,
           property,
           actor,
-          context: { ...context, notificationRecipients },
+          context: { ...context, notificationRecipients, appointmentState: normalizedCreateMode },
           now,
         }), identity.appointmentId);
       } catch (error) {
@@ -483,10 +508,16 @@ function createBookingAuthority({
       const actorInfo = actorFields(actor);
       const appointmentRecord = compactObject({
         ...appointment,
+        status: normalizedCreateMode,
         notificationRecipients,
         workOrderIds,
         capacityLockIds: locks.map((lock) => lock.id),
-        confirmedAtIso: now.toISOString(),
+        ...(temporaryHold
+          ? {
+            heldAtIso: now.toISOString(),
+            holdPolicy: "manual-confirm-or-cancel",
+          }
+          : { confirmedAtIso: now.toISOString() }),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -513,13 +544,20 @@ function createBookingAuthority({
         }));
       });
       transaction.set(offerRef, compactObject({
-        status: "booked",
+        status: temporaryHold ? "held" : "booked",
         selectedOptionId: cleanText(optionId, 180),
         appointmentId: identity.appointmentId,
         workOrderIds,
-        bookedAtIso: now.toISOString(),
+        ...(temporaryHold
+          ? {
+            heldAtIso: now.toISOString(),
+            heldAt: serverTimestamp(),
+          }
+          : {
+            bookedAtIso: now.toISOString(),
+            bookedAt: serverTimestamp(),
+          }),
         updatedAtIso: now.toISOString(),
-        bookedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       }), { merge: true });
       transaction.set(idempotencyRef, compactObject({
@@ -528,7 +566,8 @@ function createBookingAuthority({
         offerId: canonicalOfferId,
         offerVersion: Number(offerVersion),
         optionId: cleanText(optionId, 180),
-        operation: "createAppointment",
+        createMode: normalizedCreateMode,
+        operation: temporaryHold ? "createTemporaryHold" : "createAppointment",
         ...actorInfo,
         createdAtIso: now.toISOString(),
         createdAt: serverTimestamp(),
@@ -537,6 +576,7 @@ function createBookingAuthority({
       return {
         success: true,
         replayed: false,
+        createMode: normalizedCreateMode,
         appointmentId: identity.appointmentId,
         appointment: appointmentRecord,
         workOrderIds,
@@ -555,10 +595,13 @@ function createBookingAuthority({
 
 module.exports = {
   BOOKING_COLLECTIONS,
+  BOOKING_CREATE_MODES,
   assertCustomerPropertyRelationship,
   canonicalOfferIdentity,
   compactObject,
   createBookingAuthority,
+  createModeFromAppointment,
+  normalizeCreateMode,
   notificationRecipientsFrom,
   requestFingerprint,
   validateCapacityLocks,

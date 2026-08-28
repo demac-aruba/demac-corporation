@@ -26,11 +26,13 @@ import {
 import {
   createOfficeLifecycleRequestId,
   moveOfficeAppointment,
+  type OfficeAdhocSupportResult,
 } from '../../lib/office-booking-authority';
 import type { CandidateSlot, DispatchJob } from '../../lib/scheduling';
 import { getRuntimeSchedulingSettings, minutesToTime, previewVans, timeToMinutes } from '../../lib/scheduling';
 import type { CalendarDispatchJob, OperationalDay } from '../../lib/scheduling-capacity';
 import { buildOperationalWeek, currentArubaDateKey } from '../../lib/scheduling-capacity';
+import { AdhocSupportDrawer, type AdhocSupportTarget } from './adhoc-support-drawer';
 import { DragMoveConfirmation, type PendingDragMove } from './drag-move-confirmation';
 import { LiveAppointmentCreateDrawer, type LiveBookingTarget, type LiveCreatedBooking } from './live-appointment-create-drawer';
 import { LiveAppointmentDetailsDrawer } from './live-appointment-details-drawer';
@@ -43,9 +45,10 @@ type PendingLiveMove = PendingDragMove & { jobId: string; candidate: CandidateSl
 
 function appointmentAssignments(record: BrowserAppointmentRecord): CalendarDispatchJob[] {
   if (record.status === 'cancelled') return [];
+  const status = record.status === 'temporary_hold' ? 'temporary_hold' : 'confirmed';
   return record.assignments
     .filter((assignment) => assignment.status !== 'cancelled')
-    .map((assignment) => ({ ...assignment, dateKey: record.dateKey, status: 'confirmed' }));
+    .map((assignment) => ({ ...assignment, dateKey: record.dateKey, status }));
 }
 
 function formatTime(value: string) {
@@ -174,6 +177,7 @@ export function LiveSchedulingOverview() {
   const [capacityError, setCapacityError] = useState('');
   const [selectedAppointmentId, setSelectedAppointmentId] = useState('');
   const [bookingTarget, setBookingTarget] = useState<LiveBookingTarget | null>(null);
+  const [supportTarget, setSupportTarget] = useState<AdhocSupportTarget | null>(null);
   const [moveArmedJobId, setMoveArmedJobId] = useState('');
   const [pendingDragMove, setPendingDragMove] = useState<PendingLiveMove | null>(null);
   const [moveBusy, setMoveBusy] = useState(false);
@@ -194,7 +198,7 @@ export function LiveSchedulingOverview() {
   }), [baseWeek, capacityState]);
   const canManage = principal.active && principal.capabilities.has('scheduling.manage');
   const actor = useMemo(() => ({ id: principal.userId, name: principal.displayName }), [principal.displayName, principal.userId]);
-  const interactionActive = Boolean(bookingTarget || moveArmedJobId || pendingDragMove || moveBusy || manualRefreshing);
+  const interactionActive = Boolean(bookingTarget || supportTarget || moveArmedJobId || pendingDragMove || moveBusy || manualRefreshing);
 
   const refresh = useCallback(async (forceCapacity = false) => {
     const sequence = ++refreshSequenceRef.current;
@@ -264,6 +268,10 @@ export function LiveSchedulingOverview() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || moveBusy) return;
+      if (supportTarget) {
+        setSupportTarget(null);
+        return;
+      }
       if (bookingTarget) {
         setBookingTarget(null);
         return;
@@ -280,7 +288,7 @@ export function LiveSchedulingOverview() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [bookingTarget, moveArmedJobId, moveBusy, pendingDragMove]);
+  }, [bookingTarget, moveArmedJobId, moveBusy, pendingDragMove, supportTarget]);
 
   const jobs = useMemo(() => appointments.flatMap(appointmentAssignments), [appointments]);
   const vans = useMemo<DisplayVan[]>(() => {
@@ -306,6 +314,7 @@ export function LiveSchedulingOverview() {
   const activeJobs = jobs.filter((job) => job.dateKey === activeDate);
   const activeOccupancy = occupancyForDay(activeDay, jobs, vans, capacityState);
   const confirmed = appointments.filter((appointment) => appointment.dateKey === activeDate && appointment.status === 'confirmed').length;
+  const temporaryHolds = appointments.filter((appointment) => appointment.dateKey === activeDate && appointment.status === 'temporary_hold').length;
   const selectedAppointment = appointments.find((appointment) => appointment.id === selectedAppointmentId) ?? null;
   const activeConflictSlots = vans.reduce((total, van) => {
     const vanJobs = activeJobs.filter((job) => job.vanId === van.id);
@@ -341,7 +350,7 @@ export function LiveSchedulingOverview() {
   };
 
   const openCreateAppointment = (vanId: string, start: string, end: string) => {
-    if (moveArmedJobId || pendingDragMove || moveBusy) return;
+    if (moveArmedJobId || pendingDragMove || moveBusy || supportTarget) return;
     if (!canManage) {
       setMoveNotice('Your account does not have permission to create appointments.');
       return;
@@ -357,15 +366,50 @@ export function LiveSchedulingOverview() {
     setBookingTarget({ dateKey: activeDay.dateKey, vanId, vanName: van.name, start, end });
   };
 
+  const openSupportAssignment = (vanId: string, start: string, end: string) => {
+    if (moveArmedJobId || pendingDragMove || moveBusy || bookingTarget) return;
+    if (!canManage) {
+      setMoveNotice('Your account does not have permission to assign operational support.');
+      return;
+    }
+    if (!capacityState) {
+      setMoveNotice(`Live capacity is not ready${capacityError ? `: ${capacityError}` : '.'} Refresh the agenda before assigning support.`);
+      return;
+    }
+    if (activeDay.dateKey !== today) {
+      setMoveNotice('Ad-hoc coworker support is a same-day operational action. Future multi-Van work must use the planned Booking Authority support allocation.');
+      return;
+    }
+    const van = vans.find((item) => item.id === vanId);
+    if (!van) return;
+    setSelectedAppointmentId('');
+    setMoveNotice('');
+    setSupportTarget({ dateKey: activeDay.dateKey, vanId, vanName: van.name, start, end });
+  };
+
   const handleCreatedBooking = (booking: LiveCreatedBooking) => {
     setBookingTarget(null);
     setSelectedAppointmentId('');
-    setMoveNotice(`Appointment ${booking.appointmentId} confirmed for ${booking.customer.name || booking.customer.company || 'customer'} · ${booking.option.assignments[0]?.vanName || booking.option.assignments[0]?.vanId || bookingTarget?.vanName || 'van'} · ${formatTime(booking.option.time)}.`);
+    const customer = booking.customer.name || booking.customer.company || 'customer';
+    const van = booking.option.assignments[0]?.vanName || booking.option.assignments[0]?.vanId || bookingTarget?.vanName || 'van';
+    setMoveNotice(booking.status === 'temporary_hold'
+      ? `Temporary hold ${booking.appointmentId} reserved for ${customer} · ${van} · ${formatTime(booking.option.time)}. Capacity is blocked; no customer confirmation or reminder was sent.`
+      : `Appointment ${booking.appointmentId} confirmed for ${customer} · ${van} · ${formatTime(booking.option.time)}.`);
     void refresh();
   };
 
+  const handleCreatedSupport = async (result: OfficeAdhocSupportResult, appointment: BrowserAppointmentRecord) => {
+    const target = supportTarget;
+    setSupportTarget(null);
+    setSelectedAppointmentId('');
+    setMoveNotice(target
+      ? `${target.vanName} was assigned to support ${appointment.customer} at ${formatTime(target.start)}. The primary appointment remains unchanged and same-day Van alerts use the internal WhatsApp authority.`
+      : `Operational support ${result.supportWorkOrderId} was assigned to ${appointment.customer}.`);
+    await refresh();
+  };
+
   const armMove = (jobId: string) => {
-    if (moveBusy || pendingDragMove || bookingTarget) return;
+    if (moveBusy || pendingDragMove || bookingTarget || supportTarget) return;
     if (clickTimerRef.current) {
       window.clearTimeout(clickTimerRef.current);
       clickTimerRef.current = null;
@@ -385,6 +429,11 @@ export function LiveSchedulingOverview() {
     }
     const link = jobLinks.get(jobId);
     if (!link) return;
+    if (link.appointment.status === 'temporary_hold') {
+      setMoveNotice('Temporary holds own canonical capacity. Open the hold and use Reschedule so Booking Authority preserves the hold state and moves its locks atomically.');
+      setSelectedAppointmentId(link.appointmentId);
+      return;
+    }
     if (link.appointment.assignments.length !== 1) {
       setMoveNotice('This booking uses multiple vans. Use the appointment panel → Reschedule so Booking Authority can coordinate all linked capacity safely.');
       setSelectedAppointmentId(link.appointmentId);
@@ -513,7 +562,7 @@ export function LiveSchedulingOverview() {
         <div>
           <span className={styles.eyebrow}>Operations · Aruba · Live</span>
           <h1>Scheduling &amp; Dispatch</h1>
-          <p>Live Booking Authority schedule. Confirmed customer appointments and canonical operating capacity are read from Firestore; local demo scheduling is not mixed into this view.</p>
+          <p>Live Booking Authority schedule. Confirmed appointments, temporary holds and canonical operating capacity are read from Firestore; browser-only demo scheduling is not mixed into this view.</p>
         </div>
         <div className={styles.pageActions}>
           <button type="button" className={styles.secondary} onClick={() => void refreshNow()} disabled={loading || interactionActive}>
@@ -561,7 +610,7 @@ export function LiveSchedulingOverview() {
       <div className={styles.metrics}>
         <article><span>Confirmed</span><strong>{confirmed}</strong><small>{activeDay.shortDate}</small></article>
         <article><span>Data source</span><strong className={styles.metricGood}>LIVE</strong><small>Booking Authority + canonical capacity</small></article>
-        <article><span>Local holds</span><strong>0</strong><small>Demo/local holds are isolated</small></article>
+        <article><span>Temporary holds</span><strong style={{ color: 'var(--warning, #b45309)' }}>{temporaryHolds}</strong><small>Canonical capacity reserved · customer not confirmed</small></article>
         <article><span>Open spots</span><strong className={styles.metricGood}>{activeOccupancy.open}</strong><small>{activeOccupancy.occupied}/{activeOccupancy.total} operating spots occupied</small><i style={{ width: `${activeOccupancy.percent}%` }} /></article>
       </div>
 
@@ -569,7 +618,7 @@ export function LiveSchedulingOverview() {
         <header className={styles.boardHeader}>
           <div>
             <strong>Live Van Schedule</strong>
-            <span>{activeDay.weekday} {activeDay.shortDate} · click open spot = new appointment · single click booked = details · double click booked = move</span>
+            <span>{activeDay.weekday} {activeDay.shortDate} · open spot = book customer or send coworker support · single click occupied = details · double click confirmed = move</span>
             {moveNotice ? <span style={{ marginTop: 3, fontWeight: 700 }}>{moveNotice}</span> : null}
           </div>
           <b>{moveBusy ? 'SAVING MOVE…' : moveArmedJobId ? `${validDropTargets.size} VALID TARGETS` : `${activeOccupancy.open} OPEN SPOTS`}</b>
@@ -617,8 +666,10 @@ export function LiveSchedulingOverview() {
                     moveArmedJobId={moveArmedJobId}
                     moveBusy={moveBusy}
                     canCreate={canManage && Boolean(capacityState)}
+                    canSupport={canManage && Boolean(capacityState) && activeDay.dateKey === today}
                     validDropTargets={validDropTargets}
                     onCreateAppointment={openCreateAppointment}
+                    onSendSupport={openSupportAssignment}
                     onOpenAppointment={scheduleOpenJob}
                     onArmMove={armMove}
                     onDropMove={dropMove}
@@ -633,6 +684,7 @@ export function LiveSchedulingOverview() {
 
       {selectedAppointment ? <LiveAppointmentDetailsDrawer appointment={selectedAppointment} onClose={() => setSelectedAppointmentId('')} onChanged={refresh} /> : null}
       {bookingTarget ? <LiveAppointmentCreateDrawer target={bookingTarget} onClose={() => setBookingTarget(null)} onCreated={handleCreatedBooking} /> : null}
+      {supportTarget ? <AdhocSupportDrawer target={supportTarget} appointments={appointments} onClose={() => setSupportTarget(null)} onCreated={handleCreatedSupport} /> : null}
       {pendingDragMove ? <DragMoveConfirmation move={pendingDragMove} busy={moveBusy} onCancel={cancelPendingMove} onConfirm={() => void confirmPendingMove()} /> : null}
     </section>
   );
@@ -646,8 +698,10 @@ function VanScheduleSlots({
   moveArmedJobId,
   moveBusy,
   canCreate,
+  canSupport,
   validDropTargets,
   onCreateAppointment,
+  onSendSupport,
   onOpenAppointment,
   onArmMove,
   onDropMove,
@@ -659,8 +713,10 @@ function VanScheduleSlots({
   moveArmedJobId: string;
   moveBusy: boolean;
   canCreate: boolean;
+  canSupport: boolean;
   validDropTargets: Set<string>;
   onCreateAppointment: (vanId: string, start: string, end: string) => void;
+  onSendSupport: (vanId: string, start: string, end: string) => void;
   onOpenAppointment: (jobId: string) => void;
   onArmMove: (jobId: string) => void;
   onDropMove: (vanId: string, start: string) => void;
@@ -695,17 +751,10 @@ function VanScheduleSlots({
         && slot.operational
         && validDropTargets.has(liveMoveTargetKey(vanId, slot.start));
       const createEnabled = !moveArmedJobId && !moveBusy && canCreate && slot.operational;
+      const supportEnabled = !moveArmedJobId && !moveBusy && canSupport && slot.operational;
       rows.push(<div
         className={styles.openSlot}
         key={`open-${slot.start}`}
-        role={createEnabled ? 'button' : undefined}
-        tabIndex={createEnabled ? 0 : undefined}
-        onClick={() => { if (createEnabled) onCreateAppointment(vanId, slot.start, slot.end); }}
-        onKeyDown={(event) => {
-          if (!createEnabled || (event.key !== 'Enter' && event.key !== ' ')) return;
-          event.preventDefault();
-          onCreateAppointment(vanId, slot.start, slot.end);
-        }}
         onDragOver={(event) => { if (dropEnabled) event.preventDefault(); }}
         onDrop={(event) => {
           if (!dropEnabled) return;
@@ -714,11 +763,14 @@ function VanScheduleSlots({
         }}
         style={dropEnabled
           ? { borderStyle: 'solid', borderColor: 'var(--brand)', background: 'var(--brand-soft)', cursor: 'copy' }
-          : createEnabled ? { cursor: 'pointer' } : undefined}
+          : undefined}
       >
         <div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div>
-        <div><strong>{dropEnabled ? 'Drop to move' : 'Available'}</strong><span>{dropEnabled ? 'Valid for the complete appointment' : createEnabled ? 'Click to schedule' : 'Open work spot'}</span></div>
-        <b>{dropEnabled ? 'MOVE' : createEnabled ? 'BOOK' : 'LIVE'}</b>
+        <div><strong>{dropEnabled ? 'Drop to move' : 'Available'}</strong><span>{dropEnabled ? 'Valid for the complete appointment' : createEnabled || supportEnabled ? 'Choose how to use this operating capacity' : 'Open work spot'}</span></div>
+        {dropEnabled ? <b>MOVE</b> : createEnabled || supportEnabled ? <div style={{ display: 'flex', gap: 5, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          {createEnabled ? <button type="button" className={styles.secondary} style={{ padding: '5px 7px', minHeight: 0 }} onClick={() => onCreateAppointment(vanId, slot.start, slot.end)}>BOOK</button> : null}
+          {supportEnabled ? <button type="button" className={styles.secondary} style={{ padding: '5px 7px', minHeight: 0 }} onClick={() => onSendSupport(vanId, slot.start, slot.end)}>SUPPORT</button> : null}
+        </div> : <b>LIVE</b>}
       </div>);
       index += 1;
       continue;
@@ -762,6 +814,7 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
   onOpen: () => void;
   onArm: () => void;
 }) {
+  const temporaryHold = appointment?.status === 'temporary_hold' || job.status === 'temporary_hold';
   const minHeight = span * 64 + Math.max(0, span - 1) * 6 + (crossesLunch ? 18 : 0);
   const openFromKeyboard = (event: React.KeyboardEvent<HTMLElement>) => {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -769,16 +822,20 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
       onOpen();
     }
   };
-  return <div className={styles.occupiedSlot} style={{ minHeight, outline: armed ? '2px solid var(--brand)' : outsideCapacity ? '1px solid var(--warning)' : undefined, background: armed ? 'var(--brand-soft)' : undefined }}>
+  return <div className={styles.occupiedSlot} style={{
+    minHeight,
+    outline: armed ? '2px solid var(--brand)' : temporaryHold ? '1px solid var(--warning, #f59e0b)' : outsideCapacity ? '1px solid var(--warning)' : undefined,
+    background: armed ? 'var(--brand-soft)' : temporaryHold ? 'color-mix(in srgb, var(--warning, #f59e0b) 12%, var(--surface))' : undefined,
+  }}>
     <div className={styles.slotTime}><strong>{formatTime(job.start)}</strong><span>{formatTime(job.end)}</span>{span > 1 ? <span>{span} spots</span> : null}</div>
     <div className={styles.slotJobs}>
       <article
         className={styles.jobCard}
         role="button"
         tabIndex={0}
-        draggable={armed}
+        draggable={armed && !temporaryHold}
         onDragStart={(event) => {
-          if (!armed) {
+          if (!armed || temporaryHold) {
             event.preventDefault();
             return;
           }
@@ -786,19 +843,24 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
           event.dataTransfer.setData('text/plain', job.id);
         }}
         onClick={(event) => { if (event.detail === 1) onOpen(); }}
-        onDoubleClick={(event) => { event.preventDefault(); event.stopPropagation(); onArm(); }}
+        onDoubleClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (temporaryHold) onOpen(); else onArm();
+        }}
         onKeyDown={openFromKeyboard}
         style={{ minHeight: '100%', alignItems: 'center', cursor: armed ? 'grab' : 'pointer' }}
       >
         <div>
-          <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={armed ? styles.ready : slotClass(job.readiness)}>{armed ? 'MOVE ARMED' : readinessLabel(job.readiness)}</b></div>
+          <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={armed ? styles.ready : temporaryHold ? styles.risk : slotClass(job.readiness)}>{armed ? 'MOVE ARMED' : temporaryHold ? 'TEMP HOLD' : readinessLabel(job.readiness)}</b></div>
           {continuation ? <span>Reserved continuously until {formatTime(job.end)}</span> : <span>{appointmentWorkLabel(appointment, job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span>}
           <small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small>
           {!continuation && span > 1 ? <small>Reserved continuously · {formatTime(job.start)}–{formatTime(job.end)}</small> : null}
+          {temporaryHold ? <small style={{ color: 'var(--warning, #b45309)', fontWeight: 800 }}>Capacity reserved · customer not confirmed · no reminder/confirmation sent</small> : null}
           {crossesLunch ? <small>Lunch/reset remains protected</small> : null}
           {outsideCapacity ? <small style={{ color: 'var(--warning)', fontWeight: 800 }}>Outside canonical operating capacity · review schedule</small> : null}
           {bookingBadge(appointment?.bookedByName)}
-          <small>{armed ? 'Drag this block to a highlighted valid destination' : 'Single click details · double click to move'}</small>
+          <small>{temporaryHold ? 'Open details to confirm, reschedule or cancel this hold' : armed ? 'Drag this block to a highlighted valid destination' : 'Single click details · double click to move'}</small>
         </div>
       </article>
     </div>

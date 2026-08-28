@@ -5,6 +5,7 @@ import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
 import {
   cancelOfficeAppointment,
   checkOfficeRescheduleAvailability,
+  confirmOfficeTemporaryHold,
   createOfficeLifecycleRequestId,
   getOfficeAppointment,
   rescheduleOfficeAppointment,
@@ -133,6 +134,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
   const support = appointment.assignments.find((assignment) => !assignment.isPrimaryAssignment && assignment.status !== 'cancelled');
   const selectedOption = useMemo(() => availability?.options.find((option) => optionKey(option) === selectedOptionKey) ?? null, [availability, selectedOptionKey]);
   const canManageLifecycle = Boolean(appointment.customerId && appointment.siteId && appointment.status !== 'cancelled');
+  const temporaryHold = appointment.status === 'temporary_hold';
   const workLabel = appointment.workLabel || appointment.workTypeId?.replaceAll('_', ' ') || appointment.customerFacingDescription || 'Scheduled work';
 
   const begin = (next: Mode) => {
@@ -145,9 +147,27 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
     if (next === 'reschedule') setTargetDate(appointment.dateKey);
   };
 
+  const confirmHold = async () => {
+    if (!temporaryHold || busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      await confirmOfficeTemporaryHold({
+        appointmentId: appointment.id,
+        requestId: createOfficeLifecycleRequestId('confirm-hold'),
+      });
+      await onChanged();
+      onClose();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'The temporary hold could not be confirmed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const cancel = async () => {
     if (!reason) {
-      setError('Select a cancellation reason.');
+      setError(`Select a cancellation reason for this ${temporaryHold ? 'hold' : 'appointment'}.`);
       return;
     }
     setBusy(true);
@@ -162,7 +182,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
       await onChanged();
       onClose();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'The appointment could not be cancelled.');
+      setError(cause instanceof Error ? cause.message : `The ${temporaryHold ? 'temporary hold' : 'appointment'} could not be cancelled.`);
     } finally {
       setBusy(false);
     }
@@ -239,26 +259,26 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
       await onChanged();
       onClose();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'The appointment could not be rescheduled.');
+      setError(cause instanceof Error ? cause.message : `The ${temporaryHold ? 'temporary hold' : 'appointment'} could not be rescheduled.`);
     } finally {
       setBusy(false);
     }
   };
 
-  return <div className={styles.drawerOverlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+  return <div className={styles.drawerOverlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
     <aside className={styles.drawer} role="dialog" aria-modal="true" aria-label={`Appointment ${appointment.id}`}>
       <header className={styles.drawerHeader}>
         <div>
-          <span>Live appointment · Booking Authority</span>
+          <span>{temporaryHold ? 'Temporary hold' : 'Live appointment'} · Booking Authority</span>
           <h2>{appointment.customer}</h2>
           <p>{appointment.propertyAddress || appointment.site} · {appointment.sector}</p>
         </div>
-        <button type="button" onClick={onClose}>×</button>
+        <button type="button" disabled={busy} onClick={onClose}>×</button>
       </header>
 
       <div className={styles.drawerBody}>
         <section className={styles.formSection}>
-          <header><strong>Appointment &amp; work</strong><span>{appointment.status === 'cancelled' ? 'Cancelled' : `${formatDate(appointment.dateKey)} · ${formatTime(primary?.start)}–${formatTime(primary?.end)}`}</span></header>
+          <header><strong>Appointment &amp; work</strong><span>{appointment.status === 'cancelled' ? 'Cancelled' : `${temporaryHold ? 'Temporary hold · ' : ''}${formatDate(appointment.dateKey)} · ${formatTime(primary?.start)}–${formatTime(primary?.end)}`}</span></header>
           <div className={styles.formGrid}>
             <Field wide label="WORK TYPE" value={`${workLabel} · ${appointment.totalQuantity} unit${appointment.totalQuantity === 1 ? '' : 's'}`} />
             <Field label="TIME / UNIT" value={durationLabel(appointment.durationMinutesPerUnit)} />
@@ -269,6 +289,14 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
             <Field wide label="CUSTOMER-FACING DESCRIPTION" value={appointment.customerFacingDescription} />
           </div>
         </section>
+
+        {temporaryHold ? <section className={styles.formSection} style={{ borderColor: 'var(--warning, #f59e0b)' }}>
+          <header><strong style={{ color: 'var(--warning, #b45309)' }}>TEMPORARY HOLD · CAPACITY RESERVED</strong><span>Customer is not confirmed</span></header>
+          <div className={styles.descriptionPreview}>
+            <span>COMMUNICATION PAUSED</span>
+            <strong>This hold owns the canonical Van/time capacity, but customer confirmation and reminder communication stay disabled until an office user confirms the hold. The system does not assume an automatic expiry.</strong>
+          </div>
+        </section> : null}
 
         <section className={styles.formSection}>
           <header><strong>Customer</strong><span>Canonical CRM relationship</span></header>
@@ -297,22 +325,32 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
             <Field label="BOOKED BY" value={appointment.bookedByName || 'Not recorded'} />
             <Field label="SOURCE" value={sourceLabel(appointment.bookedBySource)} />
             <Field label="BOOKING CREATED" value={formatDateTime(appointment.createdAt)} />
-            <Field label="CONFIRMED" value={formatDateTime(appointment.confirmedAt)} />
+            <Field label="CONFIRMED" value={temporaryHold ? 'Not confirmed — capacity held' : formatDateTime(appointment.confirmedAt)} />
             <Field label="LAST UPDATED" value={formatDateTime(appointment.updatedAt)} />
             <Field label="WORK ORDER" value={appointment.workOrderIds?.join(', ') || appointment.workOrderId || 'Not recorded'} />
             <Field wide label="APPOINTMENT ID" value={appointment.id} />
           </div>
         </section>
 
-        <AppointmentCommunicationPanel appointmentId={appointment.id} />
+        {temporaryHold ? <section className={styles.formSection}>
+          <header><strong>Customer communication</strong><span>Paused while temporary hold</span></header>
+          <div className={styles.descriptionPreview}>
+            <span>NO CUSTOMER MESSAGE IS ACTIVE</span>
+            <strong>Recipient intent is preserved on the canonical hold and becomes eligible only after the hold is manually confirmed. Reminder settings cannot be changed while the appointment is held.</strong>
+          </div>
+        </section> : <AppointmentCommunicationPanel appointmentId={appointment.id} />}
 
         {mode === 'details' ? <section className={styles.formSection}>
-          <header><strong>Manage appointment</strong><span>All changes go through Booking Authority so capacity locks and Work Orders remain synchronized.</span></header>
+          <header><strong>Manage {temporaryHold ? 'temporary hold' : 'appointment'}</strong><span>All changes go through Booking Authority so capacity locks and Work Orders remain synchronized.</span></header>
+          {temporaryHold ? <div style={{ padding: '11px 11px 0' }}>
+            <button type="button" className={styles.primary} style={{ width: '100%' }} disabled={!canManageLifecycle || busy} onClick={() => void confirmHold()}>{busy ? 'Confirming hold…' : 'Confirm temporary hold'}</button>
+          </div> : null}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 8, padding: 11 }}>
-            <button type="button" className={styles.secondary} disabled={!canManageLifecycle} onClick={() => begin('edit')}>Edit Appointment</button>
-            <button type="button" className={styles.secondary} disabled={!canManageLifecycle} onClick={() => begin('reschedule')}>Reschedule</button>
-            <button type="button" className={styles.secondary} disabled={!canManageLifecycle} onClick={() => begin('cancel')} style={{ color: 'var(--danger)' }}>Cancel Appointment</button>
+            <button type="button" className={styles.secondary} disabled={!canManageLifecycle || busy} onClick={() => begin('edit')}>Edit Appointment</button>
+            <button type="button" className={styles.secondary} disabled={!canManageLifecycle || busy} onClick={() => begin('reschedule')}>Reschedule</button>
+            <button type="button" className={styles.secondary} disabled={!canManageLifecycle || busy} onClick={() => begin('cancel')} style={{ color: 'var(--danger)' }}>{temporaryHold ? 'Cancel Hold' : 'Cancel Appointment'}</button>
           </div>
+          {error ? <div className={styles.descriptionPreview}><span>ATTENTION</span><strong>{error}</strong></div> : null}
           {!canManageLifecycle && appointment.status !== 'cancelled' ? <div className={styles.descriptionPreview}><span>CANONICAL RELATIONSHIP REQUIRED</span><strong>This appointment cannot be changed until its customer and property IDs are resolved.</strong></div> : null}
         </section> : null}
 
@@ -323,7 +361,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
         /> : null}
 
         {mode === 'reschedule' ? <section className={styles.formSection}>
-          <header><strong>Reschedule appointment</strong><span>Choose a date, then select only from capacity returned by Booking Authority using the appointment's canonical work lines.</span></header>
+          <header><strong>Reschedule {temporaryHold ? 'temporary hold' : 'appointment'}</strong><span>Choose a date, then select only from capacity returned by Booking Authority using the appointment&apos;s canonical work lines. {temporaryHold ? 'The new capacity remains held and silent until confirmation.' : ''}</span></header>
           <div className={styles.formGrid}>
             <label><span>New date</span><input type="date" min={currentArubaDateKey()} value={targetDate} onChange={(event) => { setTargetDate(event.target.value); setAvailability(null); setSelectedOptionKey(''); setError(''); }} /></label>
             <label><span>Reason</span><select value={reason} onChange={(event) => setReason(event.target.value)}><option value="">Select reason</option>{rescheduleReasons.map((item) => <option key={item}>{item}</option>)}</select></label>
@@ -332,17 +370,17 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
           <div style={{ padding: '0 11px 10px' }}><button type="button" className={styles.secondary} disabled={busy || !targetDate} onClick={() => void findAvailability()}>{busy ? 'Checking…' : 'Check Booking Authority availability'}</button></div>
           {availability?.options.length ? <div className={styles.slotOptions}>{availability.options.map((option) => <button key={optionKey(option)} type="button" className={`${styles.slotOption} ${selectedOptionKey === optionKey(option) ? styles.slotOptionSelected : ''}`} onClick={() => setSelectedOptionKey(optionKey(option))}><div><strong>{formatDate(option.date)} · {formatTime(option.time)}–{formatTime(option.endTime)}</strong><span>{option.assignments.map((assignment) => assignment.vanId.replace('VAN-', 'Van ')).join(' + ')} · {option.zone || 'route-aware capacity'}</span></div><b>Select</b></button>)}</div> : null}
           {error ? <div className={styles.descriptionPreview}><span>ATTENTION</span><strong>{error}</strong></div> : null}
-          <footer className={styles.drawerFooter}><div><span>Current</span><strong>{formatDate(appointment.dateKey)} · {formatTime(primary?.start)}</strong></div><div><button type="button" className={styles.secondary} onClick={() => begin('details')}>Back</button><button type="button" className={styles.primary} disabled={busy || !reason || !selectedOption} onClick={() => void reschedule()}>Confirm Reschedule</button></div></footer>
+          <footer className={styles.drawerFooter}><div><span>Current</span><strong>{formatDate(appointment.dateKey)} · {formatTime(primary?.start)}</strong></div><div><button type="button" className={styles.secondary} disabled={busy} onClick={() => begin('details')}>Back</button><button type="button" className={styles.primary} disabled={busy || !reason || !selectedOption} onClick={() => void reschedule()}>{busy ? 'Saving…' : temporaryHold ? 'Move Temporary Hold' : 'Confirm Reschedule'}</button></div></footer>
         </section> : null}
 
         {mode === 'cancel' ? <section className={styles.formSection}>
-          <header><strong>Cancel appointment</strong><span>Cancellation releases the canonical capacity locks and cancels the linked Work Order(s).</span></header>
+          <header><strong>Cancel {temporaryHold ? 'temporary hold' : 'appointment'}</strong><span>Cancellation releases the canonical capacity locks and cancels the linked Work Order(s).</span></header>
           <div className={styles.formGrid}>
             <label className={styles.wide}><span>Reason</span><select value={reason} onChange={(event) => setReason(event.target.value)}><option value="">Select reason</option>{cancellationReasons.map((item) => <option key={item}>{item}</option>)}</select></label>
             <label className={styles.wide}><span>Internal note</span><textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} /></label>
           </div>
           {error ? <div className={styles.descriptionPreview}><span>ATTENTION</span><strong>{error}</strong></div> : null}
-          <footer className={styles.drawerFooter}><div><span>Appointment</span><strong>{appointment.customer} · {formatDate(appointment.dateKey)}</strong></div><div><button type="button" className={styles.secondary} onClick={() => begin('details')}>Back</button><button type="button" className={styles.primary} disabled={busy || !reason} onClick={() => void cancel()}>{busy ? 'Cancelling…' : 'Cancel Appointment'}</button></div></footer>
+          <footer className={styles.drawerFooter}><div><span>{temporaryHold ? 'Temporary hold' : 'Appointment'}</span><strong>{appointment.customer} · {formatDate(appointment.dateKey)}</strong></div><div><button type="button" className={styles.secondary} disabled={busy} onClick={() => begin('details')}>Back</button><button type="button" className={styles.primary} disabled={busy || !reason} onClick={() => void cancel()}>{busy ? 'Cancelling…' : temporaryHold ? 'Cancel Hold & Release Capacity' : 'Cancel Appointment'}</button></div></footer>
         </section> : null}
       </div>
     </aside>

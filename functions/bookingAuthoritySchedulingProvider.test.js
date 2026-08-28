@@ -81,8 +81,8 @@ function operationalData(overrides = {}) {
 
 const currentSchedule = { date: "2098-12-20", time: "08:30" };
 
-test("provider exposes canonical provider v11", () => {
-  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v11");
+test("provider exposes canonical provider v12", () => {
+  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v12");
 });
 
 test("canonical scheduling engine is versioned independently", () => {
@@ -135,11 +135,44 @@ test("provider verifies the exact ERP customer/property relationship", () => {
   );
 });
 
-test("capacity locks cover every occupied van slot", () => {
+test("capacity locks cover every sellable start overlapped by the continuous interval", () => {
   const locks = buildCapacityLocks(option(), []);
   assert.equal(locks.length, 2);
   assert.deepEqual(locks.map((item) => item.slot), ["13:30", "14:30"]);
   assert.equal(new Set(locks.map((item) => item.id)).size, 2);
+
+  const lunchSpanning = {
+    ...option(),
+    time: "10:30",
+    endTime: "13:30",
+    assignments: [{
+      ...option().assignments[0],
+      time: "10:30",
+      durationMinutes: 180,
+      slots: 3,
+    }],
+  };
+  const lunchLocks = buildCapacityLocks(lunchSpanning, []);
+  assert.deepEqual(lunchLocks.map((item) => item.slot), ["10:30"]);
+});
+
+test("full-day policy still locks every regular sellable start", () => {
+  const fullDay = {
+    ...option(),
+    time: "08:30",
+    endTime: "15:30",
+    assignments: [{
+      ...option().assignments[0],
+      time: "08:30",
+      durationMinutes: 420,
+      slots: 6,
+      fullDay: true,
+    }],
+  };
+  assert.deepEqual(
+    buildCapacityLocks(fullDay, []).map((item) => item.slot),
+    ["08:30", "09:30", "10:30", "13:30", "14:30", "15:30"],
+  );
 });
 
 test("work orders link to canonical appointment and only the primary order notifies client", () => {

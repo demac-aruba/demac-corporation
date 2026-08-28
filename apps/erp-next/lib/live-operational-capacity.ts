@@ -11,6 +11,7 @@ export type LiveDailyVanAssignment = {
   vanId?: string;
   driverStaffId?: string;
   helperStaffId?: string;
+  additionalHelperStaffId?: string;
   status?: string;
 };
 
@@ -48,6 +49,7 @@ export type LiveOperationalVan = {
   status: string;
   responsibleStaffId?: string;
   regularHelperId?: string;
+  additionalHelperId?: string;
 };
 
 export type LiveOperationalCapacityState = {
@@ -62,8 +64,11 @@ export type LiveOperationalCapacityState = {
 export type LiveVanCrew = {
   driverStaffId?: string;
   helperStaffId?: string;
+  additionalHelperStaffId?: string;
   driverName?: string;
   helperName?: string;
+  additionalHelperName?: string;
+  technicianIds: string[];
   label: string;
 };
 
@@ -80,6 +85,7 @@ type RawVan = {
   status?: string;
   responsibleStaffId?: string;
   regularHelperId?: string;
+  additionalHelperId?: string;
 };
 
 const CACHE_TTL_MS = 60_000;
@@ -149,6 +155,7 @@ async function loadCapacityState(startDate?: string, endDate?: string): Promise<
         status: String(van.status ?? ''),
         responsibleStaffId: text(van.responsibleStaffId) || undefined,
         regularHelperId: text(van.regularHelperId) || undefined,
+        additionalHelperId: text(van.additionalHelperId) || undefined,
       });
     }
   }
@@ -180,7 +187,7 @@ async function loadCapacityState(startDate?: string, endDate?: string): Promise<
  * appointments can refresh every 15 seconds without re-reading operational policy on
  * every poll, while a week change or a minute-old cache naturally refreshes the rules.
  * Staff display names ride the same cached read so the live agenda does not add a second
- * workforce-fetch path just to render the assigned technician/helper.
+ * workforce-fetch path just to render the assigned Van crew.
  */
 export async function loadLiveOperationalCapacityState(args: CapacityLoadArgs = {}): Promise<LiveOperationalCapacityState> {
   const key = capacityKey(args.startDate, args.endDate);
@@ -220,15 +227,27 @@ export function liveVanIsHalfDay(state: LiveOperationalCapacityState | null, van
 }
 
 export function liveVanCrew(state: LiveOperationalCapacityState | null, vanId: string, dateKey: string): LiveVanCrew {
-  if (!state) return { label: 'Crew loading…' };
+  if (!state) return { technicianIds: [], label: 'Crew loading…' };
   const van = state.vans.get(vanId);
   const daily = state.dailyAssignments.find((assignment) => assignment.date === dateKey && assignment.vanId === vanId);
   const driverStaffId = text(daily?.driverStaffId) || text(van?.responsibleStaffId) || undefined;
   const helperStaffId = text(daily?.helperStaffId) || text(van?.regularHelperId) || undefined;
+  const additionalHelperStaffId = text(daily?.additionalHelperStaffId) || text(van?.additionalHelperId) || undefined;
   const driverName = driverStaffId ? text(state.staffProfiles.find((profile) => profile.id === driverStaffId)?.name) || undefined : undefined;
   const helperName = helperStaffId ? text(state.staffProfiles.find((profile) => profile.id === helperStaffId)?.name) || undefined : undefined;
-  const label = [driverName, helperName].filter(Boolean).join(' · ') || 'Crew unassigned';
-  return { driverStaffId, helperStaffId, driverName, helperName, label };
+  const additionalHelperName = additionalHelperStaffId ? text(state.staffProfiles.find((profile) => profile.id === additionalHelperStaffId)?.name) || undefined : undefined;
+  const technicianIds = [driverStaffId, helperStaffId, additionalHelperStaffId].filter((value): value is string => Boolean(value));
+  const label = [driverName, helperName, additionalHelperName].filter(Boolean).join(' · ') || 'Crew unassigned';
+  return {
+    driverStaffId,
+    helperStaffId,
+    additionalHelperStaffId,
+    driverName,
+    helperName,
+    additionalHelperName,
+    technicianIds,
+    label,
+  };
 }
 
 export function liveVanOperationallyAvailable(state: LiveOperationalCapacityState | null, vanId: string, dateKey: string) {

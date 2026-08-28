@@ -147,11 +147,32 @@ const recoveryJobs: DispatchJob[] = [
     id: 'APT-BLOCK-V4', customer: 'Van 4 Full Day', site: 'Noord', sector: 'Noord', start: '08:30', end: '16:30', segment: 'full_day', vanId: 'VAN-4', presetId: 'standard_service', quantity: 7, status: 'confirmed', readiness: 'ready', isPrimaryAssignment: true, customerCommunicationOwner: true,
   },
 ];
-const recoveryRequest: BookingRequest = { customer: 'Three Unit Customer', site: 'Noord Property', sector: 'Noord', presetId: 'standard_service', quantity: 3 };
+
+const threeHourRequest: BookingRequest = { customer: 'Three Unit Customer', site: 'Noord Property', sector: 'Noord', presetId: 'standard_service', quantity: 3 };
+const threeHourCandidates = findCandidateSlotsForDay(recoveryDay, threeHourRequest, recoveryJobs);
+requireCondition(
+  threeHourCandidates.some((slot) => slot.vanId === 'VAN-1' && slot.start === '10:30' && slot.end === '13:30'),
+  'Flexible lunch must allow a continuous three-hour Van 1 appointment from 10:30 to 13:30 when the next job starts exactly at 13:30.',
+);
+requireCondition(
+  findSupportReflowPlansForDay(recoveryDay, threeHourRequest, recoveryJobs).length === 0,
+  'Support reflow must not move existing work when the request already fits continuously across lunch.',
+);
+
+const recoveryRequest: BookingRequest = { customer: 'Four Unit Customer', site: 'Noord Property', sector: 'Noord', presetId: 'standard_service', quantity: 4 };
 const fragmentedCandidates = findCandidateSlotsForDay(recoveryDay, recoveryRequest, recoveryJobs);
-requireCondition(fragmentedCandidates.length === 0, 'Fragmented Van 1 capacity must not be falsely offered as a continuous three-hour appointment.');
+requireCondition(fragmentedCandidates.length === 0, 'A real Van 1 conflict at 13:30 must prevent the continuous four-hour 10:30–14:30 appointment.');
 const recoveryPlans = findSupportReflowPlansForDay(recoveryDay, recoveryRequest, recoveryJobs);
-requireCondition(recoveryPlans.some((plan) => plan.supportJobId === 'APT-CHRISTIAN-S' && plan.vanId === 'VAN-1' && plan.fromStart === '13:30' && plan.toStart === '10:30' && plan.unlockedSlot.vanId === 'VAN-1' && plan.unlockedSlot.start === '13:30' && plan.unlockedSlot.end === '16:30'), 'Booking Intelligence must move the one-unit support assignment to 10:30 and recover Van 1 from 13:30–16:30.');
+requireCondition(
+  recoveryPlans.some((plan) => plan.supportJobId === 'APT-CHRISTIAN-S'
+    && plan.vanId === 'VAN-1'
+    && plan.fromStart === '13:30'
+    && plan.toStart === '14:30'
+    && plan.unlockedSlot.vanId === 'VAN-1'
+    && plan.unlockedSlot.start === '10:30'
+    && plan.unlockedSlot.end === '14:30'),
+  'Booking Intelligence must move only the one-unit SUPPORT to 14:30 and recover the real continuous Van 1 span from 10:30–14:30.',
+);
 requireCondition(recoveryPlans.every((plan) => plan.supportJobId !== 'APT-CHRISTIAN-P'), 'Capacity recovery must never move a primary assignment.');
 
-console.log(`Dispatch acceptance passed: ${conflicts.length} conflict(s) detected; four-van collision, route buffer, support conflict, workday overrun, delay propagation, departure gate, live route diagnostics, linked support planning and support-only capacity recovery verified.`);
+console.log(`Dispatch acceptance passed: ${conflicts.length} conflict(s) detected; collision, route buffer, support conflict, workday overrun, delay propagation, departure gate, flexible-lunch capacity, linked support planning and support-only capacity recovery verified.`);

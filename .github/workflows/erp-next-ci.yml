@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'apps/erp-next/**'
+      - 'functions/employeeAttendanceCalculation.js'
+      - 'functions/employeeAttendanceCalculation.d.ts'
       - 'functions/whatsappWacliGateway.js'
       - 'services/whatsapp-bridge/**'
       - 'docs/ERP_NEXT_**'
@@ -11,8 +13,11 @@ on:
   push:
     branches:
       - main
+      - feature/scheduling-booking-whatsapp-consolidation
     paths:
       - 'apps/erp-next/**'
+      - 'functions/employeeAttendanceCalculation.js'
+      - 'functions/employeeAttendanceCalculation.d.ts'
       - 'functions/whatsappWacliGateway.js'
       - 'services/whatsapp-bridge/**'
       - 'docs/ERP_NEXT_**'
@@ -57,5 +62,7 @@ jobs:
         run: npm run test:live-scheduling
       - name: Employee schedule architecture acceptance
         run: npm run test:employee-schedule
+      - name: Employee attendance Work Order authority acceptance
+        run: npm run test:employee-attendance-work-orders
       - name: Build
         run: npm run build

@@ -152,15 +152,27 @@ export type OfficeLifecycleChangeKind = 'customer_reschedule' | 'operational_mov
 
 export type OfficeLifecycleResult = {
   success: true;
+  replayed?: boolean;
   appointmentId: string;
   changeKind?: OfficeLifecycleChangeKind;
   customerNotificationRecommended?: boolean;
+  appointment: Record<string, unknown>;
+  workOrderIds?: string[];
+};
+
+export type OfficeAdhocSupportResult = {
+  success: true;
+  replayed?: boolean;
+  appointmentId: string;
+  supportWorkOrderId: string;
+  supportWorkOrder: Record<string, unknown>;
   appointment: Record<string, unknown>;
 };
 
 export type OfficeCreateAppointmentResult = {
   success: true;
   replayed?: boolean;
+  createMode?: 'confirmed' | 'temporary_hold';
   appointmentId: string;
   appointment: Record<string, unknown>;
   workOrderIds: string[];
@@ -330,6 +342,30 @@ export async function confirmOfficeAppointment(input: {
   return result;
 }
 
+export async function createOfficeTemporaryHold(input: {
+  requestId: string;
+  offerId: string;
+  offerVersion: number;
+  optionId: string;
+}) {
+  const result = await callOfficeBookingAuthority<OfficeCreateAppointmentResult>('create_temporary_hold', input, 12_000);
+  if (!result.success || !result.appointmentId || result.createMode !== 'temporary_hold') {
+    throw new Error('Booking Authority did not return a verified temporary hold. Nothing was reserved.');
+  }
+  return result;
+}
+
+export async function confirmOfficeTemporaryHold(input: {
+  appointmentId: string;
+  requestId: string;
+}) {
+  const result = await callOfficeBookingAuthority<OfficeLifecycleResult>('confirm_temporary_hold', input, 12_000);
+  if (!result.success || !result.appointmentId) {
+    throw new Error('Booking Authority did not confirm the temporary hold. The hold was left unchanged.');
+  }
+  return result;
+}
+
 export function getOfficeAppointment(appointmentId: string) {
   return callOfficeBookingAuthority<{
     success: true;
@@ -469,4 +505,15 @@ export async function moveOfficeAppointment(input: {
   note?: string;
 }) {
   return callOfficeBookingAuthority<OfficeLifecycleResult>('move_appointment', input, 12_000);
+}
+
+export async function addOfficeAdhocSupport(input: {
+  appointmentId: string;
+  requestId: string;
+  requestedDate: string;
+  requestedTime: string;
+  requiredVanId: string;
+  reason?: string;
+}) {
+  return callOfficeBookingAuthority<OfficeAdhocSupportResult>('add_adhoc_support', input, 12_000);
 }

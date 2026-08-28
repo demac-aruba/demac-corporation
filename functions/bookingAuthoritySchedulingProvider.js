@@ -10,17 +10,18 @@ const {
   hashId,
   isHalfDay,
   normalizeRouteConfig,
-  occupiedSlots,
   orderBlocksCapacity,
-  orderSlotCount,
   propertyZone,
   resolveAssignment,
   snapshotItems,
 } = require("./bookingSchedulingPrimitives");
 const {
+  assignmentCapacityInterval,
   candidateAvailability,
-  normalizeOrderTime,
+  capacityLockSlots,
+  intervalsOverlap,
   workOrderBlocksOperationalMoveCapacity,
+  workOrderCapacityInterval,
 } = require("./bookingCapacityAvailability");
 const {
   CANONICAL_SCHEDULING_ENGINE_VERSION,
@@ -34,7 +35,7 @@ const {
 const { buildWorkOrders: projectCanonicalWorkOrders } = require("./bookingAuthorityWorkOrders");
 const { canonicalizeSchedulingData } = require("./bookingVanIdentity");
 
-const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v11";
+const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v12";
 
 async function loadSchedulingData(db, startDate, endDate) {
   const workOrderQuery = db.collection("workOrders").where("date", ">=", startDate).where("date", "<=", endDate);
@@ -167,12 +168,24 @@ function buildCapacityLocks(option, halfDaySchedules = []) {
   for (const assignment of option.assignments || []) {
     const halfDay = isHalfDay(assignment.vanId, option.date, halfDaySchedules);
     const startTime = assignment.time || option.time;
-    const slots = occupiedSlots(startTime, assignment.slots, halfDay);
+    const slots = capacityLockSlots({
+      time: startTime,
+      durationMinutes: assignment.durationMinutes,
+      slots: assignment.slots,
+      halfDay,
+      fullDay: assignment.fullDay,
+    });
     if (!slots.length) {
       throw new BookingAuthorityError(
         BOOKING_ERROR_CODES.AVAILABILITY_CHANGED,
-        "The selected assignment no longer maps to valid scheduling slots.",
-        { date: option.date, vanId: assignment.vanId, startTime, slots: assignment.slots },
+        "The selected assignment no longer maps to valid scheduling capacity.",
+        {
+          date: option.date,
+          vanId: assignment.vanId,
+          startTime,
+          durationMinutes: assignment.durationMinutes,
+          slots: assignment.slots,
+        },
       );
     }
     slots.forEach((slot) => {
@@ -461,16 +474,19 @@ function createSchedulingProvider({ db }) {
       for (const assignment of option.assignments) {
         const halfDay = isHalfDay(assignment.vanId, option.date, halfDaySchedules);
         const startTime = assignment.time || option.time;
-        const requestedSlots = occupiedSlots(startTime, assignment.slots, halfDay);
-        if (!requestedSlots.length) return { available: false, reason: "invalid-slot-map" };
+        const requestedInterval = assignmentCapacityInterval({
+          time: startTime,
+          allocation: {
+            durationMinutes: assignment.durationMinutes,
+            slots: assignment.slots,
+            fullDay: assignment.fullDay,
+          },
+          halfDay,
+        });
+        if (!requestedInterval) return { available: false, reason: "invalid-capacity-interval" };
         const conflict = sameDayOrders.some((order) => {
           if (order.vanId !== assignment.vanId) return false;
-          const existingSlots = occupiedSlots(
-            normalizeOrderTime(order.time),
-            orderSlotCount(order, services),
-            halfDay,
-          );
-          return existingSlots.some((slot) => requestedSlots.includes(slot));
+          return intervalsOverlap(requestedInterval, workOrderCapacityInterval(order, services, halfDay));
         });
         if (conflict) {
           return { available: false, reason: "work-order-conflict", vanId: assignment.vanId };

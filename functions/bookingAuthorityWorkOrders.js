@@ -104,11 +104,16 @@ function workOrderCustomerDescription(option, request, fallback) {
   };
 }
 
+function temporaryHoldProjection(context, appointment) {
+  return context?.appointmentState === "temporary_hold" || cleanText(appointment?.status, 40) === "temporary_hold";
+}
+
 function buildWorkOrders({ appointment, option, request, customer, property, context = {}, now = new Date() }) {
   // Lifecycle changes update Scheduling-owned fields on existing Work Orders. They
   // must not replace communication policy, payment state, or creation audit fields.
   // Newly created support Work Orders still receive their normal initialization.
   const lifecycleRebuild = context.reschedule === true || context.detailsEdit === true;
+  const temporaryHold = temporaryHoldProjection(context, appointment);
   const existingWorkOrderIds = new Set([
     ...(Array.isArray(appointment?.workOrderIds) ? appointment.workOrderIds : []),
     cleanText(appointment?.workOrderId, 180),
@@ -145,16 +150,21 @@ function buildWorkOrders({ appointment, option, request, customer, property, con
     const preserveExistingDomainState = lifecycleRebuild && alreadyExists;
     const communicationSnapshot = preserveExistingDomainState
       ? {}
-      : {
-        whatsappNotificationsEnabled: isPrimary && whatsappEnabled,
-        notificationRecipients: isPrimary ? notificationRecipients : [],
-      };
+      : temporaryHold
+        ? {
+          whatsappNotificationsEnabled: false,
+          notificationRecipients: [],
+        }
+        : {
+          whatsappNotificationsEnabled: isPrimary && whatsappEnabled,
+          notificationRecipients: isPrimary ? notificationRecipients : [],
+        };
     const initializationSnapshot = preserveExistingDomainState
       ? {}
       : {
         amount: 0,
         paid: 0,
-        confirmedAt: now.toISOString(),
+        ...(temporaryHold ? { heldAt: now.toISOString() } : { confirmedAt: now.toISOString() }),
         createdAt: now.toISOString(),
         createdBy: "booking-authority",
       };
@@ -167,7 +177,7 @@ function buildWorkOrders({ appointment, option, request, customer, property, con
       serviceId,
       date: option.date,
       time: assignment.time || option.time,
-      status: "Confirmada",
+      status: temporaryHold ? "Reserva temporal" : "Confirmada",
       technicianIds: assignment.technicianIds || [],
       vanId: assignment.vanId,
       address: option.address || property.address || property.addressRaw || "",
@@ -176,9 +186,13 @@ function buildWorkOrders({ appointment, option, request, customer, property, con
       customerFacingDescription: customerDescription.customerFacingDescription,
       customerFacingDescriptionIsDefault: customerDescription.customerFacingDescriptionIsDefault,
       technicianInstructions,
-      officeNotes: isPrimary
-        ? `Cita creada por DEMAC Booking Authority${supportCount ? ` con ${supportCount} van(es) de apoyo` : ""}.`
-        : "Asignación interna de van de apoyo. No enviar confirmación ni recordatorio duplicado.",
+      officeNotes: temporaryHold
+        ? (isPrimary
+          ? `Reserva temporal creada por DEMAC Booking Authority${supportCount ? ` con ${supportCount} van(es) de apoyo` : ""}. No enviar comunicación al cliente hasta confirmar.`
+          : "Asignación interna de apoyo reservada temporalmente. No enviar comunicación al cliente.")
+        : isPrimary
+          ? `Cita creada por DEMAC Booking Authority${supportCount ? ` con ${supportCount} van(es) de apoyo` : ""}.`
+          : "Asignación interna de van de apoyo. No enviar confirmación ni recordatorio duplicado.",
       appointmentWorkType: workType,
       appointmentPresetId: workType,
       appointmentWorkLabel: workLabel,
@@ -207,6 +221,7 @@ module.exports = {
   normalizedRecipientSnapshots,
   requestCustomerFacingDescription,
   requestTechnicianInstructions,
+  temporaryHoldProjection,
   workItemsForAssignment,
   workOrderCustomerDescription,
 };

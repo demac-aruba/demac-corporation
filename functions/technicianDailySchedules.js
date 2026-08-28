@@ -13,7 +13,7 @@ exports.sendDailyTechnicianSchedules = onSchedule(
   {
     // 8:00 AM is the canonical delivery. 8:05 and 8:10 are idempotent recovery
     // windows only; a completed batch exits immediately and deterministic queue
-    // ids prevent duplicate Work Order messages if an earlier attempt partially ran.
+    // ids prevent duplicate Work Order/pending messages if an earlier attempt partially ran.
     schedule: "0,5,10 8 * * *",
     timeZone: TIME_ZONE,
     region: REGION,
@@ -32,8 +32,6 @@ exports.sendDailyTechnicianSchedules = onSchedule(
       return;
     }
 
-    // Keep the existing collection name for operational continuity. The batch
-    // now records van-group delivery instead of one message per technician.
     const batchRef = db.collection("technicianDailyScheduleBatches").doc(runDate);
     const existingBatch = await batchRef.get();
     if (existingBatch.exists && existingBatch.data()?.status === "complete") {
@@ -43,7 +41,7 @@ exports.sendDailyTechnicianSchedules = onSchedule(
 
     await batchRef.set({
       runDate,
-      deliveryModel: "van-group-work-order-v1",
+      deliveryModel: "van-group-work-order-pending-v2",
       status: "processing",
       startedAt: existingBatch.data()?.startedAt || FieldValue.serverTimestamp(),
       lastAttemptAt: FieldValue.serverTimestamp(),
@@ -59,16 +57,20 @@ exports.sendDailyTechnicianSchedules = onSchedule(
           vanId: item.vanId,
           groupName: item.groupName,
           workOrderId: item.workOrderId,
+          pendingSlot: item.pendingSlot,
+          lunchBreak: item.lunchBreak === true,
           reason: item.reason || "not-queued",
         }));
       const queuedCount = result.results.filter((item) => item.created === true).length;
       const idempotentCount = result.results.filter((item) => item.queued === true && item.created === false).length;
 
       await batchRef.set({
-        deliveryModel: "van-group-work-order-v1",
+        deliveryModel: "van-group-work-order-pending-v2",
         status: failures.length ? "partial" : "complete",
         vanCount: result.vanCount,
         workOrderCount: result.workOrderCount,
+        pendingPeriodCount: result.pendingPeriodCount,
+        lunchBreakCount: result.lunchBreakCount,
         messageCount: result.messageCount,
         queuedCount,
         idempotentCount,
@@ -82,6 +84,8 @@ exports.sendDailyTechnicianSchedules = onSchedule(
         runDate,
         vanCount: result.vanCount,
         workOrderCount: result.workOrderCount,
+        pendingPeriodCount: result.pendingPeriodCount,
+        lunchBreakCount: result.lunchBreakCount,
         messageCount: result.messageCount,
         queuedCount,
         idempotentCount,
@@ -90,7 +94,7 @@ exports.sendDailyTechnicianSchedules = onSchedule(
       });
     } catch (error) {
       await batchRef.set({
-        deliveryModel: "van-group-work-order-v1",
+        deliveryModel: "van-group-work-order-pending-v2",
         status: "partial",
         fatalError: error instanceof Error ? error.message : String(error),
         failedAt: FieldValue.serverTimestamp(),
