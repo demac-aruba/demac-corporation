@@ -47,7 +47,11 @@ function payrollPeriodFromBounds(period: AttendancePeriodBounds): PayrollPeriod 
 }
 
 function isExceptionDay(day: ReturnType<typeof calculatePayrollDay>) {
-  return day.overtimeHours > 0
+  // Normal scheduled days are synthesized and are never materialized. Therefore any
+  // explicit timesheet is itself exception evidence, including a paid partial absence
+  // that would otherwise look regular in aggregate payroll totals.
+  return day.source === 'timesheet'
+    || day.overtimeHours > 0
     || day.aoHours > 0
     || day.vacationHours > 0
     || day.noWorkNoPayHours > 0
