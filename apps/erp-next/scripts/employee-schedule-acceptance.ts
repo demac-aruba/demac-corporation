@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import type { CanonicalStaffProfile, CanonicalVan, CanonicalVanHalfDaySchedule } from '../lib/canonical-operations';
-import type { EmployeePayrollSettings } from '../lib/employee-attendance';
+import type { EmployeeSchedulePayrollSettings } from '../lib/employee-schedule-settings';
 import { resolveEmployeeSchedule } from '../lib/employee-work-schedule';
 
 function schedule(input: {
   profile: CanonicalStaffProfile;
   date: string;
-  payrollSettings?: EmployeePayrollSettings;
+  payrollSettings?: EmployeeSchedulePayrollSettings;
   vans?: CanonicalVan[];
   halfDaySchedules?: CanonicalVanHalfDaySchedule[];
 }) {
@@ -54,7 +54,7 @@ assert.deepEqual(
   'The employment start date is inclusive and must use the normal configured schedule.',
 );
 
-const wednesdayAfternoonOff = schedule({
+const legacyOfficeHalfDay = schedule({
   profile: secretary,
   date: '2026-08-26',
   payrollSettings: {
@@ -69,63 +69,104 @@ const wednesdayAfternoonOff = schedule({
 });
 assert.deepEqual(
   {
-    start: wednesdayAfternoonOff.startTime,
-    end: wednesdayAfternoonOff.endTime,
-    worked: wednesdayAfternoonOff.scheduledMinutes,
-    paidFree: wednesdayAfternoonOff.paidFreeMinutes,
+    start: legacyOfficeHalfDay.startTime,
+    end: legacyOfficeHalfDay.endTime,
+    worked: legacyOfficeHalfDay.scheduledMinutes,
+    paidFree: legacyOfficeHalfDay.paidFreeMinutes,
   },
   { start: '08:00', end: '12:00', worked: 240, paidFree: 240 },
-  'Office afternoon-off half-day must work 08:00–12:00 and remain paid for the other four hours.',
+  'Legacy office half-day records must remain compatible after the schedule redesign.',
 );
 
-const wednesdayMorningOff = schedule({
+const lateOfficeSettings: EmployeeSchedulePayrollSettings = {
+  id: secretary.id,
+  sourceStaffId: secretary.id,
+  scheduleMode: 'custom',
+  workdayStart: '09:00',
+  workdayEnd: '18:00',
+  breakMinutes: 60,
+  scheduleEffectiveFrom: '2026-08-01',
+  weeklyHalfDayWeekday: 3,
+  halfDayEffectiveFrom: '2026-08-01',
+  halfDayOffPeriod: 'afternoon',
+  halfDayRule: 'office-4-4',
+};
+
+const lateOfficeNormalDay = schedule({
+  profile: secretary,
+  date: '2026-08-25',
+  payrollSettings: lateOfficeSettings,
+});
+assert.deepEqual(
+  {
+    start: lateOfficeNormalDay.startTime,
+    end: lateOfficeNormalDay.endTime,
+    worked: lateOfficeNormalDay.scheduledMinutes,
+    paidFree: lateOfficeNormalDay.paidFreeMinutes,
+  },
+  { start: '09:00', end: '18:00', worked: 480, paidFree: 0 },
+  'A custom 09:00–18:00 shift with a one-hour break must resolve to eight paid work hours.',
+);
+
+const lateOfficeHalfDay = schedule({
+  profile: secretary,
+  date: '2026-08-26',
+  payrollSettings: lateOfficeSettings,
+});
+assert.deepEqual(
+  {
+    start: lateOfficeHalfDay.startTime,
+    end: lateOfficeHalfDay.endTime,
+    worked: lateOfficeHalfDay.scheduledMinutes,
+    paidFree: lateOfficeHalfDay.paidFreeMinutes,
+  },
+  { start: '09:00', end: '13:00', worked: 240, paidFree: 240 },
+  'Office custom partial days must work four hours and credit four paid-free hours.',
+);
+
+const companyDefaultWithStaleLegacyFields = schedule({
   profile: secretary,
   date: '2026-08-26',
   payrollSettings: {
-    id: secretary.id,
-    weeklyHalfDayWeekday: 3,
-    halfDayEffectiveFrom: '2026-08-01',
-    halfDayWorkedHours: 4,
-    halfDayPaidFreeHours: 4,
-    halfDayOffPeriod: 'morning',
+    ...lateOfficeSettings,
+    scheduleMode: 'company-default',
   },
 });
 assert.deepEqual(
   {
-    start: wednesdayMorningOff.startTime,
-    end: wednesdayMorningOff.endTime,
-    worked: wednesdayMorningOff.scheduledMinutes,
-    paidFree: wednesdayMorningOff.paidFreeMinutes,
+    start: companyDefaultWithStaleLegacyFields.startTime,
+    end: companyDefaultWithStaleLegacyFields.endTime,
+    worked: companyDefaultWithStaleLegacyFields.scheduledMinutes,
+    paidFree: companyDefaultWithStaleLegacyFields.paidFreeMinutes,
   },
-  { start: '13:00', end: '17:00', worked: 240, paidFree: 240 },
-  'Office morning-off half-day must work 13:00–17:00.',
+  { start: '08:00', end: '17:00', worked: 480, paidFree: 0 },
+  'Selecting company default must neutralize stale employee custom fields without creating a second source of truth.',
 );
 
-const legacyPeriodMissing = schedule({
+const futureLateShift = schedule({
   profile: secretary,
-  date: '2026-08-26',
+  date: '2026-08-25',
   payrollSettings: {
-    id: 'legacy-payroll-yerika',
-    weeklyHalfDayWeekday: 3,
-    halfDayWorkedHours: 4,
-    halfDayPaidFreeHours: 4,
+    ...lateOfficeSettings,
+    scheduleEffectiveFrom: '2026-09-01',
+    halfDayEffectiveFrom: '2026-09-01',
   },
 });
-assert.equal(legacyPeriodMissing.startTime, '08:00');
-assert.equal(legacyPeriodMissing.endTime, '12:00');
-
-const saturday = schedule({ profile: secretary, date: '2026-08-22' });
 assert.deepEqual(
-  { start: saturday.startTime, end: saturday.endTime, worked: saturday.scheduledMinutes },
+  { start: futureLateShift.startTime, end: futureLateShift.endTime, worked: futureLateShift.scheduledMinutes },
   { start: '08:00', end: '17:00', worked: 480 },
-  'Saturday must use the normal company day, not the obsolete 09:00–13:00 rule.',
+  'A future custom schedule must not affect attendance before its effective date.',
 );
 
-const sunday = schedule({ profile: secretary, date: '2026-08-23' });
+const sundayWithCustomSchedule = schedule({
+  profile: secretary,
+  date: '2026-08-23',
+  payrollSettings: lateOfficeSettings,
+});
 assert.deepEqual(
-  { start: sunday.startTime, end: sunday.endTime, worked: sunday.scheduledMinutes },
+  { start: sundayWithCustomSchedule.startTime, end: sundayWithCustomSchedule.endTime, worked: sundayWithCustomSchedule.scheduledMinutes },
   { start: '', end: '', worked: 0 },
-  'Sunday is the only global weekly company closure.',
+  'Sunday is company-closed and cannot be overridden by an employee custom schedule.',
 );
 
 const technician: CanonicalStaffProfile = {
@@ -152,29 +193,51 @@ const vanHalfDay: CanonicalVanHalfDaySchedule = {
   active: true,
 };
 
-const technicalWednesday = schedule({
+const technicalVanFallback = schedule({
   profile: technician,
   date: '2026-08-26',
   vans: [van],
   halfDaySchedules: [vanHalfDay],
-  // An employee payroll half-day must never override a technical Van/team rule.
+});
+assert.deepEqual(
+  {
+    start: technicalVanFallback.startTime,
+    end: technicalVanFallback.endTime,
+    worked: technicalVanFallback.scheduledMinutes,
+    paidFree: technicalVanFallback.paidFreeMinutes,
+  },
+  { start: '08:00', end: '13:00', worked: 300, paidFree: 180 },
+  'Technicians without an employee override must continue inheriting their Van/team partial-day rule.',
+);
+
+const technicalCustomOverride = schedule({
+  profile: technician,
+  date: '2026-08-26',
+  vans: [van],
+  halfDaySchedules: [vanHalfDay],
   payrollSettings: {
     id: technician.id,
-    weeklyHalfDayWeekday: 2,
-    halfDayWorkedHours: 4,
-    halfDayPaidFreeHours: 4,
-    halfDayOffPeriod: 'morning',
+    sourceStaffId: technician.id,
+    scheduleMode: 'custom',
+    workdayStart: '09:00',
+    workdayEnd: '18:00',
+    breakMinutes: 60,
+    scheduleEffectiveFrom: '2026-08-01',
+    weeklyHalfDayWeekday: 3,
+    halfDayEffectiveFrom: '2026-08-01',
+    halfDayOffPeriod: 'afternoon',
+    halfDayRule: 'technician-5-3',
   },
 });
 assert.deepEqual(
   {
-    start: technicalWednesday.startTime,
-    end: technicalWednesday.endTime,
-    worked: technicalWednesday.scheduledMinutes,
-    paidFree: technicalWednesday.paidFreeMinutes,
+    start: technicalCustomOverride.startTime,
+    end: technicalCustomOverride.endTime,
+    worked: technicalCustomOverride.scheduledMinutes,
+    paidFree: technicalCustomOverride.paidFreeMinutes,
   },
-  { start: '08:00', end: '13:00', worked: 300, paidFree: 180 },
-  'Technicians must inherit their recurring half-day only from the Van/team rule.',
+  { start: '09:00', end: '14:00', worked: 300, paidFree: 180 },
+  'An explicit technician profile schedule must override the inherited Van/team fallback and apply the 5h + 3h rule.',
 );
 
-console.log('Employee schedule acceptance passed: employment dates, one company calendar, Van half-days for technicians, individual half-days for office staff.');
+console.log('Employee schedule acceptance passed: employment dates, Sunday closure, 08–17/09–18 custom shifts, office 4+4, technician 5+3, and Van fallback precedence.');
