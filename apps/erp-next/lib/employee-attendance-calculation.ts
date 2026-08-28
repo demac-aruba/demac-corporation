@@ -69,11 +69,32 @@ export function hasValidWorkedTimeRange(clockInTime: string, clockOutTime: strin
   return start !== undefined && end !== undefined && end > start;
 }
 
+function emptyVariance(expectedBreakMinutes: number, workedMinutesValue: number): AttendanceVariance {
+  return {
+    expectedBreakMinutes,
+    workedMinutes: workedMinutesValue,
+    earlyStartMinutes: 0,
+    lateFinishMinutes: 0,
+    unusedBreakMinutes: 0,
+    overtimeMinutes: 0,
+    lateArrivalMinutes: 0,
+    earlyDepartureMinutes: 0,
+    extendedBreakMinutes: 0,
+    missingScheduledMinutes: 0,
+    missingSegments: [],
+  };
+}
+
 /**
  * OPS-STAFF-ATTENDANCE-002 / 003.
  * Overtime and missing scheduled time are intentionally calculated independently.
  * Early work, late work and unused scheduled break are overtime; they never erase a
  * late arrival, early departure or extended break that must be classified separately.
+ *
+ * The interval calculations are bounded by the real clock interval and scheduled shift.
+ * This prevents malformed-but-chronological edge cases (for example, clocking entirely
+ * after the scheduled shift) from creating more overtime than was actually worked or
+ * more missing scheduled time than the employee was scheduled to work.
  */
 export function calculateAttendanceVariance(input: {
   schedule: AttendanceScheduleForCalculation;
@@ -85,29 +106,49 @@ export function calculateAttendanceVariance(input: {
   const actualBreakMinutes = Math.max(0, Math.round(Number(input.breakMinutes) || 0));
   const expectedBreakMinutes = scheduledBreakMinutes(schedule);
   const workedMinutesValue = workedMinutes(clockInTime, clockOutTime, actualBreakMinutes);
+  const scheduleStart = minutesOfDay(schedule.startTime);
+  const scheduleEnd = minutesOfDay(schedule.endTime);
+  const actualStart = minutesOfDay(clockInTime);
+  const actualEnd = minutesOfDay(clockOutTime);
 
-  if (!schedule.startTime || !schedule.endTime || schedule.scheduledMinutes <= 0 || !clockInTime || !clockOutTime) {
-    return {
-      expectedBreakMinutes,
-      workedMinutes: workedMinutesValue,
-      earlyStartMinutes: 0,
-      lateFinishMinutes: 0,
-      unusedBreakMinutes: 0,
-      overtimeMinutes: 0,
-      lateArrivalMinutes: 0,
-      earlyDepartureMinutes: 0,
-      extendedBreakMinutes: 0,
-      missingScheduledMinutes: 0,
-      missingSegments: [],
-    };
+  if (
+    schedule.scheduledMinutes <= 0
+    || scheduleStart === undefined
+    || scheduleEnd === undefined
+    || scheduleEnd <= scheduleStart
+    || actualStart === undefined
+    || actualEnd === undefined
+    || actualEnd <= actualStart
+  ) {
+    return emptyVariance(expectedBreakMinutes, workedMinutesValue);
   }
 
-  const earlyStartMinutes = minutesBetween(clockInTime, schedule.startTime);
-  const lateFinishMinutes = minutesBetween(schedule.endTime, clockOutTime);
+  const earlyStartMinutes = actualStart < scheduleStart
+    ? Math.max(0, Math.min(actualEnd, scheduleStart) - actualStart)
+    : 0;
+  const lateFinishMinutes = actualEnd > scheduleEnd
+    ? Math.max(0, actualEnd - Math.max(actualStart, scheduleEnd))
+    : 0;
   const unusedBreakMinutes = Math.max(0, expectedBreakMinutes - actualBreakMinutes);
-  const lateArrivalMinutes = minutesBetween(schedule.startTime, clockInTime);
-  const earlyDepartureMinutes = minutesBetween(clockOutTime, schedule.endTime);
-  const extendedBreakMinutes = Math.max(0, actualBreakMinutes - expectedBreakMinutes);
+  const rawOvertimeMinutes = earlyStartMinutes + lateFinishMinutes + unusedBreakMinutes;
+  const overtimeMinutes = Math.min(workedMinutesValue, rawOvertimeMinutes);
+
+  const lateArrivalMinutes = actualStart > scheduleStart
+    ? Math.max(0, Math.min(actualStart, scheduleEnd) - scheduleStart)
+    : 0;
+  const earlyDepartureMinutes = actualEnd < scheduleEnd
+    ? Math.max(0, scheduleEnd - Math.max(actualEnd, scheduleStart))
+    : 0;
+  const missingBeforeBreak = Math.min(schedule.scheduledMinutes, lateArrivalMinutes + earlyDepartureMinutes);
+  const remainingScheduledMinutes = Math.max(0, schedule.scheduledMinutes - missingBeforeBreak);
+  const extendedBreakMinutes = Math.min(
+    remainingScheduledMinutes,
+    Math.max(0, actualBreakMinutes - expectedBreakMinutes),
+  );
+  const missingScheduledMinutes = Math.min(
+    schedule.scheduledMinutes,
+    missingBeforeBreak + extendedBreakMinutes,
+  );
 
   const missingSegments: DetectedAttendanceException[] = [];
   if (lateArrivalMinutes > 0) {
@@ -115,14 +156,14 @@ export function calculateAttendanceVariance(input: {
       kind: 'late_arrival',
       minutes: lateArrivalMinutes,
       fromTime: schedule.startTime,
-      toTime: clockInTime,
+      toTime: actualStart >= scheduleEnd ? schedule.endTime : clockInTime,
     });
   }
   if (earlyDepartureMinutes > 0) {
     missingSegments.push({
       kind: 'early_departure',
       minutes: earlyDepartureMinutes,
-      fromTime: clockOutTime,
+      fromTime: actualEnd <= scheduleStart ? schedule.startTime : clockOutTime,
       toTime: schedule.endTime,
     });
   }
@@ -136,11 +177,11 @@ export function calculateAttendanceVariance(input: {
     earlyStartMinutes,
     lateFinishMinutes,
     unusedBreakMinutes,
-    overtimeMinutes: earlyStartMinutes + lateFinishMinutes + unusedBreakMinutes,
+    overtimeMinutes,
     lateArrivalMinutes,
     earlyDepartureMinutes,
     extendedBreakMinutes,
-    missingScheduledMinutes: lateArrivalMinutes + earlyDepartureMinutes + extendedBreakMinutes,
+    missingScheduledMinutes,
     missingSegments,
   };
 }
