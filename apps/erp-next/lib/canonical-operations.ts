@@ -148,13 +148,23 @@ function canonicalVanIdFromValue(value: unknown) {
   return match ? `VAN-${Number(match[1])}` : raw;
 }
 
+/**
+ * Resolve the operational Van lane without mistaking a legacy Firestore document ID
+ * (for example VAN-1783801335935) for the canonical scheduling lane. When the value
+ * is an actual Van document ID, the record's human/canonical name (Van 1, Van 2, ...)
+ * owns the lane identity. Direct references such as VAN-1 or future VAN-5 remain valid.
+ */
 export function canonicalVanId(value: unknown, vans: CanonicalVan[] = []) {
-  const direct = canonicalVanIdFromValue(value);
-  if (/^VAN-\d+$/.test(direct)) return direct;
   const raw = text(value);
+  if (!raw) return '';
+
   const record = vans.find((van) => van.id === raw);
-  if (!record) return direct;
-  return canonicalVanIdFromValue(record.name) || direct;
+  if (record) {
+    const fromName = canonicalVanIdFromValue(record.name);
+    if (/^VAN-\d+$/.test(fromName)) return fromName;
+  }
+
+  return canonicalVanIdFromValue(raw);
 }
 
 export function weekdayLabel(value: unknown) {
@@ -275,13 +285,17 @@ export async function loadCanonicalOperationsState(): Promise<CanonicalOperation
 
   return {
     staffProfiles: [...staffProfiles].sort((a, b) => staffDisplayName(a).localeCompare(staffDisplayName(b))),
-    vans: [...vans].filter((van) => van.active !== false).sort((a, b) => canonicalVanId(a.id, vans).localeCompare(canonicalVanId(b.id, vans))),
+    vans: [...vans]
+      .filter((van) => van.active !== false)
+      .sort((a, b) => canonicalVanId(a.id, vans).localeCompare(canonicalVanId(b.id, vans), undefined, { numeric: true })),
     dailyVanAssignments: [...dailyVanAssignments]
       .filter((assignment) => assignment.status !== 'Cancelled')
       .sort((a, b) => `${b.date ?? ''}-${a.vanId ?? ''}`.localeCompare(`${a.date ?? ''}-${b.vanId ?? ''}`)),
     vanMaintenanceLogs: [...vanMaintenanceLogs].sort((a, b) => `${b.date ?? ''}-${b.updatedAt ?? ''}`.localeCompare(`${a.date ?? ''}-${a.updatedAt ?? ''}`)),
     staffAbsences: [...staffAbsences].filter((absence) => absence.active !== false).sort((a, b) => String(b.fromDate ?? '').localeCompare(String(a.fromDate ?? ''))),
-    vanHalfDaySchedules: [...vanHalfDaySchedules].filter((schedule) => schedule.active !== false).sort((a, b) => canonicalVanId(a.vanId, vans).localeCompare(canonicalVanId(b.vanId, vans))),
+    vanHalfDaySchedules: [...vanHalfDaySchedules]
+      .filter((schedule) => schedule.active !== false)
+      .sort((a, b) => canonicalVanId(a.vanId, vans).localeCompare(canonicalVanId(b.vanId, vans), undefined, { numeric: true })),
     calendarClosures: [...calendarClosures].filter((closure) => closure.active !== false).sort((a, b) => String(a.date ?? '').localeCompare(String(b.date ?? ''))),
     businessCalendar,
   };
