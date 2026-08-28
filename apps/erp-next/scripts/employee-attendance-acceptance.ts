@@ -72,6 +72,31 @@ assert.deepEqual(
 );
 assert.equal(extendedBreak.overtimeMinutes, 0, 'An extended break must not be treated as negative overtime.');
 
+const afterShiftOnly = variance('19:00', '20:00', 0);
+assert.equal(afterShiftOnly.workedMinutes, 60, 'A one-hour clock interval after the shift contains at most 60 worked minutes.');
+assert.equal(afterShiftOnly.overtimeMinutes, 60, 'Derived overtime must never exceed actual worked minutes.');
+assert.equal(afterShiftOnly.missingScheduledMinutes, 480, 'Clocking entirely after the shift must cap missing scheduled time at the scheduled 480 minutes.');
+assert.deepEqual(
+  afterShiftOnly.missingSegments,
+  [{ kind: 'late_arrival', minutes: 480, fromTime: '09:00', toTime: '18:00' }],
+  'A clock-in after the scheduled shift must classify only the bounded scheduled interval as late arrival.',
+);
+
+const beforeShiftOnly = variance('08:00', '08:30', 0);
+assert.equal(beforeShiftOnly.workedMinutes, 30, 'A 30-minute clock interval before the shift contains at most 30 worked minutes.');
+assert.equal(beforeShiftOnly.overtimeMinutes, 30, 'Early-start overtime must be bounded by the actual clock interval.');
+assert.equal(beforeShiftOnly.missingScheduledMinutes, 480, 'Clocking entirely before the shift must cap missing scheduled time at the scheduled 480 minutes.');
+assert.deepEqual(
+  beforeShiftOnly.missingSegments,
+  [{ kind: 'early_departure', minutes: 480, fromTime: '09:00', toTime: '18:00' }],
+  'A clock-out before the scheduled shift must classify only the bounded scheduled interval as early departure.',
+);
+
+const oversizedBreak = variance('09:00', '18:00', 600);
+assert.equal(oversizedBreak.workedMinutes, 0, 'Break minutes cannot create negative worked time.');
+assert.equal(oversizedBreak.extendedBreakMinutes, 480, 'Extended-break missing time must be capped at scheduled worked minutes.');
+assert.equal(oversizedBreak.missingScheduledMinutes, 480, 'Missing scheduled time must never exceed the scheduled worked minutes.');
+
 const classified = classifyAttendanceExceptions(splitAbsence, [
   { kind: 'late_arrival', treatment: 'paid', reason: 'Doctor appointment' },
   { kind: 'early_departure', treatment: 'no_work_no_pay', reason: 'Personal permission' },
@@ -125,4 +150,4 @@ assert.equal(
   'August 27 starts September payroll.',
 );
 
-console.log('Employee attendance acceptance passed: payroll navigation, schedule-derived overtime, exact partial-day compatibility, independent partial exceptions, classification and 27–26 membership.');
+console.log('Employee attendance acceptance passed: payroll navigation, schedule-derived overtime, bounded edge cases, exact partial-day compatibility, independent partial exceptions, classification and 27–26 membership.');
