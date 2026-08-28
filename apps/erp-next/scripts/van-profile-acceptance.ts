@@ -25,7 +25,16 @@ assert.deepEqual(clearedThird.technicianIds, [driver.id, helper.id], 'technician
 assert.throws(() => validateVanCrew({ ...legacyVan, regularHelperId: driver.id }, staff), /same employee/i, 'One person cannot occupy multiple regular crew positions.');
 assert.throws(() => validateVanCrew({ ...legacyVan, responsibleStaffId: third.id }, staff), /authorized to drive/i, 'Responsible driver must be explicitly authorized to drive Vans.');
 assert.equal(validateVanCrew({ id: 'VAN-5', name: 'Van 5', status: 'Fuera de servicio', active: true }, staff), true, 'A newly created out-of-service Van may be saved before crew is assigned.');
-assert.throws(() => validateVanCrew({ id: 'VAN-5', name: 'Van 5', status: 'Disponible', active: true }, staff), /requires a responsible technician/i, 'An available Van cannot create booking capacity without a driver.');
+assert.throws(
+  () => validateVanCrew({ id: 'VAN-1', name: 'Van 1', status: 'Disponible', active: true }, staff),
+  /requires a responsible technician/i,
+  'An available protected-fleet Van cannot create booking capacity without a driver.',
+);
+assert.throws(
+  () => validateVanCrew({ id: 'VAN-5', name: 'Van 5', status: 'Disponible', responsibleStaffId: driver.id, regularHelperId: helper.id, active: true }, staff),
+  /Booking Authority currently supports live capacity only for VAN-1 through VAN-4/i,
+  'A future Van may be fully configured but cannot become live scheduling capacity until Booking Authority is explicitly expanded.',
+);
 
 const ids: CanonicalVan[] = [
   { id: 'VAN-1', name: 'Van 1' }, { id: 'VAN-2', name: 'Van 2' }, { id: 'legacy-v3', name: 'Van 3' }, { id: 'VAN-4', name: 'Van 4' },
@@ -60,4 +69,4 @@ assert.equal(workedMinutes('08:00', '13:00'), 300, 'Van partial day 08:00–13:0
 assert.equal(workedMinutes('09:00', '13:00'), 240, 'Van partial day may use exact custom worked hours.');
 assert.throws(() => workedMinutes('13:00', '09:00'), /after start time/i, 'Invalid partial-day windows must be rejected.');
 
-console.log('Van profile acceptance passed: canonical crew ownership, optional third helper, cross-Van exclusivity, daily overrides, safe clearing, new-Van defaults and exact partial-day hours.');
+console.log('Van profile acceptance passed: canonical crew ownership, optional third helper, cross-Van exclusivity, daily overrides, safe clearing, protected future-Van activation, new-Van defaults and exact partial-day hours.');
