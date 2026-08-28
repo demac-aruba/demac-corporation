@@ -1,5 +1,4 @@
 import { deleteFirestoreDocument, getFirestoreDocument, listFirestoreCollection, saveFirestoreDocument, updateFirestoreDocument } from './firebase/firestore-rest';
-import { canonicalVanId } from './canonical-operations';
 import { validateDailyVanAssignment, validateVanCrew } from './van-profile';
 import type {
   CanonicalBusinessCalendar,
