@@ -161,6 +161,7 @@ function addMinutes(time: string, minutes: number) {
 export function employeeVan(profile: CanonicalStaffProfile, vans: CanonicalVan[]) {
   return vans.find((van) => van.responsibleStaffId === profile.id
     || van.regularHelperId === profile.id
+    || van.additionalHelperId === profile.id
     || van.technicianIds?.includes(profile.id)) ?? null;
 }
 
