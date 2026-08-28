@@ -28,6 +28,7 @@ const LEGACY_BROWSER_PRESETS = new Set<WorkPresetId>([
 ]);
 
 const CANONICAL_VAN_IDS = new Set(['VAN-1', 'VAN-2', 'VAN-3', 'VAN-4']);
+const ADHOC_SUPPORT_KIND = 'adhoc_rescue';
 
 type LiveWorkItem = {
   id?: string;
@@ -51,6 +52,7 @@ type LiveWorkOrder = {
   appointmentAssignmentRole?: string;
   appointmentEndTime?: string;
   parentWorkOrderId?: string;
+  supportAssignmentKind?: string;
   airConditionerCount?: number;
   assignmentRole?: string;
   supportForWorkOrderId?: string;
@@ -186,6 +188,13 @@ function workOrderSupportForId(order: LiveWorkOrder) {
 
 function workOrderQuantity(order: LiveWorkOrder) {
   return positiveInteger(order.airConditionerCount ?? order.quantity);
+}
+
+function contributesAppointmentWorkQuantity(order: LiveWorkOrder) {
+  // Planned support splits the customer's real workload and therefore contributes
+  // quantity. Ad-hoc rescue support is an extra resource assignment to the same work
+  // and must never fabricate another AC/service unit in appointment totals.
+  return text(order.supportAssignmentKind).toLowerCase() !== ADHOC_SUPPORT_KIND;
 }
 
 function timeToMinutes(value: string) {
@@ -414,7 +423,7 @@ export function projectLiveSchedulingAppointments(
     const assignments = sorted.map((order) => workOrderAssignment(order, customer, site, sector, vans, operationalState));
     const primaryAssignment = assignments.find((assignment) => assignment.isPrimaryAssignment) ?? assignments[0];
     const supportAssignment = assignments.find((assignment) => !assignment.isPrimaryAssignment);
-    const quantity = sorted.reduce((total, order) => total + workOrderQuantity(order), 0);
+    const quantity = sorted.reduce((total, order) => total + (contributesAppointmentWorkQuantity(order) ? workOrderQuantity(order) : 0), 0);
     const workTypeId = workOrderWorkTypeId(primary);
     const workLabel = workOrderWorkLabel(primary);
     const fallbackDescription = `${workLabel} × ${quantity}`;
