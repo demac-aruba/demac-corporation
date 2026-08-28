@@ -18,7 +18,7 @@ engineering index; it does not replace that registry.
 - `OPS-TEAM-*`: driver authorization, absence, availability, and no simultaneous assignment.
 - `OPS-ROUTE-*`: route anchors and calculated availability precede customer preference.
 - `OPS-STAFF-SCHEDULE-*`: employee schedule authority, employment-date boundaries, recurring
-  half-day ownership, effective schedule versions, and Sunday closure.
+  partial-day ownership, effective schedule versions, exact worked-hour windows, and Sunday closure.
 - `COMMS-*`: current-turn priority, answer-first behavior, natural language, contextual
   option selection, hidden internal van splitting, one confirmation, and no invention.
 
@@ -35,19 +35,22 @@ Ambiguity blocks automation and is escalated to an authorized human.
 - Monday through Saturday are normal operational days unless canonical closure or capacity
   configuration says otherwise.
 - Office/non-technical employees may use the company schedule or an effective individual
-  eight-work-hour schedule in `employeePayrollSettings`; the approved primary templates are
+  eight-work-hour full-day schedule in `employeePayrollSettings`; the approved primary templates are
   08:00–17:00 with a one-hour break and 09:00–18:00 with a one-hour break.
-- An office/non-technical employee's recurring half-day belongs to
-  `employeePayrollSettings` and resolves to 4 worked hours + 4 paid-free hours.
-- A technical field employee's recurring half-day belongs to the canonical Van/team through
-  `vanHalfDaySchedules` and resolves to 5 worked hours + 3 paid-free hours. An employee-level
-  payroll schedule must not override the Van/team rule.
+- An office/non-technical employee's recurring partial day belongs to
+  `employeePayrollSettings`. Its Start, End, and optional Break are stored as exact worked-time
+  values. Attendance and payroll count the resulting worked hours only; the system must not add a
+  synthetic paid-free block.
+- A technical field employee's recurring partial day belongs to the canonical Van/team through
+  `vanHalfDaySchedules`. The exact Van/team Start and End determine the worked hours. An
+  employee-level payroll schedule must not override the Van/team rule, and no synthetic paid-free
+  hours are added.
 - Effective employee schedule versions preserve historical schedule resolution instead of
   retroactively applying a later schedule change to earlier payroll/attendance dates.
 - `employmentStartedAt` and `employmentEndedAt` bound synthesized schedule/attendance/payroll
   days: dates before the start or after the end resolve to zero scheduled hours; boundary
   dates themselves are inclusive.
 - `staffAbsences` remains separate and represents dated vacation, sickness, or one-off
-  unavailability; it never becomes a recurring half-day rule.
+  unavailability; it never becomes a recurring partial-day rule.
 - `dailyVanAssignments` is a date-scoped temporary crew assignment/override and does not
   redefine recurring ownership.
