@@ -43,9 +43,10 @@ type PendingLiveMove = PendingDragMove & { jobId: string; candidate: CandidateSl
 
 function appointmentAssignments(record: BrowserAppointmentRecord): CalendarDispatchJob[] {
   if (record.status === 'cancelled') return [];
+  const status = record.status === 'temporary_hold' ? 'temporary_hold' : 'confirmed';
   return record.assignments
     .filter((assignment) => assignment.status !== 'cancelled')
-    .map((assignment) => ({ ...assignment, dateKey: record.dateKey, status: 'confirmed' }));
+    .map((assignment) => ({ ...assignment, dateKey: record.dateKey, status }));
 }
 
 function formatTime(value: string) {
@@ -301,6 +302,7 @@ export function LiveSchedulingOverview() {
   const activeJobs = jobs.filter((job) => job.dateKey === activeDate);
   const activeOccupancy = occupancyForDay(activeDay, jobs, vans, capacityState);
   const confirmed = appointments.filter((appointment) => appointment.dateKey === activeDate && appointment.status === 'confirmed').length;
+  const temporaryHolds = appointments.filter((appointment) => appointment.dateKey === activeDate && appointment.status === 'temporary_hold').length;
   const selectedAppointment = appointments.find((appointment) => appointment.id === selectedAppointmentId) ?? null;
   const activeConflictSlots = vans.reduce((total, van) => {
     const vanJobs = activeJobs.filter((job) => job.vanId === van.id);
@@ -355,7 +357,11 @@ export function LiveSchedulingOverview() {
   const handleCreatedBooking = (booking: LiveCreatedBooking) => {
     setBookingTarget(null);
     setSelectedAppointmentId('');
-    setMoveNotice(`Appointment ${booking.appointmentId} confirmed for ${booking.customer.name || booking.customer.company || 'customer'} · ${booking.option.assignments[0]?.vanName || booking.option.assignments[0]?.vanId || bookingTarget?.vanName || 'van'} · ${formatTime(booking.option.time)}.`);
+    const customer = booking.customer.name || booking.customer.company || 'customer';
+    const van = booking.option.assignments[0]?.vanName || booking.option.assignments[0]?.vanId || bookingTarget?.vanName || 'van';
+    setMoveNotice(booking.status === 'temporary_hold'
+      ? `Temporary hold ${booking.appointmentId} reserved for ${customer} · ${van} · ${formatTime(booking.option.time)}. Capacity is blocked; no customer confirmation or reminder was sent.`
+      : `Appointment ${booking.appointmentId} confirmed for ${customer} · ${van} · ${formatTime(booking.option.time)}.`);
     void refresh();
   };
 
@@ -380,6 +386,11 @@ export function LiveSchedulingOverview() {
     }
     const link = jobLinks.get(jobId);
     if (!link) return;
+    if (link.appointment.status === 'temporary_hold') {
+      setMoveNotice('Temporary holds own canonical capacity. Open the hold and use Reschedule so Booking Authority preserves the hold state and moves its locks atomically.');
+      setSelectedAppointmentId(link.appointmentId);
+      return;
+    }
     if (link.appointment.assignments.length !== 1) {
       setMoveNotice('This booking uses multiple vans. Use the appointment panel → Reschedule so Booking Authority can coordinate all linked capacity safely.');
       setSelectedAppointmentId(link.appointmentId);
@@ -508,7 +519,7 @@ export function LiveSchedulingOverview() {
         <div>
           <span className={styles.eyebrow}>Operations · Aruba · Live</span>
           <h1>Scheduling &amp; Dispatch</h1>
-          <p>Live Booking Authority schedule. Confirmed customer appointments and canonical operating capacity are read from Firestore; local demo scheduling is not mixed into this view.</p>
+          <p>Live Booking Authority schedule. Confirmed appointments, temporary holds and canonical operating capacity are read from Firestore; browser-only demo scheduling is not mixed into this view.</p>
         </div>
         <div className={styles.pageActions}>
           <button type="button" className={styles.secondary} onClick={() => void refreshNow()} disabled={loading || interactionActive}>
@@ -556,7 +567,7 @@ export function LiveSchedulingOverview() {
       <div className={styles.metrics}>
         <article><span>Confirmed</span><strong>{confirmed}</strong><small>{activeDay.shortDate}</small></article>
         <article><span>Data source</span><strong className={styles.metricGood}>LIVE</strong><small>Booking Authority + canonical capacity</small></article>
-        <article><span>Local holds</span><strong>0</strong><small>Demo/local holds are isolated</small></article>
+        <article><span>Temporary holds</span><strong style={{ color: 'var(--warning, #b45309)' }}>{temporaryHolds}</strong><small>Canonical capacity reserved · customer not confirmed</small></article>
         <article><span>Open spots</span><strong className={styles.metricGood}>{activeOccupancy.open}</strong><small>{activeOccupancy.occupied}/{activeOccupancy.total} operating spots occupied</small><i style={{ width: `${activeOccupancy.percent}%` }} /></article>
       </div>
 
@@ -564,7 +575,7 @@ export function LiveSchedulingOverview() {
         <header className={styles.boardHeader}>
           <div>
             <strong>Live Van Schedule</strong>
-            <span>{activeDay.weekday} {activeDay.shortDate} · click open spot = new appointment · single click booked = details · double click booked = move</span>
+            <span>{activeDay.weekday} {activeDay.shortDate} · click open spot = new appointment · single click occupied = details · double click confirmed = move</span>
             {moveNotice ? <span style={{ marginTop: 3, fontWeight: 700 }}>{moveNotice}</span> : null}
           </div>
           <b>{moveBusy ? 'SAVING MOVE…' : moveArmedJobId ? `${validDropTargets.size} VALID TARGETS` : `${activeOccupancy.open} OPEN SPOTS`}</b>
@@ -751,6 +762,7 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
   onOpen: () => void;
   onArm: () => void;
 }) {
+  const temporaryHold = appointment?.status === 'temporary_hold' || job.status === 'temporary_hold';
   const minHeight = span * 64 + Math.max(0, span - 1) * 6 + (crossesLunch ? 18 : 0);
   const openFromKeyboard = (event: React.KeyboardEvent<HTMLElement>) => {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -758,16 +770,20 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
       onOpen();
     }
   };
-  return <div className={styles.occupiedSlot} style={{ minHeight, outline: armed ? '2px solid var(--brand)' : outsideCapacity ? '1px solid var(--warning)' : undefined, background: armed ? 'var(--brand-soft)' : undefined }}>
+  return <div className={styles.occupiedSlot} style={{
+    minHeight,
+    outline: armed ? '2px solid var(--brand)' : temporaryHold ? '1px solid var(--warning, #f59e0b)' : outsideCapacity ? '1px solid var(--warning)' : undefined,
+    background: armed ? 'var(--brand-soft)' : temporaryHold ? 'color-mix(in srgb, var(--warning, #f59e0b) 12%, var(--surface))' : undefined,
+  }}>
     <div className={styles.slotTime}><strong>{formatTime(job.start)}</strong><span>{formatTime(job.end)}</span>{span > 1 ? <span>{span} spots</span> : null}</div>
     <div className={styles.slotJobs}>
       <article
         className={styles.jobCard}
         role="button"
         tabIndex={0}
-        draggable={armed}
+        draggable={armed && !temporaryHold}
         onDragStart={(event) => {
-          if (!armed) {
+          if (!armed || temporaryHold) {
             event.preventDefault();
             return;
           }
@@ -775,19 +791,24 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
           event.dataTransfer.setData('text/plain', job.id);
         }}
         onClick={(event) => { if (event.detail === 1) onOpen(); }}
-        onDoubleClick={(event) => { event.preventDefault(); event.stopPropagation(); onArm(); }}
+        onDoubleClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (temporaryHold) onOpen(); else onArm();
+        }}
         onKeyDown={openFromKeyboard}
         style={{ minHeight: '100%', alignItems: 'center', cursor: armed ? 'grab' : 'pointer' }}
       >
         <div>
-          <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={armed ? styles.ready : slotClass(job.readiness)}>{armed ? 'MOVE ARMED' : readinessLabel(job.readiness)}</b></div>
+          <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={armed ? styles.ready : temporaryHold ? styles.risk : slotClass(job.readiness)}>{armed ? 'MOVE ARMED' : temporaryHold ? 'TEMP HOLD' : readinessLabel(job.readiness)}</b></div>
           {continuation ? <span>Reserved continuously until {formatTime(job.end)}</span> : <span>{appointmentWorkLabel(appointment, job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span>}
           <small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small>
           {!continuation && span > 1 ? <small>Reserved continuously · {formatTime(job.start)}–{formatTime(job.end)}</small> : null}
+          {temporaryHold ? <small style={{ color: 'var(--warning, #b45309)', fontWeight: 800 }}>Capacity reserved · customer not confirmed · no reminder/confirmation sent</small> : null}
           {crossesLunch ? <small>Lunch/reset remains protected</small> : null}
           {outsideCapacity ? <small style={{ color: 'var(--warning)', fontWeight: 800 }}>Outside canonical operating capacity · review schedule</small> : null}
           {bookingBadge(appointment?.bookedByName)}
-          <small>{armed ? 'Drag this block to a highlighted valid destination' : 'Single click details · double click to move'}</small>
+          <small>{temporaryHold ? 'Open details to confirm, reschedule or cancel this hold' : armed ? 'Drag this block to a highlighted valid destination' : 'Single click details · double click to move'}</small>
         </div>
       </article>
     </div>
