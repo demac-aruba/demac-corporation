@@ -19,7 +19,7 @@ export function EmployeeCalendarProductReviewUx() {
       const periodSelector = [...document.querySelectorAll<HTMLElement>('header div')]
         .find((element) => element.textContent?.includes('Payroll Period') && element.querySelectorAll('button').length === 2);
       const periodText = periodSelector?.querySelector('strong')?.textContent?.trim();
-      if (periodSelector) periodSelector.hidden = true;
+      if (periodSelector) periodSelector.style.display = 'none';
       if (!periodText) return;
 
       const existingHeading = document.querySelector<HTMLHeadingElement>('h2[data-payroll-period-heading="true"]');
@@ -47,7 +47,7 @@ export function EmployeeCalendarProductReviewUx() {
       const payrollBadge = toolbar
         ? [...toolbar.querySelectorAll<HTMLElement>('span')].find((element) => element.textContent?.trim() === 'Payroll⌄')
         : undefined;
-      if (payrollBadge) payrollBadge.hidden = true;
+      if (payrollBadge) payrollBadge.style.display = 'none';
     };
 
     const onPointerDown = (event: PointerEvent) => {
