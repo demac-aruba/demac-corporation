@@ -23,31 +23,22 @@ export type {
 
 export type AttendanceStatus = 'Present' | 'Late' | 'Sick' | 'Vacation' | 'Day Off' | 'Absent';
 export type SalaryAdvanceMethod = 'Cash' | 'Bank Transfer';
+export type HalfDayOffPeriod = 'morning' | 'afternoon';
 
 export type EmployeePayrollSettings = {
   id: string;
   sourceStaffId?: string;
-  name: string;
+  name?: string;
   role?: string;
-  employeeType?: CanonicalStaffProfile['employeeType'];
-  active: boolean;
-  weekdayHours: number;
-  saturdayHours: number;
+  employeeType?: string;
+  active?: boolean;
+  weekdayHours?: number;
+  saturdayHours?: number;
   weeklyHalfDayWeekday?: number | null;
-  halfDayEffectiveFrom?: string;
+  halfDayEffectiveFrom?: string | null;
   halfDayWorkedHours?: number;
   halfDayPaidFreeHours?: number;
-  halfDayOffPeriod?: 'morning' | 'afternoon';
-  scheduleMode?: 'company' | 'custom';
-  scheduleTemplateId?: string;
-  weeklySchedule?: Record<string, unknown>;
-  scheduleEffectiveFrom?: string;
-  scheduleEffectiveUntil?: string | null;
-  scheduleVersions?: unknown[];
-  halfDayUsesExactHours?: boolean;
-  halfDayStartTime?: string | null;
-  halfDayEndTime?: string | null;
-  halfDayBreakMinutes?: number;
+  halfDayOffPeriod?: HalfDayOffPeriod;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -64,10 +55,10 @@ export type EmployeeTimesheetEntry = {
   overtimeHours: number;
   overtimeMinutes?: number;
   aoHours: number;
-  vacationHours: number;
+  vacationHours?: number;
   noWorkNoPayHours: number;
   status: string;
-  notes: string;
+  notes?: string;
   attendanceStatus?: AttendanceStatus;
   clockInTime?: string;
   clockOutTime?: string;
@@ -125,7 +116,7 @@ export type AttendanceSchedule = {
 export type EmployeeAttendanceState = {
   payrollSettings: EmployeePayrollSettings[];
   timesheets: EmployeeTimesheetEntry[];
-  advances: EmployeeSalaryAdvance[];
+  advances?: EmployeeSalaryAdvance[];
 };
 
 export type PayrollPeriodBounds = {
@@ -137,43 +128,47 @@ export type PayrollPeriodBounds = {
 export const ATTENDANCE_STATUS_LABELS: Record<AttendanceStatus, string> = {
   Present: 'Present',
   Late: 'Late',
-  Sick: 'AO / Sick',
+  Sick: 'Sick / AO',
   Vacation: 'Vacation',
   'Day Off': 'Day Off',
-  Absent: 'No Work No Pay',
+  Absent: 'Absent / No Work No Pay',
 };
 
+function roundHours(minutes: number) {
+  return Math.round((Math.max(0, minutes) / 60) * 100) / 100;
+}
+
+function roundNumberHours(hours: number) {
+  return Math.round(Math.max(0, Number(hours) || 0) * 100) / 100;
+}
+
+function isSalaryAdvance(record: EmployeePayrollSettings | EmployeeSalaryAdvance): record is EmployeeSalaryAdvance {
+  return 'recordType' in record && record.recordType === 'salaryAdvance';
+}
+
+function normalizedEmployeeName(value: unknown) {
+  return String(value ?? '').trim().toLocaleLowerCase('es').replace(/\s+/g, ' ');
+}
+
 export function dateKey(date: Date) {
-  return date.toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
-function addDays(value: string, amount: number) {
-  const date = new Date(`${value}T12:00:00Z`);
-  date.setUTCDate(date.getUTCDate() + amount);
-  return dateKey(date);
+export function payrollPeriodForDate(date: string) {
+  const reference = new Date(`${date}T12:00:00Z`);
+  const year = reference.getUTCFullYear();
+  const month = reference.getUTCMonth();
+  const endMonth = reference.getUTCDate() <= 26 ? month : month + 1;
+  const end = new Date(Date.UTC(year, endMonth, 26, 12));
+  const start = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() - 1, 27, 12));
+  return `${start.toISOString().slice(0, 10)}_${end.toISOString().slice(0, 10)}`;
 }
 
-function monthLastDay(year: number, monthOneBased: number) {
-  return new Date(Date.UTC(year, monthOneBased, 0, 12, 0, 0));
-}
-
-export function payrollPeriodForDate(value: string) {
-  const date = new Date(`${value}T12:00:00Z`);
-  const year = date.getUTCFullYear();
-  const month = date.getUTCMonth();
-  const day = date.getUTCDate();
-  if (day >= 27) {
-    const end = new Date(Date.UTC(year, month + 1, 26, 12, 0, 0));
-    const start = new Date(Date.UTC(year, month, 27, 12, 0, 0));
-    return `${dateKey(start)}_${dateKey(end)}`;
-  }
-  const end = new Date(Date.UTC(year, month, 26, 12, 0, 0));
-  const start = new Date(Date.UTC(year, month - 1, 27, 12, 0, 0));
-  return `${dateKey(start)}_${dateKey(end)}`;
-}
-
-export function payrollPeriodBounds(value: string): PayrollPeriodBounds {
-  const id = payrollPeriodForDate(value);
+export function payrollPeriodBounds(date: string): PayrollPeriodBounds {
+  const id = payrollPeriodForDate(date);
   const [start, end] = id.split('_');
   return { id, start, end };
 }
@@ -191,39 +186,67 @@ export function overtimeMinutesAfterFive(clockOutTime: string) {
 
 export function defaultAttendanceSchedule(date: string): AttendanceSchedule {
   const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
-  if (weekday === 0) return { startTime: '', endTime: '', scheduledMinutes: 0, paidFreeMinutes: 0, label: 'Company closed · Sunday' };
-  return { startTime: '08:00', endTime: '17:00', scheduledMinutes: 480, paidFreeMinutes: 0, label: weekday === 6 ? 'Saturday · 8h' : 'Company schedule · 8h' };
+  if (weekday === 0) return { startTime: '', endTime: '', scheduledMinutes: 0, paidFreeMinutes: 0, label: 'Company closed' };
+  return {
+    startTime: '08:00',
+    endTime: '17:00',
+    scheduledMinutes: 480,
+    paidFreeMinutes: 0,
+    label: `${weekday === 6 ? 'Saturday' : 'Weekday'} · 08:00–17:00 · lunch 12:00–13:00`,
+  };
 }
 
-function isSalaryAdvance(record: EmployeePayrollSettings | EmployeeSalaryAdvance): record is EmployeeSalaryAdvance {
-  return (record as EmployeeSalaryAdvance).recordType === 'salaryAdvance';
+export function applyHalfDaySchedule(
+  schedule: AttendanceSchedule,
+  date: string,
+  weekday: number | null | undefined,
+  workedHours: number | undefined,
+  _paidFreeHours: number | undefined,
+  effectiveFrom?: string | null,
+  offPeriod: HalfDayOffPeriod = 'afternoon',
+) {
+  const dateWeekday = new Date(`${date}T12:00:00Z`).getUTCDay();
+  if (weekday == null || weekday !== dateWeekday || (effectiveFrom && date < effectiveFrom)) return schedule;
+  const workedMinutesValue = Math.max(0, Math.round(Number(workedHours ?? 0) * 60));
+  if (!workedMinutesValue) return schedule;
+
+  const normalStart = schedule.startTime ? Number(schedule.startTime.slice(0, 2)) * 60 + Number(schedule.startTime.slice(3, 5)) : 8 * 60;
+  const normalEnd = schedule.endTime ? Number(schedule.endTime.slice(0, 2)) * 60 + Number(schedule.endTime.slice(3, 5)) : 17 * 60;
+  const workStart = offPeriod === 'morning' ? Math.max(normalStart, normalEnd - workedMinutesValue) : normalStart;
+  const workEnd = offPeriod === 'morning' ? normalEnd : Math.min(normalEnd, normalStart + workedMinutesValue);
+  const time = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+  const placementLabel = offPeriod === 'morning' ? 'work last part of day' : 'work first part of day';
+
+  return {
+    ...schedule,
+    startTime: time(workStart),
+    endTime: time(workEnd),
+    scheduledMinutes: workedMinutesValue,
+    paidFreeMinutes: 0,
+    label: `Weekly partial day · ${placementLabel} · ${time(workStart)}–${time(workEnd)} · ${roundHours(workedMinutesValue)} worked`,
+  };
 }
 
-function normalizedEmployeeName(name?: string) {
-  return (name ?? '').trim().toLocaleLowerCase('en').replace(/\s+/g, ' ');
+export function absenceForDate(absences: CanonicalStaffAbsence[], staffId: string, date: string) {
+  return absences.find((absence) => absence.active !== false
+    && absence.staffId === staffId
+    && (!absence.fromDate || absence.fromDate <= date)
+    && (!absence.toDate || absence.toDate >= date));
 }
 
-function roundNumberHours(value: number) {
-  return Math.round(Math.max(0, Number(value) || 0) * 100) / 100;
+export function timesheetForDate(entries: EmployeeTimesheetEntry[], staffId: string, date: string) {
+  return entries.find((entry) => entry.employeeId === staffId && entry.date === date);
 }
 
-function roundHours(minutes: number) {
-  return Math.round((Math.max(0, minutes) / 60) * 100) / 100;
-}
-
-export function absenceForDate(absences: CanonicalStaffAbsence[], employeeId: string, date: string) {
-  return absences.find((absence) => absence.active !== false && absence.staffId === employeeId && date >= (absence.fromDate ?? '') && date <= (absence.toDate ?? absence.fromDate ?? ''));
-}
-
-export function timesheetForDate(entries: EmployeeTimesheetEntry[], employeeId: string, date: string) {
-  return entries.find((entry) => entry.employeeId === employeeId && entry.date === date);
-}
-
-export function statusFromRecords(entry: EmployeeTimesheetEntry | undefined, absence: CanonicalStaffAbsence | undefined, scheduledMinutes: number): AttendanceStatus | null {
+export function statusFromRecords(
+  entry: EmployeeTimesheetEntry | undefined,
+  absence: CanonicalStaffAbsence | undefined,
+  scheduledMinutes: number,
+): AttendanceStatus | null {
   if (entry?.attendanceStatus) return entry.attendanceStatus;
   const reason = (absence?.reason ?? '').toLowerCase();
-  if (reason.includes('vac')) return 'Vacation';
-  if (reason.includes('enferm') || reason.includes('sick') || reason.includes('ao')) return 'Sick';
+  if (reason.includes('enferm')) return 'Sick';
+  if (reason.includes('vacacion')) return 'Vacation';
   if (reason.includes('libre')) return 'Day Off';
   if (absence) return 'Absent';
   if ((entry?.aoHours ?? 0) > 0) return 'Sick';
@@ -392,7 +415,7 @@ export async function saveAttendanceDay(input: {
   const noWorkNoPayMinutesValue = workedStatus
     ? partialTotals.noWorkNoPayMinutes
     : Math.round(fullDayNoWorkNoPayHours * 60);
-  const overtimeMinutesValue = workedStatus ? variance.overtimeMinutes : 0;
+  const overtimeMinutesValue = variance.overtimeMinutes;
   const workedMinutesValue = workedMinutes(draft.clockInTime, draft.clockOutTime, draft.breakMinutes);
 
   const entry: EmployeeTimesheetEntry = {
@@ -466,21 +489,4 @@ export async function saveAttendanceDay(input: {
   }
 
   return entry;
-}
-
-function shiftMonth(value: string, offset: number) {
-  const date = new Date(`${value}-01T12:00:00Z`);
-  date.setUTCMonth(date.getUTCMonth() + offset);
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
-}
-
-export function shiftDateMonth(value: string, offset: number) {
-  const month = shiftMonth(value.slice(0, 7), offset);
-  const day = Math.min(Number(value.slice(8, 10)), monthLastDay(Number(month.slice(0, 4)), Number(month.slice(5, 7))).getUTCDate());
-  return `${month}-${String(day).padStart(2, '0')}`;
-}
-
-export function defaultPeriodEnd(value: string) {
-  const bounds = payrollPeriodBounds(value);
-  return addDays(bounds.start, 30);
 }
