@@ -5,6 +5,7 @@ import {
   type CanonicalVanHalfDaySchedule,
 } from './canonical-operations';
 import { applyHalfDaySchedule, defaultAttendanceSchedule, type AttendanceSchedule, type EmployeePayrollSettings } from './employee-attendance';
+import { customScheduleActive, employeeScheduleConfig, type EmployeeScheduleConfig } from './employee-schedule-settings';
 
 type EmploymentDatedStaffProfile = CanonicalStaffProfile & {
   employmentStartedAt?: string;
@@ -36,6 +37,18 @@ function outsideEmploymentSchedule(profile: CanonicalStaffProfile, date: string)
   return { startTime: '', endTime: '', scheduledMinutes: 0, paidFreeMinutes: 0, label };
 }
 
+function customBaseSchedule(config: EmployeeScheduleConfig): AttendanceSchedule {
+  const grossMinutes = minutesFromTimes(config.workdayStart, config.workdayEnd) ?? 0;
+  const scheduledMinutes = Math.max(0, grossMinutes - config.breakMinutes);
+  return {
+    startTime: config.workdayStart,
+    endTime: config.workdayEnd,
+    scheduledMinutes,
+    paidFreeMinutes: 0,
+    label: `Custom employee shift · ${config.workdayStart}–${config.workdayEnd} · ${config.breakMinutes} min break`,
+  };
+}
+
 export function isTechnicalEmployee(profile: CanonicalStaffProfile) {
   return profile.employeeType === 'Técnico'
     || ['Técnico responsable', 'Técnico', 'Ayudante', 'Supervisor'].includes(profile.role ?? '');
@@ -57,18 +70,39 @@ export function resolveEmployeeSchedule(input: {
   const { profile, date, payrollSettings, vans, halfDaySchedules } = input;
   if (!isEmployeeEmployedOnDate(profile, date)) return outsideEmploymentSchedule(profile, date);
 
-  const schedule = defaultAttendanceSchedule(date);
+  const companySchedule = defaultAttendanceSchedule(date);
+  // Sunday is a company-wide closure and cannot be overridden by an employee or Van schedule.
+  if (!companySchedule.scheduledMinutes) return companySchedule;
+
   const technical = isTechnicalEmployee(profile);
+  const employeeConfig = employeeScheduleConfig(payrollSettings, technical);
+
+  // An explicit employee custom schedule is the highest schedule authority after the
+  // employment lifecycle and company Sunday closure. This gives both office and field
+  // employees the same controlled profile-level scheduling capability.
+  if (customScheduleActive(employeeConfig, date)) {
+    const base = customBaseSchedule(employeeConfig);
+    return applyHalfDaySchedule(
+      base,
+      date,
+      employeeConfig.halfDayWeekday,
+      employeeConfig.halfDayWorkedHours,
+      employeeConfig.halfDayPaidFreeHours,
+      employeeConfig.effectiveFrom,
+      employeeConfig.halfDayOffPeriod,
+    );
+  }
+
   const van = employeeVan(profile, vans);
   const vanId = van ? canonicalVanId(van.id, vans) : '';
   const vanHalfDay = halfDaySchedules.find((rule) => vanId && canonicalVanId(rule.vanId, vans) === vanId);
 
-  // Field technicians inherit the recurring half-day from their canonical Van/team.
-  // Employee payroll settings never override the operational Van half-day policy.
+  // Technicians without an explicit employee override keep inheriting the recurring
+  // partial day from their canonical Van/team. This remains the operational fallback.
   if (technical && vanHalfDay?.weekday !== undefined) {
-    const ruleMinutes = minutesFromTimes(vanHalfDay.workdayStart ?? schedule.startTime, vanHalfDay.workdayEnd);
+    const ruleMinutes = minutesFromTimes(vanHalfDay.workdayStart ?? companySchedule.startTime, vanHalfDay.workdayEnd);
     return applyHalfDaySchedule(
-      schedule,
+      companySchedule,
       date,
       vanHalfDay.weekday,
       ruleMinutes ? ruleMinutes / 60 : 5,
@@ -78,20 +112,5 @@ export function resolveEmployeeSchedule(input: {
     );
   }
 
-  // Office/non-technical staff use the existing employeePayrollSettings record as the
-  // single employee-specific recurring half-day source. Legacy records without a period
-  // keep their historical behavior: work the morning and take the afternoon off.
-  if (!technical && payrollSettings?.weeklyHalfDayWeekday != null) {
-    return applyHalfDaySchedule(
-      schedule,
-      date,
-      payrollSettings.weeklyHalfDayWeekday,
-      payrollSettings.halfDayWorkedHours ?? 4,
-      payrollSettings.halfDayPaidFreeHours ?? 4,
-      payrollSettings.halfDayEffectiveFrom,
-      payrollSettings.halfDayOffPeriod ?? 'afternoon',
-    );
-  }
-
-  return schedule;
+  return companySchedule;
 }
