@@ -20,7 +20,7 @@ assert.equal(saved.notes, 'Preserve me', 'Unrelated existing Van profile fields 
 assert.equal(saved.additionalHelperId, third.id, 'Optional third helper must persist on the canonical Van record.');
 
 assert.throws(() => validateVanCrew({ ...legacyVan, regularHelperId: driver.id }, staff), /same employee/i, 'One person cannot occupy multiple regular crew positions.');
-assert.throws(() => validateVanCrew({ ...legacyVan, responsibleStaffId: helper.id }, staff), /authorized to drive/i, 'Responsible driver must be explicitly authorized to drive Vans.');
+assert.throws(() => validateVanCrew({ ...legacyVan, responsibleStaffId: third.id }, staff), /authorized to drive/i, 'Responsible driver must be explicitly authorized to drive Vans.');
 assert.equal(validateVanCrew({ id: 'VAN-5', name: 'Van 5', status: 'Fuera de servicio', active: true }, staff), true, 'A newly created out-of-service Van may be saved before crew is assigned.');
 assert.throws(() => validateVanCrew({ id: 'VAN-5', name: 'Van 5', status: 'Disponible', active: true }, staff), /requires a responsible technician/i, 'An available Van cannot create booking capacity without a driver.');
 
@@ -34,7 +34,7 @@ const override: CanonicalDailyVanAssignment = {
 };
 assert.equal(validateDailyVanAssignment(override, staff), true, 'Daily override must support a driver, helper and additional helper without changing the regular crew.');
 assert.throws(() => validateDailyVanAssignment({ ...override, additionalHelperStaffId: helper.id }, staff), /same employee/i, 'Daily override cannot duplicate the same person across crew slots.');
-assert.throws(() => validateDailyVanAssignment({ ...override, driverStaffId: helper.id }, staff), /authorized to drive/i, 'Temporary driver must also be authorized to drive Vans.');
+assert.throws(() => validateDailyVanAssignment({ ...override, driverStaffId: third.id, additionalHelperStaffId: undefined }, staff), /authorized to drive/i, 'Temporary driver must also be authorized to drive Vans.');
 
 assert.equal(workedMinutes('08:00', '13:00'), 300, 'Van partial day 08:00–13:00 must resolve to exactly five worked hours.');
 assert.equal(workedMinutes('09:00', '13:00'), 240, 'Van partial day may use exact custom worked hours.');
