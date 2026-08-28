@@ -8,13 +8,15 @@ const {
 } = require("./bookingAuthorityCore");
 const {
   BOOKING_COLLECTIONS,
+  BOOKING_CREATE_MODES,
   assertCustomerPropertyRelationship,
   compactObject,
+  notificationRecipientsFrom,
   validateCapacityLocks,
   validateWorkOrders,
 } = require("./bookingAuthorityFirestore");
 
-const APPOINTMENT_LIFECYCLE_VERSION = 6;
+const APPOINTMENT_LIFECYCLE_VERSION = 7;
 const RESCHEDULE_CHANGE_KINDS = new Set(["customer_reschedule", "operational_move", "details_edited"]);
 
 function defaultServerTimestamp() {
@@ -68,6 +70,10 @@ function activeAppointment(snapshot, appointmentId) {
     );
   }
   return { id: snapshot.id, ...snapshot.data() };
+}
+
+function isTemporaryHoldAppointment(appointment) {
+  return cleanText(appointment?.status, 40).toLowerCase() === BOOKING_CREATE_MODES.TEMPORARY_HOLD;
 }
 
 function scheduleSnapshot(appointment = {}) {
@@ -133,6 +139,41 @@ function assertDetailsEditKeepsPlacement(current, refreshedOption) {
       { reason: "details-edit-placement-changed" },
     );
   }
+}
+
+function holdRequestFromAppointment(appointment) {
+  return normalizeBookingRequest({
+    customerId: appointment.customerId,
+    propertyId: appointment.propertyId,
+    workLines: appointment.workLines,
+    constraints: appointment.constraints,
+    notes: appointment.notes,
+  });
+}
+
+function holdOptionFromAppointment(appointment) {
+  return normalizeOfferOption({
+    id: cleanText(appointment.selectedOptionId, 180) || `hold-${cleanText(appointment.id || appointment.appointmentId, 120)}`,
+    date: appointment.date,
+    time: appointment.startTime,
+    endTime: appointment.endTime,
+    workItems: appointment.workItems,
+    assignments: appointment.assignments,
+    requestedDateMatch: true,
+    requestedTimeMatch: true,
+  });
+}
+
+function recipientNotificationsEnabled(recipients) {
+  return recipients.some((recipient) =>
+    (recipient?.sendConfirmation === true || recipient?.sendReminder === true)
+    && cleanText(recipient?.whatsapp || recipient?.phone, 80));
+}
+
+function sameLockIds(left, right) {
+  const leftSet = new Set((left || []).map((item) => cleanText(item, 180)).filter(Boolean));
+  const rightSet = new Set((right || []).map((item) => cleanText(item, 180)).filter(Boolean));
+  return leftSet.size === rightSet.size && [...leftSet].every((item) => rightSet.has(item));
 }
 
 function createBookingAppointmentLifecycle({
@@ -207,6 +248,155 @@ function createBookingAppointmentLifecycle({
       }
 
       return { success: true, replayed: false, appointmentId: id, appointment: { ...appointment, ...patch } };
+    });
+  }
+
+  async function confirmTemporaryHold({ appointmentId, actor = {}, context = {} } = {}) {
+    const id = cleanText(appointmentId, 180);
+    if (!id) {
+      throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "appointmentId is required.", { field: "appointmentId" });
+    }
+    const now = asDate(clock());
+    const appointmentRef = db.collection(collections.appointments).doc(id);
+
+    return db.runTransaction(async (transaction) => {
+      const appointmentSnapshot = await transaction.get(appointmentRef);
+      const current = activeAppointment(appointmentSnapshot, id);
+      const currentStatus = cleanText(current.status, 40).toLowerCase();
+      if (currentStatus === BOOKING_CREATE_MODES.CONFIRMED) {
+        return { success: true, replayed: true, appointmentId: id, appointment: current };
+      }
+      if (!isTemporaryHoldAppointment(current)) {
+        throw new BookingAuthorityError(
+          BOOKING_ERROR_CODES.INVALID_REQUEST,
+          "Only a temporary hold can be confirmed through this transition.",
+          { appointmentId: id, status: current.status || "" },
+        );
+      }
+
+      const request = holdRequestFromAppointment(current);
+      const option = holdOptionFromAppointment(current);
+      const validation = await schedulingProvider.validateTransaction({
+        transaction,
+        db,
+        request,
+        offer: null,
+        option,
+        appointmentId: id,
+        context: { ...context, excludeAppointmentId: id, changeKind: "hold_confirmed" },
+        now,
+      });
+      if (!validation || validation.available !== true) {
+        throw new BookingAuthorityError(
+          BOOKING_ERROR_CODES.SLOT_CONFLICT,
+          "The temporary hold no longer maps to valid appointment capacity.",
+          { reason: cleanText(validation?.reason, 240) },
+        );
+      }
+      const expectedLocks = validateCapacityLocks(validation.capacityLocks);
+      const expectedLockIds = expectedLocks.map((lock) => lock.id);
+      const currentLockIds = Array.isArray(current.capacityLockIds) ? current.capacityLockIds : [];
+      if (!sameLockIds(currentLockIds, expectedLockIds)) {
+        throw new BookingAuthorityError(
+          BOOKING_ERROR_CODES.AVAILABILITY_CHANGED,
+          "The temporary hold capacity changed before confirmation.",
+          { reason: "temporary-hold-lock-set-changed" },
+        );
+      }
+
+      for (const lockId of currentLockIds) {
+        const lockSnapshot = await transaction.get(db.collection(collections.capacityLocks).doc(lockId));
+        const lock = lockSnapshot.exists ? lockSnapshot.data() || {} : null;
+        if (!lock || lock.active === false || cleanText(lock.appointmentId, 180) !== id) {
+          throw new BookingAuthorityError(
+            BOOKING_ERROR_CODES.SLOT_CONFLICT,
+            "The temporary hold no longer owns all reserved capacity.",
+            { lockId, reason: "temporary-hold-lock-not-owned" },
+          );
+        }
+      }
+
+      const workOrderIds = Array.isArray(current.workOrderIds) ? current.workOrderIds.map((item) => cleanText(item, 180)).filter(Boolean) : [];
+      if (!workOrderIds.length) {
+        throw new BookingAuthorityError(
+          BOOKING_ERROR_CODES.AVAILABILITY_PROVIDER_ERROR,
+          "The temporary hold has no canonical Work Orders.",
+          { appointmentId: id },
+        );
+      }
+      const workOrderSnapshots = await Promise.all(workOrderIds.map(async (workOrderId) => ({
+        workOrderId,
+        ref: db.collection(collections.workOrders).doc(workOrderId),
+        snapshot: await transaction.get(db.collection(collections.workOrders).doc(workOrderId)),
+      })));
+      if (workOrderSnapshots.some((entry) => !entry.snapshot.exists)) {
+        throw new BookingAuthorityError(
+          BOOKING_ERROR_CODES.AVAILABILITY_PROVIDER_ERROR,
+          "The temporary hold is missing one or more canonical Work Orders.",
+          { appointmentId: id },
+        );
+      }
+
+      const recipients = notificationRecipientsFrom(current.notificationRecipients);
+      const whatsappEnabled = recipientNotificationsEnabled(recipients);
+      for (const entry of workOrderSnapshots) {
+        const workOrder = entry.snapshot.data() || {};
+        const isSupport = cleanText(workOrder.appointmentAssignmentRole || workOrder.assignmentRole, 40).toLowerCase() === "support";
+        transaction.set(entry.ref, compactObject({
+          status: "Confirmada",
+          notificationRecipients: isSupport ? [] : recipients,
+          whatsappNotificationsEnabled: isSupport ? false : whatsappEnabled,
+          confirmedAt: now.toISOString(),
+          holdConfirmedAt: now.toISOString(),
+          updatedAt: now.toISOString(),
+        }), { merge: true });
+      }
+
+      const actorInfo = actorFields(actor);
+      const event = historyEvent({
+        kind: "hold_confirmed",
+        actor,
+        reason: "Temporary hold confirmed",
+        now,
+        from: scheduleSnapshot(current),
+        to: scheduleSnapshot(current),
+        customerNotificationRecommended: true,
+      });
+      const lifecycleHistory = [...(Array.isArray(current.lifecycleHistory) ? current.lifecycleHistory : []), event];
+      const patch = compactObject({
+        status: BOOKING_CREATE_MODES.CONFIRMED,
+        confirmedAtIso: now.toISOString(),
+        holdConfirmedAtIso: now.toISOString(),
+        updatedAtIso: now.toISOString(),
+        lifecycleHistory,
+        lastLifecycleActorId: actorInfo.actorId,
+        lastLifecycleActorName: actorInfo.actorName,
+        lastLifecycleSource: actorInfo.source,
+        updatedAt: serverTimestamp(),
+      });
+      transaction.set(appointmentRef, patch, { merge: true });
+
+      const offerId = cleanText(current.offerId, 180);
+      if (offerId) {
+        transaction.set(db.collection(collections.offers).doc(offerId), compactObject({
+          status: "booked",
+          appointmentId: id,
+          workOrderIds,
+          bookedAtIso: now.toISOString(),
+          updatedAtIso: now.toISOString(),
+          bookedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        }), { merge: true });
+      }
+
+      return {
+        success: true,
+        replayed: false,
+        appointmentId: id,
+        appointment: { ...current, ...patch },
+        workOrderIds,
+        customerNotificationRecommended: true,
+      };
     });
   }
 
@@ -286,6 +476,8 @@ function createBookingAppointmentLifecycle({
       if (["cancelled", "canceled", "cancelada"].includes(cleanText(current.status, 40).toLowerCase())) {
         throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "A cancelled appointment cannot be changed.", { appointmentId: id });
       }
+      const currentTemporaryHold = isTemporaryHoldAppointment(current);
+      const appointmentState = currentTemporaryHold ? BOOKING_CREATE_MODES.TEMPORARY_HOLD : BOOKING_CREATE_MODES.CONFIRMED;
       const currentOffer = currentOfferSnapshot.exists ? { id: currentOfferSnapshot.id, ...currentOfferSnapshot.data() } : null;
       validateOfferSelection({ offer: currentOffer, offerVersion, optionId, now });
       const currentRequest = normalizeBookingRequest(currentOffer.request);
@@ -373,13 +565,19 @@ function createBookingAppointmentLifecycle({
       }
 
       const workOrders = validateWorkOrders(await schedulingProvider.buildWorkOrders({
-        appointment: { ...current, appointmentId: id, id },
+        appointment: { ...current, appointmentId: id, id, status: appointmentState },
         option: refreshedOption,
         request: currentRequest,
         customer,
         property,
         actor,
-        context: { ...context, reschedule: normalizedChangeKind !== "details_edited", detailsEdit: normalizedChangeKind === "details_edited", changeKind: normalizedChangeKind },
+        context: {
+          ...context,
+          reschedule: normalizedChangeKind !== "details_edited",
+          detailsEdit: normalizedChangeKind === "details_edited",
+          changeKind: normalizedChangeKind,
+          appointmentState,
+        },
         now,
       }), id);
       const workOrderIds = workOrders.map((item) => item.id);
@@ -396,7 +594,9 @@ function createBookingAppointmentLifecycle({
         supportVanId: cleanText(refreshedOption.assignments?.[1]?.vanId, 120),
         supportStart: cleanText(refreshedOption.assignments?.[1]?.time, 20),
       };
-      const customerNotificationRecommended = scheduleChangeNeedsCustomerFollowUp(normalizedChangeKind, previousSchedule, nextSchedule);
+      const customerNotificationRecommended = currentTemporaryHold
+        ? false
+        : scheduleChangeNeedsCustomerFollowUp(normalizedChangeKind, previousSchedule, nextSchedule);
       const event = historyEvent({
         kind: normalizedChangeKind,
         actor,
@@ -421,7 +621,7 @@ function createBookingAppointmentLifecycle({
         };
 
       transaction.set(appointmentRef, compactObject({
-        status: "confirmed",
+        status: appointmentState,
         offerId: canonicalOfferId,
         offerVersion: Number(offerVersion),
         selectedOptionId: cleanText(optionId, 180),
@@ -454,7 +654,7 @@ function createBookingAppointmentLifecycle({
       for (const workOrder of workOrders) {
         transaction.set(db.collection(collections.workOrders).doc(workOrder.id), compactObject({
           ...workOrder,
-          status: "Confirmada",
+          status: currentTemporaryHold ? "Reserva temporal" : "Confirmada",
           bookingOfferId: canonicalOfferId,
           updatedAt: now.toISOString(),
         }), { merge: true });
@@ -487,13 +687,20 @@ function createBookingAppointmentLifecycle({
         }), { merge: true });
       }
       transaction.set(offerRef, compactObject({
-        status: "booked",
+        status: currentTemporaryHold ? "held" : "booked",
         selectedOptionId: cleanText(optionId, 180),
         appointmentId: id,
         workOrderIds,
-        bookedAtIso: now.toISOString(),
+        ...(currentTemporaryHold
+          ? {
+            heldAtIso: now.toISOString(),
+            heldAt: serverTimestamp(),
+          }
+          : {
+            bookedAtIso: now.toISOString(),
+            bookedAt: serverTimestamp(),
+          }),
         updatedAtIso: now.toISOString(),
-        bookedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       }), { merge: true });
 
@@ -504,7 +711,7 @@ function createBookingAppointmentLifecycle({
         customerNotificationRecommended,
         appointment: {
           ...current,
-          status: "confirmed",
+          status: appointmentState,
           date: refreshedOption.date,
           startTime: refreshedOption.time,
           endTime: refreshedOption.endTime,
@@ -526,6 +733,7 @@ function createBookingAppointmentLifecycle({
   return {
     version: APPOINTMENT_LIFECYCLE_VERSION,
     cancelAppointment,
+    confirmTemporaryHold,
     rescheduleAppointment,
   };
 }
@@ -535,6 +743,11 @@ module.exports = {
   appointmentStillOwnsLock,
   assertDetailsEditKeepsPlacement,
   createBookingAppointmentLifecycle,
+  holdOptionFromAppointment,
+  holdRequestFromAppointment,
+  isTemporaryHoldAppointment,
   normalizeChangeKind,
+  recipientNotificationsEnabled,
+  sameLockIds,
   scheduleChangeNeedsCustomerFollowUp,
 };
