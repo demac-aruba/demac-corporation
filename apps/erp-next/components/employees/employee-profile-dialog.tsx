@@ -1,1 +1,1 @@
-export { EmployeeProfileEditor as EmployeeProfileDialog } from './employee-profile-editor';
+export { EmployeeProfileEditorV2 as EmployeeProfileDialog } from './employee-profile-editor-v2';
