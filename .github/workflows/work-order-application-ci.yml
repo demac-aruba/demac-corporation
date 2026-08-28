@@ -16,6 +16,7 @@ on:
       - 'functions/bookingVanIdentity.js'
       - 'functions/bookingSchedulingPrimitives.js'
       - 'functions/operatingCalendarService.js'
+      - 'functions/package.json'
       - '.github/workflows/work-order-application-ci.yml'
   push:
     branches:
@@ -35,6 +36,7 @@ on:
       - 'functions/bookingVanIdentity.js'
       - 'functions/bookingSchedulingPrimitives.js'
       - 'functions/operatingCalendarService.js'
+      - 'functions/package.json'
       - '.github/workflows/work-order-application-ci.yml'
   workflow_dispatch:
 
@@ -72,8 +74,8 @@ jobs:
       - name: Run shared attendance authority tests
         run: node --test functions/employeeAttendanceCalculation.test.js
 
-      - name: Run Work Order completion and Attendance integration tests
-        run: node --test functions/workOrderApplicationService.test.js
+      - name: Run Booking Authority aggregate regression
+        run: npm run --prefix functions test:booking-authority
 
       - name: Validate Cloud Function export
         run: |

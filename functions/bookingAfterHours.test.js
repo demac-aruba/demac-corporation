@@ -263,7 +263,7 @@ test("completion releases the Van so a later after-hours emergency can be assign
     actor: { uid: "tech-user-1", role: "technician", staffId: "driver-1", name: "Miguel Reyes" },
   });
 
-  assert.equal(completed.overtimeMinutes, 105);
+  assert.equal(completed.afterHoursWorkedMinutes, 105);
   assert.equal(db.read(`bookingCapacityLocks/${afterHoursGuard(DATE, "VAN-1").id}`).active, false);
   assert.equal(db.read(`workOrders/${first.workOrderIds[0]}`).appointmentEndTime, undefined);
 
