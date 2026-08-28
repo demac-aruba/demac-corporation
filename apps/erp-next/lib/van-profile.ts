@@ -118,7 +118,9 @@ export function validateDailyVanAssignment(
       const conflict = vans.find((van) => {
         const vanId = canonicalVanId(van.id, vans);
         if (vanId === targetVanId) return false;
-        const dated = assignments.find((item) => item.date === assignment.date && canonicalVanId(item.vanId, vans) === vanId);
+        const dated = assignments.find((item) => item.status !== 'Cancelled'
+          && item.date === assignment.date
+          && canonicalVanId(item.vanId, vans) === vanId);
         const effectiveIds = dated
           ? [dated.driverStaffId || van.responsibleStaffId, dated.helperStaffId || van.regularHelperId, dated.additionalHelperStaffId || van.additionalHelperId].filter(Boolean)
           : regularCrewIds(van);
