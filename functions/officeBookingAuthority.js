@@ -9,7 +9,10 @@ const {
   normalizeBookingRequest,
   positiveInteger,
 } = require("./bookingAuthorityCore");
-const { createBookingAuthority } = require("./bookingAuthorityFirestore");
+const {
+  BOOKING_CREATE_MODES,
+  createBookingAuthority,
+} = require("./bookingAuthorityFirestore");
 const { createBookingAppointmentLifecycle } = require("./bookingAuthorityAppointmentLifecycle");
 const { createOperationalMoveAuthority } = require("./bookingOperationalMove");
 const { createSchedulingProvider } = require("./bookingAuthoritySchedulingProvider");
@@ -26,7 +29,7 @@ const {
   notificationQueueIds: canonicalNotificationQueueIds,
 } = require("./appointmentNotificationService");
 
-const OFFICE_BOOKING_API_VERSION = 13;
+const OFFICE_BOOKING_API_VERSION = 14;
 const OFFICE_BOOKING_ROLES = Object.freeze([
   "admin",
   "office",
@@ -49,6 +52,8 @@ const OFFICE_BOOKING_ACTIONS = Object.freeze({
   DEACTIVATE_CONTACT_ASSIGNMENT: "deactivate_contact_assignment",
   CHECK_AVAILABILITY: "check_availability",
   CREATE_APPOINTMENT: "create_appointment",
+  CREATE_TEMPORARY_HOLD: "create_temporary_hold",
+  CONFIRM_TEMPORARY_HOLD: "confirm_temporary_hold",
   GET_APPOINTMENT: "get_appointment",
   CANCEL_APPOINTMENT: "cancel_appointment",
   RESCHEDULE_APPOINTMENT: "reschedule_appointment",
@@ -733,17 +738,19 @@ function createOfficeBookingApi({
         },
       });
     }
-    if (action === OFFICE_BOOKING_ACTIONS.CREATE_APPOINTMENT) {
+    if (action === OFFICE_BOOKING_ACTIONS.CREATE_APPOINTMENT || action === OFFICE_BOOKING_ACTIONS.CREATE_TEMPORARY_HOLD) {
       const requestId = officeRequestId(data.requestId);
       const offerId = cleanText(data.offerId, 180);
       const optionId = cleanText(data.optionId, 180);
       const offerVersion = positiveInteger(data.offerVersion);
+      const temporaryHold = action === OFFICE_BOOKING_ACTIONS.CREATE_TEMPORARY_HOLD;
       const result = await authority.createAppointment({
         offerId,
         offerVersion,
         optionId,
-        idempotencyKey: `office:${identity.uid}:${requestId}:create:${offerId}:${optionId}`,
+        idempotencyKey: `office:${identity.uid}:${requestId}:${temporaryHold ? "hold" : "create"}:${offerId}:${optionId}`,
         actor,
+        createMode: temporaryHold ? BOOKING_CREATE_MODES.TEMPORARY_HOLD : BOOKING_CREATE_MODES.CONFIRMED,
         context: { channel: "office", officeRequestId: requestId },
       });
       if (!result?.success || !cleanText(result.appointmentId, 180)) {
@@ -753,6 +760,14 @@ function createOfficeBookingApi({
         );
       }
       return result;
+    }
+    if (action === OFFICE_BOOKING_ACTIONS.CONFIRM_TEMPORARY_HOLD) {
+      const requestId = officeRequestId(data.requestId);
+      return getLifecycle().confirmTemporaryHold({
+        appointmentId: data.appointmentId,
+        actor,
+        context: { channel: "office", officeRequestId: requestId },
+      });
     }
     if (action === OFFICE_BOOKING_ACTIONS.GET_APPOINTMENT) {
       const appointment = await authority.getAppointment(data.appointmentId);
