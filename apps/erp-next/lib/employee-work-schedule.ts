@@ -184,9 +184,9 @@ export function resolveEmployeeSchedule(input: {
   const vanId = van ? canonicalVanId(van.id, vans) : '';
   const vanHalfDay = halfDaySchedules.find((rule) => vanId && canonicalVanId(rule.vanId, vans) === vanId);
 
-  // Field technicians inherit their recurring partial day from the canonical Van/team only.
-  // Only actual worked time is scheduled; there is no synthetic paid-free block.
-  if (technical) {
+  // Technical staff assigned to a canonical Van inherit the recurring schedule from that Van/team.
+  // Their individual employee schedule remains preserved but is not active while the Van owns the schedule.
+  if (technical && van) {
     const dateWeekday = new Date(`${date}T12:00:00Z`).getUTCDay();
     if (vanHalfDay?.weekday === undefined || vanHalfDay.weekday !== dateWeekday) return companySchedule;
     const startTime = vanHalfDay.workdayStart ?? companySchedule.startTime;
@@ -202,12 +202,12 @@ export function resolveEmployeeSchedule(input: {
     };
   }
 
+  // Office/non-technical employees and technical employees with no Van assignment use the
+  // existing versioned employeePayrollSettings authority. Assigning a technician to a Van
+  // automatically makes the Van/team rule take precedence without deleting this history.
   const version = officeScheduleVersion(payrollSettings, date);
   const schedule = baseScheduleForVersion(version, date, companySchedule);
 
-  // Office/non-technical staff use the exact partial-day times saved for that employee.
-  // Older records without exact times still derive their historical worked window, but paid-free
-  // metadata is not counted as scheduled work.
   if (version?.halfDayWeekday != null) {
     const dateWeekday = new Date(`${date}T12:00:00Z`).getUTCDay();
     if (version.halfDayWeekday === dateWeekday) {
