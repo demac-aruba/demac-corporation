@@ -52,6 +52,35 @@ test("realigns the shifted production-style group configuration without changing
   assert.equal(byVan.get("VAN-4").movedFromVanId, "VAN-2");
 });
 
+test("extra future Vans do not block or receive canonical WhatsApp group realignment", () => {
+  const rawVans = [
+    van("VAN-1", "TEC - Miguel", GROUPS.miguel),
+    van("VAN-2", "Gollo y Walter", GROUPS.gollo),
+    van("VAN-3", "TEC - Mario y Ronald", GROUPS.mario),
+    van("VAN-4", "TEC - Alejandro y Edwin", GROUPS.alejandro),
+    {
+      id: "VAN-5",
+      name: "Van 5",
+      active: true,
+      status: "Fuera de servicio",
+      scheduleDeliveryEnabled: false,
+    },
+  ];
+
+  const updates = deriveVanGroupRealignment(rawVans);
+  assert.deepEqual(updates.map((item) => item.vanId), ["VAN-1", "VAN-2", "VAN-3", "VAN-4"]);
+  assert.equal(updates.some((item) => item.sourceVanId === "VAN-5"), false);
+});
+
+test("an extra future Van does not mask a missing canonical WhatsApp target", () => {
+  assert.throws(() => deriveVanGroupRealignment([
+    van("VAN-1", "TEC - Miguel", GROUPS.miguel),
+    van("VAN-2", "Gollo y Walter", GROUPS.gollo),
+    van("VAN-3", "TEC - Mario y Ronald", GROUPS.mario),
+    { id: "VAN-5", name: "Van 5", active: true, status: "Fuera de servicio" },
+  ]), /missing canonical target Vans: VAN-4/);
+});
+
 test("already aligned canonical group configuration remains stable and verifies", () => {
   const aligned = [
     van("VAN-1", "Miguel Reyes / Alan Baquero", GROUPS.miguel),

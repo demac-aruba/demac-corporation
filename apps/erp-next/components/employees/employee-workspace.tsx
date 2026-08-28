@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useAuth } from '@/components/auth/auth-provider';
 import {
   loadCanonicalOperationsState,
@@ -12,18 +12,24 @@ import {
   ATTENDANCE_STATUS_LABELS,
   dateKey,
   loadEmployeeAttendanceState,
-  overtimeMinutesAfterFive,
   payrollPeriodBounds,
   saveAttendanceDay,
   saveSalaryAdvance,
   type AttendanceDayDraft,
+  type AttendanceExceptionKind,
+  type AttendancePaymentTreatment,
   type AttendanceStatus,
   type EmployeeAttendanceState,
   type EmployeeSalaryAdvance,
   type SalaryAdvanceMethod,
 } from '@/lib/employee-attendance';
+import {
+  attendanceExceptionKindLabel,
+  calculateAttendanceVariance,
+  scheduledBreakMinutes,
+} from '@/lib/employee-attendance-calculation';
 import { deriveAttendanceDay, summarizeAttendancePeriod } from '@/lib/employee-attendance-policy';
-import { payrollPeriodFromDates, summarizeEmployee } from '@/lib/employee-payroll';
+import { payrollPeriodFromDates, shiftPayrollPeriod, summarizeEmployee } from '@/lib/employee-payroll';
 import { downloadPayrollAccountingPdf } from '@/lib/payroll-accounting-pdf';
 import { employeeVan as resolveEmployeeVan } from '@/lib/employee-work-schedule';
 import { EmployeeDirectoryOverview, type EmployeeDirectoryPeriodSummary } from './employee-directory-overview';
@@ -49,13 +55,14 @@ type EmployeePeriodSummary = {
   recordedDays: number;
   exceptionDays: number;
 };
-type CalendarCell = { date: string; inMonth: boolean };
+type CalendarCell = { date: string; inPeriod: boolean };
 
 export function EmployeeWorkspace() {
   const { principal } = useAuth();
   const canManageSensitiveAttendance = principal.role === 'super_admin' || principal.capabilities.has('payroll_sensitive.view');
   const canManageEmployees = principal.capabilities.has('employees.manage');
   const today = dateKey(new Date());
+  const quickActionsRef = useRef<HTMLDetailsElement>(null);
   const [operations, setOperations] = useState<CanonicalOperationsState | null>(null);
   const [attendance, setAttendance] = useState<EmployeeAttendanceState>({ payrollSettings: [], timesheets: [], advances: [] });
   const [loading, setLoading] = useState(true);
@@ -66,10 +73,10 @@ export function EmployeeWorkspace() {
   const [periodAnchor, setPeriodAnchor] = useState(today);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
   const [selectedDate, setSelectedDate] = useState(today);
-  const [month, setMonth] = useState(monthKey(today));
   const [draft, setDraft] = useState<AttendanceDayDraft | null>(null);
   const [advanceDraft, setAdvanceDraft] = useState({ employeeId: '', date: today, amount: '', method: 'Bank Transfer' as SalaryAdvanceMethod, reference: '', notes: '' });
   const [profileTargetId, setProfileTargetId] = useState<string | null | undefined>(undefined);
+  const [quickActionsOpen, setQuickActionsOpen] = useState(false);
 
   const load = useCallback(async (showLoading = true) => {
     if (showLoading) setLoading(true);
@@ -94,10 +101,31 @@ export function EmployeeWorkspace() {
 
   useEffect(() => { void load(true); }, [load]);
 
+  useEffect(() => {
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!quickActionsOpen) return;
+      const target = event.target;
+      if (target instanceof Node && !quickActionsRef.current?.contains(target)) setQuickActionsOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setQuickActionsOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer);
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [quickActionsOpen]);
+
   const employees = useMemo(() => (operations?.staffProfiles ?? []).filter((profile) => profile.active !== false), [operations]);
   const selectedEmployee = employees.find((profile) => profile.id === selectedEmployeeId) ?? employees[0] ?? null;
   const period = useMemo(() => payrollPeriodBounds(periodAnchor), [periodAnchor]);
-  const monthCells = useMemo(() => calendarDays(month), [month]);
+  const calendarCells = useMemo(() => payrollCalendarDays(period.start, period.end), [period.end, period.start]);
+
+  useEffect(() => {
+    if (selectedDate < period.start || selectedDate > period.end) setSelectedDate(period.end);
+  }, [period.end, period.start, selectedDate]);
 
   const employeeVan = useCallback((profile: CanonicalStaffProfile | null) => {
     if (!operations || !profile) return null;
@@ -111,7 +139,7 @@ export function EmployeeWorkspace() {
 
   const buildDraft = useCallback((profile: CanonicalStaffProfile, date: string) => {
     const record = recordsFor(profile, date);
-    const defaultBreak = record.schedule.scheduledMinutes >= 480 ? 60 : 0;
+    const defaultBreak = scheduledBreakMinutes(record.schedule);
     const status = record.status ?? 'Day Off';
     const exceptionHours = status === 'Sick' ? record.entry?.aoHours : status === 'Vacation' ? record.entry?.vacationHours : status === 'Absent' ? record.entry?.noWorkNoPayHours : undefined;
     return {
@@ -121,6 +149,11 @@ export function EmployeeWorkspace() {
       breakMinutes: record.entry?.breakMinutes ?? defaultBreak,
       overtimeMinutes: record.entry?.overtimeMinutes ?? Math.round((record.entry?.overtimeHours ?? 0) * 60),
       exceptionHours: exceptionHours ?? (['Sick', 'Vacation', 'Absent'].includes(status) ? record.schedule.scheduledMinutes / 60 : undefined),
+      attendanceExceptionClassifications: record.entry?.attendanceExceptions?.map((segment) => ({
+        kind: segment.kind,
+        treatment: segment.treatment,
+        reason: segment.reason,
+      })) ?? [],
       notes: record.entry?.notes ?? record.absence?.notes ?? '',
     } satisfies AttendanceDayDraft;
   }, [recordsFor]);
@@ -164,17 +197,60 @@ export function EmployeeWorkspace() {
   const periodAdvances = useMemo(() => (attendance.advances ?? []).filter((advance) => advance.payrollPeriodId === period.id).sort((a, b) => b.date.localeCompare(a.date)), [attendance.advances, period.id]);
   const selectedSummary = periodSummaries.find((summary) => summary.employee.id === selectedEmployee?.id);
   const selectedRecord = selectedEmployee ? recordsFor(selectedEmployee, selectedDate) : null;
-  const suggestedOvertime = draft ? overtimeMinutesAfterFive(draft.clockOutTime) : 0;
-  const selectedWorkedMinutes = selectedRecord?.assumedRegular ? selectedRecord.schedule.scheduledMinutes : draft ? Math.max(0, (minutesFromTimes(draft.clockInTime, draft.clockOutTime) ?? 0) - draft.breakMinutes) : 0;
+  const selectedVariance = selectedRecord && draft ? calculateAttendanceVariance({ schedule: selectedRecord.schedule, clockInTime: draft.clockInTime, clockOutTime: draft.clockOutTime, breakMinutes: draft.breakMinutes }) : null;
+  const workedStatus = draft?.status === 'Present' || draft?.status === 'Late';
+  const detectedAttendanceExceptions = workedStatus ? selectedVariance?.missingSegments ?? [] : [];
+  const selectedWorkedMinutes = selectedRecord?.assumedRegular && !selectedRecord.entry && draft?.status === 'Present' && !detectedAttendanceExceptions.length && !(selectedVariance?.overtimeMinutes ?? 0)
+    ? selectedRecord.schedule.scheduledMinutes
+    : selectedVariance?.workedMinutes ?? 0;
   const selectedExceptionHours = Math.max(0, Number(draft?.exceptionHours) || 0);
-  const selectedRegularHours = selectedRecord && draft ? Math.max(0, selectedRecord.schedule.scheduledMinutes / 60 - (['Sick', 'Vacation', 'Absent'].includes(draft.status) ? selectedExceptionHours : 0)) : 0;
-  const normalScheduleNeedsNoRecord = Boolean(selectedRecord?.assumedRegular && draft?.status === 'Present' && (draft?.overtimeMinutes ?? 0) === 0 && !draft?.notes.trim());
+  const selectedRegularHours = selectedRecord && draft
+    ? workedStatus
+      ? Math.max(0, (selectedRecord.schedule.scheduledMinutes - (selectedVariance?.missingScheduledMinutes ?? 0)) / 60)
+      : Math.max(0, selectedRecord.schedule.scheduledMinutes / 60 - (['Sick', 'Vacation', 'Absent'].includes(draft.status) ? selectedExceptionHours : 0))
+    : 0;
+  const partialTreatmentTotals = detectedAttendanceExceptions.reduce((total, segment) => {
+    const classification = draft?.attendanceExceptionClassifications?.find((item) => item.kind === segment.kind);
+    if (classification?.treatment === 'paid') total.paid += segment.minutes;
+    if (classification?.treatment === 'no_work_no_pay') total.unpaid += segment.minutes;
+    return total;
+  }, { paid: 0, unpaid: 0 });
+  const incompleteAttendanceException = detectedAttendanceExceptions.some((segment) => {
+    const classification = draft?.attendanceExceptionClassifications?.find((item) => item.kind === segment.kind);
+    return !classification?.treatment || !classification.reason?.trim();
+  });
+  const normalScheduleNeedsNoRecord = Boolean(selectedRecord?.assumedRegular
+    && draft?.status === 'Present'
+    && (selectedVariance?.overtimeMinutes ?? 0) === 0
+    && detectedAttendanceExceptions.length === 0
+    && !draft?.notes.trim());
   const selectedAbsenceRanges = useMemo(() => (operations?.staffAbsences ?? []).filter((item) => item.staffId === selectedEmployee?.id && item.active !== false).sort((a, b) => String(b.fromDate ?? '').localeCompare(String(a.fromDate ?? ''))).slice(0, 4), [operations?.staffAbsences, selectedEmployee?.id]);
   const activeSectionLabel = tab === 'calendar' ? 'Employee Calendar' : tab === 'advances' ? 'Salary Advances' : 'Overview';
 
   async function refreshAfterEmployeeChange(employeeId?: string) {
     if (employeeId) setSelectedEmployeeId(employeeId);
     await load(false);
+  }
+
+  function movePayrollPeriod(offset: number) {
+    const shifted = shiftPayrollPeriod(payrollPeriodFromDates(period.start, period.end), offset);
+    setPeriodAnchor(shifted.endDate);
+    setSelectedDate(shifted.endDate);
+  }
+
+  function goToToday() {
+    setPeriodAnchor(today);
+    setSelectedDate(today);
+  }
+
+  function updateAttendanceClassification(kind: AttendanceExceptionKind, changes: { treatment?: AttendancePaymentTreatment; reason?: string }) {
+    if (!draft) return;
+    const current = draft.attendanceExceptionClassifications ?? [];
+    const existing = current.find((item) => item.kind === kind);
+    const next = existing
+      ? current.map((item) => item.kind === kind ? { ...item, ...changes } : item)
+      : [...current, { kind, ...changes }];
+    setDraft({ ...draft, attendanceExceptionClassifications: next });
   }
 
   function exportAccountingCsv() {
@@ -216,6 +292,11 @@ export function EmployeeWorkspace() {
 
   async function saveDay() {
     if (!selectedEmployee || !draft || !selectedRecord || !canManageSensitiveAttendance) return;
+    if (incompleteAttendanceException) {
+      setError('Classify every missing-time segment as Paid or No Work No Pay and enter a reason before saving.');
+      setMessage('');
+      return;
+    }
     if (normalScheduleNeedsNoRecord) {
       setError('');
       setMessage('Normal scheduled attendance is already counted automatically. No daily record was created.');
@@ -225,7 +306,7 @@ export function EmployeeWorkspace() {
     try {
       const saved = await saveAttendanceDay({ employee: selectedEmployee, date: selectedDate, schedule: selectedRecord.schedule, draft, existingEntry: selectedRecord.entry, existingAbsence: selectedRecord.absence, updatedByUserId: principal.userId, updatedByName: principal.displayName });
       setAttendance((current) => ({ ...current, timesheets: [...current.timesheets.filter((entry) => entry.id !== saved.id), saved] }));
-      setMessage('Attendance exception saved. Payroll inputs and operational availability are synchronized.');
+      setMessage('Attendance exception saved. Overtime and partial exceptions were calculated from the scheduled shift.');
     } catch (cause) { setError(errorText(cause)); }
     finally { setBusy(false); }
   }
@@ -259,8 +340,21 @@ export function EmployeeWorkspace() {
           <p>One canonical workspace for employee profiles, attendance exceptions and salary advances. Normal scheduled attendance is automatic.</p>
         </div>
         <div className={styles.headerActions}>
-          <details className={styles.quickActions}><summary><Icon name="bolt" />Quick actions <span>⌄</span></summary><div className={styles.quickMenu}><button type="button" onClick={() => void load(false)}>Refresh data</button><button type="button" onClick={() => setProfileTargetId(null)} disabled={!canManageEmployees}>Add employee</button><button type="button" onClick={exportPayrollPdf} disabled={!canManageSensitiveAttendance}>Export payroll summary PDF</button><button type="button" onClick={exportAccountingCsv} disabled={!canManageSensitiveAttendance}>Export accounting CSV</button><button type="button" onClick={() => setTab('advances')} disabled={!canManageSensitiveAttendance}>Record salary advance</button></div></details>
-          <div className={styles.periodSelector}><Icon name="calendar" /><div><span>Payroll Period</span><strong>{periodLabel(period.start, period.end)}</strong></div><button type="button" onClick={() => setPeriodAnchor((value) => shiftDateMonth(value, -1))}>‹</button><button type="button" onClick={() => setPeriodAnchor((value) => shiftDateMonth(value, 1))}>›</button></div>
+          <details
+            ref={quickActionsRef}
+            className={styles.quickActions}
+            open={quickActionsOpen}
+            onToggle={(event) => setQuickActionsOpen(event.currentTarget.open)}
+          >
+            <summary><Icon name="bolt" />Quick actions <span>⌄</span></summary>
+            <div className={styles.quickMenu}>
+              <button type="button" onClick={() => { setQuickActionsOpen(false); void load(false); }}>Refresh data</button>
+              <button type="button" onClick={() => { setQuickActionsOpen(false); setProfileTargetId(null); }} disabled={!canManageEmployees}>Add employee</button>
+              <button type="button" onClick={() => { setQuickActionsOpen(false); exportPayrollPdf(); }} disabled={!canManageSensitiveAttendance}>Export payroll summary PDF</button>
+              <button type="button" onClick={() => { setQuickActionsOpen(false); exportAccountingCsv(); }} disabled={!canManageSensitiveAttendance}>Export accounting CSV</button>
+              <button type="button" onClick={() => { setQuickActionsOpen(false); setTab('advances'); }} disabled={!canManageSensitiveAttendance}>Record salary advance</button>
+            </div>
+          </details>
         </div>
       </header>
 
@@ -313,31 +407,84 @@ export function EmployeeWorkspace() {
 
         <div className={styles.mainGrid}>
           <section className={styles.calendarCard}>
-            <div className={styles.calendarToolbar}><h2>{monthLabel(month)}</h2><div className={styles.calendarActions}><button className={styles.squareButton} type="button" onClick={() => setMonth((value) => shiftMonth(value, -1))}>‹</button><button className={styles.ghostButton} type="button" onClick={() => { setMonth(monthKey(today)); setSelectedDate(today); }}>Today</button><span className={styles.viewBadge}>Month⌄</span><button className={styles.squareButton} type="button" onClick={() => setMonth((value) => shiftMonth(value, 1))}>›</button></div></div>
+            <div className={styles.calendarToolbar}>
+              <div>
+                <h2>{monthLabel(monthKey(period.end))}</h2>
+                <span style={{ display: 'block', marginTop: 3, color: 'var(--muted, #738197)', fontSize: 10, fontWeight: 700 }}>
+                  Payroll period · {periodLabel(period.start, period.end)}
+                </span>
+              </div>
+              <div className={styles.calendarActions}>
+                <button className={styles.squareButton} type="button" onClick={() => movePayrollPeriod(-1)}>‹</button>
+                <button className={styles.ghostButton} type="button" onClick={goToToday}>Today</button>
+                <button className={styles.squareButton} type="button" onClick={() => movePayrollPeriod(1)}>›</button>
+              </div>
+            </div>
             <div className={styles.weekHeader}>{WEEKDAY_LABELS.map((day) => <span key={day}>{day}</span>)}</div>
-            <div className={styles.calendarGrid}>{monthCells.map(({ date, inMonth }) => {
-              const record = selectedEmployee ? recordsFor(selectedEmployee, date) : null;
+            <div className={styles.calendarGrid}>{calendarCells.map(({ date, inPeriod }) => {
+              const record = inPeriod && selectedEmployee ? recordsFor(selectedEmployee, date) : null;
               const assumedLabel = date > today ? 'Scheduled' : 'Regular';
-              return <button key={date} type="button" className={`${styles.dayButton} ${!inMonth ? styles.dayOutside : ''} ${date === selectedDate ? styles.daySelected : ''}`} onClick={() => { setSelectedDate(date); if (!inMonth) setMonth(monthKey(date)); }}><span className={styles.dayNumber}>{Number(date.slice(-2))}</span>{record?.status ? <span className={styles.dayState} data-tone={statusTone(record.status)}><i />{record.assumedRegular ? assumedLabel : statusShort(record.status)}</span> : <span className={styles.dayNoRecord}>Off</span>}</button>;
+              const exceptionCount = record?.entry?.attendanceExceptions?.length ?? 0;
+              const hasOvertime = (record?.entry?.overtimeMinutes ?? 0) > 0 || (record?.entry?.overtimeHours ?? 0) > 0;
+              const stateLabel = record?.assumedRegular
+                ? assumedLabel
+                : exceptionCount
+                  ? `${record?.status === 'Present' ? 'Present' : statusShort(record?.status ?? null)} · ${exceptionCount} ex.`
+                  : hasOvertime && record?.status === 'Present'
+                    ? 'Present · OT'
+                    : record?.status ? statusShort(record.status) : 'Off';
+              return <button
+                key={date}
+                type="button"
+                disabled={!inPeriod}
+                title={inPeriod ? formatDate(date) : 'Outside selected payroll period'}
+                className={`${styles.dayButton} ${!inPeriod ? styles.dayOutside : ''} ${date === selectedDate ? styles.daySelected : ''}`}
+                onClick={() => setSelectedDate(date)}
+              ><span className={styles.dayNumber}>{Number(date.slice(-2))}</span>{record?.status ? <span className={styles.dayState} data-tone={statusTone(record.status)}><i />{stateLabel}</span> : <span className={styles.dayNoRecord}>{stateLabel}</span>}</button>;
             })}</div>
-            <div className={styles.calendarLegend}><Legend tone="present">Regular / assumed</Legend><Legend tone="late">Late</Legend><Legend tone="sick">AO / Sick</Legend><Legend tone="vacation">Vacation</Legend><Legend tone="none">Off / no shift</Legend><span className={styles.historyLink}><Icon name="calendar" />Absence History</span></div>
+            <div className={styles.calendarLegend}><Legend tone="present">Regular / assumed</Legend><Legend tone="late">Late</Legend><Legend tone="sick">AO / Sick</Legend><Legend tone="vacation">Vacation</Legend><Legend tone="none">Off / outside payroll</Legend><span className={styles.historyLink}><Icon name="calendar" />Absence History</span></div>
           </section>
 
           <aside className={styles.rightRail}>
             <section className={styles.dailyCard}>
-              <div className={styles.dailyHeader}><div><h2>Daily Record</h2><span>Selected Date</span><strong><Icon name="calendar" />{formatDate(selectedDate)}</strong><small>{selectedRecord?.schedule.label ?? 'No configured schedule'}</small></div><span className={styles.statusChip} data-tone={draft?.status ?? 'Present'}>{selectedRecord?.assumedRegular ? 'Regular' : draft ? statusShort(draft.status) : 'No shift'}⌄</span></div>
+              <div className={styles.dailyHeader}><div><h2>Daily Record</h2><span>Selected Date</span><strong><Icon name="calendar" />{formatDate(selectedDate)}</strong><small>{selectedRecord?.schedule.label ?? 'No configured schedule'}</small></div><span className={styles.statusChip} data-tone={draft?.status ?? 'Present'}>{selectedRecord?.assumedRegular && !selectedRecord.entry ? 'Regular' : draft ? statusShort(draft.status) : 'No shift'}⌄</span></div>
               {draft && selectedRecord ? <div className={styles.dailyForm}>
-                {selectedRecord.assumedRegular ? <div className={styles.notice}>Normal scheduled attendance is already counted automatically. Save only if this day has an exception, overtime, or another payroll-relevant change.</div> : null}
+                {selectedRecord.assumedRegular ? <div className={styles.notice}>Normal scheduled attendance is already counted automatically. Enter only what actually changed; overtime and partial missing time are calculated from the employee schedule.</div> : null}
                 <Field label="Status" full><select className={styles.control} value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as AttendanceStatus, exceptionHours: ['Sick', 'Vacation', 'Absent'].includes(event.target.value) ? (draft.exceptionHours ?? selectedRecord.schedule.scheduledMinutes / 60) : undefined })}>{STATUS_OPTIONS.map((status) => <option key={status} value={status}>{ATTENDANCE_STATUS_LABELS[status]}</option>)}</select></Field>
                 {['Sick', 'Vacation', 'Absent'].includes(draft.status) ? <Field label="Exception Hours" full><input className={styles.control} type="number" min="0" max={selectedRecord.schedule.scheduledMinutes / 60} step="0.25" value={draft.exceptionHours ?? ''} onChange={(event) => setDraft({ ...draft, exceptionHours: Number(event.target.value) })} /></Field> : null}
                 <Field label="Clock In"><input className={styles.control} type="time" value={draft.clockInTime} onChange={(event) => setDraft({ ...draft, clockInTime: event.target.value })} /></Field>
                 <Field label="Clock Out"><input className={styles.control} type="time" value={draft.clockOutTime} onChange={(event) => setDraft({ ...draft, clockOutTime: event.target.value })} /></Field>
-                <Field label="Break Minutes"><input className={styles.control} type="number" min="0" step="5" value={draft.breakMinutes} onChange={(event) => setDraft({ ...draft, breakMinutes: Number(event.target.value) })} /></Field>
-                <Field label="Overtime Minutes"><input className={styles.control} type="number" min="0" step="5" value={draft.overtimeMinutes} onChange={(event) => setDraft({ ...draft, overtimeMinutes: Number(event.target.value) })} /></Field>
-                {suggestedOvertime !== draft.overtimeMinutes ? <button type="button" className={styles.overtimeSuggestion} onClick={() => setDraft({ ...draft, overtimeMinutes: suggestedOvertime })}>Use {hoursAndMinutes(suggestedOvertime)} suggested overtime</button> : null}
+                <Field label="Break Minutes" full><input className={styles.control} type="number" min="0" step="5" value={draft.breakMinutes} onChange={(event) => setDraft({ ...draft, breakMinutes: Number(event.target.value) })} /></Field>
+
+                {workedStatus && selectedVariance ? <div className={styles.dailySummary}>
+                  <SummaryRow icon="timer" label="Calculated Overtime" value={hoursAndMinutes(selectedVariance.overtimeMinutes)} tone="orange" />
+                  {selectedVariance.earlyStartMinutes > 0 ? <SummaryRow icon="clock" label="Early start" value={hoursAndMinutes(selectedVariance.earlyStartMinutes)} tone="blue" /> : null}
+                  {selectedVariance.lateFinishMinutes > 0 ? <SummaryRow icon="clock" label="Late finish" value={hoursAndMinutes(selectedVariance.lateFinishMinutes)} tone="blue" /> : null}
+                  {selectedVariance.unusedBreakMinutes > 0 ? <SummaryRow icon="timer" label="Unused scheduled break" value={hoursAndMinutes(selectedVariance.unusedBreakMinutes)} tone="green" /> : null}
+                </div> : null}
+
+                {detectedAttendanceExceptions.map((segment) => {
+                  const classification = draft.attendanceExceptionClassifications?.find((item) => item.kind === segment.kind);
+                  return <div key={segment.kind} className={styles.dailySummary}>
+                    <strong>{attendanceExceptionTitle(segment.kind, segment.fromTime, segment.toTime, segment.minutes)}</strong>
+                    <Field label="Payment Treatment" full><select className={styles.control} value={classification?.treatment ?? ''} onChange={(event) => updateAttendanceClassification(segment.kind, { treatment: event.target.value ? event.target.value as AttendancePaymentTreatment : undefined })}><option value="">Select treatment…</option><option value="paid">Paid</option><option value="no_work_no_pay">No Work No Pay</option></select></Field>
+                    <Field label="Reason" full><input className={styles.control} value={classification?.reason ?? ''} onChange={(event) => updateAttendanceClassification(segment.kind, { reason: event.target.value })} placeholder="Doctor appointment, personal permission, sick, other…" /></Field>
+                  </div>;
+                })}
+
+                {incompleteAttendanceException ? <div className={styles.notice}>Classify every missing-time segment as Paid or No Work No Pay and enter a reason before saving.</div> : null}
+
                 <Field label="Notes" full><textarea className={`${styles.control} ${styles.notes}`} value={draft.notes} onChange={(event) => setDraft({ ...draft, notes: event.target.value })} placeholder="Add notes for this exception…" /></Field>
-                <div className={styles.dailySummary}><SummaryRow icon="clock" label="Scheduled" value={hours(selectedRecord.schedule.scheduledMinutes / 60)} tone="blue" /><SummaryRow icon="vacation" label="Paid Free" value={hours(selectedRecord.schedule.paidFreeMinutes / 60)} tone="green" /><SummaryRow icon="timer" label="Late" value={hoursAndMinutes(selectedRecord.entry?.lateMinutes ?? 0)} tone="orange" /><SummaryRow icon="briefcase" label="Regular Baseline" value={hoursAndMinutes(selectedWorkedMinutes)} tone="blue" />{['Sick', 'Vacation', 'Absent'].includes(draft.status) ? <SummaryRow icon="heart" label="Regular After Exception" value={hours(selectedRegularHours)} tone="pink" /> : null}</div>
-                <button className={styles.saveButton} type="button" disabled={busy || !canManageSensitiveAttendance || normalScheduleNeedsNoRecord} onClick={() => void saveDay()}>{busy ? 'Saving…' : normalScheduleNeedsNoRecord ? 'No Exception to Save' : 'Save Exception'}</button>
+                <div className={styles.dailySummary}>
+                  <SummaryRow icon="clock" label="Scheduled" value={hours(selectedRecord.schedule.scheduledMinutes / 60)} tone="blue" />
+                  <SummaryRow icon="vacation" label="Scheduled Paid Free" value={hours(selectedRecord.schedule.paidFreeMinutes / 60)} tone="green" />
+                  <SummaryRow icon="briefcase" label="Actual Worked" value={hoursAndMinutes(selectedWorkedMinutes)} tone="blue" />
+                  <SummaryRow icon="briefcase" label="Regular After Exceptions" value={hours(selectedRegularHours)} tone="blue" />
+                  {workedStatus ? <SummaryRow icon="timer" label="Overtime" value={hoursAndMinutes(selectedVariance?.overtimeMinutes ?? 0)} tone="orange" /> : null}
+                  {partialTreatmentTotals.paid > 0 ? <SummaryRow icon="heart" label="Paid Missing Time" value={hoursAndMinutes(partialTreatmentTotals.paid)} tone="green" /> : null}
+                  {partialTreatmentTotals.unpaid > 0 ? <SummaryRow icon="ban" label="No Work No Pay" value={hoursAndMinutes(partialTreatmentTotals.unpaid)} tone="pink" /> : null}
+                </div>
+                <button className={styles.saveButton} type="button" disabled={busy || !canManageSensitiveAttendance || normalScheduleNeedsNoRecord || incompleteAttendanceException} onClick={() => void saveDay()}>{busy ? 'Saving…' : normalScheduleNeedsNoRecord ? 'No Exception to Save' : incompleteAttendanceException ? 'Classify Missing Time to Save' : 'Save Exception'}</button>
               </div> : <div className={styles.empty}>No scheduled shift for this employee and date.</div>}
             </section>
             <section className={styles.rangesCard}><div className={styles.rangesIcon}><Icon name="calendar" /></div><div><h3>Recent / Scheduled Ranges</h3>{selectedAbsenceRanges.length ? selectedAbsenceRanges.map((range) => <p key={range.id}><strong>{range.reason ?? 'Absence'}</strong> · {range.fromDate ?? '—'}{range.toDate && range.toDate !== range.fromDate ? ` → ${range.toDate}` : ''}</p>) : <p>No absence ranges recorded.</p>}</div></section>
@@ -384,14 +531,30 @@ function Icon({ name }: { name: IconName }) {
 }
 
 function monthKey(date: string) { return date.slice(0, 7); }
-function shiftMonth(value: string, offset: number) { const [year, month] = value.split('-').map(Number); const shifted = new Date(Date.UTC(year, month - 1 + offset, 1, 12)); return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, '0')}`; }
-function shiftDateMonth(value: string, offset: number) { const date = new Date(`${value}T12:00:00Z`); const shifted = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + offset, 15, 12)); return shifted.toISOString().slice(0, 10); }
 function monthLabel(value: string) { return new Date(`${value}-01T12:00:00Z`).toLocaleDateString('en-AW', { month: 'long', year: 'numeric', timeZone: 'UTC' }); }
 function formatDate(value: string) { return new Date(`${value}T12:00:00Z`).toLocaleDateString('en-AW', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }); }
 function shortDate(value: string) { return new Date(`${value}T12:00:00Z`).toLocaleDateString('en-AW', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }); }
 function periodLabel(start: string, end: string) { return `${shortDate(start)} – ${shortDate(end)}`; }
-function calendarDays(value: string): CalendarCell[] { const [year, month] = value.split('-').map(Number); const first = new Date(Date.UTC(year, month - 1, 1, 12)); const start = new Date(first); start.setUTCDate(1 - first.getUTCDay()); return Array.from({ length: 42 }, (_, index) => { const current = new Date(start); current.setUTCDate(start.getUTCDate() + index); const date = current.toISOString().slice(0, 10); return { date, inMonth: current.getUTCMonth() === month - 1 }; }); }
-function minutesFromTimes(start?: string, end?: string) { if (!start || !end) return undefined; const [sh, sm] = start.split(':').map(Number); const [eh, em] = end.split(':').map(Number); if (![sh, sm, eh, em].every(Number.isFinite)) return undefined; return Math.max(0, (eh * 60 + em) - (sh * 60 + sm)); }
+function payrollCalendarDays(start: string, end: string): CalendarCell[] {
+  const first = new Date(`${start}T12:00:00Z`);
+  const last = new Date(`${end}T12:00:00Z`);
+  const calendarStart = new Date(first);
+  calendarStart.setUTCDate(first.getUTCDate() - first.getUTCDay());
+  const calendarEnd = new Date(last);
+  calendarEnd.setUTCDate(last.getUTCDate() + (6 - last.getUTCDay()));
+  const count = Math.round((calendarEnd.getTime() - calendarStart.getTime()) / 86_400_000) + 1;
+  return Array.from({ length: count }, (_, index) => {
+    const current = new Date(calendarStart);
+    current.setUTCDate(calendarStart.getUTCDate() + index);
+    const date = current.toISOString().slice(0, 10);
+    return { date, inPeriod: date >= start && date <= end };
+  });
+}
+function attendanceExceptionTitle(kind: AttendanceExceptionKind, fromTime: string | undefined, toTime: string | undefined, minutes: number) {
+  const range = fromTime && toTime ? ` · ${fromTime}–${toTime}` : '';
+  const label = attendanceExceptionKindLabel(kind).replace(/^./, (character) => character.toUpperCase());
+  return `${label}${range} · ${hoursAndMinutes(minutes)}`;
+}
 function hoursAndMinutes(minutes: number | undefined) { const value = Math.max(0, Math.round(Number(minutes) || 0)); const h = Math.floor(value / 60); const m = value % 60; if (!h) return `${m}m`; if (!m) return `${h}h 00m`; return `${h}h ${String(m).padStart(2, '0')}m`; }
 function hours(value: number) { return hoursAndMinutes(Math.round((Number(value) || 0) * 60)); }
 function money(value: number) { return `Afl. ${(Number(value) || 0).toLocaleString('en-AW', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`; }

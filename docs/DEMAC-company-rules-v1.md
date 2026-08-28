@@ -1,4 +1,4 @@
-# DEMAC Company Rules Registry — Version 2
+# DEMAC Company Rules Registry — Version 4
 
 This registry is the operational reference for the DEMAC ERP and WhatsApp Copilot. Runtime values that may change are stored in Firestore; protected behavior is implemented in versioned code and tested.
 
@@ -83,6 +83,107 @@ No 9,000 BTU installation price is defined in this rule because no approved valu
 - Saved daily assignments and absences override regular van assignments.
 - Work requiring support validates the personnel of every participating van before an option is offered and again before booking.
 
+## Employee workforce schedule rules
+
+### OPS-STAFF-SCHEDULE-001 — Effective individual employee work schedule
+
+Owner: DEMAC owner/administrator. Updated effective rule: 2026-08-28.
+
+- Office/non-technical employees may use the company schedule or an individual effective schedule stored in the existing `employeePayrollSettings` authority.
+- A technical employee who is not assigned to any canonical Van may also use that same existing `employeePayrollSettings` authority for an individual effective schedule. This is not a new source of truth.
+- The primary approved individual full-day templates are 08:00–17:00 with a one-hour break and 09:00–18:00 with a one-hour break.
+- An individual full workday must contain exactly eight worked hours after the break.
+- A recurring partial day is configured separately from the full-day shift and therefore is not subject to the eight-hour full-day validation.
+- An individual schedule may have an `effectiveFrom` date and an optional `effectiveUntil` date.
+- Later schedule versions must not retroactively replace the schedule used for earlier payroll, attendance or calendar dates.
+- Migration impact: additive fields only; no production backfill or destructive migration is required.
+
+### OPS-STAFF-SCHEDULE-002 — Office/non-technical recurring partial day
+
+Owner: DEMAC owner/administrator. Corrected effective rule: 2026-08-27.
+
+- The recurring partial day for office, administration and operator staff belongs to `employeePayrollSettings`.
+- The partial-day weekday is employee-specific and may be Monday through Saturday.
+- The administrator assigns the exact Start, End and optional Break for that employee's recurring partial day.
+- Attendance, calendar and payroll schedule calculations count the resulting actual worked hours only.
+- The system must not add, display or infer a synthetic "paid free" block for the unworked portion of a recurring partial day.
+- Example: 09:00–13:00 with no break = 4 worked hours.
+- Example: 09:00–14:00 with no break = 5 worked hours; the duration is not hard-coded to four hours.
+- Legacy records that contain `halfDayWorkedHours`, `halfDayPaidFreeHours` or morning/afternoon placement metadata remain readable. Their stored metadata is not deleted, but recurring schedule resolution uses worked time only and does not count the legacy paid-free field as scheduled time.
+- Explicit historical timesheet/payroll records are not rewritten by this correction.
+
+### OPS-STAFF-SCHEDULE-003 — Technical recurring schedule authority
+
+Owner: DEMAC owner/administrator. Updated effective rule: 2026-08-28.
+
+- A technical employee assigned to a canonical regular Van crew inherits the recurring schedule from that Van/team. The Van's partial day belongs to `vanHalfDaySchedules`.
+- The Van/team's exact `workdayStart` and `workdayEnd` determine the assigned technician's recurring partial-day worked hours.
+- Only the actual worked window is counted; no synthetic paid-free hours are added.
+- An individual employee schedule must never override or duplicate the active Van/team schedule while the technical employee is assigned to a Van.
+- A technical employee with no canonical Van assignment may instead use the existing versioned `employeePayrollSettings` individual schedule, including an administrator-defined exact partial-day weekday, Start, End and optional Break.
+- Assigning that employee to a Van immediately makes the Van/team schedule authoritative for Calendar, Attendance and Payroll without deleting the employee's saved individual schedule history.
+- Moving the employee from one Van to another changes the inherited Van partial day automatically.
+- Removing the employee from all canonical Vans makes the applicable preserved individual schedule authoritative and editable again.
+- Before the supported Employee Profile flow saves an individual technical schedule, it rechecks current canonical Van membership. The schedule write contract rejects technical writes by default unless the caller explicitly confirms that the technician has no canonical Van assignment.
+
+### OPS-STAFF-SCHEDULE-004 — Employment-date schedule boundary
+
+Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
+
+- `employmentStartedAt` is the first date on which the ERP may synthesize scheduled work for an employee.
+- Dates before `employmentStartedAt` resolve to zero scheduled hours when generating calendar, assumed attendance and payroll projections.
+- If `employmentEndedAt` exists, dates after it resolve to zero scheduled hours.
+- The employment start and end dates themselves are inclusive.
+- Explicit historical records are preserved; this rule does not delete or rewrite existing timesheets, absences or payroll documents.
+
+### OPS-STAFF-SCHEDULE-005 — Sunday company closure
+
+Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
+
+- Sunday is globally company-closed.
+- An individual employee schedule may not override Sunday closure.
+
+## Employee payroll attendance rules
+
+### OPS-STAFF-ATTENDANCE-001 — Canonical 27–26 payroll calendar
+
+Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
+
+- A payroll period starts on the 27th of the previous calendar month and ends on the 26th of the payroll month.
+- Payroll navigation moves exactly one canonical payroll period at a time. September payroll (Aug 27–Sep 26) moved one period backward becomes August payroll (Jul 27–Aug 26), not July payroll.
+- The selected attendance date is subordinate to the active payroll period and does not redefine it.
+- Selecting Jul 27 while viewing Jul 27–Aug 26 keeps the active payroll calendar as August payroll.
+- Surrounding dates rendered only to complete a calendar week are contextual and must not silently create or edit records in another payroll period.
+
+### OPS-STAFF-ATTENDANCE-002 — Schedule-derived overtime
+
+Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
+
+- Overtime for a worked attendance day is derived from the employee's canonical resolved schedule plus actual Clock In, Clock Out and Break Minutes; it is not manually entered.
+- Overtime minutes are the sum of work before the scheduled start, work after the scheduled end, and unused scheduled break minutes.
+- Overtime is independent from missing scheduled time. A late arrival, early departure or extended break does not erase overtime worked elsewhere in the same day.
+- Example for 09:00–18:00 with a 60-minute scheduled break: 09:00–18:00/60 = 0 OT; 08:00–18:00/60 = 60m; 09:00–18:30/60 = 30m; 08:00–18:30/60 = 90m; 09:00–18:00/30 = 30m; 09:00–18:00/0 = 60m.
+
+### OPS-STAFF-ATTENDANCE-003 — Partial missing-time classification
+
+Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
+
+- A worked day may contain separate missing-scheduled-time segments for late arrival, early departure and break time beyond the scheduled break allowance.
+- Each detected segment must be classified independently as `Paid` or `No Work No Pay` and must contain a reason before the attendance exception can be saved.
+- Different segments on the same date may use different treatments and reasons.
+- Paid missing time contributes to payroll paid-free time; unpaid missing time contributes to No Work No Pay. Regular worked scheduled time remains separate.
+- A partially affected employee may remain `Present`; partial exceptions do not force the entire day to `Absent`.
+- Example: a 09:00–18:00 employee working 11:00–16:30 has a 09:00–11:00 late-arrival segment and a 16:30–18:00 early-departure segment. The two segments are classified separately.
+- Example: a 60-minute scheduled break with 90 minutes taken creates a separate 30-minute extended-break segment.
+
+### OPS-STAFF-ATTENDANCE-004 — Explicit attendance schedule snapshot
+
+Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
+
+- When a payroll-relevant daily attendance exception is explicitly saved, the `employeeTimesheets` record preserves additive snapshot fields for the resolved scheduled start, scheduled end, scheduled break allowance and scheduled paid-free minutes used for that edit.
+- Existing historical timesheet records without these snapshot fields remain valid and are not destructively backfilled.
+- Canonical schedule version history remains the authority for synthesized historical days; the snapshot is audit evidence for the explicit attendance record, not a second schedule authority.
+
 ## Routing rules
 
 ### OPS-ROUTE-001 — Morning route anchor
@@ -160,6 +261,31 @@ No 9,000 BTU installation price is defined in this rule because no approved valu
 - Approved WhatsApp answers and multilingual trigger examples.
 
 ## Acceptance scenarios
+
+### Employee schedule regression examples
+
+- Existing office employee with legacy Wednesday partial-day metadata → Wednesday keeps its historical worked window, for example 08:00–12:00, and resolves to 4 worked hours with zero synthetic paid-free schedule hours.
+- Office employee on a 09:00–18:00 schedule with one-hour break → a normal day resolves to 8 worked hours.
+- Office employee on a 09:00–18:00 schedule with Wednesday exact partial day 09:00–13:00 and no break → Wednesday resolves to exactly 4 worked hours.
+- Office employee configured for an exact partial day 09:00–14:00 and no break → that day resolves to exactly 5 worked hours, proving partial duration is administrator-defined rather than hard-coded.
+- Employee whose employment starts on 2026-08-11 → 2026-08-10 resolves to zero synthesized scheduled hours; 2026-08-11 is included.
+- Technical employee with no Van, individual 09:00–18:00 schedule and Wednesday 09:00–13:00 partial day → Wednesday resolves to 4 worked hours and Payroll receives 4 regular hours with zero synthetic paid-free time.
+- That same technical employee assigned to a Van whose partial day is Thursday 08:00–13:00 → the saved individual Wednesday partial day becomes inactive; Thursday resolves from the Van to 5 worked hours.
+- Moving that technician to another Van → the inherited partial day changes automatically to the new Van's rule.
+- Removing that technician from all Vans → the applicable preserved individual schedule becomes active and editable again without a migration or recreated record.
+- Technician assigned to a Van with Wednesday 08:00–13:00 partial day → Wednesday resolves to 5 worked hours with zero synthetic paid-free schedule hours even if an employee payroll record contains another schedule.
+- Any employee custom schedule on Sunday → Sunday remains closed with zero scheduled hours.
+- Saving a new schedule effective 2026-09-01 on an employee with a legacy schedule → dates before September continue resolving against the preserved legacy schedule version; explicit historical records are not deleted or rewritten.
+
+### Employee payroll-attendance regression examples
+
+- September payroll Aug 27–Sep 26 → Previous once = Jul 27–Aug 26; Previous again = Jun 27–Jul 26.
+- While Jul 27–Aug 26 is active, selecting Jul 27 keeps August payroll active.
+- 09:00–18:00/60 break → 0m overtime; 08:00–18:00/60 → 60m; 09:00–18:30/60 → 30m; 08:00–18:30/60 → 90m; 09:00–18:00/30 → 30m; 09:00–18:00/0 → 60m.
+- Exact 09:00–13:00 recurring partial day with no break → 4 worked hours, 0 synthetic break and 0 overtime when worked as scheduled.
+- 09:00–18:00 employee working 11:00–16:30 → two independent missing-time segments: 09:00–11:00 and 16:30–18:00. Saving is blocked until both have treatment and reason.
+- 09:00–18:00 with a 90-minute break instead of 60 → 30-minute extended-break segment.
+- A paid morning medical absence and an unpaid afternoon personal permission on the same day remain separate; overtime, if any, is retained independently.
 
 ### Ten standard-service units
 

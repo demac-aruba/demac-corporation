@@ -291,7 +291,12 @@ export function LiveSchedulingOverview() {
   }, [bookingTarget, moveArmedJobId, moveBusy, pendingDragMove, supportTarget]);
 
   const jobs = useMemo(() => appointments.flatMap(appointmentAssignments), [appointments]);
-  const vans = useMemo<DisplayVan[]>(() => previewVans.map((van) => ({ id: van.id, name: van.name, active: van.active })), []);
+  const vans = useMemo<DisplayVan[]>(() => {
+    if (!capacityState) return previewVans.map((van) => ({ id: van.id, name: van.name, active: van.active }));
+    return [...capacityState.vans.values()]
+      .sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true }))
+      .map((van) => ({ id: van.id, name: van.id.replace(/^VAN-(\d+)$/, 'Van $1'), active: van.active }));
+  }, [capacityState]);
   const canonicalVanIds = useMemo(() => new Set(vans.map((van) => van.id)), [vans]);
   const unresolvedJobs = useMemo(() => jobs.filter((job) => !canonicalVanIds.has(job.vanId)), [canonicalVanIds, jobs]);
   const jobLinks = useMemo(() => {
@@ -572,8 +577,8 @@ export function LiveSchedulingOverview() {
       {error ? <div className={styles.notice}><span>Live sync error: {error}</span></div> : null}
       {capacityError ? <div className={styles.notice}><span>Canonical operating-capacity policy could not be loaded: {capacityError}. Appointment data remains visible, but scheduling changes are disabled until capacity refresh succeeds.</span></div> : null}
       {moveNotice ? <div className={styles.notice}><span>{moveNotice}</span>{moveArmedJobId && !moveBusy ? <button type="button" onClick={() => { setMoveArmedJobId(''); setMoveNotice('Move mode cancelled.'); }}>×</button> : null}</div> : null}
-      {unresolvedJobs.length ? <div className={styles.notice}><span>Data integrity attention: {unresolvedJobs.length} assignment{unresolvedJobs.length === 1 ? '' : 's'} reference a van that cannot be resolved to Van 1–4. They are not converted into fake extra lanes.</span></div> : null}
-      {activeConflictSlots ? <div className={styles.notice}><span>Capacity integrity attention: {activeConflictSlots} occupied slot{activeConflictSlots === 1 ? '' : 's'} contain overlapping appointments after duplicate fleet records were collapsed to the physical Van 1–4. Both appointments remain visible below so they can be reviewed and rescheduled safely.</span></div> : null}
+      {unresolvedJobs.length ? <div className={styles.notice}><span>Data integrity attention: {unresolvedJobs.length} assignment{unresolvedJobs.length === 1 ? '' : 's'} reference a van that cannot be resolved to the canonical fleet. They are not converted into fake extra lanes.</span></div> : null}
+      {activeConflictSlots ? <div className={styles.notice}><span>Capacity integrity attention: {activeConflictSlots} occupied slot{activeConflictSlots === 1 ? '' : 's'} contain overlapping appointments after duplicate fleet records were collapsed to their canonical physical Vans. Both appointments remain visible below so they can be reviewed and rescheduled safely.</span></div> : null}
       {outsideCapacityJobs.length ? <div className={styles.notice}><span>Operating-calendar attention: {outsideCapacityJobs.length} appointment{outsideCapacityJobs.length === 1 ? '' : 's'} currently extend into capacity that is closed by the canonical van/company calendar. They remain visible for correction but are not counted as open capacity.</span></div> : null}
 
       <div className={styles.toolbar}>
@@ -619,7 +624,13 @@ export function LiveSchedulingOverview() {
           <b>{moveBusy ? 'SAVING MOVE…' : moveArmedJobId ? `${validDropTargets.size} VALID TARGETS` : `${activeOccupancy.open} OPEN SPOTS`}</b>
         </header>
         <div className={styles.boardScroll}>
-          <div className={styles.vanGrid}>
+          <div
+            className={styles.vanGrid}
+            style={{
+              gridTemplateColumns: `repeat(${Math.max(1, vans.length)}, minmax(230px, 1fr))`,
+              minWidth: `${Math.max(980, vans.length * 238)}px`,
+            }}
+          >
             {vans.map((van) => {
               const vanJobs = activeJobs.filter((job) => job.vanId === van.id);
               const vanSlots = displaySlotsForVan(activeDay, van.id, capacityState);

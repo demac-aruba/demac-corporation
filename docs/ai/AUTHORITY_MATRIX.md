@@ -14,10 +14,13 @@ provider callbacks, and cached projections are never authority by themselves.
 | Work-order lifecycle | Work-order application service | Assigned/authorized roles | Valid transitions, evidence rules, actor/time audit |
 | Pricing and service duration | Approved company rule/settings hierarchy | Read consumers; authorized settings editor | Rule version, effective date, no AI invention |
 | Employee master identity | `staffProfiles` | Authorized workforce/admin flows | Firebase users remain authentication identities, never a duplicate employee master |
+| Regular Van crew and Van vehicle profile | `vans` | Authorized operations/scheduling flows | Van owns responsible driver, regular helper, optional third helper; employee `primaryVanId` is compatibility/read metadata only; no simultaneous regular assignment |
+| Van maintenance / repair history | `vanMaintenanceLogs` plus current service milestone projection on `vans` | Authorized operations/scheduling flows | Additive history, stable Van identity, no duplicate maintenance source |
 | Dated staff unavailability | `staffAbsences` | Authorized workforce/operations flows | Vacation, sickness, and one-off dated ranges only |
-| Technical recurring half-day | `vanHalfDaySchedules` for the Van/team | Authorized operations/scheduling flows | Technical staff inherit the Van/team rule; no employee-level duplicate |
-| Office/non-technical recurring half-day and payroll schedule | `employeePayrollSettings` | Authorized workforce/payroll flows | Payroll permission boundary and employee linkage |
-| Temporary crew override | `dailyVanAssignments` | Authorized operations/scheduling flows | Date-scoped override; does not rewrite recurring crew ownership |
+| Van-assigned technical recurring schedule | `vanHalfDaySchedules` for the Van/team plus company calendar | Authorized operations/scheduling flows | Assigned technical staff inherit the Van/team rule; exact worked window; employee schedule cannot override active Van authority |
+| Individual recurring employee schedule | `employeePayrollSettings` | Authorized workforce/payroll flows | Office/non-technical employees and technical employees with no canonical Van assignment only; payroll permission boundary, effective versions, employee linkage; Van assignment takes precedence for technical staff |
+| Explicit daily attendance/payroll exception | `employeeTimesheets`, interpreted against the canonical resolved employee schedule | Authorized payroll-sensitive Employees/Payroll flows | Deterministic employee/date ID, schedule-derived overtime, classified partial missing-time segments, schedule snapshot, actor/time audit, payroll-only Firestore access |
+| Temporary crew override | `dailyVanAssignments` | Authorized operations/scheduling flows | Date-scoped driver/helper/optional third helper; no simultaneous dated assignment; does not rewrite regular crew ownership |
 | Commercial Product / Service catalog | `services` | Authorized catalog and operational flows | One canonical commercial catalog; no duplicate Product or Service authority |
 | Sellable Product stock | `commercialProductStock`, including location balances | Warehouse/authorized work-order flows through Firebase `inventoryAuthority` for transactional operations | Atomic validated balance updates, stable Product/location identity, reconciliation and audit |
 | Material / consumable stock | `warehouseInventory`, including location balances | Warehouse/authorized work-order flows through Firebase `inventoryAuthority` for transactional operations | Atomic validated balance updates, stable item/location identity, reconciliation and audit |
@@ -35,6 +38,45 @@ provider callbacks, and cached projections are never authority by themselves.
 
 When two sources disagree, do not use recency alone. Prefer the designated authority,
 record the discrepancy, and require reconciliation before a high-impact write.
+
+## Van crew boundary
+
+- A regular field assignment is written on the canonical `vans` document, not independently
+  on an employee profile. Employee, Technician and Scheduling screens may project that relationship.
+- `responsibleStaffId`, `regularHelperId`, and optional `additionalHelperId` are mutually exclusive
+  positions within one Van. `technicianIds` is a compatibility/derived projection of those slots.
+- `dailyVanAssignments` may replace those positions for one date. Once that date is over or the
+  override is removed, regular Van crew resolves again without rewriting the Van profile.
+- A person must not resolve onto two Vans on the same date. Regular and dated writes validate this
+  before persistence.
+- New Van profiles begin out of service and therefore do not silently expand booking capacity.
+
+## Employee recurring schedule boundary
+
+- A technical employee who is part of a canonical regular Van crew resolves recurring schedule
+  authority from that Van/team. `vanHalfDaySchedules` controls the Van partial-day window and an
+  employee-level payroll schedule must not override it.
+- A technical employee who is not assigned to any canonical Van may use the existing
+  `employeePayrollSettings` authority for an effective individual schedule, using the same
+  versioning, worked-hour and payroll controls as other individual employee schedules.
+- Assigning that employee to a Van immediately makes the Van/team schedule authoritative for active
+  resolution without deleting the employee's versioned individual schedule history. Removing the
+  employee from all Vans makes the applicable individual schedule active again.
+- The supported Employee Profile write flow revalidates canonical Van membership before saving an
+  individual technical schedule. Domain writes also require explicit confirmation that no Van owns
+  that schedule; omission defaults to rejection.
+- Sunday remains a protected company closure regardless of individual or Van schedule authority.
+
+## Workforce attendance boundary
+
+- `employeeTimesheets` is not a second recurring schedule authority. Explicit daily records
+  are interpreted against the employee schedule resolved from the existing schedule authorities.
+- Normal scheduled attendance remains synthesized and is not materialized as a daily record.
+- `staffAbsences` remains the dated full-day/operational unavailability authority. A partial
+  late arrival, early departure, or extended break is stored on the explicit daily timesheet
+  so separate payroll treatment can be preserved without inventing another absence collection.
+- Schedule snapshot fields on a timesheet are audit evidence for the calculation used when
+  that explicit record was edited; they do not supersede canonical schedule history.
 
 ## Inventory boundary
 
