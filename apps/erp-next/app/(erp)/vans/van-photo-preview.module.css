@@ -1,5 +1,5 @@
 .realVanPhotos :global([aria-label="Van illustration"]) {
-  background-image: url('/fleet/demac-van-real.webp');
+  background-image: url('/fleet/demac-van-real.webp?v=20260828-2');
   background-repeat: no-repeat;
   background-position: center;
   background-size: cover;
