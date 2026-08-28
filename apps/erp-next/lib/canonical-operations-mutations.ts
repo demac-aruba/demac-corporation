@@ -1,4 +1,5 @@
-import { deleteFirestoreDocument, getFirestoreDocument, listFirestoreCollection, saveFirestoreDocument, updateFirestoreDocument } from './firebase/firestore-rest';
+import { getFirestoreDocument, listFirestoreCollection, saveFirestoreDocument, updateFirestoreDocument } from './firebase/firestore-rest';
+import { requireFirebaseWebSession } from './firebase/session';
 import { validateDailyVanAssignment, validateVanCrew } from './van-profile';
 import type {
   CanonicalBusinessCalendar,
@@ -59,16 +60,61 @@ export async function saveCanonicalDailyVanAssignment(assignment: CanonicalDaily
     driverStaffId: assignment.driverStaffId || '',
     helperStaffId: assignment.helperStaffId || '',
     additionalHelperStaffId: assignment.additionalHelperStaffId || '',
+    status: assignment.status === 'Cancelled' ? 'Disponible' : assignment.status,
+    originalDate: assignment.originalDate || assignment.date,
+    cancelledAt: undefined,
+    cancelledByUserId: undefined,
+    cancelledByName: undefined,
   };
-  validateDailyVanAssignment(normalized, staffProfiles, vans, assignments.filter((item) => item.id !== assignment.id));
+  validateDailyVanAssignment(normalized, staffProfiles, vans, assignments.filter((item) => item.id !== assignment.id && item.status !== 'Cancelled'));
   return upsertCanonicalDocument('dailyVanAssignments', normalized);
 }
 
-export function deleteCanonicalDailyVanAssignment(id: string) {
-  return deleteFirestoreDocument('dailyVanAssignments', id);
+/**
+ * Operationally remove a dated override without deleting its audit evidence.
+ * Clearing the date makes the record impossible to resolve as a live dated assignment,
+ * while the original date and actor remain available in Firestore for audit/recovery.
+ */
+export async function deleteCanonicalDailyVanAssignment(id: string) {
+  const existing = await getFirestoreDocument<CanonicalDailyVanAssignment>('dailyVanAssignments', id);
+  if (!existing) return null;
+  const session = await requireFirebaseWebSession();
+  const now = new Date().toISOString();
+  return updateFirestoreDocument<CanonicalDailyVanAssignment>('dailyVanAssignments', id, {
+    originalDate: existing.originalDate || existing.date || '',
+    date: '',
+    status: 'Cancelled',
+    cancelledAt: now,
+    cancelledByUserId: session.uid,
+    cancelledByName: session.displayName || session.email,
+    updatedAt: now,
+  });
 }
 
-export function saveCanonicalVanMaintenanceLog(log: CanonicalVanMaintenanceLog) {
+/**
+ * Maintenance/repair creation is retry-safe for an ambiguous client response: an exact
+ * same-user, same-Van, same-service payload reuses the existing log instead of appending
+ * a duplicate financial/service-history row.
+ */
+export async function saveCanonicalVanMaintenanceLog(log: CanonicalVanMaintenanceLog) {
+  const existingLogs = await listFirestoreCollection<CanonicalVanMaintenanceLog>('vanMaintenanceLogs', 1000);
+  const retryMatch = existingLogs.find((item) => item.id !== log.id
+    && item.vanId === log.vanId
+    && item.date === log.date
+    && item.category === log.category
+    && item.type === log.type
+    && item.description === log.description
+    && item.odometerKm === log.odometerKm
+    && item.cost === log.cost
+    && item.createdByUserId === log.createdByUserId);
+  if (retryMatch) {
+    return upsertCanonicalDocument('vanMaintenanceLogs', {
+      ...retryMatch,
+      ...log,
+      id: retryMatch.id,
+      createdAt: retryMatch.createdAt || log.createdAt,
+    });
+  }
   return upsertCanonicalDocument('vanMaintenanceLogs', log);
 }
 
