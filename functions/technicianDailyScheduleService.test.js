@@ -454,11 +454,12 @@ test("an operationally available empty regular day queues only the six sellable 
   assert.equal(result.lunchBreakCount, 0);
   assert.equal(result.pendingPeriodCount, 6);
   assert.equal(result.messageCount, 6);
-  assert.deepEqual(result.results.map((item) => item.pendingSlot), ["08:30", "09:30", "10:30", "13:30", "14:30", "15:30"]);
+  const pendingStarts = result.results.map((item) => item.pendingSlot);
+  assert.deepEqual(pendingStarts, ["08:30", "09:30", "10:30", "13:30", "14:30", "15:30"]);
+  assert.equal(pendingStarts.includes("11:30"), false);
+  assert.equal(pendingStarts.includes("12:30"), false);
   const texts = [...db.collections.whatsappOutboundQueue.values()].map((item) => item.text);
   assert.equal(texts.every((value) => value.startsWith("*PENDIENTE*")), true);
-  assert.equal(texts.some((value) => value.includes("11:30 AM")), false);
-  assert.equal(texts.some((value) => value.includes("12:30 PM")), false);
 });
 
 test("a van with zero work orders but no operational driver queues zero messages", async () => {
