@@ -6,6 +6,7 @@ const {
   afterHoursGuard,
   createAfterHoursAuthority,
 } = require("./bookingAfterHours");
+const { createWorkOrderApplicationService } = require("./workOrderApplicationService");
 
 class FakeSnapshot {
   constructor(id, value, ref = null) {
@@ -247,6 +248,32 @@ test("a Van cannot receive a second open-ended after-hours emergency while its g
     (error) => error.code === BOOKING_ERROR_CODES.SLOT_CONFLICT
       && error.details?.reason === "after-hours-open-job-exists",
   );
+});
+
+test("completion releases the Van so a later after-hours emergency can be assigned without inventing an end time", async () => {
+  const { db, authority } = fixture();
+  const first = await authority.createEmergency(input());
+  const completion = createWorkOrderApplicationService({
+    db,
+    clock: () => new Date("2026-08-27T23:15:00.000Z"),
+  });
+  const completed = await completion.completeAfterHours({
+    requestId: "complete-after-hours-0001",
+    workOrderId: first.workOrderIds[0],
+    actor: { uid: "tech-user-1", role: "technician", staffId: "driver-1", name: "Miguel Reyes" },
+  });
+
+  assert.equal(completed.overtimeMinutes, 105);
+  assert.equal(db.read(`bookingCapacityLocks/${afterHoursGuard(DATE, "VAN-1").id}`).active, false);
+  assert.equal(db.read(`workOrders/${first.workOrderIds[0]}`).appointmentEndTime, undefined);
+
+  const second = await authority.createEmergency(input({
+    requestId: "after-hours-request-0002",
+    requestedTime: "20:00",
+  }));
+  assert.equal(second.success, true);
+  assert.notEqual(second.appointmentId, first.appointmentId);
+  assert.equal(db.read(`workOrders/${second.workOrderIds[0]}`).appointmentEndTime, undefined);
 });
 
 test("after-hours emergency respects the canonical company closure calendar", async () => {
