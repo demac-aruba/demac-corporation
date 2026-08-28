@@ -1,10 +1,8 @@
 .realVanPhotos :global([aria-label="Van illustration"]) {
-  background-image:
-    radial-gradient(circle at 50% 55%, rgba(23, 102, 215, 0.06), transparent 68%),
-    url('/fleet/demac-van-real.webp');
+  background-image: url('/fleet/demac-van-real.webp');
   background-repeat: no-repeat;
   background-position: center;
-  background-size: contain;
+  background-size: cover;
   background-color: transparent;
 }
 
