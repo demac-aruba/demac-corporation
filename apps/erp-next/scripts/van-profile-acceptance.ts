@@ -65,8 +65,21 @@ assert.equal(
   'A staff member may move to another Van for one date only when the original Van also has a dated override removing that person.',
 );
 
+const isolatedSourceVan: CanonicalVan = { id: 'VAN-3', name: 'Van 3', status: 'Disponible', responsibleStaffId: otherDriver.id, regularHelperId: third.id, active: true };
+const isolatedTargetVan: CanonicalVan = { id: 'VAN-4', name: 'Van 4', status: 'Sin personal', active: true };
+assert.equal(
+  validateDailyVanAssignment(
+    { id: 'daily-after-cancel', date: '2026-09-01', vanId: 'VAN-4', helperStaffId: helper.id },
+    staff,
+    [isolatedSourceVan, isolatedTargetVan],
+    [{ id: 'daily-cancelled', date: '2026-09-01', originalDate: '2026-09-01', vanId: 'VAN-3', helperStaffId: helper.id, status: 'Cancelled' }],
+  ),
+  true,
+  'A cancelled override must preserve its audit record without continuing to reserve that employee on the original date.',
+);
+
 assert.equal(workedMinutes('08:00', '13:00'), 300, 'Van partial day 08:00–13:00 must resolve to exactly five worked hours.');
 assert.equal(workedMinutes('09:00', '13:00'), 240, 'Van partial day may use exact custom worked hours.');
 assert.throws(() => workedMinutes('13:00', '09:00'), /after start time/i, 'Invalid partial-day windows must be rejected.');
 
-console.log('Van profile acceptance passed: canonical crew ownership, optional third helper, cross-Van exclusivity, daily overrides, safe clearing, protected future-Van activation, new-Van defaults and exact partial-day hours.');
+console.log('Van profile acceptance passed: canonical crew ownership, optional third helper, cross-Van exclusivity, daily overrides, cancelled-override recovery, safe clearing, protected future-Van activation, new-Van defaults and exact partial-day hours.');
