@@ -9,21 +9,12 @@ const {
 } = require("./bookingAuthorityFirestore");
 const {
   hashId,
-  isOpenBusinessDate,
-} = (() => {
-  const primitives = require("./bookingSchedulingPrimitives");
-  const calendar = require("./operatingCalendarService");
-  return {
-    hashId: primitives.hashId,
-    isOpenBusinessDate: calendar.isOpenBusinessDate,
-  };
-})();
-const {
   normalizeRouteConfig,
   propertyZone,
   resolveAssignment,
   snapshotItems,
 } = require("./bookingSchedulingPrimitives");
+const { isOpenBusinessDate } = require("./operatingCalendarService");
 const { candidateAvailability } = require("./bookingCapacityAvailability");
 const { canonicalizeSchedulingData } = require("./bookingVanIdentity");
 
@@ -230,9 +221,21 @@ function createAdhocSupportAuthority({
       }
       if (replaySnapshot.exists) {
         const replay = { id: replaySnapshot.id, ...replaySnapshot.data() };
-        if (cleanText(replay.appointmentId, 180) === id && activeWorkOrder(replay)) {
-          return { success: true, replayed: true, appointmentId: id, supportWorkOrderId: replay.id, supportWorkOrder: replay, appointment };
+        if (cleanText(replay.appointmentId, 180) !== id) {
+          throw new BookingAuthorityError(
+            BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
+            "This support request identity is already attached to another appointment.",
+            { supportWorkOrderId: replay.id, appointmentId: replay.appointmentId || "" },
+          );
         }
+        return {
+          success: true,
+          replayed: true,
+          appointmentId: id,
+          supportWorkOrderId: replay.id,
+          supportWorkOrder: replay,
+          appointment,
+        };
       }
 
       const sameDayQuery = db.collection(collections.workOrders).where("date", "==", targetDate);
