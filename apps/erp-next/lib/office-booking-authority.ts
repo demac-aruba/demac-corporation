@@ -160,6 +160,15 @@ export type OfficeLifecycleResult = {
   workOrderIds?: string[];
 };
 
+export type OfficeAdhocSupportResult = {
+  success: true;
+  replayed?: boolean;
+  appointmentId: string;
+  supportWorkOrderId: string;
+  supportWorkOrder: Record<string, unknown>;
+  appointment: Record<string, unknown>;
+};
+
 export type OfficeCreateAppointmentResult = {
   success: true;
   replayed?: boolean;
@@ -496,4 +505,15 @@ export async function moveOfficeAppointment(input: {
   note?: string;
 }) {
   return callOfficeBookingAuthority<OfficeLifecycleResult>('move_appointment', input, 12_000);
+}
+
+export async function addOfficeAdhocSupport(input: {
+  appointmentId: string;
+  requestId: string;
+  requestedDate: string;
+  requestedTime: string;
+  requiredVanId: string;
+  reason?: string;
+}) {
+  return callOfficeBookingAuthority<OfficeAdhocSupportResult>('add_adhoc_support', input, 12_000);
 }
