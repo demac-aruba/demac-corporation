@@ -24,6 +24,8 @@ import {
   OFFICE_SCHEDULE_TEMPLATES,
   asEmployeePayrollScheduleSettings,
   defaultEmployeeWeeklySchedule,
+  defaultPartialDayWindow,
+  employeePartialDayFromSettings,
   employeeWeeklyScheduleFromSettings,
   saveEmployeeScheduleSettings,
   type EmployeeScheduleMode,
@@ -101,6 +103,9 @@ type ScheduleDraft = {
   weeklySchedule: EmployeeWeeklySchedule;
   halfDayWeekday: string;
   halfDayOffPeriod: HalfDayOffPeriod;
+  halfDayStartTime: string;
+  halfDayEndTime: string;
+  halfDayBreakMinutes: number;
   effectiveFrom: string;
   effectiveUntil: string;
 };
@@ -230,37 +235,14 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
         if (managed) {
           if (managed.staffId && managed.staffId !== profile.id) throw new Error(`The login email ${loginEmail} is assigned to another employee.`);
           const emailChanged = managed.email.trim().toLowerCase() !== loginEmail;
-          await updateManagedUser({
-            uid: managed.uid,
-            name,
-            email: loginEmail,
-            phone,
-            role: profileDraft.accessRole,
-            active: profileDraft.accessActive,
-            staffId: profile.id,
-          });
+          await updateManagedUser({ uid: managed.uid, name, email: loginEmail, phone, role: profileDraft.accessRole, active: profileDraft.accessActive, staffId: profile.id });
           if (emailChanged) await sendPasswordSetupEmail(loginEmail);
         } else {
-          await createManagedUser({
-            name,
-            email: loginEmail,
-            phone,
-            role: profileDraft.accessRole,
-            active: profileDraft.accessActive,
-            staffId: profile.id,
-          });
+          await createManagedUser({ name, email: loginEmail, phone, role: profileDraft.accessRole, active: profileDraft.accessActive, staffId: profile.id });
           await sendPasswordSetupEmail(loginEmail);
         }
       } else if (canManageAccess && linkedUser?.active) {
-        await updateManagedUser({
-          uid: linkedUser.uid,
-          name,
-          email: linkedUser.email,
-          phone,
-          role: linkedUser.role,
-          active: false,
-          staffId: profile.id,
-        });
+        await updateManagedUser({ uid: linkedUser.uid, name, email: linkedUser.email, phone, role: linkedUser.role, active: false, staffId: profile.id });
       }
 
       await onChanged(profile.id);
@@ -284,11 +266,14 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
         effectiveUntil: scheduleDraft.effectiveUntil || null,
         halfDayWeekday: scheduleDraft.halfDayWeekday ? Number(scheduleDraft.halfDayWeekday) : null,
         halfDayOffPeriod: scheduleDraft.halfDayOffPeriod,
+        halfDayStartTime: scheduleDraft.halfDayWeekday ? scheduleDraft.halfDayStartTime : null,
+        halfDayEndTime: scheduleDraft.halfDayWeekday ? scheduleDraft.halfDayEndTime : null,
+        halfDayBreakMinutes: scheduleDraft.halfDayWeekday ? scheduleDraft.halfDayBreakMinutes : 0,
       });
       setSettings((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
       await saveCanonicalStaffProfile({ ...profile, weeklyDayOffWeekday: null, weeklyDayOffEffectiveFrom: null } as LifecycleProfile);
       await onChanged(profile.id);
-      setMessage('Work schedule saved. Effective dates preserve historical schedule calculations.');
+      setMessage('Work schedule saved. Partial days use the exact worked hours you entered.');
     } catch (cause) { setError(errorText(cause)); }
     finally { setBusy(false); }
   }
@@ -298,15 +283,7 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
     if (!timeOff.fromDate || !timeOff.toDate || timeOff.toDate < timeOff.fromDate) return setError('Choose a valid time-off range.');
     setBusy(true); setError(''); setMessage('');
     try {
-      await saveCanonicalStaffAbsence({
-        id: `profile-${profile.id}-${crypto.randomUUID()}`,
-        staffId: profile.id,
-        fromDate: timeOff.fromDate,
-        toDate: timeOff.toDate,
-        reason: timeOff.reason,
-        notes: timeOff.notes.trim() || undefined,
-        active: true,
-      });
+      await saveCanonicalStaffAbsence({ id: `profile-${profile.id}-${crypto.randomUUID()}`, staffId: profile.id, fromDate: timeOff.fromDate, toDate: timeOff.toDate, reason: timeOff.reason, notes: timeOff.notes.trim() || undefined, active: true });
       setTimeOff({ fromDate: today, toDate: today, reason: 'Vacaciones', notes: '' });
       await onChanged(profile.id);
       setMessage('Dated exception saved separately from the recurring schedule.');
@@ -318,10 +295,8 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
     const email = linkedUser?.email ?? profileDraft.loginEmail.trim().toLowerCase();
     if (!linkedUser || !email) return setError('Create or link ERP access first.');
     setBusy(true); setError(''); setMessage('');
-    try {
-      await sendPasswordSetupEmail(email);
-      setMessage(`Password setup / reset email sent to ${email}.`);
-    } catch (cause) { setError(errorText(cause)); }
+    try { await sendPasswordSetupEmail(email); setMessage(`Password setup / reset email sent to ${email}.`); }
+    catch (cause) { setError(errorText(cause)); }
     finally { setBusy(false); }
   }
 
@@ -330,12 +305,7 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
     if (!offboardDraft.reason.trim()) return setError('Enter a short offboarding reason for the audit history.');
     setBusy(true); setError(''); setMessage('');
     try {
-      await offboardEmployee({
-        staffId: profile.id,
-        endDate: offboardDraft.endDate,
-        reason: offboardDraft.reason.trim(),
-        releaseLoginEmail: offboardDraft.releaseLoginEmail,
-      });
+      await offboardEmployee({ staffId: profile.id, endDate: offboardDraft.endDate, reason: offboardDraft.reason.trim(), releaseLoginEmail: offboardDraft.releaseLoginEmail });
       await onChanged(profile.id);
       onClose();
     } catch (cause) { setError(errorText(cause)); }
@@ -346,36 +316,30 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
     if (!canManageAccess) return;
     if (!window.confirm(`Reactivate ${staffDisplayName(profile)}? ERP access and van assignments will not be restored automatically.`)) return;
     setBusy(true); setError(''); setMessage('');
-    try {
-      await reactivateEmployee(profile.id);
-      await onChanged(profile.id);
-      onClose();
-    } catch (cause) { setError(errorText(cause)); }
+    try { await reactivateEmployee(profile.id); await onChanged(profile.id); onClose(); }
+    catch (cause) { setError(errorText(cause)); }
     finally { setBusy(false); }
   }
 
   function applyTemplate(templateId: Exclude<EmployeeScheduleTemplateId, 'custom'>) {
     const template = OFFICE_SCHEDULE_TEMPLATES.find((item) => item.id === templateId);
     if (!template) return;
-    setScheduleDraft((current) => ({
-      ...current,
-      mode: 'custom',
-      templateId,
-      weeklySchedule: defaultEmployeeWeeklySchedule(template.startTime, template.endTime, template.breakMinutes),
-    }));
+    setScheduleDraft((current) => {
+      const weeklySchedule = defaultEmployeeWeeklySchedule(template.startTime, template.endTime, template.breakMinutes);
+      const weekday = Number(current.halfDayWeekday);
+      const key = String(weekday) as EmployeeScheduleWeekdayKey;
+      const partialDay = weekday >= 1 && weekday <= 6 ? defaultPartialDayWindow(weeklySchedule[key]!, current.halfDayOffPeriod, 240) : null;
+      return { ...current, mode: 'custom', templateId, weeklySchedule, halfDayStartTime: partialDay?.startTime ?? current.halfDayStartTime, halfDayEndTime: partialDay?.endTime ?? current.halfDayEndTime, halfDayBreakMinutes: partialDay?.breakMinutes ?? current.halfDayBreakMinutes };
+    });
   }
 
   function updateDay(day: EmployeeScheduleWeekdayKey, field: 'startTime' | 'endTime' | 'breakMinutes', value: string) {
-    const current = scheduleDraft.weeklySchedule[day] ?? { startTime: '08:00', endTime: '17:00', breakMinutes: 60 };
-    setScheduleDraft((draft) => ({
-      ...draft,
-      mode: 'custom',
-      templateId: 'custom',
-      weeklySchedule: {
-        ...draft.weeklySchedule,
-        [day]: { ...current, [field]: field === 'breakMinutes' ? Number(value) : value },
-      },
-    }));
+    setScheduleDraft((draft) => {
+      const partial = Number(draft.halfDayWeekday) === Number(day);
+      if (partial) return { ...draft, halfDayStartTime: field === 'startTime' ? value : draft.halfDayStartTime, halfDayEndTime: field === 'endTime' ? value : draft.halfDayEndTime, halfDayBreakMinutes: field === 'breakMinutes' ? Number(value) : draft.halfDayBreakMinutes };
+      const current = draft.weeklySchedule[day] ?? { startTime: '08:00', endTime: '17:00', breakMinutes: 60 };
+      return { ...draft, mode: 'custom', templateId: 'custom', weeklySchedule: { ...draft.weeklySchedule, [day]: { ...current, [field]: field === 'breakMinutes' ? Number(value) : value } } };
+    });
   }
 
   const tabs: Array<{ id: Tab; label: string }> = [
@@ -385,12 +349,14 @@ function ExistingEmployeeProfile({ open, employee, operations, onClose, onChange
     { id: 'timeoff', label: 'Time Off & Exceptions' },
     { id: 'payroll', label: 'Payroll & Lifecycle' },
   ];
+  const headerSavesSchedule = tab === 'schedule' && !technical;
+  const canUseHeaderSave = profile.active !== false && (headerSavesSchedule ? canManageSchedule : canManageEmployees);
 
   return <div className={styles.backdrop} role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target && !busy) onClose(); }}>
     <section className={styles.shell} role="dialog" aria-modal="true" aria-label="Employee profile">
       <header className={styles.topbar}>
         <div className={styles.identity}><div className={styles.avatar}>{initials(profileDraft.name)}</div><div><span className={styles.eyebrow}>Canonical employee profile</span><div className={styles.titleRow}><h2>{profileDraft.name}</h2><span className={profile.active === false ? styles.inactiveBadge : styles.activeBadge}>{profile.active === false ? 'Former employee' : 'Active employee'}</span></div><p>{profileDraft.role} · {profileDraft.employeeType}</p></div></div>
-        <div className={styles.headerActions}><button className={styles.secondaryButton} type="button" onClick={onClose} disabled={busy}>Cancel</button>{profile.active !== false && canManageEmployees ? <button className={styles.primaryButton} type="button" onClick={() => void saveProfile()} disabled={busy}>{busy ? 'Saving…' : 'Save Changes'}</button> : null}<button className={styles.closeButton} type="button" onClick={onClose} disabled={busy}>×</button></div>
+        <div className={styles.headerActions}><button className={styles.secondaryButton} type="button" onClick={onClose} disabled={busy}>Cancel</button>{canUseHeaderSave ? <button className={styles.primaryButton} type="button" onClick={() => void (headerSavesSchedule ? saveSchedule() : saveProfile())} disabled={busy || (headerSavesSchedule && loadingSchedule)}>{busy ? 'Saving…' : headerSavesSchedule ? 'Save Work Schedule' : 'Save Changes'}</button> : null}<button className={styles.closeButton} type="button" onClick={onClose} disabled={busy}>×</button></div>
       </header>
 
       <div className={styles.metaGrid}><Meta label="Employee ID" value={profile.id} /><Meta label="Type" value={profileDraft.employeeType} /><Meta label="Position" value={profileDraft.role} /><Meta label="Email" value={profileDraft.contactEmail || '—'} /><Meta label="Phone" value={profileDraft.phone || '—'} /><Meta label="Availability" value={availability} /></div>
@@ -437,23 +403,54 @@ function ScheduleEditor({ technical, canManage, loading, draft, setDraft, onAppl
   vanHalfDay?: CanonicalVanHalfDaySchedule;
   settings?: EmployeePayrollSettings;
 }) {
-  if (technical) return <div className={styles.scheduleLayout}><div className={styles.stack}><Card title="Work Schedule" subtitle="Technician recurring half-day is inherited from the Van/team."><div className={styles.scheduleTable}><div className={styles.scheduleHead}><span>Day</span><span>Status</span><span>Start</span><span>End</span><span>Rule</span></div>{WEEKDAYS.map((day) => { const half = vanHalfDay?.weekday === Number(day.key); return <div className={styles.scheduleRow} key={day.key}><strong>{day.label}</strong><span className={half ? styles.halfChip : styles.workChip}>{half ? 'Half-day' : 'Working day'}</span><span>{half ? vanHalfDay?.workdayStart ?? '08:00' : '08:00'}</span><span>{half ? vanHalfDay?.workdayEnd ?? '13:00' : '17:00'}</span><span>{half ? '5h work + 3h paid free' : 'Company shift'}</span></div>; })}<SundayRow /></div><Info>Change technician half-days in the Van/team schedule. An employee-level technician half-day is intentionally blocked.</Info></Card></div><aside className={styles.stack}><Card title="Schedule Source" subtitle="Protected authority"><Status label="Base schedule" value="Company calendar" /><Status label="Recurring half-day" value={vanId ? `${vanId} · vanHalfDaySchedules` : 'Van not assigned'} /><Status label="Half-day policy" value="5h + 3h paid free" /><Status label="Sunday" value="Company closed" /></Card></aside></div>;
+  if (technical) {
+    const partialWorkedMinutes = vanHalfDay?.workdayStart && vanHalfDay?.workdayEnd ? Math.max(0, timeMinutes(vanHalfDay.workdayEnd) - timeMinutes(vanHalfDay.workdayStart)) : 300;
+    return <div className={styles.scheduleLayout}><div className={styles.stack}><Card title="Work Schedule" subtitle="Technician recurring partial day is inherited from the Van/team."><div className={styles.scheduleTable}><div className={styles.scheduleHead}><span>Day</span><span>Status</span><span>Start</span><span>End</span><span>Rule</span></div>{WEEKDAYS.map((day) => { const partial = vanHalfDay?.weekday === Number(day.key); return <div className={styles.scheduleRow} key={day.key}><strong>{day.label}</strong><span className={partial ? styles.halfChip : styles.workChip}>{partial ? 'Partial day' : 'Working day'}</span><span>{partial ? vanHalfDay?.workdayStart ?? '08:00' : '08:00'}</span><span>{partial ? vanHalfDay?.workdayEnd ?? '13:00' : '17:00'}</span><span>{partial ? `${formatWorkedHours(partialWorkedMinutes)} worked` : 'Company shift'}</span></div>; })}<SundayRow /></div><Info>Change technician partial-day hours in the Van/team schedule. Only the actual worked hours are counted.</Info></Card></div><aside className={styles.stack}><Card title="Schedule Source" subtitle="Protected authority"><Status label="Base schedule" value="Company calendar" /><Status label="Recurring partial day" value={vanId ? `${vanId} · vanHalfDaySchedules` : 'Van not assigned'} /><Status label="Worked time" value={formatWorkedHours(partialWorkedMinutes)} /><Status label="Sunday" value="Company closed" /></Card></aside></div>;
+  }
 
   const rows = WEEKDAYS.map((day) => {
-    const row = draft.weeklySchedule[day.key] ?? { startTime: '08:00', endTime: '17:00', breakMinutes: 60 };
-    const half = Number(draft.halfDayWeekday) === Number(day.key);
-    return { ...day, ...row, half };
+    const fullDay = draft.weeklySchedule[day.key] ?? { startTime: '08:00', endTime: '17:00', breakMinutes: 60 };
+    const partial = Number(draft.halfDayWeekday) === Number(day.key);
+    const startTime = partial ? draft.halfDayStartTime : fullDay.startTime;
+    const endTime = partial ? draft.halfDayEndTime : fullDay.endTime;
+    const breakMinutes = partial ? draft.halfDayBreakMinutes : fullDay.breakMinutes;
+    const workedMinutes = Math.max(0, timeMinutes(endTime) - timeMinutes(startTime) - breakMinutes);
+    return { ...day, startTime, endTime, breakMinutes, workedMinutes, partial };
   });
-  const paidBaseHours = rows.reduce((sum, row) => sum + (row.half ? 8 : Math.max(0, (timeMinutes(row.endTime) - timeMinutes(row.startTime) - row.breakMinutes) / 60)), 0);
+  const scheduledWorkedMinutes = rows.reduce((sum, row) => sum + row.workedMinutes, 0);
+
+  function selectPartialDay(value: string) {
+    setDraft((current) => {
+      const weekday = Number(value);
+      if (!Number.isInteger(weekday) || weekday < 1 || weekday > 6) return { ...current, halfDayWeekday: '' };
+      const key = String(weekday) as EmployeeScheduleWeekdayKey;
+      const companyDay = defaultEmployeeWeeklySchedule()[key]!;
+      const fullDay = current.mode === 'custom' ? current.weeklySchedule[key] ?? companyDay : companyDay;
+      const partial = defaultPartialDayWindow(fullDay, current.halfDayOffPeriod, 240);
+      return { ...current, halfDayWeekday: value, halfDayStartTime: partial.startTime, halfDayEndTime: partial.endTime, halfDayBreakMinutes: partial.breakMinutes };
+    });
+  }
+
+  function selectPartialPlacement(value: HalfDayOffPeriod) {
+    setDraft((current) => {
+      const weekday = Number(current.halfDayWeekday);
+      if (!Number.isInteger(weekday) || weekday < 1 || weekday > 6) return { ...current, halfDayOffPeriod: value };
+      const key = String(weekday) as EmployeeScheduleWeekdayKey;
+      const companyDay = defaultEmployeeWeeklySchedule()[key]!;
+      const fullDay = current.mode === 'custom' ? current.weeklySchedule[key] ?? companyDay : companyDay;
+      const partial = defaultPartialDayWindow(fullDay, value, 240);
+      return { ...current, halfDayOffPeriod: value, halfDayStartTime: partial.startTime, halfDayEndTime: partial.endTime, halfDayBreakMinutes: partial.breakMinutes };
+    });
+  }
 
   return <div className={styles.scheduleLayout}>
     <div className={styles.stack}>
-      <Card title="1 · Schedule Mode" subtitle="Choose company default or a custom employee schedule."><div className={styles.modeGrid}><button className={draft.mode === 'company' ? styles.modeSelected : styles.modeCard} type="button" disabled={!canManage || loading} onClick={() => setDraft((current) => ({ ...current, mode: 'company' }))}><strong>Use company default</strong><span>08:00–17:00 · 1h break</span></button><button className={draft.mode === 'custom' ? styles.modeSelected : styles.modeCard} type="button" disabled={!canManage || loading} onClick={() => setDraft((current) => ({ ...current, mode: 'custom' }))}><strong>Use custom employee schedule</strong><span>Assign an individual eight-work-hour shift.</span></button></div></Card>
-      <Card title="2 · Shift Templates" subtitle="Fast starting points for office employees."><div className={styles.templateGrid}>{OFFICE_SCHEDULE_TEMPLATES.map((template) => <button key={template.id} className={draft.templateId === template.id && draft.mode === 'custom' ? styles.templateSelected : styles.templateCard} type="button" disabled={!canManage || loading} onClick={() => onApplyTemplate(template.id)}><strong>{template.label}</strong><span>{template.startTime}–{template.endTime}</span><small>{template.breakMinutes / 60}h break</small></button>)}<div className={styles.templateReadonly}><strong>Technician Shift</strong><span>Van/team governed</span><small>5h + 3h half-day rule</small></div></div></Card>
-      <Card title="3 · Weekly Schedule" subtitle="Sunday is company-closed and locked."><div className={styles.scheduleTable}><div className={styles.scheduleHead}><span>Day</span><span>Status</span><span>Start</span><span>End</span><span>Break / Rule</span></div>{rows.map((row) => <div className={styles.scheduleRow} key={row.key}><strong>{row.label}</strong><span className={row.half ? styles.halfChip : styles.workChip}>{row.half ? 'Half-day' : 'Working day'}</span><input className={styles.timeControl} type="time" value={row.startTime} disabled={!canManage || loading || draft.mode === 'company'} onChange={(event) => onUpdateDay(row.key, 'startTime', event.target.value)} /><input className={styles.timeControl} type="time" value={row.endTime} disabled={!canManage || loading || draft.mode === 'company'} onChange={(event) => onUpdateDay(row.key, 'endTime', event.target.value)} />{row.half ? <span className={styles.ruleText}>4h work + 4h paid free</span> : <select className={styles.miniSelect} value={row.breakMinutes} disabled={!canManage || loading || draft.mode === 'company'} onChange={(event) => onUpdateDay(row.key, 'breakMinutes', event.target.value)}><option value="60">1h break</option></select>}</div>)}<SundayRow /></div></Card>
-      <Card title="4 · Schedule Details" subtitle="Effective dates prevent future changes from rewriting historical schedule logic."><div className={styles.detailGrid}><Field label="Half-day weekday"><select className={styles.control} value={draft.halfDayWeekday} onChange={(event) => setDraft((current) => ({ ...current, halfDayWeekday: event.target.value }))} disabled={!canManage || loading}><option value="">Not configured</option>{WEEKDAYS.map((day) => <option key={day.key} value={day.key}>{day.label}</option>)}</select></Field><Field label="Half-day period"><select className={styles.control} value={draft.halfDayOffPeriod} onChange={(event) => setDraft((current) => ({ ...current, halfDayOffPeriod: event.target.value as HalfDayOffPeriod }))} disabled={!canManage || loading}><option value="afternoon">Afternoon off</option><option value="morning">Morning off</option></select></Field><Field label="Effective from"><input className={styles.control} type="date" value={draft.effectiveFrom} onChange={(event) => setDraft((current) => ({ ...current, effectiveFrom: event.target.value }))} disabled={!canManage || loading} /></Field><Field label="Effective until"><input className={styles.control} type="date" value={draft.effectiveUntil} onChange={(event) => setDraft((current) => ({ ...current, effectiveUntil: event.target.value }))} disabled={!canManage || loading} /></Field></div><Info>Office/Admin/Operators: <strong>4h worked + 4h paid free</strong>. Legacy records remain valid.</Info><div className={styles.actionRow}><button className={styles.primaryButton} type="button" onClick={onSave} disabled={!canManage || loading || busy}>{busy ? 'Saving…' : 'Save Work Schedule'}</button></div></Card>
+      <Card title="1 · Schedule Mode" subtitle="Choose company default or a custom employee schedule."><div className={styles.modeGrid}><button className={draft.mode === 'company' ? styles.modeSelected : styles.modeCard} type="button" disabled={!canManage || loading} onClick={() => setDraft((current) => ({ ...current, mode: 'company' }))}><strong>Use company default</strong><span>08:00–17:00 · 1h break</span></button><button className={draft.mode === 'custom' ? styles.modeSelected : styles.modeCard} type="button" disabled={!canManage || loading} onClick={() => setDraft((current) => ({ ...current, mode: 'custom' }))}><strong>Use custom employee schedule</strong><span>Assign an individual eight-work-hour full-day shift.</span></button></div></Card>
+      <Card title="2 · Shift Templates" subtitle="Fast starting points for office employees."><div className={styles.templateGrid}>{OFFICE_SCHEDULE_TEMPLATES.map((template) => <button key={template.id} className={draft.templateId === template.id && draft.mode === 'custom' ? styles.templateSelected : styles.templateCard} type="button" disabled={!canManage || loading} onClick={() => onApplyTemplate(template.id)}><strong>{template.label}</strong><span>{template.startTime}–{template.endTime}</span><small>{template.breakMinutes / 60}h break</small></button>)}<div className={styles.templateReadonly}><strong>Technician Shift</strong><span>Van/team governed</span><small>Partial-day hours come from the Van schedule</small></div></div></Card>
+      <Card title="3 · Weekly Schedule" subtitle="Enter the employee's exact worked Start / End times. Sunday is company-closed and locked."><div className={styles.scheduleTable}><div className={styles.scheduleHead}><span>Day</span><span>Status</span><span>Start</span><span>End</span><span>Break / Worked</span></div>{rows.map((row) => <div className={styles.scheduleRow} key={row.key}><strong>{row.label}</strong><span className={row.partial ? styles.halfChip : styles.workChip}>{row.partial ? 'Partial day' : 'Working day'}</span><input className={styles.timeControl} type="time" value={row.startTime} disabled={!canManage || loading || (!row.partial && draft.mode === 'company')} onChange={(event) => onUpdateDay(row.key, 'startTime', event.target.value)} /><input className={styles.timeControl} type="time" value={row.endTime} disabled={!canManage || loading || (!row.partial && draft.mode === 'company')} onChange={(event) => onUpdateDay(row.key, 'endTime', event.target.value)} />{row.partial ? <div className={styles.actionRow}><select className={styles.miniSelect} value={row.breakMinutes} disabled={!canManage || loading} onChange={(event) => onUpdateDay(row.key, 'breakMinutes', event.target.value)}><option value="0">No break</option><option value="30">30m break</option><option value="60">1h break</option></select><span className={styles.ruleText}>{formatWorkedHours(row.workedMinutes)} worked</span></div> : <select className={styles.miniSelect} value={row.breakMinutes} disabled={!canManage || loading || draft.mode === 'company'} onChange={(event) => onUpdateDay(row.key, 'breakMinutes', event.target.value)}><option value="60">1h break</option></select>}</div>)}<SundayRow /></div></Card>
+      <Card title="4 · Schedule Details" subtitle="Effective dates prevent future changes from rewriting historical schedule logic."><div className={styles.detailGrid}><Field label="Partial-day weekday"><select className={styles.control} value={draft.halfDayWeekday} onChange={(event) => selectPartialDay(event.target.value)} disabled={!canManage || loading}><option value="">Not configured</option>{WEEKDAYS.map((day) => <option key={day.key} value={day.key}>{day.label}</option>)}</select></Field><Field label="Default placement"><select className={styles.control} value={draft.halfDayOffPeriod} onChange={(event) => selectPartialPlacement(event.target.value as HalfDayOffPeriod)} disabled={!canManage || loading}><option value="afternoon">Work first part of day</option><option value="morning">Work last part of day</option></select></Field><Field label="Effective from"><input className={styles.control} type="date" value={draft.effectiveFrom} onChange={(event) => setDraft((current) => ({ ...current, effectiveFrom: event.target.value }))} disabled={!canManage || loading} /></Field><Field label="Effective until"><input className={styles.control} type="date" value={draft.effectiveUntil} onChange={(event) => setDraft((current) => ({ ...current, effectiveUntil: event.target.value }))} disabled={!canManage || loading} /></Field></div><Info>The partial day uses the exact Start, End and Break shown above. Attendance and payroll count the resulting <strong>worked hours only</strong>.</Info><div className={styles.actionRow}><button className={styles.primaryButton} type="button" onClick={onSave} disabled={!canManage || loading || busy}>{busy ? 'Saving…' : 'Save Work Schedule'}</button></div></Card>
     </div>
-    <aside className={styles.stack}><Card title="Weekly Overview" subtitle="Paid base preview"><div className={styles.overview}>{rows.map((row) => <div className={styles.overviewRow} key={row.key}><strong>{row.short}</strong><span>{row.half ? halfDayLabel(row.startTime, row.endTime, draft.halfDayOffPeriod) : `${row.startTime}–${row.endTime}`}</span><div className={row.half ? styles.halfBar : styles.workBar} /><b>{row.half ? '4h' : '8h'}</b></div>)}<div className={styles.overviewRow}><strong>Sun</strong><span>Closed</span><div className={styles.offBar} /><b>0h</b></div></div><div className={styles.totalRow}><span>Paid base hours</span><strong>{paidBaseHours}h</strong></div></Card><Card title="Payroll & Attendance Impact" subtitle="Shared effective schedule"><Status label="Attendance" value="Effective schedule" /><Status label="Calendar" value="Effective schedule" /><Status label="Payroll" value="Effective schedule dates" /><Status label="Employment start" value="Respected" /><Status label="Existing records" value="Not rewritten" /></Card>{settings ? <Card title="Current Record" subtitle="Backward-compatible source"><Status label="Record ID" value={settings.id} /><Status label="Legacy half-day" value={settings.weeklyHalfDayWeekday ? weekdayLabel(settings.weeklyHalfDayWeekday) : 'Not configured'} /><Status label="V2 mode" value={asEmployeePayrollScheduleSettings(settings)?.scheduleMode ?? 'Legacy / company default'} /></Card> : null}</aside>
+    <aside className={styles.stack}><Card title="Weekly Overview" subtitle="Worked-hour preview"><div className={styles.overview}>{rows.map((row) => <div className={styles.overviewRow} key={row.key}><strong>{row.short}</strong><span>{`${row.startTime}–${row.endTime}`}</span><div className={row.partial ? styles.halfBar : styles.workBar} /><b>{formatWorkedHours(row.workedMinutes)}</b></div>)}<div className={styles.overviewRow}><strong>Sun</strong><span>Closed</span><div className={styles.offBar} /><b>0h</b></div></div><div className={styles.totalRow}><span>Scheduled worked hours</span><strong>{formatWorkedHours(scheduledWorkedMinutes)}</strong></div></Card><Card title="Payroll & Attendance Impact" subtitle="Shared effective schedule"><Status label="Attendance" value="Exact worked hours" /><Status label="Calendar" value="Exact schedule" /><Status label="Payroll" value="Worked-hour schedule dates" /><Status label="Employment start" value="Respected" /><Status label="Existing records" value="Not rewritten" /></Card>{settings ? <Card title="Current Record" subtitle="Backward-compatible source"><Status label="Record ID" value={settings.id} /><Status label="Legacy partial-day weekday" value={settings.weeklyHalfDayWeekday ? weekdayLabel(settings.weeklyHalfDayWeekday) : 'Not configured'} /><Status label="V2 mode" value={asEmployeePayrollScheduleSettings(settings)?.scheduleMode ?? 'Legacy / company default'} /></Card> : null}</aside>
   </div>;
 }
 
@@ -471,9 +468,8 @@ function defaultRole(type: string) { if (type === 'Técnico') return 'Ayudante';
 function defaultAccessRole(type: string): ManagedUserRole { return type === 'Técnico' ? 'technician' : 'office'; }
 function defaultLoginEmailKind(type: string): LoginEmailKind { return type === 'Técnico' ? 'personal' : 'company'; }
 function profileDraftFrom(profile: LifecycleProfile, user?: ManagedUser): ProfileDraft { const type = profile.employeeType ?? (isTechnicalEmployee(profile) ? 'Técnico' : profile.role === 'Secretaria' ? 'Secretaria' : 'Administración'); return { name: profile.name ?? '', phone: profile.phone ?? '', contactEmail: profile.email ?? '', employeeType: type, role: profile.role ?? defaultRole(type), employmentStartedAt: profile.employmentStartedAt ?? '', canDriveVan: profile.canDriveVan === true, skills: (profile.skills ?? []).join(', '), notes: profile.notes ?? '', createAccess: Boolean(user), loginEmail: user?.email ?? profile.loginEmail ?? '', loginEmailKind: profile.loginEmailKind ?? defaultLoginEmailKind(type), accessRole: user?.role ?? defaultAccessRole(type), accessActive: user?.active ?? true }; }
-function scheduleDraftFrom(settings: EmployeePayrollSettings | undefined, profile: LifecycleProfile, today: string): ScheduleDraft { const extended = asEmployeePayrollScheduleSettings(settings); const weekday = Number(settings?.weeklyHalfDayWeekday); return { mode: extended?.scheduleMode ?? 'company', templateId: extended?.scheduleTemplateId ?? 'office-8-5', weeklySchedule: employeeWeeklyScheduleFromSettings(settings), halfDayWeekday: Number.isInteger(weekday) && weekday >= 1 && weekday <= 6 ? String(weekday) : '', halfDayOffPeriod: settings?.halfDayOffPeriod ?? 'afternoon', effectiveFrom: extended?.scheduleEffectiveFrom ?? settings?.halfDayEffectiveFrom ?? profile.employmentStartedAt ?? today, effectiveUntil: extended?.scheduleEffectiveUntil ?? '' }; }
+function scheduleDraftFrom(settings: EmployeePayrollSettings | undefined, profile: LifecycleProfile, today: string): ScheduleDraft { const extended = asEmployeePayrollScheduleSettings(settings); const weekday = Number(settings?.weeklyHalfDayWeekday); const halfDayWeekday = Number.isInteger(weekday) && weekday >= 1 && weekday <= 6 ? weekday : null; const halfDayOffPeriod = settings?.halfDayOffPeriod ?? 'afternoon'; const weeklySchedule = employeeWeeklyScheduleFromSettings(settings); const partialDay = employeePartialDayFromSettings(settings, weeklySchedule, halfDayWeekday, halfDayOffPeriod); return { mode: extended?.scheduleMode ?? 'company', templateId: extended?.scheduleTemplateId ?? 'office-8-5', weeklySchedule, halfDayWeekday: halfDayWeekday ? String(halfDayWeekday) : '', halfDayOffPeriod, halfDayStartTime: partialDay.startTime, halfDayEndTime: partialDay.endTime, halfDayBreakMinutes: partialDay.breakMinutes, effectiveFrom: extended?.scheduleEffectiveFrom ?? settings?.halfDayEffectiveFrom ?? profile.employmentStartedAt ?? today, effectiveUntil: extended?.scheduleEffectiveUntil ?? '' }; }
 function initials(value: string) { return value.trim().split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || 'DE'; }
 function timeMinutes(value: string) { const [hours, minutes] = value.split(':').map(Number); return hours * 60 + minutes; }
-function formatTime(total: number) { return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`; }
-function halfDayLabel(start: string, end: string, off: HalfDayOffPeriod) { const startMinutes = timeMinutes(start); const endMinutes = timeMinutes(end); return off === 'morning' ? `${formatTime(Math.max(startMinutes, endMinutes - 240))}–${end}` : `${start}–${formatTime(Math.min(endMinutes, startMinutes + 240))}`; }
+function formatWorkedHours(minutes: number) { const hours = Math.round((Math.max(0, minutes) / 60) * 100) / 100; return Number.isInteger(hours) ? `${hours}h` : `${hours.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')}h`; }
 function errorText(error: unknown) { return error instanceof Error ? error.message : String(error); }

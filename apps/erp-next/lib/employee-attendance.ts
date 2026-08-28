@@ -186,14 +186,13 @@ export function applyHalfDaySchedule(
   date: string,
   weekday: number | null | undefined,
   workedHours: number | undefined,
-  paidFreeHours: number | undefined,
+  _paidFreeHours: number | undefined,
   effectiveFrom?: string | null,
   offPeriod: HalfDayOffPeriod = 'afternoon',
 ) {
   const dateWeekday = new Date(`${date}T12:00:00Z`).getUTCDay();
   if (weekday == null || weekday !== dateWeekday || (effectiveFrom && date < effectiveFrom)) return schedule;
   const workedMinutesValue = Math.max(0, Math.round(Number(workedHours ?? 0) * 60));
-  const paidFreeMinutesValue = Math.max(0, Math.round(Number(paidFreeHours ?? 0) * 60));
   if (!workedMinutesValue) return schedule;
 
   const normalStart = schedule.startTime ? Number(schedule.startTime.slice(0, 2)) * 60 + Number(schedule.startTime.slice(3, 5)) : 8 * 60;
@@ -201,15 +200,15 @@ export function applyHalfDaySchedule(
   const workStart = offPeriod === 'morning' ? Math.max(normalStart, normalEnd - workedMinutesValue) : normalStart;
   const workEnd = offPeriod === 'morning' ? normalEnd : Math.min(normalEnd, normalStart + workedMinutesValue);
   const time = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
-  const offLabel = offPeriod === 'morning' ? 'morning off' : 'afternoon off';
+  const placementLabel = offPeriod === 'morning' ? 'work last part of day' : 'work first part of day';
 
   return {
     ...schedule,
     startTime: time(workStart),
     endTime: time(workEnd),
     scheduledMinutes: workedMinutesValue,
-    paidFreeMinutes: paidFreeMinutesValue,
-    label: `Weekly half-day · ${offLabel} · ${time(workStart)}–${time(workEnd)} · ${roundHours(workedMinutesValue)} worked + ${roundHours(paidFreeMinutesValue)} paid free`,
+    paidFreeMinutes: 0,
+    label: `Weekly partial day · ${placementLabel} · ${time(workStart)}–${time(workEnd)} · ${roundHours(workedMinutesValue)} worked`,
   };
 }
 
@@ -281,6 +280,7 @@ export function payrollSettingsForEmployee(settings: EmployeePayrollSettings[], 
   return matches.length === 1 ? matches[0] : undefined;
 }
 
+/** @deprecated Existing employee schedule editing uses saveEmployeeScheduleSettings with exact partial-day times. */
 export async function saveEmployeeHalfDaySettings(input: {
   employee: CanonicalStaffProfile;
   existing?: EmployeePayrollSettings;
@@ -290,7 +290,7 @@ export async function saveEmployeeHalfDaySettings(input: {
 }) {
   const weekday = Math.round(Number(input.weekday));
   if (weekday < 1 || weekday > 6) throw new Error('Choose a weekday from Monday through Saturday.');
-  if (!input.effectiveFrom) throw new Error('Choose when the recurring half-day becomes effective.');
+  if (!input.effectiveFrom) throw new Error('Choose when the recurring partial day becomes effective.');
   const now = new Date().toISOString();
   const id = input.existing?.id ?? input.employee.id;
   const changes: Omit<EmployeePayrollSettings, 'id'> = {
@@ -304,7 +304,7 @@ export async function saveEmployeeHalfDaySettings(input: {
     weeklyHalfDayWeekday: weekday,
     halfDayEffectiveFrom: input.effectiveFrom,
     halfDayWorkedHours: 4,
-    halfDayPaidFreeHours: 4,
+    halfDayPaidFreeHours: 0,
     halfDayOffPeriod: input.offPeriod,
     createdAt: input.existing?.createdAt ?? now,
     updatedAt: now,
