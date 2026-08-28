@@ -14,11 +14,13 @@ provider callbacks, and cached projections are never authority by themselves.
 | Work-order lifecycle | Work-order application service | Assigned/authorized roles | Valid transitions, evidence rules, actor/time audit |
 | Pricing and service duration | Approved company rule/settings hierarchy | Read consumers; authorized settings editor | Rule version, effective date, no AI invention |
 | Employee master identity | `staffProfiles` | Authorized workforce/admin flows | Firebase users remain authentication identities, never a duplicate employee master |
+| Regular Van crew and Van vehicle profile | `vans` | Authorized operations/scheduling flows | Van owns responsible driver, regular helper, optional third helper; employee `primaryVanId` is compatibility/read metadata only; no simultaneous regular assignment |
+| Van maintenance / repair history | `vanMaintenanceLogs` plus current service milestone projection on `vans` | Authorized operations/scheduling flows | Additive history, stable Van identity, no duplicate maintenance source |
 | Dated staff unavailability | `staffAbsences` | Authorized workforce/operations flows | Vacation, sickness, and one-off dated ranges only |
-| Technical recurring half-day | `vanHalfDaySchedules` for the Van/team | Authorized operations/scheduling flows | Technical staff inherit the Van/team rule; no employee-level duplicate |
+| Technical recurring half-day | `vanHalfDaySchedules` for the Van/team | Authorized operations/scheduling flows | Technical staff inherit the Van/team rule; exact worked window; no employee-level duplicate |
 | Office/non-technical recurring half-day and payroll schedule | `employeePayrollSettings` | Authorized workforce/payroll flows | Payroll permission boundary and employee linkage |
 | Explicit daily attendance/payroll exception | `employeeTimesheets`, interpreted against the canonical resolved employee schedule | Authorized payroll-sensitive Employees/Payroll flows | Deterministic employee/date ID, schedule-derived overtime, classified partial missing-time segments, schedule snapshot, actor/time audit, payroll-only Firestore access |
-| Temporary crew override | `dailyVanAssignments` | Authorized operations/scheduling flows | Date-scoped override; does not rewrite recurring crew ownership |
+| Temporary crew override | `dailyVanAssignments` | Authorized operations/scheduling flows | Date-scoped driver/helper/optional third helper; no simultaneous dated assignment; does not rewrite regular crew ownership |
 | Commercial Product / Service catalog | `services` | Authorized catalog and operational flows | One canonical commercial catalog; no duplicate Product or Service authority |
 | Sellable Product stock | `commercialProductStock`, including location balances | Warehouse/authorized work-order flows through Firebase `inventoryAuthority` for transactional operations | Atomic validated balance updates, stable Product/location identity, reconciliation and audit |
 | Material / consumable stock | `warehouseInventory`, including location balances | Warehouse/authorized work-order flows through Firebase `inventoryAuthority` for transactional operations | Atomic validated balance updates, stable item/location identity, reconciliation and audit |
@@ -36,6 +38,18 @@ provider callbacks, and cached projections are never authority by themselves.
 
 When two sources disagree, do not use recency alone. Prefer the designated authority,
 record the discrepancy, and require reconciliation before a high-impact write.
+
+## Van crew boundary
+
+- A regular field assignment is written on the canonical `vans` document, not independently
+  on an employee profile. Employee, Technician and Scheduling screens may project that relationship.
+- `responsibleStaffId`, `regularHelperId`, and optional `additionalHelperId` are mutually exclusive
+  positions within one Van. `technicianIds` is a compatibility/derived projection of those slots.
+- `dailyVanAssignments` may replace those positions for one date. Once that date is over or the
+  override is removed, regular Van crew resolves again without rewriting the Van profile.
+- A person must not resolve onto two Vans on the same date. Regular and dated writes validate this
+  before persistence.
+- New Van profiles begin out of service and therefore do not silently expand booking capacity.
 
 ## Workforce attendance boundary
 

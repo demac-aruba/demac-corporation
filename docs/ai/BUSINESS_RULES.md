@@ -16,6 +16,8 @@ engineering index; it does not replace that registry.
 - `OPS-SVC-*`: capacity includes the six-slot day, seven-unit single-property exception,
   and governed multi-van support.
 - `OPS-TEAM-*`: driver authorization, absence, availability, and no simultaneous assignment.
+- `OPS-VAN-PROFILE-*`: canonical Van ownership of regular crew, date-scoped override separation,
+  optional third-helper semantics, Van profile lifecycle, and vehicle maintenance/repair history.
 - `OPS-ROUTE-*`: route anchors and calculated availability precede customer preference.
 - `OPS-STAFF-SCHEDULE-*`: employee schedule authority, employment-date boundaries, recurring
   partial-day ownership, effective schedule versions, exact worked-hour windows, and Sunday closure.
@@ -30,6 +32,29 @@ Every rule change needs a stable ID, owner, source/evidence, effective date, aff
 authorities, acceptance examples, regression tests, and migration impact. Configurable
 values belong in governed settings; integrity and safety invariants remain protected code.
 Ambiguity blocks automation and is escalated to an authorized human.
+
+## Current Van profile ownership
+
+- `OPS-VAN-PROFILE-001` — The canonical `vans` record owns the regular field crew: one
+  responsible technician/driver, one regular helper, and an optional third helper. The same person
+  cannot occupy two slots on the same Van or be regular crew on two Vans simultaneously.
+  `staffProfiles.primaryVanId` is compatibility/read metadata only and must not become a second
+  crew-assignment write authority.
+- `OPS-VAN-PROFILE-002` — Temporary crew changes belong to `dailyVanAssignments` and apply only to
+  their exact date. A dated override may contain a driver, helper, and optional additional helper.
+  It never rewrites the regular Van crew, and the same employee may not resolve onto two Vans on the
+  same date. Moving a person between Vans for one date requires the source Van's dated crew to be
+  resolved as well.
+- `OPS-VAN-PROFILE-003` — Technical recurring partial-day configuration belongs to
+  `vanHalfDaySchedules`; weekday plus exact Start/End are authoritative for worked time. Sunday
+  remains governed by the company calendar and is not a Van partial-day choice.
+- `OPS-VAN-PROFILE-004` — Vehicle maintenance and repair history remains in the existing
+  `vanMaintenanceLogs` collection. Current odometer/service/insurance/registration milestones may
+  also be projected on the canonical `vans` profile; no duplicate maintenance authority is created.
+- Newly created Vans start `Fuera de servicio` so creating a profile cannot silently add live
+  booking capacity before crew/status configuration is intentionally completed.
+- Van WhatsApp group mapping continues through the existing governed Van schedule-group authority;
+  the Vans screen is a UI for that same mapping rather than a second configuration source.
 
 ## Current operating-calendar ownership
 

@@ -1,5 +1,5 @@
-import { CanonicalVansPanel } from '@/components/canonical-field-workforce';
+import { AdvancedVansWorkspace } from '@/components/vans/advanced-vans-workspace';
 
 export default function VansPage() {
-  return <CanonicalVansPanel />;
+  return <AdvancedVansWorkspace />;
 }
