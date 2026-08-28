@@ -174,10 +174,23 @@ function approvalForAdditionalIntervention(approvals, interventionId, scopeChang
   return matches[0] || null;
 }
 
+function approvalForSaleLine(approvals, saleLineId) {
+  const matches = approvals.filter((approval) => affectedId(approval, 'sale_line') === saleLineId);
+  if (matches.length > 1) {
+    throw fieldError('field_approval_identity_conflict', 'Field Sale Line has multiple customer decision records.', 409);
+  }
+  return matches[0] || null;
+}
+
 function validateApprovalLinks(job, approvals) {
   const interventionById = new Map((job.workInterventions || []).map((intervention) => [intervention.id, intervention]));
   const scopeChangeById = new Map((job.scopeChanges || []).map((scopeChange) => [scopeChange.id, scopeChange]));
+  const saleLineById = new Map((job.fieldSaleLines || []).map((saleLine) => [saleLine.id, saleLine]));
   for (const approval of approvals) {
+    const saleReferences = approval.affected.filter((reference) => reference.type === 'sale_line');
+    if (saleReferences.length && (saleReferences.length !== 1 || approval.affected.length !== 1)) {
+      throw fieldError('field_approval_identity_conflict', 'Field Sale customer decisions must reference exactly one Field Sale Line.', 409);
+    }
     for (const reference of approval.affected) {
       if (reference.type === 'intervention' && !interventionById.has(reference.id)) {
         throw fieldError('field_approval_identity_conflict', 'Field Approval references a Work Intervention outside the authorized visit.', 409);
@@ -185,8 +198,8 @@ function validateApprovalLinks(job, approvals) {
       if (reference.type === 'scope_change' && !scopeChangeById.has(reference.id)) {
         throw fieldError('field_approval_identity_conflict', 'Field Approval references a Scope Change outside the authorized visit.', 409);
       }
-      if (reference.type === 'sale_line') {
-        throw fieldError('field_approval_identity_conflict', 'Field Sale Line approvals are not activated in this read model yet.', 409);
+      if (reference.type === 'sale_line' && !saleLineById.has(reference.id)) {
+        throw fieldError('field_approval_identity_conflict', 'Field Approval references a Field Sale Line outside the authorized visit.', 409);
       }
     }
   }
@@ -217,6 +230,29 @@ function validateApprovalLinks(job, approvals) {
       continue;
     }
     throw fieldError('field_approval_identity_conflict', `Additional work status ${intervention.status} is not activated for approval reconciliation.`, 409);
+  }
+
+  for (const saleLine of job.fieldSaleLines || []) {
+    const approval = approvalForSaleLine(approvals, saleLine.id);
+    if (saleLine.status === 'proposed') {
+      if (approval || saleLine.customerApprovalId) throw fieldError('field_approval_identity_conflict', 'Proposed Field Sale Line already contains customer decision evidence.', 409);
+      continue;
+    }
+    if (saleLine.status === 'declined') {
+      if (approval?.status !== 'rejected' || approval.id !== saleLine.customerApprovalId) throw fieldError('field_approval_identity_conflict', 'Declined Field Sale Line is missing its customer rejection evidence.', 409);
+      continue;
+    }
+    if (['customer_approved', 'installed', 'delivered', 'sold'].includes(saleLine.status)) {
+      if (approval?.status !== 'approved' || approval.id !== saleLine.customerApprovalId) throw fieldError('field_approval_identity_conflict', 'Approved Field Sale Line is missing its customer approval evidence.', 409);
+      continue;
+    }
+    if (saleLine.status === 'voided') {
+      if (Boolean(approval) !== Boolean(saleLine.customerApprovalId) || (approval && approval.id !== saleLine.customerApprovalId)) {
+        throw fieldError('field_approval_identity_conflict', 'Voided Field Sale Line has inconsistent customer decision evidence.', 409);
+      }
+      continue;
+    }
+    throw fieldError('field_approval_identity_conflict', `Field Sale Line status ${saleLine.status} is not activated for approval reconciliation.`, 409);
   }
 }
 

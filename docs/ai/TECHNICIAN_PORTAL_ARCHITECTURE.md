@@ -116,7 +116,7 @@ Append-only audit evidence for material Field lifecycle actions. `fieldOperation
 
 Allowed branches from active states: `pending`, `requires_return_visit`, `no_access`, `cancelled`. Transitions are centralized and auditable; arbitrary UI status writes are forbidden.
 
-The canonical WorkVisit transition graph is implemented server-side in `functions/fieldOperationsAuthorityTransitions.js`. `allowedWorkVisitTransitions()` exposes the graph to other server modules without duplicating it. `fieldOperationsVisitActions.js` filters that canonical graph to the transitions actually activated in the current slice. The HTTP `transition_visit` command exposes `en_route`, `on_site`, `in_progress`, the governed `pending -> in_progress` pause/resume branch, and terminal `no_access` / `cancelled`. Entering `pending` requires a canonical reason, preserves an optional next action, uses exact retry semantics for that payload, and records server-owned pause/resume timestamps plus atomic audit. Entering `no_access` or `cancelled` requires its own canonical reason, uses exact retry semantics, records a server-owned terminal timestamp plus atomic audit, and does not mutate Appointment or WorkOrder lifecycle. First transition timestamps are server-owned and invalid/terminal transitions are rejected.
+The canonical WorkVisit transition graph is implemented server-side in `functions/fieldOperationsAuthorityTransitions.js`. `allowedWorkVisitTransitions()` exposes the graph to other server modules without duplicating it. `fieldOperationsVisitActions.js` filters that canonical graph to the transitions actually activated in the current slice. The HTTP `transition_visit` command exposes `en_route`, `on_site`, `in_progress`, governed `pending -> in_progress`, governed `requires_return_visit`, and terminal `no_access` / `cancelled`. Entering `pending` requires a canonical reason, preserves an optional next action, uses exact retry semantics for that payload, and records server-owned pause/resume timestamps plus atomic audit. Entering `requires_return_visit` records a required reason, timestamp and `requiresSecondVisit=true` without creating or overwriting a physical visit. Entering `no_access` or `cancelled` requires its own canonical reason, uses exact retry semantics, records a server-owned terminal timestamp plus atomic audit, and does not mutate Appointment or WorkOrder lifecycle. First transition timestamps are server-owned and invalid/terminal transitions are rejected.
 
 ### WorkIntervention
 
@@ -128,11 +128,17 @@ Branches: `pending_authorization`, `pending_part`, `not_performed`, `declined`, 
 
 `proposed -> customer_approved -> installed|delivered -> sold`
 
-Branches: `declined`, `voided`. Inventory and billing effects are transition-driven, not raw checkbox changes. Its server mutation state machine is intentionally deferred until the Field Sales phase.
+Branches: `declined`, `voided`. Inventory and billing effects remain separate governed downstream handoffs, not raw checkbox changes.
+
+The Field Sales phase is now activated through `functions/fieldOperationsSaleLines.js` and the authenticated `create_field_sale_line`, `decide_field_sale_line` and `transition_field_sale_line` actions. Catalog lines resolve active Product identity and immutable presented price only from the canonical `services`/Pricing Authority boundary; client labels, units and prices are ignored. Customer approval or rejection creates one immutable `FieldApproval` linked only to the exact sale line. Non-catalog entries remain unpriced Office Review drafts and may only remain proposed or be voided; they never create a shadow catalog item. The server projects the exact permitted decisions/transitions, uses optimistic version and payload-exact retry semantics, and appends audit atomically. `sold` is field truth and never changes stock by itself.
+
+When Office Review approves an immutable revision, `functions/fieldOperationsInventoryHandoffs.js` derives sold catalog Product lines from that frozen evidence and transactionally creates at most one deterministic `fieldInventoryHandoffs` candidate. The candidate carries exact Sale Line, Product, quantity, Work Order and source-location references and exposes unresolved location/whole-quantity mismatches as review blockers. It contains no Inventory movement IDs and never writes `commercialProductStock`, `warehouseInventory` or `inventoryMovements`; only the existing Inventory Authority may later perform the governed issue.
+
+The same Office approval transaction uses `functions/fieldOperationsBillingCandidates.js` to derive at most one deterministic immutable `fieldBillingCandidates` record from completed interventions and sold catalog Field Sale Lines in the frozen revision. Governed price snapshots become candidate lines; missing pricing and mixed currencies remain explicit blockers. Declined or voided lines are excluded. The candidate contains no invoice line IDs and does not write invoices, operational finance, Accounting or QBO; those remain separate downstream authorities.
 
 The **server-side Field Authority is the only mutation/transition decision boundary**. ERP Next displays server-projected `canPrepareVisit`, `allowedActions`, `fieldVisit` and `availableTransitions`; it does not own an independent transition map or preparation rule for canonical writes.
 
-`apps/erp-next/lib/field-operations.ts` contains only Phase 1 read/reconciliation/specification helpers. WorkVisit preparation, scheduled-scope snapshot construction and WorkVisit transitions were removed from the client mutation domain once the server boundaries existed. `validateVisitForOfficeReview` remains a specification-only helper and must move behind a server command before any Office Review submission mutation is exposed.
+`apps/erp-next/lib/field-operations.ts` contains only Phase 1 read/reconciliation/specification helpers. WorkVisit preparation, scheduled-scope snapshot construction and WorkVisit transitions were removed from the client mutation domain once the server boundaries existed. `validateVisitForOfficeReview` remains a specification/compatibility helper only; production submission validation and mutation are already owned by `functions/fieldOperationsOfficeReview.js`, and the client consumes its readiness and blockers.
 
 Server-local extraction under the existing Field Operations Authority is allowed to keep files cohesive; it is not a new service or source of truth. Do not introduce a cross-package transition framework merely to share code with the client.
 
@@ -211,7 +217,8 @@ Field read models snapshot planned intent from Work Order appointment snapshots 
 - retain root technical fields only as historical compatibility fallback;
 - do not require BTU, brand, model or both nameplate photos merely to create/identify an Asset;
 - incomplete technical metadata is explicit and may be enriched during the visit;
-- QR belonging to a different customer/property must be rejected for silent reassignment when the write workflow is introduced.
+- optional QR identification is activated only for an already-projected Asset: `attach_visit_asset_by_qr` hardcodes `qr_scan` provenance and revalidates current assignment, active visit, Customer, Property, Asset and canonical QR inside the same transaction;
+- a missing, mismatched, inactive or foreign-customer/property QR fails closed and never creates or reassigns an Asset. New A/C registration remains the separate governed path with all mandatory technical fields and evidence.
 
 ### Service and report-template relationship
 
@@ -248,7 +255,7 @@ Server mutation sequence:
 
 `prepare_visit` implements this sequence for initial WorkVisit preparation/adoption. `transition_visit` implements it for the currently activated physical transitions. Same-target retry is an idempotent no-op even when the caller still has the pre-transition version; a different stale transition receives `version_conflict` and must refresh. Audit failure aborts the surrounding transaction.
 
-UI drafts/outbox are transport state only. They never become another canonical WorkVisit/Intervention source of truth. Current active-status UI does not optimistically invent success: on an uncertain HTTP failure it re-reads server authority because a timeout may occur after commit.
+UI cache, drafts and outbox are transport state only. They never become another canonical WorkVisit/Intervention source of truth. ERP Next stores these records in user-scoped IndexedDB without authentication tokens. Successful reads refresh a bounded cache; a cached schedule/job is labeled stale and disables canonical mutations, while technical free-text may remain a local version-linked draft. An uncertain mutation stores the exact action/payload/request ID and reports it as pending rather than successful. Reconnection retries the same idempotency key; definitive server/version conflicts become blocked records requiring review rather than destructive overwrite.
 
 ## I. Evidence design
 
@@ -266,11 +273,15 @@ Legacy compatibility may map old `ready_for_review`, `changes_requested` and rev
 
 Office Review may return a revision for correction, but it must not silently mutate the planned Appointment, approved pricing snapshot or prior approved revision.
 
-`apps/erp-next/lib/field-operations.ts::validateVisitForOfficeReview` is currently a Phase 1 domain specification/acceptance helper, not a production mutation authority. Before Phase 8 exposes submission/review writes, its required validation must be implemented server-side and the client-side gate must not remain a second authority.
+`apps/erp-next/lib/field-operations.ts::validateVisitForOfficeReview` remains a Phase 1 specification/compatibility helper, not production mutation authority. `functions/fieldOperationsOfficeReview.js` now owns submission validation, immutable revision creation and office decisions. It evaluates the complete linear physical-visit chain, freezes the Professional Report read projection as source evidence without merging the two domains, and exposes only server-derived readiness/blockers to the client.
+
+The canonical lifecycle is `submit -> pending review -> approve` or `return -> correct -> resubmit`. One deterministic Office Review identity belongs to the Work Order; each submission creates a new immutable revision. A corrected resubmission requires a technician amendment note and freezes the prior revision identity, the Office return note and the technician correction note in the new revision; prior technical evidence and revisions are not overwritten. Approval moves the current WorkVisit to `completed`; return moves it to `in_progress`. Technician transition APIs expose no action from `ready_for_office_review`, so only the Office Review decision boundary can reopen or complete a submitted visit. Customer delivery is explicitly outside this command set.
 
 ## K. Runtime boundary and UI migration
 
-Current ERP Next `/field` renders `TechnicianFieldHome`, backed by Field Operations Authority. `get_schedule` / `get_job` are assignment-scoped reads; `prepare_visit` and `transition_visit` are the only activated Field mutation actions in this slice. The UI exposes **En camino**, **Llegué**, **Iniciar trabajo**, governed pending/resume, terminal **Sin acceso**, and terminal **Cancelar visita** only when server projections permit them. Legacy Technician and browser/localStorage Field implementations remain fallback/compatibility paths over older models.
+Current ERP Next `/field` renders `TechnicianFieldHome`, backed by Field Operations Authority. `get_schedule` / `get_job` are assignment-scoped reads, and the UI consumes server-projected capabilities for visit lifecycle, assets, interventions, report evidence, approvals, planned-work disposition, Field Sale Lines and Office Review submission. The optional QR control searches only the already assignment-scoped equipment projection and sends the selected canonical Asset plus presented QR for server revalidation; it is not a registration or ownership authority. Field Sale controls never reconstruct pricing or transition policy in the UI. Legacy Technician and browser/localStorage Field implementations remain fallback/compatibility paths over older models.
+
+`functions/fieldOperationsHistories.js` derives Customer and Equipment histories during the already assignment-authorized `get_job` read. It queries canonical Customer-linked Field records, validates every child against its Work Visit and every Finding against its Work Intervention, and returns Equipment histories as exact references into the Customer projection. ERP Next validates those relations again and renders them read-only. No Customer-history or Equipment-history collection is created or mutated.
 
 Migration rule:
 
@@ -338,11 +349,13 @@ Implemented:
 7. On uncertain timeout/error, the client re-fetches server state instead of guessing whether the transaction committed.
 8. WorkOrder planned/release status is not rewritten to simulate physical Field status.
 
-Still deferred within Phase 4 or later dependencies: `requires_return_visit`, Office Review submission/completion and distinct return-visit creation. The `pending -> in_progress` pause/resume and terminal `no_access` / `cancelled` branches are activated independently and do not claim that a return visit exists or that Appointment/WorkOrder was cancelled.
+The governed `requires_return_visit` outcome records the need first; a separate authenticated `create_return_visit` command then creates a new scheduled physical WorkVisit with its own deterministic retry identity and `previousVisitId`, while preserving the first visit and rejecting a branched chain. Office Review submission/completion is now activated over the complete linear chain, and a chain tip still marked `requires_return_visit` is not final-submittable. Returned-review amendment/resubmission is activated as immutable revision context; it does not reopen append-only technical evidence or silently rewrite prior submissions. The terminal `no_access` / `cancelled` branches do not imply that Appointment/WorkOrder was cancelled.
 
 ### Slice 3+ — progress by domain dependency
 
-VisitAsset -> WorkIntervention -> templates/evidence/measurements/findings -> sale lines/approvals -> partial completion/second visit -> Office Review revisions -> history projections -> offline outbox -> inventory/billing handoffs.
+VisitAsset -> WorkIntervention -> templates/evidence/measurements/findings -> sale lines/approvals -> partial completion/second visit -> Office Review revisions -> history projections -> Inventory/Billing candidates -> offline outbox -> downstream authority consumption.
+
+The dependency chain is implemented through Customer/Equipment history projections, immutable Field-to-Inventory/Field-to-Billing candidates and the user-scoped offline cache/draft/outbox boundary. Inventory, invoice and accounting authority consumption remain later boundaries.
 
 Each slice reuses the existing authority for the downstream domain and must pass its own regression boundary before the next is opened.
 
@@ -380,15 +393,15 @@ Each slice reuses the existing authority for the downstream domain and must pass
 - `apps/erp-next/components/field/technician-field-home.module.css`
 - Field acceptance scripts/tests.
 
-`bookingVanIdentity.js` is reused unchanged. The Field HTTP action set is now `get_schedule`, `get_job`, `prepare_visit`, `transition_visit` on this feature branch.
+`bookingVanIdentity.js` is reused unchanged. The authenticated Field HTTP facade now exposes governed schedule/job reads and explicit server-owned commands for visit lifecycle, equipment, interventions, report evidence, planned-work dispositions, sales, Office Review and histories. Its allowlist is the action contract; the client cannot manufacture an unsupported mutation.
 
-### Later slices
+### Activated modules and remaining boundaries
 
-- VisitAsset / WorkIntervention persistence commands under Field Operations Authority
-- canonical report/template/evidence/measurement/finding commands
-- `functions/serviceCatalog.js` and tests when Field template metadata is introduced
-- Field Sale/approval commands and Inventory/Billing handoffs in their governed phases
-- Firestore/Storage rules + emulator tests in their governed security phase
+- VisitAsset, WorkIntervention, report/template/evidence/measurement/finding commands and governed catalog sale lines are activated under Field Operations Authority.
+- Immutable Inventory/Billing review candidates are emitted from approved frozen actual work; no stock movement or invoice is created.
+- Customer/Equipment histories are read-only projections, and browser offline cache/draft/outbox remains transport state only.
+- Downstream Inventory/Billing authority consumption remains a later separately governed phase.
+- Firestore/Storage rules and their emulator allow/deny proof remain in the governed security phase; no Rules change is authorized by this workstream.
 
 Legacy source/patch scripts are not implementation targets unless a specific compatibility defect is proven and its patch owner is traced first.
 
@@ -406,6 +419,7 @@ Legacy source/patch scripts are not implementation targets unless a specific com
 | WorkVisit transition authority | server Field Operations Authority | UI labels/status display only |
 | Field action authorization | Field Operations Authority using identity + assignment | `security.ts`, server projections rendered by client |
 | Field lifecycle audit | append-only `fieldOperationEvents` | log/report views; not current-state authority |
+| Field commercial sale | Field Operations `fieldSaleLines` + immutable canonical price snapshot + linked `FieldApproval` | ERP Next controls; immutable Inventory/Billing candidates on Office approval |
 | Customer/Property/Asset identity | CRM | Field snapshots/VisitAsset participation |
 | Service/product | `services` | Scheduling Work Type / UI labels |
 | Report template definition | governed template registry referenced by service execution metadata | rendered form sections |
@@ -428,7 +442,7 @@ Legacy source/patch scripts are not implementation targets unless a specific com
 
 **Risk:** UI permits an action that server rejects or vice versa.
 
-**Control:** server is sole action/mutation decision boundary; client receives `allowedActions`, `canPrepareVisit`, WorkVisit status/version and `availableTransitions`. Activated transition targets derive from the canonical server graph. Future Intervention/Sale/Office Review mutation gates must follow the same pattern.
+**Control:** server is sole action/mutation decision boundary; client receives `allowedActions`, status/version and exact action/transition projections. Activated Visit, Intervention, Sale and Office Review targets derive from their canonical server boundaries; future mutation gates must follow the same pattern.
 
 ### High risk — WorkOrder/WorkVisit state conflation
 
@@ -476,10 +490,11 @@ Legacy source/patch scripts are not implementation targets unless a specific com
 
 ### Current implemented evidence
 
-At the latest active-visit implementation checkpoint:
+At the mandatory-scenario checkpoint through `5e71714c0c2bc8e56f27e9c813cf7390d0036b39`:
 
 - `functions/validate:firebase` explicitly includes all Field server modules, including audit, Firestore serializer, mutation assignment, visit action/read/mutation modules and HTTP authority — PASS.
-- focused `test:field-authority` — **107 tests, 107 pass, 0 fail/skipped/todo**.
+- focused `test:field-authority` manifest, executed in-process because this Windows host denies Node test-runner child-process creation — **340 tests, 340 pass, 0 fail/skipped/todo**.
+- Field extension gate — **45 tests, 45 pass, 0 fail/skipped/todo**.
 - Booking/Scheduling regression — **94 tests, 94 pass, 0 fail/skipped/todo**.
 - active transition tests cover first timestamps, `scheduled -> en_route -> on_site -> in_progress`, same-target retry, two-device stale-version conflict, helper/read-only/unassigned denial, WorkOrder cancellation revalidation, audit rollback and nonactivated target denial.
 - current-visit read tests cover no-visit preparation eligibility, WorkVisit state/version/next-transition projection, helper read-only behavior, return-chain resolution and broken/branched/cyclic/identity mismatch fail-closed behavior.
@@ -490,7 +505,9 @@ At the latest active-visit implementation checkpoint:
 - crew membership/readiness regression against Scheduling primitives — PASS.
 - WorkVisit preparation retry, planned-data immutability, CRM identity, staff namespace, audit failure and unknown-lifecycle failure paths — PASS.
 - ERP Next `test:field-security` validates route/capability vocabulary plus strict read/prepare/transition transport contracts — PASS.
-- ERP Next field-domain acceptance, typecheck and production build — PASS.
+- all 26 mandatory scenarios and the exact booked-1/actual-3+Switch fixture — PASS.
+- ERP Next field-domain/offline/security acceptance and typecheck — PASS.
+- production build compiles successfully on this host, after which the Next.js worker spawn is blocked locally with `EPERM`; remote CI remains the authoritative build result once the branch can be pushed.
 
 ### Before any security-rule deployment
 
@@ -526,7 +543,7 @@ Migration is additive and phased.
 
 Activated mutations use idempotent commands and auditable records so retries recover without creating duplicate visits or duplicate transition facts. Failed multi-record operations transactionally commit the required Field state + audit or neither. HTTP timeout is treated as uncertain delivery: the client re-reads canonical server state rather than applying an optimistic local state.
 
-The initial WorkVisit preparation command uses a deterministic Legacy-compatible first-visit identity for retry/adoption only. This identity must not be reused for a second physical return; return visits require distinct identities and preserve the first visit.
+The initial WorkVisit preparation command uses a deterministic Legacy-compatible first-visit identity for retry/adoption only. Return visits use a separate deterministic request identity, preserve the first visit and immutable scheduled-scope snapshot, revalidate current assignment/WorkOrder release/history in one transaction, and append `work_visit_return_created` audit evidence atomically.
 
 ### Rollback
 
@@ -569,10 +586,12 @@ This preserves `planned != actual` without weakening completion integrity.
 
 - canonical transition graph remains server-owned;
 - current-visit resolution and preparation/transition eligibility are server-projected;
-- `en_route`, `on_site`, `in_progress`, `pending -> in_progress`, and terminal `no_access` / `cancelled` are activated through `transition_visit`;
+- `en_route`, `on_site`, `in_progress`, `pending -> in_progress`, governed `requires_return_visit`, and terminal `no_access` / `cancelled` are activated through `transition_visit`;
 - Technician Home exposes only those server-authorized controls, with a required canonical reason before either terminal outcome;
 - WorkOrder planned/release status remains separate and is not mutated by Field;
-- return-visit/submission/completion behavior remains future work;
+- distinct return-visit creation is activated through `create_return_visit`; each return remains a separate physical WorkVisit;
+- Office Review submission and office approve/return decisions are activated through `submit_visit_for_office_review`, `get_office_review_queue` and `decide_office_review`; revisions are immutable and customer delivery remains separate;
+- returned-review correction/resubmission requires and preserves an immutable technician amendment note together with the Office return request; prior revisions remain unchanged;
 - formal four-pass review of this newer slice remains separate from this implementation phase.
 
 ## Human-only boundaries

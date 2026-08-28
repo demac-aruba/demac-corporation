@@ -203,7 +203,7 @@ test('visit progresses en route -> on site -> in progress without overwriting fi
   assert.equal(inProgress.visit.startedAt, '2026-08-24T13:00:00.000Z');
   assert.equal(inProgress.visit.departedAt, '2026-08-24T12:30:00.000Z');
   assert.equal(inProgress.visit.arrivedAt, '2026-08-24T12:45:00.000Z');
-  assert.deepEqual(inProgress.visit.availableTransitions, ['pending', 'cancelled']);
+  assert.deepEqual(inProgress.visit.availableTransitions, ['pending', 'requires_return_visit', 'cancelled']);
   assert.equal(store.get('workVisits', 'visit-WO-1').version, 4);
 });
 
@@ -230,7 +230,7 @@ test('in-progress visit pauses with a required reason, optional next action and 
   assert.equal(result.visit.pendingReason, 'Replacement control board required.');
   assert.equal(result.visit.pendingAction, 'Office should source the compatible board.');
   assert.equal(result.visit.pendingAt, '2026-08-24T12:30:00.000Z');
-  assert.deepEqual(result.visit.availableTransitions, ['in_progress', 'cancelled']);
+  assert.deepEqual(result.visit.availableTransitions, ['in_progress', 'requires_return_visit', 'cancelled']);
   assert.equal(store.get('workVisits', 'visit-WO-1').pendingRequestId, 'transition-pending-001');
   assert.deepEqual(auditEvents[0].after, {
     status: 'pending',
@@ -286,7 +286,7 @@ test('pending visit resumes without erasing the recorded pending context', async
   assert.equal(result.visit.resumedAt, '2026-08-25T13:00:00.000Z');
   assert.equal(result.visit.pendingReason, 'Awaiting access approval');
   assert.equal(result.visit.pendingAction, 'Customer will call DEMAC');
-  assert.deepEqual(result.visit.availableTransitions, ['pending', 'cancelled']);
+  assert.deepEqual(result.visit.availableTransitions, ['pending', 'requires_return_visit', 'cancelled']);
   assert.equal(store.get('workVisits', 'visit-WO-1').version, 6);
 });
 
@@ -385,6 +385,63 @@ test('cancelled transition requires a reason and exact retry payload', async () 
   await assert.rejects(
     () => transition({ ...input, cancellationReason: 'Different reason' }),
     (error) => error?.code === 'cancelled_transition_conflict' && error?.status === 409,
+  );
+});
+
+test('in-progress visit records a governed return requirement without creating a second visit', async () => {
+  const visit = baseVisit({ status: 'in_progress', startedAt: '2026-08-24T12:20:00.000Z', version: 4 });
+  const { store, auditEvents, transition } = fixture({ visit });
+  const result = await transition({
+    identity: identity(),
+    visitId: 'visit-WO-1',
+    to: 'requires_return_visit',
+    expectedVersion: 4,
+    secondVisitReason: ' Replacement compressor must be installed. ',
+    requestId: 'transition-return-required-001',
+  });
+
+  assert.equal(result.visit.status, 'requires_return_visit');
+  assert.equal(result.visit.requiresSecondVisit, true);
+  assert.equal(result.visit.secondVisitReason, 'Replacement compressor must be installed.');
+  assert.equal(result.visit.secondVisitRequiredAt, '2026-08-24T12:30:00.000Z');
+  assert.deepEqual(result.visit.availableTransitions, ['cancelled']);
+  assert.equal(store.get('workVisits', 'visit-WO-1').secondVisitRequestId, 'transition-return-required-001');
+  assert.equal(store.get('workVisits', 'visit-WO-1').previousVisitId, undefined);
+  assert.equal(store.get('workVisits', 'visit-WO-1').id, 'visit-WO-1');
+  assert.equal(store.get('workOrders', 'WO-1').status, 'Confirmada');
+  assert.deepEqual(auditEvents[0].after, {
+    status: 'requires_return_visit',
+    version: 5,
+    requiresSecondVisit: true,
+    secondVisitReason: 'Replacement compressor must be installed.',
+  });
+});
+
+test('return requirement requires a reason and exact retry payload', async () => {
+  const visit = baseVisit({ status: 'in_progress', startedAt: '2026-08-24T12:20:00.000Z', version: 4 });
+  const { store, auditEvents, transition } = fixture({ visit });
+  await assert.rejects(
+    () => transition({ identity: identity(), visitId: 'visit-WO-1', to: 'requires_return_visit', expectedVersion: 4, requestId: 'transition-return-empty' }),
+    (error) => error?.code === 'second_visit_reason_required' && error?.status === 400,
+  );
+  assert.equal(store.get('workVisits', 'visit-WO-1').status, 'in_progress');
+
+  const input = {
+    identity: identity(), visitId: 'visit-WO-1', to: 'requires_return_visit', expectedVersion: 4,
+    secondVisitReason: 'Return with ordered part', requestId: 'transition-return-exact',
+  };
+  await transition(input);
+  const replay = await transition(input);
+  assert.equal(replay.replayed, true);
+  assert.equal(store.commits[1].length, 0);
+  assert.equal(auditEvents.length, 1);
+  await assert.rejects(
+    () => transition({ ...input, requestId: 'transition-return-other-request' }),
+    (error) => error?.code === 'return_visit_transition_conflict' && error?.status === 409,
+  );
+  await assert.rejects(
+    () => transition({ ...input, secondVisitReason: 'Different reason' }),
+    (error) => error?.code === 'return_visit_transition_conflict' && error?.status === 409,
   );
 });
 
@@ -561,7 +618,7 @@ test('audit failure aborts the surrounding transaction and leaves WorkVisit unch
 test('non-activated branch targets and malformed expectedVersion fail before persistence', async () => {
   const { store, transition } = fixture();
   await assert.rejects(
-    () => transition({ identity: identity(), visitId: 'visit-WO-1', to: 'requires_return_visit', expectedVersion: 1, requestId: 'transition-return-001' }),
+    () => transition({ identity: identity(), visitId: 'visit-WO-1', to: 'ready_for_office_review', expectedVersion: 1, requestId: 'transition-review-001' }),
     (error) => error?.code === 'transition_not_activated',
   );
   await assert.rejects(

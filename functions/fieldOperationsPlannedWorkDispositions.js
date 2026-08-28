@@ -6,9 +6,9 @@ const { fieldError } = require('./fieldOperationsAuthorityCore');
 const { stableRequestId } = require('./fieldOperationsAuthorityWorkVisit');
 const { loadCurrentVisitMutationContext } = require('./fieldOperationsVisitMutationContext');
 const {
-  WORK_INTERVENTION_COLLECTION,
   coveringIntervention,
-  projectWorkIntervention,
+  effectiveChainInterventions,
+  loadWorkInterventionsForChain,
 } = require('./fieldOperationsVisitInterventions');
 
 const PLANNED_WORK_DISPOSITION_COLLECTION = 'plannedWorkDispositions';
@@ -124,15 +124,21 @@ function dispositionOptions(job, progress) {
 async function loadPlannedWorkDispositions(db, job) {
   const visitId = text(job?.fieldVisit?.id, 180);
   if (!visitId) return [];
-  const snapshot = await db.collection(PLANNED_WORK_DISPOSITION_COLLECTION).where('visitId', '==', visitId).get();
+  const visitIds = Array.isArray(job?._fieldVisitChainIds) && job._fieldVisitChainIds.includes(visitId)
+    ? job._fieldVisitChainIds
+    : [visitId];
+  const snapshots = await Promise.all(visitIds.map((chainVisitId) => (
+    db.collection(PLANNED_WORK_DISPOSITION_COLLECTION).where('visitId', '==', chainVisitId).get()
+  )));
   const expected = {
-    visitId,
     workOrderId: text(job.workOrderId, 180),
     customerId: text(job.customerId, 180),
     propertyId: text(job.propertyId, 180),
   };
   const lineIds = new Set((job.plannedWork || []).map((line) => text(line.id, 180)).filter(Boolean));
-  return records(snapshot).map((record) => projectPlannedWorkDisposition(record, expected)).map((item) => {
+  return snapshots.flatMap((snapshot, index) => records(snapshot).map((record) => (
+    projectPlannedWorkDisposition(record, { ...expected, visitId: visitIds[index] })
+  ))).map((item) => {
     if (!lineIds.has(item.plannedWorkLineId)) {
       throw fieldError('planned_work_disposition_identity_conflict', 'Planned Work Disposition references a line outside the immutable planned scope.', 409);
     }
@@ -144,7 +150,10 @@ async function attachPlannedWorkDispositionsToJob(db, job) {
   const dispositions = await loadPlannedWorkDispositions(db, job);
   const progress = reconcilePlannedWorkProgress(job?.plannedWorkProgress || [], dispositions);
   const options = dispositionOptions(job, progress);
-  const availableLines = new Set(progress.filter((line) => line.remainingQuantity > 0).map((line) => line.id));
+  const previousRemaining = new Map((job?.plannedWorkProgress || []).map((line) => [line.id, line.remainingQuantity]));
+  const availableLines = new Set(progress.filter((line) => (
+    line.remainingQuantity > 0 || previousRemaining.get(line.id) === 0
+  )).map((line) => line.id));
   const plannedInterventionOptions = (job?.plannedInterventionOptions || []).map((option) => ({
     ...option,
     plannedWorkLineIds: option.plannedWorkLineIds.filter((lineId) => availableLines.has(lineId)),
@@ -237,15 +246,21 @@ function createRecordPlannedWorkDispositionCommand({ db, resolveAssignment, appe
         throw fieldError('planned_work_disposition_request_conflict', 'This request id was already used with different disposition details.', 409);
       }
 
-      const [interventionsSnapshot, dispositionsSnapshot] = await Promise.all([
-        transaction.get(db.collection(WORK_INTERVENTION_COLLECTION).where('visitId', '==', normalizedVisitId)),
-        transaction.get(db.collection(PLANNED_WORK_DISPOSITION_COLLECTION).where('visitId', '==', normalizedVisitId)),
+      const visitIds = context.historyRecords.map((visit) => text(visit.id, 180));
+      const [chainInterventions, dispositionSnapshots] = await Promise.all([
+        loadWorkInterventionsForChain(db, visitIds, {
+          workOrderId: context.workOrderId,
+          customerId: context.customerId,
+          propertyId: context.propertyId,
+        }, (query) => transaction.get(query)),
+        Promise.all(visitIds.map((chainVisitId) => transaction.get(
+          db.collection(PLANNED_WORK_DISPOSITION_COLLECTION).where('visitId', '==', chainVisitId),
+        ))),
       ]);
-      const linkedActualQuantity = records(interventionsSnapshot)
-        .map((record) => projectWorkIntervention(record, expected))
+      const linkedActualQuantity = effectiveChainInterventions(chainInterventions, visitIds)
         .filter((intervention) => intervention.plannedWorkLineId === normalizedLineId && coveringIntervention(intervention)).length;
-      const disposedQuantity = records(dispositionsSnapshot)
-        .map((record) => projectPlannedWorkDisposition(record, expected))
+      const disposedQuantity = dispositionSnapshots.flatMap((snapshot, index) => records(snapshot)
+        .map((record) => projectPlannedWorkDisposition(record, { ...expected, visitId: visitIds[index] })))
         .filter((item) => item.plannedWorkLineId === normalizedLineId)
         .reduce((total, item) => total + item.quantity, 0);
       const remainingQuantity = plannedQuantity - linkedActualQuantity - disposedQuantity;

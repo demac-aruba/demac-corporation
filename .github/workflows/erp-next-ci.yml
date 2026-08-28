@@ -101,5 +101,7 @@ jobs:
         run: npm run test:field-domain
       - name: Field assignment security acceptance
         run: npm run test:field-security
+      - name: Field offline cache, draft and outbox acceptance
+        run: npm run test:field-offline
       - name: Build
         run: npm run build

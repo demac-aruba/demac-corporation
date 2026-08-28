@@ -43,7 +43,7 @@ const FIELD_VISIT_STATUSES = [
 ] as const;
 export type FieldVisitStatus = (typeof FIELD_VISIT_STATUSES)[number];
 
-const FIELD_ACTIVE_VISIT_TRANSITIONS = ['en_route', 'on_site', 'in_progress', 'pending', 'no_access', 'cancelled'] as const;
+const FIELD_ACTIVE_VISIT_TRANSITIONS = ['en_route', 'on_site', 'in_progress', 'pending', 'requires_return_visit', 'no_access', 'cancelled'] as const;
 export type FieldActiveVisitTransition = (typeof FIELD_ACTIVE_VISIT_TRANSITIONS)[number];
 
 const FIELD_PREPARE_SOURCES = ['field_authority', 'legacy_existing'] as const;
@@ -129,6 +129,7 @@ export type FieldPreparedVisit = {
   submittedAt?: string;
   completedAt?: string;
   requiresSecondVisit: boolean;
+  secondVisitRequiredAt?: string;
   secondVisitReason?: string;
   previousVisitId?: string;
   createdAt: string;
@@ -171,6 +172,7 @@ export type FieldScheduleJob = {
   assignmentRole?: string;
   fieldVisit: FieldVisitState | null;
   canPrepareVisit: boolean;
+  canCreateReturnVisit: boolean;
 };
 
 export type FieldJobDetail = FieldScheduleJob & {
@@ -298,6 +300,7 @@ function preparedVisitValid(value: unknown): value is FieldPreparedVisit {
     && optionalString(visit.submittedAt)
     && optionalString(visit.completedAt)
     && typeof visit.requiresSecondVisit === 'boolean'
+    && optionalString(visit.secondVisitRequiredAt)
     && optionalString(visit.secondVisitReason)
     && optionalString(visit.previousVisitId)
     && string(visit.createdAt)
@@ -310,6 +313,10 @@ function preparedVisitValid(value: unknown): value is FieldPreparedVisit {
 function visitStateValid(value: unknown): value is FieldVisitState {
   const visit = record(value);
   return preparedVisitValid(value) && Boolean(visit) && activeVisitTransitionsValid(visit!.availableTransitions);
+}
+
+export function fieldVisitStateValid(value: unknown): value is FieldVisitState {
+  return visitStateValid(value);
 }
 
 function scheduleJobValid(value: unknown): value is FieldScheduleJob {
@@ -346,7 +353,8 @@ function scheduleJobValid(value: unknown): value is FieldScheduleJob {
     && allowedActionsValid(job.allowedActions)
     && optionalString(job.assignmentRole)
     && (job.fieldVisit === null || visitStateValid(job.fieldVisit))
-    && typeof job.canPrepareVisit === 'boolean';
+    && typeof job.canPrepareVisit === 'boolean'
+    && typeof job.canCreateReturnVisit === 'boolean';
 }
 
 function knownEquipmentValid(value: unknown) {

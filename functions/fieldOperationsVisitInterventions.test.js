@@ -3,6 +3,7 @@ const test = require('node:test');
 const {
   attachWorkInterventionsToJob,
   createPlannedWorkInterventionCommand,
+  effectiveChainInterventions,
   projectWorkIntervention,
 } = require('./fieldOperationsVisitInterventions');
 
@@ -448,4 +449,88 @@ test('job projection derives per-Asset planned intervention options and exposes 
   assert.deepEqual(full.plannedInterventionOptions, []);
   assert.deepEqual(full.availableFieldServices, [], 'fully linked plan does not need mutation-only service choices');
   assert.equal(full.canAddPlannedIntervention, false);
+});
+
+test('return-visit chain treats completed planned work as consumed and does not offer it again', async () => {
+  const initial = baseVisit({ id: 'visit-initial', status: 'requires_return_visit', requiresSecondVisit: true, secondVisitReason: 'Return visit.' });
+  const returned = baseVisit({ id: 'visit-return', previousVisitId: 'visit-initial', status: 'on_site' });
+  const priorCompleted = storedIntervention('WI-PRIOR', {
+    visitId: 'visit-initial',
+    visitAssetId: 'VA-INITIAL',
+    status: 'completed',
+    completedAt: '2026-08-25T11:00:00.000Z',
+  });
+  const { create } = fixture({
+    visits: [initial, returned],
+    visitAssets: [visitAsset('VA-RETURN', 'AC-1', { visitId: 'visit-return' })],
+    workInterventions: [priorCompleted],
+  });
+
+  await assert.rejects(
+    () => create(createInput({
+      visitId: 'visit-return',
+      visitAssetId: 'VA-RETURN',
+      requestId: 'return-completed-001',
+    })),
+    (error) => error?.code === 'planned_work_fully_linked' && error?.status === 409,
+  );
+});
+
+test('return visit may replace the prior pending-part intervention for the same canonical A/C without over-linking', async () => {
+  const initial = baseVisit({ id: 'visit-initial', status: 'requires_return_visit', requiresSecondVisit: true, secondVisitReason: 'Replacement part required.' });
+  const returned = baseVisit({ id: 'visit-return', previousVisitId: 'visit-initial', status: 'on_site' });
+  const priorPending = storedIntervention('WI-PENDING', {
+    visitId: 'visit-initial',
+    visitAssetId: 'VA-INITIAL',
+    status: 'pending_part',
+  });
+  const currentAsset = visitAsset('VA-RETURN', 'AC-1', { visitId: 'visit-return' });
+  const { store, create } = fixture({
+    visits: [initial, returned],
+    visitAssets: [currentAsset],
+    workInterventions: [priorPending],
+  });
+
+  const projection = await attachWorkInterventionsToJob(store.db, {
+    workOrderId: 'WO-1', customerId: 'CLIENT-1', propertyId: 'PROPERTY-1',
+    plannedWork: [{ id: 'line-standard', label: 'Standard Service', quantity: 1 }],
+    fieldVisit: { id: 'visit-return', status: 'on_site' },
+    _fieldVisitChainIds: ['visit-initial', 'visit-return'],
+    visitAssets: [currentAsset],
+    allowedActions: ['read', 'intervention.add'],
+  });
+  assert.deepEqual(projection.plannedInterventionOptions, [
+    { visitAssetId: 'VA-RETURN', plannedWorkLineIds: ['line-standard'] },
+  ]);
+
+  const created = await create(createInput({
+    visitId: 'visit-return',
+    visitAssetId: 'VA-RETURN',
+    requestId: 'return-pending-replacement-001',
+  }));
+  assert.equal(created.success, true);
+  const effective = effectiveChainInterventions(store.all('workInterventions'), ['visit-initial', 'visit-return']);
+  assert.equal(effective.filter((item) => item.plannedWorkLineId === 'line-standard').length, 1);
+  assert.equal(effective[0].visitId, 'visit-return');
+});
+
+test('return-visit mutation fails closed when its immutable scheduled scope drifts from the original visit', async () => {
+  const initial = baseVisit({ id: 'visit-initial', status: 'requires_return_visit', requiresSecondVisit: true, secondVisitReason: 'Return visit.' });
+  const returned = baseVisit({
+    id: 'visit-return', previousVisitId: 'visit-initial', status: 'on_site',
+    scheduledScopeSnapshot: {
+      ...baseVisit().scheduledScopeSnapshot,
+      estimatedUnitCount: 2,
+      workLines: [{ ...baseVisit().scheduledScopeSnapshot.workLines[0], quantity: 2 }],
+    },
+  });
+  const { create } = fixture({
+    visits: [initial, returned],
+    visitAssets: [visitAsset('VA-RETURN', 'AC-1', { visitId: 'visit-return' })],
+  });
+
+  await assert.rejects(
+    () => create(createInput({ visitId: 'visit-return', visitAssetId: 'VA-RETURN', requestId: 'scope-drift-001' })),
+    (error) => error?.code === 'visit_scope_conflict' && error?.status === 409,
+  );
 });

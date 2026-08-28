@@ -51,7 +51,16 @@ function cancellationDetails({ target, cancellationReason }) {
   return { cancellationReason: reason };
 }
 
-function activeTransitionPatch({ storedVisit, transitionedVisit, target, identity, occurredAt, pendingReason, pendingAction, noAccessReason, cancellationReason, requestId }) {
+function returnVisitDetails({ target, secondVisitReason }) {
+  if (target !== 'requires_return_visit') return {};
+  const reason = text(secondVisitReason, 1000);
+  if (!reason) {
+    throw fieldError('second_visit_reason_required', 'A reason is required before marking a Work Visit for return.', 400);
+  }
+  return { secondVisitReason: reason };
+}
+
+function activeTransitionPatch({ storedVisit, transitionedVisit, target, identity, occurredAt, pendingReason, pendingAction, noAccessReason, cancellationReason, secondVisitReason, requestId }) {
   if (!Number.isSafeInteger(transitionedVisit.version) || transitionedVisit.version < 1 || transitionedVisit.version >= Number.MAX_SAFE_INTEGER) {
     throw fieldError('visit_version_exhausted', 'Work Visit version cannot be advanced safely.', 409, { version: transitionedVisit.version });
   }
@@ -65,6 +74,7 @@ function activeTransitionPatch({ storedVisit, transitionedVisit, target, identit
     ...pendingDetails({ target, pendingReason, pendingAction }),
     ...noAccessDetails({ target, noAccessReason }),
     ...cancellationDetails({ target, cancellationReason }),
+    ...returnVisitDetails({ target, secondVisitReason }),
   };
   if (transitionedVisit.departedAt && !storedVisit.departedAt) patch.departedAt = transitionedVisit.departedAt;
   if (transitionedVisit.arrivedAt && !storedVisit.arrivedAt) patch.arrivedAt = transitionedVisit.arrivedAt;
@@ -84,10 +94,15 @@ function activeTransitionPatch({ storedVisit, transitionedVisit, target, identit
     patch.cancelledAt = occurredAt;
     patch.cancelledRequestId = requestId;
   }
+  if (target === 'requires_return_visit') {
+    patch.requiresSecondVisit = true;
+    patch.secondVisitRequiredAt = occurredAt;
+    patch.secondVisitRequestId = requestId;
+  }
   return fieldFirestoreData(patch, 'workVisitTransition');
 }
 
-function transitionAuditEvent({ requestId, visit, previousStatus, nextStatus, identity, occurredAt, nextVersion, pendingReason, pendingAction, noAccessReason, cancellationReason }) {
+function transitionAuditEvent({ requestId, visit, previousStatus, nextStatus, identity, occurredAt, nextVersion, pendingReason, pendingAction, noAccessReason, cancellationReason, secondVisitReason }) {
   return {
     id: deterministicEventId(requestId, visit.id, nextStatus),
     type: 'work_visit_status_changed',
@@ -117,6 +132,10 @@ function transitionAuditEvent({ requestId, visit, previousStatus, nextStatus, id
       ...(nextStatus === 'cancelled' ? {
         cancellationReason: text(cancellationReason, 1000),
       } : {}),
+      ...(nextStatus === 'requires_return_visit' ? {
+        requiresSecondVisit: true,
+        secondVisitReason: text(secondVisitReason, 1000),
+      } : {}),
     },
   };
 }
@@ -126,7 +145,7 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
   if (typeof resolveAssignment !== 'function') throw new Error('resolveAssignment is required.');
   if (typeof appendAuditInTransaction !== 'function') throw new Error('appendAuditInTransaction is required.');
 
-  return async function transitionWorkVisit({ identity, visitId, to, expectedVersion, pendingReason, pendingAction, noAccessReason, cancellationReason, requestId } = {}) {
+  return async function transitionWorkVisit({ identity, visitId, to, expectedVersion, pendingReason, pendingAction, noAccessReason, cancellationReason, secondVisitReason, requestId } = {}) {
     const normalizedVisitId = text(visitId, 180);
     if (!normalizedVisitId) throw fieldError('visit_required', 'A Work Visit id is required.', 400);
     const target = text(to, 80);
@@ -183,6 +202,13 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
             throw fieldError('cancelled_transition_conflict', 'This Work Visit is already cancelled with different details.', 409);
           }
         }
+        if (target === 'requires_return_visit') {
+          const requested = returnVisitDetails({ target, secondVisitReason });
+          if (text(storedVisit.secondVisitRequestId, 240) !== stable
+            || text(storedVisit.secondVisitReason, 1000) !== requested.secondVisitReason) {
+            throw fieldError('return_visit_transition_conflict', 'This Work Visit already requires a return with different details.', 409);
+          }
+        }
         // Retry after a successful transaction is a no-op even if the caller still holds the
         // pre-transition version. The first transition and audit event already committed atomically.
         result = {
@@ -214,6 +240,7 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
         pendingAction,
         noAccessReason,
         cancellationReason,
+        secondVisitReason,
         requestId: stable,
       });
       const nextStoredVisit = { ...storedVisit, ...patch };
@@ -230,6 +257,7 @@ function createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditIn
         pendingAction,
         noAccessReason,
         cancellationReason,
+        secondVisitReason,
       });
 
       transaction.update(visitRef, patch);

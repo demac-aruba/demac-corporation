@@ -29,6 +29,12 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   output: 'export',
   trailingSlash: true,
+  experimental: {
+    // Keep production validation inside worker threads on constrained Windows/CI hosts
+    // where child-process creation is unavailable. This does not skip typechecking.
+    workerThreads: true,
+    cpus: 1,
+  },
   env: firebasePublicEnv,
 };
 

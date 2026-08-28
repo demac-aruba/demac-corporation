@@ -146,6 +146,7 @@ const job = {
   allowedActions: ['read', 'execute', 'asset.add', 'intervention.add'],
   fieldVisit: visit,
   canPrepareVisit: false,
+  canCreateReturnVisit: false,
   knownEquipment: [],
   visitAssets: [visitAsset],
   canAddExistingAsset: true,

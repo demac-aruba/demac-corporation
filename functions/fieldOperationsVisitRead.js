@@ -27,8 +27,8 @@ function ambiguousHistory(workOrderId, records, reason) {
   );
 }
 
-function selectCurrentWorkVisit(records, workOrderId) {
-  if (!Array.isArray(records) || records.length === 0) return null;
+function orderedWorkVisitChain(records, workOrderId) {
+  if (!Array.isArray(records) || records.length === 0) return [];
   const normalizedWorkOrderId = text(workOrderId, 180);
   const byId = new Map();
 
@@ -64,7 +64,31 @@ function selectCurrentWorkVisit(records, workOrderId) {
   }
   if (visited.size !== records.length) ambiguousHistory(normalizedWorkOrderId, records, 'disconnected_history');
 
-  return leaves[0];
+  const chain = [];
+  cursor = leaves[0];
+  while (cursor) {
+    chain.push(cursor);
+    const previousVisitId = text(cursor.previousVisitId, 180);
+    cursor = previousVisitId ? byId.get(previousVisitId) : null;
+  }
+  return chain.reverse();
+}
+
+function selectCurrentWorkVisit(records, workOrderId) {
+  const chain = orderedWorkVisitChain(records, workOrderId);
+  return chain.length > 0 ? chain[chain.length - 1] : null;
+}
+
+function workVisitScopeSignature(visit) {
+  const snapshot = visit?.scheduledScopeSnapshot || {};
+  return JSON.stringify({
+    appointmentId: text(snapshot.appointmentId, 180),
+    capturedAt: text(snapshot.capturedAt, 80),
+    estimatedUnitCount: Number(snapshot.estimatedUnitCount) || 0,
+    workLines: Array.isArray(snapshot.workLines) ? snapshot.workLines : [],
+    customerFacingDescription: text(snapshot.customerFacingDescription, 1500),
+    technicianInstructions: text(snapshot.technicianInstructions, 1500),
+  });
 }
 
 function projectFieldVisitState(record, job) {
@@ -89,7 +113,16 @@ function canPrepareInitialVisit(job, fieldVisit) {
     && workOrderAllowsInitialVisitPreparation({ status: job?.status });
 }
 
-async function loadCurrentWorkVisitState(db, job) {
+function canCreateReturnVisit(job, fieldVisit) {
+  return Boolean(fieldVisit)
+    && fieldVisit.status === 'requires_return_visit'
+    && fieldVisit.requiresSecondVisit === true
+    && Boolean(text(fieldVisit.secondVisitReason, 1000))
+    && Array.isArray(job?.allowedActions)
+    && job.allowedActions.includes('execute');
+}
+
+async function loadWorkVisitChainState(db, job) {
   const workOrderId = text(job?.workOrderId, 180);
   if (!workOrderId) throw fieldError('work_order_required', 'A Work Order id is required.');
   const snapshot = await db.collection('workVisits').where('workOrderId', '==', workOrderId).get();
@@ -101,16 +134,27 @@ async function loadCurrentWorkVisitState(db, job) {
     propertyId: text(job?.propertyId, 180),
   };
   for (const record of records) assertExistingVisitCompatible(record, expectedOrderIdentity);
-  const record = selectCurrentWorkVisit(records, workOrderId);
-  return projectFieldVisitState(record, job);
+  const chain = orderedWorkVisitChain(records, workOrderId);
+  const record = chain.length > 0 ? chain[chain.length - 1] : null;
+  return {
+    chain,
+    fieldVisit: projectFieldVisitState(record, job),
+  };
+}
+
+async function loadCurrentWorkVisitState(db, job) {
+  const state = await loadWorkVisitChainState(db, job);
+  return state.fieldVisit;
 }
 
 async function attachCurrentWorkVisitState(db, job) {
-  const fieldVisit = await loadCurrentWorkVisitState(db, job);
+  const { chain, fieldVisit } = await loadWorkVisitChainState(db, job);
   return {
     ...job,
+    _fieldVisitChainIds: chain.map((record) => text(record.id, 180)),
     fieldVisit,
     canPrepareVisit: canPrepareInitialVisit(job, fieldVisit),
+    canCreateReturnVisit: canCreateReturnVisit(job, fieldVisit),
   };
 }
 
@@ -121,6 +165,10 @@ async function attachCurrentWorkVisitStates(db, jobs) {
 module.exports.attachCurrentWorkVisitState = attachCurrentWorkVisitState;
 module.exports.attachCurrentWorkVisitStates = attachCurrentWorkVisitStates;
 module.exports.canPrepareInitialVisit = canPrepareInitialVisit;
+module.exports.canCreateReturnVisit = canCreateReturnVisit;
 module.exports.loadCurrentWorkVisitState = loadCurrentWorkVisitState;
+module.exports.loadWorkVisitChainState = loadWorkVisitChainState;
+module.exports.orderedWorkVisitChain = orderedWorkVisitChain;
 module.exports.projectFieldVisitState = projectFieldVisitState;
 module.exports.selectCurrentWorkVisit = selectCurrentWorkVisit;
+module.exports.workVisitScopeSignature = workVisitScopeSignature;

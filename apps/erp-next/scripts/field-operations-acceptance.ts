@@ -243,11 +243,15 @@ function gate(args: {
 {
   const workVisit = visit({});
   const changes = [scopeChange('scope-second-service'), scopeChange('scope-checkup')];
-  const visitAssets = [asset('va-1'), asset('va-2', 'asset-va-2', true)];
+  const visitAssets = [
+    { ...asset('va-1'), locationLabel: 'Sala' },
+    { ...asset('va-2', 'asset-va-2', true), locationLabel: 'Bedroom' },
+    { ...asset('va-3', 'asset-va-3', true), locationLabel: 'Kitchen' },
+  ];
   const interventions = [
     intervention({ id: 'i-service-1', visitAssetId: 'va-1', assetId: 'asset-va-1', plannedWorkLineId: 'planned-service', unitPrice: 125 }),
     intervention({ id: 'i-service-2', visitAssetId: 'va-2', assetId: 'asset-va-2', origin: 'added_on_site_client_request', scopeChangeId: 'scope-second-service', unitPrice: 125 }),
-    intervention({ id: 'i-checkup', visitAssetId: 'va-2', assetId: 'asset-va-2', origin: 'added_on_site_client_request', scopeChangeId: 'scope-checkup', type: 'Check-up', catalogId: 'service-checkup', unitPrice: 75 }),
+    intervention({ id: 'i-checkup', visitAssetId: 'va-3', assetId: 'asset-va-3', origin: 'added_on_site_client_request', scopeChangeId: 'scope-checkup', type: 'Check-up', catalogId: 'service-checkup', unitPrice: 75 }),
   ];
   const soldSwitch: FieldSaleLine = {
     ...audit('sale-switch'), visitId: 'visit-1', interventionId: 'i-service-2', assetId: 'asset-va-2', catalogItemId: 'product-switch', descriptionSnapshot: '220V Switch', quantity: 1, unit: 'ea',
@@ -258,6 +262,7 @@ function gate(args: {
   assert(result.allowed, `scenario 25 should submit actual work: ${result.blockers.join(' | ')}`);
   const billing = buildBillingCandidateLines({ visitId: workVisit.id, interventions, saleLines: [soldSwitch] });
   assert(billing.length === 4, 'scenario 25 billing candidate must include 2 services + 1 check-up + 1 switch');
+  assert(visitAssets.map((item) => item.locationLabel).join('|') === 'Sala|Bedroom|Kitchen', 'canonical fixture must preserve the three actual equipment locations');
   assert(workVisit.scheduledScopeSnapshot.workLines[0].quantity === 1, 'scenario 26 planned booking quantity must remain unchanged');
   assert(plannedVsActualSummary({ visit: workVisit, interventions, saleLines: [soldSwitch] }).actualInterventionCount === 3, 'scenario 26 actual work must be independently countable');
 }

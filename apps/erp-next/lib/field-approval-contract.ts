@@ -118,7 +118,7 @@ function affectedValid(value: unknown): value is FieldApprovalReference[] {
   return true;
 }
 
-function fieldApprovalValid(value: unknown): value is FieldApproval {
+export function fieldApprovalValid(value: unknown): value is FieldApproval {
   const item = record(value);
   if (!item || !nonEmptyString(item.status) || !APPROVAL_STATUSES.has(item.status as FieldApprovalStatus)) return false;
   if (!nonEmptyString(item.method) || !APPROVAL_METHODS.has(item.method as FieldApprovalMethod)) return false;
@@ -148,9 +148,16 @@ function validateActivatedApprovalRelations(job: FieldExecutionJobDetail) {
   const interventionById = new Map(job.workInterventions.map((intervention) => [intervention.id, intervention]));
   const scopeById = new Map(job.scopeChanges.map((scopeChange) => [scopeChange.id, scopeChange]));
   const approvalByInterventionId = new Map<string, FieldApproval>();
+  const saleApprovalIds = new Set<string>();
 
   for (const approval of job.fieldApprovals) {
-    if (approval.visitId !== visitId || approval.affected.some((reference) => reference.type === 'sale_line')) return false;
+    if (approval.visitId !== visitId) return false;
+    const saleLineId = affectedId(approval, 'sale_line');
+    if (saleLineId) {
+      if (approval.affected.length !== 1 || !['approved', 'rejected'].includes(approval.status) || saleApprovalIds.has(saleLineId)) return false;
+      saleApprovalIds.add(saleLineId);
+      continue;
+    }
     const interventionId = affectedId(approval, 'intervention');
     const scopeChangeId = affectedId(approval, 'scope_change');
     if (!interventionId || !scopeChangeId || approval.affected.length !== 2 || approvalByInterventionId.has(interventionId)) return false;

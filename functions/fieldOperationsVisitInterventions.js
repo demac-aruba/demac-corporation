@@ -163,6 +163,20 @@ function coveringIntervention(intervention) {
   return !NON_COVERING_INTERVENTION_STATUSES.has(intervention.status);
 }
 
+function effectiveChainInterventions(interventions = [], orderedVisitIds = []) {
+  const chainIndex = new Map(orderedVisitIds.map((visitId, index) => [text(visitId, 180), index]));
+  return interventions.filter((intervention) => {
+    if (intervention.status !== 'pending_part' || !intervention.plannedWorkLineId) return true;
+    const index = chainIndex.get(intervention.visitId) ?? -1;
+    return !interventions.some((candidate) => (
+      (chainIndex.get(candidate.visitId) ?? -1) > index
+      && candidate.plannedWorkLineId === intervention.plannedWorkLineId
+      && candidate.assetId === intervention.assetId
+      && coveringIntervention(candidate)
+    ));
+  });
+}
+
 function plannedWorkProgress(plannedWork = [], interventions = []) {
   return plannedWork.map((line) => {
     const plannedQuantity = Math.max(0, Number(line?.quantity) || 0);
@@ -178,12 +192,20 @@ function plannedWorkProgress(plannedWork = [], interventions = []) {
   });
 }
 
-function plannedInterventionOptions(job, progress, interventions) {
+function plannedInterventionOptions(job, progress, interventions, chainInterventions = interventions, orderedVisitIds = []) {
   if (!plannedInterventionBaseEligible(job, progress)) return [];
+  const currentVisitId = text(job?.fieldVisit?.id, 180);
+  const currentVisitIndex = orderedVisitIds.indexOf(currentVisitId);
   return job.visitAssets.map((visitAsset) => {
     const visitAssetId = text(visitAsset?.id, 180);
+    const assetId = text(visitAsset?.assetId, 180);
     const plannedWorkLineIds = progress
-      .filter((line) => line.remainingQuantity > 0)
+      .filter((line) => line.remainingQuantity > 0 || chainInterventions.some((intervention) => (
+        intervention.status === 'pending_part'
+        && intervention.plannedWorkLineId === line.id
+        && intervention.assetId === assetId
+        && (orderedVisitIds.indexOf(intervention.visitId) < currentVisitIndex)
+      )))
       .filter((line) => !interventions.some((intervention) => (
         intervention.visitAssetId === visitAssetId
         && intervention.plannedWorkLineId === line.id
@@ -220,6 +242,19 @@ async function loadWorkInterventions(db, visitId, expectedContext = {}) {
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
 }
 
+async function loadWorkInterventionsForChain(db, visitIds, expectedContext = {}, read = (query) => query.get()) {
+  const normalizedVisitIds = [...new Set((visitIds || []).map((visitId) => text(visitId, 180)).filter(Boolean))];
+  const snapshots = await Promise.all(normalizedVisitIds.map((visitId) => (
+    read(db.collection(WORK_INTERVENTION_COLLECTION).where('visitId', '==', visitId))
+  )));
+  return snapshots.flatMap((snapshot, index) => snapshotRecords(snapshot)
+    .map((record) => projectWorkIntervention(record, {
+      ...expectedContext,
+      visitId: normalizedVisitIds[index],
+    })))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+}
+
 function plannedInterventionBaseEligible(job, progress) {
   return Boolean(
     job?.fieldVisit
@@ -228,7 +263,7 @@ function plannedInterventionBaseEligible(job, progress) {
     && job.allowedActions.includes('intervention.add')
     && Array.isArray(job.visitAssets)
     && job.visitAssets.length > 0
-    && progress.some((line) => line.remainingQuantity > 0),
+    && progress.length > 0,
   );
 }
 
@@ -253,9 +288,14 @@ async function attachWorkInterventionsToJob(db, job) {
     customerId: text(job?.customerId, 180),
     propertyId: text(job?.propertyId, 180),
   };
-  const workInterventions = await loadWorkInterventions(db, visitId, expectedContext);
-  const progress = plannedWorkProgress(job?.plannedWork || [], workInterventions);
-  const options = plannedInterventionOptions(job, progress, workInterventions);
+  const visitIds = Array.isArray(job?._fieldVisitChainIds) && job._fieldVisitChainIds.includes(visitId)
+    ? job._fieldVisitChainIds
+    : [visitId];
+  const chainInterventions = await loadWorkInterventionsForChain(db, visitIds, expectedContext);
+  const effectiveInterventions = effectiveChainInterventions(chainInterventions, visitIds);
+  const workInterventions = chainInterventions.filter((intervention) => intervention.visitId === visitId);
+  const progress = plannedWorkProgress(job?.plannedWork || [], effectiveInterventions);
+  const options = plannedInterventionOptions(job, progress, workInterventions, effectiveInterventions, visitIds);
   const availableFieldServices = options.length > 0 ? await loadFieldServiceCatalog(db) : [];
   return {
     ...job,
@@ -419,19 +459,44 @@ function createPlannedWorkInterventionCommand({
       const existingInterventionsSnapshot = await transaction.get(
         db.collection(WORK_INTERVENTION_COLLECTION).where('visitId', '==', normalizedVisitId),
       );
+      const visitIds = context.historyRecords.map((visit) => text(visit.id, 180));
+      const otherVisitIds = visitIds.filter((id) => id !== normalizedVisitId);
+      const otherInterventions = await loadWorkInterventionsForChain(
+        db,
+        otherVisitIds,
+        {
+          workOrderId: context.workOrderId,
+          customerId: context.customerId,
+          propertyId: context.propertyId,
+        },
+        (query) => transaction.get(query),
+      );
       const existingInterventions = snapshotRecords(existingInterventionsSnapshot)
         .map((record) => projectWorkIntervention(record, expectedContext));
-      const activeForLine = existingInterventions.filter((intervention) => (
+      const effectiveInterventions = effectiveChainInterventions(
+        [...otherInterventions, ...existingInterventions],
+        visitIds,
+      );
+      const activeForLine = effectiveInterventions.filter((intervention) => (
         intervention.plannedWorkLineId === normalizedPlannedWorkLineId && coveringIntervention(intervention)
       ));
-      if (activeForLine.some((intervention) => intervention.visitAssetId === normalizedVisitAssetId)) {
+      if (existingInterventions.some((intervention) => (
+        intervention.visitAssetId === normalizedVisitAssetId
+        && intervention.plannedWorkLineId === normalizedPlannedWorkLineId
+        && coveringIntervention(intervention)
+      ))) {
         throw fieldError(
           'planned_work_already_linked_to_asset',
           'This planned work line is already linked to this A/C for the current visit.',
           409,
         );
       }
-      if (activeForLine.length >= plannedQuantity) {
+      const replacesPriorPendingPart = activeForLine.some((intervention) => (
+        intervention.status === 'pending_part'
+        && intervention.assetId === visitAsset.assetId
+        && intervention.visitId !== normalizedVisitId
+      ));
+      if (activeForLine.length >= plannedQuantity && !replacesPriorPendingPart) {
         throw fieldError(
           'planned_work_fully_linked',
           'The planned quantity is already fully linked to actual A/C work. Additional work must use a Scope Change.',
@@ -491,8 +556,10 @@ module.exports.attachWorkInterventionsToJob = attachWorkInterventionsToJob;
 module.exports.canAddPlannedIntervention = canAddPlannedIntervention;
 module.exports.coveringIntervention = coveringIntervention;
 module.exports.createPlannedWorkInterventionCommand = createPlannedWorkInterventionCommand;
+module.exports.effectiveChainInterventions = effectiveChainInterventions;
 module.exports.loadFieldServiceCatalog = loadFieldServiceCatalog;
 module.exports.loadWorkInterventions = loadWorkInterventions;
+module.exports.loadWorkInterventionsForChain = loadWorkInterventionsForChain;
 module.exports.plannedInterventionOptions = plannedInterventionOptions;
 module.exports.plannedWorkProgress = plannedWorkProgress;
 module.exports.projectWorkIntervention = projectWorkIntervention;

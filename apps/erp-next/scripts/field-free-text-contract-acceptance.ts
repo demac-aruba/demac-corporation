@@ -39,7 +39,7 @@ const report = {
 const baseJob = {
   id: 'WO-1', workOrderId: 'WO-1', appointmentId: 'APT-1', date: '2026-08-26', time: '08:30', status: 'En proceso', customerId: 'CLIENT-1', customerName: 'Customer', propertyId: 'PROPERTY-1', address: 'Santa Cruz 1',
   plannedWork: [{ id: 'line-standard', label: 'Standard Service', quantity: 1 }], estimatedQuantity: 1, vanId: 'VAN-1', responsibility: 'technician', assignmentSource: 'direct_staff',
-  allowedActions: ['read', 'execute', 'report.edit', 'intervention.complete'], fieldVisit: visit, canPrepareVisit: false, knownEquipment: [], visitAssets: [visitAsset], canAddExistingAsset: true,
+  allowedActions: ['read', 'execute', 'report.edit', 'intervention.complete'], fieldVisit: visit, canPrepareVisit: false, canCreateReturnVisit: false, knownEquipment: [], visitAssets: [visitAsset], canAddExistingAsset: true,
   workInterventions: [intervention], plannedWorkProgress: [{ id: 'line-standard', plannedQuantity: 1, linkedActualQuantity: 1, remainingQuantity: 0 }], plannedInterventionOptions: [],
   interventionExecutionOptions: [{ interventionId: 'WI-1', allowedTargets: ['completed', 'pending_part'] }], availableFieldServices: [], canAddPlannedIntervention: false,
   scopeChanges: [], additionalInterventionVisitAssetIds: [], canAddAdditionalIntervention: false, fieldApprovals: [], additionalApprovalInterventionIds: [], canRecordAdditionalApproval: false,

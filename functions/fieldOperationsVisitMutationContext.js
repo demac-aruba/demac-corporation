@@ -4,7 +4,7 @@ const {
   projectCanonicalWorkVisit,
 } = require('./fieldOperationsAuthorityWorkVisit');
 const { requireMutationAction } = require('./fieldOperationsMutationAssignment');
-const { selectCurrentWorkVisit } = require('./fieldOperationsVisitRead');
+const { orderedWorkVisitChain, workVisitScopeSignature } = require('./fieldOperationsVisitRead');
 
 function text(value, limit = 1000) {
   return String(value ?? '').trim().slice(0, limit);
@@ -29,6 +29,7 @@ async function loadCurrentVisitMutationContext({
   resolveAssignment,
   action,
   deniedMessage,
+  requireCurrent = true,
 } = {}) {
   if (!db || typeof db.collection !== 'function') throw new Error('A Firestore-compatible db is required.');
   if (!transaction || typeof transaction.get !== 'function') throw new Error('A Firestore transaction is required.');
@@ -77,8 +78,22 @@ async function loadCurrentVisitMutationContext({
   );
   const historyRecords = snapshotRecords(historySnapshot);
   for (const record of historyRecords) assertExistingVisitCompatible(record, order);
-  const currentRecord = selectCurrentWorkVisit(historyRecords, workOrderId);
-  if (!currentRecord || text(currentRecord.id, 180) !== normalizedVisitId) {
+  const orderedHistoryRecords = orderedWorkVisitChain(historyRecords, workOrderId);
+  const projectedHistory = orderedHistoryRecords.map((record) => (
+    projectCanonicalWorkVisit(record, { appointmentId, propertyId })
+  ));
+  const rootScopeSignature = projectedHistory.length > 0 ? workVisitScopeSignature(projectedHistory[0]) : '';
+  if (projectedHistory.some((visit) => workVisitScopeSignature(visit) !== rootScopeSignature)) {
+    throw fieldError(
+      'visit_scope_conflict',
+      'The physical Work Visit chain does not share one immutable scheduled scope.',
+      409,
+    );
+  }
+  const currentRecord = orderedHistoryRecords.length > 0
+    ? orderedHistoryRecords[orderedHistoryRecords.length - 1]
+    : null;
+  if (requireCurrent && (!currentRecord || text(currentRecord.id, 180) !== normalizedVisitId)) {
     throw fieldError('visit_not_current', 'Only the current physical Work Visit may be changed.', 409, {
       currentVisitId: text(currentRecord?.id, 180) || null,
     });
@@ -90,11 +105,13 @@ async function loadCurrentVisitMutationContext({
     assignment,
     canonicalVisit: projectCanonicalWorkVisit(storedVisit, { appointmentId, propertyId }),
     customerId,
+    historyRecords: orderedHistoryRecords,
     order,
     propertyId,
     storedVisit,
     visitRef,
     workOrderId,
+    currentVisitId: text(currentRecord?.id, 180) || undefined,
   };
 }
 

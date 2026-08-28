@@ -219,12 +219,16 @@ function createAttachExistingVisitAssetCommand({
   if (typeof resolveAssignment !== 'function') throw new Error('resolveAssignment is required.');
   if (typeof appendAuditInTransaction !== 'function') throw new Error('appendAuditInTransaction is required.');
 
-  return async function attachExistingVisitAsset({ identity, visitId, assetId, requestId, source = 'existing_asset' } = {}) {
+  return async function attachExistingVisitAsset({ identity, visitId, assetId, requestId, source = 'existing_asset', qrCode } = {}) {
     const normalizedVisitId = text(visitId, 180);
     const normalizedAssetId = text(assetId, 180);
     const attachSource = canonicalVisitAssetAttachSource(source);
+    const presentedQrCode = text(qrCode, 512);
     if (!normalizedVisitId) throw fieldError('visit_required', 'A Work Visit id is required.', 400);
     if (!normalizedAssetId) throw fieldError('asset_required', 'A canonical A/C Asset id is required.', 400);
+    if (attachSource === 'qr_scan' && presentedQrCode.length < 3) {
+      throw fieldError('invalid_equipment_qr', 'A valid QR code is required for QR identification.', 400);
+    }
     const stable = stableRequestId(requestId);
     let result;
 
@@ -254,6 +258,19 @@ function createAttachExistingVisitAssetCommand({
         );
       }
 
+      let equipment;
+      if (attachSource === 'qr_scan') {
+        const equipmentSnapshot = await transaction.get(db.collection('equipmentSystems').doc(normalizedAssetId));
+        if (!equipmentSnapshot.exists) {
+          throw fieldError('asset_not_available_for_visit', 'The QR does not identify an A/C available for this visit.', 404);
+        }
+        equipment = fieldSnapshotRecord(equipmentSnapshot);
+        requireEquipmentIdentity(equipment, context.customerId, context.propertyId);
+        if (text(equipment.qrCode, 512) !== presentedQrCode) {
+          throw fieldError('asset_qr_mismatch', 'The QR does not identify the selected A/C for this visit.', 409);
+        }
+      }
+
       const visitAssetId = deterministicId('VA', `${normalizedVisitId}:${normalizedAssetId}`);
       const visitAssetRef = db.collection(VISIT_ASSET_COLLECTION).doc(visitAssetId);
       const existingSnapshot = await transaction.get(visitAssetRef);
@@ -271,13 +288,14 @@ function createAttachExistingVisitAssetCommand({
         return;
       }
 
-      const equipmentRef = db.collection('equipmentSystems').doc(normalizedAssetId);
-      const equipmentSnapshot = await transaction.get(equipmentRef);
-      if (!equipmentSnapshot.exists) {
-        throw fieldError('asset_not_available_for_visit', 'The selected A/C is not available for this visit.', 404);
+      if (!equipment) {
+        const equipmentSnapshot = await transaction.get(db.collection('equipmentSystems').doc(normalizedAssetId));
+        if (!equipmentSnapshot.exists) {
+          throw fieldError('asset_not_available_for_visit', 'The selected A/C is not available for this visit.', 404);
+        }
+        equipment = fieldSnapshotRecord(equipmentSnapshot);
+        requireEquipmentIdentity(equipment, context.customerId, context.propertyId);
       }
-      const equipment = fieldSnapshotRecord(equipmentSnapshot);
-      requireEquipmentIdentity(equipment, context.customerId, context.propertyId);
 
       const existingAssetsSnapshot = await transaction.get(
         db.collection(VISIT_ASSET_COLLECTION).where('visitId', '==', normalizedVisitId),

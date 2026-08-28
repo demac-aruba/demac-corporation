@@ -8,28 +8,39 @@ import {
   addFieldReportMeasurement,
   addFieldReportPhotoEvidence,
   addFieldReportVoiceEvidence,
+  attachFieldAssetByQr,
   attachExistingFieldAsset,
   createAdditionalFieldIntervention,
+  createFieldSaleLine,
   createPlannedFieldIntervention,
+  createReturnFieldVisit,
+  discardOfflineFieldConflict,
   getFieldJob,
+  getOfflineFieldOutboxSummary,
   getFieldSchedule,
   prepareFieldVisit,
   recordAdditionalFieldInterventionDecision,
+  decideFieldSaleLine,
   recordFieldCustomerAcknowledgement,
   recordFieldPlannedWorkDisposition,
   registerOnSiteFieldEquipment,
   setFieldReportChecklistItem,
   setFieldReportFreeText,
+  submitFieldVisitForOfficeReview,
+  syncOfflineFieldOutbox,
   transitionFieldIntervention,
+  transitionFieldSaleLine,
   transitionFieldVisit,
   type FieldActiveVisitTransition,
   type FieldAdditionalWorkDecision,
   type FieldExecutionJobDetail,
   type FieldInterventionExecutionTarget,
+  type FieldOutboxSummary,
   type FieldScheduleJob,
   type FieldTechnicianScopeChangeOrigin,
   type FieldVisitStatus,
 } from '@/lib/field-authority';
+import { FIELD_OFFLINE_STATE_EVENT } from '@/lib/field-offline';
 import {
   uploadFieldEquipmentRegistrationImage,
   uploadFieldReportPhoto,
@@ -68,6 +79,17 @@ import {
 import { VisitPendingControls, type VisitPendingInput } from './visit-pending-controls';
 import { VisitNoAccessControls, type VisitNoAccessInput } from './visit-no-access-controls';
 import { VisitCancellationControls, type VisitCancellationInput } from './visit-cancellation-controls';
+import { VisitReturnControls, type VisitReturnInput } from './visit-return-controls';
+import { VisitReturnCreationControls } from './visit-return-creation-controls';
+import { VisitOfficeReviewControls } from './visit-office-review-controls';
+import {
+  FieldSaleControls,
+  type FieldSaleCreateInput,
+  type FieldSaleDecisionInput,
+  type FieldSaleTransitionInput,
+} from './field-sale-controls';
+import { FieldHistoryPanel } from './field-history-panel';
+import { FieldQrLookup } from './field-qr-lookup';
 import styles from './technician-field-home.module.css';
 
 type RangeKey = 'today' | 'tomorrow' | 'week';
@@ -105,6 +127,7 @@ type VisitTransitionInput = {
   pendingAction?: string;
   noAccessReason?: string;
   cancellationReason?: string;
+  secondVisitReason?: string;
 };
 
 const COMPLETED_WORK_ORDER_STATUSES = new Set(['Completada']);
@@ -117,6 +140,7 @@ const ACTIVE_TRANSITION_LABELS: Record<FieldActiveVisitTransition, string> = {
   pending: 'Dejar pendiente',
   no_access: 'Sin acceso',
   cancelled: 'Cancelar visita',
+  requires_return_visit: 'Requiere retorno',
 };
 
 function workSummary(job: Pick<FieldScheduleJob, 'plannedWork' | 'customerFacingDescription'>) {
@@ -314,6 +338,35 @@ function JobCard({ job, onOpen }: { job: FieldScheduleJob; onOpen: () => void })
   );
 }
 
+function OfflineStatus({ capturedAt, summary, syncing, onSync, onDiscard }: {
+  capturedAt: string | null;
+  summary: FieldOutboxSummary;
+  syncing: boolean;
+  onSync: () => void;
+  onDiscard: (id: string) => void;
+}) {
+  if (!capturedAt && summary.total === 0) return null;
+  return (
+    <section className={summary.blocked ? styles.mutationError : styles.section} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }} aria-live="polite">
+      <div>
+        <strong style={{ display: 'block', fontSize: 12 }}>{capturedAt ? 'Vista sin conexión · no es estado canónico actual' : 'Sincronización de campo pendiente'}</strong>
+        <span className={styles.helper} style={{ display: 'block', marginTop: 4 }}>
+          {capturedAt ? `Copia capturada ${new Date(capturedAt).toLocaleString('es-AW', { timeZone: 'America/Aruba' })}. ` : ''}
+          {summary.pending ? `${summary.pending} operación(es) esperan confirmación del servidor. ` : ''}
+          {summary.blocked ? `${summary.blocked} operación(es) tienen conflicto y requieren revisión.` : ''}
+        </span>
+        {summary.conflicts.map((conflict) => (
+          <div key={conflict.id} style={{ marginTop: 8 }}>
+            <span className={styles.helper} style={{ display: 'block', margin: 0 }}>{conflict.action}: {conflict.message}</span>
+            <button className={styles.action} style={{ marginTop: 6 }} type="button" onClick={() => onDiscard(conflict.id)}>Descartar conflicto local</button>
+          </div>
+        ))}
+      </div>
+      {summary.pending ? <button className={styles.action} disabled={syncing} type="button" onClick={onSync}>{syncing ? 'Sincronizando…' : 'Sincronizar ahora'}</button> : null}
+    </section>
+  );
+}
+
 function DetailView({
   job,
   loading,
@@ -329,7 +382,11 @@ function DetailView({
   freeTextError,
   voiceNoteError,
   customerAcknowledgementError,
+  officeReviewError,
+  fieldSaleError,
+  officeReviewCorrectionNote,
   transitioning,
+  creatingReturnVisit,
   attachingAssetId,
   registeringEquipment,
   creatingInterventionVisitAssetId,
@@ -343,8 +400,16 @@ function DetailView({
   savingFreeTextKey,
   savingVoiceNoteKey,
   savingCustomerAcknowledgementKey,
+  submittingOfficeReview,
+  savingFieldSaleLineId,
+  offlineCapturedAt,
+  outboxSummary,
+  syncingOutbox,
+  draftOwnerUserId,
   onTransition,
+  onCreateReturnVisit,
   onAttachAsset,
+  onAttachAssetByQr,
   onRegisterEquipment,
   onCreatePlannedIntervention,
   onCreateAdditionalIntervention,
@@ -357,6 +422,13 @@ function DetailView({
   onSaveFreeText,
   onSaveVoiceNote,
   onRecordCustomerAcknowledgement,
+  onCreateFieldSaleLine,
+  onDecideFieldSaleLine,
+  onTransitionFieldSaleLine,
+  onOfficeReviewCorrectionNoteChange,
+  onSubmitOfficeReview,
+  onSyncOutbox,
+  onDiscardOutboxConflict,
   onBack,
 }: {
   job: FieldExecutionJobDetail | null;
@@ -373,7 +445,11 @@ function DetailView({
   freeTextError: string | null;
   voiceNoteError: string | null;
   customerAcknowledgementError: string | null;
+  officeReviewError: string | null;
+  fieldSaleError: string | null;
+  officeReviewCorrectionNote: string;
   transitioning: FieldActiveVisitTransition | null;
+  creatingReturnVisit: boolean;
   attachingAssetId: string | null;
   registeringEquipment: boolean;
   creatingInterventionVisitAssetId: string | null;
@@ -387,8 +463,16 @@ function DetailView({
   savingFreeTextKey: string | null;
   savingVoiceNoteKey: string | null;
   savingCustomerAcknowledgementKey: string | null;
+  submittingOfficeReview: boolean;
+  savingFieldSaleLineId: string | null;
+  offlineCapturedAt: string | null;
+  outboxSummary: FieldOutboxSummary;
+  syncingOutbox: boolean;
+  draftOwnerUserId: string;
   onTransition: (input: VisitTransitionInput) => void;
+  onCreateReturnVisit: () => void;
   onAttachAsset: (assetId: string) => void;
+  onAttachAssetByQr: (assetId: string, qrCode: string) => Promise<boolean>;
   onRegisterEquipment: (input: EquipmentRegistrationInput) => Promise<boolean>;
   onCreatePlannedIntervention: (input: PlannedWorkMutationInput) => void;
   onCreateAdditionalIntervention: (input: AdditionalInterventionInput) => void;
@@ -401,6 +485,13 @@ function DetailView({
   onSaveFreeText: (input: ReportFreeTextInput) => Promise<boolean>;
   onSaveVoiceNote: (input: ReportVoiceNoteInput) => Promise<boolean>;
   onRecordCustomerAcknowledgement: (input: CustomerAcknowledgementInput) => Promise<boolean>;
+  onCreateFieldSaleLine: (input: FieldSaleCreateInput) => Promise<boolean>;
+  onDecideFieldSaleLine: (input: FieldSaleDecisionInput) => Promise<boolean>;
+  onTransitionFieldSaleLine: (input: FieldSaleTransitionInput) => Promise<boolean>;
+  onOfficeReviewCorrectionNoteChange: (value: string) => void;
+  onSubmitOfficeReview: () => void;
+  onSyncOutbox: () => void;
+  onDiscardOutboxConflict: (id: string) => void;
   onBack: () => void;
 }) {
   if (loading || error || !job) {
@@ -431,6 +522,7 @@ function DetailView({
   const attachedAssetIds = new Set(job.visitAssets.map((visitAsset) => visitAsset.assetId));
   const knownEquipmentById = new Map(job.knownEquipment.map((equipment) => [equipment.id, equipment]));
   const mutationBusy = transitioning !== null
+    || creatingReturnVisit
     || attachingAssetId !== null
     || registeringEquipment
     || creatingInterventionVisitAssetId !== null
@@ -443,7 +535,10 @@ function DetailView({
     || savingChecklistKey !== null
     || savingFreeTextKey !== null
     || savingVoiceNoteKey !== null
-    || savingCustomerAcknowledgementKey !== null;
+    || savingCustomerAcknowledgementKey !== null
+    || savingFieldSaleLineId !== null
+    || submittingOfficeReview
+    || offlineCapturedAt !== null;
 
   return (
     <div className={styles.shell}>
@@ -454,6 +549,8 @@ function DetailView({
           <p>{job.time || 'Sin hora'} · Campo: {visitStatusLabel(job.fieldVisit?.status)} · {job.workOrderId}</p>
         </div>
       </div>
+
+      <OfflineStatus capturedAt={offlineCapturedAt} summary={outboxSummary} syncing={syncingOutbox} onSync={onSyncOutbox} onDiscard={onDiscardOutboxConflict} />
 
       <section className={styles.section}>
         <h2>ESTADO DE LA VISITA</h2>
@@ -466,7 +563,7 @@ function DetailView({
         </div>
         {availableTransitions.length ? (
           <div className={styles.visitActions}>
-            {availableTransitions.filter((target) => target !== 'pending' && target !== 'no_access' && target !== 'cancelled').map((target) => (
+            {availableTransitions.filter((target) => target !== 'pending' && target !== 'requires_return_visit' && target !== 'no_access' && target !== 'cancelled').map((target) => (
               <button
                 className={`${styles.action} ${styles.primary}`}
                 disabled={mutationBusy}
@@ -504,6 +601,20 @@ function DetailView({
             saving={transitioning === 'cancelled'}
           />
         ) : null}
+        {availableTransitions.includes('requires_return_visit') ? (
+          <VisitReturnControls
+            disabled={mutationBusy}
+            onSubmit={(input: VisitReturnInput) => onTransition(input)}
+            saving={transitioning === 'requires_return_visit'}
+          />
+        ) : null}
+        {job.canCreateReturnVisit ? (
+          <VisitReturnCreationControls
+            disabled={mutationBusy}
+            onCreate={onCreateReturnVisit}
+            saving={creatingReturnVisit}
+          />
+        ) : null}
         {job.fieldVisit?.pendingReason ? (
           <div className={styles.planned} style={{ marginTop: 12 }}>
             <div className={styles.plannedTitle}>Último motivo pendiente</div>
@@ -523,8 +634,24 @@ function DetailView({
             <strong>{job.fieldVisit.cancellationReason}</strong>
           </div>
         ) : null}
+        {job.fieldVisit?.secondVisitReason ? (
+          <div className={styles.planned} style={{ marginTop: 12 }}>
+            <div className={styles.plannedTitle}>Motivo de segunda visita</div>
+            <strong>{job.fieldVisit.secondVisitReason}</strong>
+          </div>
+        ) : null}
         {transitionError ? <div className={styles.mutationError}>{transitionError}</div> : null}
       </section>
+
+      <VisitOfficeReviewControls
+        correctionNote={officeReviewCorrectionNote}
+        disabled={mutationBusy}
+        error={officeReviewError}
+        job={job}
+        onCorrectionNoteChange={onOfficeReviewCorrectionNoteChange}
+        onSubmit={onSubmitOfficeReview}
+        saving={submittingOfficeReview}
+      />
 
       <div className={styles.detailGrid}>
         <div>
@@ -602,6 +729,15 @@ function DetailView({
               error={approvalError}
               onDecide={onRecordAdditionalDecision}
             />
+            <FieldSaleControls
+              busy={mutationBusy}
+              error={fieldSaleError}
+              job={job}
+              onCreate={onCreateFieldSaleLine}
+              onDecide={onDecideFieldSaleLine}
+              onTransition={onTransitionFieldSaleLine}
+            />
+            <FieldHistoryPanel job={job} />
             <InterventionExecutionControls
               job={job}
               mutationBusy={mutationBusy}
@@ -624,6 +760,8 @@ function DetailView({
             />
             <FreeTextReportControls
               job={job}
+              draftOwnerUserId={draftOwnerUserId}
+              allowDraftWhileOffline={offlineCapturedAt !== null}
               mutationBusy={mutationBusy}
               savingKey={savingFreeTextKey}
               error={freeTextError}
@@ -648,6 +786,14 @@ function DetailView({
 
           <section className={styles.section}>
             <h2>EQUIPOS CONOCIDOS EN ESTA PROPIEDAD</h2>
+            <FieldQrLookup
+              attachingAssetId={attachingAssetId}
+              busy={mutationBusy}
+              canAttach={job.canAddExistingAsset}
+              equipment={job.knownEquipment}
+              onAttach={onAttachAssetByQr}
+              visitAssets={job.visitAssets}
+            />
             {job.knownEquipment.length ? job.knownEquipment.map((equipment) => {
               const attached = attachedAssetIds.has(equipment.id);
               return (
@@ -719,7 +865,12 @@ export function TechnicianFieldHome() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [scheduleOfflineCapturedAt, setScheduleOfflineCapturedAt] = useState<string | null>(null);
+  const [detailOfflineCapturedAt, setDetailOfflineCapturedAt] = useState<string | null>(null);
+  const [outboxSummary, setOutboxSummary] = useState<FieldOutboxSummary>({ pending: 0, blocked: 0, total: 0, conflicts: [] });
+  const [syncingOutbox, setSyncingOutbox] = useState(false);
   const [transitioning, setTransitioning] = useState<FieldActiveVisitTransition | null>(null);
+  const [creatingReturnVisit, setCreatingReturnVisit] = useState(false);
   const [transitionError, setTransitionError] = useState<string | null>(null);
   const [attachingAssetId, setAttachingAssetId] = useState<string | null>(null);
   const [assetError, setAssetError] = useState<string | null>(null);
@@ -740,6 +891,7 @@ export function TechnicianFieldHome() {
   const [savingFreeTextKey, setSavingFreeTextKey] = useState<string | null>(null);
   const [savingVoiceNoteKey, setSavingVoiceNoteKey] = useState<string | null>(null);
   const [savingCustomerAcknowledgementKey, setSavingCustomerAcknowledgementKey] = useState<string | null>(null);
+  const [submittingOfficeReview, setSubmittingOfficeReview] = useState(false);
   const [reportPhotoError, setReportPhotoError] = useState<string | null>(null);
   const [reportMeasurementError, setReportMeasurementError] = useState<string | null>(null);
   const [reportFindingError, setReportFindingError] = useState<string | null>(null);
@@ -747,11 +899,17 @@ export function TechnicianFieldHome() {
   const [reportFreeTextError, setReportFreeTextError] = useState<string | null>(null);
   const [reportVoiceNoteError, setReportVoiceNoteError] = useState<string | null>(null);
   const [customerAcknowledgementError, setCustomerAcknowledgementError] = useState<string | null>(null);
+  const [officeReviewError, setOfficeReviewError] = useState<string | null>(null);
+  const [fieldSaleError, setFieldSaleError] = useState<string | null>(null);
+  const [savingFieldSaleLineId, setSavingFieldSaleLineId] = useState<string | null>(null);
+  const [officeReviewCorrectionNote, setOfficeReviewCorrectionNote] = useState('');
   const scheduleRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
   const mutationRequestRef = useRef(0);
   const mutationLockRef = useRef<number | null>(null);
+  const syncingOutboxRef = useRef(false);
   const visitTransitionRequestRef = useRef<ReportMutationRetry | null>(null);
+  const returnVisitRequestRef = useRef<ReportMutationRetry | null>(null);
   const equipmentRegistrationRequestRef = useRef<string | null>(null);
   const reportPhotoRequestRef = useRef<ReportMutationRetry | null>(null);
   const reportMeasurementRequestRef = useRef<ReportMutationRetry | null>(null);
@@ -760,6 +918,8 @@ export function TechnicianFieldHome() {
   const reportFreeTextRequestRef = useRef<ReportMutationRetry | null>(null);
   const reportVoiceNoteRequestRef = useRef<ReportMutationRetry | null>(null);
   const customerAcknowledgementRequestRef = useRef<ReportMutationRetry | null>(null);
+  const officeReviewRequestRef = useRef<ReportMutationRetry | null>(null);
+  const fieldSaleRequestRef = useRef<ReportMutationRetry | null>(null);
   const selectedWorkOrderRef = useRef<string | null>(null);
 
   const today = arubaDateKey(clockNow);
@@ -773,6 +933,7 @@ export function TechnicianFieldHome() {
     mutationRequestRef.current += 1;
     mutationLockRef.current = null;
     visitTransitionRequestRef.current = null;
+    returnVisitRequestRef.current = null;
     equipmentRegistrationRequestRef.current = null;
     reportPhotoRequestRef.current = null;
     reportMeasurementRequestRef.current = null;
@@ -781,12 +942,15 @@ export function TechnicianFieldHome() {
     reportFreeTextRequestRef.current = null;
     reportVoiceNoteRequestRef.current = null;
     customerAcknowledgementRequestRef.current = null;
+    officeReviewRequestRef.current = null;
+    fieldSaleRequestRef.current = null;
     selectedWorkOrderRef.current = null;
     setSelectedWorkOrderId(null);
     setSelectedOwnerUserId(null);
     setDetail(null);
     setDetailOwnerUserId(null);
     setDetailError(null);
+    setDetailOfflineCapturedAt(null);
     setDetailLoading(false);
     setTransitioning(null);
     setTransitionError(null);
@@ -809,6 +973,7 @@ export function TechnicianFieldHome() {
     setSavingFreeTextKey(null);
     setSavingVoiceNoteKey(null);
     setSavingCustomerAcknowledgementKey(null);
+    setSubmittingOfficeReview(false);
     setReportPhotoError(null);
     setReportMeasurementError(null);
     setReportFindingError(null);
@@ -816,6 +981,10 @@ export function TechnicianFieldHome() {
     setReportFreeTextError(null);
     setReportVoiceNoteError(null);
     setCustomerAcknowledgementError(null);
+    setOfficeReviewError(null);
+    setFieldSaleError(null);
+    setSavingFieldSaleLineId(null);
+    setOfficeReviewCorrectionNote('');
   }, []);
 
   const loadDetail = useCallback(async (workOrderId: string, background = false) => {
@@ -832,10 +1001,12 @@ export function TechnicianFieldHome() {
       if (requestId !== detailRequestRef.current) return;
       setDetail(response.job);
       setDetailOwnerUserId(requestPrincipalKey);
+      setDetailOfflineCapturedAt(response.offlineCache?.capturedAt ?? null);
     } catch (loadError) {
       if (requestId !== detailRequestRef.current) return;
       setDetail(null);
       setDetailOwnerUserId(null);
+      setDetailOfflineCapturedAt(null);
       setDetailError(loadError instanceof Error ? loadError.message : 'No se pudo abrir el trabajo.');
     } finally {
       if (requestId === detailRequestRef.current) setDetailLoading(false);
@@ -856,6 +1027,7 @@ export function TechnicianFieldHome() {
       if (requestId !== scheduleRequestRef.current) return;
       setJobs(response.jobs);
       setJobsOwnerUserId(requestPrincipalKey);
+      setScheduleOfflineCapturedAt(response.offlineCache?.capturedAt ?? null);
 
       const selectedId = selectedWorkOrderRef.current;
       if (selectedId) {
@@ -869,12 +1041,50 @@ export function TechnicianFieldHome() {
       if (requestId !== scheduleRequestRef.current) return;
       setJobs([]);
       setJobsOwnerUserId(null);
+      setScheduleOfflineCapturedAt(null);
       closeJob();
       setScheduleError(loadError instanceof Error ? loadError.message : 'No se pudo cargar el itinerario del técnico.');
     } finally {
       if (requestId === scheduleRequestRef.current) setLoading(false);
     }
   }, [closeJob, loadDetail, principalFieldIdentityKey, today, weekEnd]);
+
+  const refreshOutboxSummary = useCallback(async () => {
+    try {
+      setOutboxSummary(await getOfflineFieldOutboxSummary(principal.userId));
+    } catch {
+      setOutboxSummary({ pending: 0, blocked: 0, total: 0, conflicts: [] });
+    }
+  }, [principal.userId]);
+
+  const syncOutbox = useCallback(async () => {
+    if (syncingOutboxRef.current || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
+    syncingOutboxRef.current = true;
+    setSyncingOutbox(true);
+    try {
+      const result = await syncOfflineFieldOutbox();
+      await refreshOutboxSummary();
+      if (result.completed > 0) {
+        await loadSchedule(true);
+      }
+    } catch {
+      await refreshOutboxSummary();
+    } finally {
+      syncingOutboxRef.current = false;
+      setSyncingOutbox(false);
+    }
+  }, [loadDetail, loadSchedule, refreshOutboxSummary]);
+
+  const discardOutboxConflict = useCallback(async (id: string) => {
+    try {
+      await discardOfflineFieldConflict(principal.userId, id);
+      await refreshOutboxSummary();
+      const selectedId = selectedWorkOrderRef.current;
+      if (selectedId) await loadDetail(selectedId, true);
+    } catch {
+      await refreshOutboxSummary();
+    }
+  }, [loadDetail, principal.userId, refreshOutboxSummary]);
 
   const clearMutationErrors = useCallback(() => {
     setTransitionError(null);
@@ -891,6 +1101,8 @@ export function TechnicianFieldHome() {
     setReportFreeTextError(null);
     setReportVoiceNoteError(null);
     setCustomerAcknowledgementError(null);
+    setOfficeReviewError(null);
+    setFieldSaleError(null);
   }, []);
 
   const runVisitTransition = useCallback(async (input: VisitTransitionInput) => {
@@ -899,7 +1111,7 @@ export function TechnicianFieldHome() {
     if (!currentDetail) return;
 
     const target = input.target;
-    const signature = `${target}|${input.pendingReason?.trim() || ''}|${input.pendingAction?.trim() || ''}|${input.noAccessReason?.trim() || ''}|${input.cancellationReason?.trim() || ''}`;
+    const signature = `${target}|${input.pendingReason?.trim() || ''}|${input.pendingAction?.trim() || ''}|${input.noAccessReason?.trim() || ''}|${input.cancellationReason?.trim() || ''}|${input.secondVisitReason?.trim() || ''}`;
     const prior = visitTransitionRequestRef.current;
     const transitionRequestId = prior?.key === target && prior.signature === signature
       ? prior.requestId
@@ -931,6 +1143,7 @@ export function TechnicianFieldHome() {
         input.pendingAction,
         input.noAccessReason,
         input.cancellationReason,
+        input.secondVisitReason,
       );
       if (mutationId !== mutationRequestRef.current) return;
 
@@ -938,6 +1151,7 @@ export function TechnicianFieldHome() {
         ? { ...current, fieldVisit: transitioned.visit, canPrepareVisit: false }
         : current);
       visitTransitionRequestRef.current = null;
+      void loadDetail(workOrderId, true);
       void loadSchedule(true);
     } catch (mutationError) {
       if (mutationId !== mutationRequestRef.current) return;
@@ -950,18 +1164,64 @@ export function TechnicianFieldHome() {
     }
   }, [clearMutationErrors, detail, detailOwnerUserId, loadDetail, loadSchedule, principalFieldIdentityKey]);
 
-  const runAttachAsset = useCallback(async (assetId: string) => {
+  const runCreateReturnVisit = useCallback(async () => {
     if (mutationLockRef.current !== null) return;
+    const currentDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
+    const visit = currentDetail?.fieldVisit;
+    if (!currentDetail || !visit || !currentDetail.canCreateReturnVisit) {
+      setTransitionError('Field Authority todavía no autoriza crear la visita física de retorno. Actualiza el trabajo e intenta nuevamente.');
+      return;
+    }
+
+    const signature = String(visit.version);
+    const prior = returnVisitRequestRef.current;
+    const requestId = prior?.key === visit.id && prior.signature === signature
+      ? prior.requestId
+      : clientRequestId('return-visit', visit.id);
+    returnVisitRequestRef.current = { key: visit.id, signature, requestId };
+
+    const mutationId = ++mutationRequestRef.current;
+    mutationLockRef.current = mutationId;
+    const workOrderId = currentDetail.workOrderId;
+    setCreatingReturnVisit(true);
+    clearMutationErrors();
+    try {
+      const created = await createReturnFieldVisit(visit.id, visit.version, requestId);
+      if (mutationId !== mutationRequestRef.current) return;
+      setDetail((current) => current?.workOrderId === workOrderId
+        ? {
+          ...current,
+          fieldVisit: created.visit,
+          canPrepareVisit: false,
+          canCreateReturnVisit: false,
+        }
+        : current);
+      returnVisitRequestRef.current = null;
+      void loadDetail(workOrderId, true);
+      void loadSchedule(true);
+    } catch (mutationError) {
+      if (mutationId !== mutationRequestRef.current) return;
+      setTransitionError(mutationError instanceof Error ? mutationError.message : 'No se pudo crear la visita física de retorno.');
+      void loadDetail(workOrderId, true);
+      void loadSchedule(true);
+    } finally {
+      if (mutationId === mutationRequestRef.current) setCreatingReturnVisit(false);
+      if (mutationLockRef.current === mutationId) mutationLockRef.current = null;
+    }
+  }, [clearMutationErrors, detail, detailOwnerUserId, loadDetail, loadSchedule, principalFieldIdentityKey]);
+
+  const runAttachAsset = useCallback(async (assetId: string, qrCode?: string) => {
+    if (mutationLockRef.current !== null) return false;
     const currentDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
     if (!currentDetail?.fieldVisit) {
       setAssetError('La visita todavía no está disponible para confirmar equipos en sitio.');
-      return;
+      return false;
     }
     if (!currentDetail.canAddExistingAsset) {
       setAssetError('Field Authority no autoriza agregar equipos en el estado o asignación actual.');
-      return;
+      return false;
     }
-    if (currentDetail.visitAssets.some((visitAsset) => visitAsset.assetId === assetId)) return;
+    if (currentDetail.visitAssets.some((visitAsset) => visitAsset.assetId === assetId)) return true;
 
     const mutationId = ++mutationRequestRef.current;
     mutationLockRef.current = mutationId;
@@ -969,17 +1229,20 @@ export function TechnicianFieldHome() {
     setAttachingAssetId(assetId);
     clearMutationErrors();
     try {
-      await attachExistingFieldAsset(
-        currentDetail.fieldVisit.id,
-        assetId,
-        clientRequestId('attach-asset', workOrderId),
-      );
-      if (mutationId !== mutationRequestRef.current) return;
+      const requestId = clientRequestId(qrCode ? 'attach-asset-qr' : 'attach-asset', workOrderId);
+      if (qrCode) {
+        await attachFieldAssetByQr(currentDetail.fieldVisit.id, assetId, qrCode, requestId);
+      } else {
+        await attachExistingFieldAsset(currentDetail.fieldVisit.id, assetId, requestId);
+      }
+      if (mutationId !== mutationRequestRef.current) return false;
       await loadDetail(workOrderId, true);
+      return true;
     } catch (mutationError) {
-      if (mutationId !== mutationRequestRef.current) return;
+      if (mutationId !== mutationRequestRef.current) return false;
       setAssetError(mutationError instanceof Error ? mutationError.message : 'No se pudo agregar el A/C a esta visita.');
       void loadDetail(workOrderId, true);
+      return false;
     } finally {
       if (mutationId === mutationRequestRef.current) setAttachingAssetId(null);
       if (mutationLockRef.current === mutationId) mutationLockRef.current = null;
@@ -1680,10 +1943,144 @@ export function TechnicianFieldHome() {
     }
   }, [clearMutationErrors, detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
 
+  const runFieldSaleMutation = useCallback(async (
+    key: string,
+    signature: string,
+    action: (visitId: string, requestId: string) => Promise<unknown>,
+  ) => {
+    if (mutationLockRef.current !== null) return false;
+    const currentDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
+    const visit = currentDetail?.fieldVisit;
+    if (!currentDetail || !visit) {
+      setFieldSaleError('La visita canónica no está disponible para registrar ventas en campo.');
+      return false;
+    }
+    const prior = fieldSaleRequestRef.current;
+    const requestId = prior?.key === key && prior.signature === signature
+      ? prior.requestId
+      : clientRequestId('field-sale', currentDetail.workOrderId);
+    fieldSaleRequestRef.current = { key, signature, requestId };
+    const mutationId = ++mutationRequestRef.current;
+    mutationLockRef.current = mutationId;
+    const workOrderId = currentDetail.workOrderId;
+    setSavingFieldSaleLineId(key);
+    clearMutationErrors();
+    try {
+      await action(visit.id, requestId);
+      if (mutationId !== mutationRequestRef.current) return false;
+      fieldSaleRequestRef.current = null;
+      await loadDetail(workOrderId, true);
+      return true;
+    } catch (mutationError) {
+      if (mutationId !== mutationRequestRef.current) return false;
+      setFieldSaleError(mutationError instanceof Error ? mutationError.message : 'No se pudo guardar la venta de campo.');
+      void loadDetail(workOrderId, true);
+      return false;
+    } finally {
+      if (mutationId === mutationRequestRef.current) setSavingFieldSaleLineId(null);
+      if (mutationLockRef.current === mutationId) mutationLockRef.current = null;
+    }
+  }, [clearMutationErrors, detail, detailOwnerUserId, loadDetail, principalFieldIdentityKey]);
+
+  const runCreateFieldSaleLine = useCallback((input: FieldSaleCreateInput) => {
+    const signature = JSON.stringify(input);
+    return runFieldSaleMutation(`create:${input.catalogItemId || input.description || 'draft'}`, signature, (visitId, requestId) => (
+      createFieldSaleLine({ ...input, visitId, requestId })
+    ));
+  }, [runFieldSaleMutation]);
+
+  const runDecideFieldSaleLine = useCallback((input: FieldSaleDecisionInput) => {
+    const signature = `${input.saleLineId}|${input.decision}|${input.receiverName}|${input.note}|${input.expectedVersion}`;
+    return runFieldSaleMutation(`decide:${input.saleLineId}`, signature, (visitId, requestId) => (
+      decideFieldSaleLine(visitId, input.saleLineId, input.decision, input.receiverName, input.note, input.expectedVersion, requestId)
+    ));
+  }, [runFieldSaleMutation]);
+
+  const runTransitionFieldSaleLine = useCallback((input: FieldSaleTransitionInput) => {
+    const signature = `${input.saleLineId}|${input.to}|${input.note}|${input.expectedVersion}`;
+    return runFieldSaleMutation(`transition:${input.saleLineId}`, signature, (visitId, requestId) => (
+      transitionFieldSaleLine(visitId, input.saleLineId, input.to, input.note, input.expectedVersion, requestId)
+    ));
+  }, [runFieldSaleMutation]);
+
+  const runSubmitOfficeReview = useCallback(async () => {
+    if (mutationLockRef.current !== null) return;
+    const currentDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
+    const visit = currentDetail?.fieldVisit;
+    if (!currentDetail || !visit || !currentDetail.officeReviewSubmission?.allowed) {
+      setOfficeReviewError('Field Authority todavía no autoriza este envío. Revisa los pendientes y actualiza el trabajo.');
+      if (currentDetail) void loadDetail(currentDetail.workOrderId, true);
+      return;
+    }
+
+    const correctionNote = currentDetail.officeReviewSubmission.correctionRequired
+      ? officeReviewCorrectionNote.trim()
+      : '';
+    if (currentDetail.officeReviewSubmission.correctionRequired && correctionNote.length < 3) {
+      setOfficeReviewError('Describe brevemente qué corregiste antes de reenviar a la oficina.');
+      return;
+    }
+    const signature = `${visit.version}|${correctionNote}`;
+    const prior = officeReviewRequestRef.current;
+    const requestId = prior?.key === visit.id && prior.signature === signature
+      ? prior.requestId
+      : clientRequestId('office-review-submit', currentDetail.workOrderId);
+    officeReviewRequestRef.current = { key: visit.id, signature, requestId };
+
+    const mutationId = ++mutationRequestRef.current;
+    mutationLockRef.current = mutationId;
+    const workOrderId = currentDetail.workOrderId;
+    setSubmittingOfficeReview(true);
+    clearMutationErrors();
+    try {
+      const submitted = await submitFieldVisitForOfficeReview(visit.id, visit.version, requestId, correctionNote);
+      if (mutationId !== mutationRequestRef.current) return;
+      setDetail((current) => current?.workOrderId === workOrderId
+        ? {
+          ...current,
+          fieldVisit: submitted.visit,
+          officeReviewSubmission: {
+            allowed: false,
+            status: 'pending',
+            reviewId: submitted.review.id,
+            revisionNumber: submitted.review.currentRevisionNumber,
+            correctionRequired: false,
+            blockers: [],
+          },
+        }
+        : current);
+      officeReviewRequestRef.current = null;
+      setOfficeReviewCorrectionNote('');
+      void loadDetail(workOrderId, true);
+      void loadSchedule(true);
+    } catch (mutationError) {
+      if (mutationId !== mutationRequestRef.current) return;
+      setOfficeReviewError(mutationError instanceof Error ? mutationError.message : 'No se pudo enviar la visita a revisión de oficina.');
+      void loadDetail(workOrderId, true);
+      void loadSchedule(true);
+    } finally {
+      if (mutationId === mutationRequestRef.current) setSubmittingOfficeReview(false);
+      if (mutationLockRef.current === mutationId) mutationLockRef.current = null;
+    }
+  }, [clearMutationErrors, detail, detailOwnerUserId, loadDetail, loadSchedule, officeReviewCorrectionNote, principalFieldIdentityKey]);
+
   useEffect(() => {
     void loadSchedule();
     return () => { scheduleRequestRef.current += 1; };
   }, [loadSchedule]);
+
+  useEffect(() => {
+    const handleState = () => { void refreshOutboxSummary(); };
+    const handleOnline = () => { void syncOutbox(); };
+    void refreshOutboxSummary();
+    if (typeof navigator === 'undefined' || navigator.onLine !== false) void syncOutbox();
+    window.addEventListener(FIELD_OFFLINE_STATE_EVENT, handleState);
+    window.addEventListener('online', handleOnline);
+    return () => {
+      window.removeEventListener(FIELD_OFFLINE_STATE_EVENT, handleState);
+      window.removeEventListener('online', handleOnline);
+    };
+  }, [refreshOutboxSummary, syncOutbox]);
 
   useEffect(() => {
     const revalidate = () => {
@@ -1765,6 +2162,9 @@ export function TechnicianFieldHome() {
         freeTextError={reportFreeTextError}
         voiceNoteError={reportVoiceNoteError}
         customerAcknowledgementError={customerAcknowledgementError}
+        officeReviewError={officeReviewError}
+        fieldSaleError={fieldSaleError}
+        officeReviewCorrectionNote={officeReviewCorrectionNote}
         transitioning={transitioning}
         attachingAssetId={attachingAssetId}
         registeringEquipment={registeringEquipment}
@@ -1779,8 +2179,17 @@ export function TechnicianFieldHome() {
         savingFreeTextKey={savingFreeTextKey}
         savingVoiceNoteKey={savingVoiceNoteKey}
         savingCustomerAcknowledgementKey={savingCustomerAcknowledgementKey}
+        submittingOfficeReview={submittingOfficeReview}
+        savingFieldSaleLineId={savingFieldSaleLineId}
+        offlineCapturedAt={detailOfflineCapturedAt}
+        outboxSummary={outboxSummary}
+        syncingOutbox={syncingOutbox}
+        draftOwnerUserId={principal.userId}
+        creatingReturnVisit={creatingReturnVisit}
         onTransition={(input) => void runVisitTransition(input)}
+        onCreateReturnVisit={() => void runCreateReturnVisit()}
         onAttachAsset={(assetId) => void runAttachAsset(assetId)}
+        onAttachAssetByQr={(assetId, qrCode) => runAttachAsset(assetId, qrCode)}
         onRegisterEquipment={runRegisterEquipment}
         onCreatePlannedIntervention={(input) => void runCreatePlannedIntervention(input)}
         onCreateAdditionalIntervention={(input) => void runCreateAdditionalIntervention(input)}
@@ -1793,6 +2202,13 @@ export function TechnicianFieldHome() {
         onSaveFreeText={runSetReportFreeText}
         onSaveVoiceNote={runAddReportVoiceNote}
         onRecordCustomerAcknowledgement={runRecordCustomerAcknowledgement}
+        onCreateFieldSaleLine={runCreateFieldSaleLine}
+        onDecideFieldSaleLine={runDecideFieldSaleLine}
+        onTransitionFieldSaleLine={runTransitionFieldSaleLine}
+        onOfficeReviewCorrectionNoteChange={setOfficeReviewCorrectionNote}
+        onSubmitOfficeReview={() => void runSubmitOfficeReview()}
+        onSyncOutbox={() => void syncOutbox()}
+        onDiscardOutboxConflict={(id) => void discardOutboxConflict(id)}
         onBack={closeJob}
       />
     );
@@ -1804,6 +2220,8 @@ export function TechnicianFieldHome() {
         <div><div className={styles.eyebrow}>DEMAC · Trabajo de campo</div><h1>Mi ruta de trabajo</h1></div>
         <div className={styles.identity}>{principal.displayName}{principal.staffId ? ` · ${principal.staffId}` : ''}</div>
       </header>
+
+      <OfflineStatus capturedAt={scheduleOfflineCapturedAt} summary={outboxSummary} syncing={syncingOutbox} onSync={() => void syncOutbox()} onDiscard={(id) => void discardOutboxConflict(id)} />
 
       <div className={styles.tabs} role="tablist" aria-label="Período del itinerario">
         <button className={`${styles.tab} ${range === 'today' ? styles.tabActive : ''}`} type="button" onClick={() => setRange('today')}>Hoy</button>

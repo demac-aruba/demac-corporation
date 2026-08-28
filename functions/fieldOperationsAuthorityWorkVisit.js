@@ -220,6 +220,7 @@ function projectCanonicalWorkVisit(record, identityFallback = {}) {
     submittedAt: text(record?.submittedAt, 80) || undefined,
     completedAt: text(record?.completedAt, 80) || undefined,
     requiresSecondVisit: record?.requiresSecondVisit === true,
+    secondVisitRequiredAt: text(record?.secondVisitRequiredAt, 80) || undefined,
     secondVisitReason: text(record?.secondVisitReason, 1000) || undefined,
     previousVisitId: text(record?.previousVisitId, 180) || undefined,
     createdAt: text(record?.createdAt, 80),

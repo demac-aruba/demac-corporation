@@ -45,9 +45,15 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
     'add_report_photo_evidence',
     'add_report_voice_evidence',
     'attach_visit_asset',
+    'attach_visit_asset_by_qr',
     'create_additional_intervention',
+    'create_field_sale_line',
     'create_planned_intervention',
+    'create_return_visit',
+    'decide_field_sale_line',
+    'decide_office_review',
     'get_job',
+    'get_office_review_queue',
     'get_schedule',
     'prepare_visit',
     'record_additional_intervention_decision',
@@ -56,16 +62,20 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
     'register_visit_asset',
     'set_report_checklist_item',
     'set_report_free_text',
+    'submit_visit_for_office_review',
+    'transition_field_sale_line',
     'transition_intervention',
     'transition_visit',
   ]);
 
   const api = createFieldOperationsApi({ db: { collection() { return {}; } }, verifyIdToken: async () => ({ uid: 'unused' }) });
   for (const action of [
-    'prepare_visit', 'transition_visit', 'attach_visit_asset', 'register_visit_asset',
+    'prepare_visit', 'create_return_visit', 'transition_visit', 'attach_visit_asset', 'attach_visit_asset_by_qr', 'register_visit_asset',
     'create_planned_intervention', 'record_planned_work_disposition', 'create_additional_intervention', 'record_additional_intervention_decision',
+    'create_field_sale_line', 'decide_field_sale_line', 'transition_field_sale_line',
     'transition_intervention', 'add_report_photo_evidence', 'add_report_voice_evidence', 'add_report_measurement', 'add_report_finding',
     'set_report_checklist_item', 'set_report_free_text', 'record_customer_report_acknowledgement',
+    'submit_visit_for_office_review', 'decide_office_review',
   ]) {
     await assert.rejects(
       () => api.execute({ action, data: {}, identity: { operations: false } }),
@@ -76,8 +86,15 @@ test('Field HTTP authority exposes only governed reads and activated audited mut
 });
 
 test('public Field DTO does not expose Legacy mixed-namespace technicianIds', () => {
-  const projected = publicJobProjection({ workOrderId: 'WO-1', technicianIds: ['uid-legacy', 'staff-1'], responsibility: 'technician', allowedActions: ['read'] });
+  const projected = publicJobProjection({
+    workOrderId: 'WO-1',
+    technicianIds: ['uid-legacy', 'staff-1'],
+    _fieldVisitChainIds: ['visit-initial', 'visit-return'],
+    responsibility: 'technician',
+    allowedActions: ['read'],
+  });
   assert.equal('technicianIds' in projected, false);
+  assert.equal('_fieldVisitChainIds' in projected, false, 'server composition metadata must not leak into the public Field contract');
   assert.equal(projected.workOrderId, 'WO-1');
   assert.equal(projected.responsibility, 'technician');
   assert.deepEqual(projected.allowedActions, ['read']);
@@ -125,7 +142,7 @@ test('transition_visit authenticates and forwards optimistic concurrency inputs 
     verifyIdToken: async () => ({ uid: 'uid-1' }),
     transitionWorkVisit: async (input) => { calls.push(input); return { success: true, replayed: false, visit: { id: 'visit-WO-1', status: 'en_route', version: 2, availableTransitions: ['on_site'] }, allowedActions: ['read', 'execute'] }; },
   });
-  const result = await api.handle(request({ token: 'valid-token', action: 'transition_visit', data: { visitId: ' visit-WO-1 ', to: ' pending ', expectedVersion: 1, pendingReason: ' Waiting for part ', pendingAction: ' Office orders it ', noAccessReason: ' Locked gate ', cancellationReason: ' Customer cancelled ', requestId: ' transition-route-001 ', allowedActions: ['execute', 'price.override'] } }));
+  const result = await api.handle(request({ token: 'valid-token', action: 'transition_visit', data: { visitId: ' visit-WO-1 ', to: ' pending ', expectedVersion: 1, pendingReason: ' Waiting for part ', pendingAction: ' Office orders it ', noAccessReason: ' Locked gate ', cancellationReason: ' Customer cancelled ', secondVisitReason: ' Return with part ', requestId: ' transition-route-001 ', allowedActions: ['execute', 'price.override'] } }));
   assert.equal(result.status, 200);
   assert.equal(result.body.version, 1);
   assert.equal(calls.length, 1);
@@ -136,9 +153,38 @@ test('transition_visit authenticates and forwards optimistic concurrency inputs 
   assert.equal(calls[0].pendingAction, 'Office orders it');
   assert.equal(calls[0].noAccessReason, 'Locked gate');
   assert.equal(calls[0].cancellationReason, 'Customer cancelled');
+  assert.equal(calls[0].secondVisitReason, 'Return with part');
   assert.equal(calls[0].requestId, 'transition-route-001');
   assert.equal(calls[0].identity.staffId, 'staff-1');
   assert.equal('allowedActions' in calls[0], false);
+});
+
+test('create_return_visit authenticates and forwards only governed prior visit identity, version and request id', async () => {
+  const calls = [];
+  const api = createFieldOperationsApi({
+    db: authDb({ active: true, role: 'technician', staffId: 'staff-1', name: 'Tech One' }),
+    verifyIdToken: async () => ({ uid: 'uid-1' }),
+    createReturnWorkVisit: async (input) => {
+      calls.push(input);
+      return { success: true, replayed: false, visit: { id: 'visit-return-1', status: 'scheduled', version: 1 }, allowedActions: ['read', 'execute'] };
+    },
+  });
+  const result = await api.handle(request({
+    token: 'valid-token',
+    action: 'create_return_visit',
+    data: {
+      previousVisitId: ' visit-WO-1 ', expectedVersion: 5, requestId: ' return-visit-001 ',
+      workOrderId: 'WO-OTHER', status: 'completed', allowedActions: ['price.override'],
+    },
+  }));
+  assert.equal(result.status, 200);
+  assert.equal(result.body.version, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].previousVisitId, 'visit-WO-1');
+  assert.equal(calls[0].expectedVersion, 5);
+  assert.equal(calls[0].requestId, 'return-visit-001');
+  assert.equal(calls[0].identity.staffId, 'staff-1');
+  assert.deepEqual(Object.keys(calls[0]).sort(), ['expectedVersion', 'identity', 'previousVisitId', 'requestId']);
 });
 
 test('attach_visit_asset authenticates and forwards only canonical visit/asset identity plus request id', async () => {
@@ -162,6 +208,28 @@ test('attach_visit_asset authenticates and forwards only canonical visit/asset i
   assert.equal(calls[0].identity.staffId, 'staff-1');
   assert.equal('allowedActions' in calls[0], false);
   assert.equal('customerId' in calls[0], false);
+});
+
+test('attach_visit_asset_by_qr hardcodes QR provenance and forwards only the presented QR and canonical identities', async () => {
+  const calls = [];
+  const api = createFieldOperationsApi({
+    db: authDb({ active: true, role: 'technician', staffId: 'staff-1', name: 'Tech One', vanId: 'VAN-1' }),
+    verifyIdToken: async () => ({ uid: 'uid-1' }),
+    attachExistingVisitAsset: async (input) => {
+      calls.push(input);
+      return { success: true, replayed: false, visitAsset: { id: 'VA-QR', visitId: 'visit-WO-1', assetId: 'AC-QR', sequence: 1, locationLabel: 'Sala', source: 'qr_scan', status: 'identified', addedOnSite: true, createdAt: '2026-08-25T10:00:00.000Z', createdBy: 'uid-1', updatedAt: '2026-08-25T10:00:00.000Z', updatedBy: 'uid-1', version: 1 }, allowedActions: ['read', 'execute', 'asset.add'] };
+    },
+  });
+  const result = await api.handle(request({ token: 'valid-token', action: 'attach_visit_asset_by_qr', data: { visitId: ' visit-WO-1 ', assetId: ' AC-QR ', qrCode: ' DEMAC-QR-001 ', requestId: ' attach-qr-001 ', source: 'existing_asset', customerId: 'CLIENT-OTHER' } }));
+
+  assert.equal(result.status, 200);
+  assert.equal(result.body.version, 1);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(Object.keys(calls[0]).sort(), ['assetId', 'identity', 'qrCode', 'requestId', 'source', 'visitId']);
+  assert.equal(calls[0].visitId, 'visit-WO-1');
+  assert.equal(calls[0].assetId, 'AC-QR');
+  assert.equal(calls[0].qrCode, 'DEMAC-QR-001');
+  assert.equal(calls[0].source, 'qr_scan');
 });
 
 test('create_planned_intervention authenticates and forwards only canonical intervention inputs', async () => {
@@ -274,22 +342,93 @@ test('record_customer_report_acknowledgement forwards only governed acknowledgem
   assert.deepEqual(Object.keys(calls[0]).sort(), ['identity', 'interventionId', 'note', 'receiverName', 'requestId', 'sectionId', 'visitId']);
 });
 
+test('Field Sale API forwards only governed draft, decision and transition inputs', async () => {
+  const calls = [];
+  const api = createFieldOperationsApi({
+    db: authDb({ active: true, role: 'technician', staffId: 'staff-1', name: 'Tech One' }),
+    verifyIdToken: async () => ({ uid: 'uid-1' }),
+    createFieldSaleLine: async (input) => { calls.push(['create', input]); return { success: true, replayed: false, fieldSaleLine: { id: 'FSL-1' } }; },
+    decideFieldSaleLine: async (input) => { calls.push(['decide', input]); return { success: true, replayed: false, fieldSaleLine: { id: 'FSL-1' }, approval: { id: 'FA-1' } }; },
+    transitionFieldSaleLine: async (input) => { calls.push(['transition', input]); return { success: true, replayed: false, fieldSaleLine: { id: 'FSL-1' } }; },
+  });
+  const created = await api.handle(request({ token: 'valid-token', action: 'create_field_sale_line', data: {
+    visitId: ' visit-WO-1 ', catalogItemId: ' product-switch ', description: ' ignored ', quantity: 2,
+    unit: ' ea ', interventionId: ' WI-1 ', assetId: ' AC-1 ', notes: ' requested ', requestId: ' field-sale-create-001 ', price: 1,
+  } }));
+  const decided = await api.handle(request({ token: 'valid-token', action: 'decide_field_sale_line', data: {
+    visitId: ' visit-WO-1 ', saleLineId: ' FSL-1 ', decision: ' approved ', receiverName: ' Maria ', note: ' accepted ',
+    expectedVersion: 1, requestId: ' field-sale-decision-001 ', customerApprovalId: 'attacker',
+  } }));
+  const transitioned = await api.handle(request({ token: 'valid-token', action: 'transition_field_sale_line', data: {
+    visitId: ' visit-WO-1 ', saleLineId: ' FSL-1 ', to: ' installed ', note: ' done ', expectedVersion: 2,
+    requestId: ' field-sale-transition-001 ', inventoryMovementId: 'attacker', invoiceLineId: 'attacker',
+  } }));
+  assert.equal(created.status, 200);
+  assert.equal(decided.status, 200);
+  assert.equal(transitioned.status, 200);
+  assert.deepEqual(Object.keys(calls[0][1]).sort(), ['assetId', 'catalogItemId', 'description', 'identity', 'interventionId', 'notes', 'quantity', 'requestId', 'unit', 'visitId']);
+  assert.deepEqual(Object.keys(calls[1][1]).sort(), ['decision', 'expectedVersion', 'identity', 'note', 'receiverName', 'requestId', 'saleLineId', 'visitId']);
+  assert.deepEqual(Object.keys(calls[2][1]).sort(), ['expectedVersion', 'identity', 'note', 'requestId', 'saleLineId', 'to', 'visitId']);
+  assert.equal(calls[0][1].catalogItemId, 'product-switch');
+  assert.equal(calls[1][1].receiverName, 'Maria');
+  assert.equal(calls[2][1].to, 'installed');
+});
+
+test('Office Review API forwards only canonical submission, queue and decision inputs', async () => {
+  const calls = [];
+  const api = createFieldOperationsApi({
+    db: authDb({ active: true, role: 'operations', staffId: 'office-1', name: 'Office One' }),
+    verifyIdToken: async () => ({ uid: 'office-uid' }),
+    submitOfficeReview: async (input) => { calls.push(['submit', input]); return { success: true, review: { id: 'FOR-1' } }; },
+    decideOfficeReview: async (input) => { calls.push(['decide', input]); return { success: true, review: { id: 'FOR-1', status: 'approved' } }; },
+    listOfficeReviews: async (db, identity) => { calls.push(['queue', { db, identity }]); return [{ id: 'FOR-1', status: 'pending' }]; },
+  });
+  const submitted = await api.handle(request({
+    token: 'valid-token', action: 'submit_visit_for_office_review',
+    data: { visitId: ' visit-WO-1 ', expectedVersion: 4, requestId: ' office-review-submit-001 ', correctionNote: ' Clarified service result. ', status: 'approved' },
+  }));
+  const queue = await api.handle(request({ token: 'valid-token', action: 'get_office_review_queue', data: { status: 'approved' } }));
+  const decided = await api.handle(request({
+    token: 'valid-token', action: 'decide_office_review',
+    data: { reviewId: ' FOR-1 ', decision: ' return ', note: ' Correct summary. ', expectedVersion: 1, requestId: ' office-review-return-001 ', reviewerId: 'attacker' },
+  }));
+
+  assert.equal(submitted.status, 200);
+  assert.equal(queue.status, 200);
+  assert.equal(queue.body.reviews[0].id, 'FOR-1');
+  assert.equal(decided.status, 200);
+  assert.equal(calls[0][0], 'submit');
+  assert.deepEqual(Object.keys(calls[0][1]).sort(), ['correctionNote', 'expectedVersion', 'identity', 'requestId', 'visitId']);
+  assert.equal(calls[0][1].visitId, 'visit-WO-1');
+  assert.equal(calls[0][1].correctionNote, 'Clarified service result.');
+  assert.equal(calls[1][0], 'queue');
+  assert.equal(calls[1][1].identity.operations, true);
+  assert.equal(calls[2][0], 'decide');
+  assert.deepEqual(Object.keys(calls[2][1]).sort(), ['decision', 'expectedVersion', 'identity', 'note', 'requestId', 'reviewId']);
+  assert.equal(calls[2][1].decision, 'return');
+  assert.equal(calls[2][1].note, 'Correct summary.');
+});
+
 test('Field mutation actions cannot execute without authentication', async () => {
   const called = new Map();
   const mark = (name) => async () => { called.set(name, true); return { success: true }; };
   const api = createFieldOperationsApi({
     db: authDb({ active: true, role: 'technician', staffId: 'staff-1' }),
     verifyIdToken: async () => ({ uid: 'uid-1' }),
-    prepareWorkVisit: mark('prepare'), transitionWorkVisit: mark('transition'), attachExistingVisitAsset: mark('attach'), registerEquipmentSystem: mark('register'),
+    prepareWorkVisit: mark('prepare'), createReturnWorkVisit: mark('return'), transitionWorkVisit: mark('transition'), attachExistingVisitAsset: mark('attach'), registerEquipmentSystem: mark('register'),
     createPlannedWorkIntervention: mark('intervention'), recordPlannedWorkDisposition: mark('disposition'), createAdditionalWorkIntervention: mark('additional'), recordAdditionalWorkDecision: mark('decision'),
     transitionWorkIntervention: mark('interventionTransition'), addReportPhotoEvidence: mark('reportPhoto'), addReportVoiceEvidence: mark('reportVoice'), addFieldMeasurement: mark('reportMeasurement'),
     addFieldFinding: mark('reportFinding'), setFieldChecklistItem: mark('reportChecklist'), setFieldFreeTextResponse: mark('reportFreeText'),
-    recordCustomerAcknowledgement: mark('reportCustomerAcknowledgement'),
+    recordCustomerAcknowledgement: mark('reportCustomerAcknowledgement'), submitOfficeReview: mark('officeReviewSubmit'),
+    createFieldSaleLine: mark('fieldSaleCreate'), decideFieldSaleLine: mark('fieldSaleDecision'), transitionFieldSaleLine: mark('fieldSaleTransition'),
+    decideOfficeReview: mark('officeReviewDecision'), listOfficeReviews: mark('officeReviewQueue'),
   });
   const cases = [
     ['prepare_visit', { workOrderId: 'WO-1', requestId: 'prepare-WO-1-001' }],
+    ['create_return_visit', { previousVisitId: 'visit-WO-1', expectedVersion: 5, requestId: 'return-visit-001' }],
     ['transition_visit', { visitId: 'visit-WO-1', to: 'en_route', expectedVersion: 1, requestId: 'transition-route-001' }],
     ['attach_visit_asset', { visitId: 'visit-WO-1', assetId: 'AC-1', requestId: 'attach-asset-001' }],
+    ['attach_visit_asset_by_qr', { visitId: 'visit-WO-1', assetId: 'AC-1', qrCode: 'DEMAC-QR-001', requestId: 'attach-qr-001' }],
     ['register_visit_asset', { visitId: 'visit-WO-1', requestId: 'register-asset-001' }],
     ['create_planned_intervention', { visitId: 'visit-WO-1', visitAssetId: 'VA-1', plannedWorkLineId: 'line-standard', serviceCatalogItemId: 'service-standard', requestId: 'planned-intervention-001' }],
     ['record_planned_work_disposition', { visitId: 'visit-WO-1', plannedWorkLineId: 'line-standard', quantity: 1, reasonCode: 'customer_cancelled', requestId: 'disposition-001' }],
@@ -303,6 +442,12 @@ test('Field mutation actions cannot execute without authentication', async () =>
     ['set_report_checklist_item', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'condition', itemId: 'filter-clean', checked: true, expectedVersion: 0, requestId: 'report-checklist-001' }],
     ['set_report_free_text', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'notes', value: 'Technical note', expectedVersion: 0, requestId: 'report-free-text-001' }],
     ['record_customer_report_acknowledgement', { visitId: 'visit-WO-1', interventionId: 'WI-1', sectionId: 'ack', receiverName: 'Maria', requestId: 'customer-ack-001' }],
+    ['create_field_sale_line', { visitId: 'visit-WO-1', catalogItemId: 'product-switch', quantity: 1, requestId: 'field-sale-create-001' }],
+    ['decide_field_sale_line', { visitId: 'visit-WO-1', saleLineId: 'FSL-1', decision: 'approved', receiverName: 'Maria', expectedVersion: 1, requestId: 'field-sale-decision-001' }],
+    ['transition_field_sale_line', { visitId: 'visit-WO-1', saleLineId: 'FSL-1', to: 'installed', expectedVersion: 2, requestId: 'field-sale-transition-001' }],
+    ['submit_visit_for_office_review', { visitId: 'visit-WO-1', expectedVersion: 4, requestId: 'office-review-submit-001' }],
+    ['decide_office_review', { reviewId: 'FOR-1', decision: 'approve', expectedVersion: 1, requestId: 'office-review-approve-001' }],
+    ['get_office_review_queue', {}],
   ];
   for (const [action, data] of cases) {
     const result = await api.handle(request({ action, data }));

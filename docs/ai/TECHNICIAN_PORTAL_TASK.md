@@ -60,10 +60,24 @@ Verified on the feature branch as of the active-visit implementation checkpoint:
 - The Field read model projects `fieldVisit`, `canPrepareVisit`, version, timestamps and server-derived `availableTransitions`; ERP Next does not reconstruct the transition graph or preparation policy.
 - The Technician Home exposes only the activated physical controls: **En camino**, **Llegué**, and **Iniciar trabajo**. It does not directly mutate WorkOrder status and it does not optimistically invent successful Field state.
 - Mutation commands use current transaction-scoped assignment, expected-version conflict detection, retry-safe same-target behavior, and append-only audit. A cancelled/unreleased WorkOrder blocks a later WorkVisit transition.
-- Phase 2 remains **PARTIAL overall** because Firestore/Storage assignment perimeter and emulator allow/deny evidence remain incomplete; production access-policy changes are not authorized by this workstream.
+- Phase 2 is complete at branch level: the Firestore/Storage assignment perimeter now has passing assigned, participant, Office, unassigned, inactive and anonymous runtime evidence. The authorized branch change has not been deployed; production Rules deployment remains a separate Human Approval Boundary.
 - Production has not been deployed or migrated by this workstream; PR #435 remains a draft implementation branch until later review/approval.
 
 At the active-visit checkpoint, ERP Next CI is green with **107/107 Field Authority tests** and **94/94 Booking/Scheduling regression tests**, plus ERP Next typecheck, Field security acceptance and production build. This is checkpoint evidence only; it does not satisfy the full Technician Portal Definition of Done.
+
+Post-checkpoint branch progress adds the read-only Professional Report readiness projection and the canonical Office Review boundary. `get_job` now returns server-derived Office Review submission readiness; the accountable lead may submit only when the complete linear physical-visit chain reconciles actual assets, interventions, planned-work dispositions, approvals and required report sections. Submission freezes an immutable review revision, Office roles may approve or return it, exact retries are idempotent, approved reviews cannot be rewritten, and no review action sends a customer message. Corrected resubmission now requires an amendment note and preserves both the Office request and technician response inside the new immutable revision.
+
+The canonical Field Sale Line slice is also activated. Assigned accountable field roles can propose active catalog Products using server-owned price snapshots, capture an immutable customer approval/rejection, and advance approved lines through installed/delivered to sold. Non-catalog entries stay unpriced and Office-review-required; no shadow Product is created. Sale lines are included in Office Review readiness and immutable revision snapshots. This slice deliberately creates no Inventory movement, billing candidate or invoice line.
+
+Customer and Equipment Field histories are now read-only `get_job` projections. Individual interventions, findings and Field Sale Lines remain linked to their canonical Customer, Work Visit and Asset; Equipment history contains exact references into the Customer history projection. No duplicate writable history table or browser-local history authority is introduced.
+
+Optional QR identification is now activated as a convenience over the assignment-scoped `knownEquipment` projection. The client cannot use a QR to create or reassign an Asset: the authenticated server command validates the presented QR against the selected canonical active Asset and rechecks Work Visit, Customer, Property and assignment inside the attachment transaction. New A/C registration remains separate and still requires location/title, system type, brand, BTU, refrigerant, voltage, reference photo, indoor nameplate and outdoor nameplate.
+
+The Inventory handoff candidate is now activated without touching Inventory balances. Office approval derives only sold catalog Products from the frozen revision and creates one deterministic immutable `fieldInventoryHandoffs` record in the same transaction. Missing source location or Inventory-incompatible Product quantity stays as an explicit review blocker. No `inventoryMovements`, `commercialProductStock` or `warehouseInventory` record is created or modified; Inventory Authority remains the only future movement boundary.
+
+The Billing candidate is also activated as a separate read-only downstream projection. Office approval derives completed interventions and sold catalog Field Sale Lines from the same frozen revision into one deterministic immutable `fieldBillingCandidates` record. Governed price snapshots become candidate lines; missing pricing and mixed currencies remain explicit blockers, while declined and voided lines are excluded. This boundary creates no invoice line, invoice, operational-finance entry, Accounting record or QBO write.
+
+Offline cache/draft/outbox hardening is activated in ERP Next without granting browser storage authority. Live assigned schedule/job reads refresh a user-scoped bounded IndexedDB cache; cached views are visibly stale and canonical mutation controls are disabled. Technical free-text can be preserved as a version-linked local draft. Uncertain mutations are queued with their exact server action, payload and original `requestId`, remain visibly unconfirmed, and replay only after authentication/connectivity returns. Definitive server or optimistic-version conflicts become blocked records instead of overwriting canonical truth.
 
 ## Scope
 
@@ -227,7 +241,7 @@ A phase may be marked PASS only after its required diff inspection, focused/full
 
 The following are `NEEDS_HUMAN` whenever reached:
 
-1. merge to `main` and independent approval/review decision;
+1. merge to `main` and the human merge/release decision;
 2. any production deployment;
 3. deploying Firestore/Storage/security rules that change production access;
 4. destructive or irreversible production data/schema migration;
@@ -265,10 +279,10 @@ These boundaries do not block branch-local design, implementation, tests, emulat
 - accessibility/error-state review;
 - diff review proving no unrelated work, secrets, debug output, duplicate catalogs/rules or new source of truth;
 - Legacy parity register updated only when executed evidence justifies status changes;
-- independent Reviewer evidence separate from Builder claims;
+- a fresh Solo Maintainer adversarial review, with external reviewer evidence added when reasonably available but not treated as a prerequisite;
 - four explicit reviews: correctness, architecture, integration/regression, production readiness.
 
-### Full Definition of Done
+### Full Definition of Done — 41 canonical deliverables
 
 The portal is complete only when all of the following are demonstrated:
 
@@ -312,33 +326,34 @@ The portal is complete only when all of the following are demonstrated:
 38. required tests pass;
 39. typecheck passes;
 40. build passes;
-41. four engineering review passes succeed with independent Reviewer evidence where required;
-42. no production deployment occurs without explicit human approval.
+41. four engineering review passes succeed under the current-main review mode, with findings and residual risk recorded.
+
+Production deployment is not a 42nd feature or engineering deliverable. It remains a separate human-only release boundary and cannot occur without explicit human approval.
 
 ## Current known gaps carried into the next engineering phase
 
 These are related blockers/status facts, not permission to broaden scope:
 
-- Phase 2 remains incomplete because assignment enforcement across the Firestore/Storage data perimeter and emulator allow/deny evidence are still pending. API/server assigned-only reads and known-ID denial are implemented/tested, but that does not prove the database/storage perimeter.
-- Existing repository Firestore/Storage policy previously observed for field/work-order/evidence access is broader than the target assigned-only model. Branch-local policy design/tests may be prepared, but any actual access-rule change/deployment is `NEEDS_HUMAN`.
+- Phase 2 assignment enforcement is complete at branch level. `TECHNICIAN_PORTAL_RULES_EVIDENCE.md` records 5/5 Firestore groups and 16/16 Storage runtime scenarios PASS after the explicitly authorized Rules hardening. No Rules deployment is authorized or performed.
 - Phase 3 Technician Home now includes the first canonical active-visit controls, but only for the explicitly activated Phase 4 path. It is not yet the complete visit-execution application.
-- Initial WorkVisit preparation is HTTP-activated on the feature branch. The active transition command is also HTTP-activated for `en_route`, `on_site`, `in_progress`, governed pending/resume, and terminal no-access/cancelled outcomes. Both re-resolve assignment on the server and use the approved audit boundary.
+- Initial WorkVisit preparation is HTTP-activated on the feature branch. The active transition command is also HTTP-activated for `en_route`, `on_site`, `in_progress`, governed pending/resume, return-required, and terminal no-access/cancelled outcomes. Both re-resolve assignment on the server and use the approved audit boundary.
 - The read model resolves the current physical WorkVisit and keeps `WorkOrder.status` separate from actual Field state. Existing Legacy in-flight WorkOrders that have no WorkVisit are not silently converted into canonical physical history; they remain compatibility/fallback cases rather than guessed truth.
-- Phase 4 remains **PARTIAL overall**: return-visit/submission/completion paths are not activated; pending/no-access/cancelled are activated as separately governed WorkVisit outcomes.
-- VisitAsset/on-site registration/QR mutation, WorkInterventions, templates/evidence/measurements/findings, Field sales, partial/return visits, Office Review, histories, offline sync and downstream Inventory/Billing handoffs remain future phases.
-- `validateVisitForOfficeReview` and billing/planned-vs-actual helpers in ERP Next remain Phase 1 specification/read-projection utilities; they must not become production mutation authority. Office Review validation must move server-side before Phase 8 activation.
+- Phase 4 remains **PARTIAL overall**: distinct return-visit creation and governed Office Review submission/completion are activated. Pending/return-required/no-access/cancelled remain separately governed WorkVisit outcomes, and a chain tip that still requires another physical visit cannot be submitted as final Office Review.
+- VisitAsset/on-site registration, optional canonical QR identification, WorkInterventions, report templates/evidence/measurements/findings, customer approvals, planned-work dispositions, partial/return visits, Professional Report readiness, canonical Field Sale Lines, Office Review revisions, non-destructive correction/resubmission context, Customer/Equipment history projections, immutable Field-to-Inventory/Field-to-Billing candidates, user-scoped offline cache/draft/outbox behavior and assignment-aware Rules are implemented on the branch. Downstream Inventory/invoice authority consumption remains outside this portal deliverable.
+- The old ERP Next `validateVisitForOfficeReview` helper remains specification/compatibility code only. Production submission validation is now server-owned by `fieldOperationsOfficeReview.js`; the client consumes blockers and never acts as a second submission authority.
 - Browser field/localStorage implementations remain compatibility/fallback until canonical persistence/UI reaches proven parity; they must not be deleted merely because they are old.
-- Full Firestore/Storage emulator evidence, all 26 mandatory scenarios, all 42 Definition-of-Done items and formal four-pass production hardening are still required before engineering completion.
+- The 26 mandatory scenarios have executable evidence in `TECHNICIAN_PORTAL_ACCEPTANCE_EVIDENCE.md`; Firestore/Storage target policy also passes its recorded runtime evidence. The final current-head four-pass review and remote CI remain before engineering completion.
+- Human UAT and merge prerequisites are prepared in `TECHNICIAN_PORTAL_UAT_HANDOFF.md`; the current decision remains HOLD and no merge/deployment is authorized.
 - No later phase may be marked complete based only on an earlier green checkpoint.
 
 ## Recovery / migration posture
 
 Any persistence migration must be additive first, idempotent, dry-run capable, backward-compatible where needed, reconcilable and paired with rollback or forward-recovery planning. No destructive production migration is authorized by this task.
 
-The initial WorkVisit command uses a deterministic Legacy-compatible first-visit identity only for idempotency/adoption. A second physical return must create a distinct WorkVisit and preserve the first visit; the initial compatibility helper must not be reused as a return-visit ID generator.
+The initial WorkVisit command uses a deterministic Legacy-compatible first-visit identity only for idempotency/adoption. `create_return_visit` now creates a distinct deterministic physical WorkVisit from a current `requires_return_visit` chain tip, preserves the prior visit and immutable scheduled-scope snapshot, and rejects branching history. It does not alter Appointment scheduling or WorkOrder lifecycle.
 
 The feature-branch HTTP activation is code activation only. No production Function deployment has occurred. A later authorized rollout must deploy the server authority before the ERP Next consumer, verify authenticated allow/deny behavior, and preserve all canonical records on rollback.
 
 ## Completion decision
 
-This task reaches engineering completion only when the 42-point Definition of Done, the mandatory scenario suite, applicable quality gates, security allow/deny evidence, parity evidence, documentation and independent review are all satisfied. Production rollout remains a separate human-approved action even after engineering completion.
+This task reaches engineering completion only when the 41 canonical Definition-of-Done deliverables, the mandatory scenario suite, applicable quality gates, security allow/deny evidence, parity evidence, documentation and current-main review requirements are all satisfied. Production rollout remains a separate human-approved action even after engineering completion.

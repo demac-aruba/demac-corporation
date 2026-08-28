@@ -1,5 +1,18 @@
 import { firebaseClientConfig } from './firebase/client-config';
-import { requireFirebaseWebSession } from './firebase/session';
+import { loadFirebaseWebSession, requireFirebaseWebSession, type FirebaseWebSession } from './firebase/session';
+import {
+  FieldOfflineQueuedError,
+  cacheFieldRead,
+  discardBlockedFieldMutation,
+  enqueueFieldMutation,
+  flushFieldOutbox,
+  getFieldOutboxSummary,
+  isGovernedFieldMutation,
+  readCachedFieldRead,
+  removeQueuedFieldMutation,
+  type FieldOutboxRecord,
+  type FieldOutboxSummary,
+} from './field-offline';
 import {
   parseFieldAttachVisitAssetResponse,
   parseFieldPrepareVisitResponse,
@@ -29,11 +42,24 @@ import { parseFieldSetReportFreeTextResponse } from './field-free-text-contract'
 import { parseFieldRecordCustomerAcknowledgementResponse } from './field-customer-acknowledgement-contract';
 import { parseFieldAddReportVoiceNoteResponse } from './field-voice-note-contract';
 import {
-  parseFieldPlannedWorkDispositionJobResponse,
   parseFieldRecordPlannedWorkDispositionResponse,
   type FieldPlannedWorkDispositionReason,
 } from './field-planned-work-disposition-contract';
 import { parseFieldRegisterVisitAssetResponse } from './field-equipment-registration-contract';
+import {
+  parseFieldCreateSaleLineResponse,
+  parseFieldDecideSaleLineResponse,
+  parseFieldTransitionSaleLineResponse,
+  type FieldSaleDecision,
+  type FieldSaleExecutionTarget,
+} from './field-sale-contract';
+import {
+  parseFieldDecideOfficeReviewResponse,
+  parseFieldOfficeReviewQueueResponse,
+  parseFieldSubmitOfficeReviewResponse,
+  type FieldOfficeReviewDecision,
+} from './field-office-review-contract';
+import { parseFieldHistoryJobResponse } from './field-history-contract';
 
 export { fieldActionAllowed } from './field-authorization';
 export type {
@@ -150,11 +176,49 @@ export type {
   FieldDispositionPlannedWorkProgress,
   FieldPlannedWorkDisposition,
   FieldPlannedWorkDispositionJobDetail,
-  FieldPlannedWorkDispositionJobDetail as FieldExecutionJobDetail,
   FieldPlannedWorkDispositionOption,
   FieldPlannedWorkDispositionReason,
   FieldRecordPlannedWorkDispositionResponse,
 } from './field-planned-work-disposition-contract';
+export type {
+  FieldCreateSaleLineResponse,
+  FieldDecideSaleLineResponse,
+  FieldSaleCatalogOption,
+  FieldSaleDecision,
+  FieldSaleExecutionTarget,
+  FieldSaleJobDetail,
+  FieldSaleLine,
+  FieldSaleLineStatus,
+  FieldSaleTransitionOption,
+  FieldTransitionSaleLineResponse,
+} from './field-sale-contract';
+export type {
+  FieldDecideOfficeReviewResponse,
+  FieldBillingCandidate,
+  FieldInventoryHandoff,
+  FieldOfficeReview,
+  FieldOfficeReviewBlocker,
+  FieldOfficeReviewDecision,
+  FieldOfficeReviewJobDetail,
+  FieldOfficeReviewQueueItem,
+  FieldOfficeReviewQueueResponse,
+  FieldOfficeReviewRevision,
+  FieldOfficeReviewSnapshot,
+  FieldOfficeReviewStatus,
+  FieldOfficeReviewSubmission,
+  FieldOfficeReviewSubmissionStatus,
+  FieldSubmitOfficeReviewResponse,
+} from './field-office-review-contract';
+export type {
+  FieldCustomerHistory,
+  FieldCustomerHistoryFinding,
+  FieldCustomerHistoryIntervention,
+  FieldCustomerHistorySaleLine,
+  FieldCustomerHistoryVisit,
+  FieldEquipmentHistory,
+  FieldHistoryJobDetail,
+  FieldHistoryJobDetail as FieldExecutionJobDetail,
+} from './field-history-contract';
 export type {
   FieldEquipmentRegistrationEvidence,
   FieldEquipmentRegistrationEvidenceKind,
@@ -163,6 +227,15 @@ export type {
 } from './field-equipment-registration-contract';
 
 type FieldApiError = { error?: { code?: string; message?: string; details?: Record<string, unknown> } };
+export type FieldOfflineReadMetadata = { capturedAt: string };
+export type { FieldOutboxSummary };
+
+class FieldAuthorityRequestError extends Error {
+  constructor(message: string, readonly retryable: boolean, readonly code?: string, readonly status?: number) {
+    super(message);
+    this.name = 'FieldAuthorityRequestError';
+  }
+}
 
 export type RegisterOnSiteFieldEquipmentInput = {
   visitId: string;
@@ -216,11 +289,23 @@ function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 
-async function callFieldAuthority(action: string, data: Record<string, unknown>, timeoutMs = 12_000): Promise<unknown> {
+function retryableRequestError(error: unknown) {
+  return error instanceof FieldAuthorityRequestError && error.retryable;
+}
+
+function browserTransportFailure(error: unknown) {
+  return error instanceof Error && (error.name === 'AbortError' || error.name === 'TypeError');
+}
+
+async function performFieldAuthorityRequest(
+  session: FirebaseWebSession,
+  action: string,
+  data: Record<string, unknown>,
+  timeoutMs: number,
+) {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const session = await abortable(requireFirebaseWebSession(), controller.signal);
     const response = await fetch(endpoint(), {
       method: 'POST',
       headers: {
@@ -234,12 +319,21 @@ async function callFieldAuthority(action: string, data: Record<string, unknown>,
     if (!response.ok) {
       const apiError = asApiErrorPayload(payload);
       const code = apiError.error?.code ? ` (${apiError.error.code})` : '';
-      throw new Error(`${apiError.error?.message ?? 'Field Operations could not complete the request.'}${code}`);
+      throw new FieldAuthorityRequestError(
+        `${apiError.error?.message ?? 'Field Operations could not complete the request.'}${code}`,
+        response.status === 401 || response.status === 408 || response.status === 429 || response.status >= 500,
+        apiError.error?.code,
+        response.status,
+      );
     }
     return payload;
   } catch (error) {
+    if (error instanceof FieldAuthorityRequestError) throw error;
     if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error('Field Operations took too long to respond. Refresh and try again.');
+      throw new FieldAuthorityRequestError('Field Operations took too long to respond. Refresh and try again.', true, 'request_timeout');
+    }
+    if (error instanceof Error && error.name === 'TypeError') {
+      throw new FieldAuthorityRequestError('Field Operations could not be reached. Check the connection and try again.', true, 'network_unavailable');
     }
     throw error;
   } finally {
@@ -247,16 +341,190 @@ async function callFieldAuthority(action: string, data: Record<string, unknown>,
   }
 }
 
+async function callFieldAuthority(action: string, data: Record<string, unknown>, timeoutMs = 12_000): Promise<unknown> {
+  const mutation = isGovernedFieldMutation(action);
+  const priorSession = loadFirebaseWebSession();
+  if (mutation && typeof navigator !== 'undefined' && navigator.onLine === false) {
+    if (!priorSession?.uid) throw new Error('Firebase authentication is required before saving an offline Field operation.');
+    const queued = await enqueueFieldMutation(priorSession.uid, action, data);
+    throw new FieldOfflineQueuedError(queued.id);
+  }
+  let session: FirebaseWebSession | null = null;
+  try {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      session = await abortable(requireFirebaseWebSession(), controller.signal);
+    } finally {
+      window.clearTimeout(timer);
+    }
+    const payload = await performFieldAuthorityRequest(session, action, data, timeoutMs);
+    if (mutation && typeof data.requestId === 'string') {
+      await removeQueuedFieldMutation(session.uid, data.requestId).catch(() => undefined);
+    }
+    return payload;
+  } catch (error) {
+    if (mutation && (retryableRequestError(error) || browserTransportFailure(error))) {
+      const ownerUserId = session?.uid || priorSession?.uid;
+      if (!ownerUserId) throw new Error('The Field request failed before an authenticated offline operation could be saved.');
+      const queued = await enqueueFieldMutation(ownerUserId, action, data);
+      throw new FieldOfflineQueuedError(queued.id);
+    }
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new FieldAuthorityRequestError('Field Operations took too long to respond. Refresh and try again.', true, 'request_timeout');
+    }
+    if (error instanceof Error && error.name === 'TypeError') {
+      throw new FieldAuthorityRequestError('Field Operations could not be reached. Check the connection and try again.', true, 'network_unavailable');
+    }
+    throw error;
+  }
+}
+
+async function cacheLiveFieldRead(cacheKey: string, value: unknown) {
+  const session = loadFirebaseWebSession();
+  if (session?.uid) await cacheFieldRead(session.uid, cacheKey, value).catch(() => undefined);
+}
+
+async function cachedFieldRead(cacheKey: string, ownerUserId?: string) {
+  const owner = ownerUserId || loadFirebaseWebSession()?.uid;
+  return owner ? readCachedFieldRead(owner, cacheKey).catch(() => null) : null;
+}
+
+export async function getOfflineFieldOutboxSummary(ownerUserId: string): Promise<FieldOutboxSummary> {
+  return getFieldOutboxSummary(ownerUserId);
+}
+
+export async function discardOfflineFieldConflict(ownerUserId: string, id: string) {
+  return discardBlockedFieldMutation(ownerUserId, id);
+}
+
+export async function syncOfflineFieldOutbox() {
+  const session = await requireFirebaseWebSession();
+  return flushFieldOutbox(session.uid, async (record: FieldOutboxRecord) => {
+    try {
+      await performFieldAuthorityRequest(session, record.action, record.data, 20_000);
+      return { ok: true };
+    } catch (error) {
+      return {
+        ok: false,
+        retryable: retryableRequestError(error),
+        code: error instanceof FieldAuthorityRequestError ? error.code : undefined,
+        message: error instanceof Error ? error.message : 'Field outbox synchronization failed.',
+      };
+    }
+  });
+}
+
 export async function getFieldSchedule(startDate: string, endDate = startDate) {
-  return parseFieldScheduleResponse(await callFieldAuthority('get_schedule', { startDate, endDate }));
+  const cacheKey = `schedule:${startDate}:${endDate}`;
+  const cacheOwner = loadFirebaseWebSession()?.uid;
+  try {
+    const parsed = parseFieldScheduleResponse(await callFieldAuthority('get_schedule', { startDate, endDate }));
+    await cacheLiveFieldRead(cacheKey, parsed);
+    return { ...parsed, offlineCache: undefined as FieldOfflineReadMetadata | undefined };
+  } catch (error) {
+    if (!retryableRequestError(error)) throw error;
+    const cached = await cachedFieldRead(cacheKey, cacheOwner);
+    if (!cached) throw error;
+    const parsed = parseFieldScheduleResponse(cached.value);
+    return { ...parsed, offlineCache: { capturedAt: cached.capturedAt } };
+  }
 }
 
 export async function getFieldJob(workOrderId: string) {
-  return parseFieldPlannedWorkDispositionJobResponse(await callFieldAuthority('get_job', { workOrderId }));
+  const cacheKey = `job:${workOrderId}`;
+  const cacheOwner = loadFirebaseWebSession()?.uid;
+  try {
+    const parsed = parseFieldHistoryJobResponse(await callFieldAuthority('get_job', { workOrderId }));
+    await cacheLiveFieldRead(cacheKey, parsed);
+    return { ...parsed, offlineCache: undefined as FieldOfflineReadMetadata | undefined };
+  } catch (error) {
+    if (!retryableRequestError(error)) throw error;
+    const cached = await cachedFieldRead(cacheKey, cacheOwner);
+    if (!cached) throw error;
+    const parsed = parseFieldHistoryJobResponse(cached.value);
+    return { ...parsed, offlineCache: { capturedAt: cached.capturedAt } };
+  }
+}
+
+export async function getFieldOfficeReviewQueue() {
+  return parseFieldOfficeReviewQueueResponse(await callFieldAuthority('get_office_review_queue', {}));
+}
+
+export async function submitFieldVisitForOfficeReview(
+  visitId: string,
+  expectedVersion: number,
+  requestId: string,
+  correctionNote = '',
+) {
+  return parseFieldSubmitOfficeReviewResponse(await callFieldAuthority(
+    'submit_visit_for_office_review',
+    { visitId, expectedVersion, requestId, correctionNote },
+  ));
+}
+
+export async function decideFieldOfficeReview(
+  reviewId: string,
+  decision: FieldOfficeReviewDecision,
+  note: string,
+  expectedVersion: number,
+  requestId: string,
+) {
+  return parseFieldDecideOfficeReviewResponse(await callFieldAuthority(
+    'decide_office_review',
+    { reviewId, decision, note, expectedVersion, requestId },
+  ));
+}
+
+export async function createFieldSaleLine(input: {
+  visitId: string;
+  catalogItemId?: string;
+  description?: string;
+  quantity: number;
+  unit?: string;
+  interventionId?: string;
+  assetId?: string;
+  notes?: string;
+  requestId: string;
+}) {
+  return parseFieldCreateSaleLineResponse(await callFieldAuthority('create_field_sale_line', input));
+}
+
+export async function decideFieldSaleLine(
+  visitId: string,
+  saleLineId: string,
+  decision: FieldSaleDecision,
+  receiverName: string,
+  note: string,
+  expectedVersion: number,
+  requestId: string,
+) {
+  return parseFieldDecideSaleLineResponse(await callFieldAuthority('decide_field_sale_line', {
+    visitId, saleLineId, decision, receiverName, note, expectedVersion, requestId,
+  }));
+}
+
+export async function transitionFieldSaleLine(
+  visitId: string,
+  saleLineId: string,
+  to: FieldSaleExecutionTarget,
+  note: string,
+  expectedVersion: number,
+  requestId: string,
+) {
+  return parseFieldTransitionSaleLineResponse(await callFieldAuthority('transition_field_sale_line', {
+    visitId, saleLineId, to, note, expectedVersion, requestId,
+  }));
 }
 
 export async function prepareFieldVisit(workOrderId: string, requestId: string) {
   return parseFieldPrepareVisitResponse(await callFieldAuthority('prepare_visit', { workOrderId, requestId }));
+}
+
+export async function createReturnFieldVisit(previousVisitId: string, expectedVersion: number, requestId: string) {
+  return parseFieldTransitionVisitResponse(await callFieldAuthority('create_return_visit', {
+    previousVisitId, expectedVersion, requestId,
+  }));
 }
 
 export async function transitionFieldVisit(
@@ -268,14 +536,21 @@ export async function transitionFieldVisit(
   pendingAction = '',
   noAccessReason = '',
   cancellationReason = '',
+  secondVisitReason = '',
 ) {
   return parseFieldTransitionVisitResponse(await callFieldAuthority('transition_visit', {
-    visitId, to, expectedVersion, requestId, pendingReason, pendingAction, noAccessReason, cancellationReason,
+    visitId, to, expectedVersion, requestId, pendingReason, pendingAction, noAccessReason, cancellationReason, secondVisitReason,
   }));
 }
 
 export async function attachExistingFieldAsset(visitId: string, assetId: string, requestId: string) {
   return parseFieldAttachVisitAssetResponse(await callFieldAuthority('attach_visit_asset', { visitId, assetId, requestId }));
+}
+
+export async function attachFieldAssetByQr(visitId: string, assetId: string, qrCode: string, requestId: string) {
+  return parseFieldAttachVisitAssetResponse(await callFieldAuthority('attach_visit_asset_by_qr', {
+    visitId, assetId, qrCode, requestId,
+  }));
 }
 
 export async function registerOnSiteFieldEquipment(input: RegisterOnSiteFieldEquipmentInput) {

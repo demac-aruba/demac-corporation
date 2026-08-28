@@ -163,6 +163,7 @@ const baseJob = {
   allowedActions: ['read', 'execute', 'report.edit', 'evidence.add', 'measurement.add', 'intervention.complete'],
   fieldVisit: visit,
   canPrepareVisit: false,
+  canCreateReturnVisit: false,
   knownEquipment: [],
   visitAssets: [visitAsset],
   canAddExistingAsset: true,

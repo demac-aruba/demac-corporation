@@ -1,5 +1,5 @@
-import { BrowserOfficeReviewQueue } from '../../../components/work-orders/browser-office-review-queue';
+import { OfficeReviewSurface } from '../../../components/work-orders/office-review-surface';
 
 export default function WorkOrdersLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <><BrowserOfficeReviewQueue />{children}</>;
+  return <><OfficeReviewSurface />{children}</>;
 }

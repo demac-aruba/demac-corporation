@@ -250,6 +250,71 @@ test('attaching a canonical existing A/C creates additive VisitAsset truth and a
   assert.equal(auditEvents[0].assetId, 'AC-1');
 });
 
+test('QR identification attaches only the matching canonical A/C and records qr_scan provenance', async () => {
+  const { store, auditEvents, attach } = fixture({
+    equipment: [equipment('AC-QR', { qrCode: 'DEMAC-QR-001' })],
+  });
+
+  const result = await attach({
+    identity: identity(),
+    visitId: 'visit-WO-1',
+    assetId: 'AC-QR',
+    qrCode: 'DEMAC-QR-001',
+    source: 'qr_scan',
+    requestId: 'attach-qr-ac-001',
+  });
+
+  assert.equal(result.replayed, false);
+  assert.equal(result.visitAsset.assetId, 'AC-QR');
+  assert.equal(result.visitAsset.source, 'qr_scan');
+  assert.equal(result.visitAsset.addedReason, 'A/C identified by QR during this Work Visit.');
+  assert.equal(store.all('visitAssets').length, 1);
+  assert.equal(auditEvents[0].after.source, 'qr_scan');
+});
+
+test('QR identification rejects missing or mismatched QR without attaching equipment', async () => {
+  const { store, attach } = fixture({
+    equipment: [equipment('AC-QR', { qrCode: 'DEMAC-QR-001' })],
+  });
+
+  await assert.rejects(
+    () => attach({ identity: identity(), visitId: 'visit-WO-1', assetId: 'AC-QR', source: 'qr_scan', requestId: 'attach-qr-missing-001' }),
+    (error) => error?.code === 'invalid_equipment_qr' && error?.status === 400,
+  );
+  await assert.rejects(
+    () => attach({ identity: identity(), visitId: 'visit-WO-1', assetId: 'AC-QR', qrCode: 'DEMAC-QR-OTHER', source: 'qr_scan', requestId: 'attach-qr-wrong-001' }),
+    (error) => error?.code === 'asset_qr_mismatch' && error?.status === 409,
+  );
+  assert.equal(store.all('visitAssets').length, 0);
+});
+
+test('QR identification cannot attach or reassign an A/C from another Customer or Property', async () => {
+  for (const foreignEquipment of [
+    equipment('AC-QR', { qrCode: 'DEMAC-QR-001', clientId: 'CLIENT-OTHER' }),
+    equipment('AC-QR', { qrCode: 'DEMAC-QR-001', propertyId: 'PROPERTY-OTHER' }),
+  ]) {
+    const { store, attach } = fixture({ equipment: [foreignEquipment] });
+    await assert.rejects(
+      () => attach({ identity: identity(), visitId: 'visit-WO-1', assetId: 'AC-QR', qrCode: 'DEMAC-QR-001', source: 'qr_scan', requestId: 'attach-foreign-qr-001' }),
+      (error) => error?.code === 'asset_not_available_for_visit' && [404, 409].includes(error?.status),
+    );
+    assert.equal(store.all('visitAssets').length, 0);
+  }
+});
+
+test('QR validation cannot be bypassed by replaying an A/C previously attached without QR', async () => {
+  const { store, attach } = fixture({
+    equipment: [equipment('AC-QR', { qrCode: 'DEMAC-QR-001' })],
+  });
+  await attach({ identity: identity(), visitId: 'visit-WO-1', assetId: 'AC-QR', requestId: 'attach-existing-before-qr-001' });
+
+  await assert.rejects(
+    () => attach({ identity: identity(), visitId: 'visit-WO-1', assetId: 'AC-QR', qrCode: 'DEMAC-QR-OTHER', source: 'qr_scan', requestId: 'attach-qr-replay-wrong-001' }),
+    (error) => error?.code === 'asset_qr_mismatch' && error?.status === 409,
+  );
+  assert.equal(store.all('visitAssets').length, 1);
+});
+
 test('planned one A/C may discover and attach two actual A/C assets with stable visit-local sequence', async () => {
   const { store, attach } = fixture();
   await attach({ identity: identity(), visitId: 'visit-WO-1', assetId: 'AC-1', requestId: 'attach-ac-one-001' });

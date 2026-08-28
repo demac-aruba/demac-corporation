@@ -2,8 +2,10 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
   attachCurrentWorkVisitState,
+  canCreateReturnVisit,
   canPrepareInitialVisit,
   projectFieldVisitState,
+  orderedWorkVisitChain,
   selectCurrentWorkVisit,
 } = require('./fieldOperationsVisitRead');
 
@@ -76,6 +78,7 @@ test('read model keeps planned Work Order state separate and projects preparatio
   assert.equal(result.status, 'Confirmada');
   assert.equal(result.fieldVisit, null);
   assert.equal(result.canPrepareVisit, true);
+  assert.equal(result.canCreateReturnVisit, false);
 });
 
 test('server preparation projection is limited to not-started active Work Orders with execute authority', () => {
@@ -96,6 +99,7 @@ test('read model projects current WorkVisit status, version and next active serv
 
   assert.equal(result.status, 'Confirmada', 'planned/release status must remain independent');
   assert.equal(result.canPrepareVisit, false);
+  assert.equal(result.canCreateReturnVisit, false);
   assert.equal(result.fieldVisit.status, 'en_route');
   assert.equal(result.fieldVisit.version, 2);
   assert.equal(result.fieldVisit.departedAt, '2026-08-24T12:30:00.000Z');
@@ -123,6 +127,19 @@ test('a linear return-visit chain resolves to its physical chain tip', () => {
   const initial = visit({ id: 'visit-1' });
   const returned = visit({ id: 'visit-2', previousVisitId: 'visit-1', status: 'on_site', version: 1 });
   assert.equal(selectCurrentWorkVisit([initial, returned], 'WO-1').id, 'visit-2');
+  assert.deepEqual(
+    orderedWorkVisitChain([returned, initial], 'WO-1').map((item) => item.id),
+    ['visit-1', 'visit-2'],
+    'the reusable chain must be ordered from the original physical visit to the current return',
+  );
+});
+
+test('read model retains ordered chain ids only as internal server composition state', async () => {
+  const initial = visit({ id: 'visit-1' });
+  const returned = visit({ id: 'visit-2', previousVisitId: 'visit-1', status: 'on_site' });
+  const result = await attachCurrentWorkVisitState(createDb([returned, initial]), job());
+  assert.deepEqual(result._fieldVisitChainIds, ['visit-1', 'visit-2']);
+  assert.equal(result.fieldVisit.id, 'visit-2');
 });
 
 test('branched, broken or cyclic visit history fails closed instead of guessing current truth', () => {
@@ -166,4 +183,18 @@ test('read projection rejects conflicting identity aliases and snapshot appointm
       (error) => error?.code === 'visit_identity_conflict' && error?.status === 409,
     );
   }
+});
+
+test('return-visit creation eligibility is a server projection of canonical visit truth and execute authority', async () => {
+  const returnRequired = visit({
+    status: 'requires_return_visit',
+    requiresSecondVisit: true,
+    secondVisitReason: 'Return with replacement board.',
+    secondVisitRequiredAt: '2026-08-24T14:00:00.000Z',
+    version: 5,
+  });
+  const result = await attachCurrentWorkVisitState(createDb([returnRequired]), job());
+  assert.equal(result.canCreateReturnVisit, true);
+  assert.equal(canCreateReturnVisit(job({ allowedActions: ['read'] }), result.fieldVisit), false);
+  assert.equal(canCreateReturnVisit(job(), { ...result.fieldVisit, secondVisitReason: undefined }), false);
 });

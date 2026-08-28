@@ -5,10 +5,11 @@ const { activatedVisitTransitions, projectActivatedVisit } = require('./fieldOpe
 test('activated transitions are projected from the canonical server graph', () => {
   assert.deepEqual(activatedVisitTransitions('scheduled', ['read', 'execute']), ['en_route', 'no_access', 'cancelled']);
   assert.deepEqual(activatedVisitTransitions('en_route', ['execute']), ['on_site', 'pending', 'no_access', 'cancelled']);
-  assert.deepEqual(activatedVisitTransitions('on_site', ['execute']), ['in_progress', 'pending', 'no_access', 'cancelled']);
-  assert.deepEqual(activatedVisitTransitions('in_progress', ['execute']), ['pending', 'cancelled']);
-  assert.deepEqual(activatedVisitTransitions('pending', ['execute']), ['in_progress', 'cancelled']);
+  assert.deepEqual(activatedVisitTransitions('on_site', ['execute']), ['in_progress', 'pending', 'requires_return_visit', 'no_access', 'cancelled']);
+  assert.deepEqual(activatedVisitTransitions('in_progress', ['execute']), ['pending', 'requires_return_visit', 'cancelled']);
+  assert.deepEqual(activatedVisitTransitions('pending', ['execute']), ['in_progress', 'requires_return_visit', 'cancelled']);
   assert.deepEqual(activatedVisitTransitions('requires_return_visit', ['execute']), ['cancelled']);
+  assert.deepEqual(activatedVisitTransitions('ready_for_office_review', ['execute']), []);
   assert.deepEqual(activatedVisitTransitions('no_access', ['execute']), []);
   assert.deepEqual(activatedVisitTransitions('cancelled', ['execute']), []);
 });

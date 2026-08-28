@@ -13,6 +13,7 @@ const {
   normalizeFieldIdentity,
 } = require('./fieldOperationsAuthorityCore');
 const { createPrepareWorkVisitCommand } = require('./fieldOperationsAuthorityWorkVisit');
+const { createReturnWorkVisitCommand } = require('./fieldOperationsReturnVisits');
 const { projectActivatedVisit } = require('./fieldOperationsVisitActions');
 const { createAttachExistingVisitAssetCommand, attachVisitAssetsToJob } = require('./fieldOperationsVisitAssets');
 const { createRegisterEquipmentSystemCommand } = require('./fieldOperationsEquipmentRegistration');
@@ -40,6 +41,12 @@ const { attachCustomerAcknowledgementsToJob } = require('./fieldOperationsCustom
 const { attachInterventionReportsToJob } = require('./fieldOperationsReportRead');
 const { attachProfessionalReportPreviewToJob } = require('./fieldOperationsProfessionalReport');
 const {
+  attachOfficeReviewSubmissionReadiness,
+  createDecideOfficeReviewCommand,
+  createSubmitOfficeReviewCommand,
+  loadOfficeReviewQueue,
+} = require('./fieldOperationsOfficeReview');
+const {
   attachScopeChangesToJob,
   createAdditionalWorkInterventionCommand,
 } = require('./fieldOperationsScopeChanges');
@@ -47,20 +54,33 @@ const {
   attachFieldApprovalsToJob,
   createRecordAdditionalWorkDecisionCommand,
 } = require('./fieldOperationsApprovals');
+const {
+  attachFieldSaleLinesToJob,
+  createDecideFieldSaleLineCommand,
+  createFieldSaleLineCommand,
+  createTransitionFieldSaleLineCommand,
+} = require('./fieldOperationsSaleLines');
+const { attachFieldHistoriesToJob } = require('./fieldOperationsHistories');
 const { attachCurrentWorkVisitState, attachCurrentWorkVisitStates } = require('./fieldOperationsVisitRead');
 const { createTransitionWorkVisitCommand } = require('./fieldOperationsVisitMutation');
 
 const FIELD_ACTIONS = new Set([
   'get_schedule',
   'get_job',
+  'get_office_review_queue',
   'prepare_visit',
+  'create_return_visit',
   'transition_visit',
   'attach_visit_asset',
+  'attach_visit_asset_by_qr',
   'register_visit_asset',
   'create_planned_intervention',
   'record_planned_work_disposition',
   'create_additional_intervention',
   'record_additional_intervention_decision',
+  'create_field_sale_line',
+  'decide_field_sale_line',
+  'transition_field_sale_line',
   'transition_intervention',
   'add_report_photo_evidence',
   'add_report_voice_evidence',
@@ -69,6 +89,8 @@ const FIELD_ACTIONS = new Set([
   'set_report_checklist_item',
   'set_report_free_text',
   'record_customer_report_acknowledgement',
+  'submit_visit_for_office_review',
+  'decide_office_review',
 ]);
 
 function cleanText(value, limit = 1000) {
@@ -86,7 +108,11 @@ function equipmentRegistrationEvidencePaths(value) {
 
 function publicJobProjection(job) {
   if (!job || typeof job !== 'object') return job;
-  const { technicianIds: _legacyTechnicianIds, ...publicJob } = job;
+  const {
+    _fieldVisitChainIds: _internalFieldVisitChainIds,
+    technicianIds: _legacyTechnicianIds,
+    ...publicJob
+  } = job;
   return publicJob;
 }
 
@@ -118,6 +144,7 @@ function createFieldOperationsApi({
   verifyIdToken,
   reportError = () => {},
   prepareWorkVisit,
+  createReturnWorkVisit,
   transitionWorkVisit,
   attachExistingVisitAsset,
   registerEquipmentSystem,
@@ -125,6 +152,9 @@ function createFieldOperationsApi({
   recordPlannedWorkDisposition,
   createAdditionalWorkIntervention,
   recordAdditionalWorkDecision,
+  createFieldSaleLine,
+  decideFieldSaleLine,
+  transitionFieldSaleLine,
   transitionWorkIntervention,
   addReportPhotoEvidence,
   addReportVoiceEvidence,
@@ -133,11 +163,15 @@ function createFieldOperationsApi({
   setFieldChecklistItem,
   setFieldFreeTextResponse,
   recordCustomerAcknowledgement,
+  submitOfficeReview,
+  decideOfficeReview,
+  listOfficeReviews = loadOfficeReviewQueue,
 } = {}) {
   if (!db || typeof db.collection !== 'function') throw new Error('A Firestore-compatible db is required.');
   if (typeof verifyIdToken !== 'function') throw new Error('verifyIdToken is required.');
   if (typeof reportError !== 'function') throw new Error('reportError must be a function when provided.');
   if (prepareWorkVisit !== undefined && typeof prepareWorkVisit !== 'function') throw new Error('prepareWorkVisit must be a function when provided.');
+  if (createReturnWorkVisit !== undefined && typeof createReturnWorkVisit !== 'function') throw new Error('createReturnWorkVisit must be a function when provided.');
   if (transitionWorkVisit !== undefined && typeof transitionWorkVisit !== 'function') throw new Error('transitionWorkVisit must be a function when provided.');
   if (attachExistingVisitAsset !== undefined && typeof attachExistingVisitAsset !== 'function') throw new Error('attachExistingVisitAsset must be a function when provided.');
   if (registerEquipmentSystem !== undefined && typeof registerEquipmentSystem !== 'function') throw new Error('registerEquipmentSystem must be a function when provided.');
@@ -145,6 +179,9 @@ function createFieldOperationsApi({
   if (recordPlannedWorkDisposition !== undefined && typeof recordPlannedWorkDisposition !== 'function') throw new Error('recordPlannedWorkDisposition must be a function when provided.');
   if (createAdditionalWorkIntervention !== undefined && typeof createAdditionalWorkIntervention !== 'function') throw new Error('createAdditionalWorkIntervention must be a function when provided.');
   if (recordAdditionalWorkDecision !== undefined && typeof recordAdditionalWorkDecision !== 'function') throw new Error('recordAdditionalWorkDecision must be a function when provided.');
+  if (createFieldSaleLine !== undefined && typeof createFieldSaleLine !== 'function') throw new Error('createFieldSaleLine must be a function when provided.');
+  if (decideFieldSaleLine !== undefined && typeof decideFieldSaleLine !== 'function') throw new Error('decideFieldSaleLine must be a function when provided.');
+  if (transitionFieldSaleLine !== undefined && typeof transitionFieldSaleLine !== 'function') throw new Error('transitionFieldSaleLine must be a function when provided.');
   if (transitionWorkIntervention !== undefined && typeof transitionWorkIntervention !== 'function') throw new Error('transitionWorkIntervention must be a function when provided.');
   if (addReportPhotoEvidence !== undefined && typeof addReportPhotoEvidence !== 'function') throw new Error('addReportPhotoEvidence must be a function when provided.');
   if (addReportVoiceEvidence !== undefined && typeof addReportVoiceEvidence !== 'function') throw new Error('addReportVoiceEvidence must be a function when provided.');
@@ -153,6 +190,9 @@ function createFieldOperationsApi({
   if (setFieldChecklistItem !== undefined && typeof setFieldChecklistItem !== 'function') throw new Error('setFieldChecklistItem must be a function when provided.');
   if (setFieldFreeTextResponse !== undefined && typeof setFieldFreeTextResponse !== 'function') throw new Error('setFieldFreeTextResponse must be a function when provided.');
   if (recordCustomerAcknowledgement !== undefined && typeof recordCustomerAcknowledgement !== 'function') throw new Error('recordCustomerAcknowledgement must be a function when provided.');
+  if (submitOfficeReview !== undefined && typeof submitOfficeReview !== 'function') throw new Error('submitOfficeReview must be a function when provided.');
+  if (decideOfficeReview !== undefined && typeof decideOfficeReview !== 'function') throw new Error('decideOfficeReview must be a function when provided.');
+  if (typeof listOfficeReviews !== 'function') throw new Error('listOfficeReviews must be a function when provided.');
 
   async function authenticate(request) {
     const token = bearerToken(request);
@@ -188,16 +228,23 @@ function createFieldOperationsApi({
       const withPlannedWorkDispositions = await attachPlannedWorkDispositionsToJob(db, withInterventions);
       const withExecutionOptions = attachInterventionExecutionOptionsToJob(withPlannedWorkDispositions);
       const withScopeChanges = await attachScopeChangesToJob(db, withExecutionOptions);
-      const withApprovals = await attachFieldApprovalsToJob(db, withScopeChanges);
+      const withSaleLines = await attachFieldSaleLinesToJob(db, withScopeChanges);
+      const withApprovals = await attachFieldApprovalsToJob(db, withSaleLines);
       const withReports = await attachInterventionReportsToJob(db, withApprovals);
       const withVoiceEvidence = await attachReportVoiceEvidenceToJob(db, withReports);
       const withCustomerAcknowledgements = await attachCustomerAcknowledgementsToJob(db, withVoiceEvidence);
       const withProfessionalReport = attachProfessionalReportPreviewToJob(withCustomerAcknowledgements);
+      const withOfficeReviewReadiness = await attachOfficeReviewSubmissionReadiness(db, withProfessionalReport);
+      const withHistories = await attachFieldHistoriesToJob(db, withOfficeReviewReadiness);
       return {
         success: true,
         version: FIELD_OPERATIONS_API_VERSION,
-        job: publicJobProjection(withProfessionalReport),
+        job: publicJobProjection(withHistories),
       };
+    }
+    if (action === 'get_office_review_queue') {
+      const reviews = await listOfficeReviews(db, identity);
+      return { success: true, version: FIELD_OPERATIONS_API_VERSION, reviews };
     }
     if (action === 'prepare_visit') {
       if (typeof prepareWorkVisit !== 'function') {
@@ -214,6 +261,18 @@ function createFieldOperationsApi({
         version: FIELD_OPERATIONS_API_VERSION,
       };
     }
+    if (action === 'create_return_visit') {
+      if (typeof createReturnWorkVisit !== 'function') {
+        throw fieldError('mutation_not_configured', 'Return Work Visit creation is not configured in this runtime.', 503);
+      }
+      const created = await createReturnWorkVisit({
+        identity,
+        previousVisitId: cleanText(data.previousVisitId, 180),
+        expectedVersion: data.expectedVersion,
+        requestId: cleanText(data.requestId, 240),
+      });
+      return { ...created, version: FIELD_OPERATIONS_API_VERSION };
+    }
     if (action === 'transition_visit') {
       if (typeof transitionWorkVisit !== 'function') {
         throw fieldError('mutation_not_configured', 'Field visit transitions are not configured in this runtime.', 503);
@@ -227,6 +286,7 @@ function createFieldOperationsApi({
         pendingAction: cleanText(data.pendingAction, 1500),
         noAccessReason: cleanText(data.noAccessReason, 1000),
         cancellationReason: cleanText(data.cancellationReason, 1000),
+        secondVisitReason: cleanText(data.secondVisitReason, 1000),
         requestId: cleanText(data.requestId, 240),
       });
       return { ...transitioned, version: FIELD_OPERATIONS_API_VERSION };
@@ -241,6 +301,20 @@ function createFieldOperationsApi({
         assetId: cleanText(data.assetId, 180),
         requestId: cleanText(data.requestId, 240),
         source: 'existing_asset',
+      });
+      return { ...attached, version: FIELD_OPERATIONS_API_VERSION };
+    }
+    if (action === 'attach_visit_asset_by_qr') {
+      if (typeof attachExistingVisitAsset !== 'function') {
+        throw fieldError('mutation_not_configured', 'Field visit QR identification is not configured in this runtime.', 503);
+      }
+      const attached = await attachExistingVisitAsset({
+        identity,
+        visitId: cleanText(data.visitId, 180),
+        assetId: cleanText(data.assetId, 180),
+        requestId: cleanText(data.requestId, 240),
+        source: 'qr_scan',
+        qrCode: cleanText(data.qrCode, 512),
       });
       return { ...attached, version: FIELD_OPERATIONS_API_VERSION };
     }
@@ -469,6 +543,76 @@ function createFieldOperationsApi({
       });
       return { ...recorded, version: FIELD_OPERATIONS_API_VERSION };
     }
+    if (action === 'create_field_sale_line') {
+      if (typeof createFieldSaleLine !== 'function') throw fieldError('mutation_not_configured', 'Field Sale Line creation is not configured in this runtime.', 503);
+      const created = await createFieldSaleLine({
+        identity,
+        visitId: cleanText(data.visitId, 180),
+        catalogItemId: cleanText(data.catalogItemId, 180),
+        description: cleanText(data.description, 500),
+        quantity: data.quantity,
+        unit: cleanText(data.unit, 40),
+        interventionId: cleanText(data.interventionId, 180),
+        assetId: cleanText(data.assetId, 180),
+        notes: cleanText(data.notes, 1500),
+        requestId: cleanText(data.requestId, 240),
+      });
+      return { ...created, version: FIELD_OPERATIONS_API_VERSION };
+    }
+    if (action === 'decide_field_sale_line') {
+      if (typeof decideFieldSaleLine !== 'function') throw fieldError('mutation_not_configured', 'Field Sale customer decisions are not configured in this runtime.', 503);
+      const decided = await decideFieldSaleLine({
+        identity,
+        visitId: cleanText(data.visitId, 180),
+        saleLineId: cleanText(data.saleLineId, 180),
+        decision: cleanText(data.decision, 40),
+        receiverName: cleanText(data.receiverName, 180),
+        note: cleanText(data.note, 1000),
+        expectedVersion: data.expectedVersion,
+        requestId: cleanText(data.requestId, 240),
+      });
+      return { ...decided, version: FIELD_OPERATIONS_API_VERSION };
+    }
+    if (action === 'transition_field_sale_line') {
+      if (typeof transitionFieldSaleLine !== 'function') throw fieldError('mutation_not_configured', 'Field Sale transitions are not configured in this runtime.', 503);
+      const transitioned = await transitionFieldSaleLine({
+        identity,
+        visitId: cleanText(data.visitId, 180),
+        saleLineId: cleanText(data.saleLineId, 180),
+        to: cleanText(data.to, 80),
+        note: cleanText(data.note, 1000),
+        expectedVersion: data.expectedVersion,
+        requestId: cleanText(data.requestId, 240),
+      });
+      return { ...transitioned, version: FIELD_OPERATIONS_API_VERSION };
+    }
+    if (action === 'submit_visit_for_office_review') {
+      if (typeof submitOfficeReview !== 'function') {
+        throw fieldError('mutation_not_configured', 'Office Review submission is not configured in this runtime.', 503);
+      }
+      const submitted = await submitOfficeReview({
+        identity,
+        visitId: cleanText(data.visitId, 180),
+        expectedVersion: data.expectedVersion,
+        requestId: cleanText(data.requestId, 240),
+        correctionNote: cleanText(data.correctionNote, 1500),
+      });
+      return { ...submitted, version: FIELD_OPERATIONS_API_VERSION };
+    }
+    if (action === 'decide_office_review') {
+      if (typeof decideOfficeReview !== 'function') {
+        throw fieldError('mutation_not_configured', 'Office Review decisions are not configured in this runtime.', 503);
+      }
+      const decided = await decideOfficeReview({
+        identity,
+        reviewId: cleanText(data.reviewId, 180),
+        decision: cleanText(data.decision, 80),
+        note: cleanText(data.note, 1500),
+        expectedVersion: data.expectedVersion,
+        requestId: cleanText(data.requestId, 240),
+      });
+      return { ...decided, version: FIELD_OPERATIONS_API_VERSION };
+    }
     throw fieldError('unsupported_action', `Unsupported Field Operations action: ${action || 'missing'}.`, 400);
   }
 
@@ -519,6 +663,7 @@ function getDefaultApi() {
     const resolveAssignment = createMutationAssignmentResolver({ db });
     const appendAuditInTransaction = createFieldAuditAppender({ db });
     const prepareWorkVisit = createPrepareWorkVisitCommand({ db, resolveAssignment, appendAuditInTransaction });
+    const createReturnWorkVisit = createReturnWorkVisitCommand({ db, resolveAssignment, appendAuditInTransaction });
     const transitionWorkVisit = createTransitionWorkVisitCommand({ db, resolveAssignment, appendAuditInTransaction });
     const attachExistingVisitAsset = createAttachExistingVisitAssetCommand({ db, resolveAssignment, appendAuditInTransaction });
     const registerEquipmentSystem = createRegisterEquipmentSystemCommand({
@@ -531,6 +676,9 @@ function getDefaultApi() {
     const recordPlannedWorkDisposition = createRecordPlannedWorkDispositionCommand({ db, resolveAssignment, appendAuditInTransaction });
     const createAdditionalWorkIntervention = createAdditionalWorkInterventionCommand({ db, resolveAssignment, appendAuditInTransaction });
     const recordAdditionalWorkDecision = createRecordAdditionalWorkDecisionCommand({ db, resolveAssignment, appendAuditInTransaction });
+    const createFieldSaleLine = createFieldSaleLineCommand({ db, resolveAssignment, appendAuditInTransaction });
+    const decideFieldSaleLine = createDecideFieldSaleLineCommand({ db, resolveAssignment, appendAuditInTransaction });
+    const transitionFieldSaleLine = createTransitionFieldSaleLineCommand({ db, resolveAssignment, appendAuditInTransaction });
     const transitionWorkIntervention = createTransitionWorkInterventionCommand({ db, resolveAssignment, appendAuditInTransaction });
     const addReportPhotoEvidence = createAddReportPhotoEvidenceCommand({
       db,
@@ -549,10 +697,13 @@ function getDefaultApi() {
     const setFieldChecklistItem = createSetFieldChecklistItemCommand({ db, resolveAssignment, appendAuditInTransaction });
     const setFieldFreeTextResponse = createSetFieldFreeTextResponseCommand({ db, resolveAssignment, appendAuditInTransaction });
     const recordCustomerAcknowledgement = createRecordCustomerAcknowledgementCommand({ db, resolveAssignment, appendAuditInTransaction });
+    const submitOfficeReview = createSubmitOfficeReviewCommand({ db, resolveAssignment, appendAuditInTransaction });
+    const decideOfficeReview = createDecideOfficeReviewCommand({ db, appendAuditInTransaction });
     defaultApi = createFieldOperationsApi({
       db,
       verifyIdToken: (token) => getAuth().verifyIdToken(token, true),
       prepareWorkVisit,
+      createReturnWorkVisit,
       transitionWorkVisit,
       attachExistingVisitAsset,
       registerEquipmentSystem,
@@ -560,6 +711,9 @@ function getDefaultApi() {
       recordPlannedWorkDisposition,
       createAdditionalWorkIntervention,
       recordAdditionalWorkDecision,
+      createFieldSaleLine,
+      decideFieldSaleLine,
+      transitionFieldSaleLine,
       transitionWorkIntervention,
       addReportPhotoEvidence,
       addReportVoiceEvidence,
@@ -568,6 +722,8 @@ function getDefaultApi() {
       setFieldChecklistItem,
       setFieldFreeTextResponse,
       recordCustomerAcknowledgement,
+      submitOfficeReview,
+      decideOfficeReview,
       reportError: ({ action, status, code, error }) => logger.error('Field Operations request failed', {
         action: cleanText(action, 120) || 'unknown',
         status,

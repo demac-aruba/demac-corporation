@@ -67,7 +67,7 @@ const baseJob = {
   plannedWork: [{ id: 'line-standard', label: 'Standard Service', quantity: 1 }], estimatedQuantity: 1, vanId: 'VAN-1',
   responsibility: 'technician', assignmentSource: 'direct_staff',
   allowedActions: ['read', 'execute', 'report.edit', 'finding.add', 'intervention.complete'],
-  fieldVisit: visit, canPrepareVisit: false, knownEquipment: [], visitAssets: [visitAsset], canAddExistingAsset: true,
+  fieldVisit: visit, canPrepareVisit: false, canCreateReturnVisit: false, knownEquipment: [], visitAssets: [visitAsset], canAddExistingAsset: true,
   workInterventions: [intervention],
   plannedWorkProgress: [{ id: 'line-standard', plannedQuantity: 1, linkedActualQuantity: 1, remainingQuantity: 0 }],
   plannedInterventionOptions: [], interventionExecutionOptions: [{ interventionId: 'WI-1', allowedTargets: ['completed', 'pending_part'] }],

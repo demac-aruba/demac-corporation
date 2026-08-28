@@ -152,6 +152,7 @@ export interface WorkVisit extends AuditFields {
   submittedAt?: ISODateTime;
   completedAt?: ISODateTime;
   requiresSecondVisit: boolean;
+  secondVisitRequiredAt?: ISODateTime;
   secondVisitReason?: string;
   previousVisitId?: EntityId;
 }

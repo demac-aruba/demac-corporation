@@ -140,6 +140,7 @@ const representativeJob = {
   allowedActions: ['read', 'execute'],
   fieldVisit: null,
   canPrepareVisit: true,
+  canCreateReturnVisit: false,
 };
 const validSchedule = parseFieldScheduleResponse({ success: true, version: 1, jobs: [representativeJob] });
 assert(validSchedule.jobs[0].workOrderId === 'WO-1', 'valid public schedule transport should parse');
@@ -152,6 +153,7 @@ const validJob = parseFieldJobResponse({
     ...representativeJob,
     fieldVisit: representativeVisit,
     canPrepareVisit: false,
+    canCreateReturnVisit: false,
     knownEquipment: [],
     visitAssets: [],
     canAddExistingAsset: false,
@@ -230,6 +232,22 @@ const validCancelledTransition = parseFieldTransitionVisitResponse({
 });
 assert(validCancelledTransition.visit.cancellationReason === 'Customer cancelled this field visit', 'cancelled transport must preserve the canonical reason');
 assert(validCancelledTransition.visit.availableTransitions.length === 0, 'cancelled transport must remain terminal');
+const validReturnRequiredTransition = parseFieldTransitionVisitResponse({
+  success: true,
+  version: 1,
+  replayed: false,
+  visit: {
+    ...representativeVisit,
+    status: 'requires_return_visit',
+    requiresSecondVisit: true,
+    secondVisitRequiredAt: '2026-08-24T13:00:00.000Z',
+    secondVisitReason: 'Return with ordered part',
+    version: 5,
+    availableTransitions: ['cancelled'],
+  },
+  allowedActions: ['read', 'execute'],
+});
+assert(validReturnRequiredTransition.visit.secondVisitReason === 'Return with ordered part', 'return-required transport must preserve the canonical reason');
 assert(validTransition.visit.status === 'en_route' && validTransition.visit.version === 2, 'valid visit transition transport should parse');
 
 const validAttach = parseFieldAttachVisitAssetResponse({
@@ -246,6 +264,7 @@ assertThrows(() => parseFieldScheduleResponse({ success: true, version: 2, jobs:
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1 }), 'missing jobs array must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1, jobs: [{ ...representativeJob, fieldVisit: undefined }] }), 'missing current-visit projection must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1, jobs: [{ ...representativeJob, canPrepareVisit: undefined }] }), 'missing preparation projection must fail closed');
+assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1, jobs: [{ ...representativeJob, canCreateReturnVisit: undefined }] }), 'missing return-visit eligibility projection must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1, jobs: [{ ...representativeJob, allowedActions: null }] }), 'malformed action projection must fail closed');
 assertThrows(() => parseFieldScheduleResponse({ success: true, version: 1, jobs: [{ ...representativeJob, allowedActions: ['read', 'future.action'] }] }), 'unknown server action name must fail closed');
 assertThrows(() => parseFieldJobResponse({ success: true, version: 1, job: representativeJob }), 'missing knownEquipment and actual-scope projection must fail closed');
@@ -262,6 +281,7 @@ assertThrows(() => parseFieldTransitionVisitResponse({ success: true, version: 1
 assertThrows(() => parseFieldTransitionVisitResponse({ success: true, version: 1, replayed: false, visit: { ...representativeVisit, pendingReason: 42 }, allowedActions: ['execute'] }), 'transition response with malformed pending context must fail closed');
 assertThrows(() => parseFieldTransitionVisitResponse({ success: true, version: 1, replayed: false, visit: { ...representativeVisit, noAccessReason: 42 }, allowedActions: ['execute'] }), 'transition response with malformed no-access context must fail closed');
 assertThrows(() => parseFieldTransitionVisitResponse({ success: true, version: 1, replayed: false, visit: { ...representativeVisit, cancellationReason: 42 }, allowedActions: ['execute'] }), 'transition response with malformed cancellation context must fail closed');
+assertThrows(() => parseFieldTransitionVisitResponse({ success: true, version: 1, replayed: false, visit: { ...representativeVisit, secondVisitRequiredAt: 42 }, allowedActions: ['execute'] }), 'transition response with malformed return-required context must fail closed');
 assertThrows(() => parseFieldTransitionVisitResponse({ success: true, version: 1, replayed: false, visit: { ...representativeVisit, version: 1.5 }, allowedActions: ['execute'] }), 'fractional visit version must fail closed at the transport boundary');
 assertThrows(() => parseFieldTransitionVisitResponse({ success: true, version: 1, replayed: false, visit: { ...representativeVisit, version: Number.MAX_SAFE_INTEGER + 1 }, allowedActions: ['execute'] }), 'unsafe visit version must fail closed at the transport boundary');
 assertThrows(() => parseFieldAttachVisitAssetResponse({ success: true, version: 2, replayed: false, visitAsset: representativeVisitAsset, allowedActions: ['asset.add'] }), 'VisitAsset response with unknown API version must fail closed');
