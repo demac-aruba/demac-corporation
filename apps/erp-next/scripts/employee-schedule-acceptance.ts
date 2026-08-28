@@ -33,7 +33,8 @@ const secretary: CanonicalStaffProfile = {
   availability: 'Disponible',
 };
 
-// Preserve all legacy office-half-day behaviors that existed before Profile V2.
+// Legacy records keep their existing weekday and worked-window behavior, but recurring partial
+// days now count actual worked hours only. Stored paid-free metadata is not scheduled.
 const legacyHalfDay: EmployeePayrollSettings = {
   id: 'legacy-payroll-yerika',
   sourceStaffId: secretary.id,
@@ -46,8 +47,8 @@ const legacyHalfDay: EmployeePayrollSettings = {
 const legacyWednesday = schedule({ profile: secretary, date: '2026-08-26', payrollSettings: legacyHalfDay });
 assert.deepEqual(
   { start: legacyWednesday.startTime, end: legacyWednesday.endTime, worked: legacyWednesday.scheduledMinutes, paidFree: legacyWednesday.paidFreeMinutes },
-  { start: '08:00', end: '12:00', worked: 240, paidFree: 240 },
-  'Legacy office half-day records must remain backward compatible.',
+  { start: '08:00', end: '12:00', worked: 240, paidFree: 0 },
+  'Legacy partial-day metadata must resolve to the historical worked window without synthetic paid-free hours.',
 );
 
 const legacyMorningOff = schedule({
@@ -64,8 +65,8 @@ const legacyMorningOff = schedule({
 });
 assert.deepEqual(
   { start: legacyMorningOff.startTime, end: legacyMorningOff.endTime, worked: legacyMorningOff.scheduledMinutes, paidFree: legacyMorningOff.paidFreeMinutes },
-  { start: '13:00', end: '17:00', worked: 240, paidFree: 240 },
-  'Legacy morning-off half-day must remain 13:00–17:00.',
+  { start: '13:00', end: '17:00', worked: 240, paidFree: 0 },
+  'Legacy morning placement must keep the exact worked window while counting worked hours only.',
 );
 
 const legacyPeriodMissing = schedule({
@@ -80,8 +81,8 @@ const legacyPeriodMissing = schedule({
 });
 assert.deepEqual(
   { start: legacyPeriodMissing.startTime, end: legacyPeriodMissing.endTime, worked: legacyPeriodMissing.scheduledMinutes, paidFree: legacyPeriodMissing.paidFreeMinutes },
-  { start: '08:00', end: '12:00', worked: 240, paidFree: 240 },
-  'Legacy records without effective date or off-period must continue using the historical afternoon-off behavior.',
+  { start: '08:00', end: '12:00', worked: 240, paidFree: 0 },
+  'Legacy records without effective date or placement must keep the historical afternoon placement without paid-free hours.',
 );
 
 const customNineToSix: EmployeePayrollScheduleSettings = {
@@ -108,9 +109,71 @@ assert.deepEqual(
 const customWednesday = schedule({ profile: secretary, date: '2026-08-26', payrollSettings: customNineToSix });
 assert.deepEqual(
   { start: customWednesday.startTime, end: customWednesday.endTime, worked: customWednesday.scheduledMinutes, paidFree: customWednesday.paidFreeMinutes },
-  { start: '09:00', end: '13:00', worked: 240, paidFree: 240 },
-  'The office 4h worked + 4h paid-free rule must apply to the selected custom shift.',
+  { start: '09:00', end: '13:00', worked: 240, paidFree: 0 },
+  'A legacy 09:00–18:00 Wednesday partial day must resolve to 09:00–13:00 and four worked hours only.',
 );
+
+const exactChanges = buildEmployeeScheduleChanges({
+  employee: secretary,
+  existing: customNineToSix,
+  mode: 'custom',
+  templateId: 'late-9-6',
+  weeklySchedule: defaultEmployeeWeeklySchedule('09:00', '18:00', 60),
+  effectiveFrom: '2026-08-01',
+  halfDayWeekday: 3,
+  halfDayOffPeriod: 'afternoon',
+  halfDayStartTime: '09:00',
+  halfDayEndTime: '13:00',
+  halfDayBreakMinutes: 0,
+  now: '2026-08-27T22:15:00.000Z',
+});
+assert.equal(exactChanges.halfDayStartTime, '09:00', 'Exact partial-day start must be stored.');
+assert.equal(exactChanges.halfDayEndTime, '13:00', 'Exact partial-day end must be stored.');
+assert.equal(exactChanges.halfDayWorkedHours, 4, '09:00–13:00 with no break must store four worked hours.');
+assert.equal(exactChanges.halfDayPaidFreeHours, 0, 'Recurring partial days must not create paid-free hours.');
+assert.equal(exactChanges.halfDayUsesExactHours, true, 'New partial-day records must use exact-hour resolution.');
+const exactSettings: EmployeePayrollScheduleSettings = { id: secretary.id, ...exactChanges };
+const exactWednesday = schedule({ profile: secretary, date: '2026-08-26', payrollSettings: exactSettings });
+assert.deepEqual(
+  { start: exactWednesday.startTime, end: exactWednesday.endTime, worked: exactWednesday.scheduledMinutes, paidFree: exactWednesday.paidFreeMinutes },
+  { start: '09:00', end: '13:00', worked: 240, paidFree: 0 },
+  'Exact 09:00–13:00 partial-day edits must persist and resolve exactly as entered.',
+);
+
+const exactFiveHourChanges = buildEmployeeScheduleChanges({
+  employee: secretary,
+  mode: 'custom',
+  templateId: 'late-9-6',
+  weeklySchedule: defaultEmployeeWeeklySchedule('09:00', '18:00', 60),
+  effectiveFrom: '2026-09-01',
+  halfDayWeekday: 4,
+  halfDayStartTime: '09:00',
+  halfDayEndTime: '14:00',
+  halfDayBreakMinutes: 0,
+  now: '2026-08-27T22:16:00.000Z',
+});
+assert.equal(exactFiveHourChanges.halfDayWorkedHours, 5, 'Partial-day duration must be calculated from the exact hours entered, not hard-coded to four.');
+const exactFiveHourSettings: EmployeePayrollScheduleSettings = { id: secretary.id, ...exactFiveHourChanges };
+const exactThursday = schedule({ profile: secretary, date: '2026-09-03', payrollSettings: exactFiveHourSettings });
+assert.deepEqual(
+  { start: exactThursday.startTime, end: exactThursday.endTime, worked: exactThursday.scheduledMinutes, paidFree: exactThursday.paidFreeMinutes },
+  { start: '09:00', end: '14:00', worked: 300, paidFree: 0 },
+  'Any valid employee partial-day hours must resolve from the administrator-entered Start / End values.',
+);
+
+const exactWithBreakChanges = buildEmployeeScheduleChanges({
+  employee: secretary,
+  mode: 'custom',
+  templateId: 'late-9-6',
+  weeklySchedule: defaultEmployeeWeeklySchedule('09:00', '18:00', 60),
+  effectiveFrom: '2026-09-01',
+  halfDayWeekday: 4,
+  halfDayStartTime: '09:00',
+  halfDayEndTime: '14:00',
+  halfDayBreakMinutes: 30,
+  now: '2026-08-27T22:17:00.000Z',
+});
+assert.equal(exactWithBreakChanges.halfDayWorkedHours, 4.5, 'Partial-day break must be deducted from exact worked hours.');
 
 const beforeEffective = schedule({ profile: secretary, date: '2026-07-28', payrollSettings: customNineToSix });
 assert.deepEqual(
@@ -200,8 +263,8 @@ assert.deepEqual(
 const technicalWednesday = schedule({ profile: technician, date: '2026-08-26', vans: [van], halfDaySchedules: [vanHalfDay], payrollSettings: customNineToSix });
 assert.deepEqual(
   { start: technicalWednesday.startTime, end: technicalWednesday.endTime, worked: technicalWednesday.scheduledMinutes, paidFree: technicalWednesday.paidFreeMinutes },
-  { start: '08:00', end: '13:00', worked: 300, paidFree: 180 },
-  'Technicians must inherit 5h worked + 3h paid free from the Van/team rule.',
+  { start: '08:00', end: '13:00', worked: 300, paidFree: 0 },
+  'Technicians must inherit the exact Van/team worked window without synthetic paid-free hours.',
 );
 
 const legacyRecord: EmployeePayrollSettings = {
@@ -224,26 +287,28 @@ const changes = buildEmployeeScheduleChanges({
   weeklySchedule: defaultEmployeeWeeklySchedule('09:00', '18:00', 60),
   effectiveFrom: '2026-09-01',
   halfDayWeekday: 4,
-  halfDayOffPeriod: 'afternoon',
+  halfDayStartTime: '09:00',
+  halfDayEndTime: '13:00',
+  halfDayBreakMinutes: 0,
   now: '2026-08-27T12:00:00.000Z',
 });
 assert.equal(changes.createdAt, legacyRecord.createdAt, 'Original payroll settings creation timestamp must be preserved.');
 assert.equal(changes.weekdayHours, 7.5, 'Legacy payroll metadata must be preserved by additive schedule writes.');
 assert.equal(changes.saturdayHours, 6, 'Legacy Saturday metadata must be preserved by additive schedule writes.');
-assert.equal(changes.scheduleVersions.length, 2, 'First V2 save must retain a legacy historical baseline.');
+assert.equal(changes.scheduleVersions.length, 2, 'First exact-hours save must retain a legacy historical baseline.');
 
 const versionedSettings: EmployeePayrollScheduleSettings = { id: legacyRecord.id, ...changes };
 const historicalTuesday = schedule({ profile: secretary, date: '2026-08-25', payrollSettings: versionedSettings });
 assert.deepEqual(
   { start: historicalTuesday.startTime, end: historicalTuesday.endTime, worked: historicalTuesday.scheduledMinutes, paidFree: historicalTuesday.paidFreeMinutes },
-  { start: '08:00', end: '12:00', worked: 240, paidFree: 240 },
-  'Historical dates must continue to use the preserved legacy schedule after a future version is saved.',
+  { start: '08:00', end: '12:00', worked: 240, paidFree: 0 },
+  'Historical legacy dates keep their worked window while paid-free metadata is no longer counted.',
 );
 const futureThursday = schedule({ profile: secretary, date: '2026-09-03', payrollSettings: versionedSettings });
 assert.deepEqual(
   { start: futureThursday.startTime, end: futureThursday.endTime, worked: futureThursday.scheduledMinutes, paidFree: futureThursday.paidFreeMinutes },
-  { start: '09:00', end: '13:00', worked: 240, paidFree: 240 },
-  'Newest applicable schedule version must apply without destroying the historical baseline.',
+  { start: '09:00', end: '13:00', worked: 240, paidFree: 0 },
+  'Newest applicable exact-hours schedule version must apply without destroying the historical baseline.',
 );
 
 assert.throws(() => buildEmployeeScheduleChanges({
@@ -262,6 +327,19 @@ assert.throws(() => buildEmployeeScheduleChanges({
   weeklySchedule: defaultEmployeeWeeklySchedule('09:00', '17:00', 60),
   effectiveFrom: '2026-08-01',
   halfDayWeekday: 3,
-}), /exactly 8 worked hours/, 'Invalid seven-hour office shifts must be rejected rather than silently normalized.');
+  halfDayStartTime: '09:00',
+  halfDayEndTime: '13:00',
+}), /exactly 8 worked hours/, 'Invalid seven-hour full office shifts must still be rejected; only the separate partial-day window may be shorter.');
 
-console.log('Employee schedule acceptance passed: preserved legacy cases, effective 8–5/9–6 schedules, employment bounds, protected Sunday, historical versioning, and Van-owned technician half-days.');
+assert.throws(() => buildEmployeeScheduleChanges({
+  employee: secretary,
+  mode: 'custom',
+  templateId: 'late-9-6',
+  weeklySchedule: defaultEmployeeWeeklySchedule('09:00', '18:00', 60),
+  effectiveFrom: '2026-08-01',
+  halfDayWeekday: 3,
+  halfDayStartTime: '13:00',
+  halfDayEndTime: '09:00',
+}), /Partial-day end time/, 'Invalid partial-day time ranges must be rejected rather than silently normalized.');
+
+console.log('Employee schedule acceptance passed: exact partial-day worked hours, no synthetic paid-free time, preserved legacy data, effective 8–5/9–6 schedules, employment bounds, protected Sunday, historical versioning, and Van-owned technician partial days.');
