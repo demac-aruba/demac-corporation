@@ -59,14 +59,13 @@ const canonical = canonicalAppointments[0];
 requireCondition(canonical.id === 'APT-CANONICAL-1', 'Canonical appointmentId must be preserved.');
 requireCondition(canonical.primaryVanId === 'VAN-1', 'Canonical vanId must be projected into the live schedule.');
 requireCondition(canonical.assignments[0].start === '08:30', 'Canonical start time must be preserved.');
-requireCondition(canonical.assignments[0].end === '10:30', 'Canonical appointment slot span must be preserved.');
-requireCondition(canonical.scheduledSlotCount === 2, 'Numeric Work Order scheduledSlots must remain the live capacity snapshot.');
+requireCondition(canonical.assignments[0].end === '10:30', 'Canonical elapsed duration must be preserved.');
+requireCondition(canonical.scheduledSlotCount === 2, 'Numeric Work Order scheduledSlots must remain capacity/history metadata.');
 requireCondition(canonical.bookedByName === 'Christian', 'Canonical booking operator must be preserved.');
 requireCondition(bookingActorLabel({ appointmentId: 'APT-MAYA', source: 'demac-customer-agent' }) === 'Maya', 'Customer Agent bookings must display Maya.');
 
-// Regression for an AM → PM drag created before operational-move v3. The Work Order
-// start moved to 13:30 but its explicit end snapshot remained at the old 11:30 AM.
-// Live Scheduling must recover the visible 3-slot PM block instead of dropping it.
+// Regression for an AM → PM drag created before operational-move v3. Duration is the
+// timing authority, so a stale pre-move end snapshot must not hide the actual span.
 const staleMovedWorkOrders = [{
   ...canonicalWorkOrders[0],
   id: 'WO-APT-STALE-MOVE-1',
@@ -85,11 +84,11 @@ const staleMoved = staleMovedAppointments[0];
 requireCondition(Boolean(staleMoved), 'A moved appointment with a stale pre-fix Work Order end snapshot must remain visible.');
 requireCondition(staleMoved.primaryVanId === 'VAN-3', 'The recovered moved appointment must remain assigned to Van 3.');
 requireCondition(staleMoved.assignments[0].start === '13:30', 'The recovered moved appointment must preserve its PM start time.');
-requireCondition(staleMoved.assignments[0].end === '16:30', 'A stale 11:30 AM end snapshot must recover to 16:30 from the canonical three-slot allocation.');
-requireCondition(staleMoved.scheduledSlotCount === 3, 'The recovered moved appointment must continue reserving all three operating spots.');
+requireCondition(staleMoved.assignments[0].end === '16:30', '13:30 plus three real hours must project to 16:30 despite a stale stored end.');
+requireCondition(staleMoved.scheduledSlotCount === 3, 'The recovered moved appointment must preserve its capacity/history slot count.');
 
-// Exact regression for the reported capacity bug: two Commercial Services at three
-// hours each consume all six operating slots while lunch/reset remains non-working time.
+// Continuous-time regression: six real work hours beginning at 08:30 end at 14:30.
+// Lunch is not a sellable start but does not add a synthetic hour to the appointment.
 const commercialWorkOrders = [{
   ...canonicalWorkOrders[0],
   id: 'WO-APT-COMMERCIAL-1-1',
@@ -120,8 +119,8 @@ requireCondition(commercial.workTypeId === 'commercial_service', 'Live Schedulin
 requireCondition(commercial.workLabel === 'Commercial Service', 'Live Scheduling must display the Work Order label snapshot.');
 requireCondition(commercial.durationMinutesPerUnit === 180, 'Commercial Service must retain its three-hour per-unit snapshot.');
 requireCondition(commercial.scheduledDurationMinutes === 360, 'Two Commercial Services must retain six total work hours.');
-requireCondition(commercial.scheduledSlotCount === 6, 'Two Commercial Services must reserve six operating spots.');
-requireCondition(commercial.assignments[0].start === '08:30' && commercial.assignments[0].end === '16:30', 'Six slots starting at 08:30 must end at 16:30, skipping lunch/reset rather than ending at 14:30.');
+requireCondition(commercial.scheduledSlotCount === 6, 'Legacy scheduledSlots remains available as capacity/history metadata.');
+requireCondition(commercial.assignments[0].start === '08:30' && commercial.assignments[0].end === '14:30', 'Six real hours starting at 08:30 must end at 14:30 without adding a synthetic lunch hour.');
 requireCondition(commercial.propertyAddress === 'Santa Cruz 54 C, local 1', 'Live appointment details must expose canonical property address without a duplicate appointment copy.');
 requireCondition(commercial.customerWhatsapp === '+2975550000', 'Live appointment details must expose canonical CRM WhatsApp contact.');
 
@@ -146,8 +145,6 @@ const baseCapacity: LiveOperationalCapacityState = {
   closedWeekdays: [0],
 };
 
-// Saturdays are normal operating days. Only an explicit per-van half-day/off rule
-// may shorten a van's capacity; Sunday remains the global closed day.
 const octoberWeek = buildOperationalWeek('2026-10-03');
 const saturday = octoberWeek.find((day) => day.dateKey === '2026-10-03');
 const sunday = octoberWeek.find((day) => day.dateKey === '2026-10-04');
@@ -196,7 +193,8 @@ requireCondition(liveVanCrew(dailyCrewCapacity, 'VAN-1', canonical.dateKey).labe
 const dragCandidates = liveDragMoveCandidates(operationalDay!, canonical, canonical.assignments, baseCapacity);
 requireCondition(dragCandidates.length > 0, 'A single-van appointment must expose same-day drag targets.');
 requireCondition(dragCandidates.some((slot) => slot.start === '09:30'), 'Past wall-clock time must not hide a physically open manual destination.');
-requireCondition(dragCandidates.every((slot) => slot.start !== '10:30' && slot.start !== '15:30'), 'A two-slot block must not be offered where its canonical operating slots cannot fit before lunch or day end.');
+requireCondition(dragCandidates.some((slot) => slot.start === '10:30' && slot.end === '12:30'), 'A two-hour block must be allowed at 10:30 because lunch is not a hard conflict.');
+requireCondition(dragCandidates.every((slot) => slot.start !== '15:30'), 'A two-hour block must not be offered at 15:30 because it exceeds the operating-day end.');
 
 const target = dragCandidates.find((slot) => slot.vanId !== canonical.primaryVanId) ?? dragCandidates[0];
 requireCondition(Boolean(target), 'A valid target must exist for committed projection coverage.');
@@ -233,7 +231,8 @@ function appointmentAt(id: string, customer: string, vanId: string, start: strin
     customer,
     primaryVanId: vanId,
     totalQuantity: quantity,
-    scheduledSlotCount: Math.max(1, Math.round((new Date(`1970-01-01T${end}:00Z`).getTime() - new Date(`1970-01-01T${start}:00Z`).getTime()) / 3_600_000)),
+    scheduledDurationMinutes: Math.max(1, Math.round((new Date(`1970-01-01T${end}:00Z`).getTime() - new Date(`1970-01-01T${start}:00Z`).getTime()) / 60_000)),
+    scheduledSlotCount: Math.max(1, Math.ceil((new Date(`1970-01-01T${end}:00Z`).getTime() - new Date(`1970-01-01T${start}:00Z`).getTime()) / 3_600_000)),
     assignments: canonical.assignments.map((assignment) => ({
       ...assignment,
       id: `${id}-PRIMARY`,
@@ -246,7 +245,6 @@ function appointmentAt(id: string, customer: string, vanId: string, start: strin
   };
 }
 
-// Exact business-rule regression for Aug 18: Van 2 works Tuesday morning and is off after 1 PM.
 const christianPm = appointmentAt('APT-CHRISTIAN-PM', 'Christian', 'VAN-3', '13:30', '15:30', 2);
 const maribelVan1Am = appointmentAt('APT-MARIBEL-V1-AM', 'Maribel Marquez', 'VAN-1', '08:30', '11:30', 3);
 const maribelVan1Pm = appointmentAt('APT-MARIBEL-V1-PM', 'Maribel Marquez', 'VAN-1', '13:30', '16:30', 3);
@@ -312,4 +310,4 @@ const fleetRecords = [
 requireCondition(resolveCanonicalVanId('v4', fleetRecords) === 'VAN-4', 'Short van aliases must resolve to canonical Van 4.');
 requireCondition(resolveCanonicalVanId('van-1783800405341', fleetRecords) === 'VAN-4', 'Legacy duplicate van documents must resolve to one physical lane.');
 
-console.log('Live scheduling acceptance passed: canonical Work Order slot snapshots drive agenda occupancy, labels and drag capacity while preserving full-day Saturdays, per-van half-days, closures and reminder authority boundaries.');
+console.log('Live scheduling acceptance passed: canonical duration drives wall-clock agenda occupancy while slot metadata remains compatibility/capacity history; flexible lunch, full-day Saturdays, per-van half-days, closures and communication ownership remain protected.');
