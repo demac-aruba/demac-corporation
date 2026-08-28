@@ -8,6 +8,7 @@ const {
   compactObject,
 } = require("./bookingAuthorityFirestore");
 const {
+  arubaDateParts,
   hashId,
   normalizeRouteConfig,
   propertyZone,
@@ -20,7 +21,19 @@ const { canonicalizeSchedulingData } = require("./bookingVanIdentity");
 
 const ADHOC_SUPPORT_VERSION = 1;
 const SUPPORT_KIND = "adhoc_rescue";
-const INACTIVE_STATUSES = new Set(["cancelada", "cancelled", "canceled", "reprogramada", "rescheduled"]);
+const INACTIVE_STATUSES = new Set([
+  "cancelada",
+  "cancelled",
+  "canceled",
+  "reprogramada",
+  "rescheduled",
+  "completada",
+  "completed",
+  "facturada",
+  "invoiced",
+  "pagada",
+  "paid",
+]);
 
 function defaultServerTimestamp() {
   const { FieldValue } = require("firebase-admin/firestore");
@@ -192,6 +205,15 @@ function createAdhocSupportAuthority({
     }
 
     const now = asDate(clock());
+    const today = arubaDateParts(now).date;
+    if (targetDate !== today) {
+      throw new BookingAuthorityError(
+        BOOKING_ERROR_CODES.INVALID_REQUEST,
+        "Ad-hoc coworker support is a same-day operational action. Future multi-Van support must use the planned Booking Authority allocation.",
+        { reason: "adhoc-support-same-day-only", requestedDate: targetDate, currentDate: today },
+      );
+    }
+
     const appointmentRef = db.collection(collections.appointments).doc(id);
     const supportId = supportWorkOrderId(id, stableRequestId);
     const supportRef = db.collection(collections.workOrders).doc(supportId);
