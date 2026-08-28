@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   candidateAvailability,
+  capacityLockSlots,
   endTimeFromOccupiedSlots,
   workOrderBlocksOperationalMoveCapacity,
 } = require("./bookingCapacityAvailability");
@@ -66,7 +67,7 @@ test("Van half-day closes afternoon capacity without marking the crew unavailabl
   assert.equal(assignment.status, "Disponible");
 });
 
-test("three reserved half-day spots end at 12:30 instead of leaking across lunch into PM capacity", () => {
+test("three reserved half-day spots end at 12:30 without opening forbidden PM capacity", () => {
   const data = {
     workOrders: [],
     services: [],
@@ -95,7 +96,7 @@ test("three reserved half-day spots end at 12:30 instead of leaking across lunch
   assert.equal(endTimeFromOccupiedSlots(["09:30", "10:30", "11:30"]), "12:30");
 });
 
-function explicitTargetFixture(existingOrderTime = "08:30") {
+function explicitTargetFixture(existingOrderTime = "08:30", existingDurationMinutes = 60) {
   const routeConfig = {
     officeZoneId: "office",
     maximumAnchorDistance: 100,
@@ -112,7 +113,8 @@ function explicitTargetFixture(existingOrderTime = "08:30") {
       time: existingOrderTime,
       status: "Confirmada",
       vanId: "VAN-2",
-      scheduledSlots: 1,
+      scheduledSlots: Math.ceil(existingDurationMinutes / 60),
+      appointmentDurationMinutes: existingDurationMinutes,
       propertyId: "p-office",
     }],
     services: [],
@@ -141,7 +143,7 @@ test("automatic routing may reject a geographically incompatible free target", (
   assert.equal(result, null);
 });
 
-test("explicit office target treats route heuristics as advisory while preserving four-hour capacity", () => {
+test("explicit office target keeps real elapsed duration while crossing lunch", () => {
   const fixture = explicitTargetFixture();
   fixture.routeConfig = { ...fixture.routeConfig, routePolicy: "advisory" };
   const result = candidateAvailability(fixture);
@@ -149,12 +151,46 @@ test("explicit office target treats route heuristics as advisory while preservin
   assert.equal(result.vanId, "VAN-2");
   assert.equal(result.slots, 4);
   assert.equal(result.durationMinutes, 240);
-  assert.equal(result.endTime, "15:30");
+  assert.equal(result.endTime, "13:30");
   assert.equal(result.routeReason, "explicit-office-target");
 });
 
-test("explicit office target still refuses a real occupied-slot conflict", () => {
-  const fixture = explicitTargetFixture("10:30");
+test("10:30 to 13:30 is valid and releases the 13:30 appointment start", () => {
+  const first = explicitTargetFixture();
+  first.time = "10:30";
+  first.allocation = { quantity: 3, durationMinutes: 180, slots: 3, fullDay: false };
+  first.routeConfig = { ...first.routeConfig, routePolicy: "advisory" };
+  first.data.workOrders = [];
+  const longJob = candidateAvailability(first);
+  assert.ok(longJob);
+  assert.equal(longJob.endTime, "13:30");
+  assert.deepEqual(capacityLockSlots({ time: "10:30", durationMinutes: 180, slots: 3, halfDay: false, fullDay: false }), ["10:30"]);
+
+  const followUp = explicitTargetFixture("10:30", 180);
+  followUp.time = "13:30";
+  followUp.allocation = { quantity: 1, durationMinutes: 60, slots: 1, fullDay: false };
+  followUp.routeConfig = { ...followUp.routeConfig, routePolicy: "advisory" };
+  assert.ok(candidateAvailability(followUp));
+});
+
+test("a real continuous-time overlap is still rejected across lunch", () => {
+  const fixture = explicitTargetFixture("10:30", 180);
+  fixture.time = "13:00";
+  fixture.allocation = { quantity: 1, durationMinutes: 60, slots: 1, fullDay: false };
   fixture.routeConfig = { ...fixture.routeConfig, routePolicy: "advisory" };
+  // 13:00 is not a sellable canonical start, so the scheduler rejects it before conflict evaluation.
   assert.equal(candidateAvailability(fixture), null);
+
+  const canonicalOverlap = explicitTargetFixture("10:30", 240);
+  canonicalOverlap.time = "13:30";
+  canonicalOverlap.allocation = { quantity: 1, durationMinutes: 60, slots: 1, fullDay: false };
+  canonicalOverlap.routeConfig = { ...canonicalOverlap.routeConfig, routePolicy: "advisory" };
+  assert.equal(candidateAvailability(canonicalOverlap), null);
+});
+
+test("full-day policy still owns every sellable regular start", () => {
+  assert.deepEqual(
+    capacityLockSlots({ time: "08:30", durationMinutes: 420, slots: 6, halfDay: false, fullDay: true }),
+    ["08:30", "09:30", "10:30", "13:30", "14:30", "15:30"],
+  );
 });
