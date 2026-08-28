@@ -2,15 +2,14 @@ const {
   EXTRA_MORNING_SLOT,
   MORNING_SLOTS,
   REGULAR_SLOTS,
-  bookingSlots,
-  capacityAnchorsForSpan,
+  capacitySlotsForInterval,
   endTime,
   isHalfDay,
   orderBlocksCapacity,
   resolveAssignment,
   vanCanReceiveAppointments,
 } = require("./bookingSchedulingPrimitives");
-const { workOrderInterval } = require("./bookingCapacityAvailability");
+const { workOrderCapacityInterval } = require("./bookingCapacityAvailability");
 
 function text(value) {
   return String(value ?? "").trim();
@@ -28,11 +27,11 @@ function reservedSlotsForOrder(order, services = [], halfDaySchedules = []) {
 
   // Full-day policy is a capacity reservation, not a fabricated wall-clock end.
   // It intentionally owns every sellable start for the Van/day.
-  if (order.fullDaySingleProperty === true) return [...bookingSlots(halfDay)];
+  if (order.fullDaySingleProperty === true) return canonicalDaySlots(order.vanId, order.date, halfDaySchedules);
 
-  const interval = workOrderInterval(order, services);
+  const interval = workOrderCapacityInterval(order, services, halfDay);
   if (interval) {
-    return capacityAnchorsForSpan(interval.start, interval.end, halfDay);
+    return capacitySlotsForInterval(text(order.time), interval.durationMinutes, halfDay);
   }
 
   // Historical fallback only: older records may contain an explicit lock/start array
