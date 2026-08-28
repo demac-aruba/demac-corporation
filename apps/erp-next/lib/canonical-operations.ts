@@ -49,6 +49,7 @@ export type CanonicalVan = {
 export type CanonicalDailyVanAssignment = {
   id: string;
   date?: string;
+  originalDate?: string;
   vanId?: string;
   driverStaffId?: string;
   helperStaffId?: string;
@@ -59,6 +60,9 @@ export type CanonicalDailyVanAssignment = {
   createdByUserId?: string;
   createdByName?: string;
   createdAt?: string;
+  cancelledAt?: string;
+  cancelledByUserId?: string;
+  cancelledByName?: string;
   updatedAt?: string;
 };
 
@@ -182,7 +186,9 @@ function profileUnavailable(profile: CanonicalStaffProfile | undefined, dateKey:
 
 export function resolveCanonicalCrew(van: CanonicalVan, dateKey: string, state: CanonicalOperationsState) {
   const vanId = canonicalVanId(van.id, state.vans);
-  const daily = state.dailyVanAssignments.find((assignment) => canonicalVanId(assignment.vanId, state.vans) === vanId && assignment.date === dateKey);
+  const daily = state.dailyVanAssignments.find((assignment) => assignment.status !== 'Cancelled'
+    && canonicalVanId(assignment.vanId, state.vans) === vanId
+    && assignment.date === dateKey);
   const driverId = text(daily?.driverStaffId || van.responsibleStaffId);
   const helperId = text(daily?.helperStaffId || van.regularHelperId);
   const additionalHelperId = text(daily?.additionalHelperStaffId || van.additionalHelperId);
@@ -270,7 +276,9 @@ export async function loadCanonicalOperationsState(): Promise<CanonicalOperation
   return {
     staffProfiles: [...staffProfiles].sort((a, b) => staffDisplayName(a).localeCompare(staffDisplayName(b))),
     vans: [...vans].filter((van) => van.active !== false).sort((a, b) => canonicalVanId(a.id, vans).localeCompare(canonicalVanId(b.id, vans))),
-    dailyVanAssignments: [...dailyVanAssignments].sort((a, b) => `${b.date ?? ''}-${a.vanId ?? ''}`.localeCompare(`${a.date ?? ''}-${b.vanId ?? ''}`)),
+    dailyVanAssignments: [...dailyVanAssignments]
+      .filter((assignment) => assignment.status !== 'Cancelled')
+      .sort((a, b) => `${b.date ?? ''}-${a.vanId ?? ''}`.localeCompare(`${a.date ?? ''}-${b.vanId ?? ''}`)),
     vanMaintenanceLogs: [...vanMaintenanceLogs].sort((a, b) => `${b.date ?? ''}-${b.updatedAt ?? ''}`.localeCompare(`${a.date ?? ''}-${a.updatedAt ?? ''}`)),
     staffAbsences: [...staffAbsences].filter((absence) => absence.active !== false).sort((a, b) => String(b.fromDate ?? '').localeCompare(String(a.fromDate ?? ''))),
     vanHalfDaySchedules: [...vanHalfDaySchedules].filter((schedule) => schedule.active !== false).sort((a, b) => canonicalVanId(a.vanId, vans).localeCompare(canonicalVanId(b.vanId, vans))),
