@@ -2,6 +2,7 @@ const { getAuth } = require("firebase-admin/auth");
 const { getFirestore } = require("firebase-admin/firestore");
 const { onRequest } = require("firebase-functions/v2/https");
 const { cleanText } = require("./bookingAuthorityCore");
+const { compactObject } = require("./bookingAuthorityFirestore");
 const { AFTER_HOURS_KIND } = require("./bookingAfterHours");
 const { canonicalVanIdFromValue } = require("./bookingVanIdentity");
 const { TIME_ZONE } = require("./operatingCalendarService");
@@ -181,7 +182,7 @@ function buildTimesheet({ existing = {}, staff, workOrder, completion, overtimeM
   const nextClockOut = sameDayCompletion ? laterClockTime(existing.clockOutTime, completion.time) : existing.clockOutTime;
   const now = completion.iso;
 
-  return {
+  return compactObject({
     ...existing,
     id: `${staff.id}_${workDate}`,
     payrollPeriodId: payrollPeriodForDate(workDate),
@@ -216,7 +217,7 @@ function buildTimesheet({ existing = {}, staff, workOrder, completion, overtimeM
     updatedAt: now,
     updatedByUserId: cleanText(actor?.uid || actor?.id, 160) || "work-order-application",
     updatedByName: cleanText(actor?.name || actor?.email, 180) || "Work Order Application",
-  };
+  });
 }
 
 function createWorkOrderApplicationService({ db, clock = () => new Date() } = {}) {
