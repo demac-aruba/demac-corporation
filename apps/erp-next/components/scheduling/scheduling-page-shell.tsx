@@ -1,5 +1,6 @@
 'use client';
 
+import { AfterHoursEmergencyPanel } from './after-hours-emergency-panel';
 import { BrowserDispatchOperations } from './browser-dispatch-operations';
 import { BrowserDispatchReadinessBoard } from './browser-dispatch-readiness-board';
 import { LiveSchedulingOverview } from './live-scheduling-overview';
@@ -16,7 +17,7 @@ type Props = {
 export function SchedulingPageShell({ view = 'schedule' }: Props) {
   return (
     <div className={`${styles.shell} ${view === 'schedule' ? styles.scheduleCompact : ''} ${readableStyles.readable}`}>
-      {view === 'schedule' ? <><VanScheduleManualSend /><LiveSchedulingOverview /></> : null}
+      {view === 'schedule' ? <><VanScheduleManualSend /><LiveSchedulingOverview /><AfterHoursEmergencyPanel /></> : null}
       {view === 'dispatch' ? <BrowserDispatchOperations /> : null}
       {view === 'readiness' ? <BrowserDispatchReadinessBoard /> : null}
     </div>
