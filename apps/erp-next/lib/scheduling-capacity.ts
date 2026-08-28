@@ -99,12 +99,8 @@ function restrictionAllowsMorningStart(request: BookingRequest) {
 
 function addSameSiteWorkingMinutes(quantity: number, settings: SchedulingSettings) {
   const start = timeToMinutes('08:30');
-  const lunchStart = timeToMinutes(settings.lunchStart);
-  const lunchEnd = timeToMinutes(settings.lunchEnd);
   const minutesNeeded = quantity * getPresetDurationMinutes('standard_service', settings);
-  const beforeLunch = lunchStart - start;
-  if (minutesNeeded <= beforeLunch) return minutesToTime(start + minutesNeeded);
-  return minutesToTime(lunchEnd + (minutesNeeded - beforeLunch));
+  return minutesToTime(start + minutesNeeded);
 }
 
 function conflictsWithSpan(jobs: DispatchJob[], vanId: string, start: string, end: string) {
@@ -127,20 +123,23 @@ export function findExtendedSameSitePlan(request: BookingRequest, jobs: Dispatch
   const end = addSameSiteWorkingMinutes(request.quantity, settings);
   const latestEnd = timeToMinutes(settings.workdayEnd) - settings.routeMarginMinutes;
   if (timeToMinutes(end) > latestEnd) return [];
+  const fullDayCapacity = request.quantity === settings.maxStandardUnitsSameSiteSingleVan;
+  const capacityEnd = fullDayCapacity ? minutesToTime(latestEnd) : end;
 
   return vans
-    .filter((van) => van.active && !conflictsWithSpan(jobs, van.id, start, end))
+    .filter((van) => van.active && !conflictsWithSpan(jobs, van.id, start, capacityEnd))
     .map((van, index) => ({
       vanId: van.id,
       start,
       end,
-      segment: 'full_day' as const,
+      segment: timeToMinutes(end) > 13 * 60 ? 'full_day' as const : 'am' as const,
       sector: request.sector,
       score: 132 - index * 4,
       reasons: [
-        `${request.quantity} same-site services planned continuously across the operational day`,
+        `${request.quantity} same-site services planned as continuous elapsed work`,
         `Configured standard-service duration: ${getPresetDurationMinutes('standard_service', settings)} minutes per unit`,
-        'Lunch is skipped as working time rather than counted as customer-service duration',
+        'Lunch is not a sellable start; a long job may span it without adding a synthetic hour to the appointment',
+        ...(fullDayCapacity ? ['Seven-unit same-property policy still reserves the primary Van for the full operating day'] : []),
         'No property-to-property transit is required',
       ],
       requiresSupportVan: false,
@@ -162,11 +161,9 @@ export function findCandidateSlotsForDay(day: OperationalDay, request: BookingRe
 function weekdayWorkingWindowAllows(start: string, end: string, settings: SchedulingSettings) {
   const startMinutes = timeToMinutes(start);
   const endMinutes = timeToMinutes(end);
-  const lunchStart = timeToMinutes(settings.lunchStart);
-  const lunchEnd = timeToMinutes(settings.lunchEnd);
+  const dayStart = timeToMinutes(settings.workdayStart);
   const dayEnd = timeToMinutes(settings.workdayEnd) - settings.routeMarginMinutes;
-  if (startMinutes < 12 * 60) return endMinutes <= lunchStart - settings.routeMarginMinutes;
-  return startMinutes >= lunchEnd && endMinutes <= dayEnd;
+  return startMinutes >= dayStart && endMinutes <= dayEnd;
 }
 
 function routeRemainsCompatible(jobs: DispatchJob[], movedSupport: DispatchJob) {
@@ -209,7 +206,7 @@ export function findSupportReflowPlansForDay(
       if (conflictsWithSpan(withoutSupport, supportJob.vanId, alternateStart, alternateEnd)) continue;
 
       const toSegment: HalfDay = timeToMinutes(alternateStart) < 12 * 60 ? 'am' : 'pm';
-      const movedSupport: DispatchJob = { ...supportJob, start: alternateStart, end: alternateEnd, segment: toSegment };
+      const movedSupport: DispatchJob = { ...supportJob, start: alternateStart, end: alternateEnd, segment: timeToMinutes(alternateStart) < 12 * 60 && timeToMinutes(alternateEnd) > 13 * 60 ? 'full_day' : toSegment };
       const simulatedJobs = [...withoutSupport, movedSupport];
       if (!routeRemainsCompatible(simulatedJobs, movedSupport)) continue;
 

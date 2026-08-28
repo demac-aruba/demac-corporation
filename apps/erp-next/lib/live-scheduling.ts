@@ -27,7 +27,6 @@ const LEGACY_BROWSER_PRESETS = new Set<WorkPresetId>([
   'other',
 ]);
 
-const CANONICAL_VAN_IDS = new Set(['VAN-1', 'VAN-2', 'VAN-3', 'VAN-4']);
 const ADHOC_SUPPORT_KIND = 'adhoc_rescue';
 
 type LiveWorkItem = {
@@ -142,17 +141,17 @@ function canonicalVanIdFromValue(value: unknown) {
   const raw = text(value);
   if (!raw) return '';
   const upper = raw.toUpperCase().replaceAll('_', '-').replace(/\s+/g, '-');
-  if (CANONICAL_VAN_IDS.has(upper)) return upper;
+  if (/^VAN-\d+$/.test(upper)) return upper;
   const compact = raw.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const match = compact.match(/^(?:van|v)([1-4])$/);
-  return match ? `VAN-${match[1]}` : '';
+  const match = compact.match(/^(?:van|v)(\d+)$/);
+  return match ? `VAN-${Number(match[1])}` : '';
 }
 
 function canonicalVanIdFromRecord(van: LiveVan | undefined) {
   if (!van) return '';
   const numericCandidates = [van.number, van.vanNumber, van.unitNumber]
     .map((value) => Number(value))
-    .filter((value) => Number.isInteger(value) && value >= 1 && value <= 4);
+    .filter((value) => Number.isInteger(value) && value >= 1);
   if (numericCandidates.length) return `VAN-${numericCandidates[0]}`;
   for (const candidate of [van.id, van.code, van.name, van.label]) {
     const canonical = canonicalVanIdFromValue(candidate);
@@ -266,10 +265,20 @@ function assignmentEnd(
 ) {
   const start = text(order.time) || '08:30';
 
-  // Canonical capacity is the authority. Older records can contain a stale
-  // appointmentEndTime generated with the regular-day slot map even though their
-  // scheduledSlots correctly reflect a half-day Van. Prefer the reserved slots so
-  // LIVE heals those records at projection time instead of displaying fake capacity.
+  // Canonical appointment duration is elapsed work time. Lunch is not a sellable
+  // appointment start, but it must never add a synthetic hour to a long job.
+  const duration = positiveInteger(order.appointmentDurationMinutes ?? order.duration, 0);
+  if (duration > 0) return minutesToTime(timeToMinutes(start) + duration);
+
+  const workItemDuration = Array.isArray(order.appointmentWorkItems)
+    ? order.appointmentWorkItems.reduce((sum, item) => sum + Math.max(0, Number(item.durationMinutes) || 0), 0)
+    : 0;
+  if (workItemDuration > 0) return minutesToTime(timeToMinutes(start) + workItemDuration);
+
+  const explicit = validTime(order.appointmentEndTime);
+  if (explicit && timeToMinutes(explicit) > timeToMinutes(start)) return explicit;
+
+  // Compatibility fallback only for historical records that predate duration/end snapshots.
   const slots = normalizedSlots(order.scheduledSlots);
   if (slots.length) return minutesToTime(timeToMinutes(slots[slots.length - 1]) + 60);
 
@@ -284,12 +293,7 @@ function assignmentEnd(
     );
   }
 
-  const explicit = validTime(order.appointmentEndTime);
-  if (explicit && timeToMinutes(explicit) > timeToMinutes(start)) return explicit;
-
-  // Final compatibility fallback for historical records that predate slot snapshots.
-  const duration = positiveInteger(order.appointmentDurationMinutes ?? order.duration, 60);
-  return minutesToTime(timeToMinutes(start) + duration);
+  return minutesToTime(timeToMinutes(start) + 60);
 }
 
 function daySegment(start: string, end: string): DaySegment {

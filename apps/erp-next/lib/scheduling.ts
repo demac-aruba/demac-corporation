@@ -207,6 +207,10 @@ export function halfDayForTime(value: string): HalfDay {
   return timeToMinutes(value) < 12 * 60 ? 'am' : 'pm';
 }
 
+function segmentForSpan(start: string, end: string): DaySegment {
+  return timeToMinutes(start) < 12 * 60 && timeToMinutes(end) > 13 * 60 ? 'full_day' : halfDayForTime(start);
+}
+
 export function getPreset(presetId: WorkPresetId) {
   return defaultWorkPresets.find((preset) => preset.id === presetId) ?? defaultWorkPresets[defaultWorkPresets.length - 1];
 }
@@ -276,12 +280,11 @@ function restrictionAllows(start: string, restriction?: BookingRestriction) {
   return true;
 }
 
+/** Lunch is protected by the absence of sellable starts during lunch, not by extending work duration. */
 function fitsWorkingWindow(start: number, end: number, settings: SchedulingSettings) {
-  const lunchStart = timeToMinutes(settings.lunchStart);
-  const lunchEnd = timeToMinutes(settings.lunchEnd);
+  const dayStart = timeToMinutes(settings.workdayStart);
   const dayEnd = timeToMinutes(settings.workdayEnd) - settings.routeMarginMinutes;
-  if (start < 12 * 60) return end <= lunchStart - settings.routeMarginMinutes;
-  return start >= lunchEnd && end <= dayEnd;
+  return start >= dayStart && end <= dayEnd;
 }
 
 function scoreCandidate(args: { anchor?: DispatchJob; candidateSector: string; start: string; existingCount: number; isFirstJob: boolean }) {
@@ -314,23 +317,8 @@ function spanIsFree(vanId: string, start: string, end: string, jobs: DispatchJob
   return !jobs.some((job) => job.vanId === vanId && job.status !== 'cancelled' && overlaps(startMinutes, endMinutes, job));
 }
 
-function workingEndAfter(start: string, workMinutes: number, settings: SchedulingSettings) {
-  let cursor = timeToMinutes(start);
-  let remaining = Math.max(0, workMinutes);
-  const lunchStart = timeToMinutes(settings.lunchStart);
-  const lunchEnd = timeToMinutes(settings.lunchEnd);
-
-  if (cursor < lunchStart) {
-    const availableBeforeLunch = lunchStart - cursor;
-    const used = Math.min(remaining, availableBeforeLunch);
-    cursor += used;
-    remaining -= used;
-    if (remaining > 0) cursor = Math.max(cursor, lunchEnd);
-  } else if (cursor >= lunchStart && cursor < lunchEnd) {
-    cursor = lunchEnd;
-  }
-
-  return minutesToTime(cursor + remaining);
+function workingEndAfter(start: string, workMinutes: number, _settings: SchedulingSettings) {
+  return minutesToTime(timeToMinutes(start) + Math.max(0, workMinutes));
 }
 
 function findSupportPlan(request: BookingRequest, jobs: DispatchJob[], vans: VanResource[], settings: SchedulingSettings): CandidateSlot[] {
@@ -361,8 +349,8 @@ function findSupportPlan(request: BookingRequest, jobs: DispatchJob[], vans: Van
           const endMinutes = timeToMinutes(supportEnd);
           if (!fitsWorkingWindow(startMinutes, endMinutes, settings)) continue;
           if (!spanIsFree(supportVan.id, supportStart, supportEnd, jobs)) continue;
-          const supportSegment = halfDayForTime(supportStart);
-          const supportAnchor = getHalfDayAnchor(jobs, supportVan.id, supportSegment);
+          const supportSegment = segmentForSpan(supportStart, supportEnd);
+          const supportAnchor = getHalfDayAnchor(jobs, supportVan.id, supportSegment === 'full_day' ? halfDayForTime(supportStart) : supportSegment);
           if (!sectorsCompatible(supportAnchor?.sector, request.sector)) continue;
           const score = 150
             + (supportAnchor?.sector === request.sector ? 8 : supportAnchor ? 2 : 5)
@@ -377,7 +365,7 @@ function findSupportPlan(request: BookingRequest, jobs: DispatchJob[], vans: Van
             score,
             reasons: [
               `${primaryUnits} units assigned to the primary full-day van`,
-              `${supportUnits} remaining unit${supportUnits === 1 ? '' : 's'} assigned to a compatible ${supportSegment === 'am' ? 'morning' : 'afternoon'} support block`,
+              `${supportUnits} remaining unit${supportUnits === 1 ? '' : 's'} assigned to a compatible ${supportSegment === 'am' ? 'morning' : supportSegment === 'pm' ? 'afternoon' : 'cross-lunch'} support block`,
               'Single customer appointment and communication owner',
             ],
             requiresSupportVan: true,
@@ -434,15 +422,17 @@ export function findCandidateSlots(request: BookingRequest, jobs: DispatchJob[],
       const startMinutes = timeToMinutes(start);
       const endMinutes = startMinutes + duration;
       if (!fitsWorkingWindow(startMinutes, endMinutes, settings)) continue;
-      const segment = halfDayForTime(start);
+      const end = minutesToTime(endMinutes);
+      const segment = segmentForSpan(start, end);
       const vanJobs = jobs.filter((job) => job.vanId === van.id && job.status !== 'cancelled');
       if (vanJobs.some((job) => overlaps(startMinutes, endMinutes, job))) continue;
 
-      const anchor = getHalfDayAnchor(jobs, van.id, segment);
+      const anchorHalfDay = segment === 'full_day' ? halfDayForTime(start) : segment;
+      const anchor = getHalfDayAnchor(jobs, van.id, anchorHalfDay);
       if (!sectorsCompatible(anchor?.sector, request.sector)) continue;
 
       const scored = scoreCandidate({ anchor, candidateSector: request.sector, start, existingCount: vanJobs.length, isFirstJob: !anchor });
-      candidates.push({ vanId: van.id, start, end: minutesToTime(endMinutes), segment, sector: request.sector, score: scored.score, reasons: scored.reasons, requiresSupportVan: false, primaryUnits: request.quantity });
+      candidates.push({ vanId: van.id, start, end, segment, sector: request.sector, score: scored.score, reasons: scored.reasons, requiresSupportVan: false, primaryUnits: request.quantity });
     }
   }
 
