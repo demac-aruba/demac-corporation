@@ -11,12 +11,24 @@ const {
   VAN_SCHEDULE_ACTIONS,
   createVanScheduleCommunicationAuthority,
 } = require("./vanScheduleCommunicationAuthority");
+const { createAfterHoursAuthority } = require("./bookingAfterHours");
 
 const COMMUNICATION_ACTIONS = new Set([
   "get_appointment_communication",
   "update_appointment_communication",
   "send_appointment_communication",
 ]);
+const AFTER_HOURS_ACTIONS = new Set([
+  "create_after_hours_emergency",
+]);
+
+function officeActor(identity = {}) {
+  return {
+    source: "office-scheduling",
+    id: cleanText(identity.uid, 160),
+    name: cleanText(identity.name || identity.email, 160),
+  };
+}
 
 function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
   if (!db || typeof db.collection !== "function") throw new Error("A Firestore-compatible db is required.");
@@ -24,6 +36,7 @@ function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
   const baseApi = createOfficeBookingApi({ db, verifyIdToken });
   const communication = createAppointmentCommunicationAuthority({ db, apiVersion: OFFICE_BOOKING_API_VERSION });
   const vanSchedules = createVanScheduleCommunicationAuthority({ db, apiVersion: OFFICE_BOOKING_API_VERSION });
+  const afterHours = createAfterHoursAuthority({ db });
 
   async function handle(request) {
     if (request.method === "OPTIONS") return { status: 204, body: null };
@@ -31,12 +44,32 @@ function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
     const action = cleanText(request.body?.action, 120);
     const data = request.body?.data || {};
     const legacyGlobalReminderUpdate = action === "update_appointment_communication" && !cleanText(data.recipientId, 180);
-    if ((!COMMUNICATION_ACTIONS.has(action) && !VAN_SCHEDULE_ACTIONS.has(action)) || legacyGlobalReminderUpdate) return baseApi.handle(request);
+    const specialized = COMMUNICATION_ACTIONS.has(action) || VAN_SCHEDULE_ACTIONS.has(action) || AFTER_HOURS_ACTIONS.has(action);
+    if (!specialized || legacyGlobalReminderUpdate) return baseApi.handle(request);
     try {
       const identity = await baseApi.authenticate(request);
-      const result = VAN_SCHEDULE_ACTIONS.has(action)
-        ? await vanSchedules.execute({ action, data, identity })
-        : await communication.execute({ action, data, identity });
+      let result;
+      if (VAN_SCHEDULE_ACTIONS.has(action)) {
+        result = await vanSchedules.execute({ action, data, identity });
+      } else if (AFTER_HOURS_ACTIONS.has(action)) {
+        result = await afterHours.createEmergency({
+          requestId: data.requestId,
+          customerId: data.customerId,
+          propertyId: data.propertyId,
+          presetId: data.presetId,
+          serviceId: data.serviceId,
+          quantity: data.quantity,
+          requestedDate: data.requestedDate,
+          requestedTime: data.requestedTime,
+          requiredVanId: data.requiredVanId,
+          customerFacingDescription: data.customerFacingDescription,
+          technicianInstructions: data.technicianInstructions,
+          recipientSelections: data.recipientSelections,
+          actor: officeActor(identity),
+        });
+      } else {
+        result = await communication.execute({ action, data, identity });
+      }
       return { status: 200, body: result };
     } catch (error) {
       return communicationError(error);
@@ -44,6 +77,7 @@ function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
   }
 
   return {
+    afterHours,
     baseApi,
     communication,
     vanSchedules,
@@ -78,5 +112,6 @@ exports.officeBookingAuthority = onRequest(
   },
 );
 
+module.exports.AFTER_HOURS_ACTIONS = AFTER_HOURS_ACTIONS;
 module.exports.COMMUNICATION_ACTIONS = COMMUNICATION_ACTIONS;
 module.exports.createOfficeBookingAuthorityFacade = createOfficeBookingAuthorityFacade;
