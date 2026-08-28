@@ -83,6 +83,45 @@ No 9,000 BTU installation price is defined in this rule because no approved valu
 - Saved daily assignments and absences override regular van assignments.
 - Work requiring support validates the personnel of every participating van before an option is offered and again before booking.
 
+## Employee work-schedule rules
+
+### ERP-SCHED-001 — Sunday company closure
+
+- Sunday is completely closed for normal employee scheduling.
+- Employee-level custom schedules and Van/team partial-day rules cannot override Sunday closure.
+
+### ERP-SCHED-002 — Normal employee shifts
+
+- Monday through Saturday use the company default schedule unless an active governed override applies.
+- The approved standard shift is 08:00–17:00 with one hour of break, for eight paid work hours.
+- The approved late shift is 09:00–18:00 with one hour of break, for eight paid work hours.
+- An employee custom shift is stored in `employeePayrollSettings` with an effective date.
+
+### ERP-SCHED-003 — Recurring partial day for office staff
+
+- Office, administrative, secretarial and operator employees may have one recurring partial-day weekday from Monday through Saturday.
+- On that day the approved rule is 4 hours physically worked + 4 hours paid free.
+- The free period may be the morning or the afternoon according to the employee schedule.
+
+### ERP-SCHED-004 — Recurring partial day for technical field staff
+
+- Technician/field employees may have one recurring partial-day weekday from Monday through Saturday.
+- On that day the approved rule is 5 hours physically worked + 3 hours paid free.
+- An explicit employee custom schedule may define this rule directly in `employeePayrollSettings`.
+- If no active explicit employee custom schedule exists, the technician inherits the canonical Van/team partial-day rule from `vanHalfDaySchedules`.
+
+### ERP-SCHED-005 — Schedule authority precedence
+
+The employee schedule resolver applies this order without duplicating business logic:
+
+1. Employment start/end lifecycle gate.
+2. Sunday company closure.
+3. Active explicit employee custom schedule in `employeePayrollSettings`.
+4. Technical Van/team partial-day fallback in `vanHalfDaySchedules` when applicable.
+5. Company default schedule.
+
+`staffAbsences` remains the separate authority for dated vacation, sickness and one-off unavailability. A dated absence does not become a recurring weekly schedule rule.
+
 ## Routing rules
 
 ### OPS-ROUTE-001 — Morning route anchor
@@ -179,6 +218,15 @@ Given one property, fourteen units and at least two compatible staffed vans:
 1. The ERP allocates seven units to each van.
 2. Both vans reserve the full day from 8:30 a.m.
 3. The customer still receives one appointment conversation and one confirmation.
+
+### Employee schedule acceptance examples
+
+- Employee start date 2026-08-11; calendar date 2026-08-10 → zero scheduled hours because employment has not begun.
+- Office custom shift 09:00–18:00 with 60-minute break → eight scheduled work hours on a normal day.
+- Office Wednesday partial day with afternoon free → 09:00–13:00 worked + four paid-free hours when the late shift is active.
+- Technician Wednesday partial day with afternoon free → five worked hours + three paid-free hours.
+- Technician with no explicit employee custom schedule → inherits the Van/team partial-day rule.
+- Sunday with any custom employee schedule → company closed, zero scheduled hours.
 
 ### Conversation regression examples
 
