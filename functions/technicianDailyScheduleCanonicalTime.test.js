@@ -7,7 +7,7 @@ const {
   hasCanonicalReservedCapacity,
 } = require("./technicianDailyScheduleService");
 
-test("reserved Booking Authority slots own the technician-visible end even when a stored end is stale", () => {
+test("canonical duration owns technician-visible time even when slot metadata spans the lunch gap", () => {
   const order = {
     date: "2026-08-27",
     vanId: "VAN-1",
@@ -18,11 +18,11 @@ test("reserved Booking Authority slots own the technician-visible end even when 
   };
 
   assert.equal(hasCanonicalReservedCapacity(order), true);
-  assert.equal(canonicalReservedEndTime(order), "16:30");
-  assert.equal(displayedOrderEndTime(order), "16:30");
+  assert.equal(canonicalReservedEndTime(order), "14:30");
+  assert.equal(displayedOrderEndTime(order), "14:30");
 });
 
-test("an explicit stored slot array uses the same canonical slot-span end", () => {
+test("explicit historical slot arrays remain fallback metadata, not the modern timing authority", () => {
   const order = {
     date: "2026-08-27",
     vanId: "VAN-1",
@@ -33,17 +33,17 @@ test("an explicit stored slot array uses the same canonical slot-span end", () =
   };
 
   assert.equal(canonicalReservedEndTime(order), "16:30");
-  assert.equal(displayedOrderEndTime(order), "16:30");
+  assert.equal(displayedOrderEndTime(order), "14:30");
 });
 
-test("half-day capacity uses the canonical half-day slot map instead of the regular-day map", () => {
+test("half-day duration ends at the real elapsed time and remains inside the half-day window", () => {
   const order = {
     date: "2026-08-29",
     vanId: "VAN-1",
     time: "08:30",
     scheduledSlots: 4,
     appointmentDurationMinutes: 240,
-    appointmentEndTime: "14:30",
+    appointmentEndTime: "12:30",
   };
   const halfDaySchedules = [{ vanId: "VAN-1", weekday: 6, active: true }];
 
@@ -51,22 +51,34 @@ test("half-day capacity uses the canonical half-day slot map instead of the regu
   assert.equal(displayedOrderEndTime(order, halfDaySchedules), "12:30");
 });
 
-test("legacy records without reserved capacity keep duration compatibility behavior", () => {
+test("10:30 plus three real hours displays 13:30 and does not add lunch time", () => {
+  const order = {
+    date: "2026-08-28",
+    vanId: "VAN-1",
+    time: "10:30",
+    scheduledSlots: 3,
+    appointmentDurationMinutes: 180,
+    appointmentEndTime: "13:30",
+  };
+  assert.equal(displayedOrderEndTime(order), "13:30");
+});
+
+test("records without duration use a valid stored end before slot metadata", () => {
   const order = {
     time: "10:30",
-    appointmentDurationMinutes: 120,
-    appointmentEndTime: "14:30",
+    appointmentEndTime: "12:30",
+    scheduledSlots: 2,
   };
 
-  assert.equal(hasCanonicalReservedCapacity(order), false);
   assert.equal(displayedOrderEndTime(order), "12:30");
 });
 
-test("full-day same-property legacy records keep the committed schedule end", () => {
+test("full-day capacity policy does not falsify the technician-visible wall-clock end", () => {
   assert.equal(displayedOrderEndTime({
     time: "08:30",
     appointmentDurationMinutes: 360,
-    appointmentEndTime: "16:30",
+    appointmentEndTime: "14:30",
     fullDaySingleProperty: true,
-  }), "16:30");
+    scheduledSlots: 6,
+  }), "14:30");
 });
