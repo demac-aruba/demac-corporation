@@ -1,1 +1,13 @@
-.realVanPhotos :global([class*="vanImage"]){background-image:radial-gradient(circle at 50% 55%,rgba(23,102,215,.06),transparent 68%),url('/fleet/demac-van-real.webp')!important;background-repeat:no-repeat!important;background-position:center!important;background-size:contain!important;background-color:transparent!important}.realVanPhotos :global([class*="vanImage"])>svg{display:none!important}.realVanPhotos :global([class*="vanImage"])>img{position:relative;z-index:1;object-fit:contain!important;background:transparent!important}
+.realVanPhotos :global([aria-label="Van illustration"]) {
+  background-image:
+    radial-gradient(circle at 50% 55%, rgba(23, 102, 215, 0.06), transparent 68%),
+    url('/fleet/demac-van-real.webp');
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+  background-color: transparent;
+}
+
+.realVanPhotos :global([aria-label="Van illustration"]) > svg {
+  display: none;
+}
