@@ -147,10 +147,14 @@ export function buildEmployeeScheduleChanges(input: {
   halfDayStartTime?: string | null;
   halfDayEndTime?: string | null;
   halfDayBreakMinutes?: number;
+  technicalVanAssigned?: boolean;
   now?: string;
 }) {
-  if (isTechnicalEmployee(input.employee)) {
-    throw new Error('Technical recurring schedules are governed by the employee’s Van/team and cannot be saved as an individual payroll schedule.');
+  // Technical employees may only own an individual schedule when the caller has explicitly
+  // confirmed that no canonical Van currently owns their recurring schedule. The safe default
+  // remains rejection so older or incomplete callers cannot bypass Van/team authority.
+  if (isTechnicalEmployee(input.employee) && input.technicalVanAssigned !== false) {
+    throw new Error('Technical recurring schedules are governed by the employee’s Van/team while assigned. An individual schedule may only be saved after confirming the technician has no canonical Van assignment.');
   }
   if (!input.effectiveFrom) throw new Error('Choose when this employee schedule becomes effective.');
   if (input.effectiveUntil && input.effectiveUntil < input.effectiveFrom) {
@@ -242,6 +246,7 @@ export async function saveEmployeeScheduleSettings(input: {
   halfDayStartTime?: string | null;
   halfDayEndTime?: string | null;
   halfDayBreakMinutes?: number;
+  technicalVanAssigned?: boolean;
 }) {
   const id = input.existing?.id ?? input.employee.id;
   const changes = buildEmployeeScheduleChanges(input);
@@ -312,7 +317,7 @@ function normalizeScheduleDay(day: EmployeeScheduleDay): EmployeeScheduleDay {
   if (endMinutes <= startMinutes) throw new Error(`Schedule end time ${endTime} must be after start time ${startTime}.`);
   if (endMinutes - startMinutes - breakMinutes <= 0) throw new Error('Break duration must be shorter than the employee shift.');
   if (endMinutes - startMinutes - breakMinutes !== 480) {
-    throw new Error('DEMAC full office workdays must contain exactly 8 worked hours after the break. Partial-day hours are configured separately and may be shorter.');
+    throw new Error('DEMAC full employee workdays must contain exactly 8 worked hours after the break. Partial-day hours are configured separately and may be shorter.');
   }
   return { startTime, endTime, breakMinutes };
 }
