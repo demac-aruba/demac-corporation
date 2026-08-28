@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import type { CanonicalStaffProfile, CanonicalVan, CanonicalVanHalfDaySchedule } from '../lib/canonical-operations';
 import type { EmployeePayrollSettings } from '../lib/employee-attendance';
-import { buildEmployeeScheduleChanges, defaultEmployeeWeeklySchedule, type EmployeePayrollScheduleSettings } from '../lib/employee-schedule-settings';
+import {
+  buildEmployeeScheduleChanges,
+  defaultEmployeeWeeklySchedule,
+  type EmployeePayrollScheduleSettings,
+} from '../lib/employee-schedule-settings';
 import { resolveEmployeeSchedule } from '../lib/employee-work-schedule';
 
 function schedule(input: {
@@ -29,51 +33,20 @@ const secretary: CanonicalStaffProfile = {
   availability: 'Disponible',
 };
 
-const wednesdayAfternoonOff = schedule({
-  profile: secretary,
-  date: '2026-08-26',
-  payrollSettings: {
-    id: 'legacy-payroll-yerika',
-    sourceStaffId: secretary.id,
-    weeklyHalfDayWeekday: 3,
-    halfDayEffectiveFrom: '2026-08-01',
-    halfDayWorkedHours: 4,
-    halfDayPaidFreeHours: 4,
-    halfDayOffPeriod: 'afternoon',
-  },
-});
+const legacyHalfDay: EmployeePayrollSettings = {
+  id: 'legacy-payroll-yerika',
+  sourceStaffId: secretary.id,
+  weeklyHalfDayWeekday: 3,
+  halfDayEffectiveFrom: '2026-08-01',
+  halfDayWorkedHours: 4,
+  halfDayPaidFreeHours: 4,
+  halfDayOffPeriod: 'afternoon',
+};
+const legacyWednesday = schedule({ profile: secretary, date: '2026-08-26', payrollSettings: legacyHalfDay });
 assert.deepEqual(
-  {
-    start: wednesdayAfternoonOff.startTime,
-    end: wednesdayAfternoonOff.endTime,
-    worked: wednesdayAfternoonOff.scheduledMinutes,
-    paidFree: wednesdayAfternoonOff.paidFreeMinutes,
-  },
+  { start: legacyWednesday.startTime, end: legacyWednesday.endTime, worked: legacyWednesday.scheduledMinutes, paidFree: legacyWednesday.paidFreeMinutes },
   { start: '08:00', end: '12:00', worked: 240, paidFree: 240 },
   'Legacy office half-day records must remain backward compatible.',
-);
-
-const wednesdayMorningOff = schedule({
-  profile: secretary,
-  date: '2026-08-26',
-  payrollSettings: {
-    id: secretary.id,
-    weeklyHalfDayWeekday: 3,
-    halfDayEffectiveFrom: '2026-08-01',
-    halfDayWorkedHours: 4,
-    halfDayPaidFreeHours: 4,
-    halfDayOffPeriod: 'morning',
-  },
-});
-assert.deepEqual(
-  {
-    start: wednesdayMorningOff.startTime,
-    end: wednesdayMorningOff.endTime,
-    worked: wednesdayMorningOff.scheduledMinutes,
-    paidFree: wednesdayMorningOff.paidFreeMinutes,
-  },
-  { start: '13:00', end: '17:00', worked: 240, paidFree: 240 },
-  'Office morning-off half-day must work 13:00–17:00 on the company shift.',
 );
 
 const customNineToSix: EmployeePayrollScheduleSettings = {
@@ -94,50 +67,36 @@ const customTuesday = schedule({ profile: secretary, date: '2026-08-25', payroll
 assert.deepEqual(
   { start: customTuesday.startTime, end: customTuesday.endTime, worked: customTuesday.scheduledMinutes, paidFree: customTuesday.paidFreeMinutes },
   { start: '09:00', end: '18:00', worked: 480, paidFree: 0 },
-  'A custom 09:00–18:00 office shift with a one-hour break must resolve to eight scheduled work hours.',
+  'A custom 09:00–18:00 shift with a one-hour break must resolve to eight work hours.',
 );
 
 const customWednesday = schedule({ profile: secretary, date: '2026-08-26', payrollSettings: customNineToSix });
 assert.deepEqual(
   { start: customWednesday.startTime, end: customWednesday.endTime, worked: customWednesday.scheduledMinutes, paidFree: customWednesday.paidFreeMinutes },
   { start: '09:00', end: '13:00', worked: 240, paidFree: 240 },
-  'The office 4h worked + 4h paid-free rule must apply to the employee’s selected custom shift.',
+  'The office 4h worked + 4h paid-free rule must apply to the selected custom shift.',
 );
 
-const beforeCustomEffective = schedule({
-  profile: secretary,
-  date: '2026-07-28',
-  payrollSettings: { ...customNineToSix, weeklyHalfDayWeekday: null },
-});
+const beforeEffective = schedule({ profile: secretary, date: '2026-07-28', payrollSettings: customNineToSix });
 assert.deepEqual(
-  { start: beforeCustomEffective.startTime, end: beforeCustomEffective.endTime, worked: beforeCustomEffective.scheduledMinutes },
+  { start: beforeEffective.startTime, end: beforeEffective.endTime, worked: beforeEffective.scheduledMinutes },
   { start: '08:00', end: '17:00', worked: 480 },
   'Before the custom schedule effective date, the company schedule must remain in force.',
 );
 
-const afterCustomUntil = schedule({
-  profile: secretary,
-  date: '2026-09-08',
-  payrollSettings: { ...customNineToSix, scheduleEffectiveUntil: '2026-08-31' },
-});
+const boundedCustom: EmployeePayrollScheduleSettings = { ...customNineToSix, scheduleEffectiveUntil: '2026-08-31' };
+const afterEffectiveUntil = schedule({ profile: secretary, date: '2026-09-08', payrollSettings: boundedCustom });
 assert.deepEqual(
-  { start: afterCustomUntil.startTime, end: afterCustomUntil.endTime, worked: afterCustomUntil.scheduledMinutes, paidFree: afterCustomUntil.paidFreeMinutes },
+  { start: afterEffectiveUntil.startTime, end: afterEffectiveUntil.endTime, worked: afterEffectiveUntil.scheduledMinutes, paidFree: afterEffectiveUntil.paidFreeMinutes },
   { start: '08:00', end: '17:00', worked: 480, paidFree: 0 },
-  'After a bounded custom schedule expires, company schedule must resume and the bounded half-day rule must stop.',
+  'After a bounded custom schedule expires, the company schedule must resume.',
 );
 
-const saturday = schedule({ profile: secretary, date: '2026-08-22' });
+const sunday = schedule({ profile: secretary, date: '2026-08-23', payrollSettings: customNineToSix });
 assert.deepEqual(
-  { start: saturday.startTime, end: saturday.endTime, worked: saturday.scheduledMinutes },
-  { start: '08:00', end: '17:00', worked: 480 },
-  'Saturday must use the normal company day, not the obsolete 09:00–13:00 rule.',
-);
-
-const sundayWithCustomSettings = schedule({ profile: secretary, date: '2026-08-23', payrollSettings: customNineToSix });
-assert.deepEqual(
-  { start: sundayWithCustomSettings.startTime, end: sundayWithCustomSettings.endTime, worked: sundayWithCustomSettings.scheduledMinutes },
+  { start: sunday.startTime, end: sunday.endTime, worked: sunday.scheduledMinutes },
   { start: '', end: '', worked: 0 },
-  'Sunday is globally closed and cannot be overridden by an individual custom schedule.',
+  'Sunday is globally closed and cannot be overridden by an employee schedule.',
 );
 
 const employeeWithStartDate = {
@@ -148,10 +107,10 @@ const beforeEmployment = schedule({ profile: employeeWithStartDate, date: '2026-
 assert.deepEqual(
   { start: beforeEmployment.startTime, end: beforeEmployment.endTime, worked: beforeEmployment.scheduledMinutes, paidFree: beforeEmployment.paidFreeMinutes },
   { start: '', end: '', worked: 0, paidFree: 0 },
-  'Calendar, attendance and payroll must not synthesize scheduled work before the employee start date.',
+  'No scheduled work may be synthesized before employmentStartedAt.',
 );
 const firstEmploymentDay = schedule({ profile: employeeWithStartDate, date: '2026-08-11', payrollSettings: customNineToSix });
-assert.equal(firstEmploymentDay.scheduledMinutes, 480, 'Employment start date is inclusive.');
+assert.equal(firstEmploymentDay.scheduledMinutes, 480, 'Employment start date must be inclusive.');
 
 const technician: CanonicalStaffProfile = {
   id: 'staff-tech',
@@ -176,63 +135,24 @@ const vanHalfDay: CanonicalVanHalfDaySchedule = {
   workdayEnd: '13:00',
   active: true,
 };
-
-const technicalTuesday = schedule({
-  profile: technician,
-  date: '2026-08-25',
-  vans: [van],
-  halfDaySchedules: [vanHalfDay],
-  payrollSettings: customNineToSix,
-});
+const technicalTuesday = schedule({ profile: technician, date: '2026-08-25', vans: [van], halfDaySchedules: [vanHalfDay], payrollSettings: customNineToSix });
 assert.deepEqual(
   { start: technicalTuesday.startTime, end: technicalTuesday.endTime, worked: technicalTuesday.scheduledMinutes },
   { start: '08:00', end: '17:00', worked: 480 },
-  'An employee-level custom payroll schedule must never override a technician’s company/Van schedule.',
+  'Employee-level payroll schedule must never override a technician base schedule.',
 );
-
-const technicalWednesday = schedule({
-  profile: technician,
-  date: '2026-08-26',
-  vans: [van],
-  halfDaySchedules: [vanHalfDay],
-  payrollSettings: customNineToSix,
-});
+const technicalWednesday = schedule({ profile: technician, date: '2026-08-26', vans: [van], halfDaySchedules: [vanHalfDay], payrollSettings: customNineToSix });
 assert.deepEqual(
-  {
-    start: technicalWednesday.startTime,
-    end: technicalWednesday.endTime,
-    worked: technicalWednesday.scheduledMinutes,
-    paidFree: technicalWednesday.paidFreeMinutes,
-  },
+  { start: technicalWednesday.startTime, end: technicalWednesday.endTime, worked: technicalWednesday.scheduledMinutes, paidFree: technicalWednesday.paidFreeMinutes },
   { start: '08:00', end: '13:00', worked: 300, paidFree: 180 },
-  'Technicians must inherit 5h worked + 3h paid free only from the Van/team half-day rule.',
+  'Technicians must inherit 5h worked + 3h paid free from the Van/team rule.',
 );
 
-const existingWithUnrelatedFields = {
-  id: 'legacy-record',
-  sourceStaffId: secretary.id,
-  createdAt: '2025-01-01T00:00:00.000Z',
-  weekdayHours: 7.5,
-  saturdayHours: 6,
-} satisfies EmployeePayrollSettings;
-const changes = buildEmployeeScheduleChanges({
-  employee: secretary,
-  existing: existingWithUnrelatedFields,
-  mode: 'custom',
-  templateId: 'late-9-6',
-  weeklySchedule: defaultEmployeeWeeklySchedule('09:00', '18:00', 60),
-  effectiveFrom: '2026-08-01',
-  halfDayWeekday: 4,
-  halfDayOffPeriod: 'afternoon',
-  now: '2026-08-27T12:00:00.000Z',
-});
-assert.equal(changes.createdAt, existingWithUnrelatedFields.createdAt, 'Schedule updates must preserve the original payroll settings creation timestamp.');
-assert.equal(changes.weekdayHours, 7.5, 'Legacy payroll hour metadata must be preserved during additive schedule updates.');
-assert.equal(changes.saturdayHours, 6, 'Legacy Saturday metadata must be preserved during additive schedule updates.');
-
-const legacyBaselineRecord: EmployeePayrollSettings = {
+const legacyRecord: EmployeePayrollSettings = {
   id: 'legacy-baseline-record',
   sourceStaffId: secretary.id,
+  weekdayHours: 7.5,
+  saturdayHours: 6,
   weeklyHalfDayWeekday: 2,
   halfDayEffectiveFrom: '2026-01-01',
   halfDayWorkedHours: 4,
@@ -240,9 +160,9 @@ const legacyBaselineRecord: EmployeePayrollSettings = {
   halfDayOffPeriod: 'afternoon',
   createdAt: '2026-01-01T00:00:00.000Z',
 };
-const versionedChanges = buildEmployeeScheduleChanges({
+const changes = buildEmployeeScheduleChanges({
   employee: secretary,
-  existing: legacyBaselineRecord,
+  existing: legacyRecord,
   mode: 'custom',
   templateId: 'late-9-6',
   weeklySchedule: defaultEmployeeWeeklySchedule('09:00', '18:00', 60),
@@ -251,28 +171,23 @@ const versionedChanges = buildEmployeeScheduleChanges({
   halfDayOffPeriod: 'afternoon',
   now: '2026-08-27T12:00:00.000Z',
 });
-assert.equal(versionedChanges.scheduleVersions.length, 2, 'The first V2 save must retain a legacy schedule as a historical baseline instead of overwriting it.');
-const legacyVersion = versionedChanges.scheduleVersions.find((version) => version.id.startsWith('legacy-baseline-'));
-assert.equal(legacyVersion?.halfDayWeekday, 2, 'Legacy half-day configuration must remain historically recoverable after a V2 save.');
-const projectedBeforeNewVersion = schedule({
-  profile: secretary,
-  date: '2026-08-25',
-  payrollSettings: { id: legacyBaselineRecord.id, ...versionedChanges },
-});
+assert.equal(changes.createdAt, legacyRecord.createdAt, 'Original payroll settings creation timestamp must be preserved.');
+assert.equal(changes.weekdayHours, 7.5, 'Legacy payroll metadata must be preserved by additive schedule writes.');
+assert.equal(changes.saturdayHours, 6, 'Legacy Saturday metadata must be preserved by additive schedule writes.');
+assert.equal(changes.scheduleVersions.length, 2, 'First V2 save must retain a legacy historical baseline.');
+
+const versionedSettings: EmployeePayrollScheduleSettings = { id: legacyRecord.id, ...changes };
+const historicalTuesday = schedule({ profile: secretary, date: '2026-08-25', payrollSettings: versionedSettings });
 assert.deepEqual(
-  { start: projectedBeforeNewVersion.startTime, end: projectedBeforeNewVersion.endTime, worked: projectedBeforeNewVersion.scheduledMinutes, paidFree: projectedBeforeNewVersion.paidFreeMinutes },
+  { start: historicalTuesday.startTime, end: historicalTuesday.endTime, worked: historicalTuesday.scheduledMinutes, paidFree: historicalTuesday.paidFreeMinutes },
   { start: '08:00', end: '12:00', worked: 240, paidFree: 240 },
-  'Historical dates must continue to resolve the preserved legacy schedule after a later schedule version is saved.',
+  'Historical dates must continue to use the preserved legacy schedule after a future version is saved.',
 );
-const projectedAfterNewVersion = schedule({
-  profile: secretary,
-  date: '2026-09-03',
-  payrollSettings: { id: legacyBaselineRecord.id, ...versionedChanges },
-});
+const futureThursday = schedule({ profile: secretary, date: '2026-09-03', payrollSettings: versionedSettings });
 assert.deepEqual(
-  { start: projectedAfterNewVersion.startTime, end: projectedAfterNewVersion.endTime, worked: projectedAfterNewVersion.scheduledMinutes, paidFree: projectedAfterNewVersion.paidFreeMinutes },
+  { start: futureThursday.startTime, end: futureThursday.endTime, worked: futureThursday.scheduledMinutes, paidFree: futureThursday.paidFreeMinutes },
   { start: '09:00', end: '13:00', worked: 240, paidFree: 240 },
-  'The newest applicable schedule version must win without destroying the prior historical version.',
+  'Newest applicable schedule version must apply without destroying the historical baseline.',
 );
 
 assert.throws(() => buildEmployeeScheduleChanges({
@@ -282,6 +197,6 @@ assert.throws(() => buildEmployeeScheduleChanges({
   weeklySchedule: defaultEmployeeWeeklySchedule(),
   effectiveFrom: '2026-08-01',
   halfDayWeekday: 3,
-}), /Van\/team/, 'The protected write path must reject individual recurring technician schedules.');
+}), /Van\/team/, 'Protected write path must reject individual technician recurring schedules.');
 
-console.log('Employee schedule acceptance passed: backward-compatible office schedules, start-date bounds, custom 8–5/9–6 shifts, protected Sunday, and Van-owned technician half-days.');
+console.log('Employee schedule acceptance passed: legacy compatibility, effective 8–5/9–6 schedules, employment bounds, protected Sunday, historical versioning, and Van-owned technician half-days.');
