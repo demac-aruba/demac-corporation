@@ -114,13 +114,26 @@ function projectedOrderEndMinutes(order) {
   return start === null ? null : start + orderDurationMinutes(order);
 }
 
+function hasCanonicalReservedCapacity(order) {
+  if (Array.isArray(order?.scheduledSlots)) return order.scheduledSlots.length > 0;
+  const slots = Number(order?.scheduledSlots);
+  return Number.isFinite(slots) && slots > 0;
+}
+
 function displayedOrderEndTime(order) {
-  if (order?.fullDaySingleProperty === true && normalizedText(order?.appointmentEndTime)) {
-    return normalizedText(order.appointmentEndTime);
-  }
+  const canonicalEnd = normalizedText(order?.appointmentEndTime);
+
+  // Booking Authority persists both reserved capacity (`scheduledSlots`) and the
+  // committed assignment end. When those reservation fields exist, the technician
+  // schedule must display that committed schedule span instead of recomputing a
+  // different end from service-duration minutes. Duration remains a compatibility
+  // fallback for older records and is still used independently by lunch planning.
+  if (hasCanonicalReservedCapacity(order) && canonicalEnd) return canonicalEnd;
+  if (order?.fullDaySingleProperty === true && canonicalEnd) return canonicalEnd;
+
   const projected = projectedOrderEndMinutes(order);
   if (projected !== null) return minutesToTime(projected);
-  return normalizedText(order?.appointmentEndTime);
+  return canonicalEnd;
 }
 
 function technicianInstructions(appointment, order) {
@@ -510,6 +523,7 @@ module.exports.formatScheduleDate = formatScheduleDate;
 module.exports.geographicDistrict = geographicDistrict;
 module.exports.geographicZone = geographicZone;
 module.exports.groupConfigForVan = groupConfigForVan;
+module.exports.hasCanonicalReservedCapacity = hasCanonicalReservedCapacity;
 module.exports.minutesToTime = minutesToTime;
 module.exports.orderDurationMinutes = orderDurationMinutes;
 module.exports.planLunchBreak = planLunchBreak;
