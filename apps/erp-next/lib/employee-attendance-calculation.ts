@@ -133,24 +133,27 @@ export function calculateAttendanceVariance(input: {
   const rawOvertimeMinutes = earlyStartMinutes + lateFinishMinutes + unusedBreakMinutes;
   const overtimeMinutes = Math.min(workedMinutesValue, rawOvertimeMinutes);
 
+  // Missing-time segments are payroll facts in their own right, so their persisted
+  // minute totals must reconcile exactly to the aggregate missing scheduled work.
+  // Allocate the bounded schedule budget chronologically across late arrival, early
+  // departure, then extended break; no combination can exceed scheduledMinutes.
   const rawLateArrivalMinutes = actualStart > scheduleStart
     ? Math.max(0, Math.min(actualStart, scheduleEnd) - scheduleStart)
     : 0;
+  const lateArrivalMinutes = Math.min(schedule.scheduledMinutes, rawLateArrivalMinutes);
+  const remainingAfterLateArrival = Math.max(0, schedule.scheduledMinutes - lateArrivalMinutes);
+
   const rawEarlyDepartureMinutes = actualEnd < scheduleEnd
     ? Math.max(0, scheduleEnd - Math.max(actualEnd, scheduleStart))
     : 0;
-  const lateArrivalMinutes = Math.min(schedule.scheduledMinutes, rawLateArrivalMinutes);
-  const earlyDepartureMinutes = Math.min(schedule.scheduledMinutes, rawEarlyDepartureMinutes);
-  const missingBeforeBreak = Math.min(schedule.scheduledMinutes, lateArrivalMinutes + earlyDepartureMinutes);
-  const remainingScheduledMinutes = Math.max(0, schedule.scheduledMinutes - missingBeforeBreak);
+  const earlyDepartureMinutes = Math.min(remainingAfterLateArrival, rawEarlyDepartureMinutes);
+  const remainingAfterClockGaps = Math.max(0, remainingAfterLateArrival - earlyDepartureMinutes);
+
   const extendedBreakMinutes = Math.min(
-    remainingScheduledMinutes,
+    remainingAfterClockGaps,
     Math.max(0, actualBreakMinutes - expectedBreakMinutes),
   );
-  const missingScheduledMinutes = Math.min(
-    schedule.scheduledMinutes,
-    missingBeforeBreak + extendedBreakMinutes,
-  );
+  const missingScheduledMinutes = lateArrivalMinutes + earlyDepartureMinutes + extendedBreakMinutes;
 
   const missingSegments: DetectedAttendanceException[] = [];
   if (lateArrivalMinutes > 0) {
