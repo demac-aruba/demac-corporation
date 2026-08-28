@@ -22,7 +22,7 @@ function createCommunicationDb({ reminderStatus = "queued" } = {}) {
       appointmentAssignmentRole: "primary",
       clientId: "client-1",
       propertyId: "property-1",
-      date: "2026-08-24",
+      date: "2099-08-24",
       time: "08:30",
       status: "Programada",
       whatsappNotificationsEnabled: true,
