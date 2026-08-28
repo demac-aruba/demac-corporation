@@ -288,9 +288,21 @@ function daySegment(start: string, end: string): DaySegment {
   return timeToMinutes(start) < 12 * 60 ? 'am' : 'pm';
 }
 
+function normalizedStatus(status: unknown) {
+  return text(status).toLowerCase();
+}
+
 function isCancelled(status: unknown) {
-  const normalized = text(status).toLowerCase();
-  return normalized === 'cancelada' || normalized === 'cancelled' || normalized === 'canceled';
+  return ['cancelada', 'cancelled', 'canceled'].includes(normalizedStatus(status));
+}
+
+function isTemporaryHold(status: unknown) {
+  return ['reserva temporal', 'temporary_hold', 'temporary hold'].includes(normalizedStatus(status));
+}
+
+function projectedStatus(status: unknown): CalendarDispatchJob['status'] {
+  if (isCancelled(status)) return 'cancelled';
+  return isTemporaryHold(status) ? 'temporary_hold' : 'confirmed';
 }
 
 function cleanCustomerDescription(problem: unknown, fallback: string) {
@@ -352,7 +364,7 @@ function workOrderAssignment(
     vanId: workOrderVanId(order, vans) || 'UNASSIGNED',
     presetId: workOrderPresetId(order),
     quantity: workOrderQuantity(order),
-    status: isCancelled(order.status) ? 'cancelled' : 'confirmed',
+    status: projectedStatus(order.status),
     readiness: 'not_checked',
     isPrimaryAssignment: primary,
     customerCommunicationOwner: primary,
@@ -409,6 +421,7 @@ export function projectLiveSchedulingAppointments(
     const customerFacingDescription = text(primary.customerFacingDescription)
       || cleanCustomerDescription(primary.problem, fallbackDescription);
     const cancelled = activeOrders.length === 0 && assignments.every((assignment) => assignment.status === 'cancelled');
+    const temporaryHold = !cancelled && assignments.some((assignment) => assignment.status === 'temporary_hold');
     const confirmedAt = text(primary.confirmedAt) || text(primary.createdAt);
     const actorLabel = bookingActorLabel(authorityAppointment);
     const durationMinutes = positiveInteger(primary.appointmentDurationMinutes ?? primary.duration, 60);
@@ -444,7 +457,7 @@ export function projectLiveSchedulingAppointments(
       customerPreferredLanguage: text(client?.preferredLanguage) || undefined,
       propertyAddress: text(property?.address) || text(primary.address) || undefined,
       propertyAccessInstructions: text(property?.accessInstructions) || undefined,
-      status: cancelled ? 'cancelled' : 'confirmed',
+      status: cancelled ? 'cancelled' : temporaryHold ? 'temporary_hold' : 'confirmed',
       assignments,
       primaryVanId: primaryAssignment.vanId,
       supportVanId: supportAssignment?.vanId,
@@ -453,7 +466,7 @@ export function projectLiveSchedulingAppointments(
       bookedBySource: text(authorityAppointment?.source) || undefined,
       createdAt: text(authorityAppointment?.createdAtIso) || text(primary.createdAt) || confirmedAt || new Date(0).toISOString(),
       updatedAt: text(authorityAppointment?.updatedAtIso) || text(primary.updatedAt) || undefined,
-      confirmedAt: confirmedAt || undefined,
+      confirmedAt: temporaryHold ? undefined : confirmedAt || undefined,
       workOrderId: primary.id,
       workOrderIds: sorted.map((order) => order.id),
     });
