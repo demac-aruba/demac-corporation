@@ -1,4 +1,4 @@
-# DEMAC Company Rules Registry — Version 2
+# DEMAC Company Rules Registry — Version 3
 
 This registry is the operational reference for the DEMAC ERP and WhatsApp Copilot. Runtime values that may change are stored in Firestore; protected behavior is implemented in versioned code and tested.
 
@@ -90,29 +90,35 @@ No 9,000 BTU installation price is defined in this rule because no approved valu
 Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
 
 - Office/non-technical employees may use the company schedule or an individual effective schedule stored in the existing `employeePayrollSettings` authority.
-- The primary approved individual templates are 08:00–17:00 with a one-hour break and 09:00–18:00 with a one-hour break.
+- The primary approved individual full-day templates are 08:00–17:00 with a one-hour break and 09:00–18:00 with a one-hour break.
 - An office/non-technical full workday must contain exactly eight worked hours after the break.
+- A recurring partial day is configured separately from the full-day shift and therefore is not subject to the eight-hour full-day validation.
 - An individual schedule may have an `effectiveFrom` date and an optional `effectiveUntil` date.
 - Later schedule versions must not retroactively replace the schedule used for earlier payroll, attendance or calendar dates.
 - Migration impact: additive fields only; no production backfill or destructive migration is required.
 
-### OPS-STAFF-SCHEDULE-002 — Office/non-technical recurring half-day
+### OPS-STAFF-SCHEDULE-002 — Office/non-technical recurring partial day
 
-Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
+Owner: DEMAC owner/administrator. Corrected effective rule: 2026-08-27.
 
-- The recurring half-day for office, administration and operator staff belongs to `employeePayrollSettings`.
-- The half-day weekday is employee-specific and may be Monday through Saturday.
-- The approved payroll rule is 4 worked hours + 4 paid-free hours.
-- Morning-off and afternoon-off variants are supported.
-- Existing legacy half-day records without the newer schedule-version fields remain valid and keep their historical behavior.
+- The recurring partial day for office, administration and operator staff belongs to `employeePayrollSettings`.
+- The partial-day weekday is employee-specific and may be Monday through Saturday.
+- The administrator assigns the exact Start, End and optional Break for that employee's recurring partial day.
+- Attendance, calendar and payroll schedule calculations count the resulting actual worked hours only.
+- The system must not add, display or infer a synthetic "paid free" block for the unworked portion of a recurring partial day.
+- Example: 09:00–13:00 with no break = 4 worked hours.
+- Example: 09:00–14:00 with no break = 5 worked hours; the duration is not hard-coded to four hours.
+- Legacy records that contain `halfDayWorkedHours`, `halfDayPaidFreeHours` or morning/afternoon placement metadata remain readable. Their stored metadata is not deleted, but recurring schedule resolution uses worked time only and does not count the legacy paid-free field as scheduled time.
+- Explicit historical timesheet/payroll records are not rewritten by this correction.
 
-### OPS-STAFF-SCHEDULE-003 — Technical recurring half-day
+### OPS-STAFF-SCHEDULE-003 — Technical recurring partial day
 
-Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
+Owner: DEMAC owner/administrator. Corrected effective rule: 2026-08-27.
 
-- A field technician's recurring half-day belongs only to the canonical Van/team through `vanHalfDaySchedules`.
-- The approved technical half-day payroll rule is 5 worked hours + 3 paid-free hours.
-- An employee-level payroll schedule must never override or duplicate the Van/team technical half-day.
+- A field technician's recurring partial day belongs only to the canonical Van/team through `vanHalfDaySchedules`.
+- The Van/team's exact `workdayStart` and `workdayEnd` determine the technician's recurring partial-day worked hours.
+- Only the actual worked window is counted; no synthetic paid-free hours are added.
+- An employee-level payroll schedule must never override or duplicate the Van/team technical partial day.
 
 ### OPS-STAFF-SCHEDULE-004 — Employment-date schedule boundary
 
@@ -211,13 +217,14 @@ Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
 
 ### Employee schedule regression examples
 
-- Existing office employee with a legacy Wednesday half-day → Wednesday resolves to 08:00–12:00 with 4 worked + 4 paid-free hours unless an approved later version applies.
-- Office employee on a 09:00–18:00 schedule with one-hour break → normal day resolves to 8 worked hours.
-- Office employee on a 09:00–18:00 schedule with Wednesday afternoon off → Wednesday resolves to 09:00–13:00 with 4 worked + 4 paid-free hours.
+- Existing office employee with legacy Wednesday partial-day metadata → Wednesday keeps its historical worked window, for example 08:00–12:00, and resolves to 4 worked hours with zero synthetic paid-free schedule hours.
+- Office employee on a 09:00–18:00 schedule with one-hour break → a normal day resolves to 8 worked hours.
+- Office employee on a 09:00–18:00 schedule with Wednesday exact partial day 09:00–13:00 and no break → Wednesday resolves to exactly 4 worked hours.
+- Office employee configured for an exact partial day 09:00–14:00 and no break → that day resolves to exactly 5 worked hours, proving partial duration is administrator-defined rather than hard-coded.
 - Employee whose employment starts on 2026-08-11 → 2026-08-10 resolves to zero synthesized scheduled hours; 2026-08-11 is included.
-- Technician assigned to a Van with Wednesday 08:00–13:00 half-day → Wednesday resolves to 5 worked + 3 paid-free hours even if an employee payroll record contains another schedule.
+- Technician assigned to a Van with Wednesday 08:00–13:00 partial day → Wednesday resolves to 5 worked hours with zero synthetic paid-free schedule hours even if an employee payroll record contains another schedule.
 - Any employee custom schedule on Sunday → Sunday remains closed with zero scheduled hours.
-- Saving a new schedule effective 2026-09-01 on an employee with a legacy schedule → dates before September continue resolving against the preserved legacy schedule version.
+- Saving a new schedule effective 2026-09-01 on an employee with a legacy schedule → dates before September continue resolving against the preserved legacy schedule version; explicit historical records are not deleted or rewritten.
 
 ### Ten standard-service units
 
