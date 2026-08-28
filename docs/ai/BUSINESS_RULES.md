@@ -17,6 +17,8 @@ engineering index; it does not replace that registry.
   and governed multi-van support.
 - `OPS-TEAM-*`: driver authorization, absence, availability, and no simultaneous assignment.
 - `OPS-ROUTE-*`: route anchors and calculated availability precede customer preference.
+- `ERP-SCHED-*`: employee lifecycle dates, Sunday closure, custom shift precedence, recurring
+  partial-day policy, and one governed resolver for calendar/attendance/payroll.
 - `COMMS-*`: current-turn priority, answer-first behavior, natural language, contextual
   option selection, hidden internal van splitting, one confirmation, and no invention.
 
@@ -29,14 +31,22 @@ Ambiguity blocks automation and is escalated to an authorized human.
 
 ## Current operating-calendar ownership
 
-- Sunday is globally closed.
-- Monday through Saturday are normal operational days unless canonical closure or capacity
-  configuration says otherwise.
-- A technical field employee's recurring half-day belongs to the canonical Van/team through
+- `ERP-SCHED-001`: Sunday is globally closed and cannot be overridden by an employee or
+  Van/team schedule.
+- `ERP-SCHED-002`: Monday through Saturday use the normal company schedule unless an active
+  employee custom schedule or governed technical Van/team fallback resolves differently.
+- `ERP-SCHED-003`: an explicit employee custom schedule is persisted in
+  `employeePayrollSettings` and can define an 08:00–17:00 or 09:00–18:00 shift with a
+  one-hour break; DEMAC custom shifts resolve to eight paid work hours after the break.
+- `ERP-SCHED-004`: each custom employee schedule may assign one recurring partial-day
+  weekday from Monday through Saturday. Office/admin/operator policy is 4 worked hours +
+  4 paid-free hours; technician/field policy is 5 worked hours + 3 paid-free hours.
+- `ERP-SCHED-005`: technical field employees with no active explicit employee custom
+  schedule inherit their recurring partial day from the canonical Van/team through
   `vanHalfDaySchedules`.
-- An office/non-technical employee's recurring half-day belongs to
-  `employeePayrollSettings`.
+- `ERP-SCHED-006`: schedule resolution precedence is employment lifecycle → Sunday closure
+  → active employee custom schedule → technical Van/team fallback → company default.
 - `staffAbsences` remains separate and represents dated vacation, sickness, or one-off
-  unavailability; it never becomes a recurring half-day rule.
+  unavailability; it never becomes a recurring partial-day rule.
 - `dailyVanAssignments` is a date-scoped temporary crew assignment/override and does not
   redefine recurring ownership.
