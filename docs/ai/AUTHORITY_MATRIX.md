@@ -15,8 +15,8 @@ provider callbacks, and cached projections are never authority by themselves.
 | Pricing and service duration | Approved company rule/settings hierarchy | Read consumers; authorized settings editor | Rule version, effective date, no AI invention |
 | Employee master identity | `staffProfiles` | Authorized workforce/admin flows | Firebase users remain authentication identities, never a duplicate employee master |
 | Dated staff unavailability | `staffAbsences` | Authorized workforce/operations flows | Vacation, sickness, and one-off dated ranges only |
-| Technical recurring half-day | `vanHalfDaySchedules` for the Van/team | Authorized operations/scheduling flows | Technical staff inherit the Van/team rule; no employee-level duplicate |
-| Office/non-technical recurring half-day and payroll schedule | `employeePayrollSettings` | Authorized workforce/payroll flows | Payroll permission boundary and employee linkage |
+| Employee custom work schedule and recurring partial day | `employeePayrollSettings` through the governed employee schedule settings service | Authorized workforce/payroll flows | Payroll permission boundary, employee linkage, effective date, Sunday closure, one resolver for calendar/attendance/payroll |
+| Technical recurring partial-day fallback | `vanHalfDaySchedules` for the Van/team | Authorized operations/scheduling flows | Used only when a technical employee has no active explicit custom employee schedule; never competes with an active employee override |
 | Temporary crew override | `dailyVanAssignments` | Authorized operations/scheduling flows | Date-scoped override; does not rewrite recurring crew ownership |
 | Commercial Product / Service catalog | `services` | Authorized catalog and operational flows | One canonical commercial catalog; no duplicate Product or Service authority |
 | Sellable Product stock | `commercialProductStock`, including location balances | Warehouse/authorized work-order flows through Firebase `inventoryAuthority` for transactional operations | Atomic validated balance updates, stable Product/location identity, reconciliation and audit |
@@ -35,6 +35,23 @@ provider callbacks, and cached projections are never authority by themselves.
 
 When two sources disagree, do not use recency alone. Prefer the designated authority,
 record the discrepancy, and require reconciliation before a high-impact write.
+
+## Employee schedule boundary
+
+Employee scheduling has one deterministic resolver and the following precedence:
+
+1. Employment lifecycle gates (`employmentStartedAt` / `employmentEndedAt`).
+2. Sunday company closure, which cannot be overridden by an employee or Van/team schedule.
+3. An active explicit custom employee schedule persisted in `employeePayrollSettings`.
+4. For technical/field staff only, `vanHalfDaySchedules` as the inherited recurring
+   partial-day fallback when no explicit employee custom schedule is active.
+5. The company default schedule.
+
+`employeePayrollSettings` is the only employee-level schedule persistence boundary. The
+profile UI, weekly preview, attendance calendar, timesheet calculations, and payroll
+consumers must resolve through the governed schedule service rather than duplicating shift
+or partial-day rules. `vanHalfDaySchedules` remains a team-level operational fallback, not
+a competing employee-level source of truth.
 
 ## Inventory boundary
 
