@@ -4,7 +4,9 @@ const {
   applyRecipientSelections,
   assignmentIdFor,
   contactIdFor,
+  linkedCustomerContactIdFor,
   normalizeContactLink,
+  readDocumentSnapshots,
   resolveAppointmentRecipients,
   writeContactLinks,
 } = require('./customerContactDirectory');
@@ -54,6 +56,58 @@ test('contact identity is customer-scoped and stable', () => {
   const otherCustomer = contactIdFor('client-2', { name: 'Finance', email: 'finance@example.com' });
   assert.equal(first, repeated);
   assert.notEqual(first, otherCustomer);
+});
+
+test('linked-customer contact projection ids are deterministic and customer-scoped', () => {
+  const first = linkedCustomerContactIdFor('client-office', 'client-person');
+  const replay = linkedCustomerContactIdFor('client-office', 'client-person');
+  const otherBusiness = linkedCustomerContactIdFor('client-other-office', 'client-person');
+  assert.equal(first, replay);
+  assert.notEqual(first, otherBusiness);
+});
+
+test('linked-customer links reject a second manual or existing-contact identity source', () => {
+  assert.throws(
+    () => normalizeContactLink({ linkedCustomerId: 'client-person', contactId: 'contact-existing' }, {
+      clientId: 'client-office', propertyId: 'property-office',
+    }),
+    (error) => error.details?.reason === 'ambiguous_contact_identity',
+  );
+  assert.throws(
+    () => normalizeContactLink({
+      linkedCustomerId: 'client-person',
+      contact: { name: 'Stale Person Copy', phone: '+2975601000' },
+    }, { clientId: 'client-office', propertyId: 'property-office' }),
+    (error) => error.details?.reason === 'ambiguous_contact_identity',
+  );
+  assert.throws(
+    () => normalizeContactLink({ linkedCustomerId: 'client-person', contact: {} }, {
+      clientId: 'client-office', propertyId: 'property-office',
+    }),
+    (error) => error.details?.reason === 'ambiguous_contact_identity',
+  );
+  assert.throws(
+    () => normalizeContactLink({
+      contactId: 'contact-existing',
+      contact: { name: 'Ignored duplicate payload', phone: '+2975601000' },
+    }, { clientId: 'client-office', propertyId: 'property-office' }),
+    (error) => error.details?.reason === 'ambiguous_contact_identity',
+  );
+});
+
+test('linked customer profile reads use bounded Firestore batch requests', async () => {
+  const batches = [];
+  const refs = Array.from({ length: 205 }, (_, index) => ({ id: `client-${index}` }));
+  const db = {
+    async getAll(...batch) {
+      batches.push(batch);
+      return batch.map((ref) => documentSnapshot(ref.id, { active: true }));
+    },
+  };
+
+  const snapshots = await readDocumentSnapshots(db, refs);
+  assert.equal(snapshots.length, 205);
+  assert.deepEqual(batches.map((batch) => batch.length), [100, 100, 5]);
 });
 
 test('property assignment ids keep property and all-properties scopes separate', () => {
@@ -140,6 +194,111 @@ test('property-specific assignment overrides all-properties assignment for the s
   assert.equal(maria.sendInvoice, false);
   assert.equal(customer.sendConfirmation, false);
   assert.equal(customer.sendReminder, false);
+});
+
+test('linked customer remains the live identity source for appointment recipients', async () => {
+  const linkedCustomer = {
+    id: 'client-person',
+    name: 'Residential Customer',
+    phone: '+2975601000',
+    whatsapp: '+2975601001',
+    email: 'home@example.com',
+    preferredLanguage: 'English',
+    active: true,
+  };
+  const contactId = linkedCustomerContactIdFor('client-office', linkedCustomer.id);
+  const db = createReadDb({
+    clients: [
+      { id: 'client-office', name: 'Office Systems Aruba', phone: '+2975640000', active: true },
+      linkedCustomer,
+    ],
+    properties: [{ id: 'property-office', clientId: 'client-office', name: 'Office' }],
+    contacts: [{
+      id: contactId,
+      clientId: 'client-office',
+      linkedCustomerId: linkedCustomer.id,
+      identitySource: 'linked_customer',
+      active: true,
+    }],
+    contactPropertyAssignments: [{
+      id: 'assignment-linked',
+      clientId: 'client-office',
+      contactId,
+      propertyId: 'property-office',
+      scope: 'property',
+      role: 'Primary contact',
+      appointmentReminder: true,
+      active: true,
+    }],
+  });
+
+  const first = await resolveAppointmentRecipients(db, { clientId: 'client-office', propertyId: 'property-office' });
+  const firstContact = first.find((recipient) => recipient.sourceId === contactId);
+  assert.equal(firstContact.name, 'Residential Customer');
+  assert.equal(firstContact.phone, '+2975601000');
+  assert.equal(firstContact.email, 'home@example.com');
+  assert.equal(firstContact.linkedCustomerId, 'client-person');
+
+  linkedCustomer.name = 'Residential Customer Updated';
+  linkedCustomer.phone = '+2975609999';
+  linkedCustomer.email = 'updated@example.com';
+  const afterProfileEdit = await resolveAppointmentRecipients(db, { clientId: 'client-office', propertyId: 'property-office' });
+  const updatedContact = afterProfileEdit.find((recipient) => recipient.sourceId === contactId);
+  assert.equal(firstContact.name, 'Residential Customer', 'a previously captured recipient snapshot must remain unchanged');
+  assert.equal(updatedContact.name, 'Residential Customer Updated');
+  assert.equal(updatedContact.phone, '+2975609999');
+  assert.equal(updatedContact.email, 'updated@example.com');
+});
+
+test('recipient resolution never resurrects a missing or inactive contact projection from an assignment', async () => {
+  const activeSource = { id: 'client-person', name: 'Residential Customer', phone: '+2975601000', active: true };
+  const activeBridge = {
+    id: 'contact-linked',
+    clientId: 'client-office',
+    linkedCustomerId: 'client-person',
+    identitySource: 'linked_customer',
+    active: true,
+  };
+  for (const entry of [
+    { clients: [activeSource], contacts: [] },
+    { clients: [activeSource], contacts: [{ ...activeBridge, active: false }] },
+    { clients: [], contacts: [activeBridge] },
+    { clients: [{ ...activeSource, active: false }], contacts: [activeBridge] },
+  ]) {
+    const db = createReadDb({
+      clients: [
+        { id: 'client-office', name: 'Office Systems Aruba', phone: '+2975640000', active: true },
+        ...entry.clients,
+      ],
+      properties: [{
+        id: 'property-office',
+        clientId: 'client-office',
+        name: 'Office',
+        contacts: [{
+          id: 'legacy-stale',
+          name: 'Stale Legacy Recipient',
+          phone: '+2975609999',
+          defaultSendReminder: true,
+          active: true,
+        }],
+      }],
+      contacts: entry.contacts,
+      contactPropertyAssignments: [{
+        id: 'assignment-linked',
+        clientId: 'client-office',
+        contactId: 'contact-linked',
+        linkedCustomerId: 'client-person',
+        propertyId: 'property-office',
+        scope: 'property',
+        appointmentReminder: true,
+        active: true,
+      }],
+    });
+
+    const recipients = await resolveAppointmentRecipients(db, { clientId: 'client-office', propertyId: 'property-office' });
+    assert.equal(recipients.some((recipient) => recipient.sourceId === 'contact-linked'), false);
+    assert.equal(recipients.some((recipient) => recipient.source === 'legacy_property_contact'), false, 'a canonical assignment must suppress stale legacy fallback even when its linked identity is unusable');
+  }
 });
 
 test('Legacy property contacts remain a notification fallback when canonical assignments do not exist', async () => {
