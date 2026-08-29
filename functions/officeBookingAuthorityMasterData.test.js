@@ -11,10 +11,17 @@ function snapshot(data, exists = true) {
   return { exists, data: () => data };
 }
 
-function createTransactionalDb({ role = "owner", active = true, clients = {}, properties = {}, contacts = {} } = {}) {
+function createTransactionalDb({
+  role = "owner",
+  active = true,
+  clients = {},
+  properties = {},
+  contacts = {},
+  contactPropertyAssignments = {},
+} = {}) {
   const writes = [];
   const docs = new Map();
-  for (const [collection, values] of Object.entries({ clients, properties, contacts })) {
+  for (const [collection, values] of Object.entries({ clients, properties, contacts, contactPropertyAssignments })) {
     for (const [id, value] of Object.entries(values)) docs.set(`${collection}/${id}`, value);
   }
 
@@ -34,6 +41,25 @@ function createTransactionalDb({ role = "owner", active = true, clients = {}, pr
     docs,
     collection(name) {
       return {
+        async get() {
+          return {
+            docs: [...docs.entries()]
+              .filter(([path]) => path.startsWith(`${name}/`))
+              .map(([path, value]) => ({ id: path.slice(name.length + 1), data: () => value })),
+          };
+        },
+        where(field, operator, value) {
+          assert.equal(operator, "==");
+          return {
+            async get() {
+              return {
+                docs: [...docs.entries()]
+                  .filter(([path, record]) => path.startsWith(`${name}/`) && record[field] === value)
+                  .map(([path, record]) => ({ id: path.slice(name.length + 1), data: () => record })),
+              };
+            },
+          };
+        },
         doc(id) {
           const reference = ref(name, id);
           return {
@@ -53,14 +79,15 @@ function createTransactionalDb({ role = "owner", active = true, clients = {}, pr
           if (writeStarted) throw new Error("transaction read after write");
           return read(reference);
         },
-        set(reference, value) {
+        set(reference, value, options = {}) {
           writeStarted = true;
-          staged.push({ reference, value });
+          staged.push({ reference, value, options });
         },
       };
       const result = await callback(transaction);
       for (const item of staged) {
-        docs.set(item.reference.path, item.value);
+        const current = docs.get(item.reference.path) || {};
+        docs.set(item.reference.path, item.options.merge ? { ...current, ...item.value } : item.value);
         writes.push({ path: item.reference.path, value: item.value });
       }
       return result;
@@ -523,6 +550,330 @@ test("CRM contact update rejects a customer/contact mismatch", async () => {
 
   assert.equal(result.status, 409);
   assert.equal(result.body.error.details.reason, "contact_customer_mismatch");
+  assert.equal(db.writes.length, 0);
+});
+
+test("CRM links an existing customer as a contact without duplicating canonical identity fields", async () => {
+  const db = createTransactionalDb({
+    clients: {
+      "client-office": { id: "client-office", active: true, name: "Office Systems Aruba" },
+      "client-person": {
+        id: "client-person",
+        active: true,
+        name: "Existing Residential Customer",
+        phone: "+2975601010",
+        email: "person@example.com",
+      },
+    },
+    properties: {
+      "property-office": { id: "property-office", clientId: "client-office", active: true },
+    },
+  });
+  const api = createApi(db);
+  const data = {
+    requestId: "crm-link-existing-customer-12345",
+    customerId: "client-office",
+    propertyId: "property-office",
+    link: {
+      linkedCustomerId: "client-person",
+      scope: "property",
+      role: "Primary contact",
+      appointmentReminder: true,
+    },
+  };
+
+  const result = await api.handle(request(OFFICE_BOOKING_ACTIONS.SAVE_CONTACT_ASSIGNMENT, data));
+  const contactPaths = [...db.docs.keys()].filter((path) => path.startsWith("contacts/"));
+  const assignmentPaths = [...db.docs.keys()].filter((path) => path.startsWith("contactPropertyAssignments/"));
+  const firstContactCreatedAt = db.docs.get(contactPaths[0]).createdAt;
+  const firstAssignmentCreatedAt = db.docs.get(assignmentPaths[0]).createdAt;
+  db.docs.set(contactPaths[0], {
+    ...db.docs.get(contactPaths[0]),
+    createdById: "original-office-user",
+    createdByName: "Original Office User",
+  });
+  const replay = await api.handle(request(OFFICE_BOOKING_ACTIONS.SAVE_CONTACT_ASSIGNMENT, data));
+
+  assert.equal(result.status, 200);
+  assert.equal(replay.status, 200);
+  assert.equal(replay.body.contactId, result.body.contactId);
+  assert.equal(replay.body.assignmentId, result.body.assignmentId);
+  assert.equal(result.body.linkedCustomerId, "client-person");
+  assert.equal(contactPaths.length, 1);
+  assert.equal(assignmentPaths.length, 1);
+  const contact = db.docs.get(contactPaths[0]);
+  const assignment = db.docs.get(assignmentPaths[0]);
+  assert.equal(contact.clientId, "client-office");
+  assert.equal(contact.linkedCustomerId, "client-person");
+  assert.equal(contact.identitySource, "linked_customer");
+  assert.equal(contact.name, undefined);
+  assert.equal(contact.phone, undefined);
+  assert.equal(contact.email, undefined);
+  assert.equal(assignment.linkedCustomerId, undefined);
+  assert.equal(assignment.contactId, contact.id);
+  assert.equal(assignment.propertyId, "property-office");
+  assert.equal(contact.createdAt, firstContactCreatedAt);
+  assert.equal(contact.createdById, "original-office-user");
+  assert.equal(contact.createdByName, "Original Office User");
+  assert.equal(assignment.createdAt, firstAssignmentCreatedAt);
+});
+
+test("contact directory hydrates linked contacts from the current canonical customer profile", async () => {
+  const db = createTransactionalDb({
+    clients: {
+      "client-office": { id: "client-office", active: true, name: "Office Systems Aruba" },
+      "client-person": {
+        id: "client-person",
+        active: true,
+        name: "Current Person Name",
+        phone: "+2975603030",
+        whatsapp: "+2975603031",
+        email: "current@example.com",
+        preferredLanguage: "English",
+      },
+    },
+    contacts: {
+      "contact-linked": {
+        id: "contact-linked",
+        clientId: "client-office",
+        linkedCustomerId: "client-person",
+        identitySource: "linked_customer",
+        active: true,
+      },
+    },
+    contactPropertyAssignments: {
+      "assignment-linked": {
+        id: "assignment-linked",
+        clientId: "client-office",
+        contactId: "contact-linked",
+        scope: "all_properties",
+        active: true,
+      },
+    },
+  });
+  const api = createApi(db);
+  const result = await api.handle(request(OFFICE_BOOKING_ACTIONS.LIST_CONTACT_DIRECTORY, {
+    customerId: "client-office",
+  }));
+
+  assert.equal(result.status, 200);
+  assert.equal(result.body.contacts.length, 1);
+  assert.equal(result.body.contacts[0].linkedCustomerId, "client-person");
+  assert.equal(result.body.contacts[0].name, "Current Person Name");
+  assert.equal(result.body.contacts[0].phone, "+2975603030");
+  assert.equal(result.body.contacts[0].whatsapp, "+2975603031");
+  assert.equal(result.body.contacts[0].email, "current@example.com");
+  assert.equal(result.body.assignments[0].linkedCustomerId, undefined);
+});
+
+test("contact directory keeps linked relationship history but marks an inactive source customer inactive", async () => {
+  const db = createTransactionalDb({
+    clients: {
+      "client-office": { id: "client-office", active: true },
+      "client-person": { id: "client-person", active: false, name: "Archived Person" },
+    },
+    contacts: {
+      "contact-linked": {
+        id: "contact-linked",
+        clientId: "client-office",
+        linkedCustomerId: "client-person",
+        identitySource: "linked_customer",
+        active: true,
+      },
+    },
+  });
+  const api = createApi(db);
+  const result = await api.handle(request(OFFICE_BOOKING_ACTIONS.LIST_CONTACT_DIRECTORY, {
+    customerId: "client-office",
+  }));
+
+  assert.equal(result.status, 200);
+  assert.equal(result.body.contacts.length, 1);
+  assert.equal(result.body.contacts[0].active, false);
+  assert.equal(result.body.contacts[0].linkedCustomerActive, false);
+});
+
+test("contact directory sanitizes stale identity fields when a linked source customer is missing", async () => {
+  const db = createTransactionalDb({
+    clients: { "client-office": { id: "client-office", active: true } },
+    contacts: {
+      "contact-linked": {
+        id: "contact-linked",
+        clientId: "client-office",
+        linkedCustomerId: "client-missing",
+        identitySource: "linked_customer",
+        name: "Stale Copied Name",
+        phone: "+2975609999",
+        whatsapp: "+2975609999",
+        email: "stale@example.com",
+        active: true,
+      },
+    },
+  });
+  const api = createApi(db);
+  const result = await api.handle(request(OFFICE_BOOKING_ACTIONS.LIST_CONTACT_DIRECTORY, {
+    customerId: "client-office",
+  }));
+
+  assert.equal(result.status, 200);
+  assert.equal(result.body.contacts.length, 1);
+  assert.equal(result.body.contacts[0].active, false);
+  assert.equal(result.body.contacts[0].linkedCustomerActive, false);
+  assert.equal(result.body.contacts[0].name, "");
+  assert.equal(result.body.contacts[0].phone, "");
+  assert.equal(result.body.contacts[0].whatsapp, "");
+  assert.equal(result.body.contacts[0].email, "");
+});
+
+test("CRM rejects linking a contact to an inactive property", async () => {
+  const db = createTransactionalDb({
+    clients: {
+      "client-office": { id: "client-office", active: true },
+      "client-person": { id: "client-person", active: true },
+    },
+    properties: {
+      "property-office": { id: "property-office", clientId: "client-office", active: false },
+    },
+  });
+  const api = createApi(db);
+  const result = await api.handle(request(OFFICE_BOOKING_ACTIONS.SAVE_CONTACT_ASSIGNMENT, {
+    requestId: "crm-link-inactive-property-12345",
+    customerId: "client-office",
+    propertyId: "property-office",
+    link: { linkedCustomerId: "client-person", scope: "property", role: "Contact" },
+  }));
+
+  assert.equal(result.status, 409);
+  assert.equal(result.body.error.code, "property_customer_mismatch");
+  assert.equal(db.writes.length, 0);
+});
+
+test("CRM rejects linking a contact to a property owned by another customer", async () => {
+  const db = createTransactionalDb({
+    clients: {
+      "client-office": { id: "client-office", active: true },
+      "client-other": { id: "client-other", active: true },
+      "client-person": { id: "client-person", active: true },
+    },
+    properties: {
+      "property-other": { id: "property-other", clientId: "client-other", active: true },
+    },
+  });
+  const api = createApi(db);
+  const result = await api.handle(request(OFFICE_BOOKING_ACTIONS.SAVE_CONTACT_ASSIGNMENT, {
+    requestId: "crm-link-wrong-property-owner-12345",
+    customerId: "client-office",
+    propertyId: "property-other",
+    link: { linkedCustomerId: "client-person", scope: "property", role: "Contact" },
+  }));
+
+  assert.equal(result.status, 409);
+  assert.equal(result.body.error.code, "property_customer_mismatch");
+  assert.equal(db.writes.length, 0);
+});
+
+test("CRM rejects missing, inactive, and self-referential linked customers without writes", async () => {
+  const cases = [
+    { linkedCustomerId: "client-missing", extraClients: {}, reason: "linked_customer_not_found" },
+    { linkedCustomerId: "client-inactive", extraClients: { "client-inactive": { id: "client-inactive", active: false } }, reason: "linked_customer_not_found" },
+    { linkedCustomerId: "client-office", extraClients: {}, reason: "linked_customer_self_reference" },
+  ];
+  for (const entry of cases) {
+    const db = createTransactionalDb({
+      clients: {
+        "client-office": { id: "client-office", active: true },
+        ...entry.extraClients,
+      },
+      properties: { "property-office": { id: "property-office", clientId: "client-office", active: true } },
+    });
+    const api = createApi(db);
+    const result = await api.handle(request(OFFICE_BOOKING_ACTIONS.SAVE_CONTACT_ASSIGNMENT, {
+      requestId: `crm-link-invalid-${entry.linkedCustomerId}-12345`,
+      customerId: "client-office",
+      propertyId: "property-office",
+      link: { linkedCustomerId: entry.linkedCustomerId, scope: "property", role: "Contact" },
+    }));
+
+    assert.equal(result.status, 409);
+    assert.equal(result.body.error.details.reason, entry.reason);
+    assert.equal(db.writes.length, 0);
+  }
+});
+
+test("CRM rejects an active linked customer profile without a usable canonical identity", async () => {
+  const cases = [
+    { linkedCustomer: { id: "client-person", active: true, phone: "+2975601010" } },
+    { linkedCustomer: { id: "client-person", active: true, name: "No Channel Person" } },
+  ];
+  for (const entry of cases) {
+    const db = createTransactionalDb({
+      clients: {
+        "client-office": { id: "client-office", active: true },
+        "client-person": entry.linkedCustomer,
+      },
+      properties: { "property-office": { id: "property-office", clientId: "client-office", active: true } },
+    });
+    const api = createApi(db);
+    const result = await api.handle(request(OFFICE_BOOKING_ACTIONS.SAVE_CONTACT_ASSIGNMENT, {
+      requestId: "crm-link-unusable-profile-12345",
+      customerId: "client-office",
+      propertyId: "property-office",
+      link: { linkedCustomerId: "client-person", scope: "property", role: "Contact" },
+    }));
+
+    assert.equal(result.status, 409);
+    assert.equal(result.body.error.details.reason, "linked_customer_unusable");
+    assert.equal(db.writes.length, 0);
+  }
+});
+
+test("CRM prevents editing a linked customer's identity through the contact projection", async () => {
+  const db = createTransactionalDb({
+    clients: { "client-office": { id: "client-office", active: true } },
+    contacts: {
+      "contact-linked": {
+        id: "contact-linked",
+        clientId: "client-office",
+        linkedCustomerId: "client-person",
+        identitySource: "linked_customer",
+        active: true,
+        updatedAt: "2026-08-29T12:00:00.000Z",
+      },
+    },
+  });
+  const api = createApi(db);
+  const result = await api.handle(request(OFFICE_BOOKING_ACTIONS.UPDATE_CONTACT, {
+    requestId: "crm-linked-contact-update-12345",
+    customerId: "client-office",
+    contactId: "contact-linked",
+    expectedUpdatedAt: "2026-08-29T12:00:00.000Z",
+    changes: { name: "Stale duplicate" },
+  }));
+
+  assert.equal(result.status, 409);
+  assert.equal(result.body.error.details.reason, "linked_customer_contact_read_only");
+  assert.equal(db.writes.length, 0);
+});
+
+test("linking an existing customer as a contact requires an authorized office role", async () => {
+  const db = createTransactionalDb({
+    role: "technician",
+    clients: {
+      "client-office": { id: "client-office", active: true },
+      "client-person": { id: "client-person", active: true },
+    },
+    properties: { "property-office": { id: "property-office", clientId: "client-office", active: true } },
+  });
+  const api = createApi(db);
+  const result = await api.handle(request(OFFICE_BOOKING_ACTIONS.SAVE_CONTACT_ASSIGNMENT, {
+    requestId: "crm-linked-contact-auth-12345",
+    customerId: "client-office",
+    propertyId: "property-office",
+    link: { linkedCustomerId: "client-person", scope: "property", role: "Contact" },
+  }));
+
+  assert.equal(result.status, 403);
+  assert.equal(result.body.error.code, "permission_denied");
   assert.equal(db.writes.length, 0);
 });
 

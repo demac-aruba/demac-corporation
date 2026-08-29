@@ -45,6 +45,9 @@ export type LiveCrmProperty = {
 export type LiveCrmContact = {
   id: string;
   clientId: string;
+  linkedCustomerId?: string;
+  identitySource?: 'linked_customer';
+  linkedCustomerActive?: boolean;
   name: string;
   phone?: string;
   phoneCountry?: string;
@@ -154,6 +157,7 @@ export type LiveCrmPersonRelationship = {
   roles: string[];
   scope: 'all_properties' | 'property' | 'mixed' | 'unassigned';
   properties: LiveCrmProperty[];
+  linkedCustomerId?: string;
   contact?: LiveCrmContact;
 };
 
@@ -197,6 +201,18 @@ function normalizedSearchText(value: unknown) {
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()
     .replace(/\s+/g, ' ');
+}
+
+export function matchesLiveCrmContactSearch(values: unknown[], query: string) {
+  const tokens = normalizedSearchText(query).split(' ').filter(Boolean);
+  if (!tokens.length) return false;
+  const normalizedValues = normalizedSearchText(values.map((value) => text(value)).join(' '));
+  const compactPhones = values
+    .map((value) => text(value).replace(/\D/g, ''))
+    .filter((value) => value.length >= 7)
+    .join(' ');
+  const searchable = `${normalizedValues} ${compactPhones}`;
+  return tokens.every((token) => searchable.includes(token));
 }
 
 function active<T extends { active?: boolean }>(items: T[]) {
@@ -247,7 +263,41 @@ export function propertiesForLiveCrmClient(snapshot: LiveCrmSnapshot, clientId: 
 
 export function contactsForLiveCrmClient(snapshot: LiveCrmSnapshot, clientId: string, includeInactive = true) {
   const matching = snapshot.contacts.filter((contact) => contact.clientId === clientId && (includeInactive || contact.active !== false));
-  return sortedByName(matching);
+  const hydrated = matching.map((contact) => hydrateLiveCrmContactIdentity(snapshot, contact));
+  return sortedByName(includeInactive ? hydrated : hydrated.filter((contact) => contact.active !== false));
+}
+
+export function hydrateLiveCrmContactIdentity(snapshot: LiveCrmSnapshot, contact: LiveCrmContact): LiveCrmContact {
+  const linkedCustomerId = text(contact.linkedCustomerId);
+  if (!linkedCustomerId) return contact;
+  const customer = snapshot.clients.find((candidate) => candidate.id === linkedCustomerId);
+  if (!customer) return {
+    ...contact,
+    linkedCustomerId,
+    identitySource: 'linked_customer',
+    active: false,
+    linkedCustomerActive: false,
+    name: '',
+    phone: '',
+    phoneCountry: '',
+    whatsapp: '',
+    whatsappCountry: '',
+    email: '',
+    preferredLanguage: '',
+  };
+  return {
+    ...contact,
+    linkedCustomerId,
+    linkedCustomerActive: customer.active !== false,
+    active: contact.active !== false && customer.active !== false,
+    name: text(customer.name) || text(customer.company) || customer.id,
+    phone: text(customer.phone),
+    phoneCountry: text(customer.phoneCountry),
+    whatsapp: text(customer.whatsapp),
+    whatsappCountry: text(customer.whatsappCountry),
+    email: text(customer.email),
+    preferredLanguage: text(customer.preferredLanguage),
+  };
 }
 
 export function assignmentsForLiveCrmClient(snapshot: LiveCrmSnapshot, clientId: string, includeInactive = true) {
@@ -329,6 +379,7 @@ export function liveCrmPeopleRelationships(snapshot: LiveCrmSnapshot, clientId: 
     roles: relationship.roles.length ? relationship.roles : ['Contact'],
     scope: relationship.scope,
     properties: relationship.properties,
+    linkedCustomerId: text(relationship.contact.linkedCustomerId),
     contact: relationship.contact,
   }));
   return [owner, ...contacts];

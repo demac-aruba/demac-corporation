@@ -26,6 +26,18 @@ function hashId(value, length = 24) {
   return crypto.createHash('sha256').update(String(value || '')).digest('hex').slice(0, length);
 }
 
+async function readDocumentSnapshots(db, refs = [], batchSize = 100) {
+  const snapshots = [];
+  for (let index = 0; index < refs.length; index += batchSize) {
+    const batch = refs.slice(index, index + batchSize);
+    const values = typeof db.getAll === 'function'
+      ? await db.getAll(...batch)
+      : await Promise.all(batch.map((ref) => ref.get()));
+    snapshots.push(...values);
+  }
+  return snapshots;
+}
+
 function contactIdentity(input = {}) {
   const whatsapp = normalizePhone(input.whatsapp || input.phone);
   const phone = normalizePhone(input.phone || input.whatsapp);
@@ -44,6 +56,19 @@ function contactIdFor(clientId, input = {}) {
     );
   }
   return `contact-${hashId(`${clientId}|${identityKey}`, 24)}`;
+}
+
+function linkedCustomerContactIdFor(clientId, linkedCustomerId) {
+  const ownerId = cleanText(clientId, 180);
+  const personId = cleanText(linkedCustomerId, 180);
+  if (!ownerId || !personId) {
+    throw new BookingAuthorityError(
+      BOOKING_ERROR_CODES.INVALID_REQUEST,
+      'Both the customer and linked customer are required for an existing-customer contact.',
+      { field: !ownerId ? 'customerId' : 'link.linkedCustomerId' },
+    );
+  }
+  return `contact-${hashId(`${ownerId}|linked-customer:${personId}`, 24)}`;
 }
 
 function assignmentIdFor({ clientId, contactId, scope, propertyId }) {
@@ -68,12 +93,29 @@ function normalizeScope(value) {
 function normalizeContactLink(link = {}, { clientId, propertyId }) {
   const scope = normalizeScope(link.scope);
   const existingContactId = cleanText(link.contactId, 180);
+  const linkedCustomerId = cleanText(link.linkedCustomerId, 180);
   const input = link.contact || {};
-  const contactId = existingContactId || contactIdFor(clientId, input);
+  const hasManualContact = Object.prototype.hasOwnProperty.call(link, 'contact');
+  const identitySourceCount = Number(Boolean(existingContactId)) + Number(Boolean(linkedCustomerId)) + Number(hasManualContact);
+  if (identitySourceCount > 1) {
+    throw new BookingAuthorityError(
+      BOOKING_ERROR_CODES.INVALID_REQUEST,
+      'Choose one contact identity source: an existing customer, an existing contact, or a new contact.',
+      {
+        reason: 'ambiguous_contact_identity',
+        contactId: existingContactId,
+        linkedCustomerId,
+        hasManualContact,
+      },
+    );
+  }
+  const contactId = existingContactId
+    || (linkedCustomerId ? linkedCustomerContactIdFor(clientId, linkedCustomerId) : contactIdFor(clientId, input));
   const role = cleanText(link.role, 120) || 'Contact';
   return {
     contactId,
     existingContactId,
+    linkedCustomerId,
     contactInput: input,
     assignment: {
       id: assignmentIdFor({ clientId, contactId, scope, propertyId }),
@@ -84,6 +126,40 @@ function normalizeContactLink(link = {}, { clientId, propertyId }) {
       role,
       ...normalizeRules(link),
     },
+  };
+}
+
+function buildLinkedCustomerContactRecord({ id, clientId, linkedCustomerId, identity = {}, now }) {
+  return {
+    id,
+    clientId,
+    linkedCustomerId,
+    identitySource: 'linked_customer',
+    active: true,
+    createdAt: now,
+    updatedAt: now,
+    createdById: cleanText(identity.uid, 160),
+    createdByName: cleanText(identity.name || identity.email, 180),
+  };
+}
+
+function projectLinkedCustomerContact(contact = {}, linkedCustomer = {}) {
+  const linkedCustomerId = cleanText(contact.linkedCustomerId, 180);
+  if (!linkedCustomerId) return contact;
+  return {
+    ...contact,
+    linkedCustomerId,
+    identitySource: 'linked_customer',
+    active: contact.active !== false && linkedCustomer.active !== false,
+    name: cleanText(linkedCustomer.name || linkedCustomer.company, 180),
+    phone: normalizePhone(linkedCustomer.phone),
+    phoneCountry: cleanText(linkedCustomer.phoneCountry, 20) || (linkedCustomer.phone ? 'AW' : ''),
+    whatsapp: normalizePhone(linkedCustomer.whatsapp || linkedCustomer.phone),
+    whatsappCountry: cleanText(linkedCustomer.whatsappCountry || linkedCustomer.phoneCountry, 20)
+      || (linkedCustomer.whatsapp || linkedCustomer.phone ? 'AW' : ''),
+    email: normalizeEmail(linkedCustomer.email),
+    preferredLanguage: cleanText(linkedCustomer.preferredLanguage, 80) || 'Papiamento',
+    linkedCustomerActive: linkedCustomer.active !== false,
   };
 }
 
@@ -128,18 +204,69 @@ async function writeContactLinks(transaction, db, { clientId, propertyId, links 
     : [];
   if (!normalized.length) return [];
 
+  const assignmentIds = new Set();
+  for (const item of normalized) {
+    if (item.linkedCustomerId === clientId) {
+      throw new BookingAuthorityError(
+        BOOKING_ERROR_CODES.INVALID_REQUEST,
+        'A customer cannot be linked as its own contact.',
+        { reason: 'linked_customer_self_reference', customerId: clientId },
+      );
+    }
+    if (assignmentIds.has(item.assignment.id)) {
+      throw new BookingAuthorityError(
+        BOOKING_ERROR_CODES.INVALID_REQUEST,
+        'The same contact relationship was supplied more than once.',
+        { reason: 'duplicate_contact_assignment', assignmentId: item.assignment.id },
+      );
+    }
+    assignmentIds.add(item.assignment.id);
+  }
+
   // Firestore transactions require every read to happen before the first write.
   // Resolve both contact and assignment snapshots first, then apply writes in a second pass.
   const prepared = [];
   for (const item of normalized) {
     const contactRef = db.collection(CONTACT_COLLECTION).doc(item.contactId);
     const assignmentRef = db.collection(CONTACT_ASSIGNMENT_COLLECTION).doc(item.assignment.id);
-    const [contactSnapshot, assignmentSnapshot] = await Promise.all([
+    const linkedCustomerRef = item.linkedCustomerId ? db.collection('clients').doc(item.linkedCustomerId) : null;
+    const [contactSnapshot, assignmentSnapshot, linkedCustomerSnapshot] = await Promise.all([
       transaction.get(contactRef),
       transaction.get(assignmentRef),
+      linkedCustomerRef ? transaction.get(linkedCustomerRef) : Promise.resolve(null),
     ]);
 
-    if (item.existingContactId) {
+    if (item.linkedCustomerId) {
+      if (!linkedCustomerSnapshot?.exists || linkedCustomerSnapshot.data()?.active === false) {
+        throw new BookingAuthorityError(
+          BOOKING_ERROR_CODES.CUSTOMER_NOT_FOUND,
+          'The selected existing customer no longer exists or is inactive.',
+          { reason: 'linked_customer_not_found', linkedCustomerId: item.linkedCustomerId },
+        );
+      }
+      const linkedCustomer = linkedCustomerSnapshot.data() || {};
+      const linkedCustomerName = cleanText(linkedCustomer.name || linkedCustomer.company, 180);
+      const linkedCustomerChannels = contactIdentity(linkedCustomer);
+      if (!linkedCustomerName
+        || (!linkedCustomerChannels.phone && !linkedCustomerChannels.whatsapp && !linkedCustomerChannels.email)) {
+        throw new BookingAuthorityError(
+          BOOKING_ERROR_CODES.INVALID_REQUEST,
+          'The selected customer profile needs a name and at least one communication channel before it can be linked as a contact.',
+          { reason: 'linked_customer_unusable', linkedCustomerId: item.linkedCustomerId },
+        );
+      }
+      if (contactSnapshot.exists) {
+        const existing = contactSnapshot.data() || {};
+        if (cleanText(existing.clientId, 180) !== clientId
+          || cleanText(existing.linkedCustomerId, 180) !== item.linkedCustomerId) {
+          throw new BookingAuthorityError(
+            BOOKING_ERROR_CODES.INVALID_REQUEST,
+            'The linked-customer contact identity conflicts with an existing contact.',
+            { reason: 'linked_customer_contact_conflict', contactId: item.contactId, linkedCustomerId: item.linkedCustomerId },
+          );
+        }
+      }
+    } else if (item.existingContactId) {
       if (!contactSnapshot.exists || cleanText(contactSnapshot.data()?.clientId, 180) !== clientId || contactSnapshot.data()?.active === false) {
         throw new BookingAuthorityError(
           BOOKING_ERROR_CODES.INVALID_REQUEST,
@@ -155,9 +282,33 @@ async function writeContactLinks(transaction, db, { clientId, propertyId, links 
       );
     }
 
+    if (assignmentSnapshot.exists) {
+      const existing = assignmentSnapshot.data() || {};
+      const sameProperty = item.assignment.scope === 'all_properties'
+        || cleanText(existing.propertyId, 180) === cleanText(item.assignment.propertyId, 180);
+      if (cleanText(existing.clientId, 180) !== clientId
+        || cleanText(existing.contactId, 180) !== item.contactId
+        || cleanText(existing.scope, 40) !== item.assignment.scope
+        || !sameProperty) {
+        throw new BookingAuthorityError(
+          BOOKING_ERROR_CODES.INVALID_REQUEST,
+          'The contact relationship conflicts with an existing assignment.',
+          { reason: 'contact_assignment_conflict', assignmentId: item.assignment.id },
+        );
+      }
+    }
+
     const contact = item.existingContactId
       ? null
-      : buildContactRecord({ id: item.contactId, clientId, input: item.contactInput, identity, now });
+      : item.linkedCustomerId
+        ? buildLinkedCustomerContactRecord({
+          id: item.contactId,
+          clientId,
+          linkedCustomerId: item.linkedCustomerId,
+          identity,
+          now,
+        })
+        : buildContactRecord({ id: item.contactId, clientId, input: item.contactInput, identity, now });
     const assignment = {
       ...item.assignment,
       active: true,
@@ -171,10 +322,16 @@ async function writeContactLinks(transaction, db, { clientId, propertyId, links 
 
   for (const entry of prepared) {
     if (entry.contact) {
+      const existingContact = entry.contactSnapshot.exists ? entry.contactSnapshot.data() || {} : {};
       transaction.set(
         entry.contactRef,
         entry.contactSnapshot.exists
-          ? { ...entry.contact, createdAt: entry.contactSnapshot.data()?.createdAt || now }
+          ? {
+            ...entry.contact,
+            createdAt: existingContact.createdAt || now,
+            createdById: existingContact.createdById || entry.contact.createdById,
+            createdByName: existingContact.createdByName || entry.contact.createdByName,
+          }
           : entry.contact,
         { merge: true },
       );
@@ -182,7 +339,11 @@ async function writeContactLinks(transaction, db, { clientId, propertyId, links 
     transaction.set(entry.assignmentRef, entry.assignment, { merge: true });
   }
 
-  return prepared.map((entry) => ({ contactId: entry.item.contactId, assignmentId: entry.assignment.id }));
+  return prepared.map((entry) => ({
+    contactId: entry.item.contactId,
+    assignmentId: entry.assignment.id,
+    ...(entry.item.linkedCustomerId ? { linkedCustomerId: entry.item.linkedCustomerId } : {}),
+  }));
 }
 
 function legacyContactRecipient(contact = {}) {
@@ -254,6 +415,7 @@ function contactRecipient(contact = {}, assignment = {}) {
     whatsappCountry: cleanText(contact.whatsappCountry || contact.phoneCountry, 20) || 'AW',
     email,
     preferredLanguage: cleanText(contact.preferredLanguage, 80) || 'Papiamento',
+    linkedCustomerId: cleanText(contact.linkedCustomerId, 180),
     sendConfirmation: assignment.appointmentConfirmation === true,
     sendReminder: assignment.appointmentReminder === true,
     technicianArrival: assignment.technicianArrival === true,
@@ -309,14 +471,34 @@ async function resolveAppointmentRecipients(db, { clientId, propertyId, selectio
     .filter((assignment) => assignment.active !== false
       && cleanText(assignment.clientId, 180) === clientId
       && (assignment.scope === 'all_properties' || cleanText(assignment.propertyId, 180) === propertyId));
+  const linkedCustomerIds = [...new Set(relevantAssignments
+    .map((assignment) => cleanText(contactById.get(assignment.contactId)?.linkedCustomerId, 180))
+    .filter(Boolean))];
+  const linkedCustomerSnapshots = await readDocumentSnapshots(
+    db,
+    linkedCustomerIds.map((linkedCustomerId) => db.collection('clients').doc(linkedCustomerId)),
+  );
+  const linkedCustomerById = new Map(linkedCustomerSnapshots
+    .map((item, index) => item.exists && item.data()?.active !== false
+      ? [linkedCustomerIds[index], { id: linkedCustomerIds[index], ...(item.data() || {}) }]
+      : null)
+    .filter(Boolean));
   const effective = new Map();
   relevantAssignments
     .sort((a, b) => Number(a.scope === 'property') - Number(b.scope === 'property'))
     .forEach((assignment) => effective.set(assignment.contactId, assignment));
   let contactRecipients = [...effective.values()]
-    .map((assignment) => contactRecipient(contactById.get(assignment.contactId), assignment))
+    .map((assignment) => {
+      const contact = contactById.get(assignment.contactId);
+      if (!contact) return null;
+      const linkedCustomerId = cleanText(contact.linkedCustomerId, 180);
+      if (!linkedCustomerId) return contactRecipient(contact, assignment);
+      const linkedCustomer = linkedCustomerById.get(linkedCustomerId);
+      if (!linkedCustomer) return null;
+      return contactRecipient(projectLinkedCustomerContact({ ...contact, linkedCustomerId }, linkedCustomer), assignment);
+    })
     .filter(Boolean);
-  if (!contactRecipients.length && Array.isArray(property.contacts)) {
+  if (!relevantAssignments.length && Array.isArray(property.contacts)) {
     contactRecipients = property.contacts.filter((contact) => contact?.active !== false).map(legacyContactRecipient).filter(Boolean);
   }
   const hasContactNoticeDefault = contactRecipients.some((recipient) => recipient.sendConfirmation || recipient.sendReminder);
@@ -331,9 +513,13 @@ module.exports = {
   applyRecipientSelections,
   assignmentIdFor,
   buildContactRecord,
+  buildLinkedCustomerContactRecord,
   contactIdFor,
+  linkedCustomerContactIdFor,
   normalizeContactLink,
   normalizeRules,
+  projectLinkedCustomerContact,
+  readDocumentSnapshots,
   resolveAppointmentRecipients,
   writeContactLinks,
 };

@@ -1,13 +1,15 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import type { FormEvent } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import type { FormEvent, KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type {
   LiveCrmContact,
   LiveCrmCustomerGraph,
   LiveCrmProperty,
 } from '@/lib/live-crm';
+import { matchesLiveCrmContactSearch } from '@/lib/live-crm';
 import { createOfficeLifecycleRequestId } from '@/lib/office-booking-authority';
+import contactLinkStyles from './customer-contact-link.module.css';
 import styles from './customer-master-data.module.css';
 
 export type CustomerEditorValue = {
@@ -25,9 +27,23 @@ export type CustomerEditorValue = {
 
 export type ExistingCustomerIdentity = Pick<CustomerEditorValue, 'id' | 'name' | 'phone' | 'whatsapp' | 'email'>;
 
+export type ContactCustomerCandidate = {
+  id: string;
+  active: boolean;
+  name: string;
+  company: string;
+  type: string;
+  phone: string;
+  whatsapp: string;
+  email: string;
+  preferredLanguage: string;
+  propertyLabels: string[];
+};
+
 export type ContactEditorValue = {
   requestId?: string;
   id?: string;
+  linkedCustomerId?: string;
   expectedUpdatedAt?: string;
   name: string;
   phone: string;
@@ -223,6 +239,7 @@ type MasterTab = 'Contacts' | 'Properties' | 'Equipment';
 type MasterDataProps = {
   tab: MasterTab;
   graph: LiveCrmCustomerGraph;
+  customerCandidates: ContactCustomerCandidate[];
   onAddContact: (value: ContactEditorValue) => Promise<void>;
   onUpdateContact: (value: ContactEditorValue) => Promise<void>;
   onAddProperty: (value: PropertyEditorValue) => Promise<void>;
@@ -236,7 +253,7 @@ type EditorState =
 function contactEditorValue(contact: LiveCrmContact, graph: LiveCrmCustomerGraph): ContactEditorValue {
   const relationship = graph.contactRelationships.find((item) => item.contact.id === contact.id);
   const assignment = relationship?.assignments[0];
-  return { id: contact.id, expectedUpdatedAt: contact.updatedAt, name: contact.name, phone: contact.phone ?? '', whatsapp: contact.whatsapp ?? '', email: contact.email ?? '', preferredLanguage: contact.preferredLanguage ?? 'Papiamento', propertyId: assignment?.propertyId ?? graph.properties[0]?.id ?? '', scope: assignment?.scope ?? 'property', role: assignment?.role ?? 'Contact' };
+  return { id: contact.id, linkedCustomerId: contact.linkedCustomerId, expectedUpdatedAt: contact.updatedAt, name: contact.name, phone: contact.phone ?? '', whatsapp: contact.whatsapp ?? '', email: contact.email ?? '', preferredLanguage: contact.preferredLanguage ?? 'Papiamento', propertyId: assignment?.propertyId ?? graph.properties[0]?.id ?? '', scope: assignment?.scope ?? 'property', role: assignment?.role ?? 'Contact' };
 }
 
 function propertyEditorValue(property: LiveCrmProperty): PropertyEditorValue {
@@ -247,7 +264,7 @@ function propertyName(property: LiveCrmProperty) {
   return property.name || property.address || property.id;
 }
 
-export function CustomerMasterDataTab({ tab, graph, onAddContact, onUpdateContact, onAddProperty, onUpdateProperty }: MasterDataProps) {
+export function CustomerMasterDataTab({ tab, graph, customerCandidates, onAddContact, onUpdateContact, onAddProperty, onUpdateProperty }: MasterDataProps) {
   const [editor, setEditor] = useState<EditorState>(null);
   const propertyById = useMemo(() => new Map(graph.properties.map((property) => [property.id, property])), [graph.properties]);
   const activeProperties = useMemo(() => graph.properties.filter((property) => property.active !== false), [graph.properties]);
@@ -271,7 +288,8 @@ export function CustomerMasterDataTab({ tab, graph, onAddContact, onUpdateContac
       {tab === 'Contacts' ? <div className={styles.recordList}>
         {graph.people.map((person) => {
           const assignmentLabel = person.scope === 'all_properties' ? `All ${person.properties.length} propert${person.properties.length === 1 ? 'y' : 'ies'}` : person.properties.map(propertyName).join(', ') || 'Not assigned to a property';
-          return <article className={styles.recordCard} key={person.id}><div className={styles.recordAvatar}>{person.name.split(/\s+/).map((part) => part[0]).slice(0, 2).join('').toUpperCase()}</div><div className={styles.recordMain}><div><strong>{person.name}</strong><b>{person.kind === 'owner' ? 'Customer / owner' : person.roles.join(' · ')}</b></div><span>{assignmentLabel}</span><small>{person.whatsapp || person.phone || 'No phone'}{person.email ? ` · ${person.email}` : ''}</small></div>{person.contact ? <button type="button" onClick={() => setEditor({ kind: 'contact', mode: 'edit', requestId: createOfficeLifecycleRequestId('crm-contact-update'), initial: contactEditorValue(person.contact!, graph) })}>Edit</button> : null}</article>;
+          const relationshipLabel = person.kind === 'owner' ? 'Customer / owner' : `${person.linkedCustomerId ? 'Existing customer · ' : ''}${person.roles.join(' · ')}`;
+          return <article className={styles.recordCard} key={person.id}><div className={styles.recordAvatar}>{person.name.split(/\s+/).map((part) => part[0]).slice(0, 2).join('').toUpperCase()}</div><div className={styles.recordMain}><div><strong>{person.name}</strong><b>{relationshipLabel}</b></div><span>{assignmentLabel}</span><small>{person.whatsapp || person.phone || 'No phone'}{person.email ? ` · ${person.email}` : ''}</small></div>{person.contact ? person.linkedCustomerId ? <span className={contactLinkStyles.linkedIndicator}>Live identity</span> : <button type="button" onClick={() => setEditor({ kind: 'contact', mode: 'edit', requestId: createOfficeLifecycleRequestId('crm-contact-update'), initial: contactEditorValue(person.contact!, graph) })}>Edit</button> : null}</article>;
         })}
         {activeProperties.length === 0 ? <div className={styles.emptyState}><strong>Add an active property before assigning contacts</strong><p>A property-specific role needs a real active property relationship.</p></div> : null}
       </div> : null}
@@ -283,43 +301,134 @@ export function CustomerMasterDataTab({ tab, graph, onAddContact, onUpdateContac
 
       {tab === 'Equipment' ? (graph.equipment.length ? <div className={styles.assetTableWrap}><table className={styles.assetTable}><thead><tr><th>Equipment</th><th>Property</th><th>System</th><th>Condition</th><th>QR / Serial</th><th>Status</th></tr></thead><tbody>{graph.equipment.map((item) => <tr key={item.id}><td><strong>{item.locationLabel || 'Registered A/C'}</strong><span>{item.id}</span></td><td>{item.propertyId ? propertyName(propertyById.get(item.propertyId) ?? { id: item.propertyId, clientId: graph.client.id }) : 'Unassigned'}</td><td>{item.systemType || item.brand || 'HVAC'}</td><td>{item.condition || 'Not recorded'}</td><td>{item.qrCode || item.serialNumber || '—'}</td><td><b>{item.active === false ? 'Inactive' : 'Active'}</b></td></tr>)}</tbody></table></div> : <div className={styles.emptyState}><strong>No equipment registered</strong><p>Equipment recorded during field execution will appear here under the correct customer and property.</p></div>) : null}
 
-      {editor?.kind === 'contact' ? <ContactEditorDrawer mode={editor.mode} requestId={editor.requestId} initial={editor.initial} properties={activeProperties} onClose={() => setEditor(null)} onSave={editor.mode === 'edit' ? onUpdateContact : onAddContact} /> : null}
+      {editor?.kind === 'contact' ? <ContactEditorDrawer mode={editor.mode} requestId={editor.requestId} initial={editor.initial} properties={activeProperties} customerCandidates={customerCandidates} currentCustomerId={graph.client.id} onClose={() => setEditor(null)} onSave={editor.mode === 'edit' ? onUpdateContact : onAddContact} /> : null}
       {editor?.kind === 'property' ? <PropertyEditorDrawer mode={editor.mode} requestId={editor.requestId} initial={editor.initial} onClose={() => setEditor(null)} onSave={editor.mode === 'edit' ? onUpdateProperty : onAddProperty} /> : null}
     </section>
   );
 }
 
-function ContactEditorDrawer({ mode, requestId, initial, properties, onClose, onSave }: { mode: 'create' | 'edit'; requestId: string; initial?: ContactEditorValue; properties: LiveCrmProperty[]; onClose: () => void; onSave: (value: ContactEditorValue) => Promise<void> }) {
+function ContactEditorDrawer({ mode, requestId, initial, properties, customerCandidates, currentCustomerId, onClose, onSave }: { mode: 'create' | 'edit'; requestId: string; initial?: ContactEditorValue; properties: LiveCrmProperty[]; customerCandidates: ContactCustomerCandidate[]; currentCustomerId: string; onClose: () => void; onSave: (value: ContactEditorValue) => Promise<void> }) {
   const empty: ContactEditorValue = { name: '', phone: '', whatsapp: '', email: '', preferredLanguage: 'Papiamento', propertyId: properties[0]?.id ?? '', scope: 'property', role: 'Contact' };
   const [form, setForm] = useState<ContactEditorValue>(initial ?? empty);
+  const [identityMode, setIdentityMode] = useState<'existing' | 'new'>(() => mode === 'create' || initial?.linkedCustomerId ? 'existing' : 'new');
+  const [customerQuery, setCustomerQuery] = useState('');
+  const [resultsOpen, setResultsOpen] = useState(false);
+  const [activeResult, setActiveResult] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const dialogRef = useDialogFocus(true, onClose, saving);
+  const searchInputId = useId();
+  const resultsId = useId();
+  const availableCustomers = useMemo(() => customerCandidates.filter((candidate) => candidate.active && candidate.id !== currentCustomerId), [currentCustomerId, customerCandidates]);
+  const selectedCustomer = useMemo(() => form.linkedCustomerId ? availableCustomers.find((candidate) => candidate.id === form.linkedCustomerId) : undefined, [availableCustomers, form.linkedCustomerId]);
+  const searchResults = useMemo(() => {
+    if (!customerQuery.trim()) return [];
+    return availableCustomers.filter((candidate) => matchesLiveCrmContactSearch([
+      candidate.name,
+      candidate.company,
+      candidate.phone,
+      candidate.whatsapp,
+      candidate.email,
+      ...candidate.propertyLabels,
+    ], customerQuery)).slice(0, 8);
+  }, [availableCustomers, customerQuery]);
   const update = <K extends keyof ContactEditorValue>(key: K, value: ContactEditorValue[K]) => setForm((current) => ({ ...current, [key]: value }));
+  const selectExistingCustomer = (candidate: ContactCustomerCandidate) => {
+    setForm((current) => ({
+      ...current,
+      linkedCustomerId: candidate.id,
+      name: candidate.name,
+      phone: candidate.phone,
+      whatsapp: candidate.whatsapp,
+      email: candidate.email,
+      preferredLanguage: candidate.preferredLanguage || 'Papiamento',
+    }));
+    setCustomerQuery('');
+    setResultsOpen(false);
+    setActiveResult(0);
+    setError('');
+  };
+  const clearExistingCustomer = (focusSearch = true) => {
+    setForm((current) => ({ ...current, linkedCustomerId: undefined, name: '', phone: '', whatsapp: '', email: '', preferredLanguage: 'Papiamento' }));
+    setCustomerQuery('');
+    setResultsOpen(false);
+    if (focusSearch) window.setTimeout(() => document.getElementById(searchInputId)?.focus(), 0);
+  };
+  const changeIdentityMode = (nextMode: 'existing' | 'new') => {
+    if (nextMode === identityMode) return;
+    setIdentityMode(nextMode);
+    clearExistingCustomer(nextMode === 'existing');
+  };
+  const onSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Escape' && resultsOpen) {
+      event.stopPropagation();
+      setResultsOpen(false);
+      return;
+    }
+    if (!searchResults.length) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setResultsOpen(true);
+      setActiveResult((current) => (current + 1) % searchResults.length);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setResultsOpen(true);
+      setActiveResult((current) => (current - 1 + searchResults.length) % searchResults.length);
+    } else if (event.key === 'Enter' && resultsOpen) {
+      event.preventDefault();
+      selectExistingCustomer(searchResults[Math.min(activeResult, searchResults.length - 1)]);
+    }
+  };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!form.name.trim() || (!form.phone.trim() && !form.whatsapp.trim() && !form.email.trim()) || (mode === 'create' && !form.propertyId) || saving) return;
+    const validIdentity = form.linkedCustomerId || (form.name.trim() && (form.phone.trim() || form.whatsapp.trim() || form.email.trim()));
+    if (!validIdentity || (mode === 'create' && !form.propertyId) || saving) return;
     setSaving(true); setError('');
-    try { await onSave({ ...form, requestId }); onClose(); } catch (saveError) { setError(errorMessage(saveError)); } finally { setSaving(false); }
+    try {
+      await onSave({ ...form, requestId, name: form.name.trim(), phone: form.phone.trim(), whatsapp: form.whatsapp.trim(), email: form.email.trim() });
+      onClose();
+    } catch (saveError) { setError(errorMessage(saveError)); } finally { setSaving(false); }
   };
+  const selectedProfile = selectedCustomer ?? (form.linkedCustomerId ? {
+    id: form.linkedCustomerId,
+    active: true,
+    name: form.name,
+    company: '',
+    type: 'Customer',
+    phone: form.phone,
+    whatsapp: form.whatsapp,
+    email: form.email,
+    preferredLanguage: form.preferredLanguage,
+    propertyLabels: [],
+  } : undefined);
+  const canSubmit = Boolean(form.linkedCustomerId || (form.name.trim() && (form.phone.trim() || form.whatsapp.trim() || form.email.trim()))) && (mode !== 'create' || Boolean(form.propertyId));
   return (
     <div className={styles.overlay} role="presentation" onMouseDown={(event) => { if (!saving && event.target === event.currentTarget) onClose(); }}>
       <aside ref={dialogRef} className={styles.drawer} role="dialog" aria-modal="true" aria-label={`${mode} contact`}>
         <header className={styles.drawerHeader}>
-          <div><span className={styles.eyebrow}>Canonical contact</span><h2>{mode === 'create' ? 'Add contact' : 'Edit contact'}</h2><p>{mode === 'create' ? 'Link this person to one property or to every property owned or managed by the customer.' : 'Identity changes preserve the existing property relationships and communication rules.'}</p></div>
+          <div><span className={styles.eyebrow}>Canonical contact</span><h2>{mode === 'create' ? 'Add contact' : 'Edit contact'}</h2><p>{mode === 'create' ? 'Find an existing customer profile or create a new contact, then link the person to the right property.' : form.linkedCustomerId ? 'This contact uses an existing customer profile as its canonical identity.' : 'Identity changes preserve the existing property relationships and communication rules.'}</p></div>
           <button type="button" className={styles.closeButton} onClick={onClose} disabled={saving} aria-label="Close">×</button>
         </header>
         <form className={styles.form} onSubmit={(event) => void submit(event)}>
-          <section className={styles.formSection}><div className={styles.fieldGrid}>
-            <label className={styles.fieldWide}><span>Full name *</span><input autoFocus value={form.name} onChange={(event) => update('name', event.target.value)} /></label>
+          {mode === 'create' ? <div className={contactLinkStyles.identityMode} role="group" aria-label="Contact identity source"><button type="button" className={identityMode === 'existing' ? contactLinkStyles.identityModeActive : ''} aria-pressed={identityMode === 'existing'} onClick={() => changeIdentityMode('existing')}>Find existing customer</button><button type="button" className={identityMode === 'new' ? contactLinkStyles.identityModeActive : ''} aria-pressed={identityMode === 'new'} onClick={() => changeIdentityMode('new')}>Create new contact</button></div> : null}
+          {identityMode === 'existing' ? <section className={styles.formSection}>
+            <div className={styles.sectionHeading}><strong>{selectedProfile ? 'Linked customer profile' : 'Search customer database'}</strong><span>{selectedProfile ? 'Identity details stay connected to the original customer record.' : 'Search by name, company, phone, email, property or address.'}</span></div>
+            {selectedProfile ? <div className={contactLinkStyles.selectedIdentity}><div className={contactLinkStyles.selectedIdentityAvatar}>{selectedProfile.name.split(/\s+/).filter(Boolean).map((part) => part[0]).slice(0, 2).join('').toUpperCase() || 'CU'}</div><div><strong>{selectedProfile.name}</strong><span>{selectedProfile.company && selectedProfile.company !== selectedProfile.name ? selectedProfile.company : selectedProfile.type || 'Existing customer'}</span><small>{[selectedProfile.whatsapp || selectedProfile.phone, selectedProfile.email, selectedProfile.propertyLabels[0]].filter(Boolean).join(' · ') || 'No communication channel'}</small></div>{mode === 'create' ? <button type="button" onClick={() => clearExistingCustomer()}>Change</button> : null}</div> : <div className={contactLinkStyles.customerLookup}>
+              <label htmlFor={searchInputId}>Search existing customers</label>
+              <input id={searchInputId} autoFocus role="combobox" aria-autocomplete="list" aria-expanded={resultsOpen && Boolean(customerQuery.trim())} aria-controls={resultsId} aria-activedescendant={resultsOpen && searchResults.length ? `${resultsId}-${Math.min(activeResult, searchResults.length - 1)}` : undefined} value={customerQuery} onFocus={() => setResultsOpen(Boolean(customerQuery.trim()))} onBlur={() => setResultsOpen(false)} onChange={(event) => { setCustomerQuery(event.target.value); setResultsOpen(Boolean(event.target.value.trim())); setActiveResult(0); }} onKeyDown={onSearchKeyDown} placeholder="Type a name, phone, email or property..." />
+              {resultsOpen && customerQuery.trim() ? <ul id={resultsId} className={contactLinkStyles.customerResults} role="listbox" aria-label="Matching customer profiles">{searchResults.map((candidate, index) => <li id={`${resultsId}-${index}`} key={candidate.id} role="option" aria-selected={index === activeResult} className={index === activeResult ? contactLinkStyles.customerResultActive : ''} onMouseDown={(event) => event.preventDefault()} onClick={() => selectExistingCustomer(candidate)}><strong>{candidate.name}</strong><span>{candidate.company && candidate.company !== candidate.name ? candidate.company : candidate.type || 'Customer'}{candidate.propertyLabels[0] ? ` · ${candidate.propertyLabels[0]}` : ''}</span><small>{[candidate.whatsapp || candidate.phone, candidate.email].filter(Boolean).join(' · ') || 'No communication channel'}</small></li>)}{!searchResults.length ? <li className={contactLinkStyles.customerNoResults} role="option" aria-disabled="true">No matching customer. Choose “Create new contact” to enter a new person.</li> : null}</ul> : null}
+            </div>}
+          </section> : <section className={styles.formSection}><div className={styles.fieldGrid}>
+            <label className={styles.fieldWide}><span>Full name *</span><input autoFocus={mode === 'create'} value={form.name} onChange={(event) => update('name', event.target.value)} /></label>
             <label><span>Phone</span><input value={form.phone} onChange={(event) => update('phone', event.target.value)} /></label>
             <label><span>WhatsApp</span><input value={form.whatsapp} onChange={(event) => update('whatsapp', event.target.value)} /></label>
             <label><span>Email</span><input type="email" value={form.email} onChange={(event) => update('email', event.target.value)} /></label>
             <label><span>Preferred language</span><select value={form.preferredLanguage} onChange={(event) => update('preferredLanguage', event.target.value)}><option>Papiamento</option><option>English</option><option>Spanish</option><option>Dutch</option></select></label>
-            {mode === 'create' ? <><label><span>Role at property</span><input value={form.role} onChange={(event) => update('role', event.target.value)} placeholder="Owner, tenant, manager..." /></label><label><span>Applies to</span><select value={form.scope} onChange={(event) => update('scope', event.target.value as ContactEditorValue['scope'])}><option value="property">One property</option><option value="all_properties">All customer properties</option></select></label><label className={styles.fieldWide}><span>Property</span><select value={form.propertyId} onChange={(event) => update('propertyId', event.target.value)}>{properties.map((property) => <option key={property.id} value={property.id}>{propertyName(property)}</option>)}</select></label></> : null}
-          </div></section>
+          </div></section>}
+          {mode === 'create' ? <section className={styles.formSection}><div className={styles.fieldGrid}><label><span>Role at property</span><input value={form.role} onChange={(event) => update('role', event.target.value)} placeholder="Owner, tenant, manager..." /></label><label><span>Applies to</span><select value={form.scope} onChange={(event) => update('scope', event.target.value as ContactEditorValue['scope'])}><option value="property">One property</option><option value="all_properties">All customer properties</option></select></label><label className={styles.fieldWide}><span>Property</span><select value={form.propertyId} onChange={(event) => update('propertyId', event.target.value)}>{properties.map((property) => <option key={property.id} value={property.id}>{propertyName(property)}</option>)}</select></label></div></section> : null}
+          {mode === 'edit' && form.linkedCustomerId ? <section className={styles.dataRule}><span>LIVE CUSTOMER IDENTITY</span><p>Name and communication details come from the linked customer profile. Edit that customer record to change them everywhere without creating a duplicate identity.</p></section> : null}
           {error ? <div className={styles.dataRule} role="alert"><span>SAVE ERROR</span><p>{error}</p></div> : null}
-          <footer className={styles.drawerFooter}><button type="button" className={styles.secondaryButton} onClick={onClose} disabled={saving}>Cancel</button><button type="submit" className={styles.primaryButton} disabled={!form.name.trim() || (!form.phone.trim() && !form.whatsapp.trim() && !form.email.trim()) || (mode === 'create' && !form.propertyId) || saving}>{saving ? 'Saving…' : 'Save contact'}</button></footer>
+          <footer className={styles.drawerFooter}>{mode === 'edit' && form.linkedCustomerId ? <button type="button" className={styles.primaryButton} onClick={onClose}>Close</button> : <><button type="button" className={styles.secondaryButton} onClick={onClose} disabled={saving}>Cancel</button><button type="submit" className={styles.primaryButton} disabled={!canSubmit || saving}>{saving ? 'Saving…' : form.linkedCustomerId ? 'Link customer as contact' : 'Save contact'}</button></>}</footer>
         </form>
       </aside>
     </div>

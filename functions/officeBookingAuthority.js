@@ -21,6 +21,8 @@ const { mergeBookablePresets } = require("./serviceCatalog");
 const {
   CONTACT_ASSIGNMENT_COLLECTION,
   CONTACT_COLLECTION,
+  projectLinkedCustomerContact,
+  readDocumentSnapshots,
   resolveAppointmentRecipients,
   writeContactLinks,
 } = require("./customerContactDirectory");
@@ -30,7 +32,7 @@ const {
   notificationQueueIds: canonicalNotificationQueueIds,
 } = require("./appointmentNotificationService");
 
-const OFFICE_BOOKING_API_VERSION = 16;
+const OFFICE_BOOKING_API_VERSION = 17;
 const OFFICE_BOOKING_ROLES = Object.freeze([
   "admin",
   "office",
@@ -574,10 +576,27 @@ function createOfficeBookingApi({
     const contactQuery = clientId ? db.collection(CONTACT_COLLECTION).where("clientId", "==", clientId) : db.collection(CONTACT_COLLECTION);
     const assignmentQuery = clientId ? db.collection(CONTACT_ASSIGNMENT_COLLECTION).where("clientId", "==", clientId) : db.collection(CONTACT_ASSIGNMENT_COLLECTION);
     const [contactSnapshot, assignmentSnapshot] = await Promise.all([contactQuery.get(), assignmentQuery.get()]);
+    const contacts = snapshotItems(contactSnapshot).filter((item) => item.active !== false);
+    const linkedCustomerIds = [...new Set(contacts.map((item) => cleanText(item.linkedCustomerId, 180)).filter(Boolean))];
+    const linkedCustomerSnapshots = await readDocumentSnapshots(
+      db,
+      linkedCustomerIds.map((linkedCustomerId) => db.collection("clients").doc(linkedCustomerId)),
+    );
+    const linkedCustomerById = new Map(linkedCustomerSnapshots
+      .map((item, index) => item.exists
+        ? [linkedCustomerIds[index], { id: linkedCustomerIds[index], ...(item.data() || {}) }]
+        : null)
+      .filter(Boolean));
     return {
       success: true,
       version: OFFICE_BOOKING_API_VERSION,
-      contacts: snapshotItems(contactSnapshot).filter((item) => item.active !== false).map(serializeMasterDataTimestamps),
+      contacts: contacts.map((contact) => {
+        const linkedCustomerId = cleanText(contact.linkedCustomerId, 180);
+        const linkedCustomer = linkedCustomerId ? linkedCustomerById.get(linkedCustomerId) : null;
+        return serializeMasterDataTimestamps(linkedCustomerId
+          ? projectLinkedCustomerContact(contact, linkedCustomer || { active: false })
+          : contact);
+      }),
       assignments: snapshotItems(assignmentSnapshot).filter((item) => item.active !== false).map(serializeMasterDataTimestamps),
     };
   }
@@ -1004,6 +1023,13 @@ function createOfficeBookingApi({
           { reason: "contact_customer_mismatch", customerId, contactId },
         );
       }
+      if (cleanText(current.linkedCustomerId, 180)) {
+        throw new BookingAuthorityError(
+          BOOKING_ERROR_CODES.INVALID_REQUEST,
+          "This contact uses an existing customer as its live identity. Edit that customer profile instead.",
+          { reason: "linked_customer_contact_read_only", contactId, linkedCustomerId: cleanText(current.linkedCustomerId, 180) },
+        );
+      }
       assertExpectedUpdatedAt(current, data.expectedUpdatedAt, "contact", contactId);
       contact = {
         ...current,
@@ -1035,7 +1061,9 @@ function createOfficeBookingApi({
       if (!customerSnapshot.exists || customerSnapshot.data()?.active === false) {
         throw new BookingAuthorityError(BOOKING_ERROR_CODES.CUSTOMER_NOT_FOUND, "The selected customer no longer exists or is inactive.", { customerId: clientId });
       }
-      if (!propertySnapshot.exists || cleanText(propertySnapshot.data()?.clientId, 180) !== clientId) {
+      if (!propertySnapshot.exists
+        || propertySnapshot.data()?.active === false
+        || cleanText(propertySnapshot.data()?.clientId, 180) !== clientId) {
         throw new BookingAuthorityError(BOOKING_ERROR_CODES.PROPERTY_CUSTOMER_MISMATCH, "The selected property does not belong to this customer.", { clientId, propertyId });
       }
       saved = await writeContactLinks(transaction, db, { clientId, propertyId, links: [link], identity, now });

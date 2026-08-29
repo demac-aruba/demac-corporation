@@ -11,6 +11,8 @@ export type ContactCommunicationRules = {
 export type BookingContact = {
   id: string;
   clientId: string;
+  linkedCustomerId?: string;
+  identitySource?: 'linked_customer';
   name: string;
   phone?: string;
   phoneCountry?: string;
@@ -37,6 +39,7 @@ export type BookingContactAssignment = ContactCommunicationRules & {
 
 export type NewBookingContactLink = ContactCommunicationRules & {
   contactId?: string;
+  linkedCustomerId?: string;
   contact?: {
     name: string;
     phone?: string;
