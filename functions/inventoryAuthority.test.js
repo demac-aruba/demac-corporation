@@ -115,6 +115,35 @@ function productSeed(onHandWarehouse = 80, onHandOffice = 10) {
   };
 }
 
+function toolSeed(overrides = {}) {
+  const seed = productSeed();
+  seed.toolCatalog["tool-drill"] = {
+    name: "Makita Impact Driver",
+    category: "Power Tools",
+    trackingMode: overrides.trackingMode || "individual",
+    standardCost: 225,
+    active: true,
+  };
+  seed.vanToolAssets["asset-drill-1"] = {
+    toolCatalogId: "tool-drill",
+    assetCode: "V1-H001-01",
+    vanId: "VAN-1",
+    locationType: "van",
+    locationId: "VAN-1",
+    assigned: true,
+    trackingMode: "individual",
+    quantityExpected: 1,
+    quantityPresent: 1,
+    condition: "Poco uso",
+    operationalStatus: "Disponible",
+    purchaseCost: 225,
+    present: true,
+    notes: "Original note",
+    ...overrides,
+  };
+  return seed;
+}
+
 function apiFor(db) {
   return createInventoryApi({ db, verifyIdToken: async () => ({ uid: "office-1", email: "office@example.com" }) });
 }
@@ -412,6 +441,115 @@ test("fractional Product quantities are rejected instead of silently rounded", a
     }, actor),
     /whole units/i,
   );
+});
+
+test("tool details update condition, notes, value and quantity atomically and replay once", async () => {
+  const db = makeDb(toolSeed({ trackingMode: "quantity", quantityExpected: 4, quantityPresent: 3 }));
+  const api = apiFor(db);
+  const input = {
+    requestId: "tool-details-update-001",
+    assetId: "asset-drill-1",
+    condition: "Uso medio",
+    notes: "  Battery   housing scratched  ",
+    purchaseCost: 245.5,
+    quantityExpected: 5,
+    quantityPresent: 4,
+  };
+
+  const updated = await api.execute({ action: "update_tool_asset_details", data: input, actor });
+  assert.equal(updated.success, true);
+  assert.equal(updated.replayed, false);
+  assert.equal(updated.asset.condition, "Uso medio");
+  assert.equal(updated.asset.notes, "Battery housing scratched");
+  assert.equal(updated.asset.purchaseCost, 245.5);
+  assert.equal(updated.asset.quantityExpected, 5);
+  assert.equal(updated.asset.quantityPresent, 4);
+  assert.equal(updated.asset.updatedById, actor.uid);
+  assert.equal(db.stores.get("inventoryMovements").size, 1);
+
+  const replay = await api.updateToolAssetDetails({ ...input, condition: "Nueva", purchaseCost: 999 }, actor);
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.asset.condition, "Uso medio");
+  assert.equal(replay.asset.purchaseCost, 245.5);
+  assert.equal(db.stores.get("inventoryMovements").size, 1, "replay must not write the asset or audit event twice");
+});
+
+test("tool details reject unsupported conditions, negative values and impossible quantities", async () => {
+  const db = makeDb(toolSeed({ trackingMode: "quantity", quantityExpected: 4, quantityPresent: 3 }));
+  const api = apiFor(db);
+
+  await assert.rejects(
+    () => api.updateToolAssetDetails({ requestId: "tool-invalid-condition-001", assetId: "asset-drill-1", condition: "Destroyed" }, actor),
+    /condition is not supported/i,
+  );
+  await assert.rejects(
+    () => api.updateToolAssetDetails({ requestId: "tool-negative-cost-001", assetId: "asset-drill-1", purchaseCost: -1 }, actor),
+    /purchaseCost must be a non-negative/i,
+  );
+  await assert.rejects(
+    () => api.updateToolAssetDetails({ requestId: "tool-negative-quantity-001", assetId: "asset-drill-1", quantityExpected: -1 }, actor),
+    /quantityExpected must be a non-negative whole number/i,
+  );
+  await assert.rejects(
+    () => api.updateToolAssetDetails({ requestId: "tool-impossible-quantity-001", assetId: "asset-drill-1", quantityExpected: 2, quantityPresent: 3 }, actor),
+    /present quantity cannot exceed expected quantity/i,
+  );
+  assert.equal(db.stores.get("vanToolAssets").get("asset-drill-1").condition, "Poco uso");
+  assert.equal(db.stores.get("inventoryMovements").size, 0, "rejected edits must not create audit events");
+});
+
+test("tool details reject quantity edits for individually tracked assets", async () => {
+  const db = makeDb(toolSeed());
+  const api = apiFor(db);
+  await assert.rejects(
+    () => api.updateToolAssetDetails({ requestId: "tool-individual-quantity-001", assetId: "asset-drill-1", quantityExpected: 2, quantityPresent: 2 }, actor),
+    /only be edited for quantity-tracked tools/i,
+  );
+  assert.equal(db.stores.get("vanToolAssets").get("asset-drill-1").quantityExpected, 1);
+});
+
+test("tool move requires a reason and moves an eligible individual asset idempotently", async () => {
+  const db = makeDb(toolSeed());
+  const api = apiFor(db);
+  await assert.rejects(
+    () => api.moveToolAsset({ requestId: "tool-move-no-reason-001", assetId: "asset-drill-1", destinationLocationId: "VAN-2" }, actor),
+    /movement reason is required/i,
+  );
+  await assert.rejects(
+    () => api.moveToolAsset({ requestId: "tool-move-same-location-001", assetId: "asset-drill-1", destinationLocationId: "VAN-1", reason: "No physical change" }, actor),
+    /already assigned to the selected destination/i,
+  );
+
+  const input = { requestId: "tool-move-valid-001", assetId: "asset-drill-1", destinationLocationId: "VAN-2", reason: "Custody reassigned after supervisor review" };
+  const moved = await api.moveToolAsset(input, actor);
+  assert.equal(moved.replayed, false);
+  assert.equal(moved.asset.locationId, "VAN-2");
+  assert.equal(moved.asset.vanId, "VAN-2");
+  assert.equal(moved.movement.reason, input.reason);
+  assert.equal(moved.asset.lifecycleHistory.length, 1);
+
+  const replay = await api.moveToolAsset(input, actor);
+  assert.equal(replay.replayed, true);
+  assert.equal(db.stores.get("inventoryMovements").size, 1);
+  assert.equal(db.stores.get("vanToolAssets").get("asset-drill-1").lifecycleHistory.length, 1);
+});
+
+test("tool move rejects quantity tracking and lifecycle-blocked statuses", async () => {
+  const quantityDb = makeDb(toolSeed({ trackingMode: "quantity", quantityExpected: 4, quantityPresent: 4 }));
+  await assert.rejects(
+    () => apiFor(quantityDb).moveToolAsset({ requestId: "tool-move-quantity-001", assetId: "asset-drill-1", destinationLocationId: "VAN-2", reason: "Attempted direct transfer" }, actor),
+    /quantity-tracked tools must be adjusted/i,
+  );
+
+  for (const [index, status] of ["Prestada", "Faltante", "En reparación", "Retirada", "Desechada"].entries()) {
+    const db = makeDb(toolSeed({ operationalStatus: status }));
+    await assert.rejects(
+      () => apiFor(db).moveToolAsset({ requestId: `tool-move-blocked-${index}-001`, assetId: "asset-drill-1", destinationLocationId: "VAN-2", reason: "Attempted direct transfer" }, actor),
+      /dedicated lifecycle workflow/i,
+    );
+    assert.equal(db.stores.get("vanToolAssets").get("asset-drill-1").locationId, "VAN-1");
+    assert.equal(db.stores.get("inventoryMovements").size, 0);
+  }
 });
 
 test("Inventory Authority HTTP boundary requires Firebase authentication", async () => {

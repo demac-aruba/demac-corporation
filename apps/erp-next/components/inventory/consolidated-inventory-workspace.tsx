@@ -1,5 +1,6 @@
 'use client';
 
+import Image, { type ImageLoaderProps } from 'next/image';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   OFFICE_LOCATION_ID,
@@ -22,11 +23,13 @@ import {
   moveInventoryTool,
   pickupInventoryTransfer,
   receiveInventoryTransfer,
+  updateInventoryToolDetails,
   updateInventoryLocationState,
   type InventoryBalance,
   type InventoryItem,
   type InventoryLocation,
   type InventorySnapshot,
+  type InventoryToolAsset,
   type InventoryTransfer,
 } from '../../lib/inventory-authority';
 import { InventoryIcon, VanThumbnail, type InventoryIconName } from './inventory-visuals';
@@ -38,6 +41,20 @@ type VanSection = 'workspace' | 'overview' | 'consumables' | 'products' | 'tools
 type StockEdit = { item: InventoryItem; locationId: string; onHand: string; minimum: string; target: string };
 type TransferDraftLine = { itemKind: 'product' | 'material'; itemId: string; quantity: number };
 type VanInventoryStatus = { label: string; tone: 'ready' | 'attention' | 'pending' | 'unavailable' };
+type ToolEdit = {
+  asset: InventoryToolAsset;
+  condition: string;
+  notes: string;
+  purchaseCost: string;
+  quantityExpected: string;
+  quantityPresent: string;
+  destinationLocationId: string;
+  transferReason: string;
+  transferConfirmed: boolean;
+};
+
+const TOOL_CONDITIONS = ['Nueva', 'Poco uso', 'Uso medio', 'Muy usada', 'Requiere reemplazo', 'No inspeccionada'] as const;
+const passthroughImageLoader = ({ src }: ImageLoaderProps) => src;
 
 function balance(item: InventoryItem, locationId: string): InventoryBalance {
   return item.balances?.[locationId] ?? { onHand: 0, reserved: 0, minimum: 0, target: 0 };
@@ -67,11 +84,40 @@ function quantity(value: number) {
 function money(value: number) {
   return `Afl. ${new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(value)}`;
 }
-function toolQuantity(asset: InventorySnapshot['toolAssets'][number]) {
-  return Math.max(0, Number(asset.quantity ?? 1) || 0);
+function toolExpectedQuantity(asset: InventoryToolAsset) {
+  if (asset.trackingMode !== 'quantity') return 1;
+  return Math.max(0, Number(asset.quantityExpected ?? asset.quantity ?? 0) || 0);
+}
+function toolPresentQuantity(asset: InventoryToolAsset) {
+  if (asset.trackingMode !== 'quantity') return asset.present === false ? 0 : 1;
+  return Math.max(0, Number(asset.quantityPresent ?? asset.quantity ?? 0) || 0);
+}
+function toolQuantity(asset: InventoryToolAsset) {
+  return toolExpectedQuantity(asset);
+}
+function toolThumbnailUrl(asset: InventoryToolAsset) {
+  if (asset.latestThumbnailUrl) return asset.latestThumbnailUrl;
+  if (!asset.latestPhotoUrl) return '';
+  return `/api/inventory-thumbnail?sourceUrl=${encodeURIComponent(asset.latestPhotoUrl)}`;
+}
+function toolCanTransfer(asset: InventoryToolAsset) {
+  if (asset.trackingMode === 'quantity') return false;
+  const status = inventoryStatusText(asset.operationalStatus);
+  return asset.present !== false && !['prestada', 'loaned', 'faltante', 'missing', 'en reparacion', 'en reparación', 'retirada', 'desechada'].some((blocked) => status.includes(blocked));
 }
 function inventoryStatusText(value?: string) {
   return String(value ?? '').trim().toLowerCase();
+}
+
+function ToolPhoto({ asset, onOpen }: { asset: InventoryToolAsset; onOpen: (url: string) => void }) {
+  const [failed, setFailed] = useState(false);
+  const thumbnail = toolThumbnailUrl(asset);
+  const original = asset.latestPhotoUrl || asset.latestThumbnailUrl || '';
+  useEffect(() => setFailed(false), [thumbnail]);
+  if (!thumbnail || failed) return <span className={styles.toolPhotoFallback}><InventoryIcon name="tool" /></span>;
+  return <button type="button" className={styles.toolPhotoButton} onClick={() => onOpen(original)} aria-label={`Open photo for ${asset.assetCode || asset.id}`}>
+    <Image loader={passthroughImageLoader} src={thumbnail} alt="" fill sizes="52px" unoptimized onError={() => setFailed(true)} />
+  </button>;
 }
 
 export function ConsolidatedInventoryWorkspace() {
@@ -98,7 +144,8 @@ export function ConsolidatedInventoryWorkspace() {
   const [transferLines, setTransferLines] = useState<TransferDraftLine[]>([]);
   const [quantityDrafts, setQuantityDrafts] = useState<Record<string, string>>({});
   const [transferNotes, setTransferNotes] = useState<Record<string, string>>({});
-  const [toolDestinations, setToolDestinations] = useState<Record<string, string>>({});
+  const [toolEdit, setToolEdit] = useState<ToolEdit | null>(null);
+  const [toolLightbox, setToolLightbox] = useState('');
 
   const refresh = useCallback(async () => {
     try {
@@ -112,7 +159,9 @@ export function ConsolidatedInventoryWorkspace() {
       if (nextOperations.value) setOperations(nextOperations.value);
       setOperationsUnavailable(nextOperations.unavailable);
       setError('');
-      const firstVan = next.locations.find((location) => location.type === 'van')?.id ?? '';
+      const firstVan = next.locations
+        .filter((location) => location.type === 'van')
+        .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id, undefined, { numeric: true, sensitivity: 'base' }))[0]?.id ?? '';
       setActiveVanId((current) => current && next.locations.some((location) => location.id === current) ? current : firstVan);
       setLineItemKey((current) => current && next.items.some((item) => itemKey(item) === current) ? current : (next.items[0] ? itemKey(next.items[0]) : ''));
       return true;
@@ -125,10 +174,22 @@ export function ConsolidatedInventoryWorkspace() {
   }, []);
 
   useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    if (!toolEdit && !toolLightbox) return undefined;
+    const closeOverlay = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (toolLightbox) setToolLightbox('');
+      else setToolEdit(null);
+    };
+    window.addEventListener('keydown', closeOverlay);
+    return () => window.removeEventListener('keydown', closeOverlay);
+  }, [toolEdit, toolLightbox]);
 
   const locations = snapshot?.locations ?? [];
   const normalLocations = locations.filter((location) => location.type !== 'legacy');
-  const vans = normalLocations.filter((location) => location.type === 'van');
+  const vans = normalLocations
+    .filter((location) => location.type === 'van')
+    .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id, undefined, { numeric: true, sensitivity: 'base' }));
   const items = useMemo(() => (snapshot?.items ?? []).filter((item) => item.active !== false), [snapshot]);
   const products = items.filter((item) => item.itemKind === 'product');
   const materials = items.filter((item) => item.itemKind === 'material');
@@ -232,7 +293,8 @@ export function ConsolidatedInventoryWorkspace() {
     }).reduce((sum, asset) => sum + toolQuantity(asset), 0);
     const toolValue = activeToolAssets.reduce((sum, asset) => {
       const catalog = snapshot?.toolCatalog.find((tool) => tool.id === asset.toolCatalogId);
-      return sum + Number(catalog?.standardCost || 0) * toolQuantity(asset);
+      const unitCost = Number.isFinite(Number(asset.purchaseCost)) ? Number(asset.purchaseCost) : Number(catalog?.standardCost || 0);
+      return sum + unitCost * toolQuantity(asset);
     }, 0);
     return [
       { label: 'Products', ...productsSummary },
@@ -375,10 +437,60 @@ export function ConsolidatedInventoryWorkspace() {
     await run(`transfer:cancel:${transfer.id}`, () => cancelInventoryTransfer({ requestId: createInventoryRequestId('transfer-cancel'), transferId: transfer.id, reason: transferNotes[transfer.id] || 'Cancelled by office before pickup' }), 'Transfer cancelled and reservation released.');
   }
 
-  async function moveTool(assetId: string) {
-    const destination = toolDestinations[assetId];
-    if (!destination) { setError('Choose a destination for the tool.'); return; }
-    await run(`tool:${assetId}`, () => moveInventoryTool({ requestId: createInventoryRequestId('tool-move'), assetId, destinationLocationId: destination, reason: 'Inventory location reassignment' }), 'Tool location updated.');
+  function beginToolEdit(asset: InventoryToolAsset) {
+    const catalog = snapshot?.toolCatalog.find((tool) => tool.id === asset.toolCatalogId);
+    const purchaseCost = Number.isFinite(Number(asset.purchaseCost)) ? Number(asset.purchaseCost) : Number(catalog?.standardCost || 0);
+    setToolEdit({
+      asset,
+      condition: asset.condition || 'No inspeccionada',
+      notes: asset.notes || '',
+      purchaseCost: String(purchaseCost),
+      quantityExpected: String(toolExpectedQuantity(asset)),
+      quantityPresent: String(toolPresentQuantity(asset)),
+      destinationLocationId: '',
+      transferReason: '',
+      transferConfirmed: false,
+    });
+  }
+
+  async function saveToolDetails() {
+    if (!toolEdit) return;
+    const purchaseCost = Number(toolEdit.purchaseCost);
+    if (!Number.isFinite(purchaseCost) || purchaseCost < 0) { setError('Tool value must be zero or greater.'); return; }
+    const quantityExpected = Number(toolEdit.quantityExpected);
+    const quantityPresent = Number(toolEdit.quantityPresent);
+    if (toolEdit.asset.trackingMode === 'quantity' && (!Number.isInteger(quantityExpected) || !Number.isInteger(quantityPresent) || quantityExpected < 0 || quantityPresent < 0 || quantityPresent > quantityExpected)) {
+      setError('Quantity present and assigned must be whole numbers, and present cannot exceed assigned.');
+      return;
+    }
+    await run(`tool-edit:${toolEdit.asset.id}`, async () => {
+      await updateInventoryToolDetails({
+        requestId: createInventoryRequestId('tool-details'),
+        assetId: toolEdit.asset.id,
+        condition: toolEdit.condition,
+        notes: toolEdit.notes,
+        purchaseCost,
+        ...(toolEdit.asset.trackingMode === 'quantity' ? { quantityExpected, quantityPresent } : {}),
+      });
+      setToolEdit(null);
+    }, 'Tool details updated.');
+  }
+
+  async function moveTool() {
+    if (!toolEdit) return;
+    if (!toolCanTransfer(toolEdit.asset)) { setError('This tool cannot be transferred from its current tracking or operational state.'); return; }
+    if (!toolEdit.destinationLocationId) { setError('Choose a destination for the tool.'); return; }
+    if (!toolEdit.transferReason.trim()) { setError('A transfer reason is required.'); return; }
+    if (!toolEdit.transferConfirmed) { setError('Confirm the transfer summary before moving the tool.'); return; }
+    await run(`tool-move:${toolEdit.asset.id}`, async () => {
+      await moveInventoryTool({
+        requestId: createInventoryRequestId('tool-move'),
+        assetId: toolEdit.asset.id,
+        destinationLocationId: toolEdit.destinationLocationId,
+        reason: toolEdit.transferReason,
+      });
+      setToolEdit(null);
+    }, 'Tool transferred and movement recorded.');
   }
 
   function StockTable({ locationId, itemKind, title }: { locationId: string; itemKind?: InventoryItem['itemKind']; title?: string }) {
@@ -396,8 +508,30 @@ export function ConsolidatedInventoryWorkspace() {
   }
 
   function ToolTable({ locationId }: { locationId?: string }) {
-    const visibleTools = locationId ? toolsAt(locationId) : activeToolAssets;
-    return <section className={styles.panel}><header className={styles.panelHead}><div><strong>{locationId ? `${locationLabel(locations, locationId)} tools` : 'Tool assets'}</strong><span>Same physical asset, one current location</span></div><b>{visibleTools.length} assets</b></header><div className={styles.tableWrap}><table><thead><tr><th>Asset</th><th>Tool</th><th>Location</th><th>Status</th><th>Move to</th><th /></tr></thead><tbody>{visibleTools.map((asset) => { const catalog = snapshot?.toolCatalog.find((tool) => tool.id === asset.toolCatalogId); const actionKey = `tool:${asset.id}`; return <tr key={asset.id}><td><strong>{asset.assetCode || asset.id}</strong></td><td>{catalog?.name || asset.toolCatalogId || 'Tool'}</td><td>{locationLabel(locations, asset.inventoryLocationId || '')}</td><td>{asset.operationalStatus || asset.condition || '—'}</td><td><select value={toolDestinations[asset.id] ?? ''} onChange={(event) => setToolDestinations((current) => ({ ...current, [asset.id]: event.target.value }))}><option value="">Choose…</option>{normalLocations.filter((location) => location.id !== asset.inventoryLocationId).map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}</select></td><td><button type="button" disabled={isPending(actionKey) || !toolDestinations[asset.id]} onClick={() => void moveTool(asset.id)}>{isPending(actionKey) ? 'Moving…' : 'Move'}</button></td></tr>; })}</tbody></table></div>{!visibleTools.length ? <p className={styles.empty}>No active tool assets are assigned to this location.</p> : null}</section>;
+    const visibleTools = [...(locationId ? toolsAt(locationId) : activeToolAssets)]
+      .sort((a, b) => (a.assetCode || a.id).localeCompare(b.assetCode || b.id, undefined, { numeric: true, sensitivity: 'base' }));
+    const assignedUnits = visibleTools.reduce((sum, asset) => sum + toolExpectedQuantity(asset), 0);
+    return <section className={styles.panel}>
+      <header className={styles.panelHead}><div><strong>{locationId ? `${locationLabel(locations, locationId)} tools` : 'Tool assets'}</strong><span>Real asset details, stored photos and controlled editing</span></div><b>{quantity(assignedUnits)} assigned · {visibleTools.length} records</b></header>
+      <div className={`${styles.tableWrap} ${styles.toolTable}`}><table><thead><tr><th>Photo</th><th>Asset / tool</th><th>Use</th><th>Quantity</th><th>Value</th><th>Status</th><th>Location</th><th>Comments</th><th /></tr></thead><tbody>{visibleTools.map((asset) => {
+        const catalog = snapshot?.toolCatalog.find((tool) => tool.id === asset.toolCatalogId);
+        const expected = toolExpectedQuantity(asset);
+        const present = toolPresentQuantity(asset);
+        const unitCost = Number.isFinite(Number(asset.purchaseCost)) ? Number(asset.purchaseCost) : Number(catalog?.standardCost || 0);
+        return <tr key={asset.id}>
+          <td><ToolPhoto asset={asset} onOpen={setToolLightbox} /></td>
+          <td><strong>{asset.assetCode || asset.id}</strong><small>{catalog?.name || asset.toolCatalogId || 'Tool'}{catalog?.category ? ` · ${catalog.category}` : ''}</small></td>
+          <td>{asset.condition || 'No inspeccionada'}</td>
+          <td><strong>{present} / {expected}</strong><small>present / assigned</small></td>
+          <td>{money(unitCost)}{expected > 1 ? <small>{money(unitCost * expected)} total</small> : null}</td>
+          <td><strong>{asset.operationalStatus || '—'}</strong><small>{asset.present === false || present === 0 ? 'Not present' : 'Present'}</small></td>
+          <td>{locationLabel(locations, asset.inventoryLocationId || asset.locationId || asset.vanId || '')}</td>
+          <td className={styles.toolNotes}>{asset.notes || '—'}</td>
+          <td><button type="button" onClick={() => beginToolEdit(asset)}>Edit</button></td>
+        </tr>;
+      })}</tbody></table></div>
+      {!visibleTools.length ? <p className={styles.empty}>No active tool assets are assigned to this location.</p> : null}
+    </section>;
   }
 
   function MetricCard({ icon, label, value, detail, tone = 'blue' }: { icon: InventoryIconName; label: string; value: string | number; detail: string; tone?: 'blue' | 'purple' | 'green' | 'orange' | 'red' }) {
@@ -441,15 +575,15 @@ export function ConsolidatedInventoryWorkspace() {
         <MetricCard icon="package" label="Total Products" value={products.length} detail={`${quantity(companyProductUnits)} units on hand`} />
         <MetricCard icon="bottle" label="Consumables" value={materials.length} detail="Canonical material records" tone="purple" />
         <MetricCard icon="van" label="Active Vans" value={vans.length} detail={`${vans.length} inventory locations`} tone="green" />
-        <MetricCard icon="tool" label="Tools Assigned" value={toolsAssignedToVans.length} detail="Active Van assets" tone="orange" />
+        <MetricCard icon="tool" label="Tools Assigned" value={quantity(toolsAssignedToVans.reduce((sum, asset) => sum + toolExpectedQuantity(asset), 0))} detail={`${toolsAssignedToVans.length} active asset records`} tone="orange" />
         <MetricCard icon="transfer" label="Open Transfers" value={openTransfers.length} detail="Requested + in transit" />
         <MetricCard icon="warning" label="Replenishment Alerts" value={snapshot.replenishment.length} detail="Below configured minimum" tone="red" />
       </div>
 
       <div className={styles.overviewTopGrid}>
         <section className={`${styles.panel} ${styles.workspacePanel}`}><header className={styles.panelHead}><div><strong>Choose an inventory workspace</strong><span>Select where you want to view and manage inventory.</span></div></header><div className={styles.workspaceCards}>
-          <article className={styles.workspaceCard}><div className={`${styles.workspaceVisual} ${styles.warehouseVisual}`}><InventoryIcon name="warehouse" /></div><h2>Warehouse</h2><p>View, store and manage inventory in the main warehouse.</p><ul><li>Bulk stock management</li><li>Receiving & put-away</li><li>Stock adjustments</li><li>Cycle counts</li></ul><button type="button" onClick={() => openView('warehouse')}>Open Warehouse</button></article>
-          <article className={styles.workspaceCard}><div className={`${styles.workspaceVisual} ${styles.officeVisual}`}><InventoryIcon name="office" /></div><h2>Office</h2><p>Manage office inventory and operational consumables.</p><ul><li>Office consumables</li><li>Small tools & equipment</li><li>Administrative stock</li><li>Usage tracking</li></ul><button type="button" onClick={() => openView('office')}>Open Office</button></article>
+          <article className={styles.workspaceCard}><div className={`${styles.workspaceVisual} ${styles.warehouseVisual}`}><Image src="/images/inventory/inventory-warehouse.webp" alt="Warehouse inventory workspace" fill sizes="(max-width: 760px) 100vw, 28vw" priority /></div><h2>Warehouse</h2><p>View, store and manage inventory in the main warehouse.</p><ul><li>Bulk stock management</li><li>Receiving & put-away</li><li>Stock adjustments</li><li>Cycle counts</li></ul><button type="button" onClick={() => openView('warehouse')}>Open Warehouse</button></article>
+          <article className={styles.workspaceCard}><div className={`${styles.workspaceVisual} ${styles.officeVisual}`}><Image src="/images/inventory/inventory-office.webp" alt="Office inventory workspace" fill sizes="(max-width: 760px) 100vw, 28vw" priority /></div><h2>Office</h2><p>Manage office inventory and operational consumables.</p><ul><li>Office consumables</li><li>Small tools & equipment</li><li>Administrative stock</li><li>Usage tracking</li></ul><button type="button" onClick={() => openView('office')}>Open Office</button></article>
           <article className={`${styles.workspaceCard} ${styles.workspaceCardActive}`}><VanThumbnail name="DEMAC" size="large" /><h2>Vans</h2><p>Access Van inventory including products, consumables and tools.</p><ul><li>Van stock & locations</li><li>Consumables by Van</li><li>Tools assigned</li><li>Stock transfers</li></ul><button type="button" className={styles.primary} onClick={() => openView('vans')}>Open Vans</button></article>
         </div><div className={styles.workspaceHint}><span>ⓘ</span>Select a workspace to view inventory details, adjust stock or initiate transfers.</div></section>
 
@@ -514,5 +648,31 @@ export function ConsolidatedInventoryWorkspace() {
     {stockEdit ? <div className={styles.modalBackdrop}><section className={styles.modal} role="dialog" aria-modal="true" aria-labelledby="stock-edit-title"><header><div><span>Physical stock · {locationLabel(locations, stockEdit.locationId)}</span><h2 id="stock-edit-title">{stockEdit.item.name}</h2></div><button type="button" aria-label="Close stock editor" onClick={() => setStockEdit(null)}>×</button></header><div className={styles.form}><label>On hand<input type="number" min="0" step={stockEdit.item.itemKind === 'product' ? 1 : 0.001} value={stockEdit.onHand} onChange={(event) => setStockEdit({ ...stockEdit, onHand: event.target.value })} /></label><label>Minimum<input type="number" min="0" step={stockEdit.item.itemKind === 'product' ? 1 : 0.001} value={stockEdit.minimum} onChange={(event) => setStockEdit({ ...stockEdit, minimum: event.target.value })} /></label><label>Target<input type="number" min="0" step={stockEdit.item.itemKind === 'product' ? 1 : 0.001} value={stockEdit.target} onChange={(event) => setStockEdit({ ...stockEdit, target: event.target.value })} /></label><p className={styles.wide}>Reserved stock cannot be counted below its committed quantity. Van min/target drives replenishment automatically.</p><footer className={styles.wide}><button type="button" onClick={() => setStockEdit(null)}>Cancel</button><button type="button" className={styles.primary} disabled={isPending(`stock:${stockEdit.locationId}:${itemKey(stockEdit.item)}`)} onClick={() => void saveStockEdit()}>{isPending(`stock:${stockEdit.locationId}:${itemKey(stockEdit.item)}`) ? 'Saving…' : 'Save verified count'}</button></footer></div></section></div> : null}
 
     {legacyItem ? <div className={styles.modalBackdrop}><section className={styles.modal} role="dialog" aria-modal="true" aria-labelledby="legacy-allocation-title"><header><div><span>Historical stock assignment</span><h2 id="legacy-allocation-title">{legacyItem.name}</h2></div><button type="button" aria-label="Close historical stock assignment" onClick={() => setLegacyItem(null)}>×</button></header><div className={styles.form}><p className={styles.wide}>Unassigned total: <b>{legacyItem.balances[LEGACY_LOCATION_ID]?.onHand ?? 0}</b>. Warehouse + Office must equal this exact quantity.</p><label>Warehouse<input type="number" min="0" value={legacyWarehouse} onChange={(event) => setLegacyWarehouse(event.target.value)} /></label><label>Office<input type="number" min="0" value={legacyOffice} onChange={(event) => setLegacyOffice(event.target.value)} /></label><footer className={styles.wide}><button type="button" onClick={() => setLegacyItem(null)}>Cancel</button><button type="button" className={styles.primary} disabled={isPending(`legacy:${legacyItem.id}`)} onClick={() => void saveLegacyAllocation()}>{isPending(`legacy:${legacyItem.id}`) ? 'Assigning…' : 'Assign locations'}</button></footer></div></section></div> : null}
+
+    {toolEdit ? <div className={styles.toolDrawerBackdrop} onMouseDown={(event) => { if (event.currentTarget === event.target) setToolEdit(null); }}><section className={styles.toolDrawer} role="dialog" aria-modal="true" aria-labelledby="tool-edit-title">
+      <header><div><span>Tool asset profile</span><h2 id="tool-edit-title">{snapshot.toolCatalog.find((tool) => tool.id === toolEdit.asset.toolCatalogId)?.name || toolEdit.asset.toolCatalogId || 'Tool'}</h2><small>{toolEdit.asset.assetCode || toolEdit.asset.id}</small></div><button type="button" aria-label="Close tool editor" onClick={() => setToolEdit(null)}>×</button></header>
+      <div className={styles.toolDrawerBody}>
+        <section className={styles.toolIdentityCard}><ToolPhoto asset={toolEdit.asset} onOpen={setToolLightbox} /><div><strong>{toolEdit.asset.assetCode || toolEdit.asset.id}</strong><span>{snapshot.toolCatalog.find((tool) => tool.id === toolEdit.asset.toolCatalogId)?.category || 'Tool asset'}</span><small>{locationLabel(locations, toolEdit.asset.inventoryLocationId || toolEdit.asset.locationId || toolEdit.asset.vanId || '')} · {toolEdit.asset.operationalStatus || 'Status unavailable'}</small></div></section>
+
+        <section className={styles.toolEditSection}><header><strong>Tool details</strong><span>Update the real information stored for this asset.</span></header><div className={styles.toolEditGrid}>
+          <label>Use / condition<select value={toolEdit.condition} onChange={(event) => setToolEdit({ ...toolEdit, condition: event.target.value })}>{TOOL_CONDITIONS.map((condition) => <option key={condition} value={condition}>{condition}</option>)}</select></label>
+          <label>Unit value (Afl.)<input type="number" min="0" step="0.01" value={toolEdit.purchaseCost} onChange={(event) => setToolEdit({ ...toolEdit, purchaseCost: event.target.value })} /></label>
+          {toolEdit.asset.trackingMode === 'quantity' ? <><label>Assigned quantity<input type="number" min="0" step="1" value={toolEdit.quantityExpected} onChange={(event) => setToolEdit({ ...toolEdit, quantityExpected: event.target.value })} /></label><label>Present quantity<input type="number" min="0" step="1" max={toolEdit.quantityExpected} value={toolEdit.quantityPresent} onChange={(event) => setToolEdit({ ...toolEdit, quantityPresent: event.target.value })} /></label></> : <div className={styles.toolReadOnlyFact}><span>Quantity</span><strong>{toolPresentQuantity(toolEdit.asset)} / 1</strong><small>Individual tracked asset</small></div>}
+          <label className={styles.wide}>Comments / observations<textarea rows={4} value={toolEdit.notes} onChange={(event) => setToolEdit({ ...toolEdit, notes: event.target.value })} placeholder="Use, condition, damage or other relevant details" /></label>
+        </div><footer><button type="button" onClick={() => setToolEdit(null)}>Cancel</button><button type="button" className={styles.primary} disabled={isPending(`tool-edit:${toolEdit.asset.id}`)} onClick={() => void saveToolDetails()}>{isPending(`tool-edit:${toolEdit.asset.id}`) ? 'Saving…' : 'Save details'}</button></footer></section>
+
+        <section className={styles.toolTransferSection}><header><strong>Transfer tool</strong><span>Separate controlled action — destination and reason are required.</span></header>
+          {toolCanTransfer(toolEdit.asset) ? <div className={styles.toolTransferForm}>
+            <label>Destination<select value={toolEdit.destinationLocationId} onChange={(event) => setToolEdit({ ...toolEdit, destinationLocationId: event.target.value, transferConfirmed: false })}><option value="">Choose a location…</option>{normalLocations.filter((location) => location.id !== (toolEdit.asset.inventoryLocationId || toolEdit.asset.locationId || toolEdit.asset.vanId)).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })).map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}</select></label>
+            <label>Transfer reason<textarea rows={3} value={toolEdit.transferReason} onChange={(event) => setToolEdit({ ...toolEdit, transferReason: event.target.value, transferConfirmed: false })} placeholder="Why is this tool being moved?" /></label>
+            {toolEdit.destinationLocationId ? <div className={styles.transferSummary}><span>Transfer summary</span><strong>{locationLabel(locations, toolEdit.asset.inventoryLocationId || toolEdit.asset.locationId || toolEdit.asset.vanId || '')} → {locationLabel(locations, toolEdit.destinationLocationId)}</strong></div> : null}
+            <label className={styles.confirmTransfer}><input type="checkbox" checked={toolEdit.transferConfirmed} onChange={(event) => setToolEdit({ ...toolEdit, transferConfirmed: event.target.checked })} /><span>I reviewed the destination and confirm this transfer.</span></label>
+            <button type="button" className={styles.transferButton} disabled={isPending(`tool-move:${toolEdit.asset.id}`) || !toolEdit.destinationLocationId || !toolEdit.transferReason.trim() || !toolEdit.transferConfirmed} onClick={() => void moveTool()}>{isPending(`tool-move:${toolEdit.asset.id}`) ? 'Transferring…' : 'Confirm transfer'}</button>
+          </div> : <div className={styles.transferBlocked}><InventoryIcon name="warning" /><div><strong>Transfer unavailable for this record</strong><span>{toolEdit.asset.trackingMode === 'quantity' ? 'Quantity-tracked tools require a controlled quantity transfer workflow.' : 'Loaned, missing, repair or retired tools must be resolved before transfer.'}</span></div></div>}
+        </section>
+      </div>
+    </section></div> : null}
+
+    {toolLightbox ? <div className={styles.photoLightbox} role="dialog" aria-modal="true" aria-label="Tool photo"><button type="button" aria-label="Close tool photo" onClick={() => setToolLightbox('')}>×</button><div><Image loader={passthroughImageLoader} src={toolLightbox} alt="Tool condition evidence" fill sizes="100vw" unoptimized /></div></div> : null}
   </section>;
 }

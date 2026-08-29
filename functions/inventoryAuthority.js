@@ -15,6 +15,12 @@ const FIXED_LOCATIONS = Object.freeze([
   { id: WAREHOUSE_LOCATION_ID, name: "Main Warehouse", type: "warehouse", active: true },
   { id: OFFICE_LOCATION_ID, name: "Main Office", type: "office", active: true },
 ]);
+const TOOL_CONDITIONS = Object.freeze([
+  "Nueva", "Poco uso", "Uso medio", "Muy usada", "Requiere reemplazo", "No inspeccionada",
+]);
+const BLOCKED_TOOL_MOVE_STATUSES = Object.freeze([
+  "prestada", "faltante", "en reparación", "retirada", "desechada",
+]);
 
 class InventoryAuthorityError extends Error {
   constructor(code, message, details = {}) {
@@ -67,6 +73,16 @@ function requiredText(value, field, label, limit = 500) {
   const result = cleanText(value, limit);
   if (!result) throw new InventoryAuthorityError("invalid_request", `${label} is required.`, { field });
   return result;
+}
+function hasOwn(value, field) {
+  return Boolean(value && Object.prototype.hasOwnProperty.call(value, field));
+}
+function nonNegativeToolNumber(value, field, options = {}) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0 || (options.integer === true && !Number.isInteger(number))) {
+    throw new InventoryAuthorityError("invalid_request", `${field} must be a non-negative${options.integer === true ? " whole" : ""} number.`, { field, value });
+  }
+  return options.integer === true ? number : Math.round((number + Number.EPSILON) * 100) / 100;
 }
 function normalizeItemKind(value) {
   const kind = cleanText(value, 40).toLowerCase();
@@ -579,10 +595,89 @@ function createInventoryApi({ db, verifyIdToken } = {}) {
     return { success: true, version: INVENTORY_API_VERSION, transfer };
   }
 
+  async function updateToolAssetDetails(data, actor) {
+    const stable = requestId(data.requestId);
+    const assetId = requiredText(data.assetId, "assetId", "Tool asset id", 180);
+    const allowedFields = new Set([
+      "requestId", "assetId", "condition", "notes", "purchaseCost", "quantityExpected", "quantityPresent",
+    ]);
+    const unexpectedFields = Object.keys(data || {}).filter((field) => !allowedFields.has(field));
+    if (unexpectedFields.length) {
+      throw new InventoryAuthorityError("invalid_request", "Unsupported tool detail fields were provided.", { fields: unexpectedFields });
+    }
+
+    const detailFields = ["condition", "notes", "purchaseCost", "quantityExpected", "quantityPresent"];
+    const suppliedFields = detailFields.filter((field) => hasOwn(data, field));
+    if (!suppliedFields.length) {
+      throw new InventoryAuthorityError("invalid_request", "At least one tool detail is required.", { fields: detailFields });
+    }
+
+    const requestedChanges = {};
+    if (hasOwn(data, "condition")) {
+      const condition = cleanText(data.condition, 80);
+      if (!TOOL_CONDITIONS.includes(condition)) {
+        throw new InventoryAuthorityError("invalid_request", "Tool condition is not supported.", { field: "condition", condition, allowed: TOOL_CONDITIONS });
+      }
+      requestedChanges.condition = condition;
+    }
+    if (hasOwn(data, "notes")) requestedChanges.notes = cleanText(data.notes, 1_500);
+    if (hasOwn(data, "purchaseCost")) requestedChanges.purchaseCost = nonNegativeToolNumber(data.purchaseCost, "purchaseCost");
+    if (hasOwn(data, "quantityExpected")) requestedChanges.quantityExpected = nonNegativeToolNumber(data.quantityExpected, "quantityExpected", { integer: true });
+    if (hasOwn(data, "quantityPresent")) requestedChanges.quantityPresent = nonNegativeToolNumber(data.quantityPresent, "quantityPresent", { integer: true });
+
+    const eventId = deterministicId("IM", `${stable}:tool-details:${assetId}`);
+    let result;
+    await db.runTransaction(async (transaction) => {
+      const ref = db.collection("vanToolAssets").doc(assetId);
+      const snapshot = await transaction.get(ref);
+      if (!snapshot.exists) throw new InventoryAuthorityError("item_not_found", "The tool asset no longer exists.", { assetId });
+      const current = { id: snapshot.id, ...snapshot.data() };
+      const eventSnapshot = await transaction.get(movementRef(eventId));
+      if (eventSnapshot.exists) {
+        result = { replayed: true, asset: current, movement: { id: eventSnapshot.id, ...eventSnapshot.data() } };
+        return;
+      }
+
+      const changesQuantity = hasOwn(requestedChanges, "quantityExpected") || hasOwn(requestedChanges, "quantityPresent");
+      if (changesQuantity && cleanText(current.trackingMode, 40).toLowerCase() !== "quantity") {
+        throw new InventoryAuthorityError("invalid_request", "Quantity fields can only be edited for quantity-tracked tools.", { assetId, trackingMode: current.trackingMode || "individual" });
+      }
+      if (changesQuantity) {
+        const currentExpected = nonNegativeToolNumber(current.quantityExpected ?? 0, "quantityExpected", { integer: true });
+        const currentPresent = nonNegativeToolNumber(current.quantityPresent ?? currentExpected, "quantityPresent", { integer: true });
+        const nextExpected = hasOwn(requestedChanges, "quantityExpected") ? requestedChanges.quantityExpected : currentExpected;
+        const nextPresent = hasOwn(requestedChanges, "quantityPresent") ? requestedChanges.quantityPresent : currentPresent;
+        if (nextPresent > nextExpected) {
+          throw new InventoryAuthorityError("invalid_request", "Present quantity cannot exceed expected quantity.", { assetId, quantityExpected: nextExpected, quantityPresent: nextPresent });
+        }
+      }
+
+      const now = new Date().toISOString();
+      const updates = {
+        ...requestedChanges,
+        updatedAt: now,
+        updatedById: actor.uid,
+        updatedByName: actor.name,
+      };
+      const next = { ...current, ...updates };
+      const event = {
+        ...movement({ id: eventId, itemKind: "tool_asset", itemId: assetId, itemName: current.assetCode || assetId, quantity: 0, type: "tool_asset_details_updated", reason: "Tool asset details updated", now, actor }),
+        changedFields: suppliedFields,
+        previousDetails: Object.fromEntries(suppliedFields.map((field) => [field, current[field] ?? null])),
+        resultingDetails: Object.fromEntries(suppliedFields.map((field) => [field, next[field] ?? null])),
+      };
+      transaction.set(ref, updates, { merge: true });
+      createMovement(transaction, event);
+      result = { replayed: false, asset: next, movement: event };
+    });
+    return { success: true, version: INVENTORY_API_VERSION, ...result };
+  }
+
   async function moveToolAsset(data, actor) {
     const stable = requestId(data.requestId);
     const assetId = requiredText(data.assetId, "assetId", "Tool asset id", 180);
     const destinationLocationId = requiredText(data.destinationLocationId, "destinationLocationId", "Destination location", 160);
+    const reason = requiredText(data.reason, "reason", "Movement reason", 800);
     const destination = await assertLocation(destinationLocationId, await inventoryLocations(db), "destinationLocationId");
     const eventId = deterministicId("IM", `${stable}:tool:${assetId}`);
     let result;
@@ -593,15 +688,25 @@ function createInventoryApi({ db, verifyIdToken } = {}) {
       const snapshot = await transaction.get(ref);
       if (!snapshot.exists) throw new InventoryAuthorityError("item_not_found", "The tool asset no longer exists.", { assetId });
       const current = { id: snapshot.id, ...snapshot.data() };
+      if (cleanText(current.trackingMode, 40).toLowerCase() === "quantity") {
+        throw new InventoryAuthorityError("invalid_request", "Quantity-tracked tools must be adjusted through their quantity workflow.", { assetId, trackingMode: current.trackingMode });
+      }
+      const currentStatus = cleanText(current.operationalStatus, 80).toLowerCase();
+      if (BLOCKED_TOOL_MOVE_STATUSES.includes(currentStatus)) {
+        throw new InventoryAuthorityError("invalid_tool_state", "This tool status requires its dedicated lifecycle workflow before it can move.", { assetId, operationalStatus: current.operationalStatus });
+      }
       const sourceLocationId = normalizeToolLocation(current);
+      if (sourceLocationId === destinationLocationId) {
+        throw new InventoryAuthorityError("invalid_request", "The tool is already assigned to the selected destination.", { assetId, destinationLocationId });
+      }
       const now = new Date().toISOString();
       const locationType = destination.type === "warehouse" ? "warehouse" : destination.type === "office" ? "office" : "van";
-      const event = movement({ id: eventId, itemKind: "tool_asset", itemId: assetId, itemName: current.assetCode || assetId, quantity: sourceLocationId === destinationLocationId ? 0 : 1, type: "tool_transfer", sourceLocationId, destinationLocationId, reason: cleanText(data.reason, 800) || "Tool location transfer", now, actor });
+      const event = movement({ id: eventId, itemKind: "tool_asset", itemId: assetId, itemName: current.assetCode || assetId, quantity: sourceLocationId === destinationLocationId ? 0 : 1, type: "tool_transfer", sourceLocationId, destinationLocationId, reason, now, actor });
       const history = Array.isArray(current.lifecycleHistory) ? current.lifecycleHistory : [];
       const next = {
         ...current, ...(destination.type === "van" ? { vanId: destination.id } : {}),
         locationType, locationId: destination.id, assigned: true, present: true,
-        operationalStatus: destination.type === "warehouse" ? "En depósito" : destination.type === "office" ? "En oficina" : "Disponible",
+        operationalStatus: destination.type === "van" ? "Disponible" : "En depósito",
         updatedAt: now,
         lifecycleHistory: sourceLocationId === destinationLocationId ? history : [...history, { id: deterministicId("TL", `${stable}:${assetId}`), action: "transferred", occurredAt: now, performedByUserId: actor.uid, performedByName: actor.name, fromLocationId: sourceLocationId, toLocationId: destination.id, reason: event.reason }],
       };
@@ -651,6 +756,7 @@ function createInventoryApi({ db, verifyIdToken } = {}) {
     if (action === "pickup_transfer") return pickupTransfer(data, actor);
     if (action === "receive_transfer") return receiveTransfer(data, actor);
     if (action === "cancel_transfer") return cancelTransfer(data, actor);
+    if (action === "update_tool_asset_details") return updateToolAssetDetails(data, actor);
     if (action === "move_tool_asset") return moveToolAsset(data, actor);
     if (action === "issue_to_work_order") return issueToWorkOrder(data, actor);
     throw new InventoryAuthorityError("invalid_request", "Unsupported Inventory Authority action.", { action: cleanText(action, 120) });
@@ -663,7 +769,7 @@ function createInventoryApi({ db, verifyIdToken } = {}) {
       return { status: 200, body: await execute({ action: cleanText(request.body?.action, 120), data: request.body?.data || {}, actor }) };
     } catch (error) { return apiError(error); }
   }
-  return { version: INVENTORY_API_VERSION, authenticate, execute, handle, getSnapshot, setStockLevel, setLocationPolicy, updateLocationInventoryState, allocateLegacyProductStock, createTransfer, pickupTransfer, receiveTransfer, cancelTransfer, moveToolAsset, issueToWorkOrder };
+  return { version: INVENTORY_API_VERSION, authenticate, execute, handle, getSnapshot, setStockLevel, setLocationPolicy, updateLocationInventoryState, allocateLegacyProductStock, createTransfer, pickupTransfer, receiveTransfer, cancelTransfer, updateToolAssetDetails, moveToolAsset, issueToWorkOrder };
 }
 
 let defaultApi;
