@@ -155,7 +155,7 @@ test("explicit office target keeps real elapsed duration while crossing lunch", 
   assert.equal(result.routeReason, "explicit-office-target");
 });
 
-test("10:30 to 13:30 is valid and releases the 13:30 appointment start", () => {
+test("three owned service-capacity spots do not collapse across lunch", () => {
   const first = explicitTargetFixture();
   first.time = "10:30";
   first.allocation = { quantity: 3, durationMinutes: 180, slots: 3, fullDay: false };
@@ -164,13 +164,39 @@ test("10:30 to 13:30 is valid and releases the 13:30 appointment start", () => {
   const longJob = candidateAvailability(first);
   assert.ok(longJob);
   assert.equal(longJob.endTime, "13:30");
-  assert.deepEqual(capacityLockSlots({ time: "10:30", durationMinutes: 180, slots: 3, halfDay: false, fullDay: false }), ["10:30"]);
+  assert.deepEqual(
+    capacityLockSlots({ time: "10:30", durationMinutes: 180, slots: 3, halfDay: false, fullDay: false }),
+    ["10:30", "13:30", "14:30"],
+  );
 
   const followUp = explicitTargetFixture("10:30", 180);
   followUp.time = "13:30";
   followUp.allocation = { quantity: 1, durationMinutes: 60, slots: 1, fullDay: false };
   followUp.routeConfig = { ...followUp.routeConfig, routePolicy: "advisory" };
-  assert.ok(candidateAvailability(followUp));
+  assert.equal(candidateAvailability(followUp), null);
+});
+
+test("six Standard Services own the complete six-spot normal day without fabricating elapsed time", () => {
+  const fixture = explicitTargetFixture();
+  fixture.time = "08:30";
+  fixture.allocation = { quantity: 6, durationMinutes: 360, slots: 6, fullDay: false };
+  fixture.routeConfig = { ...fixture.routeConfig, routePolicy: "advisory" };
+  fixture.data.workOrders = [];
+  const result = candidateAvailability(fixture);
+  assert.ok(result);
+  assert.equal(result.endTime, "14:30");
+  assert.equal(result.slots, 6);
+  assert.deepEqual(
+    capacityLockSlots({ time: "08:30", durationMinutes: 360, slots: 6, halfDay: false, fullDay: false }),
+    ["08:30", "09:30", "10:30", "13:30", "14:30", "15:30"],
+  );
+});
+
+test("three Standard Services starting at 09:30 own exactly three canonical capacity spots", () => {
+  assert.deepEqual(
+    capacityLockSlots({ time: "09:30", durationMinutes: 180, slots: 3, halfDay: false, fullDay: false }),
+    ["09:30", "10:30", "13:30"],
+  );
 });
 
 test("a real continuous-time overlap is still rejected across lunch", () => {

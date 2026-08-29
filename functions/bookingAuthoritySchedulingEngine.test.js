@@ -266,6 +266,13 @@ test("Scheduling policy uses one primary van through seven Standard Services and
     }],
   );
 
+  const six = buildAllocationPlan(6, 60, 4, preset, {});
+  assert.equal(six.length, 1);
+  assert.equal(six[0].quantity, 6);
+  assert.equal(six[0].slots, 6);
+  assert.equal(six[0].durationMinutes, 360);
+  assert.equal(six[0].fullDay, false);
+
   const seven = buildAllocationPlan(7, 60, 4, preset, {});
   assert.equal(seven.length, 1);
   assert.equal(seven[0].quantity, 7);

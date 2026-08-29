@@ -10,7 +10,10 @@ export type OperationalDay = {
   shiftLabel: string;
 };
 
-export type CalendarDispatchJob = DispatchJob & { dateKey: string };
+export type CalendarDispatchJob = DispatchJob & {
+  dateKey: string;
+  capacitySlotStarts?: string[];
+};
 
 export type SupportReflowPlan = {
   id: string;
@@ -86,6 +89,13 @@ export function buildOperationalWeek(referenceDateKey = currentArubaDateKey()): 
 
 export function jobsForDate(jobs: CalendarDispatchJob[], dateKey: string): CalendarDispatchJob[] {
   return jobs.filter((job) => job.dateKey === dateKey);
+}
+
+export function jobOwnsCapacityStart(job: CalendarDispatchJob, slotStart: string) {
+  if (job.status === 'cancelled') return false;
+  if (job.capacitySlotStarts?.includes(slotStart)) return true;
+  const slotEnd = timeToMinutes(slotStart) + 60;
+  return timeToMinutes(job.start) < slotEnd && timeToMinutes(job.end) > timeToMinutes(slotStart);
 }
 
 function restrictionAllowsMorningStart(request: BookingRequest) {

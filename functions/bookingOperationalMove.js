@@ -8,18 +8,20 @@ const {
   compactObject,
 } = require("./bookingAuthorityFirestore");
 const {
+  capacitySlotsForOwnership,
   hashId,
   orderSlotCount,
   snapshotItems,
 } = require("./bookingSchedulingPrimitives");
 const {
   normalizeOrderTime,
+  workOrderDurationMinutes,
 } = require("./bookingCapacityAvailability");
 const {
   canonicalizeSchedulingData,
 } = require("./bookingVanIdentity");
 
-const OPERATIONAL_MOVE_VERSION = 3;
+const OPERATIONAL_MOVE_VERSION = 4;
 const INACTIVE_WORK_ORDER_STATUSES = new Set([
   "cancelada",
   "cancelled",
@@ -61,28 +63,9 @@ function weekday(dateKey) {
   return new Date(`${dateKey}T12:00:00Z`).getUTCDay();
 }
 
-function manualDispatchBlocks(dateKey) {
-  if (weekday(dateKey) === 0) return [];
-  return [
-    ["08:30", "09:30", "10:30"],
-    ["13:30", "14:30", "15:30"],
-  ];
-}
-
 function manualOccupiedSlots(dateKey, startTime, slotCount) {
-  const count = Math.max(1, Math.min(6, Math.ceil(Number(slotCount) || 0)));
-  for (const block of manualDispatchBlocks(dateKey)) {
-    const index = block.indexOf(startTime);
-    if (index < 0 || index + count > block.length) continue;
-    return block.slice(index, index + count);
-  }
-  return [];
-}
-
-function endFromSlots(slots) {
-  const last = slots[slots.length - 1];
-  const minutes = timeToMinutes(last);
-  return minutes === null ? last || "" : minutesToTime(minutes + 60);
+  if (weekday(dateKey) === 0) return [];
+  return capacitySlotsForOwnership(startTime, slotCount, false);
 }
 
 function activeAppointment(snapshot, appointmentId) {
@@ -147,6 +130,18 @@ function slotCountFromCanonicalAppointment(appointment, assignment, currentOrder
     "The canonical appointment has no reliable duration for drag-and-drop.",
     { appointmentId: cleanText(appointment.appointmentId || appointment.id, 180) },
   );
+}
+
+function durationFromCanonicalAppointment(appointment, assignment, currentOrders) {
+  const primaryOrder = currentOrders.find((order) => normalizedStatus(order.appointmentAssignmentRole) !== "support")
+    || currentOrders[0];
+  if (primaryOrder) return workOrderDurationMinutes(primaryOrder, []);
+
+  const start = timeToMinutes(cleanText(appointment.startTime || assignment?.time, 20));
+  const end = timeToMinutes(cleanText(appointment.endTime || assignment?.endTime, 20));
+  if (start !== null && end !== null && end > start) return end - start;
+
+  return slotCountFromCanonicalAppointment(appointment, assignment, currentOrders) * 60;
 }
 
 function targetCrew(van, dailyAssignment) {
@@ -214,10 +209,11 @@ function existingLinkedWorkOrderIds(appointment, currentOrders) {
     .filter(Boolean);
 }
 
-function operationalConflict({ orders, appointmentId, vanId, targetStart, slotCount }) {
+function operationalConflict({ orders, appointmentId, vanId, targetStart, targetSlots, durationMinutes }) {
   const targetStartMinutes = timeToMinutes(targetStart);
   if (targetStartMinutes === null) return null;
-  const targetEndMinutes = targetStartMinutes + slotCount * 60;
+  const targetEndMinutes = targetStartMinutes + durationMinutes;
+  const targetSlotSet = new Set(targetSlots);
 
   return orders.find((order) => {
     if (!workOrderBlocksOperationalCapacity(order)) return false;
@@ -225,8 +221,12 @@ function operationalConflict({ orders, appointmentId, vanId, targetStart, slotCo
     if (cleanText(order.vanId, 120) !== vanId) return false;
     const existingStart = timeToMinutes(normalizeOrderTime(order.time));
     if (existingStart === null) return false;
-    const existingEnd = existingStart + orderSlotCount(order, []) * 60;
-    return targetStartMinutes < existingEnd && targetEndMinutes > existingStart;
+    const existingSlotCount = orderSlotCount(order, []);
+    const existingSlots = manualOccupiedSlots(cleanText(order.date, 20), normalizeOrderTime(order.time), existingSlotCount);
+    const capacityConflict = existingSlots.some((slot) => targetSlotSet.has(slot));
+    const existingEnd = existingStart + workOrderDurationMinutes(order, []);
+    const elapsedConflict = targetStartMinutes < existingEnd && targetEndMinutes > existingStart;
+    return capacityConflict || elapsedConflict;
   }) || null;
 }
 
@@ -329,6 +329,7 @@ function createOperationalMoveAuthority({
 
       const currentOrders = canonical.workOrders.filter((order) => cleanText(order.appointmentId, 180) === id);
       const slotCount = slotCountFromCanonicalAppointment(appointment, assignment, currentOrders);
+      const durationMinutes = durationFromCanonicalAppointment(appointment, assignment, currentOrders);
       const requestedSlots = manualOccupiedSlots(targetDate, targetTime, slotCount);
       if (!requestedSlots.length) {
         throw new BookingAuthorityError(
@@ -343,7 +344,8 @@ function createOperationalMoveAuthority({
         appointmentId: id,
         vanId: requiredVanId,
         targetStart: targetTime,
-        slotCount,
+        targetSlots: requestedSlots,
+        durationMinutes,
       });
       if (conflict) {
         throw new BookingAuthorityError(
@@ -375,7 +377,8 @@ function createOperationalMoveAuthority({
 
       const dailyAssignment = canonical.dailyVanAssignments.find((item) => item.vanId === requiredVanId && item.date === targetDate);
       const crew = targetCrew(targetVan, dailyAssignment);
-      const targetEnd = endFromSlots(requestedSlots);
+      const targetStartMinutes = timeToMinutes(targetTime);
+      const targetEnd = targetStartMinutes === null ? "" : minutesToTime(targetStartMinutes + durationMinutes);
       const nextAssignment = compactObject({
         ...assignment,
         vanId: requiredVanId,

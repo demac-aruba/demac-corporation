@@ -28,14 +28,22 @@ import {
   moveOfficeAppointment,
   type OfficeAdhocSupportResult,
 } from '../../lib/office-booking-authority';
+import {
+  afterHoursTargetForVan,
+  availableSlotAction,
+  type AfterHoursVanTarget,
+  type AvailableSlotIntent,
+} from '../../lib/live-scheduling-interactions';
 import type { CandidateSlot, DispatchJob } from '../../lib/scheduling';
 import { getRuntimeSchedulingSettings, minutesToTime, previewVans, timeToMinutes } from '../../lib/scheduling';
 import type { CalendarDispatchJob, OperationalDay } from '../../lib/scheduling-capacity';
-import { buildOperationalWeek, currentArubaDateKey } from '../../lib/scheduling-capacity';
+import { buildOperationalWeek, currentArubaDateKey, jobOwnsCapacityStart } from '../../lib/scheduling-capacity';
 import { AdhocSupportDrawer, type AdhocSupportTarget } from './adhoc-support-drawer';
+import { AfterHoursEmergencyDrawer } from './after-hours-emergency-panel';
 import { DragMoveConfirmation, type PendingDragMove } from './drag-move-confirmation';
 import { LiveAppointmentCreateDrawer, type LiveBookingTarget, type LiveCreatedBooking } from './live-appointment-create-drawer';
 import { LiveAppointmentDetailsDrawer } from './live-appointment-details-drawer';
+import laneStyles from './live-scheduling-lane-actions.module.css';
 import styles from './scheduling-overview-v2.module.css';
 
 type DisplaySlot = { start: string; end: string; segment: 'am' | 'pm'; operational: boolean; offReason?: string };
@@ -89,8 +97,7 @@ function displaySlotsForVan(day: OperationalDay, vanId: string, capacityState: L
 }
 
 function overlapsSlot(job: CalendarDispatchJob, slot: DisplaySlot) {
-  if (job.status === 'cancelled') return false;
-  return timeToMinutes(job.start) < timeToMinutes(slot.end) && timeToMinutes(job.end) > timeToMinutes(slot.start);
+  return jobOwnsCapacityStart(job, slot.start);
 }
 
 function activeJobsForSlot(jobs: CalendarDispatchJob[], slot: DisplaySlot) {
@@ -156,7 +163,9 @@ function slotClass(value: DispatchJob['readiness']) {
 }
 
 function jobCrossesLunch(job: CalendarDispatchJob) {
-  return timeToMinutes(job.start) < 12 * 60 && timeToMinutes(job.end) > 13 * 60;
+  const ownedStarts = job.capacitySlotStarts ?? [];
+  return (ownedStarts.some((start) => timeToMinutes(start) < 12 * 60) && ownedStarts.some((start) => timeToMinutes(start) >= 13 * 60))
+    || (timeToMinutes(job.start) < 12 * 60 && timeToMinutes(job.end) > 13 * 60);
 }
 
 function bookingBadge(name?: string) {
@@ -178,6 +187,7 @@ export function LiveSchedulingOverview() {
   const [selectedAppointmentId, setSelectedAppointmentId] = useState('');
   const [bookingTarget, setBookingTarget] = useState<LiveBookingTarget | null>(null);
   const [supportTarget, setSupportTarget] = useState<AdhocSupportTarget | null>(null);
+  const [afterHoursTarget, setAfterHoursTarget] = useState<AfterHoursVanTarget | null>(null);
   const [moveArmedJobId, setMoveArmedJobId] = useState('');
   const [pendingDragMove, setPendingDragMove] = useState<PendingLiveMove | null>(null);
   const [moveBusy, setMoveBusy] = useState(false);
@@ -198,7 +208,7 @@ export function LiveSchedulingOverview() {
   }), [baseWeek, capacityState]);
   const canManage = principal.active && principal.capabilities.has('scheduling.manage');
   const actor = useMemo(() => ({ id: principal.userId, name: principal.displayName }), [principal.displayName, principal.userId]);
-  const interactionActive = Boolean(bookingTarget || supportTarget || moveArmedJobId || pendingDragMove || moveBusy || manualRefreshing);
+  const interactionActive = Boolean(bookingTarget || supportTarget || afterHoursTarget || moveArmedJobId || pendingDragMove || moveBusy || manualRefreshing);
 
   const refresh = useCallback(async (forceCapacity = false) => {
     const sequence = ++refreshSequenceRef.current;
@@ -272,6 +282,10 @@ export function LiveSchedulingOverview() {
         setSupportTarget(null);
         return;
       }
+      if (afterHoursTarget) {
+        setAfterHoursTarget(null);
+        return;
+      }
       if (bookingTarget) {
         setBookingTarget(null);
         return;
@@ -288,7 +302,7 @@ export function LiveSchedulingOverview() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [bookingTarget, moveArmedJobId, moveBusy, pendingDragMove, supportTarget]);
+  }, [afterHoursTarget, bookingTarget, moveArmedJobId, moveBusy, pendingDragMove, supportTarget]);
 
   const jobs = useMemo(() => appointments.flatMap(appointmentAssignments), [appointments]);
   const vans = useMemo<DisplayVan[]>(() => {
@@ -385,6 +399,21 @@ export function LiveSchedulingOverview() {
     setSelectedAppointmentId('');
     setMoveNotice('');
     setSupportTarget({ dateKey: activeDay.dateKey, vanId, vanName: van.name, start, end });
+  };
+
+  const openAfterHours = (van: DisplayVan) => {
+    if (interactionActive) return;
+    if (!canManage) {
+      setMoveNotice('Your account does not have permission to create after-hours jobs.');
+      return;
+    }
+    if (activeDay.dateKey !== today) {
+      setMoveNotice('After-hours emergencies are same-day operational jobs. Return to Today and choose the Van again.');
+      return;
+    }
+    setSelectedAppointmentId('');
+    setMoveNotice('');
+    setAfterHoursTarget(afterHoursTargetForVan(activeDay.dateKey, van));
   };
 
   const handleCreatedBooking = (booking: LiveCreatedBooking) => {
@@ -643,7 +672,7 @@ export function LiveSchedulingOverview() {
                   ? `HALF-DAY · TO ${formatTime(halfDay.workdayEnd || '13:00')}`
                   : van.active ? 'ACTIVE' : 'INACTIVE';
               return (
-                <section key={van.id} className={styles.vanLane}>
+                <section key={van.id} className={`${styles.vanLane} ${laneStyles.laneLayout}`}>
                   <header>
                     <div className={styles.vanIdentity}>
                       <span>{van.id.replace('VAN-', 'V')}</span>
@@ -675,6 +704,15 @@ export function LiveSchedulingOverview() {
                     onDropMove={dropMove}
                   />
                   {!activeDay.isOpen ? <div className={styles.closedDay}>{activeDay.shiftLabel || 'Operationally closed.'}</div> : null}
+                  <div className={laneStyles.laneAction}>
+                    <button
+                      type="button"
+                      className={styles.secondary}
+                      disabled={!canManage || activeDay.dateKey !== today || !operational || interactionActive}
+                      onClick={() => openAfterHours(van)}
+                      title={activeDay.dateKey === today ? `Create after-hours emergency for ${van.name}` : 'After-hours jobs can be created for Today only'}
+                    >＋ AFTER-HOURS / EMERGENCY</button>
+                  </div>
                 </section>
               );
             })}
@@ -685,6 +723,7 @@ export function LiveSchedulingOverview() {
       {selectedAppointment ? <LiveAppointmentDetailsDrawer appointment={selectedAppointment} onClose={() => setSelectedAppointmentId('')} onChanged={refresh} /> : null}
       {bookingTarget ? <LiveAppointmentCreateDrawer target={bookingTarget} onClose={() => setBookingTarget(null)} onCreated={handleCreatedBooking} /> : null}
       {supportTarget ? <AdhocSupportDrawer target={supportTarget} appointments={appointments} onClose={() => setSupportTarget(null)} onCreated={handleCreatedSupport} /> : null}
+      {afterHoursTarget ? <AfterHoursEmergencyDrawer target={afterHoursTarget} onClose={() => setAfterHoursTarget(null)} onCreated={() => void refresh()} /> : null}
       {pendingDragMove ? <DragMoveConfirmation move={pendingDragMove} busy={moveBusy} onCancel={cancelPendingMove} onConfirm={() => void confirmPendingMove()} /> : null}
     </section>
   );
@@ -752,8 +791,13 @@ function VanScheduleSlots({
         && validDropTargets.has(liveMoveTargetKey(vanId, slot.start));
       const createEnabled = !moveArmedJobId && !moveBusy && canCreate && slot.operational;
       const supportEnabled = !moveArmedJobId && !moveBusy && canSupport && slot.operational;
+      const runAvailableAction = (intent: AvailableSlotIntent) => {
+        const action = availableSlotAction(intent);
+        if (action === 'support') onSendSupport(vanId, slot.start, slot.end);
+        else if (createEnabled) onCreateAppointment(vanId, slot.start, slot.end);
+      };
       rows.push(<div
-        className={styles.openSlot}
+        className={`${styles.openSlot} ${createEnabled ? laneStyles.slotInteractive : ''}`}
         key={`open-${slot.start}`}
         onDragOver={(event) => { if (dropEnabled) event.preventDefault(); }}
         onDrop={(event) => {
@@ -765,12 +809,13 @@ function VanScheduleSlots({
           ? { borderStyle: 'solid', borderColor: 'var(--brand)', background: 'var(--brand-soft)', cursor: 'copy' }
           : undefined}
       >
-        <div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div>
-        <div><strong>{dropEnabled ? 'Drop to move' : 'Available'}</strong><span>{dropEnabled ? 'Valid for the complete appointment' : createEnabled || supportEnabled ? 'Choose how to use this operating capacity' : 'Open work spot'}</span></div>
-        {dropEnabled ? <b>MOVE</b> : createEnabled || supportEnabled ? <div style={{ display: 'flex', gap: 5, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-          {createEnabled ? <button type="button" className={styles.secondary} style={{ padding: '5px 7px', minHeight: 0 }} onClick={() => onCreateAppointment(vanId, slot.start, slot.end)}>BOOK</button> : null}
-          {supportEnabled ? <button type="button" className={styles.secondary} style={{ padding: '5px 7px', minHeight: 0 }} onClick={() => onSendSupport(vanId, slot.start, slot.end)}>SUPPORT</button> : null}
+        <div className={`${styles.slotTime} ${createEnabled ? laneStyles.slotContent : ''}`}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div>
+        <div className={createEnabled ? laneStyles.slotContent : undefined}><strong>{dropEnabled ? 'Drop to move' : 'Available'}</strong><span>{dropEnabled ? 'Valid for the complete appointment' : createEnabled || supportEnabled ? 'Choose how to use this operating capacity' : 'Open work spot'}</span></div>
+        {dropEnabled ? <b>MOVE</b> : createEnabled || supportEnabled ? <div className={createEnabled ? laneStyles.slotActions : undefined} style={{ display: 'flex', gap: 5, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          {createEnabled ? <button type="button" className={styles.secondary} style={{ padding: '5px 7px', minHeight: 0 }} onClick={(event) => { event.stopPropagation(); runAvailableAction('book'); }}>BOOK</button> : null}
+          {supportEnabled ? <button type="button" className={styles.secondary} style={{ padding: '5px 7px', minHeight: 0 }} onClick={(event) => { event.stopPropagation(); runAvailableAction('support'); }}>SUPPORT</button> : null}
         </div> : <b>LIVE</b>}
+        {createEnabled ? <button type="button" className={laneStyles.slotCardButton} aria-label={`Book ${vanId} at ${formatTime(slot.start)}`} onClick={() => runAvailableAction('card')} /> : null}
       </div>);
       index += 1;
       continue;
@@ -855,9 +900,9 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
           <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={armed ? styles.ready : temporaryHold ? styles.risk : slotClass(job.readiness)}>{armed ? 'MOVE ARMED' : temporaryHold ? 'TEMP HOLD' : readinessLabel(job.readiness)}</b></div>
           {continuation ? <span>Reserved continuously until {formatTime(job.end)}</span> : <span>{appointmentWorkLabel(appointment, job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span>}
           <small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small>
-          {!continuation && span > 1 ? <small>Reserved continuously · {formatTime(job.start)}–{formatTime(job.end)}</small> : null}
+          {!continuation && span > 1 ? <small>{span} capacity spots reserved · elapsed work {formatTime(job.start)}–{formatTime(job.end)}</small> : null}
           {temporaryHold ? <small style={{ color: 'var(--warning, #b45309)', fontWeight: 800 }}>Capacity reserved · customer not confirmed · no reminder/confirmation sent</small> : null}
-          {crossesLunch ? <small>Lunch/reset remains protected</small> : null}
+          {crossesLunch ? <small>Lunch remains non-sellable · service-capacity ownership is preserved</small> : null}
           {outsideCapacity ? <small style={{ color: 'var(--warning)', fontWeight: 800 }}>Outside canonical operating capacity · review schedule</small> : null}
           {bookingBadge(appointment?.bookedByName)}
           <small>{temporaryHold ? 'Open details to confirm, reschedule or cancel this hold' : armed ? 'Drag this block to a highlighted valid destination' : 'Single click details · double click to move'}</small>

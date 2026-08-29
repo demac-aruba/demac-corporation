@@ -78,6 +78,7 @@ type LiveWorkOrder = {
   confirmedAt?: string;
   createdAt?: string;
   updatedAt?: string;
+  fullDaySingleProperty?: boolean;
 };
 
 type LiveClient = {
@@ -302,6 +303,22 @@ function assignmentEnd(
   return minutesToTime(timeToMinutes(start) + 60);
 }
 
+function assignmentCapacitySlotStarts(
+  order: LiveWorkOrder,
+  start: string,
+  vanId: string,
+  operationalState: LiveOperationalCapacityState | null,
+) {
+  const schedule = canonicalSlotStarts(operationalState, vanId, text(order.date));
+  if (order.fullDaySingleProperty === true) return schedule;
+  const count = numericSlotCount(order.scheduledSlots)
+    || normalizedSlots(order.scheduledSlots).length
+    || Math.ceil(positiveInteger(order.appointmentDurationMinutes ?? order.duration, 60) / 60);
+  const index = schedule.indexOf(start);
+  if (index < 0 || index + count > schedule.length) return [];
+  return schedule.slice(index, index + count);
+}
+
 function daySegment(start: string, end: string): DaySegment {
   if (timeToMinutes(start) < 12 * 60 && timeToMinutes(end) > 13 * 60) return 'full_day';
   return timeToMinutes(start) < 12 * 60 ? 'am' : 'pm';
@@ -367,6 +384,7 @@ function workOrderAssignment(
 ): CalendarDispatchJob {
   const legacySlots = normalizedSlots(order.scheduledSlots);
   const start = text(order.time) || legacySlots[0] || '08:30';
+  const resolvedVanId = workOrderVanId(order, vans) || 'UNASSIGNED';
   const end = assignmentEnd({ ...order, time: start }, vans, operationalState);
   const role = workOrderAssignmentRole(order);
   const primary = role !== 'support';
@@ -380,7 +398,8 @@ function workOrderAssignment(
     start,
     end,
     segment: daySegment(start, end),
-    vanId: workOrderVanId(order, vans) || 'UNASSIGNED',
+    vanId: resolvedVanId,
+    capacitySlotStarts: assignmentCapacitySlotStarts(order, start, resolvedVanId, operationalState),
     presetId: workOrderPresetId(order),
     quantity: workOrderQuantity(order),
     status: projectedStatus(order.status),

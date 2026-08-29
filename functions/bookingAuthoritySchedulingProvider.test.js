@@ -135,7 +135,7 @@ test("provider verifies the exact ERP customer/property relationship", () => {
   );
 });
 
-test("capacity locks cover every sellable start overlapped by the continuous interval", () => {
+test("capacity locks preserve owned slot count independently from continuous elapsed time", () => {
   const locks = buildCapacityLocks(option(), []);
   assert.equal(locks.length, 2);
   assert.deepEqual(locks.map((item) => item.slot), ["13:30", "14:30"]);
@@ -153,7 +153,27 @@ test("capacity locks cover every sellable start overlapped by the continuous int
     }],
   };
   const lunchLocks = buildCapacityLocks(lunchSpanning, []);
-  assert.deepEqual(lunchLocks.map((item) => item.slot), ["10:30"]);
+  assert.deepEqual(lunchLocks.map((item) => item.slot), ["10:30", "13:30", "14:30"]);
+});
+
+test("six-service allocation locks the complete normal Van day without full-day timing metadata", () => {
+  const sixServices = {
+    ...option(),
+    time: "08:30",
+    endTime: "14:30",
+    assignments: [{
+      ...option().assignments[0],
+      time: "08:30",
+      quantity: 6,
+      durationMinutes: 360,
+      slots: 6,
+      fullDay: false,
+    }],
+  };
+  assert.deepEqual(
+    buildCapacityLocks(sixServices, []).map((item) => item.slot),
+    ["08:30", "09:30", "10:30", "13:30", "14:30", "15:30"],
+  );
 });
 
 test("full-day policy still locks every regular sellable start", () => {

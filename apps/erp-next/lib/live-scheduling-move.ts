@@ -14,7 +14,7 @@ import {
   previewVans,
   timeToMinutes,
 } from './scheduling';
-import type { CalendarDispatchJob, OperationalDay } from './scheduling-capacity';
+import { jobOwnsCapacityStart, type CalendarDispatchJob, type OperationalDay } from './scheduling-capacity';
 import {
   applyAppointmentScheduleChange,
   appointmentSnapshot,
@@ -23,10 +23,6 @@ import {
 
 export function liveMoveTargetKey(vanId: string, start: string) {
   return `${vanId}|${start}`;
-}
-
-function overlaps(start: string, end: string, job: CalendarDispatchJob) {
-  return timeToMinutes(start) < timeToMinutes(job.end) && timeToMinutes(end) > timeToMinutes(job.start);
 }
 
 function canonicalAppointmentDurationMinutes(appointment: BrowserAppointmentRecord) {
@@ -40,12 +36,23 @@ function canonicalAppointmentDurationMinutes(appointment: BrowserAppointmentReco
   return Number.isFinite(wallClock) && wallClock > 0 ? wallClock : 0;
 }
 
+function canonicalCapacitySlotCount(appointment: BrowserAppointmentRecord) {
+  const stored = Number(appointment.scheduledSlotCount || 0);
+  if (Number.isFinite(stored) && stored > 0) return Math.max(1, Math.ceil(stored));
+  return Math.max(1, Math.ceil(canonicalAppointmentDurationMinutes(appointment) / 60));
+}
+
+function elapsedTimeOverlaps(start: string, end: string, job: CalendarDispatchJob) {
+  return timeToMinutes(start) < timeToMinutes(job.end) && timeToMinutes(end) > timeToMinutes(job.start);
+}
+
 /**
  * Manual LIVE drag is a direct office dispatch action rather than an automatic route
  * recommendation. Canonical duration is elapsed work time. Lunch remains unavailable as
  * an independent appointment start because it is absent from serviceStartTimes, but a
  * long job may span lunch without receiving a synthetic extra hour. Booking Authority
- * remains the commit-time source of truth and revalidates the same continuous interval.
+ * remains the commit-time source of truth and revalidates both elapsed time and owned
+ * service-capacity slots.
  */
 export function liveOperationalMoveCapacityCandidates(
   day: OperationalDay,
@@ -57,6 +64,7 @@ export function liveOperationalMoveCapacityCandidates(
 
   const settings = getRuntimeSchedulingSettings();
   const durationMinutes = canonicalAppointmentDurationMinutes(appointment);
+  const capacitySlotCount = canonicalCapacitySlotCount(appointment);
   if (!durationMinutes) return [];
   const dayEnd = timeToMinutes(settings.workdayEnd) - settings.routeMarginMinutes;
   // Monday through Saturday share the same canonical service starts. Per-van half-days
@@ -72,9 +80,15 @@ export function liveOperationalMoveCapacityCandidates(
     const starts = liveOperationalStartTimes(capacityState, van.id, day.dateKey, baseStarts);
     for (const start of starts) {
       const end = minutesToTime(timeToMinutes(start) + durationMinutes);
+      const startIndex = starts.indexOf(start);
+      const ownedStarts = startIndex < 0 ? [] : starts.slice(startIndex, startIndex + capacitySlotCount);
+      if (ownedStarts.length !== capacitySlotCount) continue;
       if (timeToMinutes(end) > dayEnd) continue;
       if (!liveOperationalWindowAllows(capacityState, van.id, day.dateKey, start, end)) continue;
-      if (otherJobs.some((job) => job.vanId === van.id && overlaps(start, end, job))) continue;
+      if (otherJobs.some((job) => job.vanId === van.id && (
+        elapsedTimeOverlaps(start, end, job)
+        || ownedStarts.some((ownedStart) => jobOwnsCapacityStart(job, ownedStart))
+      ))) continue;
 
       candidates.push({
         vanId: van.id,
@@ -83,7 +97,7 @@ export function liveOperationalMoveCapacityCandidates(
         segment: halfDay ? halfDayForTime(start) : timeToMinutes(start) < 12 * 60 && timeToMinutes(end) > 13 * 60 ? 'full_day' : halfDayForTime(start),
         sector: appointment.sector,
         score: 0,
-        reasons: ['Manual operational move: canonical elapsed duration fits the continuous live capacity window'],
+        reasons: ['Manual operational move: elapsed work and owned service-capacity slots both fit'],
         requiresSupportVan: false,
         primaryUnits: appointment.totalQuantity,
       });

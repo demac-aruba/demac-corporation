@@ -5,12 +5,13 @@ import {
   type LiveOperationalCapacityState,
 } from '../lib/live-operational-capacity';
 import { bookingActorLabel, projectLiveSchedulingAppointments, resolveCanonicalVanId } from '../lib/live-scheduling';
+import { afterHoursTargetForVan, availableSlotAction } from '../lib/live-scheduling-interactions';
 import {
   liveDragMoveCandidates,
   liveMoveTargetKey,
   projectCommittedLiveMove,
 } from '../lib/live-scheduling-move';
-import { buildOperationalWeek, findCandidateSlotsForDay } from '../lib/scheduling-capacity';
+import { buildOperationalWeek, findCandidateSlotsForDay, jobOwnsCapacityStart } from '../lib/scheduling-capacity';
 
 function requireCondition(condition: unknown, message: string) {
   if (!condition) throw new Error(`Live scheduling acceptance failed: ${message}`);
@@ -63,6 +64,42 @@ requireCondition(canonical.assignments[0].end === '10:30', 'Canonical elapsed du
 requireCondition(canonical.scheduledSlotCount === 2, 'Numeric Work Order scheduledSlots must remain capacity/history metadata.');
 requireCondition(canonical.bookedByName === 'Christian', 'Canonical booking operator must be preserved.');
 requireCondition(bookingActorLabel({ appointmentId: 'APT-MAYA', source: 'demac-customer-agent' }) === 'Maya', 'Customer Agent bookings must display Maya.');
+
+const sixService = projectLiveSchedulingAppointments([{
+  ...canonicalWorkOrders[0],
+  id: 'WO-APT-SIX-1',
+  appointmentId: 'APT-SIX',
+  airConditionerCount: 6,
+  appointmentDurationMinutes: 360,
+  appointmentEndTime: '14:30',
+  scheduledSlots: 6,
+}], clients, properties)[0];
+requireCondition(sixService.assignments[0].end === '14:30', 'Six Standard Services must keep the canonical 08:30–14:30 elapsed work interval.');
+requireCondition(sixService.assignments[0].capacitySlotStarts?.length === 6, 'Six Standard Services must own all six normal Van capacity starts.');
+requireCondition(jobOwnsCapacityStart(sixService.assignments[0], '15:30'), 'Six Standard Services must not expose the 15:30 capacity start as available.');
+
+const threeService = projectLiveSchedulingAppointments([{
+  ...canonicalWorkOrders[0],
+  id: 'WO-APT-THREE-1',
+  appointmentId: 'APT-THREE',
+  time: '09:30',
+  airConditionerCount: 3,
+  appointmentDurationMinutes: 180,
+  appointmentEndTime: '12:30',
+  scheduledSlots: 3,
+}], clients, properties)[0];
+requireCondition(threeService.assignments[0].end === '12:30', 'Three Standard Services must keep three real elapsed work hours.');
+requireCondition(
+  threeService.assignments[0].capacitySlotStarts?.join(',') === '09:30,10:30,13:30',
+  'Three Standard Services must retain exactly three capacity spots when lunch removes a sellable anchor.',
+);
+requireCondition(jobOwnsCapacityStart(threeService.assignments[0], '13:30'), 'The third owned capacity spot must project into the live Van lane.');
+requireCondition(!jobOwnsCapacityStart(threeService.assignments[0], '14:30'), 'Three Standard Services must not consume a fourth capacity spot.');
+
+const perVanAfterHoursTarget = afterHoursTargetForVan('2026-08-18', { id: 'VAN-3', name: 'Van 3' });
+requireCondition(perVanAfterHoursTarget.vanId === 'VAN-3' && perVanAfterHoursTarget.vanName === 'Van 3', 'Per-Van after-hours creation must preserve the lane-selected Van.');
+requireCondition(availableSlotAction('card') === 'book' && availableSlotAction('book') === 'book', 'Available card background and BOOK must open normal booking.');
+requireCondition(availableSlotAction('support') === 'support', 'The explicit SUPPORT action must remain isolated from normal booking.');
 
 // Regression for an AM → PM drag created before operational-move v3. Duration is the
 // timing authority, so a stale pre-move end snapshot must not hide the actual span.
@@ -310,4 +347,4 @@ const fleetRecords = [
 requireCondition(resolveCanonicalVanId('v4', fleetRecords) === 'VAN-4', 'Short van aliases must resolve to canonical Van 4.');
 requireCondition(resolveCanonicalVanId('van-1783800405341', fleetRecords) === 'VAN-4', 'Legacy duplicate van documents must resolve to one physical lane.');
 
-console.log('Live scheduling acceptance passed: canonical duration drives wall-clock agenda occupancy while slot metadata remains compatibility/capacity history; flexible lunch, full-day Saturdays, per-van half-days, closures and communication ownership remain protected.');
+console.log('Live scheduling acceptance passed: canonical duration drives elapsed work time while scheduled slot ownership drives capacity; flexible lunch, per-Van after-hours targeting, full-card booking, full-day Saturdays, half-days, closures and communication ownership remain protected.');

@@ -1,0 +1,53 @@
+.laneLayout {
+  display: flex;
+  flex-direction: column;
+}
+
+.laneAction {
+  margin-top: auto;
+  padding: 7px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.laneAction button {
+  width: 100%;
+  min-height: 31px;
+  padding: 7px 8px;
+  font-size: 6.2px;
+}
+
+.laneAction button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.slotInteractive {
+  position: relative;
+}
+
+.slotCardButton {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.slotCardButton:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.slotContent {
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.slotActions {
+  position: relative;
+  z-index: 2;
+}

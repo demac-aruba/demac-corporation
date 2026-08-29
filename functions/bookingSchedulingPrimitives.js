@@ -189,9 +189,21 @@ function capacitySlotsForInterval(startTime, durationMinutes, halfDay) {
   });
 }
 
-function occupiedSlots(startTime, slotCount, halfDay) {
+/**
+ * Capacity ownership is distinct from elapsed appointment time. `slotCount` is the
+ * number of canonical service-capacity units assigned to the work, so a missing
+ * sellable lunch anchor must not silently reduce that ownership.
+ */
+function capacitySlotsForOwnership(startTime, slotCount, halfDay) {
+  const schedule = bookingSlots(halfDay);
+  const index = schedule.indexOf(startTime);
   const count = Math.max(1, Math.ceil(Number(slotCount) || 0));
-  return capacitySlotsForInterval(startTime, count * 60, halfDay);
+  if (index < 0 || index + count > schedule.length) return [];
+  return schedule.slice(index, index + count);
+}
+
+function occupiedSlots(startTime, slotCount, halfDay) {
+  return capacitySlotsForOwnership(startTime, slotCount, halfDay);
 }
 
 function staffUnavailable(profile, date, absences) {
@@ -355,6 +367,7 @@ module.exports = {
   addressSimilarity,
   arubaDateParts,
   capacitySlotsForInterval,
+  capacitySlotsForOwnership,
   cleanText,
   dateDistanceInDays,
   endTime,

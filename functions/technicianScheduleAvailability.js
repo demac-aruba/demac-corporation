@@ -2,7 +2,6 @@ const {
   EXTRA_MORNING_SLOT,
   MORNING_SLOTS,
   REGULAR_SLOTS,
-  capacitySlotsForInterval,
   endTime,
   isHalfDay,
   orderBlocksCapacity,
@@ -30,9 +29,7 @@ function reservedSlotsForOrder(order, services = [], halfDaySchedules = []) {
   if (order.fullDaySingleProperty === true) return canonicalDaySlots(order.vanId, order.date, halfDaySchedules);
 
   const interval = workOrderCapacityInterval(order, services, halfDay);
-  if (interval) {
-    return capacitySlotsForInterval(text(order.time), interval.durationMinutes, halfDay);
-  }
+  if (interval?.lockSlots?.length) return interval.lockSlots;
 
   // Historical fallback only: older records may contain an explicit lock/start array
   // but no duration/end snapshot. Preserve those reservations without making arrays

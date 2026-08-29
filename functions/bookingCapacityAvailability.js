@@ -1,7 +1,7 @@
 const {
   EXTRA_MORNING_SLOT,
   REGULAR_SLOTS,
-  capacitySlotsForInterval,
+  capacitySlotsForOwnership,
   isHalfDay,
   normalizeTime,
   orderBlocksCapacity,
@@ -105,14 +105,16 @@ function assignmentCapacityInterval({ time, allocation, halfDay }) {
   const end = start + durationMinutes;
   const operationalEnd = operationalEndMinutes(halfDay);
   if (operationalEnd === null || end > operationalEnd) return null;
+  const ownedSlotCount = Math.max(1, Math.round(Number(allocation.slots) || Math.ceil(durationMinutes / 60)));
   const lockSlots = allocation.fullDay
     ? (halfDay ? [] : [...REGULAR_SLOTS])
-    : capacitySlotsForInterval(normalizedStart, durationMinutes, halfDay);
+    : capacitySlotsForOwnership(normalizedStart, ownedSlotCount, halfDay);
   if (!lockSlots.length) return null;
+  const capacityEnd = clockMinutes(endTimeFromOccupiedSlots(lockSlots));
   return {
     start,
     end,
-    capacityEnd: allocation.fullDay ? operationalEnd : end,
+    capacityEnd: allocation.fullDay ? operationalEnd : Math.max(end, capacityEnd ?? end),
     durationMinutes,
     lockSlots,
   };
@@ -126,11 +128,17 @@ function workOrderCapacityInterval(order, services, halfDay) {
   const end = start + durationMinutes;
   const operationalEnd = operationalEndMinutes(halfDay);
   const fullDay = order?.fullDaySingleProperty === true;
+  const ownedSlotCount = orderSlotCount(order, services);
+  const lockSlots = fullDay
+    ? (halfDay ? [] : [...REGULAR_SLOTS])
+    : capacitySlotsForOwnership(normalizedStart, ownedSlotCount, halfDay);
+  const capacityEnd = clockMinutes(endTimeFromOccupiedSlots(lockSlots));
   return {
     start,
     end,
-    capacityEnd: fullDay && operationalEnd !== null ? operationalEnd : end,
+    capacityEnd: fullDay && operationalEnd !== null ? operationalEnd : Math.max(end, capacityEnd ?? end),
     durationMinutes,
+    lockSlots,
   };
 }
 
@@ -138,8 +146,9 @@ function capacityLockSlots({ time, durationMinutes, slots, halfDay, fullDay }) {
   if (fullDay === true) return halfDay ? [] : [...REGULAR_SLOTS];
   const duration = Number.isFinite(Number(durationMinutes)) && Number(durationMinutes) > 0
     ? Math.max(1, Math.round(Number(durationMinutes)))
-    : Math.max(1, Math.round(Number(slots) || 1) * 60);
-  return capacitySlotsForInterval(normalizeTime(time), duration, halfDay);
+    : 60;
+  const ownedSlotCount = Math.max(1, Math.round(Number(slots) || Math.ceil(duration / 60)));
+  return capacitySlotsForOwnership(normalizeTime(time), ownedSlotCount, halfDay);
 }
 
 function vanCanReceiveOperationalMove(van, assignment) {

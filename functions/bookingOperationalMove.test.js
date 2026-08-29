@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { BOOKING_ERROR_CODES } = require("./bookingAuthorityCore");
 const {
+  OPERATIONAL_MOVE_VERSION,
   createOperationalMoveAuthority,
   manualOccupiedSlots,
   workOrderBlocksOperationalCapacity,
@@ -145,10 +146,11 @@ function moveInput(overrides = {}) {
   };
 }
 
-test("manual dispatch windows use only the visible continuous schedule blocks", () => {
+test("manual dispatch capacity preserves owned spots across lunch", () => {
+  assert.equal(OPERATIONAL_MOVE_VERSION, 4);
   assert.deepEqual(manualOccupiedSlots("2026-08-18", "08:30", 3), ["08:30", "09:30", "10:30"]);
   assert.deepEqual(manualOccupiedSlots("2026-08-18", "13:30", 3), ["13:30", "14:30", "15:30"]);
-  assert.deepEqual(manualOccupiedSlots("2026-08-18", "09:30", 3), []);
+  assert.deepEqual(manualOccupiedSlots("2026-08-18", "09:30", 3), ["09:30", "10:30", "13:30"]);
   assert.deepEqual(manualOccupiedSlots("2026-08-22", "13:30", 3), ["13:30", "14:30", "15:30"]);
   assert.deepEqual(manualOccupiedSlots("2026-08-23", "13:30", 1), []);
 });
@@ -252,14 +254,17 @@ test("real canonical occupied work still blocks the move transaction", async () 
   );
 });
 
-test("a block that cannot fit continuously before lunch or before day end is rejected", async () => {
-  const { authority } = fixture();
+test("lunch does not reduce moved capacity ownership, while the real end stays continuous", async () => {
+  const lunchMove = fixture();
+  const result = await lunchMove.authority.moveAppointment(moveInput({ requestedTime: "09:30" }));
+  assert.equal(result.success, true);
+  assert.equal(lunchMove.db.read("appointments/APT-1").endTime, "12:30");
+  assert.equal(lunchMove.db.read("workOrders/WO-1").appointmentEndTime, "12:30");
+  assert.equal(lunchMove.db.read("appointments/APT-1").capacityLockIds.length, 3);
+
+  const tooLate = fixture();
   await assert.rejects(
-    () => authority.moveAppointment(moveInput({ requestedTime: "09:30" })),
-    (error) => error.code === BOOKING_ERROR_CODES.AVAILABILITY_CHANGED && error.details.reason === "target-outside-visible-capacity",
-  );
-  await assert.rejects(
-    () => authority.moveAppointment(moveInput({ requestId: "drag-test-67890", requestedTime: "14:30" })),
+    () => tooLate.authority.moveAppointment(moveInput({ requestId: "drag-test-67890", requestedTime: "14:30" })),
     (error) => error.code === BOOKING_ERROR_CODES.AVAILABILITY_CHANGED && error.details.reason === "target-outside-visible-capacity",
   );
 });
