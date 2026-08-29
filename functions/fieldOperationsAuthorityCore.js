@@ -153,6 +153,7 @@ function membershipIncludesStaff(membership, staffId) {
   return Boolean(membership) && (
     text(membership.driverStaffId, 180) === staffId
     || text(membership.helperStaffId, 180) === staffId
+    || text(membership.additionalHelperStaffId, 180) === staffId
   );
 }
 
@@ -166,6 +167,7 @@ function profileVanFallbackAllowed(identity, context) {
   const hasDatedStaffAssignment = context.dailyAssignments.some((assignment) => (
     text(assignment.driverStaffId, 180) === staffId
     || text(assignment.helperStaffId, 180) === staffId
+    || text(assignment.additionalHelperStaffId, 180) === staffId
   ));
   if (hasDatedStaffAssignment) return false;
 
@@ -189,6 +191,9 @@ function fieldAssignmentForIdentity(identity, order, dateKey, context) {
     return { assigned: true, responsibility: 'lead', source: membership.source, readOnly: false };
   }
   if (membership && text(membership.helperStaffId, 180) === staffId) {
+    return { assigned: true, responsibility: 'helper', source: membership.source, readOnly: false };
+  }
+  if (membership && text(membership.additionalHelperStaffId, 180) === staffId) {
     return { assigned: true, responsibility: 'helper', source: membership.source, readOnly: false };
   }
 

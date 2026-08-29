@@ -7,13 +7,25 @@ on:
       - 'apps/erp-next/lib/employee-work-schedule.ts'
       - 'apps/erp-next/lib/live-operational-capacity.ts'
       - 'apps/erp-next/components/scheduling/live-scheduling-overview.tsx'
+      - 'apps/erp-next/components/scheduling/adhoc-support-drawer.tsx'
       - 'apps/erp-next/components/scheduling/van-half-day-policy-banner.tsx'
       - 'apps/erp-next/components/scheduling/scheduling-page-shell.tsx'
       - 'apps/erp-next/scripts/employee-schedule-acceptance.ts'
       - 'apps/erp-next/scripts/live-scheduling-acceptance.ts'
       - 'functions/bookingSchedulingPrimitives.js'
+      - 'functions/bookingCrewResolution.test.js'
       - 'functions/bookingCapacityAvailability.js'
       - 'functions/bookingCapacityAvailability.test.js'
+      - 'functions/bookingAdhocSupport.js'
+      - 'functions/bookingAdhocSupport.test.js'
+      - 'functions/technicianScheduleAvailability.js'
+      - 'functions/technicianScheduleAvailability.test.js'
+      - 'functions/technicianScheduleChangeService.js'
+      - 'functions/technicianScheduleChangeService.test.js'
+      - 'functions/technicianDailyScheduleService.js'
+      - 'functions/technicianDailyScheduleService.test.js'
+      - 'functions/technicianDailyScheduleCanonicalTime.test.js'
+      - 'functions/technicianDailySchedules.js'
       - '.github/workflows/van-schedule-architecture-ci.yml'
   push:
     branches:
@@ -23,13 +35,25 @@ on:
       - 'apps/erp-next/lib/employee-work-schedule.ts'
       - 'apps/erp-next/lib/live-operational-capacity.ts'
       - 'apps/erp-next/components/scheduling/live-scheduling-overview.tsx'
+      - 'apps/erp-next/components/scheduling/adhoc-support-drawer.tsx'
       - 'apps/erp-next/components/scheduling/van-half-day-policy-banner.tsx'
       - 'apps/erp-next/components/scheduling/scheduling-page-shell.tsx'
       - 'apps/erp-next/scripts/employee-schedule-acceptance.ts'
       - 'apps/erp-next/scripts/live-scheduling-acceptance.ts'
       - 'functions/bookingSchedulingPrimitives.js'
+      - 'functions/bookingCrewResolution.test.js'
       - 'functions/bookingCapacityAvailability.js'
       - 'functions/bookingCapacityAvailability.test.js'
+      - 'functions/bookingAdhocSupport.js'
+      - 'functions/bookingAdhocSupport.test.js'
+      - 'functions/technicianScheduleAvailability.js'
+      - 'functions/technicianScheduleAvailability.test.js'
+      - 'functions/technicianScheduleChangeService.js'
+      - 'functions/technicianScheduleChangeService.test.js'
+      - 'functions/technicianDailyScheduleService.js'
+      - 'functions/technicianDailyScheduleService.test.js'
+      - 'functions/technicianDailyScheduleCanonicalTime.test.js'
+      - 'functions/technicianDailySchedules.js'
       - '.github/workflows/van-schedule-architecture-ci.yml'
   workflow_dispatch:
 
@@ -70,8 +94,11 @@ jobs:
       - name: Install booking authority dependencies
         run: npm install --prefix functions --no-audit --no-fund
 
-      - name: Validate Booking Authority Van capacity
-        run: node --test functions/bookingCapacityAvailability.test.js
+      - name: Validate Booking Authority Van capacity and crew
+        run: node --test functions/bookingCapacityAvailability.test.js functions/bookingCrewResolution.test.js functions/bookingAdhocSupport.test.js
+
+      - name: Validate technician schedule capacity projection
+        run: node --test functions/technicianDailyScheduleCanonicalTime.test.js functions/technicianScheduleAvailability.test.js functions/technicianScheduleChangeService.test.js functions/technicianDailyScheduleService.test.js
 
       - name: Publish architecture status
         if: always()
@@ -81,5 +108,5 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$JOB_STATUS" = 'success' ]; then state=success; description='Van half-days and technician inheritance validated'; else state=failure; description='Van schedule architecture validation failed'; fi
+          if [ "$JOB_STATUS" = 'success' ]; then state=success; description='Van capacity, crew, support and same-day changes validated'; else state=failure; description='Van schedule architecture validation failed'; fi
           gh api repos/${{ github.repository }}/statuses/${{ github.sha }} -f state="$state" -f context='DEMAC / Van Schedule Architecture' -f description="$description"

@@ -3,14 +3,14 @@ import type { CanonicalStaffAbsence, CanonicalStaffProfile } from './canonical-o
 import { saveCanonicalStaffAbsence } from './canonical-operations-mutations';
 import {
   attendanceExceptionTotals,
-  calculateAttendanceVariance,
+  calculateAttendanceVarianceWithWorkSegments,
   classifyAttendanceExceptions,
   hasValidWorkedTimeRange,
   minutesBetween,
   scheduledBreakMinutes,
-  workedMinutes,
   type AttendanceExceptionClassification,
   type AttendanceExceptionSegment,
+  type AttendanceWorkSegment,
 } from './employee-attendance-calculation';
 
 export { minutesBetween, workedMinutes } from './employee-attendance-calculation';
@@ -19,6 +19,7 @@ export type {
   AttendanceExceptionKind,
   AttendanceExceptionSegment,
   AttendancePaymentTreatment,
+  AttendanceWorkSegment,
 } from './employee-attendance-calculation';
 
 export type AttendanceStatus = 'Present' | 'Late' | 'Sick' | 'Vacation' | 'Day Off' | 'Absent';
@@ -66,10 +67,15 @@ export type EmployeeTimesheetEntry = {
   lateMinutes?: number;
   workedMinutes?: number;
   attendanceExceptions?: AttendanceExceptionSegment[];
+  workOrderAttendanceSegments?: AttendanceWorkSegment[];
+  overtimeCalculationSource?: 'attendance_authority' | 'attendance_authority_with_work_segments';
+  overtimeReconciliationRequired?: boolean;
+  lastWorkOrderCompletedAt?: string;
   scheduledStartTime?: string;
   scheduledEndTime?: string;
   scheduledBreakMinutes?: number;
   scheduledPaidFreeMinutes?: number;
+  scheduleSnapshotSource?: string;
   createdAt?: string;
   updatedAt: string;
   updatedByUserId?: string;
@@ -178,7 +184,7 @@ export function lateMinutes(clockInTime: string, scheduledStartTime: string) {
   return Math.max(0, minutesBetween(scheduledStartTime, clockInTime));
 }
 
-/** @deprecated Overtime must be derived from the employee's resolved schedule. */
+/** @deprecated Overtime must be derived from the employee's resolved schedule and real work evidence. */
 export function overtimeMinutesAfterFive(clockOutTime: string) {
   if (!clockOutTime) return 0;
   return Math.max(0, minutesBetween('17:00', clockOutTime));
@@ -381,22 +387,31 @@ export async function saveAttendanceDay(input: {
   const scheduledBreakMinutesValue = scheduledBreakMinutes(schedule);
   const exceptionStatus = draft.status === 'Sick' || draft.status === 'Vacation' || draft.status === 'Absent';
   const workedStatus = draft.status === 'Present' || draft.status === 'Late';
+  const workOrderAttendanceSegments = existingEntry?.workOrderAttendanceSegments ?? [];
 
   if (workedStatus && schedule.scheduledMinutes > 0) {
     if (!draft.clockInTime || !draft.clockOutTime) throw new Error('Clock In and Clock Out are required for a worked attendance day.');
     if (!hasValidWorkedTimeRange(draft.clockInTime, draft.clockOutTime)) throw new Error('Clock Out must be later than Clock In.');
   }
 
-  const variance = calculateAttendanceVariance({
+  const hasBaseAttendance = hasValidWorkedTimeRange(draft.clockInTime, draft.clockOutTime);
+  const variance = calculateAttendanceVarianceWithWorkSegments({
+    workDate: date,
     schedule,
     clockInTime: draft.clockInTime,
     clockOutTime: draft.clockOutTime,
     breakMinutes: draft.breakMinutes,
+    workSegments: workOrderAttendanceSegments,
   });
   const attendanceExceptions = workedStatus
     ? classifyAttendanceExceptions(variance, draft.attendanceExceptionClassifications)
     : [];
   const partialTotals = attendanceExceptionTotals(attendanceExceptions);
+  const existingOvertimeMinutes = Math.max(
+    0,
+    Math.round(Number(existingEntry?.overtimeMinutes) || Math.round((Number(existingEntry?.overtimeHours) || 0) * 60)),
+  );
+  const preserveUnknownLegacyOvertime = !hasBaseAttendance && !workOrderAttendanceSegments.length && existingOvertimeMinutes > 0;
 
   const requestedExceptionHours = exceptionStatus
     ? draft.exceptionHours === undefined
@@ -415,8 +430,7 @@ export async function saveAttendanceDay(input: {
   const noWorkNoPayMinutesValue = workedStatus
     ? partialTotals.noWorkNoPayMinutes
     : Math.round(fullDayNoWorkNoPayHours * 60);
-  const overtimeMinutesValue = variance.overtimeMinutes;
-  const workedMinutesValue = workedMinutes(draft.clockInTime, draft.clockOutTime, draft.breakMinutes);
+  const overtimeMinutesValue = preserveUnknownLegacyOvertime ? existingOvertimeMinutes : variance.overtimeMinutes;
 
   const entry: EmployeeTimesheetEntry = {
     ...existingEntry,
@@ -440,8 +454,11 @@ export async function saveAttendanceDay(input: {
     clockOutTime: draft.clockOutTime || undefined,
     breakMinutes: Math.max(0, Math.round(Number(draft.breakMinutes) || 0)),
     lateMinutes: workedStatus ? variance.lateArrivalMinutes : 0,
-    workedMinutes: workedMinutesValue,
+    workedMinutes: variance.workedMinutes,
     attendanceExceptions,
+    workOrderAttendanceSegments,
+    overtimeCalculationSource: workOrderAttendanceSegments.length ? 'attendance_authority_with_work_segments' : 'attendance_authority',
+    overtimeReconciliationRequired: preserveUnknownLegacyOvertime,
     scheduledStartTime: schedule.startTime || undefined,
     scheduledEndTime: schedule.endTime || undefined,
     scheduledBreakMinutes: scheduledBreakMinutesValue,

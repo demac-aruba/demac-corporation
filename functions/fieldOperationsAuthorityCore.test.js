@@ -286,6 +286,25 @@ test('moving a technician by dated assignment suppresses access to their old pro
   assert.equal(jobs[0].assignmentSource, 'daily_assignment');
 });
 
+test('dated third helper receives helper access only on the assigned Van and loses stale profile-Van fallback', async () => {
+  const seed = structuredClone(baseSeed);
+  seed.dailyVanAssignments = [
+    { id: '2026-08-24-VAN-1', date: '2026-08-24', vanId: 'VAN-1', driverStaffId: 'staff-lead', helperStaffId: 'staff-helper' },
+    { id: '2026-08-24-VAN-2', date: '2026-08-24', vanId: 'VAN-2', driverStaffId: 'staff-other', additionalHelperStaffId: 'staff-third' },
+  ];
+  seed.workOrders[0].technicianIds = [];
+  seed.workOrders[1].technicianIds = [];
+
+  const jobs = await loadAssignedSchedule(createDb(seed), technician('staff-third', 'VAN-1'), '2026-08-24', '2026-08-24');
+
+  assert.deepEqual(jobs.map((job) => job.workOrderId), ['WO-2']);
+  assert.equal(jobs[0].responsibility, 'helper');
+  assert.equal(jobs[0].assignmentSource, 'daily_assignment');
+  assert.ok(jobs[0].allowedActions.includes('report.edit'));
+  assert.ok(!jobs[0].allowedActions.includes('execute'));
+  assert.ok(!jobs[0].allowedActions.includes('visit.complete'));
+});
+
 test('canonical Van aliases resolve historical Work Order and daily assignment identifiers', async () => {
   const seed = {
     dailyVanAssignments: [{ id: 'alias-day', date: '2026-08-24', vanId: 'v4', driverStaffId: 'staff-alias' }],

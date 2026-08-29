@@ -27,7 +27,7 @@ const LEGACY_BROWSER_PRESETS = new Set<WorkPresetId>([
   'other',
 ]);
 
-const CANONICAL_VAN_IDS = new Set(['VAN-1', 'VAN-2', 'VAN-3', 'VAN-4']);
+const ADHOC_SUPPORT_KIND = 'adhoc_rescue';
 
 type LiveWorkItem = {
   id?: string;
@@ -51,6 +51,7 @@ type LiveWorkOrder = {
   appointmentAssignmentRole?: string;
   appointmentEndTime?: string;
   parentWorkOrderId?: string;
+  supportAssignmentKind?: string;
   airConditionerCount?: number;
   assignmentRole?: string;
   supportForWorkOrderId?: string;
@@ -140,32 +141,38 @@ function canonicalVanIdFromValue(value: unknown) {
   const raw = text(value);
   if (!raw) return '';
   const upper = raw.toUpperCase().replaceAll('_', '-').replace(/\s+/g, '-');
-  if (CANONICAL_VAN_IDS.has(upper)) return upper;
+  if (/^VAN-\d+$/.test(upper)) return upper;
   const compact = raw.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const match = compact.match(/^(?:van|v)([1-4])$/);
-  return match ? `VAN-${match[1]}` : '';
+  const match = compact.match(/^(?:van|v)(\d+)$/);
+  return match ? `VAN-${Number(match[1])}` : '';
 }
 
 function canonicalVanIdFromRecord(van: LiveVan | undefined) {
   if (!van) return '';
   const numericCandidates = [van.number, van.vanNumber, van.unitNumber]
     .map((value) => Number(value))
-    .filter((value) => Number.isInteger(value) && value >= 1 && value <= 4);
+    .filter((value) => Number.isInteger(value) && value >= 1);
   if (numericCandidates.length) return `VAN-${numericCandidates[0]}`;
-  for (const candidate of [van.id, van.code, van.name, van.label]) {
+
+  // Human/canonical metadata owns lane identity for an existing document. A Firestore
+  // legacy id such as `van-1783800405341` must not be parsed as a future Van number.
+  for (const candidate of [van.name, van.label, van.code]) {
     const canonical = canonicalVanIdFromValue(candidate);
     if (canonical) return canonical;
   }
-  return '';
+  return canonicalVanIdFromValue(van.id);
 }
 
 export function resolveCanonicalVanId(value: unknown, vans: LiveVan[] = []) {
-  const direct = canonicalVanIdFromValue(value);
-  if (direct) return direct;
   const raw = text(value);
   if (!raw) return '';
+
+  // Resolve an exact stored record first, matching the canonical operations authority.
+  // Direct future lanes such as VAN-5 still work when no legacy record shadows the id.
   const matchingRecord = vans.find((van) => van.id === raw);
-  return canonicalVanIdFromRecord(matchingRecord);
+  const fromRecord = canonicalVanIdFromRecord(matchingRecord);
+  if (fromRecord) return fromRecord;
+  return canonicalVanIdFromValue(raw);
 }
 
 function workOrderVanId(order: LiveWorkOrder, vans: LiveVan[] = []) {
@@ -186,6 +193,13 @@ function workOrderSupportForId(order: LiveWorkOrder) {
 
 function workOrderQuantity(order: LiveWorkOrder) {
   return positiveInteger(order.airConditionerCount ?? order.quantity);
+}
+
+function contributesAppointmentWorkQuantity(order: LiveWorkOrder) {
+  // Planned support splits the customer's real workload and therefore contributes
+  // quantity. Ad-hoc rescue support is an extra resource assignment to the same work
+  // and must never fabricate another AC/service unit in appointment totals.
+  return text(order.supportAssignmentKind).toLowerCase() !== ADHOC_SUPPORT_KIND;
 }
 
 function timeToMinutes(value: string) {
@@ -257,10 +271,20 @@ function assignmentEnd(
 ) {
   const start = text(order.time) || '08:30';
 
-  // Canonical capacity is the authority. Older records can contain a stale
-  // appointmentEndTime generated with the regular-day slot map even though their
-  // scheduledSlots correctly reflect a half-day Van. Prefer the reserved slots so
-  // LIVE heals those records at projection time instead of displaying fake capacity.
+  // Canonical appointment duration is elapsed work time. Lunch is not a sellable
+  // appointment start, but it must never add a synthetic hour to a long job.
+  const duration = positiveInteger(order.appointmentDurationMinutes ?? order.duration, 0);
+  if (duration > 0) return minutesToTime(timeToMinutes(start) + duration);
+
+  const workItemDuration = Array.isArray(order.appointmentWorkItems)
+    ? order.appointmentWorkItems.reduce((sum, item) => sum + Math.max(0, Number(item.durationMinutes) || 0), 0)
+    : 0;
+  if (workItemDuration > 0) return minutesToTime(timeToMinutes(start) + workItemDuration);
+
+  const explicit = validTime(order.appointmentEndTime);
+  if (explicit && timeToMinutes(explicit) > timeToMinutes(start)) return explicit;
+
+  // Compatibility fallback only for historical records that predate duration/end snapshots.
   const slots = normalizedSlots(order.scheduledSlots);
   if (slots.length) return minutesToTime(timeToMinutes(slots[slots.length - 1]) + 60);
 
@@ -275,12 +299,7 @@ function assignmentEnd(
     );
   }
 
-  const explicit = validTime(order.appointmentEndTime);
-  if (explicit && timeToMinutes(explicit) > timeToMinutes(start)) return explicit;
-
-  // Final compatibility fallback for historical records that predate slot snapshots.
-  const duration = positiveInteger(order.appointmentDurationMinutes ?? order.duration, 60);
-  return minutesToTime(timeToMinutes(start) + duration);
+  return minutesToTime(timeToMinutes(start) + 60);
 }
 
 function daySegment(start: string, end: string): DaySegment {
@@ -288,9 +307,21 @@ function daySegment(start: string, end: string): DaySegment {
   return timeToMinutes(start) < 12 * 60 ? 'am' : 'pm';
 }
 
+function normalizedStatus(status: unknown) {
+  return text(status).toLowerCase();
+}
+
 function isCancelled(status: unknown) {
-  const normalized = text(status).toLowerCase();
-  return normalized === 'cancelada' || normalized === 'cancelled' || normalized === 'canceled';
+  return ['cancelada', 'cancelled', 'canceled'].includes(normalizedStatus(status));
+}
+
+function isTemporaryHold(status: unknown) {
+  return ['reserva temporal', 'temporary_hold', 'temporary hold'].includes(normalizedStatus(status));
+}
+
+function projectedStatus(status: unknown): CalendarDispatchJob['status'] {
+  if (isCancelled(status)) return 'cancelled';
+  return isTemporaryHold(status) ? 'temporary_hold' : 'confirmed';
 }
 
 function cleanCustomerDescription(problem: unknown, fallback: string) {
@@ -352,7 +383,7 @@ function workOrderAssignment(
     vanId: workOrderVanId(order, vans) || 'UNASSIGNED',
     presetId: workOrderPresetId(order),
     quantity: workOrderQuantity(order),
-    status: isCancelled(order.status) ? 'cancelled' : 'confirmed',
+    status: projectedStatus(order.status),
     readiness: 'not_checked',
     isPrimaryAssignment: primary,
     customerCommunicationOwner: primary,
@@ -402,13 +433,14 @@ export function projectLiveSchedulingAppointments(
     const assignments = sorted.map((order) => workOrderAssignment(order, customer, site, sector, vans, operationalState));
     const primaryAssignment = assignments.find((assignment) => assignment.isPrimaryAssignment) ?? assignments[0];
     const supportAssignment = assignments.find((assignment) => !assignment.isPrimaryAssignment);
-    const quantity = sorted.reduce((total, order) => total + workOrderQuantity(order), 0);
+    const quantity = sorted.reduce((total, order) => total + (contributesAppointmentWorkQuantity(order) ? workOrderQuantity(order) : 0), 0);
     const workTypeId = workOrderWorkTypeId(primary);
     const workLabel = workOrderWorkLabel(primary);
     const fallbackDescription = `${workLabel} × ${quantity}`;
     const customerFacingDescription = text(primary.customerFacingDescription)
       || cleanCustomerDescription(primary.problem, fallbackDescription);
     const cancelled = activeOrders.length === 0 && assignments.every((assignment) => assignment.status === 'cancelled');
+    const temporaryHold = !cancelled && assignments.some((assignment) => assignment.status === 'temporary_hold');
     const confirmedAt = text(primary.confirmedAt) || text(primary.createdAt);
     const actorLabel = bookingActorLabel(authorityAppointment);
     const durationMinutes = positiveInteger(primary.appointmentDurationMinutes ?? primary.duration, 60);
@@ -444,7 +476,7 @@ export function projectLiveSchedulingAppointments(
       customerPreferredLanguage: text(client?.preferredLanguage) || undefined,
       propertyAddress: text(property?.address) || text(primary.address) || undefined,
       propertyAccessInstructions: text(property?.accessInstructions) || undefined,
-      status: cancelled ? 'cancelled' : 'confirmed',
+      status: cancelled ? 'cancelled' : temporaryHold ? 'temporary_hold' : 'confirmed',
       assignments,
       primaryVanId: primaryAssignment.vanId,
       supportVanId: supportAssignment?.vanId,
@@ -453,7 +485,7 @@ export function projectLiveSchedulingAppointments(
       bookedBySource: text(authorityAppointment?.source) || undefined,
       createdAt: text(authorityAppointment?.createdAtIso) || text(primary.createdAt) || confirmedAt || new Date(0).toISOString(),
       updatedAt: text(authorityAppointment?.updatedAtIso) || text(primary.updatedAt) || undefined,
-      confirmedAt: confirmedAt || undefined,
+      confirmedAt: temporaryHold ? undefined : confirmedAt || undefined,
       workOrderId: primary.id,
       workOrderIds: sorted.map((order) => order.id),
     });

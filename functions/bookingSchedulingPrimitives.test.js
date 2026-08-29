@@ -7,6 +7,7 @@ test("dated crew membership overrides recurring crew without applying readiness"
     id: "VAN-1",
     responsibleStaffId: "regular-driver",
     regularHelperId: "regular-helper",
+    additionalHelperId: "regular-additional-helper",
   };
   const assignments = [{
     id: "2026-08-24-VAN-1",
@@ -14,13 +15,15 @@ test("dated crew membership overrides recurring crew without applying readiness"
     vanId: "VAN-1",
     driverStaffId: "dated-driver",
     helperStaffId: "dated-helper",
+    additionalHelperStaffId: "dated-additional-helper",
     status: "Mantenimiento",
   }];
 
   const membership = resolveCrewMembership(van, "2026-08-24", assignments);
-  assert.deepEqual(membership.technicianIds, ["dated-driver", "dated-helper"]);
+  assert.deepEqual(membership.technicianIds, ["dated-driver", "dated-helper", "dated-additional-helper"]);
   assert.equal(membership.driverStaffId, "dated-driver");
   assert.equal(membership.helperStaffId, "dated-helper");
+  assert.equal(membership.additionalHelperStaffId, "dated-additional-helper");
   assert.equal(membership.source, "daily_assignment");
   assert.equal(membership.assignmentStatus, "Mantenimiento");
 });
@@ -30,11 +33,13 @@ test("crew membership falls back to recurring Van ownership when no dated overri
     id: "VAN-2",
     responsibleStaffId: "regular-driver",
     regularHelperId: "regular-helper",
+    additionalHelperId: "regular-additional-helper",
   }, "2026-08-24", []);
 
   assert.equal(membership.driverStaffId, "regular-driver");
   assert.equal(membership.helperStaffId, "regular-helper");
-  assert.deepEqual(membership.technicianIds, ["regular-driver", "regular-helper"]);
+  assert.equal(membership.additionalHelperStaffId, "regular-additional-helper");
+  assert.deepEqual(membership.technicianIds, ["regular-driver", "regular-helper", "regular-additional-helper"]);
   assert.equal(membership.source, "regular_crew");
   assert.equal(membership.assignmentStatus, undefined);
 });
@@ -45,6 +50,7 @@ test("resolveAssignment keeps Scheduling readiness semantics while consuming mem
     active: true,
     responsibleStaffId: "regular-driver",
     regularHelperId: "regular-helper",
+    additionalHelperId: "regular-additional-helper",
   };
   const assignments = [{
     id: "2026-08-24-VAN-3",
@@ -52,10 +58,12 @@ test("resolveAssignment keeps Scheduling readiness semantics while consuming mem
     vanId: "VAN-3",
     driverStaffId: "dated-driver",
     helperStaffId: "dated-helper",
+    additionalHelperStaffId: "dated-additional-helper",
   }];
   const profiles = [
     { id: "dated-driver", active: true, availability: "Disponible", canDriveVan: true },
     { id: "dated-helper", active: true, availability: "Disponible" },
+    { id: "dated-additional-helper", active: true, availability: "Disponible" },
   ];
 
   const available = resolveAssignment(van, "2026-08-24", profiles, assignments, []);
@@ -63,7 +71,8 @@ test("resolveAssignment keeps Scheduling readiness semantics while consuming mem
     vanId: "VAN-3",
     driverStaffId: "dated-driver",
     helperStaffId: "dated-helper",
-    technicianIds: ["dated-driver", "dated-helper"],
+    additionalHelperStaffId: "dated-additional-helper",
+    technicianIds: ["dated-driver", "dated-helper", "dated-additional-helper"],
     status: "Disponible",
   });
 

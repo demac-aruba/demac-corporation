@@ -1,9 +1,9 @@
 const {
   EXTRA_MORNING_SLOT,
   REGULAR_SLOTS,
+  capacitySlotsForInterval,
   isHalfDay,
   normalizeTime,
-  occupiedSlots,
   orderBlocksCapacity,
   orderSlotCount,
   propertyZone,
@@ -24,6 +24,20 @@ const ROUTE_POLICIES = Object.freeze({
   ADVISORY: "advisory",
 });
 
+function clockMinutes(value) {
+  const match = String(value || "").match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour > 23 || minute > 59) return null;
+  return hour * 60 + minute;
+}
+
+function minutesClock(value) {
+  const total = Math.max(0, Math.round(Number(value) || 0));
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
 function normalizeOrderTime(value) {
   const time = normalizeTime(value);
   if (!time) return "08:30";
@@ -42,7 +56,90 @@ function endTimeFromOccupiedSlots(slots) {
   const match = String(slots[slots.length - 1] || "").match(/^(\d{2}):(\d{2})$/);
   if (!match) return "";
   const total = Number(match[1]) * 60 + Number(match[2]) + 60;
-  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+  return minutesClock(total);
+}
+
+function endTimeFromDuration(startTime, durationMinutes) {
+  const start = clockMinutes(normalizeTime(startTime));
+  const duration = Math.max(1, Math.round(Number(durationMinutes) || 0));
+  return start === null || !duration ? "" : minutesClock(start + duration);
+}
+
+function operationalEndMinutes(halfDay) {
+  const slots = halfDay ? ["08:30", "09:30", "10:30", EXTRA_MORNING_SLOT] : REGULAR_SLOTS;
+  const last = clockMinutes(slots[slots.length - 1]);
+  return last === null ? null : last + 60;
+}
+
+function allocationDurationMinutes(allocation = {}) {
+  const exact = Number(allocation.durationMinutes);
+  if (Number.isFinite(exact) && exact > 0) return Math.max(1, Math.round(exact));
+  return Math.max(1, Math.round(Number(allocation.slots) || 1) * 60);
+}
+
+function workOrderDurationMinutes(order = {}, services = []) {
+  const exact = Number(order.appointmentDurationMinutes);
+  if (Number.isFinite(exact) && exact > 0) return Math.max(1, Math.round(exact));
+
+  const workItems = Array.isArray(order.appointmentWorkItems) ? order.appointmentWorkItems : [];
+  const workItemMinutes = workItems.reduce((sum, item) => sum + Math.max(0, Number(item?.durationMinutes) || 0), 0);
+  if (workItemMinutes > 0) return Math.max(1, Math.round(workItemMinutes));
+
+  const exactStart = clockMinutes(normalizeTime(order.time));
+  const exactEnd = clockMinutes(normalizeTime(order.appointmentEndTime));
+  if (exactStart !== null && exactEnd !== null && exactEnd > exactStart) return exactEnd - exactStart;
+
+  return Math.max(1, orderSlotCount(order, services) * 60);
+}
+
+function intervalsOverlap(left, right) {
+  if (!left || !right) return false;
+  return left.start < right.capacityEnd && left.capacityEnd > right.start;
+}
+
+function assignmentCapacityInterval({ time, allocation, halfDay }) {
+  const normalizedStart = normalizeTime(time);
+  const start = clockMinutes(normalizedStart);
+  const durationMinutes = allocationDurationMinutes(allocation);
+  if (start === null) return null;
+  const end = start + durationMinutes;
+  const operationalEnd = operationalEndMinutes(halfDay);
+  if (operationalEnd === null || end > operationalEnd) return null;
+  const lockSlots = allocation.fullDay
+    ? (halfDay ? [] : [...REGULAR_SLOTS])
+    : capacitySlotsForInterval(normalizedStart, durationMinutes, halfDay);
+  if (!lockSlots.length) return null;
+  return {
+    start,
+    end,
+    capacityEnd: allocation.fullDay ? operationalEnd : end,
+    durationMinutes,
+    lockSlots,
+  };
+}
+
+function workOrderCapacityInterval(order, services, halfDay) {
+  const normalizedStart = normalizeTime(order?.time);
+  const start = clockMinutes(normalizedStart);
+  if (start === null) return null;
+  const durationMinutes = workOrderDurationMinutes(order, services);
+  const end = start + durationMinutes;
+  const operationalEnd = operationalEndMinutes(halfDay);
+  const fullDay = order?.fullDaySingleProperty === true;
+  return {
+    start,
+    end,
+    capacityEnd: fullDay && operationalEnd !== null ? operationalEnd : end,
+    durationMinutes,
+  };
+}
+
+function capacityLockSlots({ time, durationMinutes, slots, halfDay, fullDay }) {
+  if (fullDay === true) return halfDay ? [] : [...REGULAR_SLOTS];
+  const duration = Number.isFinite(Number(durationMinutes)) && Number(durationMinutes) > 0
+    ? Math.max(1, Math.round(Number(durationMinutes)))
+    : Math.max(1, Math.round(Number(slots) || 1) * 60);
+  return capacitySlotsForInterval(normalizeTime(time), duration, halfDay);
 }
 
 function vanCanReceiveOperationalMove(van, assignment) {
@@ -73,8 +170,8 @@ function candidateAvailability({ date, time, allocation, van, assignment, data, 
 
   const halfDay = isHalfDay(van.id, date, data.vanHalfDaySchedules);
   if (allocation.fullDay && (halfDay || time !== "08:30")) return null;
-  const occupied = allocation.fullDay ? REGULAR_SLOTS : occupiedSlots(time, allocation.slots, halfDay);
-  if (!occupied.length) return null;
+  const requestedInterval = assignmentCapacityInterval({ time, allocation, halfDay });
+  if (!requestedInterval) return null;
 
   const sameVanOrders = data.workOrders
     .filter((order) => {
@@ -86,7 +183,7 @@ function candidateAvailability({ date, time, allocation, van, assignment, data, 
     .map((order) => ({
       ...order,
       time: normalizeOrderTime(order.time),
-      occupied: occupiedSlots(normalizeOrderTime(order.time), orderSlotCount(order, data.services), halfDay),
+      capacityInterval: workOrderCapacityInterval(order, data.services, halfDay),
       zoneInfo: propertyZone(
         data.properties.find((property) => property.id === order.propertyId),
         `${order.zone ?? ""} ${order.address ?? ""}`,
@@ -94,7 +191,7 @@ function candidateAvailability({ date, time, allocation, van, assignment, data, 
       ),
     }));
 
-  if (sameVanOrders.some((order) => order.occupied.some((slot) => occupied.includes(slot)))) return null;
+  if (sameVanOrders.some((order) => intervalsOverlap(requestedInterval, order.capacityInterval))) return null;
 
   let routeScore = 0;
   let routeReason = manualOperationalMove ? "manual-operational-move" : "explicit-office-target";
@@ -119,9 +216,9 @@ function candidateAvailability({ date, time, allocation, van, assignment, data, 
     driverStaffId: assignment.driverStaffId,
     helperStaffId: assignment.helperStaffId,
     quantity: allocation.quantity,
-    durationMinutes: Number(allocation.durationMinutes || allocation.slots * 60),
+    durationMinutes: requestedInterval.durationMinutes,
     slots: allocation.fullDay ? REGULAR_SLOTS.length : allocation.slots,
-    endTime: endTimeFromOccupiedSlots(occupied),
+    endTime: minutesClock(requestedInterval.end),
     fullDay: allocation.fullDay,
     routeScore,
     routeReason,
@@ -130,10 +227,17 @@ function candidateAvailability({ date, time, allocation, van, assignment, data, 
 
 module.exports = {
   ROUTE_POLICIES,
+  allocationDurationMinutes,
+  assignmentCapacityInterval,
   candidateAvailability,
+  capacityLockSlots,
+  endTimeFromDuration,
   endTimeFromOccupiedSlots,
+  intervalsOverlap,
   normalizeOrderTime,
   routePolicy,
   vanCanReceiveOperationalMove,
   workOrderBlocksOperationalMoveCapacity,
+  workOrderCapacityInterval,
+  workOrderDurationMinutes,
 };

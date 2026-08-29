@@ -116,6 +116,20 @@ function normalizeTime(value) {
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
+function timeMinutes(value) {
+  const match = String(value || "").match(/^(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour > 23 || minute > 59) return null;
+  return hour * 60 + minute;
+}
+
+function minutesTime(value) {
+  const total = Math.max(0, Math.round(Number(value) || 0));
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
 function endTime(start, slots) {
   const schedule = start === EXTRA_MORNING_SLOT
     ? HALF_DAY_SLOTS
@@ -153,11 +167,31 @@ function bookingSlots(halfDay) {
   return halfDay ? HALF_DAY_SLOTS : REGULAR_SLOTS;
 }
 
-function occupiedSlots(startTime, slotCount, halfDay) {
+/**
+ * Capacity locks are anchored only to appointment start times the office can actually sell.
+ * Lunch is intentionally absent from REGULAR_SLOTS, but elapsed work time remains continuous.
+ * A 10:30–13:30 job therefore owns the 10:30 anchor and releases 13:30 exactly; it does not
+ * fabricate 13:30/14:30 occupancy merely because noon is not a sellable appointment start.
+ */
+function capacitySlotsForInterval(startTime, durationMinutes, halfDay) {
   const schedule = bookingSlots(halfDay);
-  const start = schedule.indexOf(startTime);
-  if (start < 0 || start + slotCount > schedule.length) return [];
-  return schedule.slice(start, start + slotCount);
+  if (!schedule.includes(startTime)) return [];
+  const start = timeMinutes(startTime);
+  const lastStart = timeMinutes(schedule[schedule.length - 1]);
+  const duration = Math.max(1, Math.round(Number(durationMinutes) || 0));
+  if (start === null || lastStart === null || !duration) return [];
+  const end = start + duration;
+  const operationalEnd = lastStart + 60;
+  if (end > operationalEnd) return [];
+  return schedule.filter((slot) => {
+    const anchor = timeMinutes(slot);
+    return anchor !== null && anchor >= start && anchor < end;
+  });
+}
+
+function occupiedSlots(startTime, slotCount, halfDay) {
+  const count = Math.max(1, Math.ceil(Number(slotCount) || 0));
+  return capacitySlotsForInterval(startTime, count * 60, halfDay);
 }
 
 function staffUnavailable(profile, date, absences) {
@@ -182,11 +216,13 @@ function resolveCrewMembership(van, date, assignments) {
   const saved = assignments.find((item) => item.vanId === van.id && item.date === date);
   const driverStaffId = saved?.driverStaffId ?? van.responsibleStaffId;
   const helperStaffId = saved?.helperStaffId ?? van.regularHelperId;
+  const additionalHelperStaffId = saved?.additionalHelperStaffId ?? van.additionalHelperId;
   return {
     vanId: van.id,
     driverStaffId,
     helperStaffId,
-    technicianIds: [driverStaffId, helperStaffId].filter(Boolean),
+    additionalHelperStaffId,
+    technicianIds: [driverStaffId, helperStaffId, additionalHelperStaffId].filter(Boolean),
     source: saved ? "daily_assignment" : "regular_crew",
     assignmentStatus: saved?.status,
   };
@@ -196,8 +232,10 @@ function resolveAssignment(van, date, profiles, assignments, absences) {
   const membership = resolveCrewMembership(van, date, assignments);
   const driver = profiles.find((item) => item.id === membership.driverStaffId);
   const helper = profiles.find((item) => item.id === membership.helperStaffId);
+  const additionalHelper = profiles.find((item) => item.id === membership.additionalHelperStaffId);
   const driverStaffId = driver?.canDriveVan && !staffUnavailable(driver, date, absences) ? driver.id : undefined;
   const helperStaffId = helper && !staffUnavailable(helper, date, absences) ? helper.id : undefined;
+  const additionalHelperStaffId = additionalHelper && !staffUnavailable(additionalHelper, date, absences) ? additionalHelper.id : undefined;
   let status;
   if (van.active === false || van.status === "Fuera de servicio" || membership.assignmentStatus === "Fuera de servicio") status = "Fuera de servicio";
   else if (van.status === "Mantenimiento" || membership.assignmentStatus === "Mantenimiento") status = "Mantenimiento";
@@ -208,7 +246,10 @@ function resolveAssignment(van, date, profiles, assignments, absences) {
     vanId: van.id,
     driverStaffId,
     helperStaffId,
-    technicianIds: [driverStaffId, helperStaffId].filter(Boolean),
+    additionalHelperStaffId,
+    // The optional third helper is crew identity only. It does not alter the protected
+    // Booking Authority slot/unit capacity model unless a separately approved rule changes it.
+    technicianIds: [driverStaffId, helperStaffId, additionalHelperStaffId].filter(Boolean),
     status,
   };
 }
@@ -334,6 +375,7 @@ module.exports = {
   addDays,
   addressSimilarity,
   arubaDateParts,
+  capacitySlotsForInterval,
   cleanText,
   dateDistanceInDays,
   endTime,

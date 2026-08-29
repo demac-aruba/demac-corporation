@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AppointmentRecipientSelection } from '../../lib/customer-contacts';
 import {
   checkOfficeCreateAvailability,
   confirmOfficeAppointment,
   createOfficeLifecycleRequestId,
+  createOfficeTemporaryHold,
   listOfficeBookingPresets,
   type OfficeBookingOption,
   type OfficeBookingPreset,
@@ -21,6 +22,10 @@ import {
   type NewBookingCustomer,
   type NewBookingProperty,
 } from '../../lib/live-scheduling-booking-data';
+import {
+  liveVanCrew,
+  loadLiveOperationalCapacityState,
+} from '../../lib/live-operational-capacity';
 import {
   suggestArubaAddresses,
   type ArubaAddressEntry,
@@ -43,6 +48,7 @@ export type LiveCreatedBooking = {
   customer: BookingCustomer;
   property: BookingProperty;
   preset: OfficeBookingPreset;
+  status: 'confirmed' | 'temporary_hold';
 };
 
 type Props = {
@@ -225,6 +231,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
   const [presets, setPresets] = useState<OfficeBookingPreset[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const [crewLabel, setCrewLabel] = useState('Crew loading…');
   const [customerQuery, setCustomerQuery] = useState('');
   const [customerId, setCustomerId] = useState('');
   const [propertyId, setPropertyId] = useState('');
@@ -232,6 +239,8 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
   const [workLines, setWorkLines] = useState<WorkLineDraft[]>([]);
   const [description, setDescription] = useState('');
   const lastAutoDescriptionRef = useRef('');
+  const validationEpochRef = useRef(0);
+  const validationSignatureRef = useRef('');
   const [technicianInstructions, setTechnicianInstructions] = useState('');
   const [customerEditorOpen, setCustomerEditorOpen] = useState(false);
   const [propertyEditorOpen, setPropertyEditorOpen] = useState(false);
@@ -242,6 +251,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
   const [masterError, setMasterError] = useState('');
   const [checking, setChecking] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [holding, setHolding] = useState(false);
   const [authorityError, setAuthorityError] = useState('');
   const [validated, setValidated] = useState<ValidationState | null>(null);
 
@@ -268,6 +278,19 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
       });
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    setCrewLabel('Crew loading…');
+    void loadLiveOperationalCapacityState({ startDate: target.dateKey, endDate: target.dateKey })
+      .then((state) => {
+        if (active) setCrewLabel(liveVanCrew(state, target.vanId, target.dateKey).label);
+      })
+      .catch(() => {
+        if (active) setCrewLabel('Crew unavailable');
+      });
+    return () => { active = false; };
+  }, [target.dateKey, target.vanId]);
 
   const selectedCustomer = references.clients.find((customer) => customer.id === customerId);
   const customerProperties = useMemo(
@@ -329,6 +352,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
   const workSignature = workLines.map((line) => `${line.presetId}:${line.quantity}:${line.manualDurationMinutes ?? ''}`).join('|');
   const recipientSignature = recipientSelections.map((item) => `${item.recipientType}:${item.sourceId}:${Number(item.sendConfirmation)}:${Number(item.sendReminder)}`).sort().join('|');
   const signature = [customerId, propertyId, recipientSignature, workSignature, description.trim(), technicianInstructions.trim(), target.dateKey, target.vanId, target.start].join('|');
+  validationSignatureRef.current = signature;
   const activeValidation = validated?.signature === signature ? validated : null;
   const selectedValidatedOption = activeValidation?.options.find((option) => option.id === activeValidation.selectedOptionId)
     ?? activeValidation?.options[0]
@@ -342,6 +366,8 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
   });
 
   const resetValidation = () => {
+    validationEpochRef.current += 1;
+    setChecking(false);
     setValidated(null);
     setAuthorityError('');
   };
@@ -444,7 +470,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
     }
   };
 
-  const workRequestLines = (): OfficeBookingWorkLine[] => workLines.map((line) => {
+  const workRequestLines = useCallback((): OfficeBookingWorkLine[] => workLines.map((line) => {
     const preset = presetById.get(line.presetId)!;
     return {
       id: line.id,
@@ -453,12 +479,25 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
       quantity: line.quantity,
       ...(isOtherPreset(preset) ? { manualDurationMinutes: line.manualDurationMinutes } : {}),
     };
-  });
+  }), [presetById, workLines]);
 
-  const validateTarget = async () => {
-    if (!selectedCustomer) return setAuthorityError('Select or create a customer first.');
-    if (!selectedProperty) return setAuthorityError('Select or add a service property first.');
-    if (!workValid) return setAuthorityError('Add at least one valid work line. Other work requires a manual scheduled duration.');
+  const validateTarget = useCallback(async (automatic = false) => {
+    if (!selectedCustomer) {
+      if (!automatic) setAuthorityError('Select or create a customer first.');
+      return;
+    }
+    if (!selectedProperty) {
+      if (!automatic) setAuthorityError('Select or add a service property first.');
+      return;
+    }
+    if (!workValid) {
+      if (!automatic) setAuthorityError('Add at least one valid work line. Other work requires a manual scheduled duration.');
+      return;
+    }
+
+    const requestEpoch = validationEpochRef.current + 1;
+    validationEpochRef.current = requestEpoch;
+    const validationSignature = signature;
     setChecking(true);
     setAuthorityError('');
     setValidated(null);
@@ -476,6 +515,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
         recipientSelections,
         notes: `Created from LIVE Scheduling slot ${target.vanId} ${target.dateKey} ${target.start}.`,
       });
+      if (requestEpoch !== validationEpochRef.current || validationSignatureRef.current !== validationSignature) return;
       const exactOptions = result.options.filter((option) => optionMatchesTarget(option, target));
       if (!result.available || !result.offer || !exactOptions.length) {
         const reason = result.reason ? ` (${result.reason})` : '';
@@ -483,21 +523,29 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
         return;
       }
       setValidated({
-        signature,
+        signature: validationSignature,
         offerId: result.offer.id,
         offerVersion: result.offer.version,
         options: exactOptions,
         selectedOptionId: exactOptions[0].id,
       });
     } catch (error) {
-      setAuthorityError(error instanceof Error ? error.message : 'Booking Authority could not validate this target.');
+      if (requestEpoch === validationEpochRef.current && validationSignatureRef.current === validationSignature) {
+        setAuthorityError(error instanceof Error ? error.message : 'Booking Authority could not validate this target.');
+      }
     } finally {
-      setChecking(false);
+      if (requestEpoch === validationEpochRef.current) setChecking(false);
     }
-  };
+  }, [description, recipientSelections, selectedCustomer, selectedProperty, signature, target, technicianInstructions, workRequestLines, workValid]);
+
+  useEffect(() => {
+    if (loading || masterSaving || saving || holding || !selectedCustomer || !selectedProperty || !workValid) return;
+    const timer = window.setTimeout(() => { void validateTarget(true); }, 350);
+    return () => window.clearTimeout(timer);
+  }, [holding, loading, masterSaving, saving, selectedCustomer, selectedProperty, validateTarget, workValid]);
 
   const confirmBooking = async () => {
-    if (!activeValidation || !selectedValidatedOption || !selectedCustomer || !selectedProperty || !selectedPresets.length || saving) return;
+    if (!activeValidation || !selectedValidatedOption || !selectedCustomer || !selectedProperty || !selectedPresets.length || saving || holding) return;
     setSaving(true);
     setAuthorityError('');
     const { offerId, offerVersion } = activeValidation;
@@ -516,6 +564,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
         customer: selectedCustomer,
         property: selectedProperty,
         preset: selectedPresets[0],
+        status: 'confirmed',
       });
     } catch (error) {
       setValidated(null);
@@ -525,7 +574,37 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
     }
   };
 
-  const busy = loading || masterSaving || checking || saving;
+  const holdBooking = async () => {
+    if (!activeValidation || !selectedValidatedOption || !selectedCustomer || !selectedProperty || !selectedPresets.length || saving || holding) return;
+    setHolding(true);
+    setAuthorityError('');
+    const { offerId, offerVersion } = activeValidation;
+    const option = selectedValidatedOption;
+    try {
+      const result = await createOfficeTemporaryHold({
+        requestId: `schedule-hold:${offerId}:${offerVersion}:${option.id}`,
+        offerId,
+        offerVersion,
+        optionId: option.id,
+      });
+      onCreated({
+        appointmentId: result.appointmentId,
+        workOrderIds: result.workOrderIds ?? [],
+        option,
+        customer: selectedCustomer,
+        property: selectedProperty,
+        preset: selectedPresets[0],
+        status: 'temporary_hold',
+      });
+    } catch (error) {
+      setValidated(null);
+      setAuthorityError(error instanceof Error ? error.message : 'The temporary hold could not be created.');
+    } finally {
+      setHolding(false);
+    }
+  };
+
+  const busy = loading || masterSaving || saving || holding;
 
   return (
     <div className={styles.overlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
@@ -542,7 +621,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
         <div className={styles.body}>
           <section className={styles.targetCard}>
             <div><span>DATE</span><strong>{formatDate(target.dateKey)}</strong></div>
-            <div><span>PRIMARY VAN</span><strong>{target.vanName}</strong></div>
+            <div><span>PRIMARY VAN</span><strong>{target.vanName} · {crewLabel}</strong></div>
             <div><span>START</span><strong>{formatTime(target.start)}</strong></div>
             <div><span>OPEN BLOCK</span><strong>{formatTime(target.start)}–{formatTime(target.end)}</strong></div>
           </section>
@@ -690,11 +769,11 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
           </section>
 
           <section className={styles.authoritySection}>
-            <div className={styles.authorityHeading}><div><span>4</span><strong>Final capacity validation</strong><small>{target.vanName} stays the primary/responsible van. Booking Authority validates the combined workload and any support capacity required.</small></div><button type="button" className={styles.validateButton} disabled={busy || !selectedCustomer || !selectedProperty || !workValid} onClick={() => void validateTarget()}>{checking ? 'Validating…' : activeValidation ? 'Revalidate target' : 'Validate target'}</button></div>
+            <div className={styles.authorityHeading}><div><span>4</span><strong>Live capacity validation</strong><small>{target.vanName} stays the primary/responsible van. Booking Authority validates automatically as the complete workload changes; final transaction validation still runs on confirm or hold.</small></div><button type="button" className={styles.validateButton} disabled={busy || checking || !selectedCustomer || !selectedProperty || !workValid} onClick={() => void validateTarget(false)}>{checking ? 'Checking…' : 'Recheck now'}</button></div>
 
             {activeValidation && selectedValidatedOption ? (
               <div className={styles.validationSuccess}>
-                <header><div><b>✓</b><div><strong>Booking Authority approved the complete allocation</strong><span>Offer {activeValidation.offerId} · final transaction validation still runs on confirm.</span></div></div></header>
+                <header><div><b>✓</b><div><strong>Booking Authority approved the complete allocation</strong><span>Offer {activeValidation.offerId} · final transaction validation still runs on commit.</span></div></div></header>
                 {activeValidation.options.length > 1 ? (
                   <div style={{ marginTop: 10 }}>
                     <div style={{ color: 'var(--muted)', fontSize: 6, fontWeight: 850, marginBottom: 6 }}>VALID SUPPORT ALTERNATIVES</div>
@@ -722,16 +801,21 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
                     </article>
                   ))}
                 </div>
+                <div className={styles.authorityIdle} style={{ marginTop: 8 }}><strong>Temporary hold:</strong> reserves these same canonical capacity locks but sends no customer confirmation or reminder until an office user manually confirms it. No automatic expiry is assumed.</div>
               </div>
             ) : (
-              <div className={styles.authorityIdle}>Complete the customer, property and work details, then validate. The browser only estimates the workload; Booking Authority remains the source of truth for schedule capacity.</div>
+              <div className={styles.authorityIdle}>{checking ? 'Checking the complete allocation with Booking Authority…' : 'Complete the customer, property and work details. Booking Authority validates the live target automatically; the browser never becomes the source of truth for capacity.'}</div>
             )}
           </section>
         </div>
 
         <footer className={styles.footer}>
           <div><span>CANONICAL WRITE PATH</span><strong>Booking Authority → Appointment + Work Order + Capacity Locks</strong></div>
-          <div><button type="button" className={styles.secondaryButton} disabled={busy} onClick={onClose}>Cancel</button><button type="button" className={styles.confirmButton} disabled={!selectedValidatedOption || busy} onClick={() => void confirmBooking()}>{saving ? 'Confirming…' : 'Confirm appointment'}</button></div>
+          <div>
+            <button type="button" className={styles.secondaryButton} disabled={busy} onClick={onClose}>Cancel</button>
+            <button type="button" className={styles.secondaryButton} style={{ color: 'var(--warning, #b45309)', borderColor: 'var(--warning, #f59e0b)' }} disabled={!selectedValidatedOption || busy || checking} onClick={() => void holdBooking()}>{holding ? 'Holding…' : 'Temporary hold'}</button>
+            <button type="button" className={styles.confirmButton} disabled={!selectedValidatedOption || busy || checking} onClick={() => void confirmBooking()}>{saving ? 'Confirming…' : 'Confirm appointment'}</button>
+          </div>
         </footer>
       </aside>
     </div>

@@ -12,6 +12,8 @@ on:
       - 'functions/bookingVanIdentity.js'
       - 'functions/bookingVanIdentity.test.js'
       - 'functions/package.json'
+      - 'functions/employeeAttendanceCalculation.js'
+      - 'functions/employeeAttendanceCalculation.d.ts'
       - 'functions/whatsappWacliGateway.js'
       - 'services/whatsapp-bridge/**'
       - 'docs/ERP_NEXT_**'
@@ -20,6 +22,7 @@ on:
   push:
     branches:
       - main
+      - feature/scheduling-booking-whatsapp-consolidation
     paths:
       - 'apps/erp-next/**'
       - 'functions/bootstrap.js'
@@ -30,6 +33,8 @@ on:
       - 'functions/bookingVanIdentity.js'
       - 'functions/bookingVanIdentity.test.js'
       - 'functions/package.json'
+      - 'functions/employeeAttendanceCalculation.js'
+      - 'functions/employeeAttendanceCalculation.d.ts'
       - 'functions/whatsappWacliGateway.js'
       - 'services/whatsapp-bridge/**'
       - 'docs/ERP_NEXT_**'
@@ -97,6 +102,8 @@ jobs:
         run: npm run test:live-scheduling
       - name: Employee schedule architecture acceptance
         run: npm run test:employee-schedule
+      - name: Employee attendance Work Order authority acceptance
+        run: npm run test:employee-attendance-work-orders
       - name: Field operations domain acceptance
         run: npm run test:field-domain
       - name: Field assignment security acceptance
