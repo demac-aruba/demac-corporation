@@ -2,9 +2,11 @@ import assert from 'node:assert/strict';
 import {
   buildLiveCrmSnapshot,
   effectiveLiveCrmAssignmentsForProperty,
+  hydrateLiveCrmContactIdentity,
   joinLiveCrmCustomer,
   liveCrmPeopleRelationships,
   loadLiveCrmSnapshot,
+  matchesLiveCrmContactSearch,
   searchLiveCrmCustomers,
   type LiveCrmDataSource,
 } from '../lib/live-crm';
@@ -195,6 +197,8 @@ async function run() {
   assert.equal(searchLiveCrmCustomers(snapshot, 'ABC Aruba N.V.').length, 0, 'the canonical layer must not inject the former demo customer fixture');
   assert.equal(searchLiveCrmCustomers(snapshot, 'Archived Relationship').length, 0, 'inactive clients should be hidden by default');
   assert.deepEqual(searchLiveCrmCustomers(snapshot, 'Archived Relationship', { includeInactive: true }).map((item) => item.client.id), ['client-archived'], 'inactive clients should remain available to an explicit archive view');
+  assert.equal(matchesLiveCrmContactSearch(['José Álvarez', '+297 588-1212'], 'jose alvarez'), true, 'contact linking search should ignore accents');
+  assert.equal(matchesLiveCrmContactSearch(['José Álvarez', '+297 588-1212'], '2975881212'), true, 'contact linking search should ignore phone formatting');
 
   const effectiveAtOffice = effectiveLiveCrmAssignmentsForProperty(snapshot, 'client-iza', 'property-office');
   assert.equal(effectiveAtOffice.filter((item) => item.contactId === 'contact-manager').length, 1, 'a property-specific assignment should override the all-properties assignment for that contact');
@@ -206,6 +210,78 @@ async function run() {
   const tenant = people.find((person) => person.id === 'contact:contact-tenant');
   assert.equal(tenant?.kind, 'contact');
   assert.deepEqual(tenant?.properties.map((property) => property.id), ['property-home'], 'a property contact must expose the exact property relationship');
+
+  const linkedContact = {
+    id: 'contact-linked-customer',
+    clientId: 'client-iza',
+    linkedCustomerId: 'client-linked-person',
+    name: 'Stale copied name',
+    phone: '+297 000 0000',
+    email: 'stale@example.com',
+    active: true,
+  };
+  const linkedSnapshot = buildLiveCrmSnapshot({
+    ...canonicalInput,
+    clients: [...canonicalInput.clients, {
+      id: 'client-linked-person',
+      name: 'Live Residential Customer',
+      phone: '+297 588 1212',
+      whatsapp: '+297 588 1212',
+      email: 'live@example.com',
+      preferredLanguage: 'Spanish',
+      active: true,
+    }],
+    properties: [...canonicalInput.properties, {
+      id: 'property-linked-home',
+      clientId: 'client-linked-person',
+      name: 'Linked customer residence',
+      address: 'Caya Residential 10',
+      active: true,
+    }],
+    contacts: [...canonicalInput.contacts, linkedContact],
+    assignments: [...canonicalInput.assignments, {
+      id: 'assignment-linked-customer',
+      clientId: 'client-iza',
+      contactId: linkedContact.id,
+      propertyId: 'property-office',
+      scope: 'property' as const,
+      role: 'Commercial contact',
+      active: true,
+    }],
+    workOrders: [...canonicalInput.workOrders, {
+      id: 'WO-linked-residential',
+      clientId: 'client-linked-person',
+      propertyId: 'property-linked-home',
+      status: 'Confirmada',
+    }],
+    loadedAt: '2026-08-28T00:00:00.000Z',
+  });
+  const hydrated = hydrateLiveCrmContactIdentity(linkedSnapshot, linkedContact);
+  assert.equal(hydrated.name, 'Live Residential Customer', 'a linked contact must read the live source customer name instead of its stored projection');
+  assert.equal(hydrated.phone, '+297 588 1212', 'a linked contact must read live communication data from the source customer');
+  const linkedPerson = liveCrmPeopleRelationships(linkedSnapshot, 'client-iza').find((person) => person.linkedCustomerId === 'client-linked-person');
+  assert.equal(linkedPerson?.email, 'live@example.com', 'the CRM relationship view must hydrate the linked customer identity');
+  assert.equal(linkedPerson?.roles[0], 'Commercial contact', 'the linked identity must preserve its separate role at the commercial property');
+  const commercialGraph = joinLiveCrmCustomer(linkedSnapshot, 'client-iza');
+  const residentialGraph = joinLiveCrmCustomer(linkedSnapshot, 'client-linked-person');
+  assert.equal(commercialGraph?.properties.some((property) => property.id === 'property-linked-home'), false, 'linking a customer as a contact must not merge their residential properties into the commercial customer');
+  assert.equal(commercialGraph?.workOrders.some((workOrder) => workOrder.id === 'WO-linked-residential'), false, 'linking a customer as a contact must not merge their residential work history into the commercial customer');
+  assert.equal(residentialGraph?.properties.some((property) => property.id === 'property-linked-home'), true, 'the linked customer must retain their independent residential graph');
+
+  const inactiveLinkedSnapshot = buildLiveCrmSnapshot({
+    ...linkedSnapshot,
+    clients: linkedSnapshot.clients.map((client) => client.id === 'client-linked-person' ? { ...client, active: false } : client),
+  });
+  const inactiveHydrated = hydrateLiveCrmContactIdentity(inactiveLinkedSnapshot, linkedContact);
+  assert.equal(inactiveHydrated.active, false, 'an archived source customer must make the linked contact inactive');
+  assert.equal(liveCrmPeopleRelationships(inactiveLinkedSnapshot, 'client-iza').some((person) => person.linkedCustomerId === 'client-linked-person'), false, 'archived linked customers must be excluded from active CRM relationships');
+  const missingLinkedSnapshot = buildLiveCrmSnapshot({
+    ...linkedSnapshot,
+    clients: linkedSnapshot.clients.filter((client) => client.id !== 'client-linked-person'),
+  });
+  const missingHydrated = hydrateLiveCrmContactIdentity(missingLinkedSnapshot, linkedContact);
+  assert.equal(missingHydrated.active, false, 'a missing source customer must fail closed as an inactive linked contact');
+  assert.equal(liveCrmPeopleRelationships(missingLinkedSnapshot, 'client-iza').some((person) => person.linkedCustomerId === 'client-linked-person'), false, 'missing linked customers must be excluded from active CRM relationships');
 
   const calls = new Map<string, number>();
   const counted = <T>(name: string, value: T) => async () => {
