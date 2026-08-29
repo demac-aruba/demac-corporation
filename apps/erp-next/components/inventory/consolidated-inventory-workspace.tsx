@@ -6,6 +6,14 @@ import {
   WAREHOUSE_LOCATION_ID,
 } from '../../lib/inventory';
 import {
+  canonicalVanId,
+  loadCanonicalOperationsState,
+  resolveCanonicalCrew,
+  staffDisplayName,
+  type CanonicalOperationsState,
+  type CanonicalVan,
+} from '../../lib/canonical-operations';
+import {
   allocateLegacyProductStock,
   cancelInventoryTransfer,
   createInventoryRequestId,
@@ -14,20 +22,22 @@ import {
   moveInventoryTool,
   pickupInventoryTransfer,
   receiveInventoryTransfer,
-  setInventoryLocationPolicy,
-  setInventoryStockLevel,
+  updateInventoryLocationState,
   type InventoryBalance,
   type InventoryItem,
   type InventoryLocation,
   type InventorySnapshot,
   type InventoryTransfer,
 } from '../../lib/inventory-authority';
+import { InventoryIcon, VanThumbnail, type InventoryIconName } from './inventory-visuals';
 import styles from './consolidated-inventory-workspace.module.css';
 
 const LEGACY_LOCATION_ID = 'LEGACY-UNASSIGNED';
 type View = 'overview' | 'warehouse' | 'office' | 'vans' | 'tools' | 'transfers' | 'replenishment' | 'movements';
+type VanSection = 'workspace' | 'overview' | 'consumables' | 'products' | 'tools';
 type StockEdit = { item: InventoryItem; locationId: string; onHand: string; minimum: string; target: string };
 type TransferDraftLine = { itemKind: 'product' | 'material'; itemId: string; quantity: number };
+type VanInventoryStatus = { label: string; tone: 'ready' | 'attention' | 'pending' | 'unavailable' };
 
 function balance(item: InventoryItem, locationId: string): InventoryBalance {
   return item.balances?.[locationId] ?? { onHand: 0, reserved: 0, minimum: 0, target: 0 };
@@ -44,14 +54,36 @@ function transferStatus(value: InventoryTransfer['status']) {
   return value === 'requested' ? 'Requested' : value === 'in_transit' ? 'In transit' : value === 'completed' ? 'Completed' : 'Cancelled';
 }
 function itemKey(item: InventoryItem) { return `${item.itemKind}:${item.id}`; }
+function arubaDateKey() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Aruba', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+function quantity(value: number) {
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 3 }).format(value);
+}
+function money(value: number) {
+  return `Afl. ${new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(value)}`;
+}
+function toolQuantity(asset: InventorySnapshot['toolAssets'][number]) {
+  return Math.max(0, Number(asset.quantity ?? 1) || 0);
+}
+function inventoryStatusText(value?: string) {
+  return String(value ?? '').trim().toLowerCase();
+}
 
 export function ConsolidatedInventoryWorkspace() {
   const [snapshot, setSnapshot] = useState<InventorySnapshot | null>(null);
+  const [operations, setOperations] = useState<CanonicalOperationsState | null>(null);
+  const [operationsUnavailable, setOperationsUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
+  const [pendingActions, setPendingActions] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [view, setView] = useState<View>('overview');
+  const [vanSection, setVanSection] = useState<VanSection>('workspace');
   const [activeVanId, setActiveVanId] = useState('');
   const [stockEdit, setStockEdit] = useState<StockEdit | null>(null);
   const [legacyItem, setLegacyItem] = useState<InventoryItem | null>(null);
@@ -70,14 +102,23 @@ export function ConsolidatedInventoryWorkspace() {
 
   const refresh = useCallback(async () => {
     try {
-      const next = await getInventorySnapshot();
+      const [next, nextOperations] = await Promise.all([
+        getInventorySnapshot(),
+        loadCanonicalOperationsState()
+          .then((value) => ({ value, unavailable: false }))
+          .catch(() => ({ value: null, unavailable: true })),
+      ]);
       setSnapshot(next);
+      if (nextOperations.value) setOperations(nextOperations.value);
+      setOperationsUnavailable(nextOperations.unavailable);
       setError('');
       const firstVan = next.locations.find((location) => location.type === 'van')?.id ?? '';
       setActiveVanId((current) => current && next.locations.some((location) => location.id === current) ? current : firstVan);
       setLineItemKey((current) => current && next.items.some((item) => itemKey(item) === current) ? current : (next.items[0] ? itemKey(next.items[0]) : ''));
+      return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Inventory could not be loaded.');
+      return false;
     } finally {
       setLoading(false);
     }
@@ -95,16 +136,151 @@ export function ConsolidatedInventoryWorkspace() {
   const companyProductUnits = products.reduce((total, item) => total + Object.values(item.balances || {}).reduce((sum, row) => sum + Number(row.onHand || 0), 0), 0);
   const selectedTransferItem = items.find((item) => itemKey(item) === lineItemKey);
   const legacyProducts = products.filter((item) => (item.balances?.[LEGACY_LOCATION_ID]?.onHand ?? 0) > 0);
+  const activeToolAssets = (snapshot?.toolAssets ?? []).filter((asset) => asset.active !== false);
+  const vanLocationIds = new Set(vans.map((van) => van.id));
+  const toolsAssignedToVans = activeToolAssets.filter((asset) => vanLocationIds.has(asset.inventoryLocationId || asset.locationId || asset.vanId || ''));
+  const today = arubaDateKey();
 
-  async function run(action: () => Promise<unknown>, success: string) {
-    setBusy(true); setError(''); setNotice('');
+  function openView(nextView: View) {
+    setView(nextView);
+    if (nextView === 'vans') setVanSection('workspace');
+  }
+
+  function profileForVan(location: InventoryLocation): CanonicalVan | undefined {
+    if (!operations) return undefined;
+    const exactId = location.vanId || location.id;
+    const exact = operations.vans.find((van) => van.id === exactId);
+    if (exact) return exact;
+    const lane = canonicalVanId(location.name || exactId, operations.vans);
+    return operations.vans.find((van) => canonicalVanId(van.id, operations.vans) === lane);
+  }
+
+  function crewForVan(location: InventoryLocation) {
+    const profile = profileForVan(location);
+    if (!profile || !operations) return [] as string[];
+    const crew = resolveCanonicalCrew(profile, today, operations);
+    return [crew.driver, crew.helper, crew.additionalHelper]
+      .filter((member): member is NonNullable<typeof member> => Boolean(member))
+      .map((member) => staffDisplayName(member));
+  }
+
+  function toolsAt(locationId: string) {
+    return activeToolAssets.filter((asset) => (asset.inventoryLocationId || asset.locationId || asset.vanId) === locationId);
+  }
+
+  function transferTouches(locationId: string, transfer: InventoryTransfer) {
+    return transfer.sourceLocationId === locationId || transfer.destinationLocationId === locationId;
+  }
+
+  function statusForVan(location: InventoryLocation): VanInventoryStatus {
+    const profileStatus = inventoryStatusText(profileForVan(location)?.status);
+    if (profileStatus && !['disponible', 'available', 'active', 'ready'].includes(profileStatus)) {
+      return { label: profileForVan(location)?.status || 'Unavailable', tone: 'unavailable' };
+    }
+    if ((snapshot?.replenishment ?? []).some((row) => row.locationId === location.id)) {
+      return { label: 'Replenishment needed', tone: 'attention' };
+    }
+    if (openTransfers.some((transfer) => transferTouches(location.id, transfer))) {
+      return { label: 'Transfer pending', tone: 'pending' };
+    }
+    return { label: 'Ready', tone: 'ready' };
+  }
+
+  function onHandAt(locationId: string, kind?: InventoryItem['itemKind']) {
+    return items
+      .filter((item) => !kind || item.itemKind === kind)
+      .reduce((sum, item) => sum + Number(balance(item, locationId).onHand || 0), 0);
+  }
+
+  function reservedAt(locationId: string, kind?: InventoryItem['itemKind']) {
+    return items
+      .filter((item) => !kind || item.itemKind === kind)
+      .reduce((sum, item) => sum + Number(balance(item, locationId).reserved || 0), 0);
+  }
+
+  const activeVan = vans.find((van) => van.id === activeVanId) ?? vans[0];
+  const activeVanProfile = activeVan ? profileForVan(activeVan) : undefined;
+  const activeVanCrew = activeVan ? crewForVan(activeVan) : [];
+  const activeVanTools = activeVan ? toolsAt(activeVan.id) : [];
+  const activeVanTransfers = activeVan ? openTransfers.filter((transfer) => transferTouches(activeVan.id, transfer)) : [];
+  const activeVanReplenishment = activeVan ? (snapshot?.replenishment ?? []).filter((row) => row.locationId === activeVan.id) : [];
+  const activeVanMovements = activeVan ? (snapshot?.movements ?? []).filter((row) => row.sourceLocationId === activeVan.id || row.destinationLocationId === activeVan.id) : [];
+  const activeVanMissingTools = activeVanTools.filter((asset) => {
+    const status = inventoryStatusText(asset.operationalStatus || asset.condition);
+    return asset.present === false || status.includes('missing') || status.includes('lost') || status.includes('faltante');
+  });
+
+  const inventorySnapshotRows = useMemo(() => {
+    const stockSummary = (kind: InventoryItem['itemKind']) => {
+      const records = items.filter((item) => item.itemKind === kind);
+      const onHand = records.reduce((sum, item) => sum + Object.values(item.balances || {}).reduce((rowSum, row) => rowSum + Number(row.onHand || 0), 0), 0);
+      const reserved = records.reduce((sum, item) => sum + Object.values(item.balances || {}).reduce((rowSum, row) => rowSum + Number(row.reserved || 0), 0), 0);
+      const value = records.reduce((sum, item) => {
+        const unitValue = kind === 'product' ? Number(item.price || 0) : Number(item.cost || 0);
+        return sum + unitValue * Object.values(item.balances || {}).reduce((rowSum, row) => rowSum + Number(row.onHand || 0), 0);
+      }, 0);
+      const alerts = (snapshot?.replenishment ?? []).filter((row) => row.itemKind === kind).length;
+      const out = records.filter((item) => normalLocations.every((location) => available(balance(item, location.id)) <= 0)).length;
+      return { items: records.length, onHand, reserved, available: Math.max(0, onHand - reserved), alerts, out, value };
+    };
+    const productsSummary = stockSummary('product');
+    const materialsSummary = stockSummary('material');
+    const toolUnits = activeToolAssets.reduce((sum, asset) => sum + toolQuantity(asset), 0);
+    const toolMissing = activeToolAssets.filter((asset) => {
+      const status = inventoryStatusText(asset.operationalStatus || asset.condition);
+      return asset.present === false || status.includes('missing') || status.includes('lost') || status.includes('faltante');
+    }).reduce((sum, asset) => sum + toolQuantity(asset), 0);
+    const toolValue = activeToolAssets.reduce((sum, asset) => {
+      const catalog = snapshot?.toolCatalog.find((tool) => tool.id === asset.toolCatalogId);
+      return sum + Number(catalog?.standardCost || 0) * toolQuantity(asset);
+    }, 0);
+    return [
+      { label: 'Products', ...productsSummary },
+      { label: 'Consumables', ...materialsSummary },
+      { label: 'Tools', items: activeToolAssets.length, onHand: toolUnits, reserved: 0, available: Math.max(0, toolUnits - toolMissing), alerts: toolMissing, out: toolMissing, value: toolValue },
+    ];
+  }, [activeToolAssets, items, normalLocations, snapshot?.replenishment, snapshot?.toolCatalog]);
+
+  function isPending(actionKey: string) {
+    return pendingActions.has(actionKey);
+  }
+
+  function isTransferPending(transferId: string) {
+    return ['cancel', 'pickup', 'receive'].some((action) => isPending(`transfer:${action}:${transferId}`));
+  }
+
+  async function run(actionKey: string, action: () => Promise<unknown>, success: string) {
+    setPendingActions((current) => new Set(current).add(actionKey));
+    setError(''); setNotice('');
     try {
       await action();
       setNotice(success);
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Inventory operation failed.');
-    } finally { setBusy(false); }
+    } finally {
+      setPendingActions((current) => {
+        const next = new Set(current);
+        next.delete(actionKey);
+        return next;
+      });
+    }
+  }
+
+  async function refreshInventory() {
+    const actionKey = 'refresh';
+    setPendingActions((current) => new Set(current).add(actionKey));
+    setError(''); setNotice('');
+    try {
+      const refreshed = await refresh();
+      if (refreshed) setNotice('Live inventory refreshed.');
+    } finally {
+      setPendingActions((current) => {
+        const next = new Set(current);
+        next.delete(actionKey);
+        return next;
+      });
+    }
   }
 
   function beginStockEdit(item: InventoryItem, locationId: string) {
@@ -117,9 +293,8 @@ export function ConsolidatedInventoryWorkspace() {
     const onHand = Math.max(0, Number(stockEdit.onHand) || 0);
     const minimum = Math.max(0, Number(stockEdit.minimum) || 0);
     const target = Math.max(minimum, Number(stockEdit.target) || 0);
-    await run(async () => {
-      await setInventoryStockLevel({ requestId: createInventoryRequestId('stock-count'), itemKind: stockEdit.item.itemKind, itemId: stockEdit.item.id, locationId: stockEdit.locationId, onHand, reason: 'Office verified physical stock count' });
-      await setInventoryLocationPolicy({ requestId: createInventoryRequestId('stock-policy'), itemKind: stockEdit.item.itemKind, itemId: stockEdit.item.id, locationId: stockEdit.locationId, minimum, target });
+    await run(`stock:${stockEdit.locationId}:${itemKey(stockEdit.item)}`, async () => {
+      await updateInventoryLocationState({ requestId: createInventoryRequestId('location-inventory-state'), itemKind: stockEdit.item.itemKind, itemId: stockEdit.item.id, locationId: stockEdit.locationId, onHand, minimum, target, reason: 'Office verified physical stock count and replenishment policy' });
       setStockEdit(null);
     }, 'Stock and replenishment policy updated.');
   }
@@ -135,7 +310,7 @@ export function ConsolidatedInventoryWorkspace() {
     if (!legacyItem) return;
     const warehouse = Math.max(0, Math.floor(Number(legacyWarehouse) || 0));
     const office = Math.max(0, Math.floor(Number(legacyOffice) || 0));
-    await run(() => allocateLegacyProductStock({
+    await run(`legacy:${legacyItem.id}`, () => allocateLegacyProductStock({
       requestId: createInventoryRequestId('legacy-allocation'),
       itemId: legacyItem.id,
       allocations: [
@@ -162,7 +337,7 @@ export function ConsolidatedInventoryWorkspace() {
   async function submitTransfer() {
     if (!transferLines.length) { setError('Add at least one Product or Consumable to the transfer.'); return; }
     if (sourceLocationId === destinationLocationId) { setError('Source and destination must be different.'); return; }
-    await run(async () => {
+    await run('transfer:create', async () => {
       await createInventoryTransfer({
         requestId: createInventoryRequestId('transfer'),
         sourceLocationId,
@@ -183,39 +358,62 @@ export function ConsolidatedInventoryWorkspace() {
   }
 
   async function pickup(transfer: InventoryTransfer) {
-    await run(() => pickupInventoryTransfer({
+    await run(`transfer:pickup:${transfer.id}`, () => pickupInventoryTransfer({
       requestId: createInventoryRequestId('pickup'), transferId: transfer.id,
       lines: transfer.lines.map((line) => ({ lineId: line.lineId, pickedQuantity: Math.max(0, Number(draftQuantity(transfer, line.lineId, 'picked', line.requestedQuantity)) || 0) })),
       note: transferNotes[transfer.id] ?? '',
     }), 'Transfer picked up. Stock is now in transit.');
   }
   async function receive(transfer: InventoryTransfer) {
-    await run(() => receiveInventoryTransfer({
+    await run(`transfer:receive:${transfer.id}`, () => receiveInventoryTransfer({
       requestId: createInventoryRequestId('receive'), transferId: transfer.id,
       lines: transfer.lines.map((line) => ({ lineId: line.lineId, receivedQuantity: Math.max(0, Number(draftQuantity(transfer, line.lineId, 'received', line.pickedQuantity)) || 0) })),
       discrepancyNote: transferNotes[transfer.id] ?? '',
     }), 'Transfer received and destination stock updated.');
   }
   async function cancelTransfer(transfer: InventoryTransfer) {
-    await run(() => cancelInventoryTransfer({ requestId: createInventoryRequestId('transfer-cancel'), transferId: transfer.id, reason: transferNotes[transfer.id] || 'Cancelled by office before pickup' }), 'Transfer cancelled and reservation released.');
+    await run(`transfer:cancel:${transfer.id}`, () => cancelInventoryTransfer({ requestId: createInventoryRequestId('transfer-cancel'), transferId: transfer.id, reason: transferNotes[transfer.id] || 'Cancelled by office before pickup' }), 'Transfer cancelled and reservation released.');
   }
 
   async function moveTool(assetId: string) {
     const destination = toolDestinations[assetId];
     if (!destination) { setError('Choose a destination for the tool.'); return; }
-    await run(() => moveInventoryTool({ requestId: createInventoryRequestId('tool-move'), assetId, destinationLocationId: destination, reason: 'Inventory location reassignment' }), 'Tool location updated.');
+    await run(`tool:${assetId}`, () => moveInventoryTool({ requestId: createInventoryRequestId('tool-move'), assetId, destinationLocationId: destination, reason: 'Inventory location reassignment' }), 'Tool location updated.');
   }
 
-  function StockTable({ locationId }: { locationId: string }) {
+  function StockTable({ locationId, itemKind, title }: { locationId: string; itemKind?: InventoryItem['itemKind']; title?: string }) {
     const location = locations.find((candidate) => candidate.id === locationId);
+    const visibleItems = items.filter((item) => !itemKind || item.itemKind === itemKind);
     return <section className={styles.panel}>
-      <header className={styles.panelHead}><div><strong>{location?.name ?? locationId}</strong><span>Products and consumables at this physical location</span></div><b>{items.filter((item) => balance(item, locationId).onHand > 0).length} stocked lines</b></header>
+      <header className={styles.panelHead}><div><strong>{title || location?.name || locationId}</strong><span>{itemKind === 'product' ? 'Sellable products' : itemKind === 'material' ? 'Operational consumables' : 'Products and consumables'} at this physical location</span></div><b>{visibleItems.filter((item) => balance(item, locationId).onHand > 0).length} stocked lines</b></header>
       <div className={styles.tableWrap}><table><thead><tr><th>Item</th><th>Type</th><th>On hand</th><th>Reserved</th><th>Available</th><th>Min</th><th>Target</th><th /></tr></thead><tbody>
-        {items.map((item) => { const value = balance(item, locationId); return <tr key={`${locationId}:${itemKey(item)}`}>
+        {visibleItems.map((item) => { const value = balance(item, locationId); return <tr key={`${locationId}:${itemKey(item)}`}>
           <td><strong>{item.name}</strong><small>{item.sku || item.category}</small></td><td>{item.itemKind === 'product' ? 'Product' : 'Consumable'}</td><td>{value.onHand}</td><td>{value.reserved}</td><td><b>{available(value)}</b></td><td>{value.minimum}</td><td>{value.target}</td><td><button type="button" onClick={() => beginStockEdit(item, locationId)}>Count / Par</button></td>
         </tr>; })}
       </tbody></table></div>
+      {!visibleItems.length ? <p className={styles.empty}>No active inventory items are available in this category.</p> : null}
     </section>;
+  }
+
+  function ToolTable({ locationId }: { locationId?: string }) {
+    const visibleTools = locationId ? toolsAt(locationId) : activeToolAssets;
+    return <section className={styles.panel}><header className={styles.panelHead}><div><strong>{locationId ? `${locationLabel(locations, locationId)} tools` : 'Tool assets'}</strong><span>Same physical asset, one current location</span></div><b>{visibleTools.length} assets</b></header><div className={styles.tableWrap}><table><thead><tr><th>Asset</th><th>Tool</th><th>Location</th><th>Status</th><th>Move to</th><th /></tr></thead><tbody>{visibleTools.map((asset) => { const catalog = snapshot?.toolCatalog.find((tool) => tool.id === asset.toolCatalogId); const actionKey = `tool:${asset.id}`; return <tr key={asset.id}><td><strong>{asset.assetCode || asset.id}</strong></td><td>{catalog?.name || asset.toolCatalogId || 'Tool'}</td><td>{locationLabel(locations, asset.inventoryLocationId || '')}</td><td>{asset.operationalStatus || asset.condition || '—'}</td><td><select value={toolDestinations[asset.id] ?? ''} onChange={(event) => setToolDestinations((current) => ({ ...current, [asset.id]: event.target.value }))}><option value="">Choose…</option>{normalLocations.filter((location) => location.id !== asset.inventoryLocationId).map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}</select></td><td><button type="button" disabled={isPending(actionKey) || !toolDestinations[asset.id]} onClick={() => void moveTool(asset.id)}>{isPending(actionKey) ? 'Moving…' : 'Move'}</button></td></tr>; })}</tbody></table></div>{!visibleTools.length ? <p className={styles.empty}>No active tool assets are assigned to this location.</p> : null}</section>;
+  }
+
+  function MetricCard({ icon, label, value, detail, tone = 'blue' }: { icon: InventoryIconName; label: string; value: string | number; detail: string; tone?: 'blue' | 'purple' | 'green' | 'orange' | 'red' }) {
+    return <article className={styles.metricCard}><span className={`${styles.metricIcon} ${styles[tone]}`}><InventoryIcon name={icon} /></span><div><span>{label}</span><strong>{value}</strong><small>{detail}</small></div></article>;
+  }
+
+  function VanStatusChip({ status }: { status: VanInventoryStatus }) {
+    return <span className={`${styles.statusChip} ${styles[status.tone]}`}><i />{status.label}</span>;
+  }
+
+  function ActivityList({ rows, emptyText }: { rows: InventorySnapshot['movements']; emptyText: string }) {
+    return <div className={styles.activityList}>{rows.slice(0, 5).map((row) => <article key={row.id}><span className={styles.activityIcon}><InventoryIcon name={row.type.includes('transfer') ? 'transfer' : row.type.includes('tool') ? 'tool' : 'movement'} /></span><div><strong>{row.itemName}</strong><small>{row.type.replaceAll('_', ' ')} · {quantity(row.quantity)}</small></div><time>{dateTime(row.occurredAt)}</time></article>)}{!rows.length ? <p className={styles.empty}>{emptyText}</p> : null}</div>;
+  }
+
+  function VanWorkspaceRow({ icon, title, description, value, tone, onClick }: { icon: InventoryIconName; title: string; description: string; value?: string; tone?: 'purple' | 'green' | 'orange'; onClick: () => void }) {
+    return <button type="button" className={`${styles.vanWorkspaceRow} ${tone ? styles[`row${tone[0].toUpperCase()}${tone.slice(1)}`] : ''}`} onClick={onClick}><span className={styles.workspaceRowIcon}><InventoryIcon name={icon} /></span><span className={styles.workspaceRowCopy}><strong>{title}</strong><small>{description}</small></span>{value ? <b>{value}</b> : null}<i aria-hidden="true">›</i></button>;
   }
 
   const tabs: Array<{ id: View; label: string }> = [
@@ -227,36 +425,74 @@ export function ConsolidatedInventoryWorkspace() {
 
   return <section className={styles.page}>
     <header className={styles.hero}>
-      <div><span className={styles.eyebrow}>Inventory · One authority</span><h1>Inventory Control</h1><p>Products, consumables and tools across Warehouse, Office and Vans. Locations are views of the same inventory — not separate databases.</p></div>
-      <button type="button" className={styles.primary} disabled={busy} onClick={() => void refresh()}>{busy ? 'Working…' : 'Refresh inventory'}</button>
+      <div><span className={styles.eyebrow}>{view === 'vans' ? 'Inventory · Mobile warehouses' : 'Inventory · One authority'}</span><h1>{view === 'vans' ? 'Van Inventory Workspace' : 'Inventory Control'}</h1><p>{view === 'vans' ? 'Select a Van and choose the inventory view you want to manage.' : 'One authority for Warehouse, Office, Vans, Products, Consumables and Tools.'}</p></div>
+      {view === 'overview' ? <details className={styles.actionMenu}><summary>Inventory actions <span>⌄</span></summary><div><button type="button" onClick={() => openView('warehouse')}>Open Warehouse</button><button type="button" onClick={() => openView('office')}>Open Office</button><button type="button" onClick={() => openView('tools')}>Open Tools</button><button type="button" onClick={() => openView('transfers')}>Manage transfers</button><button type="button" onClick={() => openView('replenishment')}>View replenishment</button><button type="button" onClick={() => openView('movements')}>View movements</button><button type="button" disabled={isPending('refresh')} onClick={() => void refreshInventory()}>{isPending('refresh') ? 'Refreshing…' : 'Refresh live inventory'}</button></div></details> : <div className={styles.heroActions}><button type="button" onClick={() => openView(view === 'vans' && vanSection !== 'workspace' ? 'vans' : 'overview')}>{view === 'vans' && vanSection !== 'workspace' ? '← Van workspace' : '← Inventory Control'}</button><button type="button" className={styles.primary} disabled={isPending('refresh')} onClick={() => void refreshInventory()}>{isPending('refresh') ? 'Refreshing…' : 'Refresh'}</button></div>}
     </header>
 
-    {error ? <div className={styles.error}>{error}</div> : null}
-    {notice ? <div className={styles.notice}>{notice}</div> : null}
+    {error ? <div className={styles.error} role="alert">{error}</div> : null}
+    {notice ? <div className={styles.notice} role="status">{notice}</div> : null}
+    {operationsUnavailable ? <div className={styles.enrichmentNotice}>Van profile details are temporarily unavailable. Live inventory quantities and operations remain available.</div> : null}
     {legacyProducts.length ? <div className={styles.warning}><strong>{legacyProducts.length} Product{legacyProducts.length === 1 ? '' : 's'} have historical stock without a known location.</strong><span>Assign the full quantity between Warehouse and Office once. The system will not guess or duplicate it.</span></div> : null}
 
-    <nav className={styles.tabs}>{tabs.map((tab) => <button key={tab.id} type="button" className={view === tab.id ? styles.activeTab : ''} onClick={() => setView(tab.id)}>{tab.label}</button>)}</nav>
+    {view !== 'overview' && view !== 'vans' ? <nav className={styles.tabs}>{tabs.map((tab) => <button key={tab.id} type="button" className={view === tab.id ? styles.activeTab : ''} onClick={() => openView(tab.id)}>{tab.label}</button>)}</nav> : null}
 
     {view === 'overview' ? <>
       <div className={styles.metrics}>
-        <article><span>Products</span><strong>{products.length}</strong><small>Canonical Services & Products catalog</small></article>
-        <article><span>Consumables</span><strong>{materials.length}</strong><small>Existing warehouseInventory catalog</small></article>
-        <article><span>Product units</span><strong>{companyProductUnits}</strong><small>Whole sellable units across all locations</small></article>
-        <article><span>Open transfers</span><strong>{openTransfers.length}</strong><small>Requested + in transit</small></article>
-        <article><span>Van replenishment</span><strong>{snapshot.replenishment.length}</strong><small>Derived from min / target</small></article>
+        <MetricCard icon="package" label="Total Products" value={products.length} detail={`${quantity(companyProductUnits)} units on hand`} />
+        <MetricCard icon="bottle" label="Consumables" value={materials.length} detail="Canonical material records" tone="purple" />
+        <MetricCard icon="van" label="Active Vans" value={vans.length} detail={`${vans.length} inventory locations`} tone="green" />
+        <MetricCard icon="tool" label="Tools Assigned" value={toolsAssignedToVans.length} detail="Active Van assets" tone="orange" />
+        <MetricCard icon="transfer" label="Open Transfers" value={openTransfers.length} detail="Requested + in transit" />
+        <MetricCard icon="warning" label="Replenishment Alerts" value={snapshot.replenishment.length} detail="Below configured minimum" tone="red" />
       </div>
-      <div className={styles.grid2}>
-        <section className={styles.panel}><header className={styles.panelHead}><div><strong>Physical locations</strong><span>Warehouse and Office are first-class locations alongside Vans</span></div></header><div className={styles.locationCards}>{normalLocations.map((location) => <button key={location.id} type="button" onClick={() => { if (location.type === 'warehouse') setView('warehouse'); else if (location.type === 'office') setView('office'); else { setActiveVanId(location.id); setView('vans'); } }}><strong>{location.name}</strong><span>{items.reduce((sum, item) => sum + balance(item, location.id).onHand, 0)} units</span></button>)}</div></section>
-        <section className={styles.panel}><header className={styles.panelHead}><div><strong>Needs attention</strong><span>Only exceptions, not a second inventory list</span></div></header><div className={styles.list}>{snapshot.replenishment.slice(0, 8).map((row) => <div key={`${row.locationId}:${row.itemId}`}><strong>{row.itemName}</strong><span>{locationLabel(locations, row.locationId)} · {row.onHand} on hand · replenish {row.needed}</span></div>)}{!snapshot.replenishment.length ? <p className={styles.empty}>No van replenishment alerts.</p> : null}</div></section>
+
+      <div className={styles.overviewTopGrid}>
+        <section className={`${styles.panel} ${styles.workspacePanel}`}><header className={styles.panelHead}><div><strong>Choose an inventory workspace</strong><span>Select where you want to view and manage inventory.</span></div></header><div className={styles.workspaceCards}>
+          <article className={styles.workspaceCard}><div className={`${styles.workspaceVisual} ${styles.warehouseVisual}`}><InventoryIcon name="warehouse" /></div><h2>Warehouse</h2><p>View, store and manage inventory in the main warehouse.</p><ul><li>Bulk stock management</li><li>Receiving & put-away</li><li>Stock adjustments</li><li>Cycle counts</li></ul><button type="button" onClick={() => openView('warehouse')}>Open Warehouse</button></article>
+          <article className={styles.workspaceCard}><div className={`${styles.workspaceVisual} ${styles.officeVisual}`}><InventoryIcon name="office" /></div><h2>Office</h2><p>Manage office inventory and operational consumables.</p><ul><li>Office consumables</li><li>Small tools & equipment</li><li>Administrative stock</li><li>Usage tracking</li></ul><button type="button" onClick={() => openView('office')}>Open Office</button></article>
+          <article className={`${styles.workspaceCard} ${styles.workspaceCardActive}`}><VanThumbnail name="DEMAC" size="large" /><h2>Vans</h2><p>Access Van inventory including products, consumables and tools.</p><ul><li>Van stock & locations</li><li>Consumables by Van</li><li>Tools assigned</li><li>Stock transfers</li></ul><button type="button" className={styles.primary} onClick={() => openView('vans')}>Open Vans</button></article>
+        </div><div className={styles.workspaceHint}><span>ⓘ</span>Select a workspace to view inventory details, adjust stock or initiate transfers.</div></section>
+
+        <section className={`${styles.panel} ${styles.vanDirectory}`}><header className={styles.panelHead}><div><strong>Van directory</strong><span>Select a Van to open its inventory workspace.</span></div></header><div className={styles.vanDirectoryList}>{vans.map((van) => { const profile = profileForVan(van); const crew = crewForVan(van); const status = statusForVan(van); return <button type="button" key={van.id} onClick={() => { setActiveVanId(van.id); openView('vans'); }}><VanThumbnail imageUrl={profile?.imageUrl} name={van.name} size="small" /><span><strong>{van.name}</strong><small>{crew.length ? crew.join(' · ') : operationsUnavailable ? 'Crew details unavailable' : 'Crew unassigned'}</small></span><VanStatusChip status={status} /><i aria-hidden="true">›</i></button>; })}{!vans.length ? <p className={styles.empty}>No active Van inventory locations are available.</p> : null}</div>{vans.length ? <button type="button" className={styles.directoryFooter} onClick={() => openView('vans')}><InventoryIcon name="overview" /> View all Vans</button> : null}</section>
       </div>
+
+      <div className={styles.overviewBottomGrid}>
+        <section className={`${styles.panel} ${styles.snapshotPanel}`}><header className={styles.panelHead}><div><strong>Inventory snapshot (all locations)</strong><span>Canonical quantities and value estimates.</span></div></header><div className={styles.snapshotTable}><div className={styles.snapshotHead}><span>Category</span><span>Total Items</span><span>On Hand</span><span>Committed</span><span>Available</span><span>Low Stock</span><span>Out of Stock</span><span>Value (Est.)</span></div>{inventorySnapshotRows.map((row) => <div className={styles.snapshotRow} key={row.label}><strong>{row.label}</strong><span>{quantity(row.items)}</span><span>{quantity(row.onHand)}</span><span>{quantity(row.reserved)}</span><span>{quantity(row.available)}</span><span className={row.alerts ? styles.warnValue : ''}>{quantity(row.alerts)}</span><span className={row.out ? styles.dangerValue : ''}>{quantity(row.out)}</span><span>{money(row.value)}</span></div>)}</div></section>
+        <section className={`${styles.panel} ${styles.recentPanel}`}><header className={styles.panelHead}><div><strong>Recent activity</strong><span>Latest canonical inventory movements.</span></div><button type="button" onClick={() => openView('movements')}>View all</button></header><ActivityList rows={snapshot.movements} emptyText="No inventory movements have been recorded yet." /></section>
+      </div>
+
       {legacyProducts.length ? <section className={styles.panel}><header className={styles.panelHead}><div><strong>Historical stock location assignment</strong><span>One-time controlled reclassification — company total does not change</span></div></header><div className={styles.list}>{legacyProducts.map((item) => <div key={item.id}><strong>{item.name}</strong><span>{item.balances[LEGACY_LOCATION_ID].onHand} unassigned units</span><button type="button" onClick={() => openLegacyAllocation(item)}>Assign locations</button></div>)}</div></section> : null}
     </> : null}
 
     {view === 'warehouse' ? <StockTable locationId={WAREHOUSE_LOCATION_ID} /> : null}
     {view === 'office' ? <StockTable locationId={OFFICE_LOCATION_ID} /> : null}
-    {view === 'vans' ? <><div className={styles.toolbar}><label>Van<select value={activeVanId} onChange={(event) => setActiveVanId(event.target.value)}>{vans.map((van) => <option key={van.id} value={van.id}>{van.name}</option>)}</select></label></div>{activeVanId ? <StockTable locationId={activeVanId} /> : <div className={styles.state}>No active vans found.</div>}</> : null}
 
-    {view === 'tools' ? <section className={styles.panel}><header className={styles.panelHead}><div><strong>Tool assets</strong><span>Same physical asset, one current location</span></div><b>{snapshot.toolAssets.length} assets</b></header><div className={styles.tableWrap}><table><thead><tr><th>Asset</th><th>Tool</th><th>Location</th><th>Status</th><th>Move to</th><th /></tr></thead><tbody>{snapshot.toolAssets.map((asset) => { const catalog = snapshot.toolCatalog.find((tool) => tool.id === asset.toolCatalogId); return <tr key={asset.id}><td><strong>{asset.assetCode || asset.id}</strong></td><td>{catalog?.name || asset.toolCatalogId || 'Tool'}</td><td>{locationLabel(locations, asset.inventoryLocationId || '')}</td><td>{asset.operationalStatus || asset.condition || '—'}</td><td><select value={toolDestinations[asset.id] ?? ''} onChange={(event) => setToolDestinations((current) => ({ ...current, [asset.id]: event.target.value }))}><option value="">Choose…</option>{normalLocations.filter((location) => location.id !== asset.inventoryLocationId).map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}</select></td><td><button type="button" disabled={busy || !toolDestinations[asset.id]} onClick={() => void moveTool(asset.id)}>Move</button></td></tr>; })}</tbody></table></div></section> : null}
+    {view === 'vans' ? !activeVan ? <div className={styles.state}>No active Vans were found in canonical inventory.</div> : <>
+      <div className={styles.vanSelectorBar}><label className={styles.vanSelector}><VanThumbnail imageUrl={activeVanProfile?.imageUrl} name={activeVan.name} size="small" /><span><small>Selected Van</small><select value={activeVan.id} onChange={(event) => { setActiveVanId(event.target.value); setVanSection('workspace'); }}>{vans.map((van) => <option key={van.id} value={van.id}>{van.name}</option>)}</select></span></label><div className={styles.vanStatusStrip}><VanStatusChip status={statusForVan(activeVan)} />{activeVanReplenishment.length ? <span className={styles.alertChip}><InventoryIcon name="warning" />{activeVanReplenishment.length} replenishment alert{activeVanReplenishment.length === 1 ? '' : 's'}</span> : <span className={styles.clearChip}>No replenishment exceptions</span>}</div></div>
+
+      {vanSection === 'workspace' ? <div className={styles.vanWorkspaceGrid}>
+        <section className={styles.vanWorkspaceMenu}><header><strong>Choose an inventory view</strong><span>Select a category below to view and manage inventory for the selected Van.</span></header>
+          <VanWorkspaceRow icon="overview" title="Overview" description="View all products and consumables stocked in this Van." value={`${items.filter((item) => balance(item, activeVan.id).onHand > 0).length} stocked lines`} onClick={() => setVanSection('overview')} />
+          <VanWorkspaceRow icon="bottle" title="Consumables" description="Manage filters, fittings, chemicals and other frequently used items." value={`${quantity(onHandAt(activeVan.id, 'material'))} on hand`} tone="purple" onClick={() => setVanSection('consumables')} />
+          <VanWorkspaceRow icon="package" title="Products for Sale" description="Manage equipment, parts and accessories physically stocked in this Van." value={`${quantity(onHandAt(activeVan.id, 'product'))} on hand`} tone="green" onClick={() => setVanSection('products')} />
+          <VanWorkspaceRow icon="tool" title="Tools" description="Manage tools and equipment assigned to this Van." value={`${quantity(activeVanTools.reduce((sum, asset) => sum + toolQuantity(asset), 0))} assigned`} tone="orange" onClick={() => setVanSection('tools')} />
+          <VanWorkspaceRow icon="warning" title="Replenishment" description="Review missing or low-stock items and target quantities." value={activeVanReplenishment.length ? `${activeVanReplenishment.length} alerts` : 'No alerts'} onClick={() => openView('replenishment')} />
+          <VanWorkspaceRow icon="transfer" title="Transfers" description="View and manage open transfers to and from this Van." value={`${activeVanTransfers.length} open`} onClick={() => openView('transfers')} />
+          <VanWorkspaceRow icon="movement" title="Movements" description="View inventory movements, usage history and adjustments." value={`${activeVanMovements.length} events`} onClick={() => openView('movements')} />
+        </section>
+
+        <aside className={styles.vanContext}><section className={styles.vanSummary}><header><strong>{activeVan.name} Summary</strong></header><div className={styles.vanIdentity}><VanThumbnail imageUrl={activeVanProfile?.imageUrl} name={activeVan.name} size="medium" /><span><strong>{activeVan.name}{activeVanCrew.length ? ` — ${activeVanCrew.join(' & ')}` : ''}</strong><small>{[activeVanProfile?.make, activeVanProfile?.model, activeVanProfile?.plate].filter(Boolean).join(' · ') || 'Canonical Van inventory location'}</small></span><VanStatusChip status={statusForVan(activeVan)} /></div><div className={styles.summaryStats}>
+          <div><InventoryIcon name="package" /><span>Products on hand</span><strong>{quantity(onHandAt(activeVan.id, 'product'))}</strong><small>{quantity(Math.max(0, onHandAt(activeVan.id, 'product') - reservedAt(activeVan.id, 'product')))} available</small></div>
+          <div><InventoryIcon name="bottle" /><span>Consumables on hand</span><strong>{quantity(onHandAt(activeVan.id, 'material'))}</strong><small>{quantity(Math.max(0, onHandAt(activeVan.id, 'material') - reservedAt(activeVan.id, 'material')))} available</small></div>
+          <div><InventoryIcon name="tool" /><span>Tools assigned</span><strong>{quantity(activeVanTools.reduce((sum, asset) => sum + toolQuantity(asset), 0))}</strong><small>Active assets</small></div>
+          <div><InventoryIcon name="transfer" /><span>Open transfers</span><strong>{activeVanTransfers.length}</strong><button type="button" onClick={() => openView('transfers')}>View transfers</button></div>
+          <div><InventoryIcon name="warning" /><span>Missing tools</span><strong>{quantity(activeVanMissingTools.reduce((sum, asset) => sum + toolQuantity(asset), 0))}</strong><button type="button" onClick={() => setVanSection('tools')}>View tools</button></div>
+          <div><InventoryIcon name="warning" /><span>Low stock alerts</span><strong>{activeVanReplenishment.length}</strong><button type="button" onClick={() => openView('replenishment')}>View alerts</button></div>
+        </div></section><section className={`${styles.panel} ${styles.vanActivity}`}><header className={styles.panelHead}><div><strong>Recent activity</strong><span>Movements involving {activeVan.name}.</span></div><button type="button" onClick={() => openView('movements')}>View all</button></header><ActivityList rows={activeVanMovements} emptyText={`No inventory movements recorded for ${activeVan.name}.`} /></section></aside>
+      </div> : <div className={styles.vanDetail}><div className={styles.vanDetailHeader}><button type="button" onClick={() => setVanSection('workspace')}>← Choose inventory view</button><span>{activeVan.name}</span></div>{vanSection === 'overview' ? <StockTable locationId={activeVan.id} title={`${activeVan.name} · Overview`} /> : null}{vanSection === 'consumables' ? <StockTable locationId={activeVan.id} itemKind="material" title={`${activeVan.name} · Consumables`} /> : null}{vanSection === 'products' ? <StockTable locationId={activeVan.id} itemKind="product" title={`${activeVan.name} · Products for Sale`} /> : null}{vanSection === 'tools' ? <ToolTable locationId={activeVan.id} /> : null}</div>}
+    </> : null}
+
+    {view === 'tools' ? <ToolTable /> : null}
 
     {view === 'transfers' ? <div className={styles.grid2}>
       <section className={styles.panel}><header className={styles.panelHead}><div><strong>Create transfer</strong><span>One order: Requested → In transit → Completed</span></div></header><div className={styles.form}>
@@ -266,17 +502,17 @@ export function ConsolidatedInventoryWorkspace() {
         <label className={styles.wide}>Note<input value={transferNote} onChange={(event) => setTransferNote(event.target.value)} placeholder="Optional transfer instructions" /></label>
         <div className={styles.lineBuilder}><select value={lineItemKey} onChange={(event) => setLineItemKey(event.target.value)}>{items.map((item) => <option key={itemKey(item)} value={itemKey(item)}>{item.name} · {item.itemKind === 'product' ? 'Product' : 'Consumable'}</option>)}</select><input type="number" min={selectedTransferItem?.itemKind === 'product' ? 1 : 0.001} step={selectedTransferItem?.itemKind === 'product' ? 1 : 0.001} value={lineQuantity} onChange={(event) => setLineQuantity(event.target.value)} /><button type="button" onClick={addTransferLine}>Add</button></div>
         <div className={styles.transferDraft}>{transferLines.map((line) => { const item = items.find((candidate) => candidate.itemKind === line.itemKind && candidate.id === line.itemId); return <div key={`${line.itemKind}:${line.itemId}`}><span>{line.quantity} × {item?.name || line.itemId}</span><button type="button" onClick={() => setTransferLines((current) => current.filter((candidate) => candidate !== line))}>Remove</button></div>; })}{!transferLines.length ? <span>No items added yet.</span> : null}</div>
-        <button type="button" className={styles.primary} disabled={busy || !transferLines.length} onClick={() => void submitTransfer()}>Create Transfer Request</button>
+        <button type="button" className={styles.primary} disabled={isPending('transfer:create') || !transferLines.length} onClick={() => void submitTransfer()}>{isPending('transfer:create') ? 'Creating…' : 'Create Transfer Request'}</button>
       </div></section>
-      <section className={styles.transferStack}>{snapshot.transfers.map((transfer) => <article className={styles.transferCard} key={transfer.id}><header><div><span>{transferStatus(transfer.status)}</span><strong>{transfer.sourceLocationName} → {transfer.destinationLocationName}</strong></div><small>{dateTime(transfer.requestedAt)}</small></header>{transfer.assignedPickupName ? <p>Pickup: <b>{transfer.assignedPickupName}</b></p> : null}<div className={styles.transferLines}>{transfer.lines.map((line) => <div key={line.lineId}><strong>{line.itemName}</strong><span>Requested {line.requestedQuantity}{transfer.status !== 'requested' ? ` · Picked ${line.pickedQuantity}` : ''}{transfer.status === 'completed' ? ` · Received ${line.receivedQuantity}` : ''}</span>{transfer.status === 'requested' ? <input type="number" min="0" step={line.itemKind === 'product' ? 1 : 0.001} max={line.requestedQuantity} value={draftQuantity(transfer, line.lineId, 'picked', line.requestedQuantity)} onChange={(event) => setDraftQuantity(transfer, line.lineId, 'picked', event.target.value)} /> : null}{transfer.status === 'in_transit' ? <input type="number" min="0" step={line.itemKind === 'product' ? 1 : 0.001} max={line.pickedQuantity} value={draftQuantity(transfer, line.lineId, 'received', line.pickedQuantity)} onChange={(event) => setDraftQuantity(transfer, line.lineId, 'received', event.target.value)} /> : null}</div>)}</div>{transfer.status === 'requested' || transfer.status === 'in_transit' ? <textarea value={transferNotes[transfer.id] ?? ''} onChange={(event) => setTransferNotes((current) => ({ ...current, [transfer.id]: event.target.value }))} placeholder={transfer.status === 'in_transit' ? 'Required if received quantity differs from picked quantity' : 'Pickup / cancellation note'} /> : null}<footer>{transfer.status === 'requested' ? <><button type="button" disabled={busy} onClick={() => void cancelTransfer(transfer)}>Cancel</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void pickup(transfer)}>Confirm Pickup</button></> : null}{transfer.status === 'in_transit' ? <button type="button" className={styles.primary} disabled={busy} onClick={() => void receive(transfer)}>Receive & Complete</button> : null}{transfer.status === 'completed' ? <span>{transfer.hasDiscrepancy ? 'Completed with discrepancy' : `Received ${dateTime(transfer.receivedAt)}`}</span> : null}</footer></article>)}</section>
+      <section className={styles.transferStack}>{snapshot.transfers.map((transfer) => <article className={styles.transferCard} key={transfer.id}><header><div><span>{transferStatus(transfer.status)}</span><strong>{transfer.sourceLocationName} → {transfer.destinationLocationName}</strong></div><small>{dateTime(transfer.requestedAt)}</small></header>{transfer.assignedPickupName ? <p>Pickup: <b>{transfer.assignedPickupName}</b></p> : null}<div className={styles.transferLines}>{transfer.lines.map((line) => <div key={line.lineId}><strong>{line.itemName}</strong><span>Requested {line.requestedQuantity}{transfer.status !== 'requested' ? ` · Picked ${line.pickedQuantity}` : ''}{transfer.status === 'completed' ? ` · Received ${line.receivedQuantity}` : ''}</span>{transfer.status === 'requested' ? <input type="number" min="0" step={line.itemKind === 'product' ? 1 : 0.001} max={line.requestedQuantity} value={draftQuantity(transfer, line.lineId, 'picked', line.requestedQuantity)} onChange={(event) => setDraftQuantity(transfer, line.lineId, 'picked', event.target.value)} /> : null}{transfer.status === 'in_transit' ? <input type="number" min="0" step={line.itemKind === 'product' ? 1 : 0.001} max={line.pickedQuantity} value={draftQuantity(transfer, line.lineId, 'received', line.pickedQuantity)} onChange={(event) => setDraftQuantity(transfer, line.lineId, 'received', event.target.value)} /> : null}</div>)}</div>{transfer.status === 'requested' || transfer.status === 'in_transit' ? <textarea value={transferNotes[transfer.id] ?? ''} onChange={(event) => setTransferNotes((current) => ({ ...current, [transfer.id]: event.target.value }))} placeholder={transfer.status === 'in_transit' ? 'Required if received quantity differs from picked quantity' : 'Pickup / cancellation note'} /> : null}<footer>{transfer.status === 'requested' ? <><button type="button" disabled={isTransferPending(transfer.id)} onClick={() => void cancelTransfer(transfer)}>{isPending(`transfer:cancel:${transfer.id}`) ? 'Cancelling…' : 'Cancel'}</button><button type="button" className={styles.primary} disabled={isTransferPending(transfer.id)} onClick={() => void pickup(transfer)}>{isPending(`transfer:pickup:${transfer.id}`) ? 'Confirming…' : 'Confirm Pickup'}</button></> : null}{transfer.status === 'in_transit' ? <button type="button" className={styles.primary} disabled={isTransferPending(transfer.id)} onClick={() => void receive(transfer)}>{isPending(`transfer:receive:${transfer.id}`) ? 'Receiving…' : 'Receive & Complete'}</button> : null}{transfer.status === 'completed' ? <span>{transfer.hasDiscrepancy ? 'Completed with discrepancy' : `Received ${dateTime(transfer.receivedAt)}`}</span> : null}</footer></article>)}</section>
     </div> : null}
 
     {view === 'replenishment' ? <section className={styles.panel}><header className={styles.panelHead}><div><strong>Van replenishment</strong><span>Derived automatically from available stock vs min / target</span></div><b>{snapshot.replenishment.length} alerts</b></header><div className={styles.tableWrap}><table><thead><tr><th>Item</th><th>Van</th><th>On hand</th><th>Reserved</th><th>Min</th><th>Target</th><th>Replenish</th></tr></thead><tbody>{snapshot.replenishment.map((row) => <tr key={`${row.locationId}:${row.itemKind}:${row.itemId}`}><td><strong>{row.itemName}</strong></td><td>{locationLabel(locations, row.locationId)}</td><td>{row.onHand}</td><td>{row.reserved}</td><td>{row.minimum}</td><td>{row.target}</td><td><b>{row.needed}</b></td></tr>)}</tbody></table></div>{!snapshot.replenishment.length ? <p className={styles.empty}>All configured van stock is above minimum.</p> : null}</section> : null}
 
     {view === 'movements' ? <section className={styles.panel}><header className={styles.panelHead}><div><strong>Inventory movement audit</strong><span>Immutable events; not another balance source</span></div></header><div className={styles.tableWrap}><table><thead><tr><th>When</th><th>Item</th><th>Movement</th><th>Qty</th><th>From</th><th>To</th><th>By</th></tr></thead><tbody>{snapshot.movements.map((row) => <tr key={row.id}><td>{dateTime(row.occurredAt)}</td><td><strong>{row.itemName}</strong></td><td>{row.type.replaceAll('_', ' ')}</td><td>{row.quantity}</td><td>{row.sourceLocationId ? locationLabel(locations, row.sourceLocationId) : '—'}</td><td>{row.destinationLocationId ? locationLabel(locations, row.destinationLocationId) : '—'}</td><td>{row.performedByName || '—'}</td></tr>)}</tbody></table></div></section> : null}
 
-    {stockEdit ? <div className={styles.modalBackdrop}><section className={styles.modal}><header><div><span>Physical stock · {locationLabel(locations, stockEdit.locationId)}</span><h2>{stockEdit.item.name}</h2></div><button type="button" onClick={() => setStockEdit(null)}>×</button></header><div className={styles.form}><label>On hand<input type="number" min="0" step={stockEdit.item.itemKind === 'product' ? 1 : 0.001} value={stockEdit.onHand} onChange={(event) => setStockEdit({ ...stockEdit, onHand: event.target.value })} /></label><label>Minimum<input type="number" min="0" step={stockEdit.item.itemKind === 'product' ? 1 : 0.001} value={stockEdit.minimum} onChange={(event) => setStockEdit({ ...stockEdit, minimum: event.target.value })} /></label><label>Target<input type="number" min="0" step={stockEdit.item.itemKind === 'product' ? 1 : 0.001} value={stockEdit.target} onChange={(event) => setStockEdit({ ...stockEdit, target: event.target.value })} /></label><p className={styles.wide}>Reserved stock cannot be counted below its committed quantity. Van min/target drives replenishment automatically.</p><footer className={styles.wide}><button type="button" onClick={() => setStockEdit(null)}>Cancel</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void saveStockEdit()}>Save verified count</button></footer></div></section></div> : null}
+    {stockEdit ? <div className={styles.modalBackdrop}><section className={styles.modal} role="dialog" aria-modal="true" aria-labelledby="stock-edit-title"><header><div><span>Physical stock · {locationLabel(locations, stockEdit.locationId)}</span><h2 id="stock-edit-title">{stockEdit.item.name}</h2></div><button type="button" aria-label="Close stock editor" onClick={() => setStockEdit(null)}>×</button></header><div className={styles.form}><label>On hand<input type="number" min="0" step={stockEdit.item.itemKind === 'product' ? 1 : 0.001} value={stockEdit.onHand} onChange={(event) => setStockEdit({ ...stockEdit, onHand: event.target.value })} /></label><label>Minimum<input type="number" min="0" step={stockEdit.item.itemKind === 'product' ? 1 : 0.001} value={stockEdit.minimum} onChange={(event) => setStockEdit({ ...stockEdit, minimum: event.target.value })} /></label><label>Target<input type="number" min="0" step={stockEdit.item.itemKind === 'product' ? 1 : 0.001} value={stockEdit.target} onChange={(event) => setStockEdit({ ...stockEdit, target: event.target.value })} /></label><p className={styles.wide}>Reserved stock cannot be counted below its committed quantity. Van min/target drives replenishment automatically.</p><footer className={styles.wide}><button type="button" onClick={() => setStockEdit(null)}>Cancel</button><button type="button" className={styles.primary} disabled={isPending(`stock:${stockEdit.locationId}:${itemKey(stockEdit.item)}`)} onClick={() => void saveStockEdit()}>{isPending(`stock:${stockEdit.locationId}:${itemKey(stockEdit.item)}`) ? 'Saving…' : 'Save verified count'}</button></footer></div></section></div> : null}
 
-    {legacyItem ? <div className={styles.modalBackdrop}><section className={styles.modal}><header><div><span>Historical stock assignment</span><h2>{legacyItem.name}</h2></div><button type="button" onClick={() => setLegacyItem(null)}>×</button></header><div className={styles.form}><p className={styles.wide}>Unassigned total: <b>{legacyItem.balances[LEGACY_LOCATION_ID]?.onHand ?? 0}</b>. Warehouse + Office must equal this exact quantity.</p><label>Warehouse<input type="number" min="0" value={legacyWarehouse} onChange={(event) => setLegacyWarehouse(event.target.value)} /></label><label>Office<input type="number" min="0" value={legacyOffice} onChange={(event) => setLegacyOffice(event.target.value)} /></label><footer className={styles.wide}><button type="button" onClick={() => setLegacyItem(null)}>Cancel</button><button type="button" className={styles.primary} disabled={busy} onClick={() => void saveLegacyAllocation()}>Assign locations</button></footer></div></section></div> : null}
+    {legacyItem ? <div className={styles.modalBackdrop}><section className={styles.modal} role="dialog" aria-modal="true" aria-labelledby="legacy-allocation-title"><header><div><span>Historical stock assignment</span><h2 id="legacy-allocation-title">{legacyItem.name}</h2></div><button type="button" aria-label="Close historical stock assignment" onClick={() => setLegacyItem(null)}>×</button></header><div className={styles.form}><p className={styles.wide}>Unassigned total: <b>{legacyItem.balances[LEGACY_LOCATION_ID]?.onHand ?? 0}</b>. Warehouse + Office must equal this exact quantity.</p><label>Warehouse<input type="number" min="0" value={legacyWarehouse} onChange={(event) => setLegacyWarehouse(event.target.value)} /></label><label>Office<input type="number" min="0" value={legacyOffice} onChange={(event) => setLegacyOffice(event.target.value)} /></label><footer className={styles.wide}><button type="button" onClick={() => setLegacyItem(null)}>Cancel</button><button type="button" className={styles.primary} disabled={isPending(`legacy:${legacyItem.id}`)} onClick={() => void saveLegacyAllocation()}>{isPending(`legacy:${legacyItem.id}`) ? 'Assigning…' : 'Assign locations'}</button></footer></div></section></div> : null}
   </section>;
 }

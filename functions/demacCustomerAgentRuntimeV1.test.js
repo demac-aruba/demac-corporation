@@ -8,6 +8,7 @@ const {
   createCustomerAgentRuntime,
   nativeInputMessages,
   normalizeCustomerTurn,
+  runtimeInstructions,
   validateFinalResponse,
   verifiedAppointmentFromTool,
 } = require("./demacCustomerAgentRuntimeV1");
@@ -38,6 +39,13 @@ function registry(invokeImpl = async (name) => ({ success: true, name })) {
     invoke: invokeImpl,
   };
 }
+
+test("runtime discovers real stock locations before propagating one exact source to reservation", () => {
+  const instructions = runtimeInstructions({ state: {}, context: {} });
+  assert.match(instructions, /eligible physical locations/);
+  assert.match(instructions, /sourceLocationId returned in locations\[\]/);
+  assert.match(instructions, /aggregates are informational/);
+});
 
 function rawBody(overrides = {}) {
   return {

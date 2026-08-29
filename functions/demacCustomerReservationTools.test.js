@@ -25,7 +25,7 @@ test("defines create, get and release as strict reservation tools", () => {
     "release_product_reservation",
   ]);
   assert.ok(CUSTOMER_RESERVATION_TOOL_DEFINITIONS.every((item) => item.strict));
-  assert.deepEqual(CUSTOMER_RESERVATION_TOOL_DEFINITIONS[0].parameters.required, ["productId", "customerId", "quantity"]);
+  assert.deepEqual(CUSTOMER_RESERVATION_TOOL_DEFINITIONS[0].parameters.required, ["productId", "customerId", "sourceLocationId", "quantity"]);
 });
 
 test("reservation idempotency is stable for the same inbound customer turn and independent of model arguments", () => {
@@ -45,11 +45,12 @@ test("create reservation passes canonical inbound identity to the authority", as
     },
   };
   const tools = createCustomerReservationTools({ db: fakeDb, reservationAuthority: authority });
-  const result = await tools.createProductReservation({ productId: "p12", customerId: "c1", quantity: 2 }, context());
+  const result = await tools.createProductReservation({ productId: "p12", customerId: "c1", sourceLocationId: "WH-MAIN", quantity: 2 }, context());
   assert.equal(result.success, true);
   assert.equal(result.reservationId, "RSV-1");
   assert.equal(seen.productId, "p12");
   assert.equal(seen.customerId, "c1");
+  assert.equal(seen.sourceLocationId, "WH-MAIN");
   assert.equal(seen.quantity, 2);
   assert.equal(seen.idempotencyKey, "customer-agent|wacli|conv-1|msg-1|create-product-reservation");
   assert.equal(seen.context.inboundMessageId, "msg-1");
@@ -62,7 +63,7 @@ test("create reservation fails closed without stable inbound identity", async ()
     reservationAuthority: { createReservation: async () => { called = true; return { success: true }; } },
   });
   const result = await tools.createProductReservation(
-    { productId: "p12", customerId: "c1", quantity: 1 },
+    { productId: "p12", customerId: "c1", sourceLocationId: "WH-MAIN", quantity: 1 },
     { provider: "wacli", conversationId: "conv-1" },
   );
   assert.equal(result.success, false);
@@ -78,7 +79,7 @@ test("authority errors preserve their canonical error code", async () => {
     db: fakeDb,
     reservationAuthority: { createReservation: async () => { throw error; } },
   });
-  const result = await tools.createProductReservation({ productId: "p12", customerId: "c1", quantity: 1 }, context());
+  const result = await tools.createProductReservation({ productId: "p12", customerId: "c1", sourceLocationId: "WH-MAIN", quantity: 1 }, context());
   assert.equal(result.success, false);
   assert.equal(result.error.code, "reservation_policy_not_configured");
   assert.equal(result.error.details.policyId, "commercial-sales-reservation-policy");

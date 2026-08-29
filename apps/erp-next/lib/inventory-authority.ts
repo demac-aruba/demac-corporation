@@ -171,6 +171,9 @@ export function setInventoryStockLevel(input: { requestId: string; itemKind: Inv
 export function setInventoryLocationPolicy(input: { requestId: string; itemKind: InventoryItemKind; itemId: string; locationId: string; minimum: number; target: number }) {
   return callInventoryAuthority('set_location_policy', input, 12_000);
 }
+export function updateInventoryLocationState(input: { requestId: string; itemKind: InventoryItemKind; itemId: string; locationId: string; onHand: number; minimum: number; target: number; reason?: string }) {
+  return callInventoryAuthority('update_location_inventory_state', input, 12_000);
+}
 export function allocateLegacyProductStock(input: { requestId: string; itemId: string; allocations: Array<{ locationId: string; quantity: number }> }) {
   return callInventoryAuthority('allocate_legacy_product_stock', input, 12_000);
 }

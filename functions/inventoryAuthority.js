@@ -345,6 +345,62 @@ function createInventoryApi({ db, verifyIdToken } = {}) {
     return { success: true, version: INVENTORY_API_VERSION, itemKind, itemId, locationId, balance };
   }
 
+  async function updateLocationInventoryState(data, actor) {
+    const stable = requestId(data.requestId);
+    const itemKind = normalizeItemKind(data.itemKind);
+    const itemId = requiredText(data.itemId, "itemId", "Item id", 180);
+    const locationId = requiredText(data.locationId, "locationId", "Location id", 160);
+    if (locationId === LEGACY_UNASSIGNED_LOCATION_ID) throw new InventoryAuthorityError("invalid_location", "Legacy unassigned stock must be allocated, not edited as a normal location.");
+    const onHand = quantityForKind(data.onHand, itemKind, { field: "onHand" });
+    const minimum = quantityForKind(data.minimum, itemKind, { field: "minimum" });
+    const target = quantityForKind(data.target, itemKind, { field: "target" });
+    if (target < minimum) throw new InventoryAuthorityError("invalid_request", "Target quantity must be greater than or equal to minimum quantity.", { minimum, target });
+    await assertLocation(locationId, await inventoryLocations(db), "locationId");
+    const eventId = deterministicId("IM", `${stable}:location-inventory-state`);
+    let result;
+    await db.runTransaction(async (transaction) => {
+      const eventSnapshot = await transaction.get(movementRef(eventId));
+      if (eventSnapshot.exists) {
+        result = { replayed: true, movement: { id: eventSnapshot.id, ...eventSnapshot.data() } };
+        return;
+      }
+      const [record] = await readStockRecords(transaction, [{ itemKind, itemId }]);
+      const balances = { ...record.balances };
+      const before = normalizeBalance(balances[locationId] || {});
+      if (onHand < before.reserved) throw new InventoryAuthorityError("stock_reserved", "The physical count cannot be lower than stock already reserved at this location.", { locationId, reserved: before.reserved, onHand });
+      const after = { ...before, onHand, minimum, target };
+      balances[locationId] = after;
+      const now = new Date().toISOString();
+      writeStockRecord(transaction, record, balances, actor, now);
+      const event = {
+        ...movement({
+          id: eventId,
+          itemKind,
+          itemId,
+          itemName: record.catalog.name,
+          quantity: Math.abs(onHand - before.onHand),
+          type: "stock_count_adjustment",
+          sourceLocationId: onHand < before.onHand ? locationId : "",
+          destinationLocationId: onHand > before.onHand ? locationId : "",
+          previousOnHand: before.onHand,
+          resultingOnHand: onHand,
+          reason: cleanText(data.reason, 800) || "Physical inventory count and location policy update",
+          now,
+          actor,
+        }),
+        requestId: stable,
+        locationId,
+        previousMinimum: before.minimum,
+        resultingMinimum: minimum,
+        previousTarget: before.target,
+        resultingTarget: target,
+      };
+      createMovement(transaction, event);
+      result = { replayed: false, movement: event, before, after };
+    });
+    return { success: true, version: INVENTORY_API_VERSION, ...result };
+  }
+
   async function allocateLegacyProductStock(data, actor) {
     const stable = requestId(data.requestId);
     const itemId = requiredText(data.itemId, "itemId", "Product id", 180);
@@ -589,6 +645,7 @@ function createInventoryApi({ db, verifyIdToken } = {}) {
     if (action === "get_snapshot") return getSnapshot();
     if (action === "set_stock_level") return setStockLevel(data, actor);
     if (action === "set_location_policy") return setLocationPolicy(data, actor);
+    if (action === "update_location_inventory_state") return updateLocationInventoryState(data, actor);
     if (action === "allocate_legacy_product_stock") return allocateLegacyProductStock(data, actor);
     if (action === "create_transfer") return createTransfer(data, actor);
     if (action === "pickup_transfer") return pickupTransfer(data, actor);
@@ -606,7 +663,7 @@ function createInventoryApi({ db, verifyIdToken } = {}) {
       return { status: 200, body: await execute({ action: cleanText(request.body?.action, 120), data: request.body?.data || {}, actor }) };
     } catch (error) { return apiError(error); }
   }
-  return { version: INVENTORY_API_VERSION, authenticate, execute, handle, getSnapshot, setStockLevel, setLocationPolicy, allocateLegacyProductStock, createTransfer, pickupTransfer, receiveTransfer, cancelTransfer, moveToolAsset, issueToWorkOrder };
+  return { version: INVENTORY_API_VERSION, authenticate, execute, handle, getSnapshot, setStockLevel, setLocationPolicy, updateLocationInventoryState, allocateLegacyProductStock, createTransfer, pickupTransfer, receiveTransfer, cancelTransfer, moveToolAsset, issueToWorkOrder };
 }
 
 let defaultApi;

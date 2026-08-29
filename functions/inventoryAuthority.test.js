@@ -259,6 +259,81 @@ test("van replenishment is derived from the same location balance and target", (
   assert.equal(rows[0].needed, 1);
 });
 
+test("location inventory state updates count, minimum and target atomically and replays once", async () => {
+  const db = makeDb(productSeed());
+  const api = apiFor(db);
+  const input = {
+    requestId: "warehouse-location-state-001",
+    itemKind: "product",
+    itemId: "prod-12k",
+    locationId: WAREHOUSE_LOCATION_ID,
+    onHand: 75,
+    minimum: 8,
+    target: 24,
+    reason: "Verified warehouse cycle count",
+  };
+
+  const updated = await api.execute({ action: "update_location_inventory_state", data: input, actor });
+  assert.equal(updated.replayed, false);
+  assert.deepEqual(balance(db, WAREHOUSE_LOCATION_ID), { onHand: 75, reserved: 0, minimum: 8, target: 24 });
+  assert.equal(stock(db).onHand, 85, "aggregate on-hand must remain derived from location balances");
+  assert.equal(db.stores.get("inventoryMovements").size, 1);
+  assert.equal(updated.movement.type, "stock_count_adjustment");
+  assert.equal(updated.movement.previousMinimum, 5);
+  assert.equal(updated.movement.resultingMinimum, 8);
+  assert.equal(updated.movement.previousTarget, 20);
+  assert.equal(updated.movement.resultingTarget, 24);
+
+  const replay = await api.execute({ action: "update_location_inventory_state", data: input, actor });
+  assert.equal(replay.replayed, true);
+  assert.deepEqual(balance(db, WAREHOUSE_LOCATION_ID), { onHand: 75, reserved: 0, minimum: 8, target: 24 });
+  assert.equal(db.stores.get("inventoryMovements").size, 1, "replay must not create a second movement");
+});
+
+test("location inventory state rolls back count and policy when count is below reserved stock", async () => {
+  const seed = productSeed();
+  seed.commercialProductStock["prod-12k"].balances[WAREHOUSE_LOCATION_ID].reserved = 6;
+  const db = makeDb(seed);
+  const api = apiFor(db);
+
+  await assert.rejects(
+    () => api.updateLocationInventoryState({
+      requestId: "warehouse-location-state-reserved-001",
+      itemKind: "product",
+      itemId: "prod-12k",
+      locationId: WAREHOUSE_LOCATION_ID,
+      onHand: 5,
+      minimum: 1,
+      target: 2,
+    }, actor),
+    /cannot be lower than stock already reserved/i,
+  );
+
+  assert.deepEqual(balance(db, WAREHOUSE_LOCATION_ID), { onHand: 80, reserved: 6, minimum: 5, target: 20 });
+  assert.equal(db.stores.get("inventoryMovements").size, 0, "failed atomic update must not write its movement");
+});
+
+test("location inventory state rejects a target below minimum without changing stock", async () => {
+  const db = makeDb(productSeed());
+  const api = apiFor(db);
+
+  await assert.rejects(
+    () => api.updateLocationInventoryState({
+      requestId: "warehouse-location-state-policy-001",
+      itemKind: "product",
+      itemId: "prod-12k",
+      locationId: WAREHOUSE_LOCATION_ID,
+      onHand: 70,
+      minimum: 10,
+      target: 9,
+    }, actor),
+    /target quantity must be greater than or equal to minimum/i,
+  );
+
+  assert.deepEqual(balance(db, WAREHOUSE_LOCATION_ID), { onHand: 80, reserved: 0, minimum: 5, target: 20 });
+  assert.equal(db.stores.get("inventoryMovements").size, 0);
+});
+
 test("Work Order issue reduces only the source location and is idempotent", async () => {
   const seed = productSeed(80, 10);
   seed.commercialProductStock["prod-12k"].balances["VAN-1"] = { onHand: 2, reserved: 0, minimum: 1, target: 2 };

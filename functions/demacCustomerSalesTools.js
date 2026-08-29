@@ -3,8 +3,14 @@ const {
   normalizeText,
   snapshotItems,
 } = require("./bookingSchedulingPrimitives");
+const {
+  INVENTORY_PRODUCT_STOCK_ERROR_CODES,
+  deriveProductStock,
+  resolveInventorySourceLocation,
+  sourceLocationStock,
+} = require("./inventoryProductStockAuthority");
 
-const CUSTOMER_SALES_TOOLS_VERSION = 2;
+const CUSTOMER_SALES_TOOLS_VERSION = 3;
 const COMMERCIAL_PRODUCT_STOCK_COLLECTION = "commercialProductStock";
 const CUSTOMER_SALES_TOOL_NAMES = Object.freeze({
   GET_PRODUCT_CATALOG: "get_product_catalog",
@@ -29,7 +35,7 @@ const CUSTOMER_SALES_TOOL_DEFINITIONS = Object.freeze([
   {
     type: "function",
     name: CUSTOMER_SALES_TOOL_NAMES.GET_PRODUCT_STOCK,
-    description: "Verify current sellable physical stock for one exact ERP product ID. This is a read-only availability check and does not reserve, hold, or sell stock.",
+    description: "Verify current physical stock for one exact ERP product. Without sourceLocationId it lists every eligible Warehouse, Office, or active Van; with one it validates and filters that exact location. This read-only check does not reserve stock.",
     strict: true,
     parameters: {
       type: "object",
@@ -37,6 +43,7 @@ const CUSTOMER_SALES_TOOL_DEFINITIONS = Object.freeze([
       required: ["productId"],
       properties: {
         productId: { type: "string", description: "Exact ERP product ID returned by get_product_catalog." },
+        sourceLocationId: { type: "string", description: "Exact physical Warehouse, Office, or active Van ID whose stock must be verified." },
       },
     },
   },
@@ -92,19 +99,12 @@ function timestampText(value) {
 }
 
 function stockCounts(stock = {}) {
-  const onHand = Number(stock.onHand);
-  const reserved = Number(stock.reserved ?? 0);
-  const valid = Number.isInteger(onHand)
-    && Number.isInteger(reserved)
-    && onHand >= 0
-    && reserved >= 0
-    && reserved <= onHand;
-  return {
-    valid,
-    onHand: valid ? onHand : null,
-    reserved: valid ? reserved : null,
-    available: valid ? onHand - reserved : null,
-  };
+  try {
+    const projection = deriveProductStock(stock);
+    return { valid: true, onHand: projection.onHand, reserved: projection.reserved, available: projection.available };
+  } catch {
+    return { valid: false, onHand: null, reserved: null, available: null };
+  }
 }
 
 function createCustomerSalesTools({ db } = {}) {
@@ -145,8 +145,9 @@ function createCustomerSalesTools({ db } = {}) {
     };
   }
 
-  async function getProductStock({ productId = "" } = {}) {
+  async function getProductStock({ productId = "", sourceLocationId = "" } = {}) {
     const id = cleanText(productId, 160);
+    const locationId = cleanText(sourceLocationId, 160);
     if (!id) {
       return {
         success: false,
@@ -159,7 +160,6 @@ function createCustomerSalesTools({ db } = {}) {
         },
       };
     }
-
     const [productSnapshot, stockSnapshot] = await Promise.all([
       db.collection("services").doc(id).get(),
       db.collection(COMMERCIAL_PRODUCT_STOCK_COLLECTION).doc(id).get(),
@@ -197,8 +197,7 @@ function createCustomerSalesTools({ db } = {}) {
 
     const stock = stockSnapshot.data() || {};
     const linkedProductId = cleanText(stock.productId, 160);
-    const counts = stockCounts(stock);
-    if ((linkedProductId && linkedProductId !== id) || !counts.valid) {
+    if (linkedProductId && linkedProductId !== id) {
       return {
         success: false,
         configured: true,
@@ -213,6 +212,80 @@ function createCustomerSalesTools({ db } = {}) {
       };
     }
 
+    let projection;
+    try {
+      projection = deriveProductStock(stock);
+    } catch (error) {
+      return {
+        success: false,
+        configured: true,
+        stockVerified: false,
+        product: customerProduct(product),
+        productId: id,
+        ...(locationId ? { sourceLocationId: locationId } : {}),
+        error: {
+          code: cleanText(error?.code || "product_stock_invalid", 120),
+          message: cleanText(error?.message || error, 500),
+          details: error?.details && typeof error.details === "object" ? error.details : {},
+        },
+      };
+    }
+
+    const reader = { get: (ref) => ref.get() };
+    let locations = [];
+    let selectedLocation = null;
+    try {
+      if (locationId) {
+        const location = await resolveInventorySourceLocation({ db, reader, sourceLocationId: locationId });
+        const counts = sourceLocationStock(stock, locationId);
+        selectedLocation = {
+          id: location.id,
+          name: location.name,
+          type: location.type,
+          onHand: counts.onHand,
+          reserved: counts.reserved,
+          available: counts.available,
+        };
+        locations = [selectedLocation];
+      } else {
+        const resolved = await Promise.all(Object.entries(projection.balances).map(async ([candidateId, balance]) => {
+          try {
+            const location = await resolveInventorySourceLocation({ db, reader, sourceLocationId: candidateId });
+            return {
+              id: location.id,
+              name: location.name,
+              type: location.type,
+              onHand: balance.onHand,
+              reserved: balance.reserved,
+              available: balance.onHand - balance.reserved,
+            };
+          } catch (error) {
+            if (error?.code === INVENTORY_PRODUCT_STOCK_ERROR_CODES.INVALID_SOURCE_LOCATION) return null;
+            throw error;
+          }
+        }));
+        locations = resolved
+          .filter(Boolean)
+          .sort((left, right) => left.name.localeCompare(right.name, "en", { sensitivity: "base" }) || left.id.localeCompare(right.id));
+      }
+    } catch (error) {
+      return {
+        success: false,
+        configured: true,
+        stockVerified: false,
+        product: customerProduct(product),
+        productId: id,
+        ...(locationId ? { sourceLocationId: locationId } : {}),
+        error: {
+          code: cleanText(error?.code || "product_stock_invalid", 120),
+          message: cleanText(error?.message || error, 500),
+          details: error?.details && typeof error.details === "object" ? error.details : {},
+        },
+      };
+    }
+
+    const headline = selectedLocation || projection;
+
     const verifiedAt = timestampText(stock.verifiedAt);
     if (!verifiedAt) {
       return {
@@ -221,8 +294,17 @@ function createCustomerSalesTools({ db } = {}) {
         stockVerified: false,
         product: customerProduct(product),
         productId: id,
-        onHand: counts.onHand,
-        reserved: counts.reserved,
+        ...(selectedLocation ? {
+          sourceLocationId: selectedLocation.id,
+          sourceLocationName: selectedLocation.name,
+          sourceLocationType: selectedLocation.type,
+        } : {}),
+        locations,
+        onHand: headline.onHand,
+        reserved: headline.reserved,
+        aggregateOnHand: projection.onHand,
+        aggregateReserved: projection.reserved,
+        aggregateAvailable: projection.available,
         error: {
           code: "product_stock_not_verified",
           message: "Commercial stock exists for this product but has no valid verification timestamp.",
@@ -237,14 +319,25 @@ function createCustomerSalesTools({ db } = {}) {
       stockVerified: true,
       product: customerProduct(product),
       productId: id,
-      onHand: counts.onHand,
-      reserved: counts.reserved,
-      available: counts.available,
-      inStock: counts.available > 0,
+      ...(selectedLocation ? {
+        sourceLocationId: selectedLocation.id,
+        sourceLocationName: selectedLocation.name,
+        sourceLocationType: selectedLocation.type,
+      } : {}),
+      locations,
+      onHand: headline.onHand,
+      reserved: headline.reserved,
+      available: headline.available,
+      aggregateOnHand: projection.onHand,
+      aggregateReserved: projection.reserved,
+      aggregateAvailable: projection.available,
+      inStock: selectedLocation ? selectedLocation.available > 0 : locations.some((location) => location.available > 0),
       verifiedAt,
       reservationRequired: true,
       stockReservedForCustomer: false,
-      stockNote: "This is current verified ERP availability only. No unit has been reserved or held for this customer by this read-only check.",
+      stockNote: selectedLocation
+        ? "This is verified ERP availability at the exact source location only. This read-only check did not reserve any unit."
+        : "Choose one exact sourceLocationId from locations before creating a reservation. Company aggregates are informational and do not prove availability at one source.",
     };
   }
 

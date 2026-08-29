@@ -5,7 +5,7 @@ const {
   createCommercialSalesAuthority,
 } = require("./commercialSalesAuthority");
 
-const CUSTOMER_RESERVATION_TOOLS_VERSION = 1;
+const CUSTOMER_RESERVATION_TOOLS_VERSION = 2;
 const CUSTOMER_RESERVATION_TOOL_NAMES = Object.freeze({
   CREATE_PRODUCT_RESERVATION: "create_product_reservation",
   GET_PRODUCT_RESERVATION: "get_product_reservation",
@@ -16,15 +16,16 @@ const CUSTOMER_RESERVATION_TOOL_DEFINITIONS = Object.freeze([
   {
     type: "function",
     name: CUSTOMER_RESERVATION_TOOL_NAMES.CREATE_PRODUCT_RESERVATION,
-    description: "Create one real ERP commercial product reservation after the customer has clearly chosen a product and quantity. The Commercial Sales Authority revalidates customer, policy, product and verified stock transactionally before reserving anything.",
+    description: "Create one real ERP commercial product reservation after the customer has chosen a product, quantity, and exact sourceLocationId returned by get_product_stock. The Commercial Sales Authority revalidates the customer, policy, product, physical location, and stock transactionally.",
     strict: true,
     parameters: {
       type: "object",
       additionalProperties: false,
-      required: ["productId", "customerId", "quantity"],
+      required: ["productId", "customerId", "sourceLocationId", "quantity"],
       properties: {
         productId: { type: "string", description: "Exact ERP product ID returned by get_product_catalog." },
         customerId: { type: "string", description: "Exact resolved ERP customer ID." },
+        sourceLocationId: { type: "string", description: "Exact physical Warehouse, Office, or active Van ID verified by get_product_stock." },
         quantity: { type: "integer", minimum: 1, description: "Positive whole number of units the customer explicitly wants reserved." },
       },
     },
@@ -91,7 +92,7 @@ function createCustomerReservationTools({ db, reservationAuthority = null } = {}
     return authority;
   }
 
-  async function createProductReservation({ productId = "", customerId = "", quantity = 0 } = {}, context = {}) {
+  async function createProductReservation({ productId = "", customerId = "", sourceLocationId = "", quantity = 0 } = {}, context = {}) {
     const idempotencyKey = stableReservationIdempotencyKey(context);
     if (!idempotencyKey) {
       return {
@@ -107,6 +108,7 @@ function createCustomerReservationTools({ db, reservationAuthority = null } = {}
       return await getAuthority().createReservation({
         productId: cleanText(productId, 160),
         customerId: cleanText(customerId, 160),
+        sourceLocationId: cleanText(sourceLocationId, 160),
         quantity: Number(quantity),
         idempotencyKey,
         actor: context.actor || {},
