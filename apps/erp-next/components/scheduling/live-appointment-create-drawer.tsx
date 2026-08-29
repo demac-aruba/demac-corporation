@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createAfterHoursEmergency } from '../../lib/after-hours-booking';
 import type { AppointmentRecipientSelection } from '../../lib/customer-contacts';
 import {
   checkOfficeCreateAvailability,
@@ -51,8 +52,11 @@ export type LiveCreatedBooking = {
   status: 'confirmed' | 'temporary_hold';
 };
 
+export type LiveBookingMode = 'standard' | 'after_hours';
+
 type Props = {
   target: LiveBookingTarget;
+  mode?: LiveBookingMode;
   onClose: () => void;
   onCreated: (booking: LiveCreatedBooking) => void;
 };
@@ -109,6 +113,14 @@ function formatTime(value: string) {
   const [hourText, minute] = value.split(':');
   const hour = Number(hourText);
   return `${hour % 12 || 12}:${minute} ${hour >= 12 ? 'PM' : 'AM'}`;
+}
+
+function validAfterHoursStart(value: string) {
+  const match = value.match(/^(\d{2}):(\d{2})$/);
+  if (!match) return false;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  return hour <= 23 && minute <= 59 && hour * 60 + minute >= 17 * 60;
 }
 
 function formatDate(value: string) {
@@ -226,13 +238,15 @@ function automaticCustomerDescription(workLines: WorkLineDraft[], presetById: Ma
   return entries.length ? `Scheduled work: ${entries.join('; ')}.` : '';
 }
 
-export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Props) {
+export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose, onCreated }: Props) {
+  const isAfterHours = mode === 'after_hours';
   const [references, setReferences] = useState<BookingReferenceData>({ clients: [], properties: [], contacts: [], contactAssignments: [] });
   const [presets, setPresets] = useState<OfficeBookingPreset[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [crewLabel, setCrewLabel] = useState('Crew loading…');
   const [customerQuery, setCustomerQuery] = useState('');
+  const [requestedStart, setRequestedStart] = useState(target.start);
   const [customerId, setCustomerId] = useState('');
   const [propertyId, setPropertyId] = useState('');
   const [recipientSelections, setRecipientSelections] = useState<AppointmentRecipientSelection[]>([]);
@@ -254,6 +268,14 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
   const [holding, setHolding] = useState(false);
   const [authorityError, setAuthorityError] = useState('');
   const [validated, setValidated] = useState<ValidationState | null>(null);
+
+  const requestTarget = useMemo<LiveBookingTarget>(() => ({
+    dateKey: target.dateKey,
+    vanId: target.vanId,
+    vanName: target.vanName,
+    start: requestedStart,
+    end: target.end,
+  }), [requestedStart, target.dateKey, target.end, target.vanId, target.vanName]);
 
   const refreshReferences = async () => {
     const next = await loadBookingReferenceData();
@@ -351,7 +373,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
   const totalQuantity = workLines.reduce((sum, line) => sum + line.quantity, 0);
   const workSignature = workLines.map((line) => `${line.presetId}:${line.quantity}:${line.manualDurationMinutes ?? ''}`).join('|');
   const recipientSignature = recipientSelections.map((item) => `${item.recipientType}:${item.sourceId}:${Number(item.sendConfirmation)}:${Number(item.sendReminder)}`).sort().join('|');
-  const signature = [customerId, propertyId, recipientSignature, workSignature, description.trim(), technicianInstructions.trim(), target.dateKey, target.vanId, target.start].join('|');
+  const signature = [customerId, propertyId, recipientSignature, workSignature, description.trim(), technicianInstructions.trim(), requestTarget.dateKey, requestTarget.vanId, requestTarget.start, mode].join('|');
   validationSignatureRef.current = signature;
   const activeValidation = validated?.signature === signature ? validated : null;
   const selectedValidatedOption = activeValidation?.options.find((option) => option.id === activeValidation.selectedOptionId)
@@ -482,6 +504,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
   }), [presetById, workLines]);
 
   const validateTarget = useCallback(async (automatic = false) => {
+    if (isAfterHours) return;
     if (!selectedCustomer) {
       if (!automatic) setAuthorityError('Select or create a customer first.');
       return;
@@ -507,16 +530,16 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
         customerId: selectedCustomer.id,
         propertyId: selectedProperty.id,
         workLines: workRequestLines(),
-        requestedDate: target.dateKey,
-        requestedTime: target.start,
-        requiredVanId: target.vanId,
+        requestedDate: requestTarget.dateKey,
+        requestedTime: requestTarget.start,
+        requiredVanId: requestTarget.vanId,
         customerFacingDescription: description.trim(),
         technicianInstructions: technicianInstructions.trim(),
         recipientSelections,
-        notes: `Created from LIVE Scheduling slot ${target.vanId} ${target.dateKey} ${target.start}.`,
+        notes: `Created from LIVE Scheduling slot ${requestTarget.vanId} ${requestTarget.dateKey} ${requestTarget.start}.`,
       });
       if (requestEpoch !== validationEpochRef.current || validationSignatureRef.current !== validationSignature) return;
-      const exactOptions = result.options.filter((option) => optionMatchesTarget(option, target));
+      const exactOptions = result.options.filter((option) => optionMatchesTarget(option, requestTarget));
       if (!result.available || !result.offer || !exactOptions.length) {
         const reason = result.reason ? ` (${result.reason})` : '';
         setAuthorityError(`Booking Authority could not reserve the complete allocation for this van/time${reason}. The schedule was not changed.`);
@@ -536,16 +559,66 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
     } finally {
       if (requestEpoch === validationEpochRef.current) setChecking(false);
     }
-  }, [description, recipientSelections, selectedCustomer, selectedProperty, signature, target, technicianInstructions, workRequestLines, workValid]);
+  }, [description, isAfterHours, recipientSelections, requestTarget, selectedCustomer, selectedProperty, signature, technicianInstructions, workRequestLines, workValid]);
 
   useEffect(() => {
-    if (loading || masterSaving || saving || holding || !selectedCustomer || !selectedProperty || !workValid) return;
+    if (isAfterHours || loading || masterSaving || saving || holding || !selectedCustomer || !selectedProperty || !workValid) return;
     const timer = window.setTimeout(() => { void validateTarget(true); }, 350);
     return () => window.clearTimeout(timer);
-  }, [holding, loading, masterSaving, saving, selectedCustomer, selectedProperty, validateTarget, workValid]);
+  }, [holding, isAfterHours, loading, masterSaving, saving, selectedCustomer, selectedProperty, validateTarget, workValid]);
 
   const confirmBooking = async () => {
-    if (!activeValidation || !selectedValidatedOption || !selectedCustomer || !selectedProperty || !selectedPresets.length || saving || holding) return;
+    if (!selectedCustomer || !selectedProperty || !selectedPresets.length || !workValid || saving || holding) return;
+    if (isAfterHours) {
+      if (!validAfterHoursStart(requestTarget.start)) {
+        setAuthorityError('After-hours work must start at 5:00 PM or later.');
+        return;
+      }
+      setSaving(true);
+      setAuthorityError('');
+      try {
+        const result = await createAfterHoursEmergency({
+          requestId: createOfficeLifecycleRequestId('after-hours-emergency'),
+          customerId: selectedCustomer.id,
+          propertyId: selectedProperty.id,
+          workLines: workRequestLines(),
+          requestedDate: requestTarget.dateKey,
+          requestedTime: requestTarget.start,
+          requiredVanId: requestTarget.vanId,
+          customerFacingDescription: description.trim(),
+          technicianInstructions: technicianInstructions.trim(),
+          recipientSelections,
+        });
+        onCreated({
+          appointmentId: result.appointmentId,
+          workOrderIds: result.workOrderIds,
+          option: {
+            id: `after-hours:${result.appointmentId}`,
+            date: requestTarget.dateKey,
+            time: requestTarget.start,
+            assignments: [{
+              vanId: requestTarget.vanId,
+              vanName: requestTarget.vanName,
+              quantity: totalQuantity,
+              slots: 0,
+              time: requestTarget.start,
+              role: 'primary',
+            }],
+          },
+          customer: selectedCustomer,
+          property: selectedProperty,
+          preset: selectedPresets[0],
+          status: 'confirmed',
+        });
+      } catch (error) {
+        setAuthorityError(error instanceof Error ? error.message : 'The after-hours job could not be created.');
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
+    if (!activeValidation || !selectedValidatedOption) return;
     setSaving(true);
     setAuthorityError('');
     const { offerId, offerVersion } = activeValidation;
@@ -608,22 +681,26 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
 
   return (
     <div className={styles.overlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
-      <aside className={styles.drawer} role="dialog" aria-modal="true" aria-label="Create appointment">
+      <aside className={styles.drawer} role="dialog" aria-modal="true" aria-label={isAfterHours ? `Create after-hours appointment for ${requestTarget.vanName}` : 'Create appointment'}>
         <header className={styles.header}>
           <div>
-            <span className={styles.eyebrow}>Booking Authority · Canonical Scheduling</span>
-            <h2>New appointment</h2>
-            <p>Select the real customer and work details. Add one or more quick work types; Booking Authority validates the combined allocation before anything is committed.</p>
+            <span className={styles.eyebrow}>Booking Authority · {isAfterHours ? 'After-Hours / Emergency' : 'Canonical Scheduling'}</span>
+            <h2>{isAfterHours ? 'New after-hours appointment' : 'New appointment'}</h2>
+            <p>{isAfterHours
+              ? 'Use the same canonical customer, property, contacts and work-selection flow as every appointment. The selected Van receives one extra open-ended job from 5:00 PM onward.'
+              : 'Select the real customer and work details. Add one or more quick work types; Booking Authority validates the combined allocation before anything is committed.'}</p>
           </div>
           <button type="button" className={styles.close} disabled={busy} onClick={onClose} aria-label="Close">×</button>
         </header>
 
         <div className={styles.body}>
           <section className={styles.targetCard}>
-            <div><span>DATE</span><strong>{formatDate(target.dateKey)}</strong></div>
-            <div><span>PRIMARY VAN</span><strong>{target.vanName} · {crewLabel}</strong></div>
-            <div><span>START</span><strong>{formatTime(target.start)}</strong></div>
-            <div><span>OPEN BLOCK</span><strong>{formatTime(target.start)}–{formatTime(target.end)}</strong></div>
+            <div><span>DATE</span><strong>{formatDate(requestTarget.dateKey)}</strong></div>
+            <div><span>PRIMARY VAN</span><strong>{requestTarget.vanName} · {crewLabel}</strong></div>
+            {isAfterHours ? (
+              <div><label htmlFor="after-hours-start" style={{ display: 'block', color: 'var(--brand)', fontSize: '5.5px', fontWeight: 950, letterSpacing: '.07em' }}>START · 5:00 PM OR LATER</label><input id="after-hours-start" style={{ width: '100%', boxSizing: 'border-box', marginTop: 3, border: '1px solid var(--border)', borderRadius: 7, padding: '5px 7px', color: 'var(--text)', background: 'var(--surface)' }} type="time" min="17:00" value={requestedStart} onChange={(event) => { setRequestedStart(event.target.value); resetValidation(); }} /></div>
+            ) : <div><span>START</span><strong>{formatTime(requestTarget.start)}</strong></div>}
+            <div><span>{isAfterHours ? 'WORK RULE' : 'OPEN BLOCK'}</span><strong>{isAfterHours ? 'Extra job · open-ended until field completion' : `${formatTime(requestTarget.start)}–${formatTime(requestTarget.end)}`}</strong></div>
           </section>
 
           {loadError ? <div className={styles.errorBox}>{loadError}</div> : null}
@@ -759,7 +836,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
               <div className={styles.quantityRow}>
                 <div><span>Work lines</span><strong>{workLines.length} line{workLines.length === 1 ? '' : 's'} · {totalQuantity} item{totalQuantity === 1 ? '' : 's'}</strong></div>
                 <div><span>Estimated workload</span><strong>{estimatedMinutes ? durationLabel(estimatedMinutes) : '—'}</strong></div>
-                <div><span>Scheduled allocation</span><strong>{allocationDurationLabel(selectedValidatedOption, estimatedMinutes)}</strong></div>
+                <div><span>{isAfterHours ? 'After-hours execution' : 'Scheduled allocation'}</span><strong>{isAfterHours ? 'Open-ended until field completion' : allocationDurationLabel(selectedValidatedOption, estimatedMinutes)}</strong></div>
               </div>
               <div className={styles.formGrid}>
                 <label className={styles.fieldWide}><span>Customer-facing work description</span><textarea value={description} onChange={(event) => { setDescription(event.target.value); resetValidation(); }} placeholder="Example: Two standard services and one installation. BTU to be confirmed by technician on site." /></label>
@@ -768,8 +845,16 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
             </div>
           </section>
 
+          {isAfterHours ? (
+            <section className={styles.authoritySection}>
+              <div className={styles.authorityHeading}><div><span>4</span><strong>After-hours operational validation</strong><small>Booking Authority validates the same canonical customer, property, contacts, services, selected Van and dated crew when you confirm. This extra job remains open until real field completion.</small></div></div>
+              <div className={styles.authorityIdle}>{selectedCustomer && selectedProperty && workValid && validAfterHoursStart(requestTarget.start)
+                ? `${requestTarget.vanName} is selected for an extra job starting ${formatTime(requestTarget.start)}. No daytime capacity, planned end time or payroll overtime is fabricated.`
+                : 'Complete the same customer, property and work details used by a normal booking, then choose a start at 5:00 PM or later.'}</div>
+            </section>
+          ) : (
           <section className={styles.authoritySection}>
-            <div className={styles.authorityHeading}><div><span>4</span><strong>Live capacity validation</strong><small>{target.vanName} stays the primary/responsible van. Booking Authority validates automatically as the complete workload changes; final transaction validation still runs on confirm or hold.</small></div><button type="button" className={styles.validateButton} disabled={busy || checking || !selectedCustomer || !selectedProperty || !workValid} onClick={() => void validateTarget(false)}>{checking ? 'Checking…' : 'Recheck now'}</button></div>
+            <div className={styles.authorityHeading}><div><span>4</span><strong>Live capacity validation</strong><small>{requestTarget.vanName} stays the primary/responsible van. Booking Authority validates automatically as the complete workload changes; final transaction validation still runs on confirm or hold.</small></div><button type="button" className={styles.validateButton} disabled={busy || checking || !selectedCustomer || !selectedProperty || !workValid} onClick={() => void validateTarget(false)}>{checking ? 'Checking…' : 'Recheck now'}</button></div>
 
             {activeValidation && selectedValidatedOption ? (
               <div className={styles.validationSuccess}>
@@ -785,7 +870,7 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
                           <button type="button" key={option.id} className={`${styles.choice} ${selected ? styles.choiceSelected : ''}`} onClick={() => setValidated((current) => current ? { ...current, selectedOptionId: option.id } : current)}>
                             <strong>{support ? `${support.vanName || support.vanId} · support` : 'Primary allocation'}</strong>
                             <span>{support ? `${formatTime(support.time || option.time)}${support.endTime ? `–${formatTime(support.endTime)}` : ''}` : `${formatTime(option.time)}–${formatTime(option.endTime || option.time)}`}</span>
-                            <small>{support ? `${support.quantity} support unit${support.quantity === 1 ? '' : 's'} · ${target.vanName} remains primary` : 'No support van required'}</small>
+                            <small>{support ? `${support.quantity} support unit${support.quantity === 1 ? '' : 's'} · ${requestTarget.vanName} remains primary` : 'No support van required'}</small>
                           </button>
                         );
                       })}
@@ -807,14 +892,17 @@ export function LiveAppointmentCreateDrawer({ target, onClose, onCreated }: Prop
               <div className={styles.authorityIdle}>{checking ? 'Checking the complete allocation with Booking Authority…' : 'Complete the customer, property and work details. Booking Authority validates the live target automatically; the browser never becomes the source of truth for capacity.'}</div>
             )}
           </section>
+          )}
         </div>
 
         <footer className={styles.footer}>
-          <div><span>CANONICAL WRITE PATH</span><strong>Booking Authority → Appointment + Work Order + Capacity Locks</strong></div>
+          <div><span>{isAfterHours ? 'CANONICAL EXTRA-WORK PATH' : 'CANONICAL WRITE PATH'}</span><strong>{isAfterHours ? 'Booking Authority → Appointment + open-ended Work Order + Van guard' : 'Booking Authority → Appointment + Work Order + Capacity Locks'}</strong></div>
           <div>
             <button type="button" className={styles.secondaryButton} disabled={busy} onClick={onClose}>Cancel</button>
-            <button type="button" className={styles.secondaryButton} style={{ color: 'var(--warning, #b45309)', borderColor: 'var(--warning, #f59e0b)' }} disabled={!selectedValidatedOption || busy || checking} onClick={() => void holdBooking()}>{holding ? 'Holding…' : 'Temporary hold'}</button>
-            <button type="button" className={styles.confirmButton} disabled={!selectedValidatedOption || busy || checking} onClick={() => void confirmBooking()}>{saving ? 'Confirming…' : 'Confirm appointment'}</button>
+            {!isAfterHours ? <button type="button" className={styles.secondaryButton} style={{ color: 'var(--warning, #b45309)', borderColor: 'var(--warning, #f59e0b)' }} disabled={!selectedValidatedOption || busy || checking} onClick={() => void holdBooking()}>{holding ? 'Holding…' : 'Temporary hold'}</button> : null}
+            <button type="button" className={styles.confirmButton} disabled={isAfterHours
+              ? busy || !selectedCustomer || !selectedProperty || !workValid || !validAfterHoursStart(requestTarget.start)
+              : !selectedValidatedOption || busy || checking} onClick={() => void confirmBooking()}>{saving ? 'Confirming…' : isAfterHours ? `Create for ${requestTarget.vanName}` : 'Confirm appointment'}</button>
           </div>
         </footer>
       </aside>

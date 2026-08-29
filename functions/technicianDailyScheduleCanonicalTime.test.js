@@ -7,7 +7,7 @@ const {
   hasCanonicalReservedCapacity,
 } = require("./technicianDailyScheduleService");
 
-test("canonical duration owns technician-visible time even when slot metadata spans the lunch gap", () => {
+test("capacity ownership may span the lunch gap without changing technician-visible elapsed time", () => {
   const order = {
     date: "2026-08-27",
     vanId: "VAN-1",
@@ -18,7 +18,7 @@ test("canonical duration owns technician-visible time even when slot metadata sp
   };
 
   assert.equal(hasCanonicalReservedCapacity(order), true);
-  assert.equal(canonicalReservedEndTime(order), "14:30");
+  assert.equal(canonicalReservedEndTime(order), "16:30");
   assert.equal(displayedOrderEndTime(order), "14:30");
 });
 

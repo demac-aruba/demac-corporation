@@ -98,6 +98,7 @@ requireCondition(!jobOwnsCapacityStart(threeService.assignments[0], '14:30'), 'T
 
 const perVanAfterHoursTarget = afterHoursTargetForVan('2026-08-18', { id: 'VAN-3', name: 'Van 3' });
 requireCondition(perVanAfterHoursTarget.vanId === 'VAN-3' && perVanAfterHoursTarget.vanName === 'Van 3', 'Per-Van after-hours creation must preserve the lane-selected Van.');
+requireCondition(perVanAfterHoursTarget.start === '17:00' && perVanAfterHoursTarget.end === '', 'After-hours creation must reuse canonical booking with a 5 PM default and no fabricated end time.');
 requireCondition(availableSlotAction('card') === 'book' && availableSlotAction('book') === 'book', 'Available card background and BOOK must open normal booking.');
 requireCondition(availableSlotAction('support') === 'support', 'The explicit SUPPORT action must remain isolated from normal booking.');
 

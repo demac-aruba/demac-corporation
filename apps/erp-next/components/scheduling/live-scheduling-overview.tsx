@@ -427,6 +427,16 @@ export function LiveSchedulingOverview() {
     void refresh();
   };
 
+  const handleCreatedAfterHours = (booking: LiveCreatedBooking) => {
+    const target = afterHoursTarget;
+    setAfterHoursTarget(null);
+    setSelectedAppointmentId('');
+    const customer = booking.customer.name || booking.customer.company || 'customer';
+    const van = target?.vanName || booking.option.assignments[0]?.vanName || booking.option.assignments[0]?.vanId || 'van';
+    setMoveNotice(`After-hours appointment ${booking.appointmentId} confirmed for ${customer} · ${van} · ${formatTime(booking.option.time)}. The Work Order remains open until real field completion.`);
+    void refresh();
+  };
+
   const handleCreatedSupport = async (result: OfficeAdhocSupportResult, appointment: BrowserAppointmentRecord) => {
     const target = supportTarget;
     setSupportTarget(null);
@@ -723,7 +733,7 @@ export function LiveSchedulingOverview() {
       {selectedAppointment ? <LiveAppointmentDetailsDrawer appointment={selectedAppointment} onClose={() => setSelectedAppointmentId('')} onChanged={refresh} /> : null}
       {bookingTarget ? <LiveAppointmentCreateDrawer target={bookingTarget} onClose={() => setBookingTarget(null)} onCreated={handleCreatedBooking} /> : null}
       {supportTarget ? <AdhocSupportDrawer target={supportTarget} appointments={appointments} onClose={() => setSupportTarget(null)} onCreated={handleCreatedSupport} /> : null}
-      {afterHoursTarget ? <AfterHoursEmergencyDrawer target={afterHoursTarget} onClose={() => setAfterHoursTarget(null)} onCreated={() => void refresh()} /> : null}
+      {afterHoursTarget ? <AfterHoursEmergencyDrawer target={afterHoursTarget} onClose={() => setAfterHoursTarget(null)} onCreated={handleCreatedAfterHours} /> : null}
       {pendingDragMove ? <DragMoveConfirmation move={pendingDragMove} busy={moveBusy} onCancel={cancelPendingMove} onConfirm={() => void confirmPendingMove()} /> : null}
     </section>
   );

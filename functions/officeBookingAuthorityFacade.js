@@ -56,6 +56,7 @@ function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
           requestId: data.requestId,
           customerId: data.customerId,
           propertyId: data.propertyId,
+          workLines: data.workLines,
           presetId: data.presetId,
           serviceId: data.serviceId,
           quantity: data.quantity,

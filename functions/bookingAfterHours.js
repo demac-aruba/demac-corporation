@@ -2,7 +2,7 @@ const {
   BOOKING_ERROR_CODES,
   BookingAuthorityError,
   cleanText,
-  positiveInteger,
+  normalizeWorkLines,
 } = require("./bookingAuthorityCore");
 const {
   BOOKING_COLLECTIONS,
@@ -99,6 +99,7 @@ function createAfterHoursAuthority({
     requestId,
     customerId,
     propertyId,
+    workLines,
     presetId,
     serviceId,
     quantity = 1,
@@ -113,14 +114,14 @@ function createAfterHoursAuthority({
     const stableRequestId = cleanText(requestId, 240);
     const clientId = cleanText(customerId, 180);
     const siteId = cleanText(propertyId, 180);
-    const requestedPresetId = cleanText(presetId, 120);
-    const requestedServiceId = cleanText(serviceId, 120);
+    const requestedWorkLines = normalizeWorkLines(Array.isArray(workLines) && workLines.length
+      ? workLines
+      : [{ presetId: presetId || serviceId, serviceId, quantity }]);
     const dateKey = cleanText(requestedDate, 20);
     const startTime = cleanText(requestedTime, 20);
     const rawVanId = cleanText(requiredVanId, 120);
-    const itemQuantity = positiveInteger(quantity);
     const startMinutes = timeMinutes(startTime);
-    if (stableRequestId.length < 8 || !clientId || !siteId || !dateKey || !rawVanId || (!requestedPresetId && !requestedServiceId)) {
+    if (stableRequestId.length < 8 || !clientId || !siteId || !dateKey || !rawVanId) {
       throw new BookingAuthorityError(
         BOOKING_ERROR_CODES.INVALID_REQUEST,
         "After-hours emergency requires requestId, customer, property, work type, date, time and Van.",
@@ -258,14 +259,17 @@ function createAfterHoursAuthority({
       const services = snapshotItems(serviceSnapshot);
       const legacyPreset = legacyPresetSnapshot.exists ? { id: "appointment-work-presets", ...legacyPresetSnapshot.data() } : { id: "appointment-work-presets" };
       const presets = mergeBookablePresets(services, [legacyPreset]);
-      const preset = presets.find((item) => item.id === requestedPresetId || (requestedServiceId && item.serviceId === requestedServiceId));
-      if (!preset || preset.active === false) {
-        throw new BookingAuthorityError(
-          BOOKING_ERROR_CODES.INVALID_REQUEST,
-          "The selected after-hours work type is not an active Scheduling work type.",
-          { presetId: requestedPresetId, serviceId: requestedServiceId },
-        );
-      }
+      const resolvedWorkLines = requestedWorkLines.map((line, index) => {
+        const preset = presets.find((item) => item.id === line.presetId || (line.serviceId && item.serviceId === line.serviceId));
+        if (!preset || preset.active === false) {
+          throw new BookingAuthorityError(
+            BOOKING_ERROR_CODES.INVALID_REQUEST,
+            "Every selected after-hours work type must be active in Scheduling.",
+            { field: `workLines[${index}]`, presetId: line.presetId, serviceId: line.serviceId },
+          );
+        }
+        return { line, preset };
+      });
 
       const guard = afterHoursGuard(dateKey, vanId);
       const guardRef = db.collection(collections.capacityLocks).doc(guard.id);
@@ -292,16 +296,19 @@ function createAfterHoursAuthority({
 
       const client = { id: clientSnapshot.id, ...clientSnapshot.data() };
       const property = { id: propertySnapshot.id, ...propertySnapshot.data() };
-      const workItem = compactObject({
-        id: `AH-WORK-${hashId(`${appointmentId}|${preset.id}`, 12).toUpperCase()}`,
+      const workItems = resolvedWorkLines.map(({ line, preset }, index) => compactObject({
+        id: cleanText(line.id, 120) || `AH-WORK-${hashId(`${appointmentId}|${preset.id}|${index}`, 12).toUpperCase()}`,
         presetId: preset.id,
         serviceId: preset.serviceId,
         label: preset.label,
-        quantity: itemQuantity,
+        quantity: line.quantity,
         durationMode: "open_ended",
         serviceDefinitionVersion: preset.serviceDefinitionVersion,
-      });
-      const description = cleanText(customerFacingDescription, 1_500) || `${preset.label} × ${itemQuantity}`;
+      }));
+      const itemQuantity = workItems.reduce((sum, item) => sum + Math.max(1, Number(item.quantity) || 1), 0);
+      const primaryPreset = resolvedWorkLines[0].preset;
+      const description = cleanText(customerFacingDescription, 1_500)
+        || workItems.map((item) => `${item.label} × ${item.quantity}`).join("; ");
       const instructions = cleanText(technicianInstructions, 1_500);
       const timestamp = now.toISOString();
       const assignment = compactObject({
@@ -331,7 +338,8 @@ function createAfterHoursAuthority({
         assignments: [assignment],
         workOrderIds: [workOrderId],
         capacityLockIds: [guard.id],
-        workItems: [workItem],
+        workLines: requestedWorkLines,
+        workItems,
         afterHoursKind: AFTER_HOURS_KIND,
         afterHoursOpenEnded: true,
         afterHoursRequestId: stableRequestId,
@@ -348,7 +356,7 @@ function createAfterHoursAuthority({
         appointmentId,
         clientId,
         propertyId: siteId,
-        serviceId: preset.serviceId,
+        serviceId: primaryPreset.serviceId,
         date: dateKey,
         time: startTime,
         status: "Confirmada",
@@ -359,10 +367,10 @@ function createAfterHoursAuthority({
         problem: description,
         customerFacingDescription: description,
         technicianInstructions: instructions,
-        appointmentWorkType: preset.id,
-        appointmentPresetId: preset.id,
-        appointmentWorkLabel: preset.label,
-        appointmentWorkItems: [workItem],
+        appointmentWorkType: primaryPreset.id,
+        appointmentPresetId: primaryPreset.id,
+        appointmentWorkLabel: primaryPreset.label,
+        appointmentWorkItems: workItems,
         appointmentAssignmentRole: "primary",
         airConditionerCount: itemQuantity,
         afterHoursKind: AFTER_HOURS_KIND,

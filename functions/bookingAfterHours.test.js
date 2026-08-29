@@ -6,6 +6,7 @@ const {
   afterHoursGuard,
   createAfterHoursAuthority,
 } = require("./bookingAfterHours");
+const { createOfficeBookingAuthorityFacade } = require("./officeBookingAuthorityFacade");
 const { createWorkOrderApplicationService } = require("./workOrderApplicationService");
 
 class FakeSnapshot {
@@ -227,6 +228,75 @@ test("after-hours emergency creates one canonical open-ended appointment, work o
   assert.equal(storedGuard.openEnded, true);
   assert.equal(storedGuard.appointmentId, result.appointmentId);
   assert.equal(storedGuard.workOrderId, result.workOrderIds[0]);
+});
+
+test("after-hours emergency accepts the same multi-line work selection as normal booking", async () => {
+  const { db, authority } = fixture();
+  const result = await authority.createEmergency(input({
+    presetId: undefined,
+    quantity: undefined,
+    customerFacingDescription: "",
+    workLines: [
+      { id: "standard", presetId: "standard_service", quantity: 2 },
+      { id: "check", presetId: "check_up", quantity: 1 },
+    ],
+  }));
+
+  const appointment = db.read(`appointments/${result.appointmentId}`);
+  const workOrder = db.read(`workOrders/${result.workOrderIds[0]}`);
+  assert.deepEqual(appointment.workLines.map((line) => [line.presetId, line.quantity]), [
+    ["standard_service", 2],
+    ["check_up", 1],
+  ]);
+  assert.deepEqual(appointment.workItems.map((item) => [item.presetId, item.quantity, item.durationMode]), [
+    ["standard_service", 2, "open_ended"],
+    ["check_up", 1, "open_ended"],
+  ]);
+  assert.equal(workOrder.appointmentWorkItems.length, 2);
+  assert.equal(workOrder.airConditionerCount, 3);
+  assert.match(workOrder.customerFacingDescription, /Standard Service × 2/);
+  assert.match(workOrder.customerFacingDescription, /Check Up × 1/);
+  assert.equal(workOrder.afterHoursOpenEnded, true);
+  assert.equal(workOrder.appointmentEndTime, undefined);
+});
+
+test("office facade preserves every after-hours work line from the canonical drawer", async () => {
+  const arubaDate = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Aruba",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+  const db = new FakeFirestore(baseSeed({
+    "users/office-user": { id: "office-user", role: "office", active: true, name: "Dispatcher" },
+  }));
+  const facade = createOfficeBookingAuthorityFacade({
+    db,
+    verifyIdToken: async () => ({ uid: "office-user", name: "Dispatcher" }),
+  });
+  const response = await facade.handle({
+    method: "POST",
+    headers: { authorization: "Bearer test-token" },
+    body: {
+      action: "create_after_hours_emergency",
+      data: input({
+        requestedDate: arubaDate,
+        presetId: undefined,
+        quantity: undefined,
+        workLines: [
+          { id: "standard", presetId: "standard_service", quantity: 2 },
+          { id: "check", presetId: "check_up", quantity: 1 },
+        ],
+      }),
+    },
+  });
+
+  assert.equal(response.status, 200);
+  const appointment = db.read(`appointments/${response.body.appointmentId}`);
+  assert.deepEqual(appointment.workItems.map((item) => [item.presetId, item.quantity]), [
+    ["standard_service", 2],
+    ["check_up", 1],
+  ]);
 });
 
 test("retrying the same after-hours request is idempotent", async () => {

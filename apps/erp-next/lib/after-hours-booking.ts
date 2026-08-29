@@ -1,6 +1,7 @@
 import type { AppointmentRecipientSelection } from './customer-contacts';
 import { firebaseClientConfig } from './firebase/client-config';
 import { requireFirebaseWebSession } from './firebase/session';
+import type { OfficeBookingWorkLine } from './office-booking-authority';
 
 export type AfterHoursEmergencyResult = {
   success: true;
@@ -20,9 +21,7 @@ export async function createAfterHoursEmergency(input: {
   requestId: string;
   customerId: string;
   propertyId: string;
-  presetId: string;
-  serviceId?: string;
-  quantity: number;
+  workLines: OfficeBookingWorkLine[];
   requestedDate: string;
   requestedTime: string;
   requiredVanId: string;
