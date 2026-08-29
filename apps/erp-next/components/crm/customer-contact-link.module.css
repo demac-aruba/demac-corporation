@@ -1,0 +1,194 @@
+.identityMode {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 18px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.identityMode button {
+  border: 0;
+  border-radius: 9px;
+  padding: 10px 12px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 8px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.identityMode button.identityModeActive {
+  color: var(--brand);
+  background: var(--surface);
+  box-shadow: 0 1px 5px rgba(7, 15, 28, .1);
+}
+
+.customerLookup {
+  position: relative;
+  padding: 15px;
+}
+
+.customerLookup > label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 7.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.customerLookup > input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  padding: 11px;
+  color: var(--text);
+  background: var(--surface-2);
+  outline: none;
+  font: inherit;
+  font-size: 9px;
+}
+
+.customerLookup > input:focus {
+  border-color: color-mix(in srgb, var(--brand) 60%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 10%, transparent);
+}
+
+.customerResults {
+  position: absolute;
+  z-index: 4;
+  top: 72px;
+  right: 15px;
+  left: 15px;
+  max-height: 300px;
+  overflow: auto;
+  margin: 0;
+  padding: 5px;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 16px 38px rgba(7, 15, 28, .18);
+}
+
+.customerResults li {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.customerResults li + li {
+  border-top: 1px solid var(--border);
+}
+
+.customerResults li.customerResultActive,
+.customerResults li:hover {
+  background: var(--brand-soft);
+}
+
+.customerResults strong {
+  font-size: 9px;
+}
+
+.customerResults span {
+  color: var(--text);
+  font-size: 7.5px;
+}
+
+.customerResults small {
+  color: var(--muted);
+  font-size: 7px;
+}
+
+.customerResults li.customerNoResults {
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.5;
+  cursor: default;
+}
+
+.selectedIdentity {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  gap: 11px;
+  align-items: center;
+  padding: 15px;
+}
+
+.selectedIdentityAvatar {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  color: var(--brand);
+  background: var(--brand-soft);
+  font-size: 9px;
+  font-weight: 950;
+}
+
+.selectedIdentity strong,
+.selectedIdentity span,
+.selectedIdentity small {
+  display: block;
+}
+
+.selectedIdentity strong {
+  font-size: 10px;
+}
+
+.selectedIdentity span {
+  margin-top: 3px;
+  color: var(--text);
+  font-size: 7.5px;
+}
+
+.selectedIdentity small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 7px;
+}
+
+.selectedIdentity > button {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 7px 9px;
+  color: var(--brand);
+  background: var(--surface-2);
+  font-size: 7px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.linkedIndicator {
+  border: 1px solid color-mix(in srgb, var(--success) 24%, var(--border));
+  border-radius: 999px;
+  padding: 5px 8px;
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 8%, transparent);
+  font-size: 6.5px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+@media (max-width: 700px) {
+  .identityMode {
+    grid-template-columns: 1fr;
+  }
+
+  .selectedIdentity {
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+
+  .selectedIdentity > button {
+    grid-column: 2;
+    justify-self: start;
+  }
+}
