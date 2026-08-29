@@ -7,17 +7,19 @@ This packet prepares human validation only. It does not authorize merge, additio
 ## Current branch state
 
 - Branch: `feature/technician-portal-canonical-foundation`
-- Prepared through local current-main merge: `0ceb618e8263aca7342312599df7ac0687ef0fd2`
-- Remote code candidate with identical tree and passing CI: `54766097e028a9d7e43fab8f675e1e294279ffb5`
+- Prepared through local current-main merge: `62cb3c7950defd276b2700b906c7276623fde95e`
+- Remote code candidate with identical tree and passing CI: `562e46e5f7e169d50d3e56f8912b5e05cfeecd8b`
 - Canonical deliverable count: **41 completed / 41 total / 0 remaining**
 - Mandatory scenarios: 26/26 branch-level acceptance evidence PASS
 - Rules gate: 5/5 Firestore groups and 16/16 Storage runtime scenarios PASS; no production Rules deployment occurred
 - Review mode: current-main Solo Maintainer Review Mode applied; absence of an external reviewer is not itself a blocker
-- Human UAT and merge decision: not yet completed
+- Human UAT: not yet recorded
+- Conditional human merge approval: received on 2026-08-28, subject to no remaining release blocker
+- Production Rules/access deployment authorization: not yet received
 
 ## Preconditions before human UAT can approve release readiness
 
-1. **PASS:** the current code tree is published and all 10 required GitHub workflows pass at remote candidate `54766097e028a9d7e43fab8f675e1e294279ffb5`.
+1. **PASS:** the current code tree is published and all 11 required GitHub workflows plus both Vercel previews pass at remote candidate `562e46e5f7e169d50d3e56f8912b5e05cfeecd8b`.
 2. **PASS:** a final fresh adversarial review covers the complete release candidate under current-main Solo Maintainer Review Mode; it is not described as independent review.
 3. **REQUIRED FOR UAT:** use non-production test identities and data only.
 
@@ -50,9 +52,9 @@ Record PASS/FAIL and evidence for every item.
 
 ## Merge decision
 
-Current decision: **HOLD / DO NOT MERGE**.
+Current decision: **HOLD / DO NOT MERGE** until human UAT is recorded and the production Rules/access deployment is explicitly authorized.
 
-After every precondition and UAT item passes, a human may decide whether to approve and merge PR #435. Production rollout remains a later, separate human-approved action even after merge.
+The current PR changes `firestore.rules` and `storage.rules`, and the repository workflow deploys those Rules on a qualifying push to `main`. Therefore this merge will automatically cross the production Rules/access boundary; conditional merge approval alone does not authorize that production effect. After UAT passes, a human must explicitly authorize that deployment consequence before PR #435 can be merged.
 
 ## Recovery posture
 
