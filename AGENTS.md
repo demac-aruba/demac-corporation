@@ -1,7 +1,9 @@
 # DEMAC AI Engineering Guide
 
-This file governs the entire repository. A more local `AGENTS.md` may add stricter
-instructions for its subtree but may not weaken these rules.
+This file is the canonical engineering protocol for every human or AI agent working in
+this repository. A more local `AGENTS.md` may add stricter instructions for its subtree
+but may not weaken these rules. The default delivery mode is **Fast Product Validation**;
+use **Deep Review** only when the owner requests it or the change is high risk.
 
 ## Non-negotiable platform rule
 
@@ -13,11 +15,50 @@ Do not rely on unversioned examples or remembered APIs.
 
 1. Read the request, this file, and any nearer `AGENTS.md`.
 2. Inspect Git status and the files that own the behavior. Preserve unrelated work.
-3. Identify the product surface, authority boundary, business-rule IDs, security
-   impact, and required quality gates before editing.
+3. Classify the task as Fast Product Validation or Deep Review before editing. For a
+   routine task, inspect only the owning files and direct dependencies needed to make
+   the requested behavior work; do not inventory the whole architecture first.
 4. Prefer the smallest reversible change. Do not deploy, migrate production data,
    rotate secrets, or modify production configuration without explicit authority.
 5. Do not claim success without reporting the exact verification performed.
+
+## Delivery modes
+
+### Fast Product Validation (default)
+
+Use this mode for routine UI/UX changes, small bug fixes, and contained features that do
+not change an authority boundary, security policy, data model, financial truth, or source
+of record.
+
+1. Confirm the requested behavior. Ask for clarification or show a mockup only when the
+   behavior or visual design is genuinely ambiguous.
+2. Reuse existing components, patterns, APIs, and save paths before creating new ones.
+3. Implement the smallest coherent change. Do not add speculative abstractions, broad
+   refactors, or unrelated cleanup.
+4. Run types/syntax checks and the focused tests for the changed surface. Do not run
+   repository-wide suites unless the change affects their consumers.
+5. Publish a preview when the feature is visual or interactive.
+6. Let the business owner validate that the concept and workflow are practical.
+7. Merge and deploy only after the required human approval.
+8. Perform architecture cleanup, broad optimization, and deep security hardening later,
+   in a separate explicitly requested task or PR, after the concept is approved.
+
+Fast mode does not require task/review templates, an ADR, a separate adversarial review
+pass, or repository-wide architecture/security/scalability audits unless the change itself
+creates evidence that one of those artifacts must change.
+
+### Deep Review
+
+Use Deep Review when the owner explicitly requests an audit, refactor, optimization, or
+hardening pass, or before merging a high-risk change involving authentication, roles or
+permissions, security rules, secrets, payments or financial state, destructive actions,
+production-data migration, a new system of record/data model, infrastructure, or a broad
+multi-module change. Incident fixes with material concurrency, retry, idempotency, or
+recovery risk also use Deep Review.
+
+When a task unexpectedly crosses into Deep Review, tell the owner why before expanding
+the work. Then use the role contracts, templates, authority/rule mapping, adversarial
+review, and broader quality gates described below.
 
 ## Absolute quality-gate rule
 
@@ -29,22 +70,21 @@ escalated, and it remains `FAIL` until an authorized resolution is recorded.
 
 - A Builder must never implement directly on `main`. Every implementation must use an
   approved `feature/`, `fix/`, `chore/`, or other explicitly approved task branch.
-- When an independent qualified reviewer is available, prefer an independent review by
-  someone who did not implement the reviewed change.
-- DEMAC is currently allowed to operate in **Solo Maintainer Review Mode** when no
-  independent engineer/reviewer is reasonably available. In that mode, absence of an
-  external reviewer must not block otherwise complete engineering work.
-- Solo Maintainer Review Mode requires a fresh adversarial review pass that is explicitly
-  separate from the implementation pass. The reviewer pass must re-read the request,
-  inspect the complete diff and affected callers, verify authority/security boundaries,
-  challenge concurrency/idempotency and failure/recovery behavior, run the applicable
-  quality gates, record findings, and state residual risk.
+- Fast Product Validation requires a focused self-check of the final diff and targeted
+  verification, but it does not require a second, separately documented review pass.
+- In Deep Review, prefer an independent qualified reviewer who did not implement the
+  change when one is available. When none is reasonably available, DEMAC may use
+  **Solo Maintainer Review Mode** rather than block otherwise complete work.
+- Deep Review in Solo Maintainer Review Mode requires a fresh adversarial pass that is
+  explicitly separate from implementation. It must inspect the complete diff and affected
+  callers, verify authority/security boundaries, challenge concurrency/idempotency and
+  failure/recovery behavior, run applicable gates, record findings, and state residual risk.
 - A solo-maintainer review must never be described as an "independent review." It is a
   documented adversarial self-review under constrained team staffing.
 - The business owner is not required to act as a technical code reviewer. The owner's role
   is to define/approve business intent and provide explicit human approval for actions that
   cross the Human Approval Boundary; technical review evidence remains the maintainer's job.
-- Green CI alone is never sufficient review evidence.
+- In Deep Review, green CI alone is never sufficient review evidence.
 - Production deployment, destructive or irreversible actions, security/access changes,
   secret changes, destructive migrations, production-data deletion, and creation of a
   new source of truth still require explicit human approval under the Human Approval
@@ -103,12 +143,13 @@ First perform dependency and reference analysis and classify it as `ACTIVE`,
 `COMPATIBILITY`, `MIGRATION`, `DEAD`, or `UNKNOWN`. Only code proven `DEAD` and
 unreferenced may be removed, and only within an approved task. `UNKNOWN` blocks removal.
 
-## Required delivery workflow
+## Deep Review workflow
 
-Use the role contracts in `docs/ai/roles/` as review lenses. In Solo Maintainer Review
-Mode, one person or agent may perform both Builder and Reviewer passes, but the evidence
-must remain explicitly separated and the reviewer pass must not be represented as
-independent.
+This workflow is required only for Deep Review tasks. Fast Product Validation follows the
+short workflow defined above. Use the role contracts in `docs/ai/roles/` as review lenses.
+In Solo Maintainer Review Mode, one person or agent may perform both Builder and Reviewer
+passes, but the evidence must remain explicitly separated and the reviewer pass must not
+be represented as independent.
 
 1. Define the task with `docs/ai/templates/TASK_TEMPLATE.md`.
 2. Map affected authorities, rules, parity obligations, failure modes, and risks.
@@ -122,8 +163,9 @@ independent.
 ## Definition of done
 
 A change is done only when scope and acceptance criteria are satisfied; permissions
-and failure behavior are explicit; relevant automated and manual checks pass; no
-unrelated files changed; documentation is current; and remaining risk is stated.
+and failure behavior touched by the change are explicit; checks required by the selected
+delivery mode pass; no unrelated files changed; documentation is current when its evidence
+changed; and remaining material risk is stated.
 
 Repository guidance:
 
@@ -136,3 +178,4 @@ Repository guidance:
 - [Security rules](docs/ai/SECURITY_RULES.md)
 - [Scalability rules](docs/ai/SCALABILITY_RULES.md)
 - [Quality gates](docs/ai/QUALITY_GATES.md)
+- [ChatGPT project setup](docs/ai/CHATGPT_PROJECT_SETUP.md)
