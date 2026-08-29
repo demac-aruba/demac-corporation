@@ -13,6 +13,7 @@ export type OperationalDay = {
 export type CalendarDispatchJob = DispatchJob & {
   dateKey: string;
   capacitySlotStarts?: string[];
+  capacityEnd?: string;
 };
 
 export type SupportReflowPlan = {

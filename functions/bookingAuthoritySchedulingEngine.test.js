@@ -128,7 +128,7 @@ function supportTimes(result) {
 }
 
 test("canonical scheduling engine has an explicit version", () => {
-  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 7);
+  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 8);
 });
 
 test("single-work helper still rejects mixed work for operations that require one work type", () => {
@@ -316,6 +316,10 @@ test("a seven-unit same-property booking keeps the office-selected van as the fu
   assert.equal(result.options[0].assignments[0].vanId, "VAN-1");
   assert.equal(result.options[0].assignments[0].quantity, 7);
   assert.equal(result.options[0].assignments[0].fullDay, true);
+  assert.equal(result.options[0].endTime, "15:30");
+  assert.equal(result.options[0].capacityEndTime, "16:30");
+  assert.equal(result.options[0].assignments[0].endTime, "15:30");
+  assert.equal(result.options[0].assignments[0].capacityEndTime, "16:30");
 });
 
 test("eight-unit support can arrive in any one-hour opening that actually exists", () => {
@@ -340,6 +344,18 @@ test("eight-unit support can arrive in any one-hour opening that actually exists
   assert.equal(times.has("14:30"), true);
   assert.equal(times.has("15:30"), true);
   assert.equal(times.has("11:30"), false, "11:30 is only an operational slot for a half-day van");
+  const optionsBySupportVan = new Map();
+  for (const option of result.options) {
+    const support = option.assignments.find((assignment) => assignment.role === "support");
+    if (!support) continue;
+    const current = optionsBySupportVan.get(support.vanId) || [];
+    current.push({ optionId: option.id, start: support.time, end: support.endTime });
+    optionsBySupportVan.set(support.vanId, current);
+  }
+  const repeatedVanWindows = [...optionsBySupportVan.values()].find((windows) => windows.length > 1);
+  assert.ok(repeatedVanWindows, "at least one support Van must expose multiple independently selectable windows");
+  assert.equal(new Set(repeatedVanWindows.map((window) => window.optionId)).size, repeatedVanWindows.length);
+  assert.equal(new Set(repeatedVanWindows.map((window) => `${window.start}|${window.end}`)).size, repeatedVanWindows.length);
 });
 
 test("eleven-unit Standard Service is not rejected by an arbitrary ten-unit ceiling", () => {

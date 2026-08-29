@@ -5,8 +5,13 @@ import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
 import {
   appointmentDraftHydrationAllowed,
   fixedAppointmentOptions,
+  optionAssignmentCapacityEnd,
   optionAssignmentIsSupport,
+  optionAssignmentStart,
+  optionAssignmentWorkEnd,
+  optionPrimaryAssignment,
   optionSupportAssignment,
+  optionSupportWindows,
 } from '../../lib/live-appointment-edit-state';
 import {
   checkOfficeRescheduleAvailability,
@@ -416,30 +421,54 @@ export function LiveAppointmentEditPanel({ appointment, onBack, onSaved }: Props
           <span>{optionSupportAssignment(selectedOption) ? 'BOOKING AUTHORITY APPROVED · VAN SUPPORT REQUIRED' : 'BOOKING AUTHORITY APPROVED'}</span>
           {activeValidation.result.options.length > 1 ? <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 6 }}>
             {activeValidation.result.options.map((option) => {
-              const support = optionSupportAssignment(option);
+              const supportWindows = optionSupportWindows(option);
+              const primary = optionPrimaryAssignment(option);
+              const primaryStart = primary ? optionAssignmentStart(option, primary) : option.time;
+              const primaryWorkEnd = primary ? optionAssignmentWorkEnd(option, primary) : option.endTime || '';
+              const primaryCapacityEnd = primary ? optionAssignmentCapacityEnd(option, primary) : option.capacityEndTime || primaryWorkEnd;
               const selected = option.id === selectedOption.id;
               return <button
                 type="button"
                 key={option.id}
                 className={styles.secondary}
                 disabled={saving}
+                aria-pressed={selected}
                 onClick={() => setValidated((current) => current?.signature === signature ? { ...current, selectedOptionId: option.id } : current)}
                 style={{ textAlign: 'left', padding: 8, borderColor: selected ? 'var(--brand)' : undefined, background: selected ? 'var(--brand-soft)' : undefined }}
               >
-                <strong style={{ display: 'block' }}>{support ? `${support.vanName || support.vanId} · support` : 'Primary allocation'}</strong>
-                <span style={{ display: 'block', marginTop: 3 }}>{support ? `${support.quantity} support service${support.quantity === 1 ? '' : 's'}` : 'No support Van required'}</span>
+                <strong style={{ display: 'block' }}>{supportWindows.length === 1
+                  ? `${supportWindows[0].assignment.vanName || supportWindows[0].assignment.vanId} · support`
+                  : supportWindows.length > 1 ? `${supportWindows.length} support Vans` : 'Primary allocation'}</strong>
+                {supportWindows.length ? supportWindows.map((window) => {
+                  const support = window.assignment;
+                  return <span key={`${support.vanId}-${window.start}-${window.capacityEnd}`} style={{ display: 'block', marginTop: 3 }}>
+                    {supportWindows.length > 1 ? `${support.vanName || support.vanId} · ` : ''}Van capacity {formatTime(window.start)}{window.capacityEnd ? `–${formatTime(window.capacityEnd)}` : ''}
+                    <small style={{ display: 'block', marginTop: 2 }}>
+                      {support.quantity} support service{support.quantity === 1 ? '' : 's'}
+                      {window.workEnd && window.capacityEnd !== window.workEnd ? ` · Service-work estimate ends ${formatTime(window.workEnd)}` : ''}
+                    </small>
+                  </span>;
+                }) : <>
+                  <span style={{ display: 'block', marginTop: 3 }}>Van capacity {formatTime(primaryStart)}{primaryCapacityEnd ? `–${formatTime(primaryCapacityEnd)}` : ''}</span>
+                  <small style={{ display: 'block', marginTop: 3 }}>
+                    No support Van required
+                    {primaryWorkEnd && primaryCapacityEnd !== primaryWorkEnd ? ` · Service-work estimate ends ${formatTime(primaryWorkEnd)}` : ''}
+                  </small>
+                </>}
               </button>;
             })}
           </div> : null}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(145px,1fr))', gap: 6 }}>
             {selectedOption.assignments.map((assignment, index) => {
               const support = optionAssignmentIsSupport(selectedOption, assignment);
-              const start = assignment.time || selectedOption.time;
-              const end = assignment.endTime || (support ? '' : selectedOption.endTime || '');
+              const start = optionAssignmentStart(selectedOption, assignment);
+              const workEnd = optionAssignmentWorkEnd(selectedOption, assignment);
+              const capacityEnd = optionAssignmentCapacityEnd(selectedOption, assignment);
               return <article key={`${assignment.vanId}-${start}-${index}`} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 8, background: 'var(--surface)' }}>
                 <span style={{ display: 'block' }}>{support ? 'SUPPORT' : 'PRIMARY / RESPONSIBLE'}</span>
                 <strong style={{ display: 'block', marginTop: 3 }}>{assignment.vanName || assignment.vanId}</strong>
-                <small style={{ display: 'block', marginTop: 3 }}>{assignment.quantity} service{assignment.quantity === 1 ? '' : 's'} · {formatTime(start)}{end ? `–${formatTime(end)}` : ''}</small>
+                <small style={{ display: 'block', marginTop: 3 }}>{assignment.quantity} service{assignment.quantity === 1 ? '' : 's'} · Van capacity {formatTime(start)}{capacityEnd ? `–${formatTime(capacityEnd)}` : ''}</small>
+                {workEnd && capacityEnd !== workEnd ? <small style={{ display: 'block', marginTop: 3 }}>Service-work estimate ends {formatTime(workEnd)}</small> : null}
               </article>;
             })}
           </div>

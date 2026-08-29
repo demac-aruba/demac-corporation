@@ -46,6 +46,7 @@ export type OfficeBookingOption = {
   date: string;
   time: string;
   endTime?: string;
+  capacityEndTime?: string;
   address?: string;
   zone?: string;
   presetId?: string;
@@ -66,6 +67,7 @@ export type OfficeBookingOption = {
     fullDay?: boolean;
     time?: string;
     endTime?: string;
+    capacityEndTime?: string;
     role?: 'primary' | 'support';
   }>;
 };

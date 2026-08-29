@@ -13,6 +13,12 @@ import {
   type OfficeBookingOption,
   type OfficeBookingWorkLine,
 } from '../../lib/office-booking-authority';
+import {
+  optionAssignmentCapacityEnd,
+  optionAssignmentStart,
+  optionPrimaryAssignment,
+  optionSupportWindows,
+} from '../../lib/live-appointment-edit-state';
 import { currentArubaDateKey } from '../../lib/scheduling-capacity';
 import { AppointmentCommunicationPanel } from './appointment-communication-panel';
 import { LiveAppointmentEditPanel } from './live-appointment-edit-panel';
@@ -132,6 +138,8 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
     ?? appointment.assignments.find((assignment) => assignment.status !== 'cancelled')
     ?? appointment.assignments[0];
   const support = appointment.assignments.find((assignment) => !assignment.isPrimaryAssignment && assignment.status !== 'cancelled');
+  const primaryCapacityEnd = primary?.capacityEnd || primary?.end;
+  const supportCapacityEnd = support?.capacityEnd || support?.end;
   const selectedOption = useMemo(() => availability?.options.find((option) => optionKey(option) === selectedOptionKey) ?? null, [availability, selectedOptionKey]);
   const canManageLifecycle = Boolean(appointment.customerId && appointment.siteId && appointment.status !== 'cancelled');
   const temporaryHold = appointment.status === 'temporary_hold';
@@ -278,14 +286,18 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
 
       <div className={styles.drawerBody}>
         <section className={styles.formSection}>
-          <header><strong>Appointment &amp; work</strong><span>{appointment.status === 'cancelled' ? 'Cancelled' : `${temporaryHold ? 'Temporary hold · ' : ''}${formatDate(appointment.dateKey)} · ${formatTime(primary?.start)}–${formatTime(primary?.end)}`}</span></header>
+          <header><strong>Appointment &amp; work</strong><span>{appointment.status === 'cancelled' ? 'Cancelled' : `${temporaryHold ? 'Temporary hold · ' : ''}${formatDate(appointment.dateKey)} · Van capacity ${formatTime(primary?.start)}–${formatTime(primaryCapacityEnd)}`}</span></header>
           <div className={styles.formGrid}>
             <Field wide label="WORK TYPE" value={`${workLabel} · ${appointment.totalQuantity} unit${appointment.totalQuantity === 1 ? '' : 's'}`} />
             <Field label="TIME / UNIT" value={durationLabel(appointment.durationMinutesPerUnit)} />
             <Field label="TOTAL WORK" value={durationLabel(appointment.scheduledDurationMinutes)} />
             <Field label="CAPACITY SPOTS" value={appointment.scheduledSlotCount ? `${appointment.scheduledSlotCount} spot${appointment.scheduledSlotCount === 1 ? '' : 's'}` : 'Not recorded'} />
+            <Field label="PRIMARY WORK ESTIMATE" value={primary ? `${formatTime(primary.start)}–${formatTime(primary.end)}` : 'Not recorded'} />
+            <Field label="CAPACITY WINDOW" value={primary ? `${formatTime(primary.start)}–${formatTime(primaryCapacityEnd)}` : 'Not recorded'} />
             <Field label="PRIMARY VAN" value={primary?.vanId?.replace('VAN-', 'Van ') || '—'} />
-            <Field label="SUPPORT" value={support ? `${support.vanId.replace('VAN-', 'Van ')} · ${formatTime(support.start)}–${formatTime(support.end)}` : 'None'} />
+            <Field label="SUPPORT VAN" value={support?.vanId.replace('VAN-', 'Van ') || 'None'} />
+            {support ? <Field label="SUPPORT WORK ESTIMATE" value={`${formatTime(support.start)}–${formatTime(support.end)}`} /> : null}
+            {support ? <Field label="SUPPORT CAPACITY WINDOW" value={`${formatTime(support.start)}–${formatTime(supportCapacityEnd)}`} /> : null}
             <Field wide label="CUSTOMER-FACING DESCRIPTION" value={appointment.customerFacingDescription} />
           </div>
         </section>
@@ -368,7 +380,19 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
             <label className={styles.wide}><span>Internal note</span><textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} /></label>
           </div>
           <div style={{ padding: '0 11px 10px' }}><button type="button" className={styles.secondary} disabled={busy || !targetDate} onClick={() => void findAvailability()}>{busy ? 'Checking…' : 'Check Booking Authority availability'}</button></div>
-          {availability?.options.length ? <div className={styles.slotOptions}>{availability.options.map((option) => <button key={optionKey(option)} type="button" className={`${styles.slotOption} ${selectedOptionKey === optionKey(option) ? styles.slotOptionSelected : ''}`} onClick={() => setSelectedOptionKey(optionKey(option))}><div><strong>{formatDate(option.date)} · {formatTime(option.time)}–{formatTime(option.endTime)}</strong><span>{option.assignments.map((assignment) => assignment.vanId.replace('VAN-', 'Van ')).join(' + ')} · {option.zone || 'route-aware capacity'}</span></div><b>Select</b></button>)}</div> : null}
+          {availability?.options.length ? <div className={styles.slotOptions}>{availability.options.map((option) => {
+            const optionPrimary = optionPrimaryAssignment(option);
+            const optionStart = optionPrimary ? optionAssignmentStart(option, optionPrimary) : option.time;
+            const optionCapacityEnd = optionPrimary ? optionAssignmentCapacityEnd(option, optionPrimary) : option.capacityEndTime || option.endTime;
+            const supportWindows = optionSupportWindows(option).map(({ assignment, start, workEnd, capacityEnd }) => {
+              const workWindow = `${formatTime(start)}–${formatTime(workEnd || capacityEnd)}`;
+              const capacityWindow = capacityEnd && capacityEnd !== workEnd ? ` · capacity through ${formatTime(capacityEnd)}` : '';
+              return `${assignment.vanId.replace('VAN-', 'Van ')} support ${workWindow}${capacityWindow}`;
+            });
+            const key = optionKey(option);
+            const selected = selectedOptionKey === key;
+            return <button key={key} type="button" aria-pressed={selected} className={`${styles.slotOption} ${selected ? styles.slotOptionSelected : ''}`} onClick={() => setSelectedOptionKey(key)}><div><strong>{formatDate(option.date)} · Van capacity {formatTime(optionStart)}–{formatTime(optionCapacityEnd)}</strong><span>{option.assignments.map((assignment) => assignment.vanId.replace('VAN-', 'Van ')).join(' + ')} · {option.zone || 'route-aware capacity'}</span>{supportWindows.length ? <span>{supportWindows.join(' · ')}</span> : null}</div><b>Select</b></button>;
+          })}</div> : null}
           {error ? <div className={styles.descriptionPreview}><span>ATTENTION</span><strong>{error}</strong></div> : null}
           <footer className={styles.drawerFooter}><div><span>Current</span><strong>{formatDate(appointment.dateKey)} · {formatTime(primary?.start)}</strong></div><div><button type="button" className={styles.secondary} disabled={busy} onClick={() => begin('details')}>Back</button><button type="button" className={styles.primary} disabled={busy || !reason || !selectedOption} onClick={() => void reschedule()}>{busy ? 'Saving…' : temporaryHold ? 'Move Temporary Hold' : 'Confirm Reschedule'}</button></div></footer>
         </section> : null}

@@ -70,6 +70,7 @@ function option() {
     date: "2098-12-20",
     time: "13:30",
     endTime: "15:30",
+    capacityEndTime: "16:30",
     address: "Wayaca 217",
     zone: "Oranjestad / Airport",
     presetId: "standard_service",
@@ -84,6 +85,7 @@ function option() {
       quantity: 2,
       slots: 2,
       fullDay: false,
+      capacityEndTime: "16:30",
     }],
   };
 }
@@ -152,6 +154,8 @@ test("checkAvailability stores one canonical offer and replays the same inbound 
   assert.equal(first.replayed, false);
   assert.equal(first.offer.version, 1);
   assert.equal(first.offer.status, "open");
+  assert.equal(first.options[0].capacityEndTime, "16:30");
+  assert.equal(first.options[0].assignments[0].capacityEndTime, "16:30");
   assert.equal(second.replayed, true);
   assert.equal(second.offer.id, first.offer.id);
   assert.ok(db.read(`bookingOffers/${first.offer.id}`));
@@ -176,6 +180,9 @@ test("createAppointment atomically creates appointment, work order, offer bookin
   assert.equal(appointment.status, "confirmed");
   assert.equal(appointment.customerId, "client-1");
   assert.equal(appointment.propertyId, "property-1");
+  assert.equal(appointment.endTime, "15:30");
+  assert.equal(appointment.capacityEndTime, "16:30");
+  assert.equal(appointment.assignments[0].capacityEndTime, "16:30");
   assert.equal(db.read(`workOrders/${result.workOrderIds[0]}`).appointmentId, result.appointmentId);
   assert.equal(db.read("bookingCapacityLocks/lock-v2-1330").appointmentId, result.appointmentId);
   assert.equal(db.read("bookingCapacityLocks/lock-v2-1430").appointmentId, result.appointmentId);

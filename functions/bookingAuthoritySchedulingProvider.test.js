@@ -81,12 +81,12 @@ function operationalData(overrides = {}) {
 
 const currentSchedule = { date: "2098-12-20", time: "08:30" };
 
-test("provider exposes canonical provider v12", () => {
-  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v12");
+test("provider exposes canonical provider v13", () => {
+  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v13");
 });
 
 test("canonical scheduling engine is versioned independently", () => {
-  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 7);
+  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 8);
 });
 
 test("explicit office van/date/time selection makes routing advisory only", () => {

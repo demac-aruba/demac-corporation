@@ -73,12 +73,13 @@ test("records without duration use a valid stored end before slot metadata", () 
   assert.equal(displayedOrderEndTime(order), "12:30");
 });
 
-test("full-day capacity policy does not falsify the technician-visible wall-clock end", () => {
+test("full-day assignment shows the complete reserved Van window to the technician", () => {
   assert.equal(displayedOrderEndTime({
     time: "08:30",
-    appointmentDurationMinutes: 360,
-    appointmentEndTime: "14:30",
+    appointmentDurationMinutes: 420,
+    appointmentEndTime: "15:30",
+    appointmentCapacityEndTime: "16:30",
     fullDaySingleProperty: true,
     scheduledSlots: 6,
-  }), "14:30");
+  }), "16:30");
 });

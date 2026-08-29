@@ -18,6 +18,7 @@ import {
   invalidateLiveSchedulingReferenceCache,
   loadLiveSchedulingAppointmentsFast,
 } from '../../lib/live-scheduling-fast';
+import { liveJobCapacityEnd } from '../../lib/live-scheduling';
 import {
   liveDragMoveCandidates,
   liveMoveTargetKey,
@@ -166,7 +167,7 @@ function slotClass(value: DispatchJob['readiness']) {
 function jobCrossesLunch(job: CalendarDispatchJob) {
   const ownedStarts = job.capacitySlotStarts ?? [];
   return (ownedStarts.some((start) => timeToMinutes(start) < 12 * 60) && ownedStarts.some((start) => timeToMinutes(start) >= 13 * 60))
-    || (timeToMinutes(job.start) < 12 * 60 && timeToMinutes(job.end) > 13 * 60);
+    || (timeToMinutes(job.start) < 12 * 60 && timeToMinutes(liveJobCapacityEnd(job)) > 13 * 60);
 }
 
 function bookingBadge(name?: string) {
@@ -880,6 +881,8 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
   onArm: () => void;
 }) {
   const temporaryHold = appointment?.status === 'temporary_hold' || job.status === 'temporary_hold';
+  const capacityEnd = liveJobCapacityEnd(job);
+  const capacityOutlastsWork = capacityEnd !== job.end;
   const minHeight = span * 64 + Math.max(0, span - 1) * 6 + (crossesLunch ? 18 : 0);
   const openFromKeyboard = (event: React.KeyboardEvent<HTMLElement>) => {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -892,7 +895,7 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
     outline: armed ? '2px solid var(--brand)' : temporaryHold ? '1px solid var(--warning, #f59e0b)' : outsideCapacity ? '1px solid var(--warning)' : undefined,
     background: armed ? 'var(--brand-soft)' : temporaryHold ? 'color-mix(in srgb, var(--warning, #f59e0b) 12%, var(--surface))' : undefined,
   }}>
-    <div className={styles.slotTime}><strong>{formatTime(job.start)}</strong><span>{formatTime(job.end)}</span>{span > 1 ? <span>{span} spots</span> : null}</div>
+    <div className={styles.slotTime}><strong>{formatTime(job.start)}</strong><span>{formatTime(capacityEnd)}</span>{span > 1 ? <span>{span} spots</span> : null}</div>
     <div className={styles.slotJobs}>
       <article
         className={styles.jobCard}
@@ -918,9 +921,10 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
       >
         <div>
           <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={armed ? styles.ready : temporaryHold ? styles.risk : slotClass(job.readiness)}>{armed ? 'MOVE ARMED' : temporaryHold ? 'TEMP HOLD' : readinessLabel(job.readiness)}</b></div>
-          {continuation ? <span>Reserved continuously until {formatTime(job.end)}</span> : <span>{appointmentWorkLabel(appointment, job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span>}
+          {continuation ? <span>Van capacity reserved until {formatTime(capacityEnd)}</span> : <span>{appointmentWorkLabel(appointment, job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span>}
           <small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small>
-          {!continuation && span > 1 ? <small>{span} capacity spots reserved · elapsed work {formatTime(job.start)}–{formatTime(job.end)}</small> : null}
+          {!continuation && span > 1 ? <small>{span} capacity spots reserved · Van capacity {formatTime(job.start)}–{formatTime(capacityEnd)}</small> : null}
+          {!continuation && capacityOutlastsWork ? <small>Service-work estimate {formatTime(job.start)}–{formatTime(job.end)} · capacity remains protected through {formatTime(capacityEnd)}</small> : null}
           {temporaryHold ? <small style={{ color: 'var(--warning, #b45309)', fontWeight: 800 }}>Capacity reserved · customer not confirmed · no reminder/confirmation sent</small> : null}
           {crossesLunch ? <small>Lunch remains non-sellable · service-capacity ownership is preserved</small> : null}
           {outsideCapacity ? <small style={{ color: 'var(--warning)', fontWeight: 800 }}>Outside canonical operating capacity · review schedule</small> : null}
@@ -939,13 +943,18 @@ function ConflictBlock({ jobs, span, jobLinks, onOpenAppointment }: {
   onOpenAppointment: (jobId: string) => void;
 }) {
   const start = jobs.reduce((earliest, job) => timeToMinutes(job.start) < timeToMinutes(earliest) ? job.start : earliest, jobs[0].start);
-  const end = jobs.reduce((latest, job) => timeToMinutes(job.end) > timeToMinutes(latest) ? job.end : latest, jobs[0].end);
+  const end = jobs.reduce((latest, job) => {
+    const capacityEnd = liveJobCapacityEnd(job);
+    return timeToMinutes(capacityEnd) > timeToMinutes(latest) ? capacityEnd : latest;
+  }, liveJobCapacityEnd(jobs[0]));
   const minHeight = Math.max(span * 64 + Math.max(0, span - 1) * 6, jobs.length * 86 + 34);
   return <div className={styles.occupiedSlot} style={{ minHeight, outline: '1px solid var(--danger)' }}>
     <div className={styles.slotTime}><strong>{formatTime(start)}</strong><span>{formatTime(end)}</span><span>Conflict</span></div>
     <div className={styles.slotJobs}>
       <div style={{ fontSize: 8, fontWeight: 800, color: 'var(--danger)', letterSpacing: '.06em', textTransform: 'uppercase' }}>Capacity conflict · review both appointments</div>
-      {jobs.map((job) => <article key={job.id} className={styles.jobCard} role="button" tabIndex={0} onClick={() => onOpenAppointment(job.id)} onKeyDown={(event) => {
+      {jobs.map((job) => {
+        const capacityEnd = liveJobCapacityEnd(job);
+        return <article key={job.id} className={styles.jobCard} role="button" tabIndex={0} onClick={() => onOpenAppointment(job.id)} onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
           onOpenAppointment(job.id);
@@ -953,12 +962,14 @@ function ConflictBlock({ jobs, span, jobLinks, onOpenAppointment }: {
       }} style={{ cursor: 'pointer' }}>
         <div>
           <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={styles.risk}>CONFLICT</b></div>
-          <span>{appointmentWorkLabel(jobLinks.get(job.id)?.appointment, job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'} · {formatTime(job.start)}–{formatTime(job.end)}</span>
+          <span>{appointmentWorkLabel(jobLinks.get(job.id)?.appointment, job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'} · Van capacity {formatTime(job.start)}–{formatTime(capacityEnd)}</span>
+          {capacityEnd !== job.end ? <small>Service-work estimate ends {formatTime(job.end)}</small> : null}
           <small>{job.site} · {job.sector}</small>
           {bookingBadge(jobLinks.get(job.id)?.appointment.bookedByName)}
           <small>Click to review / reschedule</small>
         </div>
-      </article>)}
+      </article>;
+      })}
     </div>
   </div>;
 }

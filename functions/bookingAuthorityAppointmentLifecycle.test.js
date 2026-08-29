@@ -79,6 +79,7 @@ function option(overrides = {}) {
     date: "2098-12-22",
     time: "13:30",
     endTime: "15:30",
+    capacityEndTime: "16:30",
     address: "Santa Cruz 54 C",
     zone: "Santa Cruz",
     presetId: "standard_service",
@@ -86,7 +87,7 @@ function option(overrides = {}) {
     serviceId: "service-1",
     durationMinutesPerUnit: 60,
     quantity: 2,
-    assignments: [{ vanId: "VAN-2", vanName: "Van 2", technicianIds: [], quantity: 2, slots: 2, fullDay: false, time: "13:30" }],
+    assignments: [{ vanId: "VAN-2", vanName: "Van 2", technicianIds: [], quantity: 2, slots: 2, fullDay: false, time: "13:30", endTime: "15:30", capacityEndTime: "16:30" }],
     ...overrides,
   };
 }
@@ -262,6 +263,10 @@ test("customer reschedule revalidates capacity and preserves Work Order fields o
   const appointment = db.read("appointments/APT-LIVE-1");
   assert.equal(appointment.date, "2098-12-22");
   assert.equal(appointment.startTime, "13:30");
+  assert.equal(appointment.endTime, "15:30");
+  assert.equal(appointment.capacityEndTime, "16:30");
+  assert.equal(appointment.assignments[0].capacityEndTime, "16:30");
+  assert.equal(result.appointment.capacityEndTime, "16:30");
   assert.equal(appointment.primaryVanId, "VAN-2");
   assert.equal(appointment.lastScheduleChangeKind, "customer_reschedule");
   const workOrder = db.read("workOrders/WO-APT-LIVE-1-1");

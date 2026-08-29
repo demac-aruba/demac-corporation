@@ -50,6 +50,7 @@ type LiveWorkOrder = {
   appointmentWorkItems?: LiveWorkItem[];
   appointmentAssignmentRole?: string;
   appointmentEndTime?: string;
+  appointmentCapacityEndTime?: string;
   parentWorkOrderId?: string;
   supportAssignmentKind?: string;
   airConditionerCount?: number;
@@ -80,6 +81,10 @@ type LiveWorkOrder = {
   updatedAt?: string;
   fullDaySingleProperty?: boolean;
 };
+
+export function liveJobCapacityEnd(job: Pick<CalendarDispatchJob, 'capacityEnd' | 'end'>) {
+  return job.capacityEnd || job.end;
+}
 
 type LiveClient = {
   id: string;
@@ -319,6 +324,14 @@ function assignmentCapacitySlotStarts(
   return schedule.slice(index, index + count);
 }
 
+function capacityEndFromSlotStarts(starts: string[], fallback: string) {
+  if (!starts.length) return fallback;
+  const lastStart = starts.reduce((latest, current) => (
+    timeToMinutes(current) > timeToMinutes(latest) ? current : latest
+  ), starts[0]);
+  return minutesToTime(timeToMinutes(lastStart) + 60);
+}
+
 function daySegment(start: string, end: string): DaySegment {
   if (timeToMinutes(start) < 12 * 60 && timeToMinutes(end) > 13 * 60) return 'full_day';
   return timeToMinutes(start) < 12 * 60 ? 'am' : 'pm';
@@ -386,6 +399,14 @@ function workOrderAssignment(
   const start = text(order.time) || legacySlots[0] || '08:30';
   const resolvedVanId = workOrderVanId(order, vans) || 'UNASSIGNED';
   const end = assignmentEnd({ ...order, time: start }, vans, operationalState);
+  const capacitySlotStarts = assignmentCapacitySlotStarts(order, start, resolvedVanId, operationalState);
+  const capacityEnd = [
+    end,
+    validTime(order.appointmentCapacityEndTime),
+    capacityEndFromSlotStarts(capacitySlotStarts, end),
+  ].filter(Boolean).reduce((latest, current) => (
+    timeToMinutes(current) > timeToMinutes(latest) ? current : latest
+  ), end);
   const role = workOrderAssignmentRole(order);
   const primary = role !== 'support';
   const supportForJobId = workOrderSupportForId(order);
@@ -397,9 +418,10 @@ function workOrderAssignment(
     sector,
     start,
     end,
+    capacityEnd,
     segment: daySegment(start, end),
     vanId: resolvedVanId,
-    capacitySlotStarts: assignmentCapacitySlotStarts(order, start, resolvedVanId, operationalState),
+    capacitySlotStarts,
     presetId: workOrderPresetId(order),
     quantity: workOrderQuantity(order),
     status: projectedStatus(order.status),

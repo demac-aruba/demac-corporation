@@ -147,6 +147,12 @@ function buildWorkOrders({ appointment, option, request, customer, property, con
     const problem = workSummary || "Scheduled HVAC work";
     const customerDescription = workOrderCustomerDescription(option, request, problem);
     const appointmentEndTime = cleanText(assignment.endTime || option.endTime, 20);
+    const appointmentCapacityEndTime = cleanText(
+      assignment.capacityEndTime
+        || (isPrimary ? option.capacityEndTime : "")
+        || appointmentEndTime,
+      20,
+    );
     const preserveExistingDomainState = lifecycleRebuild && alreadyExists;
     const communicationSnapshot = preserveExistingDomainState
       ? {}
@@ -199,6 +205,7 @@ function buildWorkOrders({ appointment, option, request, customer, property, con
       appointmentDurationMinutes: durationMinutes,
       appointmentDurationMode: durationMode,
       appointmentEndTime,
+      appointmentCapacityEndTime,
       serviceDefinitionVersion: singleItem?.serviceDefinitionVersion || 0,
       appointmentWorkItems: workItems,
       appointmentAssignmentRole: isPrimary ? "primary" : "support",

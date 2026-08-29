@@ -22,7 +22,7 @@ const {
 const { candidateAvailability } = require("./bookingCapacityAvailability");
 const { resolveCatalogService } = require("./serviceCatalog");
 
-const CANONICAL_SCHEDULING_ENGINE_VERSION = 7;
+const CANONICAL_SCHEDULING_ENGINE_VERSION = 8;
 const CLIENT_OPTION_LIMIT = 2;
 const ASSIGNMENT_COMBINATION_LIMIT = 8;
 const OFFICE_TARGET_OPTION_LIMIT = ASSIGNMENT_COMBINATION_LIMIT;
@@ -703,6 +703,7 @@ function generateCanonicalOptions({
           date,
           time: primary.time,
           endTime: primary.endTime,
+          capacityEndTime: primary.capacityEndTime || primary.endTime,
           quantity: scope.totalQuantity,
           address,
           zone: candidateZone?.label || cleanText(property.operationalZone || property.zone, 80),

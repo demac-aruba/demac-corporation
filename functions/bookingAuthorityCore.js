@@ -142,6 +142,7 @@ function normalizeAssignment(value = {}, index = 0) {
     fullDay: value.fullDay === true,
     time: cleanText(value.time, 20),
     endTime: cleanText(value.endTime, 20),
+    capacityEndTime: cleanText(value.capacityEndTime, 20),
     role: role === "support" || (!role && index > 0) ? "support" : "primary",
   };
 }
@@ -192,6 +193,7 @@ function normalizeOfferOption(value = {}, index = 0) {
     date: requireText(value.date, `options[${index}].date`, 20),
     time: requireText(value.time || value.startTime, `options[${index}].time`, 20),
     endTime: cleanText(value.endTime, 20),
+    capacityEndTime: cleanText(value.capacityEndTime, 20),
     address: cleanText(value.address, 500),
     zone: cleanText(value.zone, 120),
     presetId: cleanText(value.presetId, 120),
@@ -298,6 +300,13 @@ function buildAppointmentDraft({
       { selectedOptionId: validatedOption.id },
     );
   }
+  const primaryAssignment = option.assignments.find((assignment) => assignment.role !== "support")
+    || option.assignments[0]
+    || {};
+  const capacityEndTime = cleanText(
+    option.capacityEndTime || primaryAssignment.capacityEndTime || option.endTime,
+    20,
+  );
   const identity = canonicalAppointmentIdentity(idempotencyKey);
   return {
     id: identity.appointmentId,
@@ -313,12 +322,13 @@ function buildAppointmentDraft({
     date: option.date,
     startTime: option.time,
     endTime: option.endTime,
+    capacityEndTime,
     workLines: normalizedRequest.workLines,
     workItems: option.workItems,
     constraints: normalizedRequest.constraints,
     notes: normalizedRequest.notes,
     assignments: option.assignments,
-    primaryVanId: cleanText(option.assignments?.[0]?.vanId, 120),
+    primaryVanId: cleanText(primaryAssignment.vanId, 120),
     source: cleanText(actor.source, 80) || "booking-authority",
     createdBy: cleanText(actor.id || actor.userId, 160),
     createdByName: cleanText(actor.name || actor.displayName, 160),

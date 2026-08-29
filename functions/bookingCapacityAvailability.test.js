@@ -93,6 +93,7 @@ test("three reserved half-day spots end at 12:30 without opening forbidden PM ca
   assert.equal(result.slots, 3);
   assert.equal(result.durationMinutes, 180);
   assert.equal(result.endTime, "12:30");
+  assert.equal(result.capacityEndTime, "12:30");
   assert.equal(endTimeFromOccupiedSlots(["09:30", "10:30", "11:30"]), "12:30");
 });
 
@@ -152,6 +153,7 @@ test("explicit office target keeps real elapsed duration while crossing lunch", 
   assert.equal(result.slots, 4);
   assert.equal(result.durationMinutes, 240);
   assert.equal(result.endTime, "13:30");
+  assert.equal(result.capacityEndTime, "15:30");
   assert.equal(result.routeReason, "explicit-office-target");
 });
 
@@ -164,6 +166,7 @@ test("three owned service-capacity spots do not collapse across lunch", () => {
   const longJob = candidateAvailability(first);
   assert.ok(longJob);
   assert.equal(longJob.endTime, "13:30");
+  assert.equal(longJob.capacityEndTime, "15:30");
   assert.deepEqual(
     capacityLockSlots({ time: "10:30", durationMinutes: 180, slots: 3, halfDay: false, fullDay: false }),
     ["10:30", "13:30", "14:30"],
@@ -185,6 +188,7 @@ test("six Standard Services own the complete six-spot normal day without fabrica
   const result = candidateAvailability(fixture);
   assert.ok(result);
   assert.equal(result.endTime, "14:30");
+  assert.equal(result.capacityEndTime, "16:30");
   assert.equal(result.slots, 6);
   assert.deepEqual(
     capacityLockSlots({ time: "08:30", durationMinutes: 360, slots: 6, halfDay: false, fullDay: false }),
@@ -219,4 +223,18 @@ test("full-day policy still owns every sellable regular start", () => {
     capacityLockSlots({ time: "08:30", durationMinutes: 420, slots: 6, halfDay: false, fullDay: true }),
     ["08:30", "09:30", "10:30", "13:30", "14:30", "15:30"],
   );
+});
+
+test("full-day availability exposes work end and reserved capacity end separately", () => {
+  const fixture = explicitTargetFixture();
+  fixture.time = "08:30";
+  fixture.allocation = { quantity: 7, durationMinutes: 420, slots: 6, fullDay: true };
+  fixture.routeConfig = { ...fixture.routeConfig, routePolicy: "advisory" };
+  fixture.data.workOrders = [];
+  const result = candidateAvailability(fixture);
+  assert.ok(result);
+  assert.equal(result.endTime, "15:30");
+  assert.equal(result.capacityEndTime, "16:30");
+  assert.equal(result.fullDay, true);
+  assert.equal(result.slots, 6);
 });

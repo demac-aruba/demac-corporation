@@ -145,6 +145,15 @@ function canonicalReservedEndTime(order, halfDaySchedules = []) {
 
 function displayedOrderEndTime(order, halfDaySchedules = []) {
   const start = timeToMinutes(order?.time);
+  if (order?.fullDaySingleProperty === true) {
+    const explicitCapacityEnd = normalizedText(order?.appointmentCapacityEndTime);
+    const explicitCapacityEndMinutes = timeToMinutes(explicitCapacityEnd);
+    if (start !== null && explicitCapacityEndMinutes !== null && explicitCapacityEndMinutes > start) {
+      return explicitCapacityEnd;
+    }
+    const reservedEnd = canonicalReservedEndTime(order, halfDaySchedules);
+    if (reservedEnd) return reservedEnd;
+  }
   const explicitDuration = explicitOrderDurationMinutes(order);
   if (start !== null && explicitDuration > 0) return minutesToTime(start + explicitDuration);
 

@@ -35,11 +35,12 @@ test("single-service support Work Orders receive only their assigned quantity an
   const option = {
     date: "2098-12-20",
     time: "08:30",
-    endTime: "16:30",
+    endTime: "15:30",
+    capacityEndTime: "16:30",
     durationMode: "per_unit",
     workItems: [{ id: "service", presetId: "standard_service", serviceId: "s1", label: "Standard Service", quantity: 8, durationMinutes: 480, durationMinutesPerUnit: 60, durationMode: "per_unit", serviceDefinitionVersion: 1 }],
     assignments: [
-      { vanId: "VAN-1", quantity: 7, durationMinutes: 420, slots: 6, fullDay: true, endTime: "16:30" },
+      { vanId: "VAN-1", quantity: 7, durationMinutes: 420, slots: 6, fullDay: true, endTime: "15:30", capacityEndTime: "16:30" },
       { vanId: "VAN-2", quantity: 1, durationMinutes: 60, slots: 1, role: "support", time: "08:30", endTime: "09:30" },
     ],
   };
@@ -54,8 +55,10 @@ test("single-service support Work Orders receive only their assigned quantity an
   assert.equal(orders[0].appointmentWorkItems[0].quantity, 7);
   assert.equal(orders[1].appointmentWorkItems[0].quantity, 1);
   assert.equal(orders[1].appointmentAssignmentRole, "support");
-  assert.equal(orders[0].appointmentEndTime, "16:30");
+  assert.equal(orders[0].appointmentEndTime, "15:30");
+  assert.equal(orders[0].appointmentCapacityEndTime, "16:30");
   assert.equal(orders[1].appointmentEndTime, "09:30");
+  assert.equal(orders[1].appointmentCapacityEndTime, "09:30");
 });
 
 test("primary Work Order snapshots canonical communication recipients and support does not duplicate them", () => {

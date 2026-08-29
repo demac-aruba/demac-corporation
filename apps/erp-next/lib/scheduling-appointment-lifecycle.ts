@@ -1,7 +1,7 @@
 import type { BrowserAppointmentHistoryEvent, BrowserAppointmentRecord, BrowserAppointmentScheduleSnapshot, BrowserWorkOrderRecord } from './browser-operational';
 import { createBrowserWorkOrder } from './browser-operational';
 import type { BookingRequest, BookingWorkLine, CandidateSlot, WorkPresetId } from './scheduling';
-import { customerFacingDescription, halfDayForTime, timeToMinutes } from './scheduling';
+import { customerFacingDescription, getRuntimeSchedulingSettings, halfDayForTime, minutesToTime, timeToMinutes } from './scheduling';
 import type { CalendarDispatchJob, OperationalDay } from './scheduling-capacity';
 import { buildOperationalWeek, findCandidateSlotsForDay } from './scheduling-capacity';
 
@@ -62,11 +62,59 @@ function jobsWithoutAssignment(assignmentId: string, jobs: CalendarDispatchJob[]
   return jobs.filter((job) => job.id !== assignmentId);
 }
 
+function positiveSlotCount(value: unknown) {
+  const count = Number(value || 0);
+  return Number.isFinite(count) && count > 0 ? Math.max(1, Math.ceil(count)) : 0;
+}
+
+function projectedAssignmentCapacity(args: {
+  previous?: CalendarDispatchJob;
+  start: string;
+  end: string;
+  preferredSlotCount?: number;
+  preserveExisting?: boolean;
+}) {
+  const unchangedWindow = Boolean(args.preserveExisting && args.previous?.start === args.start && args.previous.end === args.end);
+  const previousStarts = args.preserveExisting ? args.previous?.capacitySlotStarts?.filter(Boolean) ?? [] : [];
+  const preferredSlotCount = positiveSlotCount(args.preferredSlotCount);
+  const elapsedSlotCount = Math.max(1, Math.ceil((timeToMinutes(args.end) - timeToMinutes(args.start)) / 60));
+  const schedule = getRuntimeSchedulingSettings().serviceStartTimes;
+  const startIndex = schedule.indexOf(args.start);
+  const derivedSlotCount = startIndex >= 0 ? Math.min(elapsedSlotCount, schedule.length - startIndex) : elapsedSlotCount;
+  const slotCount = preferredSlotCount || derivedSlotCount;
+  const capacitySlotStarts = unchangedWindow && previousStarts.length
+    ? [...previousStarts]
+    : startIndex >= 0
+      ? schedule.slice(startIndex, startIndex + slotCount)
+      : slotCount === 1
+        ? [args.start]
+        : [];
+  const capacityEndFromStarts = capacitySlotStarts.length
+    ? minutesToTime(Math.max(...capacitySlotStarts.map(timeToMinutes)) + 60)
+    : args.end;
+  const possibleEnds = [args.end, capacityEndFromStarts];
+  if (unchangedWindow && args.previous?.capacityEnd) possibleEnds.push(args.previous.capacityEnd);
+  const capacityEnd = possibleEnds.reduce((latest, current) => (
+    timeToMinutes(current) > timeToMinutes(latest) ? current : latest
+  ), args.end);
+  return { capacitySlotStarts, capacityEnd };
+}
+
 function rebuildAssignments(record: BrowserAppointmentRecord, slot: CandidateSlot, dateKey: string): CalendarDispatchJob[] {
   const oldPrimary = record.assignments.find((assignment) => assignment.isPrimaryAssignment) ?? record.assignments[0];
   const oldSupport = record.assignments.find((assignment) => !assignment.isPrimaryAssignment);
   const primaryId = oldPrimary?.id ?? `${record.id}-P`;
   const status = record.status === 'confirmed' ? 'confirmed' : 'temporary_hold';
+  const primaryQuantity = slot.primaryUnits ?? record.totalQuantity;
+  const primaryCapacity = projectedAssignmentCapacity({
+    previous: oldPrimary,
+    start: slot.start,
+    end: slot.end,
+    preserveExisting: oldPrimary?.quantity === primaryQuantity,
+    preferredSlotCount: oldPrimary?.quantity === primaryQuantity
+      ? positiveSlotCount(oldPrimary?.capacitySlotStarts?.length) || positiveSlotCount(record.scheduledSlotCount)
+      : undefined,
+  });
   const primary: CalendarDispatchJob = {
     dateKey,
     id: primaryId,
@@ -78,27 +126,41 @@ function rebuildAssignments(record: BrowserAppointmentRecord, slot: CandidateSlo
     segment: slot.segment,
     vanId: slot.vanId,
     presetId: record.presetId,
-    quantity: slot.primaryUnits ?? record.totalQuantity,
+    quantity: primaryQuantity,
     status,
     readiness: oldPrimary?.readiness ?? 'at_risk',
     isPrimaryAssignment: true,
     customerCommunicationOwner: true,
+    ...primaryCapacity,
   };
 
   if (!slot.requiresSupportVan || !slot.supportVanId) return [primary];
 
+  const supportStart = slot.supportStart ?? slot.start;
+  const supportEnd = slot.supportEnd ?? slot.end;
+  const supportQuantity = slot.supportUnits ?? Math.max(1, record.totalQuantity - primaryQuantity);
+  const supportCapacity = projectedAssignmentCapacity({
+    previous: oldSupport,
+    start: supportStart,
+    end: supportEnd,
+    preserveExisting: oldSupport?.quantity === supportQuantity,
+    preferredSlotCount: oldSupport?.quantity === supportQuantity
+      ? positiveSlotCount(oldSupport?.capacitySlotStarts?.length)
+      : undefined,
+  });
   const support: CalendarDispatchJob = {
     ...primary,
     id: oldSupport?.id ?? `${record.id}-S`,
-    start: slot.supportStart ?? slot.start,
-    end: slot.supportEnd ?? slot.end,
-    segment: slot.supportSegment ?? halfDayForTime(slot.supportStart ?? slot.start),
+    start: supportStart,
+    end: supportEnd,
+    segment: slot.supportSegment ?? halfDayForTime(supportStart),
     vanId: slot.supportVanId,
-    quantity: slot.supportUnits ?? Math.max(1, record.totalQuantity - (slot.primaryUnits ?? record.totalQuantity)),
+    quantity: supportQuantity,
     readiness: oldSupport?.readiness ?? primary.readiness,
     isPrimaryAssignment: false,
     customerCommunicationOwner: false,
     supportForJobId: primaryId,
+    ...supportCapacity,
   };
   return [primary, support];
 }
@@ -186,12 +248,20 @@ export function applySupportAssignmentMove(args: {
   if (!support || !primary) return { ok: false as const, message: 'The selected support assignment no longer exists.' };
 
   const from = appointmentSnapshot(args.record);
+  const supportCapacity = projectedAssignmentCapacity({
+    previous: support,
+    start: args.slot.start,
+    end: args.slot.end,
+    preserveExisting: true,
+    preferredSlotCount: positiveSlotCount(support.capacitySlotStarts?.length),
+  });
   const assignments = args.record.assignments.map((assignment) => assignment.id === support.id ? {
     ...assignment,
     vanId: args.slot.vanId,
     start: args.slot.start,
     end: args.slot.end,
     segment: args.slot.segment,
+    ...supportCapacity,
   } : assignment);
   const base: BrowserAppointmentRecord = {
     ...args.record,

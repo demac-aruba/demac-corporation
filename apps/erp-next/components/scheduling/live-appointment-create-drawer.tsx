@@ -4,6 +4,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createAfterHoursEmergency } from '../../lib/after-hours-booking';
 import type { AppointmentRecipientSelection } from '../../lib/customer-contacts';
 import {
+  optionAssignmentCapacityEnd,
+  optionAssignmentIsSupport,
+  optionAssignmentStart,
+  optionAssignmentWorkEnd,
+  optionPrimaryAssignment,
+  optionSupportWindows,
+} from '../../lib/live-appointment-edit-state';
+import {
   checkOfficeCreateAvailability,
   confirmOfficeAppointment,
   createOfficeLifecycleRequestId,
@@ -181,7 +189,7 @@ function propertyLabel(property: BookingProperty) {
 }
 
 function optionMatchesTarget(option: OfficeBookingOption, target: LiveBookingTarget) {
-  const primary = option.assignments?.[0];
+  const primary = optionPrimaryAssignment(option);
   return option.date === target.dateKey
     && option.time === target.start
     && primary?.vanId === target.vanId;
@@ -204,13 +212,9 @@ function materializePropertyDraft(draft: PropertyDraft): NewBookingProperty {
   };
 }
 
-function supportAssignment(option: OfficeBookingOption) {
-  return option.assignments?.[1];
-}
-
 function allocationDurationLabel(option: OfficeBookingOption | null, fallbackMinutes: number) {
   if (!option) return fallbackMinutes > 360 ? 'Large job · validate allocation' : fallbackMinutes ? durationLabel(fallbackMinutes) : 'Add work';
-  const primary = option.assignments?.[0];
+  const primary = optionPrimaryAssignment(option);
   if (!primary) return fallbackMinutes ? durationLabel(fallbackMinutes) : 'Validated';
   const primaryLabel = primary.fullDay ? 'Full-day primary van' : durationLabel(primary.durationMinutes || primary.slots * 60);
   return option.assignments.length > 1 ? `${primaryLabel} + support van` : primaryLabel;
@@ -864,13 +868,34 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                     <div style={{ color: 'var(--muted)', fontSize: 6, fontWeight: 850, marginBottom: 6 }}>VALID SUPPORT ALTERNATIVES</div>
                     <div className={styles.choiceGrid}>
                       {activeValidation.options.map((option) => {
-                        const support = supportAssignment(option);
+                        const supportWindows = optionSupportWindows(option);
+                        const primary = optionPrimaryAssignment(option);
+                        const primaryStart = primary ? optionAssignmentStart(option, primary) : option.time;
+                        const primaryWorkEnd = primary ? optionAssignmentWorkEnd(option, primary) : option.endTime || '';
+                        const primaryCapacityEnd = primary ? optionAssignmentCapacityEnd(option, primary) : option.capacityEndTime || primaryWorkEnd;
                         const selected = option.id === selectedValidatedOption.id;
                         return (
-                          <button type="button" key={option.id} className={`${styles.choice} ${selected ? styles.choiceSelected : ''}`} onClick={() => setValidated((current) => current ? { ...current, selectedOptionId: option.id } : current)}>
-                            <strong>{support ? `${support.vanName || support.vanId} · support` : 'Primary allocation'}</strong>
-                            <span>{support ? `${formatTime(support.time || option.time)}${support.endTime ? `–${formatTime(support.endTime)}` : ''}` : `${formatTime(option.time)}–${formatTime(option.endTime || option.time)}`}</span>
-                            <small>{support ? `${support.quantity} support unit${support.quantity === 1 ? '' : 's'} · ${requestTarget.vanName} remains primary` : 'No support van required'}</small>
+                          <button type="button" key={option.id} className={`${styles.choice} ${selected ? styles.choiceSelected : ''}`} aria-pressed={selected} onClick={() => setValidated((current) => current ? { ...current, selectedOptionId: option.id } : current)}>
+                            <strong>{supportWindows.length === 1
+                              ? `${supportWindows[0].assignment.vanName || supportWindows[0].assignment.vanId} · support`
+                              : supportWindows.length > 1 ? `${supportWindows.length} support Vans` : 'Primary allocation'}</strong>
+                            {supportWindows.length ? supportWindows.map((window) => {
+                              const support = window.assignment;
+                              return <span key={`${support.vanId}-${window.start}-${window.capacityEnd}`}>
+                                {supportWindows.length > 1 ? `${support.vanName || support.vanId} · ` : ''}Van capacity {formatTime(window.start)}{window.capacityEnd ? `–${formatTime(window.capacityEnd)}` : ''}
+                                <small>
+                                  {support.quantity} support unit{support.quantity === 1 ? '' : 's'}
+                                  {window.workEnd && window.capacityEnd !== window.workEnd ? ` · Service-work estimate ends ${formatTime(window.workEnd)}` : ''}
+                                </small>
+                              </span>;
+                            }) : <>
+                              <span>Van capacity {formatTime(primaryStart)}{primaryCapacityEnd ? `–${formatTime(primaryCapacityEnd)}` : ''}</span>
+                              <small>
+                                No support van required
+                                {primaryWorkEnd && primaryCapacityEnd !== primaryWorkEnd ? ` · Service-work estimate ends ${formatTime(primaryWorkEnd)}` : ''}
+                              </small>
+                            </>}
+                            {supportWindows.length ? <small>{requestTarget.vanName} remains primary</small> : null}
                           </button>
                         );
                       })}
@@ -878,13 +903,18 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                   </div>
                 ) : null}
                 <div className={styles.assignmentGrid}>
-                  {selectedValidatedOption.assignments.map((assignment, index) => (
-                    <article key={`${assignment.vanId}-${assignment.time || selectedValidatedOption.time}-${index}`}>
-                      <span>{index === 0 ? 'PRIMARY / RESPONSIBLE' : 'SUPPORT'}</span>
+                  {selectedValidatedOption.assignments.map((assignment, index) => {
+                    const support = optionAssignmentIsSupport(selectedValidatedOption, assignment);
+                    const start = optionAssignmentStart(selectedValidatedOption, assignment);
+                    const workEnd = optionAssignmentWorkEnd(selectedValidatedOption, assignment);
+                    const capacityEnd = optionAssignmentCapacityEnd(selectedValidatedOption, assignment);
+                    return <article key={`${assignment.vanId}-${start}-${index}`}>
+                      <span>{support ? 'SUPPORT' : 'PRIMARY / RESPONSIBLE'}</span>
                       <strong>{assignment.vanName || assignment.vanId}</strong>
-                      <small>{formatTime(assignment.time || selectedValidatedOption.time)}{assignment.endTime ? `–${formatTime(assignment.endTime)}` : ''} · {durationLabel(assignment.durationMinutes || assignment.slots * 60)}</small>
-                    </article>
-                  ))}
+                      <small>Van capacity {formatTime(start)}{capacityEnd ? `–${formatTime(capacityEnd)}` : ''} · {durationLabel(assignment.durationMinutes || assignment.slots * 60)}</small>
+                      {workEnd && capacityEnd !== workEnd ? <small>Service-work estimate ends {formatTime(workEnd)}</small> : null}
+                    </article>;
+                  })}
                 </div>
                 <div className={styles.authorityIdle} style={{ marginTop: 8 }}><strong>Temporary hold:</strong> reserves these same canonical capacity locks but sends no customer confirmation or reminder until an office user manually confirms it. No automatic expiry is assumed.</div>
               </div>

@@ -1,6 +1,7 @@
 import type { BrowserAppointmentRecord } from '../lib/browser-operational';
 import { createBrowserWorkOrder } from '../lib/browser-operational';
 import type { CandidateSlot } from '../lib/scheduling';
+import { minutesToTime, timeToMinutes } from '../lib/scheduling';
 import type { CalendarDispatchJob } from '../lib/scheduling-capacity';
 import { buildOperationalWeek } from '../lib/scheduling-capacity';
 import {
@@ -87,6 +88,9 @@ const day = buildOperationalWeek(dateKey).find((item) => item.dateKey === dateKe
 const actor = { id: 'owner-1', name: 'Owner' };
 
 const threeHour = appointment({ id: 'APT-LIFE-1', dateKey, vanId: 'VAN-1', start: '13:30', end: '16:30', quantity: 3 });
+threeHour.scheduledSlotCount = 3;
+threeHour.assignments[0].capacitySlotStarts = ['13:30', '14:30', '15:30'];
+threeHour.assignments[0].capacityEnd = '16:30';
 const threeHourJobs = threeHour.assignments;
 const moveOptions = validMoveCandidates(day, threeHour, threeHourJobs);
 requireCondition(moveOptions.length > 0, 'A three-hour appointment should expose valid browser move recommendations.');
@@ -108,6 +112,8 @@ requireCondition(reassigned.record.id === threeHour.id, 'Operational move must p
 requireCondition(reassigned.record.primaryVanId === 'VAN-2', 'Operational move must update the primary van.');
 requireCondition(!reassigned.customerNotificationRecommended, 'Same-time van-only reassignment should not recommend a customer notification.');
 requireCondition(reassigned.record.lifecycleHistory?.at(-1)?.kind === 'operational_move', 'Operational move must append an audit event.');
+requireCondition(reassigned.record.assignments[0].capacitySlotStarts?.join(',') === '13:30,14:30,15:30', 'Same-time Van reassignment must preserve the canonical capacity starts.');
+requireCondition(reassigned.record.assignments[0].capacityEnd === '16:30', 'Same-time Van reassignment must preserve the canonical capacity boundary.');
 
 const laterSlot = moveOptions.find((slot) => slot.vanId === 'VAN-2' && slot.start === '08:30') ?? van2Recommendation;
 requireCondition(Boolean(laterSlot), 'A valid alternate-time move should be available on a free van.');
@@ -116,6 +122,33 @@ const timeChangedSlot: CandidateSlot = laterSlot!.start === '13:30'
   : laterSlot!;
 const timeChanged = applyAppointmentScheduleChange({ record: threeHour, slot: timeChangedSlot, dateKey, kind: 'operational_move', actor });
 requireCondition(timeChanged.customerNotificationRecommended, 'Changing the promised appointment time must recommend customer communication.');
+requireCondition(timeChanged.record.assignments[0].capacitySlotStarts?.join(',') === '08:30,09:30,10:30', 'Changing time must recompute the optimistic capacity starts at the new destination.');
+requireCondition(timeChanged.record.assignments[0].capacityEnd === '11:30', 'Changing time must recompute the optimistic capacity boundary at the new destination.');
+
+const sevenService = appointment({ id: 'APT-LIFE-FULL-DAY', dateKey, vanId: 'VAN-1', start: '08:30', end: '15:30', quantity: 7 });
+sevenService.scheduledSlotCount = 6;
+sevenService.assignments[0].capacitySlotStarts = ['08:30', '09:30', '10:30', '13:30', '14:30', '15:30'];
+sevenService.assignments[0].capacityEnd = '16:30';
+const sevenServiceMoved = applyAppointmentScheduleChange({
+  record: sevenService,
+  slot: {
+    vanId: 'VAN-2',
+    start: '08:30',
+    end: '15:30',
+    segment: 'full_day',
+    sector: sevenService.sector,
+    score: 0,
+    reasons: ['Acceptance move'],
+    requiresSupportVan: false,
+    primaryUnits: 7,
+  },
+  dateKey,
+  kind: 'operational_move',
+  actor,
+});
+requireCondition(sevenServiceMoved.record.assignments[0].end === '15:30', 'A seven-service move must preserve the elapsed work estimate.');
+requireCondition(sevenServiceMoved.record.assignments[0].capacitySlotStarts?.length === 6, 'A seven-service move must preserve all six sellable capacity starts.');
+requireCondition(sevenServiceMoved.record.assignments[0].capacityEnd === '16:30', 'A seven-service move must preserve the separate full-day capacity boundary.');
 
 const tooLargeEdit = updateAppointmentDetails({ record: threeHour, update: { presetId: 'standard_service', totalQuantity: 4 }, day, jobs: threeHourJobs, actor });
 requireCondition(!tooLargeEdit.ok, 'Increasing a 1:30 PM three-hour appointment to four one-hour units must be rejected because it no longer fits the protected workday.');
@@ -163,8 +196,15 @@ requireCondition(supportMoved.ok, 'Support-only reassignment should succeed for 
 if (supportMoved.ok) {
   const movedPrimary = supportMoved.record.assignments.find((item) => item.isPrimaryAssignment)!;
   const movedSupport = supportMoved.record.assignments.find((item) => !item.isPrimaryAssignment)!;
+  const movedSupportCapacityStarts = movedSupport.capacitySlotStarts ?? [];
+  const expectedSupportCapacityEnd = minutesToTime(Math.max(
+    timeToMinutes(movedSupport.end),
+    ...movedSupportCapacityStarts.map((start) => timeToMinutes(start) + 60),
+  ));
   requireCondition(movedPrimary.vanId === 'VAN-4' && movedPrimary.start === '08:30', 'Support-only drag must leave the Van 4 primary assignment untouched.');
   requireCondition(movedSupport.vanId === 'VAN-1' && movedSupport.quantity === 3, 'Support-only drag must move exactly the three-unit support block to Van 1.');
+  requireCondition(movedSupportCapacityStarts.length === 3 && movedSupportCapacityStarts[0] === movedSupport.start, 'Support-only drag must project all support Van capacity starts at its destination.');
+  requireCondition(movedSupport.capacityEnd === expectedSupportCapacityEnd, 'Support-only drag must project the support Van capacity boundary at its destination.');
   requireCondition(supportMoved.record.lifecycleHistory?.at(-1)?.kind === 'support_move', 'Support-only drag must append a support_move audit event.');
   requireCondition(!supportMoved.customerNotificationRecommended, 'Moving support only must not recommend a customer-facing notification when the primary schedule is unchanged.');
   const supportWorkOrder = createBrowserWorkOrder(supportDragCase);

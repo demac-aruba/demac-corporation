@@ -22,8 +22,9 @@ function offer(overrides = {}) {
       date: "2098-12-20",
       time: "13:30",
       endTime: "15:30",
+      capacityEndTime: "16:30",
       presetId: "standard_service",
-      assignments: [{ vanId: "VAN-2", technicianIds: ["t1", "t2"], quantity: 2, slots: 2 }],
+      assignments: [{ vanId: "VAN-2", technicianIds: ["t1", "t2"], quantity: 2, slots: 2, capacityEndTime: "16:30" }],
     }],
     ...overrides,
   };
@@ -55,6 +56,8 @@ test("normalizes offer assignments and requires positive capacity", () => {
   const normalized = normalizeOfferOption(offer().options[0]);
   assert.equal(normalized.assignments[0].vanId, "VAN-2");
   assert.equal(normalized.assignments[0].slots, 2);
+  assert.equal(normalized.capacityEndTime, "16:30");
+  assert.equal(normalized.assignments[0].capacityEndTime, "16:30");
   assert.throws(
     () => normalizeOfferOption({ ...offer().options[0], assignments: [{ vanId: "VAN-2", quantity: 2, slots: 0 }] }),
     (error) => error.code === BOOKING_ERROR_CODES.INVALID_REQUEST,
@@ -136,6 +139,9 @@ test("builds canonical confirmed appointment only after offer validation", () =>
   assert.equal(draft.offerId, "offer-123");
   assert.equal(draft.selectedOptionId, "opt-1");
   assert.equal(draft.primaryVanId, "VAN-2");
+  assert.equal(draft.endTime, "15:30");
+  assert.equal(draft.capacityEndTime, "16:30");
+  assert.equal(draft.assignments[0].capacityEndTime, "16:30");
   assert.match(draft.appointmentId, /^APT-[A-F0-9]{20}$/);
 });
 

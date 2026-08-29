@@ -7,11 +7,15 @@ import {
 import {
   appointmentDraftHydrationAllowed,
   fixedAppointmentOptions,
+  optionAssignmentCapacityEnd,
   optionAssignmentIsSupport,
+  optionAssignmentStart,
+  optionAssignmentWorkEnd,
   optionPrimaryAssignment,
   optionSupportAssignment,
+  optionSupportWindow,
 } from '../lib/live-appointment-edit-state';
-import { bookingActorLabel, projectLiveSchedulingAppointments, resolveCanonicalVanId } from '../lib/live-scheduling';
+import { bookingActorLabel, liveJobCapacityEnd, projectLiveSchedulingAppointments, resolveCanonicalVanId } from '../lib/live-scheduling';
 import { afterHoursTargetForVan, availableSlotAction, liveSchedulingInteractionActive } from '../lib/live-scheduling-interactions';
 import {
   liveDragMoveCandidates,
@@ -82,6 +86,7 @@ const sixService = projectLiveSchedulingAppointments([{
   scheduledSlots: 6,
 }], clients, properties)[0];
 requireCondition(sixService.assignments[0].end === '14:30', 'Six Standard Services must keep the canonical 08:30–14:30 elapsed work interval.');
+requireCondition(sixService.assignments[0].capacityEnd === '16:30', 'Six Standard Services must expose the complete 08:30–16:30 Van-capacity window alongside the shorter work estimate.');
 requireCondition(sixService.assignments[0].capacitySlotStarts?.length === 6, 'Six Standard Services must own all six normal Van capacity starts.');
 requireCondition(jobOwnsCapacityStart(sixService.assignments[0], '15:30'), 'Six Standard Services must not expose the 15:30 capacity start as available.');
 
@@ -96,12 +101,28 @@ const threeService = projectLiveSchedulingAppointments([{
   scheduledSlots: 3,
 }], clients, properties)[0];
 requireCondition(threeService.assignments[0].end === '12:30', 'Three Standard Services must keep three real elapsed work hours.');
+requireCondition(threeService.assignments[0].capacityEnd === '14:30', 'Three Standard Services must expose the end of their third owned capacity spot instead of labeling a shorter two-spot block.');
 requireCondition(
   threeService.assignments[0].capacitySlotStarts?.join(',') === '09:30,10:30,13:30',
   'Three Standard Services must retain exactly three capacity spots when lunch removes a sellable anchor.',
 );
 requireCondition(jobOwnsCapacityStart(threeService.assignments[0], '13:30'), 'The third owned capacity spot must project into the live Van lane.');
 requireCondition(!jobOwnsCapacityStart(threeService.assignments[0], '14:30'), 'Three Standard Services must not consume a fourth capacity spot.');
+
+const sevenServiceFullDay = projectLiveSchedulingAppointments([{
+  ...canonicalWorkOrders[0],
+  id: 'WO-APT-SEVEN-1',
+  appointmentId: 'APT-SEVEN',
+  airConditionerCount: 7,
+  appointmentDurationMinutes: 420,
+  appointmentEndTime: '15:30',
+  scheduledSlots: 6,
+  fullDaySingleProperty: true,
+}], clients, properties)[0];
+requireCondition(sevenServiceFullDay.assignments[0].end === '15:30', 'Seven service-hours must remain a distinct work-effort estimate.');
+requireCondition(sevenServiceFullDay.assignments[0].capacityEnd === '16:30', 'A full-day seven-service assignment must label the Van as reserved through 16:30, including historical Work Orders without the new snapshot.');
+requireCondition(liveJobCapacityEnd(sevenServiceFullDay.assignments[0]) === '16:30', 'Every schedule presenter, including conflict cards, must use the canonical Van-capacity end instead of the shorter service-work estimate.');
+requireCondition(sevenServiceFullDay.assignments[0].capacitySlotStarts?.length === 6, 'A full-day primary must continue to own all six normal capacity starts.');
 
 const perVanAfterHoursTarget = afterHoursTargetForVan('2026-08-18', { id: 'VAN-3', name: 'Van 3' });
 requireCondition(perVanAfterHoursTarget.vanId === 'VAN-3' && perVanAfterHoursTarget.vanName === 'Van 3', 'Per-Van after-hours creation must preserve the lane-selected Van.');
@@ -118,17 +139,31 @@ const supportFirstOptions = [{
   id: 'support-option-a',
   date: '2026-08-18',
   time: '08:30',
+  endTime: '15:30',
+  capacityEndTime: '16:30',
   assignments: [
-    { vanId: 'VAN-2', vanName: 'Van 2', quantity: 3, slots: 3, time: '10:30', role: 'support' as const },
-    { vanId: 'VAN-1', vanName: 'Van 1', quantity: 7, slots: 7, time: '08:30' },
+    { vanId: 'VAN-2', vanName: 'Van 2', quantity: 3, slots: 3, time: '08:30', endTime: '11:30', capacityEndTime: '11:30', role: 'support' as const },
+    { vanId: 'VAN-1', vanName: 'Van 1', quantity: 7, slots: 6, time: '08:30', endTime: '15:30', capacityEndTime: '16:30' },
   ],
 }, {
   id: 'support-option-b',
   date: '2026-08-18',
   time: '08:30',
+  endTime: '15:30',
+  capacityEndTime: '16:30',
   assignments: [
-    { vanId: 'VAN-3', vanName: 'Van 3', quantity: 3, slots: 3, time: '13:30', role: 'support' as const },
-    { vanId: 'VAN-1', vanName: 'Van 1', quantity: 7, slots: 7, time: '08:30', role: 'primary' as const },
+    { vanId: 'VAN-1', vanName: 'Van 1', quantity: 7, slots: 6, time: '08:30', endTime: '15:30', capacityEndTime: '16:30', role: 'primary' as const },
+    { vanId: 'VAN-2', vanName: 'Van 2', quantity: 3, slots: 3, time: '09:30', endTime: '12:30', capacityEndTime: '14:30', role: 'support' as const },
+  ],
+}, {
+  id: 'support-option-c',
+  date: '2026-08-18',
+  time: '08:30',
+  endTime: '15:30',
+  capacityEndTime: '16:30',
+  assignments: [
+    { vanId: 'VAN-1', vanName: 'Van 1', quantity: 7, slots: 6, time: '08:30', endTime: '15:30', capacityEndTime: '16:30', role: 'primary' as const },
+    { vanId: 'VAN-4', vanName: 'Van 4', quantity: 3, slots: 3, time: '13:30', endTime: '16:30', capacityEndTime: '16:30', role: 'support' as const },
   ],
 }, {
   id: 'wrong-primary',
@@ -137,11 +172,21 @@ const supportFirstOptions = [{
   assignments: [{ vanId: 'VAN-4', vanName: 'Van 4', quantity: 10, slots: 10, time: '08:30', role: 'primary' as const }],
 }];
 const exactSupportOptions = fixedAppointmentOptions(supportFirstOptions, { dateKey: '2026-08-18', start: '08:30', vanId: 'VAN-1' });
-requireCondition(exactSupportOptions.length === 2, 'Existing-appointment validation must preserve every exact support alternative.');
+requireCondition(exactSupportOptions.length === 3, 'Existing-appointment validation must preserve every exact support alternative.');
 requireCondition(optionPrimaryAssignment(exactSupportOptions[0])?.vanId === 'VAN-1', 'An untagged primary assignment must remain primary when the API returns explicitly tagged support first.');
 requireCondition(optionSupportAssignment(exactSupportOptions[0])?.vanId === 'VAN-2', 'The support recommendation must remain visible when support is returned before primary.');
 requireCondition(optionAssignmentIsSupport(exactSupportOptions[0], exactSupportOptions[0].assignments[0]), 'The explicit support assignment must render as support.');
 requireCondition(!optionAssignmentIsSupport(exactSupportOptions[0], exactSupportOptions[0].assignments[1]), 'The explicit primary assignment must never be mislabeled as support.');
+const supportWindows = exactSupportOptions.map(optionSupportWindow);
+requireCondition(supportWindows.every(Boolean), 'Every support alternative must expose a visible assignment window.');
+requireCondition(supportWindows[0]?.assignment.vanId === 'VAN-2' && supportWindows[1]?.assignment.vanId === 'VAN-2', 'The same support Van may legitimately appear in more than one time window.');
+requireCondition(supportWindows[0]?.start === '08:30' && supportWindows[0]?.end === '11:30', 'The first Van 2 tile must expose 08:30–11:30.');
+requireCondition(supportWindows[1]?.start === '09:30' && supportWindows[1]?.end === '12:30', 'The second Van 2 tile must expose 09:30–12:30 instead of looking duplicated.');
+requireCondition(new Set(supportWindows.map((window) => `${window?.assignment.vanId}|${window?.start}|${window?.end}`)).size === 3, 'Support tiles must be distinguishable by Van and exact time.');
+const firstPrimary = optionPrimaryAssignment(exactSupportOptions[0])!;
+requireCondition(optionAssignmentStart(exactSupportOptions[0], firstPrimary) === '08:30', 'Primary allocation start must remain explicit.');
+requireCondition(optionAssignmentWorkEnd(exactSupportOptions[0], firstPrimary) === '15:30', 'Primary work estimate must remain distinct from capacity ownership.');
+requireCondition(optionAssignmentCapacityEnd(exactSupportOptions[0], firstPrimary) === '16:30', 'Primary allocation UI must expose the complete reserved Van window.');
 
 // Regression for an AM → PM drag created before operational-move v3. Duration is the
 // timing authority, so a stale pre-move end snapshot must not hide the actual span.

@@ -16,7 +16,7 @@ const {
   validateWorkOrders,
 } = require("./bookingAuthorityFirestore");
 
-const APPOINTMENT_LIFECYCLE_VERSION = 7;
+const APPOINTMENT_LIFECYCLE_VERSION = 8;
 const RESCHEDULE_CHANGE_KINDS = new Set(["customer_reschedule", "operational_move", "details_edited"]);
 
 function defaultServerTimestamp() {
@@ -76,15 +76,38 @@ function isTemporaryHoldAppointment(appointment) {
   return cleanText(appointment?.status, 40).toLowerCase() === BOOKING_CREATE_MODES.TEMPORARY_HOLD;
 }
 
+function primaryAssignment(value = {}) {
+  const assignments = Array.isArray(value.assignments) ? value.assignments : [];
+  return assignments.find((item) => cleanText(item?.role, 40) !== "support")
+    || assignments[0]
+    || {};
+}
+
+function supportAssignment(value = {}) {
+  const assignments = Array.isArray(value.assignments) ? value.assignments : [];
+  const primary = primaryAssignment(value);
+  return assignments.find((item) => item !== primary && cleanText(item?.role, 40) === "support")
+    || assignments.find((item) => item !== primary)
+    || null;
+}
+
+function capacityEndTime(value = {}) {
+  const primary = primaryAssignment(value);
+  return cleanText(
+    value.capacityEndTime || primary.capacityEndTime || value.endTime,
+    20,
+  );
+}
+
 function scheduleSnapshot(appointment = {}) {
-  const assignments = Array.isArray(appointment.assignments) ? appointment.assignments : [];
-  const primary = assignments[0] || {};
-  const support = assignments[1] || null;
+  const primary = primaryAssignment(appointment);
+  const support = supportAssignment(appointment);
   return compactObject({
     dateKey: cleanText(appointment.date, 20),
     primaryVanId: cleanText(primary.vanId || appointment.primaryVanId, 120),
     primaryStart: cleanText(primary.time || appointment.startTime, 20),
     primaryEnd: cleanText(appointment.endTime, 20),
+    primaryCapacityEnd: capacityEndTime(appointment),
     supportVanId: cleanText(support?.vanId, 120),
     supportStart: cleanText(support?.time, 20),
   });
@@ -157,6 +180,7 @@ function holdOptionFromAppointment(appointment) {
     date: appointment.date,
     time: appointment.startTime,
     endTime: appointment.endTime,
+    capacityEndTime: appointment.capacityEndTime,
     workItems: appointment.workItems,
     assignments: appointment.assignments,
     requestedDateMatch: true,
@@ -466,6 +490,9 @@ function createBookingAppointmentLifecycle({
       refreshedOption = normalizeOfferOption(revalidation.option);
     }
     if (normalizedChangeKind === "details_edited") assertDetailsEditKeepsPlacement(existing, refreshedOption);
+    const refreshedPrimaryAssignment = primaryAssignment(refreshedOption);
+    const refreshedSupportAssignment = supportAssignment(refreshedOption);
+    const refreshedCapacityEndTime = capacityEndTime(refreshedOption);
 
     return db.runTransaction(async (transaction) => {
       const [currentAppointmentSnapshot, currentOfferSnapshot] = await Promise.all([
@@ -588,11 +615,12 @@ function createBookingAppointmentLifecycle({
       const previousSchedule = scheduleSnapshot(current);
       const nextSchedule = {
         dateKey: refreshedOption.date,
-        primaryVanId: cleanText(refreshedOption.assignments?.[0]?.vanId, 120),
-        primaryStart: cleanText(refreshedOption.assignments?.[0]?.time || refreshedOption.time, 20),
+        primaryVanId: cleanText(refreshedPrimaryAssignment.vanId, 120),
+        primaryStart: cleanText(refreshedPrimaryAssignment.time || refreshedOption.time, 20),
         primaryEnd: cleanText(refreshedOption.endTime, 20),
-        supportVanId: cleanText(refreshedOption.assignments?.[1]?.vanId, 120),
-        supportStart: cleanText(refreshedOption.assignments?.[1]?.time, 20),
+        primaryCapacityEnd: refreshedCapacityEndTime,
+        supportVanId: cleanText(refreshedSupportAssignment?.vanId, 120),
+        supportStart: cleanText(refreshedSupportAssignment?.time, 20),
       };
       const customerNotificationRecommended = currentTemporaryHold
         ? false
@@ -628,12 +656,13 @@ function createBookingAppointmentLifecycle({
         date: refreshedOption.date,
         startTime: refreshedOption.time,
         endTime: refreshedOption.endTime,
+        capacityEndTime: refreshedCapacityEndTime,
         workLines: currentRequest.workLines,
         workItems: refreshedOption.workItems,
         constraints: currentRequest.constraints,
         notes: currentRequest.notes,
         assignments: refreshedOption.assignments,
-        primaryVanId: cleanText(refreshedOption.assignments?.[0]?.vanId, 120),
+        primaryVanId: cleanText(refreshedPrimaryAssignment.vanId, 120),
         workOrderIds,
         capacityLockIds: newLocks.map((lock) => lock.id),
         ...lifecycleMetadata,
@@ -715,12 +744,13 @@ function createBookingAppointmentLifecycle({
           date: refreshedOption.date,
           startTime: refreshedOption.time,
           endTime: refreshedOption.endTime,
+          capacityEndTime: refreshedCapacityEndTime,
           workLines: currentRequest.workLines,
           workItems: refreshedOption.workItems,
           constraints: currentRequest.constraints,
           notes: currentRequest.notes,
           assignments: refreshedOption.assignments,
-          primaryVanId: cleanText(refreshedOption.assignments?.[0]?.vanId, 120),
+          primaryVanId: cleanText(refreshedPrimaryAssignment.vanId, 120),
           workOrderIds,
           capacityLockIds: newLocks.map((lock) => lock.id),
           lifecycleHistory,
