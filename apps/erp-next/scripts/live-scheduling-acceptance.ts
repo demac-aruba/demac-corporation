@@ -4,8 +4,15 @@ import {
   liveVanIsHalfDay,
   type LiveOperationalCapacityState,
 } from '../lib/live-operational-capacity';
+import {
+  appointmentDraftHydrationAllowed,
+  fixedAppointmentOptions,
+  optionAssignmentIsSupport,
+  optionPrimaryAssignment,
+  optionSupportAssignment,
+} from '../lib/live-appointment-edit-state';
 import { bookingActorLabel, projectLiveSchedulingAppointments, resolveCanonicalVanId } from '../lib/live-scheduling';
-import { afterHoursTargetForVan, availableSlotAction } from '../lib/live-scheduling-interactions';
+import { afterHoursTargetForVan, availableSlotAction, liveSchedulingInteractionActive } from '../lib/live-scheduling-interactions';
 import {
   liveDragMoveCandidates,
   liveMoveTargetKey,
@@ -101,6 +108,40 @@ requireCondition(perVanAfterHoursTarget.vanId === 'VAN-3' && perVanAfterHoursTar
 requireCondition(perVanAfterHoursTarget.start === '17:00' && perVanAfterHoursTarget.end === '', 'After-hours creation must reuse canonical booking with a 5 PM default and no fabricated end time.');
 requireCondition(availableSlotAction('card') === 'book' && availableSlotAction('book') === 'book', 'Available card background and BOOK must open normal booking.');
 requireCondition(availableSlotAction('support') === 'support', 'The explicit SUPPORT action must remain isolated from normal booking.');
+requireCondition(liveSchedulingInteractionActive({ selectedAppointmentId: 'APT-CANONICAL-1' }), 'Opening appointment details or edit must pause background refresh so an unsaved draft cannot be rehydrated.');
+requireCondition(!liveSchedulingInteractionActive({}), 'Background refresh must resume when no scheduling interaction is open.');
+requireCondition(!appointmentDraftHydrationAllowed('APT-CANONICAL-1', 'APT-CANONICAL-1', true), 'A same-appointment refresh must never overwrite a dirty edit draft.');
+requireCondition(appointmentDraftHydrationAllowed('APT-CANONICAL-1', 'APT-CANONICAL-1', false), 'A clean edit draft may synchronize a newer canonical revision.');
+requireCondition(appointmentDraftHydrationAllowed('APT-CANONICAL-1', 'APT-CANONICAL-2', true), 'Opening a different appointment must hydrate its canonical draft.');
+
+const supportFirstOptions = [{
+  id: 'support-option-a',
+  date: '2026-08-18',
+  time: '08:30',
+  assignments: [
+    { vanId: 'VAN-2', vanName: 'Van 2', quantity: 3, slots: 3, time: '10:30', role: 'support' as const },
+    { vanId: 'VAN-1', vanName: 'Van 1', quantity: 7, slots: 7, time: '08:30' },
+  ],
+}, {
+  id: 'support-option-b',
+  date: '2026-08-18',
+  time: '08:30',
+  assignments: [
+    { vanId: 'VAN-3', vanName: 'Van 3', quantity: 3, slots: 3, time: '13:30', role: 'support' as const },
+    { vanId: 'VAN-1', vanName: 'Van 1', quantity: 7, slots: 7, time: '08:30', role: 'primary' as const },
+  ],
+}, {
+  id: 'wrong-primary',
+  date: '2026-08-18',
+  time: '08:30',
+  assignments: [{ vanId: 'VAN-4', vanName: 'Van 4', quantity: 10, slots: 10, time: '08:30', role: 'primary' as const }],
+}];
+const exactSupportOptions = fixedAppointmentOptions(supportFirstOptions, { dateKey: '2026-08-18', start: '08:30', vanId: 'VAN-1' });
+requireCondition(exactSupportOptions.length === 2, 'Existing-appointment validation must preserve every exact support alternative.');
+requireCondition(optionPrimaryAssignment(exactSupportOptions[0])?.vanId === 'VAN-1', 'An untagged primary assignment must remain primary when the API returns explicitly tagged support first.');
+requireCondition(optionSupportAssignment(exactSupportOptions[0])?.vanId === 'VAN-2', 'The support recommendation must remain visible when support is returned before primary.');
+requireCondition(optionAssignmentIsSupport(exactSupportOptions[0], exactSupportOptions[0].assignments[0]), 'The explicit support assignment must render as support.');
+requireCondition(!optionAssignmentIsSupport(exactSupportOptions[0], exactSupportOptions[0].assignments[1]), 'The explicit primary assignment must never be mislabeled as support.');
 
 // Regression for an AM → PM drag created before operational-move v3. Duration is the
 // timing authority, so a stale pre-move end snapshot must not hide the actual span.

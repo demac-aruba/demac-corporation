@@ -31,6 +31,7 @@ import {
 import {
   afterHoursTargetForVan,
   availableSlotAction,
+  liveSchedulingInteractionActive,
   type AfterHoursVanTarget,
   type AvailableSlotIntent,
 } from '../../lib/live-scheduling-interactions';
@@ -208,7 +209,16 @@ export function LiveSchedulingOverview() {
   }), [baseWeek, capacityState]);
   const canManage = principal.active && principal.capabilities.has('scheduling.manage');
   const actor = useMemo(() => ({ id: principal.userId, name: principal.displayName }), [principal.displayName, principal.userId]);
-  const interactionActive = Boolean(bookingTarget || supportTarget || afterHoursTarget || moveArmedJobId || pendingDragMove || moveBusy || manualRefreshing);
+  const interactionActive = liveSchedulingInteractionActive({
+    selectedAppointmentId,
+    bookingTarget,
+    supportTarget,
+    afterHoursTarget,
+    moveArmedJobId,
+    pendingDragMove,
+    moveBusy,
+    manualRefreshing,
+  });
 
   const refresh = useCallback(async (forceCapacity = false) => {
     const sequence = ++refreshSequenceRef.current;

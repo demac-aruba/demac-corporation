@@ -1,7 +1,13 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
+import {
+  appointmentDraftHydrationAllowed,
+  fixedAppointmentOptions,
+  optionAssignmentIsSupport,
+  optionSupportAssignment,
+} from '../../lib/live-appointment-edit-state';
 import {
   checkOfficeRescheduleAvailability,
   createOfficeLifecycleRequestId,
@@ -21,6 +27,12 @@ type Props = {
 };
 
 type EditLine = OfficeBookingWorkLine;
+
+type EditValidation = {
+  signature: string;
+  result: OfficeAvailabilityResult;
+  selectedOptionId: string;
+};
 
 function text(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -45,6 +57,55 @@ function autoDescription(lines: EditLine[], presetById: Map<string, OfficeBookin
   return entries.length ? `Scheduled work: ${entries.join('; ')}.` : '';
 }
 
+function normalizedDescription(value: string) {
+  return value.trim().replace(/\s+/g, ' ').replace(/[.;]+$/, '').toLowerCase();
+}
+
+function isGeneratedDescription(value: string, lines: EditLine[], presetById: Map<string, OfficeBookingPreset>) {
+  const quantityFirst = lines.map((line) => {
+    const preset = presetById.get(line.presetId);
+    return preset ? `${line.quantity} × ${preset.label}` : '';
+  }).filter(Boolean);
+  const labelFirst = lines.map((line) => {
+    const preset = presetById.get(line.presetId);
+    return preset ? `${preset.label} × ${line.quantity}` : '';
+  }).filter(Boolean);
+  const candidates = [
+    autoDescription(lines, presetById),
+    quantityFirst.join('; '),
+    labelFirst.join('; '),
+    `Scheduled work: ${labelFirst.join('; ')}.`,
+  ];
+  const normalized = normalizedDescription(value);
+  return Boolean(normalized) && candidates.some((candidate) => normalizedDescription(candidate) === normalized);
+}
+
+function formatTime(value: string) {
+  const [hourText, minute = '00'] = value.split(':');
+  const hour = Number(hourText);
+  if (!Number.isFinite(hour)) return value;
+  return `${hour % 12 || 12}:${minute} ${hour >= 12 ? 'PM' : 'AM'}`;
+}
+
+function appointmentDraftRevision(appointment: BrowserAppointmentRecord) {
+  const workLines = (appointment.workLines ?? []).map((line) => [
+    line.presetId,
+    line.quantity,
+    line.customerFacingDescription ?? '',
+    line.technicianInstructions ?? '',
+  ].join(':')).join('|');
+  return [
+    appointment.id,
+    appointment.updatedAt ?? '',
+    appointment.totalQuantity,
+    appointment.workTypeId ?? appointment.presetId,
+    appointment.serviceId ?? '',
+    appointment.customerFacingDescription,
+    appointment.technicianInstructions ?? '',
+    workLines,
+  ].join('|');
+}
+
 function normalizeCanonicalLines(value: unknown): EditLine[] {
   if (!Array.isArray(value)) return [];
   return value.map((item, index) => {
@@ -67,58 +128,97 @@ export function LiveAppointmentEditPanel({ appointment, onBack, onSaved }: Props
   const [description, setDescription] = useState(appointment.customerFacingDescription || '');
   const [instructions, setInstructions] = useState(appointment.technicianInstructions || '');
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [availability, setAvailability] = useState<OfficeAvailabilityResult | null>(null);
-  const [selectedOptionId, setSelectedOptionId] = useState('');
+  const [validated, setValidated] = useState<EditValidation | null>(null);
   const lastAutoRef = useRef('');
+  const draftDirtyRef = useRef(false);
+  const hydratedAppointmentIdRef = useRef('');
+  const validationEpochRef = useRef(0);
+  const validationSignatureRef = useRef('');
+  const validationTimerRef = useRef<number | null>(null);
 
   const primary = appointment.assignments.find((assignment) => assignment.isPrimaryAssignment && assignment.status !== 'cancelled')
     ?? appointment.assignments.find((assignment) => assignment.status !== 'cancelled')
     ?? appointment.assignments[0];
   const presetById = useMemo(() => new Map(presets.map((preset) => [preset.id, preset])), [presets]);
   const generatedDescription = useMemo(() => autoDescription(lines, presetById), [lines, presetById]);
-  const selectedOption = availability?.options.find((option) => option.id === selectedOptionId)
-    ?? availability?.options[0]
+  const hydrationRevision = appointmentDraftRevision(appointment);
+  const workSignature = lines.map((line) => `${line.presetId}:${line.serviceId ?? ''}:${line.quantity}:${line.manualDurationMinutes ?? ''}`).join('|');
+  const signature = [
+    appointment.id,
+    appointment.customerId,
+    appointment.siteId,
+    appointment.dateKey,
+    primary?.vanId,
+    primary?.start,
+    workSignature,
+    description.trim(),
+    instructions.trim(),
+  ].join('|');
+  validationSignatureRef.current = signature;
+  const activeValidation = validated?.signature === signature ? validated : null;
+  const selectedOption = activeValidation?.result.options.find((option) => option.id === activeValidation.selectedOptionId)
+    ?? activeValidation?.result.options[0]
     ?? null;
 
   useEffect(() => {
     let active = true;
-    setLoading(true);
+    const sourceAppointment = appointment;
+    const initialHydration = hydratedAppointmentIdRef.current !== sourceAppointment.id;
+    if (!appointmentDraftHydrationAllowed(hydratedAppointmentIdRef.current, sourceAppointment.id, draftDirtyRef.current)) return;
+    if (initialHydration) {
+      draftDirtyRef.current = false;
+      setLoading(true);
+    }
+    if (validationTimerRef.current !== null) {
+      window.clearTimeout(validationTimerRef.current);
+      validationTimerRef.current = null;
+    }
+    validationEpochRef.current += 1;
+    setChecking(false);
+    setValidated(null);
     setError('');
-    void Promise.all([getOfficeAppointment(appointment.id), listOfficeBookingPresets(true)])
+    void Promise.all([getOfficeAppointment(sourceAppointment.id), listOfficeBookingPresets(true)])
       .then(([canonical, presetResult]) => {
-        if (!active) return;
+        if (!active || !appointmentDraftHydrationAllowed(hydratedAppointmentIdRef.current, sourceAppointment.id, draftDirtyRef.current)) return;
         const activePresets = presetResult.presets.filter((preset) => preset.active !== false);
         setPresets(activePresets);
         const rawLines = normalizeCanonicalLines(canonical.appointment.workLines);
-        const fallbackPresetId = appointment.workTypeId || appointment.presetId;
+        const fallbackPresetId = sourceAppointment.workTypeId || sourceAppointment.presetId;
         const fallbackPreset = activePresets.find((preset) => preset.id === fallbackPresetId);
         const fallback: EditLine[] = fallbackPresetId ? [{
-          id: `${appointment.id}-edit-work`,
+          id: `${sourceAppointment.id}-edit-work`,
           presetId: fallbackPresetId,
-          serviceId: appointment.serviceId,
-          quantity: Math.max(1, appointment.totalQuantity || 1),
-          ...(isOtherPreset(fallbackPreset) ? { manualDurationMinutes: appointment.scheduledDurationMinutes || 60 } : {}),
+          serviceId: sourceAppointment.serviceId,
+          quantity: Math.max(1, sourceAppointment.totalQuantity || 1),
+          ...(isOtherPreset(fallbackPreset) ? { manualDurationMinutes: sourceAppointment.scheduledDurationMinutes || 60 } : {}),
         }] : [];
         const nextLines = rawLines.length ? rawLines : fallback;
         setLines(nextLines);
         const first = rawLines[0];
-        const canonicalDescription = text(first?.customerFacingDescription) || appointment.customerFacingDescription || '';
-        const canonicalInstructions = text(first?.technicianInstructions) || appointment.technicianInstructions || '';
+        const canonicalDescription = text(first?.customerFacingDescription) || sourceAppointment.customerFacingDescription || '';
+        const canonicalInstructions = text(first?.technicianInstructions) || sourceAppointment.technicianInstructions || '';
         setDescription(canonicalDescription);
         setInstructions(canonicalInstructions);
         const byId = new Map(activePresets.map((preset) => [preset.id, preset]));
-        lastAutoRef.current = autoDescription(nextLines, byId);
+        lastAutoRef.current = isGeneratedDescription(canonicalDescription, nextLines, byId)
+          ? canonicalDescription
+          : autoDescription(nextLines, byId);
+        draftDirtyRef.current = false;
+        hydratedAppointmentIdRef.current = sourceAppointment.id;
       })
       .catch((cause) => {
-        if (active) setError(cause instanceof Error ? cause.message : 'The canonical appointment could not be loaded.');
+        if (active && appointmentDraftHydrationAllowed(hydratedAppointmentIdRef.current, sourceAppointment.id, draftDirtyRef.current)) {
+          setError(cause instanceof Error ? cause.message : 'The canonical appointment could not be loaded.');
+        }
       })
       .finally(() => {
-        if (active) setLoading(false);
-      });
+        if (active && initialHydration) setLoading(false);
+    });
     return () => { active = false; };
-  }, [appointment]);
+  }, [hydrationRevision]);
 
   useEffect(() => {
     const previousAuto = lastAutoRef.current;
@@ -130,11 +230,13 @@ export function LiveAppointmentEditPanel({ appointment, onBack, onSaved }: Props
     lastAutoRef.current = generatedDescription;
   }, [generatedDescription]);
 
-  const resetValidation = () => {
-    setAvailability(null);
-    setSelectedOptionId('');
+  const resetValidation = useCallback(() => {
+    draftDirtyRef.current = true;
+    validationEpochRef.current += 1;
+    setChecking(false);
+    setValidated(null);
     setError('');
-  };
+  }, []);
 
   const addPreset = (preset: OfficeBookingPreset) => {
     setLines((current) => {
@@ -180,18 +282,26 @@ export function LiveAppointmentEditPanel({ appointment, onBack, onSaved }: Props
     return minutes >= 60 && minutes <= 720 && minutes % 30 === 0;
   });
 
-  const validateChanges = async () => {
+  const validateChanges = useCallback(async (automatic = false) => {
+    if (validationTimerRef.current !== null) {
+      window.clearTimeout(validationTimerRef.current);
+      validationTimerRef.current = null;
+    }
     if (!appointment.customerId || !appointment.siteId || !primary?.vanId || !primary.start) {
-      setError('This appointment is missing its canonical customer, property, van, or start time.');
+      if (!automatic) setError('This appointment is missing its canonical customer, property, van, or start time.');
       return;
     }
     if (!workValid) {
-      setError('Add at least one valid work type. Other requires a manual duration.');
+      if (!automatic) setError('Add at least one valid work type. Other requires a manual duration.');
       return;
     }
-    setBusy(true);
+
+    const requestEpoch = validationEpochRef.current + 1;
+    validationEpochRef.current = requestEpoch;
+    const validationSignature = signature;
+    setChecking(true);
     setError('');
-    setAvailability(null);
+    setValidated(null);
     try {
       const result = await checkOfficeRescheduleAvailability({
         appointmentId: appointment.id,
@@ -211,32 +321,46 @@ export function LiveAppointmentEditPanel({ appointment, onBack, onSaved }: Props
         notes: `Edited from LIVE Scheduling appointment ${appointment.id}.`,
         changeKind: 'details_edited',
       });
-      const exact = result.options.find((option) => option.date === appointment.dateKey
-        && option.time === primary.start
-        && option.assignments?.[0]?.vanId === primary.vanId);
-      if (!result.available || !result.offer || !exact) {
+      if (requestEpoch !== validationEpochRef.current || validationSignatureRef.current !== validationSignature) return;
+      const exactOptions = fixedAppointmentOptions(result.options, { dateKey: appointment.dateKey, start: primary.start, vanId: primary.vanId });
+      if (!result.available || !result.offer || !exactOptions.length) {
         setError(`The edited work does not fit the appointment's existing capacity${result.reason ? ` (${result.reason})` : ''}. Use Reschedule if the schedule must change.`);
         return;
       }
-      setAvailability({ ...result, options: [exact] });
-      setSelectedOptionId(exact.id);
+      setValidated({
+        signature: validationSignature,
+        result: { ...result, options: exactOptions },
+        selectedOptionId: exactOptions[0].id,
+      });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'The appointment changes could not be validated.');
+      if (requestEpoch === validationEpochRef.current && validationSignatureRef.current === validationSignature) {
+        setError(cause instanceof Error ? cause.message : 'The appointment changes could not be validated.');
+      }
     } finally {
-      setBusy(false);
+      if (requestEpoch === validationEpochRef.current) setChecking(false);
     }
-  };
+  }, [appointment.customerId, appointment.dateKey, appointment.id, appointment.siteId, description, instructions, lines, primary?.start, primary?.vanId, signature, workValid]);
+
+  useEffect(() => {
+    if (loading || saving || !appointment.customerId || !appointment.siteId || !primary?.vanId || !primary.start || !workValid) return;
+    const timer = window.setTimeout(() => { void validateChanges(true); }, 350);
+    validationTimerRef.current = timer;
+    return () => {
+      window.clearTimeout(timer);
+      if (validationTimerRef.current === timer) validationTimerRef.current = null;
+    };
+  }, [appointment.customerId, appointment.siteId, loading, primary?.start, primary?.vanId, saving, validateChanges, workValid]);
 
   const saveChanges = async () => {
-    if (!availability?.offer || !selectedOption || busy) return;
-    setBusy(true);
+    if (!activeValidation?.result.offer || !selectedOption || saving || checking) return;
+    setSaving(true);
     setError('');
     try {
       await rescheduleOfficeAppointment({
         appointmentId: appointment.id,
         requestId: createOfficeLifecycleRequestId('details-edit-save'),
-        offerId: availability.offer.id,
-        offerVersion: availability.offer.version,
+        offerId: activeValidation.result.offer.id,
+        offerVersion: activeValidation.result.offer.version,
         optionId: selectedOption.id,
         reason: 'Appointment work/details updated',
         note: 'Edited from Live Scheduling appointment details.',
@@ -244,11 +368,11 @@ export function LiveAppointmentEditPanel({ appointment, onBack, onSaved }: Props
       });
       await onSaved();
     } catch (cause) {
-      setAvailability(null);
-      setSelectedOptionId('');
+      validationEpochRef.current += 1;
+      setValidated(null);
       setError(cause instanceof Error ? cause.message : 'The appointment changes could not be saved.');
     } finally {
-      setBusy(false);
+      setSaving(false);
     }
   };
 
@@ -260,7 +384,7 @@ export function LiveAppointmentEditPanel({ appointment, onBack, onSaved }: Props
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 6 }}>
           {presets.map((preset) => {
             const selected = lines.find((line) => line.presetId === preset.id);
-            return <button key={preset.id} type="button" className={styles.secondary} disabled={busy} onClick={() => addPreset(preset)} style={{ textAlign: 'left', padding: 9 }}>
+            return <button key={preset.id} type="button" className={styles.secondary} disabled={saving} onClick={() => addPreset(preset)} style={{ textAlign: 'left', padding: 9 }}>
               <strong style={{ display: 'block' }}>{preset.label}</strong>
               <span style={{ display: 'block', marginTop: 3, fontSize: 8, color: 'var(--muted)' }}>{isOtherPreset(preset) ? 'Manual scheduled time' : `${hoursLabel(preset.durationMinutesPerUnit)} / unit`}{selected ? ` · selected × ${selected.quantity}` : ''}</span>
             </button>;
@@ -273,29 +397,62 @@ export function LiveAppointmentEditPanel({ appointment, onBack, onSaved }: Props
           return <div key={line.id} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'center', border: '1px solid var(--line)', borderRadius: 8, padding: 9 }}>
             <div>
               <strong>{preset.label}</strong>
-              {isOtherPreset(preset) ? <label style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 6 }}><span style={{ fontSize: 8, color: 'var(--muted)' }}>Hours</span><input type="number" min={1} max={12} step={0.5} value={(line.manualDurationMinutes || 60) / 60} onChange={(event) => changeManualHours(line.id, Number(event.target.value))} style={{ width: 75 }} /></label> : <span style={{ display: 'block', marginTop: 3, fontSize: 8, color: 'var(--muted)' }}>{hoursLabel(preset.durationMinutesPerUnit)} each</span>}
+              {isOtherPreset(preset) ? <label style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 6 }}><span style={{ fontSize: 8, color: 'var(--muted)' }}>Hours</span><input type="number" min={1} max={12} step={0.5} disabled={saving} value={(line.manualDurationMinutes || 60) / 60} onChange={(event) => changeManualHours(line.id, Number(event.target.value))} style={{ width: 75 }} /></label> : <span style={{ display: 'block', marginTop: 3, fontSize: 8, color: 'var(--muted)' }}>{hoursLabel(preset.durationMinutesPerUnit)} each</span>}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              {!isOtherPreset(preset) ? <><button type="button" className={styles.secondary} onClick={() => changeQuantity(line.id, -1)} disabled={busy}>−</button><strong>{line.quantity}</strong><button type="button" className={styles.secondary} onClick={() => changeQuantity(line.id, 1)} disabled={busy}>＋</button></> : null}
-              <button type="button" className={styles.secondary} onClick={() => removeLine(line.id)} disabled={busy}>Remove</button>
+              {!isOtherPreset(preset) ? <><button type="button" className={styles.secondary} onClick={() => changeQuantity(line.id, -1)} disabled={saving}>−</button><strong>{line.quantity}</strong><button type="button" className={styles.secondary} onClick={() => changeQuantity(line.id, 1)} disabled={saving}>＋</button></> : null}
+              <button type="button" className={styles.secondary} onClick={() => removeLine(line.id)} disabled={saving}>Remove</button>
             </div>
           </div>;
         })}
 
         <div className={styles.formGrid}>
-          <label className={styles.wide}><span>Customer-facing work description</span><textarea rows={3} value={description} onChange={(event) => { setDescription(event.target.value); resetValidation(); }} /></label>
-          <label className={styles.wide}><span>Technician instructions</span><textarea rows={3} value={instructions} onChange={(event) => { setInstructions(event.target.value); resetValidation(); }} /></label>
+          <label className={styles.wide}><span>Customer-facing work description</span><textarea rows={3} disabled={saving} value={description} onChange={(event) => { setDescription(event.target.value); resetValidation(); }} /></label>
+          <label className={styles.wide}><span>Technician instructions</span><textarea rows={3} disabled={saving} value={instructions} onChange={(event) => { setInstructions(event.target.value); resetValidation(); }} /></label>
         </div>
 
-        {availability?.offer && selectedOption ? <div className={styles.descriptionPreview}><span>BOOKING AUTHORITY APPROVED</span><strong>{selectedOption.assignments?.[0]?.slots ?? 0} capacity spot(s) · {selectedOption.endTime ? `ends ${selectedOption.endTime}` : 'validated'}</strong></div> : null}
+        {checking ? <div className={styles.descriptionPreview}><span>CHECKING LIVE CAPACITY</span><strong>Booking Authority is validating this draft in the background. You can keep editing.</strong></div> : null}
+        {activeValidation?.result.offer && selectedOption ? <div className={styles.descriptionPreview} style={{ display: 'grid', gap: 8 }}>
+          <span>{optionSupportAssignment(selectedOption) ? 'BOOKING AUTHORITY APPROVED · VAN SUPPORT REQUIRED' : 'BOOKING AUTHORITY APPROVED'}</span>
+          {activeValidation.result.options.length > 1 ? <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 6 }}>
+            {activeValidation.result.options.map((option) => {
+              const support = optionSupportAssignment(option);
+              const selected = option.id === selectedOption.id;
+              return <button
+                type="button"
+                key={option.id}
+                className={styles.secondary}
+                disabled={saving}
+                onClick={() => setValidated((current) => current?.signature === signature ? { ...current, selectedOptionId: option.id } : current)}
+                style={{ textAlign: 'left', padding: 8, borderColor: selected ? 'var(--brand)' : undefined, background: selected ? 'var(--brand-soft)' : undefined }}
+              >
+                <strong style={{ display: 'block' }}>{support ? `${support.vanName || support.vanId} · support` : 'Primary allocation'}</strong>
+                <span style={{ display: 'block', marginTop: 3 }}>{support ? `${support.quantity} support service${support.quantity === 1 ? '' : 's'}` : 'No support Van required'}</span>
+              </button>;
+            })}
+          </div> : null}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(145px,1fr))', gap: 6 }}>
+            {selectedOption.assignments.map((assignment, index) => {
+              const support = optionAssignmentIsSupport(selectedOption, assignment);
+              const start = assignment.time || selectedOption.time;
+              const end = assignment.endTime || (support ? '' : selectedOption.endTime || '');
+              return <article key={`${assignment.vanId}-${start}-${index}`} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 8, background: 'var(--surface)' }}>
+                <span style={{ display: 'block' }}>{support ? 'SUPPORT' : 'PRIMARY / RESPONSIBLE'}</span>
+                <strong style={{ display: 'block', marginTop: 3 }}>{assignment.vanName || assignment.vanId}</strong>
+                <small style={{ display: 'block', marginTop: 3 }}>{assignment.quantity} service{assignment.quantity === 1 ? '' : 's'} · {formatTime(start)}{end ? `–${formatTime(end)}` : ''}</small>
+              </article>;
+            })}
+          </div>
+        </div> : null}
         {error ? <div className={styles.descriptionPreview}><span>ATTENTION</span><strong>{error}</strong></div> : null}
       </> : null}
     </div>
     <footer className={styles.drawerFooter}>
       <div><span>Schedule remains</span><strong>{appointment.dateKey} · {primary?.start || '—'} · {primary?.vanId?.replace('VAN-', 'Van ') || '—'}</strong></div>
       <div>
-        <button type="button" className={styles.secondary} disabled={busy} onClick={onBack}>Back</button>
-        {!availability?.offer ? <button type="button" className={styles.primary} disabled={busy || loading || !workValid} onClick={() => void validateChanges()}>{busy ? 'Validating…' : 'Validate changes'}</button> : <button type="button" className={styles.primary} disabled={busy} onClick={() => void saveChanges()}>{busy ? 'Saving…' : 'Save changes'}</button>}
+        <button type="button" className={styles.secondary} disabled={saving} onClick={onBack}>Back</button>
+        <button type="button" className={styles.secondary} disabled={saving || checking || loading || !workValid} onClick={() => void validateChanges(false)}>{checking ? 'Checking…' : 'Recheck now'}</button>
+        <button type="button" className={styles.primary} disabled={saving || checking || !activeValidation?.result.offer || !selectedOption} onClick={() => void saveChanges()}>{saving ? 'Saving…' : 'Save changes'}</button>
       </div>
     </footer>
   </section>;
