@@ -14,7 +14,7 @@ The relationship-model, security, and final-QA reviews were performed without ed
 ## Scope reviewed
 
 - Request/acceptance criteria: Search for an existing canonical customer while adding a commercial/property contact, link that person's identity without duplicating it, and retain the manual new-contact path.
-- Diff/commit: Local feature branch `fix/crm-link-existing-customer-contact-20260829`; remote PR and final commit evidence will be recorded before merge.
+- Diff/commit: PR #465, code head `0ca2229a6e3668c1a3d4d0f7ff28468572bad39a` before this evidence-only documentation update.
 - Affected callers/integrations: CRM Customer 360, Office Booking Authority master-data mutation, canonical contact directory, property contact assignments, and appointment recipient resolution.
 - Authorities and invariants: `clients` remains the identity owner; `contacts` stores only the relationship bridge; `contactPropertyAssignments` owns role, scope, property, and communication responsibilities; historical appointment recipient snapshots remain immutable.
 
@@ -51,7 +51,14 @@ The relationship-model, security, and final-QA reviews were performed without ed
   - Historical appointment recipient snapshots are not rewritten.
 - Build/deployment evidence:
   - Local Next.js compilation reached successful compile and TypeScript validation, then the Windows sandbox denied a worker spawn with `EPERM`; remote CI/Vercel is the authoritative production-build gate.
-  - Remote PR checks, production deployment, and production runtime inspection are pending and must be recorded before merge completion is reported.
+  - GitHub `TypeScript and web build validation` run `33258483092` — PASS.
+  - GitHub `Office Booking Authority` run `33258483080` — PASS.
+  - GitHub `ERP Next CI` run `33258483117` — PASS.
+  - GitHub `Customer Agent Architecture` run `33258483082` — PASS.
+  - GitHub `Transactional WhatsApp Production` run `33258483083` — PASS.
+  - Vercel web preview `dpl_HftovJeqY7vyLAm4ojs1s4ST8LUW` — READY.
+  - Vercel core preview `dpl_75fRAgZqNXyo1DrrtN5G9UQGquDE` — READY.
+  - Production deployment and runtime inspection are post-merge gates; completion will not be reported to the owner until both are verified.
 - Unverified areas:
   - The local in-app browser has no authenticated DEMAC production session, so the owner must perform the final authenticated interaction smoke after deployment.
 
