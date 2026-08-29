@@ -1,9 +1,16 @@
 import type { BookingContact, BookingContactAssignment, NewBookingContactLink } from './customer-contacts';
 import {
+  createOfficeCustomer,
   createOfficeCustomerWithProperty,
   createOfficeLifecycleRequestId,
   createOfficeProperty,
   listOfficeContactDirectory,
+  updateOfficeContact,
+  updateOfficeCustomer,
+  updateOfficeProperty,
+  type OfficeContactChanges,
+  type OfficeCustomerChanges,
+  type OfficePropertyChanges,
 } from './office-booking-authority';
 import {
   loadLiveSchedulingReferenceData,
@@ -24,10 +31,13 @@ export type BookingReferenceData = {
 export type NewBookingCustomer = {
   name: string;
   company?: string;
+  legalName?: string;
+  type?: string;
   phone: string;
   whatsapp?: string;
   email?: string;
   preferredLanguage?: string;
+  zone?: string;
 };
 
 export type NewBookingProperty = {
@@ -68,6 +78,76 @@ export function normalizeBookingPhone(value: string) {
   if (plus && digits) return `+${digits}`;
   if (digits.length === 7) return `+297${digits}`;
   return digits ? `+${digits}` : raw;
+}
+
+export async function createBookingCustomer(input: NewBookingCustomer) {
+  const result = await createOfficeCustomer({
+    requestId: createOfficeLifecycleRequestId('crm-customer'),
+    customer: {
+      name: text(input.name),
+      company: text(input.company),
+      legalName: text(input.legalName),
+      type: text(input.type),
+      phone: normalizeBookingPhone(input.phone),
+      whatsapp: normalizeBookingPhone(input.whatsapp || input.phone),
+      email: text(input.email),
+      preferredLanguage: text(input.preferredLanguage) || 'Papiamento',
+      zone: text(input.zone),
+    },
+  });
+  const customer = result.customer as unknown as BookingCustomer;
+  primeLiveSchedulingReferenceCache({ clients: [customer] });
+  return customer;
+}
+
+export async function updateBookingCustomer(
+  customerId: string,
+  changes: OfficeCustomerChanges,
+  expectedUpdatedAt: string,
+) {
+  const result = await updateOfficeCustomer({
+    requestId: createOfficeLifecycleRequestId('crm-customer-update'),
+    customerId,
+    changes,
+    expectedUpdatedAt,
+  });
+  const customer = result.customer as unknown as BookingCustomer;
+  primeLiveSchedulingReferenceCache({ clients: [customer] });
+  return customer;
+}
+
+export async function updateBookingProperty(
+  customerId: string,
+  propertyId: string,
+  changes: OfficePropertyChanges,
+  expectedUpdatedAt: string,
+) {
+  const result = await updateOfficeProperty({
+    requestId: createOfficeLifecycleRequestId('crm-property-update'),
+    customerId,
+    propertyId,
+    changes,
+    expectedUpdatedAt,
+  });
+  const property = result.property as unknown as BookingProperty;
+  primeLiveSchedulingReferenceCache({ properties: [property] });
+  return property;
+}
+
+export async function updateBookingContact(
+  customerId: string,
+  contactId: string,
+  changes: OfficeContactChanges,
+  expectedUpdatedAt: string,
+) {
+  const result = await updateOfficeContact({
+    requestId: createOfficeLifecycleRequestId('crm-contact-update'),
+    customerId,
+    contactId,
+    changes,
+    expectedUpdatedAt,
+  });
+  return result.contact;
 }
 
 export async function loadBookingReferenceData(): Promise<BookingReferenceData> {
@@ -123,10 +203,13 @@ export async function createBookingCustomerWithProperty(args: {
     customer: {
       name,
       company: text(args.customer.company),
+      legalName: text(args.customer.legalName),
+      type: text(args.customer.type),
       phone,
       whatsapp,
       email: text(args.customer.email),
       preferredLanguage: text(args.customer.preferredLanguage) || 'Papiamento',
+      zone: text(args.customer.zone),
     },
     property: {
       name: text(args.property.name),

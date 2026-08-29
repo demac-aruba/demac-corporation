@@ -20,6 +20,8 @@ export type LiveSchedulingClient = {
   id: string;
   name?: string;
   company?: string;
+  legalName?: string;
+  type?: string;
   phone?: string;
   phoneCountry?: string;
   whatsapp?: string;

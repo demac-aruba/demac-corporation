@@ -182,6 +182,83 @@ export type OfficeCreateAppointmentResult = {
 
 export type OfficeMasterDataRecord = Record<string, unknown> & { id: string };
 
+export type OfficeCustomerInput = {
+  name: string;
+  company?: string;
+  legalName?: string;
+  type?: string;
+  phone: string;
+  whatsapp?: string;
+  email?: string;
+  preferredLanguage?: string;
+  zone?: string;
+};
+
+export type OfficeCustomerRecord = OfficeMasterDataRecord & {
+  name: string;
+  company?: string;
+  legalName?: string;
+  type?: string;
+  phone: string;
+  phoneCountry?: string;
+  whatsapp?: string;
+  whatsappCountry?: string;
+  email?: string;
+  preferredLanguage?: string;
+  address?: string;
+  zone?: string;
+  balance?: number;
+  equipmentCount?: number;
+  active?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+  createdById?: string;
+  createdByName?: string;
+  updatedById?: string;
+  updatedByName?: string;
+};
+
+export type OfficeCustomerChanges = Partial<Pick<OfficeCustomerInput,
+  'name' | 'company' | 'legalName' | 'type' | 'phone' | 'whatsapp' | 'email' | 'preferredLanguage' | 'zone'
+>>;
+
+export type OfficePropertyRecord = OfficeMasterDataRecord & {
+  clientId: string;
+  name?: string;
+  type?: string;
+  address: string;
+  addressRaw?: string;
+  addressNormalized?: string;
+  neighborhood?: string;
+  zone: string;
+  operationalZone?: string;
+  notes?: string;
+  accessInstructions?: string;
+  landmark?: string;
+  active?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+  createdById?: string;
+  createdByName?: string;
+  updatedById?: string;
+  updatedByName?: string;
+};
+
+export type OfficePropertyChanges = Partial<Pick<OfficePropertyRecord,
+  'name' | 'type' | 'address' | 'neighborhood' | 'zone' | 'notes' | 'accessInstructions' | 'landmark'
+>>;
+
+export type OfficeContactRecord = BookingContact & {
+  createdById?: string;
+  createdByName?: string;
+  updatedById?: string;
+  updatedByName?: string;
+};
+
+export type OfficeContactChanges = Partial<Pick<OfficeContactRecord,
+  'name' | 'phone' | 'whatsapp' | 'email' | 'preferredLanguage' | 'active'
+>>;
+
 type ApiError = { error?: { code?: string; message?: string; details?: Record<string, unknown> } };
 type PresetResponse = {
   success: true;
@@ -225,7 +302,7 @@ async function callOfficeBookingAuthority<T>(action: string, data: Record<string
     return payload;
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error('Booking Authority took too long to respond. Nothing was saved. Refresh and try again.');
+      throw new Error('Booking Authority took too long to respond, so the outcome is not yet confirmed. Refresh before trying again.');
     }
     throw error;
   } finally {
@@ -262,16 +339,27 @@ export function listOfficeContactDirectory(customerId?: string) {
   }>('list_contact_directory', customerId ? { customerId } : {}, 8_000);
 }
 
+export function createOfficeCustomer(input: {
+  requestId: string;
+  customer: OfficeCustomerInput;
+}) {
+  return callOfficeBookingAuthority<{
+    success: true;
+    version: number;
+    customer: OfficeCustomerRecord;
+  }>('create_customer', input, 10_000);
+}
+
 export function createOfficeCustomerWithProperty(input: {
   requestId: string;
-  customer: Record<string, unknown>;
+  customer: OfficeCustomerInput;
   property: Record<string, unknown>;
 }) {
   return callOfficeBookingAuthority<{
     success: true;
     version: number;
-    customer: OfficeMasterDataRecord;
-    property: OfficeMasterDataRecord;
+    customer: OfficeCustomerRecord;
+    property: OfficePropertyRecord;
   }>('create_customer_property', input, 10_000);
 }
 
@@ -283,8 +371,49 @@ export function createOfficeProperty(input: {
   return callOfficeBookingAuthority<{
     success: true;
     version: number;
-    property: OfficeMasterDataRecord;
+    property: OfficePropertyRecord;
   }>('create_property', input, 10_000);
+}
+
+export function updateOfficeCustomer(input: {
+  requestId: string;
+  customerId: string;
+  changes: OfficeCustomerChanges;
+  expectedUpdatedAt: string;
+}) {
+  return callOfficeBookingAuthority<{
+    success: true;
+    version: number;
+    customer: OfficeCustomerRecord;
+  }>('update_customer', input, 10_000);
+}
+
+export function updateOfficeProperty(input: {
+  requestId: string;
+  customerId: string;
+  propertyId: string;
+  changes: OfficePropertyChanges;
+  expectedUpdatedAt: string;
+}) {
+  return callOfficeBookingAuthority<{
+    success: true;
+    version: number;
+    property: OfficePropertyRecord;
+  }>('update_property', input, 10_000);
+}
+
+export function updateOfficeContact(input: {
+  requestId: string;
+  customerId: string;
+  contactId: string;
+  changes: OfficeContactChanges;
+  expectedUpdatedAt: string;
+}) {
+  return callOfficeBookingAuthority<{
+    success: true;
+    version: number;
+    contact: OfficeContactRecord;
+  }>('update_contact', input, 10_000);
 }
 
 export function saveOfficeContactAssignment(input: {
