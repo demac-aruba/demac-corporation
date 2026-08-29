@@ -13,11 +13,38 @@ Do not rely on unversioned examples or remembered APIs.
 
 1. Read the request, this file, and any nearer `AGENTS.md`.
 2. Inspect Git status and the files that own the behavior. Preserve unrelated work.
-3. Identify the product surface, authority boundary, business-rule IDs, security
-   impact, and required quality gates before editing.
-4. Prefer the smallest reversible change. Do not deploy, migrate production data,
-   rotate secrets, or modify production configuration without explicit authority.
-5. Do not claim success without reporting the exact verification performed.
+3. Perform a short **Authority & Safety Check** before editing: identify the product surface,
+   source of truth, security/data risk, and whether the change can affect protected systems.
+4. Classify the work as LOW, MEDIUM, or HIGH risk using
+   [docs/ai/PROGRESSIVE_ENGINEERING.md](docs/ai/PROGRESSIVE_ENGINEERING.md).
+5. Prefer the smallest reversible change. Do not deploy, migrate production data, rotate
+   secrets, or modify production configuration without explicit authority.
+6. Do not claim success without reporting the exact verification performed.
+
+The Authority & Safety Check is intentionally short for ordinary product iteration. A full
+architecture review is normally deferred until the owner accepts the product behavior, unless
+risk requires deeper analysis before implementation.
+
+## Progressive engineering rule
+
+DEMAC uses **Progressive Engineering Assurance**. The normal sequence is:
+
+1. Authority & Safety Check.
+2. Functional Prototype / implementation.
+3. Focused verification sufficient for product evaluation.
+4. **🟡 READY FOR PRODUCT REVIEW** — the business owner validates behavior and UX.
+5. Iterate between implementation and product review until the owner confirms the module is
+   functionally and conceptually correct.
+6. Engineering Hardening — full architecture/integration review, regression coverage,
+   failure/recovery review, documentation, and adversarial review proportional to risk.
+7. Release Gate.
+8. **🟢 READY FOR MERGE**.
+9. Merge/deploy only after the applicable human approval boundary is satisfied.
+
+Do not perform expensive final hardening repeatedly while the product concept is still being
+changed. Do not use the prototype phase as permission to create duplicate authority, destructive
+writes, insecure paths, or knowingly broken architecture. High-risk work may require hardening
+controls earlier; see the progressive engineering document.
 
 ## Absolute quality-gate rule
 
@@ -25,30 +52,32 @@ Required tests and checks may never be disabled, skipped, weakened, deleted, wai
 or bypassed merely to obtain `PASS`. A failing required check must be fixed or explicitly
 escalated, and it remains `FAIL` until an authorized resolution is recorded.
 
+The set of **required** gates depends on the current stage and risk class. Product-review gates
+may be focused; merge/release gates remain strict.
+
 ## Branch and review policy
 
 - A Builder must never implement directly on `main`. Every implementation must use an
-  approved `feature/`, `fix/`, `chore/`, or other explicitly approved task branch.
+  approved `feature/`, `fix/`, `chore/`, `docs/`, or other explicitly approved task branch.
+- During the prototype/product-review loop, keep commits/checkpoints coherent and avoid pushing
+  every micro-edit merely to create a remote checkpoint.
 - When an independent qualified reviewer is available, prefer an independent review by
   someone who did not implement the reviewed change.
 - DEMAC is currently allowed to operate in **Solo Maintainer Review Mode** when no
   independent engineer/reviewer is reasonably available. In that mode, absence of an
   external reviewer must not block otherwise complete engineering work.
-- Solo Maintainer Review Mode requires a fresh adversarial review pass that is explicitly
-  separate from the implementation pass. The reviewer pass must re-read the request,
-  inspect the complete diff and affected callers, verify authority/security boundaries,
-  challenge concurrency/idempotency and failure/recovery behavior, run the applicable
-  quality gates, record findings, and state residual risk.
-- A solo-maintainer review must never be described as an "independent review." It is a
-  documented adversarial self-review under constrained team staffing.
-- The business owner is not required to act as a technical code reviewer. The owner's role
-  is to define/approve business intent and provide explicit human approval for actions that
-  cross the Human Approval Boundary; technical review evidence remains the maintainer's job.
-- Green CI alone is never sufficient review evidence.
+- Solo Maintainer Review Mode requires a fresh adversarial review pass during **Engineering
+  Hardening**, explicitly separate from the implementation pass. It must inspect the accepted
+  product behavior, complete diff, affected callers, authority/security boundaries,
+  concurrency/idempotency, failure/recovery behavior, applicable quality gates, findings, and
+  residual risk.
+- A solo-maintainer review must never be described as an "independent review."
+- The business owner is not required to act as a technical code reviewer. The owner's product
+  review approves intent/behavior; the maintainer remains responsible for technical evidence.
+- Green CI alone is never sufficient final review evidence.
 - Production deployment, destructive or irreversible actions, security/access changes,
   secret changes, destructive migrations, production-data deletion, and creation of a
-  new source of truth still require explicit human approval under the Human Approval
-  Boundary below.
+  new source of truth still require explicit human approval.
 
 ## Product boundaries
 
@@ -88,6 +117,23 @@ escalated, and it remains `FAIL` until an authorized resolution is recorded.
 - Any migration must be idempotent, dry-run capable, reconcilable, and paired with a
   rollback or forward-recovery plan.
 
+## Cost and build discipline
+
+Engineering safety does not require wasteful builds.
+
+- Prefer local/targeted validation during active iteration.
+- Batch coherent changes before pushing; do not push each small UI/text/test edit separately.
+- Do not trigger full CI, preview deployments, or production-like builds repeatedly before
+  product acceptance unless the risk class requires them.
+- Documentation-only changes require documentation checks, not application builds, unless the
+  documentation change alters generated/runtime artifacts.
+- Configure and preserve build-ignore/path filters where supported so unrelated apps and
+  docs-only commits do not consume build resources.
+- In a multi-project repository, only applications affected by the diff should build when the
+  platform supports selective builds.
+- A final release-quality build still must run before merge when required by
+  [docs/ai/QUALITY_GATES.md](docs/ai/QUALITY_GATES.md).
+
 ## Human approval boundary
 
 Explicit human approval is required before any destructive database/data migration,
@@ -107,26 +153,36 @@ unreferenced may be removed, and only within an approved task. `UNKNOWN` blocks 
 
 Use the role contracts in `docs/ai/roles/` as review lenses. In Solo Maintainer Review
 Mode, one person or agent may perform both Builder and Reviewer passes, but the evidence
-must remain explicitly separated and the reviewer pass must not be represented as
-independent.
+must remain explicitly separated during Engineering Hardening.
 
-1. Define the task with `docs/ai/templates/TASK_TEMPLATE.md`.
-2. Map affected authorities, rules, parity obligations, failure modes, and risks.
-3. Implement the narrowest coherent change.
-4. Run the applicable gates in [docs/ai/QUALITY_GATES.md](docs/ai/QUALITY_GATES.md).
-5. Review with `docs/ai/templates/REVIEW_TEMPLATE.md` using either Independent Review or
-   Solo Maintainer Adversarial Review mode.
-6. Record durable architecture decisions with `docs/ai/templates/ADR_TEMPLATE.md`.
-7. Update the AI engineering documents when evidence changes them.
+1. Create a lightweight task record when useful; do not require a long task document for every
+   small product iteration.
+2. Perform the Authority & Safety Check and risk classification.
+3. Implement the narrowest coherent prototype/change.
+4. Run product-review gates from [docs/ai/QUALITY_GATES.md](docs/ai/QUALITY_GATES.md).
+5. Present **🟡 READY FOR PRODUCT REVIEW** and iterate until the owner accepts the behavior.
+6. Run Engineering Hardening proportional to risk: architecture/integration review, required
+   regressions, documentation/rule updates, failure/recovery analysis, and review using
+   `docs/ai/templates/REVIEW_TEMPLATE.md`.
+7. Run final release gates.
+8. Present **🟢 READY FOR MERGE** only when release criteria are satisfied.
+9. Record durable architecture decisions with `docs/ai/templates/ADR_TEMPLATE.md` when a real
+   architecture decision is made; do not create ADRs for routine UI/product iteration.
 
 ## Definition of done
 
-A change is done only when scope and acceptance criteria are satisfied; permissions
-and failure behavior are explicit; relevant automated and manual checks pass; no
-unrelated files changed; documentation is current; and remaining risk is stated.
+A prototype is ready for product review when the requested concept is coherent enough to test,
+the authority/safety boundary is respected, focused verification passes, and known limitations
+are stated.
+
+A change is ready for merge only when the owner-accepted behavior is preserved through
+Engineering Hardening; permissions and failure behavior are explicit; applicable final automated
+and manual checks pass; no unrelated files changed; documentation is current where evidence
+requires it; and remaining risk is stated.
 
 Repository guidance:
 
+- [Progressive engineering](docs/ai/PROGRESSIVE_ENGINEERING.md)
 - [System map](docs/ai/SYSTEM_MAP.md)
 - [Authority matrix](docs/ai/AUTHORITY_MATRIX.md)
 - [Business rules](docs/ai/BUSINESS_RULES.md)
