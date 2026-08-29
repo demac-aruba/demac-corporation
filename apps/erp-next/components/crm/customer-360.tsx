@@ -25,6 +25,7 @@ import { defaultContactCommunicationRules } from '@/lib/customer-contacts';
 import {
   CustomerEditorDrawer,
   CustomerMasterDataTab,
+  type ContactCustomerCandidate,
   type ContactEditorValue,
   type CustomerEditorValue,
   type PropertyEditorValue,
@@ -145,6 +146,18 @@ export function Customer360() {
   const graphs = useMemo(() => snapshot ? searchLiveCrmCustomers(snapshot, query, { includeInactive: true }) : [], [query, snapshot]);
   const allGraphs = useMemo(() => snapshot ? joinLiveCrmCustomers(snapshot, true) : [], [snapshot]);
   const activeGraphs = useMemo(() => allGraphs.filter((graph) => graph.client.active !== false), [allGraphs]);
+  const contactCustomerCandidates = useMemo<ContactCustomerCandidate[]>(() => allGraphs.map((graph) => ({
+    id: graph.client.id,
+    active: graph.client.active !== false,
+    name: text(graph.client.name) || customerLabel(graph.client),
+    company: text(graph.client.company),
+    type: text(graph.client.type),
+    phone: text(graph.client.phone),
+    whatsapp: text(graph.client.whatsapp),
+    email: text(graph.client.email),
+    preferredLanguage: text(graph.client.preferredLanguage) || 'Papiamento',
+    propertyLabels: graph.properties.filter((property) => property.active !== false).flatMap((property) => [text(property.name), text(property.address), text(property.neighborhood), text(property.zone)]).filter(Boolean),
+  })), [allGraphs]);
   const selected = useMemo(() => snapshot && selectedId ? joinLiveCrmCustomer(snapshot, selectedId) : null, [selectedId, snapshot]);
   const totals = useMemo(() => ({
     customers: activeGraphs.length,
@@ -214,7 +227,9 @@ export function Customer360() {
       customerId: selected.client.id,
       propertyId: value.propertyId,
       link: {
-        contact: { name: value.name, phone: value.phone, whatsapp: value.whatsapp || value.phone, email: value.email, preferredLanguage: value.preferredLanguage },
+        ...(value.linkedCustomerId
+          ? { linkedCustomerId: value.linkedCustomerId }
+          : { contact: { name: value.name, phone: value.phone, whatsapp: value.whatsapp || value.phone, email: value.email, preferredLanguage: value.preferredLanguage } }),
         scope: value.scope,
         role: value.role,
         ...defaultContactCommunicationRules,
@@ -265,7 +280,7 @@ export function Customer360() {
         </aside>
 
         <main className={styles.customerDetail}>
-          {loading && !snapshot ? <LoadingPanel /> : loadError && !snapshot ? <LoadFailurePanel onRetry={() => { setLoading(true); void refresh().catch(() => undefined); }} /> : selected ? <CustomerDetail graph={selected} activeTab={activeTab} onTab={setActiveTab} onEdit={() => setCustomerEditor({ mode: 'edit', requestId: createOfficeLifecycleRequestId('crm-customer-update'), initial: editorValue(selected.client) })} onAddContact={addContact} onUpdateContact={updateContact} onAddProperty={addProperty} onUpdateProperty={updateProperty} /> : <EmptyCustomerPanel onCreate={() => setCustomerEditor({ mode: 'create', requestId: createOfficeLifecycleRequestId('crm-customer-create') })} />}
+          {loading && !snapshot ? <LoadingPanel /> : loadError && !snapshot ? <LoadFailurePanel onRetry={() => { setLoading(true); void refresh().catch(() => undefined); }} /> : selected ? <CustomerDetail graph={selected} customerCandidates={contactCustomerCandidates} activeTab={activeTab} onTab={setActiveTab} onEdit={() => setCustomerEditor({ mode: 'edit', requestId: createOfficeLifecycleRequestId('crm-customer-update'), initial: editorValue(selected.client) })} onAddContact={addContact} onUpdateContact={updateContact} onAddProperty={addProperty} onUpdateProperty={updateProperty} /> : <EmptyCustomerPanel onCreate={() => setCustomerEditor({ mode: 'create', requestId: createOfficeLifecycleRequestId('crm-customer-create') })} />}
         </main>
 
         <aside className={styles.intelligenceRail}>
@@ -284,7 +299,7 @@ export function Customer360() {
   );
 }
 
-function CustomerDetail({ graph, activeTab, onTab, onEdit, onAddContact, onUpdateContact, onAddProperty, onUpdateProperty }: { graph: LiveCrmCustomerGraph; activeTab: Tab; onTab: (tab: Tab) => void; onEdit: () => void; onAddContact: (value: ContactEditorValue) => Promise<void>; onUpdateContact: (value: ContactEditorValue) => Promise<void>; onAddProperty: (value: PropertyEditorValue) => Promise<void>; onUpdateProperty: (value: PropertyEditorValue) => Promise<void> }) {
+function CustomerDetail({ graph, customerCandidates, activeTab, onTab, onEdit, onAddContact, onUpdateContact, onAddProperty, onUpdateProperty }: { graph: LiveCrmCustomerGraph; customerCandidates: ContactCustomerCandidate[]; activeTab: Tab; onTab: (tab: Tab) => void; onEdit: () => void; onAddContact: (value: ContactEditorValue) => Promise<void>; onUpdateContact: (value: ContactEditorValue) => Promise<void>; onAddProperty: (value: PropertyEditorValue) => Promise<void>; onUpdateProperty: (value: PropertyEditorValue) => Promise<void> }) {
   const label = customerLabel(graph.client);
   const whatsapp = (text(graph.client.whatsapp) || text(graph.client.phone)).replace(/\D/g, '');
   return <>
@@ -304,7 +319,7 @@ function CustomerDetail({ graph, activeTab, onTab, onEdit, onAddContact, onUpdat
 
     <nav className={styles.tabs} aria-label="Customer sections">{tabs.map((tab) => <button key={tab} type="button" className={activeTab === tab ? styles.tabActive : ''} onClick={() => onTab(tab)}>{tab}</button>)}</nav>
     {activeTab === 'Overview' ? <Overview graph={graph} onEdit={onEdit} onViewProperties={() => onTab('Properties')} onViewJobs={() => onTab('Jobs')} /> : null}
-    {activeTab === 'Contacts' || activeTab === 'Properties' || activeTab === 'Equipment' ? <CustomerMasterDataTab key={`${graph.client.id}-${activeTab}`} tab={activeTab} graph={graph} onAddContact={onAddContact} onUpdateContact={onUpdateContact} onAddProperty={onAddProperty} onUpdateProperty={onUpdateProperty} /> : null}
+    {activeTab === 'Contacts' || activeTab === 'Properties' || activeTab === 'Equipment' ? <CustomerMasterDataTab key={`${graph.client.id}-${activeTab}`} tab={activeTab} graph={graph} customerCandidates={customerCandidates} onAddContact={onAddContact} onUpdateContact={onUpdateContact} onAddProperty={onAddProperty} onUpdateProperty={onUpdateProperty} /> : null}
     {activeTab === 'Jobs' ? <JobsPanel graph={graph} /> : null}
   </>;
 }
