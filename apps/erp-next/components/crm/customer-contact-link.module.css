@@ -1,33 +1,4 @@
-.identityMode {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  margin-bottom: 18px;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface-2);
-}
-
-.identityMode button {
-  border: 0;
-  border-radius: 9px;
-  padding: 10px 12px;
-  color: var(--muted);
-  background: transparent;
-  font-size: 8px;
-  font-weight: 850;
-  cursor: pointer;
-}
-
-.identityMode button.identityModeActive {
-  color: var(--brand);
-  background: var(--surface);
-  box-shadow: 0 1px 5px rgba(7, 15, 28, .1);
-}
-
 .customerLookup {
-  position: relative;
   padding: 15px;
 }
 
@@ -60,20 +31,67 @@
 }
 
 .customerResults {
-  position: absolute;
-  z-index: 4;
-  top: 72px;
-  right: 15px;
-  left: 15px;
   max-height: 300px;
   overflow: auto;
-  margin: 0;
+  margin: 8px 0 0;
   padding: 5px;
   list-style: none;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface);
   box-shadow: 0 16px 38px rgba(7, 15, 28, .18);
+}
+
+.inlineAction {
+  margin-top: 8px;
+  border: 0;
+  padding: 6px 2px;
+  color: var(--brand);
+  background: transparent;
+  font-size: 8px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.manualEditor {
+  margin-top: 9px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--brand) 24%, var(--border));
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.manualEditor > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--brand-soft);
+}
+
+.manualEditor > header strong,
+.manualEditor > header span {
+  display: block;
+}
+
+.manualEditor > header strong {
+  font-size: 9px;
+}
+
+.manualEditor > header span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 7px;
+}
+
+.manualEditor > header button {
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  font-size: 17px;
+  cursor: pointer;
 }
 
 .customerResults li {
@@ -179,10 +197,6 @@
 }
 
 @media (max-width: 700px) {
-  .identityMode {
-    grid-template-columns: 1fr;
-  }
-
   .selectedIdentity {
     grid-template-columns: 42px minmax(0, 1fr);
   }
