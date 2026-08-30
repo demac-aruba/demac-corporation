@@ -59,7 +59,7 @@ export const navigationGroups: NavigationGroup[] = [
   {
     label: 'Inventory',
     items: [
-      { label: 'Warehouse', href: '/inventory', short: 'WH', roles: ['super_admin', 'operations', 'warehouse'] },
+      { label: 'Inventory', href: '/inventory', short: 'IN', roles: ['super_admin', 'operations', 'warehouse'] },
       { label: 'Vans', href: '/vans', short: 'VA', roles: ['super_admin', 'operations', 'warehouse'] },
       { label: 'Purchasing', href: '/purchasing', short: 'PU', roles: ['super_admin', 'operations', 'warehouse', 'finance'] },
       { label: 'Tools', href: '/tools', short: 'TO', roles: ['super_admin', 'operations', 'warehouse'] },

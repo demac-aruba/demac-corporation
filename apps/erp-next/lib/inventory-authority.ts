@@ -28,6 +28,7 @@ export type InventoryItem = {
 export type InventoryToolCatalogItem = {
   id: string;
   name?: string;
+  description?: string;
   category?: string;
   trackingMode?: 'individual' | 'quantity';
   standardCost?: number;
@@ -39,7 +40,11 @@ export type InventoryToolAsset = {
   toolCatalogId?: string;
   assetCode?: string;
   trackingMode?: 'individual' | 'quantity';
+  unitNumber?: number;
   quantity?: number;
+  quantityExpected?: number;
+  quantityPresent?: number;
+  purchaseCost?: number;
   vanId?: string;
   locationType?: 'van' | 'warehouse' | 'office';
   locationId?: string;
@@ -50,6 +55,17 @@ export type InventoryToolAsset = {
   assigned?: boolean;
   active?: boolean;
   latestPhotoUrl?: string;
+  latestPhotoStoragePath?: string;
+  latestPhotoAt?: string;
+  latestThumbnailUrl?: string;
+  latestThumbnailStoragePath?: string;
+  latestThumbnailSourcePhotoPath?: string;
+  latestThumbnailSizeBytes?: number;
+  latestThumbnailWidth?: number;
+  latestThumbnailHeight?: number;
+  notes?: string;
+  createdAt?: string;
+  updatedAt?: string;
 };
 export type InventoryTransferStatus = 'requested' | 'in_transit' | 'completed' | 'cancelled';
 export type InventoryTransferLine = {
@@ -115,6 +131,35 @@ export type InventoryReplenishment = {
   target: number;
   needed: number;
 };
+export type AddInventoryToolToVanInput = {
+  requestId: string;
+  vanId: string;
+  toolCatalogId?: string;
+  newCatalog?: {
+    name: string;
+    description?: string;
+    category: string;
+    standardCost: number;
+    trackingMode: 'individual' | 'quantity';
+    recommendedQuantity: number;
+  };
+  condition: string;
+  purchaseCost?: number;
+  quantity: number;
+  notes?: string;
+  photoUrl: string;
+  photoStoragePath: string;
+  thumbnailUrl?: string;
+  thumbnailStoragePath?: string;
+};
+export type AddInventoryToolToVanResult = {
+  success: true;
+  version: number;
+  catalog: InventoryToolCatalogItem;
+  asset: InventoryToolAsset;
+  movement: InventoryMovement;
+  replayed?: boolean;
+};
 export type InventorySnapshot = {
   success: true;
   version: number;
@@ -171,6 +216,9 @@ export function setInventoryStockLevel(input: { requestId: string; itemKind: Inv
 export function setInventoryLocationPolicy(input: { requestId: string; itemKind: InventoryItemKind; itemId: string; locationId: string; minimum: number; target: number }) {
   return callInventoryAuthority('set_location_policy', input, 12_000);
 }
+export function updateInventoryLocationState(input: { requestId: string; itemKind: InventoryItemKind; itemId: string; locationId: string; onHand: number; minimum: number; target: number; reason?: string }) {
+  return callInventoryAuthority('update_location_inventory_state', input, 12_000);
+}
 export function allocateLegacyProductStock(input: { requestId: string; itemId: string; allocations: Array<{ locationId: string; quantity: number }> }) {
   return callInventoryAuthority('allocate_legacy_product_stock', input, 12_000);
 }
@@ -186,8 +234,14 @@ export function receiveInventoryTransfer(input: { requestId: string; transferId:
 export function cancelInventoryTransfer(input: { requestId: string; transferId: string; reason?: string }) {
   return callInventoryAuthority<{ success: true; transfer: InventoryTransfer }>('cancel_transfer', input, 12_000);
 }
-export function moveInventoryTool(input: { requestId: string; assetId: string; destinationLocationId: string; reason?: string }) {
+export function moveInventoryTool(input: { requestId: string; assetId: string; destinationLocationId: string; reason: string }) {
   return callInventoryAuthority('move_tool_asset', input, 12_000);
+}
+export function addInventoryToolToVan(input: AddInventoryToolToVanInput) {
+  return callInventoryAuthority<AddInventoryToolToVanResult>('add_tool_to_van', input, 15_000);
+}
+export function updateInventoryToolDetails(input: { requestId: string; assetId: string; condition?: string; notes?: string; purchaseCost?: number; quantityExpected?: number; quantityPresent?: number }) {
+  return callInventoryAuthority<{ success: true; version: number; asset: InventoryToolAsset; movement?: InventoryMovement; replayed?: boolean }>('update_tool_asset_details', input, 12_000);
 }
 export function issueInventoryToWorkOrder(input: { requestId: string; itemKind: InventoryItemKind; itemId: string; locationId: string; workOrderId: string; quantity: number; reason?: string }) {
   return callInventoryAuthority('issue_to_work_order', input, 12_000);

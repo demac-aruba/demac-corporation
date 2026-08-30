@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <title>Interactive Mobile Preview · DEMAC ERP</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --bg: #f5f7fb;
+      --surface: #fff;
+      --text: #122033;
+      --muted: #69778a;
+      --border: #dce4ee;
+      --brand: #1769e0;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(49, 132, 245, .12), transparent 30rem),
+        var(--bg);
+    }
+
+    .toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      min-height: 76px;
+      padding: 12px 24px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255, 255, 255, .94);
+      box-shadow: 0 8px 24px rgba(27, 47, 74, .06);
+      backdrop-filter: blur(18px);
+    }
+
+    .heading { display: flex; align-items: center; gap: 11px; }
+    .brand-mark {
+      width: 40px;
+      height: 40px;
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      border-radius: 13px;
+      color: #fff;
+      background: linear-gradient(135deg, var(--brand), #67b5ff);
+      font-size: 15px;
+      font-weight: 900;
+      box-shadow: 0 9px 24px rgba(23, 105, 224, .28);
+    }
+    .heading strong, .heading span { display: block; }
+    .heading strong { font-size: 13px; }
+    .heading div > span { margin-top: 3px; color: var(--muted); font-size: 10px; }
+
+    .controls {
+      display: flex;
+      align-items: flex-end;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    label { display: grid; gap: 4px; }
+    label > span {
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    select, button, .exit {
+      min-height: 38px;
+      border: 1px solid #ccd6e3;
+      border-radius: 10px;
+      color: var(--text);
+      background: var(--surface);
+      padding: 0 12px;
+      font: inherit;
+      font-size: 10px;
+      font-weight: 800;
+      box-shadow: 0 8px 24px rgba(27, 47, 74, .05);
+    }
+    select, button { cursor: pointer; }
+    .exit {
+      display: inline-flex;
+      align-items: center;
+      border-color: var(--brand);
+      color: #fff;
+      background: var(--brand);
+      text-decoration: none;
+    }
+
+    .stage {
+      min-width: min-content;
+      min-height: calc(100vh - 76px);
+      display: grid;
+      justify-items: center;
+      align-items: start;
+      overflow: auto;
+      padding: 28px 28px 56px;
+    }
+    .device-wrap { display: grid; justify-items: center; gap: 12px; }
+    .phone {
+      padding: 12px;
+      border: 1px solid #2c3d55;
+      border-radius: 34px;
+      background: linear-gradient(145deg, #17263a, #07111f);
+      box-shadow: 0 28px 80px rgba(8, 19, 35, .32);
+    }
+    .speaker {
+      width: 68px;
+      height: 5px;
+      margin: 0 auto 9px;
+      border-radius: 999px;
+      background: #546276;
+    }
+    .screen {
+      width: 390px;
+      height: 844px;
+      overflow: hidden;
+      border-radius: 23px;
+      background: #fff;
+      transition: width 180ms ease, height 180ms ease;
+    }
+    iframe { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
+    .viewport-label { margin: 0; color: var(--muted); font-size: 10px; font-weight: 750; }
+
+    @media (max-width: 760px) {
+      .toolbar { position: static; align-items: flex-start; flex-direction: column; padding: 14px; }
+      .controls { justify-content: flex-start; }
+      .stage { padding: 18px 14px 40px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="toolbar">
+    <div class="heading">
+      <span class="brand-mark">D</span>
+      <div>
+        <strong>Interactive mobile preview</strong>
+        <span>Live ERP · Inventory Control</span>
+      </div>
+    </div>
+
+    <div class="controls">
+      <label>
+        <span>Device</span>
+        <select id="device">
+          <option value="390x844">Standard phone · 390 × 844</option>
+          <option value="360x800">Compact phone · 360 × 800</option>
+          <option value="430x932">Large phone · 430 × 932</option>
+        </select>
+      </label>
+      <button id="rotate" type="button">Rotate</button>
+      <button id="reload" type="button">Reload</button>
+      <a class="exit" href="/inventory/">Exit preview</a>
+    </div>
+  </header>
+
+  <main class="stage">
+    <div class="device-wrap">
+      <div class="phone">
+        <div class="speaker" aria-hidden="true"></div>
+        <div id="screen" class="screen">
+          <iframe id="erp" src="/inventory/" title="DEMAC Inventory mobile preview"></iframe>
+        </div>
+      </div>
+      <p id="viewport" class="viewport-label">Live viewport · 390 × 844 px</p>
+    </div>
+  </main>
+
+  <script>
+    const device = document.querySelector('#device');
+    const screen = document.querySelector('#screen');
+    const frame = document.querySelector('#erp');
+    const viewport = document.querySelector('#viewport');
+    let landscape = false;
+
+    function applyViewport() {
+      const [deviceWidth, deviceHeight] = device.value.split('x').map(Number);
+      const width = landscape ? deviceHeight : deviceWidth;
+      const height = landscape ? deviceWidth : deviceHeight;
+      screen.style.width = `${width}px`;
+      screen.style.height = `${height}px`;
+      viewport.textContent = `Live viewport · ${width} × ${height} px`;
+    }
+
+    device.addEventListener('change', applyViewport);
+    document.querySelector('#rotate').addEventListener('click', () => {
+      landscape = !landscape;
+      applyViewport();
+    });
+    document.querySelector('#reload').addEventListener('click', () => {
+      frame.contentWindow.location.reload();
+    });
+  </script>
+</body>
+</html>
+

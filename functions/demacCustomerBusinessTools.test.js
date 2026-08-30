@@ -80,6 +80,7 @@ test("defines lead, catalog and price as strict business tools", () => {
 test("defines ERP product catalog and stock as strict sales tools", () => {
   assert.deepEqual(CUSTOMER_SALES_TOOL_DEFINITIONS.map((item) => item.name), ["get_product_catalog", "get_product_stock"]);
   assert.ok(CUSTOMER_SALES_TOOL_DEFINITIONS.every((item) => item.strict));
+  assert.deepEqual(CUSTOMER_SALES_TOOL_DEFINITIONS[1].parameters.required, ["productId"]);
 });
 
 test("catalog returns configured presets with ERP service ids", async () => {
@@ -162,36 +163,93 @@ test("product catalog refuses a fabricated fallback when no active products exis
 test("product stock returns only verified available quantity and never claims a reservation", async () => {
   const db = new FakeDb({
     services: [activeProduct("p12")],
-    commercialProductStock: [{ id: "p12", productId: "p12", onHand: 5, reserved: 2, active: true, verifiedAt: "2026-08-17T11:00:00Z" }],
+    commercialProductStock: [{
+      id: "p12", productId: "p12", onHand: 999, reserved: 998, active: true,
+      balances: {
+        "WH-MAIN": { onHand: 5, reserved: 2, minimum: 0, target: 0 },
+        "OFFICE-MAIN": { onHand: 3, reserved: 1, minimum: 0, target: 0 },
+      },
+      verifiedAt: "2026-08-17T11:00:00Z",
+    }],
   });
   const result = await createCustomerSalesTools({ db }).getProductStock({ productId: "p12" });
   assert.equal(result.success, true);
   assert.equal(result.configured, true);
   assert.equal(result.stockVerified, true);
-  assert.equal(result.onHand, 5);
-  assert.equal(result.reserved, 2);
-  assert.equal(result.available, 3);
+  assert.equal(result.onHand, 8);
+  assert.equal(result.reserved, 3);
+  assert.equal(result.available, 5);
+  assert.equal(result.aggregateOnHand, 8);
+  assert.equal(result.aggregateReserved, 3);
+  assert.deepEqual(result.locations.map((location) => location.id).sort(), ["OFFICE-MAIN", "WH-MAIN"]);
+  assert.deepEqual(result.locations.find((location) => location.id === "WH-MAIN"), {
+    id: "WH-MAIN", name: "Main Warehouse", type: "warehouse", onHand: 5, reserved: 2, available: 3,
+  });
   assert.equal(result.inStock, true);
   assert.equal(result.reservationRequired, true);
   assert.equal(result.stockReservedForCustomer, false);
   assert.equal(result.verifiedAt, "2026-08-17T11:00:00.000Z");
+
+  const filtered = await createCustomerSalesTools({ db }).getProductStock({ productId: "p12", sourceLocationId: "WH-MAIN" });
+  assert.equal(filtered.onHand, 5);
+  assert.equal(filtered.reserved, 2);
+  assert.equal(filtered.available, 3);
+  assert.equal(filtered.locations.length, 1);
+  assert.equal(filtered.sourceLocationId, "WH-MAIN");
 });
 
 test("product stock refuses a fabricated fallback when no stock record exists", async () => {
   const db = new FakeDb({ services: [activeProduct("p12")] });
-  const result = await createCustomerSalesTools({ db }).getProductStock({ productId: "p12" });
+  const result = await createCustomerSalesTools({ db }).getProductStock({ productId: "p12", sourceLocationId: "WH-MAIN" });
   assert.equal(result.success, false);
   assert.equal(result.configured, false);
   assert.equal(result.stockVerified, false);
   assert.equal(result.error.code, "product_stock_not_configured");
 });
 
+test("product stock rejects aggregate-only legacy rows even during location discovery", async () => {
+  const db = new FakeDb({
+    services: [activeProduct("p12")],
+    commercialProductStock: [{
+      id: "p12", productId: "p12", onHand: 5, reserved: 0, active: true,
+      verifiedAt: "2026-08-17T11:00:00Z",
+    }],
+  });
+  const legacy = await createCustomerSalesTools({ db }).getProductStock({ productId: "p12" });
+  assert.equal(legacy.success, false);
+  assert.equal(legacy.error.code, "product_stock_location_balances_required");
+});
+
+test("location discovery excludes inactive Vans and exact filtering validates them", async () => {
+  const db = new FakeDb({
+    services: [activeProduct("p12")],
+    commercialProductStock: [{
+      id: "p12", productId: "p12", active: true, verifiedAt: "2026-08-17T11:00:00Z",
+      balances: {
+        "WH-MAIN": { onHand: 2, reserved: 0, minimum: 0, target: 0 },
+        "VAN-OFF": { onHand: 5, reserved: 0, minimum: 0, target: 0 },
+      },
+    }],
+    vans: [{ id: "VAN-OFF", name: "Van Off", active: false }],
+  });
+  const discovered = await createCustomerSalesTools({ db }).getProductStock({ productId: "p12" });
+  assert.deepEqual(discovered.locations.map((location) => location.id), ["WH-MAIN"]);
+  assert.equal(discovered.aggregateOnHand, 7);
+  const filtered = await createCustomerSalesTools({ db }).getProductStock({ productId: "p12", sourceLocationId: "VAN-OFF" });
+  assert.equal(filtered.success, false);
+  assert.equal(filtered.error.code, "invalid_source_location");
+});
+
 test("product stock fails closed when quantities are inconsistent", async () => {
   const db = new FakeDb({
     services: [activeProduct("p12")],
-    commercialProductStock: [{ id: "p12", productId: "p12", onHand: 2, reserved: 3, active: true, verifiedAt: "2026-08-17T11:00:00Z" }],
+    commercialProductStock: [{
+      id: "p12", productId: "p12", active: true,
+      balances: { "WH-MAIN": { onHand: 2, reserved: 3, minimum: 0, target: 0 } },
+      verifiedAt: "2026-08-17T11:00:00Z",
+    }],
   });
-  const result = await createCustomerSalesTools({ db }).getProductStock({ productId: "p12" });
+  const result = await createCustomerSalesTools({ db }).getProductStock({ productId: "p12", sourceLocationId: "WH-MAIN" });
   assert.equal(result.success, false);
   assert.equal(result.configured, true);
   assert.equal(result.stockVerified, false);
@@ -201,9 +259,12 @@ test("product stock fails closed when quantities are inconsistent", async () => 
 test("product stock requires an explicit verification timestamp", async () => {
   const db = new FakeDb({
     services: [activeProduct("p12")],
-    commercialProductStock: [{ id: "p12", productId: "p12", onHand: 2, reserved: 0, active: true }],
+    commercialProductStock: [{
+      id: "p12", productId: "p12", active: true,
+      balances: { "WH-MAIN": { onHand: 2, reserved: 0, minimum: 0, target: 0 } },
+    }],
   });
-  const result = await createCustomerSalesTools({ db }).getProductStock({ productId: "p12" });
+  const result = await createCustomerSalesTools({ db }).getProductStock({ productId: "p12", sourceLocationId: "WH-MAIN" });
   assert.equal(result.success, false);
   assert.equal(result.configured, true);
   assert.equal(result.stockVerified, false);
