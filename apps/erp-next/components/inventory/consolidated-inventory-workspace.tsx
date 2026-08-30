@@ -329,6 +329,7 @@ export function ConsolidatedInventoryWorkspace() {
   const activeVanReplenishment = activeVan ? (snapshot?.replenishment ?? []).filter((row) => row.locationId === activeVan.id) : [];
   const activeVanMovements = activeVan ? (snapshot?.movements ?? []).filter((row) => row.sourceLocationId === activeVan.id || row.destinationLocationId === activeVan.id) : [];
   const activeVanMissingTools = activeVanTools.filter((asset) => toolMissingQuantity(asset) > 0);
+  const addToolWriteAvailable = (snapshot?.version ?? 0) >= 2;
   const activeToolCatalog = [...(snapshot?.toolCatalog ?? [])]
     .filter((catalog) => catalog.active !== false)
     .sort((a, b) => toolCatalogName(a).localeCompare(toolCatalogName(b), undefined, { numeric: true, sensitivity: 'base' }));
@@ -855,7 +856,7 @@ export function ConsolidatedInventoryWorkspace() {
             </label>{uploadedToolPhoto ? <p className={styles.photoUploadState}>Photo and thumbnail uploaded. Ready to finish.</p> : null}</section>
           </> : <p className={styles.addToolPrompt}>Choose a shared template above or create a new one to continue.</p>}
         </div>
-        <footer className={styles.addToolFooter}><span>{addToolStage || 'A new physical asset will be recorded in the selected Van.'}</span><div><button type="button" disabled={Boolean(addToolStage)} onClick={closeAddTool}>Cancel</button><button type="button" className={styles.primary} disabled={Boolean(addToolStage) || !hasTemplateChoice} onClick={() => void submitAddTool()}>{addToolStage || 'Add Tool'}</button></div></footer>
+        <footer className={styles.addToolFooter}><span>{addToolStage || (addToolWriteAvailable ? 'A new physical asset will be recorded in the selected Van.' : 'Preview ready · final saving activates with Inventory Authority v2.')}</span><div><button type="button" disabled={Boolean(addToolStage)} onClick={closeAddTool}>Cancel</button><button type="button" className={styles.primary} disabled={Boolean(addToolStage) || !hasTemplateChoice || !addToolWriteAvailable} onClick={() => void submitAddTool()}>{addToolStage || 'Add Tool'}</button></div></footer>
       </section>
     </div>;
   }

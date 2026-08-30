@@ -3,7 +3,7 @@ const { onRequest } = require("firebase-functions/v2/https");
 const { getAuth } = require("firebase-admin/auth");
 const { getFirestore } = require("firebase-admin/firestore");
 
-const INVENTORY_API_VERSION = 1;
+const INVENTORY_API_VERSION = 2;
 const INVENTORY_ROLES = Object.freeze([
   "admin", "office", "supervisor", "inventory", "owner",
   "super_admin", "super-admin", "superadmin",
