@@ -147,3 +147,8 @@
   .addToolFooter{display:grid;gap:8px;padding:9px 10px max(9px,env(safe-area-inset-bottom))}.addToolFooter>span{text-align:center}.addToolFooter>div{display:grid;grid-template-columns:1fr 1fr}.addToolFooter button{min-height:43px}
 }
 @media(max-width:480px){.missingToolCard{grid-template-columns:34px minmax(0,1fr)}.missingToolCard>button{grid-column:1/-1;width:100%;min-height:38px}.addToolFooter>div{grid-template-columns:92px minmax(0,1fr)}}
+
+/* Drawers keep their header/footer fixed while the content owns vertical scrolling. */
+.toolDrawer>header,.addToolFooter{flex:0 0 auto}
+.toolDrawerBody,.addToolBody{min-height:0;flex:1 1 0;align-content:start;grid-auto-rows:max-content}
+.addToolBody{overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain}

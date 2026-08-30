@@ -814,6 +814,7 @@ export function ConsolidatedInventoryWorkspace() {
     if (!addToolDraft) return null;
     const targetVan = vans.find((van) => van.id === addToolDraft.vanId);
     const hasTemplateChoice = addToolDraft.creatingNew || Boolean(selectedAddToolCatalog);
+    const showCatalogResults = Boolean(addToolDraft.search.trim()) && !hasTemplateChoice;
     return <div className={styles.toolDrawerBackdrop} onMouseDown={(event) => { if (event.currentTarget === event.target) closeAddTool(); }}>
       <section className={`${styles.toolDrawer} ${styles.addToolDrawer}`} role="dialog" aria-modal="true" aria-labelledby="add-tool-title" aria-busy={Boolean(addToolStage)}>
         <header><div><span>New physical Van assignment</span><h2 id="add-tool-title">Add Tool</h2><small>{targetVan?.name || addToolDraft.vanId} · fresh photo required</small></div><button type="button" aria-label="Close add tool" disabled={Boolean(addToolStage)} onClick={closeAddTool}>×</button></header>
@@ -822,13 +823,13 @@ export function ConsolidatedInventoryWorkspace() {
           <section className={styles.catalogChooser}>
             <header><strong>1. Find a shared tool template</strong><span>Search once, then use a match or create the missing template.</span></header>
             <label className={styles.catalogSearch}><InventoryIcon name="overview" /><input type="search" autoFocus value={addToolDraft.search} onChange={(event) => setAddToolDraft({ ...addToolDraft, search: event.target.value, catalogId: '', creatingNew: false })} placeholder="Search name, description or category" /></label>
-            <div className={styles.catalogResults}>{filteredToolCatalog.map((catalog) => {
+            {showCatalogResults ? <div className={styles.catalogResults}>{filteredToolCatalog.map((catalog) => {
               const coverage = catalogVanCoverage.get(catalog.id) ?? [];
               const isSelected = addToolDraft.catalogId === catalog.id && !addToolDraft.creatingNew;
               return <button key={catalog.id} type="button" className={isSelected ? styles.catalogResultSelected : ''} onClick={() => chooseCatalogForAdd(catalog)}>
                 <span className={styles.catalogResultIcon}><InventoryIcon name="tool" /></span><span><strong>{toolCatalogName(catalog)}</strong><small>{catalog.description || catalog.category || 'No shared description'}</small><em>{coverage.length ? `In ${coverage.map((van) => van.name).join(', ')}` : 'No current Van assignment'}</em></span><b>{money(Number(catalog.standardCost) || 0)}</b>
               </button>;
-            })}{!filteredToolCatalog.length ? <p>No matching shared templates.</p> : null}</div>
+            })}{!filteredToolCatalog.length ? <p>No matching shared templates.</p> : null}</div> : null}
             <button type="button" className={styles.newCatalogButton} onClick={beginNewToolTemplate}>+ Create a new template{addToolDraft.search.trim() ? ` for “${addToolDraft.search.trim()}”` : ''}</button>
           </section>
 
