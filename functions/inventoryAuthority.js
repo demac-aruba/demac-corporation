@@ -84,6 +84,47 @@ function nonNegativeToolNumber(value, field, options = {}) {
   }
   return options.integer === true ? number : Math.round((number + Number.EPSILON) * 100) / 100;
 }
+function positiveToolInt(value, field) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || !Number.isInteger(number) || number < 1) {
+    throw new InventoryAuthorityError("invalid_request", `${field} must be a positive whole number.`, { field, value });
+  }
+  return number;
+}
+function normalizeToolTrackingMode(value) {
+  const mode = cleanText(value, 40).toLowerCase();
+  if (mode === "individual" || mode === "quantity") return mode;
+  throw new InventoryAuthorityError("invalid_request", "Tool tracking mode must be individual or quantity.", { field: "trackingMode", value });
+}
+function toolPhotoReference(photoUrlValue, photoStoragePathValue, options = {}) {
+  const urlField = cleanText(options.urlField, 120) || "photoUrl";
+  const pathField = cleanText(options.pathField, 120) || "photoStoragePath";
+  const label = cleanText(options.label, 120) || "Tool photo";
+  const photoUrl = requiredText(photoUrlValue, urlField, `${label} URL`, 2_500);
+  const photoStoragePath = requiredText(photoStoragePathValue, pathField, `${label} storage path`, 800);
+  let parsed;
+  try { parsed = new URL(photoUrl); }
+  catch { throw new InventoryAuthorityError("invalid_request", `${label} URL must be a valid HTTPS URL.`, { field: urlField }); }
+  if (parsed.protocol !== "https:") {
+    throw new InventoryAuthorityError("invalid_request", `${label} URL must be a valid HTTPS URL.`, { field: urlField });
+  }
+  const pathSegments = photoStoragePath.split("/");
+  if (!photoStoragePath.startsWith("inventory/van-tool/") || pathSegments.some((segment) => !segment || segment === "." || segment === "..")) {
+    throw new InventoryAuthorityError("invalid_request", `${label} storage path must reference an uploaded Van Tool photo.`, { field: pathField });
+  }
+  return { photoUrl, photoStoragePath };
+}
+function deterministicCode(value, length = 8) {
+  return crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, length).toUpperCase();
+}
+function toolAssetCode(vanId, catalog, trackingMode, stable) {
+  const vanPart = cleanText(vanId, 80).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12) || "VAN";
+  const sequence = nonNegativeInt(catalog?.sequence);
+  const catalogPart = sequence > 0 ? `H${String(sequence).padStart(3, "0")}` : `H${deterministicCode(catalog?.id || "tool", 6)}`;
+  return trackingMode === "quantity"
+    ? `${vanPart}-${catalogPart}-Q`
+    : `${vanPart}-${catalogPart}-${deterministicCode(`${stable}:${catalog?.id}:${vanId}`, 8)}`;
+}
 function normalizeItemKind(value) {
   const kind = cleanText(value, 40).toLowerCase();
   if (kind === "product" || kind === "material") return kind;
@@ -595,6 +636,279 @@ function createInventoryApi({ db, verifyIdToken } = {}) {
     return { success: true, version: INVENTORY_API_VERSION, transfer };
   }
 
+  async function addToolToVan(data, actor) {
+    const allowedFields = new Set([
+      "requestId", "vanId", "toolCatalogId", "newCatalog", "condition", "purchaseCost", "quantity", "notes",
+      "photoUrl", "photoStoragePath", "thumbnailUrl", "thumbnailStoragePath",
+    ]);
+    const unexpectedFields = Object.keys(data || {}).filter((field) => !allowedFields.has(field));
+    if (unexpectedFields.length) {
+      throw new InventoryAuthorityError("invalid_request", "Unsupported add-tool fields were provided.", { fields: unexpectedFields });
+    }
+
+    const stable = requestId(data.requestId);
+    const vanId = requiredText(data.vanId, "vanId", "Van", 160);
+    const suppliedCatalogId = hasOwn(data, "toolCatalogId");
+    const suppliedNewCatalog = hasOwn(data, "newCatalog");
+    if (suppliedCatalogId === suppliedNewCatalog) {
+      throw new InventoryAuthorityError("invalid_request", "Provide exactly one existing toolCatalogId or newCatalog definition.", { fields: ["toolCatalogId", "newCatalog"] });
+    }
+    const condition = cleanText(data.condition, 80);
+    if (!TOOL_CONDITIONS.includes(condition)) {
+      throw new InventoryAuthorityError("invalid_request", "Tool condition is not supported.", { field: "condition", condition, allowed: TOOL_CONDITIONS });
+    }
+    const quantity = positiveToolInt(data.quantity, "quantity");
+    const purchaseCost = hasOwn(data, "purchaseCost") ? nonNegativeToolNumber(data.purchaseCost, "purchaseCost") : undefined;
+    const notes = hasOwn(data, "notes") ? cleanText(data.notes, 1_500) : undefined;
+    const { photoUrl, photoStoragePath } = toolPhotoReference(data.photoUrl, data.photoStoragePath);
+    const suppliedThumbnailUrl = hasOwn(data, "thumbnailUrl");
+    const suppliedThumbnailStoragePath = hasOwn(data, "thumbnailStoragePath");
+    if (suppliedThumbnailUrl !== suppliedThumbnailStoragePath) {
+      throw new InventoryAuthorityError("invalid_request", "Tool thumbnail URL and storage path must be provided together.", { fields: ["thumbnailUrl", "thumbnailStoragePath"] });
+    }
+    const thumbnail = suppliedThumbnailUrl
+      ? toolPhotoReference(data.thumbnailUrl, data.thumbnailStoragePath, { urlField: "thumbnailUrl", pathField: "thumbnailStoragePath", label: "Tool thumbnail" })
+      : undefined;
+
+    let newCatalogDefinition;
+    if (suppliedNewCatalog) {
+      if (!data.newCatalog || typeof data.newCatalog !== "object" || Array.isArray(data.newCatalog)) {
+        throw new InventoryAuthorityError("invalid_request", "newCatalog must be an object.", { field: "newCatalog" });
+      }
+      const catalogFields = new Set(["name", "description", "category", "standardCost", "trackingMode", "recommendedQuantity"]);
+      const unexpectedCatalogFields = Object.keys(data.newCatalog).filter((field) => !catalogFields.has(field));
+      if (unexpectedCatalogFields.length) {
+        throw new InventoryAuthorityError("invalid_request", "Unsupported new-catalog fields were provided.", { fields: unexpectedCatalogFields });
+      }
+      newCatalogDefinition = {
+        name: requiredText(data.newCatalog.name, "newCatalog.name", "Tool name", 240),
+        description: cleanText(data.newCatalog.description, 1_000),
+        category: requiredText(data.newCatalog.category, "newCatalog.category", "Tool category", 160),
+        standardCost: nonNegativeToolNumber(data.newCatalog.standardCost, "newCatalog.standardCost"),
+        trackingMode: normalizeToolTrackingMode(data.newCatalog.trackingMode),
+        recommendedQuantity: positiveToolInt(data.newCatalog.recommendedQuantity, "newCatalog.recommendedQuantity"),
+      };
+    }
+
+    const catalogId = suppliedCatalogId
+      ? requiredText(data.toolCatalogId, "toolCatalogId", "Tool catalog id", 180)
+      : deterministicId("TC", `${stable}:add-tool-to-van:catalog`);
+    const eventId = deterministicId("IM", `${stable}:add-tool-to-van`);
+    const catalogRows = newCatalogDefinition ? snapshotItems(await db.collection("toolCatalog").get()) : [];
+    const duplicateCatalog = newCatalogDefinition
+      ? catalogRows.find((catalog) => (
+        catalog.active !== false
+        && catalog.id !== catalogId
+        && cleanText(catalog.name, 240).toLocaleLowerCase("en") === newCatalogDefinition.name.toLocaleLowerCase("en")
+      ))
+      : undefined;
+    const nextCatalogSequence = newCatalogDefinition
+      ? Math.max(0, ...catalogRows.map((catalog) => nonNegativeInt(catalog.sequence))) + 1
+      : 0;
+    const assetRows = snapshotItems(await db.collection("vanToolAssets").get());
+    const nextIndividualUnitNumber = Math.max(0, ...assetRows
+      .filter((asset) => asset.toolCatalogId === catalogId && cleanText(asset.trackingMode, 40).toLowerCase() !== "quantity")
+      .map((asset) => {
+        const explicit = Number(asset.unitNumber);
+        if (Number.isInteger(explicit) && explicit > 0) return explicit;
+        const suffix = cleanText(asset.assetCode, 160).match(/-(\d+)$/)?.[1];
+        const inferred = Number(suffix);
+        return Number.isInteger(inferred) && inferred > 0 ? inferred : 0;
+      })) + 1;
+    const possibleQuantityGroups = assetRows.filter((asset) => (
+      asset.toolCatalogId === catalogId
+      && cleanText(asset.trackingMode, 40).toLowerCase() === "quantity"
+      && normalizeToolLocation(asset) === vanId
+    ));
+
+    let result;
+    await db.runTransaction(async (transaction) => {
+      const eventSnapshot = await transaction.get(movementRef(eventId));
+      if (eventSnapshot.exists) {
+        const existingMovement = { id: eventSnapshot.id, ...eventSnapshot.data() };
+        const replayAssetId = requiredText(existingMovement.toolAssetId || existingMovement.itemId, "itemId", "Audited tool asset id", 180);
+        const replayCatalogId = requiredText(existingMovement.toolCatalogId || catalogId, "toolCatalogId", "Audited tool catalog id", 180);
+        const [assetSnapshot, catalogSnapshot] = await Promise.all([
+          transaction.get(db.collection("vanToolAssets").doc(replayAssetId)),
+          transaction.get(db.collection("toolCatalog").doc(replayCatalogId)),
+        ]);
+        if (!assetSnapshot.exists || !catalogSnapshot.exists) {
+          throw new InventoryAuthorityError("inventory_integrity_error", "The audited Tool registration is missing its canonical records.", { assetId: replayAssetId, toolCatalogId: replayCatalogId });
+        }
+        result = {
+          replayed: true,
+          catalog: { id: catalogSnapshot.id, ...catalogSnapshot.data() },
+          asset: { id: assetSnapshot.id, ...assetSnapshot.data() },
+          movement: existingMovement,
+        };
+        return;
+      }
+
+      if (duplicateCatalog) {
+        throw new InventoryAuthorityError("duplicate_tool_catalog", "An active Tool catalog item already uses this name. Reuse the existing catalog instead.", {
+          field: "newCatalog.name",
+          toolCatalogId: duplicateCatalog.id,
+        });
+      }
+
+      const vanSnapshot = await transaction.get(db.collection("vans").doc(vanId));
+      if (!vanSnapshot.exists || vanSnapshot.data()?.active === false) {
+        throw new InventoryAuthorityError("invalid_location", "The selected Van does not exist or is inactive.", { field: "vanId", vanId });
+      }
+
+      const catalogRef = db.collection("toolCatalog").doc(catalogId);
+      const catalogSnapshot = await transaction.get(catalogRef);
+      let catalog;
+      let catalogCreated = false;
+      if (newCatalogDefinition) {
+        if (catalogSnapshot.exists) {
+          throw new InventoryAuthorityError("request_conflict", "This request already owns a Tool catalog record without its audit event.", { requestId: stable, toolCatalogId: catalogId });
+        }
+        const now = new Date().toISOString();
+        catalog = {
+          id: catalogId,
+          sequence: nextCatalogSequence,
+          ...newCatalogDefinition,
+          active: true,
+          createdAt: now,
+          updatedAt: now,
+          createdByUserId: actor.uid,
+          createdByName: actor.name,
+        };
+        catalogCreated = true;
+      } else {
+        if (!catalogSnapshot.exists || catalogSnapshot.data()?.active === false) {
+          throw new InventoryAuthorityError("item_not_found", "The selected Tool catalog item does not exist or is inactive.", { toolCatalogId: catalogId });
+        }
+        catalog = { id: catalogSnapshot.id, ...catalogSnapshot.data() };
+      }
+
+      const trackingMode = normalizeToolTrackingMode(catalog.trackingMode || "individual");
+      if (trackingMode === "individual" && quantity !== 1) {
+        throw new InventoryAuthorityError("invalid_request", "Fast Mode adds exactly one physical asset for individually tracked tools.", { field: "quantity", quantity, trackingMode });
+      }
+      if (possibleQuantityGroups.length > 1) {
+        throw new InventoryAuthorityError("inventory_integrity_error", "More than one quantity group exists for this Tool and Van.", { toolCatalogId: catalogId, vanId });
+      }
+
+      const assetId = trackingMode === "individual"
+        ? deterministicId("TA", `${stable}:add-tool-to-van:asset`)
+        : possibleQuantityGroups[0]?.id || deterministicId("TAG", `${catalogId}:${vanId}:quantity`);
+      const assetRef = db.collection("vanToolAssets").doc(assetId);
+      const assetSnapshot = await transaction.get(assetRef);
+      const now = new Date().toISOString();
+      const lifecycleEntry = {
+        id: deterministicId("TL", `${stable}:add-tool-to-van:${assetId}`),
+        action: "registered",
+        occurredAt: now,
+        performedByUserId: actor.uid,
+        performedByName: actor.name,
+        toVanId: vanId,
+        quantity,
+        reason: trackingMode === "quantity" && assetSnapshot.exists ? "Quantity added to Van Tool inventory" : "Tool added to Van inventory",
+        condition,
+        photoUrl,
+        photoStoragePath,
+        ...(thumbnail ? {
+          thumbnailUrl: thumbnail.photoUrl,
+          thumbnailStoragePath: thumbnail.photoStoragePath,
+        } : {}),
+        ...(purchaseCost === undefined ? {} : { purchaseCost }),
+        ...(notes === undefined ? {} : { notes }),
+      };
+
+      let asset;
+      if (trackingMode === "quantity" && assetSnapshot.exists) {
+        const current = { id: assetSnapshot.id, ...assetSnapshot.data() };
+        if (current.toolCatalogId !== catalogId || normalizeToolLocation(current) !== vanId || cleanText(current.trackingMode, 40).toLowerCase() !== "quantity") {
+          throw new InventoryAuthorityError("inventory_integrity_error", "The quantity-group identity conflicts with another Tool record.", { assetId, toolCatalogId: catalogId, vanId });
+        }
+        if (current.active === false || current.retiredAt) {
+          throw new InventoryAuthorityError("invalid_tool_state", "A retired or inactive Tool quantity group cannot receive new units.", { assetId });
+        }
+        const currentExpected = nonNegativeToolNumber(current.quantityExpected ?? 0, "quantityExpected", { integer: true });
+        const currentPresent = nonNegativeToolNumber(
+          current.quantityPresent ?? (current.present === false ? 0 : currentExpected),
+          "quantityPresent",
+          { integer: true },
+        );
+        const updates = {
+          quantityExpected: currentExpected + quantity,
+          quantityPresent: currentPresent + quantity,
+          updatedAt: now,
+          updatedById: actor.uid,
+          updatedByName: actor.name,
+          lifecycleHistory: [...(Array.isArray(current.lifecycleHistory) ? current.lifecycleHistory : []), lifecycleEntry],
+        };
+        asset = { ...current, ...updates };
+        transaction.set(assetRef, updates, { merge: true });
+      } else {
+        if (assetSnapshot.exists) {
+          throw new InventoryAuthorityError("request_conflict", "This request already owns a Tool asset without its audit event.", { requestId: stable, assetId });
+        }
+        const standardCost = nonNegativeToolNumber(catalog.standardCost ?? 0, "standardCost");
+        asset = {
+          id: assetId,
+          toolCatalogId: catalogId,
+          assetCode: toolAssetCode(vanId, catalog, trackingMode, stable),
+          vanId,
+          assigned: true,
+          trackingMode,
+          ...(trackingMode === "individual" ? { unitNumber: nextIndividualUnitNumber } : {}),
+          quantityExpected: trackingMode === "quantity" ? quantity : 1,
+          quantityPresent: trackingMode === "quantity" ? quantity : 1,
+          condition,
+          operationalStatus: "Disponible",
+          purchaseCost: purchaseCost === undefined ? standardCost : purchaseCost,
+          present: true,
+          active: true,
+          locationType: "van",
+          locationId: vanId,
+          latestPhotoUrl: photoUrl,
+          latestPhotoStoragePath: photoStoragePath,
+          latestPhotoAt: now,
+          ...(thumbnail ? {
+            latestThumbnailUrl: thumbnail.photoUrl,
+            latestThumbnailStoragePath: thumbnail.photoStoragePath,
+            latestThumbnailSourcePhotoPath: photoStoragePath,
+          } : {}),
+          notes: notes || "",
+          lifecycleHistory: [lifecycleEntry],
+          createdAt: now,
+          updatedAt: now,
+          createdById: actor.uid,
+          createdByName: actor.name,
+          updatedById: actor.uid,
+          updatedByName: actor.name,
+        };
+        transaction.create(assetRef, asset);
+      }
+
+      if (catalogCreated) transaction.create(catalogRef, catalog);
+      const event = {
+        ...movement({
+          id: eventId,
+          itemKind: "tool_asset",
+          itemId: assetId,
+          itemName: asset.assetCode || catalog.name || assetId,
+          quantity,
+          type: "tool_added_to_van",
+          destinationLocationId: vanId,
+          reason: "Tool added to Van inventory",
+          now,
+          actor,
+        }),
+        toolAssetId: assetId,
+        toolCatalogId: catalogId,
+        trackingMode,
+        catalogCreated,
+      };
+      createMovement(transaction, event);
+      result = { replayed: false, catalog, asset, movement: event };
+    });
+    return { success: true, version: INVENTORY_API_VERSION, ...result };
+  }
+
   async function updateToolAssetDetails(data, actor) {
     const stable = requestId(data.requestId);
     const assetId = requiredText(data.assetId, "assetId", "Tool asset id", 180);
@@ -756,6 +1070,7 @@ function createInventoryApi({ db, verifyIdToken } = {}) {
     if (action === "pickup_transfer") return pickupTransfer(data, actor);
     if (action === "receive_transfer") return receiveTransfer(data, actor);
     if (action === "cancel_transfer") return cancelTransfer(data, actor);
+    if (action === "add_tool_to_van") return addToolToVan(data, actor);
     if (action === "update_tool_asset_details") return updateToolAssetDetails(data, actor);
     if (action === "move_tool_asset") return moveToolAsset(data, actor);
     if (action === "issue_to_work_order") return issueToWorkOrder(data, actor);
@@ -769,7 +1084,7 @@ function createInventoryApi({ db, verifyIdToken } = {}) {
       return { status: 200, body: await execute({ action: cleanText(request.body?.action, 120), data: request.body?.data || {}, actor }) };
     } catch (error) { return apiError(error); }
   }
-  return { version: INVENTORY_API_VERSION, authenticate, execute, handle, getSnapshot, setStockLevel, setLocationPolicy, updateLocationInventoryState, allocateLegacyProductStock, createTransfer, pickupTransfer, receiveTransfer, cancelTransfer, updateToolAssetDetails, moveToolAsset, issueToWorkOrder };
+  return { version: INVENTORY_API_VERSION, authenticate, execute, handle, getSnapshot, setStockLevel, setLocationPolicy, updateLocationInventoryState, allocateLegacyProductStock, createTransfer, pickupTransfer, receiveTransfer, cancelTransfer, addToolToVan, updateToolAssetDetails, moveToolAsset, issueToWorkOrder };
 }
 
 let defaultApi;

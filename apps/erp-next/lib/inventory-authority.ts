@@ -28,6 +28,7 @@ export type InventoryItem = {
 export type InventoryToolCatalogItem = {
   id: string;
   name?: string;
+  description?: string;
   category?: string;
   trackingMode?: 'individual' | 'quantity';
   standardCost?: number;
@@ -130,6 +131,35 @@ export type InventoryReplenishment = {
   target: number;
   needed: number;
 };
+export type AddInventoryToolToVanInput = {
+  requestId: string;
+  vanId: string;
+  toolCatalogId?: string;
+  newCatalog?: {
+    name: string;
+    description?: string;
+    category: string;
+    standardCost: number;
+    trackingMode: 'individual' | 'quantity';
+    recommendedQuantity: number;
+  };
+  condition: string;
+  purchaseCost?: number;
+  quantity: number;
+  notes?: string;
+  photoUrl: string;
+  photoStoragePath: string;
+  thumbnailUrl?: string;
+  thumbnailStoragePath?: string;
+};
+export type AddInventoryToolToVanResult = {
+  success: true;
+  version: number;
+  catalog: InventoryToolCatalogItem;
+  asset: InventoryToolAsset;
+  movement: InventoryMovement;
+  replayed?: boolean;
+};
 export type InventorySnapshot = {
   success: true;
   version: number;
@@ -206,6 +236,9 @@ export function cancelInventoryTransfer(input: { requestId: string; transferId: 
 }
 export function moveInventoryTool(input: { requestId: string; assetId: string; destinationLocationId: string; reason: string }) {
   return callInventoryAuthority('move_tool_asset', input, 12_000);
+}
+export function addInventoryToolToVan(input: AddInventoryToolToVanInput) {
+  return callInventoryAuthority<AddInventoryToolToVanResult>('add_tool_to_van', input, 15_000);
 }
 export function updateInventoryToolDetails(input: { requestId: string; assetId: string; condition?: string; notes?: string; purchaseCost?: number; quantityExpected?: number; quantityPresent?: number }) {
   return callInventoryAuthority<{ success: true; version: number; asset: InventoryToolAsset; movement?: InventoryMovement; replayed?: boolean }>('update_tool_asset_details', input, 12_000);

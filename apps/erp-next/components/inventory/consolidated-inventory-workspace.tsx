@@ -15,6 +15,7 @@ import {
   type CanonicalVan,
 } from '../../lib/canonical-operations';
 import {
+  addInventoryToolToVan,
   allocateLegacyProductStock,
   cancelInventoryTransfer,
   createInventoryRequestId,
@@ -25,13 +26,16 @@ import {
   receiveInventoryTransfer,
   updateInventoryToolDetails,
   updateInventoryLocationState,
+  type AddInventoryToolToVanInput,
   type InventoryBalance,
   type InventoryItem,
   type InventoryLocation,
   type InventorySnapshot,
   type InventoryToolAsset,
+  type InventoryToolCatalogItem,
   type InventoryTransfer,
 } from '../../lib/inventory-authority';
+import { uploadVanToolPhoto, type InventoryToolPhotoUpload } from '../../lib/firebase/inventory-storage';
 import { InventoryIcon, VanThumbnail, type InventoryIconName } from './inventory-visuals';
 import styles from './consolidated-inventory-workspace.module.css';
 
@@ -51,6 +55,23 @@ type ToolEdit = {
   destinationLocationId: string;
   transferReason: string;
   transferConfirmed: boolean;
+};
+type AddToolDraft = {
+  requestId: string;
+  vanId: string;
+  catalogId: string;
+  search: string;
+  creatingNew: boolean;
+  name: string;
+  description: string;
+  category: string;
+  standardCost: string;
+  trackingMode: 'individual' | 'quantity';
+  recommendedQuantity: string;
+  condition: string;
+  purchaseCost: string;
+  quantity: string;
+  notes: string;
 };
 
 const TOOL_CONDITIONS = ['Nueva', 'Poco uso', 'Uso medio', 'Muy usada', 'Requiere reemplazo', 'No inspeccionada'] as const;
@@ -89,8 +110,23 @@ function toolExpectedQuantity(asset: InventoryToolAsset) {
   return Math.max(0, Number(asset.quantityExpected ?? asset.quantity ?? 0) || 0);
 }
 function toolPresentQuantity(asset: InventoryToolAsset) {
-  if (asset.trackingMode !== 'quantity') return asset.present === false ? 0 : 1;
-  return Math.max(0, Number(asset.quantityPresent ?? asset.quantity ?? 0) || 0);
+  if (asset.trackingMode !== 'quantity') {
+    const status = String(asset.operationalStatus ?? '').trim().toLowerCase();
+    const statusIsMissing = ['missing', 'lost', 'faltante'].some((value) => status.includes(value));
+    return asset.present === false || statusIsMissing ? 0 : 1;
+  }
+  const expected = toolExpectedQuantity(asset);
+  return Math.max(0, Number(asset.quantityPresent ?? (asset.present === false ? 0 : asset.quantity ?? expected)) || 0);
+}
+function toolMissingQuantity(asset: InventoryToolAsset) {
+  return Math.max(0, toolExpectedQuantity(asset) - toolPresentQuantity(asset));
+}
+function toolRecommendedQuantity(asset: InventoryToolAsset, catalog?: InventoryToolCatalogItem) {
+  if (asset.trackingMode !== 'quantity') return 1;
+  return Math.max(1, Math.floor(Number(catalog?.recommendedQuantity) || toolExpectedQuantity(asset) || 1));
+}
+function toolRecommendedShortfall(asset: InventoryToolAsset, catalog?: InventoryToolCatalogItem) {
+  return Math.max(0, toolRecommendedQuantity(asset, catalog) - toolPresentQuantity(asset));
 }
 function toolQuantity(asset: InventoryToolAsset) {
   return toolExpectedQuantity(asset);
@@ -107,6 +143,15 @@ function toolCanTransfer(asset: InventoryToolAsset) {
 }
 function inventoryStatusText(value?: string) {
   return String(value ?? '').trim().toLowerCase();
+}
+function toolLocationId(asset: InventoryToolAsset) {
+  return asset.inventoryLocationId || asset.locationId || asset.vanId || '';
+}
+function toolCatalogName(catalog?: InventoryToolCatalogItem) {
+  return catalog?.name?.trim() || catalog?.id || 'Tool template';
+}
+function normalizedToolCatalogName(value: string) {
+  return value.trim().replace(/\s+/g, ' ').slice(0, 240).toLocaleLowerCase('en');
 }
 
 function ToolPhoto({ asset, onOpen }: { asset: InventoryToolAsset; onOpen: (url: string) => void }) {
@@ -146,6 +191,11 @@ export function ConsolidatedInventoryWorkspace() {
   const [transferNotes, setTransferNotes] = useState<Record<string, string>>({});
   const [toolEdit, setToolEdit] = useState<ToolEdit | null>(null);
   const [toolLightbox, setToolLightbox] = useState('');
+  const [addToolDraft, setAddToolDraft] = useState<AddToolDraft | null>(null);
+  const [addToolPhoto, setAddToolPhoto] = useState<File | null>(null);
+  const [addToolPhotoPreview, setAddToolPhotoPreview] = useState('');
+  const [uploadedToolPhoto, setUploadedToolPhoto] = useState<InventoryToolPhotoUpload | null>(null);
+  const [addToolStage, setAddToolStage] = useState('');
   const [mobileToolQuery, setMobileToolQuery] = useState('');
   const [mobileToolAction, setMobileToolAction] = useState<'summary' | 'edit' | 'transfer'>('summary');
 
@@ -177,15 +227,25 @@ export function ConsolidatedInventoryWorkspace() {
 
   useEffect(() => { void refresh(); }, [refresh]);
   useEffect(() => {
-    if (!toolEdit && !toolLightbox) return undefined;
+    if (!toolEdit && !toolLightbox && !addToolDraft) return undefined;
     const closeOverlay = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       if (toolLightbox) setToolLightbox('');
-      else setToolEdit(null);
+      else if (toolEdit) setToolEdit(null);
+      else if (!addToolStage) {
+        setError('');
+        setAddToolDraft(null);
+        setAddToolPhoto(null);
+        setAddToolPhotoPreview('');
+        setUploadedToolPhoto(null);
+      }
     };
     window.addEventListener('keydown', closeOverlay);
     return () => window.removeEventListener('keydown', closeOverlay);
-  }, [toolEdit, toolLightbox]);
+  }, [addToolDraft, addToolStage, toolEdit, toolLightbox]);
+  useEffect(() => () => {
+    if (addToolPhotoPreview) URL.revokeObjectURL(addToolPhotoPreview);
+  }, [addToolPhotoPreview]);
 
   const locations = snapshot?.locations ?? [];
   const normalLocations = locations.filter((location) => location.type !== 'legacy');
@@ -268,10 +328,32 @@ export function ConsolidatedInventoryWorkspace() {
   const activeVanTransfers = activeVan ? openTransfers.filter((transfer) => transferTouches(activeVan.id, transfer)) : [];
   const activeVanReplenishment = activeVan ? (snapshot?.replenishment ?? []).filter((row) => row.locationId === activeVan.id) : [];
   const activeVanMovements = activeVan ? (snapshot?.movements ?? []).filter((row) => row.sourceLocationId === activeVan.id || row.destinationLocationId === activeVan.id) : [];
-  const activeVanMissingTools = activeVanTools.filter((asset) => {
-    const status = inventoryStatusText(asset.operationalStatus || asset.condition);
-    return asset.present === false || status.includes('missing') || status.includes('lost') || status.includes('faltante');
-  });
+  const activeVanMissingTools = activeVanTools.filter((asset) => toolMissingQuantity(asset) > 0);
+  const activeToolCatalog = [...(snapshot?.toolCatalog ?? [])]
+    .filter((catalog) => catalog.active !== false)
+    .sort((a, b) => toolCatalogName(a).localeCompare(toolCatalogName(b), undefined, { numeric: true, sensitivity: 'base' }));
+  const catalogVanCoverage = new Map<string, InventoryLocation[]>();
+  for (const asset of activeToolAssets) {
+    if (!asset.toolCatalogId) continue;
+    const van = vans.find((candidate) => candidate.id === toolLocationId(asset));
+    if (!van) continue;
+    const coveredVans = catalogVanCoverage.get(asset.toolCatalogId) ?? [];
+    if (!coveredVans.some((candidate) => candidate.id === van.id)) coveredVans.push(van);
+    catalogVanCoverage.set(asset.toolCatalogId, coveredVans);
+  }
+  const activeVanCatalogIds = new Set(activeVanTools.map((asset) => asset.toolCatalogId).filter(Boolean));
+  const missingVanToolTemplates = activeToolCatalog
+    .filter((catalog) => !activeVanCatalogIds.has(catalog.id))
+    .map((catalog) => ({ catalog, vans: (catalogVanCoverage.get(catalog.id) ?? []).filter((van) => van.id !== activeVan?.id) }))
+    .filter((entry) => entry.vans.length > 0);
+  const selectedAddToolCatalog = addToolDraft?.catalogId
+    ? activeToolCatalog.find((catalog) => catalog.id === addToolDraft.catalogId)
+    : undefined;
+  const normalizedCatalogSearch = addToolDraft?.search.trim().toLowerCase() ?? '';
+  const filteredToolCatalog = activeToolCatalog.filter((catalog) => {
+    if (!normalizedCatalogSearch) return true;
+    return `${catalog.id} ${catalog.name ?? ''} ${catalog.description ?? ''} ${catalog.category ?? ''}`.toLowerCase().includes(normalizedCatalogSearch);
+  }).slice(0, 8);
 
   const inventorySnapshotRows = useMemo(() => {
     const stockSummary = (kind: InventoryItem['itemKind']) => {
@@ -288,11 +370,13 @@ export function ConsolidatedInventoryWorkspace() {
     };
     const productsSummary = stockSummary('product');
     const materialsSummary = stockSummary('material');
-    const toolUnits = activeToolAssets.reduce((sum, asset) => sum + toolQuantity(asset), 0);
-    const toolMissing = activeToolAssets.filter((asset) => {
-      const status = inventoryStatusText(asset.operationalStatus || asset.condition);
-      return asset.present === false || status.includes('missing') || status.includes('lost') || status.includes('faltante');
-    }).reduce((sum, asset) => sum + toolQuantity(asset), 0);
+    const toolUnits = activeToolAssets.reduce((sum, asset) => sum + toolPresentQuantity(asset), 0);
+    const toolMissing = activeToolAssets.reduce((sum, asset) => sum + toolMissingQuantity(asset), 0);
+    const toolLowStock = activeToolAssets.reduce((sum, asset) => {
+      const catalog = snapshot?.toolCatalog.find((tool) => tool.id === asset.toolCatalogId);
+      return sum + toolRecommendedShortfall(asset, catalog);
+    }, 0);
+    const toolOutOfStock = activeToolAssets.filter((asset) => toolPresentQuantity(asset) === 0).length;
     const toolValue = activeToolAssets.reduce((sum, asset) => {
       const catalog = snapshot?.toolCatalog.find((tool) => tool.id === asset.toolCatalogId);
       const unitCost = Number.isFinite(Number(asset.purchaseCost)) ? Number(asset.purchaseCost) : Number(catalog?.standardCost || 0);
@@ -301,7 +385,7 @@ export function ConsolidatedInventoryWorkspace() {
     return [
       { label: 'Products', ...productsSummary },
       { label: 'Consumables', ...materialsSummary },
-      { label: 'Tools', items: activeToolAssets.length, onHand: toolUnits, reserved: 0, available: Math.max(0, toolUnits - toolMissing), alerts: toolMissing, out: toolMissing, value: toolValue },
+      { label: 'Tools', items: activeToolAssets.length, onHand: toolUnits, reserved: 0, available: toolUnits, alerts: Math.max(toolMissing, toolLowStock), out: toolOutOfStock, value: toolValue },
     ];
   }, [activeToolAssets, items, normalLocations, snapshot?.replenishment, snapshot?.toolCatalog]);
 
@@ -496,6 +580,156 @@ export function ConsolidatedInventoryWorkspace() {
     }, 'Tool transferred and movement recorded.');
   }
 
+  function addToolDraftFor(vanId: string, catalog?: InventoryToolCatalogItem): AddToolDraft {
+    const trackingMode = catalog?.trackingMode ?? 'individual';
+    const recommendedQuantity = Math.max(1, Math.floor(Number(catalog?.recommendedQuantity) || 1));
+    const referenceCost = Math.max(0, Number(catalog?.standardCost) || 0);
+    return {
+      requestId: createInventoryRequestId('van-tool'),
+      vanId,
+      catalogId: catalog?.id ?? '',
+      search: catalog ? toolCatalogName(catalog) : '',
+      creatingNew: false,
+      name: catalog ? toolCatalogName(catalog) : '',
+      description: catalog?.description ?? '',
+      category: catalog?.category ?? '',
+      standardCost: String(referenceCost),
+      trackingMode,
+      recommendedQuantity: String(recommendedQuantity),
+      condition: '',
+      purchaseCost: catalog ? String(referenceCost) : '',
+      quantity: trackingMode === 'individual' ? '1' : String(recommendedQuantity),
+      notes: '',
+    };
+  }
+
+  function openAddTool(catalog?: InventoryToolCatalogItem) {
+    if (!activeVan) return;
+    setError('');
+    setNotice('');
+    setAddToolStage('');
+    setAddToolPhoto(null);
+    setAddToolPhotoPreview('');
+    setUploadedToolPhoto(null);
+    setAddToolDraft(addToolDraftFor(activeVan.id, catalog));
+  }
+
+  function closeAddTool() {
+    if (addToolStage) return;
+    setError('');
+    setAddToolDraft(null);
+    setAddToolPhoto(null);
+    setAddToolPhotoPreview('');
+    setUploadedToolPhoto(null);
+  }
+
+  function chooseCatalogForAdd(catalog: InventoryToolCatalogItem) {
+    setAddToolDraft((current) => current ? {
+      ...addToolDraftFor(current.vanId, catalog),
+      requestId: current.requestId,
+      condition: current.condition,
+      notes: current.notes,
+    } : current);
+  }
+
+  function beginNewToolTemplate() {
+    setAddToolDraft((current) => current ? {
+      ...current,
+      catalogId: '',
+      creatingNew: true,
+      name: current.search.trim(),
+      description: '',
+      category: '',
+      standardCost: '0',
+      trackingMode: 'individual',
+      recommendedQuantity: '1',
+      purchaseCost: '',
+      quantity: '1',
+    } : current);
+  }
+
+  function chooseAddToolPhoto(file?: File) {
+    setAddToolPhoto(file ?? null);
+    setUploadedToolPhoto(null);
+    setAddToolPhotoPreview(file ? URL.createObjectURL(file) : '');
+    setAddToolDraft((current) => current ? { ...current, requestId: createInventoryRequestId('van-tool') } : current);
+  }
+
+  async function submitAddTool() {
+    if (!addToolDraft) return;
+    const existingCatalog = addToolDraft.catalogId
+      ? activeToolCatalog.find((catalog) => catalog.id === addToolDraft.catalogId)
+      : undefined;
+    if (!addToolDraft.creatingNew && !existingCatalog) { setError('Choose a tool template or create a new one.'); return; }
+    if (addToolDraft.creatingNew && !addToolDraft.name.trim()) { setError('Enter a name for the new tool template.'); return; }
+    if (addToolDraft.creatingNew && !addToolDraft.category.trim()) { setError('Enter a category for the new tool template.'); return; }
+    const duplicateCatalog = addToolDraft.creatingNew
+      ? activeToolCatalog.find((catalog) => normalizedToolCatalogName(toolCatalogName(catalog)) === normalizedToolCatalogName(addToolDraft.name))
+      : undefined;
+    if (duplicateCatalog) { setError(`“${toolCatalogName(duplicateCatalog)}” already exists. Select that shared template instead of creating a duplicate.`); return; }
+    if (!addToolDraft.condition) { setError('Choose the physical condition of this tool.'); return; }
+    if (!addToolPhoto) { setError('Take or choose a fresh photo of the tool being added to this Van.'); return; }
+
+    const standardCost = Number(addToolDraft.standardCost);
+    const purchaseCost = addToolDraft.purchaseCost.trim() ? Number(addToolDraft.purchaseCost) : undefined;
+    const recommendedQuantity = Number(addToolDraft.recommendedQuantity);
+    const requestedQuantity = addToolDraft.trackingMode === 'individual' ? 1 : Number(addToolDraft.quantity);
+    if (addToolDraft.creatingNew && (!Number.isFinite(standardCost) || standardCost < 0)) { setError('Reference value must be zero or greater.'); return; }
+    if (addToolDraft.creatingNew && (!Number.isInteger(recommendedQuantity) || recommendedQuantity < 1)) { setError('Recommended quantity must be a whole number of at least one.'); return; }
+    if (purchaseCost !== undefined && (!Number.isFinite(purchaseCost) || purchaseCost < 0)) { setError('Purchase cost must be zero or greater.'); return; }
+    if (!Number.isInteger(requestedQuantity) || requestedQuantity < 1) { setError('Quantity must be a whole number of at least one.'); return; }
+
+    setError('');
+    setNotice('');
+    try {
+      let photo = uploadedToolPhoto;
+      if (!photo) {
+        setAddToolStage('Optimizing and uploading photo…');
+        photo = await uploadVanToolPhoto({
+          file: addToolPhoto,
+          requestId: addToolDraft.requestId,
+          vanId: addToolDraft.vanId,
+        });
+        setUploadedToolPhoto(photo);
+      }
+      setAddToolStage('Adding tool to Van…');
+      const input: AddInventoryToolToVanInput = {
+        requestId: addToolDraft.requestId,
+        vanId: addToolDraft.vanId,
+        ...(addToolDraft.creatingNew ? {
+          newCatalog: {
+            name: addToolDraft.name.trim(),
+            ...(addToolDraft.description.trim() ? { description: addToolDraft.description.trim() } : {}),
+            category: addToolDraft.category.trim(),
+            standardCost,
+            trackingMode: addToolDraft.trackingMode,
+            recommendedQuantity,
+          },
+        } : { toolCatalogId: existingCatalog!.id }),
+        condition: addToolDraft.condition,
+        ...(purchaseCost === undefined ? {} : { purchaseCost }),
+        quantity: requestedQuantity,
+        ...(addToolDraft.notes.trim() ? { notes: addToolDraft.notes.trim() } : {}),
+        photoUrl: photo.downloadUrl,
+        photoStoragePath: photo.storagePath,
+        thumbnailUrl: photo.thumbnailUrl,
+        thumbnailStoragePath: photo.thumbnailStoragePath,
+      };
+      const result = await addInventoryToolToVan(input);
+      const targetVan = vans.find((van) => van.id === addToolDraft.vanId);
+      await refresh();
+      setNotice(`${toolCatalogName(result.catalog)} added to ${targetVan?.name || addToolDraft.vanId} with a new physical photo.`);
+      setAddToolDraft(null);
+      setAddToolPhoto(null);
+      setAddToolPhotoPreview('');
+      setUploadedToolPhoto(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'The tool could not be added to this Van.');
+    } finally {
+      setAddToolStage('');
+    }
+  }
+
   function StockTable({ locationId, itemKind, title }: { locationId: string; itemKind?: InventoryItem['itemKind']; title?: string }) {
     const location = locations.find((candidate) => candidate.id === locationId);
     const visibleItems = items.filter((item) => !itemKind || item.itemKind === itemKind);
@@ -510,7 +744,7 @@ export function ConsolidatedInventoryWorkspace() {
     </section>;
   }
 
-  function ToolTable({ locationId }: { locationId?: string }) {
+  function ToolTable({ locationId, allowAdd = false }: { locationId?: string; allowAdd?: boolean }) {
     const visibleTools = [...(locationId ? toolsAt(locationId) : activeToolAssets)]
       .sort((a, b) => (a.assetCode || a.id).localeCompare(b.assetCode || b.id, undefined, { numeric: true, sensitivity: 'base' }));
     const normalizedQuery = mobileToolQuery.trim().toLowerCase();
@@ -522,19 +756,21 @@ export function ConsolidatedInventoryWorkspace() {
     }) : visibleTools;
     const assignedUnits = visibleTools.reduce((sum, asset) => sum + toolExpectedQuantity(asset), 0);
     return <section className={styles.panel}>
-      <header className={styles.panelHead}><div><strong>{locationId ? `${locationLabel(locations, locationId)} tools` : 'Tool assets'}</strong><span>Real asset details, stored photos and controlled editing</span></div><b>{quantity(assignedUnits)} assigned · {visibleTools.length} records</b></header>
+      <header className={styles.panelHead}><div><strong>{locationId ? `${locationLabel(locations, locationId)} tools` : 'Tool assets'}</strong><span>{locationId ? 'Physically assigned to this Van' : 'Real asset details, stored photos and controlled editing'}</span></div><div className={styles.panelHeadActions}><b>{quantity(assignedUnits)} assigned · {visibleTools.length} records</b>{allowAdd ? <button type="button" className={styles.addToolButton} onClick={() => openAddTool()}>+ Add Tool</button> : null}</div></header>
       <div className={styles.mobileToolSearch}><label><InventoryIcon name="overview" /><input type="search" value={mobileToolQuery} onChange={(event) => setMobileToolQuery(event.target.value)} placeholder="Search tools or asset ID" aria-label="Search tools or asset ID" /></label><span>{mobileVisibleTools.length} items</span></div>
       <div className={styles.mobileToolList}>{mobileVisibleTools.map((asset) => {
         const catalog = snapshot?.toolCatalog.find((tool) => tool.id === asset.toolCatalogId);
         const expected = toolExpectedQuantity(asset);
         const present = toolPresentQuantity(asset);
+        const missing = toolMissingQuantity(asset);
+        const recommended = toolRecommendedQuantity(asset, catalog);
         const unitCost = Number.isFinite(Number(asset.purchaseCost)) ? Number(asset.purchaseCost) : Number(catalog?.standardCost || 0);
-        const isMissing = asset.present === false || present === 0;
+        const isMissing = missing > 0;
         return <article key={`mobile:${asset.id}`} className={styles.mobileToolRow}>
           <ToolPhoto asset={asset} onOpen={setToolLightbox} />
           <button type="button" className={styles.mobileToolOpen} onClick={() => beginToolEdit(asset)}>
-            <span className={styles.mobileToolCopy}><strong>{catalog?.name || asset.toolCatalogId || 'Tool'}</strong><small>{asset.assetCode || asset.id} · {asset.condition || 'No inspeccionada'}</small><span><b>Qty {present}/{expected}</b><b>{money(unitCost)}{expected > 1 ? ' ea.' : ''}</b></span></span>
-            <span className={`${styles.mobileToolStatus} ${isMissing ? styles.mobileToolStatusAlert : ''}`}><small>{isMissing ? 'Not present' : asset.operationalStatus || 'Available'}</small><i aria-hidden="true">›</i></span>
+            <span className={styles.mobileToolCopy}><strong>{catalog?.name || asset.toolCatalogId || 'Tool'}</strong><small>{asset.assetCode || asset.id} · {asset.condition || 'No inspeccionada'}</small><span><b>Qty {present}/{expected}</b><b>{money(unitCost)}{expected > 1 ? ' ea.' : ''}</b></span><small>Recommended {recommended}</small></span>
+            <span className={`${styles.mobileToolStatus} ${isMissing ? styles.mobileToolStatusAlert : ''}`}><small>{isMissing ? `${missing} missing` : `${present} available`}</small><i aria-hidden="true">›</i></span>
           </button>
         </article>;
       })}{!mobileVisibleTools.length ? <p className={styles.empty}>No tools match this search.</p> : null}</div>
@@ -542,14 +778,16 @@ export function ConsolidatedInventoryWorkspace() {
         const catalog = snapshot?.toolCatalog.find((tool) => tool.id === asset.toolCatalogId);
         const expected = toolExpectedQuantity(asset);
         const present = toolPresentQuantity(asset);
+        const missing = toolMissingQuantity(asset);
+        const recommended = toolRecommendedQuantity(asset, catalog);
         const unitCost = Number.isFinite(Number(asset.purchaseCost)) ? Number(asset.purchaseCost) : Number(catalog?.standardCost || 0);
         return <tr key={asset.id}>
           <td><ToolPhoto asset={asset} onOpen={setToolLightbox} /></td>
           <td><strong>{asset.assetCode || asset.id}</strong><small>{catalog?.name || asset.toolCatalogId || 'Tool'}{catalog?.category ? ` · ${catalog.category}` : ''}</small></td>
           <td>{asset.condition || 'No inspeccionada'}</td>
-          <td><strong>{present} / {expected}</strong><small>present / assigned</small></td>
+          <td><strong>{present} / {expected}</strong><small>{missing} missing · {recommended} recommended</small></td>
           <td>{money(unitCost)}{expected > 1 ? <small>{money(unitCost * expected)} total</small> : null}</td>
-          <td><strong>{asset.operationalStatus || '—'}</strong><small>{asset.present === false || present === 0 ? 'Not present' : 'Present'}</small></td>
+          <td><strong>{asset.operationalStatus || '—'}</strong><small>{present} available · {missing} missing</small></td>
           <td>{locationLabel(locations, asset.inventoryLocationId || asset.locationId || asset.vanId || '')}</td>
           <td className={styles.toolNotes}>{asset.notes || '—'}</td>
           <td><button type="button" onClick={() => beginToolEdit(asset)}>Edit</button></td>
@@ -557,6 +795,69 @@ export function ConsolidatedInventoryWorkspace() {
       })}</tbody></table></div>
       {!visibleTools.length ? <p className={styles.empty}>No active tool assets are assigned to this location.</p> : null}
     </section>;
+  }
+
+  function MissingToolTemplates() {
+    if (!activeVan) return null;
+    return <section className={`${styles.panel} ${styles.missingToolTemplates}`}>
+      <header className={styles.panelHead}><div><strong>Templates in other Vans</strong><span>Shared catalog tools not physically assigned to {activeVan.name}</span></div><b>{missingVanToolTemplates.length} available</b></header>
+      {missingVanToolTemplates.length ? <div className={styles.missingToolGrid}>{missingVanToolTemplates.map(({ catalog, vans: templateVans }) => <article key={catalog.id} className={styles.missingToolCard}>
+        <span className={styles.missingToolIcon}><InventoryIcon name="tool" /></span>
+        <div className={styles.missingToolCopy}><strong>{toolCatalogName(catalog)}</strong><small>{catalog.description || catalog.category || 'No shared description'}</small><div><span>Reference value</span><b>{money(Number(catalog.standardCost) || 0)}</b></div><p><span>Currently in</span>{templateVans.map((van) => van.name).join(', ')}</p></div>
+        <button type="button" onClick={() => openAddTool(catalog)}>Add to this Van</button>
+      </article>)}</div> : <p className={styles.empty}>Every shared tool template already has an assignment in this Van.</p>}
+    </section>;
+  }
+
+  function AddToolDrawer() {
+    if (!addToolDraft) return null;
+    const targetVan = vans.find((van) => van.id === addToolDraft.vanId);
+    const hasTemplateChoice = addToolDraft.creatingNew || Boolean(selectedAddToolCatalog);
+    return <div className={styles.toolDrawerBackdrop} onMouseDown={(event) => { if (event.currentTarget === event.target) closeAddTool(); }}>
+      <section className={`${styles.toolDrawer} ${styles.addToolDrawer}`} role="dialog" aria-modal="true" aria-labelledby="add-tool-title" aria-busy={Boolean(addToolStage)}>
+        <header><div><span>New physical Van assignment</span><h2 id="add-tool-title">Add Tool</h2><small>{targetVan?.name || addToolDraft.vanId} · fresh photo required</small></div><button type="button" aria-label="Close add tool" disabled={Boolean(addToolStage)} onClick={closeAddTool}>×</button></header>
+        <div className={styles.addToolBody}>
+          {error ? <div className={styles.addToolError} role="alert">{error}</div> : null}
+          <section className={styles.catalogChooser}>
+            <header><strong>1. Find a shared tool template</strong><span>Search once, then use a match or create the missing template.</span></header>
+            <label className={styles.catalogSearch}><InventoryIcon name="overview" /><input type="search" autoFocus value={addToolDraft.search} onChange={(event) => setAddToolDraft({ ...addToolDraft, search: event.target.value, catalogId: '', creatingNew: false })} placeholder="Search name, description or category" /></label>
+            <div className={styles.catalogResults}>{filteredToolCatalog.map((catalog) => {
+              const coverage = catalogVanCoverage.get(catalog.id) ?? [];
+              const isSelected = addToolDraft.catalogId === catalog.id && !addToolDraft.creatingNew;
+              return <button key={catalog.id} type="button" className={isSelected ? styles.catalogResultSelected : ''} onClick={() => chooseCatalogForAdd(catalog)}>
+                <span className={styles.catalogResultIcon}><InventoryIcon name="tool" /></span><span><strong>{toolCatalogName(catalog)}</strong><small>{catalog.description || catalog.category || 'No shared description'}</small><em>{coverage.length ? `In ${coverage.map((van) => van.name).join(', ')}` : 'No current Van assignment'}</em></span><b>{money(Number(catalog.standardCost) || 0)}</b>
+              </button>;
+            })}{!filteredToolCatalog.length ? <p>No matching shared templates.</p> : null}</div>
+            <button type="button" className={styles.newCatalogButton} onClick={beginNewToolTemplate}>+ Create a new template{addToolDraft.search.trim() ? ` for “${addToolDraft.search.trim()}”` : ''}</button>
+          </section>
+
+          {hasTemplateChoice ? <>
+            {addToolDraft.creatingNew ? <section className={styles.addToolSection}><header><strong>Shared template details</strong><span>These fields can be reused by every Van.</span></header><div className={styles.addToolGrid}>
+              <label>Name<input value={addToolDraft.name} maxLength={160} onChange={(event) => setAddToolDraft({ ...addToolDraft, name: event.target.value })} /></label>
+              <label>Category<input value={addToolDraft.category} maxLength={120} onChange={(event) => setAddToolDraft({ ...addToolDraft, category: event.target.value })} /></label>
+              <label className={styles.wide}>Description<textarea rows={3} maxLength={1000} value={addToolDraft.description} onChange={(event) => setAddToolDraft({ ...addToolDraft, description: event.target.value })} placeholder="What this tool is and what it is used for" /></label>
+              <label>Reference value<input type="number" min="0" step="0.01" value={addToolDraft.standardCost} onChange={(event) => setAddToolDraft({ ...addToolDraft, standardCost: event.target.value })} /></label>
+              <label>Tracking<select value={addToolDraft.trackingMode} onChange={(event) => { const trackingMode = event.target.value as AddToolDraft['trackingMode']; setAddToolDraft({ ...addToolDraft, trackingMode, quantity: trackingMode === 'individual' ? '1' : addToolDraft.recommendedQuantity }); }}><option value="individual">Individual asset</option><option value="quantity">Quantity</option></select></label>
+              <label>Recommended quantity<input type="number" min="1" step="1" value={addToolDraft.recommendedQuantity} onChange={(event) => setAddToolDraft({ ...addToolDraft, recommendedQuantity: event.target.value, ...(addToolDraft.trackingMode === 'quantity' ? { quantity: event.target.value } : {}) })} /></label>
+            </div></section> : selectedAddToolCatalog ? <section className={styles.selectedCatalogCard}><span className={styles.catalogResultIcon}><InventoryIcon name="tool" /></span><div><small>Selected shared template</small><strong>{toolCatalogName(selectedAddToolCatalog)}</strong><p>{selectedAddToolCatalog.description || 'No shared description'}</p><span>{selectedAddToolCatalog.category || 'Uncategorized'} · {selectedAddToolCatalog.trackingMode === 'quantity' ? 'Quantity tracked' : 'Individual asset'} · {money(Number(selectedAddToolCatalog.standardCost) || 0)}</span></div><button type="button" onClick={() => setAddToolDraft({ ...addToolDraft, catalogId: '', search: '', creatingNew: false })}>Change</button></section> : null}
+
+            <section className={styles.addToolSection}><header><strong>2. This physical assignment</strong><span>Condition, value and quantity belong to {targetVan?.name || 'this Van'}.</span></header><div className={styles.addToolGrid}>
+              <label>Condition<select value={addToolDraft.condition} onChange={(event) => setAddToolDraft({ ...addToolDraft, condition: event.target.value })}><option value="">Choose condition…</option>{TOOL_CONDITIONS.map((condition) => <option key={condition} value={condition}>{condition}</option>)}</select></label>
+              <label>Purchase cost<input type="number" min="0" step="0.01" value={addToolDraft.purchaseCost} onChange={(event) => setAddToolDraft({ ...addToolDraft, purchaseCost: event.target.value })} placeholder={addToolDraft.standardCost || '0.00'} /></label>
+              <label>Quantity<input type="number" min="1" step="1" disabled={addToolDraft.trackingMode === 'individual'} value={addToolDraft.trackingMode === 'individual' ? '1' : addToolDraft.quantity} onChange={(event) => setAddToolDraft({ ...addToolDraft, quantity: event.target.value })} /><small>{addToolDraft.trackingMode === 'individual' ? 'One individual asset per add.' : 'Adds this many physical units.'}</small></label>
+              <label className={styles.wide}>Notes<textarea rows={3} value={addToolDraft.notes} onChange={(event) => setAddToolDraft({ ...addToolDraft, notes: event.target.value })} placeholder="Optional assignment notes" /></label>
+            </div></section>
+
+            <section className={styles.addToolSection}><header><strong>3. Fresh photo for this Van</strong><span>Another Van’s photo is never reused. The thumbnail is generated automatically.</span></header><label className={`${styles.addToolPhotoField} ${addToolPhotoPreview ? styles.addToolPhotoReady : ''}`}>
+              {addToolPhotoPreview ? <img src={addToolPhotoPreview} alt="New tool photo preview" /> : <span><InventoryIcon name="tool" /><strong>Take or choose a photo</strong><small>Image only · optimized before upload</small></span>}
+              <input type="file" accept="image/*" capture="environment" onChange={(event) => chooseAddToolPhoto(event.target.files?.[0])} />
+              {addToolPhotoPreview ? <b>Replace photo</b> : null}
+            </label>{uploadedToolPhoto ? <p className={styles.photoUploadState}>Photo and thumbnail uploaded. Ready to finish.</p> : null}</section>
+          </> : <p className={styles.addToolPrompt}>Choose a shared template above or create a new one to continue.</p>}
+        </div>
+        <footer className={styles.addToolFooter}><span>{addToolStage || 'A new physical asset will be recorded in the selected Van.'}</span><div><button type="button" disabled={Boolean(addToolStage)} onClick={closeAddTool}>Cancel</button><button type="button" className={styles.primary} disabled={Boolean(addToolStage) || !hasTemplateChoice} onClick={() => void submitAddTool()}>{addToolStage || 'Add Tool'}</button></div></footer>
+      </section>
+    </div>;
   }
 
   function MetricCard({ icon, label, value, detail, tone = 'blue' }: { icon: InventoryIconName; label: string; value: string | number; detail: string; tone?: 'blue' | 'purple' | 'green' | 'orange' | 'red' }) {
@@ -704,10 +1005,10 @@ export function ConsolidatedInventoryWorkspace() {
           <div><InventoryIcon name="bottle" /><span>Consumables on hand</span><strong>{quantity(onHandAt(activeVan.id, 'material'))}</strong><small>{quantity(Math.max(0, onHandAt(activeVan.id, 'material') - reservedAt(activeVan.id, 'material')))} available</small></div>
           <div><InventoryIcon name="tool" /><span>Tools assigned</span><strong>{quantity(activeVanTools.reduce((sum, asset) => sum + toolQuantity(asset), 0))}</strong><small>Active assets</small></div>
           <div><InventoryIcon name="transfer" /><span>Open transfers</span><strong>{activeVanTransfers.length}</strong><button type="button" onClick={() => openView('transfers')}>View transfers</button></div>
-          <div><InventoryIcon name="warning" /><span>Missing tools</span><strong>{quantity(activeVanMissingTools.reduce((sum, asset) => sum + toolQuantity(asset), 0))}</strong><button type="button" onClick={() => setVanSection('tools')}>View tools</button></div>
+          <div><InventoryIcon name="warning" /><span>Missing tools</span><strong>{quantity(activeVanMissingTools.reduce((sum, asset) => sum + toolMissingQuantity(asset), 0))}</strong><button type="button" onClick={() => setVanSection('tools')}>View tools</button></div>
           <div><InventoryIcon name="warning" /><span>Low stock alerts</span><strong>{activeVanReplenishment.length}</strong><button type="button" onClick={() => openView('replenishment')}>View alerts</button></div>
         </div></section><section className={`${styles.panel} ${styles.vanActivity}`}><header className={styles.panelHead}><div><strong>Recent activity</strong><span>Movements involving {activeVan.name}.</span></div><button type="button" onClick={() => openView('movements')}>View all</button></header><ActivityList rows={activeVanMovements} emptyText={`No inventory movements recorded for ${activeVan.name}.`} /></section></aside>
-      </div> : <div className={styles.vanDetail}><div className={styles.vanDetailHeader}><button type="button" onClick={() => setVanSection('workspace')}>← Choose inventory view</button><span>{activeVan.name}</span></div>{vanSection === 'overview' ? <StockTable locationId={activeVan.id} title={`${activeVan.name} · Overview`} /> : null}{vanSection === 'consumables' ? <StockTable locationId={activeVan.id} itemKind="material" title={`${activeVan.name} · Consumables`} /> : null}{vanSection === 'products' ? <StockTable locationId={activeVan.id} itemKind="product" title={`${activeVan.name} · Products for Sale`} /> : null}{vanSection === 'tools' ? <ToolTable locationId={activeVan.id} /> : null}</div>}
+      </div> : <div className={styles.vanDetail}><div className={styles.vanDetailHeader}><button type="button" onClick={() => setVanSection('workspace')}>← Choose inventory view</button><span>{activeVan.name}</span></div>{vanSection === 'overview' ? <StockTable locationId={activeVan.id} title={`${activeVan.name} · Overview`} /> : null}{vanSection === 'consumables' ? <StockTable locationId={activeVan.id} itemKind="material" title={`${activeVan.name} · Consumables`} /> : null}{vanSection === 'products' ? <StockTable locationId={activeVan.id} itemKind="product" title={`${activeVan.name} · Products for Sale`} /> : null}{vanSection === 'tools' ? <div className={styles.vanToolsSections}><ToolTable locationId={activeVan.id} allowAdd />{MissingToolTemplates()}</div> : null}</div>}
       </div>
     </> : null}
 
@@ -735,6 +1036,8 @@ export function ConsolidatedInventoryWorkspace() {
     {stockEdit ? <div className={styles.modalBackdrop}><section className={styles.modal} role="dialog" aria-modal="true" aria-labelledby="stock-edit-title"><header><div><span>Physical stock · {locationLabel(locations, stockEdit.locationId)}</span><h2 id="stock-edit-title">{stockEdit.item.name}</h2></div><button type="button" aria-label="Close stock editor" onClick={() => setStockEdit(null)}>×</button></header><div className={styles.form}><label>On hand<input type="number" min="0" step={stockEdit.item.itemKind === 'product' ? 1 : 0.001} value={stockEdit.onHand} onChange={(event) => setStockEdit({ ...stockEdit, onHand: event.target.value })} /></label><label>Minimum<input type="number" min="0" step={stockEdit.item.itemKind === 'product' ? 1 : 0.001} value={stockEdit.minimum} onChange={(event) => setStockEdit({ ...stockEdit, minimum: event.target.value })} /></label><label>Target<input type="number" min="0" step={stockEdit.item.itemKind === 'product' ? 1 : 0.001} value={stockEdit.target} onChange={(event) => setStockEdit({ ...stockEdit, target: event.target.value })} /></label><p className={styles.wide}>Reserved stock cannot be counted below its committed quantity. Van min/target drives replenishment automatically.</p><footer className={styles.wide}><button type="button" onClick={() => setStockEdit(null)}>Cancel</button><button type="button" className={styles.primary} disabled={isPending(`stock:${stockEdit.locationId}:${itemKey(stockEdit.item)}`)} onClick={() => void saveStockEdit()}>{isPending(`stock:${stockEdit.locationId}:${itemKey(stockEdit.item)}`) ? 'Saving…' : 'Save verified count'}</button></footer></div></section></div> : null}
 
     {legacyItem ? <div className={styles.modalBackdrop}><section className={styles.modal} role="dialog" aria-modal="true" aria-labelledby="legacy-allocation-title"><header><div><span>Historical stock assignment</span><h2 id="legacy-allocation-title">{legacyItem.name}</h2></div><button type="button" aria-label="Close historical stock assignment" onClick={() => setLegacyItem(null)}>×</button></header><div className={styles.form}><p className={styles.wide}>Unassigned total: <b>{legacyItem.balances[LEGACY_LOCATION_ID]?.onHand ?? 0}</b>. Warehouse + Office must equal this exact quantity.</p><label>Warehouse<input type="number" min="0" value={legacyWarehouse} onChange={(event) => setLegacyWarehouse(event.target.value)} /></label><label>Office<input type="number" min="0" value={legacyOffice} onChange={(event) => setLegacyOffice(event.target.value)} /></label><footer className={styles.wide}><button type="button" onClick={() => setLegacyItem(null)}>Cancel</button><button type="button" className={styles.primary} disabled={isPending(`legacy:${legacyItem.id}`)} onClick={() => void saveLegacyAllocation()}>{isPending(`legacy:${legacyItem.id}`) ? 'Assigning…' : 'Assign locations'}</button></footer></div></section></div> : null}
+
+    {AddToolDrawer()}
 
     {toolEdit ? <div className={styles.toolDrawerBackdrop} onMouseDown={(event) => { if (event.currentTarget === event.target) setToolEdit(null); }}><section className={styles.toolDrawer} role="dialog" aria-modal="true" aria-labelledby="tool-edit-title">
       <header><div><span>Tool asset profile</span><h2 id="tool-edit-title">{snapshot.toolCatalog.find((tool) => tool.id === toolEdit.asset.toolCatalogId)?.name || toolEdit.asset.toolCatalogId || 'Tool'}</h2><small>{toolEdit.asset.assetCode || toolEdit.asset.id}</small></div><button type="button" aria-label="Close tool editor" onClick={() => setToolEdit(null)}>×</button></header>

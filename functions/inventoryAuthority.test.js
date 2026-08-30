@@ -443,6 +443,290 @@ test("fractional Product quantities are rejected instead of silently rounded", a
   );
 });
 
+test("add tool to Van creates one fresh physical asset from an existing individual catalog", async () => {
+  const seed = toolSeed();
+  seed.vanToolAssets["asset-drill-1"].maintenanceDueAt = "2030-01-01T00:00:00.000Z";
+  const db = makeDb(seed);
+  const api = apiFor(db);
+  const result = await api.execute({
+    action: "add_tool_to_van",
+    data: {
+      requestId: "add-existing-individual-001",
+      vanId: "VAN-2",
+      toolCatalogId: "tool-drill",
+      condition: "Poco uso",
+      purchaseCost: 210,
+      quantity: 1,
+      notes: "Dedicated to the second crew",
+      photoUrl: "https://example.com/inventory/drill-new.jpg",
+      photoStoragePath: "inventory/van-tool/add-existing-individual-001.jpg",
+      thumbnailUrl: "https://example.com/inventory/drill-new-thumb.jpg",
+      thumbnailStoragePath: "inventory/van-tool/add-existing-individual-001-thumb.jpg",
+    },
+    actor,
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.replayed, false);
+  assert.equal(result.catalog.id, "tool-drill");
+  assert.notEqual(result.asset.id, "asset-drill-1");
+  assert.notEqual(result.asset.assetCode, seed.vanToolAssets["asset-drill-1"].assetCode);
+  assert.equal(result.asset.vanId, "VAN-2");
+  assert.equal(result.asset.trackingMode, "individual");
+  assert.equal(result.asset.quantityExpected, 1);
+  assert.equal(result.asset.quantityPresent, 1);
+  assert.equal(result.asset.latestPhotoStoragePath, "inventory/van-tool/add-existing-individual-001.jpg");
+  assert.equal(result.asset.latestThumbnailStoragePath, "inventory/van-tool/add-existing-individual-001-thumb.jpg");
+  assert.equal(result.asset.latestThumbnailSourcePhotoPath, result.asset.latestPhotoStoragePath);
+  assert.equal(result.asset.unitNumber, 2);
+  assert.equal(result.asset.maintenanceDueAt, undefined, "a new physical asset must not clone fields from an existing asset");
+  assert.equal(result.asset.lifecycleHistory.length, 1);
+  assert.equal(db.stores.get("vanToolAssets").size, 2);
+  assert.equal(db.stores.get("inventoryMovements").size, 1);
+  assert.equal(result.movement.type, "tool_added_to_van");
+});
+
+test("add tool to Van atomically creates a new catalog and its first asset", async () => {
+  const db = makeDb(productSeed());
+  const api = apiFor(db);
+  const result = await api.addToolToVan({
+    requestId: "add-new-catalog-tool-001",
+    vanId: "VAN-1",
+    newCatalog: {
+      name: "Milwaukee Inspection Camera",
+      description: "Flexible inspection camera for confined equipment spaces.",
+      category: "Inspection Tools",
+      standardCost: 399.95,
+      trackingMode: "individual",
+      recommendedQuantity: 1,
+    },
+    condition: "Nueva",
+    quantity: 1,
+    notes: "Initial registration",
+    photoUrl: "https://example.com/inventory/inspection-camera.jpg",
+    photoStoragePath: "inventory/van-tool/add-new-catalog-tool-001.jpg",
+  }, actor);
+
+  assert.equal(result.replayed, false);
+  assert.equal(result.catalog.name, "Milwaukee Inspection Camera");
+  assert.equal(result.catalog.description, "Flexible inspection camera for confined equipment spaces.");
+  assert.equal(result.catalog.sequence, 1);
+  assert.equal(result.asset.toolCatalogId, result.catalog.id);
+  assert.equal(result.asset.purchaseCost, 399.95);
+  assert.equal(db.stores.get("toolCatalog").size, 1);
+  assert.equal(db.stores.get("vanToolAssets").size, 1);
+  assert.equal(db.stores.get("inventoryMovements").size, 1);
+});
+
+test("add tool to Van rejects a duplicate active catalog name and identifies the reusable catalog", async () => {
+  const seed = productSeed();
+  seed.toolCatalog["tool-camera"] = {
+    name: "Milwaukee Inspection Camera",
+    category: "Inspection Tools",
+    standardCost: 399.95,
+    trackingMode: "individual",
+    active: true,
+  };
+  const db = makeDb(seed);
+  const api = apiFor(db);
+  await assert.rejects(
+    () => api.addToolToVan({
+      requestId: "add-duplicate-catalog-001",
+      vanId: "VAN-1",
+      newCatalog: {
+        name: "  milwaukee   inspection camera  ",
+        description: "Duplicate template attempt",
+        category: "Tools",
+        standardCost: 400,
+        trackingMode: "individual",
+        recommendedQuantity: 1,
+      },
+      condition: "Nueva",
+      quantity: 1,
+      photoUrl: "https://example.com/inventory/duplicate-camera.jpg",
+      photoStoragePath: "inventory/van-tool/add-duplicate-catalog-001.jpg",
+    }, actor),
+    (error) => {
+      assert.equal(error.code, "duplicate_tool_catalog");
+      assert.equal(error.details.toolCatalogId, "tool-camera");
+      return true;
+    },
+  );
+  assert.equal(db.stores.get("toolCatalog").size, 1);
+  assert.equal(db.stores.get("vanToolAssets").size, 0);
+  assert.equal(db.stores.get("inventoryMovements").size, 0);
+});
+
+test("add tool to Van increments a quantity group without erasing its missing state or representative metadata", async () => {
+  const db = makeDb(toolSeed({
+    trackingMode: "quantity",
+    quantityExpected: 4,
+    quantityPresent: 3,
+    condition: "Muy usada",
+    operationalStatus: "Faltante",
+    present: false,
+    purchaseCost: 175,
+    notes: "Representative group metadata",
+    latestPhotoUrl: "https://example.com/inventory/old-drill.jpg",
+    latestPhotoStoragePath: "inventory/van-tool/old-drill.jpg",
+    latestThumbnailUrl: "https://example.com/inventory/old-drill-thumb.jpg",
+    latestThumbnailStoragePath: "inventory/van-tool/old-drill-thumb.jpg",
+    latestThumbnailSourcePhotoPath: "inventory/van-tool/old-drill.jpg",
+    lifecycleHistory: [{ id: "initial", action: "registered", occurredAt: "2026-01-01T00:00:00.000Z" }],
+  }));
+  const api = apiFor(db);
+  const result = await api.addToolToVan({
+    requestId: "add-quantity-group-001",
+    vanId: "VAN-1",
+    toolCatalogId: "tool-drill",
+    condition: "Uso medio",
+    purchaseCost: 99,
+    quantity: 3,
+    notes: "Evidence for only the newly added units",
+    photoUrl: "https://example.com/inventory/drill-bits.jpg",
+    photoStoragePath: "inventory/van-tool/add-quantity-group-001.jpg",
+  }, actor);
+
+  assert.equal(result.asset.id, "asset-drill-1");
+  assert.equal(result.asset.quantityExpected, 7);
+  assert.equal(result.asset.quantityPresent, 6);
+  assert.equal(result.asset.present, false);
+  assert.equal(result.asset.operationalStatus, "Faltante");
+  assert.equal(result.asset.condition, "Muy usada");
+  assert.equal(result.asset.purchaseCost, 175);
+  assert.equal(result.asset.notes, "Representative group metadata");
+  assert.equal(result.asset.latestPhotoStoragePath, "inventory/van-tool/old-drill.jpg");
+  assert.equal(result.asset.latestThumbnailUrl, "https://example.com/inventory/old-drill-thumb.jpg");
+  assert.equal(result.asset.lifecycleHistory.length, 2);
+  assert.equal(result.asset.lifecycleHistory.at(-1).action, "registered");
+  assert.equal(result.asset.lifecycleHistory.at(-1).condition, "Uso medio");
+  assert.equal(result.asset.lifecycleHistory.at(-1).purchaseCost, 99);
+  assert.equal(result.asset.lifecycleHistory.at(-1).notes, "Evidence for only the newly added units");
+  assert.equal(result.asset.lifecycleHistory.at(-1).photoStoragePath, "inventory/van-tool/add-quantity-group-001.jpg");
+  assert.equal(db.stores.get("vanToolAssets").size, 1);
+  assert.equal(db.stores.get("inventoryMovements").size, 1);
+});
+
+test("add tool to Van replays deterministically without duplicating catalog, asset, quantity or movement", async () => {
+  const db = makeDb(productSeed());
+  const api = apiFor(db);
+  const input = {
+    requestId: "add-tool-replay-001",
+    vanId: "VAN-3",
+    newCatalog: {
+      name: "Klein Fish Tape",
+      category: "Hand Tools",
+      standardCost: 75,
+      trackingMode: "quantity",
+      recommendedQuantity: 4,
+    },
+    condition: "Nueva",
+    quantity: 2,
+    photoUrl: "https://example.com/inventory/fish-tape.jpg",
+    photoStoragePath: "inventory/van-tool/add-tool-replay-001.jpg",
+  };
+
+  const created = await api.addToolToVan(input, actor);
+  const replay = await api.addToolToVan({ ...input, quantity: 5, condition: "Muy usada" }, actor);
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.catalog.id, created.catalog.id);
+  assert.equal(replay.asset.id, created.asset.id);
+  assert.equal(replay.asset.quantityExpected, 2);
+  assert.equal(replay.asset.condition, "Nueva");
+  assert.equal(db.stores.get("toolCatalog").size, 1);
+  assert.equal(db.stores.get("vanToolAssets").size, 1);
+  assert.equal(db.stores.get("inventoryMovements").size, 1);
+});
+
+test("add tool to Van rejects missing or fake photo references and an unavailable Van without partial writes", async () => {
+  const seed = toolSeed();
+  seed.vans["VAN-2"].active = false;
+  const db = makeDb(seed);
+  const api = apiFor(db);
+  const base = {
+    requestId: "add-tool-invalid-001",
+    vanId: "VAN-1",
+    toolCatalogId: "tool-drill",
+    condition: "Nueva",
+    quantity: 1,
+    photoUrl: "https://example.com/inventory/tool.jpg",
+    photoStoragePath: "inventory/van-tool/add-tool-invalid-001.jpg",
+  };
+
+  await assert.rejects(
+    () => api.addToolToVan({ ...base, requestId: "add-tool-no-photo-001", photoUrl: "" }, actor),
+    /photo URL is required/i,
+  );
+  await assert.rejects(
+    () => api.addToolToVan({ ...base, requestId: "add-tool-fake-photo-001", photoUrl: "data:image/jpeg;base64,abc" }, actor),
+    /valid HTTPS URL/i,
+  );
+  await assert.rejects(
+    () => api.addToolToVan({ ...base, requestId: "add-tool-wrong-path-001", photoStoragePath: "temporary/tool.jpg" }, actor),
+    /uploaded Van Tool photo/i,
+  );
+  await assert.rejects(
+    () => api.addToolToVan({ ...base, requestId: "add-tool-half-thumbnail-001", thumbnailUrl: "https://example.com/inventory/tool-thumb.jpg" }, actor),
+    /thumbnail URL and storage path must be provided together/i,
+  );
+  await assert.rejects(
+    () => api.addToolToVan({
+      requestId: "add-tool-inactive-van-001",
+      vanId: "VAN-2",
+      newCatalog: {
+        name: "Inactive Van Test Tool",
+        category: "Test Tools",
+        standardCost: 10,
+        trackingMode: "individual",
+        recommendedQuantity: 1,
+      },
+      condition: "Nueva",
+      quantity: 1,
+      photoUrl: base.photoUrl,
+      photoStoragePath: base.photoStoragePath,
+    }, actor),
+    /does not exist or is inactive/i,
+  );
+  assert.equal(db.stores.get("toolCatalog").size, 1);
+  assert.equal(db.stores.get("vanToolAssets").size, 1);
+  assert.equal(db.stores.get("inventoryMovements").size, 0);
+});
+
+test("add tool to Van validates supported fields, condition, costs and Fast Mode quantities", async () => {
+  const db = makeDb(toolSeed());
+  const api = apiFor(db);
+  const base = {
+    requestId: "add-tool-validation-001",
+    vanId: "VAN-1",
+    toolCatalogId: "tool-drill",
+    condition: "Nueva",
+    quantity: 1,
+    photoUrl: "https://example.com/inventory/tool.jpg",
+    photoStoragePath: "inventory/van-tool/add-tool-validation-001.jpg",
+  };
+  await assert.rejects(
+    () => api.addToolToVan({ ...base, requestId: "add-tool-unsupported-001", operationalStatus: "Disponible" }, actor),
+    /unsupported add-tool fields/i,
+  );
+  await assert.rejects(
+    () => api.addToolToVan({ ...base, requestId: "add-tool-condition-001", condition: "Destroyed" }, actor),
+    /condition is not supported/i,
+  );
+  await assert.rejects(
+    () => api.addToolToVan({ ...base, requestId: "add-tool-cost-001", purchaseCost: -1 }, actor),
+    /purchaseCost must be a non-negative/i,
+  );
+  await assert.rejects(
+    () => api.addToolToVan({ ...base, requestId: "add-tool-individual-quantity-001", quantity: 2 }, actor),
+    /exactly one physical asset/i,
+  );
+  await assert.rejects(
+    () => api.addToolToVan({ ...base, requestId: "add-tool-fractional-quantity-001", quantity: 1.5 }, actor),
+    /positive whole number/i,
+  );
+  assert.equal(db.stores.get("inventoryMovements").size, 0);
+});
+
 test("tool details update condition, notes, value and quantity atomically and replay once", async () => {
   const db = makeDb(toolSeed({ trackingMode: "quantity", quantityExpected: 4, quantityPresent: 3 }));
   const api = apiFor(db);
