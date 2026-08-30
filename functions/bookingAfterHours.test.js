@@ -269,6 +269,7 @@ test("office facade preserves every after-hours work line from the canonical dra
   }).format(new Date());
   const db = new FakeFirestore(baseSeed({
     "users/office-user": { id: "office-user", role: "office", active: true, name: "Dispatcher" },
+    "businessSettings/business-calendar": { id: "business-calendar", closedWeekdays: [] },
   }));
   const facade = createOfficeBookingAuthorityFacade({
     db,
