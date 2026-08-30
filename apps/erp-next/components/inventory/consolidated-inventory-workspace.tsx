@@ -146,6 +146,8 @@ export function ConsolidatedInventoryWorkspace() {
   const [transferNotes, setTransferNotes] = useState<Record<string, string>>({});
   const [toolEdit, setToolEdit] = useState<ToolEdit | null>(null);
   const [toolLightbox, setToolLightbox] = useState('');
+  const [mobileToolQuery, setMobileToolQuery] = useState('');
+  const [mobileToolAction, setMobileToolAction] = useState<'summary' | 'edit' | 'transfer'>('summary');
 
   const refresh = useCallback(async () => {
     try {
@@ -440,6 +442,7 @@ export function ConsolidatedInventoryWorkspace() {
   function beginToolEdit(asset: InventoryToolAsset) {
     const catalog = snapshot?.toolCatalog.find((tool) => tool.id === asset.toolCatalogId);
     const purchaseCost = Number.isFinite(Number(asset.purchaseCost)) ? Number(asset.purchaseCost) : Number(catalog?.standardCost || 0);
+    setMobileToolAction('summary');
     setToolEdit({
       asset,
       condition: asset.condition || 'No inspeccionada',
@@ -510,10 +513,32 @@ export function ConsolidatedInventoryWorkspace() {
   function ToolTable({ locationId }: { locationId?: string }) {
     const visibleTools = [...(locationId ? toolsAt(locationId) : activeToolAssets)]
       .sort((a, b) => (a.assetCode || a.id).localeCompare(b.assetCode || b.id, undefined, { numeric: true, sensitivity: 'base' }));
+    const normalizedQuery = mobileToolQuery.trim().toLowerCase();
+    const mobileVisibleTools = normalizedQuery ? visibleTools.filter((asset) => {
+      const catalog = snapshot?.toolCatalog.find((tool) => tool.id === asset.toolCatalogId);
+      return [asset.assetCode, asset.id, catalog?.name, catalog?.category, asset.condition, asset.operationalStatus]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(normalizedQuery));
+    }) : visibleTools;
     const assignedUnits = visibleTools.reduce((sum, asset) => sum + toolExpectedQuantity(asset), 0);
     return <section className={styles.panel}>
       <header className={styles.panelHead}><div><strong>{locationId ? `${locationLabel(locations, locationId)} tools` : 'Tool assets'}</strong><span>Real asset details, stored photos and controlled editing</span></div><b>{quantity(assignedUnits)} assigned · {visibleTools.length} records</b></header>
-      <div className={`${styles.tableWrap} ${styles.toolTable}`}><table><thead><tr><th>Photo</th><th>Asset / tool</th><th>Use</th><th>Quantity</th><th>Value</th><th>Status</th><th>Location</th><th>Comments</th><th /></tr></thead><tbody>{visibleTools.map((asset) => {
+      <div className={styles.mobileToolSearch}><label><InventoryIcon name="overview" /><input type="search" value={mobileToolQuery} onChange={(event) => setMobileToolQuery(event.target.value)} placeholder="Search tools or asset ID" aria-label="Search tools or asset ID" /></label><span>{mobileVisibleTools.length} items</span></div>
+      <div className={styles.mobileToolList}>{mobileVisibleTools.map((asset) => {
+        const catalog = snapshot?.toolCatalog.find((tool) => tool.id === asset.toolCatalogId);
+        const expected = toolExpectedQuantity(asset);
+        const present = toolPresentQuantity(asset);
+        const unitCost = Number.isFinite(Number(asset.purchaseCost)) ? Number(asset.purchaseCost) : Number(catalog?.standardCost || 0);
+        const isMissing = asset.present === false || present === 0;
+        return <article key={`mobile:${asset.id}`} className={styles.mobileToolRow}>
+          <ToolPhoto asset={asset} onOpen={setToolLightbox} />
+          <button type="button" className={styles.mobileToolOpen} onClick={() => beginToolEdit(asset)}>
+            <span className={styles.mobileToolCopy}><strong>{catalog?.name || asset.toolCatalogId || 'Tool'}</strong><small>{asset.assetCode || asset.id} · {asset.condition || 'No inspeccionada'}</small><span><b>Qty {present}/{expected}</b><b>{money(unitCost)}{expected > 1 ? ' ea.' : ''}</b></span></span>
+            <span className={`${styles.mobileToolStatus} ${isMissing ? styles.mobileToolStatusAlert : ''}`}><small>{isMissing ? 'Not present' : asset.operationalStatus || 'Available'}</small><i aria-hidden="true">›</i></span>
+          </button>
+        </article>;
+      })}{!mobileVisibleTools.length ? <p className={styles.empty}>No tools match this search.</p> : null}</div>
+      <div className={`${styles.tableWrap} ${styles.toolTable} ${styles.desktopToolTable}`}><table><thead><tr><th>Photo</th><th>Asset / tool</th><th>Use</th><th>Quantity</th><th>Value</th><th>Status</th><th>Location</th><th>Comments</th><th /></tr></thead><tbody>{visibleTools.map((asset) => {
         const catalog = snapshot?.toolCatalog.find((tool) => tool.id === asset.toolCatalogId);
         const expected = toolExpectedQuantity(asset);
         const present = toolPresentQuantity(asset);
@@ -550,6 +575,63 @@ export function ConsolidatedInventoryWorkspace() {
     return <button type="button" className={`${styles.vanWorkspaceRow} ${tone ? styles[`row${tone[0].toUpperCase()}${tone.slice(1)}`] : ''}`} onClick={onClick}><span className={styles.workspaceRowIcon}><InventoryIcon name={icon} /></span><span className={styles.workspaceRowCopy}><strong>{title}</strong><small>{description}</small></span>{value ? <b>{value}</b> : null}<i aria-hidden="true">›</i></button>;
   }
 
+  function openMobileVanTools() {
+    if (!activeVan) { openView('tools'); return; }
+    setView('vans');
+    setVanSection('tools');
+    setMobileToolQuery('');
+  }
+
+  function MobileBottomNav() {
+    const buttons: Array<{ label: string; icon: InventoryIconName; active: boolean; onClick: () => void }> = [
+      { label: 'Overview', icon: 'overview', active: view === 'overview', onClick: () => openView('overview') },
+      { label: 'Vans', icon: 'van', active: view === 'vans' && vanSection === 'workspace', onClick: () => openView('vans') },
+      { label: 'Tools', icon: 'tool', active: view === 'tools', onClick: () => openView('tools') },
+      { label: 'Activity', icon: 'movement', active: view === 'movements', onClick: () => openView('movements') },
+      { label: 'Alerts', icon: 'warning', active: view === 'replenishment', onClick: () => openView('replenishment') },
+    ];
+    return <nav className={styles.mobileBottomNav} aria-label="Inventory mobile navigation">{buttons.map((button) => <button key={button.label} type="button" className={button.active ? styles.mobileNavActive : ''} onClick={button.onClick}><InventoryIcon name={button.icon} /><span>{button.label}</span></button>)}</nav>;
+  }
+
+  function MobileOverview() {
+    return <section className={styles.mobileOverview}>
+      <header className={styles.mobilePageHeader}><div><span className={styles.eyebrow}>Inventory control</span><h1>Inventory</h1></div><button type="button" aria-label="Refresh live inventory" disabled={isPending('refresh')} onClick={() => void refreshInventory()}>↻</button></header>
+      <nav className={styles.mobileLocationNav} aria-label="Inventory locations"><button type="button" onClick={() => openView('warehouse')}><InventoryIcon name="warehouse" />Warehouse</button><button type="button" onClick={() => openView('office')}><InventoryIcon name="office" />Office</button><button type="button" className={styles.mobileLocationActive} onClick={() => openView('vans')}><InventoryIcon name="van" />Vans</button></nav>
+
+      <section className={styles.mobileSection}><header><h2>Overview</h2><button type="button" onClick={() => openView('tools')}>View all</button></header><div className={styles.mobileMetricGrid}>
+        <button type="button" onClick={() => openView('warehouse')}><span className={styles.blue}><InventoryIcon name="package" /></span><b>{products.length}</b><small>Products</small></button>
+        <button type="button" onClick={() => openView('office')}><span className={styles.purple}><InventoryIcon name="bottle" /></span><b>{materials.length}</b><small>Consumables</small></button>
+        <button type="button" onClick={() => openView('tools')}><span className={styles.orange}><InventoryIcon name="tool" /></span><b>{quantity(toolsAssignedToVans.reduce((sum, asset) => sum + toolExpectedQuantity(asset), 0))}</b><small>Tools</small></button>
+        <button type="button" onClick={() => openView('transfers')}><span className={styles.green}><InventoryIcon name="transfer" /></span><b>{openTransfers.length}</b><small>Transfers</small></button>
+      </div></section>
+
+      <section className={styles.mobileSection}><header><h2>Quick access</h2></header><div className={styles.mobileQuickGrid}>
+        <button type="button" onClick={() => openView('vans')}><span><InventoryIcon name="van" /></span><b>Van inventory</b><small>{vans.length} active vans</small></button>
+        <button type="button" onClick={() => openView('warehouse')}><span><InventoryIcon name="warehouse" /></span><b>Stock counts</b><small>Count / par</small></button>
+        <button type="button" onClick={() => openView('transfers')}><span><InventoryIcon name="transfer" /></span><b>Transfers</b><small>{openTransfers.length} open</small></button>
+        <button type="button" onClick={() => openView('replenishment')}><span><InventoryIcon name="warning" /></span><b>Alerts</b><small>{snapshot?.replenishment.length ?? 0} to review</small></button>
+      </div></section>
+
+      {activeVan ? <section className={styles.mobileSection}><header><h2>Selected Van</h2><button type="button" onClick={() => openView('vans')}>See all</button></header><button type="button" className={styles.mobileVanCard} onClick={() => openView('vans')}><VanThumbnail imageUrl={activeVanProfile?.imageUrl} name={activeVan.name} size="small" /><span><strong>{activeVan.name}</strong><small>{activeVanCrew.length ? activeVanCrew.slice(0, 2).join(', ') + (activeVanCrew.length > 2 ? ` +${activeVanCrew.length - 2}` : '') : 'Crew unassigned'}</small></span><VanStatusChip status={statusForVan(activeVan)} /><i aria-hidden="true">›</i></button></section> : null}
+    </section>;
+  }
+
+  function MobileVanWorkspace() {
+    if (!activeVan) return <section className={styles.mobileVanWorkspace}><p className={styles.empty}>No active Van inventory locations are available.</p></section>;
+    return <section className={styles.mobileVanWorkspace}>
+      <header className={styles.mobilePageHeader}><div><span className={styles.eyebrow}>Van inventory</span><h1>{activeVan.name}</h1></div><button type="button" aria-label="Back to inventory" onClick={() => openView('overview')}>←</button></header>
+      <label className={styles.mobileVanSelector}><VanThumbnail imageUrl={activeVanProfile?.imageUrl} name={activeVan.name} size="small" /><span><small>Selected Van</small><select value={activeVan.id} onChange={(event) => setActiveVanId(event.target.value)}>{vans.map((van) => <option key={van.id} value={van.id}>{van.name}</option>)}</select><b>{activeVanCrew.length ? activeVanCrew.slice(0, 2).join(', ') + (activeVanCrew.length > 2 ? ` +${activeVanCrew.length - 2}` : '') : 'Crew unassigned'}</b></span><VanStatusChip status={statusForVan(activeVan)} /></label>
+      <section className={styles.mobileSection}><header><div><h2>Choose a view</h2><p>Open only the information you need.</p></div></header><div className={styles.mobileVanGrid}>
+        <button type="button" onClick={() => setVanSection('overview')}><span><InventoryIcon name="overview" /></span><b>Overview</b><small>{onHandAt(activeVan.id)} units</small></button>
+        <button type="button" onClick={() => setVanSection('consumables')}><span className={styles.purple}><InventoryIcon name="bottle" /></span><b>Consumables</b><small>{onHandAt(activeVan.id, 'material')} on hand</small></button>
+        <button type="button" onClick={() => setVanSection('products')}><span className={styles.green}><InventoryIcon name="package" /></span><b>Products</b><small>{onHandAt(activeVan.id, 'product')} on hand</small></button>
+        <button type="button" onClick={openMobileVanTools}><span className={styles.orange}><InventoryIcon name="tool" /></span><b>Tools</b><small>{quantity(activeVanTools.reduce((sum, asset) => sum + toolQuantity(asset), 0))} assigned</small></button>
+        <button type="button" onClick={() => openView('transfers')}><span><InventoryIcon name="transfer" /></span><b>Transfers</b><small>{activeVanTransfers.length} open</small></button>
+        <button type="button" onClick={() => openView('replenishment')}><span><InventoryIcon name="warning" /></span><b>Alerts</b><small>{activeVanReplenishment.length} to review</small></button>
+      </div></section>
+    </section>;
+  }
+
   const tabs: Array<{ id: View; label: string }> = [
     ['overview', 'Overview'], ['warehouse', 'Warehouse'], ['office', 'Office'], ['vans', 'Vans'], ['tools', 'Tools'], ['transfers', 'Transfers'], ['replenishment', 'Replenishment'], ['movements', 'Movements'],
   ].map(([id, label]) => ({ id: id as View, label }));
@@ -558,7 +640,7 @@ export function ConsolidatedInventoryWorkspace() {
   if (!snapshot) return <section className={styles.page}><div className={styles.state}>{error || 'Inventory is unavailable.'}<button type="button" onClick={() => { setLoading(true); void refresh(); }}>Retry</button></div></section>;
 
   return <section className={styles.page}>
-    <header className={styles.hero}>
+    <header className={`${styles.hero} ${view === 'overview' ? styles.overviewHero : ''} ${view === 'vans' ? styles.vanHero : ''}`}>
       <div><span className={styles.eyebrow}>{view === 'vans' ? 'Inventory · Mobile warehouses' : 'Inventory · One authority'}</span><h1>{view === 'vans' ? 'Van Inventory Workspace' : 'Inventory Control'}</h1><p>{view === 'vans' ? 'Select a Van and choose the inventory view you want to manage.' : 'One authority for Warehouse, Office, Vans, Products, Consumables and Tools.'}</p></div>
       {view === 'overview' ? <details className={styles.actionMenu}><summary>Inventory actions <span>⌄</span></summary><div><button type="button" onClick={() => openView('warehouse')}>Open Warehouse</button><button type="button" onClick={() => openView('office')}>Open Office</button><button type="button" onClick={() => openView('tools')}>Open Tools</button><button type="button" onClick={() => openView('transfers')}>Manage transfers</button><button type="button" onClick={() => openView('replenishment')}>View replenishment</button><button type="button" onClick={() => openView('movements')}>View movements</button><button type="button" disabled={isPending('refresh')} onClick={() => void refreshInventory()}>{isPending('refresh') ? 'Refreshing…' : 'Refresh live inventory'}</button></div></details> : <div className={styles.heroActions}><button type="button" onClick={() => openView(view === 'vans' && vanSection !== 'workspace' ? 'vans' : 'overview')}>{view === 'vans' && vanSection !== 'workspace' ? '← Van workspace' : '← Inventory Control'}</button><button type="button" className={styles.primary} disabled={isPending('refresh')} onClick={() => void refreshInventory()}>{isPending('refresh') ? 'Refreshing…' : 'Refresh'}</button></div>}
     </header>
@@ -570,7 +652,7 @@ export function ConsolidatedInventoryWorkspace() {
 
     {view !== 'overview' && view !== 'vans' ? <nav className={styles.tabs}>{tabs.map((tab) => <button key={tab.id} type="button" className={view === tab.id ? styles.activeTab : ''} onClick={() => openView(tab.id)}>{tab.label}</button>)}</nav> : null}
 
-    {view === 'overview' ? <>
+    {view === 'overview' ? <><MobileOverview /><div className={styles.desktopOverview}>
       <div className={styles.metrics}>
         <MetricCard icon="package" label="Total Products" value={products.length} detail={`${quantity(companyProductUnits)} units on hand`} />
         <MetricCard icon="bottle" label="Consumables" value={materials.length} detail="Canonical material records" tone="purple" />
@@ -596,12 +678,14 @@ export function ConsolidatedInventoryWorkspace() {
       </div>
 
       {legacyProducts.length ? <section className={styles.panel}><header className={styles.panelHead}><div><strong>Historical stock location assignment</strong><span>One-time controlled reclassification — company total does not change</span></div></header><div className={styles.list}>{legacyProducts.map((item) => <div key={item.id}><strong>{item.name}</strong><span>{item.balances[LEGACY_LOCATION_ID].onHand} unassigned units</span><button type="button" onClick={() => openLegacyAllocation(item)}>Assign locations</button></div>)}</div></section> : null}
-    </> : null}
+    </div></> : null}
 
     {view === 'warehouse' ? <StockTable locationId={WAREHOUSE_LOCATION_ID} /> : null}
     {view === 'office' ? <StockTable locationId={OFFICE_LOCATION_ID} /> : null}
 
     {view === 'vans' ? !activeVan ? <div className={styles.state}>No active Vans were found in canonical inventory.</div> : <>
+      {vanSection === 'workspace' ? <MobileVanWorkspace /> : null}
+      <div className={vanSection === 'workspace' ? styles.desktopVanOnly : styles.vanDesktopOrDetail}>
       <div className={styles.vanSelectorBar}><label className={styles.vanSelector}><VanThumbnail imageUrl={activeVanProfile?.imageUrl} name={activeVan.name} size="small" /><span><small>Selected Van</small><select value={activeVan.id} onChange={(event) => { setActiveVanId(event.target.value); setVanSection('workspace'); }}>{vans.map((van) => <option key={van.id} value={van.id}>{van.name}</option>)}</select></span></label><div className={styles.vanStatusStrip}><VanStatusChip status={statusForVan(activeVan)} />{activeVanReplenishment.length ? <span className={styles.alertChip}><InventoryIcon name="warning" />{activeVanReplenishment.length} replenishment alert{activeVanReplenishment.length === 1 ? '' : 's'}</span> : <span className={styles.clearChip}>No replenishment exceptions</span>}</div></div>
 
       {vanSection === 'workspace' ? <div className={styles.vanWorkspaceGrid}>
@@ -624,6 +708,7 @@ export function ConsolidatedInventoryWorkspace() {
           <div><InventoryIcon name="warning" /><span>Low stock alerts</span><strong>{activeVanReplenishment.length}</strong><button type="button" onClick={() => openView('replenishment')}>View alerts</button></div>
         </div></section><section className={`${styles.panel} ${styles.vanActivity}`}><header className={styles.panelHead}><div><strong>Recent activity</strong><span>Movements involving {activeVan.name}.</span></div><button type="button" onClick={() => openView('movements')}>View all</button></header><ActivityList rows={activeVanMovements} emptyText={`No inventory movements recorded for ${activeVan.name}.`} /></section></aside>
       </div> : <div className={styles.vanDetail}><div className={styles.vanDetailHeader}><button type="button" onClick={() => setVanSection('workspace')}>← Choose inventory view</button><span>{activeVan.name}</span></div>{vanSection === 'overview' ? <StockTable locationId={activeVan.id} title={`${activeVan.name} · Overview`} /> : null}{vanSection === 'consumables' ? <StockTable locationId={activeVan.id} itemKind="material" title={`${activeVan.name} · Consumables`} /> : null}{vanSection === 'products' ? <StockTable locationId={activeVan.id} itemKind="product" title={`${activeVan.name} · Products for Sale`} /> : null}{vanSection === 'tools' ? <ToolTable locationId={activeVan.id} /> : null}</div>}
+      </div>
     </> : null}
 
     {view === 'tools' ? <ToolTable /> : null}
@@ -645,6 +730,8 @@ export function ConsolidatedInventoryWorkspace() {
 
     {view === 'movements' ? <section className={styles.panel}><header className={styles.panelHead}><div><strong>Inventory movement audit</strong><span>Immutable events; not another balance source</span></div></header><div className={styles.tableWrap}><table><thead><tr><th>When</th><th>Item</th><th>Movement</th><th>Qty</th><th>From</th><th>To</th><th>By</th></tr></thead><tbody>{snapshot.movements.map((row) => <tr key={row.id}><td>{dateTime(row.occurredAt)}</td><td><strong>{row.itemName}</strong></td><td>{row.type.replaceAll('_', ' ')}</td><td>{row.quantity}</td><td>{row.sourceLocationId ? locationLabel(locations, row.sourceLocationId) : '—'}</td><td>{row.destinationLocationId ? locationLabel(locations, row.destinationLocationId) : '—'}</td><td>{row.performedByName || '—'}</td></tr>)}</tbody></table></div></section> : null}
 
+    <MobileBottomNav />
+
     {stockEdit ? <div className={styles.modalBackdrop}><section className={styles.modal} role="dialog" aria-modal="true" aria-labelledby="stock-edit-title"><header><div><span>Physical stock · {locationLabel(locations, stockEdit.locationId)}</span><h2 id="stock-edit-title">{stockEdit.item.name}</h2></div><button type="button" aria-label="Close stock editor" onClick={() => setStockEdit(null)}>×</button></header><div className={styles.form}><label>On hand<input type="number" min="0" step={stockEdit.item.itemKind === 'product' ? 1 : 0.001} value={stockEdit.onHand} onChange={(event) => setStockEdit({ ...stockEdit, onHand: event.target.value })} /></label><label>Minimum<input type="number" min="0" step={stockEdit.item.itemKind === 'product' ? 1 : 0.001} value={stockEdit.minimum} onChange={(event) => setStockEdit({ ...stockEdit, minimum: event.target.value })} /></label><label>Target<input type="number" min="0" step={stockEdit.item.itemKind === 'product' ? 1 : 0.001} value={stockEdit.target} onChange={(event) => setStockEdit({ ...stockEdit, target: event.target.value })} /></label><p className={styles.wide}>Reserved stock cannot be counted below its committed quantity. Van min/target drives replenishment automatically.</p><footer className={styles.wide}><button type="button" onClick={() => setStockEdit(null)}>Cancel</button><button type="button" className={styles.primary} disabled={isPending(`stock:${stockEdit.locationId}:${itemKey(stockEdit.item)}`)} onClick={() => void saveStockEdit()}>{isPending(`stock:${stockEdit.locationId}:${itemKey(stockEdit.item)}`) ? 'Saving…' : 'Save verified count'}</button></footer></div></section></div> : null}
 
     {legacyItem ? <div className={styles.modalBackdrop}><section className={styles.modal} role="dialog" aria-modal="true" aria-labelledby="legacy-allocation-title"><header><div><span>Historical stock assignment</span><h2 id="legacy-allocation-title">{legacyItem.name}</h2></div><button type="button" aria-label="Close historical stock assignment" onClick={() => setLegacyItem(null)}>×</button></header><div className={styles.form}><p className={styles.wide}>Unassigned total: <b>{legacyItem.balances[LEGACY_LOCATION_ID]?.onHand ?? 0}</b>. Warehouse + Office must equal this exact quantity.</p><label>Warehouse<input type="number" min="0" value={legacyWarehouse} onChange={(event) => setLegacyWarehouse(event.target.value)} /></label><label>Office<input type="number" min="0" value={legacyOffice} onChange={(event) => setLegacyOffice(event.target.value)} /></label><footer className={styles.wide}><button type="button" onClick={() => setLegacyItem(null)}>Cancel</button><button type="button" className={styles.primary} disabled={isPending(`legacy:${legacyItem.id}`)} onClick={() => void saveLegacyAllocation()}>{isPending(`legacy:${legacyItem.id}`) ? 'Assigning…' : 'Assign locations'}</button></footer></div></section></div> : null}
@@ -654,14 +741,25 @@ export function ConsolidatedInventoryWorkspace() {
       <div className={styles.toolDrawerBody}>
         <section className={styles.toolIdentityCard}><ToolPhoto asset={toolEdit.asset} onOpen={setToolLightbox} /><div><strong>{toolEdit.asset.assetCode || toolEdit.asset.id}</strong><span>{snapshot.toolCatalog.find((tool) => tool.id === toolEdit.asset.toolCatalogId)?.category || 'Tool asset'}</span><small>{locationLabel(locations, toolEdit.asset.inventoryLocationId || toolEdit.asset.locationId || toolEdit.asset.vanId || '')} · {toolEdit.asset.operationalStatus || 'Status unavailable'}</small></div></section>
 
-        <section className={styles.toolEditSection}><header><strong>Tool details</strong><span>Update the real information stored for this asset.</span></header><div className={styles.toolEditGrid}>
+        <div className={`${styles.mobileToolSummary} ${mobileToolAction !== 'summary' ? styles.mobileToolSummaryHidden : ''}`}>
+          <div className={styles.mobileToolFacts}>
+            <div><span>Location</span><strong>{locationLabel(locations, toolEdit.asset.inventoryLocationId || toolEdit.asset.locationId || toolEdit.asset.vanId || '')}</strong></div>
+            <div><span>Quantity</span><strong>{toolPresentQuantity(toolEdit.asset)} / {toolExpectedQuantity(toolEdit.asset)}</strong></div>
+            <div><span>Condition</span><strong>{toolEdit.condition}</strong></div>
+            <div><span>Unit value</span><strong>{money(Number(toolEdit.purchaseCost) || 0)}</strong></div>
+          </div>
+          <section className={styles.mobileToolNotes}><strong>Notes</strong><p>{toolEdit.notes || 'No comments recorded for this tool.'}</p></section>
+          <div className={styles.mobileToolActions}><button type="button" className={styles.primary} onClick={() => setMobileToolAction('edit')}><span aria-hidden="true">✎</span>Edit details</button><button type="button" disabled={!toolCanTransfer(toolEdit.asset)} onClick={() => setMobileToolAction('transfer')}><InventoryIcon name="transfer" />Start transfer</button><small>Transfers require a destination, reason and confirmation.</small></div>
+        </div>
+
+        <section className={`${styles.toolEditSection} ${mobileToolAction === 'edit' ? styles.mobileActionActive : ''}`}><header><button type="button" className={styles.mobileActionBack} onClick={() => setMobileToolAction('summary')}>← Details</button><strong>Tool details</strong><span>Update the real information stored for this asset.</span></header><div className={styles.toolEditGrid}>
           <label>Use / condition<select value={toolEdit.condition} onChange={(event) => setToolEdit({ ...toolEdit, condition: event.target.value })}>{TOOL_CONDITIONS.map((condition) => <option key={condition} value={condition}>{condition}</option>)}</select></label>
           <label>Unit value (Afl.)<input type="number" min="0" step="0.01" value={toolEdit.purchaseCost} onChange={(event) => setToolEdit({ ...toolEdit, purchaseCost: event.target.value })} /></label>
           {toolEdit.asset.trackingMode === 'quantity' ? <><label>Assigned quantity<input type="number" min="0" step="1" value={toolEdit.quantityExpected} onChange={(event) => setToolEdit({ ...toolEdit, quantityExpected: event.target.value })} /></label><label>Present quantity<input type="number" min="0" step="1" max={toolEdit.quantityExpected} value={toolEdit.quantityPresent} onChange={(event) => setToolEdit({ ...toolEdit, quantityPresent: event.target.value })} /></label></> : <div className={styles.toolReadOnlyFact}><span>Quantity</span><strong>{toolPresentQuantity(toolEdit.asset)} / 1</strong><small>Individual tracked asset</small></div>}
           <label className={styles.wide}>Comments / observations<textarea rows={4} value={toolEdit.notes} onChange={(event) => setToolEdit({ ...toolEdit, notes: event.target.value })} placeholder="Use, condition, damage or other relevant details" /></label>
         </div><footer><button type="button" onClick={() => setToolEdit(null)}>Cancel</button><button type="button" className={styles.primary} disabled={isPending(`tool-edit:${toolEdit.asset.id}`)} onClick={() => void saveToolDetails()}>{isPending(`tool-edit:${toolEdit.asset.id}`) ? 'Saving…' : 'Save details'}</button></footer></section>
 
-        <section className={styles.toolTransferSection}><header><strong>Transfer tool</strong><span>Separate controlled action — destination and reason are required.</span></header>
+        <section className={`${styles.toolTransferSection} ${mobileToolAction === 'transfer' ? styles.mobileActionActive : ''}`}><header><button type="button" className={styles.mobileActionBack} onClick={() => setMobileToolAction('summary')}>← Details</button><strong>Transfer tool</strong><span>Separate controlled action — destination and reason are required.</span></header>
           {toolCanTransfer(toolEdit.asset) ? <div className={styles.toolTransferForm}>
             <label>Destination<select value={toolEdit.destinationLocationId} onChange={(event) => setToolEdit({ ...toolEdit, destinationLocationId: event.target.value, transferConfirmed: false })}><option value="">Choose a location…</option>{normalLocations.filter((location) => location.id !== (toolEdit.asset.inventoryLocationId || toolEdit.asset.locationId || toolEdit.asset.vanId)).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })).map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}</select></label>
             <label>Transfer reason<textarea rows={3} value={toolEdit.transferReason} onChange={(event) => setToolEdit({ ...toolEdit, transferReason: event.target.value, transferConfirmed: false })} placeholder="Why is this tool being moved?" /></label>
