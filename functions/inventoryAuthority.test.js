@@ -308,6 +308,8 @@ test("location inventory state updates count, minimum and target atomically and 
   assert.equal(stock(db).onHand, 85, "aggregate on-hand must remain derived from location balances");
   assert.equal(db.stores.get("inventoryMovements").size, 1);
   assert.equal(updated.movement.type, "stock_count_adjustment");
+  assert.equal(updated.movement.previousOnHand, 80);
+  assert.equal(updated.movement.resultingOnHand, 75);
   assert.equal(updated.movement.previousMinimum, 5);
   assert.equal(updated.movement.resultingMinimum, 8);
   assert.equal(updated.movement.previousTarget, 20);
@@ -484,6 +486,8 @@ test("add tool to Van creates one fresh physical asset from an existing individu
   assert.equal(db.stores.get("vanToolAssets").size, 2);
   assert.equal(db.stores.get("inventoryMovements").size, 1);
   assert.equal(result.movement.type, "tool_added_to_van");
+  assert.equal(Object.hasOwn(result.movement, "previousOnHand"), false, "non-count movements must omit previousOnHand instead of writing undefined");
+  assert.equal(Object.hasOwn(result.movement, "resultingOnHand"), false, "non-count movements must omit resultingOnHand instead of writing undefined");
 });
 
 test("add tool to Van atomically creates a new catalog and its first asset", async () => {
