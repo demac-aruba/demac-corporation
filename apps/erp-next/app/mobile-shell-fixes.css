@@ -1,4 +1,80 @@
 @media (max-width: 920px) {
-  .erp-sidebar { box-shadow: none !important; }
+  html,
+  body {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  @supports (overflow: clip) {
+    html,
+    body {
+      overflow-x: clip;
+    }
+  }
+
+  .erp-frame,
+  .erp-main,
+  .erp-content {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .erp-sidebar {
+    padding-top: env(safe-area-inset-top);
+    padding-left: env(safe-area-inset-left);
+    box-shadow: none !important;
+  }
   .erp-sidebar.open { box-shadow: 20px 0 60px rgba(0, 0, 0, .28) !important; }
+  .sidebar-footer { padding-bottom: max(24px, env(safe-area-inset-bottom)); }
+}
+
+@media (max-width: 640px) {
+  .erp-topbar {
+    height: calc(62px + env(safe-area-inset-top));
+    min-height: calc(62px + env(safe-area-inset-top));
+    gap: 6px;
+    padding-top: env(safe-area-inset-top);
+    padding-right: max(10px, env(safe-area-inset-right));
+    padding-left: max(10px, env(safe-area-inset-left));
+  }
+
+  .menu-trigger,
+  .notification-anchor,
+  .icon-action,
+  .owner-chip,
+  .avatar {
+    flex: 0 0 auto;
+  }
+
+  .global-search {
+    min-width: 0;
+    padding-right: 9px;
+    padding-left: 9px;
+  }
+
+  .topbar-actions {
+    min-width: 0;
+    gap: 8px;
+  }
+
+  .owner-chip {
+    padding-left: 0;
+  }
+
+  .avatar {
+    width: 34px;
+    height: 34px;
+  }
+
+  .erp-content {
+    padding-right: max(14px, env(safe-area-inset-right));
+    padding-left: max(14px, env(safe-area-inset-left));
+  }
+
+  .notification-popover {
+    top: calc(62px + env(safe-area-inset-top));
+    right: max(10px, env(safe-area-inset-right));
+    left: max(10px, env(safe-area-inset-left));
+  }
 }

@@ -63,6 +63,9 @@ export type InventoryToolAsset = {
   latestThumbnailSizeBytes?: number;
   latestThumbnailWidth?: number;
   latestThumbnailHeight?: number;
+  maintenanceDueAt?: string;
+  calibrationDueAt?: string;
+  retiredAt?: string;
   notes?: string;
   createdAt?: string;
   updatedAt?: string;

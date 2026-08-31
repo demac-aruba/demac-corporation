@@ -57,14 +57,20 @@
 @media(max-width:760px){.hero{display:grid}.heroActions{justify-content:flex-start}.actionMenu{justify-self:start}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.workspaceCards{grid-template-columns:1fr}.workspaceCard p{min-height:0}.workspaceVisual{height:135px}.vanDirectoryList{grid-template-columns:1fr}.vanDirectoryList>button:nth-last-child(2){border-bottom:1px solid var(--border)}.vanSelectorBar{grid-template-columns:1fr}.vanStatusStrip{flex-wrap:wrap}.vanContext{grid-template-columns:1fr}.form{grid-template-columns:1fr}.wide,.lineBuilder,.transferDraft{grid-column:1}.lineBuilder{grid-template-columns:1fr 80px}.lineBuilder button{grid-column:1/-1}.vanWorkspaceRow{grid-template-columns:42px minmax(0,1fr) 14px}.vanWorkspaceRow>b{grid-column:2}.vanWorkspaceRow>i{grid-column:3;grid-row:1/3}.activityList article{grid-template-columns:30px minmax(0,1fr)}.activityList time{grid-column:2}.hero h1{font-size:26px}.toolEditGrid{grid-template-columns:1fr}.toolEditGrid .wide{grid-column:1}.toolDrawerBody{padding:12px}.photoLightbox{padding:58px 12px 12px}}
 @media(max-width:480px){.metrics{grid-template-columns:1fr}.metricCard{grid-template-columns:38px minmax(0,1fr)}.workspaceHint{align-items:flex-start}.vanIdentity{grid-template-columns:78px minmax(0,1fr)}.summaryStats>div{grid-template-columns:25px minmax(0,1fr) auto}}
 
-.mobileOverview,.mobileVanWorkspace,.mobileBottomNav,.mobileToolSearch,.mobileToolList,.mobileToolSummary,.mobileActionBack{display:none}
+.mobileOverview,.mobileLocationWorkspace,.mobileVanWorkspace,.mobileBottomNav,.mobileToolSearch,.mobileToolList,.mobileToolMetrics,.mobileToolSummary,.mobileActionBack{display:none}
 .desktopOverview,.desktopVanOnly,.vanDesktopOrDetail{display:grid;gap:14px}
+.desktopLocationWorkspace{display:block}
+.loadingShell{min-height:520px;align-content:start}.skeletonHeader,.skeletonMetrics>span,.skeletonPanel>span{position:relative;overflow:hidden;background:var(--surface-2)}
+.skeletonHeader,.skeletonMetrics,.skeletonPanel{display:grid;gap:10px}.skeletonHeader{grid-template-columns:minmax(160px,320px) 72px;justify-content:space-between;background:transparent;overflow:visible}.skeletonHeader>span{height:38px;border-radius:11px}.skeletonMetrics{grid-template-columns:repeat(4,minmax(0,1fr))}.skeletonMetrics>span{height:82px;border-radius:14px}.skeletonPanel{padding:14px;border:1px solid var(--border);border-radius:16px;background:var(--surface)}.skeletonPanel>span{height:54px;border-radius:11px}.skeletonHeader span:after,.skeletonMetrics>span:after,.skeletonPanel>span:after{content:'';position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--surface) 68%,transparent),transparent);animation:inventoryShimmer 1.15s infinite}.skeletonLabel{color:var(--muted);font-size:9px}
+@keyframes inventoryShimmer{to{transform:translateX(100%)}}
 
 @media(max-width:760px){
-  .page{gap:10px;padding-bottom:78px}
-  .overviewHero,.vanHero{display:none}
-  .desktopOverview,.desktopVanOnly{display:none}
-  .mobileOverview,.mobileVanWorkspace{display:grid;gap:17px}
+  .page{gap:10px;padding-bottom:calc(80px + env(safe-area-inset-bottom))}
+  .overviewHero,.vanHero,.locationHero{display:none}
+  .desktopOverview,.desktopVanOnly,.desktopLocationWorkspace{display:none}
+  .tabs{display:none}
+  .mobileOverview,.mobileLocationWorkspace,.mobileVanWorkspace{display:grid;gap:17px}
+  .loadingShell{min-height:calc(100dvh - 90px);padding-bottom:20px}.skeletonMetrics{grid-template-columns:repeat(2,minmax(0,1fr))}.skeletonMetrics>span{height:72px}.skeletonPanel>span{height:62px}
   .mobilePageHeader{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 2px 0}
   .mobilePageHeader h1{margin:4px 0 0;font-size:25px;line-height:1;letter-spacing:-.04em}
   .mobilePageHeader>button{width:44px;height:44px;display:grid;place-items:center;padding:0;border:0;border-radius:14px;background:var(--brand);color:#fff;font-size:22px;box-shadow:0 8px 18px color-mix(in srgb,var(--brand) 20%,transparent)}
@@ -72,6 +78,9 @@
   .mobileLocationNav button{min-height:42px;display:flex;align-items:center;justify-content:center;gap:6px;border:0;background:transparent;color:var(--muted);font-size:9px}
   .mobileLocationNav button svg{width:15px;height:15px}
   .mobileLocationNav .mobileLocationActive{background:var(--surface);color:var(--brand);box-shadow:var(--shadow-soft)}
+  .mobileLocationCard{min-width:0;display:grid;grid-template-columns:92px minmax(0,1fr) auto;gap:11px;align-items:center;padding:10px;border:1px solid var(--border);border-radius:16px;background:var(--surface);box-shadow:var(--shadow-soft)}
+  .mobileLocationVisual{position:relative;width:92px;height:72px;overflow:hidden;border-radius:13px;background:var(--surface-2)}.mobileLocationVisual img{object-fit:cover}
+  .mobileLocationCard>div:nth-child(2){min-width:0}.mobileLocationCard>div:nth-child(2)>span,.mobileLocationCard strong,.mobileLocationCard small{display:block}.mobileLocationCard>div:nth-child(2)>span{color:var(--brand);font-size:7px;font-weight:900;text-transform:uppercase}.mobileLocationCard strong{margin-top:4px;font-size:11px}.mobileLocationCard small{margin-top:4px;color:var(--muted);font-size:7px;line-height:1.4}
   .mobileSection{display:grid;gap:9px}
   .mobileSection>header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 2px}
   .mobileSection>header>div{display:grid;gap:3px}
@@ -84,6 +93,13 @@
   .mobileMetricGrid>button>span svg{width:20px;height:20px}
   .mobileMetricGrid b{align-self:end;font-size:17px;line-height:1}
   .mobileMetricGrid small{align-self:start;margin-top:3px;color:var(--muted);font-size:8px}
+  .mobileLocationMetrics,.mobileToolMetrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .mobileLocationMetrics>article,.mobileToolMetrics>article{min-width:0;min-height:72px;display:grid;grid-template-columns:38px minmax(0,1fr);gap:9px;align-items:center;padding:9px;border:1px solid var(--border);border-radius:14px;background:var(--surface);box-shadow:var(--shadow-soft)}
+  .mobileLocationMetrics>article>span,.mobileToolMetrics>article>span{width:38px;height:38px;display:grid;place-items:center;border-radius:11px}.mobileLocationMetrics svg,.mobileToolMetrics svg{width:20px;height:20px}.mobileLocationMetrics small,.mobileToolMetrics small{display:block;overflow:hidden;color:var(--muted);font-size:7px;text-overflow:ellipsis;white-space:nowrap}.mobileLocationMetrics strong,.mobileToolMetrics strong{display:block;margin-top:4px;overflow:hidden;font-size:14px;text-overflow:ellipsis;white-space:nowrap}
+  .mobileSectionCount{color:var(--muted);font-size:8px;white-space:nowrap}
+  .mobileStockList{display:grid;border:1px solid var(--border);border-radius:16px;background:var(--surface);box-shadow:var(--shadow-soft);overflow:hidden}
+  .mobileStockRow{min-width:0;display:grid;grid-template-columns:42px minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px;border-bottom:1px solid var(--border)}.mobileStockRow:last-child{border-bottom:0}.mobileStockRow>span:first-child{width:42px;height:42px;display:grid;place-items:center;border-radius:12px}.mobileStockRow>span:first-child svg{width:21px;height:21px}.mobileStockRow>div:nth-child(2){min-width:0}.mobileStockRow strong,.mobileStockRow small{display:block}.mobileStockRow strong{overflow:hidden;font-size:10px;text-overflow:ellipsis;white-space:nowrap}.mobileStockRow small{margin-top:3px;overflow:hidden;color:var(--muted);font-size:7px;text-overflow:ellipsis;white-space:nowrap}.mobileStockRow p{display:grid;gap:2px;margin:6px 0 0}.mobileStockRow p b{font-size:8px}.mobileStockRow p span{color:var(--muted);font-size:7px}.mobileStockRow>div:last-child{display:grid;justify-items:end;gap:7px}.mobileStockRow>div:last-child>span{border-radius:999px;padding:4px 6px;font-size:7px;font-weight:850}.mobileStockRow>div:last-child>button{min-height:34px;padding:7px 9px}.stockReady{color:var(--success);background:var(--success-soft)}.stockAttention{color:var(--danger);background:var(--danger-soft)}
+  .mobileLocationActions{display:grid;gap:8px}.mobileLocationActions>button{min-height:62px;display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 12px;text-align:left;box-shadow:var(--shadow-soft)}.mobileLocationActions>button>svg{width:22px;height:22px;color:var(--brand)}.mobileLocationActions b,.mobileLocationActions small{display:block}.mobileLocationActions b{font-size:10px}.mobileLocationActions small{margin-top:3px;color:var(--muted);font-size:7px}.mobileLocationActions i{color:var(--muted);font-size:20px;font-style:normal}
   .mobileQuickGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}
   .mobileQuickGrid>button{min-width:0;min-height:88px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px 4px;border:0;border-radius:13px;background:var(--surface);box-shadow:var(--shadow-soft)}
   .mobileQuickGrid>button>span{width:32px;height:32px;display:grid;place-items:center;border-radius:10px;background:var(--brand-soft);color:var(--brand)}
@@ -101,7 +117,7 @@
   .vanDesktopOrDetail{display:grid;gap:10px}
   .vanDesktopOrDetail .vanSelectorBar{grid-template-columns:1fr}.vanDesktopOrDetail .vanStatusStrip{display:none}
   .vanDesktopOrDetail .vanSelector{min-height:64px;grid-template-columns:58px minmax(0,1fr);padding:6px 10px}
-  .vanDesktopOrDetail .vanDetailHeader{min-height:42px}.vanDesktopOrDetail .vanDetailHeader>button{border:0;background:transparent;color:var(--brand);padding-left:0}
+  .vanDesktopOrDetail .vanDetailHeader{display:none}
   .mobileToolSearch{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:11px 11px 8px}
   .mobileToolSearch label{min-width:0;flex:1;min-height:44px;display:flex;align-items:center;gap:8px;padding:0 11px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2);color:var(--muted)}
   .mobileToolSearch label svg{width:17px;height:17px}.mobileToolSearch input{width:100%;min-width:0;border:0!important;background:transparent!important;padding:0!important;font-size:10px!important}.mobileToolSearch>span{color:var(--muted);font-size:8px;white-space:nowrap}
@@ -112,7 +128,7 @@
   .mobileToolStatus{display:grid;justify-items:end;gap:7px}.mobileToolStatus small{max-width:72px;overflow:hidden;color:var(--success);font-size:7px;text-overflow:ellipsis;white-space:nowrap}.mobileToolStatusAlert small{color:var(--danger)}.mobileToolStatus i{color:var(--muted);font-size:20px;font-style:normal}
   .desktopToolTable{display:none}
   .toolTable+.empty{display:none}
-  .mobileBottomNav{position:fixed;z-index:150;left:0;right:0;bottom:0;height:68px;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));align-items:center;padding:4px max(8px,env(safe-area-inset-right)) max(5px,env(safe-area-inset-bottom)) max(8px,env(safe-area-inset-left));border-top:1px solid var(--border);background:color-mix(in srgb,var(--surface) 96%,transparent);box-shadow:0 -8px 24px rgba(19,38,62,.08);backdrop-filter:blur(14px)}
+  .mobileBottomNav{position:fixed;z-index:150;left:0;right:0;bottom:0;min-height:68px;height:auto;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));align-items:center;padding:4px max(8px,env(safe-area-inset-right)) max(5px,env(safe-area-inset-bottom)) max(8px,env(safe-area-inset-left));border-top:1px solid var(--border);background:color-mix(in srgb,var(--surface) 96%,transparent);box-shadow:0 -8px 24px rgba(19,38,62,.08);backdrop-filter:blur(14px)}
   .mobileBottomNav button{min-width:0;height:54px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;border:0;background:transparent;color:var(--muted);padding:3px;font-size:7px}.mobileBottomNav button svg{width:18px;height:18px}.mobileBottomNav .mobileNavActive{color:var(--brand)}
   .toolDrawer{width:100%;max-width:none}
   .toolDrawer>header{padding:14px 15px}.toolDrawer>header h2{font-size:20px}
@@ -146,7 +162,7 @@
   .addToolPhotoField{min-height:160px;margin:10px}.addToolPhotoField img{height:190px}
   .addToolFooter{display:grid;gap:8px;padding:9px 10px max(9px,env(safe-area-inset-bottom))}.addToolFooter>span{text-align:center}.addToolFooter>div{display:grid;grid-template-columns:1fr 1fr}.addToolFooter button{min-height:43px}
 }
-@media(max-width:480px){.missingToolCard{grid-template-columns:34px minmax(0,1fr)}.missingToolCard>button{grid-column:1/-1;width:100%;min-height:38px}.addToolFooter>div{grid-template-columns:92px minmax(0,1fr)}}
+@media(max-width:480px){.mobileLocationCard{grid-template-columns:74px minmax(0,1fr)}.mobileLocationVisual{width:74px;height:66px}.mobileLocationCard>.statusChip{grid-column:2}.mobileLocationMetrics strong,.mobileToolMetrics strong{font-size:12px}.mobileStockRow{grid-template-columns:38px minmax(0,1fr) auto;gap:8px;padding:9px}.mobileStockRow>span:first-child{width:38px;height:38px}.missingToolCard{grid-template-columns:34px minmax(0,1fr)}.missingToolCard>button{grid-column:1/-1;width:100%;min-height:38px}.addToolFooter>div{grid-template-columns:92px minmax(0,1fr)}}
 
 /* Drawers keep their header/footer fixed while the content owns vertical scrolling. */
 .toolDrawer>header,.addToolFooter{flex:0 0 auto}
