@@ -334,3 +334,7 @@ exports.sendQueuedWhatsAppMessage = onDocumentCreated(
 
 Object.assign(exports, require("./officeBookingAuthority"));
 Object.assign(exports, require("./inventoryAuthority"));
+// This wrapper intentionally exports the same officeBookingAuthority name last,
+// extending the canonical Booking Authority with partial-completion lifecycle actions
+// without creating a second scheduling source of truth.
+Object.assign(exports, require("./officeBookingAuthorityPartialWrapper"));

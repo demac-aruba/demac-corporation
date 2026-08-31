@@ -1,0 +1,48 @@
+name: Partial Completion CI
+
+on:
+  pull_request:
+    paths:
+      - 'functions/bookingPartialCompletion.js'
+      - 'functions/bookingPartialCompletion.test.js'
+      - 'functions/officeBookingAuthorityPartialWrapper.js'
+      - 'functions/officeBookingAuthorityPartialWrapper.test.js'
+      - 'functions/index.js'
+      - 'apps/erp-next/lib/office-partial-completion-authority.ts'
+      - 'apps/erp-next/components/scheduling/partial-completion-panel.tsx'
+      - 'apps/erp-next/components/scheduling/live-appointment-details-drawer.tsx'
+      - '.github/workflows/partial-completion-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-partial-completion:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Syntax check partial-completion authority
+        run: |
+          node --check functions/bookingPartialCompletion.js
+          node --check functions/officeBookingAuthorityPartialWrapper.js
+          node --check functions/index.js
+
+      - name: Partial-completion authority tests
+        run: node --test functions/bookingPartialCompletion.test.js functions/officeBookingAuthorityPartialWrapper.test.js
+
+      - name: Install ERP Next dependencies
+        run: npm install --prefix apps/erp-next --no-audit --no-fund
+
+      - name: ERP Next typecheck
+        run: npm run typecheck --prefix apps/erp-next
