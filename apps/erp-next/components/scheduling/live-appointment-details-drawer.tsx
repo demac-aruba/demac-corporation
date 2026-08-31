@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
 import {
   cancelOfficeAppointment,
@@ -22,14 +22,25 @@ import {
 import { currentArubaDateKey } from '../../lib/scheduling-capacity';
 import { AppointmentCommunicationPanel } from './appointment-communication-panel';
 import { LiveAppointmentEditPanel } from './live-appointment-edit-panel';
+import { PartialCompletionPanel } from './partial-completion-panel';
 import styles from './scheduling-overview-v2.module.css';
 
-type Mode = 'details' | 'edit' | 'reschedule' | 'cancel';
+type Mode = 'details' | 'edit' | 'reschedule' | 'cancel' | 'outcome';
 
 type Props = {
   appointment: BrowserAppointmentRecord;
   onClose: () => void;
   onChanged: () => Promise<void> | void;
+};
+
+type PartialOutcomeSummary = {
+  plannedQuantity: number;
+  completedQuantity: number;
+  remainingQuantity: number;
+  actualEndTime: string;
+  reason: string;
+  remainingWorkStatus: string;
+  followUpAppointmentId?: string;
 };
 
 const cancellationReasons = [
@@ -76,6 +87,26 @@ function canonicalWorkLines(value: unknown): OfficeBookingWorkLine[] {
 
 function sharedWorkText(lines: OfficeBookingWorkLine[], field: 'customerFacingDescription' | 'technicianInstructions') {
   return [...new Set(lines.map((line) => text(line[field])).filter(Boolean))].join('; ');
+}
+
+function partialOutcomeSummary(value: unknown): PartialOutcomeSummary | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if (text(record.status) !== 'partial') return null;
+  const plannedQuantity = Math.max(0, Math.round(Number(record.plannedQuantity) || 0));
+  const completedQuantity = Math.max(0, Math.round(Number(record.completedQuantity) || 0));
+  const remainingQuantity = Math.max(0, Math.round(Number(record.remainingQuantity) || 0));
+  const actualEndTime = text(record.actualEndTime);
+  if (!plannedQuantity || !completedQuantity || !actualEndTime) return null;
+  return {
+    plannedQuantity,
+    completedQuantity,
+    remainingQuantity,
+    actualEndTime,
+    reason: text(record.reason),
+    remainingWorkStatus: text(record.remainingWorkStatus) || 'pending_schedule',
+    followUpAppointmentId: text(record.followUpAppointmentId) || undefined,
+  };
 }
 
 function formatTime(value?: string) {
@@ -133,6 +164,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
   const [selectedOptionKey, setSelectedOptionKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [partialOutcome, setPartialOutcome] = useState<PartialOutcomeSummary | null>(null);
 
   const primary = appointment.assignments.find((assignment) => assignment.isPrimaryAssignment && assignment.status !== 'cancelled')
     ?? appointment.assignments.find((assignment) => assignment.status !== 'cancelled')
@@ -145,6 +177,28 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
   const temporaryHold = appointment.status === 'temporary_hold';
   const workLabel = appointment.workLabel || appointment.workTypeId?.replaceAll('_', ' ') || appointment.customerFacingDescription || 'Scheduled work';
 
+  const refreshPartialOutcome = async () => {
+    try {
+      const result = await getOfficeAppointment(appointment.id);
+      setPartialOutcome(partialOutcomeSummary(result.appointment.executionOutcome));
+    } catch {
+      // The details drawer remains usable when this supplemental lifecycle read fails.
+      // Any write still goes through Booking Authority and is protected server-side.
+    }
+  };
+
+  useEffect(() => {
+    let active = true;
+    void getOfficeAppointment(appointment.id)
+      .then((result) => {
+        if (active) setPartialOutcome(partialOutcomeSummary(result.appointment.executionOutcome));
+      })
+      .catch(() => {
+        // Supplemental partial-outcome metadata must not hide the base appointment details.
+      });
+    return () => { active = false; };
+  }, [appointment.id]);
+
   const begin = (next: Mode) => {
     setMode(next);
     setReason('');
@@ -153,6 +207,11 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
     setAvailability(null);
     setSelectedOptionKey('');
     if (next === 'reschedule') setTargetDate(appointment.dateKey);
+  };
+
+  const backFromOutcome = () => {
+    begin('details');
+    void refreshPartialOutcome();
   };
 
   const confirmHold = async () => {
@@ -277,7 +336,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
     <aside className={styles.drawer} role="dialog" aria-modal="true" aria-label={`Appointment ${appointment.id}`}>
       <header className={styles.drawerHeader}>
         <div>
-          <span>{temporaryHold ? 'Temporary hold' : 'Live appointment'} · Booking Authority</span>
+          <span>{partialOutcome ? 'Partial completion' : temporaryHold ? 'Temporary hold' : 'Live appointment'} · Booking Authority</span>
           <h2>{appointment.customer}</h2>
           <p>{appointment.propertyAddress || appointment.site} · {appointment.sector}</p>
         </div>
@@ -301,6 +360,19 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
             <Field wide label="CUSTOMER-FACING DESCRIPTION" value={appointment.customerFacingDescription} />
           </div>
         </section>
+
+        {partialOutcome ? <section className={styles.formSection} style={{ borderColor: 'var(--warning, #f59e0b)' }}>
+          <header><strong style={{ color: 'var(--warning, #b45309)' }}>PARTIAL COMPLETION · ACTUAL OUTCOME</strong><span>Executed history preserved</span></header>
+          <div className={styles.descriptionPreview} style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 8 }}>
+            <div><span>PLANNED</span><strong style={{ fontSize: 17 }}>{partialOutcome.plannedQuantity}</strong></div>
+            <div><span>COMPLETED</span><strong style={{ fontSize: 17 }}>{partialOutcome.completedQuantity}</strong></div>
+            <div><span>REMAINING</span><strong style={{ fontSize: 17 }}>{partialOutcome.remainingQuantity}</strong></div>
+          </div>
+          <div className={styles.descriptionPreview}>
+            <span>CREW RELEASED {formatTime(partialOutcome.actualEndTime)}</span>
+            <strong>{partialOutcome.reason || 'Partial work recorded.'}{partialOutcome.remainingWorkStatus === 'scheduled' && partialOutcome.followUpAppointmentId ? ` Remaining work is linked to ${partialOutcome.followUpAppointmentId}.` : ' Remaining work is pending scheduling.'}</strong>
+          </div>
+        </section> : null}
 
         {temporaryHold ? <section className={styles.formSection} style={{ borderColor: 'var(--warning, #f59e0b)' }}>
           <header><strong style={{ color: 'var(--warning, #b45309)' }}>TEMPORARY HOLD · CAPACITY RESERVED</strong><span>Customer is not confirmed</span></header>
@@ -353,15 +425,18 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
         </section> : <AppointmentCommunicationPanel appointmentId={appointment.id} />}
 
         {mode === 'details' ? <section className={styles.formSection}>
-          <header><strong>Manage {temporaryHold ? 'temporary hold' : 'appointment'}</strong><span>All changes go through Booking Authority so capacity locks and Work Orders remain synchronized.</span></header>
+          <header><strong>Manage {partialOutcome ? 'actual outcome' : temporaryHold ? 'temporary hold' : 'appointment'}</strong><span>{partialOutcome ? 'Executed history is locked. Continue by scheduling the canonical remaining work.' : 'All changes go through Booking Authority so capacity locks and Work Orders remain synchronized.'}</span></header>
           {temporaryHold ? <div style={{ padding: '11px 11px 0' }}>
             <button type="button" className={styles.primary} style={{ width: '100%' }} disabled={!canManageLifecycle || busy} onClick={() => void confirmHold()}>{busy ? 'Confirming hold…' : 'Confirm temporary hold'}</button>
           </div> : null}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 8, padding: 11 }}>
+          {partialOutcome ? <div style={{ padding: 11 }}>
+            <button type="button" className={styles.primary} style={{ width: '100%' }} disabled={!canManageLifecycle || busy} onClick={() => begin('outcome')}>{partialOutcome.remainingWorkStatus === 'scheduled' ? 'Review Actual Outcome' : `Schedule Remaining ${partialOutcome.remainingQuantity}`}</button>
+          </div> : <div style={{ display: 'grid', gridTemplateColumns: temporaryHold ? 'repeat(3,minmax(0,1fr))' : 'repeat(4,minmax(0,1fr))', gap: 8, padding: 11 }}>
             <button type="button" className={styles.secondary} disabled={!canManageLifecycle || busy} onClick={() => begin('edit')}>Edit Appointment</button>
             <button type="button" className={styles.secondary} disabled={!canManageLifecycle || busy} onClick={() => begin('reschedule')}>Reschedule</button>
+            {!temporaryHold ? <button type="button" className={styles.secondary} disabled={!canManageLifecycle || busy} onClick={() => begin('outcome')}>Record Actual Outcome</button> : null}
             <button type="button" className={styles.secondary} disabled={!canManageLifecycle || busy} onClick={() => begin('cancel')} style={{ color: 'var(--danger)' }}>{temporaryHold ? 'Cancel Hold' : 'Cancel Appointment'}</button>
-          </div>
+          </div>}
           {error ? <div className={styles.descriptionPreview}><span>ATTENTION</span><strong>{error}</strong></div> : null}
           {!canManageLifecycle && appointment.status !== 'cancelled' ? <div className={styles.descriptionPreview}><span>CANONICAL RELATIONSHIP REQUIRED</span><strong>This appointment cannot be changed until its customer and property IDs are resolved.</strong></div> : null}
         </section> : null}
@@ -369,6 +444,12 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
         {mode === 'edit' ? <LiveAppointmentEditPanel
           appointment={appointment}
           onBack={() => begin('details')}
+          onSaved={async () => { await onChanged(); onClose(); }}
+        /> : null}
+
+        {mode === 'outcome' ? <PartialCompletionPanel
+          appointment={appointment}
+          onBack={backFromOutcome}
           onSaved={async () => { await onChanged(); onClose(); }}
         /> : null}
 
