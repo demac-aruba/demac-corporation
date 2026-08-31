@@ -51,3 +51,415 @@
   position: relative;
   z-index: 2;
 }
+
+.vanPager {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .mobileSchedule {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: clip;
+  }
+
+  .mobileSchedule > header:first-child {
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .mobileSchedule > header:first-child h1 {
+    font-size: 22px;
+  }
+
+  .mobileSchedule > header:first-child p {
+    display: none;
+  }
+
+  .mobileSchedule > header:first-child > div:last-child {
+    width: 100%;
+    align-items: center;
+  }
+
+  .mobileSchedule > header:first-child > div:last-child span {
+    margin-left: auto;
+    font-size: 9px !important;
+  }
+
+  .mobileSchedule [data-schedule-toolbar] {
+    flex-direction: row !important;
+    align-items: center !important;
+    gap: 6px !important;
+    padding: 6px !important;
+    margin-bottom: 7px !important;
+  }
+
+  .mobileSchedule [data-schedule-toolbar] > div:first-child {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .mobileSchedule [data-schedule-toolbar] > div:first-child > div {
+    min-width: 0;
+  }
+
+  .mobileSchedule [data-schedule-toolbar] strong {
+    font-size: 9px !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .mobileSchedule [data-schedule-toolbar] span {
+    display: none !important;
+  }
+
+  .mobileSchedule [data-schedule-toolbar] button {
+    min-width: 34px;
+    min-height: 34px;
+  }
+
+  .mobileSchedule [data-schedule-week] {
+    display: grid !important;
+    grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
+    gap: 3px !important;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    margin-bottom: 7px !important;
+  }
+
+  .mobileSchedule [data-schedule-day] {
+    width: 100%;
+    min-width: 0;
+    min-height: 58px;
+    padding: 6px 3px !important;
+    border-radius: 9px !important;
+    overflow: hidden;
+    text-align: center !important;
+  }
+
+  .mobileSchedule [data-schedule-day] > div {
+    flex-direction: column;
+    align-items: center !important;
+    gap: 2px !important;
+  }
+
+  .mobileSchedule [data-schedule-day] > div > span,
+  .mobileSchedule [data-schedule-day] > div > strong {
+    font-size: 9px !important;
+    line-height: 1.1;
+    white-space: nowrap;
+  }
+
+  .mobileSchedule [data-schedule-day] > div > b,
+  .mobileSchedule [data-schedule-day] > small,
+  .mobileSchedule [data-schedule-day] > p {
+    display: none !important;
+  }
+
+  .mobileSchedule [data-schedule-day] > i {
+    height: 3px !important;
+    margin-top: 8px !important;
+  }
+
+  .mobileSchedule [data-schedule-metrics] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+    margin-bottom: 7px !important;
+  }
+
+  .mobileSchedule [data-schedule-metrics] > article {
+    min-height: 66px;
+    padding: 9px 10px 11px !important;
+    border-radius: 10px !important;
+  }
+
+  .mobileSchedule [data-schedule-metrics] > article > span {
+    font-size: 8px !important;
+  }
+
+  .mobileSchedule [data-schedule-metrics] > article > strong {
+    margin-top: 3px !important;
+    font-size: 18px !important;
+  }
+
+  .mobileSchedule [data-schedule-metrics] > article > small {
+    margin-top: 2px !important;
+    font-size: 8px !important;
+    line-height: 1.25;
+  }
+
+  .mobileSchedule [data-schedule-board] {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    border-radius: 12px !important;
+    overflow: hidden;
+  }
+
+  .mobileSchedule [data-schedule-board-header] {
+    padding: 9px 10px !important;
+  }
+
+  .mobileSchedule [data-schedule-board-header] strong {
+    font-size: 12px !important;
+  }
+
+  .mobileSchedule [data-schedule-board-header] span {
+    display: none !important;
+  }
+
+  .mobileSchedule [data-schedule-board-header] > b {
+    flex: 0 0 auto;
+    padding: 5px 7px !important;
+    font-size: 8px !important;
+  }
+
+  .mobileSchedule [data-schedule-board-scroll] {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto !important;
+    overflow-y: visible;
+    scroll-snap-type: x mandatory;
+    scroll-padding-inline: 0;
+    scrollbar-width: none;
+    overscroll-behavior-inline: contain;
+    touch-action: pan-x pan-y;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .mobileSchedule [data-schedule-board-scroll]::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  .mobileSchedule [data-schedule-van-grid] {
+    display: flex !important;
+    grid-template-columns: none !important;
+    gap: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    padding: 0 !important;
+  }
+
+  .mobileSchedule [data-van-lane] {
+    flex: 0 0 100% !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
+    border: 0 !important;
+    border-radius: 0 !important;
+  }
+
+  .mobileSchedule [data-van-lane] > header {
+    padding: 10px 11px !important;
+  }
+
+  .mobileSchedule [data-van-lane] > header strong {
+    font-size: 12px !important;
+  }
+
+  .mobileSchedule [data-van-lane] > header small {
+    margin-top: 3px !important;
+    font-size: 9px !important;
+    line-height: 1.25;
+  }
+
+  .mobileSchedule [data-van-lane] > header > b {
+    font-size: 8px !important;
+  }
+
+  .mobileSchedule [data-van-lane] > header + div > div {
+    padding: 8px 9px !important;
+  }
+
+  .mobileSchedule [data-van-lane] > header + div span {
+    font-size: 8px !important;
+  }
+
+  .mobileSchedule [data-van-lane] > header + div strong {
+    font-size: 10px !important;
+  }
+
+  .mobileSchedule [data-schedule-slots] {
+    gap: 8px !important;
+    padding: 9px !important;
+  }
+
+  .mobileSchedule [data-schedule-slot] {
+    min-width: 0;
+    min-height: 62px;
+    grid-template-columns: 62px minmax(0, 1fr) auto !important;
+    gap: 9px !important;
+    padding: 10px !important;
+    border-radius: 10px !important;
+  }
+
+  .mobileSchedule [data-schedule-slot="occupied"] {
+    grid-template-columns: 62px minmax(0, 1fr) !important;
+  }
+
+  .mobileSchedule [data-schedule-slot] > div:first-child strong {
+    font-size: 11px !important;
+  }
+
+  .mobileSchedule [data-schedule-slot] > div:first-child span {
+    font-size: 8px !important;
+  }
+
+  .mobileSchedule [data-schedule-slot="open"] > div:nth-child(2) > strong,
+  .mobileSchedule [data-schedule-slot="off"] > div:nth-child(2) > strong {
+    font-size: 11px !important;
+  }
+
+  .mobileSchedule [data-schedule-slot="open"] > div:nth-child(2) > span,
+  .mobileSchedule [data-schedule-slot="off"] > div:nth-child(2) > span {
+    font-size: 9px !important;
+    line-height: 1.3;
+  }
+
+  .mobileSchedule [data-schedule-slot="open"] > div:nth-child(3) {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .mobileSchedule [data-schedule-slot="open"] > div:nth-child(3) > button {
+    flex: 1 1 92px;
+    min-height: 40px !important;
+    font-size: 9px !important;
+  }
+
+  .mobileSchedule [data-schedule-job] {
+    min-height: 52px;
+    padding: 9px !important;
+    border-radius: 9px !important;
+  }
+
+  .mobileSchedule [data-schedule-job] strong {
+    font-size: 11px !important;
+  }
+
+  .mobileSchedule [data-schedule-job] b {
+    font-size: 7px !important;
+  }
+
+  .mobileSchedule [data-schedule-job] span,
+  .mobileSchedule [data-schedule-job] small {
+    font-size: 8.5px !important;
+    line-height: 1.35;
+  }
+
+  .mobileSchedule [data-schedule-lunch] {
+    min-height: 28px;
+    font-size: 8px !important;
+  }
+
+  .laneAction {
+    padding: 10px;
+    border-top-color: color-mix(in srgb, var(--brand) 30%, var(--border));
+    background: linear-gradient(180deg, var(--surface-2), var(--brand-soft));
+  }
+
+  .laneAction button {
+    min-height: 48px;
+    border-color: color-mix(in srgb, var(--brand) 46%, var(--border));
+    color: var(--brand);
+    background: var(--surface);
+    box-shadow: 0 5px 16px color-mix(in srgb, var(--brand) 10%, transparent);
+    font-size: 10px;
+    letter-spacing: .02em;
+  }
+
+  .vanPager {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 72px;
+    padding: 8px 10px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  .vanPager > button {
+    flex: 0 0 42px;
+    width: 42px;
+    height: 42px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    color: var(--brand);
+    background: var(--surface-2);
+    font-size: 22px;
+    cursor: pointer;
+  }
+
+  .vanPager > button:disabled {
+    opacity: .35;
+    cursor: not-allowed;
+  }
+
+  .vanPagerCenter {
+    display: grid;
+    flex: 1;
+    justify-items: center;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .vanPagerStatus {
+    color: var(--text);
+    font-size: 10px;
+    font-weight: 900;
+  }
+
+  .vanPagerCenter small {
+    color: var(--muted);
+    font-size: 8px;
+  }
+
+  .vanPagerDots {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+  }
+
+  .vanPagerDots button {
+    width: 26px;
+    height: 24px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .vanPagerDots button::after {
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--border-strong);
+    content: '';
+    transition: width .16s ease, background .16s ease;
+  }
+
+  .vanPagerDots button:focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: -2px;
+    border-radius: 8px;
+  }
+
+  .vanPagerDots .vanPagerDotActive::after {
+    width: 18px;
+    background: var(--brand);
+  }
+
+}

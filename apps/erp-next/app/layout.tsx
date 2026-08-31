@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { AuthProvider } from '@/components/auth/auth-provider';
 import './globals.css';
 import './theme-hardening.css';
@@ -26,6 +26,12 @@ export const metadata: Metadata = {
   description: 'Professional cooling solutions in Aruba.',
   applicationName: 'DEMAC Professional Cooling Solutions',
   robots: { index: true, follow: true },
+};
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
 };
 
 const themeBootstrap = `

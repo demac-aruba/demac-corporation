@@ -1,7 +1,7 @@
 'use client';
 
 import Image, { type ImageLoaderProps } from 'next/image';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   OFFICE_LOCATION_ID,
   WAREHOUSE_LOCATION_ID,
@@ -144,6 +144,24 @@ function toolCanTransfer(asset: InventoryToolAsset) {
 function inventoryStatusText(value?: string) {
   return String(value ?? '').trim().toLowerCase();
 }
+function isLiveToolAsset(asset: InventoryToolAsset) {
+  const status = inventoryStatusText(asset.operationalStatus);
+  return asset.active !== false
+    && asset.assigned !== false
+    && !asset.retiredAt
+    && !['retirada', 'retired', 'desechada', 'disposed'].some((blocked) => status.includes(blocked));
+}
+function toolNeedsService(asset: InventoryToolAsset) {
+  const condition = inventoryStatusText(asset.condition);
+  const status = inventoryStatusText(asset.operationalStatus);
+  const dueAt = asset.maintenanceDueAt ? Date.parse(asset.maintenanceDueAt) : Number.NaN;
+  return condition.includes('requiere reemplazo')
+    || condition.includes('damaged')
+    || condition.includes('dañad')
+    || status.includes('repair')
+    || status.includes('repar')
+    || (Number.isFinite(dueAt) && dueAt <= Date.now());
+}
 function toolLocationId(asset: InventoryToolAsset) {
   return asset.inventoryLocationId || asset.locationId || asset.vanId || '';
 }
@@ -163,6 +181,15 @@ function ToolPhoto({ asset, onOpen }: { asset: InventoryToolAsset; onOpen: (url:
   return <button type="button" className={styles.toolPhotoButton} onClick={() => onOpen(original)} aria-label={`Open photo for ${asset.assetCode || asset.id}`}>
     <Image loader={passthroughImageLoader} src={thumbnail} alt="" fill sizes="52px" unoptimized onError={() => setFailed(true)} />
   </button>;
+}
+
+function InventoryLoadingSkeleton() {
+  return <section className={`${styles.page} ${styles.loadingShell}`} aria-label="Loading live inventory" aria-busy="true">
+    <div className={styles.skeletonHeader}><span /><span /></div>
+    <div className={styles.skeletonMetrics}>{Array.from({ length: 4 }, (_, index) => <span key={index} />)}</div>
+    <div className={styles.skeletonPanel}><span /><span /><span /><span /></div>
+    <span className={styles.skeletonLabel}>Loading live inventory…</span>
+  </section>;
 }
 
 export function ConsolidatedInventoryWorkspace() {
@@ -198,24 +225,22 @@ export function ConsolidatedInventoryWorkspace() {
   const [addToolStage, setAddToolStage] = useState('');
   const [mobileToolQuery, setMobileToolQuery] = useState('');
   const [mobileToolAction, setMobileToolAction] = useState<'summary' | 'edit' | 'transfer'>('summary');
+  const operationsLoadStarted = useRef(false);
 
   const refresh = useCallback(async () => {
+    const startedAt = typeof performance === 'undefined' ? 0 : performance.now();
     try {
-      const [next, nextOperations] = await Promise.all([
-        getInventorySnapshot(),
-        loadCanonicalOperationsState()
-          .then((value) => ({ value, unavailable: false }))
-          .catch(() => ({ value: null, unavailable: true })),
-      ]);
+      const next = await getInventorySnapshot();
       setSnapshot(next);
-      if (nextOperations.value) setOperations(nextOperations.value);
-      setOperationsUnavailable(nextOperations.unavailable);
       setError('');
       const firstVan = next.locations
         .filter((location) => location.type === 'van')
         .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id, undefined, { numeric: true, sensitivity: 'base' }))[0]?.id ?? '';
       setActiveVanId((current) => current && next.locations.some((location) => location.id === current) ? current : firstVan);
       setLineItemKey((current) => current && next.items.some((item) => itemKey(item) === current) ? current : (next.items[0] ? itemKey(next.items[0]) : ''));
+      if (startedAt && typeof performance !== 'undefined') {
+        performance.measure('demac.inventory.snapshot', { start: startedAt, end: performance.now() });
+      }
       return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Inventory could not be loaded.');
@@ -225,7 +250,28 @@ export function ConsolidatedInventoryWorkspace() {
     }
   }, []);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  const loadOperationsEnrichment = useCallback(async () => {
+    if (operationsLoadStarted.current) return;
+    operationsLoadStarted.current = true;
+    const startedAt = typeof performance === 'undefined' ? 0 : performance.now();
+    try {
+      const nextOperations = await loadCanonicalOperationsState();
+      setOperations(nextOperations);
+      setOperationsUnavailable(false);
+    } catch {
+      operationsLoadStarted.current = false;
+      setOperationsUnavailable(true);
+    } finally {
+      if (startedAt && typeof performance !== 'undefined') {
+        performance.measure('demac.inventory.operations-enrichment', { start: startedAt, end: performance.now() });
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+    void loadOperationsEnrichment();
+  }, [loadOperationsEnrichment, refresh]);
   useEffect(() => {
     if (!toolEdit && !toolLightbox && !addToolDraft) return undefined;
     const closeOverlay = (event: KeyboardEvent) => {
@@ -246,6 +292,20 @@ export function ConsolidatedInventoryWorkspace() {
   useEffect(() => () => {
     if (addToolPhotoPreview) URL.revokeObjectURL(addToolPhotoPreview);
   }, [addToolPhotoPreview]);
+  useEffect(() => {
+    const syncFromHistory = () => {
+      const params = new URLSearchParams(window.location.search);
+      const requestedView = params.get('inventoryView');
+      const requestedSection = params.get('vanSection');
+      const allowedViews: View[] = ['overview', 'warehouse', 'office', 'vans', 'tools', 'transfers', 'replenishment', 'movements'];
+      const allowedSections: VanSection[] = ['workspace', 'overview', 'consumables', 'products', 'tools'];
+      setView(allowedViews.includes(requestedView as View) ? requestedView as View : 'overview');
+      setVanSection(allowedSections.includes(requestedSection as VanSection) ? requestedSection as VanSection : 'workspace');
+    };
+    syncFromHistory();
+    window.addEventListener('popstate', syncFromHistory);
+    return () => window.removeEventListener('popstate', syncFromHistory);
+  }, []);
 
   const locations = snapshot?.locations ?? [];
   const normalLocations = locations.filter((location) => location.type !== 'legacy');
@@ -259,14 +319,37 @@ export function ConsolidatedInventoryWorkspace() {
   const companyProductUnits = products.reduce((total, item) => total + Object.values(item.balances || {}).reduce((sum, row) => sum + Number(row.onHand || 0), 0), 0);
   const selectedTransferItem = items.find((item) => itemKey(item) === lineItemKey);
   const legacyProducts = products.filter((item) => (item.balances?.[LEGACY_LOCATION_ID]?.onHand ?? 0) > 0);
-  const activeToolAssets = (snapshot?.toolAssets ?? []).filter((asset) => asset.active !== false);
+  const activeToolAssets = (snapshot?.toolAssets ?? []).filter(isLiveToolAsset);
   const vanLocationIds = new Set(vans.map((van) => van.id));
   const toolsAssignedToVans = activeToolAssets.filter((asset) => vanLocationIds.has(asset.inventoryLocationId || asset.locationId || asset.vanId || ''));
   const today = arubaDateKey();
 
+  function writeInventoryHistory(nextView: View, nextSection: VanSection = 'workspace') {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    if (nextView === 'overview') {
+      url.searchParams.delete('inventoryView');
+      url.searchParams.delete('vanSection');
+    } else {
+      url.searchParams.set('inventoryView', nextView);
+      if (nextView === 'vans' && nextSection !== 'workspace') url.searchParams.set('vanSection', nextSection);
+      else url.searchParams.delete('vanSection');
+    }
+    const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (nextUrl !== currentUrl) window.history.pushState({ inventoryView: nextView, vanSection: nextSection }, '', nextUrl);
+  }
+
   function openView(nextView: View) {
     setView(nextView);
     if (nextView === 'vans') setVanSection('workspace');
+    writeInventoryHistory(nextView);
+  }
+
+  function openVanSection(nextSection: VanSection) {
+    setView('vans');
+    setVanSection(nextSection);
+    writeInventoryHistory('vans', nextSection);
   }
 
   function profileForVan(location: InventoryLocation): CanonicalVan | undefined {
@@ -421,7 +504,7 @@ export function ConsolidatedInventoryWorkspace() {
     setPendingActions((current) => new Set(current).add(actionKey));
     setError(''); setNotice('');
     try {
-      const refreshed = await refresh();
+      const [refreshed] = await Promise.all([refresh(), loadOperationsEnrichment()]);
       if (refreshed) setNotice('Live inventory refreshed.');
     } finally {
       setPendingActions((current) => {
@@ -756,8 +839,21 @@ export function ConsolidatedInventoryWorkspace() {
         .some((value) => String(value).toLowerCase().includes(normalizedQuery));
     }) : visibleTools;
     const assignedUnits = visibleTools.reduce((sum, asset) => sum + toolExpectedQuantity(asset), 0);
+    const missingUnits = visibleTools.reduce((sum, asset) => sum + toolMissingQuantity(asset), 0);
+    const serviceDue = visibleTools.filter(toolNeedsService).length;
+    const assetValue = visibleTools.reduce((sum, asset) => {
+      const catalog = snapshot?.toolCatalog.find((tool) => tool.id === asset.toolCatalogId);
+      const unitCost = Number.isFinite(Number(asset.purchaseCost)) ? Number(asset.purchaseCost) : Number(catalog?.standardCost || 0);
+      return sum + unitCost * toolExpectedQuantity(asset);
+    }, 0);
     return <section className={styles.panel}>
       <header className={styles.panelHead}><div><strong>{locationId ? `${locationLabel(locations, locationId)} tools` : 'Tool assets'}</strong><span>{locationId ? 'Physically assigned to this Van' : 'Real asset details, stored photos and controlled editing'}</span></div><div className={styles.panelHeadActions}><b>{quantity(assignedUnits)} assigned · {visibleTools.length} records</b>{allowAdd ? <button type="button" className={styles.addToolButton} onClick={() => openAddTool()}>+ Add Tool</button> : null}</div></header>
+      {locationId && allowAdd ? <div className={styles.mobileToolMetrics} aria-label="Van tool summary">
+        <article><span className={styles.blue}><InventoryIcon name="tool" /></span><div><small>Total tools</small><strong>{quantity(assignedUnits)}</strong></div></article>
+        <article><span className={missingUnits ? styles.red : styles.green}><InventoryIcon name="warning" /></span><div><small>Missing</small><strong>{quantity(missingUnits)}</strong></div></article>
+        <article><span className={serviceDue ? styles.orange : styles.green}><InventoryIcon name="warning" /></span><div><small>Service / damage</small><strong>{quantity(serviceDue)}</strong></div></article>
+        <article><span className={styles.purple}><InventoryIcon name="package" /></span><div><small>Asset value</small><strong>{money(assetValue)}</strong></div></article>
+      </div> : null}
       <div className={styles.mobileToolSearch}><label><InventoryIcon name="overview" /><input type="search" value={mobileToolQuery} onChange={(event) => setMobileToolQuery(event.target.value)} placeholder="Search tools or asset ID" aria-label="Search tools or asset ID" /></label><span>{mobileVisibleTools.length} items</span></div>
       <div className={styles.mobileToolList}>{mobileVisibleTools.map((asset) => {
         const catalog = snapshot?.toolCatalog.find((tool) => tool.id === asset.toolCatalogId);
@@ -880,16 +976,15 @@ export function ConsolidatedInventoryWorkspace() {
 
   function openMobileVanTools() {
     if (!activeVan) { openView('tools'); return; }
-    setView('vans');
-    setVanSection('tools');
+    openVanSection('tools');
     setMobileToolQuery('');
   }
 
   function MobileBottomNav() {
     const buttons: Array<{ label: string; icon: InventoryIconName; active: boolean; onClick: () => void }> = [
-      { label: 'Overview', icon: 'overview', active: view === 'overview', onClick: () => openView('overview') },
+      { label: 'Inventory', icon: 'overview', active: view === 'overview' || view === 'warehouse' || view === 'office', onClick: () => openView('overview') },
       { label: 'Vans', icon: 'van', active: view === 'vans' && vanSection === 'workspace', onClick: () => openView('vans') },
-      { label: 'Tools', icon: 'tool', active: view === 'tools', onClick: () => openView('tools') },
+      { label: 'Tools', icon: 'tool', active: view === 'tools' || (view === 'vans' && vanSection === 'tools'), onClick: openMobileVanTools },
       { label: 'Activity', icon: 'movement', active: view === 'movements', onClick: () => openView('movements') },
       { label: 'Alerts', icon: 'warning', active: view === 'replenishment', onClick: () => openView('replenishment') },
     ];
@@ -919,15 +1014,67 @@ export function ConsolidatedInventoryWorkspace() {
     </section>;
   }
 
+  function MobileLocationWorkspace({ locationId, kind }: { locationId: string; kind: 'warehouse' | 'office' }) {
+    const location = locations.find((candidate) => candidate.id === locationId);
+    const locationItems = [...items].sort((left, right) => {
+      const stockDifference = balance(right, locationId).onHand - balance(left, locationId).onHand;
+      return stockDifference || left.name.localeCompare(right.name);
+    });
+    const totalOnHand = locationItems.reduce((sum, item) => sum + Number(balance(item, locationId).onHand || 0), 0);
+    const totalReserved = locationItems.reduce((sum, item) => sum + Number(balance(item, locationId).reserved || 0), 0);
+    const lowStock = locationItems.filter((item) => {
+      const value = balance(item, locationId);
+      return value.minimum > 0 && available(value) > 0 && available(value) <= value.minimum;
+    }).length;
+    const outOfStock = locationItems.filter((item) => {
+      const value = balance(item, locationId);
+      return value.minimum > 0 && available(value) <= 0;
+    }).length;
+    const stockValue = locationItems.reduce((sum, item) => {
+      const unitValue = item.itemKind === 'product' ? Number(item.price || 0) : Number(item.cost || 0);
+      return sum + unitValue * Number(balance(item, locationId).onHand || 0);
+    }, 0);
+    const locationTransfers = openTransfers.filter((transfer) => transferTouches(locationId, transfer));
+    const imageSrc = kind === 'warehouse' ? '/images/inventory/inventory-warehouse.webp' : '/images/inventory/inventory-office.webp';
+    const title = kind === 'warehouse' ? 'Warehouse' : 'Office';
+    const subtitle = kind === 'warehouse' ? 'Main warehouse stock' : 'Office supplies & small equipment';
+
+    return <section className={styles.mobileLocationWorkspace}>
+      <header className={styles.mobilePageHeader}><div><span className={styles.eyebrow}>Inventory control</span><h1>{title}</h1></div><button type="button" aria-label={`Refresh ${title} inventory`} disabled={isPending('refresh')} onClick={() => void refreshInventory()}>↻</button></header>
+      <nav className={styles.mobileLocationNav} aria-label="Inventory locations"><button type="button" className={kind === 'warehouse' ? styles.mobileLocationActive : ''} onClick={() => openView('warehouse')}><InventoryIcon name="warehouse" />Warehouse</button><button type="button" className={kind === 'office' ? styles.mobileLocationActive : ''} onClick={() => openView('office')}><InventoryIcon name="office" />Office</button><button type="button" onClick={() => openView('vans')}><InventoryIcon name="van" />Vans</button></nav>
+
+      <article className={styles.mobileLocationCard}><div className={styles.mobileLocationVisual}><Image src={imageSrc} alt="" fill sizes="104px" unoptimized /></div><div><span>{location?.name || title}</span><strong>{subtitle}</strong><small>{locationItems.filter((item) => balance(item, locationId).onHand > 0).length} stocked lines · {quantity(Math.max(0, totalOnHand - totalReserved))} available units</small></div><span className={`${styles.statusChip} ${styles.ready}`}><i />Live</span></article>
+
+      <section className={styles.mobileSection}><header><div><h2>Location overview</h2><p>Real stock at this physical location.</p></div></header><div className={styles.mobileLocationMetrics}>
+        <article><span className={styles.blue}><InventoryIcon name="package" /></span><div><small>Units on hand</small><strong>{quantity(totalOnHand)}</strong></div></article>
+        <article><span className={lowStock ? styles.orange : styles.green}><InventoryIcon name="warning" /></span><div><small>Low stock</small><strong>{lowStock}</strong></div></article>
+        <article><span className={outOfStock ? styles.red : styles.green}><InventoryIcon name="warning" /></span><div><small>Out of stock</small><strong>{outOfStock}</strong></div></article>
+        <article><span className={styles.purple}><InventoryIcon name="package" /></span><div><small>Stock value</small><strong>{money(stockValue)}</strong></div></article>
+      </div></section>
+
+      <section className={styles.mobileSection}><header><div><h2>Stock at this location</h2><p>Count, availability and par levels.</p></div><span className={styles.mobileSectionCount}>{locationItems.length} items</span></header><div className={styles.mobileStockList}>
+        {locationItems.map((item) => {
+          const value = balance(item, locationId);
+          const availableUnits = available(value);
+          const needsStock = value.minimum > 0 && availableUnits <= value.minimum;
+          return <article className={styles.mobileStockRow} key={`${kind}:${itemKey(item)}`}><span className={item.itemKind === 'product' ? styles.blue : styles.purple}><InventoryIcon name={item.itemKind === 'product' ? 'package' : 'bottle'} /></span><div><strong>{item.name}</strong><small>{item.sku || item.category || (item.itemKind === 'product' ? 'Product' : 'Consumable')}</small><p><b>{quantity(value.onHand)} on hand</b><span>{quantity(availableUnits)} available · par {quantity(value.target)}</span></p></div><div><span className={needsStock ? styles.stockAttention : styles.stockReady}>{availableUnits <= 0 ? 'Out' : needsStock ? 'Low' : 'Ready'}</span><button type="button" onClick={() => beginStockEdit(item, locationId)}>Count</button></div></article>;
+        })}
+        {!locationItems.length ? <p className={styles.empty}>No active items are configured for this location.</p> : null}
+      </div></section>
+
+      <section className={styles.mobileSection}><header><h2>Quick actions</h2></header><div className={styles.mobileLocationActions}><button type="button" onClick={() => openView('transfers')}><InventoryIcon name="transfer" /><span><b>Transfers</b><small>{locationTransfers.length} open</small></span><i>›</i></button><button type="button" onClick={() => openView('movements')}><InventoryIcon name="movement" /><span><b>Movements</b><small>View location history</small></span><i>›</i></button></div></section>
+    </section>;
+  }
+
   function MobileVanWorkspace() {
     if (!activeVan) return <section className={styles.mobileVanWorkspace}><p className={styles.empty}>No active Van inventory locations are available.</p></section>;
     return <section className={styles.mobileVanWorkspace}>
-      <header className={styles.mobilePageHeader}><div><span className={styles.eyebrow}>Van inventory</span><h1>{activeVan.name}</h1></div><button type="button" aria-label="Back to inventory" onClick={() => openView('overview')}>←</button></header>
+      <header className={styles.mobilePageHeader}><div><span className={styles.eyebrow}>Van inventory</span><h1>{activeVan.name}</h1></div><button type="button" aria-label="Refresh Van inventory" disabled={isPending('refresh')} onClick={() => void refreshInventory()}>↻</button></header>
       <label className={styles.mobileVanSelector}><VanThumbnail imageUrl={activeVanProfile?.imageUrl} name={activeVan.name} size="small" /><span><small>Selected Van</small><select value={activeVan.id} onChange={(event) => setActiveVanId(event.target.value)}>{vans.map((van) => <option key={van.id} value={van.id}>{van.name}</option>)}</select><b>{activeVanCrew.length ? activeVanCrew.slice(0, 2).join(', ') + (activeVanCrew.length > 2 ? ` +${activeVanCrew.length - 2}` : '') : 'Crew unassigned'}</b></span><VanStatusChip status={statusForVan(activeVan)} /></label>
       <section className={styles.mobileSection}><header><div><h2>Choose a view</h2><p>Open only the information you need.</p></div></header><div className={styles.mobileVanGrid}>
-        <button type="button" onClick={() => setVanSection('overview')}><span><InventoryIcon name="overview" /></span><b>Overview</b><small>{onHandAt(activeVan.id)} units</small></button>
-        <button type="button" onClick={() => setVanSection('consumables')}><span className={styles.purple}><InventoryIcon name="bottle" /></span><b>Consumables</b><small>{onHandAt(activeVan.id, 'material')} on hand</small></button>
-        <button type="button" onClick={() => setVanSection('products')}><span className={styles.green}><InventoryIcon name="package" /></span><b>Products</b><small>{onHandAt(activeVan.id, 'product')} on hand</small></button>
+        <button type="button" onClick={() => openVanSection('overview')}><span><InventoryIcon name="overview" /></span><b>Overview</b><small>{onHandAt(activeVan.id)} units</small></button>
+        <button type="button" onClick={() => openVanSection('consumables')}><span className={styles.purple}><InventoryIcon name="bottle" /></span><b>Consumables</b><small>{onHandAt(activeVan.id, 'material')} on hand</small></button>
+        <button type="button" onClick={() => openVanSection('products')}><span className={styles.green}><InventoryIcon name="package" /></span><b>Products</b><small>{onHandAt(activeVan.id, 'product')} on hand</small></button>
         <button type="button" onClick={openMobileVanTools}><span className={styles.orange}><InventoryIcon name="tool" /></span><b>Tools</b><small>{quantity(activeVanTools.reduce((sum, asset) => sum + toolQuantity(asset), 0))} assigned</small></button>
         <button type="button" onClick={() => openView('transfers')}><span><InventoryIcon name="transfer" /></span><b>Transfers</b><small>{activeVanTransfers.length} open</small></button>
         <button type="button" onClick={() => openView('replenishment')}><span><InventoryIcon name="warning" /></span><b>Alerts</b><small>{activeVanReplenishment.length} to review</small></button>
@@ -939,11 +1086,11 @@ export function ConsolidatedInventoryWorkspace() {
     ['overview', 'Overview'], ['warehouse', 'Warehouse'], ['office', 'Office'], ['vans', 'Vans'], ['tools', 'Tools'], ['transfers', 'Transfers'], ['replenishment', 'Replenishment'], ['movements', 'Movements'],
   ].map(([id, label]) => ({ id: id as View, label }));
 
-  if (loading) return <section className={styles.page}><div className={styles.state}>Loading consolidated inventory…</div></section>;
+  if (loading) return <InventoryLoadingSkeleton />;
   if (!snapshot) return <section className={styles.page}><div className={styles.state}>{error || 'Inventory is unavailable.'}<button type="button" onClick={() => { setLoading(true); void refresh(); }}>Retry</button></div></section>;
 
   return <section className={styles.page}>
-    <header className={`${styles.hero} ${view === 'overview' ? styles.overviewHero : ''} ${view === 'vans' ? styles.vanHero : ''}`}>
+    <header className={`${styles.hero} ${view === 'overview' ? styles.overviewHero : ''} ${view === 'vans' ? styles.vanHero : ''} ${view === 'warehouse' || view === 'office' ? styles.locationHero : ''}`}>
       <div><span className={styles.eyebrow}>{view === 'vans' ? 'Inventory · Mobile warehouses' : 'Inventory · One authority'}</span><h1>{view === 'vans' ? 'Van Inventory Workspace' : 'Inventory Control'}</h1><p>{view === 'vans' ? 'Select a Van and choose the inventory view you want to manage.' : 'One authority for Warehouse, Office, Vans, Products, Consumables and Tools.'}</p></div>
       {view === 'overview' ? <details className={styles.actionMenu}><summary>Inventory actions <span>⌄</span></summary><div><button type="button" onClick={() => openView('warehouse')}>Open Warehouse</button><button type="button" onClick={() => openView('office')}>Open Office</button><button type="button" onClick={() => openView('tools')}>Open Tools</button><button type="button" onClick={() => openView('transfers')}>Manage transfers</button><button type="button" onClick={() => openView('replenishment')}>View replenishment</button><button type="button" onClick={() => openView('movements')}>View movements</button><button type="button" disabled={isPending('refresh')} onClick={() => void refreshInventory()}>{isPending('refresh') ? 'Refreshing…' : 'Refresh live inventory'}</button></div></details> : <div className={styles.heroActions}><button type="button" onClick={() => openView(view === 'vans' && vanSection !== 'workspace' ? 'vans' : 'overview')}>{view === 'vans' && vanSection !== 'workspace' ? '← Van workspace' : '← Inventory Control'}</button><button type="button" className={styles.primary} disabled={isPending('refresh')} onClick={() => void refreshInventory()}>{isPending('refresh') ? 'Refreshing…' : 'Refresh'}</button></div>}
     </header>
@@ -967,8 +1114,8 @@ export function ConsolidatedInventoryWorkspace() {
 
       <div className={styles.overviewTopGrid}>
         <section className={`${styles.panel} ${styles.workspacePanel}`}><header className={styles.panelHead}><div><strong>Choose an inventory workspace</strong><span>Select where you want to view and manage inventory.</span></div></header><div className={styles.workspaceCards}>
-          <article className={styles.workspaceCard}><div className={`${styles.workspaceVisual} ${styles.warehouseVisual}`}><Image src="/images/inventory/inventory-warehouse.webp" alt="Warehouse inventory workspace" fill sizes="(max-width: 760px) 100vw, 28vw" priority unoptimized /></div><h2>Warehouse</h2><p>View, store and manage inventory in the main warehouse.</p><ul><li>Bulk stock management</li><li>Receiving & put-away</li><li>Stock adjustments</li><li>Cycle counts</li></ul><button type="button" onClick={() => openView('warehouse')}>Open Warehouse</button></article>
-          <article className={styles.workspaceCard}><div className={`${styles.workspaceVisual} ${styles.officeVisual}`}><Image src="/images/inventory/inventory-office.webp" alt="Office inventory workspace" fill sizes="(max-width: 760px) 100vw, 28vw" priority unoptimized /></div><h2>Office</h2><p>Manage office inventory and operational consumables.</p><ul><li>Office consumables</li><li>Small tools & equipment</li><li>Administrative stock</li><li>Usage tracking</li></ul><button type="button" onClick={() => openView('office')}>Open Office</button></article>
+          <article className={styles.workspaceCard}><div className={`${styles.workspaceVisual} ${styles.warehouseVisual}`}><Image src="/images/inventory/inventory-warehouse.webp" alt="Warehouse inventory workspace" fill sizes="28vw" unoptimized /></div><h2>Warehouse</h2><p>View, store and manage inventory in the main warehouse.</p><ul><li>Bulk stock management</li><li>Receiving & put-away</li><li>Stock adjustments</li><li>Cycle counts</li></ul><button type="button" onClick={() => openView('warehouse')}>Open Warehouse</button></article>
+          <article className={styles.workspaceCard}><div className={`${styles.workspaceVisual} ${styles.officeVisual}`}><Image src="/images/inventory/inventory-office.webp" alt="Office inventory workspace" fill sizes="28vw" unoptimized /></div><h2>Office</h2><p>Manage office inventory and operational consumables.</p><ul><li>Office consumables</li><li>Small tools & equipment</li><li>Administrative stock</li><li>Usage tracking</li></ul><button type="button" onClick={() => openView('office')}>Open Office</button></article>
           <article className={`${styles.workspaceCard} ${styles.workspaceCardActive}`}><VanThumbnail name="DEMAC" size="large" /><h2>Vans</h2><p>Access Van inventory including products, consumables and tools.</p><ul><li>Van stock & locations</li><li>Consumables by Van</li><li>Tools assigned</li><li>Stock transfers</li></ul><button type="button" className={styles.primary} onClick={() => openView('vans')}>Open Vans</button></article>
         </div><div className={styles.workspaceHint}><span>ⓘ</span>Select a workspace to view inventory details, adjust stock or initiate transfers.</div></section>
 
@@ -983,20 +1130,20 @@ export function ConsolidatedInventoryWorkspace() {
       {legacyProducts.length ? <section className={styles.panel}><header className={styles.panelHead}><div><strong>Historical stock location assignment</strong><span>One-time controlled reclassification — company total does not change</span></div></header><div className={styles.list}>{legacyProducts.map((item) => <div key={item.id}><strong>{item.name}</strong><span>{item.balances[LEGACY_LOCATION_ID].onHand} unassigned units</span><button type="button" onClick={() => openLegacyAllocation(item)}>Assign locations</button></div>)}</div></section> : null}
     </div></> : null}
 
-    {view === 'warehouse' ? <StockTable locationId={WAREHOUSE_LOCATION_ID} /> : null}
-    {view === 'office' ? <StockTable locationId={OFFICE_LOCATION_ID} /> : null}
+    {view === 'warehouse' ? <><MobileLocationWorkspace locationId={WAREHOUSE_LOCATION_ID} kind="warehouse" /><div className={styles.desktopLocationWorkspace}><StockTable locationId={WAREHOUSE_LOCATION_ID} /></div></> : null}
+    {view === 'office' ? <><MobileLocationWorkspace locationId={OFFICE_LOCATION_ID} kind="office" /><div className={styles.desktopLocationWorkspace}><StockTable locationId={OFFICE_LOCATION_ID} /></div></> : null}
 
     {view === 'vans' ? !activeVan ? <div className={styles.state}>No active Vans were found in canonical inventory.</div> : <>
       {vanSection === 'workspace' ? <MobileVanWorkspace /> : null}
       <div className={vanSection === 'workspace' ? styles.desktopVanOnly : styles.vanDesktopOrDetail}>
-      <div className={styles.vanSelectorBar}><label className={styles.vanSelector}><VanThumbnail imageUrl={activeVanProfile?.imageUrl} name={activeVan.name} size="small" /><span><small>Selected Van</small><select value={activeVan.id} onChange={(event) => { setActiveVanId(event.target.value); setVanSection('workspace'); }}>{vans.map((van) => <option key={van.id} value={van.id}>{van.name}</option>)}</select></span></label><div className={styles.vanStatusStrip}><VanStatusChip status={statusForVan(activeVan)} />{activeVanReplenishment.length ? <span className={styles.alertChip}><InventoryIcon name="warning" />{activeVanReplenishment.length} replenishment alert{activeVanReplenishment.length === 1 ? '' : 's'}</span> : <span className={styles.clearChip}>No replenishment exceptions</span>}</div></div>
+      <div className={styles.vanSelectorBar}><label className={styles.vanSelector}><VanThumbnail imageUrl={activeVanProfile?.imageUrl} name={activeVan.name} size="small" /><span><small>Selected Van</small><select value={activeVan.id} onChange={(event) => { setActiveVanId(event.target.value); openVanSection('workspace'); }}>{vans.map((van) => <option key={van.id} value={van.id}>{van.name}</option>)}</select></span></label><div className={styles.vanStatusStrip}><VanStatusChip status={statusForVan(activeVan)} />{activeVanReplenishment.length ? <span className={styles.alertChip}><InventoryIcon name="warning" />{activeVanReplenishment.length} replenishment alert{activeVanReplenishment.length === 1 ? '' : 's'}</span> : <span className={styles.clearChip}>No replenishment exceptions</span>}</div></div>
 
       {vanSection === 'workspace' ? <div className={styles.vanWorkspaceGrid}>
         <section className={styles.vanWorkspaceMenu}><header><strong>Choose an inventory view</strong><span>Select a category below to view and manage inventory for the selected Van.</span></header>
-          <VanWorkspaceRow icon="overview" title="Overview" description="View all products and consumables stocked in this Van." value={`${items.filter((item) => balance(item, activeVan.id).onHand > 0).length} stocked lines`} onClick={() => setVanSection('overview')} />
-          <VanWorkspaceRow icon="bottle" title="Consumables" description="Manage filters, fittings, chemicals and other frequently used items." value={`${quantity(onHandAt(activeVan.id, 'material'))} on hand`} tone="purple" onClick={() => setVanSection('consumables')} />
-          <VanWorkspaceRow icon="package" title="Products for Sale" description="Manage equipment, parts and accessories physically stocked in this Van." value={`${quantity(onHandAt(activeVan.id, 'product'))} on hand`} tone="green" onClick={() => setVanSection('products')} />
-          <VanWorkspaceRow icon="tool" title="Tools" description="Manage tools and equipment assigned to this Van." value={`${quantity(activeVanTools.reduce((sum, asset) => sum + toolQuantity(asset), 0))} assigned`} tone="orange" onClick={() => setVanSection('tools')} />
+          <VanWorkspaceRow icon="overview" title="Overview" description="View all products and consumables stocked in this Van." value={`${items.filter((item) => balance(item, activeVan.id).onHand > 0).length} stocked lines`} onClick={() => openVanSection('overview')} />
+          <VanWorkspaceRow icon="bottle" title="Consumables" description="Manage filters, fittings, chemicals and other frequently used items." value={`${quantity(onHandAt(activeVan.id, 'material'))} on hand`} tone="purple" onClick={() => openVanSection('consumables')} />
+          <VanWorkspaceRow icon="package" title="Products for Sale" description="Manage equipment, parts and accessories physically stocked in this Van." value={`${quantity(onHandAt(activeVan.id, 'product'))} on hand`} tone="green" onClick={() => openVanSection('products')} />
+          <VanWorkspaceRow icon="tool" title="Tools" description="Manage tools and equipment assigned to this Van." value={`${quantity(activeVanTools.reduce((sum, asset) => sum + toolQuantity(asset), 0))} assigned`} tone="orange" onClick={() => openVanSection('tools')} />
           <VanWorkspaceRow icon="warning" title="Replenishment" description="Review missing or low-stock items and target quantities." value={activeVanReplenishment.length ? `${activeVanReplenishment.length} alerts` : 'No alerts'} onClick={() => openView('replenishment')} />
           <VanWorkspaceRow icon="transfer" title="Transfers" description="View and manage open transfers to and from this Van." value={`${activeVanTransfers.length} open`} onClick={() => openView('transfers')} />
           <VanWorkspaceRow icon="movement" title="Movements" description="View inventory movements, usage history and adjustments." value={`${activeVanMovements.length} events`} onClick={() => openView('movements')} />
@@ -1007,10 +1154,10 @@ export function ConsolidatedInventoryWorkspace() {
           <div><InventoryIcon name="bottle" /><span>Consumables on hand</span><strong>{quantity(onHandAt(activeVan.id, 'material'))}</strong><small>{quantity(Math.max(0, onHandAt(activeVan.id, 'material') - reservedAt(activeVan.id, 'material')))} available</small></div>
           <div><InventoryIcon name="tool" /><span>Tools assigned</span><strong>{quantity(activeVanTools.reduce((sum, asset) => sum + toolQuantity(asset), 0))}</strong><small>Active assets</small></div>
           <div><InventoryIcon name="transfer" /><span>Open transfers</span><strong>{activeVanTransfers.length}</strong><button type="button" onClick={() => openView('transfers')}>View transfers</button></div>
-          <div><InventoryIcon name="warning" /><span>Missing tools</span><strong>{quantity(activeVanMissingTools.reduce((sum, asset) => sum + toolMissingQuantity(asset), 0))}</strong><button type="button" onClick={() => setVanSection('tools')}>View tools</button></div>
+          <div><InventoryIcon name="warning" /><span>Missing tools</span><strong>{quantity(activeVanMissingTools.reduce((sum, asset) => sum + toolMissingQuantity(asset), 0))}</strong><button type="button" onClick={() => openVanSection('tools')}>View tools</button></div>
           <div><InventoryIcon name="warning" /><span>Low stock alerts</span><strong>{activeVanReplenishment.length}</strong><button type="button" onClick={() => openView('replenishment')}>View alerts</button></div>
         </div></section><section className={`${styles.panel} ${styles.vanActivity}`}><header className={styles.panelHead}><div><strong>Recent activity</strong><span>Movements involving {activeVan.name}.</span></div><button type="button" onClick={() => openView('movements')}>View all</button></header><ActivityList rows={activeVanMovements} emptyText={`No inventory movements recorded for ${activeVan.name}.`} /></section></aside>
-      </div> : <div className={styles.vanDetail}><div className={styles.vanDetailHeader}><button type="button" onClick={() => setVanSection('workspace')}>← Choose inventory view</button><span>{activeVan.name}</span></div>{vanSection === 'overview' ? <StockTable locationId={activeVan.id} title={`${activeVan.name} · Overview`} /> : null}{vanSection === 'consumables' ? <StockTable locationId={activeVan.id} itemKind="material" title={`${activeVan.name} · Consumables`} /> : null}{vanSection === 'products' ? <StockTable locationId={activeVan.id} itemKind="product" title={`${activeVan.name} · Products for Sale`} /> : null}{vanSection === 'tools' ? <div className={styles.vanToolsSections}><ToolTable locationId={activeVan.id} allowAdd />{MissingToolTemplates()}</div> : null}</div>}
+      </div> : <div className={styles.vanDetail}><div className={styles.vanDetailHeader}><button type="button" onClick={() => openVanSection('workspace')}>← Choose inventory view</button><span>{activeVan.name}</span></div>{vanSection === 'overview' ? <StockTable locationId={activeVan.id} title={`${activeVan.name} · Overview`} /> : null}{vanSection === 'consumables' ? <StockTable locationId={activeVan.id} itemKind="material" title={`${activeVan.name} · Consumables`} /> : null}{vanSection === 'products' ? <StockTable locationId={activeVan.id} itemKind="product" title={`${activeVan.name} · Products for Sale`} /> : null}{vanSection === 'tools' ? <div className={styles.vanToolsSections}><ToolTable locationId={activeVan.id} allowAdd />{MissingToolTemplates()}</div> : null}</div>}
       </div>
     </> : null}
 

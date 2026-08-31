@@ -198,9 +198,12 @@ export function LiveSchedulingOverview() {
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [lastSyncedAt, setLastSyncedAt] = useState('');
+  const [activeVanIndex, setActiveVanIndex] = useState(0);
   const clickTimerRef = useRef<number | null>(null);
   const reconcileTimerRef = useRef<number | null>(null);
   const refreshSequenceRef = useRef(0);
+  const boardScrollRef = useRef<HTMLDivElement>(null);
+  const vanScrollFrameRef = useRef<number | null>(null);
   const baseWeek = useMemo(() => buildOperationalWeek(activeDate), [activeDate]);
   const weekStartDate = baseWeek[0]?.dateKey ?? activeDate;
   const weekEndDate = baseWeek[6]?.dateKey ?? activeDate;
@@ -284,6 +287,7 @@ export function LiveSchedulingOverview() {
   useEffect(() => () => {
     if (clickTimerRef.current) window.clearTimeout(clickTimerRef.current);
     if (reconcileTimerRef.current) window.clearTimeout(reconcileTimerRef.current);
+    if (vanScrollFrameRef.current) window.cancelAnimationFrame(vanScrollFrameRef.current);
   }, []);
 
   useEffect(() => {
@@ -322,6 +326,9 @@ export function LiveSchedulingOverview() {
       .sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true }))
       .map((van) => ({ id: van.id, name: van.id.replace(/^VAN-(\d+)$/, 'Van $1'), active: van.active }));
   }, [capacityState]);
+  useEffect(() => {
+    setActiveVanIndex((current) => Math.min(current, Math.max(0, vans.length - 1)));
+  }, [vans.length]);
   const canonicalVanIds = useMemo(() => new Set(vans.map((van) => van.id)), [vans]);
   const unresolvedJobs = useMemo(() => jobs.filter((job) => !canonicalVanIds.has(job.vanId)), [canonicalVanIds, jobs]);
   const jobLinks = useMemo(() => {
@@ -359,6 +366,37 @@ export function LiveSchedulingOverview() {
     [dragCandidates],
   );
   const validDropTargets = useMemo(() => new Set(dragCandidateMap.keys()), [dragCandidateMap]);
+
+  const vanLanes = () => Array.from(boardScrollRef.current?.querySelectorAll<HTMLElement>('[data-van-lane]') ?? []);
+
+  const scrollToVan = (requestedIndex: number) => {
+    const scroller = boardScrollRef.current;
+    const lanes = vanLanes();
+    if (!scroller || !lanes.length) return;
+    const nextIndex = Math.max(0, Math.min(requestedIndex, lanes.length - 1));
+    const lane = lanes[nextIndex];
+    scroller.scrollTo({ left: lane.offsetLeft, behavior: 'smooth' });
+  };
+
+  const syncActiveVanFromScroll = () => {
+    const scroller = boardScrollRef.current;
+    if (!scroller) return;
+    if (vanScrollFrameRef.current) window.cancelAnimationFrame(vanScrollFrameRef.current);
+    vanScrollFrameRef.current = window.requestAnimationFrame(() => {
+      const lanes = vanLanes();
+      if (!lanes.length) {
+        vanScrollFrameRef.current = null;
+        return;
+      }
+      const closestIndex = lanes.reduce((closest, lane, index) => (
+        Math.abs(lane.offsetLeft - scroller.scrollLeft) < Math.abs(lanes[closest].offsetLeft - scroller.scrollLeft)
+          ? index
+          : closest
+      ), 0);
+      setActiveVanIndex(closestIndex);
+      vanScrollFrameRef.current = null;
+    });
+  };
 
   const openJob = (jobId: string) => {
     const link = jobLinks.get(jobId);
@@ -607,7 +645,7 @@ export function LiveSchedulingOverview() {
   };
 
   return (
-    <section className={styles.page}>
+    <section className={`${styles.page} ${laneStyles.mobileSchedule}`} data-live-schedule>
       <header className={styles.pageHeader}>
         <div>
           <span className={styles.eyebrow}>Operations · Aruba · Live</span>
@@ -631,7 +669,7 @@ export function LiveSchedulingOverview() {
       {activeConflictSlots ? <div className={styles.notice}><span>Capacity integrity attention: {activeConflictSlots} occupied slot{activeConflictSlots === 1 ? '' : 's'} contain overlapping appointments after duplicate fleet records were collapsed to their canonical physical Vans. Both appointments remain visible below so they can be reviewed and rescheduled safely.</span></div> : null}
       {outsideCapacityJobs.length ? <div className={styles.notice}><span>Operating-calendar attention: {outsideCapacityJobs.length} appointment{outsideCapacityJobs.length === 1 ? '' : 's'} currently extend into capacity that is closed by the canonical van/company calendar. They remain visible for correction but are not counted as open capacity.</span></div> : null}
 
-      <div className={styles.toolbar}>
+      <div className={styles.toolbar} data-schedule-toolbar>
         <div className={styles.dayNav}>
           <button type="button" onClick={() => setActiveDate(addDays(activeDate, -7))} disabled={interactionActive}>‹</button>
           <div><strong>{week[0]?.shortDate} – {week[6]?.shortDate}</strong><span>Navigate the live operational week</span></div>
@@ -642,12 +680,12 @@ export function LiveSchedulingOverview() {
         </div>
       </div>
 
-      <div className={styles.weekStrip}>
+      <div className={styles.weekStrip} data-schedule-week>
         {week.map((day) => {
           const summary = weekSummaries[day.dateKey];
           const halfDayVans = halfDayVansForDay(day, vans, capacityState);
           return (
-            <button key={day.dateKey} type="button" className={`${styles.dayCard} ${day.dateKey === activeDate ? styles.dayActive : ''} ${day.isToday ? styles.today : ''}`} disabled={!day.isOpen || interactionActive} onClick={() => setActiveDate(day.dateKey)}>
+            <button key={day.dateKey} type="button" data-schedule-day className={`${styles.dayCard} ${day.dateKey === activeDate ? styles.dayActive : ''} ${day.isToday ? styles.today : ''}`} disabled={!day.isOpen || interactionActive} onClick={() => setActiveDate(day.dateKey)}>
               <div><span>{day.weekday}</span><strong>{day.shortDate}</strong>{day.isToday ? <b>Today</b> : null}</div>
               <small>{day.shiftLabel}{halfDayVans.length ? ` · ${halfDayVans.join(', ')} PM off` : ''}</small>
               <i><em style={{ width: `${summary?.percent ?? 0}%` }} /></i>
@@ -657,15 +695,15 @@ export function LiveSchedulingOverview() {
         })}
       </div>
 
-      <div className={styles.metrics}>
+      <div className={styles.metrics} data-schedule-metrics>
         <article><span>Confirmed</span><strong>{confirmed}</strong><small>{activeDay.shortDate}</small></article>
         <article><span>Data source</span><strong className={styles.metricGood}>LIVE</strong><small>Booking Authority + canonical capacity</small></article>
         <article><span>Temporary holds</span><strong style={{ color: 'var(--warning, #b45309)' }}>{temporaryHolds}</strong><small>Canonical capacity reserved · customer not confirmed</small></article>
         <article><span>Open spots</span><strong className={styles.metricGood}>{activeOccupancy.open}</strong><small>{activeOccupancy.occupied}/{activeOccupancy.total} operating spots occupied</small><i style={{ width: `${activeOccupancy.percent}%` }} /></article>
       </div>
 
-      <div className={styles.board}>
-        <header className={styles.boardHeader}>
+      <div className={styles.board} data-schedule-board>
+        <header className={styles.boardHeader} data-schedule-board-header>
           <div>
             <strong>Live Van Schedule</strong>
             <span>{activeDay.weekday} {activeDay.shortDate} · open spot = book customer or send coworker support · single click occupied = details · double click confirmed = move</span>
@@ -673,9 +711,17 @@ export function LiveSchedulingOverview() {
           </div>
           <b>{moveBusy ? 'SAVING MOVE…' : moveArmedJobId ? `${validDropTargets.size} VALID TARGETS` : `${activeOccupancy.open} OPEN SPOTS`}</b>
         </header>
-        <div className={styles.boardScroll}>
+        <div
+          ref={boardScrollRef}
+          className={styles.boardScroll}
+          role="region"
+          aria-label="Van schedule pages"
+          data-schedule-board-scroll
+          onScroll={syncActiveVanFromScroll}
+        >
           <div
             className={styles.vanGrid}
+            data-schedule-van-grid
             style={{
               gridTemplateColumns: `repeat(${Math.max(1, vans.length)}, minmax(230px, 1fr))`,
               minWidth: `${Math.max(980, vans.length * 238)}px`,
@@ -693,7 +739,12 @@ export function LiveSchedulingOverview() {
                   ? `HALF-DAY · TO ${formatTime(halfDay.workdayEnd || '13:00')}`
                   : van.active ? 'ACTIVE' : 'INACTIVE';
               return (
-                <section key={van.id} className={`${styles.vanLane} ${laneStyles.laneLayout}`}>
+                <section
+                  key={van.id}
+                  data-van-lane
+                  aria-label={`${van.name} schedule`}
+                  className={`${styles.vanLane} ${laneStyles.laneLayout}`}
+                >
                   <header>
                     <div className={styles.vanIdentity}>
                       <span>{van.id.replace('VAN-', 'V')}</span>
@@ -739,6 +790,36 @@ export function LiveSchedulingOverview() {
             })}
           </div>
         </div>
+        {vans.length ? <nav className={laneStyles.vanPager} aria-label="Choose a van schedule">
+          <button
+            type="button"
+            aria-label="Previous van"
+            disabled={activeVanIndex === 0}
+            onClick={() => scrollToVan(activeVanIndex - 1)}
+          >‹</button>
+          <div className={laneStyles.vanPagerCenter}>
+            <span className={laneStyles.vanPagerStatus} role="status" aria-live="polite" aria-atomic="true">
+              {vans[activeVanIndex]?.name ?? 'Van'} · {activeVanIndex + 1} of {vans.length}
+            </span>
+            <div className={laneStyles.vanPagerDots}>
+              {vans.map((van, index) => <button
+                type="button"
+                key={van.id}
+                aria-label={`Show ${van.name}`}
+                aria-current={index === activeVanIndex ? 'page' : undefined}
+                className={index === activeVanIndex ? laneStyles.vanPagerDotActive : undefined}
+                onClick={() => scrollToVan(index)}
+              />)}
+            </div>
+            <small>Swipe left or right to change van</small>
+          </div>
+          <button
+            type="button"
+            aria-label="Next van"
+            disabled={activeVanIndex >= vans.length - 1}
+            onClick={() => scrollToVan(activeVanIndex + 1)}
+          >›</button>
+        </nav> : null}
       </div>
 
       {selectedAppointment ? <LiveAppointmentDetailsDrawer appointment={selectedAppointment} onClose={() => setSelectedAppointmentId('')} onChanged={refresh} /> : null}
@@ -788,12 +869,13 @@ function VanScheduleSlots({
     const slot = slots[index];
     const previous = slots[index - 1];
     const firstAfternoon = index > 0 && previous?.segment === 'am' && slot.segment === 'pm';
-    if (firstAfternoon) rows.push(<div className={styles.lunchRow} key={`lunch-${slot.start}`}><span>12:00</span><div>Lunch / reset</div><span>1:00</span></div>);
+    if (firstAfternoon) rows.push(<div className={styles.lunchRow} data-schedule-lunch key={`lunch-${slot.start}`}><span>12:00</span><div>Lunch / reset</div><span>1:00</span></div>);
 
     const active = activeJobsForSlot(jobs, slot);
     if (!active.length && !slot.operational) {
       rows.push(<div
         className={styles.openSlot}
+        data-schedule-slot="off"
         key={`off-${slot.start}`}
         style={{ borderStyle: 'solid', borderColor: 'var(--border)', background: 'var(--surface-2)', cursor: 'default', opacity: 0.76 }}
       >
@@ -819,6 +901,7 @@ function VanScheduleSlots({
       };
       rows.push(<div
         className={`${styles.openSlot} ${createEnabled ? laneStyles.slotInteractive : ''}`}
+        data-schedule-slot="open"
         key={`open-${slot.start}`}
         onDragOver={(event) => { if (dropEnabled) event.preventDefault(); }}
         onDrop={(event) => {
@@ -866,7 +949,7 @@ function VanScheduleSlots({
     index += span;
   }
 
-  return <div className={styles.slotList}>{rows}</div>;
+  return <div className={styles.slotList} data-schedule-slots>{rows}</div>;
 }
 
 function AppointmentBlock({ job, appointment, span, crossesLunch, continuation = false, armed, outsideCapacity, onOpen, onArm }: {
@@ -890,7 +973,7 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
       onOpen();
     }
   };
-  return <div className={styles.occupiedSlot} style={{
+  return <div className={styles.occupiedSlot} data-schedule-slot="occupied" style={{
     minHeight,
     outline: armed ? '2px solid var(--brand)' : temporaryHold ? '1px solid var(--warning, #f59e0b)' : outsideCapacity ? '1px solid var(--warning)' : undefined,
     background: armed ? 'var(--brand-soft)' : temporaryHold ? 'color-mix(in srgb, var(--warning, #f59e0b) 12%, var(--surface))' : undefined,
@@ -899,6 +982,7 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
     <div className={styles.slotJobs}>
       <article
         className={styles.jobCard}
+        data-schedule-job
         role="button"
         tabIndex={0}
         draggable={armed && !temporaryHold}
@@ -948,13 +1032,13 @@ function ConflictBlock({ jobs, span, jobLinks, onOpenAppointment }: {
     return timeToMinutes(capacityEnd) > timeToMinutes(latest) ? capacityEnd : latest;
   }, liveJobCapacityEnd(jobs[0]));
   const minHeight = Math.max(span * 64 + Math.max(0, span - 1) * 6, jobs.length * 86 + 34);
-  return <div className={styles.occupiedSlot} style={{ minHeight, outline: '1px solid var(--danger)' }}>
+  return <div className={styles.occupiedSlot} data-schedule-slot="occupied" style={{ minHeight, outline: '1px solid var(--danger)' }}>
     <div className={styles.slotTime}><strong>{formatTime(start)}</strong><span>{formatTime(end)}</span><span>Conflict</span></div>
     <div className={styles.slotJobs}>
       <div style={{ fontSize: 8, fontWeight: 800, color: 'var(--danger)', letterSpacing: '.06em', textTransform: 'uppercase' }}>Capacity conflict · review both appointments</div>
       {jobs.map((job) => {
         const capacityEnd = liveJobCapacityEnd(job);
-        return <article key={job.id} className={styles.jobCard} role="button" tabIndex={0} onClick={() => onOpenAppointment(job.id)} onKeyDown={(event) => {
+        return <article key={job.id} className={styles.jobCard} data-schedule-job role="button" tabIndex={0} onClick={() => onOpenAppointment(job.id)} onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
           onOpenAppointment(job.id);
