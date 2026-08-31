@@ -209,7 +209,8 @@ function apiError(error) {
   if (error instanceof InventoryAuthorityError) return { status: 409, body: { success: false, error: { code: error.code, message: error.message, details: error.details || {} } } };
   if (error?.code === "unauthenticated") return { status: 401, body: { success: false, error: { code: "unauthenticated", message: error.message, details: {} } } };
   if (error?.code === "permission_denied") return { status: 403, body: { success: false, error: { code: "permission_denied", message: error.message, details: {} } } };
-  return { status: 500, body: { success: false, error: { code: "internal_error", message: cleanText(error?.message || error, 500) || "Unexpected inventory error.", details: {} } } };
+  console.error("Inventory Authority internal error", error);
+  return { status: 500, body: { success: false, error: { code: "internal_error", message: "The inventory operation could not be completed. Nothing was saved. Please try again.", details: {} } } };
 }
 
 async function inventoryLocations(db) {
@@ -326,8 +327,8 @@ function createInventoryApi({ db, verifyIdToken } = {}) {
       itemName: cleanText(args.itemName, 240), quantity: nonNegativeQuantity(args.quantity), type: args.type,
       sourceLocationId: cleanText(args.sourceLocationId, 160), destinationLocationId: cleanText(args.destinationLocationId, 160),
       transferId: cleanText(args.transferId, 180), workOrderId: cleanText(args.workOrderId, 180),
-      previousOnHand: Number.isFinite(Number(args.previousOnHand)) ? Number(args.previousOnHand) : undefined,
-      resultingOnHand: Number.isFinite(Number(args.resultingOnHand)) ? Number(args.resultingOnHand) : undefined,
+      ...(Number.isFinite(args.previousOnHand) ? { previousOnHand: args.previousOnHand } : {}),
+      ...(Number.isFinite(args.resultingOnHand) ? { resultingOnHand: args.resultingOnHand } : {}),
       reason: cleanText(args.reason, 800), occurredAt: args.now,
       performedById: args.actor.uid, performedByName: args.actor.name,
     };

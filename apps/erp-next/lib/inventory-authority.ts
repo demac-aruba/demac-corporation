@@ -195,7 +195,7 @@ async function callInventoryAuthority<T>(action: string, data: Record<string, un
     });
     const payload = await response.json().catch(() => ({})) as T & ApiError;
     if (!response.ok) {
-      const code = payload.error?.code ? ` (${payload.error.code})` : '';
+      const code = payload.error?.code && payload.error.code !== 'internal_error' ? ` (${payload.error.code})` : '';
       throw new Error(`${payload.error?.message ?? 'The inventory operation could not be completed.'}${code}`);
     }
     return payload;

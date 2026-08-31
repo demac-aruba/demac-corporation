@@ -119,8 +119,9 @@
   .vanDesktopOrDetail .vanSelector{min-height:64px;grid-template-columns:58px minmax(0,1fr);padding:6px 10px}
   .vanDesktopOrDetail .vanDetailHeader{display:none}
   .mobileToolSearch{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:11px 11px 8px}
-  .mobileToolSearch label{min-width:0;flex:1;min-height:44px;display:flex;align-items:center;gap:8px;padding:0 11px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2);color:var(--muted)}
-  .mobileToolSearch label svg{width:17px;height:17px}.mobileToolSearch input{width:100%;min-width:0;border:0!important;background:transparent!important;padding:0!important;font-size:10px!important}.mobileToolSearch>span{color:var(--muted);font-size:8px;white-space:nowrap}
+  .mobileToolSearch label{min-width:0;flex:1;min-height:44px;display:flex;align-items:center;gap:8px;padding:0 11px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2);color:var(--muted);transition:border-color .15s ease,box-shadow .15s ease,background .15s ease}
+  .mobileToolSearch label:focus-within{border-color:color-mix(in srgb,var(--brand) 55%,var(--border));background:var(--surface);box-shadow:0 0 0 2px color-mix(in srgb,var(--brand) 12%,transparent)}
+  .mobileToolSearch label svg{width:17px;height:17px}.mobileToolSearch input{width:100%;min-width:0;border:0!important;outline:0!important;box-shadow:none!important;background:transparent!important;padding:0!important;font-size:10px!important}.mobileToolSearch input:focus,.mobileToolSearch input:focus-visible{outline:0!important;box-shadow:none!important}.mobileToolSearch>span{color:var(--muted);font-size:8px;white-space:nowrap}
   .mobileToolList{display:grid;margin:0 10px 11px;border:1px solid var(--border);border-radius:15px;background:var(--surface);overflow:hidden}
   .mobileToolRow{min-height:82px;display:grid;grid-template-columns:52px minmax(0,1fr);gap:10px;align-items:center;padding:9px;border-bottom:1px solid var(--border)}.mobileToolRow:last-child{border-bottom:0}
   .mobileToolOpen{width:100%;min-width:0;display:grid!important;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;border:0!important;background:transparent!important;padding:0!important;text-align:left!important}
