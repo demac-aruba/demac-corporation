@@ -1,0 +1,43 @@
+name: Partial Facade Routing CI
+
+on:
+  pull_request:
+    paths:
+      - 'functions/officeBookingAuthorityFacade.js'
+      - 'functions/officeBookingAuthorityPartialWrapper.js'
+      - 'functions/bookingPartialCompletion.js'
+      - 'functions/officeBookingAuthorityFacadePartial.test.js'
+      - '.github/workflows/partial-facade-routing-ci.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'functions/officeBookingAuthorityFacade.js'
+      - 'functions/officeBookingAuthorityPartialWrapper.js'
+      - 'functions/bookingPartialCompletion.js'
+      - 'functions/officeBookingAuthorityFacadePartial.test.js'
+      - '.github/workflows/partial-facade-routing-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-production-facade-routing:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+      - name: Syntax
+        run: |
+          node --check functions/officeBookingAuthorityFacade.js
+          node --check functions/officeBookingAuthorityPartialWrapper.js
+          node --check functions/bookingPartialCompletion.js
+      - name: Production facade partial-completion regression
+        run: node --test functions/officeBookingAuthorityFacadePartial.test.js functions/officeBookingAuthorityPartialWrapper.test.js functions/bookingPartialCompletion.test.js
