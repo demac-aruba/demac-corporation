@@ -241,7 +241,19 @@ export function ConsolidatedInventoryWorkspace() {
   const [mobileToolQuery, setMobileToolQuery] = useState('');
   const [mobileToolAction, setMobileToolAction] = useState<'summary' | 'edit' | 'transfer'>('summary');
   const operationsLoadStarted = useRef(false);
+  const toolProfileHistoryEntry = useRef(false);
   const backgroundToolJobRunning = backgroundToolJob?.status === 'uploading' || backgroundToolJob?.status === 'saving';
+
+  const closeToolProfile = useCallback(() => {
+    const shouldConsumeHistory = typeof window !== 'undefined'
+      && toolProfileHistoryEntry.current
+      && window.history.state?.inventoryOverlay === 'tool-profile';
+    toolProfileHistoryEntry.current = false;
+    setToolLightbox('');
+    setMobileToolAction('summary');
+    setToolEdit(null);
+    if (shouldConsumeHistory) window.history.back();
+  }, []);
 
   const refresh = useCallback(async () => {
     const startedAt = typeof performance === 'undefined' ? 0 : performance.now();
@@ -293,7 +305,7 @@ export function ConsolidatedInventoryWorkspace() {
     const closeOverlay = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       if (toolLightbox) setToolLightbox('');
-      else if (toolEdit) setToolEdit(null);
+      else if (toolEdit) closeToolProfile();
       else {
         setError('');
         setAddToolDraft(null);
@@ -303,12 +315,16 @@ export function ConsolidatedInventoryWorkspace() {
     };
     window.addEventListener('keydown', closeOverlay);
     return () => window.removeEventListener('keydown', closeOverlay);
-  }, [addToolDraft, toolEdit, toolLightbox]);
+  }, [addToolDraft, closeToolProfile, toolEdit, toolLightbox]);
   useEffect(() => () => {
     if (addToolPhotoPreview) URL.revokeObjectURL(addToolPhotoPreview);
   }, [addToolPhotoPreview]);
   useEffect(() => {
     const syncFromHistory = () => {
+      toolProfileHistoryEntry.current = false;
+      setToolLightbox('');
+      setToolEdit(null);
+      setMobileToolAction('summary');
       const params = new URLSearchParams(window.location.search);
       const requestedView = params.get('inventoryView');
       const requestedSection = params.get('vanSection');
@@ -625,6 +641,11 @@ export function ConsolidatedInventoryWorkspace() {
   function beginToolEdit(asset: InventoryToolAsset) {
     const catalog = snapshot?.toolCatalog.find((tool) => tool.id === asset.toolCatalogId);
     const purchaseCost = Number.isFinite(Number(asset.purchaseCost)) ? Number(asset.purchaseCost) : Number(catalog?.standardCost || 0);
+    if (typeof window !== 'undefined' && !toolProfileHistoryEntry.current) {
+      const currentState = window.history.state && typeof window.history.state === 'object' ? window.history.state : {};
+      window.history.pushState({ ...currentState, inventoryOverlay: 'tool-profile', inventoryToolId: asset.id }, '', window.location.href);
+      toolProfileHistoryEntry.current = true;
+    }
     setMobileToolAction('summary');
     setToolEdit({
       asset,
@@ -658,7 +679,7 @@ export function ConsolidatedInventoryWorkspace() {
         purchaseCost,
         ...(toolEdit.asset.trackingMode === 'quantity' ? { quantityExpected, quantityPresent } : {}),
       });
-      setToolEdit(null);
+      closeToolProfile();
     }, 'Tool details updated.');
   }
 
@@ -675,7 +696,7 @@ export function ConsolidatedInventoryWorkspace() {
         destinationLocationId: toolEdit.destinationLocationId,
         reason: toolEdit.transferReason,
       });
-      setToolEdit(null);
+      closeToolProfile();
     }, 'Tool transferred and movement recorded.');
   }
 
@@ -1234,8 +1255,8 @@ export function ConsolidatedInventoryWorkspace() {
 
     {AddToolDrawer()}
 
-    {toolEdit ? <div className={styles.toolDrawerBackdrop} onMouseDown={(event) => { if (event.currentTarget === event.target) setToolEdit(null); }}><section className={styles.toolDrawer} role="dialog" aria-modal="true" aria-labelledby="tool-edit-title">
-      <header><div><span>Tool asset profile</span><h2 id="tool-edit-title">{snapshot.toolCatalog.find((tool) => tool.id === toolEdit.asset.toolCatalogId)?.name || toolEdit.asset.toolCatalogId || 'Tool'}</h2><small>{toolEdit.asset.assetCode || toolEdit.asset.id}</small></div><button type="button" aria-label="Close tool editor" onClick={() => setToolEdit(null)}>×</button></header>
+    {toolEdit ? <div className={styles.toolDrawerBackdrop} onMouseDown={(event) => { if (event.currentTarget === event.target) closeToolProfile(); }}><section className={styles.toolDrawer} role="dialog" aria-modal="true" aria-labelledby="tool-edit-title">
+      <header><div><span>Tool asset profile</span><h2 id="tool-edit-title">{snapshot.toolCatalog.find((tool) => tool.id === toolEdit.asset.toolCatalogId)?.name || toolEdit.asset.toolCatalogId || 'Tool'}</h2><small>{toolEdit.asset.assetCode || toolEdit.asset.id}</small></div><button type="button" aria-label="Close tool editor" onClick={closeToolProfile}>×</button></header>
       <div className={styles.toolDrawerBody}>
         <section className={styles.toolIdentityCard}><ToolPhoto asset={toolEdit.asset} onOpen={setToolLightbox} mode="detail" /><div><strong>{toolEdit.asset.assetCode || toolEdit.asset.id}</strong><span>{snapshot.toolCatalog.find((tool) => tool.id === toolEdit.asset.toolCatalogId)?.category || 'Tool asset'}</span><small>{locationLabel(locations, toolEdit.asset.inventoryLocationId || toolEdit.asset.locationId || toolEdit.asset.vanId || '')} · {toolEdit.asset.operationalStatus || 'Status unavailable'}</small></div></section>
 
@@ -1255,7 +1276,7 @@ export function ConsolidatedInventoryWorkspace() {
           <label>Tool cost (Afl.)<input type="number" min="0" step="0.01" value={toolEdit.purchaseCost} onChange={(event) => setToolEdit({ ...toolEdit, purchaseCost: event.target.value })} /></label>
           {toolEdit.asset.trackingMode === 'quantity' ? <><label>Assigned quantity<input type="number" min="0" step="1" value={toolEdit.quantityExpected} onChange={(event) => setToolEdit({ ...toolEdit, quantityExpected: event.target.value })} /></label><label>Present quantity<input type="number" min="0" step="1" max={toolEdit.quantityExpected} value={toolEdit.quantityPresent} onChange={(event) => setToolEdit({ ...toolEdit, quantityPresent: event.target.value })} /></label></> : <div className={styles.toolReadOnlyFact}><span>Quantity</span><strong>{toolPresentQuantity(toolEdit.asset)} / 1</strong><small>Individual tracked asset</small></div>}
           <label className={styles.wide}>Comments / observations<textarea rows={4} value={toolEdit.notes} onChange={(event) => setToolEdit({ ...toolEdit, notes: event.target.value })} placeholder="Use, condition, damage or other relevant details" /></label>
-        </div><footer><button type="button" onClick={() => setToolEdit(null)}>Cancel</button><button type="button" className={styles.primary} disabled={isPending(`tool-edit:${toolEdit.asset.id}`)} onClick={() => void saveToolDetails()}>{isPending(`tool-edit:${toolEdit.asset.id}`) ? 'Saving…' : 'Save details'}</button></footer></section>
+        </div><footer><button type="button" onClick={closeToolProfile}>Cancel</button><button type="button" className={styles.primary} disabled={isPending(`tool-edit:${toolEdit.asset.id}`)} onClick={() => void saveToolDetails()}>{isPending(`tool-edit:${toolEdit.asset.id}`) ? 'Saving…' : 'Save details'}</button></footer></section>
 
         <section className={`${styles.toolTransferSection} ${mobileToolAction === 'transfer' ? styles.mobileActionActive : ''}`}><header><button type="button" className={styles.mobileActionBack} onClick={() => setMobileToolAction('summary')}>← Details</button><strong>Transfer tool</strong><span>Separate controlled action — destination and reason are required.</span></header>
           {toolCanTransfer(toolEdit.asset) ? <div className={styles.toolTransferForm}>
