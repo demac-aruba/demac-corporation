@@ -1,10 +1,15 @@
-import assert from 'node:assert/strict';
 import type { LiveOperationalCapacityState } from '../lib/live-operational-capacity';
 import {
   visualOptionFitsVanPolicy,
   visualVanDayStatus,
   visualVanSlotAvailableByPolicy,
 } from '../lib/visual-schedule-operational-policy';
+
+function expectEqual<T>(actual: T, expected: T, label: string) {
+  if (actual !== expected) {
+    throw new Error(`${label}: expected ${String(expected)}, received ${String(actual)}`);
+  }
+}
 
 const state: LiveOperationalCapacityState = {
   vans: new Map([
@@ -29,14 +34,14 @@ const state: LiveOperationalCapacityState = {
 
 const date = '2026-09-01'; // Tuesday
 
-assert.equal(visualVanDayStatus(state, 'VAN-2', date).label, 'HALF-DAY TO 1:00 PM');
-assert.equal(visualVanSlotAvailableByPolicy(state, 'VAN-2', date, '10:30'), true);
-assert.equal(visualVanSlotAvailableByPolicy(state, 'VAN-2', date, '13:30'), false);
-assert.equal(visualOptionFitsVanPolicy(state, 'VAN-2', date, '08:30', '12:30'), true);
-assert.equal(visualOptionFitsVanPolicy(state, 'VAN-2', date, '10:30', '14:30'), false);
+expectEqual(visualVanDayStatus(state, 'VAN-2', date).label, 'HALF-DAY TO 1:00 PM', 'Van 2 half-day label');
+expectEqual(visualVanSlotAvailableByPolicy(state, 'VAN-2', date, '10:30'), true, 'Van 2 morning slot');
+expectEqual(visualVanSlotAvailableByPolicy(state, 'VAN-2', date, '13:30'), false, 'Van 2 afternoon slot');
+expectEqual(visualOptionFitsVanPolicy(state, 'VAN-2', date, '08:30', '12:30'), true, 'Van 2 valid morning allocation');
+expectEqual(visualOptionFitsVanPolicy(state, 'VAN-2', date, '10:30', '14:30'), false, 'Van 2 invalid afternoon allocation');
 
-assert.equal(visualVanDayStatus(state, 'VAN-4', date).label, 'ACTIVE');
-assert.equal(visualVanSlotAvailableByPolicy(state, 'VAN-4', date, '13:30'), true);
-assert.equal(visualOptionFitsVanPolicy(state, 'VAN-4', date, '13:30', '16:30'), true);
+expectEqual(visualVanDayStatus(state, 'VAN-4', date).label, 'ACTIVE', 'Van 4 full-day label');
+expectEqual(visualVanSlotAvailableByPolicy(state, 'VAN-4', date, '13:30'), true, 'Van 4 afternoon slot');
+expectEqual(visualOptionFitsVanPolicy(state, 'VAN-4', date, '13:30', '16:30'), true, 'Van 4 afternoon allocation');
 
 console.log('Visual schedule policy acceptance passed: half-day Vans stop showing false afternoon availability while full-day Vans remain available.');
