@@ -2,7 +2,8 @@ const { getAuth } = require("firebase-admin/auth");
 const { getFirestore } = require("firebase-admin/firestore");
 const { onRequest } = require("firebase-functions/v2/https");
 const { cleanText } = require("./bookingAuthorityCore");
-const { createOfficeBookingApi, OFFICE_BOOKING_API_VERSION } = require("./officeBookingAuthority");
+const { OFFICE_BOOKING_API_VERSION } = require("./officeBookingAuthority");
+const { createOfficeBookingPartialWrapper } = require("./officeBookingAuthorityPartialWrapper");
 const {
   communicationError,
   createAppointmentCommunicationAuthority,
@@ -33,7 +34,13 @@ function officeActor(identity = {}) {
 function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
   if (!db || typeof db.collection !== "function") throw new Error("A Firestore-compatible db is required.");
   if (typeof verifyIdToken !== "function") throw new Error("verifyIdToken is required.");
-  const baseApi = createOfficeBookingApi({ db, verifyIdToken });
+
+  // The partial-completion wrapper is the canonical base Booking Authority delegate.
+  // It handles ordinary booking/lifecycle actions plus record_partial_completion and
+  // schedule_remaining_work, while this facade continues to own specialized
+  // communication, van-schedule communication, and after-hours actions.
+  const partialWrapper = createOfficeBookingPartialWrapper({ db, verifyIdToken });
+  const baseApi = partialWrapper.api;
   const communication = createAppointmentCommunicationAuthority({ db, apiVersion: OFFICE_BOOKING_API_VERSION });
   const vanSchedules = createVanScheduleCommunicationAuthority({ db, apiVersion: OFFICE_BOOKING_API_VERSION });
   const afterHours = createAfterHoursAuthority({ db });
@@ -45,7 +52,12 @@ function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
     const data = request.body?.data || {};
     const legacyGlobalReminderUpdate = action === "update_appointment_communication" && !cleanText(data.recipientId, 180);
     const specialized = COMMUNICATION_ACTIONS.has(action) || VAN_SCHEDULE_ACTIONS.has(action) || AFTER_HOURS_ACTIONS.has(action);
-    if (!specialized || legacyGlobalReminderUpdate) return baseApi.handle(request);
+
+    // Everything that is not a facade-owned specialized action must flow through
+    // the partial wrapper so the production entrypoint recognizes the new lifecycle
+    // actions and preserves its executed-history guards.
+    if (!specialized || legacyGlobalReminderUpdate) return partialWrapper.handle(request);
+
     try {
       const identity = await baseApi.authenticate(request);
       let result;
@@ -81,6 +93,7 @@ function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
     afterHours,
     baseApi,
     communication,
+    partialWrapper,
     vanSchedules,
     handle,
     version: OFFICE_BOOKING_API_VERSION,
