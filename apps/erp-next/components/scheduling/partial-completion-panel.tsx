@@ -2,27 +2,14 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
-import {
-  checkOfficeCreateAvailability,
-  getOfficeAppointment,
-  type OfficeAvailabilityResult,
-  type OfficeBookingOption,
-  type OfficeBookingWorkLine,
-} from '../../lib/office-booking-authority';
+import { getOfficeAppointment } from '../../lib/office-booking-authority';
 import {
   createPartialOutcomeRequestId,
   recordOfficePartialCompletion,
-  scheduleOfficeRemainingWork,
   type PartialCompletionOutcome,
   type PartialCompletionWorkLine,
 } from '../../lib/office-partial-completion-authority';
-import {
-  optionAssignmentCapacityEnd,
-  optionAssignmentStart,
-  optionPrimaryAssignment,
-  optionSupportWindows,
-} from '../../lib/live-appointment-edit-state';
-import { currentArubaDateKey } from '../../lib/scheduling-capacity';
+import { RemainingWorkSchedulePicker } from './remaining-work-schedule-picker';
 import styles from './scheduling-overview-v2.module.css';
 
 type Props = {
@@ -60,16 +47,6 @@ function formatTime(value?: string) {
   const hour = Number(hourText);
   if (!Number.isFinite(hour)) return value;
   return `${hour % 12 || 12}:${minute} ${hour >= 12 ? 'PM' : 'AM'}`;
-}
-
-function formatDate(value: string) {
-  if (!value) return '—';
-  return new Date(`${value}T12:00:00Z`).toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    timeZone: 'UTC',
-  });
 }
 
 function canonicalWorkLines(value: unknown): PartialCompletionWorkLine[] {
@@ -125,17 +102,6 @@ function canonicalOutcome(value: unknown): PartialCompletionOutcome | null {
   };
 }
 
-function optionKey(option: OfficeBookingOption) {
-  return `${option.id}|${option.date}|${option.time}`;
-}
-
-function optionSummary(option: OfficeBookingOption) {
-  const primary = optionPrimaryAssignment(option);
-  const start = primary ? optionAssignmentStart(option, primary) : option.time;
-  const capacityEnd = primary ? optionAssignmentCapacityEnd(option, primary) : option.capacityEndTime || option.endTime;
-  return `${formatDate(option.date)} · ${formatTime(start)}–${formatTime(capacityEnd)}`;
-}
-
 function workLabel(appointment: BrowserAppointmentRecord, line?: PartialCompletionWorkLine) {
   return appointment.workLabel
     || appointment.workTypeId?.replaceAll('_', ' ')
@@ -148,16 +114,12 @@ export function PartialCompletionPanel({ appointment, onBack, onSaved }: Props) 
   const [outcome, setOutcome] = useState<PartialCompletionOutcome | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingOutcome, setSavingOutcome] = useState(false);
-  const [checkingAvailability, setCheckingAvailability] = useState(false);
-  const [schedulingRemaining, setSchedulingRemaining] = useState(false);
   const [completedQuantity, setCompletedQuantity] = useState(1);
   const [actualEndTime, setActualEndTime] = useState('');
   const [reason, setReason] = useState('DEMAC operational reassignment');
   const [note, setNote] = useState('');
-  const [targetDate, setTargetDate] = useState('');
-  const [availability, setAvailability] = useState<OfficeAvailabilityResult | null>(null);
-  const [selectedOptionKey, setSelectedOptionKey] = useState('');
   const [releasedSlots, setReleasedSlots] = useState<string[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [error, setError] = useState('');
 
   const workLines = useMemo(() => canonicalWorkLines(canonical?.workLines), [canonical]);
@@ -166,10 +128,6 @@ export function PartialCompletionPanel({ appointment, onBack, onSaved }: Props) 
   const supportAssignments = assignments.filter((item) => item !== primaryAssignment);
   const plannedQuantity = outcome?.plannedQuantity ?? workLines[0]?.quantity ?? 0;
   const remainingQuantity = outcome?.remainingQuantity ?? Math.max(0, plannedQuantity - completedQuantity);
-  const selectedOption = useMemo(
-    () => availability?.options.find((option) => optionKey(option) === selectedOptionKey) ?? null,
-    [availability, selectedOptionKey],
-  );
   const supportedShape = Boolean(workLines.length === 1 && primaryAssignment && supportAssignments.length === 0);
   const appointmentStart = text(primaryAssignment?.time) || appointment.assignments[0]?.start || '';
 
@@ -227,77 +185,10 @@ export function PartialCompletionPanel({ appointment, onBack, onSaved }: Props) 
       setCanonical(result.appointment as CanonicalAppointment);
       setOutcome(result.outcome);
       setReleasedSlots(result.releasedCapacitySlots ?? []);
-      setAvailability(null);
-      setSelectedOptionKey('');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'The actual appointment outcome could not be recorded.');
     } finally {
       setSavingOutcome(false);
-    }
-  };
-
-  const findRemainingAvailability = async () => {
-    if (!outcome || !canonical || checkingAvailability) return;
-    const customerId = text(canonical.customerId) || appointment.customerId || '';
-    const propertyId = text(canonical.propertyId) || appointment.siteId || '';
-    if (!customerId || !propertyId) {
-      setError('This appointment is missing its canonical customer/property relationship.');
-      return;
-    }
-    if (!targetDate) {
-      setError('Choose a date for the remaining work.');
-      return;
-    }
-    if (!outcome.remainingWorkLines.length || outcome.remainingQuantity < 1) {
-      setError('There is no canonical remaining work to schedule.');
-      return;
-    }
-
-    setCheckingAvailability(true);
-    setError('');
-    setAvailability(null);
-    setSelectedOptionKey('');
-    try {
-      const result = await checkOfficeCreateAvailability({
-        requestId: createPartialOutcomeRequestId('remaining-availability'),
-        customerId,
-        propertyId,
-        workLines: outcome.remainingWorkLines as OfficeBookingWorkLine[],
-        requestedDate: targetDate,
-        requestedTime: '',
-        requiredVanId: '',
-        customerFacingDescription: outcome.remainingWorkLines.map((line) => line.customerFacingDescription).filter(Boolean).join('; '),
-        technicianInstructions: outcome.remainingWorkLines.map((line) => line.technicianInstructions).filter(Boolean).join('; '),
-        notes: `Remaining work from partial completion of appointment ${appointment.id}.`,
-      });
-      setAvailability(result);
-      if (!result.available || !result.options.length) {
-        setError('No valid Booking Authority capacity is available for the remaining work on that date.');
-      }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Availability for the remaining work could not be checked.');
-    } finally {
-      setCheckingAvailability(false);
-    }
-  };
-
-  const scheduleRemaining = async () => {
-    if (!outcome || !availability?.offer || !selectedOption || schedulingRemaining) return;
-    setSchedulingRemaining(true);
-    setError('');
-    try {
-      await scheduleOfficeRemainingWork({
-        appointmentId: appointment.id,
-        requestId: createPartialOutcomeRequestId('remaining-schedule'),
-        offerId: availability.offer.id,
-        offerVersion: availability.offer.version,
-        optionId: selectedOption.id,
-      });
-      await onSaved();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'The remaining work could not be scheduled.');
-    } finally {
-      setSchedulingRemaining(false);
     }
   };
 
@@ -353,52 +244,48 @@ export function PartialCompletionPanel({ appointment, onBack, onSaved }: Props) 
   }
 
   const label = workLabel(appointment, outcome.plannedWorkLines[0]);
-  return <section className={styles.formSection} style={{ borderColor: 'var(--warning, #f59e0b)' }}>
-    <header><strong style={{ color: 'var(--warning, #b45309)' }}>Partial completion recorded</strong><span>Executed history is locked; remaining work is handled as a linked follow-up.</span></header>
-    <div style={{ padding: 11, display: 'grid', gap: 10 }}>
-      <div className={styles.descriptionPreview} style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 8 }}>
-        <div><span>PLANNED</span><strong style={{ fontSize: 18 }}>{outcome.plannedQuantity}</strong><small style={{ display: 'block' }}>{label}</small></div>
-        <div><span>COMPLETED</span><strong style={{ fontSize: 18 }}>{outcome.completedQuantity}</strong><small style={{ display: 'block' }}>Crew ended {formatTime(outcome.actualEndTime)}</small></div>
-        <div><span>REMAINING</span><strong style={{ fontSize: 18 }}>{outcome.remainingQuantity}</strong><small style={{ display: 'block' }}>{outcome.remainingWorkStatus === 'scheduled' ? 'Follow-up scheduled' : 'Pending scheduling'}</small></div>
-      </div>
-
-      <div className={styles.formGrid}>
-        <div><span>REASON</span><strong style={{ display: 'block', marginTop: 4 }}>{outcome.reason || 'Not recorded'}</strong></div>
-        <div><span>ACTUAL END</span><strong style={{ display: 'block', marginTop: 4 }}>{formatTime(outcome.actualEndTime)}</strong></div>
-        <div className={styles.wide}><span>INTERNAL NOTE</span><strong style={{ display: 'block', marginTop: 4, whiteSpace: 'pre-wrap' }}>{outcome.note || 'None'}</strong></div>
-      </div>
-
-      {releasedSlots.length ? <div className={styles.descriptionPreview}><span>CAPACITY RELEASED</span><strong>{releasedSlots.map(formatTime).join(', ')} are now available for other work.</strong></div> : null}
-
-      {outcome.remainingWorkStatus === 'scheduled' && outcome.followUpAppointmentId ? <div className={styles.descriptionPreview}>
-        <span>REMAINING WORK SCHEDULED</span>
-        <strong>{outcome.remainingQuantity} remaining unit{outcome.remainingQuantity === 1 ? '' : 's'} are linked to follow-up appointment {outcome.followUpAppointmentId}. The original executed history remains unchanged.</strong>
-      </div> : null}
-
-      {outcome.remainingWorkStatus !== 'scheduled' && outcome.remainingQuantity > 0 ? <>
-        <div className={styles.formGrid}>
-          <label className={styles.wide}><span>Schedule remaining {outcome.remainingQuantity} unit{outcome.remainingQuantity === 1 ? '' : 's'} on</span><input type="date" min={currentArubaDateKey()} value={targetDate} disabled={checkingAvailability || schedulingRemaining} onChange={(event) => { setTargetDate(event.target.value); setAvailability(null); setSelectedOptionKey(''); setError(''); }} /></label>
+  return <>
+    <section className={styles.formSection} style={{ borderColor: 'var(--warning, #f59e0b)' }}>
+      <header><strong style={{ color: 'var(--warning, #b45309)' }}>Partial completion recorded</strong><span>Executed history is locked; remaining work is handled as a linked follow-up.</span></header>
+      <div style={{ padding: 11, display: 'grid', gap: 10 }}>
+        <div className={styles.descriptionPreview} style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 8 }}>
+          <div><span>PLANNED</span><strong style={{ fontSize: 18 }}>{outcome.plannedQuantity}</strong><small style={{ display: 'block' }}>{label}</small></div>
+          <div><span>COMPLETED</span><strong style={{ fontSize: 18 }}>{outcome.completedQuantity}</strong><small style={{ display: 'block' }}>Crew ended {formatTime(outcome.actualEndTime)}</small></div>
+          <div><span>REMAINING</span><strong style={{ fontSize: 18 }}>{outcome.remainingQuantity}</strong><small style={{ display: 'block' }}>{outcome.remainingWorkStatus === 'scheduled' ? 'Follow-up scheduled' : 'Pending scheduling'}</small></div>
         </div>
-        <div><button type="button" className={styles.secondary} disabled={!targetDate || checkingAvailability || schedulingRemaining} onClick={() => void findRemainingAvailability()}>{checkingAvailability ? 'Checking Booking Authority…' : 'Check Availability for Remaining Work'}</button></div>
 
-        {availability?.options.length ? <div className={styles.slotOptions}>{availability.options.map((option) => {
-          const key = optionKey(option);
-          const selected = selectedOptionKey === key;
-          const support = optionSupportWindows(option);
-          return <button key={key} type="button" aria-pressed={selected} className={`${styles.slotOption} ${selected ? styles.slotOptionSelected : ''}`} disabled={schedulingRemaining} onClick={() => setSelectedOptionKey(key)}>
-            <div><strong>{optionSummary(option)}</strong><span>{option.assignments.map((assignment) => assignment.vanName || assignment.vanId.replace('VAN-', 'Van ')).join(' + ')}</span>{support.length ? <span>{support.map((window) => `${window.assignment.vanName || window.assignment.vanId} support ${formatTime(window.start)}–${formatTime(window.capacityEnd || window.workEnd)}`).join(' · ')}</span> : null}</div><b>{selected ? 'Selected' : 'Select'}</b>
-          </button>;
-        })}</div> : null}
-      </> : null}
+        <div className={styles.formGrid}>
+          <div><span>REASON</span><strong style={{ display: 'block', marginTop: 4 }}>{outcome.reason || 'Not recorded'}</strong></div>
+          <div><span>ACTUAL END</span><strong style={{ display: 'block', marginTop: 4 }}>{formatTime(outcome.actualEndTime)}</strong></div>
+          <div className={styles.wide}><span>INTERNAL NOTE</span><strong style={{ display: 'block', marginTop: 4, whiteSpace: 'pre-wrap' }}>{outcome.note || 'None'}</strong></div>
+        </div>
 
-      {error ? <div className={styles.descriptionPreview}><span>ATTENTION</span><strong>{error}</strong></div> : null}
-    </div>
-    <footer className={styles.drawerFooter}>
-      <div><span>Original appointment</span><strong>{appointment.customer} · {appointment.id}</strong></div>
-      <div>
-        <button type="button" className={styles.secondary} disabled={schedulingRemaining} onClick={onBack}>Back</button>
-        {outcome.remainingWorkStatus !== 'scheduled' ? <button type="button" className={styles.primary} disabled={schedulingRemaining || checkingAvailability || !availability?.offer || !selectedOption} onClick={() => void scheduleRemaining()}>{schedulingRemaining ? 'Scheduling…' : `Schedule Remaining ${outcome.remainingQuantity}`}</button> : null}
+        {releasedSlots.length ? <div className={styles.descriptionPreview}><span>CAPACITY RELEASED</span><strong>{releasedSlots.map(formatTime).join(', ')} are now available for other work.</strong></div> : null}
+
+        {outcome.remainingWorkStatus === 'scheduled' && outcome.followUpAppointmentId ? <div className={styles.descriptionPreview}>
+          <span>REMAINING WORK SCHEDULED</span>
+          <strong>{outcome.remainingQuantity} remaining unit{outcome.remainingQuantity === 1 ? '' : 's'} are linked to follow-up appointment {outcome.followUpAppointmentId}. The original executed history remains unchanged.</strong>
+        </div> : null}
+
+        {outcome.remainingWorkStatus !== 'scheduled' && outcome.remainingQuantity > 0 ? <div style={{ display: 'grid', gap: 7 }}>
+          <button type="button" className={styles.primary} style={{ width: '100%', minHeight: 40 }} onClick={() => { setError(''); setPickerOpen(true); }}>Check Availability for Remaining Work</button>
+          <small style={{ color: 'var(--muted)' }}>Opens the live Van schedule. Navigate day by day and select only a complete Booking Authority match for all {outcome.remainingQuantity} remaining unit{outcome.remainingQuantity === 1 ? '' : 's'}.</small>
+        </div> : null}
+
+        {error ? <div className={styles.descriptionPreview}><span>ATTENTION</span><strong>{error}</strong></div> : null}
       </div>
-    </footer>
-  </section>;
+      <footer className={styles.drawerFooter}>
+        <div><span>Original appointment</span><strong>{appointment.customer} · {appointment.id}</strong></div>
+        <div><button type="button" className={styles.secondary} onClick={onBack}>Back</button></div>
+      </footer>
+    </section>
+
+    {pickerOpen && canonical && outcome.remainingWorkStatus !== 'scheduled' ? <RemainingWorkSchedulePicker
+      appointment={appointment}
+      canonical={canonical}
+      outcome={outcome}
+      onClose={() => setPickerOpen(false)}
+      onScheduled={onSaved}
+    /> : null}
+  </>;
 }
