@@ -1,0 +1,41 @@
+name: Visual Schedule Reschedule CI
+
+on:
+  pull_request:
+    paths:
+      - 'apps/erp-next/components/scheduling/remaining-work-schedule-picker.tsx'
+      - 'apps/erp-next/components/scheduling/live-appointment-details-drawer.tsx'
+      - 'apps/erp-next/lib/visual-schedule-day-cache.ts'
+      - 'apps/erp-next/lib/visual-schedule-operational-policy.ts'
+      - 'apps/erp-next/lib/visual-schedule-halfday-policy.ts'
+      - 'apps/erp-next/scripts/visual-schedule-policy-acceptance.ts'
+      - '.github/workflows/visual-schedule-reschedule-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-visual-reschedule:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install ERP Next dependencies
+        run: npm install --prefix apps/erp-next --no-audit --no-fund
+      - name: ERP Next typecheck
+        run: npm run typecheck --prefix apps/erp-next
+      - name: Compile half-day policy acceptance
+        run: |
+          rm -rf apps/erp-next/.visual-schedule-test
+          npx --prefix apps/erp-next tsc --ignoreConfig \
+            apps/erp-next/scripts/visual-schedule-policy-acceptance.ts \
+            --module commonjs --target ES2022 --moduleResolution node \
+            --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck \
+            --outDir apps/erp-next/.visual-schedule-test --rootDir apps/erp-next --lib ES2022,DOM
+      - name: Half-day policy acceptance
+        run: node apps/erp-next/.visual-schedule-test/scripts/visual-schedule-policy-acceptance.js
