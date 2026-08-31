@@ -34,7 +34,7 @@ jobs:
           npx --prefix apps/erp-next tsc --ignoreConfig \
             apps/erp-next/scripts/visual-schedule-policy-acceptance.ts \
             --module commonjs --target ES2022 --moduleResolution node \
-            --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck --types node \
+            --ignoreDeprecations 6.0 --esModuleInterop --skipLibCheck \
             --outDir apps/erp-next/.visual-schedule-test --rootDir apps/erp-next --lib ES2022,DOM
       - name: Half-day policy acceptance
         run: node apps/erp-next/.visual-schedule-test/scripts/visual-schedule-policy-acceptance.js
