@@ -1,5 +1,7 @@
 'use client';
 
+// LEGACY ACCEPTANCE UI. Product booking uses LiveAppointmentCreateDrawer + Office Booking Authority.
+
 import { useEffect, useMemo, useState } from 'react';
 import { createBookingOffer, validateBookingOffer, type BookingOffer } from '../../lib/booking-intelligence/booking-offer';
 import { bookingRestrictionFromConstraints, describeBookingConstraints, type BookingConstraintState } from '../../lib/booking-intelligence/constraints';
@@ -10,6 +12,7 @@ import { diagnoseBookingRequest, type BookingLiveIssue } from '../../lib/schedul
 import { browserKeys, saveBrowserValue } from '../../lib/browser-store';
 import type { BookingRequest, BookingRestriction, BookingWorkLine, CandidateSlot, WorkPresetId } from '../../lib/scheduling';
 import { customerFacingDescription, defaultWorkPresets } from '../../lib/scheduling';
+import { legacySchedulingSimulatorVans } from '../../lib/legacy-scheduling-simulator-fixtures';
 import type { CalendarDispatchJob, OperationalDay, SupportReflowPlan } from '../../lib/scheduling-capacity';
 import { findCandidateSlotsForDay, findSupportReflowPlansForDay } from '../../lib/scheduling-capacity';
 import { QuickCustomerOnboarding, type QuickCustomerCreateResult, type QuickExistingPropertyResult } from './quick-customer-onboarding';
@@ -122,7 +125,7 @@ export function BookingDrawer({ day, jobs, preferred, prefill, onClose, onReserv
 
   const slots = useMemo(() => {
     if (!customerId || !siteId || !sector || !scopeValid) return [];
-    const options = rankRouteAwareCandidates({ slots: findCandidateSlotsForDay(day, request, jobs), request, jobs, officeSector: 'Santa Cruz' });
+    const options = rankRouteAwareCandidates({ slots: findCandidateSlotsForDay(day, request, jobs, legacySchedulingSimulatorVans), request, jobs, officeSector: 'Santa Cruz' });
     return [...options].sort((a, b) => {
       const aPreferred = Number(Boolean(preferred.vanId && a.vanId === preferred.vanId && preferred.start && a.start === preferred.start));
       const bPreferred = Number(Boolean(preferred.vanId && b.vanId === preferred.vanId && preferred.start && b.start === preferred.start));
@@ -134,7 +137,7 @@ export function BookingDrawer({ day, jobs, preferred, prefill, onClose, onReserv
 
   const reflowPlans = useMemo(() => {
     if (!customerId || !siteId || !sector || !scopeValid || slots.length) return [];
-    const plans = findSupportReflowPlansForDay(day, request, jobs);
+    const plans = findSupportReflowPlansForDay(day, request, jobs, legacySchedulingSimulatorVans);
     return [...plans].sort((a, b) => b.score - a.score);
   }, [customerId, day, jobs, request, scopeValid, sector, siteId, slots.length]);
 
@@ -232,7 +235,7 @@ export function BookingDrawer({ day, jobs, preferred, prefill, onClose, onReserv
 
   const reserveSelected = () => {
     if (!selected || !selectedOffer || !customerId || !siteId || !sector || !scopeValid) return;
-    const currentCandidates = rankRouteAwareCandidates({ slots: findCandidateSlotsForDay(day, request, jobs), request, jobs, officeSector: 'Santa Cruz' });
+    const currentCandidates = rankRouteAwareCandidates({ slots: findCandidateSlotsForDay(day, request, jobs, legacySchedulingSimulatorVans), request, jobs, officeSector: 'Santa Cruz' });
     const validation = validateBookingOffer({ offer: selectedOffer, request, currentJobs: jobs, currentCandidates });
     if (!validation.valid || !validation.replacement) {
       clearSelection();

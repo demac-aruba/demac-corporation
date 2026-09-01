@@ -3,11 +3,14 @@ const {
   BookingAuthorityError,
   canonicalAppointmentIdentity,
   cleanText,
+  hashKey,
   normalizeBookingRequest,
 } = require("./bookingAuthorityCore");
 const { compactObject } = require("./bookingAuthorityFirestore");
+const { workOrderStatusIsTerminal } = require("./bookingSchedulingPrimitives");
 
 const PARTIAL_COMPLETION_VERSION = 1;
+const PARTIAL_COMPLETION_FINGERPRINT_VERSION = 1;
 
 function defaultServerTimestamp() {
   const { FieldValue } = require("firebase-admin/firestore");
@@ -155,6 +158,128 @@ function requirePartialOutcome(appointment) {
   return outcome;
 }
 
+function partialCompletionRequestFingerprint({
+  appointmentId,
+  requestId,
+  completedQuantity,
+  actualEndTime,
+  reason,
+  note,
+  actor,
+}) {
+  return hashKey(JSON.stringify({
+    version: PARTIAL_COMPLETION_FINGERPRINT_VERSION,
+    appointmentId: cleanText(appointmentId, 180),
+    requestId: cleanText(requestId, 240),
+    completedQuantity: Math.round(Number(completedQuantity)),
+    actualEndTime: validTime(actualEndTime),
+    reason: cleanText(reason, 500),
+    note: cleanText(note, 1_500),
+    actor: actorFields(actor),
+  }), 40);
+}
+
+function storedPartialCompletionRequestFingerprint(appointment, outcome) {
+  const stored = cleanText(outcome?.recordRequestFingerprint, 80);
+  if (stored) return stored;
+  return partialCompletionRequestFingerprint({
+    appointmentId: appointment?.id || appointment?.appointmentId,
+    requestId: outcome?.recordRequestId,
+    completedQuantity: outcome?.completedQuantity,
+    actualEndTime: outcome?.actualEndTime,
+    reason: outcome?.reason,
+    note: outcome?.note,
+    actor: {
+      id: outcome?.recordedById,
+      name: outcome?.recordedByName,
+      source: outcome?.recordedSource || appointment?.lastLifecycleSource,
+    },
+  });
+}
+
+function assertExistingRemainingWorkFollowUp({
+  original,
+  followUp,
+  followUpAppointmentId,
+  outcome,
+  revision,
+  idempotencyKeyHash,
+  offerId,
+  offerVersion,
+  optionId,
+}) {
+  const originalAppointmentId = cleanText(original?.appointmentId || original?.id, 180);
+  const storedId = cleanText(followUp?.id, 180);
+  const storedAppointmentId = cleanText(followUp?.appointmentId, 180);
+  const storedSourceAppointmentId = cleanText(followUp?.sourcePartialAppointmentId, 180);
+  const storedSourceRevision = Number(followUp?.sourcePartialOutcomeRevision);
+  const storedRelationship = cleanText(followUp?.workRelationship, 80);
+  const matches = Boolean(storedId || storedAppointmentId)
+    && (!storedId || storedId === followUpAppointmentId)
+    && (!storedAppointmentId || storedAppointmentId === followUpAppointmentId)
+    && cleanText(followUp?.idempotencyKeyHash, 80) === idempotencyKeyHash
+    && (!storedSourceAppointmentId || storedSourceAppointmentId === originalAppointmentId)
+    && (!Number.isFinite(storedSourceRevision) || storedSourceRevision === Number(revision))
+    && (!storedRelationship || storedRelationship === "remaining_work_follow_up")
+    && cleanText(followUp?.customerId, 160) === cleanText(original?.customerId, 160)
+    && cleanText(followUp?.propertyId, 160) === cleanText(original?.propertyId, 160)
+    && sameWorkLines(followUp?.workLines, outcome?.remainingWorkLines)
+    && cleanText(followUp?.offerId, 180) === offerId
+    && Number(followUp?.offerVersion) === Number(offerVersion)
+    && cleanText(followUp?.selectedOptionId, 180) === optionId;
+  if (!matches) {
+    throw new BookingAuthorityError(
+      BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
+      "The deterministic remaining-work appointment already belongs to a different booking payload.",
+      {
+        originalAppointmentId,
+        followUpAppointmentId,
+        reason: "remaining-work-follow-up-conflict",
+      },
+    );
+  }
+}
+
+function remainingWorkLinkState({ original, followUpAppointmentId, revision, actor, requestId, now }) {
+  const outcome = requirePartialOutcome(original);
+  if (Number(outcome.revision || 0) !== Number(revision)) {
+    throw new BookingAuthorityError(
+      BOOKING_ERROR_CODES.INVALID_REQUEST,
+      "The partial-completion record changed before remaining work could be linked.",
+      { originalAppointmentId: original.id || original.appointmentId, followUpAppointmentId },
+    );
+  }
+  const alreadyLinked = cleanText(outcome.followUpAppointmentId, 180);
+  if (alreadyLinked && alreadyLinked !== followUpAppointmentId) {
+    throw new BookingAuthorityError(
+      BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
+      "Remaining work is already linked to another follow-up appointment.",
+      { originalAppointmentId: original.id || original.appointmentId, followUpAppointmentId: alreadyLinked },
+    );
+  }
+  const actorInfo = actorFields(actor);
+  const nextOutcome = {
+    ...outcome,
+    remainingWorkStatus: "scheduled",
+    followUpAppointmentId,
+    followUpScheduledAtIso: now.toISOString(),
+    followUpScheduledById: actorInfo.actorId,
+    followUpScheduledByName: actorInfo.actorName,
+    followUpScheduleRequestId: cleanText(requestId, 240),
+  };
+  const event = lifecycleEvent({
+    kind: "remaining_work_scheduled",
+    actor,
+    reason: "Remaining work scheduled",
+    note: `Follow-up appointment ${followUpAppointmentId}`,
+    now,
+    from: scheduleSnapshot(original),
+    to: scheduleSnapshot(original),
+    details: { followUpAppointmentId, remainingQuantity: Number(outcome.remainingQuantity || 0) },
+  });
+  return { actorInfo, event, nextOutcome, outcome };
+}
+
 function createPartialCompletionAuthority({
   db,
   bookingAuthority,
@@ -189,6 +314,15 @@ function createPartialCompletionAuthority({
         { reason: "invalid-partial-completion-input" },
       );
     }
+    const requestFingerprint = partialCompletionRequestFingerprint({
+      appointmentId: id,
+      requestId: stableRequestId,
+      completedQuantity: completed,
+      actualEndTime: endTime,
+      reason: outcomeReason,
+      note,
+      actor,
+    });
 
     const now = asDate(clock());
     const appointmentRef = db.collection("appointments").doc(id);
@@ -211,15 +345,52 @@ function createPartialCompletionAuthority({
           { appointmentId: id, appointmentDate: current.date },
         );
       }
+      const workOrderIds = Array.isArray(current.workOrderIds) ? current.workOrderIds.map((value) => cleanText(value, 180)).filter(Boolean) : [];
+      if (workOrderIds.length !== 1) {
+        throw new BookingAuthorityError(
+          BOOKING_ERROR_CODES.INVALID_REQUEST,
+          "Partial completion requires exactly one canonical Work Order for this appointment.",
+          { appointmentId: id, reason: "partial-completion-work-order-shape-not-supported" },
+        );
+      }
+      const workOrderRef = db.collection("workOrders").doc(workOrderIds[0]);
+      const workOrderSnapshot = await transaction.get(workOrderRef);
+      if (!workOrderSnapshot.exists) {
+        throw new BookingAuthorityError(
+          BOOKING_ERROR_CODES.INVALID_REQUEST,
+          "The canonical Work Order is missing, so partial completion cannot be reconciled safely.",
+          { appointmentId: id, workOrderId: workOrderIds[0] },
+        );
+      }
+      const currentWorkOrder = workOrderSnapshot.data() || {};
       const existingOutcome = current.executionOutcome;
       if (existingOutcome && cleanText(existingOutcome.status, 40) === "partial") {
         if (cleanText(existingOutcome.recordRequestId, 240) === stableRequestId) {
+          if (storedPartialCompletionRequestFingerprint(current, existingOutcome) !== requestFingerprint) {
+            throw new BookingAuthorityError(
+              BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
+              "This partial-completion request id was already used with a different payload.",
+              { appointmentId: id, requestId: stableRequestId, reason: "partial-completion-payload-conflict" },
+            );
+          }
           return { success: true, replayed: true, appointmentId: id, appointment: current, outcome: existingOutcome };
         }
         throw new BookingAuthorityError(
           BOOKING_ERROR_CODES.INVALID_REQUEST,
           "Partial completion is already recorded for this appointment. Use Schedule remaining work instead of rewriting the executed history.",
           { appointmentId: id, reason: "partial-completion-already-recorded" },
+        );
+      }
+      if (workOrderStatusIsTerminal(currentWorkOrder.status)) {
+        throw new BookingAuthorityError(
+          BOOKING_ERROR_CODES.INVALID_REQUEST,
+          "A completed, invoiced, or paid Work Order cannot be partially completed.",
+          {
+            appointmentId: id,
+            workOrderId: workOrderIds[0],
+            workOrderStatus: cleanText(currentWorkOrder.status, 80),
+            reason: "partial-completion-terminal-work-order",
+          },
         );
       }
 
@@ -237,14 +408,6 @@ function createPartialCompletionAuthority({
           BOOKING_ERROR_CODES.INVALID_REQUEST,
           "Partial completion currently supports a single primary Van assignment only.",
           { appointmentId: id, reason: "partial-completion-multi-van-not-supported" },
-        );
-      }
-      const workOrderIds = Array.isArray(current.workOrderIds) ? current.workOrderIds.map((value) => cleanText(value, 180)).filter(Boolean) : [];
-      if (workOrderIds.length !== 1) {
-        throw new BookingAuthorityError(
-          BOOKING_ERROR_CODES.INVALID_REQUEST,
-          "Partial completion requires exactly one canonical Work Order for this appointment.",
-          { appointmentId: id, reason: "partial-completion-work-order-shape-not-supported" },
         );
       }
 
@@ -265,15 +428,6 @@ function createPartialCompletionAuthority({
         );
       }
 
-      const workOrderRef = db.collection("workOrders").doc(workOrderIds[0]);
-      const workOrderSnapshot = await transaction.get(workOrderRef);
-      if (!workOrderSnapshot.exists) {
-        throw new BookingAuthorityError(
-          BOOKING_ERROR_CODES.INVALID_REQUEST,
-          "The canonical Work Order is missing, so partial completion cannot be reconciled safely.",
-          { appointmentId: id, workOrderId: workOrderIds[0] },
-        );
-      }
       const lockIds = Array.isArray(current.capacityLockIds) ? current.capacityLockIds.map((value) => cleanText(value, 180)).filter(Boolean) : [];
       if (!lockIds.length) {
         throw new BookingAuthorityError(
@@ -329,9 +483,11 @@ function createPartialCompletionAuthority({
         status: "partial",
         revision: 1,
         recordRequestId: stableRequestId,
+        recordRequestFingerprint: requestFingerprint,
         recordedAtIso: now.toISOString(),
         recordedById: actorInfo.actorId,
         recordedByName: actorInfo.actorName,
+        recordedSource: actorInfo.source,
         reason: outcomeReason,
         note: cleanText(note, 1_500),
         actualEndTime: endTime,
@@ -375,7 +531,6 @@ function createPartialCompletionAuthority({
         updatedAt: serverTimestamp(),
       }), { merge: true });
 
-      const currentWorkOrder = workOrderSnapshot.data() || {};
       transaction.set(workOrderRef, compactObject({
         airConditionerCount: completed,
         quantity: completed,
@@ -422,7 +577,16 @@ function createPartialCompletionAuthority({
     });
   }
 
-  async function linkFollowUp({ originalAppointmentId, followUpAppointmentId, revision, actor, requestId }) {
+  async function linkFollowUp({
+    originalAppointmentId,
+    followUpAppointmentId,
+    revision,
+    actor,
+    requestId,
+    offerId,
+    offerVersion,
+    optionId,
+  }) {
     const now = asDate(clock());
     const originalRef = db.collection("appointments").doc(originalAppointmentId);
     const followUpRef = db.collection("appointments").doc(followUpAppointmentId);
@@ -434,40 +598,29 @@ function createPartialCompletionAuthority({
       const original = activeAppointment(originalSnapshot, originalAppointmentId);
       const followUp = activeAppointment(followUpSnapshot, followUpAppointmentId);
       const outcome = requirePartialOutcome(original);
-      if (Number(outcome.revision || 0) !== Number(revision)) {
-        throw new BookingAuthorityError(
-          BOOKING_ERROR_CODES.INVALID_REQUEST,
-          "The partial-completion record changed before remaining work could be linked.",
-          { originalAppointmentId, followUpAppointmentId },
-        );
-      }
-      const alreadyLinked = cleanText(outcome.followUpAppointmentId, 180);
-      if (alreadyLinked && alreadyLinked !== followUpAppointmentId) {
-        throw new BookingAuthorityError(
-          BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
-          "Remaining work is already linked to another follow-up appointment.",
-          { originalAppointmentId, followUpAppointmentId: alreadyLinked },
-        );
-      }
-      const actorInfo = actorFields(actor);
-      const nextOutcome = {
-        ...outcome,
-        remainingWorkStatus: "scheduled",
+      const expectedIdentity = canonicalAppointmentIdentity(`office:partial-followup:${originalAppointmentId}:v${revision}`);
+      assertExistingRemainingWorkFollowUp({
+        original,
+        followUp,
         followUpAppointmentId,
-        followUpScheduledAtIso: now.toISOString(),
-        followUpScheduledById: actorInfo.actorId,
-        followUpScheduledByName: actorInfo.actorName,
-        followUpScheduleRequestId: cleanText(requestId, 240),
-      };
-      const event = lifecycleEvent({
-        kind: "remaining_work_scheduled",
+        outcome,
+        revision,
+        idempotencyKeyHash: expectedIdentity.idempotencyKeyHash,
+        offerId,
+        offerVersion,
+        optionId,
+      });
+      const {
+        actorInfo,
+        event,
+        nextOutcome,
+      } = remainingWorkLinkState({
+        original,
+        followUpAppointmentId,
+        revision,
         actor,
-        reason: "Remaining work scheduled",
-        note: `Follow-up appointment ${followUpAppointmentId}`,
+        requestId,
         now,
-        from: scheduleSnapshot(original),
-        to: scheduleSnapshot(original),
-        details: { followUpAppointmentId, remainingQuantity: Number(outcome.remainingQuantity || 0) },
       });
       transaction.set(originalRef, compactObject({
         executionOutcome: nextOutcome,
@@ -526,38 +679,9 @@ function createPartialCompletionAuthority({
         { appointmentId: id },
       );
     }
-    if (cleanText(outcome.remainingWorkStatus, 80) === "scheduled" && cleanText(outcome.followUpAppointmentId, 180)) {
-      const followUp = await bookingAuthority.getAppointment(outcome.followUpAppointmentId);
-      return {
-        success: true,
-        replayed: true,
-        originalAppointmentId: id,
-        followUpAppointmentId: outcome.followUpAppointmentId,
-        followUpAppointment: followUp,
-      };
-    }
-
     const revision = Math.max(1, Math.round(Number(outcome.revision) || 1));
     const stableIdempotencyKey = `office:partial-followup:${id}:v${revision}`;
     const expectedIdentity = canonicalAppointmentIdentity(stableIdempotencyKey);
-    const expectedSnapshot = await db.collection("appointments").doc(expectedIdentity.appointmentId).get();
-    if (expectedSnapshot.exists) {
-      const linked = await linkFollowUp({
-        originalAppointmentId: id,
-        followUpAppointmentId: expectedIdentity.appointmentId,
-        revision,
-        actor,
-        requestId: stableRequestId,
-      });
-      return {
-        success: true,
-        replayed: true,
-        originalAppointmentId: id,
-        followUpAppointmentId: expectedIdentity.appointmentId,
-        followUpAppointment: linked.followUp,
-      };
-    }
-
     const offerSnapshot = await db.collection("bookingOffers").doc(canonicalOfferId).get();
     if (!offerSnapshot.exists) {
       throw new BookingAuthorityError(
@@ -568,8 +692,12 @@ function createPartialCompletionAuthority({
     }
     const offer = offerSnapshot.data() || {};
     const request = normalizeBookingRequest(offer.request || {});
+    const selectedOptionExists = Array.isArray(offer.options)
+      && offer.options.some((candidate) => cleanText(candidate?.id, 180) === canonicalOptionId);
     if (
-      request.customerId !== cleanText(original.customerId, 160)
+      Number(offer.version) !== Number(offerVersion)
+      || !selectedOptionExists
+      || request.customerId !== cleanText(original.customerId, 160)
       || request.propertyId !== cleanText(original.propertyId, 160)
       || !sameWorkLines(request.workLines, outcome.remainingWorkLines)
     ) {
@@ -578,6 +706,49 @@ function createPartialCompletionAuthority({
         "The selected offer does not match this appointment's canonical remaining work.",
         { appointmentId: id, offerId: canonicalOfferId, reason: "remaining-work-offer-mismatch" },
       );
+    }
+
+    if (cleanText(outcome.remainingWorkStatus, 80) === "scheduled" && cleanText(outcome.followUpAppointmentId, 180)) {
+      const followUp = await bookingAuthority.getAppointment(outcome.followUpAppointmentId);
+      assertExistingRemainingWorkFollowUp({
+        original,
+        followUp,
+        followUpAppointmentId: expectedIdentity.appointmentId,
+        outcome,
+        revision,
+        idempotencyKeyHash: expectedIdentity.idempotencyKeyHash,
+        offerId: canonicalOfferId,
+        offerVersion,
+        optionId: canonicalOptionId,
+      });
+      return {
+        success: true,
+        replayed: true,
+        originalAppointmentId: id,
+        followUpAppointmentId: expectedIdentity.appointmentId,
+        followUpAppointment: followUp,
+      };
+    }
+
+    const expectedSnapshot = await db.collection("appointments").doc(expectedIdentity.appointmentId).get();
+    if (expectedSnapshot.exists) {
+      const linked = await linkFollowUp({
+        originalAppointmentId: id,
+        followUpAppointmentId: expectedIdentity.appointmentId,
+        revision,
+        actor,
+        requestId: stableRequestId,
+        offerId: canonicalOfferId,
+        offerVersion,
+        optionId: canonicalOptionId,
+      });
+      return {
+        success: true,
+        replayed: true,
+        originalAppointmentId: id,
+        followUpAppointmentId: expectedIdentity.appointmentId,
+        followUpAppointment: linked.followUp,
+      };
     }
 
     const created = await bookingAuthority.createAppointment({
@@ -592,6 +763,57 @@ function createPartialCompletionAuthority({
         sourcePartialAppointmentId: id,
         sourcePartialOutcomeRevision: revision,
       },
+      internalTransactionParticipant: async ({
+        transaction,
+        appointmentId: followUpAppointmentId,
+        request: committedRequest,
+        now,
+      }) => {
+        const originalRef = db.collection("appointments").doc(id);
+        const originalSnapshot = await transaction.get(originalRef);
+        const currentOriginal = activeAppointment(originalSnapshot, id);
+        const currentOutcome = requirePartialOutcome(currentOriginal);
+        if (
+          committedRequest.customerId !== cleanText(currentOriginal.customerId, 160)
+          || committedRequest.propertyId !== cleanText(currentOriginal.propertyId, 160)
+          || !sameWorkLines(committedRequest.workLines, currentOutcome.remainingWorkLines)
+        ) {
+          throw new BookingAuthorityError(
+            BOOKING_ERROR_CODES.INVALID_REQUEST,
+            "The selected offer no longer matches this appointment's canonical remaining work.",
+            { appointmentId: id, offerId: canonicalOfferId, reason: "remaining-work-transaction-mismatch" },
+          );
+        }
+        const { actorInfo, event, nextOutcome } = remainingWorkLinkState({
+          original: currentOriginal,
+          followUpAppointmentId,
+          revision,
+          actor,
+          requestId: stableRequestId,
+          now,
+        });
+        transaction.set(originalRef, compactObject({
+          executionOutcome: nextOutcome,
+          lifecycleHistory: [...(Array.isArray(currentOriginal.lifecycleHistory) ? currentOriginal.lifecycleHistory : []), event],
+          updatedAtIso: now.toISOString(),
+          lastLifecycleActorId: actorInfo.actorId,
+          lastLifecycleActorName: actorInfo.actorName,
+          lastLifecycleSource: actorInfo.source,
+          updatedAt: serverTimestamp(),
+        }), { merge: true });
+        return {
+          appointmentPatch: {
+            sourcePartialAppointmentId: id,
+            sourcePartialOutcomeRevision: revision,
+            workRelationship: "remaining_work_follow_up",
+          },
+          workOrderPatch: {
+            sourcePartialAppointmentId: id,
+            sourcePartialOutcomeRevision: revision,
+            workRelationship: "remaining_work_follow_up",
+          },
+        };
+      },
     });
     if (!created?.success || !cleanText(created.appointmentId, 180)) {
       throw new BookingAuthorityError(
@@ -600,13 +822,41 @@ function createPartialCompletionAuthority({
         { appointmentId: id },
       );
     }
-    await linkFollowUp({
-      originalAppointmentId: id,
-      followUpAppointmentId: created.appointmentId,
+    assertExistingRemainingWorkFollowUp({
+      original,
+      followUp: created.appointment,
+      followUpAppointmentId: expectedIdentity.appointmentId,
+      outcome,
       revision,
-      actor,
-      requestId: stableRequestId,
+      idempotencyKeyHash: expectedIdentity.idempotencyKeyHash,
+      offerId: canonicalOfferId,
+      offerVersion,
+      optionId: canonicalOptionId,
     });
+    // A replay can represent a historical split-commit appointment created
+    // before the atomic participant existed (including one that raced this
+    // request during rollout). Repair only that legacy state; a newly created
+    // appointment is already linked by the transaction above.
+    if (created.replayed === true) {
+      const latestOriginal = await bookingAuthority.getAppointment(id);
+      const latestOutcome = requirePartialOutcome(latestOriginal);
+      const linkedAppointmentId = cleanText(latestOutcome.followUpAppointmentId, 180);
+      if (
+        cleanText(latestOutcome.remainingWorkStatus, 80) !== "scheduled"
+        || linkedAppointmentId !== created.appointmentId
+      ) {
+        await linkFollowUp({
+          originalAppointmentId: id,
+          followUpAppointmentId: created.appointmentId,
+          revision,
+          actor,
+          requestId: stableRequestId,
+          offerId: canonicalOfferId,
+          offerVersion,
+          optionId: canonicalOptionId,
+        });
+      }
+    }
     return {
       success: true,
       replayed: created.replayed === true,

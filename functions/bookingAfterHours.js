@@ -7,6 +7,7 @@ const {
 const {
   BOOKING_COLLECTIONS,
   compactObject,
+  findLiveForeignCapacityLocks,
 } = require("./bookingAuthorityFirestore");
 const {
   arubaDateParts,
@@ -19,7 +20,8 @@ const { isOpenBusinessDate } = require("./operatingCalendarService");
 const { mergeBookablePresets } = require("./serviceCatalog");
 const { resolveAppointmentRecipients } = require("./customerContactDirectory");
 
-const AFTER_HOURS_VERSION = 1;
+const AFTER_HOURS_VERSION = 2;
+const AFTER_HOURS_FINGERPRINT_VERSION = 1;
 const AFTER_HOURS_KIND = "after_hours_emergency";
 const AFTER_HOURS_START_MINUTES = 17 * 60;
 
@@ -62,6 +64,79 @@ function afterHoursAppointmentId(requestId) {
 
 function afterHoursWorkOrderId(appointmentId) {
   return `WO-${appointmentId}-1`;
+}
+
+function normalizedRecipientSelections(selections) {
+  return (Array.isArray(selections) ? selections : [])
+    .map((selection) => ({
+      recipientType: cleanText(selection?.recipientType, 40) === "client" ? "client" : "contact",
+      sourceId: cleanText(selection?.sourceId, 180),
+      sendConfirmation: selection?.sendConfirmation === true,
+      sendReminder: selection?.sendReminder === true,
+    }))
+    .filter((selection) => selection.sourceId)
+    .sort((left, right) => `${left.recipientType}:${left.sourceId}`.localeCompare(`${right.recipientType}:${right.sourceId}`));
+}
+
+function afterHoursRequestFingerprint({
+  customerId,
+  propertyId,
+  workLines,
+  requestedDate,
+  requestedTime,
+  requiredVanId,
+  customerFacingDescription,
+  technicianInstructions,
+  recipientSelections,
+}) {
+  return hashId(JSON.stringify({
+    version: AFTER_HOURS_FINGERPRINT_VERSION,
+    customerId: cleanText(customerId, 180),
+    propertyId: cleanText(propertyId, 180),
+    workLines: (workLines || []).map((line) => ({
+      id: cleanText(line.id, 120),
+      presetId: cleanText(line.presetId, 120),
+      serviceId: cleanText(line.serviceId, 120),
+      quantity: Number(line.quantity) || 0,
+      manualDurationMinutes: Number(line.manualDurationMinutes) || 0,
+      customerFacingDescription: cleanText(line.customerFacingDescription, 500),
+      technicianInstructions: cleanText(line.technicianInstructions, 1_500),
+    })),
+    requestedDate: cleanText(requestedDate, 20),
+    requestedTime: cleanText(requestedTime, 20),
+    requiredVanId: cleanText(requiredVanId, 120),
+    customerFacingDescription: cleanText(customerFacingDescription, 1_500),
+    technicianInstructions: cleanText(technicianInstructions, 1_500),
+    recipientSelections: normalizedRecipientSelections(recipientSelections),
+  }), 40);
+}
+
+function storedAfterHoursMatchesRequest(appointment, workOrder, payload) {
+  const storedFingerprint = cleanText(appointment?.afterHoursRequestFingerprint, 80);
+  if (storedFingerprint) return storedFingerprint === payload.requestFingerprint;
+  const storedLines = Array.isArray(appointment?.workLines) ? appointment.workLines : [];
+  const requestedDescription = cleanText(payload.customerFacingDescription, 1_500);
+  const requestedSelections = normalizedRecipientSelections(payload.recipientSelections);
+  const storedRecipients = Array.isArray(workOrder?.notificationRecipients) ? workOrder.notificationRecipients : [];
+  const recipientSelectionsMatch = requestedSelections.every((selection) => {
+    const stored = storedRecipients.find((recipient) => (
+      cleanText(recipient?.recipientType, 40) === selection.recipientType
+      && cleanText(recipient?.sourceId, 180) === selection.sourceId
+    ));
+    return stored
+      && stored.sendConfirmation === selection.sendConfirmation
+      && stored.sendReminder === selection.sendReminder;
+  });
+  return cleanText(appointment?.afterHoursRequestId, 240) === payload.requestId
+    && cleanText(appointment?.customerId, 180) === payload.customerId
+    && cleanText(appointment?.propertyId, 180) === payload.propertyId
+    && cleanText(appointment?.date, 20) === payload.requestedDate
+    && cleanText(appointment?.startTime, 20) === payload.requestedTime
+    && cleanText(appointment?.primaryVanId, 120) === payload.requiredVanId
+    && JSON.stringify(storedLines) === JSON.stringify(payload.workLines)
+    && (!requestedDescription || cleanText(workOrder?.customerFacingDescription, 1_500) === requestedDescription)
+    && cleanText(workOrder?.technicianInstructions, 1_500) === cleanText(payload.technicianInstructions, 1_500)
+    && recipientSelectionsMatch;
 }
 
 function afterHoursGuard(dateKey, vanId) {
@@ -134,16 +209,17 @@ function createAfterHoursAuthority({
         { reason: "after-hours-start-before-17", requestedTime: startTime },
       );
     }
-
-    const now = asDate(clock());
-    const currentDate = arubaDateParts(now).date;
-    if (dateKey !== currentDate) {
-      throw new BookingAuthorityError(
-        BOOKING_ERROR_CODES.INVALID_REQUEST,
-        "After-hours emergency scheduling is a same-day operational action.",
-        { reason: "after-hours-same-day-only", requestedDate: dateKey, currentDate },
-      );
-    }
+    const requestFingerprint = afterHoursRequestFingerprint({
+      customerId: clientId,
+      propertyId: siteId,
+      workLines: requestedWorkLines,
+      requestedDate: dateKey,
+      requestedTime: startTime,
+      requiredVanId: rawVanId,
+      customerFacingDescription,
+      technicianInstructions,
+      recipientSelections,
+    });
 
     const appointmentId = afterHoursAppointmentId(stableRequestId);
     const workOrderId = afterHoursWorkOrderId(appointmentId);
@@ -164,21 +240,68 @@ function createAfterHoursAuthority({
       const replaySnapshot = await transaction.get(appointmentRef);
       if (replaySnapshot.exists) {
         const replay = { id: replaySnapshot.id, ...replaySnapshot.data() };
-        if (cleanText(replay.afterHoursRequestId, 240) !== stableRequestId) {
+        const replayOrderSnapshot = await transaction.get(workOrderRef);
+        const replayOrder = replayOrderSnapshot.exists ? { id: workOrderId, ...replayOrderSnapshot.data() } : null;
+        if (!storedAfterHoursMatchesRequest(replay, replayOrder, {
+          requestId: stableRequestId,
+          requestFingerprint,
+          customerId: clientId,
+          propertyId: siteId,
+          workLines: requestedWorkLines,
+          requestedDate: dateKey,
+          requestedTime: startTime,
+          requiredVanId: rawVanId,
+          customerFacingDescription,
+          technicianInstructions,
+          recipientSelections,
+        })) {
           throw new BookingAuthorityError(
             BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
-            "The deterministic after-hours appointment identity belongs to another request.",
+            "This after-hours request identity was already used with a different payload.",
+            { appointmentId },
           );
         }
-        const replayOrderSnapshot = await transaction.get(workOrderRef);
         return {
           success: true,
           replayed: true,
           appointmentId,
           workOrderIds: [workOrderId],
           appointment: replay,
-          workOrder: replayOrderSnapshot.exists ? { id: workOrderId, ...replayOrderSnapshot.data() } : null,
+          workOrder: replayOrder,
         };
+      }
+
+      // Firestore may retry this callback after a concurrent write. Read the
+      // clock inside every attempt so a request cannot commit after its start
+      // minute has elapsed. A committed idempotent replay is intentionally
+      // recognized first, so historical retries still return their result.
+      const now = asDate(clock());
+      const current = arubaDateParts(now);
+      if (dateKey !== current.date) {
+        throw new BookingAuthorityError(
+          BOOKING_ERROR_CODES.INVALID_REQUEST,
+          "After-hours emergency scheduling is a same-day operational action.",
+          { reason: "after-hours-same-day-only", requestedDate: dateKey, currentDate: current.date },
+        );
+      }
+      if (startMinutes <= timeMinutes(current.time)) {
+        throw new BookingAuthorityError(
+          BOOKING_ERROR_CODES.AVAILABILITY_CHANGED,
+          "The selected after-hours start time has already passed.",
+          {
+            reason: "selected-time-passed",
+            requestedDate: dateKey,
+            requestedTime: startTime,
+            currentDate: current.date,
+            currentTime: current.time,
+            rejection: {
+              code: "START_TIME_PASSED",
+              stage: "temporal",
+              date: dateKey,
+              time: startTime,
+            },
+          },
+        );
       }
 
       const dailyAssignmentQuery = db.collection("dailyVanAssignments").where("date", "==", dateKey);
@@ -274,15 +397,19 @@ function createAfterHoursAuthority({
       const guard = afterHoursGuard(dateKey, vanId);
       const guardRef = db.collection(collections.capacityLocks).doc(guard.id);
       const guardSnapshot = await transaction.get(guardRef);
-      if (guardSnapshot.exists) {
-        const stored = guardSnapshot.data() || {};
-        if (stored.active !== false && cleanText(stored.appointmentId, 180) !== appointmentId) {
-          throw new BookingAuthorityError(
-            BOOKING_ERROR_CODES.SLOT_CONFLICT,
-            "This Van already has an open-ended after-hours emergency. Complete or cancel it before assigning another one.",
-            { reason: "after-hours-open-job-exists", vanId, appointmentId: stored.appointmentId || "" },
-          );
-        }
+      const liveForeignLocks = await findLiveForeignCapacityLocks({
+        transaction,
+        db,
+        collections,
+        lockSnapshots: [{ lock: guard, lockRef: guardRef, snapshot: guardSnapshot }],
+        appointmentId,
+      });
+      if (liveForeignLocks.length) {
+        throw new BookingAuthorityError(
+          BOOKING_ERROR_CODES.SLOT_CONFLICT,
+          "This Van already has an open-ended after-hours emergency. Complete or cancel it before assigning another one.",
+          { reason: "after-hours-open-job-exists", vanId, appointmentId: liveForeignLocks[0].ownerId },
+        );
       }
 
       const existingOpen = canonical.workOrders.find((order) => cleanText(order.vanId, 120) === vanId && activeOpenAfterHours(order));
@@ -343,6 +470,8 @@ function createAfterHoursAuthority({
         afterHoursKind: AFTER_HOURS_KIND,
         afterHoursOpenEnded: true,
         afterHoursRequestId: stableRequestId,
+        afterHoursRequestFingerprint: requestFingerprint,
+        afterHoursVersion: AFTER_HOURS_VERSION,
         actualCompletedAt: null,
         createdBy: cleanText(actor?.id || actor?.userId, 160) || "office-scheduling",
         createdByName: cleanText(actor?.name || actor?.displayName, 160),
@@ -375,6 +504,9 @@ function createAfterHoursAuthority({
         airConditionerCount: itemQuantity,
         afterHoursKind: AFTER_HOURS_KIND,
         afterHoursOpenEnded: true,
+        afterHoursRequestId: stableRequestId,
+        afterHoursRequestFingerprint: requestFingerprint,
+        afterHoursVersion: AFTER_HOURS_VERSION,
         afterHoursStartTime: startTime,
         afterHoursGuardId: guard.id,
         actualStartedAt: null,

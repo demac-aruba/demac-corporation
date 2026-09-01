@@ -5,12 +5,14 @@ const {
 } = require("./bookingAuthorityCore");
 const {
   AFTERNOON_SLOTS,
+  ARUBA_TIME_ZONE,
   EXTRA_MORNING_SLOT,
   MAX_SEARCH_DAYS,
   MORNING_SLOTS,
   REGULAR_SLOTS,
   addDays,
   dateDistanceInDays,
+  halfDaySchedule,
   hashId,
   normalizeText,
   normalizeTime,
@@ -19,13 +21,80 @@ const {
   vanCanReceiveAppointments,
   weekday,
 } = require("./bookingSchedulingPrimitives");
-const { candidateAvailability } = require("./bookingCapacityAvailability");
+const {
+  capacityLockSlots,
+  endTimeFromDuration,
+  endTimeFromOccupiedSlots,
+  evaluateCandidateAvailability,
+} = require("./bookingCapacityAvailability");
 const { resolveCatalogService } = require("./serviceCatalog");
 
-const CANONICAL_SCHEDULING_ENGINE_VERSION = 8;
+const CANONICAL_SCHEDULING_ENGINE_VERSION = 11;
+const SCHEDULING_DIAGNOSTIC_VERSION = 1;
 const CLIENT_OPTION_LIMIT = 2;
 const ASSIGNMENT_COMBINATION_LIMIT = 8;
+const ASSIGNMENT_SEARCH_NODE_LIMIT = 20_000;
 const OFFICE_TARGET_OPTION_LIMIT = ASSIGNMENT_COMBINATION_LIMIT;
+const REQUESTED_DATE_GRID_OPTION_LIMIT = 210;
+
+const DIAGNOSTIC_BOOLEAN_FACTS = new Set([
+  "vanPresent",
+  "vanActive",
+  "hasEligibleDriver",
+  "halfDay",
+  "fullDay",
+]);
+const DIAGNOSTIC_NUMBER_FACTS = new Set([
+  "requestedDayOffset",
+  "searchDays",
+  "operationalVanCount",
+  "vansRequired",
+  "durationMinutes",
+  "slots",
+  "blockingWorkOrderCount",
+  "unlinkedBlockingWorkOrderCount",
+]);
+const DIAGNOSTIC_STRING_FACTS = new Map([
+  ["assignmentStatus", 80],
+  ["attemptedEnd", 20],
+  ["attemptedCapacityEnd", 20],
+  ["routePolicy", 40],
+  ["routeReason", 120],
+  ["candidateVanId", 120],
+  ["candidateDate", 20],
+  ["candidateStart", 20],
+  ["allocationRole", 40],
+]);
+const DIAGNOSTIC_ARRAY_FACTS = new Map([
+  ["ownedSlots", { limit: 12, itemLimit: 20 }],
+  ["blockingSlots", { limit: 12, itemLimit: 20 }],
+  ["blockingWorkOrderIds", { limit: 5, itemLimit: 180 }],
+]);
+
+function sanitizeSchedulingDiagnosticFacts(rawFacts = {}) {
+  const facts = rawFacts && typeof rawFacts === "object" && !Array.isArray(rawFacts) ? rawFacts : {};
+  const sanitized = {};
+  for (const key of DIAGNOSTIC_BOOLEAN_FACTS) {
+    if (typeof facts[key] === "boolean") sanitized[key] = facts[key];
+  }
+  for (const key of DIAGNOSTIC_NUMBER_FACTS) {
+    const value = Number(facts[key]);
+    if (Number.isFinite(value)) sanitized[key] = Math.max(-100_000, Math.min(100_000, Math.round(value)));
+  }
+  for (const [key, limit] of DIAGNOSTIC_STRING_FACTS) {
+    const value = cleanText(facts[key], limit);
+    if (value) sanitized[key] = value;
+  }
+  for (const [key, policy] of DIAGNOSTIC_ARRAY_FACTS) {
+    if (!Array.isArray(facts[key])) continue;
+    const values = [...new Set(facts[key]
+      .map((value) => cleanText(value, policy.itemLimit))
+      .filter(Boolean))]
+      .slice(0, policy.limit);
+    if (values.length) sanitized[key] = values;
+  }
+  return sanitized;
+}
 
 // Scheduling owns operational capacity and van-allocation policy. The service
 // catalog contributes only the identity and duration of one service execution.
@@ -36,7 +105,7 @@ const DEFAULT_OPERATIONAL_RULES = Object.freeze({
     afternoonDifferentPropertyStops: 3,
     singlePropertyMainVanMaxUnits: 7,
     automaticSupportFromUnits: 8,
-    automaticSupportMaxUnits: 10,
+    automaticSupportMaxUnits: 0,
     supportHalfDayMaxUnits: 3,
   },
   customerCommunication: {
@@ -87,8 +156,8 @@ function normalizeOperationalRules(raw = {}) {
       automaticSupportMaxUnits: boundedInteger(
         standard.automaticSupportMaxUnits,
         DEFAULT_OPERATIONAL_RULES.standardService.automaticSupportMaxUnits,
-        2,
-        24,
+        0,
+        500,
       ),
       supportHalfDayMaxUnits: boundedInteger(
         standard.supportHalfDayMaxUnits,
@@ -107,10 +176,12 @@ function normalizeOperationalRules(raw = {}) {
     capacity.singlePropertyMainVanMaxUnits + 1,
     capacity.automaticSupportFromUnits,
   );
-  capacity.automaticSupportMaxUnits = Math.max(
-    capacity.automaticSupportFromUnits,
-    capacity.automaticSupportMaxUnits,
-  );
+  if (capacity.automaticSupportMaxUnits > 0) {
+    capacity.automaticSupportMaxUnits = Math.max(
+      capacity.automaticSupportFromUnits,
+      capacity.automaticSupportMaxUnits,
+    );
+  }
   return normalized;
 }
 
@@ -234,6 +305,24 @@ function primarySupportAllocationPlan(quantity, durationMinutesPerUnit, availabl
     Math.max(1, differentPropertyDailyMaxUnits),
     48,
   );
+  const automaticSupportFromUnits = boundedInteger(
+    capacity.automaticSupportFromUnits,
+    DEFAULT_OPERATIONAL_RULES.standardService.automaticSupportFromUnits,
+    primaryMaxUnits + 1,
+    500,
+  );
+  const automaticSupportMaxUnits = boundedInteger(
+    capacity.automaticSupportMaxUnits,
+    DEFAULT_OPERATIONAL_RULES.standardService.automaticSupportMaxUnits,
+    0,
+    500,
+  );
+  const supportHalfDayMaxUnits = boundedInteger(
+    capacity.supportHalfDayMaxUnits,
+    DEFAULT_OPERATIONAL_RULES.standardService.supportHalfDayMaxUnits,
+    1,
+    Math.max(1, primaryMaxUnits - 1),
+  );
   const totalDuration = durationForQuantity(quantity, durationMinutesPerUnit, "per_unit");
 
   if (quantity <= differentPropertyDailyMaxUnits) {
@@ -253,33 +342,43 @@ function primarySupportAllocationPlan(quantity, durationMinutesPerUnit, availabl
     }];
   }
 
-  if (availableVanCount < 2) return [];
-  const supportQuantity = quantity - primaryMaxUnits;
-  const supportDuration = durationForQuantity(supportQuantity, durationMinutesPerUnit, "per_unit");
-  const supportSlots = Math.ceil(supportDuration / 60);
-  const allowedTimes = supportStartTimes(supportSlots);
-  if (!supportQuantity || !allowedTimes.length) return [];
+  if (quantity < automaticSupportFromUnits) return [];
+  if (automaticSupportMaxUnits > 0 && quantity > automaticSupportMaxUnits) return [];
 
-  return [
-    {
-      quantity: primaryMaxUnits,
-      durationMinutes: durationForQuantity(primaryMaxUnits, durationMinutesPerUnit, "per_unit"),
-      slots: REGULAR_SLOTS.length,
-      fullDay: true,
-      role: "primary",
-      fixedTime: "08:30",
-      timePolicy: "fixed",
-    },
-    {
-      quantity: supportQuantity,
-      durationMinutes: supportDuration,
-      slots: supportSlots,
-      fullDay: false,
-      role: "support",
-      allowedTimes,
-      timePolicy: "allowed",
-    },
-  ];
+  const plan = [];
+  let remaining = quantity;
+  while (remaining > 0) {
+    const role = plan.length ? "support" : "primary";
+    const allocationQuantity = Math.min(primaryMaxUnits, remaining);
+    const allocationDuration = durationForQuantity(allocationQuantity, durationMinutesPerUnit, "per_unit");
+    const requiresFullDay = plan.length === 0 || allocationQuantity > supportHalfDayMaxUnits;
+    if (requiresFullDay) {
+      plan.push({
+        quantity: allocationQuantity,
+        durationMinutes: allocationDuration,
+        slots: REGULAR_SLOTS.length,
+        fullDay: true,
+        role,
+        fixedTime: "08:30",
+        timePolicy: "fixed",
+      });
+    } else {
+      const supportSlots = Math.ceil(allocationDuration / 60);
+      const allowedTimes = supportStartTimes(supportSlots);
+      if (!allowedTimes.length) return [];
+      plan.push({
+        quantity: allocationQuantity,
+        durationMinutes: allocationDuration,
+        slots: supportSlots,
+        fullDay: false,
+        role,
+        allowedTimes,
+        timePolicy: "allowed",
+      });
+    }
+    remaining -= allocationQuantity;
+  }
+  return plan.length <= availableVanCount ? plan : [];
 }
 
 function buildAllocationPlan(quantity, durationMinutesPerUnit, availableVanCount, preset, rawRules) {
@@ -422,6 +521,126 @@ function allocationPlanForScope(scope, availableVanCount, rawRules) {
   return allocation ? [allocation] : [];
 }
 
+function resolveSchedulingWorkload(request = {}, data = {}) {
+  const scope = resolveWorkScope(request, data);
+  const preset = scope.singlePreset || {
+    id: "multiple_services",
+    label: "Multiple services",
+    kind: "mixed_service",
+    durationMinutesPerUnit: scope.totalDurationMinutes,
+    durationMode: "mixed",
+    serviceId: "",
+    source: "scheduling_scope",
+    serviceDefinitionVersion: 0,
+  };
+  const operationalSettings = (data.businessSettings || []).find(
+    (item) => item.id === "company-operational-rules",
+  );
+  const operationalRules = normalizeOperationalRules(operationalSettings);
+  const allocations = allocationPlanForScope(
+    scope,
+    data.vans.length,
+    operationalRules,
+  );
+  return { scope, preset, operationalRules, allocations };
+}
+
+function resolvedWorkloadSummary({
+  scope,
+  allocations,
+  data,
+  requestedDate = "",
+  requestedTime = "",
+  requiredPrimaryVanId = "",
+}) {
+  const fallbackAllocation = {
+    role: "primary",
+    quantity: scope.totalQuantity,
+    durationMinutes: scope.totalDurationMinutes,
+    slots: Math.max(1, Math.ceil(scope.totalDurationMinutes / 60)),
+    fullDay: false,
+  };
+  const primary = allocations[0] || fallbackAllocation;
+  const targetVan = (data.vans || []).find((van) => van.id === requiredPrimaryVanId);
+  const halfDayRule = targetVan && requestedDate
+    ? halfDaySchedule(targetVan.id, requestedDate, data.vanHalfDaySchedules || [])
+    : null;
+  const halfDay = Boolean(halfDayRule);
+  const ownedSlots = requestedTime
+    ? capacityLockSlots({
+      time: requestedTime,
+      durationMinutes: primary.durationMinutes,
+      slots: primary.slots,
+      halfDay: halfDayRule || false,
+      fullDay: primary.fullDay,
+    })
+    : [];
+  const endTime = requestedTime
+    ? endTimeFromDuration(requestedTime, primary.durationMinutes)
+    : "";
+  const occupiedCapacityEndTime = endTimeFromOccupiedSlots(ownedSlots);
+  const capacityEndTime = [endTime, occupiedCapacityEndTime]
+    .filter(Boolean)
+    .sort()
+    .slice(-1)[0] || "";
+  const durationMode = scope.hasManualDuration
+    ? "manual"
+    : scope.singleType
+      ? scope.items[0]?.durationMode || "per_unit"
+      : "mixed";
+
+  return {
+    quantity: scope.totalQuantity,
+    durationMinutes: scope.totalDurationMinutes,
+    durationMode,
+    workItemCount: scope.workItems.length,
+    hasManualDuration: scope.hasManualDuration,
+    vansRequired: allocations.length || 1,
+    slots: Math.max(1, Math.round(Number(primary.slots) || Math.ceil(primary.durationMinutes / 60))),
+    ownedSlots,
+    endTime,
+    capacityEndTime,
+    halfDay,
+    allocations: (allocations.length ? allocations : [fallbackAllocation]).map((allocation) => ({
+      role: allocation.role || "primary",
+      quantity: allocation.quantity,
+      durationMinutes: allocation.durationMinutes,
+      slots: allocation.slots,
+      fullDay: allocation.fullDay === true,
+    })),
+  };
+}
+
+function buildExactTargetDiagnostic({
+  stage,
+  code,
+  requestedDate = "",
+  requestedTime = "",
+  requiredPrimaryVanId = "",
+  today = "",
+  currentTime = "",
+  resolvedWorkload,
+  facts = {},
+}) {
+  return {
+    version: SCHEDULING_DIAGNOSTIC_VERSION,
+    stage,
+    code,
+    requested: {
+      date: requestedDate,
+      time: requestedTime,
+      primaryVanId: requiredPrimaryVanId,
+    },
+    evaluated: {
+      date: today,
+      time: currentTime,
+      timeZone: ARUBA_TIME_ZONE,
+    },
+    resolvedWorkload,
+    facts: sanitizeSchedulingDiagnosticFacts(facts),
+  };
+}
+
 function parseStructuredTimeConstraint(constraints = {}) {
   const exact = normalizeTime(constraints.requestedTime || "");
   if (exact) return { kind: "exact", time: exact };
@@ -534,26 +753,25 @@ function assignmentCombinations({
   routeConfig,
   candidateZone,
   requiredPrimaryVanId,
+  onRejectedCandidate,
+  resultLimit = ASSIGNMENT_COMBINATION_LIMIT,
+  nodeLimit = ASSIGNMENT_SEARCH_NODE_LIMIT,
 }) {
   const results = [];
-
-  function visit(allocationIndex, remainingVans, selected) {
-    if (results.length >= ASSIGNMENT_COMBINATION_LIMIT) return;
-    if (allocationIndex >= allocations.length) {
-      results.push(selected);
-      return;
-    }
-
-    const allocation = allocations[allocationIndex];
+  let visitedNodes = 0;
+  const deadStates = new Set();
+  const candidatesByAllocation = allocations.map((allocation) => {
     const allowedTimes = candidateTimesForAllocation(allocation, primaryTime);
-    const vanPool = allocation.role === "primary" && requiredPrimaryVanId
-      ? remainingVans.filter(({ van }) => van.id === requiredPrimaryVanId)
-      : remainingVans;
+    const vanPool = requiredPrimaryVanId
+      ? allocation.role === "primary"
+        ? dateAssignments.filter(({ van }) => van.id === requiredPrimaryVanId)
+        : dateAssignments.filter(({ van }) => van.id !== requiredPrimaryVanId)
+      : dateAssignments;
     const candidates = [];
     for (const { van, assignment } of vanPool) {
       for (const allocationTime of allowedTimes) {
         if (!allocationTime) continue;
-        const candidate = candidateAvailability({
+        const evaluated = evaluateCandidateAvailability({
           date,
           time: allocationTime,
           allocation,
@@ -563,26 +781,63 @@ function assignmentCombinations({
           routeConfig,
           candidateZone,
         });
-        if (!candidate) continue;
+        if (!evaluated.available) {
+          if (typeof onRejectedCandidate === "function") {
+            onRejectedCandidate({ allocation, time: allocationTime, rejection: evaluated.rejection });
+          }
+          continue;
+        }
         candidates.push({
-          ...candidate,
+          ...evaluated.candidate,
           time: allocationTime,
-          endTime: candidate.endTime,
+          endTime: evaluated.candidate.endTime,
           role: allocation.role,
           block: blockForTime(allocationTime),
         });
       }
     }
+    return sortAllocationCandidates(candidates, allocation);
+  });
 
-    for (const candidate of sortAllocationCandidates(candidates, allocation)) {
-      const nextRemaining = remainingVans.filter((item) => item.van.id !== candidate.vanId);
-      visit(allocationIndex + 1, nextRemaining, [...selected, candidate]);
-      if (results.length >= ASSIGNMENT_COMBINATION_LIMIT) break;
+  function visit(allocationIndex, usedVanIds, selected) {
+    if (results.length >= resultLimit || visitedNodes >= nodeLimit) return;
+    visitedNodes += 1;
+    if (allocationIndex >= allocations.length) {
+      results.push(selected);
+      return;
     }
+    const stateKey = `${allocationIndex}|${[...usedVanIds].sort().join(",")}`;
+    if (deadStates.has(stateKey)) return;
+    const resultCountBefore = results.length;
+    for (const candidate of candidatesByAllocation[allocationIndex]) {
+      if (usedVanIds.has(candidate.vanId)) continue;
+      const nextUsedVanIds = new Set(usedVanIds);
+      nextUsedVanIds.add(candidate.vanId);
+      visit(allocationIndex + 1, nextUsedVanIds, [...selected, candidate]);
+      if (results.length >= resultLimit || visitedNodes >= nodeLimit) break;
+    }
+    if (results.length === resultCountBefore && visitedNodes < nodeLimit) deadStates.add(stateKey);
   }
 
-  visit(0, dateAssignments, []);
+  if (candidatesByAllocation.every((candidates) => candidates.length)) {
+    visit(0, new Set(), []);
+  }
   return results;
+}
+
+function withCapacityIndexes(data) {
+  const workOrdersByDateVan = new Map();
+  for (const order of data.workOrders || []) {
+    const key = `${order.date}|${order.vanId}`;
+    const bucket = workOrdersByDateVan.get(key) || [];
+    bucket.push(order);
+    workOrdersByDateVan.set(key, bucket);
+  }
+  return {
+    ...data,
+    workOrdersByDateVan,
+    propertyById: new Map((data.properties || []).map((property) => [property.id, property])),
+  };
 }
 
 function generateCanonicalOptions({
@@ -594,48 +849,115 @@ function generateCanonicalOptions({
   currentTime,
   requiredPrimaryVanId = "",
   requireRequestedTarget = false,
+  requestedDateGrid = false,
 }) {
-  const scope = resolveWorkScope(request, data);
-  const preset = scope.singlePreset || {
-    id: "multiple_services",
-    label: "Multiple services",
-    kind: "mixed_service",
-    durationMinutesPerUnit: scope.totalDurationMinutes,
-    durationMode: "mixed",
-    serviceId: "",
-    source: "scheduling_scope",
-    serviceDefinitionVersion: 0,
-  };
-  const operationalSettings = (data.businessSettings || []).find(
-    (item) => item.id === "company-operational-rules",
-  );
-  const operationalRules = normalizeOperationalRules(operationalSettings);
-  const allocations = allocationPlanForScope(
+  const {
     scope,
-    data.vans.length,
+    preset,
     operationalRules,
-  );
-  if (!allocations.length) {
-    return {
-      options: [],
-      preset,
-      quantity: scope.totalQuantity,
-      workItems: scope.workItems,
-      allocations,
-      operationalRules,
-      reason: scope.singleType ? "capacity" : "mixed-work-exceeds-single-van-capacity",
-    };
-  }
-
+    allocations,
+  } = resolveSchedulingWorkload(request, data);
+  const capacityData = withCapacityIndexes(data);
   const address = cleanText(property.address || property.addressRaw || property.addressNormalized, 500);
   const candidateZone = propertyZone(property, address, routeConfig);
   const requestedDate = requestedDateValue(request.constraints?.requestedDate);
+  const useRequestedDateGrid = Boolean(requestedDateGrid && requestedDate);
   const timeConstraint = parseStructuredTimeConstraint(request.constraints);
+  const requestedTime = timeConstraint.kind === "exact" ? timeConstraint.time : "";
   const largeSingleProperty = scope.singleType
     && isStandardServicePreset(preset)
     && scope.totalQuantity > operationalRules.standardService.differentPropertyDailyCapacity;
   const calendarSettings = (data.businessSettings || []).find((item) => item.id === "business-calendar")
     || { closedWeekdays: [0] };
+  const resolvedWorkload = resolvedWorkloadSummary({
+    scope,
+    allocations,
+    data,
+    requestedDate,
+    requestedTime,
+    requiredPrimaryVanId,
+  });
+  const exactRequestedTarget = Boolean(
+    requireRequestedTarget
+    && requestedDate
+    && requestedTime
+    && requiredPrimaryVanId,
+  );
+  const diagnosticStageOrder = new Map([
+    ["workload", 0],
+    ["fleet", 1],
+    ["calendar", 2],
+    ["temporal", 3],
+    ["crew", 4],
+    ["capacity", 5],
+    ["work-order", 6],
+    ["route", 7],
+  ]);
+  let diagnostic = null;
+  let diagnosticRank = Number.POSITIVE_INFINITY;
+  const recordDiagnostic = (stage, code, facts = {}) => {
+    if (!exactRequestedTarget) return;
+    const rank = diagnosticStageOrder.get(stage) ?? 99;
+    if (diagnostic && rank >= diagnosticRank) return;
+    diagnosticRank = rank;
+    diagnostic = buildExactTargetDiagnostic({
+      stage,
+      code,
+      requestedDate,
+      requestedTime,
+      requiredPrimaryVanId,
+      today,
+      currentTime,
+      resolvedWorkload,
+      facts,
+    });
+  };
+  const resultEnvelope = (options, reason, evaluatedOptions = options) => ({
+    options,
+    preset,
+    quantity: scope.totalQuantity,
+    workItems: scope.workItems,
+    allocations,
+    requestedDate,
+    requestedTime,
+    timeConstraint,
+    operationalRules,
+    largeSingleProperty,
+    requestedDateUnavailable: Boolean(
+      requestedDate && !evaluatedOptions.some((option) => option.date === requestedDate),
+    ),
+    requestedTimeUnavailable: Boolean(
+      requestedTime
+      && !evaluatedOptions.some((option) => option.date === (requestedDate || option.date) && option.time === requestedTime),
+    ),
+    candidateZone,
+    resolvedWorkload,
+    diagnostic,
+    reason,
+  });
+
+  if (exactRequestedTarget) {
+    const targetVan = data.vans.find((van) => van.id === requiredPrimaryVanId);
+    const requestedDayOffset = dateDistanceInDays(requestedDate, today);
+    if (!targetVan) {
+      recordDiagnostic("fleet", "required-van-unavailable", { vanPresent: false });
+    } else if (requestedDayOffset < 0 || (requestedDayOffset === 0 && requestedTime <= currentTime)) {
+      recordDiagnostic("temporal", "START_TIME_PASSED", { requestedDayOffset });
+    } else if (dateClosed(requestedDate, calendarSettings, data.calendarClosures || [])) {
+      recordDiagnostic("calendar", "requested-date-closed", {});
+    }
+  }
+
+  if (!allocations.length) {
+    if (!diagnostic) recordDiagnostic("workload", "workload-exceeds-scheduling-capacity", {});
+    return resultEnvelope(
+      [],
+      scope.singleType ? "capacity" : "mixed-work-exceeds-single-van-capacity",
+    );
+  }
+
+  if (diagnostic) return resultEnvelope([], "no-availability");
+
   const primaryAllocation = allocations[0];
   const primaryCandidateTimes = primaryAllocation.timePolicy === "fixed"
     ? [primaryAllocation.fixedTime]
@@ -643,10 +965,47 @@ function generateCanonicalOptions({
   const options = [];
   const workSignature = scope.workItems.map((item) => `${item.presetId}:${item.serviceId}:${item.quantity}:${item.durationMinutes}`).join("|");
 
-  for (let dayOffset = 0; dayOffset < MAX_SEARCH_DAYS; dayOffset += 1) {
-    const date = addDays(today, dayOffset);
-    if (requireRequestedTarget && requestedDate && date !== requestedDate) continue;
-    if (dateClosed(date, calendarSettings, data.calendarClosures)) continue;
+  if (exactRequestedTarget) {
+    const targetVan = data.vans.find((van) => van.id === requiredPrimaryVanId);
+    const assignment = resolveAssignment(
+      targetVan,
+      requestedDate,
+      data.staffProfiles,
+      data.dailyVanAssignments,
+      data.staffAbsences,
+    );
+    const evaluated = evaluateCandidateAvailability({
+      date: requestedDate,
+      time: requestedTime,
+      allocation: primaryAllocation,
+      van: targetVan,
+      assignment,
+      data: capacityData,
+      routeConfig,
+      candidateZone,
+    });
+    if (!evaluated.available) {
+      recordDiagnostic(
+        evaluated.rejection.stage,
+        evaluated.rejection.code,
+        {
+          ...evaluated.rejection.facts,
+          candidateVanId: evaluated.rejection.vanId,
+          candidateDate: evaluated.rejection.date,
+          candidateStart: evaluated.rejection.start,
+          allocationRole: primaryAllocation.role || "primary",
+        },
+      );
+      return resultEnvelope([], "no-availability");
+    }
+  }
+
+  const candidateDates = (requireRequestedTarget || useRequestedDateGrid) && requestedDate
+    ? [requestedDate]
+    : Array.from({ length: MAX_SEARCH_DAYS }, (_, dayOffset) => addDays(today, dayOffset));
+  for (const date of candidateDates) {
+    const dayOffset = Math.max(0, dateDistanceInDays(date, today));
+    if (dateClosed(date, calendarSettings, data.calendarClosures || [])) continue;
     const dateAssignments = data.vans.map((van) => ({
       van,
       assignment: resolveAssignment(
@@ -657,24 +1016,50 @@ function generateCanonicalOptions({
         data.staffAbsences,
       ),
     })).filter(({ van, assignment }) => vanCanReceiveAppointments(van, assignment));
-    if (dateAssignments.length < allocations.length) continue;
-    if (requiredPrimaryVanId && !dateAssignments.some(({ van }) => van.id === requiredPrimaryVanId)) continue;
+    if (dateAssignments.length < allocations.length) {
+      recordDiagnostic("fleet", "insufficient-operational-vans", {
+        operationalVanCount: dateAssignments.length,
+        vansRequired: allocations.length,
+      });
+      continue;
+    }
+    if (requiredPrimaryVanId && !dateAssignments.some(({ van }) => van.id === requiredPrimaryVanId)) {
+      recordDiagnostic("crew", "crew-unavailable", {});
+      continue;
+    }
 
     for (const primaryTime of primaryCandidateTimes) {
       if (!primaryTime) continue;
       if (date === today && primaryTime <= currentTime) continue;
       if (!timeAllowed(primaryTime, timeConstraint)) continue;
 
-      const combinations = assignmentCombinations({
+      const primaryVanTargets = useRequestedDateGrid && !requiredPrimaryVanId
+        ? dateAssignments.map(({ van }) => van.id)
+        : [requiredPrimaryVanId];
+      const combinations = primaryVanTargets.flatMap((primaryVanTarget) => assignmentCombinations({
         allocations,
         dateAssignments,
         date,
         primaryTime,
-        data,
+        data: capacityData,
         routeConfig,
         candidateZone,
-        requiredPrimaryVanId,
-      });
+        requiredPrimaryVanId: primaryVanTarget,
+        resultLimit: useRequestedDateGrid ? 1 : ASSIGNMENT_COMBINATION_LIMIT,
+        onRejectedCandidate: ({ allocation, rejection }) => {
+          recordDiagnostic(
+            rejection.stage,
+            rejection.code,
+            {
+              ...rejection.facts,
+              candidateVanId: rejection.vanId,
+              candidateDate: rejection.date,
+              candidateStart: rejection.start,
+              allocationRole: allocation.role || "primary",
+            },
+          );
+        },
+      }));
       for (const selected of combinations) {
         const primary = selected.find((item) => item.role === "primary") || selected[0];
         if (!primary) continue;
@@ -736,7 +1121,7 @@ function generateCanonicalOptions({
   const seen = new Set();
   for (const option of options) {
     const key = `${option.date}|${option.time}|${option.assignments
-      .map((item) => `${item.vanId}:${item.time}`).sort().join(",")}`;
+      .map((item) => `${item.role}:${item.vanId}:${item.time}`).sort().join(",")}`;
     if (seen.has(key)) continue;
     seen.add(key);
     unique.push(option);
@@ -748,51 +1133,50 @@ function generateCanonicalOptions({
       && (timeConstraint.kind !== "exact" || option.time === timeConstraint.time)
       && (!requiredPrimaryVanId || option.assignments?.[0]?.vanId === requiredPrimaryVanId)
     ))
-    : unique;
+    : useRequestedDateGrid
+      ? unique.filter((option) => option.date === requestedDate)
+      : unique;
   const clientOptions = requireRequestedTarget
     ? targetOptions.slice(0, OFFICE_TARGET_OPTION_LIMIT)
-    : selectClientOptions(targetOptions);
+    : useRequestedDateGrid
+      ? targetOptions.slice(0, REQUESTED_DATE_GRID_OPTION_LIMIT)
+      : selectClientOptions(targetOptions);
 
-  return {
-    options: clientOptions,
-    preset,
-    quantity: scope.totalQuantity,
-    workItems: scope.workItems,
-    allocations,
-    requestedDate,
-    requestedTime: timeConstraint.kind === "exact" ? timeConstraint.time : "",
-    timeConstraint,
-    operationalRules,
-    largeSingleProperty,
-    requestedDateUnavailable: Boolean(
-      requestedDate && !options.some((option) => option.date === requestedDate),
-    ),
-    requestedTimeUnavailable: Boolean(
-      timeConstraint.kind === "exact"
-      && !options.some(
-        (option) => option.date === (requestedDate || option.date) && option.time === timeConstraint.time,
-      )
-    ),
-    candidateZone,
-    reason: clientOptions.length ? "available" : "no-availability",
-  };
+  if (clientOptions.length) {
+    diagnostic = null;
+  } else if (!diagnostic) {
+    recordDiagnostic("capacity", "no-feasible-assignment-combination", {});
+  }
+  return resultEnvelope(
+    clientOptions,
+    clientOptions.length ? "available" : "no-availability",
+    options,
+  );
 }
 
 module.exports = {
   ASSIGNMENT_COMBINATION_LIMIT,
+  ASSIGNMENT_SEARCH_NODE_LIMIT,
   CANONICAL_SCHEDULING_ENGINE_VERSION,
+  REQUESTED_DATE_GRID_OPTION_LIMIT,
   CLIENT_OPTION_LIMIT,
   DEFAULT_OPERATIONAL_RULES,
   OFFICE_TARGET_OPTION_LIMIT,
+  SCHEDULING_DIAGNOSTIC_VERSION,
   allocationPlanForScope,
   assignmentCombinations,
+  buildExactTargetDiagnostic,
   buildAllocationPlan,
+  dateClosed,
   exactPreset,
   generateCanonicalOptions,
   isOtherPreset,
   normalizeOperationalRules,
   parseStructuredTimeConstraint,
   requestedDateValue,
+  sanitizeSchedulingDiagnosticFacts,
+  resolvedWorkloadSummary,
+  resolveSchedulingWorkload,
   resolveWorkScope,
   selectClientOptions,
   serviceIdForRequest,

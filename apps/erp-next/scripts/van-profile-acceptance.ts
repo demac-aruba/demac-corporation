@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { canonicalVanId, type CanonicalDailyVanAssignment, type CanonicalStaffProfile, type CanonicalVan } from '../lib/canonical-operations';
+import { canonicalCrewReadinessRoster, canonicalVanId, type CanonicalDailyVanAssignment, type CanonicalOperationsState, type CanonicalStaffProfile, type CanonicalVan } from '../lib/canonical-operations';
 import { buildVanSaveRecord, nextCanonicalVanId, validateDailyVanAssignment, validateVanCrew, workedMinutes } from '../lib/van-profile';
 
 const driver: CanonicalStaffProfile = { id: 'staff-driver', name: 'Driver', employeeType: 'Técnico', role: 'Técnico responsable', canDriveVan: true, active: true };
@@ -14,9 +14,12 @@ const historicalVans: CanonicalVan[] = [
   { id: 'VAN-1783801335937', name: 'Van 1', plate: 'A-58347' },
   { id: 'VAN-1783801335938', name: 'Van 3', plate: 'A-59742' },
 ];
-assert.equal(canonicalVanId(historicalVans[0].id, historicalVans), 'VAN-2', 'A legacy Firestore document ID must resolve through the Van name instead of masquerading as the scheduling lane.');
+assert.equal(canonicalVanId(historicalVans[0].id, historicalVans), 'VAN-2', 'A known legacy Firestore document ID must resolve through the explicit migration registry.');
 assert.equal(canonicalVanId('VAN-2', historicalVans), 'VAN-2', 'Direct canonical references must continue to resolve unchanged for WhatsApp and Scheduling lookups.');
 assert.equal(canonicalVanId('VAN-5', [...historicalVans, { id: 'VAN-5', name: 'Van 5' }]), 'VAN-5', 'Future canonical Van IDs must remain supported.');
+assert.equal(canonicalVanId(historicalVans[0].id, [{ ...historicalVans[0], name: 'West Team' }]), 'VAN-2', 'Renaming a legacy Van display name must not change its explicit identity alias.');
+const collisionFleet: CanonicalVan[] = [{ id: 'RESOURCE-ALPHA', name: 'Van 5' }, { id: 'VAN-5', name: 'West Team' }];
+assert.deepEqual(collisionFleet.map((van) => canonicalVanId(van.id, collisionFleet)), ['RESOURCE-ALPHA', 'VAN-5'], 'An opaque master-data ID named Van 5 must not collide with the real VAN-5 record.');
 const historicalOrder = [...historicalVans]
   .sort((a, b) => canonicalVanId(a.id, historicalVans).localeCompare(canonicalVanId(b.id, historicalVans), undefined, { numeric: true }))
   .map((van) => canonicalVanId(van.id, historicalVans));
@@ -44,14 +47,24 @@ assert.throws(
   /requires a responsible technician/i,
   'An available protected-fleet Van cannot create booking capacity without a driver.',
 );
+const futureVan: CanonicalVan = {
+  id: 'VAN-FUTURE-TEST-947',
+  name: 'Future Test Field Van',
+  status: 'Disponible',
+  responsibleStaffId: driver.id,
+  regularHelperId: helper.id,
+  active: true,
+};
+assert.equal(validateVanCrew(futureVan, staff), true, 'An opaque future Van from master data may become live capacity when its crew is valid.');
+assert.equal(buildVanSaveRecord(futureVan, staff, '2026-09-01T12:00:00.000Z').id, futureVan.id, 'Saving a future Van must preserve its opaque canonical ID.');
 assert.throws(
-  () => validateVanCrew({ id: 'VAN-5', name: 'Van 5', status: 'Disponible', responsibleStaffId: driver.id, regularHelperId: helper.id, active: true }, staff),
-  /Booking Authority currently supports live capacity only for VAN-1 through VAN-4/i,
-  'A future Van may be fully configured but cannot become live scheduling capacity until Booking Authority is explicitly expanded.',
+  () => validateVanCrew({ ...futureVan, regularHelperId: undefined }, staff),
+  /requires a regular helper/i,
+  'A future Van must satisfy the same live-capacity crew invariant as every existing Van.',
 );
 
 const ids: CanonicalVan[] = [
-  { id: 'VAN-1', name: 'Van 1' }, { id: 'VAN-2', name: 'Van 2' }, { id: 'legacy-v3', name: 'Van 3' }, { id: 'VAN-4', name: 'Van 4' },
+  { id: 'VAN-1', name: 'Van 99 display rename' }, { id: 'VAN-2', name: 'Van 2' }, { id: 'v3', name: 'Van 3 legacy duplicate' }, { id: 'VAN-4', name: 'Van 4' },
 ];
 assert.equal(nextCanonicalVanId(ids), 'VAN-5', 'Add Van must use the next canonical numeric Van ID.');
 const vanTwo: CanonicalVan = { id: 'VAN-2', name: 'Van 2', status: 'Disponible', responsibleStaffId: otherDriver.id, regularHelperId: third.id, active: true };
@@ -92,8 +105,28 @@ assert.equal(
   'A cancelled override must preserve its audit record without continuing to reserve that employee on the original date.',
 );
 
+const readinessDate = '2026-09-02';
+const readinessState: CanonicalOperationsState = {
+  staffProfiles: [
+    { ...driver, skills: ['Service'], skillsVerified: true, updatedAt: '2026-09-01T12:00:00.000Z' },
+    { ...helper, skills: ['Service'], skillsVerified: true, updatedAt: '2026-09-01T12:00:00.000Z' },
+    { ...otherDriver, skills: ['Service'], skillsVerified: true, updatedAt: '2026-09-01T12:00:00.000Z' },
+  ],
+  vans: [{ id: 'RESOURCE-FIELD-ALPHA', name: 'Van 5', active: true, responsibleStaffId: driver.id, regularHelperId: helper.id }],
+  dailyVanAssignments: [{ id: 'daily-alpha', date: readinessDate, vanId: 'RESOURCE-FIELD-ALPHA', driverStaffId: otherDriver.id, helperStaffId: helper.id }],
+  vanMaintenanceLogs: [],
+  staffAbsences: [{ id: 'absence-helper', staffId: helper.id, fromDate: readinessDate, toDate: readinessDate, active: true }],
+  vanHalfDaySchedules: [],
+  calendarClosures: [],
+  businessCalendar: { id: 'business-calendar', closedWeekdays: [0] },
+};
+const readinessRoster = canonicalCrewReadinessRoster(readinessState, readinessDate);
+assert.equal(readinessRoster.some((employee) => employee.id === otherDriver.id && employee.vanId === 'RESOURCE-FIELD-ALPHA' && employee.active), true, 'Dispatch roster must resolve the dated driver override for an opaque Van ID.');
+assert.equal(readinessRoster.some((employee) => employee.id === driver.id), false, 'The regular driver must not leak into a date with an explicit replacement.');
+assert.equal(readinessRoster.find((employee) => employee.id === helper.id)?.active, false, 'A dated canonical absence must make the resolved helper inactive for readiness.');
+
 assert.equal(workedMinutes('08:00', '13:00'), 300, 'Van partial day 08:00–13:00 must resolve to exactly five worked hours.');
 assert.equal(workedMinutes('09:00', '13:00'), 240, 'Van partial day may use exact custom worked hours.');
 assert.throws(() => workedMinutes('13:00', '09:00'), /after start time/i, 'Invalid partial-day windows must be rejected.');
 
-console.log('Van profile acceptance passed: legacy Van IDs resolve to canonical lanes, Vans sort naturally, WhatsApp/Scheduling direct lane references remain stable, canonical crew ownership, optional third helper, cross-Van exclusivity, daily overrides, cancelled-override recovery, safe clearing, protected future-Van activation, new-Van defaults and exact partial-day hours.');
+console.log('Van profile acceptance passed: explicit legacy Van aliases, opaque/display-rename identity stability, date-aware canonical readiness roster, canonical crew ownership, optional third helper, cross-Van exclusivity, daily overrides, cancelled-override recovery, safe clearing, dynamic future-Van activation, new-Van defaults and exact partial-day hours.');

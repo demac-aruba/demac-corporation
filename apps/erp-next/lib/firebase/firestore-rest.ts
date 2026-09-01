@@ -179,6 +179,62 @@ export async function queryFirestoreCollectionDateRange<T extends { id: string }
   return rows.flatMap((row) => row.document ? [decodeDocument<T>(row.document)] : []);
 }
 
+export type FirestoreOverlapDateRangeArgs = {
+  collectionId: string;
+  startFieldPath: string;
+  endFieldPath: string;
+  startInclusive: string;
+  endInclusive: string;
+};
+
+export function buildFirestoreOverlapDateRangeQuery(args: FirestoreOverlapDateRangeArgs) {
+  return {
+    from: [{ collectionId: args.collectionId }],
+    where: {
+      compositeFilter: {
+        op: 'AND',
+        filters: [
+          {
+            fieldFilter: {
+              field: { fieldPath: args.startFieldPath },
+              op: 'LESS_THAN_OR_EQUAL',
+              value: { stringValue: args.endInclusive },
+            },
+          },
+          {
+            fieldFilter: {
+              field: { fieldPath: args.endFieldPath },
+              op: 'GREATER_THAN_OR_EQUAL',
+              value: { stringValue: args.startInclusive },
+            },
+          },
+        ],
+      },
+    },
+    orderBy: [
+      { field: { fieldPath: args.startFieldPath }, direction: 'ASCENDING' },
+      { field: { fieldPath: args.endFieldPath }, direction: 'ASCENDING' },
+    ],
+  };
+}
+
+/**
+ * Reads only records whose inclusive date ranges intersect the requested window.
+ * There is intentionally no result limit: unlike a capped global collection list,
+ * every operational exception relevant to the requested scheduling window is read.
+ */
+export async function queryFirestoreCollectionOverlappingDateRange<T extends { id: string }>(
+  args: FirestoreOverlapDateRangeArgs,
+): Promise<T[]> {
+  const response = await authenticatedFetch(`${baseUrl()}:runQuery`, {
+    method: 'POST',
+    body: JSON.stringify({ structuredQuery: buildFirestoreOverlapDateRangeQuery(args) }),
+  });
+  if (!response.ok) throw new Error(await readError(response, `Unable to query overlapping ${args.collectionId} ranges.`));
+  const rows = await response.json() as FirestoreRunQueryRow[];
+  return rows.flatMap((row) => row.document ? [decodeDocument<T>(row.document)] : []);
+}
+
 export async function saveFirestoreDocument<T extends { id: string }>(collectionPath: string, document: T): Promise<T> {
   const { id, ...data } = document;
   const response = await authenticatedFetch(`${baseUrl()}/${collectionPath}/${encodeURIComponent(id)}`, {

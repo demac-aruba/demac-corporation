@@ -6,6 +6,7 @@ const {
   SCHEDULING_PROVIDER_VERSION,
   buildCapacityLocks,
   buildWorkOrders,
+  createSchedulingProvider,
   exactCustomerProperty,
   explicitOfficeRoutePolicy,
   operationalMoveDateAllowed,
@@ -65,8 +66,17 @@ function operationalData(overrides = {}) {
     services: [{ id: "s1", name: "Servicio estándar", durationMinutes: 60 }],
     properties: [{ id: "p1", clientId: "c1", address: "Wayaca 217", operationalZone: "Oranjestad" }],
     clients: [{ id: "c1", name: "Test Customer" }],
-    vans: [{ id: "VAN-2", name: "Van 2", active: true }],
-    staffProfiles: [],
+    vans: [{
+      id: "VAN-2",
+      name: "Van 2",
+      active: true,
+      responsibleStaffId: "driver-2",
+      regularHelperId: "helper-2",
+    }],
+    staffProfiles: [
+      { id: "driver-2", active: true, availability: "Disponible", canDriveVan: true },
+      { id: "helper-2", active: true, availability: "Disponible" },
+    ],
     dailyVanAssignments: [],
     staffAbsences: [],
     calendarClosures: [],
@@ -81,12 +91,176 @@ function operationalData(overrides = {}) {
 
 const currentSchedule = { date: "2098-12-20", time: "08:30" };
 
-test("provider exposes canonical provider v13", () => {
-  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v13");
+function readOnlyProviderDb(collections = {}) {
+  class Query {
+    constructor(items, filters = []) {
+      this.items = items;
+      this.filters = filters;
+    }
+
+    where(field, operator, expected) {
+      return new Query(this.items, [...this.filters, { field, operator, expected }]);
+    }
+
+    doc(id) {
+      const item = this.items.find((candidate) => candidate.id === id);
+      return {
+        id,
+        async get() {
+          return {
+            id,
+            exists: Boolean(item),
+            data: () => item ? { ...item } : undefined,
+          };
+        },
+      };
+    }
+
+    async get() {
+      const items = this.items.filter((item) => this.filters.every(({ field, operator, expected }) => {
+        if (operator === ">=") return item[field] >= expected;
+        if (operator === "<=") return item[field] <= expected;
+        if (operator === "==") return item[field] === expected;
+        return false;
+      }));
+      return {
+        docs: items.map((item) => ({
+          id: item.id,
+          data: () => ({ ...item }),
+        })),
+      };
+    }
+  }
+
+  return {
+    collection(name) {
+      return new Query(collections[name] || []);
+    },
+  };
+}
+
+function exactOtherProviderFixture() {
+  const service = {
+    id: "s-other",
+    name: "Other",
+    itemType: "Servicio",
+    active: true,
+    durationMinutes: 60,
+    serviceDefinition: {
+      version: 1,
+      bookingCode: "other",
+      duration: { minutes: 60 },
+    },
+  };
+  const db = readOnlyProviderDb({
+    workOrders: [],
+    services: [service],
+    properties: [{ id: "p1", clientId: "c1", address: "Wayaca 217", operationalZone: "Oranjestad" }],
+    clients: [{ id: "c1", name: "Test Customer" }],
+    vans: [{
+      id: "VAN-4",
+      name: "Van 4",
+      active: true,
+      responsibleStaffId: "driver-4",
+      regularHelperId: "helper-4",
+    }],
+    staffProfiles: [
+      { id: "driver-4", active: true, availability: "Disponible", canDriveVan: true },
+      { id: "helper-4", active: true, availability: "Disponible" },
+    ],
+    dailyVanAssignments: [],
+    staffAbsences: [],
+    calendarClosures: [],
+    businessSettings: [{ id: "business-calendar", closedWeekdays: [0] }],
+    vanHalfDaySchedules: [],
+  });
+  return {
+    provider: createSchedulingProvider({ db }),
+    request: {
+      customerId: "c1",
+      propertyId: "p1",
+      workLines: [{
+        id: "other-work",
+        presetId: "other",
+        serviceId: "s-other",
+        quantity: 1,
+        manualDurationMinutes: 180,
+      }],
+      constraints: { requestedDate: "2026-09-01", requestedTime: "08:30" },
+    },
+  };
+}
+
+test("provider exposes canonical provider v16", () => {
+  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v16");
 });
 
 test("canonical scheduling engine is versioned independently", () => {
-  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 8);
+  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 11);
+});
+
+test("provider preserves the public exact-target reason and adds non-PII temporal metadata", async () => {
+  const { provider, request: exactRequest } = exactOtherProviderFixture();
+  const result = await provider.checkAvailability({
+    request: exactRequest,
+    context: { channel: "office", requiredPrimaryVanId: "VAN-4" },
+    now: new Date("2026-09-01T13:05:30.000Z"),
+  });
+
+  assert.deepEqual(result.options, []);
+  assert.equal(result.reason, "required-primary-target-unavailable");
+  assert.equal(result.providerVersion, "erp-booking-scheduling-provider-v16");
+  assert.equal(result.engineVersion, 11);
+  assert.equal(result.metadata.routePolicy, "advisory");
+  assert.equal(result.metadata.diagnostic.stage, "temporal");
+  assert.equal(result.metadata.diagnostic.code, "START_TIME_PASSED");
+  assert.deepEqual(result.metadata.diagnostic.requested, {
+    date: "2026-09-01",
+    time: "08:30",
+    primaryVanId: "VAN-4",
+  });
+  assert.deepEqual(result.metadata.diagnostic.evaluated, {
+    date: "2026-09-01",
+    time: "09:05",
+    timeZone: "America/Aruba",
+  });
+  assert.equal(result.metadata.resolvedWorkload.durationMinutes, 180);
+  assert.equal(result.metadata.resolvedWorkload.slots, 3);
+  assert.deepEqual(result.metadata.resolvedWorkload.ownedSlots, ["08:30", "09:30", "10:30"]);
+  assert.equal(JSON.stringify(result.metadata).includes("c1"), false);
+  assert.equal(JSON.stringify(result.metadata).includes("p1"), false);
+});
+
+test("requested-date grid returns representative options for every eligible primary Van", async () => {
+  const collections = operationalData();
+  collections.vans = Array.from({ length: 5 }, (_, index) => ({
+    id: `opaque-grid-van-${index}`,
+    name: `Configured Van ${index + 1}`,
+    active: true,
+    responsibleStaffId: `grid-driver-${index}`,
+    regularHelperId: `grid-helper-${index}`,
+  }));
+  collections.staffProfiles = collections.vans.flatMap((van) => [
+    { id: van.responsibleStaffId, active: true, availability: "Disponible", canDriveVan: true },
+    { id: van.regularHelperId, active: true, availability: "Disponible" },
+  ]);
+  const provider = createSchedulingProvider({ db: readOnlyProviderDb(collections) });
+  const gridRequest = {
+    ...request(),
+    constraints: { requestedDate: "2098-12-22", requestedTime: "" },
+  };
+  const result = await provider.checkAvailability({
+    request: gridRequest,
+    context: { channel: "office", availabilityMode: "requested_date_grid" },
+    now: new Date("2098-12-21T11:00:00.000Z"),
+  });
+  assert.equal(result.reason, "available");
+  assert.equal(result.metadata.availabilityMode, "requested_date_grid");
+  assert.equal(result.options.every((candidate) => candidate.date === "2098-12-22"), true);
+  assert.deepEqual(
+    new Set(result.options.map((candidate) => candidate.assignments[0]?.vanId)),
+    new Set(collections.vans.map((van) => van.id)),
+  );
 });
 
 test("explicit office van/date/time selection makes routing advisory only", () => {
@@ -105,7 +279,7 @@ test("explicit office van/date/time selection makes routing advisory only", () =
   assert.equal(explicitOfficeRoutePolicy({
     context: { channel: "office", changeKind: "operational_move", requiredPrimaryVanId: "VAN-2" },
     request: exactRequest,
-  }), "enforced");
+  }), "advisory");
 });
 
 test("explicit office policy survives confirm-time revalidation through option intent", () => {
@@ -135,7 +309,7 @@ test("provider verifies the exact ERP customer/property relationship", () => {
   );
 });
 
-test("capacity locks preserve owned slot count independently from continuous elapsed time", () => {
+test("capacity locks follow the authoritative continuous interval across lunch", () => {
   const locks = buildCapacityLocks(option(), []);
   assert.equal(locks.length, 2);
   assert.deepEqual(locks.map((item) => item.slot), ["13:30", "14:30"]);
@@ -153,10 +327,10 @@ test("capacity locks preserve owned slot count independently from continuous ela
     }],
   };
   const lunchLocks = buildCapacityLocks(lunchSpanning, []);
-  assert.deepEqual(lunchLocks.map((item) => item.slot), ["10:30", "13:30", "14:30"]);
+  assert.deepEqual(lunchLocks.map((item) => item.slot), ["10:30"]);
 });
 
-test("six-service allocation locks the complete normal Van day without full-day timing metadata", () => {
+test("a non-full-day six-hour allocation releases starts at its real 14:30 end", () => {
   const sixServices = {
     ...option(),
     time: "08:30",
@@ -172,7 +346,7 @@ test("six-service allocation locks the complete normal Van day without full-day 
   };
   assert.deepEqual(
     buildCapacityLocks(sixServices, []).map((item) => item.slot),
-    ["08:30", "09:30", "10:30", "13:30", "14:30", "15:30"],
+    ["08:30", "09:30", "10:30", "13:30"],
   );
 });
 
@@ -264,8 +438,11 @@ test("mixed work remains one appointment Work Order with every selected line", (
   assert.match(orders[0].problem, /Standard Installation × 1/);
 });
 
-test("manual operator drag can place work on an active van before a driver is assigned", () => {
-  const data = operationalData();
+test("manual operator drag fails closed before an eligible driver is assigned", () => {
+  const data = operationalData({
+    vans: [{ id: "VAN-2", name: "Van 2", active: true }],
+    staffProfiles: [],
+  });
   const result = operationalMoveResult({
     request: request(),
     property: data.properties[0],
@@ -276,10 +453,8 @@ test("manual operator drag can place work on an active van before a driver is as
     vanId: "VAN-2",
     currentSchedule,
   });
-  assert.equal(result.reason, "available");
-  assert.equal(result.option.assignments[0].vanId, "VAN-2");
-  assert.equal(result.option.assignments[0].technicianIds.length, 0);
-  assert.equal(result.option.time, "13:30");
+  assert.equal(result.option, null);
+  assert.equal(result.reason, "operational-target-unavailable");
 });
 
 test("manual operational drag may change to any physically valid time on the canonical appointment date", () => {
@@ -320,7 +495,7 @@ test("manual operational drag cannot silently move an appointment to a different
   assert.equal(result.reason, "operational-move-date-mismatch");
 });
 
-test("manual operator drag ignores legacy unlinked work orders that are not visible in LIVE Booking Authority schedule", () => {
+test("manual operator drag fails closed on active unlinked work orders", () => {
   const data = operationalData({
     workOrders: [{
       id: "WO-LEGACY",
@@ -343,8 +518,8 @@ test("manual operator drag ignores legacy unlinked work orders that are not visi
     vanId: "VAN-2",
     currentSchedule,
   });
-  assert.equal(result.reason, "available");
-  assert.equal(result.option.assignments[0].vanId, "VAN-2");
+  assert.equal(result.option, null);
+  assert.equal(result.reason, "operational-target-unavailable");
 });
 
 test("manual operator drag still refuses a real canonical occupied-capacity conflict", () => {
@@ -391,4 +566,50 @@ test("manual operator drag refuses a van that is actually out of service or in m
   });
   assert.equal(result.option, null);
   assert.equal(result.reason, "operational-target-unavailable");
+});
+
+test("transaction validation rereads canonical gating state and rejects a newly maintained Van", async () => {
+  const collections = operationalData();
+  const db = readOnlyProviderDb(collections);
+  const provider = createSchedulingProvider({ db });
+  const selected = {
+    ...option(),
+    requestedDateMatch: true,
+    requestedTimeMatch: true,
+    assignments: [{
+      ...option().assignments[0],
+      vanId: "VAN-2",
+      vanName: "Van 2",
+    }],
+  };
+  const context = { channel: "office", requiredPrimaryVanId: "VAN-2" };
+  const before = await provider.revalidateSelection({
+    request: request(),
+    option: selected,
+    context,
+    now: new Date("2098-12-19T12:00:00.000Z"),
+  });
+  assert.equal(before.available, true);
+
+  collections.dailyVanAssignments.push({
+    id: "2098-12-20-VAN-2",
+    date: "2098-12-20",
+    vanId: "VAN-2",
+    status: "Mantenimiento",
+    driverStaffId: "driver-2",
+    helperStaffId: "helper-2",
+  });
+  const transaction = { get: (reference) => reference.get() };
+  const atCommit = await provider.validateTransaction({
+    transaction,
+    db,
+    request: request(),
+    option: selected,
+    appointmentId: "APT-NEW",
+    context,
+    now: new Date("2098-12-19T12:01:00.000Z"),
+  });
+  assert.equal(atCommit.available, false);
+  assert.equal(atCommit.reason, "van-unavailable");
+  assert.equal(atCommit.rejection.stage, "fleet");
 });

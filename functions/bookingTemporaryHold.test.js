@@ -24,8 +24,7 @@ class FakeDocRef {
   key() { return `${this.collectionName}/${this.id}`; }
   async get() { return new FakeSnapshot(this.id, this.db.store.get(this.key())); }
   async set(value, options) {
-    const current = this.db.store.get(this.key());
-    this.db.store.set(this.key(), options?.merge ? { ...(current || {}), ...value } : value);
+    this.db.write(this.key(), value, options);
   }
 }
 
@@ -35,24 +34,76 @@ class FakeCollectionRef {
 }
 
 class FakeTransaction {
-  constructor(db) { this.db = db; this.writes = []; }
-  async get(ref) { return ref.get(); }
-  set(ref, value, options) { this.writes.push({ ref, value, options }); }
-  async commit() {
-    for (const write of this.writes) await write.ref.set(write.value, write.options);
+  constructor(db) { this.db = db; this.writes = []; this.readVersions = new Map(); }
+  async get(ref) {
+    const key = ref.key();
+    if (!this.readVersions.has(key)) this.readVersions.set(key, this.db.version(key));
+    return new FakeSnapshot(ref.id, this.db.store.get(key));
   }
+  set(ref, value, options) { this.writes.push({ ref, value, options }); }
+  commit() { return this.db.commit(this); }
 }
 
 class FakeFirestore {
-  constructor(seed = {}) { this.store = new Map(Object.entries(seed)); }
+  constructor(seed = {}) {
+    this.store = new Map(Object.entries(seed));
+    this.versions = new Map([...this.store.keys()].map((key) => [key, 1]));
+    this.commitTail = Promise.resolve();
+    this.transactionAttempts = 0;
+    this.transactionConflicts = 0;
+  }
   collection(name) { return new FakeCollectionRef(this, name); }
+  version(path) { return this.versions.get(path) || 0; }
+  write(path, value, options) {
+    const current = this.store.get(path);
+    this.store.set(path, options?.merge ? { ...(current || {}), ...value } : value);
+    this.versions.set(path, this.version(path) + 1);
+  }
+  async commit(transaction) {
+    const previous = this.commitTail;
+    let release;
+    this.commitTail = new Promise((resolve) => { release = resolve; });
+    await previous;
+    try {
+      for (const [path, version] of transaction.readVersions) {
+        if (this.version(path) !== version) {
+          const conflict = new Error("transaction-conflict");
+          conflict.retryableTransactionConflict = true;
+          throw conflict;
+        }
+      }
+      for (const { ref, value, options } of transaction.writes) this.write(ref.key(), value, options);
+    } finally {
+      release();
+    }
+  }
   async runTransaction(callback) {
-    const transaction = new FakeTransaction(this);
-    const result = await callback(transaction);
-    await transaction.commit();
-    return result;
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      this.transactionAttempts += 1;
+      const transaction = new FakeTransaction(this);
+      try {
+        const result = await callback(transaction);
+        await transaction.commit();
+        return result;
+      } catch (error) {
+        if (!error?.retryableTransactionConflict || attempt === 5) throw error;
+        this.transactionConflicts += 1;
+      }
+    }
+    throw new Error("transaction retry limit exceeded");
   }
   read(path) { return this.store.get(path); }
+}
+
+function overlapGate(parties = 2) {
+  let arrivals = 0;
+  let release;
+  const ready = new Promise((resolve) => { release = resolve; });
+  return async () => {
+    arrivals += 1;
+    if (arrivals >= parties) release();
+    await ready;
+  };
 }
 
 function request() {
@@ -103,7 +154,7 @@ function option() {
   };
 }
 
-function fixture() {
+function fixture(providerOverrides = {}) {
   const db = new FakeFirestore({
     "clients/client-1": { name: "Richard", phone: "+2975600000" },
     "properties/property-1": { clientId: "client-1", address: "Wayaca 217", operationalZone: "Oranjestad" },
@@ -117,6 +168,7 @@ function fixture() {
       capacityLocks: [{ id: "lock-v2-1330", date: selected.date, vanId: "VAN-2", slot: "13:30" }],
     }),
     buildWorkOrders,
+    ...providerOverrides,
   };
   const authority = createBookingAuthority({
     db,
@@ -193,4 +245,49 @@ test("temporary hold creation is idempotent and never duplicates capacity or wor
   assert.equal([...db.store.keys()].filter((path) => path.startsWith("appointments/")).length, 1);
   assert.equal([...db.store.keys()].filter((path) => path.startsWith("workOrders/")).length, 1);
   assert.equal([...db.store.keys()].filter((path) => path.startsWith("bookingCapacityLocks/")).length, 1);
+});
+
+test("overlapping hold submits retry transactionally and create one hold, Work Order and lock set", async () => {
+  const gate = overlapGate(2);
+  let transactionValidations = 0;
+  const { authority, db } = fixture({
+    validateTransaction: async () => {
+      transactionValidations += 1;
+      await gate();
+      return {
+        available: true,
+        capacityLocks: [{ id: "lock-v2-1330", date: "2098-12-20", vanId: "VAN-2", slot: "13:30" }],
+      };
+    },
+  });
+  const availability = await authority.checkAvailability({
+    request: request(),
+    context: { requestKey: "office-hold-concurrent" },
+  });
+  const input = {
+    offerId: availability.offer.id,
+    offerVersion: availability.offer.version,
+    optionId: "opt-hold-1",
+    idempotencyKey: "office-user:hold:create:concurrent",
+    createMode: BOOKING_CREATE_MODES.TEMPORARY_HOLD,
+  };
+
+  const results = await Promise.all([
+    authority.createAppointment(input),
+    authority.createAppointment(input),
+  ]);
+
+  assert.deepEqual(results.map((result) => result.replayed).sort(), [false, true]);
+  assert.equal(new Set(results.map((result) => result.appointmentId)).size, 1);
+  assert.equal(transactionValidations, 2);
+  assert.equal(db.transactionConflicts, 1);
+  assert.equal(db.transactionAttempts, 3);
+  assert.equal([...db.store.keys()].filter((path) => path.startsWith("appointments/")).length, 1);
+  assert.equal([...db.store.keys()].filter((path) => path.startsWith("workOrders/")).length, 1);
+  assert.equal([...db.store.keys()].filter((path) => path.startsWith("bookingCapacityLocks/")).length, 1);
+  assert.equal([...db.store.keys()].filter((path) => path.startsWith("bookingIdempotency/")).length, 1);
+  const appointment = db.read(`appointments/${results[0].appointmentId}`);
+  assert.equal(appointment.status, BOOKING_CREATE_MODES.TEMPORARY_HOLD);
+  assert.deepEqual(appointment.capacityLockIds, ["lock-v2-1330"]);
+  assert.equal(db.read("bookingCapacityLocks/lock-v2-1330").appointmentId, results[0].appointmentId);
 });

@@ -72,10 +72,22 @@ export type OfficeBookingOption = {
   }>;
 };
 
+export type OfficeBookingOffer = {
+  id: string;
+  version: number;
+  status: string;
+  expiresAt?: string;
+  requestFingerprint?: string;
+  providerVersion?: string;
+  createdAtIso?: string;
+  updatedAtIso?: string;
+  metadata?: Record<string, unknown>;
+};
+
 export type OfficeAvailabilityResult = {
   success: boolean;
   available: boolean;
-  offer: { id: string; version: number; status: string; expiresAt?: string } | null;
+  offer: OfficeBookingOffer | null;
   options: OfficeBookingOption[];
   reason?: string;
   metadata?: Record<string, unknown>;
@@ -260,6 +272,23 @@ export type OfficeContactChanges = Partial<Pick<OfficeContactRecord,
 >>;
 
 type ApiError = { error?: { code?: string; message?: string; details?: Record<string, unknown> } };
+export type OfficeBookingRequestOptions = { signal?: AbortSignal };
+
+export class OfficeBookingAuthorityError extends Error {
+  readonly code?: string;
+  readonly details: Record<string, unknown>;
+  readonly reason?: string;
+
+  constructor(message: string, code?: string, details: Record<string, unknown> = {}) {
+    super(message);
+    this.name = 'OfficeBookingAuthorityError';
+    this.code = code;
+    this.details = details;
+    const reason = details.reason;
+    this.reason = typeof reason === 'string' && reason.trim() ? reason.trim() : undefined;
+  }
+}
+
 type PresetResponse = {
   success: true;
   version: number;
@@ -280,10 +309,22 @@ function apiErrorDetail(payload: ApiError) {
   return typeof reason === 'string' && reason.trim() ? ` · ${reason.trim()}` : '';
 }
 
-async function callOfficeBookingAuthority<T>(action: string, data: Record<string, unknown>, timeoutMs = 15_000): Promise<T> {
+async function callOfficeBookingAuthority<T>(
+  action: string,
+  data: Record<string, unknown>,
+  timeoutMs = 15_000,
+  options: OfficeBookingRequestOptions = {},
+): Promise<T> {
   const session = await requireFirebaseWebSession();
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  let timedOut = false;
+  const abortFromCaller = () => controller.abort();
+  if (options.signal?.aborted) controller.abort();
+  else options.signal?.addEventListener('abort', abortFromCaller, { once: true });
+  const timer = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
   try {
     const response = await fetch(endpoint(), {
       method: 'POST',
@@ -297,16 +338,27 @@ async function callOfficeBookingAuthority<T>(action: string, data: Record<string
     const payload = await response.json().catch(() => ({})) as T & ApiError;
     if (!response.ok) {
       const code = payload.error?.code ? ` (${payload.error.code})` : '';
-      throw new Error(`${payload.error?.message ?? 'The appointment operation could not be completed.'}${code}${apiErrorDetail(payload)}`);
+      throw new OfficeBookingAuthorityError(
+        `${payload.error?.message ?? 'The appointment operation could not be completed.'}${code}${apiErrorDetail(payload)}`,
+        payload.error?.code,
+        payload.error?.details,
+      );
     }
     return payload;
   } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
+    const aborted = (error instanceof DOMException || error instanceof Error) && error.name === 'AbortError';
+    if (aborted && options.signal?.aborted && !timedOut) {
+      const superseded = new Error('Booking Authority request was superseded.');
+      superseded.name = 'AbortError';
+      throw superseded;
+    }
+    if (aborted) {
       throw new Error('Booking Authority took too long to respond, so the outcome is not yet confirmed. Refresh before trying again.');
     }
     throw error;
   } finally {
     window.clearTimeout(timer);
+    options.signal?.removeEventListener('abort', abortFromCaller);
   }
 }
 
@@ -456,8 +508,9 @@ export async function checkOfficeCreateAvailability(input: {
   recipientSelections?: AppointmentRecipientSelection[];
   notes?: string;
   changeKind?: OfficeLifecycleChangeKind;
-}) {
-  return callOfficeBookingAuthority<OfficeAvailabilityResult>('check_availability', input, 12_000);
+  availabilityMode?: 'requested_date_grid';
+}, options: OfficeBookingRequestOptions = {}) {
+  return callOfficeBookingAuthority<OfficeAvailabilityResult>('check_availability', input, 12_000, options);
 }
 
 export async function confirmOfficeAppointment(input: {
@@ -594,8 +647,9 @@ export async function checkOfficeRescheduleAvailability(input: {
   technicianInstructions?: string;
   notes?: string;
   changeKind?: OfficeLifecycleChangeKind;
-}) {
-  return callOfficeBookingAuthority<OfficeAvailabilityResult>('check_availability', input, 12_000);
+  availabilityMode?: 'requested_date_grid';
+}, options: OfficeBookingRequestOptions = {}) {
+  return callOfficeBookingAuthority<OfficeAvailabilityResult>('check_availability', input, 12_000, options);
 }
 
 export async function cancelOfficeAppointment(input: {

@@ -18,7 +18,7 @@ test("regular and half-day pending calendars reuse canonical Booking Authority s
   ]), ["08:30", "09:30", "10:30", "11:30"]);
 });
 
-test("three Standard Service capacity units remain reserved across lunch", () => {
+test("a three-hour job ending at 13:30 releases the 13:30 PENDIENTE start", () => {
   const order = {
     id: "WO-1",
     status: "Confirmada",
@@ -29,13 +29,13 @@ test("three Standard Service capacity units remain reserved across lunch", () =>
     appointmentEndTime: "13:30",
     scheduledSlots: 3,
   };
-  assert.deepEqual(reservedSlotsForOrder(order), ["10:30", "13:30", "14:30"]);
+  assert.deepEqual(reservedSlotsForOrder(order), ["10:30"]);
   assert.deepEqual(pendingSlotsForVan({
     van,
     dateKey: "2026-08-28",
     capacityOrders: [order],
     staffProfiles,
-  }), ["08:30", "09:30", "15:30"]);
+  }), ["08:30", "09:30", "13:30", "14:30", "15:30"]);
 });
 
 test("a real 10:30 to 14:30 span blocks the 13:30 start without making lunch sellable", () => {
@@ -49,16 +49,16 @@ test("a real 10:30 to 14:30 span blocks the 13:30 start without making lunch sel
     appointmentEndTime: "14:30",
     scheduledSlots: 4,
   };
-  assert.deepEqual(reservedSlotsForOrder(order), ["10:30", "13:30", "14:30", "15:30"]);
+  assert.deepEqual(reservedSlotsForOrder(order), ["10:30", "13:30"]);
   assert.deepEqual(pendingSlotsForVan({
     van,
     dateKey: "2026-08-28",
     capacityOrders: [order],
     staffProfiles,
-  }), ["08:30", "09:30"]);
+  }), ["08:30", "09:30", "14:30", "15:30"]);
 });
 
-test("six Standard Services consume every normal PENDIENTE capacity unit", () => {
+test("a non-full-day six-hour job releases the 14:30 and 15:30 PENDIENTE starts", () => {
   const order = {
     id: "WO-SIX-1",
     status: "Confirmada",
@@ -71,13 +71,13 @@ test("six Standard Services consume every normal PENDIENTE capacity unit", () =>
     appointmentEndTime: "14:30",
     scheduledSlots: 6,
   };
-  assert.deepEqual(reservedSlotsForOrder(order), ["08:30", "09:30", "10:30", "13:30", "14:30", "15:30"]);
+  assert.deepEqual(reservedSlotsForOrder(order), ["08:30", "09:30", "10:30", "13:30"]);
   assert.deepEqual(pendingSlotsForVan({
     van,
     dateKey: "2026-08-28",
     capacityOrders: [order],
     staffProfiles,
-  }), []);
+  }), ["14:30", "15:30"]);
 });
 
 test("temporary holds reserve real continuous capacity but are not technician work messages", () => {

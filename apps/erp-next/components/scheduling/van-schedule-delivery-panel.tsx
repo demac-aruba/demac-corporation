@@ -106,7 +106,7 @@ export function VanScheduleDeliveryPanel() {
   };
 
   const send = async () => {
-    const targetLabel = vanId ? vanId.replace('VAN-', 'Van ') : 'all configured vans';
+    const targetLabel = vanId ? groups.find((group) => group.vanId === vanId)?.vanName || vanId : 'all configured vans';
     if (!window.confirm(`Send the ${dateKey} work schedule now to ${targetLabel}? Each Work Order will be a separate WhatsApp group message.`)) return;
     setBusy(true);
     setMessage('');
@@ -131,13 +131,13 @@ export function VanScheduleDeliveryPanel() {
       <div style={{ padding: '11px 13px', display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
         <div>
           <strong style={{ display: 'block', fontSize: 12 }}>WhatsApp Van Schedules</strong>
-          <span style={{ color: 'var(--muted)', fontSize: 10 }}>8:00 AM automatic delivery · 8:05 / 8:10 recovery · one message per Work Order · {configuredCount}/4 van groups configured</span>
+          <span style={{ color: 'var(--muted)', fontSize: 10 }}>8:00 AM automatic delivery · 8:05 / 8:10 recovery · one message per Work Order · {configuredCount}/{groups.length} van groups configured</span>
         </div>
         <div style={{ display: 'flex', gap: 7, alignItems: 'center', flexWrap: 'wrap' }}>
           <input aria-label="Schedule date" type="date" value={dateKey} onChange={(event) => setDateKey(event.target.value)} disabled={busy} style={{ minHeight: 34 }} />
           <select aria-label="Target van" value={vanId} onChange={(event) => setVanId(event.target.value)} disabled={busy} style={{ minHeight: 34 }}>
             <option value="">All vans</option>
-            {[1, 2, 3, 4].map((number) => <option key={number} value={`VAN-${number}`}>Van {number}</option>)}
+            {groups.map((group) => <option key={group.vanId} value={group.vanId}>{group.vanName || group.vanId}</option>)}
           </select>
           <button type="button" onClick={() => setEditing((value) => !value)} disabled={busy}>{editing ? 'Close Groups' : 'Configure Groups'}</button>
           <button type="button" onClick={() => void send()} disabled={busy || configuredCount === 0}>{busy ? 'Working…' : 'Send Now'}</button>
@@ -146,7 +146,7 @@ export function VanScheduleDeliveryPanel() {
 
       {editing ? <div style={{ borderTop: '1px solid var(--border)', padding: 12, display: 'grid', gap: 8 }}>
         {groups.map((group, index) => <div key={group.vanId} style={{ display: 'grid', gridTemplateColumns: '90px minmax(160px,1fr) minmax(260px,2fr) 80px', gap: 8, alignItems: 'center' }}>
-          <strong>{group.vanId.replace('VAN-', 'Van ')}</strong>
+          <strong>{group.vanName || group.vanId}</strong>
           <input value={group.groupName} onChange={(event) => setGroups((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, groupName: event.target.value } : item))} placeholder={EXPECTED_GROUP_NAMES[group.vanId]} />
           <input value={group.groupJid} onChange={(event) => setGroups((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, groupJid: event.target.value } : item))} placeholder="WhatsApp Group JID · …@g.us" autoCapitalize="none" autoCorrect="off" />
           <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10 }}><input type="checkbox" checked={group.enabled} onChange={(event) => setGroups((items) => items.map((item, itemIndex) => itemIndex === index ? { ...item, enabled: event.target.checked } : item))} /> Active</label>

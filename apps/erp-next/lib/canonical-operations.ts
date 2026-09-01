@@ -1,4 +1,5 @@
 import { listFirestoreCollection } from './firebase/firestore-rest';
+import { resolveStableVanId } from './stable-van-identity';
 import { normalizeWorkforceSkills, type WorkforceEmployee } from './workforce-readiness';
 
 export type CanonicalStaffAvailability = 'Disponible' | 'Enfermo' | 'Vacaciones' | 'Libre' | 'Inactivo' | string;
@@ -140,31 +141,13 @@ function text(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function canonicalVanIdFromValue(value: unknown) {
-  const raw = text(value);
-  if (!raw) return '';
-  const compact = raw.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const match = compact.match(/^(?:van|v)(\d+)$/);
-  return match ? `VAN-${Number(match[1])}` : raw;
-}
-
 /**
- * Resolve the operational Van lane without mistaking a legacy Firestore document ID
- * (for example VAN-1783801335935) for the canonical scheduling lane. When the value
- * is an actual Van document ID, the record's human/canonical name (Van 1, Van 2, ...)
- * owns the lane identity. Direct references such as VAN-1 or future VAN-5 remain valid.
+ * Resolve the operational Van lane from immutable master-data identity. Only the
+ * closed legacy-ID registry may translate an old physical document ID; editable
+ * name/label fields never participate in identity.
  */
 export function canonicalVanId(value: unknown, vans: CanonicalVan[] = []) {
-  const raw = text(value);
-  if (!raw) return '';
-
-  const record = vans.find((van) => van.id === raw);
-  if (record) {
-    const fromName = canonicalVanIdFromValue(record.name);
-    if (/^VAN-\d+$/.test(fromName)) return fromName;
-  }
-
-  return canonicalVanIdFromValue(raw);
+  return resolveStableVanId(value, vans);
 }
 
 export function weekdayLabel(value: unknown) {

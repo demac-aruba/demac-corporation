@@ -36,10 +36,18 @@ import {
   type AfterHoursVanTarget,
   type AvailableSlotIntent,
 } from '../../lib/live-scheduling-interactions';
+import { liveBookingTargetKey } from '../../lib/live-booking-ui-state';
+import { deriveDynamicVanLanes, observedOnlyVanIds } from '../../lib/dynamic-van-lanes';
+import {
+  liveSchedulingClockSnapshot,
+  liveSlotStartHasPassed,
+  millisecondsUntilNextClockMinute,
+  type LiveSchedulingClockSnapshot,
+} from '../../lib/live-scheduling-clock';
 import type { CandidateSlot, DispatchJob } from '../../lib/scheduling';
-import { getRuntimeSchedulingSettings, minutesToTime, previewVans, timeToMinutes } from '../../lib/scheduling';
+import { getRuntimeSchedulingSettings, minutesToTime, timeToMinutes } from '../../lib/scheduling';
 import type { CalendarDispatchJob, OperationalDay } from '../../lib/scheduling-capacity';
-import { buildOperationalWeek, currentArubaDateKey, jobOwnsCapacityStart } from '../../lib/scheduling-capacity';
+import { buildOperationalWeek, jobOwnsCapacityStart } from '../../lib/scheduling-capacity';
 import { AdhocSupportDrawer, type AdhocSupportTarget } from './adhoc-support-drawer';
 import { AfterHoursEmergencyDrawer } from './after-hours-emergency-panel';
 import { DragMoveConfirmation, type PendingDragMove } from './drag-move-confirmation';
@@ -48,10 +56,21 @@ import { LiveAppointmentDetailsDrawer } from './live-appointment-details-drawer'
 import laneStyles from './live-scheduling-lane-actions.module.css';
 import styles from './scheduling-overview-v2.module.css';
 
-type DisplaySlot = { start: string; end: string; segment: 'am' | 'pm'; operational: boolean; offReason?: string };
+type DisplaySlot = { start: string; end: string; segment: 'am' | 'pm'; operational: boolean; past: boolean; offReason?: string };
 type DisplayVan = { id: string; name: string; active: boolean };
 type JobLink = { appointmentId: string; appointment: BrowserAppointmentRecord };
 type PendingLiveMove = PendingDragMove & { jobId: string; candidate: CandidateSlot };
+type Props = { now?: () => Date };
+type RefreshMode = 'normal' | 'force_capacity' | 'after_write';
+type RefreshQueueEntry = {
+  startDate: string;
+  endDate: string;
+  forceCapacity: boolean;
+  sequence: number;
+  settle: Array<() => void>;
+};
+
+const systemNow = () => new Date();
 
 function appointmentAssignments(record: BrowserAppointmentRecord): CalendarDispatchJob[] {
   if (record.status === 'cancelled') return [];
@@ -73,7 +92,12 @@ function appointmentWorkLabel(appointment: BrowserAppointmentRecord | undefined,
   return fallback ? fallback.replace(/\b\w/g, (letter) => letter.toUpperCase()) : 'Scheduled work';
 }
 
-function displaySlotsForVan(day: OperationalDay, vanId: string, capacityState: LiveOperationalCapacityState | null): DisplaySlot[] {
+function displaySlotsForVan(
+  day: OperationalDay,
+  vanId: string,
+  capacityState: LiveOperationalCapacityState | null,
+  clock: LiveSchedulingClockSnapshot,
+): DisplaySlot[] {
   if (!day.isOpen) return [];
   const baseStarts = getRuntimeSchedulingSettings().serviceStartTimes;
   const starts = liveOperationalStartTimes(capacityState, vanId, day.dateKey, baseStarts);
@@ -84,6 +108,7 @@ function displaySlotsForVan(day: OperationalDay, vanId: string, capacityState: L
   return starts.map((start) => {
     const startMinutes = timeToMinutes(start);
     const end = minutesToTime(startMinutes + 60);
+    const past = liveSlotStartHasPassed(day.dateKey, start, clock);
     const operational = vanAvailable && liveOperationalWindowAllows(capacityState, vanId, day.dateKey, start, end);
     const offReason = operational
       ? undefined
@@ -94,7 +119,7 @@ function displaySlotsForVan(day: OperationalDay, vanId: string, capacityState: L
           : halfDay
             ? `Weekly half-day · off after ${formatTime(halfDay.workdayEnd || '13:00')}`
             : liveCompanyClosureReason(capacityState, day.dateKey) || 'Outside operating capacity';
-    return { start, end, segment: startMinutes < 12 * 60 ? 'am' : 'pm', operational, offReason };
+    return { start, end, segment: startMinutes < 12 * 60 ? 'am' : 'pm', operational, past, offReason };
   });
 }
 
@@ -120,26 +145,37 @@ function activeSetSpan(jobs: CalendarDispatchJob[], slots: DisplaySlot[], startI
   return span;
 }
 
-function occupancyForDay(day: OperationalDay, jobs: CalendarDispatchJob[], vans: DisplayVan[], capacityState: LiveOperationalCapacityState | null) {
+function occupancyForDay(
+  day: OperationalDay,
+  jobs: CalendarDispatchJob[],
+  vans: DisplayVan[],
+  capacityState: LiveOperationalCapacityState | null,
+  clock: LiveSchedulingClockSnapshot,
+) {
   if (!day.isOpen) return { total: 0, occupied: 0, open: 0, percent: 0 };
   let total = 0;
   let occupied = 0;
+  let open = 0;
   for (const van of vans) {
-    for (const slot of displaySlotsForVan(day, van.id, capacityState)) {
+    for (const slot of displaySlotsForVan(day, van.id, capacityState, clock)) {
       if (!slot.operational) continue;
       total += 1;
-      if (jobs.some((job) => job.dateKey === day.dateKey && job.vanId === van.id && overlapsSlot(job, slot))) occupied += 1;
+      if (jobs.some((job) => job.dateKey === day.dateKey && job.vanId === van.id && overlapsSlot(job, slot))) {
+        occupied += 1;
+      } else if (!slot.past) {
+        open += 1;
+      }
     }
   }
   if (!total) return { total: 0, occupied: 0, open: 0, percent: 0 };
-  return { total, occupied, open: Math.max(0, total - occupied), percent: Math.round((occupied / total) * 100) };
+  return { total, occupied, open, percent: Math.round((occupied / total) * 100) };
 }
 
 function halfDayVansForDay(day: OperationalDay, vans: DisplayVan[], capacityState: LiveOperationalCapacityState | null) {
   if (!day.isOpen || !capacityState) return [];
   return vans
     .filter((van) => Boolean(liveVanHalfDaySchedule(capacityState, van.id, day.dateKey)))
-    .map((van) => van.id.replace('VAN-', 'Van '));
+    .map((van) => van.name);
 }
 
 function addDays(dateKey: string, amount: number) {
@@ -179,10 +215,11 @@ function bookingBadge(name?: string) {
   </span>;
 }
 
-export function LiveSchedulingOverview() {
+export function LiveSchedulingOverview({ now = systemNow }: Props = {}) {
   const { principal } = useAuth();
-  const [today] = useState(() => currentArubaDateKey());
-  const [activeDate, setActiveDate] = useState(today);
+  const [clock, setClock] = useState(() => liveSchedulingClockSnapshot(now()));
+  const today = clock.dateKey;
+  const [activeDate, setActiveDate] = useState(() => clock.dateKey);
   const [appointments, setAppointments] = useState<BrowserAppointmentRecord[]>([]);
   const [capacityState, setCapacityState] = useState<LiveOperationalCapacityState | null>(null);
   const [capacityError, setCapacityError] = useState('');
@@ -202,8 +239,36 @@ export function LiveSchedulingOverview() {
   const clickTimerRef = useRef<number | null>(null);
   const reconcileTimerRef = useRef<number | null>(null);
   const refreshSequenceRef = useRef(0);
+  const refreshRunningRef = useRef<RefreshQueueEntry | null>(null);
+  const refreshQueuedRef = useRef<RefreshQueueEntry | null>(null);
+  const refreshMountedRef = useRef(true);
   const boardScrollRef = useRef<HTMLDivElement>(null);
   const vanScrollFrameRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    refreshMountedRef.current = true;
+    return () => {
+      refreshMountedRef.current = false;
+      refreshSequenceRef.current += 1;
+      const queued = refreshQueuedRef.current;
+      refreshQueuedRef.current = null;
+      queued?.settle.forEach((resolve) => resolve());
+    };
+  }, []);
+
+  useEffect(() => {
+    let timer: number | null = null;
+    const tick = () => {
+      const current = now();
+      setClock(liveSchedulingClockSnapshot(current));
+      timer = window.setTimeout(tick, millisecondsUntilNextClockMinute(current));
+    };
+    const current = now();
+    timer = window.setTimeout(tick, millisecondsUntilNextClockMinute(current));
+    return () => {
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [now]);
   const baseWeek = useMemo(() => buildOperationalWeek(activeDate), [activeDate]);
   const weekStartDate = baseWeek[0]?.dateKey ?? activeDate;
   const weekEndDate = baseWeek[6]?.dateKey ?? activeDate;
@@ -224,20 +289,24 @@ export function LiveSchedulingOverview() {
     manualRefreshing,
   });
 
-  const refresh = useCallback(async (forceCapacity = false) => {
-    const sequence = ++refreshSequenceRef.current;
-    if (forceCapacity) invalidateLiveSchedulingReferenceCache();
+  const performRefresh = useCallback(async (entry: RefreshQueueEntry) => {
+    const { sequence, startDate, endDate, forceCapacity } = entry;
     try {
+      if (forceCapacity) invalidateLiveSchedulingReferenceCache();
+      const capacityFlight = loadLiveOperationalCapacityState({ startDate, endDate, force: forceCapacity })
+        .then((value) => ({ value, error: '' }))
+        .catch((capacityLoadError) => ({
+          value: null,
+          error: capacityLoadError instanceof Error ? capacityLoadError.message : 'Live operational capacity could not be loaded.',
+        }));
       const [next, capacityResult] = await Promise.all([
-        loadLiveSchedulingAppointmentsFast({ startDate: weekStartDate, endDate: weekEndDate }),
-        loadLiveOperationalCapacityState({ startDate: weekStartDate, endDate: weekEndDate, force: forceCapacity })
-          .then((value) => ({ value, error: '' }))
-          .catch((capacityLoadError) => ({
-            value: null,
-            error: capacityLoadError instanceof Error ? capacityLoadError.message : 'Live operational capacity could not be loaded.',
-          })),
+        loadLiveSchedulingAppointmentsFast(
+          { startDate, endDate },
+          { operationalState: capacityFlight.then((result) => result.value) },
+        ),
+        capacityFlight,
       ]);
-      if (sequence !== refreshSequenceRef.current) return;
+      if (!refreshMountedRef.current || sequence !== refreshSequenceRef.current) return;
       setAppointments(next);
       setCapacityState(capacityResult.value);
       setCapacityError(capacityResult.error);
@@ -247,25 +316,84 @@ export function LiveSchedulingOverview() {
 
       void enrichLiveSchedulingAttribution(next)
         .then((enriched) => {
-          if (sequence === refreshSequenceRef.current) setAppointments(enriched);
+          if (refreshMountedRef.current && sequence === refreshSequenceRef.current) setAppointments(enriched);
         })
         .catch(() => {
           // Booking attribution is supplemental; operational scheduling stays usable without it.
         });
     } catch (loadError) {
-      if (sequence !== refreshSequenceRef.current) return;
+      if (!refreshMountedRef.current || sequence !== refreshSequenceRef.current) return;
       setError(loadError instanceof Error ? loadError.message : 'Live scheduling data could not be loaded.');
       setLoading(false);
     }
-  }, [weekEndDate, weekStartDate]);
+  }, []);
+
+  const drainRefreshQueue = useCallback(async () => {
+    if (refreshRunningRef.current || !refreshMountedRef.current) return;
+    while (refreshMountedRef.current && refreshQueuedRef.current) {
+      const entry = refreshQueuedRef.current;
+      refreshQueuedRef.current = null;
+      refreshRunningRef.current = entry;
+      try {
+        await performRefresh(entry);
+      } finally {
+        refreshRunningRef.current = null;
+        entry.settle.forEach((resolve) => resolve());
+      }
+    }
+  }, [performRefresh]);
+
+  const refresh = useCallback((mode: RefreshMode = 'normal') => new Promise<void>((resolve) => {
+    if (!refreshMountedRef.current) {
+      resolve();
+      return;
+    }
+    const forceCapacity = mode === 'force_capacity';
+    const mustStartAfterCurrent = mode === 'after_write';
+
+    const queued = refreshQueuedRef.current;
+    if (queued) {
+      const requestChanged = queued.startDate !== weekStartDate
+        || queued.endDate !== weekEndDate
+        || (forceCapacity && !queued.forceCapacity);
+      if (requestChanged) queued.sequence = ++refreshSequenceRef.current;
+      queued.startDate = weekStartDate;
+      queued.endDate = weekEndDate;
+      queued.forceCapacity ||= forceCapacity;
+      queued.settle.push(resolve);
+      return;
+    }
+
+    const running = refreshRunningRef.current;
+    if (running
+      && !mustStartAfterCurrent
+      && !forceCapacity
+      && running.startDate === weekStartDate
+      && running.endDate === weekEndDate
+      && running.sequence === refreshSequenceRef.current) {
+      running.settle.push(resolve);
+      return;
+    }
+
+    refreshQueuedRef.current = {
+      startDate: weekStartDate,
+      endDate: weekEndDate,
+      forceCapacity,
+      sequence: ++refreshSequenceRef.current,
+      settle: [resolve],
+    };
+    void drainRefreshQueue();
+  }), [drainRefreshQueue, weekEndDate, weekStartDate]);
+
+  const refreshAfterWrite = useCallback(() => refresh('after_write'), [refresh]);
 
   const refreshNow = useCallback(async () => {
     if (interactionActive) return;
     setManualRefreshing(true);
     try {
-      await refresh(true);
+      await refresh('force_capacity');
     } finally {
-      setManualRefreshing(false);
+      if (refreshMountedRef.current) setManualRefreshing(false);
     }
   }, [interactionActive, refresh]);
 
@@ -293,18 +421,9 @@ export function LiveSchedulingOverview() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || moveBusy) return;
-      if (supportTarget) {
-        setSupportTarget(null);
-        return;
-      }
-      if (afterHoursTarget) {
-        setAfterHoursTarget(null);
-        return;
-      }
-      if (bookingTarget) {
-        setBookingTarget(null);
-        return;
-      }
+      // Write-capable drawers own Escape so they can refuse to unmount while a
+      // canonical CRM or Booking Authority write is still in flight.
+      if (supportTarget || afterHoursTarget || bookingTarget) return;
       if (pendingDragMove) {
         setPendingDragMove(null);
         setMoveNotice('Move cancelled. Nothing was changed.');
@@ -321,16 +440,20 @@ export function LiveSchedulingOverview() {
 
   const jobs = useMemo(() => appointments.flatMap(appointmentAssignments), [appointments]);
   const vans = useMemo<DisplayVan[]>(() => {
-    if (!capacityState) return previewVans.map((van) => ({ id: van.id, name: van.name, active: van.active }));
-    return [...capacityState.vans.values()]
-      .sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true }))
-      .map((van) => ({ id: van.id, name: van.id.replace(/^VAN-(\d+)$/, 'Van $1'), active: van.active }));
-  }, [capacityState]);
+    const registry = capacityState ? [...capacityState.vans.values()] : null;
+    return deriveDynamicVanLanes(registry, jobs.map((job) => job.vanId)).map((lane) => ({
+      id: lane.id,
+      name: lane.name,
+      active: capacityState?.vans.get(lane.id)?.active === true,
+    }));
+  }, [capacityState, jobs]);
   useEffect(() => {
     setActiveVanIndex((current) => Math.min(current, Math.max(0, vans.length - 1)));
   }, [vans.length]);
-  const canonicalVanIds = useMemo(() => new Set(vans.map((van) => van.id)), [vans]);
-  const unresolvedJobs = useMemo(() => jobs.filter((job) => !canonicalVanIds.has(job.vanId)), [canonicalVanIds, jobs]);
+  const observedOnlyIds = useMemo(() => capacityState
+    ? new Set(observedOnlyVanIds(capacityState.vans.values(), jobs.map((job) => job.vanId)))
+    : new Set<string>(), [capacityState, jobs]);
+  const observedOnlyJobs = useMemo(() => jobs.filter((job) => observedOnlyIds.has(job.vanId)), [jobs, observedOnlyIds]);
   const jobLinks = useMemo(() => {
     const result = new Map<string, JobLink>();
     for (const appointment of appointments) {
@@ -339,27 +462,31 @@ export function LiveSchedulingOverview() {
     return result;
   }, [appointments]);
   const weekSummaries = useMemo(
-    () => Object.fromEntries(week.map((day) => [day.dateKey, occupancyForDay(day, jobs, vans, capacityState)])),
-    [capacityState, jobs, vans, week],
+    () => Object.fromEntries(week.map((day) => [day.dateKey, occupancyForDay(day, jobs, vans, capacityState, clock)])),
+    [capacityState, clock, jobs, vans, week],
   );
   const activeDay = week.find((day) => day.dateKey === activeDate) ?? week[0];
   const activeJobs = jobs.filter((job) => job.dateKey === activeDate);
-  const activeOccupancy = occupancyForDay(activeDay, jobs, vans, capacityState);
+  const activeOccupancy = occupancyForDay(activeDay, jobs, vans, capacityState, clock);
   const confirmed = appointments.filter((appointment) => appointment.dateKey === activeDate && appointment.status === 'confirmed').length;
   const temporaryHolds = appointments.filter((appointment) => appointment.dateKey === activeDate && appointment.status === 'temporary_hold').length;
+  const needsHumanAppointments = appointments.filter((appointment) => appointment.dateKey === activeDate
+    && appointment.status !== 'cancelled'
+    && appointment.projectionIntegrity === 'needs_human');
   const selectedAppointment = appointments.find((appointment) => appointment.id === selectedAppointmentId) ?? null;
   const activeConflictSlots = vans.reduce((total, van) => {
     const vanJobs = activeJobs.filter((job) => job.vanId === van.id);
-    return total + displaySlotsForVan(activeDay, van.id, capacityState).filter((slot) => activeJobsForSlot(vanJobs, slot).length > 1).length;
+    return total + displaySlotsForVan(activeDay, van.id, capacityState, clock).filter((slot) => activeJobsForSlot(vanJobs, slot).length > 1).length;
   }, 0);
   const outsideCapacityJobs = activeJobs.filter((job) => {
-    const slots = displaySlotsForVan(activeDay, job.vanId, capacityState);
+    const slots = displaySlotsForVan(activeDay, job.vanId, capacityState, clock);
     return slots.some((slot) => !slot.operational && overlapsSlot(job, slot));
   });
   const armedLink = moveArmedJobId ? jobLinks.get(moveArmedJobId) : undefined;
   const dragCandidates = useMemo(
-    () => liveDragMoveCandidates(activeDay, armedLink?.appointment, activeJobs, capacityState),
-    [activeDay, activeJobs, armedLink?.appointment, capacityState],
+    () => liveDragMoveCandidates(activeDay, armedLink?.appointment, activeJobs, capacityState)
+      .filter((slot) => !liveSlotStartHasPassed(activeDay.dateKey, slot.start, clock)),
+    [activeDay, activeJobs, armedLink?.appointment, capacityState, clock],
   );
   const dragCandidateMap = useMemo(
     () => new Map(dragCandidates.map((slot) => [liveMoveTargetKey(slot.vanId, slot.start), slot])),
@@ -400,7 +527,12 @@ export function LiveSchedulingOverview() {
 
   const openJob = (jobId: string) => {
     const link = jobLinks.get(jobId);
-    if (link) setSelectedAppointmentId(link.appointmentId);
+    if (!link) return;
+    if (link.appointment.projectionIntegrity === 'needs_human') {
+      setMoveNotice(link.appointment.projectionIntegrityReason || 'This Work Order needs Operations reconciliation before appointment actions are available.');
+      return;
+    }
+    setSelectedAppointmentId(link.appointmentId);
   };
 
   const scheduleOpenJob = (jobId: string) => {
@@ -413,13 +545,17 @@ export function LiveSchedulingOverview() {
   };
 
   const openCreateAppointment = (vanId: string, start: string, end: string) => {
-    if (moveArmedJobId || pendingDragMove || moveBusy || supportTarget) return;
+    if (moveArmedJobId || pendingDragMove || moveBusy || supportTarget || bookingTarget) return;
     if (!canManage) {
       setMoveNotice('Your account does not have permission to create appointments.');
       return;
     }
     if (!capacityState) {
       setMoveNotice(`Live capacity is not ready${capacityError ? `: ${capacityError}` : '.'} Refresh the agenda before creating an appointment.`);
+      return;
+    }
+    if (liveSlotStartHasPassed(activeDay.dateKey, start, liveSchedulingClockSnapshot(now()))) {
+      setMoveNotice(`${formatTime(start)} has already passed. Choose a future start; the schedule was not changed.`);
       return;
     }
     const van = vans.find((item) => item.id === vanId);
@@ -441,6 +577,10 @@ export function LiveSchedulingOverview() {
     }
     if (activeDay.dateKey !== today) {
       setMoveNotice('Ad-hoc coworker support is a same-day operational action. Future multi-Van work must use the planned Booking Authority support allocation.');
+      return;
+    }
+    if (liveSlotStartHasPassed(activeDay.dateKey, start, liveSchedulingClockSnapshot(now()))) {
+      setMoveNotice(`${formatTime(start)} has already passed. Choose a future support start; the schedule was not changed.`);
       return;
     }
     const van = vans.find((item) => item.id === vanId);
@@ -473,7 +613,7 @@ export function LiveSchedulingOverview() {
     setMoveNotice(booking.status === 'temporary_hold'
       ? `Temporary hold ${booking.appointmentId} reserved for ${customer} · ${van} · ${formatTime(booking.option.time)}. Capacity is blocked; no customer confirmation or reminder was sent.`
       : `Appointment ${booking.appointmentId} confirmed for ${customer} · ${van} · ${formatTime(booking.option.time)}.`);
-    void refresh();
+    void refreshAfterWrite();
   };
 
   const handleCreatedAfterHours = (booking: LiveCreatedBooking) => {
@@ -483,7 +623,7 @@ export function LiveSchedulingOverview() {
     const customer = booking.customer.name || booking.customer.company || 'customer';
     const van = target?.vanName || booking.option.assignments[0]?.vanName || booking.option.assignments[0]?.vanId || 'van';
     setMoveNotice(`After-hours appointment ${booking.appointmentId} confirmed for ${customer} · ${van} · ${formatTime(booking.option.time)}. The Work Order remains open until real field completion.`);
-    void refresh();
+    void refreshAfterWrite();
   };
 
   const handleCreatedSupport = async (result: OfficeAdhocSupportResult, appointment: BrowserAppointmentRecord) => {
@@ -493,7 +633,7 @@ export function LiveSchedulingOverview() {
     setMoveNotice(target
       ? `${target.vanName} was assigned to support ${appointment.customer} at ${formatTime(target.start)}. The primary appointment remains unchanged and same-day Van alerts use the internal WhatsApp authority.`
       : `Operational support ${result.supportWorkOrderId} was assigned to ${appointment.customer}.`);
-    await refresh();
+    await refreshAfterWrite();
   };
 
   const armMove = (jobId: string) => {
@@ -517,6 +657,10 @@ export function LiveSchedulingOverview() {
     }
     const link = jobLinks.get(jobId);
     if (!link) return;
+    if (link.appointment.projectionIntegrity === 'needs_human') {
+      setMoveNotice(link.appointment.projectionIntegrityReason || 'This Work Order needs Operations reconciliation before it can be moved.');
+      return;
+    }
     if (link.appointment.status === 'temporary_hold') {
       setMoveNotice('Temporary holds own canonical capacity. Open the hold and use Reschedule so Booking Authority preserves the hold state and moves its locks atomically.');
       setSelectedAppointmentId(link.appointmentId);
@@ -527,7 +671,9 @@ export function LiveSchedulingOverview() {
       setSelectedAppointmentId(link.appointmentId);
       return;
     }
-    const candidates = liveDragMoveCandidates(activeDay, link.appointment, activeJobs, capacityState);
+    const currentClock = liveSchedulingClockSnapshot(now());
+    const candidates = liveDragMoveCandidates(activeDay, link.appointment, activeJobs, capacityState)
+      .filter((slot) => !liveSlotStartHasPassed(activeDay.dateKey, slot.start, currentClock));
     if (!candidates.length) {
       setMoveNotice(`There are no valid same-day destinations for ${link.appointment.customer}. The existing appointment was not changed.`);
       return;
@@ -540,6 +686,11 @@ export function LiveSchedulingOverview() {
 
   const dropMove = (targetVanId: string, targetStart: string) => {
     if (!moveArmedJobId || moveBusy || pendingDragMove) return;
+    if (liveSlotStartHasPassed(activeDay.dateKey, targetStart, liveSchedulingClockSnapshot(now()))) {
+      setMoveArmedJobId('');
+      setMoveNotice(`${formatTime(targetStart)} has already passed. The appointment was not moved.`);
+      return;
+    }
     const movingJobId = moveArmedJobId;
     const link = jobLinks.get(movingJobId);
     const currentJob = jobs.find((job) => job.id === movingJobId);
@@ -634,7 +785,7 @@ export function LiveSchedulingOverview() {
       if (reconcileTimerRef.current) window.clearTimeout(reconcileTimerRef.current);
       reconcileTimerRef.current = window.setTimeout(() => {
         reconcileTimerRef.current = null;
-        void refresh();
+        void refreshAfterWrite();
       }, 350);
     } catch (cause) {
       setPendingDragMove(null);
@@ -665,7 +816,8 @@ export function LiveSchedulingOverview() {
       {error ? <div className={styles.notice}><span>Live sync error: {error}</span></div> : null}
       {capacityError ? <div className={styles.notice}><span>Canonical operating-capacity policy could not be loaded: {capacityError}. Appointment data remains visible, but scheduling changes are disabled until capacity refresh succeeds.</span></div> : null}
       {moveNotice ? <div className={styles.notice}><span>{moveNotice}</span>{moveArmedJobId && !moveBusy ? <button type="button" onClick={() => { setMoveArmedJobId(''); setMoveNotice('Move mode cancelled.'); }}>×</button> : null}</div> : null}
-      {unresolvedJobs.length ? <div className={styles.notice}><span>Data integrity attention: {unresolvedJobs.length} assignment{unresolvedJobs.length === 1 ? '' : 's'} reference a van that cannot be resolved to the canonical fleet. They are not converted into fake extra lanes.</span></div> : null}
+      {observedOnlyJobs.length ? <div className={styles.notice}><span>Data integrity attention: {observedOnlyJobs.length} assignment{observedOnlyJobs.length === 1 ? '' : 's'} reference {observedOnlyIds.size} Van ID{observedOnlyIds.size === 1 ? '' : 's'} absent from the canonical registry snapshot. Observed-only lanes remain visible for correction but are not treated as bookable fleet.</span></div> : null}
+      {needsHumanAppointments.length ? <div className={styles.notice}><span>NEEDS HUMAN: {needsHumanAppointments.length} Work Order{needsHumanAppointments.length === 1 ? '' : 's'} lack a canonical appointment link on this date. Their capacity remains blocked and appointment writes are disabled until Operations reconciles the data.</span></div> : null}
       {activeConflictSlots ? <div className={styles.notice}><span>Capacity integrity attention: {activeConflictSlots} occupied slot{activeConflictSlots === 1 ? '' : 's'} contain overlapping appointments after duplicate fleet records were collapsed to their canonical physical Vans. Both appointments remain visible below so they can be reviewed and rescheduled safely.</span></div> : null}
       {outsideCapacityJobs.length ? <div className={styles.notice}><span>Operating-calendar attention: {outsideCapacityJobs.length} appointment{outsideCapacityJobs.length === 1 ? '' : 's'} currently extend into capacity that is closed by the canonical van/company calendar. They remain visible for correction but are not counted as open capacity.</span></div> : null}
 
@@ -729,7 +881,7 @@ export function LiveSchedulingOverview() {
           >
             {vans.map((van) => {
               const vanJobs = activeJobs.filter((job) => job.vanId === van.id);
-              const vanSlots = displaySlotsForVan(activeDay, van.id, capacityState);
+              const vanSlots = displaySlotsForVan(activeDay, van.id, capacityState, clock);
               const crew = liveVanCrew(capacityState, van.id, activeDay.dateKey);
               const halfDay = liveVanHalfDaySchedule(capacityState, van.id, activeDay.dateKey);
               const operational = liveVanOperationallyAvailable(capacityState, van.id, activeDay.dateKey);
@@ -822,10 +974,10 @@ export function LiveSchedulingOverview() {
         </nav> : null}
       </div>
 
-      {selectedAppointment ? <LiveAppointmentDetailsDrawer appointment={selectedAppointment} onClose={() => setSelectedAppointmentId('')} onChanged={refresh} /> : null}
-      {bookingTarget ? <LiveAppointmentCreateDrawer target={bookingTarget} onClose={() => setBookingTarget(null)} onCreated={handleCreatedBooking} /> : null}
+      {selectedAppointment ? <LiveAppointmentDetailsDrawer appointment={selectedAppointment} onClose={() => setSelectedAppointmentId('')} onChanged={refreshAfterWrite} /> : null}
+      {bookingTarget ? <LiveAppointmentCreateDrawer key={liveBookingTargetKey(bookingTarget)} target={bookingTarget} onClose={() => setBookingTarget(null)} onCreated={handleCreatedBooking} /> : null}
       {supportTarget ? <AdhocSupportDrawer target={supportTarget} appointments={appointments} onClose={() => setSupportTarget(null)} onCreated={handleCreatedSupport} /> : null}
-      {afterHoursTarget ? <AfterHoursEmergencyDrawer target={afterHoursTarget} onClose={() => setAfterHoursTarget(null)} onCreated={handleCreatedAfterHours} /> : null}
+      {afterHoursTarget ? <AfterHoursEmergencyDrawer key={liveBookingTargetKey(afterHoursTarget, 'after_hours')} target={afterHoursTarget} onClose={() => setAfterHoursTarget(null)} onCreated={handleCreatedAfterHours} /> : null}
       {pendingDragMove ? <DragMoveConfirmation move={pendingDragMove} busy={moveBusy} onCancel={cancelPendingMove} onConfirm={() => void confirmPendingMove()} /> : null}
     </section>
   );
@@ -872,6 +1024,20 @@ function VanScheduleSlots({
     if (firstAfternoon) rows.push(<div className={styles.lunchRow} data-schedule-lunch key={`lunch-${slot.start}`}><span>12:00</span><div>Lunch / reset</div><span>1:00</span></div>);
 
     const active = activeJobsForSlot(jobs, slot);
+    if (!active.length && slot.past) {
+      rows.push(<div
+        className={styles.openSlot}
+        data-schedule-slot="past"
+        key={`past-${slot.start}`}
+        style={{ borderStyle: 'solid', borderColor: 'var(--border)', background: 'var(--surface-2)', cursor: 'default', opacity: 0.76 }}
+      >
+        <div className={styles.slotTime}><strong>{formatTime(slot.start)}</strong><span>{formatTime(slot.end)}</span></div>
+        <div><strong style={{ color: 'var(--muted)' }}>Start passed</strong><span>Historical schedule context · no new booking</span></div>
+        <b style={{ color: 'var(--muted)' }}>PAST</b>
+      </div>);
+      index += 1;
+      continue;
+    }
     if (!active.length && !slot.operational) {
       rows.push(<div
         className={styles.openSlot}
@@ -890,10 +1056,11 @@ function VanScheduleSlots({
     if (!active.length) {
       const dropEnabled = Boolean(moveArmedJobId)
         && !moveBusy
+        && !slot.past
         && slot.operational
         && validDropTargets.has(liveMoveTargetKey(vanId, slot.start));
-      const createEnabled = !moveArmedJobId && !moveBusy && canCreate && slot.operational;
-      const supportEnabled = !moveArmedJobId && !moveBusy && canSupport && slot.operational;
+      const createEnabled = !moveArmedJobId && !moveBusy && canCreate && slot.operational && !slot.past;
+      const supportEnabled = !moveArmedJobId && !moveBusy && canSupport && slot.operational && !slot.past;
       const runAvailableAction = (intent: AvailableSlotIntent) => {
         const action = availableSlotAction(intent);
         if (action === 'support') onSendSupport(vanId, slot.start, slot.end);
@@ -964,6 +1131,7 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
   onArm: () => void;
 }) {
   const temporaryHold = appointment?.status === 'temporary_hold' || job.status === 'temporary_hold';
+  const needsHuman = appointment?.projectionIntegrity === 'needs_human';
   const capacityEnd = liveJobCapacityEnd(job);
   const capacityOutlastsWork = capacityEnd !== job.end;
   const minHeight = span * 64 + Math.max(0, span - 1) * 6 + (crossesLunch ? 18 : 0);
@@ -975,7 +1143,7 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
   };
   return <div className={styles.occupiedSlot} data-schedule-slot="occupied" style={{
     minHeight,
-    outline: armed ? '2px solid var(--brand)' : temporaryHold ? '1px solid var(--warning, #f59e0b)' : outsideCapacity ? '1px solid var(--warning)' : undefined,
+    outline: armed ? '2px solid var(--brand)' : needsHuman ? '2px solid var(--danger)' : temporaryHold ? '1px solid var(--warning, #f59e0b)' : outsideCapacity ? '1px solid var(--warning)' : undefined,
     background: armed ? 'var(--brand-soft)' : temporaryHold ? 'color-mix(in srgb, var(--warning, #f59e0b) 12%, var(--surface))' : undefined,
   }}>
     <div className={styles.slotTime}><strong>{formatTime(job.start)}</strong><span>{formatTime(capacityEnd)}</span>{span > 1 ? <span>{span} spots</span> : null}</div>
@@ -985,9 +1153,9 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
         data-schedule-job
         role="button"
         tabIndex={0}
-        draggable={armed && !temporaryHold}
+        draggable={armed && !temporaryHold && !needsHuman}
         onDragStart={(event) => {
-          if (!armed || temporaryHold) {
+          if (!armed || temporaryHold || needsHuman) {
             event.preventDefault();
             return;
           }
@@ -998,22 +1166,23 @@ function AppointmentBlock({ job, appointment, span, crossesLunch, continuation =
         onDoubleClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
-          if (temporaryHold) onOpen(); else onArm();
+          if (temporaryHold || needsHuman) onOpen(); else onArm();
         }}
         onKeyDown={openFromKeyboard}
         style={{ minHeight: '100%', alignItems: 'center', cursor: armed ? 'grab' : 'pointer' }}
       >
         <div>
-          <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={armed ? styles.ready : temporaryHold ? styles.risk : slotClass(job.readiness)}>{armed ? 'MOVE ARMED' : temporaryHold ? 'TEMP HOLD' : readinessLabel(job.readiness)}</b></div>
+          <div className={styles.jobTitle}><strong>{job.customer}</strong><b className={armed ? styles.ready : needsHuman ? styles.blocked : temporaryHold ? styles.risk : slotClass(job.readiness)}>{armed ? 'MOVE ARMED' : needsHuman ? 'NEEDS HUMAN' : temporaryHold ? 'TEMP HOLD' : readinessLabel(job.readiness)}</b></div>
           {continuation ? <span>Van capacity reserved until {formatTime(capacityEnd)}</span> : <span>{appointmentWorkLabel(appointment, job.presetId)} · {job.quantity} unit{job.quantity === 1 ? '' : 's'}</span>}
           <small>{job.site} · {job.sector}{job.supportForJobId ? ' · Support assignment' : ''}</small>
           {!continuation && span > 1 ? <small>{span} capacity spots reserved · Van capacity {formatTime(job.start)}–{formatTime(capacityEnd)}</small> : null}
           {!continuation && capacityOutlastsWork ? <small>Service-work estimate {formatTime(job.start)}–{formatTime(job.end)} · capacity remains protected through {formatTime(capacityEnd)}</small> : null}
           {temporaryHold ? <small style={{ color: 'var(--warning, #b45309)', fontWeight: 800 }}>Capacity reserved · customer not confirmed · no reminder/confirmation sent</small> : null}
+          {needsHuman ? <small style={{ color: 'var(--danger)', fontWeight: 800 }}>{appointment?.projectionIntegrityReason}</small> : null}
           {crossesLunch ? <small>Lunch remains non-sellable · service-capacity ownership is preserved</small> : null}
           {outsideCapacity ? <small style={{ color: 'var(--warning)', fontWeight: 800 }}>Outside canonical operating capacity · review schedule</small> : null}
           {bookingBadge(appointment?.bookedByName)}
-          <small>{temporaryHold ? 'Open details to confirm, reschedule or cancel this hold' : armed ? 'Drag this block to a highlighted valid destination' : 'Single click details · double click to move'}</small>
+          <small>{needsHuman ? 'Appointment writes disabled · reconcile the Work Order link first' : temporaryHold ? 'Open details to confirm, reschedule or cancel this hold' : armed ? 'Drag this block to a highlighted valid destination' : 'Single click details · double click to move'}</small>
         </div>
       </article>
     </div>
