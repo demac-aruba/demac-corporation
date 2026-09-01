@@ -4,15 +4,15 @@ import { useEffect, useMemo, useState } from 'react';
 import type { BrowserFieldExecutionRecord } from '../../lib/browser-field';
 import type { BrowserAppointmentRecord, BrowserWorkOrderRecord } from '../../lib/browser-operational';
 import { browserKeys, loadBrowserValue } from '../../lib/browser-store';
+import { canonicalCrewReadinessRoster, loadCanonicalOperationsState, type CanonicalOperationsState } from '../../lib/canonical-operations';
 import { deriveBrowserJobReadiness, fieldStartDecision, loadDispatchAtRiskReleases } from '../../lib/browser-job-readiness';
-import { loadBrowserWorkforce } from '../../lib/browser-workforce';
 import { loadWorkOrderScopes } from '../../lib/browser-workorder-scope';
 import { currentArubaDateKey } from '../../lib/scheduling-capacity';
 import { assignmentStateFor, deriveDailyClose, deriveDispatchConflicts, deriveDispatchTimingAlerts, deriveProjectedDelayByAssignment, effectiveDispatchStage, loadDispatchAssignmentStates, saveDispatchAssignmentStage, type BrowserDispatchAssignmentState, type DispatchAssignmentStage } from '../../lib/browser-dispatch-operations';
 import { recordDispatchEvent } from '../../lib/browser-dispatch-history';
+import { deriveDynamicVanLanes } from '../../lib/dynamic-van-lanes';
 import styles from './browser-dispatch-operations.module.css';
 
-const vanIds = ['VAN-1', 'VAN-2', 'VAN-3', 'VAN-4'] as const;
 const preFieldStages: Array<{ value: DispatchAssignmentStage; label: string }> = [
   { value: 'not_ready', label: 'Not Ready' },
   { value: 'ready_to_depart', label: 'Ready to Depart' },
@@ -46,6 +46,8 @@ export function BrowserDispatchOperations() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [clockKey, setClockKey] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
+  const [canonicalOperations, setCanonicalOperations] = useState<CanonicalOperationsState | null>(null);
+  const [canonicalError, setCanonicalError] = useState<string | null>(null);
 
   useEffect(() => {
     const nextOrders = loadBrowserValue<BrowserWorkOrderRecord[]>(browserKeys.workOrders, []);
@@ -55,6 +57,22 @@ export function BrowserDispatchOperations() {
     setStates(loadDispatchAssignmentStates());
     const todayOrder = nextOrders.find((order) => order.scheduledDate === currentArubaDateKey());
     setSelectedOrderId((current) => current || todayOrder?.id || nextOrders[nextOrders.length - 1]?.id || '');
+  }, [refreshKey]);
+
+  useEffect(() => {
+    let current = true;
+    setCanonicalError(null);
+    void loadCanonicalOperationsState()
+      .then((state) => {
+        if (current) setCanonicalOperations(state);
+      })
+      .catch((error) => {
+        if (current) {
+          setCanonicalOperations(null);
+          setCanonicalError(error instanceof Error ? error.message : String(error));
+        }
+      });
+    return () => { current = false; };
   }, [refreshKey]);
 
   useEffect(() => {
@@ -68,10 +86,14 @@ export function BrowserDispatchOperations() {
   }, [orders]);
 
   const dayOrders = useMemo(() => orders.filter((order) => order.scheduledDate === activeDate).sort((a, b) => a.scheduledStart.localeCompare(b.scheduledStart)), [activeDate, orders]);
-  const workforce = useMemo(() => loadBrowserWorkforce(), [refreshKey]);
+  const vanLanes = useMemo(
+    () => deriveDynamicVanLanes(canonicalOperations?.vans, dayOrders.flatMap((order) => order.assignments.map((assignment) => assignment.vanId))),
+    [canonicalOperations, dayOrders],
+  );
+  const workforce = useMemo(() => canonicalOperations ? canonicalCrewReadinessRoster(canonicalOperations, activeDate) : [], [activeDate, canonicalOperations]);
   const scopes = useMemo(() => loadWorkOrderScopes(), [refreshKey]);
   const releases = useMemo(() => loadDispatchAtRiskReleases(), [refreshKey]);
-  const readinessByWorkOrder = useMemo(() => new Map(dayOrders.map((order) => [order.id, deriveBrowserJobReadiness(order, { appointments, executions })])), [appointments, dayOrders, executions, refreshKey]);
+  const readinessByWorkOrder = useMemo(() => new Map(dayOrders.map((order) => [order.id, deriveBrowserJobReadiness(order, { appointments, executions, crewRoster: workforce })])), [appointments, dayOrders, executions, workforce]);
   const conflicts = useMemo(() => deriveDispatchConflicts(orders, activeDate, workforce), [activeDate, orders, workforce, refreshKey]);
   const delays = useMemo(() => deriveProjectedDelayByAssignment({ orders, executions, dateKey: activeDate }), [activeDate, clockKey, executions, orders]);
   const timingAlerts = useMemo(() => deriveDispatchTimingAlerts({ orders, appointments, executions, readinessByWorkOrder, dateKey: activeDate, states }), [activeDate, appointments, clockKey, executions, orders, readinessByWorkOrder, states]);
@@ -117,6 +139,7 @@ export function BrowserDispatchOperations() {
       </header>
 
       {notice ? <div className={styles.notice}><span>{notice}</span><button type="button" onClick={() => setNotice(null)}>×</button></div> : null}
+      {canonicalError ? <div className={styles.notice}><span>Canonical workforce/Van registry could not be loaded: {canonicalError}. Dispatch readiness is failing closed; browser workforce seeds are not used.</span></div> : null}
 
       <div className={styles.metrics}>
         <article><span>Scheduled</span><strong>{close.scheduled}</strong><small>Primary Work Orders</small></article>
@@ -130,26 +153,28 @@ export function BrowserDispatchOperations() {
 
       <div className={styles.topGrid}>
         <section className={styles.exceptions}>
-          <div className={styles.sectionHead}><div><strong>Operations Exception Queue</strong><span>Resolve exceptions instead of scanning four calendars manually.</span></div><b>{exceptionItems.length}</b></div>
+          <div className={styles.sectionHead}><div><strong>Operations Exception Queue</strong><span>Resolve exceptions without scanning every Van lane manually.</span></div><b>{exceptionItems.length}</b></div>
           <div className={styles.exceptionList}>{exceptionItems.length ? exceptionItems.slice(0, 12).map((item) => <button type="button" key={item.id} className={item.severity === 'critical' ? styles.exceptionCritical : styles.exceptionWarning} onClick={() => openException(item.workOrderId)}><i /><div><div><strong>{item.title}</strong><b>{item.severity}</b></div><p>{item.detail}</p></div></button>) : <div className={styles.empty}><strong>No active dispatch exceptions</strong><p>The selected day has no detected overlap, route-buffer, timing or overrun exception in browser test data.</p></div>}</div>
         </section>
 
         <section className={styles.delayPanel}>
           <div className={styles.sectionHead}><div><strong>Delay Propagation</strong><span>Late work can consume the buffer of following jobs.</span></div></div>
-          <div className={styles.delayList}>{vanIds.map((vanId) => {
+          <div className={styles.delayList}>{vanLanes.map((van) => {
+            const vanId = van.id;
             const lane = dayOrders.flatMap((order) => order.assignments.filter((assignment) => assignment.vanId === vanId).map(() => ({ order, delay: delays.get(`${order.id}:${vanId}`) ?? 0 }))).filter((row) => row.delay > 0);
             const worst = lane.reduce((max, row) => Math.max(max, row.delay), 0);
-            return <article key={vanId}><div><span>{vanId}</span><strong>{worst ? `${worst} min projected` : 'On schedule'}</strong></div><small>{lane.length ? `${lane.length} assignment(s) affected downstream` : 'No propagated delay detected'}</small><i><em style={{ width: `${Math.min(100, worst * 2)}%` }} /></i></article>;
+            return <article key={vanId}><div><span>{van.name}</span><strong>{worst ? `${worst} min projected` : 'On schedule'}</strong></div><small>{vanId} · {lane.length ? `${lane.length} assignment(s) affected downstream` : 'No propagated delay detected'}</small><i><em style={{ width: `${Math.min(100, worst * 2)}%` }} /></i></article>;
           })}</div>
           <div className={styles.communicationGuard}><span>CUSTOMER COMMUNICATION</span><strong>Delay detection never auto-messages the customer.</strong><p>Operations receives the exception first and retains explicit control over any WhatsApp/email update.</p></div>
         </section>
       </div>
 
       <section className={styles.vans}>
-        <div className={styles.sectionHead}><div><strong>Four-Van Departure Control</strong><span>Each linked assignment has its own physical movement status; the customer appointment remains singular.</span></div></div>
-        <div className={styles.vanGrid}>{vanIds.map((vanId) => {
+        <div className={styles.sectionHead}><div><strong>Fleet Departure Control</strong><span>Each linked assignment has its own physical movement status; the customer appointment remains singular.</span></div></div>
+        <div className={styles.vanGrid} style={{ gridTemplateColumns: `repeat(${Math.max(1, vanLanes.length)}, minmax(230px, 1fr))` }}>{vanLanes.length ? vanLanes.map((van) => {
+          const vanId = van.id;
           const laneOrders = dayOrders.filter((order) => order.assignments.some((assignment) => assignment.vanId === vanId));
-          return <article className={styles.vanCard} key={vanId}><header><div><span>{vanId}</span><strong>{laneOrders.length} assignment{laneOrders.length === 1 ? '' : 's'}</strong></div><b>{workforce.filter((employee) => employee.active && employee.vanId === vanId).map((employee) => employee.name).join(' · ') || 'Crew not resolved'}</b></header><div>{laneOrders.length ? laneOrders.map((order) => {
+          return <article className={styles.vanCard} key={vanId}><header><div><span>{van.name}</span><strong>{vanId} · {laneOrders.length} assignment{laneOrders.length === 1 ? '' : 's'}</strong></div><b>{workforce.filter((employee) => employee.active && employee.vanId === vanId).map((employee) => employee.name).join(' · ') || 'Crew not resolved'}</b></header><div>{laneOrders.length ? laneOrders.map((order) => {
             const readiness = readinessByWorkOrder.get(order.id)!;
             const execution = executions.find((item) => item.workOrderId === order.id);
             const stage = effectiveDispatchStage(order, vanId, execution, states);
@@ -157,7 +182,7 @@ export function BrowserDispatchOperations() {
             const delay = delays.get(`${order.id}:${vanId}`) ?? 0;
             return <button type="button" className={styles.vanJob} key={`${order.id}-${vanId}`} onClick={() => { setSelectedOrderId(order.id); openException(order.id); }}><div><span>{timeLabel(order.scheduledStart)}–{timeLabel(order.scheduledEnd)} · {assignment.role}</span><strong>{order.customer}</strong><small>{order.site} · {order.sector}</small></div><div><b className={readinessClass(readiness.status)}>{stageLabel(stage)}</b>{delay ? <em>{delay}m delay</em> : null}</div></button>;
           }) : <div className={styles.emptyVan}><strong>Available</strong><span>No assigned Work Order</span></div>}</div></article>;
-        })}</div>
+        }) : <div className={styles.empty}><strong>No Van lanes available</strong><p>The canonical registry could not be loaded and no assignment IDs were observed for this date.</p></div>}</div>
       </section>
 
       {selectedOrder && selectedReadiness ? <section className={styles.briefing} id="dispatch-briefing">

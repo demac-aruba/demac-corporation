@@ -7,25 +7,23 @@ const {
   MAX_SEARCH_DAYS,
   addDays,
   arubaDateParts,
+  halfDaySchedule,
   hashId,
-  isHalfDay,
   normalizeRouteConfig,
-  orderBlocksCapacity,
   propertyZone,
   resolveAssignment,
   snapshotItems,
 } = require("./bookingSchedulingPrimitives");
 const {
-  assignmentCapacityInterval,
   candidateAvailability,
   capacityLockSlots,
-  intervalsOverlap,
-  workOrderBlocksOperationalMoveCapacity,
-  workOrderCapacityInterval,
+  evaluateCandidateAvailability,
 } = require("./bookingCapacityAvailability");
 const {
   CANONICAL_SCHEDULING_ENGINE_VERSION,
   buildAllocationPlan,
+  buildExactTargetDiagnostic,
+  dateClosed,
   exactPreset,
   generateCanonicalOptions,
   normalizeOperationalRules,
@@ -35,54 +33,120 @@ const {
 const { buildWorkOrders: projectCanonicalWorkOrders } = require("./bookingAuthorityWorkOrders");
 const { canonicalizeSchedulingData } = require("./bookingVanIdentity");
 
-const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v13";
+const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v16";
 
-async function loadSchedulingData(db, startDate, endDate) {
-  const workOrderQuery = db.collection("workOrders").where("date", ">=", startDate).where("date", "<=", endDate);
+function uniqueIds(values = []) {
+  return [...new Set(values.map((value) => cleanText(value, 180)).filter(Boolean))];
+}
+
+function documentItem(snapshot) {
+  if (!snapshot?.exists) return null;
+  return { id: snapshot.id, ...(snapshot.data() || {}) };
+}
+
+async function loadSchedulingData(db, startDate, endDate, {
+  transaction = null,
+  request = null,
+  targetVanIds = [],
+} = {}) {
+  const workOrderQuery = startDate === endDate
+    ? db.collection("workOrders").where("date", "==", startDate)
+    : db.collection("workOrders").where("date", ">=", startDate).where("date", "<=", endDate);
+  const read = (reference) => transaction ? transaction.get(reference) : reference.get();
+  const dateRangeQuery = (collectionName) => startDate === endDate
+    ? db.collection(collectionName).where("date", "==", startDate)
+    : db.collection(collectionName).where("date", ">=", startDate).where("date", "<=", endDate);
+  const requestedVanIds = uniqueIds(targetVanIds);
+  const businessSettingIds = [
+    "appointment-work-presets",
+    "business-calendar",
+    "company-operational-rules",
+    "whatsapp-copilot-routing",
+  ];
   const [
     workOrderSnapshot,
-    serviceSnapshot,
-    propertySnapshot,
-    clientSnapshot,
-    vanSnapshot,
-    staffSnapshot,
     assignmentSnapshot,
-    absenceSnapshot,
     closureSnapshot,
-    businessSnapshot,
-    halfDaySnapshot,
+    vanSnapshots,
+    businessSnapshots,
   ] = await Promise.all([
-    workOrderQuery.get(),
-    db.collection("services").get(),
-    db.collection("properties").get(),
-    db.collection("clients").get(),
-    db.collection("vans").get(),
-    db.collection("staffProfiles").get(),
-    db.collection("dailyVanAssignments").get(),
-    db.collection("staffAbsences").get(),
-    db.collection("calendarClosures").get(),
-    db.collection("businessSettings").get(),
-    db.collection("vanHalfDaySchedules").get(),
+    read(workOrderQuery),
+    read(dateRangeQuery("dailyVanAssignments")),
+    read(dateRangeQuery("calendarClosures")),
+    requestedVanIds.length
+      ? Promise.all(requestedVanIds.map((id) => read(db.collection("vans").doc(id))))
+      : read(db.collection("vans")),
+    Promise.all(businessSettingIds.map((id) => read(db.collection("businessSettings").doc(id)))),
   ]);
+  const workOrders = snapshotItems(workOrderSnapshot);
+  const dailyVanAssignments = snapshotItems(assignmentSnapshot);
+  const vans = (Array.isArray(vanSnapshots)
+    ? vanSnapshots.map(documentItem).filter(Boolean)
+    : snapshotItems(vanSnapshots)).filter((van) => van.active !== false);
+  const canonicalVanIds = uniqueIds(vans.map((van) => van.id));
+  const selectedAssignments = dailyVanAssignments.filter((assignment) => canonicalVanIds.includes(assignment.vanId));
+  const staffIds = uniqueIds([
+    ...vans.flatMap((van) => [van.responsibleStaffId, van.regularHelperId, van.additionalHelperId]),
+    ...selectedAssignments.flatMap((assignment) => [
+      assignment.driverStaffId,
+      assignment.helperStaffId,
+      assignment.additionalHelperStaffId,
+    ]),
+  ]);
+  const requestServiceIds = uniqueIds((request?.workLines || []).map((line) => line.serviceId));
+  const workOrderServiceIds = uniqueIds(workOrders.map((order) => order.serviceId));
+  const serviceIds = uniqueIds([...requestServiceIds, ...workOrderServiceIds]);
+  const propertyIds = uniqueIds([
+    request?.propertyId,
+    ...workOrders.map((order) => order.propertyId),
+  ]);
+  const clientIds = uniqueIds([request?.customerId]);
+  const requiresCatalogFallback = (request?.workLines || []).some((line) => !cleanText(line.serviceId, 180));
+  const [
+    staffSnapshots,
+    absenceSnapshots,
+    halfDaySnapshots,
+    serviceSnapshots,
+    propertySnapshots,
+    clientSnapshots,
+  ] = await Promise.all([
+    Promise.all(staffIds.map((id) => read(db.collection("staffProfiles").doc(id)))),
+    Promise.all(staffIds.map((id) => read(db.collection("staffAbsences").where("staffId", "==", id)))),
+    Promise.all(canonicalVanIds.map((id) => read(db.collection("vanHalfDaySchedules").where("vanId", "==", id)))),
+    requiresCatalogFallback
+      ? read(db.collection("services"))
+      : Promise.all(serviceIds.map((id) => read(db.collection("services").doc(id)))),
+    Promise.all(propertyIds.map((id) => read(db.collection("properties").doc(id)))),
+    Promise.all(clientIds.map((id) => read(db.collection("clients").doc(id)))),
+  ]);
+  const services = Array.isArray(serviceSnapshots)
+    ? serviceSnapshots.map(documentItem).filter(Boolean)
+    : snapshotItems(serviceSnapshots);
+  const staffAbsences = absenceSnapshots
+    .flatMap(snapshotItems)
+    .filter((absence) => absence.active !== false
+      && cleanText(absence.fromDate, 20) <= endDate
+      && cleanText(absence.toDate, 20) >= startDate);
   return canonicalizeSchedulingData({
-    workOrders: snapshotItems(workOrderSnapshot),
-    services: snapshotItems(serviceSnapshot),
-    properties: snapshotItems(propertySnapshot),
-    clients: snapshotItems(clientSnapshot),
-    vans: snapshotItems(vanSnapshot).filter((van) => van.active !== false),
-    staffProfiles: snapshotItems(staffSnapshot),
-    dailyVanAssignments: snapshotItems(assignmentSnapshot),
-    staffAbsences: snapshotItems(absenceSnapshot),
+    workOrders,
+    services,
+    properties: propertySnapshots.map(documentItem).filter(Boolean),
+    clients: clientSnapshots.map(documentItem).filter(Boolean),
+    vans,
+    staffProfiles: staffSnapshots.map(documentItem).filter(Boolean),
+    dailyVanAssignments: selectedAssignments,
+    staffAbsences,
     calendarClosures: snapshotItems(closureSnapshot),
-    businessSettings: snapshotItems(businessSnapshot),
-    vanHalfDaySchedules: snapshotItems(halfDaySnapshot),
+    businessSettings: businessSnapshots.map(documentItem).filter(Boolean),
+    vanHalfDaySchedules: halfDaySnapshots.flatMap(snapshotItems),
   });
 }
 
-async function loadAppointmentSchedule(db, appointmentId) {
+async function loadAppointmentSchedule(db, appointmentId, { transaction = null } = {}) {
   const id = cleanText(appointmentId, 180);
   if (!id) return null;
-  const snapshot = await db.collection("appointments").doc(id).get();
+  const reference = db.collection("appointments").doc(id);
+  const snapshot = await (transaction ? transaction.get(reference) : reference.get());
   if (!snapshot.exists) return null;
   const appointment = snapshot.data() || {};
   const assignments = Array.isArray(appointment.assignments) ? appointment.assignments : [];
@@ -112,7 +176,7 @@ function routeConfigFromSettings(settings) {
 }
 
 function explicitOfficeRoutePolicy({ context = {}, request = {}, option = null } = {}) {
-  if (context.channel !== "office" || context.changeKind === "operational_move") return "enforced";
+  if (context.channel !== "office") return "enforced";
   const requestedDate = cleanText(request.constraints?.requestedDate, 20);
   const requestedTime = cleanText(request.constraints?.requestedTime, 20);
   const explicitPrimaryTarget = Boolean(
@@ -166,7 +230,7 @@ function exactCustomerProperty(data, request) {
 function buildCapacityLocks(option, halfDaySchedules = []) {
   const locks = [];
   for (const assignment of option.assignments || []) {
-    const halfDay = isHalfDay(assignment.vanId, option.date, halfDaySchedules);
+    const halfDay = halfDaySchedule(assignment.vanId, option.date, halfDaySchedules) || false;
     const startTime = assignment.time || option.time;
     const slots = capacityLockSlots({
       time: startTime,
@@ -228,6 +292,11 @@ function operationalMoveResult({ request, property, data, routeConfig, date, tim
   if (!operationalMoveDateAllowed({ date, currentSchedule })) {
     return { option: null, reason: "operational-move-date-mismatch" };
   }
+  const calendarSettings = (data.businessSettings || []).find((item) => item.id === "business-calendar")
+    || { closedWeekdays: [0] };
+  if (dateClosed(date, calendarSettings, data.calendarClosures || [])) {
+    return { option: null, reason: "requested-date-closed" };
+  }
 
   const work = singleWork(request);
   const preset = exactPreset(data, work);
@@ -259,7 +328,7 @@ function operationalMoveResult({ request, property, data, routeConfig, date, tim
     data,
     routeConfig,
     candidateZone,
-    manualOperationalMove: true,
+    manualOperationalMove: false,
   });
   if (!availability) return { option: null, reason: "operational-target-unavailable" };
 
@@ -289,6 +358,95 @@ function operationalMoveResult({ request, property, data, routeConfig, date, tim
   return { option, reason: "available", preset, candidateZone, allocations };
 }
 
+function validateCanonicalSelection({ request, option, context = {}, now = new Date(), loadedData, currentSchedule = null }) {
+  const nowParts = arubaDateParts(now);
+  const operationalMove = context.changeKind === "operational_move";
+  if (operationalMove && !operationalMoveDateAllowed({ date: option.date, currentSchedule })) {
+    return { available: false, reason: "operational-move-date-mismatch" };
+  }
+  if (option.date < nowParts.date || (option.date === nowParts.date && option.time <= nowParts.time)) {
+    return {
+      available: false,
+      reason: "selected-time-passed",
+      rejection: { stage: "temporal", code: "START_TIME_PASSED" },
+    };
+  }
+
+  const data = dataWithoutAppointment(loadedData, context.excludeAppointmentId);
+  const calendarSettings = (data.businessSettings || []).find((item) => item.id === "business-calendar")
+    || { closedWeekdays: [0] };
+  if (dateClosed(option.date, calendarSettings, data.calendarClosures || [])) {
+    return { available: false, reason: "requested-date-closed" };
+  }
+
+  const { property } = exactCustomerProperty(data, request);
+  const routePolicy = explicitOfficeRoutePolicy({ context, request, option });
+  const routeConfig = routeConfigForPolicy(data.businessSettings, routePolicy);
+  const candidateZone = propertyZone(
+    property,
+    option.address || property.address || property.addressRaw || property.addressNormalized || "",
+    routeConfig,
+  );
+  const refreshedAssignments = [];
+  for (const requested of option.assignments || []) {
+    const van = data.vans.find((item) => item.id === requested.vanId);
+    if (!van) return { available: false, reason: "van-unavailable", vanId: requested.vanId };
+    const assignment = resolveAssignment(
+      van,
+      option.date,
+      data.staffProfiles,
+      data.dailyVanAssignments,
+      data.staffAbsences,
+    );
+    const startTime = requested.time || option.time;
+    const evaluated = evaluateCandidateAvailability({
+      date: option.date,
+      time: startTime,
+      allocation: {
+        quantity: requested.quantity,
+        durationMinutes: requested.durationMinutes,
+        slots: requested.slots,
+        fullDay: requested.fullDay,
+      },
+      van,
+      assignment,
+      data,
+      routeConfig,
+      candidateZone,
+      manualOperationalMove: false,
+    });
+    if (!evaluated.available) {
+      return {
+        available: false,
+        reason: evaluated.rejection?.code
+          || (operationalMove ? "operational-target-unavailable" : "capacity-or-route-changed"),
+        vanId: requested.vanId,
+        rejection: evaluated.rejection || null,
+      };
+    }
+    const availability = evaluated.candidate;
+    refreshedAssignments.push({
+      ...availability,
+      time: startTime,
+      endTime: availability.endTime,
+      role: requested.role,
+    });
+  }
+  if (!refreshedAssignments.length) return { available: false, reason: "missing-assignments" };
+  const primary = refreshedAssignments.find((assignment) => assignment.role !== "support") || refreshedAssignments[0];
+  return {
+    available: true,
+    option: {
+      ...option,
+      endTime: primary?.endTime || option.endTime,
+      capacityEndTime: primary?.capacityEndTime || option.capacityEndTime,
+      assignments: refreshedAssignments,
+    },
+    data,
+    routePolicy,
+  };
+}
+
 function createSchedulingProvider({ db }) {
   if (!db || typeof db.collection !== "function") throw new Error("A Firestore-compatible db is required.");
 
@@ -303,27 +461,55 @@ function createSchedulingProvider({ db }) {
       const requestedDate = cleanText(request.constraints?.requestedDate, 20);
       const requestedTime = cleanText(request.constraints?.requestedTime, 20);
       const operationalMove = context.changeKind === "operational_move" && requiredPrimaryVanId && requestedDate && requestedTime;
+      const requestedDateGrid = context.availabilityMode === "requested_date_grid";
+      const exactDateLoad = Boolean(requestedDate && (operationalMove || requestedDateGrid || requiredPrimaryVanId));
       const [loaded, currentSchedule] = operationalMove
         ? await Promise.all([
-          loadSchedulingData(db, requestedDate, requestedDate),
+          loadSchedulingData(db, requestedDate, requestedDate, { request }),
           loadAppointmentSchedule(db, context.excludeAppointmentId),
         ])
-        : [await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS)), null];
+        : [await loadSchedulingData(
+          db,
+          exactDateLoad ? requestedDate : today,
+          exactDateLoad ? requestedDate : addDays(today, MAX_SEARCH_DAYS - 1),
+          { request },
+        ), null];
       const data = dataWithoutAppointment(loaded, context.excludeAppointmentId);
-      if (requiredPrimaryVanId && !data.vans.some((van) => van.id === requiredPrimaryVanId)) {
-        return {
-          options: [],
-          reason: "required-van-unavailable",
-          providerVersion: SCHEDULING_PROVIDER_VERSION,
-          engineVersion: CANONICAL_SCHEDULING_ENGINE_VERSION,
-          metadata: { requiredPrimaryVanId },
-        };
-      }
+      const requiredVanUnavailable = Boolean(
+        requiredPrimaryVanId
+        && !data.vans.some((van) => van.id === requiredPrimaryVanId),
+      );
       const { property } = exactCustomerProperty(data, request);
       const routePolicy = explicitOfficeRoutePolicy({ context, request });
       const routeConfig = routeConfigForPolicy(data.businessSettings, routePolicy);
 
       if (operationalMove) {
+        if (requestedDate < today || (requestedDate === today && requestedTime <= nowParts.time)) {
+          return {
+            options: [],
+            reason: "selected-time-passed",
+            providerVersion: SCHEDULING_PROVIDER_VERSION,
+            engineVersion: CANONICAL_SCHEDULING_ENGINE_VERSION,
+            metadata: {
+              requestedDate,
+              requestedTime,
+              requestedDateUnavailable: true,
+              requestedTimeUnavailable: true,
+              requiredPrimaryVanId,
+              operationalMove: true,
+              routePolicy,
+              diagnostic: buildExactTargetDiagnostic({
+                stage: "temporal",
+                code: "START_TIME_PASSED",
+                requestedDate,
+                requestedTime,
+                requiredPrimaryVanId,
+                today,
+                currentTime: nowParts.time,
+              }),
+            },
+          };
+        }
         const exact = operationalMoveResult({
           request,
           property,
@@ -362,11 +548,18 @@ function createSchedulingProvider({ db }) {
         currentTime: nowParts.time,
         requiredPrimaryVanId,
         requireRequestedTarget: Boolean(requiredPrimaryVanId),
+        requestedDateGrid,
       });
       const options = result.options;
       return {
         options,
-        reason: options.length ? result.reason : (requiredPrimaryVanId ? "required-primary-target-unavailable" : result.reason),
+        reason: options.length
+          ? result.reason
+          : requiredVanUnavailable
+            ? "required-van-unavailable"
+            : requiredPrimaryVanId
+              ? "required-primary-target-unavailable"
+              : result.reason,
         providerVersion: SCHEDULING_PROVIDER_VERSION,
         engineVersion: CANONICAL_SCHEDULING_ENGINE_VERSION,
         metadata: {
@@ -378,124 +571,50 @@ function createSchedulingProvider({ db }) {
           vansRequired: result.allocations?.length || 0,
           requiredPrimaryVanId: requiredPrimaryVanId || "",
           routePolicy,
+          availabilityMode: requestedDateGrid ? "requested_date_grid" : "client_shortlist",
+          resolvedWorkload: result.resolvedWorkload,
+          diagnostic: result.diagnostic,
         },
       };
     },
 
     async revalidateSelection({ request, option, context = {}, now = new Date() }) {
-      const nowParts = arubaDateParts(now);
-      const today = nowParts.date;
       const operationalMove = context.changeKind === "operational_move";
       const currentSchedule = operationalMove
         ? await loadAppointmentSchedule(db, context.excludeAppointmentId)
         : null;
-      if (operationalMove) {
-        if (!operationalMoveDateAllowed({ date: option.date, currentSchedule })) {
-          return { available: false, reason: "operational-move-date-mismatch" };
-        }
-      } else if (option.date < today || (option.date === today && option.time <= nowParts.time)) {
-        return { available: false, reason: "selected-time-passed" };
-      }
-
-      const loaded = operationalMove
-        ? await loadSchedulingData(db, option.date, option.date)
-        : await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS));
-      const data = dataWithoutAppointment(loaded, context.excludeAppointmentId);
-      const { property } = exactCustomerProperty(data, request);
-      const routePolicy = explicitOfficeRoutePolicy({ context, request, option });
-      const routeConfig = routeConfigForPolicy(data.businessSettings, routePolicy);
-      const candidateZone = propertyZone(property, option.address, routeConfig);
-      const refreshedAssignments = [];
-      for (const requested of option.assignments) {
-        const van = data.vans.find((item) => item.id === requested.vanId);
-        if (!van) return { available: false, reason: "van-unavailable", vanId: requested.vanId };
-        const assignment = resolveAssignment(
-          van,
-          option.date,
-          data.staffProfiles,
-          data.dailyVanAssignments,
-          data.staffAbsences,
-        );
-        const startTime = requested.time || option.time;
-        const availability = candidateAvailability({
-          date: option.date,
-          time: startTime,
-          allocation: {
-            quantity: requested.quantity,
-            durationMinutes: requested.durationMinutes,
-            slots: requested.slots,
-            fullDay: requested.fullDay,
-          },
-          van,
-          assignment,
-          data,
-          routeConfig,
-          candidateZone,
-          manualOperationalMove: operationalMove,
-        });
-        if (!availability) {
-          return { available: false, reason: operationalMove ? "operational-target-unavailable" : "capacity-or-route-changed", vanId: requested.vanId };
-        }
-        refreshedAssignments.push({ ...availability, time: startTime, endTime: availability.endTime, role: requested.role });
-      }
-      const primary = refreshedAssignments.find((assignment) => assignment.role !== "support") || refreshedAssignments[0];
-      return {
-        available: true,
-        option: {
-          ...option,
-          endTime: primary?.endTime || option.endTime,
-          assignments: refreshedAssignments,
-        },
-      };
+      const loaded = await loadSchedulingData(db, option.date, option.date, {
+        request,
+        targetVanIds: (option.assignments || []).map((assignment) => assignment.vanId),
+      });
+      return validateCanonicalSelection({ request, option, context, now, loadedData: loaded, currentSchedule });
     },
 
-    async validateTransaction({ transaction, db: transactionDb, option, appointmentId, context = {} }) {
-      const sameDayQuery = transactionDb.collection("workOrders").where("date", "==", option.date);
-      const [sameDaySnapshot, serviceSnapshot, halfDaySnapshot, vanSnapshot] = await Promise.all([
-        transaction.get(sameDayQuery),
-        transaction.get(transactionDb.collection("services")),
-        transaction.get(transactionDb.collection("vanHalfDaySchedules")),
-        transaction.get(transactionDb.collection("vans")),
-      ]);
-      const services = snapshotItems(serviceSnapshot);
-      const canonical = canonicalizeSchedulingData({
-        vans: snapshotItems(vanSnapshot),
-        workOrders: snapshotItems(sameDaySnapshot),
-        vanHalfDaySchedules: snapshotItems(halfDaySnapshot),
-      });
-      const halfDaySchedules = canonical.vanHalfDaySchedules;
+    async validateTransaction({ transaction, db: transactionDb, request, option, appointmentId, context = {}, now = new Date() }) {
       const operationalMove = context.changeKind === "operational_move";
-      const sameDayOrders = canonical.workOrders
-        .filter((order) => operationalMove
-          ? workOrderBlocksOperationalMoveCapacity(order)
-          : orderBlocksCapacity(order))
-        .filter((order) => order.appointmentId !== appointmentId);
-
-      for (const assignment of option.assignments) {
-        const halfDay = isHalfDay(assignment.vanId, option.date, halfDaySchedules);
-        const startTime = assignment.time || option.time;
-        const requestedInterval = assignmentCapacityInterval({
-          time: startTime,
-          allocation: {
-            durationMinutes: assignment.durationMinutes,
-            slots: assignment.slots,
-            fullDay: assignment.fullDay,
-          },
-          halfDay,
-        });
-        if (!requestedInterval) return { available: false, reason: "invalid-capacity-interval" };
-        const conflict = sameDayOrders.some((order) => {
-          if (order.vanId !== assignment.vanId) return false;
-          return intervalsOverlap(requestedInterval, workOrderCapacityInterval(order, services, halfDay));
-        });
-        if (conflict) {
-          return { available: false, reason: "work-order-conflict", vanId: assignment.vanId };
-        }
-      }
-
+      const [loaded, currentSchedule] = await Promise.all([
+        loadSchedulingData(transactionDb, option.date, option.date, {
+          transaction,
+          request,
+          targetVanIds: (option.assignments || []).map((assignment) => assignment.vanId),
+        }),
+        operationalMove
+          ? loadAppointmentSchedule(transactionDb, context.excludeAppointmentId || appointmentId, { transaction })
+          : Promise.resolve(null),
+      ]);
+      const validation = validateCanonicalSelection({
+        request,
+        option,
+        context: { ...context, excludeAppointmentId: context.excludeAppointmentId || appointmentId },
+        now,
+        loadedData: loaded,
+        currentSchedule,
+      });
+      if (!validation.available || !validation.option) return validation;
       return {
         available: true,
-        capacityLocks: buildCapacityLocks(option, halfDaySchedules),
+        option: validation.option,
+        capacityLocks: buildCapacityLocks(validation.option, loaded.vanHalfDaySchedules),
       };
     },
 
@@ -521,4 +640,5 @@ module.exports = {
   operationalRulesFromSettings,
   routeConfigForPolicy,
   routeConfigFromSettings,
+  validateCanonicalSelection,
 };

@@ -245,6 +245,27 @@ test("cancelling an appointment releases capacity and cancels linked work orders
   assert.equal(db.read("bookingCapacityLocks/lock-old-0930").active, false);
 });
 
+test("cancellation never releases a lock now owned by another appointment", async () => {
+  const { db, lifecycle } = fixture({
+    "appointments/APT-OTHER-LOCK": {
+      appointmentId: "APT-OTHER-LOCK",
+      status: "confirmed",
+      capacityLockIds: ["lock-old-0830"],
+    },
+    "bookingCapacityLocks/lock-old-0830": {
+      appointmentId: "APT-OTHER-LOCK",
+      active: true,
+      date: "2098-12-20",
+      vanId: "VAN-1",
+      slot: "08:30",
+    },
+  });
+  await lifecycle.cancelAppointment({ appointmentId: "APT-LIVE-1", reason: "Customer cancelled service" });
+  assert.equal(db.read("bookingCapacityLocks/lock-old-0830").appointmentId, "APT-OTHER-LOCK");
+  assert.equal(db.read("bookingCapacityLocks/lock-old-0830").active, true);
+  assert.equal(db.read("bookingCapacityLocks/lock-old-0930").active, false);
+});
+
 test("customer reschedule revalidates capacity and preserves Work Order fields owned by other domains", async () => {
   const { db, lifecycle, provider } = fixture({ "bookingOffers/OFR-RESCHEDULE-1": openOffer() });
   const result = await lifecycle.rescheduleAppointment({
@@ -281,6 +302,63 @@ test("customer reschedule revalidates capacity and preserves Work Order fields o
   assert.equal(db.read("bookingCapacityLocks/lock-new-1330").active, true);
   assert.equal(db.read("bookingCapacityLocks/lock-new-1330").appointmentId, "APT-LIVE-1");
   assert.equal(db.read("bookingOffers/OFR-RESCHEDULE-1").appointmentId, "APT-LIVE-1");
+});
+
+test("reschedule rejects terminal Work Orders without mutating appointment, work or locks", async (t) => {
+  for (const status of ["Completada", "Facturada", "Pagada"]) {
+    await t.test(status, async () => {
+      const { db, lifecycle } = fixture({
+        "bookingOffers/OFR-RESCHEDULE-1": openOffer(),
+        "workOrders/WO-APT-LIVE-1-1": {
+          appointmentId: "APT-LIVE-1",
+          status,
+          date: "2098-12-20",
+          time: "08:30",
+          vanId: "VAN-1",
+        },
+      });
+      const before = Object.fromEntries([...db.store.entries()].map(([key, value]) => [key, structuredClone(value)]));
+      await assert.rejects(
+        lifecycle.rescheduleAppointment({
+          appointmentId: "APT-LIVE-1",
+          offerId: "OFR-RESCHEDULE-1",
+          offerVersion: 1,
+          optionId: "OPT-NEW",
+          reason: "Customer requested another date",
+        }),
+        (error) => error.code === "invalid_request" && error.details?.reason === "terminal-work-order",
+      );
+      assert.deepEqual(Object.fromEntries(db.store), before);
+    });
+  }
+});
+
+test("reschedule never releases an old lock now owned by another appointment", async () => {
+  const { db, lifecycle } = fixture({
+    "bookingOffers/OFR-RESCHEDULE-1": openOffer(),
+    "appointments/APT-OTHER-OLD-LOCK": {
+      appointmentId: "APT-OTHER-OLD-LOCK",
+      status: "confirmed",
+      capacityLockIds: ["lock-old-0830"],
+    },
+    "bookingCapacityLocks/lock-old-0830": {
+      appointmentId: "APT-OTHER-OLD-LOCK",
+      active: true,
+      date: "2098-12-20",
+      vanId: "VAN-1",
+      slot: "08:30",
+    },
+  });
+  await lifecycle.rescheduleAppointment({
+    appointmentId: "APT-LIVE-1",
+    offerId: "OFR-RESCHEDULE-1",
+    offerVersion: 1,
+    optionId: "OPT-NEW",
+    reason: "Customer requested another date",
+  });
+  assert.equal(db.read("bookingCapacityLocks/lock-old-0830").appointmentId, "APT-OTHER-OLD-LOCK");
+  assert.equal(db.read("bookingCapacityLocks/lock-old-0830").active, true);
+  assert.equal(db.read("bookingCapacityLocks/lock-old-0930").active, false);
 });
 
 test("operational drag uses its server-created offer directly and skips duplicate provider revalidation", async () => {

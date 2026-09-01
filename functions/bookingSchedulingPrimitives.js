@@ -8,20 +8,36 @@ const REGULAR_SLOTS = [...MORNING_SLOTS, ...AFTERNOON_SLOTS];
 const HALF_DAY_SLOTS = [...MORNING_SLOTS, EXTRA_MORNING_SLOT];
 const HALF_DAY_EFFECTIVE_FROM = "2026-08-01";
 const MAX_SEARCH_DAYS = 21;
-const MAX_VANS = 4;
 
 const ACTIVE_BLOCKING_STATUSES = new Set([
-  "Solicitud recibida",
-  "Reserva temporal",
-  "Confirmada",
-  "Asignada",
-  "En camino",
-  "En el sitio",
-  "En proceso",
-  "Pendiente",
-  "Completada",
-  "Facturada",
-  "Pagada",
+  "solicitud recibida",
+  "reserva temporal",
+  "confirmada",
+  "asignada",
+  "en camino",
+  "en el sitio",
+  "en proceso",
+  "pendiente",
+  "completada",
+  "facturada",
+  "pagada",
+]);
+
+const NON_BLOCKING_WORK_ORDER_STATUSES = new Set([
+  "cancelada",
+  "cancelled",
+  "canceled",
+  "reprogramada",
+  "rescheduled",
+]);
+
+const TERMINAL_WORK_ORDER_STATUSES = new Set([
+  "completada",
+  "completed",
+  "facturada",
+  "invoiced",
+  "pagada",
+  "paid",
 ]);
 
 const DEFAULT_ROUTE_CONFIG = {
@@ -143,9 +159,25 @@ function endTime(start, slots) {
   return `${String(hour + 1).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
+function normalizeWorkOrderStatus(value) {
+  return normalizeText(value);
+}
+
+function workOrderStatusBlocksCapacity(value) {
+  const status = normalizeWorkOrderStatus(value);
+  if (NON_BLOCKING_WORK_ORDER_STATUSES.has(status)) return false;
+  if (ACTIVE_BLOCKING_STATUSES.has(status)) return true;
+  // Unknown and blank legacy states are deliberately fail-closed. They must be
+  // corrected or explicitly classified before Scheduling can release capacity.
+  return true;
+}
+
+function workOrderStatusIsTerminal(value) {
+  return TERMINAL_WORK_ORDER_STATUSES.has(normalizeWorkOrderStatus(value));
+}
+
 function orderBlocksCapacity(order) {
-  if (ACTIVE_BLOCKING_STATUSES.has(order.status)) return true;
-  return !["Cancelada", "Reprogramada"].includes(order.status);
+  return workOrderStatusBlocksCapacity(order?.status);
 }
 
 function orderSlotCount(order, services) {
@@ -158,13 +190,40 @@ function orderSlotCount(order, services) {
 }
 
 function isHalfDay(vanId, date, schedules) {
+  return Boolean(halfDaySchedule(vanId, date, schedules));
+}
+
+function halfDaySchedule(vanId, date, schedules) {
   if (date < HALF_DAY_EFFECTIVE_FROM) return false;
   const day = weekday(date);
-  return schedules.some((schedule) => schedule.active !== false && schedule.vanId === vanId && Number(schedule.weekday) === day);
+  return schedules.find((schedule) => schedule.active !== false && schedule.vanId === vanId && Number(schedule.weekday) === day) || null;
 }
 
 function bookingSlots(halfDay) {
-  return halfDay ? HALF_DAY_SLOTS : REGULAR_SLOTS;
+  if (!halfDay) return REGULAR_SLOTS;
+  if (typeof halfDay !== "object") return HALF_DAY_SLOTS;
+  const windowStart = timeMinutes(normalizeTime(halfDay.workdayStart) || "08:00");
+  const windowEnd = timeMinutes(normalizeTime(halfDay.workdayEnd) || "13:00");
+  const extraMorningSlot = normalizeTime(halfDay.extraMorningSlot) || EXTRA_MORNING_SLOT;
+  return [...new Set([...REGULAR_SLOTS, extraMorningSlot])]
+    .filter((slot) => {
+      const start = timeMinutes(slot);
+      return start !== null
+        && (windowStart === null || start >= windowStart)
+        && (windowEnd === null || start < windowEnd);
+    })
+    .sort((left, right) => timeMinutes(left) - timeMinutes(right));
+}
+
+function operationalEndMinutes(halfDay) {
+  if (halfDay === true) return 13 * 60;
+  if (halfDay && typeof halfDay === "object") {
+    const configured = timeMinutes(normalizeTime(halfDay.workdayEnd) || "13:00");
+    if (configured !== null) return configured;
+  }
+  const schedule = bookingSlots(halfDay);
+  const lastStart = timeMinutes(schedule[schedule.length - 1]);
+  return lastStart === null ? null : lastStart + 60;
 }
 
 /**
@@ -177,11 +236,11 @@ function capacitySlotsForInterval(startTime, durationMinutes, halfDay) {
   const schedule = bookingSlots(halfDay);
   if (!schedule.includes(startTime)) return [];
   const start = timeMinutes(startTime);
-  const lastStart = timeMinutes(schedule[schedule.length - 1]);
   const duration = Math.max(1, Math.round(Number(durationMinutes) || 0));
-  if (start === null || lastStart === null || !duration) return [];
+  if (start === null || !duration) return [];
   const end = start + duration;
-  const operationalEnd = lastStart + 60;
+  const operationalEnd = operationalEndMinutes(halfDay);
+  if (operationalEnd === null) return [];
   if (end > operationalEnd) return [];
   return schedule.filter((slot) => {
     const anchor = timeMinutes(slot);
@@ -360,9 +419,9 @@ module.exports = {
   AFTERNOON_SLOTS,
   EXTRA_MORNING_SLOT,
   MAX_SEARCH_DAYS,
-  MAX_VANS,
   MORNING_SLOTS,
   REGULAR_SLOTS,
+  ARUBA_TIME_ZONE,
   addDays,
   addressSimilarity,
   arubaDateParts,
@@ -372,12 +431,15 @@ module.exports = {
   dateDistanceInDays,
   endTime,
   hashId,
+  halfDaySchedule,
   isHalfDay,
   normalizePhone,
   normalizeRouteConfig,
   normalizeText,
   normalizeTime,
+  normalizeWorkOrderStatus,
   occupiedSlots,
+  operationalEndMinutes,
   orderBlocksCapacity,
   orderSlotCount,
   propertyZone,
@@ -386,4 +448,6 @@ module.exports = {
   snapshotItems,
   vanCanReceiveAppointments,
   weekday,
+  workOrderStatusBlocksCapacity,
+  workOrderStatusIsTerminal,
 };

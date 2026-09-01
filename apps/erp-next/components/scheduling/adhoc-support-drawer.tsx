@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { BrowserAppointmentRecord } from '../../lib/browser-operational';
 import {
   addOfficeAdhocSupport,
@@ -92,6 +92,14 @@ export function AdhocSupportDrawer({ target, appointments, onClose, onCreated }:
     ? text(note)
     : [reason, text(note)].filter(Boolean).join(' · ');
 
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !busy) onClose();
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [busy, onClose]);
+
   const submit = async () => {
     if (!selected) {
       setError('Select the primary appointment that needs help.');
@@ -133,7 +141,7 @@ export function AdhocSupportDrawer({ target, appointments, onClose, onCreated }:
           <h2>Send support to a coworker</h2>
           <p>{target.vanName} · {formatDate(target.dateKey)} · {formatTime(target.start)}–{formatTime(target.end)}</p>
         </div>
-        <button type="button" disabled={busy} onClick={onClose}>×</button>
+        <button type="button" disabled={busy} onClick={onClose} aria-label="Close support drawer">×</button>
       </header>
 
       <div className={styles.drawerBody}>
@@ -176,7 +184,7 @@ export function AdhocSupportDrawer({ target, appointments, onClose, onCreated }:
             <label className={styles.wide}><span>Reason</span><select value={reason} disabled={busy} onChange={(event) => { setReason(event.target.value); setError(''); }}><option value="">Select reason</option>{supportReasons.map((item) => <option key={item}>{item}</option>)}</select></label>
             <label className={styles.wide}><span>{reason === 'Other' ? 'Describe support *' : 'Additional note'}</span><textarea rows={3} value={note} disabled={busy} onChange={(event) => { setNote(event.target.value); setError(''); }} placeholder="What should the support team know before going to help?" /></label>
           </div>
-          {error ? <div className={styles.descriptionPreview}><span>ATTENTION</span><strong>{error}</strong></div> : null}
+          {error ? <div className={styles.descriptionPreview} role="alert"><span>ATTENTION</span><strong>{error}</strong></div> : null}
         </section>
       </div>
 

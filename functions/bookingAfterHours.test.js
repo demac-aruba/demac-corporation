@@ -92,6 +92,25 @@ class FakeFirestore {
   read(path) { return this.store.get(path); }
 }
 
+class RetryingFakeFirestore extends FakeFirestore {
+  constructor(seed = {}) {
+    super(seed);
+    this.transactionAttempts = 0;
+  }
+  async runTransaction(callback) {
+    const firstAttempt = new FakeTransaction(this);
+    this.transactionAttempts += 1;
+    await callback(firstAttempt);
+
+    // Simulate Firestore discarding the first attempt after a concurrent write.
+    const retry = new FakeTransaction(this);
+    this.transactionAttempts += 1;
+    const result = await callback(retry);
+    await retry.commit();
+    return result;
+  }
+}
+
 const DATE = "2026-08-27";
 const CLOCK = "2026-08-27T18:00:00.000Z";
 
@@ -207,6 +226,9 @@ test("after-hours emergency creates one canonical open-ended appointment, work o
   assert.equal(appointment.status, "confirmed");
   assert.equal(appointment.afterHoursKind, AFTER_HOURS_KIND);
   assert.equal(appointment.afterHoursOpenEnded, true);
+  assert.equal(appointment.afterHoursRequestId, "after-hours-request-0001");
+  assert.equal(typeof appointment.afterHoursRequestFingerprint, "string");
+  assert.equal(appointment.afterHoursRequestFingerprint.length, 40);
   assert.equal(appointment.actualCompletedAt, null);
   assert.equal(appointment.startTime, "17:30");
   assert.equal(appointment.primaryVanId, "VAN-1");
@@ -215,6 +237,8 @@ test("after-hours emergency creates one canonical open-ended appointment, work o
   assert.equal(workOrder.status, "Confirmada");
   assert.equal(workOrder.afterHoursKind, AFTER_HOURS_KIND);
   assert.equal(workOrder.afterHoursOpenEnded, true);
+  assert.equal(workOrder.afterHoursRequestId, "after-hours-request-0001");
+  assert.equal(workOrder.afterHoursRequestFingerprint, appointment.afterHoursRequestFingerprint);
   assert.equal(workOrder.actualCompletedAt, null);
   assert.equal(workOrder.time, "17:30");
   assert.equal(workOrder.appointmentEndTime, undefined);
@@ -311,6 +335,96 @@ test("retrying the same after-hours request is idempotent", async () => {
   assert.equal(db.read(`appointments/${first.appointmentId}`).afterHoursRequestId, "after-hours-request-0001");
 });
 
+test("the same after-hours requestId cannot be reused for a different target", async () => {
+  const { authority } = fixture();
+  await authority.createEmergency(input());
+  await assert.rejects(
+    authority.createEmergency(input({ requiredVanId: "VAN-2" })),
+    (error) => error.code === BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
+  );
+});
+
+test("after-hours emergency rejects a same-day start in the past or equal to Aruba now", async (t) => {
+  for (const scenario of [
+    { name: "past", clock: "2026-08-27T21:31:00.000Z", currentTime: "17:31" },
+    { name: "equal", clock: "2026-08-27T21:30:00.000Z", currentTime: "17:30" },
+  ]) {
+    await t.test(scenario.name, async () => {
+      const { db, authority } = fixture({}, scenario.clock);
+      await assert.rejects(
+        authority.createEmergency(input()),
+        (error) => error.code === BOOKING_ERROR_CODES.AVAILABILITY_CHANGED
+          && error.details?.reason === "selected-time-passed"
+          && error.details?.rejection?.code === "START_TIME_PASSED"
+          && error.details?.currentTime === scenario.currentTime,
+      );
+      assert.equal([...db.store.keys()].some((path) => path.startsWith("appointments/")), false);
+      assert.equal([...db.store.keys()].some((path) => path.startsWith("workOrders/")), false);
+      assert.equal([...db.store.keys()].some((path) => path.startsWith("bookingCapacityLocks/")), false);
+    });
+  }
+});
+
+test("a Firestore retry re-reads Aruba now and cannot commit after the requested start", async () => {
+  const db = new RetryingFakeFirestore(baseSeed());
+  const clockValues = [
+    "2026-08-27T21:29:00.000Z",
+    "2026-08-27T21:30:00.000Z",
+  ];
+  let clockCalls = 0;
+  const authority = createAfterHoursAuthority({
+    db,
+    clock: () => new Date(clockValues[Math.min(clockCalls++, clockValues.length - 1)]),
+    serverTimestamp: () => "SERVER_TIMESTAMP",
+  });
+
+  await assert.rejects(
+    authority.createEmergency(input()),
+    (error) => error.code === BOOKING_ERROR_CODES.AVAILABILITY_CHANGED
+      && error.details?.reason === "selected-time-passed"
+      && error.details?.rejection?.code === "START_TIME_PASSED",
+  );
+  assert.equal(db.transactionAttempts, 2);
+  assert.equal(clockCalls, 2);
+  assert.equal([...db.store.keys()].some((path) => path.startsWith("appointments/")), false);
+  assert.equal([...db.store.keys()].some((path) => path.startsWith("workOrders/")), false);
+  assert.equal([...db.store.keys()].some((path) => path.startsWith("bookingCapacityLocks/")), false);
+});
+
+test("a committed after-hours request replays after Aruba midnight", async () => {
+  const db = new FakeFirestore(baseSeed());
+  let clockValue = "2026-08-28T03:00:00.000Z"; // Aug 27, 23:00 in Aruba.
+  let clockCalls = 0;
+  const authority = createAfterHoursAuthority({
+    db,
+    clock: () => {
+      clockCalls += 1;
+      return new Date(clockValue);
+    },
+    serverTimestamp: () => "SERVER_TIMESTAMP",
+  });
+  const request = input({ requestedTime: "23:30" });
+
+  const first = await authority.createEmergency(request);
+  clockValue = "2026-08-28T04:05:00.000Z"; // Aug 28, 00:05 in Aruba.
+  const replay = await authority.createEmergency(request);
+
+  assert.equal(first.replayed, false);
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.appointmentId, first.appointmentId);
+  assert.deepEqual(replay.workOrderIds, first.workOrderIds);
+  assert.equal(clockCalls, 1);
+});
+
+test("the same after-hours requestId cannot be reused for different work data", async () => {
+  const { authority } = fixture();
+  await authority.createEmergency(input());
+  await assert.rejects(
+    authority.createEmergency(input({ customerFacingDescription: "A different emergency scope" })),
+    (error) => error.code === BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
+  );
+});
+
 test("a Van cannot receive a second open-ended after-hours emergency while its guard is active", async () => {
   const { authority } = fixture();
   await authority.createEmergency(input());
@@ -319,6 +433,26 @@ test("a Van cannot receive a second open-ended after-hours emergency while its g
     (error) => error.code === BOOKING_ERROR_CODES.SLOT_CONFLICT
       && error.details?.reason === "after-hours-open-job-exists",
   );
+});
+
+test("after-hours reclaims a guard whose former appointment is cancelled", async () => {
+  const guard = afterHoursGuard(DATE, "VAN-1");
+  const { db, authority } = fixture({
+    "appointments/APT-CANCELLED-AFTER-HOURS": {
+      appointmentId: "APT-CANCELLED-AFTER-HOURS",
+      status: "cancelled",
+      capacityLockIds: [guard.id],
+    },
+    [`bookingCapacityLocks/${guard.id}`]: {
+      ...guard,
+      appointmentId: "APT-CANCELLED-AFTER-HOURS",
+      active: true,
+    },
+  });
+  const result = await authority.createEmergency(input());
+  assert.equal(result.success, true);
+  assert.equal(db.read(`bookingCapacityLocks/${guard.id}`).appointmentId, result.appointmentId);
+  assert.equal(db.read(`bookingCapacityLocks/${guard.id}`).active, true);
 });
 
 test("completion releases the Van so a later after-hours emergency can be assigned without inventing an end time", async () => {

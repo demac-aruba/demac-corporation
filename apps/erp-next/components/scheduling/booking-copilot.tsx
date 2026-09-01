@@ -1,5 +1,7 @@
 'use client';
 
+// LEGACY ACCEPTANCE UI. It is quarantined from every App Router production entry.
+
 import { useMemo, useState } from 'react';
 import type { BookingRestriction, BookingWorkLine } from '../../lib/scheduling';
 import type { CalendarDispatchJob } from '../../lib/scheduling-capacity';

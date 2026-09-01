@@ -1,9 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createAfterHoursEmergency } from '../../lib/after-hours-booking';
 import type { AppointmentRecipientSelection } from '../../lib/customer-contacts';
 import {
+  fixedAppointmentOptions,
   optionAssignmentCapacityEnd,
   optionAssignmentIsSupport,
   optionAssignmentStart,
@@ -11,6 +12,19 @@ import {
   optionPrimaryAssignment,
   optionSupportWindows,
 } from '../../lib/live-appointment-edit-state';
+import {
+  captureBookingOfferForCommit,
+  createBookingCommitGate,
+  createLatestAvailabilityGate,
+  officeOfferExpiresAtMs,
+  officeOfferIsExpired,
+} from '../../lib/live-booking-ui-state';
+import {
+  officeBookingDiagnosticMessage,
+  officeBookingErrorMessage,
+  officeBookingResolvedWorkload,
+  type OfficeBookingResolvedWorkload,
+} from '../../lib/office-booking-diagnostics';
 import {
   checkOfficeCreateAvailability,
   confirmOfficeAppointment,
@@ -89,8 +103,16 @@ type ValidationState = {
   signature: string;
   offerId: string;
   offerVersion: number;
+  offerExpiresAt?: string;
+  offerFingerprint: string;
+  resolvedWorkload?: OfficeBookingResolvedWorkload;
   options: OfficeBookingOption[];
   selectedOptionId: string;
+};
+
+type ResolvedWorkloadState = {
+  signature: string;
+  workload: OfficeBookingResolvedWorkload;
 };
 
 const emptyCustomer: CustomerDraft = {
@@ -188,13 +210,6 @@ function propertyLabel(property: BookingProperty) {
   return text(property.name) || text(property.address) || property.id;
 }
 
-function optionMatchesTarget(option: OfficeBookingOption, target: LiveBookingTarget) {
-  const primary = optionPrimaryAssignment(option);
-  return option.date === target.dateKey
-    && option.time === target.start
-    && primary?.vanId === target.vanId;
-}
-
 function materializePropertyDraft(draft: PropertyDraft): NewBookingProperty {
   const base = text(draft.address);
   const detail = text(draft.addressDetail);
@@ -212,8 +227,19 @@ function materializePropertyDraft(draft: PropertyDraft): NewBookingProperty {
   };
 }
 
-function allocationDurationLabel(option: OfficeBookingOption | null, fallbackMinutes: number) {
-  if (!option) return fallbackMinutes > 360 ? 'Large job · validate allocation' : fallbackMinutes ? durationLabel(fallbackMinutes) : 'Add work';
+function resolvedWorkloadLabel(
+  workload: OfficeBookingResolvedWorkload | undefined,
+  option: OfficeBookingOption | null,
+  fallbackMinutes: number,
+) {
+  if (workload) {
+    const minutes = Number(workload.durationMinutes || 0);
+    const slots = Number(workload.ownedSlots?.length ?? workload.slots ?? 0);
+    const parts = [minutes ? durationLabel(minutes) : 'Authority resolved'];
+    if (slots > 0) parts.push(`${slots} capacity slot${slots === 1 ? '' : 's'}`);
+    return parts.join(' · ');
+  }
+  if (!option) return fallbackMinutes ? 'Pending Booking Authority' : 'Add work';
   const primary = optionPrimaryAssignment(option);
   if (!primary) return fallbackMinutes ? durationLabel(fallbackMinutes) : 'Validated';
   const primaryLabel = primary.fullDay ? 'Full-day primary van' : durationLabel(primary.durationMinutes || primary.slots * 60);
@@ -257,8 +283,11 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const [workLines, setWorkLines] = useState<WorkLineDraft[]>([]);
   const [description, setDescription] = useState('');
   const lastAutoDescriptionRef = useRef('');
-  const validationEpochRef = useRef(0);
+  const availabilityGateRef = useRef(createLatestAvailabilityGate());
+  const commitGateRef = useRef(createBookingCommitGate());
   const validationSignatureRef = useRef('');
+  const validatedOfferRef = useRef<ValidationState | null>(null);
+  const offerExpiredDuringCommitRef = useRef(false);
   const [technicianInstructions, setTechnicianInstructions] = useState('');
   const [customerEditorOpen, setCustomerEditorOpen] = useState(false);
   const [propertyEditorOpen, setPropertyEditorOpen] = useState(false);
@@ -272,6 +301,12 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const [holding, setHolding] = useState(false);
   const [authorityError, setAuthorityError] = useState('');
   const [validated, setValidated] = useState<ValidationState | null>(null);
+  const [resolvedWorkload, setResolvedWorkload] = useState<ResolvedWorkloadState | null>(null);
+  const [offerClockMs, setOfferClockMs] = useState(() => Date.now());
+
+  useEffect(() => () => {
+    availabilityGateRef.current.invalidate();
+  }, []);
 
   const requestTarget = useMemo<LiveBookingTarget>(() => ({
     dateKey: target.dateKey,
@@ -378,8 +413,16 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const workSignature = workLines.map((line) => `${line.presetId}:${line.quantity}:${line.manualDurationMinutes ?? ''}`).join('|');
   const recipientSignature = recipientSelections.map((item) => `${item.recipientType}:${item.sourceId}:${Number(item.sendConfirmation)}:${Number(item.sendReminder)}`).sort().join('|');
   const signature = [customerId, propertyId, recipientSignature, workSignature, description.trim(), technicianInstructions.trim(), requestTarget.dateKey, requestTarget.vanId, requestTarget.start, mode].join('|');
-  validationSignatureRef.current = signature;
-  const activeValidation = validated?.signature === signature ? validated : null;
+  useLayoutEffect(() => {
+    validationSignatureRef.current = signature;
+  }, [signature]);
+  const activeValidation = validated?.signature === signature
+    && !officeOfferIsExpired(validated.offerExpiresAt, offerClockMs)
+    ? validated
+    : null;
+  const activeResolvedWorkload = resolvedWorkload?.signature === signature
+    ? resolvedWorkload.workload
+    : activeValidation?.resolvedWorkload;
   const selectedValidatedOption = activeValidation?.options.find((option) => option.id === activeValidation.selectedOptionId)
     ?? activeValidation?.options[0]
     ?? null;
@@ -392,13 +435,26 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   });
 
   const resetValidation = () => {
-    validationEpochRef.current += 1;
+    availabilityGateRef.current.invalidate();
+    validatedOfferRef.current = null;
     setChecking(false);
     setValidated(null);
+    setResolvedWorkload(null);
     setAuthorityError('');
   };
 
+  useEffect(() => {
+    setRequestedStart(target.start);
+    availabilityGateRef.current.invalidate();
+    validatedOfferRef.current = null;
+    setChecking(false);
+    setValidated(null);
+    setResolvedWorkload(null);
+    setAuthorityError('');
+  }, [target.dateKey, target.start, target.vanId]);
+
   const selectCustomer = (customer: BookingCustomer) => {
+    if (commitGateRef.current.isActive()) return;
     setCustomerId(customer.id);
     const firstProperty = references.properties.find((property) => property.clientId === customer.id && property.active !== false);
     setPropertyId(firstProperty?.id ?? '');
@@ -411,6 +467,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   };
 
   const addPreset = (preset: OfficeBookingPreset) => {
+    if (commitGateRef.current.isActive()) return;
     setWorkLines((current) => {
       const existing = current.find((line) => line.presetId === preset.id);
       if (!existing) return [...current, newWorkLine(preset)];
@@ -421,6 +478,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   };
 
   const changeQuantity = (lineId: string, delta: number) => {
+    if (commitGateRef.current.isActive()) return;
     setWorkLines((current) => current.map((line) => line.id === lineId
       ? { ...line, quantity: Math.max(1, Math.min(20, line.quantity + delta)) }
       : line));
@@ -428,11 +486,13 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   };
 
   const removeWorkLine = (lineId: string) => {
+    if (commitGateRef.current.isActive()) return;
     setWorkLines((current) => current.filter((line) => line.id !== lineId));
     resetValidation();
   };
 
   const changeManualHours = (lineId: string, hours: number) => {
+    if (commitGateRef.current.isActive()) return;
     const minutes = Math.max(60, Math.min(720, Math.round(hours * 2) * 30));
     setWorkLines((current) => current.map((line) => line.id === lineId ? { ...line, manualDurationMinutes: minutes } : line));
     resetValidation();
@@ -522,14 +582,14 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       return;
     }
 
-    const requestEpoch = validationEpochRef.current + 1;
-    validationEpochRef.current = requestEpoch;
     const validationSignature = signature;
+    validatedOfferRef.current = null;
     setChecking(true);
     setAuthorityError('');
     setValidated(null);
-    try {
-      const result = await checkOfficeCreateAvailability({
+    await availabilityGateRef.current.runLatest({
+      signature: validationSignature,
+      request: (signal) => checkOfficeCreateAvailability({
         requestId: createOfficeLifecycleRequestId('schedule-create-check'),
         customerId: selectedCustomer.id,
         propertyId: selectedProperty.id,
@@ -541,28 +601,44 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         technicianInstructions: technicianInstructions.trim(),
         recipientSelections,
         notes: `Created from LIVE Scheduling slot ${requestTarget.vanId} ${requestTarget.dateKey} ${requestTarget.start}.`,
-      });
-      if (requestEpoch !== validationEpochRef.current || validationSignatureRef.current !== validationSignature) return;
-      const exactOptions = result.options.filter((option) => optionMatchesTarget(option, requestTarget));
-      if (!result.available || !result.offer || !exactOptions.length) {
-        const reason = result.reason ? ` (${result.reason})` : '';
-        setAuthorityError(`Booking Authority could not reserve the complete allocation for this van/time${reason}. The schedule was not changed.`);
-        return;
-      }
-      setValidated({
-        signature: validationSignature,
-        offerId: result.offer.id,
-        offerVersion: result.offer.version,
-        options: exactOptions,
-        selectedOptionId: exactOptions[0].id,
-      });
-    } catch (error) {
-      if (requestEpoch === validationEpochRef.current && validationSignatureRef.current === validationSignature) {
-        setAuthorityError(error instanceof Error ? error.message : 'Booking Authority could not validate this target.');
-      }
-    } finally {
-      if (requestEpoch === validationEpochRef.current) setChecking(false);
-    }
+      }, { signal }),
+      currentSignature: () => validationSignatureRef.current,
+      publish: (result) => {
+        const exactOptions = fixedAppointmentOptions(result.options, {
+          dateKey: requestTarget.dateKey,
+          start: requestTarget.start,
+          vanId: requestTarget.vanId,
+        });
+        const resultWorkload = officeBookingResolvedWorkload(result.metadata);
+        setResolvedWorkload(resultWorkload
+          ? { signature: validationSignature, workload: resultWorkload }
+          : null);
+        if (!result.available || !result.offer || !exactOptions.length) {
+          setAuthorityError(officeBookingDiagnosticMessage(
+            { reason: result.reason, metadata: result.metadata },
+            'Booking Authority could not reserve the complete allocation for this Van and start. The schedule was not changed.',
+          ));
+          return;
+        }
+        setOfferClockMs(Date.now());
+        const nextValidation: ValidationState = {
+          signature: validationSignature,
+          offerId: result.offer.id,
+          offerVersion: result.offer.version,
+          offerExpiresAt: result.offer.expiresAt,
+          offerFingerprint: result.offer.requestFingerprint || validationSignature,
+          resolvedWorkload: resultWorkload,
+          options: exactOptions,
+          selectedOptionId: exactOptions[0].id,
+        };
+        validatedOfferRef.current = nextValidation;
+        setValidated(nextValidation);
+      },
+      reject: (error) => {
+        setAuthorityError(officeBookingErrorMessage(error, 'Booking Authority could not validate this target.'));
+      },
+      settle: () => setChecking(false),
+    });
   }, [description, isAfterHours, recipientSelections, requestTarget, selectedCustomer, selectedProperty, signature, technicianInstructions, workRequestLines, workValid]);
 
   useEffect(() => {
@@ -571,6 +647,37 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     return () => window.clearTimeout(timer);
   }, [holding, isAfterHours, loading, masterSaving, saving, selectedCustomer, selectedProperty, validateTarget, workValid]);
 
+  useEffect(() => {
+    if (!validated?.offerExpiresAt) return;
+    const expiresAtMs = officeOfferExpiresAtMs(validated.offerExpiresAt);
+    if (!Number.isFinite(expiresAtMs)) return;
+    const offerId = validated.offerId;
+    const expire = () => {
+      const nowMs = Date.now();
+      setOfferClockMs(nowMs);
+      availabilityGateRef.current.invalidate();
+      if (validatedOfferRef.current?.offerId === offerId) validatedOfferRef.current = null;
+      setChecking(false);
+      setValidated((current) => current?.offerId === offerId ? null : current);
+      setAuthorityError(officeBookingDiagnosticMessage(
+        { reason: 'offer_expired' },
+        'The Booking Authority offer expired and must be checked again.',
+      ));
+      if (commitGateRef.current.isActive()) {
+        offerExpiredDuringCommitRef.current = true;
+        return;
+      }
+      void validateTarget(true);
+    };
+    const delay = expiresAtMs - Date.now();
+    if (delay <= 0) {
+      expire();
+      return;
+    }
+    const timer = window.setTimeout(expire, delay);
+    return () => window.clearTimeout(timer);
+  }, [validateTarget, validated?.offerExpiresAt, validated?.offerId]);
+
   const confirmBooking = async () => {
     if (!selectedCustomer || !selectedProperty || !selectedPresets.length || !workValid || saving || holding) return;
     if (isAfterHours) {
@@ -578,6 +685,8 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         setAuthorityError('After-hours work must start at 5:00 PM or later.');
         return;
       }
+      const commitCapture = commitGateRef.current.tryCapture(() => true);
+      if (!commitCapture) return;
       setSaving(true);
       setAuthorityError('');
       try {
@@ -615,18 +724,40 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           status: 'confirmed',
         });
       } catch (error) {
-        setAuthorityError(error instanceof Error ? error.message : 'The after-hours job could not be created.');
+        setAuthorityError(officeBookingErrorMessage(error, 'The after-hours job could not be created.'));
       } finally {
+        commitCapture.release();
         setSaving(false);
       }
       return;
     }
 
-    if (!activeValidation || !selectedValidatedOption) return;
+    const commitCapture = captureBookingOfferForCommit(
+      commitGateRef.current,
+      validatedOfferRef.current,
+      validationSignatureRef.current,
+      Date.now(),
+    );
+    if (commitCapture.status === 'expired') {
+      setOfferClockMs(Date.now());
+      validatedOfferRef.current = null;
+      setValidated(null);
+      void validateTarget(true);
+      return;
+    }
+    if (commitCapture.status !== 'captured') return;
+    const commitValidation = commitCapture.offer;
+    const commitOption = commitValidation.options.find((option) => option.id === commitValidation.selectedOptionId)
+      ?? commitValidation.options[0];
+    if (!commitOption) {
+      commitCapture.release();
+      return;
+    }
+    let committed = false;
     setSaving(true);
     setAuthorityError('');
-    const { offerId, offerVersion } = activeValidation;
-    const option = selectedValidatedOption;
+    const { offerId, offerVersion } = commitValidation;
+    const option = commitOption;
     try {
       const result = await confirmOfficeAppointment({
         requestId: `schedule-create:${offerId}:${offerVersion}:${option.id}`,
@@ -634,6 +765,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         offerVersion,
         optionId: option.id,
       });
+      committed = true;
       onCreated({
         appointmentId: result.appointmentId,
         workOrderIds: result.workOrderIds ?? [],
@@ -644,19 +776,47 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         status: 'confirmed',
       });
     } catch (error) {
-      setValidated(null);
-      setAuthorityError(error instanceof Error ? error.message : 'The appointment could not be confirmed.');
+      if (validatedOfferRef.current?.offerId === offerId) validatedOfferRef.current = null;
+      setValidated((current) => current?.offerId === offerId ? null : current);
+      setAuthorityError(officeBookingErrorMessage(error, 'The appointment could not be confirmed.'));
     } finally {
+      commitCapture.release();
       setSaving(false);
+      if (!committed && offerExpiredDuringCommitRef.current) {
+        offerExpiredDuringCommitRef.current = false;
+        void validateTarget(true);
+      }
     }
   };
 
   const holdBooking = async () => {
-    if (!activeValidation || !selectedValidatedOption || !selectedCustomer || !selectedProperty || !selectedPresets.length || saving || holding) return;
+    if (!selectedCustomer || !selectedProperty || !selectedPresets.length || saving || holding) return;
+    const commitCapture = captureBookingOfferForCommit(
+      commitGateRef.current,
+      validatedOfferRef.current,
+      validationSignatureRef.current,
+      Date.now(),
+    );
+    if (commitCapture.status === 'expired') {
+      setOfferClockMs(Date.now());
+      validatedOfferRef.current = null;
+      setValidated(null);
+      void validateTarget(true);
+      return;
+    }
+    if (commitCapture.status !== 'captured') return;
+    const commitValidation = commitCapture.offer;
+    const commitOption = commitValidation.options.find((option) => option.id === commitValidation.selectedOptionId)
+      ?? commitValidation.options[0];
+    if (!commitOption) {
+      commitCapture.release();
+      return;
+    }
+    let committed = false;
     setHolding(true);
     setAuthorityError('');
-    const { offerId, offerVersion } = activeValidation;
-    const option = selectedValidatedOption;
+    const { offerId, offerVersion } = commitValidation;
+    const option = commitOption;
     try {
       const result = await createOfficeTemporaryHold({
         requestId: `schedule-hold:${offerId}:${offerVersion}:${option.id}`,
@@ -664,6 +824,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         offerVersion,
         optionId: option.id,
       });
+      committed = true;
       onCreated({
         appointmentId: result.appointmentId,
         workOrderIds: result.workOrderIds ?? [],
@@ -674,14 +835,46 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         status: 'temporary_hold',
       });
     } catch (error) {
-      setValidated(null);
-      setAuthorityError(error instanceof Error ? error.message : 'The temporary hold could not be created.');
+      if (validatedOfferRef.current?.offerId === offerId) validatedOfferRef.current = null;
+      setValidated((current) => current?.offerId === offerId ? null : current);
+      setAuthorityError(officeBookingErrorMessage(error, 'The temporary hold could not be created.'));
     } finally {
+      commitCapture.release();
       setHolding(false);
+      if (!committed && offerExpiredDuringCommitRef.current) {
+        offerExpiredDuringCommitRef.current = false;
+        void validateTarget(true);
+      }
     }
   };
 
-  const busy = loading || masterSaving || saving || holding;
+  const commitBusy = saving || holding || commitGateRef.current.isActive();
+  const busy = loading || masterSaving || commitBusy;
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || busy) return;
+      onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [busy, onClose]);
+  const resolvedPrimary = selectedValidatedOption ? optionPrimaryAssignment(selectedValidatedOption) : undefined;
+  const resolvedStart = selectedValidatedOption && resolvedPrimary
+    ? optionAssignmentStart(selectedValidatedOption, resolvedPrimary)
+    : requestTarget.start;
+  const resolvedCapacityEnd = selectedValidatedOption && resolvedPrimary
+    ? optionAssignmentCapacityEnd(selectedValidatedOption, resolvedPrimary)
+    : '';
+  const workloadCapacityStart = activeResolvedWorkload?.ownedSlots?.[0] || requestTarget.start;
+  const workloadCapacityEnd = activeResolvedWorkload?.capacityEndTime || activeResolvedWorkload?.endTime || '';
+  const workloadSlotCount = activeResolvedWorkload
+    ? Number(activeResolvedWorkload.ownedSlots?.length ?? activeResolvedWorkload.slots ?? 0)
+    : 0;
+  const requiredAllocationLabel = selectedValidatedOption
+    ? `Van capacity ${formatTime(resolvedStart)}${resolvedCapacityEnd ? `–${formatTime(resolvedCapacityEnd)}` : ''}`
+    : activeResolvedWorkload
+      ? `Van capacity ${formatTime(workloadCapacityStart)}${workloadCapacityEnd ? `–${formatTime(workloadCapacityEnd)}` : ''}${workloadSlotCount ? ` · ${workloadSlotCount} slot${workloadSlotCount === 1 ? '' : 's'}` : ''}`
+    : estimatedMinutes ? `${durationLabel(estimatedMinutes)} · Authority pending` : 'Add work to resolve capacity';
 
   return (
     <div className={styles.overlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
@@ -697,19 +890,19 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           <button type="button" className={styles.close} disabled={busy} onClick={onClose} aria-label="Close">×</button>
         </header>
 
-        <div className={styles.body}>
+        <fieldset className={styles.body} disabled={commitBusy} style={{ border: 0, margin: 0, minWidth: 0 }}>
           <section className={styles.targetCard}>
             <div><span>DATE</span><strong>{formatDate(requestTarget.dateKey)}</strong></div>
             <div><span>PRIMARY VAN</span><strong>{requestTarget.vanName} · {crewLabel}</strong></div>
             {isAfterHours ? (
               <div><label htmlFor="after-hours-start" style={{ display: 'block', color: 'var(--brand)', fontSize: '5.5px', fontWeight: 950, letterSpacing: '.07em' }}>START · 5:00 PM OR LATER</label><input id="after-hours-start" style={{ width: '100%', boxSizing: 'border-box', marginTop: 3, border: '1px solid var(--border)', borderRadius: 7, padding: '5px 7px', color: 'var(--text)', background: 'var(--surface)' }} type="time" min="17:00" value={requestedStart} onChange={(event) => { setRequestedStart(event.target.value); resetValidation(); }} /></div>
-            ) : <div><span>START</span><strong>{formatTime(requestTarget.start)}</strong></div>}
-            <div><span>{isAfterHours ? 'WORK RULE' : 'OPEN BLOCK'}</span><strong>{isAfterHours ? 'Extra job · open-ended until field completion' : `${formatTime(requestTarget.start)}–${formatTime(requestTarget.end)}`}</strong></div>
+            ) : <div><span>SELECTED START</span><strong>{formatTime(resolvedStart)}</strong></div>}
+            <div><span>{isAfterHours ? 'WORK RULE' : 'REQUIRED ALLOCATION'}</span><strong>{isAfterHours ? 'Extra job · open-ended until field completion' : requiredAllocationLabel}</strong></div>
           </section>
 
-          {loadError ? <div className={styles.errorBox}>{loadError}</div> : null}
-          {authorityError ? <div className={styles.errorBox}>{authorityError}</div> : null}
-          {masterError ? <div className={styles.errorBox}>{masterError}</div> : null}
+          {loadError ? <div className={styles.errorBox} role="alert">{loadError}</div> : null}
+          {authorityError ? <div className={styles.errorBox} role="alert">{authorityError}</div> : null}
+          {masterError ? <div className={styles.errorBox} role="alert">{masterError}</div> : null}
 
           <section className={styles.section}>
             <header><div><span>1</span><strong>Customer</strong><small>Search canonical CRM records or register a new customer.</small></div></header>
@@ -734,7 +927,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
 
               {customerEditorOpen ? (
                 <div className={styles.editorPanel}>
-                  <header><div><strong>Create customer + first property</strong><span>Customer, property and optional contact relationships are committed atomically to canonical CRM.</span></div><button type="button" onClick={() => setCustomerEditorOpen(false)}>×</button></header>
+                  <header><div><strong>Create customer + first property</strong><span>Customer, property and optional contact relationships are committed atomically to canonical CRM.</span></div><button type="button" onClick={() => setCustomerEditorOpen(false)} aria-label="Close customer editor">×</button></header>
                   <div className={styles.formGrid}>
                     <Field label="Customer name *" value={customerDraft.name} onChange={(value) => setCustomerDraft((current) => ({ ...current, name: value }))} />
                     <Field label="Company" value={customerDraft.company ?? ''} onChange={(value) => setCustomerDraft((current) => ({ ...current, company: value }))} />
@@ -782,7 +975,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
 
               {propertyEditorOpen ? (
                 <div className={styles.editorPanel}>
-                  <header><div><strong>Add property for {selectedCustomer ? customerLabel(selectedCustomer) : 'customer'}</strong><span>Property identity stays separate from reusable customer contacts and communication rules.</span></div><button type="button" onClick={() => setPropertyEditorOpen(false)}>×</button></header>
+                  <header><div><strong>Add property for {selectedCustomer ? customerLabel(selectedCustomer) : 'customer'}</strong><span>Property identity stays separate from reusable customer contacts and communication rules.</span></div><button type="button" onClick={() => setPropertyEditorOpen(false)} aria-label="Close property editor">×</button></header>
                   <div className={styles.formGrid}>
                     <Field label="Property name (optional)" value={propertyDraft.name} onChange={(value) => setPropertyDraft((current) => ({ ...current, name: value }))} placeholder="Pastechi House Building, Front Office, Rental Villa…" />
                     <label><span>Property type</span><select value={propertyDraft.type} onChange={(event) => setPropertyDraft((current) => ({ ...current, type: event.target.value }))}><option>Casa</option><option>Apartamento</option><option>Oficina</option><option>Local comercial</option><option>Otro</option></select></label>
@@ -839,8 +1032,8 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
 
               <div className={styles.quantityRow}>
                 <div><span>Work lines</span><strong>{workLines.length} line{workLines.length === 1 ? '' : 's'} · {totalQuantity} item{totalQuantity === 1 ? '' : 's'}</strong></div>
-                <div><span>Estimated workload</span><strong>{estimatedMinutes ? durationLabel(estimatedMinutes) : '—'}</strong></div>
-                <div><span>{isAfterHours ? 'After-hours execution' : 'Scheduled allocation'}</span><strong>{isAfterHours ? 'Open-ended until field completion' : allocationDurationLabel(selectedValidatedOption, estimatedMinutes)}</strong></div>
+                <div><span>Requested workload</span><strong>{estimatedMinutes ? durationLabel(estimatedMinutes) : '—'}</strong></div>
+                <div><span>{isAfterHours ? 'After-hours execution' : 'Resolved workload'}</span><strong>{isAfterHours ? 'Open-ended until field completion' : resolvedWorkloadLabel(activeResolvedWorkload, selectedValidatedOption, estimatedMinutes)}</strong></div>
               </div>
               <div className={styles.formGrid}>
                 <label className={styles.fieldWide}><span>Customer-facing work description</span><textarea value={description} onChange={(event) => { setDescription(event.target.value); resetValidation(); }} placeholder="Example: Two standard services and one installation. BTU to be confirmed by technician on site." /></label>
@@ -875,7 +1068,13 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                         const primaryCapacityEnd = primary ? optionAssignmentCapacityEnd(option, primary) : option.capacityEndTime || primaryWorkEnd;
                         const selected = option.id === selectedValidatedOption.id;
                         return (
-                          <button type="button" key={option.id} className={`${styles.choice} ${selected ? styles.choiceSelected : ''}`} aria-pressed={selected} onClick={() => setValidated((current) => current ? { ...current, selectedOptionId: option.id } : current)}>
+                          <button type="button" key={option.id} className={`${styles.choice} ${selected ? styles.choiceSelected : ''}`} aria-pressed={selected} onClick={() => {
+                            const current = validatedOfferRef.current;
+                            if (!current || !current.options.some((candidate) => candidate.id === option.id)) return;
+                            const next = { ...current, selectedOptionId: option.id };
+                            validatedOfferRef.current = next;
+                            setValidated(next);
+                          }}>
                             <strong>{supportWindows.length === 1
                               ? `${supportWindows[0].assignment.vanName || supportWindows[0].assignment.vanId} · support`
                               : supportWindows.length > 1 ? `${supportWindows.length} support Vans` : 'Primary allocation'}</strong>
@@ -923,7 +1122,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
             )}
           </section>
           )}
-        </div>
+        </fieldset>
 
         <footer className={styles.footer}>
           <div><span>{isAfterHours ? 'CANONICAL EXTRA-WORK PATH' : 'CANONICAL WRITE PATH'}</span><strong>{isAfterHours ? 'Booking Authority → Appointment + open-ended Work Order + Van guard' : 'Booking Authority → Appointment + Work Order + Capacity Locks'}</strong></div>

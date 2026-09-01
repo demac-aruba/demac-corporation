@@ -1,11 +1,14 @@
 'use client';
 
+// LEGACY ACCEPTANCE UI. Product routes mount LiveSchedulingOverview instead.
+
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../auth/auth-provider';
 import { createBrowserWorkOrder, type BrowserAppointmentRecord, type BrowserWorkOrderRecord } from '../../lib/browser-operational';
 import { browserKeys, loadBrowserValue, saveBrowserValue } from '../../lib/browser-store';
 import type { BookingRequest, CandidateSlot, DispatchJob, WorkPresetId } from '../../lib/scheduling';
-import { customerFacingDescription, defaultWorkPresets, getHalfDayAnchor, getRuntimeSchedulingSettings, minutesToTime, previewVans, timeToMinutes } from '../../lib/scheduling';
+import { customerFacingDescription, defaultWorkPresets, getHalfDayAnchor, getRuntimeSchedulingSettings, minutesToTime, timeToMinutes } from '../../lib/scheduling';
+import { legacySchedulingSimulatorVans } from '../../lib/legacy-scheduling-simulator-fixtures';
 import type { CalendarDispatchJob, OperationalDay, SupportReflowPlan } from '../../lib/scheduling-capacity';
 import { buildOperationalWeek, currentArubaDateKey } from '../../lib/scheduling-capacity';
 import type { BookingCopilotPlan } from '../../lib/booking-intelligence/copilot';
@@ -59,10 +62,10 @@ function overlapsSlot(job: CalendarDispatchJob, slot: DisplaySlot) {
 
 function occupancyForDay(day: OperationalDay, jobs: CalendarDispatchJob[]) {
   const slots = displaySlotsForDay(day);
-  const total = slots.length * previewVans.length;
+  const total = slots.length * legacySchedulingSimulatorVans.length;
   if (!total) return { total: 0, occupied: 0, open: 0, percent: 0 };
   let occupied = 0;
-  for (const van of previewVans) {
+  for (const van of legacySchedulingSimulatorVans) {
     for (const slot of slots) {
       if (jobs.some((job) => job.dateKey === day.dateKey && job.vanId === van.id && overlapsSlot(job, slot))) occupied += 1;
     }
@@ -464,7 +467,7 @@ export function SchedulingOverviewV2() {
 
     <section className={styles.bookingIntelligence}><div className={styles.aiBadge}>AI</div><div className={styles.intelligenceTitle}><strong>Booking Intelligence</strong><span>Deterministic booking engine + voice/text simulator</span></div><div className={styles.intelligenceInsight}><span>Date-aware capacity</span><p>{activeOccupancy.open} open spot{activeOccupancy.open === 1 ? '' : 's'} across four vans on the selected day.</p></div><div className={styles.intelligenceInsight}><span>Conversation-aware</span><p>Ask for “3 services in Noord this week” and refine with follow-ups like “not Wednesday” or “after 10”.</p></div><div className={styles.intelligenceInsight}><span>Safe simulation</span><p>The copilot can suggest support reflow, but nothing changes until you explicitly confirm a plan.</p></div><button type="button" disabled={!canManage} onClick={() => { setDrawerOpen(false); setCopilotOpen(true); }}>Ask Booking Copilot</button></section>
 
-    <section className={styles.board}><header className={styles.boardHeader}><div><strong>Four-Van Schedule</strong><span>{activeDay.weekday} {activeDay.shortDate} · single click opens details; double click arms safe drag.</span></div><b>{activeOccupancy.open} OPEN SPOTS</b></header><div className={styles.boardScroll}><div className={styles.vanGrid}>{previewVans.map((van) => { const vanJobs = activeJobs.filter((job) => job.vanId === van.id); const amAnchor = getHalfDayAnchor(activeJobs, van.id, 'am'); const pmAnchor = getHalfDayAnchor(activeJobs, van.id, 'pm'); const validDropStarts = new Set(dragCandidates.filter((slot) => slot.vanId === van.id).map((slot) => slot.start)); return <section className={styles.vanLane} key={van.id}><header><div className={styles.vanIdentity}><span>{van.id.replace('VAN-', 'V')}</span><div><strong>{van.name}</strong><small>{van.team}</small></div></div><b>ACTIVE</b></header><div className={styles.anchorBar}><div><span>AM anchor</span><strong>{amAnchor?.sector ?? 'Open'}</strong></div><div><span>PM anchor</span><strong>{pmAnchor?.sector ?? 'Open'}</strong></div></div><VanScheduleSlots vanId={van.id} slots={activeSlots} jobs={vanJobs} onConfirm={confirmAppointment} onOpen={(start) => openBooking({ vanId: van.id, start })} onSelect={(appointmentId) => { setDrawerOpen(false); setCopilotOpen(false); setSelectedAppointmentId(appointmentId); }} onToggleArm={toggleMoveArm} armedAppointmentId={moveArmedAppointmentId} armedAssignmentId={moveArmedAssignmentId} selectedAppointmentId={selectedAppointmentId} validDropStarts={validDropStarts} canManage={canManage} onDropMove={dropMove} />{!activeDay.isOpen ? <div className={styles.closedDay}>No operational capacity</div> : null}</section>; })}</div></div></section>
+    <section className={styles.board}><header className={styles.boardHeader}><div><strong>Four-Van Schedule</strong><span>{activeDay.weekday} {activeDay.shortDate} · single click opens details; double click arms safe drag.</span></div><b>{activeOccupancy.open} OPEN SPOTS</b></header><div className={styles.boardScroll}><div className={styles.vanGrid}>{legacySchedulingSimulatorVans.map((van) => { const vanJobs = activeJobs.filter((job) => job.vanId === van.id); const amAnchor = getHalfDayAnchor(activeJobs, van.id, 'am'); const pmAnchor = getHalfDayAnchor(activeJobs, van.id, 'pm'); const validDropStarts = new Set(dragCandidates.filter((slot) => slot.vanId === van.id).map((slot) => slot.start)); return <section className={styles.vanLane} key={van.id}><header><div className={styles.vanIdentity}><span>{van.id.replace('VAN-', 'V')}</span><div><strong>{van.name}</strong><small>{van.team}</small></div></div><b>ACTIVE</b></header><div className={styles.anchorBar}><div><span>AM anchor</span><strong>{amAnchor?.sector ?? 'Open'}</strong></div><div><span>PM anchor</span><strong>{pmAnchor?.sector ?? 'Open'}</strong></div></div><VanScheduleSlots vanId={van.id} slots={activeSlots} jobs={vanJobs} onConfirm={confirmAppointment} onOpen={(start) => openBooking({ vanId: van.id, start })} onSelect={(appointmentId) => { setDrawerOpen(false); setCopilotOpen(false); setSelectedAppointmentId(appointmentId); }} onToggleArm={toggleMoveArm} armedAppointmentId={moveArmedAppointmentId} armedAssignmentId={moveArmedAssignmentId} selectedAppointmentId={selectedAppointmentId} validDropStarts={validDropStarts} canManage={canManage} onDropMove={dropMove} />{!activeDay.isOpen ? <div className={styles.closedDay}>No operational capacity</div> : null}</section>; })}</div></div></section>
 
     {drawerOpen ? <BookingDrawer day={activeDay} jobs={activeJobs} preferred={preferredSlot} prefill={bookingPrefill} onClose={() => { setDrawerOpen(false); setPreferredSlot({}); setBookingPrefill(undefined); }} onReserve={addAppointment} onApplySupportReflow={applySupportReflow} /> : null}
     <BookingCopilot open={copilotOpen} referenceDateKey={today} jobs={jobs} onClose={() => setCopilotOpen(false)} onUsePlan={useCopilotPlan} />

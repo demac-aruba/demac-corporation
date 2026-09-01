@@ -1,11 +1,14 @@
 'use client';
 
+// LEGACY ACCEPTANCE UI. It is not mounted by the production scheduling routes.
+
 import { useEffect, useMemo, useState } from 'react';
 import { loadBrowserCrmCustomers, loadBrowserCustomerMaster, sectorFromCrm, type BrowserCrmCustomerIdentity, type BrowserCrmSiteIdentity } from '../../lib/browser-crm';
 import { browserKeys, loadBrowserValue, saveBrowserValue } from '../../lib/browser-store';
 import { createBrowserWorkOrder, type BrowserAppointmentRecord, type BrowserWorkOrderRecord } from '../../lib/browser-operational';
 import type { BookingRequest, CandidateSlot, DispatchJob, WorkPresetId } from '../../lib/scheduling';
-import { customerFacingDescription, defaultWorkPresets, evaluateReadiness, getHalfDayAnchor, previewVans } from '../../lib/scheduling';
+import { customerFacingDescription, defaultWorkPresets, evaluateReadiness, getHalfDayAnchor } from '../../lib/scheduling';
+import { legacySchedulingSimulatorVans } from '../../lib/legacy-scheduling-simulator-fixtures';
 import type { CalendarDispatchJob, OperationalDay } from '../../lib/scheduling-capacity';
 import { buildOperationalWeek, currentArubaDateKey, findCandidateSlotsForDay, jobsForDate, weekCapacity } from '../../lib/scheduling-capacity';
 import styles from './dispatch-board.module.css';
@@ -134,7 +137,7 @@ export function DispatchWorkspace() {
 
     <div className={styles.toolbar}><div className={styles.dayNav}><button type="button" onClick={() => moveDay(-1)}>‹</button><div><strong>{activeDay.isToday ? 'Today' : `${activeDay.weekday} · ${activeDay.shortDate}`}</strong><span>{activeDay.shiftLabel} · Aruba time</span></div><button type="button" onClick={() => moveDay(1)}>›</button></div><div className={styles.legend}><span><i className={styles.readyDot} /> Ready</span><span><i className={styles.riskDot} /> At risk</span><span><i className={styles.blockedDot} /> Blocked</span><span><i className={styles.holdDot} /> Hold</span></div></div>
 
-    <div className={styles.layout}><main className={styles.board}><div className={styles.boardHeader}><div><strong>{activeDay.isOpen ? 'Live Dispatch Board' : 'Closed Operational Day'}</strong><span>{activeDay.isOpen ? `${activeDay.weekday} ${activeDay.shortDate} · ${activeDay.shiftLabel}` : 'No appointment capacity is offered for this day.'}</span></div><button type="button">Optimize route</button></div><div className={styles.vanGrid}>{previewVans.map((van) => {
+    <div className={styles.layout}><main className={styles.board}><div className={styles.boardHeader}><div><strong>{activeDay.isOpen ? 'Live Dispatch Board' : 'Closed Operational Day'}</strong><span>{activeDay.isOpen ? `${activeDay.weekday} ${activeDay.shortDate} · ${activeDay.shiftLabel}` : 'No appointment capacity is offered for this day.'}</span></div><button type="button">Optimize route</button></div><div className={styles.vanGrid}>{legacySchedulingSimulatorVans.map((van) => {
       const vanJobs = activeJobs.filter((job) => job.vanId === van.id);
       const amAnchor = getHalfDayAnchor(activeJobs, van.id, 'am');
       const pmAnchor = getHalfDayAnchor(activeJobs, van.id, 'pm');
@@ -172,7 +175,7 @@ function AppointmentDrawer({ day, jobs, onClose, onReserve }: { day: Operational
   const selectedCustomer = crmCustomers.find((item) => item.id === customerId);
   const selectedSite = crmSites.find((item) => item.id === siteId);
   const request = useMemo<BookingRequest>(() => ({ customer, site, sector, presetId, quantity, restriction: restriction === 'morning' ? { halfDay: 'am' } : restriction === 'afternoon' ? { halfDay: 'pm' } : restriction === 'after10' ? { notBefore: '10:00' } : restriction === 'after2' ? { notBefore: '14:00' } : undefined }), [customer, site, sector, presetId, quantity, restriction]);
-  const slots = useMemo(() => findCandidateSlotsForDay(day, request, jobs), [day, request, jobs]);
+  const slots = useMemo(() => findCandidateSlotsForDay(day, request, jobs, legacySchedulingSimulatorVans), [day, request, jobs]);
   const description = customerFacingDescription(request);
 
   const chooseCustomer = (id: string) => {

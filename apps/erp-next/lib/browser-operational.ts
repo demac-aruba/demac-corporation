@@ -69,6 +69,9 @@ export type BrowserAppointmentRecord = {
   confirmedAt?: string;
   workOrderId?: string;
   workOrderIds?: string[];
+  /** Read-projection integrity marker; never a second lifecycle/status authority. */
+  projectionIntegrity?: 'needs_human';
+  projectionIntegrityReason?: string;
 };
 
 export type BrowserWorkOrderAssignment = {

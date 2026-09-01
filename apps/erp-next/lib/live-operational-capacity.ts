@@ -3,6 +3,8 @@ import {
   getFirestoreDocument,
   listFirestoreCollection,
   queryFirestoreCollectionDateRange,
+  queryFirestoreCollectionOverlappingDateRange,
+  type FirestoreOverlapDateRangeArgs,
 } from './firebase/firestore-rest';
 
 export type LiveDailyVanAssignment = {
@@ -41,10 +43,23 @@ export type LiveStaffProfile = {
   id: string;
   name?: string;
   active?: boolean;
+  availability?: string;
+  unavailableFrom?: string;
+  unavailableUntil?: string;
+  canDriveVan?: boolean;
+};
+
+export type LiveStaffAbsence = {
+  id: string;
+  active?: boolean;
+  staffId?: string;
+  fromDate?: string;
+  toDate?: string;
 };
 
 export type LiveOperationalVan = {
   id: string;
+  name?: string;
   active: boolean;
   status: string;
   responsibleStaffId?: string;
@@ -55,6 +70,7 @@ export type LiveOperationalVan = {
 export type LiveOperationalCapacityState = {
   vans: Map<string, LiveOperationalVan>;
   staffProfiles: LiveStaffProfile[];
+  staffAbsences?: LiveStaffAbsence[];
   dailyAssignments: LiveDailyVanAssignment[];
   halfDaySchedules: LiveVanHalfDaySchedule[];
   calendarClosures: LiveCalendarClosure[];
@@ -72,13 +88,13 @@ export type LiveVanCrew = {
   label: string;
 };
 
-type CapacityLoadArgs = {
+export type CapacityLoadArgs = {
   startDate?: string;
   endDate?: string;
   force?: boolean;
 };
 
-type RawVan = {
+export type LiveOperationalVanRecord = {
   id: string;
   name?: string;
   active?: boolean;
@@ -89,8 +105,6 @@ type RawVan = {
 };
 
 const CACHE_TTL_MS = 60_000;
-let cachedState: { key: string; loadedAt: number; value: LiveOperationalCapacityState } | null = null;
-let pendingLoad: { key: string; promise: Promise<LiveOperationalCapacityState> } | null = null;
 
 function weekday(dateKey: string) {
   return new Date(`${dateKey}T12:00:00Z`).getUTCDay();
@@ -108,7 +122,21 @@ function text(value: unknown) {
 
 function blockedOperationalStatus(value: string | undefined) {
   const normalized = String(value ?? '').trim().toLowerCase();
-  return normalized === 'mantenimiento' || normalized === 'fuera de servicio';
+  return normalized === 'mantenimiento' || normalized === 'fuera de servicio' || normalized === 'sin personal';
+}
+
+function liveStaffUnavailable(profile: LiveStaffProfile | undefined, dateKey: string, absences: LiveStaffAbsence[]) {
+  if (!profile || profile.active === false || text(profile.availability).toLowerCase() === 'inactivo') return true;
+  const availability = text(profile.availability);
+  const generallyUnavailable = Boolean(availability && availability !== 'Disponible')
+    && (!profile.unavailableFrom || dateKey >= profile.unavailableFrom)
+    && (!profile.unavailableUntil || dateKey <= profile.unavailableUntil);
+  return generallyUnavailable || absences.some((absence) => absence.active !== false
+    && absence.staffId === profile.id
+    && Boolean(absence.fromDate)
+    && Boolean(absence.toDate)
+    && dateKey >= String(absence.fromDate)
+    && dateKey <= String(absence.toDate));
 }
 
 function normalizeClosedWeekdays(value: unknown) {
@@ -133,32 +161,43 @@ async function readDateScopedCollection<T extends { id: string; date?: string }>
   return listFirestoreCollection<T>(collectionId, limit);
 }
 
+export type LiveStaffAbsenceReaders = {
+  queryOverlap?: (args: FirestoreOverlapDateRangeArgs) => Promise<LiveStaffAbsence[]>;
+  listAll?: () => Promise<LiveStaffAbsence[]>;
+};
+
+export async function loadLiveStaffAbsencesForRange(
+  startDate?: string,
+  endDate?: string,
+  readers: LiveStaffAbsenceReaders = {},
+) {
+  if (startDate && endDate) {
+    const queryOverlap = readers.queryOverlap
+      ?? ((args: FirestoreOverlapDateRangeArgs) => queryFirestoreCollectionOverlappingDateRange<LiveStaffAbsence>(args));
+    return queryOverlap({
+      collectionId: 'staffAbsences',
+      startFieldPath: 'fromDate',
+      endFieldPath: 'toDate',
+      startInclusive: startDate,
+      endInclusive: endDate,
+    });
+  }
+  const listAll = readers.listAll ?? (() => listFirestoreCollection<LiveStaffAbsence>('staffAbsences', 1000));
+  return listAll();
+}
+
 async function loadCapacityState(startDate?: string, endDate?: string): Promise<LiveOperationalCapacityState> {
-  const [rawVans, staffProfiles, rawDailyAssignments, rawHalfDays, rawClosures, businessCalendar] = await Promise.all([
-    listFirestoreCollection<RawVan>('vans', 250),
+  const [rawVans, staffProfiles, staffAbsences, rawDailyAssignments, rawHalfDays, rawClosures, businessCalendar] = await Promise.all([
+    listFirestoreCollection<LiveOperationalVanRecord>('vans', 250),
     listFirestoreCollection<LiveStaffProfile>('staffProfiles', 500),
+    loadLiveStaffAbsencesForRange(startDate, endDate),
     readDateScopedCollection<LiveDailyVanAssignment>('dailyVanAssignments', startDate, endDate, 1000),
     listFirestoreCollection<LiveVanHalfDaySchedule>('vanHalfDaySchedules', 250),
     readDateScopedCollection<LiveCalendarClosure>('calendarClosures', startDate, endDate, 500),
     getFirestoreDocument<LiveBusinessCalendar>('businessSettings', 'business-calendar'),
   ]);
 
-  const canonicalVans = new Map<string, LiveOperationalVan>();
-  for (const van of rawVans) {
-    const id = canonicalVanId(van.id, rawVans);
-    if (!/^VAN-\d+$/.test(id)) continue;
-    const current = canonicalVans.get(id);
-    if (!current || van.id === id) {
-      canonicalVans.set(id, {
-        id,
-        active: van.active !== false,
-        status: String(van.status ?? ''),
-        responsibleStaffId: text(van.responsibleStaffId) || undefined,
-        regularHelperId: text(van.regularHelperId) || undefined,
-        additionalHelperId: text(van.additionalHelperId) || undefined,
-      });
-    }
-  }
+  const canonicalVans = buildLiveOperationalVanRegistry(rawVans);
 
   const dailyAssignments = rawDailyAssignments.map((assignment) => ({
     ...assignment,
@@ -174,11 +213,33 @@ async function loadCapacityState(startDate?: string, endDate?: string): Promise<
   return {
     vans: canonicalVans,
     staffProfiles,
+    staffAbsences: staffAbsences.filter((absence) => absence.active !== false),
     dailyAssignments,
     halfDaySchedules,
     calendarClosures: rawClosures.filter((closure) => closure.active !== false),
     closedWeekdays: normalizeClosedWeekdays(businessCalendar?.closedWeekdays),
   };
+}
+
+export function buildLiveOperationalVanRegistry(rawVans: LiveOperationalVanRecord[]) {
+  const canonicalVans = new Map<string, LiveOperationalVan>();
+  for (const van of rawVans) {
+    const id = canonicalVanId(van.id, rawVans);
+    if (!id) continue;
+    const current = canonicalVans.get(id);
+    if (!current || van.id === id) {
+      canonicalVans.set(id, {
+        id,
+        name: text(van.name) || id,
+        active: van.active !== false,
+        status: String(van.status ?? ''),
+        responsibleStaffId: text(van.responsibleStaffId) || undefined,
+        regularHelperId: text(van.regularHelperId) || undefined,
+        additionalHelperId: text(van.additionalHelperId) || undefined,
+      });
+    }
+  }
+  return canonicalVans;
 }
 
 /**
@@ -189,22 +250,48 @@ async function loadCapacityState(startDate?: string, endDate?: string): Promise<
  * Staff display names ride the same cached read so the live agenda does not add a second
  * workforce-fetch path just to render the assigned Van crew.
  */
-export async function loadLiveOperationalCapacityState(args: CapacityLoadArgs = {}): Promise<LiveOperationalCapacityState> {
-  const key = capacityKey(args.startDate, args.endDate);
-  const now = Date.now();
-  if (!args.force && cachedState?.key === key && now - cachedState.loadedAt < CACHE_TTL_MS) return cachedState.value;
-  if (!args.force && pendingLoad?.key === key) return pendingLoad.promise;
+export function createLiveOperationalCapacityLoader(
+  readState: (startDate?: string, endDate?: string) => Promise<LiveOperationalCapacityState>,
+  now: () => number = Date.now,
+) {
+  const cachedStates = new Map<string, { loadedAt: number; value: LiveOperationalCapacityState }>();
+  const pendingLoads = new Map<string, { identity: object; promise: Promise<LiveOperationalCapacityState> }>();
 
-  const promise = loadCapacityState(args.startDate, args.endDate)
-    .then((value) => {
-      cachedState = { key, loadedAt: Date.now(), value };
-      return value;
-    })
-    .finally(() => {
-      if (pendingLoad?.key === key) pendingLoad = null;
-    });
-  pendingLoad = { key, promise };
-  return promise;
+  return function loadCapacity(args: CapacityLoadArgs = {}): Promise<LiveOperationalCapacityState> {
+    const key = capacityKey(args.startDate, args.endDate);
+    // An in-flight read is already the freshest possible value. Force callers for
+    // the same range join it instead of starting a duplicate network read.
+    const pending = pendingLoads.get(key);
+    if (pending) return pending.promise;
+    const requestedAt = now();
+    for (const [cachedKey, candidate] of cachedStates) {
+      if (requestedAt - candidate.loadedAt >= CACHE_TTL_MS) cachedStates.delete(cachedKey);
+    }
+    const cached = cachedStates.get(key);
+    if (!args.force && cached && requestedAt - cached.loadedAt < CACHE_TTL_MS) {
+      return Promise.resolve(cached.value);
+    }
+
+    const identity = {};
+    const promise = Promise.resolve()
+      .then(() => readState(args.startDate, args.endDate))
+      .then((value) => {
+        // Only the promise still registered for this range may publish its cache.
+        if (pendingLoads.get(key)?.identity === identity) cachedStates.set(key, { loadedAt: now(), value });
+        return value;
+      })
+      .finally(() => {
+        if (pendingLoads.get(key)?.identity === identity) pendingLoads.delete(key);
+      });
+    pendingLoads.set(key, { identity, promise });
+    return promise;
+  };
+}
+
+const defaultCapacityLoader = createLiveOperationalCapacityLoader(loadCapacityState);
+
+export function loadLiveOperationalCapacityState(args: CapacityLoadArgs = {}) {
+  return defaultCapacityLoader(args);
 }
 
 export function liveCompanyClosureReason(state: LiveOperationalCapacityState | null, dateKey: string) {
@@ -251,11 +338,16 @@ export function liveVanCrew(state: LiveOperationalCapacityState | null, vanId: s
 }
 
 export function liveVanOperationallyAvailable(state: LiveOperationalCapacityState | null, vanId: string, dateKey: string) {
-  if (!state) return true;
+  // A missing registry/operational snapshot is UNKNOWN, never proof that a Van is
+  // bookable. Authority remains final and the visual layer fails closed.
+  if (!state) return false;
   const van = state.vans.get(vanId);
   if (!van || !van.active || blockedOperationalStatus(van.status)) return false;
   const daily = state.dailyAssignments.find((assignment) => assignment.date === dateKey && assignment.vanId === vanId);
-  return !blockedOperationalStatus(daily?.status);
+  if (blockedOperationalStatus(daily?.status)) return false;
+  const driverStaffId = text(daily?.driverStaffId) || text(van.responsibleStaffId);
+  const driver = state.staffProfiles.find((profile) => profile.id === driverStaffId);
+  return Boolean(driver?.canDriveVan) && !liveStaffUnavailable(driver, dateKey, state.staffAbsences ?? []);
 }
 
 export function liveOperationalWindowAllows(
@@ -265,7 +357,7 @@ export function liveOperationalWindowAllows(
   start: string,
   end: string,
 ) {
-  if (!state) return true;
+  if (!state) return false;
   if (liveCompanyClosureReason(state, dateKey)) return false;
   const halfDay = liveVanHalfDaySchedule(state, vanId, dateKey);
   if (!halfDay) return true;

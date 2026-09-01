@@ -4,7 +4,8 @@ import {
   type LiveOperationalCapacityState,
 } from '../lib/live-operational-capacity';
 import { liveDragMoveCandidates, liveMoveTargetKey } from '../lib/live-scheduling-move';
-import { getRuntimeSchedulingSettings, previewVans } from '../lib/scheduling';
+import { getRuntimeSchedulingSettings } from '../lib/scheduling';
+import { legacySchedulingSimulatorVans } from '../lib/legacy-scheduling-simulator-fixtures';
 import { buildOperationalWeek, type CalendarDispatchJob } from '../lib/scheduling-capacity';
 
 function requireCondition(condition: unknown, message: string) {
@@ -16,8 +17,20 @@ const saturday = buildOperationalWeek(dateKey).find((day) => day.dateKey === dat
 requireCondition(Boolean(saturday) && saturday!.isOpen, 'Saturday must be an open normal operating day.');
 
 const capacityState: LiveOperationalCapacityState = {
-  vans: new Map(previewVans.map((van) => [van.id, { id: van.id, active: true, status: '' }])),
-  staffProfiles: [],
+  vans: new Map(legacySchedulingSimulatorVans.map((van, index) => [van.id, {
+    id: van.id,
+    active: true,
+    status: '',
+    responsibleStaffId: `STAFF-SATURDAY-DRIVER-${index + 1}`,
+  }])),
+  staffProfiles: legacySchedulingSimulatorVans.map((_van, index) => ({
+    id: `STAFF-SATURDAY-DRIVER-${index + 1}`,
+    name: `Saturday Driver ${index + 1}`,
+    active: true,
+    availability: 'Disponible',
+    canDriveVan: true,
+  })),
+  staffAbsences: [],
   dailyAssignments: [],
   halfDaySchedules: [],
   calendarClosures: [],
