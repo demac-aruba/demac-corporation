@@ -198,7 +198,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
           <h2>{appointment.customer}</h2>
           <p>{appointment.propertyAddress || appointment.site} · {appointment.sector}</p>
         </div>
-        <button type="button" disabled={busy} onClick={onClose} aria-label="Close appointment details">×</button>
+        <button type="button" disabled={busy} onClick={onClose}>×</button>
       </header>
 
       <div className={styles.drawerBody}>
@@ -285,7 +285,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
             {!temporaryHold ? <button type="button" className={styles.secondary} disabled={!canManageLifecycle || busy} onClick={() => begin('outcome')}>Record Actual Outcome</button> : null}
             <button type="button" className={styles.secondary} disabled={!canManageLifecycle || busy} onClick={() => begin('cancel')} style={{ color: 'var(--danger)' }}>{temporaryHold ? 'Cancel Hold' : 'Cancel Appointment'}</button>
           </div>}
-          {error ? <div className={styles.descriptionPreview} role="alert"><span>ATTENTION</span><strong>{error}</strong></div> : null}
+          {error ? <div className={styles.descriptionPreview}><span>ATTENTION</span><strong>{error}</strong></div> : null}
           {!canManageLifecycle && appointment.status !== 'cancelled' ? <div className={styles.descriptionPreview}><span>CANONICAL RELATIONSHIP REQUIRED</span><strong>This appointment cannot be changed until its customer and property IDs are resolved.</strong></div> : null}
         </section> : null}
 
@@ -305,7 +305,7 @@ export function LiveAppointmentDetailsDrawer({ appointment, onClose, onChanged }
             <label className={styles.wide}><span>Reason</span><select value={reason} onChange={(event) => setReason(event.target.value)}><option value="">Select reason</option>{cancellationReasons.map((item) => <option key={item}>{item}</option>)}</select></label>
             <label className={styles.wide}><span>Internal note</span><textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} /></label>
           </div>
-          {error ? <div className={styles.descriptionPreview} role="alert"><span>ATTENTION</span><strong>{error}</strong></div> : null}
+          {error ? <div className={styles.descriptionPreview}><span>ATTENTION</span><strong>{error}</strong></div> : null}
           <footer className={styles.drawerFooter}><div><span>{temporaryHold ? 'Temporary hold' : 'Appointment'}</span><strong>{appointment.customer} · {formatDate(appointment.dateKey)}</strong></div><div><button type="button" className={styles.secondary} disabled={busy} onClick={() => begin('details')}>Back</button><button type="button" className={styles.primary} disabled={busy || !reason} onClick={() => void cancel()}>{busy ? 'Cancelling…' : temporaryHold ? 'Cancel Hold & Release Capacity' : 'Cancel Appointment'}</button></div></footer>
         </section> : null}
       </div>

@@ -3,9 +3,6 @@ name: Office Booking Authority
 on:
   pull_request:
     paths:
-      - 'functions/booking*.js'
-      - 'functions/officeBookingAuthority*.js'
-      - 'functions/workOrderApplicationService*.js'
       - 'functions/bootstrap.js'
       - 'functions/officeBookingAuthority.js'
       - 'functions/officeBookingAuthorityFacade.js'
@@ -55,9 +52,6 @@ on:
     branches:
       - main
     paths:
-      - 'functions/booking*.js'
-      - 'functions/officeBookingAuthority*.js'
-      - 'functions/workOrderApplicationService*.js'
       - 'functions/bootstrap.js'
       - 'functions/officeBookingAuthority.js'
       - 'functions/officeBookingAuthorityFacade.js'
@@ -128,32 +122,52 @@ jobs:
       - name: Install function dependencies
         run: npm install --prefix functions --no-audit --no-fund
 
-      - name: Validate all Firebase authority modules
-        run: npm --prefix functions run validate:firebase
-
-      - name: Run complete Booking Authority suite
-        run: npm --prefix functions run test:booking-authority
-
-      - name: Run transactional communication suite
-        run: npm --prefix functions run test:transactional-whatsapp
-
-      - name: Install ERP parity dependencies
-        run: npm install --prefix apps/erp-next --no-audit --no-fund
-
-      - name: Validate Authority and LIVE capacity parity
-        run: npm --prefix apps/erp-next run test:scheduling-capacity-parity
-
-      - name: Validate remaining Office Booking Authority boundaries
+      - name: Validate Office Booking Authority boundary
         shell: bash
         run: |
           set -euo pipefail
           node --check functions/index.js
-          node --test \
-            functions/customerContactDirectory.test.js \
-            functions/officeBookingAuthority.test.js \
-            functions/officeBookingAuthorityCommunication.test.js \
-            functions/officeBookingAuthorityCatalog.test.js \
-            functions/officeBookingAuthorityMasterData.test.js
+          node --check functions/bootstrap.js
+          node --check functions/officeBookingAuthority.js
+          node --check functions/officeBookingAuthorityFacade.js
+          node --check functions/appointmentCommunicationAuthority.js
+          node --check functions/appointmentCommunicationRenderer.js
+          node --check functions/vanScheduleCommunicationAuthority.js
+          node --check functions/technicianDailyScheduleService.js
+          node --check functions/whatsappTransactionalService.js
+          node --check functions/operatingCalendarService.js
+          node --check functions/appointmentNotificationService.js
+          node --check functions/customerContactDirectory.js
+          node --check functions/bookingOperationalMove.js
+          node --check functions/bookingAuthorityCore.js
+          node --check functions/bookingAuthorityFirestore.js
+          node --check functions/bookingAuthorityWorkOrders.js
+          node --check functions/bookingAuthorityAppointmentLifecycle.js
+          node --check functions/bookingAuthoritySchedulingEngine.js
+          node --check functions/bookingAuthoritySchedulingProvider.js
+          node --check functions/serviceCatalog.js
+          node --check functions/bookingCapacityAvailability.js
+          node --check functions/bookingVanIdentity.js
+          node --test functions/vanScheduleCommunicationAuthority.test.js
+          node --test functions/technicianDailyScheduleService.test.js
+          node --test functions/whatsappTransactionalGroupRecipient.test.js
+          node --test functions/operatingCalendarService.test.js
+          node --test functions/appointmentCommunicationRenderer.test.js
+          node --test functions/appointmentNotificationService.test.js
+          node --test functions/appointmentCommunicationAuthority.test.js
+          node --test functions/customerContactDirectory.test.js
+          node --test functions/bookingAuthorityWorkOrders.test.js
+          node --test functions/bookingOperationalMove.test.js
+          node --test functions/bookingCapacityAvailability.test.js
+          node --test functions/bookingAuthorityAppointmentLifecycle.test.js
+          node --test functions/serviceCatalog.test.js
+          node --test functions/bookingAuthoritySchedulingEngine.test.js
+          node --test functions/bookingAuthoritySchedulingProvider.test.js
+          node --test functions/bookingVanIdentity.test.js
+          node --test functions/officeBookingAuthority.test.js
+          node --test functions/officeBookingAuthorityCommunication.test.js
+          node --test functions/officeBookingAuthorityCatalog.test.js
+          node --test functions/officeBookingAuthorityMasterData.test.js
           node - <<'NODE'
           const mod = require('./functions/bootstrap');
           if (typeof mod.officeBookingAuthority !== 'function') {

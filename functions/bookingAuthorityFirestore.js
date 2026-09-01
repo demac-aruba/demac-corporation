@@ -106,53 +106,6 @@ function requestFingerprint(request) {
   return hashKey(JSON.stringify(normalizeBookingRequest(request)), 40);
 }
 
-function createAppointmentFingerprint({ appointmentId, offerId, offerVersion, optionId, createMode }) {
-  return hashKey(JSON.stringify({
-    appointmentId: cleanText(appointmentId, 180),
-    offerId: cleanText(offerId, 180),
-    offerVersion: Number(offerVersion),
-    optionId: cleanText(optionId, 180),
-    createMode: normalizeCreateMode(createMode),
-  }), 40);
-}
-
-function appointmentStillOwnsCapacityLock(appointment, lockId) {
-  if (!appointment) return false;
-  const status = cleanText(appointment.status, 40).toLowerCase();
-  if (["cancelled", "canceled", "cancelada"].includes(status)) return false;
-  return Array.isArray(appointment.capacityLockIds)
-    && appointment.capacityLockIds.map((value) => cleanText(value, 180)).includes(cleanText(lockId, 180));
-}
-
-async function findLiveForeignCapacityLocks({ transaction, db, collections, lockSnapshots, appointmentId }) {
-  const foreign = (lockSnapshots || []).filter((entry) => {
-    if (!entry?.snapshot?.exists) return false;
-    const stored = entry.snapshot.data() || {};
-    return stored.active !== false && cleanText(stored.appointmentId, 180) !== cleanText(appointmentId, 180);
-  });
-  if (!foreign.length) return [];
-
-  const ownerIds = [...new Set(foreign
-    .map((entry) => cleanText(entry.snapshot.data()?.appointmentId, 180))
-    .filter(Boolean))];
-  const ownerSnapshots = await Promise.all(ownerIds.map(async (ownerId) => ({
-    ownerId,
-    snapshot: await transaction.get(db.collection(collections.appointments).doc(ownerId)),
-  })));
-  const owners = new Map(ownerSnapshots.map(({ ownerId, snapshot }) => [
-    ownerId,
-    snapshot.exists ? { id: snapshot.id, ...snapshot.data() } : null,
-  ]));
-
-  return foreign.filter((entry) => {
-    const ownerId = cleanText(entry.snapshot.data()?.appointmentId, 180);
-    return appointmentStillOwnsCapacityLock(owners.get(ownerId), entry.lock?.id || entry.lockId);
-  }).map((entry) => ({
-    ...entry,
-    ownerId: cleanText(entry.snapshot.data()?.appointmentId, 180),
-  }));
-}
-
 function assertCustomerPropertyRelationship({ customerSnapshot, propertySnapshot, request }) {
   if (!customerSnapshot.exists) {
     throw new BookingAuthorityError(
@@ -342,10 +295,6 @@ function createBookingAuthority({
     actor = {},
     context = {},
     createMode = BOOKING_CREATE_MODES.CONFIRMED,
-    // Server-internal callback only. Callable/HTTP adapters never forward this field.
-    // It lets another authority join this exact Firestore transaction without
-    // creating a second, failure-prone commit boundary.
-    internalTransactionParticipant = null,
   } = {}) {
     const canonicalOfferId = cleanText(offerId, 180);
     if (!canonicalOfferId) {
@@ -357,66 +306,20 @@ function createBookingAuthority({
     }
     const normalizedCreateMode = normalizeCreateMode(createMode);
     const temporaryHold = normalizedCreateMode === BOOKING_CREATE_MODES.TEMPORARY_HOLD;
-    if (internalTransactionParticipant !== null && typeof internalTransactionParticipant !== "function") {
-      throw new TypeError("internalTransactionParticipant must be a server-internal function.");
-    }
     const now = asDate(clock());
     const identity = canonicalAppointmentIdentity(idempotencyKey);
     const offerRef = db.collection(collections.offers).doc(canonicalOfferId);
-    const appointmentRef = db.collection(collections.appointments).doc(identity.appointmentId);
     const idempotencyRef = db.collection(collections.idempotency).doc(identity.idempotencyKeyHash);
-    const createRequestFingerprint = createAppointmentFingerprint({
-      appointmentId: identity.appointmentId,
-      offerId: canonicalOfferId,
-      offerVersion,
-      optionId,
-      createMode: normalizedCreateMode,
-    });
-    const sameIdempotencyRequest = (record = {}) => record.offerId === canonicalOfferId
-      && Number(record.offerVersion) === Number(offerVersion)
-      && record.optionId === cleanText(optionId, 180)
-      && record.appointmentId === identity.appointmentId
-      && normalizeCreateMode(record.createMode) === normalizedCreateMode
-      && (!cleanText(record.createRequestFingerprint, 80)
-        || cleanText(record.createRequestFingerprint, 80) === createRequestFingerprint);
-    const sameAppointmentRequest = (appointment = {}) => {
-      if (cleanText(appointment.idempotencyKeyHash, 80) !== identity.idempotencyKeyHash) return false;
-      const storedFingerprint = cleanText(appointment.createRequestFingerprint, 80);
-      if (storedFingerprint) return storedFingerprint === createRequestFingerprint;
-      return cleanText(appointment.offerId, 180) === canonicalOfferId
-        && Number(appointment.offerVersion) === Number(offerVersion)
-        && cleanText(appointment.selectedOptionId, 180) === cleanText(optionId, 180)
-        && createModeFromAppointment(appointment) === normalizedCreateMode;
-    };
-    const idempotencyRecord = (recordNow) => compactObject({
-      id: identity.idempotencyKeyHash,
-      appointmentId: identity.appointmentId,
-      offerId: canonicalOfferId,
-      offerVersion: Number(offerVersion),
-      optionId: cleanText(optionId, 180),
-      createMode: normalizedCreateMode,
-      createRequestFingerprint,
-      operation: temporaryHold ? "createTemporaryHold" : "createAppointment",
-      ...actorFields(actor),
-      createdAtIso: recordNow.toISOString(),
-      createdAt: serverTimestamp(),
-    });
-    const replayResult = (appointment) => ({
-      success: true,
-      replayed: true,
-      createMode: createModeFromAppointment(appointment),
-      appointmentId: appointment.appointmentId || appointment.id,
-      appointment,
-      workOrderIds: appointment.workOrderIds || [],
-    });
 
-    const [existingIdempotencySnapshot, existingAppointmentSnapshot] = await Promise.all([
-      idempotencyRef.get(),
-      appointmentRef.get(),
-    ]);
+    const existingIdempotencySnapshot = await idempotencyRef.get();
     if (existingIdempotencySnapshot.exists) {
       const record = existingIdempotencySnapshot.data();
-      if (!sameIdempotencyRequest(record)) {
+      const sameRequest = record.offerId === canonicalOfferId
+        && Number(record.offerVersion) === Number(offerVersion)
+        && record.optionId === cleanText(optionId, 180)
+        && record.appointmentId === identity.appointmentId
+        && normalizeCreateMode(record.createMode) === normalizedCreateMode;
+      if (!sameRequest) {
         throw new BookingAuthorityError(
           BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
           "This idempotency key was already used for a different booking request.",
@@ -424,44 +327,14 @@ function createBookingAuthority({
         );
       }
       const replay = await getAppointment(record.appointmentId);
-      return replayResult(replay);
-    }
-
-    // A canonical appointment and its idempotency document are normally committed
-    // together. If an older/imported graph is missing only the idempotency record,
-    // repair it without requiring the already-consumed offer to still be open.
-    if (existingAppointmentSnapshot.exists) {
-      return db.runTransaction(async (transaction) => {
-        const repairNow = asDate(clock());
-        const [currentIdempotencySnapshot, currentAppointmentSnapshot] = await Promise.all([
-          transaction.get(idempotencyRef),
-          transaction.get(appointmentRef),
-        ]);
-        if (currentIdempotencySnapshot.exists && !sameIdempotencyRequest(currentIdempotencySnapshot.data() || {})) {
-          throw new BookingAuthorityError(
-            BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
-            "This idempotency key was already used for a different booking request.",
-            { appointmentId: cleanText(currentIdempotencySnapshot.data()?.appointmentId, 180) },
-          );
-        }
-        if (!currentAppointmentSnapshot.exists) {
-          throw new BookingAuthorityError(
-            BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
-            "The canonical appointment disappeared while repairing its idempotency record.",
-            { appointmentId: identity.appointmentId },
-          );
-        }
-        const existing = { id: currentAppointmentSnapshot.id, ...currentAppointmentSnapshot.data() };
-        if (!sameAppointmentRequest(existing)) {
-          throw new BookingAuthorityError(
-            BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
-            "The canonical appointment id already exists for a different booking request.",
-            { appointmentId: identity.appointmentId },
-          );
-        }
-        if (!currentIdempotencySnapshot.exists) transaction.set(idempotencyRef, idempotencyRecord(repairNow));
-        return replayResult(existing);
-      });
+      return {
+        success: true,
+        replayed: true,
+        createMode: createModeFromAppointment(replay),
+        appointmentId: replay.appointmentId || replay.id,
+        appointment: replay,
+        workOrderIds: replay.workOrderIds || [],
+      };
     }
 
     const initialOfferSnapshot = await offerRef.get();
@@ -491,7 +364,7 @@ function createBookingAuthority({
     const refreshedOption = normalizeOfferOption(revalidation.option);
 
     return db.runTransaction(async (transaction) => {
-      const transactionNow = asDate(clock());
+      const appointmentRef = db.collection(collections.appointments).doc(identity.appointmentId);
       const [idempotencySnapshot, appointmentSnapshot, currentOfferSnapshot] = await Promise.all([
         transaction.get(idempotencyRef),
         transaction.get(appointmentRef),
@@ -500,7 +373,12 @@ function createBookingAuthority({
 
       if (idempotencySnapshot.exists) {
         const record = idempotencySnapshot.data();
-        if (!sameIdempotencyRequest(record)) {
+        const sameRequest = record.offerId === canonicalOfferId
+          && Number(record.offerVersion) === Number(offerVersion)
+          && record.optionId === cleanText(optionId, 180)
+          && record.appointmentId === identity.appointmentId
+          && normalizeCreateMode(record.createMode) === normalizedCreateMode;
+        if (!sameRequest) {
           throw new BookingAuthorityError(
             BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
             "This idempotency key was already used for a different booking request.",
@@ -518,24 +396,37 @@ function createBookingAuthority({
           );
         }
         const replay = { id: replaySnapshot.id, ...replaySnapshot.data() };
-        return replayResult(replay);
+        return {
+          success: true,
+          replayed: true,
+          createMode: createModeFromAppointment(replay),
+          appointmentId: replay.appointmentId || replay.id,
+          appointment: replay,
+          workOrderIds: replay.workOrderIds || [],
+        };
       }
 
       if (appointmentSnapshot.exists) {
         const existing = { id: appointmentSnapshot.id, ...appointmentSnapshot.data() };
-        if (!sameAppointmentRequest(existing)) {
+        if (existing.idempotencyKeyHash !== identity.idempotencyKeyHash) {
           throw new BookingAuthorityError(
             BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
-            "The canonical appointment id already exists for a different booking request.",
+            "The canonical appointment id already exists with a different idempotency identity.",
             { appointmentId: identity.appointmentId },
           );
         }
-        transaction.set(idempotencyRef, idempotencyRecord(transactionNow));
-        return replayResult(existing);
+        return {
+          success: true,
+          replayed: true,
+          createMode: createModeFromAppointment(existing),
+          appointmentId: existing.appointmentId || existing.id,
+          appointment: existing,
+          workOrderIds: existing.workOrderIds || [],
+        };
       }
 
       const currentOffer = currentOfferSnapshot.exists ? { id: currentOfferSnapshot.id, ...currentOfferSnapshot.data() } : null;
-      validateOfferSelection({ offer: currentOffer, offerVersion, optionId, now: transactionNow });
+      validateOfferSelection({ offer: currentOffer, offerVersion, optionId, now });
       const request = normalizeBookingRequest(currentOffer.request);
       const customerRef = db.collection(collections.clients).doc(request.customerId);
       const propertyRef = db.collection(collections.properties).doc(request.propertyId);
@@ -556,7 +447,7 @@ function createBookingAuthority({
           option: refreshedOption,
           appointmentId: identity.appointmentId,
           context,
-          now: transactionNow,
+          now,
         });
       } catch (error) {
         throw providerError(error, "validateTransaction");
@@ -568,27 +459,22 @@ function createBookingAuthority({
           { reason: cleanText(transactionValidation?.reason, 240) },
         );
       }
-      const committedOption = normalizeOfferOption(transactionValidation.option || refreshedOption);
       const locks = validateCapacityLocks(transactionValidation.capacityLocks);
       const lockSnapshots = [];
       for (const lock of locks) {
         const lockRef = db.collection(collections.capacityLocks).doc(lock.id);
         lockSnapshots.push({ lock, lockRef, snapshot: await transaction.get(lockRef) });
       }
-      const liveForeignLocks = await findLiveForeignCapacityLocks({
-        transaction,
-        db,
-        collections,
-        lockSnapshots,
-        appointmentId: identity.appointmentId,
-      });
-      if (liveForeignLocks.length) {
-        const entry = liveForeignLocks[0];
-        throw new BookingAuthorityError(
-          BOOKING_ERROR_CODES.SLOT_CONFLICT,
-          "The selected appointment capacity was occupied concurrently.",
-          { date: entry.lock.date, vanId: entry.lock.vanId, slot: entry.lock.slot, appointmentId: entry.ownerId },
-        );
+      for (const entry of lockSnapshots) {
+        if (!entry.snapshot.exists) continue;
+        const stored = entry.snapshot.data();
+        if (stored.active !== false && stored.appointmentId !== identity.appointmentId) {
+          throw new BookingAuthorityError(
+            BOOKING_ERROR_CODES.SLOT_CONFLICT,
+            "The selected appointment capacity was occupied concurrently.",
+            { date: entry.lock.date, vanId: entry.lock.vanId, slot: entry.lock.slot },
+          );
+        }
       }
 
       const appointment = buildAppointmentDraft({
@@ -598,8 +484,8 @@ function createBookingAuthority({
         optionId,
         idempotencyKey,
         actor,
-        now: transactionNow,
-        optionOverride: committedOption,
+        now,
+        optionOverride: refreshedOption,
       });
       const notificationRecipients = notificationRecipientsFrom(currentOffer?.metadata?.notificationRecipients);
       let workOrders;
@@ -607,53 +493,31 @@ function createBookingAuthority({
         const buildWorkOrders = requireProviderMethod(availabilityProvider, "buildWorkOrders");
         workOrders = validateWorkOrders(await buildWorkOrders({
           appointment: { ...appointment, status: normalizedCreateMode },
-          option: committedOption,
+          option: refreshedOption,
           request,
           customer,
           property,
           actor,
           context: { ...context, notificationRecipients, appointmentState: normalizedCreateMode },
-          now: transactionNow,
+          now,
         }), identity.appointmentId);
       } catch (error) {
         throw providerError(error, "buildWorkOrders");
       }
       const workOrderIds = workOrders.map((item) => item.id);
-      const participantResult = internalTransactionParticipant
-        ? (await internalTransactionParticipant({
-          transaction,
-          appointmentId: identity.appointmentId,
-          request,
-          now: transactionNow,
-        })) || {}
-        : {};
-      if (!participantResult || typeof participantResult !== "object" || Array.isArray(participantResult)) {
-        throw new TypeError("internalTransactionParticipant must return an object when it returns a value.");
-      }
-      const participantAppointmentPatch = compactObject(
-        participantResult.appointmentPatch && typeof participantResult.appointmentPatch === "object"
-          ? participantResult.appointmentPatch
-          : {},
-      );
-      const participantWorkOrderPatch = compactObject(
-        participantResult.workOrderPatch && typeof participantResult.workOrderPatch === "object"
-          ? participantResult.workOrderPatch
-          : {},
-      );
+      const actorInfo = actorFields(actor);
       const appointmentRecord = compactObject({
-        ...participantAppointmentPatch,
         ...appointment,
-        createRequestFingerprint,
         status: normalizedCreateMode,
         notificationRecipients,
         workOrderIds,
         capacityLockIds: locks.map((lock) => lock.id),
         ...(temporaryHold
           ? {
-            heldAtIso: transactionNow.toISOString(),
+            heldAtIso: now.toISOString(),
             holdPolicy: "manual-confirm-or-cancel",
           }
-          : { confirmedAtIso: transactionNow.toISOString() }),
+          : { confirmedAtIso: now.toISOString() }),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -661,12 +525,11 @@ function createBookingAuthority({
       transaction.set(appointmentRef, appointmentRecord);
       workOrders.forEach((workOrder) => {
         transaction.set(db.collection(collections.workOrders).doc(workOrder.id), compactObject({
-          ...participantWorkOrderPatch,
           ...workOrder,
           bookingAuthorityVersion: BOOKING_AUTHORITY_VERSION,
           bookingOfferId: canonicalOfferId,
-          createdAt: workOrder.createdAt || transactionNow.toISOString(),
-          updatedAt: transactionNow.toISOString(),
+          createdAt: workOrder.createdAt || now.toISOString(),
+          updatedAt: now.toISOString(),
         }));
       });
       lockSnapshots.forEach(({ lock, lockRef }) => {
@@ -674,8 +537,8 @@ function createBookingAuthority({
           ...lock,
           appointmentId: identity.appointmentId,
           active: true,
-          createdAtIso: transactionNow.toISOString(),
-          updatedAtIso: transactionNow.toISOString(),
+          createdAtIso: now.toISOString(),
+          updatedAtIso: now.toISOString(),
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         }));
@@ -687,17 +550,28 @@ function createBookingAuthority({
         workOrderIds,
         ...(temporaryHold
           ? {
-            heldAtIso: transactionNow.toISOString(),
+            heldAtIso: now.toISOString(),
             heldAt: serverTimestamp(),
           }
           : {
-            bookedAtIso: transactionNow.toISOString(),
+            bookedAtIso: now.toISOString(),
             bookedAt: serverTimestamp(),
           }),
-        updatedAtIso: transactionNow.toISOString(),
+        updatedAtIso: now.toISOString(),
         updatedAt: serverTimestamp(),
       }), { merge: true });
-      transaction.set(idempotencyRef, idempotencyRecord(transactionNow));
+      transaction.set(idempotencyRef, compactObject({
+        id: identity.idempotencyKeyHash,
+        appointmentId: identity.appointmentId,
+        offerId: canonicalOfferId,
+        offerVersion: Number(offerVersion),
+        optionId: cleanText(optionId, 180),
+        createMode: normalizedCreateMode,
+        operation: temporaryHold ? "createTemporaryHold" : "createAppointment",
+        ...actorInfo,
+        createdAtIso: now.toISOString(),
+        createdAt: serverTimestamp(),
+      }));
 
       return {
         success: true,
@@ -722,14 +596,11 @@ function createBookingAuthority({
 module.exports = {
   BOOKING_COLLECTIONS,
   BOOKING_CREATE_MODES,
-  appointmentStillOwnsCapacityLock,
   assertCustomerPropertyRelationship,
   canonicalOfferIdentity,
   compactObject,
-  createAppointmentFingerprint,
   createBookingAuthority,
   createModeFromAppointment,
-  findLiveForeignCapacityLocks,
   normalizeCreateMode,
   notificationRecipientsFrom,
   requestFingerprint,

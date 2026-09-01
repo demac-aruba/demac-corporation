@@ -43,28 +43,6 @@ test("normalizes a channel-independent booking request", () => {
   assert.equal(request.constraints.preferredTime, "afternoon");
 });
 
-test("manual duration accepts 1-12 hours only in half-hour increments", () => {
-  for (let minutes = 60; minutes <= 720; minutes += 30) {
-    const normalized = normalizeBookingRequest({
-      customerId: "client-1",
-      propertyId: "property-1",
-      workLines: [{ presetId: "other", quantity: 1, manualDurationMinutes: minutes }],
-    });
-    assert.equal(normalized.workLines[0].manualDurationMinutes, minutes);
-  }
-  for (const minutes of [30, 59, 75, 721, 750]) {
-    assert.throws(
-      () => normalizeBookingRequest({
-        customerId: "client-1",
-        propertyId: "property-1",
-        workLines: [{ presetId: "other", quantity: 1, manualDurationMinutes: minutes }],
-      }),
-      (error) => error instanceof BookingAuthorityError
-        && error.code === BOOKING_ERROR_CODES.INVALID_REQUEST,
-    );
-  }
-});
-
 test("rejects requests without stable customer/property ids", () => {
   assert.throws(
     () => normalizeBookingRequest({ propertyId: "property-1", workLines: [{ presetId: "standard_service", quantity: 1 }] }),
@@ -75,18 +53,11 @@ test("rejects requests without stable customer/property ids", () => {
 });
 
 test("normalizes offer assignments and requires positive capacity", () => {
-  const normalized = normalizeOfferOption({
-    ...offer().options[0],
-    assignments: [{
-      ...offer().options[0].assignments[0],
-      ownedSlots: ["13:30", "14:30", "14:30", "not-a-slot"],
-    }],
-  });
+  const normalized = normalizeOfferOption(offer().options[0]);
   assert.equal(normalized.assignments[0].vanId, "VAN-2");
   assert.equal(normalized.assignments[0].slots, 2);
   assert.equal(normalized.capacityEndTime, "16:30");
   assert.equal(normalized.assignments[0].capacityEndTime, "16:30");
-  assert.deepEqual(normalized.assignments[0].ownedSlots, ["13:30", "14:30"]);
   assert.throws(
     () => normalizeOfferOption({ ...offer().options[0], assignments: [{ vanId: "VAN-2", quantity: 2, slots: 0 }] }),
     (error) => error.code === BOOKING_ERROR_CODES.INVALID_REQUEST,

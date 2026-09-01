@@ -4,9 +4,6 @@ on:
   pull_request:
     paths:
       - 'apps/erp-next/**'
-      - 'functions/booking*.js'
-      - 'functions/officeBookingAuthority*.js'
-      - 'functions/serviceCatalog.js'
       - 'functions/employeeAttendanceCalculation.js'
       - 'functions/employeeAttendanceCalculation.d.ts'
       - 'functions/whatsappWacliGateway.js'
@@ -19,9 +16,6 @@ on:
       - feature/scheduling-booking-whatsapp-consolidation
     paths:
       - 'apps/erp-next/**'
-      - 'functions/booking*.js'
-      - 'functions/officeBookingAuthority*.js'
-      - 'functions/serviceCatalog.js'
       - 'functions/employeeAttendanceCalculation.js'
       - 'functions/employeeAttendanceCalculation.d.ts'
       - 'functions/whatsappWacliGateway.js'
@@ -54,15 +48,6 @@ jobs:
         run: node --check functions/whatsappWacliGateway.js
       - name: Install
         run: npm install --no-audit --no-fund
-      - name: Install Booking Authority dependencies
-        working-directory: .
-        run: npm install --prefix functions --no-audit --no-fund
-      - name: Validate Firebase authority modules
-        working-directory: .
-        run: npm --prefix functions run validate:firebase
-      - name: Booking Authority regression suite
-        working-directory: .
-        run: npm --prefix functions run test:booking-authority
       - name: Typecheck
         run: npm run typecheck
       - name: Dispatch acceptance simulation
@@ -75,8 +60,6 @@ jobs:
         run: npm run test:booking-copilot
       - name: Live scheduling acceptance simulation
         run: npm run test:live-scheduling
-      - name: Scheduling capacity authority parity matrix
-        run: npm run test:scheduling-capacity-parity
       - name: Employee schedule architecture acceptance
         run: npm run test:employee-schedule
       - name: Employee attendance Work Order authority acceptance

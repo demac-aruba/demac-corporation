@@ -47,7 +47,6 @@ import {
   visualVanDayStatus,
   visualVanSlotAvailableByPolicy,
 } from '../../lib/visual-schedule-operational-policy';
-import { officeOfferExpiresAtMs, officeOfferIsExpired } from '../../lib/live-booking-ui-state';
 import styles from './remaining-work-schedule-picker.module.css';
 
 type CanonicalAppointment = Record<string, unknown> & {
@@ -91,7 +90,7 @@ type VisualPickerProps = {
   confirmLabel: string;
   confirmingLabel: string;
   footerNote: string;
-  loadAvailability: (dateKey: string, signal: AbortSignal) => Promise<OfficeAvailabilityResult>;
+  loadAvailability: (dateKey: string) => Promise<OfficeAvailabilityResult>;
   confirmSelection: (availability: OfficeAvailabilityResult, option: OfficeBookingOption) => Promise<void>;
   onClose: () => void;
 };
@@ -105,20 +104,6 @@ const rescheduleReasons = [
   'Weather / external condition',
   'Other',
 ];
-
-const AVAILABILITY_CACHE_TTL_MS = 10_000;
-
-type AvailabilityCacheEntry = {
-  value: OfficeAvailabilityResult;
-  expiresAt: number;
-};
-
-function availabilityCacheExpiry(result: OfficeAvailabilityResult, now = Date.now()) {
-  const shortTtlExpiry = now + AVAILABILITY_CACHE_TTL_MS;
-  const authorityExpiry = officeOfferExpiresAtMs(result.offer?.expiresAt);
-  if (!Number.isFinite(authorityExpiry)) return now;
-  return Math.min(shortTtlExpiry, Math.max(now, authorityExpiry - 1_000));
-}
 
 function text(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -145,9 +130,12 @@ function hoursLabel(minutes: number) {
   return `${value} hour${hours === 1 ? '' : 's'}`;
 }
 
-function vanLabel(value: string, capacityState?: LiveOperationalCapacityState | null) {
-  const canonicalName = capacityState?.vans.get(value)?.name?.trim();
-  if (canonicalName) return canonicalName;
+function vanNumber(value: string) {
+  const match = value.match(/(\d+)/);
+  return match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
+}
+
+function vanLabel(value: string) {
   const match = value.match(/^VAN-(\d+)$/i);
   return match ? `Van ${Number(match[1])}` : value;
 }
@@ -219,12 +207,11 @@ function VisualCapacitySchedulePicker({
   const [selectedOptionKey, setSelectedOptionKey] = useState('');
   const [contextLoading, setContextLoading] = useState(!initialContext);
   const [availabilityLoading, setAvailabilityLoading] = useState(true);
-  const [availabilityRevision, setAvailabilityRevision] = useState(0);
   const [scheduling, setScheduling] = useState(false);
   const [error, setError] = useState('');
   const [scheduleWarning, setScheduleWarning] = useState('');
   const requestSequence = useRef(0);
-  const availabilityCache = useRef(new Map<string, AvailabilityCacheEntry>());
+  const availabilityCache = useRef(new Map<string, OfficeAvailabilityResult>());
 
   const dayOptions = useMemo(
     () => (availability?.options ?? []).filter((option) => option.date === dateKey),
@@ -248,12 +235,11 @@ function VisualCapacitySchedulePicker({
     capacityState?.vans.forEach((_van, id) => ids.add(id));
     allVanJobs.forEach((entry) => ids.add(entry.assignment.vanId));
     dayOptions.forEach((option) => option.assignments.forEach((assignment) => ids.add(assignment.vanId)));
-    return [...ids].filter((id) => Boolean(text(id)));
+    return [...ids].filter((id) => /^VAN-\d+$/i.test(id)).sort((a, b) => vanNumber(a) - vanNumber(b));
   }, [allVanJobs, capacityState, dayOptions]);
 
   useEffect(() => {
     const sequence = ++requestSequence.current;
-    const availabilityController = new AbortController();
     setSelectedOptionKey('');
     setError('');
     setScheduleWarning('');
@@ -268,39 +254,27 @@ function VisualCapacitySchedulePicker({
     }
 
     const cachedAvailability = availabilityCache.current.get(dateKey);
-    const cachedResult = cachedAvailability && cachedAvailability.expiresAt > Date.now()
-      ? cachedAvailability.value
-      : null;
-    if (cachedAvailability && !cachedResult) availabilityCache.current.delete(dateKey);
-    if (cachedResult) {
-      setAvailability(cachedResult);
+    if (cachedAvailability) {
+      setAvailability(cachedAvailability);
       setAvailabilityLoading(false);
-      if (!cachedResult.available || !cachedResult.options.some((option) => option.date === dateKey)) {
+      if (!cachedAvailability.available || !cachedAvailability.options.some((option) => option.date === dateKey)) {
         setScheduleWarning('No Van has a complete Booking Authority allocation for all required work on this date. You can inspect the schedule or move to another day.');
       }
     } else {
       setAvailability(null);
       setAvailabilityLoading(true);
-      void loadAvailability(dateKey, availabilityController.signal).then((result) => {
-        if (availabilityController.signal.aborted || requestSequence.current !== sequence) return;
-        if (result.available && (!result.offer || officeOfferIsExpired(result.offer.expiresAt, Date.now()))) {
-          availabilityCache.current.delete(dateKey);
-          setAvailability(null);
-          setError('Booking Authority returned an offer without a current expiration. Nothing was scheduled; change the date to recheck capacity.');
-          return;
-        }
-        const expiresAt = availabilityCacheExpiry(result);
-        if (expiresAt > Date.now()) availabilityCache.current.set(dateKey, { value: result, expiresAt });
+      void loadAvailability(dateKey).then((result) => {
+        availabilityCache.current.set(dateKey, result);
+        if (requestSequence.current !== sequence) return;
         setAvailability(result);
         if (!result.available || !result.options.some((option) => option.date === dateKey)) {
           setScheduleWarning('No Van has a complete Booking Authority allocation for all required work on this date. You can inspect the schedule or move to another day.');
         }
       }).catch((cause) => {
-        if (availabilityController.signal.aborted || requestSequence.current !== sequence) return;
-        if (cause instanceof Error && cause.name === 'AbortError') return;
+        if (requestSequence.current !== sequence) return;
         setError(cause instanceof Error ? cause.message : 'Booking Authority availability could not be loaded.');
       }).finally(() => {
-        if (!availabilityController.signal.aborted && requestSequence.current === sequence) setAvailabilityLoading(false);
+        if (requestSequence.current === sequence) setAvailabilityLoading(false);
       });
     }
 
@@ -315,44 +289,7 @@ function VisualCapacitySchedulePicker({
       setContextLoading(false);
       setScheduleWarning((current) => current || 'The live schedule context could not be loaded. Booking Authority remains the final capacity authority.');
     });
-
-    return () => {
-      availabilityController.abort();
-      if (requestSequence.current === sequence) requestSequence.current += 1;
-    };
-  }, [availabilityRevision, dateKey]);
-
-  const activeOfferId = availability?.offer?.id;
-  const activeOfferExpiresAt = availability?.offer?.expiresAt;
-  useEffect(() => {
-    if (!activeOfferId) return;
-    const expiresAtMs = officeOfferExpiresAtMs(activeOfferExpiresAt);
-    if (!Number.isFinite(expiresAtMs)) {
-      availabilityCache.current.delete(dateKey);
-      setSelectedOptionKey('');
-      setAvailability(null);
-      setAvailabilityLoading(false);
-      setError('Booking Authority returned an offer without a current expiration. Nothing was scheduled; change the date to recheck capacity.');
-      return;
-    }
-
-    const expireAndRecheck = () => {
-      if (scheduling) return;
-      availabilityCache.current.delete(dateKey);
-      setSelectedOptionKey('');
-      setAvailability((current) => current?.offer?.id === activeOfferId ? null : current);
-      setAvailabilityLoading(true);
-      setScheduleWarning('The previous Booking Authority offer expired. Capacity is being checked again before confirmation.');
-      setAvailabilityRevision((current) => current + 1);
-    };
-    const delay = expiresAtMs - Date.now();
-    if (delay <= 0) {
-      expireAndRecheck();
-      return;
-    }
-    const timer = window.setTimeout(expireAndRecheck, delay);
-    return () => window.clearTimeout(timer);
-  }, [activeOfferExpiresAt, activeOfferId, dateKey, scheduling]);
+  }, [dateKey]);
 
   const moveDay = (delta: number) => {
     const next = addDays(dateKey, delta);
@@ -362,15 +299,6 @@ function VisualCapacitySchedulePicker({
 
   const confirm = async () => {
     if (!availability?.offer || !selectedOption || !canConfirm || scheduling) return;
-    if (officeOfferIsExpired(availability.offer.expiresAt, Date.now())) {
-      availabilityCache.current.delete(dateKey);
-      setSelectedOptionKey('');
-      setAvailability(null);
-      setAvailabilityLoading(true);
-      setScheduleWarning('The previous Booking Authority offer expired. Capacity is being checked again before confirmation.');
-      setAvailabilityRevision((current) => current + 1);
-      return;
-    }
     setScheduling(true);
     setError('');
     try {
@@ -385,7 +313,6 @@ function VisualCapacitySchedulePicker({
   const selectedPrimary = selectedOption ? optionPrimaryAssignment(selectedOption) : null;
   const selectedSupport = selectedOption ? optionSupportWindows(selectedOption) : [];
   const selectedDuration = selectedOption ? optionDurationMinutes(selectedOption) : requiredMinutes;
-  const offerCurrent = Boolean(availability?.offer && !officeOfferIsExpired(availability.offer.expiresAt, Date.now()));
   const settings = getRuntimeSchedulingSettings();
   const closure = liveCompanyClosureReason(capacityState, dateKey);
 
@@ -400,7 +327,7 @@ function VisualCapacitySchedulePicker({
         <section className={styles.kpis}>
           <article><span>WORK</span><strong>{quantity} unit{quantity === 1 ? '' : 's'}</strong><small>{workLabel}</small></article>
           <article><span>REQUIRED WORK TIME</span><strong>{hoursLabel(requiredMinutes)}</strong><small>{dayOptions.length ? 'Based on Booking Authority allocation' : 'Recalculated when capacity is available'}</small></article>
-          <article><span>ORIGINAL JOB</span><strong>{vanLabel(appointment.primaryVanId, capacityState)} · {formatLongDate(appointment.dateKey)}</strong><small>{originalJobNote}</small></article>
+          <article><span>ORIGINAL JOB</span><strong>{vanLabel(appointment.primaryVanId)} · {formatLongDate(appointment.dateKey)}</strong><small>{originalJobNote}</small></article>
         </section>
 
         {controls}
@@ -412,9 +339,9 @@ function VisualCapacitySchedulePicker({
         </section>
 
         {closure ? <div className={styles.warning}><strong>{closure}</strong><span>This date is operationally closed. Navigate to another day.</span></div> : null}
-        {availabilityLoading ? <div className={styles.info} role="status" aria-live="polite"><strong>Checking Booking Authority</strong><span>The live schedule is available while verified complete-match options are being calculated.</span></div> : null}
-        {scheduleWarning ? <div className={styles.info} role="status" aria-live="polite"><strong>Capacity note</strong><span>{scheduleWarning}</span></div> : null}
-        {error ? <div className={styles.error} role="alert"><strong>Attention</strong><span>{error}</span></div> : null}
+        {availabilityLoading ? <div className={styles.info}><strong>Checking Booking Authority</strong><span>The live schedule is available while verified complete-match options are being calculated.</span></div> : null}
+        {scheduleWarning ? <div className={styles.info}><strong>Capacity note</strong><span>{scheduleWarning}</span></div> : null}
+        {error ? <div className={styles.error}><strong>Attention</strong><span>{error}</span></div> : null}
 
         {contextLoading && !dayAppointments.length && !capacityState ? <div className={styles.loadingGrid}>{Array.from({ length: 5 }, (_, index) => <div key={index}><span /><span /><span /><span /></div>)}</div> : <div className={styles.vanScroller}>
           <div className={styles.vanGrid}>
@@ -430,7 +357,7 @@ function VisualCapacitySchedulePicker({
               const halfDay = Boolean(dayStatus.halfDay);
               return <article key={vanId} className={`${styles.vanCard} ${candidates.length ? styles.hasMatch : ''}`}>
                 <header>
-                  <div><strong>{vanLabel(vanId, capacityState)}</strong><span>{crew.label}</span></div>
+                  <div><strong>{vanLabel(vanId)}</strong><span>{crew.label}</span></div>
                   <b className={operational ? styles.activeBadge : styles.offBadge} style={halfDay && operational ? { color: 'var(--warning)' } : undefined}>{closure ? 'UNAVAILABLE' : dayStatus.label}</b>
                 </header>
 
@@ -442,7 +369,7 @@ function VisualCapacitySchedulePicker({
                     const support = optionSupportWindows(option);
                     return <button key={key} type="button" className={`${styles.match} ${selected ? styles.matchSelected : ''}`} aria-pressed={selected} onClick={() => setSelectedOptionKey(key)} disabled={scheduling}>
                       <span>✓ COMPLETE MATCH</span><strong>{candidateSummary(option)}</strong><small>{hoursLabel(duration)} available · fits required work</small>
-                      {support.length ? <small>{support.map((item) => `${item.assignment.vanName || vanLabel(item.assignment.vanId, capacityState)} support ${formatTime(item.start)}–${formatTime(item.capacityEnd || item.workEnd)}`).join(' · ')}</small> : null}
+                      {support.length ? <small>{support.map((item) => `${vanLabel(item.assignment.vanId)} support ${formatTime(item.start)}–${formatTime(item.capacityEnd || item.workEnd)}`).join(' · ')}</small> : null}
                     </button>;
                   }) : <div className={styles.noMatch}><span>NO COMPLETE MATCH</span><small>{operational ? 'Inspect open slots or try another day.' : 'Van unavailable for this date.'}</small></div>}
                 </div>
@@ -470,9 +397,9 @@ function VisualCapacitySchedulePicker({
       <footer className={styles.footer}>
         <div className={styles.footerHint}><span>ⓘ</span><p><strong>Only complete Booking Authority matches are selectable.</strong> Open-looking slots are visual context; half-day and operational rules are enforced, and no slot becomes a reservation until the complete allocation is confirmed.</p></div>
         <div className={styles.selection}>
-          <div><span>SELECTED OPTION</span>{selectedOption && selectedPrimary ? <><strong>{selectedPrimary.vanName || vanLabel(selectedPrimary.vanId, capacityState)} · {formatLongDate(selectedOption.date)}</strong><small>{candidateSummary(selectedOption)} · {hoursLabel(selectedDuration)}{selectedSupport.length ? ` · ${selectedSupport.length} support Van${selectedSupport.length === 1 ? '' : 's'}` : ''}</small></> : <><strong>No allocation selected</strong><small>Select a green complete-match block above.</small></>}</div>
+          <div><span>SELECTED OPTION</span>{selectedOption && selectedPrimary ? <><strong>{selectedPrimary.vanName || vanLabel(selectedPrimary.vanId)} · {formatLongDate(selectedOption.date)}</strong><small>{candidateSummary(selectedOption)} · {hoursLabel(selectedDuration)}{selectedSupport.length ? ` · ${selectedSupport.length} support Van${selectedSupport.length === 1 ? '' : 's'}` : ''}</small></> : <><strong>No allocation selected</strong><small>Select a green complete-match block above.</small></>}</div>
           <div className={styles.workSummary}><span>WORK SUMMARY</span><strong>{quantity} {workLabel} unit{quantity === 1 ? '' : 's'}</strong><small>{footerNote}</small></div>
-          <div className={styles.actions}><button type="button" className={styles.cancel} onClick={onClose} disabled={scheduling}>Cancel</button><button type="button" className={styles.confirm} disabled={!selectedOption || !offerCurrent || availabilityLoading || !canConfirm || scheduling} onClick={() => void confirm()}>{scheduling ? confirmingLabel : confirmLabel}</button></div>
+          <div className={styles.actions}><button type="button" className={styles.cancel} onClick={onClose} disabled={scheduling}>Cancel</button><button type="button" className={styles.confirm} disabled={!selectedOption || !availability?.offer || availabilityLoading || !canConfirm || scheduling} onClick={() => void confirm()}>{scheduling ? confirmingLabel : confirmLabel}</button></div>
         </div>
       </footer>
     </section>
@@ -502,7 +429,7 @@ export function RemainingWorkSchedulePicker({ appointment, canonical, outcome, o
     confirmLabel="Confirm Reassignment"
     confirmingLabel="Reassigning…"
     footerNote="Follow-up will stay linked to the original appointment."
-    loadAvailability={(target, signal) => {
+    loadAvailability={(target) => {
       if (!customerId || !propertyId || !workLines.length) return Promise.reject(new Error('The remaining work is missing its canonical customer, property, or work definition.'));
       return checkOfficeCreateAvailability({
         requestId: createPartialOutcomeRequestId('remaining-visual-availability'),
@@ -515,8 +442,7 @@ export function RemainingWorkSchedulePicker({ appointment, canonical, outcome, o
         customerFacingDescription: workLines.map((line) => line.customerFacingDescription).filter(Boolean).join('; '),
         technicianInstructions: workLines.map((line) => line.technicianInstructions).filter(Boolean).join('; '),
         notes: `Remaining work from partial completion of appointment ${appointment.id}.`,
-        availabilityMode: 'requested_date_grid',
-      }, { signal });
+      });
     }}
     confirmSelection={async (availability, option) => {
       if (!availability.offer) throw new Error('Booking Authority did not return a valid offer.');
@@ -551,7 +477,7 @@ export function AppointmentRescheduleSchedulePicker({ appointment, onClose, onRe
   }, [appointment.id]);
 
   if (!canonical) {
-    return <div className={styles.overlay} role="presentation"><section className={styles.modal} role="dialog" aria-modal="true" aria-label="Reschedule appointment"><header className={styles.header}><div><span className={styles.eyebrow}>BOOKING AUTHORITY · VISUAL CAPACITY</span><h2>Reschedule Appointment</h2><p>{appointment.customer}</p></div><button type="button" className={styles.close} onClick={onClose} aria-label="Close reschedule appointment">×</button></header><div className={styles.body}>{canonicalError ? <div className={styles.error} role="alert"><strong>Attention</strong><span>{canonicalError}</span></div> : <div className={styles.loadingGrid} role="status" aria-label="Loading appointment details">{Array.from({ length: 5 }, (_, index) => <div key={index}><span /><span /><span /><span /></div>)}</div>}</div></section></div>;
+    return <div className={styles.overlay} role="presentation"><section className={styles.modal} role="dialog" aria-modal="true" aria-label="Reschedule appointment"><header className={styles.header}><div><span className={styles.eyebrow}>BOOKING AUTHORITY · VISUAL CAPACITY</span><h2>Reschedule Appointment</h2><p>{appointment.customer}</p></div><button type="button" className={styles.close} onClick={onClose}>×</button></header><div className={styles.body}>{canonicalError ? <div className={styles.error}><strong>Attention</strong><span>{canonicalError}</span></div> : <div className={styles.loadingGrid}>{Array.from({ length: 5 }, (_, index) => <div key={index}><span /><span /><span /><span /></div>)}</div>}</div></section></div>;
   }
 
   const workLines = canonicalWorkLines(canonical.workLines);
@@ -573,7 +499,7 @@ export function AppointmentRescheduleSchedulePicker({ appointment, onClose, onRe
     minDate={today}
     originalJobNote="Current appointment"
     fallbackRequiredMinutes={fallbackRequiredMinutes}
-    controls={<section className={styles.rescheduleControls}>
+    controls={<section style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, .7fr) minmax(320px, 1.3fr)', gap: 10, marginBottom: 10, padding: 10, border: '1px solid var(--border)', borderRadius: 12, background: 'var(--surface)' }}>
       <label style={{ display: 'grid', gap: 5 }}><span style={{ color: 'var(--muted)', fontSize: 10, fontWeight: 850, letterSpacing: '.05em' }}>RESCHEDULE REASON</span><select value={reason} onChange={(event) => setReason(event.target.value)} style={inputStyle}><option value="">Select reason</option>{rescheduleReasons.map((item) => <option key={item}>{item}</option>)}</select></label>
       <label style={{ display: 'grid', gap: 5 }}><span style={{ color: 'var(--muted)', fontSize: 10, fontWeight: 850, letterSpacing: '.05em' }}>INTERNAL NOTE</span><input value={note} onChange={(event) => setNote(event.target.value)} placeholder="Optional operational context" style={inputStyle} /></label>
     </section>}
@@ -581,7 +507,7 @@ export function AppointmentRescheduleSchedulePicker({ appointment, onClose, onRe
     confirmLabel={appointment.status === 'temporary_hold' ? 'Confirm Hold Move' : 'Confirm Reschedule'}
     confirmingLabel="Rescheduling…"
     footerNote="The same appointment and Work Order relationship will be preserved."
-    loadAvailability={(target, signal) => {
+    loadAvailability={(target) => {
       if (!customerId || !propertyId || !workLines.length) return Promise.reject(new Error('This appointment is missing its canonical customer, property, or work definition.'));
       return checkOfficeRescheduleAvailability({
         appointmentId: appointment.id,
@@ -593,8 +519,7 @@ export function AppointmentRescheduleSchedulePicker({ appointment, onClose, onRe
         customerFacingDescription: sharedWorkText(workLines, 'customerFacingDescription') || appointment.customerFacingDescription,
         technicianInstructions: sharedWorkText(workLines, 'technicianInstructions') || appointment.technicianInstructions,
         changeKind: 'customer_reschedule',
-        availabilityMode: 'requested_date_grid',
-      }, { signal });
+      });
     }}
     confirmSelection={async (availability, option) => {
       if (!availability.offer) throw new Error('Booking Authority did not return a valid reschedule offer.');

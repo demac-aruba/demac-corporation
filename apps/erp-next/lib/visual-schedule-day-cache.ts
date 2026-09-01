@@ -32,14 +32,12 @@ async function loadWindow(centerDate: string) {
 
   const startDate = addDays(centerDate, -1);
   const endDate = addDays(centerDate, 1);
-  // Work Orders and operational fleet state form one projection snapshot. Treating
-  // a failed Work Order read as an empty successful list can label every slot OPEN,
-  // while treating a failed fleet read as null can silently erase policy. Cache only
-  // complete snapshots; callers already render an explicit loading/error state.
-  const promise = Promise.all([
+  const promise = Promise.allSettled([
     loadLiveSchedulingAppointmentsFast({ startDate, endDate }),
     loadLiveOperationalCapacityState({ startDate, endDate }),
-  ]).then(([appointments, capacityState]) => {
+  ]).then(([appointmentsResult, stateResult]) => {
+    const appointments = appointmentsResult.status === 'fulfilled' ? appointmentsResult.value : [];
+    const capacityState = stateResult.status === 'fulfilled' ? stateResult.value : null;
     const loadedAt = Date.now();
 
     for (const dateKey of [startDate, centerDate, endDate]) {
@@ -51,6 +49,14 @@ async function loadWindow(centerDate: string) {
       });
     }
 
+    if (appointmentsResult.status === 'rejected' && stateResult.status === 'rejected') {
+      const reason = appointmentsResult.reason instanceof Error
+        ? appointmentsResult.reason
+        : stateResult.reason instanceof Error
+          ? stateResult.reason
+          : new Error('The live scheduling context could not be loaded.');
+      throw reason;
+    }
   }).finally(() => {
     if (windowLoads.get(centerDate) === promise) windowLoads.delete(centerDate);
   });

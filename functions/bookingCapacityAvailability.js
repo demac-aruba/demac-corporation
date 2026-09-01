@@ -1,16 +1,23 @@
 const {
   EXTRA_MORNING_SLOT,
   REGULAR_SLOTS,
-  capacitySlotsForInterval,
-  halfDaySchedule,
+  capacitySlotsForOwnership,
+  isHalfDay,
   normalizeTime,
-  operationalEndMinutes,
   orderBlocksCapacity,
   orderSlotCount,
   propertyZone,
   routeCompatibility,
   vanCanReceiveAppointments,
 } = require("./bookingSchedulingPrimitives");
+
+const OPERATIONAL_NON_BLOCKING_STATUSES = new Set([
+  "cancelada",
+  "cancelled",
+  "canceled",
+  "reprogramada",
+  "rescheduled",
+]);
 
 const ROUTE_POLICIES = Object.freeze({
   ENFORCED: "enforced",
@@ -58,6 +65,12 @@ function endTimeFromDuration(startTime, durationMinutes) {
   return start === null || !duration ? "" : minutesClock(start + duration);
 }
 
+function operationalEndMinutes(halfDay) {
+  const slots = halfDay ? ["08:30", "09:30", "10:30", EXTRA_MORNING_SLOT] : REGULAR_SLOTS;
+  const last = clockMinutes(slots[slots.length - 1]);
+  return last === null ? null : last + 60;
+}
+
 function allocationDurationMinutes(allocation = {}) {
   const exact = Number(allocation.durationMinutes);
   if (Number.isFinite(exact) && exact > 0) return Math.max(1, Math.round(exact));
@@ -92,9 +105,10 @@ function assignmentCapacityInterval({ time, allocation, halfDay }) {
   const end = start + durationMinutes;
   const operationalEnd = operationalEndMinutes(halfDay);
   if (operationalEnd === null || end > operationalEnd) return null;
+  const ownedSlotCount = Math.max(1, Math.round(Number(allocation.slots) || Math.ceil(durationMinutes / 60)));
   const lockSlots = allocation.fullDay
     ? (halfDay ? [] : [...REGULAR_SLOTS])
-    : capacitySlotsForInterval(normalizedStart, durationMinutes, halfDay);
+    : capacitySlotsForOwnership(normalizedStart, ownedSlotCount, halfDay);
   if (!lockSlots.length) return null;
   const capacityEnd = clockMinutes(endTimeFromOccupiedSlots(lockSlots));
   return {
@@ -114,9 +128,10 @@ function workOrderCapacityInterval(order, services, halfDay) {
   const end = start + durationMinutes;
   const operationalEnd = operationalEndMinutes(halfDay);
   const fullDay = order?.fullDaySingleProperty === true;
+  const ownedSlotCount = orderSlotCount(order, services);
   const lockSlots = fullDay
     ? (halfDay ? [] : [...REGULAR_SLOTS])
-    : capacitySlotsForInterval(normalizedStart, durationMinutes, halfDay);
+    : capacitySlotsForOwnership(normalizedStart, ownedSlotCount, halfDay);
   const capacityEnd = clockMinutes(endTimeFromOccupiedSlots(lockSlots));
   return {
     start,
@@ -131,8 +146,9 @@ function capacityLockSlots({ time, durationMinutes, slots, halfDay, fullDay }) {
   if (fullDay === true) return halfDay ? [] : [...REGULAR_SLOTS];
   const duration = Number.isFinite(Number(durationMinutes)) && Number(durationMinutes) > 0
     ? Math.max(1, Math.round(Number(durationMinutes)))
-    : Math.max(1, Math.round(Number(slots) || 1)) * 60;
-  return capacitySlotsForInterval(normalizeTime(time), duration, halfDay);
+    : 60;
+  const ownedSlotCount = Math.max(1, Math.round(Number(slots) || Math.ceil(duration / 60)));
+  return capacitySlotsForOwnership(normalizeTime(time), ownedSlotCount, halfDay);
 }
 
 function vanCanReceiveOperationalMove(van, assignment) {
@@ -143,6 +159,8 @@ function vanCanReceiveOperationalMove(van, assignment) {
 function workOrderBlocksOperationalMoveCapacity(order) {
   const appointmentId = String(order?.appointmentId ?? "").trim();
   if (!appointmentId) return false;
+  const status = String(order?.status ?? "").trim().toLowerCase();
+  if (OPERATIONAL_NON_BLOCKING_STATUSES.has(status)) return false;
   return orderBlocksCapacity(order);
 }
 
@@ -152,87 +170,21 @@ function routePolicy(routeConfig) {
     : ROUTE_POLICIES.ENFORCED;
 }
 
-function rejectedCandidate(stage, code, facts = {}, context = {}) {
-  return {
-    available: false,
-    rejection: {
-      stage,
-      code,
-      vanId: String(context.vanId ?? "").trim(),
-      date: String(context.date ?? "").trim(),
-      start: normalizeTime(context.start),
-      facts,
-    },
-  };
-}
-
-function vanCandidateRejection(van, assignment, manualOperationalMove, context) {
-  const assignmentStatus = String(assignment?.status ?? "").trim();
-  const physicallyUnavailable = van?.active === false
-    || ["Mantenimiento", "Fuera de servicio"].includes(String(van?.status ?? "").trim())
-    || ["Mantenimiento", "Fuera de servicio"].includes(assignmentStatus);
-  if (physicallyUnavailable) {
-    return rejectedCandidate("fleet", "van-unavailable", {
-      assignmentStatus,
-      vanActive: van?.active !== false,
-    }, context);
-  }
-  if (!manualOperationalMove && (!assignment?.driverStaffId || assignmentStatus === "Sin personal")) {
-    return rejectedCandidate("crew", "crew-unavailable", {
-      assignmentStatus,
-      hasEligibleDriver: Boolean(assignment?.driverStaffId),
-    }, context);
-  }
-  return rejectedCandidate("fleet", "van-unavailable", {
-    assignmentStatus,
-    vanActive: van?.active !== false,
-  }, context);
-}
-
-function evaluateCandidateAvailability({ date, time, allocation, van, assignment, data, routeConfig, candidateZone, manualOperationalMove = false }) {
-  const rejectionContext = { vanId: van?.id, date, start: time };
+function candidateAvailability({ date, time, allocation, van, assignment, data, routeConfig, candidateZone, manualOperationalMove = false }) {
   if (manualOperationalMove) {
-    if (!vanCanReceiveOperationalMove(van, assignment)) return vanCandidateRejection(van, assignment, true, rejectionContext);
+    if (!vanCanReceiveOperationalMove(van, assignment)) return null;
   } else if (!vanCanReceiveAppointments(van, assignment)) {
-    return vanCandidateRejection(van, assignment, false, rejectionContext);
+    return null;
   }
 
-  const halfDay = halfDaySchedule(van.id, date, data.vanHalfDaySchedules) || false;
-  if (allocation.fullDay && halfDay) {
-    return rejectedCandidate("calendar", "half-day-capacity-unavailable", {
-      halfDay: true,
-      fullDay: true,
-    }, rejectionContext);
-  }
-  if (allocation.fullDay && time !== "08:30") {
-    return rejectedCandidate("capacity", "outside-operational-window", {
-      halfDay,
-      fullDay: true,
-    }, rejectionContext);
-  }
+  const halfDay = isHalfDay(van.id, date, data.vanHalfDaySchedules);
+  if (allocation.fullDay && (halfDay || time !== "08:30")) return null;
   const requestedInterval = assignmentCapacityInterval({ time, allocation, halfDay });
-  if (!requestedInterval) {
-    return rejectedCandidate(halfDay ? "calendar" : "capacity", halfDay ? "half-day-capacity-unavailable" : "outside-operational-window", {
-      halfDay,
-      fullDay: allocation.fullDay === true,
-      durationMinutes: allocationDurationMinutes(allocation),
-      slots: Math.max(1, Math.round(Number(allocation.slots) || Math.ceil(allocationDurationMinutes(allocation) / 60))),
-      ownedSlots: capacityLockSlots({
-        time,
-        durationMinutes: allocation.durationMinutes,
-        slots: allocation.slots,
-        halfDay,
-        fullDay: allocation.fullDay,
-      }),
-    }, rejectionContext);
-  }
+  if (!requestedInterval) return null;
 
-  const indexedOrders = data.workOrdersByDateVan instanceof Map
-    ? data.workOrdersByDateVan.get(`${date}|${van.id}`) || []
-    : data.workOrders || [];
-  const sameVanOrders = indexedOrders
+  const sameVanOrders = data.workOrders
     .filter((order) => {
-      if (!(data.workOrdersByDateVan instanceof Map) && (order.date !== date || order.vanId !== van.id)) return false;
+      if (order.date !== date || order.vanId !== van.id) return false;
       return manualOperationalMove
         ? workOrderBlocksOperationalMoveCapacity(order)
         : orderBlocksCapacity(order);
@@ -242,38 +194,18 @@ function evaluateCandidateAvailability({ date, time, allocation, van, assignment
       time: normalizeOrderTime(order.time),
       capacityInterval: workOrderCapacityInterval(order, data.services, halfDay),
       zoneInfo: propertyZone(
-        data.propertyById instanceof Map
-          ? data.propertyById.get(order.propertyId)
-          : data.properties.find((property) => property.id === order.propertyId),
+        data.properties.find((property) => property.id === order.propertyId),
         `${order.zone ?? ""} ${order.address ?? ""}`,
         routeConfig,
       ),
     }));
 
-  const conflictingOrders = sameVanOrders.filter((order) => intervalsOverlap(requestedInterval, order.capacityInterval));
-  if (conflictingOrders.length) {
-    const requestedSlotSet = new Set(requestedInterval.lockSlots);
-    const blockingSlots = [...new Set(conflictingOrders.flatMap((order) => (
-      (order.capacityInterval?.lockSlots || []).filter((slot) => requestedSlotSet.has(slot))
-    )))];
-    return rejectedCandidate("work-order", "work-order-conflict", {
-      blockingWorkOrderCount: conflictingOrders.length,
-      unlinkedBlockingWorkOrderCount: conflictingOrders.filter((order) => !String(order.appointmentId ?? "").trim()).length,
-      blockingWorkOrderIds: conflictingOrders
-        .map((order) => String(order.id ?? "").trim())
-        .filter(Boolean)
-        .slice(0, 5),
-      blockingSlots,
-      attemptedEnd: minutesClock(requestedInterval.end),
-      attemptedCapacityEnd: minutesClock(requestedInterval.capacityEnd),
-      ownedSlots: [...requestedInterval.lockSlots],
-    }, rejectionContext);
-  }
+  if (sameVanOrders.some((order) => intervalsOverlap(requestedInterval, order.capacityInterval))) return null;
 
   let routeScore = 0;
   let routeReason = manualOperationalMove ? "manual-operational-move" : "explicit-office-target";
   if (!manualOperationalMove && routePolicy(routeConfig) === ROUTE_POLICIES.ENFORCED) {
-    const office = (routeConfig.zones || []).find((zone) => zone.id === routeConfig.officeZoneId);
+    const office = routeConfig.zones.find((zone) => zone.id === routeConfig.officeZoneId);
     const compatibility = routeCompatibility({
       candidateZone,
       existingOrders: sameVanOrders,
@@ -281,41 +213,26 @@ function evaluateCandidateAvailability({ date, time, allocation, van, assignment
       officePosition: office?.position ?? 50,
       maximumAnchorDistance: routeConfig.maximumAnchorDistance,
     });
-    if (!compatibility.allowed) {
-      return rejectedCandidate("route", "route-policy-rejected", {
-        routePolicy: ROUTE_POLICIES.ENFORCED,
-        routeReason: compatibility.reason,
-        ownedSlots: [...requestedInterval.lockSlots],
-      }, rejectionContext);
-    }
+    if (!compatibility.allowed) return null;
     routeScore = compatibility.score;
     routeReason = compatibility.reason;
   }
 
   return {
-    available: true,
-    candidate: {
-      vanId: van.id,
-      vanName: van.name,
-      technicianIds: assignment.technicianIds,
-      driverStaffId: assignment.driverStaffId,
-      helperStaffId: assignment.helperStaffId,
-      quantity: allocation.quantity,
-      durationMinutes: requestedInterval.durationMinutes,
-      slots: allocation.fullDay ? REGULAR_SLOTS.length : allocation.slots,
-      ownedSlots: [...requestedInterval.lockSlots],
-      endTime: minutesClock(requestedInterval.end),
-      capacityEndTime: minutesClock(requestedInterval.capacityEnd),
-      fullDay: allocation.fullDay,
-      routeScore,
-      routeReason,
-    },
+    vanId: van.id,
+    vanName: van.name,
+    technicianIds: assignment.technicianIds,
+    driverStaffId: assignment.driverStaffId,
+    helperStaffId: assignment.helperStaffId,
+    quantity: allocation.quantity,
+    durationMinutes: requestedInterval.durationMinutes,
+    slots: allocation.fullDay ? REGULAR_SLOTS.length : allocation.slots,
+    endTime: minutesClock(requestedInterval.end),
+    capacityEndTime: minutesClock(requestedInterval.capacityEnd),
+    fullDay: allocation.fullDay,
+    routeScore,
+    routeReason,
   };
-}
-
-function candidateAvailability(args) {
-  const evaluated = evaluateCandidateAvailability(args);
-  return evaluated.available ? evaluated.candidate : null;
 }
 
 module.exports = {
@@ -326,7 +243,6 @@ module.exports = {
   capacityLockSlots,
   endTimeFromDuration,
   endTimeFromOccupiedSlots,
-  evaluateCandidateAvailability,
   intervalsOverlap,
   normalizeOrderTime,
   routePolicy,

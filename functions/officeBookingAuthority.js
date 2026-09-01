@@ -32,7 +32,7 @@ const {
   notificationQueueIds: canonicalNotificationQueueIds,
 } = require("./appointmentNotificationService");
 
-const OFFICE_BOOKING_API_VERSION = 18;
+const OFFICE_BOOKING_API_VERSION = 17;
 const OFFICE_BOOKING_ROLES = Object.freeze([
   "admin",
   "office",
@@ -1121,9 +1121,6 @@ function createOfficeBookingApi({
       const excludeAppointmentId = cleanText(data.appointmentId, 180);
       const requiredPrimaryVanId = cleanText(data.requiredVanId, 120);
       const changeKind = lifecycleChangeKind(data.changeKind);
-      const availabilityMode = cleanText(data.availabilityMode, 60) === "requested_date_grid"
-        ? "requested_date_grid"
-        : "client_shortlist";
       const notificationRecipients = await resolveAppointmentRecipients(db, {
         clientId: request.customerId,
         propertyId: request.propertyId,
@@ -1134,12 +1131,11 @@ function createOfficeBookingApi({
         actor,
         context: {
           channel: "office",
-          requestKey: `office:${identity.uid}:${requestId}:${availabilityMode}:availability`,
+          requestKey: `office:${identity.uid}:${requestId}:availability`,
           officeRequestId: requestId,
           excludeAppointmentId,
           requiredPrimaryVanId,
           changeKind,
-          availabilityMode,
           notificationRecipients,
         },
       });

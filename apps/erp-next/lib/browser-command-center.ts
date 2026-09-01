@@ -1,5 +1,4 @@
 import { BROWSER_BILLING_DRAFTS_KEY, type BrowserBillingDraft } from './browser-billing';
-import { canonicalCrewReadinessRoster, type CanonicalOperationsState } from './canonical-operations';
 import type { BrowserFieldExecutionRecord, BrowserOfficeReviewRecord } from './browser-field';
 import { BROWSER_INVENTORY_MOVEMENTS_KEY, type BrowserInventoryMovement } from './browser-inventory-ledger';
 import { deriveBrowserJobReadiness, fieldStartDecision, loadDispatchAtRiskReleases } from './browser-job-readiness';
@@ -33,7 +32,7 @@ export type BrowserCommandCenterSnapshot = {
   attention: Array<{ severity: 'critical' | 'warning' | 'opportunity' | 'information'; title: string; detail: string; href: string }>;
 };
 
-export function loadBrowserCommandCenterSnapshot(canonicalOperations: CanonicalOperationsState | null = null): BrowserCommandCenterSnapshot {
+export function loadBrowserCommandCenterSnapshot(): BrowserCommandCenterSnapshot {
   const appointments = loadBrowserValue<BrowserAppointmentRecord[]>(browserKeys.appointments, []);
   const workOrders = loadBrowserValue<BrowserWorkOrderRecord[]>(browserKeys.workOrders, []);
   const fieldExecutions = loadBrowserValue<BrowserFieldExecutionRecord[]>(browserKeys.fieldExecutions, []);
@@ -52,11 +51,7 @@ export function loadBrowserCommandCenterSnapshot(canonicalOperations: CanonicalO
   const approvedReviewIds = new Set(reviews.filter((review) => review.status === 'approved').map((review) => review.id));
   const sentReviewIds = new Set(deliveries.map((delivery) => delivery.reviewId));
   const activeWorkOrders = workOrders.filter((order) => !submittedIds.has(order.id));
-  const activeReadiness = activeWorkOrders.map((order) => deriveBrowserJobReadiness(order, {
-    appointments,
-    executions: fieldExecutions,
-    crewRoster: canonicalOperations ? canonicalCrewReadinessRoster(canonicalOperations, order.scheduledDate) : [],
-  }));
+  const activeReadiness = activeWorkOrders.map((order) => deriveBrowserJobReadiness(order, { appointments, executions: fieldExecutions }));
   const dispatchReady = activeReadiness.filter((item) => item.status === 'ready').length;
   const dispatchAtRiskStates = activeReadiness.filter((item) => item.status === 'at_risk');
   const dispatchAtRisk = dispatchAtRiskStates.length;

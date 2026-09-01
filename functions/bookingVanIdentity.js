@@ -1,35 +1,9 @@
 const { realignCanonicalVanScheduleGroups } = require("./vanScheduleGroupIdentity");
 
-// These four IDs identify only the original fleet whose historical WhatsApp groups need
-// realignment. Scheduling capacity itself is discovered from the complete Vans collection.
-const LEGACY_CORE_WHATSAPP_VAN_IDS = Object.freeze(["VAN-1", "VAN-2", "VAN-3", "VAN-4"]);
-const CORE_CANONICAL_VAN_SET = new Set(LEGACY_CORE_WHATSAPP_VAN_IDS);
-
-// Closed migration registry. A new Van's master-data document ID is its scheduling
-// identity; adding or renaming human-readable metadata must never create an alias.
-const LEGACY_MASTER_DATA_VAN_ALIASES = Object.freeze({
-  v1: "VAN-1",
-  van1: "VAN-1",
-  "van 1": "VAN-1",
-  van_1: "VAN-1",
-  v2: "VAN-2",
-  van2: "VAN-2",
-  "van 2": "VAN-2",
-  van_2: "VAN-2",
-  v3: "VAN-3",
-  van3: "VAN-3",
-  "van 3": "VAN-3",
-  van_3: "VAN-3",
-  v4: "VAN-4",
-  van4: "VAN-4",
-  "van 4": "VAN-4",
-  van_4: "VAN-4",
-  "van-1783800405341": "VAN-4",
-  "van-1783801335935": "VAN-2",
-  "van-1783801335936": "VAN-4",
-  "van-1783801335937": "VAN-1",
-  "van-1783801335938": "VAN-3",
-});
+// These four IDs are the safe fallback fleet when Firestore master data is unavailable.
+// Live Booking Authority may discover additional canonical VAN-N lanes from the Vans collection.
+const CANONICAL_VAN_IDS = Object.freeze(["VAN-1", "VAN-2", "VAN-3", "VAN-4"]);
+const CORE_CANONICAL_VAN_SET = new Set(CANONICAL_VAN_IDS);
 
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -44,18 +18,24 @@ function canonicalVanNumber(value) {
 }
 
 function canonicalVanIdFromValue(value) {
-  const raw = text(value);
-  if (!raw) return "";
-  const legacy = LEGACY_MASTER_DATA_VAN_ALIASES[raw.toLowerCase()];
-  if (legacy) return legacy;
-  const match = raw.match(/^VAN-([1-9]\d*)$/i);
-  return match ? `VAN-${Number(match[1])}` : "";
+  const number = canonicalVanNumber(value);
+  return number ? `VAN-${number}` : "";
 }
 
 function canonicalVanIdFromRecord(van = {}) {
-  // Master-data ID owns identity. Only the closed migration aliases above may
-  // translate an old document ID; editable names/numbers/codes are display data.
-  return canonicalVanIdFromValue(van.id) || text(van.id);
+  for (const value of [van.number, van.vanNumber, van.unitNumber]) {
+    const number = Number(value);
+    if (Number.isInteger(number) && number >= 1) return `VAN-${number}`;
+  }
+
+  // Prefer business identity fields before the physical Firestore document ID. Historical
+  // records can have IDs such as VAN-1783801335935 while their actual lane is named Van 2.
+  for (const value of [van.name, van.label, van.code]) {
+    const canonical = canonicalVanIdFromValue(value);
+    if (canonical) return canonical;
+  }
+
+  return canonicalVanIdFromValue(van.id);
 }
 
 function recordPreference(van = {}, canonicalId) {
@@ -65,12 +45,7 @@ function recordPreference(van = {}, canonicalId) {
 }
 
 function canonicalVanSort(left, right) {
-  const leftNumber = canonicalVanNumber(left);
-  const rightNumber = canonicalVanNumber(right);
-  if (leftNumber && rightNumber) return leftNumber - rightNumber;
-  if (leftNumber) return -1;
-  if (rightNumber) return 1;
-  return text(left).localeCompare(text(right), undefined, { numeric: true, sensitivity: "base" });
+  return canonicalVanNumber(left) - canonicalVanNumber(right);
 }
 
 function realignCoreScheduleGroups(canonicalVans) {
@@ -97,16 +72,7 @@ function canonicalizeVanCatalog(vans = []) {
 
   const canonicalVans = [...selected.entries()]
     .sort(([left], [right]) => canonicalVanSort(left, right))
-    .map(([id, van]) => {
-      const number = canonicalVanNumber(id);
-      const configuredName = text(van.name) || text(van.label) || text(van.code);
-      return {
-        ...van,
-        sourceVanId: van.id,
-        id,
-        name: configuredName || (number ? `Van ${number}` : id),
-      };
-    });
+    .map(([id, van]) => ({ ...van, sourceVanId: van.id, id, name: `Van ${canonicalVanNumber(id)}` }));
 
   // Existing WhatsApp group defaults are intentionally defined only for the original four
   // lanes. Realign those four without inventing a group/JID for future Vans.
@@ -116,8 +82,7 @@ function canonicalizeVanCatalog(vans = []) {
 function resolveCanonicalVanId(value, aliases = new Map()) {
   // Historical appointment references may contain a physical Firestore document ID that
   // looks like VAN-<large number>. Resolve known aliases before treating the value as a lane.
-  const raw = text(value);
-  return aliases.get(raw) || canonicalVanIdFromValue(raw) || raw;
+  return aliases.get(text(value)) || canonicalVanIdFromValue(value) || "";
 }
 
 function normalizeVanReference(item, aliases) {
@@ -135,15 +100,12 @@ function canonicalizeSchedulingData(data = {}) {
     workOrders: (Array.isArray(data.workOrders) ? data.workOrders : []).map((item) => normalizeVanReference(item, catalog.aliases)),
     dailyVanAssignments: (Array.isArray(data.dailyVanAssignments) ? data.dailyVanAssignments : []).map((item) => normalizeVanReference(item, catalog.aliases)),
     vanHalfDaySchedules: (Array.isArray(data.vanHalfDaySchedules) ? data.vanHalfDaySchedules : []).map((item) => normalizeVanReference(item, catalog.aliases)),
-    capacityLocks: (Array.isArray(data.capacityLocks) ? data.capacityLocks : []).map((item) => normalizeVanReference(item, catalog.aliases)),
-    bookingCapacityLocks: (Array.isArray(data.bookingCapacityLocks) ? data.bookingCapacityLocks : []).map((item) => normalizeVanReference(item, catalog.aliases)),
     vanAliases: catalog.aliases,
   };
 }
 
 module.exports = {
-  LEGACY_CORE_WHATSAPP_VAN_IDS,
-  LEGACY_MASTER_DATA_VAN_ALIASES,
+  CANONICAL_VAN_IDS,
   canonicalVanIdFromRecord,
   canonicalVanIdFromValue,
   canonicalizeSchedulingData,

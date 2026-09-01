@@ -140,6 +140,13 @@ export const defaultWorkPresets: WorkPreset[] = [
   { id: 'other', label: 'Other work', defaultMinutes: 60, perUnit: false, customerDescriptionTemplate: 'A/C service visit' },
 ];
 
+export const previewVans: VanResource[] = [
+  { id: 'VAN-1', name: 'Van 1', team: 'Team 1', active: true, skills: ['service', 'repair', 'installation'] },
+  { id: 'VAN-2', name: 'Van 2', team: 'Team 2', active: true, skills: ['service', 'repair', 'installation'] },
+  { id: 'VAN-3', name: 'Van 3', team: 'Team 3', active: true, skills: ['service', 'repair', 'installation', 'commercial'] },
+  { id: 'VAN-4', name: 'Van 4', team: 'Team 4', active: true, skills: ['service', 'diagnostic', 'repair'] },
+];
+
 export const previewSectorCompatibility: Record<string, string[]> = {
   Noord: ['Noord', 'Palm Beach', 'Malmok', 'Oranjestad'],
   'Palm Beach': ['Palm Beach', 'Noord', 'Malmok', 'Oranjestad'],
@@ -314,7 +321,7 @@ function workingEndAfter(start: string, workMinutes: number, _settings: Scheduli
   return minutesToTime(timeToMinutes(start) + Math.max(0, workMinutes));
 }
 
-function findSupportPlan(request: BookingRequest, jobs: DispatchJob[], vans: readonly VanResource[], settings: SchedulingSettings): CandidateSlot[] {
+function findSupportPlan(request: BookingRequest, jobs: DispatchJob[], vans: VanResource[], settings: SchedulingSettings): CandidateSlot[] {
   if (!isStandardServiceOnly(request)) return [];
   const requestedUnits = standardServiceQuantity(request);
   const primaryCapacity = settings.maxStandardUnitsSameSiteSingleVan;
@@ -402,8 +409,7 @@ function findSupportPlan(request: BookingRequest, jobs: DispatchJob[], vans: rea
   return results.sort((a, b) => b.score - a.score).slice(0, 6);
 }
 
-/** @deprecated Acceptance simulator only. Production must use Office Booking Authority. */
-export function findCandidateSlots(request: BookingRequest, jobs: DispatchJob[], vans: readonly VanResource[], settings: SchedulingSettings = getRuntimeSchedulingSettings()): CandidateSlot[] {
+export function findCandidateSlots(request: BookingRequest, jobs: DispatchJob[], vans: VanResource[] = previewVans, settings: SchedulingSettings = getRuntimeSchedulingSettings()): CandidateSlot[] {
   const supportPlans = findSupportPlan(request, jobs, vans, settings);
   if (supportPlans.length) return supportPlans;
 

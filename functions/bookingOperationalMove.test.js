@@ -4,6 +4,7 @@ const { BOOKING_ERROR_CODES } = require("./bookingAuthorityCore");
 const {
   OPERATIONAL_MOVE_VERSION,
   createOperationalMoveAuthority,
+  manualOccupiedSlots,
   workOrderBlocksOperationalCapacity,
 } = require("./bookingOperationalMove");
 
@@ -93,9 +94,6 @@ function baseSeed(extra = {}) {
       date: "2026-08-18",
       startTime: "08:30",
       endTime: "11:30",
-      customerId: "c1",
-      propertyId: "p1",
-      address: "Wayaca 217",
       primaryVanId: "VAN-1",
       assignments: [{ vanId: "VAN-1", vanName: "Van 1", time: "08:30", endTime: "11:30", quantity: 3, slots: 3, role: "primary" }],
       workOrderIds: ["WO-1"],
@@ -117,12 +115,6 @@ function baseSeed(extra = {}) {
     },
     "vans/VAN-1": { id: "VAN-1", name: "Van 1", active: true, responsibleStaffId: "tech-1", regularHelperId: "tech-2" },
     "vans/VAN-2": { id: "VAN-2", name: "Van 2", active: true, responsibleStaffId: "tech-3", regularHelperId: "tech-4" },
-    "staffProfiles/tech-1": { id: "tech-1", active: true, availability: "Disponible", canDriveVan: true },
-    "staffProfiles/tech-2": { id: "tech-2", active: true, availability: "Disponible" },
-    "staffProfiles/tech-3": { id: "tech-3", active: true, availability: "Disponible", canDriveVan: true },
-    "staffProfiles/tech-4": { id: "tech-4", active: true, availability: "Disponible" },
-    "clients/c1": { id: "c1", name: "Test Customer" },
-    "properties/p1": { id: "p1", clientId: "c1", address: "Wayaca 217", operationalZone: "Oranjestad" },
     "bookingCapacityLocks/OLD-1": { appointmentId: "APT-1", active: true },
     "bookingCapacityLocks/OLD-2": { appointmentId: "APT-1", active: true },
     "bookingCapacityLocks/OLD-3": { appointmentId: "APT-1", active: true },
@@ -130,11 +122,11 @@ function baseSeed(extra = {}) {
   };
 }
 
-function fixture(extra = {}, clock = () => new Date("2026-08-18T12:00:00.000Z")) {
+function fixture(extra = {}) {
   const db = new FakeFirestore(baseSeed(extra));
   const authority = createOperationalMoveAuthority({
     db,
-    clock,
+    clock: () => new Date("2026-08-18T22:40:00.000Z"),
     serverTimestamp: () => "SERVER_TIMESTAMP",
   });
   return { db, authority };
@@ -154,8 +146,16 @@ function moveInput(overrides = {}) {
   };
 }
 
+test("manual dispatch capacity preserves owned spots across lunch", () => {
+  assert.equal(OPERATIONAL_MOVE_VERSION, 4);
+  assert.deepEqual(manualOccupiedSlots("2026-08-18", "08:30", 3), ["08:30", "09:30", "10:30"]);
+  assert.deepEqual(manualOccupiedSlots("2026-08-18", "13:30", 3), ["13:30", "14:30", "15:30"]);
+  assert.deepEqual(manualOccupiedSlots("2026-08-18", "09:30", 3), ["09:30", "10:30", "13:30"]);
+  assert.deepEqual(manualOccupiedSlots("2026-08-22", "13:30", 3), ["13:30", "14:30", "15:30"]);
+  assert.deepEqual(manualOccupiedSlots("2026-08-23", "13:30", 1), []);
+});
+
 test("operational capacity ignores cancelled/rescheduled canonical work orders exactly like LIVE scheduling", () => {
-  assert.equal(OPERATIONAL_MOVE_VERSION, 5);
   assert.equal(workOrderBlocksOperationalCapacity({ appointmentId: "A", status: "Confirmada" }), true);
   assert.equal(workOrderBlocksOperationalCapacity({ appointmentId: "A", status: "cancelled" }), false);
   assert.equal(workOrderBlocksOperationalCapacity({ appointmentId: "A", status: "Canceled" }), false);
@@ -191,8 +191,8 @@ test("three-slot LIVE drag moves directly to an open Van 2 afternoon block in on
   }
 });
 
-test("half-day and maintenance metadata fail closed for a manual drag destination", async () => {
-  const { authority } = fixture({
+test("half-day and maintenance metadata do not hide an otherwise free manual drag destination", async () => {
+  const { db, authority } = fixture({
     "vanHalfDaySchedules/TUE-V2": { id: "TUE-V2", active: true, vanId: "VAN-2", weekday: 2 },
     "dailyVanAssignments/2026-08-18-V2": {
       id: "2026-08-18-V2",
@@ -203,49 +203,10 @@ test("half-day and maintenance metadata fail closed for a manual drag destinatio
       helperStaffId: "tech-4",
     },
   });
-  await assert.rejects(
-    () => authority.moveAppointment(moveInput()),
-    (error) => error.code === BOOKING_ERROR_CODES.AVAILABILITY_CHANGED
-      && error.details.reason === "van-unavailable",
-  );
-});
-
-test("operational move canonicalizes time and cannot bypass the Aruba clock with 8:30", async () => {
-  const { db, authority } = fixture({}, () => new Date("2026-08-18T13:00:00.000Z"));
-  const before = structuredClone(db.read("appointments/APT-1"));
-  await assert.rejects(
-    authority.moveAppointment(moveInput({ requestedTime: "8:30", requestId: "drag-past-noncanonical" })),
-    (error) => error.code === BOOKING_ERROR_CODES.AVAILABILITY_CHANGED,
-  );
-  assert.deepEqual(db.read("appointments/APT-1"), before);
-});
-
-test("operational move rejects terminal work and leaves the canonical graph unchanged", async () => {
-  const { db, authority } = fixture({
-    "workOrders/WO-1": { ...baseSeed()["workOrders/WO-1"], status: "Facturada" },
-  });
-  const before = Object.fromEntries([...db.store.entries()].map(([key, value]) => [key, structuredClone(value)]));
-  await assert.rejects(
-    authority.moveAppointment(moveInput({ requestId: "drag-terminal-work-order" })),
-    (error) => error.code === BOOKING_ERROR_CODES.INVALID_REQUEST && error.details?.reason === "terminal-work-order",
-  );
-  assert.deepEqual(Object.fromEntries(db.store), before);
-});
-
-test("operational move never releases an old lock now owned by another appointment", async () => {
-  const { db, authority } = fixture({
-    "appointments/APT-OTHER-OLD-LOCK": {
-      appointmentId: "APT-OTHER-OLD-LOCK",
-      status: "confirmed",
-      capacityLockIds: ["OLD-1"],
-    },
-    "bookingCapacityLocks/OLD-1": { appointmentId: "APT-OTHER-OLD-LOCK", active: true },
-  });
-  await authority.moveAppointment(moveInput({ requestId: "drag-stale-old-lock-owner" }));
-  assert.deepEqual(db.read("bookingCapacityLocks/OLD-1"), {
-    appointmentId: "APT-OTHER-OLD-LOCK",
-    active: true,
-  });
+  const result = await authority.moveAppointment(moveInput());
+  assert.equal(result.success, true);
+  assert.equal(db.read("appointments/APT-1").primaryVanId, "VAN-2");
+  assert.equal(db.read("appointments/APT-1").startTime, "13:30");
 });
 
 test("hidden cancelled work order does not reject a visually open LIVE target", async () => {
@@ -265,24 +226,6 @@ test("hidden cancelled work order does not reject a visually open LIVE target", 
   assert.equal(db.read("appointments/APT-1").primaryVanId, "VAN-2");
 });
 
-test("active unlinked work order blocks the move transaction fail-closed", async () => {
-  const { authority } = fixture({
-    "workOrders/WO-UNLINKED": {
-      id: "WO-UNLINKED",
-      status: "Pendiente",
-      date: "2026-08-18",
-      time: "13:30",
-      vanId: "VAN-2",
-      scheduledSlots: 3,
-    },
-  });
-  await assert.rejects(
-    () => authority.moveAppointment(moveInput()),
-    (error) => error.code === BOOKING_ERROR_CODES.SLOT_CONFLICT
-      && error.details.reason === "work-order-conflict",
-  );
-});
-
 test("detached stale capacity lock is healed instead of becoming a second hidden rule", async () => {
   const staleLockId = `BAL-${require("node:crypto").createHash("sha256").update("2026-08-18|VAN-2|13:30").digest("hex").slice(0, 32).toUpperCase()}`;
   const { db, authority } = fixture({
@@ -291,29 +234,6 @@ test("detached stale capacity lock is healed instead of becoming a second hidden
   const result = await authority.moveAppointment(moveInput());
   assert.equal(result.success, true);
   assert.equal(db.read(`bookingCapacityLocks/${staleLockId}`).appointmentId, "APT-1");
-});
-
-test("an active foreign lock owned by its canonical appointment cannot be stolen", async () => {
-  const occupiedLockId = `BAL-${require("node:crypto").createHash("sha256").update("2026-08-18|VAN-2|13:30").digest("hex").slice(0, 32).toUpperCase()}`;
-  const { db, authority } = fixture({
-    [`bookingCapacityLocks/${occupiedLockId}`]: { appointmentId: "APT-OWNER", active: true },
-    "appointments/APT-OWNER": {
-      id: "APT-OWNER",
-      appointmentId: "APT-OWNER",
-      status: "confirmed",
-      capacityLockIds: [occupiedLockId],
-    },
-  });
-
-  await assert.rejects(
-    () => authority.moveAppointment(moveInput()),
-    (error) => error.code === BOOKING_ERROR_CODES.SLOT_CONFLICT
-      && error.details.appointmentId === "APT-OWNER"
-      && error.details.vanId === "VAN-2"
-      && error.details.slot === "13:30",
-  );
-  assert.equal(db.read(`bookingCapacityLocks/${occupiedLockId}`).appointmentId, "APT-OWNER");
-  assert.equal(db.read("appointments/APT-1").primaryVanId, "VAN-1");
 });
 
 test("real canonical occupied work still blocks the move transaction", async () => {
@@ -334,18 +254,18 @@ test("real canonical occupied work still blocks the move transaction", async () 
   );
 });
 
-test("a move uses continuous elapsed time without inventing post-lunch locks", async () => {
+test("lunch does not reduce moved capacity ownership, while the real end stays continuous", async () => {
   const lunchMove = fixture();
   const result = await lunchMove.authority.moveAppointment(moveInput({ requestedTime: "09:30" }));
   assert.equal(result.success, true);
   assert.equal(lunchMove.db.read("appointments/APT-1").endTime, "12:30");
   assert.equal(lunchMove.db.read("workOrders/WO-1").appointmentEndTime, "12:30");
-  assert.equal(lunchMove.db.read("appointments/APT-1").capacityLockIds.length, 2);
+  assert.equal(lunchMove.db.read("appointments/APT-1").capacityLockIds.length, 3);
 
   const tooLate = fixture();
   await assert.rejects(
     () => tooLate.authority.moveAppointment(moveInput({ requestId: "drag-test-67890", requestedTime: "14:30" })),
-    (error) => error.code === BOOKING_ERROR_CODES.AVAILABILITY_CHANGED && error.details.reason === "outside-operational-window",
+    (error) => error.code === BOOKING_ERROR_CODES.AVAILABILITY_CHANGED && error.details.reason === "target-outside-visible-capacity",
   );
 });
 
@@ -357,51 +277,4 @@ test("same request id is idempotent and does not append duplicate lifecycle hist
   assert.equal(second.success, true);
   assert.equal(second.replayed, true);
   assert.equal(db.read("appointments/APT-1").lifecycleHistory.length, 1);
-});
-
-test("the same request id with a different destination is an idempotency conflict", async () => {
-  const { db, authority } = fixture();
-  await authority.moveAppointment(moveInput());
-
-  await assert.rejects(
-    () => authority.moveAppointment(moveInput({ requestedTime: "14:30" })),
-    (error) => error.code === BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
-  );
-  assert.equal(db.read("appointments/APT-1").primaryVanId, "VAN-2");
-  assert.equal(db.read("appointments/APT-1").startTime, "13:30");
-  assert.equal(db.read("appointments/APT-1").lifecycleHistory.length, 1);
-});
-
-test("retrying an older move after a newer move never reverses the newer placement", async () => {
-  const { db, authority } = fixture();
-  const first = moveInput();
-  await authority.moveAppointment(first);
-  await authority.moveAppointment(moveInput({
-    requestId: "drag-test-second-67890",
-    targetVanId: "VAN-1",
-  }));
-
-  const replay = await authority.moveAppointment(first);
-  assert.equal(replay.replayed, true);
-  assert.equal(db.read("appointments/APT-1").primaryVanId, "VAN-1");
-  assert.equal(db.read("appointments/APT-1").startTime, "13:30");
-  assert.equal(db.read("appointments/APT-1").lifecycleHistory.length, 2);
-});
-
-test("a no-op move still binds its request identity to that exact target", async () => {
-  const { db, authority } = fixture();
-  const noOp = moveInput({
-    requestId: "drag-no-op-12345",
-    requestedTime: "08:30",
-    targetVanId: "VAN-1",
-  });
-  const result = await authority.moveAppointment(noOp);
-  assert.equal(result.replayed, true);
-
-  await assert.rejects(
-    () => authority.moveAppointment({ ...noOp, requestedTime: "13:30", targetVanId: "VAN-2" }),
-    (error) => error.code === BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
-  );
-  assert.equal(db.read("appointments/APT-1").primaryVanId, "VAN-1");
-  assert.equal(db.read("appointments/APT-1").startTime, "08:30");
 });

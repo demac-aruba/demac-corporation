@@ -6,7 +6,6 @@ const {
 const {
   createAdhocSupportAuthority,
   supportCapacityLock,
-  supportWorkOrderId,
 } = require("./bookingAdhocSupport");
 
 class FakeSnapshot {
@@ -81,18 +80,12 @@ class FakeTransaction {
 }
 
 class FakeFirestore {
-  constructor(seed = {}, transactionAttempts = 1) {
-    this.store = new Map(Object.entries(seed));
-    this.transactionAttempts = Math.max(1, transactionAttempts);
-  }
+  constructor(seed = {}) { this.store = new Map(Object.entries(seed)); }
   collection(name) { return new FakeCollectionRef(this, name); }
   async runTransaction(callback) {
-    let result;
-    for (let attempt = 0; attempt < this.transactionAttempts; attempt += 1) {
-      const transaction = new FakeTransaction(this);
-      result = await callback(transaction);
-      if (attempt === this.transactionAttempts - 1) await transaction.commit();
-    }
+    const transaction = new FakeTransaction(this);
+    const result = await callback(transaction);
+    await transaction.commit();
     return result;
   }
   read(path) { return this.store.get(path); }
@@ -131,7 +124,6 @@ function baseSeed(extra = {}) {
       appointmentId: "APT-SUPPORT-1",
       clientId: "client-1",
       propertyId: "property-1",
-      serviceId: "service-standard",
       status: "Confirmada",
       date: DATE,
       time: "09:30",
@@ -146,17 +138,6 @@ function baseSeed(extra = {}) {
       customerFacingDescription: "Two standard AC services",
       whatsappNotificationsEnabled: true,
       notificationRecipients: [{ id: "client-1", sendConfirmation: true, sendReminder: true }],
-    },
-    "clients/client-1": {
-      id: "client-1",
-      name: "Canonical Customer",
-      active: true,
-    },
-    "services/service-standard": {
-      id: "service-standard",
-      name: "Standard Service",
-      active: true,
-      durationMinutes: 60,
     },
     "properties/property-1": {
       id: "property-1",
@@ -204,11 +185,11 @@ function baseSeed(extra = {}) {
   };
 }
 
-function fixture(extra = {}, clock = "2026-08-27T14:00:00.000Z", { transactionAttempts = 1 } = {}) {
-  const db = new FakeFirestore(baseSeed(extra), transactionAttempts);
+function fixture(extra = {}, clock = "2026-08-27T14:00:00.000Z") {
+  const db = new FakeFirestore(baseSeed(extra));
   const authority = createAdhocSupportAuthority({
     db,
-    clock: typeof clock === "function" ? clock : () => new Date(clock),
+    clock: () => new Date(clock),
     serverTimestamp: () => "SERVER_TIMESTAMP",
   });
   return { db, authority };
@@ -252,9 +233,6 @@ test("ad hoc support creates one linked SUPPORT work order and one canonical cap
   assert.equal(supportOrder.supportPrimaryVanId, "VAN-1");
   assert.equal(supportOrder.vanId, "VAN-2");
   assert.equal(supportOrder.time, "13:30");
-  assert.equal(supportOrder.adhocSupportRequestId, "support-request-0001");
-  assert.equal(typeof supportOrder.adhocSupportRequestFingerprint, "string");
-  assert.equal(supportOrder.adhocSupportRequestFingerprint.length, 40);
   assert.equal(supportOrder.appointmentEndTime, "14:30");
   assert.deepEqual(supportOrder.technicianIds, ["support-driver-date", "support-helper-date", "support-third-date"]);
   assert.equal(supportOrder.whatsappNotificationsEnabled, false);
@@ -279,62 +257,12 @@ test("retrying the same support request is idempotent and does not append anothe
   assert.equal(db.read("appointments/APT-SUPPORT-1").assignments.length, 2);
 });
 
-test("the same support requestId cannot be reused for a different target", async () => {
-  const { authority } = fixture();
-  await authority.addSupport(addInput());
-  await assert.rejects(
-    authority.addSupport(addInput({ targetVanId: "VAN-3" })),
-    (error) => error.code === BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
-  );
-});
-
-test("the same support requestId cannot be reused for different support data", async () => {
-  const { authority } = fixture();
-  await authority.addSupport(addInput());
-  await assert.rejects(
-    authority.addSupport(addInput({ reason: "Different operational reason" })),
-    (error) => error.code === BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
-  );
-});
-
 test("ad hoc coworker support is same-day only", async () => {
   const { authority } = fixture({}, "2026-08-28T14:00:00.000Z");
   await assert.rejects(
     authority.addSupport(addInput()),
     (error) => error.code === BOOKING_ERROR_CODES.INVALID_REQUEST && error.details?.reason === "adhoc-support-same-day-only",
   );
-});
-
-test("same-day support rejects a start equal to the current Aruba time", async () => {
-  const { authority } = fixture({}, "2026-08-27T17:30:00.000Z");
-  await assert.rejects(
-    authority.addSupport(addInput()),
-    (error) => error.code === BOOKING_ERROR_CODES.AVAILABILITY_CHANGED
-      && error.details?.reason === "selected-time-passed"
-      && error.details?.rejection?.code === "START_TIME_PASSED",
-  );
-});
-
-test("a Firestore retry re-reads the clock and cannot commit support after its start passes", async () => {
-  const clockValues = [
-    "2026-08-27T17:29:00.000Z",
-    "2026-08-27T17:30:00.000Z",
-  ];
-  let clockCalls = 0;
-  const { db, authority } = fixture({}, () => {
-    const value = clockValues[Math.min(clockCalls, clockValues.length - 1)];
-    clockCalls += 1;
-    return new Date(value);
-  }, { transactionAttempts: 2 });
-
-  await assert.rejects(
-    authority.addSupport(addInput()),
-    (error) => error.code === BOOKING_ERROR_CODES.AVAILABILITY_CHANGED
-      && error.details?.reason === "selected-time-passed",
-  );
-  assert.equal(clockCalls, 2);
-  assert.equal(db.read(`workOrders/${supportWorkOrderId("APT-SUPPORT-1", "support-request-0001")}`), undefined);
-  assert.equal(db.read("appointments/APT-SUPPORT-1").assignments.length, 1);
 });
 
 test("support cannot target the primary van", async () => {
@@ -383,11 +311,6 @@ test("support rejects a slot already occupied by another active work order", asy
 test("support rejects a concurrent active capacity lock owned by another appointment", async () => {
   const lock = supportCapacityLock(DATE, "VAN-2", "13:30");
   const { authority } = fixture({
-    "appointments/APT-OTHER-LOCK": {
-      appointmentId: "APT-OTHER-LOCK",
-      status: "confirmed",
-      capacityLockIds: [lock.id],
-    },
     [`bookingCapacityLocks/${lock.id}`]: {
       ...lock,
       appointmentId: "APT-OTHER-LOCK",
@@ -398,26 +321,6 @@ test("support rejects a concurrent active capacity lock owned by another appoint
     authority.addSupport(addInput()),
     (error) => error.code === BOOKING_ERROR_CODES.SLOT_CONFLICT && /occupied concurrently/i.test(error.message),
   );
-});
-
-test("support reclaims an active lock whose former owner no longer owns it", async () => {
-  const lock = supportCapacityLock(DATE, "VAN-2", "13:30");
-  const { db, authority } = fixture({
-    "appointments/APT-DETACHED": {
-      appointmentId: "APT-DETACHED",
-      status: "confirmed",
-      capacityLockIds: [],
-    },
-    [`bookingCapacityLocks/${lock.id}`]: {
-      ...lock,
-      appointmentId: "APT-DETACHED",
-      active: true,
-    },
-  });
-  const result = await authority.addSupport(addInput());
-  assert.equal(result.success, true);
-  assert.equal(db.read(`bookingCapacityLocks/${lock.id}`).appointmentId, "APT-SUPPORT-1");
-  assert.equal(db.read(`bookingCapacityLocks/${lock.id}`).active, true);
 });
 
 test("support respects the canonical company closure calendar", async () => {

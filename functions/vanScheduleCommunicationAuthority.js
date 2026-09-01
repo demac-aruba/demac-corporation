@@ -1,5 +1,5 @@
 const { BOOKING_ERROR_CODES, BookingAuthorityError, cleanText } = require("./bookingAuthorityCore");
-const { canonicalizeVanCatalog, canonicalVanIdFromValue, resolveCanonicalVanId } = require("./bookingVanIdentity");
+const { canonicalizeVanCatalog, canonicalVanIdFromValue } = require("./bookingVanIdentity");
 const { createOperatingCalendarService, dateKeyInTimeZone } = require("./operatingCalendarService");
 const { DEFAULT_VAN_GROUP_NAMES, createTechnicianDailyScheduleService } = require("./technicianDailyScheduleService");
 const { validWacliRecipient } = require("./whatsappTransactionalService");
@@ -15,22 +15,18 @@ function groupJid(value) {
   return jid.endsWith("@g.us") && validWacliRecipient(jid) ? jid : "";
 }
 
-function normalizeGroupInput(value = {}, catalog = null) {
-  const rawVanId = cleanText(value.vanId, 160);
-  const vanId = catalog
-    ? resolveCanonicalVanId(rawVanId, catalog.aliases)
-    : canonicalVanIdFromValue(rawVanId);
+function normalizeGroupInput(value = {}) {
+  const vanId = canonicalVanIdFromValue(value.vanId);
   if (!vanId) {
-    throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "A canonical Van id is required.", { field: "vanId" });
+    throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "A canonical VAN-1 through VAN-4 id is required.", { field: "vanId" });
   }
-  const catalogVan = catalog?.vans.find((van) => van.id === vanId);
   const jid = groupJid(value.groupJid);
   if (value.enabled !== false && !jid) {
     throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "A valid WhatsApp group JID ending in @g.us is required for an enabled van.", { field: "groupJid", vanId });
   }
   return {
     vanId,
-    groupName: cleanText(value.groupName, 180) || DEFAULT_VAN_GROUP_NAMES[vanId] || catalogVan?.name || vanId,
+    groupName: cleanText(value.groupName, 180) || DEFAULT_VAN_GROUP_NAMES[vanId] || vanId,
     groupJid: jid,
     enabled: value.enabled !== false,
   };
@@ -66,23 +62,22 @@ function createVanScheduleCommunicationAuthority({ db, scheduleService = null, o
 
   async function saveConfiguration(data = {}, identity = {}) {
     const supplied = Array.isArray(data.groups) ? data.groups : [];
-    if (!supplied.length) {
-      throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "At least one Van group configuration is required.", { field: "groups" });
+    if (!supplied.length || supplied.length > 4) {
+      throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "One to four van group configurations are required.", { field: "groups" });
     }
-    const catalog = await loadVanCatalog();
-    const groups = supplied.map((group) => normalizeGroupInput(group, catalog));
+    const groups = supplied.map(normalizeGroupInput);
     const unique = new Set(groups.map((item) => item.vanId));
     if (unique.size !== groups.length) {
       throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "Each van can appear only once in the group configuration.", { field: "groups" });
     }
+    const catalog = await loadVanCatalog();
     const byId = new Map(catalog.vans.map((van) => [van.id, van]));
-    const missing = groups.find((group) => !byId.get(group.vanId)?.sourceVanId);
-    if (missing) {
-      throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "The canonical Van is not present in the active Van catalog.", { vanId: missing.vanId });
-    }
     const now = new Date().toISOString();
     for (const group of groups) {
       const van = byId.get(group.vanId);
+      if (!van?.sourceVanId) {
+        throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "The canonical van is not present in the active van catalog.", { vanId: group.vanId });
+      }
       await db.collection("vans").doc(van.sourceVanId).set({
         whatsappScheduleGroupName: group.groupName,
         whatsappScheduleGroupJid: group.groupJid,
@@ -97,13 +92,9 @@ function createVanScheduleCommunicationAuthority({ db, scheduleService = null, o
 
   async function sendNow(data = {}, identity = {}) {
     const dateKey = cleanText(data.dateKey, 20) || dateKeyInTimeZone();
-    let targetVanId = "";
-    if (data.vanId) {
-      const catalog = await loadVanCatalog();
-      targetVanId = resolveCanonicalVanId(data.vanId, catalog.aliases);
-      if (!catalog.vans.some((van) => van.id === targetVanId)) {
-        throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "vanId must identify an active Van in the canonical catalog.", { field: "vanId", vanId: targetVanId });
-      }
+    const targetVanId = data.vanId ? canonicalVanIdFromValue(data.vanId) : "";
+    if (data.vanId && !targetVanId) {
+      throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "vanId must be VAN-1 through VAN-4 when supplied.", { field: "vanId" });
     }
     const requestId = cleanText(data.requestId, 240);
     if (requestId.length < 8) {

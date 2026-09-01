@@ -1,7 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { loadCanonicalOperationsState, type CanonicalOperationsState } from '../../lib/canonical-operations';
+import { useMemo, useState } from 'react';
 import { loadBrowserCommandCenterSnapshot } from '../../lib/browser-command-center';
 import styles from './browser-live-command-center.module.css';
 
@@ -11,22 +10,7 @@ function afl(value: number) {
 
 export function BrowserLiveCommandCenter() {
   const [refreshKey, setRefreshKey] = useState(0);
-  const [canonicalOperations, setCanonicalOperations] = useState<CanonicalOperationsState | null>(null);
-  const [canonicalError, setCanonicalError] = useState<string | null>(null);
-  useEffect(() => {
-    let current = true;
-    setCanonicalError(null);
-    void loadCanonicalOperationsState()
-      .then((state) => { if (current) setCanonicalOperations(state); })
-      .catch((error) => {
-        if (current) {
-          setCanonicalOperations(null);
-          setCanonicalError(error instanceof Error ? error.message : String(error));
-        }
-      });
-    return () => { current = false; };
-  }, [refreshKey]);
-  const snapshot = useMemo(() => loadBrowserCommandCenterSnapshot(canonicalOperations), [canonicalOperations, refreshKey]);
+  const snapshot = useMemo(() => loadBrowserCommandCenterSnapshot(), [refreshKey]);
   const workProgress = snapshot.workOrders.total ? Math.round((snapshot.workOrders.fieldSubmitted / snapshot.workOrders.total) * 100) : 0;
   const activeDispatch = snapshot.workOrders.dispatchReady + snapshot.workOrders.dispatchAtRisk + snapshot.workOrders.dispatchBlocked;
   const readinessProgress = activeDispatch ? Math.round((snapshot.workOrders.dispatchReady / activeDispatch) * 100) : 100;
@@ -36,7 +20,6 @@ export function BrowserLiveCommandCenter() {
   return (
     <section className={styles.command}>
       <header><div><span>LIVE TEST OPERATIONS · CROSS-MODULE PROJECTION</span><h2>ERP Next Workflow Command Center</h2><p>This panel is calculated from the browser-persistent transactions you create while testing the live ERP—not from hard-coded dashboard examples.</p></div><button type="button" onClick={() => setRefreshKey((value) => value + 1)}>↻ Refresh Live Data</button></header>
-      {canonicalError ? <div className={styles.alerts}><div className={`${styles.alert} ${styles.critical}`}><i /><div><div><strong>Canonical workforce unavailable</strong><b>critical</b></div><p>{canonicalError}. Dispatch readiness is failing closed without browser roster seeds.</p></div></div></div> : null}
       <div className={styles.kpis}>
         <article><div><span>Confirmed Appointments</span><b>{snapshot.appointments.holds ? `${snapshot.appointments.holds} hold${snapshot.appointments.holds === 1 ? '' : 's'}` : 'No holds'}</b></div><strong>{snapshot.appointments.confirmed}</strong><small>Persistent scheduling records</small><i><em style={{ width: `${Math.min(100, snapshot.appointments.confirmed * 16)}%` }} /></i></article>
         <article><div><span>Work Orders Field-Submitted</span><b>{snapshot.workOrders.inField} in progress</b></div><strong>{snapshot.workOrders.fieldSubmitted}/{snapshot.workOrders.total}</strong><small>{workProgress}% of test Work Orders</small><i><em style={{ width: `${workProgress}%` }} /></i></article>
