@@ -7,14 +7,13 @@ const {
   resolveCanonicalVanId,
 } = require("./bookingVanIdentity");
 
-test("normalizes only canonical IDs and the closed legacy alias registry", () => {
+test("normalizes common operational van aliases, including future lanes", () => {
   assert.equal(canonicalVanIdFromValue("VAN-1"), "VAN-1");
   assert.equal(canonicalVanIdFromValue("v4"), "VAN-4");
   assert.equal(canonicalVanIdFromValue("Van 3"), "VAN-3");
   assert.equal(canonicalVanIdFromValue("van_2"), "VAN-2");
   assert.equal(canonicalVanIdFromValue("VAN-5"), "VAN-5");
-  assert.equal(canonicalVanIdFromValue("VAN-12"), "VAN-12");
-  assert.equal(canonicalVanIdFromValue("Van 12"), "");
+  assert.equal(canonicalVanIdFromValue("Van 12"), "VAN-12");
 });
 
 test("deduplicates multiple Firestore records that represent the same physical van", () => {
@@ -28,7 +27,7 @@ test("deduplicates multiple Firestore records that represent the same physical v
   assert.equal(catalog.aliases.get("van-1783800405341"), "VAN-4");
 });
 
-test("legacy physical document IDs resolve only through the explicit migration registry", () => {
+test("legacy physical document IDs resolve through Van business identity before numeric lane parsing", () => {
   const catalog = canonicalizeVanCatalog([
     { id: "VAN-1783801335935", name: "Van 2", active: true },
     { id: "VAN-5", name: "Van 5", active: true },
@@ -46,7 +45,7 @@ test("deduplicates the full raw fleet and keeps future canonical Vans in natural
     { id: "v4", name: "Van 4", active: true },
     { id: "van-1783800405341", name: "Van 4", active: true },
     { id: "v1", name: "Van 1", active: true },
-    { id: "VAN-1783801335937", name: "Renamed legacy Van 1 duplicate", active: true },
+    { id: "legacy-v1", name: "Van 1", active: true },
     { id: "VAN-2", name: "Van 2", active: true },
     { id: "VAN-5", name: "Van 5", active: true },
     { id: "VAN-3", name: "Van 3", active: true },
@@ -66,7 +65,7 @@ test("canonicalizes scheduling references for legacy and future Vans before avai
       { id: "wo-5", vanId: "VAN-5", appointmentId: "apt-5" },
     ],
     dailyVanAssignments: [{ id: "assign-5", vanId: "VAN-5" }],
-    vanHalfDaySchedules: [{ id: "half-5", vanId: "VAN-5" }],
+    vanHalfDaySchedules: [{ id: "half-5", vanId: "Van 5" }],
   });
   assert.deepEqual(data.vans.map((van) => van.id), ["VAN-4", "VAN-5"]);
   assert.equal(data.workOrders[0].vanId, "VAN-4");
@@ -74,51 +73,6 @@ test("canonicalizes scheduling references for legacy and future Vans before avai
   assert.equal(data.dailyVanAssignments[0].vanId, "VAN-5");
   assert.equal(data.vanHalfDaySchedules[0].vanId, "VAN-5");
   assert.equal(data.vans.find((van) => van.id === "VAN-5").status, "Fuera de servicio");
-});
-
-test("preserves an opaque master-data Van ID, display name, and every scheduling reference", () => {
-  const futureVanId = "VAN-FUTURE-TEST-947";
-  const data = canonicalizeSchedulingData({
-    vans: [{ id: futureVanId, name: "Future Test Field Van", active: true, status: "Disponible" }],
-    workOrders: [{ id: "wo-future", vanId: futureVanId, appointmentId: "apt-future" }],
-    dailyVanAssignments: [{ id: "assign-future", vanId: futureVanId }],
-    vanHalfDaySchedules: [{ id: "half-future", vanId: futureVanId }],
-    capacityLocks: [{ id: "lock-future", vanId: futureVanId, slot: "08:30" }],
-  });
-
-  assert.deepEqual(data.vans.map((van) => van.id), [futureVanId]);
-  assert.equal(data.vans[0].name, "Future Test Field Van");
-  assert.equal(data.workOrders[0].vanId, futureVanId);
-  assert.equal(data.dailyVanAssignments[0].vanId, futureVanId);
-  assert.equal(data.vanHalfDaySchedules[0].vanId, futureVanId);
-  assert.equal(data.capacityLocks[0].vanId, futureVanId);
-  assert.equal(resolveCanonicalVanId(futureVanId, data.vanAliases), futureVanId);
-});
-
-test("opaque identity, historical Work Orders, and capacity locks are invariant under display rename", () => {
-  function canonicalizedReferences(name) {
-    const vanId = "RESOURCE-ALPHA";
-    const data = canonicalizeSchedulingData({
-      vans: [{ id: vanId, name, active: true }],
-      workOrders: [{ id: "wo-future", vanId }],
-      capacityLocks: [{ id: "lock-future", vanId, slot: "08:30" }],
-    });
-    return { ids: [data.vans[0].id, data.workOrders[0].vanId, data.capacityLocks[0].vanId], name: data.vans[0].name };
-  }
-
-  assert.deepEqual(canonicalizedReferences("Van 5"), { ids: Array(3).fill("RESOURCE-ALPHA"), name: "Van 5" });
-  assert.deepEqual(canonicalizedReferences("West Team"), { ids: Array(3).fill("RESOURCE-ALPHA"), name: "West Team" });
-});
-
-test("an opaque Van named Van 5 cannot collide with the real VAN-5 master record", () => {
-  const catalog = canonicalizeVanCatalog([
-    { id: "RESOURCE-ALPHA", name: "Van 5", active: true },
-    { id: "VAN-5", name: "West Team", active: true },
-  ]);
-
-  assert.deepEqual(catalog.vans.map((van) => van.id), ["VAN-5", "RESOURCE-ALPHA"]);
-  assert.equal(catalog.vans.find((van) => van.id === "RESOURCE-ALPHA").name, "Van 5");
-  assert.equal(catalog.vans.find((van) => van.id === "VAN-5").name, "West Team");
 });
 
 test("canonical Van catalog realigns the original WhatsApp groups while leaving future Vans unconfigured", () => {

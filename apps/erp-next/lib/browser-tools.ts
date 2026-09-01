@@ -20,8 +20,7 @@ export type BrowserToolAsset = {
   id: string;
   name: string;
   toolClass: ToolClass;
-  /** Canonical location identity. Van master-data IDs are opaque and fleet-size agnostic. */
-  locationId: string;
+  locationId: 'OFFICE' | 'VAN-1' | 'VAN-2' | 'VAN-3' | 'VAN-4' | 'UNASSIGNED';
   status: 'available' | 'checked_out' | 'maintenance' | 'calibration_due' | 'lost';
   verified: boolean;
   serialOrQr?: string;

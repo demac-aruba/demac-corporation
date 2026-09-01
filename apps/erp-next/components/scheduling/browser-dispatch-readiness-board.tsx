@@ -4,11 +4,11 @@ import { useEffect, useMemo, useState } from 'react';
 import type { BrowserAppointmentRecord, BrowserWorkOrderRecord } from '../../lib/browser-operational';
 import type { BrowserFieldExecutionRecord } from '../../lib/browser-field';
 import { browserKeys, loadBrowserValue } from '../../lib/browser-store';
-import { canonicalCrewReadinessRoster, loadCanonicalOperationsState, type CanonicalOperationsState } from '../../lib/canonical-operations';
 import { deriveBrowserJobReadiness, fieldStartDecision, loadDispatchAtRiskReleases } from '../../lib/browser-job-readiness';
 import { currentArubaDateKey } from '../../lib/scheduling-capacity';
-import { deriveDynamicVanLanes } from '../../lib/dynamic-van-lanes';
 import styles from './browser-dispatch-readiness-board.module.css';
+
+const vanIds = ['VAN-1', 'VAN-2', 'VAN-3', 'VAN-4'] as const;
 
 type DispatchRow = {
   order: BrowserWorkOrderRecord;
@@ -41,29 +41,11 @@ export function BrowserDispatchReadinessBoard() {
   const [executions, setExecutions] = useState<BrowserFieldExecutionRecord[]>([]);
   const [activeDate, setActiveDate] = useState(currentArubaDateKey());
   const [refreshKey, setRefreshKey] = useState(0);
-  const [canonicalOperations, setCanonicalOperations] = useState<CanonicalOperationsState | null>(null);
-  const [canonicalError, setCanonicalError] = useState<string | null>(null);
 
   useEffect(() => {
     setOrders(loadBrowserValue<BrowserWorkOrderRecord[]>(browserKeys.workOrders, []));
     setAppointments(loadBrowserValue<BrowserAppointmentRecord[]>(browserKeys.appointments, []));
     setExecutions(loadBrowserValue<BrowserFieldExecutionRecord[]>(browserKeys.fieldExecutions, []));
-  }, [refreshKey]);
-
-  useEffect(() => {
-    let current = true;
-    setCanonicalError(null);
-    void loadCanonicalOperationsState()
-      .then((state) => {
-        if (current) setCanonicalOperations(state);
-      })
-      .catch((error) => {
-        if (current) {
-          setCanonicalOperations(null);
-          setCanonicalError(error instanceof Error ? error.message : String(error));
-        }
-      });
-    return () => { current = false; };
   }, [refreshKey]);
 
   const dates = useMemo(() => {
@@ -73,21 +55,16 @@ export function BrowserDispatchReadinessBoard() {
 
   const rows = useMemo(() => {
     const releases = loadDispatchAtRiskReleases();
-    const crewRoster = canonicalOperations ? canonicalCrewReadinessRoster(canonicalOperations, activeDate) : [];
     return orders
       .filter((order) => order.scheduledDate === activeDate)
       .flatMap((order): DispatchRow[] => {
-        const readiness = deriveBrowserJobReadiness(order, { appointments, executions, crewRoster });
+        const readiness = deriveBrowserJobReadiness(order, { appointments, executions });
         const startDecision = fieldStartDecision(readiness, releases);
         const execution = executions.find((item) => item.workOrderId === order.id);
         return order.assignments.map((assignment) => ({ order, vanId: assignment.vanId, role: assignment.role, readiness, startDecision, execution }));
       })
       .sort((a, b) => a.order.scheduledStart.localeCompare(b.order.scheduledStart) || a.order.id.localeCompare(b.order.id));
-  }, [activeDate, appointments, canonicalOperations, executions, orders, refreshKey]);
-  const vanLanes = useMemo(
-    () => deriveDynamicVanLanes(canonicalOperations?.vans, rows.map((row) => row.vanId)),
-    [canonicalOperations, rows],
-  );
+  }, [activeDate, appointments, executions, orders, refreshKey]);
 
   const holds = appointments.filter((appointment) => appointment.dateKey === activeDate && appointment.status === 'temporary_hold');
   const primaryRows = rows.filter((row) => row.role === 'primary');
@@ -117,15 +94,13 @@ export function BrowserDispatchReadinessBoard() {
       </div>
 
       {holds.length ? <section className={styles.holdStrip}><div><span>UNCONFIRMED CAPACITY</span><strong>{holds.length} temporary appointment hold{holds.length === 1 ? '' : 's'} on this date</strong><p>Temporary holds are visible for capacity awareness but are intentionally excluded from Work Order readiness because confirmation has not created the Work Order yet.</p></div><a href="/scheduling/">Review holds in Scheduling →</a></section> : null}
-      {canonicalError ? <section className={styles.holdStrip}><div><span>CANONICAL SOURCE ERROR</span><strong>Dispatch readiness is failing closed.</strong><p>{canonicalError}. Browser workforce seeds are not used when canonical staff/Van facts are unavailable.</p></div></section> : null}
 
-      <div className={styles.lanes} style={{ gridTemplateColumns: `repeat(${Math.max(1, vanLanes.length)}, minmax(220px, 1fr))` }}>
-        {vanLanes.length ? vanLanes.map((van) => {
-          const vanId = van.id;
+      <div className={styles.lanes}>
+        {vanIds.map((vanId) => {
           const laneRows = rows.filter((row) => row.vanId === vanId);
           const lanePrimary = laneRows.filter((row) => row.role === 'primary').length;
           return <section className={styles.lane} key={vanId}>
-            <header><div><span>{van.name}</span><strong>{vanId} · {laneRows.length ? `${laneRows.length} assignment${laneRows.length === 1 ? '' : 's'}` : 'No assignments'}</strong></div><b>{lanePrimary} primary</b></header>
+            <header><div><span>{vanId}</span><strong>{laneRows.length ? `${laneRows.length} assignment${laneRows.length === 1 ? '' : 's'}` : 'No assignments'}</strong></div><b>{lanePrimary} primary</b></header>
             <div className={styles.cards}>{laneRows.length ? laneRows.map((row) => {
               const riskReasons = row.readiness.risks.map((item) => item.label).join(', ');
               const blockerReasons = row.readiness.blockers.map((item) => item.label).join(', ');
@@ -142,7 +117,7 @@ export function BrowserDispatchReadinessBoard() {
               </article>;
             }) : <div className={styles.emptyLane}><span>AVAILABLE</span><strong>No Work Order assigned</strong><p>Scheduling remains the authority for placing work into this lane.</p></div>}</div>
           </section>;
-        }) : <div className={styles.emptyLane}><span>NO VAN LANES</span><strong>No canonical or observed Van IDs</strong><p>The registry could not be loaded and this date has no assigned Work Orders.</p></div>}
+        })}
       </div>
 
       <footer><span>READ-ONLY PROJECTION</span><strong>Pre-dispatch metrics stop counting a Work Order once physical Field start occurs. Current source facts remain visible, but the original start authority is preserved as historical execution evidence.</strong></footer>

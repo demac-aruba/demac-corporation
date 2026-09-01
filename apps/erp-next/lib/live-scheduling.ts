@@ -4,7 +4,6 @@ import { getRuntimeSchedulingSettings } from './scheduling';
 import type { DaySegment, WorkPresetId } from './scheduling';
 import { listFirestoreCollection } from './firebase/firestore-rest';
 import { listOfficeAppointmentAttribution, type OfficeAppointmentAttribution } from './office-booking-authority';
-import { resolveStableVanId } from './stable-van-identity';
 import {
   liveVanHalfDaySchedule,
   loadLiveOperationalCapacityState,
@@ -144,8 +143,42 @@ function workOrderWorkLabel(order: LiveWorkOrder) {
   return text(order.appointmentWorkLabel) || text(item?.label) || humanizeWorkType(workOrderWorkTypeId(order));
 }
 
+function canonicalVanIdFromValue(value: unknown) {
+  const raw = text(value);
+  if (!raw) return '';
+  const upper = raw.toUpperCase().replaceAll('_', '-').replace(/\s+/g, '-');
+  if (/^VAN-\d+$/.test(upper)) return upper;
+  const compact = raw.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const match = compact.match(/^(?:van|v)(\d+)$/);
+  return match ? `VAN-${Number(match[1])}` : '';
+}
+
+function canonicalVanIdFromRecord(van: LiveVan | undefined) {
+  if (!van) return '';
+  const numericCandidates = [van.number, van.vanNumber, van.unitNumber]
+    .map((value) => Number(value))
+    .filter((value) => Number.isInteger(value) && value >= 1);
+  if (numericCandidates.length) return `VAN-${numericCandidates[0]}`;
+
+  // Human/canonical metadata owns lane identity for an existing document. A Firestore
+  // legacy id such as `van-1783800405341` must not be parsed as a future Van number.
+  for (const candidate of [van.name, van.label, van.code]) {
+    const canonical = canonicalVanIdFromValue(candidate);
+    if (canonical) return canonical;
+  }
+  return canonicalVanIdFromValue(van.id);
+}
+
 export function resolveCanonicalVanId(value: unknown, vans: LiveVan[] = []) {
-  return resolveStableVanId(value, vans);
+  const raw = text(value);
+  if (!raw) return '';
+
+  // Resolve an exact stored record first, matching the canonical operations authority.
+  // Direct future lanes such as VAN-5 still work when no legacy record shadows the id.
+  const matchingRecord = vans.find((van) => van.id === raw);
+  const fromRecord = canonicalVanIdFromRecord(matchingRecord);
+  if (fromRecord) return fromRecord;
+  return canonicalVanIdFromValue(raw);
 }
 
 function workOrderVanId(order: LiveWorkOrder, vans: LiveVan[] = []) {
@@ -278,28 +311,14 @@ function assignmentEnd(
 function assignmentCapacitySlotStarts(
   order: LiveWorkOrder,
   start: string,
-  end: string,
   vanId: string,
   operationalState: LiveOperationalCapacityState | null,
 ) {
   const schedule = canonicalSlotStarts(operationalState, vanId, text(order.date));
   if (order.fullDaySingleProperty === true) return schedule;
-  const hasExactDuration = positiveInteger(order.appointmentDurationMinutes ?? order.duration, 0) > 0
-    || (Array.isArray(order.appointmentWorkItems)
-      && order.appointmentWorkItems.some((item) => Number(item.durationMinutes) > 0))
-    || Boolean(validTime(order.appointmentEndTime));
-  if (hasExactDuration) {
-    const startMinutes = timeToMinutes(start);
-    const endMinutes = timeToMinutes(end);
-    return schedule.filter((slot) => {
-      const anchor = timeToMinutes(slot);
-      return anchor >= startMinutes && anchor < endMinutes;
-    });
-  }
-  const storedSlots = normalizedSlots(order.scheduledSlots);
-  if (storedSlots.length) return storedSlots.filter((slot) => schedule.includes(slot));
   const count = numericSlotCount(order.scheduledSlots)
-    || 1;
+    || normalizedSlots(order.scheduledSlots).length
+    || Math.ceil(positiveInteger(order.appointmentDurationMinutes ?? order.duration, 60) / 60);
   const index = schedule.indexOf(start);
   if (index < 0 || index + count > schedule.length) return [];
   return schedule.slice(index, index + count);
@@ -318,35 +337,12 @@ function daySegment(start: string, end: string): DaySegment {
   return timeToMinutes(start) < 12 * 60 ? 'am' : 'pm';
 }
 
-const NON_BLOCKING_WORK_ORDER_STATUSES = new Set([
-  'cancelada',
-  'cancelled',
-  'canceled',
-  'reprogramada',
-  'rescheduled',
-]);
-
 function normalizedStatus(status: unknown) {
-  return text(status)
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[_-]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return text(status).toLowerCase();
 }
 
-/**
- * LIVE is a read projection of the canonical Work Order occupancy policy. Unknown
- * and blank statuses deliberately fail closed; only explicit cancellation or
- * reschedule terminal states release capacity.
- */
-export function liveWorkOrderBlocksCapacity(status: unknown) {
-  return !NON_BLOCKING_WORK_ORDER_STATUSES.has(normalizedStatus(status));
-}
-
-function isReleasedCapacity(status: unknown) {
-  return !liveWorkOrderBlocksCapacity(status);
+function isCancelled(status: unknown) {
+  return ['cancelada', 'cancelled', 'canceled'].includes(normalizedStatus(status));
 }
 
 function isTemporaryHold(status: unknown) {
@@ -354,7 +350,7 @@ function isTemporaryHold(status: unknown) {
 }
 
 function projectedStatus(status: unknown): CalendarDispatchJob['status'] {
-  if (isReleasedCapacity(status)) return 'cancelled';
+  if (isCancelled(status)) return 'cancelled';
   return isTemporaryHold(status) ? 'temporary_hold' : 'confirmed';
 }
 
@@ -403,7 +399,7 @@ function workOrderAssignment(
   const start = text(order.time) || legacySlots[0] || '08:30';
   const resolvedVanId = workOrderVanId(order, vans) || 'UNASSIGNED';
   const end = assignmentEnd({ ...order, time: start }, vans, operationalState);
-  const capacitySlotStarts = assignmentCapacitySlotStarts(order, start, end, resolvedVanId, operationalState);
+  const capacitySlotStarts = assignmentCapacitySlotStarts(order, start, resolvedVanId, operationalState);
   const capacityEnd = [
     end,
     validTime(order.appointmentCapacityEndTime),
@@ -450,10 +446,8 @@ export function projectLiveSchedulingAppointments(
   const grouped = new Map<string, LiveWorkOrder[]>();
 
   for (const order of workOrders) {
-    if (!text(order.date) || !workOrderVanId(order, vans)) continue;
-    // Active legacy/corrupt Work Orders without appointmentId still own physical
-    // capacity. Keep each one as a deterministic, non-writable reconciliation card.
-    const appointmentId = text(order.appointmentId) || `UNLINKED-WORK-ORDER-${order.id}`;
+    const appointmentId = text(order.appointmentId);
+    if (!appointmentId || !text(order.date) || !workOrderVanId(order, vans)) continue;
     const current = grouped.get(appointmentId) ?? [];
     current.push(order);
     grouped.set(appointmentId, current);
@@ -461,7 +455,7 @@ export function projectLiveSchedulingAppointments(
 
   const appointments: BrowserAppointmentRecord[] = [];
   for (const [appointmentId, allOrders] of grouped.entries()) {
-    const activeOrders = allOrders.filter((order) => liveWorkOrderBlocksCapacity(order.status));
+    const activeOrders = allOrders.filter((order) => !isCancelled(order.status));
     const orders = activeOrders.length ? activeOrders : allOrders;
     const sorted = [...orders].sort((a, b) => {
       const aSupport = workOrderAssignmentRole(a) === 'support' ? 1 : 0;
@@ -469,7 +463,6 @@ export function projectLiveSchedulingAppointments(
       return aSupport - bSupport || text(a.time).localeCompare(text(b.time)) || a.id.localeCompare(b.id);
     });
     const primary = sorted[0];
-    const needsHuman = !text(primary.appointmentId);
     const authorityAppointment = appointmentById.get(appointmentId);
     const clientId = text(primary.clientId);
     const propertyId = text(primary.propertyId);
@@ -478,12 +471,7 @@ export function projectLiveSchedulingAppointments(
     const customer = clientLabel(client, clientId);
     const site = propertyLabel(property, propertyId);
     const sector = text(primary.operationalZone) || text(primary.zone) || text(property?.operationalZone) || text(property?.zone) || 'Unknown';
-    const assignments = sorted.map((order) => {
-      const assignment = workOrderAssignment(order, customer, site, sector, vans, operationalState);
-      return needsHuman && liveWorkOrderBlocksCapacity(order.status)
-        ? { ...assignment, readiness: 'blocked' as const }
-        : assignment;
-    });
+    const assignments = sorted.map((order) => workOrderAssignment(order, customer, site, sector, vans, operationalState));
     const primaryAssignment = assignments.find((assignment) => assignment.isPrimaryAssignment) ?? assignments[0];
     const supportAssignment = assignments.find((assignment) => !assignment.isPrimaryAssignment);
     const quantity = sorted.reduce((total, order) => total + (contributesAppointmentWorkQuantity(order) ? workOrderQuantity(order) : 0), 0);
@@ -541,10 +529,6 @@ export function projectLiveSchedulingAppointments(
       confirmedAt: temporaryHold ? undefined : confirmedAt || undefined,
       workOrderId: primary.id,
       workOrderIds: sorted.map((order) => order.id),
-      ...(needsHuman ? {
-        projectionIntegrity: 'needs_human' as const,
-        projectionIntegrityReason: `Work Order ${primary.id} is missing appointmentId. Capacity remains blocked until Operations reconciles the canonical appointment link.`,
-      } : {}),
     });
   }
 

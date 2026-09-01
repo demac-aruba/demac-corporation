@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { browserKeys, loadBrowserValue, saveBrowserValue } from '../../lib/browser-store';
 import type { BrowserWorkOrderRecord } from '../../lib/browser-operational';
-import { canonicalCrewReadinessRoster, loadCanonicalOperationsState, type CanonicalOperationsState } from '../../lib/canonical-operations';
 import { canSubmitFieldExecution, createFieldExecution, createOfficeReview, type BrowserFieldExecutionRecord, type BrowserOfficeReviewRecord, type FieldAddonState, type FieldEquipmentProgress } from '../../lib/browser-field';
 import { deriveBrowserJobReadiness, fieldStartDecision } from '../../lib/browser-job-readiness';
 import { loadWorkOrderScopes, scopeStatus } from '../../lib/browser-workorder-scope';
@@ -22,8 +21,6 @@ export function BrowserFieldExecution() {
   const [selectedId, setSelectedId] = useState('');
   const [ready, setReady] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [canonicalOperations, setCanonicalOperations] = useState<CanonicalOperationsState | null>(null);
-  const [canonicalError, setCanonicalError] = useState<string | null>(null);
 
   useEffect(() => {
     const storedOrders = loadBrowserValue<BrowserWorkOrderRecord[]>(browserKeys.workOrders, []);
@@ -34,14 +31,6 @@ export function BrowserFieldExecution() {
     setReviews(storedReviews);
     setSelectedId(storedOrders[storedOrders.length - 1]?.id ?? '');
     setReady(true);
-  }, []);
-
-  useEffect(() => {
-    let current = true;
-    void loadCanonicalOperationsState()
-      .then((state) => { if (current) setCanonicalOperations(state); })
-      .catch((error) => { if (current) setCanonicalError(error instanceof Error ? error.message : String(error)); });
-    return () => { current = false; };
   }, []);
 
   useEffect(() => {
@@ -59,10 +48,7 @@ export function BrowserFieldExecution() {
   const selectedReview = reviews.find((review) => review.workOrderId === selectedOrder?.id);
   const selectedScope = selectedOrder ? loadWorkOrderScopes().find((scope) => scope.workOrderId === selectedOrder.id) : undefined;
   const scopeGate = selectedOrder ? scopeStatus(selectedOrder, selectedScope) : { complete: false, reason: 'No Work Order selected.' };
-  const crewRoster = useMemo(() => selectedOrder && canonicalOperations
-    ? canonicalCrewReadinessRoster(canonicalOperations, selectedOrder.scheduledDate)
-    : [], [canonicalOperations, selectedOrder]);
-  const jobReadiness = selectedOrder ? deriveBrowserJobReadiness(selectedOrder, { executions, crewRoster }) : null;
+  const jobReadiness = selectedOrder ? deriveBrowserJobReadiness(selectedOrder, { executions }) : null;
   const dispatchDecision = jobReadiness ? fieldStartDecision(jobReadiness) : { allowed: false, mode: 'blocked' as const, release: undefined, reason: 'No Work Order readiness decision available.' };
   const fieldGate = useMemo(() => selectedExecution ? canSubmitFieldExecution(selectedExecution) : { allowed: false, blockers: ['Start the work order first.'] }, [selectedExecution]);
   const canSubmit = Boolean(selectedExecution && selectedExecution.technicianStatus === 'in_progress' && scopeGate.complete && fieldGate.allowed && selectedReview?.status !== 'pending' && selectedReview?.status !== 'approved');
@@ -193,7 +179,6 @@ export function BrowserFieldExecution() {
       </header>
 
       {notice ? <div className={styles.notice}><span>{notice}</span><button type="button" onClick={() => setNotice(null)}>×</button></div> : null}
-      {canonicalError ? <div className={styles.notice}><span>Canonical workforce facts could not be loaded: {canonicalError}. Field start is failing closed; browser roster seeds are not used.</span></div> : null}
 
       <div className={styles.summary}>
         <article><span>Customer</span><strong>{selectedOrder.customer}</strong><small>{selectedOrder.customerId ? `CRM ${selectedOrder.customerId}` : 'Unregistered lead snapshot'}</small></article>

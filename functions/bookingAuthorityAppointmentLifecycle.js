@@ -15,7 +15,6 @@ const {
   validateCapacityLocks,
   validateWorkOrders,
 } = require("./bookingAuthorityFirestore");
-const { workOrderStatusIsTerminal } = require("./bookingSchedulingPrimitives");
 
 const APPOINTMENT_LIFECYCLE_VERSION = 8;
 const RESCHEDULE_CHANGE_KINDS = new Set(["customer_reschedule", "operational_move", "details_edited"]);
@@ -219,40 +218,14 @@ function createBookingAppointmentLifecycle({
       throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "appointmentId is required.", { field: "appointmentId" });
     }
     const cancellationReason = requireReason(reason, "Cancellation");
+    const now = asDate(clock());
     const appointmentRef = db.collection(collections.appointments).doc(id);
 
     return db.runTransaction(async (transaction) => {
-      const transactionNow = asDate(clock());
       const snapshot = await transaction.get(appointmentRef);
       const appointment = activeAppointment(snapshot, id);
       if (["cancelled", "canceled", "cancelada"].includes(cleanText(appointment.status, 40).toLowerCase())) {
         return { success: true, replayed: true, appointmentId: id, appointment };
-      }
-
-      const workOrderIds = [...new Set((Array.isArray(appointment.workOrderIds) ? appointment.workOrderIds : [])
-        .map((value) => cleanText(value, 180))
-        .filter(Boolean))];
-      const lockIds = [...new Set((Array.isArray(appointment.capacityLockIds) ? appointment.capacityLockIds : [])
-        .map((value) => cleanText(value, 180))
-        .filter(Boolean))];
-      const [workOrderSnapshots, lockSnapshots] = await Promise.all([
-        Promise.all(workOrderIds.map(async (workOrderId) => {
-          const ref = db.collection(collections.workOrders).doc(workOrderId);
-          return { workOrderId, ref, snapshot: await transaction.get(ref) };
-        })),
-        Promise.all(lockIds.map(async (lockId) => {
-          const ref = db.collection(collections.capacityLocks).doc(lockId);
-          return { lockId, ref, snapshot: await transaction.get(ref) };
-        })),
-      ]);
-      const ownedWorkOrders = workOrderSnapshots.filter((entry) => entry.snapshot.exists
-        && cleanText(entry.snapshot.data()?.appointmentId, 180) === id);
-      if (ownedWorkOrders.some((entry) => workOrderStatusIsTerminal(entry.snapshot.data()?.status))) {
-        throw new BookingAuthorityError(
-          BOOKING_ERROR_CODES.INVALID_REQUEST,
-          "A terminal Work Order cannot be cancelled through Scheduling.",
-          { appointmentId: id, reason: "terminal-work-order" },
-        );
       }
 
       const actorInfo = actorFields(actor);
@@ -261,7 +234,7 @@ function createBookingAppointmentLifecycle({
         actor,
         reason: cancellationReason,
         note,
-        now: transactionNow,
+        now,
         from: scheduleSnapshot(appointment),
         customerNotificationRecommended: false,
       });
@@ -270,8 +243,8 @@ function createBookingAppointmentLifecycle({
         status: "cancelled",
         cancellationReason,
         cancellationNote: cleanText(note, 1_500),
-        cancelledAtIso: transactionNow.toISOString(),
-        updatedAtIso: transactionNow.toISOString(),
+        cancelledAtIso: now.toISOString(),
+        updatedAtIso: now.toISOString(),
         lifecycleHistory,
         lastLifecycleActorId: actorInfo.actorId,
         lastLifecycleActorName: actorInfo.actorName,
@@ -280,22 +253,20 @@ function createBookingAppointmentLifecycle({
       });
       transaction.set(appointmentRef, patch, { merge: true });
 
-      for (const entry of ownedWorkOrders) {
-        transaction.set(entry.ref, compactObject({
+      for (const workOrderId of Array.isArray(appointment.workOrderIds) ? appointment.workOrderIds : []) {
+        transaction.set(db.collection(collections.workOrders).doc(workOrderId), compactObject({
           status: "Cancelada",
           cancellationReason,
           cancellationNote: cleanText(note, 1_500),
-          cancelledAt: transactionNow.toISOString(),
-          updatedAt: transactionNow.toISOString(),
+          cancelledAt: now.toISOString(),
+          updatedAt: now.toISOString(),
         }), { merge: true });
       }
-      for (const entry of lockSnapshots) {
-        const stored = entry.snapshot.exists ? entry.snapshot.data() || {} : null;
-        if (!stored || cleanText(stored.appointmentId, 180) !== id) continue;
-        transaction.set(entry.ref, compactObject({
+      for (const lockId of Array.isArray(appointment.capacityLockIds) ? appointment.capacityLockIds : []) {
+        transaction.set(db.collection(collections.capacityLocks).doc(lockId), compactObject({
           active: false,
-          releasedAtIso: transactionNow.toISOString(),
-          updatedAtIso: transactionNow.toISOString(),
+          releasedAtIso: now.toISOString(),
+          updatedAtIso: now.toISOString(),
           updatedAt: serverTimestamp(),
         }), { merge: true });
       }
@@ -309,10 +280,10 @@ function createBookingAppointmentLifecycle({
     if (!id) {
       throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "appointmentId is required.", { field: "appointmentId" });
     }
+    const now = asDate(clock());
     const appointmentRef = db.collection(collections.appointments).doc(id);
 
     return db.runTransaction(async (transaction) => {
-      const transactionNow = asDate(clock());
       const appointmentSnapshot = await transaction.get(appointmentRef);
       const current = activeAppointment(appointmentSnapshot, id);
       const currentStatus = cleanText(current.status, 40).toLowerCase();
@@ -337,7 +308,7 @@ function createBookingAppointmentLifecycle({
         option,
         appointmentId: id,
         context: { ...context, excludeAppointmentId: id, changeKind: "hold_confirmed" },
-        now: transactionNow,
+        now,
       });
       if (!validation || validation.available !== true) {
         throw new BookingAuthorityError(
@@ -346,8 +317,6 @@ function createBookingAppointmentLifecycle({
           { reason: cleanText(validation?.reason, 240) },
         );
       }
-      const committedOption = normalizeOfferOption(validation.option || option);
-      const committedPrimary = primaryAssignment(committedOption);
       const expectedLocks = validateCapacityLocks(validation.capacityLocks);
       const expectedLockIds = expectedLocks.map((lock) => lock.id);
       const currentLockIds = Array.isArray(current.capacityLockIds) ? current.capacityLockIds : [];
@@ -397,22 +366,13 @@ function createBookingAppointmentLifecycle({
       for (const entry of workOrderSnapshots) {
         const workOrder = entry.snapshot.data() || {};
         const isSupport = cleanText(workOrder.appointmentAssignmentRole || workOrder.assignmentRole, 40).toLowerCase() === "support";
-        const role = isSupport ? "support" : "primary";
-        const currentVanId = cleanText(workOrder.vanId, 120);
-        const committedAssignment = committedOption.assignments.find((candidate) => (
-          candidate.role === role && (!currentVanId || candidate.vanId === currentVanId)
-        )) || committedOption.assignments.find((candidate) => candidate.role === role);
         transaction.set(entry.ref, compactObject({
           status: "Confirmada",
-          vanId: committedAssignment?.vanId,
-          technicianIds: committedAssignment?.technicianIds,
-          driverStaffId: committedAssignment?.driverStaffId,
-          helperStaffId: committedAssignment?.helperStaffId,
           notificationRecipients: isSupport ? [] : recipients,
           whatsappNotificationsEnabled: isSupport ? false : whatsappEnabled,
-          confirmedAt: transactionNow.toISOString(),
-          holdConfirmedAt: transactionNow.toISOString(),
-          updatedAt: transactionNow.toISOString(),
+          confirmedAt: now.toISOString(),
+          holdConfirmedAt: now.toISOString(),
+          updatedAt: now.toISOString(),
         }), { merge: true });
       }
 
@@ -421,7 +381,7 @@ function createBookingAppointmentLifecycle({
         kind: "hold_confirmed",
         actor,
         reason: "Temporary hold confirmed",
-        now: transactionNow,
+        now,
         from: scheduleSnapshot(current),
         to: scheduleSnapshot(current),
         customerNotificationRecommended: true,
@@ -429,13 +389,9 @@ function createBookingAppointmentLifecycle({
       const lifecycleHistory = [...(Array.isArray(current.lifecycleHistory) ? current.lifecycleHistory : []), event];
       const patch = compactObject({
         status: BOOKING_CREATE_MODES.CONFIRMED,
-        assignments: committedOption.assignments,
-        primaryVanId: committedPrimary.vanId,
-        endTime: committedOption.endTime,
-        capacityEndTime: capacityEndTime(committedOption),
-        confirmedAtIso: transactionNow.toISOString(),
-        holdConfirmedAtIso: transactionNow.toISOString(),
-        updatedAtIso: transactionNow.toISOString(),
+        confirmedAtIso: now.toISOString(),
+        holdConfirmedAtIso: now.toISOString(),
+        updatedAtIso: now.toISOString(),
         lifecycleHistory,
         lastLifecycleActorId: actorInfo.actorId,
         lastLifecycleActorName: actorInfo.actorName,
@@ -450,8 +406,8 @@ function createBookingAppointmentLifecycle({
           status: "booked",
           appointmentId: id,
           workOrderIds,
-          bookedAtIso: transactionNow.toISOString(),
-          updatedAtIso: transactionNow.toISOString(),
+          bookedAtIso: now.toISOString(),
+          updatedAtIso: now.toISOString(),
           bookedAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         }), { merge: true });
@@ -534,9 +490,11 @@ function createBookingAppointmentLifecycle({
       refreshedOption = normalizeOfferOption(revalidation.option);
     }
     if (normalizedChangeKind === "details_edited") assertDetailsEditKeepsPlacement(existing, refreshedOption);
+    const refreshedPrimaryAssignment = primaryAssignment(refreshedOption);
+    const refreshedSupportAssignment = supportAssignment(refreshedOption);
+    const refreshedCapacityEndTime = capacityEndTime(refreshedOption);
 
     return db.runTransaction(async (transaction) => {
-      const transactionNow = asDate(clock());
       const [currentAppointmentSnapshot, currentOfferSnapshot] = await Promise.all([
         transaction.get(appointmentRef),
         transaction.get(offerRef),
@@ -548,35 +506,10 @@ function createBookingAppointmentLifecycle({
       const currentTemporaryHold = isTemporaryHoldAppointment(current);
       const appointmentState = currentTemporaryHold ? BOOKING_CREATE_MODES.TEMPORARY_HOLD : BOOKING_CREATE_MODES.CONFIRMED;
       const currentOffer = currentOfferSnapshot.exists ? { id: currentOfferSnapshot.id, ...currentOfferSnapshot.data() } : null;
-      validateOfferSelection({ offer: currentOffer, offerVersion, optionId, now: transactionNow });
+      validateOfferSelection({ offer: currentOffer, offerVersion, optionId, now });
       const currentRequest = normalizeBookingRequest(currentOffer.request);
       if (currentRequest.customerId !== cleanText(current.customerId, 160) || currentRequest.propertyId !== cleanText(current.propertyId, 160)) {
         throw new BookingAuthorityError(BOOKING_ERROR_CODES.INVALID_REQUEST, "The current lifecycle offer no longer matches the appointment.", { appointmentId: id });
-      }
-      const oldWorkOrderIds = [...new Set((Array.isArray(current.workOrderIds) ? current.workOrderIds : [])
-        .map((value) => cleanText(value, 180))
-        .filter(Boolean))];
-      const oldLockIds = [...new Set((Array.isArray(current.capacityLockIds) ? current.capacityLockIds : [])
-        .map((value) => cleanText(value, 180))
-        .filter(Boolean))];
-      const [oldWorkOrderSnapshots, oldLockSnapshots] = await Promise.all([
-        Promise.all(oldWorkOrderIds.map(async (workOrderId) => {
-          const ref = db.collection(collections.workOrders).doc(workOrderId);
-          return { workOrderId, ref, snapshot: await transaction.get(ref) };
-        })),
-        Promise.all(oldLockIds.map(async (lockId) => {
-          const ref = db.collection(collections.capacityLocks).doc(lockId);
-          return { lockId, ref, snapshot: await transaction.get(ref) };
-        })),
-      ]);
-      const ownedOldWorkOrders = oldWorkOrderSnapshots.filter((entry) => entry.snapshot.exists
-        && cleanText(entry.snapshot.data()?.appointmentId, 180) === id);
-      if (ownedOldWorkOrders.some((entry) => workOrderStatusIsTerminal(entry.snapshot.data()?.status))) {
-        throw new BookingAuthorityError(
-          BOOKING_ERROR_CODES.INVALID_REQUEST,
-          "A terminal Work Order cannot be changed through Scheduling.",
-          { appointmentId: id, reason: "terminal-work-order" },
-        );
       }
       if (normalizedChangeKind === "operational_move") {
         if (cleanText(current.date, 20) !== cleanText(refreshedOption.date, 20)) {
@@ -612,7 +545,7 @@ function createBookingAppointmentLifecycle({
         option: refreshedOption,
         appointmentId: id,
         context: { ...context, excludeAppointmentId: id },
-        now: transactionNow,
+        now,
       });
       if (!validation || validation.available !== true) {
         throw new BookingAuthorityError(
@@ -621,11 +554,6 @@ function createBookingAppointmentLifecycle({
           { reason: cleanText(validation?.reason, 240) },
         );
       }
-      const committedOption = normalizeOfferOption(validation.option || refreshedOption);
-      const committedPrimaryAssignment = primaryAssignment(committedOption);
-      const committedSupportAssignment = supportAssignment(committedOption);
-      const committedCapacityEndTime = capacityEndTime(committedOption);
-      if (normalizedChangeKind === "details_edited") assertDetailsEditKeepsPlacement(current, committedOption);
 
       const newLocks = validateCapacityLocks(validation.capacityLocks);
       const newLockIds = new Set(newLocks.map((lock) => lock.id));
@@ -665,7 +593,7 @@ function createBookingAppointmentLifecycle({
 
       const workOrders = validateWorkOrders(await schedulingProvider.buildWorkOrders({
         appointment: { ...current, appointmentId: id, id, status: appointmentState },
-        option: committedOption,
+        option: refreshedOption,
         request: currentRequest,
         customer,
         property,
@@ -677,44 +605,22 @@ function createBookingAppointmentLifecycle({
           changeKind: normalizedChangeKind,
           appointmentState,
         },
-        now: transactionNow,
+        now,
       }), id);
       const workOrderIds = workOrders.map((item) => item.id);
       const newWorkOrderIds = new Set(workOrderIds);
-      const oldWorkOrderIdSet = new Set(oldWorkOrderIds);
-      const newWorkOrderSnapshots = await Promise.all(workOrderIds
-        .filter((workOrderId) => !oldWorkOrderIdSet.has(workOrderId))
-        .map(async (workOrderId) => {
-          const ref = db.collection(collections.workOrders).doc(workOrderId);
-          return { workOrderId, ref, snapshot: await transaction.get(ref) };
-        }));
-      const occupiedNewWorkOrder = newWorkOrderSnapshots.find((entry) => entry.snapshot.exists
-        && cleanText(entry.snapshot.data()?.appointmentId, 180) !== id);
-      if (occupiedNewWorkOrder) {
-        throw new BookingAuthorityError(
-          BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
-          "A generated Work Order id already belongs to another appointment.",
-          { appointmentId: id, workOrderId: occupiedNewWorkOrder.workOrderId },
-        );
-      }
-      if (newWorkOrderSnapshots.some((entry) => entry.snapshot.exists
-        && workOrderStatusIsTerminal(entry.snapshot.data()?.status))) {
-        throw new BookingAuthorityError(
-          BOOKING_ERROR_CODES.INVALID_REQUEST,
-          "A terminal Work Order cannot be changed through Scheduling.",
-          { appointmentId: id, reason: "terminal-work-order" },
-        );
-      }
+      const oldWorkOrderIds = Array.isArray(current.workOrderIds) ? current.workOrderIds : [];
+      const oldLockIds = Array.isArray(current.capacityLockIds) ? current.capacityLockIds : [];
       const actorInfo = actorFields(actor);
       const previousSchedule = scheduleSnapshot(current);
       const nextSchedule = {
-        dateKey: committedOption.date,
-        primaryVanId: cleanText(committedPrimaryAssignment.vanId, 120),
-        primaryStart: cleanText(committedPrimaryAssignment.time || committedOption.time, 20),
-        primaryEnd: cleanText(committedOption.endTime, 20),
-        primaryCapacityEnd: committedCapacityEndTime,
-        supportVanId: cleanText(committedSupportAssignment?.vanId, 120),
-        supportStart: cleanText(committedSupportAssignment?.time, 20),
+        dateKey: refreshedOption.date,
+        primaryVanId: cleanText(refreshedPrimaryAssignment.vanId, 120),
+        primaryStart: cleanText(refreshedPrimaryAssignment.time || refreshedOption.time, 20),
+        primaryEnd: cleanText(refreshedOption.endTime, 20),
+        primaryCapacityEnd: refreshedCapacityEndTime,
+        supportVanId: cleanText(refreshedSupportAssignment?.vanId, 120),
+        supportStart: cleanText(refreshedSupportAssignment?.time, 20),
       };
       const customerNotificationRecommended = currentTemporaryHold
         ? false
@@ -724,7 +630,7 @@ function createBookingAppointmentLifecycle({
         actor,
         reason: lifecycleReason,
         note,
-        now: transactionNow,
+        now,
         from: previousSchedule,
         to: nextSchedule,
         customerNotificationRecommended,
@@ -734,12 +640,12 @@ function createBookingAppointmentLifecycle({
         ? {
           detailsEditReason: lifecycleReason,
           detailsEditNote: cleanText(note, 1_500),
-          detailsEditedAtIso: transactionNow.toISOString(),
+          detailsEditedAtIso: now.toISOString(),
         }
         : {
           rescheduleReason: lifecycleReason,
           rescheduleNote: cleanText(note, 1_500),
-          rescheduledAtIso: transactionNow.toISOString(),
+          rescheduledAtIso: now.toISOString(),
         };
 
       transaction.set(appointmentRef, compactObject({
@@ -747,22 +653,22 @@ function createBookingAppointmentLifecycle({
         offerId: canonicalOfferId,
         offerVersion: Number(offerVersion),
         selectedOptionId: cleanText(optionId, 180),
-        date: committedOption.date,
-        startTime: committedOption.time,
-        endTime: committedOption.endTime,
-        capacityEndTime: committedCapacityEndTime,
+        date: refreshedOption.date,
+        startTime: refreshedOption.time,
+        endTime: refreshedOption.endTime,
+        capacityEndTime: refreshedCapacityEndTime,
         workLines: currentRequest.workLines,
-        workItems: committedOption.workItems,
+        workItems: refreshedOption.workItems,
         constraints: currentRequest.constraints,
         notes: currentRequest.notes,
-        assignments: committedOption.assignments,
-        primaryVanId: cleanText(committedPrimaryAssignment.vanId, 120),
+        assignments: refreshedOption.assignments,
+        primaryVanId: cleanText(refreshedPrimaryAssignment.vanId, 120),
         workOrderIds,
         capacityLockIds: newLocks.map((lock) => lock.id),
         ...lifecycleMetadata,
         lastScheduleChangeKind: normalizedChangeKind,
         customerNotificationRecommended,
-        updatedAtIso: transactionNow.toISOString(),
+        updatedAtIso: now.toISOString(),
         lifecycleHistory,
         lastLifecycleActorId: actorInfo.actorId,
         lastLifecycleActorName: actorInfo.actorName,
@@ -779,26 +685,24 @@ function createBookingAppointmentLifecycle({
           ...workOrder,
           status: currentTemporaryHold ? "Reserva temporal" : "Confirmada",
           bookingOfferId: canonicalOfferId,
-          updatedAt: transactionNow.toISOString(),
+          updatedAt: now.toISOString(),
         }), { merge: true });
       }
-      for (const entry of ownedOldWorkOrders) {
-        if (newWorkOrderIds.has(entry.workOrderId)) continue;
-        transaction.set(entry.ref, compactObject({
+      for (const oldWorkOrderId of oldWorkOrderIds) {
+        if (newWorkOrderIds.has(oldWorkOrderId)) continue;
+        transaction.set(db.collection(collections.workOrders).doc(oldWorkOrderId), compactObject({
           status: "Cancelada",
           replacedByReschedule: normalizedChangeKind !== "details_edited",
           replacedByDetailsEdit: normalizedChangeKind === "details_edited",
-          updatedAt: transactionNow.toISOString(),
+          updatedAt: now.toISOString(),
         }), { merge: true });
       }
-      for (const entry of oldLockSnapshots) {
-        if (newLockIds.has(entry.lockId)) continue;
-        const stored = entry.snapshot.exists ? entry.snapshot.data() || {} : null;
-        if (!stored || cleanText(stored.appointmentId, 180) !== id) continue;
-        transaction.set(entry.ref, compactObject({
+      for (const oldLockId of oldLockIds) {
+        if (newLockIds.has(oldLockId)) continue;
+        transaction.set(db.collection(collections.capacityLocks).doc(oldLockId), compactObject({
           active: false,
-          releasedAtIso: transactionNow.toISOString(),
-          updatedAtIso: transactionNow.toISOString(),
+          releasedAtIso: now.toISOString(),
+          updatedAtIso: now.toISOString(),
           updatedAt: serverTimestamp(),
         }), { merge: true });
       }
@@ -807,7 +711,7 @@ function createBookingAppointmentLifecycle({
           ...lock,
           appointmentId: id,
           active: true,
-          updatedAtIso: transactionNow.toISOString(),
+          updatedAtIso: now.toISOString(),
           updatedAt: serverTimestamp(),
         }), { merge: true });
       }
@@ -818,14 +722,14 @@ function createBookingAppointmentLifecycle({
         workOrderIds,
         ...(currentTemporaryHold
           ? {
-            heldAtIso: transactionNow.toISOString(),
+            heldAtIso: now.toISOString(),
             heldAt: serverTimestamp(),
           }
           : {
-            bookedAtIso: transactionNow.toISOString(),
+            bookedAtIso: now.toISOString(),
             bookedAt: serverTimestamp(),
           }),
-        updatedAtIso: transactionNow.toISOString(),
+        updatedAtIso: now.toISOString(),
         updatedAt: serverTimestamp(),
       }), { merge: true });
 
@@ -837,16 +741,16 @@ function createBookingAppointmentLifecycle({
         appointment: {
           ...current,
           status: appointmentState,
-          date: committedOption.date,
-          startTime: committedOption.time,
-          endTime: committedOption.endTime,
-          capacityEndTime: committedCapacityEndTime,
+          date: refreshedOption.date,
+          startTime: refreshedOption.time,
+          endTime: refreshedOption.endTime,
+          capacityEndTime: refreshedCapacityEndTime,
           workLines: currentRequest.workLines,
-          workItems: committedOption.workItems,
+          workItems: refreshedOption.workItems,
           constraints: currentRequest.constraints,
           notes: currentRequest.notes,
-          assignments: committedOption.assignments,
-          primaryVanId: cleanText(committedPrimaryAssignment.vanId, 120),
+          assignments: refreshedOption.assignments,
+          primaryVanId: cleanText(refreshedPrimaryAssignment.vanId, 120),
           workOrderIds,
           capacityLockIds: newLocks.map((lock) => lock.id),
           lifecycleHistory,

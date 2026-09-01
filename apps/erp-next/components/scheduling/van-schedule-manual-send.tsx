@@ -40,8 +40,7 @@ export function VanScheduleManualSend() {
   if (!canManage) return null;
 
   const send = async () => {
-    const target = groups.find((group) => group.vanId === vanId);
-    const targetLabel = vanId ? target?.vanName || target?.groupName || vanId : 'all vans';
+    const targetLabel = vanId ? vanId.replace('VAN-', 'Van ') : 'all vans';
     if (!window.confirm(`Send the ${dateKey} work schedule now to ${targetLabel}? Each Work Order will be sent as a separate WhatsApp group message.`)) return;
 
     setBusy(true);
@@ -72,7 +71,7 @@ export function VanScheduleManualSend() {
         <input aria-label="Schedule date" type="date" value={dateKey} onChange={(event) => setDateKey(event.target.value)} disabled={busy} style={{ minHeight: 30, height: 30 }} />
         <select aria-label="Target van" value={vanId} onChange={(event) => setVanId(event.target.value)} disabled={busy} style={{ minHeight: 30, height: 30 }}>
           <option value="">All vans</option>
-          {groups.map((group) => <option key={group.vanId} value={group.vanId}>{group.vanName || group.vanId} · {group.configured && group.enabled ? 'ready' : 'not configured'}</option>)}
+          {[1, 2, 3, 4].map((number) => <option key={number} value={`VAN-${number}`}>Van {number}</option>)}
         </select>
         <button type="button" onClick={() => void send()} disabled={busy} style={{ minHeight: 30, height: 30, padding: '0 10px' }}>
           {busy ? 'Sending…' : 'Send Now'}

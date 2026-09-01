@@ -1,14 +1,9 @@
-/**
- * LEGACY BROWSER SIMULATOR — acceptance/demo state only.
- * Product scheduling commits and availability use Office Booking Authority.
- */
 import type { BrowserAppointmentHistoryEvent, BrowserAppointmentRecord, BrowserAppointmentScheduleSnapshot, BrowserWorkOrderRecord } from './browser-operational';
 import { createBrowserWorkOrder } from './browser-operational';
 import type { BookingRequest, BookingWorkLine, CandidateSlot, WorkPresetId } from './scheduling';
 import { customerFacingDescription, getRuntimeSchedulingSettings, halfDayForTime, minutesToTime, timeToMinutes } from './scheduling';
 import type { CalendarDispatchJob, OperationalDay } from './scheduling-capacity';
 import { buildOperationalWeek, findCandidateSlotsForDay } from './scheduling-capacity';
-import { legacySchedulingSimulatorVans } from './legacy-scheduling-simulator-fixtures';
 
 export type AppointmentActor = { id?: string; name?: string };
 
@@ -172,7 +167,7 @@ function rebuildAssignments(record: BrowserAppointmentRecord, slot: CandidateSlo
 
 export function validMoveCandidates(day: OperationalDay, record: BrowserAppointmentRecord, jobs: CalendarDispatchJob[]) {
   if (record.status === 'cancelled' || record.dateKey !== day.dateKey) return [];
-  return findCandidateSlotsForDay(day, appointmentRequest(record), jobsWithoutAppointment(record, jobs), legacySchedulingSimulatorVans);
+  return findCandidateSlotsForDay(day, appointmentRequest(record), jobsWithoutAppointment(record, jobs));
 }
 
 export function validSupportMoveCandidates(day: OperationalDay, record: BrowserAppointmentRecord, supportAssignmentId: string, jobs: CalendarDispatchJob[]) {
@@ -185,7 +180,7 @@ export function validSupportMoveCandidates(day: OperationalDay, record: BrowserA
   if (supportDuration <= 0) return [];
 
   const request = appointmentRequest(record, { presetId: support.presetId, quantity: support.quantity });
-  return findCandidateSlotsForDay(day, request, jobsWithoutAssignment(support.id, jobs), legacySchedulingSimulatorVans)
+  return findCandidateSlotsForDay(day, request, jobsWithoutAssignment(support.id, jobs))
     .filter((slot) => !slot.requiresSupportVan)
     .filter((slot) => slot.vanId !== primary.vanId)
     .filter((slot) => timeToMinutes(slot.end) - timeToMinutes(slot.start) === supportDuration)
@@ -200,7 +195,7 @@ export function validRescheduleCandidates(dateKey: string, record: BrowserAppoin
   const day = buildOperationalWeek(dateKey).find((item) => item.dateKey === dateKey);
   if (!day || !day.isOpen) return { day, slots: [] as CandidateSlot[] };
   const jobs = dateKey === record.dateKey ? jobsWithoutAppointment(record, targetJobs) : targetJobs;
-  return { day, slots: findCandidateSlotsForDay(day, appointmentRequest(record), jobs, legacySchedulingSimulatorVans) };
+  return { day, slots: findCandidateSlotsForDay(day, appointmentRequest(record), jobs) };
 }
 
 export function applyAppointmentScheduleChange(args: {
@@ -322,7 +317,7 @@ export function updateAppointmentDetails(args: {
     customerFacingDescription: customerFacingDescription({ presetId: primaryPreset, quantity: totalQuantity, workLines }),
   };
   const current = appointmentSnapshot(args.record);
-  const options = findCandidateSlotsForDay(args.day, appointmentRequest(candidateRecord), jobsWithoutAppointment(args.record, args.jobs), legacySchedulingSimulatorVans);
+  const options = findCandidateSlotsForDay(args.day, appointmentRequest(candidateRecord), jobsWithoutAppointment(args.record, args.jobs));
   const exact = options.find((slot) => slot.vanId === current.primaryVanId && slot.start === current.primaryStart);
   if (!exact) {
     return { ok: false as const, message: 'The edited appointment scope no longer fits the current schedule. Use Move / Reassign or Reschedule to choose a valid work spot.' };

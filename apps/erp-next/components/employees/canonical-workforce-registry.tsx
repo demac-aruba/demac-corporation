@@ -103,7 +103,7 @@ export function CanonicalWorkforceRegistry() {
 
       <div className={styles.metrics}>
         <article><span>Active Staff</span><strong>{metrics.active}</strong><small>staffProfiles</small></article>
-        <article><span>Canonical Vans</span><strong>{metrics.vans}</strong><small>active registry; duplicate IDs collapse to physical vans</small></article>
+        <article><span>Canonical Vans</span><strong>{metrics.vans}/4</strong><small>duplicate IDs collapse to physical vans</small></article>
         <article><span>Absent Today</span><strong>{metrics.absent}</strong><small>{today} · staffAbsences</small></article>
         <article><span>Half-Day Rules</span><strong>{metrics.halfDays}</strong><small>vanHalfDaySchedules</small></article>
       </div>

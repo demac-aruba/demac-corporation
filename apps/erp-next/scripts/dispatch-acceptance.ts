@@ -3,11 +3,9 @@ import type { BrowserFieldExecutionRecord } from '../lib/browser-field';
 import type { BrowserJobReadiness } from '../lib/browser-job-readiness';
 import type { BrowserWorkOrderRecord } from '../lib/browser-operational';
 import type { BrowserWorkforceEmployee } from '../lib/browser-workforce';
-import { deriveRequiredToolsReadiness } from '../lib/browser-tools';
 import { diagnoseBookingRequest } from '../lib/scheduling-booking-diagnostics';
 import { findCandidateSlots, type BookingRequest, type DispatchJob } from '../lib/scheduling';
 import { findCandidateSlotsForDay, findSupportReflowPlansForDay, type OperationalDay } from '../lib/scheduling-capacity';
-import { legacySchedulingSimulatorVans } from '../lib/legacy-scheduling-simulator-fixtures';
 
 const dateKey = '2026-08-11';
 
@@ -73,30 +71,6 @@ requireCondition(conflicts.some((conflict) => conflict.type === 'route_buffer' &
 requireCondition(conflicts.some((conflict) => conflict.type === 'van_overlap' && conflict.vanIds.includes('VAN-3') && conflict.workOrderIds.includes('WO-E') && conflict.workOrderIds.includes('WO-F')), 'Support-van overlap must be detected.');
 requireCondition(conflicts.some((conflict) => conflict.type === 'workday_overrun' && conflict.vanIds.includes('VAN-4') && conflict.workOrderIds.includes('WO-G')), 'Configured workday overrun must be detected.');
 
-const opaqueVanId = 'RESOURCE-FIELD-ALPHA';
-const opaqueToolReadiness = deriveRequiredToolsReadiness(order({
-  id: 'WO-OPAQUE-TOOLS', primaryVanId: opaqueVanId, start: '10:30', end: '11:30', sector: 'Noord',
-}), {
-  assets: [{
-    id: 'TOOL-OPAQUE-1',
-    name: 'Service Kit Alpha',
-    toolClass: 'Service Toolkit',
-    locationId: opaqueVanId,
-    status: 'available',
-    verified: true,
-    updatedAt: '2026-08-10T12:00:00.000Z',
-  }],
-  policies: [{
-    presetId: 'standard_service',
-    requiredClasses: ['Service Toolkit'],
-    coverageMode: 'per_assigned_van',
-    reviewed: true,
-    updatedAt: '2026-08-10T12:00:00.000Z',
-    updatedBy: 'acceptance',
-  }],
-});
-requireCondition(opaqueToolReadiness.status === 'ready', 'Tool custody must accept an opaque canonical Van location ID instead of limiting readiness to VAN-1–VAN-4.');
-
 const fieldExecution: BrowserFieldExecutionRecord = {
   workOrderId: 'WO-H',
   appointmentId: 'APT-WO-H',
@@ -136,16 +110,16 @@ const noordAnchor: DispatchJob = {
   customerCommunicationOwner: true,
 };
 const farRequest: BookingRequest = { customer: 'San Nicolas Customer', site: 'San Nicolas Property', sector: 'San Nicolas', presetId: 'standard_service', quantity: 1 };
-const farCandidates = findCandidateSlots(farRequest, [noordAnchor], legacySchedulingSimulatorVans);
+const farCandidates = findCandidateSlots(farRequest, [noordAnchor]);
 const farIssues = diagnoseBookingRequest({ request: farRequest, jobs: [noordAnchor], preferred: { vanId: 'VAN-1', start: '10:30' }, candidateSlots: farCandidates, quantityValid: true });
 requireCondition(farIssues.some((issue) => issue.code === 'route-anchor-conflict' && issue.field === 'property' && issue.severity === 'error'), 'Noord morning anchor versus San Nicolas preferred spot must produce an immediate property-level route error.');
 
 const tenUnitRequest: BookingRequest = { customer: 'Large Customer', site: 'Large Property', sector: 'Noord', presetId: 'standard_service', quantity: 10 };
-const tenUnitPlans = findCandidateSlots(tenUnitRequest, [], legacySchedulingSimulatorVans);
+const tenUnitPlans = findCandidateSlots(tenUnitRequest, []);
 requireCondition(tenUnitPlans.some((slot) => slot.requiresSupportVan && slot.primaryUnits === 7 && slot.supportUnits === 3 && Boolean(slot.supportStart) && Boolean(slot.supportEnd)), '10 same-site units must automatically plan 7 primary + 3 support with explicit support timing.');
 
 const fourteenUnitRequest: BookingRequest = { customer: 'Very Large Customer', site: 'Very Large Property', sector: 'Noord', presetId: 'standard_service', quantity: 14 };
-const fourteenUnitPlans = findCandidateSlots(fourteenUnitRequest, [], legacySchedulingSimulatorVans);
+const fourteenUnitPlans = findCandidateSlots(fourteenUnitRequest, []);
 requireCondition(fourteenUnitPlans.some((slot) => slot.requiresSupportVan && slot.primaryUnits === 7 && slot.supportUnits === 7 && slot.supportSegment === 'full_day'), '14 same-site units must automatically plan 7 + 7 across two linked full-day vans.');
 
 const recoveryDay: OperationalDay = {
@@ -175,20 +149,20 @@ const recoveryJobs: DispatchJob[] = [
 ];
 
 const threeHourRequest: BookingRequest = { customer: 'Three Unit Customer', site: 'Noord Property', sector: 'Noord', presetId: 'standard_service', quantity: 3 };
-const threeHourCandidates = findCandidateSlotsForDay(recoveryDay, threeHourRequest, recoveryJobs, legacySchedulingSimulatorVans);
+const threeHourCandidates = findCandidateSlotsForDay(recoveryDay, threeHourRequest, recoveryJobs);
 requireCondition(
   threeHourCandidates.some((slot) => slot.vanId === 'VAN-1' && slot.start === '10:30' && slot.end === '13:30'),
   'Flexible lunch must allow a continuous three-hour Van 1 appointment from 10:30 to 13:30 when the next job starts exactly at 13:30.',
 );
 requireCondition(
-  findSupportReflowPlansForDay(recoveryDay, threeHourRequest, recoveryJobs, legacySchedulingSimulatorVans).length === 0,
+  findSupportReflowPlansForDay(recoveryDay, threeHourRequest, recoveryJobs).length === 0,
   'Support reflow must not move existing work when the request already fits continuously across lunch.',
 );
 
 const recoveryRequest: BookingRequest = { customer: 'Four Unit Customer', site: 'Noord Property', sector: 'Noord', presetId: 'standard_service', quantity: 4 };
-const fragmentedCandidates = findCandidateSlotsForDay(recoveryDay, recoveryRequest, recoveryJobs, legacySchedulingSimulatorVans);
+const fragmentedCandidates = findCandidateSlotsForDay(recoveryDay, recoveryRequest, recoveryJobs);
 requireCondition(fragmentedCandidates.length === 0, 'A real Van 1 conflict at 13:30 must prevent the continuous four-hour 10:30–14:30 appointment.');
-const recoveryPlans = findSupportReflowPlansForDay(recoveryDay, recoveryRequest, recoveryJobs, legacySchedulingSimulatorVans);
+const recoveryPlans = findSupportReflowPlansForDay(recoveryDay, recoveryRequest, recoveryJobs);
 requireCondition(
   recoveryPlans.some((plan) => plan.supportJobId === 'APT-CHRISTIAN-S'
     && plan.vanId === 'VAN-1'

@@ -58,10 +58,10 @@ function hashKey(value, length = 24) {
 function normalizeManualDuration(value, field) {
   if (value === undefined || value === null || value === "") return 0;
   const minutes = positiveInteger(value);
-  if (minutes < 60 || minutes > 720 || minutes % 30 !== 0) {
+  if (minutes < 30 || minutes > 720 || minutes % 15 !== 0) {
     throw new BookingAuthorityError(
       BOOKING_ERROR_CODES.INVALID_REQUEST,
-      `${field} must be between 60 and 720 minutes in 30-minute increments.`,
+      `${field} must be between 30 and 720 minutes in 15-minute increments.`,
       { field },
     );
   }
@@ -128,12 +128,6 @@ function normalizeAssignment(value = {}, index = 0) {
     );
   }
   const role = cleanText(value.role, 40);
-  const ownedSlots = Array.isArray(value.ownedSlots)
-    ? [...new Set(value.ownedSlots
-      .map((item) => cleanText(item, 20))
-      .filter((item) => /^\d{2}:\d{2}$/.test(item)))]
-      .slice(0, 12)
-    : [];
   return {
     vanId: requireText(value.vanId, `options.assignments[${index}].vanId`, 120),
     vanName: cleanText(value.vanName, 160),
@@ -149,7 +143,6 @@ function normalizeAssignment(value = {}, index = 0) {
     time: cleanText(value.time, 20),
     endTime: cleanText(value.endTime, 20),
     capacityEndTime: cleanText(value.capacityEndTime, 20),
-    ownedSlots,
     role: role === "support" || (!role && index > 0) ? "support" : "primary",
   };
 }

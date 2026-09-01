@@ -1,13 +1,7 @@
-/**
- * LEGACY ACCEPTANCE SIMULATOR — not a scheduling authority.
- * Product routes must use `office-booking-authority.ts`; the production-boundary
- * acceptance test rejects this module from the App Router dependency graph.
- */
 import type { BookingRequest, BookingWorkLine, CandidateSlot, WorkPresetId } from '../scheduling';
 import { customerFacingDescription, timeToMinutes } from '../scheduling';
 import type { CalendarDispatchJob, OperationalDay, SupportReflowPlan } from '../scheduling-capacity';
 import { buildOperationalWeek, findCandidateSlotsForDay, findSupportReflowPlansForDay, jobsForDate } from '../scheduling-capacity';
-import { legacySchedulingSimulatorVans } from '../legacy-scheduling-simulator-fixtures';
 import { bookingRestrictionFromConstraints, describeBookingConstraints, inferBookingConstraintPatch, mergeBookingConstraints, type BookingConstraintState } from './constraints';
 import { rankRouteAwareCandidates } from './route-ranking';
 
@@ -300,7 +294,7 @@ export function simulateBookingCopilot(args: { state: BookingCopilotState; refer
     const day = operationalDay(dateKey);
     if (!day?.isOpen) continue;
     const dayJobs = jobsForDate(args.jobs, dateKey);
-    let slots = rankRouteAwareCandidates({ slots: findCandidateSlotsForDay(day, request, dayJobs, legacySchedulingSimulatorVans), request, jobs: dayJobs, officeSector: 'Santa Cruz' });
+    let slots = rankRouteAwareCandidates({ slots: findCandidateSlotsForDay(day, request, dayJobs), request, jobs: dayJobs, officeSector: 'Santa Cruz' });
     if (dateKey === clock.dateKey && args.referenceDateKey === clock.dateKey) slots = slots.filter((slot) => timeToMinutes(slot.start) > clock.minutes);
 
     slots.slice(0, 2).forEach((slot, index) => directPlans.push({
@@ -318,7 +312,7 @@ export function simulateBookingCopilot(args: { state: BookingCopilotState; refer
     }));
 
     if (!slots.length && !(dateKey === clock.dateKey && args.referenceDateKey === clock.dateKey && clock.minutes >= 16 * 60)) {
-      const reflows = findSupportReflowPlansForDay(day, request, dayJobs, legacySchedulingSimulatorVans);
+      const reflows = findSupportReflowPlansForDay(day, request, dayJobs);
       reflows.slice(0, 2).forEach((plan) => recoveryPlans.push({
         id: `recovery-${dateKey}-${plan.id}`,
         dateKey,

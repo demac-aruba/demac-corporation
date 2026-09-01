@@ -6,6 +6,7 @@ import type {
 } from './canonical-operations';
 
 const TECHNICAL_ROLES = new Set(['Técnico responsable', 'Técnico', 'Ayudante', 'Supervisor']);
+export const BOOKING_CAPACITY_VAN_IDS = ['VAN-1', 'VAN-2', 'VAN-3', 'VAN-4'] as const;
 
 export function isTechnicalStaff(profile: CanonicalStaffProfile) {
   return profile.employeeType === 'Técnico' || TECHNICAL_ROLES.has(profile.role ?? '');
@@ -17,17 +18,18 @@ export function regularCrewIds(van: Pick<CanonicalVan, 'responsibleStaffId' | 'r
 
 export function nextCanonicalVanId(vans: CanonicalVan[]) {
   const highest = vans.reduce((max, van) => {
-    const match = String(van.id).match(/^VAN-(\d+)$/i);
-    return match ? Math.max(max, Number(match[1])) : max;
+    const values = [van.id, van.name ?? ''];
+    const numbers = values.flatMap((value) => {
+      const match = String(value).match(/(?:VAN|Van|van|V)[\s-]*(\d+)/);
+      return match ? [Number(match[1])] : [];
+    });
+    return Math.max(max, ...numbers, 0);
   }, 0);
   return `VAN-${highest + 1}`;
 }
 
 export function isBookingCapacityVan(vanId: string, vans: CanonicalVan[] = []) {
-  const targetVanId = canonicalVanId(vanId, vans);
-  if (!targetVanId) return false;
-  if (!vans.length) return true;
-  return vans.some((van) => van.active !== false && canonicalVanId(van.id, vans) === targetVanId);
+  return (BOOKING_CAPACITY_VAN_IDS as readonly string[]).includes(canonicalVanId(vanId, vans));
 }
 
 export function validateVanCrew(van: CanonicalVan, staffProfiles: CanonicalStaffProfile[], existingVans: CanonicalVan[] = []) {
@@ -57,6 +59,9 @@ export function validateVanCrew(van: CanonicalVan, staffProfiles: CanonicalStaff
   }
 
   if ((van.status ?? 'Disponible') === 'Disponible') {
+    if (!isBookingCapacityVan(targetVanId, existingVans)) {
+      throw new Error(`${targetVanId} can be created and configured, but Booking Authority currently supports live capacity only for VAN-1 through VAN-4. Keep this Van out of service until the fleet-capacity authority is explicitly expanded.`);
+    }
     if (!driver) throw new Error('An available Van requires a responsible technician / driver.');
     if (!helper) throw new Error('An available Van requires a regular helper.');
   }

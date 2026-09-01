@@ -7,10 +7,7 @@ import {
   bookingActorLabel,
   projectLiveSchedulingAppointments,
 } from './live-scheduling';
-import {
-  loadLiveOperationalCapacityState,
-  type LiveOperationalCapacityState,
-} from './live-operational-capacity';
+import { loadLiveOperationalCapacityState } from './live-operational-capacity';
 import {
   listOfficeAppointmentAttribution,
   type OfficeAppointmentAttribution,
@@ -72,13 +69,10 @@ export type LiveSchedulingRange = {
   endDate: string;
 };
 
-export type LiveSchedulingProjectionContext = {
-  operationalState: LiveOperationalCapacityState | null | Promise<LiveOperationalCapacityState | null>;
-};
-
 const REFERENCE_CACHE_MS = 5 * 60_000;
 const ATTRIBUTION_CACHE_MS = 5 * 60_000;
 let referenceCache: { expiresAt: number; promise: Promise<LiveSchedulingReferenceData> } | null = null;
+const attributionCache = new Map<string, CachedAttribution>();
 
 function text(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -153,111 +147,44 @@ async function workOrdersForRange(range?: LiveSchedulingRange) {
   }
 }
 
-type LiveSchedulingFastDependencies = {
-  loadWorkOrders: typeof workOrdersForRange;
-  loadReferences: typeof loadLiveSchedulingReferenceData;
-  loadOperationalState: typeof loadLiveOperationalCapacityState;
-  projectAppointments: (
-    workOrders: WorkOrder[],
-    clients: LiveSchedulingClient[],
-    properties: LiveSchedulingProperty[],
-    vans: Van[],
-    attribution: OfficeAppointmentAttribution[],
-    operationalState: LiveOperationalCapacityState | null,
-  ) => BrowserAppointmentRecord[];
-};
-
-export function createLiveSchedulingAppointmentsFastLoader(
-  dependencies: Partial<LiveSchedulingFastDependencies> = {},
-) {
-  const loadWorkOrders = dependencies.loadWorkOrders ?? workOrdersForRange;
-  const loadReferences = dependencies.loadReferences ?? loadLiveSchedulingReferenceData;
-  const loadOperationalState = dependencies.loadOperationalState ?? loadLiveOperationalCapacityState;
-  const projectAppointments = dependencies.projectAppointments ?? projectLiveSchedulingAppointments;
-
-  return async function loadAppointments(
-    range?: LiveSchedulingRange,
-    context?: LiveSchedulingProjectionContext,
-  ) {
-    const operationalStatePromise = context
-      ? Promise.resolve(context.operationalState)
-      : loadOperationalState({
-        startDate: range?.startDate,
-        endDate: range?.endDate,
-      }).catch(() => null);
-    const [workOrders, references, operationalState] = await Promise.all([
-      loadWorkOrders(range),
-      loadReferences(),
-      operationalStatePromise,
-    ]);
-    return projectAppointments(
-      workOrders,
-      references.clients,
-      references.properties,
-      references.vans,
-      [],
-      operationalState,
-    );
-  };
+export async function loadLiveSchedulingAppointmentsFast(range?: LiveSchedulingRange) {
+  const [workOrders, references, operationalState] = await Promise.all([
+    workOrdersForRange(range),
+    loadLiveSchedulingReferenceData(),
+    loadLiveOperationalCapacityState({
+      startDate: range?.startDate,
+      endDate: range?.endDate,
+    }).catch(() => null),
+  ]);
+  return projectLiveSchedulingAppointments(
+    workOrders,
+    references.clients,
+    references.properties,
+    references.vans,
+    [],
+    operationalState,
+  );
 }
 
-export const loadLiveSchedulingAppointmentsFast = createLiveSchedulingAppointmentsFastLoader();
+async function attributionFor(appointmentIds: string[]) {
+  const now = Date.now();
+  const resolved = new Map<string, OfficeAppointmentAttribution>();
+  const missing: string[] = [];
+  for (const id of appointmentIds) {
+    const cached = attributionCache.get(id);
+    if (cached && cached.expiresAt > now) resolved.set(id, cached.value);
+    else missing.push(id);
+  }
 
-export function createLiveSchedulingAttributionResolver(
-  loadAttribution: (appointmentIds: string[]) => Promise<OfficeAppointmentAttribution[]> = listOfficeAppointmentAttribution,
-  now: () => number = Date.now,
-) {
-  const attributionCache = new Map<string, CachedAttribution>();
-  const pendingAttribution = new Map<string, {
-    identity: object;
-    promise: Promise<OfficeAppointmentAttribution | undefined>;
-  }>();
-
-  return async function attributionFor(appointmentIds: string[]) {
-    const resolved = new Map<string, OfficeAppointmentAttribution>();
-    const awaiting = new Map<string, Promise<OfficeAppointmentAttribution | undefined>>();
-    const missing: string[] = [];
-    const requestedAt = now();
-    for (const id of new Set(appointmentIds)) {
-      const pending = pendingAttribution.get(id);
-      if (pending) {
-        awaiting.set(id, pending.promise);
-        continue;
-      }
-      const cached = attributionCache.get(id);
-      if (cached && cached.expiresAt > requestedAt) resolved.set(id, cached.value);
-      else missing.push(id);
+  if (missing.length) {
+    const loaded = await listOfficeAppointmentAttribution(missing);
+    for (const item of loaded) {
+      resolved.set(item.appointmentId, item);
+      attributionCache.set(item.appointmentId, { expiresAt: now + ATTRIBUTION_CACHE_MS, value: item });
     }
-
-    if (missing.length) {
-      const batch = Promise.resolve()
-        .then(() => loadAttribution(missing))
-        .then((items) => new Map(items.map((item) => [item.appointmentId, item])));
-      for (const id of missing) {
-        const identity = {};
-        const promise = batch
-          .then((byId) => {
-            const item = byId.get(id);
-            if (item) attributionCache.set(id, { expiresAt: now() + ATTRIBUTION_CACHE_MS, value: item });
-            return item;
-          })
-          .finally(() => {
-            if (pendingAttribution.get(id)?.identity === identity) pendingAttribution.delete(id);
-          });
-        pendingAttribution.set(id, { identity, promise });
-        awaiting.set(id, promise);
-      }
-    }
-
-    const loaded = await Promise.all([...awaiting].map(async ([id, promise]) => [id, await promise] as const));
-    for (const [id, item] of loaded) {
-      if (item) resolved.set(id, item);
-    }
-    return resolved;
-  };
+  }
+  return resolved;
 }
-
-const attributionFor = createLiveSchedulingAttributionResolver();
 
 export async function enrichLiveSchedulingAttribution(appointments: BrowserAppointmentRecord[]) {
   const appointmentIds = [...new Set(appointments.map((appointment) => text(appointment.id)).filter(Boolean))];

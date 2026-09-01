@@ -11,14 +11,15 @@ import {
   getRuntimeSchedulingSettings,
   halfDayForTime,
   minutesToTime,
+  previewVans,
   timeToMinutes,
 } from './scheduling';
 import { jobOwnsCapacityStart, type CalendarDispatchJob, type OperationalDay } from './scheduling-capacity';
 import {
-  applyAuthoritativeAppointmentProjection,
+  applyAppointmentScheduleChange,
   appointmentSnapshot,
   type AppointmentActor,
-} from './scheduling-appointment-projection';
+} from './scheduling-appointment-lifecycle';
 
 export function liveMoveTargetKey(vanId: string, start: string) {
   return `${vanId}|${start}`;
@@ -73,12 +74,7 @@ export function liveOperationalMoveCapacityCandidates(
   const otherJobs = jobs.filter((job) => !assignmentIds.has(job.id) && job.status !== 'cancelled');
   const candidates: CandidateSlot[] = [];
 
-  const activeVans = capacityState
-    ? [...capacityState.vans.values()].filter((resource) => resource.active)
-    : [];
-  const vanOrder = new Map(activeVans.map((van, index) => [van.id, index]));
-
-  for (const van of activeVans) {
+  for (const van of previewVans.filter((resource) => resource.active)) {
     if (!liveVanOperationallyAvailable(capacityState, van.id, day.dateKey)) continue;
     const halfDay = liveVanIsHalfDay(capacityState, van.id, day.dateKey);
     const starts = liveOperationalStartTimes(capacityState, van.id, day.dateKey, baseStarts);
@@ -108,8 +104,7 @@ export function liveOperationalMoveCapacityCandidates(
     }
   }
 
-  return candidates.sort((left, right) => (vanOrder.get(left.vanId) ?? Number.MAX_SAFE_INTEGER) - (vanOrder.get(right.vanId) ?? Number.MAX_SAFE_INTEGER)
-    || timeToMinutes(left.start) - timeToMinutes(right.start));
+  return candidates.sort((left, right) => left.vanId.localeCompare(right.vanId) || timeToMinutes(left.start) - timeToMinutes(right.start));
 }
 
 export function liveDragMoveCandidates(
@@ -130,7 +125,7 @@ export function projectCommittedLiveMove(args: {
   dateKey: string;
   actor?: AppointmentActor;
 }) {
-  return applyAuthoritativeAppointmentProjection({
+  return applyAppointmentScheduleChange({
     record: args.appointment,
     slot: args.slot,
     dateKey: args.dateKey,

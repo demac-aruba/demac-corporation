@@ -36,9 +36,8 @@ function arubaDateKey() {
   return `${values.year}-${values.month}-${values.day}`;
 }
 
-function HalfDayEditor({ vanId, vanName, schedule, onSaved }: {
+function HalfDayEditor({ vanId, schedule, onSaved }: {
   vanId: string;
-  vanName: string;
   schedule?: CanonicalVanHalfDaySchedule;
   onSaved: () => Promise<void>;
 }) {
@@ -72,11 +71,11 @@ function HalfDayEditor({ vanId, vanName, schedule, onSaved }: {
   };
 
   return <div>
-    <strong>{vanName}</strong>
+    <strong>{vanId}</strong>
     <select value={weekday} onChange={(event) => setWeekday(Number(event.target.value))}>
       {weekdayOptions.filter((day) => day.value !== 0).map((day) => <option key={day.value} value={day.value}>{day.label}</option>)}
     </select>
-    <small>{vanId} · {schedule ? `${schedule.workdayStart || '08:00'}–${schedule.workdayEnd || '13:00'} · extra morning slot ${schedule.extraMorningSlot || '11:30'}` : 'Creates the canonical weekly half-day record used by Booking Authority.'}</small>
+    <small>{schedule ? `${schedule.workdayStart || '08:00'}–${schedule.workdayEnd || '13:00'} · extra morning slot ${schedule.extraMorningSlot || '11:30'}` : 'Creates the canonical weekly half-day record used by Booking Authority.'}</small>
     <button className="btn" type="button" disabled={saving} onClick={() => void save()}>{saving ? 'Saving…' : 'Save half-day'}</button>
     {message ? <small>{message}</small> : null}
   </div>;
@@ -117,13 +116,7 @@ export function CanonicalOperatingCalendar() {
       const id = canonicalVanId(schedule.vanId, state.vans);
       if (!byVan.has(id)) byVan.set(id, schedule);
     }
-    const seen = new Set<string>();
-    return state.vans.flatMap((van) => {
-      const vanId = canonicalVanId(van.id, state.vans);
-      if (!vanId || seen.has(vanId)) return [];
-      seen.add(vanId);
-      return [{ vanId, vanName: van.name || vanId, schedule: byVan.get(vanId) }];
-    });
+    return ['VAN-1', 'VAN-2', 'VAN-3', 'VAN-4'].map((vanId) => ({ vanId, schedule: byVan.get(vanId) }));
   }, [state]);
 
   const duplicateVans = useMemo(() => {
@@ -203,7 +196,7 @@ export function CanonicalOperatingCalendar() {
         <header><div><span>Canonical Operations</span><h2>Weekly Van Half-Days</h2></div><b>Live Firestore · Editable</b></header>
         {error ? <div className="sg-runtime-note"><strong>Unable to read canonical calendar</strong><p>{error}</p></div> : null}
         <div className="sg-rule-table">
-          {halfDays.map(({ vanId, vanName, schedule }) => <HalfDayEditor key={vanId} vanId={vanId} vanName={vanName} schedule={schedule} onSaved={refresh} />)}
+          {halfDays.map(({ vanId, schedule }) => <HalfDayEditor key={vanId} vanId={vanId} schedule={schedule} onSaved={refresh} />)}
         </div>
         <div className="sg-runtime-note"><strong>Booking behavior</strong><p>The selected weekday is the team's recurring afternoon off. The canonical Legacy behavior is preserved: 08:00–13:00 with the additional 11:30 morning slot; afternoon booking capacity is closed. Manual office drag remains a separate intentional override path.</p></div>
         <div className="page-actions"><button className="btn" type="button" onClick={() => void refresh()} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh canonical schedule'}</button></div>

@@ -1,9 +1,7 @@
 import {
-  buildLiveOperationalVanRegistry,
   liveOperationalWindowAllows,
   liveVanCrew,
   liveVanIsHalfDay,
-  liveVanOperationallyAvailable,
   type LiveOperationalCapacityState,
 } from '../lib/live-operational-capacity';
 import {
@@ -17,7 +15,7 @@ import {
   optionSupportAssignment,
   optionSupportWindow,
 } from '../lib/live-appointment-edit-state';
-import { bookingActorLabel, liveJobCapacityEnd, liveWorkOrderBlocksCapacity, projectLiveSchedulingAppointments, resolveCanonicalVanId } from '../lib/live-scheduling';
+import { bookingActorLabel, liveJobCapacityEnd, projectLiveSchedulingAppointments, resolveCanonicalVanId } from '../lib/live-scheduling';
 import { afterHoursTargetForVan, availableSlotAction, liveSchedulingInteractionActive } from '../lib/live-scheduling-interactions';
 import {
   liveDragMoveCandidates,
@@ -25,7 +23,6 @@ import {
   projectCommittedLiveMove,
 } from '../lib/live-scheduling-move';
 import { buildOperationalWeek, findCandidateSlotsForDay, jobOwnsCapacityStart } from '../lib/scheduling-capacity';
-import { legacySchedulingSimulatorVans } from '../lib/legacy-scheduling-simulator-fixtures';
 
 function requireCondition(condition: unknown, message: string) {
   if (!condition) throw new Error(`Live scheduling acceptance failed: ${message}`);
@@ -79,67 +76,6 @@ requireCondition(canonical.scheduledSlotCount === 2, 'Numeric Work Order schedul
 requireCondition(canonical.bookedByName === 'Christian', 'Canonical booking operator must be preserved.');
 requireCondition(bookingActorLabel({ appointmentId: 'APT-MAYA', source: 'demac-customer-agent' }) === 'Maya', 'Customer Agent bookings must display Maya.');
 
-for (const status of ['Cancelada', 'cancelada', 'Cancelled', 'cancelled', 'Canceled', 'canceled', 'Reprogramada', 'reprogramada', 'Rescheduled', 'rescheduled']) {
-  requireCondition(!liveWorkOrderBlocksCapacity(status), `${status} must not project phantom LIVE capacity.`);
-}
-for (const status of ['Confirmada', 'Reserva temporal', 'En proceso', 'Completada', '', 'unknown legacy status']) {
-  requireCondition(liveWorkOrderBlocksCapacity(status), `${status || '<blank>'} must fail closed as blocking capacity.`);
-}
-
-const unlinkedActive = projectLiveSchedulingAppointments([{
-  ...canonicalWorkOrders[0],
-  id: 'WO-UNLINKED-ACTIVE',
-  appointmentId: undefined,
-  status: 'Confirmada',
-}], clients, properties)[0];
-requireCondition(Boolean(unlinkedActive), 'An active Work Order without appointmentId must remain visible instead of disappearing into an OPEN slot.');
-requireCondition(unlinkedActive.id === 'UNLINKED-WORK-ORDER-WO-UNLINKED-ACTIVE', 'An unlinked Work Order must receive a deterministic read-only projection key.');
-requireCondition(unlinkedActive.projectionIntegrity === 'needs_human' && unlinkedActive.assignments[0].readiness === 'blocked', 'Missing appointment linkage must be visibly NEEDS HUMAN and fail closed.');
-const unlinkedReleased = projectLiveSchedulingAppointments([{
-  ...canonicalWorkOrders[0],
-  id: 'WO-UNLINKED-RELEASED',
-  appointmentId: undefined,
-  status: 'Reprogramada',
-}], clients, properties)[0];
-requireCondition(unlinkedReleased.status === 'cancelled' && unlinkedReleased.assignments[0].status === 'cancelled', 'An unlinked cancelled/rescheduled Work Order must still release visual capacity.');
-
-const futureVanId = 'VAN-FUTURE-TEST-947';
-const futureVanRecords = [{ id: futureVanId, name: 'Future Test Field Van', active: true, status: 'Disponible' }];
-const futureWorkOrder = {
-  ...canonicalWorkOrders[0],
-  id: 'WO-APT-FUTURE-1',
-  appointmentId: 'APT-FUTURE',
-  vanId: futureVanId,
-  time: '08:30',
-  appointmentDurationMinutes: 180,
-  scheduledSlots: 3,
-};
-const futureAppointment = projectLiveSchedulingAppointments([futureWorkOrder], clients, properties, futureVanRecords)[0];
-requireCondition(Boolean(futureAppointment), 'A Work Order assigned to an opaque master-data Van ID must remain visible in Live Scheduling.');
-requireCondition(futureAppointment.primaryVanId === futureVanId, 'Live Scheduling must preserve an opaque canonical Van ID without coercing it to VAN-N.');
-requireCondition(futureAppointment.assignments[0].capacitySlotStarts?.join(',') === '08:30,09:30,10:30', 'An opaque future Van must project the same three owned capacity starts as a numeric Van.');
-const displayRenamedFuture = projectLiveSchedulingAppointments(
-  [futureWorkOrder],
-  clients,
-  properties,
-  [{ id: futureVanId, name: 'Van 5', active: true }, { id: 'VAN-5', name: 'West Team', active: true }],
-)[0];
-requireCondition(displayRenamedFuture.primaryVanId === futureVanId, 'An editable Van 5 display name must not rewrite the opaque Work Order assignment to VAN-5.');
-requireCondition(resolveCanonicalVanId(futureVanId, [{ id: futureVanId, name: 'Van 5' }, { id: 'VAN-5', name: 'West Team' }]) !== 'VAN-5', 'Opaque and numeric master records must remain collision-free when their display names overlap.');
-
-const renamedFutureVanId = 'RESOURCE-RENAMED-82917';
-const renamedFutureAppointment = projectLiveSchedulingAppointments(
-  [{ ...futureWorkOrder, id: 'WO-APT-FUTURE-RENAMED-1', appointmentId: 'APT-FUTURE-RENAMED', vanId: renamedFutureVanId }],
-  clients,
-  properties,
-  [{ id: renamedFutureVanId, name: 'Future Test Field Van', active: true }],
-)[0];
-requireCondition(renamedFutureAppointment.primaryVanId === renamedFutureVanId, 'A consistent opaque registry rename must flow through the projected appointment identity.');
-requireCondition(
-  renamedFutureAppointment.assignments[0].capacitySlotStarts?.join(',') === futureAppointment.assignments[0].capacitySlotStarts?.join(','),
-  'Renaming an opaque Van ID must not change its projected capacity ownership.',
-);
-
 const sixService = projectLiveSchedulingAppointments([{
   ...canonicalWorkOrders[0],
   id: 'WO-APT-SIX-1',
@@ -150,9 +86,9 @@ const sixService = projectLiveSchedulingAppointments([{
   scheduledSlots: 6,
 }], clients, properties)[0];
 requireCondition(sixService.assignments[0].end === '14:30', 'Six Standard Services must keep the canonical 08:30–14:30 elapsed work interval.');
-requireCondition(sixService.assignments[0].capacityEnd === '14:30', 'A non-full-day six-hour job must release the Van at its real 14:30 end.');
-requireCondition(sixService.assignments[0].capacitySlotStarts?.join(',') === '08:30,09:30,10:30,13:30', 'Six continuous hours must own only sellable starts before 14:30.');
-requireCondition(!jobOwnsCapacityStart(sixService.assignments[0], '15:30'), 'A non-full-day job ending at 14:30 must leave the 15:30 start available.');
+requireCondition(sixService.assignments[0].capacityEnd === '16:30', 'Six Standard Services must expose the complete 08:30–16:30 Van-capacity window alongside the shorter work estimate.');
+requireCondition(sixService.assignments[0].capacitySlotStarts?.length === 6, 'Six Standard Services must own all six normal Van capacity starts.');
+requireCondition(jobOwnsCapacityStart(sixService.assignments[0], '15:30'), 'Six Standard Services must not expose the 15:30 capacity start as available.');
 
 const threeService = projectLiveSchedulingAppointments([{
   ...canonicalWorkOrders[0],
@@ -165,12 +101,12 @@ const threeService = projectLiveSchedulingAppointments([{
   scheduledSlots: 3,
 }], clients, properties)[0];
 requireCondition(threeService.assignments[0].end === '12:30', 'Three Standard Services must keep three real elapsed work hours.');
-requireCondition(threeService.assignments[0].capacityEnd === '12:30', 'Three Standard Services must release the Van at the real 12:30 end.');
+requireCondition(threeService.assignments[0].capacityEnd === '14:30', 'Three Standard Services must expose the end of their third owned capacity spot instead of labeling a shorter two-spot block.');
 requireCondition(
-  threeService.assignments[0].capacitySlotStarts?.join(',') === '09:30,10:30',
-  'Continuous capacity must not fabricate a 13:30 lock merely because lunch has no sellable anchor.',
+  threeService.assignments[0].capacitySlotStarts?.join(',') === '09:30,10:30,13:30',
+  'Three Standard Services must retain exactly three capacity spots when lunch removes a sellable anchor.',
 );
-requireCondition(!jobOwnsCapacityStart(threeService.assignments[0], '13:30'), 'The 13:30 start must remain free after a 09:30–12:30 job.');
+requireCondition(jobOwnsCapacityStart(threeService.assignments[0], '13:30'), 'The third owned capacity spot must project into the live Van lane.');
 requireCondition(!jobOwnsCapacityStart(threeService.assignments[0], '14:30'), 'Three Standard Services must not consume a fourth capacity spot.');
 
 const sevenServiceFullDay = projectLiveSchedulingAppointments([{
@@ -217,7 +153,7 @@ const supportFirstOptions = [{
   capacityEndTime: '16:30',
   assignments: [
     { vanId: 'VAN-1', vanName: 'Van 1', quantity: 7, slots: 6, time: '08:30', endTime: '15:30', capacityEndTime: '16:30', role: 'primary' as const },
-    { vanId: 'VAN-2', vanName: 'Van 2', quantity: 3, slots: 3, time: '09:30', endTime: '12:30', capacityEndTime: '12:30', role: 'support' as const },
+    { vanId: 'VAN-2', vanName: 'Van 2', quantity: 3, slots: 3, time: '09:30', endTime: '12:30', capacityEndTime: '14:30', role: 'support' as const },
   ],
 }, {
   id: 'support-option-c',
@@ -318,40 +254,20 @@ requireCondition(Boolean(operationalDay), 'The live appointment date must resolv
 const baseCapacity: LiveOperationalCapacityState = {
   vans: new Map([
     ['VAN-1', { id: 'VAN-1', active: true, status: '', responsibleStaffId: 'STAFF-TECH-1', regularHelperId: 'STAFF-HELPER-1' }],
-    ['VAN-2', { id: 'VAN-2', active: true, status: '', responsibleStaffId: 'STAFF-TECH-2' }],
-    ['VAN-3', { id: 'VAN-3', active: true, status: '', responsibleStaffId: 'STAFF-TECH-3' }],
-    ['VAN-4', { id: 'VAN-4', active: true, status: '', responsibleStaffId: 'STAFF-TECH-4' }],
+    ['VAN-2', { id: 'VAN-2', active: true, status: '' }],
+    ['VAN-3', { id: 'VAN-3', active: true, status: '' }],
+    ['VAN-4', { id: 'VAN-4', active: true, status: '' }],
   ]),
   staffProfiles: [
-    { id: 'STAFF-TECH-1', name: 'Miguel Technician', active: true, availability: 'Disponible', canDriveVan: true },
-    { id: 'STAFF-TECH-2', name: 'Van 2 Driver', active: true, availability: 'Disponible', canDriveVan: true },
-    { id: 'STAFF-TECH-3', name: 'Van 3 Driver', active: true, availability: 'Disponible', canDriveVan: true },
-    { id: 'STAFF-TECH-4', name: 'Van 4 Driver', active: true, availability: 'Disponible', canDriveVan: true },
+    { id: 'STAFF-TECH-1', name: 'Miguel Technician', active: true },
     { id: 'STAFF-HELPER-1', name: 'Rafael Helper', active: true },
-    { id: 'STAFF-TECH-OVERRIDE', name: 'Daily Technician', active: true, availability: 'Disponible', canDriveVan: true },
+    { id: 'STAFF-TECH-OVERRIDE', name: 'Daily Technician', active: true },
   ],
-  staffAbsences: [],
   dailyAssignments: [],
   halfDaySchedules: [],
   calendarClosures: [],
   closedWeekdays: [0],
 };
-
-requireCondition(!liveVanOperationallyAvailable(null, 'VAN-1', canonical.dateKey), 'Missing operational state must fail closed instead of presenting a Van as OPEN.');
-requireCondition(!liveOperationalWindowAllows(null, 'VAN-1', canonical.dateKey, '08:30', '09:30'), 'Missing calendar/Van policy must not approve a visual allocation window.');
-const absentDriverCapacity: LiveOperationalCapacityState = {
-  ...baseCapacity,
-  staffAbsences: [{ id: 'ABS-DRIVER', staffId: 'STAFF-TECH-1', fromDate: canonical.dateKey, toDate: canonical.dateKey, active: true }],
-};
-requireCondition(!liveVanOperationallyAvailable(absentDriverCapacity, 'VAN-1', canonical.dateKey), 'A canonical driver absence must make the LIVE Van non-bookable just as Booking Authority does.');
-
-const dynamicRegistry = buildLiveOperationalVanRegistry([
-  { id: 'van-1783800405341', name: 'Van 4', active: true, status: '' },
-  { id: 'VAN-5', name: 'Van 5', active: true, status: '' },
-  { id: futureVanId, name: 'Future Test Field Van', active: true, status: '' },
-]);
-requireCondition([...dynamicRegistry.keys()].join(',') === `VAN-4,VAN-5,${futureVanId}`, 'The live capacity registry must retain legacy aliases, VAN-5, and an opaque future Van in master-data order.');
-requireCondition(dynamicRegistry.get(futureVanId)?.name === 'Future Test Field Van', 'The live capacity registry must preserve the configured name for an opaque future Van.');
 
 const octoberWeek = buildOperationalWeek('2026-10-03');
 const saturday = octoberWeek.find((day) => day.dateKey === '2026-10-03');
@@ -367,9 +283,9 @@ const saturdayRequest = {
   quantity: 1,
   restriction: { halfDay: 'pm' as const },
 };
-const saturdayCandidates = findCandidateSlotsForDay(saturday!, saturdayRequest, [], legacySchedulingSimulatorVans);
+const saturdayCandidates = findCandidateSlotsForDay(saturday!, saturdayRequest, []);
 requireCondition(saturdayCandidates.length > 0 && saturdayCandidates.every((slot) => ['13:30', '14:30', '15:30'].includes(slot.start)), 'Saturday PM requests must use the normal afternoon work starts.');
-requireCondition(findCandidateSlotsForDay(sunday!, saturdayRequest, [], legacySchedulingSimulatorVans).length === 0, 'Sunday must not expose candidate work capacity.');
+requireCondition(findCandidateSlotsForDay(sunday!, saturdayRequest, []).length === 0, 'Sunday must not expose candidate work capacity.');
 const saturdayHalfDayCapacity: LiveOperationalCapacityState = {
   ...baseCapacity,
   halfDaySchedules: [{
@@ -403,23 +319,6 @@ requireCondition(dragCandidates.length > 0, 'A single-van appointment must expos
 requireCondition(dragCandidates.some((slot) => slot.start === '09:30'), 'Past wall-clock time must not hide a physically open manual destination.');
 requireCondition(dragCandidates.some((slot) => slot.start === '10:30' && slot.end === '12:30'), 'A two-hour block must be allowed at 10:30 because lunch is not a hard conflict.');
 requireCondition(dragCandidates.every((slot) => slot.start !== '15:30'), 'A two-hour block must not be offered at 15:30 because it exceeds the operating-day end.');
-
-const futureMoveCapacity: LiveOperationalCapacityState = {
-  ...baseCapacity,
-  vans: buildLiveOperationalVanRegistry([{ id: futureVanId, name: 'Future Test Field Van', active: true, status: '', responsibleStaffId: 'STAFF-TECH-1' }]),
-};
-const futureMoveTargets = liveDragMoveCandidates(operationalDay!, canonical, canonical.assignments, futureMoveCapacity);
-requireCondition(futureMoveTargets.length > 0 && futureMoveTargets.every((slot) => slot.vanId === futureVanId), 'Manual drag targets must come from the loaded registry and include an opaque future Van without a previewVans edit.');
-
-const renamedMoveCapacity: LiveOperationalCapacityState = {
-  ...baseCapacity,
-  vans: buildLiveOperationalVanRegistry([{ id: renamedFutureVanId, name: 'Future Test Field Van', active: true, status: '', responsibleStaffId: 'STAFF-TECH-1' }]),
-};
-const renamedMoveTargets = liveDragMoveCandidates(operationalDay!, canonical, canonical.assignments, renamedMoveCapacity);
-requireCondition(
-  renamedMoveTargets.map((slot) => `${slot.start}|${slot.end}`).join(',') === futureMoveTargets.map((slot) => `${slot.start}|${slot.end}`).join(','),
-  'A consistent opaque Van ID rename must not change the set or order of manual move windows.',
-);
 
 const target = dragCandidates.find((slot) => slot.vanId !== canonical.primaryVanId) ?? dragCandidates[0];
 requireCondition(Boolean(target), 'A valid target must exist for committed projection coverage.');
@@ -534,6 +433,5 @@ const fleetRecords = [
 ];
 requireCondition(resolveCanonicalVanId('v4', fleetRecords) === 'VAN-4', 'Short van aliases must resolve to canonical Van 4.');
 requireCondition(resolveCanonicalVanId('van-1783800405341', fleetRecords) === 'VAN-4', 'Legacy duplicate van documents must resolve to one physical lane.');
-requireCondition(resolveCanonicalVanId(futureVanId, futureVanRecords) === futureVanId, 'Opaque canonical Van IDs must resolve directly from master data.');
 
-console.log('Live scheduling acceptance passed: canonical duration drives elapsed work time while scheduled slot ownership drives capacity; opaque future Van identity, registry-driven drag targets, rename invariance, flexible lunch, per-Van after-hours targeting, full-card booking, full-day Saturdays, half-days, closures and communication ownership remain protected.');
+console.log('Live scheduling acceptance passed: canonical duration drives elapsed work time while scheduled slot ownership drives capacity; flexible lunch, per-Van after-hours targeting, full-card booking, full-day Saturdays, half-days, closures and communication ownership remain protected.');

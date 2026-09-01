@@ -1,5 +1,5 @@
 import type { BookingRequest, CandidateSlot, DispatchJob, HalfDay, SchedulingSettings, VanResource } from './scheduling';
-import { calculateDurationMinutes, findCandidateSlots, getPresetDurationMinutes, getRuntimeSchedulingSettings, minutesToTime, sectorsCompatible, timeToMinutes } from './scheduling';
+import { calculateDurationMinutes, findCandidateSlots, getPresetDurationMinutes, getRuntimeSchedulingSettings, minutesToTime, previewVans, sectorsCompatible, timeToMinutes } from './scheduling';
 
 export type OperationalDay = {
   dateKey: string;
@@ -125,8 +125,7 @@ function conflictsWithSpan(jobs: DispatchJob[], vanId: string, start: string, en
   });
 }
 
-/** @deprecated Acceptance simulator only. Production must use Office Booking Authority. */
-export function findExtendedSameSitePlan(request: BookingRequest, jobs: DispatchJob[], vans: readonly VanResource[], settings: SchedulingSettings = getRuntimeSchedulingSettings()): CandidateSlot[] {
+export function findExtendedSameSitePlan(request: BookingRequest, jobs: DispatchJob[], vans: VanResource[] = previewVans, settings: SchedulingSettings = getRuntimeSchedulingSettings()): CandidateSlot[] {
   if (request.presetId !== 'standard_service') return [];
   if (request.quantity < 4 || request.quantity > settings.maxStandardUnitsSameSiteSingleVan) return [];
   if (!restrictionAllowsMorningStart(request)) return [];
@@ -159,15 +158,13 @@ export function findExtendedSameSitePlan(request: BookingRequest, jobs: Dispatch
     }));
 }
 
-/** @deprecated Acceptance simulator only. Production must use Office Booking Authority. */
-export function findCandidateSlotsV2(request: BookingRequest, jobs: DispatchJob[], vans: readonly VanResource[], settings: SchedulingSettings = getRuntimeSchedulingSettings()) {
+export function findCandidateSlotsV2(request: BookingRequest, jobs: DispatchJob[], vans: VanResource[] = previewVans, settings: SchedulingSettings = getRuntimeSchedulingSettings()) {
   const extended = findExtendedSameSitePlan(request, jobs, vans, settings);
   if (extended.length) return extended;
   return findCandidateSlots(request, jobs, vans, settings);
 }
 
-/** @deprecated Acceptance simulator only. Production must use Office Booking Authority. */
-export function findCandidateSlotsForDay(day: OperationalDay, request: BookingRequest, jobs: DispatchJob[], vans: readonly VanResource[], settings: SchedulingSettings = getRuntimeSchedulingSettings()) {
+export function findCandidateSlotsForDay(day: OperationalDay, request: BookingRequest, jobs: DispatchJob[], vans: VanResource[] = previewVans, settings: SchedulingSettings = getRuntimeSchedulingSettings()) {
   if (!day.isOpen) return [];
   return findCandidateSlotsV2(request, jobs, vans, settings);
 }
@@ -195,7 +192,7 @@ export function findSupportReflowPlansForDay(
   day: OperationalDay,
   request: BookingRequest,
   jobs: DispatchJob[],
-  vans: readonly VanResource[],
+  vans: VanResource[] = previewVans,
   settings: SchedulingSettings = getRuntimeSchedulingSettings(),
 ): SupportReflowPlan[] {
   if (!day.isOpen) return [];

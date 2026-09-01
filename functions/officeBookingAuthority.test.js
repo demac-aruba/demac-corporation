@@ -211,38 +211,9 @@ test("check_availability delegates to canonical Booking Authority for non-drag b
   assert.equal(captured.request.constraints.requestedTime, "09:30");
   assert.equal(captured.actor.source, "office-scheduling");
   assert.equal(captured.actor.id, "user-1");
-  assert.equal(captured.context.requestKey, "office:user-1:office-form-123:client_shortlist:availability");
-  assert.equal(captured.context.availabilityMode, "client_shortlist");
+  assert.equal(captured.context.requestKey, "office:user-1:office-form-123:availability");
   assert.equal(captured.context.excludeAppointmentId, "APT-EXISTING-1");
   assert.equal(captured.context.requiredPrimaryVanId, "VAN-4");
-});
-
-test("check_availability preserves the requested-date grid mode without changing booking authority", async () => {
-  let captured;
-  const authority = createAuthority({
-    async checkAvailability(args) {
-      captured = args;
-      return { success: true, available: true, offer: { id: "OFR-GRID", version: 1 }, options: [{ id: "OPT-GRID" }] };
-    },
-  });
-  const api = createOfficeBookingApi({ db: createDb(), verifyIdToken, bookingAuthority: authority, schedulingProvider: {} });
-  const result = await api.handle(request({
-    action: OFFICE_BOOKING_ACTIONS.CHECK_AVAILABILITY,
-    data: {
-      requestId: "office-grid-123",
-      customerId: "client-1",
-      propertyId: "property-1",
-      presetId: "standard_service",
-      quantity: 1,
-      requestedDate: "2026-08-20",
-      requestedTime: "",
-      requiredVanId: "",
-      availabilityMode: "requested_date_grid",
-    },
-  }));
-  assert.equal(result.status, 200);
-  assert.equal(captured.context.availabilityMode, "requested_date_grid");
-  assert.equal(captured.context.requestKey, "office:user-1:office-grid-123:requested_date_grid:availability");
 });
 
 test("create_appointment uses stable idempotency and returns only real Booking Authority proof", async () => {
