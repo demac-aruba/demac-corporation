@@ -91,6 +91,41 @@ test("primary Work Order snapshots canonical communication recipients and suppor
   assert.equal(orders[1].whatsappNotificationsEnabled, false);
 });
 
+test("backdated Work Orders are audited and suppress every automatic customer notification", () => {
+  const option = {
+    date: "2026-09-01",
+    time: "08:30",
+    endTime: "11:30",
+    durationMode: "per_unit",
+    workItems: [{ id: "service", presetId: "standard_service", label: "Standard Service", quantity: 3, durationMinutes: 180, durationMinutesPerUnit: 60, durationMode: "per_unit" }],
+    assignments: [{ vanId: "VAN-4", quantity: 3, durationMinutes: 180, slots: 3, endTime: "11:30" }],
+  };
+  const [order] = buildWorkOrders({
+    appointment: { appointmentId: "APT-BACKDATED" },
+    option,
+    request: { workLines: [] },
+    customer: { id: "c1", whatsapp: "+2975640000" },
+    property: { id: "p1" },
+    actor: { id: "office-user-1", name: "Office User" },
+    context: {
+      bookingMode: "backdated",
+      backdatingAcknowledged: true,
+      notificationRecipients: [{ recipientType: "client", sourceId: "c1", whatsapp: "+2975640000", sendConfirmation: true, sendReminder: true }],
+    },
+  });
+
+  assert.equal(order.status, "Confirmada");
+  assert.equal(order.bookingMode, "backdated");
+  assert.equal(order.backdated, true);
+  assert.equal(order.workAlreadyPerformed, true);
+  assert.equal(order.backdatedRecordedBy, "office-user-1");
+  assert.equal(order.backdatedRecordedByName, "Office User");
+  assert.match(order.backdatedRecordedAtIso, /T/);
+  assert.equal(order.whatsappNotificationsEnabled, false);
+  assert.deepEqual(order.notificationRecipients, []);
+  assert.match(order.officeNotes, /registrado retrospectivamente/);
+});
+
 test("lifecycle rebuild of an existing Work Order changes only Scheduling-owned projection", () => {
   const option = {
     date: "2098-12-20",

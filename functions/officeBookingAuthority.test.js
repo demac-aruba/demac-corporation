@@ -216,6 +216,60 @@ test("check_availability delegates to canonical Booking Authority for non-drag b
   assert.equal(captured.context.requiredPrimaryVanId, "VAN-4");
 });
 
+test("check_availability forwards only explicitly acknowledged backdating intent and suppresses recipients", async () => {
+  let captured;
+  const authority = createAuthority({
+    async checkAvailability(args) {
+      captured = args;
+      return { success: true, available: true, offer: { id: "OFR-BACKDATED", version: 1 }, options: [{ id: "OPT-BACKDATED" }] };
+    },
+  });
+  const api = createOfficeBookingApi({ db: createDb(), verifyIdToken, bookingAuthority: authority, schedulingProvider: {} });
+  const result = await api.handle(request({
+    action: OFFICE_BOOKING_ACTIONS.CHECK_AVAILABILITY,
+    data: {
+      requestId: "office-backdated-123",
+      customerId: "client-1",
+      propertyId: "property-1",
+      presetId: "standard_service",
+      quantity: 3,
+      requestedDate: "2026-09-01",
+      requestedTime: "08:30",
+      requiredVanId: "VAN-4",
+      bookingMode: "backdated",
+      backdatingAcknowledged: true,
+    },
+  }));
+
+  assert.equal(result.status, 200);
+  assert.equal(captured.context.bookingMode, "backdated");
+  assert.equal(captured.context.backdatingAcknowledged, true);
+  assert.deepEqual(captured.context.notificationRecipients, []);
+  assert.equal(captured.context.requestKey, "office:user-1:office-backdated-123:availability:backdated");
+});
+
+test("office backdating rejects an incomplete operator acknowledgement", async () => {
+  const api = createOfficeBookingApi({ db: createDb(), verifyIdToken, bookingAuthority: createAuthority(), schedulingProvider: {} });
+  const result = await api.handle(request({
+    action: OFFICE_BOOKING_ACTIONS.CHECK_AVAILABILITY,
+    data: {
+      requestId: "office-backdated-invalid",
+      customerId: "client-1",
+      propertyId: "property-1",
+      presetId: "standard_service",
+      quantity: 1,
+      requestedDate: "2026-09-01",
+      requestedTime: "08:30",
+      requiredVanId: "VAN-4",
+      bookingMode: "backdated",
+    },
+  }));
+
+  assert.equal(result.status, 409);
+  assert.equal(result.body.error.code, "invalid_request");
+  assert.equal(result.body.error.details.reason, "backdating-confirmation-required");
+});
+
 test("create_appointment uses stable idempotency and returns only real Booking Authority proof", async () => {
   const calls = [];
   const authority = createAuthority({
@@ -237,6 +291,32 @@ test("create_appointment uses stable idempotency and returns only real Booking A
   assert.equal(calls.length, 2);
   assert.equal(calls[0].idempotencyKey, calls[1].idempotencyKey);
   assert.equal(calls[0].idempotencyKey, "office:user-1:office-form-777:create:OFR-77:OPT-77");
+});
+
+test("create_appointment echoes acknowledged backdating intent for commit-time verification", async () => {
+  let captured;
+  const authority = createAuthority({
+    async createAppointment(args) {
+      captured = args;
+      return { success: true, appointmentId: "APT-BACKDATED-1", workOrderIds: ["WO-BACKDATED-1"] };
+    },
+  });
+  const api = createOfficeBookingApi({ db: createDb(), verifyIdToken, bookingAuthority: authority, schedulingProvider: {} });
+  const result = await api.handle(request({
+    action: OFFICE_BOOKING_ACTIONS.CREATE_APPOINTMENT,
+    data: {
+      requestId: "office-backdated-create",
+      offerId: "OFR-BACKDATED",
+      offerVersion: 1,
+      optionId: "OPT-BACKDATED",
+      bookingMode: "backdated",
+      backdatingAcknowledged: true,
+    },
+  }));
+
+  assert.equal(result.status, 200);
+  assert.equal(captured.context.bookingMode, "backdated");
+  assert.equal(captured.context.backdatingAcknowledged, true);
 });
 
 test("create_appointment refuses success without a verified appointment id", async () => {

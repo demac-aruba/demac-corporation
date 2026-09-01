@@ -9,6 +9,7 @@ const {
   arubaDateParts,
   hashId,
   isHalfDay,
+  normalizeTime,
   normalizeRouteConfig,
   orderBlocksCapacity,
   propertyZone,
@@ -35,7 +36,28 @@ const {
 const { buildWorkOrders: projectCanonicalWorkOrders } = require("./bookingAuthorityWorkOrders");
 const { canonicalizeSchedulingData } = require("./bookingVanIdentity");
 
-const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v13";
+const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v14";
+const BACKDATED_BOOKING_MODE = "backdated";
+
+function backdatingIntent({ context = {}, offer = null } = {}) {
+  const metadata = offer?.metadata || {};
+  const bookingMode = cleanText(context.bookingMode || metadata.bookingMode, 40);
+  const acknowledged = context.backdatingAcknowledged === true
+    || metadata.backdatingAcknowledged === true;
+  return context.channel === "office"
+    && bookingMode === BACKDATED_BOOKING_MODE
+    && acknowledged;
+}
+
+function requestedTargetPassed({ requestedDate, requestedTime, today, currentTime }) {
+  const normalizedTime = normalizeTime(requestedTime);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(requestedDate) || normalizedTime !== requestedTime) return false;
+  return requestedDate < today || (requestedDate === today && normalizedTime <= currentTime);
+}
+
+function backdatingConfirmationRequired({ targetPassed, backdated, operationalMove }) {
+  return targetPassed === true && backdated !== true && operationalMove !== true;
+}
 
 async function loadSchedulingData(db, startDate, endDate) {
   const workOrderQuery = db.collection("workOrders").where("date", ">=", startDate).where("date", "<=", endDate);
@@ -303,12 +325,62 @@ function createSchedulingProvider({ db }) {
       const requestedDate = cleanText(request.constraints?.requestedDate, 20);
       const requestedTime = cleanText(request.constraints?.requestedTime, 20);
       const operationalMove = context.changeKind === "operational_move" && requiredPrimaryVanId && requestedDate && requestedTime;
+      const backdated = backdatingIntent({ context });
+      const targetPassed = requestedTargetPassed({
+        requestedDate,
+        requestedTime,
+        today,
+        currentTime: nowParts.time,
+      });
+      if (backdatingConfirmationRequired({ targetPassed, backdated, operationalMove })) {
+        return {
+          options: [],
+          reason: "backdating-confirmation-required",
+          providerVersion: SCHEDULING_PROVIDER_VERSION,
+          engineVersion: CANONICAL_SCHEDULING_ENGINE_VERSION,
+          metadata: { requestedDate, requestedTime, requiredPrimaryVanId },
+        };
+      }
+      if (backdated && (!requiredPrimaryVanId || !requestedDate || !requestedTime)) {
+        return {
+          options: [],
+          reason: "backdating-target-required",
+          providerVersion: SCHEDULING_PROVIDER_VERSION,
+          engineVersion: CANONICAL_SCHEDULING_ENGINE_VERSION,
+          metadata: {
+            requestedDate,
+            requestedTime,
+            requiredPrimaryVanId,
+            bookingMode: BACKDATED_BOOKING_MODE,
+            backdatingAcknowledged: true,
+          },
+        };
+      }
+      if (backdated && !targetPassed) {
+        return {
+          options: [],
+          reason: "backdating-target-not-past",
+          providerVersion: SCHEDULING_PROVIDER_VERSION,
+          engineVersion: CANONICAL_SCHEDULING_ENGINE_VERSION,
+          metadata: {
+            requestedDate,
+            requestedTime,
+            requiredPrimaryVanId,
+            bookingMode: BACKDATED_BOOKING_MODE,
+            backdatingAcknowledged: true,
+          },
+        };
+      }
       const [loaded, currentSchedule] = operationalMove
         ? await Promise.all([
           loadSchedulingData(db, requestedDate, requestedDate),
           loadAppointmentSchedule(db, context.excludeAppointmentId),
         ])
-        : [await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS)), null];
+        : [await loadSchedulingData(
+          db,
+          backdated ? requestedDate : today,
+          backdated ? requestedDate : addDays(today, MAX_SEARCH_DAYS),
+        ), null];
       const data = dataWithoutAppointment(loaded, context.excludeAppointmentId);
       if (requiredPrimaryVanId && !data.vans.some((van) => van.id === requiredPrimaryVanId)) {
         return {
@@ -362,11 +434,14 @@ function createSchedulingProvider({ db }) {
         currentTime: nowParts.time,
         requiredPrimaryVanId,
         requireRequestedTarget: Boolean(requiredPrimaryVanId),
+        allowBackdating: backdated,
       });
       const options = result.options;
       return {
         options,
-        reason: options.length ? result.reason : (requiredPrimaryVanId ? "required-primary-target-unavailable" : result.reason),
+        reason: options.length
+          ? result.reason
+          : (backdated ? "backdated-target-unavailable" : (requiredPrimaryVanId ? "required-primary-target-unavailable" : result.reason)),
         providerVersion: SCHEDULING_PROVIDER_VERSION,
         engineVersion: CANONICAL_SCHEDULING_ENGINE_VERSION,
         metadata: {
@@ -378,6 +453,13 @@ function createSchedulingProvider({ db }) {
           vansRequired: result.allocations?.length || 0,
           requiredPrimaryVanId: requiredPrimaryVanId || "",
           routePolicy,
+          ...(backdated
+            ? {
+              bookingMode: BACKDATED_BOOKING_MODE,
+              backdatingAcknowledged: true,
+              workAlreadyPerformed: true,
+            }
+            : {}),
         },
       };
     },
@@ -386,6 +468,7 @@ function createSchedulingProvider({ db }) {
       const nowParts = arubaDateParts(now);
       const today = nowParts.date;
       const operationalMove = context.changeKind === "operational_move";
+      const backdated = backdatingIntent({ context, offer });
       const currentSchedule = operationalMove
         ? await loadAppointmentSchedule(db, context.excludeAppointmentId)
         : null;
@@ -393,13 +476,17 @@ function createSchedulingProvider({ db }) {
         if (!operationalMoveDateAllowed({ date: option.date, currentSchedule })) {
           return { available: false, reason: "operational-move-date-mismatch" };
         }
-      } else if (option.date < today || (option.date === today && option.time <= nowParts.time)) {
+      } else if (!backdated && (option.date < today || (option.date === today && option.time <= nowParts.time))) {
         return { available: false, reason: "selected-time-passed" };
       }
 
       const loaded = operationalMove
         ? await loadSchedulingData(db, option.date, option.date)
-        : await loadSchedulingData(db, today, addDays(today, MAX_SEARCH_DAYS));
+        : await loadSchedulingData(
+          db,
+          backdated ? option.date : today,
+          backdated ? option.date : addDays(today, MAX_SEARCH_DAYS),
+        );
       const data = dataWithoutAppointment(loaded, context.excludeAppointmentId);
       const { property } = exactCustomerProperty(data, request);
       const routePolicy = explicitOfficeRoutePolicy({ context, request, option });
@@ -506,7 +593,10 @@ function createSchedulingProvider({ db }) {
 }
 
 module.exports = {
+  BACKDATED_BOOKING_MODE,
   SCHEDULING_PROVIDER_VERSION,
+  backdatingConfirmationRequired,
+  backdatingIntent,
   buildCapacityLocks,
   buildWorkOrders,
   createSchedulingProvider,
@@ -521,4 +611,5 @@ module.exports = {
   operationalRulesFromSettings,
   routeConfigForPolicy,
   routeConfigFromSettings,
+  requestedTargetPassed,
 };

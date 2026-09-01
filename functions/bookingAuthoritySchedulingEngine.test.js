@@ -128,7 +128,93 @@ function supportTimes(result) {
 }
 
 test("canonical scheduling engine has an explicit version", () => {
-  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 8);
+  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 9);
+});
+
+test("same-day past targets remain unavailable unless backdating was explicitly acknowledged", () => {
+  const data = schedulingData();
+  const request = bookingRequest({
+    workLines: [{ id: "w1", presetId: "standard_service", serviceId: "s1", quantity: 3 }],
+    constraints: { requestedDate: "2026-09-01", requestedTime: "08:30" },
+  });
+  const args = {
+    request,
+    property: data.properties[0],
+    data,
+    routeConfig: normalizeRouteConfig(),
+    today: "2026-09-01",
+    currentTime: "12:00",
+    requiredPrimaryVanId: "VAN-1",
+    requireRequestedTarget: true,
+  };
+
+  assert.equal(generateCanonicalOptions(args).options.length, 0);
+  const backdated = generateCanonicalOptions({ ...args, allowBackdating: true });
+  assert.equal(backdated.options.length, 1);
+  assert.equal(backdated.options[0].date, "2026-09-01");
+  assert.equal(backdated.options[0].time, "08:30");
+  assert.equal(backdated.options[0].assignments[0].slots, 3);
+});
+
+test("acknowledged backdating searches the exact prior date and still rejects historical conflicts", () => {
+  const data = schedulingData();
+  const request = bookingRequest({
+    workLines: [{ id: "w1", presetId: "standard_service", serviceId: "s1", quantity: 3 }],
+    constraints: { requestedDate: "2026-08-31", requestedTime: "08:30" },
+  });
+  const args = {
+    request,
+    property: data.properties[0],
+    data,
+    routeConfig: normalizeRouteConfig(),
+    today: "2026-09-01",
+    currentTime: "12:00",
+    requiredPrimaryVanId: "VAN-1",
+    requireRequestedTarget: true,
+    allowBackdating: true,
+  };
+
+  const available = generateCanonicalOptions(args);
+  assert.equal(available.options.length, 1);
+  assert.equal(available.options[0].date, "2026-08-31");
+
+  const conflicting = generateCanonicalOptions({
+    ...args,
+    data: {
+      ...data,
+      workOrders: [{
+        id: "WO-HISTORICAL",
+        date: "2026-08-31",
+        time: "09:30",
+        vanId: "VAN-1",
+        status: "Confirmada",
+        scheduledSlots: 1,
+      }],
+    },
+  });
+  assert.equal(conflicting.options.length, 0);
+});
+
+test("backdating does not override canonical calendar closures", () => {
+  const data = schedulingData();
+  const request = bookingRequest({
+    constraints: { requestedDate: "2026-08-31", requestedTime: "08:30" },
+  });
+  data.businessSettings = data.businessSettings.map((setting) => setting.id === "business-calendar"
+    ? { ...setting, closedWeekdays: [1] }
+    : setting);
+  const result = generateCanonicalOptions({
+    request,
+    property: data.properties[0],
+    data,
+    routeConfig: normalizeRouteConfig(),
+    today: "2026-09-01",
+    currentTime: "12:00",
+    requiredPrimaryVanId: "VAN-1",
+    requireRequestedTarget: true,
+    allowBackdating: true,
+  });
+  assert.equal(result.options.length, 0);
 });
 
 test("single-work helper still rejects mixed work for operations that require one work type", () => {

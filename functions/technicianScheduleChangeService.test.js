@@ -30,6 +30,15 @@ test("same-day work created before the daily 8 AM dispatch is left for the canon
   assert.equal(sameDayScheduleChangeRequired(null, base, { date: "2026-08-27", time: "07:59" }), false);
 });
 
+test("backdated same-day work never sends a misleading new-job technician alert", () => {
+  assert.equal(sameDayScheduleChangeRequired(null, {
+    ...base,
+    bookingMode: "backdated",
+    backdated: true,
+    workAlreadyPerformed: true,
+  }, { date: "2026-08-27", time: "12:00" }), false);
+});
+
 test("future work never generates a same-day van alert", () => {
   assert.equal(sameDayScheduleChangeRequired(null, { ...base, date: "2026-08-28" }, { date: "2026-08-27", time: "10:15" }), false);
 });

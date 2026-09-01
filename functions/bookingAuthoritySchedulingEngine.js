@@ -22,7 +22,7 @@ const {
 const { candidateAvailability } = require("./bookingCapacityAvailability");
 const { resolveCatalogService } = require("./serviceCatalog");
 
-const CANONICAL_SCHEDULING_ENGINE_VERSION = 8;
+const CANONICAL_SCHEDULING_ENGINE_VERSION = 9;
 const CLIENT_OPTION_LIMIT = 2;
 const ASSIGNMENT_COMBINATION_LIMIT = 8;
 const OFFICE_TARGET_OPTION_LIMIT = ASSIGNMENT_COMBINATION_LIMIT;
@@ -594,6 +594,7 @@ function generateCanonicalOptions({
   currentTime,
   requiredPrimaryVanId = "",
   requireRequestedTarget = false,
+  allowBackdating = false,
 }) {
   const scope = resolveWorkScope(request, data);
   const preset = scope.singlePreset || {
@@ -643,8 +644,11 @@ function generateCanonicalOptions({
   const options = [];
   const workSignature = scope.workItems.map((item) => `${item.presetId}:${item.serviceId}:${item.quantity}:${item.durationMinutes}`).join("|");
 
-  for (let dayOffset = 0; dayOffset < MAX_SEARCH_DAYS; dayOffset += 1) {
-    const date = addDays(today, dayOffset);
+  const candidateDates = allowBackdating && requestedDate
+    ? [requestedDate]
+    : Array.from({ length: MAX_SEARCH_DAYS }, (_, dayOffset) => addDays(today, dayOffset));
+
+  for (const [dayOffset, date] of candidateDates.entries()) {
     if (requireRequestedTarget && requestedDate && date !== requestedDate) continue;
     if (dateClosed(date, calendarSettings, data.calendarClosures)) continue;
     const dateAssignments = data.vans.map((van) => ({
@@ -662,7 +666,7 @@ function generateCanonicalOptions({
 
     for (const primaryTime of primaryCandidateTimes) {
       if (!primaryTime) continue;
-      if (date === today && primaryTime <= currentTime) continue;
+      if (!allowBackdating && date === today && primaryTime <= currentTime) continue;
       if (!timeAllowed(primaryTime, timeConstraint)) continue;
 
       const combinations = assignmentCombinations({

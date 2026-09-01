@@ -32,7 +32,8 @@ const {
   notificationQueueIds: canonicalNotificationQueueIds,
 } = require("./appointmentNotificationService");
 
-const OFFICE_BOOKING_API_VERSION = 17;
+const OFFICE_BOOKING_API_VERSION = 18;
+const BACKDATED_BOOKING_MODE = "backdated";
 const OFFICE_BOOKING_ROLES = Object.freeze([
   "admin",
   "office",
@@ -108,6 +109,20 @@ function lifecycleChangeKind(value) {
   const normalized = cleanText(value, 80);
   if (normalized === "operational_move" || normalized === "details_edited") return normalized;
   return "customer_reschedule";
+}
+
+function bookingIntentFromOffice(data = {}) {
+  const bookingMode = cleanText(data.bookingMode, 40);
+  const backdatingAcknowledged = data.backdatingAcknowledged === true;
+  if (!bookingMode && !backdatingAcknowledged) return {};
+  if (bookingMode !== BACKDATED_BOOKING_MODE || !backdatingAcknowledged) {
+    throw new BookingAuthorityError(
+      BOOKING_ERROR_CODES.INVALID_REQUEST,
+      "Backdated booking requires explicit operator confirmation.",
+      { reason: "backdating-confirmation-required" },
+    );
+  }
+  return { bookingMode: BACKDATED_BOOKING_MODE, backdatingAcknowledged: true };
 }
 
 function bookingRequestFromOffice(data = {}) {
@@ -1118,25 +1133,30 @@ function createOfficeBookingApi({
     if (action === OFFICE_BOOKING_ACTIONS.CHECK_AVAILABILITY) {
       const requestId = officeRequestId(data.requestId);
       const request = bookingRequestFromOffice(data);
+      const bookingIntent = bookingIntentFromOffice(data);
+      const backdated = bookingIntent.bookingMode === BACKDATED_BOOKING_MODE;
       const excludeAppointmentId = cleanText(data.appointmentId, 180);
       const requiredPrimaryVanId = cleanText(data.requiredVanId, 120);
       const changeKind = lifecycleChangeKind(data.changeKind);
-      const notificationRecipients = await resolveAppointmentRecipients(db, {
-        clientId: request.customerId,
-        propertyId: request.propertyId,
-        selections: data.recipientSelections,
-      });
+      const notificationRecipients = backdated
+        ? []
+        : await resolveAppointmentRecipients(db, {
+          clientId: request.customerId,
+          propertyId: request.propertyId,
+          selections: data.recipientSelections,
+        });
       return authority.checkAvailability({
         request,
         actor,
         context: {
           channel: "office",
-          requestKey: `office:${identity.uid}:${requestId}:availability`,
+          requestKey: `office:${identity.uid}:${requestId}:availability${backdated ? ":backdated" : ""}`,
           officeRequestId: requestId,
           excludeAppointmentId,
           requiredPrimaryVanId,
           changeKind,
           notificationRecipients,
+          ...bookingIntent,
         },
       });
     }
@@ -1146,6 +1166,7 @@ function createOfficeBookingApi({
       const optionId = cleanText(data.optionId, 180);
       const offerVersion = positiveInteger(data.offerVersion);
       const temporaryHold = action === OFFICE_BOOKING_ACTIONS.CREATE_TEMPORARY_HOLD;
+      const bookingIntent = bookingIntentFromOffice(data);
       const result = await authority.createAppointment({
         offerId,
         offerVersion,
@@ -1153,7 +1174,7 @@ function createOfficeBookingApi({
         idempotencyKey: `office:${identity.uid}:${requestId}:${temporaryHold ? "hold" : "create"}:${offerId}:${optionId}`,
         actor,
         createMode: temporaryHold ? BOOKING_CREATE_MODES.TEMPORARY_HOLD : BOOKING_CREATE_MODES.CONFIRMED,
-        context: { channel: "office", officeRequestId: requestId },
+        context: { channel: "office", officeRequestId: requestId, ...bookingIntent },
       });
       if (!result?.success || !cleanText(result.appointmentId, 180)) {
         throw new BookingAuthorityError(
@@ -1301,6 +1322,7 @@ exports.officeBookingAuthority = onRequest(
 module.exports.OFFICE_BOOKING_API_VERSION = OFFICE_BOOKING_API_VERSION;
 module.exports.OFFICE_BOOKING_ACTIONS = OFFICE_BOOKING_ACTIONS;
 module.exports.OFFICE_BOOKING_ROLES = OFFICE_BOOKING_ROLES;
+module.exports.bookingIntentFromOffice = bookingIntentFromOffice;
 module.exports.bookingRequestFromOffice = bookingRequestFromOffice;
 module.exports.buildOfficeProperty = buildOfficeProperty;
 module.exports.createOfficeBookingApi = createOfficeBookingApi;

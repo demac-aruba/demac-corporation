@@ -23,10 +23,20 @@ import {
   projectCommittedLiveMove,
 } from '../lib/live-scheduling-move';
 import { buildOperationalWeek, findCandidateSlotsForDay, jobOwnsCapacityStart } from '../lib/scheduling-capacity';
+import { arubaBookingClock, isBackdatedAppointmentTarget } from '../lib/scheduling-backdating';
 
 function requireCondition(condition: unknown, message: string) {
   if (!condition) throw new Error(`Live scheduling acceptance failed: ${message}`);
 }
+
+const arubaNoon = new Date('2026-09-01T16:11:00.000Z');
+requireCondition(arubaBookingClock(arubaNoon).dateKey === '2026-09-01', 'Backdating checks must use the Aruba calendar date.');
+requireCondition(arubaBookingClock(arubaNoon).time === '12:11', 'Backdating checks must use the Aruba local clock.');
+requireCondition(isBackdatedAppointmentTarget('2026-08-31', '15:30', arubaNoon), 'A prior-day appointment must require backdating acknowledgement.');
+requireCondition(isBackdatedAppointmentTarget('2026-09-01', '08:30', arubaNoon), 'A past same-day appointment must require backdating acknowledgement.');
+requireCondition(isBackdatedAppointmentTarget('2026-09-01', '12:11', arubaNoon), 'The current minute must remain protected by backdating acknowledgement.');
+requireCondition(!isBackdatedAppointmentTarget('2026-09-01', '12:12', arubaNoon), 'A future same-day appointment must keep the normal booking flow.');
+requireCondition(!isBackdatedAppointmentTarget('2026-09-02', '08:30', arubaNoon), 'A future-day appointment must keep the normal booking flow.');
 
 const canonicalWorkOrders = [
   {

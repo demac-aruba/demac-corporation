@@ -29,6 +29,8 @@ export type OfficeBookingWorkLine = {
   technicianInstructions?: string;
 };
 
+export type OfficeBookingMode = 'backdated';
+
 export type OfficeBookingWorkItem = {
   id: string;
   presetId: string;
@@ -456,6 +458,8 @@ export async function checkOfficeCreateAvailability(input: {
   recipientSelections?: AppointmentRecipientSelection[];
   notes?: string;
   changeKind?: OfficeLifecycleChangeKind;
+  bookingMode?: OfficeBookingMode;
+  backdatingAcknowledged?: boolean;
 }) {
   return callOfficeBookingAuthority<OfficeAvailabilityResult>('check_availability', input, 12_000);
 }
@@ -465,6 +469,8 @@ export async function confirmOfficeAppointment(input: {
   offerId: string;
   offerVersion: number;
   optionId: string;
+  bookingMode?: OfficeBookingMode;
+  backdatingAcknowledged?: boolean;
 }) {
   const result = await callOfficeBookingAuthority<OfficeCreateAppointmentResult>('create_appointment', input, 12_000);
   if (!result.success || !result.appointmentId) {

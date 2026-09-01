@@ -108,17 +108,24 @@ function temporaryHoldProjection(context, appointment) {
   return context?.appointmentState === "temporary_hold" || cleanText(appointment?.status, 40) === "temporary_hold";
 }
 
-function buildWorkOrders({ appointment, option, request, customer, property, context = {}, now = new Date() }) {
+function backdatedProjection(context, appointment) {
+  return (context?.bookingMode === "backdated" && context?.backdatingAcknowledged === true)
+    || appointment?.backdated === true
+    || appointment?.bookingMode === "backdated";
+}
+
+function buildWorkOrders({ appointment, option, request, customer, property, actor = {}, context = {}, now = new Date() }) {
   // Lifecycle changes update Scheduling-owned fields on existing Work Orders. They
   // must not replace communication policy, payment state, or creation audit fields.
   // Newly created support Work Orders still receive their normal initialization.
   const lifecycleRebuild = context.reschedule === true || context.detailsEdit === true;
   const temporaryHold = temporaryHoldProjection(context, appointment);
+  const backdated = backdatedProjection(context, appointment);
   const existingWorkOrderIds = new Set([
     ...(Array.isArray(appointment?.workOrderIds) ? appointment.workOrderIds : []),
     cleanText(appointment?.workOrderId, 180),
   ].filter(Boolean));
-  const notificationRecipients = lifecycleRebuild ? [] : normalizedRecipientSnapshots(context, customer);
+  const notificationRecipients = lifecycleRebuild || backdated ? [] : normalizedRecipientSnapshots(context, customer);
   const whatsappEnabled = notificationRecipients.some((recipient) =>
     (recipient.sendConfirmation === true || recipient.sendReminder === true)
     && cleanText(recipient.whatsapp || recipient.phone, 80));
@@ -161,6 +168,11 @@ function buildWorkOrders({ appointment, option, request, customer, property, con
           whatsappNotificationsEnabled: false,
           notificationRecipients: [],
         }
+        : backdated
+          ? {
+            whatsappNotificationsEnabled: false,
+            notificationRecipients: [],
+          }
         : {
           whatsappNotificationsEnabled: isPrimary && whatsappEnabled,
           notificationRecipients: isPrimary ? notificationRecipients : [],
@@ -196,9 +208,13 @@ function buildWorkOrders({ appointment, option, request, customer, property, con
         ? (isPrimary
           ? `Reserva temporal creada por DEMAC Booking Authority${supportCount ? ` con ${supportCount} van(es) de apoyo` : ""}. No enviar comunicación al cliente hasta confirmar.`
           : "Asignación interna de apoyo reservada temporalmente. No enviar comunicación al cliente.")
-        : isPrimary
-          ? `Cita creada por DEMAC Booking Authority${supportCount ? ` con ${supportCount} van(es) de apoyo` : ""}.`
-          : "Asignación interna de van de apoyo. No enviar confirmación ni recordatorio duplicado.",
+        : backdated
+          ? (isPrimary
+            ? `Trabajo ya realizado registrado retrospectivamente por DEMAC Booking Authority${supportCount ? ` con ${supportCount} van(es) de apoyo` : ""}. No enviar confirmación ni recordatorio automático.`
+            : "Asignación retrospectiva interna de van de apoyo. No enviar notificaciones automáticas.")
+          : isPrimary
+            ? `Cita creada por DEMAC Booking Authority${supportCount ? ` con ${supportCount} van(es) de apoyo` : ""}.`
+            : "Asignación interna de van de apoyo. No enviar confirmación ni recordatorio duplicado.",
       appointmentWorkType: workType,
       appointmentPresetId: workType,
       appointmentWorkLabel: workLabel,
@@ -214,6 +230,17 @@ function buildWorkOrders({ appointment, option, request, customer, property, con
       schedulingMode: durationMode === "per_unit" ? "perUnit" : "fixed",
       airConditionerCount: assignment.quantity,
       scheduledSlots: assignment.slots,
+      ...(backdated
+        ? {
+          bookingMode: "backdated",
+          backdated: true,
+          backdatingAcknowledged: true,
+          workAlreadyPerformed: true,
+          backdatedRecordedAtIso: now.toISOString(),
+          backdatedRecordedBy: cleanText(actor.id || actor.userId, 160),
+          backdatedRecordedByName: cleanText(actor.name || actor.displayName, 160),
+        }
+        : {}),
       ...communicationSnapshot,
       ...initializationSnapshot,
       updatedAt: now.toISOString(),
@@ -223,6 +250,7 @@ function buildWorkOrders({ appointment, option, request, customer, property, con
 
 module.exports = {
   automaticCustomerFacingDescription,
+  backdatedProjection,
   buildWorkOrders,
   notificationRecipient,
   normalizedRecipientSnapshots,

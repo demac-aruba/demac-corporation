@@ -188,6 +188,39 @@ function notificationRecipientsFrom(value) {
   return Array.isArray(value) ? value.filter((item) => item && typeof item === "object").map((item) => compactObject({ ...item })) : [];
 }
 
+function backdatedOfferMetadata(offer) {
+  const metadata = offer?.metadata || {};
+  return metadata.bookingMode === "backdated" && metadata.backdatingAcknowledged === true
+    ? {
+      bookingMode: "backdated",
+      backdatingAcknowledged: true,
+      workAlreadyPerformed: true,
+    }
+    : null;
+}
+
+function assertBackdatedCreateIntent({ offer, context = {}, createMode }) {
+  const offerIsBackdated = Boolean(backdatedOfferMetadata(offer));
+  const contextIsBackdated = context.channel === "office"
+    && context.bookingMode === "backdated"
+    && context.backdatingAcknowledged === true;
+  if (offerIsBackdated !== contextIsBackdated) {
+    throw new BookingAuthorityError(
+      BOOKING_ERROR_CODES.INVALID_REQUEST,
+      "The confirmed backdating intent does not match the selected booking offer.",
+      { reason: "backdating-intent-mismatch" },
+    );
+  }
+  if (offerIsBackdated && normalizeCreateMode(createMode) === BOOKING_CREATE_MODES.TEMPORARY_HOLD) {
+    throw new BookingAuthorityError(
+      BOOKING_ERROR_CODES.INVALID_REQUEST,
+      "Backdated work must be recorded as a confirmed appointment, not a temporary hold.",
+      { reason: "backdating-temporary-hold-not-allowed" },
+    );
+  }
+  return offerIsBackdated;
+}
+
 function createBookingAuthority({
   db,
   availabilityProvider,
@@ -340,6 +373,7 @@ function createBookingAuthority({
     const initialOfferSnapshot = await offerRef.get();
     const initialOffer = initialOfferSnapshot.exists ? { id: initialOfferSnapshot.id, ...initialOfferSnapshot.data() } : null;
     const initiallySelected = validateOfferSelection({ offer: initialOffer, offerVersion, optionId, now });
+    assertBackdatedCreateIntent({ offer: initialOffer, context, createMode: normalizedCreateMode });
 
     let revalidation;
     try {
@@ -427,6 +461,8 @@ function createBookingAuthority({
 
       const currentOffer = currentOfferSnapshot.exists ? { id: currentOfferSnapshot.id, ...currentOfferSnapshot.data() } : null;
       validateOfferSelection({ offer: currentOffer, offerVersion, optionId, now });
+      assertBackdatedCreateIntent({ offer: currentOffer, context, createMode: normalizedCreateMode });
+      const backdatedMetadata = backdatedOfferMetadata(currentOffer);
       const request = normalizeBookingRequest(currentOffer.request);
       const customerRef = db.collection(collections.clients).doc(request.customerId);
       const propertyRef = db.collection(collections.properties).doc(request.propertyId);
@@ -487,7 +523,9 @@ function createBookingAuthority({
         now,
         optionOverride: refreshedOption,
       });
-      const notificationRecipients = notificationRecipientsFrom(currentOffer?.metadata?.notificationRecipients);
+      const notificationRecipients = backdatedMetadata
+        ? []
+        : notificationRecipientsFrom(currentOffer?.metadata?.notificationRecipients);
       let workOrders;
       try {
         const buildWorkOrders = requireProviderMethod(availabilityProvider, "buildWorkOrders");
@@ -498,7 +536,12 @@ function createBookingAuthority({
           customer,
           property,
           actor,
-          context: { ...context, notificationRecipients, appointmentState: normalizedCreateMode },
+          context: {
+            ...context,
+            notificationRecipients,
+            appointmentState: normalizedCreateMode,
+            ...(backdatedMetadata || {}),
+          },
           now,
         }), identity.appointmentId);
       } catch (error) {
@@ -512,6 +555,13 @@ function createBookingAuthority({
         notificationRecipients,
         workOrderIds,
         capacityLockIds: locks.map((lock) => lock.id),
+        ...(backdatedMetadata
+          ? {
+            ...backdatedMetadata,
+            backdated: true,
+            backdatedRecordedAtIso: now.toISOString(),
+          }
+          : {}),
         ...(temporaryHold
           ? {
             heldAtIso: now.toISOString(),
@@ -596,7 +646,9 @@ function createBookingAuthority({
 module.exports = {
   BOOKING_COLLECTIONS,
   BOOKING_CREATE_MODES,
+  assertBackdatedCreateIntent,
   assertCustomerPropertyRelationship,
+  backdatedOfferMetadata,
   canonicalOfferIdentity,
   compactObject,
   createBookingAuthority,

@@ -19,6 +19,8 @@ engineering index; it does not replace that registry.
 - `OPS-VAN-PROFILE-*`: canonical Van ownership of regular crew, date-scoped override separation,
   optional third-helper semantics, Van profile lifecycle, and vehicle maintenance/repair history.
 - `OPS-ROUTE-*`: route anchors and calculated availability precede customer preference.
+- `OPS-SCHED-*`: historical work registration requires explicit operator acknowledgment,
+  canonical conflict validation, audit markers and silent automatic communications.
 - `OPS-STAFF-SCHEDULE-*`: employee schedule authority, employment-date boundaries, Van-aware
   technical schedule precedence, effective schedule versions, exact worked-hour windows, and Sunday closure.
 - `OPS-STAFF-ATTENDANCE-*`: 27–26 payroll-period membership, schedule-derived overtime,

@@ -39,6 +39,7 @@ import {
   suggestArubaAddresses,
   type ArubaAddressEntry,
 } from '../../lib/aruba-address-directory';
+import { isBackdatedAppointmentTarget } from '../../lib/scheduling-backdating';
 import { PropertyCommunicationPanel, PropertyContactDraftEditor } from './property-communication-editor';
 import styles from './live-appointment-create-drawer.module.css';
 
@@ -259,6 +260,8 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const lastAutoDescriptionRef = useRef('');
   const validationEpochRef = useRef(0);
   const validationSignatureRef = useRef('');
+  const backdatingPromptedRef = useRef(false);
+  const [backdatingAcknowledged, setBackdatingAcknowledged] = useState(false);
   const [technicianInstructions, setTechnicianInstructions] = useState('');
   const [customerEditorOpen, setCustomerEditorOpen] = useState(false);
   const [propertyEditorOpen, setPropertyEditorOpen] = useState(false);
@@ -280,6 +283,30 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     start: requestedStart,
     end: target.end,
   }), [requestedStart, target.dateKey, target.end, target.vanId, target.vanName]);
+  const backdatedTarget = useMemo(
+    () => !isAfterHours && isBackdatedAppointmentTarget(requestTarget.dateKey, requestTarget.start),
+    [isAfterHours, requestTarget.dateKey, requestTarget.start],
+  );
+
+  useEffect(() => {
+    if (!backdatedTarget) {
+      backdatingPromptedRef.current = false;
+      setBackdatingAcknowledged(false);
+      return;
+    }
+    if (backdatingPromptedRef.current) return;
+    backdatingPromptedRef.current = true;
+    const approved = window.confirm([
+      'Backdated appointment',
+      'This appointment date or start time is in the past. You are recording work after it happened.',
+      'Automatic confirmation and reminder messages will not be sent. Are you sure you want to continue?',
+    ].join('\n\n'));
+    if (!approved) {
+      onClose();
+      return;
+    }
+    setBackdatingAcknowledged(true);
+  }, [backdatedTarget, onClose]);
 
   const refreshReferences = async () => {
     const next = await loadBookingReferenceData();
@@ -376,8 +403,14 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   }, 0);
   const totalQuantity = workLines.reduce((sum, line) => sum + line.quantity, 0);
   const workSignature = workLines.map((line) => `${line.presetId}:${line.quantity}:${line.manualDurationMinutes ?? ''}`).join('|');
-  const recipientSignature = recipientSelections.map((item) => `${item.recipientType}:${item.sourceId}:${Number(item.sendConfirmation)}:${Number(item.sendReminder)}`).sort().join('|');
-  const signature = [customerId, propertyId, recipientSignature, workSignature, description.trim(), technicianInstructions.trim(), requestTarget.dateKey, requestTarget.vanId, requestTarget.start, mode].join('|');
+  const effectiveRecipientSelections = useMemo(
+    () => backdatedTarget
+      ? recipientSelections.map((item) => ({ ...item, sendConfirmation: false, sendReminder: false }))
+      : recipientSelections,
+    [backdatedTarget, recipientSelections],
+  );
+  const recipientSignature = effectiveRecipientSelections.map((item) => `${item.recipientType}:${item.sourceId}:${Number(item.sendConfirmation)}:${Number(item.sendReminder)}`).sort().join('|');
+  const signature = [customerId, propertyId, recipientSignature, workSignature, description.trim(), technicianInstructions.trim(), requestTarget.dateKey, requestTarget.vanId, requestTarget.start, mode, backdatedTarget ? `backdated:${Number(backdatingAcknowledged)}` : 'current'].join('|');
   validationSignatureRef.current = signature;
   const activeValidation = validated?.signature === signature ? validated : null;
   const selectedValidatedOption = activeValidation?.options.find((option) => option.id === activeValidation.selectedOptionId)
@@ -509,6 +542,10 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
 
   const validateTarget = useCallback(async (automatic = false) => {
     if (isAfterHours) return;
+    if (backdatedTarget && !backdatingAcknowledged) {
+      if (!automatic) setAuthorityError('Confirm the backdated appointment warning before validating historical capacity.');
+      return;
+    }
     if (!selectedCustomer) {
       if (!automatic) setAuthorityError('Select or create a customer first.');
       return;
@@ -539,8 +576,9 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         requiredVanId: requestTarget.vanId,
         customerFacingDescription: description.trim(),
         technicianInstructions: technicianInstructions.trim(),
-        recipientSelections,
-        notes: `Created from LIVE Scheduling slot ${requestTarget.vanId} ${requestTarget.dateKey} ${requestTarget.start}.`,
+        recipientSelections: effectiveRecipientSelections,
+        notes: `${backdatedTarget ? 'Backdated work recorded' : 'Created'} from LIVE Scheduling slot ${requestTarget.vanId} ${requestTarget.dateKey} ${requestTarget.start}.`,
+        ...(backdatedTarget ? { bookingMode: 'backdated' as const, backdatingAcknowledged: true } : {}),
       });
       if (requestEpoch !== validationEpochRef.current || validationSignatureRef.current !== validationSignature) return;
       const exactOptions = result.options.filter((option) => optionMatchesTarget(option, requestTarget));
@@ -563,16 +601,20 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     } finally {
       if (requestEpoch === validationEpochRef.current) setChecking(false);
     }
-  }, [description, isAfterHours, recipientSelections, requestTarget, selectedCustomer, selectedProperty, signature, technicianInstructions, workRequestLines, workValid]);
+  }, [backdatedTarget, backdatingAcknowledged, description, effectiveRecipientSelections, isAfterHours, requestTarget, selectedCustomer, selectedProperty, signature, technicianInstructions, workRequestLines, workValid]);
 
   useEffect(() => {
-    if (isAfterHours || loading || masterSaving || saving || holding || !selectedCustomer || !selectedProperty || !workValid) return;
+    if (isAfterHours || (backdatedTarget && !backdatingAcknowledged) || loading || masterSaving || saving || holding || !selectedCustomer || !selectedProperty || !workValid) return;
     const timer = window.setTimeout(() => { void validateTarget(true); }, 350);
     return () => window.clearTimeout(timer);
-  }, [holding, isAfterHours, loading, masterSaving, saving, selectedCustomer, selectedProperty, validateTarget, workValid]);
+  }, [backdatedTarget, backdatingAcknowledged, holding, isAfterHours, loading, masterSaving, saving, selectedCustomer, selectedProperty, validateTarget, workValid]);
 
   const confirmBooking = async () => {
     if (!selectedCustomer || !selectedProperty || !selectedPresets.length || !workValid || saving || holding) return;
+    if (backdatedTarget && !backdatingAcknowledged) {
+      setAuthorityError('Confirm the backdated appointment warning before saving this historical appointment.');
+      return;
+    }
     if (isAfterHours) {
       if (!validAfterHoursStart(requestTarget.start)) {
         setAuthorityError('After-hours work must start at 5:00 PM or later.');
@@ -633,6 +675,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         offerId,
         offerVersion,
         optionId: option.id,
+        ...(backdatedTarget ? { bookingMode: 'backdated' as const, backdatingAcknowledged: true } : {}),
       });
       onCreated({
         appointmentId: result.appointmentId,
@@ -710,6 +753,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           {loadError ? <div className={styles.errorBox}>{loadError}</div> : null}
           {authorityError ? <div className={styles.errorBox}>{authorityError}</div> : null}
           {masterError ? <div className={styles.errorBox}>{masterError}</div> : null}
+          {backdatedTarget && backdatingAcknowledged ? <div className={styles.authorityIdle} style={{ marginBottom: 10, border: '1px solid var(--warning, #f59e0b)', borderRadius: 10, background: 'var(--surface)' }} role="status"><strong style={{ display: 'block', marginBottom: 3, color: 'var(--warning, #b45309)' }}>BACKDATED APPOINTMENT</strong><span>This records work after it happened. Historical Van capacity will still be checked, and no automatic confirmation or reminder will be sent.</span></div> : null}
 
           <section className={styles.section}>
             <header><div><span>1</span><strong>Customer</strong><small>Search canonical CRM records or register a new customer.</small></div></header>
@@ -768,7 +812,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                   </div>
                   {!customerProperties.length ? <div className={styles.emptyResult}>This customer has no active service property yet.</div> : null}
                   <button type="button" className={styles.inlineAction} onClick={openPropertyEditor}>＋ Add property</button>
-                  {selectedProperty ? <PropertyCommunicationPanel
+                  {selectedProperty && !backdatedTarget ? <PropertyCommunicationPanel
                     client={selectedCustomer}
                     propertyId={selectedProperty.id}
                     contacts={references.contacts}
@@ -776,7 +820,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                     selections={recipientSelections}
                     onSelectionsChange={(next) => { setRecipientSelections(next); resetValidation(); }}
                     onRefresh={refreshReferences}
-                  /> : null}
+                  /> : selectedProperty ? <div className={styles.authorityIdle} style={{ marginTop: 10, border: '1px solid var(--warning, #f59e0b)', borderRadius: 10 }}><strong style={{ display: 'block', color: 'var(--warning, #b45309)' }}>Customer messages are off for this backdated appointment.</strong><span>Confirmation and reminder choices are intentionally suppressed because the work already happened.</span></div> : null}
                 </>
               ) : <div className={styles.emptyResult}>Select a customer to load their properties.</div>}
 
@@ -858,7 +902,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
             </section>
           ) : (
           <section className={styles.authoritySection}>
-            <div className={styles.authorityHeading}><div><span>4</span><strong>Live capacity validation</strong><small>{requestTarget.vanName} stays the primary/responsible van. Booking Authority validates automatically as the complete workload changes; final transaction validation still runs on confirm or hold.</small></div><button type="button" className={styles.validateButton} disabled={busy || checking || !selectedCustomer || !selectedProperty || !workValid} onClick={() => void validateTarget(false)}>{checking ? 'Checking…' : 'Recheck now'}</button></div>
+            <div className={styles.authorityHeading}><div><span>4</span><strong>{backdatedTarget ? 'Historical capacity validation' : 'Live capacity validation'}</strong><small>{requestTarget.vanName} stays the primary/responsible van. Booking Authority validates automatically as the complete workload changes; final transaction validation still runs on confirm or hold.</small></div><button type="button" className={styles.validateButton} disabled={busy || checking || !selectedCustomer || !selectedProperty || !workValid || (backdatedTarget && !backdatingAcknowledged)} onClick={() => void validateTarget(false)}>{checking ? 'Checking…' : backdatedTarget ? 'Recheck history' : 'Recheck now'}</button></div>
 
             {activeValidation && selectedValidatedOption ? (
               <div className={styles.validationSuccess}>
@@ -929,10 +973,10 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           <div><span>{isAfterHours ? 'CANONICAL EXTRA-WORK PATH' : 'CANONICAL WRITE PATH'}</span><strong>{isAfterHours ? 'Booking Authority → Appointment + open-ended Work Order + Van guard' : 'Booking Authority → Appointment + Work Order + Capacity Locks'}</strong></div>
           <div>
             <button type="button" className={styles.secondaryButton} disabled={busy} onClick={onClose}>Cancel</button>
-            {!isAfterHours ? <button type="button" className={styles.secondaryButton} style={{ color: 'var(--warning, #b45309)', borderColor: 'var(--warning, #f59e0b)' }} disabled={!selectedValidatedOption || busy || checking} onClick={() => void holdBooking()}>{holding ? 'Holding…' : 'Temporary hold'}</button> : null}
+            {!isAfterHours && !backdatedTarget ? <button type="button" className={styles.secondaryButton} style={{ color: 'var(--warning, #b45309)', borderColor: 'var(--warning, #f59e0b)' }} disabled={!selectedValidatedOption || busy || checking} onClick={() => void holdBooking()}>{holding ? 'Holding…' : 'Temporary hold'}</button> : null}
             <button type="button" className={styles.confirmButton} disabled={isAfterHours
               ? busy || !selectedCustomer || !selectedProperty || !workValid || !validAfterHoursStart(requestTarget.start)
-              : !selectedValidatedOption || busy || checking} onClick={() => void confirmBooking()}>{saving ? 'Confirming…' : isAfterHours ? `Create for ${requestTarget.vanName}` : 'Confirm appointment'}</button>
+              : !selectedValidatedOption || busy || checking || (backdatedTarget && !backdatingAcknowledged)} onClick={() => void confirmBooking()}>{saving ? 'Confirming…' : isAfterHours ? `Create for ${requestTarget.vanName}` : backdatedTarget ? 'Save backdated appointment' : 'Confirm appointment'}</button>
           </div>
         </footer>
       </aside>

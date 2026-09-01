@@ -3,7 +3,10 @@ const assert = require("node:assert/strict");
 const { BOOKING_ERROR_CODES } = require("./bookingAuthorityCore");
 const { CANONICAL_SCHEDULING_ENGINE_VERSION } = require("./bookingAuthoritySchedulingEngine");
 const {
+  BACKDATED_BOOKING_MODE,
   SCHEDULING_PROVIDER_VERSION,
+  backdatingConfirmationRequired,
+  backdatingIntent,
   buildCapacityLocks,
   buildWorkOrders,
   exactCustomerProperty,
@@ -12,6 +15,7 @@ const {
   operationalMoveResult,
   routeConfigForPolicy,
   routeConfigFromSettings,
+  requestedTargetPassed,
 } = require("./bookingAuthoritySchedulingProvider");
 
 function request() {
@@ -81,12 +85,41 @@ function operationalData(overrides = {}) {
 
 const currentSchedule = { date: "2098-12-20", time: "08:30" };
 
-test("provider exposes canonical provider v13", () => {
-  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v13");
+test("provider exposes canonical provider v14", () => {
+  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v14");
 });
 
 test("canonical scheduling engine is versioned independently", () => {
-  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 8);
+  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 9);
+});
+
+test("backdating intent requires the authenticated office channel and explicit acknowledgement", () => {
+  assert.equal(BACKDATED_BOOKING_MODE, "backdated");
+  assert.equal(backdatingIntent({
+    context: { channel: "office", bookingMode: "backdated", backdatingAcknowledged: true },
+  }), true);
+  assert.equal(backdatingIntent({
+    context: { channel: "office", bookingMode: "backdated", backdatingAcknowledged: false },
+  }), false);
+  assert.equal(backdatingIntent({
+    context: { channel: "customer_agent", bookingMode: "backdated", backdatingAcknowledged: true },
+  }), false);
+  assert.equal(backdatingIntent({
+    context: { channel: "office" },
+    offer: { metadata: { bookingMode: "backdated", backdatingAcknowledged: true } },
+  }), true);
+});
+
+test("past-target detection covers earlier today and prior dates without affecting future targets", () => {
+  assert.equal(requestedTargetPassed({ requestedDate: "2026-09-01", requestedTime: "08:30", today: "2026-09-01", currentTime: "12:00" }), true);
+  assert.equal(requestedTargetPassed({ requestedDate: "2026-08-31", requestedTime: "15:30", today: "2026-09-01", currentTime: "12:00" }), true);
+  assert.equal(requestedTargetPassed({ requestedDate: "2026-09-01", requestedTime: "13:30", today: "2026-09-01", currentTime: "12:00" }), false);
+});
+
+test("the past-target confirmation guard does not intercept existing operational moves", () => {
+  assert.equal(backdatingConfirmationRequired({ targetPassed: true, backdated: false, operationalMove: false }), true);
+  assert.equal(backdatingConfirmationRequired({ targetPassed: true, backdated: true, operationalMove: false }), false);
+  assert.equal(backdatingConfirmationRequired({ targetPassed: true, backdated: false, operationalMove: true }), false);
 });
 
 test("explicit office van/date/time selection makes routing advisory only", () => {

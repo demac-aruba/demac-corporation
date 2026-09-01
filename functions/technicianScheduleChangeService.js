@@ -30,6 +30,7 @@ function scheduleMaterialChanged(before, after) {
 
 function sameDayScheduleChangeRequired(before, after, now = arubaDateParts()) {
   if (!after || !activeWorkOrder(after)) return false;
+  if (after.backdated === true || text(after.bookingMode).toLowerCase() === "backdated") return false;
   if (text(after.date) !== text(now.date)) return false;
   if (text(now.time) < DAILY_SCHEDULE_START_TIME) return false;
   if (!before) return true;

@@ -4,7 +4,7 @@ const {
   BOOKING_ERROR_CODES,
   BookingAuthorityError,
 } = require("./bookingAuthorityCore");
-const { createBookingAuthority } = require("./bookingAuthorityFirestore");
+const { BOOKING_CREATE_MODES, createBookingAuthority } = require("./bookingAuthorityFirestore");
 
 class FakeSnapshot {
   constructor(id, value) {
@@ -189,6 +189,106 @@ test("createAppointment atomically creates appointment, work order, offer bookin
   const offer = db.read(`bookingOffers/${availability.offer.id}`);
   assert.equal(offer.status, "booked");
   assert.equal(offer.appointmentId, result.appointmentId);
+});
+
+test("backdated offer intent is persisted, revalidated and audited on the confirmed appointment", async () => {
+  const { db, authority } = authorityFixture({
+    providerOverrides: {
+      checkAvailability: async () => ({
+        options: [option()],
+        providerVersion: "test-provider-backdated",
+        metadata: {
+          bookingMode: "backdated",
+          backdatingAcknowledged: true,
+          workAlreadyPerformed: true,
+        },
+      }),
+      buildWorkOrders: async ({ appointment, option: selected, customer, property, context }) => ([{
+        id: `WO-${appointment.appointmentId}-1`,
+        clientId: customer.id,
+        propertyId: property.id,
+        date: selected.date,
+        time: selected.time,
+        status: "Confirmada",
+        vanId: selected.assignments[0].vanId,
+        scheduledSlots: selected.assignments[0].slots,
+        bookingMode: context.bookingMode,
+        backdated: true,
+        whatsappNotificationsEnabled: false,
+        notificationRecipients: context.notificationRecipients,
+      }]),
+    },
+  });
+  const intent = { channel: "office", bookingMode: "backdated", backdatingAcknowledged: true };
+  const availability = await authority.checkAvailability({
+    request: baseRequest(),
+    context: { ...intent, requestKey: "office-backdated-offer-1" },
+  });
+  const result = await authority.createAppointment({
+    offerId: availability.offer.id,
+    offerVersion: 1,
+    optionId: "opt-1",
+    idempotencyKey: "office:backdated:create:appointment:1",
+    actor: { source: "office-scheduling", id: "office-user-1" },
+    context: intent,
+  });
+
+  assert.equal(availability.offer.metadata.bookingMode, "backdated");
+  const appointment = db.read(`appointments/${result.appointmentId}`);
+  assert.equal(appointment.status, "confirmed");
+  assert.equal(appointment.bookingMode, "backdated");
+  assert.equal(appointment.backdated, true);
+  assert.equal(appointment.backdatingAcknowledged, true);
+  assert.equal(appointment.workAlreadyPerformed, true);
+  assert.equal(appointment.createdBy, "office-user-1");
+  assert.deepEqual(appointment.notificationRecipients, []);
+  assert.equal(appointment.backdatedRecordedAtIso, "2098-12-01T12:00:00.000Z");
+  const workOrder = db.read(`workOrders/${result.workOrderIds[0]}`);
+  assert.equal(workOrder.bookingMode, "backdated");
+  assert.equal(workOrder.whatsappNotificationsEnabled, false);
+  assert.deepEqual(workOrder.notificationRecipients, []);
+});
+
+test("backdated create rejects missing commit-time acknowledgement and temporary holds", async () => {
+  const { authority } = authorityFixture({
+    providerOverrides: {
+      checkAvailability: async () => ({
+        options: [option()],
+        metadata: { bookingMode: "backdated", backdatingAcknowledged: true },
+      }),
+    },
+  });
+  const availability = await authority.checkAvailability({
+    request: baseRequest(),
+    context: {
+      channel: "office",
+      bookingMode: "backdated",
+      backdatingAcknowledged: true,
+      requestKey: "office-backdated-offer-2",
+    },
+  });
+  const baseCreate = {
+    offerId: availability.offer.id,
+    offerVersion: 1,
+    optionId: "opt-1",
+    idempotencyKey: "office:backdated:create:appointment:2",
+  };
+
+  await assert.rejects(
+    authority.createAppointment({ ...baseCreate, context: { channel: "office" } }),
+    (error) => error.code === BOOKING_ERROR_CODES.INVALID_REQUEST
+      && error.details.reason === "backdating-intent-mismatch",
+  );
+  await assert.rejects(
+    authority.createAppointment({
+      ...baseCreate,
+      idempotencyKey: "office:backdated:hold:appointment:2",
+      createMode: BOOKING_CREATE_MODES.TEMPORARY_HOLD,
+      context: { channel: "office", bookingMode: "backdated", backdatingAcknowledged: true },
+    }),
+    (error) => error.code === BOOKING_ERROR_CODES.INVALID_REQUEST
+      && error.details.reason === "backdating-temporary-hold-not-allowed",
+  );
 });
 
 test("same idempotency key returns the same appointment without duplicate work orders", async () => {

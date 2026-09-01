@@ -202,6 +202,18 @@ Owner: DEMAC owner/administrator. Effective date: 2026-08-27.
 - The ERP calculates real options from capacity, route, staff, closures and existing appointments.
 - A day or time voluntarily supplied by the customer is treated as a scheduling constraint.
 
+## Scheduling record rules
+
+### OPS-SCHED-BACKDATE-001 — Explicit historical work registration
+
+Owner: DEMAC owner/administrator. Effective date: 2026-09-01.
+
+- An authorized office operator may register work at a past date or time only after explicitly acknowledging the backdating warning.
+- The historical appointment is created as confirmed, not automatically completed, and remains linked to its canonical Work Order and capacity locks.
+- Booking Authority still validates the exact Van, operating calendar, crew, duration and every historical capacity conflict before committing the record.
+- Backdated creation does not automatically send customer confirmations, reminders or same-day technician schedule-change alerts.
+- The Appointment and Work Orders preserve the backdated mode, recording actor and recording time as audit evidence. Normal current and future bookings remain unchanged.
+
 ## Conversation rules
 
 ### COMMS-001 — Current turn has priority
