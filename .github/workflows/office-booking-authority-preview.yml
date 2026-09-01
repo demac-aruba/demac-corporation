@@ -1,0 +1,101 @@
+name: Office Booking Authority Preview
+
+on:
+  push:
+    branches:
+      - fix/scheduling-global-exact-target
+    paths:
+      - 'functions/bookingAuthoritySchedulingEngine.js'
+      - 'functions/bookingAuthoritySchedulingEngine.test.js'
+      - 'functions/bookingAuthoritySchedulingProvider.js'
+      - 'functions/bookingAuthoritySchedulingProvider.test.js'
+      - 'functions/bookingSchedulingPrimitives.js'
+      - 'functions/bookingCrewResolution.test.js'
+      - 'apps/erp-next/lib/office-booking-authority.ts'
+      - '.github/workflows/office-booking-authority-preview.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: office-booking-authority-preview
+  cancel-in-progress: true
+
+jobs:
+  deploy-preview:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Validate focused scheduling changes
+        run: |
+          node --check functions/bookingAuthoritySchedulingEngine.js
+          node --check functions/bookingAuthoritySchedulingProvider.js
+          node --check functions/bookingSchedulingPrimitives.js
+          node --test functions/bookingAuthoritySchedulingEngine.test.js functions/bookingAuthoritySchedulingProvider.test.js functions/bookingCrewResolution.test.js
+
+      - name: Authenticate Firebase deployment service account
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Resolve DEMAC runtime identity
+        id: config
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_FUNCTION='generateProfessionalCustomerReport'
+          if ! gcloud functions describe "$SOURCE_FUNCTION" --project=demac-corporation --gen2 --region=us-central1 --format='value(name)' >/dev/null 2>&1; then
+            SOURCE_FUNCTION='wacliWebhook'
+          fi
+          RUN_SA="$(gcloud functions describe "$SOURCE_FUNCTION" --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.serviceAccountEmail)')"
+          test -n "$RUN_SA"
+          echo "run_service_account=${RUN_SA}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy isolated preview authority
+        shell: bash
+        env:
+          RUN_SERVICE_ACCOUNT: ${{ steps.config.outputs.run_service_account }}
+        run: |
+          set -euo pipefail
+          gcloud functions deploy officeBookingAuthorityPreview \
+            --project=demac-corporation \
+            --gen2 \
+            --region=us-central1 \
+            --runtime=nodejs22 \
+            --source=functions \
+            --entry-point=officeBookingAuthority \
+            --memory=256Mi \
+            --timeout=60s \
+            --run-service-account="$RUN_SERVICE_ACCOUNT" \
+            --trigger-http \
+            --allow-unauthenticated \
+            --quiet
+
+      - name: Verify preview authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint='https://us-central1-demac-corporation.cloudfunctions.net/officeBookingAuthorityPreview'
+          state="$(gcloud functions describe officeBookingAuthorityPreview --project=demac-corporation --gen2 --region=us-central1 --format='value(state)')"
+          test "$state" = 'ACTIVE'
+          status="$(curl --silent --show-error --output /tmp/preview-body.json --write-out '%{http_code}' \
+            --request POST "$endpoint" \
+            --header 'Content-Type: application/json' \
+            --data '{"action":"list_presets","data":{}}')"
+          test "$status" = '401'
+

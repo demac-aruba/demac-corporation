@@ -270,11 +270,16 @@ type PresetResponse = {
 };
 
 const PRESET_CACHE_MS = 5 * 60_000;
+const PREVIEW_AUTHORITY_QUERY = 'scheduling-global-exact-target';
+const PREVIEW_AUTHORITY_FUNCTION = 'officeBookingAuthorityPreview';
 let presetCache: { expiresAt: number; promise: Promise<PresetResponse> } | null = null;
 
 function endpoint() {
   if (!firebaseClientConfig.projectId) throw new Error('Firebase project is not configured for ERP Next.');
-  return `https://us-central1-${firebaseClientConfig.projectId}.cloudfunctions.net/officeBookingAuthority`;
+  const previewRequested = typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('authorityPreview') === PREVIEW_AUTHORITY_QUERY;
+  const functionName = previewRequested ? PREVIEW_AUTHORITY_FUNCTION : 'officeBookingAuthority';
+  return `https://us-central1-${firebaseClientConfig.projectId}.cloudfunctions.net/${functionName}`;
 }
 
 function apiErrorDetail(payload: ApiError) {
