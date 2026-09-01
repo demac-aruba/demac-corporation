@@ -464,7 +464,7 @@ function createSchedulingProvider({ db }) {
       };
     },
 
-    async revalidateSelection({ request, option, context = {}, now = new Date() }) {
+    async revalidateSelection({ request, offer, option, context = {}, now = new Date() }) {
       const nowParts = arubaDateParts(now);
       const today = nowParts.date;
       const operationalMove = context.changeKind === "operational_move";

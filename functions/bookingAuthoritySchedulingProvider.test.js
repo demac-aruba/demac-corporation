@@ -9,6 +9,7 @@ const {
   backdatingIntent,
   buildCapacityLocks,
   buildWorkOrders,
+  createSchedulingProvider,
   exactCustomerProperty,
   explicitOfficeRoutePolicy,
   operationalMoveDateAllowed,
@@ -83,6 +84,21 @@ function operationalData(overrides = {}) {
   };
 }
 
+function schedulingDb(data) {
+  const snapshot = (records = []) => ({
+    docs: records.map(({ id, ...record }) => ({ id, data: () => record })),
+  });
+  return {
+    collection(name) {
+      const query = {
+        where() { return query; },
+        async get() { return snapshot(data[name]); },
+      };
+      return query;
+    },
+  };
+}
+
 const currentSchedule = { date: "2098-12-20", time: "08:30" };
 
 test("provider exposes canonical provider v14", () => {
@@ -108,6 +124,74 @@ test("backdating intent requires the authenticated office channel and explicit a
     context: { channel: "office" },
     offer: { metadata: { bookingMode: "backdated", backdatingAcknowledged: true } },
   }), true);
+});
+
+test("confirm-time revalidation accepts the persisted offer for acknowledged backdated work", async () => {
+  const provider = createSchedulingProvider({
+    db: schedulingDb(operationalData({
+      vans: [{ id: "VAN-2", name: "Van 2", active: true, responsibleStaffId: "driver-2" }],
+      staffProfiles: [{ id: "driver-2", active: true, availability: "Disponible", canDriveVan: true }],
+    })),
+  });
+  const selected = {
+    ...option(),
+    date: "2026-09-01",
+    time: "08:30",
+    endTime: "10:30",
+    requestedDateMatch: true,
+    requestedTimeMatch: true,
+    assignments: [{
+      ...option().assignments[0],
+      vanId: "VAN-2",
+      time: "08:30",
+    }],
+  };
+  const result = await provider.revalidateSelection({
+    request: {
+      ...request(),
+      constraints: { requestedDate: "2026-09-01", requestedTime: "08:30" },
+    },
+    offer: {
+      metadata: { bookingMode: "backdated", backdatingAcknowledged: true },
+    },
+    option: selected,
+    context: { channel: "office", bookingMode: "backdated", backdatingAcknowledged: true },
+    now: new Date("2026-09-01T16:00:00.000Z"),
+  });
+
+  assert.equal(result.available, true, JSON.stringify(result));
+  assert.equal(result.option.date, "2026-09-01");
+  assert.equal(result.option.time, "08:30");
+  assert.equal(result.option.assignments[0].vanId, "VAN-2");
+});
+
+test("confirm-time revalidation still accepts normal future bookings", async () => {
+  const provider = createSchedulingProvider({
+    db: schedulingDb(operationalData({
+      vans: [{ id: "VAN-2", name: "Van 2", active: true, responsibleStaffId: "driver-2" }],
+      staffProfiles: [{ id: "driver-2", active: true, availability: "Disponible", canDriveVan: true }],
+    })),
+  });
+  const selected = {
+    ...option(),
+    requestedDateMatch: true,
+    requestedTimeMatch: true,
+    assignments: [{ ...option().assignments[0], vanId: "VAN-2", time: "13:30" }],
+  };
+  const result = await provider.revalidateSelection({
+    request: {
+      ...request(),
+      constraints: { requestedDate: selected.date, requestedTime: selected.time },
+    },
+    offer: { metadata: {} },
+    option: selected,
+    context: { channel: "office" },
+    now: new Date("2098-12-01T16:00:00.000Z"),
+  });
+
+  assert.equal(result.available, true, JSON.stringify(result));
+  assert.equal(result.option.date, selected.date);
+  assert.equal(result.option.time, selected.time);
 });
 
 test("past-target detection covers earlier today and prior dates without affecting future targets", () => {
