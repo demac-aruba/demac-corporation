@@ -644,7 +644,11 @@ function generateCanonicalOptions({
   const options = [];
   const workSignature = scope.workItems.map((item) => `${item.presetId}:${item.serviceId}:${item.quantity}:${item.durationMinutes}`).join("|");
 
-  const candidateDates = allowBackdating && requestedDate
+  const exactRequestedTarget = requireRequestedTarget
+    && requiredPrimaryVanId
+    && requestedDate
+    && timeConstraint.kind === "exact";
+  const candidateDates = (allowBackdating || exactRequestedTarget) && requestedDate
     ? [requestedDate]
     : Array.from({ length: MAX_SEARCH_DAYS }, (_, dayOffset) => addDays(today, dayOffset));
 

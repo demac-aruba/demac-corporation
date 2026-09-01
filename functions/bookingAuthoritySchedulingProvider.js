@@ -325,6 +325,8 @@ function createSchedulingProvider({ db }) {
       const requestedDate = cleanText(request.constraints?.requestedDate, 20);
       const requestedTime = cleanText(request.constraints?.requestedTime, 20);
       const operationalMove = context.changeKind === "operational_move" && requiredPrimaryVanId && requestedDate && requestedTime;
+      const officeExactTarget = context.channel === "office"
+        && Boolean(requiredPrimaryVanId && requestedDate && requestedTime);
       const backdated = backdatingIntent({ context });
       const targetPassed = requestedTargetPassed({
         requestedDate,
@@ -378,8 +380,8 @@ function createSchedulingProvider({ db }) {
         ])
         : [await loadSchedulingData(
           db,
-          backdated ? requestedDate : today,
-          backdated ? requestedDate : addDays(today, MAX_SEARCH_DAYS),
+          backdated || officeExactTarget ? requestedDate : today,
+          backdated || officeExactTarget ? requestedDate : addDays(today, MAX_SEARCH_DAYS),
         ), null];
       const data = dataWithoutAppointment(loaded, context.excludeAppointmentId);
       if (requiredPrimaryVanId && !data.vans.some((van) => van.id === requiredPrimaryVanId)) {
@@ -469,6 +471,9 @@ function createSchedulingProvider({ db }) {
       const today = nowParts.date;
       const operationalMove = context.changeKind === "operational_move";
       const backdated = backdatingIntent({ context, offer });
+      const officeExactTarget = context.channel === "office"
+        && option.requestedDateMatch === true
+        && option.requestedTimeMatch === true;
       const currentSchedule = operationalMove
         ? await loadAppointmentSchedule(db, context.excludeAppointmentId)
         : null;
@@ -484,8 +489,8 @@ function createSchedulingProvider({ db }) {
         ? await loadSchedulingData(db, option.date, option.date)
         : await loadSchedulingData(
           db,
-          backdated ? option.date : today,
-          backdated ? option.date : addDays(today, MAX_SEARCH_DAYS),
+          backdated || officeExactTarget ? option.date : today,
+          backdated || officeExactTarget ? option.date : addDays(today, MAX_SEARCH_DAYS),
         );
       const data = dataWithoutAppointment(loaded, context.excludeAppointmentId);
       const { property } = exactCustomerProperty(data, request);

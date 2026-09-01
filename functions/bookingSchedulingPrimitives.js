@@ -221,9 +221,9 @@ function staffUnavailable(profile, date, absences) {
 
 function resolveAssignment(van, date, profiles, assignments, absences) {
   const saved = assignments.find((item) => item.vanId === van.id && item.date === date);
-  const driver = profiles.find((item) => item.id === (saved?.driverStaffId ?? van.responsibleStaffId));
-  const helper = profiles.find((item) => item.id === (saved?.helperStaffId ?? van.regularHelperId));
-  const additionalHelper = profiles.find((item) => item.id === (saved?.additionalHelperStaffId ?? van.additionalHelperId));
+  const driver = profiles.find((item) => item.id === (saved?.driverStaffId || van.responsibleStaffId));
+  const helper = profiles.find((item) => item.id === (saved?.helperStaffId || van.regularHelperId));
+  const additionalHelper = profiles.find((item) => item.id === (saved?.additionalHelperStaffId || van.additionalHelperId));
   const driverStaffId = driver?.canDriveVan && !staffUnavailable(driver, date, absences) ? driver.id : undefined;
   const helperStaffId = helper && !staffUnavailable(helper, date, absences) ? helper.id : undefined;
   const additionalHelperStaffId = additionalHelper && !staffUnavailable(additionalHelper, date, absences) ? additionalHelper.id : undefined;

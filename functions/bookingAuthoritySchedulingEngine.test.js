@@ -156,6 +156,28 @@ test("same-day past targets remain unavailable unless backdating was explicitly 
   assert.equal(backdated.options[0].assignments[0].slots, 3);
 });
 
+test("exact required target evaluates tomorrow without a search-horizon dependency", () => {
+  const data = schedulingData();
+  const requestedDate = "2026-09-02";
+  const result = generateCanonicalOptions({
+    request: bookingRequest({
+      constraints: { requestedDate, requestedTime: "08:30" },
+    }),
+    property: data.properties[0],
+    data,
+    routeConfig: normalizeRouteConfig(),
+    today: "2026-09-01",
+    currentTime: "12:00",
+    requiredPrimaryVanId: "VAN-1",
+    requireRequestedTarget: true,
+  });
+
+  assert.equal(result.options.length, 1, JSON.stringify(result));
+  assert.equal(result.options[0].date, requestedDate);
+  assert.equal(result.options[0].time, "08:30");
+  assert.equal(result.options[0].assignments[0].vanId, "VAN-1");
+});
+
 test("acknowledged backdating searches the exact prior date and still rejects historical conflicts", () => {
   const data = schedulingData();
   const request = bookingRequest({

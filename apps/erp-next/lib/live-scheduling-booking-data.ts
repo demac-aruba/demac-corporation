@@ -28,6 +28,9 @@ export type BookingReferenceData = {
   contactAssignments: BookingContactAssignment[];
 };
 
+export type BookingMasterReferenceData = Pick<BookingReferenceData, 'clients' | 'properties'>;
+export type BookingContactReferenceData = Pick<BookingReferenceData, 'contacts' | 'contactAssignments'>;
+
 export type NewBookingCustomer = {
   name: string;
   company?: string;
@@ -150,20 +153,31 @@ export async function updateBookingContact(
   return result.contact;
 }
 
-export async function loadBookingReferenceData(): Promise<BookingReferenceData> {
-  const [references, directory] = await Promise.all([
-    loadLiveSchedulingReferenceData(),
-    listOfficeContactDirectory(),
-  ]);
+export async function loadBookingMasterReferenceData(): Promise<BookingMasterReferenceData> {
+  const references = await loadLiveSchedulingReferenceData();
   return {
     // The empty search state only renders a short list. Put the newest canonical
     // CRM relationships first so a customer created during booking remains visible
     // when the user opens a different day/slot immediately afterward.
     clients: references.clients.filter((client) => client.active !== false).sort(recentCustomersFirst),
     properties: references.properties.filter((property) => property.active !== false),
+  };
+}
+
+export async function loadBookingContactReferenceData(): Promise<BookingContactReferenceData> {
+  const directory = await listOfficeContactDirectory();
+  return {
     contacts: (directory.contacts ?? []).filter((contact) => contact.active !== false),
     contactAssignments: (directory.assignments ?? []).filter((assignment) => assignment.active !== false),
   };
+}
+
+export async function loadBookingReferenceData(): Promise<BookingReferenceData> {
+  const [masterData, contactData] = await Promise.all([
+    loadBookingMasterReferenceData(),
+    loadBookingContactReferenceData(),
+  ]);
+  return { ...masterData, ...contactData };
 }
 
 function assertCustomerDoesNotDuplicate(input: NewBookingCustomer, references: BookingReferenceData) {

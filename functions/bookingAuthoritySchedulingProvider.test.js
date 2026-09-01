@@ -84,14 +84,17 @@ function operationalData(overrides = {}) {
   };
 }
 
-function schedulingDb(data) {
+function schedulingDb(data, whereCalls = []) {
   const snapshot = (records = []) => ({
     docs: records.map(({ id, ...record }) => ({ id, data: () => record })),
   });
   return {
     collection(name) {
       const query = {
-        where() { return query; },
+        where(field, operator, value) {
+          whereCalls.push({ collection: name, field, operator, value });
+          return query;
+        },
         async get() { return snapshot(data[name]); },
       };
       return query;
@@ -192,6 +195,59 @@ test("confirm-time revalidation still accepts normal future bookings", async () 
   assert.equal(result.available, true, JSON.stringify(result));
   assert.equal(result.option.date, selected.date);
   assert.equal(result.option.time, selected.time);
+});
+
+test("exact office target loads and evaluates a far-future February date directly", async () => {
+  const whereCalls = [];
+  const requestedDate = "2027-02-02";
+  const provider = createSchedulingProvider({
+    db: schedulingDb(operationalData({
+      vans: [{ id: "VAN-2", name: "Van 2", active: true, responsibleStaffId: "driver-2" }],
+      staffProfiles: [{ id: "driver-2", active: true, availability: "Disponible", canDriveVan: true }],
+    }), whereCalls),
+  });
+
+  const result = await provider.checkAvailability({
+    request: {
+      ...request(),
+      constraints: { requestedDate, requestedTime: "08:30" },
+    },
+    context: { channel: "office", requiredPrimaryVanId: "VAN-2" },
+    now: new Date("2026-09-01T16:00:00.000Z"),
+  });
+
+  assert.equal(result.options.length, 1, JSON.stringify(result));
+  assert.equal(result.options[0].date, requestedDate);
+  assert.equal(result.options[0].time, "08:30");
+  assert.equal(result.options[0].assignments[0].vanId, "VAN-2");
+  assert.deepEqual(
+    whereCalls.filter((call) => call.collection === "workOrders"),
+    [
+      { collection: "workOrders", field: "date", operator: ">=", value: requestedDate },
+      { collection: "workOrders", field: "date", operator: "<=", value: requestedDate },
+    ],
+  );
+
+  whereCalls.length = 0;
+  const revalidated = await provider.revalidateSelection({
+    request: {
+      ...request(),
+      constraints: { requestedDate, requestedTime: "08:30" },
+    },
+    offer: { metadata: {} },
+    option: result.options[0],
+    context: { channel: "office" },
+    now: new Date("2026-09-01T16:00:00.000Z"),
+  });
+
+  assert.equal(revalidated.available, true, JSON.stringify(revalidated));
+  assert.deepEqual(
+    whereCalls.filter((call) => call.collection === "workOrders"),
+    [
+      { collection: "workOrders", field: "date", operator: ">=", value: requestedDate },
+      { collection: "workOrders", field: "date", operator: "<=", value: requestedDate },
+    ],
+  );
 });
 
 test("past-target detection covers earlier today and prior dates without affecting future targets", () => {

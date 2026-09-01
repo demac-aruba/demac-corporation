@@ -24,7 +24,8 @@ import {
 import {
   createBookingCustomerWithProperty,
   createBookingProperty,
-  loadBookingReferenceData,
+  loadBookingContactReferenceData,
+  loadBookingMasterReferenceData,
   type BookingCustomer,
   type BookingProperty,
   type BookingReferenceData,
@@ -94,6 +95,8 @@ type ValidationState = {
   selectedOptionId: string;
 };
 
+type ReferenceLoadScope = 'master' | 'contacts' | 'presets';
+
 const emptyCustomer: CustomerDraft = {
   name: '',
   company: '',
@@ -130,6 +133,27 @@ function validAfterHoursStart(value: string) {
   const hour = Number(match[1]);
   const minute = Number(match[2]);
   return hour <= 23 && minute <= 59 && hour * 60 + minute >= 17 * 60;
+}
+
+function referenceLoadError(scope: string, error: unknown) {
+  const message = error instanceof Error && error.message.trim()
+    ? error.message.trim()
+    : 'The request could not be completed.';
+  return `${scope} could not be loaded. ${message}`;
+}
+
+function isTransientReferenceLoadError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return /took too long|timed out|timeout|failed to fetch|network(?: error)?|load failed|temporarily unavailable/i.test(message);
+}
+
+async function withOneTransientRetry<T>(load: () => Promise<T>) {
+  try {
+    return await load();
+  } catch (error) {
+    if (!isTransientReferenceLoadError(error)) throw error;
+    return load();
+  }
 }
 
 function formatDate(value: string) {
@@ -248,7 +272,8 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const [references, setReferences] = useState<BookingReferenceData>({ clients: [], properties: [], contacts: [], contactAssignments: [] });
   const [presets, setPresets] = useState<OfficeBookingPreset[]>([]);
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState('');
+  const [presetsLoading, setPresetsLoading] = useState(true);
+  const [loadErrors, setLoadErrors] = useState<Partial<Record<ReferenceLoadScope, string>>>({});
   const [crewLabel, setCrewLabel] = useState('Crew loading…');
   const [customerQuery, setCustomerQuery] = useState('');
   const [requestedStart, setRequestedStart] = useState(target.start);
@@ -260,6 +285,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const lastAutoDescriptionRef = useRef('');
   const validationEpochRef = useRef(0);
   const validationSignatureRef = useRef('');
+  const referenceLoadEpochRef = useRef(0);
   const backdatingPromptedRef = useRef(false);
   const [backdatingAcknowledged, setBackdatingAcknowledged] = useState(false);
   const [technicianInstructions, setTechnicianInstructions] = useState('');
@@ -275,6 +301,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const [holding, setHolding] = useState(false);
   const [authorityError, setAuthorityError] = useState('');
   const [validated, setValidated] = useState<ValidationState | null>(null);
+  const loadError = Object.values(loadErrors).filter(Boolean).join(' ');
 
   const requestTarget = useMemo<LiveBookingTarget>(() => ({
     dateKey: target.dateKey,
@@ -309,26 +336,105 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   }, [backdatedTarget, onClose]);
 
   const refreshReferences = async () => {
-    const next = await loadBookingReferenceData();
-    setReferences(next);
+    const referenceLoadEpoch = referenceLoadEpochRef.current + 1;
+    referenceLoadEpochRef.current = referenceLoadEpoch;
+    setLoadErrors((current) => {
+      const next = { ...current };
+      delete next.master;
+      delete next.contacts;
+      return next;
+    });
+    const [masterResult, contactResult] = await Promise.allSettled([
+      loadBookingMasterReferenceData(),
+      withOneTransientRetry(loadBookingContactReferenceData),
+    ]);
+    if (referenceLoadEpoch !== referenceLoadEpochRef.current) return;
+    if (masterResult.status === 'fulfilled') {
+      setReferences((current) => ({ ...current, ...masterResult.value }));
+      setLoadErrors((current) => {
+        const next = { ...current };
+        delete next.master;
+        return next;
+      });
+    } else {
+      setLoadErrors((current) => ({ ...current, master: referenceLoadError('Customer and property data', masterResult.reason) }));
+    }
+    if (contactResult.status === 'fulfilled') {
+      setReferences((current) => ({ ...current, ...contactResult.value }));
+      setLoadErrors((current) => {
+        const next = { ...current };
+        delete next.contacts;
+        return next;
+      });
+    } else {
+      setLoadErrors((current) => ({ ...current, contacts: referenceLoadError('Contact directory', contactResult.reason) }));
+    }
+    if (masterResult.status === 'rejected') throw masterResult.reason;
   };
 
   useEffect(() => {
     let active = true;
+    const referenceLoadEpoch = referenceLoadEpochRef.current + 1;
+    referenceLoadEpochRef.current = referenceLoadEpoch;
     setLoading(true);
-    setLoadError('');
-    void Promise.all([loadBookingReferenceData(), listOfficeBookingPresets(true)])
-      .then(([referenceData, presetResult]) => {
-        if (!active) return;
-        setReferences(referenceData);
-        setPresets(presetResult.presets.filter((preset) => preset.active !== false));
+    setPresetsLoading(true);
+    setLoadErrors({});
+    const reportError = (scope: ReferenceLoadScope, message: string) => {
+      if (!active) return;
+      setLoadErrors((current) => ({ ...current, [scope]: message }));
+    };
+
+    const masterTask = loadBookingMasterReferenceData()
+      .then((masterData) => {
+        if (!active || referenceLoadEpoch !== referenceLoadEpochRef.current) return;
+        setReferences((current) => ({ ...current, ...masterData }));
+        setLoadErrors((current) => {
+          const next = { ...current };
+          delete next.master;
+          return next;
+        });
       })
       .catch((error) => {
-        if (active) setLoadError(error instanceof Error ? error.message : 'Scheduling reference data could not be loaded.');
+        if (referenceLoadEpoch === referenceLoadEpochRef.current) {
+          reportError('master', referenceLoadError('Customer and property data', error));
+        }
       })
       .finally(() => {
         if (active) setLoading(false);
       });
+
+    const contactTask = withOneTransientRetry(loadBookingContactReferenceData)
+      .then((contactData) => {
+        if (!active || referenceLoadEpoch !== referenceLoadEpochRef.current) return;
+        setReferences((current) => ({ ...current, ...contactData }));
+        setLoadErrors((current) => {
+          const next = { ...current };
+          delete next.contacts;
+          return next;
+        });
+      })
+      .catch((error) => {
+        if (referenceLoadEpoch === referenceLoadEpochRef.current) {
+          reportError('contacts', referenceLoadError('Contact directory', error));
+        }
+      });
+
+    const presetTask = withOneTransientRetry(() => listOfficeBookingPresets())
+      .then((presetResult) => {
+        if (!active) return;
+        setPresets(presetResult.presets.filter((preset) => preset.active !== false));
+        setLoadErrors((current) => {
+          const next = { ...current };
+          delete next.presets;
+          return next;
+        });
+      })
+      .catch((error) => reportError('presets', referenceLoadError('Scheduling services', error)))
+      .finally(() => {
+        if (active) setPresetsLoading(false);
+      });
+
+    void Promise.allSettled([masterTask, contactTask, presetTask]);
     return () => { active = false; };
   }, []);
 
@@ -771,7 +877,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                       <b>{customer.id === customerId ? 'SELECTED' : 'SELECT'}</b>
                     </button>
                   ))}
-                  {!filteredCustomers.length ? <div className={styles.emptyResult}>No existing customer matches this search.</div> : null}
+                  {!filteredCustomers.length && !loading && !loadErrors.master ? <div className={styles.emptyResult}>No existing customer matches this search.</div> : null}
                 </div>
               ) : null}
               <button type="button" className={styles.inlineAction} onClick={openCustomerEditor}>＋ Create customer</button>
@@ -854,7 +960,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                   );
                 })}
               </div>
-              {!presets.length && !loading ? <div className={styles.emptyResult}>No services are marked “Show in Scheduling” yet. Configure the quick booking list in Services & Products.</div> : null}
+              {!presets.length && !presetsLoading && !loadErrors.presets ? <div className={styles.emptyResult}>No services are marked “Show in Scheduling” yet. Configure the quick booking list in Services & Products.</div> : null}
 
               {workLines.length ? (
                 <div style={{ display: 'grid', gap: 7, marginTop: 10 }}>
