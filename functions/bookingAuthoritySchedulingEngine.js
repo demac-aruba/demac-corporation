@@ -534,11 +534,15 @@ function assignmentCombinations({
   routeConfig,
   candidateZone,
   requiredPrimaryVanId,
+  combinationLimit = ASSIGNMENT_COMBINATION_LIMIT,
 }) {
   const results = [];
+  const limit = Number.isFinite(combinationLimit)
+    ? Math.max(1, Math.floor(combinationLimit))
+    : Number.POSITIVE_INFINITY;
 
   function visit(allocationIndex, remainingVans, selected) {
-    if (results.length >= ASSIGNMENT_COMBINATION_LIMIT) return;
+    if (results.length >= limit) return;
     if (allocationIndex >= allocations.length) {
       results.push(selected);
       return;
@@ -577,7 +581,7 @@ function assignmentCombinations({
     for (const candidate of sortAllocationCandidates(candidates, allocation)) {
       const nextRemaining = remainingVans.filter((item) => item.van.id !== candidate.vanId);
       visit(allocationIndex + 1, nextRemaining, [...selected, candidate]);
-      if (results.length >= ASSIGNMENT_COMBINATION_LIMIT) break;
+      if (results.length >= limit) break;
     }
   }
 
@@ -684,6 +688,9 @@ function generateCanonicalOptions({
         routeConfig,
         candidateZone,
         requiredPrimaryVanId,
+        combinationLimit: requestedDateAlternatives
+          ? Number.POSITIVE_INFINITY
+          : ASSIGNMENT_COMBINATION_LIMIT,
       });
       for (const selected of combinations) {
         const primary = selected.find((item) => item.role === "primary") || selected[0];
@@ -745,8 +752,15 @@ function generateCanonicalOptions({
   const unique = [];
   const seen = new Set();
   for (const option of options) {
-    const key = `${option.date}|${option.time}|${option.assignments
-      .map((item) => `${item.vanId}:${item.time}`).sort().join(",")}`;
+    const assignmentKey = requestedDateAlternatives
+      ? option.assignments
+        .map((item) => `${item.role || "assignment"}:${item.vanId}:${item.time}`)
+        .join(",")
+      : option.assignments
+        .map((item) => `${item.vanId}:${item.time}`)
+        .sort()
+        .join(",");
+    const key = `${option.date}|${option.time}|${assignmentKey}`;
     if (seen.has(key)) continue;
     seen.add(key);
     unique.push(option);
@@ -759,9 +773,11 @@ function generateCanonicalOptions({
       && (!requiredPrimaryVanId || option.assignments?.[0]?.vanId === requiredPrimaryVanId)
     ))
     : unique;
-  const clientOptions = requireRequestedTarget || requestedDateAlternatives
-    ? targetOptions.slice(0, OFFICE_TARGET_OPTION_LIMIT)
-    : selectClientOptions(targetOptions);
+  const clientOptions = requestedDateAlternatives
+    ? targetOptions
+    : requireRequestedTarget
+      ? targetOptions.slice(0, OFFICE_TARGET_OPTION_LIMIT)
+      : selectClientOptions(targetOptions);
 
   return {
     options: clientOptions,

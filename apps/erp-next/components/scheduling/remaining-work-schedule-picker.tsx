@@ -32,7 +32,11 @@ import { currentArubaDateKey, jobOwnsCapacityStart } from '../../lib/scheduling-
 import { getRuntimeSchedulingSettings, minutesToTime, timeToMinutes } from '../../lib/scheduling';
 import {
   addDays,
+  emptyManualRescheduleSelection,
   laterDate,
+  manualRescheduleCandidateOption,
+  manualReschedulePrimaryChoices,
+  manualRescheduleSupportChoices,
   optionDurationMinutes,
   optionKey,
   optionsForVan,
@@ -87,6 +91,7 @@ type VisualPickerProps = {
   fallbackRequiredMinutes: number;
   controls?: ReactNode;
   canConfirm?: boolean;
+  manualVanSelection?: boolean;
   confirmLabel: string;
   confirmingLabel: string;
   footerNote: string;
@@ -192,6 +197,7 @@ function VisualCapacitySchedulePicker({
   fallbackRequiredMinutes,
   controls,
   canConfirm = true,
+  manualVanSelection = false,
   confirmLabel,
   confirmingLabel,
   footerNote,
@@ -205,6 +211,9 @@ function VisualCapacitySchedulePicker({
   const [capacityState, setCapacityState] = useState<LiveOperationalCapacityState | null>(initialContext?.capacityState ?? null);
   const [availability, setAvailability] = useState<OfficeAvailabilityResult | null>(null);
   const [selectedOptionKey, setSelectedOptionKey] = useState('');
+  const [selectedPrimaryVanId, setSelectedPrimaryVanId] = useState(
+    () => emptyManualRescheduleSelection().primaryVanId,
+  );
   const [contextLoading, setContextLoading] = useState(!initialContext);
   const [availabilityLoading, setAvailabilityLoading] = useState(true);
   const [scheduling, setScheduling] = useState(false);
@@ -217,9 +226,23 @@ function VisualCapacitySchedulePicker({
     () => (availability?.options ?? []).filter((option) => option.date === dateKey),
     [availability, dateKey],
   );
-  const selectedOption = useMemo(
-    () => dayOptions.find((option) => optionKey(option) === selectedOptionKey) ?? null,
-    [dayOptions, selectedOptionKey],
+  const manualPrimaryChoices = useMemo(
+    () => manualVanSelection ? manualReschedulePrimaryChoices(dayOptions, dateKey) : [],
+    [dateKey, dayOptions, manualVanSelection],
+  );
+  const manualSupportChoices = useMemo(
+    () => manualVanSelection
+      ? manualRescheduleSupportChoices(dayOptions, dateKey, selectedPrimaryVanId)
+      : [],
+    [dateKey, dayOptions, manualVanSelection, selectedPrimaryVanId],
+  );
+  const selectedOption = useMemo(() => manualVanSelection
+    ? manualRescheduleCandidateOption(dayOptions, dateKey, selectedPrimaryVanId, selectedOptionKey)
+    : dayOptions.find((option) => optionKey(option) === selectedOptionKey) ?? null,
+  [dateKey, dayOptions, manualVanSelection, selectedOptionKey, selectedPrimaryVanId]);
+  const selectedPrimaryChoice = useMemo(
+    () => manualPrimaryChoices.find((choice) => choice.vanId === selectedPrimaryVanId) ?? null,
+    [manualPrimaryChoices, selectedPrimaryVanId],
   );
   const requiredMinutes = useMemo(() => {
     const fromAuthority = dayOptions.map(optionDurationMinutes).find((value) => value > 0) ?? 0;
@@ -241,6 +264,7 @@ function VisualCapacitySchedulePicker({
   useEffect(() => {
     const sequence = ++requestSequence.current;
     setSelectedOptionKey('');
+    setSelectedPrimaryVanId('');
     setError('');
     setScheduleWarning('');
 
@@ -343,6 +367,66 @@ function VisualCapacitySchedulePicker({
         {scheduleWarning ? <div className={styles.info}><strong>Capacity note</strong><span>{scheduleWarning}</span></div> : null}
         {error ? <div className={styles.error}><strong>Attention</strong><span>{error}</span></div> : null}
 
+        {manualVanSelection ? <section className={styles.assignmentBuilder} aria-label="Choose reschedule Vans">
+          <div className={styles.assignmentStep}>
+            <b>1</b>
+            <div><strong>Choose the primary Van</strong><span>You decide which Van owns the appointment. No Van is selected automatically.</span></div>
+          </div>
+          <div className={styles.primaryChoices}>
+            {manualPrimaryChoices.map((choice) => {
+              const selected = selectedPrimaryVanId === choice.vanId;
+              return <button
+                key={choice.vanId}
+                type="button"
+                className={`${styles.primaryChoice} ${selected ? styles.primaryChoiceSelected : ''}`}
+                aria-pressed={selected}
+                disabled={scheduling}
+                onClick={() => {
+                  setSelectedPrimaryVanId(choice.vanId);
+                  setSelectedOptionKey('');
+                }}
+              >
+                <span>{selected ? 'PRIMARY VAN' : 'CHOOSE AS PRIMARY'}</span>
+                <strong>{choice.vanName || vanLabel(choice.vanId)}</strong>
+                <small>{choice.quantity} of {quantity} work unit{choice.quantity === 1 ? '' : 's'} · {choice.slots} capacity spot{choice.slots === 1 ? '' : 's'}</small>
+              </button>;
+            })}
+          </div>
+
+          {selectedPrimaryChoice ? <div className={styles.coverageSummary}>
+            <div><span>PRIMARY CAPACITY</span><strong>{selectedPrimaryChoice.quantity} work unit{selectedPrimaryChoice.quantity === 1 ? '' : 's'} · {selectedPrimaryChoice.slots} spots</strong></div>
+            <div><span>STILL TO ASSIGN</span><strong>{Math.max(0, quantity - selectedPrimaryChoice.quantity)} work unit{Math.max(0, quantity - selectedPrimaryChoice.quantity) === 1 ? '' : 's'}</strong></div>
+          </div> : <p className={styles.assignmentPrompt}>Select a primary Van to see exactly how much work remains and which support Vans can cover it.</p>}
+
+          <div className={styles.assignmentStep}>
+            <b>2</b>
+            <div><strong>Choose the support Van</strong><span>After the primary Van is chosen, select the exact support Van and schedule that complete the work.</span></div>
+          </div>
+          {selectedPrimaryChoice ? <div className={styles.supportChoices}>
+            {manualSupportChoices.map((choice) => {
+              const option = manualRescheduleCandidateOption(dayOptions, dateKey, selectedPrimaryVanId, choice.optionId);
+              if (!option) return null;
+              const selected = selectedOptionKey === choice.optionId;
+              const supportQuantity = choice.supportVans.reduce((sum, support) => sum + support.quantity, 0);
+              const supportSlots = choice.supportVans.reduce((sum, support) => sum + support.slots, 0);
+              const supportNames = choice.supportVans.map((support) => support.vanName || vanLabel(support.vanId)).join(' + ');
+              return <button
+                key={choice.optionId}
+                type="button"
+                className={`${styles.supportChoice} ${selected ? styles.supportChoiceSelected : ''}`}
+                aria-pressed={selected}
+                disabled={scheduling}
+                onClick={() => setSelectedOptionKey(choice.optionId)}
+              >
+                <span>{selected ? 'COMPLETE ALLOCATION SELECTED' : choice.supportVans.length ? 'CHOOSE SUPPORT' : 'CHOOSE THIS SCHEDULE'}</span>
+                <strong>{choice.supportVans.length ? supportNames : `${choice.primaryVanName} only`}</strong>
+                <small>Primary: {formatTime(choice.primaryStart)}–{formatTime(choice.primaryCapacityEnd)}</small>
+                {choice.supportVans.length ? <small>{supportQuantity} remaining work unit{supportQuantity === 1 ? '' : 's'} · {supportSlots} support spot{supportSlots === 1 ? '' : 's'} · {choice.supportVans.map((support) => `${formatTime(support.start)}–${formatTime(support.capacityEnd || support.workEnd)}`).join(' · ')}</small> : <small>No support Van is required for this allocation.</small>}
+              </button>;
+            })}
+          </div> : <div className={styles.supportPlaceholder}>Choose the primary Van first.</div>}
+        </section> : null}
+
         {contextLoading && !dayAppointments.length && !capacityState ? <div className={styles.loadingGrid}>{Array.from({ length: 5 }, (_, index) => <div key={index}><span /><span /><span /><span /></div>)}</div> : <div className={styles.vanScroller}>
           <div className={styles.vanGrid}>
             {vanIds.map((vanId) => {
@@ -362,7 +446,10 @@ function VisualCapacitySchedulePicker({
                 </header>
 
                 <div className={styles.matches}>
-                  {candidates.length ? candidates.map((option) => {
+                  {manualVanSelection ? candidates.length ? <div className={styles.noMatch}>
+                    <span>{selectedPrimaryVanId === vanId ? 'PRIMARY VAN SELECTED' : selectedSupport.some((support) => support.assignment.vanId === vanId) ? 'SUPPORT VAN SELECTED' : 'AVAILABLE FOR SELECTION'}</span>
+                    <small>Choose this Van in the assignment steps above.</small>
+                  </div> : <div className={styles.noMatch}><span>NO VALID ALLOCATION</span><small>{operational ? 'Inspect open slots or try another day.' : 'Van unavailable for this date.'}</small></div> : candidates.length ? candidates.map((option) => {
                     const key = optionKey(option);
                     const selected = selectedOptionKey === key;
                     const duration = optionDurationMinutes(option);
@@ -395,9 +482,9 @@ function VisualCapacitySchedulePicker({
       </div>
 
       <footer className={styles.footer}>
-        <div className={styles.footerHint}><span>ⓘ</span><p><strong>Only complete Booking Authority matches are selectable.</strong> Open-looking slots are visual context; half-day and operational rules are enforced, and no slot becomes a reservation until the complete allocation is confirmed.</p></div>
+        <div className={styles.footerHint}><span>ⓘ</span><p><strong>{manualVanSelection ? 'You choose the primary and support Vans; Booking Authority validates the complete allocation.' : 'Only complete Booking Authority matches are selectable.'}</strong> Open-looking slots are visual context; half-day and operational rules are enforced, and no slot becomes a reservation until the complete allocation is confirmed.</p></div>
         <div className={styles.selection}>
-          <div><span>SELECTED OPTION</span>{selectedOption && selectedPrimary ? <><strong>{selectedPrimary.vanName || vanLabel(selectedPrimary.vanId)} · {formatLongDate(selectedOption.date)}</strong><small>{candidateSummary(selectedOption)} · {hoursLabel(selectedDuration)}{selectedSupport.length ? ` · ${selectedSupport.length} support Van${selectedSupport.length === 1 ? '' : 's'}` : ''}</small></> : <><strong>No allocation selected</strong><small>Select a green complete-match block above.</small></>}</div>
+          <div><span>SELECTED OPTION</span>{selectedOption && selectedPrimary ? <><strong>{selectedPrimary.vanName || vanLabel(selectedPrimary.vanId)} · {formatLongDate(selectedOption.date)}</strong><small>{candidateSummary(selectedOption)} · {hoursLabel(selectedDuration)}{selectedSupport.length ? ` · support: ${selectedSupport.map((support) => support.assignment.vanName || vanLabel(support.assignment.vanId)).join(' + ')}` : ''}</small></> : manualVanSelection && selectedPrimaryChoice ? <><strong>{selectedPrimaryChoice.vanName || vanLabel(selectedPrimaryChoice.vanId)} selected as primary</strong><small>{Math.max(0, quantity - selectedPrimaryChoice.quantity)} work unit{Math.max(0, quantity - selectedPrimaryChoice.quantity) === 1 ? '' : 's'} still need an exact support allocation.</small></> : <><strong>No allocation selected</strong><small>{manualVanSelection ? 'Choose the primary Van, then choose its support allocation.' : 'Select a green complete-match block above.'}</small></>}</div>
           <div className={styles.workSummary}><span>WORK SUMMARY</span><strong>{quantity} {workLabel} unit{quantity === 1 ? '' : 's'}</strong><small>{footerNote}</small></div>
           <div className={styles.actions}><button type="button" className={styles.cancel} onClick={onClose} disabled={scheduling}>Cancel</button><button type="button" className={styles.confirm} disabled={!selectedOption || !availability?.offer || availabilityLoading || !canConfirm || scheduling} onClick={() => void confirm()}>{scheduling ? confirmingLabel : confirmLabel}</button></div>
         </div>
@@ -507,6 +594,7 @@ export function AppointmentRescheduleSchedulePicker({ appointment, onClose, onRe
     confirmLabel={appointment.status === 'temporary_hold' ? 'Confirm Hold Move' : 'Confirm Reschedule'}
     confirmingLabel="Rescheduling…"
     footerNote="The same appointment and Work Order relationship will be preserved."
+    manualVanSelection
     loadAvailability={(target) => {
       if (!customerId || !propertyId || !workLines.length) return Promise.reject(new Error('This appointment is missing its canonical customer, property, or work definition.'));
       return checkOfficeRescheduleAvailability({

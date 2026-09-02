@@ -567,16 +567,32 @@ test("explicit requested-date alternatives expose valid primary and support Van 
   });
 
   assert.equal(result.reason, "available");
-  assert.ok(result.options.length > 1, "rescheduling must expose more than the single client shortlist option");
+  assert.equal(result.options.length, 12, "four available Vans must expose every ordered primary/support pair");
   assert.equal(result.options.every((option) => option.date === "2098-12-22"), true);
+  assert.deepEqual(
+    new Set(result.options.map((option) => option.assignments.find((assignment) => assignment.role === "primary")?.vanId)),
+    new Set(["VAN-1", "VAN-2", "VAN-3", "VAN-4"]),
+    "every operational Van must remain available as the primary assignment",
+  );
+  assert.deepEqual(
+    new Set(result.options.map(assignmentPair)),
+    new Set([
+      "VAN-1+VAN-2", "VAN-1+VAN-3", "VAN-1+VAN-4",
+      "VAN-2+VAN-1", "VAN-2+VAN-3", "VAN-2+VAN-4",
+      "VAN-3+VAN-1", "VAN-3+VAN-2", "VAN-3+VAN-4",
+      "VAN-4+VAN-1", "VAN-4+VAN-2", "VAN-4+VAN-3",
+    ]),
+    "rescheduling must preserve every viable ordered primary/support combination",
+  );
   assert.equal(
     result.options.some((option) => assignmentPair(option) === "VAN-2+VAN-4"),
     true,
     "Van 2 primary with Van 4 support is a valid complete allocation and must remain selectable",
   );
-  assert.ok(
-    new Set(result.options.map((option) => option.assignments.find((assignment) => assignment.role === "primary")?.vanId)).size > 1,
-    "requested-date alternatives must not collapse every result onto the first-ranked primary Van",
+  assert.equal(
+    result.options.some((option) => assignmentPair(option) === "VAN-4+VAN-2"),
+    true,
+    "Van 4 must remain selectable as the primary assignment",
   );
 });
 
