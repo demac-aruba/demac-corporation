@@ -289,10 +289,28 @@ function apiErrorDetail(payload: ApiError) {
   return typeof reason === 'string' && reason.trim() ? ` · ${reason.trim()}` : '';
 }
 
-async function callOfficeBookingAuthority<T>(action: string, data: Record<string, unknown>, timeoutMs = 15_000): Promise<T> {
+async function callOfficeBookingAuthority<T>(
+  action: string,
+  data: Record<string, unknown>,
+  timeoutMs = 15_000,
+  externalSignal?: AbortSignal,
+): Promise<T> {
+  if (externalSignal?.aborted) throw new DOMException('Booking Authority request was cancelled.', 'AbortError');
   const session = await requireFirebaseWebSession();
+  if (externalSignal?.aborted) throw new DOMException('Booking Authority request was cancelled.', 'AbortError');
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  let abortCause: 'external' | 'timeout' | null = null;
+  const abortFromExternalSignal = () => {
+    if (abortCause) return;
+    abortCause = 'external';
+    controller.abort();
+  };
+  externalSignal?.addEventListener('abort', abortFromExternalSignal, { once: true });
+  const timer = window.setTimeout(() => {
+    if (abortCause) return;
+    abortCause = 'timeout';
+    controller.abort();
+  }, timeoutMs);
   try {
     const response = await fetch(endpoint(), {
       method: 'POST',
@@ -303,19 +321,27 @@ async function callOfficeBookingAuthority<T>(action: string, data: Record<string
       body: JSON.stringify({ action, data }),
       signal: controller.signal,
     });
-    const payload = await response.json().catch(() => ({})) as T & ApiError;
+    const payload = await response.json().catch((error) => {
+      if (controller.signal.aborted) throw error;
+      return {};
+    }) as T & ApiError;
     if (!response.ok) {
       const code = payload.error?.code ? ` (${payload.error.code})` : '';
       throw new Error(`${payload.error?.message ?? 'The appointment operation could not be completed.'}${code}${apiErrorDetail(payload)}`);
     }
     return payload;
   } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
+    if (abortCause === 'external') {
+      if (error instanceof DOMException && error.name === 'AbortError') throw error;
+      throw new DOMException('Booking Authority request was cancelled.', 'AbortError');
+    }
+    if (abortCause === 'timeout' || (error instanceof DOMException && error.name === 'AbortError')) {
       throw new Error('Booking Authority took too long to respond, so the outcome is not yet confirmed. Refresh before trying again.');
     }
     throw error;
   } finally {
     window.clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', abortFromExternalSignal);
   }
 }
 
@@ -467,8 +493,8 @@ export async function checkOfficeCreateAvailability(input: {
   changeKind?: OfficeLifecycleChangeKind;
   bookingMode?: OfficeBookingMode;
   backdatingAcknowledged?: boolean;
-}) {
-  return callOfficeBookingAuthority<OfficeAvailabilityResult>('check_availability', input, 12_000);
+}, signal?: AbortSignal) {
+  return callOfficeBookingAuthority<OfficeAvailabilityResult>('check_availability', input, 12_000, signal);
 }
 
 export async function confirmOfficeAppointment(input: {

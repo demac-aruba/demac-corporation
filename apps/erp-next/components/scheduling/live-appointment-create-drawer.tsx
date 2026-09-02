@@ -88,7 +88,8 @@ type WorkLineDraft = {
 };
 
 type ValidationState = {
-  signature: string;
+  capacitySignature: string;
+  offerSignature: string;
   offerId: string;
   offerVersion: number;
   options: OfficeBookingOption[];
@@ -284,7 +285,11 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const [description, setDescription] = useState('');
   const lastAutoDescriptionRef = useRef('');
   const validationEpochRef = useRef(0);
-  const validationSignatureRef = useRef('');
+  const offerSignatureRef = useRef('');
+  const automaticValidationCapacityRef = useRef('');
+  const automaticValidationTimerRef = useRef<number | null>(null);
+  const validationChangeKindRef = useRef<'capacity' | 'metadata'>('capacity');
+  const validationAbortRef = useRef<AbortController | null>(null);
   const referenceLoadEpochRef = useRef(0);
   const backdatingPromptedRef = useRef(false);
   const [backdatingAcknowledged, setBackdatingAcknowledged] = useState(false);
@@ -438,6 +443,16 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     return () => { active = false; };
   }, []);
 
+  useEffect(() => () => {
+    if (automaticValidationTimerRef.current !== null) {
+      window.clearTimeout(automaticValidationTimerRef.current);
+      automaticValidationTimerRef.current = null;
+    }
+    validationAbortRef.current?.abort();
+    validationAbortRef.current = null;
+    validationEpochRef.current += 1;
+  }, []);
+
   useEffect(() => {
     let active = true;
     setCrewLabel('Crew loading…');
@@ -516,9 +531,14 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     [backdatedTarget, recipientSelections],
   );
   const recipientSignature = effectiveRecipientSelections.map((item) => `${item.recipientType}:${item.sourceId}:${Number(item.sendConfirmation)}:${Number(item.sendReminder)}`).sort().join('|');
-  const signature = [customerId, propertyId, recipientSignature, workSignature, description.trim(), technicianInstructions.trim(), requestTarget.dateKey, requestTarget.vanId, requestTarget.start, mode, backdatedTarget ? `backdated:${Number(backdatingAcknowledged)}` : 'current'].join('|');
-  validationSignatureRef.current = signature;
-  const activeValidation = validated?.signature === signature ? validated : null;
+  const capacitySignature = [customerId, propertyId, workSignature, requestTarget.dateKey, requestTarget.vanId, requestTarget.start, mode, backdatedTarget ? `backdated:${Number(backdatingAcknowledged)}` : 'current'].join('|');
+  const offerSignature = [capacitySignature, recipientSignature, description.trim(), technicianInstructions.trim()].join('|');
+  offerSignatureRef.current = offerSignature;
+  const capacityValidation = validated?.capacitySignature === capacitySignature ? validated : null;
+  const activeValidation = capacityValidation?.offerSignature === offerSignature ? capacityValidation : null;
+  const selectedCapacityOption = capacityValidation?.options.find((option) => option.id === capacityValidation.selectedOptionId)
+    ?? capacityValidation?.options[0]
+    ?? null;
   const selectedValidatedOption = activeValidation?.options.find((option) => option.id === activeValidation.selectedOptionId)
     ?? activeValidation?.options[0]
     ?? null;
@@ -530,10 +550,25 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     return minutes >= 60 && minutes <= 720 && minutes % 30 === 0;
   });
 
-  const resetValidation = () => {
+  const cancelValidationRequest = () => {
+    validationAbortRef.current?.abort();
+    validationAbortRef.current = null;
+  };
+
+  const resetCapacityValidation = () => {
+    cancelValidationRequest();
+    validationChangeKindRef.current = 'capacity';
     validationEpochRef.current += 1;
     setChecking(false);
     setValidated(null);
+    setAuthorityError('');
+  };
+
+  const invalidateOfferValidation = () => {
+    cancelValidationRequest();
+    validationChangeKindRef.current = capacityValidation ? 'metadata' : 'capacity';
+    validationEpochRef.current += 1;
+    setChecking(false);
     setAuthorityError('');
   };
 
@@ -546,7 +581,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     setMasterError('');
     setCustomerEditorOpen(false);
     setPropertyEditorOpen(false);
-    resetValidation();
+    resetCapacityValidation();
   };
 
   const addPreset = (preset: OfficeBookingPreset) => {
@@ -556,25 +591,25 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       if (isOtherPreset(preset)) return current;
       return current.map((line) => line.id === existing.id ? { ...line, quantity: Math.min(20, line.quantity + 1) } : line);
     });
-    resetValidation();
+    resetCapacityValidation();
   };
 
   const changeQuantity = (lineId: string, delta: number) => {
     setWorkLines((current) => current.map((line) => line.id === lineId
       ? { ...line, quantity: Math.max(1, Math.min(20, line.quantity + delta)) }
       : line));
-    resetValidation();
+    resetCapacityValidation();
   };
 
   const removeWorkLine = (lineId: string) => {
     setWorkLines((current) => current.filter((line) => line.id !== lineId));
-    resetValidation();
+    resetCapacityValidation();
   };
 
   const changeManualHours = (lineId: string, hours: number) => {
     const minutes = Math.max(60, Math.min(720, Math.round(hours * 2) * 30));
     setWorkLines((current) => current.map((line) => line.id === lineId ? { ...line, manualDurationMinutes: minutes } : line));
-    resetValidation();
+    resetCapacityValidation();
   };
 
   const openCustomerEditor = () => {
@@ -601,7 +636,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       setRecipientSelections([]);
       setCustomerQuery('');
       setCustomerEditorOpen(false);
-      resetValidation();
+      resetCapacityValidation();
     } catch (error) {
       setMasterError(error instanceof Error ? error.message : 'The customer could not be created.');
     } finally {
@@ -627,7 +662,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       setPropertyId(created.id);
       setRecipientSelections([]);
       setPropertyEditorOpen(false);
-      resetValidation();
+      resetCapacityValidation();
     } catch (error) {
       setMasterError(error instanceof Error ? error.message : 'The property could not be created.');
     } finally {
@@ -647,6 +682,10 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   }), [presetById, workLines]);
 
   const validateTarget = useCallback(async (automatic = false) => {
+    if (!automatic && automaticValidationTimerRef.current !== null) {
+      window.clearTimeout(automaticValidationTimerRef.current);
+      automaticValidationTimerRef.current = null;
+    }
     if (isAfterHours) return;
     if (backdatedTarget && !backdatingAcknowledged) {
       if (!automatic) setAuthorityError('Confirm the backdated appointment warning before validating historical capacity.');
@@ -665,12 +704,21 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       return;
     }
 
+    validationAbortRef.current?.abort();
+    const requestController = new AbortController();
+    validationAbortRef.current = requestController;
     const requestEpoch = validationEpochRef.current + 1;
     validationEpochRef.current = requestEpoch;
-    const validationSignature = signature;
+    const validationCapacitySignature = capacitySignature;
+    const validationOfferSignature = offerSignature;
     setChecking(true);
     setAuthorityError('');
-    setValidated(null);
+    setValidated((current) => {
+      if (current?.capacitySignature !== validationCapacitySignature) return null;
+      return current.offerSignature === validationOfferSignature
+        ? { ...current, offerSignature: '' }
+        : current;
+    });
     try {
       const result = await checkOfficeCreateAvailability({
         requestId: createOfficeLifecycleRequestId('schedule-create-check'),
@@ -685,35 +733,54 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         recipientSelections: effectiveRecipientSelections,
         notes: `${backdatedTarget ? 'Backdated work recorded' : 'Created'} from LIVE Scheduling slot ${requestTarget.vanId} ${requestTarget.dateKey} ${requestTarget.start}.`,
         ...(backdatedTarget ? { bookingMode: 'backdated' as const, backdatingAcknowledged: true } : {}),
-      });
-      if (requestEpoch !== validationEpochRef.current || validationSignatureRef.current !== validationSignature) return;
+      }, requestController.signal);
+      if (requestEpoch !== validationEpochRef.current || offerSignatureRef.current !== validationOfferSignature) return;
       const exactOptions = result.options.filter((option) => optionMatchesTarget(option, requestTarget));
-      if (!result.available || !result.offer || !exactOptions.length) {
+      const offer = result.offer;
+      if (!result.available || !offer || !exactOptions.length) {
         const reason = result.reason ? ` (${result.reason})` : '';
+        setValidated(null);
         setAuthorityError(`Booking Authority could not reserve the complete allocation for this van/time${reason}. The schedule was not changed.`);
         return;
       }
-      setValidated({
-        signature: validationSignature,
-        offerId: result.offer.id,
-        offerVersion: result.offer.version,
+      setValidated((current) => ({
+        capacitySignature: validationCapacitySignature,
+        offerSignature: validationOfferSignature,
+        offerId: offer.id,
+        offerVersion: offer.version,
         options: exactOptions,
-        selectedOptionId: exactOptions[0].id,
-      });
+        selectedOptionId: current?.capacitySignature === validationCapacitySignature
+          && exactOptions.some((option) => option.id === current.selectedOptionId)
+          ? current.selectedOptionId
+          : exactOptions[0].id,
+      }));
     } catch (error) {
-      if (requestEpoch === validationEpochRef.current && validationSignatureRef.current === validationSignature) {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
+      if (requestEpoch === validationEpochRef.current && offerSignatureRef.current === validationOfferSignature) {
         setAuthorityError(error instanceof Error ? error.message : 'Booking Authority could not validate this target.');
       }
     } finally {
+      if (validationAbortRef.current === requestController) validationAbortRef.current = null;
       if (requestEpoch === validationEpochRef.current) setChecking(false);
     }
-  }, [backdatedTarget, backdatingAcknowledged, description, effectiveRecipientSelections, isAfterHours, requestTarget, selectedCustomer, selectedProperty, signature, technicianInstructions, workRequestLines, workValid]);
+  }, [backdatedTarget, backdatingAcknowledged, capacitySignature, description, effectiveRecipientSelections, isAfterHours, offerSignature, requestTarget, selectedCustomer, selectedProperty, technicianInstructions, workRequestLines, workValid]);
 
   useEffect(() => {
+    const capacityChanged = automaticValidationCapacityRef.current !== capacitySignature;
+    automaticValidationCapacityRef.current = capacitySignature;
+    if (capacityChanged) validationChangeKindRef.current = 'capacity';
     if (isAfterHours || (backdatedTarget && !backdatingAcknowledged) || loading || masterSaving || saving || holding || !selectedCustomer || !selectedProperty || !workValid) return;
-    const timer = window.setTimeout(() => { void validateTarget(true); }, 350);
-    return () => window.clearTimeout(timer);
-  }, [backdatedTarget, backdatingAcknowledged, holding, isAfterHours, loading, masterSaving, saving, selectedCustomer, selectedProperty, validateTarget, workValid]);
+    const timer = window.setTimeout(() => {
+      if (automaticValidationTimerRef.current === timer) automaticValidationTimerRef.current = null;
+      validationChangeKindRef.current = 'metadata';
+      void validateTarget(true);
+    }, validationChangeKindRef.current === 'capacity' ? 100 : 800);
+    automaticValidationTimerRef.current = timer;
+    return () => {
+      window.clearTimeout(timer);
+      if (automaticValidationTimerRef.current === timer) automaticValidationTimerRef.current = null;
+    };
+  }, [backdatedTarget, backdatingAcknowledged, capacitySignature, holding, isAfterHours, loading, masterSaving, offerSignature, saving, selectedCustomer, selectedProperty, validateTarget, workValid]);
 
   const confirmBooking = async () => {
     if (!selectedCustomer || !selectedProperty || !selectedPresets.length || !workValid || saving || holding) return;
@@ -851,7 +918,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
             <div><span>DATE</span><strong>{formatDate(requestTarget.dateKey)}</strong></div>
             <div><span>PRIMARY VAN</span><strong>{requestTarget.vanName} · {crewLabel}</strong></div>
             {isAfterHours ? (
-              <div><label htmlFor="after-hours-start" style={{ display: 'block', color: 'var(--brand)', fontSize: '5.5px', fontWeight: 950, letterSpacing: '.07em' }}>START · 5:00 PM OR LATER</label><input id="after-hours-start" style={{ width: '100%', boxSizing: 'border-box', marginTop: 3, border: '1px solid var(--border)', borderRadius: 7, padding: '5px 7px', color: 'var(--text)', background: 'var(--surface)' }} type="time" min="17:00" value={requestedStart} onChange={(event) => { setRequestedStart(event.target.value); resetValidation(); }} /></div>
+              <div><label htmlFor="after-hours-start" style={{ display: 'block', color: 'var(--brand)', fontSize: '5.5px', fontWeight: 950, letterSpacing: '.07em' }}>START · 5:00 PM OR LATER</label><input id="after-hours-start" style={{ width: '100%', boxSizing: 'border-box', marginTop: 3, border: '1px solid var(--border)', borderRadius: 7, padding: '5px 7px', color: 'var(--text)', background: 'var(--surface)' }} type="time" min="17:00" value={requestedStart} onChange={(event) => { setRequestedStart(event.target.value); resetCapacityValidation(); }} /></div>
             ) : <div><span>START</span><strong>{formatTime(requestTarget.start)}</strong></div>}
             <div><span>{isAfterHours ? 'WORK RULE' : 'OPEN BLOCK'}</span><strong>{isAfterHours ? 'Extra job · open-ended until field completion' : `${formatTime(requestTarget.start)}–${formatTime(requestTarget.end)}`}</strong></div>
           </section>
@@ -911,7 +978,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                 <>
                   <div className={styles.choiceGrid}>
                     {customerProperties.map((property) => (
-                      <button type="button" key={property.id} className={`${styles.choice} ${property.id === propertyId ? styles.choiceSelected : ''}`} onClick={() => { setPropertyId(property.id); setRecipientSelections([]); resetValidation(); }}>
+                      <button type="button" key={property.id} className={`${styles.choice} ${property.id === propertyId ? styles.choiceSelected : ''}`} onClick={() => { setPropertyId(property.id); setRecipientSelections([]); resetCapacityValidation(); }}>
                         <strong>{propertyLabel(property)}</strong><span>{text(property.address) || 'No address'}</span><small>{text(property.operationalZone) || text(property.zone) || 'Area not specified'}</small>
                       </button>
                     ))}
@@ -924,7 +991,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                     contacts={references.contacts}
                     assignments={references.contactAssignments}
                     selections={recipientSelections}
-                    onSelectionsChange={(next) => { setRecipientSelections(next); resetValidation(); }}
+                    onSelectionsChange={(next) => { setRecipientSelections(next); invalidateOfferValidation(); }}
                     onRefresh={refreshReferences}
                   /> : selectedProperty ? <div className={styles.authorityIdle} style={{ marginTop: 10, border: '1px solid var(--warning, #f59e0b)', borderRadius: 10 }}><strong style={{ display: 'block', color: 'var(--warning, #b45309)' }}>Customer messages are off for this backdated appointment.</strong><span>Confirmation and reminder choices are intentionally suppressed because the work already happened.</span></div> : null}
                 </>
@@ -990,11 +1057,11 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
               <div className={styles.quantityRow}>
                 <div><span>Work lines</span><strong>{workLines.length} line{workLines.length === 1 ? '' : 's'} · {totalQuantity} item{totalQuantity === 1 ? '' : 's'}</strong></div>
                 <div><span>Estimated workload</span><strong>{estimatedMinutes ? durationLabel(estimatedMinutes) : '—'}</strong></div>
-                <div><span>{isAfterHours ? 'After-hours execution' : 'Scheduled allocation'}</span><strong>{isAfterHours ? 'Open-ended until field completion' : allocationDurationLabel(selectedValidatedOption, estimatedMinutes)}</strong></div>
+                <div><span>{isAfterHours ? 'After-hours execution' : 'Scheduled allocation'}</span><strong>{isAfterHours ? 'Open-ended until field completion' : allocationDurationLabel(selectedCapacityOption, estimatedMinutes)}</strong></div>
               </div>
               <div className={styles.formGrid}>
-                <label className={styles.fieldWide}><span>Customer-facing work description</span><textarea value={description} onChange={(event) => { setDescription(event.target.value); resetValidation(); }} placeholder="Example: Two standard services and one installation. BTU to be confirmed by technician on site." /></label>
-                <label className={styles.fieldWide}><span>Technician instructions</span><textarea value={technicianInstructions} onChange={(event) => { setTechnicianInstructions(event.target.value); resetValidation(); }} placeholder="Access instructions, contact person, equipment location, diagnostic notes…" /></label>
+                <label className={styles.fieldWide}><span>Customer-facing work description</span><textarea value={description} onChange={(event) => { setDescription(event.target.value); invalidateOfferValidation(); }} placeholder="Example: Two standard services and one installation. BTU to be confirmed by technician on site." /></label>
+                <label className={styles.fieldWide}><span>Technician instructions</span><textarea value={technicianInstructions} onChange={(event) => { setTechnicianInstructions(event.target.value); invalidateOfferValidation(); }} placeholder="Access instructions, contact person, equipment location, diagnostic notes…" /></label>
               </div>
             </div>
           </section>
@@ -1010,22 +1077,26 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           <section className={styles.authoritySection}>
             <div className={styles.authorityHeading}><div><span>4</span><strong>{backdatedTarget ? 'Historical capacity validation' : 'Live capacity validation'}</strong><small>{requestTarget.vanName} stays the primary/responsible van. Booking Authority validates automatically as the complete workload changes; final transaction validation still runs on confirm or hold.</small></div><button type="button" className={styles.validateButton} disabled={busy || checking || !selectedCustomer || !selectedProperty || !workValid || (backdatedTarget && !backdatingAcknowledged)} onClick={() => void validateTarget(false)}>{checking ? 'Checking…' : backdatedTarget ? 'Recheck history' : 'Recheck now'}</button></div>
 
-            {activeValidation && selectedValidatedOption ? (
+            {capacityValidation && selectedCapacityOption ? (
               <div className={styles.validationSuccess}>
-                <header><div><b>✓</b><div><strong>Booking Authority approved the complete allocation</strong><span>Offer {activeValidation.offerId} · final transaction validation still runs on commit.</span></div></div></header>
-                {activeValidation.options.length > 1 ? (
+                <header><div><b>✓</b><div><strong>{activeValidation ? 'Booking Authority approved the complete allocation' : 'Booking Authority approved this capacity allocation'}</strong><span>{activeValidation
+                  ? `Offer ${activeValidation.offerId} · final transaction validation still runs on commit.`
+                  : authorityError
+                    ? 'The last approved capacity remains visible, but the current appointment details still need a fresh offer.'
+                    : 'Capacity remains approved while appointment details synchronize with Booking Authority.'}</span></div></div></header>
+                {capacityValidation.options.length > 1 ? (
                   <div style={{ marginTop: 10 }}>
                     <div style={{ color: 'var(--muted)', fontSize: 6, fontWeight: 850, marginBottom: 6 }}>VALID SUPPORT ALTERNATIVES</div>
                     <div className={styles.choiceGrid}>
-                      {activeValidation.options.map((option) => {
+                      {capacityValidation.options.map((option) => {
                         const supportWindows = optionSupportWindows(option);
                         const primary = optionPrimaryAssignment(option);
                         const primaryStart = primary ? optionAssignmentStart(option, primary) : option.time;
                         const primaryWorkEnd = primary ? optionAssignmentWorkEnd(option, primary) : option.endTime || '';
                         const primaryCapacityEnd = primary ? optionAssignmentCapacityEnd(option, primary) : option.capacityEndTime || primaryWorkEnd;
-                        const selected = option.id === selectedValidatedOption.id;
+                        const selected = option.id === selectedCapacityOption.id;
                         return (
-                          <button type="button" key={option.id} className={`${styles.choice} ${selected ? styles.choiceSelected : ''}`} aria-pressed={selected} onClick={() => setValidated((current) => current ? { ...current, selectedOptionId: option.id } : current)}>
+                          <button type="button" key={option.id} className={`${styles.choice} ${selected ? styles.choiceSelected : ''}`} aria-pressed={selected} onClick={() => setValidated((current) => current?.capacitySignature === capacitySignature ? { ...current, selectedOptionId: option.id } : current)}>
                             <strong>{supportWindows.length === 1
                               ? `${supportWindows[0].assignment.vanName || supportWindows[0].assignment.vanId} · support`
                               : supportWindows.length > 1 ? `${supportWindows.length} support Vans` : 'Primary allocation'}</strong>
@@ -1053,11 +1124,11 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                   </div>
                 ) : null}
                 <div className={styles.assignmentGrid}>
-                  {selectedValidatedOption.assignments.map((assignment, index) => {
-                    const support = optionAssignmentIsSupport(selectedValidatedOption, assignment);
-                    const start = optionAssignmentStart(selectedValidatedOption, assignment);
-                    const workEnd = optionAssignmentWorkEnd(selectedValidatedOption, assignment);
-                    const capacityEnd = optionAssignmentCapacityEnd(selectedValidatedOption, assignment);
+                  {selectedCapacityOption.assignments.map((assignment, index) => {
+                    const support = optionAssignmentIsSupport(selectedCapacityOption, assignment);
+                    const start = optionAssignmentStart(selectedCapacityOption, assignment);
+                    const workEnd = optionAssignmentWorkEnd(selectedCapacityOption, assignment);
+                    const capacityEnd = optionAssignmentCapacityEnd(selectedCapacityOption, assignment);
                     return <article key={`${assignment.vanId}-${start}-${index}`}>
                       <span>{support ? 'SUPPORT' : 'PRIMARY / RESPONSIBLE'}</span>
                       <strong>{assignment.vanName || assignment.vanId}</strong>
@@ -1069,7 +1140,11 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                 <div className={styles.authorityIdle} style={{ marginTop: 8 }}><strong>Temporary hold:</strong> reserves these same canonical capacity locks but sends no customer confirmation or reminder until an office user manually confirms it. No automatic expiry is assumed.</div>
               </div>
             ) : (
-              <div className={styles.authorityIdle}>{checking ? 'Checking the complete allocation with Booking Authority…' : 'Complete the customer, property and work details. Booking Authority validates the live target automatically; the browser never becomes the source of truth for capacity.'}</div>
+              <div className={styles.authorityIdle}>{!backdatedTarget && selectedCustomer && selectedProperty && workValid && !authorityError
+                ? 'LIVE slot appears open · confirming Booking Authority'
+                : checking
+                  ? 'Checking the complete allocation with Booking Authority…'
+                  : 'Complete the customer, property and work details. Booking Authority validates the live target automatically; the browser never becomes the source of truth for capacity.'}</div>
             )}
           </section>
           )}
