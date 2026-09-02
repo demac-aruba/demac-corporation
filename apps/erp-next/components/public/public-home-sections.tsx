@@ -27,11 +27,11 @@ function LineIcon({ name }: { name: IconName }) {
   return <svg viewBox="0 0 24 24" aria-hidden="true">{shapes[name]}</svg>;
 }
 
-const solutionGroups: Array<{ icon: IconName; title: string; subtitle: string }> = [
-  { icon: 'home', title: 'Residential', subtitle: 'Comfort solutions for your home.' },
-  { icon: 'store', title: 'Light Commercial', subtitle: 'Efficient systems for small businesses.' },
-  { icon: 'building', title: 'Commercial', subtitle: 'Powerful cooling for medium & large spaces.' },
-  { icon: 'vrf', title: 'VRF Systems', subtitle: 'Advanced technology for maximum efficiency.' },
+const solutionGroups: Array<{ href: string; icon: IconName; title: string; subtitle: string }> = [
+  { href: '/services', icon: 'home', title: 'Residential', subtitle: 'Comfort solutions for your home.' },
+  { href: '/services', icon: 'store', title: 'Light Commercial', subtitle: 'Efficient systems for small businesses.' },
+  { href: '/services', icon: 'building', title: 'Commercial', subtitle: 'Powerful cooling for medium & large spaces.' },
+  { href: '/services/vrf-systems', icon: 'vrf', title: 'VRF Systems', subtitle: 'Advanced technology for maximum efficiency.' },
 ];
 
 const services: Array<{ icon: IconName; title: string; description: string }> = [
@@ -62,7 +62,7 @@ const projectTypes = [
 export function PublicHomeSections() {
   return <>
     <section className="approved-solutions" id="solutions">
-      {solutionGroups.map((group) => <Link className="approved-solution" href="/services" key={group.title}><span className="approved-solution-icon"><LineIcon name={group.icon} /></span><span><strong>{group.title}</strong><small>{group.subtitle}</small></span><b aria-hidden="true">→</b></Link>)}
+      {solutionGroups.map((group) => <Link className="approved-solution" href={group.href} key={group.title}><span className="approved-solution-icon"><LineIcon name={group.icon} /></span><span><strong>{group.title}</strong><small>{group.subtitle}</small></span><b aria-hidden="true">→</b></Link>)}
     </section>
 
     <section className="approved-services" id="services">
