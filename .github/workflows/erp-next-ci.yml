@@ -4,11 +4,20 @@ on:
   pull_request:
     paths:
       - 'apps/erp-next/**'
+      - 'functions/bootstrap.js'
+      - 'functions/index.js'
+      - 'functions/fieldOperations*.js'
+      - 'functions/bookingSchedulingPrimitives.js'
+      - 'functions/bookingSchedulingPrimitives.test.js'
+      - 'functions/bookingVanIdentity.js'
+      - 'functions/bookingVanIdentity.test.js'
+      - 'functions/package.json'
       - 'functions/employeeAttendanceCalculation.js'
       - 'functions/employeeAttendanceCalculation.d.ts'
       - 'functions/whatsappWacliGateway.js'
       - 'services/whatsapp-bridge/**'
       - 'docs/ERP_NEXT_**'
+      - 'docs/ai/TECHNICIAN_PORTAL_**'
       - '.github/workflows/erp-next-ci.yml'
   push:
     branches:
@@ -16,17 +25,48 @@ on:
       - feature/scheduling-booking-whatsapp-consolidation
     paths:
       - 'apps/erp-next/**'
+      - 'functions/bootstrap.js'
+      - 'functions/index.js'
+      - 'functions/fieldOperations*.js'
+      - 'functions/bookingSchedulingPrimitives.js'
+      - 'functions/bookingSchedulingPrimitives.test.js'
+      - 'functions/bookingVanIdentity.js'
+      - 'functions/bookingVanIdentity.test.js'
+      - 'functions/package.json'
       - 'functions/employeeAttendanceCalculation.js'
       - 'functions/employeeAttendanceCalculation.d.ts'
       - 'functions/whatsappWacliGateway.js'
       - 'services/whatsapp-bridge/**'
       - 'docs/ERP_NEXT_**'
+      - 'docs/ai/TECHNICIAN_PORTAL_**'
       - '.github/workflows/erp-next-ci.yml'
 
 permissions:
   contents: read
 
 jobs:
+  field-functions:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: functions
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup Functions Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install Functions
+        run: npm install --no-audit --no-fund
+      - name: Validate Firebase Functions syntax
+        run: npm run validate:firebase
+      - name: Field authority acceptance
+        run: npm run test:field-authority
+      - name: Booking and scheduling regression
+        run: npm run test:booking-authority
+
   validate:
     runs-on: ubuntu-latest
     defaults:
@@ -64,5 +104,11 @@ jobs:
         run: npm run test:employee-schedule
       - name: Employee attendance Work Order authority acceptance
         run: npm run test:employee-attendance-work-orders
+      - name: Field operations domain acceptance
+        run: npm run test:field-domain
+      - name: Field assignment security acceptance
+        run: npm run test:field-security
+      - name: Field offline cache, draft and outbox acceptance
+        run: npm run test:field-offline
       - name: Build
         run: npm run build

@@ -1,0 +1,356 @@
+'use strict';
+
+const { fieldSnapshotRecord } = require('./fieldOperationsFirestoreData');
+const { fieldError } = require('./fieldOperationsAuthorityCore');
+const {
+  REPORT_SECTION_STATUSES,
+  projectStoredReportSectionStatus,
+  projectStoredReportTemplateSnapshot,
+  reportTemplateCompletion,
+} = require('./fieldOperationsReportTemplates');
+const {
+  REPORT_EVIDENCE_TARGET_TYPE,
+  projectReportPhotoEvidence,
+} = require('./fieldOperationsReportEvidence');
+const { loadFieldMeasurements } = require('./fieldOperationsMeasurements');
+const { loadFieldFindings } = require('./fieldOperationsFindings');
+const { loadFieldChecklistResponses } = require('./fieldOperationsChecklistResponses');
+const { loadFieldFreeTextResponses } = require('./fieldOperationsFreeTextResponses');
+const {
+  WORK_INTERVENTION_COLLECTION,
+  projectWorkIntervention,
+} = require('./fieldOperationsVisitInterventions');
+
+function text(value, limit = 1000) {
+  return String(value ?? '').trim().slice(0, limit);
+}
+
+function snapshotRecords(snapshot) {
+  return (snapshot?.docs || []).map(fieldSnapshotRecord);
+}
+
+function reportProjectionFromStored(storedRecord, projectedIntervention) {
+  const template = projectStoredReportTemplateSnapshot(
+    storedRecord?.reportTemplateSnapshot,
+    projectedIntervention.serviceCatalogItemId,
+  );
+  const sectionStatus = projectStoredReportSectionStatus(storedRecord?.reportSectionStatus, template);
+  if (!template) {
+    if (projectedIntervention.templateId || projectedIntervention.templateVersion !== undefined) {
+      throw fieldError('work_intervention_report_state_conflict', 'Work Intervention template identity exists without a frozen report template.', 409);
+    }
+    return undefined;
+  }
+  if (projectedIntervention.templateId !== template.id || projectedIntervention.templateVersion !== template.version) {
+    throw fieldError('work_intervention_template_identity_conflict', 'Work Intervention template identity does not match its frozen report template.', 409);
+  }
+  return {
+    interventionId: projectedIntervention.id,
+    visitAssetId: projectedIntervention.visitAssetId,
+    assetId: projectedIntervention.assetId,
+    serviceCatalogItemId: projectedIntervention.serviceCatalogItemId,
+    template,
+    sectionStatus,
+    completion: reportTemplateCompletion(template, sectionStatus),
+    evidence: [],
+    measurements: [],
+    findings: [],
+    checklistResponses: [],
+    freeTextResponses: [],
+  };
+}
+
+async function loadInterventionReportRecords(db, job) {
+  const visitId = text(job?.fieldVisit?.id, 180);
+  if (!visitId) return [];
+  const expectedContext = {
+    visitId,
+    workOrderId: text(job?.workOrderId, 180),
+    customerId: text(job?.customerId, 180),
+    propertyId: text(job?.propertyId, 180),
+  };
+  const rawSnapshot = await db.collection(WORK_INTERVENTION_COLLECTION).where('visitId', '==', visitId).get();
+  const rawById = new Map(snapshotRecords(rawSnapshot).map((record) => [record.id, record]));
+  const reports = [];
+  for (const intervention of job?.workInterventions || []) {
+    const raw = rawById.get(intervention.id);
+    if (!raw) {
+      throw fieldError('work_intervention_identity_conflict', 'Projected Work Intervention is missing from canonical persistence.', 409);
+    }
+    const current = projectWorkIntervention(raw, expectedContext);
+    if (current.id !== intervention.id || current.version !== intervention.version) {
+      throw fieldError('work_intervention_identity_conflict', 'Work Intervention report projection does not match the canonical job projection.', 409);
+    }
+    const report = reportProjectionFromStored(raw, current);
+    if (report) reports.push(report);
+  }
+  return reports;
+}
+
+async function attachReportEvidence(db, job, reports) {
+  const visitId = text(job?.fieldVisit?.id, 180);
+  if (!visitId || reports.length === 0) return reports;
+  const snapshot = await db.collection('fieldEvidence').where('visitId', '==', visitId).get();
+  const reportByInterventionId = new Map(reports.map((report) => [report.interventionId, report]));
+  for (const record of snapshotRecords(snapshot)) {
+    if (text(record?.targetType, 80) !== REPORT_EVIDENCE_TARGET_TYPE) continue;
+    const interventionId = text(record?.interventionId, 180);
+    const report = reportByInterventionId.get(interventionId);
+    if (!report) {
+      throw fieldError('report_evidence_identity_conflict', 'Persisted report evidence references an intervention without a canonical report projection.', 409);
+    }
+    const section = report.template.sections.find((candidate) => candidate.id === text(record?.sectionId, 120));
+    if (!section || section.type !== 'photos') {
+      throw fieldError('report_evidence_identity_conflict', 'Persisted report photo references an invalid report section.', 409);
+    }
+    report.evidence.push(projectReportPhotoEvidence(record, {
+      visitId,
+      workOrderId: text(job.workOrderId, 180),
+      customerId: text(job.customerId, 180),
+      propertyId: text(job.propertyId, 180),
+      visitAssetId: report.visitAssetId,
+      assetId: report.assetId,
+      interventionId,
+      sectionId: section.id,
+    }));
+  }
+  for (const report of reports) {
+    report.evidence.sort((left, right) => left.capturedAt.localeCompare(right.capturedAt) || left.id.localeCompare(right.id));
+  }
+  return reports;
+}
+
+async function attachReportMeasurements(db, job, reports) {
+  const visitId = text(job?.fieldVisit?.id, 180);
+  if (!visitId || reports.length === 0) return reports;
+  const measurements = await loadFieldMeasurements(db, visitId, {
+    workOrderId: text(job.workOrderId, 180),
+    customerId: text(job.customerId, 180),
+    propertyId: text(job.propertyId, 180),
+  });
+  const reportByInterventionId = new Map(reports.map((report) => [report.interventionId, report]));
+  for (const measurement of measurements) {
+    const report = reportByInterventionId.get(measurement.interventionId);
+    if (!report) {
+      throw fieldError('field_measurement_identity_conflict', 'Persisted Field Measurement references an intervention without a canonical report projection.', 409);
+    }
+    const section = report.template.sections.find((candidate) => candidate.id === measurement.sectionId);
+    if (!section || section.type !== 'measurement_table') {
+      throw fieldError('field_measurement_identity_conflict', 'Persisted Field Measurement references an invalid report section.', 409);
+    }
+    if (measurement.visitAssetId !== report.visitAssetId || measurement.assetId !== report.assetId) {
+      throw fieldError('field_measurement_identity_conflict', 'Persisted Field Measurement does not match its Work Intervention equipment identity.', 409);
+    }
+    report.measurements.push(measurement);
+  }
+  for (const report of reports) {
+    report.measurements.sort((left, right) => left.measuredAt.localeCompare(right.measuredAt) || left.id.localeCompare(right.id));
+  }
+  return reports;
+}
+
+async function attachReportFindings(db, job, reports) {
+  const visitId = text(job?.fieldVisit?.id, 180);
+  if (!visitId || reports.length === 0) return reports;
+  const findings = await loadFieldFindings(db, visitId, {
+    workOrderId: text(job.workOrderId, 180),
+    customerId: text(job.customerId, 180),
+    propertyId: text(job.propertyId, 180),
+  });
+  const reportByInterventionId = new Map(reports.map((report) => [report.interventionId, report]));
+  for (const finding of findings) {
+    const report = reportByInterventionId.get(finding.interventionId);
+    if (!report) {
+      throw fieldError('field_finding_identity_conflict', 'Persisted Field Finding references an intervention without a canonical report projection.', 409);
+    }
+    const section = report.template.sections.find((candidate) => candidate.id === finding.sectionId);
+    if (!section || section.type !== 'findings') {
+      throw fieldError('field_finding_identity_conflict', 'Persisted Field Finding references an invalid report section.', 409);
+    }
+    if (finding.visitAssetId !== report.visitAssetId || finding.assetId !== report.assetId) {
+      throw fieldError('field_finding_identity_conflict', 'Persisted Field Finding does not match its Work Intervention equipment identity.', 409);
+    }
+    report.findings.push(finding);
+  }
+  for (const report of reports) {
+    report.findings.sort((left, right) => left.observedAt.localeCompare(right.observedAt) || left.id.localeCompare(right.id));
+  }
+  return reports;
+}
+
+async function attachReportChecklistResponses(db, job, reports) {
+  const visitId = text(job?.fieldVisit?.id, 180);
+  if (!visitId || reports.length === 0) return reports;
+  const responses = await loadFieldChecklistResponses(db, visitId, {
+    workOrderId: text(job.workOrderId, 180),
+    customerId: text(job.customerId, 180),
+    propertyId: text(job.propertyId, 180),
+  });
+  const reportByInterventionId = new Map(reports.map((report) => [report.interventionId, report]));
+  for (const response of responses) {
+    const report = reportByInterventionId.get(response.interventionId);
+    if (!report) {
+      throw fieldError('field_checklist_response_identity_conflict', 'Persisted checklist response references an intervention without a canonical report projection.', 409);
+    }
+    const section = report.template.sections.find((candidate) => candidate.id === response.sectionId);
+    const item = section?.type === 'checklist'
+      ? section.checklistItems?.find((candidate) => candidate.id === response.itemId)
+      : null;
+    if (!section || section.type !== 'checklist' || !item) {
+      throw fieldError('field_checklist_response_identity_conflict', 'Persisted checklist response references an invalid frozen checklist item.', 409);
+    }
+    if (response.visitAssetId !== report.visitAssetId || response.assetId !== report.assetId) {
+      throw fieldError('field_checklist_response_identity_conflict', 'Persisted checklist response does not match its Work Intervention equipment identity.', 409);
+    }
+    report.checklistResponses.push(response);
+  }
+  for (const report of reports) {
+    report.checklistResponses.sort((left, right) => left.sectionId.localeCompare(right.sectionId) || left.itemId.localeCompare(right.itemId));
+    for (const section of report.template.sections.filter((candidate) => candidate.type === 'checklist')) {
+      const responsesByItemId = new Map(
+        report.checklistResponses
+          .filter((response) => response.sectionId === section.id)
+          .map((response) => [response.itemId, response.checked]),
+      );
+      const completed = section.checklistItems.length > 0
+        && section.checklistItems.every((item) => responsesByItemId.get(item.id) === true);
+      if (completed !== (report.sectionStatus?.[section.id] === 'completed')) {
+        if (completed || report.sectionStatus?.[section.id] === 'completed') {
+          throw fieldError('field_checklist_report_state_conflict', 'Checklist responses do not match the persisted report section completion state.', 409, {
+            interventionId: report.interventionId,
+            sectionId: section.id,
+          });
+        }
+      }
+    }
+  }
+  return reports;
+}
+
+async function attachReportFreeTextResponses(db, job, reports) {
+  const visitId = text(job?.fieldVisit?.id, 180);
+  if (!visitId || reports.length === 0) return reports;
+  const responses = await loadFieldFreeTextResponses(db, visitId, {
+    workOrderId: text(job.workOrderId, 180),
+    customerId: text(job.customerId, 180),
+    propertyId: text(job.propertyId, 180),
+  });
+  const reportByInterventionId = new Map(reports.map((report) => [report.interventionId, report]));
+  const responseKeys = new Set();
+  for (const response of responses) {
+    const report = reportByInterventionId.get(response.interventionId);
+    if (!report) {
+      throw fieldError('field_free_text_response_identity_conflict', 'Persisted free-text response references an intervention without a canonical report projection.', 409);
+    }
+    const section = report.template.sections.find((candidate) => candidate.id === response.sectionId);
+    if (!section || section.type !== 'free_text') {
+      throw fieldError('field_free_text_response_identity_conflict', 'Persisted free-text response references an invalid frozen report section.', 409);
+    }
+    if (response.visitAssetId !== report.visitAssetId || response.assetId !== report.assetId) {
+      throw fieldError('field_free_text_response_identity_conflict', 'Persisted free-text response does not match its Work Intervention equipment identity.', 409);
+    }
+    const key = `${response.interventionId}:${response.sectionId}`;
+    if (responseKeys.has(key)) {
+      throw fieldError('field_free_text_response_identity_conflict', 'More than one canonical free-text response exists for the same report section.', 409);
+    }
+    responseKeys.add(key);
+    report.freeTextResponses.push(response);
+  }
+  for (const report of reports) {
+    report.freeTextResponses.sort((left, right) => left.sectionId.localeCompare(right.sectionId));
+    const responseBySectionId = new Map(report.freeTextResponses.map((response) => [response.sectionId, response]));
+    for (const section of report.template.sections.filter((candidate) => candidate.type === 'free_text')) {
+      const response = responseBySectionId.get(section.id);
+      const completed = Boolean(response && response.value.length > 0);
+      if (completed !== (report.sectionStatus?.[section.id] === 'completed')) {
+        if (completed || report.sectionStatus?.[section.id] === 'completed') {
+          throw fieldError('field_free_text_report_state_conflict', 'Free-text response does not match the persisted report section completion state.', 409, {
+            interventionId: report.interventionId,
+            sectionId: section.id,
+          });
+        }
+      }
+    }
+  }
+  return reports;
+}
+
+function reportSectionOptions(job, reports, action, sectionType) {
+  if (text(job?.fieldVisit?.status, 80) !== 'in_progress') return [];
+  if (!Array.isArray(job?.allowedActions) || !job.allowedActions.includes(action)) return [];
+  const interventionById = new Map((job?.workInterventions || []).map((intervention) => [intervention.id, intervention]));
+  return reports.map((report) => {
+    const intervention = interventionById.get(report.interventionId);
+    if (!intervention || intervention.status !== 'in_progress') return null;
+    const sectionIds = report.template.sections
+      .filter((section) => section.type === sectionType)
+      .filter((section) => sectionType === 'checklist' || sectionType === 'free_text' || report.sectionStatus?.[section.id] !== 'completed')
+      .map((section) => section.id);
+    return sectionIds.length > 0 ? { interventionId: report.interventionId, sectionIds } : null;
+  }).filter(Boolean);
+}
+
+function reportPhotoOptions(job, reports) {
+  return reportSectionOptions(job, reports, 'evidence.add', 'photos');
+}
+
+function reportMeasurementOptions(job, reports) {
+  return reportSectionOptions(job, reports, 'measurement.add', 'measurement_table');
+}
+
+function reportFindingOptions(job, reports) {
+  return reportSectionOptions(job, reports, 'finding.add', 'findings');
+}
+
+function reportChecklistOptions(job, reports) {
+  return reportSectionOptions(job, reports, 'report.edit', 'checklist');
+}
+
+function reportFreeTextOptions(job, reports) {
+  return reportSectionOptions(job, reports, 'report.edit', 'free_text');
+}
+
+async function attachInterventionReportsToJob(db, job) {
+  let reports = await loadInterventionReportRecords(db, job);
+  reports = await attachReportEvidence(db, job, reports);
+  reports = await attachReportMeasurements(db, job, reports);
+  reports = await attachReportFindings(db, job, reports);
+  reports = await attachReportChecklistResponses(db, job, reports);
+  reports = await attachReportFreeTextResponses(db, job, reports);
+  const photoOptions = reportPhotoOptions(job, reports);
+  const measurementOptions = reportMeasurementOptions(job, reports);
+  const findingOptions = reportFindingOptions(job, reports);
+  const checklistOptions = reportChecklistOptions(job, reports);
+  const freeTextOptions = reportFreeTextOptions(job, reports);
+  return {
+    ...job,
+    interventionReports: reports,
+    reportPhotoOptions: photoOptions,
+    canAddReportPhoto: photoOptions.length > 0,
+    reportMeasurementOptions: measurementOptions,
+    canAddReportMeasurement: measurementOptions.length > 0,
+    reportFindingOptions: findingOptions,
+    canAddReportFinding: findingOptions.length > 0,
+    reportChecklistOptions: checklistOptions,
+    canEditReportChecklist: checklistOptions.length > 0,
+    reportFreeTextOptions: freeTextOptions,
+    canEditReportFreeText: freeTextOptions.length > 0,
+  };
+}
+
+module.exports.REPORT_SECTION_STATUSES = REPORT_SECTION_STATUSES;
+module.exports.attachInterventionReportsToJob = attachInterventionReportsToJob;
+module.exports.attachReportChecklistResponses = attachReportChecklistResponses;
+module.exports.attachReportEvidence = attachReportEvidence;
+module.exports.attachReportFindings = attachReportFindings;
+module.exports.attachReportFreeTextResponses = attachReportFreeTextResponses;
+module.exports.attachReportMeasurements = attachReportMeasurements;
+module.exports.loadInterventionReportRecords = loadInterventionReportRecords;
+module.exports.projectReportSectionStatus = projectStoredReportSectionStatus;
+module.exports.reportChecklistOptions = reportChecklistOptions;
+module.exports.reportFindingOptions = reportFindingOptions;
+module.exports.reportFreeTextOptions = reportFreeTextOptions;
+module.exports.reportMeasurementOptions = reportMeasurementOptions;
+module.exports.reportPhotoOptions = reportPhotoOptions;
+module.exports.reportProjectionFromStored = reportProjectionFromStored;
+module.exports.reportSectionOptions = reportSectionOptions;

@@ -6,6 +6,55 @@ service firebase.storage {
       return request.auth != null;
     }
 
+    function userProfile() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid));
+    }
+
+    function activeStaff() {
+      return signedIn() && userProfile().data.active == true;
+    }
+
+    function technicianRole() {
+      return activeStaff() && userProfile().data.role == 'technician';
+    }
+
+    function currentStaffId() {
+      return userProfile().data.get('staffId', '');
+    }
+
+    function currentVanId() {
+      return userProfile().data.get('vanId', '');
+    }
+
+    function assignedToWorkOrderId(workOrderId) {
+      let workOrder = firestore.get(/databases/(default)/documents/workOrders/$(workOrderId)).data;
+      return technicianRole()
+        && (
+          request.auth.uid in workOrder.get('technicianIds', [])
+          || currentStaffId() in workOrder.get('technicianIds', [])
+          || (currentVanId() != '' && currentVanId() == workOrder.get('vanId', ''))
+        );
+    }
+
+    function assignedToVisitId(visitId) {
+      let visit = firestore.get(/databases/(default)/documents/workVisits/$(visitId)).data;
+      return technicianRole()
+        && (
+          assignedToWorkOrderId(visit.workOrderId)
+          || request.auth.uid in visit.get('participatingStaffIds', [])
+          || currentStaffId() in visit.get('participatingStaffIds', [])
+          || (currentStaffId() != '' && currentStaffId() == visit.get('leadTechnicianStaffId', ''))
+        );
+    }
+
+    function assignmentAwareWorkOrderAccess(workOrderId) {
+      return activeStaff() && (!technicianRole() || assignedToWorkOrderId(workOrderId));
+    }
+
+    function assignmentAwareVisitAccess(visitId) {
+      return activeStaff() && (!technicianRole() || assignedToVisitId(visitId));
+    }
+
     function websiteAdmin() {
       return signedIn()
         && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.active == true
@@ -71,6 +120,26 @@ service firebase.storage {
         && request.resource.metadata.mediaKind == 'audio';
     }
 
+    // Canonical Field uploads use the Firebase media endpoint, which supplies
+    // content type and auth but no custom metadata. Assignment binds authority;
+    // immutability below prevents a technician from replacing accepted evidence.
+    function validCanonicalEvidenceImage() {
+      return signedIn()
+        && request.resource != null
+        && request.resource.size < 12 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    function validCanonicalEvidenceAudio() {
+      return signedIn()
+        && request.resource != null
+        && request.resource.size < 6 * 1024 * 1024
+        && (
+          request.resource.contentType.matches('audio/.*')
+          || request.resource.contentType == 'video/mp4'
+        );
+    }
+
     function uploadedByCurrentUser() {
       return signedIn()
         && resource != null
@@ -92,11 +161,19 @@ service firebase.storage {
       allow delete: if websiteAdmin();
     }
 
+    match /field-evidence/{visitId}/{allPaths=**} {
+      allow read: if assignmentAwareVisitAccess(visitId);
+      allow create: if assignmentAwareVisitAccess(visitId)
+        && (validCanonicalEvidenceImage() || validCanonicalEvidenceAudio());
+      allow update, delete: if false;
+    }
+
     match /work-orders/{workOrderId}/{unitId}/{fileName} {
-      allow read: if signedIn();
-      allow create: if validEvidenceImage() || validEvidenceAudio();
+      allow read: if assignmentAwareWorkOrderAccess(workOrderId);
+      allow create: if assignmentAwareWorkOrderAccess(workOrderId)
+        && (validEvidenceImage() || validEvidenceAudio());
       allow update: if false;
-      allow delete: if uploadedByCurrentUser();
+      allow delete: if assignmentAwareWorkOrderAccess(workOrderId) && uploadedByCurrentUser();
     }
 
     match /inventory/{scope}/{entityId}/{fileName} {

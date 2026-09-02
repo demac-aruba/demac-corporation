@@ -1,8 +1,8 @@
 # Employee Profile V2 — Work Schedule Task Contract
 
-Date: 2026-08-27  
-Owner / approving human: DEMAC owner/administrator  
-Surface: `apps/erp-next` Employees, Attendance, Payroll  
+Date: 2026-08-27
+Owner / approving human: DEMAC owner/administrator
+Surface: `apps/erp-next` Employees, Attendance, Payroll
 Implementation branch: `feature/employee-profile-v2-mainline-20260827`
 
 ## Objective

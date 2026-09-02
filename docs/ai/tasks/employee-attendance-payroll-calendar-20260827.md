@@ -1,8 +1,8 @@
 # Employee Attendance Payroll Calendar — Task Contract
 
-Date: 2026-08-27  
-Owner / approving human: DEMAC owner/administrator  
-Surface: `apps/erp-next` Employees → Employee Calendar / payroll attendance  
+Date: 2026-08-27
+Owner / approving human: DEMAC owner/administrator
+Surface: `apps/erp-next` Employees → Employee Calendar / payroll attendance
 Implementation branch: `fix/employee-attendance-payroll-calendar-mainline-20260827`
 
 ## Context

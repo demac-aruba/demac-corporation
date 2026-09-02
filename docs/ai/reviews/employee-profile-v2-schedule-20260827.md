@@ -1,8 +1,8 @@
 # Review: Employee Profile V2 — Work Schedule
 
-Review mode: **Solo Maintainer Adversarial Review**  
-Date: 2026-08-27  
-Branch: `feature/employee-profile-v2-mainline-20260827`  
+Review mode: **Solo Maintainer Adversarial Review**
+Date: 2026-08-27
+Branch: `feature/employee-profile-v2-mainline-20260827`
 Base: current `main` at review start (`3b1073aa2a4aaa105a13193604765d2e79252b2c`)
 
 This review is intentionally separate from the Builder pass. It is not represented as an independent external review.

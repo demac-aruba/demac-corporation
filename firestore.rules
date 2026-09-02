@@ -100,13 +100,33 @@ service cloud.firestore {
     }
 
     function assignedToVisitId(visitId) {
+      return assignedToVisitData(visitData(visitId));
+    }
+
+    function assignedToVisitData(data) {
       return technicianRole()
         && (
-          assignedToWorkOrderId(visitData(visitId).workOrderId)
-          || request.auth.uid in visitData(visitId).get('participatingStaffIds', [])
-          || currentStaffId() in visitData(visitId).get('participatingStaffIds', [])
-          || (currentStaffId() != '' && currentStaffId() == visitData(visitId).get('leadTechnicianStaffId', ''))
+          assignedToWorkOrderId(data.workOrderId)
+          || request.auth.uid in data.get('participatingStaffIds', [])
+          || currentStaffId() in data.get('participatingStaffIds', [])
+          || (currentStaffId() != '' && currentStaffId() == data.get('leadTechnicianStaffId', ''))
         );
+    }
+
+    function assignmentAwareWorkOrderRead(data) {
+      return activeStaff() && (!technicianRole() || assignedToWorkOrderData(data));
+    }
+
+    function assignmentAwareWorkOrderIdRead(workOrderId) {
+      return activeStaff() && (!technicianRole() || assignedToWorkOrderId(workOrderId));
+    }
+
+    function assignmentAwareVisitRead(data) {
+      return activeStaff() && (!technicianRole() || assignedToVisitData(data));
+    }
+
+    function assignmentAwareVisitIdRead(visitId) {
+      return activeStaff() && (!technicianRole() || assignedToVisitId(visitId));
     }
 
     function technicianWorkOrderFieldsOnly() {
@@ -420,14 +440,14 @@ service cloud.firestore {
     }
 
     match /workOrders/{workOrderId} {
-      allow read: if activeStaff();
+      allow read: if assignmentAwareWorkOrderRead(resource.data);
       allow create: if operationsRole();
       allow update: if operationsRole() || (assignedToTechnician() && technicianWorkOrderFieldsOnly());
       allow delete: if adminOrSupervisor();
     }
 
     match /workVisits/{visitId} {
-      allow read: if activeStaff();
+      allow read: if assignmentAwareVisitRead(resource.data);
       allow create: if operationsRole()
         || (assignedToWorkOrderId(request.resource.data.workOrderId)
           && request.resource.data.createdByUserId == request.auth.uid);
@@ -442,7 +462,7 @@ service cloud.firestore {
     }
 
     match /visitUnits/{unitId} {
-      allow read: if activeStaff();
+      allow read: if assignmentAwareVisitIdRead(resource.data.visitId);
       allow create: if operationsRole()
         || (assignedToWorkOrderId(request.resource.data.workOrderId)
           && request.resource.data.workOrderId == visitData(request.resource.data.visitId).workOrderId
@@ -458,7 +478,7 @@ service cloud.firestore {
     }
 
     match /workInterventions/{interventionId} {
-      allow read: if activeStaff();
+      allow read: if assignmentAwareVisitIdRead(resource.data.visitId);
       allow create: if operationsRole()
         || (assignedToVisitId(request.resource.data.visitId)
           && request.resource.data.createdByUserId == request.auth.uid);
@@ -475,7 +495,7 @@ service cloud.firestore {
     }
 
     match /workReportSections/{sectionId} {
-      allow read: if activeStaff();
+      allow read: if assignmentAwareVisitIdRead(resource.data.visitId);
       allow create: if operationsRole()
         || (assignedToVisitId(request.resource.data.visitId)
           && request.resource.data.createdByUserId == request.auth.uid);
@@ -492,7 +512,7 @@ service cloud.firestore {
     }
 
     match /workVisitAddOns/{addOnId} {
-      allow read: if activeStaff();
+      allow read: if assignmentAwareVisitIdRead(resource.data.visitId);
       allow create: if operationsRole()
         || (assignedToVisitId(request.resource.data.visitId)
           && request.resource.data.workOrderId == visitData(request.resource.data.visitId).workOrderId
@@ -511,7 +531,7 @@ service cloud.firestore {
     }
 
     match /equipmentSystems/{equipmentId} {
-      allow read: if activeStaff();
+      allow read: if assignmentAwareVisitIdRead(resource.data.sourceVisitId);
       allow create: if operationsRole()
         || (assignedToVisitId(request.resource.data.sourceVisitId)
           && request.resource.data.sourceWorkOrderId == visitData(request.resource.data.sourceVisitId).workOrderId
@@ -532,7 +552,7 @@ service cloud.firestore {
     }
 
     match /workOrderUnits/{unitId} {
-      allow read: if activeStaff();
+      allow read: if assignmentAwareWorkOrderIdRead(resource.data.workOrderId);
       allow create: if operationsRole()
         || (assignedToWorkOrderId(request.resource.data.workOrderId)
           && request.resource.data.createdByUserId == request.auth.uid);
@@ -544,7 +564,7 @@ service cloud.firestore {
     }
 
     match /workOrderEvidence/{evidenceId} {
-      allow read: if activeStaff();
+      allow read: if assignmentAwareWorkOrderIdRead(resource.data.workOrderId);
       allow create: if operationsRole()
         || (assignedToWorkOrderId(request.resource.data.workOrderId)
           && request.resource.data.uploadedByUserId == request.auth.uid);

@@ -1,5 +1,6 @@
 const core = require("./index");
 const officeBookingAuthorityFacade = require("./officeBookingAuthorityFacade");
+const fieldOperationsAuthority = require("./fieldOperationsAuthority");
 const workOrderApplicationService = require("./workOrderApplicationService");
 const wacliGateway = require("./whatsappWacliGateway");
 const wacliOutboundMediaUpload = require("./wacliOutboundMediaUpload");
@@ -28,6 +29,7 @@ const router = require("./whatsappCopilotRouter");
 module.exports = {
   ...core,
   ...officeBookingAuthorityFacade,
+  ...fieldOperationsAuthority,
   ...workOrderApplicationService,
   ...wacliGateway,
   ...wacliOutboundMediaUpload,

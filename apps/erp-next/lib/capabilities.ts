@@ -1,5 +1,16 @@
 import type { UserRole } from './domain';
+import {
+  can as canCanonical,
+  requireCapability as requireCanonicalCapability,
+  roleCapabilities as canonicalRoleCapabilities,
+  type AuthPrincipal,
+  type Capability as CanonicalCapability,
+} from './security';
 
+/**
+ * @deprecated Compatibility vocabulary for older ERP Next consumers.
+ * `lib/security.ts` is the only authorization source of truth. Do not add permissions here.
+ */
 export type Capability =
   | 'dashboard.read'
   | 'crm.read'
@@ -29,77 +40,69 @@ export type Capability =
   | 'settings.manage'
   | 'audit.read';
 
-const allCapabilities: Capability[] = [
-  'dashboard.read',
-  'crm.read',
-  'crm.customer.edit',
-  'crm.customer.merge',
-  'crm.contact.manage',
-  'crm.site.manage',
-  'crm.asset.manage',
-  'crm.timeline.note',
-  'crm.opportunity.manage',
-  'crm.financial_summary.read',
-  'scheduling.read',
-  'scheduling.manage',
-  'work_orders.read',
-  'work_orders.manage',
-  'communications.read',
-  'communications.manage',
-  'inventory.read',
-  'inventory.manage',
-  'finance.summary.read',
-  'finance.full',
-  'projects.read',
-  'projects.manage',
-  'employees.read',
-  'employees.manage',
-  'executive_ai.use',
-  'settings.manage',
-  'audit.read',
-];
+export const legacyCapabilityToCanonical: Readonly<Record<Capability, CanonicalCapability>> = {
+  'dashboard.read': 'dashboard.view',
+  'crm.read': 'crm.view',
+  'crm.customer.edit': 'crm.manage',
+  'crm.customer.merge': 'crm.manage',
+  'crm.contact.manage': 'crm.manage',
+  'crm.site.manage': 'crm.manage',
+  'crm.asset.manage': 'crm.manage',
+  'crm.timeline.note': 'crm.manage',
+  'crm.opportunity.manage': 'crm.manage',
+  'crm.financial_summary.read': 'finance.view',
+  'scheduling.read': 'scheduling.view',
+  'scheduling.manage': 'scheduling.manage',
+  'work_orders.read': 'work_orders.view',
+  'work_orders.manage': 'work_orders.manage',
+  'communications.read': 'communications.view',
+  'communications.manage': 'communications.manage',
+  'inventory.read': 'inventory.view',
+  'inventory.manage': 'inventory.manage',
+  'finance.summary.read': 'finance.view',
+  'finance.full': 'finance.manage',
+  'projects.read': 'projects.view',
+  'projects.manage': 'projects.manage',
+  'employees.read': 'employees.view',
+  'employees.manage': 'employees.manage',
+  'executive_ai.use': 'executive_ai.use',
+  'settings.manage': 'settings.manage',
+  'audit.read': 'audit.view',
+};
 
+const legacyCapabilities = Object.keys(legacyCapabilityToCanonical) as Capability[];
+
+function legacyCapabilitiesFor(role: UserRole): readonly Capability[] {
+  return legacyCapabilities.filter((capability) => canCanonical(role, legacyCapabilityToCanonical[capability]));
+}
+
+/**
+ * @deprecated Read-only projection generated from the canonical policy.
+ * It is intentionally not an independent role matrix.
+ */
 export const roleCapabilities: Record<UserRole, readonly Capability[]> = {
-  super_admin: allCapabilities,
-  operations: [
-    'dashboard.read', 'crm.read', 'crm.customer.edit', 'crm.contact.manage', 'crm.site.manage', 'crm.asset.manage',
-    'crm.timeline.note', 'crm.opportunity.manage', 'crm.financial_summary.read', 'scheduling.read', 'scheduling.manage',
-    'work_orders.read', 'work_orders.manage', 'communications.read', 'communications.manage', 'inventory.read',
-    'finance.summary.read', 'projects.read', 'employees.read',
-  ],
-  office_operator: [
-    'dashboard.read', 'crm.read', 'crm.customer.edit', 'crm.contact.manage', 'crm.site.manage', 'crm.asset.manage',
-    'crm.timeline.note', 'crm.opportunity.manage', 'crm.financial_summary.read', 'scheduling.read', 'scheduling.manage',
-    'work_orders.read', 'work_orders.manage', 'communications.read', 'communications.manage', 'finance.summary.read',
-  ],
-  finance: [
-    'dashboard.read', 'crm.read', 'crm.financial_summary.read', 'finance.summary.read', 'finance.full', 'audit.read',
-  ],
-  warehouse: [
-    'dashboard.read', 'crm.read', 'work_orders.read', 'inventory.read', 'inventory.manage',
-  ],
-  sales: [
-    'dashboard.read', 'crm.read', 'crm.customer.edit', 'crm.contact.manage', 'crm.site.manage', 'crm.timeline.note',
-    'crm.opportunity.manage', 'crm.financial_summary.read', 'communications.read', 'finance.summary.read',
-  ],
-  project_manager: [
-    'dashboard.read', 'crm.read', 'crm.contact.manage', 'crm.site.manage', 'crm.asset.manage', 'crm.timeline.note',
-    'crm.opportunity.manage', 'crm.financial_summary.read', 'scheduling.read', 'work_orders.read', 'work_orders.manage',
-    'inventory.read', 'finance.summary.read', 'projects.read', 'projects.manage',
-  ],
-  technician: ['crm.read', 'work_orders.read', 'inventory.read'],
-  auditor: ['dashboard.read', 'crm.read', 'crm.financial_summary.read', 'finance.summary.read', 'audit.read'],
+  super_admin: legacyCapabilitiesFor('super_admin'),
+  operations: legacyCapabilitiesFor('operations'),
+  office_operator: legacyCapabilitiesFor('office_operator'),
+  finance: legacyCapabilitiesFor('finance'),
+  warehouse: legacyCapabilitiesFor('warehouse'),
+  sales: legacyCapabilitiesFor('sales'),
+  project_manager: legacyCapabilitiesFor('project_manager'),
+  technician: legacyCapabilitiesFor('technician'),
+  auditor: legacyCapabilitiesFor('auditor'),
 };
 
 export function hasCapability(role: UserRole, capability: Capability) {
-  return roleCapabilities[role].includes(capability);
+  return canCanonical(role, legacyCapabilityToCanonical[capability]);
 }
 
 export function requireCapability(role: UserRole, capability: Capability) {
-  if (!hasCapability(role, capability)) {
-    throw new Error(`Role ${role} is not allowed to use capability ${capability}.`);
-  }
+  const principal: AuthPrincipal = {
+    userId: 'legacy-capability-adapter',
+    displayName: 'Legacy capability adapter',
+    role,
+    active: true,
+    capabilities: canonicalRoleCapabilities[role],
+  };
+  requireCanonicalCapability(principal, legacyCapabilityToCanonical[capability]);
 }
-
-// Permission decisions belong to the application/domain boundary, not to visual hiding alone.
-// Firebase rules, API authorization and UI affordances must eventually enforce the same capability policy.

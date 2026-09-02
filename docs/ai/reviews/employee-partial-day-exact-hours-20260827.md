@@ -1,7 +1,7 @@
 # Solo Maintainer Adversarial Review — Employee Partial-Day Exact Hours
 
-Date: 2026-08-27  
-Branch: `fix/employee-partial-day-exact-hours-20260827`  
+Date: 2026-08-27
+Branch: `fix/employee-partial-day-exact-hours-20260827`
 Task contract: `docs/ai/tasks/employee-partial-day-exact-hours-20260827.md`
 
 ## Review verdict

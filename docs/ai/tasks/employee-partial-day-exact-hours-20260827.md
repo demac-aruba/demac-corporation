@@ -1,8 +1,8 @@
 # Employee Partial-Day Exact Hours — Correction Contract
 
-Date: 2026-08-27  
-Owner / approving human: DEMAC owner/administrator  
-Surface: `apps/erp-next` Employees, Attendance, Payroll  
+Date: 2026-08-27
+Owner / approving human: DEMAC owner/administrator
+Surface: `apps/erp-next` Employees, Attendance, Payroll
 Branch: `fix/employee-partial-day-exact-hours-20260827`
 
 ## User-reported production discrepancy
