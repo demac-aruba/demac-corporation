@@ -270,18 +270,11 @@ type PresetResponse = {
 };
 
 const PRESET_CACHE_MS = 5 * 60_000;
-const PREVIEW_AUTHORITY_QUERY = 'scheduling-global-exact-target';
-const PREVIEW_AUTHORITY_FUNCTION = 'officeBookingAuthorityPreview';
-const PREVIEW_AUTHORITY_HOST = 'demac-corporation-web-git-fix-scheduli-debc04-demac-corporation.vercel.app';
 let presetCache: { expiresAt: number; promise: Promise<PresetResponse> } | null = null;
 
 function endpoint() {
   if (!firebaseClientConfig.projectId) throw new Error('Firebase project is not configured for ERP Next.');
-  const previewRequested = typeof window !== 'undefined'
-    && (window.location.hostname === PREVIEW_AUTHORITY_HOST
-      || new URLSearchParams(window.location.search).get('authorityPreview') === PREVIEW_AUTHORITY_QUERY);
-  const functionName = previewRequested ? PREVIEW_AUTHORITY_FUNCTION : 'officeBookingAuthority';
-  return `https://us-central1-${firebaseClientConfig.projectId}.cloudfunctions.net/${functionName}`;
+  return `https://us-central1-${firebaseClientConfig.projectId}.cloudfunctions.net/officeBookingAuthority`;
 }
 
 function apiErrorDetail(payload: ApiError) {
