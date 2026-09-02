@@ -17,12 +17,12 @@ const primaryLinks = [
 ] as const;
 
 const footerServices = [
-  'A/C Sales',
-  'Installation',
-  'Service & Maintenance',
-  'Diagnostics & Repairs',
-  'Commercial / VRF',
-  'Anti-Corrosive Treatment',
+  { label: 'A/C Sales', href: '/services' },
+  { label: 'Installation', href: '/services' },
+  { label: 'Service & Maintenance', href: '/services' },
+  { label: 'Diagnostics & Repairs', href: '/services' },
+  { label: 'Commercial / VRF', href: '/services/vrf-systems' },
+  { label: 'Anti-Corrosive Treatment', href: '/services' },
 ] as const;
 
 export function PublicBrand() {
@@ -105,7 +105,7 @@ export function PublicFooter() {
 
           <nav className="premium-footer-column" aria-label="Footer services">
             <strong>Services</strong>
-            {footerServices.map((service) => <Link href="/services" key={service}>{service}</Link>)}
+            {footerServices.map((service) => <Link href={service.href} key={service.label}>{service.label}</Link>)}
           </nav>
 
           <PublicFooterDynamicInfo />
