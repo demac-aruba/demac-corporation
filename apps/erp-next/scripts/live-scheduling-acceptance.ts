@@ -1,4 +1,5 @@
 import {
+  liveOperationalStartTimes,
   liveOperationalWindowAllows,
   liveVanCrew,
   liveVanIsHalfDay,
@@ -24,6 +25,7 @@ import {
 } from '../lib/live-scheduling-move';
 import { buildOperationalWeek, findCandidateSlotsForDay, jobOwnsCapacityStart } from '../lib/scheduling-capacity';
 import { arubaBookingClock, isBackdatedAppointmentTarget } from '../lib/scheduling-backdating';
+import { getRuntimeSchedulingSettings } from '../lib/scheduling';
 
 function requireCondition(condition: unknown, message: string) {
   if (!condition) throw new Error(`Live scheduling acceptance failed: ${message}`);
@@ -355,6 +357,15 @@ const halfDayCapacity: LiveOperationalCapacityState = {
   }],
 };
 requireCondition(liveVanIsHalfDay(halfDayCapacity, 'VAN-2', canonical.dateKey), 'Tuesday must resolve as Van 2 weekly half-day.');
+requireCondition(
+  liveOperationalStartTimes(
+    halfDayCapacity,
+    'VAN-2',
+    canonical.dateKey,
+    getRuntimeSchedulingSettings().serviceStartTimes,
+  ).join('|') === '08:30|09:30|10:30|11:30|13:30|14:30|15:30',
+  'Normal Scheduling and Reschedule must share the same four-slot half-day timeline.',
+);
 requireCondition(liveOperationalWindowAllows(halfDayCapacity, 'VAN-2', canonical.dateKey, '11:30', '12:30'), 'The canonical extra 11:30 half-day slot must remain available when a one-hour appointment fits.');
 requireCondition(!liveOperationalWindowAllows(halfDayCapacity, 'VAN-2', canonical.dateKey, '13:30', '14:30'), 'Van 2 afternoon must be closed on its Tuesday half-day.');
 

@@ -25,6 +25,7 @@ import {
 } from '../../lib/live-appointment-edit-state';
 import {
   liveCompanyClosureReason,
+  liveOperationalStartTimes,
   liveVanCrew,
   type LiveOperationalCapacityState,
 } from '../../lib/live-operational-capacity';
@@ -439,6 +440,12 @@ function VisualCapacitySchedulePicker({
                 return visualOptionFitsVanPolicy(capacityState, vanId, dateKey, window.start, window.end);
               }) : [];
               const halfDay = Boolean(dayStatus.halfDay);
+              const timelineStarts = liveOperationalStartTimes(
+                capacityState,
+                vanId,
+                dateKey,
+                settings.serviceStartTimes,
+              );
               return <article key={vanId} className={`${styles.vanCard} ${candidates.length ? styles.hasMatch : ''}`}>
                 <header>
                   <div><strong>{vanLabel(vanId)}</strong><span>{crew.label}</span></div>
@@ -462,7 +469,7 @@ function VisualCapacitySchedulePicker({
                 </div>
 
                 <div className={styles.timeline}>
-                  {settings.serviceStartTimes.map((slot) => {
+                  {timelineStarts.map((slot) => {
                     const owned = jobs.find((entry) => jobOwnsCapacityStart(entry.assignment, slot));
                     const policyAvailable = !closure && visualVanSlotAvailableByPolicy(capacityState, vanId, dateKey, slot);
                     const isAvailable = policyAvailable && !owned;
@@ -471,7 +478,15 @@ function VisualCapacitySchedulePicker({
                       <span>{owned ? owned.appointment.customer : isAvailable ? 'Available' : halfDay && !policyAvailable ? 'Half-day schedule' : 'Not available'}</span>
                       <b>{owned ? 'Booked' : isAvailable ? 'Open' : 'Off'}</b>
                     </div>;
-                  }).flatMap((row, index) => index === 2 ? [row, <div key="lunch" className={styles.lunch}><span>{formatTime(settings.lunchStart)}–{formatTime(settings.lunchEnd)}</span><strong>Lunch / Break</strong></div>] : [row])}
+                  }).flatMap((row, index) => {
+                    const previous = timelineStarts[index - 1];
+                    const firstAfternoon = index > 0
+                      && timeToMinutes(previous) < 12 * 60
+                      && timeToMinutes(timelineStarts[index]) >= 12 * 60;
+                    return firstAfternoon
+                      ? [<div key="lunch" className={styles.lunch}><span>{formatTime(settings.lunchStart)}–{formatTime(settings.lunchEnd)}</span><strong>Lunch / Break</strong></div>, row]
+                      : [row];
+                  })}
                 </div>
               </article>;
             })}
