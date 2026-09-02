@@ -43,6 +43,13 @@ export type ManualRescheduleSupportChoice = {
   supportVans: ManualRescheduleSupportVan[];
 };
 
+export type ManualReschedulePrimaryResolution = ManualRescheduleSelection & {
+  remainingQuantity: number;
+  nextStep: 'complete' | 'support' | 'time' | 'unavailable';
+  completePrimaryChoices: ManualRescheduleSupportChoice[];
+  supportChoices: ManualRescheduleSupportChoice[];
+};
+
 export function addDays(dateKey: string, amount: number) {
   const date = new Date(`${dateKey}T12:00:00Z`);
   date.setUTCDate(date.getUTCDate() + amount);
@@ -162,6 +169,65 @@ export function manualRescheduleSupportChoices(
       .localeCompare(right.supportVans.map((support) => `${support.start}|${support.vanId}`).join(','))
     || left.optionId.localeCompare(right.optionId)
   ));
+}
+
+export function resolveManualReschedulePrimarySelection(
+  options: OfficeBookingOption[],
+  dateKey: string,
+  primaryVanId: string,
+  requiredQuantity: number,
+  currentOptionId = '',
+): ManualReschedulePrimaryResolution {
+  const totalRequired = Math.max(0, Number(requiredQuantity) || 0);
+  const choices = manualRescheduleSupportChoices(options, dateKey, primaryVanId);
+  const completePrimaryChoices = choices.filter((choice) => (
+    choice.supportVans.length === 0
+    && choice.primaryQuantity >= totalRequired
+  ));
+  const supportChoices = choices.filter((choice) => choice.supportVans.length > 0);
+
+  if (!primaryVanId || (!completePrimaryChoices.length && !supportChoices.length)) {
+    return {
+      primaryVanId,
+      optionId: '',
+      remainingQuantity: totalRequired,
+      nextStep: 'unavailable',
+      completePrimaryChoices,
+      supportChoices,
+    };
+  }
+
+  if (completePrimaryChoices.length === 1) {
+    return {
+      primaryVanId,
+      optionId: completePrimaryChoices[0].optionId,
+      remainingQuantity: 0,
+      nextStep: 'complete',
+      completePrimaryChoices,
+      supportChoices,
+    };
+  }
+
+  if (completePrimaryChoices.length > 1) {
+    return {
+      primaryVanId,
+      optionId: completePrimaryChoices.some((choice) => choice.optionId === currentOptionId) ? currentOptionId : '',
+      remainingQuantity: 0,
+      nextStep: 'time',
+      completePrimaryChoices,
+      supportChoices,
+    };
+  }
+
+  const primaryQuantity = supportChoices.reduce((largest, choice) => Math.max(largest, choice.primaryQuantity), 0);
+  return {
+    primaryVanId,
+    optionId: supportChoices.some((choice) => choice.optionId === currentOptionId) ? currentOptionId : '',
+    remainingQuantity: Math.max(0, totalRequired - primaryQuantity),
+    nextStep: 'support',
+    completePrimaryChoices,
+    supportChoices,
+  };
 }
 
 export function manualRescheduleCandidateOption(

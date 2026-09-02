@@ -11,6 +11,7 @@ import {
   optionKey,
   optionPrimaryVanId,
   optionsForVan,
+  resolveManualReschedulePrimarySelection,
 } from '../lib/remaining-work-schedule-picker-model';
 
 const option = (overrides: Partial<OfficeBookingOption> = {}): OfficeBookingOption => ({
@@ -118,6 +119,59 @@ assert.equal(
   'manual rescheduling must not silently preselect the first Van or candidate option',
 );
 
+const independentlyCompleteVans = [
+  option({
+    id: 'V1-COMPLETE',
+    date: '2026-09-05',
+    assignments: [{ vanId: 'VAN-1', vanName: 'Van 1', quantity: 4, slots: 4, durationMinutes: 240, time: '08:30', endTime: '12:30', capacityEndTime: '12:30', role: 'primary' }],
+  }),
+  option({
+    id: 'VAN-4-COMPLETE',
+    date: '2026-09-05',
+    assignments: [{ vanId: 'VAN-4', vanName: 'Van 4', quantity: 4, slots: 4, durationMinutes: 240, time: '08:30', endTime: '12:30', capacityEndTime: '12:30', role: 'primary' }],
+  }),
+];
+for (const [vanId, expectedOptionId] of [['VAN-1', 'V1-COMPLETE'], ['VAN-4', 'VAN-4-COMPLETE']] as const) {
+  const resolution = resolveManualReschedulePrimarySelection(independentlyCompleteVans, '2026-09-05', vanId, 4);
+  assert.equal(resolution.nextStep, 'complete');
+  assert.equal(resolution.optionId, expectedOptionId);
+  assert.equal(resolution.remainingQuantity, 0);
+  assert.equal(resolution.supportChoices.length, 0);
+}
+
+const completeTimeChoices = [
+  option({
+    id: 'V3-COMPLETE-EARLY',
+    date: '2026-09-06',
+    assignments: [{ vanId: 'VAN-3', vanName: 'Van 3', quantity: 4, slots: 4, durationMinutes: 240, time: '08:30', endTime: '12:30', capacityEndTime: '12:30', role: 'primary' }],
+  }),
+  option({
+    id: 'V3-COMPLETE-LATE',
+    date: '2026-09-06',
+    time: '09:30',
+    assignments: [{ vanId: 'VAN-3', vanName: 'Van 3', quantity: 4, slots: 4, durationMinutes: 240, time: '09:30', endTime: '13:30', capacityEndTime: '13:30', role: 'primary' }],
+  }),
+];
+const timeResolution = resolveManualReschedulePrimarySelection(completeTimeChoices, '2026-09-06', 'VAN-3', 4);
+assert.equal(timeResolution.nextStep, 'time');
+assert.equal(timeResolution.optionId, '', 'multiple complete times must not be selected automatically');
+assert.equal(timeResolution.remainingQuantity, 0);
+assert.deepEqual(timeResolution.completePrimaryChoices.map((choice) => choice.optionId), ['V3-COMPLETE-EARLY', 'V3-COMPLETE-LATE']);
+assert.equal(
+  resolveManualReschedulePrimarySelection(completeTimeChoices, '2026-09-06', 'VAN-3', 4, 'V3-COMPLETE-LATE').optionId,
+  'V3-COMPLETE-LATE',
+  'an exact time explicitly selected by the operator must be preserved',
+);
+const incompletePrimaryOnly = resolveManualReschedulePrimarySelection([
+  option({
+    id: 'V3-INCOMPLETE',
+    date: '2026-09-06',
+    assignments: [{ vanId: 'VAN-3', vanName: 'Van 3', quantity: 3, slots: 3, durationMinutes: 180, time: '08:30', endTime: '11:30', capacityEndTime: '11:30', role: 'primary' }],
+  }),
+], '2026-09-06', 'VAN-3', 4);
+assert.equal(incompletePrimaryOnly.nextStep, 'unavailable');
+assert.equal(incompletePrimaryOnly.optionId, '', 'an incomplete primary-only option must not be selected automatically');
+
 assert.deepEqual(
   manualReschedulePrimaryChoices(manualOptions, '2026-09-03'),
   [
@@ -152,6 +206,17 @@ assert.deepEqual(
     { optionId: 'V2-V4-LATE', vanId: 'VAN-4', start: '09:30', primaryQuantity: 3, primarySlots: 6, primaryDurationMinutes: 360, supportQuantity: 3, supportSlots: 6, supportDurationMinutes: 360 },
   ],
 );
+
+const supportResolution = resolveManualReschedulePrimarySelection(
+  [pairedOption('V2-NEEDS-V4', 'VAN-2', 'VAN-4')],
+  '2026-09-03',
+  'VAN-2',
+  6,
+);
+assert.equal(supportResolution.nextStep, 'support');
+assert.equal(supportResolution.optionId, '', 'a support allocation must never be selected automatically');
+assert.equal(supportResolution.remainingQuantity, 3);
+assert.equal(supportResolution.supportChoices[0]?.supportVans[0]?.vanId, 'VAN-4');
 
 assert.equal(
   manualRescheduleCandidateOption(manualOptions, '2026-09-03', 'VAN-2', 'V2-V4-LATE')?.id,

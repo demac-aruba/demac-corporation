@@ -37,10 +37,10 @@ import {
   laterDate,
   manualRescheduleCandidateOption,
   manualReschedulePrimaryChoices,
-  manualRescheduleSupportChoices,
   optionDurationMinutes,
   optionKey,
   optionsForVan,
+  resolveManualReschedulePrimarySelection,
 } from '../../lib/remaining-work-schedule-picker-model';
 import {
   loadVisualScheduleDay,
@@ -231,12 +231,6 @@ function VisualCapacitySchedulePicker({
     () => manualVanSelection ? manualReschedulePrimaryChoices(dayOptions, dateKey) : [],
     [dateKey, dayOptions, manualVanSelection],
   );
-  const manualSupportChoices = useMemo(
-    () => manualVanSelection
-      ? manualRescheduleSupportChoices(dayOptions, dateKey, selectedPrimaryVanId)
-      : [],
-    [dateKey, dayOptions, manualVanSelection, selectedPrimaryVanId],
-  );
   const selectedOption = useMemo(() => manualVanSelection
     ? manualRescheduleCandidateOption(dayOptions, dateKey, selectedPrimaryVanId, selectedOptionKey)
     : dayOptions.find((option) => optionKey(option) === selectedOptionKey) ?? null,
@@ -244,6 +238,16 @@ function VisualCapacitySchedulePicker({
   const selectedPrimaryChoice = useMemo(
     () => manualPrimaryChoices.find((choice) => choice.vanId === selectedPrimaryVanId) ?? null,
     [manualPrimaryChoices, selectedPrimaryVanId],
+  );
+  const selectedPrimaryResolution = useMemo(
+    () => resolveManualReschedulePrimarySelection(
+      manualVanSelection ? dayOptions : [],
+      dateKey,
+      selectedPrimaryVanId,
+      quantity,
+      selectedOptionKey,
+    ),
+    [dateKey, dayOptions, manualVanSelection, quantity, selectedOptionKey, selectedPrimaryVanId],
   );
   const requiredMinutes = useMemo(() => {
     const fromAuthority = dayOptions.map(optionDurationMinutes).find((value) => value > 0) ?? 0;
@@ -316,6 +320,17 @@ function VisualCapacitySchedulePicker({
     });
   }, [dateKey]);
 
+  useEffect(() => {
+    if (!manualVanSelection || !selectedPrimaryVanId) return;
+    setSelectedOptionKey((current) => resolveManualReschedulePrimarySelection(
+      dayOptions,
+      dateKey,
+      selectedPrimaryVanId,
+      quantity,
+      current,
+    ).optionId);
+  }, [dateKey, dayOptions, manualVanSelection, quantity, selectedPrimaryVanId]);
+
   const moveDay = (delta: number) => {
     const next = addDays(dateKey, delta);
     if (next < minDate) return;
@@ -340,6 +355,9 @@ function VisualCapacitySchedulePicker({
   const selectedDuration = selectedOption ? optionDurationMinutes(selectedOption) : requiredMinutes;
   const settings = getRuntimeSchedulingSettings();
   const closure = liveCompanyClosureReason(capacityState, dateKey);
+  const allocationChoices = selectedPrimaryResolution.nextStep === 'time'
+    ? selectedPrimaryResolution.completePrimaryChoices
+    : selectedPrimaryResolution.supportChoices;
 
   return <div className={styles.overlay} role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !scheduling) onClose(); }}>
     <section className={styles.modal} role="dialog" aria-modal="true" aria-label={title}>
@@ -384,7 +402,13 @@ function VisualCapacitySchedulePicker({
                 disabled={scheduling}
                 onClick={() => {
                   setSelectedPrimaryVanId(choice.vanId);
-                  setSelectedOptionKey('');
+                  setSelectedOptionKey(resolveManualReschedulePrimarySelection(
+                    dayOptions,
+                    dateKey,
+                    choice.vanId,
+                    quantity,
+                    choice.vanId === selectedPrimaryVanId ? selectedOptionKey : '',
+                  ).optionId);
                 }}
               >
                 <span>{selected ? 'PRIMARY VAN' : 'CHOOSE AS PRIMARY'}</span>
@@ -396,15 +420,37 @@ function VisualCapacitySchedulePicker({
 
           {selectedPrimaryChoice ? <div className={styles.coverageSummary}>
             <div><span>PRIMARY CAPACITY</span><strong>{selectedPrimaryChoice.quantity} work unit{selectedPrimaryChoice.quantity === 1 ? '' : 's'} · {selectedPrimaryChoice.slots} spots</strong></div>
-            <div><span>STILL TO ASSIGN</span><strong>{Math.max(0, quantity - selectedPrimaryChoice.quantity)} work unit{Math.max(0, quantity - selectedPrimaryChoice.quantity) === 1 ? '' : 's'}</strong></div>
+            <div><span>STILL TO ASSIGN</span><strong>{selectedPrimaryResolution.remainingQuantity} work unit{selectedPrimaryResolution.remainingQuantity === 1 ? '' : 's'}</strong></div>
           </div> : <p className={styles.assignmentPrompt}>Select a primary Van to see exactly how much work remains and which support Vans can cover it.</p>}
 
-          <div className={styles.assignmentStep}>
-            <b>2</b>
-            <div><strong>Choose the support Van</strong><span>After the primary Van is chosen, select the exact support Van and schedule that complete the work.</span></div>
-          </div>
-          {selectedPrimaryChoice ? <div className={styles.supportChoices}>
-            {manualSupportChoices.map((choice) => {
+          {selectedPrimaryResolution.nextStep === 'complete' ? <p className={styles.assignmentPrompt}>
+            Complete allocation selected automatically. {selectedPrimaryChoice?.vanName || vanLabel(selectedPrimaryVanId)} covers all required work; no support Van is needed.
+          </p> : selectedPrimaryResolution.nextStep === 'time' ? <>
+            <p className={styles.assignmentPrompt}>This Van covers all required work without support. Choose the exact schedule time.</p>
+            <div className={styles.supportChoices}>
+              {allocationChoices.map((choice) => {
+                const selected = selectedOptionKey === choice.optionId;
+                return <button
+                  key={choice.optionId}
+                  type="button"
+                  className={`${styles.supportChoice} ${selected ? styles.supportChoiceSelected : ''}`}
+                  aria-pressed={selected}
+                  disabled={scheduling}
+                  onClick={() => setSelectedOptionKey(choice.optionId)}
+                >
+                  <span>{selected ? 'SCHEDULE SELECTED' : 'CHOOSE TIME'}</span>
+                  <strong>{formatTime(choice.primaryStart)}–{formatTime(choice.primaryCapacityEnd)}</strong>
+                  <small>{choice.primaryVanName} only · no support Van required</small>
+                </button>;
+              })}
+            </div>
+          </> : selectedPrimaryResolution.nextStep === 'support' ? <>
+            <div className={styles.assignmentStep}>
+              <b>2</b>
+              <div><strong>Choose the support Van</strong><span>The primary Van does not cover all required work. Select the exact support allocation.</span></div>
+            </div>
+            <div className={styles.supportChoices}>
+            {allocationChoices.map((choice) => {
               const option = manualRescheduleCandidateOption(dayOptions, dateKey, selectedPrimaryVanId, choice.optionId);
               if (!option) return null;
               const selected = selectedOptionKey === choice.optionId;
@@ -419,13 +465,14 @@ function VisualCapacitySchedulePicker({
                 disabled={scheduling}
                 onClick={() => setSelectedOptionKey(choice.optionId)}
               >
-                <span>{selected ? 'COMPLETE ALLOCATION SELECTED' : choice.supportVans.length ? 'CHOOSE SUPPORT' : 'CHOOSE THIS SCHEDULE'}</span>
-                <strong>{choice.supportVans.length ? supportNames : `${choice.primaryVanName} only`}</strong>
+                <span>{selected ? 'COMPLETE ALLOCATION SELECTED' : 'CHOOSE SUPPORT'}</span>
+                <strong>{supportNames}</strong>
                 <small>Primary: {formatTime(choice.primaryStart)}–{formatTime(choice.primaryCapacityEnd)}</small>
-                {choice.supportVans.length ? <small>{supportQuantity} remaining work unit{supportQuantity === 1 ? '' : 's'} · {supportSlots} support spot{supportSlots === 1 ? '' : 's'} · {choice.supportVans.map((support) => `${formatTime(support.start)}–${formatTime(support.capacityEnd || support.workEnd)}`).join(' · ')}</small> : <small>No support Van is required for this allocation.</small>}
+                <small>{supportQuantity} remaining work unit{supportQuantity === 1 ? '' : 's'} · {supportSlots} support spot{supportSlots === 1 ? '' : 's'} · {choice.supportVans.map((support) => `${formatTime(support.start)}–${formatTime(support.capacityEnd || support.workEnd)}`).join(' · ')}</small>
               </button>;
             })}
-          </div> : <div className={styles.supportPlaceholder}>Choose the primary Van first.</div>}
+            </div>
+          </> : selectedPrimaryChoice ? <div className={styles.supportPlaceholder}>No complete allocation is available for this Van on the selected date.</div> : null}
         </section> : null}
 
         {contextLoading && !dayAppointments.length && !capacityState ? <div className={styles.loadingGrid}>{Array.from({ length: 5 }, (_, index) => <div key={index}><span /><span /><span /><span /></div>)}</div> : <div className={styles.vanScroller}>
@@ -497,9 +544,9 @@ function VisualCapacitySchedulePicker({
       </div>
 
       <footer className={styles.footer}>
-        <div className={styles.footerHint}><span>ⓘ</span><p><strong>{manualVanSelection ? 'You choose the primary and support Vans; Booking Authority validates the complete allocation.' : 'Only complete Booking Authority matches are selectable.'}</strong> Open-looking slots are visual context; half-day and operational rules are enforced, and no slot becomes a reservation until the complete allocation is confirmed.</p></div>
+        <div className={styles.footerHint}><span>ⓘ</span><p><strong>{manualVanSelection ? 'You choose the primary Van and any support that is actually required; Booking Authority validates the complete allocation.' : 'Only complete Booking Authority matches are selectable.'}</strong> Open-looking slots are visual context; half-day and operational rules are enforced, and no slot becomes a reservation until the complete allocation is confirmed.</p></div>
         <div className={styles.selection}>
-          <div><span>SELECTED OPTION</span>{selectedOption && selectedPrimary ? <><strong>{selectedPrimary.vanName || vanLabel(selectedPrimary.vanId)} · {formatLongDate(selectedOption.date)}</strong><small>{candidateSummary(selectedOption)} · {hoursLabel(selectedDuration)}{selectedSupport.length ? ` · support: ${selectedSupport.map((support) => support.assignment.vanName || vanLabel(support.assignment.vanId)).join(' + ')}` : ''}</small></> : manualVanSelection && selectedPrimaryChoice ? <><strong>{selectedPrimaryChoice.vanName || vanLabel(selectedPrimaryChoice.vanId)} selected as primary</strong><small>{Math.max(0, quantity - selectedPrimaryChoice.quantity)} work unit{Math.max(0, quantity - selectedPrimaryChoice.quantity) === 1 ? '' : 's'} still need an exact support allocation.</small></> : <><strong>No allocation selected</strong><small>{manualVanSelection ? 'Choose the primary Van, then choose its support allocation.' : 'Select a green complete-match block above.'}</small></>}</div>
+          <div><span>SELECTED OPTION</span>{selectedOption && selectedPrimary ? <><strong>{selectedPrimary.vanName || vanLabel(selectedPrimary.vanId)} · {formatLongDate(selectedOption.date)}</strong><small>{candidateSummary(selectedOption)} · {hoursLabel(selectedDuration)}{selectedSupport.length ? ` · support: ${selectedSupport.map((support) => support.assignment.vanName || vanLabel(support.assignment.vanId)).join(' + ')}` : ' · no support Van required'}</small></> : manualVanSelection && selectedPrimaryChoice ? <><strong>{selectedPrimaryChoice.vanName || vanLabel(selectedPrimaryChoice.vanId)} selected as primary</strong><small>{selectedPrimaryResolution.nextStep === 'time' ? 'Choose one available schedule time.' : selectedPrimaryResolution.nextStep === 'support' ? `${selectedPrimaryResolution.remainingQuantity} work unit${selectedPrimaryResolution.remainingQuantity === 1 ? '' : 's'} still need an exact support allocation.` : 'No complete allocation is available for this Van on the selected date.'}</small></> : <><strong>No allocation selected</strong><small>{manualVanSelection ? 'Choose the primary Van. Support is requested only when the primary cannot cover all work.' : 'Select a green complete-match block above.'}</small></>}</div>
           <div className={styles.workSummary}><span>WORK SUMMARY</span><strong>{quantity} {workLabel} unit{quantity === 1 ? '' : 's'}</strong><small>{footerNote}</small></div>
           <div className={styles.actions}><button type="button" className={styles.cancel} onClick={onClose} disabled={scheduling}>Cancel</button><button type="button" className={styles.confirm} disabled={!selectedOption || !availability?.offer || availabilityLoading || !canConfirm || scheduling} onClick={() => void confirm()}>{scheduling ? confirmingLabel : confirmLabel}</button></div>
         </div>
