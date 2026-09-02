@@ -116,6 +116,41 @@ function schedulingData({ canonical = true } = {}) {
   };
 }
 
+function fourVanSchedulingData() {
+  const data = schedulingData();
+  data.vans.push({
+    id: "VAN-4",
+    name: "Van 4",
+    active: true,
+    responsibleStaffId: "driver-4",
+  });
+  data.staffProfiles.push({
+    id: "driver-4",
+    active: true,
+    availability: "Disponible",
+    canDriveVan: true,
+  });
+  return data;
+}
+
+function sixInstallationRequest() {
+  return bookingRequest({
+    workLines: [{
+      id: "installation",
+      presetId: "standard_installation",
+      serviceId: "s-install",
+      quantity: 6,
+    }],
+    constraints: { requestedDate: "2098-12-22" },
+  });
+}
+
+function assignmentPair(option) {
+  const primary = option.assignments.find((assignment) => assignment.role === "primary");
+  const support = option.assignments.find((assignment) => assignment.role === "support");
+  return `${primary?.vanId || ""}+${support?.vanId || ""}`;
+}
+
 function exactTargetRequest(quantity) {
   return bookingRequest({
     workLines: [{ id: "w1", presetId: "standard_service", serviceId: "s1", quantity }],
@@ -517,6 +552,75 @@ test("support alternatives skip occupied windows but preserve a later valid arri
   assert.equal(result.reason, "available");
   assert.equal(result.options.some((option) => option.assignments[1]?.vanId === "VAN-2" && option.assignments[1]?.time === "08:30"), false);
   assert.equal(result.options.some((option) => option.assignments[1]?.vanId === "VAN-2" && option.assignments[1]?.time === "09:30"), true);
+});
+
+test("explicit requested-date alternatives expose valid primary and support Van combinations for rescheduling", () => {
+  const data = fourVanSchedulingData();
+  const result = generateCanonicalOptions({
+    request: sixInstallationRequest(),
+    property: data.properties[0],
+    data,
+    routeConfig: normalizeRouteConfig(),
+    today: "2098-12-21",
+    currentTime: "07:00",
+    includeRequestedDateAlternatives: true,
+  });
+
+  assert.equal(result.reason, "available");
+  assert.ok(result.options.length > 1, "rescheduling must expose more than the single client shortlist option");
+  assert.equal(result.options.every((option) => option.date === "2098-12-22"), true);
+  assert.equal(
+    result.options.some((option) => assignmentPair(option) === "VAN-2+VAN-4"),
+    true,
+    "Van 2 primary with Van 4 support is a valid complete allocation and must remain selectable",
+  );
+  assert.ok(
+    new Set(result.options.map((option) => option.assignments.find((assignment) => assignment.role === "primary")?.vanId)).size > 1,
+    "requested-date alternatives must not collapse every result onto the first-ranked primary Van",
+  );
+});
+
+test("normal option selection keeps the existing two-option client shortlist", () => {
+  const data = fourVanSchedulingData();
+  const result = generateCanonicalOptions({
+    request: sixInstallationRequest(),
+    property: data.properties[0],
+    data,
+    routeConfig: normalizeRouteConfig(),
+    today: "2098-12-21",
+    currentTime: "07:00",
+  });
+
+  assert.equal(result.options.length, 2);
+  assert.equal(result.options.filter((option) => option.date === "2098-12-22").length, 1);
+  assert.equal(assignmentPair(result.options[0]), "VAN-1+VAN-2");
+  assert.notEqual(result.options[1].date, result.options[0].date);
+});
+
+test("required primary Van remains fixed when requested-date alternatives are enabled", () => {
+  const data = fourVanSchedulingData();
+  const result = generateCanonicalOptions({
+    request: sixInstallationRequest(),
+    property: data.properties[0],
+    data,
+    routeConfig: normalizeRouteConfig(),
+    today: "2098-12-21",
+    currentTime: "07:00",
+    requiredPrimaryVanId: "VAN-1",
+    requireRequestedTarget: true,
+    includeRequestedDateAlternatives: true,
+  });
+
+  assert.equal(result.reason, "available");
+  assert.ok(result.options.length > 1);
+  assert.equal(
+    result.options.every((option) => option.assignments.find((assignment) => assignment.role === "primary")?.vanId === "VAN-1"),
+    true,
+  );
+  assert.deepEqual(
+    new Set(result.options.map((option) => option.assignments.find((assignment) => assignment.role === "support")?.vanId)),
+    new Set(["VAN-2", "VAN-3", "VAN-4"]),
+  );
 });
 
 test("large fixed-primary booking fails cleanly when no support van is operationally available", () => {

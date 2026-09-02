@@ -199,6 +199,8 @@ test("check_availability delegates to canonical Booking Authority for non-drag b
       requestedDate: "2026-08-20",
       requestedTime: "09:30",
       requiredVanId: "VAN-4",
+      includeRequestedDateAlternatives: true,
+      changeKind: "customer_reschedule",
       preferredTime: "",
       customerFacingDescription: "Servicio de dos aires",
       technicianInstructions: "Acceso por recepción",
@@ -214,6 +216,7 @@ test("check_availability delegates to canonical Booking Authority for non-drag b
   assert.equal(captured.context.requestKey, "office:user-1:office-form-123:availability");
   assert.equal(captured.context.excludeAppointmentId, "APT-EXISTING-1");
   assert.equal(captured.context.requiredPrimaryVanId, "VAN-4");
+  assert.equal(captured.context.includeRequestedDateAlternatives, true);
 });
 
 test("check_availability forwards only explicitly acknowledged backdating intent and suppresses recipients", async () => {

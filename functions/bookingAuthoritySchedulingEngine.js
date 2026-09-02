@@ -594,6 +594,7 @@ function generateCanonicalOptions({
   currentTime,
   requiredPrimaryVanId = "",
   requireRequestedTarget = false,
+  includeRequestedDateAlternatives = false,
   allowBackdating = false,
 }) {
   const scope = resolveWorkScope(request, data);
@@ -648,7 +649,8 @@ function generateCanonicalOptions({
     && requiredPrimaryVanId
     && requestedDate
     && timeConstraint.kind === "exact";
-  const candidateDates = (allowBackdating || exactRequestedTarget) && requestedDate
+  const requestedDateAlternatives = includeRequestedDateAlternatives === true && Boolean(requestedDate);
+  const candidateDates = (allowBackdating || exactRequestedTarget || requestedDateAlternatives) && requestedDate
     ? [requestedDate]
     : Array.from({ length: MAX_SEARCH_DAYS }, (_, dayOffset) => addDays(today, dayOffset));
 
@@ -750,14 +752,14 @@ function generateCanonicalOptions({
     unique.push(option);
   }
 
-  const targetOptions = requireRequestedTarget
+  const targetOptions = requireRequestedTarget || requestedDateAlternatives
     ? unique.filter((option) => (
       (!requestedDate || option.date === requestedDate)
       && (timeConstraint.kind !== "exact" || option.time === timeConstraint.time)
       && (!requiredPrimaryVanId || option.assignments?.[0]?.vanId === requiredPrimaryVanId)
     ))
     : unique;
-  const clientOptions = requireRequestedTarget
+  const clientOptions = requireRequestedTarget || requestedDateAlternatives
     ? targetOptions.slice(0, OFFICE_TARGET_OPTION_LIMIT)
     : selectClientOptions(targetOptions);
 

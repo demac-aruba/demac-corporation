@@ -327,6 +327,10 @@ function createSchedulingProvider({ db }) {
       const operationalMove = context.changeKind === "operational_move" && requiredPrimaryVanId && requestedDate && requestedTime;
       const officeExactTarget = context.channel === "office"
         && Boolean(requiredPrimaryVanId && requestedDate && requestedTime);
+      const includeRequestedDateAlternatives = context.channel === "office"
+        && context.changeKind === "customer_reschedule"
+        && context.includeRequestedDateAlternatives === true
+        && Boolean(context.excludeAppointmentId && requestedDate);
       const backdated = backdatingIntent({ context });
       const targetPassed = requestedTargetPassed({
         requestedDate,
@@ -380,8 +384,8 @@ function createSchedulingProvider({ db }) {
         ])
         : [await loadSchedulingData(
           db,
-          backdated || officeExactTarget ? requestedDate : today,
-          backdated || officeExactTarget ? requestedDate : addDays(today, MAX_SEARCH_DAYS),
+          backdated || officeExactTarget || includeRequestedDateAlternatives ? requestedDate : today,
+          backdated || officeExactTarget || includeRequestedDateAlternatives ? requestedDate : addDays(today, MAX_SEARCH_DAYS),
         ), null];
       const data = dataWithoutAppointment(loaded, context.excludeAppointmentId);
       if (requiredPrimaryVanId && !data.vans.some((van) => van.id === requiredPrimaryVanId)) {
@@ -436,6 +440,7 @@ function createSchedulingProvider({ db }) {
         currentTime: nowParts.time,
         requiredPrimaryVanId,
         requireRequestedTarget: Boolean(requiredPrimaryVanId),
+        includeRequestedDateAlternatives,
         allowBackdating: backdated,
       });
       const options = result.options;
@@ -454,6 +459,7 @@ function createSchedulingProvider({ db }) {
           routeZone: result.candidateZone?.label || "",
           vansRequired: result.allocations?.length || 0,
           requiredPrimaryVanId: requiredPrimaryVanId || "",
+          includeRequestedDateAlternatives,
           routePolicy,
           ...(backdated
             ? {

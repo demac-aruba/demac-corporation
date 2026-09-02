@@ -629,6 +629,7 @@ export async function checkOfficeRescheduleAvailability(input: {
   requestedDate: string;
   requestedTime?: string;
   requiredVanId?: string;
+  includeRequestedDateAlternatives?: boolean;
   customerFacingDescription?: string;
   technicianInstructions?: string;
   notes?: string;

@@ -1138,6 +1138,12 @@ function createOfficeBookingApi({
       const excludeAppointmentId = cleanText(data.appointmentId, 180);
       const requiredPrimaryVanId = cleanText(data.requiredVanId, 120);
       const changeKind = lifecycleChangeKind(data.changeKind);
+      const includeRequestedDateAlternatives = Boolean(
+        data.includeRequestedDateAlternatives === true
+        && excludeAppointmentId
+        && changeKind === "customer_reschedule"
+        && cleanText(request.constraints?.requestedDate, 20)
+      );
       const notificationRecipients = backdated
         ? []
         : await resolveAppointmentRecipients(db, {
@@ -1155,6 +1161,7 @@ function createOfficeBookingApi({
           excludeAppointmentId,
           requiredPrimaryVanId,
           changeKind,
+          includeRequestedDateAlternatives,
           notificationRecipients,
           ...bookingIntent,
         },

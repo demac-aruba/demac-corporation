@@ -516,6 +516,7 @@ export function AppointmentRescheduleSchedulePicker({ appointment, onClose, onRe
         propertyId,
         workLines,
         requestedDate: target,
+        includeRequestedDateAlternatives: true,
         customerFacingDescription: sharedWorkText(workLines, 'customerFacingDescription') || appointment.customerFacingDescription,
         technicianInstructions: sharedWorkText(workLines, 'technicianInstructions') || appointment.technicianInstructions,
         changeKind: 'customer_reschedule',
