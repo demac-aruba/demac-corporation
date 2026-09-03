@@ -2,6 +2,19 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createAfterHoursEmergency } from '../../lib/after-hours-booking';
+import {
+  BROWSER_PROJECTS_PREVIEW_KEY,
+  commitBrowserProjectsPreviewMutation,
+  createProjectsPreviewState,
+  linkProjectSchedulingAssignment,
+  loadBrowserProjectsPreviewState,
+  planProjectScheduling,
+  projectIsSchedulable,
+  searchProjectsForScheduling,
+  type BrowserProject,
+  type BrowserProjectsPreviewState,
+  type ProjectSchedulingPlan,
+} from '../../lib/browser-projects';
 import type { AppointmentRecipientSelection } from '../../lib/customer-contacts';
 import {
   optionAssignmentCapacityEnd,
@@ -41,6 +54,7 @@ import {
   type ArubaAddressEntry,
 } from '../../lib/aruba-address-directory';
 import { isBackdatedAppointmentTarget } from '../../lib/scheduling-backdating';
+import { useAuth } from '../auth/auth-provider';
 import { PropertyCommunicationPanel, PropertyContactDraftEditor } from './property-communication-editor';
 import styles from './live-appointment-create-drawer.module.css';
 
@@ -60,6 +74,15 @@ export type LiveCreatedBooking = {
   property: BookingProperty;
   preset: OfficeBookingPreset;
   status: 'confirmed' | 'temporary_hold';
+  project?: {
+    id: string;
+    projectNumber: string;
+    name: string;
+    phaseId: string;
+    phaseName: string;
+    scheduledHours: number;
+    syncStatus: 'linked' | 'pending';
+  };
 };
 
 export type LiveBookingMode = 'standard' | 'after_hours';
@@ -69,6 +92,7 @@ type Props = {
   mode?: LiveBookingMode;
   onClose: () => void;
   onCreated: (booking: LiveCreatedBooking) => void;
+  onAvailabilityConflict?: () => Promise<void> | void;
 };
 
 type CustomerDraft = NewBookingCustomer & {
@@ -97,6 +121,13 @@ type ValidationState = {
 };
 
 type ReferenceLoadScope = 'master' | 'contacts' | 'presets';
+type AppointmentSource = 'service' | 'project';
+
+const EMPTY_PROJECTS_PREVIEW_STATE: BrowserProjectsPreviewState = {
+  version: 1,
+  selectedProjectId: '',
+  projects: [],
+};
 
 const emptyCustomer: CustomerDraft = {
   name: '',
@@ -268,7 +299,12 @@ function automaticCustomerDescription(workLines: WorkLineDraft[], presetById: Ma
   return entries.length ? `Scheduled work: ${entries.join('; ')}.` : '';
 }
 
-export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose, onCreated }: Props) {
+export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose, onCreated, onAvailabilityConflict }: Props) {
+  const { principal } = useAuth();
+  const canViewProjects = principal.active && principal.capabilities.has('projects.view');
+  const canManageProjects = canViewProjects && principal.capabilities.has('projects.manage');
+  const projectAccessRef = useRef({ canView: canViewProjects, canManage: canManageProjects });
+  projectAccessRef.current = { canView: canViewProjects, canManage: canManageProjects };
   const isAfterHours = mode === 'after_hours';
   const [references, setReferences] = useState<BookingReferenceData>({ clients: [], properties: [], contacts: [], contactAssignments: [] });
   const [presets, setPresets] = useState<OfficeBookingPreset[]>([]);
@@ -276,6 +312,13 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const [presetsLoading, setPresetsLoading] = useState(true);
   const [loadErrors, setLoadErrors] = useState<Partial<Record<ReferenceLoadScope, string>>>({});
   const [crewLabel, setCrewLabel] = useState('Crew loading…');
+  const [appointmentSource, setAppointmentSource] = useState<AppointmentSource>('service');
+  const [projectsState, setProjectsState] = useState<BrowserProjectsPreviewState>(EMPTY_PROJECTS_PREVIEW_STATE);
+  const [projectsReady, setProjectsReady] = useState(false);
+  const [projectQuery, setProjectQuery] = useState('');
+  const [projectId, setProjectId] = useState('');
+  const [projectPhaseId, setProjectPhaseId] = useState('');
+  const [projectSlots, setProjectSlots] = useState('');
   const [customerQuery, setCustomerQuery] = useState('');
   const [requestedStart, setRequestedStart] = useState(target.start);
   const [customerId, setCustomerId] = useState('');
@@ -284,6 +327,9 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const [workLines, setWorkLines] = useState<WorkLineDraft[]>([]);
   const [description, setDescription] = useState('');
   const lastAutoDescriptionRef = useRef('');
+  const technicianInstructionsTouchedRef = useRef(false);
+  const lastSyncedProjectSiteRef = useRef('');
+  const pendingProjectSiteRefreshRef = useRef('');
   const validationEpochRef = useRef(0);
   const offerSignatureRef = useRef('');
   const automaticValidationCapacityRef = useRef('');
@@ -340,7 +386,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     setBackdatingAcknowledged(true);
   }, [backdatedTarget, onClose]);
 
-  const refreshReferences = async () => {
+  const refreshReferences = useCallback(async () => {
     const referenceLoadEpoch = referenceLoadEpochRef.current + 1;
     referenceLoadEpochRef.current = referenceLoadEpoch;
     setLoadErrors((current) => {
@@ -375,7 +421,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       setLoadErrors((current) => ({ ...current, contacts: referenceLoadError('Contact directory', contactResult.reason) }));
     }
     if (masterResult.status === 'rejected') throw masterResult.reason;
-  };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -443,6 +489,53 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     return () => { active = false; };
   }, []);
 
+  useEffect(() => {
+    if (isAfterHours || !canViewProjects) {
+      setProjectsState(EMPTY_PROJECTS_PREVIEW_STATE);
+      setProjectsReady(false);
+      return undefined;
+    }
+    const loadProjects = () => {
+      setProjectsState(loadBrowserProjectsPreviewState(createProjectsPreviewState()));
+      setProjectsReady(true);
+    };
+    loadProjects();
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key === BROWSER_PROJECTS_PREVIEW_KEY) loadProjects();
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, [canViewProjects, isAfterHours]);
+
+  useEffect(() => {
+    if (canViewProjects || appointmentSource !== 'project') return;
+    validationAbortRef.current?.abort();
+    validationAbortRef.current = null;
+    validationEpochRef.current += 1;
+    setAppointmentSource('service');
+    setProjectsState(EMPTY_PROJECTS_PREVIEW_STATE);
+    setProjectsReady(false);
+    setProjectQuery('');
+    setProjectId('');
+    setProjectPhaseId('');
+    setProjectSlots('');
+    setCustomerId('');
+    setPropertyId('');
+    setRecipientSelections([]);
+    setWorkLines([]);
+    setDescription('');
+    technicianInstructionsTouchedRef.current = false;
+    lastSyncedProjectSiteRef.current = '';
+    pendingProjectSiteRefreshRef.current = '';
+    setTechnicianInstructions('');
+    setCustomerEditorOpen(false);
+    setPropertyEditorOpen(false);
+    setChecking(false);
+    setValidated(null);
+    setMasterError('');
+    setAuthorityError('Projects access is no longer available. Continue with a Regular Booking.');
+  }, [appointmentSource, canViewProjects]);
+
   useEffect(() => () => {
     if (automaticValidationTimerRef.current !== null) {
       window.clearTimeout(automaticValidationTimerRef.current);
@@ -466,6 +559,26 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     return () => { active = false; };
   }, [target.dateKey, target.vanId]);
 
+  const projectSourceSelected = !isAfterHours && appointmentSource === 'project';
+  const projectMode = projectSourceSelected && canViewProjects;
+  const projectWriteBlocked = projectSourceSelected && !canManageProjects;
+  const projectAccessRevoked = projectSourceSelected && !canViewProjects;
+  const authorizedDescription = projectAccessRevoked ? '' : description;
+  const authorizedTechnicianInstructions = projectAccessRevoked ? '' : technicianInstructions;
+  const selectedProject = projectMode ? projectsState.projects.find((project) => project.id === projectId) : undefined;
+  const selectedProjectRecordId = selectedProject?.id ?? '';
+  const selectedProjectCustomerId = selectedProject?.customerId ?? '';
+  const selectedProjectSiteId = selectedProject?.siteId ?? '';
+  const selectedProjectTechnicianInstructions = selectedProject?.technicianInstructions?.trim() ?? '';
+  const schedulableProjectPhases = useMemo(
+    () => selectedProject?.phases.filter((phase) => phase.status !== 'Completed') ?? [],
+    [selectedProject],
+  );
+  const selectedProjectPhase = schedulableProjectPhases.find((phase) => phase.id === projectPhaseId);
+  const matchingProjects = useMemo(
+    () => canViewProjects ? searchProjectsForScheduling(projectsState.projects, projectQuery).slice(0, 10) : [],
+    [canViewProjects, projectQuery, projectsState.projects],
+  );
   const selectedCustomer = references.clients.find((customer) => customer.id === customerId);
   const customerProperties = useMemo(
     () => references.properties.filter((property) => property.clientId === customerId && property.active !== false),
@@ -473,8 +586,64 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   );
   const selectedProperty = customerProperties.find((property) => property.id === propertyId);
   const presetById = useMemo(() => new Map(presets.map((preset) => [preset.id, preset])), [presets]);
-  const selectedPresets = workLines.map((line) => presetById.get(line.presetId)).filter((preset): preset is OfficeBookingPreset => Boolean(preset));
-  const autoDescription = useMemo(() => automaticCustomerDescription(workLines, presetById), [presetById, workLines]);
+  const projectWorkPreset = presets.find((preset) => isOtherPreset(preset));
+  const selectedPresets = projectMode
+    ? (projectWorkPreset ? [projectWorkPreset] : [])
+    : workLines.map((line) => presetById.get(line.presetId)).filter((preset): preset is OfficeBookingPreset => Boolean(preset));
+  const projectDailySlotLimit = selectedProject?.slotsPerWorkDay ?? 6;
+  const projectPlanState = useMemo<{ plan: ProjectSchedulingPlan | null; error: string }>(() => {
+    if (!projectMode || !selectedProject || !projectSlots.trim()) return { plan: null, error: '' };
+    if (selectedProject.phases.length && !selectedProjectPhase) {
+      return { plan: null, error: 'Select an active or planned Project phase.' };
+    }
+    try {
+      return { plan: planProjectScheduling(selectedProject, Number(projectSlots)), error: '' };
+    } catch (error) {
+      return { plan: null, error: error instanceof Error ? error.message : 'Enter a valid whole number of Project slots.' };
+    }
+  }, [projectMode, projectSlots, selectedProject, selectedProjectPhase]);
+  const projectPlan = projectPlanState.plan;
+  const projectWorkDescription = selectedProject
+    ? `${selectedProject.name} · ${selectedProject.type}${selectedProjectPhase ? ` · ${selectedProjectPhase.name}` : ''}.`
+    : '';
+  const autoDescription = useMemo(
+    () => projectMode ? projectWorkDescription : automaticCustomerDescription(workLines, presetById),
+    [presetById, projectMode, projectWorkDescription, workLines],
+  );
+
+  useEffect(() => {
+    if (!projectMode || !selectedProjectRecordId || technicianInstructionsTouchedRef.current) return;
+    setTechnicianInstructions(selectedProjectTechnicianInstructions);
+  }, [projectMode, selectedProjectRecordId, selectedProjectTechnicianInstructions]);
+
+  useEffect(() => {
+    if (!projectMode || !selectedProjectRecordId || selectedProjectSiteId === lastSyncedProjectSiteRef.current) return;
+    const linkedProperty = references.properties.find((property) => property.id === selectedProjectSiteId
+      && property.clientId === selectedProjectCustomerId
+      && property.active !== false);
+    validationAbortRef.current?.abort();
+    validationAbortRef.current = null;
+    validationEpochRef.current += 1;
+    setChecking(false);
+    setValidated(null);
+    setAuthorityError('');
+    setRecipientSelections([]);
+    if (selectedProjectSiteId && !linkedProperty) {
+      setPropertyId('');
+      setMasterError('The Project Service Property changed and is not available in the current CRM references. Refreshing canonical customer data…');
+      if (pendingProjectSiteRefreshRef.current !== selectedProjectSiteId) {
+        pendingProjectSiteRefreshRef.current = selectedProjectSiteId;
+        void refreshReferences().catch(() => {
+          if (pendingProjectSiteRefreshRef.current === selectedProjectSiteId) pendingProjectSiteRefreshRef.current = '';
+        });
+      }
+      return;
+    }
+    lastSyncedProjectSiteRef.current = selectedProjectSiteId;
+    pendingProjectSiteRefreshRef.current = '';
+    setMasterError('');
+    setPropertyId(linkedProperty?.id ?? '');
+  }, [projectMode, references.properties, refreshReferences, selectedProjectCustomerId, selectedProjectRecordId, selectedProjectSiteId]);
 
   useEffect(() => {
     const previousAuto = lastAutoDescriptionRef.current;
@@ -515,15 +684,19 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       .map((item) => item.customer);
   }, [customerQuery, references.clients, references.properties]);
 
-  const estimatedMinutes = workLines.reduce((sum, line) => {
+  const serviceEstimatedMinutes = workLines.reduce((sum, line) => {
     const preset = presetById.get(line.presetId);
     if (!preset) return sum;
     return sum + (isOtherPreset(preset)
       ? Math.max(60, line.manualDurationMinutes ?? 60)
       : preset.durationMinutesPerUnit * line.quantity);
   }, 0);
-  const totalQuantity = workLines.reduce((sum, line) => sum + line.quantity, 0);
-  const workSignature = workLines.map((line) => `${line.presetId}:${line.quantity}:${line.manualDurationMinutes ?? ''}`).join('|');
+  const estimatedMinutes = projectMode ? projectPlan?.scheduledHours ? projectPlan.scheduledHours * 60 : 0 : serviceEstimatedMinutes;
+  const totalQuantity = projectMode ? (projectPlan ? 1 : 0) : workLines.reduce((sum, line) => sum + line.quantity, 0);
+  const serviceWorkSignature = workLines.map((line) => `${line.presetId}:${line.quantity}:${line.manualDurationMinutes ?? ''}`).join('|');
+  const workSignature = projectMode
+    ? `project:${projectId}:${projectPhaseId || 'general'}:${projectPlan?.scheduledHours ?? ''}:${projectPlan?.scheduledSlots ?? ''}:${projectPlan?.remainingHoursBefore ?? ''}:${projectWorkPreset?.id ?? ''}`
+    : serviceWorkSignature;
   const effectiveRecipientSelections = useMemo(
     () => backdatedTarget
       ? recipientSelections.map((item) => ({ ...item, sendConfirmation: false, sendReminder: false }))
@@ -531,8 +704,8 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     [backdatedTarget, recipientSelections],
   );
   const recipientSignature = effectiveRecipientSelections.map((item) => `${item.recipientType}:${item.sourceId}:${Number(item.sendConfirmation)}:${Number(item.sendReminder)}`).sort().join('|');
-  const capacitySignature = [customerId, propertyId, workSignature, requestTarget.dateKey, requestTarget.vanId, requestTarget.start, mode, backdatedTarget ? `backdated:${Number(backdatingAcknowledged)}` : 'current'].join('|');
-  const offerSignature = [capacitySignature, recipientSignature, description.trim(), technicianInstructions.trim()].join('|');
+  const capacitySignature = [appointmentSource, customerId, propertyId, workSignature, requestTarget.dateKey, requestTarget.vanId, requestTarget.start, mode, backdatedTarget ? `backdated:${Number(backdatingAcknowledged)}` : 'current'].join('|');
+  const offerSignature = [capacitySignature, recipientSignature, authorizedDescription.trim(), authorizedTechnicianInstructions.trim()].join('|');
   offerSignatureRef.current = offerSignature;
   const capacityValidation = validated?.capacitySignature === capacitySignature ? validated : null;
   const activeValidation = capacityValidation?.offerSignature === offerSignature ? capacityValidation : null;
@@ -542,13 +715,21 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const selectedValidatedOption = activeValidation?.options.find((option) => option.id === activeValidation.selectedOptionId)
     ?? activeValidation?.options[0]
     ?? null;
-  const workValid = workLines.length > 0 && workLines.every((line) => {
-    const preset = presetById.get(line.presetId);
-    if (!preset || line.quantity < 1) return false;
-    if (!isOtherPreset(preset)) return true;
-    const minutes = Number(line.manualDurationMinutes || 0);
-    return minutes >= 60 && minutes <= 720 && minutes % 30 === 0;
-  });
+  const workValid = projectMode
+    ? Boolean(selectedProject
+      && projectWorkPreset
+      && projectPlan
+      && selectedCustomer?.id === selectedProject.customerId
+      && selectedProject.siteId
+      && selectedProperty?.id === selectedProject.siteId
+      && (!selectedProject.phases.length || selectedProjectPhase))
+    : workLines.length > 0 && workLines.every((line) => {
+      const preset = presetById.get(line.presetId);
+      if (!preset || line.quantity < 1) return false;
+      if (!isOtherPreset(preset)) return true;
+      const minutes = Number(line.manualDurationMinutes || 0);
+      return minutes >= 60 && minutes <= 720 && minutes % 30 === 0;
+    });
 
   const cancelValidationRequest = () => {
     validationAbortRef.current?.abort();
@@ -572,7 +753,83 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     setAuthorityError('');
   };
 
+  const projectLinkIssue = (project: BrowserProject) => {
+    if (!projectAccessRef.current.canView) return 'Projects viewing permission is required.';
+    if (!projectIsSchedulable(project)) return 'This Project is not open for scheduling.';
+    const projectCustomer = references.clients.find((customer) => customer.id === project.customerId && customer.active !== false);
+    if (!projectCustomer) return 'Needs a canonical CRM Customer link.';
+    if (!project.siteId) return 'Needs its canonical Service Property link before scheduling.';
+    const projectProperty = references.properties.find((property) => property.id === project.siteId
+      && property.clientId === projectCustomer.id
+      && property.active !== false);
+    return projectProperty ? '' : 'Needs its canonical Service Property link.';
+  };
+
+  const chooseAppointmentSource = (source: AppointmentSource) => {
+    if (source === 'project' && !projectAccessRef.current.canView) {
+      setAuthorityError('Your account does not have permission to view Projects.');
+      return;
+    }
+    if (source === 'project' && backdatedTarget) return;
+    if (source === appointmentSource) return;
+    setAppointmentSource(source);
+    setProjectQuery('');
+    setProjectId('');
+    setProjectPhaseId('');
+    setProjectSlots('');
+    setCustomerId('');
+    setPropertyId('');
+    setRecipientSelections([]);
+    setWorkLines([]);
+    setDescription('');
+    technicianInstructionsTouchedRef.current = false;
+    lastSyncedProjectSiteRef.current = '';
+    pendingProjectSiteRefreshRef.current = '';
+    setTechnicianInstructions('');
+    setMasterError('');
+    setCustomerEditorOpen(false);
+    setPropertyEditorOpen(false);
+    resetCapacityValidation();
+  };
+
+  const selectProject = (project: BrowserProject) => {
+    if (!projectAccessRef.current.canView) {
+      setAuthorityError('Your account does not have permission to view Projects.');
+      return;
+    }
+    const linkIssue = projectLinkIssue(project);
+    if (linkIssue) {
+      setMasterError(`${project.projectNumber}: ${linkIssue}`);
+      return;
+    }
+    const projectCustomer = references.clients.find((customer) => customer.id === project.customerId && customer.active !== false);
+    if (!projectCustomer) return;
+    const availableProperties = references.properties.filter((property) => property.clientId === projectCustomer.id && property.active !== false);
+    const linkedProperty = project.siteId
+      ? availableProperties.find((property) => property.id === project.siteId)
+      : undefined;
+    const defaultPhase = project.phases.find((phase) => phase.status === 'In Progress')
+      ?? project.phases.find((phase) => phase.status === 'Planned');
+    setProjectId(project.id);
+    lastSyncedProjectSiteRef.current = project.siteId;
+    pendingProjectSiteRefreshRef.current = '';
+    setProjectPhaseId(defaultPhase?.id ?? '');
+    setProjectSlots('');
+    setCustomerId(projectCustomer.id);
+    setPropertyId(linkedProperty?.id ?? (availableProperties.length === 1 ? availableProperties[0].id : ''));
+    setRecipientSelections([]);
+    setWorkLines([]);
+    technicianInstructionsTouchedRef.current = false;
+    setTechnicianInstructions(project.technicianInstructions?.trim() ?? '');
+    setProjectQuery('');
+    setMasterError('');
+    setCustomerEditorOpen(false);
+    setPropertyEditorOpen(false);
+    resetCapacityValidation();
+  };
+
   const selectCustomer = (customer: BookingCustomer) => {
+    if (projectMode) return;
     setCustomerId(customer.id);
     const firstProperty = references.properties.find((property) => property.clientId === customer.id && property.active !== false);
     setPropertyId(firstProperty?.id ?? '');
@@ -670,16 +927,34 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     }
   };
 
-  const workRequestLines = useCallback((): OfficeBookingWorkLine[] => workLines.map((line) => {
-    const preset = presetById.get(line.presetId)!;
-    return {
-      id: line.id,
-      presetId: preset.id,
-      serviceId: preset.serviceId,
-      quantity: line.quantity,
-      ...(isOtherPreset(preset) ? { manualDurationMinutes: line.manualDurationMinutes } : {}),
-    };
-  }), [presetById, workLines]);
+  const workRequestLines = useCallback((): OfficeBookingWorkLine[] => {
+    if (projectMode && selectedProject && projectWorkPreset && projectPlan) {
+      const projectInstructions = [
+        projectWorkDescription,
+        `Planned Project capacity: ${projectPlan.scheduledSlots} slot${projectPlan.scheduledSlots === 1 ? '' : 's'} (${durationLabel(projectPlan.scheduledHours * 60)} Van time).`,
+        authorizedTechnicianInstructions.trim(),
+      ].filter(Boolean).join('\n');
+      return [{
+        id: `project-${selectedProject.id}-${selectedProjectPhase?.id || 'general'}`,
+        presetId: projectWorkPreset.id,
+        serviceId: projectWorkPreset.serviceId,
+        quantity: 1,
+        manualDurationMinutes: projectPlan.scheduledHours * 60,
+        customerFacingDescription: authorizedDescription.trim() || projectWorkDescription,
+        technicianInstructions: projectInstructions,
+      }];
+    }
+    return workLines.map((line) => {
+      const preset = presetById.get(line.presetId)!;
+      return {
+        id: line.id,
+        presetId: preset.id,
+        serviceId: preset.serviceId,
+        quantity: line.quantity,
+        ...(isOtherPreset(preset) ? { manualDurationMinutes: line.manualDurationMinutes } : {}),
+      };
+    });
+  }, [authorizedDescription, authorizedTechnicianInstructions, presetById, projectMode, projectPlan, projectWorkDescription, projectWorkPreset, selectedProject, selectedProjectPhase, workLines]);
 
   const validateTarget = useCallback(async (automatic = false) => {
     if (!automatic && automaticValidationTimerRef.current !== null) {
@@ -700,7 +975,9 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       return;
     }
     if (!workValid) {
-      if (!automatic) setAuthorityError('Add at least one valid work line. Other work requires a manual scheduled duration.');
+      if (!automatic) setAuthorityError(projectMode
+        ? projectPlanState.error || 'Select a Project, its phase when applicable, and the whole Project slots to reserve.'
+        : 'Add at least one valid work line. Other work requires a manual scheduled duration.');
       return;
     }
 
@@ -728,19 +1005,24 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         requestedDate: requestTarget.dateKey,
         requestedTime: requestTarget.start,
         requiredVanId: requestTarget.vanId,
-        customerFacingDescription: description.trim(),
-        technicianInstructions: technicianInstructions.trim(),
+        customerFacingDescription: authorizedDescription.trim(),
+        technicianInstructions: authorizedTechnicianInstructions.trim(),
         recipientSelections: effectiveRecipientSelections,
-        notes: `${backdatedTarget ? 'Backdated work recorded' : 'Created'} from LIVE Scheduling slot ${requestTarget.vanId} ${requestTarget.dateKey} ${requestTarget.start}.`,
+        notes: `${backdatedTarget ? 'Backdated work recorded' : 'Created'} from LIVE Scheduling slot ${requestTarget.vanId} ${requestTarget.dateKey} ${requestTarget.start}.${projectMode && selectedProject ? ` Project preview link: ${selectedProject.projectNumber} (${selectedProject.id})${selectedProjectPhase ? `, phase ${selectedProjectPhase.name} (${selectedProjectPhase.id})` : ', no phase required'}.` : ''}`,
         ...(backdatedTarget ? { bookingMode: 'backdated' as const, backdatingAcknowledged: true } : {}),
       }, requestController.signal);
       if (requestEpoch !== validationEpochRef.current || offerSignatureRef.current !== validationOfferSignature) return;
       const exactOptions = result.options.filter((option) => optionMatchesTarget(option, requestTarget));
       const offer = result.offer;
       if (!result.available || !offer || !exactOptions.length) {
-        const reason = result.reason ? ` (${result.reason})` : '';
         setValidated(null);
-        setAuthorityError(`Booking Authority could not reserve the complete allocation for this van/time${reason}. The schedule was not changed.`);
+        if (result.reason === 'required-primary-target-unavailable') {
+          setAuthorityError(`${requestTarget.vanName} no longer has the complete requested capacity at ${formatTime(requestTarget.start)}. Another appointment or Temporary Hold may already reserve one or more of these slots. The live agenda is being refreshed; choose another open Van/day or review the existing reservation. Nothing was changed.`);
+          void onAvailabilityConflict?.();
+        } else {
+          const reason = result.reason ? ` (${result.reason})` : '';
+          setAuthorityError(`Booking Authority could not reserve the complete allocation for this van/time${reason}. The schedule was not changed.`);
+        }
         return;
       }
       setValidated((current) => ({
@@ -763,7 +1045,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       if (validationAbortRef.current === requestController) validationAbortRef.current = null;
       if (requestEpoch === validationEpochRef.current) setChecking(false);
     }
-  }, [backdatedTarget, backdatingAcknowledged, capacitySignature, description, effectiveRecipientSelections, isAfterHours, offerSignature, requestTarget, selectedCustomer, selectedProperty, technicianInstructions, workRequestLines, workValid]);
+  }, [authorizedDescription, authorizedTechnicianInstructions, backdatedTarget, backdatingAcknowledged, capacitySignature, effectiveRecipientSelections, isAfterHours, offerSignature, onAvailabilityConflict, projectMode, projectPlanState.error, requestTarget, selectedCustomer, selectedProject, selectedProjectPhase, selectedProperty, workRequestLines, workValid]);
 
   useEffect(() => {
     const capacityChanged = automaticValidationCapacityRef.current !== capacitySignature;
@@ -782,7 +1064,66 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     };
   }, [backdatedTarget, backdatingAcknowledged, capacitySignature, holding, isAfterHours, loading, masterSaving, offerSignature, saving, selectedCustomer, selectedProperty, validateTarget, workValid]);
 
+  const saveProjectBookingLink = async (input: {
+    appointmentId: string;
+    workOrderIds: string[];
+    option: OfficeBookingOption;
+    status: 'confirmed' | 'temporary_hold';
+  }) => {
+    if (!projectMode) return true;
+    if (!projectAccessRef.current.canManage || !selectedProject || !projectPlan) return false;
+    try {
+      const nextState = await commitBrowserProjectsPreviewMutation(projectsState, (latestProjectsState) => {
+        const primary = optionPrimaryAssignment(input.option);
+        const latestProject = latestProjectsState.projects.find((project) => project.id === selectedProject.id);
+        if (!latestProject
+          || latestProject.customerId !== selectedCustomer?.id
+          || latestProject.siteId !== selectedProperty?.id) {
+          throw new Error('The latest Project customer or Service Property no longer matches this appointment.');
+        }
+        return linkProjectSchedulingAssignment(latestProjectsState, {
+          projectId: selectedProject.id,
+          customerId: selectedCustomer.id,
+          siteId: selectedProperty.id,
+          phaseId: selectedProjectPhase?.id ?? '',
+          appointmentId: input.appointmentId,
+          workOrderId: input.workOrderIds[0] ?? `appointment:${input.appointmentId}`,
+          bookingStatus: input.status,
+          vanId: primary?.vanId ?? requestTarget.vanId,
+          scheduledSlots: projectPlan.scheduledSlots,
+          scheduledDate: input.option.date,
+          scheduledStart: primary ? optionAssignmentStart(input.option, primary) : input.option.time,
+          scheduledEnd: primary ? optionAssignmentCapacityEnd(input.option, primary) : input.option.capacityEndTime,
+        });
+      }, {
+        authorize: () => {
+          if (!projectAccessRef.current.canManage) {
+            throw new Error('Projects management permission changed before the Scheduling link was saved.');
+          }
+        },
+      });
+      setProjectsState(nextState);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const createdProjectContext = selectedProject && projectPlan ? {
+    id: selectedProject.id,
+    projectNumber: selectedProject.projectNumber,
+    name: selectedProject.name,
+    phaseId: selectedProjectPhase?.id ?? '',
+    phaseName: selectedProjectPhase?.name ?? selectedProject.type,
+    scheduledHours: projectPlan.scheduledHours,
+  } : undefined;
+
   const confirmBooking = async () => {
+    const projectBookingRequested = !isAfterHours && appointmentSource === 'project';
+    if (projectBookingRequested && !projectAccessRef.current.canManage) {
+      setAuthorityError('Projects management permission is required to confirm an appointment linked to a Project.');
+      return;
+    }
     if (!selectedCustomer || !selectedProperty || !selectedPresets.length || !workValid || saving || holding) return;
     if (backdatedTarget && !backdatingAcknowledged) {
       setAuthorityError('Confirm the backdated appointment warning before saving this historical appointment.');
@@ -804,8 +1145,8 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           requestedDate: requestTarget.dateKey,
           requestedTime: requestTarget.start,
           requiredVanId: requestTarget.vanId,
-          customerFacingDescription: description.trim(),
-          technicianInstructions: technicianInstructions.trim(),
+          customerFacingDescription: authorizedDescription.trim(),
+          technicianInstructions: authorizedTechnicianInstructions.trim(),
           recipientSelections,
         });
         onCreated({
@@ -850,6 +1191,15 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         optionId: option.id,
         ...(backdatedTarget ? { bookingMode: 'backdated' as const, backdatingAcknowledged: true } : {}),
       });
+      const projectLinked = projectBookingRequested && projectAccessRef.current.canManage
+        ? await saveProjectBookingLink({
+          appointmentId: result.appointmentId,
+          workOrderIds: result.workOrderIds ?? [],
+          option,
+          status: 'confirmed',
+        })
+        : !projectBookingRequested;
+      const canExposeCreatedProject = projectAccessRef.current.canView;
       onCreated({
         appointmentId: result.appointmentId,
         workOrderIds: result.workOrderIds ?? [],
@@ -858,6 +1208,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         property: selectedProperty,
         preset: selectedPresets[0],
         status: 'confirmed',
+        ...(createdProjectContext && canExposeCreatedProject ? { project: { ...createdProjectContext, syncStatus: projectLinked ? 'linked' as const : 'pending' as const } } : {}),
       });
     } catch (error) {
       setValidated(null);
@@ -868,6 +1219,11 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   };
 
   const holdBooking = async () => {
+    const projectBookingRequested = !isAfterHours && appointmentSource === 'project';
+    if (projectBookingRequested && !projectAccessRef.current.canManage) {
+      setAuthorityError('Projects management permission is required to place a Temporary Hold linked to a Project.');
+      return;
+    }
     if (!activeValidation || !selectedValidatedOption || !selectedCustomer || !selectedProperty || !selectedPresets.length || saving || holding) return;
     setHolding(true);
     setAuthorityError('');
@@ -880,6 +1236,15 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         offerVersion,
         optionId: option.id,
       });
+      const projectLinked = projectBookingRequested && projectAccessRef.current.canManage
+        ? await saveProjectBookingLink({
+          appointmentId: result.appointmentId,
+          workOrderIds: result.workOrderIds ?? [],
+          option,
+          status: 'temporary_hold',
+        })
+        : !projectBookingRequested;
+      const canExposeCreatedProject = projectAccessRef.current.canView;
       onCreated({
         appointmentId: result.appointmentId,
         workOrderIds: result.workOrderIds ?? [],
@@ -888,6 +1253,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         property: selectedProperty,
         preset: selectedPresets[0],
         status: 'temporary_hold',
+        ...(createdProjectContext && canExposeCreatedProject ? { project: { ...createdProjectContext, syncStatus: projectLinked ? 'linked' as const : 'pending' as const } } : {}),
       });
     } catch (error) {
       setValidated(null);
@@ -908,7 +1274,9 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
             <h2>{isAfterHours ? 'New after-hours appointment' : 'New appointment'}</h2>
             <p>{isAfterHours
               ? 'Use the same canonical customer, property, contacts and work-selection flow as every appointment. The selected Van receives one extra open-ended job from 5:00 PM onward.'
-              : 'Select the real customer and work details. Add one or more quick work types; Booking Authority validates the combined allocation before anything is committed.'}</p>
+              : canViewProjects
+                ? 'Create a Regular Booking or select an existing Project. Customer, property, work and Van time are validated together before anything is committed.'
+                : 'Create a Regular Booking. Customer, property, work and Van time are validated together before anything is committed.'}</p>
           </div>
           <button type="button" className={styles.close} disabled={busy} onClick={onClose} aria-label="Close">×</button>
         </header>
@@ -923,14 +1291,63 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
             <div><span>{isAfterHours ? 'WORK RULE' : 'OPEN BLOCK'}</span><strong>{isAfterHours ? 'Extra job · open-ended until field completion' : `${formatTime(requestTarget.start)}–${formatTime(requestTarget.end)}`}</strong></div>
           </section>
 
-          {loadError ? <div className={styles.errorBox}>{loadError}</div> : null}
-          {authorityError ? <div className={styles.errorBox}>{authorityError}</div> : null}
-          {masterError ? <div className={styles.errorBox}>{masterError}</div> : null}
+          {loadError ? <div className={styles.errorBox} role="alert" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}><span>{loadError}</span><button type="button" className={styles.secondaryButton} onClick={() => { pendingProjectSiteRefreshRef.current = ''; void refreshReferences().catch(() => undefined); }}>Retry customer data</button></div> : null}
+          {authorityError ? <div className={styles.errorBox} role="alert">{authorityError}</div> : null}
+          {masterError ? <div className={styles.errorBox} role="alert" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}><span>{masterError}</span>{projectMode ? <button type="button" className={styles.secondaryButton} onClick={() => { pendingProjectSiteRefreshRef.current = ''; void refreshReferences().catch(() => undefined); }}>Retry Project property</button> : null}</div> : null}
           {backdatedTarget && backdatingAcknowledged ? <div className={styles.authorityIdle} style={{ marginBottom: 10, border: '1px solid var(--warning, #f59e0b)', borderRadius: 10, background: 'var(--surface)' }} role="status"><strong style={{ display: 'block', marginBottom: 3, color: 'var(--warning, #b45309)' }}>BACKDATED APPOINTMENT</strong><span>This records work after it happened. Historical Van capacity will still be checked, and no automatic confirmation or reminder will be sent.</span></div> : null}
 
+          {!isAfterHours ? (
+            <section className={styles.section}>
+              <header><div><span>1</span><strong>Appointment source</strong><small>{canViewProjects ? 'Create a Regular Booking or reserve real Scheduling capacity for an existing Project.' : 'Create a Regular Booking from canonical customer, property, and Services & Products records.'}</small></div></header>
+              <div className={styles.sectionBody}>
+                <div className={styles.sourceToggle}>
+                  <button type="button" className={`${styles.sourceOption} ${!projectMode ? styles.sourceOptionActive : ''}`} aria-pressed={!projectMode} onClick={() => chooseAppointmentSource('service')}>
+                    <strong>Regular Booking</strong><span>Choose customer, property and work from Services & Products.</span>
+                  </button>
+                  {canViewProjects ? <button type="button" disabled={backdatedTarget} className={`${styles.sourceOption} ${projectMode ? styles.sourceOptionActive : ''}`} aria-pressed={projectMode} onClick={() => chooseAppointmentSource('project')}>
+                    <strong>Project</strong><span>Find a Project and reserve whole Van capacity slots against it.</span>
+                  </button> : null}
+                </div>
+                {projectMode ? (
+                  <div className={styles.projectPicker}>
+                    <label className={styles.fieldWide}>
+                      <span>Search Project</span>
+                      <input autoFocus value={projectQuery} onChange={(event) => setProjectQuery(event.target.value)} placeholder="Project name, number, customer or location…" />
+                    </label>
+                    <div className={styles.searchResults}>
+                      {matchingProjects.map((project) => {
+                        const linkIssue = projectLinkIssue(project);
+                        const selected = project.id === projectId;
+                        return (
+                          <button type="button" key={project.id} disabled={Boolean(linkIssue)} className={`${styles.searchResult} ${selected ? styles.selectedResult : ''}`} aria-pressed={selected} onClick={() => selectProject(project)}>
+                            <div><strong>{project.projectNumber} · {project.name}</strong><span>{project.customerName} · {project.type}</span></div>
+                            <small>{linkIssue || `${project.location || 'Location pending'} · ${project.status}`}</small>
+                            <b>{selected ? 'SELECTED' : linkIssue ? 'LINK NEEDED' : 'SELECT'}</b>
+                          </button>
+                        );
+                      })}
+                      {projectsReady && !matchingProjects.length ? <div className={styles.emptyResult}>No schedulable Project matches this search.</div> : null}
+                    </div>
+                    {selectedProject ? (
+                      <div className={styles.linkedProject}>
+                        <div><span>SELECTED PROJECT</span><strong>{selectedProject.projectNumber} · {selectedProject.name}</strong><small>{selectedProject.customerName} · {selectedProject.location || 'Property to be selected'}</small></div>
+                        <button type="button" onClick={() => { setProjectId(''); setProjectPhaseId(''); setProjectSlots(''); setCustomerId(''); setPropertyId(''); setRecipientSelections([]); technicianInstructionsTouchedRef.current = false; lastSyncedProjectSiteRef.current = ''; pendingProjectSiteRefreshRef.current = ''; setTechnicianInstructions(''); resetCapacityValidation(); }}>Change</button>
+                      </div>
+                    ) : null}
+                    <div className={styles.previewBoundary} role="note"><strong>{canManageProjects ? 'Preview bridge:' : 'Read-only Project access:'}</strong> {canManageProjects ? 'the Appointment and its capacity locks are canonical. The selected Project is linked to the generated Work Order. A Temporary Hold blocks the same slots without sending customer confirmation or reminders until it is manually confirmed.' : 'you may inspect and plan against this Project, but confirming or holding a linked appointment requires Projects management permission.'}</div>
+                  </div>
+                ) : null}
+              </div>
+            </section>
+          ) : null}
+
           <section className={styles.section}>
-            <header><div><span>1</span><strong>Customer</strong><small>Search canonical CRM records or register a new customer.</small></div></header>
+            <header><div><span>{isAfterHours ? '1' : '2'}</span><strong>Customer</strong><small>{projectMode ? 'The selected Project supplies its canonical CRM customer.' : 'Search canonical CRM records or register a new customer.'}</small></div></header>
             <div className={styles.sectionBody}>
+              {projectMode ? (
+                selectedCustomer ? <div className={styles.lockedIdentity}><span>LINKED FROM PROJECT</span><strong>{customerLabel(selectedCustomer)}</strong><small>{text(selectedCustomer.phone) || text(selectedCustomer.whatsapp) || 'No phone'} · Customer cannot be changed while this Project is selected.</small></div>
+                  : <div className={styles.emptyResult}>Select a Project that is linked to a canonical CRM customer.</div>
+              ) : <>
               <label className={styles.fieldWide}>
                 <span>Search customer</span>
                 <input autoFocus={!loading} value={customerQuery} onChange={(event) => setCustomerQuery(event.target.value)} placeholder="Name, company, phone, WhatsApp, address or area…" />
@@ -968,23 +1385,25 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                   <footer><button type="button" className={styles.secondaryButton} disabled={masterSaving} onClick={() => setCustomerEditorOpen(false)}>Cancel</button><button type="button" className={styles.primaryButton} disabled={masterSaving} onClick={() => void saveCustomer()}>{masterSaving ? 'Saving…' : 'Create & select'}</button></footer>
                 </div>
               ) : null}
+              </>}
             </div>
           </section>
 
           <section className={styles.section}>
-            <header><div><span>2</span><strong>Service property</strong><small>Appointments always point to a real property belonging to the selected customer.</small></div></header>
+            <header><div><span>{isAfterHours ? '2' : '3'}</span><strong>Service property</strong><small>{projectMode && selectedProject?.siteId ? 'The selected Project supplies its canonical Service Property.' : 'Appointments always point to a real property belonging to the selected customer.'}</small></div></header>
             <div className={styles.sectionBody}>
               {selectedCustomer ? (
                 <>
                   <div className={styles.choiceGrid}>
                     {customerProperties.map((property) => (
-                      <button type="button" key={property.id} className={`${styles.choice} ${property.id === propertyId ? styles.choiceSelected : ''}`} onClick={() => { setPropertyId(property.id); setRecipientSelections([]); resetCapacityValidation(); }}>
+                      <button type="button" key={property.id} disabled={Boolean(projectMode && (!selectedProject?.siteId || property.id !== selectedProject.siteId))} aria-pressed={property.id === propertyId} className={`${styles.choice} ${property.id === propertyId ? styles.choiceSelected : ''}`} onClick={() => { setPropertyId(property.id); setRecipientSelections([]); resetCapacityValidation(); }}>
                         <strong>{propertyLabel(property)}</strong><span>{text(property.address) || 'No address'}</span><small>{text(property.operationalZone) || text(property.zone) || 'Area not specified'}</small>
                       </button>
                     ))}
                   </div>
                   {!customerProperties.length ? <div className={styles.emptyResult}>This customer has no active service property yet.</div> : null}
-                  <button type="button" className={styles.inlineAction} onClick={openPropertyEditor}>＋ Add property</button>
+                  {projectMode && selectedProject && !selectedProject.siteId ? <div className={styles.previewBoundary}><strong>Project update required:</strong> this Project has no linked Service Property. Open the Project, use Edit Project to link its canonical property, then return to Scheduling.</div> : null}
+                  {!projectMode ? <button type="button" className={styles.inlineAction} onClick={openPropertyEditor}>＋ Add property</button> : null}
                   {selectedProperty && !backdatedTarget ? <PropertyCommunicationPanel
                     client={selectedCustomer}
                     propertyId={selectedProperty.id}
@@ -1014,8 +1433,43 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           </section>
 
           <section className={styles.section}>
-            <header><div><span>3</span><strong>Work & allocation</strong><small>Quick booking services come from Services & Products. Click a tile to add work; click it again to increase quantity.</small></div></header>
+            <header><div><span>{isAfterHours ? '3' : '4'}</span><strong>Work & allocation</strong><small>{projectMode ? 'Choose whole Project slots to reserve for this Van. Actual technician hours remain individual field time.' : 'Quick booking services come from Services & Products. Click a tile to add work; click it again to increase quantity.'}</small></div></header>
             <div className={styles.sectionBody}>
+              {projectMode ? (
+                selectedProject ? (
+                  <div className={styles.projectWorkPanel}>
+                    <div className={styles.projectWorkHeading}>
+                      <div><span>PROJECT WORK</span><strong>{selectedProject.projectNumber} · {selectedProject.name}</strong><small>{selectedProject.type} · {selectedProject.customerName}</small></div>
+                      <b>{selectedProject.status}</b>
+                    </div>
+                    <div className={styles.formGrid}>
+                      {selectedProject.phases.length ? (
+                        <label>
+                          <span>Project phase *</span>
+                          <select value={projectPhaseId} onChange={(event) => { setProjectPhaseId(event.target.value); resetCapacityValidation(); }}>
+                            <option value="">Select phase</option>
+                            {schedulableProjectPhases.map((phase) => <option key={phase.id} value={phase.id}>{phase.name} · {phase.status}</option>)}
+                          </select>
+                        </label>
+                      ) : <div className={styles.lockedIdentity}><span>PROJECT TYPE</span><strong>{selectedProject.type}</strong><small>This Project does not require a separate phase.</small></div>}
+                      <label>
+                        <span>Planned Project slots *</span>
+                        <input aria-invalid={Boolean(projectPlanState.error)} aria-describedby="project-slots-help" type="number" min="1" max={projectDailySlotLimit} step="1" inputMode="numeric" value={projectSlots} onChange={(event) => { setProjectSlots(event.target.value); resetCapacityValidation(); }} placeholder={`1–${projectDailySlotLimit} slots`} />
+                      </label>
+                      <div id="project-slots-help" className={`${styles.previewBoundary} ${styles.fieldWide}`}><strong>Project capacity:</strong> enter whole slots only. One slot reserves {selectedProject.slotDurationMinutes} minutes of Van capacity; this Project allows up to {selectedProject.slotsPerWorkDay} slots per workday. Each technician records actual labor time separately in the Technician Portal.</div>
+                    </div>
+                    {projectPlanState.error ? <div className={styles.projectPlanError} role="alert">{projectPlanState.error}</div> : null}
+                    {projectPlan ? (
+                      <div className={styles.projectPlanSummary}>
+                        <div><span>PROJECT SLOTS</span><strong>{projectPlan.scheduledSlots}</strong><small>{selectedProject.slotDurationMinutes} min each</small></div>
+                        <div><span>EQUIVALENT VAN TIME</span><strong>{durationLabel(projectPlan.scheduledHours * 60)}</strong></div>
+                        <div><span>PROJECT HOURS LEFT</span><strong>{projectPlan.remainingHoursAfter}h</strong><small>{projectPlan.remainingHoursBefore}h before this visit</small></div>
+                      </div>
+                    ) : null}
+                    {!projectWorkPreset && !presetsLoading ? <div className={styles.projectPlanError} role="alert">Scheduling needs the active “Other” work type to reserve manual Project hours. Enable it in Services & Products.</div> : null}
+                  </div>
+                ) : <div className={styles.emptyResult}>Select a Project above before entering planned slots.</div>
+              ) : <>
               <div className={styles.presetGrid}>
                 {presets.map((preset) => {
                   const selectedLine = workLines.find((line) => line.presetId === preset.id);
@@ -1053,15 +1507,16 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                   })}
                 </div>
               ) : <div className={styles.emptyResult}>Add the work expected for this visit. BTU is not required when scheduling.</div>}
+              </>}
 
               <div className={styles.quantityRow}>
-                <div><span>Work lines</span><strong>{workLines.length} line{workLines.length === 1 ? '' : 's'} · {totalQuantity} item{totalQuantity === 1 ? '' : 's'}</strong></div>
-                <div><span>Estimated workload</span><strong>{estimatedMinutes ? durationLabel(estimatedMinutes) : '—'}</strong></div>
+                <div><span>{projectMode ? 'Project task' : 'Work lines'}</span><strong>{projectMode ? selectedProjectPhase?.name || selectedProject?.type || '—' : `${workLines.length} line${workLines.length === 1 ? '' : 's'} · ${totalQuantity} item${totalQuantity === 1 ? '' : 's'}`}</strong></div>
+                <div><span>{projectMode ? 'Planned Project slots' : 'Estimated workload'}</span><strong>{projectPlan ? `${projectPlan.scheduledSlots} slot${projectPlan.scheduledSlots === 1 ? '' : 's'}` : '—'}</strong></div>
                 <div><span>{isAfterHours ? 'After-hours execution' : 'Scheduled allocation'}</span><strong>{isAfterHours ? 'Open-ended until field completion' : allocationDurationLabel(selectedCapacityOption, estimatedMinutes)}</strong></div>
               </div>
               <div className={styles.formGrid}>
-                <label className={styles.fieldWide}><span>Customer-facing work description</span><textarea value={description} onChange={(event) => { setDescription(event.target.value); invalidateOfferValidation(); }} placeholder="Example: Two standard services and one installation. BTU to be confirmed by technician on site." /></label>
-                <label className={styles.fieldWide}><span>Technician instructions</span><textarea value={technicianInstructions} onChange={(event) => { setTechnicianInstructions(event.target.value); invalidateOfferValidation(); }} placeholder="Access instructions, contact person, equipment location, diagnostic notes…" /></label>
+                <label className={styles.fieldWide}><span>Customer-facing work description</span><textarea value={authorizedDescription} onChange={(event) => { setDescription(event.target.value); invalidateOfferValidation(); }} placeholder={projectMode ? 'Project scope for this scheduled visit…' : 'Example: Two standard services and one installation. BTU to be confirmed by technician on site.'} /></label>
+                <label className={styles.fieldWide}><span>Technician instructions</span><textarea value={authorizedTechnicianInstructions} onChange={(event) => { technicianInstructionsTouchedRef.current = true; setTechnicianInstructions(event.target.value); invalidateOfferValidation(); }} placeholder="Access instructions, contact person, equipment location, diagnostic notes…" /></label>
               </div>
             </div>
           </section>
@@ -1071,11 +1526,11 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
               <div className={styles.authorityHeading}><div><span>4</span><strong>After-hours operational validation</strong><small>Booking Authority validates the same canonical customer, property, contacts, services, selected Van and dated crew when you confirm. This extra job remains open until real field completion.</small></div></div>
               <div className={styles.authorityIdle}>{selectedCustomer && selectedProperty && workValid && validAfterHoursStart(requestTarget.start)
                 ? `${requestTarget.vanName} is selected for an extra job starting ${formatTime(requestTarget.start)}. No daytime capacity, planned end time or payroll overtime is fabricated.`
-                : 'Complete the same customer, property and work details used by a normal booking, then choose a start at 5:00 PM or later.'}</div>
+                : 'Complete the same customer, property and work details used by a Regular Booking, then choose a start at 5:00 PM or later.'}</div>
             </section>
           ) : (
           <section className={styles.authoritySection}>
-            <div className={styles.authorityHeading}><div><span>4</span><strong>{backdatedTarget ? 'Historical capacity validation' : 'Live capacity validation'}</strong><small>{requestTarget.vanName} stays the primary/responsible van. Booking Authority validates automatically as the complete workload changes; final transaction validation still runs on confirm or hold.</small></div><button type="button" className={styles.validateButton} disabled={busy || checking || !selectedCustomer || !selectedProperty || !workValid || (backdatedTarget && !backdatingAcknowledged)} onClick={() => void validateTarget(false)}>{checking ? 'Checking…' : backdatedTarget ? 'Recheck history' : 'Recheck now'}</button></div>
+            <div className={styles.authorityHeading}><div><span>5</span><strong>{backdatedTarget ? 'Historical capacity validation' : 'Live capacity validation'}</strong><small>{requestTarget.vanName} stays the primary/responsible van. Booking Authority validates automatically as the complete workload changes; final transaction validation still runs on confirm or hold.</small></div><button type="button" className={styles.validateButton} disabled={busy || checking || !selectedCustomer || !selectedProperty || !workValid || (backdatedTarget && !backdatingAcknowledged)} onClick={() => void validateTarget(false)}>{checking ? 'Checking…' : backdatedTarget ? 'Recheck history' : 'Recheck now'}</button></div>
 
             {capacityValidation && selectedCapacityOption ? (
               <div className={styles.validationSuccess}>
@@ -1144,20 +1599,22 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                 ? 'LIVE slot appears open · confirming Booking Authority'
                 : checking
                   ? 'Checking the complete allocation with Booking Authority…'
-                  : 'Complete the customer, property and work details. Booking Authority validates the live target automatically; the browser never becomes the source of truth for capacity.'}</div>
+                  : projectMode
+                    ? 'Select the Project, confirm its customer and property, then enter whole planned slots. Booking Authority will validate the real Van capacity automatically.'
+                    : 'Complete the customer, property and work details. Booking Authority validates the live target automatically; the browser never becomes the source of truth for capacity.'}</div>
             )}
           </section>
           )}
         </div>
 
         <footer className={styles.footer}>
-          <div><span>{isAfterHours ? 'CANONICAL EXTRA-WORK PATH' : 'CANONICAL WRITE PATH'}</span><strong>{isAfterHours ? 'Booking Authority → Appointment + open-ended Work Order + Van guard' : 'Booking Authority → Appointment + Work Order + Capacity Locks'}</strong></div>
+          <div><span>{isAfterHours ? 'CANONICAL EXTRA-WORK PATH' : projectMode ? 'PROJECT PREVIEW + CANONICAL SCHEDULING' : 'CANONICAL WRITE PATH'}</span><strong>{isAfterHours ? 'Booking Authority → Appointment + open-ended Work Order + Van guard' : projectMode ? 'Project → Booking Authority → Appointment + Work Order + Capacity Locks' : 'Booking Authority → Appointment + Work Order + Capacity Locks'}</strong></div>
           <div>
             <button type="button" className={styles.secondaryButton} disabled={busy} onClick={onClose}>Cancel</button>
-            {!isAfterHours && !backdatedTarget ? <button type="button" className={styles.secondaryButton} style={{ color: 'var(--warning, #b45309)', borderColor: 'var(--warning, #f59e0b)' }} disabled={!selectedValidatedOption || busy || checking} onClick={() => void holdBooking()}>{holding ? 'Holding…' : 'Temporary hold'}</button> : null}
+            {!isAfterHours && !backdatedTarget ? <button type="button" className={styles.secondaryButton} style={{ color: 'var(--warning, #b45309)', borderColor: 'var(--warning, #f59e0b)' }} disabled={!selectedValidatedOption || busy || checking || projectWriteBlocked} title={projectWriteBlocked ? 'Projects management permission required' : undefined} onClick={() => void holdBooking()}>{holding ? 'Holding…' : 'Temporary hold'}</button> : null}
             <button type="button" className={styles.confirmButton} disabled={isAfterHours
               ? busy || !selectedCustomer || !selectedProperty || !workValid || !validAfterHoursStart(requestTarget.start)
-              : !selectedValidatedOption || busy || checking || (backdatedTarget && !backdatingAcknowledged)} onClick={() => void confirmBooking()}>{saving ? 'Confirming…' : isAfterHours ? `Create for ${requestTarget.vanName}` : backdatedTarget ? 'Save backdated appointment' : 'Confirm appointment'}</button>
+              : !selectedValidatedOption || busy || checking || projectWriteBlocked || (backdatedTarget && !backdatingAcknowledged)} title={projectWriteBlocked ? 'Projects management permission required' : undefined} onClick={() => void confirmBooking()}>{saving ? 'Confirming…' : isAfterHours ? `Create for ${requestTarget.vanName}` : backdatedTarget ? 'Save backdated appointment' : 'Confirm appointment'}</button>
           </div>
         </footer>
       </aside>

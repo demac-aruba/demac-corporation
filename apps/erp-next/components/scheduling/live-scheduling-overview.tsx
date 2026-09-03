@@ -470,11 +470,15 @@ export function LiveSchedulingOverview() {
     setSelectedAppointmentId('');
     const customer = booking.customer.name || booking.customer.company || 'customer';
     const van = booking.option.assignments[0]?.vanName || booking.option.assignments[0]?.vanId || bookingTarget?.vanName || 'van';
+    const project = booking.project ? ` · ${booking.project.projectNumber} ${booking.project.name}` : '';
+    const projectSync = booking.project?.syncStatus === 'pending' ? ' The appointment is saved, but the Projects preview link needs review.' : '';
     setMoveNotice(booking.status === 'temporary_hold'
-      ? `Temporary hold ${booking.appointmentId} reserved for ${customer} · ${van} · ${formatTime(booking.option.time)}. Capacity is blocked; no customer confirmation or reminder was sent.`
-      : `Appointment ${booking.appointmentId} confirmed for ${customer} · ${van} · ${formatTime(booking.option.time)}.`);
+      ? `Temporary hold ${booking.appointmentId} reserved for ${customer} · ${van} · ${formatTime(booking.option.time)}${project}. Capacity is blocked; no customer confirmation or reminder was sent.${projectSync}`
+      : `Appointment ${booking.appointmentId} confirmed for ${customer} · ${van} · ${formatTime(booking.option.time)}${project}.${projectSync}`);
     void refresh();
   };
+
+  const handleAvailabilityConflict = useCallback(() => refresh(true), [refresh]);
 
   const handleCreatedAfterHours = (booking: LiveCreatedBooking) => {
     const target = afterHoursTarget;
@@ -823,7 +827,7 @@ export function LiveSchedulingOverview() {
       </div>
 
       {selectedAppointment ? <LiveAppointmentDetailsDrawer appointment={selectedAppointment} onClose={() => setSelectedAppointmentId('')} onChanged={refresh} /> : null}
-      {bookingTarget ? <LiveAppointmentCreateDrawer target={bookingTarget} onClose={() => setBookingTarget(null)} onCreated={handleCreatedBooking} /> : null}
+      {bookingTarget ? <LiveAppointmentCreateDrawer target={bookingTarget} onClose={() => setBookingTarget(null)} onCreated={handleCreatedBooking} onAvailabilityConflict={handleAvailabilityConflict} /> : null}
       {supportTarget ? <AdhocSupportDrawer target={supportTarget} appointments={appointments} onClose={() => setSupportTarget(null)} onCreated={handleCreatedSupport} /> : null}
       {afterHoursTarget ? <AfterHoursEmergencyDrawer target={afterHoursTarget} onClose={() => setAfterHoursTarget(null)} onCreated={handleCreatedAfterHours} /> : null}
       {pendingDragMove ? <DragMoveConfirmation move={pendingDragMove} busy={moveBusy} onCancel={cancelPendingMove} onConfirm={() => void confirmPendingMove()} /> : null}
