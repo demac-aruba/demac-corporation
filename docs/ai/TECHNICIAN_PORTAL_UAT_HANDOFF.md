@@ -1,5 +1,15 @@
 # Technician Portal UAT and merge handoff
 
+## Authorized release update — 2026-09-03
+
+- The owner approved the simplified Technician Portal concept and explicitly authorized merge and production deployment so the flow can be tested on a phone. This authorization includes the already-reviewed Firestore/Storage access-rule effect of the merge; it does not authorize migrations, secret changes, destructive recovery, Inventory movement, invoicing, Accounting/QBO writes, or customer communication.
+- The production function was deployed before the client from reviewed source SHA `628d32c6e300f111414ffbbafa11b52dd7c06e41`. GitHub Actions run `33796220465` completed successfully. Independent direct probes confirmed `fieldOperationsAuthority` CORS preflight `204` for `https://demac-corporation.vercel.app` and unauthenticated POST rejection `401` with `error.code=unauthenticated`.
+- The approved release UI shows only the current Aruba day, offers a temporary `super_admin` selector for one individual Van or technician at a time, removes the administrative shell for technician accounts, presents the work flow as `Llegada / Servicio / Cierre`, and keeps all canonical server states and mutations intact.
+- The temporary selector can be revoked with `FIELD_ADMIN_SIMULATOR_ENABLED=false` and must be removed after the UAT window.
+- Authenticated phone UAT remains an explicit post-deployment follow-up because the agent did not have a production login session. It must not be recorded as already passing.
+
+Release decision for this approved staged rollout: **PASS WITH RECORDED PHONE-UAT FOLLOW-UP**. This section supersedes the historical HOLD below; the original preparation record remains intact for audit history.
+
 Prepared: 2026-08-28
 
 This packet prepares human validation only. It does not authorize merge, additional Rules changes, deployment, production data access, customer communication, Inventory movement, invoicing or Accounting/QBO activity.
