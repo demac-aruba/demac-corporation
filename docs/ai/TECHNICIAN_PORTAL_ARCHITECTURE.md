@@ -187,6 +187,7 @@ Do not use raw van-string equality as the canonical crew test.
 6. Van-only compatibility may allow discovery/read when necessary, but mutations require resolved explicit staff membership/responsibility.
 7. Canonical `participatingStaffIds` contains staff-profile IDs only; raw Work Order `technicianIds` is not copied into that field because historical records may contain a Firebase uid.
 8. Active mutations re-read dated assignment + canonical Van context inside the same Firestore transaction that changes Field truth, closing the assignment TOCTOU gap.
+9. That shared transactional assignment resolver also derives the current Aruba day server-side and rejects every non-Office mutation for another Work Order date. This closes the known-ID path for preparation and for mutations against an already-existing visit.
 
 ### Client capability vocabulary
 
@@ -331,7 +332,8 @@ Implemented under the existing Field Operations Authority:
 
 - `/field` is the canonical Field entry route and no longer renders BrowserFieldExecution.
 - Technician post-login default and direct-route guard are derived from existing `navigationGroups`; no second role-routing matrix exists.
-- Today/Tomorrow/Week and next-job use centralized Aruba date/time handling and one authorized seven-day server fetch.
+- The technician route and next-job use centralized Aruba date/time handling and only the current Aruba workday; the server owns that restriction for schedule/job reads and rechecks it in the shared transactional resolver for every technician mutation.
+- Preview/development builds may expose a Super Admin-only selector that reads today's canonical Agenda by Van or technician. Its workflow controls are an isolated local simulation and cannot invoke Field mutations or impersonate the technician.
 - Job detail separates `PROGRAMADO POR LA OFICINA` from actual physical visit state and known equipment.
 - Navigate/Call/WhatsApp remain contact/navigation affordances.
 - Phase 4 extends this same component with server-projected active-visit controls; it does not introduce a second Field component tree.

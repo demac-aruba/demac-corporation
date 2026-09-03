@@ -2,6 +2,8 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { createMutationAssignmentResolver, requireMutationExecution } = require('./fieldOperationsMutationAssignment');
 
+const TEST_NOW = () => new Date('2026-08-25T18:30:00.000-04:00');
+
 function snapshot(id, value) {
   return { id, exists: value !== undefined, data: () => value };
 }
@@ -77,7 +79,7 @@ function order(overrides = {}) {
 
 test('mutation assignment reads dated crew and vans through the supplied transaction', async () => {
   const fixture = createDb({ vans, dailyVanAssignments: [] });
-  const resolveAssignment = createMutationAssignmentResolver({ db: fixture.db });
+  const resolveAssignment = createMutationAssignmentResolver({ db: fixture.db, now: TEST_NOW });
   const result = await resolveAssignment({ transaction: fixture.transaction, identity: identity(), order: order() });
 
   assert.equal(result.assigned, true);
@@ -96,7 +98,7 @@ test('dated reassignment is authoritative inside the mutation transaction', asyn
       { id: 'assign-v2', date: '2026-08-25', vanId: 'VAN-2', driverStaffId: 'staff-a', helperStaffId: 'staff-helper-a' },
     ],
   });
-  const resolveAssignment = createMutationAssignmentResolver({ db: fixture.db });
+  const resolveAssignment = createMutationAssignmentResolver({ db: fixture.db, now: TEST_NOW });
 
   const oldVan = await resolveAssignment({ transaction: fixture.transaction, identity: identity(), order: order({ vanId: 'VAN-1' }) });
   const newVan = await resolveAssignment({ transaction: fixture.transaction, identity: identity(), order: order({ vanId: 'VAN-2' }) });
@@ -109,7 +111,7 @@ test('dated reassignment is authoritative inside the mutation transaction', asyn
 
 test('direct Work Order staff assignment remains authoritative even when no crew Van matches', async () => {
   const fixture = createDb({ vans, dailyVanAssignments: [] });
-  const resolveAssignment = createMutationAssignmentResolver({ db: fixture.db });
+  const resolveAssignment = createMutationAssignmentResolver({ db: fixture.db, now: TEST_NOW });
   const result = await resolveAssignment({
     transaction: fixture.transaction,
     identity: identity({ vanId: '' }),
@@ -126,7 +128,7 @@ test('helper responsibility remains non-lead under a dated override', async () =
     vans,
     dailyVanAssignments: [{ id: 'assign-v1', date: '2026-08-25', vanId: 'VAN-1', driverStaffId: 'staff-b', helperStaffId: 'staff-a' }],
   });
-  const resolveAssignment = createMutationAssignmentResolver({ db: fixture.db });
+  const resolveAssignment = createMutationAssignmentResolver({ db: fixture.db, now: TEST_NOW });
   const result = await resolveAssignment({ transaction: fixture.transaction, identity: identity(), order: order() });
 
   assert.equal(result.assigned, true);
@@ -136,11 +138,54 @@ test('helper responsibility remains non-lead under a dated override', async () =
 
 test('invalid Work Order date fails closed before any mutation assignment is granted', async () => {
   const fixture = createDb({ vans, dailyVanAssignments: [] });
-  const resolveAssignment = createMutationAssignmentResolver({ db: fixture.db });
+  const resolveAssignment = createMutationAssignmentResolver({ db: fixture.db, now: TEST_NOW });
   await assert.rejects(
     () => resolveAssignment({ transaction: fixture.transaction, identity: identity(), order: order({ date: 'not-a-date' }) }),
     /YYYY-MM-DD|invalid/i,
   );
+});
+
+test('technician mutations use the current Aruba date at the UTC boundary and fail before crew reads', async () => {
+  const fixture = createDb({ vans, dailyVanAssignments: [] });
+  const resolveAssignment = createMutationAssignmentResolver({
+    db: fixture.db,
+    now: () => new Date('2026-09-03T02:30:00.000Z'),
+  });
+
+  const today = await resolveAssignment({
+    transaction: fixture.transaction,
+    identity: identity(),
+    order: order({ date: '2026-09-02' }),
+  });
+  assert.equal(today.assigned, true);
+
+  const readsBeforeFutureAttempt = fixture.reads.length;
+  await assert.rejects(
+    () => resolveAssignment({
+      transaction: fixture.transaction,
+      identity: identity(),
+      order: order({ date: '2026-09-03' }),
+    }),
+    (error) => error?.code === 'work_order_not_available_today'
+      && error?.status === 404
+      && error?.details?.todayDate === '2026-09-02',
+  );
+  assert.equal(fixture.reads.length, readsBeforeFutureAttempt, 'future-date denial must happen before crew reads');
+});
+
+test('operations mutation context remains available for governed cross-date office workflows', async () => {
+  const fixture = createDb({ vans, dailyVanAssignments: [] });
+  const resolveAssignment = createMutationAssignmentResolver({
+    db: fixture.db,
+    now: () => new Date('2026-09-03T02:30:00.000Z'),
+  });
+  const result = await resolveAssignment({
+    transaction: fixture.transaction,
+    identity: identity({ operations: true, role: 'operations' }),
+    order: order({ date: '2026-09-03' }),
+  });
+  assert.equal(result.assigned, true);
+  assert.equal(result.source, 'office');
 });
 
 test('mutation execution gate reuses server action policy instead of caller-specific role inference', () => {

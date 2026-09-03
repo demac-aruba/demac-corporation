@@ -63,6 +63,7 @@ const {
 const { attachFieldHistoriesToJob } = require('./fieldOperationsHistories');
 const { attachCurrentWorkVisitState, attachCurrentWorkVisitStates } = require('./fieldOperationsVisitRead');
 const { createTransitionWorkVisitCommand } = require('./fieldOperationsVisitMutation');
+const { arubaDateParts } = require('./bookingSchedulingPrimitives');
 
 const FIELD_ACTIONS = new Set([
   'get_schedule',
@@ -95,6 +96,19 @@ const FIELD_ACTIONS = new Set([
 
 function cleanText(value, limit = 1000) {
   return String(value ?? '').trim().slice(0, limit);
+}
+
+function resolveFieldScheduleDateRange(identity, data, clockValue = new Date()) {
+  const today = arubaDateParts(clockValue).date;
+  if (!identity?.operations) return { startDate: today, endDate: today };
+  return {
+    startDate: data?.startDate,
+    endDate: data?.endDate || data?.startDate,
+  };
+}
+
+function fieldJobAvailableForCurrentDay(identity, job, clockValue = new Date()) {
+  return Boolean(identity?.operations) || cleanText(job?.date, 10) === arubaDateParts(clockValue).date;
 }
 
 function equipmentRegistrationEvidencePaths(value) {
@@ -143,6 +157,9 @@ function createFieldOperationsApi({
   db,
   verifyIdToken,
   reportError = () => {},
+  now = () => new Date(),
+  loadSchedule = loadAssignedSchedule,
+  loadJob = loadAssignedJob,
   prepareWorkVisit,
   createReturnWorkVisit,
   transitionWorkVisit,
@@ -170,6 +187,9 @@ function createFieldOperationsApi({
   if (!db || typeof db.collection !== 'function') throw new Error('A Firestore-compatible db is required.');
   if (typeof verifyIdToken !== 'function') throw new Error('verifyIdToken is required.');
   if (typeof reportError !== 'function') throw new Error('reportError must be a function when provided.');
+  if (typeof now !== 'function') throw new Error('now must be a function when provided.');
+  if (typeof loadSchedule !== 'function') throw new Error('loadSchedule must be a function when provided.');
+  if (typeof loadJob !== 'function') throw new Error('loadJob must be a function when provided.');
   if (prepareWorkVisit !== undefined && typeof prepareWorkVisit !== 'function') throw new Error('prepareWorkVisit must be a function when provided.');
   if (createReturnWorkVisit !== undefined && typeof createReturnWorkVisit !== 'function') throw new Error('createReturnWorkVisit must be a function when provided.');
   if (transitionWorkVisit !== undefined && typeof transitionWorkVisit !== 'function') throw new Error('transitionWorkVisit must be a function when provided.');
@@ -214,14 +234,18 @@ function createFieldOperationsApi({
 
   async function execute({ action, data = {}, identity }) {
     if (action === 'get_schedule') {
-      const jobs = await loadAssignedSchedule(db, identity, data.startDate, data.endDate || data.startDate);
+      const { startDate, endDate } = resolveFieldScheduleDateRange(identity, data, now());
+      const jobs = await loadSchedule(db, identity, startDate, endDate);
       const enriched = await attachCurrentWorkVisitStates(db, jobs);
       return { success: true, version: FIELD_OPERATIONS_API_VERSION, jobs: enriched.map(publicJobProjection) };
     }
     if (action === 'get_job') {
       const workOrderId = cleanText(data.workOrderId, 180);
       if (!workOrderId) throw fieldError('work_order_required', 'A Work Order id is required.');
-      const job = await loadAssignedJob(db, identity, workOrderId);
+      const job = await loadJob(db, identity, workOrderId);
+      if (!fieldJobAvailableForCurrentDay(identity, job, now())) {
+        throw fieldError('work_order_not_available_today', 'The requested Work Order is not available for the current Aruba workday.', 404);
+      }
       const withVisit = await attachCurrentWorkVisitState(db, job);
       const withAssets = await attachVisitAssetsToJob(db, withVisit);
       const withInterventions = await attachWorkInterventionsToJob(db, withAssets);
@@ -758,6 +782,8 @@ module.exports.apiError = apiError;
 module.exports.bearerToken = bearerToken;
 module.exports.createFieldOperationsApi = createFieldOperationsApi;
 module.exports.equipmentRegistrationEvidencePaths = equipmentRegistrationEvidencePaths;
+module.exports.fieldJobAvailableForCurrentDay = fieldJobAvailableForCurrentDay;
 module.exports.publicJobProjection = publicJobProjection;
+module.exports.resolveFieldScheduleDateRange = resolveFieldScheduleDateRange;
 module.exports.verifyStoredFieldAudio = verifyStoredFieldAudio;
 module.exports.verifyStoredFieldImage = verifyStoredFieldImage;

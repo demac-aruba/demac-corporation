@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/components/auth/auth-provider';
-import { addDaysToDateKey, arubaDateKey, arubaTimeKey, formatArubaDateKey } from '@/lib/aruba-date';
+import { arubaDateKey, arubaTimeKey, formatArubaDateKey } from '@/lib/aruba-date';
 import {
   addFieldReportFinding,
   addFieldReportMeasurement,
@@ -41,6 +41,13 @@ import {
   type FieldVisitStatus,
 } from '@/lib/field-authority';
 import { FIELD_OFFLINE_STATE_EVENT } from '@/lib/field-offline';
+import {
+  canUseFieldAdminSimulation,
+  loadFieldAdminSimulationData,
+  resolveFieldAdminSimulationJobs,
+  type FieldAdminSimulationData,
+  type FieldAdminSimulationTarget,
+} from '@/lib/field-admin-simulator';
 import {
   uploadFieldEquipmentRegistrationImage,
   uploadFieldReportPhoto,
@@ -90,9 +97,9 @@ import {
 } from './field-sale-controls';
 import { FieldHistoryPanel } from './field-history-panel';
 import { FieldQrLookup } from './field-qr-lookup';
+import { FieldAdminSimulationDetail, FieldAdminSimulationSelector } from './field-admin-simulator';
+import simulationStyles from './field-admin-simulator.module.css';
 import styles from './technician-field-home.module.css';
-
-type RangeKey = 'today' | 'tomorrow' | 'week';
 
 type AdditionalInterventionInput = {
   visitAssetId: string;
@@ -191,7 +198,9 @@ function jobCompleted(job: FieldScheduleJob) {
 }
 
 function jobInProgress(job: FieldScheduleJob) {
-  return job.fieldVisit ? ACTIVE_VISIT_STATUSES.has(job.fieldVisit.status) : false;
+  return job.fieldVisit
+    ? ACTIVE_VISIT_STATUSES.has(job.fieldVisit.status)
+    : ['En camino', 'En el sitio', 'En proceso'].includes(job.status);
 }
 
 function clientRequestId(prefix: string, workOrderId: string) {
@@ -304,19 +313,25 @@ function contactLinks(job: FieldScheduleJob) {
   };
 }
 
-function JobActions({ job, onOpen }: { job: FieldScheduleJob; onOpen: () => void }) {
+function JobActions({ job, onOpen, simulated = false }: { job: FieldScheduleJob; onOpen: () => void; simulated?: boolean }) {
   const links = contactLinks(job);
   return (
     <div className={styles.actions}>
       <button className={`${styles.action} ${styles.primary}`} type="button" onClick={onOpen}>Abrir</button>
-      {links.map ? <a className={styles.action} href={links.map} target="_blank" rel="noreferrer">Navegar</a> : null}
-      {links.call ? <a className={styles.action} href={links.call}>Llamar</a> : null}
-      {links.whatsapp ? <a className={styles.action} href={links.whatsapp} target="_blank" rel="noreferrer">WhatsApp</a> : null}
+      {simulated ? <>
+        <button className={styles.action} type="button" disabled title="Contacto real deshabilitado durante la simulación">Navegar</button>
+        <button className={styles.action} type="button" disabled title="Contacto real deshabilitado durante la simulación">Llamar</button>
+        <button className={styles.action} type="button" disabled title="Contacto real deshabilitado durante la simulación">WhatsApp</button>
+      </> : <>
+        {links.map ? <a className={styles.action} href={links.map} target="_blank" rel="noreferrer">Navegar</a> : null}
+        {links.call ? <a className={styles.action} href={links.call}>Llamar</a> : null}
+        {links.whatsapp ? <a className={styles.action} href={links.whatsapp} target="_blank" rel="noreferrer">WhatsApp</a> : null}
+      </>}
     </div>
   );
 }
 
-function JobCard({ job, onOpen }: { job: FieldScheduleJob; onOpen: () => void }) {
+function JobCard({ job, onOpen, simulated = false }: { job: FieldScheduleJob; onOpen: () => void; simulated?: boolean }) {
   return (
     <article className={styles.jobCard}>
       <div className={styles.time}>{job.time || '—'}<small>{job.endTime ? `hasta ${job.endTime}` : job.status}</small></div>
@@ -325,7 +340,7 @@ function JobCard({ job, onOpen }: { job: FieldScheduleJob; onOpen: () => void })
         <div className={styles.address}>{job.propertyName ? `${job.propertyName} · ` : ''}{job.address || 'Dirección no disponible'}</div>
         <div className={styles.work}>{workSummary(job)}</div>
         <div className={styles.badges}>
-          <span className={`${styles.badge} ${styles.badgeBrand}`}>Campo: {visitStatusLabel(job.fieldVisit?.status)}</span>
+          <span className={`${styles.badge} ${styles.badgeBrand}`}>{simulated ? 'Vista simulada' : `Campo: ${visitStatusLabel(job.fieldVisit?.status)}`}</span>
           <span className={styles.badge}>Programación: {job.status}</span>
           <span className={styles.badge}>{job.vanId || 'Sin van'}</span>
           <span className={styles.badge}>{roleLabel(job.responsibility)}</span>
@@ -333,7 +348,7 @@ function JobCard({ job, onOpen }: { job: FieldScheduleJob; onOpen: () => void })
           <span className={styles.badge}>{job.estimatedQuantity > 0 ? `${job.estimatedQuantity} A/C estimado` : 'Cantidad por confirmar'}</span>
         </div>
       </div>
-      <JobActions job={job} onOpen={onOpen} />
+      <JobActions job={job} onOpen={onOpen} simulated={simulated} />
     </article>
   );
 }
@@ -851,12 +866,14 @@ function DetailView({
   );
 }
 
-export function TechnicianFieldHome() {
+export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableAdminSimulation?: boolean }) {
   const { principal } = useAuth();
+  const adminSimulation = canUseFieldAdminSimulation(principal.role, enableAdminSimulation);
   const [clockNow, setClockNow] = useState(() => new Date());
   const [jobs, setJobs] = useState<FieldScheduleJob[]>([]);
   const [jobsOwnerUserId, setJobsOwnerUserId] = useState<string | null>(null);
-  const [range, setRange] = useState<RangeKey>('today');
+  const [simulationTargetValue, setSimulationTargetValue] = useState('all');
+  const [simulationTargets, setSimulationTargets] = useState<FieldAdminSimulationTarget[]>([]);
   const [selectedWorkOrderId, setSelectedWorkOrderId] = useState<string | null>(null);
   const [selectedOwnerUserId, setSelectedOwnerUserId] = useState<string | null>(null);
   const [detail, setDetail] = useState<FieldExecutionJobDetail | null>(null);
@@ -921,12 +938,11 @@ export function TechnicianFieldHome() {
   const officeReviewRequestRef = useRef<ReportMutationRetry | null>(null);
   const fieldSaleRequestRef = useRef<ReportMutationRetry | null>(null);
   const selectedWorkOrderRef = useRef<string | null>(null);
+  const simulationDataRef = useRef<FieldAdminSimulationData | null>(null);
 
   const today = arubaDateKey(clockNow);
   const nowTime = arubaTimeKey(clockNow);
-  const tomorrow = addDaysToDateKey(today, 1);
-  const weekEnd = addDaysToDateKey(today, 6);
-  const principalFieldIdentityKey = `${principal.userId}|${principal.role}|${principal.staffId ?? ''}|${principal.vanId ?? ''}`;
+  const principalFieldIdentityKey = `${principal.userId}|${principal.role}|${principal.staffId ?? ''}|${principal.vanId ?? ''}|${adminSimulation ? simulationTargetValue : 'canonical'}`;
 
   const closeJob = useCallback(() => {
     detailRequestRef.current += 1;
@@ -988,6 +1004,7 @@ export function TechnicianFieldHome() {
   }, []);
 
   const loadDetail = useCallback(async (workOrderId: string, background = false) => {
+    if (adminSimulation) return;
     const requestId = ++detailRequestRef.current;
     const requestPrincipalKey = principalFieldIdentityKey;
     if (!background) {
@@ -1011,7 +1028,7 @@ export function TechnicianFieldHome() {
     } finally {
       if (requestId === detailRequestRef.current) setDetailLoading(false);
     }
-  }, [principalFieldIdentityKey]);
+  }, [adminSimulation, principalFieldIdentityKey]);
 
   const loadSchedule = useCallback(async (background = false) => {
     const requestId = ++scheduleRequestRef.current;
@@ -1023,16 +1040,38 @@ export function TechnicianFieldHome() {
     }
     setScheduleError(null);
     try {
-      const response = await getFieldSchedule(today, weekEnd);
+      let nextJobs: FieldScheduleJob[];
+      let offlineCapturedAt: string | null = null;
+      if (adminSimulation) {
+        let simulationData = simulationDataRef.current;
+        if (!simulationData || simulationData.dateKey !== today || background) {
+          const loadedSimulationData = await loadFieldAdminSimulationData(today);
+          if (requestId !== scheduleRequestRef.current) return;
+          simulationData = loadedSimulationData;
+          simulationDataRef.current = simulationData;
+        }
+        const targetValue = simulationData.targets.some((target) => target.value === simulationTargetValue)
+          ? simulationTargetValue
+          : 'all';
+        if (targetValue !== simulationTargetValue) setSimulationTargetValue(targetValue);
+        setSimulationTargets(simulationData.targets);
+        nextJobs = resolveFieldAdminSimulationJobs(simulationData, targetValue);
+      } else {
+        simulationDataRef.current = null;
+        setSimulationTargets([]);
+        const response = await getFieldSchedule(today, today);
+        nextJobs = response.jobs;
+        offlineCapturedAt = response.offlineCache?.capturedAt ?? null;
+      }
       if (requestId !== scheduleRequestRef.current) return;
-      setJobs(response.jobs);
+      setJobs(nextJobs);
       setJobsOwnerUserId(requestPrincipalKey);
-      setScheduleOfflineCapturedAt(response.offlineCache?.capturedAt ?? null);
+      setScheduleOfflineCapturedAt(offlineCapturedAt);
 
       const selectedId = selectedWorkOrderRef.current;
       if (selectedId) {
-        if (response.jobs.some((job) => job.workOrderId === selectedId)) {
-          void loadDetail(selectedId, true);
+        if (nextJobs.some((job) => job.workOrderId === selectedId)) {
+          if (!adminSimulation) void loadDetail(selectedId, true);
         } else {
           closeJob();
         }
@@ -1043,22 +1082,29 @@ export function TechnicianFieldHome() {
       setJobsOwnerUserId(null);
       setScheduleOfflineCapturedAt(null);
       closeJob();
-      setScheduleError(loadError instanceof Error ? loadError.message : 'No se pudo cargar el itinerario del técnico.');
+      const detail = loadError instanceof Error ? loadError.message : '';
+      setScheduleError(adminSimulation
+        ? `No se pudo leer la Agenda real de hoy para la simulación.${detail ? ` ${detail}` : ''}`
+        : detail || 'No se pudo cargar el itinerario del técnico.');
     } finally {
       if (requestId === scheduleRequestRef.current) setLoading(false);
     }
-  }, [closeJob, loadDetail, principalFieldIdentityKey, today, weekEnd]);
+  }, [adminSimulation, closeJob, loadDetail, principalFieldIdentityKey, simulationTargetValue, today]);
 
   const refreshOutboxSummary = useCallback(async () => {
+    if (adminSimulation) {
+      setOutboxSummary({ pending: 0, blocked: 0, total: 0, conflicts: [] });
+      return;
+    }
     try {
       setOutboxSummary(await getOfflineFieldOutboxSummary(principal.userId));
     } catch {
       setOutboxSummary({ pending: 0, blocked: 0, total: 0, conflicts: [] });
     }
-  }, [principal.userId]);
+  }, [adminSimulation, principal.userId]);
 
   const syncOutbox = useCallback(async () => {
-    if (syncingOutboxRef.current || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
+    if (adminSimulation || syncingOutboxRef.current || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
     syncingOutboxRef.current = true;
     setSyncingOutbox(true);
     try {
@@ -1073,7 +1119,7 @@ export function TechnicianFieldHome() {
       syncingOutboxRef.current = false;
       setSyncingOutbox(false);
     }
-  }, [loadDetail, loadSchedule, refreshOutboxSummary]);
+  }, [adminSimulation, loadDetail, loadSchedule, refreshOutboxSummary]);
 
   const discardOutboxConflict = useCallback(async (id: string) => {
     try {
@@ -2070,6 +2116,7 @@ export function TechnicianFieldHome() {
   }, [loadSchedule]);
 
   useEffect(() => {
+    if (adminSimulation) return undefined;
     const handleState = () => { void refreshOutboxSummary(); };
     const handleOnline = () => { void syncOutbox(); };
     void refreshOutboxSummary();
@@ -2080,7 +2127,7 @@ export function TechnicianFieldHome() {
       window.removeEventListener(FIELD_OFFLINE_STATE_EVENT, handleState);
       window.removeEventListener('online', handleOnline);
     };
-  }, [refreshOutboxSummary, syncOutbox]);
+  }, [adminSimulation, refreshOutboxSummary, syncOutbox]);
 
   useEffect(() => {
     const revalidate = () => {
@@ -2106,7 +2153,7 @@ export function TechnicianFieldHome() {
   }, [closeJob, principalFieldIdentityKey]);
 
   useEffect(() => {
-    if (!selectedWorkOrderId || selectedOwnerUserId !== principalFieldIdentityKey) {
+    if (adminSimulation || !selectedWorkOrderId || selectedOwnerUserId !== principalFieldIdentityKey) {
       setDetail(null);
       setDetailOwnerUserId(null);
       setDetailError(null);
@@ -2115,7 +2162,7 @@ export function TechnicianFieldHome() {
     }
     void loadDetail(selectedWorkOrderId);
     return () => { detailRequestRef.current += 1; };
-  }, [loadDetail, principalFieldIdentityKey, selectedOwnerUserId, selectedWorkOrderId]);
+  }, [adminSimulation, loadDetail, principalFieldIdentityKey, selectedOwnerUserId, selectedWorkOrderId]);
 
   const authorizedJobs = jobsOwnerUserId === principalFieldIdentityKey ? jobs : [];
   const todayJobs = useMemo(() => authorizedJobs.filter((job) => job.date === today), [authorizedJobs, today]);
@@ -2124,12 +2171,6 @@ export function TechnicianFieldHome() {
     const inProgress = todayJobs.filter(jobInProgress).length;
     return { scheduled: todayJobs.length, completed, inProgress, remaining: Math.max(0, todayJobs.length - completed) };
   }, [todayJobs]);
-
-  const visibleJobs = useMemo(() => {
-    if (range === 'today') return authorizedJobs.filter((job) => job.date === today);
-    if (range === 'tomorrow') return authorizedJobs.filter((job) => job.date === tomorrow);
-    return authorizedJobs;
-  }, [authorizedJobs, range, today, tomorrow]);
 
   const nextJob = useMemo(() => {
     const open = todayJobs.filter((job) => !jobCompleted(job));
@@ -2144,7 +2185,23 @@ export function TechnicianFieldHome() {
     setSelectedWorkOrderId(workOrderId);
   };
 
-  if (selectedWorkOrderId && selectedOwnerUserId === principalFieldIdentityKey) {
+  const selectedSimulationTarget = simulationTargets.find((target) => target.value === simulationTargetValue);
+
+  if (adminSimulation && selectedWorkOrderId && selectedOwnerUserId === principalFieldIdentityKey) {
+    const simulationJob = authorizedJobs.find((job) => job.workOrderId === selectedWorkOrderId);
+    if (simulationJob) {
+      return (
+        <FieldAdminSimulationDetail
+          key={`${simulationJob.workOrderId}|${simulationJob.status}|${simulationTargetValue}`}
+          job={simulationJob}
+          targetLabel={selectedSimulationTarget?.label || 'Todas las Vans'}
+          onBack={closeJob}
+        />
+      );
+    }
+  }
+
+  if (!adminSimulation && selectedWorkOrderId && selectedOwnerUserId === principalFieldIdentityKey) {
     const authorizedDetail = detailOwnerUserId === principalFieldIdentityKey ? detail : null;
     return (
       <DetailView
@@ -2218,16 +2275,20 @@ export function TechnicianFieldHome() {
     <div className={styles.shell}>
       <header className={styles.head}>
         <div><div className={styles.eyebrow}>DEMAC · Trabajo de campo</div><h1>Mi ruta de trabajo</h1></div>
-        <div className={styles.identity}>{principal.displayName}{principal.staffId ? ` · ${principal.staffId}` : ''}</div>
+        {adminSimulation ? (
+          <FieldAdminSimulationSelector
+            targets={simulationTargets}
+            value={simulationTargetValue}
+            loading={loading}
+            onChange={setSimulationTargetValue}
+          />
+        ) : <div className={styles.identity}>{principal.displayName}{principal.staffId ? ` · ${principal.staffId}` : ''}</div>}
       </header>
 
-      <OfflineStatus capturedAt={scheduleOfflineCapturedAt} summary={outboxSummary} syncing={syncingOutbox} onSync={() => void syncOutbox()} onDiscard={(id) => void discardOutboxConflict(id)} />
-
-      <div className={styles.tabs} role="tablist" aria-label="Período del itinerario">
-        <button className={`${styles.tab} ${range === 'today' ? styles.tabActive : ''}`} type="button" onClick={() => setRange('today')}>Hoy</button>
-        <button className={`${styles.tab} ${range === 'tomorrow' ? styles.tabActive : ''}`} type="button" onClick={() => setRange('tomorrow')}>Mañana</button>
-        <button className={`${styles.tab} ${range === 'week' ? styles.tabActive : ''}`} type="button" onClick={() => setRange('week')}>Semana</button>
-      </div>
+      {adminSimulation ? <section className={simulationStyles.simulationNotice}>
+        <strong>Vista temporal · {selectedSimulationTarget?.label || 'Todas las Vans'}</strong>
+        <span>Datos reales de la Agenda de hoy. Las acciones dentro de un trabajo son una simulación local y no cambian información real.</span>
+      </section> : <OfflineStatus capturedAt={scheduleOfflineCapturedAt} summary={outboxSummary} syncing={syncingOutbox} onSync={() => void syncOutbox()} onDiscard={(id) => void discardOutboxConflict(id)} />}
 
       <section className={styles.summary} aria-label="Resumen de hoy">
         <div className={styles.metric}><strong>{summary.scheduled}</strong><span>Programados hoy</span></div>
@@ -2238,17 +2299,17 @@ export function TechnicianFieldHome() {
 
       {scheduleError ? <section className={styles.panel}><div className={styles.error}>{scheduleError}<div style={{ marginTop: 12 }}><button className={styles.action} type="button" onClick={() => void loadSchedule()}>Reintentar</button></div></div></section> : null}
 
-      {range === 'today' ? <section className={styles.panel}>
+      <section className={styles.panel}>
         <div className={styles.panelHead}><h2>Próximo trabajo</h2><span>{formatArubaDateKey(today, { weekday: 'long', month: 'long', day: 'numeric' })}</span></div>
-        {loading ? <div className={styles.loading}>Cargando ruta asignada…</div> : nextJob ? <div className={styles.next}><JobCard job={nextJob} onOpen={() => openJob(nextJob.workOrderId)} /></div> : <div className={styles.empty}>No quedan trabajos activos asignados para hoy.</div>}
-      </section> : null}
+        {loading ? <div className={styles.loading}>Cargando ruta asignada…</div> : nextJob ? <div className={styles.next}><JobCard job={nextJob} simulated={adminSimulation} onOpen={() => openJob(nextJob.workOrderId)} /></div> : <div className={styles.empty}>No quedan trabajos activos asignados para hoy.</div>}
+      </section>
 
       <section className={styles.panel}>
         <div className={styles.panelHead}>
-          <h2>{range === 'today' ? 'Hoy' : range === 'tomorrow' ? 'Mañana' : 'Próximos 7 días'}</h2>
-          <span>{loading ? 'Cargando…' : `${visibleJobs.length} trabajo${visibleJobs.length === 1 ? '' : 's'}`}</span>
+          <h2>Trabajos de hoy</h2>
+          <span>{loading ? 'Cargando…' : `${todayJobs.length} trabajo${todayJobs.length === 1 ? '' : 's'}`}</span>
         </div>
-        {loading ? <div className={styles.loading}>Cargando itinerario autorizado…</div> : visibleJobs.length ? visibleJobs.map((job) => <JobCard key={job.workOrderId} job={job} onOpen={() => openJob(job.workOrderId)} />) : <div className={styles.empty}>No hay trabajos asignados en este período.</div>}
+        {loading ? <div className={styles.loading}>Cargando itinerario autorizado…</div> : todayJobs.length ? todayJobs.map((job) => <JobCard key={job.workOrderId} job={job} simulated={adminSimulation} onOpen={() => openJob(job.workOrderId)} />) : <div className={styles.empty}>No hay trabajos asignados para esta selección hoy.</div>}
       </section>
     </div>
   );

@@ -53,7 +53,7 @@ Verified on the feature branch as of the active-visit implementation checkpoint:
 - Firebase principal resolution carries canonical `staffId`/`vanId` linkage and technicians without a staff profile fail closed.
 - Slice 1 read/security boundary is validated: Field Authority performs assignment-scoped schedule/job reads, reuses canonical Van identity and shared dated crew membership, projects `responsibility`/`assignmentSource`/`allowedActions`, and denies another-team known-ID access server-side.
 - Field Function syntax/tests are included in the ERP feature CI together with Booking/Scheduling regression coverage. The CI trigger covers all `functions/fieldOperations*.js` modules.
-- Phase 3 Technician Home is the canonical ERP Next `/field` surface. It preserves Today/Tomorrow/Week, assignment-scoped detail, known equipment and contact/navigation affordances.
+- Phase 3 Technician Home is the canonical ERP Next `/field` surface. It is restricted to the current Aruba day and preserves assignment-scoped detail, known equipment and contact/navigation affordances.
 - DEMAC approved the canonical persistent Field lifecycle/audit boundary. Append-only `fieldOperationEvents` is implemented through `functions/fieldOperationsAudit.js`; `userAuditLogs` is not repurposed.
 - `prepare_visit` is HTTP-activated on this feature branch. It creates/adopts the initial Legacy-compatible `workVisits` record transactionally, re-resolves assignment inside the transaction, preserves planned scope, and appends the Field audit event atomically.
 - Phase 4 active physical visit status is implemented on this feature branch for `scheduled -> en_route -> on_site -> in_progress` through `transition_visit`. WorkVisit, not WorkOrder, is the actual physical-state authority.
@@ -85,7 +85,7 @@ Offline cache/draft/outbox hardening is activated in ERP Next without granting b
 
 1. Canonical Field Operations domain and persistence boundaries.
 2. Assigned-only technician authentication/authorization.
-3. Role-aware Technician Home with Today, Tomorrow, Week, next-job/progress and map/call/WhatsApp actions using canonical Scheduling/Work Order data.
+3. Role-aware Technician Home with today's jobs only, next-job/progress and map/call/WhatsApp actions using canonical Scheduling/Work Order data.
 4. Visit lifecycle: en route, arrived, start, pending, return visit, submission and auditable status history.
 5. Explicit separation of planned scope and progressively discovered actual scope.
 6. QR lookup, existing-asset selection and controlled on-site registration of canonical CRM Equipment Assets.

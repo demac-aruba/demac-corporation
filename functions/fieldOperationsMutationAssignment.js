@@ -1,5 +1,5 @@
 const { canonicalizeVanCatalog, resolveCanonicalVanId } = require('./bookingVanIdentity');
-const { resolveCrewMembership } = require('./bookingSchedulingPrimitives');
+const { arubaDateParts, resolveCrewMembership } = require('./bookingSchedulingPrimitives');
 const {
   allowedActionsForAssignment,
   fieldAssignmentForIdentity,
@@ -64,12 +64,25 @@ function requireMutationExecution(identity, assignment, deniedMessage = 'This as
   return requireMutationAction(identity, assignment, 'execute', deniedMessage);
 }
 
-function createMutationAssignmentResolver({ db } = {}) {
+function createMutationAssignmentResolver({ db, now = () => new Date() } = {}) {
   if (!db || typeof db.collection !== 'function') throw new Error('A Firestore-compatible db is required.');
+  if (typeof now !== 'function') throw new Error('A clock function is required.');
 
   return async function resolveMutationAssignment({ transaction, identity, order } = {}) {
     if (!order || typeof order !== 'object') throw new Error('A Work Order is required to resolve Field mutation assignment.');
     const dateKey = validDateKey(order.date);
+    const capturedNow = now();
+    const instant = capturedNow instanceof Date ? capturedNow : new Date(capturedNow);
+    if (Number.isNaN(instant.getTime())) throw new Error('Clock returned an invalid timestamp.');
+    const todayDateKey = arubaDateParts(instant).date;
+    if (!identity?.operations && dateKey !== todayDateKey) {
+      throw fieldError(
+        'work_order_not_available_today',
+        'This Work Order is not available for technician execution today.',
+        404,
+        { workOrderDate: dateKey, todayDate: todayDateKey },
+      );
+    }
     const context = await loadMutationCrewContext({ db, transaction, dateKey });
     return {
       ...fieldAssignmentForIdentity(identity, order, dateKey, context),

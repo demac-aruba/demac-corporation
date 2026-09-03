@@ -1,6 +1,12 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { FIELD_ACTIONS, createFieldOperationsApi, publicJobProjection } = require('./fieldOperationsAuthority');
+const {
+  FIELD_ACTIONS,
+  createFieldOperationsApi,
+  fieldJobAvailableForCurrentDay,
+  publicJobProjection,
+  resolveFieldScheduleDateRange,
+} = require('./fieldOperationsAuthority');
 const { normalizeFieldIdentity } = require('./fieldOperationsAuthorityCore');
 
 function authDb(profile) {
@@ -98,6 +104,47 @@ test('public Field DTO does not expose Legacy mixed-namespace technicianIds', ()
   assert.equal(projected.workOrderId, 'WO-1');
   assert.equal(projected.responsibility, 'technician');
   assert.deepEqual(projected.allowedActions, ['read']);
+});
+
+test('technician Field reads are server-owned and limited to the current Aruba workday', () => {
+  const clock = new Date('2026-09-03T02:00:00.000Z');
+  assert.deepEqual(
+    resolveFieldScheduleDateRange({ role: 'technician', operations: false }, { startDate: '2026-09-03', endDate: '2026-09-09' }, clock),
+    { startDate: '2026-09-02', endDate: '2026-09-02' },
+  );
+  assert.equal(fieldJobAvailableForCurrentDay({ operations: false }, { date: '2026-09-02' }, clock), true);
+  assert.equal(fieldJobAvailableForCurrentDay({ operations: false }, { date: '2026-09-03' }, clock), false);
+  assert.deepEqual(
+    resolveFieldScheduleDateRange({ role: 'super_admin', operations: true }, { startDate: '2026-09-01', endDate: '2026-09-07' }, clock),
+    { startDate: '2026-09-01', endDate: '2026-09-07' },
+    'office authorities retain their governed read range outside the technician portal',
+  );
+  assert.equal(fieldJobAvailableForCurrentDay({ operations: true }, { date: '2026-09-03' }, clock), true);
+});
+
+test('Field executor forwards only Aruba today to technician schedule reads and rejects a future job before composition', async () => {
+  const scheduleCalls = [];
+  const api = createFieldOperationsApi({
+    db: { collection() { return {}; } },
+    verifyIdToken: async () => ({ uid: 'unused' }),
+    now: () => new Date('2026-09-03T02:00:00.000Z'),
+    loadSchedule: async (_db, _identity, startDate, endDate) => {
+      scheduleCalls.push({ startDate, endDate });
+      return [];
+    },
+    loadJob: async () => ({ workOrderId: 'WO-FUTURE', date: '2026-09-03' }),
+  });
+  const schedule = await api.execute({
+    action: 'get_schedule',
+    data: { startDate: '2026-09-03', endDate: '2026-09-09' },
+    identity: { role: 'technician', operations: false },
+  });
+  assert.equal(schedule.success, true);
+  assert.deepEqual(scheduleCalls, [{ startDate: '2026-09-02', endDate: '2026-09-02' }]);
+  await assert.rejects(
+    () => api.execute({ action: 'get_job', data: { workOrderId: 'WO-FUTURE' }, identity: { role: 'technician', operations: false } }),
+    (error) => error?.code === 'work_order_not_available_today' && error?.status === 404,
+  );
 });
 
 test('HTTP method and truly unsupported action fail before protected business execution', async () => {

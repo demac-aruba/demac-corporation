@@ -28,6 +28,21 @@ engineering index; it does not replace that registry.
 - `COMMS-*`: current-turn priority, answer-first behavior, natural language, contextual
   option selection, hidden internal van splitting, one confirmation, and no invention.
 
+## Current Field portal ownership
+
+- `FIELD-DAY-001` — A technician's Field route is limited to the current Aruba calendar day.
+  The server derives that date; a technician-provided range cannot expose tomorrow or the week,
+  a directly requested assigned Work Order from another date is unavailable, and every technician
+  mutation rechecks that same date inside its transaction. A known Work Order or Work Visit ID from
+  another date therefore cannot prepare, transition, or write Field truth. Governed Office
+  review/history workflows remain separate and are not converted into technician execution access.
+  This is a strict day boundary: after the Aruba calendar day changes, an earlier visit is read-only
+  to the technician unless a later approved grace-window rule explicitly changes this policy.
+- `FIELD-PREVIEW-001` — The temporary Super Admin Field preview may project today's canonical
+  Scheduling data by Van or staff member only in preview/development deployments. Its interactive
+  controls are browser-local simulation: they create no Work Visit, upload, draft, outbox item,
+  audit event, or canonical mutation and never replace authenticated technician identity.
+
 ## Change protocol
 
 Every rule change needs a stable ID, owner, source/evidence, effective date, affected
