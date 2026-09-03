@@ -916,9 +916,19 @@
     border-radius: 0;
   }
 
+  :global(.technician-frame) .mobileHeader {
+    min-height: calc(90px + env(safe-area-inset-top));
+    padding-top: max(18px, calc(env(safe-area-inset-top) + 12px));
+    padding-right: max(88px, calc(env(safe-area-inset-right) + 76px));
+  }
+
   .homeHeader {
     grid-template-columns: auto 1fr;
     min-height: 150px;
+  }
+
+  :global(.technician-frame) .homeHeader {
+    min-height: calc(150px + env(safe-area-inset-top));
   }
 
   .headerTitle {

@@ -274,5 +274,8 @@ a { color: inherit; text-decoration: none; }
   .kpi-grid, .operation-strip, .foundation-list { grid-template-columns: 1fr; }
   .timeline-row { grid-template-columns: 52px 1fr; }
   .timeline-row .badge { grid-column: 2; justify-self: start; }
-  .technician-logout { top: max(10px, env(safe-area-inset-top)); right: max(10px, env(safe-area-inset-right)); }
+  .technician-logout {
+    top: calc(env(safe-area-inset-top) + 8px);
+    right: max(10px, env(safe-area-inset-right));
+  }
 }
