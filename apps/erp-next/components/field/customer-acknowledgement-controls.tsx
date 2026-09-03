@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from 'react';
 import type { FieldExecutionJobDetail } from '@/lib/field-authority';
-import { ProfessionalReportPreview } from './professional-report-preview';
 import styles from './technician-field-home.module.css';
 
 export type CustomerAcknowledgementInput = {
@@ -53,9 +52,7 @@ export function CustomerAcknowledgementControls({
       }));
   });
 
-  return (
-    <>
-      {sections.length > 0 ? (
+  return sections.length > 0 ? (
         <div className={styles.interventionGroup}>
           <div className={styles.plannedTitle}>CONFIRMACIÓN DEL CLIENTE</div>
           <p className={styles.helper}>El reconocimiento queda como evidencia inmutable del reporte. Una corrección posterior requiere revisión de oficina.</p>
@@ -140,8 +137,5 @@ export function CustomerAcknowledgementControls({
           })}
           {error ? <div className={styles.mutationError}>{error}</div> : null}
         </div>
-      ) : null}
-      <ProfessionalReportPreview job={job} />
-    </>
-  );
+      ) : null;
 }

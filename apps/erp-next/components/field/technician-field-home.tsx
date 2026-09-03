@@ -49,6 +49,16 @@ import {
   type FieldAdminSimulationTarget,
 } from '@/lib/field-admin-simulator';
 import {
+  FIELD_EXPERIENCE_STAGES,
+  fieldExperienceStageForStatus,
+  fieldExperienceStepState,
+  fieldRouteWithoutNextJob,
+  isFieldJobCompleted,
+  isFieldJobInProgress,
+  selectNextFieldJob,
+  type FieldExperienceStage,
+} from '@/lib/field-ui-flow';
+import {
   uploadFieldEquipmentRegistrationImage,
   uploadFieldReportPhoto,
   uploadFieldReportVoice,
@@ -98,6 +108,7 @@ import {
 import { FieldHistoryPanel } from './field-history-panel';
 import { FieldQrLookup } from './field-qr-lookup';
 import { FieldAdminSimulationDetail, FieldAdminSimulationSelector } from './field-admin-simulator';
+import { ProfessionalReportPreview } from './professional-report-preview';
 import simulationStyles from './field-admin-simulator.module.css';
 import styles from './technician-field-home.module.css';
 
@@ -137,8 +148,6 @@ type VisitTransitionInput = {
   secondVisitReason?: string;
 };
 
-const COMPLETED_WORK_ORDER_STATUSES = new Set(['Completada']);
-const ACTIVE_VISIT_STATUSES = new Set<FieldVisitStatus>(['en_route', 'on_site', 'in_progress']);
 const SCHEDULE_REVALIDATE_MS = 60_000;
 const ACTIVE_TRANSITION_LABELS: Record<FieldActiveVisitTransition, string> = {
   en_route: 'En camino',
@@ -191,16 +200,6 @@ function visitAssetSourceLabel(value: FieldExecutionJobDetail['visitAssets'][num
   if (value === 'registered_on_site') return 'Registrado en sitio';
   if (value === 'qr_scan') return 'Identificado por QR';
   return 'Equipo programado';
-}
-
-function jobCompleted(job: FieldScheduleJob) {
-  return job.fieldVisit?.status === 'completed' || COMPLETED_WORK_ORDER_STATUSES.has(job.status);
-}
-
-function jobInProgress(job: FieldScheduleJob) {
-  return job.fieldVisit
-    ? ACTIVE_VISIT_STATUSES.has(job.fieldVisit.status)
-    : ['En camino', 'En el sitio', 'En proceso'].includes(job.status);
 }
 
 function clientRequestId(prefix: string, workOrderId: string) {
@@ -313,27 +312,47 @@ function contactLinks(job: FieldScheduleJob) {
   };
 }
 
-function JobActions({ job, onOpen, simulated = false }: { job: FieldScheduleJob; onOpen: () => void; simulated?: boolean }) {
+function JobActions({
+  job,
+  onOpen,
+  simulated = false,
+  featured = false,
+}: {
+  job: FieldScheduleJob;
+  onOpen: () => void;
+  simulated?: boolean;
+  featured?: boolean;
+}) {
   const links = contactLinks(job);
   return (
-    <div className={styles.actions}>
-      <button className={`${styles.action} ${styles.primary}`} type="button" onClick={onOpen}>Abrir</button>
+    <div className={`${styles.actions} ${featured ? styles.actionsFeatured : ''}`}>
       {simulated ? <>
         <button className={styles.action} type="button" disabled title="Contacto real deshabilitado durante la simulación">Navegar</button>
         <button className={styles.action} type="button" disabled title="Contacto real deshabilitado durante la simulación">Llamar</button>
-        <button className={styles.action} type="button" disabled title="Contacto real deshabilitado durante la simulación">WhatsApp</button>
       </> : <>
         {links.map ? <a className={styles.action} href={links.map} target="_blank" rel="noreferrer">Navegar</a> : null}
         {links.call ? <a className={styles.action} href={links.call}>Llamar</a> : null}
-        {links.whatsapp ? <a className={styles.action} href={links.whatsapp} target="_blank" rel="noreferrer">WhatsApp</a> : null}
       </>}
+      <button className={`${styles.action} ${styles.primary}`} type="button" onClick={onOpen}>
+        {isFieldJobInProgress(job) ? 'Continuar trabajo' : featured ? 'Abrir próximo trabajo' : 'Ver trabajo'}
+      </button>
     </div>
   );
 }
 
-function JobCard({ job, onOpen, simulated = false }: { job: FieldScheduleJob; onOpen: () => void; simulated?: boolean }) {
+function JobCard({
+  job,
+  onOpen,
+  simulated = false,
+  featured = false,
+}: {
+  job: FieldScheduleJob;
+  onOpen: () => void;
+  simulated?: boolean;
+  featured?: boolean;
+}) {
   return (
-    <article className={styles.jobCard}>
+    <article className={`${styles.jobCard} ${featured ? styles.jobFeatured : ''}`}>
       <div className={styles.time}>{job.time || '—'}<small>{job.endTime ? `hasta ${job.endTime}` : job.status}</small></div>
       <div className={styles.jobMain}>
         <strong>{job.customerName}</strong>
@@ -341,14 +360,11 @@ function JobCard({ job, onOpen, simulated = false }: { job: FieldScheduleJob; on
         <div className={styles.work}>{workSummary(job)}</div>
         <div className={styles.badges}>
           <span className={`${styles.badge} ${styles.badgeBrand}`}>{simulated ? 'Vista simulada' : `Campo: ${visitStatusLabel(job.fieldVisit?.status)}`}</span>
-          <span className={styles.badge}>Programación: {job.status}</span>
           <span className={styles.badge}>{job.vanId || 'Sin van'}</span>
-          <span className={styles.badge}>{roleLabel(job.responsibility)}</span>
-          <span className={styles.badge}>{assignmentLabel(job.assignmentSource)}</span>
           <span className={styles.badge}>{job.estimatedQuantity > 0 ? `${job.estimatedQuantity} A/C estimado` : 'Cantidad por confirmar'}</span>
         </div>
       </div>
-      <JobActions job={job} onOpen={onOpen} simulated={simulated} />
+      <JobActions job={job} onOpen={onOpen} simulated={simulated} featured={featured} />
     </article>
   );
 }
@@ -382,7 +398,7 @@ function OfflineStatus({ capturedAt, summary, syncing, onSync, onDiscard }: {
   );
 }
 
-function DetailView({
+function LegacyDetailView({
   job,
   loading,
   error,
@@ -862,6 +878,327 @@ function DetailView({
           </section>
         </aside>
       </div>
+    </div>
+  );
+}
+
+type DetailViewProps = Parameters<typeof LegacyDetailView>[0];
+
+function DetailView({
+  job,
+  loading,
+  error,
+  transitionError,
+  assetError,
+  equipmentRegistrationError,
+  interventionError,
+  additionalInterventionError,
+  approvalError,
+  executionError,
+  reportError,
+  freeTextError,
+  voiceNoteError,
+  customerAcknowledgementError,
+  officeReviewError,
+  fieldSaleError,
+  officeReviewCorrectionNote,
+  transitioning,
+  creatingReturnVisit,
+  attachingAssetId,
+  registeringEquipment,
+  creatingInterventionVisitAssetId,
+  creatingAdditionalInterventionVisitAssetId,
+  decidingApprovalInterventionId,
+  transitioningInterventionId,
+  uploadingReportPhotoKey,
+  savingReportMeasurementKey,
+  savingReportFindingKey,
+  savingChecklistKey,
+  savingFreeTextKey,
+  savingVoiceNoteKey,
+  savingCustomerAcknowledgementKey,
+  submittingOfficeReview,
+  savingFieldSaleLineId,
+  offlineCapturedAt,
+  outboxSummary,
+  syncingOutbox,
+  draftOwnerUserId,
+  onTransition,
+  onCreateReturnVisit,
+  onAttachAsset,
+  onAttachAssetByQr,
+  onRegisterEquipment,
+  onCreatePlannedIntervention,
+  onCreateAdditionalIntervention,
+  onRecordAdditionalDecision,
+  onTransitionIntervention,
+  onAddReportPhoto,
+  onAddReportMeasurement,
+  onAddReportFinding,
+  onSetChecklistItem,
+  onSaveFreeText,
+  onSaveVoiceNote,
+  onRecordCustomerAcknowledgement,
+  onCreateFieldSaleLine,
+  onDecideFieldSaleLine,
+  onTransitionFieldSaleLine,
+  onOfficeReviewCorrectionNoteChange,
+  onSubmitOfficeReview,
+  onSyncOutbox,
+  onDiscardOutboxConflict,
+  onBack,
+}: DetailViewProps) {
+  const canonicalStage = fieldExperienceStageForStatus(job?.fieldVisit?.status);
+  const [activeStage, setActiveStage] = useState<FieldExperienceStage>(canonicalStage);
+
+  useEffect(() => {
+    setActiveStage(canonicalStage);
+  }, [canonicalStage, job?.workOrderId]);
+
+  if (loading || error || !job) {
+    return (
+      <div className={styles.technicianApp}>
+        <header className={styles.mobileHeader}>
+          <button className={styles.headerBack} type="button" onClick={onBack} aria-label="Volver a Mi día">←</button>
+          <div><span>DEMAC ERP Next</span><strong>Trabajo activo</strong></div>
+        </header>
+        <main className={styles.mobileContent}>
+          <section className={styles.panel}>
+            <div className={error ? styles.error : styles.loading}>
+              {loading ? 'Cargando información del trabajo…' : error || 'No se pudo abrir este trabajo.'}
+            </div>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
+  const links = contactLinks(job);
+  const availableTransitions: FieldActiveVisitTransition[] = job.fieldVisit
+    ? job.fieldVisit.availableTransitions
+    : job.canPrepareVisit
+      ? ['en_route', 'no_access', 'cancelled']
+      : [];
+  const primaryTransition = availableTransitions.find((target) => (
+    target === 'en_route' || target === 'on_site' || target === 'in_progress'
+  )) ?? null;
+  const attachedAssetIds = new Set(job.visitAssets.map((visitAsset) => visitAsset.assetId));
+  const knownEquipmentById = new Map(job.knownEquipment.map((equipment) => [equipment.id, equipment]));
+  const mutationBusy = transitioning !== null
+    || creatingReturnVisit
+    || attachingAssetId !== null
+    || registeringEquipment
+    || creatingInterventionVisitAssetId !== null
+    || creatingAdditionalInterventionVisitAssetId !== null
+    || decidingApprovalInterventionId !== null
+    || transitioningInterventionId !== null
+    || uploadingReportPhotoKey !== null
+    || savingReportMeasurementKey !== null
+    || savingReportFindingKey !== null
+    || savingChecklistKey !== null
+    || savingFreeTextKey !== null
+    || savingVoiceNoteKey !== null
+    || savingCustomerAcknowledgementKey !== null
+    || savingFieldSaleLineId !== null
+    || submittingOfficeReview
+    || offlineCapturedAt !== null;
+  const primaryTransitionLabel = primaryTransition === 'en_route'
+    ? 'Iniciar ruta'
+    : primaryTransition === 'on_site'
+      ? 'Confirmar llegada'
+      : primaryTransition === 'in_progress' && job.fieldVisit?.status === 'pending'
+        ? 'Reanudar servicio'
+        : primaryTransition === 'in_progress'
+          ? 'Iniciar servicio'
+          : '';
+
+  return (
+    <div className={styles.technicianApp} data-field-experience-stage={activeStage}>
+      <header className={styles.mobileHeader}>
+        <button className={styles.headerBack} type="button" onClick={onBack} aria-label="Volver a Mi día">←</button>
+        <div><span>DEMAC ERP Next</span><strong>Trabajo activo</strong></div>
+        <span className={styles.headerStatus}>{visitStatusLabel(job.fieldVisit?.status)}</span>
+      </header>
+
+      <main className={styles.mobileContent}>
+        <section className={styles.jobHero}>
+          <div className={styles.heroTopline}>
+            <span>{job.time || 'Hora pendiente'}{job.endTime ? ` – ${job.endTime}` : ''}</span>
+            <span>{job.vanId || 'Sin Van'}</span>
+          </div>
+          <h1>{job.customerName}</h1>
+          <p>{job.propertyName || job.address || 'Ubicación pendiente'}</p>
+          <div className={styles.heroWork}>{workSummary(job)}</div>
+          <div className={styles.quickActions}>
+            {links.call ? <a href={links.call}>Llamar</a> : null}
+            {links.whatsapp ? <a href={links.whatsapp} target="_blank" rel="noreferrer">WhatsApp</a> : null}
+            {links.map ? <a href={links.map} target="_blank" rel="noreferrer">Navegar</a> : null}
+          </div>
+        </section>
+
+        <nav className={styles.flowStepper} aria-label="Pasos del trabajo">
+          {FIELD_EXPERIENCE_STAGES.map((step, index) => {
+            const state = fieldExperienceStepState(step.id, activeStage);
+            return (
+              <button
+                className={state === 'current' ? styles.flowStepCurrent : state === 'complete' ? styles.flowStepComplete : styles.flowStep}
+                key={step.id}
+                type="button"
+                aria-current={state === 'current' ? 'step' : undefined}
+                onClick={() => setActiveStage(step.id)}
+              >
+                <b>{state === 'complete' ? '✓' : index + 1}</b>
+                <span>{step.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        <OfflineStatus capturedAt={offlineCapturedAt} summary={outboxSummary} syncing={syncingOutbox} onSync={onSyncOutbox} onDiscard={onDiscardOutboxConflict} />
+
+        <div className={styles.stagePanel} hidden={activeStage !== 'arrival'}>
+          <section className={styles.section}>
+            <div className={styles.sectionHeading}>
+              <div><span>Paso 1</span><h2>Llegada al cliente</h2></div>
+              <span className={styles.syncBadge}>{offlineCapturedAt ? 'Guardado local' : 'Sincronizado'}</span>
+            </div>
+            <div className={styles.infoGrid}>
+              <div className={styles.info}><span>Estado</span><strong>{visitStatusLabel(job.fieldVisit?.status)}</strong></div>
+              <div className={styles.info}><span>Orden</span><strong>{job.workOrderId}</strong></div>
+              <div className={styles.info}><span>Dirección</span><strong>{job.address || 'No disponible'}</strong></div>
+              <div className={styles.info}><span>Acceso</span><strong>{job.accessInstructions || 'Sin instrucciones especiales'}</strong></div>
+            </div>
+            <div className={styles.planned}>
+              <div className={styles.plannedTitle}>Alcance programado</div>
+              {job.plannedWork.length ? job.plannedWork.map((line) => (
+                <div className={styles.plannedItem} key={line.id}><span>{line.label}</span><strong>{line.quantity}×</strong></div>
+              )) : <p className={styles.helper}>{job.customerFacingDescription || 'Trabajo programado'}</p>}
+            </div>
+            {job.technicianInstructions ? <div className={styles.siteNote}><strong>Nota de oficina</strong><span>{job.technicianInstructions}</span></div> : null}
+          </section>
+
+          <details className={styles.moreOptions}>
+            <summary>Más opciones de llegada</summary>
+            {availableTransitions.includes('no_access') ? (
+              <VisitNoAccessControls disabled={mutationBusy} onSubmit={(input: VisitNoAccessInput) => onTransition(input)} saving={transitioning === 'no_access'} />
+            ) : null}
+            {availableTransitions.includes('cancelled') ? (
+              <VisitCancellationControls disabled={mutationBusy} onSubmit={(input: VisitCancellationInput) => onTransition(input)} saving={transitioning === 'cancelled'} />
+            ) : null}
+          </details>
+          {transitionError ? <div className={styles.mutationError}>{transitionError}</div> : null}
+        </div>
+
+        <div className={styles.stagePanel} hidden={activeStage !== 'service'}>
+          <section className={styles.section}>
+            <div className={styles.sectionHeading}>
+              <div><span>Paso 2</span><h2>Registrar servicio</h2></div>
+              <span className={styles.syncBadge}>{job.visitAssets.length} equipo{job.visitAssets.length === 1 ? '' : 's'}</span>
+            </div>
+            {job.visitAssets.length ? job.visitAssets.map((visitAsset) => {
+              const equipment = knownEquipmentById.get(visitAsset.assetId);
+              return (
+                <div className={styles.equipment} key={visitAsset.id}>
+                  <div>
+                    <strong>{visitAsset.locationLabel || equipment?.locationLabel || `A/C ${visitAsset.sequence}`}</strong>
+                    <span>{[equipment?.brand, equipment?.model, equipment?.systemType].filter(Boolean).join(' · ') || 'Equipo confirmado'}</span>
+                    <span>{equipment?.btu ? `${equipment.btu} BTU` : 'BTU por confirmar'} · {visitAssetSourceLabel(visitAsset.source)}</span>
+                  </div>
+                  <span className={`${styles.badge} ${styles.badgeBrand}`}>#{visitAsset.sequence}</span>
+                </div>
+              );
+            }) : <p className={styles.helper}>Confirma el primer equipo para comenzar el registro.</p>}
+          </section>
+
+          <details className={styles.workflowDisclosure} open>
+            <summary><b>1</b><span>Equipos atendidos<small>Escanea, selecciona o registra el A/C</small></span></summary>
+            <div className={styles.disclosureBody}>
+              <FieldQrLookup attachingAssetId={attachingAssetId} busy={mutationBusy} canAttach={job.canAddExistingAsset} equipment={job.knownEquipment} onAttach={onAttachAssetByQr} visitAssets={job.visitAssets} />
+              {job.knownEquipment.map((equipment) => {
+                const attached = attachedAssetIds.has(equipment.id);
+                return (
+                  <div className={styles.equipment} key={equipment.id}>
+                    <div><strong>{equipment.locationLabel || 'Ubicación no registrada'}</strong><span>{[equipment.brand, equipment.model, equipment.systemType].filter(Boolean).join(' · ') || 'Información técnica incompleta'}</span></div>
+                    {!attached && equipment.active && job.canAddExistingAsset ? <button className={styles.action} disabled={mutationBusy} onClick={() => onAttachAsset(equipment.id)} type="button">{attachingAssetId === equipment.id ? 'Agregando…' : 'Agregar'}</button> : <span className={styles.badge}>{attached ? 'Incluido' : 'Solo lectura'}</span>}
+                  </div>
+                );
+              })}
+              <EquipmentRegistrationControls job={job} mutationBusy={mutationBusy} registering={registeringEquipment} error={equipmentRegistrationError} onRegister={onRegisterEquipment} />
+              {assetError ? <div className={styles.mutationError}>{assetError}</div> : null}
+            </div>
+          </details>
+
+          <details className={styles.workflowDisclosure}>
+            <summary><b>2</b><span>Trabajo y materiales<small>Planificado, adicional y add-ons</small></span></summary>
+            <div className={styles.disclosureBody}>
+              <PlannedInterventionControls job={job} mutationBusy={mutationBusy} creatingVisitAssetId={creatingInterventionVisitAssetId} error={interventionError} onCreate={onCreatePlannedIntervention} />
+              <AdditionalInterventionControls job={job} mutationBusy={mutationBusy} creatingVisitAssetId={creatingAdditionalInterventionVisitAssetId} error={additionalInterventionError} onCreate={onCreateAdditionalIntervention} />
+              <AdditionalApprovalControls job={job} mutationBusy={mutationBusy} decidingInterventionId={decidingApprovalInterventionId} error={approvalError} onDecide={onRecordAdditionalDecision} />
+              <FieldSaleControls busy={mutationBusy} error={fieldSaleError} job={job} onCreate={onCreateFieldSaleLine} onDecide={onDecideFieldSaleLine} onTransition={onTransitionFieldSaleLine} />
+            </div>
+          </details>
+
+          <details className={styles.workflowDisclosure}>
+            <summary><b>3</b><span>Evidencia y reporte<small>Checklist, fotos, mediciones, notas y voz</small></span></summary>
+            <div className={styles.disclosureBody}>
+              <InterventionExecutionControls job={job} mutationBusy={mutationBusy} transitioningInterventionId={transitioningInterventionId} error={executionError} onTransition={onTransitionIntervention} />
+              <InterventionReportControls job={job} mutationBusy={mutationBusy} uploadingPhotoKey={uploadingReportPhotoKey} savingMeasurementKey={savingReportMeasurementKey} savingFindingKey={savingReportFindingKey} savingChecklistKey={savingChecklistKey} error={reportError} onAddPhoto={onAddReportPhoto} onAddMeasurement={onAddReportMeasurement} onAddFinding={onAddReportFinding} onSetChecklistItem={onSetChecklistItem} />
+              <FreeTextReportControls job={job} draftOwnerUserId={draftOwnerUserId} allowDraftWhileOffline={offlineCapturedAt !== null} mutationBusy={mutationBusy} savingKey={savingFreeTextKey} error={freeTextError} onSave={onSaveFreeText} />
+              <VoiceNoteReportControls job={job} mutationBusy={mutationBusy} savingKey={savingVoiceNoteKey} error={voiceNoteError} onSave={onSaveVoiceNote} />
+            </div>
+          </details>
+
+          <details className={styles.workflowDisclosure}>
+            <summary><b>4</b><span>Historial<small>Contexto previo del equipo y la visita</small></span></summary>
+            <div className={styles.disclosureBody}><FieldHistoryPanel job={job} /></div>
+          </details>
+
+          <details className={styles.moreOptions}>
+            <summary>Pendiente, pieza o segunda visita</summary>
+            {availableTransitions.includes('pending') ? <VisitPendingControls disabled={mutationBusy} onSubmit={(input: VisitPendingInput) => onTransition(input)} saving={transitioning === 'pending'} /> : null}
+            {availableTransitions.includes('requires_return_visit') ? <VisitReturnControls disabled={mutationBusy} onSubmit={(input: VisitReturnInput) => onTransition(input)} saving={transitioning === 'requires_return_visit'} /> : null}
+            {job.canCreateReturnVisit ? <VisitReturnCreationControls disabled={mutationBusy} onCreate={onCreateReturnVisit} saving={creatingReturnVisit} /> : null}
+          </details>
+          {transitionError ? <div className={styles.mutationError}>{transitionError}</div> : null}
+        </div>
+
+        <div className={styles.stagePanel} hidden={activeStage !== 'close'}>
+          <section className={styles.section}>
+            <div className={styles.sectionHeading}>
+              <div><span>Paso 3</span><h2>Revisar y cerrar</h2></div>
+              <span className={styles.syncBadge}>{visitStatusLabel(job.fieldVisit?.status)}</span>
+            </div>
+            <ProfessionalReportPreview job={job} />
+            <CustomerAcknowledgementControls job={job} mutationBusy={mutationBusy} savingKey={savingCustomerAcknowledgementKey} error={customerAcknowledgementError} onRecord={onRecordCustomerAcknowledgement} />
+          </section>
+
+          {(job.fieldVisit?.pendingReason || job.fieldVisit?.noAccessReason || job.fieldVisit?.cancellationReason || job.fieldVisit?.secondVisitReason) ? (
+            <section className={styles.section}>
+              <h2>Seguimiento de la visita</h2>
+              {job.fieldVisit?.pendingReason ? <div className={styles.siteNote}><strong>Pendiente</strong><span>{job.fieldVisit.pendingReason}{job.fieldVisit.pendingAction ? ` · ${job.fieldVisit.pendingAction}` : ''}</span></div> : null}
+              {job.fieldVisit?.noAccessReason ? <div className={styles.siteNote}><strong>Sin acceso</strong><span>{job.fieldVisit.noAccessReason}</span></div> : null}
+              {job.fieldVisit?.cancellationReason ? <div className={styles.siteNote}><strong>Cancelación</strong><span>{job.fieldVisit.cancellationReason}</span></div> : null}
+              {job.fieldVisit?.secondVisitReason ? <div className={styles.siteNote}><strong>Segunda visita</strong><span>{job.fieldVisit.secondVisitReason}</span></div> : null}
+            </section>
+          ) : null}
+
+          <VisitOfficeReviewControls correctionNote={officeReviewCorrectionNote} disabled={mutationBusy} error={officeReviewError} job={job} onCorrectionNoteChange={onOfficeReviewCorrectionNoteChange} onSubmit={onSubmitOfficeReview} saving={submittingOfficeReview} />
+        </div>
+      </main>
+
+      {activeStage !== 'close' ? (
+        <div className={styles.stickyActionBar}>
+          {primaryTransition ? (
+            <button className={styles.primaryWorkAction} disabled={mutationBusy} type="button" onClick={() => onTransition({ target: primaryTransition })}>
+              {transitioning === primaryTransition ? 'Procesando…' : primaryTransitionLabel}
+            </button>
+          ) : (
+            <button className={styles.primaryWorkAction} type="button" onClick={() => setActiveStage(activeStage === 'arrival' ? 'service' : 'close')}>
+              {activeStage === 'arrival' ? 'Ver registro de servicio' : 'Revisar cierre'}
+            </button>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2167,17 +2504,13 @@ export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableA
   const authorizedJobs = jobsOwnerUserId === principalFieldIdentityKey ? jobs : [];
   const todayJobs = useMemo(() => authorizedJobs.filter((job) => job.date === today), [authorizedJobs, today]);
   const summary = useMemo(() => {
-    const completed = todayJobs.filter(jobCompleted).length;
-    const inProgress = todayJobs.filter(jobInProgress).length;
+    const completed = todayJobs.filter(isFieldJobCompleted).length;
+    const inProgress = todayJobs.filter(isFieldJobInProgress).length;
     return { scheduled: todayJobs.length, completed, inProgress, remaining: Math.max(0, todayJobs.length - completed) };
   }, [todayJobs]);
 
-  const nextJob = useMemo(() => {
-    const open = todayJobs.filter((job) => !jobCompleted(job));
-    const active = open.find(jobInProgress);
-    if (active) return active;
-    return open.find((job) => job.time && job.time >= nowTime) ?? open[0] ?? null;
-  }, [nowTime, todayJobs]);
+  const nextJob = useMemo(() => selectNextFieldJob(todayJobs, nowTime), [nowTime, todayJobs]);
+  const routeJobs = useMemo(() => fieldRouteWithoutNextJob(todayJobs, nextJob), [nextJob, todayJobs]);
 
   const openJob = (workOrderId: string) => {
     selectedWorkOrderRef.current = workOrderId;
@@ -2272,45 +2605,51 @@ export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableA
   }
 
   return (
-    <div className={styles.shell}>
-      <header className={styles.head}>
-        <div><div className={styles.eyebrow}>DEMAC · Trabajo de campo</div><h1>Mi ruta de trabajo</h1></div>
-        {adminSimulation ? (
-          <FieldAdminSimulationSelector
-            targets={simulationTargets}
-            value={simulationTargetValue}
-            loading={loading}
-            onChange={setSimulationTargetValue}
-          />
-        ) : <div className={styles.identity}>{principal.displayName}{principal.staffId ? ` · ${principal.staffId}` : ''}</div>}
+    <div className={styles.technicianApp}>
+      {adminSimulation ? (
+        <aside className={styles.adminPreviewBar} aria-label="Controles temporales de prueba">
+          <div><strong>Vista de prueba · solo Super Admin</strong><span>Selecciona una Van o técnico individual. Las acciones no modifican datos reales.</span></div>
+          <FieldAdminSimulationSelector targets={simulationTargets} value={simulationTargetValue} loading={loading} onChange={setSimulationTargetValue} />
+        </aside>
+      ) : null}
+
+      <header className={`${styles.mobileHeader} ${styles.homeHeader}`}>
+        <div className={styles.brandBlock}><span>DEMAC</span><small>ERP Next</small></div>
+        <div className={styles.headerTitle}><strong>Mi día</strong><span>{formatArubaDateKey(today, { weekday: 'long', month: 'long', day: 'numeric' })}</span></div>
+        <div className={styles.headerIdentity}>
+          <strong>{adminSimulation ? selectedSimulationTarget?.label || 'Selecciona una Van' : principal.displayName}</strong>
+          <span>{adminSimulation ? selectedSimulationTarget?.detail || 'Vista temporal' : principal.staffId || 'Técnico'}</span>
+        </div>
       </header>
 
-      {adminSimulation ? <section className={simulationStyles.simulationNotice}>
-        <strong>Vista temporal · {selectedSimulationTarget?.label || 'Selecciona una Van o técnico'}</strong>
-        <span>Datos reales de la Agenda de hoy. Las acciones dentro de un trabajo son una simulación local y no cambian información real.</span>
-      </section> : <OfflineStatus capturedAt={scheduleOfflineCapturedAt} summary={outboxSummary} syncing={syncingOutbox} onSync={() => void syncOutbox()} onDiscard={(id) => void discardOutboxConflict(id)} />}
+      <main className={styles.mobileContent}>
+        {adminSimulation ? <section className={simulationStyles.simulationNotice}>
+          <strong>{selectedSimulationTarget?.label || 'Selecciona una Van o técnico para comenzar'}</strong>
+          <span>Agenda real de Aruba para hoy. La ejecución dentro del portal sigue siendo una simulación local segura.</span>
+        </section> : <OfflineStatus capturedAt={scheduleOfflineCapturedAt} summary={outboxSummary} syncing={syncingOutbox} onSync={() => void syncOutbox()} onDiscard={(id) => void discardOutboxConflict(id)} />}
 
-      <section className={styles.summary} aria-label="Resumen de hoy">
-        <div className={styles.metric}><strong>{summary.scheduled}</strong><span>Programados hoy</span></div>
-        <div className={styles.metric}><strong>{summary.completed}</strong><span>Completados</span></div>
-        <div className={styles.metric}><strong>{summary.inProgress}</strong><span>En curso</span></div>
-        <div className={styles.metric}><strong>{summary.remaining}</strong><span>Restantes</span></div>
-      </section>
+        <section className={styles.daySummary} aria-label="Resumen del día actual">
+          <div><strong>{summary.scheduled}</strong><span>Trabajos</span></div>
+          <div><strong>{summary.completed}</strong><span>Completados</span></div>
+          <div><strong>{summary.inProgress}</strong><span>En curso</span></div>
+          <div><strong>{summary.remaining}</strong><span>Restantes</span></div>
+        </section>
 
-      {scheduleError ? <section className={styles.panel}><div className={styles.error}>{scheduleError}<div style={{ marginTop: 12 }}><button className={styles.action} type="button" onClick={() => void loadSchedule()}>Reintentar</button></div></div></section> : null}
+        {scheduleError ? <section className={styles.panel}><div className={styles.error}>{scheduleError}<div style={{ marginTop: 12 }}><button className={styles.action} type="button" onClick={() => void loadSchedule()}>Reintentar</button></div></div></section> : null}
 
-      <section className={styles.panel}>
-        <div className={styles.panelHead}><h2>Próximo trabajo</h2><span>{formatArubaDateKey(today, { weekday: 'long', month: 'long', day: 'numeric' })}</span></div>
-        {loading ? <div className={styles.loading}>Cargando ruta asignada…</div> : nextJob ? <div className={styles.next}><JobCard job={nextJob} simulated={adminSimulation} onOpen={() => openJob(nextJob.workOrderId)} /></div> : <div className={styles.empty}>No quedan trabajos activos asignados para hoy.</div>}
-      </section>
+        <section className={`${styles.panel} ${styles.nextPanel}`}>
+          <div className={styles.panelHead}><div><span>Ahora</span><h2>{nextJob && isFieldJobInProgress(nextJob) ? 'Trabajo activo' : 'Próximo trabajo'}</h2></div><span>{nextJob?.time || 'Hoy'}</span></div>
+          {loading ? <div className={styles.loading}>Cargando agenda de hoy…</div> : nextJob ? <JobCard job={nextJob} featured simulated={adminSimulation} onOpen={() => openJob(nextJob.workOrderId)} /> : <div className={styles.empty}>No quedan trabajos activos asignados para hoy.</div>}
+        </section>
 
-      <section className={styles.panel}>
-        <div className={styles.panelHead}>
-          <h2>Trabajos de hoy</h2>
-          <span>{loading ? 'Cargando…' : `${todayJobs.length} trabajo${todayJobs.length === 1 ? '' : 's'}`}</span>
-        </div>
-        {loading ? <div className={styles.loading}>Cargando itinerario autorizado…</div> : todayJobs.length ? todayJobs.map((job) => <JobCard key={job.workOrderId} job={job} simulated={adminSimulation} onOpen={() => openJob(job.workOrderId)} />) : <div className={styles.empty}>No hay trabajos asignados para esta selección hoy.</div>}
-      </section>
+        <section className={styles.panel}>
+          <div className={styles.panelHead}>
+            <div><span>Solo hoy</span><h2>Ruta del día</h2></div>
+            <span>{loading ? 'Cargando…' : `${todayJobs.length} trabajo${todayJobs.length === 1 ? '' : 's'}`}</span>
+          </div>
+          {loading ? <div className={styles.loading}>Cargando itinerario autorizado…</div> : routeJobs.length ? routeJobs.map((job) => <JobCard key={job.workOrderId} job={job} simulated={adminSimulation} onOpen={() => openJob(job.workOrderId)} />) : todayJobs.length ? <div className={styles.empty}>El próximo trabajo ya aparece arriba. No hay otros trabajos en la ruta de hoy.</div> : <div className={styles.empty}>No hay trabajos asignados para esta selección hoy.</div>}
+        </section>
+      </main>
     </div>
   );
 }

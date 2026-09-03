@@ -1,30 +1,35 @@
 .simulationSelector {
   display: grid;
-  min-width: min(390px, 48vw);
+  min-width: min(360px, 48vw);
   gap: 6px;
   color: var(--muted);
   font-size: 10px;
   font-weight: 800;
-  letter-spacing: .05em;
+  letter-spacing: .06em;
   text-transform: uppercase;
 }
 
 .simulationSelector select {
-  min-height: 42px;
+  min-height: 44px;
   width: 100%;
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: 12px;
   background: var(--surface);
   color: var(--text);
-  padding: 8px 34px 8px 11px;
-  font-size: 11px;
+  padding: 9px 36px 9px 12px;
+  font: inherit;
+  font-size: 12px;
   font-weight: 750;
   letter-spacing: normal;
   text-transform: none;
 }
 
-.simulationSelector select:focus-visible {
-  outline: 2px solid var(--brand);
+.simulationSelector select:focus-visible,
+.simulationProgress button:focus-visible,
+.back:focus-visible,
+.stickyAction button:focus-visible,
+.moreActions button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--brand) 35%, transparent);
   outline-offset: 2px;
 }
 
@@ -33,15 +38,78 @@
   opacity: .65;
 }
 
+.simulationShell {
+  display: grid;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 20px 18px 112px;
+  gap: 14px;
+}
+
+.detailHeader {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.detailHeader h1,
+.detailHeader p {
+  margin: 0;
+}
+
+.detailHeader h1 {
+  font-size: clamp(22px, 4vw, 32px);
+  line-height: 1.08;
+}
+
+.detailHeader p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.back {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 21px;
+  cursor: pointer;
+}
+
+.eyebrow {
+  margin-bottom: 6px;
+  color: var(--brand);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.statusPill,
+.syncState {
+  width: fit-content;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  padding: 7px 10px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
 .simulationNotice {
   display: grid;
   gap: 4px;
-  margin-bottom: 14px;
-  border: 1px solid color-mix(in srgb, var(--brand) 42%, var(--border));
-  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--brand) 35%, var(--border));
+  border-radius: 13px;
   background: var(--brand-soft);
   color: var(--text);
-  padding: 12px 14px;
+  padding: 11px 13px;
 }
 
 .simulationNotice strong {
@@ -49,43 +117,115 @@
   font-size: 11px;
 }
 
-.simulationNotice span {
+.simulationNotice span,
+.permissionNote {
   color: var(--muted);
   font-size: 10px;
   line-height: 1.45;
 }
 
+.jobOverview,
+.stepPanel,
+.moreActions {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .05);
+}
+
+.jobOverview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+}
+
+.jobOverview > div:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.jobOverview span,
+.info span,
+.scopeCard span,
+.equipmentCard span,
+.closeSummary span,
+.reportPreview > span,
+.stickyAction span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.jobOverview strong {
+  font-size: 13px;
+}
+
+.quickActions {
+  display: flex;
+  gap: 7px;
+}
+
+.quickActions button,
+.moreActions button {
+  min-height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--muted);
+  padding: 8px 12px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
 .simulationProgress {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  background: var(--surface);
+  padding: 7px;
 }
 
 .simulationStep,
 .simulationStepActive {
-  display: grid;
-  justify-items: center;
-  gap: 6px;
-  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 46px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
   color: var(--muted);
-  font-size: 9px;
-  text-align: center;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
 }
 
 .simulationStep b,
 .simulationStepActive b {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 25px;
+  height: 25px;
   border: 1px solid var(--border);
   border-radius: 50%;
   background: var(--surface-2);
+  font-size: 10px;
+}
+
+.simulationStep[data-state='complete'] b {
+  border-color: #16a34a;
+  background: #dcfce7;
+  color: #15803d;
 }
 
 .simulationStepActive {
+  background: var(--brand-soft);
   color: var(--brand);
-  font-weight: 800;
 }
 
 .simulationStepActive b {
@@ -94,18 +234,100 @@
   color: white;
 }
 
-.simulationOutcome {
-  margin-top: 12px;
-  border-radius: 10px;
+.stepPanel {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.stepPanel[hidden] {
+  display: none;
+}
+
+.panelHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.panelHeading > div {
+  display: grid;
+  gap: 2px;
+}
+
+.panelHeading span:first-child {
+  color: var(--brand);
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.panelHeading h2 {
+  margin: 0;
+  font-size: 19px;
+}
+
+.infoGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.info,
+.scopeCard,
+.reportPreview {
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
   background: var(--surface-2);
-  padding: 10px 12px;
-  color: var(--muted);
-  font-size: 10px;
+  padding: 12px;
+}
+
+.info strong,
+.scopeCard strong,
+.reportPreview strong {
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.equipmentCard {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  border: 1px solid color-mix(in srgb, var(--brand) 32%, var(--border));
+  border-radius: 13px;
+  background: var(--brand-soft);
+  padding: 12px;
+}
+
+.equipmentCard > div:nth-child(2) {
+  display: grid;
+  gap: 3px;
+}
+
+.equipmentCard strong {
+  font-size: 12px;
+}
+
+.equipmentIcon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--brand);
+  font-size: 11px;
+  font-weight: 900;
 }
 
 .simulationChecklist {
   display: grid;
-  gap: 0;
   border: 1px solid var(--border);
   border-radius: 12px;
   overflow: hidden;
@@ -115,9 +337,9 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 44px;
+  min-height: 46px;
   border-top: 1px solid var(--border);
-  padding: 9px 11px;
+  padding: 9px 12px;
   font-size: 11px;
 }
 
@@ -125,17 +347,34 @@
   border-top: 0;
 }
 
-.simulationChecklist input {
-  width: 17px;
-  height: 17px;
+.simulationChecklist input,
+.acknowledgement input {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
   accent-color: var(--brand);
+}
+
+.disclosure {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0 12px 12px;
+}
+
+.disclosure summary,
+.moreActions summary {
+  padding: 12px 0;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
 }
 
 .simulationTextArea,
 .simulationEvidence {
   display: grid;
   gap: 6px;
-  margin-top: 14px;
+  margin-top: 10px;
 }
 
 .simulationTextArea span,
@@ -148,7 +387,7 @@
 }
 
 .simulationTextArea textarea {
-  min-height: 110px;
+  min-height: 104px;
   resize: vertical;
   border: 1px solid var(--border);
   border-radius: 11px;
@@ -170,22 +409,122 @@
   font-size: 10px;
 }
 
-.disabledContactActions {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 7px;
-  margin-top: 12px;
-}
-
-.disabledContactActions button {
-  min-height: 42px;
-  border: 1px solid var(--border);
-  border-radius: 11px;
-  background: var(--surface-2);
+.disclosure p,
+.reportPreview p {
+  margin: 9px 0 0;
   color: var(--muted);
   font-size: 10px;
-  font-weight: 800;
-  opacity: .58;
+  line-height: 1.45;
+}
+
+.closeSummary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.closeSummary > div {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+  padding: 12px;
+}
+
+.closeSummary strong {
+  font-size: 15px;
+}
+
+.acknowledgement {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.acknowledgement span {
+  display: grid;
+  gap: 3px;
+}
+
+.acknowledgement strong {
+  font-size: 11px;
+}
+
+.acknowledgement small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.permissionNote {
+  margin: 0;
+  border-left: 3px solid var(--brand);
+  padding: 3px 0 3px 10px;
+}
+
+.moreActions {
+  padding: 0 14px;
+}
+
+.moreActions > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 14px;
+}
+
+.stickyAction {
+  position: sticky;
+  z-index: 5;
+  bottom: 12px;
+  display: grid;
+  grid-template-columns: minmax(120px, .65fr) minmax(210px, 1fr);
+  align-items: center;
+  gap: 12px;
+  border: 1px solid color-mix(in srgb, var(--brand) 25%, var(--border));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  box-shadow: 0 16px 42px rgba(15, 23, 42, .16);
+  padding: 10px;
+  backdrop-filter: blur(14px);
+}
+
+.stickyAction > div {
+  display: grid;
+  gap: 3px;
+  padding-left: 4px;
+}
+
+.stickyAction > div strong {
+  font-size: 11px;
+}
+
+.stickyAction button {
+  min-height: 48px;
+  border: 0;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--brand), #063ca4);
+  color: white;
+  padding: 10px 16px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.stickyAction button:disabled {
+  cursor: not-allowed;
+  filter: grayscale(.6);
+  opacity: .52;
+}
+
+.stickyAction button span {
+  margin-left: 5px;
+  color: inherit;
+  font-size: 15px;
 }
 
 @media (max-width: 700px) {
@@ -194,19 +533,62 @@
     width: 100%;
   }
 
-  .simulationProgress {
+  .simulationShell {
+    padding: 14px 10px 100px;
+  }
+
+  .detailHeader {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .statusPill {
+    grid-column: 2;
+  }
+
+  .jobOverview {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .quickActions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .infoGrid,
+  .closeSummary {
     grid-template-columns: 1fr;
+  }
+
+  .simulationProgress {
+    gap: 4px;
+    padding: 5px;
   }
 
   .simulationStep,
   .simulationStepActive {
-    grid-template-columns: 28px 1fr;
-    align-items: center;
-    justify-items: start;
-    text-align: left;
+    display: grid;
+    justify-items: center;
+    gap: 4px;
+    min-height: 58px;
+    padding: 5px;
+    font-size: 9px;
   }
 
-  .disabledContactActions {
+  .equipmentCard {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .equipmentCard > span {
+    grid-column: 2;
+  }
+
+  .stickyAction {
     grid-template-columns: 1fr;
+    bottom: 8px;
+  }
+
+  .stickyAction > div {
+    display: none;
   }
 }

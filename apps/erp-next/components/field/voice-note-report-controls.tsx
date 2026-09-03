@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FieldExecutionJobDetail } from '@/lib/field-authority';
 import { MAX_REPORT_VOICE_DURATION_SECONDS } from '@/lib/field-voice-note-contract';
-import { ProfessionalReportPreview } from './professional-report-preview';
 import styles from './technician-field-home.module.css';
 
 export type ReportVoiceNoteInput = {
@@ -241,9 +240,7 @@ export function VoiceNoteReportControls({
       }));
   });
 
-  return (
-    <>
-      {sections.length > 0 ? (
+  return sections.length > 0 ? (
         <div className={styles.interventionGroup}>
           <div className={styles.plannedTitle}>NOTAS DE VOZ DEL REPORTE</div>
           <p className={styles.helper}>Cada sección conserva una sola grabación canónica de hasta dos minutos.</p>
@@ -261,8 +258,5 @@ export function VoiceNoteReportControls({
           })}
           {error ? <div className={styles.mutationError}>{error}</div> : null}
         </div>
-      ) : null}
-      <ProfessionalReportPreview job={job} />
-    </>
-  );
+      ) : null;
 }

@@ -10,7 +10,7 @@ export function AuthGate({ children }: Readonly<{ children: React.ReactNode }>) 
   const router = useRouter();
   const { mode, status, principal } = useAuth();
   const authenticated = mode === 'firebase' && status === 'ready' && principal.active;
-  const routeAllowed = authenticated && isAuthenticatedRouteAllowed(pathname, principal.role);
+  const routeAllowed = authenticated && isAuthenticatedRouteAllowed(pathname ?? '/', principal.role);
 
   useEffect(() => {
     if (status === 'loading') return;

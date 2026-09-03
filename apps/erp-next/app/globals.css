@@ -137,6 +137,53 @@ a { color: inherit; text-decoration: none; }
 .owner-chip span { display: block; margin-top: 2px; color: var(--muted); font-size: 8px; }
 .erp-content { padding: 28px; }
 
+.technician-frame {
+  position: relative;
+  min-height: 100dvh;
+  background: var(--bg);
+}
+.technician-logout {
+  position: fixed;
+  top: max(12px, env(safe-area-inset-top));
+  right: max(12px, env(safe-area-inset-right));
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  border: 1px solid rgba(255, 255, 255, .42);
+  border-radius: 999px;
+  background: rgba(3, 39, 96, .78);
+  color: #fff;
+  padding: 3px 9px 3px 4px;
+  box-shadow: 0 7px 20px rgba(3, 39, 96, .2);
+  backdrop-filter: blur(10px);
+  cursor: pointer;
+}
+.technician-logout > span {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, .18);
+  font-size: 8px;
+  font-weight: 900;
+}
+.technician-logout strong {
+  font-size: 10px;
+  font-weight: 800;
+}
+.technician-logout:hover { background: rgba(3, 39, 96, .92); }
+.technician-logout:focus-visible {
+  outline: 3px solid rgba(255, 255, 255, .42);
+  outline-offset: 2px;
+}
+.technician-content {
+  min-width: 0;
+  padding: 0 max(0px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(0px, env(safe-area-inset-left));
+}
+
 .page-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 18px; margin-bottom: 24px; }
 .eyebrow { margin-bottom: 6px; color: var(--brand); font-size: 9px; font-weight: 850; text-transform: uppercase; letter-spacing: .16em; }
 .page-head h1 { margin: 0; font-size: clamp(24px, 2.5vw, 34px); letter-spacing: -.035em; }
@@ -227,4 +274,5 @@ a { color: inherit; text-decoration: none; }
   .kpi-grid, .operation-strip, .foundation-list { grid-template-columns: 1fr; }
   .timeline-row { grid-template-columns: 52px 1fr; }
   .timeline-row .badge { grid-column: 2; justify-self: start; }
+  .technician-logout { top: max(10px, env(safe-area-inset-top)); right: max(10px, env(safe-area-inset-right)); }
 }

@@ -39,9 +39,12 @@ engineering index; it does not replace that registry.
   This is a strict day boundary: after the Aruba calendar day changes, an earlier visit is read-only
   to the technician unless a later approved grace-window rule explicitly changes this policy.
 - `FIELD-PREVIEW-001` — The temporary Super Admin Field preview may project today's canonical
-  Scheduling data by Van or staff member only in preview/development deployments. Its interactive
-  controls are browser-local simulation: they create no Work Visit, upload, draft, outbox item,
-  audit event, or canonical mutation and never replace authenticated technician identity.
+  Scheduling data by individual Van or staff member during the explicitly owner-approved production
+  UAT period that began on 2026-09-03. The surface remains restricted to an authenticated Super Admin,
+  is enabled by default for this temporary validation period, and can be revoked immediately by setting
+  the server-side `FIELD_ADMIN_SIMULATOR_ENABLED=false` deployment variable. Its interactive controls
+  are browser-local simulation: they create no Work Visit, upload, draft, outbox item, audit event, or
+  canonical mutation and never replace authenticated technician identity.
 
 ## Change protocol
 

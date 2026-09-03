@@ -113,6 +113,27 @@ export function ErpShell({ children }: Readonly<{ children: React.ReactNode }>) 
     router.replace('/login');
   };
 
+  const technicianFieldShell = principal.role === 'technician'
+    && (pathname === '/field' || Boolean(pathname?.startsWith('/field/')));
+
+  if (technicianFieldShell) {
+    return (
+      <div className="technician-frame">
+        <button
+          className="technician-logout"
+          type="button"
+          onClick={logout}
+          title={`Cerrar sesión · ${principal.displayName}`}
+          aria-label={`Cerrar sesión de ${principal.displayName}`}
+        >
+          <span aria-hidden="true">{initials(principal.displayName)}</span>
+          <strong>Salir</strong>
+        </button>
+        <main className="technician-content">{children}</main>
+      </div>
+    );
+  }
+
   return (
     <div className="erp-frame">
       <aside className={`erp-sidebar ${sidebarOpen ? 'open' : ''}`}>
