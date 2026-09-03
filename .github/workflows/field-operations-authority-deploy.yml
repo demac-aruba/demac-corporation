@@ -4,22 +4,25 @@ on:
   pull_request:
     paths:
       - "functions/bootstrap.js"
+      - "functions/index.js"
       - "functions/fieldOperations*.js"
-      - "functions/servicePricingAuthority.js"
-      - "functions/bookingSchedulingPrimitives.js"
-      - "functions/bookingVanIdentity.js"
+      - "functions/serviceCatalog*.js"
+      - "functions/servicePricingAuthority*.js"
+      - "functions/bookingSchedulingPrimitives*.js"
+      - "functions/bookingVanIdentity*.js"
       - "functions/package.json"
       - ".github/workflows/field-operations-authority-deploy.yml"
   push:
     branches:
       - main
-      - release/field-operations-authority-20260903
     paths:
       - "functions/bootstrap.js"
+      - "functions/index.js"
       - "functions/fieldOperations*.js"
-      - "functions/servicePricingAuthority.js"
-      - "functions/bookingSchedulingPrimitives.js"
-      - "functions/bookingVanIdentity.js"
+      - "functions/serviceCatalog*.js"
+      - "functions/servicePricingAuthority*.js"
+      - "functions/bookingSchedulingPrimitives*.js"
+      - "functions/bookingVanIdentity*.js"
       - "functions/package.json"
       - ".github/workflows/field-operations-authority-deploy.yml"
   workflow_dispatch:
@@ -45,7 +48,7 @@ jobs:
           package-manager-cache: false
 
       - name: Install function dependencies
-        run: npm install --prefix functions --no-audit --no-fund
+        run: npm install --prefix functions --ignore-scripts --no-audit --no-fund
 
       - name: Validate Field Operations Authority boundary
         shell: bash
@@ -61,7 +64,7 @@ jobs:
           NODE
 
   deploy-field-operations-authority:
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release/field-operations-authority-20260903'))
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || github.event_name == 'push')
     needs: validate-field-operations-authority
     runs-on: ubuntu-latest
     steps:
@@ -108,6 +111,7 @@ jobs:
             --memory=256Mi \
             --timeout=60s \
             --run-service-account="$RUN_SERVICE_ACCOUNT" \
+            --set-env-vars='^@^FIREBASE_CONFIG={"projectId":"demac-corporation","storageBucket":"demac-corporation.firebasestorage.app"}' \
             --trigger-http \
             --allow-unauthenticated \
             --quiet
