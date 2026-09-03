@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
+import { CommercialSystemPhotoGuide } from '@/components/public/commercial-system-photo-guide';
 import { PublicSiteShell } from '@/components/public/public-site-shell';
 
 export const metadata: Metadata = {
@@ -192,40 +193,6 @@ const process = [
   { icon: 'calendar' as const, title: 'Coordinate', copy: 'Plan access, materials, work areas, schedule and communication around the property’s operation.' },
   { icon: 'install' as const, title: 'Execute', copy: 'Complete installation, maintenance or corrective work with professional field control.' },
   { icon: 'report' as const, title: 'Test & Document', copy: 'Verify operation and provide findings, attention items or commissioning information after the work.' },
-];
-
-const systems = [
-  {
-    icon: 'cassette' as const,
-    title: 'Cassette & floor-ceiling systems',
-    copy: 'Flexible air distribution for restaurants, offices, retail areas and open commercial spaces.',
-    tag: 'Open areas',
-  },
-  {
-    icon: 'ducted' as const,
-    title: 'Commercial split & ducted systems',
-    copy: 'Condensing units and indoor equipment configured for larger zones, ductwork and higher-capacity applications.',
-    tag: 'Larger zones',
-  },
-  {
-    icon: 'rooftop' as const,
-    title: 'Rooftop & outdoor equipment',
-    copy: 'Installation, replacement and service planning that accounts for access, supports, airflow and exposure.',
-    tag: 'Exterior equipment',
-  },
-  {
-    icon: 'airhandler' as const,
-    title: 'Air handlers & chilled-water terminal units',
-    copy: 'Service and maintenance support for internal air handlers, drainage, coils, controls and operating condition.',
-    tag: 'Airside service',
-  },
-  {
-    icon: 'zones' as const,
-    title: 'VRF multi-zone systems',
-    copy: 'A dedicated solution path for buildings that need advanced zoning, long piping flexibility and centralized control.',
-    tag: 'Complex zoning',
-    link: '/services/vrf-systems',
-  },
 ];
 
 const environments = [
@@ -453,18 +420,7 @@ export default function CommercialCoolingPage() {
             <p>Commercial properties can require different equipment types across the same site. DEMAC evaluates the application, capacity, airflow, access, controls and future service needs before defining the scope.</p>
             <Link href="/contact?request=commercial-assessment">Request a system review →</Link>
           </div>
-          <div className="commercial-system-stack">
-            {systems.map((system, index) => {
-              const card = <>
-                <span className="commercial-system-icon"><CommercialIcon name={system.icon} /></span>
-                <span className="commercial-system-copy"><small>{system.tag}</small><strong>{system.title}</strong><p>{system.copy}</p></span>
-                <b>0{index + 1}</b>
-              </>;
-              return system.link
-                ? <Link className="commercial-system-card is-linked" href={system.link} key={system.title}>{card}</Link>
-                : <article className="commercial-system-card" key={system.title}>{card}</article>;
-            })}
-          </div>
+          <CommercialSystemPhotoGuide />
         </section>
 
         <section className="commercial-aruba-section">
