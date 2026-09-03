@@ -21,12 +21,15 @@ export function loadBrowserValue<T>(key: string, fallback: T): T {
   }
 }
 
-export function saveBrowserValue<T>(key: string, value: T): void {
-  if (typeof window === 'undefined') return;
+export function saveBrowserValue<T>(key: string, value: T): boolean {
+  if (typeof window === 'undefined') return false;
   try {
-    window.localStorage.setItem(key, JSON.stringify(value));
+    const serialized = JSON.stringify(value);
+    window.localStorage.setItem(key, serialized);
+    return window.localStorage.getItem(key) === serialized;
   } catch {
     // Browser preview persistence must never block the business UI.
+    return false;
   }
 }
 

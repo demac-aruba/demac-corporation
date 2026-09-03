@@ -22,6 +22,7 @@ export const navigationGroups: NavigationGroup[] = [
       { label: 'Command Center', href: '/dashboard', short: 'CC', roles: allManagementRoles },
       { label: 'KPIs', href: '/kpis', short: 'KP', roles: allManagementRoles },
       { label: 'Scheduling & Dispatch', href: '/scheduling', short: 'SD', roles: schedulingRoles },
+      { label: 'Projects', href: '/projects', short: 'PR', roles: ['super_admin', 'operations', 'project_manager', 'finance'] },
       { label: 'Daily Dispatch Control', href: '/scheduling/dispatch', short: 'DC', roles: schedulingRoles },
       { label: 'Dispatch Readiness Board', href: '/scheduling/readiness', short: 'RB', roles: schedulingRoles },
       { label: 'Work Orders', href: '/work-orders', short: 'WO', roles: schedulingRoles },
@@ -80,7 +81,6 @@ export const navigationGroups: NavigationGroup[] = [
     label: 'Management',
     items: [
       { label: 'Employees', href: '/employees', short: 'EM', roles: ['super_admin', 'operations'] },
-      { label: 'Projects', href: '/projects', short: 'PR', roles: ['super_admin', 'operations', 'project_manager', 'finance'] },
       { label: 'Reports', href: '/reports', short: 'RE', roles: ['super_admin', 'operations', 'finance', 'project_manager', 'auditor'] },
       { label: 'Executive AI', href: '/executive-ai', short: 'EA', roles: ['super_admin'] },
     ],
