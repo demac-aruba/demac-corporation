@@ -48,11 +48,12 @@ function progressIndex(stage: FieldSimulationStage) {
 export function FieldAdminSimulationSelector({ targets, value, loading, onChange }: Props) {
   const vans = targets.filter((target) => target.kind === 'van');
   const staff = targets.filter((target) => target.kind === 'staff');
+  const selectedValue = targets.some((target) => target.value === value) ? value : '';
   return (
     <label className={simulationStyles.simulationSelector}>
       <span>Vista temporal</span>
-      <select disabled={loading} value={value} onChange={(event) => onChange(event.target.value)}>
-        <option value="all">Todas las Vans · hoy</option>
+      <select disabled={loading || !targets.length} value={selectedValue} onChange={(event) => onChange(event.target.value)}>
+        {!selectedValue ? <option value="" disabled>{loading ? 'Cargando Vans y técnicos…' : 'Selecciona una Van o técnico'}</option> : null}
         {vans.length ? <optgroup label="Vans">
           {vans.map((target) => <option key={target.value} value={target.value}>{target.label} — {target.detail}</option>)}
         </optgroup> : null}

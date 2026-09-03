@@ -28,7 +28,7 @@
 - [x] Given a Super Admin on a preview/development deployment, when selecting a Van or technician, then today's real `workOrders` are filtered using canonical Van and dated crew membership.
 - [x] Given any other role or a production deployment, when `/field/` renders, then the temporary selector is absent.
 - [x] Given the simulator, when the user advances, resets, or closes a job, then no canonical write/upload/outbox call occurs and the UI states that the activity is local simulation.
-- [x] Failure/denial behavior: Firestore read failures show a retryable Spanish error and do not fall back to broad technician reads or fabricated data.
+- [x] Failure/denial behavior: the preview reads only the Agenda collections already authorized to active staff; protected `users` and `appointments` reads are not required, and mandatory Firestore failures remain retryable without fabricated jobs.
 - [x] Audit/observability behavior: No canonical audit event is created for simulation; the UI makes that absence explicit.
 
 ## Plan and risk
@@ -40,6 +40,6 @@
 ## Verification
 
 - Automated gates: Field simulator acceptance, Field security/domain suites, TypeScript, Next build, and relevant Function tests.
-- Manual scenarios: Preview as all Vans, Van 1-4, and individual technicians; verify Agenda counts for today; walk and reset a simulated job; verify selector absence for non-admin/production paths.
+- Manual scenarios: Preview Van 1-4 and individual technicians; verify Agenda counts for today; walk and reset a simulated job; verify selector absence for non-admin/production paths.
 - Evidence/results: simulator acceptance, Field domain/security/offline suites, 352 Function Field tests, TypeScript and production build pass. Independent simulator and data-parity reviews pass after correcting role, state, race, current-day mutation and canonical Van/fallback findings.
 - Not run and why: Production Function/Rules deployment and real technician mutation UAT require a separately approved release boundary. The preview selector is intentionally the safe UAT path while that Function is absent.

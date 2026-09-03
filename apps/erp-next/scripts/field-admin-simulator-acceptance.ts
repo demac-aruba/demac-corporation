@@ -184,6 +184,7 @@ assert.deepEqual(inactiveAliasFallbackJobs.map((job) => job.workOrderId), ['WO-I
 assert.equal(inactiveAliasFallbackJobs[0].assignmentSource, 'profile_van_fallback');
 
 assert(data.targets.some((target) => target.value === 'van:VAN-1'));
+assert(!data.targets.some((target) => target.kind === 'all'), 'the temporary selector presents individual Vans and technicians, not an office-wide all-Vans identity');
 assert.equal(data.targets.filter((target) => target.value === 'van:VAN-1').length, 1, 'inactive canonical duplicates do not hide an active legacy record for the same physical Van');
 assert(data.targets.some((target) => target.value === 'van:VAN-2'));
 assert(data.targets.some((target) => target.value === 'staff:staff-today-driver'));
@@ -192,6 +193,40 @@ assert(data.targets.some((target) => target.value === 'staff:staff-no-jobs'), 'a
 assert(!data.targets.some((target) => target.value === 'staff:staff-roster-only'), 'a staff record without an active technician login is not presented as a portal identity');
 assert(!data.targets.some((target) => target.value === 'staff:staff-inactive-user'), 'an inactive technician login is not selectable');
 assert(!data.targets.some((target) => target.value === 'staff:staff-office'), 'non-field staff are not listed');
+
+const protectedCollectionFallback = projectFieldAdminSimulationData({
+  dateKey: today,
+  staffProfiles: [
+    { id: 'staff-driver', name: 'Driver', employeeType: 'Técnico', role: 'Técnico responsable', active: true },
+    { id: 'staff-helper', name: 'Helper', employeeType: 'Técnico', role: 'Ayudante', active: true },
+    { id: 'staff-office-fallback', name: 'Office', employeeType: 'Administración', role: 'Administración', active: true },
+  ],
+  vans: [1, 2, 3, 4].map((number) => ({
+    id: `VAN-${number}`,
+    name: `Van ${number}`,
+    active: true,
+    ...(number === 1 ? { responsibleStaffId: 'staff-driver', regularHelperId: 'staff-helper' } : {}),
+  })),
+  dailyAssignments: [],
+  workOrders: [{ id: 'WO-FALLBACK', date: today, time: '09:30', status: 'Confirmada', vanId: 'VAN-1' }],
+  clients: [],
+  properties: [],
+  appointments: [],
+  users: [],
+});
+assert.deepEqual(
+  protectedCollectionFallback.targets.filter((target) => target.kind === 'van').map((target) => target.label),
+  ['Van 1', 'Van 2', 'Van 3', 'Van 4'],
+  'all active physical Vans remain individually selectable when the protected users collection is unavailable',
+);
+assert(protectedCollectionFallback.targets.some((target) => target.value === 'staff:staff-driver'), 'active technical staff are inferred from the canonical roster');
+assert(protectedCollectionFallback.targets.some((target) => target.value === 'staff:staff-helper'), 'active helpers in the Van crew are selectable');
+assert(!protectedCollectionFallback.targets.some((target) => target.value === 'staff:staff-office-fallback'), 'office staff are not inferred as technicians');
+assert.deepEqual(
+  resolveFieldAdminSimulationJobs(protectedCollectionFallback, 'van:VAN-1').map((job) => job.workOrderId),
+  ['WO-FALLBACK'],
+  'the real today Work Order remains visible for its selected Van without users or appointments reads',
+);
 
 assert.equal(nextFieldSimulationStage('scheduled'), 'en_route');
 assert.equal(nextFieldSimulationStage('in_progress'), 'ready_for_office_review');

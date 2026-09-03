@@ -34,6 +34,12 @@ Corrected during review: future-range access, mutation known-ID bypass, stale as
 - Failure/recovery cases: read failure is explicit/retryable and does not fabricate data; removing the preview prop/component rolls back without data migration.
 - Unverified areas: real technician mutation UAT and production Function/Rules rollout remain outside this preview-only release boundary.
 
+## Preview runtime correction
+
+- The first preview attempted two supplemental browser reads that Agenda does not use: a full `users` list and `appointments/{id}` documents. Current Firestore rules reject those reads for this owner flow, and the aggregate promise discarded otherwise valid Vans and Work Orders.
+- The simulator now uses the authorized Agenda sources (`workOrders`, `clients`, `properties`, `vans`) plus canonical `staffProfiles` and date-scoped `dailyVanAssignments`. Work-item detail comes from the snapshot already embedded in each Work Order.
+- The selector now presents individual active Vans and inferred field technicians, defaults to the first Van, and no longer exposes an office-wide `Todas las Vans` identity.
+
 ## Decision
 
 - [ ] Pass

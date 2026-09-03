@@ -872,7 +872,7 @@ export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableA
   const [clockNow, setClockNow] = useState(() => new Date());
   const [jobs, setJobs] = useState<FieldScheduleJob[]>([]);
   const [jobsOwnerUserId, setJobsOwnerUserId] = useState<string | null>(null);
-  const [simulationTargetValue, setSimulationTargetValue] = useState('all');
+  const [simulationTargetValue, setSimulationTargetValue] = useState('');
   const [simulationTargets, setSimulationTargets] = useState<FieldAdminSimulationTarget[]>([]);
   const [selectedWorkOrderId, setSelectedWorkOrderId] = useState<string | null>(null);
   const [selectedOwnerUserId, setSelectedOwnerUserId] = useState<string | null>(null);
@@ -1052,10 +1052,10 @@ export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableA
         }
         const targetValue = simulationData.targets.some((target) => target.value === simulationTargetValue)
           ? simulationTargetValue
-          : 'all';
+          : simulationData.targets[0]?.value ?? '';
         if (targetValue !== simulationTargetValue) setSimulationTargetValue(targetValue);
         setSimulationTargets(simulationData.targets);
-        nextJobs = resolveFieldAdminSimulationJobs(simulationData, targetValue);
+        nextJobs = targetValue ? resolveFieldAdminSimulationJobs(simulationData, targetValue) : [];
       } else {
         simulationDataRef.current = null;
         setSimulationTargets([]);
@@ -2194,7 +2194,7 @@ export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableA
         <FieldAdminSimulationDetail
           key={`${simulationJob.workOrderId}|${simulationJob.status}|${simulationTargetValue}`}
           job={simulationJob}
-          targetLabel={selectedSimulationTarget?.label || 'Todas las Vans'}
+          targetLabel={selectedSimulationTarget?.label || 'Selección temporal'}
           onBack={closeJob}
         />
       );
@@ -2286,7 +2286,7 @@ export function TechnicianFieldHome({ enableAdminSimulation = false }: { enableA
       </header>
 
       {adminSimulation ? <section className={simulationStyles.simulationNotice}>
-        <strong>Vista temporal · {selectedSimulationTarget?.label || 'Todas las Vans'}</strong>
+        <strong>Vista temporal · {selectedSimulationTarget?.label || 'Selecciona una Van o técnico'}</strong>
         <span>Datos reales de la Agenda de hoy. Las acciones dentro de un trabajo son una simulación local y no cambian información real.</span>
       </section> : <OfflineStatus capturedAt={scheduleOfflineCapturedAt} summary={outboxSummary} syncing={syncingOutbox} onSync={() => void syncOutbox()} onDiscard={(id) => void discardOutboxConflict(id)} />}
 

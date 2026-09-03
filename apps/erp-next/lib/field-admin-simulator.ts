@@ -347,6 +347,50 @@ function isActiveTechnicianUser(user: FieldAdminSimulationUser) {
   return user.active === true && (role === 'technician' || role === 'tech') && Boolean(text(user.staffId));
 }
 
+function normalizedStaffClassification(value: unknown) {
+  return text(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[\s_-]+/g, ' ');
+}
+
+function inferredTechnicianUsers(source: Omit<FieldAdminSimulationSource, 'users'>): FieldAdminSimulationUser[] {
+  const assignedStaffIds = new Set(unique([
+    ...source.vans.flatMap((van) => [
+      van.responsibleStaffId,
+      van.regularHelperId,
+      van.additionalHelperId,
+      ...(Array.isArray(van.technicianIds) ? van.technicianIds : []),
+    ]),
+    ...source.dailyAssignments.flatMap((assignment) => [
+      assignment.driverStaffId,
+      assignment.helperStaffId,
+      assignment.additionalHelperStaffId,
+    ]),
+    ...source.workOrders.flatMap((order) => Array.isArray(order.technicianIds) ? order.technicianIds : []),
+  ]));
+
+  return source.staffProfiles
+    .filter((profile) => profile.active !== false)
+    .filter((profile) => {
+      const employeeType = normalizedStaffClassification(profile.employeeType);
+      const role = normalizedStaffClassification(profile.role);
+      return assignedStaffIds.has(profile.id)
+        || ['tecnico', 'technician'].includes(employeeType)
+        || ['tecnico responsable', 'tecnico', 'ayudante', 'supervisor', 'technician', 'hvac technician', 'helper'].includes(role);
+    })
+    .map((profile) => ({
+      id: profile.id,
+      active: true,
+      role: 'technician',
+      staffId: profile.id,
+      vanId: text(profile.primaryVanId) || undefined,
+      name: profile.name,
+      email: profile.email,
+    }));
+}
+
 function buildTargets(
   profiles: CanonicalStaffProfile[],
   vans: FieldAdminSimulationVan[],
@@ -393,11 +437,7 @@ function buildTargets(
       };
     });
 
-  return [
-    { value: 'all', kind: 'all', label: 'Todas las Vans', detail: 'Agenda real de hoy' },
-    ...vanTargets,
-    ...staffTargets,
-  ];
+  return [...vanTargets, ...staffTargets];
 }
 
 function baseResponsibilityForCrew(crew: SimulationCrew, activeTechnicianStaffIds: Set<string>): FieldResponsibility {
@@ -481,11 +521,17 @@ export function projectFieldAdminSimulationData(source: FieldAdminSimulationSour
   assertDateKey(source.dateKey);
   const { dateKey, staffProfiles, vans, dailyAssignments } = source;
   const orders = source.workOrders.filter((order) => order.date === dateKey && FIELD_VISIBLE_STATUSES.has(text(order.status)));
+  // The temporary owner simulator must not depend on listing the protected users
+  // collection. The canonical staff roster and Van assignments already contain the
+  // operational identities needed to preview today's routes.
+  const technicianUsers = source.users.length
+    ? source.users
+    : inferredTechnicianUsers({ ...source, workOrders: orders });
   const clients = new Map(source.clients.map((item) => [item.id, item]));
   const properties = new Map(source.properties.map((item) => [item.id, item]));
   const appointments = new Map(source.appointments.map((item) => [item.id, item]));
-  const userById = new Map(source.users.filter((item) => item.active === true).map((item) => [item.id, item]));
-  const userByStaffId = new Map(source.users
+  const userById = new Map(technicianUsers.filter((item) => item.active === true).map((item) => [item.id, item]));
+  const userByStaffId = new Map(technicianUsers
     .filter(isActiveTechnicianUser)
     .map((item) => [text(item.staffId), item]));
   const rows = orders.map((order): SimulationRow => {
@@ -551,14 +597,14 @@ export function projectFieldAdminSimulationData(source: FieldAdminSimulationSour
     dateKey,
     rows,
     staffProfiles: activeProfiles,
-    activeTechnicianStaffIds: source.users.filter(isActiveTechnicianUser).map((user) => text(user.staffId)),
-    targets: buildTargets(activeProfiles, vans, dateKey, dailyAssignments, source.users),
+    activeTechnicianStaffIds: technicianUsers.filter(isActiveTechnicianUser).map((user) => text(user.staffId)),
+    targets: buildTargets(activeProfiles, vans, dateKey, dailyAssignments, technicianUsers),
   };
 }
 
 export async function loadFieldAdminSimulationData(dateKey: string): Promise<FieldAdminSimulationData> {
   assertDateKey(dateKey);
-  const [workOrders, staffProfiles, vans, dailyAssignments, users] = await Promise.all([
+  const [workOrders, staffProfiles, vans, dailyAssignments] = await Promise.all([
     queryFirestoreCollectionDateRange<FieldAdminSimulationWorkOrder>({
       collectionId: 'workOrders',
       fieldPath: 'date',
@@ -575,14 +621,12 @@ export async function loadFieldAdminSimulationData(dateKey: string): Promise<Fie
       endInclusive: dateKey,
       limit: 250,
     }),
-    listFirestoreCollection<FieldAdminSimulationUser>('users', 500),
   ]);
 
   const visibleOrders = workOrders.filter((order) => order.date === dateKey && FIELD_VISIBLE_STATUSES.has(text(order.status)));
-  const [clientMap, propertyMap, appointmentMap] = await Promise.all([
+  const [clientMap, propertyMap] = await Promise.all([
     relatedDocuments<FieldAdminSimulationClient>('clients', visibleOrders.map((order) => order.clientId)),
     relatedDocuments<FieldAdminSimulationProperty>('properties', visibleOrders.map((order) => order.propertyId)),
-    relatedDocuments<FieldAdminSimulationAppointment>('appointments', visibleOrders.map((order) => order.appointmentId)),
   ]);
 
   return projectFieldAdminSimulationData({
@@ -593,7 +637,10 @@ export async function loadFieldAdminSimulationData(dateKey: string): Promise<Fie
     dailyAssignments,
     clients: [...clientMap.values()],
     properties: [...propertyMap.values()],
-    appointments: [...appointmentMap.values()],
-    users,
+    // Work Orders already carry the scheduling work-item snapshots used by Agenda.
+    // Reading appointments directly is not authorized by Firestore rules and is not
+    // required for this temporary, read-only preview.
+    appointments: [],
+    users: [],
   });
 }
