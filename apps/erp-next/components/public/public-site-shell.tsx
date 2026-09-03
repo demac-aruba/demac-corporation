@@ -21,7 +21,8 @@ const footerServices = [
   { label: 'Installation', href: '/services' },
   { label: 'Service & Maintenance', href: '/services' },
   { label: 'Diagnostics & Repairs', href: '/services' },
-  { label: 'Commercial / VRF', href: '/services/vrf-systems' },
+  { label: 'Commercial Cooling', href: '/services/commercial' },
+  { label: 'VRF Systems', href: '/services/vrf-systems' },
   { label: 'Anti-Corrosive Treatment', href: '/services' },
 ] as const;
 

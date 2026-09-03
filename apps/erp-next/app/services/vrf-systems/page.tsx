@@ -75,7 +75,7 @@ function VrfIcon({ name }: { name: IconName }) {
 const segments = [
   { href: '/services', icon: 'home' as const, title: 'Residential', copy: 'Comfort solutions for your home.' },
   { href: '/services', icon: 'store' as const, title: 'Light Commercial', copy: 'Efficient systems for small businesses.' },
-  { href: '/services', icon: 'building' as const, title: 'Commercial', copy: 'Powerful cooling for larger spaces.' },
+  { href: '/services/commercial', icon: 'building' as const, title: 'Commercial', copy: 'Powerful cooling for larger spaces.' },
   { href: '/services/vrf-systems', icon: 'zones' as const, title: 'VRF Systems', copy: 'Advanced zoning and efficiency.', active: true },
 ];
 
