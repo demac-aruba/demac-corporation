@@ -30,7 +30,7 @@ function LineIcon({ name }: { name: IconName }) {
 const solutionGroups: Array<{ href: string; icon: IconName; title: string; subtitle: string }> = [
   { href: '/services', icon: 'home', title: 'Residential', subtitle: 'Comfort solutions for your home.' },
   { href: '/services', icon: 'store', title: 'Light Commercial', subtitle: 'Efficient systems for small businesses.' },
-  { href: '/services', icon: 'building', title: 'Commercial', subtitle: 'Powerful cooling for medium & large spaces.' },
+  { href: '/services/commercial', icon: 'building', title: 'Commercial', subtitle: 'Powerful cooling for medium & large spaces.' },
   { href: '/services/vrf-systems', icon: 'vrf', title: 'VRF Systems', subtitle: 'Advanced technology for maximum efficiency.' },
 ];
 
