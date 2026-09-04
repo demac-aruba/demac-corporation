@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import type { BrowserProject } from '../lib/browser-projects';
 import {
   allocateTemplateHours,
@@ -31,6 +32,14 @@ function projectFixture(): BrowserProject {
     assignedVans: [], phases: [], materials: [], expenses: [], costEntries: [], assignments: [],
   };
 }
+
+const workspaceSource = readFileSync('components/projects/projects-phase-workspace-v2.tsx', 'utf8');
+assert.match(workspaceSource, /loadBookingMasterReferenceData/, 'Create Project must load canonical CRM customer and Property references.');
+assert.match(workspaceSource, /role="combobox"/, 'Customer entry must remain an accessible autocomplete combobox.');
+assert.match(workspaceSource, /matchingCustomers\(references, customerQuery\)/, 'Typing a customer name must render canonical CRM matches.');
+assert.match(workspaceSource, /createOfficeCustomer/, 'An explicit no-match selection must retain canonical customer creation.');
+assert.match(workspaceSource, /Property \/ service location/, 'The selected CRM customer must expose its canonical Service Properties.');
+assert.match(workspaceSource, /if \(!createCustomer\) throw new Error\('Select an existing CRM customer/, 'Free-text customer names must not silently create or link Projects.');
 
 const fixture = projectFixture();
 const exactSeed = { ...fixture, id: 'DEMO-PRJ-VRF-001', projectNumber: 'PRJ-1007', name: 'Seeded sample' };
@@ -117,4 +126,4 @@ assert.equal(companyTemplate.phases.length, templatePhases.length, 'Company temp
 const reordered = reorderProjectPhases(templated, templatePhases.map((phase) => phase.id).reverse());
 assert.deepEqual(projectPhases(reordered).map((phase) => phase.id), templatePhases.map((phase) => phase.id).reverse(), 'Phase reordering must be stable and explicit.');
 
-console.log('Project Phase Planner acceptance passed: exact sample removal, user-project preservation, custom phases, capacity, templates, Scheduling preview, technician actuals, idempotency, completion, deletion protection, and reorder verified.');
+console.log('Project Phase Planner acceptance passed: canonical CRM customer search, explicit customer creation, property selection, exact sample removal, user-project preservation, custom phases, capacity, templates, Scheduling preview, technician actuals, idempotency, completion, deletion protection, and reorder verified.');
