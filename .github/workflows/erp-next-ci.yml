@@ -90,6 +90,14 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Typecheck
         run: npm run typecheck
+      - name: Project phase planner acceptance
+        run: >-
+          node -e "require('fs').rmSync('.project-phase-planner-test',{recursive:true,force:true})"
+          && npx tsc --ignoreConfig scripts/project-phase-planner-acceptance.ts
+          --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0
+          --esModuleInterop --skipLibCheck --types node
+          --outDir .project-phase-planner-test --rootDir . --lib ES2022,DOM
+          && node .project-phase-planner-test/scripts/project-phase-planner-acceptance.js
       - name: Dispatch acceptance simulation
         run: npm run test:dispatch
       - name: Appointment lifecycle acceptance simulation
