@@ -1,5 +1,5 @@
-import { ProjectPhasePlannerPreview } from '@/components/projects/project-phase-planner-preview';
+import { ProjectsPhaseWorkspace } from '@/components/projects/projects-phase-workspace';
 
-export default function ProjectPhasePlannerPreviewPage() {
-  return <ProjectPhasePlannerPreview />;
+export default function ProjectPhasePlannerPage() {
+  return <ProjectsPhaseWorkspace />;
 }
