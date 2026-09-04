@@ -106,6 +106,14 @@ jobs:
           --esModuleInterop --skipLibCheck --types node
           --outDir .projects-browser-autofill-test --rootDir . --lib ES2022,DOM
           && node .projects-browser-autofill-test/scripts/projects-browser-autofill-acceptance.js
+      - name: Projects typography accessibility acceptance
+        run: >-
+          node -e "require('fs').rmSync('.projects-typography-test',{recursive:true,force:true})"
+          && npx tsc --ignoreConfig scripts/projects-typography-acceptance.ts
+          --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0
+          --esModuleInterop --skipLibCheck --types node
+          --outDir .projects-typography-test --rootDir . --lib ES2022,DOM
+          && node .projects-typography-test/scripts/projects-typography-acceptance.js
       - name: Dispatch acceptance simulation
         run: npm run test:dispatch
       - name: Appointment lifecycle acceptance simulation
