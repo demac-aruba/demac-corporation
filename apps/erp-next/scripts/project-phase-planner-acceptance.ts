@@ -18,6 +18,7 @@ import {
   schedulePreviewPhaseAssignment,
   suggestedPhaseTemplates,
 } from '../lib/project-phase-planner';
+import { KNOWN_PROJECT_SAMPLE_IDS, sanitizeProjectsState } from '../lib/project-record-sanitizer';
 
 function projectFixture(): BrowserProject {
   return {
@@ -32,6 +33,18 @@ function projectFixture(): BrowserProject {
 }
 
 const fixture = projectFixture();
+const exactSeed = { ...fixture, id: 'DEMO-PRJ-VRF-001', projectNumber: 'PRJ-1007', name: 'Seeded sample' };
+const userCreatedLegacyId = { ...fixture, id: 'DEMO-PRJ-1788364800000', projectNumber: 'PRJ-1013', name: 'User-created project' };
+const sanitized = sanitizeProjectsState({
+  version: 1,
+  selectedProjectId: exactSeed.id,
+  projects: [exactSeed, userCreatedLegacyId],
+});
+assert.equal(KNOWN_PROJECT_SAMPLE_IDS.has(exactSeed.id), true, 'The exact historical sample ID must be recognized.');
+assert.deepEqual(sanitized.removedIds, [exactSeed.id], 'Only the exact seeded sample record must be removed.');
+assert.deepEqual(sanitized.state.projects.map((project) => project.id), [userCreatedLegacyId.id], 'A user-created timestamp Project must be preserved even when its legacy ID begins with DEMO-PRJ.');
+assert.equal(sanitized.state.selectedProjectId, userCreatedLegacyId.id, 'Selection must move safely to the preserved user Project.');
+
 assert.deepEqual(allocateTemplateHours(10, [
   { name: 'A', weight: 1, objective: '', scopeOfWork: '', completionCriteria: '', technicianInstructions: '', progressMethod: 'hours', checklist: [], priority: 'Normal' },
   { name: 'B', weight: 1, objective: '', scopeOfWork: '', completionCriteria: '', technicianInstructions: '', progressMethod: 'hours', checklist: [], priority: 'Normal' },
@@ -104,4 +117,4 @@ assert.equal(companyTemplate.phases.length, templatePhases.length, 'Company temp
 const reordered = reorderProjectPhases(templated, templatePhases.map((phase) => phase.id).reverse());
 assert.deepEqual(projectPhases(reordered).map((phase) => phase.id), templatePhases.map((phase) => phase.id).reverse(), 'Phase reordering must be stable and explicit.');
 
-console.log('Project Phase Planner acceptance passed: custom phases, capacity, templates, Scheduling preview, technician actuals, idempotency, completion, deletion protection, and reorder verified.');
+console.log('Project Phase Planner acceptance passed: exact sample removal, user-project preservation, custom phases, capacity, templates, Scheduling preview, technician actuals, idempotency, completion, deletion protection, and reorder verified.');
