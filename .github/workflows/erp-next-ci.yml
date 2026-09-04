@@ -98,6 +98,14 @@ jobs:
           --esModuleInterop --skipLibCheck --types node
           --outDir .project-phase-planner-test --rootDir . --lib ES2022,DOM
           && node .project-phase-planner-test/scripts/project-phase-planner-acceptance.js
+      - name: Projects browser autofill acceptance
+        run: >-
+          node -e "require('fs').rmSync('.projects-browser-autofill-test',{recursive:true,force:true})"
+          && npx tsc --ignoreConfig scripts/projects-browser-autofill-acceptance.ts
+          --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0
+          --esModuleInterop --skipLibCheck --types node
+          --outDir .projects-browser-autofill-test --rootDir . --lib ES2022,DOM
+          && node .projects-browser-autofill-test/scripts/projects-browser-autofill-acceptance.js
       - name: Dispatch acceptance simulation
         run: npm run test:dispatch
       - name: Appointment lifecycle acceptance simulation
