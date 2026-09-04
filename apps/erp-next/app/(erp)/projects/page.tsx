@@ -1,5 +1,5 @@
-import { ProjectsWorkspace } from '@/components/projects/projects-workspace';
+import { ProjectsPhaseWorkspace } from '@/components/projects/projects-phase-workspace';
 
 export default function ProjectsPage() {
-  return <ProjectsWorkspace />;
+  return <ProjectsPhaseWorkspace />;
 }
