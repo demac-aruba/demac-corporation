@@ -1,0 +1,53 @@
+.root { display: grid; gap: 1em; color: var(--text); font: inherit; min-width: 0; }
+.header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1em; }
+.header h1 { margin: .35em 0 .2em; font-size: 1.75em; line-height: 1.15; }
+.header p { margin: 0; color: var(--muted); }
+.back { color: var(--brand); font-weight: 650; }
+.badge, .cancelled { display: inline-flex; align-items: center; padding: .35em .7em; border-radius: 2em; font-size: .9em; white-space: nowrap; background: var(--surface-2); color: var(--text); }
+.cancelled { background: var(--danger-soft); color: var(--text); }
+.views { display: flex; flex-wrap: wrap; gap: .4em; border-bottom: 1px solid var(--border); padding-bottom: .65em; }
+.root button, .workspaceLink { font: inherit; border: 1px solid var(--border-strong); border-radius: .6em; padding: .65em .9em; background: var(--surface); color: var(--text); cursor: pointer; min-height: 44px; }
+.root button[aria-pressed='true'] { color: var(--brand); background: var(--brand-soft); border-color: var(--brand); font-weight: 700; }
+.root button:disabled { opacity: .6; cursor: progress; }
+.root button:focus-visible, .root a:focus-visible, .root input:focus-visible, .root summary:focus-visible, .workspaceLink:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+.notice { padding: .9em 1em; background: var(--brand-soft); border-radius: .7em; line-height: 1.55; }
+.toolbar { display: flex; align-items: flex-end; flex-wrap: wrap; gap: .8em; }
+.dates { display: flex; align-items: flex-end; flex-wrap: wrap; gap: .6em; }
+.toolbar label { display: grid; gap: .35em; font-size: .95em; color: var(--muted); }
+.toolbar input { min-width: 0; width: 100%; min-height: 44px; padding: .65em .8em; background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); border-radius: .6em; font: inherit; }
+.search { flex: 1 1 16em; }
+.summary, .footer { color: var(--muted); line-height: 1.5; font-size: .95em; }
+.records { display: grid; gap: .8em; }
+.card { border: 1px solid var(--border); background: var(--surface); border-radius: 1em; padding: 1.15em; min-width: 0; }
+.cardHeading { display: flex; gap: .8em; justify-content: space-between; align-items: flex-start; }
+.card h2 { font-size: 1.12em; line-height: 1.4; margin: 0; overflow-wrap: anywhere; }
+.facts { display: grid; grid-template-columns: 1fr 1.45fr 1fr; gap: 1em; margin: 1em 0; }
+.facts div { min-width: 0; }
+.facts dt { color: var(--muted); margin-bottom: .3em; font-size: .92em; }
+.facts dd { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
+.card summary { color: var(--brand); cursor: pointer; width: fit-content; padding: .5em 0; font-weight: 600; }
+.detailBody { border-top: 1px solid var(--border); margin-top: .4em; padding-top: .6em; }
+.detailBody p { margin: .45em 0; line-height: 1.5; overflow-wrap: anywhere; }
+.detailBody blockquote { margin: .5em 0; padding: .6em 1em; border-left: 3px solid var(--brand); background: var(--surface-2); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.reference { color: var(--muted); font-size: .9em; }
+.kind { color: var(--brand); margin: .5em 0; }
+.warning { background: var(--warning-soft); padding: .65em; border-radius: .5em; line-height: 1.5; }
+.error { padding: 1em; border: 1px solid var(--danger); border-radius: .7em; background: var(--danger-soft); overflow-wrap: anywhere; }
+.error p { margin: .5em 0 0; }
+.empty { text-align: center; padding: 2.5em 1em; border: 1px dashed var(--border-strong); border-radius: 1em; background: var(--surface); }
+.empty h2 { margin: 0; font-size: 1.15em; }
+.empty p { color: var(--muted); line-height: 1.5; }
+.more { justify-self: center; }
+.workspaceNav { display: flex; justify-content: flex-end; margin-bottom: .65em; }
+.workspaceLink { display: inline-flex; align-items: center; color: var(--brand); font-size: 1em; }
+@media (max-width: 720px) {
+  .header { flex-direction: column; }
+  .facts { grid-template-columns: 1fr; gap: .75em; }
+  .toolbar, .dates { width: 100%; }
+  .dates label { flex: 1 1 8.5em; }
+  .search { flex-basis: 100%; }
+  .card { padding: 1em; }
+  .views button { flex: 1 1 12em; }
+  .workspaceNav { justify-content: stretch; }
+  .workspaceLink { width: 100%; justify-content: center; }
+}
