@@ -9,6 +9,9 @@ on:
       - "functions/demacCorePrimitives.js"
       - "functions/demacCommunication*.js"
       - "functions/demacCustomer*.js"
+      - "functions/mayaOperationsReadModel.js"
+      - "functions/officeMayaOperations.test.js"
+      - "functions/test-support/mayaWorkspaceMemoryDb.js"
       - "functions/index.js"
       - "functions/whatsappCopilotRouter.js"
       - "functions/whatsappCopilotRouterExports.test.js"
@@ -24,6 +27,9 @@ on:
       - "functions/demacCorePrimitives.js"
       - "functions/demacCommunication*.js"
       - "functions/demacCustomer*.js"
+      - "functions/mayaOperationsReadModel.js"
+      - "functions/officeMayaOperations.test.js"
+      - "functions/test-support/mayaWorkspaceMemoryDb.js"
       - "functions/index.js"
       - "functions/whatsappCopilotRouter.js"
       - "functions/whatsappCopilotRouterExports.test.js"
@@ -66,6 +72,12 @@ jobs:
 
       - name: Validate Customer Reservation Adapter syntax
         run: node --check demacCustomerReservationTools.js
+
+      - name: Validate Maya operations and waiting preference syntax
+        run: node --check mayaOperationsReadModel.js && node --check demacCustomerBookingInterest.js
+
+      - name: Test Maya operations and waiting preferences
+        run: node --test demacCustomerBookingInterest.test.js officeMayaOperations.test.js
 
       - name: Test Booking Authority
         run: npm run test:booking-authority
