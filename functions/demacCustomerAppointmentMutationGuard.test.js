@@ -83,6 +83,9 @@ class FakeDb {
 function seed({
   autoCancelEnabled = false,
   autoRescheduleEnabled = false,
+  autoReplyEnabled = true,
+  autoReplyAllowlist = ["2975600000"],
+  replyMode = "allowlist",
   ownerUserId = "",
   aiDisposition = "ai_active",
   ownershipVersion = 3,
@@ -95,6 +98,8 @@ function seed({
   workflowAppointmentId = APPOINTMENT_ID,
   observedMessageId = MESSAGE_ID,
   caseState = "APPOINTMENT_MATCHED",
+  confidence = 0.97,
+  dispatchHoldActive = caseState === "AWAITING_CUSTOMER_DECISION",
   attentionReason = "",
   appointmentWorkLines = CANONICAL_WORK_LINES,
   offerWorkLines = CANONICAL_WORK_LINES,
@@ -104,6 +109,9 @@ function seed({
       {
         id: "customer-agent",
         enabled: true,
+        autoReplyEnabled,
+        replyMode,
+        autoReplyAllowlist,
         autoCancelEnabled,
         autoRescheduleEnabled,
       },
@@ -117,6 +125,7 @@ function seed({
       communicationAccountId,
       provider: "wacli",
       channel: "whatsapp",
+      phone: "2975600000",
       remoteConversationId: "2975600000@s.whatsapp.net",
       ownerUserId,
       aiDisposition,
@@ -130,7 +139,23 @@ function seed({
         appointmentId: workflowAppointmentId,
         caseId: "CASE-1",
         caseState,
+        confidence,
+        dispatchHoldActive,
       },
+    }],
+    communicationCases: [{
+      id: "CASE-1",
+      caseType: "appointment_change",
+      communicationAccountId,
+      conversationId: CONVERSATION_ID,
+      lastSourceMessageId: observedMessageId,
+      appointmentId: workflowAppointmentId,
+      customerId: "C-1",
+      intent: workflow,
+      state: caseState,
+      confidence,
+      dispatchHoldActive,
+      attentionReason,
     }],
     customerAgentInboundQueue: [{
       id: "CAQ-1",
@@ -149,6 +174,7 @@ function seed({
       propertyId: "P-1",
       status: "confirmed",
       workLines: appointmentWorkLines,
+      dispatchHold: { active: dispatchHoldActive, caseId: "CASE-1" },
     }],
     bookingOffers: [{
       id: OFFER_ID,
@@ -161,9 +187,11 @@ function seed({
   };
 }
 
-async function decide(options = {}, action = "cancel_appointment") {
+async function decide(options = {}, action = "cancel_appointment", mutate = () => {}) {
   const workflow = action === "reschedule_appointment" ? "reschedule" : "cancellation";
-  const db = new FakeDb(seed({ workflow, ...options }));
+  const records = seed({ workflow, ...options });
+  mutate(records);
+  const db = new FakeDb(records);
   return mayaAppointmentMutationDecisionInTransaction({
     db,
     transaction: db.transaction(),
@@ -347,4 +375,96 @@ test("same Maya turn cannot replay a materially different reschedule mutation", 
   const decision = mutationReplayDecision({ receipt, expected: changed, appointment });
   assert.equal(decision.allowed, false);
   assert.equal(decision.reason, "mutation-idempotency-conflict");
+});
+
+test("explicit cancellation may consume P0's pending dispatch-hold state with exact canonical evidence", async () => {
+  const decision = await decide({ autoCancelEnabled: true, caseState: "AWAITING_CUSTOMER_DECISION" });
+  assert.equal(decision.allowed, true);
+});
+
+test("a pending reschedule is not consent to select a new time", async () => {
+  const decision = await decide({ autoRescheduleEnabled: true, caseState: "AWAITING_CUSTOMER_DECISION" }, "reschedule_appointment");
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.reason, "appointment-workflow-context-incomplete");
+});
+
+test("an ambiguous or weak cancellation cannot inherit the pending-state exception", async () => {
+  for (const options of [
+    { confidence: 0.5 },
+    { dispatchHoldActive: false },
+    { attentionReason: "critical-value-ambiguous" },
+    { caseState: "AWAITING_APPOINTMENT_CLARIFICATION" },
+  ]) {
+    const decision = await decide({ autoCancelEnabled: true, caseState: "AWAITING_CUSTOMER_DECISION", ...options });
+    assert.equal(decision.allowed, false, JSON.stringify(options));
+  }
+});
+
+test("removing the pilot phone before the transaction blocks cancellation and reschedule", async () => {
+  for (const action of ["cancel_appointment", "reschedule_appointment"]) {
+    const decision = await decide({ autoCancelEnabled: true, autoRescheduleEnabled: true, autoReplyAllowlist: [] }, action);
+    assert.equal(decision.allowed, false);
+    assert.equal(decision.reason, "phone-not-allowlisted");
+  }
+});
+
+test("pilot workflow reply exceptions cannot authorize a non-allowlisted appointment mutation", async () => {
+  const decision = await decide({ autoCancelEnabled: true, replyMode: "pilot", autoReplyAllowlist: [] }, "cancel_appointment", (records) => {
+    records.businessSettings[0].cancellationAutoReplyEnabled = true;
+  });
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.reason, "mutation-phone-not-allowlisted");
+});
+
+test("the global reply kill switch also blocks appointment mutations", async () => {
+  const decision = await decide({ autoCancelEnabled: true, autoReplyEnabled: false });
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.reason, "auto-reply-disabled");
+});
+
+test("a conversation projection is insufficient when the canonical Case is missing", async () => {
+  const decision = await decide({ autoCancelEnabled: true }, "cancel_appointment", (records) => {
+    records.communicationCases = [];
+  });
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.reason, "canonical-appointment-case-missing");
+});
+
+test("canonical Case must still match account, customer, conversation, source turn, appointment and state", async () => {
+  for (const patch of [
+    { communicationAccountId: "another-account" },
+    { conversationId: "another-conversation" },
+    { lastSourceMessageId: "MSG-OLDER" },
+    { appointmentId: "APT-OTHER" },
+    { intent: "reschedule" },
+    { state: "RESOLVED_CUSTOMER_WITHDREW_CHANGE" },
+    { caseType: "complaint" },
+    { customerId: "C-OTHER" },
+    { attentionReason: "needs-human" },
+    { confidence: 0.2 },
+  ]) {
+    const decision = await decide({ autoCancelEnabled: true }, "cancel_appointment", (records) => {
+      Object.assign(records.communicationCases[0], patch);
+    });
+    assert.equal(decision.allowed, false, JSON.stringify(patch));
+  }
+});
+
+test("a pending cancellation requires a still-active hold belonging to its exact Case", async () => {
+  for (const hold of [{ active: false, caseId: "CASE-1" }, { active: true, caseId: "CASE-OTHER" }]) {
+    const decision = await decide({ autoCancelEnabled: true, caseState: "AWAITING_CUSTOMER_DECISION" }, "cancel_appointment", (records) => {
+      records.appointments[0].dispatchHold = hold;
+    });
+    assert.equal(decision.allowed, false);
+  }
+});
+
+test("completed or already-started work is not silently cancelled as a future appointment", async () => {
+  for (const status of ["completed", "in_progress", "cancelled"]) {
+    const decision = await decide({ autoCancelEnabled: true }, "cancel_appointment", (records) => {
+      records.appointments[0].status = status;
+    });
+    assert.equal(decision.allowed, false);
+    assert.equal(decision.reason, "appointment-not-open-for-customer-change");
+  }
 });
