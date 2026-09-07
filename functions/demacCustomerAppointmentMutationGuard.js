@@ -3,7 +3,9 @@ const {
   BookingAuthorityError,
   hashKey,
 } = require("./bookingAuthorityCore");
+const { FieldValue } = require("firebase-admin/firestore");
 const { cleanText } = require("./bookingSchedulingPrimitives");
+const { DISPATCH_HOLD_CONFIDENCE } = require("./demacCommunicationCaseService");
 const {
   COMMUNICATION_SETTINGS_COLLECTION,
   COMMUNICATION_SETTINGS_DOCUMENT,
@@ -13,8 +15,11 @@ const { communicationEpochDecision, positiveEpoch, nonNegativeEpoch } = require(
 const {
   MAYA_SETTINGS_COLLECTION,
   MAYA_SETTINGS_DOCUMENT,
+  configuredAllowlist,
   mayaBusinessActionDecision,
+  mayaReplyDecision,
   mayaSenderOwnershipDecision,
+  resolveConversationPhone,
 } = require("./demacCustomerAgentReplyPolicy");
 
 const MAYA_APPOINTMENT_MUTATION_ACTIONS = new Set([
@@ -41,6 +46,17 @@ function denied(reason, details = {}) {
   return { allowed: false, reason: cleanText(reason, 160) || "maya-mutation-not-authorized", ...details };
 }
 
+// P0 uses this pending state after protecting dispatch, including when the
+// customer has already explicitly requested cancellation. It is not itself
+// permission to mutate. The canonical Case and appointment are checked below.
+function heldCancellationContextReady(workflow, caseState, insight = {}) {
+  return workflow === "cancellation"
+    && caseState === "AWAITING_CUSTOMER_DECISION"
+    && insight.dispatchHoldActive === true
+    && Number.isFinite(insight.confidence)
+    && insight.confidence >= DISPATCH_HOLD_CONFIDENCE;
+}
+
 function appointmentWorkflowContextFromConversation(conversation = {}, inboundMessageId = "") {
   const insight = conversation.mayaInsight && typeof conversation.mayaInsight === "object"
     ? conversation.mayaInsight
@@ -57,7 +73,8 @@ function appointmentWorkflowContextFromConversation(conversation = {}, inboundMe
   if (!MAYA_APPOINTMENT_WORKFLOWS.has(workflow)) {
     return { valid: false, reason: "appointment-workflow-not-authorized" };
   }
-  if (!appointmentId || !caseId || !MAYA_APPOINTMENT_WORKFLOW_STATES.has(caseState)) {
+  if (!appointmentId || !caseId || (!MAYA_APPOINTMENT_WORKFLOW_STATES.has(caseState)
+    && !heldCancellationContextReady(workflow, caseState, insight))) {
     return { valid: false, reason: "appointment-workflow-context-incomplete" };
   }
   if (cleanText(conversation.mayaAttentionReason, 180)) {
@@ -70,6 +87,39 @@ function appointmentWorkflowContextFromConversation(conversation = {}, inboundMe
     caseId,
     caseState,
   };
+}
+
+function currentAppointmentCaseDecision({ caseRecord = {}, appointment = {}, workflowContext = {}, identity = {}, communicationAccountId = "" } = {}) {
+  if (
+    cleanText(caseRecord.communicationAccountId, 180).toLowerCase() !== communicationAccountId
+    || cleanText(caseRecord.conversationId, 300) !== identity.conversationId
+    || cleanText(caseRecord.lastSourceMessageId, 300) !== identity.inboundMessageId
+    || cleanText(caseRecord.appointmentId, 180) !== workflowContext.appointmentId
+    || cleanText(caseRecord.intent, 80) !== workflowContext.workflow
+    || cleanText(caseRecord.state, 80) !== workflowContext.caseState
+    || cleanText(caseRecord.caseType, 80) !== "appointment_change"
+  ) return denied("canonical-appointment-case-mismatch");
+  const customerId = cleanText(caseRecord.customerId, 160);
+  if (!customerId || cleanText(appointment.customerId, 160) !== customerId) {
+    return denied("appointment-case-customer-mismatch");
+  }
+  if (cleanText(caseRecord.attentionReason, 180)) return denied("canonical-case-requires-human-attention");
+  if (!Number.isFinite(caseRecord.confidence) || caseRecord.confidence < DISPATCH_HOLD_CONFIDENCE) {
+    return denied("appointment-case-confidence-insufficient");
+  }
+  if (!["confirmed", "scheduled"].includes(cleanText(appointment.status, 40).toLowerCase())) {
+    return denied("appointment-not-open-for-customer-change");
+  }
+  const hold = appointment.dispatchHold || {};
+  if (hold.active === true && cleanText(hold.caseId, 180) !== workflowContext.caseId) {
+    return denied("appointment-held-by-another-case");
+  }
+  if (workflowContext.caseState === "AWAITING_CUSTOMER_DECISION"
+    && (!heldCancellationContextReady(workflowContext.workflow, caseRecord.state, caseRecord)
+      || hold.active !== true)) {
+    return denied("held-cancellation-evidence-incomplete");
+  }
+  return { allowed: true, reason: "canonical-appointment-case-current" };
 }
 
 function normalizedWorkLine(line = {}) {
@@ -114,15 +164,27 @@ async function loadCurrentAppointmentWorkflowContext({ db, context = {} } = {}) 
   if (!conversationSnapshot.exists) {
     return { success: false, error: { code: "appointment_workflow_context_missing", reason: "conversation-missing" } };
   }
-  const workflowContext = appointmentWorkflowContextFromConversation(conversationSnapshot.data() || {}, identity.inboundMessageId);
+  const conversation = conversationSnapshot.data() || {};
+  const workflowContext = appointmentWorkflowContextFromConversation(conversation, identity.inboundMessageId);
   if (!workflowContext.valid) {
     return { success: false, error: { code: "appointment_workflow_context_missing", reason: workflowContext.reason } };
   }
-  const appointmentSnapshot = await db.collection("appointments").doc(workflowContext.appointmentId).get();
-  if (!appointmentSnapshot.exists) {
-    return { success: false, error: { code: "appointment_workflow_context_missing", reason: "appointment-missing" } };
+  const [appointmentSnapshot, caseSnapshot] = await Promise.all([
+    db.collection("appointments").doc(workflowContext.appointmentId).get(),
+    db.collection("communicationCases").doc(workflowContext.caseId).get(),
+  ]);
+  if (!appointmentSnapshot.exists || !caseSnapshot.exists) {
+    return { success: false, error: { code: "appointment_workflow_context_missing", reason: "appointment-or-case-missing" } };
   }
-  const appointment = { id: appointmentSnapshot.id, ...appointmentSnapshot.data() };
+  const appointment = { ...appointmentSnapshot.data(), id: appointmentSnapshot.id };
+  const decision = currentAppointmentCaseDecision({
+    caseRecord: caseSnapshot.data() || {},
+    appointment,
+    workflowContext,
+    identity,
+    communicationAccountId: cleanText(conversation.communicationAccountId, 180).toLowerCase(),
+  });
+  if (!decision.allowed) return { success: false, error: { code: "appointment_workflow_context_missing", reason: decision.reason } };
   return {
     success: true,
     workflow: workflowContext.workflow,
@@ -267,10 +329,8 @@ async function mayaAppointmentMutationDecisionInTransaction({
     return denied("appointment-workflow-context-mismatch");
   }
 
-  const accountDecision = activeAccountDecision({
-    conversation,
-    settings: communicationSettingsSnapshot.exists ? communicationSettingsSnapshot.data() || {} : {},
-  });
+  const communicationSettings = communicationSettingsSnapshot.exists ? communicationSettingsSnapshot.data() || {} : {};
+  const accountDecision = activeAccountDecision({ conversation, settings: communicationSettings });
   if (!accountDecision.allowed) return denied(accountDecision.reason);
 
   const ownershipDecision = mayaSenderOwnershipDecision({ conversation });
@@ -283,26 +343,39 @@ async function mayaAppointmentMutationDecisionInTransaction({
   });
   if (!epochDecision.allowed) return denied(epochDecision.reason);
 
-  const actionDecision = mayaBusinessActionDecision({
-    action: normalizedAction,
-    settings: mayaSettingsSnapshot.exists ? mayaSettingsSnapshot.data() || {} : {},
-    ownershipAllowed: true,
-  });
+  const settings = mayaSettingsSnapshot.exists ? mayaSettingsSnapshot.data() || {} : {};
+  const actionDecision = mayaBusinessActionDecision({ action: normalizedAction, settings, ownershipAllowed: true });
   if (!actionDecision.allowed) return denied(actionDecision.reason);
+
+  // Re-read pilot permission inside the scheduling transaction, not only at
+  // inbound/final-send time. Pilot exceptions must not bypass the selected list.
+  const replyDecision = mayaReplyDecision({ conversation, settings, communicationSettings, authorizedWorkflow: workflowContext.workflow });
+  if (!replyDecision.allowed) return denied(replyDecision.reason);
+  const phone = resolveConversationPhone({ conversation });
+  if (!configuredAllowlist(settings).includes(phone)) return denied("mutation-phone-not-allowlisted");
+
+  const [appointmentSnapshot, caseSnapshot] = await Promise.all([
+    transaction.get(db.collection("appointments").doc(requestedAppointmentId)),
+    transaction.get(db.collection("communicationCases").doc(workflowContext.caseId)),
+  ]);
+  if (!appointmentSnapshot.exists) return denied("requested-appointment-missing");
+  if (!caseSnapshot.exists) return denied("canonical-appointment-case-missing");
+  const appointment = { ...appointmentSnapshot.data(), id: appointmentSnapshot.id };
+  const caseDecision = currentAppointmentCaseDecision({
+    caseRecord: caseSnapshot.data() || {},
+    appointment,
+    workflowContext,
+    identity,
+    communicationAccountId: currentAccount,
+  });
+  if (!caseDecision.allowed) return caseDecision;
 
   if (normalizedAction === "reschedule_appointment") {
     const requestedOfferId = cleanText(context.requestedOfferId, 180);
     if (!requestedOfferId) return denied("requested-reschedule-offer-missing");
-    const [appointmentSnapshot, offerSnapshot] = await Promise.all([
-      transaction.get(db.collection("appointments").doc(requestedAppointmentId)),
-      transaction.get(db.collection("bookingOffers").doc(requestedOfferId)),
-    ]);
-    if (!appointmentSnapshot.exists) return denied("requested-appointment-missing");
+    const offerSnapshot = await transaction.get(db.collection("bookingOffers").doc(requestedOfferId));
     if (!offerSnapshot.exists) return denied("requested-reschedule-offer-missing");
-    const scopeDecision = rescheduleScopeDecision(
-      { id: appointmentSnapshot.id, ...appointmentSnapshot.data() },
-      { id: offerSnapshot.id, ...offerSnapshot.data() },
-    );
+    const scopeDecision = rescheduleScopeDecision(appointment, { id: offerSnapshot.id, ...offerSnapshot.data() });
     if (!scopeDecision.allowed) return scopeDecision;
   }
 
@@ -337,14 +410,8 @@ function createMayaGuardedBookingDb({ db, action, context = {}, mutationReceipt 
   return {
     collection: db.collection.bind(db),
     runTransaction: (callback) => db.runTransaction(async (transaction) => {
-      const decision = await mayaAppointmentMutationDecisionInTransaction({
-        db,
-        transaction,
-        action: normalizedAction,
-        context,
-      });
-      if (!decision.allowed) throw mutationAuthorizationError(normalizedAction, decision);
-
+      // Read a completed execution receipt before mutable workflow state: a
+      // concurrent retry may arrive after the first commit resolved the Case.
       let receiptRef = null;
       if (mutationReceipt?.id && mutationReceipt?.requestFingerprint) {
         receiptRef = db.collection(MAYA_MUTATION_RECEIPT_COLLECTION).doc(mutationReceipt.id);
@@ -365,8 +432,22 @@ function createMayaGuardedBookingDb({ db, action, context = {}, mutationReceipt 
           );
         }
       }
+      const decision = await mayaAppointmentMutationDecisionInTransaction({ db, transaction, action: normalizedAction, context });
+      if (!decision.allowed) throw mutationAuthorizationError(normalizedAction, decision);
 
       const result = await callback(transaction);
+      const proof = mutationReplayDecision({
+        receipt: { ...mutationReceipt, status: "committed" },
+        expected: mutationReceipt || mutationReceiptIdentity(normalizedAction, {
+          appointmentId: decision.appointmentId,
+          offerId: context.requestedOfferId,
+        }, context),
+        appointment: result?.appointment || {},
+      });
+      if (result?.success !== true || (mutationReceipt && !proof.allowed)) {
+        throw mutationAuthorizationError(normalizedAction, { reason: "canonical-lifecycle-proof-missing" });
+      }
+      const nowIso = new Date().toISOString();
       if (receiptRef) {
         transaction.set(receiptRef, {
           ...mutationReceipt,
@@ -374,9 +455,25 @@ function createMayaGuardedBookingDb({ db, action, context = {}, mutationReceipt 
           communicationAccountId: decision.communicationAccountId,
           workflow: decision.workflow,
           caseId: decision.caseId,
-          committedAtIso: new Date().toISOString(),
+          committedAtIso: nowIso,
         });
       }
+      transaction.set(db.collection("communicationCases").doc(decision.caseId), {
+        state: normalizedAction === "cancel_appointment" ? "RESOLVED_CANCELLED" : "RESOLVED_RESCHEDULED",
+        dispatchHoldActive: false,
+        attentionRequired: false,
+        attentionReason: null,
+        resolution: {
+          action: normalizedAction,
+          appointmentId: decision.appointmentId,
+          sourceMessageId: mutationContextIdentity(context).inboundMessageId,
+          mutationReceiptId: mutationReceipt?.id || null,
+        },
+        resolvedAt: FieldValue.serverTimestamp(),
+        resolvedAtIso: nowIso,
+        updatedAt: FieldValue.serverTimestamp(),
+        updatedAtIso: nowIso,
+      }, { merge: true });
       return result;
     }),
   };
@@ -391,6 +488,8 @@ module.exports = {
   MAYA_MUTATION_RECEIPT_COLLECTION,
   appointmentWorkflowContextFromConversation,
   createMayaGuardedBookingDb,
+  currentAppointmentCaseDecision,
+  heldCancellationContextReady,
   loadCurrentAppointmentWorkflowContext,
   loadMutationEpochReceipt,
   mayaAppointmentMutationDecisionInTransaction,
