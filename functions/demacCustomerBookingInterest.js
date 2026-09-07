@@ -6,7 +6,7 @@ const { loadMutationEpochReceipt } = require('./demacCustomerAppointmentMutation
 const { activeAccountDecision } = require('./demacCommunicationIdentity');
 const { configuredAllowlist, mayaReplyDecision, mayaSenderOwnershipDecision, resolveConversationPhone } = require('./demacCustomerAgentReplyPolicy');
 const { cleanText, hashId, arubaDateParts } = require('./bookingSchedulingPrimitives');
-const { dateKey, documentId, failure } = require('./mayaOperationsReadModel');
+const { dateKey, timeKey, documentId, failure } = require('./mayaOperationsReadModel');
 
 const NAME = 'record_booking_interest';
 const DEFINITION = {
@@ -57,7 +57,8 @@ function normalizeInterest(args = {}, today) {
 function createCustomerBookingInterestTools({ db, clock = () => new Date() } = {}) {
   async function record(args, context = {}) {
     const now = clock();
-    const input = normalizeInterest(args, arubaDateParts(now).date);
+    const currentTime = arubaDateParts(now);
+    const input = normalizeInterest(args, currentTime.date);
     const conversationId = documentId(context.conversationId || context.conversationKey);
     const messageId = documentId(context.inboundMessageId || context.messageId);
     return db.runTransaction(async transaction => {
@@ -91,14 +92,17 @@ function createCustomerBookingInterestTools({ db, clock = () => new Date() } = {
       if (party.ambiguous || !party.customer || party.customer.id !== input.customerId) throw failure('identity_mismatch', 'The current sender must resolve unambiguously to this canonical customer.');
       const property = await read('properties', input.propertyId);
       if (!property || property.active === false || property.clientId !== input.customerId) throw failure('identity_mismatch', 'The property must belong to the resolved customer.');
-      const appointment = input.appointmentId ? await read('appointments', input.appointmentId) : null;
+      // Withdrawal preserves the previously recorded booking snapshot. It must
+      // not copy details from an appointment whose ownership may have changed.
+      const appointment = input.action === 'register' && input.appointmentId ? await read('appointments', input.appointmentId) : null;
       if (input.action === 'register' && input.appointmentId && (!appointment || appointment.customerId !== input.customerId
         || appointment.propertyId !== input.propertyId || !['confirmed', 'scheduled'].includes(appointment.status)
-        || !dateKey(appointment.date) || appointment.date < arubaDateParts(now).date)) {
-        throw failure('appointment_changed', 'Earlier-date interest requires the current open appointment for this customer and property.');
+        || !dateKey(appointment.date) || !timeKey(appointment.startTime) || appointment.date < currentTime.date
+        || (appointment.date === currentTime.date && appointment.startTime <= currentTime.time))) {
+        throw failure('appointment_changed', 'Earlier-date interest requires the current future open appointment for this customer and property.');
       }
-      if (input.action === 'register' && appointment && input.dateFrom && input.dateFrom > appointment.date) {
-        throw failure('invalid_request', 'An earlier-date request cannot start after the current booking.');
+      if (input.action === 'register' && appointment && ((input.dateFrom && input.dateFrom > appointment.date) || (input.dateTo && input.dateTo > appointment.date))) {
+        throw failure('invalid_request', 'An earlier-date request cannot extend after the current booking.');
       }
       const caseId = communicationCaseId({ communicationAccountId: conversation.communicationAccountId, conversationId,
         caseType: `booking_interest|${input.propertyId}|${input.kind}|${input.appointmentId}` });
