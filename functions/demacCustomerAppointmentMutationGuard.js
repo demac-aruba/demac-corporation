@@ -4,6 +4,7 @@ const {
   hashKey,
 } = require("./bookingAuthorityCore");
 const { FieldValue } = require("firebase-admin/firestore");
+const { BOOKING_COLLECTIONS } = require("./bookingAuthorityFirestore");
 const { cleanText } = require("./bookingSchedulingPrimitives");
 const { DISPATCH_HOLD_CONFIDENCE } = require("./demacCommunicationCaseService");
 const {
@@ -402,62 +403,113 @@ function mutationAuthorizationError(action, decision = {}) {
   );
 }
 
+function canonicalReferenceIds(values) {
+  if (!Array.isArray(values) || !values.length || values.some((id) => (
+    typeof id !== "string" || !id || id !== cleanText(id, 180) || id.includes("/")
+  ))) return null;
+  return [...new Set(values)];
+}
+
+async function cancellationLinksDecisionInTransaction({ db, transaction, appointmentId }) {
+  const snapshot = await transaction.get(db.collection(BOOKING_COLLECTIONS.appointments).doc(appointmentId));
+  if (!snapshot.exists) return denied("requested-appointment-missing");
+  const appointment = snapshot.data() || {};
+  const workOrderIds = canonicalReferenceIds(appointment.workOrderIds);
+  const lockIds = canonicalReferenceIds(appointment.capacityLockIds);
+  if (!workOrderIds || !lockIds) return denied("cancellation-links-incomplete");
+  const [orders, locks] = await Promise.all([
+    Promise.all(workOrderIds.map((id) => transaction.get(db.collection(BOOKING_COLLECTIONS.workOrders).doc(id)))),
+    Promise.all(lockIds.map((id) => transaction.get(db.collection(BOOKING_COLLECTIONS.capacityLocks).doc(id)))),
+  ]);
+  for (const orderSnapshot of orders) {
+    if (!orderSnapshot.exists) return denied("cancellation-work-order-missing");
+    const order = orderSnapshot.data() || {};
+    if (cleanText(order.appointmentId, 180) !== appointmentId
+      || cleanText(order.clientId, 160) !== cleanText(appointment.customerId, 160)
+      || cleanText(order.propertyId, 160) !== cleanText(appointment.propertyId, 160)) {
+      return denied("cancellation-work-order-link-mismatch");
+    }
+    // Booking Authority initializes future work as Confirmada. Unknown, started,
+    // completed or externally changed work requires office review, not guessing.
+    if (cleanText(order.status, 80).toLowerCase() !== "confirmada") {
+      return denied("cancellation-work-order-not-confirmed");
+    }
+  }
+  for (const lockSnapshot of locks) {
+    const lock = lockSnapshot.exists ? lockSnapshot.data() || {} : {};
+    if (!lockSnapshot.exists || lock.active !== true
+      || cleanText(lock.appointmentId, 180) !== appointmentId
+      || cleanText(lock.date, 20) !== cleanText(appointment.date, 20)) {
+      return denied("cancellation-capacity-link-mismatch");
+    }
+  }
+  return { allowed: true, reason: "cancellation-links-current" };
+}
+
 function createMayaGuardedBookingDb({ db, action, context = {}, mutationReceipt = null } = {}) {
   if (!db || typeof db.collection !== "function" || typeof db.runTransaction !== "function") {
     throw new Error("A Firestore-compatible transactional db is required.");
   }
   const normalizedAction = cleanText(action, 80).toLowerCase();
+  const identity = mutationContextIdentity(context);
+  const expectedReceipt = mutationReceiptIdentity(normalizedAction, mutationReceipt || {}, context);
+  if (!mutationReceipt?.id || !mutationReceipt?.requestFingerprint
+    || mutationReceipt.id !== expectedReceipt.id
+    || mutationReceipt.requestFingerprint !== expectedReceipt.requestFingerprint
+    || mutationReceipt.action !== normalizedAction
+    || mutationReceipt.conversationId !== identity.conversationId
+    || mutationReceipt.inboundMessageId !== identity.inboundMessageId
+    || mutationReceipt.appointmentId !== cleanText(context.requestedAppointmentId, 180)
+    || (normalizedAction === "reschedule_appointment" && mutationReceipt.offerId !== cleanText(context.requestedOfferId, 180))) {
+    throw mutationAuthorizationError(normalizedAction, { reason: "canonical-mutation-receipt-required" });
+  }
   return {
     collection: db.collection.bind(db),
     runTransaction: (callback) => db.runTransaction(async (transaction) => {
       // Read a completed execution receipt before mutable workflow state: a
       // concurrent retry may arrive after the first commit resolved the Case.
-      let receiptRef = null;
-      if (mutationReceipt?.id && mutationReceipt?.requestFingerprint) {
-        receiptRef = db.collection(MAYA_MUTATION_RECEIPT_COLLECTION).doc(mutationReceipt.id);
-        const existingReceipt = await transaction.get(receiptRef);
-        if (existingReceipt.exists) {
-          const stored = existingReceipt.data() || {};
-          if (cleanText(stored.requestFingerprint, 80) !== cleanText(mutationReceipt.requestFingerprint, 80)) {
-            throw new BookingAuthorityError(
-              BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
-              "The same Maya customer turn cannot be reused for a different appointment mutation.",
-              { receiptId: mutationReceipt.id, mayaMutationReplay: false },
-            );
-          }
+      const receiptRef = db.collection(MAYA_MUTATION_RECEIPT_COLLECTION).doc(mutationReceipt.id);
+      const existingReceipt = await transaction.get(receiptRef);
+      if (existingReceipt.exists) {
+        const stored = existingReceipt.data() || {};
+        if (cleanText(stored.requestFingerprint, 80) !== cleanText(mutationReceipt.requestFingerprint, 80)) {
           throw new BookingAuthorityError(
             BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
-            "This Maya appointment mutation was already committed.",
-            { receiptId: mutationReceipt.id, mayaMutationReplay: true },
+            "The same Maya customer turn cannot be reused for a different appointment mutation.",
+            { receiptId: mutationReceipt.id, mayaMutationReplay: false },
           );
         }
+        throw new BookingAuthorityError(
+          BOOKING_ERROR_CODES.IDEMPOTENCY_CONFLICT,
+          "This Maya appointment mutation was already committed.",
+          { receiptId: mutationReceipt.id, mayaMutationReplay: true },
+        );
       }
       const decision = await mayaAppointmentMutationDecisionInTransaction({ db, transaction, action: normalizedAction, context });
       if (!decision.allowed) throw mutationAuthorizationError(normalizedAction, decision);
+      if (normalizedAction === "cancel_appointment") {
+        const links = await cancellationLinksDecisionInTransaction({ db, transaction, appointmentId: decision.appointmentId });
+        if (!links.allowed) throw mutationAuthorizationError(normalizedAction, links);
+      }
 
       const result = await callback(transaction);
       const proof = mutationReplayDecision({
         receipt: { ...mutationReceipt, status: "committed" },
-        expected: mutationReceipt || mutationReceiptIdentity(normalizedAction, {
-          appointmentId: decision.appointmentId,
-          offerId: context.requestedOfferId,
-        }, context),
+        expected: mutationReceipt,
         appointment: result?.appointment || {},
       });
-      if (result?.success !== true || (mutationReceipt && !proof.allowed)) {
+      if (result?.success !== true || !proof.allowed) {
         throw mutationAuthorizationError(normalizedAction, { reason: "canonical-lifecycle-proof-missing" });
       }
       const nowIso = new Date().toISOString();
-      if (receiptRef) {
-        transaction.set(receiptRef, {
-          ...mutationReceipt,
-          status: "committed",
-          communicationAccountId: decision.communicationAccountId,
-          workflow: decision.workflow,
-          caseId: decision.caseId,
-          committedAtIso: nowIso,
-        });
-      }
+      transaction.set(receiptRef, {
+        ...mutationReceipt,
+        status: "committed",
+        communicationAccountId: decision.communicationAccountId,
+        workflow: decision.workflow,
+        caseId: decision.caseId,
+        committedAtIso: nowIso,
+      });
       transaction.set(db.collection("communicationCases").doc(decision.caseId), {
         state: normalizedAction === "cancel_appointment" ? "RESOLVED_CANCELLED" : "RESOLVED_RESCHEDULED",
         dispatchHoldActive: false,
@@ -467,7 +519,7 @@ function createMayaGuardedBookingDb({ db, action, context = {}, mutationReceipt 
           action: normalizedAction,
           appointmentId: decision.appointmentId,
           sourceMessageId: mutationContextIdentity(context).inboundMessageId,
-          mutationReceiptId: mutationReceipt?.id || null,
+          mutationReceiptId: mutationReceipt.id,
         },
         resolvedAt: FieldValue.serverTimestamp(),
         resolvedAtIso: nowIso,
@@ -487,6 +539,7 @@ module.exports = {
   MAYA_APPOINTMENT_WORKFLOW_STATES,
   MAYA_MUTATION_RECEIPT_COLLECTION,
   appointmentWorkflowContextFromConversation,
+  cancellationLinksDecisionInTransaction,
   createMayaGuardedBookingDb,
   currentAppointmentCaseDecision,
   heldCancellationContextReady,
