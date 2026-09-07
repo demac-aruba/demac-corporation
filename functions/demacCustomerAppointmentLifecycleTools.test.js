@@ -274,3 +274,118 @@ test("a callback without exact canonical success proof cannot resolve the Case o
   assertStillBooked(db);
   assert.equal(db.read("communicationCases", detected.caseId).state, "AWAITING_CUSTOMER_DECISION");
 });
+
+test("a single appointment does not override a contradictory or unresolved cancellation date/time", async () => {
+  for (const observationPatch of [
+    { requestedDate: "2026-09-09" },
+    { requestedTime: "10:30" },
+    { requestedDate: "next Tuesday" },
+    { requestedTime: "8:30 PM" },
+  ]) {
+    const { db, tools, detected } = await prepareRecovery({ observationPatch });
+    assert.equal(detected.state, "AWAITING_APPOINTMENT_CLARIFICATION", JSON.stringify(observationPatch));
+    assert.equal(detected.dispatchHoldActive, false);
+    const result = await tools.invoke("cancel_appointment", CANCEL_ARGS, CONTEXT);
+    assert.equal(result.success, false);
+    assertStillBooked(db);
+  }
+});
+
+test("a clear cancellation without date/time still resolves the only upcoming appointment", async () => {
+  const { db, tools } = await prepareRecovery({ observationPatch: { requestedDate: "", requestedTime: "" } });
+  const result = await tools.invoke("cancel_appointment", CANCEL_ARGS, CONTEXT);
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(db.read("appointments", AID).status, "cancelled");
+});
+
+test("a capacity lock reassigned after observation cannot be released by the cancelled appointment", async () => {
+  const { db, tools } = await prepareRecovery();
+  db.patch(BOOKING_COLLECTIONS.capacityLocks, "LOCK-RECOVERY", { appointmentId: "APT-OTHER" });
+  const before = new Map(db.docs);
+  const result = await tools.invoke("cancel_appointment", CANCEL_ARGS, CONTEXT);
+  assert.equal(result.success, false);
+  assert.equal(result.error.details.authorizationReason, "cancellation-capacity-link-mismatch");
+  assert.deepEqual(db.docs, before);
+});
+
+test("changed work-order identity or execution status blocks cancellation without overwriting that work", async () => {
+  for (const patch of [
+    { appointmentId: "APT-OTHER" },
+    { clientId: "C-OTHER" },
+    { propertyId: "P-OTHER" },
+    { status: "En progreso" },
+    { status: "Completada" },
+    { status: "unrecognized-state" },
+  ]) {
+    const { db, tools } = await prepareRecovery();
+    db.patch("workOrders", "WO-RECOVERY", patch);
+    const before = new Map(db.docs);
+    const result = await tools.invoke("cancel_appointment", CANCEL_ARGS, CONTEXT);
+    assert.equal(result.success, false, JSON.stringify(patch));
+    assert.deepEqual(db.docs, before);
+  }
+});
+
+test("incomplete or missing cancellation links require review instead of creating partial records", async () => {
+  for (const damage of [
+    (db) => db.docs.delete("workOrders/WO-RECOVERY"),
+    (db) => db.docs.delete(`${BOOKING_COLLECTIONS.capacityLocks}/LOCK-RECOVERY`),
+    (db) => db.patch("appointments", AID, { workOrderIds: [] }),
+    (db) => db.patch("appointments", AID, { capacityLockIds: ["invalid/path"] }),
+    (db) => db.patch(BOOKING_COLLECTIONS.capacityLocks, "LOCK-RECOVERY", { active: false }),
+  ]) {
+    const { db, tools } = await prepareRecovery();
+    damage(db);
+    const before = new Map(db.docs);
+    const result = await tools.invoke("cancel_appointment", CANCEL_ARGS, CONTEXT);
+    assert.equal(result.success, false);
+    assert.deepEqual(db.docs, before);
+  }
+});
+
+test("a multi-work-order cancellation releases all and only its verified capacity links", async () => {
+  const { db, tools } = await prepareRecovery({ seedPatch: (seed) => {
+    seed.appointments[0].workOrderIds.push("WO-SUPPORT");
+    seed.appointments[0].capacityLockIds.push("LOCK-SUPPORT");
+    seed.workOrders.push({ ...seed.workOrders[0], id: "WO-SUPPORT", vanId: "VAN-2" });
+    seed[BOOKING_COLLECTIONS.capacityLocks].push({ ...seed[BOOKING_COLLECTIONS.capacityLocks][0], id: "LOCK-SUPPORT", vanId: "VAN-2" });
+    seed[BOOKING_COLLECTIONS.capacityLocks].push({ id: "LOCK-UNRELATED", appointmentId: "APT-UNRELATED", active: true, date: DAY, vanId: "VAN-3", slot: "08:30" });
+  } });
+  const result = await tools.invoke("cancel_appointment", CANCEL_ARGS, CONTEXT);
+  assert.equal(result.success, true, JSON.stringify(result));
+  assert.equal(db.read("workOrders", "WO-SUPPORT").status, "Cancelada");
+  assert.equal(db.read(BOOKING_COLLECTIONS.capacityLocks, "LOCK-SUPPORT").active, false);
+  assert.equal(db.read(BOOKING_COLLECTIONS.capacityLocks, "LOCK-RECOVERY").active, false);
+  assert.equal(db.read(BOOKING_COLLECTIONS.capacityLocks, "LOCK-UNRELATED").active, true);
+});
+
+test("missing or tampered execution receipts cannot bypass canonical completion proof", async () => {
+  const { db } = await prepareRecovery();
+  const context = { ...CONTEXT, requestedAppointmentId: AID };
+  const valid = mutationReceiptIdentity("cancel_appointment", CANCEL_ARGS, context);
+  for (const mutationReceipt of [
+    null,
+    { ...valid, requestFingerprint: "tampered" },
+    { ...valid, action: "reschedule_appointment" },
+    { ...valid, conversationId: "OTHER" },
+    { ...valid, appointmentId: "APT-OTHER" },
+  ]) {
+    assert.throws(() => createMayaGuardedBookingDb({ db, action: "cancel_appointment", context, mutationReceipt }),
+      (error) => error instanceof BookingAuthorityError && error.details.authorizationReason === "canonical-mutation-receipt-required");
+  }
+  assertStillBooked(db);
+});
+
+test("a retry reaching the transaction after Case resolution takes the execution-replay path without running the callback", async () => {
+  const { db, tools } = await prepareRecovery();
+  assert.equal((await tools.invoke("cancel_appointment", CANCEL_ARGS, CONTEXT)).success, true);
+  const context = { ...CONTEXT, requestedAppointmentId: AID };
+  const mutationReceipt = mutationReceiptIdentity("cancel_appointment", CANCEL_ARGS, context);
+  const guarded = createMayaGuardedBookingDb({ db, action: "cancel_appointment", context, mutationReceipt });
+  let called = false;
+  const before = new Map(db.docs);
+  await assert.rejects(guarded.runTransaction(async () => { called = true; return { success: false }; }),
+    (error) => error instanceof BookingAuthorityError && error.details.mayaMutationReplay === true);
+  assert.equal(called, false);
+  assert.deepEqual(db.docs, before);
+});
