@@ -28,8 +28,9 @@ const {
   CUSTOMER_POLICY_TOOL_NAMES,
   createCustomerPolicyTools,
 } = require("./demacCustomerPolicyTools");
+const { NAME: BOOKING_INTEREST_TOOL_NAME, DEFINITION: BOOKING_INTEREST_DEFINITION, createCustomerBookingInterestTools } = require("./demacCustomerBookingInterest");
 
-const CUSTOMER_TOOL_REGISTRY_VERSION = 7;
+const CUSTOMER_TOOL_REGISTRY_VERSION = 8;
 const TOOL_ORDER = Object.freeze([
   CUSTOMER_AGENT_TOOL_NAMES.RESOLVE_CUSTOMER,
   CUSTOMER_AGENT_TOOL_NAMES.RESOLVE_PROPERTY,
@@ -48,6 +49,7 @@ const TOOL_ORDER = Object.freeze([
   CUSTOMER_APPOINTMENT_LIFECYCLE_TOOL_NAMES.GET_APPOINTMENT_CHANGE_CONTEXT,
   CUSTOMER_APPOINTMENT_LIFECYCLE_TOOL_NAMES.CANCEL_APPOINTMENT,
   CUSTOMER_APPOINTMENT_LIFECYCLE_TOOL_NAMES.RESCHEDULE_APPOINTMENT,
+  BOOKING_INTEREST_TOOL_NAME,
 ]);
 
 function createDemacCustomerToolRegistry({
@@ -58,6 +60,7 @@ function createDemacCustomerToolRegistry({
   salesTools = null,
   reservationTools = null,
   policyTools = null,
+  bookingInterestTools = null,
 } = {}) {
   const base = customerTools || createCustomerAgentTools({ db });
   const appointmentLifecycle = appointmentLifecycleTools || createCustomerAppointmentLifecycleTools({ db });
@@ -65,6 +68,7 @@ function createDemacCustomerToolRegistry({
   const sales = salesTools || createCustomerSalesTools({ db });
   const reservations = reservationTools || createCustomerReservationTools({ db });
   const policies = policyTools || createCustomerPolicyTools({ db });
+  const interests = bookingInterestTools || createCustomerBookingInterestTools({ db });
   const definitionsByName = new Map(
     [
       ...CUSTOMER_AGENT_TOOL_DEFINITIONS,
@@ -73,6 +77,7 @@ function createDemacCustomerToolRegistry({
       ...CUSTOMER_SALES_TOOL_DEFINITIONS,
       ...CUSTOMER_RESERVATION_TOOL_DEFINITIONS,
       ...CUSTOMER_POLICY_TOOL_DEFINITIONS,
+      BOOKING_INTEREST_DEFINITION,
     ].map((definition) => [definition.name, definition]),
   );
   const definitions = TOOL_ORDER.map((name) => definitionsByName.get(name)).filter(Boolean);
@@ -90,6 +95,7 @@ function createDemacCustomerToolRegistry({
     if (salesNames.has(name)) return sales.invoke(name, args, context);
     if (reservationNames.has(name)) return reservations.invoke(name, args, context);
     if (policyNames.has(name)) return policies.invoke(name, args, context);
+    if (name === BOOKING_INTEREST_TOOL_NAME) return interests.invoke(name, args, context);
     return {
       success: false,
       error: {
@@ -110,6 +116,7 @@ function createDemacCustomerToolRegistry({
     salesTools: sales,
     reservationTools: reservations,
     policyTools: policies,
+    bookingInterestTools: interests,
   };
 }
 
