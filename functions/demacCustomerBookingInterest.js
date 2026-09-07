@@ -54,6 +54,12 @@ function normalizeInterest(args = {}, today) {
   if (args.action === 'register' && dateTo && dateTo < today) throw failure('invalid_request', 'A past deadline cannot become an active waiting request.');
   return { action: args.action, kind: args.kind, customerId, propertyId, appointmentId, sourceQuote, dateFrom, dateTo };
 }
+function bookingInterestCaseId(input, communicationAccountId, conversationId) {
+  // communicationCaseId bounds caseType to 80 characters. Hash the complete
+  // material identity first so long IDs cannot truncate away the appointment.
+  const material = JSON.stringify([input.customerId, input.propertyId, input.kind, input.appointmentId]);
+  return communicationCaseId({ communicationAccountId, conversationId, caseType: `booking_interest:${hashId(material, 40)}` });
+}
 function createCustomerBookingInterestTools({ db, clock = () => new Date() } = {}) {
   async function record(args, context = {}) {
     const now = clock();
@@ -104,13 +110,13 @@ function createCustomerBookingInterestTools({ db, clock = () => new Date() } = {
       if (input.action === 'register' && appointment && ((input.dateFrom && input.dateFrom > appointment.date) || (input.dateTo && input.dateTo > appointment.date))) {
         throw failure('invalid_request', 'An earlier-date request cannot extend after the current booking.');
       }
-      const caseId = communicationCaseId({ communicationAccountId: conversation.communicationAccountId, conversationId,
-        caseType: `booking_interest|${input.propertyId}|${input.kind}|${input.appointmentId}` });
+      const caseId = bookingInterestCaseId(input, conversation.communicationAccountId, conversationId);
       const ref = db.collection('communicationCases').doc(caseId);
       const previous = await read('communicationCases', caseId);
       const fingerprint = hashId(JSON.stringify(input), 40);
       if (previous && (previous.caseType !== 'booking_interest' || previous.customerId !== input.customerId
         || previous.propertyId !== input.propertyId || previous.conversationId !== conversationId
+        || previous.appointmentId !== input.appointmentId || previous.bookingInterest?.kind !== input.kind
         || previous.communicationAccountId !== conversation.communicationAccountId)) throw failure('identity_mismatch', 'Existing waiting preference identity is inconsistent.');
       if (previous?.lastSourceMessageId === messageId) {
         if (previous.interestFingerprint !== fingerprint) throw failure('idempotency_conflict', 'The same customer turn cannot record two different waiting preferences.');
@@ -144,4 +150,4 @@ function createCustomerBookingInterestTools({ db, clock = () => new Date() } = {
   }
   return { definitions: [DEFINITION], invoke, record };
 }
-module.exports = { NAME, DEFINITION, createCustomerBookingInterestTools, normalizeInterest, transactionalReader };
+module.exports = { NAME, DEFINITION, bookingInterestCaseId, createCustomerBookingInterestTools, normalizeInterest, transactionalReader };
