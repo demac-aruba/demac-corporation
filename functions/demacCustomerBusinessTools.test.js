@@ -243,13 +243,14 @@ test("ambiguous existing customer is never merged", async () => {
   assert.equal(result.error.code, "ambiguous_customer");
 });
 
-test("single registry exposes all seventeen tools in intended order and dispatches by capability", async () => {
+test("single registry exposes all eighteen tools in intended order and dispatches by capability", async () => {
   const customer = { invoke: async (name) => ({ success: true, source: "customer", name }) };
   const appointmentLifecycle = { invoke: async (name) => ({ success: true, source: "appointment-lifecycle", name }) };
   const business = { invoke: async (name) => ({ success: true, source: "business", name }) };
   const sales = { invoke: async (name) => ({ success: true, source: "sales", name }) };
   const reservations = { invoke: async (name) => ({ success: true, source: "reservation", name }) };
   const policies = { invoke: async (name) => ({ success: true, source: "policy", name }) };
+  const interests = { invoke: async (name) => ({ success: true, source: "booking-interest", name }) };
   const registry = createDemacCustomerToolRegistry({
     db: new FakeDb(),
     customerTools: customer,
@@ -258,14 +259,16 @@ test("single registry exposes all seventeen tools in intended order and dispatch
     salesTools: sales,
     reservationTools: reservations,
     policyTools: policies,
+    bookingInterestTools: interests,
   });
   assert.deepEqual(TOOL_ORDER, [
     "resolve_customer", "resolve_property", "create_or_update_lead", "get_service_catalog",
     "get_service_price", "get_product_catalog", "get_product_stock", "create_product_reservation",
     "get_product_reservation", "release_product_reservation", "get_company_policy",
     "check_availability", "create_appointment", "get_appointment", "get_appointment_change_context", "cancel_appointment", "reschedule_appointment",
+    "record_booking_interest",
   ]);
-  assert.equal(registry.definitions.length, 17);
+  assert.equal(registry.definitions.length, 18);
   assert.equal((await registry.invoke("resolve_customer")).source, "customer");
   assert.equal((await registry.invoke("get_service_price")).source, "business");
   assert.equal((await registry.invoke("get_product_catalog")).source, "sales");
@@ -276,4 +279,5 @@ test("single registry exposes all seventeen tools in intended order and dispatch
   assert.equal((await registry.invoke("get_appointment_change_context")).source, "appointment-lifecycle");
   assert.equal((await registry.invoke("cancel_appointment")).source, "appointment-lifecycle");
   assert.equal((await registry.invoke("reschedule_appointment")).source, "appointment-lifecycle");
+  assert.equal((await registry.invoke("record_booking_interest")).source, "booking-interest");
 });

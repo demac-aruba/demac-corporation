@@ -11,12 +11,14 @@ const {
   VAN_SCHEDULE_ACTIONS,
   createVanScheduleCommunicationAuthority,
 } = require("./vanScheduleCommunicationAuthority");
+const { createMayaOperationsReadModel } = require("./mayaOperationsReadModel");
 
 const COMMUNICATION_ACTIONS = new Set([
   "get_appointment_communication",
   "update_appointment_communication",
   "send_appointment_communication",
 ]);
+const MAYA_READ_ACTIONS = new Set(["list_maya_cancellations", "list_maya_waitlist"]);
 
 function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
   if (!db || typeof db.collection !== "function") throw new Error("A Firestore-compatible db is required.");
@@ -24,6 +26,7 @@ function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
   const baseApi = createOfficeBookingApi({ db, verifyIdToken });
   const communication = createAppointmentCommunicationAuthority({ db, apiVersion: OFFICE_BOOKING_API_VERSION });
   const vanSchedules = createVanScheduleCommunicationAuthority({ db, apiVersion: OFFICE_BOOKING_API_VERSION });
+  const mayaOperations = createMayaOperationsReadModel({ db });
 
   async function handle(request) {
     if (request.method === "OPTIONS") return { status: 204, body: null };
@@ -31,9 +34,15 @@ function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
     const action = cleanText(request.body?.action, 120);
     const data = request.body?.data || {};
     const legacyGlobalReminderUpdate = action === "update_appointment_communication" && !cleanText(data.recipientId, 180);
-    if ((!COMMUNICATION_ACTIONS.has(action) && !VAN_SCHEDULE_ACTIONS.has(action)) || legacyGlobalReminderUpdate) return baseApi.handle(request);
+    if ((!COMMUNICATION_ACTIONS.has(action) && !VAN_SCHEDULE_ACTIONS.has(action) && !MAYA_READ_ACTIONS.has(action)) || legacyGlobalReminderUpdate) return baseApi.handle(request);
     try {
       const identity = await baseApi.authenticate(request);
+      if (MAYA_READ_ACTIONS.has(action)) {
+        const result = action === "list_maya_cancellations"
+          ? await mayaOperations.listCancellations(data)
+          : await mayaOperations.listWaitlist(data);
+        return { status: 200, body: result };
+      }
       const result = VAN_SCHEDULE_ACTIONS.has(action)
         ? await vanSchedules.execute({ action, data, identity })
         : await communication.execute({ action, data, identity });
@@ -47,6 +56,7 @@ function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
     baseApi,
     communication,
     vanSchedules,
+    mayaOperations,
     handle,
     version: OFFICE_BOOKING_API_VERSION,
   };
@@ -79,4 +89,5 @@ exports.officeBookingAuthority = onRequest(
 );
 
 module.exports.COMMUNICATION_ACTIONS = COMMUNICATION_ACTIONS;
+module.exports.MAYA_READ_ACTIONS = MAYA_READ_ACTIONS;
 module.exports.createOfficeBookingAuthorityFacade = createOfficeBookingAuthorityFacade;

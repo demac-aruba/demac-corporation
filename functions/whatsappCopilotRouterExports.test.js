@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 
 const router = require("./whatsappCopilotRouter");
 const bootstrap = require("./bootstrap");
+const { TOOL_ORDER } = require("./demacCustomerToolRegistry");
 
 test("exports one public WhatsApp customer endpoint backed only by the unified Customer Runtime", () => {
   assert.equal(typeof router.whatsappCopilotDraft, "function");
@@ -10,7 +11,8 @@ test("exports one public WhatsApp customer endpoint backed only by the unified C
   assert.equal(router.RUNTIME.source, "demac-customer-agent-runtime-v1+booking-authority");
   assert.equal(router.RUNTIME.architecture, "single-agent-tool-loop+erp-tools+booking-authority");
   assert.equal(router.RUNTIME.bookingAuthority, true);
-  assert.equal(router.RUNTIME.toolCount, 17);
+  assert.equal(router.RUNTIME.toolCount, 18);
+  assert.equal(TOOL_ORDER.filter(name => name === "record_booking_interest").length, 1);
   assert.equal(router.RUNTIME.functionName, "whatsappCopilotDraft");
   assert.strictEqual(bootstrap.whatsappCopilotDraft, router.whatsappCopilotDraft);
   assert.doesNotMatch(router.RUNTIME.source, /confirmation-guard|booking-core|agent-v31/i);
