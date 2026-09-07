@@ -15,7 +15,7 @@ function database() {
     businessSettings: [{ id: 'whatsapp', communicationAccountId: ACCOUNT }, { id: 'customer-agent', enabled: true, autoReplyEnabled: true, replyMode: 'allowlist', autoReplyAllowlist: [PHONE], bookingInterestEnabled: true }],
     communicationConversations: [{ id: CONV, ...comms, aiDisposition: 'ai_active', ownershipVersion: 2, customerInputVersion: 4 }],
     whatsappMessages: [{ id: 'MSG-1', ...comms, conversationId: CONV, direction: 'inbound', text: input.sourceQuote, customerInputVersion: 4 }],
-    customerAgentInboundQueue: [{ id: 'Q-1', communicationAccountId: ACCOUNT, conversationId: CONV, messageId: 'MSG-1', expectedOwnershipVersion: 2, expectedCustomerInputVersionVersion: 4, expectedCustomerInputVersion: 4 }],
+    customerAgentInboundQueue: [{ id: 'Q-1', communicationAccountId: ACCOUNT, conversationId: CONV, messageId: 'MSG-1', expectedOwnershipVersion: 2, expectedCustomerInputVersion: 4 }],
     clients: [{ id: 'C-1', name: 'Controlled test', phone: PHONE, whatsapp: PHONE, active: true }],
     properties: [{ id: 'P-1', clientId: 'C-1', active: true }],
     appointments: [{ id: 'APT-1', customerId: 'C-1', propertyId: 'P-1', status: 'confirmed', date: '2026-09-10', startTime: '09:30' }],
