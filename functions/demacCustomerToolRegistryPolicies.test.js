@@ -14,7 +14,7 @@ function capability(source, definitions) {
   };
 }
 
-test("single Customer Agent registry exposes seventeen governed capabilities including exact appointment-change context", async () => {
+test("single Customer Agent registry exposes eighteen governed capabilities including waiting preferences", async () => {
   const customer = capability("customer", [
     { name: "resolve_customer" },
     { name: "resolve_property" },
@@ -42,6 +42,7 @@ test("single Customer Agent registry exposes seventeen governed capabilities inc
     { name: "release_product_reservation" },
   ]);
   const policies = capability("policy", [{ name: "get_company_policy" }]);
+  const interests = capability("booking-interest", [{ name: "record_booking_interest" }]);
   const registry = createDemacCustomerToolRegistry({
     db: fakeDb,
     customerTools: customer,
@@ -50,16 +51,18 @@ test("single Customer Agent registry exposes seventeen governed capabilities inc
     salesTools: sales,
     reservationTools: reservations,
     policyTools: policies,
+    bookingInterestTools: interests,
   });
 
-  assert.equal(TOOL_ORDER.length, 17);
-  assert.equal(registry.definitions.length, 17);
+  assert.equal(TOOL_ORDER.length, 18);
+  assert.equal(registry.definitions.length, 18);
   assert.equal(TOOL_ORDER[6], "get_product_stock");
   assert.equal(TOOL_ORDER[7], "create_product_reservation");
   assert.equal(TOOL_ORDER[10], "get_company_policy");
   assert.equal(TOOL_ORDER[14], "get_appointment_change_context");
   assert.equal(TOOL_ORDER[15], "cancel_appointment");
   assert.equal(TOOL_ORDER[16], "reschedule_appointment");
+  assert.equal(TOOL_ORDER[17], "record_booking_interest");
   assert.equal((await registry.invoke("get_company_policy", { topic: "warranty" })).source, "policy");
   assert.equal((await registry.invoke("get_product_catalog", { query: "Adina" })).source, "sales");
   assert.equal((await registry.invoke("get_product_stock", { productId: "p12" })).source, "sales");
@@ -69,4 +72,5 @@ test("single Customer Agent registry exposes seventeen governed capabilities inc
   assert.equal((await registry.invoke("get_appointment_change_context", {})).source, "appointment-lifecycle");
   assert.equal((await registry.invoke("cancel_appointment", { appointmentId: "APT-1" })).source, "appointment-lifecycle");
   assert.equal((await registry.invoke("reschedule_appointment", { appointmentId: "APT-1" })).source, "appointment-lifecycle");
+  assert.equal((await registry.invoke("record_booking_interest", {})).source, "booking-interest");
 });
