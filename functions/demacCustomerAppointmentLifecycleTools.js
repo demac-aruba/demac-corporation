@@ -13,7 +13,8 @@ const {
   mutationReplayDecision,
 } = require("./demacCustomerAppointmentMutationGuard");
 
-const CUSTOMER_APPOINTMENT_LIFECYCLE_TOOLS_VERSION = 2;
+const CUSTOMER_APPOINTMENT_LIFECYCLE_TOOLS_VERSION = 3;
+const CUSTOMER_REQUESTED_CANCELLATION_REASON = "customer_requested_cancellation";
 
 const CUSTOMER_APPOINTMENT_LIFECYCLE_TOOL_NAMES = Object.freeze({
   GET_APPOINTMENT_CHANGE_CONTEXT: "get_appointment_change_context",
@@ -37,7 +38,7 @@ const CUSTOMER_APPOINTMENT_LIFECYCLE_TOOL_DEFINITIONS = Object.freeze([
   {
     type: "function",
     name: CUSTOMER_APPOINTMENT_LIFECYCLE_TOOL_NAMES.CANCEL_APPOINTMENT,
-    description: "Cancel the exact appointment authorized by the current Communication Case through canonical Booking Authority. The supplied appointmentId must match that observed case. Never claim cancellation unless this tool returns success=true and the canonical appointment is cancelled.",
+    description: "Cancel the exact appointment authorized by the current Communication Case through canonical Booking Authority. A clear current cancellation request does not need a repeated confirmation or a customer-supplied reason. Pass an empty reason when none was provided; never invent a reason. The supplied appointmentId must match the observed case. Never claim cancellation unless this tool returns success=true and the canonical appointment is cancelled. Ambiguous requests still require clarification.",
     strict: true,
     parameters: {
       type: "object",
@@ -212,7 +213,8 @@ function createCustomerAppointmentLifecycleTools({ db, schedulingProvider = null
       const lifecycle = lifecycleFor(CUSTOMER_APPOINTMENT_LIFECYCLE_TOOL_NAMES.CANCEL_APPOINTMENT, executionContext, receipt);
       return lifecycle.cancelAppointment({
         appointmentId: args.appointmentId,
-        reason: args.reason,
+        // An internal audit category is not a fabricated customer explanation.
+        reason: cleanText(args.reason, 500) || CUSTOMER_REQUESTED_CANCELLATION_REASON,
         note: args.note,
         actor: context.actor || { id: "demac-customer-agent", name: "Maya", source: "demac-customer-agent" },
       });
@@ -274,6 +276,7 @@ module.exports = {
   CUSTOMER_APPOINTMENT_LIFECYCLE_TOOLS_VERSION,
   CUSTOMER_APPOINTMENT_LIFECYCLE_TOOL_DEFINITIONS,
   CUSTOMER_APPOINTMENT_LIFECYCLE_TOOL_NAMES,
+  CUSTOMER_REQUESTED_CANCELLATION_REASON,
   compactAppointmentForChange,
   createCustomerAppointmentLifecycleTools,
   lifecycleToolError,
