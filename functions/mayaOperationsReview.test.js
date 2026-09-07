@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { MemoryDb } = require('./test-support/mayaWorkspaceMemoryDb');
-const { NAME, createCustomerBookingInterestTools } = require('./demacCustomerBookingInterest');
+const { NAME, bookingInterestCaseId, createCustomerBookingInterestTools } = require('./demacCustomerBookingInterest');
 const { cancellationRow, waitlistRow, timeKey } = require('./mayaOperationsReadModel');
 const NOW = new Date('2026-09-06T18:00:00Z'); // 14:00 Aruba
 const CONV = `COMM-${'B'.repeat(40)}`;
@@ -15,7 +15,7 @@ function database() {
     businessSettings: [{ id: 'whatsapp', communicationAccountId: ACCOUNT }, { id: 'customer-agent', enabled: true, autoReplyEnabled: true, replyMode: 'allowlist', autoReplyAllowlist: [PHONE], bookingInterestEnabled: true }],
     communicationConversations: [{ id: CONV, ...comms, aiDisposition: 'ai_active', ownershipVersion: 2, customerInputVersion: 4 }],
     whatsappMessages: [{ id: 'MSG-1', ...comms, conversationId: CONV, direction: 'inbound', text: input.sourceQuote, customerInputVersion: 4 }],
-    customerAgentInboundQueue: [{ id: 'Q-1', communicationAccountId: ACCOUNT, conversationId: CONV, messageId: 'MSG-1', expectedOwnershipVersion: 2, expectedCustomerInputVersion: 4 }],
+    customerAgentInboundQueue: [{ id: 'Q-1', communicationAccountId: ACCOUNT, conversationId: CONV, messageId: 'MSG-1', expectedOwnershipVersion: 2, expectedCustomerInputVersionVersion: 4, expectedCustomerInputVersion: 4 }],
     clients: [{ id: 'C-1', name: 'Controlled test', phone: PHONE, whatsapp: PHONE, active: true }],
     properties: [{ id: 'P-1', clientId: 'C-1', active: true }],
     appointments: [{ id: 'APT-1', customerId: 'C-1', propertyId: 'P-1', status: 'confirmed', date: '2026-09-10', startTime: '09:30' }],
@@ -72,4 +72,36 @@ test('withdrawal keeps prior booking evidence and never reads a now-foreign appo
   assert.equal(stored.bookingInterest.originalDate, '2026-09-10');
   assert.equal(stored.bookingInterest.originalTime, '09:30');
   assert.equal(db.reads.includes('appointments/APT-1'), false);
+});
+test('long shared property identifiers cannot truncate away appointment or customer identity', () => {
+  const long = { ...input, propertyId: `P-${'shared'.repeat(25)}` };
+  const first = bookingInterestCaseId(long, ACCOUNT, CONV);
+  assert.equal(first, bookingInterestCaseId({ ...long }, ACCOUNT, CONV));
+  const variants = [
+    { ...long, appointmentId: 'APT-2' },
+    { ...long, customerId: 'C-2' },
+    { ...long, propertyId: `${long.propertyId}-other` },
+    { ...long, kind: 'new_appointment', appointmentId: '' },
+  ];
+  const ids = [first, ...variants.map(value => bookingInterestCaseId(value, ACCOUNT, CONV)),
+    bookingInterestCaseId(long, 'other-account', CONV),
+    bookingInterestCaseId(long, ACCOUNT, `COMM-${'C'.repeat(40)}`)];
+  assert.equal(new Set(ids).size, ids.length);
+  assert.ok(ids.every(id => /^COMMCASE-[A-F0-9]{40}$/.test(id)));
+});
+test('stored waiting preference with mismatched appointment or kind cannot be replayed or overwritten', async () => {
+  for (const mismatch of ['appointment', 'kind']) {
+    const db = database();
+    const first = await record(db); assert.equal(first.success, true, JSON.stringify(first));
+    const prior = db.read('communicationCases', first.caseId);
+    db.patch('communicationCases', first.caseId, mismatch === 'appointment'
+      ? { appointmentId: 'APT-OTHER' }
+      : { bookingInterest: { ...prior.bookingInterest, kind: 'new_appointment' } });
+    const protectedBefore = JSON.stringify(db.read('appointments', 'APT-1'));
+    db.writes.length = 0;
+    const result = await record(db);
+    assert.equal(result.success, false); assert.equal(result.error.code, 'identity_mismatch');
+    assert.equal(db.writes.length, 0);
+    assert.equal(JSON.stringify(db.read('appointments', 'APT-1')), protectedBefore);
+  }
 });
