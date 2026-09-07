@@ -54,14 +54,35 @@ function normalizedRequestedTime(value) {
 function matchRelevantAppointment({ appointments = [], observation = {}, today } = {}) {
   const candidates = upcomingAppointmentCandidates(appointments, today);
   if (!candidates.length) return { matched: false, reason: "no-upcoming-appointment", candidates: [] };
-  if (candidates.length === 1) return { matched: true, reason: "single-upcoming-appointment", appointment: candidates[0], candidates };
+  const cancellation = observation.intent === "cancellation";
+  // A reschedule's requested date can be its new target date. Preserve that
+  // existing interpretation here; cancellation dates identify the old booking.
+  if (candidates.length === 1 && !cancellation) {
+    return { matched: true, reason: "single-upcoming-appointment", appointment: candidates[0], candidates };
+  }
 
   const requestedDate = normalizedRequestedDate(observation.requestedDate);
   const requestedTime = normalizedRequestedTime(observation.requestedTime);
+  if (cancellation && (
+    (cleanText(observation.requestedDate, 80) && !requestedDate)
+    || (cleanText(observation.requestedTime, 80) && !/^([01]?\d|2[0-3]):[0-5]\d$/.test(cleanText(observation.requestedTime, 80)))
+  )) {
+    return { matched: false, reason: "cancellation-reference-unresolved", candidates };
+  }
   let narrowed = candidates;
   if (requestedDate) narrowed = narrowed.filter((appointment) => cleanText(appointment.date, 20) === requestedDate);
   if (requestedTime) narrowed = narrowed.filter((appointment) => cleanText(appointment.startTime || appointment.time, 20) === requestedTime);
-  if (narrowed.length === 1) return { matched: true, reason: "explicit-date-time-match", appointment: narrowed[0], candidates };
+  if (narrowed.length === 1) {
+    return {
+      matched: true,
+      reason: candidates.length === 1 && !requestedDate && !requestedTime ? "single-upcoming-appointment" : "explicit-date-time-match",
+      appointment: narrowed[0],
+      candidates,
+    };
+  }
+  if (cancellation && !narrowed.length) {
+    return { matched: false, reason: "cancellation-reference-mismatch", candidates };
+  }
   return {
     matched: false,
     reason: "multiple-plausible-appointments",
@@ -328,7 +349,8 @@ function createCommunicationCaseService({ db = getFirestore(), dispatchSafety = 
       state = "AWAITING_APPOINTMENT_CLARIFICATION";
       attentionReason = "critical-value-ambiguous";
     } else if (ACTIVE_APPOINTMENT_CHANGE_INTENTS.has(observation.intent) && !match.matched) {
-      state = match.reason === "multiple-plausible-appointments" ? "AWAITING_APPOINTMENT_CLARIFICATION" : "ESCALATED";
+      state = ["multiple-plausible-appointments", "cancellation-reference-unresolved", "cancellation-reference-mismatch"].includes(match.reason)
+        ? "AWAITING_APPOINTMENT_CLARIFICATION" : "ESCALATED";
       attentionReason = match.reason;
     } else if (match.matched) {
       state = "APPOINTMENT_MATCHED";
