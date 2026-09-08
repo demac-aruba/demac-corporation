@@ -67,7 +67,7 @@ async function fixture() {
     db.patch('whatsappOutboundQueue', 'QUEUE-OUT-1', { provider: 'wacli', outboundClass: 'conversation_maya', status: 'sent',
       conversationId: CONV, communicationAccountId: ACCOUNT, expectedOwnershipVersion: 2, expectedCustomerInputVersion: 4,
       recoveryOfferId: prepared.offerId, recoveryOfferVersion: prepared.offerVersion,
-      recoveryOfferFingerprint: stored.recovery.fingerprint, text: prepared.messageText, messageId: 'provider-out-1' });
+      recoveryOfferFingerprint: stored.recovery.fingerprint, text: prepared.messageText, messageId: 'OUT-1', providerMessageId: 'provider-out-1' });
     db.patch('communicationConversations', CONV, { recentMessages: [{ id: 'OUT-1', role: 'ai', text: prepared.messageText }] });
     return service.bindDelivery({ offerId: prepared.offerId, offerVersion: prepared.offerVersion, queueId: 'QUEUE-OUT-1', outboundMessageId: 'OUT-1' });
   }
