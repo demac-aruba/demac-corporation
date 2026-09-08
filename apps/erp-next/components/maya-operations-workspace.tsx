@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { listMayaCancellations, listMayaWaitlist, type CancellationFilter, type MayaCancellationRow, type MayaWaitlistRow } from '../lib/maya-operations';
+import { MayaRecoveryInspection } from './maya-recovery-inspection';
 import styles from './maya-operations-workspace.module.css';
 
 type View = 'cancellations' | 'waitlist';
@@ -97,6 +98,7 @@ export function MayaOperationsWorkspace() {
           {row.workLines.length > 0 && <p><strong>Scheduled work:</strong> {row.workLines.map(line => `${line.quantity ?? '—'} × ${line.service.replaceAll('_', ' ')}`).join('; ')}</p>}
           <p className={styles.reference}>Appointment reference: {row.id}</p>
         </div></details>
+        <MayaRecoveryInspection cancelledAppointmentId={row.id} />
       </article>)}
       {view === 'waitlist' && visibleWaitlist.map(row => <article className={styles.card} key={row.id}>
         <div className={styles.cardHeading}><h2>{row.customer}</h2><span className={styles.badge}>{stateLabels[row.state] || 'Needs review'}</span></div>
