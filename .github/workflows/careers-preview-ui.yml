@@ -19,12 +19,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  source-evidence:
+    if: github.ref == 'refs/heads/feature/careers-funnel-preview'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Retain tracked engineering inputs only (no environment or credentials)
+        run: |
+          python3 - <<'PY'
+          import pathlib, subprocess, zipfile
+          files = subprocess.check_output(['git','ls-files','-z']).decode().split('\0')
+          with zipfile.ZipFile('careers-engineering-inputs.zip','w',zipfile.ZIP_DEFLATED) as archive:
+            for name in files:
+              p = pathlib.Path(name)
+              if not name or any(x in name.lower() for x in ('.env','credential','serviceaccount','private-key')): continue
+              source = name.startswith(('apps/erp-next/','functions/','docs/ai/')) and p.suffix in ('.js','.cjs','.ts','.tsx','.css','.md','.json')
+              config = name in ('AGENTS.md','firebase.json','firestore.rules','storage.rules','firestore.indexes.json')
+              guide = p.name == 'AGENTS.md'
+              if source or config or guide: archive.write(name,name)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: careers-engineering-inputs-${{ github.sha }}
+          path: careers-engineering-inputs.zip
+          retention-days: 1
   browser-review:
     if: github.ref == 'refs/heads/feature/careers-funnel-preview'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
@@ -36,6 +64,12 @@ jobs:
           CAREERS_PREVIEW_BUILD: '1'
           NEXT_TELEMETRY_DISABLED: '1'
         run: npm --prefix apps/erp-next run typecheck && npm --prefix apps/erp-next run build
+      - name: Retain compiled preview without production configuration
+        uses: actions/upload-artifact@v4
+        with:
+          name: careers-compiled-preview-${{ github.sha }}
+          path: apps/erp-next/out/
+          retention-days: 1
       - name: Install isolated test browser tooling
         run: |
           npm install --prefix "$RUNNER_TEMP/careers-browser" playwright@1.58.2 --no-audit --no-fund
