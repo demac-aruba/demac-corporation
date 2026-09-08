@@ -1,26 +1,29 @@
 'use strict';
-// Actual compiled UI against local Firestore/Storage/Auth emulators only.
+// End-to-end tests use local demo emulators; no production records or messages.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http'),crypto=require('node:crypto');
 const {chromium,webkit}=require('playwright');
 const project='demo-demac-careers';
-for(const key of ['FIRESTORE_EMULATOR_HOST','FIREBASE_STORAGE_EMULATOR_HOST','FIREBASE_AUTH_EMULATOR_HOST'])if(!/^127\.0\.0\.1:\d+$/.test(process.env[key]||''))throw Error('Only local demo emulators may be used.');
-if(process.env.GCLOUD_PROJECT!==project)throw Error('Production is forbidden in Careers browser tests.');
+for(const key of ['FIRESTORE_EMULATOR_HOST','FIREBASE_STORAGE_EMULATOR_HOST','FIREBASE_AUTH_EMULATOR_HOST'])if(!/^127\.0\.0\.1:\d+$/.test(process.env[key]||''))throw Error('Local demo emulators required.');
+if(process.env.GCLOUD_PROJECT!==project)throw Error('Production is forbidden in this test.');
 const {initializeApp,deleteApp}=require('firebase-admin/app'),{getFirestore}=require('firebase-admin/firestore'),{getAuth}=require('firebase-admin/auth'),{getStorage}=require('firebase-admin/storage');
 const {createService,COLLECTIONS}=require('./service'),{createFiles}=require('./files'),{createHandler}=require('./http'),C=require('./core');
 const app=initializeApp({projectId:project,storageBucket:`${project}.appspot.com`}),db=getFirestore(app),auth=getAuth(app),bucket=getStorage(app).bucket();
-const site='http://127.0.0.1:4174',api='http://127.0.0.1:4175',output='careers-live-results';fs.mkdirSync(output,{recursive:true});
-const infra={blockers:()=>[],signature:s=>C.digest(`${s?.from}|${s?.privacyVersion}`),verify:async()=>{},send:async()=>{throw Error('No real email may be sent.');}};
+const site='http://127.0.0.1:4174',api='http://127.0.0.1:4175',output='careers-live-results',testPassword=crypto.randomBytes(24).toString('hex');
+fs.mkdirSync(output,{recursive:true});
+const infra={blockers:()=>[],signature:s=>C.digest(`${s?.from}|${s?.privacyVersion}`),verify:async()=>{},send:async()=>{throw Error('Email transport is forbidden in this test.');}};
 const files=createFiles({bucket,sharp:require('sharp'),scanner:async()=>{}}),service=createService({db,files,infrastructure:infra});
-const env={DEMAC_CAREERS_BACKEND_ENABLED:'true',CAREERS_ALLOWED_ORIGINS:site,CAREERS_RATE_SALT:'qa-only-isolated-emulator-salt-not-a-secret'};
+const env={DEMAC_CAREERS_BACKEND_ENABLED:'true',CAREERS_ALLOWED_ORIGINS:site,CAREERS_RATE_SALT:crypto.randomBytes(32).toString('hex')};
 let interrupt=false,interrupted=false;
-const handlers={ '/careersPublic':createHandler({service,auth,env}), '/careersAdmin':createHandler({service,auth,env,admin:true}) };
+const handlers={'/careersPublic':createHandler({service,auth,env}),'/careersAdmin':createHandler({service,auth,env,admin:true})};
 const server=http.createServer(async(req,res)=>{
   const handler=handlers[req.url];if(!handler){res.writeHead(404);res.end();return;}
   let raw=Buffer.alloc(0);for await(const chunk of req){raw=Buffer.concat([raw,chunk]);if(raw.length>15*1024*1024){res.writeHead(413);res.end();return;}}
   try{
     const request={method:req.method,body:raw.length?JSON.parse(raw):{},rawBody:raw,ip:'127.0.0.1',get:k=>req.headers[k.toLowerCase()],is:type=>String(req.headers['content-type']||'').startsWith(type)};
     const response={set(k,v){res.setHeader(k,v);return this;},status(n){res.statusCode=n;return this;},json(body){
-      if(interrupt && !interrupted && request.body.action==='application.submit' && body.ok){interrupted=true;res.destroy();return this;}
+      // Return a deterministic gateway error after the real transaction commits.
+      // Closing a socket instead allows Chromium to retry invisibly at HTTP level.
+      if(interrupt&&!interrupted&&request.body.action==='application.submit'&&body.ok){interrupted=true;res.statusCode=503;res.setHeader('Content-Type','application/json');res.end(JSON.stringify({ok:false,code:'connection-error',message:'Connection interrupted after saving. Please retry.'}));return this;}
       res.setHeader('Content-Type','application/json');res.end(JSON.stringify(body));return this;
     },send(value){res.end(value);return this;}};
     await handler(request,response);
@@ -31,31 +34,33 @@ async function context(browser,admin,viewport){
   const ctx=await browser.newContext({viewport,reducedMotion:'reduce'});
   await ctx.route('**/*',async route=>{
     const u=new URL(route.request().url());
-    if([site,api].includes(u.origin) || u.protocol==='data:' || u.protocol==='blob:'&&[site,api].includes(new URL(u.pathname).origin))return route.continue();
+    if([site,api].includes(u.origin)||u.protocol==='data:'||u.protocol==='blob:'&&[site,api].includes(new URL(u.pathname).origin))return route.continue();
     if(u.hostname==='firestore.googleapis.com'&&u.pathname.startsWith(`/v1/projects/${project}/`)){
-      const response=await fetch(`http://${process.env.FIRESTORE_EMULATOR_HOST}${u.pathname}${u.search}`,{method:route.request().method(),headers:route.request().headers(),...(route.request().postData()?{body:route.request().postData()}: {})});
+      const response=await fetch(`http://${process.env.FIRESTORE_EMULATOR_HOST}${u.pathname}${u.search}`,{method:route.request().method(),headers:route.request().headers(),...(route.request().postData()?{body:route.request().postData()}:{})});
       return route.fulfill({status:response.status,headers:{'Content-Type':'application/json'},body:await response.text()});
     }
     return route.abort();
   });
   if(admin){
-    const response=await fetch(`http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=test-api-key`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:'qa-admin@example.test',password:'QA-only-password-2026',returnSecureToken:true})});
-    const token=await response.json();assert(token.idToken,'Auth emulator signs in test administrator');
+    const response=await fetch(`http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=test-api-key`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:'qa-admin@example.test',password:testPassword,returnSecureToken:true})});
+    const token=await response.json();assert(token.idToken,'Auth emulator must sign in the test administrator');
     await ctx.addInitScript(session=>sessionStorage.setItem('demac.erp-next.firebase.session.v1',JSON.stringify(session)),{uid:'qa-admin',email:'qa-admin@example.test',idToken:token.idToken,refreshToken:token.refreshToken,expiresAt:Date.now()+3600000});
   }
   return ctx;
 }
 (async()=>{
-  await auth.createUser({uid:'qa-admin',email:'qa-admin@example.test',password:'QA-only-password-2026'});
+  await auth.createUser({uid:'qa-admin',email:'qa-admin@example.test',password:testPassword});
   await db.collection('users').doc('qa-admin').set({role:'admin',active:true,name:'QA Administrator'});
   const settings={intakeEnabled:false,privacyText:'QA notice for emulator tests only. Never a live policy.',privacyVersion:'qa-v1',retentionDays:7,talentRetentionDays:14,from:'careers@example.test',replyTo:'careers@example.test',senderName:'QA'};
   await service.saveSettings('qa-admin',{requestId:crypto.randomUUID(),expectedVersion:0,settings});await service.verifySetup('qa-admin');
   await service.saveSettings('qa-admin',{requestId:crypto.randomUUID(),expectedVersion:1,settings:{...settings,intakeEnabled:true}});
   await new Promise(resolve=>server.listen(4175,'127.0.0.1',resolve));
-  for(const [name,type] of [['chromium',chromium],['webkit',webkit]]){
-    const browser=await type.launch({headless:true});const admin=await context(browser,true,{width:1440,height:1000}),candidate=await context(browser,false,{width:390,height:844});
-    const office=await admin.newPage(),person=await candidate.newPage(),errors=[];for(const page of [office,person]){page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());}
-    async function shot(page,label){await page.screenshot({path:path.join(output,`${name}-${label}.png`),fullPage:true});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'no horizontal overflow');}
+  for(const [name,type]of [['chromium',chromium],['webkit',webkit]]){
+    const browser=await type.launch({headless:true}),admin=await context(browser,true,{width:1440,height:1000}),candidate=await context(browser,false,{width:390,height:844});
+    const office=await admin.newPage(),person=await candidate.newPage(),errors=[];
+    for(const page of [office,person]){page.setDefaultTimeout(15000);page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());}
+    async function shot(page,label){await page.evaluate(()=>window.scrollTo({top:0,behavior:'instant'}));await page.screenshot({path:path.join(output,`${name}-${label}.png`),fullPage:true});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'no horizontal overflow');}
+    async function settled(){await office.getByText('Loading from DEMAC…',{exact:true}).waitFor({state:'hidden'});}
     try{
       const title=`QA VRF Specialist ${name}`;
       await office.goto(`${site}/recruitment/`);await office.getByRole('button',{name:'＋ New vacancy',exact:true}).click();
@@ -84,19 +89,21 @@ async function context(browser,admin,viewport){
       await person.locator('#photo').setInputFiles({name:'qa.png',mimeType:'image/png',buffer:png});await person.getByText('Photo selected for review',{exact:true}).waitFor();
       await person.locator('#cv').setInputFiles({name:'qa-cv.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4\n% QA test file\n%%EOF')});
       await shot(person,'03-documents');await person.getByRole('button',{name:'Review application',exact:true}).click();await person.locator('#privacy').check();
-      interrupt=true;interrupted=false;await person.getByRole('button',{name:'Submit application',exact:true}).click();await person.getByRole('alert').filter({hasText:'Connection interrupted'}).waitFor();assert(interrupted,'response interrupted only after committed application');
+      interrupt=true;interrupted=false;await person.getByRole('button',{name:'Submit application',exact:true}).click();await person.getByRole('alert').filter({hasText:'Connection interrupted'}).waitFor();assert(interrupted,'gateway failure must occur after committed application');
       interrupt=false;await person.getByRole('button',{name:'Submit application',exact:true}).click();await person.getByRole('heading',{name:'Application received',exact:true}).waitFor();await shot(person,'04-receipt');
       await candidate.close();
-      await office.getByRole('button',{name:'Applicants',exact:true}).click();await office.getByLabel('Search',{exact:true}).fill(`Candidate ${name}`);await office.getByRole('button',{name:'Apply filters',exact:true}).click();
-      await office.getByText(`QA Candidate ${name}`,{exact:true}).waitFor();assert.equal(await office.getByRole('button',{name:'Open profile',exact:true}).count(),1);
+      await office.getByRole('button',{name:'Applicants',exact:true}).click();await settled();await office.getByLabel('Search',{exact:true}).fill(`Candidate ${name}`);
+      await Promise.all([office.waitForResponse(r=>r.url()===`${api}/careersAdmin`&&r.request().postDataJSON()?.action==='applications.list'&&r.request().postDataJSON()?.payload?.search===`Candidate ${name}`),office.getByRole('button',{name:'Apply filters',exact:true}).click()]);
+      await settled();await office.getByText(`QA Candidate ${name}`,{exact:true}).waitFor();await office.waitForFunction(()=>Array.from(document.querySelectorAll('button')).filter(b=>b.textContent.trim()==='Open profile').length===1);
+      assert.equal(await office.getByRole('button',{name:'Open profile',exact:true}).count(),1);
       await shot(office,'05-applicants');await office.getByRole('button',{name:'Open profile',exact:true}).click();await office.getByRole('heading',{name:`QA Candidate ${name}`,exact:true}).waitFor();
-      await office.getByLabel('Recruitment stage',{exact:true}).selectOption('Interview');await office.getByText('Selection stage updated. No automated message was sent.',{exact:true}).waitFor();
+      await office.getByLabel('Recruitment stage',{exact:true}).selectOption('Interview');await office.getByText('Selection stage updated. No automated message was sent.',{exact:true}).waitFor();await settled();
       await office.getByLabel('Private note',{exact:true}).fill('QA reviewed after candidate browser closed.');await office.getByRole('button',{name:'Save note',exact:true}).click();await office.getByText('QA reviewed after candidate browser closed.',{exact:true}).waitFor();
       await office.reload();await office.getByText('QA reviewed after candidate browser closed.',{exact:true}).waitFor();assert.equal(await office.getByLabel('Recruitment stage',{exact:true}).inputValue(),'Interview');await office.getByAltText('Candidate profile photo').waitFor();
-      await shot(office,'06-profile');
+      await shot(office,'06-profile');await office.setViewportSize({width:390,height:844});await shot(office,'07-profile-mobile');
       const snapshot=await db.collection(COLLECTIONS.applications).where('profile.email','==',`candidate-${name}@example.test`).get();assert.equal(snapshot.size,1);assert.equal((await db.collection(COLLECTIONS.mail).doc(snapshot.docs[0].id).get()).data().status,'queued');
       for(const collection of ['appointments','customers','staffProfiles'])assert.equal((await db.collection(collection).get()).size,0);
-      assert.deepEqual(errors,[]);results.push({name,result:'PASS',browser:browser.version(),verified:['admin save/reload/edit/publish','public form from saved vacancy','private notes excluded','actual private emulator storage','lost response retry without duplicate','candidate browser closed then admin reads persistent record','stage/note/photo after reload','no operational domain writes']});
+      assert.deepEqual(errors,[]);results.push({name,result:'PASS',browser:browser.version(),verified:['admin save/reload/edit/publish','public form from saved vacancy','private notes excluded','actual private emulator storage','gateway failure after commit and retry without duplicate','candidate browser closed then admin reads persistent record','stage/note/photo after reload','mobile admin layout','no operational domain writes']});
     }catch(error){for(const [label,page]of [['office',office],['candidate',person]])await page.screenshot({path:path.join(output,`${name}-${label}-FAIL.png`),fullPage:true}).catch(()=>{});results.push({name,result:'FAIL',error:String(error),pageErrors:errors});console.error(error);}
     finally{await admin.close();await candidate.close().catch(()=>{});await browser.close();fs.writeFileSync(path.join(output,'report.json'),JSON.stringify(results,null,2));}
   }
