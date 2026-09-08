@@ -17,6 +17,7 @@ const { configuredAllowlist, mayaReplyDecision, mayaSenderOwnershipDecision, res
 const { digest } = require('./demacCustomerInterestHistory');
 const { documentId } = require('./mayaOperationsReadModel');
 const { analyzeRecoveryResponse, validateDecision } = require('./mayaRecoveryResponseAnalysis');
+const { deliveryProof } = require('./mayaRecoveryDeliveryProof');
 const P = require('./mayaRecoveryOfferPolicy');
 const need = P.requireCondition;
 
@@ -182,25 +183,6 @@ function createMayaRecoveryOfferService({ db, clock = () => new Date(), analyzeR
       return publicOffer(offer);
     });
   }
-  async function deliveryProof(reader, offer, queueId, messageId) {
-    const [queue, message] = await Promise.all([read(reader, 'whatsappOutboundQueue', queueId), read(reader, 'whatsappMessages', messageId)]);
-    const r = offer.recovery;
-    need(queue && message && ['sent', 'delivered', 'read'].includes(queue.status)
-      && queue.outboundClass === 'conversation_maya' && queue.provider === 'wacli'
-      && queue.communicationAccountId === r.account && queue.conversationId === r.conversationId
-      && queue.expectedOwnershipVersion === r.ownershipVersion && queue.expectedCustomerInputVersion === r.customerInputVersion
-      && queue.recoveryOfferId === offer.id && queue.recoveryOfferVersion === offer.version
-      && queue.recoveryOfferFingerprint === r.fingerprint && queue.text === r.messageText
-      && message.direction === 'outbound' && message.provider === 'wacli'
-      && message.communicationAccountId === r.account && message.conversationId === r.conversationId
-      && message.text === r.messageText && typeof message.providerMessageId === 'string' && message.providerMessageId
-      && queue.messageId === message.providerMessageId, 'recovery_delivery_unproven');
-    const times = P.canonicalTime(message);
-    need(times.provider >= Date.parse(offer.createdAtIso) && times.ingested >= Date.parse(offer.createdAtIso)
-      && times.provider < Date.parse(offer.expiresAt) && times.ingested < Date.parse(offer.expiresAt), 'recovery_delivery_expired');
-    return { queueId, messageId, providerAt: times.provider, ingestedAt: times.ingested,
-      fingerprint: digest([queueId, messageId, queue.messageId, message.text, times]) };
-  }
   async function bindDelivery({ offerId, offerVersion, queueId, outboundMessageId } = {}) {
     return db.runTransaction(async transaction => {
       const reader = transactionView(db, transaction).db; const offer = await read(reader, 'bookingOffers', offerId);
@@ -208,8 +190,7 @@ function createMayaRecoveryOfferService({ db, clock = () => new Date(), analyzeR
       need(pointerMatches(pilot.conversation, offer) && P.isOpen(offer, clock()), 'recovery_offer_expired');
       need(pilot.conversation.customerInputVersion === r.customerInputVersion, 'recovery_customer_turn_changed');
       await unchangedBasis(reader, offer, pilot);
-      const delivery = await deliveryProof(reader, offer, documentId(queueId), documentId(outboundMessageId));
-      need(delivery.providerAt <= clock().getTime() && delivery.ingestedAt <= clock().getTime(), 'recovery_delivery_unproven');
+      const delivery = await deliveryProof(reader, offer, documentId(queueId), documentId(outboundMessageId), clock());
       need(!r.delivery || digest(r.delivery) === digest(delivery), 'recovery_delivery_conflict');
       if (!r.delivery) transaction.set(db.collection('bookingOffers').doc(offer.id), { recovery: { ...r, state: 'sent', delivery } }, { merge: true });
       return publicOffer({ ...offer, recovery: { ...r, state: 'sent', delivery } }, Boolean(r.delivery));
@@ -237,7 +218,7 @@ function createMayaRecoveryOfferService({ db, clock = () => new Date(), analyzeR
     const sourceFingerprint = responseMessageFingerprint(message);
     if (!r.response) {
       P.assertReplyEvidence({ offer, conversation: pilot.conversation, message, receipt, quote: args.sourceQuote, now: clock() });
-      const delivery = await deliveryProof(reader, offer, r.delivery.queueId, r.delivery.messageId);
+      const delivery = await deliveryProof(reader, offer, r.delivery.queueId, r.delivery.messageId, clock());
       need(digest(delivery) === digest(r.delivery), 'recovery_delivery_changed');
     }
     const fingerprint = digest({ offer: r.fingerprint, state: r.state, delivery: r.delivery || null, response: r.response || null,
@@ -308,4 +289,5 @@ function createMayaRecoveryOfferService({ db, clock = () => new Date(), analyzeR
   }
   return { prepare, bindDelivery, respond };
 }
-module.exports = { createMayaRecoveryOfferService, transactionView };
+module.exports = { createMayaRecoveryOfferService, transactionView, currentPilot, unchangedBasis,
+  originalOwnership, selectOption, read, pointerMatches };
