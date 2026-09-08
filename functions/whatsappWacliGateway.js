@@ -15,6 +15,7 @@ const {
 } = require("./wacliCommunicationBoundary");
 const { isRecoveryOutbound, recoveryOutboundClaimDecision } = require("./mayaRecoveryOfferOutbound");
 const { createMayaRecoveryOfferService } = require("./mayaRecoveryOfferService");
+const { recoveryDispatchFingerprint, recoveryClaimIsUnchanged } = require("./mayaRecoveryDispatchReceipt");
 
 const db = getFirestore();
 const storage = getStorage();
@@ -177,7 +178,7 @@ async function fetchAndStoreProfilePicture({ communicationAccountId, conversatio
   if (current?.profilePictureSourceUrl === profilePicture.sourceUrl && current?.profilePictureUrl) {
     return {
       profilePictureUrl: current.profilePictureUrl,
-      profilePictureSourceUrl: current.profilePictureSourceUrl,
+      profilePictureSourceUrl: profilePicture.sourceUrl,
       profilePictureUpdatedAt: current.profilePictureUpdatedAt || profilePicture.updatedAt,
     };
   }
@@ -318,7 +319,7 @@ async function persistCanonicalMessage({
       mediaType: media?.mediaType || null,
       mediaCaption: media?.mediaCaption || null,
       mediaFileName: media?.mediaFileName || null,
-      mediaMimeType: media?.mimeType || null,
+      mediaMimeType: media?.mediaMimeType || null,
       mediaSize: media?.mediaSize || null,
       mediaUrl: media?.mediaUrl || null,
       reactionEmoji,
@@ -775,7 +776,10 @@ async function claimOutboundCommandWithDb(database, bridgeId, communicationAccou
         claimedCommunicationAccountId: communicationAccountId,
         claimedAt: FieldValue.serverTimestamp(),
         processingStartedAt: current.processingStartedAt || FieldValue.serverTimestamp(),
-        ...(isRecoveryOutbound(candidate.id, current) ? { recoveryDispatchAttemptedAtIso: new Date(now).toISOString() } : {}),
+        ...(isRecoveryOutbound(candidate.id, current) ? {
+          recoveryDispatchAttemptedAtIso: new Date(now).toISOString(),
+          recoveryDispatchFingerprint: recoveryDispatchFingerprint(candidate.id, current),
+        } : {}),
         leaseUntil,
         attempts: FieldValue.increment(1),
         updatedAt: FieldValue.serverTimestamp(),
@@ -869,6 +873,9 @@ exports.wacliOutboundAck = onRequest(
         const recovery = isRecoveryOutbound(queueId, current);
         if (recovery && sent && (!reportedProviderMessageId || reportedProviderMessageId === queueId)) {
           throw httpError(400, "A real provider message ID is required for recovery offer acknowledgement.", "recovery-provider-id-missing");
+        }
+        if (recovery && !recoveryClaimIsUnchanged(queueId, current)) {
+          throw httpError(409, "Recovery command changed after its delivery claim.", "recovery-claimed-payload-changed");
         }
 
         if (current.status === "sent" && sent) {
@@ -997,8 +1004,9 @@ exports.wacliOutboundAck = onRequest(
             provider: "wacli",
             channel: "whatsapp",
             communicationAccountId,
-            status: conversationCurrent?.status === "escalated" ? "escalated" : "waiting_customer",
-            unread: 0,
+            status: recovery ? (conversationCurrent?.status || "waiting_customer")
+              : conversationCurrent?.status === "escalated" ? "escalated" : "waiting_customer",
+            unread: recovery ? (conversationCurrent?.unread || 0) : 0,
             lastMessageText: outboundPreview(text, media),
             lastActivityAt: FieldValue.serverTimestamp(),
             recentMessages,
