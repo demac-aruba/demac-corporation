@@ -1,0 +1,298 @@
+'use strict';
+
+// Internal composition service. No public endpoint, sender, trigger or production
+// activation is introduced here. Delivery must be proven by the existing transport.
+const { FieldValue } = require('firebase-admin/firestore');
+const { createBookingAuthority } = require('./bookingAuthorityFirestore');
+const { createBookingAppointmentLifecycle } = require('./bookingAuthorityAppointmentLifecycle');
+const { createSchedulingProvider } = require('./bookingAuthoritySchedulingProvider');
+const { normalizeBookingRequest, normalizeOfferOption } = require('./bookingAuthorityCore');
+const { createMayaRecoveryMatching, recoveryTarget, releasedCapacityMatches } = require('./mayaRecoveryMatching');
+const { activeAccountDecision } = require('./demacCommunicationIdentity');
+const { communicationEpochDecision } = require('./demacCustomerTurn');
+const { loadMutationEpochReceipt } = require('./demacCustomerAppointmentMutationGuard');
+const { resolveInboundParty } = require('./customerContactDirectory');
+const { configuredAllowlist, mayaReplyDecision, mayaSenderOwnershipDecision, resolveConversationPhone } = require('./demacCustomerAgentReplyPolicy');
+const { digest } = require('./demacCustomerInterestHistory');
+const { documentId } = require('./mayaOperationsReadModel');
+const P = require('./mayaRecoveryOfferPolicy');
+const need = P.requireCondition;
+
+// Reuse one real transaction for all domain reads and the canonical lifecycle.
+// No nested Firestore transaction and no network/model work occurs in the callback.
+function transactionView(db, transaction, acceptedOfferId = '') {
+  const targets = new WeakMap();
+  const raw = target => targets.get(target) || target;
+  function project(snapshot, target) {
+    if (acceptedOfferId && raw(target).id === acceptedOfferId && raw(target).path === `bookingOffers/${acceptedOfferId}` && snapshot.exists) {
+      return { id: snapshot.id, ref: snapshot.ref, exists: true, data: () => ({ ...snapshot.data(), status: 'open' }) };
+    }
+    return snapshot;
+  }
+  const t = {
+    get: async target => project(await transaction.get(raw(target)), target),
+    set: (target, value, options) => transaction.set(raw(target), value, options),
+  };
+  function wrap(target) {
+    const result = { id: target.id, path: target.path, get: () => t.get(target),
+      set: (value, options) => t.set(target, value, options),
+      doc: id => wrap(target.doc(id)), where: (...args) => wrap(target.where(...args)),
+      limit: count => wrap(target.limit(count)), orderBy: (...args) => wrap(target.orderBy(...args)),
+      startAfter: cursor => wrap(target.startAfter(cursor)) };
+    targets.set(result, target);
+    return result;
+  }
+  return { db: { collection: name => wrap(db.collection(name)), runTransaction: callback => callback(t) }, transaction: t };
+}
+async function read(db, collection, id) {
+  if (!id) return null;
+  const snapshot = await db.collection(collection).doc(documentId(id)).get();
+  return snapshot.exists ? { ...snapshot.data(), id: snapshot.id } : null;
+}
+function publicOffer(offer, replayed = false) {
+  const option = offer.options[0];
+  return { success: true, replayed, offerId: offer.id, offerVersion: offer.version,
+    state: offer.recovery.state, appointmentId: offer.recovery.appointmentId,
+    date: option.date, time: option.time, endTime: option.endTime, expiresAt: offer.expiresAt,
+    messageText: offer.recovery.messageText, ...P.NO_RESERVATION };
+}
+async function currentPilot(db, conversationId) {
+  const [settings, comms, conversation] = await Promise.all([
+    read(db, 'businessSettings', 'customer-agent'), read(db, 'businessSettings', 'whatsapp'),
+    read(db, 'communicationConversations', conversationId),
+  ]);
+  need(settings?.recoveryOffersEnabled === true, 'recovery_offers_disabled');
+  need(conversation && activeAccountDecision({ conversation, settings: comms || {} }).allowed,
+    'recovery_account_changed');
+  const phone = resolveConversationPhone({ conversation });
+  need(configuredAllowlist(settings).includes(phone)
+    && mayaReplyDecision({ conversation, settings, communicationSettings: comms || {} }).allowed
+    && mayaSenderOwnershipDecision({ conversation }).allowed, 'recovery_pilot_blocked');
+  return { settings, comms, conversation, phone };
+}
+async function unchangedBasis(db, offer, pilot) {
+  const r = offer.recovery;
+  need(pilot.conversation.communicationAccountId === r.account && pilot.phone === r.phone
+    && pilot.conversation.ownershipVersion === r.ownershipVersion, 'recovery_account_changed');
+  const [record, original, cancellation, property] = await Promise.all([
+    read(db, 'communicationCases', r.caseId), read(db, 'appointments', r.appointmentId),
+    read(db, 'appointments', r.cancellationId), read(db, 'properties', offer.request.propertyId),
+  ]);
+  need(record?.state === 'WAITING' && P.preferenceFingerprint(record) === r.preferenceFingerprint,
+    'recovery_preference_changed');
+  need(original && P.originalFingerprint(original) === r.originalFingerprint, 'recovery_original_changed');
+  need(cancellation && P.originalFingerprint(cancellation) === r.cancellationFingerprint,
+    'recovery_cancellation_changed');
+  const party = await resolveInboundParty(db, { phone: pilot.phone, whatsapp: pilot.phone });
+  need(!party.ambiguous && party.customer?.active !== false && party.customer?.id === offer.request.customerId
+    && property?.clientId === party.customer.id && property.active !== false, 'recovery_customer_changed');
+  return { record, original, cancellation };
+}
+async function originalOwnership(db, original) {
+  for (const field of ['workOrderIds', 'capacityLockIds']) {
+    const ids = original[field];
+    need(Array.isArray(ids) && ids.length > 0 && ids.length <= 48 && new Set(ids).size === ids.length,
+      'recovery_original_links_invalid');
+    for (const id of ids) documentId(id);
+  }
+  const [orders, locks] = await Promise.all([
+    Promise.all(original.workOrderIds.map(id => read(db, 'workOrders', id))),
+    Promise.all(original.capacityLockIds.map(id => read(db, 'bookingCapacityLocks', id))),
+  ]);
+  need(orders.every(order => order && order.appointmentId === original.id && order.clientId === original.customerId
+    && order.propertyId === original.propertyId && order.date === original.date
+    && ['confirmada', 'confirmed', 'scheduled'].includes(String(order.status).toLowerCase())
+    && order.dispatchHoldActive !== true), 'recovery_original_work_changed');
+  need(locks.every(lock => lock && lock.active === true && lock.appointmentId === original.id
+    && lock.date === original.date), 'recovery_original_capacity_changed');
+}
+async function selectOption(db, transaction, provider, original, cancellation, now) {
+  const target = recoveryTarget(cancellation, now);
+  need(`${target.date}T${target.time}` < `${original.date}T${original.startTime}`, 'recovery_not_earlier');
+  const request = normalizeBookingRequest({ customerId: original.customerId, propertyId: original.propertyId,
+    workLines: original.workLines, notes: original.notes,
+    constraints: { requestedDate: target.date, requestedTime: target.time } });
+  const context = { channel: 'whatsapp', source: 'maya-recovery-offer', excludeAppointmentId: original.id,
+    requiredPrimaryVanId: target.vanId };
+  const available = await provider.checkAvailability({ request, context, now });
+  for (const raw of available.options || []) {
+    if (raw.date !== target.date || raw.time !== target.time || raw.endTime > target.endTime
+      || raw.assignments?.[0]?.vanId !== target.vanId) continue;
+    const option = normalizeOfferOption(raw);
+    const valid = await provider.validateTransaction({ db, transaction, request, option, appointmentId: original.id, context, now });
+    if (valid?.available !== true || !Array.isArray(valid.capacityLocks) || !valid.capacityLocks.length
+      || valid.capacityLocks.some(lock => !target.formerCapacityIds.has(lock.id))) continue;
+    const locks = await Promise.all(valid.capacityLocks.map(lock => read(db, 'bookingCapacityLocks', lock.id)));
+    if (locks.some((lock, index) => !releasedCapacityMatches(lock, valid.capacityLocks[index]))) continue;
+    return { request, context, option, available };
+  }
+  need(false, 'recovery_capacity_unavailable');
+}
+function pointerMatches(conversation, offer) {
+  return conversation.mayaRecoveryOffer?.id === offer.id && conversation.mayaRecoveryOffer?.version === offer.version;
+}
+function createMayaRecoveryOfferService({ db, clock = () => new Date() } = {}) {
+  need(db && typeof db.runTransaction === 'function', 'transaction_required');
+  async function prepare({ cancelledAppointmentId, caseId, afterId = '' } = {}) {
+    documentId(cancelledAppointmentId); documentId(caseId); if (afterId) documentId(afterId);
+    return db.runTransaction(async transaction => {
+      const now = clock(); const view = transactionView(db, transaction); const reader = view.db;
+      const record = await read(reader, 'communicationCases', caseId);
+      need(record?.caseType === 'booking_interest' && record.bookingInterest?.kind === 'earlier_appointment', 'recovery_candidate_invalid');
+      const pilot = await currentPilot(reader, record.conversationId);
+      const ttl = P.configuredTtl(pilot.settings);
+      const id = P.recoveryOfferId(pilot.conversation.communicationAccountId, cancelledAppointmentId);
+      const [previous, pending, original, cancellation] = await Promise.all([
+        read(reader, 'bookingOffers', id), read(reader, 'bookingOffers', pilot.conversation.mayaRecoveryOffer?.id),
+        read(reader, 'appointments', record.appointmentId), read(reader, 'appointments', cancelledAppointmentId),
+      ]);
+      if (previous) {
+        P.assertOffer(previous, previous.version);
+        if (P.isOpen(previous, now)) {
+          need(previous.recovery.caseId === caseId && pointerMatches(pilot.conversation, previous), 'recovery_offer_already_pending');
+          await unchangedBasis(reader, previous, pilot);
+          return publicOffer(previous, true);
+        }
+        need(previous.recovery.state !== 'accepted', 'recovery_opening_already_used');
+      }
+      need(!pending || !P.isOpen(pending, now), 'recovery_conversation_has_offer');
+      // Reuse the existing bounded inspector on the selected review page. It
+      // validates current history, exact identity and all route/pilot restrictions.
+      const inspection = await createMayaRecoveryMatching({
+        db: { collection: db.collection.bind(db), runTransaction: callback => callback(transaction) }, clock: () => now,
+      }).inspect({ cancelledAppointmentId, ...(afterId ? { afterId } : {}) });
+      need(inspection.rows.some(row => row.caseId === caseId && row.status === 'compatible_for_review'), 'recovery_candidate_not_current');
+      await originalOwnership(reader, original);
+      const provider = createSchedulingProvider({ db: reader });
+      const selection = await selectOption(reader, view.transaction, provider, original, cancellation, now);
+      let staged;
+      const stagingDb = { collection: name => {
+        need(name === 'bookingOffers', 'recovery_offer_write_scope');
+        return { doc: offerId => {
+          need(offerId === id, 'recovery_offer_write_scope');
+          return { get: async () => ({ exists: false, id }), set: async value => { staged = value; } };
+        } };
+      }, runTransaction: () => { throw new Error('No nested transaction is permitted.'); } };
+      await createBookingAuthority({ db: stagingDb, clock: () => now, offerTtlMinutes: ttl,
+        availabilityProvider: { checkAvailability: async () => ({ ...selection.available, options: [selection.option] }) },
+      }).checkAvailability({ request: selection.request, actor: { id: 'demac-customer-agent', name: 'Maya', source: 'maya-recovery-offer' },
+        context: { ...selection.context, requestKey: P.offerRequestKey(pilot.conversation.communicationAccountId, cancelledAppointmentId) } });
+      need(staged, 'recovery_offer_not_created');
+      const version = (previous?.version || 0) + 1;
+      const expiresAt = new Date(Math.min(Date.parse(staged.expiresAt), Date.parse(`${selection.option.date}T${selection.option.time}:00-04:00`))).toISOString();
+      const recovery = { version: P.VERSION, state: 'prepared', caseId, cancellationId: cancelledAppointmentId,
+        conversationId: record.conversationId, account: pilot.conversation.communicationAccountId, phone: pilot.phone,
+        appointmentId: original.id, originalFingerprint: P.originalFingerprint(original),
+        cancellationFingerprint: P.originalFingerprint(cancellation), preferenceFingerprint: P.preferenceFingerprint(record),
+        ownershipVersion: pilot.conversation.ownershipVersion, customerInputVersion: pilot.conversation.customerInputVersion,
+        messageText: P.renderOffer(original, selection.option, expiresAt, pilot.conversation.language) };
+      const offer = { ...staged, version, status: 'recovery_pending', expiresAt, recovery };
+      recovery.fingerprint = P.offerFingerprint(offer);
+      // A recovery_pending offer cannot be used by create_appointment or ordinary
+      // reschedule tools. Only an evidenced response opens its transaction-local view.
+      transaction.set(db.collection('bookingOffers').doc(id), offer);
+      transaction.set(db.collection('communicationConversations').doc(record.conversationId), {
+        mayaRecoveryOffer: { id, version },
+      }, { merge: true });
+      return publicOffer(offer);
+    });
+  }
+  async function deliveryProof(reader, offer, queueId, messageId) {
+    const [queue, message] = await Promise.all([read(reader, 'whatsappOutboundQueue', queueId), read(reader, 'whatsappMessages', messageId)]);
+    const r = offer.recovery;
+    need(queue && message && ['sent', 'delivered', 'read'].includes(queue.status)
+      && queue.outboundClass === 'conversation_maya' && queue.provider === 'wacli'
+      && queue.communicationAccountId === r.account && queue.conversationId === r.conversationId
+      && queue.expectedOwnershipVersion === r.ownershipVersion && queue.expectedCustomerInputVersion === r.customerInputVersion
+      && queue.recoveryOfferId === offer.id && queue.recoveryOfferVersion === offer.version
+      && queue.recoveryOfferFingerprint === r.fingerprint && queue.text === r.messageText
+      && message.direction === 'outbound' && message.provider === 'wacli'
+      && message.communicationAccountId === r.account && message.conversationId === r.conversationId
+      && message.text === r.messageText && typeof message.providerMessageId === 'string' && message.providerMessageId
+      && queue.messageId === message.providerMessageId, 'recovery_delivery_unproven');
+    const times = P.canonicalTime(message);
+    need(times.provider >= Date.parse(offer.createdAtIso) && times.ingested >= Date.parse(offer.createdAtIso)
+      && times.provider < Date.parse(offer.expiresAt) && times.ingested < Date.parse(offer.expiresAt), 'recovery_delivery_expired');
+    return { queueId, messageId, providerAt: times.provider, ingestedAt: times.ingested,
+      fingerprint: digest([queueId, messageId, queue.messageId, message.text, times]) };
+  }
+  async function bindDelivery({ offerId, offerVersion, queueId, outboundMessageId } = {}) {
+    return db.runTransaction(async transaction => {
+      const reader = transactionView(db, transaction).db; const offer = await read(reader, 'bookingOffers', offerId);
+      const r = P.assertOffer(offer, offerVersion); const pilot = await currentPilot(reader, r.conversationId);
+      need(pointerMatches(pilot.conversation, offer) && P.isOpen(offer, clock()), 'recovery_offer_expired');
+      need(pilot.conversation.customerInputVersion === r.customerInputVersion, 'recovery_customer_turn_changed');
+      await unchangedBasis(reader, offer, pilot);
+      const delivery = await deliveryProof(reader, offer, documentId(queueId), documentId(outboundMessageId));
+      need(!r.delivery || digest(r.delivery) === digest(delivery), 'recovery_delivery_conflict');
+      if (!r.delivery) transaction.set(db.collection('bookingOffers').doc(offer.id), { recovery: { ...r, state: 'sent', delivery } }, { merge: true });
+      return publicOffer({ ...offer, recovery: { ...r, state: 'sent', delivery } }, Boolean(r.delivery));
+    });
+  }
+  async function respond({ offerId, offerVersion, decision, sourceQuote } = {}, context = {}) {
+    need(['accept', 'decline'].includes(decision), 'invalid_recovery_response');
+    const conversationId = documentId(context.conversationId); const messageId = documentId(context.inboundMessageId);
+    return db.runTransaction(async transaction => {
+      const now = clock(); const reader = transactionView(db, transaction).db;
+      const offer = await read(reader, 'bookingOffers', offerId); const r = P.assertOffer(offer, offerVersion);
+      need(r.conversationId === conversationId, 'recovery_wrong_conversation');
+      const pilot = await currentPilot(reader, conversationId);
+      need(pointerMatches(pilot.conversation, offer) && pilot.phone === r.phone
+        && pilot.conversation.communicationAccountId === r.account
+        && pilot.conversation.ownershipVersion === r.ownershipVersion, 'recovery_pilot_blocked');
+      const receipt = await loadMutationEpochReceipt({ db: reader, transaction: { get: ref => ref.get() }, conversationId, inboundMessageId: messageId });
+      need(receipt.valid && receipt.communicationAccountId === r.account
+        && communicationEpochDecision({ conversation: pilot.conversation, expectedOwnershipVersion: receipt.expectedOwnershipVersion,
+          expectedCustomerInputVersion: receipt.expectedCustomerInputVersion }).allowed, 'recovery_stale_response');
+      const message = await read(reader, 'whatsappMessages', messageId);
+      need(message, 'recovery_response_missing');
+      if (r.response) {
+        need(r.response.messageId === messageId && r.response.decision === decision
+          && r.response.sourceQuote === sourceQuote, 'recovery_response_conflict');
+        if (decision === 'decline') return { success: true, replayed: true, state: 'declined', ...P.NO_RESERVATION };
+        const current = await read(reader, 'appointments', r.appointmentId);
+        need(current?.status === 'confirmed' && current.offerId === offer.id && current.offerVersion === offer.version
+          && current.selectedOptionId === offer.options[0].id && current.date === offer.options[0].date
+          && current.startTime === offer.options[0].time, 'recovery_replay_changed');
+        return { success: true, replayed: true, state: 'accepted', appointmentId: current.id,
+          changeKind: 'customer_reschedule', appointment: current, ...P.NO_RESERVATION };
+      }
+      P.assertReplyEvidence({ offer, conversation: pilot.conversation, message, receipt, quote: sourceQuote, now });
+      const delivery = await deliveryProof(reader, offer, r.delivery.queueId, r.delivery.messageId);
+      need(digest(delivery) === digest(r.delivery), 'recovery_delivery_changed');
+      const response = { messageId, decision, sourceQuote, at: now.toISOString(), customerInputVersion: receipt.expectedCustomerInputVersion };
+      if (decision === 'decline') {
+        // Declining THIS offer is not withdrawal from all waiting preferences.
+        transaction.set(db.collection('bookingOffers').doc(offer.id), { status: 'declined', recovery: { ...r, state: 'declined', response } }, { merge: true });
+        return { success: true, replayed: false, state: 'declined', ...P.NO_RESERVATION };
+      }
+      need(pilot.settings.autoRescheduleEnabled === true, 'recovery_reschedule_disabled');
+      const { record, original, cancellation } = await unchangedBasis(reader, offer, pilot);
+      await originalOwnership(reader, original);
+      const provider = createSchedulingProvider({ db: reader });
+      const fresh = await selectOption(reader, { get: ref => ref.get() }, provider, original, cancellation, now);
+      need(P.optionFingerprint(fresh.option) === P.optionFingerprint(offer.options[0])
+        && digest(fresh.request) === digest(offer.request), 'recovery_option_changed');
+      // Only after every response/identity/capacity check succeeds may the existing
+      // lifecycle see this exact pending offer as open. No intermediate open write.
+      const acceptedView = transactionView(db, transaction, offer.id);
+      const lifecycle = createBookingAppointmentLifecycle({ db: acceptedView.db,
+        schedulingProvider: createSchedulingProvider({ db: acceptedView.db }), clock: () => now });
+      const result = await lifecycle.rescheduleAppointment({ appointmentId: original.id, offerId: offer.id,
+        offerVersion: offer.version, optionId: offer.options[0].id, reason: 'customer_accepted_earlier_appointment',
+        note: sourceQuote, actor: { id: 'demac-customer-agent', name: 'Maya', source: 'maya-recovery-offer' },
+        changeKind: 'customer_reschedule', context: fresh.context });
+      need(result.success === true && result.appointment?.offerId === offer.id
+        && result.appointment.startTime === fresh.option.time && result.appointment.date === fresh.option.date,
+      'recovery_canonical_proof_missing');
+      transaction.set(db.collection('bookingOffers').doc(offer.id), { recovery: { ...r, state: 'accepted', response } }, { merge: true });
+      transaction.set(db.collection('communicationCases').doc(record.id), {
+        state: 'FULFILLED', fulfilledAtIso: now.toISOString(), fulfillment: { offerId: offer.id, offerVersion: offer.version,
+          appointmentId: original.id, sourceMessageId: messageId }, updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+      return { ...result, replayed: false, state: 'accepted', ...P.NO_RESERVATION };
+    });
+  }
+  return { prepare, bindDelivery, respond };
+}
+module.exports = { createMayaRecoveryOfferService, transactionView };
