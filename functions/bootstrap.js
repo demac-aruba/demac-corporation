@@ -37,6 +37,7 @@ module.exports = {
   ...appointmentNotifications,
   ...technicianDailySchedules,
   ...userManagement,
+  ...require("./careers"),
   ...voiceTranscription,
   ...professionalReports,
   ...marketingImageAnalysisCallable,

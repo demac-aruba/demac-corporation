@@ -1,0 +1,73 @@
+name: Careers Preview UI
+
+on:
+  push:
+    branches: [feature/careers-funnel-preview]
+    paths:
+      - 'apps/erp-next/components/careers/**'
+      - 'apps/erp-next/lib/careers-preview.ts'
+      - 'apps/erp-next/lib/careers-recovery.ts'
+      - 'functions/careers/form-contract.*'
+      - 'apps/erp-next/app/careers/**'
+      - 'apps/erp-next/scripts/careers-visual-acceptance.cjs'
+      - 'apps/erp-next/scripts/careers-navigation-acceptance.cjs'
+      - 'apps/erp-next/scripts/careers-form-contract.test.cjs'
+      - '.github/workflows/careers-preview-ui.yml'
+  pull_request:
+    paths:
+      - 'apps/erp-next/components/careers/**'
+      - 'apps/erp-next/lib/careers-preview.ts'
+      - 'apps/erp-next/lib/careers-recovery.ts'
+      - 'functions/careers/form-contract.*'
+      - 'apps/erp-next/app/careers/**'
+      - 'apps/erp-next/scripts/careers-visual-acceptance.cjs'
+      - 'apps/erp-next/scripts/careers-navigation-acceptance.cjs'
+      - 'apps/erp-next/scripts/careers-form-contract.test.cjs'
+      - '.github/workflows/careers-preview-ui.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: careers-ui-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Install existing Next app
+        run: npm install --prefix apps/erp-next --no-audit --no-fund
+      - name: Typecheck and build with existing required gates
+        env:
+          CAREERS_PREVIEW_BUILD: '1'
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: npm --prefix apps/erp-next run typecheck && npm --prefix apps/erp-next run build
+      - name: Install isolated test browser tooling
+        run: |
+          npm install --prefix "$RUNNER_TEMP/careers-browser" playwright@1.58.2 --no-audit --no-fund
+          "$RUNNER_TEMP/careers-browser/node_modules/.bin/playwright" install --with-deps chromium webkit firefox
+      - name: Test the compiled Next pages in desktop and mobile browsers
+        run: |
+          python3 -m http.server 4173 --bind 127.0.0.1 --directory apps/erp-next/out > "$RUNNER_TEMP/careers-server.log" 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" || true' EXIT
+          for i in $(seq 1 20); do curl --fail --silent http://127.0.0.1:4173/careers/ >/dev/null && break; sleep 1; done
+          NODE_PATH="$RUNNER_TEMP/careers-browser/node_modules" node apps/erp-next/scripts/careers-visual-acceptance.cjs
+          NODE_PATH="$RUNNER_TEMP/careers-browser/node_modules" node apps/erp-next/scripts/careers-navigation-acceptance.cjs
+      - name: Retain synthetic-data screenshots and actual results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: careers-preview-ui-${{ github.sha }}
+          path: careers-ui-results/
+          retention-days: 7
+          if-no-files-found: warn

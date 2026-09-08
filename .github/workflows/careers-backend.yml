@@ -1,0 +1,92 @@
+name: Careers backend integrity
+on:
+  push:
+    branches: [feature/careers-funnel-preview]
+    paths: ['functions/careers/**','functions/careers.js','functions/package.json','functions/bootstrap.js','firebase.careers-test.json','.github/workflows/careers-backend.yml','apps/erp-next/components/careers/**','apps/erp-next/components/recruitment/**','apps/erp-next/lib/firebase/careers.ts','apps/erp-next/lib/careers-preview.ts','apps/erp-next/lib/careers-recovery.ts','apps/erp-next/scripts/careers-form-contract.test.cjs','apps/erp-next/app/careers/**','apps/erp-next/app/(erp)/recruitment/**']
+  pull_request:
+    paths: ['functions/careers/**','functions/careers.js','firebase.careers-test.json','.github/workflows/careers-backend.yml','apps/erp-next/components/careers/**','apps/erp-next/components/recruitment/**','apps/erp-next/lib/firebase/careers.ts','apps/erp-next/lib/careers-preview.ts','apps/erp-next/lib/careers-recovery.ts','apps/erp-next/scripts/careers-form-contract.test.cjs','apps/erp-next/app/careers/**','apps/erp-next/app/(erp)/recruitment/**']
+permissions:
+  contents: read
+jobs:
+  recruitment-integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm install --prefix functions --no-audit --no-fund
+      - name: Existing backend syntax gates and Careers unit/security contracts
+        run: npm --prefix functions run validate:firebase && npm --prefix functions run test:careers
+      - name: Root-cause fault injection and shared browser/server form contract
+        run: |
+          node --test functions/careers/architecture.test.js
+          node --experimental-strip-types --test apps/erp-next/scripts/careers-form-contract.test.cjs
+      - name: Existing booking, field and communications regression suites
+        run: |
+          npm --prefix functions run test:booking-authority
+          npm --prefix functions run test:field-authority
+          npm --prefix functions run test:customer-agent-tools
+          npm --prefix functions run test:customer-agent-router
+          npm --prefix functions run test:transactional-whatsapp
+      - name: Persistent records, private files and ambiguous-write recovery in demo emulators only
+        env:
+          GCLOUD_PROJECT: demo-demac-careers
+        run: npx --yes firebase-tools@15.29.0 emulators:exec --config firebase.careers-test.json --project demo-demac-careers --only firestore,storage 'node --test functions/careers/emulator.test.js && node --test functions/careers/orphan-emulator.test.js'
+  recruitment-browser-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm install --prefix functions --no-audit --no-fund && npm install --prefix apps/erp-next --no-audit --no-fund
+      - name: Build server-backed interface with isolated demo configuration
+        env:
+          NEXT_PUBLIC_CAREERS_ADMIN_ENABLED: 'true'
+          NEXT_PUBLIC_CAREERS_LIVE_ENABLED: 'true'
+          NEXT_PUBLIC_CAREERS_FUNCTIONS_BASE_URL: http://127.0.0.1:4175
+          NEXT_PUBLIC_FIREBASE_API_KEY: test-api-key
+          NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: demo-demac-careers.firebaseapp.com
+          NEXT_PUBLIC_FIREBASE_PROJECT_ID: demo-demac-careers
+          NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: demo-demac-careers.appspot.com
+          NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: '123456'
+          NEXT_PUBLIC_FIREBASE_APP_ID: demo-careers-app
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: npm --prefix apps/erp-next run typecheck && npm --prefix apps/erp-next run build
+      - name: Install isolated test browsers
+        run: |
+          npm install --prefix "$RUNNER_TEMP/careers-browser" playwright@1.58.2 --no-audit --no-fund
+          "$RUNNER_TEMP/careers-browser/node_modules/.bin/playwright" install --with-deps chromium webkit
+      - name: Full administrative and applicant workflow, never production
+        env:
+          GCLOUD_PROJECT: demo-demac-careers
+        run: |
+          python3 -m http.server 4174 --bind 127.0.0.1 --directory apps/erp-next/out > "$RUNNER_TEMP/careers-live-server.log" 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" || true' EXIT
+          export NODE_PATH="$RUNNER_TEMP/careers-browser/node_modules"
+          npx --yes firebase-tools@15.29.0 emulators:exec --config firebase.careers-test.json --project demo-demac-careers --only firestore,storage,auth 'node functions/careers/browser-emulator.cjs'
+      - name: Retain actual screenshots and integration results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: careers-live-ui-${{ github.sha }}
+          path: careers-live-results/
+          retention-days: 7
