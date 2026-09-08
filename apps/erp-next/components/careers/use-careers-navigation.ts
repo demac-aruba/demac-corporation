@@ -47,10 +47,7 @@ function routeUrl(route: CareerRoute): string {
   url.hash = '';
   return `${url.pathname}${url.search}`;
 }
-/** Native browser history, integrated with Next's supported History API.
- * Only route identifiers are put in URLs/history.state. Drafts, files, contact
- * details and scroll/focus snapshots remain in component memory, never storage.
- */
+/** Route identifiers only in history; draft data and files remain in tab memory. */
 export function useCareersNavigation(normalize: (route: CareerRoute) => CareerRoute) {
   const [screen, setScreen] = useState<{ route: CareerRoute; ready: boolean; revision: number }>({ route: { view: 'jobs' }, ready: false, revision: 0 });
   const normalizer = useRef(normalize);
@@ -72,8 +69,6 @@ export function useCareersNavigation(normalize: (route: CareerRoute) => CareerRo
     pendingPosition.current = { entry, restore };
     setScreen(previous => ({ route: entry.route, ready: true, revision: previous.revision + 1 }));
   }, []);
-  // Run against the committed DOM before it becomes interactive. A delayed rAF
-  // focus can steal focus after a user (or browser automation) starts typing.
   useLayoutEffect(() => {
     const pending = pendingPosition.current;
     if (!screen.ready || !pending) return;
@@ -93,7 +88,9 @@ export function useCareersNavigation(normalize: (route: CareerRoute) => CareerRo
     session.current = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const initial: Entry = { id: ++sequence.current, parent: null, route: normalizer.current(readRoute()), scroll: 0, focus: null };
     entries.current.set(initial.id, initial);
-    window.history.replaceState({ [stateKey]: { session: session.current, id: initial.id } }, '', routeUrl(initial.route));
+    // A child effect can precede Next's history patch. Preserve the router's
+    // existing initial-entry state; dropping it makes Back reload the whole app.
+    window.history.replaceState({ ...window.history.state, [stateKey]: { session: session.current, id: initial.id } }, '', routeUrl(initial.route));
     publish(initial, false);
     const onPopState = () => {
       if (window.location.pathname !== pathname) return;
@@ -137,8 +134,6 @@ export function useCareersNavigation(normalize: (route: CareerRoute) => CareerRo
       distance += 1;
       if (ancestor && routeKey(ancestor.route) === routeKey(fallback)) { window.history.go(-distance); return; }
     }
-    // Direct role URLs have no in-module parent. Never send them to an unrelated
-    // origin or add sentinel entries that trap the browser Back button.
     navigate(fallback);
   }, [navigate, savePosition]);
   return { ...screen, navigate, backTo };
