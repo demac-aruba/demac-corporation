@@ -191,9 +191,9 @@ async function processObservedMessage({
   // An earlier-offer answer belongs to the existing Runtime's scoped offer
   // tools. Do not first create a new cancellation/reschedule Case or hold that
   // would invalidate the original booking before the offer can be accepted.
-  if (conversation.mayaRecoveryOffer) {
+  if (conversation.mayaRecoveryOffer || message.mayaRecoveryResponseRoute !== undefined) {
     try {
-      const scope = await readRecoveryTurnScope({ db, context: {
+      const scope = await readRecoveryTurnScope({ db, recordRoute: true, context: {
         conversationId, inboundMessageId: messageId,
         expectedOwnershipVersion, expectedCustomerInputVersion,
       } });
