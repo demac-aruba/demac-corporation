@@ -1,23 +1,76 @@
-/* The existing site uses `.public-site svg { width:100%; height:100%; }`
-   for hero illustrations. Constrain Careers action icons without changing that
-   shared rule, the brand or other modules. Applies to both file labels and CTAs. */
-.public-site[data-careers-version="premium-v2"] label > svg,
-.public-site[data-careers-version="premium-v2"] button > svg {
+/* Component-owned sizing beats `.public-site svg { width:100%; height:100% }`
+   in the shared public shell, regardless of CSS chunk order. Do not change the
+   shell rule: its full-size illustrations are still valid outside Careers. */
+.public-site[data-careers-version] svg[data-career-icon] {
   display: inline-block;
-  flex: 0 0 20px;
-  width: 20px;
-  min-width: 20px;
-  max-width: 20px;
-  height: 20px;
-  min-height: 20px;
-  max-height: 20px;
+  width: var(--career-icon-size, 22px);
+  min-width: var(--career-icon-size, 22px);
+  max-width: var(--career-icon-size, 22px);
+  height: var(--career-icon-size, 22px);
+  min-height: var(--career-icon-size, 22px);
+  max-height: var(--career-icon-size, 22px);
+  flex: 0 0 var(--career-icon-size, 22px);
+  vertical-align: middle;
 }
-.public-site[data-careers-version="premium-v2"] [data-step-state] svg {
-  width: 22px;
-  height: 22px;
+.public-site[data-careers-version] label > svg[data-career-icon],
+.public-site[data-careers-version] button > svg[data-career-icon] { --career-icon-size: 20px; }
+.public-site[data-careers-version] [data-career-facts] { gap: 14px; align-items: stretch; }
+.public-site[data-careers-version] [data-career-facts] > div {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 20px 18px;
+  border: 1px solid #e3edf8;
 }
-/* The shared public anchor inheritance otherwise makes this white button's
-   text inherit the footer's white foreground. Limit the correction to Careers. */
-.public-site[data-careers-version="premium-v2"] .premium-footer-whatsapp-button {
-  color: #0b2458;
+.public-site[data-careers-version] [data-career-facts] svg { --career-icon-size: 28px; }
+.public-site[data-careers-version] [data-career-facts] dt { margin: 0 0 5px; line-height: 1.4; }
+.public-site[data-careers-version] [data-career-facts] dd {
+  margin: 0; line-height: 1.45; word-break: normal; overflow-wrap: break-word;
+}
+.public-site[data-careers-version] [data-career-back] {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 46px;
+  width: 46px;
+  height: 46px;
+  min-height: 46px;
+  padding: 0;
+  border: 1px solid var(--career-border, #dfe8f2);
+  border-radius: 50%;
+  background: var(--career-surface, #fff);
+  color: var(--career-text, #0b2458);
+  box-shadow: 0 3px 10px rgba(11,36,88,.04);
+  cursor: pointer;
+  transition: background .15s, box-shadow .15s;
+}
+.public-site[data-careers-version] [data-career-back]:hover {
+  background: var(--career-soft, #eef5fc);
+  box-shadow: 0 4px 14px rgba(11,36,88,.09);
+}
+.public-site[data-careers-version] [data-career-back]:focus-visible {
+  outline: 3px solid var(--career-primary, #0864f6); outline-offset: 3px;
+}
+.public-site[data-careers-version] [data-career-navrow] {
+  display: flex; align-items: center; gap: 12px; margin: 0 0 20px; min-width: 0;
+}
+.public-site[data-careers-version] [data-career-navrow] > span {
+  font-size: .8125rem; color: var(--career-muted, #50627d); font-weight: 600;
+}
+.public-site[data-careers-version] [data-career-form-fields] {
+  border: 0; margin: 0; padding: 0; min-width: 0;
+}
+.public-site[data-careers-version] .premium-footer-whatsapp-button { color:#0b2458; }
+@media (max-width: 1050px) {
+  .public-site[data-careers-version] [data-career-facts] { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}
+@media (max-width: 500px) {
+  .public-site[data-careers-version] [data-career-facts] > div { grid-template-columns: 24px minmax(0,1fr); padding: 15px 12px; gap: 9px; }
+  .public-site[data-careers-version] [data-career-facts] svg { --career-icon-size: 24px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .public-site[data-careers-version] [data-career-back] { transition: none; }
 }

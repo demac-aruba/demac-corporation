@@ -4,7 +4,7 @@ import { sizeLabel } from './careers-ui';
 import s from './careers.module.css';
 import './careers-control-compat.css';
 
-export type IconName = 'person' | 'file' | 'certificate' | 'briefcase' | 'location' | 'clock' | 'chart' | 'check' | 'arrow' | 'mail' | 'upload' | 'camera' | 'close' | 'filters' | 'lock' | 'users';
+export type IconName = 'person' | 'file' | 'certificate' | 'briefcase' | 'location' | 'clock' | 'chart' | 'check' | 'arrow' | 'back' | 'mail' | 'upload' | 'camera' | 'close' | 'filters' | 'lock' | 'users';
 const paths: Record<IconName, ReactNode> = {
   person: <><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></>,
   file: <><path d="M14 2H5v20h14V7zM14 2v6h5M8 12h8M8 16h6"/></>,
@@ -15,6 +15,7 @@ const paths: Record<IconName, ReactNode> = {
   chart: <><path d="M4 21V11h4v10M10 21V7h4v14M16 21V3h4v18"/></>,
   check: <path d="m5 12 4 4L19 6"/>,
   arrow: <path d="M4 12h16m-6-6 6 6-6 6"/>,
+  back: <path d="M20 12H4m6-6-6 6 6 6"/>,
   mail: <><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 6 9 7 9-7"/></>,
   upload: <path d="M12 16V3m-5 5 5-5 5 5M4 15v6h16v-6"/>,
   camera: <><path d="m8 5 2-3h4l2 3h5v16H3V5z"/><circle cx="12" cy="12" r="4"/></>,
@@ -24,7 +25,10 @@ const paths: Record<IconName, ReactNode> = {
   users: <><circle cx="9" cy="7" r="3"/><path d="M2 21v-3a7 7 0 0 1 14 0v3M17 4a3 3 0 0 1 0 6M19 14c2 1 3 2 3 5v2"/></>,
 };
 export function CareerIcon({ name, className }: { name: IconName; className?: string }) {
-  return <svg className={className || s.icon} viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">{paths[name]}</svg>;
+  return <svg data-career-icon={name} className={className || s.icon} viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">{paths[name]}</svg>;
+}
+export function BackControl({ label, onClick, disabled = false }: { label: string; onClick: () => void; disabled?: boolean }) {
+  return <button type="button" data-career-back aria-label={label} title={label} onClick={onClick} disabled={disabled}><CareerIcon name="back"/></button>;
 }
 export function IconTile({ name, children }: { name: IconName; children?: ReactNode }) {
   return <span className={s.iconTile}><CareerIcon name={name}/>{children}</span>;
@@ -35,7 +39,7 @@ export function VacancyFacts({ vacancy }: { vacancy: Vacancy }) {
     ['location', 'Location', vacancy.location], ['briefcase', 'Department', vacancy.department],
     ['clock', 'Type', vacancy.contract], ['chart', 'Experience', experience || 'See requirements'],
   ];
-  return <dl className={s.factGrid}>{facts.map(([icon, label, value]) => <div key={label}><CareerIcon name={icon}/><div><dt>{label}</dt><dd>{value}</dd></div></div>)}</dl>;
+  return <dl data-career-facts className={s.factGrid}>{facts.map(([icon, label, value]) => <div key={label}><CareerIcon name={icon}/><div><dt>{label}</dt><dd>{value}</dd></div></div>)}</dl>;
 }
 export function ReadyFile({ file, onRemove }: { file: File; onRemove: () => void }) {
   return <div className={s.selectedFile} data-file-state="selected"><span className={s.greenCheck}><CareerIcon name="check"/></span><div className={s.selectedFileCopy}><strong>{file.name}</strong><small>{sizeLabel(file.size)} · Selected for review</small></div><button type="button" className={s.iconButton} aria-label={`Remove ${file.name}`} onClick={onRemove}><CareerIcon name="close"/></button></div>;

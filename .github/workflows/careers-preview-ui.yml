@@ -8,6 +8,7 @@ on:
       - 'apps/erp-next/lib/careers-preview.ts'
       - 'apps/erp-next/app/careers/**'
       - 'apps/erp-next/scripts/careers-visual-acceptance.cjs'
+      - 'apps/erp-next/scripts/careers-navigation-acceptance.cjs'
       - '.github/workflows/careers-preview-ui.yml'
 
 permissions:
@@ -46,6 +47,7 @@ jobs:
           trap 'kill "$SERVER_PID" || true' EXIT
           for i in $(seq 1 20); do curl --fail --silent http://127.0.0.1:4173/careers/ >/dev/null && break; sleep 1; done
           NODE_PATH="$RUNNER_TEMP/careers-browser/node_modules" node apps/erp-next/scripts/careers-visual-acceptance.cjs
+          NODE_PATH="$RUNNER_TEMP/careers-browser/node_modules" node apps/erp-next/scripts/careers-navigation-acceptance.cjs
       - name: Retain synthetic-data screenshots and actual results
         if: always()
         uses: actions/upload-artifact@v4

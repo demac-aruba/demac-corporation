@@ -1,5 +1,5 @@
-/* Tests the actual Next static export, not a substitute HTML implementation.
-   Use only fictional fixtures. External network traffic is blocked in every context. */
+/* Actual Next export, with existing acceptance checks retained.
+   Fictional fixtures only; block all external HTTP/S, including production. */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -18,8 +18,6 @@ const matrix = [
 ];
 function isLocalResource(raw) {
   const url = new URL(raw);
-  // WebKit exposes same-origin object-URL reads to routing; they are local files,
-  // not network traffic. Keep external HTTP/S origins blocked, including nested blobs.
   if (url.protocol === 'blob:') return new URL(url.pathname).origin === testOrigin;
   if (url.protocol === 'data:') return /^data:image\/(png|jpeg|webp);base64,/i.test(raw);
   return url.origin === testOrigin;
@@ -36,8 +34,7 @@ const report = [];
     await context.route('**/*', route => {
       const raw = route.request().url();
       if (isLocalResource(raw)) return route.continue();
-      blocked.push(raw);
-      return route.abort();
+      blocked.push(raw); return route.abort();
     });
     const page = await context.newPage();
     page.setDefaultTimeout(12000);
@@ -51,11 +48,14 @@ const report = [];
       await page.screenshot({ path: path.join(output, `${test.name}-${name}.png`), fullPage: true, animations: 'disabled' });
       const dims = await page.evaluate(() => ({ width: window.innerWidth, scroll: document.documentElement.scrollWidth }));
       check(dims.scroll <= dims.width + 1, `no horizontal overflow: ${name}`);
+      const icons = await page.locator('svg[data-career-icon]').evaluateAll(elements => elements.filter(el => el.getClientRects().length).map(el => ({ width: el.getBoundingClientRect().width, height: el.getBoundingClientRect().height })));
+      check(icons.every(d => d.width > 0 && d.width <= 32 && d.height > 0 && d.height <= 32), `every visible Careers icon stays bounded: ${name}`);
     }
     try {
       const response = await page.goto(`${base}/careers/`, { waitUntil: 'networkidle' });
       check(response.status() === 200, 'compiled careers route returns HTTP 200');
-      await page.locator('[data-careers-version="premium-v2"]').waitFor();
+      await page.locator('[data-careers-version="premium-v3"]').waitFor();
+      await page.getByRole('button', { name: 'View VRF Specialist', exact: true }).waitFor();
       check(await page.getByRole('button', { name: /^View / }).count() === 9, 'nine preview vacancies');
       const ribbon = await page.locator('details').filter({ has: page.locator('summary', { hasText: 'Review tools' }) }).evaluate(el => el.parentElement.getBoundingClientRect().height);
       check(ribbon <= 52, 'preview ribbon stays compact');
