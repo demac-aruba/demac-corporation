@@ -1,25 +1,25 @@
 'use strict';
 
-// Internal composition service. No public endpoint, sender, trigger or production
-// activation is introduced here. Delivery must be proven by the existing transport.
+// Internal composition service: no endpoint, sender, trigger or live activation.
 const { FieldValue } = require('firebase-admin/firestore');
+const { defineSecret } = require('firebase-functions/params');
 const { createBookingAuthority } = require('./bookingAuthorityFirestore');
 const { createBookingAppointmentLifecycle } = require('./bookingAuthorityAppointmentLifecycle');
 const { createSchedulingProvider } = require('./bookingAuthoritySchedulingProvider');
 const { normalizeBookingRequest, normalizeOfferOption } = require('./bookingAuthorityCore');
 const { createMayaRecoveryMatching, recoveryTarget, releasedCapacityMatches } = require('./mayaRecoveryMatching');
 const { activeAccountDecision } = require('./demacCommunicationIdentity');
-const { communicationEpochDecision } = require('./demacCustomerTurn');
+const { communicationEpochDecision, customerSemanticContent } = require('./demacCustomerTurn');
 const { loadMutationEpochReceipt } = require('./demacCustomerAppointmentMutationGuard');
 const { resolveInboundParty } = require('./customerContactDirectory');
 const { configuredAllowlist, mayaReplyDecision, mayaSenderOwnershipDecision, resolveConversationPhone } = require('./demacCustomerAgentReplyPolicy');
 const { digest } = require('./demacCustomerInterestHistory');
 const { documentId } = require('./mayaOperationsReadModel');
+const { analyzeRecoveryResponse, validateDecision } = require('./mayaRecoveryResponseAnalysis');
 const P = require('./mayaRecoveryOfferPolicy');
 const need = P.requireCondition;
 
 // Reuse one real transaction for all domain reads and the canonical lifecycle.
-// No nested Firestore transaction and no network/model work occurs in the callback.
 function transactionView(db, transaction, acceptedOfferId = '') {
   const targets = new WeakMap();
   const raw = target => targets.get(target) || target;
@@ -29,18 +29,13 @@ function transactionView(db, transaction, acceptedOfferId = '') {
     }
     return snapshot;
   }
-  const t = {
-    get: async target => project(await transaction.get(raw(target)), target),
-    set: (target, value, options) => transaction.set(raw(target), value, options),
-  };
+  const t = { get: async target => project(await transaction.get(raw(target)), target),
+    set: (target, value, options) => transaction.set(raw(target), value, options) };
   function wrap(target) {
-    const result = { id: target.id, path: target.path, get: () => t.get(target),
-      set: (value, options) => t.set(target, value, options),
-      doc: id => wrap(target.doc(id)), where: (...args) => wrap(target.where(...args)),
-      limit: count => wrap(target.limit(count)), orderBy: (...args) => wrap(target.orderBy(...args)),
-      startAfter: cursor => wrap(target.startAfter(cursor)) };
-    targets.set(result, target);
-    return result;
+    const result = { id: target.id, path: target.path, get: () => t.get(target), set: (value, options) => t.set(target, value, options),
+      doc: id => wrap(target.doc(id)), where: (...args) => wrap(target.where(...args)), limit: count => wrap(target.limit(count)),
+      orderBy: (...args) => wrap(target.orderBy(...args)), startAfter: cursor => wrap(target.startAfter(cursor)) };
+    targets.set(result, target); return result;
   }
   return { db: { collection: name => wrap(db.collection(name)), runTransaction: callback => callback(t) }, transaction: t };
 }
@@ -51,19 +46,15 @@ async function read(db, collection, id) {
 }
 function publicOffer(offer, replayed = false) {
   const option = offer.options[0];
-  return { success: true, replayed, offerId: offer.id, offerVersion: offer.version,
-    state: offer.recovery.state, appointmentId: offer.recovery.appointmentId,
-    date: option.date, time: option.time, endTime: option.endTime, expiresAt: offer.expiresAt,
-    messageText: offer.recovery.messageText, ...P.NO_RESERVATION };
+  return { success: true, replayed, offerId: offer.id, offerVersion: offer.version, state: offer.recovery.state,
+    appointmentId: offer.recovery.appointmentId, date: option.date, time: option.time, endTime: option.endTime,
+    expiresAt: offer.expiresAt, messageText: offer.recovery.messageText, ...P.NO_RESERVATION };
 }
 async function currentPilot(db, conversationId) {
-  const [settings, comms, conversation] = await Promise.all([
-    read(db, 'businessSettings', 'customer-agent'), read(db, 'businessSettings', 'whatsapp'),
-    read(db, 'communicationConversations', conversationId),
-  ]);
+  const [settings, comms, conversation] = await Promise.all([read(db, 'businessSettings', 'customer-agent'),
+    read(db, 'businessSettings', 'whatsapp'), read(db, 'communicationConversations', conversationId)]);
   need(settings?.recoveryOffersEnabled === true, 'recovery_offers_disabled');
-  need(conversation && activeAccountDecision({ conversation, settings: comms || {} }).allowed,
-    'recovery_account_changed');
+  need(conversation && activeAccountDecision({ conversation, settings: comms || {} }).allowed, 'recovery_account_changed');
   const phone = resolveConversationPhone({ conversation });
   need(configuredAllowlist(settings).includes(phone)
     && mayaReplyDecision({ conversation, settings, communicationSettings: comms || {} }).allowed
@@ -74,15 +65,11 @@ async function unchangedBasis(db, offer, pilot) {
   const r = offer.recovery;
   need(pilot.conversation.communicationAccountId === r.account && pilot.phone === r.phone
     && pilot.conversation.ownershipVersion === r.ownershipVersion, 'recovery_account_changed');
-  const [record, original, cancellation, property] = await Promise.all([
-    read(db, 'communicationCases', r.caseId), read(db, 'appointments', r.appointmentId),
-    read(db, 'appointments', r.cancellationId), read(db, 'properties', offer.request.propertyId),
-  ]);
-  need(record?.state === 'WAITING' && P.preferenceFingerprint(record) === r.preferenceFingerprint,
-    'recovery_preference_changed');
+  const [record, original, cancellation, property] = await Promise.all([read(db, 'communicationCases', r.caseId),
+    read(db, 'appointments', r.appointmentId), read(db, 'appointments', r.cancellationId), read(db, 'properties', offer.request.propertyId)]);
+  need(record?.state === 'WAITING' && P.preferenceFingerprint(record) === r.preferenceFingerprint, 'recovery_preference_changed');
   need(original && P.originalFingerprint(original) === r.originalFingerprint, 'recovery_original_changed');
-  need(cancellation && P.originalFingerprint(cancellation) === r.cancellationFingerprint,
-    'recovery_cancellation_changed');
+  need(cancellation && P.originalFingerprint(cancellation) === r.cancellationFingerprint, 'recovery_cancellation_changed');
   const party = await resolveInboundParty(db, { phone: pilot.phone, whatsapp: pilot.phone });
   need(!party.ambiguous && party.customer?.active !== false && party.customer?.id === offer.request.customerId
     && property?.clientId === party.customer.id && property.active !== false, 'recovery_customer_changed');
@@ -91,14 +78,11 @@ async function unchangedBasis(db, offer, pilot) {
 async function originalOwnership(db, original) {
   for (const field of ['workOrderIds', 'capacityLockIds']) {
     const ids = original[field];
-    need(Array.isArray(ids) && ids.length > 0 && ids.length <= 48 && new Set(ids).size === ids.length,
-      'recovery_original_links_invalid');
+    need(Array.isArray(ids) && ids.length > 0 && ids.length <= 48 && new Set(ids).size === ids.length, 'recovery_original_links_invalid');
     for (const id of ids) documentId(id);
   }
-  const [orders, locks] = await Promise.all([
-    Promise.all(original.workOrderIds.map(id => read(db, 'workOrders', id))),
-    Promise.all(original.capacityLockIds.map(id => read(db, 'bookingCapacityLocks', id))),
-  ]);
+  const [orders, locks] = await Promise.all([Promise.all(original.workOrderIds.map(id => read(db, 'workOrders', id))),
+    Promise.all(original.capacityLockIds.map(id => read(db, 'bookingCapacityLocks', id)))]);
   need(orders.every(order => order && order.appointmentId === original.id && order.clientId === original.customerId
     && order.propertyId === original.propertyId && order.date === original.date
     && ['confirmada', 'confirmed', 'scheduled'].includes(String(order.status).toLowerCase())
@@ -110,14 +94,11 @@ async function selectOption(db, transaction, provider, original, cancellation, n
   const target = recoveryTarget(cancellation, now);
   need(`${target.date}T${target.time}` < `${original.date}T${original.startTime}`, 'recovery_not_earlier');
   const request = normalizeBookingRequest({ customerId: original.customerId, propertyId: original.propertyId,
-    workLines: original.workLines, notes: original.notes,
-    constraints: { requestedDate: target.date, requestedTime: target.time } });
-  const context = { channel: 'whatsapp', source: 'maya-recovery-offer', excludeAppointmentId: original.id,
-    requiredPrimaryVanId: target.vanId };
+    workLines: original.workLines, notes: original.notes, constraints: { requestedDate: target.date, requestedTime: target.time } });
+  const context = { channel: 'whatsapp', source: 'maya-recovery-offer', excludeAppointmentId: original.id, requiredPrimaryVanId: target.vanId };
   const available = await provider.checkAvailability({ request, context, now });
   for (const raw of available.options || []) {
-    if (raw.date !== target.date || raw.time !== target.time || raw.endTime > target.endTime
-      || raw.assignments?.[0]?.vanId !== target.vanId) continue;
+    if (raw.date !== target.date || raw.time !== target.time || raw.endTime > target.endTime || raw.assignments?.[0]?.vanId !== target.vanId) continue;
     const option = normalizeOfferOption(raw);
     const valid = await provider.validateTransaction({ db, transaction, request, option, appointmentId: original.id, context, now });
     if (valid?.available !== true || !Array.isArray(valid.capacityLocks) || !valid.capacityLocks.length
@@ -131,7 +112,13 @@ async function selectOption(db, transaction, provider, original, cancellation, n
 function pointerMatches(conversation, offer) {
   return conversation.mayaRecoveryOffer?.id === offer.id && conversation.mayaRecoveryOffer?.version === offer.version;
 }
-function createMayaRecoveryOfferService({ db, clock = () => new Date() } = {}) {
+function responseMessageFingerprint(message) {
+  return digest({ id: message.id, direction: message.direction, conversationId: message.conversationId,
+    account: message.communicationAccountId, input: message.customerInputVersion, content: customerSemanticContent(message, 8000),
+    firstIngestedAtIso: message.firstIngestedAtIso, whatsappTimestamp: message.whatsappTimestamp });
+}
+function createMayaRecoveryOfferService({ db, clock = () => new Date(), analyzeResponse = analyzeRecoveryResponse,
+  apiKeyProvider = () => defineSecret('OPENAI_API_KEY').value() } = {}) {
   need(db && typeof db.runTransaction === 'function', 'transaction_required');
   async function prepare({ cancelledAppointmentId, caseId, afterId = '' } = {}) {
     documentId(cancelledAppointmentId); documentId(caseId); if (afterId) documentId(afterId);
@@ -142,24 +129,23 @@ function createMayaRecoveryOfferService({ db, clock = () => new Date() } = {}) {
       const pilot = await currentPilot(reader, record.conversationId);
       const ttl = P.configuredTtl(pilot.settings);
       const id = P.recoveryOfferId(pilot.conversation.communicationAccountId, cancelledAppointmentId);
-      const [previous, pending, original, cancellation] = await Promise.all([
-        read(reader, 'bookingOffers', id), read(reader, 'bookingOffers', pilot.conversation.mayaRecoveryOffer?.id),
-        read(reader, 'appointments', record.appointmentId), read(reader, 'appointments', cancelledAppointmentId),
-      ]);
+      const [previous, pending, original, cancellation] = await Promise.all([read(reader, 'bookingOffers', id),
+        read(reader, 'bookingOffers', pilot.conversation.mayaRecoveryOffer?.id), read(reader, 'appointments', record.appointmentId),
+        read(reader, 'appointments', cancelledAppointmentId)]);
       if (previous) {
         P.assertOffer(previous, previous.version);
         if (P.isOpen(previous, now)) {
           need(previous.recovery.caseId === caseId && pointerMatches(pilot.conversation, previous), 'recovery_offer_already_pending');
           await unchangedBasis(reader, previous, pilot);
+          need(pilot.conversation.customerInputVersion === previous.recovery.customerInputVersion, 'recovery_customer_turn_changed');
           return publicOffer(previous, true);
         }
         need(previous.recovery.state !== 'accepted', 'recovery_opening_already_used');
       }
       need(!pending || !P.isOpen(pending, now), 'recovery_conversation_has_offer');
-      // Reuse the existing bounded inspector on the selected review page. It
-      // validates current history, exact identity and all route/pilot restrictions.
-      const inspection = await createMayaRecoveryMatching({
-        db: { collection: db.collection.bind(db), runTransaction: callback => callback(transaction) }, clock: () => now,
+      // Reuse the existing bounded inspector on the selected review page.
+      const inspection = await createMayaRecoveryMatching({ db: { collection: db.collection.bind(db),
+        runTransaction: callback => callback(transaction) }, clock: () => now,
       }).inspect({ cancelledAppointmentId, ...(afterId ? { afterId } : {}) });
       need(inspection.rows.some(row => row.caseId === caseId && row.status === 'compatible_for_review'), 'recovery_candidate_not_current');
       await originalOwnership(reader, original);
@@ -188,12 +174,10 @@ function createMayaRecoveryOfferService({ db, clock = () => new Date() } = {}) {
         messageText: P.renderOffer(original, selection.option, expiresAt, pilot.conversation.language) };
       const offer = { ...staged, version, status: 'recovery_pending', expiresAt, recovery };
       recovery.fingerprint = P.offerFingerprint(offer);
-      // A recovery_pending offer cannot be used by create_appointment or ordinary
-      // reschedule tools. Only an evidenced response opens its transaction-local view.
+      // Ordinary booking tools cannot consume this pending offer. It is opened
+      // only in the transaction-local view of its verified acceptance below.
       transaction.set(db.collection('bookingOffers').doc(id), offer);
-      transaction.set(db.collection('communicationConversations').doc(record.conversationId), {
-        mayaRecoveryOffer: { id, version },
-      }, { merge: true });
+      transaction.set(db.collection('communicationConversations').doc(record.conversationId), { mayaRecoveryOffer: { id, version } }, { merge: true });
       return publicOffer(offer);
     });
   }
@@ -229,40 +213,67 @@ function createMayaRecoveryOfferService({ db, clock = () => new Date() } = {}) {
       return publicOffer({ ...offer, recovery: { ...r, state: 'sent', delivery } }, Boolean(r.delivery));
     });
   }
-  async function respond({ offerId, offerVersion, decision, sourceQuote } = {}, context = {}) {
-    need(['accept', 'decline'].includes(decision), 'invalid_recovery_response');
+  async function responseContext(reader, args, context) {
     const conversationId = documentId(context.conversationId); const messageId = documentId(context.inboundMessageId);
+    const offer = await read(reader, 'bookingOffers', args.offerId); const r = P.assertOffer(offer, args.offerVersion);
+    need(r.conversationId === conversationId, 'recovery_wrong_conversation');
+    const pilot = await currentPilot(reader, conversationId);
+    need(pointerMatches(pilot.conversation, offer) && pilot.phone === r.phone
+      && pilot.conversation.communicationAccountId === r.account
+      && pilot.conversation.ownershipVersion === r.ownershipVersion, 'recovery_pilot_blocked');
+    const receipt = await loadMutationEpochReceipt({ db: reader, transaction: { get: ref => ref.get() }, conversationId, inboundMessageId: messageId });
+    need(receipt.valid && receipt.communicationAccountId === r.account
+      && communicationEpochDecision({ conversation: pilot.conversation, expectedOwnershipVersion: receipt.expectedOwnershipVersion,
+        expectedCustomerInputVersion: receipt.expectedCustomerInputVersion }).allowed, 'recovery_stale_response');
+    const message = await read(reader, 'whatsappMessages', messageId);
+    need(message, 'recovery_response_missing');
+    need(message.direction === 'inbound' && message.communicationAccountId === r.account && message.conversationId === conversationId
+      && message.customerInputVersion === receipt.expectedCustomerInputVersion, 'recovery_stale_response');
+    const sourceFingerprint = responseMessageFingerprint(message);
+    if (!r.response) {
+      P.assertReplyEvidence({ offer, conversation: pilot.conversation, message, receipt, quote: args.sourceQuote, now: clock() });
+      const delivery = await deliveryProof(reader, offer, r.delivery.queueId, r.delivery.messageId);
+      need(digest(delivery) === digest(r.delivery), 'recovery_delivery_changed');
+    }
+    const fingerprint = digest({ offer: r.fingerprint, state: r.state, delivery: r.delivery || null, response: r.response || null,
+      sourceFingerprint, ownershipVersion: pilot.conversation.ownershipVersion, customerInputVersion: pilot.conversation.customerInputVersion });
+    return { offer, r, pilot, receipt, message, sourceFingerprint, fingerprint };
+  }
+  async function respond(args = {}, context = {}) {
+    const { decision, sourceQuote } = args;
+    need(['accept', 'decline'].includes(decision), 'invalid_recovery_response');
+    const first = await db.runTransaction(transaction => responseContext(transactionView(db, transaction).db, args, context), { readOnly: true });
+    let interpretation = null;
+    if (!first.r.response) {
+      // Semantic interpretation is outside every Firestore transaction. Its result
+      // never overrides deterministic binding, current state or capacity checks.
+      const customerText = customerSemanticContent(first.message, 8000);
+      interpretation = validateDecision(await analyzeResponse({ offerText: first.r.messageText,
+        customerText, apiKey: apiKeyProvider() }), customerText);
+      need(interpretation.decision === decision && interpretation.confidence >= 0.9 && interpretation.ambiguous === false,
+        'recovery_response_requires_clarification');
+    }
     return db.runTransaction(async transaction => {
       const now = clock(); const reader = transactionView(db, transaction).db;
-      const offer = await read(reader, 'bookingOffers', offerId); const r = P.assertOffer(offer, offerVersion);
-      need(r.conversationId === conversationId, 'recovery_wrong_conversation');
-      const pilot = await currentPilot(reader, conversationId);
-      need(pointerMatches(pilot.conversation, offer) && pilot.phone === r.phone
-        && pilot.conversation.communicationAccountId === r.account
-        && pilot.conversation.ownershipVersion === r.ownershipVersion, 'recovery_pilot_blocked');
-      const receipt = await loadMutationEpochReceipt({ db: reader, transaction: { get: ref => ref.get() }, conversationId, inboundMessageId: messageId });
-      need(receipt.valid && receipt.communicationAccountId === r.account
-        && communicationEpochDecision({ conversation: pilot.conversation, expectedOwnershipVersion: receipt.expectedOwnershipVersion,
-          expectedCustomerInputVersion: receipt.expectedCustomerInputVersion }).allowed, 'recovery_stale_response');
-      const message = await read(reader, 'whatsappMessages', messageId);
-      need(message, 'recovery_response_missing');
+      const currentContext = await responseContext(reader, args, context);
+      const { offer, r, pilot, receipt, message, sourceFingerprint } = currentContext;
       if (r.response) {
-        need(r.response.messageId === messageId && r.response.decision === decision
-          && r.response.sourceQuote === sourceQuote, 'recovery_response_conflict');
+        need(r.response.messageId === message.id && r.response.decision === decision && r.response.sourceQuote === sourceQuote
+          && r.response.sourceFingerprint === sourceFingerprint, 'recovery_response_conflict');
         if (decision === 'decline') return { success: true, replayed: true, state: 'declined', ...P.NO_RESERVATION };
         const current = await read(reader, 'appointments', r.appointmentId);
         need(current?.status === 'confirmed' && current.offerId === offer.id && current.offerVersion === offer.version
           && current.selectedOptionId === offer.options[0].id && current.date === offer.options[0].date
-          && current.startTime === offer.options[0].time, 'recovery_replay_changed');
+          && current.startTime === offer.options[0].time && P.originalFingerprint(current) === r.response.canonicalFingerprint,
+        'recovery_replay_changed');
         return { success: true, replayed: true, state: 'accepted', appointmentId: current.id,
-          changeKind: 'customer_reschedule', appointment: current, ...P.NO_RESERVATION };
+          changeKind: 'customer_reschedule', appointment: current, capacityReserved: true, proactiveContactAuthorized: false };
       }
-      P.assertReplyEvidence({ offer, conversation: pilot.conversation, message, receipt, quote: sourceQuote, now });
-      const delivery = await deliveryProof(reader, offer, r.delivery.queueId, r.delivery.messageId);
-      need(digest(delivery) === digest(r.delivery), 'recovery_delivery_changed');
-      const response = { messageId, decision, sourceQuote, at: now.toISOString(), customerInputVersion: receipt.expectedCustomerInputVersion };
+      need(currentContext.fingerprint === first.fingerprint, 'recovery_stale_response');
+      const response = { messageId: message.id, decision, sourceQuote, sourceFingerprint, interpretation,
+        at: now.toISOString(), customerInputVersion: receipt.expectedCustomerInputVersion };
       if (decision === 'decline') {
-        // Declining THIS offer is not withdrawal from all waiting preferences.
+        // Declining this offer is not withdrawal from all waiting preferences.
         transaction.set(db.collection('bookingOffers').doc(offer.id), { status: 'declined', recovery: { ...r, state: 'declined', response } }, { merge: true });
         return { success: true, replayed: false, state: 'declined', ...P.NO_RESERVATION };
       }
@@ -273,8 +284,6 @@ function createMayaRecoveryOfferService({ db, clock = () => new Date() } = {}) {
       const fresh = await selectOption(reader, { get: ref => ref.get() }, provider, original, cancellation, now);
       need(P.optionFingerprint(fresh.option) === P.optionFingerprint(offer.options[0])
         && digest(fresh.request) === digest(offer.request), 'recovery_option_changed');
-      // Only after every response/identity/capacity check succeeds may the existing
-      // lifecycle see this exact pending offer as open. No intermediate open write.
       const acceptedView = transactionView(db, transaction, offer.id);
       const lifecycle = createBookingAppointmentLifecycle({ db: acceptedView.db,
         schedulingProvider: createSchedulingProvider({ db: acceptedView.db }), clock: () => now });
@@ -282,15 +291,14 @@ function createMayaRecoveryOfferService({ db, clock = () => new Date() } = {}) {
         offerVersion: offer.version, optionId: offer.options[0].id, reason: 'customer_accepted_earlier_appointment',
         note: sourceQuote, actor: { id: 'demac-customer-agent', name: 'Maya', source: 'maya-recovery-offer' },
         changeKind: 'customer_reschedule', context: fresh.context });
-      need(result.success === true && result.appointment?.offerId === offer.id
-        && result.appointment.startTime === fresh.option.time && result.appointment.date === fresh.option.date,
-      'recovery_canonical_proof_missing');
+      need(result.success === true && result.appointment?.offerId === offer.id && result.appointment.startTime === fresh.option.time
+        && result.appointment.date === fresh.option.date, 'recovery_canonical_proof_missing');
+      response.canonicalFingerprint = P.originalFingerprint(result.appointment);
       transaction.set(db.collection('bookingOffers').doc(offer.id), { recovery: { ...r, state: 'accepted', response } }, { merge: true });
-      transaction.set(db.collection('communicationCases').doc(record.id), {
-        state: 'FULFILLED', fulfilledAtIso: now.toISOString(), fulfillment: { offerId: offer.id, offerVersion: offer.version,
-          appointmentId: original.id, sourceMessageId: messageId }, updatedAt: FieldValue.serverTimestamp(),
-      }, { merge: true });
-      return { ...result, replayed: false, state: 'accepted', ...P.NO_RESERVATION };
+      transaction.set(db.collection('communicationCases').doc(record.id), { state: 'FULFILLED', fulfilledAtIso: now.toISOString(),
+        fulfillment: { offerId: offer.id, offerVersion: offer.version, appointmentId: original.id, sourceMessageId: message.id },
+        updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+      return { ...result, replayed: false, state: 'accepted', capacityReserved: true, proactiveContactAuthorized: false };
     });
   }
   return { prepare, bindDelivery, respond };
