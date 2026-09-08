@@ -9,7 +9,13 @@ const MAX_MESSAGES = 40;
 const MAX_TEXT = 24000;
 const MAX_AGE_MS = 30 * 86400000; // Recovery coverage, NOT expiration of the customer's preference.
 
-function digest(value) { return hashId(JSON.stringify(value), 64); }
+// Firestore may reorder map keys. Evidence hashes cannot depend on insertion order.
+function canonicalValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalValue(value[key])]));
+  return value;
+}
+function digest(value) { return hashId(JSON.stringify(canonicalValue(value)), 64); }
 function recentIds(conversation) {
   const recent = conversation.recentMessages;
   if (!Array.isArray(recent) || !recent.length) throw failure('history_incomplete', 'Canonical recent message references are required.');
@@ -68,10 +74,16 @@ function interestMaterial(record) {
 async function recoveredInterestIsCurrent({ reader, record, conversation, now = new Date() }) {
   const review = record.interestReview;
   if (!review || review.version !== HISTORY_VERSION || review.customerInputVersion !== conversation.customerInputVersion
-    || review.ownershipVersion !== conversation.ownershipVersion || review.materialFingerprint !== digest(interestMaterial(record))) return false;
+    || review.ownershipVersion !== conversation.ownershipVersion || review.materialFingerprint !== digest(interestMaterial(record))
+    || !Array.isArray(review.reviewedMessageIds) || !review.reviewedMessageIds.length || review.reviewedMessageIds.length > MAX_MESSAGES
+    || new Set(review.reviewedMessageIds).size !== review.reviewedMessageIds.length) return false;
   try {
-    const window = await loadHistoryWindow(reader, conversation, now);
+    // Later outbound acknowledgments are not a new customer preference. Re-read
+    // the exact reviewed evidence, while epochs still reject any newer inbound
+    // or operator takeover. The matcher separately verifies the live booking.
+    const reviewed = { ...conversation, recentMessages: review.reviewedMessageIds.map(id => ({ id })) };
+    const window = await loadHistoryWindow(reader, reviewed, now);
     return review.windowFingerprint === window.fingerprint && window.entries.some(message => message.id === record.lastSourceMessageId && message.direction === 'inbound');
   } catch { return false; }
 }
-module.exports = { HISTORY_VERSION, MAX_MESSAGES, MAX_TEXT, MAX_AGE_MS, digest, interestMaterial, loadHistoryWindow, messageEvidence, recentIds, recoveredInterestIsCurrent };
+module.exports = { HISTORY_VERSION, MAX_MESSAGES, MAX_TEXT, MAX_AGE_MS, canonicalValue, digest, interestMaterial, loadHistoryWindow, messageEvidence, recentIds, recoveredInterestIsCurrent };
