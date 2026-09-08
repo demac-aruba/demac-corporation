@@ -6,6 +6,7 @@ import { copyForSubmission, emptyDraft, exampleVacancies, totalFileBytes, valida
 import { ApplicationFunnel } from './application-funnel';
 import { RecruitmentPreview } from './recruitment-preview';
 import { Field } from './careers-ui';
+import { CareerIcon, VacancyFacts } from './careers-visuals';
 import s from './careers.module.css';
 
 type View = 'jobs' | 'detail' | 'form' | 'success' | 'admin';
@@ -21,10 +22,12 @@ export function CareersPreview() {
   const [submittedId, setSubmittedId] = useState('');
   const submitLock = useRef(false);
   const heading = useRef<HTMLHeadingElement>(null);
+  const tools = useRef<HTMLDetailsElement>(null);
   const draft = selected ? drafts[selected.id] || emptyDraft() : emptyDraft();
+  const submitted = applications.find(application => application.id === submittedId);
   const hasDraft = Object.values(drafts).some(item => item.givenName || item.email || item.photo || item.cv);
   useEffect(() => { if (new URLSearchParams(window.location.search).get('view') === 'admin') setView('admin'); }, []);
-  useEffect(() => { heading.current?.focus(); window.scrollTo({ top: 0, behavior: 'auto' }); }, [view]);
+  useEffect(() => { heading.current?.focus({ preventScroll: true }); window.scrollTo({ top: 0, behavior: 'auto' }); }, [view]);
   useEffect(() => {
     if (!hasDraft && !applications.length) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
@@ -53,30 +56,41 @@ export function CareersPreview() {
     return null;
   }
   function tryApplication() { setView('jobs'); setSubmittedId(''); }
-  return <main className={`public-site public-subsite ${s.root} ${view === 'admin' ? s.admin : ''}`} onClickCapture={event => {
+  function reviewView(next: View) { if (tools.current) tools.current.open = false; setView(next); }
+  return <main className={`public-site public-subsite ${s.root} ${view === 'admin' ? s.admin : ''}`} data-careers-version="premium-v2" onClickCapture={event => {
     const anchor = (event.target as HTMLElement).closest('a');
     if (anchor && !anchor.hasAttribute('download') && !anchor.href.startsWith('blob:') && (hasDraft || applications.length) && !window.confirm('Leave this preview? The application details in this session will be cleared.')) { event.preventDefault(); event.stopPropagation(); }
   }}>
-    <div className={s.previewBar}><div><strong>CAREERS · PREVIEW</strong><span>Test information only · No live applications or emails · Not merged</span></div><nav aria-label="Preview experience"><button type="button" aria-pressed={view !== 'admin'} onClick={() => setView(selected && drafts[selected.id] ? 'form' : 'jobs')}>Candidate view</button><button type="button" aria-pressed={view === 'admin'} onClick={() => { setSubmittedId(''); setView('admin'); }}>Recruitment preview</button></nav></div>
-    {view === 'jobs' || view === 'detail' ? <PublicHeader /> : <header className={s.compactHeader}><PublicBrand /><span>{view === 'admin' ? 'ERP NEXT · RECRUITMENT' : 'Careers'}</span></header>}
+    <div className={s.previewRibbon}><span><i aria-hidden="true"/>Preview v2 · Test data only</span><details ref={tools} className={s.reviewTools}><summary>Review tools <span aria-hidden="true">⌄</span></summary><div><strong>Design review · Not merged</strong><p>Test details and files stay in this tab. No live applications or emails.</p><button type="button" className={s.secondary} onClick={() => reviewView(selected && drafts[selected.id] ? 'form' : 'jobs')}>Candidate view</button><button type="button" className={s.primary} onClick={() => { setSubmittedId(''); reviewView('admin'); }}>Recruitment preview</button></div></details></div>
+    {view === 'jobs' || view === 'detail' ? <PublicHeader/> : <header className={s.compactHeader}><PublicBrand/><span>{view === 'admin' ? 'Recruitment' : 'Careers'}</span></header>}
     {view === 'jobs' && <>
-      <section className={`public-page-hero ${s.hero}`}><div className="public-page-hero-inner"><div><span className="public-page-kicker">CAREERS AT DEMAC</span><h1 ref={heading} tabIndex={-1}>Your next chapter.<br /><em>A cooler Aruba.</em></h1><p>Bring your skills, curiosity and experience to our team.</p><div className={s.heroTags}><span>Technical & office roles</span><span>Apply from any device</span><span>No account needed</span></div></div><div className="public-page-hero-panel" aria-hidden="true"><div className="public-page-panel-unit" /><div className="public-page-panel-air" /></div></div></section>
-      <section className={s.container} aria-label="Open positions"><div className={s.catalogueHeader}><div><h2>Find your opportunity</h2><p>{openJobs.length} {openJobs.length === 1 ? 'position' : 'positions'} · Preview vacancies</p></div><div className={s.catalogueFilters}><Field id="job-search" label="Search positions"><input id="job-search" type="search" value={search} placeholder="Role or keyword" onChange={event => setSearch(event.target.value)} /></Field><Field id="department-filter" label="Department"><select id="department-filter" value={department} onChange={event => setDepartment(event.target.value)}><option value="">All departments</option>{departments.map(item => <option key={item}>{item}</option>)}</select></Field></div></div>
-        <div className={s.vacancyGrid}>{openJobs.map(job => <article className={s.jobCard} key={job.id}><span className={s.eyebrow}>{job.department}</span><h2>{job.title}</h2><div className={s.meta}><span>{job.location}</span><span>{job.contract}</span></div><p>{job.summary}</p><button type="button" className={s.jobLink} aria-label={`View ${job.title}`} onClick={() => detail(job)}>View position <span aria-hidden="true">→</span></button></article>)}</div>
+      <section className={s.careerHero}><div className={s.heroInner}><span className={s.eyebrow}>BUILD YOUR NEXT CHAPTER</span><h1 ref={heading} tabIndex={-1}>Careers</h1><h2>Join the DEMAC team.</h2><p>Bring your skills. Make a difference in Aruba.</p><div className={s.heroTags}><span><CareerIcon name="location"/>Aruba</span><span><CareerIcon name="users"/>Technical & office roles</span></div></div></section>
+      <section className={s.container} aria-label="Open positions"><div className={s.catalogueHeader}><div><h2>Find your opportunity</h2><p>{openJobs.length} {openJobs.length === 1 ? 'position' : 'positions'} · Preview vacancies</p></div></div>
+        <div className={s.catalogueFilters}><Field id="job-search" label="Search positions"><div className={s.searchInput}><CareerIcon name="filters"/><input id="job-search" type="search" value={search} placeholder="Search jobs or keywords…" onChange={event => setSearch(event.target.value)}/></div></Field><Field id="department-filter" label="Department"><select id="department-filter" value={department} onChange={event => setDepartment(event.target.value)}><option value="">All departments</option>{departments.map(item => <option key={item}>{item}</option>)}</select></Field></div>
+        <div className={s.vacancyGrid}>{openJobs.map(job => <article className={s.jobCard} key={job.id}><div className={s.jobTitleRow}><h2>{job.title}</h2><span className={s.jobArrow} aria-hidden="true"><CareerIcon name="arrow"/></span></div><div className={s.meta}><span><CareerIcon name="briefcase"/>{job.department}</span><span><CareerIcon name="location"/>{job.location}</span><span><CareerIcon name="clock"/>{job.contract}</span></div><p>{job.summary}</p><button type="button" className={s.jobLink} aria-label={`View ${job.title}`} onClick={() => detail(job)}>View position <CareerIcon name="arrow"/></button></article>)}</div>
         {!openJobs.length && <div className={s.empty}><h2>No matching positions</h2><p>Try another keyword or department.</p><button type="button" className={s.secondary} onClick={() => { setSearch(''); setDepartment(''); }}>Clear filters</button></div>}
-        <p className={s.catalogueNote}>Example roles for your review. These are not live job advertisements.</p>
+        <p className={s.catalogueNote}>These roles are for preview review, not live job advertisements.</p>
       </section>
     </>}
-    {view === 'detail' && selected && <section className={`${s.container} ${s.rolePage}`}>
-      <button className={s.textButton} type="button" onClick={() => setView('jobs')}>← All positions</button>
-      <div className={s.roleHero}><div><span className={s.eyebrow}>{selected.department}</span><h1 ref={heading} tabIndex={-1}>{selected.title}</h1><div className={s.meta}><span>{selected.location}</span><span>{selected.contract}</span><span>Preview vacancy</span></div></div><button type="button" className={s.primary} onClick={start}>{drafts[selected.id] ? 'Continue application →' : 'Apply for this role →'}</button></div>
-      <div className={s.roleDetailGrid}><div className={s.roleDescription}><section><h2>About the role</h2><p>{selected.summary}</p></section><section><h2>What you’ll do</h2><ul>{selected.responsibilities.filter(Boolean).map((item, index) => <li key={index}>{item}</li>)}</ul></section><section><h2>What we’re looking for</h2><ul>{selected.requirements.filter(Boolean).map((item, index) => <li key={index}>{item}</li>)}</ul></section></div>
-        <aside className={s.prepareCard}><span className={s.eyebrow}>BEFORE YOU START</span><h2>A simple application.</h2><ol><li>Your contact details</li><li>Your experience and role questions</li><li>A recent photo, documents and review</li></ol><p>Have a recent photo{selected.cvRequired ? ' and your CV' : ''} ready. Certificates are optional. A professional photo is not necessary.</p><button className={s.primary} type="button" onClick={start}>{drafts[selected.id] ? 'Resume application →' : 'Start application →'}</button><small>No account. No password.</small></aside>
-      </div>
+    {view === 'detail' && selected && <>
+      <section className={`${s.careerHero} ${s.detailHero}`}><div className={s.heroInner}><button className={s.textButton} type="button" onClick={() => setView('jobs')}>← All positions</button><span className={s.eyebrow}>{selected.department}</span><h1 ref={heading} tabIndex={-1}>{selected.title}</h1><p>{selected.summary}</p></div></section>
+      <section className={`${s.container} ${s.rolePage}`}><VacancyFacts vacancy={selected}/><div className={s.roleDetailGrid}><div className={s.roleDescription}>
+        <section><h2>About the role</h2><p>{selected.summary}</p></section>
+        <section><h2>What you’ll do</h2><ul>{selected.responsibilities.filter(Boolean).map((item, index) => <li key={index}>{item}</li>)}</ul></section>
+        <section><h2>What we’re looking for</h2><ul>{selected.requirements.filter(Boolean).map((item, index) => <li key={index}>{item}</li>)}</ul></section>
+        <section className={s.prepareDocuments}><span className={s.iconTile}><CareerIcon name="file"/></span><div><h2>Documents to prepare</h2><p>A recent photo{selected.cvRequired ? ' and your CV' : ''}. Add relevant certificates or courses, when available.</p><small>CV {selected.cvRequired ? 'required' : 'optional'} · Certificates optional · No professional photo needed</small></div></section>
+      </div><aside className={s.prepareCard}><span className={s.eyebrow}>YOUR APPLICATION</span><h2>Three simple steps.</h2><ol><li>Your details</li><li>Experience & role questions</li><li>Photo, documents & review</li></ol><small><CareerIcon name="lock"/>No account or password needed.</small></aside></div>
+      <div className={s.applyBar}><div><strong>{selected.title}</strong><small>{selected.location} · {selected.contract}</small></div><button type="button" className={s.primary} onClick={start}>{drafts[selected.id] ? 'Continue application' : 'Apply now'}<CareerIcon name="arrow"/></button></div></section>
+    </>}
+    {view === 'form' && selected && <ApplicationFunnel key={selected.id} vacancy={selected} draft={draft} step={wizard.step} reviewing={wizard.reviewing} onChange={next => setDrafts(previous => ({ ...previous, [selected.id]: next }))} onStep={(step, reviewing = false) => { setWizard({ step, reviewing }); window.scrollTo({ top: 0, behavior: 'auto' }); }} onBackToJob={() => setView('detail')} onSubmit={submit}/>}
+    {view === 'success' && submitted && <section className={s.successPage}><div className={s.successIcon}><CareerIcon name="check"/></div><span className={s.eyebrow}>PREVIEW COMPLETE</span><h1 ref={heading} tabIndex={-1}>Application completed</h1><p>Thank you for your interest in joining the DEMAC team.</p><strong className={s.successRole}>{submitted.vacancy.title}</strong>
+      <dl className={s.receiptCard}><div><CareerIcon name="file"/><dt>Reference number</dt><dd>{submitted.id}</dd></div><div><CareerIcon name="mail"/><dt>Your email</dt><dd>{submitted.draft.email}</dd></div></dl>
+      <div className={s.informationCard}><span className={s.iconTile}><CareerIcon name="mail"/></span><div><strong>Confirmation email · Preview only</strong><p>No email has been sent. This test profile is available in Recruitment in this tab.</p></div></div>
+      <section className={s.nextSteps}><h2>What happens next?</h2><ol><li><span>1</span><div><strong>Review the application</strong><p>See the information and documents in the recruitment preview.</p></div></li><li><span>2</span><div><strong>Follow the selection process</strong><p>Explore review stages and add a test recruiter note.</p></div></li></ol></section>
+      <button type="button" className={s.primary} onClick={() => setView('admin')}>Review this candidate <CareerIcon name="arrow"/></button><button type="button" className={s.secondary} onClick={tryApplication}>Back to Careers</button><small>Test information only. Refreshing or closing the tab clears this session.</small>
     </section>}
-    {view === 'form' && selected && <ApplicationFunnel key={selected.id} vacancy={selected} draft={draft} step={wizard.step} reviewing={wizard.reviewing} onChange={next => setDrafts(previous => ({ ...previous, [selected.id]: next }))} onStep={(step, reviewing = false) => setWizard({ step, reviewing })} onBackToJob={() => setView('detail')} onSubmit={submit} />}
-    {view === 'success' && <section className={s.successPage}><div className={s.successIcon} aria-hidden="true">✓</div><span className={s.eyebrow}>PREVIEW APPLICATION COMPLETE</span><h1 ref={heading} tabIndex={-1}>Thank you for<br />your interest.</h1><p>You completed the {selected?.title} application flow.</p><div className={s.reviewCard}><strong>{submittedId}</strong><p>Your test profile is ready to review in Recruitment in this browser session. No application, documents or email have been sent to production.</p></div><h2>What happens next?</h2><p>In the live module, the candidate receives confirmation from the Careers address selected by DEMAC. The team then reviews their profile.</p><button type="button" className={s.primary} onClick={() => setView('admin')}>See this profile in recruitment preview →</button><button type="button" className={s.textButton} onClick={tryApplication}>Back to positions</button></section>}
-    {view === 'admin' && <RecruitmentPreview vacancies={vacancies} applications={applications} onVacancies={setVacancies} onApplications={setApplications} initialApplication={submittedId} onTryApplication={tryApplication} />}
-    {(view === 'jobs' || view === 'detail') && <PublicFooter />}
+    {view === 'admin' && <RecruitmentPreview vacancies={vacancies} applications={applications} onVacancies={setVacancies} onApplications={setApplications} initialApplication={submittedId} onTryApplication={tryApplication}/>}
+    {(view === 'jobs' || view === 'detail') && <PublicFooter/>}
+    {(view === 'form' || view === 'success') && <footer className={s.funnelFooter}><span>DEMAC · Professional Cooling Solutions</span><span>Careers · Aruba</span></footer>}
   </main>;
 }
