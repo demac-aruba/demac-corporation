@@ -18,6 +18,7 @@ const { digest } = require('./demacCustomerInterestHistory');
 const { documentId } = require('./mayaOperationsReadModel');
 const { analyzeRecoveryResponse, validateDecision } = require('./mayaRecoveryResponseAnalysis');
 const { deliveryProof } = require('./mayaRecoveryDeliveryProof');
+const { loadRecoveryResponseWindow } = require('./mayaRecoveryResponseWindow');
 const P = require('./mayaRecoveryOfferPolicy');
 const need = P.requireCondition;
 
@@ -198,7 +199,7 @@ function createMayaRecoveryOfferService({ db, clock = () => new Date(), analyzeR
   }
   async function responseContext(reader, args, context) {
     const conversationId = documentId(context.conversationId); const messageId = documentId(context.inboundMessageId);
-    const offer = await read(reader, 'bookingOffers', args.offerId); const r = P.assertOffer(offer, args.offerVersion);
+    let offer = await read(reader, 'bookingOffers', args.offerId); let r = P.assertOffer(offer, args.offerVersion);
     need(r.conversationId === conversationId, 'recovery_wrong_conversation');
     const pilot = await currentPilot(reader, conversationId);
     need(pointerMatches(pilot.conversation, offer) && pilot.phone === r.phone
@@ -212,18 +213,16 @@ function createMayaRecoveryOfferService({ db, clock = () => new Date(), analyzeR
     need(message, 'recovery_response_missing');
     need(message.direction === 'inbound' && message.communicationAccountId === r.account && message.conversationId === conversationId
       && message.customerInputVersion === receipt.expectedCustomerInputVersion, 'recovery_stale_response');
-    // Do not accept a truncated prefix whose omitted suffix could reverse consent.
-    const fullContent = customerSemanticContent(message, 8001);
-    need(fullContent.length > 0 && fullContent.length <= 8000, 'recovery_response_requires_clarification');
+    // Every consecutive source is read from canonical storage, including earlier
+    // parts that may contain a qualification or reversal of the current fragment.
+    const evidence = await loadRecoveryResponseWindow({ reader, offer, conversation: pilot.conversation,
+      message, receipt, quote: args.sourceQuote, now: clock() });
+    offer = evidence.offer; r = offer.recovery;
     const sourceFingerprint = responseMessageFingerprint(message);
-    if (!r.response) {
-      P.assertReplyEvidence({ offer, conversation: pilot.conversation, message, receipt, quote: args.sourceQuote, now: clock() });
-      const delivery = await deliveryProof(reader, offer, r.delivery.queueId, r.delivery.messageId, clock());
-      need(digest(delivery) === digest(r.delivery), 'recovery_delivery_changed');
-    }
     const fingerprint = digest({ offer: r.fingerprint, state: r.state, delivery: r.delivery || null, response: r.response || null,
-      sourceFingerprint, ownershipVersion: pilot.conversation.ownershipVersion, customerInputVersion: pilot.conversation.customerInputVersion });
-    return { offer, r, pilot, receipt, message, sourceFingerprint, fingerprint };
+      sourceFingerprint, responseWindow: evidence.proof,
+      ownershipVersion: pilot.conversation.ownershipVersion, customerInputVersion: pilot.conversation.customerInputVersion });
+    return { offer, r, pilot, receipt, message, sourceFingerprint, fingerprint, evidence };
   }
   async function respond(args = {}, context = {}) {
     const { decision, sourceQuote } = args;
@@ -233,11 +232,12 @@ function createMayaRecoveryOfferService({ db, clock = () => new Date(), analyzeR
     if (!first.r.response) {
       // Semantic interpretation is outside every Firestore transaction. Its result
       // never overrides deterministic binding, current state or capacity checks.
-      const customerText = customerSemanticContent(first.message, 8000);
+      const customerText = first.evidence.text;
       interpretation = validateDecision(await analyzeResponse({ offerText: first.r.messageText,
-        customerText, apiKey: apiKeyProvider() }), customerText);
-      need(interpretation.decision === decision && interpretation.confidence >= 0.9 && interpretation.ambiguous === false,
-        'recovery_response_requires_clarification');
+        customerText, customerMessages: first.evidence.entries.map(entry => entry.text), apiKey: apiKeyProvider() }), customerText);
+      need(first.evidence.entries.some(entry => entry.text.includes(interpretation.quote.trim()))
+        && interpretation.decision === decision && interpretation.confidence >= 0.9 && interpretation.ambiguous === false,
+      'recovery_response_requires_clarification');
     }
     return db.runTransaction(async transaction => {
       const now = clock(); const reader = transactionView(db, transaction).db;
@@ -257,6 +257,7 @@ function createMayaRecoveryOfferService({ db, clock = () => new Date(), analyzeR
       }
       need(currentContext.fingerprint === first.fingerprint, 'recovery_stale_response');
       const response = { messageId: message.id, decision, sourceQuote, sourceFingerprint, interpretation,
+        responseWindow: currentContext.evidence.proof,
         at: now.toISOString(), customerInputVersion: receipt.expectedCustomerInputVersion };
       if (decision === 'decline') {
         // Declining this offer is not withdrawal from all waiting preferences.
