@@ -8,6 +8,7 @@ const { communicationEpochDecision, customerSemanticContent } = require('./demac
 const { resolveInboundParty } = require('./customerContactDirectory');
 const { digest } = require('./demacCustomerInterestHistory');
 const { documentId } = require('./mayaOperationsReadModel');
+const { loadRecoveryResponseWindow } = require('./mayaRecoveryResponseWindow');
 const P = require('./mayaRecoveryOfferPolicy');
 const need = P.requireCondition;
 const READ = 'get_appointment_change_context';
@@ -160,9 +161,19 @@ function createMayaRecoveryConversationTools({ db, clock = () => new Date(), ana
       const original = r.response?.decision === 'accept'
         ? await read(reader, 'appointments', r.appointmentId)
         : (await unchangedBasis(reader, offer, pilot)).original;
-      return { offer, original, sourceQuote: fullText.slice(0, 800), context: {
-        conversationId: scope.conversationId, inboundMessageId: scope.messageId,
-      } };
+      let evidence = null;
+      let evidenceError = '';
+      try {
+        evidence = await loadRecoveryResponseWindow({ reader, offer, conversation: pilot.conversation,
+          message, receipt, quote: fullText.slice(0, 800), now: clock() });
+      } catch (error) {
+        if (!/^recovery_[a-z_]+$/.test(error?.code || '')) throw error;
+        evidenceError = error.code;
+      }
+      return { offer: evidence?.offer || offer, original, sourceQuote: fullText.slice(0, 800),
+        responseEvidenceReady: Boolean(evidence), responseMessageCount: evidence?.entries.length || 0,
+        deliveryReconciledReadOnly: evidence?.reconciledDelivery === true, evidenceError,
+        context: { conversationId: scope.conversationId, inboundMessageId: scope.messageId } };
     }, { readOnly: true });
   }
   async function invokeIfScoped(name, args = {}, context = {}) {
@@ -179,7 +190,9 @@ function createMayaRecoveryConversationTools({ db, clock = () => new Date(), ana
           optionId: option.id, date: option.date, time: option.time, endTime: option.endTime,
           expiresAt: offer.expiresAt, state: offer.recovery.state,
           deliveryBound: Boolean(offer.recovery.delivery), capacityReserved: offer.recovery.state === 'accepted',
-          instructions: 'This is an existing earlier-time offer, not a new booking request. For an unequivocal acceptance call reschedule_appointment with these exact IDs, reason and note as empty strings. For rejection of this one time call record_booking_interest with action=decline_offer and every other field empty. Do not call check_availability, create_appointment or cancel_appointment. A question, condition, expired/unbound offer or other requested change requires clarification or scheduling handoff. Do not claim any move until reschedule_appointment returns canonical success.' };
+          responseEvidenceReady: current.responseEvidenceReady, responseMessageCount: current.responseMessageCount,
+          deliveryReconciledReadOnly: current.deliveryReconciledReadOnly, responseEvidenceError: current.evidenceError,
+          instructions: 'This is an existing earlier-time offer, not a new booking request. For an unequivocal acceptance call reschedule_appointment with these exact IDs, reason and note as empty strings. For rejection of this one time call record_booking_interest with action=decline_offer and every other field empty. The server reads all consecutive response fragments together. Do not call check_availability, create_appointment or cancel_appointment. A question, condition, expired offer, responseEvidenceReady=false or other requested change requires clarification or scheduling handoff. A read-only delivery reconciliation proves transport but does not change an appointment or resend anything. Do not claim any move until reschedule_appointment returns canonical success.' };
       }
       if (name === ACCEPT) {
         const keys = ['appointmentId', 'offerId', 'offerVersion', 'optionId', 'reason', 'note'];
@@ -188,8 +201,8 @@ function createMayaRecoveryConversationTools({ db, clock = () => new Date(), ana
           && args.appointmentId === offer.recovery.appointmentId && args.offerId === offer.id
           && args.offerVersion === offer.version && args.optionId === offer.options[0].id
           && typeof args.reason === 'string' && typeof args.note === 'string', 'recovery_chat_option_mismatch');
-        // Consent is interpreted from the complete canonical current message by
-        // the existing service. Caller prose cannot replace customer evidence.
+        // Consent is interpreted from the complete canonical response by the
+        // existing service. Caller prose cannot replace customer evidence.
         return await recoveryService(scope).respond({ offerId: offer.id, offerVersion: offer.version,
           decision: 'accept', sourceQuote }, current.context);
       }
