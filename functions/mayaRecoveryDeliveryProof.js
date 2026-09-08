@@ -1,6 +1,7 @@
 'use strict';
 const { digest } = require('./demacCustomerInterestHistory');
 const { documentId } = require('./mayaOperationsReadModel');
+const { recoveryClaimIsUnchanged } = require('./mayaRecoveryDispatchReceipt');
 const P = require('./mayaRecoveryOfferPolicy');
 const need = P.requireCondition;
 async function read(reader, collection, id) {
@@ -23,11 +24,22 @@ async function deliveryProof(reader, offer, queueId, messageId, now = new Date()
     && message.text === r.messageText && typeof message.providerMessageId === 'string' && message.providerMessageId
     && queue.messageId === message.id && queue.providerMessageId === message.providerMessageId
     && queue.providerMessageId !== queue.id, 'recovery_delivery_unproven');
+  const governed = Boolean(r.outbound) || queue.recoveryDispatchVersion !== undefined || queueId.startsWith('MRO-');
+  if (governed) {
+    need(recoveryClaimIsUnchanged(queueId, queue) && r.outbound?.queueId === queueId
+      && r.outbound.policyFingerprint === queue.recoveryContactPolicyFingerprint && queue.to === r.phone
+      && typeof queue.recoveryAcknowledgedAtIso === 'string' && typeof message.recoveryAcknowledgedAtIso === 'string',
+    'recovery_delivery_unproven');
+  }
   let temporal;
   if (queue.recoveryAcknowledgedAtIso !== undefined || message.recoveryAcknowledgedAtIso !== undefined) {
     const acknowledgedAt = Date.parse(queue.recoveryAcknowledgedAtIso || '');
     need(queue.recoveryAcknowledgedAtIso === message.recoveryAcknowledgedAtIso
       && Number.isFinite(acknowledgedAt) && message.queueId === queue.id, 'recovery_delivery_unproven');
+    if (governed) {
+      const attemptedAt = Date.parse(queue.recoveryDispatchAttemptedAtIso || '');
+      need(attemptedAt >= Date.parse(offer.createdAtIso) && attemptedAt <= acknowledgedAt, 'recovery_delivery_unproven');
+    }
     temporal = { timeBasis: 'bridge_acknowledgement', acknowledgedAt, ingestedAt: acknowledgedAt };
   } else {
     const times = P.canonicalTime(message);
