@@ -6,6 +6,7 @@ const { defineSecret } = require('firebase-functions/params');
 const { createBookingAuthority } = require('./bookingAuthorityFirestore');
 const { createBookingAppointmentLifecycle } = require('./bookingAuthorityAppointmentLifecycle');
 const { createSchedulingProvider } = require('./bookingAuthoritySchedulingProvider');
+const { createRecoveryLifecycleProvider } = require('./mayaRecoverySchedulingGuard');
 const { normalizeBookingRequest, normalizeOfferOption } = require('./bookingAuthorityCore');
 const { createMayaRecoveryMatching, recoveryTarget, releasedCapacityMatches } = require('./mayaRecoveryMatching');
 const { activeAccountDecision } = require('./demacCommunicationIdentity');
@@ -208,6 +209,7 @@ function createMayaRecoveryOfferService({ db, clock = () => new Date(), analyzeR
       need(pilot.conversation.customerInputVersion === r.customerInputVersion, 'recovery_customer_turn_changed');
       await unchangedBasis(reader, offer, pilot);
       const delivery = await deliveryProof(reader, offer, documentId(queueId), documentId(outboundMessageId));
+      need(delivery.providerAt <= clock().getTime() && delivery.ingestedAt <= clock().getTime(), 'recovery_delivery_unproven');
       need(!r.delivery || digest(r.delivery) === digest(delivery), 'recovery_delivery_conflict');
       if (!r.delivery) transaction.set(db.collection('bookingOffers').doc(offer.id), { recovery: { ...r, state: 'sent', delivery } }, { merge: true });
       return publicOffer({ ...offer, recovery: { ...r, state: 'sent', delivery } }, Boolean(r.delivery));
@@ -229,6 +231,9 @@ function createMayaRecoveryOfferService({ db, clock = () => new Date(), analyzeR
     need(message, 'recovery_response_missing');
     need(message.direction === 'inbound' && message.communicationAccountId === r.account && message.conversationId === conversationId
       && message.customerInputVersion === receipt.expectedCustomerInputVersion, 'recovery_stale_response');
+    // Do not accept a truncated prefix whose omitted suffix could reverse consent.
+    const fullContent = customerSemanticContent(message, 8001);
+    need(fullContent.length > 0 && fullContent.length <= 8000, 'recovery_response_requires_clarification');
     const sourceFingerprint = responseMessageFingerprint(message);
     if (!r.response) {
       P.assertReplyEvidence({ offer, conversation: pilot.conversation, message, receipt, quote: args.sourceQuote, now: clock() });
@@ -286,7 +291,7 @@ function createMayaRecoveryOfferService({ db, clock = () => new Date(), analyzeR
         && digest(fresh.request) === digest(offer.request), 'recovery_option_changed');
       const acceptedView = transactionView(db, transaction, offer.id);
       const lifecycle = createBookingAppointmentLifecycle({ db: acceptedView.db,
-        schedulingProvider: createSchedulingProvider({ db: acceptedView.db }), clock: () => now });
+        schedulingProvider: createRecoveryLifecycleProvider({ db: acceptedView.db }), clock: () => now });
       const result = await lifecycle.rescheduleAppointment({ appointmentId: original.id, offerId: offer.id,
         offerVersion: offer.version, optionId: offer.options[0].id, reason: 'customer_accepted_earlier_appointment',
         note: sourceQuote, actor: { id: 'demac-customer-agent', name: 'Maya', source: 'maya-recovery-offer' },
