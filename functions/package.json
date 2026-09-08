@@ -3,9 +3,7 @@
   "version": "1.0.0",
   "description": "Secure backend functions for DEMAC Corporation integrations.",
   "main": "bootstrap.js",
-  "engines": {
-    "node": "22"
-  },
+  "engines": { "node": "22" },
   "scripts": {
     "serve": "firebase emulators:start --only functions",
     "shell": "firebase functions:shell",
@@ -17,12 +15,9 @@
     "test:field-authority": "node --test servicePricingAuthority.test.js fieldOperationsAudit.test.js fieldOperationsFirestoreData.test.js fieldOperationsMutationAssignment.test.js fieldOperationsAuthority.test.js fieldOperationsEquipmentRegistrationHttp.test.js fieldOperationsInterventionMutationHttp.test.js fieldOperationsReportEvidenceHttp.test.js fieldOperationsMeasurementsHttp.test.js fieldOperationsFindingsHttp.test.js fieldOperationsChecklistResponsesHttp.test.js fieldOperationsFreeTextResponsesHttp.test.js fieldOperationsScopeChangesHttp.test.js fieldOperationsApprovalsHttp.test.js fieldOperationsAuthorityBootstrap.test.js fieldOperationsAuthorityCore.test.js fieldOperationsAuthorityWorkVisit.test.js fieldOperationsAuthorityTransitions.test.js fieldOperationsVisitActions.test.js fieldOperationsVisitRead.test.js fieldOperationsVisitMutation.test.js fieldOperationsVisitAssets.test.js fieldOperationsVisitAssetSources.test.js fieldOperationsEvidence.test.js fieldOperationsEquipmentRegistration.test.js fieldOperationsPriceSnapshots.test.js fieldOperationsInterventionTransitions.test.js fieldOperationsInterventionMutation.test.js fieldOperationsReportTemplates.test.js fieldOperationsReportEvidence.test.js fieldOperationsReportVoiceEvidence.test.js fieldOperationsMeasurements.test.js fieldOperationsFindings.test.js fieldOperationsChecklistResponses.test.js fieldOperationsFreeTextResponses.test.js fieldOperationsCustomerAcknowledgements.test.js fieldOperationsCustomerAcknowledgementRead.test.js fieldOperationsReportRead.test.js fieldOperationsProfessionalReport.test.js fieldOperationsPlannedWorkDispositions.test.js fieldOperationsFreeTextRead.test.js fieldOperationsVisitInterventions.test.js fieldOperationsScopeChanges.test.js fieldOperationsApprovals.test.js fieldOperationsAuthorityCorrectness.test.js bookingSchedulingPrimitives.test.js bookingVanIdentity.test.js",
     "test:customer-agent-tools": "node --test demacCustomerAgentTools.test.js demacCustomerBusinessTools.test.js demacCustomerPolicyTools.test.js demacCustomerToolRegistryPolicies.test.js demacCustomerConversationState.test.js demacCustomerAgentRuntimeV1.test.js demacCustomerAgentOwnershipGuard.test.js demacCustomerAgentCommunication.test.js demacCustomerAgentReplyPolicy.test.js demacCustomerIngressSmoke.test.js customerAgentSemanticEvalCases.test.js",
     "test:customer-agent-router": "node --test whatsappCopilotRouterExports.test.js",
-    "test:transactional-whatsapp": "node --test whatsappTransactionalService.test.js whatsappTransactionalGroupRecipient.test.js migrations/migrateLegacyMetaTransactionalQueueToWacli.test.js migrations/realignVanScheduleGroups.test.js vanScheduleGroupIdentity.test.js operatingCalendarService.test.js appointmentCommunicationRenderer.test.js appointmentNotificationService.test.js appointmentCommunicationAuthority.test.js technicianDailyScheduleService.test.js technicianDailyScheduleCanonicalTime.test.js technicianScheduleAvailability.test.js technicianScheduleChangeService.test.js vanScheduleCommunicationAuthority.test.js officeBookingAuthorityCommunication.test.js"
+    "test:transactional-whatsapp": "node --test whatsappTransactionalService.test.js whatsappTransactionalGroupRecipient.test.js migrations/migrateLegacyMetaTransactionalQueueToWacli.test.js migrations/realignVanScheduleGroups.test.js vanScheduleGroupIdentity.test.js operatingCalendarService.test.js appointmentCommunicationRenderer.test.js appointmentNotificationService.test.js appointmentCommunicationAuthority.test.js technicianDailyScheduleService.test.js technicianDailyScheduleCanonicalTime.test.js technicianScheduleAvailability.test.js technicianScheduleChangeService.test.js vanScheduleCommunicationAuthority.test.js officeBookingAuthorityCommunication.test.js",
+    "test:careers": "node --test careers/core.test.js careers/files.test.js careers/http.test.js"
   },
-  "dependencies": {
-    "firebase-admin": "^13.4.0",
-    "firebase-functions": "^6.4.0",
-    "sharp": "^0.34.3"
-  },
+  "dependencies": { "firebase-admin": "^13.4.0", "firebase-functions": "^6.4.0", "sharp": "^0.34.3", "nodemailer": "10.0.1" },
   "private": true
 }

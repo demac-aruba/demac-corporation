@@ -1,0 +1,32 @@
+name: Careers backend integrity
+on:
+  push:
+    branches: [feature/careers-funnel-preview]
+    paths: ['functions/careers/**','functions/careers.js','functions/package.json','functions/bootstrap.js','firebase.careers-test.json','.github/workflows/careers-backend.yml']
+  pull_request:
+    paths: ['functions/careers/**','functions/careers.js','firebase.careers-test.json','.github/workflows/careers-backend.yml']
+permissions:
+  contents: read
+jobs:
+  recruitment-integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm install --prefix functions --no-audit --no-fund
+      - name: Existing backend syntax gates and Careers unit/security contracts
+        run: npm --prefix functions run validate:firebase && npm --prefix functions run test:careers
+      - name: Persistent records and private files in local demo emulators only
+        env:
+          GCLOUD_PROJECT: demo-demac-careers
+        run: npx --yes firebase-tools@15.29.0 emulators:exec --config firebase.careers-test.json --project demo-demac-careers --only firestore,storage 'node --test functions/careers/emulator.test.js'
