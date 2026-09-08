@@ -96,6 +96,9 @@ function createMayaRecoveryMatching({ db, clock = () => new Date(), providerFact
     return db.runTransaction(async transaction => {
       const now = clock();
       const reader = snapshotReader(db, transaction);
+      // Provider validation builds references with `reader`, so dereference them
+      // through their cached snapshot get(). Never pass wrappers to Firestore.
+      const readTransaction = { get: reference => reference.get() };
       async function read(collection, id) {
         if (!id) return null;
         const snapshot = await reader.collection(collection).doc(documentId(id)).get();
@@ -218,7 +221,7 @@ function createMayaRecoveryMatching({ db, clock = () => new Date(), providerFact
           if (option.date !== target.date || option.time !== target.time || !timeKey(option.endTime)
             || option.endTime > target.endTime || !option.assignments?.length
             || option.assignments[0].vanId !== target.vanId) continue;
-          const validation = await provider.validateTransaction({ transaction, db: reader, request, option,
+          const validation = await provider.validateTransaction({ transaction: readTransaction, db: reader, request, option,
             appointmentId: original.id, context, now });
           if (validation?.available !== true || !Array.isArray(validation.capacityLocks) || !validation.capacityLocks.length) continue;
           if (validation.capacityLocks.some(lock => !target.formerCapacityIds.has(lock.id))) {
