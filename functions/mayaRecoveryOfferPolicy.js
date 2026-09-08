@@ -6,6 +6,7 @@ const { dateKey, timeKey, documentId, failure } = require('./mayaOperationsReadM
 const { normalizeOfferOption } = require('./bookingAuthorityCore');
 
 const VERSION = 1;
+const MAX_RESPONSE_MESSAGES = 6;
 const TERMINAL = new Set(['accepted', 'declined', 'expired']);
 const NO_RESERVATION = Object.freeze({ capacityReserved: false, proactiveContactAuthorized: false });
 function requireCondition(value, code) {
@@ -78,21 +79,30 @@ function canonicalTime(message) {
   requireCondition(Number.isFinite(ingested) && Number.isFinite(provider), 'recovery_message_time_missing');
   return { ingested, provider };
 }
-function assertReplyEvidence({ offer, conversation, message, receipt, quote, now }) {
+function assertReplyEvidence({ offer, conversation, message, receipt, quote, now, responseMessages = [message] }) {
   const r = offer.recovery;
   requireCondition(r.state === 'sent' && r.delivery, 'recovery_offer_not_delivered');
   requireCondition(isOpen(offer, now), 'recovery_offer_expired');
-  requireCondition(message.direction === 'inbound' && message.conversationId === r.conversationId
-    && message.communicationAccountId === r.account && message.customerInputVersion === receipt.expectedCustomerInputVersion
-    && message.customerInputVersion === r.customerInputVersion + 1, 'recovery_response_ambiguous');
-  const times = canonicalTime(message);
-  // ACK time is explicitly server-observed, not a fabricated provider timestamp.
-  // Conservatively defer a reply preceding that proof; ACK-lag reconciliation is
-  // a separate runtime concern rather than permission to guess response ordering.
+  requireCondition(Array.isArray(responseMessages) && responseMessages.length > 0
+    && responseMessages.length <= MAX_RESPONSE_MESSAGES
+    && responseMessages.at(-1)?.id === message.id
+    && message.customerInputVersion === receipt.expectedCustomerInputVersion
+    && message.customerInputVersion === r.customerInputVersion + responseMessages.length,
+  'recovery_response_ambiguous');
   const sentEvidenceAt = r.delivery.timeBasis === 'bridge_acknowledgement'
     ? r.delivery.acknowledgedAt : r.delivery.providerAt;
-  requireCondition(Number.isFinite(sentEvidenceAt) && times.ingested >= r.delivery.ingestedAt && times.provider >= sentEvidenceAt
-    && times.ingested <= now.getTime() && times.provider <= now.getTime(), 'recovery_response_predates_offer');
+  let preceding = { ingested: r.delivery.ingestedAt, provider: sentEvidenceAt };
+  requireCondition(Number.isFinite(preceding.ingested) && Number.isFinite(preceding.provider), 'recovery_delivery_unproven');
+  for (let index = 0; index < responseMessages.length; index += 1) {
+    const part = responseMessages[index];
+    requireCondition(part.direction === 'inbound' && part.conversationId === r.conversationId
+      && part.communicationAccountId === r.account && Number.isSafeInteger(part.customerInputVersion)
+      && part.customerInputVersion === r.customerInputVersion + index + 1, 'recovery_response_ambiguous');
+    const times = canonicalTime(part);
+    requireCondition(times.ingested >= preceding.ingested && times.provider >= preceding.provider
+      && times.ingested <= now.getTime() && times.provider <= now.getTime(), 'recovery_response_predates_offer');
+    preceding = times;
+  }
   const { customerSemanticContent } = require('./demacCustomerTurn');
   requireCondition(typeof quote === 'string' && quote.trim().length >= 2 && quote.length <= 800
     && customerSemanticContent(message, 8000).includes(quote.trim()), 'recovery_response_evidence_missing');
@@ -102,6 +112,6 @@ function assertReplyEvidence({ offer, conversation, message, receipt, quote, now
   // is never evidence; only its last outbound ID is used, then delivery is re-read.
   requireCondition(lastOutbound?.id === r.delivery.messageId, 'recovery_response_ambiguous');
 }
-module.exports = { VERSION, NO_RESERVATION, TERMINAL, assertOffer, assertReplyEvidence, canonicalTime,
+module.exports = { VERSION, MAX_RESPONSE_MESSAGES, NO_RESERVATION, TERMINAL, assertOffer, assertReplyEvidence, canonicalTime,
   configuredTtl, isOpen, offerFingerprint, offerRequestKey, optionFingerprint, originalFingerprint,
   preferenceFingerprint, recoveryOfferId, renderOffer, requireCondition };
