@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 export type CareerView = 'jobs' | 'detail' | 'form' | 'success' | 'admin';
 export type RecruitmentTab = 'applications' | 'vacancies' | 'settings';
@@ -60,7 +60,7 @@ export function useCareersNavigation(normalize: (route: CareerRoute) => CareerRo
   const sequence = useRef(0);
   const session = useRef('');
   const restoring = useRef(false);
-  const frame = useRef(0);
+  const pendingPosition = useRef<{ entry: Entry; restore: boolean } | null>(null);
   const savePosition = useCallback(() => {
     if (!current.current || restoring.current) return;
     current.current.scroll = window.scrollY;
@@ -69,19 +69,23 @@ export function useCareersNavigation(normalize: (route: CareerRoute) => CareerRo
   const publish = useCallback((entry: Entry, restore: boolean) => {
     current.current = entry;
     restoring.current = true;
+    pendingPosition.current = { entry, restore };
     setScreen(previous => ({ route: entry.route, ready: true, revision: previous.revision + 1 }));
-    cancelAnimationFrame(frame.current);
-    frame.current = requestAnimationFrame(() => {
-      frame.current = requestAnimationFrame(() => {
-        const target = restore && entry.focus
-          ? Array.from(document.querySelectorAll<HTMLElement>('[data-career-focus]')).find(element => element.getAttribute('data-career-focus') === entry.focus)
-          : document.querySelector<HTMLElement>('[data-career-page-title], main h1');
-        target?.focus({ preventScroll: true });
-        window.scrollTo({ top: restore ? entry.scroll : 0, behavior: 'instant' });
-        restoring.current = false;
-      });
-    });
   }, []);
+  // Run against the committed DOM before it becomes interactive. A delayed rAF
+  // focus can steal focus after a user (or browser automation) starts typing.
+  useLayoutEffect(() => {
+    const pending = pendingPosition.current;
+    if (!screen.ready || !pending) return;
+    pendingPosition.current = null;
+    const { entry, restore } = pending;
+    const target = restore && entry.focus
+      ? Array.from(document.querySelectorAll<HTMLElement>('[data-career-focus]')).find(element => element.getAttribute('data-career-focus') === entry.focus)
+      : document.querySelector<HTMLElement>('[data-career-page-title], main h1');
+    target?.focus({ preventScroll: true });
+    window.scrollTo({ top: restore ? entry.scroll : 0, behavior: 'instant' });
+    restoring.current = false;
+  }, [screen.ready, screen.revision]);
   useEffect(() => {
     const pathname = window.location.pathname;
     const previousRestoration = window.history.scrollRestoration;
@@ -89,7 +93,6 @@ export function useCareersNavigation(normalize: (route: CareerRoute) => CareerRo
     session.current = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const initial: Entry = { id: ++sequence.current, parent: null, route: normalizer.current(readRoute()), scroll: 0, focus: null };
     entries.current.set(initial.id, initial);
-    // Passing only our own marker lets Next preserve its router state internally.
     window.history.replaceState({ [stateKey]: { session: session.current, id: initial.id } }, '', routeUrl(initial.route));
     publish(initial, false);
     const onPopState = () => {
@@ -113,7 +116,6 @@ export function useCareersNavigation(normalize: (route: CareerRoute) => CareerRo
       window.removeEventListener('popstate', onPopState);
       window.removeEventListener('scroll', onScroll);
       window.history.scrollRestoration = previousRestoration;
-      cancelAnimationFrame(frame.current);
     };
   }, [publish]);
   const navigate = useCallback((requested: CareerRoute, replace = false) => {
@@ -135,8 +137,8 @@ export function useCareersNavigation(normalize: (route: CareerRoute) => CareerRo
       distance += 1;
       if (ancestor && routeKey(ancestor.route) === routeKey(fallback)) { window.history.go(-distance); return; }
     }
-    // A directly opened role has no in-module parent entry. Do not send it to
-    // an unrelated site, and do not install a history trap or duplicate entries.
+    // Direct role URLs have no in-module parent. Never send them to an unrelated
+    // origin or add sentinel entries that trap the browser Back button.
     navigate(fallback);
   }, [navigate, savePosition]);
   return { ...screen, navigate, backTo };
