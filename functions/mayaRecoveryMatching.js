@@ -55,8 +55,9 @@ function recoveryTarget(appointment, now) {
   if (!Array.isArray(assignments) || !assignments.length || assignments.length > 4) {
     throw failure('invalid_cancellation', 'The former canonical Van assignment is required.');
   }
-  const primary = assignments.find(item => item && item.role !== 'support');
-  if (!primary || !primary.vanId || (primary.time && primary.time !== time)) {
+  const primaries = assignments.filter(item => item && item.role !== 'support');
+  const primary = primaries[0];
+  if (primaries.length !== 1 || !primary.vanId || (primary.time && primary.time !== time)) {
     throw failure('invalid_cancellation', 'The former primary assignment is inconsistent.');
   }
   const locks = appointment.capacityLockIds;
@@ -65,6 +66,13 @@ function recoveryTarget(appointment, now) {
     throw failure('invalid_cancellation', 'The former canonical capacity references are required.');
   }
   return { date, time, endTime, vanId: documentId(primary.vanId), formerCapacityIds: new Set(locks) };
+}
+
+function releasedCapacityMatches(lock, expected) {
+  return Boolean(lock && expected && lock.active === false && lock.id === expected.id
+    && dateKey(lock.date) && lock.date === expected.date
+    && typeof lock.vanId === 'string' && lock.vanId && lock.vanId === expected.vanId
+    && timeKey(lock.slot) && lock.slot === expected.slot);
 }
 
 function resultRow(record, status, reason, extra = {}) {
@@ -219,7 +227,7 @@ function createMayaRecoveryMatching({ db, clock = () => new Date(), providerFact
         let reason = 'capacity_route_or_calendar_unavailable';
         for (const option of available.options || []) {
           if (option.date !== target.date || option.time !== target.time || !timeKey(option.endTime)
-            || option.endTime > target.endTime || !option.assignments?.length
+            || option.endTime <= option.time || option.endTime > target.endTime || !option.assignments?.length
             || option.assignments[0].vanId !== target.vanId) continue;
           const validation = await provider.validateTransaction({ transaction: readTransaction, db: reader, request, option,
             appointmentId: original.id, context, now });
@@ -228,7 +236,9 @@ function createMayaRecoveryMatching({ db, clock = () => new Date(), providerFact
             reason = 'work_exceeds_cancelled_capacity'; continue;
           }
           const locks = await Promise.all(validation.capacityLocks.map(lock => read('bookingCapacityLocks', lock.id)));
-          if (locks.some(lock => lock && lock.active !== false)) { reason = 'capacity_reoccupied_or_unreleased'; continue; }
+          if (locks.some((lock, index) => !releasedCapacityMatches(lock, validation.capacityLocks[index]))) {
+            reason = 'capacity_reoccupied_or_unreleased'; continue;
+          }
           compatible = option;
           break;
         }
@@ -250,4 +260,4 @@ function createMayaRecoveryMatching({ db, clock = () => new Date(), providerFact
   return { inspect };
 }
 
-module.exports = { MATCHING_VERSION, MAX_CANDIDATES_PER_PAGE, snapshotReader, recoveryTarget, createMayaRecoveryMatching };
+module.exports = { MATCHING_VERSION, MAX_CANDIDATES_PER_PAGE, snapshotReader, recoveryTarget, releasedCapacityMatches, createMayaRecoveryMatching };
