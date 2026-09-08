@@ -78,8 +78,11 @@ jobs:
       - name: Validate Maya operations and waiting preference syntax
         run: node --check mayaOperationsReadModel.js && node --check demacCustomerBookingInterest.js && node --check mayaRecoveryMatching.js
 
+      - name: Validate Maya interest history syntax
+        run: node --check demacCustomerInterestHistory.js && node --check demacCustomerInterestAnalysis.js && node --check demacCustomerInterestRecovery.js
+
       - name: Test Maya operations, waiting preferences and recovery matching
-        run: node --test demacCustomerBookingInterest.test.js officeMayaOperations.test.js mayaOperationsReview.test.js mayaRecovery*.test.js
+        run: node --test demacCustomerBookingInterest.test.js officeMayaOperations.test.js mayaOperationsReview.test.js mayaRecovery*.test.js demacCustomerInterest*.test.js
 
       - name: Test Booking Authority
         run: npm run test:booking-authority

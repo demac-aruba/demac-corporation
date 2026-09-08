@@ -11,13 +11,13 @@ const { dateKey, timeKey, documentId, failure } = require('./mayaOperationsReadM
 const NAME = 'record_booking_interest';
 const DEFINITION = {
   type: 'function', name: NAME, strict: true,
-  description: 'Record or withdraw an explicitly expressed request for an appointment or an earlier appointment. Resolve the customer and property first. Quote the current inbound message exactly as evidence. This records a waiting preference only: it never books, holds capacity, moves the existing appointment, or authorizes proactive contact. Use empty dates when no exact date was given, and an empty appointmentId for a customer without a booking. Never claim future contact or a reserved slot from this result.',
+  description: 'Record or withdraw an explicitly expressed waiting/earlier-appointment preference from the current customer message. Resolve customer/property first and quote the customer exactly. For an earlier request elsewhere in this same conversation, or a later acknowledgment/change of mind affecting it, use action=recover_recent with EVERY other field an empty string: the server reviews the canonical recent conversation, never a caller-selected other chat. Recovery may retain interest after thanks or withdraw it after a later explicit reversal. This tool never books, holds capacity, moves an appointment or authorizes proactive contact. Never claim future contact, availability or a reserved slot from its result. Disabled/incomplete recovery is not successful capture.',
   parameters: {
     type: 'object', additionalProperties: false,
     required: ['action', 'kind', 'customerId', 'propertyId', 'appointmentId', 'sourceQuote', 'dateFrom', 'dateTo'],
     properties: {
-      action: { type: 'string', enum: ['register', 'withdraw'] },
-      kind: { type: 'string', enum: ['new_appointment', 'earlier_appointment'] },
+      action: { type: 'string', enum: ['register', 'withdraw', 'recover_recent'] },
+      kind: { type: 'string', enum: ['new_appointment', 'earlier_appointment', ''] },
       customerId: { type: 'string' }, propertyId: { type: 'string' }, appointmentId: { type: 'string' },
       sourceQuote: { type: 'string' }, dateFrom: { type: 'string' }, dateTo: { type: 'string' },
     },
@@ -60,7 +60,8 @@ function bookingInterestCaseId(input, communicationAccountId, conversationId) {
   const material = JSON.stringify([input.customerId, input.propertyId, input.kind, input.appointmentId]);
   return communicationCaseId({ communicationAccountId, conversationId, caseType: `booking_interest:${hashId(material, 40)}` });
 }
-function createCustomerBookingInterestTools({ db, clock = () => new Date() } = {}) {
+function createCustomerBookingInterestTools({ db, clock = () => new Date(), historyRecovery = null } = {}) {
+  let recovery = historyRecovery;
   async function record(args, context = {}) {
     const now = clock();
     const currentTime = arubaDateParts(now);
@@ -134,6 +135,7 @@ function createCustomerBookingInterestTools({ db, clock = () => new Date() } = {
         communicationAccountId: conversation.communicationAccountId, conversationId,
         customerId: input.customerId, propertyId: input.propertyId, appointmentId: input.appointmentId,
         state, lastSourceMessageId: messageId, interestFingerprint: fingerprint, interestHistory: history,
+        interestReview: null,
         bookingInterest: { kind: input.kind, sourceQuote: input.sourceQuote, dateFrom: input.dateFrom, dateTo: input.dateTo,
           originalDate, originalTime, capacityReserved: false, proactiveContactAuthorized: false },
         createdAt: previous?.createdAt || FieldValue.serverTimestamp(),
@@ -145,8 +147,16 @@ function createCustomerBookingInterestTools({ db, clock = () => new Date() } = {
   }
   async function invoke(name, args, context) {
     if (name !== NAME) return { success: false, error: { code: 'unknown_tool', message: 'Unsupported waiting-list tool.' } };
-    try { return await record(args, context); }
-    catch (error) { return { success: false, error: { code: error.code || 'internal_error', message: cleanText(error.message, 500) } }; }
+    try {
+      if (args?.action === 'recover_recent') {
+        const fields = ['kind', 'customerId', 'propertyId', 'appointmentId', 'sourceQuote', 'dateFrom', 'dateTo'];
+        if (Object.keys(args).length !== 8 || fields.some(field => args[field] !== '')) throw failure('invalid_request', 'History recovery does not accept target, quote or date overrides.');
+        // Lazy import avoids coupling the existing register/withdraw path to model execution.
+        if (!recovery) recovery = require('./demacCustomerInterestRecovery').createCustomerInterestRecovery({ db, clock });
+        return await recovery.invoke('recover_recent_booking_interest', {}, context);
+      }
+      return await record(args, context);
+    } catch (error) { return { success: false, error: { code: error.code || 'internal_error', message: cleanText(error.message, 500) } }; }
   }
   return { definitions: [DEFINITION], invoke, record };
 }
