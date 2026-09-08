@@ -29,7 +29,8 @@ function originalFingerprint(appointment) {
   return digest(material);
 }
 function preferenceFingerprint(record) {
-  return digest({ ...interestMaterial(record), interestHistory: record.interestHistory || [], interestReview: record.interestReview || null });
+  return digest({ ...interestMaterial(record), interestHistory: record.interestHistory || [], interestReview: record.interestReview || null,
+    sourceFingerprint: record.interestSourceFingerprint ?? null });
 }
 function optionFingerprint(option) { return digest(normalizeOfferOption(option)); }
 function offerFingerprint(offer) {
@@ -85,7 +86,12 @@ function assertReplyEvidence({ offer, conversation, message, receipt, quote, now
     && message.communicationAccountId === r.account && message.customerInputVersion === receipt.expectedCustomerInputVersion
     && message.customerInputVersion === r.customerInputVersion + 1, 'recovery_response_ambiguous');
   const times = canonicalTime(message);
-  requireCondition(times.ingested >= r.delivery.ingestedAt && times.provider >= r.delivery.providerAt
+  // ACK time is explicitly server-observed, not a fabricated provider timestamp.
+  // Conservatively defer a reply preceding that proof; ACK-lag reconciliation is
+  // a separate runtime concern rather than permission to guess response ordering.
+  const sentEvidenceAt = r.delivery.timeBasis === 'bridge_acknowledgement'
+    ? r.delivery.acknowledgedAt : r.delivery.providerAt;
+  requireCondition(Number.isFinite(sentEvidenceAt) && times.ingested >= r.delivery.ingestedAt && times.provider >= sentEvidenceAt
     && times.ingested <= now.getTime() && times.provider <= now.getTime(), 'recovery_response_predates_offer');
   const { customerSemanticContent } = require('./demacCustomerTurn');
   requireCondition(typeof quote === 'string' && quote.trim().length >= 2 && quote.length <= 800

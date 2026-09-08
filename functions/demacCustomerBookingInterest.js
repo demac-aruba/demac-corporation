@@ -7,6 +7,7 @@ const { activeAccountDecision } = require('./demacCommunicationIdentity');
 const { configuredAllowlist, mayaReplyDecision, mayaSenderOwnershipDecision, resolveConversationPhone } = require('./demacCustomerAgentReplyPolicy');
 const { cleanText, hashId, arubaDateParts } = require('./bookingSchedulingPrimitives');
 const { dateKey, timeKey, documentId, failure } = require('./mayaOperationsReadModel');
+const { interestSourceFingerprint } = require('./demacCustomerInterestSourceProof');
 
 const NAME = 'record_booking_interest';
 const DEFINITION = {
@@ -95,6 +96,7 @@ function createCustomerBookingInterestTools({ db, clock = () => new Date(), hist
         || message.customerInputVersion !== receipt.expectedCustomerInputVersion) throw failure('stale_context', 'The source message must belong to this exact account, conversation and current turn.');
       const content = customerSemanticContent(message, 8000);
       if (!content || !content.includes(input.sourceQuote)) throw failure('evidence_missing', 'The supplied quote is not in the current customer message.');
+      const sourceFingerprint = interestSourceFingerprint(message);
       const party = await resolveInboundParty(transactionalReader(db, transaction), { phone, whatsapp: phone });
       if (party.ambiguous || !party.customer || party.customer.id !== input.customerId) throw failure('identity_mismatch', 'The current sender must resolve unambiguously to this canonical customer.');
       const property = await read('properties', input.propertyId);
@@ -121,6 +123,7 @@ function createCustomerBookingInterestTools({ db, clock = () => new Date(), hist
         || previous.communicationAccountId !== conversation.communicationAccountId)) throw failure('identity_mismatch', 'Existing waiting preference identity is inconsistent.');
       if (previous?.lastSourceMessageId === messageId) {
         if (previous.interestFingerprint !== fingerprint) throw failure('idempotency_conflict', 'The same customer turn cannot record two different waiting preferences.');
+        if (previous.interestSourceFingerprint !== sourceFingerprint) throw failure('stale_context', 'The full source message changed or requires a new evidenced review.');
         return { success: true, replayed: true, caseId, state: previous.state, capacityReserved: false, proactiveContactAuthorized: false };
       }
       if (input.action === 'withdraw' && !previous) throw failure('interest_not_found', 'No matching waiting preference exists.');
@@ -135,6 +138,7 @@ function createCustomerBookingInterestTools({ db, clock = () => new Date(), hist
         communicationAccountId: conversation.communicationAccountId, conversationId,
         customerId: input.customerId, propertyId: input.propertyId, appointmentId: input.appointmentId,
         state, lastSourceMessageId: messageId, interestFingerprint: fingerprint, interestHistory: history,
+        interestSourceFingerprint: sourceFingerprint,
         interestReview: null,
         bookingInterest: { kind: input.kind, sourceQuote: input.sourceQuote, dateFrom: input.dateFrom, dateTo: input.dateTo,
           originalDate, originalTime, capacityReserved: false, proactiveContactAuthorized: false },
