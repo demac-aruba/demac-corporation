@@ -9,7 +9,8 @@ import s from './careers.module.css';
 
 type Props = { vacancy: Vacancy; draft: ApplicationDraft; step: number; reviewing: boolean; completed?: boolean;
   onChange: (draft: ApplicationDraft) => void; onStep: (step: number, reviewing?: boolean) => void;
-  onBack: () => void; onBackToJob: () => void; onSubmit: () => string | null; };
+  onBack: () => void; onBackToJob: () => void; onSubmit: () => string | null | Promise<string | null>;
+  live?: { privacyText: string; status: string }; };
 const titles = ['Your details', 'Your experience', 'Photo & documents'];
 function QuestionField({ question: q, value, error, onChange }: { question: Question; value: string | string[] | undefined; error?: string; onChange: (value: string | string[]) => void }) {
   const id = `q-${q.id}`;
@@ -23,10 +24,13 @@ function QuestionField({ question: q, value, error, onChange }: { question: Ques
   const shared = { id, value: typeof value === 'string' ? value : '', 'aria-invalid': !!error, 'aria-describedby': error ? `${id}-error` : undefined, onChange: (event: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => onChange(event.target.value) };
   return <Field id={id} label={q.label} optional={!q.required} error={error}>{q.kind === 'select' ? <select {...shared}><option value="">Select an answer</option>{q.options?.map(option => <option key={option} value={option}>{option}</option>)}</select> : q.kind === 'textarea' ? <textarea {...shared} rows={3} maxLength={1200}/> : <input {...shared} type={q.kind === 'number' ? 'number' : 'text'} min={q.kind === 'number' ? 0 : undefined} maxLength={q.kind === 'number' ? undefined : 240}/>}</Field>;
 }
-export function ApplicationFunnel({ vacancy, draft, step, reviewing, completed = false, onChange, onStep, onBack, onBackToJob, onSubmit }: Props) {
+export function ApplicationFunnel({ vacancy, draft, step, reviewing, completed = false, onChange, onStep, onBack, onBackToJob, onSubmit, live }: Props) {
   const [errors, setErrors] = useState<Errors>({});
   const [fileIssue, setFileIssue] = useState('');
   const [photoBusy, setPhotoBusy] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const inFlight = useRef(false);
+  const busy = photoBusy || submitting;
   const [otherDial, setOtherDial] = useState(!dialingCodes.some(([code]) => code === draft.dialCode));
   const photoGeneration = useRef(0);
   const latestDraft = useRef(draft);
@@ -40,8 +44,9 @@ export function ApplicationFunnel({ vacancy, draft, step, reviewing, completed =
     if (errors[key]) setErrors(previous => { const next = { ...previous }; delete next[key]; return next; });
   }
   function move(next: number, review = false) { setErrors({}); setFileIssue(''); onStep(next, review); }
-  function next() {
-    if (completed) { onSubmit(); return; }
+  async function next() {
+    if (inFlight.current) return;
+    if (completed) { await onSubmit(); return; }
     const found = validateStep(draft, vacancy, step, reviewing);
     if (totalFileBytes(draft) > 30 * 1024 * 1024) found.cv = 'The combined files must be smaller than 30 MB.';
     if (Object.keys(found).length) { setErrors(found); focusError(found); return; }
@@ -49,8 +54,10 @@ export function ApplicationFunnel({ vacancy, draft, step, reviewing, completed =
     if (!reviewing) { move(2, true); return; }
     const all = { ...validateStep(draft, vacancy, 0), ...validateStep(draft, vacancy, 1), ...validateStep(draft, vacancy, 2, true) };
     if (Object.keys(all).length) { setErrors(all); return; }
-    const issue = onSubmit();
-    if (issue) setFileIssue(issue);
+    inFlight.current = true; setSubmitting(true);
+    try { const issue = await onSubmit(); if (issue) setFileIssue(issue); }
+    catch (error) { setFileIssue(error instanceof Error ? error.message : 'Unable to submit. Please retry.'); }
+    finally { inFlight.current = false; setSubmitting(false); }
   }
   async function choosePhoto(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]; event.target.value = '';
@@ -82,16 +89,16 @@ export function ApplicationFunnel({ vacancy, draft, step, reviewing, completed =
   const requiredReady = Number(!!draft.photo) + Number(!!draft.cv || (!vacancy.cvRequired && draft.noCv));
   const backLabel = reviewing ? 'Back to documents' : step === 2 ? 'Back to experience' : step === 1 ? 'Back to your details' : 'Back to position details';
   return <div className={s.funnelLayout}>
-    <aside className={s.roleAside}><div data-career-navrow><BackControl label="Back to position details" onClick={onBackToJob}/><span>Position details</span></div><span className={s.eyebrow}>YOU ARE APPLYING FOR</span><h2>{vacancy.title}</h2><p>{vacancy.location} · {vacancy.contract}</p><hr/><strong>A few steps.<br/>A new opportunity.</strong><p>Share your experience and tell us what you can bring to the team.</p><small><CareerIcon name="lock"/>No account or password needed.</small></aside>
+    <aside className={s.roleAside}><div data-career-navrow><BackControl label="Back to position details" disabled={busy} onClick={onBackToJob}/><span>Position details</span></div><span className={s.eyebrow}>YOU ARE APPLYING FOR</span><h2>{vacancy.title}</h2><p>{vacancy.location} · {vacancy.contract}</p><hr/><strong>A few steps.<br/>A new opportunity.</strong><p>Share your experience and tell us what you can bring to the team.</p><small><CareerIcon name="lock"/>No account or password needed.</small></aside>
     <section className={s.formPanel} aria-label="Application form">
-      <div className={s.mobileRole}><BackControl label="Back to position details" onClick={onBackToJob}/><span><small>APPLYING FOR</small><strong>{vacancy.title}</strong></span></div>
-      <FunnelSteps step={step} disabled={photoBusy} onSelect={index => move(index)}/>
+      <div className={s.mobileRole}><BackControl label="Back to position details" disabled={busy} onClick={onBackToJob}/><span><small>APPLYING FOR</small><strong>{vacancy.title}</strong></span></div>
+      <FunnelSteps step={step} disabled={busy} onSelect={index => move(index)}/>
       <div className={s.formHeading}><span className={s.eyebrow}>STEP {step + 1} OF 3{reviewing ? ' · FINAL REVIEW' : ''}</span><h1 data-career-page-title ref={heading} tabIndex={-1}>{reviewing ? 'Review your application' : titles[step]}</h1><p>{reviewing ? 'Everything in one place. Make any final changes before you send.' : step === 0 ? 'Let’s start with the best way to reach you.' : step === 1 ? 'Tell us what you do best.' : 'Your profile photo, CV and relevant qualifications.'}</p></div>
-      {completed && <div className={s.informationCard} role="status"><CareerIcon name="check"/><div><strong>This preview application is already completed.</strong><p>Your details remain available for review. Back and Forward will not create another application.</p></div></div>}
+      {completed && <div className={s.informationCard} role="status"><CareerIcon name="check"/><div><strong>{live ? 'This application has been received.' : 'This preview application is already completed.'}</strong><p>Your details remain available for review. Back and Forward will not create another application.</p></div></div>}
       {step === 0 && !completed && <div className={s.informationCard}><span className={s.iconTile}><CareerIcon name="person"/></span><div><strong>Let’s get to know you</strong><p>A few details so we can stay in touch.</p></div></div>}
       {fileIssue && <Alert>{fileIssue}</Alert>}
-      <form noValidate onSubmit={event => { event.preventDefault(); if (!photoBusy) next(); }}>
-        <fieldset disabled={completed} data-career-form-fields aria-label="Application details">
+      <form noValidate onSubmit={event => { event.preventDefault(); if (!busy) void next(); }}>
+        <fieldset disabled={completed || submitting} data-career-form-fields aria-label="Application details">
         {step === 0 && <div className={s.formFields}>
           <div className={s.twoColumns}><Field id="givenName" label="First name" error={errors.givenName}><input {...input('givenName', 'text', 'given-name')} maxLength={80}/></Field><Field id="familyName" label="Last name" error={errors.familyName}><input {...input('familyName', 'text', 'family-name')} maxLength={100}/></Field></div>
           <Field id="email" label="Email address" error={errors.email} hint="For updates about your application."><input {...input('email', 'email', 'email')} inputMode="email" maxLength={254}/></Field>
@@ -113,12 +120,12 @@ export function ApplicationFunnel({ vacancy, draft, step, reviewing, completed =
           <div className={s.sectionHeading}><h2>Upload documents</h2><span className={requiredReady === 2 ? s.readyBadge : s.badge}>{requiredReady} / 2 ready</span></div>
           <section className={s.uploadCard} aria-labelledby="photo-title"><div className={s.uploadHeading}><span className={s.iconTile}><CareerIcon name="person"/></span><div><h2 id="photo-title">Profile photo <span className={s.requiredMark}>*</span></h2><p>A recent photo of you. No professional photo needed.</p></div>{draft.photo && !photoBusy && <span className={s.greenCheck} aria-label="Photo selected"><CareerIcon name="check"/></span>}</div>
             <div className={s.photoRow}>{draft.photo ? <img className={s.photoPreview} src={draft.photo.dataUrl} alt="Your selected profile photo"/> : <div className={s.photoPlaceholder}><CareerIcon name="person"/></div>}<div className={s.photoActions}>
-              <label className={`${s.secondary} ${s.fileControl}`}><CareerIcon name="upload"/>{draft.photo ? 'Replace photo' : 'Select photo'}<input id="photo" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" onChange={choosePhoto} disabled={photoBusy} aria-label="Select profile photo"/></label>
-              <label className={`${s.textButton} ${s.fileControl}`}><CareerIcon name="camera"/>Take a photo<input type="file" accept="image/*" capture="user" onChange={choosePhoto} disabled={photoBusy} aria-label="Take profile photo"/></label>
-              {draft.photo && <button type="button" className={s.textButton} onClick={() => patch('photo', null)} disabled={photoBusy}>Remove photo</button>}
+              <label className={`${s.secondary} ${s.fileControl}`}><CareerIcon name="upload"/>{draft.photo ? 'Replace photo' : 'Select photo'}<input id="photo" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif" onChange={choosePhoto} disabled={busy} aria-label="Select profile photo"/></label>
+              <label className={`${s.textButton} ${s.fileControl}`}><CareerIcon name="camera"/>Take a photo<input type="file" accept="image/*" capture="user" onChange={choosePhoto} disabled={busy} aria-label="Take profile photo"/></label>
+              {draft.photo && <button type="button" className={s.textButton} onClick={() => patch('photo', null)} disabled={busy}>Remove photo</button>}
             </div></div>
             <div className={s.fileStatus} role="status">{photoBusy ? <><span className={s.spinner}/>Preparing photo…</> : draft.photo ? <><span className={s.statusDot}/>Photo selected for review</> : 'JPG, PNG or WebP · Up to 10 MB'}</div>
-            <details className={s.fileHelp}><summary>Photo formats & privacy</summary><p>HEIC is supported only when this browser can open it. Otherwise select JPG/PNG or use the camera. The photo stays in this preview tab, is not uploaded, and is not used for automated scoring.</p></details>
+            <details className={s.fileHelp}><summary>Photo formats & privacy</summary><p>HEIC is supported only when this browser can open it. Otherwise select JPG/PNG or use the camera. {live ? 'Your photo will be processed and stored privately when you submit. It is not used for automated scoring.' : 'The photo stays in this preview tab, is not uploaded, and is not used for automated scoring.'}</p></details>
             {errors.photo && <small className={s.error} role="alert">{errors.photo}</small>}
           </section>
           <section className={s.uploadCard}><div className={s.uploadHeading}><span className={s.iconTile}><CareerIcon name="file"/></span><div><h2>CV / Resume{vacancy.cvRequired ? <span className={s.requiredMark}> *</span> : <span className={s.optional}> (optional)</span>}</h2><p>PDF or DOCX · Up to 10 MB</p></div></div>
@@ -132,18 +139,18 @@ export function ApplicationFunnel({ vacancy, draft, step, reviewing, completed =
             <div className={s.documentActions}><label className={`${s.secondary} ${s.fileControl}`}><CareerIcon name="upload"/>Choose files{/* A general picker keeps PDF accessible on Android. */}<input id="supporting-files" type="file" multiple onChange={event => chooseFiles(event, 'document')} aria-label="Choose supporting files"/></label><label className={`${s.textButton} ${s.fileControl}`}><CareerIcon name="camera"/>Take photo<input type="file" accept="image/*" capture="environment" onChange={event => chooseFiles(event, 'document')} aria-label="Photograph a document"/></label></div>
             <small>PDF, JPG, PNG or WebP · Up to 5 files, 10 MB each</small>
           </section>
-          <p className={s.previewNotice}><CareerIcon name="lock"/>Preview: selected files stay in this tab. Nothing is uploaded or scanned.</p>
+          <p className={s.previewNotice}><CareerIcon name="lock"/>{live ? 'Selected files will be uploaded and security-checked when you submit.' : 'Preview: selected files stay in this tab. Nothing is uploaded or scanned.'}</p>
         </div>}
         {step === 2 && reviewing && <div className={s.formFields}>
           <section className={s.reviewCard}><div className={s.sectionHeading}><h2><CareerIcon name="person"/>Contact details</h2><button type="button" className={s.textButton} onClick={() => move(0)}>Edit</button></div><div className={s.profileHeading}>{draft.photo && <img className={s.avatar} src={draft.photo.dataUrl} alt="Your profile photo"/>}<div><strong>{draft.givenName} {draft.familyName}</strong><p>{draft.email}</p><p>{phoneInternational(draft)}</p></div></div><p>{draft.city}, {countryName(draft.sameResidence ? draft.applyingFrom : draft.residence)}</p><p>Nationality: {countryName(draft.nationality)}</p></section>
           <section className={s.reviewCard}><div className={s.sectionHeading}><h2><CareerIcon name="briefcase"/>Experience</h2><button type="button" className={s.textButton} onClick={() => move(1)}>Edit</button></div><p>{draft.totalExperience} years total · {draft.relevantExperience} years relevant</p><p>{draft.languages.join(', ')} · {draft.availability}</p><dl className={s.answers}>{visibleQuestions(vacancy, draft).map(q => <div key={q.id}><dt>{q.label}</dt><dd>{Array.isArray(draft.answers[q.id]) ? (draft.answers[q.id] as string[]).join(', ') : draft.answers[q.id] || 'Not provided'}</dd></div>)}</dl></section>
           <section className={s.reviewCard}><div className={s.sectionHeading}><h2><CareerIcon name="file"/>Documents</h2><button type="button" className={s.textButton} onClick={() => move(2)}>Edit</button></div><p className={s.readyLine}><CareerIcon name="check"/>Recent profile photo selected</p><p className={s.readyLine}><CareerIcon name="check"/>{draft.cv?.name || 'CV optional for this role'}</p>{draft.documents.map((file, index) => <p className={s.readyLine} key={`${file.name}-${index}`}><CareerIcon name="check"/>{file.name}</p>)}</section>
-          <details className={s.privacy}><summary>How this preview uses your information</summary><p>This is a design preview, not a live recruitment service. Details, photos and files remain in memory in this browser tab. They are not sent to DEMAC, a database or an email provider. Refreshing or closing this page clears the session. Use fictional details and test files. Production privacy and retention settings still require approval.</p></details>
-          <label className={s.checkbox}><input id="privacy" type="checkbox" checked={draft.privacy} onChange={event => patch('privacy', event.target.checked)} aria-invalid={!!errors.privacy}/>I have read the preview privacy information.</label>{errors.privacy && <small className={s.error} role="alert">{errors.privacy}</small>}
-          <label className={s.checkbox}><input type="checkbox" checked={draft.futureTalent} onChange={event => patch('futureTalent', event.target.checked)}/>Keep my profile for future openings (optional; simulated in preview).</label>
+          <details className={s.privacy}><summary>{live ? 'Recruitment privacy notice' : 'How this preview uses your information'}</summary><p style={{ whiteSpace: 'pre-wrap' }}>{live ? live.privacyText : 'This is a design preview, not a live recruitment service. Details, photos and files remain in memory in this browser tab. They are not sent to DEMAC, a database or an email provider. Refreshing or closing this page clears the session. Use fictional details and test files. Production privacy and retention settings still require approval.'}</p></details>
+          <label className={s.checkbox}><input id="privacy" type="checkbox" checked={draft.privacy} onChange={event => patch('privacy', event.target.checked)} aria-invalid={!!errors.privacy}/>{live ? 'I have read the recruitment privacy notice.' : 'I have read the preview privacy information.'}</label>{errors.privacy && <small className={s.error} role="alert">{errors.privacy}</small>}
+          <label className={s.checkbox}><input type="checkbox" checked={draft.futureTalent} onChange={event => patch('futureTalent', event.target.checked)}/>{live ? 'Keep my profile for future openings (optional).' : 'Keep my profile for future openings (optional; simulated in preview).'}</label>
         </div>}
         </fieldset>
-        <div className={s.formActions}><BackControl label={backLabel} disabled={photoBusy} onClick={onBack}/><button className={s.primary} type="submit" disabled={photoBusy}>{photoBusy ? 'Preparing photo…' : completed ? 'View confirmation' : reviewing ? 'Submit preview application' : step === 2 ? 'Review application' : 'Continue'}{!photoBusy && <CareerIcon name="arrow"/>}</button></div>
+        <div className={s.formActions}><BackControl label={backLabel} disabled={busy} onClick={onBack}/><button className={s.primary} type="submit" disabled={busy}>{submitting ? (live?.status || 'Submitting…') : photoBusy ? 'Preparing photo…' : completed ? 'View confirmation' : reviewing ? (live ? 'Submit application' : 'Submit preview application') : step === 2 ? 'Review application' : 'Continue'}{!photoBusy && <CareerIcon name="arrow"/>}</button></div>
       </form>
     </section>
   </div>;
