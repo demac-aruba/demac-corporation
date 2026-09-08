@@ -10,6 +10,7 @@ on:
       - "functions/demacCommunication*.js"
       - "functions/demacCustomer*.js"
       - "functions/mayaOperations*.js"
+      - "functions/mayaRecovery*.js"
       - "functions/officeMayaOperations.test.js"
       - "functions/test-support/mayaWorkspaceMemoryDb.js"
       - "functions/index.js"
@@ -28,6 +29,7 @@ on:
       - "functions/demacCommunication*.js"
       - "functions/demacCustomer*.js"
       - "functions/mayaOperations*.js"
+      - "functions/mayaRecovery*.js"
       - "functions/officeMayaOperations.test.js"
       - "functions/test-support/mayaWorkspaceMemoryDb.js"
       - "functions/index.js"
@@ -74,10 +76,10 @@ jobs:
         run: node --check demacCustomerReservationTools.js
 
       - name: Validate Maya operations and waiting preference syntax
-        run: node --check mayaOperationsReadModel.js && node --check demacCustomerBookingInterest.js
+        run: node --check mayaOperationsReadModel.js && node --check demacCustomerBookingInterest.js && node --check mayaRecoveryMatching.js
 
-      - name: Test Maya operations and waiting preferences
-        run: node --test demacCustomerBookingInterest.test.js officeMayaOperations.test.js mayaOperationsReview.test.js
+      - name: Test Maya operations, waiting preferences and recovery matching
+        run: node --test demacCustomerBookingInterest.test.js officeMayaOperations.test.js mayaOperationsReview.test.js mayaRecovery*.test.js
 
       - name: Test Booking Authority
         run: npm run test:booking-authority
