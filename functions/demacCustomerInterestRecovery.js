@@ -101,11 +101,12 @@ function createCustomerInterestRecovery({ db, analyze = analyzeInterestHistory, 
     for (const decision of decisions) {
       if (!decision || Array.isArray(decision) || Object.keys(decision).length !== DECISION_KEYS.length
         || DECISION_KEYS.some(key => !Object.prototype.hasOwnProperty.call(decision, key))
+        || DECISION_KEYS.filter(key => !['confidence', 'ambiguous'].includes(key)).some(key => typeof decision[key] !== 'string')
         || !['waiting', 'withdrawn', 'needs_review'].includes(decision.state)
         || typeof decision.ambiguous !== 'boolean' || !Number.isFinite(decision.confidence)
         || decision.confidence < 0 || decision.confidence > 1) throw failure('interest_review_failed', 'Invalid decision contract.');
       const source = snapshot.window.entries.find(message => message.id === decision.evidenceMessageId && message.direction === 'inbound');
-      const quote = typeof decision.quote === 'string' ? decision.quote.trim() : '';
+      const quote = decision.quote.trim();
       if (!source || quote.length < 3 || quote.length > 800 || !source.text.includes(quote)) throw failure('evidence_missing', 'The exact customer quotation is missing.');
       const input = normalizeInterest({ action: decision.state === 'withdrawn' ? 'withdraw' : 'register', kind: decision.kind,
         customerId: snapshot.customerId, propertyId: decision.propertyId, appointmentId: decision.appointmentId,
@@ -150,6 +151,7 @@ function createCustomerInterestRecovery({ db, analyze = analyzeInterestHistory, 
         bookingInterest: { kind: input.kind, sourceQuote: quote, dateFrom: input.dateFrom, dateTo: input.dateTo,
           originalDate, originalTime, capacityReserved: false, proactiveContactAuthorized: false } };
       record.interestReview = { version: HISTORY_VERSION, windowFingerprint: snapshot.window.fingerprint,
+        reviewedMessageIds: snapshot.window.entries.map(message => message.id),
         materialFingerprint: digest(interestMaterial(record)), ownershipVersion: snapshot.conversation.ownershipVersion,
         customerInputVersion: snapshot.conversation.customerInputVersion, reviewedAt: snapshot.now.toISOString() };
       planned.set(id, record);
@@ -162,12 +164,14 @@ function createCustomerInterestRecovery({ db, analyze = analyzeInterestHistory, 
     if (replay) return replay;
     // External semantic analysis must never run inside a retried DB transaction.
     const decisions = await analyze({ context: modelContext(first), apiKey: apiKey === undefined ? apiKeyProvider() : apiKey });
-    const planned = plan(first, decisions);
+    plan(first, decisions);
     return db.runTransaction(async transaction => {
       const current = await loadSnapshot(transactionalReader(db, transaction), context);
       const replayed = replayResult(current);
       if (replayed) return replayed;
       if (current.precondition !== first.precondition) throw failure('stale_context', 'Conversation, identity, preferences or appointment changed during review.');
+      // Time can advance while the model runs even when document values do not.
+      const planned = plan(current, decisions);
       const results = planned.map(record => ({ caseId: record.id, kind: record.bookingInterest.kind, state: record.state }));
       const merged = new Map(current.cases.map(record => [record.id, record]));
       // All reads are complete. Only derived preference Cases and their review receipt may be written.
