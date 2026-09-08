@@ -13,6 +13,8 @@ const {
   wacliCommunicationAccountDecision,
   wacliOutboundClaimDecision,
 } = require("./wacliCommunicationBoundary");
+const { isRecoveryOutbound, recoveryOutboundClaimDecision } = require("./mayaRecoveryOfferOutbound");
+const { createMayaRecoveryOfferService } = require("./mayaRecoveryOfferService");
 
 const db = getFirestore();
 const storage = getStorage();
@@ -316,7 +318,7 @@ async function persistCanonicalMessage({
       mediaType: media?.mediaType || null,
       mediaCaption: media?.mediaCaption || null,
       mediaFileName: media?.mediaFileName || null,
-      mediaMimeType: media?.mediaMimeType || null,
+      mediaMimeType: media?.mimeType || null,
       mediaSize: media?.mediaSize || null,
       mediaUrl: media?.mediaUrl || null,
       reactionEmoji,
@@ -723,17 +725,22 @@ async function claimOutboundCommandWithDb(database, bridgeId, communicationAccou
           conversation = conversationSnapshot.exists ? conversationSnapshot.data() || {} : null;
         }
       }
-      const authorization = wacliOutboundClaimDecision({
+      let authorization = wacliOutboundClaimDecision({
         queueItem: current,
         conversation,
         communicationAccountId,
       });
+      if (authorization.allowed) {
+        authorization = await recoveryOutboundClaimDecision({ db: database, transaction,
+          queueId: candidate.id, queueItem: current, now: new Date(now) });
+      }
       if (!authorization.allowed) {
         transaction.set(candidate.ref, {
           status: "failed",
           errorCode: "outbound_authorization_failed",
           authorizationReason: authorization.reason,
           authorizationEpochReason: authorization.epochReason || null,
+          ...(authorization.recoveryReason ? { recoveryAuthorizationReason: authorization.recoveryReason } : {}),
           errorMessage: `Outbound command blocked before provider delivery: ${authorization.reason}.`,
           failedAt: FieldValue.serverTimestamp(),
           claimToken: null,
@@ -768,6 +775,7 @@ async function claimOutboundCommandWithDb(database, bridgeId, communicationAccou
         claimedCommunicationAccountId: communicationAccountId,
         claimedAt: FieldValue.serverTimestamp(),
         processingStartedAt: current.processingStartedAt || FieldValue.serverTimestamp(),
+        ...(isRecoveryOutbound(candidate.id, current) ? { recoveryDispatchAttemptedAtIso: new Date(now).toISOString() } : {}),
         leaseUntil,
         attempts: FieldValue.increment(1),
         updatedAt: FieldValue.serverTimestamp(),
@@ -849,15 +857,26 @@ exports.wacliOutboundAck = onRequest(
 
       const queueRef = db.collection("whatsappOutboundQueue").doc(queueId);
       let ackResult = null;
+      let recoveryDelivery = null;
       await db.runTransaction(async (transaction) => {
+        recoveryDelivery = null;
         const queueSnapshot = await transaction.get(queueRef);
         if (!queueSnapshot.exists) throw httpError(404, "Outbound queue item not found.");
         const current = queueSnapshot.data() || {};
         if (!outboundQueueAccountMatches(current, communicationAccountId)) {
           throw httpError(409, "Outbound queue item belongs to another communication account.", "communication-account-mismatch");
         }
+        const recovery = isRecoveryOutbound(queueId, current);
+        if (recovery && sent && (!reportedProviderMessageId || reportedProviderMessageId === queueId)) {
+          throw httpError(400, "A real provider message ID is required for recovery offer acknowledgement.", "recovery-provider-id-missing");
+        }
 
         if (current.status === "sent" && sent) {
+          if (recovery) {
+            if (current.providerMessageId !== reportedProviderMessageId) throw httpError(409, "Recovery acknowledgement does not match the recorded provider message.", "recovery-ack-conflict");
+            recoveryDelivery = { offerId: current.recoveryOfferId, offerVersion: current.recoveryOfferVersion,
+              queueId, outboundMessageId: current.messageId };
+          }
           ackResult = { alreadyAcknowledged: true, messageId: current.messageId || reportedProviderMessageId || queueId };
           return;
         }
@@ -910,6 +929,21 @@ exports.wacliOutboundAck = onRequest(
         });
         if (!identity.messageId) throw httpError(409, "Outbound acknowledgement has no canonical message identity.");
         const messageRef = db.collection("whatsappMessages").doc(identity.messageId);
+        let recoveryAckPatch = {};
+        if (recovery) {
+          const previousMessage = await transaction.get(messageRef);
+          if (previousMessage.exists) {
+            const value = previousMessage.data() || {};
+            if (value.direction !== "outbound" || value.communicationAccountId !== communicationAccountId
+              || value.conversationId !== current.conversationId || value.providerMessageId !== providerMessageId || value.text !== text
+              || (value.queueId && value.queueId !== queueId)) {
+              throw httpError(409, "Recovery delivery conflicts with the original message.", "recovery-message-conflict");
+            }
+          }
+          recoveryAckPatch = { recoveryAcknowledgedAtIso: new Date().toISOString() };
+          recoveryDelivery = { offerId: current.recoveryOfferId, offerVersion: current.recoveryOfferVersion,
+            queueId, outboundMessageId: identity.messageId };
+        }
 
         transaction.set(messageRef, {
           provider: "wacli",
@@ -926,6 +960,7 @@ exports.wacliOutboundAck = onRequest(
           text,
           status: "sent",
           queueId,
+          ...recoveryAckPatch,
           sentByUserId: current.createdByUserId || null,
           sentByName: current.createdByName || "DEMAC",
           bridgeResponse: { sent: true, messageId: providerMessageId, storeWarning },
@@ -935,6 +970,7 @@ exports.wacliOutboundAck = onRequest(
           status: "sent",
           messageId: identity.messageId,
           providerMessageId,
+          ...recoveryAckPatch,
           bridgeResponse: { sent: true, messageId: providerMessageId, storeWarning },
           completedAt: FieldValue.serverTimestamp(),
           claimToken: null,
@@ -972,6 +1008,17 @@ exports.wacliOutboundAck = onRequest(
         ackResult = { sent: true, messageId: identity.messageId, providerMessageId };
       });
 
+      if (recoveryDelivery) {
+        // Delivery is already committed. A delayed/blocked offer binding must not
+        // turn a successful transport ACK into an error that prompts a resend.
+        try {
+          await createMayaRecoveryOfferService({ db }).bindDelivery(recoveryDelivery);
+          ackResult.recoveryDeliveryBound = true;
+        } catch {
+          ackResult.recoveryDeliveryBound = false;
+          ackResult.recoveryDeliveryReason = "requires_reconciliation";
+        }
+      }
       response.status(200).json({ ok: true, ...ackResult });
     } catch (error) {
       const status = Number(error?.statusCode || 500);
