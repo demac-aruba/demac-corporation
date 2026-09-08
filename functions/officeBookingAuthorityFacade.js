@@ -12,13 +12,14 @@ const {
   createVanScheduleCommunicationAuthority,
 } = require("./vanScheduleCommunicationAuthority");
 const { createMayaOperationsReadModel } = require("./mayaOperationsReadModel");
+const { createMayaRecoveryMatching } = require("./mayaRecoveryMatching");
 
 const COMMUNICATION_ACTIONS = new Set([
   "get_appointment_communication",
   "update_appointment_communication",
   "send_appointment_communication",
 ]);
-const MAYA_READ_ACTIONS = new Set(["list_maya_cancellations", "list_maya_waitlist"]);
+const MAYA_READ_ACTIONS = new Set(["list_maya_cancellations", "list_maya_waitlist", "inspect_maya_recovery_candidates"]);
 
 function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
   if (!db || typeof db.collection !== "function") throw new Error("A Firestore-compatible db is required.");
@@ -38,9 +39,11 @@ function createOfficeBookingAuthorityFacade({ db, verifyIdToken } = {}) {
     try {
       const identity = await baseApi.authenticate(request);
       if (MAYA_READ_ACTIONS.has(action)) {
-        const result = action === "list_maya_cancellations"
-          ? await mayaOperations.listCancellations(data)
-          : await mayaOperations.listWaitlist(data);
+        const result = action === "inspect_maya_recovery_candidates"
+          ? await createMayaRecoveryMatching({ db }).inspect(data)
+          : action === "list_maya_cancellations"
+            ? await mayaOperations.listCancellations(data)
+            : await mayaOperations.listWaitlist(data);
         return { status: 200, body: result };
       }
       const result = VAN_SCHEDULE_ACTIONS.has(action)
