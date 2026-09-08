@@ -35,12 +35,32 @@ async function deliveryProof(reader, offer, queueId, messageId, now = new Date()
   if (queue.recoveryAcknowledgedAtIso !== undefined || message.recoveryAcknowledgedAtIso !== undefined) {
     const acknowledgedAt = Date.parse(queue.recoveryAcknowledgedAtIso || '');
     need(queue.recoveryAcknowledgedAtIso === message.recoveryAcknowledgedAtIso
-      && Number.isFinite(acknowledgedAt) && message.queueId === queue.id, 'recovery_delivery_unproven');
+      && Number.isFinite(acknowledgedAt) && acknowledgedAt <= now.getTime() && message.queueId === queue.id,
+    'recovery_delivery_unproven');
     if (governed) {
       const attemptedAt = Date.parse(queue.recoveryDispatchAttemptedAtIso || '');
       need(attemptedAt >= Date.parse(offer.createdAtIso) && attemptedAt <= acknowledgedAt, 'recovery_delivery_unproven');
     }
     temporal = { timeBasis: 'bridge_acknowledgement', acknowledgedAt, ingestedAt: acknowledgedAt };
+    // The ACK may lag behind an already materialized provider echo. Use that
+    // earlier chronology only when its authenticated webhook was fully processed.
+    // Existing bound proof keeps its chosen basis; later metadata cannot silently
+    // change it. A missing/invalid previously used echo fails, never falls back.
+    const useEcho = governed && (r.delivery?.timeBasis === 'provider_message_with_ack'
+      || (!r.delivery && Boolean(message.webhookEventId)));
+    if (useEcho) {
+      const eventId = documentId(message.webhookEventId);
+      const event = await read(reader, 'whatsappWebhookEvents', eventId);
+      need(event?.processed === true && event.source === 'wacli' && event.provider === 'wacli'
+        && event.communicationAccountId === r.account && event.auth === 'bridge-bearer-account-bound-v1'
+        && event.eventType === 'message', 'recovery_delivery_unproven');
+      const times = P.canonicalTime(message);
+      const attemptedAt = Date.parse(queue.recoveryDispatchAttemptedAtIso || '');
+      need(times.provider >= attemptedAt && times.ingested >= attemptedAt
+        && times.provider <= acknowledgedAt && times.ingested <= acknowledgedAt, 'recovery_delivery_unproven');
+      temporal = { timeBasis: 'provider_message_with_ack', providerAt: times.provider,
+        ingestedAt: times.ingested, acknowledgedAt, webhookEventId: eventId };
+    }
   } else {
     const times = P.canonicalTime(message);
     temporal = { timeBasis: 'provider_message', providerAt: times.provider, ingestedAt: times.ingested };
