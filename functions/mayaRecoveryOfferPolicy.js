@@ -29,7 +29,8 @@ function originalFingerprint(appointment) {
   return digest(material);
 }
 function preferenceFingerprint(record) {
-  return digest({ ...interestMaterial(record), interestHistory: record.interestHistory || [], interestReview: record.interestReview || null });
+  return digest({ ...interestMaterial(record), interestHistory: record.interestHistory || [], interestReview: record.interestReview || null,
+    sourceFingerprint: record.interestSourceFingerprint ?? null });
 }
 function optionFingerprint(option) { return digest(normalizeOfferOption(option)); }
 function offerFingerprint(offer) {
