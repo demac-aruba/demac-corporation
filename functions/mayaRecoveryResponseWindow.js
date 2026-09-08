@@ -10,6 +10,7 @@ const P = require('./mayaRecoveryOfferPolicy');
 const need = P.requireCondition;
 const VERSION = 1;
 const MAX_TEXT = 8000;
+const MAX_RECENT_MESSAGES = 120;
 
 async function deliveredResponseOffer(reader, offer, now) {
   const r = offer.recovery;
@@ -56,6 +57,39 @@ function partEvidence(part, offer, expectedVersion, now) {
     transcriptionVersion: voice ? String(part.transcriptionVersion || '') : '' };
 }
 
+function observedMillis(value) {
+  if (typeof value?.toMillis === 'function') return value.toMillis();
+  if (typeof value?.toDate === 'function') return value.toDate().getTime();
+  if (value instanceof Date) return value.getTime();
+  return typeof value === 'string' ? Date.parse(value) : NaN;
+}
+async function assertNoInterveningOutbound(reader, offer, conversation) {
+  const r = offer.recovery;
+  const recent = conversation.recentMessages;
+  need(Array.isArray(recent) && recent.length <= MAX_RECENT_MESSAGES, 'recovery_response_ambiguous');
+  const ids = [...new Set(recent.filter(item => item?.direction === 'outbound'
+    || ['operator', 'ai', 'assistant'].includes(item?.role)).map(item => item.id))];
+  const others = ids.filter(id => id !== r.delivery.messageId);
+  const createdAt = Date.parse(offer.createdAtIso);
+  need(Number.isFinite(createdAt), 'recovery_response_ambiguous');
+  // A delayed ACK can append the offer at the end of the cache after a newer
+  // question. Check the ORIGINAL outbound records, not just cache position/time.
+  // Use preparation time conservatively: ACK-only time cannot prove when the
+  // physical send happened. Any later/unknown other outbound requires review.
+  await Promise.all(others.map(async id => {
+    const snapshot = await reader.collection('whatsappMessages').doc(documentId(id)).get();
+    const original = snapshot.exists ? snapshot.data() : null;
+    need(original && original.direction === 'outbound' && original.provider === 'wacli'
+      && original.communicationAccountId === r.account && original.conversationId === r.conversationId,
+    'recovery_response_ambiguous');
+    const values = [original.whatsappTimestamp, original.firstIngestedAtIso,
+      original.recoveryAcknowledgedAtIso, original.createdAt].filter(value => value !== undefined && value !== null);
+    need(values.length > 0 && values.every(value => {
+      const time = observedMillis(value); return Number.isFinite(time) && time < createdAt;
+    }), 'recovery_response_ambiguous');
+  }));
+}
+
 async function loadRecoveryResponseWindow({ reader, offer, conversation, message, receipt, quote, now = new Date() }) {
   const r = P.assertOffer(offer, offer?.version);
   const last = receipt.expectedCustomerInputVersion;
@@ -85,6 +119,7 @@ async function loadRecoveryResponseWindow({ reader, offer, conversation, message
       delivery: readyOffer.recovery.delivery || null }) };
   if (!r.response) {
     P.assertReplyEvidence({ offer: readyOffer, conversation, message, receipt, quote, now, responseMessages: messages });
+    await assertNoInterveningOutbound(reader, readyOffer, conversation);
   } else if (r.response.responseWindow !== undefined) {
     need(digest(r.response.responseWindow) === digest(proof), 'recovery_response_conflict');
   } else {
@@ -93,4 +128,5 @@ async function loadRecoveryResponseWindow({ reader, offer, conversation, message
   }
   return { offer: readyOffer, entries, text, proof, reconciledDelivery: !r.delivery && Boolean(readyOffer.recovery.delivery) };
 }
-module.exports = { VERSION, MAX_TEXT, deliveredResponseOffer, partEvidence, loadRecoveryResponseWindow };
+module.exports = { VERSION, MAX_TEXT, MAX_RECENT_MESSAGES, deliveredResponseOffer, partEvidence,
+  assertNoInterveningOutbound, loadRecoveryResponseWindow };
