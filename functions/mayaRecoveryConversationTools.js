@@ -2,9 +2,11 @@
 
 // A scoped adapter inside the existing Customer Runtime registry, not a new
 // agent/tool loop, sender, scheduling authority or public endpoint.
-const { createMayaRecoveryOfferService, transactionView, currentPilot, unchangedBasis, read } = require('./mayaRecoveryOfferService');
+const { createMayaRecoveryOfferService, transactionView, currentPilot, unchangedBasis, originalOwnership, read } = require('./mayaRecoveryOfferService');
 const { loadMutationEpochReceipt } = require('./demacCustomerAppointmentMutationGuard');
 const { communicationEpochDecision, customerSemanticContent } = require('./demacCustomerTurn');
+const { resolveInboundParty } = require('./customerContactDirectory');
+const { digest } = require('./demacCustomerInterestHistory');
 const { documentId } = require('./mayaOperationsReadModel');
 const P = require('./mayaRecoveryOfferPolicy');
 const need = P.requireCondition;
@@ -23,14 +25,17 @@ function publicFailure(error) {
 }
 
 // Detection intentionally still recognizes a pending offer when routing has been
-// disabled. The adapter must reject rather than fall through to ordinary tools.
-async function readRecoveryTurnScope({ db, context = {} } = {}) {
+// disabled. A recorded route also prevents pointer removal from enabling fallback
+// writes for the same inbound turn. Recording is reserved to the Observer caller.
+async function readRecoveryTurnScope({ db, context = {}, recordRoute = false } = {}) {
   const conversationId = context.conversationId || context.conversationKey;
   const messageId = context.inboundMessageId || context.messageId;
   if (!conversationId || !messageId) return null;
   documentId(conversationId); documentId(messageId);
-  const initial = await read(db, 'communicationConversations', conversationId);
-  if (!initial?.mayaRecoveryOffer) return null;
+  const [initial, initialMessage] = await Promise.all([
+    read(db, 'communicationConversations', conversationId), read(db, 'whatsappMessages', messageId),
+  ]);
+  if (!initial?.mayaRecoveryOffer && initialMessage?.mayaRecoveryResponseRoute === undefined) return null;
   need(typeof db.runTransaction === 'function', 'recovery_transaction_required');
   return db.runTransaction(async transaction => {
     const reader = transactionView(db, transaction).db;
@@ -41,15 +46,32 @@ async function readRecoveryTurnScope({ db, context = {} } = {}) {
     const r = P.assertOffer(offer, pointer.version);
     need(r.conversationId === conversationId && r.account === conversation.communicationAccountId,
       'recovery_wrong_conversation');
+    need(['prepared', 'sent', 'accepted', 'declined', 'expired'].includes(r.state), 'recovery_chat_scope_changed');
     const message = await read(reader, 'whatsappMessages', messageId);
     need(message && message.direction === 'inbound' && message.conversationId === conversationId
       && message.communicationAccountId === r.account && Number.isSafeInteger(message.customerInputVersion)
       && message.customerInputVersion > 0 && message.customerInputVersion === conversation.customerInputVersion,
     'recovery_stale_response');
+    const recorded = message.mayaRecoveryResponseRoute;
     // The original request is not a response. A completed offer must not capture
     // a later unrelated conversation; its exact response may still replay.
-    if (message.customerInputVersion <= r.customerInputVersion) return null;
-    if (r.response && r.response.messageId !== messageId) return null;
+    if (message.customerInputVersion <= r.customerInputVersion) {
+      need(recorded === undefined, 'recovery_chat_scope_changed');
+      return null;
+    }
+    if (r.response) {
+      need(['accept', 'decline'].includes(r.response.decision)
+        && r.state === (r.response.decision === 'accept' ? 'accepted' : 'declined')
+        && offer.status === (r.response.decision === 'accept' ? 'booked' : 'declined')
+        && Number.isSafeInteger(r.response.customerInputVersion)
+        && r.response.customerInputVersion > r.customerInputVersion, 'recovery_chat_scope_changed');
+      documentId(r.response.messageId);
+      if (r.response.messageId !== messageId) {
+        need(recorded === undefined && message.customerInputVersion > r.response.customerInputVersion,
+          'recovery_chat_scope_changed');
+        return null;
+      }
+    }
     const receipt = await loadMutationEpochReceipt({ db: reader, transaction: { get: ref => ref.get() },
       conversationId, inboundMessageId: messageId });
     need(receipt.valid && receipt.communicationAccountId === r.account
@@ -62,16 +84,44 @@ async function readRecoveryTurnScope({ db, context = {} } = {}) {
     if (context.expectedCustomerInputVersion !== undefined) {
       need(context.expectedCustomerInputVersion === receipt.expectedCustomerInputVersion, 'recovery_stale_response');
     }
+    const route = { version: 1, offerId: offer.id, offerVersion: offer.version, account: r.account,
+      ownershipVersion: receipt.expectedOwnershipVersion, customerInputVersion: receipt.expectedCustomerInputVersion };
+    if (recorded !== undefined) need(digest(recorded) === digest(route), 'recovery_chat_scope_changed');
+    if (recordRoute && recorded === undefined) {
+      transaction.set(db.collection('whatsappMessages').doc(messageId), { mayaRecoveryResponseRoute: route }, { merge: true });
+    }
     return { conversationId, messageId, offerId: offer.id, offerVersion: offer.version };
-  }, { readOnly: true });
+  }, { readOnly: !recordRoute });
 }
 
-function routingGuardedDb(db) {
+async function verifyScopedIdentity(reader, scope) {
+  const pilot = await currentPilot(reader, scope.conversationId);
+  need(pilot.conversation.mayaRecoveryOffer?.id === scope.offerId
+    && pilot.conversation.mayaRecoveryOffer?.version === scope.offerVersion, 'recovery_chat_scope_changed');
+  const offer = await read(reader, 'bookingOffers', scope.offerId);
+  const r = P.assertOffer(offer, scope.offerVersion);
+  need(r.conversationId === scope.conversationId && r.account === pilot.conversation.communicationAccountId
+    && r.phone === pilot.phone && r.ownershipVersion === pilot.conversation.ownershipVersion, 'recovery_pilot_blocked');
+  const party = await resolveInboundParty(reader, { phone: pilot.phone, whatsapp: pilot.phone });
+  const property = await read(reader, 'properties', offer.request.propertyId);
+  need(!party.ambiguous && party.customer?.active !== false && party.customer?.id === offer.request.customerId
+    && property?.active !== false && property?.clientId === offer.request.customerId, 'recovery_customer_changed');
+  if (r.response?.decision === 'accept') {
+    const appointment = await read(reader, 'appointments', r.appointmentId);
+    need(appointment?.customerId === offer.request.customerId && appointment?.propertyId === offer.request.propertyId
+      && appointment?.status === 'confirmed' && appointment?.offerId === offer.id && appointment?.offerVersion === offer.version
+      && P.originalFingerprint(appointment) === r.response.canonicalFingerprint, 'recovery_replay_changed');
+    await originalOwnership(reader, appointment);
+  }
+}
+
+function routingGuardedDb(db, scope) {
   return {
     collection: db.collection.bind(db),
     runTransaction: (callback, options) => db.runTransaction(async transaction => {
       const snapshot = await transaction.get(db.collection('businessSettings').doc('customer-agent'));
       need(snapshot.exists && snapshot.data()?.recoveryResponseRoutingEnabled === true, 'recovery_chat_routing_disabled');
+      if (scope) await verifyScopedIdentity(transactionView(db, transaction).db, scope);
       return callback(transaction);
     }, options),
   };
@@ -83,22 +133,18 @@ function compactAppointment(appointment) {
 }
 
 function createMayaRecoveryConversationTools({ db, clock = () => new Date(), analyzeResponse, apiKeyProvider } = {}) {
-  let service;
-  function recoveryService() {
-    if (!service) service = createMayaRecoveryOfferService({ db: routingGuardedDb(db), clock,
+  function recoveryService(scope) {
+    // A fresh adapter captures exactly this scope; never retain another chat's
+    // identity in a shared service instance.
+    return createMayaRecoveryOfferService({ db: routingGuardedDb(db, scope), clock,
       ...(analyzeResponse ? { analyzeResponse } : {}), ...(apiKeyProvider ? { apiKeyProvider } : {}) });
-    return service;
   }
-  async function loadCurrent(scope, context) {
-    return routingGuardedDb(db).runTransaction(async transaction => {
+  async function loadCurrent(scope) {
+    return routingGuardedDb(db, scope).runTransaction(async transaction => {
       const reader = transactionView(db, transaction).db;
       const pilot = await currentPilot(reader, scope.conversationId);
-      need(pilot.conversation.mayaRecoveryOffer?.id === scope.offerId
-        && pilot.conversation.mayaRecoveryOffer?.version === scope.offerVersion, 'recovery_chat_scope_changed');
       const offer = await read(reader, 'bookingOffers', scope.offerId);
       const r = P.assertOffer(offer, scope.offerVersion);
-      need(r.conversationId === scope.conversationId && r.account === pilot.conversation.communicationAccountId
-        && pilot.conversation.ownershipVersion === r.ownershipVersion && pilot.phone === r.phone, 'recovery_pilot_blocked');
       const receipt = await loadMutationEpochReceipt({ db: reader, transaction: { get: ref => ref.get() },
         conversationId: scope.conversationId, inboundMessageId: scope.messageId });
       need(receipt.valid && receipt.communicationAccountId === r.account
@@ -111,16 +157,9 @@ function createMayaRecoveryConversationTools({ db, clock = () => new Date(), ana
       'recovery_stale_response');
       const fullText = customerSemanticContent(message, 8001);
       need(fullText.length >= 2 && fullText.length <= 8000, 'recovery_response_requires_clarification');
-      let original;
-      if (r.response?.decision === 'accept') {
-        original = await read(reader, 'appointments', r.appointmentId);
-        need(r.response.messageId === scope.messageId && original?.customerId === offer.request.customerId
-          && original?.propertyId === offer.request.propertyId && original?.offerId === offer.id
-          && original?.offerVersion === offer.version && original?.status === 'confirmed'
-          && P.originalFingerprint(original) === r.response.canonicalFingerprint, 'recovery_replay_changed');
-      } else {
-        original = (await unchangedBasis(reader, offer, pilot)).original;
-      }
+      const original = r.response?.decision === 'accept'
+        ? await read(reader, 'appointments', r.appointmentId)
+        : (await unchangedBasis(reader, offer, pilot)).original;
       return { offer, original, sourceQuote: fullText.slice(0, 800), context: {
         conversationId: scope.conversationId, inboundMessageId: scope.messageId,
       } };
@@ -130,7 +169,7 @@ function createMayaRecoveryConversationTools({ db, clock = () => new Date(), ana
     try {
       const scope = await readRecoveryTurnScope({ db, context });
       if (!scope) return null;
-      const current = await loadCurrent(scope, context);
+      const current = await loadCurrent(scope);
       const { offer, original, sourceQuote } = current;
       if (name === READ) {
         need(args && !Array.isArray(args) && Object.keys(args).length === 0, 'invalid_request');
@@ -151,13 +190,13 @@ function createMayaRecoveryConversationTools({ db, clock = () => new Date(), ana
           && typeof args.reason === 'string' && typeof args.note === 'string', 'recovery_chat_option_mismatch');
         // Consent is interpreted from the complete canonical current message by
         // the existing service. Caller prose cannot replace customer evidence.
-        return await recoveryService().respond({ offerId: offer.id, offerVersion: offer.version,
+        return await recoveryService(scope).respond({ offerId: offer.id, offerVersion: offer.version,
           decision: 'accept', sourceQuote }, current.context);
       }
       if (name === INTEREST && args?.action === DECLINE_ACTION) {
         need(Object.keys(args).length === 8 && EMPTY_INTEREST_FIELDS.every(field => args[field] === ''),
           'invalid_request');
-        return await recoveryService().respond({ offerId: offer.id, offerVersion: offer.version,
+        return await recoveryService(scope).respond({ offerId: offer.id, offerVersion: offer.version,
           decision: 'decline', sourceQuote }, current.context);
       }
       need(false, 'recovery_chat_use_scoped_offer');
