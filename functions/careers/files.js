@@ -2,6 +2,7 @@
 const net = require('node:net');
 const { once } = require('node:events');
 const C = require('./core');
+const { removePrivateObject } = require('./object-deletion');
 function decode(value) {
   C.requireValue(typeof value==='string' && value.length>0 && value.length<=Math.ceil(C.MAX_FILE/3)*4 && value.length%4===0 && /^[A-Za-z0-9+/]*={0,2}$/.test(value),'Select a valid file up to 10 MB.');
   const bytes=Buffer.from(value,'base64');
@@ -74,7 +75,7 @@ function createFiles({bucket,sharp,scanner}) {
     }
     return {bytes,mime};
   }
-  function object(record){C.requireValue(/^careers-private\/[A-Za-z0-9_-]+\/[a-f0-9]{64}-[a-f0-9-]{36}$/.test(record.path),'Invalid document reference.');return bucket.file(record.path,{generation:record.generation});}
+  function object(record){C.requireValue(/^careers-private\/[A-Za-z0-9_-]+\/[a-f0-9]{64}-[a-f0-9-]{36}$/.test(record.path),'Invalid document reference.');return bucket.file(record.path,record.generation?{generation:record.generation}:undefined);}
   async function store(sessionId,fileId,prepared,lease) {
     const path=`careers-private/${C.id(sessionId)}/${C.id(fileId)}-${C.id(lease)}`,file=bucket.file(path),sha=C.digest(prepared.bytes);
     try {await file.save(prepared.bytes,{resumable:false,validation:'crc32c',preconditionOpts:{ifGenerationMatch:0},metadata:{contentType:prepared.mime,cacheControl:'private,no-store',metadata:{sha256:sha,securityStatus:'clean'}}});}
@@ -88,7 +89,7 @@ function createFiles({bucket,sharp,scanner}) {
     const [bytes]=await file.download({validation:'crc32c'});C.requireValue(C.digest(bytes)===record.sha256,'Document verification failed.','unavailable',409);
     return {bytes,mime:record.mime,name:record.name};
   }
-  async function remove(record) {if(record.path)await object(record).delete({ignoreNotFound:true});}
+  const remove = record => removePrivateObject(bucket,record);
   return {decode,prepare,store,read,remove,publicFile:record=>({id:record.id,kind:record.kind,name:record.name,size:record.size,status:record.status})};
 }
 module.exports={decode,detectedType,privateScannerAddress,scan,createFiles};

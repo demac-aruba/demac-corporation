@@ -1,18 +1,21 @@
 'use client';
-import { Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Suspense, cloneElement, isValidElement, useId, useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '../auth/auth-provider';
 import { careersAdmin, newRequestId, newVacancy, newQuestion, downloadApplicantDocument, type RecruitmentVacancy, type ApplicantSummary, type ApplicantRecord, type CareersSettings, type Page, type DocumentRecord } from '../../lib/firebase/careers';
 import { stages, type QuestionKind } from '../../lib/careers-preview';
 import s from './recruitment.module.css';
-function Field({ label, children }: { label: string; children: ReactNode }) { return <label className={s.field}><span>{label}</span>{children}</label>; }
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  const id = useId();
+  return <div className={s.field}><label htmlFor={id}>{label}</label>{isValidElement(children) ? cloneElement(children as ReactElement<{ id?: string }>, { id }) : children}</div>;
+}
 function Back({ onClick }: { onClick: () => void }) { return <button type="button" className={s.round} onClick={onClick} aria-label="Back to list" title="Back to list"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></button>; }
 const err = (e: unknown) => e instanceof Error ? e.message : 'This action could not be completed.';
 const stamp = (value: string) => new Date(value).toLocaleString('en-GB', { timeZone: 'America/Aruba', dateStyle: 'medium', timeStyle: 'short' });
 function Workspace() {
   const { principal } = useAuth();
   const router = useRouter(), params = useSearchParams();
-  const tab = params.get('tab') || 'vacancies', edit = params.get('edit'), candidate = params.get('candidate');
+  const rawTab = params.get('tab'), tab = rawTab === 'applicants' || rawTab === 'settings' ? rawTab : 'vacancies', edit = params.get('edit'), candidate = params.get('candidate');
   const [jobs, setJobs] = useState<RecruitmentVacancy[]>([]), [applicants, setApplicants] = useState<ApplicantSummary[]>([]);
   const [vacancy, setVacancy] = useState<RecruitmentVacancy | null>(null), [profile, setProfile] = useState<ApplicantRecord | null>(null);
   const [settings, setSettings] = useState<CareersSettings | null>(null), [blockers, setBlockers] = useState<string[]>([]);

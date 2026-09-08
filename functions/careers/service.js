@@ -120,7 +120,7 @@ function createService({ db, files, infrastructure, now = Date.now }) {
     const note=p.note == null?null:C.text(p.note,'note',2000);
     return adminMutation(uid,p.requestId,note?'application.note':'application.stage',{key,stage:p.stage || null,note,expectedVersion:p.expectedVersion},async(tx,actor)=>{
       const document=ref('applications',key), current=(await tx.get(document)).data();
-      C.requireValue(current,'Application not found.','not-found',404);
+      C.requireValue(current && current.expiresAt>now() && !current.deleting,'Application not found.','not-found',404);
       C.requireValue(current.version===p.expectedVersion,'Another reviewer updated this application. Reload.','version-conflict',409);
       const version=current.version+1;
       tx.update(document,{...(note?{}:{stage:p.stage}),version,updatedAt:at()});
@@ -156,6 +156,7 @@ function createService({ db, files, infrastructure, now = Date.now }) {
     const bytes=files.decode(p.base64), kind=p.kind;
     C.requireValue(['photo','cv','document'].includes(kind),'Invalid document category.');
     const name=C.text(p.name,'file name',180); const key=C.digest(`${kind}|${C.digest(bytes)}`), lease=crypto.randomUUID();
+    const attemptPath=`careers-private/${C.id(p.sessionId)}/${key}-${lease}`;
     const reserved=await db.runTransaction(async tx=>{
       const session=sessionAccess(await tx.get(sessionRef),p.token);
       C.requireValue(session.status==='draft','This application was already submitted.','already-submitted',409);
@@ -166,7 +167,8 @@ function createService({ db, files, infrastructure, now = Date.now }) {
       C.requireValue(Object.keys(session.files).length<16 || !!existing,'Too many upload attempts. Start another application session.','file-limit',409);
       C.requireValue(active.reduce((n,f)=>n+f.size,0)+bytes.length<=C.MAX_TOTAL,'Combined files exceed 30 MB.');
       C.requireValue(kind==='document'?active.filter(f=>f.kind==='document').length<5:!active.some(f=>f.kind===kind),'Remove the previous file before replacing it.','file-slot',409);
-      const file={id:key,kind,name,size:bytes.length,status:'uploading',lease,leaseUntil:now()+120000};
+      if(existing?.path)tx.set(ref('deletions',C.digest(existing.path)),{path:existing.path,generation:existing.generation || null,notBefore:now()+300000,createdAt:at()});
+      const file={id:key,kind,name,size:bytes.length,status:'uploading',lease,leaseUntil:now()+120000,path:attemptPath,generation:null};
       tx.update(sessionRef,{[`files.${key}`]:file}); return file;
     });
     if(reserved.status==='clean') return files.publicFile(reserved);
@@ -182,7 +184,9 @@ function createService({ db, files, infrastructure, now = Date.now }) {
       });
       return files.publicFile(record);
     } catch(error) {
-      if(stored) await ref('deletions',C.digest(stored.path)).set({...stored,createdAt:at()});
+      // Persist a cleanup intent even if storage acknowledgement was lost. A
+      // hard crash is also recoverable because the reserved path is in session.
+      await ref('deletions',C.digest(attemptPath)).set({path:attemptPath,generation:stored?.generation || null,notBefore:now()+300000,createdAt:at()});
       await db.runTransaction(async tx=>{const s=(await tx.get(sessionRef)).data();if(s?.status==='draft' && s.files[key]?.lease===lease)tx.update(sessionRef,{[`files.${key}`]:{id:key,kind,name,size:bytes.length,status:'rejected'}});}).catch(()=>{});
       throw error;
     }

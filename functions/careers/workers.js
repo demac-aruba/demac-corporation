@@ -37,7 +37,7 @@ function createWorkers({db,files,infrastructure,now=Date.now}){
   }
   async function cleanup(){
     const deletionJobs=await db.collection(COLLECTIONS.deletions).limit(30).get();
-    for(const job of deletionJobs.docs){await files.remove(job.data());await job.ref.delete();}
+    for(const job of deletionJobs.docs){if((job.data().notBefore || 0)>now())continue;await files.remove(job.data());await job.ref.delete();}
     const sessions=await db.collection(COLLECTIONS.sessions).where('expiresAt','<=',now()).limit(20).get();
     for(const doc of sessions.docs){
       const session=doc.data();

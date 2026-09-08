@@ -26,10 +26,17 @@ jobs:
       - run: npm install --prefix functions --no-audit --no-fund
       - name: Existing backend syntax gates and Careers unit/security contracts
         run: npm --prefix functions run validate:firebase && npm --prefix functions run test:careers
-      - name: Persistent records and private files in local demo emulators only
+      - name: Existing booking, field and communications regression suites
+        run: |
+          npm --prefix functions run test:booking-authority
+          npm --prefix functions run test:field-authority
+          npm --prefix functions run test:customer-agent-tools
+          npm --prefix functions run test:customer-agent-router
+          npm --prefix functions run test:transactional-whatsapp
+      - name: Persistent records, private files and ambiguous-write recovery in demo emulators only
         env:
           GCLOUD_PROJECT: demo-demac-careers
-        run: npx --yes firebase-tools@15.29.0 emulators:exec --config firebase.careers-test.json --project demo-demac-careers --only firestore,storage 'node --test functions/careers/emulator.test.js'
+        run: npx --yes firebase-tools@15.29.0 emulators:exec --config firebase.careers-test.json --project demo-demac-careers --only firestore,storage 'node --test functions/careers/emulator.test.js && node --test functions/careers/orphan-emulator.test.js'
   recruitment-browser-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 20
