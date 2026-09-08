@@ -68,7 +68,7 @@ test('repeated real ACK keeps one original message and the exact same delivery r
 test('wrong or missing provider ID cannot fabricate a recovery ACK', async t => {
   const f = await setup(t); const before = JSON.stringify([...f.db.docs]);
   assert.equal((await ack(f, { messageId: '' })).statusCode, 400);
-  assert.equal((await ack(f, { messageId: f.command.queueId })).statusCode, 401);
+  assert.equal((await ack(f, { messageId: f.command.queueId })).statusCode, 400);
   assert.equal((await ack(f, {}, 'wrong-synthetic-token')).statusCode, 401);
   assert.equal(JSON.stringify([...f.db.docs]), before);
   await ack(f); assert.equal((await ack(f, { messageId: 'another-provider-message' })).statusCode, 409);
