@@ -13,10 +13,8 @@ const { dateKey, timeKey, documentId, failure } = require('./mayaOperationsReadM
 const { HISTORY_VERSION, digest, interestMaterial, loadHistoryWindow } = require('./demacCustomerInterestHistory');
 const { analyzeInterestHistory } = require('./demacCustomerInterestAnalysis');
 
+// Internal action dispatched by the EXISTING record_booking_interest tool.
 const NAME = 'recover_recent_booking_interest';
-const DEFINITION = { type: 'function', name: NAME, strict: true,
-  description: 'Review this customer conversation for previously expressed waiting or earlier-date requests, including later changes of mind. Use after a booking/follow-up when the customer wanted earlier service or when a later message may affect a waiting request. Original canonical messages are verified by the server. No arguments: the caller cannot read another customer chat. The result only records/reconciles preferences; it never promises proactive contact, availability, a reservation, cancellation or a changed appointment. If disabled, incomplete or ambiguous, do not claim recovery succeeded.',
-  parameters: { type: 'object', additionalProperties: false, properties: {}, required: [] } };
 const DECISION_KEYS = ['caseId', 'kind', 'propertyId', 'appointmentId', 'state', 'evidenceMessageId', 'quote', 'confidence', 'ambiguous', 'dateFrom', 'dateTo'];
 const SAFE_CODES = new Set(['interest_recovery_disabled', 'permission_denied', 'stale_context', 'context_missing', 'history_incomplete', 'history_identity_mismatch', 'history_too_large', 'identity_mismatch', 'scope_too_large', 'invalid_request', 'evidence_missing', 'interest_review_failed', 'appointment_changed', 'interest_not_found', 'idempotency_conflict']);
 function publicFailure(error) {
@@ -54,6 +52,7 @@ function createCustomerInterestRecovery({ db, analyze = analyzeInterestHistory, 
     ]);
     if (settings?.bookingInterestRecoveryEnabled !== true || settings?.bookingInterestEnabled !== true) throw failure('interest_recovery_disabled', 'Recovery must be explicitly enabled.');
     if (!conversation) throw failure('context_missing', 'Conversation missing.');
+    if (context.communicationAccountId && context.communicationAccountId !== conversation.communicationAccountId) throw failure('permission_denied', 'Caller account does not match the conversation.');
     const phone = resolveConversationPhone({ conversation });
     if (!activeAccountDecision({ conversation, settings: comms || {} }).allowed
       || !configuredAllowlist(settings).includes(phone)
@@ -63,8 +62,8 @@ function createCustomerInterestRecovery({ db, analyze = analyzeInterestHistory, 
     const window = await loadHistoryWindow(reader, conversation, now);
     const inboundId = documentId(context.inboundMessageId || context.messageId || window.latestInbound.id);
     if (inboundId !== window.latestInbound.id) throw failure('stale_context', 'A newer customer turn exists.');
-    // Use the existing queue-backed receipt. Caller-supplied epochs never replace it.
-    const receipt = await loadMutationEpochReceipt({ db: reader, conversationId, inboundMessageId: inboundId });
+    // The reader already wraps transaction.get; never pass its wrapper to Firestore.
+    const receipt = await loadMutationEpochReceipt({ db: reader, transaction: { get: reference => reference.get() }, conversationId, inboundMessageId: inboundId });
     if (!receipt.valid || receipt.communicationAccountId !== conversation.communicationAccountId
       || !communicationEpochDecision({ conversation, expectedOwnershipVersion: receipt.expectedOwnershipVersion,
         expectedCustomerInputVersion: receipt.expectedCustomerInputVersion }).allowed) throw failure('stale_context', 'Current customer-turn proof is missing.');
@@ -93,8 +92,7 @@ function createCustomerInterestRecovery({ db, analyze = analyzeInterestHistory, 
   function modelContext(snapshot) {
     return { timezone: 'America/Aruba', now: snapshot.now.toISOString(), coverage: snapshot.window.coverage,
       messages: snapshot.window.entries.map(({ id, direction, text, at }) => ({ id, direction, text, at })),
-      properties: snapshot.properties.filter(property => property.active),
-      appointments: snapshot.appointments,
+      properties: snapshot.properties.filter(property => property.active), appointments: snapshot.appointments,
       previousInterests: snapshot.cases.map(record => ({ ...interestMaterial(record), id: record.id })) };
   }
   function plan(snapshot, decisions) {
@@ -122,12 +120,10 @@ function createCustomerInterestRecovery({ db, analyze = analyzeInterestHistory, 
       const lastEvent = previous?.interestHistory?.at(-1);
       if (previous && (!lastEvent || !Number.isSafeInteger(lastEvent.customerInputVersion))) throw failure('evidence_missing', 'Prior source ordering requires review.');
       if (lastEvent && (source.customerInputVersion < lastEvent.customerInputVersion
-        || (previous.state === 'WITHDRAWN' && decision.state === 'waiting' && source.customerInputVersion <= lastEvent.customerInputVersion))) {
-        throw failure('stale_context', 'Older evidence cannot override a later customer decision.');
-      }
+        || (previous.state === 'WITHDRAWN' && decision.state === 'waiting' && source.customerInputVersion <= lastEvent.customerInputVersion))) throw failure('stale_context', 'Older evidence cannot override a later customer decision.');
       const fingerprint = hashId(JSON.stringify(input), 40);
       if (previous && previous.lastSourceMessageId === source.id && previous.interestFingerprint !== fingerprint
-        && !['NEEDS_REVIEW'].includes(previous.state)) throw failure('idempotency_conflict', 'The same evidence cannot silently change material preferences.');
+        && previous.state !== 'NEEDS_REVIEW') throw failure('idempotency_conflict', 'The same evidence cannot silently change material preferences.');
       let state = decision.state === 'withdrawn' ? 'WITHDRAWN' : decision.state === 'waiting' ? 'WAITING' : 'NEEDS_REVIEW';
       if (decision.ambiguous || decision.confidence < 0.9) state = 'NEEDS_REVIEW';
       let originalDate = previous?.bookingInterest?.originalDate || '';
@@ -143,10 +139,9 @@ function createCustomerInterestRecovery({ db, analyze = analyzeInterestHistory, 
         if ((input.dateFrom && input.dateFrom > original.date) || (input.dateTo && input.dateTo > original.date)) throw failure('invalid_request', 'Earlier-date preferences cannot extend after the current appointment.');
         originalDate = original.date; originalTime = original.startTime;
       }
-      const event = { messageId: source.id, action: state === 'WITHDRAWN' ? 'withdraw' : 'register',
-        at: snapshot.now.toISOString(), sourceQuote: quote, ownershipVersion: snapshot.conversation.ownershipVersion,
-        customerInputVersion: source.customerInputVersion, reviewedThroughCustomerInputVersion: snapshot.conversation.customerInputVersion,
-        reviewFingerprint: snapshot.window.fingerprint };
+      const event = { messageId: source.id, action: state === 'WITHDRAWN' ? 'withdraw' : 'register', at: snapshot.now.toISOString(),
+        sourceQuote: quote, ownershipVersion: snapshot.conversation.ownershipVersion, customerInputVersion: source.customerInputVersion,
+        reviewedThroughCustomerInputVersion: snapshot.conversation.customerInputVersion, reviewFingerprint: snapshot.window.fingerprint };
       const record = { ...(previous || {}), id, version: 2, caseType: 'booking_interest',
         communicationAccountId: snapshot.conversation.communicationAccountId, conversationId: snapshot.conversation.id,
         customerId: input.customerId, propertyId: input.propertyId, appointmentId: input.appointmentId,
@@ -184,8 +179,7 @@ function createCustomerInterestRecovery({ db, analyze = analyzeInterestHistory, 
       }
       transaction.set(db.collection('communicationConversations').doc(current.conversation.id), {
         mayaInterestRecovery: { version: HISTORY_VERSION, windowFingerprint: current.window.fingerprint,
-          scopeFingerprint: current.scopeFingerprint, casesFingerprint: casesDigest([...merged.values()]), results,
-          checkedAt: current.now.toISOString() },
+          scopeFingerprint: current.scopeFingerprint, casesFingerprint: casesDigest([...merged.values()]), results, checkedAt: current.now.toISOString() },
       }, { merge: true });
       return noActions({ success: true, replayed: false, results, coverage: current.window.coverage });
     });
@@ -193,6 +187,7 @@ function createCustomerInterestRecovery({ db, analyze = analyzeInterestHistory, 
   async function invoke(name, args = {}, context = {}) {
     if (name !== NAME) return { success: false, error: { code: 'unknown_tool', message: 'Unsupported history recovery tool.' } };
     if (!args || Array.isArray(args) || typeof args !== 'object' || Object.keys(args).length) return publicFailure(failure('invalid_request', 'This tool accepts no target override.'));
+    if (!context.inboundMessageId && !context.messageId) return publicFailure(failure('stale_context', 'The caller must supply its exact inbound turn.'));
     try { return await recover(context); } catch (error) { return publicFailure(error); }
   }
   // Internal orchestration entry only. Each conversation is separately checked;
@@ -208,6 +203,6 @@ function createCustomerInterestRecovery({ db, analyze = analyzeInterestHistory, 
     }
     return noActions({ results });
   }
-  return { definitions: [DEFINITION], invoke, recover, recoverMany };
+  return { invoke, recover, recoverMany };
 }
-module.exports = { NAME, DEFINITION, createCustomerInterestRecovery, publicFailure };
+module.exports = { NAME, createCustomerInterestRecovery, publicFailure };
