@@ -16,3 +16,8 @@
   width: 22px;
   height: 22px;
 }
+/* The shared public anchor inheritance otherwise makes this white button's
+   text inherit the footer's white foreground. Limit the correction to Careers. */
+.public-site[data-careers-version="premium-v2"] .premium-footer-whatsapp-button {
+  color: #0b2458;
+}
