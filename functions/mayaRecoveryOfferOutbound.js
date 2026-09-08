@@ -3,6 +3,7 @@
 // One producer for the existing Communication Authority queue, never a sender.
 const { FieldValue } = require('firebase-admin/firestore');
 const { digest, recoveredInterestIsCurrent } = require('./demacCustomerInterestHistory');
+const { interestSourceFingerprint } = require('./demacCustomerInterestSourceProof');
 const { customerSemanticContent } = require('./demacCustomerTurn');
 const { arubaDateParts } = require('./bookingSchedulingPrimitives');
 const { createSchedulingProvider } = require('./bookingAuthoritySchedulingProvider');
@@ -83,7 +84,8 @@ async function preparedDispatchContext(reader, offer, now) {
   'recovery_interest_evidence_changed');
   need(record.interestReview
     ? await recoveredInterestIsCurrent({ reader, record, conversation: pilot.conversation, now })
-    : source.customerInputVersion === pilot.conversation.customerInputVersion,
+    : source.customerInputVersion === pilot.conversation.customerInputVersion
+      && record.interestSourceFingerprint === interestSourceFingerprint(source),
   'recovery_interest_requires_review');
   await originalOwnership(reader, basis.original);
   const selection = await selectOption(reader, { get: ref => ref.get() }, createSchedulingProvider({ db: reader }),
