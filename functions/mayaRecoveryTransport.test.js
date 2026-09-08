@@ -68,7 +68,7 @@ test('repeated real ACK keeps one original message and the exact same delivery r
 test('wrong or missing provider ID cannot fabricate a recovery ACK', async t => {
   const f = await setup(t); const before = JSON.stringify([...f.db.docs]);
   assert.equal((await ack(f, { messageId: '' })).statusCode, 400);
-  assert.equal((await ack(f, { messageId: f.command.queueId })).statusCode, 400);
+  assert.equal((await ack(f, { messageId: f.command.queueId })).statusCode, 401);
   assert.equal((await ack(f, {}, 'wrong-synthetic-token')).statusCode, 401);
   assert.equal(JSON.stringify([...f.db.docs]), before);
   await ack(f); assert.equal((await ack(f, { messageId: 'another-provider-message' })).statusCode, 409);
@@ -92,8 +92,14 @@ test('takeover after claim records actual delivery without authorizing an offer 
 });
 test('new customer input before ACK is left for reconciliation, not silently accepted', async t => {
   const f = await setup(t); f.inbound();
+  // inbound() advances the injected service clock to +120s. Advance the gateway's
+  // global clock too: its ACK must actually be later than this early response.
+  t.mock.timers.setTime(NOW.getTime() + 180000);
+  f.setTime(new Date(NOW.getTime() + 181000));
   const response = await ack(f); assert.equal(response.statusCode, 200); assert.equal(response.body.recoveryDeliveryBound, false);
-  await assert.rejects(() => f.respond(f.offer));
+  const queue = f.db.read('whatsappOutboundQueue', f.command.queueId);
+  assert.ok(Date.parse(f.db.read('whatsappMessages', 'MSG-2').whatsappTimestamp) < Date.parse(queue.recoveryAcknowledgedAtIso));
+  await assert.rejects(() => f.respond(f.offer), { code: 'recovery_response_predates_offer' });
   assert.equal(f.db.read('appointments', 'APT-1').date, '2026-09-10');
 });
 test('conflicting original provider message is not overwritten by recovery ACK', async t => {
