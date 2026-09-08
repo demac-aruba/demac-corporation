@@ -8,6 +8,7 @@ const { resolveInboundParty } = require('./customerContactDirectory');
 const { activeAccountDecision } = require('./demacCommunicationIdentity');
 const { customerSemanticContent } = require('./demacCustomerTurn');
 const { bookingInterestCaseId } = require('./demacCustomerBookingInterest');
+const { recoveredInterestIsCurrent } = require('./demacCustomerInterestHistory');
 const { configuredAllowlist, mayaReplyDecision, mayaSenderOwnershipDecision, resolveConversationPhone } = require('./demacCustomerAgentReplyPolicy');
 const { CANCELLED, dateKey, timeKey, documentId, failure } = require('./mayaOperationsReadModel');
 
@@ -165,11 +166,17 @@ function createMayaRecoveryMatching({ db, clock = () => new Date(), providerFact
           rows.push(reject('pilot_or_ownership_blocked', 'excluded')); continue;
         }
         const event = Array.isArray(record.interestHistory) ? record.interestHistory.at(-1) : null;
-        if (!event || event.action !== 'register' || event.messageId !== source.id
-          || !Number.isSafeInteger(source.customerInputVersion) || source.customerInputVersion <= 0
-          || event.customerInputVersion !== source.customerInputVersion
-          || conversation.customerInputVersion !== source.customerInputVersion
-          || event.ownershipVersion !== conversation.ownershipVersion) {
+        const sourceBound = event && event.action === 'register' && event.messageId === source.id
+          && Number.isSafeInteger(source.customerInputVersion) && source.customerInputVersion > 0
+          && event.customerInputVersion === source.customerInputVersion
+          && event.ownershipVersion === conversation.ownershipVersion;
+        // A reviewed older request may survive benign later messages, but only
+        // while the entire reviewed canonical window still has the same digest.
+        // A present but invalid review must never fall back to the legacy path.
+        const currentBound = sourceBound && (record.interestReview
+          ? await recoveredInterestIsCurrent({ reader, record, conversation, now })
+          : conversation.customerInputVersion === source.customerInputVersion);
+        if (!currentBound) {
           rows.push(reject('interest_requires_reconfirmation')); continue;
         }
         const quote = typeof interest.sourceQuote === 'string' ? interest.sourceQuote.trim() : '';
