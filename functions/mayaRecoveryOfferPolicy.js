@@ -46,7 +46,7 @@ function assertOffer(offer, offerVersion) {
   return r;
 }
 function isOpen(offer, now) {
-  return offer?.status === 'open' && !TERMINAL.has(offer.recovery?.state)
+  return offer?.status === 'recovery_pending' && !TERMINAL.has(offer.recovery?.state)
     && Number.isFinite(Date.parse(offer.expiresAt)) && Date.parse(offer.expiresAt) > now.getTime();
 }
 function configuredTtl(settings) {
