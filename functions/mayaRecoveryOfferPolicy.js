@@ -20,7 +20,13 @@ function recoveryOfferId(account, cancellationId) {
 function originalFingerprint(appointment) {
   const fields = ['id', 'customerId', 'propertyId', 'status', 'date', 'startTime', 'endTime',
     'workLines', 'constraints', 'notes', 'assignments', 'workOrderIds', 'capacityLockIds', 'dispatchHold'];
-  return digest(Object.fromEntries(fields.map(key => [key, appointment[key] ?? null])));
+  const material = Object.fromEntries(fields.map(key => [key, appointment[key] ?? null]));
+  // The canonical dispatch service returns {} when there has never been a hold,
+  // without writing that empty map to the Appointment. Missing/null and {} carry
+  // the same no-hold meaning. Keep every populated hold field in the fingerprint:
+  // active holds, changed case links and release history must still invalidate it.
+  material.dispatchHold = appointment.dispatchHold ?? {};
+  return digest(material);
 }
 function preferenceFingerprint(record) {
   return digest({ ...interestMaterial(record), interestHistory: record.interestHistory || [], interestReview: record.interestReview || null });
