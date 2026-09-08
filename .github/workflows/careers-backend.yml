@@ -2,9 +2,9 @@ name: Careers backend integrity
 on:
   push:
     branches: [feature/careers-funnel-preview]
-    paths: ['functions/careers/**','functions/careers.js','functions/package.json','functions/bootstrap.js','firebase.careers-test.json','.github/workflows/careers-backend.yml','apps/erp-next/components/careers/**','apps/erp-next/components/recruitment/**','apps/erp-next/lib/firebase/careers.ts','apps/erp-next/app/careers/**','apps/erp-next/app/(erp)/recruitment/**']
+    paths: ['functions/careers/**','functions/careers.js','functions/package.json','functions/bootstrap.js','firebase.careers-test.json','.github/workflows/careers-backend.yml','apps/erp-next/components/careers/**','apps/erp-next/components/recruitment/**','apps/erp-next/lib/firebase/careers.ts','apps/erp-next/lib/careers-preview.ts','apps/erp-next/lib/careers-recovery.ts','apps/erp-next/scripts/careers-form-contract.test.cjs','apps/erp-next/app/careers/**','apps/erp-next/app/(erp)/recruitment/**']
   pull_request:
-    paths: ['functions/careers/**','functions/careers.js','firebase.careers-test.json','.github/workflows/careers-backend.yml','apps/erp-next/components/careers/**','apps/erp-next/components/recruitment/**','apps/erp-next/lib/firebase/careers.ts','apps/erp-next/app/careers/**','apps/erp-next/app/(erp)/recruitment/**']
+    paths: ['functions/careers/**','functions/careers.js','firebase.careers-test.json','.github/workflows/careers-backend.yml','apps/erp-next/components/careers/**','apps/erp-next/components/recruitment/**','apps/erp-next/lib/firebase/careers.ts','apps/erp-next/lib/careers-preview.ts','apps/erp-next/lib/careers-recovery.ts','apps/erp-next/scripts/careers-form-contract.test.cjs','apps/erp-next/app/careers/**','apps/erp-next/app/(erp)/recruitment/**']
 permissions:
   contents: read
 jobs:
@@ -26,6 +26,10 @@ jobs:
       - run: npm install --prefix functions --no-audit --no-fund
       - name: Existing backend syntax gates and Careers unit/security contracts
         run: npm --prefix functions run validate:firebase && npm --prefix functions run test:careers
+      - name: Root-cause fault injection and shared browser/server form contract
+        run: |
+          node --test functions/careers/architecture.test.js
+          node --experimental-strip-types --test apps/erp-next/scripts/careers-form-contract.test.cjs
       - name: Existing booking, field and communications regression suites
         run: |
           npm --prefix functions run test:booking-authority

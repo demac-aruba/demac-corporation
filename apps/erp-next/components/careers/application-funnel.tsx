@@ -22,7 +22,7 @@ function QuestionField({ question: q, value, error, onChange }: { question: Ques
     })}</div>{error && <small className={s.error} id={`${id}-error`} role="alert">{error}</small>}</fieldset>;
   }
   const shared = { id, value: typeof value === 'string' ? value : '', 'aria-invalid': !!error, 'aria-describedby': error ? `${id}-error` : undefined, onChange: (event: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => onChange(event.target.value) };
-  return <Field id={id} label={q.label} optional={!q.required} error={error}>{q.kind === 'select' ? <select {...shared}><option value="">Select an answer</option>{q.options?.map(option => <option key={option} value={option}>{option}</option>)}</select> : q.kind === 'textarea' ? <textarea {...shared} rows={3} maxLength={1200}/> : <input {...shared} type={q.kind === 'number' ? 'number' : 'text'} min={q.kind === 'number' ? 0 : undefined} maxLength={q.kind === 'number' ? undefined : 240}/>}</Field>;
+  return <Field id={id} label={q.label} optional={!q.required} error={error}>{q.kind === 'select' ? <select {...shared}><option value="">Select an answer</option>{q.options?.map(option => <option key={option} value={option}>{option}</option>)}</select> : q.kind === 'textarea' ? <textarea {...shared} rows={3} maxLength={1200}/> : <input {...shared} type={q.kind === 'number' || q.kind === 'date' || q.kind === 'url' ? q.kind : 'text'} min={q.kind === 'number' ? 0 : undefined} maxLength={q.kind === 'number' ? undefined : 240}/>}</Field>;
 }
 export function ApplicationFunnel({ vacancy, draft, step, reviewing, completed = false, onChange, onStep, onBack, onBackToJob, onSubmit, live }: Props) {
   const [errors, setErrors] = useState<Errors>({});
@@ -36,7 +36,7 @@ export function ApplicationFunnel({ vacancy, draft, step, reviewing, completed =
   const latestDraft = useRef(draft);
   latestDraft.current = draft;
   const heading = useRef<HTMLHeadingElement>(null);
-  useEffect(() => { setErrors({}); setFileIssue(''); heading.current?.focus({ preventScroll: true }); }, [step, reviewing]);
+  useEffect(() => { setErrors({}); setFileIssue(''); heading.current?.focus({ preventScroll: true }); }, [step, reviewing, vacancy.version]);
   useEffect(() => () => { photoGeneration.current += 1; }, []);
   function patch<K extends keyof ApplicationDraft>(key: K, value: ApplicationDraft[K]) {
     if (completed) return;
@@ -89,7 +89,7 @@ export function ApplicationFunnel({ vacancy, draft, step, reviewing, completed =
   const requiredReady = Number(!!draft.photo) + Number(!!draft.cv || (!vacancy.cvRequired && draft.noCv));
   const backLabel = reviewing ? 'Back to documents' : step === 2 ? 'Back to experience' : step === 1 ? 'Back to your details' : 'Back to position details';
   return <div className={s.funnelLayout}>
-    <aside className={s.roleAside}><div data-career-navrow><BackControl label="Back to position details" disabled={busy} onClick={onBackToJob}/><span>Position details</span></div><span className={s.eyebrow}>YOU ARE APPLYING FOR</span><h2>{vacancy.title}</h2><p>{vacancy.location} · {vacancy.contract}</p><hr/><strong>A few steps.<br/>A new opportunity.</strong><p>Share your experience and tell us what you can bring to the team.</p><small><CareerIcon name="lock"/>No account or password needed.</small></aside>
+    <aside className={s.roleAside}><div className={s.navigationRow} data-career-navrow><BackControl label="Back to position details" disabled={busy} onClick={onBackToJob}/><span>Position details</span></div><span className={s.eyebrow}>YOU ARE APPLYING FOR</span><h2>{vacancy.title}</h2><p>{vacancy.location} · {vacancy.contract}</p><hr/><strong>A few steps.<br/>A new opportunity.</strong><p>Share your experience and tell us what you can bring to the team.</p><small><CareerIcon name="lock"/>No account or password needed.</small></aside>
     <section className={s.formPanel} aria-label="Application form">
       <div className={s.mobileRole}><BackControl label="Back to position details" disabled={busy} onClick={onBackToJob}/><span><small>APPLYING FOR</small><strong>{vacancy.title}</strong></span></div>
       <FunnelSteps step={step} disabled={busy} onSelect={index => move(index)}/>
@@ -98,7 +98,7 @@ export function ApplicationFunnel({ vacancy, draft, step, reviewing, completed =
       {step === 0 && !completed && <div className={s.informationCard}><span className={s.iconTile}><CareerIcon name="person"/></span><div><strong>Let’s get to know you</strong><p>A few details so we can stay in touch.</p></div></div>}
       {fileIssue && <Alert>{fileIssue}</Alert>}
       <form noValidate onSubmit={event => { event.preventDefault(); if (!busy) void next(); }}>
-        <fieldset disabled={completed || submitting} data-career-form-fields aria-label="Application details">
+        <fieldset className={s.formFieldset} disabled={completed || submitting} data-career-form-fields aria-label="Application details">
         {step === 0 && <div className={s.formFields}>
           <div className={s.twoColumns}><Field id="givenName" label="First name" error={errors.givenName}><input {...input('givenName', 'text', 'given-name')} maxLength={80}/></Field><Field id="familyName" label="Last name" error={errors.familyName}><input {...input('familyName', 'text', 'family-name')} maxLength={100}/></Field></div>
           <Field id="email" label="Email address" error={errors.email} hint="For updates about your application."><input {...input('email', 'email', 'email')} inputMode="email" maxLength={254}/></Field>

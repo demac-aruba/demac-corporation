@@ -1,6 +1,7 @@
 'use strict';
 const C=require('./core');
-function createHandler({service,auth,env,admin=false}) {
+function createHandler({service: serviceSource,auth,env,admin=false}) {
+  const getService = () => typeof serviceSource === 'function' ? serviceSource() : serviceSource;
   const origins=(env.CAREERS_ALLOWED_ORIGINS || '').split(',').map(v=>v.trim()).filter(Boolean);
   return async(req,res)=>{
     res.set('Cache-Control','no-store');res.set('X-Content-Type-Options','nosniff');res.set('Referrer-Policy','no-referrer');
@@ -22,6 +23,7 @@ function createHandler({service,auth,env,admin=false}) {
         C.requireValue(match,'Sign in to DEMAC ERP.','unauthenticated',401);
         let decoded;try{decoded=await auth.verifyIdToken(match[1],true);}catch{throw C.fault('unauthenticated','Your session expired. Sign in again.',401);}
         const uid=decoded.uid;
+        const service = getService();
         if(action==='settings.get')result=await service.getSettings(uid);
         else if(action==='settings.save')result=await service.saveSettings(uid,p);
         else if(action==='settings.verify')result=await service.verifySetup(uid);
@@ -39,6 +41,7 @@ function createHandler({service,auth,env,admin=false}) {
         }else throw C.fault('unknown-action','Unknown administration action.');
       }else{
         C.requireValue(env.CAREERS_RATE_SALT && env.CAREERS_RATE_SALT.length>=32,'Careers protection is not configured.','not-configured',503);
+        const service = getService();
         await service.rateLimit(C.digest(`${env.CAREERS_RATE_SALT}|${req.ip || req.socket?.remoteAddress || 'unknown'}`));
         if(action==='vacancies.list')result=await service.publicJobs();
         else if(action==='session.start')result=await service.startSession(p);

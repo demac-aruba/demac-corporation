@@ -6,17 +6,23 @@ on:
     paths:
       - 'apps/erp-next/components/careers/**'
       - 'apps/erp-next/lib/careers-preview.ts'
+      - 'apps/erp-next/lib/careers-recovery.ts'
+      - 'functions/careers/form-contract.*'
       - 'apps/erp-next/app/careers/**'
       - 'apps/erp-next/scripts/careers-visual-acceptance.cjs'
       - 'apps/erp-next/scripts/careers-navigation-acceptance.cjs'
+      - 'apps/erp-next/scripts/careers-form-contract.test.cjs'
       - '.github/workflows/careers-preview-ui.yml'
   pull_request:
     paths:
       - 'apps/erp-next/components/careers/**'
       - 'apps/erp-next/lib/careers-preview.ts'
+      - 'apps/erp-next/lib/careers-recovery.ts'
+      - 'functions/careers/form-contract.*'
       - 'apps/erp-next/app/careers/**'
       - 'apps/erp-next/scripts/careers-visual-acceptance.cjs'
       - 'apps/erp-next/scripts/careers-navigation-acceptance.cjs'
+      - 'apps/erp-next/scripts/careers-form-contract.test.cjs'
       - '.github/workflows/careers-preview-ui.yml'
 
 permissions:

@@ -1,5 +1,6 @@
-/** Product-validation contracts only. No network, storage, employee or scheduling writes. */
-export type QuestionKind = 'select' | 'multiselect' | 'yesno' | 'text' | 'textarea' | 'number';
+import { COUNTRY_CODES, validateDetails, validateExperience, visibleQuestions as visibleFormQuestions, type FormQuestion } from '../../../functions/careers/form-contract.js';
+/** UI draft types and shared validation. Preview fixtures are never persisted. */
+export type QuestionKind = FormQuestion['kind'];
 export interface Question {
   id: string; label: string; kind: QuestionKind; required: boolean;
   options?: string[];
@@ -8,7 +9,7 @@ export interface Question {
 export interface Vacancy {
   id: string; title: string; department: string; location: string;
   contract: string; summary: string; responsibilities: string[];
-  requirements: string[]; status: 'Open' | 'Draft' | 'Paused' | 'Closed';
+  requirements: string[]; status: 'Open' | 'Draft' | 'Paused' | 'Closed' | 'Archived';
   cvRequired: boolean; version: number; questions: Question[];
 }
 export interface ProfilePhoto { dataUrl: string; name: string; size: number }
@@ -27,7 +28,7 @@ export interface PreviewApplication {
   notes: { text: string; at: string }[]; timeline: { text: string; at: string }[];
 }
 export type Errors = Record<string, string>;
-export const countryCodes = 'AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW'.split(' ');
+export const countryCodes = [...COUNTRY_CODES];
 export const dialingCodes = [ ['+297', 'Aruba'], ['+599', 'Curaçao / Caribbean Netherlands'], ['+1', 'US / Canada / Caribbean'], ['+31', 'Netherlands'], ['+58', 'Venezuela'], ['+57', 'Colombia'], ['+503', 'El Salvador'], ['+51', 'Peru'], ['+593', 'Ecuador'], ['+52', 'Mexico'], ['+34', 'Spain'], ['+44', 'United Kingdom'], ['+49', 'Germany'], ['+55', 'Brazil'], ['+54', 'Argentina'], ['+56', 'Chile'], ['+507', 'Panama'], ['+506', 'Costa Rica'], ['+502', 'Guatemala'], ['+504', 'Honduras'], ['+505', 'Nicaragua'], ['+63', 'Philippines'] ];
 export function emptyDraft(): ApplicationDraft {
   return { givenName: '', familyName: '', email: '', dialCode: '+297', phone: '', whatsapp: true,
@@ -55,43 +56,15 @@ export function exampleVacancies(): Vacancy[] {
     questions: role.questions.map(q => ({ ...q, options: q.options ? [...q.options] : undefined })) }));
 }
 export function visibleQuestions(vacancy: Vacancy, draft: ApplicationDraft): Question[] {
-  return vacancy.questions.filter(q => !q.when || draft.answers[q.when.questionId] === q.when.value);
+  return visibleFormQuestions(vacancy.questions, draft.answers);
 }
 export function phoneInternational(draft: Pick<ApplicationDraft, 'dialCode' | 'phone'>): string {
   return `+${draft.dialCode.replace(/\D/g, '')}${draft.phone.replace(/\D/g, '')}`;
 }
 export function validateStep(draft: ApplicationDraft, vacancy: Vacancy, step: number, review = false): Errors {
   const errors: Errors = {};
-  if (step === 0) {
-    if (!draft.givenName.trim()) errors.givenName = 'Enter your first name.';
-    if (!draft.familyName.trim()) errors.familyName = 'Enter your last name.';
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(draft.email.trim())) errors.email = 'Enter a valid email address.';
-    if (!/^\+?[1-9]\d{0,3}$/.test(draft.dialCode.trim())) errors.dialCode = 'Enter a country calling code, such as +297.';
-    if (!/^[\d\s().-]+$/.test(draft.phone) || !/^\+[1-9]\d{6,14}$/.test(phoneInternational(draft))) errors.phone = 'Check the number and country code.';
-    if (!countryCodes.includes(draft.nationality)) errors.nationality = 'Select your nationality.';
-    if (!countryCodes.includes(draft.applyingFrom)) errors.applyingFrom = 'Select the country you are applying from.';
-    if (!draft.sameResidence && !countryCodes.includes(draft.residence)) errors.residence = 'Select your country of residence.';
-    if (!draft.city.trim()) errors.city = 'Enter your current city.';
-  }
-  if (step === 1) {
-    for (const key of ['totalExperience', 'relevantExperience'] as const) {
-      const value = Number(draft[key]);
-      if (draft[key].trim() === '' || !Number.isFinite(value) || value < 0 || value > 70) errors[key] = 'Enter years of experience from 0 to 70.';
-    }
-    if (!errors.totalExperience && !errors.relevantExperience && Number(draft.relevantExperience) > Number(draft.totalExperience)) errors.relevantExperience = 'Relevant experience cannot exceed your total experience.';
-    if (!draft.languages.length) errors.languages = 'Select at least one language.';
-    if (!draft.availability) errors.availability = 'Select when you could start.';
-    for (const q of visibleQuestions(vacancy, draft)) {
-      const value = draft.answers[q.id];
-      const missing = value === undefined || (Array.isArray(value) ? !value.length : !value.trim());
-      if (q.required && missing) errors[`q-${q.id}`] = 'Please answer this question.';
-      if (!missing && q.kind === 'number' && (Array.isArray(value) || !Number.isFinite(Number(value)) || Number(value) < 0)) errors[`q-${q.id}`] = 'Enter a number of zero or more.';
-      if (!missing && ['select', 'multiselect', 'yesno'].includes(q.kind)) {
-        const allowed = q.kind === 'yesno' ? ['Yes', 'No'] : (q.options ?? []);
-        if ((Array.isArray(value) ? value : [value]).some(v => !allowed.includes(v))) errors[`q-${q.id}`] = 'Choose one of the available options.';
-      }
-    }
-  }
+  if (step === 0) Object.assign(errors, validateDetails(draft).errors);
+  if (step === 1) Object.assign(errors, validateExperience(draft, vacancy.questions).errors);
   if (step === 2) {
     if (!draft.photo) errors.photo = 'Add a recent photo for your profile.';
     if (!draft.cv && (vacancy.cvRequired || !draft.noCv)) errors.cv = vacancy.cvRequired ? 'Select your CV to continue.' : 'Select a CV or choose “I do not have a CV”.';

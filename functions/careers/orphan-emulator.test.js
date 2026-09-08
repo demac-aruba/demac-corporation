@@ -24,3 +24,51 @@ test('storage acknowledgement loss retains cleanup intent and never deletes adop
     time+=86400000;await workers.cleanup();[objects]=await bucket.getFiles({prefix:`careers-private/${id}/`});assert.equal(objects.length,0,'expired draft removes its own remaining object');
   }finally{await db.terminate();await deleteApp(app);}
 });
+
+test('lost Firestore finalization acknowledgement preserves clean bytes and submitted ownership',async()=>{
+  const app=initializeApp({projectId:'demo-demac-careers',storageBucket:'demo-demac-careers.appspot.com'},'finalization-review');
+  const db=getFirestore(app),bucket=getStorage(app).bucket(),time=Date.now(),C=require('./core');
+  const files=createFiles({bucket,sharp,scanner:async()=>{}}),token='b'.repeat(64);
+  const photo=await sharp({create:{width:64,height:64,channels:3,background:'#eee'}}).png().toBuffer();
+  try {
+    for (const adopted of [false,true]) {
+      const id=crypto.randomUUID();
+      await db.collection(N.sessions).doc(id).set({id,files:{},status:'draft',secretHash:C.digest(token),expiresAt:time+86400000});
+      let armed=true,ackLost=false;
+      const faultDb={collection:name=>db.collection(name),runTransaction:async work=>{
+        let finalized=false;
+        const result=await db.runTransaction(tx=>{
+          finalized=false;
+          const wrapped={get:tx.get.bind(tx),set:tx.set.bind(tx),create:tx.create.bind(tx),delete:tx.delete.bind(tx),update:(ref,values)=>{
+            if(Object.values(values).some(value=>value?.status==='clean'))finalized=true;
+            return tx.update(ref,values);
+          }};
+          return work(wrapped);
+        });
+        if(armed&&finalized){
+          armed=false;ackLost=true;
+          if(adopted){
+            const session=(await db.collection(N.sessions).doc(id).get()).data();
+            await db.collection(N.applications).doc(id).set({id,documents:Object.values(session.files),expiresAt:time+172800000});
+            await db.collection(N.sessions).doc(id).delete();
+          }
+          throw Error('Simulated lost Firestore finalization acknowledgement');
+        }
+        return result;
+      }};
+      const service=createService({db:faultDb,files,infrastructure:{},now:()=>time});
+      const payload={sessionId:id,token,kind:'photo',name:'qa.png',base64:photo.toString('base64')};
+      if(adopted)await assert.rejects(service.upload(payload),/lost Firestore/);
+      else {
+        const result=await service.upload(payload);assert.equal(result.status,'clean');
+        assert.equal((await service.upload(payload)).id,result.id,'retry returns the same clean document');
+      }
+      assert(ackLost,'fault occurs after a real emulator transaction committed');
+      const queued=await db.collection(N.deletions).get();
+      assert(!queued.docs.some(doc=>doc.data().path.startsWith(`careers-private/${id}/`)),'owned bytes never enter deletion queue');
+      const [objects]=await bucket.getFiles({prefix:`careers-private/${id}/`});assert.equal(objects.length,1);
+      const record=adopted?(await db.collection(N.applications).doc(id).get()).data().documents[0]:Object.values((await db.collection(N.sessions).doc(id).get()).data().files)[0];
+      assert.equal((await files.read(record)).mime,'image/jpeg','owned file is still readable');
+    }
+  } finally {await db.terminate();await deleteApp(app);}
+});

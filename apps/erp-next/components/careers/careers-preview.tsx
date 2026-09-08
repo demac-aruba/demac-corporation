@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { PublicBrand, PublicHeader, PublicFooter } from '../public/public-site-shell';
+import { CareersHeader, CareersFooter } from './careers-chrome';
 import { copyForSubmission, emptyDraft, exampleVacancies, totalFileBytes, validateStep, type ApplicationDraft, type PreviewApplication, type Vacancy } from '../../lib/careers-preview';
 import { ApplicationFunnel } from './application-funnel';
 import { RecruitmentPreview } from './recruitment-preview';
@@ -97,12 +97,12 @@ export function CareersPreview() {
   function reviewView(next: CareerRoute) { if (tools.current) tools.current.open = false; navigation.navigate(next); }
   const openJobs = vacancies.filter(job => job.status === 'Open' && (!department || job.department === department) && (!search || `${job.title} ${job.summary}`.toLowerCase().includes(search.toLowerCase())));
   const departments = Array.from(new Set(vacancies.map(job => job.department))).sort();
-  return <main className={`public-site public-subsite ${s.root} ${view === 'admin' ? s.admin : ''}`} data-careers-version="premium-v3" data-career-view={view} onClickCapture={event => {
+  return <main className={`${s.root} ${view === 'admin' ? s.admin : ''}`} data-careers-version="premium-v3" data-career-view={view} onClickCapture={event => {
     const anchor = event.target instanceof Element ? event.target.closest('a') : null;
     if (anchor && !anchor.hasAttribute('download') && !anchor.href.startsWith('blob:') && (hasDraft || applications.length) && !window.confirm('Leave this preview? The application details in this session will be cleared.')) { event.preventDefault(); event.stopPropagation(); }
   }}>
     <div className={s.previewRibbon}><span><i aria-hidden="true"/>Preview v3 · Test data only</span><details ref={tools} className={s.reviewTools}><summary>Review tools <span aria-hidden="true">⌄</span></summary><div><strong>Design review · Not merged</strong><p>Test details and files stay in this tab. No live applications or emails.</p><button type="button" className={s.secondary} onClick={() => reviewView({ view: 'jobs' })}>Candidate view</button><button type="button" className={s.primary} onClick={() => reviewView({ view: 'admin', tab: 'applications' })}>Recruitment preview</button></div></details></div>
-    {view === 'jobs' || view === 'detail' ? <PublicHeader/> : <header className={s.compactHeader}><PublicBrand/><span>{view === 'admin' ? 'Recruitment' : 'Careers'}</span></header>}
+    <CareersHeader compactLabel={view === 'jobs' || view === 'detail' ? undefined : view === 'admin' ? 'Recruitment' : 'Careers'}/>
     {!navigation.ready && <div className={s.container} role="status">Opening Careers…</div>}
     {navigation.ready && view === 'jobs' && <>
       <section className={s.careerHero}><div className={s.heroInner}><span className={s.eyebrow}>BUILD YOUR NEXT CHAPTER</span><h1 data-career-page-title tabIndex={-1}>Careers</h1><h2>Join the DEMAC team.</h2><p>Bring your skills. Make a difference in Aruba.</p><div className={s.heroTags}><span><CareerIcon name="location"/>Aruba</span><span><CareerIcon name="users"/>Technical & office roles</span></div></div></section>
@@ -114,7 +114,7 @@ export function CareersPreview() {
       </section>
     </>}
     {navigation.ready && view === 'detail' && selected && <>
-      <section className={`${s.careerHero} ${s.detailHero}`}><div className={s.heroInner}><div data-career-navrow><BackControl label="Back to open positions" onClick={() => navigation.backTo({ view: 'jobs' })}/><span>Careers / Position</span></div><span className={s.eyebrow}>{selected.department}</span><h1 data-career-page-title tabIndex={-1}>{selected.title}</h1><p>{selected.summary}</p></div></section>
+      <section className={`${s.careerHero} ${s.detailHero}`}><div className={s.heroInner}><div className={s.navigationRow} data-career-navrow><BackControl label="Back to open positions" onClick={() => navigation.backTo({ view: 'jobs' })}/><span>Careers / Position</span></div><span className={s.eyebrow}>{selected.department}</span><h1 data-career-page-title tabIndex={-1}>{selected.title}</h1><p>{selected.summary}</p></div></section>
       <section className={`${s.container} ${s.rolePage}`}><VacancyFacts vacancy={selected}/><div className={s.roleDetailGrid}><div className={s.roleDescription}>
         <section><h2>About the role</h2><p>{selected.summary}</p></section>
         <section><h2>What you’ll do</h2><ul>{selected.responsibilities.filter(Boolean).map((item, index) => <li key={index}>{item}</li>)}</ul></section>
@@ -134,7 +134,7 @@ export function CareersPreview() {
       <button type="button" className={s.primary} onClick={() => navigation.navigate({ view: 'admin', tab: 'applications', candidate: submitted.id })}>Review this candidate <CareerIcon name="arrow"/></button><button type="button" className={s.secondary} onClick={() => navigation.navigate({ view: 'jobs' })}>Explore positions</button><small>Test information only. Refreshing or closing the tab clears this session.</small>
     </section>}
     {navigation.ready && view === 'admin' && <RecruitmentPreview vacancies={vacancies} applications={applications} onVacancies={changeVacancies} onApplications={changeApplications} initialApplication={route.candidate} onTryApplication={() => navigation.navigate({ view: 'jobs' })}/>}
-    {(view === 'jobs' || view === 'detail') && <PublicFooter/>}
+    {(view === 'jobs' || view === 'detail') && <CareersFooter/>}
     {(view === 'form' || view === 'success') && <footer className={s.funnelFooter}><span>DEMAC · Professional Cooling Solutions</span><span>Careers · Aruba</span></footer>}
   </main>;
 }

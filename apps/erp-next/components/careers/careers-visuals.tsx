@@ -2,7 +2,6 @@ import type { ReactNode } from 'react';
 import type { Vacancy } from '../../lib/careers-preview';
 import { sizeLabel } from './careers-ui';
 import s from './careers.module.css';
-import './careers-control-compat.css';
 
 export type IconName = 'person' | 'file' | 'certificate' | 'briefcase' | 'location' | 'clock' | 'chart' | 'check' | 'arrow' | 'back' | 'mail' | 'upload' | 'camera' | 'close' | 'filters' | 'lock' | 'users';
 const paths: Record<IconName, ReactNode> = {
@@ -28,7 +27,7 @@ export function CareerIcon({ name, className }: { name: IconName; className?: st
   return <svg data-career-icon={name} className={className || s.icon} viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">{paths[name]}</svg>;
 }
 export function BackControl({ label, onClick, disabled = false }: { label: string; onClick: () => void; disabled?: boolean }) {
-  return <button type="button" data-career-back aria-label={label} title={label} onClick={onClick} disabled={disabled}><CareerIcon name="back"/></button>;
+  return <button className={s.backControl} type="button" data-career-back aria-label={label} title={label} onClick={onClick} disabled={disabled}><CareerIcon name="back"/></button>;
 }
 export function IconTile({ name, children }: { name: IconName; children?: ReactNode }) {
   return <span className={s.iconTile}><CareerIcon name={name}/>{children}</span>;

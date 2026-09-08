@@ -71,6 +71,12 @@ async function context(browser,admin,viewport){
       await office.getByLabel('Internal hiring notes — never shown to applicants',{exact:true}).fill('QA PRIVATE NOTE MUST NOT APPEAR PUBLICLY');
       await office.getByRole('button',{name:'＋ Add role question',exact:true}).click();
       await office.getByLabel('Question',{exact:true}).fill('Have you worked on VRF systems?');await office.getByLabel('Answer format',{exact:true}).selectOption('yesno');
+      // Exercise types that previously existed only in the server contract.
+      for(const [index,label,kind]of [[1,'Earliest start date','date'],[2,'Portfolio URL','url']]){
+        await office.getByRole('button',{name:'＋ Add role question',exact:true}).click();
+        await office.getByLabel('Question',{exact:true}).nth(index).fill(label);
+        await office.getByLabel('Answer format',{exact:true}).nth(index).selectOption(kind);
+      }
       await shot(office,'01-vacancy-editor');await office.getByRole('button',{name:'Save vacancy',exact:true}).click();
       await office.getByText(title,{exact:true}).waitFor();await office.reload();await office.getByText(title,{exact:true}).waitFor();
       const row=office.locator('div').filter({has:office.getByText(title,{exact:true})}).filter({has:office.getByRole('button',{name:'Edit position',exact:true})}).last();
@@ -79,16 +85,43 @@ async function context(browser,admin,viewport){
       await person.goto(`${site}/careers/`);await person.getByRole('heading',{name:title,exact:true}).waitFor();
       await person.getByRole('article').filter({has:person.getByRole('heading',{name:title,exact:true})}).getByRole('button',{name:'View position',exact:true}).click();
       assert(!(await person.locator('body').innerText()).includes('QA PRIVATE NOTE'),'private vacancy notes excluded');
+      assert(await person.locator('[data-career-icon]').evaluateAll(icons=>icons.every(icon=>!icon.closest('.public-site'))),'Careers controls are outside marketing illustration styles');
       await person.getByRole('button',{name:'Apply now',exact:true}).click();
       for(const [id,value]of Object.entries({givenName:'QA',familyName:`Candidate ${name}`,email:`candidate-${name}@example.test`,phone:'2025550101',city:'Test City'}))await person.locator(`#${id}`).fill(value);
       await person.locator('#dialCode').selectOption('+1');await person.locator('#nationality').selectOption('NL');await person.locator('#applyingFrom').selectOption('AW');
       await person.getByRole('button',{name:'Continue',exact:true}).click();await person.locator('#totalExperience').fill('6');await person.locator('#relevantExperience').fill('3');
       await person.getByRole('group',{name:'Have you worked on VRF systems?',exact:true}).getByLabel('Yes',{exact:true}).check();await person.locator('#q-languages').getByLabel('English',{exact:true}).check();await person.locator('#availability').selectOption('Within 2 weeks');
+      await person.getByLabel('Earliest start date',{exact:true}).fill('2026-10-01');
+      await person.getByLabel('Portfolio URL',{exact:true}).fill('javascript:alert(1)');
+      await person.getByRole('button',{name:'Continue',exact:true}).click();
+      await person.getByText('Enter a valid http or https web address.',{exact:true}).waitFor();
+      assert.equal(await person.getByLabel('Earliest start date',{exact:true}).getAttribute('type'),'date');
+      assert.equal(await person.getByLabel('Portfolio URL',{exact:true}).getAttribute('type'),'url');
+      await person.getByLabel('Portfolio URL',{exact:true}).fill('https://example.test/portfolio');
       await person.getByRole('button',{name:'Continue',exact:true}).click();
       const png=await require('sharp')({create:{width:96,height:96,channels:3,background:'#cbddee'}}).png().toBuffer();
       await person.locator('#photo').setInputFiles({name:'qa.png',mimeType:'image/png',buffer:png});await person.getByText('Photo selected for review',{exact:true}).waitFor();
       await person.locator('#cv').setInputFiles({name:'qa-cv.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4\n% QA test file\n%%EOF')});
       await shot(person,'03-documents');await person.getByRole('button',{name:'Review application',exact:true}).click();await person.locator('#privacy').check();
+      // A real admin edit invalidates the public form version; recovery is explicit,
+      // keeps contact/files and never reinterprets an answer to a changed question.
+      const jobs=await db.collection(COLLECTIONS.jobs).where('title','==',title).get();
+      const oldJob=jobs.docs[0].data();
+      await service.saveVacancy('qa-admin',{id:oldJob.id,requestId:crypto.randomUUID(),expectedVersion:oldJob.version,vacancy:{...oldJob,questions:oldJob.questions.map(q=>q.kind==='url'?{...q,label:'Portfolio URL (current)'}:q)}});
+      await person.getByRole('button',{name:'Submit application',exact:true}).click();
+      await person.getByRole('button',{name:'Review updated position',exact:true}).click();
+      await person.getByLabel('Portfolio URL (current)',{exact:true}).waitFor();
+      assert.equal(await person.getByLabel('Portfolio URL (current)',{exact:true}).inputValue(),'');
+      assert.equal(await person.getByLabel('Earliest start date',{exact:true}).inputValue(),'2026-10-01');
+      await person.getByLabel('Portfolio URL (current)',{exact:true}).fill('https://example.test/reviewed-portfolio');
+      await person.getByRole('button',{name:'Continue',exact:true}).click();
+      await person.getByAltText('Your selected profile photo').waitFor();
+      await person.getByText('qa-cv.pdf',{exact:true}).waitFor();
+      await person.getByRole('button',{name:'Review application',exact:true}).click();
+      assert(!(await person.locator('#privacy').isChecked()),'revised privacy requires new acknowledgement');
+      await person.getByText(`candidate-${name}@example.test`,{exact:true}).waitFor();
+      await person.locator('#privacy').check();
+      await shot(person,'03b-revised-review');
       interrupt=true;interrupted=false;await person.getByRole('button',{name:'Submit application',exact:true}).click();await person.getByRole('alert').filter({hasText:'Connection interrupted'}).waitFor();assert(interrupted,'gateway failure must occur after committed application');
       interrupt=false;await person.getByRole('button',{name:'Submit application',exact:true}).click();await person.getByRole('heading',{name:'Application received',exact:true}).waitFor();await shot(person,'04-receipt');
       await candidate.close();
@@ -103,7 +136,7 @@ async function context(browser,admin,viewport){
       await shot(office,'06-profile');await office.setViewportSize({width:390,height:844});await shot(office,'07-profile-mobile');
       const snapshot=await db.collection(COLLECTIONS.applications).where('profile.email','==',`candidate-${name}@example.test`).get();assert.equal(snapshot.size,1);assert.equal((await db.collection(COLLECTIONS.mail).doc(snapshot.docs[0].id).get()).data().status,'queued');
       for(const collection of ['appointments','customers','staffProfiles'])assert.equal((await db.collection(collection).get()).size,0);
-      assert.deepEqual(errors,[]);results.push({name,result:'PASS',browser:browser.version(),verified:['admin save/reload/edit/publish','public form from saved vacancy','private notes excluded','actual private emulator storage','gateway failure after commit and retry without duplicate','candidate browser closed then admin reads persistent record','stage/note/photo after reload','mobile admin layout','no operational domain writes']});
+      assert.deepEqual(errors,[]);results.push({name,result:'PASS',browser:browser.version(),verified:['admin save/reload/edit/publish','shared date and URL types validated before submit','stale vacancy recovery preserves details/files and clears redefined answers/consent','style ownership excludes marketing SVG rules','public form from saved vacancy','private notes excluded','actual private emulator storage','gateway failure after commit and retry without duplicate','candidate browser closed then admin reads persistent record','stage/note/photo after reload','mobile admin layout','no operational domain writes']});
     }catch(error){for(const [label,page]of [['office',office],['candidate',person]])await page.screenshot({path:path.join(output,`${name}-${label}-FAIL.png`),fullPage:true}).catch(()=>{});results.push({name,result:'FAIL',error:String(error),pageErrors:errors});console.error(error);}
     finally{await admin.close();await candidate.close().catch(()=>{});await browser.close();fs.writeFileSync(path.join(output,'report.json'),JSON.stringify(results,null,2));}
   }

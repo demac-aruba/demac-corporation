@@ -48,7 +48,7 @@ function createService({ db, files, infrastructure, now = Date.now }) {
   }
   async function saveSettings(uid,p) {
     const clean=C.settings(p.settings);
-    return adminMutation(uid,p.requestId,'settings.save',clean,async tx=>{
+    return adminMutation(uid,p.requestId,'settings.save',{clean,expectedVersion:p.expectedVersion},async tx=>{
       const previous=(await tx.get(configRef)).data();
       C.requireValue((previous?.version || 0) === p.expectedVersion,'Settings changed. Reload before saving.','version-conflict',409);
       if (previous?.privacyText !== clean.privacyText && previous?.privacyVersion === clean.privacyVersion) throw C.fault('privacy-version','Change the notice version when editing privacy text.',409);
@@ -184,10 +184,37 @@ function createService({ db, files, infrastructure, now = Date.now }) {
       });
       return files.publicFile(record);
     } catch(error) {
-      // Persist a cleanup intent even if storage acknowledgement was lost. A
-      // hard crash is also recoverable because the reserved path is in session.
-      await ref('deletions',C.digest(attemptPath)).set({path:attemptPath,generation:stored?.generation || null,notBefore:now()+300000,createdAt:at()});
-      await db.runTransaction(async tx=>{const s=(await tx.get(sessionRef)).data();if(s?.status==='draft' && s.files[key]?.lease===lease)tx.update(sessionRef,{[`files.${key}`]:{id:key,kind,name,size:bytes.length,status:'rejected'}});}).catch(()=>{});
+      // An exception does not prove that a transaction failed to commit.
+      // Resolve ownership before marking rejected or scheduling deletion. The
+      // cleanup intent and failed reservation change are themselves atomic.
+      // If this read fails, leave the reserved path for lease/expiry recovery;
+      // never guess that an acknowledged-or-ambiguous object is an orphan.
+      const recovered = await db.runTransaction(async tx => {
+        const [sessionSnapshot, applicationSnapshot] = await Promise.all([
+          tx.get(sessionRef), tx.get(ref('applications', p.sessionId)),
+        ]);
+        const session = sessionSnapshot.data();
+        const currentFile = session?.files?.[key];
+        if (currentFile?.status === 'clean' && currentFile.lease === lease && currentFile.path === attemptPath) {
+          sessionAccess(sessionSnapshot, p.token);
+          return currentFile;
+        }
+        // Submitted applications outlive their temporary sessions. A delayed
+        // failure handler must never delete a document owned by that record.
+        if (applicationSnapshot.data()?.documents?.some(file => file.path === attemptPath)) return null;
+        tx.set(ref('deletions', C.digest(attemptPath)), {
+          path: attemptPath, generation: stored?.generation || null,
+          notBefore: now() + 300000, createdAt: at(),
+        });
+        if (session?.status === 'draft' && currentFile?.lease === lease) {
+          tx.update(sessionRef, { [`files.${key}`]: {
+            id: key, kind, name, size: bytes.length, status: 'rejected',
+            path: attemptPath, generation: stored?.generation || null,
+          } });
+        }
+        return null;
+      });
+      if (recovered) return files.publicFile(recovered);
       throw error;
     }
   }
@@ -195,10 +222,12 @@ function createService({ db, files, infrastructure, now = Date.now }) {
     const sref=ref('sessions',p.sessionId), key=C.id(p.fileId);
     const record=await db.runTransaction(async tx=>{
       const session=sessionAccess(await tx.get(sref),p.token); C.requireValue(session.status==='draft','Application was submitted.','already-submitted',409);
-      const file=session.files[key]; C.requireValue(file && file.status!=='uploading','File cannot be removed during upload.','upload-busy',409);
+      const file=session.files[key];
+      if (!file) return null; // Exact removal retries are successful, not upload errors.
+      C.requireValue(file.status!=='uploading' || file.leaseUntil<=now(),'File cannot be removed during upload.','upload-busy',409);
       const remaining={...session.files}; delete remaining[key]; tx.update(sref,{files:remaining}); if(file.path)tx.set(ref('deletions',C.digest(file.path)),{path:file.path,generation:file.generation,createdAt:at()}); return file;
     });
-    if(record.path) {try{await files.remove(record);await ref('deletions',C.digest(record.path)).delete();}catch{ }} return {removed:true};
+    if(record?.path) {try{await files.remove(record);await ref('deletions',C.digest(record.path)).delete();}catch{ }} return {removed:true};
   }
   async function submit(p) {
     const sref=ref('sessions',p.sessionId); const fingerprint=C.digest(C.stable(p.profile));

@@ -13,3 +13,12 @@ test('document route checks identity and never serves public file URLs',async()=
   const res=response();await createHandler({service,auth:{verifyIdToken:async()=>({uid:'admin'})},env:{DEMAC_CAREERS_BACKEND_ENABLED:'true'},admin:true})(request({authorization:'Bearer test'},{action:'documents.get',payload:{applicationId:'a',fileId:'b'}}),res);
   assert.equal(uid,'admin');assert.equal(res.statusCode,200);assert.equal(res.headers['X-Content-Type-Options'],'nosniff');assert.match(res.headers['Content-Disposition'],/^attachment/);
 });
+
+test('disabled or unauthenticated requests do not initialize storage, scanner or SMTP',async()=>{
+  let initialized=0;
+  const service=()=>{initialized++;throw Error('Must not initialize');};
+  let res=response();await createHandler({service,auth:{},env:{}})(request(),res);
+  assert.equal(res.statusCode,503);assert.equal(initialized,0);
+  res=response();await createHandler({service,auth:{},env:{DEMAC_CAREERS_BACKEND_ENABLED:'true'},admin:true})(request(),res);
+  assert.equal(res.statusCode,401);assert.equal(initialized,0);
+});

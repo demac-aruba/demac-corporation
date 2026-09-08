@@ -1,7 +1,8 @@
 'use strict';
 const crypto = require('node:crypto');
 const STAGES = ['New','In review','Shortlisted','Interview','Technical test','Offer','Hired','Not selected','Withdrawn'];
-const KINDS = ['select','multiselect','yesno','text','textarea','number','date','url'];
+const Form = require('./form-contract');
+const KINDS = Form.QUESTION_KINDS;
 const MAX_FILE = 10 * 1024 * 1024;
 const MAX_TOTAL = 30 * 1024 * 1024;
 function fault(code, message, status = 400) { return Object.assign(new Error(message), { code, status }); }
@@ -79,51 +80,18 @@ function publicVacancy(job) {
 }
 function profile(input, job, settings) {
   requireValue(input && typeof input === 'object' && !Array.isArray(input), 'Application details are required.');
-  const clean = {};
-  for (const k of ['givenName','familyName','city']) clean[k] = text(input[k],k,120);
-  clean.email = email(input.email);
-  const dial = text(input.dialCode,'country code',5);
-  const number = text(input.phone,'phone',30);
-  requireValue(/^\+[1-9]\d{0,3}$/.test(dial) && /^[0-9\s().-]+$/.test(number), 'Check phone and country code.');
-  clean.dialCode=dial; clean.phone=number.replace(/\D/g,'');
-  requireValue(/^\+[1-9]\d{6,14}$/.test(dial+clean.phone),'Check international telephone number.');
-  clean.whatsapp=boolean(input.whatsapp,'WhatsApp');
-  clean.sameResidence=boolean(input.sameResidence,'residence');
-  for (const k of ['nationality','applyingFrom','residence']) {
-    const value = k === 'residence' && clean.sameResidence ? input.applyingFrom : input[k];
-    requireValue(typeof value === 'string' && /^[A-Z]{2}$/.test(value), `Select ${k}.`); clean[k]=value;
-  }
-  for (const k of ['totalExperience','relevantExperience']) {
-    const raw = input[k]; requireValue((typeof raw === 'number' || typeof raw === 'string') && String(raw).trim() !== '', `Check ${k}.`);
-    const n=Number(raw); requireValue(Number.isFinite(n) && n>=0 && n<=70, `Check ${k}.`); clean[k]=String(n);
-  }
-  requireValue(Number(clean.relevantExperience)<=Number(clean.totalExperience),'Relevant experience cannot exceed total experience.');
-  clean.languages=list(input.languages,'languages',12,60); requireValue(clean.languages.length>0,'Select a language.');
-  clean.availability=text(input.availability,'availability',120);
+  const details = Form.validateDetails(input);
+  const experience = Form.validateExperience(input, job.questions);
+  const errors = { ...details.errors, ...experience.errors };
+  requireValue(Object.keys(errors).length === 0, Object.values(errors)[0] || 'Check application details.');
+  const clean = { ...details.value, ...experience.value };
   requireValue(input.privacy === true && input.privacyVersion === settings.privacyVersion,'Read and acknowledge the current privacy notice.','privacy-version',409);
   clean.privacyVersion=settings.privacyVersion; clean.futureTalent=boolean(input.futureTalent,'future vacancies');
   clean.noCv=input.noCv === true;
-  const supplied = input.answers;
-  requireValue(supplied && typeof supplied === 'object' && !Array.isArray(supplied),'Check role answers.');
-  clean.answers={};
-  for (const q of job.questions) {
-    if (q.when && clean.answers[q.when.questionId] !== q.when.value) continue;
-    const raw = Object.hasOwn(supplied,q.id) ? supplied[q.id] : undefined;
-    const missing = raw == null || raw === '' || (Array.isArray(raw) && raw.length===0);
-    if (missing) { requireValue(!q.required, `Answer: ${q.label}`); continue; }
-    let answer;
-    if (q.kind==='multiselect') { answer=list(raw,q.label,40,120); requireValue(new Set(answer).size===answer.length && answer.every(v=>q.options.includes(v)),`Select valid options: ${q.label}`); }
-    else { requireValue(typeof raw === 'string' || (q.kind==='number' && typeof raw==='number'), `Check answer: ${q.label}`); answer=text(String(raw),q.label,q.kind==='textarea'?1200:240); }
-    if (q.kind==='select') requireValue(q.options.includes(answer),`Select a valid option: ${q.label}`);
-    if (q.kind==='yesno') requireValue(['Yes','No'].includes(answer),`Select Yes or No: ${q.label}`);
-    if (q.kind==='number') requireValue(Number.isFinite(Number(answer)) && Number(answer)>=0,`Enter a valid number: ${q.label}`);
-    if (q.kind==='date') date(answer);
-    if (q.kind==='url') { let u; try {u=new URL(answer);}catch{} requireValue(u && ['https:','http:'].includes(u.protocol),`Enter a valid web address: ${q.label}`); }
-    clean.answers[q.id]=answer;
-  }
   return clean;
 }
 function settings(input) {
+  requireValue(input && typeof input === 'object' && !Array.isArray(input), 'Settings are required.');
   const clean={intakeEnabled:boolean(input.intakeEnabled,'intake'),privacyText:text(input.privacyText,'privacy notice',12000),privacyVersion:id(input.privacyVersion),retentionDays:integer(input.retentionDays,'retention days',1,730),talentRetentionDays:integer(input.talentRetentionDays ?? input.retentionDays,'talent retention days',1,730),from:email(input.from),replyTo:email(input.replyTo),senderName:text(input.senderName || 'DEMAC Recruitment','sender name',120)};
   requireValue(!/[\r\n]/.test(clean.senderName),'Invalid sender name.');
   return clean;

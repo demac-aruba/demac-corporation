@@ -5,13 +5,14 @@ export type RecruitmentVacancy = Omit<Vacancy, 'status'> & {
   status: Vacancy['status'] | 'Archived'; desired: string[]; internalNotes: string; openings: number;
   publishFrom: string | null; publishUntil: string | null; photoRequired: boolean;
 };
+export type PublicVacancy = Omit<RecruitmentVacancy, 'internalNotes'>;
 export type CareersSettings = { intakeEnabled: boolean; privacyText: string; privacyVersion: string; retentionDays: number; talentRetentionDays: number; from: string; replyTo: string; senderName: string; version: number; verification?: { at: number; signature: string } | null };
 export type DocumentRecord = { id: string; kind: 'photo' | 'cv' | 'document'; name: string; size: number; mime: string; status: string };
 export type ApplicantSummary = { id: string; title: string; name: string; stage: Stage; version: number; experience: string; country: string; createdAt: string };
-export type ApplicantRecord = { id: string; reference: string; jobSnapshot: RecruitmentVacancy; profile: Omit<ApplicationDraft, 'photo' | 'cv' | 'documents'>; documents: DocumentRecord[]; stage: Stage; version: number; createdAt: string; emailStatus: string; notes: { id: string; text: string; actorName: string; at: string }[]; events: { id: string; action: string; at: string }[] };
+export type ApplicantRecord = { id: string; reference: string; jobSnapshot: PublicVacancy; profile: Omit<ApplicationDraft, 'photo' | 'cv' | 'documents'>; documents: DocumentRecord[]; stage: Stage; version: number; createdAt: string; emailStatus: string; notes: { id: string; text: string; actorName: string; at: string }[]; events: { id: string; action: string; at: string }[] };
 export type ApplicantSession = { sessionId: string; token: string; expiresAt: number };
 export type Receipt = { id: string; reference: string; emailStatus: string };
-export type PublicJobs = { available: boolean; jobs: RecruitmentVacancy[]; privacy?: { text: string; version: string } };
+export type PublicJobs = { available: boolean; jobs: PublicVacancy[]; privacy?: { text: string; version: string } };
 export type Page<T> = { items: T[]; nextCursor: string | null };
 export class CareersError extends Error { constructor(message: string, public readonly code: string, public readonly status: number) { super(message); } }
 function base() {
