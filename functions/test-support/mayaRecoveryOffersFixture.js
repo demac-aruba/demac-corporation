@@ -11,16 +11,14 @@ const QUOTE = 'Can you come earlier?';
 const WORK = [{ id: 'work-1', presetId: 'standard_service', serviceId: 's1', quantity: 1,
   customerFacingDescription: 'Service one unit', technicianInstructions: 'Keep recorded instructions' }];
 function option(date) {
-  return { date, time: '09:30', endTime: '10:30', assignments: [{ vanId: 'VAN-1', vanName: 'Van 1',
-    role: 'primary', time: '09:30', endTime: '10:30', slots: 1, quantity: 1,
-    durationMinutes: 60, technicianIds: ['driver-1'] }] };
+  return { date, time: '09:30', endTime: '10:30', assignments: [{ vanId: 'VAN-1', vanName: 'Van 1', role: 'primary',
+    time: '09:30', endTime: '10:30', slots: 1, quantity: 1, durationMinutes: 60, technicianIds: ['driver-1'] }] };
 }
 async function fixture() {
   let time = new Date(NOW);
   const target = option('2026-09-08'); const original = option('2026-09-10');
   const targetLocks = buildCapacityLocks(target); const originalLocks = buildCapacityLocks(original);
-  const comms = { communicationAccountId: ACCOUNT, provider: 'wacli', channel: 'whatsapp',
-    phone: PHONE, remoteConversationId: `${PHONE}@s.whatsapp.net` };
+  const comms = { communicationAccountId: ACCOUNT, provider: 'wacli', channel: 'whatsapp', phone: PHONE, remoteConversationId: `${PHONE}@s.whatsapp.net` };
   const db = new MemoryDb({
     businessSettings: [{ id: 'whatsapp', communicationAccountId: ACCOUNT },
       { id: 'customer-agent', enabled: true, autoReplyEnabled: true, replyMode: 'allowlist', autoReplyAllowlist: [PHONE],
@@ -54,14 +52,18 @@ async function fixture() {
   const registered = await createCustomerBookingInterestTools({ db, clock: () => time }).record({ action: 'register', kind: 'earlier_appointment',
     customerId: 'C-1', propertyId: 'P-1', appointmentId: 'APT-1', sourceQuote: QUOTE, dateFrom: '', dateTo: '' },
   { conversationId: CONV, inboundMessageId: 'MSG-1' });
-  const service = createMayaRecoveryOfferService({ db, clock: () => time });
+  const analysisCalls = [];
+  // Controlled semantic output for tests, not a production keyword classifier.
+  let analyzer = async ({ customerText }) => ({ decision: customerText === 'No, keep Thursday.' ? 'decline' : 'accept',
+    quote: customerText, confidence: 0.99, ambiguous: false });
+  const service = createMayaRecoveryOfferService({ db, clock: () => time, apiKeyProvider: () => 'synthetic-not-a-credential',
+    analyzeResponse: input => { analysisCalls.push(input); return analyzer(input); } });
   const prepare = () => service.prepare({ cancelledAppointmentId: 'CANCEL-1', caseId: registered.caseId });
   async function delivered(prepared) {
     time = new Date(NOW.getTime() + 60_000);
     const stored = db.read('bookingOffers', prepared.offerId);
-    const message = { id: 'OUT-1', ...comms, conversationId: CONV, direction: 'outbound', providerMessageId: 'provider-out-1',
-      text: prepared.messageText, firstIngestedAtIso: time.toISOString(), whatsappTimestamp: time.toISOString() };
-    db.patch('whatsappMessages', 'OUT-1', message);
+    db.patch('whatsappMessages', 'OUT-1', { ...comms, conversationId: CONV, direction: 'outbound', providerMessageId: 'provider-out-1',
+      text: prepared.messageText, firstIngestedAtIso: time.toISOString(), whatsappTimestamp: time.toISOString() });
     db.patch('whatsappOutboundQueue', 'QUEUE-OUT-1', { provider: 'wacli', outboundClass: 'conversation_maya', status: 'sent',
       conversationId: CONV, communicationAccountId: ACCOUNT, expectedOwnershipVersion: 2, expectedCustomerInputVersion: 4,
       recoveryOfferId: prepared.offerId, recoveryOfferVersion: prepared.offerVersion,
@@ -81,7 +83,7 @@ async function fixture() {
   const respond = (prepared, decision = 'accept', sourceQuote = 'Yes, please move it to Tuesday.') => service.respond({
     offerId: prepared.offerId, offerVersion: prepared.offerVersion, decision, sourceQuote }, { conversationId: CONV, inboundMessageId: 'MSG-2' });
   db.writes.length = 0;
-  return { db, service, prepare, delivered, inbound, respond, caseId: registered.caseId,
-    setTime: value => { time = new Date(value); }, targetLocks, originalLocks };
+  return { db, service, prepare, delivered, inbound, respond, analysisCalls, setAnalyzer: value => { analyzer = value; },
+    caseId: registered.caseId, setTime: value => { time = new Date(value); }, targetLocks, originalLocks };
 }
 module.exports = { fixture, NOW, CONV, PHONE, ACCOUNT };
