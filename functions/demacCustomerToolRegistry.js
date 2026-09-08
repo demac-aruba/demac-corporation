@@ -29,8 +29,9 @@ const {
   createCustomerPolicyTools,
 } = require("./demacCustomerPolicyTools");
 const { NAME: BOOKING_INTEREST_TOOL_NAME, DEFINITION: BOOKING_INTEREST_DEFINITION, createCustomerBookingInterestTools } = require("./demacCustomerBookingInterest");
+const { createMayaRecoveryConversationTools, recoveryToolDefinition } = require("./mayaRecoveryConversationTools");
 
-const CUSTOMER_TOOL_REGISTRY_VERSION = 8;
+const CUSTOMER_TOOL_REGISTRY_VERSION = 9;
 const TOOL_ORDER = Object.freeze([
   CUSTOMER_AGENT_TOOL_NAMES.RESOLVE_CUSTOMER,
   CUSTOMER_AGENT_TOOL_NAMES.RESOLVE_PROPERTY,
@@ -61,6 +62,7 @@ function createDemacCustomerToolRegistry({
   reservationTools = null,
   policyTools = null,
   bookingInterestTools = null,
+  recoveryTools = null,
 } = {}) {
   const base = customerTools || createCustomerAgentTools({ db });
   const appointmentLifecycle = appointmentLifecycleTools || createCustomerAppointmentLifecycleTools({ db });
@@ -69,6 +71,7 @@ function createDemacCustomerToolRegistry({
   const reservations = reservationTools || createCustomerReservationTools({ db });
   const policies = policyTools || createCustomerPolicyTools({ db });
   const interests = bookingInterestTools || createCustomerBookingInterestTools({ db });
+  const recovery = recoveryTools || createMayaRecoveryConversationTools({ db });
   const definitionsByName = new Map(
     [
       ...CUSTOMER_AGENT_TOOL_DEFINITIONS,
@@ -80,7 +83,7 @@ function createDemacCustomerToolRegistry({
       BOOKING_INTEREST_DEFINITION,
     ].map((definition) => [definition.name, definition]),
   );
-  const definitions = TOOL_ORDER.map((name) => definitionsByName.get(name)).filter(Boolean);
+  const definitions = TOOL_ORDER.map((name) => definitionsByName.get(name)).filter(Boolean).map(recoveryToolDefinition);
   const baseNames = new Set(CUSTOMER_AGENT_TOOL_DEFINITIONS.map((item) => item.name));
   const appointmentLifecycleNames = new Set(CUSTOMER_APPOINTMENT_LIFECYCLE_TOOL_DEFINITIONS.map((item) => item.name));
   const businessNames = new Set(CUSTOMER_BUSINESS_TOOL_DEFINITIONS.map((item) => item.name));
@@ -89,6 +92,8 @@ function createDemacCustomerToolRegistry({
   const policyNames = new Set(CUSTOMER_POLICY_TOOL_DEFINITIONS.map((item) => item.name));
 
   async function invoke(name, args = {}, context = {}) {
+    const scoped = await recovery.invokeIfScoped(name, args, context);
+    if (scoped !== null) return scoped;
     if (baseNames.has(name)) return base.invoke(name, args, context);
     if (appointmentLifecycleNames.has(name)) return appointmentLifecycle.invoke(name, args, context);
     if (businessNames.has(name)) return business.invoke(name, args, context);

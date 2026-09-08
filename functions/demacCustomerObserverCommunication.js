@@ -5,6 +5,7 @@ const { defineSecret } = require("firebase-functions/params");
 const { cleanText, hashId } = require("./bookingSchedulingPrimitives");
 const { createMayaCustomerObserver, MAYA_OBSERVER_VERSION } = require("./demacCustomerObserver");
 const { createCommunicationCaseService } = require("./demacCommunicationCaseService");
+const { readRecoveryTurnScope } = require("./mayaRecoveryConversationTools");
 const {
   communicationEpochDecision,
   customerSemanticContent,
@@ -185,6 +186,26 @@ async function processObservedMessage({
   });
   if (!initialEpochDecision.allowed) {
     return { observed: false, reason: "stale-communication-epoch", epochReason: initialEpochDecision.reason };
+  }
+
+  // An earlier-offer answer belongs to the existing Runtime's scoped offer
+  // tools. Do not first create a new cancellation/reschedule Case or hold that
+  // would invalidate the original booking before the offer can be accepted.
+  if (conversation.mayaRecoveryOffer || message.mayaRecoveryResponseRoute !== undefined) {
+    try {
+      const scope = await readRecoveryTurnScope({ db, recordRoute: true, context: {
+        conversationId, inboundMessageId: messageId,
+        expectedOwnershipVersion, expectedCustomerInputVersion,
+      } });
+      if (scope) return { observed: false, recoveryResponseRouted: true, reason: "recovery-offer-response-routed" };
+    } catch {
+      await updateConversationIfCurrent({
+        conversationRef: db.collection("communicationConversations").doc(conversationId),
+        expectedOwnershipVersion, expectedCustomerInputVersion,
+        patch: { mayaAttentionRequired: true, mayaAttentionReason: "recovery-response-review-required" },
+      });
+      return { observed: false, recoveryResponseRouted: true, reason: "recovery-offer-context-requires-review" };
+    }
   }
 
   const fingerprint = observerSourceFingerprint(message, text);
