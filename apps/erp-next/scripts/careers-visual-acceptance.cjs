@@ -1,11 +1,12 @@
 /* Tests the actual Next static export, not a substitute HTML implementation.
-   Use only fictional fixtures. External traffic is blocked in every browser context. */
+   Use only fictional fixtures. External network traffic is blocked in every context. */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { chromium, webkit, firefox } = require('playwright');
 const output = process.env.CAREERS_TEST_OUTPUT || path.join(process.cwd(), 'careers-ui-results');
 const base = process.env.CAREERS_TEST_URL || 'http://127.0.0.1:4173';
+const testOrigin = new URL(base).origin;
 fs.mkdirSync(output, { recursive: true });
 const matrix = [
   { name: 'chromium-390', type: chromium, width: 390, height: 844, touch: true },
@@ -15,14 +16,28 @@ const matrix = [
   { name: 'webkit-desktop', type: webkit, width: 1440, height: 900 },
   { name: 'firefox-desktop-dark', type: firefox, width: 1366, height: 900, dark: true },
 ];
+function isLocalResource(raw) {
+  const url = new URL(raw);
+  // WebKit exposes same-origin object-URL reads to routing; they are local files,
+  // not network traffic. Keep external HTTP/S origins blocked, including nested blobs.
+  if (url.protocol === 'blob:') return new URL(url.pathname).origin === testOrigin;
+  if (url.protocol === 'data:') return /^data:image\/(png|jpeg|webp);base64,/i.test(raw);
+  return url.origin === testOrigin;
+}
+assert.equal(isLocalResource('https://example.com/test'), false);
+assert.equal(isLocalResource('blob:https://example.com/test'), false);
+assert.equal(isLocalResource(`blob:${base}/test`), true);
 const report = [];
 (async () => {
   for (const test of matrix) {
     const browser = await test.type.launch({ headless: true });
     const context = await browser.newContext({ viewport: { width: test.width, height: test.height }, isMobile: !!test.touch, hasTouch: !!test.touch, colorScheme: test.dark ? 'dark' : 'light', reducedMotion: 'reduce' });
+    const blocked = [];
     await context.route('**/*', route => {
-      const url = new URL(route.request().url());
-      return ['127.0.0.1', 'localhost'].includes(url.hostname) ? route.continue() : route.abort();
+      const raw = route.request().url();
+      if (isLocalResource(raw)) return route.continue();
+      blocked.push(raw);
+      return route.abort();
     });
     const page = await context.newPage();
     page.setDefaultTimeout(12000);
@@ -87,6 +102,8 @@ const report = [];
       await page.getByRole('button', { name: 'Review application', exact: true }).click();
       await page.getByText('Add a recent photo for your profile.', { exact: true }).waitFor();
       check(true, 'required photo prevents continuing');
+      const iconDimensions = await page.locator('label > svg').evaluateAll(elements => elements.map(el => ({ width: el.getBoundingClientRect().width, height: el.getBoundingClientRect().height })));
+      check(iconDimensions.length >= 4 && iconDimensions.every(d => d.width >= 16 && d.width <= 24 && d.height >= 16 && d.height <= 24), 'file control icons remain compact despite shared illustration CSS');
       await shot('05-documents-empty');
       const image = await page.evaluate(() => { const c = document.createElement('canvas'); c.width = 96; c.height = 96; const ctx = c.getContext('2d'); ctx.fillStyle = '#deedfb'; ctx.fillRect(0, 0, 96, 96); ctx.fillStyle = '#23558c'; ctx.font = '40px sans-serif'; ctx.fillText('QA', 16, 60); return c.toDataURL('image/png').split(',')[1]; });
       await page.locator('#photo').setInputFiles({ name: 'qa-photo.png', mimeType: 'image/png', buffer: Buffer.from(image, 'base64') });
@@ -127,7 +144,7 @@ const report = [];
       console.log(`PASS ${test.name}: ${checks.length} checks`);
     } catch (error) {
       await page.screenshot({ path: path.join(output, `${test.name}-FAIL.png`), fullPage: true }).catch(() => {});
-      report.push({ scenario: test.name, result: 'FAIL', error: String(error), pageErrors: errors, checks });
+      report.push({ scenario: test.name, result: 'FAIL', error: String(error), pageErrors: errors, blockedRequests: blocked, visibleAlerts: await page.getByRole('alert').allTextContents(), checks });
       console.error(`FAIL ${test.name}: ${error.stack}`);
     } finally { await context.close(); await browser.close(); fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify(report, null, 2)); }
   }
