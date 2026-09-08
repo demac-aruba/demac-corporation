@@ -65,12 +65,12 @@ function interestMaterial(record) {
     communicationAccountId: record.communicationAccountId, conversationId: record.conversationId, state: record.state,
     lastSourceMessageId: record.lastSourceMessageId, interestFingerprint: record.interestFingerprint, bookingInterest: record.bookingInterest };
 }
-async function recoveredInterestIsCurrent({ reader, record, conversation }) {
+async function recoveredInterestIsCurrent({ reader, record, conversation, now = new Date() }) {
   const review = record.interestReview;
   if (!review || review.version !== HISTORY_VERSION || review.customerInputVersion !== conversation.customerInputVersion
     || review.ownershipVersion !== conversation.ownershipVersion || review.materialFingerprint !== digest(interestMaterial(record))) return false;
   try {
-    const window = await loadHistoryWindow(reader, conversation);
+    const window = await loadHistoryWindow(reader, conversation, now);
     return review.windowFingerprint === window.fingerprint && window.entries.some(message => message.id === record.lastSourceMessageId && message.direction === 'inbound');
   } catch { return false; }
 }
