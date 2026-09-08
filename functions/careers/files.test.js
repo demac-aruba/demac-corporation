@@ -17,3 +17,10 @@ test('INSTREAM sends bytes and rejects infected replies, not just a successful c
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   try{const address={host:'127.0.0.1',port:server.address().port};await F.scan(Buffer.from('Test-only bytes'),address);assert.equal(data.subarray(0,10).toString(),'zINSTREAM\0');reply='stream: Test.Signature FOUND\0';await assert.rejects(F.scan(Buffer.from('Test-only bytes'),address),{code:'unsafe-file'});}finally{await new Promise(resolve=>server.close(resolve));}
 });
+test('large uploads use bounded linear validation without regex stack exhaustion',()=>{
+  const sample=Buffer.alloc(10*1024*1024,120),encoded=sample.toString('base64');
+  assert.equal(F.decode(encoded).length,sample.length);
+  assert.throws(()=>F.decode(encoded.slice(0,-1)+'!'));
+  assert.throws(()=>F.decode(Buffer.alloc(10*1024*1024+1).toString('base64')));
+  assert.throws(()=>F.decode('eB=='));
+});

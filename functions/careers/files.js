@@ -3,8 +3,10 @@ const net = require('node:net');
 const { once } = require('node:events');
 const C = require('./core');
 function decode(value) {
-  C.requireValue(typeof value==='string' && value.length<=Math.ceil(C.MAX_FILE/3)*4 && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value),'Select a valid file up to 10 MB.');
-  const bytes=Buffer.from(value,'base64'); C.requireValue(bytes.length>0 && bytes.length<=C.MAX_FILE,'Select a non-empty file up to 10 MB.');return bytes;
+  C.requireValue(typeof value==='string' && value.length>0 && value.length<=Math.ceil(C.MAX_FILE/3)*4 && value.length%4===0 && /^[A-Za-z0-9+/]*={0,2}$/.test(value),'Select a valid file up to 10 MB.');
+  const bytes=Buffer.from(value,'base64');
+  C.requireValue(bytes.length>0 && bytes.length<=C.MAX_FILE && bytes.toString('base64')===value,'Select a valid non-empty file up to 10 MB.');
+  return bytes;
 }
 function detectedType(bytes) {
   if(bytes.subarray(0,5).toString()==='%PDF-') return 'application/pdf';

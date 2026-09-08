@@ -19,7 +19,7 @@ function getRuntime(){
   const service=createService({db,files,infrastructure});
   runtime={service,workers:createWorkers({db,files,infrastructure})};return runtime;
 }
-const options={region:'us-central1',timeoutSeconds:90,memory:'512MiB',maxInstances:3,concurrency:8,secrets:['CAREERS_SMTP_PASSWORD','CAREERS_RATE_SALT'],...(process.env.CAREERS_VPC_CONNECTOR?{vpcConnector:process.env.CAREERS_VPC_CONNECTOR,vpcConnectorEgressSettings:'PRIVATE_RANGES_ONLY'}:{})};
+const options={region:'us-central1',timeoutSeconds:90,memory:'512MiB',maxInstances:3,concurrency:1,secrets:['CAREERS_SMTP_PASSWORD','CAREERS_RATE_SALT'],...(process.env.CAREERS_VPC_CONNECTOR?{vpcConnector:process.env.CAREERS_VPC_CONNECTOR,vpcConnectorEgressSettings:'PRIVATE_RANGES_ONLY'}:{})};
 exports.careersAdmin=onRequest(options,(req,res)=>createHandler({service:getRuntime().service,auth:getAuth(),env:process.env,admin:true})(req,res));
 exports.careersPublic=onRequest(options,(req,res)=>createHandler({service:getRuntime().service,auth:getAuth(),env:process.env})(req,res));
 exports.careersMaintenance=onSchedule({...options,schedule:'every 5 minutes',timeZone:'America/Aruba'},async()=>{
