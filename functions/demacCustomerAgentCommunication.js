@@ -3,6 +3,7 @@ const { FieldValue, getFirestore } = require("firebase-admin/firestore");
 const logger = require("firebase-functions/logger");
 const { defineSecret } = require("firebase-functions/params");
 const { createCustomerAgentRuntime, HANDOFF_QUEUES } = require("./demacCustomerAgentRuntimeV1");
+const { createMayaRecoveryConfirmation } = require("./mayaRecoveryConfirmation");
 const { sessionIdentity, stableConversationIdentity } = require("./demacCustomerConversationState");
 const {
   canonicalRuntimeMessage,
@@ -347,6 +348,10 @@ async function queueAgentReply({
   if (!automaticReplySupported(provider)) {
     throw new Error(`Automatic customer-agent replies are not enabled for provider ${cleanText(provider, 40) || "unknown"}.`);
   }
+  const recovered = await createMayaRecoveryConfirmation({ db }).enqueueIfCompleted({
+    context: { conversationId, inboundMessageId, expectedOwnershipVersion, expectedCustomerInputVersion }, result,
+  });
+  if (recovered) return recovered;
   const text = cleanCustomerFacingMessage(result.draft, 3_000);
   if (!text) return { queued: false, reason: "empty-draft" };
   const id = outboundDocumentId(conversationId, inboundMessageId);
@@ -526,10 +531,14 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
       },
     }),
   });
-  const result = await turnRuntime.runTurn({
-    rawBody,
-    apiKey: openAiApiKey.value(),
-    company: "DEMAC Professional Cooling Solutions",
+  const result = await createMayaRecoveryConfirmation({ db }).runWithRecovery({
+    context: { conversationId, inboundMessageId: selected.messageId, communicationAccountId: currentAccount,
+      expectedOwnershipVersion, expectedCustomerInputVersion: currentInputVersion },
+    run: () => turnRuntime.runTurn({
+      rawBody,
+      apiKey: openAiApiKey.value(),
+      company: "DEMAC Professional Cooling Solutions",
+    }),
   });
 
   if (result.metadata?.ownershipChanged === true) {
