@@ -3,8 +3,9 @@
 const { randomUUID } = require('node:crypto');
 const { createCustomerInterestRecovery } = require('./demacCustomerInterestRecovery');
 const { createMayaRecoveryMatching, recoveryTarget } = require('./mayaRecoveryMatching');
-const { createMayaRecoveryOfferService, transactionView, read } = require('./mayaRecoveryOfferService');
-const { createMayaRecoveryOfferOutbound, configuredContactPolicy } = require('./mayaRecoveryOfferOutbound');
+const { createMayaRecoveryOfferService, transactionView, read, originalOwnership } = require('./mayaRecoveryOfferService');
+const { createMayaRecoveryOfferOutbound, configuredContactPolicy, recoveryQueueId, assertQueueIdentity } = require('./mayaRecoveryOfferOutbound');
+const { deliveryProof } = require('./mayaRecoveryDeliveryProof');
 const { digest } = require('./demacCustomerInterestHistory');
 const { documentId } = require('./mayaOperationsReadModel');
 const P = require('./mayaRecoveryOfferPolicy');
@@ -140,9 +141,40 @@ function createMayaRecoveryCoordinator({ db, taskQueue, clock = () => new Date()
       if (!entry) { need(!offer, 'recovery_automation_unowned_offer'); return { current, offer: null }; }
       need(offer && offer.id === entry.offerId && offer.version === entry.offerVersion
         && offer.recovery?.fingerprint === entry.fingerprint, 'recovery_automation_offer_changed');
-      P.assertOffer(offer, entry.offerVersion);
-      const queue = offer.recovery.outbound?.queueId
-        ? await read(reader, 'whatsappOutboundQueue', offer.recovery.outbound.queueId) : null;
+      const r = P.assertOffer(offer, entry.offerVersion);
+      need(r.automation?.generation === scope.payload.generation && r.automation.policyFingerprint === current.configured.fingerprint,
+        'recovery_automation_offer_changed');
+      need((['prepared', 'sent'].includes(r.state) && offer.status === 'recovery_pending' && !r.response)
+        || (r.state === 'accepted' && offer.status === 'booked' && r.response?.decision === 'accept')
+        || (r.state === 'declined' && offer.status === 'declined' && r.response?.decision === 'decline'),
+      'recovery_automation_result_unproven');
+      const queue = r.outbound?.queueId ? await read(reader, 'whatsappOutboundQueue', r.outbound.queueId) : null;
+      need(!r.outbound || queue, 'recovery_automation_lost_queue');
+      if (queue) {
+        need(queue.id === recoveryQueueId(offer.id, offer.version), 'recovery_automation_offer_changed');
+        assertQueueIdentity(queue.id, queue, offer, digest(current.contact));
+        if (['sent', 'delivered', 'read'].includes(queue.status)) {
+          const proof = await deliveryProof(reader, offer, queue.id, documentId(queue.messageId), clock());
+          if (r.delivery) need(digest(proof) === digest(r.delivery), 'recovery_delivery_changed');
+        }
+      }
+      if (r.response) need(queue && ['sent', 'delivered', 'read'].includes(queue.status) && r.delivery,
+        'recovery_automation_result_unproven');
+      if (r.state === 'accepted') {
+        const [appointment, source, record] = await Promise.all([
+          read(reader, 'appointments', r.appointmentId), read(reader, 'whatsappMessages', r.response.messageId),
+          read(reader, 'communicationCases', r.caseId),
+        ]);
+        need(appointment?.status === 'confirmed' && appointment.offerId === offer.id && appointment.offerVersion === offer.version
+          && appointment.selectedOptionId === offer.options[0].id
+          && P.originalFingerprint(appointment) === r.response.canonicalFingerprint
+          && source?.mayaRecoveryCompletion?.offerId === offer.id && source.mayaRecoveryCompletion.offerVersion === offer.version
+          && source.mayaRecoveryCompletion.responseFingerprint === digest(r.response)
+          && record?.state === 'FULFILLED' && record.fulfillment?.offerId === offer.id
+          && record.fulfillment.offerVersion === offer.version && record.fulfillment.appointmentId === appointment.id,
+        'recovery_automation_result_unproven');
+        await originalOwnership(reader, appointment);
+      }
       return { current, entry, offer, queue };
     }, { readOnly: true });
   }
@@ -237,15 +269,17 @@ function createMayaRecoveryCoordinator({ db, taskQueue, clock = () => new Date()
     const guarded = fencedDb(scope);
     try {
       let { current, entry, offer, queue } = await currentOffer(scope, guarded);
+      // A retry may occur after the accepted history entry committed but before
+      // finalization. It must finish that result, never start candidate discovery.
+      if (offer?.recovery.state === 'accepted') {
+        need(['pending', 'accepted'].includes(entry?.outcome), 'recovery_automation_result_unproven');
+        if (entry.outcome === 'pending') await closePrevious(scope, guarded, offer, 'accepted');
+        return await finish(scope, 'completed', 'opening_filled');
+      }
       if (entry?.outcome === 'pending') {
-        if (offer.recovery.state === 'accepted' && offer.recovery.response?.decision === 'accept' && offer.status === 'booked') {
-          await closePrevious(scope, guarded, offer, 'accepted');
-          return await finish(scope, 'completed', 'opening_filled');
-        }
-        if (offer.recovery.state === 'declined' && offer.recovery.response?.decision === 'decline' && offer.status === 'declined') {
+        if (offer.recovery.state === 'declined') {
           await closePrevious(scope, guarded, offer, 'declined');
         } else if (!P.isOpen(offer, clock())) {
-          need(!offer.recovery.outbound || queue, 'recovery_automation_lost_queue');
           need(!queue || (queue.status === 'queued' && !queue.processingStartedAt && !queue.recoveryDispatchAttemptedAtIso)
             || ['sent', 'delivered', 'read'].includes(queue.status), 'recovery_automation_delivery_uncertain');
           await closePrevious(scope, guarded, offer, 'expired');
