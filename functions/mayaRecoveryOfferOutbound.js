@@ -9,6 +9,7 @@ const { arubaDateParts } = require('./bookingSchedulingPrimitives');
 const { createSchedulingProvider } = require('./bookingAuthoritySchedulingProvider');
 const { documentId, timeKey } = require('./mayaOperationsReadModel');
 const { transactionView, currentPilot, unchangedBasis, originalOwnership, selectOption, read, pointerMatches } = require('./mayaRecoveryOfferService');
+const { recoveryConfirmationClaimDecision } = require('./mayaRecoveryConfirmation');
 const P = require('./mayaRecoveryOfferPolicy');
 const need = P.requireCondition;
 const PREFIX = 'MRO-';
@@ -143,6 +144,8 @@ function createMayaRecoveryOfferOutbound({ db, clock = () => new Date() } = {}) 
   return { enqueue };
 }
 async function recoveryOutboundClaimDecision({ db, transaction, queueId, queueItem = {}, now = new Date() }) {
+  const confirmation = await recoveryConfirmationClaimDecision({ db, transaction, queueId, queueItem, now });
+  if (confirmation) return confirmation;
   if (!isRecoveryOutbound(queueId, queueItem)) return { allowed: true, reason: 'not-recovery-outbound' };
   try {
     // A lost ACK is not evidence that the message was not sent. Do not blindly
