@@ -61,7 +61,9 @@ async function completedCandidate(reader, context) {
   need(message && r.state === 'accepted' && offer.status === 'booked'
     && r.response?.decision === 'accept' && r.response.messageId === messageId,
   'recovery_confirmation_completion_changed');
-  if (pin !== undefined) need(digest(pin) === digest(completionPin(offer)), 'recovery_confirmation_completion_changed');
+  // A missing atomic pointer is not permission to reconstruct completion from
+  // caller prose or silently backfill an older unproven source.
+  need(pin && digest(pin) === digest(completionPin(offer)), 'recovery_confirmation_completion_changed');
   return { conversation, message, offer };
 }
 
@@ -134,13 +136,16 @@ async function verifiedConfirmation(reader, context, now) {
     && (!session.communicationAccountId || session.communicationAccountId === r.account)), 'recovery_confirmation_human_review');
   const language = pilot.conversation.language;
   const text = renderConfirmation(appointment, language);
+  const remote = pilot.conversation.remoteConversationId || pilot.conversation.chatJid || pilot.conversation.externalChatId || pilot.phone;
+  need(typeof remote === 'string' && remote.trim().length > 0 && remote.length <= 300, 'recovery_confirmation_context_changed');
   const proof = { ...completionPin(offer), sourceMessageId: message.id, language,
     canonicalFingerprint: r.response.canonicalFingerprint, responseWindowFingerprint: r.response.responseWindow.fingerprint };
   const material = { provider: 'wacli', outboundClass: 'conversation_maya', communicationAccountId: r.account,
     conversationId: r.conversationId, sourceInboundMessageId: message.id, to: pilot.phone, text,
     expectedOwnershipVersion: r.ownershipVersion, expectedCustomerInputVersion: r.response.customerInputVersion,
-    recoveryConfirmation: proof };
-  return { offer, appointment, context: { ...context, communicationAccountId: r.account, provider: 'wacli' },
+    confirmationRemoteConversationId: remote.trim(), recoveryConfirmation: proof };
+  return { offer, appointment, publication: message.mayaRecoveryConfirmationQueued,
+    context: { ...context, communicationAccountId: r.account, provider: 'wacli' },
     material, result: { draft: text, source: 'maya-canonical-recovery-confirmation', warning: '', metadata: {
       outcome: 'appointment_rescheduled', language, appointmentId: appointment.id, appointmentRescheduled: true,
       requiresHuman: false, humanActive: false, handoffQueue: '', handoffReason: '', recoveryConfirmation: proof } } };
@@ -148,8 +153,11 @@ async function verifiedConfirmation(reader, context, now) {
 
 function confirmationMaterial(item) {
   const fields = ['provider', 'outboundClass', 'communicationAccountId', 'conversationId', 'sourceInboundMessageId', 'to', 'text',
-    'expectedOwnershipVersion', 'expectedCustomerInputVersion', 'recoveryConfirmation'];
+    'expectedOwnershipVersion', 'expectedCustomerInputVersion', 'confirmationRemoteConversationId', 'recoveryConfirmation'];
   return Object.fromEntries(fields.map(key => [key, item[key] ?? null]));
+}
+function publicationReceipt(queueId, material) {
+  return { version: VERSION, queueId, proofFingerprint: digest(material.recoveryConfirmation) };
 }
 function confirmationDispatchFingerprint(queueId, item) {
   return digest({ queueId, material: confirmationMaterial(item), media: item.media ?? null });
@@ -161,7 +169,11 @@ function confirmationClaimIsUnchanged(queueId, item) {
 }
 function assertQueue(queueId, queue, verified) {
   need(queueId === confirmationQueueId(verified.material.conversationId, verified.material.sourceInboundMessageId)
-    && !queue.media && digest(confirmationMaterial(queue)) === digest(verified.material), 'recovery_confirmation_queue_changed');
+    && !queue.media && digest(confirmationMaterial(queue)) === digest(verified.material)
+    && !['recoveryDispatchVersion', 'recoveryOfferId', 'recoveryOfferVersion', 'recoveryOfferFingerprint'].some(key => key in queue),
+  'recovery_confirmation_queue_changed');
+  need(digest(verified.publication) === digest(publicationReceipt(queueId, verified.material)),
+    'recovery_confirmation_publication_changed');
 }
 
 function createMayaRecoveryConfirmation({ db, clock = () => new Date() } = {}) {
@@ -202,8 +214,11 @@ function createMayaRecoveryConfirmation({ db, clock = () => new Date() } = {}) {
         assertQueue(queueId, existing, verified);
         need(['queued', 'processing', 'sent', 'delivered', 'read'].includes(existing.status),
           'recovery_confirmation_reconciliation_required');
+        if (existing.status !== 'queued') need(confirmationClaimIsUnchanged(queueId, existing),
+          'recovery_confirmation_reconciliation_required');
         return { queued: true, id: queueId, existing: true, recoveryConfirmation: true };
       }
+      need(verified.publication === undefined, 'recovery_confirmation_publication_missing');
       transaction.set(db.collection(QUEUE).doc(queueId), { id: queueId, ...material, status: 'queued', type: 'text', attempts: 0,
         createdByUserId: 'demac-customer-agent', createdByName: 'Maya', createdAt: FieldValue.serverTimestamp(),
         createdAtIso: clock().toISOString(), updatedAt: FieldValue.serverTimestamp() });
@@ -214,7 +229,7 @@ function createMayaRecoveryConfirmation({ db, clock = () => new Date() } = {}) {
         updatedAt: FieldValue.serverTimestamp(),
       }, { merge: true });
       transaction.set(db.collection('whatsappMessages').doc(material.sourceInboundMessageId), {
-        mayaRecoveryConfirmationQueued: { version: VERSION, queueId, proofFingerprint: digest(material.recoveryConfirmation) },
+        mayaRecoveryConfirmationQueued: publicationReceipt(queueId, material),
       }, { merge: true });
       // Existing session services write through this same transaction-bound view.
       // They perform no reads after the queue/conversation writes above.
@@ -233,13 +248,16 @@ async function recoveryConfirmationClaimDecision({ db, transaction, queueId, que
   try {
     need(queueItem.status === 'queued' && !queueItem.processingStartedAt && !queueItem.confirmationAttemptedAtIso
       && (queueItem.attempts === undefined || queueItem.attempts === 0), 'recovery_confirmation_reconciliation_required');
-    const verified = await verifiedConfirmation(transactionView(db, transaction).db, {
+    const reader = transactionView(db, transaction).db;
+    const verified = await verifiedConfirmation(reader, {
       conversationId: queueItem.conversationId, inboundMessageId: queueItem.sourceInboundMessageId,
       communicationAccountId: queueItem.communicationAccountId, expectedOwnershipVersion: queueItem.expectedOwnershipVersion,
       expectedCustomerInputVersion: queueItem.expectedCustomerInputVersion,
     }, now);
     need(verified, 'recovery_confirmation_completion_missing');
     assertQueue(queueId, queueItem, verified);
+    need(!await read(reader, QUEUE, ordinaryReplyId(queueItem.conversationId, queueItem.sourceInboundMessageId)),
+      'recovery_confirmation_other_reply_exists');
     return { allowed: true, reason: 'recovery-confirmation-current', claimPatch: {
       confirmationAttemptedAtIso: now.toISOString(), confirmationDispatchFingerprint: confirmationDispatchFingerprint(queueId, queueItem) } };
   } catch (error) {
