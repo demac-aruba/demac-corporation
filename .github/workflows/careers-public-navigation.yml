@@ -1,0 +1,68 @@
+name: Careers public navigation
+on:
+  pull_request:
+    paths:
+      - 'apps/erp-next/components/public/public-site-shell.tsx'
+      - 'apps/erp-next/components/careers/careers-availability*'
+      - 'apps/erp-next/components/careers/careers-chrome.tsx'
+      - 'apps/erp-next/app/careers/page.tsx'
+      - 'apps/erp-next/app/public-approved.css'
+      - 'apps/erp-next/scripts/careers-public-navigation.cjs'
+      - '.github/workflows/careers-public-navigation.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/erp-next/components/public/public-site-shell.tsx'
+      - 'apps/erp-next/components/careers/careers-availability*'
+      - 'apps/erp-next/components/careers/careers-chrome.tsx'
+      - 'apps/erp-next/app/careers/page.tsx'
+      - 'apps/erp-next/app/public-approved.css'
+      - 'apps/erp-next/scripts/careers-public-navigation.cjs'
+      - '.github/workflows/careers-public-navigation.yml'
+permissions:
+  contents: read
+jobs:
+  public-menu-and-inactive-landing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - run: npm install --prefix apps/erp-next --no-audit --no-fund
+      - name: Build actual production layout with Careers intake disabled
+        env:
+          VERCEL_ENV: production
+          CAREERS_PREVIEW_BUILD: '0'
+          NEXT_PUBLIC_CAREERS_LIVE_ENABLED: 'false'
+          NEXT_PUBLIC_CAREERS_ADMIN_ENABLED: 'false'
+          NEXT_PUBLIC_FIREBASE_API_KEY: test-api-key
+          NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: demo-demac-careers.firebaseapp.com
+          NEXT_PUBLIC_FIREBASE_PROJECT_ID: demo-demac-careers
+          NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: demo-demac-careers.appspot.com
+          NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: '123456'
+          NEXT_PUBLIC_FIREBASE_APP_ID: demo-careers-app
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: npm --prefix apps/erp-next run typecheck && npm --prefix apps/erp-next run build
+      - name: Install isolated browser tooling
+        run: |
+          npm install --prefix "$RUNNER_TEMP/careers-menu-browser" playwright@1.58.2 --no-audit --no-fund
+          "$RUNNER_TEMP/careers-menu-browser/node_modules/.bin/playwright" install --with-deps chromium webkit firefox
+      - name: Test mobile and desktop navigation without production network access
+        run: |
+          python3 -m http.server 4176 --bind 127.0.0.1 --directory apps/erp-next/out > "$RUNNER_TEMP/careers-menu-http.log" 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" || true' EXIT
+          for i in $(seq 1 20); do curl --fail --silent http://127.0.0.1:4176/careers/ >/dev/null && break; sleep 1; done
+          NODE_PATH="$RUNNER_TEMP/careers-menu-browser/node_modules" node apps/erp-next/scripts/careers-public-navigation.cjs
+      - name: Retain real rendered screenshots and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: careers-public-menu-${{ github.sha }}
+          path: careers-menu-results/
+          retention-days: 7

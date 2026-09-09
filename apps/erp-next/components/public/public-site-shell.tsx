@@ -4,7 +4,7 @@ import { PublicFooterDynamicInfo } from './public-footer-dynamic-info';
 
 type PublicSiteShellProps = {
   children: ReactNode;
-  active?: 'home' | 'services' | 'projects' | 'about' | 'contact';
+  active?: 'home' | 'services' | 'projects' | 'about' | 'careers' | 'contact';
 };
 
 const primaryLinks = [
@@ -13,6 +13,7 @@ const primaryLinks = [
   ['services', '/services', 'Services'],
   ['projects', '/project-gallery', 'Projects'],
   ['industries', '/#industries', 'Industries We Serve'],
+  ['careers', '/careers', 'Careers'],
   ['contact', '/contact', 'Contact'],
 ] as const;
 
@@ -42,7 +43,7 @@ export function PublicHeader({ active }: { active?: PublicSiteShellProps['active
         <PublicBrand />
         <nav className="public-nav" aria-label="Main navigation">
           {primaryLinks.map(([id, href, label]) => (
-            <Link className={active === id ? 'is-active' : ''} href={href} key={id}>{label}</Link>
+            <Link className={active === id ? 'is-active' : ''} href={href} key={id} aria-current={active === id ? 'page' : undefined}>{label}</Link>
           ))}
         </nav>
         <div className="public-header-actions">
@@ -52,7 +53,7 @@ export function PublicHeader({ active }: { active?: PublicSiteShellProps['active
         <details className="public-mobile-menu">
           <summary aria-label="Open navigation"><span /><span /><span /></summary>
           <div>
-            {primaryLinks.map(([id, href, label]) => <Link href={href} key={id}>{label}</Link>)}
+            {primaryLinks.map(([id, href, label]) => <Link href={href} key={id} aria-current={active === id ? 'page' : undefined}>{label}</Link>)}
             <Link href="/login">Staff Login</Link>
           </div>
         </details>
@@ -101,6 +102,7 @@ export function PublicFooter() {
             <Link href="/services">Services</Link>
             <Link href="/project-gallery">Projects</Link>
             <Link href="/#industries">Industries We Serve</Link>
+            <Link href="/careers">Careers</Link>
             <Link href="/contact">Contact</Link>
           </nav>
 
