@@ -3,7 +3,7 @@ const { FieldValue, getFirestore } = require("firebase-admin/firestore");
 const logger = require("firebase-functions/logger");
 const { defineSecret } = require("firebase-functions/params");
 const { createCustomerAgentRuntime, HANDOFF_QUEUES } = require("./demacCustomerAgentRuntimeV1");
-const { createMayaRecoveryConfirmation } = require("./mayaRecoveryConfirmation");
+const { createMayaRecoveryConfirmation, confirmationQueueId } = require("./mayaRecoveryConfirmation");
 const { sessionIdentity, stableConversationIdentity } = require("./demacCustomerConversationState");
 const {
   canonicalRuntimeMessage,
@@ -362,12 +362,22 @@ async function queueAgentReply({
   let outcome = { queued: false, id, reason: "not-created" };
 
   await db.runTransaction(async (transaction) => {
-    const [conversationSnapshot, existing, settingsSnapshot, communicationSettingsSnapshot] = await Promise.all([
+    const [conversationSnapshot, existing, settingsSnapshot, communicationSettingsSnapshot, sourceSnapshot, confirmationSnapshot] = await Promise.all([
       transaction.get(conversationRef),
       transaction.get(ref),
       transaction.get(settingsRef),
       transaction.get(communicationSettingsRef),
+      transaction.get(db.collection("whatsappMessages").doc(inboundMessageId)),
+      transaction.get(db.collection("whatsappOutboundQueue").doc(confirmationQueueId(conversationId, inboundMessageId))),
     ]);
+    // Serialize this ordinary reply with an acceptance/confirmation committed
+    // after the earlier recovery lookup. Never publish a second or stale draft.
+    const source = sourceSnapshot.exists ? sourceSnapshot.data() || {} : {};
+    if (source.mayaRecoveryCompletion !== undefined || source.mayaRecoveryConfirmationQueued !== undefined || confirmationSnapshot.exists) {
+      const changed = new Error("This turn requires canonical confirmation reconciliation before publishing a reply.");
+      changed.code = "recovery_confirmation_recheck_required";
+      throw changed;
+    }
     if (!conversationSnapshot.exists || !shouldRunAgent(conversationSnapshot.data() || {})) {
       outcome = { queued: false, id, reason: "human-takeover" };
       return;
@@ -476,7 +486,7 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
     return { processed: false, reason: "communication-account-changed-or-missing" };
   }
   if (!customerSemanticContent(inboundMessage, 4_000)) {
-    await selected.ref.set({ status: "skipped_policy", discardReason: "no-canonical-customer-content", completedAt: FieldValue.serverTimestamp() }, { merge: true });
+    await selected.ref.set({ status: "skipped_policy", discardReason: "no-canonical-customer-content" }, { merge: true });
     return { processed: false, reason: "no-canonical-customer-content" };
   }
   const expectedOwnershipVersion = nonNegativeEpoch(conversation.ownershipVersion);
@@ -512,7 +522,12 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
     expectedCustomerInputVersion: currentInputVersion,
     processingStartedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
-  await ensureAgentSessionActive(conversationId, selected.provider || "wacli", currentAccount);
+  const confirmationService = createMayaRecoveryConfirmation({ db });
+  const confirmationContext = { conversationId, inboundMessageId: selected.messageId, communicationAccountId: currentAccount,
+    expectedOwnershipVersion, expectedCustomerInputVersion: currentInputVersion };
+  // Check committed recovery and any existing human session before reactivation.
+  const priorConfirmation = await confirmationService.recover(confirmationContext);
+  if (!priorConfirmation) await ensureAgentSessionActive(conversationId, selected.provider || "wacli", currentAccount);
 
   const rawBody = buildRuntimeBody({
     conversationId,
@@ -531,9 +546,8 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
       },
     }),
   });
-  const result = await createMayaRecoveryConfirmation({ db }).runWithRecovery({
-    context: { conversationId, inboundMessageId: selected.messageId, communicationAccountId: currentAccount,
-      expectedOwnershipVersion, expectedCustomerInputVersion: currentInputVersion },
+  const result = priorConfirmation || await confirmationService.runWithRecovery({
+    context: confirmationContext,
     run: () => turnRuntime.runTurn({
       rawBody,
       apiKey: openAiApiKey.value(),
