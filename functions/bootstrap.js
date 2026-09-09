@@ -6,6 +6,7 @@ const wacliOutboundMediaUpload = require("./wacliOutboundMediaUpload");
 const communicationIngressMetadata = require("./demacCommunicationIngressMetadata");
 const customerAgentCommunication = require("./demacCustomerAgentAllowlistCommunication");
 const customerTurnOrchestrator = require("./demacCustomerTurnOrchestrator");
+const recoveryAutomation = require("./mayaRecoveryAutomation");
 const appointmentNotifications = require("./appointmentNotifications");
 const technicianDailySchedules = require("./technicianDailySchedules");
 const userManagement = require("./userManagement");
@@ -47,6 +48,10 @@ module.exports = {
   ...communicationIngressMetadata,
   ...customerAgentCommunication,
   processCustomerAgentTurnWakeup: customerTurnOrchestrator.processCustomerAgentTurnWakeup,
+  // Explicit exports only: pure coordinator/test helpers are not deployed APIs.
+  startMayaRecoveryAfterCancellation: recoveryAutomation.startMayaRecoveryAfterCancellation,
+  continueMayaRecoveryAfterOffer: recoveryAutomation.continueMayaRecoveryAfterOffer,
+  processMayaRecoveryOpening: recoveryAutomation.processMayaRecoveryOpening,
   ...appointmentNotifications,
   ...technicianDailySchedules,
   ...userManagement,
