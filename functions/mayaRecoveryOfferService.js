@@ -264,6 +264,12 @@ function createMayaRecoveryOfferService({ db, clock = () => new Date(), analyzeR
         transaction.set(db.collection('bookingOffers').doc(offer.id), { status: 'declined', recovery: { ...r, state: 'declined', response } }, { merge: true });
         return { success: true, replayed: false, state: 'declined', ...P.NO_RESERVATION };
       }
+      // A delayed worker cannot move the appointment after this source already
+      // produced a reply. The ordinary reply transaction also reads the source
+      // completion marker, so both commit orderings preserve one turn outcome.
+      const published = await reader.collection('whatsappOutboundQueue').where('conversationId', '==', r.conversationId)
+        .where('sourceInboundMessageId', '==', message.id).limit(1).get();
+      need(published.docs.length === 0, 'recovery_response_already_published');
       need(pilot.settings.autoRescheduleEnabled === true, 'recovery_reschedule_disabled');
       const { record, original, cancellation } = await unchangedBasis(reader, offer, pilot);
       await originalOwnership(reader, original);
