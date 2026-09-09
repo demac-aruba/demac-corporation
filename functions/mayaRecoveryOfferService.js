@@ -282,6 +282,12 @@ function createMayaRecoveryOfferService({ db, clock = () => new Date(), analyzeR
         && result.appointment.date === fresh.option.date, 'recovery_canonical_proof_missing');
       response.canonicalFingerprint = P.originalFingerprint(result.appointment);
       transaction.set(db.collection('bookingOffers').doc(offer.id), { recovery: { ...r, state: 'accepted', response } }, { merge: true });
+      // A derived source pointer survives a lost model/final-reply result. It is
+      // committed with the move, not a second booking status or send instruction.
+      transaction.set(db.collection('whatsappMessages').doc(message.id), { mayaRecoveryCompletion: {
+        version: 1, offerId: offer.id, offerVersion: offer.version, appointmentId: original.id,
+        responseFingerprint: digest(response),
+      } }, { merge: true });
       transaction.set(db.collection('communicationCases').doc(record.id), { state: 'FULFILLED', fulfilledAtIso: now.toISOString(),
         fulfillment: { offerId: offer.id, offerVersion: offer.version, appointmentId: original.id, sourceMessageId: message.id },
         updatedAt: FieldValue.serverTimestamp() }, { merge: true });
