@@ -3,6 +3,7 @@ const { FieldValue, getFirestore } = require("firebase-admin/firestore");
 const logger = require("firebase-functions/logger");
 const { defineSecret } = require("firebase-functions/params");
 const { createCustomerAgentRuntime, HANDOFF_QUEUES } = require("./demacCustomerAgentRuntimeV1");
+const { createMayaRecoveryConfirmation, confirmationQueueId } = require("./mayaRecoveryConfirmation");
 const { sessionIdentity, stableConversationIdentity } = require("./demacCustomerConversationState");
 const {
   canonicalRuntimeMessage,
@@ -347,6 +348,10 @@ async function queueAgentReply({
   if (!automaticReplySupported(provider)) {
     throw new Error(`Automatic customer-agent replies are not enabled for provider ${cleanText(provider, 40) || "unknown"}.`);
   }
+  const recovered = await createMayaRecoveryConfirmation({ db }).enqueueIfCompleted({
+    context: { conversationId, inboundMessageId, expectedOwnershipVersion, expectedCustomerInputVersion }, result,
+  });
+  if (recovered) return recovered;
   const text = cleanCustomerFacingMessage(result.draft, 3_000);
   if (!text) return { queued: false, reason: "empty-draft" };
   const id = outboundDocumentId(conversationId, inboundMessageId);
@@ -357,12 +362,22 @@ async function queueAgentReply({
   let outcome = { queued: false, id, reason: "not-created" };
 
   await db.runTransaction(async (transaction) => {
-    const [conversationSnapshot, existing, settingsSnapshot, communicationSettingsSnapshot] = await Promise.all([
+    const [conversationSnapshot, existing, settingsSnapshot, communicationSettingsSnapshot, sourceSnapshot, confirmationSnapshot] = await Promise.all([
       transaction.get(conversationRef),
       transaction.get(ref),
       transaction.get(settingsRef),
       transaction.get(communicationSettingsRef),
+      transaction.get(db.collection("whatsappMessages").doc(inboundMessageId)),
+      transaction.get(db.collection("whatsappOutboundQueue").doc(confirmationQueueId(conversationId, inboundMessageId))),
     ]);
+    // Serialize this ordinary reply with an acceptance/confirmation committed
+    // after the earlier recovery lookup. Never publish a second or stale draft.
+    const source = sourceSnapshot.exists ? sourceSnapshot.data() || {} : {};
+    if (source.mayaRecoveryCompletion !== undefined || source.mayaRecoveryConfirmationQueued !== undefined || confirmationSnapshot.exists) {
+      const changed = new Error("This turn requires canonical confirmation reconciliation before publishing a reply.");
+      changed.code = "recovery_confirmation_recheck_required";
+      throw changed;
+    }
     if (!conversationSnapshot.exists || !shouldRunAgent(conversationSnapshot.data() || {})) {
       outcome = { queued: false, id, reason: "human-takeover" };
       return;
@@ -507,7 +522,12 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
     expectedCustomerInputVersion: currentInputVersion,
     processingStartedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
-  await ensureAgentSessionActive(conversationId, selected.provider || "wacli", currentAccount);
+  const confirmationService = createMayaRecoveryConfirmation({ db });
+  const confirmationContext = { conversationId, inboundMessageId: selected.messageId, communicationAccountId: currentAccount,
+    expectedOwnershipVersion, expectedCustomerInputVersion: currentInputVersion };
+  // Check committed recovery and any existing human session before reactivation.
+  const priorConfirmation = await confirmationService.recover(confirmationContext);
+  if (!priorConfirmation) await ensureAgentSessionActive(conversationId, selected.provider || "wacli", currentAccount);
 
   const rawBody = buildRuntimeBody({
     conversationId,
@@ -526,10 +546,13 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
       },
     }),
   });
-  const result = await turnRuntime.runTurn({
-    rawBody,
-    apiKey: openAiApiKey.value(),
-    company: "DEMAC Professional Cooling Solutions",
+  const result = priorConfirmation || await confirmationService.runWithRecovery({
+    context: confirmationContext,
+    run: () => turnRuntime.runTurn({
+      rawBody,
+      apiKey: openAiApiKey.value(),
+      company: "DEMAC Professional Cooling Solutions",
+    }),
   });
 
   if (result.metadata?.ownershipChanged === true) {

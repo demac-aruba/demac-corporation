@@ -16,6 +16,7 @@ const {
 const { isRecoveryOutbound, recoveryOutboundClaimDecision } = require("./mayaRecoveryOfferOutbound");
 const { createMayaRecoveryOfferService } = require("./mayaRecoveryOfferService");
 const { recoveryDispatchFingerprint, recoveryClaimIsUnchanged } = require("./mayaRecoveryDispatchReceipt");
+const { isRecoveryConfirmation, confirmationClaimIsUnchanged } = require("./mayaRecoveryConfirmation");
 
 const db = getFirestore();
 const storage = getStorage();
@@ -776,6 +777,7 @@ async function claimOutboundCommandWithDb(database, bridgeId, communicationAccou
         claimedCommunicationAccountId: communicationAccountId,
         claimedAt: FieldValue.serverTimestamp(),
         processingStartedAt: current.processingStartedAt || FieldValue.serverTimestamp(),
+        ...(authorization.claimPatch || {}),
         ...(isRecoveryOutbound(candidate.id, current) ? {
           recoveryDispatchAttemptedAtIso: new Date(now).toISOString(),
           recoveryDispatchFingerprint: recoveryDispatchFingerprint(candidate.id, current),
@@ -871,14 +873,21 @@ exports.wacliOutboundAck = onRequest(
           throw httpError(409, "Outbound queue item belongs to another communication account.", "communication-account-mismatch");
         }
         const recovery = isRecoveryOutbound(queueId, current);
-        if (recovery && sent && (!reportedProviderMessageId || reportedProviderMessageId === queueId)) {
+        const confirmation = isRecoveryConfirmation(queueId, current);
+        if ((recovery || confirmation) && sent && (!reportedProviderMessageId || reportedProviderMessageId === queueId)) {
           throw httpError(400, "A real provider message ID is required for recovery offer acknowledgement.", "recovery-provider-id-missing");
         }
         if (recovery && !recoveryClaimIsUnchanged(queueId, current)) {
           throw httpError(409, "Recovery command changed after its delivery claim.", "recovery-claimed-payload-changed");
         }
+        if (confirmation && !confirmationClaimIsUnchanged(queueId, current)) {
+          throw httpError(409, "Confirmation changed after its delivery claim.", "recovery-confirmation-claimed-payload-changed");
+        }
 
         if (current.status === "sent" && sent) {
+          if (confirmation && current.providerMessageId !== reportedProviderMessageId) {
+            throw httpError(409, "Confirmation acknowledgement conflicts with its recorded provider message.", "recovery-confirmation-ack-conflict");
+          }
           if (recovery) {
             if (current.providerMessageId !== reportedProviderMessageId) throw httpError(409, "Recovery acknowledgement does not match the recorded provider message.", "recovery-ack-conflict");
             recoveryDelivery = { offerId: current.recoveryOfferId, offerVersion: current.recoveryOfferVersion,
@@ -921,13 +930,15 @@ exports.wacliOutboundAck = onRequest(
           }
         }
         const remoteConversationId = String(
-          conversationCurrent?.remoteConversationId
-            || conversationCurrent?.chatJid
-            || conversationCurrent?.externalChatId
-            || current.to
-            || current.phone
-            || current.recipient
-            || "",
+          confirmation ? current.confirmationRemoteConversationId : (
+            conversationCurrent?.remoteConversationId
+              || conversationCurrent?.chatJid
+              || conversationCurrent?.externalChatId
+              || current.to
+              || current.phone
+              || current.recipient
+              || ""
+          ),
         ).trim();
         const identity = wacliCanonicalIdentity({
           communicationAccountId,
@@ -937,7 +948,7 @@ exports.wacliOutboundAck = onRequest(
         if (!identity.messageId) throw httpError(409, "Outbound acknowledgement has no canonical message identity.");
         const messageRef = db.collection("whatsappMessages").doc(identity.messageId);
         let recoveryAckPatch = {};
-        if (recovery) {
+        if (recovery || confirmation) {
           const previousMessage = await transaction.get(messageRef);
           if (previousMessage.exists) {
             const value = previousMessage.data() || {};
@@ -947,9 +958,13 @@ exports.wacliOutboundAck = onRequest(
               throw httpError(409, "Recovery delivery conflicts with the original message.", "recovery-message-conflict");
             }
           }
-          recoveryAckPatch = { recoveryAcknowledgedAtIso: new Date().toISOString() };
-          recoveryDelivery = { offerId: current.recoveryOfferId, offerVersion: current.recoveryOfferVersion,
-            queueId, outboundMessageId: identity.messageId };
+          if (confirmation) {
+            recoveryAckPatch = { recoveryConfirmationAcknowledgedAtIso: new Date().toISOString() };
+          } else {
+            recoveryAckPatch = { recoveryAcknowledgedAtIso: new Date().toISOString() };
+            recoveryDelivery = { offerId: current.recoveryOfferId, offerVersion: current.recoveryOfferVersion,
+              queueId, outboundMessageId: identity.messageId };
+          }
         }
 
         transaction.set(messageRef, {
@@ -1004,9 +1019,9 @@ exports.wacliOutboundAck = onRequest(
             provider: "wacli",
             channel: "whatsapp",
             communicationAccountId,
-            status: recovery ? (conversationCurrent?.status || "waiting_customer")
+            status: (recovery || confirmation) ? (conversationCurrent?.status || "waiting_customer")
               : conversationCurrent?.status === "escalated" ? "escalated" : "waiting_customer",
-            unread: recovery ? (conversationCurrent?.unread || 0) : 0,
+            unread: (recovery || confirmation) ? (conversationCurrent?.unread || 0) : 0,
             lastMessageText: outboundPreview(text, media),
             lastActivityAt: FieldValue.serverTimestamp(),
             recentMessages,

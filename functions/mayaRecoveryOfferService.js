@@ -264,6 +264,12 @@ function createMayaRecoveryOfferService({ db, clock = () => new Date(), analyzeR
         transaction.set(db.collection('bookingOffers').doc(offer.id), { status: 'declined', recovery: { ...r, state: 'declined', response } }, { merge: true });
         return { success: true, replayed: false, state: 'declined', ...P.NO_RESERVATION };
       }
+      // A delayed worker cannot move the appointment after this source already
+      // produced a reply. The ordinary reply transaction also reads the source
+      // completion marker, so both commit orderings preserve one turn outcome.
+      const published = await reader.collection('whatsappOutboundQueue').where('conversationId', '==', r.conversationId)
+        .where('sourceInboundMessageId', '==', message.id).limit(1).get();
+      need(published.docs.length === 0, 'recovery_response_already_published');
       need(pilot.settings.autoRescheduleEnabled === true, 'recovery_reschedule_disabled');
       const { record, original, cancellation } = await unchangedBasis(reader, offer, pilot);
       await originalOwnership(reader, original);
@@ -282,6 +288,12 @@ function createMayaRecoveryOfferService({ db, clock = () => new Date(), analyzeR
         && result.appointment.date === fresh.option.date, 'recovery_canonical_proof_missing');
       response.canonicalFingerprint = P.originalFingerprint(result.appointment);
       transaction.set(db.collection('bookingOffers').doc(offer.id), { recovery: { ...r, state: 'accepted', response } }, { merge: true });
+      // A derived source pointer survives a lost model/final-reply result. It is
+      // committed with the move, not a second booking status or send instruction.
+      transaction.set(db.collection('whatsappMessages').doc(message.id), { mayaRecoveryCompletion: {
+        version: 1, offerId: offer.id, offerVersion: offer.version, appointmentId: original.id,
+        responseFingerprint: digest(response),
+      } }, { merge: true });
       transaction.set(db.collection('communicationCases').doc(record.id), { state: 'FULFILLED', fulfilledAtIso: now.toISOString(),
         fulfillment: { offerId: offer.id, offerVersion: offer.version, appointmentId: original.id, sourceMessageId: message.id },
         updatedAt: FieldValue.serverTimestamp() }, { merge: true });
