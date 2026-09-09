@@ -1,0 +1,71 @@
+name: Careers administrative access
+on:
+  pull_request:
+    paths:
+      - 'apps/erp-next/lib/navigation.ts'
+      - 'apps/erp-next/app/(erp)/recruitment/page.tsx'
+      - 'apps/erp-next/scripts/careers-admin-access.test.cjs'
+      - 'functions/careers-admin-entry.cjs'
+      - 'functions/careers/admin-preparation-emulator.test.js'
+      - 'scripts/deploy-careers-admin.py'
+      - 'scripts/test-deploy-careers-admin.py'
+      - '.github/workflows/careers-admin-release.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'functions/careers-admin-entry.cjs'
+      - 'scripts/deploy-careers-admin.py'
+      - '.github/workflows/careers-admin-release.yml'
+permissions:
+  contents: read
+concurrency:
+  group: careers-admin-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm install --prefix functions --no-audit --no-fund && npm install --prefix apps/erp-next --no-audit --no-fund
+      - name: Verify protected menu, routing and narrow deployment source
+        run: |
+          node --check functions/careers-admin-entry.cjs
+          node --test apps/erp-next/scripts/careers-admin-access.test.cjs
+          python3 scripts/test-deploy-careers-admin.py
+          node - <<'NODE'
+          const assert = require('node:assert/strict');
+          const entry = require('./functions/careers-admin-entry.cjs');
+          assert.deepEqual(Object.keys(entry), ['careersAdmin']);
+          assert.equal(typeof entry.careersAdmin, 'function');
+          NODE
+      - name: Verify actual draft persistence with NO sender, scanner or intake configuration
+        env:
+          GCLOUD_PROJECT: demo-demac-careers
+        run: npx --yes firebase-tools@15.29.0 emulators:exec --config firebase.careers-test.json --project demo-demac-careers --only firestore 'node --test functions/careers/admin-preparation-emulator.test.js'
+  deploy-admin-only:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Reuse existing DEMAC deployment identity
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Activate only the authenticated administrative authority
+        run: python3 scripts/deploy-careers-admin.py
