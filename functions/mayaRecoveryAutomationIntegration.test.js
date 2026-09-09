@@ -51,7 +51,7 @@ async function deliver(f) {
 async function respond(f, decision) {
   f.advance(1000);
   const offer = f.offer(); const r = offer.recovery; const id = 'AUTOMATION-REPLY';
-  const text = decision === 'accept' ? 'Yes, Tuesday works.' : 'No, keep Thursday.';
+  const text = decision === 'accept' ? 'Yes, Tuesday works.' : 'No, keep my existing appointment.';
   const version = r.customerInputVersion + 1;
   f.db.patch('communicationConversations', r.conversationId, { customerInputVersion: version });
   f.db.patch('whatsappMessages', id, { messageId: id, conversationId: r.conversationId, communicationAccountId: ACCOUNT,
@@ -67,23 +67,29 @@ async function respond(f, decision) {
 
 test('actual cancellation handler -> coordinator/history/scheduling -> queue/poll/HTTP ACK -> accepted move stops further offers', async t => {
   const f = await install(t, { second: true });
+  const originals = Object.fromEntries(['APT-1', 'APT-2'].map(id => [id, structuredClone(f.db.read('appointments', id))]));
   await start(f); const beforeResponse = await deliver(f);
-  assert.equal(f.db.read('appointments', beforeResponse.recovery.appointmentId).date, '2026-09-10');
+  const selectedId = beforeResponse.recovery.appointmentId;
+  const otherId = selectedId === 'APT-1' ? 'APT-2' : 'APT-1';
+  // Equal-time requests use the configured stable case-ID tie-break, not fixture order.
+  assert.deepEqual(f.db.read('appointments', selectedId), originals[selectedId]);
   const result = await respond(f, 'accept');
-  assert.equal(result.appointment.date, '2026-09-08');
+  assert.equal(result.appointment.id, selectedId); assert.equal(result.appointment.date, '2026-09-08');
   const after = f.offer();
   const event = { data: { before: snapshot(after.id, beforeResponse), after: snapshot(after.id, after) } };
   assert.equal((await handleRecoveryOfferChange(event, f.coordinator)).scheduled, true);
   const completed = await f.coordinator.run(f.tasks.at(-1).payload);
   assert.equal(completed.status, 'completed', JSON.stringify(completed));
   assert.equal(f.state().history[0].outcome, 'accepted');
-  assert.equal(f.outgoing().length, 1); assert.equal(f.db.read('appointments', 'APT-2').date, '2026-09-11');
-  assert.equal(f.db.read('bookingCapacityLocks', f.originalLocks[0].id).active, false);
+  assert.equal(f.outgoing().length, 1); assert.deepEqual(f.db.read('appointments', otherId), originals[otherId]);
+  for (const id of originals[selectedId].capacityLockIds) assert.equal(f.db.read('bookingCapacityLocks', id).active, false);
+  for (const id of originals[otherId].capacityLockIds) assert.equal(f.db.read('bookingCapacityLocks', id).active, true);
   assert.equal(f.db.read('bookingCapacityLocks', f.targetLocks[0].id).active, true);
   assert.equal((await f.coordinator.run(f.payload)).reason, 'already_terminal');
 });
 test('actual delivered decline -> offer-result event -> another compatible customer, with first booking and general interest intact', async t => {
   const f = await install(t, { second: true }); await start(f); const first = await deliver(f);
+  const original = structuredClone(f.db.read('appointments', first.recovery.appointmentId));
   assert.equal((await respond(f, 'decline')).state, 'declined');
   const declined = f.offer();
   assert.equal((await handleRecoveryOfferChange({ data: { before: snapshot(first.id, first), after: snapshot(first.id, declined) } }, f.coordinator)).scheduled, true);
@@ -92,7 +98,7 @@ test('actual delivered decline -> offer-result event -> another compatible custo
   assert.equal(f.offer().version, first.version + 1);
   assert.notEqual(f.offer().recovery.conversationId, first.recovery.conversationId);
   assert.equal(f.state().history[0].outcome, 'declined'); assert.equal(f.outgoing().length, 2);
-  assert.equal(f.db.read('appointments', first.recovery.appointmentId).date, '2026-09-10');
+  assert.deepEqual(f.db.read('appointments', first.recovery.appointmentId), original);
   assert.equal(f.db.read('communicationCases', first.recovery.caseId).state, 'WAITING');
 });
 test('duplicate cancellation events do not produce another offer and derived metadata does not recursively trigger discovery', async t => {
@@ -132,4 +138,24 @@ test('revoking automation after enqueue is checked by the actual Wacli claim bef
   const queue = f.db.read('whatsappOutboundQueue', offer.recovery.outbound.queueId);
   assert.equal(queue.status, 'failed'); assert.equal(queue.recoveryAuthorizationReason, 'recovery_automation_disabled');
   assert.equal(f.db.read('appointments', 'APT-1').date, '2026-09-10');
+});
+test('single Thursday candidate moves to Tuesday and coordinator finalization retry never restarts outreach', async t => {
+  const f = await install(t); await start(f); await deliver(f);
+  assert.equal(f.db.read('appointments', 'APT-1').date, '2026-09-10');
+  assert.equal((await respond(f, 'accept')).appointment.date, '2026-09-08');
+  const transaction = f.db.runTransaction.bind(f.db); let fail = true;
+  f.db.runTransaction = (callback, options) => transaction(raw => callback({
+    get: raw.get.bind(raw), set(ref, value, writeOptions) {
+      if (fail && ref.path === 'appointments/CANCEL-1' && value.mayaRecoveryAutomation?.status === 'completed') {
+        fail = false; throw new Error('simulated finalization storage failure');
+      }
+      return raw.set(ref, value, writeOptions);
+    },
+  }), options);
+  await assert.rejects(() => f.coordinator.run(f.payload), /finalization storage failure/);
+  assert.equal(f.state().history[0].outcome, 'accepted');
+  const completed = await f.coordinator.run(f.payload);
+  assert.equal(completed.status, 'completed', JSON.stringify(completed));
+  assert.equal(f.outgoing().length, 1); assert.equal(f.offer().version, 1);
+  assert.equal(f.db.read('appointments', 'APT-1').date, '2026-09-08');
 });
