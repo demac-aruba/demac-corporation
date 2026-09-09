@@ -486,7 +486,7 @@ async function processLatestQueued(conversationId, leaseOwnerId) {
     return { processed: false, reason: "communication-account-changed-or-missing" };
   }
   if (!customerSemanticContent(inboundMessage, 4_000)) {
-    await selected.ref.set({ status: "skipped_policy", discardReason: "no-canonical-customer-content" }, { merge: true });
+    await selected.ref.set({ status: "skipped_policy", discardReason: "no-canonical-customer-content", completedAt: FieldValue.serverTimestamp() }, { merge: true });
     return { processed: false, reason: "no-canonical-customer-content" };
   }
   const expectedOwnershipVersion = nonNegativeEpoch(conversation.ownershipVersion);
