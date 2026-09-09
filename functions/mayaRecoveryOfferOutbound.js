@@ -10,6 +10,7 @@ const { createSchedulingProvider } = require('./bookingAuthoritySchedulingProvid
 const { documentId, timeKey } = require('./mayaOperationsReadModel');
 const { transactionView, currentPilot, unchangedBasis, originalOwnership, selectOption, read, pointerMatches } = require('./mayaRecoveryOfferService');
 const { recoveryConfirmationClaimDecision } = require('./mayaRecoveryConfirmation');
+const { assertAutomatedOfferCurrent } = require('./mayaRecoveryAutomationPolicy');
 const P = require('./mayaRecoveryOfferPolicy');
 const need = P.requireCondition;
 const PREFIX = 'MRO-';
@@ -74,6 +75,7 @@ async function preparedDispatchContext(reader, offer, now) {
   'recovery_customer_turn_changed');
   assertContactTime(configured.policy, offer, now);
   const basis = await unchangedBasis(reader, offer, pilot);
+  assertAutomatedOfferCurrent({ offer, cancellation: basis.cancellation, settings: pilot.settings, now });
   const record = basis.record;
   const source = await read(reader, 'whatsappMessages', record.lastSourceMessageId);
   const event = Array.isArray(record.interestHistory) ? record.interestHistory.at(-1) : null;

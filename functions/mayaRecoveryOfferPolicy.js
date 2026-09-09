@@ -42,7 +42,10 @@ function offerFingerprint(offer) {
       conversationId: r.conversationId, phone: r.phone, appointmentId: r.appointmentId,
       originalFingerprint: r.originalFingerprint, preferenceFingerprint: r.preferenceFingerprint,
       ownershipVersion: r.ownershipVersion, customerInputVersion: r.customerInputVersion,
-      cancellationFingerprint: r.cancellationFingerprint, messageText: r.messageText } });
+      cancellationFingerprint: r.cancellationFingerprint, messageText: r.messageText,
+      // Old/manual offer fingerprints remain byte-for-byte compatible. Removing
+      // an automated origin from a new offer must invalidate its stored proof.
+      ...(r.automation === undefined ? {} : { automation: r.automation }) } });
 }
 function assertOffer(offer, offerVersion) {
   requireCondition(offer && offer.recovery?.version === VERSION, 'recovery_offer_missing');
