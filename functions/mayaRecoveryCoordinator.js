@@ -95,6 +95,7 @@ function createMayaRecoveryCoordinator({ db, taskQueue, clock = () => new Date()
           const automation = { version: A.VERSION, generation: scope.payload.generation,
             policyFingerprint: current.configured.fingerprint };
           value = { ...value, recovery: { ...value.recovery, automation } };
+          value.recovery.fingerprint = P.offerFingerprint(value);
           prepared = { offerId: ref.id, offerVersion: value.version, caseId: value.recovery.caseId,
             conversationId: value.recovery.conversationId, fingerprint: value.recovery.fingerprint,
             preparedAtIso: clock().toISOString(), expiresAt: value.expiresAt, outcome: 'pending',
@@ -239,11 +240,12 @@ function createMayaRecoveryCoordinator({ db, taskQueue, clock = () => new Date()
       if (entry?.outcome === 'pending') {
         if (offer.recovery.state === 'accepted' && offer.recovery.response?.decision === 'accept' && offer.status === 'booked') {
           await closePrevious(scope, guarded, offer, 'accepted');
-          return finish(scope, 'completed', 'opening_filled');
+          return await finish(scope, 'completed', 'opening_filled');
         }
         if (offer.recovery.state === 'declined' && offer.recovery.response?.decision === 'decline' && offer.status === 'declined') {
           await closePrevious(scope, guarded, offer, 'declined');
         } else if (!P.isOpen(offer, clock())) {
+          need(!offer.recovery.outbound || queue, 'recovery_automation_lost_queue');
           need(!queue || (queue.status === 'queued' && !queue.processingStartedAt && !queue.recoveryDispatchAttemptedAtIso)
             || ['sent', 'delivered', 'read'].includes(queue.status), 'recovery_automation_delivery_uncertain');
           await closePrevious(scope, guarded, offer, 'expired');
@@ -253,26 +255,28 @@ function createMayaRecoveryCoordinator({ db, taskQueue, clock = () => new Date()
             await outboundFactory({ db: guarded, clock }).enqueue({ offerId: offer.id, offerVersion: offer.version });
           } else need(queue && ['queued', 'processing', 'sent', 'delivered', 'read'].includes(queue.status)
             || offer.recovery.delivery, 'recovery_automation_delivery_uncertain');
-          return waitForOffer(scope, offer);
+          return await waitForOffer(scope, offer);
         }
         ({ current } = await currentOffer(scope, guarded));
       }
-      if (current.state.history.length >= current.configured.policy.maxOffers) return finish(scope, 'exhausted', 'configured_offer_limit');
+      if (current.state.history.length >= current.configured.policy.maxOffers) return await finish(scope, 'exhausted', 'configured_offer_limit');
       const next = A.nextContactTime(current.contact, clock());
       const openingAt = Date.parse(`${current.target.date}T${current.target.time}:00-04:00`);
-      if (!next || next.getTime() >= openingAt) return finish(scope, 'exhausted', 'no_contact_window_before_opening');
+      if (!next || next.getTime() >= openingAt) return await finish(scope, 'exhausted', 'no_contact_window_before_opening');
       if (next.getTime() > clock().getTime()) {
         await schedule(payload, next);
-        return finish(scope, 'waiting_contact', 'outside_contact_hours', { nextWakeAtIso: next.toISOString() });
+        return await finish(scope, 'waiting_contact', 'outside_contact_hours', { nextWakeAtIso: next.toISOString() });
       }
       const found = await discover(scope, guarded, current);
-      if (!found.candidates.length) return finish(scope, found.issues.length ? 'review_required' : 'exhausted',
+      if (!found.candidates.length) return await finish(scope, found.issues.length ? 'review_required' : 'exhausted',
         found.issues[0] || 'no_compatible_candidate', { examined: found.examined, reviewReasons: found.issues });
       const selected = found.candidates[0];
       const prepared = await offerFactory({ db: guarded, clock }).prepare({ cancelledAppointmentId: payload.cancelledAppointmentId,
         caseId: selected.caseId, ...(selected.afterId ? { afterId: selected.afterId } : {}) });
       await outboundFactory({ db: guarded, clock }).enqueue({ offerId: prepared.offerId, offerVersion: prepared.offerVersion });
-      return waitForOffer(scope, { expiresAt: prepared.expiresAt });
+      // Await inside this try: follow-up transport or final-state failures must
+      // reach releaseAfterError rather than abandoning a live worker lease.
+      return await waitForOffer(scope, { expiresAt: prepared.expiresAt });
     } catch (error) {
       await releaseAfterError(scope, error);
       if (expectedFailure(error)) return { processed: false, status: 'review_required', reason: error.code };
