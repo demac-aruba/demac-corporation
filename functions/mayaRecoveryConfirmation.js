@@ -47,6 +47,9 @@ async function completedCandidate(reader, context) {
   const [conversation, message] = await Promise.all([read(reader, 'communicationConversations', conversationId),
     read(reader, 'whatsappMessages', messageId)]);
   const pin = message?.mayaRecoveryCompletion;
+  need(pin === undefined || (pin && typeof pin === 'object' && !Array.isArray(pin)),
+    'recovery_confirmation_completion_changed');
+  if (message?.mayaRecoveryConfirmationQueued !== undefined) need(pin, 'recovery_confirmation_completion_changed');
   const route = message?.mayaRecoveryResponseRoute;
   const pointer = pin || (route ? { id: route.offerId, version: route.offerVersion } : conversation?.mayaRecoveryOffer);
   if (!pointer) return null;
