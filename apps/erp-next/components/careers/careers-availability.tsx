@@ -11,7 +11,7 @@ export function CareersAvailability() {
     <main className={s.root} data-careers-availability>
       <CareersHeader />
       <section className={`public-page-hero ${layout.hero}`} aria-labelledby="careers-title">
-        <div className={`public-page-hero-inner ${layout.heroInner}`}>
+        <div className={`${s.container} ${layout.heroInner}`}>
           <div>
             <span className={s.eyebrow}>CAREERS AT DEMAC</span>
             <h1 id="careers-title">Careers</h1>

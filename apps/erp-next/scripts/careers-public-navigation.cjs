@@ -36,7 +36,11 @@ async function geometry(page) {
     const box = element => { const r = element.getBoundingClientRect(); return { label: element.textContent.trim(), left: r.left, right: r.right, top: r.top, bottom: r.bottom }; };
     const nav = document.querySelector('.public-header .public-nav');
     const visible = nav && getComputedStyle(nav).display !== 'none';
-    const items = visible ? [document.querySelector('.public-header .public-brand'), ...nav.querySelectorAll('a'), ...document.querySelectorAll('.public-header-actions a')].map(box) : [];
+    // Existing responsive rules intentionally hide the WhatsApp header action at
+    // narrow desktop widths. A display:none element has a zero rectangle, not
+    // an overlapping visible control. Measure every rendered control instead.
+    const rendered = element => { const r = element.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(element).visibility !== 'hidden'; };
+    const items = visible ? [document.querySelector('.public-header .public-brand'), ...nav.querySelectorAll('a'), ...document.querySelectorAll('.public-header-actions a')].filter(rendered).map(box) : [];
     return { width: innerWidth, scrollWidth: document.documentElement.scrollWidth, items };
   });
   assert(measured.scrollWidth <= measured.width + 1, `Horizontal overflow: ${JSON.stringify(measured)}`);

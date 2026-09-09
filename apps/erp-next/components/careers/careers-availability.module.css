@@ -1,5 +1,5 @@
 .hero { padding-block: clamp(40px, 5vw, 72px); }
-.heroInner { grid-template-columns: minmax(0, 1fr); }
+.heroInner { display: grid; grid-template-columns: minmax(0, 1fr); }
 .heroInner h1 { margin-block: 14px; }
 .heroInner p { font-size: clamp(1rem, 1.6vw, 1.25rem); }
 .body { padding-block: clamp(32px, 5vw, 64px); }
