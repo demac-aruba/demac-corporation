@@ -10,6 +10,6 @@ function BrandChrome({ children }: { children: ReactNode }) {
   return <div className={`public-subsite ${s.brandChrome}`} data-careers-chrome>{children}</div>;
 }
 export function CareersHeader({ compactLabel }: { compactLabel?: string }) {
-  return <BrandChrome>{compactLabel ? <header className={s.compactHeader}><PublicBrand/><span>{compactLabel}</span></header> : <PublicHeader/>}</BrandChrome>;
+  return <BrandChrome>{compactLabel ? <header className={s.compactHeader}><PublicBrand/><span>{compactLabel}</span></header> : <PublicHeader active="careers"/>}</BrandChrome>;
 }
 export function CareersFooter() { return <BrandChrome><PublicFooter/></BrandChrome>; }

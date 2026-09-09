@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { CareersPublic } from '@/components/careers/careers-public';
 import { CareersPreview } from '@/components/careers/careers-preview';
+import { CareersAvailability } from '@/components/careers/careers-availability';
 
 export const metadata: Metadata = {
   title: 'Careers · DEMAC',
@@ -13,6 +13,8 @@ export default function CareersPage() {
   if (process.env.NEXT_PUBLIC_CAREERS_LIVE_ENABLED === 'true') return <CareersPublic />;
   // Evaluate the isolated design-review gate during static export.
   const allowed = process.env.VERCEL_ENV === 'preview' || process.env.NODE_ENV === 'development' || (process.env.CAREERS_PREVIEW_BUILD === '1' && process.env.VERCEL_ENV !== 'production');
-  if (!allowed) return <main style={{ padding: '3rem', maxWidth: '48rem', margin: 'auto' }}><h1>Preview unavailable</h1><p>This review page is not enabled in production.</p><Link href="/">Back to DEMAC</Link></main>;
+  // Public navigation must not expose internal preview tools or accept applications
+  // while the live intake remains disabled. This screen makes no Careers API calls.
+  if (!allowed) return <CareersAvailability />;
   return <CareersPreview />;
 }

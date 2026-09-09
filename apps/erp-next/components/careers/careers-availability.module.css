@@ -1,0 +1,24 @@
+.hero { padding-block: clamp(40px, 5vw, 72px); }
+.heroInner { grid-template-columns: minmax(0, 1fr); }
+.heroInner h1 { margin-block: 14px; }
+.heroInner p { font-size: clamp(1rem, 1.6vw, 1.25rem); }
+.body { padding-block: clamp(32px, 5vw, 64px); }
+.notice {
+  max-width: 760px;
+  padding: clamp(24px, 4vw, 40px);
+  border: 1px solid var(--career-border);
+  border-radius: 18px;
+  background: var(--career-panel);
+}
+.badge {
+  display: inline-block;
+  margin-bottom: 18px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  color: var(--career-primary);
+  background: var(--career-soft);
+  font-size: .8125rem;
+  font-weight: 700;
+}
+.notice h2 { font-size: clamp(1.375rem, 2.5vw, 1.875rem); }
+.notice p { max-width: 62ch; font-size: 1rem; }
