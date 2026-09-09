@@ -80,7 +80,7 @@ export const navigationGroups: NavigationGroup[] = [
   {
     label: 'Management',
     items: [
-      ...(process.env.NEXT_PUBLIC_CAREERS_ADMIN_ENABLED === 'true' ? [{ label: 'Recruitment', href: '/recruitment', short: 'RC', roles: ['super_admin'] as UserRole[] }] : []),
+      { label: 'Recruitment', href: '/recruitment', short: 'RC', roles: ['super_admin'] },
       { label: 'Employees', href: '/employees', short: 'EM', roles: ['super_admin', 'operations'] },
       { label: 'Reports', href: '/reports', short: 'RE', roles: ['super_admin', 'operations', 'finance', 'project_manager', 'auditor'] },
       { label: 'Executive AI', href: '/executive-ai', short: 'EA', roles: ['super_admin'] },
