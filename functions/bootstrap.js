@@ -33,7 +33,8 @@ const router = require("./whatsappCopilotRouter");
 // Task Tracker is an independent Operations boundary. Its authenticated API and
 // private evidence transport are the mutation boundaries, while reminder workers
 // may enqueue into the existing WhatsApp outbound authority. None of these
-// surfaces import, mutate, or derive work from Scheduling & Dispatch.
+// surfaces import, mutate, or derive work from Scheduling & Dispatch. Only the
+// deployable API handler is exported here; test helpers remain module-internal.
 module.exports = {
   ...core,
   ...officeBookingAuthorityFacade,
@@ -44,7 +45,7 @@ module.exports = {
   ...customerAgentCommunication,
   ...appointmentNotifications,
   ...taskReminders,
-  ...taskTrackerApi,
+  taskTrackerApi: taskTrackerApi.taskTrackerApi,
   ...taskTrackerAttachments,
   ...technicianDailySchedules,
   ...userManagement,
