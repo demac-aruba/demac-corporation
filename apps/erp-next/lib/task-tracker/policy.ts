@@ -1,4 +1,4 @@
-import type { AuthPrincipal } from '@/lib/security';
+import type { AuthPrincipal } from '../security';
 import type {
   TaskAccess,
   TaskDisplayStatus,
