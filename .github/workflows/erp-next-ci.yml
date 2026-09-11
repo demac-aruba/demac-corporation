@@ -12,6 +12,7 @@ on:
       - 'functions/bookingVanIdentity.js'
       - 'functions/bookingVanIdentity.test.js'
       - 'functions/taskReminder*.js'
+      - 'functions/taskTracker*.js'
       - 'functions/package.json'
       - 'functions/employeeAttendanceCalculation.js'
       - 'functions/employeeAttendanceCalculation.d.ts'
@@ -35,6 +36,7 @@ on:
       - 'functions/bookingVanIdentity.js'
       - 'functions/bookingVanIdentity.test.js'
       - 'functions/taskReminder*.js'
+      - 'functions/taskTracker*.js'
       - 'functions/package.json'
       - 'functions/employeeAttendanceCalculation.js'
       - 'functions/employeeAttendanceCalculation.d.ts'
@@ -66,7 +68,7 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Validate Firebase Functions syntax
         run: npm run validate:firebase
-      - name: Task reminder policy acceptance
+      - name: Task Tracker backend acceptance
         run: npm run test:task-reminders
       - name: Field authority acceptance
         run: npm run test:field-authority
