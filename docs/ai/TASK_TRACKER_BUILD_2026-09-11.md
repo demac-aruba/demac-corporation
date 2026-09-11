@@ -17,6 +17,14 @@
 - Existing theme tokens, dark/light behavior and `AccessibilityTextProvider` font scaling; no parallel design system.
 - Authenticated `taskTrackerApi` as the server-side Task Tracker mutation authority.
 - Server enforcement of provisioned Firebase identity, normalized ERP role, canonical `staffId`, task ownership, manager-only administration and optimistic version checks.
+- Governed private Task evidence:
+  - evidence metadata is part of the canonical Task;
+  - image/PDF/text/CSV/Word/Excel upload support is bounded to 20 MB;
+  - file bytes live privately under Firebase Storage `task-evidence/`;
+  - authenticated `taskTrackerAttachments` authorizes upload/download against the Task actor;
+  - no public evidence URL is persisted;
+  - stale-version metadata commits fail closed and uploaded orphan objects are deleted.
+- `attachment_required` completion policy blocks task completion until evidence exists.
 - Deterministic WhatsApp reminder planner: 24h, 3h, 1h, deadline and overdue opportunities.
 - Daily WhatsApp digest with one numbered message per operator; default 08:00 Aruba time and configurable scheduling window with deterministic deduplication.
 - Manual `Request Update` and scheduled reminders reuse the existing `whatsappOutboundQueue`; no second sender/provider was created.
@@ -24,28 +32,23 @@
 
 ## Deliberately not activated / not merged
 
-- No production deployment.
+- No production Firebase Function deployment.
 - No merge to `main`.
 - No production task data migration/backfill.
 - No `backendEnabled` activation.
 - No WhatsApp reminder activation.
 - No demo task data.
-- No new browser Firestore rules for Task Tracker; task persistence is routed through the authenticated backend authority instead.
-
-## Still incomplete before merge approval
-
-- Real attachment upload/download UX and its governed Firebase Storage boundary. Attachment metadata exists in the contract, but the UI intentionally shows evidence as not yet activated rather than faking upload support.
-- Final live-browser desktop/mobile visual QA against the deployed ERP shell and user-selected font-size settings.
-- Final Solo Maintainer Adversarial Review after attachments/visual QA are complete.
-- Optional future scope, not required for the first production release: recurring tasks and richer priority-specific escalation presets.
+- No new browser Firestore or Storage rules for Task Tracker; persistence/evidence are routed through authenticated backend authorities instead.
 
 ## Governance
 
-- Task truth: proposed canonical `taskRecords` collection + append-only `taskEvents` activity stream, accessed through `taskTrackerApi`.
+- Task truth: proposed canonical `taskRecords` collection + append-only `taskEvents`, accessed through `taskTrackerApi`.
+- Task evidence: metadata on `taskRecords`; private bytes through `taskTrackerAttachments` and Firebase Storage `task-evidence/`.
 - Employee/operator identity: existing canonical `staffProfiles`.
 - Authentication/roles: Firebase Auth plus provisioned `users`; UI capability checks are convenience only and backend authorization is authoritative.
 - Transactional WhatsApp: existing `whatsappOutboundQueue` and Wacli bridge remain the authority.
-- Business-rule family: new `OPS-TASK-*`; protected `OPS-SCHED-*` behavior is unchanged.
+- Business-rule family: `OPS-TASK-001` through `OPS-TASK-007`; protected `OPS-SCHED-*` behavior is unchanged.
+- Architecture record: `ADR-001-TASK-TRACKER-AUTHORITY.md` is Proposed until owner-approved rollout/merge.
 - Rollback before merge: close Draft PR / delete `feature/task-tracker`; no production data or infrastructure has been activated.
 
 ## Acceptance criteria status
@@ -59,43 +62,45 @@
 - [x] Task WhatsApp operations target the existing outbound queue/provider authority.
 - [x] Mobile UX avoids horizontal desktop-table dependency and uses phone-specific interaction patterns.
 - [x] Existing Scheduling & Dispatch implementation files are unchanged in the PR diff.
-- [ ] Governed attachment upload/download is complete.
-- [ ] Live browser visual QA is complete.
+- [x] Governed private attachment upload/download and attachment-required completion are implemented.
+- [x] Static responsive/accessibility contract validates mobile cards/board/full-screen drawers and continued use of the shared ERP text scaling boundary.
+- [ ] Human visual UAT in a dedicated deployed ERP Next preview is complete.
 
 ## Verification evidence
 
 Draft PR: `#499` (`feature/task-tracker` -> `main`). No merge performed.
 
-Latest completed ERP Next CI before this documentation-only update:
+Automated evidence on the branch includes:
 
-- Firebase Functions syntax: PASS.
-- Task Tracker backend acceptance: PASS.
-- Field authority acceptance: PASS.
-- Booking and scheduling regression: PASS.
-- ERP Next TypeScript typecheck: PASS.
-- Project phase planner: PASS.
-- Projects browser autofill: PASS.
-- Projects typography/accessibility: PASS.
-- Dispatch acceptance: PASS.
-- Appointment lifecycle: PASS.
-- Booking intelligence: PASS.
-- Booking Copilot: PASS.
-- Live scheduling: PASS.
-- Employee schedule architecture: PASS.
-- Employee attendance / Work Order authority: PASS.
-- Field operations domain: PASS.
-- Field admin simulator: PASS.
-- Field technician experience: PASS.
-- Field assignment security: PASS.
-- Field offline cache/draft/outbox: PASS.
-- ERP Next production build: PASS.
+- Firebase Functions syntax checks including Task API/reminder/evidence functions.
+- Task Tracker backend acceptance including lifecycle, server completion policy and evidence-file policy.
+- ERP Next Task Tracker acceptance including authorization, reminder planning, evidence completion and mobile UX source contract.
+- ERP Next TypeScript typecheck.
+- Project phase planner, browser autofill and typography/accessibility tests.
+- Dispatch and Appointment lifecycle acceptance.
+- Booking Intelligence, Booking Copilot and Live Scheduling acceptance.
+- Employee schedule and Employee attendance/Work Order authority acceptance.
+- Field domain, simulator, technician experience, assignment security and offline acceptance.
+- ERP Next production build.
 
 PR changed-file inspection shows no Scheduling, Dispatch, appointment, booking or CRM implementation file modified. Existing menu invariant keeping `Projects` immediately below `Scheduling & Dispatch` was detected by a protected regression test during development and was corrected without weakening the test.
 
-## Release gates still required
+## Visual UAT boundary
 
-1. Finish governed attachment support.
-2. Run desktop/mobile visual QA in the real ERP shell at multiple Settings font-size offsets.
-3. Re-run full CI after those changes.
-4. Perform final adversarial review.
-5. Ask the owner for explicit merge/deploy/activation approval.
+Repository evidence shows the existing Vercel projects are not configured with `apps/erp-next` as
+their project root. ERP Next's own README requires a separate Vercel project/root configuration for
+its preview/deployment. Therefore a root-repository Vercel preview is not valid evidence of the ERP
+Next `/tasks` screen.
+
+Creating a dedicated ERP Next preview/deployment is an infrastructure/deployment action and remains
+inside the Human Approval Boundary. Until the owner approves that preview/deployment step, visual QA
+is limited to source/layout contracts, successful Next.js build and the shared responsive/font-scaling
+architecture. This limitation must not be misreported as completed screenshot/browser UAT.
+
+## Release gates
+
+1. Full CI on the final branch head must remain green.
+2. Solo Maintainer Adversarial Review must pass or record explicit follow-up risk.
+3. Owner approves the proposed ADR/source-of-truth boundary and merge.
+4. Owner separately approves deployment/activation, including the dedicated ERP Next preview/UAT path.
+5. `backendEnabled` remains false until that activation approval is explicitly given.
