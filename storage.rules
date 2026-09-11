@@ -154,6 +154,15 @@ service firebase.storage {
       allow delete: if websiteAdmin();
     }
 
+    // Service-page configs use the same protected Website Manager publish path
+    // as the homepage, while remaining independent so existing homepage drafts
+    // and publishing behavior cannot be overwritten by a VRF content change.
+    match /public-website/vrf/published.json {
+      allow read: if true;
+      allow create, update: if validWebsiteConfig();
+      allow delete: if websiteAdmin();
+    }
+
     match /public-website/{allPaths=**} {
       allow read: if true;
       allow create: if validWebsiteImage();
