@@ -163,9 +163,37 @@ function arubaDateKey(now = new Date()) {
   return `${map.year}-${map.month}-${map.day}`;
 }
 
+function arubaClockMinutes(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TASK_TIME_ZONE,
+    hourCycle: "h23",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).formatToParts(now);
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return Number(map.hour) * 60 + Number(map.minute);
+}
+
+function configuredClockMinutes(value) {
+  const match = /^(\d{2}):(\d{2})$/.exec(String(value || "08:00"));
+  if (!match) return 8 * 60;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return 8 * 60;
+  return hour * 60 + minute;
+}
+
+function dailySummaryWindowOpen(settings, now = new Date(), windowMinutes = 15) {
+  const current = arubaClockMinutes(now);
+  const target = configuredClockMinutes(settings?.dailySummaryTime);
+  const elapsed = (current - target + (24 * 60)) % (24 * 60);
+  return elapsed >= 0 && elapsed < Math.max(1, Number(windowMinutes || 15));
+}
+
 async function processDailySummaryBatch({ now = new Date() } = {}) {
   const settings = await loadAutomationSettings();
   if (!settings.enabled || !settings.dailySummaryEnabled) return { status: "disabled", queued: 0, skipped: 0 };
+  if (!dailySummaryWindowOpen(settings, now, 15)) return { status: "outside-window", queued: 0, skipped: 0 };
 
   const tasks = (await loadActiveTasks()).filter((task) => task?.reminderPolicy?.dailySummary !== false);
   const byStaff = new Map();
@@ -195,7 +223,7 @@ async function processDailySummaryBatch({ now = new Date() } = {}) {
         to: contact.phone,
         text: dailySummaryMessage(assignedTasks, contact.name, now),
         kind: "daily_task_summary",
-        scheduledFor: `${dateKey}T08:00:00-04:00`,
+        scheduledFor: `${dateKey}T${settings.dailySummaryTime || "08:00"}:00-04:00`,
         taskIds: assignedTasks.map((task) => task.id),
       });
       if (result.queued) queued += 1;
@@ -225,7 +253,7 @@ exports.processTaskDeadlineReminders = onSchedule(
 
 exports.sendDailyTaskSummaries = onSchedule(
   {
-    schedule: "0 8 * * *",
+    schedule: "*/15 * * * *",
     timeZone: TASK_TIME_ZONE,
     region: REGION,
     memory: "256MiB",
@@ -237,6 +265,9 @@ exports.sendDailyTaskSummaries = onSchedule(
   },
 );
 
+module.exports.arubaClockMinutes = arubaClockMinutes;
+module.exports.configuredClockMinutes = configuredClockMinutes;
+module.exports.dailySummaryWindowOpen = dailySummaryWindowOpen;
 module.exports.processDeadlineReminderBatch = processDeadlineReminderBatch;
 module.exports.processDailySummaryBatch = processDailySummaryBatch;
 module.exports.loadAutomationSettings = loadAutomationSettings;
