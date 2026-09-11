@@ -39,6 +39,10 @@ function id(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function errorText(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function normalizePhone(value: unknown) {
   const digits = String(value ?? '').replace(/\D/g, '');
   if (!digits) return '';
@@ -88,12 +92,19 @@ function taskAssigneesFromOperations(profiles: Awaited<ReturnType<typeof loadCan
 export async function loadTaskTrackerWorkspace(principal: AuthPrincipal): Promise<TaskTrackerWorkspace> {
   if (!principal.capabilities.has('tasks.view')) throw new Error('You do not have access to Task Tracker.');
 
-  const [operations, allTasks, allEvents, storedAutomation] = await Promise.all([
-    loadCanonicalOperationsState(),
+  const operations = await loadCanonicalOperationsState();
+  const [taskResult, eventResult, automationResult] = await Promise.allSettled([
     listFirestoreCollection<TaskRecord>(TASK_COLLECTION, 1000),
     listFirestoreCollection<TaskEvent>(TASK_EVENT_COLLECTION, 2000),
-    getFirestoreDocument<TaskAutomationSettings>('businessSettings', 'task-tracker').catch(() => null),
+    getFirestoreDocument<TaskAutomationSettings>('businessSettings', 'task-tracker'),
   ]);
+
+  const taskAccessError = taskResult.status === 'rejected' ? errorText(taskResult.reason) : '';
+  const eventAccessError = eventResult.status === 'rejected' ? errorText(eventResult.reason) : '';
+  const liveDataAvailable = taskResult.status === 'fulfilled' && eventResult.status === 'fulfilled';
+  const allTasks = taskResult.status === 'fulfilled' ? taskResult.value : [];
+  const allEvents = eventResult.status === 'fulfilled' ? eventResult.value : [];
+  const storedAutomation = automationResult.status === 'fulfilled' ? automationResult.value : null;
 
   const visibleTasks = principal.capabilities.has('tasks.manage')
     ? allTasks
@@ -105,6 +116,10 @@ export async function loadTaskTrackerWorkspace(principal: AuthPrincipal): Promis
     events: allEvents.filter((event) => visibleIds.has(event.taskId)).sort((left, right) => right.at.localeCompare(left.at)),
     assignees: taskAssigneesFromOperations(operations.staffProfiles),
     automation: { ...DEFAULT_TASK_AUTOMATION_SETTINGS, ...(storedAutomation ?? {}) },
+    liveDataAvailable,
+    dataAccessMessage: liveDataAvailable
+      ? undefined
+      : `Task Tracker data is not activated in this environment yet. The module is isolated and read-safe until its Firestore access rules are reviewed and approved.${taskAccessError || eventAccessError ? ` (${taskAccessError || eventAccessError})` : ''}`,
   };
 }
 
