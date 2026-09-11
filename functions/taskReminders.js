@@ -18,9 +18,10 @@ const ACTIVE_STATUSES = ["pending", "in_progress", "waiting"];
 
 async function loadAutomationSettings() {
   const snapshot = await db.doc(AUTOMATION_SETTINGS_PATH).get();
-  if (!snapshot.exists) return { enabled: false };
+  if (!snapshot.exists) return { backendEnabled: false, enabled: false };
   const data = snapshot.data() || {};
   return {
+    backendEnabled: data.backendEnabled === true,
     enabled: data.enabled === true,
     dailySummaryEnabled: data.dailySummaryEnabled === true,
     dailySummaryTime: String(data.dailySummaryTime || "08:00"),
@@ -33,6 +34,10 @@ async function loadAutomationSettings() {
     escalateOverdue: data.escalateOverdue === true,
     escalateAfterHours: Math.max(1, Number(data.escalateAfterHours || 24)),
   };
+}
+
+function automationRuntimeEnabled(settings) {
+  return settings?.backendEnabled === true && settings?.enabled === true;
 }
 
 async function loadActiveTasks() {
@@ -113,7 +118,7 @@ async function queueTextOnce({ queueId, to, text, task = null, kind, scheduledFo
 
 async function processDeadlineReminderBatch({ now = new Date() } = {}) {
   const settings = await loadAutomationSettings();
-  if (!settings.enabled) return { status: "disabled", queued: 0, skipped: 0 };
+  if (!automationRuntimeEnabled(settings)) return { status: "disabled", queued: 0, skipped: 0 };
 
   const tasks = await loadActiveTasks();
   const resolveContact = createContactResolver();
@@ -192,7 +197,7 @@ function dailySummaryWindowOpen(settings, now = new Date(), windowMinutes = 15) 
 
 async function processDailySummaryBatch({ now = new Date() } = {}) {
   const settings = await loadAutomationSettings();
-  if (!settings.enabled || !settings.dailySummaryEnabled) return { status: "disabled", queued: 0, skipped: 0 };
+  if (!automationRuntimeEnabled(settings) || !settings.dailySummaryEnabled) return { status: "disabled", queued: 0, skipped: 0 };
   if (!dailySummaryWindowOpen(settings, now, 15)) return { status: "outside-window", queued: 0, skipped: 0 };
 
   const tasks = (await loadActiveTasks()).filter((task) => task?.reminderPolicy?.dailySummary !== false);
@@ -266,6 +271,7 @@ exports.sendDailyTaskSummaries = onSchedule(
 );
 
 module.exports.arubaClockMinutes = arubaClockMinutes;
+module.exports.automationRuntimeEnabled = automationRuntimeEnabled;
 module.exports.configuredClockMinutes = configuredClockMinutes;
 module.exports.dailySummaryWindowOpen = dailySummaryWindowOpen;
 module.exports.processDeadlineReminderBatch = processDeadlineReminderBatch;
