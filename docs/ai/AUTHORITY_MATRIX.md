@@ -11,6 +11,8 @@ provider callbacks, and cached projections are never authority by themselves.
 | Contact identity | Canonical `Contact` record | Authorized CRM and communication flows | Stable ID, deduplication, consent and audit |
 | Contact-to-Property responsibility | `contactPropertyAssignments` | Authorized CRM/communication flows | Explicit role/responsibility and effective configuration |
 | Scheduling and capacity | Booking Authority and approved canonical company/calendar/capacity settings | Office tools, ERP Next, allowlisted AI tool | Commit-time revalidation, conflict prevention, idempotency |
+| Internal operational Task lifecycle | `taskRecords` plus append-only `taskEvents`, with mutations through authenticated `taskTrackerApi` | Super Admin, Operations and Project Manager administer; assigned Office Operator executes own Task | Canonical `staffProfiles` assignee, server-side role/staff checks, optimistic version, terminal transitions, audit, fail-closed `backendEnabled`; no Appointment/Work Order/Scheduling effect |
+| Task evidence | Task attachment metadata on canonical `taskRecords`; private bytes under Firebase Storage `task-evidence/` via `taskTrackerAttachments` | Same authorized Task actor; manager or assigned Office Operator | Authenticated private read/write, no public URL, approved file types, 20 MB limit, version check, orphan cleanup on failed metadata commit |
 | Work-order lifecycle | Work-order application service | Assigned/authorized roles | Valid transitions, evidence rules, actor/time audit |
 | Physical field execution | Field Operations Authority over `workVisits`, Visit Assets, Work Interventions and governed child records | Current assigned field roles through authenticated commands | Complete linear visit chain, transaction-scoped assignment, optimistic version, idempotency and append-only audit |
 | Professional Report readiness | Read-only projection derived by Field Operations Authority from canonical field truth | Assigned field readers and authorized office readers | No independent persistence or editorial state; fail closed on identity/reconciliation/report contradictions |
@@ -47,6 +49,25 @@ provider callbacks, and cached projections are never authority by themselves.
 
 When two sources disagree, do not use recency alone. Prefer the designated authority,
 record the discrepancy, and require reconciliation before a high-impact write.
+
+## Task Tracker boundary
+
+- Task Tracker owns internal operational follow-up only. `taskRecords` and `taskEvents` do not
+  reserve company capacity, create Appointments or Work Orders, move Schedule cards, change route
+  availability, or become input to Booking Authority unless a future explicitly approved architecture
+  decision defines a governed handoff.
+- The assignee is always an existing canonical `staffProfiles` identity. Name and phone values on a
+  Task are historical snapshots, not another employee directory or authorization source.
+- `taskTrackerApi` is the authenticated mutation authority. Manager roles may create/administer Tasks;
+  an Office Operator may execute only the Task assigned to its provisioned canonical `staffId`.
+  Optimistic versions reject stale writes and terminal Tasks cannot be reopened by ordinary mutation.
+- Task evidence metadata remains on the Task. File bytes are private Firebase Storage objects reached
+  only through `taskTrackerAttachments`; no direct/public download URL is authoritative or required.
+- Reminder planning belongs to Task Tracker, but message delivery remains exclusively owned by the
+  existing transactional WhatsApp authority through `whatsappOutboundQueue`. Deterministic reminder
+  identifiers prevent Task Tracker from creating the same scheduled reminder repeatedly.
+- `businessSettings/task-tracker.backendEnabled` is the fail-closed activation gate. It is not a
+  normal UI setting. Production activation/deployment remains a human-approved rollout action.
 
 ## Van crew boundary
 
