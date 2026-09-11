@@ -1,7 +1,12 @@
 import { loadCanonicalOperationsState, staffDisplayName } from '@/lib/canonical-operations';
 import type { AuthPrincipal } from '@/lib/security';
 import { effectiveTaskStatus, sortTasksByAttention, taskIsAssignedToPrincipal } from './policy';
-import { taskTrackerRequest, TaskTrackerApiError } from './api';
+import {
+  downloadTaskAttachment,
+  taskTrackerRequest,
+  TaskTrackerApiError,
+  uploadTaskAttachment,
+} from './api';
 import {
   DEFAULT_TASK_AUTOMATION_SETTINGS,
   type TaskAssignee,
@@ -105,6 +110,16 @@ export async function updateTaskStatus(task: TaskRecord, nextStatus: TaskLifecyc
 export async function updateTaskChecklist(task: TaskRecord, checklist: TaskChecklistItem[], principal: AuthPrincipal) {
   if (!principal.capabilities.has('tasks.execute') && !principal.capabilities.has('tasks.manage')) throw new Error('You cannot update this task checklist.');
   return taskTrackerRequest<TaskRecord>('task.checklist', { taskId: task.id, expectedVersion: task.version, checklist });
+}
+
+export async function addTaskEvidence(task: TaskRecord, file: File, principal: AuthPrincipal) {
+  if (!principal.capabilities.has('tasks.execute') && !principal.capabilities.has('tasks.manage')) throw new Error('You cannot add evidence to this task.');
+  return uploadTaskAttachment({ taskId: task.id, expectedVersion: task.version, file });
+}
+
+export async function downloadTaskEvidence(task: TaskRecord, attachmentId: string, fileName: string, principal: AuthPrincipal) {
+  if (!principal.capabilities.has('tasks.execute') && !principal.capabilities.has('tasks.manage')) throw new Error('You cannot access evidence for this task.');
+  return downloadTaskAttachment({ taskId: task.id, attachmentId, fileName });
 }
 
 export async function addTaskComment(task: TaskRecord, text: string, principal: AuthPrincipal) {
