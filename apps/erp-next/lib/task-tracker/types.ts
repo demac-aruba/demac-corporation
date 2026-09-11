@@ -131,6 +131,8 @@ export type TaskTrackerWorkspace = {
   events: TaskEvent[];
   assignees: TaskAssignee[];
   automation: TaskAutomationSettings;
+  liveDataAvailable: boolean;
+  dataAccessMessage?: string;
 };
 
 export type TaskAccess = {
