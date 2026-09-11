@@ -1,10 +1,13 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const { _taskTrackerTest } = require("./taskTrackerApi");
 
 const {
   allowedTransition,
   completionBlocked,
+  deterministicId,
   normalizeChecklist,
   normalizeRole,
 } = _taskTrackerTest;
@@ -44,11 +47,38 @@ test("server completion policy enforces checklist and attachment requirements", 
   }) || "", /attach/i);
 });
 
-test("checklist input is normalized and bounded before persistence", () => {
+test("checklist input is bounded and omits undefined Firestore fields", () => {
   const taskId = "task-1";
-  const result = normalizeChecklist([" Draft report ", "", { id: "custom", label: " Review " }], taskId);
+  const result = normalizeChecklist([
+    " Draft report ",
+    "",
+    { id: "custom", label: " Review ", completed: false },
+    { id: "done", label: " Sent ", completed: true, completedAt: "2026-09-11T12:00:00.000Z", completedByUserId: "u-1" },
+  ], taskId);
   assert.deepEqual(result.map((item) => ({ id: item.id, label: item.label, completed: item.completed })), [
     { id: "task-1-item-1", label: "Draft report", completed: false },
     { id: "custom", label: "Review", completed: false },
+    { id: "done", label: "Sent", completed: true },
   ]);
+  assert.equal(Object.prototype.hasOwnProperty.call(result[1], "completedAt"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(result[1], "completedByUserId"), false);
+  assert.equal(result[2].completedAt, "2026-09-11T12:00:00.000Z");
+  assert.equal(result[2].completedByUserId, "u-1");
+});
+
+test("deterministic ids are stable for retry-safe task side effects", () => {
+  const first = deterministicId("task-update", "actor|task|3", 32);
+  const retry = deterministicId("task-update", "actor|task|3", 32);
+  const nextRevision = deterministicId("task-update", "actor|task|4", 32);
+  assert.equal(first, retry);
+  assert.notEqual(first, nextRevision);
+  assert.match(first, /^task-update-[a-f0-9]{32}$/);
+});
+
+test("state mutations require an explicit expected version and manual WhatsApp requests are deduplicated", () => {
+  const source = fs.readFileSync(path.join(__dirname, "taskTrackerApi.js"), "utf8");
+  assert.match(source, /const expectedVersion = Number\(payload\.expectedVersion\)/);
+  assert.match(source, /version-required/);
+  assert.match(source, /deterministicId\("task-update", `\$\{actor\.uid\}\|\$\{task\.id\}\|\$\{task\.version\}`/);
+  assert.match(source, /transaction\.get\(queueRef\)/);
 });
