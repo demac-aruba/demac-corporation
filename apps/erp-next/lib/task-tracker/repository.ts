@@ -47,12 +47,20 @@ export async function loadTaskTrackerWorkspace(principal: AuthPrincipal): Promis
       automation: { ...DEFAULT_TASK_AUTOMATION_SETTINGS, ...result.automation },
     };
   } catch (error) {
-    const operations = await loadCanonicalOperationsState().catch(() => ({ staffProfiles: [] } as Awaited<ReturnType<typeof loadCanonicalOperationsState>>));
+    let assignees: TaskAssignee[] = [];
+    if (principal.capabilities.has('tasks.manage')) {
+      try {
+        const operations = await loadCanonicalOperationsState();
+        assignees = taskAssigneesFromOperations(operations.staffProfiles);
+      } catch {
+        assignees = [];
+      }
+    }
     const reason = error instanceof TaskTrackerApiError ? error.message : error instanceof Error ? error.message : String(error);
     return {
       tasks: [],
       events: [],
-      assignees: principal.capabilities.has('tasks.manage') ? taskAssigneesFromOperations(operations.staffProfiles) : [],
+      assignees,
       automation: { ...DEFAULT_TASK_AUTOMATION_SETTINGS },
       liveDataAvailable: false,
       dataAccessMessage: `Task Tracker is isolated in safe preview mode. Server-side persistence has not been activated in this environment yet. (${reason})`,
