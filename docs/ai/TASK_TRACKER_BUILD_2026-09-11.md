@@ -4,84 +4,98 @@
 
 - Request/source: Business-owner request on 2026-09-11 to build a Task Tracker for assigning operator work, deadlines, status, evidence, and governed WhatsApp reminders.
 - Product surface and users: DEMAC ERP Next; owner/super admin, operations/project managers, and office operators.
-- Current behavior/evidence: ERP Next has the shared `ErpShell`, canonical `staffProfiles`, Firebase-authenticated Firestore REST access, accessibility text scaling, and the governed WhatsApp outbound queue. There is no canonical Task Tracker module yet.
+- Existing contracts reused: shared `ErpShell`, Settings-driven accessibility text scaling, canonical `staffProfiles`, Firebase Auth + provisioned `users`, and the existing `whatsappOutboundQueue` / Wacli transport authority.
+- Protected invariant: Scheduling & Dispatch, appointments, booking capacity and CRM behavior are outside the Task Tracker authority boundary.
 
-## Scope
+## Scope implemented in the review branch
 
-- In scope:
-  - Native `/tasks` ERP Next module using the existing shell, theme tokens, responsive behavior, and text-size accessibility contract.
-  - Task domain contract, lifecycle, priority, deadlines, checklist, comments/activity metadata, completion requirements, acknowledgements, audit events, reminder policy, and automation settings contract.
-  - Canonical assignee selection from existing `staffProfiles` (no duplicate employee/operator identity).
-  - Desktop-first management surfaces plus purpose-built phone UX (compact task cards, grouped status board, mobile action bar and sheet-style forms rather than a desktop table stacked vertically).
-  - Governed integration contract for reminders through the existing `whatsappOutboundQueue` authority.
-  - Focused acceptance tests for lifecycle, permissions and reminder planning.
-- Out of scope for this branch until explicit activation approval:
-  - Production deployment or merge.
-  - Firestore/Storage rule deployment.
-  - Production data migration/backfill.
-  - Any change to Scheduling & Dispatch, Booking Authority, appointments, capacity, CRM, or existing Schedule behavior.
-  - A new WhatsApp sender/queue/provider.
-- Files/boundaries expected:
-  - `apps/erp-next/app/(erp)/tasks/**`
-  - `apps/erp-next/components/task-tracker/**`
-  - `apps/erp-next/lib/task-tracker/**`
-  - Narrow additions to `apps/erp-next/lib/navigation.ts`, `apps/erp-next/lib/security.ts`, and `apps/erp-next/package.json`.
-  - No scheduling files.
+- Native `/tasks` ERP Next route and existing Operations navigation integration.
+- Task domain contract: lifecycle, priority, Aruba deadlines, checklist, acknowledgements, comments/activity, completion requirements, audit events and reminder policy.
+- Canonical assignee selection from existing `staffProfiles`; no task-specific duplicate employee identity.
+- Desktop management UX: overview/list, five-lane status board, creation/detail drawers and reminder administration.
+- Purpose-built phone UX: compact task cards, touch-first filters/actions, single-lane mobile status board and full-screen create/detail flows rather than a stacked desktop table.
+- Existing theme tokens, dark/light behavior and `AccessibilityTextProvider` font scaling; no parallel design system.
+- Authenticated `taskTrackerApi` as the server-side Task Tracker mutation authority.
+- Server enforcement of provisioned Firebase identity, normalized ERP role, canonical `staffId`, task ownership, manager-only administration and optimistic version checks.
+- Deterministic WhatsApp reminder planner: 24h, 3h, 1h, deadline and overdue opportunities.
+- Daily WhatsApp digest with one numbered message per operator; default 08:00 Aruba time and configurable scheduling window with deterministic deduplication.
+- Manual `Request Update` and scheduled reminders reuse the existing `whatsappOutboundQueue`; no second sender/provider was created.
+- Fail-closed activation: server persistence requires `businessSettings/task-tracker.backendEnabled === true`, and that activation switch is intentionally not exposed in the UI.
+
+## Deliberately not activated / not merged
+
+- No production deployment.
+- No merge to `main`.
+- No production task data migration/backfill.
+- No `backendEnabled` activation.
+- No WhatsApp reminder activation.
+- No demo task data.
+- No new browser Firestore rules for Task Tracker; task persistence is routed through the authenticated backend authority instead.
+
+## Still incomplete before merge approval
+
+- Real attachment upload/download UX and its governed Firebase Storage boundary. Attachment metadata exists in the contract, but the UI intentionally shows evidence as not yet activated rather than faking upload support.
+- Final live-browser desktop/mobile visual QA against the deployed ERP shell and user-selected font-size settings.
+- Final Solo Maintainer Adversarial Review after attachments/visual QA are complete.
+- Optional future scope, not required for the first production release: recurring tasks and richer priority-specific escalation presets.
 
 ## Governance
 
-- Authority owner(s):
-  - Task truth: new governed Task Tracker domain (proposed `taskRecords` + append-only `taskEvents`).
-  - Employee/operator identity: existing canonical `staffProfiles`.
-  - Authentication/roles: Firebase Auth + governed user/role records.
-  - Transactional WhatsApp: existing communication authority and `whatsappOutboundQueue`; provider configuration remains canonical.
-- Business-rule IDs:
-  - New proposed family `OPS-TASK-*`; no change to protected `OPS-SCHED-*` rules.
-- Security/privacy impact:
-  - Task access is role/capability scoped. Assignees may execute their own work; assignment/automation administration is restricted. UI visibility is not considered authorization.
-- Legacy parity impact: none. This is a new ERP Next capability.
-- ADR/debt impact:
-  - The new task source-of-truth boundary must be documented before production activation. This branch may implement the contract and preview behavior but must not deploy new access rules without human approval.
+- Task truth: proposed canonical `taskRecords` collection + append-only `taskEvents` activity stream, accessed through `taskTrackerApi`.
+- Employee/operator identity: existing canonical `staffProfiles`.
+- Authentication/roles: Firebase Auth plus provisioned `users`; UI capability checks are convenience only and backend authorization is authoritative.
+- Transactional WhatsApp: existing `whatsappOutboundQueue` and Wacli bridge remain the authority.
+- Business-rule family: new `OPS-TASK-*`; protected `OPS-SCHED-*` behavior is unchanged.
+- Rollback before merge: close Draft PR / delete `feature/task-tracker`; no production data or infrastructure has been activated.
 
-## Acceptance criteria
+## Acceptance criteria status
 
-- [ ] Given an authorized manager, when `/tasks` opens, they can see a responsive task overview without loading or mutating Schedule data.
-- [ ] Given canonical `staffProfiles`, when creating a task, assignees are selected from that source rather than duplicated task-specific operator records.
-- [ ] Given a task, when priority/status/deadline changes, lifecycle rules reject invalid terminal transitions and audit metadata is produced.
-- [ ] Given an office operator, when viewing tasks, their execution surface prioritizes their own assigned tasks and does not expose task administration controls they lack.
-- [ ] Given a configured deadline, reminder planning produces deterministic 24h/3h/1h/deadline/overdue opportunities without reminder spam or duplicated reminder keys.
-- [ ] Given a WhatsApp reminder, the integration contract targets the existing governed outbound queue; it does not create another sender, provider configuration, or notification authority.
-- [ ] On a narrow phone viewport, primary actions, filters, creation and task detail are touch-first and usable without horizontal desktop-table interaction.
-- [ ] Existing Scheduling & Dispatch files and behavior remain unchanged.
+- [x] Authorized management surface exists at `/tasks` without importing or mutating Scheduling data.
+- [x] Assignees come from canonical `staffProfiles`.
+- [x] Invalid terminal lifecycle transitions and completion requirements are rejected by policy/server authority.
+- [x] Office operator execution is scoped to the authenticated operator's canonical `staffId`; managers retain governed administration.
+- [x] Reminder planning generates deterministic 24h/3h/1h/deadline/overdue opportunities with deterministic queue IDs.
+- [x] Daily summary is one numbered operator digest rather than one morning message per task.
+- [x] Task WhatsApp operations target the existing outbound queue/provider authority.
+- [x] Mobile UX avoids horizontal desktop-table dependency and uses phone-specific interaction patterns.
+- [x] Existing Scheduling & Dispatch implementation files are unchanged in the PR diff.
+- [ ] Governed attachment upload/download is complete.
+- [ ] Live browser visual QA is complete.
 
-## Plan and risk
+## Verification evidence
 
-- Implementation outline:
-  1. Add domain types and pure lifecycle/reminder policy.
-  2. Add Firestore repository adapter behind explicit capabilities and canonical staff identity.
-  3. Add responsive Task Tracker workspace and route using existing ERP tokens/shell.
-  4. Add narrow navigation/capability entries.
-  5. Add focused acceptance test script.
-  6. Run typecheck + focused task acceptance test; build if integration surface is ready.
-  7. Perform separate Solo Maintainer Adversarial Review before requesting merge approval.
-- Migration/rollback or recovery:
-  - No production migration in this branch. All changes are isolated to `feature/task-tracker`; rollback is branch deletion/PR closure before merge.
-- Key risks and mitigations:
-  - Schedule regression: zero imports/writes from task code to scheduling modules; compare diff before review.
-  - Duplicate employee identity: reference `staffProfiles` IDs only.
-  - WhatsApp duplication/spam: deterministic reminder keys and existing queue authority only.
-  - Client-only authorization: capability checks are implemented in the application contract, but production activation remains blocked until corresponding server/Firestore enforcement is reviewed and approved.
+Draft PR: `#499` (`feature/task-tracker` -> `main`). No merge performed.
 
-## Verification
+Latest completed ERP Next CI before this documentation-only update:
 
-- Automated gates:
-  - `npm run typecheck --prefix apps/erp-next`
-  - `npm run test:task-tracker --prefix apps/erp-next`
-  - `npm run build --prefix apps/erp-next` before release/preview handoff when available.
-- Manual scenarios:
-  - Desktop owner overview/create/detail/board/automation.
-  - Mobile operator My Tasks/detail/status update.
-  - Font-size offset and dark/light theme.
-  - Negative capability paths.
-- Evidence/results: pending implementation.
-- Not run and why: production deploy/migration/security-rule deployment are intentionally prohibited until owner approval.
+- Firebase Functions syntax: PASS.
+- Task Tracker backend acceptance: PASS.
+- Field authority acceptance: PASS.
+- Booking and scheduling regression: PASS.
+- ERP Next TypeScript typecheck: PASS.
+- Project phase planner: PASS.
+- Projects browser autofill: PASS.
+- Projects typography/accessibility: PASS.
+- Dispatch acceptance: PASS.
+- Appointment lifecycle: PASS.
+- Booking intelligence: PASS.
+- Booking Copilot: PASS.
+- Live scheduling: PASS.
+- Employee schedule architecture: PASS.
+- Employee attendance / Work Order authority: PASS.
+- Field operations domain: PASS.
+- Field admin simulator: PASS.
+- Field technician experience: PASS.
+- Field assignment security: PASS.
+- Field offline cache/draft/outbox: PASS.
+- ERP Next production build: PASS.
+
+PR changed-file inspection shows no Scheduling, Dispatch, appointment, booking or CRM implementation file modified. Existing menu invariant keeping `Projects` immediately below `Scheduling & Dispatch` was detected by a protected regression test during development and was corrected without weakening the test.
+
+## Release gates still required
+
+1. Finish governed attachment support.
+2. Run desktop/mobile visual QA in the real ERP shell at multiple Settings font-size offsets.
+3. Re-run full CI after those changes.
+4. Perform final adversarial review.
+5. Ask the owner for explicit merge/deploy/activation approval.
