@@ -278,8 +278,6 @@ function newEvent({ taskId, type, actor, message = null, metadata = null }) {
 async function createTask(actor, payload) {
   requireManager(actor);
   await requireBackendEnabled();
-  const requestId = cleanText(payload.requestId, 180);
-  if (!requestId) throw fail("request-id-required", "Task creation requires a request id. Refresh and retry.", 409);
   const title = cleanText(payload.title, 300);
   if (!title) throw fail("title-required", "Task title is required.");
   const assigneeId = cleanText(payload.assigneeStaffId, 180);
@@ -291,6 +289,19 @@ async function createTask(actor, payload) {
   if (Number.isNaN(dueAt.getTime())) throw fail("deadline-invalid", "Choose a valid task deadline.");
   const priority = TASK_PRIORITIES.has(payload.priority) ? payload.priority : "normal";
   const completionRequirement = COMPLETION_REQUIREMENTS.has(payload.completionRequirement) ? payload.completionRequirement : "none";
+  const checklistForFingerprint = normalizeChecklist(payload.checklist, "task-fingerprint").map((item) => ({ label: item.label, completed: item.completed }));
+  const explicitRequestId = cleanText(payload.requestId, 180);
+  const implicitFingerprint = JSON.stringify({
+    title,
+    description: cleanText(payload.description, 10000),
+    category: cleanText(payload.category, 120),
+    priority,
+    assigneeId,
+    dueAt: dueAt.toISOString(),
+    checklist: checklistForFingerprint,
+    completionRequirement,
+  });
+  const requestId = explicitRequestId || deterministicId("implicit-request", `${actor.uid}|${implicitFingerprint}`, 36);
   const id = deterministicId("task", `${actor.uid}|${requestId}`, 28);
   const ref = db.collection(TASK_COLLECTION).doc(id);
   const existing = await ref.get();
