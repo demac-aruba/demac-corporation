@@ -1,4 +1,4 @@
-import type { AuthPrincipal } from '@/lib/security';
+import type { AuthPrincipal } from '../security';
 
 export type TaskPriority = 'normal' | 'important' | 'urgent' | 'critical';
 export type TaskLifecycleStatus = 'pending' | 'in_progress' | 'waiting' | 'completed' | 'cancelled';
