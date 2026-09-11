@@ -137,6 +137,11 @@ function randomId(prefix) {
   return `${prefix}-${Date.now()}-${crypto.randomBytes(5).toString("hex")}`;
 }
 
+function deterministicId(prefix, value, length = 24) {
+  const digest = crypto.createHash("sha256").update(String(value)).digest("hex").slice(0, length);
+  return `${prefix}-${digest}`;
+}
+
 function taskNumberFromId(id) {
   const suffix = crypto.createHash("sha256").update(id).digest("hex").slice(0, 6).toUpperCase();
   return `TSK-${suffix}`;
@@ -151,13 +156,18 @@ function normalizeChecklist(value, taskId) {
     }
     const label = cleanText(item?.label, 500);
     if (!label) return null;
-    return {
+    const normalized = {
       id: cleanText(item?.id, 180) || `${taskId}-item-${index + 1}`,
       label,
       completed: item?.completed === true,
-      completedAt: item?.completedAt || undefined,
-      completedByUserId: item?.completedByUserId || undefined,
     };
+    if (normalized.completed) {
+      const completedAt = cleanText(item?.completedAt, 100);
+      const completedByUserId = cleanText(item?.completedByUserId, 180);
+      if (completedAt) normalized.completedAt = completedAt;
+      if (completedByUserId) normalized.completedByUserId = completedByUserId;
+    }
+    return normalized;
   }).filter(Boolean);
 }
 
@@ -192,6 +202,12 @@ function serializeRecord(data) {
   return result;
 }
 
+function profileDisplayName(profile, fallbackId) {
+  const direct = cleanText(profile?.name || profile?.displayName, 160);
+  const parts = cleanText(`${profile?.firstName || ""} ${profile?.lastName || ""}`, 160);
+  return direct || parts || cleanText(fallbackId, 160) || "DEMAC staff";
+}
+
 async function activeAssignees() {
   const snapshot = await db.collection("staffProfiles").get();
   return snapshot.docs
@@ -199,7 +215,7 @@ async function activeAssignees() {
     .filter((profile) => profile.active !== false)
     .map((profile) => ({
       staffId: profile.id,
-      name: cleanText(profile.name || profile.displayName || `${profile.firstName || ""} ${profile.lastName || ""}` || profile.id, 160),
+      name: profileDisplayName(profile, profile.id),
       phone: normalizeArubaPhone(profile.phone || profile.mobile) || undefined,
       role: cleanText(profile.role, 80) || undefined,
       employeeType: cleanText(profile.employeeType, 80) || undefined,
@@ -262,6 +278,8 @@ function newEvent({ taskId, type, actor, message = null, metadata = null }) {
 async function createTask(actor, payload) {
   requireManager(actor);
   await requireBackendEnabled();
+  const requestId = cleanText(payload.requestId, 180);
+  if (!requestId) throw fail("request-id-required", "Task creation requires a request id. Refresh and retry.", 409);
   const title = cleanText(payload.title, 300);
   if (!title) throw fail("title-required", "Task title is required.");
   const assigneeId = cleanText(payload.assigneeStaffId, 180);
@@ -273,10 +291,14 @@ async function createTask(actor, payload) {
   if (Number.isNaN(dueAt.getTime())) throw fail("deadline-invalid", "Choose a valid task deadline.");
   const priority = TASK_PRIORITIES.has(payload.priority) ? payload.priority : "normal";
   const completionRequirement = COMPLETION_REQUIREMENTS.has(payload.completionRequirement) ? payload.completionRequirement : "none";
-  const id = randomId("task");
+  const id = deterministicId("task", `${actor.uid}|${requestId}`, 28);
+  const ref = db.collection(TASK_COLLECTION).doc(id);
+  const existing = await ref.get();
+  if (existing.exists) return serializeRecord({ id: existing.id, ...existing.data() });
   const at = isoNow();
   const task = {
     id,
+    requestId,
     taskNumber: taskNumberFromId(id),
     title,
     description: cleanText(payload.description, 10000),
@@ -284,7 +306,7 @@ async function createTask(actor, payload) {
     priority,
     status: "pending",
     assigneeStaffId: assigneeId,
-    assigneeNameSnapshot: cleanText(assignee.name || assignee.displayName || `${assignee.firstName || ""} ${assignee.lastName || ""}` || assigneeId, 160),
+    assigneeNameSnapshot: profileDisplayName(assignee, assigneeId),
     assigneePhoneSnapshot: normalizeArubaPhone(assignee.phone || assignee.mobile) || null,
     dueAt: dueAt.toISOString(),
     checklist: normalizeChecklist(payload.checklist, id),
@@ -301,10 +323,16 @@ async function createTask(actor, payload) {
   };
   const event = newEvent({ taskId: id, type: "created", actor, message: `Task assigned to ${task.assigneeNameSnapshot}.` });
   const batch = db.batch();
-  batch.set(db.collection(TASK_COLLECTION).doc(id), task);
+  batch.create(ref, task);
   batch.set(db.collection(EVENT_COLLECTION).doc(event.id), event);
-  await batch.commit();
-  return task;
+  try {
+    await batch.commit();
+    return task;
+  } catch (error) {
+    const after = await ref.get().catch(() => null);
+    if (after?.exists) return serializeRecord({ id: after.id, ...after.data() });
+    throw error;
+  }
 }
 
 function completionBlocked(task) {
@@ -327,6 +355,10 @@ async function mutateTask(actor, payload, mutation) {
   await requireBackendEnabled();
   const taskId = cleanText(payload.taskId, 180);
   if (!taskId) throw fail("task-required", "Task id is required.");
+  const expectedVersion = Number(payload.expectedVersion);
+  if (!Number.isInteger(expectedVersion) || expectedVersion < 1) {
+    throw fail("version-required", "Refresh the task before changing it. A current task version is required.", 409);
+  }
   const ref = db.collection(TASK_COLLECTION).doc(taskId);
   let result;
   let event;
@@ -335,7 +367,6 @@ async function mutateTask(actor, payload, mutation) {
     if (!snapshot.exists) throw fail("task-not-found", "This task no longer exists.", 404);
     const task = { id: snapshot.id, ...snapshot.data() };
     requireTaskExecutor(actor, task);
-    const expectedVersion = Number(payload.expectedVersion || task.version || 1);
     if (Number(task.version || 1) !== expectedVersion) throw fail("version-conflict", "This task changed while you were viewing it. Refresh and retry.", 409);
     const output = mutation(task);
     const at = isoNow();
@@ -386,11 +417,14 @@ async function updateStatus(actor, payload) {
 async function updateChecklist(actor, payload) {
   return mutateTask(actor, payload, (task) => {
     const at = isoNow();
-    const checklist = normalizeChecklist(payload.checklist, task.id).map((item) => ({
-      ...item,
-      completedAt: item.completed ? item.completedAt || at : undefined,
-      completedByUserId: item.completed ? item.completedByUserId || actor.uid : undefined,
-    }));
+    const checklist = normalizeChecklist(payload.checklist, task.id).map((item) => {
+      const next = { id: item.id, label: item.label, completed: item.completed };
+      if (item.completed) {
+        next.completedAt = item.completedAt || at;
+        next.completedByUserId = item.completedByUserId || actor.uid;
+      }
+      return next;
+    });
     return { patch: { checklist }, eventType: "checklist_updated" };
   });
 }
@@ -415,29 +449,43 @@ async function requestUpdate(actor, payload) {
   const staff = staffSnapshot.exists ? staffSnapshot.data() || {} : {};
   const to = normalizeArubaPhone(staff.phone || staff.mobile || task.assigneePhoneSnapshot);
   if (!to) throw fail("assignee-phone-missing", `${task.assigneeNameSnapshot} does not have a WhatsApp phone number on the canonical staff profile.`, 409);
-  const queueId = randomId("task-update");
+  const queueId = deterministicId("task-update", `${actor.uid}|${task.id}|${task.version}`, 32);
   const due = new Intl.DateTimeFormat("en-AW", { timeZone: "America/Aruba", dateStyle: "medium", timeStyle: "short" }).format(new Date(task.dueAt));
   const text = `Hi ${task.assigneeNameSnapshot}, an update was requested for ${task.taskNumber} – ${task.title}. Please update the task status in DEMAC ERP. Deadline: ${due}.`;
-  const event = newEvent({ taskId: task.id, type: "update_requested", actor, message: text, metadata: { queueId } });
-  const batch = db.batch();
-  batch.set(db.collection(OUTBOUND_QUEUE_COLLECTION).doc(queueId), {
-    id: queueId,
-    provider: "wacli",
-    status: "queued",
-    type: "text",
-    to,
-    text,
-    taskId: task.id,
-    taskNumber: task.taskNumber,
-    reason: "update_request",
-    source: "task-tracker-api",
-    createdByUserId: actor.uid,
-    createdByName: actor.name,
-    createdAt: FieldValue.serverTimestamp(),
+  const queueRef = db.collection(OUTBOUND_QUEUE_COLLECTION).doc(queueId);
+  const eventRef = db.collection(EVENT_COLLECTION).doc(deterministicId("task-event", queueId, 32));
+  let created = false;
+  await db.runTransaction(async (transaction) => {
+    const existing = await transaction.get(queueRef);
+    if (existing.exists) return;
+    created = true;
+    transaction.set(queueRef, {
+      id: queueId,
+      provider: "wacli",
+      status: "queued",
+      type: "text",
+      to,
+      text,
+      taskId: task.id,
+      taskNumber: task.taskNumber,
+      reason: "update_request",
+      source: "task-tracker-api",
+      createdByUserId: actor.uid,
+      createdByName: actor.name,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+    transaction.set(eventRef, {
+      id: eventRef.id,
+      taskId: task.id,
+      type: "update_requested",
+      at: isoNow(),
+      actorUserId: actor.uid,
+      actorName: actor.name,
+      message: text,
+      metadata: { queueId },
+    });
   });
-  batch.set(db.collection(EVENT_COLLECTION).doc(event.id), event);
-  await batch.commit();
-  return { queueId };
+  return { queueId, created };
 }
 
 async function saveAutomation(actor, payload) {
@@ -508,6 +556,7 @@ exports.taskTrackerApi = onRequest(
 module.exports._taskTrackerTest = {
   allowedTransition,
   completionBlocked,
+  deterministicId,
   normalizeChecklist,
   normalizeRole,
 };
