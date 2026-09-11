@@ -1,351 +1,234 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
-import type { ReactNode } from 'react';
 import { PublicSiteShell } from '@/components/public/public-site-shell';
+import { loadPublishedVrfContent } from '@/lib/public-vrf-public';
+import type { VrfCard, VrfLink } from '@/lib/public-vrf-content';
+import styles from './vrf-premium.module.css';
 
 export const metadata: Metadata = {
   title: 'VRF Systems in Aruba',
-  description: 'DEMAC VRF assessment, design coordination, installation, commissioning, diagnostics, preventive maintenance and controls support for Aruba properties.',
+  description: 'Large VRF, modular VRF and mini VRF design, installation, commissioning, service and maintenance in Aruba.',
   alternates: { canonical: '/services/vrf-systems' },
   openGraph: {
     title: 'VRF Systems in Aruba | DEMAC',
-    description: 'Smarter zoning, efficient operation and end-to-end VRF support for commercial properties in Aruba.',
+    description: 'Smarter zoning, energy efficiency and end-to-end VRF support for buildings across Aruba.',
     type: 'website',
     url: '/services/vrf-systems',
   },
 };
 
-type IconName =
-  | 'home'
-  | 'store'
-  | 'building'
-  | 'zones'
-  | 'temperature'
-  | 'leaf'
-  | 'layout'
-  | 'monitor'
-  | 'search'
-  | 'plan'
-  | 'install'
-  | 'shield'
-  | 'headset'
-  | 'wrench'
-  | 'maintenance'
-  | 'controls'
-  | 'check'
-  | 'hotel'
-  | 'office'
-  | 'clinic';
+const applicationImages: Record<string, string> = {
+  apartments: 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?auto=format&fit=crop&fm=webp&q=82&w=900',
+  hospitality: 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&fm=webp&q=82&w=900',
+  office: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&fm=webp&q=82&w=900',
+  retail: 'https://images.unsplash.com/photo-1497366811353-6870744d04b2?auto=format&fit=crop&fm=webp&q=82&w=900',
+  villas: 'https://images.unsplash.com/photo-1600047509807-ba8f99d2cdde?auto=format&fit=crop&fm=webp&q=82&w=900',
+  controlled: 'https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?auto=format&fit=crop&fm=webp&q=82&w=900',
+};
 
-function VrfIcon({ name }: { name: IconName }) {
-  const common = {
-    fill: 'none',
-    stroke: 'currentColor',
-    strokeWidth: 1.8,
-    strokeLinecap: 'round' as const,
-    strokeLinejoin: 'round' as const,
-  };
-
-  const icons: Record<IconName, ReactNode> = {
-    home: <><path {...common} d="M3.5 11.2 12 4l8.5 7.2"/><path {...common} d="M5.5 10.2V20h13v-9.8M9.5 20v-6h5v6"/></>,
-    store: <><path {...common} d="M4 9h16l-1.3-5H5.3L4 9Z"/><path {...common} d="M5 9v11h14V9M8 20v-6h4v6M4 9c0 2 3 2 4 0 1 2 3 2 4 0 1 2 3 2 4 0 1 2 4 2 4 0"/></>,
-    building: <><path {...common} d="M5 20V5h9v15M14 9h5v11M8 8h3M8 11h3M8 14h3M8 17h3M16.5 12h1M16.5 15h1M16.5 18h1"/></>,
-    zones: <><rect {...common} x="4" y="4" width="6" height="6" rx="1"/><rect {...common} x="14" y="4" width="6" height="6" rx="1"/><rect {...common} x="4" y="14" width="6" height="6" rx="1"/><rect {...common} x="14" y="14" width="6" height="6" rx="1"/></>,
-    temperature: <><path {...common} d="M10 14.8V5a2 2 0 1 1 4 0v9.8a4 4 0 1 1-4 0Z"/><path {...common} d="M12 8v8"/></>,
-    leaf: <><path {...common} d="M20 4C12 4 6 7.7 6 14c0 3.2 2.3 5 5.1 5C17 19 20 11 20 4Z"/><path {...common} d="M5 20c2.5-5.3 6.1-8.4 11-10"/></>,
-    layout: <><path {...common} d="M4 5h16v14H4zM4 10h16M10 10v9"/></>,
-    monitor: <><rect {...common} x="3" y="4" width="18" height="13" rx="2"/><path {...common} d="M8 21h8M12 17v4M7 8h4M7 12h2M14 8h3M14 12h3"/></>,
-    search: <><circle {...common} cx="10.5" cy="10.5" r="6.5"/><path {...common} d="m15.5 15.5 5 5M8 10.5h5M10.5 8v5"/></>,
-    plan: <><path {...common} d="M4 5h16v14H4zM8 5v14M4 10h4M12 9h4M12 13h4M12 17h2"/></>,
-    install: <><path {...common} d="m5 19 8.7-8.7M15.2 4.1a4 4 0 0 0-4.6 5.2L4 15.9 8.1 20l6.6-6.6a4 4 0 0 0 5.2-4.6l-2.6 2.6-3-3 2.6-2.6Z"/></>,
-    shield: <><path {...common} d="M12 3 19 6v5.2c0 4.6-2.8 7.8-7 9.8-4.2-2-7-5.2-7-9.8V6l7-3Z"/><path {...common} d="m8.5 12 2.2 2.2 4.8-5"/></>,
-    headset: <><path {...common} d="M4 13v-1a8 8 0 0 1 16 0v1M4 13h3v6H5a1 1 0 0 1-1-1v-5ZM20 13h-3v6h2a1 1 0 0 0 1-1v-5ZM17 19c0 1.5-1.2 2-3 2"/></>,
-    wrench: <><path {...common} d="M15.5 4.5a4.2 4.2 0 0 0-5 5L4 16l4 4 6.5-6.5a4.2 4.2 0 0 0 5-5L17 11l-4-4 2.5-2.5Z"/></>,
-    maintenance: <><circle {...common} cx="12" cy="12" r="3"/><path {...common} d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></>,
-    controls: <><path {...common} d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M10 14v6"/><circle {...common} cx="14" cy="7" r="2"/><circle {...common} cx="8" cy="17" r="2"/></>,
-    check: <path {...common} d="m5 12 4 4L19 6"/>,
-    hotel: <><path {...common} d="M4 20V6h16v14M7 9h3v3H7zM14 9h3v3h-3zM7 15h3v3H7zM14 15h3v3h-3z"/></>,
-    office: <><path {...common} d="M4 20h16M6 20V5h8v15M14 9h4v11M9 8h2M9 11h2M9 14h2M9 17h2"/></>,
-    clinic: <><path {...common} d="M5 8h14v12H5zM9 8V4h6v4M12 11v6M9 14h6"/></>,
-  };
-
-  return <svg viewBox="0 0 24 24" aria-hidden="true">{icons[name]}</svg>;
+function ActionLink({ link, tone = 'primary' }: { link: VrfLink; tone?: 'primary' | 'whatsapp' | 'ghost' }) {
+  const className = tone === 'whatsapp' ? styles.whatsappButton : tone === 'ghost' ? styles.ghostButton : styles.primaryButton;
+  return <a className={className} href={link.href}>{tone === 'whatsapp' ? <span className={styles.whatsappGlyph}>●</span> : null}{link.label}<span aria-hidden="true">→</span></a>;
 }
 
-const segments = [
-  { href: '/services', icon: 'home' as const, title: 'Residential', copy: 'Comfort solutions for your home.' },
-  { href: '/services', icon: 'store' as const, title: 'Light Commercial', copy: 'Efficient systems for small businesses.' },
-  { href: '/services/commercial', icon: 'building' as const, title: 'Commercial', copy: 'Powerful cooling for larger spaces.' },
-  { href: '/services/vrf-systems', icon: 'zones' as const, title: 'VRF Systems', copy: 'Advanced zoning and efficiency.', active: true },
-];
+function LineIcon({ index }: { index: number }) {
+  const icons = [
+    <path key="a" d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1M9 12a3 3 0 1 0 6 0 3 3 0 0 0-6 0Z" />,
+    <path key="b" d="M20 4c-7.2.5-12.3 3.7-12.3 9.1 0 3.4 2.4 5.4 5.2 5.4 5.4 0 7.1-8.3 7.1-14.5ZM5 20c2-4.6 5.3-7.7 10.3-10.2" />,
+    <path key="c" d="M4 5h16v14H4V5Zm0 5h16M10 10v9" />,
+    <path key="d" d="M4 12h5l2-5 3 10 2-5h4" />,
+    <path key="e" d="M4 6h16v12H4V6Zm4 15h8M12 18v3M8 10h8m-8 4h5" />,
+    <path key="f" d="M5 10v4m3-7v10m3-13v16m4-11v6m3-3v1" />,
+  ];
+  return <svg viewBox="0 0 24 24" aria-hidden="true">{icons[index % icons.length]}</svg>;
+}
 
-const outcomes = [
-  { icon: 'temperature' as const, title: 'Zoned Comfort', copy: 'Individual temperature control for every occupied area—only where and when it is needed.' },
-  { icon: 'leaf' as const, title: 'Energy Efficiency', copy: 'Variable-capacity operation follows real demand instead of running every zone at full output.' },
-  { icon: 'layout' as const, title: 'Flexible Design', copy: 'Long piping runs and multiple indoor-unit styles support complex layouts and future changes.' },
-  { icon: 'monitor' as const, title: 'Centralized Control', copy: 'Smart controls provide scheduling, operating visibility and easier performance oversight.' },
-];
+function OutdoorSystemArt({ variant }: { variant: number }) {
+  const count = variant === 0 ? 3 : variant === 1 ? 2 : 1;
+  return (
+    <div className={styles.outdoorArt} aria-hidden="true">
+      {Array.from({ length: count }).map((_, index) => (
+        <span className={styles.outdoorCabinet} key={index}>
+          <i className={styles.fan}><b /></i><em>DEMAC</em>
+        </span>
+      ))}
+    </div>
+  );
+}
 
-const process = [
-  { icon: 'search' as const, title: 'Assessment', copy: 'We evaluate occupancy, usage, heat load, access and operating priorities.' },
-  { icon: 'plan' as const, title: 'Design & Coordination', copy: 'System architecture is coordinated with the property, trades and project requirements.' },
-  { icon: 'install' as const, title: 'Installation', copy: 'Certified technicians execute piping, wiring, indoor units and outdoor equipment.' },
-  { icon: 'shield' as const, title: 'Commissioning', copy: 'Vacuum, testing, addressing and system validation confirm correct operation.' },
-  { icon: 'headset' as const, title: 'Ongoing Support', copy: 'Preventive maintenance, diagnostics and service protect long-term performance.' },
-];
+function IndoorUnitArt({ id }: { id: string }) {
+  if (id === 'cassette') return <div className={`${styles.unitArt} ${styles.cassette}`}><span /><i /><i /><i /><i /></div>;
+  if (id === 'fan-coil') return <div className={`${styles.unitArt} ${styles.fanCoil}`}><span /><span /><span /></div>;
+  if (id === 'floor-ceiling') return <div className={`${styles.unitArt} ${styles.floorCeiling}`}><i /><span /></div>;
+  if (id === 'air-handler') return <div className={`${styles.unitArt} ${styles.airHandler}`}><span /><span /><span /></div>;
+  if (id === 'split-unit') return <div className={`${styles.unitArt} ${styles.splitUnit}`}><i /><span /></div>;
+  return <div className={`${styles.unitArt} ${styles.wallMounted}`}><i /><span /></div>;
+}
 
-const capabilities = [
-  {
-    className: 'is-design',
-    icon: 'plan' as const,
-    title: 'VRF Assessment & Design',
-    copy: 'Property review, load planning, equipment selection and a coordinated system concept before execution.',
-    image: 'https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&w=1200&q=84',
-  },
-  {
-    className: 'is-install',
-    icon: 'install' as const,
-    title: 'Installation & Commissioning',
-    copy: 'Precision installation followed by evacuation, startup, addressing and performance verification.',
-    image: 'https://images.unsplash.com/photo-1621905252507-b35492cc74b4?auto=format&fit=crop&w=900&q=84',
-  },
-  {
-    className: 'is-diagnostics',
-    icon: 'wrench' as const,
-    title: 'Diagnostics & Repair',
-    copy: 'Structured troubleshooting for refrigeration, electrical, communication and control faults.',
-    image: 'https://images.unsplash.com/photo-1581092160562-40aa08e78837?auto=format&fit=crop&w=900&q=84',
-  },
-  {
-    className: 'is-maintenance',
-    icon: 'maintenance' as const,
-    title: 'Preventive Maintenance',
-    copy: 'Scheduled care for coils, filters, drains, refrigerant performance and operating condition.',
-    image: 'https://images.unsplash.com/photo-1581578731548-c64695cc6952?auto=format&fit=crop&w=900&q=84',
-  },
-  {
-    className: 'is-controls',
-    icon: 'controls' as const,
-    title: 'Controls & Integration',
-    copy: 'Central controllers, schedules, operating modes and integration-ready system planning.',
-    image: 'https://images.unsplash.com/photo-1551288049-bebda4e38f71?auto=format&fit=crop&w=900&q=84',
-  },
-];
+function SectionHead({ eyebrow, title, copy }: { eyebrow: string; title: string; copy?: string }) {
+  return (
+    <div className={styles.sectionHead}>
+      <div><span className={styles.eyebrow}>{eyebrow}</span><h2>{title}</h2></div>
+      {copy ? <p>{copy}</p> : null}
+    </div>
+  );
+}
 
-const applications = [
-  {
-    type: 'Hospitality',
-    title: 'Guest rooms & common areas',
-    copy: 'Independent zones, quiet indoor units and centralized oversight for hospitality operations.',
-    image: 'https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?auto=format&fit=crop&w=1000&q=84',
-  },
-  {
-    type: 'Professional Offices',
-    title: 'Multi-tenant office floors',
-    copy: 'Flexible zoning for meeting rooms, open offices and spaces with different operating hours.',
-    image: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=1000&q=84',
-  },
-  {
-    type: 'Mixed-use Properties',
-    title: 'Retail, office & residential zones',
-    copy: 'One coordinated architecture serving areas with different schedules and comfort requirements.',
-    image: 'https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1000&q=84',
-  },
-  {
-    type: 'Healthcare & Clinics',
-    title: 'Controlled professional environments',
-    copy: 'Stable comfort, operational visibility and service planning around occupied facilities.',
-    image: 'https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?auto=format&fit=crop&w=1000&q=84',
-  },
-];
+function CardCopy({ card }: { card: VrfCard }) {
+  return <><h3>{card.title}</h3><p>{card.description}</p>{card.detail ? <small>{card.detail}</small> : null}</>;
+}
 
-const zones = [
-  { type: 'Wall-mounted', name: 'Zone 01', temperature: '22°C', className: 'zone-wall' },
-  { type: 'Ducted', name: 'Zone 02', temperature: '24°C', className: 'zone-ducted' },
-  { type: 'Cassette', name: 'Zone 03', temperature: '23°C', className: 'zone-cassette' },
-  { type: 'Controller', name: 'Zone 04', temperature: '21°C', className: 'zone-control' },
-];
+export default async function VrfSystemsPage() {
+  const content = await loadPublishedVrfContent();
 
-export default function VrfSystemsPage() {
   return (
     <PublicSiteShell active="services">
-      <article className="vrf-segment-page">
-        <section className="vrf-hero">
-          <div className="vrf-hero-media" aria-hidden="true">
-            <div className="vrf-hero-image" />
-            <div className="vrf-hero-wash" />
-            <div className="vrf-hero-visual">
-              <div className="vrf-temperature-orb"><strong>23°C</strong><span>Zone 04</span></div>
-              <div className="vrf-outdoor-system"><i /><i /><i /><span>VRF</span></div>
-              <div className="vrf-building-model">
-                {Array.from({ length: 12 }).map((_, index) => <span key={index} />)}
+      <main className={styles.page}>
+        <section className={styles.hero}>
+          <div className={styles.heroBackdrop} />
+          <div className={styles.container}>
+            <div className={styles.heroGrid}>
+              <div className={styles.heroCopy}>
+                <span className={styles.eyebrow}>{content.hero.eyebrow}</span>
+                <h1>{content.hero.title} <strong>{content.hero.accent}</strong></h1>
+                <p>{content.hero.description}</p>
+                <div className={styles.heroActions}>
+                  <ActionLink link={content.hero.secondaryCta} tone="whatsapp" />
+                  <ActionLink link={content.hero.primaryCta} />
+                </div>
+                <div className={styles.heroProof}>
+                  {['Higher Energy Efficiency', 'Individual Zoning Control', 'Expert Design & Installation', 'Long-Term After-Sales Support'].map((item, index) => (
+                    <div key={item}><span><LineIcon index={index} /></span><b>{item}</b></div>
+                  ))}
+                </div>
               </div>
-              <svg className="vrf-flow-network" viewBox="0 0 720 390" preserveAspectRatio="none">
-                <path d="M565 120 C510 150 510 220 410 236 S300 248 250 290" />
-                <path d="M565 120 C505 90 470 55 405 52" />
-                <path d="M565 120 C610 175 625 238 660 286" />
-                <circle cx="565" cy="120" r="6" />
-                <circle cx="410" cy="236" r="6" />
-                <circle cx="250" cy="290" r="6" />
-                <circle cx="405" cy="52" r="6" />
-                <circle cx="660" cy="286" r="6" />
-              </svg>
-              <div className="vrf-status-card">
-                <strong>System Status</strong>
-                <span><i /> Cooling</span>
-                <span><i /> Efficient</span>
-                <span><i /> All zones online</span>
-              </div>
-            </div>
-          </div>
 
-          <div className="vrf-hero-inner">
-            <nav className="vrf-breadcrumb" aria-label="Breadcrumb">
-              <Link href="/">Home</Link><span>›</span><Link href="/services">Services</Link><span>›</span><strong>VRF Systems</strong>
-            </nav>
-            <div className="vrf-hero-copy">
-              <span className="vrf-kicker">VRF systems in Aruba</span>
-              <h1>Smarter comfort.<br />Maximum efficiency.<br /><em>Engineered for Aruba.</em></h1>
-              <p>Variable Refrigerant Flow systems deliver precise zoning, high efficiency and powerful performance for today’s commercial buildings. DEMAC designs, installs and supports complete VRF solutions tailored to your property and goals.</p>
-              <div className="vrf-hero-actions">
-                <Link className="public-button public-button-whatsapp vrf-button" href="/contact?channel=whatsapp&service=vrf">◉ WhatsApp Us</Link>
-                <Link className="public-button public-button-primary vrf-button" href="/contact?request=vrf-consultation">Request a VRF Consultation</Link>
-              </div>
-              <div className="vrf-trust-row">
-                <span><b>✓</b> Aruba-based expertise</span>
-                <span><b>✓</b> Project coordination</span>
-                <span><b>✓</b> Island-wide support</span>
+              <div className={styles.heroVisual}>
+                <div className={styles.heroPhoto} style={{ backgroundImage: `url(${content.hero.imageUrl})`, backgroundPosition: content.hero.imagePosition }} />
+                <div className={styles.heroPhotoWash} />
+                <svg className={styles.zoneNetwork} viewBox="0 0 760 520" preserveAspectRatio="none" aria-hidden="true">
+                  <path d="M465 444V104M465 142H590M465 220H618M465 302H565M465 378H615" />
+                  {[['465','142'],['590','142'],['465','220'],['618','220'],['465','302'],['565','302'],['465','378'],['615','378']].map(([cx,cy]) => <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r="5" />)}
+                </svg>
+                <div className={`${styles.zoneChip} ${styles.zoneOne}`}><b>Cassette</b><span>Office · 22°C</span></div>
+                <div className={`${styles.zoneChip} ${styles.zoneTwo}`}><b>Fan Coil</b><span>Hotel Room · 23°C</span></div>
+                <div className={`${styles.zoneChip} ${styles.zoneThree}`}><b>Wall Mounted</b><span>Apartment · 24°C</span></div>
+                <div className={styles.heroOutdoor}><OutdoorSystemArt variant={1} /></div>
+                <aside className={styles.systemPanel}>
+                  <strong>ONE SYSTEM.<br />MULTIPLE ZONES.<br />TOTAL COMFORT.</strong>
+                  {['Apartments', 'Hotel Rooms', 'Offices', 'Retail Spaces', 'Villas & Homes'].map((item, index) => <span key={item}><i><LineIcon index={index} /></i>{item}</span>)}
+                </aside>
+                <div className={styles.arubaBadge}><b>✦</b><span>ENGINEERED<br />FOR ARUBA</span></div>
               </div>
             </div>
           </div>
         </section>
 
-        <nav className="vrf-segment-nav" aria-label="Cooling solution segments">
-          {segments.map((segment) => (
-            <Link className={segment.active ? 'is-active' : ''} href={segment.href} key={segment.title} aria-current={segment.active ? 'page' : undefined}>
-              <span className="vrf-segment-icon"><VrfIcon name={segment.icon} /></span>
-              <span><strong>{segment.title}</strong><small>{segment.copy}</small></span>
-              <b aria-hidden="true">→</b>
-            </Link>
-          ))}
-        </nav>
-
-        <section className="vrf-section vrf-outcomes-section">
-          <header className="vrf-section-heading">
-            <span>Why choose VRF?</span>
-            <h2>Advanced technology. <em>Better outcomes.</em></h2>
-          </header>
-          <div className="vrf-outcome-rail">
-            {outcomes.map((outcome) => (
-              <article key={outcome.title}>
-                <span className="vrf-round-icon"><VrfIcon name={outcome.icon} /></span>
-                <div><h3>{outcome.title}</h3><p>{outcome.copy}</p></div>
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <section className="vrf-section vrf-process-section">
-          <header className="vrf-section-heading">
-            <span>Our process</span>
-            <h2>How DEMAC delivers <em>VRF projects</em></h2>
-          </header>
-          <ol className="vrf-process-timeline">
-            {process.map((step, index) => (
-              <li key={step.title}>
-                <span className="vrf-step-number">{index + 1}</span>
-                <span className="vrf-step-icon"><VrfIcon name={step.icon} /></span>
-                <h3>{step.title}</h3>
-                <p>{step.copy}</p>
-              </li>
-            ))}
-          </ol>
-        </section>
-
-        <section className="vrf-section vrf-capabilities-section">
-          <header className="vrf-section-heading vrf-heading-row">
-            <div><span>Our VRF solutions</span><h2>Full-service <em>VRF capabilities</em></h2></div>
-            <Link href="/services">View all related services →</Link>
-          </header>
-          <div className="vrf-capability-bento">
-            {capabilities.map((capability) => (
-              <Link className={`vrf-capability-card ${capability.className}`} href="/contact?request=vrf-consultation" key={capability.title}>
-                <img src={capability.image} alt="" loading="lazy" />
-                <span className="vrf-capability-shade" />
-                <span className="vrf-capability-copy">
-                  <i><VrfIcon name={capability.icon} /></i>
-                  <strong>{capability.title}</strong>
-                  <small>{capability.copy}</small>
-                  <b aria-hidden="true">→</b>
-                </span>
-              </Link>
-            ))}
-          </div>
-        </section>
-
-        <section className="vrf-section vrf-applications-section">
-          <header className="vrf-section-heading vrf-heading-row">
-            <div><span>VRF project profiles</span><h2>Built for comfort. Designed to perform.</h2></div>
-            <Link href="/project-gallery">View project gallery →</Link>
-          </header>
-          <div className="vrf-application-grid">
-            {applications.map((application) => (
-              <Link className="vrf-application-card" href="/project-gallery" key={application.title}>
-                <span className="vrf-application-image"><img src={application.image} alt="" loading="lazy" /></span>
-                <span className="vrf-application-copy">
-                  <small>{application.type}</small>
-                  <strong>{application.title}</strong>
-                  <p>{application.copy}</p>
-                  <b>Explore application →</b>
-                </span>
-              </Link>
-            ))}
-          </div>
-        </section>
-
-        <section className="vrf-section vrf-system-section">
-          <div className="vrf-system-board">
-            <div className="vrf-system-intro">
-              <span>How VRF works</span>
-              <h2>One system.<br />Multiple zones.</h2>
-              <p>Outdoor capacity is distributed through refrigerant piping to multiple indoor units, allowing each zone to operate around its own comfort requirement.</p>
-              <Link href="/contact?request=vrf-consultation">Plan your system →</Link>
-            </div>
-            <div className="vrf-outdoor-unit" aria-hidden="true"><i /><i /><i /><strong>VRF</strong></div>
-            <div className="vrf-zone-network">
-              <span className="vrf-main-pipe" aria-hidden="true" />
-              {zones.map((zone) => (
-                <article className={zone.className} key={zone.name}>
-                  <span className="vrf-zone-unit" aria-hidden="true"><i /><i /></span>
-                  <small>{zone.type}</small>
-                  <strong>{zone.name}</strong>
-                  <b>{zone.temperature}</b>
-                  <span className="vrf-zone-drop" aria-hidden="true" />
+        <section className={`${styles.section} ${styles.solutionsSection}`}>
+          <div className={styles.container}>
+            <SectionHead eyebrow="OUR VRF SOLUTIONS" title={content.solutionsHeading} copy={content.solutionsIntro} />
+            <div className={styles.solutionGrid}>
+              {content.solutions.map((card, index) => (
+                <article className={styles.solutionCard} key={card.id}>
+                  <div className={styles.solutionArt}><OutdoorSystemArt variant={index} /></div>
+                  <div className={styles.solutionText}><CardCopy card={card} /><a href="/contact?request=vrf" aria-label={`Discuss ${card.title}`}>→</a></div>
                 </article>
               ))}
             </div>
           </div>
-          <aside className="vrf-partner-card">
-            <span>Why partner with DEMAC?</span>
-            <h2>Local expertise.<br />Long-term performance.</h2>
-            <ul>
-              <li><i><VrfIcon name="building" /></i><div><strong>Aruba-based team</strong><small>Local understanding of climate, access and operating realities.</small></div></li>
-              <li><i><VrfIcon name="plan" /></i><div><strong>Professional coordination</strong><small>Structured collaboration with owners, contractors and project teams.</small></div></li>
-              <li><i><VrfIcon name="shield" /></i><div><strong>Precision commissioning</strong><small>Documented testing and validation before handover.</small></div></li>
-              <li><i><VrfIcon name="headset" /></i><div><strong>Island-wide service</strong><small>Responsive support and maintenance after installation.</small></div></li>
-            </ul>
-          </aside>
         </section>
 
-        <section className="vrf-final-cta">
-          <div className="vrf-final-icon"><VrfIcon name="clinic" /></div>
-          <div><span>Ready to optimize your building?</span><h2>Let’s assess your comfort, efficiency and zoning requirements.</h2><p>Start with a structured property and system review, then move forward with a clear technical recommendation.</p></div>
-          <div className="vrf-final-actions">
-            <Link className="public-button public-button-whatsapp vrf-button" href="/contact?channel=whatsapp&service=vrf">◉ WhatsApp Us</Link>
-            <Link className="public-button public-button-primary vrf-button" href="/contact?request=vrf-consultation">Request a VRF Consultation</Link>
+        <section className={styles.section}>
+          <div className={styles.container}>
+            <SectionHead eyebrow="WHY CHOOSE VRF?" title={content.benefitsHeading} copy="VRF technology delivers precise comfort, efficiency and control — ideal for Aruba’s climate and modern buildings." />
+            <div className={styles.benefitGrid}>
+              {content.benefits.map((card, index) => <article className={styles.benefitCard} key={card.id}><span><LineIcon index={index} /></span><CardCopy card={card} /></article>)}
+            </div>
           </div>
         </section>
-      </article>
+
+        <section className={styles.section}>
+          <div className={styles.container}>
+            <SectionHead eyebrow="INDOOR UNIT OPTIONS" title={content.indoorHeading} copy={content.indoorIntro} />
+            <div className={styles.indoorGrid}>
+              {content.indoorUnits.map((card) => (
+                <article className={styles.indoorCard} key={card.id}>
+                  <div className={styles.indoorArtWrap}><IndoorUnitArt id={card.id} /></div>
+                  <CardCopy card={card} />
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className={`${styles.section} ${styles.applicationSection}`}>
+          <div className={styles.container}>
+            <SectionHead eyebrow="WHERE VRF WORKS BEST" title={content.applicationsHeading} />
+            <div className={styles.applicationGrid}>
+              {content.applications.map((card) => (
+                <article className={styles.applicationCard} key={card.id}>
+                  <div className={styles.applicationPhoto} style={{ backgroundImage: `linear-gradient(180deg, transparent 42%, rgba(3,32,79,.72)), url(${applicationImages[card.id] ?? applicationImages.office})` }} />
+                  <div><CardCopy card={card} /></div>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className={styles.section}>
+          <div className={styles.container}>
+            <SectionHead eyebrow="HOW DEMAC DELIVERS VRF PROJECTS" title={content.processHeading} copy="A proven process. Exceptional results." />
+            <div className={styles.processGrid}>
+              {content.process.map((card, index) => (
+                <article className={styles.processCard} key={card.id}>
+                  <div className={styles.processNumber}>{index + 1}</div>
+                  <span className={styles.processIcon}><LineIcon index={index + 1} /></span>
+                  <CardCopy card={card} />
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className={`${styles.section} ${styles.serviceSection}`}>
+          <div className={styles.container}>
+            <SectionHead eyebrow="OUR SERVICE CAPABILITIES" title={content.servicesHeading} />
+            <div className={styles.serviceGrid}>
+              {content.services.map((card, index) => <article className={styles.serviceCard} key={card.id}><span><LineIcon index={index + 2} /></span><CardCopy card={card} /></article>)}
+            </div>
+          </div>
+        </section>
+
+        <section className={`${styles.section} ${styles.trustSection}`}>
+          <div className={`${styles.container} ${styles.trustGrid}`}>
+            <div className={styles.trustCopy}>
+              <span className={styles.eyebrow}>{content.trust.eyebrow}</span>
+              <h2>{content.trust.title}</h2>
+              <p>{content.trust.description}</p>
+              <a className={styles.projectButton} href="/projects">Our Projects <span>→</span></a>
+            </div>
+            <div className={styles.trustPhoto} style={{ backgroundImage: `linear-gradient(110deg, rgba(3,37,88,.02), rgba(3,37,88,.12)), url(${content.trust.imageUrl})` }}><span>DEMAC</span></div>
+            <div className={styles.trustBullets}>{content.trust.bullets.map((bullet) => <div key={bullet}><i>✓</i><span>{bullet}</span></div>)}</div>
+          </div>
+        </section>
+
+        <section className={`${styles.section} ${styles.faqSection}`}>
+          <div className={styles.container}>
+            <SectionHead eyebrow="FREQUENTLY ASKED QUESTIONS" title={content.faqHeading} />
+            <div className={styles.faqGrid}>
+              {content.faq.map((item) => <details className={styles.faqItem} key={item.id}><summary>{item.title}<span>+</span></summary><p>{item.description}</p></details>)}
+            </div>
+          </div>
+        </section>
+
+        <section className={styles.finalCta}>
+          <div className={styles.container}>
+            <div className={styles.finalCtaInner}>
+              <div><span>{content.finalCta.eyebrow}</span><h2>{content.finalCta.title}</h2><p>{content.finalCta.description}</p></div>
+              <div><ActionLink link={content.finalCta.secondaryCta} tone="whatsapp" /><ActionLink link={content.finalCta.primaryCta} /></div>
+            </div>
+          </div>
+        </section>
+      </main>
     </PublicSiteShell>
   );
 }
