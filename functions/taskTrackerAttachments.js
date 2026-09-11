@@ -200,7 +200,8 @@ async function uploadEvidence(request, actor) {
 }
 
 async function downloadEvidence(request, actor, response) {
-  await requireBackendEnabled();
+  // `backendEnabled` is a write/automation kill switch. Existing evidence remains
+  // readable to an already-authorized Task actor for audit and reconciliation.
   const task = await loadTask(request.query.taskId);
   requireTaskAccess(actor, task);
   const attachmentId = cleanText(request.query.attachmentId, 200);
