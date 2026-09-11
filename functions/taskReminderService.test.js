@@ -1,5 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const {
   dailySummaryMessage,
   dueReminderOpportunities,
@@ -98,4 +100,12 @@ test("reminder wording becomes stronger as deadline pressure increases", () => {
 
 test("queue ids are deterministic and Firestore-safe", () => {
   assert.equal(queueDocumentId("task-reminder", "task:one/24h"), "task-reminder-task_one_24h");
+});
+
+test("scheduled reminder workers require both backend activation and automation enablement", () => {
+  const source = fs.readFileSync(path.join(__dirname, "taskReminders.js"), "utf8");
+  assert.match(source, /backendEnabled:\s*data\.backendEnabled === true/);
+  assert.match(source, /settings\?\.backendEnabled === true && settings\?\.enabled === true/);
+  assert.match(source, /if \(!automationRuntimeEnabled\(settings\)\)/);
+  assert.match(source, /if \(!automationRuntimeEnabled\(settings\) \|\| !settings\.dailySummaryEnabled\)/);
 });
