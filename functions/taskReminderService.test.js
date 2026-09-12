@@ -3,10 +3,12 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const {
+  checkpointReminderLines,
   dailySummaryMessage,
   dueReminderOpportunities,
   effectiveTaskStatus,
   normalizeArubaPhone,
+  pendingCheckpoints,
   plannedReminderOpportunities,
   queueDocumentId,
   reminderMessage,
@@ -23,7 +25,23 @@ function task(overrides = {}) {
     assigneeStaffId: "staff-1",
     assigneeNameSnapshot: "Scarlett",
     assigneePhoneSnapshot: "5600000",
+    createdAt: "2026-09-10T12:00:00.000Z",
     dueAt: "2026-09-12T14:00:00.000Z",
+    checklist: [
+      { id: "a", label: "Contact customer A", completed: true, status: "completed" },
+      {
+        id: "b",
+        label: "Confirm customer C payment",
+        completed: false,
+        status: "waiting",
+        waitingOn: "Customer C",
+        nextAction: "Call again tomorrow",
+        nextFollowUpAt: "2026-09-12T13:00:00.000Z",
+        lastUpdateAt: "2026-09-11T12:00:00.000Z",
+        updates: [{ id: "u1", text: "Called today; customer said payment will be made tomorrow.", at: "2026-09-11T12:00:00.000Z", actorName: "Scarlett", status: "waiting" }],
+      },
+      { id: "c", label: "Send final report", completed: false, status: "pending" },
+    ],
     reminderPolicy: {
       dailySummary: true,
       twentyFourHoursBefore: true,
@@ -81,7 +99,19 @@ test("priority and overdue state control digest attention order", () => {
   assert.deepEqual(sortTasksByAttention(tasks, now).map((item) => item.id), ["overdue", "critical", "normal"]);
 });
 
-test("daily summary sends one numbered digest instead of one morning message per task", () => {
+test("pending checkpoints exclude completed work and preserve open checkpoint context", () => {
+  const record = task();
+  assert.deepEqual(pendingCheckpoints(record).map((item) => item.id), ["b", "c"]);
+  const text = checkpointReminderLines(record, new Date("2026-09-12T12:00:00.000Z")).join("\n");
+  assert.doesNotMatch(text, /Contact customer A/);
+  assert.match(text, /Confirm customer C payment/);
+  assert.match(text, /Latest: Called today/);
+  assert.match(text, /Next: Call again tomorrow/);
+  assert.match(text, /Waiting on: Customer C/);
+  assert.match(text, /Follow-up:/);
+});
+
+test("daily summary sends one digest grouped by task with only pending checkpoints", () => {
   const text = dailySummaryMessage([
     task({ id: "one", taskNumber: "TSK-1", title: "Delta Blue Report" }),
     task({ id: "two", taskNumber: "TSK-2", title: "Invoice Follow-up" }),
@@ -89,13 +119,24 @@ test("daily summary sends one numbered digest instead of one morning message per
   assert.match(text, /Good morning, Scarlett/);
   assert.match(text, /1\. TSK-1/);
   assert.match(text, /2\. TSK-2/);
+  assert.match(text, /Pending checkpoints:/);
+  assert.match(text, /Confirm customer C payment/);
+  assert.doesNotMatch(text, /Contact customer A/);
 });
 
-test("reminder wording becomes stronger as deadline pressure increases", () => {
+test("scheduled reminder wording includes pending checkpoint context", () => {
   const record = task();
-  assert.match(reminderMessage(record, { kind: "pre_deadline_24h" }, "Scarlett"), /24 hours/i);
-  assert.match(reminderMessage(record, { kind: "pre_deadline_1h" }, "Scarlett"), /final reminder/i);
+  const oneHour = reminderMessage(record, { kind: "pre_deadline_1h" }, "Scarlett", new Date("2026-09-12T13:00:00.000Z"));
+  assert.match(oneHour, /final reminder/i);
+  assert.match(oneHour, /Pending checkpoints:/);
+  assert.match(oneHour, /Confirm customer C payment/);
+  assert.doesNotMatch(oneHour, /Contact customer A/);
   assert.match(reminderMessage(record, { kind: "overdue" }, "Scarlett"), /overdue/i);
+});
+
+test("reminder reports when all checklist items are complete but task remains open", () => {
+  const record = task({ checklist: [{ id: "a", label: "Done", completed: true, status: "completed" }] });
+  assert.match(reminderMessage(record, { kind: "pre_deadline_24h" }, "Scarlett"), /All checklist items are complete/i);
 });
 
 test("queue ids are deterministic and Firestore-safe", () => {
