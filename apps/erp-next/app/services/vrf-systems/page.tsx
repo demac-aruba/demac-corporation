@@ -122,13 +122,6 @@ export default async function VrfSystemsPage() {
               <div className={styles.heroVisual}>
                 <div className={styles.heroPhoto} style={{ backgroundImage: `url(${heroImage})`, backgroundPosition: content.hero.imagePosition }} />
                 <div className={styles.heroPhotoWash} />
-                <div className={styles.comfortScript}>Comfort<br />in Every Space</div>
-                <div className={styles.heroOutdoor}><OutdoorSystemArt variant={0} /></div>
-                <aside className={styles.systemPanel}>
-                  <strong>ONE SYSTEM.<br />MULTIPLE ZONES.<br />TOTAL COMFORT.</strong>
-                  {['Apartments', 'Hotel Rooms', 'Offices', 'Retail Spaces', 'Villas & Homes'].map((item, index) => <span key={item}><i><LineIcon index={index} /></i>{item}</span>)}
-                </aside>
-                <div className={styles.arubaBadge}><b>✦</b><span>ENGINEERED<br />FOR ARUBA</span></div>
               </div>
             </div>
           </div>
