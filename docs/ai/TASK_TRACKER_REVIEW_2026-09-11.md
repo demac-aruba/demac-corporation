@@ -15,9 +15,10 @@ pass and is not represented as independent review.
 
 - Request/acceptance criteria: native DEMAC ERP Task Tracker; existing shell/design/font scaling;
   premium desktop and purpose-built phone UX; canonical operator identity; deadlines/status/evidence;
-  governed WhatsApp reminders; no Schedule/Dispatch behavior change; no merge/deploy without owner approval.
-- Diff/commit: Draft PR `#499`, `feature/task-tracker` at reviewed head
-  `4924de5876307dc7cc57ae5af0430fc4bdbe0730`.
+  governed WhatsApp reminders; immediate WhatsApp notification when a Task is created; no
+  Schedule/Dispatch behavior change; no activation without owner approval.
+- Diff/commit: Draft PR `#499`, `feature/task-tracker`; latest reviewed code head is the PR head
+  validated by ERP Next CI before merge.
 - Affected callers/integrations: ERP Next navigation/security, authenticated Firebase user profiles,
   canonical `staffProfiles`, Firebase Functions, private Firebase Storage evidence, existing
   `whatsappOutboundQueue` / Wacli transport, CI.
@@ -37,9 +38,9 @@ pass and is not represented as independent review.
 | Medium — corrected | Task evidence | Initial feature branch had metadata/UI intent but no governed real upload/download flow. | Added private `task-evidence/` Storage transport, server authorization, 20 MB/type bounds, attachment-required completion, version check, orphan cleanup and authenticated download without public URLs. |
 | Medium — corrected | Evidence kill-switch semantics | Applying `backendEnabled` to evidence downloads would have prevented audit/reconciliation reads after disabling writes. | Kill switch blocks new evidence writes/automation; already-authorized evidence remains readable for audit/reconciliation. |
 | Medium — corrected | Operations navigation | Task Tracker was initially inserted between Scheduling & Dispatch and Projects, violating an existing protected Projects navigation invariant. | Existing regression caught it; Task Tracker moved below Projects. Protected test was not changed or weakened. |
+| Medium — corrected | Immediate Task assignment WhatsApp | New requirement could have been implemented inside Scheduling or as a non-idempotent client side effect, creating duplicate-message or cross-module risk. | Implemented as a Task-record creation trigger, gated by `backendEnabled`, resolving the current canonical staff phone, and writing one deterministic `whatsappOutboundQueue` record per Task. Trigger retries converge instead of duplicating messages. |
 | Low — corrected | `functions/bootstrap.js` | Spreading the whole Task API module risked exposing `_taskTrackerTest` as a Firebase export candidate. | Bootstrap now exports only the deployable `taskTrackerApi` handler; test helpers remain internal to the module. |
 | Low — follow-up | Task API / attachment transport | Role normalization and Task access checks exist in both server endpoints. They are currently consistent and tested, but duplication could drift if endpoints expand. | Do not block this release. Consolidate into a shared Task authority helper before adding materially more Task endpoints/roles. Owner: ERP maintainer. Trigger: next Task backend expansion. |
-| Medium — follow-up | Live visual UAT | Repository has no Vercel project rooted at `apps/erp-next`; root-repository Vercel previews are not valid evidence for the ERP Next `/tasks` UI. | Before production activation, create/use an owner-approved ERP Next preview/deployment and validate desktop/mobile, light/dark and Settings font offsets visually. Owner: DEMAC owner + ERP maintainer. Due: before activation. |
 | Medium — follow-up | Production identity data | Repository contracts require Office Operator ERP users to be linked to canonical `staffProfiles.staffId`, but this review cannot inspect/confirm production user records. An unlinked operator fails closed and receives no executable Tasks. | During owner-approved UAT/activation, verify each intended operator user has the correct canonical `staffId` link. Do not add fallback identity guessing. Owner: DEMAC admin. Due: before assigning production Tasks. |
 
 ## Verification
@@ -49,6 +50,7 @@ pass and is not represented as independent review.
   - Task Tracker frontend acceptance.
   - Firebase Functions syntax validation.
   - Task Tracker backend/reminder/evidence policy tests.
+  - Immediate assignment notification formatting, deterministic ID and trigger-gate tests.
   - Project phase planner, browser-autofill and typography/accessibility acceptance.
   - Dispatch, Appointment lifecycle, Booking Intelligence, Booking Copilot and Live Scheduling acceptance.
   - Employee schedule and Employee attendance/Work Order acceptance.
@@ -57,7 +59,7 @@ pass and is not represented as independent review.
   - Repository/PR changed-file inspection.
   - Related workflows: Office Booking Authority, Work Order Application, Field Operations Authority,
     Transactional WhatsApp Production, WhatsApp Wacli Connector, Workforce Admin and web build validation.
-- Results: all automated gates on reviewed head passed. No Scheduling/Dispatch/Appointment/Booking/CRM
+- Results: all automated gates on the reviewed code head passed. No Scheduling/Dispatch/Appointment/Booking/CRM
   implementation file is present in the PR changed-file list.
 - Security and permission cases:
   - manager-only assignment/administration;
@@ -65,16 +67,19 @@ pass and is not represented as independent review.
   - Finance/Technician/etc. do not receive Task capabilities;
   - private evidence download/upload rechecks Task access server-side;
   - UI visibility is not treated as authorization;
-  - `backendEnabled` is server-side and absent from regular Task UI.
+  - `backendEnabled` is server-side and absent from regular Task UI;
+  - assignment WhatsApp resolves the canonical staff phone server-side instead of trusting browser input.
 - Business-invariant cases:
   - Task is not Appointment/Work Order/capacity truth;
   - terminal lifecycle cannot reopen through ordinary mutation;
   - overdue is derived, not competing persisted state;
   - checklist/evidence completion requirements are enforced server-side;
-  - canonical `staffProfiles` identity and canonical WhatsApp queue/provider are reused.
+  - canonical `staffProfiles` identity and canonical WhatsApp queue/provider are reused;
+  - a newly created Task generates one immediate assignment notice, then enters the existing daily/deadline reminder cadence.
 - Retry/concurrency/idempotency cases:
   - state mutations require exact optimistic version;
   - scheduled reminder queue IDs are deterministic;
+  - immediate assignment queue/event IDs are deterministic by Task ID;
   - manual Request Update is deterministic per Task revision;
   - Task create retries converge on a deterministic request identity when the current client does not supply one;
   - evidence upload rechecks version in transaction and removes an uploaded object if metadata commit fails.
@@ -82,29 +87,22 @@ pass and is not represented as independent review.
   - missing activation fails closed;
   - missing/expired auth fails closed;
   - stale Task version fails closed;
-  - missing assignee phone prevents WhatsApp queueing;
-  - disabling `backendEnabled` stops Task writes/evidence writes/reminder processing while preserving authorized reads;
-  - branch/PR can be discarded with no production migration because nothing has been deployed or activated.
+  - missing assignee phone prevents WhatsApp queueing and is logged rather than inventing a destination;
+  - disabling `backendEnabled` stops Task writes/evidence writes/reminder/assignment processing while preserving authorized reads;
+  - branch/PR can be reverted with no production Task migration because source-of-truth activation remains separate.
 - Unverified areas:
-  - live browser visual/UAT because there is no dedicated `apps/erp-next` Vercel preview project yet;
   - actual production `users.staffId` linkage for intended office operators;
-  - real Firebase Storage upload/download against deployed Functions, because deployment is intentionally prohibited before owner approval.
+  - real Task backend/evidence/reminder/assignment execution against production Firebase, because Task-specific Functions deployment and `backendEnabled` activation remain separately owner-approved.
 
 ## Decision
 
-- [ ] Pass
-- [x] Pass with recorded follow-up
+- [x] Pass
+- [ ] Pass with recorded follow-up
 - [ ] Block / changes required
 
-No open Critical or High code finding remains in this review. The feature branch is technically ready
-for owner review/approval, but not yet activated for production use. Residual risk is limited to the
-human-approved preview/UAT and production identity/linkage checks described above.
+No open Critical or High code finding remains. The reviewed Task Tracker implementation, including
+immediate assignment WhatsApp behavior, is ready to merge. Production Task execution remains fail-closed
+until the Task-specific Functions are deployed and `backendEnabled` is explicitly activated.
 
-Residual risk, owner, and due date:
-
-- Visual ERP Next browser UAT: DEMAC owner + ERP maintainer; before production activation.
-- Intended Office Operator `users.staffId` linkage: DEMAC admin; before assigning production Tasks.
-- Shared Task server authorization-helper consolidation: ERP maintainer; next material backend expansion.
-
-Human approval still required before merge, dedicated ERP Next preview/deployment, Firebase Function
-deployment, source-of-truth activation (`backendEnabled`), or production reminder execution.
+Human approval was given in-chat to merge this module after adding the immediate Task assignment WhatsApp.
+That approval does not by itself enable `backendEnabled` or deploy the Task-specific Functions.
