@@ -16,6 +16,13 @@ Status: living foundation document. Confirm details against code before changing
 ## Current authority notes
 
 - Booking Authority owns commit-time scheduling validation and writes.
+- Task Tracker owns internal operational follow-up through canonical `taskRecords` and
+  append-only `taskEvents`; authenticated mutations go through `taskTrackerApi`. It is
+  intentionally independent from Booking Authority, Appointments, Work Orders and Schedule capacity.
+- Task evidence metadata stays on the canonical Task while bytes live privately in Firebase
+  Storage under `task-evidence/` and are accessed only through `taskTrackerAttachments`.
+- Task reminder planning may enqueue only into the existing `whatsappOutboundQueue`; message
+  transport remains owned by the canonical WhatsApp authority and configured provider.
 - Inventory catalog and stock truth is split by item type: `services` owns the canonical
   commercial Product / Service catalog; `commercialProductStock` owns sellable Product stock
   and location balances; `warehouseInventory` owns material / consumable stock and location
@@ -27,7 +34,7 @@ Status: living foundation document. Confirm details against code before changing
   updates the existing canonical stock records atomically and does not create another catalog,
   stock ledger, or Product, Consumable, Material, or Tool authority.
 - `staffProfiles` owns employee master identity. Firebase users authenticate people but do
-  not create a second employee master.
+  not create a second employee master. Task assignments reference these same canonical staff IDs.
 - Canonical Customer, Property, and Contact records own CRM identity;
   `contactPropertyAssignments` owns Contact-to-Property communication responsibility.
 - DEMAC ERP owns operational workflows. QuickBooks Online is the planned/official accounting
@@ -58,6 +65,10 @@ human approval for the new source-of-truth boundary.
 
 `Work Order -> Assignment -> Labor + Materials + Evidence`
 
+`StaffProfile -> TaskRecord -> TaskEvent + Private Task Evidence`
+
+`TaskRecord -> governed reminder opportunity -> existing WhatsApp outbound authority`
+
 `Canonical Catalog Item -> Location -> Canonical Stock Record -> audited physical movement`
 
 `Conversation -> Communication Case -> governed business action`
@@ -69,6 +80,11 @@ Every material mutation should emit or preserve an audit event.
 Presentation calls application/domain services. Domain services own invariants.
 Adapters translate Firebase and external-provider contracts. AI calls allowlisted,
 governed tools; it does not bypass services or write databases directly.
+
+Task Tracker follows the same direction: ERP Next presentation calls the authenticated
+Task Tracker Functions boundary; Functions own role/staff authorization, version checks,
+lifecycle invariants, private evidence transport and audit emission. The browser is never
+the persistence authority.
 
 ## Change routing
 

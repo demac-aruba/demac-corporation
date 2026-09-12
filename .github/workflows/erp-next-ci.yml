@@ -11,6 +11,9 @@ on:
       - 'functions/bookingSchedulingPrimitives.test.js'
       - 'functions/bookingVanIdentity.js'
       - 'functions/bookingVanIdentity.test.js'
+      - 'functions/taskReminder*.js'
+      - 'functions/taskTracker*.js'
+      - 'functions/taskAttachment*.js'
       - 'functions/package.json'
       - 'functions/employeeAttendanceCalculation.js'
       - 'functions/employeeAttendanceCalculation.d.ts'
@@ -18,6 +21,7 @@ on:
       - 'services/whatsapp-bridge/**'
       - 'docs/ERP_NEXT_**'
       - 'docs/ai/TECHNICIAN_PORTAL_**'
+      - 'docs/ai/TASK_TRACKER_**'
       - '.github/workflows/erp-next-ci.yml'
   push:
     branches:
@@ -32,6 +36,9 @@ on:
       - 'functions/bookingSchedulingPrimitives.test.js'
       - 'functions/bookingVanIdentity.js'
       - 'functions/bookingVanIdentity.test.js'
+      - 'functions/taskReminder*.js'
+      - 'functions/taskTracker*.js'
+      - 'functions/taskAttachment*.js'
       - 'functions/package.json'
       - 'functions/employeeAttendanceCalculation.js'
       - 'functions/employeeAttendanceCalculation.d.ts'
@@ -39,6 +46,7 @@ on:
       - 'services/whatsapp-bridge/**'
       - 'docs/ERP_NEXT_**'
       - 'docs/ai/TECHNICIAN_PORTAL_**'
+      - 'docs/ai/TASK_TRACKER_**'
       - '.github/workflows/erp-next-ci.yml'
 
 permissions:
@@ -62,6 +70,8 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Validate Firebase Functions syntax
         run: npm run validate:firebase
+      - name: Task Tracker backend acceptance
+        run: npm run test:task-reminders
       - name: Field authority acceptance
         run: npm run test:field-authority
       - name: Booking and scheduling regression

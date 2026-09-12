@@ -21,6 +21,8 @@ engineering index; it does not replace that registry.
 - `OPS-ROUTE-*`: route anchors and calculated availability precede customer preference.
 - `OPS-SCHED-*`: historical work registration requires explicit operator acknowledgment,
   canonical conflict validation, audit markers and silent automatic communications.
+- `OPS-TASK-*`: internal operational tasks are independent of Scheduling, use canonical staff
+  identity, governed lifecycle/version checks, private evidence and the existing WhatsApp authority.
 - `OPS-STAFF-SCHEDULE-*`: employee schedule authority, employment-date boundaries, Van-aware
   technical schedule precedence, effective schedule versions, exact worked-hour windows, and Sunday closure.
 - `OPS-STAFF-ATTENDANCE-*`: 27–26 payroll-period membership, schedule-derived overtime,
@@ -52,6 +54,42 @@ Every rule change needs a stable ID, owner, source/evidence, effective date, aff
 authorities, acceptance examples, regression tests, and migration impact. Configurable
 values belong in governed settings; integrity and safety invariants remain protected code.
 Ambiguity blocks automation and is escalated to an authorized human.
+
+## Current Task Tracker ownership
+
+The rules below describe the ERP Next Task Tracker contract implemented on the feature branch.
+Production activation remains separately owner-approved through the server-side activation boundary.
+
+- `OPS-TASK-001` — `taskRecords` is the canonical internal operational Task record and
+  append-only `taskEvents` is its audit/activity history. A Task is not an Appointment, Work Order,
+  booking slot, scheduling hold, capacity reservation, or project phase. Creating, updating or
+  completing a Task must never create, move, cancel, reserve or derive Scheduling & Dispatch work.
+- `OPS-TASK-002` — A Task assignee references the existing canonical `staffProfiles` employee ID.
+  Task Tracker must not create a second operator/employee directory. Historical name/phone snapshots
+  may be retained on the Task for audit and messaging context, but current authorization resolves from
+  the authenticated ERP user and its canonical `staffId` link.
+- `OPS-TASK-003` — Task mutations are server-authoritative through authenticated Task Tracker
+  functions. Super Admin, Operations and Project Manager roles may assign/administer Tasks. An Office
+  Operator may execute only Tasks whose `assigneeStaffId` equals that operator's provisioned canonical
+  `staffId`. Browser visibility or disabled controls are never authorization.
+- `OPS-TASK-004` — Task writes use optimistic `version` checks and append audit events. `completed`
+  and `cancelled` are terminal lifecycle states. `overdue` is a derived attention state based on the
+  Aruba deadline and must not become a competing persisted lifecycle status. Completion may be blocked
+  by an explicit checklist or evidence requirement.
+- `OPS-TASK-005` — Task evidence is private operational evidence. Metadata belongs to the canonical
+  Task while bytes live under the governed Firebase Storage `task-evidence/` namespace and are read or
+  written only through the authenticated Task evidence authority. Evidence is never made public by URL;
+  uploads are bounded to approved document/image types and 20 MB, version conflicts fail closed, and an
+  uploaded object is cleaned up if its Task metadata transaction cannot commit.
+- `OPS-TASK-006` — Task WhatsApp reminders reuse the existing canonical `whatsappOutboundQueue` and
+  configured provider authority. They may send one configured daily digest per assignee plus deterministic
+  24-hour, 3-hour, 1-hour, deadline and overdue reminders. Deterministic queue identifiers prevent repeat
+  creation for the same reminder opportunity. Task Tracker must not create another WhatsApp sender,
+  provider configuration, queue, contact model, or customer-conversation authority.
+- `OPS-TASK-007` — Task persistence, evidence writes and reminder automation fail closed unless the
+  server-side `businessSettings/task-tracker.backendEnabled` activation flag is explicitly enabled.
+  That activation flag is intentionally absent from the normal Task Tracker UI. Production activation,
+  Function deployment and any irreversible source-of-truth rollout remain within the Human Approval Boundary.
 
 ## Current Van profile ownership
 

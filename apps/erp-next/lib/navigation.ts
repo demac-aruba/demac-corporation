@@ -14,6 +14,7 @@ export type NavigationGroup = {
 
 const allManagementRoles: UserRole[] = ['super_admin', 'operations', 'office_operator', 'finance', 'warehouse', 'sales', 'project_manager', 'auditor'];
 const schedulingRoles: UserRole[] = ['super_admin', 'operations', 'office_operator', 'project_manager'];
+const taskTrackerRoles: UserRole[] = ['super_admin', 'operations', 'office_operator', 'project_manager'];
 
 export const navigationGroups: NavigationGroup[] = [
   {
@@ -23,6 +24,7 @@ export const navigationGroups: NavigationGroup[] = [
       { label: 'KPIs', href: '/kpis', short: 'KP', roles: allManagementRoles },
       { label: 'Scheduling & Dispatch', href: '/scheduling', short: 'SD', roles: schedulingRoles },
       { label: 'Projects', href: '/projects', short: 'PR', roles: ['super_admin', 'operations', 'project_manager', 'finance'] },
+      { label: 'Task Tracker', href: '/tasks', short: 'TT', roles: taskTrackerRoles },
       { label: 'Daily Dispatch Control', href: '/scheduling/dispatch', short: 'DC', roles: schedulingRoles },
       { label: 'Dispatch Readiness Board', href: '/scheduling/readiness', short: 'RB', roles: schedulingRoles },
       { label: 'Work Orders', href: '/work-orders', short: 'WO', roles: schedulingRoles },
