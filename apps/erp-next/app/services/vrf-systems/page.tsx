@@ -19,7 +19,10 @@ export const metadata: Metadata = {
 const DEFAULT_HERO_IMAGES = new Set([
   'https://images.unsplash.com/photo-1600566753190-17f0baa2a6c3?auto=format&fit=crop&fm=webp&q=88&w=2200',
   'https://images.unsplash.com/photo-1775629632806-165d644178c0?auto=format&fit=crop&fm=webp&q=88&w=2200',
+  '/website/hero/hero-hospitality.webp',
 ]);
+
+const DEFAULT_VRF_HERO = 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?auto=format&fit=crop&fm=webp&q=90&w=2200';
 
 const indoorUnitImages: Record<string, string> = {
   cassette: 'https://www.pinclipart.com/picdir/middle/535-5355980_inverter-4-way-cassette-samsung-ceiling-cassette-air.png',
@@ -92,7 +95,7 @@ function CardCopy({ card }: { card: VrfCard }) {
 
 export default async function VrfSystemsPage() {
   const content = await loadPublishedVrfContent();
-  const heroImage = DEFAULT_HERO_IMAGES.has(content.hero.imageUrl) ? '/website/hero/hero-hospitality.webp' : content.hero.imageUrl;
+  const heroImage = DEFAULT_HERO_IMAGES.has(content.hero.imageUrl) ? DEFAULT_VRF_HERO : content.hero.imageUrl;
   const trustImage = content.trust.imageUrl.includes('photo-1621905251189-08b45d6a269e') ? trustImageFallback : content.trust.imageUrl;
 
   return (
