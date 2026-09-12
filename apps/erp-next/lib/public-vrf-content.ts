@@ -61,6 +61,11 @@ export const VRF_PUBLISHED_ID = 'publicVrfPagePublished';
 export const VRF_SETTINGS_COLLECTION = 'businessSettings';
 export const PUBLIC_VRF_CONFIG_PATH = 'public-website/vrf/published.json';
 
+export const APPROVED_VRF_HERO_IMAGE_URL = 'https://images.unsplash.com/photo-1775629632806-165d644178c0?auto=format&fit=crop&fm=webp&q=88&w=2200';
+export const APPROVED_VRF_TRUST_IMAGE_URL = 'https://skipcalls.com/aeo/hvac/hvac-first-hot-day-my-phone-blows-up-with-no-cool-calls.webp';
+const LEGACY_VRF_HERO_IMAGE_URL = 'https://images.unsplash.com/photo-1600566753190-17f0baa2a6c3?auto=format&fit=crop&fm=webp&q=88&w=2200';
+const LEGACY_VRF_TRUST_IMAGE_URL = 'https://images.unsplash.com/photo-1621905251189-08b45d6a269e?auto=format&fit=crop&fm=webp&q=86&w=1400';
+
 export const defaultPublicVrfContent: PublicVrfContent = {
   id: VRF_PUBLISHED_ID,
   version: 1,
@@ -69,7 +74,7 @@ export const defaultPublicVrfContent: PublicVrfContent = {
     title: 'Smarter VRF solutions for complex buildings in',
     accent: 'Aruba.',
     description: 'Energy-efficient. Flexible. Built for Aruba. DEMAC designs, installs and supports VRF systems for apartments, hotels, offices, villas and commercial buildings — delivering precise comfort, lower operating costs and long-term reliability.',
-    imageUrl: 'https://images.unsplash.com/photo-1600566753190-17f0baa2a6c3?auto=format&fit=crop&fm=webp&q=88&w=2200',
+    imageUrl: APPROVED_VRF_HERO_IMAGE_URL,
     imagePosition: 'center center',
     primaryCta: { label: 'Request a VRF Consultation', href: '/contact?request=vrf' },
     secondaryCta: { label: 'WhatsApp Us', href: '/contact?channel=whatsapp' },
@@ -131,7 +136,7 @@ export const defaultPublicVrfContent: PublicVrfContent = {
     eyebrow: 'WHY WORK WITH DEMAC?',
     title: 'Local expertise. Lasting performance.',
     description: 'DEMAC combines VRF technical expertise with local Aruba knowledge to deliver systems that are practical to install, commission, service and support for the long term.',
-    imageUrl: 'https://images.unsplash.com/photo-1621905251189-08b45d6a269e?auto=format&fit=crop&fm=webp&q=86&w=1400',
+    imageUrl: APPROVED_VRF_TRUST_IMAGE_URL,
     bullets: [
       'Aruba-based team with local expertise',
       'End-to-end project coordination',
@@ -187,6 +192,11 @@ function normalizeCards(value: unknown, fallback: VrfCard[], limit = 12): VrfCar
   });
 }
 
+function managedImage(value: unknown, fallback: string, legacy: string, approved: string) {
+  const next = text(value, fallback);
+  return next === legacy ? approved : next;
+}
+
 export function normalizePublicVrfContent(value: unknown, id = VRF_PUBLISHED_ID): PublicVrfContent {
   const f = defaultPublicVrfContent;
   if (!value || typeof value !== 'object') return { ...f, id };
@@ -203,7 +213,7 @@ export function normalizePublicVrfContent(value: unknown, id = VRF_PUBLISHED_ID)
       title: text(hero.title, f.hero.title),
       accent: text(hero.accent, f.hero.accent),
       description: text(hero.description, f.hero.description),
-      imageUrl: text(hero.imageUrl, f.hero.imageUrl),
+      imageUrl: managedImage(hero.imageUrl, f.hero.imageUrl, LEGACY_VRF_HERO_IMAGE_URL, APPROVED_VRF_HERO_IMAGE_URL),
       imagePosition: text(hero.imagePosition, f.hero.imagePosition),
       primaryCta: normalizeLink(hero.primaryCta, f.hero.primaryCta),
       secondaryCta: normalizeLink(hero.secondaryCta, f.hero.secondaryCta),
@@ -226,7 +236,7 @@ export function normalizePublicVrfContent(value: unknown, id = VRF_PUBLISHED_ID)
       eyebrow: text(trust.eyebrow, f.trust.eyebrow),
       title: text(trust.title, f.trust.title),
       description: text(trust.description, f.trust.description),
-      imageUrl: text(trust.imageUrl, f.trust.imageUrl),
+      imageUrl: managedImage(trust.imageUrl, f.trust.imageUrl, LEGACY_VRF_TRUST_IMAGE_URL, APPROVED_VRF_TRUST_IMAGE_URL),
       bullets: rawBullets.length ? rawBullets.slice(0, 8).map((item, index) => text(item, f.trust.bullets[index] ?? 'Local support')) : f.trust.bullets,
     },
     faqHeading: text(source.faqHeading, f.faqHeading),
