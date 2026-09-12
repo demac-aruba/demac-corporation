@@ -16,20 +16,21 @@ export const metadata: Metadata = {
   },
 };
 
-const APPROVED_HERO_IMAGE = 'https://images.unsplash.com/photo-1775629632806-165d644178c0?auto=format&fit=crop&fm=webp&q=88&w=2200';
-const LEGACY_HERO_IMAGE = 'https://images.unsplash.com/photo-1600566753190-17f0baa2a6c3?auto=format&fit=crop&fm=webp&q=88&w=2200';
+const DEFAULT_HERO_IMAGES = new Set([
+  'https://images.unsplash.com/photo-1600566753190-17f0baa2a6c3?auto=format&fit=crop&fm=webp&q=88&w=2200',
+  'https://images.unsplash.com/photo-1775629632806-165d644178c0?auto=format&fit=crop&fm=webp&q=88&w=2200',
+]);
 
 const indoorUnitImages: Record<string, string> = {
   cassette: 'https://www.pinclipart.com/picdir/middle/535-5355980_inverter-4-way-cassette-samsung-ceiling-cassette-air.png',
   'fan-coil': 'https://cdn1-1.ddc.kz/nomenclature/images/60309/fan_coil1.png',
   'floor-ceiling': 'https://cdn.freewebstore.com/origin/32505/1457534704266_mideauniversalfront.jpg',
-  'air-handler': 'https://www.holtop.com/uploads/Air-Handling-Unit-Customized-AHU.jpg',
   'split-unit': 'https://pngimg.com/uploads/air_conditioner/air_conditioner_PNG42.png',
   'wall-mounted': 'https://pngimg.com/uploads/air_conditioner/air_conditioner_PNG42.png',
 };
 
 const applicationImages: Record<string, string> = {
-  apartments: 'https://images.unsplash.com/photo-1775629632806-165d644178c0?auto=format&fit=crop&fm=webp&q=86&w=1000',
+  apartments: 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?auto=format&fit=crop&fm=webp&q=86&w=1000',
   hospitality: 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&fm=webp&q=86&w=1000',
   office: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&fm=webp&q=86&w=1000',
   retail: 'https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&fm=webp&q=86&w=1000',
@@ -72,8 +73,8 @@ function OutdoorSystemArt({ variant = 0 }: { variant?: number }) {
   );
 }
 
-function MiniIndoor({ type, label }: { type: 'wall' | 'cassette' | 'ducted' | 'air-handler'; label: string }) {
-  return <div className={`${styles.miniIndoor} ${styles[`mini${type === 'air-handler' ? 'AirHandler' : type.charAt(0).toUpperCase() + type.slice(1)}`]}`}><span>{label}</span></div>;
+function AirHandlerArt() {
+  return <div className={styles.airHandlerArt} aria-hidden="true"><span /><span /><span /><i /><i /></div>;
 }
 
 function SectionHead({ eyebrow, title, copy }: { eyebrow: string; title: string; copy?: string }) {
@@ -91,7 +92,7 @@ function CardCopy({ card }: { card: VrfCard }) {
 
 export default async function VrfSystemsPage() {
   const content = await loadPublishedVrfContent();
-  const heroImage = content.hero.imageUrl === LEGACY_HERO_IMAGE ? APPROVED_HERO_IMAGE : content.hero.imageUrl;
+  const heroImage = DEFAULT_HERO_IMAGES.has(content.hero.imageUrl) ? '/website/hero/hero-hospitality.webp' : content.hero.imageUrl;
   const trustImage = content.trust.imageUrl.includes('photo-1621905251189-08b45d6a269e') ? trustImageFallback : content.trust.imageUrl;
 
   return (
@@ -119,16 +120,6 @@ export default async function VrfSystemsPage() {
                 <div className={styles.heroPhoto} style={{ backgroundImage: `url(${heroImage})`, backgroundPosition: content.hero.imagePosition }} />
                 <div className={styles.heroPhotoWash} />
                 <div className={styles.comfortScript}>Comfort<br />in Every Space</div>
-                <div className={styles.cutaway} aria-label="VRF zoning example">
-                  <div className={styles.cutawayRoom}><MiniIndoor type="wall" label="Wall Mounted" /></div>
-                  <div className={styles.cutawayRoom}><MiniIndoor type="cassette" label="Cassette" /></div>
-                  <div className={styles.cutawayRoom}><MiniIndoor type="ducted" label="Ducted" /></div>
-                  <div className={styles.cutawayRoom}><MiniIndoor type="air-handler" label="Air Handler" /></div>
-                </div>
-                <svg className={styles.zoneNetwork} viewBox="0 0 720 500" preserveAspectRatio="none" aria-hidden="true">
-                  <path d="M410 390V96M410 120H535M410 205H558M410 292H533M410 378H555" />
-                  {[['410','120'],['535','120'],['410','205'],['558','205'],['410','292'],['533','292'],['410','378'],['555','378']].map(([cx,cy]) => <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r="5" />)}
-                </svg>
                 <div className={styles.heroOutdoor}><OutdoorSystemArt variant={0} /></div>
                 <aside className={styles.systemPanel}>
                   <strong>ONE SYSTEM.<br />MULTIPLE ZONES.<br />TOTAL COMFORT.</strong>
@@ -169,8 +160,10 @@ export default async function VrfSystemsPage() {
             <div className={styles.indoorGrid}>
               {content.indoorUnits.map((card) => (
                 <article className={styles.indoorCard} key={card.id}>
-                  <div className={styles.indoorArtWrap}><img src={indoorUnitImages[card.id]} alt="" loading="lazy" /></div>
-                  <CardCopy card={card} />
+                  <div className={styles.indoorArtWrap}>
+                    {card.id === 'air-handler' ? <AirHandlerArt /> : <img className={styles.indoorImage} src={indoorUnitImages[card.id]} alt="" loading="lazy" />}
+                  </div>
+                  <div className={styles.indoorBody}><CardCopy card={card} /></div>
                 </article>
               ))}
             </div>
@@ -184,7 +177,7 @@ export default async function VrfSystemsPage() {
               {content.applications.map((card) => (
                 <article className={styles.applicationCard} key={card.id}>
                   <div className={styles.applicationPhoto} style={{ backgroundImage: `url(${applicationImages[card.id] ?? applicationImages.office})` }} />
-                  <div><CardCopy card={card} /></div>
+                  <div className={styles.applicationBody}><CardCopy card={card} /></div>
                 </article>
               ))}
             </div>
@@ -231,14 +224,14 @@ export default async function VrfSystemsPage() {
 
         <section className={`${styles.section} ${styles.faqSection}`}>
           <div className={styles.container}>
-            <SectionHead eyebrow="FREQUENTLY ASKED QUESTIONS" title={content.faqHeading} />
+            <div className={styles.faqHeadingRow}><SectionHead eyebrow="FREQUENTLY ASKED QUESTIONS" title={content.faqHeading} /><a href="/contact">Still have questions? <strong>Contact our team →</strong></a></div>
             <div className={styles.faqGrid}>
               {content.faq.map((item) => <details className={styles.faqItem} key={item.id}><summary>{item.title}<span>+</span></summary><p>{item.description}</p></details>)}
             </div>
           </div>
         </section>
 
-        <section className={styles.finalCta} style={{ backgroundImage: `linear-gradient(90deg,rgba(235,248,255,.95) 0%,rgba(235,248,255,.88) 46%,rgba(20,123,190,.18) 100%),url(${ctaBackground})` }}>
+        <section className={styles.finalCta} style={{ backgroundImage: `linear-gradient(90deg,rgba(235,248,255,.96),rgba(220,245,255,.77),rgba(185,234,255,.58)),url(${ctaBackground})` }}>
           <div className={styles.container}>
             <div className={styles.finalCtaInner}>
               <div><span>{content.finalCta.eyebrow}</span><h2>{content.finalCta.title}</h2><p>{content.finalCta.description}</p></div>
