@@ -136,24 +136,81 @@ function formatArubaDateTime(value) {
   }).format(date);
 }
 
-function reminderMessage(task, opportunity, assigneeName) {
+function checkpointStatus(item) {
+  if (item?.completed === true) return "completed";
+  const status = String(item?.status || "pending");
+  return ["pending", "in_progress", "waiting", "blocked", "completed"].includes(status) ? status : "pending";
+}
+
+function pendingCheckpoints(task) {
+  return (Array.isArray(task?.checklist) ? task.checklist : []).filter((item) => checkpointStatus(item) !== "completed");
+}
+
+function compactText(value, maxLength = 160) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`;
+}
+
+function latestCheckpointUpdate(item) {
+  const updates = Array.isArray(item?.updates) ? item.updates : [];
+  return updates.length ? updates[updates.length - 1] : null;
+}
+
+function daysSince(value, now = new Date()) {
+  const time = Date.parse(String(value || ""));
+  if (!Number.isFinite(time)) return null;
+  return Math.max(0, Math.floor((now.getTime() - time) / (24 * 60 * 60 * 1000)));
+}
+
+function checkpointReminderLines(task, now = new Date(), limit = 20) {
+  const all = pendingCheckpoints(task);
+  if (!(Array.isArray(task?.checklist) && task.checklist.length)) return ["No checklist is configured for this task."];
+  if (!all.length) return ["✓ All checklist items are complete. Review and close the task if no further action is required."];
+
+  const lines = ["Pending checkpoints:"];
+  for (const item of all.slice(0, Math.max(1, limit))) {
+    const status = checkpointStatus(item).replaceAll("_", " ").toUpperCase();
+    lines.push(`☐ ${compactText(item?.label, 180)}${status === "PENDING" ? "" : ` [${status}]`}`);
+    const latest = latestCheckpointUpdate(item);
+    if (latest?.text) lines.push(`   Latest: ${compactText(latest.text, 180)}`);
+    if (item?.nextAction) lines.push(`   Next: ${compactText(item.nextAction, 150)}`);
+    if (item?.nextFollowUpAt) lines.push(`   Follow-up: ${formatArubaDateTime(item.nextFollowUpAt)}`);
+    if (item?.waitingOn) lines.push(`   Waiting on: ${compactText(item.waitingOn, 120)}`);
+    if (item?.blockedReason) lines.push(`   Blocked: ${compactText(item.blockedReason, 150)}`);
+    if (item?.requiresApproval === true && item?.approvalStatus !== "approved") lines.push("   Approval: manager approval pending");
+    const inactivityDays = daysSince(item?.lastUpdateAt || latest?.at || task?.createdAt, now);
+    if (inactivityDays !== null && inactivityDays >= 2) lines.push(`   Attention: no progress update for ${inactivityDays} days`);
+  }
+  if (all.length > limit) lines.push(`…and ${all.length - limit} more pending checkpoint${all.length - limit === 1 ? "" : "s"}.`);
+  return lines;
+}
+
+function checkpointReminderBlock(task, now = new Date()) {
+  return checkpointReminderLines(task, now).join("\n");
+}
+
+function reminderMessage(task, opportunity, assigneeName, now = new Date()) {
   const name = String(assigneeName || task?.assigneeNameSnapshot || "team member").trim();
   const taskLabel = `${task?.taskNumber || "Task"} – ${task?.title || "Untitled task"}`;
   const due = formatArubaDateTime(task?.dueAt);
-  if (opportunity?.kind === "pre_deadline_24h") return `Hi ${name}, reminder: ${taskLabel} is due in 24 hours. Deadline: ${due}. Please update the task in DEMAC ERP.`;
-  if (opportunity?.kind === "pre_deadline_3h") return `Hi ${name}, ${taskLabel} is due in about 3 hours. Deadline: ${due}. Please make sure it is on track in DEMAC ERP.`;
-  if (opportunity?.kind === "pre_deadline_1h") return `Hi ${name}, final reminder: ${taskLabel} is due in about 1 hour. Deadline: ${due}. Please complete or update it in DEMAC ERP.`;
-  if (opportunity?.kind === "overdue") return `Hi ${name}, ${taskLabel} is overdue. Original deadline: ${due}. Please complete it or update its status in DEMAC ERP as soon as possible.`;
-  return `Hi ${name}, ${taskLabel} has reached its deadline (${due}). Please complete it or update the task status in DEMAC ERP.`;
+  const checkpointBlock = checkpointReminderBlock(task, now);
+  let intro;
+  if (opportunity?.kind === "pre_deadline_24h") intro = `Hi ${name}, reminder: ${taskLabel} is due in 24 hours. Deadline: ${due}.`;
+  else if (opportunity?.kind === "pre_deadline_3h") intro = `Hi ${name}, ${taskLabel} is due in about 3 hours. Deadline: ${due}.`;
+  else if (opportunity?.kind === "pre_deadline_1h") intro = `Hi ${name}, final reminder: ${taskLabel} is due in about 1 hour. Deadline: ${due}.`;
+  else if (opportunity?.kind === "overdue") intro = `Hi ${name}, ${taskLabel} is overdue. Original deadline: ${due}.`;
+  else intro = `Hi ${name}, ${taskLabel} has reached its deadline (${due}).`;
+  return `${intro}\n\n${checkpointBlock}\n\nPlease update the checkpoint progress in DEMAC ERP.`;
 }
 
 function dailySummaryMessage(tasks, assigneeName, now = new Date()) {
   const active = sortTasksByAttention((Array.isArray(tasks) ? tasks : []).filter((task) => !isTerminalTask(task)), now);
-  const lines = active.map((task, index) => {
+  const sections = active.map((task, index) => {
     const status = effectiveTaskStatus(task, now).replaceAll("_", " ").toUpperCase();
-    return `${index + 1}. ${task.taskNumber || "Task"} – ${task.title || "Untitled task"}\n   ${status} · Due ${formatArubaDateTime(task.dueAt)}`;
+    return `${index + 1}. ${task.taskNumber || "Task"} – ${task.title || "Untitled task"}\n   ${status} · Due ${formatArubaDateTime(task.dueAt)}\n${checkpointReminderLines(task, now).map((line) => `   ${line}`).join("\n")}`;
   });
-  return `Good morning, ${String(assigneeName || "team member").trim()}. Here are your pending DEMAC tasks:\n\n${lines.length ? lines.join("\n\n") : "No pending tasks today."}\n\n— DEMAC ERP`;
+  return `Good morning, ${String(assigneeName || "team member").trim()}. Here are your pending DEMAC tasks and checkpoints:\n\n${sections.length ? sections.join("\n\n") : "No pending tasks today."}\n\nPlease add a progress update whenever something changes, even when a checkpoint is not completed yet.\n\n— DEMAC ERP`;
 }
 
 function queueDocumentId(prefix, key) {
@@ -163,13 +220,18 @@ function queueDocumentId(prefix, key) {
 module.exports = {
   TASK_TIME_ZONE,
   DEFAULT_REMINDER_POLICY,
+  checkpointReminderBlock,
+  checkpointReminderLines,
+  checkpointStatus,
   dailySummaryMessage,
   dueReminderOpportunities,
   effectiveTaskStatus,
   formatArubaDateTime,
   isTerminalTask,
+  latestCheckpointUpdate,
   mergedReminderPolicy,
   normalizeArubaPhone,
+  pendingCheckpoints,
   plannedReminderOpportunities,
   queueDocumentId,
   reminderMessage,

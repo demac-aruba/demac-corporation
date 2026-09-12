@@ -9,6 +9,7 @@ const appointmentNotifications = require("./appointmentNotifications");
 const taskAssignmentNotifications = require("./taskAssignmentNotifications");
 const taskReminders = require("./taskReminders");
 const taskTrackerApi = require("./taskTrackerApi");
+const taskCheckpointApi = require("./taskCheckpointApi");
 const taskTrackerAttachments = require("./taskTrackerAttachments");
 const technicianDailySchedules = require("./technicianDailySchedules");
 const userManagement = require("./userManagement");
@@ -31,11 +32,11 @@ const router = require("./whatsappCopilotRouter");
 // canonical Office Booking Authority; only appointment communication actions
 // are projected per recipient by the dedicated communication authority.
 //
-// Task Tracker is an independent Operations boundary. Its authenticated API and
-// private evidence transport are the mutation boundaries. Creation notifications
-// and reminder workers enqueue only into the existing WhatsApp outbound authority.
-// None of these surfaces import, mutate, or derive work from Scheduling & Dispatch.
-// Only the deployable API handler is exported here; test helpers remain module-internal.
+// Task Tracker is an independent Operations boundary. Its authenticated APIs and
+// private evidence transport are the mutation boundaries. Checkpoint progress,
+// creation notifications and reminder workers remain inside Task Tracker and
+// enqueue only into the existing WhatsApp outbound authority. None of these
+// surfaces import, mutate, or derive work from Scheduling & Dispatch.
 module.exports = {
   ...core,
   ...officeBookingAuthorityFacade,
@@ -48,6 +49,7 @@ module.exports = {
   ...taskAssignmentNotifications,
   ...taskReminders,
   taskTrackerApi: taskTrackerApi.taskTrackerApi,
+  taskCheckpointApi: taskCheckpointApi.taskCheckpointApi,
   ...taskTrackerAttachments,
   ...technicianDailySchedules,
   ...userManagement,

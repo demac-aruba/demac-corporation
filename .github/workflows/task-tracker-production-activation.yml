@@ -8,11 +8,16 @@ on:
       - 'functions/taskReminderService.js'
       - 'functions/taskReminders.js'
       - 'functions/taskTrackerApi.js'
+      - 'functions/taskCheckpointApi.js'
+      - 'functions/taskCheckpointApi.test.js'
       - 'functions/taskAttachmentPolicy.js'
       - 'functions/taskTrackerAttachments.js'
       - 'functions/scripts/taskTrackerProductionActivation.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
+      - 'apps/erp-next/app/(erp)/tasks/**'
+      - 'apps/erp-next/components/task-tracker/**'
+      - 'apps/erp-next/lib/task-tracker/**'
       - '.github/workflows/task-tracker-production-activation.yml'
   push:
     branches:
@@ -23,11 +28,16 @@ on:
       - 'functions/taskReminderService.js'
       - 'functions/taskReminders.js'
       - 'functions/taskTrackerApi.js'
+      - 'functions/taskCheckpointApi.js'
+      - 'functions/taskCheckpointApi.test.js'
       - 'functions/taskAttachmentPolicy.js'
       - 'functions/taskTrackerAttachments.js'
       - 'functions/scripts/taskTrackerProductionActivation.js'
       - 'functions/bootstrap.js'
       - 'functions/package.json'
+      - 'apps/erp-next/app/(erp)/tasks/**'
+      - 'apps/erp-next/components/task-tracker/**'
+      - 'apps/erp-next/lib/task-tracker/**'
       - '.github/workflows/task-tracker-production-activation.yml'
   workflow_dispatch:
 
@@ -64,14 +74,17 @@ jobs:
           node --check functions/taskReminderService.js
           node --check functions/taskReminders.js
           node --check functions/taskTrackerApi.js
+          node --check functions/taskCheckpointApi.js
           node --check functions/taskAttachmentPolicy.js
           node --check functions/taskTrackerAttachments.js
           node --check functions/scripts/taskTrackerProductionActivation.js
           npm run test:task-reminders --prefix functions
+          node --test functions/taskCheckpointApi.test.js
           node - <<'NODE'
           const mod = require('./functions/bootstrap');
           for (const name of [
             'taskTrackerApi',
+            'taskCheckpointApi',
             'taskTrackerAttachments',
             'notifyTaskAssigneeOnCreate',
             'processTaskDeadlineReminders',
@@ -123,7 +136,7 @@ jobs:
         run: |
           set -euo pipefail
           npx --yes firebase-tools@15.2.1 deploy \
-            --only functions:taskTrackerApi,functions:taskTrackerAttachments,functions:notifyTaskAssigneeOnCreate,functions:processTaskDeadlineReminders,functions:sendDailyTaskSummaries \
+            --only functions:taskTrackerApi,functions:taskCheckpointApi,functions:taskTrackerAttachments,functions:notifyTaskAssigneeOnCreate,functions:processTaskDeadlineReminders,functions:sendDailyTaskSummaries \
             --project demac-corporation \
             --non-interactive \
             --force
@@ -134,6 +147,7 @@ jobs:
           set -euo pipefail
           for name in \
             taskTrackerApi \
+            taskCheckpointApi \
             taskTrackerAttachments \
             notifyTaskAssigneeOnCreate \
             processTaskDeadlineReminders \
