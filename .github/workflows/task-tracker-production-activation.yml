@@ -1,0 +1,167 @@
+name: Task Tracker Production Activation
+
+on:
+  pull_request:
+    paths:
+      - 'functions/taskAssignmentNotificationService.js'
+      - 'functions/taskAssignmentNotifications.js'
+      - 'functions/taskReminderService.js'
+      - 'functions/taskReminders.js'
+      - 'functions/taskTrackerApi.js'
+      - 'functions/taskAttachmentPolicy.js'
+      - 'functions/taskTrackerAttachments.js'
+      - 'functions/scripts/taskTrackerProductionActivation.js'
+      - 'functions/bootstrap.js'
+      - 'functions/package.json'
+      - '.github/workflows/task-tracker-production-activation.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'functions/taskAssignmentNotificationService.js'
+      - 'functions/taskAssignmentNotifications.js'
+      - 'functions/taskReminderService.js'
+      - 'functions/taskReminders.js'
+      - 'functions/taskTrackerApi.js'
+      - 'functions/taskAttachmentPolicy.js'
+      - 'functions/taskTrackerAttachments.js'
+      - 'functions/scripts/taskTrackerProductionActivation.js'
+      - 'functions/bootstrap.js'
+      - 'functions/package.json'
+      - '.github/workflows/task-tracker-production-activation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: task-tracker-production-activation
+  cancel-in-progress: false
+
+jobs:
+  validate-task-tracker-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Validate Task Tracker release boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check functions/bootstrap.js
+          node --check functions/taskAssignmentNotificationService.js
+          node --check functions/taskAssignmentNotifications.js
+          node --check functions/taskReminderService.js
+          node --check functions/taskReminders.js
+          node --check functions/taskTrackerApi.js
+          node --check functions/taskAttachmentPolicy.js
+          node --check functions/taskTrackerAttachments.js
+          node --check functions/scripts/taskTrackerProductionActivation.js
+          npm run test:task-reminders --prefix functions
+          node - <<'NODE'
+          const mod = require('./functions/bootstrap');
+          for (const name of [
+            'taskTrackerApi',
+            'taskTrackerAttachments',
+            'notifyTaskAssigneeOnCreate',
+            'processTaskDeadlineReminders',
+            'sendDailyTaskSummaries',
+          ]) {
+            if (typeof mod[name] !== 'function') throw new Error(`${name} export missing from functions/bootstrap.js`);
+          }
+          NODE
+
+  activate-task-tracker-production:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate-task-tracker-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Install function dependencies
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Authenticate Firebase deployment service account
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Verify operator identity links before activation
+        shell: bash
+        env:
+          GCLOUD_PROJECT: demac-corporation
+          GOOGLE_CLOUD_PROJECT: demac-corporation
+        run: |
+          set -euo pipefail
+          node functions/scripts/taskTrackerProductionActivation.js preflight
+
+      - name: Deploy Task Tracker functions only
+        shell: bash
+        env:
+          GCLOUD_PROJECT: demac-corporation
+          GOOGLE_CLOUD_PROJECT: demac-corporation
+        run: |
+          set -euo pipefail
+          npx --yes firebase-tools@15.2.1 deploy \
+            --only functions:taskTrackerApi,functions:taskTrackerAttachments,functions:notifyTaskAssigneeOnCreate,functions:processTaskDeadlineReminders,functions:sendDailyTaskSummaries \
+            --project demac-corporation \
+            --non-interactive \
+            --force
+
+      - name: Verify deployed Task Tracker functions
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in \
+            taskTrackerApi \
+            taskTrackerAttachments \
+            notifyTaskAssigneeOnCreate \
+            processTaskDeadlineReminders \
+            sendDailyTaskSummaries
+          do
+            state="$(gcloud functions describe "$name" --project=demac-corporation --gen2 --region=us-central1 --format='value(state)')"
+            if [ "$state" != 'ACTIVE' ]; then
+              echo "::error::${name} state is ${state:-unknown}."
+              exit 1
+            fi
+            echo "${name}: ACTIVE"
+          done
+
+      - name: Enable Task Tracker production authority
+        shell: bash
+        env:
+          GCLOUD_PROJECT: demac-corporation
+          GOOGLE_CLOUD_PROJECT: demac-corporation
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          node functions/scripts/taskTrackerProductionActivation.js activate
+
+      - name: Verify Task Tracker production authority
+        shell: bash
+        env:
+          GCLOUD_PROJECT: demac-corporation
+          GOOGLE_CLOUD_PROJECT: demac-corporation
+        run: |
+          set -euo pipefail
+          node functions/scripts/taskTrackerProductionActivation.js verify
