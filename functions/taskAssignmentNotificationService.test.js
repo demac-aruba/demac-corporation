@@ -24,15 +24,16 @@ function task(overrides = {}) {
   };
 }
 
-test('new task message includes task, priority, Aruba deadline and requirements', () => {
+test('new task message uses approved clean WhatsApp format', () => {
   const text = assignmentNotificationMessage(task(), 'Scarlett');
-  assert.match(text, /new DEMAC task/i);
-  assert.match(text, /TSK-ABC123/);
-  assert.match(text, /Delta Blue Report/);
-  assert.match(text, /Priority: Important/);
-  assert.match(text, /Aruba time/);
-  assert.match(text, /Prepare the Delta Blue report/);
+  assert.match(text, /Hi Scarlett, you have a new DEMAC task\./);
+  assert.match(text, /TSK-ABC123\n\*Delta Blue Report\*/);
+  assert.match(text, /\*Deadline:\*/);
+  assert.match(text, /\*Requirements:\*\nPrepare the Delta Blue report/);
+  assert.match(text, /────────────/);
   assert.match(text, /review and acknowledge/i);
+  assert.doesNotMatch(text, /Priority:/);
+  assert.doesNotMatch(text, /Aruba time/i);
 });
 
 test('assignment queue and event ids are deterministic for trigger retries', () => {
@@ -41,9 +42,10 @@ test('assignment queue and event ids are deterministic for trigger retries', () 
   assert.notEqual(assignmentQueueId('task-abc'), assignmentQueueId('task-other'));
 });
 
-test('long requirements are compacted for WhatsApp readability', () => {
-  const compacted = compactRequirements('x'.repeat(500), 100);
+test('long requirements remain readable and bounded without collapsing intentional lines', () => {
+  const compacted = compactRequirements('Line one\nLine two\n' + 'x'.repeat(500), 100);
   assert.equal(compacted.length, 100);
+  assert.match(compacted, /^Line one\nLine two\n/);
   assert.match(compacted, /…$/);
 });
 
