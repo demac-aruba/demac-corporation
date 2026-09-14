@@ -190,6 +190,29 @@ function checkpointReminderBlock(task, now = new Date()) {
   return checkpointReminderLines(task, now).join("\n");
 }
 
+function dailyCheckpointLines(task, now = new Date(), limit = 20) {
+  const all = pendingCheckpoints(task);
+  if (!(Array.isArray(task?.checklist) && task.checklist.length)) return ["No checklist is configured for this task."];
+  if (!all.length) return ["✓ All checklist items are complete. Review and close the task if no further action is required."];
+
+  const lines = [];
+  for (const item of all.slice(0, Math.max(1, limit))) {
+    const status = checkpointStatus(item).replaceAll("_", " ").toUpperCase();
+    lines.push(`☐ ${compactText(item?.label, 180)}${status === "PENDING" ? "" : ` [${status}]`}`);
+    const latest = latestCheckpointUpdate(item);
+    if (latest?.text) lines.push(`   *Latest Update:* ${compactText(latest.text, 180)}`);
+    if (item?.nextAction) lines.push(`   *Next:* ${compactText(item.nextAction, 150)}`);
+    if (item?.nextFollowUpAt) lines.push(`   *Follow-up:* ${formatArubaDateTime(item.nextFollowUpAt)}`);
+    if (item?.waitingOn) lines.push(`   *Waiting on:* ${compactText(item.waitingOn, 120)}`);
+    if (item?.blockedReason) lines.push(`   *Blocked:* ${compactText(item.blockedReason, 150)}`);
+    if (item?.requiresApproval === true && item?.approvalStatus !== "approved") lines.push("   *Approval:* manager approval pending");
+    const inactivityDays = daysSince(item?.lastUpdateAt || latest?.at || task?.createdAt, now);
+    if (inactivityDays !== null && inactivityDays >= 2) lines.push(`   *Attention:* no progress update for ${inactivityDays} days`);
+  }
+  if (all.length > limit) lines.push(`…and ${all.length - limit} more pending checkpoint${all.length - limit === 1 ? "" : "s"}.`);
+  return lines;
+}
+
 function reminderMessage(task, opportunity, assigneeName, now = new Date()) {
   const name = String(assigneeName || task?.assigneeNameSnapshot || "team member").trim();
   const taskLabel = `${task?.taskNumber || "Task"} – ${task?.title || "Untitled task"}`;
@@ -204,13 +227,37 @@ function reminderMessage(task, opportunity, assigneeName, now = new Date()) {
   return `${intro}\n\n${checkpointBlock}\n\nPlease update the checkpoint progress in DEMAC ERP.`;
 }
 
+function dailyGreetingMessage(assigneeName) {
+  const name = String(assigneeName || "team member").trim();
+  return `Good morning, ${name}.\nHere are your pending DEMAC tasks for today.\n\nPlease check the following messages.`;
+}
+
+function dailyTaskReminderMessage(task, now = new Date()) {
+  const number = String(task?.taskNumber || "Task").trim();
+  const title = String(task?.title || "Untitled task").trim();
+  const due = formatArubaDateTime(task?.dueAt);
+  const pendingLines = dailyCheckpointLines(task, now);
+  return [
+    number,
+    `*${title}*`,
+    '',
+    `*Deadline:* ${due}`,
+    '',
+    '*Pending:*',
+    ...pendingLines,
+  ].join('\n');
+}
+
+function dailyClosingMessage() {
+  return `Please open DEMAC ERP to update your progress or add any new information.\n\n— DEMAC ERP`;
+}
+
 function dailySummaryMessage(tasks, assigneeName, now = new Date()) {
   const active = sortTasksByAttention((Array.isArray(tasks) ? tasks : []).filter((task) => !isTerminalTask(task)), now);
-  const sections = active.map((task, index) => {
-    const status = effectiveTaskStatus(task, now).replaceAll("_", " ").toUpperCase();
-    return `${index + 1}. ${task.taskNumber || "Task"} – ${task.title || "Untitled task"}\n   ${status} · Due ${formatArubaDateTime(task.dueAt)}\n${checkpointReminderLines(task, now).map((line) => `   ${line}`).join("\n")}`;
-  });
-  return `Good morning, ${String(assigneeName || "team member").trim()}. Here are your pending DEMAC tasks and checkpoints:\n\n${sections.length ? sections.join("\n\n") : "No pending tasks today."}\n\nPlease add a progress update whenever something changes, even when a checkpoint is not completed yet.\n\n— DEMAC ERP`;
+  const messages = [dailyGreetingMessage(assigneeName)];
+  messages.push(...active.map((task) => dailyTaskReminderMessage(task, now)));
+  messages.push(dailyClosingMessage());
+  return messages.join("\n\n────────────\n\n");
 }
 
 function queueDocumentId(prefix, key) {
@@ -223,7 +270,11 @@ module.exports = {
   checkpointReminderBlock,
   checkpointReminderLines,
   checkpointStatus,
+  dailyCheckpointLines,
+  dailyClosingMessage,
+  dailyGreetingMessage,
   dailySummaryMessage,
+  dailyTaskReminderMessage,
   dueReminderOpportunities,
   effectiveTaskStatus,
   formatArubaDateTime,
