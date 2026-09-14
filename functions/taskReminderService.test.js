@@ -4,7 +4,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {
   checkpointReminderLines,
+  dailyClosingMessage,
+  dailyGreetingMessage,
   dailySummaryMessage,
+  dailyTaskReminderMessage,
   dueReminderOpportunities,
   effectiveTaskStatus,
   normalizeArubaPhone,
@@ -111,17 +114,32 @@ test("pending checkpoints exclude completed work and preserve open checkpoint co
   assert.match(text, /Follow-up:/);
 });
 
-test("daily summary sends one digest grouped by task with only pending checkpoints", () => {
+test("morning reminder format is one greeting, one task message per task, and one closing", () => {
+  const now = new Date("2026-09-11T12:00:00.000Z");
+  const greeting = dailyGreetingMessage("Scarlett");
+  const taskMessage = dailyTaskReminderMessage(task({ taskNumber: "TSK-11EF55", title: "INVENTORY UPDATE REQUEST" }), now);
+  const closing = dailyClosingMessage();
+
+  assert.match(greeting, /Good morning, Scarlett/);
+  assert.match(greeting, /check the following messages/i);
+  assert.match(taskMessage, /^TSK-11EF55\n\*INVENTORY UPDATE REQUEST\*/);
+  assert.match(taskMessage, /\*Deadline:\*/);
+  assert.match(taskMessage, /\*Pending:\*/);
+  assert.match(taskMessage, /Confirm customer C payment/);
+  assert.match(taskMessage, /\*Latest Update:\* Called today/);
+  assert.doesNotMatch(taskMessage, /Contact customer A/);
+  assert.match(closing, /Please open DEMAC ERP to update your progress/i);
+});
+
+test("legacy combined preview is composed from the same separated-message content", () => {
   const text = dailySummaryMessage([
     task({ id: "one", taskNumber: "TSK-1", title: "Delta Blue Report" }),
     task({ id: "two", taskNumber: "TSK-2", title: "Invoice Follow-up" }),
   ], "Scarlett", new Date("2026-09-11T12:00:00.000Z"));
   assert.match(text, /Good morning, Scarlett/);
-  assert.match(text, /1\. TSK-1/);
-  assert.match(text, /2\. TSK-2/);
-  assert.match(text, /Pending checkpoints:/);
-  assert.match(text, /Confirm customer C payment/);
-  assert.doesNotMatch(text, /Contact customer A/);
+  assert.match(text, /TSK-1\n\*Delta Blue Report\*/);
+  assert.match(text, /TSK-2\n\*Invoice Follow-up\*/);
+  assert.match(text, /Please open DEMAC ERP to update your progress/);
 });
 
 test("scheduled reminder wording includes pending checkpoint context", () => {
@@ -149,4 +167,15 @@ test("scheduled reminder workers require both backend activation and automation 
   assert.match(source, /settings\?\.backendEnabled === true && settings\?\.enabled === true/);
   assert.match(source, /if \(!automationRuntimeEnabled\(settings\)\)/);
   assert.match(source, /if \(!automationRuntimeEnabled\(settings\) \|\| !settings\.dailySummaryEnabled\)/);
+});
+
+test("daily worker creates deterministic separate greeting, per-task, and closing queue records", () => {
+  const source = fs.readFileSync(path.join(__dirname, "taskReminders.js"), "utf8");
+  assert.match(source, /task-digest-greeting/);
+  assert.match(source, /task-digest-task/);
+  assert.match(source, /task-digest-closing/);
+  assert.match(source, /daily_task_greeting/);
+  assert.match(source, /daily_task_summary/);
+  assert.match(source, /daily_task_closing/);
+  assert.match(source, /sequence: index \+ 1/);
 });
