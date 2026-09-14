@@ -3,12 +3,15 @@ const logger = require("firebase-functions/logger");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const {
   TASK_TIME_ZONE,
-  dailySummaryMessage,
+  dailyClosingMessage,
+  dailyGreetingMessage,
+  dailyTaskReminderMessage,
   dueReminderOpportunities,
   isTerminalTask,
   normalizeArubaPhone,
   queueDocumentId,
   reminderMessage,
+  sortTasksByAttention,
 } = require("./taskReminderService");
 
 const db = getFirestore();
@@ -74,7 +77,7 @@ function createContactResolver() {
   };
 }
 
-async function queueTextOnce({ queueId, to, text, task = null, kind, scheduledFor, taskIds = null }) {
+async function queueTextOnce({ queueId, to, text, task = null, kind, scheduledFor, taskIds = null, batchKey = null, sequence = null }) {
   if (!to || !text) return { queued: false, reason: !to ? "missing-phone" : "empty-message" };
   const queueRef = db.collection("whatsappOutboundQueue").doc(queueId);
   const eventRef = task?.id ? db.collection("taskEvents").doc(queueDocumentId("task-event", queueId)) : null;
@@ -96,6 +99,8 @@ async function queueTextOnce({ queueId, to, text, task = null, kind, scheduledFo
       taskNumber: task?.taskNumber || null,
       taskIds: Array.isArray(taskIds) ? taskIds : null,
       scheduledFor: scheduledFor || null,
+      batchKey: batchKey || null,
+      sequence: Number.isInteger(sequence) ? sequence : null,
       createdByUserId: "task-reminder-automation",
       createdByName: "Task Reminder Automation",
       createdAt: FieldValue.serverTimestamp(),
@@ -109,7 +114,7 @@ async function queueTextOnce({ queueId, to, text, task = null, kind, scheduledFo
         actorUserId: "task-reminder-automation",
         actorName: "Task Reminder Automation",
         message: text,
-        metadata: { queueId, reason: kind, scheduledFor: scheduledFor || null },
+        metadata: { queueId, reason: kind, scheduledFor: scheduledFor || null, batchKey: batchKey || null, sequence: Number.isInteger(sequence) ? sequence : null },
       });
     }
   });
@@ -211,35 +216,73 @@ async function processDailySummaryBatch({ now = new Date() } = {}) {
 
   const resolveContact = createContactResolver();
   const dateKey = arubaDateKey(now);
+  const scheduledFor = `${dateKey}T${settings.dailySummaryTime || "08:00"}:00-04:00`;
   let queued = 0;
   let skipped = 0;
   const errors = [];
 
-  for (const [staffId, assignedTasks] of byStaff.entries()) {
+  for (const [staffId, rawAssignedTasks] of byStaff.entries()) {
+    const assignedTasks = sortTasksByAttention(rawAssignedTasks, now);
     const contact = await resolveContact(assignedTasks[0]);
     if (contact.active === false || !contact.phone || !assignedTasks.length) {
       skipped += 1;
       continue;
     }
-    const queueId = queueDocumentId("task-digest", `${dateKey}-${staffId}`);
-    try {
-      const result = await queueTextOnce({
-        queueId,
-        to: contact.phone,
-        text: dailySummaryMessage(assignedTasks, contact.name, now),
+
+    const batchKey = `task-morning-${dateKey}-${staffId}`;
+    const allTaskIds = assignedTasks.map((task) => task.id);
+    const messages = [
+      {
+        queueId: queueDocumentId("task-digest-greeting", `${dateKey}-${staffId}`),
+        text: dailyGreetingMessage(contact.name),
+        kind: "daily_task_greeting",
+        task: null,
+        taskIds: allTaskIds,
+        sequence: 0,
+      },
+      ...assignedTasks.map((task, index) => ({
+        queueId: queueDocumentId("task-digest-task", `${dateKey}-${staffId}-${task.id}`),
+        text: dailyTaskReminderMessage(task, now),
         kind: "daily_task_summary",
-        scheduledFor: `${dateKey}T${settings.dailySummaryTime || "08:00"}:00-04:00`,
-        taskIds: assignedTasks.map((task) => task.id),
-      });
-      if (result.queued) queued += 1;
-      else skipped += 1;
-    } catch (error) {
-      skipped += 1;
-      errors.push({ staffId, error: error?.message || String(error) });
+        task,
+        taskIds: [task.id],
+        sequence: index + 1,
+      })),
+      {
+        queueId: queueDocumentId("task-digest-closing", `${dateKey}-${staffId}`),
+        text: dailyClosingMessage(),
+        kind: "daily_task_closing",
+        task: null,
+        taskIds: allTaskIds,
+        sequence: assignedTasks.length + 1,
+      },
+    ];
+
+    for (const message of messages) {
+      try {
+        const result = await queueTextOnce({
+          ...message,
+          to: contact.phone,
+          scheduledFor,
+          batchKey,
+        });
+        if (result.queued) queued += 1;
+        else skipped += 1;
+      } catch (error) {
+        skipped += 1;
+        errors.push({ staffId, queueId: message.queueId, error: error?.message || String(error) });
+      }
     }
   }
 
-  return { status: errors.length ? "partial" : "complete", operatorCount: byStaff.size, queued, skipped, errors };
+  return {
+    status: errors.length ? "partial" : "complete",
+    operatorCount: byStaff.size,
+    taskCount: tasks.length,
+    queued,
+    skipped,
+    errors,
+  };
 }
 
 exports.processTaskDeadlineReminders = onSchedule(
