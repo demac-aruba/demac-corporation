@@ -24,6 +24,12 @@ const DEFAULT_HERO_IMAGES = new Set([
 
 const DEFAULT_VRF_HERO = 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?auto=format&fit=crop&fm=webp&q=90&w=2400';
 
+const solutionImages = [
+  '/website/vrf/large-vrf-aruba.jpg',
+  '/website/vrf/modular-vrf-aruba.jpg',
+  '/website/vrf/mini-vrf-aruba.jpg',
+] as const;
+
 const applicationImages: Record<string, string> = {
   apartments: 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?auto=format&fit=crop&fm=webp&q=88&w=1200',
   hospitality: 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&fm=webp&q=88&w=1200',
@@ -54,17 +60,16 @@ function LineIcon({ index }: { index: number }) {
 }
 
 function OutdoorSystemArt({ variant = 0 }: { variant?: number }) {
-  const count = variant === 0 ? 3 : variant === 1 ? 2 : 1;
+  const source = solutionImages[variant] ?? solutionImages[0];
   return (
-    <div className={styles.outdoorArt} aria-hidden="true">
-      {Array.from({ length: count }).map((_, index) => (
-        <span className={styles.outdoorCabinet} key={index}>
-          <i className={styles.fan}><b /></i>
-          <i className={`${styles.fan} ${styles.fanLower}`}><b /></i>
-          <em>VRF</em>
-        </span>
-      ))}
-    </div>
+    <img
+      src={source}
+      alt=""
+      loading="lazy"
+      width={480}
+      height={430}
+      style={{ display: 'block', width: '100%', height: '100%', minHeight: 170, objectFit: 'cover', objectPosition: 'center', borderRadius: 8 }}
+    />
   );
 }
 
