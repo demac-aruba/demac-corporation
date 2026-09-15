@@ -7,7 +7,25 @@ const { chromium, webkit } = createRequire('/tmp/vrf-browser/package.json')('pla
 const output = path.resolve('.vrf-mobile-artifacts');
 fs.mkdirSync(output, { recursive: true });
 const url = process.env.VRF_REVIEW_URL || 'http://127.0.0.1:4173/services/vrf-systems/';
-const report = { route: url, checks: [], imageChecks: [], stickyChecks: [], desktop: null };
+const report = { route: url, checks: [], imageChecks: [], stickyChecks: [], publicConfigReads: [], desktop: null };
+
+async function configureLocalPublicConfigRead(context) {
+  const origin = new URL(url).origin;
+  if (!['127.0.0.1', 'localhost'].includes(new URL(url).hostname)) return;
+  // The export is tested on localhost, not its deployed origin. WebKit reports
+  // the public footer config's CORS rejection as a page error even though its
+  // existing loader catches failed reads. Proxy only this exact PUBLIC JSON GET
+  // with its real upstream body/status and a localhost CORS header. No fixtures,
+  // authenticated requests, Firebase writes or production settings are changed.
+  await context.route((requestUrl) => requestUrl.hostname === 'firebasestorage.googleapis.com'
+    && requestUrl.pathname === '/v0/b/demac-corporation.firebasestorage.app/o/public-website%2Fconfig%2Fpublished.json'
+    && requestUrl.searchParams.get('alt') === 'media', async (route) => {
+    assert.equal(route.request().method(), 'GET', 'Public configuration review is read-only');
+    const response = await route.fetch({ timeout: 30000 });
+    report.publicConfigReads.push({ status: response.status(), localOriginCorsProxy: true });
+    await route.fulfill({ response, headers: { ...response.headers(), 'access-control-allow-origin': origin } });
+  });
+}
 
 async function recordImages(page, root) {
   return root.locator('[role="img"][style*="background-image"]:visible').evaluateAll(async (nodes) => {
@@ -49,6 +67,7 @@ async function reviewStickyNavigation(page, root, name) {
 
 async function mobileReview(browser, name, width, height, interactions) {
   const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, reducedMotion: 'reduce' });
+  await configureLocalPublicConfigRead(context);
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
@@ -133,6 +152,7 @@ async function mobileReview(browser, name, width, height, interactions) {
     for (const width of [320, 360, 390, 412, 430, 600, 767]) await mobileReview(chrome, `chromium-${width}`, width, 844, width === 390);
     await mobileReview(safari, 'webkit-iphone-390', 390, 844, true);
     const context = await chrome.newContext({ viewport: { width: 1440, height: 1000 } });
+    await configureLocalPublicConfigRead(context);
     const page = await context.newPage();
     await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
     assert(!(await page.locator('[data-vrf-mobile]').isVisible()), 'Mobile UI must not appear on desktop');
