@@ -25,9 +25,18 @@ const DEFAULT_HERO_IMAGES = new Set([
 const DEFAULT_VRF_HERO = 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?auto=format&fit=crop&fm=webp&q=90&w=2400';
 
 const solutionImages = [
-  '/website/vrf/large-vrf-aruba.webp',
-  '/website/vrf/modular-vrf-aruba.webp',
-  '/website/vrf/mini-vrf-aruba.webp',
+  {
+    primary: 'https://qtrypzzcjebvfcihiynt.supabase.co/storage/v1/object/public/base44-prod/public/user_690ccf1f4f20635046a259c9/e52f5393d_Tropicalrooftopwithmodernequipment1.png',
+    fallback: '/website/vrf/large-vrf-aruba.jpg',
+  },
+  {
+    primary: 'https://cdn1.npcdn.net/images/5960ee38ad7354220701bc5d1f0a886e_1772521105.webp?from=jpeg&md5id=d41ca4d10ddfea76d016acbfded20618&new_height=1000&new_width=1000&size=max&type=9&w=-62170008925',
+    fallback: '/website/vrf/modular-vrf-aruba.jpg',
+  },
+  {
+    primary: 'https://static.wixstatic.com/media/ba87af_d796787b6c0f440d9036b324b812071b~mv2.jpg/v1/fill/w_632%2Ch_632%2Cal_c%2Cq_85%2Cenc_avif%2Cquality_auto/ba87af_d796787b6c0f440d9036b324b812071b~mv2.jpg',
+    fallback: '/website/vrf/mini-vrf-aruba.jpg',
+  },
 ] as const;
 
 const applicationImages: Record<string, string> = {
@@ -62,13 +71,19 @@ function LineIcon({ index }: { index: number }) {
 function OutdoorSystemArt({ variant = 0 }: { variant?: number }) {
   const source = solutionImages[variant] ?? solutionImages[0];
   return (
-    <img
-      src={source}
-      alt=""
-      loading="lazy"
-      width={480}
-      height={429}
-      style={{ display: 'block', width: '100%', height: '100%', minHeight: 170, objectFit: 'cover', objectPosition: 'center', borderRadius: 8 }}
+    <div
+      aria-hidden="true"
+      style={{
+        display: 'block',
+        width: '100%',
+        height: '100%',
+        minHeight: 170,
+        borderRadius: 8,
+        backgroundImage: `url("${source.primary}"), url("${source.fallback}")`,
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        backgroundRepeat: 'no-repeat',
+      }}
     />
   );
 }
