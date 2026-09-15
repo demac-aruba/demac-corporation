@@ -44,5 +44,6 @@ jobs:
         with:
           name: vrf-mobile-browser-review
           path: .vrf-mobile-artifacts/
+          include-hidden-files: true
           retention-days: 7
           if-no-files-found: warn
