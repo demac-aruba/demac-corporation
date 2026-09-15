@@ -1,5 +1,7 @@
 import type { Metadata } from 'next';
 import { PublicSiteShell } from '@/components/public/public-site-shell';
+import { VrfMobileExperience } from '@/components/public/vrf-mobile-experience';
+import mobileStyles from '@/components/public/vrf-mobile-experience.module.css';
 import { loadPublishedVrfContent } from '@/lib/public-vrf-public';
 import type { VrfCard, VrfLink } from '@/lib/public-vrf-content';
 import styles from './vrf-fidelity.module.css';
@@ -88,9 +90,9 @@ function OutdoorSystemArt({ variant = 0 }: { variant?: number }) {
   );
 }
 
-function IndoorUnitArt({ id }: { id: string }) {
-  const shell = `unit-shell-${id}`;
-  const shade = `unit-shade-${id}`;
+function IndoorUnitArt({ id, prefix = '' }: { id: string; prefix?: string }) {
+  const shell = `${prefix}unit-shell-${id}`;
+  const shade = `${prefix}unit-shade-${id}`;
   return (
     <svg className={styles.indoorSvg} viewBox="0 0 220 120" role="img" aria-label="">
       <defs>
@@ -103,11 +105,11 @@ function IndoorUnitArt({ id }: { id: string }) {
           <stop offset="0" stopColor="#aab9c3" />
           <stop offset="1" stopColor="#6f8490" />
         </linearGradient>
-        <filter id={`shadow-${id}`} x="-30%" y="-40%" width="160%" height="190%">
+        <filter id={`${prefix}shadow-${id}`} x="-30%" y="-40%" width="160%" height="190%">
           <feDropShadow dx="0" dy="8" stdDeviation="6" floodColor="#173858" floodOpacity="0.18" />
         </filter>
       </defs>
-      <g filter={`url(#shadow-${id})`}>
+      <g filter={`url(#${prefix}shadow-${id})`}>
         {id === 'cassette' ? <>
           <path d="M47 38 112 20l61 20-65 21Z" fill={`url(#${shell})`} stroke="#b8c7d0" />
           <path d="M47 38v30l61 22V61Z" fill="#dce5ea" stroke="#b8c7d0" />
@@ -176,7 +178,10 @@ export default async function VrfSystemsPage() {
   const trustImage = content.trust.imageUrl.includes('photo-1621905251189-08b45d6a269e') ? trustImageFallback : content.trust.imageUrl;
 
   return (
+    <div className={mobileStyles.route}>
     <PublicSiteShell active="services">
+      <VrfMobileExperience content={content} heroImage={heroImage} heroPosition={heroPosition} solutionImages={solutionImages} applicationImages={applicationImages} trustImage={trustImage} indoorArt={content.indoorUnits.map((card) => <IndoorUnitArt key={card.id} id={card.id} prefix="mobile-" />)} />
+      <div className={mobileStyles.desktop} data-vrf-desktop>
       <main className={styles.page}>
         <section className={styles.hero}>
           <div className={styles.heroMedia} aria-hidden="true">
@@ -308,6 +313,8 @@ export default async function VrfSystemsPage() {
           </div>
         </section>
       </main>
+      </div>
     </PublicSiteShell>
+    </div>
   );
 }
