@@ -25,9 +25,9 @@ const DEFAULT_HERO_IMAGES = new Set([
 const DEFAULT_VRF_HERO = 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?auto=format&fit=crop&fm=webp&q=90&w=2400';
 
 const solutionImages = [
-  '/website/vrf/large-vrf-aruba.jpg',
-  '/website/vrf/modular-vrf-aruba.jpg',
-  '/website/vrf/mini-vrf-aruba.jpg',
+  '/website/vrf/large-vrf-aruba.webp',
+  '/website/vrf/modular-vrf-aruba.webp',
+  '/website/vrf/mini-vrf-aruba.webp',
 ] as const;
 
 const applicationImages: Record<string, string> = {
@@ -67,7 +67,7 @@ function OutdoorSystemArt({ variant = 0 }: { variant?: number }) {
       alt=""
       loading="lazy"
       width={480}
-      height={430}
+      height={429}
       style={{ display: 'block', width: '100%', height: '100%', minHeight: 170, objectFit: 'cover', objectPosition: 'center', borderRadius: 8 }}
     />
   );
