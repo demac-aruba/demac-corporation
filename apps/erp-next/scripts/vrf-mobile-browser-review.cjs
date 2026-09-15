@@ -7,7 +7,7 @@ const { chromium, webkit } = createRequire('/tmp/vrf-browser/package.json')('pla
 const output = path.resolve('.vrf-mobile-artifacts');
 fs.mkdirSync(output, { recursive: true });
 const url = process.env.VRF_REVIEW_URL || 'http://127.0.0.1:4173/services/vrf-systems/';
-const report = { route: url, checks: [], imageChecks: [], desktop: null };
+const report = { route: url, checks: [], imageChecks: [], stickyChecks: [], desktop: null };
 
 async function recordImages(page, root) {
   return root.locator('[role="img"][style*="background-image"]:visible').evaluateAll(async (nodes) => {
@@ -25,6 +25,26 @@ async function recordImages(page, root) {
     }
     return results;
   });
+}
+
+async function reviewStickyNavigation(page, root, name) {
+  const nav = root.getByRole('navigation', { name: 'Explore VRF solutions' });
+  // A Playwright click can scroll a tab into the viewport without passing the
+  // navigation's natural position. Explicitly cross that threshold before
+  // asserting sticky behavior; preserve the original two-pixel tolerance.
+  for (const id of ['systems', 'indoors', 'services']) {
+    const target = await root.locator(`#vrf-mobile-${id}`).evaluate((node) => {
+      const top = node.getBoundingClientRect().top + window.scrollY + 100;
+      window.scrollTo({ top, behavior: 'instant' });
+      return top;
+    });
+    await page.waitForFunction((top) => Math.abs(window.scrollY - top) <= 2, target, { timeout: 5000 });
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const metrics = await nav.evaluate((node) => ({ top: node.getBoundingClientRect().top, position: getComputedStyle(node).position, scrollY: window.scrollY }));
+    report.stickyChecks.push({ name, section: id, ...metrics });
+    assert.equal(metrics.position, 'sticky', 'Section navigation uses sticky positioning');
+    assert(Math.abs(metrics.top) <= 2, `Section navigation stays reachable on scroll: ${JSON.stringify(metrics)}`);
+  }
 }
 
 async function mobileReview(browser, name, width, height, interactions) {
@@ -85,16 +105,15 @@ async function mobileReview(browser, name, width, height, interactions) {
       await root.locator('#vrf-building-rail').evaluate((node) => { node.scrollLeft = 0; });
       await process.nth(0).click();
       await tabs.nth(0).click();
-      const sticky = await root.getByRole('navigation', { name: 'Explore VRF solutions' }).evaluate((node) => node.getBoundingClientRect().top);
-      assert(Math.abs(sticky) <= 2, `Section navigation stays reachable on scroll: ${sticky}`);
     }
-    await page.evaluate(() => scrollTo(0, 0));
+    await reviewStickyNavigation(page, root, name);
+    await page.evaluate(() => scrollTo({ top: 0, behavior: 'instant' }));
     await page.waitForTimeout(200);
     await page.screenshot({ path: path.join(output, `${name}-hero.png`) });
     if (interactions) {
       await page.screenshot({ path: path.join(output, `${name}-full.png`), fullPage: true });
       for (const id of ['systems', 'indoors', 'buildings', 'services', 'faq']) {
-        await page.locator(`#vrf-mobile-${id}`).evaluate((node) => { scrollTo(0, node.getBoundingClientRect().top + scrollY - 65); });
+        await page.locator(`#vrf-mobile-${id}`).evaluate((node) => { scrollTo({ top: node.getBoundingClientRect().top + scrollY - 65, behavior: 'instant' }); });
         await page.waitForTimeout(200);
         await page.screenshot({ path: path.join(output, `${name}-${id}.png`) });
       }
