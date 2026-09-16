@@ -40,6 +40,10 @@ function activeWorkOrder(order) {
   return Boolean(order) && !INACTIVE_WORK_ORDER_STATUSES.has(normalizedText(order.status));
 }
 
+function isSupportOrder(order) {
+  return normalizedText(order?.appointmentAssignmentRole || order?.assignmentRole).toLowerCase() === "support";
+}
+
 function orderTimeKey(order) {
   return normalizedText(order.time || "99:99").padStart(5, "0");
 }
@@ -247,13 +251,92 @@ function arrivalContact(order, client) {
   return { name: normalizedText(preferred.name), source: "additional-property-contact" };
 }
 
+function supportUnitCount(order) {
+  const items = Array.isArray(order?.appointmentWorkItems) ? order.appointmentWorkItems : [];
+  const itemQuantity = items.reduce((sum, item) => sum + Math.max(0, Number(item?.quantity) || 0), 0);
+  if (itemQuantity > 0) return itemQuantity;
+  const airCount = Number(order?.airConditionerCount);
+  if (Number.isFinite(airCount) && airCount > 0) return Math.round(airCount);
+  const slots = Number(order?.scheduledSlots);
+  return Number.isFinite(slots) && slots > 0 ? Math.round(slots) : 1;
+}
+
+function primaryVanLabel(appointment, supportVanId = "") {
+  const assignments = Array.isArray(appointment?.assignments) ? appointment.assignments : [];
+  const primary = assignments.find((assignment) => normalizedText(assignment?.role).toLowerCase() !== "support")
+    || assignments.find((assignment) => normalizedText(assignment?.vanId) !== normalizedText(supportVanId));
+  return normalizedText(primary?.vanName || primary?.vanId);
+}
+
+function mergeSupportWorkItems(left, right) {
+  const merged = new Map();
+  for (const item of [...(Array.isArray(left) ? left : []), ...(Array.isArray(right) ? right : [])]) {
+    const key = [item?.id, item?.presetId, item?.serviceId, item?.label].map(normalizedText).join("|");
+    const current = merged.get(key);
+    if (!current) {
+      merged.set(key, { ...item });
+      continue;
+    }
+    current.quantity = Math.max(0, Number(current.quantity) || 0) + Math.max(0, Number(item?.quantity) || 0);
+    current.durationMinutes = Math.max(0, Number(current.durationMinutes) || 0) + Math.max(0, Number(item?.durationMinutes) || 0);
+  }
+  return [...merged.values()];
+}
+
+function supportOrdersCanCollapse(left, right) {
+  if (!isSupportOrder(left) || !isSupportOrder(right)) return false;
+  if (normalizedText(left.vanId) !== normalizedText(right.vanId)) return false;
+  if (normalizedText(left.appointmentId) !== normalizedText(right.appointmentId)) return false;
+  if (normalizedText(left.clientId) !== normalizedText(right.clientId)) return false;
+  if (normalizedText(left.propertyId) !== normalizedText(right.propertyId)) return false;
+  const leftEnd = projectedOrderEndMinutes(left);
+  const rightStart = timeToMinutes(right.time);
+  return leftEnd !== null && rightStart !== null && leftEnd === rightStart;
+}
+
+function mergeContiguousSupportOrders(left, right) {
+  const durationMinutes = orderDurationMinutes(left) + orderDurationMinutes(right);
+  const slots = Math.max(1, Number(left.scheduledSlots) || 1) + Math.max(1, Number(right.scheduledSlots) || 1);
+  const start = timeToMinutes(left.time);
+  return {
+    ...left,
+    appointmentWorkItems: mergeSupportWorkItems(left.appointmentWorkItems, right.appointmentWorkItems),
+    appointmentDurationMinutes: durationMinutes,
+    appointmentEndTime: start === null ? normalizedText(right.appointmentEndTime) : minutesToTime(start + durationMinutes),
+    appointmentCapacityEndTime: normalizedText(right.appointmentCapacityEndTime || right.appointmentEndTime),
+    scheduledSlots: slots,
+    airConditionerCount: supportUnitCount(left) + supportUnitCount(right),
+    technicianIds: [...new Set([...(Array.isArray(left.technicianIds) ? left.technicianIds : []), ...(Array.isArray(right.technicianIds) ? right.technicianIds : [])])],
+    scheduleSourceWorkOrderIds: [
+      ...(Array.isArray(left.scheduleSourceWorkOrderIds) ? left.scheduleSourceWorkOrderIds : [left.id]),
+      ...(Array.isArray(right.scheduleSourceWorkOrderIds) ? right.scheduleSourceWorkOrderIds : [right.id]),
+    ].filter(Boolean),
+  };
+}
+
+function collapseContiguousSupportOrders(orders) {
+  const sorted = [...(Array.isArray(orders) ? orders : [])]
+    .sort((a, b) => orderTimeKey(a).localeCompare(orderTimeKey(b)) || String(a.id || "").localeCompare(String(b.id || "")));
+  const collapsed = [];
+  for (const order of sorted) {
+    const previous = collapsed[collapsed.length - 1];
+    if (previous && supportOrdersCanCollapse(previous, order)) {
+      collapsed[collapsed.length - 1] = mergeContiguousSupportOrders(previous, order);
+    } else {
+      collapsed.push(order);
+    }
+  }
+  return collapsed;
+}
+
 function renderVanWorkOrderText({ van, order, client, property, appointment, staffById, halfDaySchedules = [], sequence }) {
   const start = formatClock(order.time);
   const endValue = displayedOrderEndTime(order, halfDaySchedules);
   const end = endValue ? formatClock(endValue) : "";
   const contact = arrivalContact(order, client);
   const team = staffFirstNamesForOrder(order, staffById);
-  const description = customerDescription(order) || workSummary(order);
+  const support = isSupportOrder(order);
+  const description = support ? workSummary(order) : (customerDescription(order) || workSummary(order));
   const instructions = technicianInstructions(appointment, order);
   const access = propertyAccessInstructions(property);
   const district = geographicDistrict(property);
@@ -264,8 +347,12 @@ function renderVanWorkOrderText({ van, order, client, property, appointment, sta
   const header = [`*DEMAC · ${headerLabel}*`, `*Trabajo ${sequence} · ${formatScheduleDate(order.date)}*`];
   const customerBlock = [
     `*Hora:* ${start}${end ? ` – ${end}` : ""}`,
-    `*Cliente:* ${normalizedText(client?.name || client?.company || order.clientName) || "Cliente"}`,
   ];
+  if (support) {
+    const primaryVan = primaryVanLabel(appointment, order.vanId);
+    customerBlock.push(`*Apoyo:* ${primaryVan ? `${primaryVan} · ` : ""}${supportUnitCount(order)} spot${supportUnitCount(order) === 1 ? "" : "s"}`);
+  }
+  customerBlock.push(`*Cliente:* ${normalizedText(client?.name || client?.company || order.clientName) || "Cliente"}`);
   if (contact?.name) customerBlock.push(`*Contacto:* ${contact.name}`);
   const locationBlock = [];
   if (locationName) locationBlock.push(`*Location:* ${locationName}`);
@@ -451,6 +538,7 @@ function createTechnicianDailyScheduleService({ db } = {}) {
         groupName: config.groupName,
         groupJid: config.groupJid,
         workOrderId: order.id,
+        sourceWorkOrderIds: order.scheduleSourceWorkOrderIds || [order.id],
         appointmentId: order.appointmentId || null,
         scheduleDate: dateKey,
         sequence,
@@ -521,12 +609,14 @@ function createTechnicianDailyScheduleService({ db } = {}) {
     const vans = day.vans.filter((van) => !canonicalTarget || van.id === canonicalTarget);
     const results = [];
     let workOrderCount = 0;
+    let scheduleVisitCount = 0;
     let lunchBreakCount = 0;
     let pendingPeriodCount = 0;
     for (const van of vans) {
-      const orders = day.workOrders
+      const rawOrders = day.workOrders
         .filter((order) => order.vanId === van.id)
         .sort((a, b) => orderTimeKey(a).localeCompare(orderTimeKey(b)) || String(a.id || "").localeCompare(String(b.id || "")));
+      const orders = collapseContiguousSupportOrders(rawOrders);
       const pendingSlots = pendingSlotsForVan({
         van,
         dateKey,
@@ -537,7 +627,8 @@ function createTechnicianDailyScheduleService({ db } = {}) {
         staffAbsences: day.staffAbsences,
         halfDaySchedules: day.halfDaySchedules,
       });
-      workOrderCount += orders.length;
+      workOrderCount += rawOrders.length;
+      scheduleVisitCount += orders.length;
       pendingPeriodCount += pendingSlots.length;
       const lunch = planLunchBreak(orders);
       if (lunch) lunchBreakCount += 1;
@@ -570,6 +661,7 @@ function createTechnicianDailyScheduleService({ db } = {}) {
       dateKey,
       vanCount: vans.length,
       workOrderCount,
+      scheduleVisitCount,
       pendingPeriodCount,
       lunchBreakCount,
       messageCount: results.length,
@@ -588,6 +680,7 @@ module.exports.VAN_DAILY_LANGUAGE = VAN_DAILY_LANGUAGE;
 module.exports.activeWorkOrder = activeWorkOrder;
 module.exports.arrivalContact = arrivalContact;
 module.exports.canonicalReservedEndTime = canonicalReservedEndTime;
+module.exports.collapseContiguousSupportOrders = collapseContiguousSupportOrders;
 module.exports.createTechnicianDailyScheduleService = createTechnicianDailyScheduleService;
 module.exports.customerDescription = customerDescription;
 module.exports.deterministicLunchQueueId = deterministicLunchQueueId;
@@ -601,9 +694,12 @@ module.exports.geographicDistrict = geographicDistrict;
 module.exports.geographicZone = geographicZone;
 module.exports.groupConfigForVan = groupConfigForVan;
 module.exports.hasCanonicalReservedCapacity = hasCanonicalReservedCapacity;
+module.exports.isSupportOrder = isSupportOrder;
+module.exports.mergeContiguousSupportOrders = mergeContiguousSupportOrders;
 module.exports.minutesToTime = minutesToTime;
 module.exports.orderDurationMinutes = orderDurationMinutes;
 module.exports.planLunchBreak = planLunchBreak;
+module.exports.primaryVanLabel = primaryVanLabel;
 module.exports.projectedOrderEndMinutes = projectedOrderEndMinutes;
 module.exports.propertyAccessInstructions = propertyAccessInstructions;
 module.exports.propertyLocationName = propertyLocationName;
@@ -614,6 +710,8 @@ module.exports.samePersonAsCustomer = samePersonAsCustomer;
 module.exports.scheduleSpansLunch = scheduleSpansLunch;
 module.exports.staffFirstNamesForOrder = staffFirstNamesForOrder;
 module.exports.staffNamesForOrder = staffNamesForOrder;
+module.exports.supportOrdersCanCollapse = supportOrdersCanCollapse;
+module.exports.supportUnitCount = supportUnitCount;
 module.exports.technicianInstructions = technicianInstructions;
 module.exports.timeToMinutes = timeToMinutes;
 module.exports.workSummary = workSummary;

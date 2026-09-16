@@ -3,6 +3,7 @@ const test = require("node:test");
 
 const {
   arrivalContact,
+  collapseContiguousSupportOrders,
   createTechnicianDailyScheduleService,
   deterministicLunchQueueId,
   deterministicPendingQueueId,
@@ -285,18 +286,167 @@ test("blank or legacy generated property names do not create a Location line", (
   }
 });
 
-test("a support Work Order does not expose internal assignment labels", () => {
+test("support Work Order identifies the primary Van without exposing internal assignment jargon", () => {
   const text = renderVanWorkOrderText({
     van: { ...groupVan, id: "VAN-4", name: "Van 4" },
-    order: { ...order, vanId: "VAN-4", appointmentAssignmentRole: "support" },
+    order: {
+      ...order,
+      vanId: "VAN-4",
+      appointmentAssignmentRole: "support",
+      appointmentDurationMinutes: 120,
+      appointmentEndTime: "11:30",
+      time: "09:30",
+      scheduledSlots: 2,
+      appointmentWorkItems: [{ label: "Standard Service", quantity: 2, durationMinutes: 120 }],
+    },
     client: { id: "client-1", name: "Customer" },
     property: { operationalZone: "Santa Cruz", neighborhood: "Balashi" },
-    appointment: {},
+    appointment: {
+      assignments: [
+        { vanId: "VAN-1", vanName: "Van 1", role: "primary" },
+        { vanId: "VAN-4", vanName: "Van 4", role: "support" },
+      ],
+      workLines: [{ technicianInstructions: "Bring coil cleaner" }],
+    },
     staffById: new Map(),
     sequence: 1,
   });
   assert.match(text, /\*DEMAC · Van 4\*/);
-  assert.doesNotMatch(text, /Asignación|Apoyo|Principal/);
+  assert.match(text, /\*Hora:\* 9:30 AM – 11:30 AM/);
+  assert.match(text, /\*Apoyo:\* Van 1 · 2 spots/);
+  assert.match(text, /\*Descripción:\* Standard Service × 2/);
+  assert.match(text, /\*Instrucciones técnico:\* Bring coil cleaner/);
+  assert.doesNotMatch(text, /Asignación|Principal/);
+});
+
+test("consecutive support Work Orders for the same visit collapse into one schedule visit", () => {
+  const supportOrders = [
+    {
+      ...order,
+      id: "WO-SUPPORT-1",
+      vanId: "VAN-4",
+      time: "09:30",
+      appointmentEndTime: "10:30",
+      appointmentDurationMinutes: 60,
+      scheduledSlots: 1,
+      appointmentAssignmentRole: "support",
+      appointmentWorkItems: [{ label: "Standard Service", quantity: 1, durationMinutes: 60 }],
+    },
+    {
+      ...order,
+      id: "WO-SUPPORT-2",
+      vanId: "VAN-4",
+      time: "10:30",
+      appointmentEndTime: "11:30",
+      appointmentDurationMinutes: 60,
+      scheduledSlots: 1,
+      appointmentAssignmentRole: "support",
+      appointmentWorkItems: [{ label: "Standard Service", quantity: 1, durationMinutes: 60 }],
+    },
+  ];
+  const collapsed = collapseContiguousSupportOrders(supportOrders);
+  assert.equal(collapsed.length, 1);
+  assert.equal(collapsed[0].time, "09:30");
+  assert.equal(collapsed[0].appointmentEndTime, "11:30");
+  assert.equal(collapsed[0].appointmentDurationMinutes, 120);
+  assert.equal(collapsed[0].scheduledSlots, 2);
+  assert.equal(collapsed[0].appointmentWorkItems[0].quantity, 2);
+  assert.deepEqual(collapsed[0].scheduleSourceWorkOrderIds, ["WO-SUPPORT-1", "WO-SUPPORT-2"]);
+});
+
+test("a separated afternoon support slot remains a second schedule visit", () => {
+  const supportOrders = [
+    {
+      ...order,
+      id: "WO-SUPPORT-1",
+      vanId: "VAN-4",
+      time: "09:30",
+      appointmentEndTime: "10:30",
+      appointmentDurationMinutes: 60,
+      scheduledSlots: 1,
+      appointmentAssignmentRole: "support",
+      appointmentWorkItems: [{ label: "Standard Service", quantity: 1, durationMinutes: 60 }],
+    },
+    {
+      ...order,
+      id: "WO-SUPPORT-2",
+      vanId: "VAN-4",
+      time: "10:30",
+      appointmentEndTime: "11:30",
+      appointmentDurationMinutes: 60,
+      scheduledSlots: 1,
+      appointmentAssignmentRole: "support",
+      appointmentWorkItems: [{ label: "Standard Service", quantity: 1, durationMinutes: 60 }],
+    },
+    {
+      ...order,
+      id: "WO-SUPPORT-3",
+      vanId: "VAN-4",
+      time: "15:30",
+      appointmentEndTime: "16:30",
+      appointmentDurationMinutes: 60,
+      scheduledSlots: 1,
+      appointmentAssignmentRole: "support",
+      appointmentWorkItems: [{ label: "Standard Service", quantity: 1, durationMinutes: 60 }],
+    },
+  ];
+  const collapsed = collapseContiguousSupportOrders(supportOrders);
+  assert.equal(collapsed.length, 2);
+  assert.deepEqual(collapsed.map((item) => [item.time, item.appointmentEndTime, item.appointmentWorkItems[0].quantity]), [
+    ["09:30", "11:30", 2],
+    ["15:30", "16:30", 1],
+  ]);
+});
+
+test("queueDay emits one message for two consecutive support spots", async () => {
+  const supportOrders = [
+    {
+      ...order,
+      id: "WO-SUPPORT-1",
+      vanId: "VAN-4",
+      time: "09:30",
+      appointmentEndTime: "10:30",
+      appointmentDurationMinutes: 60,
+      scheduledSlots: 1,
+      appointmentAssignmentRole: "support",
+      appointmentWorkItems: [{ label: "Standard Service", quantity: 1, durationMinutes: 60 }],
+    },
+    {
+      ...order,
+      id: "WO-SUPPORT-2",
+      vanId: "VAN-4",
+      time: "10:30",
+      appointmentEndTime: "11:30",
+      appointmentDurationMinutes: 60,
+      scheduledSlots: 1,
+      appointmentAssignmentRole: "support",
+      appointmentWorkItems: [{ label: "Standard Service", quantity: 1, durationMinutes: 60 }],
+    },
+  ];
+  const db = createScheduleDb({
+    vans: [{ id: "VAN-4", name: "Van 4", active: true, whatsappScheduleGroupName: "Van 4 Group", whatsappScheduleGroupJid: "120000000000000004@g.us" }],
+    workOrders: supportOrders,
+    clients: [{ id: "client-1", name: "Support Customer" }],
+    properties: [{ id: "property-1", operationalZone: "Santa Cruz", neighborhood: "Balashi" }],
+    appointments: [{
+      id: "APT-1",
+      assignments: [
+        { vanId: "VAN-1", vanName: "Van 1", role: "primary" },
+        { vanId: "VAN-4", vanName: "Van 4", role: "support" },
+      ],
+      workLines: [{ technicianInstructions: "Bring coil cleaner" }],
+    }],
+  });
+  const service = createTechnicianDailyScheduleService({ db });
+  const result = await service.queueDay("2026-08-21", { targetVanId: "VAN-4", deliveryKey: "support-condense" });
+  assert.equal(result.workOrderCount, 2);
+  assert.equal(result.scheduleVisitCount, 1);
+  assert.equal(result.messageCount, 1);
+  const queued = [...db.collections.whatsappOutboundQueue.values()];
+  assert.equal(queued.length, 1);
+  assert.match(queued[0].text, /\*Hora:\* 9:30 AM – 11:30 AM/);
+  assert.match(queued[0].text, /\*Apoyo:\* Van 1 · 2 spots/);
+  assert.match(queued[0].text, /\*Instrucciones técnico:\* Bring coil cleaner/);
 });
 
 test("technician work times use real duration instead of stretching through the lunch gap", () => {
@@ -419,6 +569,7 @@ test("queueDay sends a minimal lunch message between morning and afternoon work 
 
   assert.equal(result.vanCount, 1);
   assert.equal(result.workOrderCount, 2);
+  assert.equal(result.scheduleVisitCount, 2);
   assert.equal(result.pendingPeriodCount, 0);
   assert.equal(result.lunchBreakCount, 1);
   assert.equal(result.messageCount, 3);
@@ -451,6 +602,7 @@ test("an operationally available empty regular day queues only the six sellable 
   const result = await service.queueDay("2026-08-21", { targetVanId: "VAN-2", deliveryKey: "pending-test" });
 
   assert.equal(result.workOrderCount, 0);
+  assert.equal(result.scheduleVisitCount, 0);
   assert.equal(result.lunchBreakCount, 0);
   assert.equal(result.pendingPeriodCount, 6);
   assert.equal(result.messageCount, 6);
@@ -469,6 +621,7 @@ test("a van with zero work orders but no operational driver queues zero messages
   const service = createTechnicianDailyScheduleService({ db });
   const result = await service.queueDay("2026-08-21", { targetVanId: "VAN-4" });
   assert.equal(result.workOrderCount, 0);
+  assert.equal(result.scheduleVisitCount, 0);
   assert.equal(result.pendingPeriodCount, 0);
   assert.equal(result.lunchBreakCount, 0);
   assert.equal(result.messageCount, 0);

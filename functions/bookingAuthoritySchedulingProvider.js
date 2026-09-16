@@ -4,7 +4,9 @@ const {
   cleanText,
 } = require("./bookingAuthorityCore");
 const {
+  EXTRA_MORNING_SLOT,
   MAX_SEARCH_DAYS,
+  REGULAR_SLOTS,
   addDays,
   arubaDateParts,
   hashId,
@@ -15,6 +17,7 @@ const {
   propertyZone,
   resolveAssignment,
   snapshotItems,
+  vanCanReceiveAppointments,
 } = require("./bookingSchedulingPrimitives");
 const {
   assignmentCapacityInterval,
@@ -36,7 +39,7 @@ const {
 const { buildWorkOrders: projectCanonicalWorkOrders } = require("./bookingAuthorityWorkOrders");
 const { canonicalizeSchedulingData } = require("./bookingVanIdentity");
 
-const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v14";
+const SCHEDULING_PROVIDER_VERSION = "erp-booking-scheduling-provider-v15";
 const BACKDATED_BOOKING_MODE = "backdated";
 
 function backdatingIntent({ context = {}, offer = null } = {}) {
@@ -245,6 +248,239 @@ function buildWorkOrders(args) {
   return projectCanonicalWorkOrders(args);
 }
 
+function standardServicePreset(preset = {}) {
+  const value = `${cleanText(preset.id, 120)} ${cleanText(preset.label, 180)}`.toLowerCase();
+  return cleanText(preset.id, 120) === "standard_service"
+    || /standard service|servicio estandar|servicio standard/.test(value);
+}
+
+function supportSelectionPolicy(result = {}) {
+  const quantity = Math.max(0, Number(result.quantity) || 0);
+  const preset = result.preset || {};
+  const durationMinutes = Math.max(30, Number(preset.durationMinutesPerUnit) || 60);
+  const capacity = result.operationalRules?.standardService || {};
+  const primaryMax = Math.max(1, Number(capacity.singlePropertyMainVanMaxUnits) || 7);
+  const policyMax = Math.max(1, Number(capacity.supportHalfDayMaxUnits) || 3);
+  if (!standardServicePreset(preset) || durationMinutes !== 60 || quantity <= primaryMax) return null;
+  const minimum = Math.max(1, quantity - primaryMax);
+  const maximum = Math.min(quantity - 1, policyMax);
+  if (minimum > maximum) return null;
+  return { quantity, durationMinutes, primaryMax, minimum, maximum };
+}
+
+function supportSlotTimes() {
+  return [...new Set([...REGULAR_SLOTS, EXTRA_MORNING_SLOT])].sort();
+}
+
+function supportSlotCandidates({ result, data, routeConfig, date, requiredPrimaryVanId }) {
+  const policy = supportSelectionPolicy(result);
+  if (!policy || !date || !requiredPrimaryVanId) return [];
+  const candidates = [];
+  const candidateZone = result.candidateZone;
+  const allocation = {
+    quantity: 1,
+    durationMinutes: policy.durationMinutes,
+    slots: 1,
+    fullDay: false,
+  };
+  for (const van of data.vans) {
+    if (van.id === requiredPrimaryVanId) continue;
+    const assignment = resolveAssignment(
+      van,
+      date,
+      data.staffProfiles,
+      data.dailyVanAssignments,
+      data.staffAbsences,
+    );
+    if (!vanCanReceiveAppointments(van, assignment)) continue;
+    for (const time of supportSlotTimes()) {
+      const available = candidateAvailability({
+        date,
+        time,
+        allocation,
+        van,
+        assignment,
+        data,
+        routeConfig,
+        candidateZone,
+      });
+      if (!available) continue;
+      candidates.push({
+        id: `support-${hashId(`${date}|${van.id}|${time}|${result.preset?.id || "standard_service"}`, 18)}`,
+        vanId: van.id,
+        vanName: van.name || van.id,
+        time,
+        endTime: available.endTime,
+        capacityEndTime: available.capacityEndTime || available.endTime,
+        durationMinutes: policy.durationMinutes,
+        slots: 1,
+      });
+    }
+  }
+  return candidates.sort((left, right) => left.time.localeCompare(right.time) || left.vanId.localeCompare(right.vanId));
+}
+
+function cleanSupportSelectionIds(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item) => cleanText(item, 120)).filter(Boolean))];
+}
+
+function clockMinutes(value) {
+  const match = cleanText(value, 20).match(/^(\d{2}):(\d{2})$/);
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+}
+
+function contiguousSupportGroups(selectedCandidates) {
+  const byVan = new Map();
+  for (const candidate of selectedCandidates) {
+    const current = byVan.get(candidate.vanId) || [];
+    current.push(candidate);
+    byVan.set(candidate.vanId, current);
+  }
+  const groups = [];
+  for (const entries of byVan.values()) {
+    const sorted = [...entries].sort((left, right) => left.time.localeCompare(right.time));
+    let group = [];
+    for (const candidate of sorted) {
+      if (!group.length) {
+        group = [candidate];
+        continue;
+      }
+      const previous = group[group.length - 1];
+      const previousEnd = clockMinutes(previous.endTime);
+      const nextStart = clockMinutes(candidate.time);
+      if (previousEnd !== null && nextStart !== null && previousEnd === nextStart) {
+        group.push(candidate);
+      } else {
+        groups.push(group);
+        group = [candidate];
+      }
+    }
+    if (group.length) groups.push(group);
+  }
+  return groups.sort((left, right) => left[0].time.localeCompare(right[0].time) || left[0].vanId.localeCompare(right[0].vanId));
+}
+
+function composeSelectedSupportOption({
+  result,
+  request,
+  property,
+  data,
+  routeConfig,
+  requiredPrimaryVanId,
+  selectedIds,
+  candidates,
+}) {
+  const policy = supportSelectionPolicy(result);
+  if (!policy) return { option: null, reason: "support-selection-not-applicable" };
+  if (selectedIds.length < policy.minimum || selectedIds.length > policy.maximum) {
+    return { option: null, reason: "support-selection-count" };
+  }
+  const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+  const selected = selectedIds.map((id) => candidateById.get(id));
+  if (selected.some((candidate) => !candidate)) {
+    return { option: null, reason: "support-selection-unavailable" };
+  }
+
+  const primaryQuantity = policy.quantity - selected.length;
+  if (primaryQuantity < 1) return { option: null, reason: "support-selection-count" };
+  const primaryVan = data.vans.find((van) => van.id === requiredPrimaryVanId);
+  if (!primaryVan) return { option: null, reason: "required-van-unavailable" };
+  const primaryCrew = resolveAssignment(
+    primaryVan,
+    result.requestedDate,
+    data.staffProfiles,
+    data.dailyVanAssignments,
+    data.staffAbsences,
+  );
+  const primaryFullDay = primaryQuantity > (Number(result.operationalRules?.standardService?.differentPropertyDailyCapacity) || 6);
+  const primaryAllocation = {
+    quantity: primaryQuantity,
+    durationMinutes: primaryQuantity * policy.durationMinutes,
+    slots: primaryFullDay ? REGULAR_SLOTS.length : primaryQuantity,
+    fullDay: primaryFullDay,
+  };
+  const primary = candidateAvailability({
+    date: result.requestedDate,
+    time: result.requestedTime,
+    allocation: primaryAllocation,
+    van: primaryVan,
+    assignment: primaryCrew,
+    data,
+    routeConfig,
+    candidateZone: result.candidateZone,
+  });
+  if (!primary) return { option: null, reason: "required-primary-target-unavailable" };
+
+  const supportAssignments = [];
+  for (const group of contiguousSupportGroups(selected)) {
+    const first = group[0];
+    const van = data.vans.find((item) => item.id === first.vanId);
+    if (!van) return { option: null, reason: "support-selection-unavailable" };
+    const crew = resolveAssignment(
+      van,
+      result.requestedDate,
+      data.staffProfiles,
+      data.dailyVanAssignments,
+      data.staffAbsences,
+    );
+    const allocation = {
+      quantity: group.length,
+      durationMinutes: group.length * policy.durationMinutes,
+      slots: group.length,
+      fullDay: false,
+    };
+    const available = candidateAvailability({
+      date: result.requestedDate,
+      time: first.time,
+      allocation,
+      van,
+      assignment: crew,
+      data,
+      routeConfig,
+      candidateZone: result.candidateZone,
+    });
+    if (!available) return { option: null, reason: "support-selection-unavailable" };
+    supportAssignments.push({
+      ...available,
+      time: first.time,
+      endTime: available.endTime,
+      role: "support",
+      supportSlotIds: group.map((candidate) => candidate.id),
+    });
+  }
+
+  const address = cleanText(property.address || property.addressRaw || property.addressNormalized, 500);
+  const option = {
+    id: `opt-${hashId(`${result.requestedDate}|${result.requestedTime}|${requiredPrimaryVanId}|${selectedIds.slice().sort().join(",")}|${policy.quantity}`, 16)}`,
+    date: result.requestedDate,
+    time: result.requestedTime,
+    endTime: primary.endTime,
+    capacityEndTime: primary.capacityEndTime || primary.endTime,
+    quantity: policy.quantity,
+    address,
+    zone: result.candidateZone?.label || cleanText(property.operationalZone || property.zone, 80),
+    presetId: result.preset?.id || "standard_service",
+    presetLabel: result.preset?.label || "Standard Service",
+    durationMinutesPerUnit: policy.durationMinutes,
+    durationMode: result.preset?.durationMode || "per_unit",
+    serviceDefinitionVersion: result.preset?.serviceDefinitionVersion || 0,
+    serviceId: cleanText(result.preset?.serviceId, 120),
+    workItems: result.workItems || [],
+    assignments: [
+      { ...primary, time: result.requestedTime, endTime: primary.endTime, role: "primary" },
+      ...supportAssignments,
+    ],
+    score: 2_000,
+    requestedDateMatch: true,
+    requestedTimeMatch: true,
+    largeSingleProperty: true,
+    allDayCustomerNotice: result.operationalRules?.customerCommunication?.largeJobAllDayNotice !== false,
+    internalSupportCount: supportAssignments.length,
+  };
+  return { option, reason: "available" };
+}
+
 function operationalMoveResult({ request, property, data, routeConfig, date, time, vanId, currentSchedule }) {
   if (!date || !time || !vanId) return { option: null, reason: "missing-operational-move-target" };
   if (!operationalMoveDateAllowed({ date, currentSchedule })) {
@@ -443,32 +679,71 @@ function createSchedulingProvider({ db }) {
         includeRequestedDateAlternatives,
         allowBackdating: backdated,
       });
-      const options = result.options;
+      const selectionPolicy = officeExactTarget ? supportSelectionPolicy(result) : null;
+      const candidates = selectionPolicy
+        ? supportSlotCandidates({
+          result,
+          data,
+          routeConfig,
+          date: requestedDate,
+          requiredPrimaryVanId,
+        })
+        : [];
+      const requestedSupportSlotIds = cleanSupportSelectionIds(context.requestedSupportSlotIds);
+      let options = result.options;
+      let supportReason = "";
+      if (selectionPolicy && requestedSupportSlotIds.length) {
+        const composed = composeSelectedSupportOption({
+          result,
+          request,
+          property,
+          data,
+          routeConfig,
+          requiredPrimaryVanId,
+          selectedIds: requestedSupportSlotIds,
+          candidates,
+        });
+        options = composed.option ? [composed.option] : [];
+        supportReason = composed.reason;
+      }
+      const defaultSupportSlotIds = selectionPolicy
+        ? candidates.slice(0, selectionPolicy.minimum).map((candidate) => candidate.id)
+        : [];
+      const metadata = {
+        requestedDate: result.requestedDate || "",
+        requestedTime: result.requestedTime || "",
+        requestedDateUnavailable: result.requestedDateUnavailable === true,
+        requestedTimeUnavailable: result.requestedTimeUnavailable === true,
+        routeZone: result.candidateZone?.label || "",
+        vansRequired: options[0]?.assignments?.length || result.allocations?.length || 0,
+        requiredPrimaryVanId: requiredPrimaryVanId || "",
+        includeRequestedDateAlternatives,
+        routePolicy,
+        ...(selectionPolicy
+          ? {
+            supportSlotCandidates: candidates,
+            supportMinSlots: selectionPolicy.minimum,
+            supportMaxSlots: selectionPolicy.maximum,
+            defaultSupportSlotIds,
+            selectedSupportSlotIds: requestedSupportSlotIds,
+          }
+          : {}),
+        ...(backdated
+          ? {
+            bookingMode: BACKDATED_BOOKING_MODE,
+            backdatingAcknowledged: true,
+            workAlreadyPerformed: true,
+          }
+          : {}),
+      };
       return {
         options,
         reason: options.length
-          ? result.reason
-          : (backdated ? "backdated-target-unavailable" : (requiredPrimaryVanId ? "required-primary-target-unavailable" : result.reason)),
+          ? (supportReason || result.reason)
+          : (supportReason || (backdated ? "backdated-target-unavailable" : (requiredPrimaryVanId ? "required-primary-target-unavailable" : result.reason))),
         providerVersion: SCHEDULING_PROVIDER_VERSION,
         engineVersion: CANONICAL_SCHEDULING_ENGINE_VERSION,
-        metadata: {
-          requestedDate: result.requestedDate || "",
-          requestedTime: result.requestedTime || "",
-          requestedDateUnavailable: result.requestedDateUnavailable === true,
-          requestedTimeUnavailable: result.requestedTimeUnavailable === true,
-          routeZone: result.candidateZone?.label || "",
-          vansRequired: result.allocations?.length || 0,
-          requiredPrimaryVanId: requiredPrimaryVanId || "",
-          includeRequestedDateAlternatives,
-          routePolicy,
-          ...(backdated
-            ? {
-              bookingMode: BACKDATED_BOOKING_MODE,
-              backdatingAcknowledged: true,
-              workAlreadyPerformed: true,
-            }
-            : {}),
-        },
+        metadata,
       };
     },
 
@@ -610,6 +885,9 @@ module.exports = {
   backdatingIntent,
   buildCapacityLocks,
   buildWorkOrders,
+  cleanSupportSelectionIds,
+  composeSelectedSupportOption,
+  contiguousSupportGroups,
   createSchedulingProvider,
   dataWithoutAppointment,
   exactCustomerProperty,
@@ -623,4 +901,7 @@ module.exports = {
   routeConfigForPolicy,
   routeConfigFromSettings,
   requestedTargetPassed,
+  standardServicePreset,
+  supportSelectionPolicy,
+  supportSlotCandidates,
 };

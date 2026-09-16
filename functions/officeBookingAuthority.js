@@ -163,6 +163,11 @@ function normalizedAppointmentIds(value) {
   return [...new Set(value.map((item) => cleanText(item, 180)).filter(Boolean))].slice(0, 500);
 }
 
+function normalizedSupportSlotIds(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item) => cleanText(item, 120)).filter(Boolean))].slice(0, 12);
+}
+
 function masterDataId(prefix, seed = "") {
   const stableSeed = cleanText(seed, 500);
   if (stableSeed) {
@@ -1144,6 +1149,7 @@ function createOfficeBookingApi({
         && changeKind === "customer_reschedule"
         && cleanText(request.constraints?.requestedDate, 20)
       );
+      const requestedSupportSlotIds = normalizedSupportSlotIds(data.supportSlotSelections);
       const notificationRecipients = backdated
         ? []
         : await resolveAppointmentRecipients(db, {
@@ -1160,6 +1166,7 @@ function createOfficeBookingApi({
           officeRequestId: requestId,
           excludeAppointmentId,
           requiredPrimaryVanId,
+          requestedSupportSlotIds,
           changeKind,
           includeRequestedDateAlternatives,
           notificationRecipients,
@@ -1334,3 +1341,4 @@ module.exports.bookingRequestFromOffice = bookingRequestFromOffice;
 module.exports.buildOfficeProperty = buildOfficeProperty;
 module.exports.createOfficeBookingApi = createOfficeBookingApi;
 module.exports.normalizeOfficePhone = normalizeOfficePhone;
+module.exports.normalizedSupportSlotIds = normalizedSupportSlotIds;

@@ -84,6 +84,28 @@ function operationalData(overrides = {}) {
   };
 }
 
+function multiSupportData() {
+  return operationalData({
+    vans: [
+      { id: "VAN-1", name: "Van 1", active: true, responsibleStaffId: "driver-1" },
+      { id: "VAN-2", name: "Van 2", active: true, responsibleStaffId: "driver-2" },
+      { id: "VAN-3", name: "Van 3", active: true, responsibleStaffId: "driver-3" },
+    ],
+    staffProfiles: [
+      { id: "driver-1", active: true, availability: "Disponible", canDriveVan: true },
+      { id: "driver-2", active: true, availability: "Disponible", canDriveVan: true },
+      { id: "driver-3", active: true, availability: "Disponible", canDriveVan: true },
+    ],
+    businessSettings: [{
+      id: "appointment-work-presets",
+      presets: [{ id: "standard_service", label: "Servicio estándar", durationMinutesPerUnit: 60, active: true }],
+    }, {
+      id: "business-calendar",
+      closedWeekdays: [0],
+    }],
+  });
+}
+
 function schedulingDb(data, whereCalls = []) {
   const snapshot = (records = []) => ({
     docs: records.map(({ id, ...record }) => ({ id, data: () => record })),
@@ -104,12 +126,112 @@ function schedulingDb(data, whereCalls = []) {
 
 const currentSchedule = { date: "2098-12-20", time: "08:30" };
 
-test("provider exposes canonical provider v14", () => {
-  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v14");
+test("provider exposes canonical provider v15", () => {
+  assert.equal(SCHEDULING_PROVIDER_VERSION, "erp-booking-scheduling-provider-v15");
 });
 
 test("canonical scheduling engine is versioned independently", () => {
   assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 10);
+});
+
+test("large exact office booking exposes individually selectable support capacity slots", async () => {
+  const data = multiSupportData();
+  const provider = createSchedulingProvider({ db: schedulingDb(data) });
+  const result = await provider.checkAvailability({
+    request: {
+      ...request(),
+      workLines: [{ id: "w1", presetId: "standard_service", serviceId: "s1", quantity: 8 }],
+      constraints: { requestedDate: "2098-12-22", requestedTime: "08:30" },
+    },
+    context: { channel: "office", requiredPrimaryVanId: "VAN-1" },
+    now: new Date("2098-12-20T11:00:00.000Z"),
+  });
+
+  assert.ok(result.options.length > 0, JSON.stringify(result));
+  assert.equal(result.metadata.supportMinSlots, 1);
+  assert.equal(result.metadata.supportMaxSlots, 3);
+  assert.ok(Array.isArray(result.metadata.supportSlotCandidates));
+  assert.equal(result.metadata.supportSlotCandidates.some((item) => item.vanId === "VAN-2" && item.time === "09:30"), true);
+  assert.equal(result.metadata.supportSlotCandidates.some((item) => item.vanId === "VAN-2" && item.time === "10:30"), true);
+  assert.equal(result.metadata.supportSlotCandidates.some((item) => item.vanId === "VAN-3" && item.time === "13:30"), true);
+});
+
+test("two consecutive selected support slots become one two-hour support assignment", async () => {
+  const data = multiSupportData();
+  const provider = createSchedulingProvider({ db: schedulingDb(data) });
+  const bookingRequest = {
+    ...request(),
+    workLines: [{ id: "w1", presetId: "standard_service", serviceId: "s1", quantity: 8 }],
+    constraints: { requestedDate: "2098-12-22", requestedTime: "08:30" },
+  };
+  const initial = await provider.checkAvailability({
+    request: bookingRequest,
+    context: { channel: "office", requiredPrimaryVanId: "VAN-1" },
+    now: new Date("2098-12-20T11:00:00.000Z"),
+  });
+  const morning = initial.metadata.supportSlotCandidates
+    .filter((item) => item.vanId === "VAN-2" && ["09:30", "10:30"].includes(item.time))
+    .sort((a, b) => a.time.localeCompare(b.time));
+  assert.equal(morning.length, 2);
+
+  const selected = await provider.checkAvailability({
+    request: bookingRequest,
+    context: {
+      channel: "office",
+      requiredPrimaryVanId: "VAN-1",
+      requestedSupportSlotIds: morning.map((item) => item.id),
+    },
+    now: new Date("2098-12-20T11:00:00.000Z"),
+  });
+  assert.equal(selected.options.length, 1, JSON.stringify(selected));
+  const assignments = selected.options[0].assignments;
+  const primary = assignments.find((item) => item.role === "primary");
+  const support = assignments.find((item) => item.role === "support");
+  assert.equal(primary.quantity, 6);
+  assert.equal(support.vanId, "VAN-2");
+  assert.equal(support.time, "09:30");
+  assert.equal(support.quantity, 2);
+  assert.equal(support.slots, 2);
+  assert.equal(support.endTime, "11:30");
+});
+
+test("non-consecutive and cross-van support selections remain separate chronological support blocks", async () => {
+  const data = multiSupportData();
+  const provider = createSchedulingProvider({ db: schedulingDb(data) });
+  const bookingRequest = {
+    ...request(),
+    workLines: [{ id: "w1", presetId: "standard_service", serviceId: "s1", quantity: 8 }],
+    constraints: { requestedDate: "2098-12-22", requestedTime: "08:30" },
+  };
+  const initial = await provider.checkAvailability({
+    request: bookingRequest,
+    context: { channel: "office", requiredPrimaryVanId: "VAN-1" },
+    now: new Date("2098-12-20T11:00:00.000Z"),
+  });
+  const findSlot = (vanId, time) => initial.metadata.supportSlotCandidates.find((item) => item.vanId === vanId && item.time === time);
+  const selectedSlots = [findSlot("VAN-2", "09:30"), findSlot("VAN-2", "10:30"), findSlot("VAN-3", "13:30")];
+  assert.equal(selectedSlots.every(Boolean), true, JSON.stringify(initial.metadata.supportSlotCandidates));
+
+  const selected = await provider.checkAvailability({
+    request: bookingRequest,
+    context: {
+      channel: "office",
+      requiredPrimaryVanId: "VAN-1",
+      requestedSupportSlotIds: selectedSlots.map((item) => item.id),
+    },
+    now: new Date("2098-12-20T11:00:00.000Z"),
+  });
+  assert.equal(selected.options.length, 1, JSON.stringify(selected));
+  const assignments = selected.options[0].assignments;
+  const primary = assignments.find((item) => item.role === "primary");
+  const support = assignments.filter((item) => item.role === "support");
+  assert.equal(primary.quantity, 5);
+  assert.equal(support.length, 2);
+  assert.deepEqual(support.map((item) => [item.vanId, item.time, item.quantity]), [
+    ["VAN-2", "09:30", 2],
+    ["VAN-3", "13:30", 1],
+  ]);
+  assert.equal(assignments.reduce((sum, item) => sum + item.quantity, 0), 8);
 });
 
 test("backdating intent requires the authenticated office channel and explicit acknowledgement", () => {
