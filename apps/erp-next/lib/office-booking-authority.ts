@@ -43,6 +43,17 @@ export type OfficeBookingWorkItem = {
   serviceDefinitionVersion?: number;
 };
 
+export type OfficeSupportSlotCandidate = {
+  id: string;
+  vanId: string;
+  vanName: string;
+  time: string;
+  endTime: string;
+  capacityEndTime?: string;
+  durationMinutes: number;
+  slots: number;
+};
+
 export type OfficeBookingOption = {
   id: string;
   date: string;
@@ -479,6 +490,7 @@ export async function checkOfficeCreateAvailability(input: {
   requestedDate: string;
   requestedTime: string;
   requiredVanId: string;
+  supportSlotSelections?: string[];
   customerFacingDescription?: string;
   technicianInstructions?: string;
   recipientSelections?: AppointmentRecipientSelection[];
