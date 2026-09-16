@@ -937,7 +937,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
 
   const changeQuantity = (lineId: string, delta: number) => {
     setWorkLines((current) => current.map((line) => line.id === lineId
-      ? { ...line, quantity: Math.max(1, Math.min(20, line.quantity + delta) }
+      ? { ...line, quantity: Math.max(1, Math.min(20, line.quantity + delta)) }
       : line));
     resetCapacityValidation();
   };
