@@ -109,7 +109,7 @@ test("provider exposes canonical provider v14", () => {
 });
 
 test("canonical scheduling engine is versioned independently", () => {
-  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 9);
+  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 10);
 });
 
 test("backdating intent requires the authenticated office channel and explicit acknowledgement", () => {
