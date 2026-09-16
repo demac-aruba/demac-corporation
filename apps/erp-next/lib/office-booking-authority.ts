@@ -49,7 +49,7 @@ export type OfficeSupportSlotCandidate = {
   vanName: string;
   time: string;
   endTime: string;
-  capacityEndTime?: string;
+  capacityEndTime: string;
   durationMinutes: number;
   slots: number;
 };
