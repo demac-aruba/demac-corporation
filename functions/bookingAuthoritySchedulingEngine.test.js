@@ -163,7 +163,7 @@ function supportTimes(result) {
 }
 
 test("canonical scheduling engine has an explicit version", () => {
-  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 9);
+  assert.equal(CANONICAL_SCHEDULING_ENGINE_VERSION, 10);
 });
 
 test("same-day past targets remain unavailable unless backdating was explicitly acknowledged", () => {
@@ -499,6 +499,37 @@ test("eight-unit support can arrive in any one-hour opening that actually exists
   assert.ok(repeatedVanWindows, "at least one support Van must expose multiple independently selectable windows");
   assert.equal(new Set(repeatedVanWindows.map((window) => window.optionId)).size, repeatedVanWindows.length);
   assert.equal(new Set(repeatedVanWindows.map((window) => `${window.start}|${window.end}`)).size, repeatedVanWindows.length);
+});
+
+test("fixed office target offers selectable support spots while preserving the eight-unit total", () => {
+  const data = schedulingData();
+  const result = generateCanonicalOptions({
+    request: exactTargetRequest(8),
+    property: data.properties[0],
+    data,
+    routeConfig: normalizeRouteConfig(),
+    today: "2098-12-21",
+    currentTime: "07:00",
+    requiredPrimaryVanId: "VAN-1",
+    requireRequestedTarget: true,
+  });
+
+  const splits = new Set();
+  for (const option of result.options) {
+    const primary = option.assignments.find((assignment) => assignment.role === "primary");
+    const support = option.assignments.find((assignment) => assignment.role === "support");
+    assert.ok(primary);
+    assert.ok(support);
+    assert.equal(primary.vanId, "VAN-1");
+    assert.notEqual(support.vanId, "VAN-1");
+    assert.equal(primary.quantity + support.quantity, 8);
+    assert.equal(support.slots, support.quantity, "one-hour Standard Service support must reserve one canonical spot per unit");
+    splits.add(`${primary.quantity}+${support.quantity}`);
+  }
+
+  assert.equal(splits.has("7+1"), true, "the current default allocation remains available");
+  assert.equal(splits.has("6+2"), true, "the operator can reserve two support spots");
+  assert.equal(splits.has("5+3"), true, "the operator can reserve three support spots when capacity allows");
 });
 
 test("eleven-unit Standard Service is not rejected by an arbitrary ten-unit ceiling", () => {
