@@ -245,7 +245,7 @@ function createBookingAuthority({
       if (existingSnapshot.exists) {
         const existing = { id: existingSnapshot.id, ...existingSnapshot.data() };
         if (existing.requestFingerprint === requestFingerprint(normalizedRequest) && offerStillUsable(existing, now)) {
-          return { success: true, available: true, replayed: true, offer: existing, options: existing.options || [] };
+          return { success: true, available: true, replayed: true, offer: existing, options: existing.options || [], metadata: compactObject(existing.metadata || {}) };
         }
       }
     }
@@ -297,7 +297,7 @@ function createBookingAuthority({
       updatedAt: serverTimestamp(),
     });
     await offerRef.set(offer);
-    return { success: true, available: true, replayed: false, offer, options };
+    return { success: true, available: true, replayed: false, offer, options, metadata: compactObject(offer.metadata || {}) };
   }
 
   async function getAppointment(appointmentId) {
