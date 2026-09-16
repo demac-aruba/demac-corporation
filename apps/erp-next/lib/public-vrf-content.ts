@@ -1,3 +1,5 @@
+import { defaultVrfIndoorUnits, normalizeVrfIndoorUnits } from './public-vrf-indoor';
+
 export type VrfLink = { label: string; href: string };
 
 export type VrfCard = {
@@ -5,6 +7,8 @@ export type VrfCard = {
   title: string;
   description: string;
   detail?: string;
+  imageUrl?: string;
+  imageAlt?: string;
 };
 
 export type PublicVrfContent = {
@@ -97,14 +101,7 @@ export const defaultPublicVrfContent: PublicVrfContent = {
   ],
   indoorHeading: 'A complete range of indoor units.',
   indoorIntro: 'Mix and match indoor-unit styles to create the right comfort solution for each space.',
-  indoorUnits: [
-    { id: 'cassette', title: 'Cassette Units', description: 'Discreet ceiling integration with wide air distribution.', detail: 'Offices · retail · commercial spaces' },
-    { id: 'fan-coil', title: 'Fan Coil Units', description: 'Flexible concealed or ducted installation for refined interiors.', detail: 'Hotels · offices · residences' },
-    { id: 'floor-ceiling', title: 'Floor-Ceiling Units', description: 'Versatile mounting for open areas and spaces with limited ceiling options.', detail: 'Retail · restaurants · open spaces' },
-    { id: 'air-handler', title: 'Air Handlers', description: 'Higher-static solutions for custom ductwork and larger conditioned areas.', detail: 'Large buildings · custom applications' },
-    { id: 'split-unit', title: 'Split Units', description: 'Flexible indoor-unit option for smaller commercial zones.', detail: 'Offices · support spaces' },
-    { id: 'wall-mounted', title: 'Wall-Mounted Split Units', description: 'Compact, familiar indoor units with independent zoning.', detail: 'Bedrooms · offices · smaller rooms' },
-  ],
+  indoorUnits: defaultVrfIndoorUnits,
   applicationsHeading: 'Trusted in every type of building.',
   applications: [
     { id: 'apartments', title: 'Apartments & Condominiums', description: 'Efficient, individual comfort for every residence.' },
@@ -225,7 +222,7 @@ export function normalizePublicVrfContent(value: unknown, id = VRF_PUBLISHED_ID)
     benefits: normalizeCards(source.benefits, f.benefits, 6),
     indoorHeading: text(source.indoorHeading, f.indoorHeading),
     indoorIntro: text(source.indoorIntro, f.indoorIntro),
-    indoorUnits: normalizeCards(source.indoorUnits, f.indoorUnits, 6),
+    indoorUnits: normalizeVrfIndoorUnits(source.indoorUnits),
     applicationsHeading: text(source.applicationsHeading, f.applicationsHeading),
     applications: normalizeCards(source.applications, f.applications, 6),
     processHeading: text(source.processHeading, f.processHeading),

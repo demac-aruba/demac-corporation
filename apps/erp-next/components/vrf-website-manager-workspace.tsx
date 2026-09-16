@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/components/auth/auth-provider';
+import { VrfIndoorPhoto } from '@/components/public/vrf-indoor-photo';
 import { uploadPublicWebsiteImage } from '@/lib/firebase/storage-rest';
 import {
   loadVrfWebsiteDraft,
@@ -28,7 +29,7 @@ function formatDate(value?: string) {
   catch { return value; }
 }
 
-function CardEditor({ title, items, onChange }: { title: string; items: VrfCard[]; onChange: (items: VrfCard[]) => void }) {
+function CardEditor({ title, items, onChange, showImages = false }: { title: string; items: VrfCard[]; onChange: (items: VrfCard[]) => void; showImages?: boolean }) {
   function patch(index: number, patch: Partial<VrfCard>) {
     onChange(items.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item));
   }
@@ -38,6 +39,12 @@ function CardEditor({ title, items, onChange }: { title: string; items: VrfCard[
       <div className={styles.cardEditorGrid}>
         {items.map((item, index) => (
           <article key={item.id}>
+            {showImages ? <>
+              <div style={{ height: 159, background: '#f8fafb', borderRadius: 8 }}><VrfIndoorPhoto card={item} /></div>
+              <label><span>Product image URL</span><input value={item.imageUrl ?? ''} placeholder="/website/vrf/... or https://..." onChange={(event) => patch(index, { imageUrl: event.target.value })} /></label>
+              <label><span>Image description (accessibility)</span><input value={item.imageAlt ?? ''} onChange={(event) => patch(index, { imageAlt: event.target.value })} /></label>
+              <small>Use a local site path or an HTTPS image URL. Save Draft, then Publish to apply. An empty image URL uses the approved image.</small>
+            </> : null}
             <label><span>Title</span><input value={item.title} onChange={(event) => patch(index, { title: event.target.value })} /></label>
             <label><span>Description</span><textarea rows={3} value={item.description} onChange={(event) => patch(index, { description: event.target.value })} /></label>
             {'detail' in item ? <label><span>Detail / ideal for</span><input value={item.detail ?? ''} onChange={(event) => patch(index, { detail: event.target.value })} /></label> : null}
@@ -155,7 +162,7 @@ export function VrfWebsiteManagerWorkspace() {
         <CardEditor title="Large / Modular / Mini VRF" items={draft.solutions} onChange={(items) => patch('solutions', items)} />
         <section className="panel"><div className={styles.twoCols}><label><span>Benefits heading</span><input value={draft.benefitsHeading} onChange={(e) => patch('benefitsHeading', e.target.value)} /></label><label><span>Indoor units heading</span><input value={draft.indoorHeading} onChange={(e) => patch('indoorHeading', e.target.value)} /></label><label><span>Indoor units intro</span><input value={draft.indoorIntro} onChange={(e) => patch('indoorIntro', e.target.value)} /></label><label><span>Applications heading</span><input value={draft.applicationsHeading} onChange={(e) => patch('applicationsHeading', e.target.value)} /></label></div></section>
         <CardEditor title="VRF Benefits" items={draft.benefits} onChange={(items) => patch('benefits', items)} />
-        <CardEditor title="Indoor Unit Options" items={draft.indoorUnits} onChange={(items) => patch('indoorUnits', items)} />
+        <CardEditor title="Indoor Unit Options" items={draft.indoorUnits} showImages onChange={(items) => patch('indoorUnits', items)} />
         <CardEditor title="Where VRF Works Best" items={draft.applications} onChange={(items) => patch('applications', items)} />
         <section className="panel"><div className={styles.twoCols}><label><span>Process heading</span><input value={draft.processHeading} onChange={(e) => patch('processHeading', e.target.value)} /></label><label><span>Services heading</span><input value={draft.servicesHeading} onChange={(e) => patch('servicesHeading', e.target.value)} /></label></div></section>
         <CardEditor title="Project Process" items={draft.process} onChange={(items) => patch('process', items)} />
