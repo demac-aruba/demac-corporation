@@ -8,6 +8,7 @@ const output = path.resolve('.vrf-mobile-artifacts');
 fs.mkdirSync(output, { recursive: true });
 const url = process.env.VRF_REVIEW_URL || 'http://127.0.0.1:4173/services/vrf-systems/';
 const ids = ['cassette', 'fan-coil', 'floor-ceiling', 'air-handler', 'mini-split'];
+const titles = ['Cassette Units', 'Fan Coil Units', 'Floor-Ceiling Units', 'Air Handlers', 'Mini Split Units'];
 const report = { route: url, checks: [] };
 
 async function review(browser, name, width, phone) {
@@ -45,9 +46,10 @@ async function review(browser, name, width, phone) {
       assert.equal(image.fit, 'contain', 'Keep equipment uncropped');
       assert(image.alt.length > 5, 'Meaningful product alt');
     }
-    assert.equal(await section.getByText('Mini Split Units', { exact: true }).count(), 1);
-    assert.equal(await section.getByText('Split Units', { exact: true }).count(), 0);
-    assert.equal(await section.getByText('Wall-Mounted Split Units', { exact: true }).count(), 0);
+    // Phone labels share a span with an aria-hidden + disclosure glyph. Compare
+    // the text nodes only, so the same exact five approved labels are tested.
+    const labels = await section.locator(phone ? 'details > summary > span:nth-child(2)' : '[data-vrf-indoor-grid] h3').evaluateAll((nodes) => nodes.map((node) => [...node.childNodes].filter((child) => child.nodeType === Node.TEXT_NODE).map((child) => child.textContent).join('').trim()));
+    assert.deepEqual(labels, titles, 'Exactly five approved labels, Mini Split Units once, no legacy duplicate');
     const cards = section.locator(phone ? 'details' : '[data-vrf-indoor-grid] > article');
     const boxes = await cards.evaluateAll((nodes) => nodes.map((node) => { const r = node.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width }; }));
     if (phone) {
