@@ -22,10 +22,10 @@ const {
 const { candidateAvailability } = require("./bookingCapacityAvailability");
 const { resolveCatalogService } = require("./serviceCatalog");
 
-const CANONICAL_SCHEDULING_ENGINE_VERSION = 9;
+const CANONICAL_SCHEDULING_ENGINE_VERSION = 10;
 const CLIENT_OPTION_LIMIT = 2;
 const ASSIGNMENT_COMBINATION_LIMIT = 8;
-const OFFICE_TARGET_OPTION_LIMIT = ASSIGNMENT_COMBINATION_LIMIT;
+const OFFICE_TARGET_OPTION_LIMIT = 12;
 
 // Scheduling owns operational capacity and van-allocation policy. The service
 // catalog contributes only the identity and duration of one service execution.
@@ -282,6 +282,88 @@ function primarySupportAllocationPlan(quantity, durationMinutesPerUnit, availabl
   ];
 }
 
+function selectableStandardServiceAllocationPlans(quantity, durationMinutesPerUnit, availableVanCount, capacity = {}) {
+  const basePlan = primarySupportAllocationPlan(
+    quantity,
+    durationMinutesPerUnit,
+    availableVanCount,
+    capacity,
+  );
+  if (basePlan.length !== 2 || basePlan[1]?.role !== "support") {
+    return basePlan.length ? [basePlan] : [];
+  }
+
+  const differentPropertyDailyMaxUnits = boundedInteger(
+    capacity.differentPropertyDailyCapacity,
+    DEFAULT_OPERATIONAL_RULES.standardService.differentPropertyDailyCapacity,
+    1,
+    24,
+  );
+  const supportHalfDayMaxUnits = boundedInteger(
+    capacity.supportHalfDayMaxUnits,
+    DEFAULT_OPERATIONAL_RULES.standardService.supportHalfDayMaxUnits,
+    1,
+    6,
+  );
+  const duration = Math.max(30, Number(durationMinutesPerUnit || 60));
+  const physicalSupportMaxUnits = Math.max(1, Math.floor((REGULAR_SLOTS.length * 60) / duration));
+  const minimumSupportUnits = basePlan[1].quantity;
+  const maximumSelectableSupportUnits = Math.min(
+    quantity - 1,
+    supportHalfDayMaxUnits,
+    physicalSupportMaxUnits,
+  );
+
+  // Jobs that already require more than the half-day support policy keep the
+  // existing canonical allocation. The selectable split is intentionally a
+  // small office override for the common 8–10 Standard Service case.
+  if (minimumSupportUnits > maximumSelectableSupportUnits) return [basePlan];
+
+  const plans = [];
+  for (let supportQuantity = minimumSupportUnits; supportQuantity <= maximumSelectableSupportUnits; supportQuantity += 1) {
+    const primaryQuantity = quantity - supportQuantity;
+    const primaryDuration = durationForQuantity(primaryQuantity, duration, "per_unit");
+    const primarySlots = Math.ceil(primaryDuration / 60);
+    const supportDuration = durationForQuantity(supportQuantity, duration, "per_unit");
+    const supportSlots = Math.ceil(supportDuration / 60);
+    const allowedTimes = supportStartTimes(supportSlots);
+    if (!allowedTimes.length || primarySlots < 1 || primarySlots > REGULAR_SLOTS.length) {
+      // Seven same-property services intentionally use the existing full-day
+      // primary allocation even though seven service-hours exceed six sellable
+      // starts. This preserves the current 7+N operating rule.
+      if (primaryQuantity !== basePlan[0].quantity) continue;
+      plans.push(basePlan);
+      continue;
+    }
+
+    const primary = primaryQuantity > differentPropertyDailyMaxUnits
+      ? basePlan[0]
+      : {
+        quantity: primaryQuantity,
+        durationMinutes: primaryDuration,
+        slots: primarySlots,
+        fullDay: false,
+        role: "primary",
+        fixedTime: "08:30",
+        timePolicy: "fixed",
+      };
+    plans.push([
+      primary,
+      {
+        quantity: supportQuantity,
+        durationMinutes: supportDuration,
+        slots: supportSlots,
+        fullDay: false,
+        role: "support",
+        allowedTimes,
+        timePolicy: "allowed",
+      },
+    ]);
+  }
+
+  return plans.length ? plans : [basePlan];
+}
+
 function buildAllocationPlan(quantity, durationMinutesPerUnit, availableVanCount, preset, rawRules) {
   const rules = normalizeOperationalRules(rawRules);
   const duration = Math.max(30, Number(durationMinutesPerUnit || 60));
@@ -420,6 +502,26 @@ function allocationPlanForScope(scope, availableVanCount, rawRules) {
   if (availableVanCount < 1) return [];
   const allocation = regularAllocation(scope.totalQuantity, scope.totalDurationMinutes);
   return allocation ? [allocation] : [];
+}
+
+function allocationPlansForScope(scope, availableVanCount, rawRules, includeSelectableSupport = false) {
+  const rules = normalizeOperationalRules(rawRules);
+  if (
+    includeSelectableSupport
+    && scope.singleType
+    && scope.singlePreset
+    && !scope.hasManualDuration
+    && isStandardServicePreset(scope.singlePreset)
+  ) {
+    return selectableStandardServiceAllocationPlans(
+      scope.totalQuantity,
+      scope.singlePreset.durationMinutesPerUnit,
+      availableVanCount,
+      rules.standardService,
+    );
+  }
+  const plan = allocationPlanForScope(scope, availableVanCount, rules);
+  return plan.length ? [plan] : [];
 }
 
 function parseStructuredTimeConstraint(constraints = {}) {
@@ -589,6 +691,13 @@ function assignmentCombinations({
   return results;
 }
 
+function allocationCombinationLimit(planIndex, planCount, requestedDateAlternatives) {
+  if (requestedDateAlternatives) return Number.POSITIVE_INFINITY;
+  if (planCount <= 1) return ASSIGNMENT_COMBINATION_LIMIT;
+  if (planIndex === 0) return Math.min(6, ASSIGNMENT_COMBINATION_LIMIT);
+  return Math.max(1, Math.floor((OFFICE_TARGET_OPTION_LIMIT - Math.min(6, ASSIGNMENT_COMBINATION_LIMIT)) / (planCount - 1)));
+}
+
 function generateCanonicalOptions({
   request,
   property,
@@ -616,18 +725,22 @@ function generateCanonicalOptions({
     (item) => item.id === "company-operational-rules",
   );
   const operationalRules = normalizeOperationalRules(operationalSettings);
-  const allocations = allocationPlanForScope(
+  const includeSelectableSupport = requireRequestedTarget && Boolean(requiredPrimaryVanId);
+  const allocationPlans = allocationPlansForScope(
     scope,
     data.vans.length,
     operationalRules,
+    includeSelectableSupport,
   );
-  if (!allocations.length) {
+  const allocations = allocationPlans[0] || [];
+  if (!allocationPlans.length || !allocations.length) {
     return {
       options: [],
       preset,
       quantity: scope.totalQuantity,
       workItems: scope.workItems,
       allocations,
+      allocationPlans,
       operationalRules,
       reason: scope.singleType ? "capacity" : "mixed-work-exceeds-single-van-capacity",
     };
@@ -642,10 +755,6 @@ function generateCanonicalOptions({
     && scope.totalQuantity > operationalRules.standardService.differentPropertyDailyCapacity;
   const calendarSettings = (data.businessSettings || []).find((item) => item.id === "business-calendar")
     || { closedWeekdays: [0] };
-  const primaryAllocation = allocations[0];
-  const primaryCandidateTimes = primaryAllocation.timePolicy === "fixed"
-    ? [primaryAllocation.fixedTime]
-    : [...REGULAR_SLOTS, EXTRA_MORNING_SLOT].sort();
   const options = [];
   const workSignature = scope.workItems.map((item) => `${item.presetId}:${item.serviceId}:${item.quantity}:${item.durationMinutes}`).join("|");
 
@@ -671,79 +780,87 @@ function generateCanonicalOptions({
         data.staffAbsences,
       ),
     })).filter(({ van, assignment }) => vanCanReceiveAppointments(van, assignment));
-    if (dateAssignments.length < allocations.length) continue;
     if (requiredPrimaryVanId && !dateAssignments.some(({ van }) => van.id === requiredPrimaryVanId)) continue;
 
-    for (const primaryTime of primaryCandidateTimes) {
-      if (!primaryTime) continue;
-      if (!allowBackdating && date === today && primaryTime <= currentTime) continue;
-      if (!timeAllowed(primaryTime, timeConstraint)) continue;
+    for (const [planIndex, plan] of allocationPlans.entries()) {
+      if (dateAssignments.length < plan.length) continue;
+      const primaryAllocation = plan[0];
+      const primaryCandidateTimes = primaryAllocation.timePolicy === "fixed"
+        ? [primaryAllocation.fixedTime]
+        : [...REGULAR_SLOTS, EXTRA_MORNING_SLOT].sort();
+      const allocationSignature = plan
+        .map((item) => `${item.role}:${item.quantity}:${item.slots}:${item.fullDay ? 1 : 0}`)
+        .join(",");
 
-      const combinations = assignmentCombinations({
-        allocations,
-        dateAssignments,
-        date,
-        primaryTime,
-        data,
-        routeConfig,
-        candidateZone,
-        requiredPrimaryVanId,
-        combinationLimit: requestedDateAlternatives
-          ? Number.POSITIVE_INFINITY
-          : ASSIGNMENT_COMBINATION_LIMIT,
-      });
-      for (const selected of combinations) {
-        const primary = selected.find((item) => item.role === "primary") || selected[0];
-        if (!primary) continue;
-        const totalRouteScore = selected.reduce((sum, item) => sum + item.routeScore, 0);
-        const datePenalty = dayOffset * 9;
-        const requestedDateBonus = requestedDate && date === requestedDate ? 500 : 0;
-        const requestedDateDistancePenalty = requestedDate
-          ? Math.abs(dateDistanceInDays(date, requestedDate)) * 18
-          : 0;
-        const exactTime = timeConstraint.kind === "exact" ? timeConstraint.time : "";
-        const requestedTimeBonus = exactTime && primary.time === exactTime ? 180 : 0;
-        const morningBonus = !timeConstraint.kind && MORNING_SLOTS.includes(primary.time) ? 8 : 0;
-        const score = 1_000
-          + totalRouteScore
-          + requestedDateBonus
-          + requestedTimeBonus
-          + morningBonus
-          - datePenalty
-          - requestedDateDistancePenalty;
+      for (const primaryTime of primaryCandidateTimes) {
+        if (!primaryTime) continue;
+        if (!allowBackdating && date === today && primaryTime <= currentTime) continue;
+        if (!timeAllowed(primaryTime, timeConstraint)) continue;
 
-        options.push({
-          id: `opt-${hashId(
-            `${date}|${primary.time}|${selected.map((item) => `${item.vanId}:${item.time}`).join(",")}|${workSignature}`,
-            16,
-          )}`,
+        const combinations = assignmentCombinations({
+          allocations: plan,
+          dateAssignments,
           date,
-          time: primary.time,
-          endTime: primary.endTime,
-          capacityEndTime: primary.capacityEndTime || primary.endTime,
-          quantity: scope.totalQuantity,
-          address,
-          zone: candidateZone?.label || cleanText(property.operationalZone || property.zone, 80),
-          presetId: preset.id,
-          presetLabel: preset.label,
-          durationMinutesPerUnit: scope.singleType && !scope.hasManualDuration
-            ? preset.durationMinutesPerUnit
-            : scope.totalDurationMinutes,
-          durationMode: scope.singleType && !scope.hasManualDuration
-            ? preset.durationMode
-            : scope.singleType ? scope.workItems[0].durationMode : "mixed",
-          serviceDefinitionVersion: scope.singleType ? preset.serviceDefinitionVersion || 0 : 0,
-          serviceId: scope.singleType ? cleanText(preset.serviceId, 120) : "",
-          workItems: scope.workItems,
-          assignments: selected,
-          score,
-          requestedDateMatch: Boolean(requestedDate && date === requestedDate),
-          requestedTimeMatch: Boolean(exactTime && primary.time === exactTime),
-          largeSingleProperty,
-          allDayCustomerNotice: largeSingleProperty
-            && operationalRules.customerCommunication.largeJobAllDayNotice,
-          internalSupportCount: Math.max(0, selected.length - 1),
+          primaryTime,
+          data,
+          routeConfig,
+          candidateZone,
+          requiredPrimaryVanId,
+          combinationLimit: allocationCombinationLimit(planIndex, allocationPlans.length, requestedDateAlternatives),
         });
+        for (const selected of combinations) {
+          const primary = selected.find((item) => item.role === "primary") || selected[0];
+          if (!primary) continue;
+          const totalRouteScore = selected.reduce((sum, item) => sum + item.routeScore, 0);
+          const datePenalty = dayOffset * 9;
+          const requestedDateBonus = requestedDate && date === requestedDate ? 500 : 0;
+          const requestedDateDistancePenalty = requestedDate
+            ? Math.abs(dateDistanceInDays(date, requestedDate)) * 18
+            : 0;
+          const exactTime = timeConstraint.kind === "exact" ? timeConstraint.time : "";
+          const requestedTimeBonus = exactTime && primary.time === exactTime ? 180 : 0;
+          const morningBonus = !timeConstraint.kind && MORNING_SLOTS.includes(primary.time) ? 8 : 0;
+          const score = 1_000
+            + totalRouteScore
+            + requestedDateBonus
+            + requestedTimeBonus
+            + morningBonus
+            - datePenalty
+            - requestedDateDistancePenalty;
+
+          options.push({
+            id: `opt-${hashId(
+              `${date}|${primary.time}|${selected.map((item) => `${item.vanId}:${item.time}`).join(",")}|${workSignature}|${allocationSignature}`,
+              16,
+            )}`,
+            date,
+            time: primary.time,
+            endTime: primary.endTime,
+            capacityEndTime: primary.capacityEndTime || primary.endTime,
+            quantity: scope.totalQuantity,
+            address,
+            zone: candidateZone?.label || cleanText(property.operationalZone || property.zone, 80),
+            presetId: preset.id,
+            presetLabel: preset.label,
+            durationMinutesPerUnit: scope.singleType && !scope.hasManualDuration
+              ? preset.durationMinutesPerUnit
+              : scope.totalDurationMinutes,
+            durationMode: scope.singleType && !scope.hasManualDuration
+              ? preset.durationMode
+              : scope.singleType ? scope.workItems[0].durationMode : "mixed",
+            serviceDefinitionVersion: scope.singleType ? preset.serviceDefinitionVersion || 0 : 0,
+            serviceId: scope.singleType ? cleanText(preset.serviceId, 120) : "",
+            workItems: scope.workItems,
+            assignments: selected,
+            score,
+            requestedDateMatch: Boolean(requestedDate && date === requestedDate),
+            requestedTimeMatch: Boolean(exactTime && primary.time === exactTime),
+            largeSingleProperty,
+            allDayCustomerNotice: largeSingleProperty
+              && operationalRules.customerCommunication.largeJobAllDayNotice,
+            internalSupportCount: Math.max(0, selected.length - 1),
+          });
+        }
       }
     }
   }
@@ -754,10 +871,10 @@ function generateCanonicalOptions({
   for (const option of options) {
     const assignmentKey = requestedDateAlternatives
       ? option.assignments
-        .map((item) => `${item.role || "assignment"}:${item.vanId}:${item.time}`)
+        .map((item) => `${item.role || "assignment"}:${item.vanId}:${item.time}:${item.quantity}:${item.slots}`)
         .join(",")
       : option.assignments
-        .map((item) => `${item.vanId}:${item.time}`)
+        .map((item) => `${item.vanId}:${item.time}:${item.quantity}:${item.slots}`)
         .sort()
         .join(",");
     const key = `${option.date}|${option.time}|${assignmentKey}`;
@@ -785,6 +902,7 @@ function generateCanonicalOptions({
     quantity: scope.totalQuantity,
     workItems: scope.workItems,
     allocations,
+    allocationPlans,
     requestedDate,
     requestedTime: timeConstraint.kind === "exact" ? timeConstraint.time : "",
     timeConstraint,
@@ -811,6 +929,7 @@ module.exports = {
   DEFAULT_OPERATIONAL_RULES,
   OFFICE_TARGET_OPTION_LIMIT,
   allocationPlanForScope,
+  allocationPlansForScope,
   assignmentCombinations,
   buildAllocationPlan,
   exactPreset,
@@ -821,6 +940,7 @@ module.exports = {
   requestedDateValue,
   resolveWorkScope,
   selectClientOptions,
+  selectableStandardServiceAllocationPlans,
   serviceIdForRequest,
   singleWork,
   sortAllocationCandidates,
