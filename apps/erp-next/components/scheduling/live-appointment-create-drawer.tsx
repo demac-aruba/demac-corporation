@@ -33,6 +33,7 @@ import {
   type OfficeBookingOption,
   type OfficeBookingPreset,
   type OfficeBookingWorkLine,
+  type OfficeSupportSlotCandidate,
 } from '../../lib/office-booking-authority';
 import {
   createBookingCustomerWithProperty,
@@ -299,6 +300,48 @@ function automaticCustomerDescription(workLines: WorkLineDraft[], presetById: Ma
   return entries.length ? `Scheduled work: ${entries.join('; ')}.` : '';
 }
 
+function metadataNumber(metadata: Record<string, unknown> | undefined, key: string) {
+  const value = Number(metadata?.[key]);
+  return Number.isFinite(value) && value >= 0 ? Math.round(value) : 0;
+}
+
+function metadataStringArray(metadata: Record<string, unknown> | undefined, key: string) {
+  const value = metadata?.[key];
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((item) => text(item)).filter(Boolean))];
+}
+
+function supportCandidatesFromMetadata(metadata: Record<string, unknown> | undefined): OfficeSupportSlotCandidate[] {
+  const raw = metadata?.supportSlotCandidates;
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => {
+    if (!entry || typeof entry !== 'object') return null;
+    const item = entry as Record<string, unknown>;
+    const id = text(item.id);
+    const vanId = text(item.vanId);
+    const vanName = text(item.vanName) || vanId;
+    const time = text(item.time);
+    const endTime = text(item.endTime);
+    const durationMinutes = Math.max(1, Number(item.durationMinutes) || 60);
+    const slots = Math.max(1, Number(item.slots) || 1);
+    if (!id || !vanId || !time || !endTime) return null;
+    return {
+      id,
+      vanId,
+      vanName,
+      time,
+      endTime,
+      capacityEndTime: text(item.capacityEndTime) || endTime,
+      durationMinutes,
+      slots,
+    } satisfies OfficeSupportSlotCandidate;
+  }).filter((item): item is OfficeSupportSlotCandidate => Boolean(item));
+}
+
+function sameStringArray(left: string[], right: string[]) {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
+}
+
 export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose, onCreated, onAvailabilityConflict }: Props) {
   const { principal } = useAuth();
   const canViewProjects = principal.active && principal.capabilities.has('projects.view');
@@ -352,6 +395,10 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const [holding, setHolding] = useState(false);
   const [authorityError, setAuthorityError] = useState('');
   const [validated, setValidated] = useState<ValidationState | null>(null);
+  const [supportSlotCandidates, setSupportSlotCandidates] = useState<OfficeSupportSlotCandidate[]>([]);
+  const [supportMinSlots, setSupportMinSlots] = useState(0);
+  const [supportMaxSlots, setSupportMaxSlots] = useState(0);
+  const [selectedSupportSlotIds, setSelectedSupportSlotIds] = useState<string[]>([]);
   const loadError = Object.values(loadErrors).filter(Boolean).join(' ');
 
   const requestTarget = useMemo<LiveBookingTarget>(() => ({
@@ -532,6 +579,10 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     setPropertyEditorOpen(false);
     setChecking(false);
     setValidated(null);
+    setSupportSlotCandidates([]);
+    setSupportMinSlots(0);
+    setSupportMaxSlots(0);
+    setSelectedSupportSlotIds([]);
     setMasterError('');
     setAuthorityError('Projects access is no longer available. Continue with a Regular Booking.');
   }, [appointmentSource, canViewProjects]);
@@ -704,8 +755,20 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     [backdatedTarget, recipientSelections],
   );
   const recipientSignature = effectiveRecipientSelections.map((item) => `${item.recipientType}:${item.sourceId}:${Number(item.sendConfirmation)}:${Number(item.sendReminder)}`).sort().join('|');
+  const supportSelectionSignature = [...selectedSupportSlotIds].sort().join(',');
+  const selectedSupportByVan = useMemo(() => {
+    const selectedIds = new Set(selectedSupportSlotIds);
+    const grouped = new Map<string, { vanId: string; vanName: string; count: number }>();
+    supportSlotCandidates.forEach((candidate) => {
+      if (!selectedIds.has(candidate.id)) return;
+      const current = grouped.get(candidate.vanId) ?? { vanId: candidate.vanId, vanName: candidate.vanName || candidate.vanId, count: 0 };
+      current.count += 1;
+      grouped.set(candidate.vanId, current);
+    });
+    return [...grouped.values()].sort((left, right) => left.vanName.localeCompare(right.vanName));
+  }, [selectedSupportSlotIds, supportSlotCandidates]);
   const capacitySignature = [appointmentSource, customerId, propertyId, workSignature, requestTarget.dateKey, requestTarget.vanId, requestTarget.start, mode, backdatedTarget ? `backdated:${Number(backdatingAcknowledged)}` : 'current'].join('|');
-  const offerSignature = [capacitySignature, recipientSignature, authorizedDescription.trim(), authorizedTechnicianInstructions.trim()].join('|');
+  const offerSignature = [capacitySignature, `support:${supportSelectionSignature}`, recipientSignature, authorizedDescription.trim(), authorizedTechnicianInstructions.trim()].join('|');
   offerSignatureRef.current = offerSignature;
   const capacityValidation = validated?.capacitySignature === capacitySignature ? validated : null;
   const activeValidation = capacityValidation?.offerSignature === offerSignature ? capacityValidation : null;
@@ -715,6 +778,9 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
   const selectedValidatedOption = activeValidation?.options.find((option) => option.id === activeValidation.selectedOptionId)
     ?? activeValidation?.options[0]
     ?? null;
+  const displayAllocationOption = activeValidation
+    ? selectedValidatedOption
+    : supportSlotCandidates.length ? null : selectedCapacityOption;
   const workValid = projectMode
     ? Boolean(selectedProject
       && projectWorkPreset
@@ -742,6 +808,10 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     validationEpochRef.current += 1;
     setChecking(false);
     setValidated(null);
+    setSupportSlotCandidates([]);
+    setSupportMinSlots(0);
+    setSupportMaxSlots(0);
+    setSelectedSupportSlotIds([]);
     setAuthorityError('');
   };
 
@@ -751,6 +821,20 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
     validationEpochRef.current += 1;
     setChecking(false);
     setAuthorityError('');
+  };
+
+  const toggleSupportSlot = (slotId: string) => {
+    const selected = selectedSupportSlotIds.includes(slotId);
+    if (selected && selectedSupportSlotIds.length <= supportMinSlots) return;
+    if (!selected && supportMaxSlots > 0 && selectedSupportSlotIds.length >= supportMaxSlots) return;
+    cancelValidationRequest();
+    validationChangeKindRef.current = 'capacity';
+    validationEpochRef.current += 1;
+    setChecking(false);
+    setAuthorityError('');
+    setSelectedSupportSlotIds((current) => selected
+      ? current.filter((item) => item !== slotId)
+      : [...current, slotId]);
   };
 
   const projectLinkIssue = (project: BrowserProject) => {
@@ -853,7 +937,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
 
   const changeQuantity = (lineId: string, delta: number) => {
     setWorkLines((current) => current.map((line) => line.id === lineId
-      ? { ...line, quantity: Math.max(1, Math.min(20, line.quantity + delta)) }
+      ? { ...line, quantity: Math.max(1, Math.min(20, line.quantity + delta) }
       : line));
     resetCapacityValidation();
   };
@@ -1005,6 +1089,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         requestedDate: requestTarget.dateKey,
         requestedTime: requestTarget.start,
         requiredVanId: requestTarget.vanId,
+        supportSlotSelections: selectedSupportSlotIds,
         customerFacingDescription: authorizedDescription.trim(),
         technicianInstructions: authorizedTechnicianInstructions.trim(),
         recipientSelections: effectiveRecipientSelections,
@@ -1012,6 +1097,26 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         ...(backdatedTarget ? { bookingMode: 'backdated' as const, backdatingAcknowledged: true } : {}),
       }, requestController.signal);
       if (requestEpoch !== validationEpochRef.current || offerSignatureRef.current !== validationOfferSignature) return;
+
+      const candidates = supportCandidatesFromMetadata(result.metadata);
+      const candidateIds = new Set(candidates.map((candidate) => candidate.id));
+      const nextMinSlots = metadataNumber(result.metadata, 'supportMinSlots');
+      const nextMaxSlots = metadataNumber(result.metadata, 'supportMaxSlots');
+      const serverSelectedIds = metadataStringArray(result.metadata, 'selectedSupportSlotIds').filter((id) => candidateIds.has(id));
+      const defaultIds = metadataStringArray(result.metadata, 'defaultSupportSlotIds').filter((id) => candidateIds.has(id));
+      const validCurrentSelection = selectedSupportSlotIds.filter((id) => candidateIds.has(id));
+      const nextSelection = candidates.length
+        ? (validCurrentSelection.length
+          ? validCurrentSelection
+          : selectedSupportSlotIds.length
+            ? validCurrentSelection
+            : serverSelectedIds.length ? serverSelectedIds : defaultIds)
+        : [];
+      setSupportSlotCandidates(candidates);
+      setSupportMinSlots(nextMinSlots);
+      setSupportMaxSlots(nextMaxSlots);
+      if (!sameStringArray(selectedSupportSlotIds, nextSelection)) setSelectedSupportSlotIds(nextSelection);
+
       const exactOptions = result.options.filter((option) => optionMatchesTarget(option, requestTarget));
       const offer = result.offer;
       if (!result.available || !offer || !exactOptions.length) {
@@ -1019,6 +1124,10 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
         if (result.reason === 'required-primary-target-unavailable') {
           setAuthorityError(`${requestTarget.vanName} no longer has the complete requested capacity at ${formatTime(requestTarget.start)}. Another appointment or Temporary Hold may already reserve one or more of these slots. The live agenda is being refreshed; choose another open Van/day or review the existing reservation. Nothing was changed.`);
           void onAvailabilityConflict?.();
+        } else if (result.reason === 'support-selection-count') {
+          setAuthorityError(`Select between ${nextMinSlots} and ${nextMaxSlots} available support spots before confirming this large job.`);
+        } else if (result.reason === 'support-selection-unavailable') {
+          setAuthorityError('One or more selected support spots are no longer available. Review the live support slots and choose another open spot. Nothing was changed.');
         } else {
           const reason = result.reason ? ` (${result.reason})` : '';
           setAuthorityError(`Booking Authority could not reserve the complete allocation for this van/time${reason}. The schedule was not changed.`);
@@ -1045,7 +1154,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
       if (validationAbortRef.current === requestController) validationAbortRef.current = null;
       if (requestEpoch === validationEpochRef.current) setChecking(false);
     }
-  }, [authorizedDescription, authorizedTechnicianInstructions, backdatedTarget, backdatingAcknowledged, capacitySignature, effectiveRecipientSelections, isAfterHours, offerSignature, onAvailabilityConflict, projectMode, projectPlanState.error, requestTarget, selectedCustomer, selectedProject, selectedProjectPhase, selectedProperty, workRequestLines, workValid]);
+  }, [authorizedDescription, authorizedTechnicianInstructions, backdatedTarget, backdatingAcknowledged, capacitySignature, effectiveRecipientSelections, isAfterHours, offerSignature, onAvailabilityConflict, projectMode, projectPlanState.error, requestTarget, selectedCustomer, selectedProject, selectedProjectPhase, selectedProperty, selectedSupportSlotIds, workRequestLines, workValid]);
 
   useEffect(() => {
     const capacityChanged = automaticValidationCapacityRef.current !== capacitySignature;
@@ -1512,7 +1621,7 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
               <div className={styles.quantityRow}>
                 <div><span>{projectMode ? 'Project task' : 'Work lines'}</span><strong>{projectMode ? selectedProjectPhase?.name || selectedProject?.type || '—' : `${workLines.length} line${workLines.length === 1 ? '' : 's'} · ${totalQuantity} item${totalQuantity === 1 ? '' : 's'}`}</strong></div>
                 <div><span>{projectMode ? 'Planned Project slots' : 'Estimated workload'}</span><strong>{projectPlan ? `${projectPlan.scheduledSlots} slot${projectPlan.scheduledSlots === 1 ? '' : 's'}` : '—'}</strong></div>
-                <div><span>{isAfterHours ? 'After-hours execution' : 'Scheduled allocation'}</span><strong>{isAfterHours ? 'Open-ended until field completion' : allocationDurationLabel(selectedCapacityOption, estimatedMinutes)}</strong></div>
+                <div><span>{isAfterHours ? 'After-hours execution' : 'Scheduled allocation'}</span><strong>{isAfterHours ? 'Open-ended until field completion' : allocationDurationLabel(selectedValidatedOption ?? selectedCapacityOption, estimatedMinutes)}</strong></div>
               </div>
               <div className={styles.formGrid}>
                 <label className={styles.fieldWide}><span>Customer-facing work description</span><textarea value={authorizedDescription} onChange={(event) => { setDescription(event.target.value); invalidateOfferValidation(); }} placeholder={projectMode ? 'Project scope for this scheduled visit…' : 'Example: Two standard services and one installation. BTU to be confirmed by technician on site.'} /></label>
@@ -1532,14 +1641,53 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
           <section className={styles.authoritySection}>
             <div className={styles.authorityHeading}><div><span>5</span><strong>{backdatedTarget ? 'Historical capacity validation' : 'Live capacity validation'}</strong><small>{requestTarget.vanName} stays the primary/responsible van. Booking Authority validates automatically as the complete workload changes; final transaction validation still runs on confirm or hold.</small></div><button type="button" className={styles.validateButton} disabled={busy || checking || !selectedCustomer || !selectedProperty || !workValid || (backdatedTarget && !backdatingAcknowledged)} onClick={() => void validateTarget(false)}>{checking ? 'Checking…' : backdatedTarget ? 'Recheck history' : 'Recheck now'}</button></div>
 
+            {supportSlotCandidates.length ? (
+              <div style={{ margin: '10px 8px 0', padding: 10, border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface)' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
+                  <div><strong style={{ display: 'block', fontSize: 7 }}>AVAILABLE SUPPORT SLOTS</strong><span style={{ display: 'block', marginTop: 3, color: 'var(--muted)', fontSize: 5.8 }}>Select {supportMinSlots === supportMaxSlots ? supportMinSlots : `${supportMinSlots}–${supportMaxSlots}`} open spot{supportMaxSlots === 1 ? '' : 's'}. You may combine different times and different Vans.</span></div>
+                  <b style={{ color: 'var(--brand)', whiteSpace: 'nowrap', fontSize: 6.2 }}>{selectedSupportSlotIds.length} selected</b>
+                </div>
+                <div className={styles.choiceGrid}>
+                  {supportSlotCandidates.map((candidate) => {
+                    const selected = selectedSupportSlotIds.includes(candidate.id);
+                    const lockedAtMinimum = selected && selectedSupportSlotIds.length <= supportMinSlots;
+                    const lockedAtMaximum = !selected && supportMaxSlots > 0 && selectedSupportSlotIds.length >= supportMaxSlots;
+                    return (
+                      <button
+                        type="button"
+                        key={candidate.id}
+                        className={`${styles.choice} ${selected ? styles.choiceSelected : ''}`}
+                        aria-pressed={selected}
+                        disabled={busy || checking || lockedAtMinimum || lockedAtMaximum}
+                        onClick={() => toggleSupportSlot(candidate.id)}
+                      >
+                        <strong>{candidate.vanName || candidate.vanId} · support</strong>
+                        <span>{formatTime(candidate.time)}–{formatTime(candidate.endTime)}</span>
+                        <small>1 support spot · {selected ? 'SELECTED' : 'available'}</small>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className={styles.authorityIdle} style={{ marginTop: 8 }}>
+                  <strong>Allocation summary</strong>
+                  <span style={{ display: 'block', marginTop: 4 }}>{requestTarget.vanName} · Primary / Responsible — {Math.max(0, totalQuantity - selectedSupportSlotIds.length)} unit{Math.max(0, totalQuantity - selectedSupportSlotIds.length) === 1 ? '' : 's'}</span>
+                  {selectedSupportByVan.map((item) => <span key={item.vanId} style={{ display: 'block', marginTop: 2 }}>{item.vanName} · Support — {item.count} unit{item.count === 1 ? '' : 's'}</span>)}
+                  <span style={{ display: 'block', marginTop: 4, fontWeight: 850 }}>Total scheduled — {totalQuantity} units</span>
+                  <small style={{ display: 'block', marginTop: 5 }}>Consecutive selected spots on the same Van become one continuous support visit in the daily Van schedule. Non-consecutive spots remain separate visits in chronological order.</small>
+                </div>
+              </div>
+            ) : null}
+
             {capacityValidation && selectedCapacityOption ? (
               <div className={styles.validationSuccess}>
                 <header><div><b>✓</b><div><strong>{activeValidation ? 'Booking Authority approved the complete allocation' : 'Booking Authority approved this capacity allocation'}</strong><span>{activeValidation
                   ? `Offer ${activeValidation.offerId} · final transaction validation still runs on commit.`
                   : authorityError
                     ? 'The last approved capacity remains visible, but the current appointment details still need a fresh offer.'
-                    : 'Capacity remains approved while appointment details synchronize with Booking Authority.'}</span></div></div></header>
-                {capacityValidation.options.length > 1 ? (
+                    : supportSlotCandidates.length
+                      ? 'Validating the selected support spots with Booking Authority…'
+                      : 'Capacity remains approved while appointment details synchronize with Booking Authority.'}</span></div></div></header>
+                {!supportSlotCandidates.length && capacityValidation.options.length > 1 ? (
                   <div style={{ marginTop: 10 }}>
                     <div style={{ color: 'var(--muted)', fontSize: 6, fontWeight: 850, marginBottom: 6 }}>VALID SUPPORT ALTERNATIVES</div>
                     <div className={styles.choiceGrid}>
@@ -1578,30 +1726,37 @@ export function LiveAppointmentCreateDrawer({ target, mode = 'standard', onClose
                     </div>
                   </div>
                 ) : null}
-                <div className={styles.assignmentGrid}>
-                  {selectedCapacityOption.assignments.map((assignment, index) => {
-                    const support = optionAssignmentIsSupport(selectedCapacityOption, assignment);
-                    const start = optionAssignmentStart(selectedCapacityOption, assignment);
-                    const workEnd = optionAssignmentWorkEnd(selectedCapacityOption, assignment);
-                    const capacityEnd = optionAssignmentCapacityEnd(selectedCapacityOption, assignment);
-                    return <article key={`${assignment.vanId}-${start}-${index}`}>
-                      <span>{support ? 'SUPPORT' : 'PRIMARY / RESPONSIBLE'}</span>
-                      <strong>{assignment.vanName || assignment.vanId}</strong>
-                      <small>Van capacity {formatTime(start)}{capacityEnd ? `–${formatTime(capacityEnd)}` : ''} · {durationLabel(assignment.durationMinutes || assignment.slots * 60)}</small>
-                      {workEnd && capacityEnd !== workEnd ? <small>Service-work estimate ends {formatTime(workEnd)}</small> : null}
-                    </article>;
-                  })}
-                </div>
+                {displayAllocationOption ? (
+                  <div className={styles.assignmentGrid}>
+                    {displayAllocationOption.assignments.map((assignment, index) => {
+                      const support = optionAssignmentIsSupport(displayAllocationOption, assignment);
+                      const start = optionAssignmentStart(displayAllocationOption, assignment);
+                      const workEnd = optionAssignmentWorkEnd(displayAllocationOption, assignment);
+                      const capacityEnd = optionAssignmentCapacityEnd(displayAllocationOption, assignment);
+                      return <article key={`${assignment.vanId}-${start}-${index}`}>
+                        <span>{support ? 'SUPPORT' : 'PRIMARY / RESPONSIBLE'}</span>
+                        <strong>{assignment.vanName || assignment.vanId}</strong>
+                        <small>Van capacity {formatTime(start)}{capacityEnd ? `–${formatTime(capacityEnd)}` : ''} · {durationLabel(assignment.durationMinutes || assignment.slots * 60)}</small>
+                        {support ? <small>{assignment.quantity} support unit{assignment.quantity === 1 ? '' : 's'}</small> : null}
+                        {workEnd && capacityEnd !== workEnd ? <small>Service-work estimate ends {formatTime(workEnd)}</small> : null}
+                      </article>;
+                    })}
+                  </div>
+                ) : supportSlotCandidates.length ? <div className={styles.authorityIdle} style={{ marginTop: 8 }}>Validating the exact selected support spots before this allocation can be confirmed…</div> : null}
                 <div className={styles.authorityIdle} style={{ marginTop: 8 }}><strong>Temporary hold:</strong> reserves these same canonical capacity locks but sends no customer confirmation or reminder until an office user manually confirms it. No automatic expiry is assumed.</div>
               </div>
             ) : (
-              <div className={styles.authorityIdle}>{!backdatedTarget && selectedCustomer && selectedProperty && workValid && !authorityError
-                ? 'LIVE slot appears open · confirming Booking Authority'
-                : checking
-                  ? 'Checking the complete allocation with Booking Authority…'
-                  : projectMode
-                    ? 'Select the Project, confirm its customer and property, then enter whole planned slots. Booking Authority will validate the real Van capacity automatically.'
-                    : 'Complete the customer, property and work details. Booking Authority validates the live target automatically; the browser never becomes the source of truth for capacity.'}</div>
+              <div className={styles.authorityIdle}>{supportSlotCandidates.length
+                ? checking
+                  ? 'Validating the selected support slots with Booking Authority…'
+                  : 'Choose the required support spots above. Booking Authority will revalidate the complete primary + support allocation before confirmation.'
+                : !backdatedTarget && selectedCustomer && selectedProperty && workValid && !authorityError
+                  ? 'LIVE slot appears open · confirming Booking Authority'
+                  : checking
+                    ? 'Checking the complete allocation with Booking Authority…'
+                    : projectMode
+                      ? 'Select the Project, confirm its customer and property, then enter whole planned slots. Booking Authority will validate the real Van capacity automatically.'
+                      : 'Complete the customer, property and work details. Booking Authority validates the live target automatically; the browser never becomes the source of truth for capacity.'}</div>
             )}
           </section>
           )}
