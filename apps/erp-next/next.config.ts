@@ -1,9 +1,6 @@
 import type { NextConfig } from 'next';
 
-// Firebase web-app configuration is public client configuration, not a service-account secret.
-// Prefer Vercel environment variables when present. The DEMAC Firebase web-app defaults below
-// keep ERP authentication available when this repository is deployed by either connected Vercel
-// project, preventing one project from silently building an unauthenticated/locked client.
+// Public Firebase application configuration, not service-account credentials.
 const firebaseDefaults = {
   apiKey: 'AIzaSyCo31zuo6d8RsgiLWGqUVOvRmHkisoF1DE',
   authDomain: 'demac-corporation.firebaseapp.com',
@@ -13,7 +10,6 @@ const firebaseDefaults = {
   appId: '1:1053571783393:web:f40e18627a16acf4df75a0',
   measurementId: 'G-XCWED77MLQ',
 };
-
 const firebasePublicEnv = {
   NEXT_PUBLIC_FIREBASE_API_KEY: process.env.NEXT_PUBLIC_FIREBASE_API_KEY ?? process.env.EXPO_PUBLIC_FIREBASE_API_KEY ?? firebaseDefaults.apiKey,
   NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN ?? process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN ?? firebaseDefaults.authDomain,
@@ -23,19 +19,15 @@ const firebasePublicEnv = {
   NEXT_PUBLIC_FIREBASE_APP_ID: process.env.NEXT_PUBLIC_FIREBASE_APP_ID ?? process.env.EXPO_PUBLIC_FIREBASE_APP_ID ?? firebaseDefaults.appId,
   NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID ?? process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID ?? firebaseDefaults.measurementId,
 };
-
-const nextConfig: NextConfig = {
-  reactStrictMode: true,
-  poweredByHeader: false,
-  output: 'export',
-  trailingSlash: true,
-  experimental: {
-    // Keep production validation inside worker threads on constrained Windows/CI hosts
-    // where child-process creation is unavailable. This does not skip typechecking.
-    workerThreads: true,
-    cpus: 1,
-  },
-  env: firebasePublicEnv,
+const publicBuildEnv = {
+  NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA: process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? process.env.GITHUB_SHA ?? 'unknown',
+  // Preview/local collection is off unless an isolated test explicitly enables it.
+  NEXT_PUBLIC_PERFORMANCE_ENVIRONMENT: process.env.NEXT_PUBLIC_PERFORMANCE_ENVIRONMENT ?? (process.env.VERCEL_ENV === 'production' ? 'production' : 'preview'),
+  NEXT_PUBLIC_PERFORMANCE_TELEMETRY_ENABLED: process.env.NEXT_PUBLIC_PERFORMANCE_TELEMETRY_ENABLED ?? (process.env.VERCEL_ENV === 'production' ? 'true' : 'false'),
 };
-
+const nextConfig: NextConfig = {
+  reactStrictMode: true, poweredByHeader: false, output: 'export', trailingSlash: true,
+  experimental: { workerThreads: true, cpus: 1 },
+  env: { ...firebasePublicEnv, ...publicBuildEnv },
+};
 export default nextConfig;
