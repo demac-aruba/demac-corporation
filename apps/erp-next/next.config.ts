@@ -24,6 +24,15 @@ const firebasePublicEnv = {
   NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID ?? process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID ?? firebaseDefaults.measurementId,
 };
 
+const publicBuildEnv = {
+  // This is a public revision identifier only. It lets Performance & Health Center
+  // correlate regressions with the exact deployment without exposing a secret.
+  NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA: process.env.VERCEL_GIT_COMMIT_SHA
+    ?? process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA
+    ?? process.env.GITHUB_SHA
+    ?? 'unknown',
+};
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
@@ -35,7 +44,7 @@ const nextConfig: NextConfig = {
     workerThreads: true,
     cpus: 1,
   },
-  env: firebasePublicEnv,
+  env: { ...firebasePublicEnv, ...publicBuildEnv },
 };
 
 export default nextConfig;
