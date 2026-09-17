@@ -36,7 +36,7 @@ permissions:
   contents: read
 concurrency:
   group: performance-health-center-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   validate-telemetry:
@@ -81,7 +81,6 @@ jobs:
     timeout-minutes: 25
     env:
       GCLOUD_PROJECT: demo-demac-health
-      PHC_TOOLS_DIR: ${{ runner.temp }}/phc-tools
       NEXT_PUBLIC_PERFORMANCE_TELEMETRY_ENABLED: 'true'
       NEXT_PUBLIC_PERFORMANCE_ENVIRONMENT: test
       NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA: ${{ github.sha }}
@@ -95,6 +94,8 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - name: Set isolated tool directory
+        run: echo "PHC_TOOLS_DIR=$RUNNER_TEMP/phc-tools" >> "$GITHUB_ENV"
       - name: Install isolated test tooling (no production credentials)
         run: |
           npm install --prefix functions --no-audit --no-fund
