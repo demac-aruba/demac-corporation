@@ -39,6 +39,7 @@ const router = require("./whatsappCopilotRouter");
 // surfaces import, mutate, or derive work from Scheduling & Dispatch.
 module.exports = {
   ...core,
+  ...require("./websiteContentApi"),
   ...officeBookingAuthorityFacade,
   ...fieldOperationsAuthority,
   ...workOrderApplicationService,

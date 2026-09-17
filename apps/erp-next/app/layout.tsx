@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import { AuthProvider } from '@/components/auth/auth-provider';
+import { WebsiteFrameProvider } from '@/components/website-editor/frame-provider';
 import './globals.css';
 import './theme-hardening.css';
 import './management-intelligence.css';
@@ -75,7 +76,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <script dangerouslySetInnerHTML={{ __html: themeBootstrap }} />
         <script dangerouslySetInnerHTML={{ __html: legacyCacheCleanup }} />
       </head>
-      <body><AuthProvider>{children}</AuthProvider></body>
+      <body><AuthProvider><WebsiteFrameProvider>{children}</WebsiteFrameProvider></AuthProvider></body>
     </html>
   );
 }

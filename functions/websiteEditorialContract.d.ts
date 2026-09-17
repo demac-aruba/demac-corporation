@@ -1,0 +1,10 @@
+export type EditorialField = { key: string; label: string; group: string; kind: 'text' | 'image' | 'position'; max: number };
+export type EditorialChange = { key: string; value: string };
+export const PAGE: Readonly<{ id: 'vrf'; name: string; route: string; draftId: string; publishedId: string; publicPath: string }>;
+export const defaults: Record<string, unknown>;
+export function normalizeVrf(value: unknown, id?: string): unknown;
+export function normalizeIndoor(value: unknown): unknown[];
+export function descriptors(content: unknown): EditorialField[];
+export function values(content: unknown): Record<string, string>;
+export function applyChanges<T>(content: T, changes: EditorialChange[], options?: { allowPreviewImages?: boolean }): T;
+export function imageUrl(value: unknown, fallback?: string, allowPreview?: boolean): string;

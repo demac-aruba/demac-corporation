@@ -58,7 +58,12 @@ service firebase.storage {
     function websiteAdmin() {
       return signedIn()
         && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.active == true
-        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role in ['admin', 'owner', 'super_admin'];
+        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role in ['admin', 'owner', 'superadmin', 'super_admin'];
+    }
+
+    function websiteEditorEnabled() {
+      let path = /databases/(default)/documents/businessSettings/website-editor;
+      return firestore.exists(path) && firestore.get(path).data.get('backendEnabled', false) == true;
     }
 
     function marketingRole() {
@@ -159,15 +164,16 @@ service firebase.storage {
     // and publishing behavior cannot be overwritten by a VRF content change.
     match /public-website/vrf/published.json {
       allow read: if true;
-      allow create, update: if validWebsiteConfig();
-      allow delete: if websiteAdmin();
+      allow create, update: if validWebsiteConfig() && !websiteEditorEnabled();
+      allow delete: if false;
     }
 
     match /public-website/{allPaths=**} {
       allow read: if true;
-      allow create: if validWebsiteImage();
+      // Avoid a recursive allow overriding the exact protected JSON match.
+      allow create: if allPaths != 'vrf/published.json' && validWebsiteImage();
       allow update: if false;
-      allow delete: if websiteAdmin();
+      allow delete: if allPaths != 'vrf/published.json' && websiteAdmin();
     }
 
     match /field-evidence/{visitId}/{allPaths=**} {

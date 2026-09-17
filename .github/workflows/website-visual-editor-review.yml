@@ -5,6 +5,9 @@ on:
     paths:
       - 'apps/erp-next/**'
       - 'functions/website*'
+      - 'functions/bootstrap.js'
+      - 'firestore.rules'
+      - 'storage.rules'
       - 'docs/ai/website-editor/**'
       - '.github/workflows/website-visual-editor-review.yml'
 
@@ -16,28 +19,65 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  editor-review:
+  domain-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: node --check functions/websiteContentApi.js && node --test functions/websiteContentService.test.js
+
+  browser-review:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
-      - name: Prepare tracked-source review bundle (no credentials or live data)
-        run: |
-          python3 - <<'PY'
-          import os, subprocess, tarfile
-          files = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
-          allowed = ('apps/erp-next/', 'functions/', 'docs/ai/', 'api/', '.github/workflows/')
-          root = {'AGENTS.md', 'package.json', 'package-lock.json', 'firebase.json', 'firestore.rules', 'storage.rules', 'vercel.json'}
-          extensions = ('.ts', '.tsx', '.js', '.jsx', '.cjs', '.mjs', '.json', '.css', '.md', '.yml', '.yaml', '.rules')
-          with tarfile.open('/tmp/website-editor-source.tar.gz', 'w:gz') as archive:
-              for name in files:
-                  if not name or not (name in root or name.startswith(allowed)): continue
-                  if not name.endswith(extensions): continue
-                  if '.env' in name or 'credential' in name.lower() or 'service-account' in name.lower(): continue
-                  if os.path.isfile(name): archive.add(name, arcname=name)
-          PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/setup-node@v6
         with:
-          name: website-editor-tracked-source
-          path: /tmp/website-editor-source.tar.gz
-          retention-days: 2
+          node-version: '24'
+          package-manager-cache: false
+      - name: Build the actual site without live writes
+        env:
+          VERCEL_ENV: preview
+        run: |
+          npm install --prefix apps/erp-next --no-audit --no-fund
+          npm run typecheck --prefix apps/erp-next
+          node --test apps/erp-next/scripts/canonical-calendar-read-acceptance.cjs
+          npm run build --prefix apps/erp-next
+      - name: Install isolated browser review tools
+        run: |
+          npm install --prefix /tmp/vrf-browser playwright@1.56.1 @playwright/test@1.56.1 --no-audit --no-fund
+          /tmp/vrf-browser/node_modules/.bin/playwright install --with-deps chromium webkit
+      - name: Exercise editor, negative activation, responsive UI and recovery
+        run: |
+          python3 -m http.server 4173 --bind 127.0.0.1 --directory apps/erp-next/out >/tmp/editor-server.log 2>&1 &
+          node apps/erp-next/scripts/website-editor-browser-review.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: website-editor-browser-review
+          path: .website-editor-artifacts/
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: warn
+
+  rules-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install isolated emulator test tools
+        run: npm install --prefix /tmp/editor-rules firebase-tools@14.18.0 @firebase/rules-unit-testing@4.0.1 firebase@11.10.0 --no-audit --no-fund
+      - name: Validate actual allow/deny rules against local demo emulators
+        run: /tmp/editor-rules/node_modules/.bin/firebase emulators:exec --config functions/website-editor.emulator.json --project demo-demac-website --only firestore,storage "node functions/websiteContentRules.test.cjs"

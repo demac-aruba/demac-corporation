@@ -372,10 +372,27 @@ service cloud.firestore {
       allow create, update, delete: if operationsRole();
     }
 
+    function websiteOwner() {
+      return activeStaff() && userProfile().data.role in ['admin', 'owner', 'superadmin', 'super_admin'];
+    }
+
+    function websiteEditorEnabled() {
+      let config = /databases/$(database)/documents/businessSettings/website-editor;
+      return exists(config) && get(config).data.get('backendEnabled', false) == true;
+    }
+
     match /businessSettings/{settingId} {
-      allow read: if activeStaff();
-      allow create, update: if operationsRole();
-      allow delete: if adminOrSupervisor();
+      function editorialDocument() { return settingId in ['publicVrfPageDraft', 'publicVrfPagePublished', 'website-editor']; }
+      allow read: if editorialDocument() ? websiteOwner() : activeStaff();
+      allow create, update: if editorialDocument()
+        ? (settingId != 'website-editor' && websiteOwner() && !websiteEditorEnabled())
+        : operationsRole();
+      allow delete: if !editorialDocument() && adminOrSupervisor();
+    }
+
+    match /businessSettings/publicVrfPagePublished/editorReleases/{releaseId} {
+      allow read: if websiteOwner();
+      allow write: if false; // Protected service only; immutable published receipts.
     }
 
     match /marketingUploadSessions/{sessionId} {

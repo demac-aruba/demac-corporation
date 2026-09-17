@@ -42,13 +42,13 @@ function Action({ link, whatsapp = false }: { link: VrfLink; whatsapp?: boolean 
   </a>;
 }
 
-function Heading({ eyebrow, title, children }: { eyebrow: string; title: string; children?: ReactNode }) {
-  return <header className={styles.heading}><span className={styles.eyebrow}>{eyebrow}</span><h2>{title}</h2>{children}</header>;
+function Heading({ eyebrow, title, children, titleField, eyebrowField }: { eyebrow: string; title: string; children?: ReactNode; titleField?: string; eyebrowField?: string }) {
+  return <header className={styles.heading}><span className={styles.eyebrow} data-website-text={eyebrowField}>{eyebrow}</span><h2 data-website-text={titleField}>{title}</h2>{children}</header>;
 }
 
 // Reuse the approved desktop image sources; do not replace Website Manager data.
-function Photo({ primary, fallback, label, className = '' }: SolutionImage & { label: string; className?: string }) {
-  return <div role="img" aria-label={label} className={`${styles.photo} ${className}`} style={{ backgroundImage: `url("${primary}"), url("${fallback}")` }} />;
+function Photo({ primary, fallback, label, className = '', fieldKey }: SolutionImage & { label: string; className?: string; fieldKey?: string }) {
+  return <div role="img" data-website-image={fieldKey} aria-label={label} className={`${styles.photo} ${className}`} style={{ backgroundImage: `url("${primary}"), url("${fallback}")` }} />;
 }
 
 function moveTab(event: KeyboardEvent<HTMLButtonElement>, index: number, count: number, choose: (index: number) => void) {
@@ -122,12 +122,12 @@ export function VrfMobileExperience({ content, heroImage, heroPosition, solution
   return <div className={styles.mobile} ref={rootRef} data-vrf-mobile>
     <section className={styles.hero} ref={heroRef} aria-labelledby="vrf-mobile-title">
       <div className={styles.heroCopy}>
-        <span className={styles.eyebrow}>{content.hero.eyebrow}</span>
-        <h1 id="vrf-mobile-title">{content.hero.title} <strong>{content.hero.accent}</strong></h1>
-        <p>{content.hero.description}</p>
+        <span className={styles.eyebrow} data-website-text="hero.eyebrow">{content.hero.eyebrow}</span>
+        <h1 id="vrf-mobile-title"><span data-website-text="hero.title">{content.hero.title}</span> <strong data-website-text="hero.accent">{content.hero.accent}</strong></h1>
+        <p data-website-text="hero.description">{content.hero.description}</p>
         <div className={styles.actions}><Action link={content.hero.secondaryCta} whatsapp /><Action link={content.hero.primaryCta} /></div>
       </div>
-      <div className={styles.heroImage} role="img" aria-label="Building exterior" style={{ backgroundImage: `url("${heroImage}")`, backgroundPosition: heroPosition }} />
+      <div className={styles.heroImage} data-website-image="hero.imageUrl" role="img" aria-label="Building exterior" style={{ backgroundImage: `url("${heroImage}")`, backgroundPosition: heroPosition }} />
     </section>
 
     <nav className={styles.sectionNav} aria-label="Explore VRF solutions">
@@ -135,78 +135,78 @@ export function VrfMobileExperience({ content, heroImage, heroPosition, solution
     </nav>
 
     <section id="vrf-mobile-systems" className={styles.section}>
-      <Heading eyebrow="OUR VRF SOLUTIONS" title={content.solutionsHeading}><p>{content.solutionsIntro}</p></Heading>
+      <Heading eyebrow={content.editorial.systemsEyebrow} eyebrowField="editorial.systemsEyebrow" title={content.solutionsHeading} titleField="solutionsHeading"><p data-website-text="solutionsIntro">{content.solutionsIntro}</p></Heading>
       <div className={styles.systemTabs} role="tablist" aria-label="Choose your VRF system">
         {content.solutions.map((card, index) => <button key={card.id} id={`vrf-system-tab-${index}`} type="button" role="tab" aria-selected={currentSystem === index} aria-controls={`vrf-system-panel-${index}`} tabIndex={currentSystem === index ? 0 : -1} onClick={() => setSystemIndex(index)} onKeyDown={(event) => moveTab(event, index, content.solutions.length, setSystemIndex)}>{card.title.replace(/\s+Systems?$/i, '')}</button>)}
       </div>
       {content.solutions.map((card, index) => <div key={card.id} id={`vrf-system-panel-${index}`} role="tabpanel" aria-labelledby={`vrf-system-tab-${index}`} hidden={currentSystem !== index} className={styles.systemPanel} tabIndex={0}>
-        <Photo {...(solutionImages[index] ?? solutionImages[0])} label={`${card.title} equipment`} className={styles.systemPhoto} />
+        <Photo {...(solutionImages[index] ?? solutionImages[0])} label={`${card.title} equipment`} className={styles.systemPhoto} fieldKey={`solutions.${card.id}.imageUrl`} />
         <div className={styles.systemBody}>
-          <div className={styles.systemTitle}><h3>{card.title}</h3><span>{String(index + 1).padStart(2, '0')} / {String(content.solutions.length).padStart(2, '0')}</span></div>
-          <p>{card.description}</p>
-          {card.detail ? <p className={styles.ideal}>{card.detail}</p> : null}
+          <div className={styles.systemTitle}><h3 data-website-text={`solutions.${card.id}.title`}>{card.title}</h3><span>{String(index + 1).padStart(2, '0')} / {String(content.solutions.length).padStart(2, '0')}</span></div>
+          <p data-website-text={`solutions.${card.id}.description`}>{card.description}</p>
+          {card.detail ? <p className={styles.ideal} data-website-text={`solutions.${card.id}.detail`}>{card.detail}</p> : null}
           <a href={content.hero.primaryCta.href} className={styles.textLink}>Discuss this system <span aria-hidden="true">↗</span></a>
         </div>
       </div>)}
     </section>
 
     <section className={`${styles.section} ${styles.benefits}`}>
-      <Heading eyebrow="WHY CHOOSE VRF?" title={content.benefitsHeading} />
-      <div className={styles.benefitGrid}>{content.benefits.map((card, index) => <article key={card.id} className={styles.benefitCard}><span className={styles.icon}><Icon kind={index} /></span><h3>{card.title}</h3><p>{card.description}</p></article>)}</div>
+      <Heading eyebrow={content.editorial.benefitsEyebrow} eyebrowField="editorial.benefitsEyebrow" title={content.benefitsHeading} titleField="benefitsHeading" />
+      <div className={styles.benefitGrid}>{content.benefits.map((card, index) => <article key={card.id} className={styles.benefitCard}><span className={styles.icon}><Icon kind={index} /></span><h3 data-website-text={`benefits.${card.id}.title`}>{card.title}</h3><p data-website-text={`benefits.${card.id}.description`}>{card.description}</p></article>)}</div>
     </section>
 
     <section id="vrf-mobile-indoors" className={styles.section}>
-      <Heading eyebrow="INDOOR UNIT OPTIONS" title={content.indoorHeading}><p>{content.indoorIntro}</p></Heading>
+      <Heading eyebrow={content.editorial.indoorsEyebrow} eyebrowField="editorial.indoorsEyebrow" title={content.indoorHeading} titleField="indoorHeading"><p data-website-text="indoorIntro">{content.indoorIntro}</p></Heading>
       <div className={styles.unitGrid}>{content.indoorUnits.map((card, index) => <details key={card.id} className={styles.unitCard}>
-        <summary><span className={styles.unitArt}>{indoorArt[index]}</span><span className={styles.unitTitle}>{card.title}<span aria-hidden="true">+</span></span><span className={styles.unitHint}>Explore this unit</span></summary>
-        <div className={styles.unitDetails}><p>{card.description}</p>{card.detail ? <small>{card.detail}</small> : null}</div>
+        <summary><span className={styles.unitArt}>{indoorArt[index]}</span><span className={styles.unitTitle}><span data-website-text={`indoorUnits.${card.id}.title`}>{card.title}</span><span aria-hidden="true">+</span></span><span className={styles.unitHint}>Explore this unit</span></summary>
+        <div className={styles.unitDetails}><p data-website-text={`indoorUnits.${card.id}.description`}>{card.description}</p>{card.detail ? <small data-website-text={`indoorUnits.${card.id}.detail`}>{card.detail}</small> : null}</div>
       </details>)}</div>
     </section>
 
     <section id="vrf-mobile-buildings" className={`${styles.section} ${styles.buildings}`}>
-      <Heading eyebrow="WHERE VRF WORKS BEST" title={content.applicationsHeading} />
+      <Heading eyebrow={content.editorial.buildingsEyebrow} eyebrowField="editorial.buildingsEyebrow" title={content.applicationsHeading} titleField="applicationsHeading" />
       <div className={styles.railHeading}><span>Swipe to explore <span aria-hidden="true">↔</span></span><div><button type="button" aria-label="Previous building types" aria-controls="vrf-building-rail" onClick={() => moveBuildings(-1)}>←</button><button type="button" aria-label="Next building types" aria-controls="vrf-building-rail" onClick={() => moveBuildings(1)}>→</button></div></div>
       <div id="vrf-building-rail" ref={buildingsRef} className={styles.buildingRail} tabIndex={0} aria-label="Building types, scroll horizontally">
         {content.applications.map((card, index) => <article className={styles.buildingCard} key={card.id}>
-          <div className={styles.buildingPhoto} role="img" aria-label={card.title} style={{ backgroundImage: `url("${applicationImages[card.id] ?? applicationImages.office}")` }} />
-          <div><span className={styles.cardNumber}>{String(index + 1).padStart(2, '0')}</span><h3>{card.title}</h3><p>{card.description}</p></div>
+          <div className={styles.buildingPhoto} data-website-image={`applications.${card.id}.imageUrl`} role="img" aria-label={card.title} style={{ backgroundImage: `url("${applicationImages[card.id] ?? applicationImages.office}")` }} />
+          <div><span className={styles.cardNumber}>{String(index + 1).padStart(2, '0')}</span><h3 data-website-text={`applications.${card.id}.title`}>{card.title}</h3><p data-website-text={`applications.${card.id}.description`}>{card.description}</p></div>
         </article>)}
       </div>
     </section>
 
     <section className={styles.section}>
-      <Heading eyebrow="YOUR PROJECT, STEP BY STEP" title={content.processHeading} />
+      <Heading eyebrow={content.editorial.processMobileEyebrow} eyebrowField="editorial.processMobileEyebrow" title={content.processHeading} titleField="processHeading" />
       <div className={styles.processBox}>
         <div className={styles.steps} role="tablist" aria-label="Explore the project process">
           {content.process.map((card, index) => <button key={card.id} type="button" id={`vrf-step-tab-${index}`} role="tab" aria-label={`Step ${index + 1}: ${card.title}`} aria-selected={currentStep === index} aria-controls={`vrf-step-panel-${index}`} tabIndex={currentStep === index ? 0 : -1} onClick={() => setStepIndex(index)} onKeyDown={(event) => moveTab(event, index, content.process.length, setStepIndex)}>{String(index + 1).padStart(2, '0')}</button>)}
         </div>
-        {content.process.map((card, index) => <div key={card.id} id={`vrf-step-panel-${index}`} role="tabpanel" aria-labelledby={`vrf-step-tab-${index}`} hidden={currentStep !== index} className={styles.stepPanel} tabIndex={0}><span className={styles.icon}><Icon kind={index + 2} /></span><h3>{card.title}</h3><p>{card.description}</p></div>)}
+        {content.process.map((card, index) => <div key={card.id} id={`vrf-step-panel-${index}`} role="tabpanel" aria-labelledby={`vrf-step-tab-${index}`} hidden={currentStep !== index} className={styles.stepPanel} tabIndex={0}><span className={styles.icon}><Icon kind={index + 2} /></span><h3 data-website-text={`process.${card.id}.title`}>{card.title}</h3><p data-website-text={`process.${card.id}.description`}>{card.description}</p></div>)}
         <div className={styles.stepFooter}><span>Step {currentStep + 1} of {content.process.length}</span><button type="button" onClick={() => setStepIndex((currentStep + 1) % content.process.length)}>{currentStep === content.process.length - 1 ? 'Back to start' : 'Next step'} <span aria-hidden="true">→</span></button></div>
       </div>
     </section>
 
     <section id="vrf-mobile-services" className={`${styles.section} ${styles.services}`}>
-      <Heading eyebrow="OUR SERVICE CAPABILITIES" title={content.servicesHeading} />
-      <div className={styles.disclosures}>{content.services.map((card, index) => <details key={card.id} name="vrf-mobile-service" className={styles.disclosure}><summary><span className={styles.icon}><Icon kind={index + 2} /></span><span>{card.title}</span><span className={styles.plus} aria-hidden="true">+</span></summary><p>{card.description}</p></details>)}</div>
+      <Heading eyebrow={content.editorial.servicesEyebrow} eyebrowField="editorial.servicesEyebrow" title={content.servicesHeading} titleField="servicesHeading" />
+      <div className={styles.disclosures}>{content.services.map((card, index) => <details key={card.id} name="vrf-mobile-service" className={styles.disclosure}><summary><span className={styles.icon}><Icon kind={index + 2} /></span><span data-website-text={`services.${card.id}.title`}>{card.title}</span><span className={styles.plus} aria-hidden="true">+</span></summary><p data-website-text={`services.${card.id}.description`}>{card.description}</p></details>)}</div>
     </section>
 
     <section className={`${styles.section} ${styles.trust}`}>
       <div className={styles.trustBox}>
-        <div className={styles.trustHeader}><div><span className={styles.eyebrow}>{content.trust.eyebrow}</span><h2>{content.trust.title}</h2></div><div role="img" aria-label="HVAC service technician" className={styles.trustPhoto} style={{ backgroundImage: `url("${trustImage}")` }} /></div>
-        <div className={styles.trustBullets}>{content.trust.bullets.map((bullet) => <div key={bullet}><span aria-hidden="true">✓</span>{bullet}</div>)}</div>
-        <details className={styles.trustMore}><summary>Our local approach <span aria-hidden="true">+</span></summary><p>{content.trust.description}</p></details>
+        <div className={styles.trustHeader}><div><span className={styles.eyebrow} data-website-text="trust.eyebrow">{content.trust.eyebrow}</span><h2 data-website-text="trust.title">{content.trust.title}</h2></div><div role="img" aria-label="HVAC service technician" className={styles.trustPhoto} data-website-image="trust.imageUrl" style={{ backgroundImage: `url("${trustImage}")` }} /></div>
+        <div className={styles.trustBullets}>{content.trust.bullets.map((bullet, index) => <div key={index}><span aria-hidden="true">✓</span><span data-website-text={`trust.bullets.${index}`}>{bullet}</span></div>)}</div>
+        <details className={styles.trustMore}><summary>Our local approach <span aria-hidden="true">+</span></summary><p data-website-text="trust.description">{content.trust.description}</p></details>
         <a href="/projects" className={styles.textLink}>Our projects <span aria-hidden="true">↗</span></a>
       </div>
     </section>
 
     <section id="vrf-mobile-faq" className={styles.section}>
-      <Heading eyebrow="FREQUENTLY ASKED QUESTIONS" title={content.faqHeading} />
-      <div className={styles.disclosures}>{content.faq.map((card) => <details className={styles.disclosure} name="vrf-mobile-faq" key={card.id}><summary><span>{card.title}</span><span className={styles.plus} aria-hidden="true">+</span></summary><p>{card.description}</p></details>)}</div>
+      <Heading eyebrow={content.editorial.faqEyebrow} eyebrowField="editorial.faqEyebrow" title={content.faqHeading} titleField="faqHeading" />
+      <div className={styles.disclosures}>{content.faq.map((card) => <details className={styles.disclosure} name="vrf-mobile-faq" key={card.id}><summary><span data-website-text={`faq.${card.id}.title`}>{card.title}</span><span className={styles.plus} aria-hidden="true">+</span></summary><p data-website-text={`faq.${card.id}.description`}>{card.description}</p></details>)}</div>
       <a className={styles.faqContact} href="/contact">Still have questions? <strong>Talk to our team ↗</strong></a>
     </section>
 
     <section className={styles.contact} ref={endRef} id="vrf-mobile-contact">
-      <span className={styles.eyebrow}>{content.finalCta.eyebrow}</span><h2>{content.finalCta.title}</h2><p>{content.finalCta.description}</p>
+      <span className={styles.eyebrow} data-website-text="finalCta.eyebrow">{content.finalCta.eyebrow}</span><h2 data-website-text="finalCta.title">{content.finalCta.title}</h2><p data-website-text="finalCta.description">{content.finalCta.description}</p>
       <div className={styles.contactActions}><Action link={content.finalCta.secondaryCta} whatsapp /><Action link={content.finalCta.primaryCta} /></div>
     </section>
     {showActions ? <aside className={styles.actionDock} aria-label="Contact DEMAC about VRF"><Action link={content.finalCta.secondaryCta} whatsapp /><Action link={content.finalCta.primaryCta} /></aside> : null}

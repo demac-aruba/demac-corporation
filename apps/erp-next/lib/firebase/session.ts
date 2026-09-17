@@ -66,7 +66,14 @@ export function loadFirebaseWebSession(): FirebaseWebSession | null {
 }
 
 export function clearFirebaseWebSession() {
+  const hadSession = Boolean(storage()?.getItem(SESSION_KEY));
   storage()?.removeItem(SESSION_KEY);
+  // Revocation signal only: no credentials or auth-state changes in other tabs.
+  // An explicitly activated editor must close when the owner signs out.
+  if (hadSession && typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('demac-editor-revoke'));
+    try { const channel = new BroadcastChannel('demac-website-editor-session'); channel.postMessage({ type: 'signed-out' }); channel.close(); } catch { /* Unsupported browser: editor also revalidates session. */ }
+  }
 }
 
 export async function signInWithFirebaseEmail(email: string, password: string) {
