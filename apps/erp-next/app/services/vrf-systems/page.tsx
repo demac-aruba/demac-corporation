@@ -1,6 +1,8 @@
 import type { Metadata } from 'next';
 import { PublicSiteShell } from '@/components/public/public-site-shell';
 import { VrfMobileExperience } from '@/components/public/vrf-mobile-experience';
+import { VrfIndoorPhoto } from '@/components/public/vrf-indoor-photo';
+import indoorStyles from '@/components/public/vrf-indoor-photos.module.css';
 import mobileStyles from '@/components/public/vrf-mobile-experience.module.css';
 import { loadPublishedVrfContent } from '@/lib/public-vrf-public';
 import type { VrfCard, VrfLink } from '@/lib/public-vrf-content';
@@ -90,73 +92,6 @@ function OutdoorSystemArt({ variant = 0 }: { variant?: number }) {
   );
 }
 
-function IndoorUnitArt({ id, prefix = '' }: { id: string; prefix?: string }) {
-  const shell = `${prefix}unit-shell-${id}`;
-  const shade = `${prefix}unit-shade-${id}`;
-  return (
-    <svg className={styles.indoorSvg} viewBox="0 0 220 120" role="img" aria-label="">
-      <defs>
-        <linearGradient id={shell} x1="0" x2="1" y1="0" y2="1">
-          <stop offset="0" stopColor="#ffffff" />
-          <stop offset="0.62" stopColor="#edf2f5" />
-          <stop offset="1" stopColor="#c7d3db" />
-        </linearGradient>
-        <linearGradient id={shade} x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0" stopColor="#aab9c3" />
-          <stop offset="1" stopColor="#6f8490" />
-        </linearGradient>
-        <filter id={`${prefix}shadow-${id}`} x="-30%" y="-40%" width="160%" height="190%">
-          <feDropShadow dx="0" dy="8" stdDeviation="6" floodColor="#173858" floodOpacity="0.18" />
-        </filter>
-      </defs>
-      <g filter={`url(#${prefix}shadow-${id})`}>
-        {id === 'cassette' ? <>
-          <path d="M47 38 112 20l61 20-65 21Z" fill={`url(#${shell})`} stroke="#b8c7d0" />
-          <path d="M47 38v30l61 22V61Z" fill="#dce5ea" stroke="#b8c7d0" />
-          <path d="M173 40v29l-65 21V61Z" fill="#eef3f6" stroke="#b8c7d0" />
-          <ellipse cx="111" cy="43" rx="23" ry="10" fill="#c5d2d9" stroke="#93a6b1" />
-          <ellipse cx="111" cy="43" rx="14" ry="6" fill="#edf4f7" stroke="#93a6b1" />
-          <path d="M60 39 103 28M162 40l-43-11M61 64l42 15M160 64l-42 15" stroke="#8da2ad" strokeWidth="3" strokeLinecap="round" />
-        </> : null}
-        {id === 'fan-coil' ? <>
-          <rect x="34" y="31" width="152" height="52" rx="5" fill={`url(#${shade})`} stroke="#657b88" />
-          <rect x="43" y="40" width="134" height="32" rx="3" fill="#263f4d" />
-          {Array.from({ length: 15 }).map((_, index) => <line key={index} x1={49 + index * 8.4} x2={49 + index * 8.4} y1="43" y2="69" stroke="#6f8793" strokeWidth="2" />)}
-          <rect x="52" y="21" width="27" height="11" rx="3" fill="#dbe5e9" stroke="#a9b8c0" />
-          <rect x="141" y="21" width="27" height="11" rx="3" fill="#dbe5e9" stroke="#a9b8c0" />
-        </> : null}
-        {id === 'floor-ceiling' ? <>
-          <rect x="31" y="35" width="158" height="46" rx="7" fill={`url(#${shell})`} stroke="#b7c6ce" />
-          <path d="M45 68h130" stroke="#8ca0aa" strokeWidth="5" strokeLinecap="round" />
-          <path d="M46 54h98" stroke="#d0dbe0" strokeWidth="2" />
-          <circle cx="172" cy="48" r="3" fill="#7d929e" />
-        </> : null}
-        {id === 'air-handler' ? <>
-          <rect x="29" y="27" width="162" height="62" rx="4" fill={`url(#${shell})`} stroke="#a6b8c2" />
-          <line x1="78" x2="78" y1="27" y2="89" stroke="#9fb1bb" />
-          <line x1="139" x2="139" y1="27" y2="89" stroke="#9fb1bb" />
-          <rect x="38" y="37" width="30" height="42" rx="3" fill="#d3dde2" stroke="#a0b2bc" />
-          <circle cx="108" cy="58" r="20" fill="#d9e3e8" stroke="#98abb6" />
-          <circle cx="108" cy="58" r="8" fill="#a5b6bf" />
-          <path d="M150 41h29M150 51h29M150 61h29M150 71h29" stroke="#98abb6" strokeWidth="2" />
-        </> : null}
-        {id === 'split-unit' ? <>
-          <path d="M38 43c0-7 6-12 13-12h118c7 0 13 5 13 12v31H38Z" fill={`url(#${shell})`} stroke="#b8c7d0" />
-          <path d="M49 63h122" stroke="#8fa3ad" strokeWidth="4" strokeLinecap="round" />
-          <path d="M57 49h65" stroke="#d9e2e6" strokeWidth="2" />
-          <circle cx="165" cy="47" r="3" fill="#7f98a5" />
-        </> : null}
-        {id === 'wall-mounted' ? <>
-          <path d="M35 37c0-7 6-12 13-12h124c7 0 13 5 13 12l-5 38c-1 6-6 10-12 10H52c-6 0-11-4-12-10Z" fill={`url(#${shell})`} stroke="#b8c7d0" />
-          <path d="M49 67c35 8 87 8 122 0" stroke="#8ea2ad" strokeWidth="4" fill="none" strokeLinecap="round" />
-          <path d="M54 44h72" stroke="#d6e1e6" strokeWidth="2" />
-          <circle cx="166" cy="44" r="3" fill="#7e96a3" />
-        </> : null}
-      </g>
-    </svg>
-  );
-}
-
 function SectionHead({ eyebrow, title, copy }: { eyebrow: string; title: string; copy?: string }) {
   return (
     <div className={styles.sectionHead}>
@@ -178,9 +113,9 @@ export default async function VrfSystemsPage() {
   const trustImage = content.trust.imageUrl.includes('photo-1621905251189-08b45d6a269e') ? trustImageFallback : content.trust.imageUrl;
 
   return (
-    <div className={mobileStyles.route}>
+    <div className={`${mobileStyles.route} ${indoorStyles.scope}`}>
     <PublicSiteShell active="services">
-      <VrfMobileExperience content={content} heroImage={heroImage} heroPosition={heroPosition} solutionImages={solutionImages} applicationImages={applicationImages} trustImage={trustImage} indoorArt={content.indoorUnits.map((card) => <IndoorUnitArt key={card.id} id={card.id} prefix="mobile-" />)} />
+      <VrfMobileExperience content={content} heroImage={heroImage} heroPosition={heroPosition} solutionImages={solutionImages} applicationImages={applicationImages} trustImage={trustImage} indoorArt={content.indoorUnits.map((card) => <VrfIndoorPhoto key={card.id} card={card} />)} />
       <div className={mobileStyles.desktop} data-vrf-desktop>
       <main className={styles.page}>
         <section className={styles.hero}>
@@ -229,13 +164,13 @@ export default async function VrfSystemsPage() {
           </div>
         </section>
 
-        <section className={styles.section}>
+        <section className={styles.section} id="indoor-unit-options">
           <div className={styles.container}>
             <SectionHead eyebrow="INDOOR UNIT OPTIONS" title={content.indoorHeading} copy={content.indoorIntro} />
-            <div className={styles.indoorGrid}>
+            <div className={`${styles.indoorGrid} ${indoorStyles.catalogGrid}`} data-vrf-indoor-grid>
               {content.indoorUnits.map((card) => (
                 <article className={styles.indoorCard} key={card.id}>
-                  <div className={styles.indoorArtWrap}><IndoorUnitArt id={card.id} /></div>
+                  <div className={styles.indoorArtWrap}><VrfIndoorPhoto card={card} /></div>
                   <div className={styles.indoorBody}><CardCopy card={card} /></div>
                 </article>
               ))}
