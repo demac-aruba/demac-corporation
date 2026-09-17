@@ -35,7 +35,7 @@ function createPerformanceTelemetryApi({ db, verifyIdToken, timestamp = (ms) => 
     return { uid: decoded.uid, role: normalized };
   }
   async function policy() {
-    return { success: true, version: C.VERSION, environment, ...policyValue(await controlRef.get()) };
+    return { success: true, apiVersion: C.VERSION, environment, ...policyValue(await controlRef.get()) };
   }
   async function setCollection(data, actor) {
     requireAdmin(actor);
@@ -115,6 +115,7 @@ function createPerformanceTelemetryApi({ db, verifyIdToken, timestamp = (ms) => 
       db.collection(C.COLLECTIONS.sessions).where('lastSeenMs', '>=', at - C.STALE_MS).limit(201).get(),
       controlRef.get(),
     ]);
+    const truncated = buckets.size > 800;
     const allMetrics = []; const timeline = new Map(); const days = new Set(); let lastReceivedAtMs = 0;
     for (const doc of buckets.docs.slice(0,800)) {
       const item = doc.data();
@@ -123,8 +124,9 @@ function createPerformanceTelemetryApi({ db, verifyIdToken, timestamp = (ms) => 
       for (const raw of Object.values(item.metrics || {})) {
         if (!raw || !C.MODULES.has(raw.module) || C.UNITS[raw.name] !== raw.unit) continue;
         allMetrics.push(raw);
-        if (raw.module !== 'performance' && C.PRIMARY_METRICS.has(raw.name)) days.add(new Date(item.bucketStartMs).toISOString().slice(0,10));
-        if ((release === 'all' || raw.release === release) && raw.module === selectedModule && raw.name === selectedMetric) {
+        const selectedRelease = release === 'all' || raw.release === release;
+        if (selectedRelease && raw.module !== 'performance' && C.PRIMARY_METRICS.has(raw.name)) days.add(new Date(item.bucketStartMs).toISOString().slice(0,10));
+        if (selectedRelease && raw.module === selectedModule && raw.name === selectedMetric) {
           if (!timeline.has(item.bucketStartMs)) timeline.set(item.bucketStartMs, C.emptyMetric(raw.name, raw.module, release, raw.unit));
           C.addMetric(timeline.get(item.bucketStartMs), raw);
         }
@@ -143,13 +145,13 @@ function createPerformanceTelemetryApi({ db, verifyIdToken, timestamp = (ms) => 
     const coverage = ['schedule_data_ready','support_slot_validation','confirm_appointment'].map((name) => ({ name, count: metrics.find((m) => m.module === 'scheduling' && m.name === name)?.count || 0 }));
     return { success: true, version: C.VERSION, environment, generatedAtMs: at,
       rangeMinutes: spec.rangeMinutes, windowStartMs: spec.from, windowEndMs: at, bucketSizeMs: spec.size,
-      bucketCount: buckets.size, truncated: buckets.size > 800, sessionsTruncated: sessions.size > 200,
+      bucketCount: buckets.size, truncated, sessionsTruncated: sessions.size > 200,
       lastReceivedAtMs: lastReceivedAtMs || null,
       lastObservedAtMs: filtered.length ? Math.max(...filtered.map((m) => m.lastObservedAtMs || 0)) : null,
       policy: policyValue(control), metrics, releases, releaseMetrics,
       timeline: [...timeline.entries()].sort((a,b) => a[0]-b[0]).map(([atMs, metric]) => ({ atMs, ...C.serialize(metric) })),
       trend: { name: selectedMetric, module: selectedModule }, activeSessions: active.length, activeModules, activeRoles,
-      health: C.health(metrics, at), baseline: { observedDays: days.size, requiredDays: 5, coverage, ready: !data.truncated && days.size >= 5 && coverage.every((m) => m.count >= 20) },
+      health: C.health(metrics, at), baseline: { observedDays: days.size, requiredDays: 5, coverage, ready: !truncated && days.size >= 5 && coverage.every((m) => m.count >= 20) },
       recovery: { backupVerified: false, restoreVerified: false, reason: 'No verified backup/restore provider is connected.' },
     };
   }
