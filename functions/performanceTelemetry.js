@@ -22,6 +22,11 @@ function safeToken(value, fallback = "unknown", limit = 64) {
   return normalized || fallback;
 }
 
+function safeRoute(value) {
+  const raw = cleanText(value, 180) || "/";
+  return (raw.split("?")[0].split("#")[0] || "/").slice(0, 180);
+}
+
 function safeNumber(value, min = 0, max = 120_000) {
   const number = Number(value);
   if (!Number.isFinite(number)) return null;
@@ -75,7 +80,7 @@ function percentileFromHistogram(histogram = {}, count = 0, percentile = 0.95) {
 function normalizeMeasurement(input = {}, fallbackRoute = "unknown") {
   const name = safeToken(input.name, "metric", 80);
   const module = safeToken(input.module, "erp", 48);
-  const route = cleanText(input.route || fallbackRoute, 180) || "/";
+  const route = safeRoute(input.route || fallbackRoute);
   const unit = ["ms", "count", "ratio", "bytes"].includes(input.unit) ? input.unit : "count";
   const value = safeNumber(input.value, 0, unit === "bytes" ? 1_000_000_000 : 120_000);
   if (value === null) return null;
@@ -210,7 +215,7 @@ function createPerformanceTelemetryApi({ db, verifyIdToken, now = () => Date.now
       error.code = "invalid_request";
       throw error;
     }
-    const route = cleanText(data.route, 180) || "/";
+    const route = safeRoute(data.route);
     const module = safeToken(data.module, "erp", 48);
     const release = safeToken(data.release, "unknown", 40);
     const supplied = Array.isArray(data.measurements) ? data.measurements.slice(0, MAX_MEASUREMENTS) : [];
@@ -235,10 +240,8 @@ function createPerformanceTelemetryApi({ db, verifyIdToken, now = () => Date.now
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
 
-    const userHash = crypto.createHash("sha256").update(actor.uid).digest("hex").slice(0, 16);
     await db.collection("performanceTelemetrySessions").doc(sessionId).set({
       sessionId,
-      userHash,
       role: actor.role,
       route,
       module,
