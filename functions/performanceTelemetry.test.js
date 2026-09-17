@@ -35,7 +35,7 @@ test("measurements are sanitized, bounded and contain no arbitrary payload", () 
   const normalized = normalizeMeasurement({
     name: "Schedule Data Ready !!!",
     module: "Scheduling / Main",
-    route: "/scheduling?week=2026-09-16",
+    route: "/scheduling?week=2026-09-16&customer=private",
     value: 1842.5,
     unit: "ms",
     error: true,
@@ -44,7 +44,7 @@ test("measurements are sanitized, bounded and contain no arbitrary payload", () 
   assert.deepEqual(normalized, {
     name: "schedule_data_ready",
     module: "scheduling_main",
-    route: "/scheduling?week=2026-09-16",
+    route: "/scheduling",
     value: 1842.5,
     unit: "ms",
     error: true,
