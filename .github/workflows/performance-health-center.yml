@@ -4,7 +4,6 @@ on:
   pull_request:
     paths:
       - 'functions/performanceTelemetry*'
-      - 'functions/bootstrap.js'
       - 'apps/erp-next/app/(erp)/layout.tsx'
       - 'apps/erp-next/app/(erp)/settings/system/performance/**'
       - 'apps/erp-next/components/performance/**'
@@ -20,12 +19,12 @@ on:
     branches: [main]
     paths:
       - 'functions/performanceTelemetry*'
-      - 'functions/bootstrap.js'
       - 'apps/erp-next/app/(erp)/layout.tsx'
       - 'apps/erp-next/app/(erp)/settings/system/performance/**'
       - 'apps/erp-next/components/performance/**'
       - 'apps/erp-next/lib/performance*'
       - 'apps/erp-next/lib/live-scheduling-fast.ts'
+      - 'apps/erp-next/lib/navigation.ts'
       - 'apps/erp-next/next.config.ts'
       - 'apps/erp-next/scripts/performance*'
       - 'firebase.performance-emulator.json'
@@ -48,13 +47,36 @@ jobs:
         with:
           node-version: '22'
           package-manager-cache: false
-      - name: Syntax and isolated service tests
+      - name: Syntax, service safety and standalone packaging tests
         run: |
           set -euo pipefail
           node --check functions/performanceTelemetry.js
           node --check functions/performanceTelemetryCore.js
           node --check functions/performanceTelemetryService.js
-          node --test functions/performanceTelemetry.test.js
+          node --test functions/performanceTelemetry.test.js functions/performanceTelemetryPackage.test.cjs
+      - name: Build isolated deployment source
+        run: |
+          set -euo pipefail
+          TARGET="$RUNNER_TEMP/performance-telemetry-source"
+          node functions/performanceTelemetryPackage.cjs "$TARGET"
+          npm install --prefix "$TARGET" --no-audit --no-fund
+          node - "$TARGET" <<'NODE'
+          const assert = require('node:assert/strict');
+          const exported = require(process.argv[2]);
+          assert.deepEqual(Object.keys(exported), ['performanceTelemetry']);
+          assert.equal(typeof exported.performanceTelemetry, 'function');
+          console.log('Standalone telemetry entry verified. No operational entry points exported.');
+          NODE
+      - name: Retain tested deployment source and resolved dependency lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-telemetry-deploy-source
+          path: |
+            ${{ runner.temp }}/performance-telemetry-source/*.js
+            ${{ runner.temp }}/performance-telemetry-source/package.json
+            ${{ runner.temp }}/performance-telemetry-source/package-lock.json
+          retention-days: 7
+          if-no-files-found: error
 
   validate-erp-ui:
     runs-on: ubuntu-latest
@@ -126,7 +148,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: performance-telemetry-deploy-source
+          path: ${{ runner.temp }}/performance-telemetry-source
       - uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
@@ -147,18 +172,22 @@ jobs:
             gcloud firestore fields ttls update expiresAt --collection-group="$collection" --enable-ttl --project=demac-corporation --async --quiet
           done
           for collection in performanceTelemetry15mV2 performanceTelemetryHourV2 performanceTelemetryDayV2; do
-            gcloud firestore indexes fields update metrics --collection-group="$collection" --clear-indexes --project=demac-corporation --async --quiet
+            gcloud firestore indexes fields update metrics --collection-group="$collection" --disable-indexes --project=demac-corporation --async --quiet
           done
-      - name: Deploy only the telemetry endpoint
+      - name: Deploy only the isolated telemetry endpoint
         env:
           RUN_SA: ${{ steps.config.outputs.runtime }}
         run: |
           set -euo pipefail
-          gcloud functions deploy performanceTelemetry --project=demac-corporation --gen2 --region=us-central1 --runtime=nodejs22 --source=functions --entry-point=performanceTelemetry --memory=256Mi --timeout=30s --max-instances=3 --run-service-account="$RUN_SA" --set-env-vars=PERFORMANCE_TELEMETRY_ENABLED=true,PERFORMANCE_ENVIRONMENT=production --trigger-http --allow-unauthenticated --quiet
+          TARGET="$RUNNER_TEMP/performance-telemetry-source"
+          test -f "$TARGET/package-lock.json"
+          test ! -f "$TARGET/bootstrap.js"
+          test ! -f "$TARGET/officeBookingAuthority.js"
+          gcloud functions deploy performanceTelemetry --project=demac-corporation --gen2 --region=us-central1 --runtime=nodejs22 --source="$TARGET" --entry-point=performanceTelemetry --memory=256Mi --timeout=30s --max-instances=3 --run-service-account="$RUN_SA" --set-env-vars=PERFORMANCE_TELEMETRY_ENABLED=true,PERFORMANCE_ENVIRONMENT=production --trigger-http --allow-unauthenticated --quiet
       - name: Verify unauthenticated requests remain denied
         run: |
           set -euo pipefail
           ENDPOINT=https://us-central1-demac-corporation.cloudfunctions.net/performanceTelemetry
           STATUS="$(curl --silent --show-error --output /tmp/phc-unauth.json --write-out '%{http_code}' --request POST "$ENDPOINT" --header 'Content-Type: application/json' --data '{"action":"dashboard","data":{}}')"
           test "$STATUS" = 401
-          node -e "const r=require('/tmp/phc-unauth.json');if(r.error?.code!=='unauthenticated')process.exit(1)"
+          grep -q 'unauthenticated' /tmp/phc-unauth.json

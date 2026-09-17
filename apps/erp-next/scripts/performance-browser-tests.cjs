@@ -80,8 +80,6 @@ async function main() {
           return route.fulfill({ status: result.status, headers, body: JSON.stringify(result.body) });
         }
         if (url.hostname.endsWith('.cloudfunctions.net')) {
-          // Honor the real GroupResponse contract. An incomplete generic fixture
-          // previously made VanScheduleManualSend call undefined.filter().
           const payload = request.postDataJSON();
           if (payload?.action === 'get_van_schedule_groups') return route.fulfill({ status: 200, headers, body: JSON.stringify({ success: true, version: 18, groups: [] }) });
           return route.fulfill({ status: 200, headers, body: JSON.stringify({ success: true, version: 18, available: false, options: [], presets: [], attribution: [] }) });
@@ -123,11 +121,20 @@ async function main() {
         await page.getByRole('button', { name: tab, exact: true }).click();
         if (name === 'chromium') await page.screenshot({ path: path.join(ART, `${tab.replace(/[^a-z0-9]/gi, '-')}.png`), fullPage: true });
       }
-      phase = 'mobile overflow';
+      phase = 'mobile cold navigation and usability';
       await page.setViewportSize({ width: 390, height: 844 });
-      await page.waitForTimeout(200);
+      // A fresh mobile navigation tests actual mobile CSS, not a screenshot midway
+      // through the desktop-sidebar resize animation in headless WebKit.
+      await page.reload();
+      await page.getByRole('heading', { name: 'Performance & Health Center', exact: true }).waitFor();
+      await page.waitForFunction(() => {
+        const sidebar = document.querySelector('.erp-sidebar');
+        return !sidebar || sidebar.getBoundingClientRect().right <= 1 || getComputedStyle(sidebar).display === 'none';
+      });
+      await page.getByRole('button', { name: 'Backup & Rollback', exact: true }).click();
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 2), 'No page-level mobile overflow');
-      await page.screenshot({ path: path.join(ART, `${name}-mobile.png`), fullPage: true });
+      await page.getByRole('button', { name: 'Pause collection', exact: true }).waitFor();
+      await page.screenshot({ path: path.join(ART, `${name}-mobile.png`), fullPage: true, animations: 'disabled' });
       await page.setViewportSize({ width: 1600, height: 1050 });
       phase = 'near expiry outage';
       const raw = await page.evaluate(() => {
@@ -155,7 +162,7 @@ async function main() {
       await page.getByRole('button', { name: 'Resume collection', exact: true }).click();
       await page.waitForTimeout(1000);
       assert.equal(errors.length, 0, JSON.stringify(errors));
-      console.log(`${name}: browser -> authenticated handler -> Firestore -> dashboard, six tabs, mobile, outage/session safety and shutoff passed.`);
+      console.log(`${name}: browser -> authenticated handler -> Firestore -> dashboard, six tabs, mobile cold navigation, outage/session safety and shutoff passed.`);
       await context.close();
     } catch (error) {
       if (page && !page.isClosed()) {
@@ -167,6 +174,6 @@ async function main() {
       throw error;
     } finally { await browser.close(); }
   }
-  fs.writeFileSync(path.join(ART, 'summary.json'), JSON.stringify({ environment: 'demo-demac-health only', browsers: ['chromium', 'webkit'], productionRequests: 0, tests: 'ingestion, authenticated dashboard, six screens, mobile layout, outage/session isolation, collection switch' }, null, 2));
+  fs.writeFileSync(path.join(ART, 'summary.json'), JSON.stringify({ environment: 'demo-demac-health only', browsers: ['chromium', 'webkit'], productionRequests: 0, tests: 'ingestion, authenticated dashboard, six screens, cold mobile navigation, outage/session isolation, collection switch' }, null, 2));
 }
 main().then(() => console.log('Performance browser isolation checks complete.')).catch((error) => { console.error(error); process.exitCode = 1; }).finally(async () => { server.close(); await deleteApp(app); });
