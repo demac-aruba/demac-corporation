@@ -79,7 +79,13 @@ async function main() {
           telemetryResults.push({ action: payload.action, status: result.status, code: result.body?.error?.code });
           return route.fulfill({ status: result.status, headers, body: JSON.stringify(result.body) });
         }
-        if (url.hostname.endsWith('.cloudfunctions.net')) return route.fulfill({ status: 200, headers, body: JSON.stringify({ success: true, version: 18, available: false, options: [], presets: [], attribution: [] }) });
+        if (url.hostname.endsWith('.cloudfunctions.net')) {
+          // Honor the real GroupResponse contract. An incomplete generic fixture
+          // previously made VanScheduleManualSend call undefined.filter().
+          const payload = request.postDataJSON();
+          if (payload?.action === 'get_van_schedule_groups') return route.fulfill({ status: 200, headers, body: JSON.stringify({ success: true, version: 18, groups: [] }) });
+          return route.fulfill({ status: 200, headers, body: JSON.stringify({ success: true, version: 18, available: false, options: [], presets: [], attribution: [] }) });
+        }
         return route.abort();
       });
       page = await context.newPage();
@@ -102,8 +108,6 @@ async function main() {
       await page.waitForTimeout(2500);
       phase = 'navigate via performance link';
       assert.equal(errors.length, 0, `Unexpected page error before navigation: ${JSON.stringify(errors)}`);
-      await page.screenshot({ path: path.join(ART, `${name}-before-navigation.png`), fullPage: true });
-      console.log('Pre-navigation isolated UI', JSON.stringify({ browser: name, pathname: new URL(page.url()).pathname, healthLinks: await page.getByRole('link', { name: /Performance & Health/ }).count(), telemetryResults, missingAssets }));
       await page.getByRole('link', { name: /Performance & Health/ }).click();
       phase = 'dashboard verification';
       await page.getByRole('heading', { name: 'Performance & Health Center', exact: true }).waitFor();

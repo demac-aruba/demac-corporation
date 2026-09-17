@@ -38,13 +38,20 @@ type Dependencies = {
 };
 export function createCollector(deps: Dependencies) {
   let stopped=false; let permitted=false; let policyAt=0; let dropped=0;
+  let initialPolicyPending=true; let initialDeadline=0;
   let queue:Observation[]=[];
   let pending:{batch:TelemetryBatch;attempts:number;retryAt:number}|null=null;
   let flight:Promise<void>|null=null; let policyFlight:Promise<void>|null=null;
   const controllers=new Set<AbortController>();
-  let sessionId=''; try {sessionId=deps.id();} catch {stopped=true;}
+  let sessionId='';
+  try { sessionId=deps.id(); initialDeadline=deps.now()+10000; } catch { stopped=true; }
   const validConfig=deps.enabled && /^[a-f0-9]{40}$/.test(deps.release) && ['production','preview','test'].includes(deps.environment);
-  const canCollect=()=>{try{return !stopped && validConfig && permitted && deps.now()-policyAt<90000;}catch{return false;}};
+  // Preserve the initial data-load sample in bounded memory while policy arrives.
+  // This is NOT permission to upload: flush separately requires server approval.
+  const canCollect=()=>{
+    try { return !stopped && validConfig && ((permitted && deps.now()-policyAt<90000) || (initialPolicyPending && deps.now()<initialDeadline)); }
+    catch { return false; }
+  };
   function discard(){dropped+=queue.length+(pending?.batch.measurements.length||0);queue=[];pending=null;}
   function record(input:PerformanceMeasurement){
     try{if(!canCollect())return;const item=normalizeObservation(input,deps.now());if(!item)return;
@@ -55,8 +62,6 @@ export function createCollector(deps: Dependencies) {
     if(stopped||!validConfig)return;
     if(policyFlight)return policyFlight;
     const controller=new AbortController();controllers.add(controller);
-    // Deferring the body prevents a synchronous early return from leaving a settled
-    // promise permanently in the in-flight guard (e.g. missing credentials).
     const work=Promise.resolve().then(async()=>{
       try{
         const auth=deps.credential();
@@ -66,12 +71,13 @@ export function createCollector(deps: Dependencies) {
         permitted=result.success===true && result.enabled===true && result.environment===deps.environment;
         policyAt=deps.now();if(!permitted)discard();
       }catch{permitted=false;discard();}
+      finally { initialPolicyPending=false; }
     });
     policyFlight=work;
     try{await work;}finally{controllers.delete(controller);if(policyFlight===work)policyFlight=null;}
   }
   async function flush(){
-    if(stopped||!canCollect())return;
+    if(stopped||!permitted||!canCollect())return;
     if(flight)return flight;
     const controller=new AbortController();controllers.add(controller);
     const work=Promise.resolve().then(async()=>{
@@ -106,6 +112,6 @@ export function createCollector(deps: Dependencies) {
     flight=work;
     try{await work;}catch{/* Background failure is contained. */}finally{controllers.delete(controller);if(flight===work)flight=null;}
   }
-  function stop(){stopped=true;permitted=false;queue=[];pending=null;for(const controller of controllers){try{controller.abort();}catch{/* optional */}}controllers.clear();}
+  function stop(){stopped=true;permitted=false;initialPolicyPending=false;queue=[];pending=null;for(const controller of controllers){try{controller.abort();}catch{/* optional */}}controllers.clear();}
   return{record,flush,checkPolicy,stop,canCollect,stats:()=>({queued:queue.length,pending:pending?.batch.measurements.length||0,dropped,stopped,permitted})};
 }
