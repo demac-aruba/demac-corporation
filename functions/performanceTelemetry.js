@@ -8,6 +8,8 @@ const BUCKET_MS = 15 * 60 * 1000;
 const SHARD_COUNT = 4;
 const MAX_MEASUREMENTS = 80;
 const MAX_DASHBOARD_BUCKETS = 12_000;
+const TELEMETRY_RETENTION_MS = 45 * 24 * 60 * 60 * 1000;
+const SESSION_RETENTION_MS = 2 * 24 * 60 * 60 * 1000;
 const HISTOGRAM_BOUNDS_MS = Object.freeze([50, 100, 200, 400, 800, 1_500, 2_500, 5_000, 10_000, 30_000]);
 const DASHBOARD_ROLES = new Set(["super_admin", "superadmin", "super-admin", "owner", "admin", "auditor"]);
 
@@ -229,6 +231,7 @@ function createPerformanceTelemetryApi({ db, verifyIdToken, now = () => Date.now
       bucketStartMs: startMs,
       shard,
       metrics,
+      expiresAt: Timestamp.fromMillis(startMs + TELEMETRY_RETENTION_MS),
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
 
@@ -242,6 +245,7 @@ function createPerformanceTelemetryApi({ db, verifyIdToken, now = () => Date.now
       release,
       lastSeenAt: FieldValue.serverTimestamp(),
       lastSeenMs: nowMs,
+      expiresAt: Timestamp.fromMillis(nowMs + SESSION_RETENTION_MS),
     }, { merge: true });
 
     return { success: true, version: API_VERSION, accepted: measurements.length, bucketStartMs: startMs };
@@ -271,12 +275,23 @@ function createPerformanceTelemetryApi({ db, verifyIdToken, now = () => Date.now
       const value = doc.data() || {};
       const startMs = Number(value.bucketStartMs) || value.bucketStartAt?.toMillis?.() || 0;
       latestBucketMs = Math.max(latestBucketMs, startMs);
-      const timelineEntry = timeline.get(startMs) || { bucketStartMs: startMs, samples: 0, errors: 0 };
+      const timelineEntry = timeline.get(startMs) || {
+        bucketStartMs: startMs,
+        samples: 0,
+        errors: 0,
+        latencySum: 0,
+        latencyCount: 0,
+      };
       for (const metric of Object.values(value.metrics || {})) {
         if (!metric || typeof metric !== "object") continue;
         mergeDashboardMetric(merged, metric);
-        timelineEntry.samples += Number(metric.count) || 0;
+        const metricCount = Number(metric.count) || 0;
+        timelineEntry.samples += metricCount;
         timelineEntry.errors += Number(metric.errors) || 0;
+        if (metric.unit === "ms") {
+          timelineEntry.latencySum += Number(metric.sum) || 0;
+          timelineEntry.latencyCount += metricCount;
+        }
       }
       timeline.set(startMs, timelineEntry);
     }
@@ -296,6 +311,17 @@ function createPerformanceTelemetryApi({ db, verifyIdToken, now = () => Date.now
       activeRoles[role] = (activeRoles[role] || 0) + 1;
     }
 
+    const serializedTimeline = [...timeline.values()]
+      .sort((a, b) => a.bucketStartMs - b.bucketStartMs)
+      .map((entry) => ({
+        bucketStartMs: entry.bucketStartMs,
+        samples: entry.samples,
+        errors: entry.errors,
+        averageLatencyMs: entry.latencyCount > 0
+          ? Math.round((entry.latencySum / entry.latencyCount) * 100) / 100
+          : 0,
+      }));
+
     return {
       success: true,
       version: API_VERSION,
@@ -305,7 +331,7 @@ function createPerformanceTelemetryApi({ db, verifyIdToken, now = () => Date.now
       truncated: query.size >= MAX_DASHBOARD_BUCKETS,
       latestBucketAt: latestBucketMs ? new Date(latestBucketMs).toISOString() : null,
       metrics: [...merged.values()].map(serializeDashboardMetric),
-      timeline: [...timeline.values()].sort((a, b) => a.bucketStartMs - b.bucketStartMs),
+      timeline: serializedTimeline,
       activeSessions: sessionsSnapshot.size,
       activeModules,
       activeRoles,
@@ -323,7 +349,11 @@ function createPerformanceTelemetryApi({ db, verifyIdToken, now = () => Date.now
         ? await ingest(data, actor)
         : action === "dashboard"
           ? await dashboard(data, actor)
-          : (() => { const error = new Error("Unknown performance telemetry action."); error.code = "invalid_request"; throw error; })();
+          : (() => {
+            const error = new Error("Unknown performance telemetry action.");
+            error.code = "invalid_request";
+            throw error;
+          })();
       return { status: 200, body };
     } catch (error) {
       const code = cleanText(error?.code, 80) || "internal_error";
