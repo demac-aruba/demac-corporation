@@ -36,7 +36,7 @@ export type PerformanceDashboard = {
   truncated: boolean;
   latestBucketAt: string | null;
   metrics: PerformanceDashboardMetric[];
-  timeline: Array<{ bucketStartMs: number; samples: number; errors: number }>;
+  timeline: Array<{ bucketStartMs: number; samples: number; errors: number; averageLatencyMs: number }>;
   activeSessions: number;
   activeModules: Record<string, number>;
   activeRoles: Record<string, number>;
