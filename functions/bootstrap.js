@@ -19,6 +19,7 @@ const marketingImageAnalysisCallable = require("./marketingImageAnalysisCallable
 const marketingCampaignStrategy = require("./marketingCampaignStrategyAruba");
 const marketingCreativeBuilder = require("./marketingCreativeBuilderV2Compat");
 const marketingCreativeRead = require("./marketingCreativeRead");
+const performanceTelemetry = require("./performanceTelemetry");
 const router = require("./whatsappCopilotRouter");
 
 // Production customer conversations have one runtime: Customer Runtime V1.
@@ -60,5 +61,6 @@ module.exports = {
   ...marketingCampaignStrategy,
   ...marketingCreativeBuilder,
   ...marketingCreativeRead,
+  ...performanceTelemetry,
   whatsappCopilotDraft: router.whatsappCopilotDraft,
 };
