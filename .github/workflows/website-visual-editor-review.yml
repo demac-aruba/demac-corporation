@@ -1,0 +1,43 @@
+name: Website visual editor review
+
+on:
+  pull_request:
+    paths:
+      - 'apps/erp-next/**'
+      - 'functions/website*'
+      - 'docs/ai/website-editor/**'
+      - '.github/workflows/website-visual-editor-review.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-editor-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  editor-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Prepare tracked-source review bundle (no credentials or live data)
+        run: |
+          python3 - <<'PY'
+          import os, subprocess, tarfile
+          files = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          allowed = ('apps/erp-next/', 'functions/', 'docs/ai/', 'api/', '.github/workflows/')
+          root = {'AGENTS.md', 'package.json', 'package-lock.json', 'firebase.json', 'firestore.rules', 'storage.rules', 'vercel.json'}
+          extensions = ('.ts', '.tsx', '.js', '.jsx', '.cjs', '.mjs', '.json', '.css', '.md', '.yml', '.yaml', '.rules')
+          with tarfile.open('/tmp/website-editor-source.tar.gz', 'w:gz') as archive:
+              for name in files:
+                  if not name or not (name in root or name.startswith(allowed)): continue
+                  if not name.endswith(extensions): continue
+                  if '.env' in name or 'credential' in name.lower() or 'service-account' in name.lower(): continue
+                  if os.path.isfile(name): archive.add(name, arcname=name)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: website-editor-tracked-source
+          path: /tmp/website-editor-source.tar.gz
+          retention-days: 2
