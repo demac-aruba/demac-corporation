@@ -1,170 +1,64 @@
 'use client';
 
 import { firebaseClientConfig } from './firebase/client-config';
-import { requireFirebaseWebSession } from './firebase/session';
-
-export type PerformanceUnit = 'ms' | 'count' | 'ratio' | 'bytes';
-export type PerformanceMeasurement = {
-  name: string;
-  module: string;
-  value: number;
-  unit: PerformanceUnit;
-  error?: boolean;
-  route?: string;
-};
-
-export type PerformanceDashboardMetric = {
-  module: string;
-  name: string;
-  release: string;
-  unit: PerformanceUnit;
-  count: number;
-  average: number;
-  errors: number;
-  errorRate: number;
-  p50: number | null;
-  p95: number | null;
-  p99: number | null;
-};
-
-export type PerformanceDashboard = {
-  success: true;
-  version: number;
-  generatedAt: string;
-  rangeMinutes: number;
-  bucketCount: number;
-  truncated: boolean;
-  latestBucketAt: string | null;
-  metrics: PerformanceDashboardMetric[];
-  timeline: Array<{ bucketStartMs: number; samples: number; errors: number; averageLatencyMs: number }>;
-  activeSessions: number;
-  activeModules: Record<string, number>;
-  activeRoles: Record<string, number>;
-};
-
-type ApiError = { error?: { code?: string; message?: string } };
-
-const TELEMETRY_SESSION_KEY = 'demac.performance.session.v1';
-const MAX_QUEUE = 80;
-const queue: PerformanceMeasurement[] = [];
-let flushPromise: Promise<void> | null = null;
-
-function endpoint() {
-  if (!firebaseClientConfig.projectId) throw new Error('Firebase project is not configured for performance telemetry.');
-  return `https://us-central1-${firebaseClientConfig.projectId}.cloudfunctions.net/performanceTelemetry`;
+import { createCollector, existingCredential, moduleFromPath, TelemetryError, type Credential } from './performance-client-core';
+import type { PerformanceDashboard, PerformanceMeasurement } from './performance-types';
+export type { PerformanceDashboard, PerformanceDashboardMetric, PerformanceMeasurement, PerformanceUnit } from './performance-types';
+export { moduleFromPath } from './performance-client-core';
+let collector:ReturnType<typeof createCollector>|null=null;
+function credential(uid:string|null=null):Credential|null {
+  try { return existingCredential(window.sessionStorage,uid,Date.now()); } catch { return null; }
 }
-
-function safeRoute(value?: string) {
-  const raw = value || (typeof window === 'undefined' ? '/' : window.location.pathname);
-  return (raw.split('?')[0].split('#')[0] || '/').slice(0, 180);
+export function performanceClock() {
+  try { return typeof window === 'undefined' ? 0 : performance.now(); } catch { return 0; }
 }
-
-export function moduleFromPath(pathname: string) {
-  const segment = pathname.split('?')[0].split('/').filter(Boolean)[0] || 'dashboard';
-  if (segment === 'settings') return pathname.includes('/performance') ? 'performance' : 'settings';
-  return segment.replace(/[^a-z0-9_-]/gi, '_').toLowerCase();
-}
-
-function releaseTag() {
-  return (process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA
-    || process.env.NEXT_PUBLIC_GIT_SHA
-    || process.env.NEXT_PUBLIC_APP_VERSION
-    || 'unknown').slice(0, 40);
-}
-
-export function performanceSessionId() {
-  if (typeof window === 'undefined') return 'server';
-  const existing = window.sessionStorage.getItem(TELEMETRY_SESSION_KEY);
-  if (existing) return existing;
-  const random = typeof crypto !== 'undefined' && 'randomUUID' in crypto
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
-  const value = `erp-${random}`.slice(0, 96);
-  window.sessionStorage.setItem(TELEMETRY_SESSION_KEY, value);
-  return value;
-}
-
-export function recordPerformanceMeasurement(input: PerformanceMeasurement) {
-  if (typeof window === 'undefined') return;
-  if (!Number.isFinite(input.value) || input.value < 0) return;
-  queue.push({
-    ...input,
-    name: input.name.slice(0, 80),
-    module: input.module.slice(0, 48),
-    route: safeRoute(input.route),
-  });
-  if (queue.length > MAX_QUEUE) queue.splice(0, queue.length - MAX_QUEUE);
-  if (queue.length >= 36) void flushPerformanceTelemetry();
-}
-
-export function recordDuration(name: string, module: string, startedAt: number, options: { error?: boolean; route?: string } = {}) {
-  recordPerformanceMeasurement({
-    name,
-    module,
-    value: Math.max(0, performance.now() - startedAt),
-    unit: 'ms',
-    error: options.error,
-    route: options.route,
-  });
-}
-
-export async function measurePerformance<T>(name: string, module: string, task: () => Promise<T>, route?: string): Promise<T> {
-  const startedAt = performance.now();
+async function transport(action:string,data:Record<string,unknown>,auth:Credential,externalSignal?:AbortSignal):Promise<unknown> {
+  if (!firebaseClientConfig.projectId) throw new TelemetryError(503,'not_configured','Telemetry is not configured.');
+  const controller=new AbortController(); const abort=()=>controller.abort();
+  if (externalSignal?.aborted) controller.abort();
+  externalSignal?.addEventListener('abort',abort,{once:true});
+  const timer=window.setTimeout(abort,8000);
   try {
-    const value = await task();
-    recordDuration(name, module, startedAt, { route });
-    return value;
-  } catch (error) {
-    recordDuration(name, module, startedAt, { error: true, route });
-    throw error;
-  }
-}
-
-async function callPerformanceTelemetry<T>(action: 'ingest' | 'dashboard', data: Record<string, unknown>, timeoutMs = 10_000): Promise<T> {
-  const session = await requireFirebaseWebSession();
-  const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(endpoint(), {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${session.idToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ action, data }),
-      signal: controller.signal,
-      keepalive: action === 'ingest',
+    const response=await fetch(`https://us-central1-${firebaseClientConfig.projectId}.cloudfunctions.net/performanceTelemetry`,{
+      method:'POST',headers:{Authorization:`Bearer ${auth.idToken}`,'Content-Type':'application/json'},
+      body:JSON.stringify({action,data}),signal:controller.signal,keepalive:action==='ingest',
     });
-    const payload = await response.json().catch(() => ({})) as T & ApiError;
-    if (!response.ok) throw new Error(payload.error?.message || 'Performance telemetry request failed.');
-    return payload;
-  } finally {
-    window.clearTimeout(timer);
-  }
+    const body=await response.json().catch(()=>({}));
+    if (!response.ok) throw new TelemetryError(response.status,body.error?.code||'unavailable',body.error?.message||'Telemetry is unavailable.');
+    return body;
+  } finally { window.clearTimeout(timer); externalSignal?.removeEventListener('abort',abort); }
 }
-
+export function startPerformanceSession(uid:string) {
+  collector?.stop();
+  const current=createCollector({uid,release:process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA||'',
+    environment:process.env.NEXT_PUBLIC_PERFORMANCE_ENVIRONMENT||'preview',enabled:process.env.NEXT_PUBLIC_PERFORMANCE_TELEMETRY_ENABLED==='true',
+    now:Date.now,id:()=>crypto.randomUUID(),credential:()=>credential(uid),visible:()=>document.visibilityState==='visible',
+    module:()=>moduleFromPath(window.location.pathname),send:transport});
+  collector=current;
+  return {...current,stop:()=>{current.stop();if(collector===current)collector=null;}};
+}
+export function recordPerformanceMeasurement(input:PerformanceMeasurement) {
+  try { collector?.record(input); } catch { /* Never affect the measured operation. */ }
+}
 export async function flushPerformanceTelemetry() {
-  if (typeof window === 'undefined' || queue.length === 0) return;
-  if (flushPromise) return flushPromise;
-  const measurements = queue.splice(0, MAX_QUEUE);
-  const route = safeRoute();
-  const module = moduleFromPath(window.location.pathname);
-  flushPromise = callPerformanceTelemetry('ingest', {
-    sessionId: performanceSessionId(),
-    route,
-    module,
-    release: releaseTag(),
-    measurements,
-  }, 8_000)
-    .then(() => undefined)
-    .catch(() => {
-      const room = Math.max(0, MAX_QUEUE - queue.length);
-      if (room > 0) queue.unshift(...measurements.slice(-room));
-    })
-    .finally(() => { flushPromise = null; });
-  return flushPromise;
+  try { await collector?.flush(); } catch { /* Never affect the measured operation. */ }
 }
-
-export function getPerformanceDashboard(rangeMinutes = 1_440) {
-  return callPerformanceTelemetry<PerformanceDashboard>('dashboard', { rangeMinutes }, 15_000);
+export function recordDuration(name:string,module:string,startedAt:number,options:{error?:boolean;route?:string}={}) {
+  try { const end=performanceClock();if(startedAt>0&&end>=startedAt)recordPerformanceMeasurement({name,module,value:end-startedAt,unit:'ms',error:options.error}); } catch { /* optional */ }
+}
+export async function measurePerformance<T>(name:string,module:string,task:()=>Promise<T>):Promise<T> {
+  const start=performanceClock();
+  try { const result=await task();recordDuration(name,module,start);return result; }
+  catch (error) { recordDuration(name,module,start,{error:true});throw error; }
+}
+export async function getPerformanceDashboard(rangeMinutes=60,release='all',metric='schedule_data_ready',signal?:AbortSignal):Promise<PerformanceDashboard> {
+  const auth=credential();
+  if(!auth)throw new TelemetryError(401,'session_unavailable','An existing valid ERP session is required. Monitoring will not renew or alter your session.');
+  const result=await transport('dashboard',{rangeMinutes,release,metric,module:'scheduling'},auth,signal) as PerformanceDashboard;
+  if(!result||result.success!==true||result.version!==2||!Array.isArray(result.metrics)||!Array.isArray(result.timeline)||!Array.isArray(result.releases)||!Array.isArray(result.releaseMetrics)||!result.policy||!result.health||!result.baseline||!result.activeModules)throw new TelemetryError(503,'invalid_response','Telemetry returned an incompatible response. No health status can be certified.');
+  return result;
+}
+export async function setPerformanceCollection(enabled:boolean,expectedVersion:number) {
+  const auth=credential();if(!auth)throw new TelemetryError(401,'session_unavailable','A valid administrator session is required.');
+  return transport('set_collection',{enabled,expectedVersion},auth);
 }

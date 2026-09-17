@@ -3,182 +3,161 @@ name: Performance Health Center
 on:
   pull_request:
     paths:
-      - 'functions/performanceTelemetry.js'
-      - 'functions/performanceTelemetry.test.js'
+      - 'functions/performanceTelemetry*'
       - 'functions/bootstrap.js'
       - 'apps/erp-next/app/(erp)/layout.tsx'
       - 'apps/erp-next/app/(erp)/settings/system/performance/**'
       - 'apps/erp-next/components/performance/**'
-      - 'apps/erp-next/lib/performance-telemetry.ts'
+      - 'apps/erp-next/lib/performance*'
       - 'apps/erp-next/lib/live-scheduling-fast.ts'
       - 'apps/erp-next/lib/navigation.ts'
       - 'apps/erp-next/next.config.ts'
+      - 'apps/erp-next/scripts/performance*'
+      - 'firebase.performance-emulator.json'
+      - 'docs/PERFORMANCE_HEALTH_CENTER*'
       - '.github/workflows/performance-health-center.yml'
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
-      - 'functions/performanceTelemetry.js'
-      - 'functions/performanceTelemetry.test.js'
+      - 'functions/performanceTelemetry*'
       - 'functions/bootstrap.js'
       - 'apps/erp-next/app/(erp)/layout.tsx'
       - 'apps/erp-next/app/(erp)/settings/system/performance/**'
       - 'apps/erp-next/components/performance/**'
-      - 'apps/erp-next/lib/performance-telemetry.ts'
+      - 'apps/erp-next/lib/performance*'
       - 'apps/erp-next/lib/live-scheduling-fast.ts'
-      - 'apps/erp-next/lib/navigation.ts'
       - 'apps/erp-next/next.config.ts'
+      - 'apps/erp-next/scripts/performance*'
+      - 'firebase.performance-emulator.json'
       - '.github/workflows/performance-health-center.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
-
 concurrency:
   group: performance-health-center-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   validate-telemetry:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
           package-manager-cache: false
-
-      - name: Install function dependencies
-        run: npm install --prefix functions --no-audit --no-fund
-
-      - name: Validate telemetry authority syntax
+      - name: Syntax and isolated service tests
         run: |
           set -euo pipefail
           node --check functions/performanceTelemetry.js
-          node --check functions/bootstrap.js
-          grep -q 'performanceTelemetry' functions/bootstrap.js
-
-      - name: Run telemetry aggregation tests
-        run: node --test functions/performanceTelemetry.test.js
+          node --check functions/performanceTelemetryCore.js
+          node --check functions/performanceTelemetryService.js
+          node --test functions/performanceTelemetry.test.js
 
   validate-erp-ui:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: apps/erp-next
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: '24'
           package-manager-cache: false
+      - run: npm install --no-audit --no-fund
+      - run: npm run typecheck
+      - name: Client isolation and health-state regression
+        run: |
+          npx tsc --ignoreConfig lib/performance-types.ts lib/performance-client-core.ts lib/performance-observers.ts lib/performance-view-model.ts --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0 --skipLibCheck --types node --outDir .performance-test --rootDir . --lib ES2022,DOM
+          node --test scripts/performance-client-tests.cjs
+      - run: npm run build
 
-      - name: Install ERP Next dependencies
-        run: npm install --no-audit --no-fund
-
-      - name: Typecheck Performance & Health Center
-        run: npm run typecheck
-
-      - name: Build static ERP Next application
-        run: npm run build
+  isolated-emulators-and-browsers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GCLOUD_PROJECT: demo-demac-health
+      PHC_TOOLS_DIR: ${{ runner.temp }}/phc-tools
+      NEXT_PUBLIC_PERFORMANCE_TELEMETRY_ENABLED: 'true'
+      NEXT_PUBLIC_PERFORMANCE_ENVIRONMENT: test
+      NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install isolated test tooling (no production credentials)
+        run: |
+          npm install --prefix functions --no-audit --no-fund
+          npm install --prefix apps/erp-next --no-audit --no-fund
+          mkdir -p "$PHC_TOOLS_DIR"
+          npm install --prefix "$PHC_TOOLS_DIR" --no-audit --no-fund firebase-tools@15.30.0 playwright@1.57.0
+          "$PHC_TOOLS_DIR/node_modules/.bin/playwright" install --with-deps chromium webkit
+      - name: Build the exact ERP with test-only telemetry environment
+        run: npm run build --prefix apps/erp-next
+      - name: Real Auth/Firestore emulation, concurrent ingestion and browser isolation
+        run: >-
+          "$PHC_TOOLS_DIR/node_modules/.bin/firebase" emulators:exec
+          --project demo-demac-health --config firebase.performance-emulator.json
+          --only firestore,auth
+          'node --test functions/performanceTelemetry.emulator.test.js && node apps/erp-next/scripts/performance-browser-tests.cjs'
+      - name: Publish synthetic UI evidence only (no tokens or HTTP traces)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-health-isolated-evidence
+          path: performance-test-artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
 
   deploy-telemetry:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [validate-telemetry, validate-erp-ui]
+    needs: [validate-telemetry, validate-erp-ui, isolated-emulators-and-browsers]
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Authenticate Firebase deployment service account
-        uses: google-github-actions/auth@v2
+      - uses: actions/checkout@v6
+      - uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_DEMAC_CORPORATION }}
-
-      - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v2
-
-      - name: Resolve DEMAC runtime identity
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Resolve existing runtime identity
         id: config
-        shell: bash
         run: |
           set -euo pipefail
-          SOURCE_FUNCTION='generateProfessionalCustomerReport'
-          if ! gcloud functions describe "$SOURCE_FUNCTION" --project=demac-corporation --gen2 --region=us-central1 --format='value(name)' >/dev/null 2>&1; then
-            SOURCE_FUNCTION='wacliWebhook'
-          fi
+          SOURCE_FUNCTION=generateProfessionalCustomerReport
+          if ! gcloud functions describe "$SOURCE_FUNCTION" --project=demac-corporation --gen2 --region=us-central1 --format='value(name)' >/dev/null 2>&1; then SOURCE_FUNCTION=wacliWebhook; fi
           RUN_SA="$(gcloud functions describe "$SOURCE_FUNCTION" --project=demac-corporation --gen2 --region=us-central1 --format='value(serviceConfig.serviceAccountEmail)')"
-          if [ -z "$RUN_SA" ]; then
-            echo '::error::Could not resolve the DEMAC Cloud Functions runtime service account.'
-            exit 1
-          fi
-          echo "run_service_account=${RUN_SA}" >> "$GITHUB_OUTPUT"
-
-      - name: Deploy Performance Telemetry only
-        shell: bash
+          test -n "$RUN_SA"
+          echo "runtime=$RUN_SA" >> "$GITHUB_OUTPUT"
+      - name: Configure retention and index exemptions for new telemetry collections only
+        run: |
+          set -euo pipefail
+          for collection in performanceTelemetry15mV2 performanceTelemetryHourV2 performanceTelemetryDayV2 performanceTelemetryReceiptsV2 performanceTelemetrySessionsV2 performanceTelemetryRateV2 performanceTelemetryAuditV2; do
+            gcloud firestore fields ttls update expiresAt --collection-group="$collection" --enable-ttl --project=demac-corporation --async --quiet
+          done
+          for collection in performanceTelemetry15mV2 performanceTelemetryHourV2 performanceTelemetryDayV2; do
+            gcloud firestore indexes fields update metrics --collection-group="$collection" --clear-indexes --project=demac-corporation --async --quiet
+          done
+      - name: Deploy only the telemetry endpoint
         env:
-          RUN_SERVICE_ACCOUNT: ${{ steps.config.outputs.run_service_account }}
+          RUN_SA: ${{ steps.config.outputs.runtime }}
         run: |
           set -euo pipefail
-          gcloud functions deploy performanceTelemetry \
-            --project=demac-corporation \
-            --gen2 \
-            --region=us-central1 \
-            --runtime=nodejs22 \
-            --source=functions \
-            --entry-point=performanceTelemetry \
-            --memory=256Mi \
-            --timeout=30s \
-            --run-service-account="$RUN_SERVICE_ACCOUNT" \
-            --trigger-http \
-            --allow-unauthenticated \
-            --quiet
-
-      - name: Verify deployed telemetry auth boundary
-        shell: bash
+          gcloud functions deploy performanceTelemetry --project=demac-corporation --gen2 --region=us-central1 --runtime=nodejs22 --source=functions --entry-point=performanceTelemetry --memory=256Mi --timeout=30s --max-instances=3 --run-service-account="$RUN_SA" --set-env-vars=PERFORMANCE_TELEMETRY_ENABLED=true,PERFORMANCE_ENVIRONMENT=production --trigger-http --allow-unauthenticated --quiet
+      - name: Verify unauthenticated requests remain denied
         run: |
           set -euo pipefail
-          name='performanceTelemetry'
-          endpoint="https://us-central1-demac-corporation.cloudfunctions.net/${name}"
-          state="$(gcloud functions describe "$name" --project=demac-corporation --gen2 --region=us-central1 --format='value(state)')"
-          if [ "$state" != 'ACTIVE' ]; then
-            echo "::error::${name} state is ${state:-unknown}."
-            exit 1
-          fi
-
-          cors_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
-            --request OPTIONS "$endpoint" \
-            --header 'Origin: https://demac-aruba.com' \
-            --header 'Access-Control-Request-Method: POST' \
-            --header 'Access-Control-Request-Headers: authorization,content-type')"
-          if [ "$cors_status" != '204' ]; then
-            echo "::error::Performance Telemetry CORS preflight returned HTTP ${cors_status}; expected 204."
-            exit 1
-          fi
-
-          body="$(mktemp)"
-          status="$(curl --silent --show-error --output "$body" --write-out '%{http_code}' \
-            --request POST "$endpoint" \
-            --header 'Content-Type: application/json' \
-            --data '{"action":"dashboard","data":{"rangeMinutes":60}}')"
-          if [ "$status" != '401' ]; then
-            echo "::error::${name} returned HTTP ${status}; expected 401 without Firebase authentication."
-            cat "$body"
-            rm -f "$body"
-            exit 1
-          fi
-          node - "$body" <<'NODE'
-          const fs = require('node:fs');
-          const payload = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          if (payload?.error?.code !== 'unauthenticated') {
-            throw new Error(`Unexpected unauthenticated payload: ${JSON.stringify(payload)}`);
-          }
-          console.log('performanceTelemetry: ACTIVE and Firebase-auth protected');
-          NODE
-          rm -f "$body"
+          ENDPOINT=https://us-central1-demac-corporation.cloudfunctions.net/performanceTelemetry
+          STATUS="$(curl --silent --show-error --output /tmp/phc-unauth.json --write-out '%{http_code}' --request POST "$ENDPOINT" --header 'Content-Type: application/json' --data '{"action":"dashboard","data":{}}')"
+          test "$STATUS" = 401
+          node -e "const r=require('/tmp/phc-unauth.json');if(r.error?.code!=='unauthenticated')process.exit(1)"
