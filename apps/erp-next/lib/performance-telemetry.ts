@@ -55,9 +55,8 @@ function endpoint() {
 }
 
 function safeRoute(value?: string) {
-  if (value) return value.slice(0, 180);
-  if (typeof window === 'undefined') return '/';
-  return `${window.location.pathname}${window.location.search}`.slice(0, 180);
+  const raw = value || (typeof window === 'undefined' ? '/' : window.location.pathname);
+  return (raw.split('?')[0].split('#')[0] || '/').slice(0, 180);
 }
 
 export function moduleFromPath(pathname: string) {
