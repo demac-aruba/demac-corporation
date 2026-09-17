@@ -12,6 +12,7 @@ import {
   listOfficeAppointmentAttribution,
   type OfficeAppointmentAttribution,
 } from './office-booking-authority';
+import { recordPerformanceMeasurement } from './performance-telemetry';
 
 type WorkOrder = Parameters<typeof projectLiveSchedulingAppointments>[0][number];
 type Van = NonNullable<Parameters<typeof projectLiveSchedulingAppointments>[3]>[number];
@@ -78,6 +79,18 @@ function text(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function recordScheduleDuration(name: string, startedAt: number, error = false) {
+  if (typeof window === 'undefined') return;
+  recordPerformanceMeasurement({
+    name,
+    module: 'scheduling',
+    value: Math.max(0, performance.now() - startedAt),
+    unit: 'ms',
+    error,
+    route: window.location.pathname,
+  });
+}
+
 function mergeReferenceRecords<T extends { id: string }>(current: T[], additions: T[] = []) {
   if (!additions.length) return current;
   const byId = new Map(current.map((item) => [item.id, item]));
@@ -116,54 +129,95 @@ export function primeLiveSchedulingReferenceCache(input: {
 export function loadLiveSchedulingReferenceData() {
   const now = Date.now();
   if (referenceCache && referenceCache.expiresAt > now) return referenceCache.promise;
+  const startedAt = typeof window === 'undefined' ? 0 : performance.now();
   const promise = Promise.all([
     listFirestoreCollection<LiveSchedulingClient>('clients', 1000),
     listFirestoreCollection<LiveSchedulingProperty>('properties', 1000),
     listFirestoreCollection<Van>('vans', 250),
-  ]).then(([clients, properties, vans]) => ({ clients, properties, vans }));
+  ]).then(([clients, properties, vans]) => {
+    if (startedAt) recordScheduleDuration('schedule_reference_data', startedAt);
+    return { clients, properties, vans };
+  });
   referenceCache = { expiresAt: now + REFERENCE_CACHE_MS, promise };
   promise.catch(() => {
+    if (startedAt) recordScheduleDuration('schedule_reference_data', startedAt, true);
     if (referenceCache?.promise === promise) referenceCache = null;
   });
   return promise;
 }
 
 async function workOrdersForRange(range?: LiveSchedulingRange) {
-  if (!range?.startDate || !range?.endDate) return listFirestoreCollection<WorkOrder>('workOrders', 1000);
+  const startedAt = typeof window === 'undefined' ? 0 : performance.now();
+  if (!range?.startDate || !range?.endDate) {
+    try {
+      const result = await listFirestoreCollection<WorkOrder>('workOrders', 1000);
+      if (startedAt) recordScheduleDuration('schedule_work_orders', startedAt);
+      return result;
+    } catch (error) {
+      if (startedAt) recordScheduleDuration('schedule_work_orders', startedAt, true);
+      throw error;
+    }
+  }
   try {
-    return await queryFirestoreCollectionDateRange<WorkOrder>({
+    const result = await queryFirestoreCollectionDateRange<WorkOrder>({
       collectionId: 'workOrders',
       fieldPath: 'date',
       startInclusive: range.startDate,
       endInclusive: range.endDate,
       limit: 1000,
     });
+    if (startedAt) recordScheduleDuration('schedule_work_orders', startedAt);
+    return result;
   } catch {
-    const all = await listFirestoreCollection<WorkOrder>('workOrders', 1000);
-    return all.filter((order) => {
-      const date = text(order.date);
-      return date >= range.startDate && date <= range.endDate;
-    });
+    if (typeof window !== 'undefined') {
+      recordPerformanceMeasurement({ name: 'schedule_work_order_fallback', module: 'scheduling', value: 1, unit: 'count', error: true, route: window.location.pathname });
+    }
+    try {
+      const all = await listFirestoreCollection<WorkOrder>('workOrders', 1000);
+      const result = all.filter((order) => {
+        const date = text(order.date);
+        return date >= range.startDate && date <= range.endDate;
+      });
+      if (startedAt) recordScheduleDuration('schedule_work_orders', startedAt);
+      return result;
+    } catch (error) {
+      if (startedAt) recordScheduleDuration('schedule_work_orders', startedAt, true);
+      throw error;
+    }
   }
 }
 
 export async function loadLiveSchedulingAppointmentsFast(range?: LiveSchedulingRange) {
-  const [workOrders, references, operationalState] = await Promise.all([
-    workOrdersForRange(range),
-    loadLiveSchedulingReferenceData(),
-    loadLiveOperationalCapacityState({
-      startDate: range?.startDate,
-      endDate: range?.endDate,
-    }).catch(() => null),
-  ]);
-  return projectLiveSchedulingAppointments(
-    workOrders,
-    references.clients,
-    references.properties,
-    references.vans,
-    [],
-    operationalState,
-  );
+  const startedAt = typeof window === 'undefined' ? 0 : performance.now();
+  try {
+    const [workOrders, references, operationalState] = await Promise.all([
+      workOrdersForRange(range),
+      loadLiveSchedulingReferenceData(),
+      loadLiveOperationalCapacityState({
+        startDate: range?.startDate,
+        endDate: range?.endDate,
+      }).catch(() => null),
+    ]);
+    const appointments = projectLiveSchedulingAppointments(
+      workOrders,
+      references.clients,
+      references.properties,
+      references.vans,
+      [],
+      operationalState,
+    );
+    if (startedAt) recordScheduleDuration('schedule_data_ready', startedAt);
+    if (typeof window !== 'undefined') {
+      recordPerformanceMeasurement({ name: 'schedule_appointment_count', module: 'scheduling', value: appointments.length, unit: 'count', route: window.location.pathname });
+    }
+    return appointments;
+  } catch (error) {
+    if (startedAt) recordScheduleDuration('schedule_data_ready', startedAt, true);
+    if (typeof window !== 'undefined') {
+      recordPerformanceMeasurement({ name: 'schedule_load_error', module: 'scheduling', value: 1, unit: 'count', error: true, route: window.location.pathname });
+    }
+    throw error;
+  }
 }
 
 async function attributionFor(appointmentIds: string[]) {
