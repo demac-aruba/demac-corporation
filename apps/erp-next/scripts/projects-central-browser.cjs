@@ -1,5 +1,6 @@
 'use strict';
 const assert=require('node:assert/strict');const fs=require('node:fs');const path=require('node:path');const http=require('node:http');
+const {createCommittedResponseFault,interruptResponse}=require('./projects-central-response-fault.cjs');
 const ROOT=path.resolve(__dirname,'../../..');const PROJECT='demo-demac-projects';
 for(const key of ['FIRESTORE_EMULATOR_HOST','FIREBASE_AUTH_EMULATOR_HOST'])if(!/^(127\.0\.0\.1|localhost):\d+$/.test(process.env[key]||''))throw Error('Only loopback emulators are allowed.');
 if(process.env.GCLOUD_PROJECT!==PROJECT||process.env.GOOGLE_APPLICATION_CREDENTIALS)throw Error('Demo-only browser test; production credentials forbidden.');
@@ -13,7 +14,8 @@ const app=initializeApp({projectId:PROJECT},'projects-central-browser');const db
 const service=createProjectRegistryService({db,verifyIdToken:(token,revoked)=>auth.verifyIdToken(token,revoked),enabled:true,allowLegacyImport:true});
 const OUT=path.join(ROOT,'apps/erp-next/out');const ART=path.join(ROOT,'projects-central-ui-evidence');fs.mkdirSync(ART,{recursive:true});
 const protectedCollections=['clients','properties','appointments','workOrders','workVisits','bookingCapacityLocks','whatsappOutboundQueue','warehouseInventory'];
-let sequence=0;const actors={};let origin='';let handler;let dropNext=false;let previewRequests=0;
+let sequence=0;const actors={};let origin='';let handler;let previewRequests=0;
+const responseFault=createCommittedResponseFault();const recoveryEvidence=[];
 const CUSTOMER='UI-CUSTOMER',PROPERTY='UI-PROPERTY';
 // Native loopback HTTP for both app assets and the isolated backend proxy. No Playwright
 // network interception: its WebKit implementation intercepts all URLs when any route exists.
@@ -27,7 +29,7 @@ const server=http.createServer(async(request,response)=>{
       const chunks=[];let size=0;
       for await(const chunk of request){size+=chunk.length;if(size>128*1024){response.writeHead(413).end();return;}chunks.push(chunk);}
       const result=await externalResponse(new URL(requested.searchParams.get('target')),request,Buffer.concat(chunks).toString('utf8'));
-      if(result.connectionLost){response.destroy();return;}
+      if(result.connectionLost){interruptResponse(response);return;}
       response.writeHead(result.status,result.headers);response.end(result.body??'');
     }catch(error){response.writeHead(503,{'content-type':'application/json'}).end(JSON.stringify({success:false,error:{code:'test_transport_error',message:String(error.message),outcome:'unknown'}}));}
     return;
@@ -55,7 +57,7 @@ async function externalResponse(url,request,rawBody) {
   if(url.hostname.endsWith('.cloudfunctions.net')&&url.pathname==='/projectsRegistry') {
     if(body?.action==='preview_legacy_import')previewRequests++;
     const result=await handler({method:request.method,headers:{...request.headers,origin},body});
-    if(dropNext&&body?.action==='edit_metadata'&&result.status===200){dropNext=false;return{connectionLost:true};}
+    if(responseFault.observe(body,result))return{connectionLost:true};
     return{status:result.status,headers:result.headers,body:result.body===null?'':JSON.stringify(result.body)};
   }
   if(url.hostname==='firestore.googleapis.com') {
@@ -124,7 +126,35 @@ async function main(){
       stage='associate existing';await page.getByRole('tab',{name:'Scheduling activity',exact:true}).click();await page.getByRole('button',{name:'Associate existing appointment',exact:true}).click();const assoc=page.getByRole('dialog',{name:'Associate existing appointment'});await assoc.getByLabel('Canonical appointment ID',{exact:true}).fill('UI-EXISTING-APT');await assoc.getByLabel('Reason for this association',{exact:true}).fill('Verified synthetic link');await assoc.getByRole('checkbox').check();await assoc.getByRole('button',{name:'Save reviewed association',exact:true}).click();await assoc.waitFor({state:'hidden'});await page.getByRole('tab',{name:'Scheduling activity',exact:true}).click();await page.getByText(/UI-WO-SUPPORT/).waitFor();await page.getByText(/UI-VISIT/).waitFor();await page.screenshot({path:path.join(ART,'central-activity.png'),fullPage:true});
     }
     stage='conflicting operator';await page.getByRole('button',{name:'Edit plan',exact:true}).click();const edit=page.getByRole('dialog',{name:'Edit project plan'});await edit.getByLabel('Project name',{exact:true}).fill('Stale browser edit');const current=(await api('get_plan',{projectId:created.id})).project;await api('edit_metadata',{projectId:created.id,expectedVersion:current.version,patch:{description:'Second operator revision'}},'operations');await edit.getByRole('button',{name:'Save project',exact:true}).click();await edit.getByText(/Another operator changed/).waitFor();assert.equal((await api('get_plan',{projectId:created.id})).project.name,name);await edit.getByRole('button',{name:'Close dialog',exact:true}).click();await page.getByRole('button',{name:'Refresh',exact:true}).click();await page.getByRole('tab',{name:'Overview',exact:true}).click();await page.getByText('Second operator revision',{exact:true}).waitFor();
-    stage='lost response and reload';await page.getByRole('button',{name:'Edit plan',exact:true}).click();const lost=page.getByRole('dialog',{name:'Edit project plan'});await lost.getByLabel('Scope / description',{exact:true}).fill('Saved once despite lost response');dropNext=true;await lost.getByRole('button',{name:'Save project',exact:true}).click();await page.getByText(/An earlier operation needs confirmation/).waitFor();if(await lost.count())await lost.getByRole('button',{name:'Close dialog',exact:true}).click();page.once('dialog',event=>event.accept());await page.reload();await page.getByRole('button',{name:'Retry the exact request',exact:true}).waitFor();await page.getByRole('button',{name:'Retry the exact request',exact:true}).click();await page.getByText(/original request recovered/).waitFor();const afterRetry=(await api('get_plan',{projectId:created.id})).project;assert.equal(afterRetry.description,'Saved once despite lost response');assert.equal(afterRetry.version,current.version+2);
+    stage='lost response and reload';
+    await page.getByRole('button',{name:'Edit plan',exact:true}).click();
+    const lost=page.getByRole('dialog',{name:'Edit project plan'});
+    await lost.getByLabel('Scope / description',{exact:true}).fill('Saved once despite lost response');
+    responseFault.arm(created.id);
+    await lost.getByRole('button',{name:'Save project',exact:true}).click();
+    await page.getByText(/An earlier operation needs confirmation/).waitFor();
+    const committedWhileUnknown=(await api('get_plan',{projectId:created.id})).project;
+    assert.equal(committedWhileUnknown.description,'Saved once despite lost response');
+    assert.equal(committedWhileUnknown.version,current.version+2,'Server committed exactly once despite the missing response');
+    const journalKey=`demac.projects.pending.v1:${actors.admin.localId}`;
+    const readPending=()=>page.evaluate(key=>JSON.parse(sessionStorage.getItem(key)),journalKey);
+    const pendingBeforeReload=await readPending();
+    assert.deepEqual(pendingBeforeReload.command,responseFault.pendingCommand(),'The browser retains the exact submitted command');
+    if(await lost.count())await lost.getByRole('button',{name:'Close dialog',exact:true}).click();
+    page.once('dialog',event=>event.accept());
+    await page.reload();
+    await page.getByRole('button',{name:'Retry the exact request',exact:true}).waitFor();
+    assert.deepEqual(await readPending(),pendingBeforeReload,'Reload must preserve recovery evidence, not generate another write');
+    assert.equal(await page.getByRole('button',{name:/Create Project/}).isDisabled(),true,'Replacement writes stay blocked while outcome is unknown');
+    assert.equal(responseFault.snapshot().commits,1);
+    responseFault.releaseForExactRetry();
+    await page.getByRole('button',{name:'Retry the exact request',exact:true}).click();
+    await page.getByText(/original request recovered/).waitFor();
+    const afterRetry=(await api('get_plan',{projectId:created.id})).project;
+    assert.equal(afterRetry.description,'Saved once despite lost response');
+    assert.equal(afterRetry.version,current.version+2);
+    assert.equal(await readPending(),null,'Only a verified acknowledgement may clear the journal');
+    recoveryEvidence.push({browser:engineName,...responseFault.finish()});
     stage='mobile';await page.setViewportSize({width:390,height:844});await page.reload();await page.getByRole('button',{name:/Open project/}).first().waitFor();await page.waitForFunction(()=>{const sidebar=document.querySelector('.erp-sidebar');return !sidebar||sidebar.getBoundingClientRect().right<=1||getComputedStyle(sidebar).display==='none';});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2),'No mobile page overflow');await page.screenshot({path:path.join(ART,`${engineName}-central-mobile.png`),fullPage:true});
     stage='second user';const second=await contextFor(browser,'operations');const other=await second.newPage();await other.goto(origin+'/projects/central/');await other.getByText(name,{exact:true}).waitFor();await second.close();
     if(engineName==='chromium'){
@@ -139,6 +169,6 @@ async function main(){
   finally{fs.writeFileSync(path.join(ART,`${engineName}-network.json`),JSON.stringify(network,null,2));await context.close();await browser.close();}
  }
  assert.deepEqual(await snapshotProtected(),before,'Operational customer/appointment/Field/capacity/stock/message data must remain unchanged');
- fs.writeFileSync(path.join(ART,'summary.json'),JSON.stringify({emulatorProject:PROJECT,browsers:['chromium','webkit'],externalRequestsForwarded:0,protectedOperationalCollectionsUnchanged:true,tests:'central planning, phase, activity, import preview, cross-user read, stale version, lost response/reload/exact replay, mobile'}));
+ fs.writeFileSync(path.join(ART,'summary.json'),JSON.stringify({emulatorProject:PROJECT,browsers:['chromium','webkit'],recoveryEvidence,externalRequestsForwarded:0,protectedOperationalCollectionsUnchanged:true,tests:'central planning, phase, activity, import preview, cross-user read, stale version, lost response/reload/exact replay, mobile'}));
 }
 main().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{server.close();await deleteApp(app);});
