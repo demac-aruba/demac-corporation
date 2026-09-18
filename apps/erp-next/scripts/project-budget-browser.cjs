@@ -68,7 +68,7 @@ async function main() {
         if(stubs[key])return {path:key,namespace:'budget-test-stub'};
       });
       builder.onLoad({filter:/.*/,namespace:'budget-test-stub'},args=>({contents:stubs[args.path],loader:'js',resolveDir:APP}));
-    }],
+    }}],
   });
   const server = http.createServer((req,res)=>{
     const name = new URL(req.url,'http://local').pathname;
