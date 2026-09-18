@@ -1,22 +1,38 @@
 'use client';
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
-import { MAX_BACKUP_BYTES, verifyLocalBackup, inspectLocalBackup, projectImportCandidate, type LegacyProjectImportCandidate } from '../../../../../functions/projects/recovery';
+import { MAX_BACKUP_BYTES, STORAGE_KEYS, verifyLocalBackup, inspectLocalBackup, projectImportCandidate, type LegacyProjectImportCandidate } from '../../../../../functions/projects/recovery';
 import { minutesLabel, type RegistryRequest } from '@/lib/projects/registry-client-core';
 import type { ImportPreview } from '@/lib/projects/registry-types';
 import s from './projects-central.module.css';
 
 export function ProjectImportPanel({request,enabled,locked,onApply}:{request:RegistryRequest;enabled:boolean;locked:boolean;onApply:(action:string,data:Record<string,unknown>)=>Promise<void>}) {
-  const [raw,setRaw]=useState('');const [records,setRecords]=useState<Array<{id:string;name:string}>>([]);const [selected,setSelected]=useState('');const [origin,setOrigin]=useState('');
+  const [raw,setRaw]=useState('');const [records,setRecords]=useState<Array<{id:string;name:string}>>([]);const [selected,setSelected]=useState('');const [origin,setOrigin]=useState('');const [templatesAbsent,setTemplatesAbsent]=useState(false);
   const [preview,setPreview]=useState<ImportPreview|null>(null);const [candidate,setCandidate]=useState<LegacyProjectImportCandidate|null>(null);const [error,setError]=useState('');const [busy,setBusy]=useState(false);
   const [checked,setChecked]=useState<string[]>([]);const [backup,setBackup]=useState(false);const [reason,setReason]=useState('');const generation=useRef(0);const controller=useRef<AbortController|null>(null);
   useEffect(()=>()=>{generation.current++;controller.current?.abort();},[]);
   const resetPreview=()=>{generation.current++;controller.current?.abort();setPreview(null);setCandidate(null);setChecked([]);setBackup(false);setReason('');setError('');setBusy(false);};
-  const file=async(event:ChangeEvent<HTMLInputElement>)=>{const chosen=event.currentTarget.files?.[0];event.currentTarget.value='';resetPreview();setRaw('');setRecords([]);setSelected('');setOrigin('');if(!chosen)return;const epoch=generation.current;setBusy(true);try{
-    if(chosen.size>MAX_BACKUP_BYTES)throw Error('Backup file exceeds 16 MiB.');const text=await chosen.text();const verified=await verifyLocalBackup(text);const inspection=inspectLocalBackup(verified);
-    if(inspection.issues.length)throw Error('The backup contains invalid, missing or duplicate source records. Review it before import.');
-    const projects=(inspection.projects??[]).map(row=>{if(!row||typeof row!=='object')throw Error('Invalid project record.');const project=row as Record<string,unknown>;if(typeof project.id!=='string')throw Error('Missing project identity.');return {id:project.id,name:typeof project.name==='string'?project.name:project.id};});
-    if(epoch===generation.current){setRaw(text);setRecords(projects);setOrigin(inspection.origin);}
-  }catch(cause){if(epoch===generation.current)setError(cause instanceof Error?cause.message:'The file could not be verified.');}finally{if(epoch===generation.current)setBusy(false);}};
+  const file=async(event:ChangeEvent<HTMLInputElement>)=>{
+    const chosen=event.currentTarget.files?.[0];event.currentTarget.value='';resetPreview();setRaw('');setRecords([]);setSelected('');setOrigin('');setTemplatesAbsent(false);
+    if(!chosen)return;
+    const epoch=generation.current;setBusy(true);
+    try {
+      if(chosen.size>MAX_BACKUP_BYTES)throw Error('Backup file exceeds 16 MiB.');
+      const text=await chosen.text();const verified=await verifyLocalBackup(text);const inspection=inspectLocalBackup(verified);
+      // A browser that never saved company templates legitimately has no template key.
+      // No source bytes are altered; invalid templates, corrupt Projects and duplicate IDs still block.
+      const absentTemplateKey=inspection.issues.some(issue=>issue.code==='missing_storage_key'&&issue.key===STORAGE_KEYS[1]);
+      const blockers=inspection.issues.filter(issue=>!(issue.code==='missing_storage_key'&&issue.key===STORAGE_KEYS[1]));
+      if(blockers.length)throw Error('The backup contains invalid, missing or duplicate source records. Review it before import.');
+      const projects=(inspection.projects??[]).map(row=>{
+        if(!row||typeof row!=='object')throw Error('Invalid project record.');
+        const project=row as Record<string,unknown>;
+        if(typeof project.id!=='string')throw Error('Missing project identity.');
+        return {id:project.id,name:typeof project.name==='string'?project.name:project.id};
+      });
+      if(epoch===generation.current){setRaw(text);setRecords(projects);setOrigin(inspection.origin);setTemplatesAbsent(absentTemplateKey);}
+    }catch(cause){if(epoch===generation.current)setError(cause instanceof Error?cause.message:'The file could not be verified.');}
+    finally{if(epoch===generation.current)setBusy(false);}
+  };
   const review=async()=>{resetPreview();const epoch=generation.current;setBusy(true);controller.current=new AbortController();try{
     const extracted=await projectImportCandidate(raw,selected);
     if(epoch!==generation.current)return;
@@ -28,7 +44,8 @@ export function ProjectImportPanel({request,enabled,locked,onApply}:{request:Reg
   return <section className={`${s.card} ${s.form}`}><h2>Review an original browser backup</h2><p className={s.notice}>Select the saved Projects backup from the original browser. File verification runs on this device. Only the selected project is sent when you press Review import. Nothing is migrated automatically.</p><p><a className={s.button} href="/projects/recovery/">Backup and file verification</a></p>
     <label>Saved backup file<input type="file" accept=".json,application/json" disabled={busy||locked} onChange={event=>void file(event)}/></label>
     {origin&&<p>Source website: <strong>{origin}</strong></p>}
-    {records.length>0&&<label>Select backed-up project<select value={selected} disabled={busy||locked} onChange={event=>{resetPreview();setSelected(event.target.value);}}><option value="">Choose a project</option>{records.map(project=><option key={project.id} value={project.id}>{project.name} · {project.id}</option>)}</select></label>}
+    {templatesAbsent&&<p className={s.notice}>No company phase-template record was present in this backup. The selected project can still be reviewed; no templates will be invented or imported.</p>}
+    {records.length>0&&<label>Select backed-up project<select aria-label="Select backed-up project" value={selected} disabled={busy||locked} onChange={event=>{resetPreview();setSelected(event.target.value);}}><option value="">Choose a project</option>{records.map(project=><option key={project.id} value={project.id}>{project.name} · {project.id}</option>)}</select></label>}
     <div><button className={s.button} type="button" disabled={!selected||busy||locked} onClick={()=>void review()}>{busy?'Reviewing…':'Review import — no writes'}</button></div>
     {preview&&<section><div className={s.sectionTitle}><h3>{preview.projectNumber} · {preview.plan.name}</h3><span className={s.badge}>Read-only preview</span></div><dl className={s.detailList}><dt>Preserved project ID</dt><dd>{preview.projectId}</dd><dt>Captured estimate</dt><dd>{minutesLabel(preview.plan.budgetedVanMinutes)}</dd><dt>Phases preserved</dt><dd>{preview.plan.phases.length}</dd><dt>Original declared status</dt><dd>{preview.sourceDeclaredStatus} — execution is not certified by this import</dd></dl>
       {preview.conflicts.length>0&&<div className={s.error} role="alert"><strong>Import blocked</strong>{preview.conflicts.map(code=><p key={code}>{code.replaceAll('_',' ')}</p>)}</div>}
