@@ -51,6 +51,17 @@ function intentText(command: RegistryCommand) {
   if (new TextEncoder().encode(text).length > 128*1024) throw new RegistryRequestError('payload_too_large', 'The pending request exceeds the Projects size limit.');
   return text;
 }
+function requireMutationAcknowledgement(value: unknown, command: RegistryCommand): void {
+  const result = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown> : null;
+  if (!result || result.success !== true || typeof result.projectId !== 'string'
+      || !result.projectId || result.projectId.length > 180 || /[\s/\x00-\x1f]/.test(result.projectId)
+      || !Number.isSafeInteger(result.version) || (result.version as number) < 1
+      || typeof result.changed !== 'boolean' || typeof result.replayed !== 'boolean'
+      || (typeof command.data.projectId === 'string' && result.projectId !== command.data.projectId)) {
+    throw new RegistryRequestError('invalid_acknowledgement', 'The server response does not confirm this exact project operation. Recovery evidence was retained; retry the same request.', true);
+  }
+}
 /** A token-free session journal is pending intent, never authoritative Project data. */
 export function createIntentJournal(storage: Pick<Storage,'getItem'|'setItem'|'removeItem'>, uid: string): IntentJournal {
   if (!uid || uid.length>180) throw new Error('A current user identity is required.');
@@ -75,7 +86,9 @@ export function createRegistryWriter(request: RegistryRequest, makeId = () => cr
     if (!pendingText||running) throw new RegistryRequestError('write_busy','Resolve the current operation first.');
     running=true;
     try {
-      const result=await request<T>(JSON.parse(pendingText) as RegistryCommand);
+      const command = JSON.parse(pendingText) as RegistryCommand;
+      const result=await request<T>(command);
+      requireMutationAcknowledgement(result, command);
       try { clear(); } catch { throw new RegistryRequestError('journal_cleanup','The server replied successfully, but local recovery state could not be cleared. Retry the same request.',true); }
       return result;
     } catch(error) {
