@@ -1,0 +1,89 @@
+name: Projects central UI integration
+on:
+  pull_request:
+    paths:
+      - 'apps/erp-next/components/projects/central/**'
+      - 'apps/erp-next/app/(erp)/projects/central/**'
+      - 'apps/erp-next/lib/projects/**'
+      - 'apps/erp-next/scripts/projects-central*'
+      - 'functions/projects/**'
+      - '.github/workflows/projects-central-ui.yml'
+  push:
+    branches: ['feature/projects-canonical-integration']
+    paths:
+      - 'apps/erp-next/components/projects/central/**'
+      - 'apps/erp-next/app/(erp)/projects/central/**'
+      - 'apps/erp-next/lib/projects/**'
+      - 'apps/erp-next/scripts/projects-central*'
+      - 'functions/projects/**'
+      - '.github/workflows/projects-central-ui.yml'
+permissions:
+  contents: read
+concurrency:
+  group: projects-central-ui-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: npm install --prefix apps/erp-next --no-audit --no-fund
+      - run: node --test functions/projects/registry-http.test.js
+      - name: Client transport and exact-intent recovery
+        working-directory: apps/erp-next
+        run: >-
+          npx tsc --ignoreConfig scripts/projects-central-client-acceptance.ts
+          --module commonjs --target ES2022 --moduleResolution node --ignoreDeprecations 6.0
+          --esModuleInterop --skipLibCheck --types node --outDir .projects-central-test --rootDir . --lib ES2022,DOM
+          && node .projects-central-test/scripts/projects-central-client-acceptance.js
+      - run: npm run typecheck --prefix apps/erp-next
+  emulated-browsers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GCLOUD_PROJECT: demo-demac-projects
+      NEXT_PUBLIC_PROJECTS_REGISTRY_ENABLED: 'true'
+      NEXT_PUBLIC_PROJECTS_LEGACY_IMPORT_ENABLED: 'false'
+      NEXT_PUBLIC_PERFORMANCE_TELEMETRY_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Set isolated tooling directory
+        run: echo "PROJECTS_UI_TOOLS=$RUNNER_TEMP/projects-ui-tools" >> "$GITHUB_ENV"
+      - name: Install tests without production credentials
+        run: |
+          npm install --prefix functions --no-audit --no-fund
+          npm install --prefix apps/erp-next --no-audit --no-fund
+          npm install --prefix "$PROJECTS_UI_TOOLS" --no-audit --no-fund firebase-tools@15.30.0 playwright@1.57.0
+          "$PROJECTS_UI_TOOLS/node_modules/.bin/playwright" install --with-deps chromium webkit
+      - name: Build exact ERP with isolated central UI activation
+        run: npm run build --prefix apps/erp-next
+      - name: Actual ERP browser to authenticated handler to Firestore emulators
+        run: >-
+          "$PROJECTS_UI_TOOLS/node_modules/.bin/firebase" emulators:exec
+          --project demo-demac-projects --config firebase.projects-emulator.json --only firestore,auth
+          'node apps/erp-next/scripts/projects-central-browser.cjs'
+      - name: Keep synthetic UI evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: projects-central-ui-evidence
+          path: projects-central-ui-evidence/
+          if-no-files-found: warn
+          retention-days: 7

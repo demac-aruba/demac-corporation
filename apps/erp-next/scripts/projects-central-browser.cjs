@@ -1,0 +1,87 @@
+'use strict';
+const assert=require('node:assert/strict');const fs=require('node:fs');const path=require('node:path');const http=require('node:http');
+const ROOT=path.resolve(__dirname,'../../..');const PROJECT='demo-demac-projects';
+for(const key of ['FIRESTORE_EMULATOR_HOST','FIREBASE_AUTH_EMULATOR_HOST'])if(!/^(127\.0\.0\.1|localhost):\d+$/.test(process.env[key]||''))throw Error('Only loopback emulators are allowed.');
+if(process.env.GCLOUD_PROJECT!==PROJECT||process.env.GOOGLE_APPLICATION_CREDENTIALS)throw Error('Demo-only browser test; production credentials forbidden.');
+const fromFunctions=require('node:module').createRequire(path.join(ROOT,'functions/package.json'));
+const {initializeApp,deleteApp}=fromFunctions('firebase-admin/app');const {getFirestore}=fromFunctions('firebase-admin/firestore');const {getAuth}=fromFunctions('firebase-admin/auth');
+const {createProjectRegistryService}=require(path.join(ROOT,'functions/projects/registry-service'));
+const {createProjectRegistryHttp}=require(path.join(ROOT,'functions/projects/registry-http'));
+const {captureLocalBackup,STORAGE_KEYS}=require(path.join(ROOT,'functions/projects/recovery'));
+const {chromium,webkit}=require(path.join(process.env.PROJECTS_UI_TOOLS,'node_modules/playwright'));
+const app=initializeApp({projectId:PROJECT},'projects-central-browser');const db=getFirestore(app),auth=getAuth(app);
+const service=createProjectRegistryService({db,verifyIdToken:(token,revoked)=>auth.verifyIdToken(token,revoked),enabled:true,allowLegacyImport:true});
+const OUT=path.join(ROOT,'apps/erp-next/out');const ART=path.join(ROOT,'projects-central-ui-evidence');fs.mkdirSync(ART,{recursive:true});
+const protectedCollections=['clients','properties','appointments','workOrders','workVisits','bookingCapacityLocks','whatsappOutboundQueue','warehouseInventory'];
+let sequence=0;const actors={};let origin='';let handler;let dropNext=false;let previewRequests=0;
+const CUSTOMER='UI-CUSTOMER',PROPERTY='UI-PROPERTY';
+const server=http.createServer((request,response)=>{const pathname=decodeURIComponent(new URL(request.url,'http://local').pathname);let file=path.resolve(OUT,`.${pathname}`);if(!file.startsWith(OUT+path.sep)){response.writeHead(403).end();return;}try{if(fs.statSync(file).isDirectory())file=path.join(file,'index.html');response.setHeader('Content-Type',file.endsWith('.js')?'application/javascript':file.endsWith('.css')?'text/css':file.endsWith('.html')?'text/html':file.endsWith('.txt')?'text/plain':'application/octet-stream');response.end(fs.readFileSync(file));}catch{response.writeHead(404).end();}});
+function field(value){if(value===null)return{nullValue:null};if(typeof value==='boolean')return{booleanValue:value};if(typeof value==='number')return{integerValue:String(value)};if(typeof value==='string')return{stringValue:value};return{mapValue:{fields:Object.fromEntries(Object.entries(value).map(([key,v])=>[key,field(v)]))}};}
+function document(id,data){return{name:`projects/${PROJECT}/databases/(default)/documents/${id}`,fields:Object.fromEntries(Object.entries(data).map(([key,value])=>[key,field(value)]))};}
+async function api(action,data,who='admin'){return service.execute({idToken:actors[who].idToken,command:{action,data,requestId:`UI-REQUEST-${++sequence}`}});}
+async function snapshotProtected(){const output={};for(const collection of protectedCollections){const values=await db.collection(collection).get();output[collection]=values.docs.map(doc=>[doc.id,doc.data()]).sort((a,b)=>a[0].localeCompare(b[0]));}return output;}
+async function contextFor(browser,who='admin'){
+ const context=await browser.newContext({viewport:{width:1600,height:1050},serviceWorkers:'block'});const actor=actors[who];
+ await context.addInitScript(session=>sessionStorage.setItem('demac.erp-next.firebase.session.v1',JSON.stringify(session)),{uid:actor.localId,email:`ui-${who}@example.test`,idToken:actor.idToken,refreshToken:'NEVER-USE',expiresAt:Date.now()+3600000});
+ await context.route('**/*',async route=>{const request=route.request();const url=new URL(request.url());if(url.origin===origin)return route.continue();const headers={'access-control-allow-origin':origin,'access-control-allow-headers':'authorization,content-type','content-type':'application/json'};
+  if(url.pathname==='/projectsRegistry'){
+   const body=request.method()==='POST'?request.postDataJSON():null;if(body?.action==='preview_legacy_import')previewRequests++;
+   const result=await handler({method:request.method(),headers:request.headers(),body});
+   if(dropNext&&body?.action==='edit_metadata'&&result.status===200){dropNext=false;return route.abort();}
+   return route.fulfill({status:result.status,headers:{...headers,...result.headers},body:result.body===null?'':JSON.stringify(result.body)});
+  }
+  if(request.method()==='OPTIONS')return route.fulfill({status:204,headers,body:''});
+  if(url.hostname==='firestore.googleapis.com'){
+    assert.ok(request.method()==='GET'||(request.method()==='POST'&&url.pathname.endsWith(':runQuery')),'No direct Firestore writes are allowed from the browser test');
+    if(/\/users\/[^/]+$/.test(url.pathname))return route.fulfill({status:200,headers,body:JSON.stringify(document(`users/${actor.localId}`,{role:who==='admin'?'admin':who==='finance'?'finance':'operations',active:true,name:`Synthetic ${who}`}))});
+    const clients=[document(`clients/${CUSTOMER}`,{name:'Synthetic CRM customer',active:true})];const properties=[document(`properties/${PROPERTY}`,{name:'Synthetic CRM property',clientId:CUSTOMER,address:'Synthetic site',active:true})];
+    if(url.pathname.endsWith('/clients'))return route.fulfill({status:200,headers,body:JSON.stringify({documents:clients})});
+    if(url.pathname.endsWith('/properties'))return route.fulfill({status:200,headers,body:JSON.stringify({documents:properties})});
+    if(url.pathname.endsWith(':runQuery')){const collection=request.postDataJSON()?.structuredQuery?.from?.[0]?.collectionId;const docs=collection==='clients'?clients:collection==='properties'?properties:[];return route.fulfill({status:200,headers,body:JSON.stringify(docs.map(document=>({document})))});}
+    return route.fulfill({status:200,headers,body:JSON.stringify({documents:[]})});
+  }
+  // Optional app-shell reads are isolated; never forward a call to an operational authority.
+  if(url.hostname.endsWith('.cloudfunctions.net'))return route.fulfill({status:503,headers,body:JSON.stringify({error:{code:'test_isolated',message:'No external operational functions in this test'}})});
+  return route.abort();
+ });return context;
+}
+async function main(){
+ for(const [who,role]of[['admin','admin'],['operations','operations'],['finance','finance']]){const response=await fetch(`http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}/identitytoolkit.googleapis.com/v1/accounts:signUp?key=demo`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:`projects-ui-${who}@example.test`,password:'synthetic-ui-test-password',returnSecureToken:true})});actors[who]=await response.json();assert.ok(actors[who].idToken);await db.collection('users').doc(actors[who].localId).set({role,active:true});}
+ await db.collection('businessSettings').doc('projects-registry').set({backendEnabled:true,legacyImportEnabled:true});await db.collection('clients').doc(CUSTOMER).set({name:'Synthetic CRM customer',active:true});await db.collection('properties').doc(PROPERTY).set({clientId:CUSTOMER,name:'Synthetic CRM property',active:true});
+ await db.collection('appointments').doc('UI-EXISTING-APT').set({customerId:CUSTOMER,propertyId:PROPERTY,status:'confirmed',workOrderIds:['UI-WO','UI-WO-SUPPORT']});
+ for(const [id,van,minutes]of[['UI-WO','VAN-A',360],['UI-WO-SUPPORT','VAN-B',120]])await db.collection('workOrders').doc(id).set({appointmentId:'UI-EXISTING-APT',clientId:CUSTOMER,propertyId:PROPERTY,status:'Confirmada',vanId:van,date:'2026-09-18',time:'08:30',appointmentDurationMinutes:minutes,scheduledSlots:minutes/60});
+ await db.collection('workVisits').doc('UI-VISIT').set({id:'UI-VISIT',workOrderId:'UI-WO',appointmentId:'UI-EXISTING-APT',clientId:CUSTOMER,propertyId:PROPERTY,status:'in_progress',startedAt:'2026-09-18T13:00:00.000Z',version:1});
+ for(const collection of protectedCollections)await db.collection(collection).doc('UI-PROTECTED').set({protected:true,collection});const before=await snapshotProtected();
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));origin=`http://127.0.0.1:${server.address().port}`;handler=createProjectRegistryHttp({service,allowedOrigins:[origin]});
+ for(const [engineName,engine]of[['chromium',chromium],['webkit',webkit]]){
+  const browser=await engine.launch({headless:true});const context=await contextFor(browser);const page=await context.newPage();page.setDefaultTimeout(20000);const errors=[];page.on('pageerror',error=>errors.push(error.message));let stage='load';
+  try{
+    const name=`Synthetic shared ${engineName}`;await page.goto(origin+'/projects/central/');await page.getByRole('button',{name:/Create Project/}).waitFor();
+    stage='create';await page.getByRole('button',{name:/Create Project/}).click();const dialog=page.getByRole('dialog',{name:'Create shared project'});
+    await dialog.getByRole('button',{name:'Synthetic CRM customer',exact:true}).click();await dialog.getByLabel('Service property',{exact:true}).selectOption(PROPERTY);
+    await dialog.getByLabel('Project name',{exact:true}).fill(name);await dialog.getByLabel('Start date',{exact:true}).fill('2026-09-01');await dialog.getByLabel('Estimated completion',{exact:true}).fill('2026-10-01');await dialog.getByLabel('Estimated Van hours',{exact:false}).fill('66');await dialog.getByLabel('Technician instructions',{exact:true}).fill('Synthetic instructions preserved');await dialog.getByRole('button',{name:'Save project',exact:true}).click();
+    await page.getByRole('heading',{name,exact:true}).waitFor();const created=(await api('list_plans',{limit:50})).projects.find(project=>project.name===name);assert.ok(created);
+    stage='phase';await page.getByRole('tab',{name:'Plan & phases',exact:true}).click();await page.getByRole('button',{name:'Add phase',exact:true}).click();const phase=page.getByRole('dialog',{name:'Add custom phase'});await phase.getByLabel('Phase name',{exact:true}).fill('Install and test');await phase.getByLabel('Estimated Van hours',{exact:true}).fill('4');await phase.getByLabel('Scope of work',{exact:true}).fill('Synthetic scope');await phase.getByLabel('Completion criteria',{exact:true}).fill('Review the verified installation');await phase.getByRole('button',{name:'Save phase',exact:true}).click();await phase.waitFor({state:'hidden'});
+    assert.equal((await api('get_plan',{projectId:created.id})).project.phases.length,1);
+    if(engineName==='chromium'){
+      stage='associate existing';await page.getByRole('tab',{name:'Scheduling activity',exact:true}).click();await page.getByRole('button',{name:'Associate existing appointment',exact:true}).click();const assoc=page.getByRole('dialog',{name:'Associate existing appointment'});await assoc.getByLabel('Canonical appointment ID',{exact:true}).fill('UI-EXISTING-APT');await assoc.getByLabel('Reason for this association',{exact:true}).fill('Verified synthetic link');await assoc.getByRole('checkbox').check();await assoc.getByRole('button',{name:'Save reviewed association',exact:true}).click();await assoc.waitFor({state:'hidden'});await page.getByRole('tab',{name:'Scheduling activity',exact:true}).click();await page.getByText(/UI-WO-SUPPORT/).waitFor();await page.getByText(/UI-VISIT/).waitFor();await page.screenshot({path:path.join(ART,'central-activity.png'),fullPage:true});
+    }
+    stage='conflicting operator';await page.getByRole('button',{name:'Edit plan',exact:true}).click();const edit=page.getByRole('dialog',{name:'Edit project plan'});await edit.getByLabel('Project name',{exact:true}).fill('Stale browser edit');const current=(await api('get_plan',{projectId:created.id})).project;await api('edit_metadata',{projectId:created.id,expectedVersion:current.version,patch:{description:'Second operator revision'}},'operations');await edit.getByRole('button',{name:'Save project',exact:true}).click();await edit.getByText(/Another operator changed/).waitFor();assert.equal((await api('get_plan',{projectId:created.id})).project.name,name);await edit.getByRole('button',{name:'Close dialog',exact:true}).click();await page.getByRole('button',{name:'Refresh',exact:true}).click();await page.getByText('Second operator revision',{exact:true}).waitFor();
+    stage='lost response and reload';await page.getByRole('button',{name:'Edit plan',exact:true}).click();const lost=page.getByRole('dialog',{name:'Edit project plan'});await lost.getByLabel('Scope / description',{exact:true}).fill('Saved once despite lost response');dropNext=true;await lost.getByRole('button',{name:'Save project',exact:true}).click();await page.getByText(/An earlier operation needs confirmation/).waitFor();if(await lost.count())await lost.getByRole('button',{name:'Close dialog',exact:true}).click();page.once('dialog',event=>event.accept());await page.reload();await page.getByRole('button',{name:'Retry the exact request',exact:true}).waitFor();await page.getByRole('button',{name:'Retry the exact request',exact:true}).click();await page.getByText(/original request recovered/).waitFor();const afterRetry=(await api('get_plan',{projectId:created.id})).project;assert.equal(afterRetry.description,'Saved once despite lost response');assert.equal(afterRetry.version,current.version+2);
+    stage='mobile';await page.setViewportSize({width:390,height:844});await page.reload();await page.getByRole('button',{name:/Open project/}).first().waitFor();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2),'No mobile page overflow');await page.screenshot({path:path.join(ART,`${engineName}-central-mobile.png`),fullPage:true});
+    stage='second user';const second=await contextFor(browser,'operations');const other=await second.newPage();await other.goto(origin+'/projects/central/');await other.getByText(name,{exact:true}).waitFor();await second.close();
+    if(engineName==='chromium'){
+      stage='read-only role';const finance=await contextFor(browser,'finance');const financePage=await finance.newPage();await financePage.goto(origin+'/projects/central/');await financePage.getByRole('button',{name:/Create Project/}).waitFor();assert.equal(await financePage.getByRole('button',{name:/Create Project/}).isDisabled(),true);await finance.close();
+      stage='import preview';await page.setViewportSize({width:1600,height:1050});await page.reload();await page.getByRole('button',{name:'Import & recovery',exact:true}).click();
+      const source={id:'UI-LEGACY',projectNumber:'PRJ-UI-LEGACY',name:'Synthetic archived project',customerId:CUSTOMER,customerName:'Synthetic customer',siteId:PROPERTY,location:'Synthetic property',contactPerson:'Synthetic contact',type:'VRF Project',description:'Scope',technicianInstructions:'Instructions',status:'Planned',priority:'High',managerId:'',managerName:'Not assigned',startsOn:'2026-09-01',estimatedCompletionOn:'2026-10-01',totalUnits:10,completedUnits:0,unitType:'Units',estimatedWorkDays:11,slotsPerWorkDay:6,slotDurationMinutes:60,estimatedSlots:66,estimatedLaborHours:66,actualLaborHours:0,scheduledFutureHours:0,materialBudget:null,materialActual:0,assignedVans:[],phases:[],assignments:[],materials:[],expenses:[],costEntries:[]};
+      const file=JSON.stringify(await captureLocalBackup({getItem:key=>key===STORAGE_KEYS[0]?JSON.stringify({version:1,projects:[source]}):'[]'},{capturedAt:'2026-09-18T12:00:00.000Z',origin:'https://erp.example.test'}));const priorPreviewCount=previewRequests;
+      await page.getByLabel('Saved backup file',{exact:true}).setInputFiles({name:'synthetic-projects.json',mimeType:'application/json',buffer:Buffer.from(file)});await page.getByLabel('Select backed-up project',{exact:true}).selectOption(source.id);assert.equal(previewRequests,priorPreviewCount);await page.getByRole('button',{name:'Review import — no writes',exact:true}).click();await page.getByText('Read-only preview',{exact:true}).waitFor();assert.equal((await db.collection('projectRecords').doc(source.id).get()).exists,false);await page.screenshot({path:path.join(ART,'central-import-preview.png'),fullPage:true});
+    }
+    assert.deepEqual(errors,[]);console.log(`PASS ${engineName}: shared create/read, phase, conflicting edit, lost response with reload, exact retry, mobile, cross-user reads.`);
+  }catch(error){console.error('CENTRAL_UI_FAILURE',engineName,stage,JSON.stringify({errors,text:(await page.locator('body').innerText().catch(()=>'' )).slice(0,6000)}));await page.screenshot({path:path.join(ART,`${engineName}-failure.png`),fullPage:true}).catch(()=>{});throw error;}
+  finally{await context.close();await browser.close();}
+ }
+ assert.deepEqual(await snapshotProtected(),before,'Operational customer/appointment/Field/capacity/stock/message data must remain unchanged');
+ fs.writeFileSync(path.join(ART,'summary.json'),JSON.stringify({emulatorProject:PROJECT,browsers:['chromium','webkit'],externalRequestsForwarded:0,protectedOperationalCollectionsUnchanged:true,tests:'central planning, phase, activity, import preview, cross-user read, stale version, lost response/reload/exact replay, mobile'}));
+}
+main().catch(error=>{console.error(error);process.exitCode=1;}).finally(async()=>{server.close();await deleteApp(app);});
